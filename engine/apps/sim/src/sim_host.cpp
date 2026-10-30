@@ -203,6 +203,7 @@ bool SimHost::tick_once() {
     if (recorder_->log().records.empty()) recorder_->capture(frame_);  // initial state (after load)
     // T1 Begin_Tick.
     ++frame_;
+    profile::begin_tick(frame_);  // OPT1: wall-clock profiler; nothing below reads it
     step("T1.begin_tick");
     // T2 scheduled commands due this frame (handler runs inside, in drain order).
     batch_crc_ = 0;
@@ -230,8 +231,11 @@ bool SimHost::tick_once() {
     }
     // T6 scene animations [stub].
     // T7 PlayerList update in player index order (AI controllers issue orders here).
-    for (uint32_t p = 0; p < cfg_.players; ++p)
+    static const char* const kPlayerZone[] = {"T7.p0", "T7.p1", "T7.p2", "T7.p3", "T7.p4", "T7.p5", "T7.p6", "T7.p7", "T7.p8+"};
+    for (uint32_t p = 0; p < cfg_.players; ++p) {
         if (controllers_[p]) controllers_[p](*this, static_cast<uint8_t>(p), frame_);
+        profile::lap(kPlayerZone[p < 8 ? p : 8]);  // per-player AI / controller time
+    }
     step("T7.players");
     // --- P4 host (owner: game host agent): presentation tap before the story drains the galactic events ---
     if (before_story_) before_story_(*this);
@@ -256,6 +260,7 @@ bool SimHost::tick_once() {
     pipeline_->events().deliver();
     recorder_->capture(frame_);
     step("T13.end_tick");
+    profile::end_tick();
     return true;
 }
 

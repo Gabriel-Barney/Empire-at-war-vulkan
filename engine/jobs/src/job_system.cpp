@@ -1,6 +1,7 @@
 #include "alamo/jobs/job_system.hpp"
 
 #include "alamo/core/log.hpp"
+#include "alamo/core/profile.hpp"
 #include "alamo/jobs/scratch.hpp"
 
 namespace alamo::jobs {
@@ -18,6 +19,9 @@ struct ThreadState {
 thread_local ThreadState t_state;
 // Non-null while this thread executes a background job of that system (priority inheritance).
 thread_local const JobSystem* t_background_of = nullptr;
+// Nesting depth of execute() on this thread: a job that waits runs other jobs inside itself, and only the outermost one
+// counts as busy time (OPT1 profiler).
+thread_local uint32_t t_execute_depth = 0;
 
 }  // namespace
 
@@ -204,6 +208,9 @@ bool JobSystem::claim_background(const JobCounter& counter, Job& out) {
 void JobSystem::execute(const Job& job, uint32_t self) {
     const JobSystem* const prev = t_background_of;
     t_background_of = job.priority == Priority::Background ? this : (prev == this ? nullptr : prev);
+    const bool timed = t_execute_depth == 0 && profile::enabled();  // wall clock, write-only: never read by scheduling
+    const int64_t busy_from = timed ? profile::now_ns() : 0;
+    ++t_execute_depth;
     try {
         ScratchScope scope;  // inside the try: first use of the thread arena may allocate
         job.fn(job.ctx, job.a, job.b);
@@ -211,6 +218,8 @@ void JobSystem::execute(const Job& job, uint32_t self) {
         job.counter->capture(job.a, std::current_exception());
     }
     t_background_of = prev;
+    --t_execute_depth;
+    if (timed) profile::add_busy_ns(self, profile::now_ns() - busy_from);
     slots_[self]->executed.fetch_add(1, std::memory_order_relaxed);
     // After this decrement the counter (and anything the waiter owns) may be destroyed: touch
     // only `this` from here on. Only a counter reaching zero wakes waiters (other conditions use

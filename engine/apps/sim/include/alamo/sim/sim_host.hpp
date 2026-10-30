@@ -56,6 +56,8 @@
 #include <functional>
 #include <memory>
 #include <string>
+
+#include "alamo/core/profile.hpp"
 #include <vector>
 
 #include "alamo/commands/pipeline.hpp"
@@ -278,6 +280,7 @@ private:
     // dispatch (only the four move-order executors and the guard order do). ---
     void story_order_feed(uint8_t player, const commands::EventData& ev, const std::vector<ObjectId>& selection);
     void step(const char* name) {
+        profile::lap(name);  // OPT1: time of the phase that just finished (wall clock; never read by the sim)
         if (trace_) trace_->emplace_back(name);
     }
 

@@ -11,6 +11,8 @@ add_library(alamo_core STATIC
   # N1: engine save files (header + named chunks), packed with the in-house LZ77 + Huffman codec.
   src/save_file.cpp
   src/compress.cpp
+  # OPT1: tick profiler (wall-clock data, never read by sim logic).
+  src/profile.cpp
 )
 add_library(alamo::core ALIAS alamo_core)
 target_include_directories(alamo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -50,3 +52,9 @@ add_test(NAME alamo_core_sim_math_lint_selftest
          COMMAND ${CMAKE_COMMAND} -DENGINE_DIR=${PROJECT_SOURCE_DIR}/tools/lint/fixture
                  -P ${PROJECT_SOURCE_DIR}/tools/lint/check_sim_math.cmake)
 set_tests_properties(alamo_core_sim_math_lint_selftest PROPERTIES WILL_FAIL TRUE)
+
+# OPT1: profiler zones / laps / ring / report.
+add_executable(alamo_core_profile_tests tests/test_profile.cpp)
+target_link_libraries(alamo_core_profile_tests PRIVATE alamo_core)
+add_test(NAME alamo_core_profile_tests COMMAND alamo_core_profile_tests)
+set_tests_properties(alamo_core_profile_tests PROPERTIES TIMEOUT 60)

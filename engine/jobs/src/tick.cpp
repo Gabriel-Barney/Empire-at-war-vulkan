@@ -38,7 +38,8 @@ TickScheduler::TickScheduler(JobSystem& js, SimClock clock) : js_(&js), clock_(c
 TickScheduler::SystemId TickScheduler::add_system(std::string name, uint32_t period, uint32_t phase,
                                                   SystemFn fn) {
     if (period == 0) throw std::invalid_argument("TickScheduler::add_system: period must be >= 1");
-    systems_.push_back(System{std::move(name), period, phase % period, true, std::move(fn)});
+    const profile::ZoneId zone = profile::register_zone(("sys." + name).c_str());
+    systems_.push_back(System{std::move(name), period, phase % period, true, std::move(fn), zone});
     return static_cast<SystemId>(systems_.size() - 1);
 }
 
@@ -65,11 +66,15 @@ uint32_t TickScheduler::advance(double real_seconds) {
 
 void TickScheduler::step() {
     const TickContext ctx{frame_, clock_.fixed_dt(), *js_};
+    profile::begin_tick(frame_);
     for (DeferredBase* d : tracked_) d->sync(frame_);
     for (const System& s : systems_) {
-        if (s.enabled && frame_ % s.period == s.phase) s.fn(ctx);
+        if (!s.enabled || frame_ % s.period != s.phase) continue;
+        profile::Scope timer(s.zone);
+        s.fn(ctx);
     }
     ++frame_;
+    profile::end_tick();
 }
 
 }  // namespace alamo::jobs

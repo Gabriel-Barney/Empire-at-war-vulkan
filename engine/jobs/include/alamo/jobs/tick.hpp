@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "alamo/core/profile.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/jobs/scratch.hpp"
 
@@ -217,6 +218,7 @@ private:
         uint32_t phase;
         bool enabled;
         SystemFn fn;
+        profile::ZoneId zone;  // OPT1: "sys.<name>"
     };
     JobSystem* js_;
     SimClock clock_;

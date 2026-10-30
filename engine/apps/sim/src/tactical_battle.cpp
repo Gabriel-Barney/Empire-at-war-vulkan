@@ -5,6 +5,7 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/profile.hpp"
 #include "alamo/galactic/special_data.hpp"  // P4 tactical: special_name_crc (Black Market gate)
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/map_spawn.hpp"
@@ -1956,6 +1957,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     l1_weather_tick(rng);  // L1 systems: land weather service (before the common tick)
     fog_decay();  // fog of war: common-tick step 4, before the object services (owner: fog agent)
     hg_production(mode, rng);  // station contents / skirmish tactical production (before the object services)
+    profile::lap("tac.setup");
     // 1. reinforcements, 2. stand-in orders, 3. retreat coordinator.
     reinforce(mode, rng, true);
     if (cfg_.order_interval > 0 && (frame_ - 1) % cfg_.order_interval == 0) issue_orders(mode, rng);
@@ -1964,13 +1966,16 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         bt_retreat_attrition(static_cast<uint8_t>(retreat_side_), rng);  // battle host: vf12 at the countdown end (§4.9)
         complete_retreat(mode, static_cast<uint8_t>(retreat_side_));
     }
+    profile::lap("tac.orders");
     // 4. speed factors, movement, positions into the store and the trees, locomotor animation.
     apply_speed_factors();
     fighter_sync();  // S7 fighters: new squadrons (map start, reinforcements, hangar launches, wingmen) and params
     feed_attack_targets(store);
     if (space_) avoid_snapshot(store);  // SPACE_AVOIDANCE: committed member transforms for the fighter avoidance hook
+    profile::lap("tac.pre_move");
     movement_->tick(frame_, rng, pf);
     movement_->commit(store);
+    profile::lap("tac.movement");
     forward_fighter_events();  // S7 fighters: Provoke / Retarget -> combat attack orders (before the combat tick)
     for (const objects::ObjectId id : movement_->despawned())  // §4.6: land bombers at their path end, no death effects
         if (const Unit* u = unit_by_id(id)) bt_kill_silently(mode, u->h);
@@ -1978,11 +1983,14 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     l1_motion(mode, rng);  // L1 systems: hyperspace jumps, engine re-enables
     hg_engine_service();   // engine loops: SimpleSpace locomotor services (moving first, then idle)
     bt_team_positions(mode);  // battle host: TEAM containers follow their first live member
+    profile::lap("tac.motion_post");
     for (const Unit& u : units_)
         if (u.alive && !u.retreated && u.movable && store.alive(u.h))
             mode.trees().update(static_cast<tactical::EntityHandle>(u.id), mode.bounds_of(u.h));
     mode.trees().maintain(sim_time, pf);
+    profile::lap("tac.trees");
     drive_animation(rng, global_frame);
+    profile::lap("tac.anim");
     // 5. combat (abilities run inside its serial phases), events.
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !u.movable) continue;
@@ -1990,24 +1998,31 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         combat_->set_facing(u.id, tv(facing_of_yaw(movement_->view(u.id).yaw)));
     }
     s4_positions(mode);  // S4: garrisoned units sit on their holders
+    profile::lap("tac.combat_pre");
     hooks_->set_tick(&rng, global_frame);
     abilities_->tick(frame_, mode.trees(), rng, pf);
+    profile::lap("tac.combat");
     consume_events(mode);
     oi_respawn_due(mode);  // OI abilities: Tactical_Respawn creations due this frame
+    profile::lap("tac.events");
     hg_tick(mode, rng);    // hangars: SPAWN_SQUADRON services and the launches they request
     l1_weapons(mode, rng);  // L1 systems: special-weapon volleys, TSW state machines
+    profile::lap("tac.services");
     expire_objects(mode);
     s4_tick(mode, rng);  // S4: garrison enters / exits / ejects, structure capture
     pads_tick(mode);     // Int-final: build pads (construction completion, children gone)
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants follow the live shields (land)
     service_damage_tracking();
+    profile::lap("tac.cleanup");
     fog_service(mode);  // fog of war: REVEAL sources, attacker flashes (owner: fog agent)
+    profile::lap("tac.fog");
     advance_queues(mode, rng);  // [port: Gabriel] 5b. queueable unit actions: completed orders start the next entry
     stats_.shots = combat_->stats().shots;
     stats_.hits = combat_->stats().hits;
     // 6. victory.
     check_victory();
     hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
+    profile::lap("tac.victory");
 }
 
 // ---- commands / owner ---------------------------------------------------------------------------------------------

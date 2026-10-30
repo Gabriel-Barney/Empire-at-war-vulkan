@@ -91,6 +91,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/profile.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/game_database.hpp"
@@ -756,7 +757,7 @@ int replay_mode(const Options& opt) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+static int headless_main(int argc, char** argv) {
     Options opt;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -1039,6 +1040,39 @@ int main(int argc, char** argv) {
         print_result(run_campaign(map, o, opt.workers, nullptr, nullptr, 0, &seed.snapshot), opt.workers);
         if (!opt.quiet)
             for (const auto& d : mdiag) std::printf("  %s\n", d.c_str());
+    }
+    return rc;
+}
+
+// OPT1: --profile [--profile-out FILE] [--profile-budget MS] times every tick of the run (SimHost / TickScheduler ticks)
+// and prints p50 / p99 / max tick time, per-zone shares and the 20 worst ticks after it. Wall-clock data only: the run's
+// results and CRCs are unchanged. Runs that tick several hosts in turn (--selfcheck, --check-workers) report them together.
+int main(int argc, char** argv) {
+    std::vector<char*> args;
+    bool profile_on = false;
+    std::string profile_out;
+    double budget_ms = 1000.0 / 30.0;
+    for (int i = 0; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--profile") profile_on = true;
+        else if (a == "--profile-out" && i + 1 < argc) profile_out = argv[++i];
+        else if (a == "--profile-budget" && i + 1 < argc) budget_ms = std::strtod(argv[++i], nullptr);
+        else args.push_back(argv[i]);
+    }
+    if (profile_on || !profile_out.empty()) alamo::profile::start(65536);
+    const int rc = headless_main(static_cast<int>(args.size()), args.data());
+    if (alamo::profile::enabled()) {
+        alamo::profile::stop();
+        const std::string text = alamo::profile::format_report(alamo::profile::build_report(alamo::profile::snapshot(), budget_ms));
+        std::fputs(text.c_str(), stdout);
+        if (!profile_out.empty()) {
+            if (FILE* f = std::fopen(profile_out.c_str(), "wb")) {
+                std::fputs(text.c_str(), f);
+                std::fclose(f);
+            } else {
+                std::fprintf(stderr, "cannot write %s\n", profile_out.c_str());
+            }
+        }
     }
     return rc;
 }

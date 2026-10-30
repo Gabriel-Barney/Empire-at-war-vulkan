@@ -177,6 +177,12 @@ if(_alamo_sim)
       set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_w${_w} PROPERTIES TIMEOUT 1800
                            FIXTURES_REQUIRED alamo_land_outcome_w0)
     endforeach()
+    # OPT1: the tick profiler is wall-clock and write-only; a run with --profile must give the same CRCs as the 0-worker run.
+    add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_profiled
+             COMMAND alamo_headless --skirmish-ai foc-land --ticks 20000 --workers 4 --quiet --profile
+                     --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt --golden ${_land_outcome_crc})
+    set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
+                         FIXTURES_REQUIRED alamo_land_outcome_w0)
     # t41: FoC space, an AI defender with a Level 2 station against a far larger fleet must not retreat; skipped (exit 0) without ALAMO_FOC_DATA.
     add_test(NAME alamo_headless_skirmish_ai_foc_station
              COMMAND alamo_headless --skirmish-ai foc-station --seed 3 --ticks 20000 --workers 4 --quiet --expect-battle-end)

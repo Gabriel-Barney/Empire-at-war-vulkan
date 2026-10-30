@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/profile.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/game_object_types.hpp"
 
@@ -127,6 +128,7 @@ void GalacticMode::tick(const ModeTickContext& ctx) {
         // S3: GalacticSim::update is the galactic mode tick (GALACTIC_ECONOMY.md 5.1); it services
         // the primary store itself and does nothing while the pause counter is raised.
         sim_->update();
+        profile::lap("gal.sim");
         trace(ctx, "galactic.sim");
         secondary_.update(static_cast<uint32_t>(frame_), {}, {});
         trace(ctx, "galactic.end");
