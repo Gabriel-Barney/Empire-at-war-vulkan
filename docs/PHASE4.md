@@ -141,6 +141,40 @@ The base layer every gameplay system sits on. Done = the engine spawns a map's r
 | P4 sim | FoC galactic special systems behind the P4 panels (docs/re/P4_SIM_SYSTEMS.md) + auto-resolve Withdraw / tactical Autoresolve entry points | ✅ 2026-10-28 | engine/galactic (new special_data.hpp, special_systems.hpp, src/special_rules.cpp, src/special_systems.cpp, tests/test_special.cpp = alamo_galactic_special_tests; "P4 sim" blocks in campaign.hpp/.cpp, galactic_rules, economy.hpp, galactic_events.hpp, conflicts.hpp/.cpp, test_conflicts.cpp); engine/apps/sim ("P4 sim" blocks in campaign_battles.*, tactical_battle.*) |
 | N1 | Save / load + replay: stage 1 galactic-map saves, stage 2 saves during a tactical battle, alamo_game save / load menus, save size | ✅ 2026-10-29 (stage 1, then stage 2 + menus + size the same day; in-game check of the menus waits on Gabriel) | Stage 2: engine/tactical (movement, fog, tree, combat, abilities, garrison, hangar: src/*_save.cpp), engine/ai/tactical (src/tactical_save.cpp), engine/anim (src/anim_save.cpp), engine/lua (PresentationLog), engine/apps/sim (src/tactical_battle_save.cpp, save_io.hpp, campaign_battles, sim_anim, story_session), engine/apps/headless (save_run, skirmish_run); menus: engine/apps/game (save_games.*, game_session, app/game_main.cpp), engine/ui (gui_menus); size: engine/core (compress.hpp/.cpp, save_file), engine/ai (ai_lua_runtime, galactic_ai_save). Stage 1: engine/core (save_file.hpp/.cpp, ByteWriter/Reader save helpers), engine/objects (ObjectStore), engine/commands (scheduler, events, recording), engine/galactic (src/galactic_save.cpp), engine/ai (src/ai_save*.cpp, src/galactic_ai_save.cpp + every AI system), engine/lua (src/vm_persist.cpp, 2 Lua patches, bridge / players / fog / cinematic write+read), engine/apps/sim (save_session.*, sim_host_save.cpp), engine/apps/headless (save_run.*); build_agent.cmd |
 
+## Performance baseline and tick budget (OPT1, 2026-10-30)
+
+Tool: `alamo_headless --profile [--profile-out FILE] [--profile-budget MS]` (engine/core `profile.hpp`; design in `docs/OPT1_PLAN.md`).
+It reports tick wall time (mean / p50 / p99 / max), per-zone thread time, job-slot busy share and the 20 worst ticks. It is
+wall-clock and write-only: the CRC logs of a profiled run equal the unprofiled ones at 0 / 1 / 4 / 15 workers (checked by hand, and by the
+ctest entry `alamo_headless_skirmish_ai_foc_land_outcome_profiled`). `bench_msvc.cmd` re-runs the four scenarios into `logs\bench_profile_*.txt`.
+
+Machine: AMD Ryzen 7 7800X3D (8 cores, 16 logical), Windows 11, MSVC `/O2` build, nothing else heavy running. Each scenario 3 runs; the
+three runs agree within about 3 %, the median is shown. Tick = 33.3 ms at 30 ticks/s. W15 = `--workers 15` (default), W0 = serial.
+
+| Scenario (flags) | Ticks | W15 mean / p50 / p99 / max (ms) | W0 mean / p50 / p99 / max (ms) |
+|---|---|---|---|
+| FoC Heart of the Maw, every faction an AI (`--economy --galactic-ai --ticks 18000`) | 18000 | 0.21 / 0.19 / 0.52 / 3.1 | 0.19 / 0.16 / 0.49 / 3.0 |
+| 400-planet synthetic, 4 AIs (`--synthetic 400 --ais 4`) | 900 | 0.48 / 0.39 / 2.99 / 11.9 | 1.17 / 0.82 / 15.0 / 60.0 |
+| FoC land battle (`--skirmish-ai foc-land --ticks 20000`, ends at 12374) | 12374 | 3.42 / 3.06 / 6.39 / 104.7 | 3.08 / 2.67 / 6.25 / 108.7 |
+| FoC space battle with station (`--skirmish-ai foc-station --seed 3`, ends at 9072) | 9072 | 1.02 / 0.95 / 2.17 / 66.9 | 0.94 / 0.86 / 2.24 / 64.9 |
+
+What the numbers say:
+- Every scenario's p99 is far below half a tick (16.7 ms); the sim has plenty of headroom on this PC. These battles are two-AI skirmishes, not
+  the largest scenes the game can reach, so the budget below is for these scenes and gets re-checked when bigger ones exist.
+- The few ticks over budget are one-off setup ticks: the first battle tick (land 104 ms, space 67 ms; zone `T5.battles`, followed by a 22.8 ms
+  `tac.pre_move` tick in space) and frame 0 of the synthetic run (full all-pairs recompute, 11.9 ms at W15, 57 ms at W0).
+- Land and space battles are serial: the job slots are busy 4 % of tick time on W15, so more workers do not help there (they cost 10 % on land).
+  The synthetic galactic run does use them (W15 is 2.4 x faster on mean, 5 x on p99).
+- `T13.end_tick` (end-of-tick work including the CRC) is 46-54 % of every battle tick (1.5-1.7 ms land, 0.55 ms space): the first thing to look at
+  for a constant per-tick cost. `T5.battles` outside the `tac.*` steps (1.2 ms p50 on land) is not split yet.
+- Space has 11 ms `tac.movement` spikes (frames 2169, 9035) that land does not.
+
+Budget (proposal, Gabriel to confirm): per tick, p99 below 16.7 ms (50 % of 33.3 ms) and no tick above 33.3 ms, measured with
+`--profile --profile-budget 33.33` on the four scenarios above at the default worker count. Current status: p99 passes in all four
+(max 6.4 ms); the no-tick-above-33.3 ms limit fails on exactly the one-off setup ticks listed above, so those are the first inputs for OPT2
+(spread battle setup over several ticks or prepare it ahead; start the synthetic all-pairs recompute in the background, as `--latency` already does).
+Not covered yet: a profile of `alamo_game` (render host), story / Lua zones (they run inside `T7` / `T5` laps today), and bigger fleets.
+
 ## Open items
 
 **How to read this list** (status tags added 2026-10-28; inline, ✅ marks a finished sub-item, often also struck through, and ⬜ marks one still open):
