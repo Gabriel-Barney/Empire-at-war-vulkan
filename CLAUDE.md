@@ -34,7 +34,7 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 - Shaders are compiled by DXC (`toolchain\dxc`) to SPIR-V; the C++ compiler choice doesn't affect them.
 
 ## Build and test
-- Version control (2026-10-30): the project is a git repository (`main`); commit before and after each agent task. Build trees, logs, `toolchain/`, game data (`Data/`, `extracted/`), `re_reference/` and probe captures are ignored; `roadmap-store/` is its own repository. No remote yet.
+- Version control (2026-10-30): the project is a git repository (`main`); commit before and after each agent task. Build trees, logs, `toolchain/`, game data (`Data/`, `extracted/`), `re_reference/` and probe captures are ignored; `roadmap-store/` is its own repository. Remotes (both private, 2026-10-30): engine `https://github.com/Gabriel-Barney/Empire-at-war-vulkan.git` (`origin`, branch `main`; push after each task); roadmap store `https://github.com/Gabriel-Barney/Empire-Vulkan-Brenach.git` (`roadmap_store.py` pushes by itself after every write and build record; `python roadmap-store/roadmap_store.py sync` checks it). On a new account or machine: `git clone` the engine repo, `git clone` the store into `roadmap-store/`, then rebuild `toolchain/` with `toolchain\*.cmd` and unzip game data (these are not in git).
 - Main build: run `build_msvc.cmd` from the project root. It configures `build-msvc\`
   with the local toolchain, builds everything and runs ctest. Read `logs\msvc_configure.txt` and
   `logs\msvc_build.txt`; the run is finished when `msvc_configure.txt` ends with `BUILD_DONE`.
