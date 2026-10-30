@@ -19,6 +19,7 @@ call "%TC%\msvc\setup_x64.bat" >nul
 set PATH=%TC%\llvm\bin;%TC%\llvm\lib\clang\20\lib\windows;%TC%\venv\Scripts;%PATH%
 set CMAKE=%TC%\venv\Scripts\cmake.exe
 set CTEST=%TC%\venv\Scripts\ctest.exe
+call "%~dp0tools\test_env.cmd"
 rem ALAMO_SANITIZE picks the sanitizers (default undefined). With address on, clang 20 (MSVC ABI) crashes in a minimal
 rem program that catches a thrown exception, and address,undefined makes UBSan report a false "member call on null
 rem pointer" in engine/jobs/tests/test_jobs.cpp:196, so ASan is opt-in: set ALAMO_SANITIZE=address for tests that do not throw.
@@ -37,8 +38,9 @@ set SAN=-fsanitize=%ALAMO_SANITIZE% -fno-sanitize-recover=undefined -fno-omit-fr
   if not exist build-asan\tmp mkdir build-asan\tmp
   set "TMP=%~dp0build-asan\tmp"
   set "TEMP=%~dp0build-asan\tmp"
-  "%CTEST%" --test-dir build-asan --output-on-failure -j 4 2>&1
+  "%CTEST%" --test-dir build-asan --output-on-failure --output-junit "%~dp0build-asan\ctest_junit.xml" -j 4 2>&1
   echo ctest exit !ERRORLEVEL!
+  python tools\lint\ctest_skips.py "%~dp0build-asan\ctest_junit.xml"
 )
 echo BUILD_DONE>> logs\asan_configure.txt
 python roadmap-store\roadmap_store.py record-build clang-asan build-asan logs\asan_configure.txt logs\asan_build.txt

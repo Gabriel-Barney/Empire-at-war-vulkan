@@ -10,6 +10,7 @@ if not exist toolchain\msvc\setup_x64.bat (
 )
 call toolchain\msvc\setup_x64.bat >nul
 set PATH=%~dp0toolchain\venv\Scripts;%PATH%
+call "%~dp0tools\test_env.cmd"
 > logs\msvc_configure.txt (
   where cl.exe 2>&1
   cl.exe 2>&1
@@ -25,8 +26,9 @@ set PATH=%~dp0toolchain\venv\Scripts;%PATH%
   if not exist build-msvc\tmp mkdir build-msvc\tmp
   set "TMP=%~dp0build-msvc\tmp"
   set "TEMP=%~dp0build-msvc\tmp"
-  ctest --test-dir build-msvc --output-on-failure -j 8 2>&1
+  ctest --test-dir build-msvc --output-on-failure --output-junit "%~dp0build-msvc\ctest_junit.xml" -j 8 2>&1
   echo ctest exit !ERRORLEVEL!
+  python tools\lint\ctest_skips.py "%~dp0build-msvc\ctest_junit.xml"
 )
 echo BUILD_DONE>> logs\msvc_configure.txt
 python roadmap-store\roadmap_store.py record-build msvc build-msvc logs\msvc_configure.txt logs\msvc_build.txt

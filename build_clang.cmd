@@ -15,6 +15,7 @@ call "%TC%\msvc\setup_x64.bat" >nul
 set PATH=%TC%\llvm\bin;%TC%\venv\Scripts;%PATH%
 set CMAKE=%TC%\venv\Scripts\cmake.exe
 set CTEST=%TC%\venv\Scripts\ctest.exe
+call "%~dp0tools\test_env.cmd"
 > logs\clang_configure.txt (
   "%TC%\llvm\bin\clang++.exe" --version 2>&1
   rem -U drops a cached module list so the full build always gets every module (engine/CMakeLists.txt default).
@@ -29,8 +30,9 @@ set CTEST=%TC%\venv\Scripts\ctest.exe
   if not exist build-clang\tmp mkdir build-clang\tmp
   set "TMP=%~dp0build-clang\tmp"
   set "TEMP=%~dp0build-clang\tmp"
-  "%CTEST%" --test-dir build-clang --output-on-failure -j 8 2>&1
+  "%CTEST%" --test-dir build-clang --output-on-failure --output-junit "%~dp0build-clang\ctest_junit.xml" -j 8 2>&1
   echo ctest exit !ERRORLEVEL!
+  python tools\lint\ctest_skips.py "%~dp0build-clang\ctest_junit.xml"
 )
 echo BUILD_DONE>> logs\clang_configure.txt
 python roadmap-store\roadmap_store.py record-build clang build-clang logs\clang_configure.txt logs\clang_build.txt
