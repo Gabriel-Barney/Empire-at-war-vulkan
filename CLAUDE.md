@@ -30,10 +30,11 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 - **Two compilers: MSVC (ships) and clang (checks).**
 - Every change: MSVC build + tests. Changes to sim code (everything in `engine/` except render, audio,
   video and UI): also the clang build + tests, including the CRC selfchecks. Changes to `engine/jobs` or
-  other threading code: also a clang sanitizer run (ASan/UBSan; TSan where the toolchain provides it).
+  other threading code: also `build_asan.cmd` (clang UBSan by default; `set ALAMO_SANITIZE=address` for ASan on tests that do not throw, because ASan and exceptions crash on this toolchain; no TSan runtime on Windows, so races are covered by the per-worker-count CRC tests).
 - Shaders are compiled by DXC (`toolchain\dxc`) to SPIR-V; the C++ compiler choice doesn't affect them.
 
 ## Build and test
+- Version control (2026-10-30): the project is a git repository (`main`); commit before and after each agent task. Build trees, logs, `toolchain/`, game data (`Data/`, `extracted/`), `re_reference/` and probe captures are ignored; `roadmap-store/` is its own repository. No remote yet.
 - Main build: run `build_msvc.cmd` from the project root. It configures `build-msvc\`
   with the local toolchain, builds everything and runs ctest. Read `logs\msvc_configure.txt` and
   `logs\msvc_build.txt`; the run is finished when `msvc_configure.txt` ends with `BUILD_DONE`.

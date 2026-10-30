@@ -14,11 +14,11 @@ there are no dedicated art or design teams in this tree.
 ## Findings, by priority
 
 ### P0 — Safety net
-1. **No version control.** The folder is not a git repository. History is a set of zips and folders in `backups/`
+1. **No version control.** *(Fixed 2026-10-30: `git init`, first commit `fdc6b9c`, 1,251 files, 52 MB pack; no remote yet.)* The folder is not a git repository. History is a set of zips and folders in `backups/`
    (`goldens-before-*`, `logs-through-*`, `pre-phase*`), made by hand. Nothing can be bisected, diffed or rolled back, and
    parallel agents edit one live tree. This is the biggest single risk.
 2. **No CI.** No `.github`, no scheduled build. Every gate depends on a person or agent running `build_msvc.cmd`/`build_clang.cmd`.
-3. **Sanitizer gate is not wired.** `CLAUDE.md` requires an ASan/UBSan (TSan where possible) run for `engine/jobs` and threading
+3. **Sanitizer gate is not wired.** *(Partly fixed 2026-10-30: `build_asan.cmd` runs UBSan on core+jobs, 10/10 pass. ASan is opt-in because clang 20 + MSVC ABI crashes on any caught exception, and ASan+UBSan reports a false null-member-call at `test_jobs.cpp:196`; so no ASan result for jobs yet.)* `CLAUDE.md` requires an ASan/UBSan (TSan where possible) run for `engine/jobs` and threading
    changes. Neither the CMake files nor the build scripts outside `toolchain/` and the build trees mention a sanitizer flag.
    There is no `build_asan.cmd`. The rule cannot currently be followed as written.
 4. **Silent skips in data-driven tests.** 62 test sources read `ALAMO_FOC_DATA` / `ALAMO_EAW_DATA` and skip when unset. The
