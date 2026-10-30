@@ -4,6 +4,12 @@ The main roadmap and flowchart is `ROADMAP.html` in the project root (Gabriel, 2
 claude.ai sign-in. It is generated, so never edit it by hand: change the documents in `roadmap-store/` and it is rebuilt,
 along with the copy in that repository that other accounts pull. `docs/ROADMAP.html` is its page shell.
 
+Copies, so nobody edits the wrong one: `docs/ROADMAP.html` is the **only** hand-edited page file (the shell: layout, script,
+`PRESETS`). `roadmap-store/page_shell.html` is a copy of it that `roadmap_store.py` refreshes on every render (the fallback when
+the store is cloned alone). `ROADMAP.html` in the project root and in `roadmap-store/` are the shell plus a read-only data
+snapshot, and `roadmap-store/ROADMAP.md` is the text form; all of these are regenerated on every write, marked generated in
+`.gitattributes`, and a diff in them is never a change to review.
+
 To update, write a JSON list of `{"op", "collection", "doc_id", "data"}` to a scratch file, then run:
 
 ```bash
@@ -88,6 +94,25 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
 
 `roadmap-store/` is its own git repository, and `write` pushes to its remote when one is set. Another account clones it and
 updates the same way (`roadmap-store/README.md`). Until a remote is set, updates stay on this machine.
+
+### Keeping the local page current (Gabriel, 2026-10-30)
+
+When `ROADMAP.html` changes in the GitHub store repository (another account or machine wrote to the roadmap), the local
+`ROADMAP.html` in the project root must change with it. The page is generated from `roadmap-store/data/`, so this happens
+whenever the store is brought up to date through the script:
+
+- `python roadmap-store/roadmap_store.py sync` pulls the remote (`git pull --rebase`), then regenerates **both** copies of
+  `ROADMAP.html` (in `roadmap-store/` and in the project root) and `ROADMAP.md`, commits and pushes. Run it at the start of a
+  session, and whenever the roadmap on GitHub may have changed.
+- `write` and every build record (`record-build`, called by the build scripts) pull first and regenerate both copies the same
+  way, so any roadmap update on this machine refreshes the local page too.
+- A plain `git pull` inside `roadmap-store/` updates the store's own `ROADMAP.html` but **not** the project-root copy. If you
+  pulled by hand, run `python roadmap-store/roadmap_store.py render` (or `sync`) afterwards.
+- The project-root `ROADMAP.html` is also tracked in the engine repository, so after a refresh it shows as modified there:
+  commit it with the work that triggered the update (it is generated, never reviewed or edited by hand).
+
+Check that the two copies agree with `python roadmap-store/roadmap_store.py sync` (prints `in sync with origin/main`) and by
+comparing `ROADMAP.html` with `roadmap-store/ROADMAP.html` (byte-identical after any refresh).
 
 ## Build records
 

@@ -2,13 +2,13 @@
 rem Sanitizer check: build with the project-local LLVM clang++ plus -fsanitize=%ALAMO_SANITIZE% and run ctest.
 rem Required for changes to engine/jobs and other threading code (CLAUDE.md). Default is UBSan; see ALAMO_SANITIZE below.
 rem TSan has no Windows runtime in LLVM 20, so races are covered by the per-worker-count determinism tests instead.
-rem Usage: build_asan.cmd [module list]   default "core;jobs"; e.g. build_asan.cmd "core;vfs;data;jobs;galactic"
+rem Usage: build_asan.cmd [module list]   default "core;vfs;data;jobs;galactic;objects;anim;commands;tactical;lua;ai" (the sim modules, PAF t03)
 rem Dir build-asan\, logs logs\asan_configure.txt / logs\asan_build.txt (finished when asan_configure.txt ends with BUILD_DONE).
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 if not exist logs mkdir logs
 set TC=%~dp0toolchain
-set MODULES=core;jobs
+set MODULES=core;vfs;data;jobs;galactic;objects;anim;commands;tactical;lua;ai
 if not "%~1"=="" set MODULES=%~1
 if not exist "%TC%\llvm\bin\clang++.exe" (
   echo clang missing: run toolchain\5_portability_compilers.cmd first.> logs\asan_configure.txt
@@ -20,11 +20,14 @@ set PATH=%TC%\llvm\bin;%TC%\llvm\lib\clang\20\lib\windows;%TC%\venv\Scripts;%PAT
 set CMAKE=%TC%\venv\Scripts\cmake.exe
 set CTEST=%TC%\venv\Scripts\ctest.exe
 call "%~dp0tools\test_env.cmd"
-rem ALAMO_SANITIZE picks the sanitizers (default undefined). With address on, clang 20 (MSVC ABI) crashes in a minimal
-rem program that catches a thrown exception, and address,undefined makes UBSan report a false "member call on null
-rem pointer" in engine/jobs/tests/test_jobs.cpp:196, so ASan is opt-in: set ALAMO_SANITIZE=address for tests that do not throw.
+rem ALAMO_SANITIZE picks the sanitizers (default undefined). ASan on clang 20 (MSVC ABI) crashes in any catch handler
+rem (even a minimal try/catch) because the stack instrumentation touches the exception funclet frame; address,undefined also
+rem made UBSan report a false "member call on null pointer" in engine/jobs/tests/test_jobs.cpp:196. The same cause: both go
+rem away with -mllvm -asan-stack=0, added below whenever address is on. Cost: ASan then checks heap and globals only, not
+rem stack buffers or use-after-return. Rationale and results: docs/PHASE4.md, "Sanitizer limits".
 if not defined ALAMO_SANITIZE set ALAMO_SANITIZE=undefined
 set SAN=-fsanitize=%ALAMO_SANITIZE% -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g
+echo %ALAMO_SANITIZE%| findstr /c:address >nul && set SAN=!SAN! -mllvm -asan-stack=0
 > logs\asan_configure.txt (
   "%TC%\llvm\bin\clang++.exe" --version 2>&1
   "%CMAKE%" -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MAKE_PROGRAM=%TC%\venv\Scripts\ninja.exe" "-DCMAKE_CXX_COMPILER=%TC%\llvm\bin\clang++.exe" "-DCMAKE_CXX_FLAGS=-Wconversion -Wshadow !SAN!" "-DCMAKE_EXE_LINKER_FLAGS=!SAN! -Wl,/IGNORE:4217" "-DALAMO_ENGINE_MODULES=!MODULES!" 2>&1

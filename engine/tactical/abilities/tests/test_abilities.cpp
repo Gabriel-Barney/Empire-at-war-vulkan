@@ -97,6 +97,7 @@ struct World {
     World() : trees(2) {}
     void make(CombatConfig cfg = {}, AbilityConfig acfg = {}) {
         acfg.corvette_category = kCatCorvette;
+        ab.reset();  // the old AbilitySystem unhooks itself from the old CombatSystem in its destructor, so it goes first
         sys = std::make_unique<CombatSystem>(cd, cfg, std::vector<PlayerInfo>{PlayerInfo{}, PlayerInfo{}});
         ab = std::make_unique<AbilitySystem>(*sys, ad, acfg);
         sys->bind_rng(&rng);
@@ -1404,6 +1405,7 @@ struct OiWorld {
         AbilityConfig acfg;
         acfg.mode = mode;
         acfg.corvette_category = kCatCorvette;
+        ab.reset();
         sys = std::make_unique<CombatSystem>(cd, cfg, std::move(players));
         ab = std::make_unique<AbilitySystem>(*sys, ad, acfg);
         sys->bind_rng(&rng);

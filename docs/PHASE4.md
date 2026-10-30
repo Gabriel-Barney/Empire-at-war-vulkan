@@ -175,6 +175,24 @@ Budget (confirmed by Gabriel, 2026-10-30): per tick, p99 below 16.7 ms (50 % of 
 (spread battle setup over several ticks or prepare it ahead; start the synthetic all-pairs recompute in the background, as `--latency` already does).
 Not covered yet: a profile of `alamo_game` (render host), story / Lua zones (they run inside `T7` / `T5` laps today), and bigger fleets.
 
+## Sanitizer limits (PAF t02 / t03, 2026-10-30)
+
+`build_asan.cmd` runs clang 20 (MSVC ABI) with UBSan by default; `ALAMO_SANITIZE=address` adds ASan.
+- **ASan and exceptions.** A minimal `try { throw } catch` program built with `-fsanitize=address` crashes in the catch handler
+  (static runtime: access violation inside `main` right after `CxxCallCatchBlock`; `-fms-runtime-lib=dll` does not link at all
+  with this toolchain). Cause: the stack instrumentation touches the catch funclet's frame. `-mllvm -asan-stack=0` fixes it (the
+  program prints and exits 0); `-asan-globals=0`, `-fsanitize-address-use-after-return=never` and `-asan-use-after-scope=0` do not.
+  `build_asan.cmd` now adds `-mllvm -asan-stack=0` whenever `address` is in `ALAMO_SANITIZE`, so ASan covers heap, globals and
+  use-after-free but **not stack buffer overflows or use-after-return**. The false "member call on null" at
+  `engine/jobs/tests/test_jobs.cpp:196` came from the same instrumentation.
+- **TSan:** no Windows runtime in LLVM 20; races are covered by the per-worker-count CRC tests.
+- **Modules covered** (2026-10-30): the default is now the sim set `core;vfs;data;jobs;galactic;objects;anim;commands;tactical;lua;ai` (52 tests; UBSan 17 s, ASan about 3 min,
+  both 52/52 and 0 warnings). Not covered: assets, rhi, materials, shaderxlat, terrain, render, ui, audio, video, apps (GPU / window / big-data
+  tests; sim code is what the sanitizer rule protects). The first run found three real bugs, all fixed: `alamo_commands_tests` shifted a `uint32_t` by 32
+  (`engine/commands/tests/test_commands.cpp`, UBSan); `alamo_tactical_abilities_tests` replaced its `CombatSystem` before its `AbilitySystem`, whose
+  destructor then wrote to the freed system (test fixture order, `World::make`); `luaG_checkcode` indexed `luaP_opmodes` with an opcode
+  from a corrupt save (patch in `engine/lua/CMakeLists.txt`, the save is now rejected).
+
 ## Open items
 
 **How to read this list** (status tags added 2026-10-28; inline, ✅ marks a finished sub-item, often also struck through, and ⬜ marks one still open):

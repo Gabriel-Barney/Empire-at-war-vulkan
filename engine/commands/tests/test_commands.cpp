@@ -70,7 +70,7 @@ EventData random_event(Rng& r, uint8_t type) {
             case FieldKind::Player: v.u = r.below(16); break;
             case FieldKind::Quant: v.u = quantize(f.arg, static_cast<float>(r.below(2000000)) * 0.01f - 10000.0f); break;
             case FieldKind::List: {
-                v.ids.resize(std::min<uint32_t>(r.below(6), (1u << f.arg) - 1));
+                v.ids.resize(std::min<uint32_t>(r.below(6), f.arg >= 32 ? 0xFFFFFFFFu : (1u << f.arg) - 1));  // arg = count bits (32: no shift)
                 for (auto& id : v.ids) id = static_cast<uint32_t>(r.next());
                 break;
             }
