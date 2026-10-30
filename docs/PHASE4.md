@@ -169,7 +169,7 @@ What the numbers say:
   for a constant per-tick cost. `T5.battles` outside the `tac.*` steps (1.2 ms p50 on land) is not split yet.
 - Space has 11 ms `tac.movement` spikes (frames 2169, 9035) that land does not.
 
-Budget (proposal, Gabriel to confirm): per tick, p99 below 16.7 ms (50 % of 33.3 ms) and no tick above 33.3 ms, measured with
+Budget (confirmed by Gabriel, 2026-10-30): per tick, p99 below 16.7 ms (50 % of 33.3 ms) and no tick above 33.3 ms, measured with
 `--profile --profile-budget 33.33` on the four scenarios above at the default worker count. Current status: p99 passes in all four
 (max 6.4 ms); the no-tick-above-33.3 ms limit fails on exactly the one-off setup ticks listed above, so those are the first inputs for OPT2
 (spread battle setup over several ticks or prepare it ahead; start the synthetic all-pairs recompute in the background, as `--latency` already does).
