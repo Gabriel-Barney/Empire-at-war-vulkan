@@ -30,10 +30,12 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 - **Two compilers: MSVC (ships) and clang (checks).**
 - Every change: MSVC build + tests. Changes to sim code (everything in `engine/` except render, audio,
   video and UI): also the clang build + tests, including the CRC selfchecks. Changes to `engine/jobs` or
-  other threading code: also `build_asan.cmd` (clang UBSan by default; `set ALAMO_SANITIZE=address` for ASan on tests that do not throw, because ASan and exceptions crash on this toolchain; no TSan runtime on Windows, so races are covered by the per-worker-count CRC tests).
+  other threading code: also `build_asan.cmd` (clang UBSan by default; `set ALAMO_SANITIZE=address` for ASan, which then runs with `-asan-stack=0` (heap and globals only) because stack instrumentation crashes catch handlers on this toolchain, see `docs/PHASE4.md` "Sanitizer limits"; the default module list is the 11 sim modules; no TSan runtime on Windows, so races are covered by the per-worker-count CRC tests).
 - Shaders are compiled by DXC (`toolchain\dxc`) to SPIR-V; the C++ compiler choice doesn't affect them.
 
 ## Build and test
+- Line endings: `.gitattributes` keeps text files LF in the working tree too (golden files and test data are compared byte for byte, so a CRLF checkout fails `alamo_ai_tests` and `alamo_shaderxlat_tests`); `.cmd` / `.bat` / `.ps1` are CRLF.
+- Screenshot diffs: `python tools/visual/png_diff.py compare BASELINE_DIR NEW_DIR [--diff-dir D]` compares the render / GUI PNGs against stored baselines (tolerance, mismatch report and diff images; `update` refreshes baselines). Where the baselines live is Gabriel's call (open on the roadmap, PAF).
 - Version control (2026-10-30): the project is a git repository (`main`); commit before and after each agent task. Build trees, logs, `toolchain/`, game data (`Data/`, `extracted/`), `re_reference/` and probe captures are ignored; `roadmap-store/` is its own repository. Remotes (both private, 2026-10-30): engine `https://github.com/Gabriel-Barney/Empire-at-war-vulkan.git` (`origin`, branch `main`; push after each task); roadmap store `https://github.com/Gabriel-Barney/Empire-Vulkan-Brenach.git` (`roadmap_store.py` pushes by itself after every write and build record; `python roadmap-store/roadmap_store.py sync` checks it). On a new account or machine: `git clone` the engine repo, `git clone` the store into `roadmap-store/`, then rebuild `toolchain/` with `toolchain\*.cmd` and unzip game data (these are not in git).
 - Main build: run `build_msvc.cmd` from the project root. It configures `build-msvc\`
   with the local toolchain, builds everything and runs ctest. Read `logs\msvc_configure.txt` and

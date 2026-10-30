@@ -105,6 +105,12 @@ alamo_lua_patch(lstate.h
 alamo_lua_patch(ltable.c "#define lua_number2int(i,n)\t((i)=(int)(n))\n"
   "#define lua_number2int(i,n)\t((i)=(((n) >= -2147483648.0 && (n) < 2147483648.0) ? (int)(n) : (-2147483647-1)))  /* alamo: no float-cast UB */\n")
 # end OI lua (UB fixes)
+# PAF t03 (ASan, 2026-10-30): luaG_symbexec (luaG_checkcode, run on every function loaded from a save) indexes luaP_opmodes
+# with the raw 6-bit opcode, so a corrupt save holding an opcode >= NUM_OPCODES read past the table (ASan
+# global-buffer-overflow in alamo_lua_save_tests test_corruption). The check rejects it like any other malformed code;
+# valid code is unchanged.
+alamo_lua_patch(ldebug.c "    OpCode op = GET_OPCODE(i);\n    int a = GETARG_A(i);\n"
+  "    OpCode op = GET_OPCODE(i);\n    check(op < NUM_OPCODES);  /* alamo: opcode past the opmodes table */\n    int a = GETARG_A(i);\n")
 # N1 lua (memory safety, found by the save tests): a closure keeps a coroutine's local through an OPEN upvalue; when
 # that coroutine becomes garbage, stock 5.0.2 marks neither (traverseclosure skips open upvalues, the dead thread is not
 # traversed), sweeps the value, then frees the thread, whose luaF_close copies the now dangling value into the closed

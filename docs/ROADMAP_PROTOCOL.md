@@ -4,6 +4,12 @@ The main roadmap and flowchart is `ROADMAP.html` in the project root (Gabriel, 2
 claude.ai sign-in. It is generated, so never edit it by hand: change the documents in `roadmap-store/` and it is rebuilt,
 along with the copy in that repository that other accounts pull. `docs/ROADMAP.html` is its page shell.
 
+Copies, so nobody edits the wrong one: `docs/ROADMAP.html` is the **only** hand-edited page file (the shell: layout, script,
+`PRESETS`). `roadmap-store/page_shell.html` is a copy of it that `roadmap_store.py` refreshes on every render (the fallback when
+the store is cloned alone). `ROADMAP.html` in the project root and in `roadmap-store/` are the shell plus a read-only data
+snapshot, and `roadmap-store/ROADMAP.md` is the text form; all of these are regenerated on every write, marked generated in
+`.gitattributes`, and a diff in them is never a change to review.
+
 To update, write a JSON list of `{"op", "collection", "doc_id", "data"}` to a scratch file, then run:
 
 ```bash

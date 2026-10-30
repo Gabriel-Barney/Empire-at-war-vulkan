@@ -80,7 +80,8 @@ function(alamo_game_add_exe)
   if(NOT EXISTS ${_dir}/app/game_main.cpp)
     return()
   endif()
-  add_executable(alamo_game ${_dir}/app/game_main.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp
+  add_executable(alamo_game ${_dir}/app/game_main.cpp ${_dir}/app/app_session.cpp ${_dir}/app/app_input.cpp ${_dir}/app/app_screens.cpp
+                           ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_script.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp
                            ${_dir}/app/game_info.cpp ${_dir}/app/game_display.cpp)
   # alamo_core first: tools/formats' inline ByteReader vs core's (LNK2005, see alamo_render_app).
   target_link_libraries(alamo_game PRIVATE alamo_core alamo_game_core alamo_render_galactic alamo_render_sim alamo_ui_draw alamo_ui_hud
