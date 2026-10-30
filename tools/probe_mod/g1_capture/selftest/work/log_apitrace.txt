@@ -1,0 +1,15 @@
+  - game: C:\Users\Gabriel\Desktop\Star wars empire at war port\tools\probe_mod\g1_capture\selftest\work\fakegame
+  - run folder: C:\Users\Gabriel\Desktop\Star wars empire at war port\tools\probe_mod\g1_capture\selftest\work\out\runs\apitrace_20261027_101152
+  - replace d3dx9_43.dll <- C:\Users\Gabriel\Desktop\Star wars empire at war port\tools\probe_mod\g1_capture\selftest\work\fakegame\corruption\eaw_modifier_d3dx_original.dll (disable prior patch chain: genuine d3dx9_43 (PRIOR_PATCH.md))
+  - replace d3d9.dll <- C:\Users\Gabriel\Desktop\Star wars empire at war port\toolchain\capture\apitrace-14.0\lib\wrappers\d3d9.dll (apitrace D3D9 wrapper (forwards to the system d3d9.dll))
+  - move aside dxgi.dll (keep DXVK's dxgi out of the native D3D9 path)
+  - game started (pid 5444)
+  - marker m1 (trace 2 bytes)
+  - quit requested
+  - game exited
+  - restoring C:\Users\Gabriel\Desktop\Star wars empire at war port\tools\probe_mod\g1_capture\selftest\work\fakegame\corruption from C:\Users\Gabriel\Desktop\Star wars empire at war port\tools\probe_mod\g1_capture\selftest\work\out\state\manifest.json
+  - restore verified: every pre-run file has its pre-run SHA-256 (game-written logs excepted)
+  - running g1_analyze.py
+analysis written to C:\Users\Gabriel\Desktop\Star wars empire at war port\tools\probe_mod\g1_capture\selftest\work\out\runs\apitrace_20261027_101152\analysis
+RESULT ok exit 0
+

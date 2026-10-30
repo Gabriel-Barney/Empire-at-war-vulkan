@@ -1,0 +1,92 @@
+{
+ "blobs": 291,
+ "match": 291,
+ "mismatch": [],
+ "vkd3d_failed": [],
+ "unknown_opcodes": {},
+ "profiles": {
+  "vs_1_1": 177,
+  "ps_2_0": 32,
+  "vs_2_0": 4,
+  "ps_1_1": 63,
+  "ps_1_3": 4,
+  "ps_1_4": 11
+ },
+ "spirv_ok": 230,
+ "instructions_compared": 9449,
+ "spirv_fail": {
+  "E2007: Unhandled instruction \"expp\" (0x7a).": [
+   "059647860988.bin",
+   "1176a655f235.bin",
+   "15f27f6f3968.bin",
+   "1732194e176f.bin",
+   "25470fce6948.bin",
+   "29931c4a893b.bin",
+   "370b56538d74.bin",
+   "3ad055eb09b9.bin",
+   "431d7e4919b7.bin",
+   "4632f085050f.bin",
+   "4ddf9cd9d030.bin",
+   "6646b4dd3f17.bin",
+   "6dd7de952252.bin",
+   "753f913cfc29.bin",
+   "81630d128c2b.bin",
+   "82e0cc594ff9.bin",
+   "93d9e1fd6b52.bin",
+   "977cddeb2c47.bin",
+   "9796d1ded976.bin",
+   "9b1d915925b2.bin",
+   "9d06b7402a74.bin",
+   "9ea57392d1f5.bin",
+   "a00a26019c9c.bin",
+   "aaf7237809b4.bin",
+   "ae5115872a27.bin",
+   "b53795024903.bin",
+   "bb182a407d80.bin",
+   "cea5f1ef0810.bin",
+   "d104e9ade8e0.bin",
+   "d9e8af203a14.bin",
+   "db0cb3a804e8.bin",
+   "e58ca524fbcf.bin",
+   "e6f7f4c09268.bin",
+   "f2b7f6a00b3a.bin",
+   "f79625176039.bin"
+  ],
+  "E2007: Unhandled instruction \"cnd\" (0x1c).": [
+   "11cc917522ed.bin",
+   "d2b74c9d9903.bin"
+  ],
+  "E2001: Unrecognized register (register 0xb, 4294967295).": [
+   "1394311143c3.bin",
+   "241298c1d72c.bin",
+   "cb81c0843364.bin",
+   "ea11e00ac1f1.bin"
+  ],
+  "E9000: Aborting due to unimplemented feature: Source modifier 0x4.": [
+   "1cd87769b176.bin",
+   "26673e06d10f.bin",
+   "2be18ecefe31.bin",
+   "4c3b044d7d8b.bin",
+   "4edaeb02fb39.bin",
+   "506cc0e09b22.bin",
+   "5670cf5e52e4.bin",
+   "57cf53587894.bin",
+   "5aac2ce6057e.bin",
+   "5c4e64efa8f3.bin",
+   "9052b6ef7b2e.bin",
+   "a26ddc744235.bin",
+   "b72e5934dbc2.bin",
+   "ecfd8a1eb8c9.bin",
+   "f476b6c68261.bin",
+   "fb37f533e05c.bin"
+  ],
+  "E9000: Aborting due to unimplemented feature: Combined sampler instruction \"texdepth\" (0x118).": [
+   "2421f271a5ef.bin",
+   "4b76c082c386.bin"
+  ],
+  "E9000: Aborting due to unimplemented feature: Combined sampler instruction \"texm3x2pad\" (0x120).": [
+   "9afae340849e.bin",
+   "c154786be79c.bin"
+  ]
+ }
+}

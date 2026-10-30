@@ -1,0 +1,272 @@
+# S5 / G0 game host library: mode stack (galactic / land / space), main loop + pacing, command
+# handlers, map spawning, per-tick CRC. Integrates objects, commands, tactical, terrain, jobs.
+set(_alamo_sim OFF)
+if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND TARGET alamo_terrain AND TARGET alamo_jobs
+   AND TARGET alamo_galactic_sim)
+  set(_alamo_sim ON)
+  add_library(alamo_sim STATIC
+    sim/src/pacing.cpp
+    sim/src/game_modes.cpp
+    sim/src/sim_host.cpp
+    sim/src/sim_host_save.cpp   # N1 save / load (owner: n1-host)
+    sim/src/save_session.cpp    # N1 session descriptor + data fingerprints
+    sim/src/map_spawn.cpp
+    sim/src/scenario.cpp
+  )
+  add_library(alamo::sim ALIAS alamo_sim)
+  target_include_directories(alamo_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sim/include)
+  target_link_libraries(alamo_sim PUBLIC alamo_objects alamo_commands alamo_tactical alamo_terrain alamo_jobs
+                                         alamo_galactic_sim alamo_core alamo_engine_flags)
+  # S4 story & campaign events: engine/lua's StoryModel + one LuaVm per plot script (lua.h for
+  # ServiceRate / LastService). Without engine/lua the session never starts (story_session_none.cpp).
+  if(TARGET alamo_lua AND TARGET alamo_lua_vm)
+    target_sources(alamo_sim PRIVATE sim/src/story_session.cpp)
+    target_link_libraries(alamo_sim PUBLIC alamo_lua PRIVATE alamo_lua_vm)
+    target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_STORY=1)
+  else()
+    target_sources(alamo_sim PRIVATE sim/src/story_session_none.cpp)
+  endif()
+
+  # S10-int / R3: sim-owned animation (SimAnimation, T5.anim) when engine/anim is configured.
+  if(TARGET alamo_anim)
+    target_sources(alamo_sim PRIVATE sim/src/sim_anim.cpp)
+    target_link_libraries(alamo_sim PUBLIC alamo_anim)
+    target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_ANIM=1)
+  endif()
+
+  # S10 battle transitions (docs/re/BATTLE_TRANSITIONS.md): tactical battles of galactic conflicts on
+  # MovementSystem (S7) + CombatSystem (S8): battle_catalog / tactical_battle / campaign_battles.
+  # S10-int: the battles run combat through the S9 AbilitySystem (abilities required).
+  if(TARGET alamo_tactical_movement AND TARGET alamo_tactical_combat AND TARGET alamo_tactical_abilities)
+    target_sources(alamo_sim PRIVATE sim/src/battle_catalog.cpp sim/src/tactical_battle.cpp sim/src/campaign_battles.cpp)
+    target_link_libraries(alamo_sim PUBLIC alamo_tactical_movement alamo_tactical_combat alamo_tactical_abilities PRIVATE alamo_data)
+    target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_BATTLES=1)
+    # --- fog of war (owner: fog agent): per-battle FogOfWar (tactical_battle_fog.cpp; no-op stubs without the lib) ---
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_fog.cpp)
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_l1.cpp sim/src/tactical_battle_l1_strikes.cpp)  # L1 systems (owner: tactical-systems agent)
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_pads.cpp)  # Int-final: build pads (L1_S4_REMAINING §3.6)
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_bt.cpp)    # battle host: BT setup / transition rules, pad units
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_oi_abilities.cpp)  # OI abilities: ability host side (owner: abilities agent)
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_save.cpp)  # N1 stage 2 (owner: n2-host): battle save / load
+    # Hangars / station upgrade / engine-loop requests (docs/re/STATION_HANGARS_SOUND.md): engine/tactical/hangar.
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_hangar.cpp)
+    target_link_libraries(alamo_sim PUBLIC alamo_tactical_hangar)
+    # battle host: model data (bounds for the LAND_OBSTACLE stamps, hard-point bones) from the ALO files when engine/assets
+    # is configured; without it (or without the model files) the catalog keeps its data-only fallbacks.
+    if(TARGET alamo_assets)
+      target_link_libraries(alamo_sim PRIVATE alamo_assets)
+      target_compile_definitions(alamo_sim PRIVATE ALAMO_SIM_HAVE_ASSETS=1)
+    endif()
+    if(TARGET alamo_tactical_fog)
+      target_link_libraries(alamo_sim PUBLIC alamo_tactical_fog)
+      target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_FOG=1)
+    endif()
+    # --- end fog ---
+    # --- S4 (owner: S4 agent): garrisons + structure capture in battles (tactical_battle_garrison.cpp; stubs without the lib) ---
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_garrison.cpp)
+    if(TARGET alamo_tactical_garrison)
+      target_link_libraries(alamo_sim PUBLIC alamo_tactical_garrison)
+      target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_GARRISON=1)
+    endif()
+    # --- end S4 ---
+    # A1 hooks: DAMAGE_TRACKING store per battle, land campaign-battle credit transfer.
+    if(TARGET alamo_ai_tactical)
+      target_link_libraries(alamo_sim PUBLIC alamo_ai_tactical)
+      target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_AI_TACTICAL=1)
+    endif()
+    # --- A1 stage 2 (owner: A1 agent): opt-in tactical AI in battles (battle_ai.hpp, campaign_battles_ai.cpp) ---
+    if(TARGET alamo_ai_tactical_world)
+      target_sources(alamo_sim PRIVATE sim/src/battle_ai.cpp sim/src/campaign_battles_ai.cpp)
+      target_link_libraries(alamo_sim PUBLIC alamo_ai_tactical_world)
+      target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_TACTICAL_AI=1)
+    endif()
+    # --- end A1 ---
+    add_executable(alamo_sim_battle_tests sim/tests/test_battles.cpp)
+    target_link_libraries(alamo_sim_battle_tests PRIVATE alamo_sim alamo_vfs)
+    target_compile_definitions(alamo_sim_battle_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
+    add_test(NAME alamo_sim_battle_tests COMMAND alamo_sim_battle_tests)
+    set_tests_properties(alamo_sim_battle_tests PROPERTIES TIMEOUT 900)
+    # --- L1 systems (owner: tactical-systems agent): special weapons / TSW / hyperspace / engines in a campaign battle ---
+    add_executable(alamo_sim_l1_tests sim/tests/test_battle_l1.cpp)
+    target_link_libraries(alamo_sim_l1_tests PRIVATE alamo_sim alamo_vfs)
+    target_compile_definitions(alamo_sim_l1_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
+    add_test(NAME alamo_sim_l1_tests COMMAND alamo_sim_l1_tests)
+    set_tests_properties(alamo_sim_l1_tests PROPERTIES TIMEOUT 600)
+    # --- end L1 systems ---
+  endif()
+
+  # Tests: pacing, mode stack (only the top mode ticks), per-tick step order, synthetic map with a
+  # recorded command stream at 0/1/4/N workers + checked-in golden (no game data needed), and the
+  # real FoC space / land maps when ALAMO_FOC_DATA is set (skipped otherwise).
+  add_executable(alamo_sim_tests sim/tests/test_sim.cpp)
+  target_link_libraries(alamo_sim_tests PRIVATE alamo_sim alamo_vfs)
+  target_compile_definitions(alamo_sim_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
+  add_test(NAME alamo_sim_tests COMMAND alamo_sim_tests)
+  set_tests_properties(alamo_sim_tests PROPERTIES TIMEOUT 600)
+endif()
+
+# Headless host: load game data through the VFS, build a campaign's galaxy, and run the
+# deterministic tick with per-AI all-pairs recomputes on the job system. Also the Phase 2 smoke test.
+# With alamo_sim: --map NAME --ticks N runs a tactical map through the G0 host.
+add_executable(alamo_headless headless/main.cpp)
+# alamo_core first: tools/formats defines its own alamo::ByteReader (inline members) that clashes with
+# core's out-of-line one when MSVC pulls formats' COMDATs first (LNK2005, an ODR issue outside apps).
+target_link_libraries(alamo_headless PRIVATE alamo_core alamo_vfs alamo_data alamo_jobs alamo_galactic alamo_commands
+                                             alamo_ai alamo_objects)
+if(_alamo_sim)
+  target_sources(alamo_headless PRIVATE headless/map_run.cpp headless/battle_run.cpp)
+  target_link_libraries(alamo_headless PRIVATE alamo_sim)
+  target_compile_definitions(alamo_headless PRIVATE ALAMO_HEADLESS_HAVE_SIM=1)
+  # --- A2: --economy --galactic-ai (AI-vs-AI galactic campaign, headless/ai_run.cpp) ---
+  target_sources(alamo_headless PRIVATE headless/ai_run.cpp)
+  if(TARGET alamo_ai_galactic)
+    target_link_libraries(alamo_headless PRIVATE alamo_ai_galactic)
+    target_compile_definitions(alamo_headless PRIVATE ALAMO_HEADLESS_HAVE_GALACTIC_AI=1)
+    # FoC Heart of the Maw, 10 min of galactic time, every faction an AI; skipped (exit 0) without
+    # ALAMO_FOC_DATA. Regenerate after an intended change: same command with --ai-log <golden path>.
+    add_test(NAME alamo_headless_galactic_ai
+             COMMAND alamo_headless --economy --galactic-ai --ticks 18000 --workers 4 --quiet
+                     --ai-golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/galactic_ai_hotm_golden.txt)
+    set_tests_properties(alamo_headless_galactic_ai PROPERTIES TIMEOUT 1200)
+    # A2 galactic: the same campaign with the Rebel player a scripted human (fixed recorded command stream
+    # headless/testdata/galactic_human_hotm.txt), so the Human-rooted conquest desires run; CRC + AI log compared
+    # across 0/1/4/15 workers. Regenerate after an intended change: same command with --ai-log <golden path> (MSVC).
+    add_test(NAME alamo_headless_galactic_ai_human
+             COMMAND alamo_headless --economy --galactic-ai --ticks 36000 --check-workers --quiet --human Rebel
+                     --human-script ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/galactic_human_hotm.txt
+                     --ai-golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/galactic_ai_hotm_human_golden.txt)
+    set_tests_properties(alamo_headless_galactic_ai_human PROPERTIES TIMEOUT 1800)
+  endif()
+  # --- end A2 ---
+  # --- A1 stage 2 (owner: A1 agent): --skirmish-ai synthetic|foc (headless/skirmish_run.cpp). Goldens: regenerate
+  # after an intended change with the same command and --crc-out <golden path> (MSVC); clang must match. ---
+  target_sources(alamo_headless PRIVATE headless/skirmish_run.cpp)
+  if(TARGET alamo_ai_tactical_world)
+    add_test(NAME alamo_headless_skirmish_ai_synthetic
+             COMMAND alamo_headless --skirmish-ai synthetic --check-workers --quiet
+                     --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_synthetic_golden.crc)
+    # FoC _MP_SPACE_KUAT, Empire vs Rebel; skipped (exit 0) without ALAMO_FOC_DATA.
+    add_test(NAME alamo_headless_skirmish_ai_foc
+             COMMAND alamo_headless --skirmish-ai foc --workers 4 --quiet
+                     --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_golden.crc)
+    set_tests_properties(alamo_headless_skirmish_ai_synthetic alamo_headless_skirmish_ai_foc PROPERTIES TIMEOUT 1200)
+    # battle host: FoC land invasion (Utapau, _Land_Planet_Utapau_01), 2 min of battle; skipped (exit 0) without ALAMO_FOC_DATA.
+    add_test(NAME alamo_headless_skirmish_ai_foc_land
+             COMMAND alamo_headless --skirmish-ai foc-land --ticks 3600 --workers 4 --quiet
+                     --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_land_golden.crc)
+    set_tests_properties(alamo_headless_skirmish_ai_foc_land PROPERTIES TIMEOUT 1200)
+    # S10 land outcome: the same invasion run to its end must finish before the 14400-frame limit with a winner
+    # (0/1/4/N workers identical); skipped (exit 0) without ALAMO_FOC_DATA. One ctest entry per worker count so they run
+    # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
+    # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
+    set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
+    add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome
+             COMMAND alamo_headless --skirmish-ai foc-land --ticks 20000 --workers 0 --quiet --expect-battle-end
+                     --crc-out ${_land_outcome_crc})
+    set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome PROPERTIES TIMEOUT 1800
+                         FIXTURES_SETUP alamo_land_outcome_w0)
+    cmake_host_system_information(RESULT _logical_cores QUERY NUMBER_OF_LOGICAL_CORES)
+    math(EXPR _default_workers "${_logical_cores} - 1")
+    set(_land_outcome_workers 1 4 ${_default_workers})
+    list(REMOVE_DUPLICATES _land_outcome_workers)
+    list(REMOVE_ITEM _land_outcome_workers 0)
+    foreach(_w IN LISTS _land_outcome_workers)
+      add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_w${_w}
+               COMMAND alamo_headless --skirmish-ai foc-land --ticks 20000 --workers ${_w} --quiet
+                       --golden ${_land_outcome_crc})
+      set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_w${_w} PROPERTIES TIMEOUT 1800
+                           FIXTURES_REQUIRED alamo_land_outcome_w0)
+    endforeach()
+    # t41: FoC space, an AI defender with a Level 2 station against a far larger fleet must not retreat; skipped (exit 0) without ALAMO_FOC_DATA.
+    add_test(NAME alamo_headless_skirmish_ai_foc_station
+             COMMAND alamo_headless --skirmish-ai foc-station --seed 3 --ticks 20000 --workers 4 --quiet --expect-battle-end)
+    # t48: the default seed reaches QuickReinforce's anti-idle with a particle as the nearest enemy; 0 Lua errors (it may run to the
+    # frame limit: half the seeds do, the station holds).
+    add_test(NAME alamo_headless_skirmish_ai_foc_station_lua
+             COMMAND alamo_headless --skirmish-ai foc-station --ticks 20000 --workers 4 --quiet)
+    set_tests_properties(alamo_headless_skirmish_ai_foc_station alamo_headless_skirmish_ai_foc_station_lua PROPERTIES TIMEOUT 1800)
+  endif()
+  # --- end A1 ---
+  # --- N1 save / load (owner: n1-host): --save-session / --load / --save-check (headless/save_run.cpp) ---
+  # The N1 done-check: save at T, continue to T+K; loading the save in this process, in a fresh process and with
+  # replay-from-save must give the original's per-tick CRCs. Chunks whose system write/read has not landed yet are listed
+  # in _n1_pending_*: the test then verifies what loaded at the save tick, prints "PENDING: <chunks>" and exits 77
+  # (ctest reports it as skipped, not passed). Empty a list (remove the --expect-pending argument) once its chunks load:
+  # the check prints "note: --expect-pending lists chunks that load now" when an entry is stale.
+  target_sources(alamo_headless PRIVATE headless/save_run.cpp)
+  # Nothing pending since n1-lua landed ObjectBridge / LuaPlayerWorld write+read (story.bridge, story.players).
+  add_test(NAME alamo_headless_save_synthetic
+           COMMAND alamo_headless --save-session synthetic --save-check
+                   --save-at 450 ${CMAKE_CURRENT_BINARY_DIR}/n1_save_synthetic.alsv --ticks 750 --workers 4)
+  # The same session without the story: nothing pending, the full continue / fresh-process / replay-from-save check.
+  add_test(NAME alamo_headless_save_synthetic_nostory
+           COMMAND alamo_headless --save-session synthetic-nostory --save-check
+                   --save-at 450 ${CMAKE_CURRENT_BINARY_DIR}/n1_save_synthetic_nostory.alsv --ticks 750 --workers 4)
+  set_tests_properties(alamo_headless_save_synthetic_nostory PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+  # FoC Heart of the Maw, every faction a galactic AI (as alamo_headless_galactic_ai), save after 1 min of galactic time,
+  # 2 min compared; skipped (exit 0) without ALAMO_FOC_DATA. Nothing pending (every chunk loads).
+  add_test(NAME alamo_headless_save_hotm
+           COMMAND alamo_headless --save-session hotm --save-check
+                   --save-at 1800 ${CMAKE_CURRENT_BINARY_DIR}/n1_save_hotm.alsv --ticks 3600 --workers 4 --quiet)
+  set_tests_properties(alamo_headless_save_synthetic PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+  set_tests_properties(alamo_headless_save_hotm PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77)
+  # N1 stage 2 (owner: n2-host): saves during a tactical battle (headless/save_run.hpp "Stage 2 options"). Each saves at
+  # the first tick >= T matching --save-when and runs the full check (in-process, fresh-process, both replays, synced RNG).
+  # All need ALAMO_FOC_DATA (skipped, exit 0, without it).
+  if(TARGET alamo_anim)
+    # hotm with the sim-owned animation ("anim" chunk), conflicts auto-resolved.
+    add_test(NAME alamo_headless_save_hotm_anim
+             COMMAND alamo_headless --save-session hotm --battles auto+anim --save-check
+                     --save-at 1800 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_hotm_anim.alsv --ticks 3600 --workers 4 --quiet)
+    set_tests_properties(alamo_headless_save_hotm_anim PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77)
+  endif()
+  if(TARGET alamo_ai_tactical_world)
+    # The --skirmish-ai FoC battles (both sides a tactical AI), saved while the battle runs; 1.5 min of AI battle after the load.
+    add_test(NAME alamo_headless_save_skirmish_foc
+             COMMAND alamo_headless --save-session skirmish --campaign foc --save-when battle --save-check
+                     --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_skirmish_foc.alsv --ticks 2400 --workers 4 --quiet)
+    add_test(NAME alamo_headless_save_skirmish_foc_land
+             COMMAND alamo_headless --save-session skirmish --campaign foc-land --save-when battle --save-check
+                     --save-at 900 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_skirmish_foc_land.alsv --ticks 2700 --workers 4 --quiet)
+    # hotm campaign with the story on, every conflict fought (tactical AI on all sides): saved during a running battle,
+    # and a galactic save taken before the battles start (they start after the load).
+    add_test(NAME alamo_headless_save_hotm_battle
+             COMMAND alamo_headless --save-session hotm --battles fight-all --story --save-when battle --save-check
+                     --save-at 1800 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_hotm_battle.alsv --ticks 900 --workers 4 --quiet)
+    add_test(NAME alamo_headless_save_hotm_before_battle
+             COMMAND alamo_headless --save-session hotm --battles fight-all --story --save-when galactic --save-check
+                     --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_hotm_before_battle.alsv --ticks 1800 --workers 4 --quiet)
+    set_tests_properties(alamo_headless_save_skirmish_foc alamo_headless_save_skirmish_foc_land alamo_headless_save_hotm_battle
+                         alamo_headless_save_hotm_before_battle PROPERTIES TIMEOUT 1800 SKIP_RETURN_CODE 77)
+    if(TARGET alamo_anim)
+      # A battle with the animation on (anim worlds of the galaxy and the battle mode).
+      add_test(NAME alamo_headless_save_skirmish_anim
+               COMMAND alamo_headless --save-session skirmish --campaign foc --battles +anim --save-when battle --save-check
+                       --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_skirmish_anim.alsv --ticks 600 --workers 4 --quiet)
+      set_tests_properties(alamo_headless_save_skirmish_anim PROPERTIES TIMEOUT 1800 SKIP_RETURN_CODE 77)
+    endif()
+  endif()
+  # --- end N1 ---
+endif()
+
+# Self-check on synthetic data (no game files needed): determinism across worker counts
+# (final checksum + every tick's CRC record, 0/1/4/N workers).
+add_test(NAME alamo_headless_selfcheck COMMAND alamo_headless --selfcheck)
+
+# Q1 replay: a fixed recorded command stream must give identical per-tick CRC sequences for
+# 0/1/4/N workers, and match the golden CRC file checked into the repo (generated by MSVC;
+# the clang build must reproduce it). Regenerate after an intended sim change:
+#   alamo_headless --replay engine/apps/headless/testdata/replay_stream.acmd --crc-out engine/apps/headless/testdata/replay_golden.crc
+set(_q1_data ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata)
+add_test(NAME alamo_headless_replay_workers
+         COMMAND alamo_headless --replay ${_q1_data}/replay_stream.acmd --check-workers)
+add_test(NAME alamo_headless_replay_golden
+         COMMAND alamo_headless --replay ${_q1_data}/replay_stream.acmd --workers 4
+                 --crc-out ${CMAKE_CURRENT_BINARY_DIR}/replay_actual.crc --golden ${_q1_data}/replay_golden.crc)
+set_tests_properties(alamo_headless_replay_workers alamo_headless_replay_golden PROPERTIES TIMEOUT 300)
+
+# --- P host (owner: game host agent): alamo_game, the playable game exe (menus/HUD/renderer/sim/audio per frame) ---
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/game/CMakeLists.txt)
+  add_subdirectory(game)
+endif()
+# --- end P host ---

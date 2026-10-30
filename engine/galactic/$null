@@ -1,0 +1,47 @@
+-- Configuring done (0.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: E:/Projects/Star wars empire at war port/build-galactic
+configure exit 0
+[1/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_special_tests.dir\tests\test_special.cpp.obj
+FAILED: [code=2] engine/galactic/CMakeFiles/alamo_galactic_special_tests.dir/tests/test_special.cpp.obj 
+"E:\Projects\Star wars empire at war port\toolchain\msvc\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64\cl.exe"  /nologo /TP -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -I"E:\Projects\Star wars empire at war port\engine\galactic\tests" -I"E:\Projects\Star wars empire at war port\engine\galactic\include" -I"E:\Projects\Star wars empire at war port\engine\core\include" -I"E:\Projects\Star wars empire at war port\engine\objects\include" -I"E:\Projects\Star wars empire at war port\engine\data\include" -I"E:\Projects\Star wars empire at war port\engine\commands\include" /DWIN32 /D_WINDOWS /EHsc /O2 /Ob2 /DNDEBUG -std:c++20 -MT /utf-8 /permissive- /Zc:__cplusplus /EHsc /W4 /fp:precise /showIncludes /Foengine\galactic\CMakeFiles\alamo_galactic_special_tests.dir\tests\test_special.cpp.obj /Fdengine\galactic\CMakeFiles\alamo_galactic_special_tests.dir\ /FS -c "E:\Projects\Star wars empire at war port\engine\galactic\tests\test_special.cpp"
+E:\Projects\Star wars empire at war port\engine\galactic\tests\test_special.cpp(1293): error C2248: 'alamo::galactic::GalacticSim::launch_reveal': cannot access private member declared in class 'alamo::galactic::GalacticSim'
+E:\Projects\Star wars empire at war port\engine\galactic\include\alamo/galactic/campaign.hpp(729): note: see declaration of 'alamo::galactic::GalacticSim::launch_reveal'
+E:\Projects\Star wars empire at war port\engine\galactic\include\alamo/galactic/campaign.hpp(309): note: see declaration of 'alamo::galactic::GalacticSim'
+E:\Projects\Star wars empire at war port\engine\galactic\tests\test_special.cpp(1294): error C2248: 'alamo::galactic::GalacticSim::launch_reveal': cannot access private member declared in class 'alamo::galactic::GalacticSim'
+E:\Projects\Star wars empire at war port\engine\galactic\include\alamo/galactic/campaign.hpp(729): note: see declaration of 'alamo::galactic::GalacticSim::launch_reveal'
+E:\Projects\Star wars empire at war port\engine\galactic\include\alamo/galactic/campaign.hpp(309): note: see declaration of 'alamo::galactic::GalacticSim'
+[2/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\story_ops.cpp.obj
+[3/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\galactic_rules.cpp.obj
+[4/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\corruption.cpp.obj
+[5/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\strategic.cpp.obj
+[6/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\campaign_setup.cpp.obj
+[7/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\victory.cpp.obj
+[8/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\ai_hooks.cpp.obj
+[9/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\special_systems.cpp.obj
+[10/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_conflict_tests.dir\tests\test_conflicts.cpp.obj
+[11/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\special_rules.cpp.obj
+[12/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\campaign.cpp.obj
+[13/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_sim.dir\src\conflicts.cpp.obj
+[14/18] Building CXX object engine\galactic\CMakeFiles\alamo_galactic_economy_tests.dir\tests\test_economy.cpp.obj
+ninja: build stopped: subcommand failed.
+build exit 2
+Test project E:/Projects/Star wars empire at war port/build-galactic
+    Start 12: alamo_galactic_tests
+1/6 Test #12: alamo_galactic_tests ........................   Passed    2.50 sec
+    Start 13: alamo_galactic_economy_tests
+2/6 Test #13: alamo_galactic_economy_tests ................   Passed    0.01 sec
+    Start 14: alamo_galactic_economy_synthetic_campaign
+3/6 Test #14: alamo_galactic_economy_synthetic_campaign ...   Passed    0.56 sec
+    Start 15: alamo_galactic_economy_foc_campaign
+4/6 Test #15: alamo_galactic_economy_foc_campaign .........   Passed    3.46 sec
+    Start 16: alamo_galactic_conflict_tests
+5/6 Test #16: alamo_galactic_conflict_tests ...............   Passed    0.01 sec
+    Start 17: alamo_galactic_special_tests
+6/6 Test #17: alamo_galactic_special_tests ................   Passed    0.65 sec
+
+100% tests passed out of 6
+
+Total Test time (real) =   7.30 sec
+ctest exit 0
+MODULE_DONE

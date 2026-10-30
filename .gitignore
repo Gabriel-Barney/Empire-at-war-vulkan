@@ -1,0 +1,29 @@
+# Build trees, logs, packages
+/build-*/
+/logs/
+/dist/
+/backups/
+
+# Project-local toolchain (rebuilt by toolchain\*.cmd) and agent worktrees
+/toolchain/
+/.claude/worktrees/
+/.claude/settings.local.json
+
+# Copyrighted game data and decompiled output: never commit
+/Data/
+/extracted/
+/re_reference/
+
+# Probe captures and traces (many GB)
+/tools/probe_mod/**/out/
+
+# Roadmap data lives in its own repository
+/roadmap-store/
+
+# Misc
+__pycache__/
+*.pyc
+*.tmp
+*.pkl
+*.trace
+/tools/probe_mod/**/*.dat

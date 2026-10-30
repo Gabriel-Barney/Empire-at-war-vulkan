@@ -1,0 +1,37 @@
+rva,namespace,name,source,confidence,function,note
+0x2134c0,FileClass,Open,behaviour,high,existing,vf3: mod/search dirs -> cwd -> MEG -> fallback dirs
+0x214550,FileClass,Try_Search_Path_List,behaviour,high,existing,only for names starting Data\ ./Data/ etc; first match wins
+0x214110,,Add_Fallback_Search_Path,behaviour,high,existing,FALLBACKPATH= and EaW install dir
+0x214130,,Add_Mod_Search_Path,behaviour,high,existing,MODPATH= and STEAMMOD= dirs
+0x214940,,DynamicVector_string_Add,behaviour,medium,existing,
+0x219ff0,MegaFileManagerClass,Open_File,behaviour,medium,existing,lookup in mounted archives
+0x67d70,,Parse_Command_Line,behaviour,high,existing,MODPATH= STEAMMOD= FALLBACKPATH= WINDOWED ...
+0x20e600,TreeCullClass,Insert,behaviour,high,existing,vf1
+0x20e6d0,TreeCullClass,Remove,behaviour,high,existing,vf2
+0x20f0a0,TreeCullClass,Update_Bounds,behaviour,high,existing,vf4: refit/move up to containing ancestor
+0x20f180,TreeCullClass,Rebuild,behaviour,high,existing,flatten + top-down split
+0x20f000,TreeCullClass,Rebuild_All_Dirty,behaviour,high,existing,per main-loop iteration; >=1s since last rebuild
+0x20e530,TreeCullClass,Rebuild_With_Threshold,behaviour,high,existing,
+0x20e5e0,TreeCullClass,Rebuild_Default_Threshold,behaviour,high,existing,threshold 500.0
+0x20f600,TreeCullClass,Collapse_Subtree_Into,behaviour,high,existing,
+0x20fc50,TreeCullClass,Split_Node,behaviour,high,existing,depth<=16 and >=4 links
+0x210610,TreeCullClass,Partition_Links,behaviour,medium,existing,median via sort (<16) or 16-bin histogram
+0x210480,TreeCullClass,Find_Smallest_Containing_Node,behaviour,high,existing,
+0x20f960,TreeCullClass,Node_Add_Link,behaviour,high,existing,
+0x20fbe0,TreeCullClass,Node_Remove_Link,behaviour,medium,existing,
+0x3f0010,GalacticPathFinderClass,Find_Path,behaviour,high,existing,A* over planet graph; binary heap; generation stamps
+0x3f1c10,GalacticPathFinderClass,Build_Planet_Graph,behaviour,high,existing,O(N^2) pair scan; edges via trade routes
+0x3ef4c0,GalacticPathFinderClass,Edge_Cost,behaviour,high,existing,distance / HS_Speed_Factor + blockade/visibility rules
+0x3eefd0,GalacticPathFinderClass,Path_Request_Init,behaviour,medium,existing,
+0x3f95a0,PlanetaryBehaviorClass,Find_Trade_Route_To,behaviour,high,existing,linear scan of planet route links
+0x6913e0,AIExecutionPathFinderClass,Recompute_All_Pairs,behaviour,high,existing,Floyd-Warshall O(N^3) every 90 frames per AI
+0x690f10,AIExecutionPathFinderClass,Get_Path,behaviour,high,existing,walk predecessor matrix
+0x693e20,GalacticExecutionPathFinderClass,Initialize,behaviour,high,existing,vf1: planet list + N^2 matrices
+0x693c30,GalacticExecutionPathFinderClass,Edge_Weight,behaviour,high,existing,vf2
+0x693db0,GalacticExecutionPathFinderClass,Node_Weight,behaviour,high,existing,vf3: perception-based planet cost
+0x286760,PlayerClass,Save,behaviour,high,existing,chunk serializer
+0x4bbef0,PlanetaryDataPackClass,Save,behaviour,high,existing,vf0 chunk serializer
+0x5c3840,TradeRouteClass,Parse_Database_Entry,behaviour,high,existing,string-proven
+0x4715e0,,Create_Trade_Routes_From_XML,behaviour,high,existing,TradeRouteFiles.xml
+0x3f5e10,PlanetaryBehaviorClass,Create_Trade_Route_Link,behaviour,high,existing,
+0x431c80,,Get_Fleet_Hyperspace_Route_Speed_Factor,behaviour,medium,existing,

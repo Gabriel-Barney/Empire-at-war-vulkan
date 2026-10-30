@@ -1,0 +1,794 @@
+// alamo_headless --skirmish-ai (A1 stage 2): see skirmish_run.hpp.
+#include "skirmish_run.hpp"
+
+#include <chrono>
+#include <cinttypes>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+#include "alamo/ai/ai_definitions.hpp"
+#include "alamo/ai/perception_equations.hpp"
+#include "alamo/core/file_provider.hpp"
+#include "alamo/data/game_database.hpp"
+#include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/conflicts.hpp"
+#include "alamo/galactic/galactic_rules.hpp"
+#include "alamo/jobs/crc_recorder.hpp"
+#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/object_types.hpp"
+#include "alamo/sim/battle_ai.hpp"
+#include "alamo/sim/campaign_battles.hpp"
+#include "alamo/sim/save_session.hpp"  // N1 stage 2: skirmish_save_*
+#include "alamo/sim/sim_anim.hpp"
+#include "alamo/sim/sim_host.hpp"
+#include "alamo/vfs/vfs.hpp"
+#else
+#include "alamo/objects/game_object_types.hpp"  // N1 stage 2 stubs
+#endif
+
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+namespace {
+
+using namespace alamo;
+namespace fs = std::filesystem;
+
+std::string env_value(const char* name) {
+#ifdef _MSC_VER
+    char* v = nullptr;
+    size_t len = 0;
+    std::string out;
+    if (_dupenv_s(&v, &len, name) == 0 && v) {
+        out = v;
+        std::free(v);
+    }
+    return out;
+#else
+    const char* v = std::getenv(name);
+    return v ? std::string(v) : std::string();
+#endif
+}
+
+// ---- synthetic data (S10 battle test types + tactical evaluator flags / UNIT_AI) ----
+const char* kTypes = R"(<A1S>
+ <Planet Name="A1S_A"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain><Planet_Credit_Value>10</Planet_Credit_Value></Planet>
+ <Planet Name="A1S_B"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain><Planet_Credit_Value>10</Planet_Credit_Value>
+  <Space_Tactical_Map>A1S_Space_B</Space_Tactical_Map></Planet>
+ <Planet Name="A1S_C"><Behavior>PLANET</Behavior><Terrain>Desert</Terrain><Planet_Credit_Value>10</Planet_Credit_Value></Planet>
+ <Projectile Name="A1S_Laser_Proj"><Max_Speed>40</Max_Speed><Projectile_Damage>120</Projectile_Damage>
+  <Projectile_Max_Flight_Distance>2500</Projectile_Max_Flight_Distance><Damage_Type>Damage_Laser</Damage_Type></Projectile>
+ <SpaceUnit Name="A1S_Frigate">
+  <Tactical_Health>900</Tactical_Health><Max_Speed>3.0</Max_Speed><Max_Rate_Of_Turn>2.0</Max_Rate_Of_Turn>
+  <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><AI_Combat_Power>1000</AI_Combat_Power>
+  <CategoryMask>Frigate</CategoryMask><Targeting_Max_Attack_Distance>1400</Targeting_Max_Attack_Distance>
+  <Population_Value>2</Population_Value><Armor_Type>Armor_Ship</Armor_Type><Has_Space_Evaluator>Yes</Has_Space_Evaluator>
+  <HardPoints>HP_A1S_Laser_A, HP_A1S_Laser_B</HardPoints>
+  <Behavior>SELECTABLE, UNIT_AI, DAMAGE_TRACKING</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><SpaceBehavior>STARSHIP_LOCOMOTOR</SpaceBehavior>
+  <Custom_Soft_Footprint_Radius>60</Custom_Soft_Footprint_Radius>
+ </SpaceUnit>
+ <SpaceUnit Name="A1S_Corvette"><Variant_Of_Existing_Type>A1S_Frigate</Variant_Of_Existing_Type>
+  <Tactical_Health>400</Tactical_Health><Max_Speed>5.0</Max_Speed><AI_Combat_Power>400</AI_Combat_Power>
+  <CategoryMask>Corvette</CategoryMask><Population_Value>1</Population_Value><HardPoints>HP_A1S_Laser_B</HardPoints>
+  <Custom_Soft_Footprint_Radius>30</Custom_Soft_Footprint_Radius></SpaceUnit>
+ <StarBase Name="A1S_Star_Base_1"><Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>
+  <AI_Combat_Power>600</AI_Combat_Power><CategoryMask>Structure</CategoryMask><HardPoints>HP_A1S_Laser_A</HardPoints>
+  <Targeting_Max_Attack_Distance>1500</Targeting_Max_Attack_Distance><Has_Space_Evaluator>Yes</Has_Space_Evaluator>
+  <Behavior>SELECTABLE, UNIT_AI, DAMAGE_TRACKING</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living></StarBase>
+</A1S>
+)";
+const char* kHardpoints = R"(<HardPoints>
+ <HardPoint Name="HP_A1S_Laser_A"><Type>HARD_POINT_WEAPON_LASER</Type><Health>150</Health>
+  <Is_Targetable>Yes</Is_Targetable><Is_Destroyable>Yes</Is_Destroyable>
+  <Fire_Projectile_Type>A1S_Laser_Proj</Fire_Projectile_Type><Fire_Min_Recharge_Seconds>2.0</Fire_Min_Recharge_Seconds>
+  <Fire_Max_Recharge_Seconds>3.0</Fire_Max_Recharge_Seconds><Fire_Pulse_Count>2</Fire_Pulse_Count>
+  <Fire_Pulse_Delay_Seconds>0.2</Fire_Pulse_Delay_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance></HardPoint>
+ <HardPoint Name="HP_A1S_Laser_B"><Variant_Of_Existing_Type>HP_A1S_Laser_A</Variant_Of_Existing_Type><Health>100</Health></HardPoint>
+</HardPoints>
+)";
+const char* kFactions = R"(<Factions>
+ <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+  <Space_Tactical_Unit_Cap>6</Space_Tactical_Unit_Cap><Space_Retreat_Countdown_Seconds>5</Space_Retreat_Countdown_Seconds></Faction>
+ <Faction Name="Rebel"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+  <Space_Tactical_Unit_Cap>6</Space_Tactical_Unit_Cap><Space_Retreat_Countdown_Seconds>5</Space_Retreat_Countdown_Seconds></Faction>
+ <Faction Name="Neutral"><Is_Neutral>Yes</Is_Neutral></Faction>
+</Factions>
+)";
+const char* kContrastLua = R"(function Set_Contrast_Values()
+	EnemyContrastTypes[1] = "Corvette"
+	FriendlyContrastTypeNames = {"Frigate", "Corvette"}
+	FriendlyContrastWeights =	{1.5, 1.0}
+	FriendlyContrastTypes[1].Parse(FriendlyContrastTypeNames, FriendlyContrastWeights)
+	EnemyContrastTypes[2] = "Frigate"
+	FriendlyContrastTypeNames = {"Frigate", "Corvette"}
+	FriendlyContrastWeights =	{1.0, 0.5}
+	FriendlyContrastTypes[2].Parse(FriendlyContrastTypeNames, FriendlyContrastWeights)
+end
+)";
+const char* kGoals = R"(<Goals>
+  <Skirmish_Destroy_Unit><AIGoalApplicationFlags>Enemy_Unit | Enemy_Structure</AIGoalApplicationFlags><GameMode>Space</GameMode>
+    <Category>Tactical_Targeted</Category><Reachability>Any</Reachability><Time_Limit>120</Time_Limit>
+    <Tracking_Duration>30</Tracking_Duration><Per_Failure_Desire_Adjust>-0.5</Per_Failure_Desire_Adjust></Skirmish_Destroy_Unit>
+  <Skirmish_Sweep_Area><AIGoalApplicationFlags>Tactical_Location</AIGoalApplicationFlags><GameMode>Space</GameMode>
+    <Category>Tactical_Targeted</Category><Reachability>Any</Reachability>
+    <Tracking_Duration>30</Tracking_Duration><Per_Failure_Desire_Adjust>-0.5</Per_Failure_Desire_Adjust></Skirmish_Sweep_Area>
+</Goals>)";
+const char* kSet = R"(<FunctionSet>
+  <A><Goal>Skirmish_Destroy_Unit</Goal><Function>Skirmish_Destroy_Desire</Function></A>
+  <B><Goal>Skirmish_Sweep_Area</Goal><Function>Skirmish_Sweep_Desire</Function></B>
+</FunctionSet>)";
+const char* kTemplates = R"(<AITemplates>
+  <Skirmish_Space><Priority>1</Priority><Trigger>One</Trigger>
+    <Turn_On><Goals><Category>Tactical_Targeted</Category></Goals><Plans><Goal_Category>Tactical_Targeted</Goal_Category></Plans></Turn_On>
+  </Skirmish_Space>
+</AITemplates>)";
+const char* kPlayer = R"(<AIPlayerType><Name>%s</Name>
+  <SpaceFreeStoreScript>SkirmishFreeStore</SpaceFreeStoreScript>
+  <GoalProposalFunctionSets>SkirmishSpaceSet</GoalProposalFunctionSets>
+  <Templates><Space>Skirmish_Space</Space></Templates>
+  <Difficulty_Adjustments><Easy>Easy_Default</Easy><Normal>Normal_Default</Normal><Hard>Hard_Default</Hard></Difficulty_Adjustments>
+</AIPlayerType>)";
+const char* kBase = R"(
+function ScriptExit()
+  _ScriptExit()
+  if GetThreadID() >= 0 then coroutine.yield(false) end
+end
+function PumpEvents()
+  coroutine.yield(true)
+  local e = GetEvent()
+  while e do
+    local p = GetEvent.Params()
+    if p then e(unpack(p)) else e() end
+    e = GetEvent()
+  end
+end
+function Sleep(t)
+  local s = GetCurrentTime()
+  while GetCurrentTime() - s < t do PumpEvents() end
+end
+function BlockOnCommand(b, max)
+  PumpEvents()
+  if not b then return nil end
+  local s = GetCurrentTime()
+  repeat
+    PumpEvents()
+    if max and GetCurrentTime() - s > max then return nil end
+  until b.IsFinished() == true
+  return b.Result()
+end
+function TestValid(w)
+  if w == nil then return false end
+  if w.Is_Valid == nil then return false end
+  return w.Is_Valid()
+end
+function Flush_G()
+  local del = {}
+  for k, v in pairs(_G) do
+    if type(v) == "table" and k ~= "_LOADED" and k ~= "coroutine" and k ~= "string" and k ~= "table" and k ~= "_G" and k ~= "LuaWrapperMetaTable" then
+      table.insert(del, k)
+    end
+  end
+  for i, k in pairs(del) do _G[k] = nil end
+end
+)";
+const char* kAICommands = R"(
+require("SkirmishBase")
+function Base_Definitions()
+  AITarget = nil
+  Target = nil
+  PlayerObject = nil
+  Budget = nil
+  if TaskForce and type(TaskForce) == "table" then
+    for i, d in pairs(TaskForce) do
+      if type(d) == "table" and type(d[1]) == "string" then _G[d[1]] = nil end
+    end
+  end
+  PlanDefinitionLoad = nil
+  if Definitions then Definitions() end
+end
+function QuickReinforce(tf)
+  local home = FindTarget(tf, "One", "Friendly_Structure | Friendly_Unit", 1.0)
+  if home then
+    local st = tf.Reinforce(home)
+    if st then BlockOnCommand(st, 5) end
+  end
+end
+)";
+const char* kPlanDestroy = R"(
+require("SkirmishAICommands")
+ScriptPoolCount = 2
+function Definitions()
+  Category = "Skirmish_Destroy_Unit"
+  TaskForce = { { "MainForce", "Frigate | Corvette = 1,4" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  BlockOnCommand(MainForce.Produce_Force())
+  QuickReinforce(MainForce)
+  if MainForce.Get_Force_Count() == 0 then ScriptExit() end
+  local d = EvaluatePerception("Skirmish_Destroy_Desire", PlayerObject, AITarget)
+  if d and d > 0 and TestValid(Target) then
+    BlockOnCommand(MainForce.Attack_Target(Target, "Random"), 60)
+  end
+  MainForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+function MainForce_No_Units_Remaining()
+  ScriptExit()
+end
+)";
+const char* kPlanSweep = R"(
+require("SkirmishAICommands")
+ScriptPoolCount = 2
+function Definitions()
+  Category = "Skirmish_Sweep_Area"
+  TaskForce = { { "SweepForce", "Corvette | Frigate = 1,2" } }
+end
+function SweepForce_Thread()
+  BlockOnCommand(SweepForce.Produce_Force())
+  QuickReinforce(SweepForce)
+  if SweepForce.Get_Force_Count() == 0 then ScriptExit() end
+  BlockOnCommand(SweepForce.Attack_Move(AITarget, SweepForce.Get_Self_Threat_Max()), 40)
+  local deadly = FindDeadlyEnemy(SweepForce)
+  if TestValid(deadly) then BlockOnCommand(SweepForce.Attack_Target(deadly), 30) end
+  SweepForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+)";
+const char* kFreeStore = R"(
+require("SkirmishBase")
+function Base_Definitions()
+  ServiceRate = 5
+  UnitServiceRate = 2
+end
+function main()
+  while true do
+    FreeStoreService()
+    PumpEvents()
+  end
+end
+function FreeStoreService()
+  enemy_unit = FindTarget.Reachable_Target(PlayerObject, "Skirmish_Destroy_Desire", "Enemy_Unit | Enemy_Structure", "Any", 0.5)
+end
+function On_Unit_Added(object)
+end
+function On_Unit_Service(object)
+  if not TestValid(object) then return end
+  if object.Has_Active_Orders() then return end
+  if enemy_unit then
+    local o = enemy_unit.Get_Game_Object()
+    if TestValid(o) then object.Attack_Move(o) end
+  end
+end
+)";
+
+void write_file(const fs::path& p, const std::string& s) {
+    fs::create_directories(p.parent_path());
+    std::ofstream(p, std::ios::binary) << s;
+}
+
+struct Session {
+    std::unique_ptr<FileProvider> files;
+    data::GameDatabase db;
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    galactic::GalacticRules rules;
+    galactic::ConflictRules crules;
+    std::unique_ptr<sim::BattleCatalog> catalog;
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    std::shared_ptr<sim::TacticalAiSetup> ai;
+    galactic::GalacticSetup setup;
+    std::string map;
+    bool land = false;  // battle host: foc-land - a land invasion instead of a space conflict
+    // t48: BattleConfig::skirmish, for the kinds that are skirmishes: synthetic and foc. foc-land invades on a campaign map with no
+    // skirmish base (the shipped land skirmish equations want barracks, command center and refinery; without them the AI only
+    // scouts); foc-station guards the campaign-only defender retreat rule (t41).
+    bool skirmish = true;
+};
+
+bool load_game(Session& s, std::vector<std::string>& diag) {
+    if (!s.db.load(*s.files, {}, &diag) || !s.raw.load(*s.files, &diag) || !s.types.build(s.raw, s.files.get(), &diag) ||
+        !galactic::load_galactic_rules(*s.files, s.db, s.types, s.rules, &diag))
+        return false;
+    galactic::load_conflict_rules(*s.files, s.db, s.types, s.rules, s.crules, &diag);
+    s.catalog = std::make_unique<sim::BattleCatalog>(s.types, s.files.get(), &s.db.constants(), &diag);
+    return true;
+}
+
+// 3 planets A - B - C; the defender (player 0) holds B's orbit, the attacker (player 1) moves in from C.
+galactic::GalacticSetup make_galaxy(const Session& s, uint32_t planet_type, const std::vector<uint32_t>& defender,
+                                    const std::vector<uint32_t>& attacker) {
+    galactic::GalacticSetup g;
+    GalaxyMap& m = g.map;
+    m.campaign_name = "A1_Skirmish";
+    for (uint32_t i = 0; i < 3; ++i) {
+        m.planets.add(std::string("A1S_P") + std::to_string(i));
+        m.planets.position[i] = {static_cast<float>(i) * 60.0f, 0.0f, 0.0f};
+        m.planets.flags[i] = static_cast<uint32_t>(kPlanetHasPlanetBehavior);
+    }
+    for (uint32_t i = 0; i + 1 < 3; ++i) {
+        const uint32_t r = m.routes.add("R" + std::to_string(i));
+        m.routes.point_a[r] = i;
+        m.routes.point_b[r] = i + 1;
+        m.routes.hs_speed_factor[r] = 5.0f;
+    }
+    g.planet_type = {planet_type, planet_type, planet_type};
+    galactic::PlayerSetup e;
+    e.faction = s.rules.find_faction("Empire");
+    e.ai = true;
+    galactic::PlayerSetup r = e;
+    r.faction = s.rules.find_faction("Rebel");
+    galactic::PlayerSetup n;
+    n.faction = s.rules.find_faction("Neutral");
+    g.players = {e, r, n};
+    // S10 map owners [probe 2026-10-29]: a Hostile player besides Neutral (map owners resolve by faction; natives -> Hostile).
+    galactic::PlayerSetup h;
+    h.faction = s.rules.find_faction("Hostile");
+    if (h.faction != galactic::kNoIndex) g.players.push_back(h);
+    for (const uint32_t t : defender) g.forces.push_back({0, 1, t});
+    for (const uint32_t t : attacker) g.forces.push_back({1, 2, t});
+    return g;
+}
+
+bool synthetic_session(Session& s, std::vector<std::string>& diag) {
+    const fs::path root = fs::temp_directory_path() / "alamo_a1_skirmish_ai";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    const fs::path x = root / "Data/XML";
+    write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>A1STypes.xml</File></GameObjectFiles>\n");
+    write_file(x / "A1STypes.xml", kTypes);
+    write_file(x / "HardPointDataFiles.xml", "<Hard_Point_Files><File>A1SHardPoints.xml</File></Hard_Point_Files>\n");
+    write_file(x / "A1SHardPoints.xml", kHardpoints);
+    write_file(x / "FactionFiles.xml", "<FactionFiles><File>A1SFactions.xml</File></FactionFiles>\n");
+    write_file(x / "A1SFactions.xml", kFactions);
+    write_file(x / "TradeRouteFiles.xml", "<TradeRouteFiles></TradeRouteFiles>\n");
+    write_file(x / "CampaignFiles.xml", "<CampaignFiles></CampaignFiles>\n");
+    write_file(x / "GameConstants.xml",
+               "<GameConstants>\n <Damage_Types>Damage_Default, Damage_Laser</Damage_Types>\n"
+               " <Armor_Types>Armor_Default, Armor_Ship</Armor_Types>\n"
+               " <Damage_To_Armor_Mod>Damage_Laser, Armor_Ship, 0.8</Damage_To_Armor_Mod>\n"
+               " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n</GameConstants>\n");
+    write_file(root / "Data/Scripts/Library/PGAICommands.lua", kContrastLua);
+    write_file(root / "Data/Scripts/Library/SkirmishBase.lua", kBase);
+    write_file(root / "Data/Scripts/Library/SkirmishAICommands.lua", kAICommands);
+    write_file(root / "Data/Scripts/AI/SpaceMode/SkirmishDestroy.lua", kPlanDestroy);
+    write_file(root / "Data/Scripts/AI/SpaceMode/SkirmishSweep.lua", kPlanSweep);
+    write_file(root / "Data/Scripts/FreeStore/SkirmishFreeStore.lua", kFreeStore);
+    s.files = std::make_unique<DirectoryProvider>(path_to_utf8(root));
+    if (!load_game(s, diag)) return false;
+    s.defs.add_goals(kGoals, "goals.xml");
+    s.defs.link();
+    s.defs.add_function_set("SkirmishSpaceSet", kSet, "SkirmishSpaceSet.xml");
+    s.defs.add_templates(kTemplates, "templates.xml");
+    char buf[1024];
+    for (const char* n : {"BasicEmpire", "BasicRebel"}) {
+        std::snprintf(buf, sizeof buf, kPlayer, n);
+        s.defs.add_players(buf, "players.xml");
+    }
+    s.eqs.add("One", "1.0");
+    s.eqs.add("Skirmish_Destroy_Desire", "2 - Variable_Target.Health");
+    s.eqs.add("Skirmish_Sweep_Desire", "(Variable_Target.EnemyForceUnnormalized > 0) * 0.5");
+    s.eqs.link();
+    s.ai = std::make_shared<sim::TacticalAiSetup>();
+    s.ai->space_plans = {"Data\\Scripts\\AI\\SpaceMode\\SkirmishDestroy.lua", "Data\\Scripts\\AI\\SpaceMode\\SkirmishSweep.lua"};
+    s.ai->difficulties = {{"Normal_Default", 0.0f, 0.0f, 1.0f, 1.0f}};
+    auto t = [&s](const char* n) { return s.rules.find_type(n); };
+    // Defender: frigate + 2 corvettes + starbase (+ reserves over the cap 6); attacker: 3 frigates + 2 corvettes.
+    s.setup = make_galaxy(s, t("A1S_B"), {t("A1S_Frigate"), t("A1S_Corvette"), t("A1S_Corvette"), t("A1S_Star_Base_1"), t("A1S_Frigate"), t("A1S_Frigate")},
+                          {t("A1S_Frigate"), t("A1S_Frigate"), t("A1S_Frigate"), t("A1S_Corvette"), t("A1S_Corvette")});
+    s.map = "A1S_Space_B";
+    return true;
+}
+
+bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, bool land, bool station = false) {
+    const std::string root = opt.game_dir.empty() ? env_value("ALAMO_FOC_DATA") : opt.game_dir;
+    std::error_code ec;
+    if (root.empty() || !fs::is_directory(path_from_utf8(root) / "Data", ec)) {
+        skipped = true;
+        return false;
+    }
+    vfs::VfsConfig vcfg;
+    vcfg.foc_root = root;
+    vfs::parse_command_line(opt.game_args, vcfg);
+    std::string err;
+    std::unique_ptr<vfs::Vfs> v = vfs::Vfs::create(vcfg, &err);
+    if (!v) {
+        diag.push_back("VFS: " + err);
+        return false;
+    }
+    vfs::Vfs* vp = v.get();
+    s.files = std::move(v);
+    if (!load_game(s, diag)) return false;
+    const auto list = [vp](std::string_view glob) { return vp->list(glob); };
+    if (!ai::load_ai_definitions(*s.files, ai::list_ai_data(list), s.defs)) return false;
+    ai::load_equation_files(*s.files, vp->list(ai::kPerceptionEquationGlob), s.eqs);
+    s.ai = std::make_shared<sim::TacticalAiSetup>();
+    s.ai->space_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Space, list);
+    s.ai->land_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Land, list);
+    s.ai->difficulties = ai::tactical::load_tactical_ai_difficulties(*s.files);
+    std::vector<uint32_t> emp, reb;
+    if (land) {  // battle host: --skirmish-ai foc-land - Empire companies hold the planet, Rebel companies invade
+        s.land = true;
+        s.skirmish = false;
+        for (const char* n : {"Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Heavy_Assault_Company", "Imperial_Anti_Infantry_Brigade"})
+            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
+        for (const char* n : {"Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Heavy_Tank_Brigade", "Rebel_Infantry_Squad"})
+            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+    } else if (station) {  // t41: --skirmish-ai foc-station - a Level 2 station and one escort hold against a far larger fleet
+        s.skirmish = false;
+        for (const char* n : {"Empire_Star_Base_2", "Tartan_Patrol_Cruiser"})
+            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
+        for (int i = 0; i < 12; ++i)
+            for (const char* n : {"Calamari_Cruiser", "Nebulon_B_Frigate", "Alliance_Assault_Frigate"})
+                if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+    } else {
+        for (const char* n : {"Star_Destroyer", "Tartan_Patrol_Cruiser", "Tartan_Patrol_Cruiser", "Acclamator_Assault_Ship", "Broadside_Class_Cruiser"})
+            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
+        for (const char* n : {"Calamari_Cruiser", "Nebulon_B_Frigate", "Corellian_Corvette", "Corellian_Corvette", "Alliance_Assault_Frigate"})
+            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+    }
+    uint32_t planet = s.rules.find_type(land ? "Utapau" : "Kuat");
+    if (planet == galactic::kNoIndex) planet = s.rules.find_type("Coruscant");
+    if (emp.empty() || reb.empty() || planet == galactic::kNoIndex) {
+        diag.push_back("FoC skirmish: unit / planet types not found");
+        return false;
+    }
+    s.setup = make_galaxy(s, planet, emp, reb);
+    // S10 skirmish follow-up: land default = Utapau's Land_Tactical_Map (a campaign map: Defending Forces + Attacker Entry
+    // markers, REMAINING_GAPS §3.2); the MP maps carry no Attacker Entry Position, so the invaders stood at the fallback.
+    s.map = opt.map.empty() ? std::string(land ? "_Land_Planet_Utapau_01" : "_MP_SPACE_KUAT") : opt.map;
+    return true;
+}
+
+}  // namespace
+
+int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log) {
+    Session s;
+    std::vector<std::string> diag;
+    bool skipped = false;
+    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-station";
+    const bool ok = foc ? foc_session(s, opt, diag, skipped, kind == "foc-land", kind == "foc-station") : synthetic_session(s, diag);
+    if (skipped) {
+        std::printf("skirmish-ai %s: ALAMO_FOC_DATA / --game not set: skipped\n", kind.c_str());
+        return 0;
+    }
+    if (!ok) {
+        std::fprintf(stderr, "skirmish-ai %s: setup failed\n", kind.c_str());
+        for (const std::string& d : diag) std::fprintf(stderr, "  %s\n", d.c_str());
+        return 2;
+    }
+    terrain::MapData map;
+    if (foc) {
+        if (!terrain::load_map(*s.files, s.map, map) || map.is_space() == s.land) {
+            std::fprintf(stderr, "skirmish-ai: %s map %s not loaded\n", s.land ? "land" : "space", s.map.c_str());
+            return 2;
+        }
+    } else {
+        map.space.present = true;
+        for (int i = 0; i < 3; ++i) {
+            map.space.playable_min[i] = -4000.0f;
+            map.space.playable_max[i] = 4000.0f;
+        }
+        map.playable.present = map.playable.has_outer_box = true;
+        for (int i = 0; i < 3; ++i) {
+            map.playable.outer_min[i] = -4000.0f;
+            map.playable.outer_max[i] = 4000.0f;
+        }
+    }
+    s.ai->defs = &s.defs;
+    s.ai->equations = &s.eqs;
+    s.ai->files = s.files.get();
+    const uint64_t max_ticks = opt.ticks_set ? opt.ticks : 30 * 600;
+    struct Out {
+        CrcLog crc;
+        std::string text;
+        uint64_t ticks = 0;
+        size_t lua_errors = 0;
+        // S10 land outcome: from the battle summary (TacticalBattle::summary) - battle frames, winner faction, victory.
+        bool ended = false, starbase_lost = false;
+        unsigned long battle_frames = 0;
+        std::string winner, victory;
+    };
+    constexpr uint32_t kBattleFrames = 30 * 480;  // [port] the 15-min battle limit (S10)
+    std::string log_text;
+    auto run_one = [&](int32_t workers, Out& out) -> bool {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        sim::SimConfig cfg;
+        cfg.seed = opt.seed;
+        cfg.players = 4;
+        sim::SimHost host(s.types, js, cfg);
+        galactic::GalacticSim* gs = host.start_galactic(s.rules, s.setup);
+        if (!gs) return false;
+        sim::CampaignBattleOptions bo;
+        bo.conflict.human_choice = galactic::BattleChoice::Fight;
+        bo.conflict.fight_ai_battles = true;
+        bo.battle.max_frames = kBattleFrames;
+        bo.battle.skirmish = s.skirmish;
+        bo.tactical_ai = s.ai;
+        sim::load_tactical_systems(*s.files, s.rules, &s.db.constants(), bo);  // Int-final: weather, retreat, strikes data
+        const terrain::MapData* mp = &map;
+        sim::CampaignBattles battles(host, s.crules, *s.catalog,
+                                     [mp](const std::string&, terrain::MapData& m) {
+                                         m = *mp;
+                                         return true;
+                                     },
+                                     bo);
+        std::vector<std::string> d;
+        if (!battles.attach(&d)) return false;
+        if (s.land) {  // battle host: the invaders lift off from C (Launch_Units into an orbit fleet), then fly to B and invade
+            const std::vector<objects::ObjectHandle> up = gs->planets()[2].surface;
+            if (gs->launch_units(1, 2, up) != commands::RejectReason::None) return false;
+        }
+        const std::vector<uint32_t> fleets = gs->fleets_at(2, 1);
+        if (fleets.empty() || gs->move_fleet(1, fleets[0], 1) != commands::RejectReason::None) return false;
+        bool invaded = !s.land;
+        const auto t0 = std::chrono::steady_clock::now();
+        uint64_t t = 0;
+        uint64_t orders = 0, rejected = 0;
+        size_t decisions = 0, lua_errors = 0;
+        std::vector<std::string> error_list;
+        for (; t < max_ticks; ++t) {
+            host.tick_once();
+            if (!invaded && !gs->fleets_at(1, 1).empty())  // battle host: arrived at B - invade (a land conflict)
+                invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+            if (const sim::BattleAi* a = battles.tactical_ai()) {
+                orders = a->world().orders_issued();
+                rejected = a->world().orders_rejected();
+                decisions = a->world().decision_log().size();
+                error_list = a->world().lua_errors();
+                lua_errors = error_list.size();
+            }
+            if (battles.battles_fought() > 0 && !battles.battle() && host.modes().depth() == 1) {
+                ++t;
+                break;
+            }
+        }
+        out.crc = host.crc_log();
+        out.ticks = t;
+        char buf[512];
+        std::snprintf(buf, sizeof buf, "skirmish-ai %s workers %d: %" PRIu64 " ticks (%.0f ms), AI orders %" PRIu64 " rejected %" PRIu64
+                                       ", %zu decisions, %zu Lua errors, final CRC %016" PRIx64 "\n",
+                      kind.c_str(), workers, t, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),
+                      orders, rejected, decisions, lua_errors, out.crc.records.empty() ? 0 : out.crc.records.back().combined);
+        out.text = buf;
+        out.lua_errors = lua_errors;
+        for (const std::string& e : error_list) out.text += "  Lua error: " + e + "\n";
+        for (const std::string& l : battles.log()) {
+            out.text += "  " + l + "\n";
+            const size_t c = l.find(": "), w = l.find(", winner "), v = l.find(", victory ");
+            if ((l.rfind("land battle ", 0) == 0 || l.rfind("space battle ", 0) == 0) && c != std::string::npos &&
+                w != std::string::npos && v != std::string::npos) {
+                out.ended = true;
+                out.starbase_lost = l.find("+ starbase") != std::string::npos;
+                out.battle_frames = std::strtoul(l.c_str() + c + 2, nullptr, 10);
+                out.winner = l.substr(w + 9, v - (w + 9));
+                out.victory = l.substr(v + 10, l.find(',', v + 10) - (v + 10));
+            }
+        }
+        if (log_text.empty())
+            for (const std::string& l : battles.ai_log()) log_text += l + "\n";
+        size_t shown = 0;
+        for (const std::string& l : battles.ai_log())
+            if (shown++ < 12) out.text += "  " + l + "\n";
+        return true;
+    };
+    Out first;
+    const auto counts = jobs::determinism_worker_counts();
+    if (!run_one(opt.check_workers ? counts.front() : opt.workers, first)) {
+        std::fprintf(stderr, "skirmish-ai: run failed\n");
+        return 1;
+    }
+    std::printf("%s", first.text.c_str());
+    if (!ai_log.empty()) std::ofstream(fs::path(ai_log), std::ios::binary) << log_text;
+    bool good = true;
+    if (opt.check_workers)
+        for (size_t i = 1; i < counts.size(); ++i) {
+            Out other;
+            run_one(counts[i], other);
+            const auto dv = first_divergence(first.crc, other.crc);
+            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], dv.message.c_str());
+            if (dv.diverged) good = false;
+        }
+    // t48: shipped scripts against the port: a Lua error here is a port bug until shown otherwise.
+    if (kind == "foc-station" && first.lua_errors != 0) good = false;
+    if (opt.expect_battle_end) {  // S10 land outcome: a real result before the frame limit
+        const bool ended_ok = first.ended && first.battle_frames < kBattleFrames && first.winner != "-";
+        std::printf("battle outcome: %s, winner %s, victory %s, %lu of %u frames\n", ended_ok ? "ended" : "NOT ENDED",
+                    first.winner.c_str(), first.victory.c_str(), first.battle_frames, kBattleFrames);
+        if (!ended_ok) good = false;
+        // t41: the shipped Want_To_Retreat_From_Space keeps a defender holding a station in the fight, however outnumbered.
+        // t48: once the station is dead BaseLevel is 0 and the survivors may leave.
+        if (kind == "foc-station" && first.victory == "all-retreated" && !first.starbase_lost) good = false;
+        if (s.land) {  // Script_ evaluators (AI_GALACTIC_2 §4.4): the goals gated by Script_TargetHasProperty /
+                       // Script_GetDistanceToNearestWithProperty must be proposed in the land battle
+            for (const char* fn : {"Need_To_Secure_Contestable_Land", "Need_To_Secure_Contestable_Escorted_Land",
+                                   "Need_To_PreDefend_Structure"}) {
+                const std::string key = std::string("  stat ~ proposed ") + fn + " ";
+                unsigned long n = 0;
+                for (size_t at = log_text.find(key); at != std::string::npos; at = log_text.find(key, at + 1))
+                    n += std::strtoul(log_text.c_str() + at + key.size(), nullptr, 10);
+                std::printf("  proposed %s: %lu\n", fn, n);
+                if (n == 0) good = false;
+            }
+        }
+    }
+    first.crc.comments = {"A1 skirmish-ai " + kind + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(first.ticks)};
+    std::string err;
+    if (!opt.crc_out.empty() && first.crc.save(opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
+    if (!opt.golden.empty()) {
+        CrcLog golden;
+        if (!CrcLog::load(opt.golden, golden, &err)) {
+            std::fprintf(stderr, "golden: %s\n", err.c_str());
+            return 2;
+        }
+        const auto dv = first_divergence(golden, first.crc);
+        std::printf("golden: %s\n", dv.message.c_str());
+        if (dv.diverged) good = false;
+    }
+    std::printf(good ? "skirmish-ai run: OK\n" : "skirmish-ai run: FAILED\n");
+    return good ? 0 : 1;
+}
+
+// --- N1 stage 2 (owner: n2-host): skirmish_run.hpp skirmish_save_* ---
+struct SkirmishSaveData {
+    Session s;
+    std::string kind;
+    terrain::MapData map;
+    uint64_t fingerprint = 0;
+};
+
+std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, const std::string& game_dir,
+                                                     const std::vector<std::string>& game_args, const std::string& map,
+                                                     bool& skipped, std::string& err) {
+    auto d = std::make_shared<SkirmishSaveData>();
+    d->kind = kind;
+    Session& s = d->s;
+    std::vector<std::string> diag;
+    skipped = false;
+    const bool foc = kind == "foc" || kind == "foc-land";
+    if (!foc && kind != "synthetic") {
+        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-land)";
+        return nullptr;
+    }
+    MapRunOptions mo;
+    mo.game_dir = game_dir;
+    mo.game_args = game_args;
+    mo.map = map;
+    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land") : synthetic_session(s, diag);
+    if (skipped) {
+        err = "ALAMO_FOC_DATA / --game not set";
+        return nullptr;
+    }
+    if (!ok) {
+        err = "skirmish " + kind + ": setup failed (" + std::to_string(diag.size()) + " diagnostics" +
+              (diag.empty() ? std::string() : ": " + diag.front()) + ")";
+        return nullptr;
+    }
+    if (foc) {
+        if (!terrain::load_map(*s.files, s.map, d->map) || d->map.is_space() == s.land) {
+            err = "skirmish: " + std::string(s.land ? "land" : "space") + " map " + s.map + " not loaded";
+            return nullptr;
+        }
+    } else {  // as skirmish_ai_run
+        d->map.space.present = true;
+        for (int i = 0; i < 3; ++i) {
+            d->map.space.playable_min[i] = -4000.0f;
+            d->map.space.playable_max[i] = 4000.0f;
+        }
+        d->map.playable.present = d->map.playable.has_outer_box = true;
+        for (int i = 0; i < 3; ++i) {
+            d->map.playable.outer_min[i] = -4000.0f;
+            d->map.playable.outer_max[i] = 4000.0f;
+        }
+    }
+    s.ai->defs = &s.defs;
+    s.ai->equations = &s.eqs;
+    s.ai->files = s.files.get();
+    StateHasher h;  // the battle inputs beyond types / rules / galaxy
+    h.str(kind);
+    h.str(s.map);
+    h.u32(static_cast<uint32_t>(s.ai->space_plans.size() + s.ai->land_plans.size()));
+    h.u32(static_cast<uint32_t>(s.defs.goals.size()));
+    h.u32(static_cast<uint32_t>(s.eqs.size()));
+    d->fingerprint = sim::combine_fingerprints({sim::fingerprint_types(s.types), sim::fingerprint_galactic(s.rules, s.setup), h.digest()});
+    return d;
+}
+
+const objects::GameObjectTypes& skirmish_save_types(const SkirmishSaveData& d) { return d.s.types; }
+uint64_t skirmish_save_fingerprint(const SkirmishSaveData& d) { return d.fingerprint; }
+std::string skirmish_save_map(const SkirmishSaveData& d) { return d.s.map; }
+
+bool skirmish_save_start(const SkirmishSaveData& d, sim::SimHost& host, bool anim, SkirmishSaveRun& run, std::string& err) {
+    const Session& s = d.s;
+    galactic::GalacticSim* gs = host.start_galactic(s.rules, s.setup);
+    if (!gs) {
+        err = "skirmish: start_galactic failed";
+        return false;
+    }
+    sim::CampaignBattleOptions bo;  // as skirmish_ai_run
+    bo.conflict.human_choice = galactic::BattleChoice::Fight;
+    bo.conflict.fight_ai_battles = true;
+    bo.battle.max_frames = 30 * 480;
+    bo.battle.skirmish = s.skirmish;
+    bo.tactical_ai = s.ai;
+    sim::load_tactical_systems(*s.files, s.rules, &s.db.constants(), bo);
+#ifdef ALAMO_SIM_HAVE_ANIM
+    if (anim) {
+        auto a = std::make_shared<sim::SimAnimation>(s.types, *s.files);
+        a->attach(host, true);
+        bo.animation = a.get();
+        run.anim = a;
+    }
+#else
+    if (anim) {
+        err = "skirmish: this build has no animation (engine/anim)";
+        return false;
+    }
+#endif
+    const terrain::MapData* mp = &d.map;
+    run.battles = std::make_shared<sim::CampaignBattles>(host, s.crules, *s.catalog,
+                                                         [mp](const std::string&, terrain::MapData& m) {
+                                                             m = *mp;
+                                                             return true;
+                                                         },
+                                                         bo);
+    std::vector<std::string> ad;
+    if (!run.battles->attach(&ad)) {
+        err = "skirmish: CampaignBattles::attach failed";
+        return false;
+    }
+    if (s.land) {
+        const std::vector<objects::ObjectHandle> up = gs->planets()[2].surface;
+        if (gs->launch_units(1, 2, up) != commands::RejectReason::None) {
+            err = "skirmish: launch_units failed";
+            return false;
+        }
+    }
+    const std::vector<uint32_t> fleets = gs->fleets_at(2, 1);
+    if (fleets.empty() || gs->move_fleet(1, fleets[0], 1) != commands::RejectReason::None) {
+        err = "skirmish: move_fleet failed";
+        return false;
+    }
+    auto invaded = std::make_shared<bool>(!s.land);
+    run.after_tick = [gs, invaded] {
+        if (!*invaded && !gs->fleets_at(1, 1).empty()) *invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+    };
+    sim::SaveParticipant p;  // the harness state across a save: the invasion step done or not
+    p.name = "skirmish";
+    p.write = [invaded](ByteWriter& w) { w.boolean(*invaded); };
+    p.read = [invaded](ByteReader& r) {
+        const bool v = r.boolean();
+        if (!r.ok()) return false;
+        *invaded = v;
+        return true;
+    };
+    host.add_save_participant(std::move(p));
+    return true;
+}
+// --- end N1 stage 2 ---
+#else
+int skirmish_ai_run(const MapRunOptions&, const std::string&, const std::string&) {
+    std::fprintf(stderr, "--skirmish-ai: this build has no tactical AI (engine/ai/tactical + engine/lua)\n");
+    return 2;
+}
+// --- N1 stage 2 (owner: n2-host): no tactical AI in this build ---
+struct SkirmishSaveData {
+    alamo::objects::GameObjectTypes types;
+};
+std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string&, const std::string&, const std::vector<std::string>&,
+                                                     const std::string&, bool& skipped, std::string& err) {
+    skipped = true;
+    err = "this build has no tactical AI (engine/ai/tactical + engine/lua)";
+    return nullptr;
+}
+const alamo::objects::GameObjectTypes& skirmish_save_types(const SkirmishSaveData& d) { return d.types; }
+uint64_t skirmish_save_fingerprint(const SkirmishSaveData&) { return 0; }
+std::string skirmish_save_map(const SkirmishSaveData&) { return {}; }
+bool skirmish_save_start(const SkirmishSaveData&, alamo::sim::SimHost&, bool, SkirmishSaveRun&, std::string& err) {
+    err = "this build has no tactical AI";
+    return false;
+}
+#endif

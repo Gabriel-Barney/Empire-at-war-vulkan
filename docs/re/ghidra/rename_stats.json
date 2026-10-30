@@ -1,0 +1,14 @@
+{
+ "by_source": {
+  "ctor_dtor": 1997,
+  "vftable": 4121,
+  "string": 183,
+  "fixed": 11,
+  "lua_member": 303,
+  "lua_global": 117
+ },
+ "to_create": 42,
+ "icf_shared_slots_skipped": 354,
+ "default_named_before": 20578,
+ "total_functions": 21627
+}

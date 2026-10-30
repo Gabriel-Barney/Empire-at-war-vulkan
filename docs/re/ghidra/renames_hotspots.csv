@@ -1,0 +1,43 @@
+rva,namespace,name,source,confidence,function,note
+0x6cacd0,AIGoalSystemClass,Service,behaviour,high,existing,vf2: countdown at +0x18c then incremental proposal; HOTSPOTS.md
+0x6ca9a0,AIGoalSystemClass,Save,behaviour,high,existing,vf4: chunk writer 0x20000..0x20005
+0x6cb120,AIGoalSystemClass,Propose_Goals_Incremental,behaviour,high,existing,HOTSPOTS.md
+0x6c8710,AIGoalSystemClass,Commit_Proposed_Goals,behaviour,high,existing,HOTSPOTS.md
+0x6c8970,AIGoalSystemClass,Resolve_Category,behaviour,medium,existing,HOTSPOTS.md
+0x6c76f0,AIGoalSystemClass,Sort_Categories_By_Budget,behaviour,medium,existing,std::sort instance; comparator = budget weight lookup
+0x614590,AIBudgetClass,Recompute_Category_Weights,behaviour,medium,existing,perception eval per budget category
+0x3ef160,PerceptionContextClass,PerceptionContextClass,behaviour,high,existing,ctor: unordered_map token->value + context ptrs
+0x7b260,PerceptionContextClass,~PerceptionContextClass,behaviour,high,existing,dtor
+0x241df0,,IntKeyHashMap_Emplace,behaviour,high,existing,std::unordered_map<int,T>::emplace (minstd hash of key^0xdeadbeef)
+0x698de0,FindTargetClass,Weighted_Random_Pick,behaviour,high,existing,binary search over cumulative scores with GameRandom
+0x20bb60,TreeCullClass,Classify_AABB_vs_AABB,behaviour,high,existing,returns 1 outside 2 inside 8 straddle
+0x20be80,TreeCullClass,Classify_AABB_vs_Frustum,behaviour,high,existing,6 planes with inherited plane mask
+0x20c6d0,TreeCullClass,Classify_Ray_vs_Node,behaviour,medium,existing,
+0x20cd70,TreeCullClass,Slab_Test,behaviour,medium,existing,
+0x20e780,TreeCullClass,Query_AABB,behaviour,high,existing,results chained via entry+0x18
+0x20e9f0,TreeCullClass,Query_Frustum,behaviour,high,existing,
+0x20eac0,TreeCullClass,Query_Ray,behaviour,high,existing,
+0x20fef0,TreeCullClass,Collect_AABB_Recursive,behaviour,high,existing,
+0x2100a0,TreeCullClass,Collect_Frustum_Recursive,behaviour,high,existing,
+0x2102d0,TreeCullClass,Collect_Ray_Recursive,behaviour,high,existing,
+0x2abcf0,GameObjectManagerClass,Find_First_Object_Hit_By_Segment_All_Enemies,behaviour,high,existing,projectile sweep over each enemy player's tree
+0x2acb90,GameObjectManagerClass,Find_First_Object_Hit_By_Segment_For_Player,behaviour,high,existing,
+0x45580,,vector_ptr_Emplace_Reallocate,behaviour,high,existing,std::vector<T*> growth 1.5x
+0x45480,,vector_ptr_Emplace_Reallocate_2,behaviour,medium,existing,
+0x48410,,vector_ptr_Change_Array,behaviour,high,existing,
+0x2c2bf0,,vector_int_Emplace_Reallocate,behaviour,high,existing,
+0x27da40,,vector_48b_Emplace_Reallocate,behaviour,medium,existing,element 0x30 bytes (vec3 + modifier list)
+0x535cb0,,ModifierSet_ctor,behaviour,medium,existing,11 modifier lists x 0x20
+0x535fb0,,ModifierSet_dtor,behaviour,medium,existing,
+0x536570,,ModifierSet_Merge,behaviour,high,existing,merge 11 lists
+0x536330,,ModifierList_Merge,behaviour,medium,existing,
+0x395c70,GameObjectClass,Gather_Modifiers,behaviour,medium,existing,collect all stat modifiers affecting object
+0x33fb70,,ModifierSet_Reduce_MaxThenSum,behaviour,medium,existing,GreaterThan<float> within source then Plus<float>
+0x540070,HardPointDataClass,Get_Health_Difficulty_Scaled,behaviour,high,existing,+0x58 Health x difficulty factor
+0x3727a0,GameObjectTypeClass,Get_Max_Tactical_Health,behaviour,high,existing,+0xdcc Tactical_Health x difficulty x faction x (1+mods)
+0x3857d0,HardPointClass,Get_Fire_Range,behaviour,high,existing,type+0x238 Fire_Range_Distance x (1+mods)
+0x385ae0,HardPointClass,Get_Max_Health,behaviour,high,existing,
+0x38e0c0,GameObjectClass,Get_Damage_Multiplier,behaviour,medium,existing,attacker/defender modifiers + surface cover
+0x566ca0,TargetingBehaviorClass,Get_Modified_Value,behaviour,low,existing,vf40; max-then-sum over modifier lists
+0x597dc0,SpacePathFinderClass,Build_Smoothed_Path,behaviour,medium,existing,5 temp vectors per call
+0x698360,FindTargetClass,Lua_Reachable_Target,behaviour,high,existing,scores candidates with perception fn then weighted pick

@@ -1,0 +1,17 @@
+{
+  "source": "selftest fake_d3d9_game through DXVK 3.1.1 + RenderDoc 1.46",
+  "dxvk_cull_map": {
+    "D3DCULL_CW": {
+      "cull": "Front",
+      "front_ccw": false
+    },
+    "D3DCULL_CCW": {
+      "cull": "Back",
+      "front_ccw": false
+    },
+    "D3DCULL_NONE": {
+      "cull": "NoCull",
+      "front_ccw": false
+    }
+  }
+}

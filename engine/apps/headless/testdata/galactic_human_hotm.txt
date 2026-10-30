@@ -1,0 +1,16 @@
+# A2 galactic: the scripted human's recorded command stream for alamo_headless --economy --galactic-ai --human Rebel
+# on Sandbox_Heart_Of_The_Maw_Underworld (format: engine/apps/headless/ai_run.cpp). The Rebel player gathers its
+# fleets at Mon Calamari, builds a little, takes its infantry along to attack the Underworld at Shola, later pushes on
+# to The Maw, and leaves Yavin and Kamino without a fleet.
+5    move   Yavin MonCalimari
+5    move   Kamino MonCalimari
+10   build  Rebel_X-Wing_Squadron MonCalimari
+10   build  Corellian_Corvette MonCalimari
+15   build  Rebel_Infantry_Squad MonCalimari
+80   launch MonCalimari
+90   move   MonCalimari Shola
+150  invade Shola
+240  build  Nebulon_B_Frigate MonCalimari
+240  build  Rebel_X-Wing_Squadron MonCalimari
+300  move   MonCalimari Shola
+420  move   Shola The_Maw

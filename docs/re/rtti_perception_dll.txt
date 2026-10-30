@@ -1,0 +1,127 @@
+# RTTI classes recovered from bin/PerceptionFunctionG.dll
+# name | primary vtable RVA (slots) | parent | all bases
+_Iosb<H@std> | - | - | 
+_Mpunct<_W@std> | 0xcb060(12) | std::money_base | std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+_Mpunct<D@std> | 0xcb890(12) | std::money_base | std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+_Mpunct<G@std> | 0xcb3e0(12) | std::money_base | std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost> | 0xc7f28(3) | - | 
+abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost> | 0xc81e0(3) | - | 
+AdditionOperatorNodeClass | 0xc7a68(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+basic_ios<DU?$char_traits@D@std@@@std> | 0xc7848(1) | std::ios_base | std::ios_base, _Iosb<H@std>
+basic_ostream<DU?$char_traits@D@std@@@std> | 0xc7858(1) | basic_ios<DU?$char_traits@D@std@@@std> | basic_ios<DU?$char_traits@D@std@@@std>, std::ios_base, _Iosb<H@std>
+basic_ostringstream<DU?$char_traits@D@std@@V?$allocator@D@2@@std> | 0xc7970(1) | basic_ostream<DU?$char_traits@D@std@@@std> | basic_ostream<DU?$char_traits@D@std@@@std>, basic_ios<DU?$char_traits@D@std@@@std>, std::ios_base, _Iosb<H@std>
+basic_streambuf<DU?$char_traits@D@std@@@std> | 0xc7870(15) | - | 
+basic_stringbuf<DU?$char_traits@D@std@@V?$allocator@D@2@@std> | 0xc78f0(15) | basic_streambuf<DU?$char_traits@D@std@@@std> | basic_streambuf<DU?$char_traits@D@std@@@std>
+boost::detail::sp_counted_base | 0xc7988(6) | - | 
+charNode | 0xcd000(4) | DNameNode | DNameNode
+ClampFunctionNodeClass | 0xc7be0(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+codecvt<_WD_Mbstatet,@std> | 0xcac38(10) | std::codecvt_base | std::codecvt_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+codecvt<DD_Mbstatet,@std> | 0xca8b0(10) | std::codecvt_base | std::codecvt_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+codecvt<GD_Mbstatet,@std> | 0xcac90(10) | std::codecvt_base | std::codecvt_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+collate<_W@std> | 0xcaf90(6) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+collate<D@std> | 0xcb7c0(6) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+collate<G@std> | 0xcb310(6) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+concrete_parser<U?$leaf_node_parser@U?$real_parser@NU?$real_parser_policies@N@spirit@boost@@@spirit@boost@@@spirit@boost@@V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@Unil_t@23@@impl@spirit@boost> | 0xc7f48(3) | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost> | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost>
+concrete_parser<U?$leaf_node_parser@U?$sequence@U?$sequence@U?$chlit@D@spirit@boost@@U?$kleene_star@U?$alternative@U?$alternative@Ualnum_parser@spirit@boost@@U?$chlit@D@23@@spirit@boost@@U?$chlit@D@23@@spirit@boost@@@23@@spirit@boost@@U?$chlit@D@23@@spirit@boost@@@spirit@boost@@V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@Unil_t@23@@impl@spirit@boost> | 0xc80e8(3) | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost> | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost>
+concrete_parser<U?$leaf_node_parser@U?$sequence@Ualpha_parser@spirit@boost@@U?$kleene_star@U?$alternative@U?$alternative@U?$alternative@Ualnum_parser@spirit@boost@@U?$chlit@D@23@@spirit@boost@@U?$chlit@D@23@@spirit@boost@@U?$chlit@D@23@@spirit@boost@@@23@@spirit@boost@@@spirit@boost@@V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@Unil_t@23@@impl@spirit@boost> | 0xc7fe8(3) | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost> | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost>
+concrete_parser<U?$leaf_node_parser@U?$sequence@Ualpha_parser@spirit@boost@@U?$kleene_star@U?$alternative@Ualnum_parser@spirit@boost@@U?$chlit@D@23@@spirit@boost@@@23@@spirit@boost@@@spirit@boost@@V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@Unil_t@23@@impl@spirit@boost> | 0xc7f68(3) | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost> | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost>
+concrete_parser<U?$leaf_node_parser@U?$sequence@Ualpha_parser@spirit@boost@@U?$kleene_star@U?$alternative@Ualnum_parser@spirit@boost@@U?$chlit@D@23@@spirit@boost@@@23@@spirit@boost@@@spirit@boost@@V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@Unil_t@23@@impl@spirit@boost> | 0xc8200(3) | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost> | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost>
+concrete_parser<U?$sequence@U?$sequence@U?$chlit@D@spirit@boost@@V?$rule@V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@U?$parser_context@Unil_t@spirit@boost@@@23@U?$parser_tag@$03@23@@23@@spirit@boost@@U?$chlit@D@23@@spirit@boost@@V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@Unil_t@23@@impl@spirit@boost> | 0xc8260(3) | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost> | abstract_parser<V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@spirit@boost@@Unil_t@23@@impl@spirit@boost>
+ConstantNodeClass | 0xc7bc8(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+ctype<_W@std> | 0xcace8(15) | std::ctype_base | std::ctype_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+ctype<D@std> | 0xc7778(11) | std::ctype_base | std::ctype_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+ctype<G@std> | 0xcad68(15) | std::ctype_base | std::ctype_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+DatabaseObjectManagerClass<VPerceptionFunctionClass> | 0xc75f8(4) | DatabaseUIntConversionClass | DatabaseUIntConversionClass
+DatabaseUIntConversionClass | 0xc7598(3) | - | 
+DivisionOperatorNodeClass | 0xc7b28(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+DNameNode | 0xccfd8(4) | - | 
+DNameStatusNode | 0xcd078(4) | DNameNode | DNameNode
+DynamicVectorClass<PEAVXMLNodeClass@XMLDatabase> | 0xc82f0(1) | - | 
+DynamicVectorClass<PEBX> | 0xc91a0(1) | - | 
+DynamicVectorClass<V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std> | 0xc8530(1) | - | 
+DynamicVectorClass<VXMLAttributeClass@XMLDatabase> | 0xc82e0(1) | - | 
+EqualOperatorNodeClass | 0xc7a98(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+FileClass | 0xc8540(13) | - | 
+grammar_helper<U?$grammar@PerceptionFunctionCallSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@PerceptionFunctionCallSpiritGrammar,V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@@impl@spirit@boost> | 0xc81c8(2) | grammar_helper_base<U?$grammar@PerceptionFunctionCallSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@@impl@spirit@boost> | grammar_helper_base<U?$grammar@PerceptionFunctionCallSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@@impl@spirit@boost>
+grammar_helper<U?$grammar@PerceptionFunctionSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@PerceptionFunctionSpiritGrammar,V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@@impl@spirit@boost> | 0xc7f10(2) | grammar_helper_base<U?$grammar@PerceptionFunctionSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@@impl@spirit@boost> | grammar_helper_base<U?$grammar@PerceptionFunctionSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@@impl@spirit@boost>
+grammar_helper_base<U?$grammar@PerceptionFunctionCallSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@@impl@spirit@boost> | 0xc81b0(2) | - | 
+grammar_helper_base<U?$grammar@PerceptionFunctionSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@@impl@spirit@boost> | 0xc7e58(2) | - | 
+GreaterOrEqualOperatorNodeClass | 0xc7b10(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+GreaterThanOperatorNodeClass | 0xc7ae0(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+LessOrEqualOperatorNodeClass | 0xc7af8(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+LessThanOperatorNodeClass | 0xc7ac8(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+messages<_W@std> | 0xcafc8(6) | std::messages_base | std::messages_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+messages<D@std> | 0xcb7f8(6) | std::messages_base | std::messages_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+messages<G@std> | 0xcb348(6) | std::messages_base | std::messages_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+money_get<_WV?$istreambuf_iterator@_WU?$char_traits@_W@std@@@std@@@std> | 0xcb000(5) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+money_get<DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std> | 0xcb830(5) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+money_get<GV?$istreambuf_iterator@GU?$char_traits@G@std@@@std@@@std> | 0xcb380(5) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+money_put<_WV?$ostreambuf_iterator@_WU?$char_traits@_W@std@@@std@@@std> | 0xcb030(5) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+money_put<DV?$ostreambuf_iterator@DU?$char_traits@D@std@@@std@@@std> | 0xcb860(5) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+money_put<GV?$ostreambuf_iterator@GU?$char_traits@G@std@@@std@@@std> | 0xcb3b0(5) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+moneypunct<_W$00@std> | 0xcb130(12) | _Mpunct<_W@std> | _Mpunct<_W@std>, std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+moneypunct<_W$0A@@std> | 0xcb0c8(12) | _Mpunct<_W@std> | _Mpunct<_W@std>, std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+moneypunct<D$00@std> | 0xcb960(12) | _Mpunct<D@std> | _Mpunct<D@std>, std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+moneypunct<D$0A@@std> | 0xcb8f8(12) | _Mpunct<D@std> | _Mpunct<D@std>, std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+moneypunct<G$00@std> | 0xcb4b0(12) | _Mpunct<G@std> | _Mpunct<G@std>, std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+moneypunct<G$0A@@std> | 0xcb448(12) | _Mpunct<G@std> | _Mpunct<G@std>, std::money_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+MultiplyOperatorNodeClass | 0xc7a50(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+NotEqualOperatorNodeClass | 0xc7ab0(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+num_get<_WV?$istreambuf_iterator@_WU?$char_traits@_W@std@@@std@@@std> | 0xcae70(14) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+num_get<DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std> | 0xca790(14) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+num_get<GV?$istreambuf_iterator@GU?$char_traits@G@std@@@std@@@std> | 0xcb1f0(14) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+num_put<_WV?$ostreambuf_iterator@_WU?$char_traits@_W@std@@@std@@@std> | 0xcaee8(11) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+num_put<DV?$ostreambuf_iterator@DU?$char_traits@D@std@@@std@@@std> | 0xca808(11) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+num_put<GV?$ostreambuf_iterator@GU?$char_traits@G@std@@@std@@@std> | 0xcb268(11) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+numpunct<_W@std> | 0xcaf48(8) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+numpunct<D@std> | 0xca868(8) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+numpunct<G@std> | 0xcb2c8(8) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+pairNode | 0xcd0a0(4) | DNameNode | DNameNode
+pcharNode | 0xcd028(4) | DNameNode | DNameNode
+pDNameNode | 0xcd050(4) | DNameNode | DNameNode
+PerceptionFunctionClass | 0xc7648(1) | - | 
+PerceptionFunctionNodeClass | 0xc7a38(2) | - | 
+PerceptionParameterBindingsClass | 0xc75e0(1) | - | 
+PerceptualLookupNodeClass | 0xc7bf8(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+RandomNumberOperatorNodeClass | 0xc7b98(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+sp_counted_impl_p<U?$grammar_helper@U?$grammar@PerceptionFunctionCallSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@PerceptionFunctionCallSpiritGrammar,V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$pt_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@@impl@spirit@boost@@@detail@boost> | 0xc82a0(6) | boost::detail::sp_counted_base | boost::detail::sp_counted_base
+sp_counted_impl_p<U?$grammar_helper@U?$grammar@PerceptionFunctionSpiritGrammar,U?$parser_context@Unil_t@spirit@boost@@@spirit@boost@@@spirit@boost@@PerceptionFunctionSpiritGrammar,V?$scanner@PEBDU?$scanner_policies@V?$skip_parser_iteration_policy@Uspace_parser@spirit@boost@@Uiteration_policy@23@@spirit@boost@@U?$ast_match_policy@PEBDV?$node_val_data_factory@Unil_t@spirit@boost@@@spirit@boost@@Unil_t@23@@23@Uaction_policy@23@@spirit@boost@@@23@@impl@spirit@boost@@@detail@boost> | 0xc8108(6) | boost::detail::sp_counted_base | boost::detail::sp_counted_base
+sp_counted_impl_p<U?$object_with_id_base_supply@_K@impl@spirit@boost@@@detail@boost> | 0xc7ed8(6) | boost::detail::sp_counted_base | boost::detail::sp_counted_base
+std::_Crt_new_delete | - | - | 
+std::_Facet_base | 0xc7708(3) | - | 
+std::_Iostream_error_category2 | 0xc76a8(6) | std::error_category | std::error_category
+std::_System_error | 0xc7670(2) | std::runtime_error | std::runtime_error, std::exception
+std::bad_alloc | 0xc7530(2) | std::exception | std::exception
+std::bad_array_new_length | 0xc7558(2) | std::bad_alloc | std::bad_alloc, std::exception
+std::bad_cast | 0xc75b8(2) | std::exception | std::exception
+std::bad_exception | 0xcbd68(2) | std::exception | std::exception
+std::bad_function_call | 0xc91b8(2) | std::exception | std::exception
+std::codecvt_base | 0xca758(6) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+std::ctype_base | 0xc7758(3) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+std::error_category | - | - | 
+std::exception | 0xc7500(2) | - | 
+std::invalid_argument | 0xc9200(2) | std::logic_error | std::logic_error, std::exception
+std::ios_base | 0xc77f0(1) | _Iosb<H@std> | _Iosb<H@std>
+std::ios_base::failure | 0xc77d8(2) | std::system_error | std::system_error, std::_System_error, std::runtime_error, std::exception
+std::length_error | 0xc9218(2) | std::logic_error | std::logic_error, std::exception
+std::locale::_Locimp | 0xca618(3) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+std::locale::facet | 0xc7738(3) | std::_Facet_base | std::_Facet_base, std::_Crt_new_delete
+std::logic_error | 0xc91e8(2) | std::exception | std::exception
+std::messages_base | 0xcade8(3) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+std::money_base | 0xcae08(3) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+std::out_of_range | 0xc9230(2) | std::logic_error | std::logic_error, std::exception
+std::overflow_error | 0xc9248(2) | std::runtime_error | std::runtime_error, std::exception
+std::regex_error | 0xc9260(2) | std::runtime_error | std::runtime_error, std::exception
+std::runtime_error | 0xc7658(2) | std::exception | std::exception
+std::system_error | 0xc7690(2) | std::_System_error | std::_System_error, std::runtime_error, std::exception
+std::time_base | 0xcae28(3) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+SubtractionOperatorNodeClass | 0xc7a80(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass
+ThePerceptionFunctionManagerClass | 0xc7620(4) | DatabaseObjectManagerClass<VPerceptionFunctionClass> | DatabaseObjectManagerClass<VPerceptionFunctionClass>, DatabaseUIntConversionClass
+time_get<_WV?$istreambuf_iterator@_WU?$char_traits@_W@std@@@std@@@std> | 0xcb198(10) | std::time_base | std::time_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+time_get<DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std> | 0xcb9c8(10) | std::time_base | std::time_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+time_get<GV?$istreambuf_iterator@GU?$char_traits@G@std@@@std@@@std> | 0xcb518(10) | std::time_base | std::time_base, std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+time_put<_WV?$ostreambuf_iterator@_WU?$char_traits@_W@std@@@std@@@std> | 0xcae48(4) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+time_put<DV?$ostreambuf_iterator@DU?$char_traits@D@std@@@std@@@std> | 0xcba20(4) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+time_put<GV?$ostreambuf_iterator@GU?$char_traits@G@std@@@std@@@std> | 0xcb570(4) | std::locale::facet | std::locale::facet, std::_Facet_base, std::_Crt_new_delete
+type_info | 0xcbbd0(1) | - | 
+UnaryOperatorNodeClass | 0xc7bb0(2) | PerceptionFunctionNodeClass | PerceptionFunctionNodeClass

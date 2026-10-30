@@ -1,0 +1,1803 @@
+{
+ "notes": [
+  "Button texts are the English MasterTextFile strings (TEXT_BUTTON_*). Screen positions are not fixed: a UI-driving agent finds each label on a screenshot before clicking.",
+  "No command-line switch loads a map directly in this build (Parse_Command_Line accepts only LOCALPORT MONITOR WINDOWED FULLSCREEN MODPATH STEAMMOD FALLBACKPATH LOGFILE RANDOMLOGFILE SYNCLOGFILTER SCREENWIDTH SCREENHEIGHT BCAST2..4 PROFILE LOWRAM FPSCAP MULTI SAFEMODE LANGUAGE DEEPSYNC MPRECORDFILE, docs/re/ghidra/strings_xrefs.csv). A quick-load-map path exists (0x68b20, 'Quick Loading Map %s...') but its trigger is not documented; if an RE pass finds it, pass it with --extra-args and the menu steps below shrink to none.",
+  "The kit starts the game WINDOWED SCREENWIDTH=1920 SCREENHEIGHT=1080 by default (easier to drive and screenshot; --fullscreen to turn off).",
+  "Graphics options are the player's own settings (stored by the game). Note their values before changing them for a capture and set them back afterwards."
+ ],
+ "graphics_options": {
+  "path": [
+   "Main menu: click 'Options'",
+   "Options screen: open the graphics/video page",
+   "use the checkboxes 'Bloom', 'Heat Distortions', 'Soft Shadows' and the 'Shadow detail' slider; 'Accept' to apply"
+  ],
+  "want_for_parity": "Bloom on, Heat Distortions on, Soft Shadows on, Shadow detail high, Shader detail high (also record them in game_logs/_GraphicsInit.txt)"
+ },
+ "scenes": [
+  {
+   "id": "K",
+   "title": "Space skirmish at Kuat with Thrawn's Star Destroyer (Admonitor) - the main scene",
+   "modes": [
+    "dxvk",
+    "renderdoc",
+    "apitrace"
+   ],
+   "answers": [
+    "blue cast on the lit Thrawn SD / Colorization default",
+    "heat target 0x80 bias",
+    "engine cull mode",
+    "space frame order (background scene, depth-only clear, ships)",
+    "shadow-volume draws in space (SPACE_AND_OPEN C.4)",
+    "skydome rotation order at Kuat (C.3)",
+    "planet backdrop (D.2/D.7)"
+   ],
+   "manual": [
+    "Main menu > Single Player > Skirmish Battles > Space Battle.",
+    "Pick the map Kuat, play as the Empire against one AI, set Starting Credits to the maximum, then Start Game.",
+    "Select your space station and build Thrawn's Star Destroyer (Admonitor, 6200 credits, 40 s). Build a few more ships too.",
+    "Fly the Admonitor so it is lit by the sun and the planet is in the background. Zoom in so it fills about a third of the screen.",
+    "RenderDoc run: press F12 once here (Thrawn close-up), once while ships fire/explode (heat), once zoomed out (whole battle).",
+    "DXVK run: wait for a screenshot (every 15 s), toggle Shadow detail low/high in Options, wait again.",
+    "apitrace run: as soon as the Admonitor is on screen, keep it there 10 seconds, then quit the game (Esc > Quit Game). Keep the whole session short."
+   ],
+   "ui_steps": [
+    {
+     "screen": "intro movies / splash",
+     "do": "press Escape (or click) to skip each logo movie",
+     "expect": "main menu with 'Single Player', 'Multiplayer', 'Options'"
+    },
+    {
+     "screen": "main menu",
+     "do": "click 'Single Player'",
+     "expect": "single-player menu listing 'Skirmish Battles'"
+    },
+    {
+     "screen": "single-player menu",
+     "do": "click 'Skirmish Battles'",
+     "expect": "'Skirmish Battle Setup' screen"
+    },
+    {
+     "screen": "Skirmish Battle Setup",
+     "do": "click 'Space Battle'",
+     "expect": "map list shows space maps"
+    },
+    {
+     "screen": "Skirmish Battle Setup",
+     "do": "click the map 'Kuat' in the map list",
+     "expect": "Kuat preview shown"
+    },
+    {
+     "screen": "Skirmish Battle Setup",
+     "do": "set your faction to Empire; make sure exactly one AI opponent is present",
+     "expect": "player row shows Empire"
+    },
+    {
+     "screen": "Skirmish Battle Setup",
+     "do": "drag the 'Starting Credits' slider to the maximum",
+     "expect": "credits >= 6200"
+    },
+    {
+     "screen": "Skirmish Battle Setup",
+     "do": "click 'Start Game'",
+     "expect": "loading screen, then the space battle"
+    },
+    {
+     "screen": "space battle",
+     "do": "click your space station; in the build bar click the Thrawn / Admonitor icon (i_button_thrawn)",
+     "expect": "build queue shows the Admonitor (40 s)"
+    },
+    {
+     "screen": "space battle",
+     "do": "wait ~45 s; double-click the Admonitor (or its unit button) to centre the camera; zoom in with the mouse wheel",
+     "expect": "Thrawn's SD fills ~1/3 of the screen, planet visible behind it"
+    },
+    {
+     "screen": "space battle",
+     "do": "TRIGGER kuat_thrawn (g1.py trigger --label kuat_thrawn)",
+     "expect": "capture file in the run folder"
+    },
+    {
+     "screen": "space battle",
+     "do": "send ships toward the enemy; when weapons fire / ships explode TRIGGER kuat_heat",
+     "expect": "capture file"
+    },
+    {
+     "screen": "space battle",
+     "do": "zoom out fully; TRIGGER kuat_wide",
+     "expect": "capture file"
+    },
+    {
+     "screen": "space battle",
+     "do": "g1.py quit (or Esc > 'Quit Game' > confirm)",
+     "expect": "game exits; kit restores and analyses"
+    }
+   ],
+   "triggers": [
+    "kuat_thrawn",
+    "kuat_heat",
+    "kuat_wide"
+   ],
+   "auto": [
+    {
+     "do": "wait_window",
+     "s": 180,
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 150,
+     "poll": 3,
+     "nudge_key": "ESC",
+     "label": "skip intro movies",
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 813,
+     "label": "Single Player",
+     "gap": 1.5,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "sp_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 864,
+     "label": "Skirmish Battles",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 30,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 600,
+     "y": 401,
+     "label": "Space game type",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 866,
+     "y": 471,
+     "repeat": 20,
+     "gap": 0.25,
+     "label": "map list to top"
+    },
+    {
+     "do": "click",
+     "x": 560,
+     "y": 713,
+     "label": "(4) Shipyards of Kuat",
+     "gap": 1
+    },
+    {
+     "do": "shot",
+     "label": "K_setup"
+    },
+    {
+     "do": "click",
+     "x": 940,
+     "y": 798,
+     "label": "Advanced",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "advanced_accept",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 1232,
+     "y": 575,
+     "repeat": 15,
+     "gap": 0.25,
+     "label": "starting credits to max"
+    },
+    {
+     "do": "shot",
+     "label": "K_advanced"
+    },
+    {
+     "do": "click",
+     "x": 1318,
+     "y": 766,
+     "label": "Accept",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 1572,
+     "y": 798,
+     "label": "Start Game",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "loading_begin",
+     "timeout": 240,
+     "poll": 2
+    },
+    {
+     "do": "click",
+     "x": 1280,
+     "y": 993,
+     "label": "Begin",
+     "gap": 2
+    },
+    {
+     "do": "expect_like",
+     "ref": "hud_buttons",
+     "timeout": 60
+    },
+    {
+     "do": "park",
+     "x": 960,
+     "y": 150
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "shot",
+     "label": "K_start"
+    },
+    {
+     "do": "click",
+     "x": 57,
+     "y": 1018,
+     "label": "minimap: own station",
+     "gap": 2
+    },
+    {
+     "do": "click",
+     "x": 1030,
+     "y": 420,
+     "label": "select station",
+     "gap": 1.5
+    },
+    {
+     "do": "shot",
+     "label": "K_station_selected"
+    },
+    {
+     "do": "click",
+     "x": 688,
+     "y": 1028,
+     "label": "build Admonitor (probe mod)",
+     "gap": 1.5
+    },
+    {
+     "do": "shot",
+     "label": "K_admonitor_queued"
+    },
+    {
+     "do": "wait",
+     "s": 42
+    },
+    {
+     "do": "shot",
+     "label": "K_build_done"
+    },
+    {
+     "do": "wait",
+     "s": 6
+    },
+    {
+     "do": "shot",
+     "label": "K_after_build"
+    },
+    {
+     "do": "trigger",
+     "label": "kuat_thrawn"
+    },
+    {
+     "do": "wait",
+     "s": 10
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 10,
+     "label": "zoom out"
+    },
+    {
+     "do": "wait",
+     "s": 2
+    },
+    {
+     "do": "trigger",
+     "label": "kuat_wide"
+    },
+    {
+     "do": "wait",
+     "s": 5
+    },
+    {
+     "do": "key",
+     "key": "ESC",
+     "gap": 1.5,
+     "label": "pause menu"
+    },
+    {
+     "do": "expect_like",
+     "ref": "esc_quit",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 959,
+     "y": 659,
+     "label": "Quit Game",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "confirm_yes",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 804,
+     "y": 595,
+     "label": "Yes",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "result_exit",
+     "timeout": 30
+    },
+    {
+     "do": "shot",
+     "label": "K_result"
+    },
+    {
+     "do": "click",
+     "x": 1383,
+     "y": 950,
+     "label": "Exit",
+     "gap": 3
+    },
+    {
+     "do": "park",
+     "on": false
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 60
+    }
+   ]
+  },
+  {
+   "id": "E",
+   "title": "Land skirmish on Endor - units next to a building (stencil shadows, occluded silhouettes, decals)",
+   "modes": [
+    "dxvk",
+    "renderdoc",
+    "apitrace"
+   ],
+   "answers": [
+    "engine cull mode (land)",
+    "StencilDarken stencil func / soft-shadow chain",
+    "decal atlas corner (DECORATIONS)",
+    "bloom chain targets",
+    "land frame order"
+   ],
+   "manual": [
+    "Main menu > Single Player > Skirmish Battles > Land Battle, map Endor, any faction, Start Game.",
+    "Move a few units next to a building so they are partly hidden behind it; make sure building shadows fall on the ground.",
+    "RenderDoc run: press F12 with Soft Shadows on; then turn Soft Shadows off in Options and press F12 again.",
+    "Also capture one frame where a destroyed unit left a scorch mark or a build pad decal is visible."
+   ],
+   "ui_steps": [
+    {
+     "screen": "main menu",
+     "do": "click 'Single Player' > 'Skirmish Battles'",
+     "expect": "'Skirmish Battle Setup'"
+    },
+    {
+     "screen": "Skirmish Battle Setup",
+     "do": "click 'Land Battle', click map 'Endor', click 'Start Game'",
+     "expect": "land battle loads"
+    },
+    {
+     "screen": "land battle",
+     "do": "box-select starting units, right-click next to the nearest building; wait until they stand beside/behind it",
+     "expect": "units partly occluded by the building, shadows visible"
+    },
+    {
+     "screen": "land battle",
+     "do": "TRIGGER endor_softshadows",
+     "expect": "capture file"
+    },
+    {
+     "screen": "land battle",
+     "do": "Esc > Options > uncheck 'Soft Shadows' > Accept > Resume; TRIGGER endor_hardshadows; then set it back",
+     "expect": "capture file"
+    },
+    {
+     "screen": "land battle",
+     "do": "aim the camera at a decal (build pad / scorch); TRIGGER endor_decal",
+     "expect": "capture file"
+    },
+    {
+     "screen": "land battle",
+     "do": "g1.py quit",
+     "expect": "game exits"
+    }
+   ],
+   "triggers": [
+    "endor_softshadows",
+    "endor_hardshadows",
+    "endor_decal"
+   ],
+   "auto": [
+    {
+     "do": "wait_window",
+     "s": 180,
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 150,
+     "poll": 3,
+     "nudge_key": "ESC",
+     "label": "skip intro movies",
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 813,
+     "label": "Single Player",
+     "gap": 1.5,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "sp_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 864,
+     "label": "Skirmish Battles",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 30,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 600,
+     "y": 369,
+     "label": "Land game type",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 866,
+     "y": 713,
+     "repeat": 20,
+     "gap": 0.25,
+     "label": "map list to bottom"
+    },
+    {
+     "do": "click",
+     "x": 580,
+     "y": 559,
+     "label": "(6) Endor Xpress",
+     "gap": 1
+    },
+    {
+     "do": "shot",
+     "label": "E_setup"
+    },
+    {
+     "do": "click",
+     "x": 1572,
+     "y": 798,
+     "label": "Start Game",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "loading_begin",
+     "timeout": 240,
+     "poll": 2
+    },
+    {
+     "do": "click",
+     "x": 1280,
+     "y": 993,
+     "label": "Begin",
+     "gap": 2
+    },
+    {
+     "do": "expect_like",
+     "ref": "hud_buttons",
+     "timeout": 60
+    },
+    {
+     "do": "park",
+     "x": 960,
+     "y": 150
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "shot",
+     "label": "E_start"
+    },
+    {
+     "do": "trigger",
+     "label": "endor_decal"
+    },
+    {
+     "do": "click",
+     "x": 28,
+     "y": 880,
+     "label": "minimap: own command centre",
+     "gap": 3
+    },
+    {
+     "do": "shot",
+     "label": "E_base"
+    },
+    {
+     "do": "trigger",
+     "label": "endor_softshadows"
+    },
+    {
+     "do": "wait",
+     "s": 5
+    },
+    {
+     "do": "key",
+     "key": "ESC",
+     "gap": 1.5,
+     "label": "pause menu"
+    },
+    {
+     "do": "expect_like",
+     "ref": "esc_quit",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 959,
+     "y": 659,
+     "label": "Quit Game",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "confirm_yes",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 804,
+     "y": 595,
+     "label": "Yes",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "result_exit",
+     "timeout": 30
+    },
+    {
+     "do": "shot",
+     "label": "E_result"
+    },
+    {
+     "do": "click",
+     "x": 1383,
+     "y": 950,
+     "label": "Exit",
+     "gap": 3
+    },
+    {
+     "do": "park",
+     "on": false
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 60
+    }
+   ]
+  },
+  {
+   "id": "G",
+   "title": "Galactic map idle (cheap; galactic camera, no bloom/heat)",
+   "modes": [
+    "dxvk",
+    "renderdoc"
+   ],
+   "answers": [
+    "galactic camera (SPACE_AND_OPEN B.8, already answered statically: confirm)",
+    "galactic has no bloom/heat passes"
+   ],
+   "manual": [
+    "Main menu > Single Player > Galactic Conquest > any map > start. Wait for the galaxy view, press F12 (RenderDoc) or wait for a screenshot (DXVK)."
+   ],
+   "ui_steps": [
+    {
+     "screen": "main menu",
+     "do": "click 'Single Player' > 'Galactic Conquest'",
+     "expect": "campaign list"
+    },
+    {
+     "screen": "campaign list",
+     "do": "pick the first entry, click 'Start Game' / 'Play'",
+     "expect": "galaxy view"
+    },
+    {
+     "screen": "galaxy view",
+     "do": "wait 10 s; TRIGGER galactic",
+     "expect": "capture file"
+    }
+   ],
+   "triggers": [
+    "galactic"
+   ]
+  },
+  {
+   "id": "P",
+   "title": "Planet backdrop spin at Kuat, no building, camera markers every 12 s (apitrace, ~4.5 min)",
+   "modes": [
+    "apitrace"
+   ],
+   "answers": [
+    "planet idle clip wraps at 239 or 240 frames (needs one full turn: several minutes)"
+   ],
+   "manual": [
+    "Only if asked: apitrace run, Kuat space skirmish, leave the camera still with the planet in view for 5 minutes, then quit. The trace will be large (several GB)."
+   ],
+   "ui_steps": [
+    {
+     "screen": "main menu",
+     "do": "same as scene K up to the start of the battle",
+     "expect": "space battle"
+    },
+    {
+     "screen": "space battle",
+     "do": "do not touch anything for 300 s (pause is NOT ok: the clip must run); then g1.py quit",
+     "expect": "game exits"
+    }
+   ],
+   "triggers": [],
+   "auto": [
+    {
+     "do": "wait_window",
+     "s": 180,
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 150,
+     "poll": 3,
+     "nudge_key": "ESC",
+     "label": "skip intro movies",
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 813,
+     "label": "Single Player",
+     "gap": 1.5,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "sp_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 864,
+     "label": "Skirmish Battles",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 30,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 600,
+     "y": 401,
+     "label": "Space game type",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 866,
+     "y": 471,
+     "repeat": 20,
+     "gap": 0.25,
+     "label": "map list to top"
+    },
+    {
+     "do": "click",
+     "x": 560,
+     "y": 713,
+     "label": "(4) Shipyards of Kuat",
+     "gap": 1
+    },
+    {
+     "do": "shot",
+     "label": "K_setup"
+    },
+    {
+     "do": "click",
+     "x": 940,
+     "y": 798,
+     "label": "Advanced",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "advanced_accept",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 1232,
+     "y": 575,
+     "repeat": 15,
+     "gap": 0.25,
+     "label": "starting credits to max"
+    },
+    {
+     "do": "shot",
+     "label": "K_advanced"
+    },
+    {
+     "do": "click",
+     "x": 1318,
+     "y": 766,
+     "label": "Accept",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 1572,
+     "y": 798,
+     "label": "Start Game",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "loading_begin",
+     "timeout": 240,
+     "poll": 2
+    },
+    {
+     "do": "click",
+     "x": 1280,
+     "y": 993,
+     "label": "Begin",
+     "gap": 2
+    },
+    {
+     "do": "expect_like",
+     "ref": "hud_buttons",
+     "timeout": 60
+    },
+    {
+     "do": "park",
+     "x": 960,
+     "y": 150
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "shot",
+     "label": "K_start"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 0"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 0"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 1"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 1"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 2"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 2"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 3"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 3"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 4"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 4"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 5"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 5"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 6"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 6"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 7"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 7"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 8"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 8"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 9"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 9"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 10"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 10"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 11"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 11"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 12"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 12"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 13"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 13"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 14"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 14"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 15"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 15"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 16"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 16"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 17"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 17"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 18"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 18"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 19"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 19"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 20"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 20"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 21"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 21"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 22"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 22"
+    },
+    {
+     "do": "wait",
+     "s": 9
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": -120,
+     "count": 2,
+     "label": "marker out 23"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "wheel",
+     "x": 960,
+     "y": 450,
+     "delta": 120,
+     "count": 2,
+     "label": "marker in 23"
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "key",
+     "key": "ESC",
+     "gap": 1.5,
+     "label": "pause menu"
+    },
+    {
+     "do": "expect_like",
+     "ref": "esc_quit",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 959,
+     "y": 659,
+     "label": "Quit Game",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "confirm_yes",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 804,
+     "y": 595,
+     "label": "Yes",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "result_exit",
+     "timeout": 30
+    },
+    {
+     "do": "shot",
+     "label": "K_result"
+    },
+    {
+     "do": "click",
+     "x": 1383,
+     "y": 950,
+     "label": "Exit",
+     "gap": 3
+    },
+    {
+     "do": "park",
+     "on": false
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 60
+    }
+   ]
+  },
+  {
+   "id": "KX",
+   "title": "Exploration: K with the level-4 start station, queue the Admonitor, burst shots around completion (use with --drive-keep-open)",
+   "modes": [
+    "dxvk",
+    "apitrace"
+   ],
+   "answers": [],
+   "manual": [],
+   "ui_steps": [],
+   "triggers": [],
+   "auto": [
+    {
+     "do": "wait_window",
+     "s": 180,
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 150,
+     "poll": 3,
+     "nudge_key": "ESC",
+     "label": "skip intro movies",
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 813,
+     "label": "Single Player",
+     "gap": 1.5,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "sp_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 864,
+     "label": "Skirmish Battles",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 30,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 600,
+     "y": 401,
+     "label": "Space game type",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 866,
+     "y": 471,
+     "repeat": 20,
+     "gap": 0.25,
+     "label": "map list to top"
+    },
+    {
+     "do": "click",
+     "x": 560,
+     "y": 713,
+     "label": "(4) Shipyards of Kuat",
+     "gap": 1
+    },
+    {
+     "do": "shot",
+     "label": "K_setup"
+    },
+    {
+     "do": "click",
+     "x": 940,
+     "y": 798,
+     "label": "Advanced",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "advanced_accept",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 1232,
+     "y": 575,
+     "repeat": 15,
+     "gap": 0.25,
+     "label": "starting credits to max"
+    },
+    {
+     "do": "shot",
+     "label": "K_advanced"
+    },
+    {
+     "do": "click",
+     "x": 1318,
+     "y": 766,
+     "label": "Accept",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 1572,
+     "y": 798,
+     "label": "Start Game",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "loading_begin",
+     "timeout": 240,
+     "poll": 2
+    },
+    {
+     "do": "click",
+     "x": 1280,
+     "y": 993,
+     "label": "Begin",
+     "gap": 2
+    },
+    {
+     "do": "expect_like",
+     "ref": "hud_buttons",
+     "timeout": 60
+    },
+    {
+     "do": "park",
+     "x": 960,
+     "y": 150
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "shot",
+     "label": "K_start"
+    },
+    {
+     "do": "click",
+     "x": 57,
+     "y": 1018,
+     "label": "minimap: own station",
+     "gap": 2
+    },
+    {
+     "do": "click",
+     "x": 1030,
+     "y": 420,
+     "label": "select station",
+     "gap": 1.5
+    },
+    {
+     "do": "shot",
+     "label": "K_station_selected"
+    }
+   ]
+  }
+ ],
+ "refs": {
+  "_note": "Reference crops (refs/*.png, cut from 1920x1080 screenshots of FoC 1.121 in English) and their box in 1920x1080 client space; used by expect_like steps. g1_ui.py like <shot.png> prints the distances.",
+  "main_menu": {
+   "png": "refs/main_menu.png",
+   "box": [
+    1578,
+    795,
+    1778,
+    830
+   ]
+  },
+  "sp_menu": {
+   "png": "refs/sp_menu.png",
+   "box": [
+    1578,
+    846,
+    1778,
+    882
+   ]
+  },
+  "setup_start": {
+   "png": "refs/setup_start.png",
+   "box": [
+    1450,
+    780,
+    1700,
+    815
+   ]
+  },
+  "advanced_accept": {
+   "png": "refs/advanced_accept.png",
+   "box": [
+    1220,
+    750,
+    1420,
+    785
+   ]
+  },
+  "loading_begin": {
+   "png": "refs/loading_begin.png",
+   "box": [
+    1180,
+    975,
+    1380,
+    1012
+   ]
+  },
+  "hud_buttons": {
+   "png": "refs/hud_buttons.png",
+   "box": [
+    0,
+    700,
+    90,
+    800
+   ]
+  },
+  "esc_quit": {
+   "png": "refs/esc_quit.png",
+   "box": [
+    860,
+    640,
+    1060,
+    680
+   ]
+  },
+  "confirm_yes": {
+   "png": "refs/confirm_yes.png",
+   "box": [
+    704,
+    578,
+    904,
+    612
+   ]
+  },
+  "result_exit": {
+   "png": "refs/result_exit.png",
+   "box": [
+    1283,
+    932,
+    1483,
+    968
+   ]
+  }
+ },
+ "auto_notes": "auto steps: g1.py <mode> --drive K,E --probe-mod admonitor --ui-method post. Each scene's list starts from the main menu or the skirmish setup screen (the main-menu steps are skipped automatically when the setup screen is already up) and ends back on the skirmish setup screen. Kuat needs --probe-mod admonitor (Thrawn's SD at station level 1). The player row (Empire, team 1, one Easy AI) is the setup the game remembers."
+}

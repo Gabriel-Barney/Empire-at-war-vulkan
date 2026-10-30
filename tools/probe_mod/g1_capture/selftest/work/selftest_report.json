@@ -1,0 +1,191 @@
+{
+  "passed": 37,
+  "failed": 0,
+  "results": [
+    {
+      "check": "dry run exit 0",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dry run changes nothing",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dry run plans the patch-chain swap",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dxvk exit 0",
+      "ok": true,
+      "detail": "exit 0 "
+    },
+    {
+      "check": "dxvk restores the fake folder byte-identically",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dxvk restore verified by the kit",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dxvk screenshots",
+      "ok": true,
+      "detail": "5"
+    },
+    {
+      "check": "dxvk requested screenshot",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dxvk log in run folder",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dxvk patch chain was disabled during the run",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "renderdoc exit 0",
+      "ok": true,
+      "detail": "exit 0 "
+    },
+    {
+      "check": "renderdoc restores the fake folder byte-identically",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "renderdoc restore verified by the kit",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "renderdoc captures",
+      "ok": true,
+      "detail": "t2, t4, req"
+    },
+    {
+      "check": "renderdoc extraction + analysis",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "renderdoc heat shift measured",
+      "ok": true,
+      "detail": "{\"dx_px\": 0.0, \"dy_px\": -1.0, \"residual\": 0.0, \"image_is_flat\": false, \"before\": \"C:\\\\Users\\\\Gabriel\\\\Desktop\\\\Star wars empire at war port\\\\tools\\\\probe_mod\\\\g1_capture\\\\selftest\\\\work\\\\out\\\\runs\\\\renderdoc_20261027_101125\\\\req_f432_heat_before.png\", \"after\": \"C:\\\\Users\\\\Gabriel\\\\Desktop\\\\Star wars empire at war port\\\\tools\\\\probe_mod\\\\g1_capture\\\\selftest\\\\work\\\\out\\\\runs\\\\renderdoc_20261027_101125\\\\req_f432_heat_after.png\"}"
+    },
+    {
+      "check": "cull calibration distinct",
+      "ok": true,
+      "detail": "{\"D3DCULL_CW\": {\"cull\": \"Front\", \"front_ccw\": false}, \"D3DCULL_CCW\": {\"cull\": \"Back\", \"front_ccw\": false}, \"D3DCULL_NONE\": {\"cull\": \"NoCull\", \"front_ccw\": false}}"
+    },
+    {
+      "check": "apitrace exit 0",
+      "ok": true,
+      "detail": "exit 0 "
+    },
+    {
+      "check": "apitrace restores the fake folder byte-identically",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace restore verified by the kit",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace exit 0",
+      "ok": true,
+      "detail": "exit 0 "
+    },
+    {
+      "check": "apitrace restores the fake folder byte-identically",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace restore verified by the kit",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace trace",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace marker",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace quit request closed the game early",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace engine cull default found",
+      "ok": true,
+      "detail": "{\"call\": 2, \"value\": \"D3DCULL_CW\", \"draws_before\": 0}"
+    },
+    {
+      "check": "apitrace Colorization value found",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace stencil NOTEQUAL found",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace heat clear found",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "apitrace heat shift measured",
+      "ok": true,
+      "detail": "{\"dx_px\": 0.0, \"dy_px\": -1.0, \"residual\": 0.0, \"image_is_flat\": false, \"before\": \"C:\\\\Users\\\\Gabriel\\\\Desktop\\\\Star wars empire at war port\\\\tools\\\\probe_mod\\\\g1_capture\\\\selftest\\\\work\\\\out\\\\runs\\\\apitrace_20261027_101152\\\\analysis\\\\heat_0000008832.png\", \"after\": \"C:\\\\Users\\\\Gabriel\\\\Desktop\\\\Star wars empire at war port\\\\tools\\\\probe_mod\\\\g1_capture\\\\selftest\\\\work\\\\out\\\\runs\\\\apitrace_20261027_101152\\\\analysis\\\\heat_0000008833.png\", \"draw_call\": 8833}"
+    },
+    {
+      "check": "killed run left a manifest",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "killed run left the folder modified",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "cleanup after a crash exit 0",
+      "ok": true,
+      "detail": "  - restoring C:\\Users\\Gabriel\\Desktop\\Star wars empire at war port\\tools\\probe_mod\\g1_capture\\selftest\\work\\fakegame\\corruption from C:\\Users\\Gabriel\\Desktop\\Star wars empire at war port\\tools\\probe_mod\\g1_capture\\selftest\\work\\out\\state\\manifest.json\n  - restore verified: every pre-run file has its pre-run SHA-256 (game-written logs excepted)\n  - prior patch chain now: enabled\nRESULT ok exit 0\n"
+    },
+    {
+      "check": "cleanup after a crash restores byte-identically",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "second cleanup is a no-op (exit 0)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "folder still identical after second cleanup",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

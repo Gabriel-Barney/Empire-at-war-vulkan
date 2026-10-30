@@ -1,0 +1,300 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "alamo_formats alo2gltf"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "LPF_Pellaeon_SD_Turret_04",
+      "rotation": [-0.7071068,0,0,0.7071068],
+      "children": [
+        1
+      ]
+    },
+    {
+      "name": "Root",
+      "translation": [0,0,0],
+      "rotation": [0,0,0,1],
+      "scale": [1,1,1],
+      "children": [
+        2
+      ],
+      "extras": {
+        "proxies": [
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo",
+          "LPtw_Turbo"
+        ]
+      }
+    },
+    {
+      "name": "Turret_04",
+      "translation": [-3.821192e-10,-0.008741856,-0.07930791],
+      "rotation": [-0.008737952,0.008790591,-0.7091684,0.7049302],
+      "scale": [1,1,1],
+      "children": [
+        3,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "name": "Barrel_04",
+      "translation": [0.6421682,-0.07835123,3.315263],
+      "rotation": [-1.112937e-07,0.003542265,8.77773e-05,0.9999937],
+      "scale": [1,0.9999999,1],
+      "children": [
+        4,
+        8
+      ]
+    },
+    {
+      "name": "MuzzleT_03",
+      "translation": [4.409959,0.05713017,-0.0346787],
+      "rotation": [0.01240171,-0.003518251,-0.002046942,0.9999148],
+      "scale": [0.9999999,0.9999999,0.9999999]
+    },
+    {
+      "name": "Coll_T04",
+      "translation": [0.994154,0.07052609,0.08108113],
+      "rotation": [0.00873794,-0.008790646,0.7091684,0.7049302],
+      "scale": [0.9999999,0.9999999,1]
+    },
+    {
+      "name": "Pptw_Turbo",
+      "translation": [0.03569307,-0.09043524,-0.03863332],
+      "rotation": [0.005784739,0.001381489,-0.00292928,0.9999781],
+      "scale": [1,0.9999999,0.9999999],
+      "extras": {
+        "proxies": [
+          "LPtw_Turbo"
+        ]
+      }
+    },
+    {
+      "name": "Turret_04",
+      "mesh": 0
+    },
+    {
+      "name": "Barrel_04",
+      "mesh": 1
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Turret_04",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0,
+          "mode": 4
+        }
+      ]
+    },
+    {
+      "name": "Barrel_04",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 1,
+          "mode": 4
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "MeshBumpLight.fx:LPf_pelleaonsdf.dds",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [1,1,1,1],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.8
+      },
+      "doubleSided": false,
+      "extras": {
+        "shader": "MeshBumpLight.fx",
+        "Emissive": [0,0,0,0],
+        "Diffuse": [1,1,1,0],
+        "Specular": [1,1,1,0],
+        "Shininess": 32,
+        "Colorization": [1,1,1,1],
+        "UVOffset": [0,0,0,0],
+        "BaseTexture": "LPf_pelleaonsdf.dds",
+        "NormalTexture": "LPf_pelleaonsdf_b.dds"
+      }
+    },
+    {
+      "name": "MeshBumpLight.fx:LPf_pelleaonsdf.dds",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [1,1,1,1],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.8
+      },
+      "doubleSided": false,
+      "extras": {
+        "shader": "MeshBumpLight.fx",
+        "Emissive": [0,0,0,0],
+        "Diffuse": [1,1,1,0],
+        "Specular": [1,1,1,0],
+        "Shininess": 32,
+        "Colorization": [1,1,1,1],
+        "UVOffset": [0,0,0,0],
+        "BaseTexture": "LPf_pelleaonsdf.dds",
+        "NormalTexture": "LPf_pelleaonsdf_b.dds"
+      }
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 16780,
+      "uri": "LPF_Pellaeon_SD_Turret_04.bin"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 1176,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1176,
+      "byteLength": 1176,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 2352,
+      "byteLength": 784,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 3136,
+      "byteLength": 384,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 3520,
+      "byteLength": 4392,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 7912,
+      "byteLength": 4392,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 12304,
+      "byteLength": 2928,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 15232,
+      "byteLength": 1548,
+      "target": 34963
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 98,
+      "type": "VEC3",
+      "min": [
+        -3.16600442,
+        -3.12702036,
+        -0.0712150857
+      ],
+      "max": [
+        3.32548141,
+        3.12432933,
+        4.08463764
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 98,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 98,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 192,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 366,
+      "type": "VEC3",
+      "min": [
+        -0.814824343,
+        -3.02219748,
+        -0.667779446
+      ],
+      "max": [
+        4.58065033,
+        3.13379359,
+        0.573151112
+      ]
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 366,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 366,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5123,
+      "count": 774,
+      "type": "SCALAR"
+    }
+  ]
+}

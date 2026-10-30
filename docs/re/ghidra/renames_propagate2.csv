@@ -1,0 +1,1129 @@
+rva,namespace,name,source,confidence,function,note
+0x1e360,PlayersCommand,sub_1e360,callgraph,medium,existing,all 1 callers in this class
+0x2b1f0,SteamPeerLobbyClass,sub_2b1f0,callgraph,medium,existing,all 1 callers in this class
+0x345c0,,Game_Boot_Init_Filesystem_helper_2_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x38930,,Game_Boot_Init_Filesystem_helper_2_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x38b60,,Game_Boot_Init_Filesystem_helper_2_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x38f80,,Game_Boot_Init_Filesystem_helper_2_helper_4,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x3c360,,Game_Boot_Init_Filesystem_helper_2_helper_5,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x3e240,,Game_Boot_Init_Filesystem_helper_2_helper_6,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x3ed90,,Game_Boot_Init_Filesystem_helper_2_helper_7,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x3f330,,Game_Boot_Init_Filesystem_helper_3_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_3
+0x40040,,Game_Boot_Init_Filesystem_helper_2_helper_8,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x40640,,Game_Boot_Init_Filesystem_helper_2_helper_9,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x48f20,,Game_Boot_Init_Filesystem_helper_5_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x49110,,Game_Boot_Init_Filesystem_helper_5_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x49270,,Game_Boot_Init_Filesystem_helper_5_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4a040,"DynamicVectorClass<std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t>_>_>",sub_4a040,locality,low,existing,between two methods of this class
+0x4a220,"DynamicVectorClass<std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t>_>_>",sub_4a220,locality,low,existing,between two methods of this class
+0x4a260,"DynamicVectorClass<std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t>_>_>",sub_4a260,locality,low,existing,between two methods of this class
+0x4a340,"DynamicVectorClass<std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t>_>_>",sub_4a340,locality,low,existing,between two methods of this class
+0x4a3d0,"DynamicVectorClass<std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t>_>_>",sub_4a3d0,locality,low,existing,between two methods of this class
+0x4da50,,Game_Boot_Init_Filesystem_helper_5_helper_4,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4df10,,Game_Boot_Init_Filesystem_helper_5_helper_5,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4f150,,Game_Boot_Init_Filesystem_helper_5_helper_6,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4f350,,Game_Boot_Init_Filesystem_helper_6_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_6
+0x4f5b0,LuaNetworkDebuggerClass,sub_4f5b0,callgraph,medium,existing,all 2 callers in this class
+0x4f670,,Game_Boot_Init_Filesystem_helper_6_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_6
+0x50100,,Game_Boot_Init_Filesystem_helper_6_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_6
+0x514d0,,Game_Boot_Init_Filesystem_helper_7_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_7
+0x52460,,Game_Boot_Init_Filesystem_helper_9_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_9
+0x6ad60,SteamClass,sub_6ad60,locality,low,existing,between two methods of this class
+0x6ae20,SteamClass,sub_6ae20,locality,low,existing,between two methods of this class
+0x6aee0,SteamClass,sub_6aee0,locality,low,existing,between two methods of this class
+0x6b550,SteamAsyncSocketImpl,sub_6b550,locality,low,existing,between two methods of this class
+0x6bc00,SteamAsyncSocketImpl,sub_6bc00,callgraph,medium,existing,all 3 callers in this class
+0x6bd20,,Game_Boot_Init_Filesystem_helper_15_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_15
+0x6bda0,SteamAsyncSocketImpl,sub_6bda0,locality,low,existing,between two methods of this class
+0x6bde0,SteamAsyncSocketImpl,sub_6bde0,locality,low,existing,between two methods of this class
+0x74260,SteamPeerLobbyClass,sub_74260,callgraph,medium,existing,all 1 callers in this class
+0x74a90,SteamPeerLobbyClass,sub_74a90,callgraph,medium,existing,all 1 callers in this class
+0x74d50,SteamPeerLobbyClass,sub_74d50,callgraph,medium,existing,all 1 callers in this class
+0x757a0,SteamPeerLobbyClass,sub_757a0,callgraph,medium,existing,all 1 callers in this class
+0x75ee0,SteamPeerLobbyClass,sub_75ee0,callgraph,medium,existing,all 1 callers in this class
+0x7b310,SingletonInstance<SteamPeerLobbyClass>,sub_7b310,callgraph,medium,existing,all 1 callers in this class
+0x7b3d0,SingletonInstance<SteamPeerLobbyClass>,sub_7b3d0,callgraph,medium,existing,all 1 callers in this class
+0x7b490,SingletonInstance<SteamPeerLobbyClass>,sub_7b490,callgraph,medium,existing,all 1 callers in this class
+0x7c890,SteamPeerLobbyClass,sub_7c890,callgraph,medium,existing,all 1 callers in this class
+0x7d100,,Game_Boot_Init_Filesystem_helper_5_helper_7,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x84a70,,Game_Boot_Init_Filesystem_helper_5_helper_8,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x85380,,Game_Boot_Init_Filesystem_helper_5_helper_9,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x86ff0,,Game_Boot_Init_Filesystem_helper_5_helper_10,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x8e880,,Game_Boot_Init_Filesystem_helper_5_helper_11,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0xa9800,,Game_Boot_Init_Filesystem_helper_5_helper_12,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x105240,,Game_Boot_Init_Filesystem_helper_5_helper_13,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x107b70,,Game_Boot_Init_Filesystem_helper_5_helper_14,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x10bd40,DynamicVectorClass<GameObjectClass*___ptr64>,sub_10bd40,locality,low,existing,between two methods of this class
+0x12b920,alHModel,sub_12b920,locality,low,existing,between two methods of this class
+0x12db30,alEmitter,sub_12db30,callgraph,medium,existing,all 1 callers in this class
+0x12dee0,DynamicVectorClass<Vector3>,sub_12dee0,callgraph,medium,existing,all 1 callers in this class
+0x12eba0,alHModel,sub_12eba0,callgraph,medium,existing,all 1 callers in this class
+0x131980,LandModeClass,sub_131980,callgraph,medium,existing,all 1 callers in this class
+0x133470,LandModeClass,sub_133470,callgraph,medium,existing,all 1 callers in this class
+0x133550,LandModeClass,sub_133550,callgraph,medium,existing,all 1 callers in this class
+0x1338b0,LandModeClass,sub_1338b0,callgraph,medium,existing,all 1 callers in this class
+0x133aa0,LandModeClass,sub_133aa0,callgraph,medium,existing,all 2 callers in this class
+0x133bf0,LandModeClass,sub_133bf0,callgraph,medium,existing,all 5 callers in this class
+0x136000,LandModeClass,sub_136000,callgraph,medium,existing,all 3 callers in this class
+0x1360f0,alD3dTerrainRender,sub_1360f0,callgraph,medium,existing,all 1 callers in this class
+0x136120,LandModeClass,sub_136120,callgraph,medium,existing,all 5 callers in this class
+0x136150,alD3dTerrainRender,sub_136150,callgraph,medium,existing,all 2 callers in this class
+0x1364c0,LandModeClass,sub_1364c0,callgraph,medium,existing,all 1 callers in this class
+0x136590,LandModeClass,sub_136590,callgraph,medium,existing,all 1 callers in this class
+0x137560,LandModeClass,sub_137560,callgraph,medium,existing,all 1 callers in this class
+0x137cc0,GOM,sub_137cc0,callgraph,medium,existing,all 1 callers in this class
+0x137f70,LandModeClass,sub_137f70,callgraph,medium,existing,all 1 callers in this class
+0x138500,MultiLinkedListClass<alTerrainShadowBlob>,sub_138500,callgraph,medium,existing,all 1 callers in this class
+0x139350,LandModeClass,sub_139350,callgraph,medium,existing,all 1 callers in this class
+0x13d6e0,alLensFlareTask,sub_13d6e0,callgraph,medium,existing,all 2 callers in this class
+0x13d760,alD3dTerrainDecorationRenderTask,sub_13d760,callgraph,medium,existing,all 1 callers in this class
+0x13d770,alD3dTerrainDecorationRenderTask,sub_13d770,callgraph,medium,existing,all 1 callers in this class
+0x13d820,alMeshRenderTask,sub_13d820,locality,low,existing,between two methods of this class
+0x13d850,alMeshRenderTask,sub_13d850,locality,low,existing,between two methods of this class
+0x13d880,alMeshRenderTask,sub_13d880,locality,low,existing,between two methods of this class
+0x13d890,alMeshRenderTask,sub_13d890,locality,low,existing,between two methods of this class
+0x13d8f0,alSimpleScene,sub_13d8f0,callgraph,medium,existing,all 1 callers in this class
+0x13d940,alScene,sub_13d940,locality,low,existing,between two methods of this class
+0x13e190,,Game_Boot_Init_Filesystem_helper_11_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x13e840,,Game_Boot_Init_Filesystem_helper_11_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x13eaf0,,Game_Boot_Init_Filesystem_helper_30_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_30
+0x13ed20,LandModeClass,sub_13ed20,callgraph,medium,existing,all 1 callers in this class
+0x13ed30,GOM,sub_13ed30,callgraph,medium,existing,all 1 callers in this class
+0x13ed40,GOM,sub_13ed40,callgraph,medium,existing,all 1 callers in this class
+0x13f1c0,ArtProcessClass,sub_13f1c0,callgraph,medium,existing,all 1 callers in this class
+0x145770,alHModel,sub_145770,callgraph,medium,existing,all 1 callers in this class
+0x147ab0,alSkeletonConstants,sub_147ab0,locality,low,existing,between two methods of this class
+0x148070,alSkeletonConstants,sub_148070,callgraph,medium,existing,all 1 callers in this class
+0x148230,alSkeletonConstants,sub_148230,locality,low,existing,between two methods of this class
+0x1483e0,alSkeletonConstants,sub_1483e0,locality,low,existing,between two methods of this class
+0x148690,alSkeletonConstants,sub_148690,locality,low,existing,between two methods of this class
+0x148700,alSkeletonConstants,sub_148700,locality,low,existing,between two methods of this class
+0x148990,alSkeletonConstants,sub_148990,locality,low,existing,between two methods of this class
+0x148a10,alSkeletonConstants,sub_148a10,callgraph,medium,existing,all 1 callers in this class
+0x148a80,alSkeletonConstants,sub_148a80,locality,low,existing,between two methods of this class
+0x148af0,alSkeletonConstants,sub_148af0,callgraph,medium,existing,all 3 callers in this class
+0x14b4e0,alLightSource,sub_14b4e0,locality,low,existing,between two methods of this class
+0x14b570,alLightSource,sub_14b570,locality,low,existing,between two methods of this class
+0x14b5b0,alLightSource,sub_14b5b0,locality,low,existing,between two methods of this class
+0x14b610,alLightSource,sub_14b610,locality,low,existing,between two methods of this class
+0x14b660,alLightSource,sub_14b660,locality,low,existing,between two methods of this class
+0x14e7b0,alBlobFlushTask,sub_14e7b0,callgraph,medium,existing,all 1 callers in this class
+0x14f420,LandModeClass,sub_14f420,callgraph,medium,existing,all 1 callers in this class
+0x14f6b0,LandModeClass,sub_14f6b0,callgraph,medium,existing,all 1 callers in this class
+0x154270,LandModeClass,sub_154270,callgraph,medium,existing,all 1 callers in this class
+0x1547a0,LandModeClass,sub_1547a0,callgraph,medium,existing,all 1 callers in this class
+0x15d850,LandModeClass,sub_15d850,callgraph,medium,existing,all 1 callers in this class
+0x15de50,LandModeClass,sub_15de50,callgraph,medium,existing,all 1 callers in this class
+0x15df60,LandModeClass,sub_15df60,callgraph,medium,existing,all 1 callers in this class
+0x15e890,alEmitter,sub_15e890,callgraph,medium,existing,all 1 callers in this class
+0x15e8b0,alEmitter,sub_15e8b0,callgraph,medium,existing,all 1 callers in this class
+0x1639e0,alParticleGroup,sub_1639e0,locality,low,existing,between two methods of this class
+0x168810,alParticleGroupRenderTask,sub_168810,callgraph,medium,existing,all 1 callers in this class
+0x16abe0,alParticleGroup,sub_16abe0,callgraph,medium,existing,all 1 callers in this class
+0x171e00,alEmitter,sub_171e00,callgraph,medium,existing,all 1 callers in this class
+0x171eb0,alEmitter,sub_171eb0,callgraph,medium,existing,all 1 callers in this class
+0x172790,alEmitter,sub_172790,callgraph,medium,existing,all 2 callers in this class
+0x172d30,alEmitter,sub_172d30,callgraph,medium,existing,all 2 callers in this class
+0x172df0,PlanetaryBehaviorClass,sub_172df0,callgraph,medium,existing,all 1 callers in this class
+0x173100,alEmitter,sub_173100,callgraph,medium,existing,all 1 callers in this class
+0x1771b0,MousePointerClass,sub_1771b0,callgraph,medium,existing,all 1 callers in this class
+0x1771e0,alD3dRenderTarget,sub_1771e0,callgraph,medium,existing,all 1 callers in this class
+0x177960,alD3dEffectStateManager,sub_177960,locality,low,existing,between two methods of this class
+0x177a30,alD3dEffectStateManager,sub_177a30,locality,low,existing,between two methods of this class
+0x177aa0,alD3dEffectStateManager,sub_177aa0,locality,low,existing,between two methods of this class
+0x177b10,alD3dEffectStateManager,sub_177b10,locality,low,existing,between two methods of this class
+0x177b60,alD3dEffectStateManager,sub_177b60,locality,low,existing,between two methods of this class
+0x177b90,alD3dEffectStateManager,sub_177b90,locality,low,existing,between two methods of this class
+0x177bd0,alD3dEffectStateManager,sub_177bd0,locality,low,existing,between two methods of this class
+0x177bf0,alD3dEffectStateManager,sub_177bf0,locality,low,existing,between two methods of this class
+0x17f6d0,alMeshRenderTask,sub_17f6d0,callgraph,medium,existing,all 1 callers in this class
+0x18ba20,alD3dEffectInstance,sub_18ba20,callgraph,medium,existing,all 2 callers in this class
+0x18bd80,alD3dEffectInstance,sub_18bd80,callgraph,medium,existing,all 4 callers in this class
+0x18be00,alD3dEffectInstance,sub_18be00,callgraph,medium,existing,all 1 callers in this class
+0x191d90,alD3dTerrainDecorationRenderTask,sub_191d90,locality,low,existing,between two methods of this class
+0x191ee0,alD3dTerrainDecorationRenderTask,sub_191ee0,locality,low,existing,between two methods of this class
+0x193280,alD3dWaterRenderTask,sub_193280,callgraph,medium,existing,all 1 callers in this class
+0x193b40,alD3dWaterRenderTask,sub_193b40,callgraph,medium,existing,all 1 callers in this class
+0x193e70,alD3dTerrainRender,sub_193e70,callgraph,medium,existing,all 1 callers in this class
+0x193f60,alD3dTerrainRender,sub_193f60,callgraph,medium,existing,all 1 callers in this class
+0x196e90,LandModeClass,sub_196e90,callgraph,medium,existing,all 1 callers in this class
+0x1996b0,alSimpleScene,sub_1996b0,callgraph,medium,existing,all 1 callers in this class
+0x19a600,alScene,sub_19a600,callgraph,medium,existing,all 1 callers in this class
+0x19a6b0,alScene,sub_19a6b0,callgraph,medium,existing,all 1 callers in this class
+0x19a740,alScene,sub_19a740,callgraph,medium,existing,all 1 callers in this class
+0x19b030,alSimpleScene,sub_19b030,callgraph,medium,existing,all 1 callers in this class
+0x19b6c0,alSimpleScene,sub_19b6c0,callgraph,medium,existing,all 1 callers in this class
+0x19bc50,alSimpleScene,sub_19bc50,callgraph,medium,existing,all 1 callers in this class
+0x19bdd0,alSimpleScene,sub_19bdd0,callgraph,medium,existing,all 1 callers in this class
+0x19bf60,alSimpleScene,sub_19bf60,callgraph,medium,existing,all 1 callers in this class
+0x19c220,alSimpleScene,sub_19c220,callgraph,medium,existing,all 1 callers in this class
+0x1a0600,alQuantizedAnim,sub_1a0600,callgraph,medium,existing,all 1 callers in this class
+0x1a0ab0,alQuantizedAnim,sub_1a0ab0,callgraph,medium,existing,all 1 callers in this class
+0x1a0cc0,alQuantizedAnim,sub_1a0cc0,locality,low,existing,between two methods of this class
+0x1a0d30,alQuantizedAnim,sub_1a0d30,locality,low,existing,between two methods of this class
+0x1a1460,alQuantizedAnim,sub_1a1460,locality,low,existing,between two methods of this class
+0x1a1500,alQuantizedAnim,sub_1a1500,locality,low,existing,between two methods of this class
+0x1a1620,alQuantizedAnim,sub_1a1620,callgraph,medium,existing,all 1 callers in this class
+0x1a1820,alQuantizedAnim,sub_1a1820,callgraph,medium,existing,all 1 callers in this class
+0x1a1a10,alQuantizedAnim,sub_1a1a10,locality,low,existing,between two methods of this class
+0x1b02f0,alD3dEffectInstance,sub_1b02f0,callgraph,medium,existing,all 1 callers in this class
+0x1b12f0,alD3dEffect,sub_1b12f0,locality,low,existing,between two methods of this class
+0x1b1370,alD3dEffect,sub_1b1370,locality,low,existing,between two methods of this class
+0x1b39f0,RtsSceneClass,sub_1b39f0,callgraph,medium,existing,all 1 callers in this class
+0x1b3be0,alSimpleScene,sub_1b3be0,locality,low,existing,between two methods of this class
+0x1b3c70,alSimpleScene,sub_1b3c70,locality,low,existing,between two methods of this class
+0x1b3d60,alSimpleScene,sub_1b3d60,locality,low,existing,between two methods of this class
+0x1b5910,alD3dTerrainRender,sub_1b5910,callgraph,medium,existing,all 1 callers in this class
+0x1b6210,alD3dTerrainRenderTask,sub_1b6210,callgraph,medium,existing,all 1 callers in this class
+0x1b7060,alD3dTerrainRender,sub_1b7060,locality,low,existing,between two methods of this class
+0x1b7380,alD3dWaterRenderTask,sub_1b7380,callgraph,medium,existing,all 1 callers in this class
+0x1b73a0,alD3dTerrainRender,sub_1b73a0,locality,low,existing,between two methods of this class
+0x1b74e0,alD3dTerrainRender,sub_1b74e0,locality,low,existing,between two methods of this class
+0x1b7c30,alD3dTerrainRender,sub_1b7c30,callgraph,medium,existing,all 1 callers in this class
+0x1b7f20,alD3dTerrainRender,sub_1b7f20,callgraph,medium,existing,all 1 callers in this class
+0x1b9cf0,alD3dTerrainRender,sub_1b9cf0,callgraph,medium,existing,all 1 callers in this class
+0x1b9d30,alD3dTerrainRender,sub_1b9d30,callgraph,medium,existing,all 1 callers in this class
+0x1b9ed0,alD3dTerrainRender,sub_1b9ed0,callgraph,medium,existing,all 1 callers in this class
+0x1ba930,alD3dTerrainRender,sub_1ba930,callgraph,medium,existing,all 1 callers in this class
+0x1bb1a0,alD3dTerrainRender,sub_1bb1a0,callgraph,medium,existing,all 2 callers in this class
+0x1bb220,alD3dTerrainRender,sub_1bb220,callgraph,medium,existing,all 2 callers in this class
+0x1bbae0,ArtProcessClass,sub_1bbae0,callgraph,medium,existing,all 1 callers in this class
+0x1bbd60,ArtProcessClass,sub_1bbd60,callgraph,medium,existing,all 1 callers in this class
+0x1bdcb0,ArtProcessClass,sub_1bdcb0,callgraph,medium,existing,all 2 callers in this class
+0x1bdd40,ArtProcessClass,sub_1bdd40,callgraph,medium,existing,all 3 callers in this class
+0x1bde60,ArtProcessClass,sub_1bde60,locality,low,existing,between two methods of this class
+0x1be150,ArtProcessClass,sub_1be150,callgraph,medium,existing,all 3 callers in this class
+0x1be690,ArtProcessClass,sub_1be690,locality,low,existing,between two methods of this class
+0x1beda0,"DynamicVectorClass<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>_>",sub_1beda0,locality,low,existing,between two methods of this class
+0x1bee40,"DynamicVectorClass<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>_>",sub_1bee40,locality,low,existing,between two methods of this class
+0x1beec0,"DynamicVectorClass<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>_>",sub_1beec0,locality,low,existing,between two methods of this class
+0x1bf5a0,"DynamicVectorClass<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>_>",sub_1bf5a0,locality,low,existing,between two methods of this class
+0x1c0e60,,Game_Boot_Init_Filesystem_helper_20_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_20
+0x1c1f40,,Game_Boot_Init_Filesystem_helper_11_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x1ca5c0,GUIGadgetListboxClass,sub_1ca5c0,callgraph,medium,existing,all 1 callers in this class
+0x1ce690,DrawPrimitiveClass,sub_1ce690,callgraph,medium,existing,all 1 callers in this class
+0x1d00b0,GUIGadgetVScrollbarClass,sub_1d00b0,callgraph,medium,existing,all 2 callers in this class
+0x1d2340,GUIGadgetIMEEditboxClass,sub_1d2340,locality,low,existing,between two methods of this class
+0x1d2350,GUIGadgetIMEEditboxClass,sub_1d2350,locality,low,existing,between two methods of this class
+0x1d2430,GUIGadgetIMEEditboxClass,sub_1d2430,locality,low,existing,between two methods of this class
+0x1d24f0,GUIGadgetIMEEditboxClass,sub_1d24f0,locality,low,existing,between two methods of this class
+0x1d25b0,,Game_Boot_Init_Filesystem_helper_5_helper_15,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x1d2720,GUIGadgetIMEEditboxClass,sub_1d2720,locality,low,existing,between two methods of this class
+0x1d27c0,GUIGadgetIMEEditboxClass,sub_1d27c0,callgraph,medium,existing,all 1 callers in this class
+0x1d2890,GUIGadgetIMEEditboxClass,sub_1d2890,locality,low,existing,between two methods of this class
+0x1d28e0,GUIGadgetIMEEditboxClass,sub_1d28e0,locality,low,existing,between two methods of this class
+0x1d3c20,,Game_Boot_Init_Filesystem_helper_5_helper_16,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x1d40f0,GUIGadgetIMEEditboxClass,sub_1d40f0,callgraph,medium,existing,all 2 callers in this class
+0x1d4160,,Game_Boot_Init_Filesystem_helper_5_helper_17,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x1d4700,,Game_Boot_Init_Filesystem_helper_5_helper_18,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x1d4920,DynamicVectorClass<GUIGadgetClass*___ptr64>,sub_1d4920,callgraph,medium,existing,all 1 callers in this class
+0x1d5d00,GUIGadgetTrackbarSliderClass,sub_1d5d00,callgraph,medium,existing,all 4 callers in this class
+0x1d5e20,GUIGadgetTrackbarSliderClass,sub_1d5e20,callgraph,medium,existing,all 3 callers in this class
+0x1e31b0,,Game_Boot_Init_Filesystem_helper_19_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_19
+0x1e34e0,,Game_Boot_Init_Filesystem_helper_20_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_20
+0x1e5310,GUIGadgetEditboxClass,sub_1e5310,callgraph,medium,existing,all 2 callers in this class
+0x1eb330,GUIGadgetCustomImageClass,sub_1eb330,locality,low,existing,between two methods of this class
+0x1f4770,GUIGadgetIMEEditboxClass,sub_1f4770,locality,low,existing,between two methods of this class
+0x1f4fa0,GUIGadgetIMEEditboxClass,sub_1f4fa0,callgraph,medium,existing,all 5 callers in this class
+0x1f5340,GUIGadgetIMEEditboxClass,sub_1f5340,locality,low,existing,between two methods of this class
+0x1f6380,GUIGadgetIMEEditboxClass,sub_1f6380,callgraph,medium,existing,all 1 callers in this class
+0x1fcb00,GameTextClass,sub_1fcb00,callgraph,medium,existing,all 1 callers in this class
+0x1fd280,GameTextClass,sub_1fd280,callgraph,medium,existing,all 1 callers in this class
+0x1fdcf0,GameTextClass,sub_1fdcf0,callgraph,medium,existing,all 1 callers in this class
+0x1fed00,LandModeClass,sub_1fed00,callgraph,medium,existing,all 1 callers in this class
+0x1ffc00,LocomotorCommonClass,sub_1ffc00,callgraph,medium,existing,all 1 callers in this class
+0x203b70,PlayerProfileClass,sub_203b70,locality,low,existing,between two methods of this class
+0x203c00,PlayerProfileClass,sub_203c00,locality,low,existing,between two methods of this class
+0x203c20,PlayerProfileClass,sub_203c20,locality,low,existing,between two methods of this class
+0x203c40,PlayerProfileClass,sub_203c40,locality,low,existing,between two methods of this class
+0x203ee0,PlayerProfileClass,sub_203ee0,locality,low,existing,between two methods of this class
+0x204930,ConnectionClass,sub_204930,locality,low,existing,between two methods of this class
+0x204a20,ConnectionClass,sub_204a20,locality,low,existing,between two methods of this class
+0x204ad0,ConnectionClass,sub_204ad0,locality,low,existing,between two methods of this class
+0x204bd0,ConnectionClass,sub_204bd0,locality,low,existing,between two methods of this class
+0x204c30,ConnectionClass,sub_204c30,locality,low,existing,between two methods of this class
+0x205200,PacketClass,sub_205200,callgraph,medium,existing,all 3 callers in this class
+0x207460,PacketHandlerClass,sub_207460,callgraph,medium,existing,all 1 callers in this class
+0x207c10,NetworkClass,sub_207c10,callgraph,medium,existing,all 1 callers in this class
+0x207e50,NetworkClass,sub_207e50,callgraph,medium,existing,all 1 callers in this class
+0x2081a0,LuaNetworkDebuggerClass,sub_2081a0,callgraph,medium,existing,all 1 callers in this class
+0x209670,ReferenceListClass<PacketClass>,sub_209670,callgraph,medium,existing,all 3 callers in this class
+0x20e010,,Game_Boot_Init_Filesystem_helper_5_helper_19,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x20e350,,Game_Boot_Init_Filesystem_helper_2_helper_10,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x210da0,TreeCullClass,sub_210da0,locality,low,existing,between two methods of this class
+0x210f60,TreeCullClass,sub_210f60,callgraph,medium,existing,all 1 callers in this class
+0x2156d0,"DynamicVectorClass<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>_>",sub_2156d0,callgraph,medium,existing,all 1 callers in this class
+0x215b40,,Game_Boot_Init_Filesystem_helper_9_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_9
+0x215d70,,Game_Boot_Init_Filesystem_helper_9_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_9
+0x2163c0,,Game_Boot_Init_Filesystem_helper_9_helper_4,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_9
+0x216450,,Game_Boot_Init_Filesystem_helper_9_helper_5,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_9
+0x216710,,Game_Boot_Init_Filesystem_helper_5_helper_20,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x216790,,Game_Boot_Init_Filesystem_helper_5_helper_21,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x216860,,Game_Boot_Init_Filesystem_helper_26_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_26
+0x216d20,MegaFileManagerClass,sub_216d20,locality,low,existing,between two methods of this class
+0x216de0,MegaFileManagerClass,sub_216de0,callgraph,medium,existing,all 1 callers in this class
+0x2174b0,MegaFileManagerClass,sub_2174b0,locality,low,existing,between two methods of this class
+0x2175b0,MegaFileManagerClass,sub_2175b0,locality,low,existing,between two methods of this class
+0x21c2f0,,Game_Boot_Init_Filesystem_helper_5_helper_22,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x21eb10,,Game_Boot_Init_Filesystem_helper_27_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_27
+0x21ec90,DynamicVectorClass<BandwidthStatsClass::StatsStruct>,sub_21ec90,callgraph,medium,existing,all 1 callers in this class
+0x21f940,PlayerProfileClass,sub_21f940,locality,low,existing,between two methods of this class
+0x21fae0,PlayerProfileClass,sub_21fae0,locality,low,existing,between two methods of this class
+0x21fb30,PlayerProfileClass,sub_21fb30,locality,low,existing,between two methods of this class
+0x21fb70,PlayerProfileClass,sub_21fb70,locality,low,existing,between two methods of this class
+0x220ce0,ChunkReaderClass,sub_220ce0,locality,low,existing,between two methods of this class
+0x221940,SignalDispatcherClass,sub_221940,locality,low,existing,between two methods of this class
+0x2219e0,SignalDispatcherClass,sub_2219e0,locality,low,existing,between two methods of this class
+0x221b60,SignalDispatcherClass,sub_221b60,locality,low,existing,between two methods of this class
+0x2220f0,SignalDispatcherClass,sub_2220f0,locality,low,existing,between two methods of this class
+0x2223f0,SignalDispatcherClass,sub_2223f0,locality,low,existing,between two methods of this class
+0x224990,NATUtilsClass::NATUtilsThreadClass,sub_224990,callgraph,medium,existing,all 1 callers in this class
+0x2260d0,NATUtilsClass::NATUtilsThreadClass,sub_2260d0,callgraph,medium,existing,all 1 callers in this class
+0x2269d0,NATUtilsClass::NATUtilsThreadClass,sub_2269d0,callgraph,medium,existing,all 3 callers in this class
+0x226b50,NATUtilsClass::NATUtilsThreadClass,sub_226b50,callgraph,medium,existing,all 1 callers in this class
+0x22c030,,Game_Boot_Init_Filesystem_helper_44_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_44
+0x22c200,,Game_Boot_Init_Filesystem_helper_44_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_44
+0x22c370,,Game_Boot_Init_Filesystem_helper_44_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_44
+0x22ca30,,Game_Boot_Init_Filesystem_helper_48_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_48
+0x22dfb0,LandModeClass,sub_22dfb0,callgraph,medium,existing,all 1 callers in this class
+0x22f9f0,GameModeClass,sub_22f9f0,callgraph,medium,existing,all 1 callers in this class
+0x2330f0,GameModeClass,sub_2330f0,callgraph,medium,existing,all 1 callers in this class
+0x23c340,PacketHandlerClass,sub_23c340,callgraph,medium,existing,all 1 callers in this class
+0x23d370,PacketSequencerClass,sub_23d370,callgraph,medium,existing,all 1 callers in this class
+0x23d9a0,PacketSequencerClass,sub_23d9a0,callgraph,medium,existing,all 2 callers in this class
+0x23dab0,PacketSequencerClass,sub_23dab0,callgraph,medium,existing,all 2 callers in this class
+0x23e030,PacketSequencerClass,sub_23e030,callgraph,medium,existing,all 1 callers in this class
+0x23e0a0,TreeCullClass,sub_23e0a0,callgraph,medium,existing,all 3 callers in this class
+0x23ff20,FileClass,sub_23ff20,callgraph,medium,existing,all 1 callers in this class
+0x2408c0,SignalListClass,sub_2408c0,locality,low,existing,between two methods of this class
+0x240940,SignalListClass,sub_240940,locality,low,existing,between two methods of this class
+0x240b50,SignalListClass,sub_240b50,locality,low,existing,between two methods of this class
+0x240bb0,SignalListClass,sub_240bb0,locality,low,existing,between two methods of this class
+0x240d40,SignalListClass,sub_240d40,locality,low,existing,between two methods of this class
+0x241260,SignalListClass,sub_241260,locality,low,existing,between two methods of this class
+0x241580,SignalListClass,sub_241580,locality,low,existing,between two methods of this class
+0x2415e0,SignalListClass,sub_2415e0,locality,low,existing,between two methods of this class
+0x2440b0,GetEvent,sub_2440b0,callgraph,medium,existing,all 1 callers in this class
+0x245650,LuaNetworkDebuggerClass,sub_245650,callgraph,medium,existing,all 1 callers in this class
+0x248e80,LuaScript,sub_248e80,callgraph,medium,existing,all 1 callers in this class
+0x249550,LuaUserVar,sub_249550,callgraph,medium,existing,all 1 callers in this class
+0x24ce00,StoryEventWrapper,sub_24ce00,callgraph,medium,existing,all 1 callers in this class
+0x2506a0,LuaNetworkDebuggerClass,sub_2506a0,callgraph,medium,existing,all 1 callers in this class
+0x250a60,LuaNetworkDebuggerClass,sub_250a60,callgraph,medium,existing,all 1 callers in this class
+0x250eb0,LuaNetworkDebuggerClass,sub_250eb0,callgraph,medium,existing,all 1 callers in this class
+0x251ed0,LuaNetworkDebuggerClass,sub_251ed0,callgraph,medium,existing,all 1 callers in this class
+0x252060,AITaskForceDiagnosticsNodeClass,sub_252060,callgraph,medium,existing,all 2 callers in this class
+0x2527f0,LuaNetworkDebuggerClass,sub_2527f0,locality,low,existing,between two methods of this class
+0x252a00,LuaNetworkDebuggerClass,sub_252a00,locality,low,existing,between two methods of this class
+0x253d30,ThreadValue,sub_253d30,callgraph,medium,existing,all 2 callers in this class
+0x2563a0,ThreadValue,sub_2563a0,locality,low,existing,between two methods of this class
+0x2567b0,ThreadValue,sub_2567b0,locality,low,existing,between two methods of this class
+0x257410,ThreadValue,sub_257410,locality,low,existing,between two methods of this class
+0x257450,ThreadValue,sub_257450,locality,low,existing,between two methods of this class
+0x257500,ThreadValue,sub_257500,locality,low,existing,between two methods of this class
+0x257d00,LuaScriptWrapper,sub_257d00,callgraph,medium,existing,all 2 callers in this class
+0x25ab50,TaskForceClass,sub_25ab50,callgraph,medium,existing,all 1 callers in this class
+0x260630,GUIGadgetCustomImageClass,sub_260630,callgraph,medium,existing,all 1 callers in this class
+0x260c20,,Game_Boot_Init_Filesystem_helper_5_helper_23,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x261280,,Game_Boot_Init_Filesystem_helper_5_helper_24,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x262a00,,Game_Boot_Init_Filesystem_helper_5_helper_25,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x264820,GameModeClass,sub_264820,callgraph,medium,existing,all 1 callers in this class
+0x264870,GameObjectClass,sub_264870,callgraph,medium,existing,all 1 callers in this class
+0x266480,ModelClass,sub_266480,callgraph,medium,existing,all 1 callers in this class
+0x2681e0,LandModeClass,sub_2681e0,callgraph,medium,existing,all 2 callers in this class
+0x269db0,GameModeClass,sub_269db0,callgraph,medium,existing,all 1 callers in this class
+0x26a310,GameModeClass,sub_26a310,callgraph,medium,existing,all 1 callers in this class
+0x26a6b0,GameModeClass,sub_26a6b0,callgraph,medium,existing,all 1 callers in this class
+0x26b000,GameModeClass,sub_26b000,callgraph,medium,existing,all 1 callers in this class
+0x26cf90,DrawTextClass,sub_26cf90,callgraph,medium,existing,all 1 callers in this class
+0x26f880,DrawPrimitiveClass,sub_26f880,callgraph,medium,existing,all 1 callers in this class
+0x276f40,GalacticModeClass,sub_276f40,callgraph,medium,existing,all 1 callers in this class
+0x278ee0,ModelClass,sub_278ee0,callgraph,medium,existing,all 1 callers in this class
+0x27b670,LandTeamInfantryLocomotorBehaviorClass,sub_27b670,callgraph,medium,existing,all 3 callers in this class
+0x27bff0,,Game_Boot_Init_Filesystem_helper_37_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_37
+0x27cef0,,Game_Boot_Init_Filesystem_helper_43_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_43
+0x27cf90,,Game_Boot_Init_Filesystem_helper_43_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_43
+0x27f480,GalaxyWideUpgradeAbilityClass,sub_27f480,callgraph,medium,existing,all 1 callers in this class
+0x27f4f0,GalaxyWideUpgradeAbilityClass,sub_27f4f0,callgraph,medium,existing,all 1 callers in this class
+0x27ff80,GameModeClass,sub_27ff80,callgraph,medium,existing,all 1 callers in this class
+0x280cc0,ReduceProductionPriceAbilityClass,sub_280cc0,callgraph,medium,existing,all 1 callers in this class
+0x280dc0,ReduceProductionTimeAbilityClass,sub_280dc0,callgraph,medium,existing,all 1 callers in this class
+0x281240,DynamicVectorClass<PlayerClass*___ptr64>,sub_281240,locality,low,existing,between two methods of this class
+0x2813b0,DynamicVectorClass<PlayerClass*___ptr64>,sub_2813b0,locality,low,existing,between two methods of this class
+0x2813c0,DynamicVectorClass<PlayerClass*___ptr64>,sub_2813c0,locality,low,existing,between two methods of this class
+0x2857f0,GameModeClass,sub_2857f0,callgraph,medium,existing,all 1 callers in this class
+0x285ee0,GalaxyWideUpgradeAbilityClass,sub_285ee0,callgraph,medium,existing,all 1 callers in this class
+0x285f30,GalaxyWideUpgradeAbilityClass,sub_285f30,callgraph,medium,existing,all 1 callers in this class
+0x287e70,,Game_Boot_Init_Filesystem_helper_42_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_42
+0x289530,PlayerClass,sub_289530,callgraph,medium,existing,all 1 callers in this class
+0x28a080,TheStoryMode,sub_28a080,callgraph,medium,existing,all 1 callers in this class
+0x28d760,TheStoryMode,sub_28d760,locality,low,existing,between two methods of this class
+0x28d7f0,TheStoryMode,sub_28d7f0,locality,low,existing,between two methods of this class
+0x28d930,TheStoryMode,sub_28d930,locality,low,existing,between two methods of this class
+0x28d940,TheStoryMode,sub_28d940,locality,low,existing,between two methods of this class
+0x298de0,std,"_Sort_unchecked<GSISymbolEntry*___ptr64*___ptr64,<lambda_17fc2db6b915a174aa9adac87939b088>_>_helper_3_helper_1",callee_of,low,existing,"only caller std::_Sort_unchecked<GSISymbolEntry*___ptr64*___ptr64,<lambda_17fc2db6b915a174aa9adac87939b088>_>_helper_3"
+0x299d70,DynamicVectorClass<GameObjectClass*___ptr64>,sub_299d70,callgraph,medium,existing,all 1 callers in this class
+0x2a73a0,,Game_Boot_Init_Filesystem_helper_5_helper_26,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x2ac160,,Game_Boot_Init_Filesystem_helper_37_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_37
+0x2b4d70,,Game_Boot_Init_Filesystem_helper_36_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_36
+0x2b69b0,GarrisonUnitBehaviorClass,sub_2b69b0,callgraph,medium,existing,all 1 callers in this class
+0x2b6a20,TransportLandingBehaviorClass,sub_2b6a20,callgraph,medium,existing,all 1 callers in this class
+0x2bd230,DynamicVectorClass<GameObjectClass*___ptr64>,sub_2bd230,locality,low,existing,between two methods of this class
+0x2bd2f0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_2bd2f0,locality,low,existing,between two methods of this class
+0x2bd360,DynamicVectorClass<GameObjectClass*___ptr64>,sub_2bd360,locality,low,existing,between two methods of this class
+0x2bec70,GameModeClass,sub_2bec70,callgraph,medium,existing,all 1 callers in this class
+0x2c1250,,Game_Boot_Init_Filesystem_helper_35_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_35
+0x2c1cf0,,Game_Boot_Init_Filesystem_helper_43_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_43
+0x2c3300,LinearInterpolator,sub_2c3300,callgraph,medium,existing,all 1 callers in this class
+0x2c3f50,CubicInterpolator,sub_2c3f50,callgraph,medium,existing,all 1 callers in this class
+0x2c7870,,Game_Boot_Init_Filesystem_helper_11_helper_4,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x2c79d0,,Game_Boot_Init_Filesystem_helper_5_helper_27,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x2c7bf0,DynamicVectorClass<CorruptionChoiceProperties>,sub_2c7bf0,callgraph,medium,existing,all 1 callers in this class
+0x2c7c30,DynamicVectorClass<CorruptionChoiceProperties>,sub_2c7c30,callgraph,medium,existing,all 1 callers in this class
+0x2cb7a0,LuaCreateCinematicTransport,sub_2cb7a0,callgraph,medium,existing,all 1 callers in this class
+0x2cbc90,LuaEndCinematicCamera,sub_2cbc90,callgraph,medium,existing,all 1 callers in this class
+0x2ccd80,LuaStartCinematicCamera,sub_2ccd80,callgraph,medium,existing,all 1 callers in this class
+0x2ccf30,TacticalSuperWeaponBehaviorClass,sub_2ccf30,callgraph,medium,existing,all 1 callers in this class
+0x2cd8f0,LuaSetCinematicCameraKey,sub_2cd8f0,callgraph,medium,existing,all 1 callers in this class
+0x2cd910,LuaSetCinematicTargetKey,sub_2cd910,callgraph,medium,existing,all 1 callers in this class
+0x2cdb60,LuaTransitionCinematicCameraKey,sub_2cdb60,callgraph,medium,existing,all 1 callers in this class
+0x2cdb80,LuaTransitionCinematicTargetKey,sub_2cdb80,callgraph,medium,existing,all 1 callers in this class
+0x2cdba0,LuaTransitionToTacticalCamera,sub_2cdba0,callgraph,medium,existing,all 1 callers in this class
+0x2d2370,,Game_Boot_Init_Filesystem_helper_5_helper_28,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x2d43f0,,Game_Boot_Init_Filesystem_helper_11_helper_5,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x2e4260,,Game_Boot_Init_Filesystem_helper_47_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x2e71b0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_2e71b0,locality,low,existing,between two methods of this class
+0x2e7260,DynamicVectorClass<GameObjectClass*___ptr64>,sub_2e7260,locality,low,existing,between two methods of this class
+0x2e7350,DynamicVectorClass<GameObjectClass*___ptr64>,sub_2e7350,locality,low,existing,between two methods of this class
+0x2e7430,DynamicVectorClass<GameObjectClass*___ptr64>,sub_2e7430,locality,low,existing,between two methods of this class
+0x2ea110,,Game_Boot_Init_Filesystem_helper_11_helper_6,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x2f4ca0,,Game_Boot_Init_Filesystem_helper_47_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x2fd330,,Game_Boot_Init_Filesystem_helper_47_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x305c40,,Game_Boot_Init_Filesystem_helper_47_helper_4,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x306d00,SpaceModeClass,sub_306d00,callgraph,medium,existing,all 1 callers in this class
+0x310e40,,Game_Boot_Init_Filesystem_helper_47_helper_5,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x312570,,Game_Boot_Init_Filesystem_helper_47_helper_6,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x314360,,Game_Boot_Init_Filesystem_helper_47_helper_7,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x315c40,,Game_Boot_Init_Filesystem_helper_45_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_45
+0x317480,,Game_Boot_Init_Filesystem_helper_47_helper_8,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x317d00,,Game_Boot_Init_Filesystem_helper_47_helper_9,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x31a450,,Game_Boot_Init_Filesystem_helper_47_helper_10,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x31acd0,,Game_Boot_Init_Filesystem_helper_47_helper_11,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x31b590,,Game_Boot_Init_Filesystem_helper_47_helper_12,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x31d360,,Game_Boot_Init_Filesystem_helper_47_helper_13,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x31d750,,Game_Boot_Init_Filesystem_helper_45_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_45
+0x320760,,Game_Boot_Init_Filesystem_helper_5_helper_29,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x321450,,Game_Boot_Init_Filesystem_helper_5_helper_30,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x3223f0,MeleeHeroClashClass,sub_3223f0,callgraph,medium,existing,all 1 callers in this class
+0x3225a0,MeleeHeroClashClass,sub_3225a0,callgraph,medium,existing,all 1 callers in this class
+0x3226e0,,Game_Boot_Init_Filesystem_helper_5_helper_31,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x324710,WeatherAudioManagerClass,sub_324710,callgraph,medium,existing,all 1 callers in this class
+0x326e50,PlanetaryBehaviorClass,sub_326e50,callgraph,medium,existing,all 1 callers in this class
+0x326e80,DynamicVectorClass<CorruptionChoiceProperties>,sub_326e80,callgraph,medium,existing,all 1 callers in this class
+0x326f80,DynamicVectorClass<GameObjectClass*___ptr64>,sub_326f80,locality,low,existing,between two methods of this class
+0x327070,DynamicVectorClass<GameObjectClass*___ptr64>,sub_327070,callgraph,medium,existing,all 1 callers in this class
+0x327110,DynamicVectorClass<GameObjectClass*___ptr64>,sub_327110,locality,low,existing,between two methods of this class
+0x327170,DynamicVectorClass<GameObjectClass*___ptr64>,sub_327170,locality,low,existing,between two methods of this class
+0x327cd0,GarrisonUnitBehaviorClass,sub_327cd0,callgraph,medium,existing,all 1 callers in this class
+0x32a7a0,PlanetaryBehaviorClass,sub_32a7a0,callgraph,medium,existing,all 1 callers in this class
+0x32e7a0,CapturePointBehaviorClass,sub_32e7a0,callgraph,medium,existing,all 1 callers in this class
+0x32f8d0,GameModeClass,sub_32f8d0,callgraph,medium,existing,all 1 callers in this class
+0x330450,,Game_Boot_Init_Filesystem_helper_5_helper_32,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x331d70,,Game_Boot_Init_Filesystem_helper_5_helper_33,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x333350,BroadcasterClass,sub_333350,locality,low,existing,between two methods of this class
+0x3334f0,BroadcasterClass,sub_3334f0,locality,low,existing,between two methods of this class
+0x3336c0,BroadcasterClass,sub_3336c0,locality,low,existing,between two methods of this class
+0x333db0,BroadcasterClass,sub_333db0,locality,low,existing,between two methods of this class
+0x333dd0,BroadcasterClass,sub_333dd0,locality,low,existing,between two methods of this class
+0x333df0,BroadcasterClass,sub_333df0,locality,low,existing,between two methods of this class
+0x333e10,BroadcasterClass,sub_333e10,locality,low,existing,between two methods of this class
+0x333e30,BroadcasterClass,sub_333e30,locality,low,existing,between two methods of this class
+0x333e50,BroadcasterClass,sub_333e50,locality,low,existing,between two methods of this class
+0x333e70,BroadcasterClass,sub_333e70,locality,low,existing,between two methods of this class
+0x333e90,BroadcasterClass,sub_333e90,locality,low,existing,between two methods of this class
+0x333eb0,BroadcasterClass,sub_333eb0,locality,low,existing,between two methods of this class
+0x333ed0,BroadcasterClass,sub_333ed0,locality,low,existing,between two methods of this class
+0x333ef0,BroadcasterClass,sub_333ef0,locality,low,existing,between two methods of this class
+0x333f10,BroadcasterClass,sub_333f10,locality,low,existing,between two methods of this class
+0x333f30,BroadcasterClass,sub_333f30,locality,low,existing,between two methods of this class
+0x336d50,,Game_Boot_Init_Filesystem_helper_52_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_52
+0x33e600,SpecialWeaponBehaviorClass,sub_33e600,callgraph,medium,existing,all 1 callers in this class
+0x33e660,SpecialWeaponBehaviorClass,sub_33e660,callgraph,medium,existing,all 1 callers in this class
+0x33e760,CapturePointBehaviorClass,sub_33e760,callgraph,medium,existing,all 1 callers in this class
+0x33e7d0,CapturePointBehaviorClass,sub_33e7d0,callgraph,medium,existing,all 1 callers in this class
+0x33e840,CapturePointBehaviorClass,sub_33e840,callgraph,medium,existing,all 1 callers in this class
+0x33e8b0,CapturePointBehaviorClass,sub_33e8b0,callgraph,medium,existing,all 1 callers in this class
+0x342de0,GameModeClass,sub_342de0,callgraph,medium,existing,all 1 callers in this class
+0x3441f0,GameModeClass,sub_3441f0,callgraph,medium,existing,all 1 callers in this class
+0x349230,BarComponentClass,sub_349230,callgraph,medium,existing,all 1 callers in this class
+0x34b2c0,BaseComponentClass,sub_34b2c0,callgraph,medium,existing,all 1 callers in this class
+0x34c1d0,BaseComponentClass,sub_34c1d0,callgraph,medium,existing,all 1 callers in this class
+0x355240,BarComponentClass,sub_355240,callgraph,medium,existing,all 1 callers in this class
+0x355de0,GameModeClass,sub_355de0,callgraph,medium,existing,all 1 callers in this class
+0x356410,GameModeClass,sub_356410,callgraph,medium,existing,all 3 callers in this class
+0x356960,,Game_Boot_Init_Filesystem_helper_11_helper_7,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x358700,,Game_Boot_Init_Filesystem_helper_45_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_45
+0x359a90,GameModeClass,sub_359a90,callgraph,medium,existing,all 2 callers in this class
+0x35ac50,GameModeClass,sub_35ac50,callgraph,medium,existing,all 3 callers in this class
+0x35b2f0,GameModeClass,sub_35b2f0,locality,low,existing,between two methods of this class
+0x35b380,GameModeClass,sub_35b380,locality,low,existing,between two methods of this class
+0x35c520,GameModeClass,sub_35c520,locality,low,existing,between two methods of this class
+0x3611f0,GameModeClass,sub_3611f0,locality,low,existing,between two methods of this class
+0x369be0,GameObjectTypeClass,sub_369be0,callgraph,medium,existing,all 1 callers in this class
+0x369cb0,GameObjectTypeClass,sub_369cb0,callgraph,medium,existing,all 1 callers in this class
+0x369d10,GameObjectTypeClass,sub_369d10,callgraph,medium,existing,all 1 callers in this class
+0x369dd0,GameObjectTypeClass,sub_369dd0,callgraph,medium,existing,all 1 callers in this class
+0x369e90,GameObjectTypeClass,sub_369e90,callgraph,medium,existing,all 1 callers in this class
+0x369f50,GameObjectTypeClass,sub_369f50,callgraph,medium,existing,all 1 callers in this class
+0x371160,TeamBehaviorClass,sub_371160,callgraph,medium,existing,all 1 callers in this class
+0x371840,LandTeamInfantryLocomotorBehaviorClass,sub_371840,callgraph,medium,existing,all 1 callers in this class
+0x379d30,FlagshipDataPackClass,sub_379d30,locality,low,existing,between two methods of this class
+0x379df0,FlagshipDataPackClass,sub_379df0,locality,low,existing,between two methods of this class
+0x37a4c0,FlagshipDataPackClass,sub_37a4c0,locality,low,existing,between two methods of this class
+0x37a5c0,FlagshipDataPackClass,sub_37a5c0,locality,low,existing,between two methods of this class
+0x37a6c0,FlagshipDataPackClass,sub_37a6c0,locality,low,existing,between two methods of this class
+0x37cd80,DetectHeroAbilityClass,sub_37cd80,callgraph,medium,existing,all 1 callers in this class
+0x37cdc0,DetectHeroAbilityClass,sub_37cdc0,callgraph,medium,existing,all 1 callers in this class
+0x37e100,LineSubClass,sub_37e100,callgraph,medium,existing,all 1 callers in this class
+0x380160,PlanetaryBehaviorClass,sub_380160,callgraph,medium,existing,all 2 callers in this class
+0x387d10,DynamicVectorClass<PlayerClass*___ptr64>,sub_387d10,callgraph,medium,existing,all 1 callers in this class
+0x3893e0,GameObjectClass,sub_3893e0,callgraph,medium,existing,all 1 callers in this class
+0x38f8d0,MoveActionClass,sub_38f8d0,callgraph,medium,existing,all 3 callers in this class
+0x393970,HolsterWeaponBehaviorClass,sub_393970,callgraph,medium,existing,all 1 callers in this class
+0x394eb0,LandModeClass,sub_394eb0,callgraph,medium,existing,all 1 callers in this class
+0x395680,LandTeamInfantryLocomotorBehaviorClass,sub_395680,callgraph,medium,existing,all 1 callers in this class
+0x395900,GameObjectClass,sub_395900,locality,low,existing,between two methods of this class
+0x395920,GameObjectClass,sub_395920,locality,low,existing,between two methods of this class
+0x3971f0,WalkLocomotorBehaviorClass,sub_3971f0,callgraph,medium,existing,all 1 callers in this class
+0x3a04d0,PlanetaryBehaviorClass,sub_3a04d0,callgraph,medium,existing,all 1 callers in this class
+0x3a7af0,WalkLocomotorBehaviorClass,sub_3a7af0,callgraph,medium,existing,all 1 callers in this class
+0x3a8140,StealthAbilityClass,sub_3a8140,callgraph,medium,existing,all 3 callers in this class
+0x3a8820,,Game_Boot_Init_Filesystem_helper_47_helper_14,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x3a8b40,SpecialAbilityClass,sub_3a8b40,callgraph,medium,existing,all 2 callers in this class
+0x3a8e20,MoveActionClass,sub_3a8e20,callgraph,medium,existing,all 1 callers in this class
+0x3abf80,StarshipLocomotorBehaviorClass,sub_3abf80,callgraph,medium,existing,all 1 callers in this class
+0x3ac210,TransportLandingBehaviorClass,sub_3ac210,callgraph,medium,existing,all 1 callers in this class
+0x3afd90,ReferenceListClass<GameObjectClass>,sub_3afd90,locality,low,existing,between two methods of this class
+0x3b1580,,Game_Boot_Init_Filesystem_helper_2_helper_11,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x3b21d0,,Game_Boot_Init_Filesystem_helper_2_helper_12,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x3b4fa0,LandModeClass,sub_3b4fa0,locality,low,existing,between two methods of this class
+0x3bd7b0,SetupPhaseManagerClass,sub_3bd7b0,callgraph,medium,existing,all 1 callers in this class
+0x3be8b0,,Game_Boot_Init_Filesystem_helper_2_helper_13,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x3c1850,SetupPhaseManagerClass,sub_3c1850,callgraph,medium,existing,all 1 callers in this class
+0x3c1e60,SelectBehaviorClass,sub_3c1e60,callgraph,medium,existing,all 2 callers in this class
+0x3c1f90,SelectBehaviorClass,sub_3c1f90,locality,low,existing,between two methods of this class
+0x3c3bb0,,Game_Boot_Init_Filesystem_helper_2_helper_14,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_2
+0x3c3ec0,,Game_Boot_Init_Filesystem_helper_53_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_53
+0x3c3ed0,,Game_Boot_Init_Filesystem_helper_53_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_53
+0x3c4b00,NeutralizeHeroAbilityClass,sub_3c4b00,callgraph,medium,existing,all 3 callers in this class
+0x3c5200,std,"_Sort_unchecked<GSISymbolEntry*___ptr64*___ptr64,<lambda_17fc2db6b915a174aa9adac87939b088>_>_helper_3_helper_1",callee_of,low,existing,"only caller std::_Sort_unchecked<GSISymbolEntry*___ptr64*___ptr64,<lambda_17fc2db6b915a174aa9adac87939b088>_>_helper_3"
+0x3c82f0,GalacticSabotageAbilityClass,sub_3c82f0,callgraph,medium,existing,all 1 callers in this class
+0x3d1b50,DynamicVectorClass<CorruptionChoiceProperties>,sub_3d1b50,callgraph,medium,existing,all 1 callers in this class
+0x3d1fd0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_3d1fd0,locality,low,existing,between two methods of this class
+0x3d4490,,Game_Boot_Init_Filesystem_helper_5_helper_34,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x3e4cb0,,Game_Boot_Init_Filesystem_helper_47_helper_15,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x3e7840,,Game_Boot_Init_Filesystem_helper_45_helper_4,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_45
+0x3e79b0,,Game_Boot_Init_Filesystem_helper_47_helper_16,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_47
+0x3e7a90,NeutralizeHeroAbilityClass,sub_3e7a90,callgraph,medium,existing,all 1 callers in this class
+0x3ee4c0,BlackMarketAbilityClass,sub_3ee4c0,callgraph,medium,existing,all 1 callers in this class
+0x3ee640,NeutralizeHeroAbilityClass,sub_3ee640,callgraph,medium,existing,all 1 callers in this class
+0x3f4db0,Plus<float>,sub_3f4db0,locality,low,existing,between two methods of this class
+0x3f4f90,Plus<float>,sub_3f4f90,locality,low,existing,between two methods of this class
+0x3f7130,PlanetaryBehaviorClass,sub_3f7130,locality,low,existing,between two methods of this class
+0x3f7280,PlanetaryBehaviorClass,sub_3f7280,locality,low,existing,between two methods of this class
+0x3f7430,PlanetaryBehaviorClass,sub_3f7430,locality,low,existing,between two methods of this class
+0x3f7440,PlanetaryBehaviorClass,sub_3f7440,locality,low,existing,between two methods of this class
+0x3f88b0,AutoResolveClass,sub_3f88b0,callgraph,medium,existing,all 1 callers in this class
+0x3fc750,PlanetaryBehaviorClass,sub_3fc750,locality,low,existing,between two methods of this class
+0x3fd560,PlanetaryBehaviorClass,sub_3fd560,locality,low,existing,between two methods of this class
+0x3fe9e0,PlanetaryBehaviorClass,sub_3fe9e0,locality,low,existing,between two methods of this class
+0x3feb90,PlanetaryBehaviorClass,sub_3feb90,locality,low,existing,between two methods of this class
+0x4023d0,ProductionBehaviorClass,sub_4023d0,locality,low,existing,between two methods of this class
+0x402490,ProductionBehaviorClass,sub_402490,locality,low,existing,between two methods of this class
+0x406370,TeamBehaviorClass,sub_406370,locality,low,existing,between two methods of this class
+0x4077c0,,Game_Boot_Init_Filesystem_helper_11_helper_8,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x408830,,Game_Boot_Init_Filesystem_helper_5_helper_35,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x40d160,FormationClass,sub_40d160,locality,low,existing,between two methods of this class
+0x40d660,FormationClass,sub_40d660,locality,low,existing,between two methods of this class
+0x40d940,FormationClass,sub_40d940,locality,low,existing,between two methods of this class
+0x40db50,FormationClass,sub_40db50,locality,low,existing,between two methods of this class
+0x40dbc0,FormationClass,sub_40dbc0,locality,low,existing,between two methods of this class
+0x40dc90,FormationClass,sub_40dc90,locality,low,existing,between two methods of this class
+0x40ded0,FormationClass,sub_40ded0,locality,low,existing,between two methods of this class
+0x410350,SpaceMovementCoordinatorClass,sub_410350,callgraph,medium,existing,all 1 callers in this class
+0x419f20,WalkLocomotorBehaviorClass,sub_419f20,callgraph,medium,existing,all 1 callers in this class
+0x41a5c0,MovingVsMovingCollisionClass,sub_41a5c0,callgraph,medium,existing,all 1 callers in this class
+0x41af10,MovementCoordinatorClass,sub_41af10,locality,low,existing,between two methods of this class
+0x41af60,MovementCoordinatorClass,sub_41af60,locality,low,existing,between two methods of this class
+0x41afb0,MovementCoordinatorClass,sub_41afb0,locality,low,existing,between two methods of this class
+0x41afe0,MovementCoordinatorClass,sub_41afe0,locality,low,existing,between two methods of this class
+0x41b170,MovementCoordinatorClass,sub_41b170,locality,low,existing,between two methods of this class
+0x41b200,MovementCoordinatorClass,sub_41b200,locality,low,existing,between two methods of this class
+0x41b260,MovementCoordinatorClass,sub_41b260,locality,low,existing,between two methods of this class
+0x41b2a0,MovementCoordinatorClass,sub_41b2a0,locality,low,existing,between two methods of this class
+0x41b440,MovementCoordinatorClass,sub_41b440,locality,low,existing,between two methods of this class
+0x41b450,MovementCoordinatorClass,sub_41b450,locality,low,existing,between two methods of this class
+0x41b470,MovementCoordinatorClass,sub_41b470,locality,low,existing,between two methods of this class
+0x41b480,MovementCoordinatorClass,sub_41b480,locality,low,existing,between two methods of this class
+0x41b4a0,MovementCoordinatorClass,sub_41b4a0,locality,low,existing,between two methods of this class
+0x41b600,SpaceMovementCoordinatorClass,sub_41b600,callgraph,medium,existing,all 1 callers in this class
+0x41cf30,FlyingLocomotorBehaviorClass,sub_41cf30,callgraph,medium,existing,all 1 callers in this class
+0x41d020,MovementCoordinatorClass,sub_41d020,callgraph,medium,existing,all 1 callers in this class
+0x422150,MovementCoordinatorClass,sub_422150,callgraph,medium,existing,all 1 callers in this class
+0x423c00,MovementCoordinatorClass,sub_423c00,callgraph,medium,existing,all 1 callers in this class
+0x4267e0,GameModeClass,sub_4267e0,locality,low,existing,between two methods of this class
+0x426ce0,SpaceMovementCoordinatorClass,sub_426ce0,callgraph,medium,existing,all 1 callers in this class
+0x426d50,GameModeClass,sub_426d50,locality,low,existing,between two methods of this class
+0x427e20,,Game_Boot_Init_Filesystem_helper_5_helper_36,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4280b0,,Game_Boot_Init_Filesystem_helper_5_helper_37,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x429fb0,TacticalSuperWeaponBehaviorClass,sub_429fb0,callgraph,medium,existing,all 2 callers in this class
+0x42daf0,TacticalBuildObjectsBehaviorClass,sub_42daf0,locality,low,existing,between two methods of this class
+0x42ecd0,TacticalSellBehaviorClass,sub_42ecd0,callgraph,medium,existing,all 1 callers in this class
+0x42f7e0,MaximumFirepowerAttackAbilityClass,sub_42f7e0,callgraph,medium,existing,all 1 callers in this class
+0x431770,DynamicVectorClass<GameObjectClass*___ptr64>,sub_431770,callgraph,medium,existing,all 2 callers in this class
+0x431b50,DynamicVectorClass<GameObjectClass*___ptr64>,sub_431b50,callgraph,medium,existing,all 1 callers in this class
+0x431c20,ProductionBehaviorClass,sub_431c20,callgraph,medium,existing,all 1 callers in this class
+0x43fa10,AbilitySignalDataClass,sub_43fa10,callgraph,medium,existing,all 1 callers in this class
+0x43fab0,,Game_Boot_Init_Filesystem_helper_5_helper_38,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x444440,GarrisonUnitBehaviorClass,sub_444440,callgraph,medium,existing,all 3 callers in this class
+0x445370,,Game_Boot_Init_Filesystem_helper_11_helper_9,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x4470b0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_4470b0,callgraph,medium,existing,all 1 callers in this class
+0x447140,DynamicVectorClass<GameObjectClass*___ptr64>,sub_447140,callgraph,medium,existing,all 1 callers in this class
+0x447190,,Game_Boot_Init_Filesystem_helper_5_helper_39,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x44b130,GameModeClass,sub_44b130,callgraph,medium,existing,all 1 callers in this class
+0x44ce30,,Game_Boot_Init_Filesystem_helper_5_helper_40,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x451cd0,,Game_Boot_Init_Filesystem_helper_5_helper_41,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x463c80,,Game_Boot_Init_Filesystem_helper_5_helper_42,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x467740,,Game_Boot_Init_Filesystem_helper_5_helper_43,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x46a350,,Game_Boot_Init_Filesystem_helper_5_helper_44,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x46ea70,,Game_Boot_Init_Filesystem_helper_5_helper_45,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x46ffe0,,Game_Boot_Init_Filesystem_helper_5_helper_46,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x470720,ProjectileBehaviorClass,sub_470720,callgraph,medium,existing,all 1 callers in this class
+0x470750,,Game_Boot_Init_Filesystem_helper_5_helper_47,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x470ef0,,Game_Boot_Init_Filesystem_helper_5_helper_48,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4737c0,,Game_Boot_Init_Filesystem_helper_5_helper_49,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4738b0,,Game_Boot_Init_Filesystem_helper_5_helper_50,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x474ad0,,Game_Boot_Init_Filesystem_helper_11_helper_10,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x474c50,AITaskForceDiagnosticsNodeClass,sub_474c50,callgraph,medium,existing,all 1 callers in this class
+0x4753b0,,Game_Boot_Init_Filesystem_helper_5_helper_51,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4766a0,,Game_Boot_Init_Filesystem_helper_5_helper_52,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x476e00,,Game_Boot_Init_Filesystem_helper_11_helper_11,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x477c10,,Game_Boot_Init_Filesystem_helper_5_helper_53,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x479400,,Game_Boot_Init_Filesystem_helper_5_helper_54,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x479fe0,,Game_Boot_Init_Filesystem_helper_5_helper_55,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x47cb40,,Game_Boot_Init_Filesystem_helper_5_helper_56,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x47fcf0,,Game_Boot_Init_Filesystem_helper_5_helper_57,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x47fd00,,Game_Boot_Init_Filesystem_helper_5_helper_58,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x47fd10,,Game_Boot_Init_Filesystem_helper_5_helper_59,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x47fde0,,Game_Boot_Init_Filesystem_helper_11_helper_12,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x47fe50,,Game_Boot_Init_Filesystem_helper_11_helper_13,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x480430,,Game_Boot_Init_Filesystem_helper_11_helper_14,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x480ed0,MeleeHeroClashClass,sub_480ed0,callgraph,medium,existing,all 1 callers in this class
+0x4814d0,,Game_Boot_Init_Filesystem_helper_5_helper_60,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x482490,,Game_Boot_Init_Filesystem_helper_5_helper_61,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x482d30,,Game_Boot_Init_Filesystem_helper_5_helper_62,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x483ea0,,Game_Boot_Init_Filesystem_helper_5_helper_63,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x483f10,,Game_Boot_Init_Filesystem_helper_5_helper_64,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x484e30,,Game_Boot_Init_Filesystem_helper_5_helper_65,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x4889d0,,Game_Boot_Init_Filesystem_helper_5_helper_66,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x488ec0,,Game_Boot_Init_Filesystem_helper_5_helper_67,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x489660,,Game_Boot_Init_Filesystem_helper_5_helper_68,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x489d30,,Game_Boot_Init_Filesystem_helper_5_helper_69,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x48aa00,,Game_Boot_Init_Filesystem_helper_5_helper_70,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x48b4c0,,Game_Boot_Init_Filesystem_helper_11_helper_15,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_11
+0x48b7d0,,Game_Boot_Init_Filesystem_helper_5_helper_71,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x48b800,,Game_Boot_Init_Filesystem_helper_5_helper_72,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x48c630,SpecialAbilityClass,sub_48c630,callgraph,medium,existing,all 1 callers in this class
+0x48f5b0,,Game_Boot_Init_Filesystem_helper_5_helper_73,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_5
+0x490de0,,Game_Boot_Init_Filesystem_helper_56_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_56
+0x494410,GameModeClass,sub_494410,locality,low,existing,between two methods of this class
+0x494480,GameModeClass,sub_494480,locality,low,existing,between two methods of this class
+0x4944e0,GameModeClass,sub_4944e0,locality,low,existing,between two methods of this class
+0x494540,GameModeClass,sub_494540,locality,low,existing,between two methods of this class
+0x494cb0,GameModeClass,sub_494cb0,callgraph,medium,existing,all 1 callers in this class
+0x495440,GameModeClass,sub_495440,callgraph,medium,existing,all 2 callers in this class
+0x4958c0,GameModeClass,sub_4958c0,callgraph,medium,existing,all 1 callers in this class
+0x496140,GameModeClass,sub_496140,callgraph,medium,existing,all 3 callers in this class
+0x4986a0,GameModeClass,sub_4986a0,callgraph,medium,existing,all 1 callers in this class
+0x49ebb0,GameModeClass,sub_49ebb0,callgraph,medium,existing,all 2 callers in this class
+0x49f000,SpaceRetreatCoordinatorClass,sub_49f000,callgraph,medium,existing,all 1 callers in this class
+0x4a5990,SpaceRetreatCoordinatorClass,sub_4a5990,callgraph,medium,existing,all 1 callers in this class
+0x4ab550,SpaceRetreatCoordinatorClass,sub_4ab550,callgraph,medium,existing,all 1 callers in this class
+0x4b0f80,GalacticModeClass,sub_4b0f80,callgraph,medium,existing,all 1 callers in this class
+0x4b1600,GalacticModeClass,sub_4b1600,locality,low,existing,between two methods of this class
+0x4b16f0,GalacticModeClass,sub_4b16f0,locality,low,existing,between two methods of this class
+0x4b5700,PlanetaryBehaviorClass,sub_4b5700,callgraph,medium,existing,all 1 callers in this class
+0x4b7a50,PlanetaryBehaviorClass,sub_4b7a50,callgraph,medium,existing,all 1 callers in this class
+0x4b7c00,TacticalBuildObjectsBehaviorClass,sub_4b7c00,callgraph,medium,existing,all 1 callers in this class
+0x4b7f90,PlanetaryBehaviorClass,sub_4b7f90,callgraph,medium,existing,all 1 callers in this class
+0x4b8090,AutoResolveClass,sub_4b8090,callgraph,medium,existing,all 2 callers in this class
+0x4b8a40,PlanetaryDataPackClass,sub_4b8a40,locality,low,existing,between two methods of this class
+0x4c0b20,SaveLoadManagerClass,sub_4c0b20,callgraph,medium,existing,all 1 callers in this class
+0x4c0ec0,GameModeClass,sub_4c0ec0,callgraph,medium,existing,all 2 callers in this class
+0x4c1560,GameModeClass,sub_4c1560,callgraph,medium,existing,all 2 callers in this class
+0x4c18f0,GameModeClass,sub_4c18f0,callgraph,medium,existing,all 1 callers in this class
+0x4c1970,ForceSightAbilityClass,sub_4c1970,callgraph,medium,existing,all 1 callers in this class
+0x4c19b0,GameModeClass,sub_4c19b0,callgraph,medium,existing,all 1 callers in this class
+0x4c2020,,Game_Boot_Init_Filesystem_helper_37_helper_3,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_37
+0x4c5b80,PlayerClass,sub_4c5b80,callgraph,medium,existing,all 1 callers in this class
+0x4c6e30,ProjectileBehaviorClass,sub_4c6e30,callgraph,medium,existing,all 2 callers in this class
+0x4c8910,ProjectileBehaviorClass,sub_4c8910,callgraph,medium,existing,all 1 callers in this class
+0x4c8b90,ProjectileBehaviorClass,sub_4c8b90,callgraph,medium,existing,all 1 callers in this class
+0x4c91a0,ProjectileBehaviorClass,sub_4c91a0,callgraph,medium,existing,all 1 callers in this class
+0x4cceb0,ProjectileBehaviorClass,sub_4cceb0,callgraph,medium,existing,all 1 callers in this class
+0x4cdb00,ProjectileBehaviorClass,sub_4cdb00,callgraph,medium,existing,all 1 callers in this class
+0x4d0080,ProjectileBehaviorClass,sub_4d0080,callgraph,medium,existing,all 5 callers in this class
+0x4d1510,AIFreeStoreClass,sub_4d1510,locality,low,existing,between two methods of this class
+0x4d1c30,AIFreeStoreClass,sub_4d1c30,callgraph,medium,existing,all 1 callers in this class
+0x4d1eb0,AIFreeStoreClass,sub_4d1eb0,locality,low,existing,between two methods of this class
+0x4d22b0,AIFreeStoreClass,sub_4d22b0,locality,low,existing,between two methods of this class
+0x4d2570,AIFreeStoreClass,sub_4d2570,locality,low,existing,between two methods of this class
+0x4d2680,AIFreeStoreClass,sub_4d2680,callgraph,medium,existing,all 1 callers in this class
+0x4d6540,AIFreeStoreClass,sub_4d6540,locality,low,existing,between two methods of this class
+0x4d6600,AIFreeStoreClass,sub_4d6600,locality,low,existing,between two methods of this class
+0x4d6640,AIFreeStoreClass,sub_4d6640,locality,low,existing,between two methods of this class
+0x4d6680,AIFreeStoreClass,sub_4d6680,locality,low,existing,between two methods of this class
+0x4d6810,AIFreeStoreClass,sub_4d6810,locality,low,existing,between two methods of this class
+0x4d68c0,AIFreeStoreClass,sub_4d68c0,locality,low,existing,between two methods of this class
+0x4da590,AIPerceptionSystemClass,sub_4da590,callgraph,medium,existing,all 1 callers in this class
+0x4da9a0,AIPerceptionSystemClass,sub_4da9a0,locality,low,existing,between two methods of this class
+0x4dac90,AIPerceptionSystemClass,sub_4dac90,locality,low,existing,between two methods of this class
+0x4daf60,AIPerceptionSystemClass,sub_4daf60,callgraph,medium,existing,all 1 callers in this class
+0x4dc570,SpacePerceptionSystemClass,sub_4dc570,callgraph,medium,existing,all 1 callers in this class
+0x4e0270,AIPerceptionSystemClass,sub_4e0270,locality,low,existing,between two methods of this class
+0x4e04d0,AIPerceptionSystemClass,sub_4e04d0,locality,low,existing,between two methods of this class
+0x4e0690,AIPerceptionSystemClass,sub_4e0690,locality,low,existing,between two methods of this class
+0x4e0740,AIPerceptionSystemClass,sub_4e0740,locality,low,existing,between two methods of this class
+0x4e0a30,AIPerceptionSystemClass,sub_4e0a30,callgraph,medium,existing,all 2 callers in this class
+0x4e0d70,GalacticPerceptionSystemClass,sub_4e0d70,callgraph,medium,existing,all 1 callers in this class
+0x4e31d0,TheStoryMode,sub_4e31d0,callgraph,medium,existing,all 1 callers in this class
+0x4e5b30,SelectBehaviorClass,sub_4e5b30,callgraph,medium,existing,all 1 callers in this class
+0x4ec680,TeamBehaviorClass,sub_4ec680,callgraph,medium,existing,all 1 callers in this class
+0x4ed640,FleetBehaviorClass,sub_4ed640,callgraph,medium,existing,all 1 callers in this class
+0x4ed740,FleetBehaviorClass,sub_4ed740,callgraph,medium,existing,all 1 callers in this class
+0x4ee250,HintBehaviorClass,sub_4ee250,callgraph,medium,existing,all 1 callers in this class
+0x4ee890,FrameSynchronizerClass,sub_4ee890,callgraph,medium,existing,all 1 callers in this class
+0x4f3290,DynamicVectorClass<ObjectPersistenceClass::tPersistentUnit>,sub_4f3290,callgraph,medium,existing,all 1 callers in this class
+0x4f3bd0,TransportBehaviorClass,sub_4f3bd0,locality,low,existing,between two methods of this class
+0x4f3d60,ProductionBehaviorClass,sub_4f3d60,callgraph,medium,existing,all 1 callers in this class
+0x4f45c0,ProductionBehaviorClass,sub_4f45c0,callgraph,medium,existing,all 1 callers in this class
+0x4f48a0,UnitAIBehaviorClass,sub_4f48a0,callgraph,medium,existing,all 1 callers in this class
+0x4f5800,TargetingBehaviorClass,sub_4f5800,callgraph,medium,existing,all 1 callers in this class
+0x4f5b00,UnitDamagedDataClass,sub_4f5b00,locality,low,existing,between two methods of this class
+0x4f5cb0,UnitDamagedDataClass,sub_4f5cb0,locality,low,existing,between two methods of this class
+0x4f8890,LandObstacleBehaviorClass,sub_4f8890,locality,low,existing,between two methods of this class
+0x4fa9e0,SpaceModeClass,sub_4fa9e0,callgraph,medium,existing,all 1 callers in this class
+0x502770,AffectedByShieldBehaviorClass,sub_502770,callgraph,medium,existing,all 1 callers in this class
+0x5031a0,AffectedByShieldBehaviorClass,sub_5031a0,locality,low,existing,between two methods of this class
+0x504ed0,MovingVsMovingCollisionClass,sub_504ed0,callgraph,medium,existing,all 1 callers in this class
+0x5093c0,LocomotorCommonClass,sub_5093c0,callgraph,medium,existing,all 1 callers in this class
+0x50a020,LocomotorCommonClass,sub_50a020,callgraph,medium,existing,all 1 callers in this class
+0x50bba0,NeutralizeHeroAbilityClass,sub_50bba0,callgraph,medium,existing,all 1 callers in this class
+0x50e8c0,LandModeClass,sub_50e8c0,callgraph,medium,existing,all 1 callers in this class
+0x50e9c0,LandModeClass,sub_50e9c0,callgraph,medium,existing,all 1 callers in this class
+0x50eb90,LandModeClass,sub_50eb90,callgraph,medium,existing,all 1 callers in this class
+0x5116c0,LandModeClass,sub_5116c0,callgraph,medium,existing,all 1 callers in this class
+0x512d50,DynamicVectorClass<int>,sub_512d50,callgraph,medium,existing,all 1 callers in this class
+0x525200,AIGoalSystemClass,sub_525200,callgraph,medium,existing,all 1 callers in this class
+0x526f60,BountyOnFactionAbilityClass,sub_526f60,callgraph,medium,existing,all 2 callers in this class
+0x5276a0,BitwiseAnd<bool>,sub_5276a0,locality,low,existing,between two methods of this class
+0x5292a0,GameModeClass,sub_5292a0,callgraph,medium,existing,all 1 callers in this class
+0x529e00,GameModeClass,sub_529e00,callgraph,medium,existing,all 1 callers in this class
+0x52e730,,Game_Boot_Init_Filesystem_helper_51_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_51
+0x52e7b0,,Game_Boot_Init_Filesystem_helper_51_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_51
+0x52f0a0,GameModeClass,sub_52f0a0,callgraph,medium,existing,all 1 callers in this class
+0x52fe20,GameModeClass,sub_52fe20,callgraph,medium,existing,all 1 callers in this class
+0x531000,SpawnIndigenousUnitsBehaviorClass,sub_531000,callgraph,medium,existing,all 1 callers in this class
+0x531b60,SpawnIndigenousUnitsBehaviorClass,sub_531b60,callgraph,medium,existing,all 2 callers in this class
+0x536640,DynamicVectorClass<PlayerClass*___ptr64>,sub_536640,callgraph,medium,existing,all 1 callers in this class
+0x537a00,IncomeStreamModAbilityClass,sub_537a00,callgraph,medium,existing,all 2 callers in this class
+0x538290,LandBomberLocomotorBehaviorClass,sub_538290,callgraph,medium,existing,all 1 callers in this class
+0x538de0,GameModeClass,sub_538de0,callgraph,medium,existing,all 1 callers in this class
+0x539750,GameModeClass,sub_539750,callgraph,medium,existing,all 1 callers in this class
+0x53b7d0,AIBuildTaskClass,sub_53b7d0,callgraph,medium,existing,all 1 callers in this class
+0x53c730,PotentialPlanClass,sub_53c730,callgraph,medium,existing,all 1 callers in this class
+0x53d600,GameModeClass,sub_53d600,callgraph,medium,existing,all 1 callers in this class
+0x53d830,GameModeClass,sub_53d830,callgraph,medium,existing,all 1 callers in this class
+0x53e0f0,AffectedByShieldBehaviorClass,sub_53e0f0,callgraph,medium,existing,all 1 callers in this class
+0x549e80,WeaponBehaviorClass,sub_549e80,callgraph,medium,existing,all 1 callers in this class
+0x54c2f0,WeaponBehaviorClass,sub_54c2f0,locality,low,existing,between two methods of this class
+0x54fd00,MovingVsMovingCollisionClass,sub_54fd00,callgraph,medium,existing,all 1 callers in this class
+0x550ed0,UnitAIBehaviorClass,sub_550ed0,callgraph,medium,existing,all 1 callers in this class
+0x551b30,AmbientSFXBehaviorClass,sub_551b30,callgraph,medium,existing,all 1 callers in this class
+0x551c90,BombBehaviorClass,sub_551c90,callgraph,medium,existing,all 1 callers in this class
+0x551db0,CashPointBehaviorClass,sub_551db0,callgraph,medium,existing,all 1 callers in this class
+0x552650,DebrisBehaviorClass,sub_552650,callgraph,medium,existing,all 1 callers in this class
+0x552830,DemolitionBehaviorClass,sub_552830,callgraph,medium,existing,all 1 callers in this class
+0x5528b0,DemolitionBehaviorClass,sub_5528b0,callgraph,medium,existing,all 2 callers in this class
+0x5528e0,FleetBehaviorClass,sub_5528e0,callgraph,medium,existing,all 1 callers in this class
+0x553cc0,LocomotorCommonClass,sub_553cc0,callgraph,medium,existing,all 1 callers in this class
+0x559680,ProductionBehaviorClass,sub_559680,callgraph,medium,existing,all 1 callers in this class
+0x559950,ReduceProductionPriceAbilityClass,sub_559950,callgraph,medium,existing,all 1 callers in this class
+0x559a50,ReduceProductionTimeAbilityClass,sub_559a50,callgraph,medium,existing,all 1 callers in this class
+0x55b4d0,ProjectileBehaviorClass,sub_55b4d0,callgraph,medium,existing,all 1 callers in this class
+0x55be30,SelectBehaviorClass,sub_55be30,callgraph,medium,existing,all 1 callers in this class
+0x55c540,SpawnSquadronBehaviorClass,sub_55c540,callgraph,medium,existing,all 1 callers in this class
+0x55d290,SpecialAbilityDataPackClass,sub_55d290,callgraph,medium,existing,all 1 callers in this class
+0x55e100,SpecialAbilityClass,sub_55e100,callgraph,medium,existing,all 1 callers in this class
+0x55f120,SpecialAbilityClass,sub_55f120,callgraph,medium,existing,all 1 callers in this class
+0x560600,SpecialAbilityDataPackClass,sub_560600,callgraph,medium,existing,all 1 callers in this class
+0x5608c0,SquadLeaderBehaviorClass,sub_5608c0,callgraph,medium,existing,all 1 callers in this class
+0x561270,TacticalBuildObjectsBehaviorClass,sub_561270,callgraph,medium,existing,all 1 callers in this class
+0x561650,TacticalSellBehaviorClass,sub_561650,callgraph,medium,existing,all 1 callers in this class
+0x5617e0,TacticalUnderConstructionBehaviorClass,sub_5617e0,callgraph,medium,existing,all 1 callers in this class
+0x561a30,TelekinesisTargetBehaviorClass,sub_561a30,callgraph,medium,existing,all 1 callers in this class
+0x562010,VehicleThiefBehaviorClass,sub_562010,callgraph,medium,existing,all 1 callers in this class
+0x562270,TacticalSuperWeaponBehaviorClass,sub_562270,callgraph,medium,existing,all 1 callers in this class
+0x5628b0,MarkerBehaviorClass,sub_5628b0,callgraph,medium,existing,all 1 callers in this class
+0x562940,CapturePointBehaviorClass,sub_562940,callgraph,medium,existing,all 1 callers in this class
+0x562eb0,BarrageAreaBehaviorClass,sub_562eb0,callgraph,medium,existing,all 1 callers in this class
+0x563060,DeployTroopersBehaviorClass,sub_563060,callgraph,medium,existing,all 1 callers in this class
+0x563580,BaseShieldBehaviorClass,sub_563580,callgraph,medium,existing,all 1 callers in this class
+0x563740,EarthquakeTargetBehaviorClass,sub_563740,callgraph,medium,existing,all 1 callers in this class
+0x563ea0,InfectionBehaviorClass,sub_563ea0,callgraph,medium,existing,all 1 callers in this class
+0x5649f0,CorruptSystemsBehaviorClass,sub_5649f0,callgraph,medium,existing,all 1 callers in this class
+0x564c20,DynamicTransformBehaviorClass,sub_564c20,callgraph,medium,existing,all 1 callers in this class
+0x565c90,InvulnerableBehaviorClass,sub_565c90,callgraph,medium,existing,all 1 callers in this class
+0x5662b0,TargetingBehaviorClass,sub_5662b0,callgraph,medium,existing,all 1 callers in this class
+0x568340,TargetingBehaviorClass,sub_568340,locality,low,existing,between two methods of this class
+0x5683a0,TargetingBehaviorClass,sub_5683a0,locality,low,existing,between two methods of this class
+0x569d50,FleetLocomotorBehaviorClass,sub_569d50,callgraph,medium,existing,all 3 callers in this class
+0x569ee0,FleetLocomotorBehaviorClass,sub_569ee0,locality,low,existing,between two methods of this class
+0x56c540,HeroClashManagerClass,sub_56c540,callgraph,medium,existing,all 1 callers in this class
+0x56cfb0,GameObjectWrapper,sub_56cfb0,callgraph,medium,existing,all 2 callers in this class
+0x56d4c0,GameObjectWrapper,sub_56d4c0,callgraph,medium,existing,all 1 callers in this class
+0x5822e0,GameObjectWrapper,sub_5822e0,callgraph,medium,existing,all 1 callers in this class
+0x584870,AILearningSystemClass,sub_584870,callgraph,medium,existing,all 1 callers in this class
+0x585040,AILearningSystemClass,sub_585040,callgraph,medium,existing,all 1 callers in this class
+0x585970,AILearningSystemClass,sub_585970,callgraph,medium,existing,all 1 callers in this class
+0x585c70,AILearningSystemClass,sub_585c70,locality,low,existing,between two methods of this class
+0x588b60,AIPlanningSystemDiagnosticsNodeClass,sub_588b60,callgraph,medium,existing,all 1 callers in this class
+0x589ab0,AILearningSystemClass,sub_589ab0,callgraph,medium,existing,all 1 callers in this class
+0x589c80,AILearningSystemClass,sub_589c80,callgraph,medium,existing,all 1 callers in this class
+0x58a9a0,AILearningSystemClass,sub_58a9a0,locality,low,existing,between two methods of this class
+0x58b730,AILearningSystemClass,sub_58b730,callgraph,medium,existing,all 1 callers in this class
+0x58bfb0,DeathBehaviorClass,sub_58bfb0,callgraph,medium,existing,all 1 callers in this class
+0x58c460,LureBehaviorClass,sub_58c460,callgraph,medium,existing,all 1 callers in this class
+0x58f840,DeployTroopersBehaviorClass,sub_58f840,locality,low,existing,between two methods of this class
+0x58f870,DeployTroopersBehaviorClass,sub_58f870,locality,low,existing,between two methods of this class
+0x58fb80,DeployTroopersBehaviorClass,sub_58fb80,callgraph,medium,existing,all 2 callers in this class
+0x592490,LandObstacleBehaviorClass,sub_592490,callgraph,medium,existing,all 1 callers in this class
+0x593350,SpawnSquadronBehaviorClass,sub_593350,callgraph,medium,existing,all 2 callers in this class
+0x594b30,SpawnSquadronBehaviorClass,sub_594b30,callgraph,medium,existing,all 2 callers in this class
+0x594dc0,SpawnSquadronBehaviorClass,sub_594dc0,callgraph,medium,existing,all 1 callers in this class
+0x596ab0,SpacePathFinderClass,sub_596ab0,locality,low,existing,between two methods of this class
+0x596b20,SpacePathFinderClass,sub_596b20,locality,low,existing,between two methods of this class
+0x59efe0,BaseShieldBehaviorClass,sub_59efe0,callgraph,medium,existing,all 1 callers in this class
+0x59f330,BaseShieldBehaviorClass,sub_59f330,callgraph,medium,existing,all 1 callers in this class
+0x59f430,BaseShieldBehaviorClass,sub_59f430,callgraph,medium,existing,all 1 callers in this class
+0x59f4b0,LandModeClass,sub_59f4b0,callgraph,medium,existing,all 2 callers in this class
+0x5a17d0,LandModeClass,sub_5a17d0,callgraph,medium,existing,all 3 callers in this class
+0x5a6110,ZoneReachabilityClass,sub_5a6110,callgraph,medium,existing,all 1 callers in this class
+0x5a6700,LandMovementBlockStatus,sub_5a6700,callgraph,medium,existing,all 1 callers in this class
+0x5a6d00,LandMovementBlockStatus,sub_5a6d00,callgraph,medium,existing,all 1 callers in this class
+0x5a7880,ZoneReachabilityClass,sub_5a7880,callgraph,medium,existing,all 1 callers in this class
+0x5a8260,LandModeClass,sub_5a8260,callgraph,medium,existing,all 1 callers in this class
+0x5a8370,LandModeClass,sub_5a8370,callgraph,medium,existing,all 1 callers in this class
+0x5a8770,LandLocationPerceptualEvaluatorClass,sub_5a8770,callgraph,medium,existing,all 1 callers in this class
+0x5a89f0,LandModeClass,sub_5a89f0,callgraph,medium,existing,all 1 callers in this class
+0x5a8f50,LandModeClass,sub_5a8f50,locality,low,existing,between two methods of this class
+0x5a8fd0,LandModeClass,sub_5a8fd0,locality,low,existing,between two methods of this class
+0x5a94e0,LandModeClass,sub_5a94e0,callgraph,medium,existing,all 1 callers in this class
+0x5aaf70,LandTeamContainerLocomotorBehaviorClass,sub_5aaf70,callgraph,medium,existing,all 1 callers in this class
+0x5ac120,LandTeamContainerLocomotorBehaviorClass,sub_5ac120,callgraph,medium,existing,all 3 callers in this class
+0x5b21a0,GalacticSabotageAbilityClass,sub_5b21a0,locality,low,existing,between two methods of this class
+0x5b2430,GalacticSabotageAbilityClass,sub_5b2430,locality,low,existing,between two methods of this class
+0x5c1de0,TradeRouteLineListClass,sub_5c1de0,callgraph,medium,existing,all 1 callers in this class
+0x5c28e0,PlanetaryBehaviorClass,sub_5c28e0,callgraph,medium,existing,all 2 callers in this class
+0x5c30f0,PlanetaryBehaviorClass,sub_5c30f0,locality,low,existing,between two methods of this class
+0x5c32a0,PlanetaryBehaviorClass,sub_5c32a0,callgraph,medium,existing,all 1 callers in this class
+0x5c3360,PlanetaryBehaviorClass,sub_5c3360,locality,low,existing,between two methods of this class
+0x5c36f0,PlanetaryBehaviorClass,sub_5c36f0,locality,low,existing,between two methods of this class
+0x5c62a0,StoppedVsStoppedCollisionClass,sub_5c62a0,callgraph,medium,existing,all 1 callers in this class
+0x5ca390,FighterLocomotorBehaviorClass,sub_5ca390,locality,low,existing,between two methods of this class
+0x5ca430,FighterLocomotorBehaviorClass,sub_5ca430,locality,low,existing,between two methods of this class
+0x5ca4c0,FighterLocomotorBehaviorClass,sub_5ca4c0,locality,low,existing,between two methods of this class
+0x5caf40,FighterLocomotorBehaviorClass,sub_5caf40,locality,low,existing,between two methods of this class
+0x5cd680,FighterLocomotorBehaviorClass,sub_5cd680,locality,low,existing,between two methods of this class
+0x5ce010,FighterLocomotorBehaviorClass,sub_5ce010,callgraph,medium,existing,all 2 callers in this class
+0x5ce4f0,FighterLocomotorBehaviorClass,sub_5ce4f0,callgraph,medium,existing,all 1 callers in this class
+0x5cedf0,FighterLocomotorBehaviorClass,sub_5cedf0,callgraph,medium,existing,all 1 callers in this class
+0x5d4730,SpaceMovementCoordinatorClass,sub_5d4730,callgraph,medium,existing,all 2 callers in this class
+0x5d7500,TacticalBuildObjectsBehaviorClass,sub_5d7500,callgraph,medium,existing,all 1 callers in this class
+0x5d75e0,TacticalBuildObjectsBehaviorClass,sub_5d75e0,callgraph,medium,existing,all 1 callers in this class
+0x5d7970,GameModeClass,sub_5d7970,callgraph,medium,existing,all 1 callers in this class
+0x5d7f10,GameModeClass,sub_5d7f10,callgraph,medium,existing,all 1 callers in this class
+0x5d83e0,GameModeClass,sub_5d83e0,callgraph,medium,existing,all 1 callers in this class
+0x5e79d0,AIPerceptionSystemClass,sub_5e79d0,callgraph,medium,existing,all 1 callers in this class
+0x5e8160,AIPerceptionSystemClass,sub_5e8160,callgraph,medium,existing,all 1 callers in this class
+0x5e9300,ActionDrivenHeroClashClass,sub_5e9300,callgraph,medium,existing,all 1 callers in this class
+0x5ee0e0,SurfaceFXBehaviorClass,sub_5ee0e0,callgraph,medium,existing,all 1 callers in this class
+0x5ee570,SurfaceFXBehaviorClass,sub_5ee570,callgraph,medium,existing,all 1 callers in this class
+0x5ee820,SurfaceFXBehaviorClass,sub_5ee820,callgraph,medium,existing,all 1 callers in this class
+0x5ef6d0,SurfaceFXBehaviorClass,sub_5ef6d0,callgraph,medium,existing,all 1 callers in this class
+0x5efc90,SurfaceFXBehaviorClass,sub_5efc90,locality,low,existing,between two methods of this class
+0x5efff0,SurfaceFXBehaviorClass,sub_5efff0,callgraph,medium,existing,all 1 callers in this class
+0x5f1920,DynamicVectorClass<GameObjectClass*___ptr64>,sub_5f1920,callgraph,medium,existing,all 1 callers in this class
+0x5f2b50,AutoResolveClass,sub_5f2b50,callgraph,medium,existing,all 1 callers in this class
+0x5f6650,,Game_Boot_Init_Filesystem_helper_55_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_55
+0x5f67c0,AIDiagsNode,sub_5f67c0,callgraph,medium,existing,all 1 callers in this class
+0x5f7090,AIGoalSystemClass,sub_5f7090,callgraph,medium,existing,all 1 callers in this class
+0x5f7660,AIPlanningSystemClass,sub_5f7660,callgraph,medium,existing,all 1 callers in this class
+0x5f7f80,AIPlanningSystemClass,sub_5f7f80,callgraph,medium,existing,all 1 callers in this class
+0x5f8310,AIPlanningSystemClass,sub_5f8310,callgraph,medium,existing,all 1 callers in this class
+0x5f8370,AIGoalSystemClass,sub_5f8370,callgraph,medium,existing,all 1 callers in this class
+0x5f8460,AITaskForceDiagnosticsNodeClass,sub_5f8460,callgraph,medium,existing,all 1 callers in this class
+0x5f85d0,AITaskForceDiagnosticsNodeClass,sub_5f85d0,callgraph,medium,existing,all 1 callers in this class
+0x600d00,PlayerWrapper,sub_600d00,callgraph,medium,existing,all 1 callers in this class
+0x6049d0,,Game_Boot_Init_Filesystem_helper_57_helper_1,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_57
+0x604a10,GameObjectTypeWrapper,sub_604a10,callgraph,medium,existing,all 2 callers in this class
+0x606690,,Game_Boot_Init_Filesystem_helper_57_helper_2,callee_of,low,existing,only caller Global::Game_Boot_Init_Filesystem_helper_57
+0x607b70,AutoResolveClass,sub_607b70,callgraph,medium,existing,all 1 callers in this class
+0x607da0,AutoResolveClass,sub_607da0,callgraph,medium,existing,all 4 callers in this class
+0x60ad90,AutoResolveClass,sub_60ad90,callgraph,medium,existing,all 1 callers in this class
+0x60c200,AutoResolveClass,sub_60c200,callgraph,medium,existing,all 1 callers in this class
+0x60d140,AutoResolveClass,sub_60d140,callgraph,medium,existing,all 2 callers in this class
+0x60da50,AutoResolveClass,sub_60da50,callgraph,medium,existing,all 3 callers in this class
+0x6129c0,AIGoalSystemClass,sub_6129c0,callgraph,medium,existing,all 2 callers in this class
+0x612d60,BudgetWrapper,sub_612d60,callgraph,medium,existing,all 1 callers in this class
+0x612f90,AIInstantiatedGoalDiagnosticsNodeClass,sub_612f90,callgraph,medium,existing,all 2 callers in this class
+0x6136f0,AIInstantiatedGoalDiagnosticsNodeClass,sub_6136f0,callgraph,medium,existing,all 1 callers in this class
+0x6137b0,TacticalAIManagerClass,sub_6137b0,callgraph,medium,existing,all 1 callers in this class
+0x614880,AIGoalSystemClass,sub_614880,callgraph,medium,existing,all 2 callers in this class
+0x614d60,AIGoalSystemClass,sub_614d60,callgraph,medium,existing,all 1 callers in this class
+0x615210,AIGoalSystemClass,sub_615210,locality,low,existing,between two methods of this class
+0x615880,BudgetWrapper,sub_615880,callgraph,medium,existing,all 1 callers in this class
+0x615b40,AIPlayerDiagnosticsNodeClass,sub_615b40,callgraph,medium,existing,all 1 callers in this class
+0x618210,SlicerAbilityClass,sub_618210,callgraph,medium,existing,all 1 callers in this class
+0x619160,SlicerAbilityClass,sub_619160,locality,low,existing,between two methods of this class
+0x619ee0,SlicerAbilityClass,sub_619ee0,callgraph,medium,existing,all 1 callers in this class
+0x619fb0,BlackMarketAbilityClass,sub_619fb0,callgraph,medium,existing,all 1 callers in this class
+0x61b3b0,BlackMarketAbilityClass,sub_61b3b0,callgraph,medium,existing,all 1 callers in this class
+0x61d220,WalkLocomotorBehaviorClass,sub_61d220,callgraph,medium,existing,all 1 callers in this class
+0x61d520,WalkLocomotorBehaviorClass,sub_61d520,locality,low,existing,between two methods of this class
+0x61d570,WalkLocomotorBehaviorClass,sub_61d570,locality,low,existing,between two methods of this class
+0x6204f0,WalkLocomotorBehaviorClass,sub_6204f0,callgraph,medium,existing,all 1 callers in this class
+0x620820,WalkLocomotorBehaviorClass,sub_620820,callgraph,medium,existing,all 3 callers in this class
+0x623fe0,StarshipLocomotorBehaviorClass,sub_623fe0,callgraph,medium,existing,all 2 callers in this class
+0x62b6f0,LureBehaviorClass,sub_62b6f0,callgraph,medium,existing,all 2 callers in this class
+0x62d520,LandTeamInfantryLocomotorBehaviorClass,sub_62d520,callgraph,medium,existing,all 2 callers in this class
+0x633730,EarthquakeTargetBehaviorClass,sub_633730,callgraph,medium,existing,all 2 callers in this class
+0x638f40,BikeLocomotorBehaviorClass,sub_638f40,callgraph,medium,existing,all 1 callers in this class
+0x63b640,FlyingLocomotorBehaviorClass,sub_63b640,callgraph,medium,existing,all 1 callers in this class
+0x642c70,TransportLandingBehaviorClass,sub_642c70,callgraph,medium,existing,all 2 callers in this class
+0x646990,LandBomberLocomotorBehaviorClass,sub_646990,callgraph,medium,existing,all 2 callers in this class
+0x646c90,LandBomberLocomotorBehaviorClass,sub_646c90,callgraph,medium,existing,all 1 callers in this class
+0x647df0,AIExecutionSystemClass,sub_647df0,callgraph,medium,existing,all 1 callers in this class
+0x649070,AIExecutionSystemClass,sub_649070,callgraph,medium,existing,all 1 callers in this class
+0x6491f0,AIFreeStoreClass,sub_6491f0,callgraph,medium,existing,all 2 callers in this class
+0x6492f0,AIExecutionSystemClass,sub_6492f0,callgraph,medium,existing,all 1 callers in this class
+0x6498f0,AIBuildTaskClass,sub_6498f0,callgraph,medium,existing,all 2 callers in this class
+0x64a2a0,AIExecutionSystemClass,sub_64a2a0,callgraph,medium,existing,all 1 callers in this class
+0x64abf0,ProductionBehaviorClass,sub_64abf0,callgraph,medium,existing,all 1 callers in this class
+0x64adb0,ProductionBehaviorClass,sub_64adb0,callgraph,medium,existing,all 1 callers in this class
+0x64e620,VisibleEvaluatorDiagnosticsNodeClass<PerceptualEvaluatorClass>,sub_64e620,callgraph,medium,existing,all 1 callers in this class
+0x64ee60,PlanetPerceptualEvaluatorClass,sub_64ee60,callgraph,medium,existing,all 1 callers in this class
+0x650210,VisibleEvaluatorDiagnosticsNodeClass<GameObjectTypePerceptualEvaluatorClass>,sub_650210,callgraph,medium,existing,all 1 callers in this class
+0x6512c0,VisibleEvaluatorDiagnosticsNodeClass<PlanetTypePerceptualEvaluatorClass>,sub_6512c0,callgraph,medium,existing,all 1 callers in this class
+0x6537d0,TacticalPerceptionGridClass,sub_6537d0,locality,low,existing,between two methods of this class
+0x653a50,TacticalPerceptionGridClass,sub_653a50,locality,low,existing,between two methods of this class
+0x6545d0,TacticalLocationPerceptualEvaluatorClass,sub_6545d0,locality,low,existing,between two methods of this class
+0x654940,TacticalLocationPerceptualEvaluatorClass,sub_654940,locality,low,existing,between two methods of this class
+0x654d90,TacticalLocationPerceptualEvaluatorClass,sub_654d90,callgraph,medium,existing,all 2 callers in this class
+0x6558b0,ExploreAreaBlockStatus,sub_6558b0,callgraph,medium,existing,all 1 callers in this class
+0x655be0,ExploreAreaBlockStatus,sub_655be0,callgraph,medium,existing,all 1 callers in this class
+0x656400,TacticalLocationPerceptualEvaluatorClass,sub_656400,locality,low,existing,between two methods of this class
+0x656800,TacticalLocationPerceptualEvaluatorClass,sub_656800,callgraph,medium,existing,all 2 callers in this class
+0x656a10,UnitAIBehaviorClass,sub_656a10,callgraph,medium,existing,all 1 callers in this class
+0x6570e0,AIDataPackClass,sub_6570e0,callgraph,medium,existing,all 1 callers in this class
+0x658930,ObjectOwnerChangedDataClass,sub_658930,callgraph,medium,existing,all 1 callers in this class
+0x658f20,AIPerceptionSystemClass,sub_658f20,callgraph,medium,existing,all 1 callers in this class
+0x6598b0,TacticalPerceptionGridClass,sub_6598b0,callgraph,medium,existing,all 2 callers in this class
+0x6599b0,TacticalPerceptionGridClass,sub_6599b0,callgraph,medium,existing,all 2 callers in this class
+0x65a8b0,AIPerceptionSystemClass,sub_65a8b0,callgraph,medium,existing,all 1 callers in this class
+0x65a900,GalacticPerceptionSystemClass,sub_65a900,callgraph,medium,existing,all 1 callers in this class
+0x6611a0,VisibleEvaluatorDiagnosticsNodeClass<PlanetPerceptualEvaluatorClass>,sub_6611a0,callgraph,medium,existing,all 1 callers in this class
+0x662a60,GalacticPerceptionSystemClass,sub_662a60,callgraph,medium,existing,all 1 callers in this class
+0x66e530,VisibleEvaluatorDiagnosticsNodeClass<GalacticGamePerceptualEvaluatorClass>,sub_66e530,callgraph,medium,existing,all 1 callers in this class
+0x66fca0,GalacticTaskForceClass,sub_66fca0,callgraph,medium,existing,all 5 callers in this class
+0x66fcb0,GalacticTaskForceClass,sub_66fcb0,callgraph,medium,existing,all 3 callers in this class
+0x670e10,AITemplateSystemClass,sub_670e10,locality,low,existing,between two methods of this class
+0x670ed0,AITemplateSystemClass,sub_670ed0,locality,low,existing,between two methods of this class
+0x679fa0,DynamicLandPathFinderClass,sub_679fa0,callgraph,medium,existing,all 1 callers in this class
+0x67b4c0,MovingVsStoppedCollisionClass,sub_67b4c0,callgraph,medium,existing,all 1 callers in this class
+0x67b730,MovingVsStoppedCollisionClass,sub_67b730,callgraph,medium,existing,all 1 callers in this class
+0x67ea40,MovingVsMovingCollisionClass,sub_67ea40,callgraph,medium,existing,all 1 callers in this class
+0x67f080,MovingVsMovingCollisionClass,sub_67f080,callgraph,medium,existing,all 5 callers in this class
+0x67f130,MovingVsMovingCollisionClass,sub_67f130,locality,low,existing,between two methods of this class
+0x67f590,MovingVsMovingCollisionClass,sub_67f590,callgraph,medium,existing,all 2 callers in this class
+0x683260,MovingVsMovingCollisionClass,sub_683260,callgraph,medium,existing,all 1 callers in this class
+0x684100,MovingVsStoppedCollisionClass,sub_684100,callgraph,medium,existing,all 1 callers in this class
+0x685480,MovingVsStoppedCollisionClass,sub_685480,locality,low,existing,between two methods of this class
+0x687010,StoppedVsStoppedCollisionClass,sub_687010,callgraph,medium,existing,all 1 callers in this class
+0x68d400,WeightedTypeListClass,sub_68d400,callgraph,medium,existing,all 1 callers in this class
+0x68e6f0,WeightedTypeListClass,sub_68e6f0,locality,low,existing,between two methods of this class
+0x68e7d0,WeightedTypeListClass,sub_68e7d0,locality,low,existing,between two methods of this class
+0x68e8a0,WeightedTypeListClass,sub_68e8a0,callgraph,medium,existing,all 1 callers in this class
+0x68e900,WeightedTypeListClass,sub_68e900,locality,low,existing,between two methods of this class
+0x68e980,WeightedTypeListClass,sub_68e980,locality,low,existing,between two methods of this class
+0x691930,GalacticTaskForceClass,sub_691930,callgraph,medium,existing,all 3 callers in this class
+0x692d20,AIGoalSystemClass,sub_692d20,callgraph,medium,existing,all 2 callers in this class
+0x693200,AIGoalSystemClass,sub_693200,callgraph,medium,existing,all 1 callers in this class
+0x693720,AIGoalSystemClass,sub_693720,locality,low,existing,between two methods of this class
+0x693730,AIGoalSystemClass,sub_693730,locality,low,existing,between two methods of this class
+0x693750,AIGoalSystemClass,sub_693750,locality,low,existing,between two methods of this class
+0x694a30,IncomeStreamAbilityClass,sub_694a30,callgraph,medium,existing,all 1 callers in this class
+0x6951a0,IncomeStreamAbilityClass,sub_6951a0,locality,low,existing,between two methods of this class
+0x6955a0,ProductionBehaviorClass,sub_6955a0,callgraph,medium,existing,all 1 callers in this class
+0x6956f0,AIBuildTaskClass,sub_6956f0,callgraph,medium,existing,all 1 callers in this class
+0x695720,AIBuildTaskClass,sub_695720,callgraph,medium,existing,all 1 callers in this class
+0x695780,ProductionBehaviorClass,sub_695780,callgraph,medium,existing,all 1 callers in this class
+0x695a10,ProductionBehaviorClass,sub_695a10,callgraph,medium,existing,all 1 callers in this class
+0x695a40,AIExecutionSystemClass,sub_695a40,callgraph,medium,existing,all 1 callers in this class
+0x695c90,ProductionBehaviorClass,sub_695c90,callgraph,medium,existing,all 1 callers in this class
+0x69bdc0,FindDeadlyEnemyClass,sub_69bdc0,callgraph,medium,existing,all 2 callers in this class
+0x6a1120,LandTaskForceClass,sub_6a1120,callgraph,medium,existing,all 3 callers in this class
+0x6a34f0,LuaDiscreteDistributionClass,sub_6a34f0,callgraph,medium,existing,all 2 callers in this class
+0x6a4270,LuaDiscreteDistributionClass,sub_6a4270,locality,low,existing,between two methods of this class
+0x6a4330,LuaDiscreteDistributionClass,sub_6a4330,locality,low,existing,between two methods of this class
+0x6a8d80,FindBestLocalThreatCenterClass,sub_6a8d80,callgraph,medium,existing,all 1 callers in this class
+0x6abcd0,MeleeHeroClashClass,sub_6abcd0,callgraph,medium,existing,all 2 callers in this class
+0x6ac1b0,MeleeHeroClashClass,sub_6ac1b0,callgraph,medium,existing,all 1 callers in this class
+0x6ac660,MeleeHeroClashClass,sub_6ac660,callgraph,medium,existing,all 2 callers in this class
+0x6b6c90,SurfaceFXEventClass,sub_6b6c90,callgraph,medium,existing,all 2 callers in this class
+0x6bf790,AIBuildTaskClass,sub_6bf790,callgraph,medium,existing,all 1 callers in this class
+0x6bfb40,SpaceTaskForceClass,sub_6bfb40,callgraph,medium,existing,all 1 callers in this class
+0x6c0450,AIInstantiatedGoalDiagnosticsNodeClass,sub_6c0450,callgraph,medium,existing,all 1 callers in this class
+0x6c0d00,AIPlanningSystemDiagnosticsNodeClass,sub_6c0d00,callgraph,medium,existing,all 1 callers in this class
+0x6c1dc0,LandTaskForceClass,sub_6c1dc0,callgraph,medium,existing,all 1 callers in this class
+0x6c2d60,AIGoalSystemClass,sub_6c2d60,callgraph,medium,existing,all 2 callers in this class
+0x6c47c0,AIGoalSystemClass,sub_6c47c0,callgraph,medium,existing,all 2 callers in this class
+0x6c7190,AIGoalSystemClass,sub_6c7190,callgraph,medium,existing,all 1 callers in this class
+0x6cce20,GalacticTaskForceClass,sub_6cce20,callgraph,medium,existing,all 2 callers in this class
+0x6d05c0,GalacticTaskForceClass,sub_6d05c0,locality,low,existing,between two methods of this class
+0x6d2790,AIPerceptionSystemClass,sub_6d2790,callgraph,medium,existing,all 1 callers in this class
+0x6d27f0,SpacePerceptionSystemClass,sub_6d27f0,callgraph,medium,existing,all 2 callers in this class
+0x6d2b30,VisibleEvaluatorDiagnosticsNodeClass<SpaceShipPerceptualEvaluatorClass>,sub_6d2b30,callgraph,medium,existing,all 1 callers in this class
+0x6d4660,VisibleEvaluatorDiagnosticsNodeClass<LandPlayerPerceptualEvaluatorClass>,sub_6d4660,callgraph,medium,existing,all 1 callers in this class
+0x6d5e50,VisibleEvaluatorDiagnosticsNodeClass<LandLocationPerceptualEvaluatorClass>,sub_6d5e50,callgraph,medium,existing,all 1 callers in this class
+0x6d76d0,VisibleEvaluatorDiagnosticsNodeClass<LandUnitPerceptualEvaluatorClass>,sub_6d76d0,callgraph,medium,existing,all 1 callers in this class
+0x6dabc0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_6dabc0,locality,low,existing,between two methods of this class
+0x6dd5b0,VisibleEvaluatorDiagnosticsNodeClass<PlanetForcePerceptualEvaluatorClass>,sub_6dd5b0,callgraph,medium,existing,all 1 callers in this class
+0x6de370,VisiblePerceptualEvaluatorClass<LandLocationPerceptualEvaluatorClass>,sub_6de370,callgraph,medium,existing,all 1 callers in this class
+0x6e26b0,VisibleEvaluatorDiagnosticsNodeClass<GamePerceptualEvaluatorClass>,sub_6e26b0,callgraph,medium,existing,all 1 callers in this class
+0x6e8b80,LandTaskForceClass,sub_6e8b80,callgraph,medium,existing,all 2 callers in this class
+0x6f3b80,CableAttackAbilityClass,sub_6f3b80,callgraph,medium,existing,all 4 callers in this class
+0x6fed20,DynamicVectorClass<GameObjectClass*___ptr64>,sub_6fed20,locality,low,existing,between two methods of this class
+0x6fed30,DynamicVectorClass<GameObjectClass*___ptr64>,sub_6fed30,locality,low,existing,between two methods of this class
+0x7061b0,PersonalFlameThrowerAbilityClass,sub_7061b0,callgraph,medium,existing,all 2 callers in this class
+0x716850,LaserDefenseAbilityClass,sub_716850,callgraph,medium,existing,all 2 callers in this class
+0x720eb0,AIGoalSystemClass,sub_720eb0,callgraph,medium,existing,all 2 callers in this class
+0x721480,AIGoalSystemClass,sub_721480,locality,low,existing,between two methods of this class
+0x721820,AIGoalSystemClass,sub_721820,locality,low,existing,between two methods of this class
+0x721a50,AIGoalSystemClass,sub_721a50,locality,low,existing,between two methods of this class
+0x721d90,AIGoalSystemClass,sub_721d90,locality,low,existing,between two methods of this class
+0x721e90,AIGoalSystemClass,sub_721e90,locality,low,existing,between two methods of this class
+0x721f70,AIGoalSystemClass,sub_721f70,locality,low,existing,between two methods of this class
+0x7220c0,AIGoalSystemClass,sub_7220c0,locality,low,existing,between two methods of this class
+0x722130,AIGoalSystemClass,sub_722130,callgraph,medium,existing,all 1 callers in this class
+0x7225d0,AIGoalSystemClass,sub_7225d0,callgraph,medium,existing,all 4 callers in this class
+0x725910,AIGoalSystemClass,sub_725910,callgraph,medium,existing,all 1 callers in this class
+0x7293e0,PlanInstantiationMarshallerClass,sub_7293e0,callgraph,medium,existing,all 1 callers in this class
+0x7294d0,PlanInstantiationMarshallerClass,sub_7294d0,locality,low,existing,between two methods of this class
+0x72a880,PlanInstantiationMarshallerClass,sub_72a880,callgraph,medium,existing,all 1 callers in this class
+0x72a960,PlanInstantiationMarshallerClass,sub_72a960,callgraph,medium,existing,all 1 callers in this class
+0x731810,VisibleEvaluatorDiagnosticsNodeClass<TacticalObjectPerceptualEvaluatorClass>,sub_731810,callgraph,medium,existing,all 1 callers in this class
+0x734040,VisibleEvaluatorDiagnosticsNodeClass<TacticalUnitPerceptualEvaluatorClass>,sub_734040,callgraph,medium,existing,all 1 callers in this class
+0x737010,VisibleEvaluatorDiagnosticsNodeClass<TacticalPlayerPerceptualEvaluatorClass>,sub_737010,callgraph,medium,existing,all 1 callers in this class
+0x738180,VisibleEvaluatorDiagnosticsNodeClass<TacticalGamePerceptualEvaluatorClass>,sub_738180,callgraph,medium,existing,all 1 callers in this class
+0x73fe90,TacticalRegionAITargetLocationClass,sub_73fe90,callgraph,medium,existing,all 1 callers in this class
+0x7405e0,TacticalRegionAITargetLocationClass,sub_7405e0,callgraph,medium,existing,all 1 callers in this class
+0x743f28,"std::num_get<char,std::istreambuf_iterator<char,std::char_traits<char>_>_>",sub_743f28,callgraph,medium,existing,all 1 callers in this class
+0x7498cc,"std::num_get<unsigned_short,std::istreambuf_iterator<unsigned_short,std::char_traits<unsigned_short>_>_>",sub_7498cc,callgraph,medium,existing,all 1 callers in this class
+0x757b50,std::locale::_Locimp,sub_757b50,callgraph,medium,existing,all 1 callers in this class
+0x758838,std::locale::_Locimp,sub_758838,callgraph,medium,existing,all 1 callers in this class
+0x78d670,,__acrt_initialize_multibyte_helper_2_helper_1,callee_of,low,existing,only caller Global::__acrt_initialize_multibyte_helper_2
+0x78d9e4,__crt_seh_guarded_call<void>,sub_78d9e4,locality,low,existing,between two methods of this class
+0x78de64,__crt_seh_guarded_call<void>,sub_78de64,locality,low,existing,between two methods of this class
+0x78df70,__crt_seh_guarded_call<void>,sub_78df70,callgraph,medium,existing,all 1 callers in this class
+0x78e3ec,__crt_seh_guarded_call<void>,sub_78e3ec,callgraph,medium,existing,all 1 callers in this class
+0x7966fc,,tzset_nolock_helper_2_helper_1,callee_of,low,existing,only caller Global::tzset_nolock_helper_2
+0x7967ac,,tzset_nolock_helper_1_helper_1,callee_of,low,existing,only caller Global::tzset_nolock_helper_1
+0x796db4,,tzset_nolock_helper_2_helper_2,callee_of,low,existing,only caller Global::tzset_nolock_helper_2
+0x7977e0,,__acrt_initialize_multibyte_helper_2_helper_2,callee_of,low,existing,only caller Global::__acrt_initialize_multibyte_helper_2
+0x79da10,,_sopen_nolock_helper_1_helper_1,callee_of,low,existing,only caller Global::_sopen_nolock_helper_1
+0x79dca4,,_sopen_nolock_helper_1_helper_2,callee_of,low,existing,only caller Global::_sopen_nolock_helper_1
+0x7a16f0,,compress2_helper_1_helper_1,callee_of,low,existing,only caller Global::compress2_helper_1
+0x7a30f0,,deflateInit2__helper_1_helper_1,callee_of,low,existing,only caller Global::deflateInit2__helper_1
+0x7a3200,,compress2_helper_1_helper_2,callee_of,low,existing,only caller Global::compress2_helper_1
+0x7a33d0,,compress2_helper_1_helper_3,callee_of,low,existing,only caller Global::compress2_helper_1
+0x7a3980,,deflateInit2__helper_1_helper_2,callee_of,low,existing,only caller Global::deflateInit2__helper_1
+0x7a3a40,,compress2_helper_1_helper_4,callee_of,low,existing,only caller Global::compress2_helper_1
+0x7a3b90,,uncompress2_helper_1_helper_1,callee_of,low,existing,only caller Global::uncompress2_helper_1
+0x7a5530,,inflateInit__helper_1_helper_1,callee_of,low,existing,only caller Global::inflateInit__helper_1
+0x7a7a10,,inflateInit__helper_1_helper_2,callee_of,low,existing,only caller Global::inflateInit__helper_1
+0x7a7d00,,uncompress2_helper_1_helper_2,callee_of,low,existing,only caller Global::uncompress2_helper_1
+0x7a82b0,,uncompress2_helper_1_helper_3,callee_of,low,existing,only caller Global::uncompress2_helper_1
+0x7aa7d0,alLaserKiteFlushTask,sub_7aa7d0,locality,low,existing,between two methods of this class
+0x7aa8e0,alLaserKiteFlushTask,sub_7aa8e0,locality,low,existing,between two methods of this class
+0x7abdd0,alLensFlareTask,sub_7abdd0,callgraph,medium,existing,all 2 callers in this class
+0x7b0450,CableAttackAbilityClass,sub_7b0450,callgraph,medium,existing,all 5 callers in this class
+0x7b04c0,CableAttackAbilityClass,sub_7b04c0,callgraph,medium,existing,all 2 callers in this class
+0x7b0540,CableAttackAbilityClass,sub_7b0540,callgraph,medium,existing,all 1 callers in this class
+0x7b14c0,CableAttackAbilityClass,sub_7b14c0,callgraph,medium,existing,all 2 callers in this class
+0x7b15b0,CableAttackAbilityClass,sub_7b15b0,callgraph,medium,existing,all 2 callers in this class
+0x7b2180,al3DCable,sub_7b2180,locality,low,existing,between two methods of this class
+0x7b35c0,alLightningBolt,sub_7b35c0,callgraph,medium,existing,all 1 callers in this class
+0x7b8a20,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7b8a20,locality,low,existing,between two methods of this class
+0x7b8af0,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7b8af0,locality,low,existing,between two methods of this class
+0x7b8b50,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7b8b50,locality,low,existing,between two methods of this class
+0x7ce7a0,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7ce7a0,callgraph,medium,existing,all 4 callers in this class
+0x7d0950,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7d0950,locality,low,existing,between two methods of this class
+0x7d0a30,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7d0a30,locality,low,existing,between two methods of this class
+0x7d0b20,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7d0b20,locality,low,existing,between two methods of this class
+0x7d0c50,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7d0c50,locality,low,existing,between two methods of this class
+0x7d0ce0,"LuaValue<std::basic_string<char,std::char_traits<char>,std::allocator<char>_>,6>",sub_7d0ce0,locality,low,existing,between two methods of this class
+0x7da9e0,GameModeClass,sub_7da9e0,locality,low,existing,between two methods of this class
+0x7dab30,GameModeClass,sub_7dab30,locality,low,existing,between two methods of this class
+0x7dab80,GameModeClass,sub_7dab80,callgraph,medium,existing,all 1 callers in this class
+0x7dac70,GameModeClass,sub_7dac70,locality,low,existing,between two methods of this class
+0x7dac80,GameModeClass,sub_7dac80,callgraph,medium,existing,all 1 callers in this class
+0x7daea0,GameModeClass,sub_7daea0,callgraph,medium,existing,all 1 callers in this class
+0x7db010,GameModeClass,sub_7db010,callgraph,medium,existing,all 1 callers in this class
+0x7db030,GameModeClass,sub_7db030,callgraph,medium,existing,all 1 callers in this class
+0x7db050,GameModeClass,sub_7db050,callgraph,medium,existing,all 1 callers in this class
+0x7dd5d0,LightningEffectClass,sub_7dd5d0,locality,low,existing,between two methods of this class
+0x7dd5f0,LightningEffectClass,sub_7dd5f0,locality,low,existing,between two methods of this class
+0x7dd600,LightningEffectClass,sub_7dd600,locality,low,existing,between two methods of this class
+0x7de700,GameModeClass,sub_7de700,callgraph,medium,existing,all 2 callers in this class
+0x7dffe0,alRenderablePlane,sub_7dffe0,callgraph,medium,existing,all 1 callers in this class
+0x7e0f80,LightningEffectClass,sub_7e0f80,callgraph,medium,existing,all 1 callers in this class
+0x7e12f0,alLightningBolt,sub_7e12f0,callgraph,medium,existing,all 1 callers in this class
+0x7f3720,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f3720,locality,low,existing,between two methods of this class
+0x7f3eb0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f3eb0,locality,low,existing,between two methods of this class
+0x7f5590,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5590,locality,low,existing,between two methods of this class
+0x7f55d0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f55d0,locality,low,existing,between two methods of this class
+0x7f5660,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5660,locality,low,existing,between two methods of this class
+0x7f56d0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f56d0,locality,low,existing,between two methods of this class
+0x7f5790,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5790,locality,low,existing,between two methods of this class
+0x7f5800,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5800,locality,low,existing,between two methods of this class
+0x7f5890,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5890,locality,low,existing,between two methods of this class
+0x7f5900,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5900,locality,low,existing,between two methods of this class
+0x7f5970,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5970,locality,low,existing,between two methods of this class
+0x7f5a00,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5a00,locality,low,existing,between two methods of this class
+0x7f5a70,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5a70,locality,low,existing,between two methods of this class
+0x7f5d10,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5d10,locality,low,existing,between two methods of this class
+0x7f5d80,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5d80,locality,low,existing,between two methods of this class
+0x7f5df0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5df0,locality,low,existing,between two methods of this class
+0x7f5e30,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5e30,locality,low,existing,between two methods of this class
+0x7f5ea0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5ea0,locality,low,existing,between two methods of this class
+0x7f5f10,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5f10,locality,low,existing,between two methods of this class
+0x7f5f80,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5f80,locality,low,existing,between two methods of this class
+0x7f5fc0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f5fc0,locality,low,existing,between two methods of this class
+0x7f6000,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f6000,locality,low,existing,between two methods of this class
+0x7f6080,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f6080,locality,low,existing,between two methods of this class
+0x7f60c0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f60c0,locality,low,existing,between two methods of this class
+0x7f6100,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f6100,locality,low,existing,between two methods of this class
+0x7f6170,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f6170,locality,low,existing,between two methods of this class
+0x7f61e0,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f61e0,locality,low,existing,between two methods of this class
+0x7f6250,DynamicVectorClass<GameObjectClass*___ptr64>,sub_7f6250,locality,low,existing,between two methods of this class

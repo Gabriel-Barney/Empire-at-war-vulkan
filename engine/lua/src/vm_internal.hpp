@@ -1,0 +1,273 @@
+// Internals shared by the VM, the dispatcher and the binding implementations.
+//
+// Error discipline: Lua 5.0 raises errors with longjmp, which skips C++ destructors. So no Lua error
+// is ever raised while a C++ object with a destructor is alive in a binding:
+//   * binding implementations (ImplFn) never call lua_error / luaL_check*; they write the message
+//     into Call::err (Call::fail) and return -1, or throw a C++ exception (caught by the dispatcher);
+//   * the dispatcher's outermost frame (no C++ locals) raises the Lua error after the
+//     implementation has returned and destroyed everything.
+// Only allocation failures inside lua_push* can still longjmp out of an implementation.
+#pragma once
+#include <cstdint>
+#include <deque>
+#include <map>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+// The vendored VM is compiled as C++ (engine/lua/CMakeLists.txt), so its headers are included with
+// C++ linkage - no extern "C".
+#include <lauxlib.h>
+#include <lua.h>
+
+#include "alamo/core/bytes.hpp"
+#include "alamo/lua/bindings.hpp"
+#include "alamo/lua/lua_vm.hpp"
+
+namespace alamo::lua {
+
+namespace detail {
+
+inline constexpr uint32_t kNoBinding = 0xFFFFFFFFu;
+inline constexpr uint32_t kNoClass = 0xFFFFFFFFu;
+
+// Every engine userdata (globals, game objects, types, players, the Script object).
+struct Ud {
+    uint32_t cls = kNoClass;      // class id (class_names())
+    uint32_t binding = kNoBinding;  // global row for callable globals
+    uint64_t value = 0;           // ObjectHandle value / TypeIndex
+    int32_t id = 0;               // object id / player id
+    int32_t reserved = 0;
+};
+
+struct Call;
+using ImplFn = int (*)(Call&);
+
+struct ImplEntry {
+    BindingKind kind;
+    const char* cls;  // Method owner; "" for globals
+    const char* name;
+    ImplFn fn;
+};
+std::span<const ImplEntry> implementations();  // bind_registry.cpp: all families below, concatenated in this order
+// One table per binding family, each in its own file so families can be worked on in parallel.
+std::span<const ImplEntry> impl_core();          // bind_engine.cpp: threads, random, debug, basic object/type/player
+std::span<const ImplEntry> impl_objects();       // bind_objects.cpp: finding, spawning and commanding game objects
+std::span<const ImplEntry> impl_players();       // bind_players.cpp: players, factions, credits, AI, perception
+std::span<const ImplEntry> impl_story();         // bind_story.cpp: story events/flags, objectives, radar blips, timers
+std::span<const ImplEntry> impl_presentation();  // bind_presentation.cpp: camera, cinematics, fades, fog, audio, UI
+std::span<const ImplEntry> impl_ai();            // bind_ai.cpp: task forces, AI targets, plan budget, free store (A2)
+std::span<const ImplEntry> impl_ai_tactical();   // bind_ai_tactical.cpp: land/space task-force orders, tactical queries (A1)
+std::span<const ImplEntry> impl_script_gaps();   // bind_script_gaps.cpp: special weapons, TSW, cinematics, markup, parent mode (L1/S4 wave 2b)
+std::span<const ImplEntry> impl_fog();           // bind_fog.cpp: FogOfWar.* and LuaFOWCellsClass.Undo_Reveal (fog follow-up)
+std::span<const ImplEntry> impl_script_remaining();  // bind_script_remaining.cpp: the last unbound globals / methods (L1 final)
+
+// L1/S4 wave 2b (SCRIPT_GAPS.md §1.4 / §1.5): Land/SpaceTaskForceClass.Fire_Special_Weapon(type_name, target) on the
+// task force's units (unit-list order). For the tactical AI family's binding (bind_ai_tactical.cpp): pass the task
+// force's units (AiScriptHost::tf_units) and its player (§1.5 upgrade gate; -1 = the first unit's owner). Pushes the
+// result (the firing unit, or false / nothing on a script error) and returns the value count, like an ImplFn.
+int task_force_fire_special_weapon(Call& c, bool space, const std::vector<objects::ObjectHandle>& units, int32_t player);
+// bind_script_remaining.cpp: calls GameObjectWrapper.<name> of `unit` with `nargs` arguments at stack index `first` (the
+// task-force variants delegate to the object bindings). The results are dropped; returns the first result's truth (false
+// on an error, whose message is discarded [port: the original logs per unit]).
+bool call_object_method(Call& c, objects::ObjectHandle unit, const char* name, int first, int nargs);
+// bind_objects.cpp: TaskForceClass.Set_Targeting_Priorities(set [, type or category filter]) applied to `units` through
+// the object binding (script argument 1 = set name, 2 = optional filter).
+void task_force_set_targeting_priorities(Call& c, const std::vector<objects::ObjectHandle>& units);
+
+// OI lua (A1 ask 2). bind_ai.cpp: script argument i as an AI wrapper - an AITargetLocationWrapper -> its game object,
+// a task force -> its first live unit. Returns 0 when the argument is not an AI wrapper, 1 when it is (out = null
+// when it resolves to no live object, or no AI host is attached). The objects family's position arguments use it.
+int ai_wrapper_object(Call& c, int i, objects::ObjectHandle& out);
+// An AITargetLocationWrapper with no live object (a region / marker target): its host position [port]. False otherwise.
+bool ai_target_position(Call& c, int i, Vec3& out);
+// bind_ai_tactical.cpp: EvaluatePerception(name, player [, target at target_index; 0 = none]) through the attached
+// tactical AI host (AI targets and task forces accepted). Pushes the result and returns 1; -2 = no tactical host.
+int tactical_evaluate_perception(Call& c, std::string_view name, int32_t player, int target_index);
+
+// Class registry (sorted names; ids are indices). Built once from the binding table.
+const std::vector<std::string>& class_names();
+uint32_t class_id(std::string_view cls);
+uint32_t parent_class(uint32_t cls);  // kNoClass at the root (LuaUserVar)
+
+struct MethodSlot {
+    uint32_t row = kNoBinding;  // binding row, kNoBinding for extra (implemented-only) methods
+    uint32_t cls = kNoClass;    // owner
+    ImplFn fn = nullptr;        // nullptr = unbound stub
+    std::string label;          // "GameObjectWrapper.Get_Position"
+};
+const std::vector<MethodSlot>& method_slots();
+// Walks cls, its parents, then LuaUserVar. Returns an index into method_slots() or kNoBinding.
+uint32_t find_method(uint32_t cls, std::string_view name);
+ImplFn global_impl(uint32_t row);
+// Row of a global by name (kNoBinding if not in the table).
+uint32_t global_row(std::string_view name);
+// Number of rows + extra methods (size of the unbound counter array).
+size_t counter_slots();
+uint32_t extra_counter_slot(uint32_t method_slot);
+
+}  // namespace detail
+
+struct ThreadRec {
+    lua_State* co = nullptr;
+    int ref = LUA_NOREF;  // keeps the coroutine alive (registry)
+    std::string function;
+    int nargs = 0;
+    bool started = false;
+    bool killed = false;
+};
+
+struct LuaVm::Impl {
+    LuaVm* owner = nullptr;
+    lua_State* L = nullptr;
+    LuaHost host;
+    LuaVmOptions options;
+    double time = 0.0;
+    uint32_t frame = 0;
+    std::vector<std::string> messages, errors;
+    std::vector<uint32_t> unbound;  // per binding row (then extra slots)
+    uint64_t unbound_total = 0;
+    std::map<int32_t, ThreadRec> threads;  // id order = service order
+    int32_t next_thread = 0;
+    int32_t current_thread = -1;
+    bool exit_requested = false;
+    bool mp_free_random_warned = false;
+    // L1/S4 wave 2b (Get_Parent_Mode_Object): which store host.store is while a binding runs - 0 the VM's own, 1 the
+    // parent mode's (ObjectBridge::parent_store, swapped in by the dispatcher for a method of a parent-mode wrapper).
+    // GameObjectWrapper Ud::reserved holds the store tag of its object.
+    int32_t store_tag = 0;
+    std::string save_error;  // N1: why the last LuaVm::write could not save ("" = it saved)
+
+    void message(std::string line);
+    void kill_thread(int32_t id);  // marks; removal happens in reap()
+    void reap();
+    // Starts a thread running the function at absolute stack index fn_index of `from` with `nargs`
+    // arguments copied from args_first... Returns the id, or -1 if fn_index is not a function.
+    int32_t start_thread(lua_State* from, int fn_index, int args_first, int nargs, std::string name);
+};
+
+namespace detail {
+
+// One binding invocation. Script argument i (1-based) is at stack index first + i - 1.
+struct Call {
+    lua_State* L;
+    LuaVm::Impl* vm;
+    const Ud* self;  // the receiver (methods) or the global userdata (calls)
+    int first;
+    int nargs;
+    char* err;
+    size_t err_cap;
+
+    int idx(int i) const { return first + i - 1; }
+    bool has(int i) const { return i >= 1 && i <= nargs; }
+    bool is_number(int i) const { return has(i) && lua_type(L, idx(i)) == LUA_TNUMBER; }
+    bool is_string(int i) const { return has(i) && lua_type(L, idx(i)) == LUA_TSTRING; }
+    double number(int i) const { return lua_tonumber(L, idx(i)); }
+    std::string_view string(int i) const {
+        const char* s = lua_tostring(L, idx(i));
+        return s ? std::string_view(s, lua_strlen(L, idx(i))) : std::string_view();
+    }
+    const Ud* userdata(int i, uint32_t cls) const;  // nullptr unless an engine userdata of `cls`
+    int fail(const char* fmt, ...);                 // writes err, returns -1
+};
+
+// Pushers. Wrappers are cached per VM: the same engine entity gives the SAME userdata every time, so
+// scripts can key tables by wrappers (Lua 5.0 table lookup is raw identity; __eq is not consulted).
+//   objects: cache keyed by object id (ids are never reused); dead entries dropped by
+//            LuaVm::sweep_dead_wrappers(); a stale entry (same id, other handle) is replaced;
+//   types:   keyed by type index, kept for the VM's lifetime;
+//   players and the other entity wrappers (story plots/events, ...): push_cached_userdata, keyed by
+//            (class, key), kept for the VM's lifetime (their entities live as long as the session).
+// Value wrappers (PositionWrapper, BlockingStatus, created instances) are new userdata per call.
+void push_object(lua_State* L, LuaVm::Impl& vm, objects::ObjectHandle h);
+// L1/S4 wave 2b: the wrapper of object `h` of the parent mode's store (ObjectBridge::parent_store; nil without
+// one). Its methods run on that store (the dispatcher swaps LuaVm::Impl::host.store, kParentStoreTag).
+void push_parent_object(lua_State* L, LuaVm::Impl& vm, objects::ObjectHandle h);
+objects::ObjectStore* parent_store(LuaVm::Impl& vm);  // nullptr without a bridge / parent store
+// Pushes the cached wrapper of class ud.cls under `key` (exact integer in a double), creating it from
+// `ud` when absent or when the cached payload differs.
+void push_cached_userdata(lua_State* L, const Ud& ud, lua_Number key);
+void push_type(lua_State* L, LuaVm::Impl& vm, uint32_t type_index);
+void push_player(lua_State* L, LuaVm::Impl& vm, int32_t player_id);
+bool object_alive(const LuaVm::Impl& vm, const Ud& ud);
+objects::ObjectHandle object_handle(const Ud& ud);
+// Saturating double -> int32 (truncation toward zero; NaN -> 0).
+int32_t to_int(double d);
+
+// GetEvent queue (one per VM, FIFO, kept in the Lua registry): appends the value at `fn_index` (a
+// function, or a global function NAME resolved when GetEvent pops it) with the table at
+// `params_index` as its GetEvent.Params() (0 = no parameters). bind_engine.cpp.
+void queue_event(lua_State* L, int fn_index, int params_index);
+
+// BlockingStatus kinds (Ud::reserved of a BlockingStatus userdata; BlockOnCommand polls IsFinished):
+// 0 order / 1 reinforcement / 2 forever are answered by bind_objects.cpp; the galactic waits by the
+// players family (bind_players.cpp, galactic_block_finished; always finished in builds without it).
+inline constexpr int32_t kBlockOrder = 0, kBlockReinforcement = 1, kBlockForever = 2;
+inline constexpr int32_t kBlockStarbaseLevel = 3;    // WaitForStarbase(planet, level): id = planet object id, value = level
+inline constexpr int32_t kBlockGroundbaseLevel = 4;  // WaitForGroundbase(planet, level)
+bool galactic_block_finished(Call& c);  // c.self = the BlockingStatus
+
+// --- P4 lua: FoC galactic special systems (bind_players.cpp; stubs without the players family) ---------------------
+// GameObjectWrapper.Activate_Ability in a galactic script (Activate_Ability_Galactic 0x570670, P4_SIM_SYSTEMS 6.1): true
+// when the VM's store is the galactic sim's (the trigger path ran; the caller returns a finished BlockingStatus), false
+// otherwise (the caller continues with its tactical paths).
+bool galactic_activate_ability(Call& c);
+// GalacticSim::ground_activated_trigger(unit, planet row) for each pair still alive, in order (galactic scripts only).
+// The task-force orders (Land_Units, GalacticTaskForce Activate_Ability) fire it in the AI host (engine/ai).
+void galactic_trigger(Call& c, const std::vector<std::pair<objects::ObjectHandle, uint32_t>>& units);
+// The campaign Must_Be_Bought_On_Black_Market gate of a unit ability (ABILITIES_HARDPOINTS 2.4, 0x39bbd0 =
+// GalacticSim::bm_allows_unit_ability with special_name_crc(ability_name)); true without a galactic sim.
+bool black_market_allows(Call& c, int32_t player, std::string_view ability_name, bool must_be_bought);
+// --- end P4 lua ---
+
+// Store tag of a GameObjectWrapper's object (Ud::reserved, LuaVm::Impl::store_tag): 0 the VM's store, 1 the parent
+// mode's store (L1/S4 wave 2b, Get_Parent_Mode_Object).
+inline constexpr int32_t kParentStoreTag = 1;
+
+void install_metatable(lua_State* L, LuaVm::Impl& vm);  // also sets global LuaWrapperMetaTable
+void push_engine_userdata(lua_State* L, const Ud& ud);   // new userdata with the shared metatable
+void install_globals(lua_State* L, LuaVm::Impl& vm);
+void install_math_library(lua_State* L, LuaVm::Impl& vm);  // math_lib.cpp
+
+// ---- N1 save / load (vm_persist.cpp) ----
+// C functions pushed at run time (not reachable from a fresh VM's globals / registry), by a stable name: a saved
+// closure of one of them is restored by that name. Every family that pushes such a closure lists it here.
+struct NamedCFunction {
+    const char* name;
+    lua_CFunction fn;
+};
+std::span<const NamedCFunction> runtime_cfunctions_bindings();      // bindings.cpp: bound method closures
+std::span<const NamedCFunction> runtime_cfunctions_presentation();  // bind_presentation.cpp: block status tables
+
+// The whole Lua heap of L (layout: vm_persist.cpp). vm_self = the light userdata the engine's closures carry (the
+// VM's Impl). thread_index[i] = object index of threads[i] (coroutine states the engine holds). False + err when
+// the state cannot be saved (w then holds nothing usable).
+bool write_heap(lua_State* L, const void* vm_self, const std::vector<lua_State*>& threads,
+                std::vector<uint32_t>& thread_index, ByteWriter& w, std::string& err);
+// Parses and validates a heap written by write_heap (the rest of r: requires r.done()), then builds it as a NEW state
+// (`out`); L_old is only read (registry attachments are taken from it). thread_states[i] = the state of object
+// thread_index[i]. False + err on bad data; nothing is then allocated and L_old is untouched.
+bool read_heap(ByteReader& r, lua_State* L_old, void* vm_self, lua_CFunction panic,
+               const std::vector<uint32_t>& thread_index, std::vector<lua_State*>& thread_states, lua_State*& out,
+               std::string& err);
+struct HeapStats {
+    uint32_t serial = 0;
+    uint64_t bytes = 0, threshold = 0;
+    uint32_t strings = 0;
+};
+HeapStats heap_stats(lua_State* L);
+// The persistence name table's aliases ("name=saved name": names of a C function that is saved under another name,
+// e.g. the shared dispatchers, or functions the linker folded together). Diagnostics / tests.
+std::vector<std::string> cfunction_aliases();
+
+// Fixed class ids used by the implementations.
+uint32_t cls_game_object();
+uint32_t cls_type();
+uint32_t cls_player();
+uint32_t cls_script();
+uint32_t cls_user_var();
+
+}  // namespace detail
+}  // namespace alamo::lua

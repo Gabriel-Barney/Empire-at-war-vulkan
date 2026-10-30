@@ -1,0 +1,2180 @@
+// S8 combat tests: hand-computed reference formulas (docs/re/TACTICAL_COMBAT.md 2-4, incl. the four
+// disassembly-verified rules), modifier stacking, priority sets, damage pipeline, a scripted
+// 2-sided space engagement whose per-tick CRC log must be identical for 1/4/N threads and match the
+// golden file on every compiler, a per-tick allocation count and a modifier-aggregation benchmark.
+//   alamo_tactical_combat_tests [--golden <file>] [--write-golden <file>] [--no-bench]
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <new>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "alamo/core/bytes.hpp"
+#include "alamo/core/dmath.hpp"
+#include "alamo/core/file_provider.hpp"
+#include "alamo/core/hash.hpp"
+#include "alamo/core/sim_crc.hpp"
+#include "alamo/data/game_database.hpp"
+#include "alamo/data/xml.hpp"
+#include "alamo/objects/enums.hpp"
+#include "alamo/tactical/combat/combat_system.hpp"
+#include "alamo/tactical/combat/weather.hpp"
+#include "thread_parallel_for.hpp"
+#ifdef ALAMO_COMBAT_TESTS_HAVE_VFS
+#include "alamo/vfs/vfs.hpp"
+#endif
+
+// ---- allocation counter (counts only while enabled) -------------------------------------------
+namespace {
+std::atomic<uint64_t> g_allocs{0};
+std::atomic<bool> g_count{false};
+}  // namespace
+// GCC flags free() inside a replaced operator delete (-Wmismatched-new-delete) although the replaced
+// operator new allocates with malloc(); the pairing is correct by construction (as in test_render).
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
+void* operator new(std::size_t n) {
+    if (g_count.load(std::memory_order_relaxed)) g_allocs.fetch_add(1, std::memory_order_relaxed);
+    void* p = std::malloc(n ? n : 1);
+    if (!p) throw std::bad_alloc();
+    return p;
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+
+using namespace alamo;
+using namespace alamo::tactical;
+using namespace alamo::tactical::combat;
+
+namespace {
+
+using alamo::tactical::Vec3;  // hides alamo::Vec3 (galaxy.hpp) inside this namespace
+
+int g_fail = 0;
+#define CHECK(c)                                                         \
+    do {                                                                 \
+        if (!(c)) {                                                      \
+            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
+            ++g_fail;                                                    \
+        }                                                                \
+    } while (0)
+#define CHECK_F(a, b)                                                                                     \
+    do {                                                                                                  \
+        const float va_ = (a), vb_ = (b);                                                                 \
+        if (!(va_ == vb_)) {                                                                              \
+            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", __FILE__, __LINE__, #a, #b, static_cast<double>(va_), \
+                        static_cast<double>(vb_));                                                        \
+            ++g_fail;                                                                                     \
+        }                                                                                                 \
+    } while (0)
+#define CHECK_NEAR(a, b, eps)                                                                             \
+    do {                                                                                                  \
+        const double va_ = (a), vb_ = (b);                                                                \
+        if (!(std::fabs(va_ - vb_) <= (eps))) {                                                           \
+            std::printf("FAIL %s:%d: %s ~ %s (%.9g vs %.9g)\n", __FILE__, __LINE__, #a, #b, va_, vb_);  \
+            ++g_fail;                                                                                     \
+        }                                                                                                 \
+    } while (0)
+
+Aabb box_of(Vec3 p, float r) { return {{p.x - r, p.y - r, p.z - r}, {p.x + r, p.y + r, p.z + r}}; }
+
+Vec3 norm(Vec3 v) {  // same arithmetic as the system's normalize
+    const float l2 = dot(v, v);
+    const float inv = 1.0f / dmath::sqrt(l2);
+    return v * inv;
+}
+
+bool same(Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+
+// A battle-free sandbox: data, system, trees and the synced RNG.
+struct World {
+    CombatData data;
+    std::unique_ptr<CombatSystem> sys;
+    TreeSet trees;
+    SimRng rng{12345u};
+    uint32_t frame = 1;
+
+    explicit World(uint32_t players = 2) : trees(players) {}
+    void make(CombatConfig cfg = {}, std::vector<PlayerInfo> players = {PlayerInfo{}, PlayerInfo{}}) {
+        // The S8 tests and golden pin the S8 behaviour: opportunity fire (added in S9, default on)
+        // stays off here; the S9 tests (engine/tactical/abilities) cover it.
+        cfg.opportunity_fire = false;
+        sys = std::make_unique<CombatSystem>(data, std::move(cfg), std::move(players));
+    }
+    void add(ObjectId id, uint32_t desc, int32_t owner, Vec3 pos, Vec3 facing = {1.0f, 0.0f, 0.0f}, float health = 1.0f) {
+        UnitSpawn s;
+        s.id = id;
+        s.desc = desc;
+        s.owner = owner;
+        s.position = pos;
+        s.facing = facing;
+        s.health_fraction = health;
+        CHECK(sys->add_unit(s, frame, rng));
+        TreeMembership m;
+        m.owner = owner;
+        CHECK(trees.add(static_cast<EntityHandle>(id), box_of(pos, data.units[desc].radius), 1u, m));
+    }
+    void tick(const ParallelFor& pf = serial_for) {
+        sys->tick(frame, trees, rng, pf);
+        for (const DeathEvent& d : sys->deaths()) trees.remove(static_cast<EntityHandle>(d.id));
+        ++frame;
+    }
+};
+
+uint32_t push_unit(CombatData& d, const UnitDesc& u) {
+    d.units.push_back(u);
+    return static_cast<uint32_t>(d.units.size() - 1);
+}
+
+// ================================================================================================
+// formulas
+// ================================================================================================
+
+void test_scan_cadence() {
+    SimRng r(777u), c(777u);
+    const uint32_t n = next_scan_frame(100, 30, r);
+    CHECK(n == 130u + static_cast<uint32_t>(c.range_int(0, 15)));
+    CHECK(r.draws() == 1);
+    for (int i = 0; i < 200; ++i) {
+        const uint32_t f = next_scan_frame(1000, 30, r);
+        CHECK(f >= 1030 && f <= 1045);
+    }
+}
+
+void test_recharge() {
+    // Pulse branch: int(30 x 0.2f) = 6; W unconditional: int(6 x 0.75 + 0.5) = 5; int(5 / 1.25 + 0.5) = 4.
+    Recharge p = hp_pulse_recharge(0.2f, 3, 0.75f, 1.25f, 30);
+    CHECK(p.frames == 4 && p.pulses == 3);
+    p = hp_pulse_recharge(0.2f, 3, 2.0f, 1.0f, 30);  // W >= 1 still applied on this branch: int(12.5) = 12
+    CHECK(p.frames == 12 && p.pulses == 3);
+    p = hp_pulse_recharge(0.2f, 3, 1.0f, 0.0f, 30);  // F <= 0: frames and pulses 0
+    CHECK(p.frames == 0 && p.pulses == 0);
+
+    // Full recharge: Get_Int(300, 400) x 30 / 100, unsigned divide; W >= 1 NOT applied; F = 1 not applied.
+    SimRng r(99u), c(99u);
+    Recharge f = hp_full_recharge(3.0f, 4.0f, 7, 1.5f, 1.0f, 30, r);
+    const int32_t v = c.range_int(300, 400);
+    CHECK(f.frames == v * 30 / 100);
+    CHECK(f.pulses == 7);
+    // Truncated bounds: 0.337 x 100 = 33.7 -> 33 (rounding would give 34); 0.339 -> 33: lo == hi, no draw.
+    const uint64_t d0 = r.draws();
+    f = hp_full_recharge(0.337f, 0.339f, 7, 1.0f, 1.0f, 30, r);
+    CHECK(r.draws() == d0);
+    CHECK(f.frames == 9);  // 33 x 30 = 990, / 100 = 9 (34 would give 10)
+    // W < 1 applied: 200 x 30 / 100 = 60 -> int(60 x 0.5 + 0.5) = 30; 0 < F < 1: int(30 / 0.8 + 0.5) = 38.
+    f = hp_full_recharge(2.0f, 2.0f, 7, 0.5f, 0.8f, 30, r);
+    CHECK(f.frames == 38);
+    CHECK(f.pulses == static_cast<int32_t>(7.0f * 0.8f + 0.5f));  // int(6.1) = 6
+    CHECK(f.pulses == 6);
+    // F > 1 does not shorten the full recharge; pulses scale: int(7 x 2 + 0.5) = 14.
+    f = hp_full_recharge(2.0f, 2.0f, 7, 1.0f, 2.0f, 30, r);
+    CHECK(f.frames == 60 && f.pulses == 14);
+    // First cooldown: Get_Int(0, int(30 x 4.0)).
+    SimRng a(5u), b(5u);
+    CHECK(hp_first_cooldown(4.0f, 30, a) == b.range_int(0, 120));
+
+    // WeaponBehavior reset: int(1.0 x 30) + Get_Int(0, 10); frames = trunc(frames / F), pulses = trunc(F x n).
+    SimRng w(31u), wc(31u);
+    const Recharge wr = weapon_reset(1.0f, 3, 1.0f, 1.5f, 30, w);
+    const int32_t extra = wc.range_int(0, 10);
+    CHECK(wr.frames == static_cast<int32_t>(static_cast<float>(30 + extra) / 1.5f));
+    CHECK(wr.pulses == 4);  // trunc(4.5): no +0.5 rounding
+    CHECK(weapon_pulse_delay(0.15f, 2.0f, 30) == 2);  // int(4.5) = 4 -> trunc(4 / 2) = 2
+}
+
+void test_inaccuracy_formula() {
+    CHECK_F(inaccuracy_f(GameMode::Space, 0.7f), 1.0f);
+    CHECK_F(scale_inaccuracy(10.0f, inaccuracy_f(GameMode::Space, 0.7f)), 20.0f);  // doubled in space
+    const float fl = inaccuracy_f(GameMode::Land, 0.7f);
+    CHECK_F(scale_inaccuracy(10.0f, fl), 10.0f * (1.0f - 0.7f) + 10.0f);  // (2 - accuracy) x
+    CHECK_F(scale_inaccuracy(10.0f, inaccuracy_f(GameMode::Land, 1.0f)), 10.0f);
+    CHECK_F(inaccuracy_spread(14.0f, 500.0f, 1000.0f), 7.0f);
+    SimRng r(3u), c(3u);
+    const Vec3 o = inaccuracy_offset(10.0f, r);
+    CHECK(r.draws() == 3);
+    CHECK_F(o.x, c.range_float(-10.0f, 10.0f));
+    CHECK_F(o.y, c.range_float(-10.0f, 10.0f));
+    CHECK_F(o.z, c.range_float(-10.0f, 10.0f));
+}
+
+void test_range_lead_area() {
+    // Fire range is XY only: (100, 0, 500) is in range 100 although 3D distance is ~510.
+    const float d = distance_xy(Vec3{0, 0, 0}, Vec3{100, 0, 500});
+    CHECK_F(d, 100.0f);
+    CHECK(in_fire_range(d, 0.0f, 100.0f, 0.0f));
+    CHECK(!in_fire_range(d, 101.0f, 1000.0f, 0.0f));         // below the min range
+    CHECK(in_fire_range(105.0f, 0.0f, 100.0f, 5.0f));         // + target radius
+    CHECK(!in_fire_range(105.5f, 0.0f, 100.0f, 5.0f));
+    CHECK_F(fire_range(1000.0f, 0.25f), 1250.0f);             // x (1 + list 8)
+    CHECK_F(lob_range(10.0f, 2.0f, 0.5f), 100.0f);            // Max_Speed^2 / (gravity x lob mod)
+
+    // Lead: |(100, 10 t)| = 20 t -> t = 100 / sqrt(300) = 5.7735; aim (100, 57.735, 0).
+    const Vec3 aim = linear_lead(Vec3{0, 0, 0}, Vec3{100, 0, 0}, Vec3{0, 10, 0}, 20.0f);
+    CHECK_NEAR(aim.x, 100.0, 1e-4);
+    CHECK_NEAR(aim.y, 57.73502691896258, 1e-3);
+    // Unreachable (target faster, moving away): aim at the target.
+    const Vec3 aim2 = linear_lead(Vec3{0, 0, 0}, Vec3{100, 0, 0}, Vec3{50, 0, 0}, 20.0f);
+    CHECK(same(aim2, Vec3{100, 0, 0}));
+
+    // Area falloff: 1 - floor(d x tiers / R) / (tiers + 1)
+    CHECK_F(area_falloff(0.0f, 300.0f, 3), 1.0f);
+    CHECK_F(area_falloff(150.0f, 300.0f, 3), 0.75f);  // floor(1.5) = 1
+    CHECK_F(area_falloff(299.0f, 300.0f, 3), 0.5f);   // floor(2.99) = 2
+    CHECK_F(area_falloff(300.0f, 300.0f, 3), 0.25f);  // floor(3) = 3
+    CHECK_F(area_falloff(250.0f, 300.0f, 0), 1.0f);   // no tiers
+    CHECK_F(area_falloff(10.0f, 0.0f, 3), 1.0f);
+    CHECK_F(area_delay_seconds(150.0f, 300.0f, 2.0f), 1.0f);
+    CHECK_F(area_delay_seconds(0.5f, 300.0f, 2.0f), 0.0f);  // d < 1
+    CHECK(delay_frames(0.01f, 30) == 1);                    // max(1, int(FPS x delay))
+    CHECK(delay_frames(0.5f, 30) == 15);
+
+    // Shields: absolute regen cap during the lockout [H, disasm].
+    CHECK_F(shield_regen_step(0.1f, 5.0f, 100.0f, true, 0.25f), 0.25f);
+    CHECK_F(shield_regen_step(0.1f, 5.0f, 100.0f, false, 0.25f), 5.1f);
+    CHECK_F(shield_regen_step(98.0f, 5.0f, 100.0f, false, 0.25f), 100.0f);
+    CHECK_F(shield_regen_step(0.0f, 5.0f, 1000.0f, true, 0.25f), 0.25f);  // not 25% of the maximum
+    CHECK(shield_lockout_active(249, 100, 30, 5.0f));                       // 149 / 30 < 5
+    CHECK(!shield_lockout_active(250, 100, 30, 5.0f));                      // 150 / 30 = 5
+    CHECK(shield_regen_interval_frames(30, 1.0f, 3.0f) == 90);
+    CHECK(shield_regen_interval_frames(30, 0.5f, 3.0f) == 45);
+
+    // Maxima / damage multiplier
+    CHECK_F(max_hull(1000.0f, 1.5f, 1.0f, 0.2f), 1000.0f * 1.5f * 1.0f * 1.2f);
+    CHECK_F(damage_multiplier(0.25f, 0.75f, 1.0f, 1.0f), 0.3125f);
+}
+
+// ================================================================================================
+// modifiers
+// ================================================================================================
+
+void test_modifier_stacking() {
+    ModifierSet s;
+    // Same stacking category: maximum; two debuffs give the LESS negative one.
+    s.insert(ModList::Damage, 1, 0.2f, kPermanent);
+    s.insert(ModList::Damage, 1, 0.5f, kPermanent);
+    s.insert(ModList::Damage, 2, -0.3f, kPermanent);
+    s.insert(ModList::Damage, 2, -0.1f, kPermanent);
+    CHECK_F(reduce_list(nullptr, &s, ModList::Damage), 0.5f + -0.1f);
+    // Two heroes with the same aura (same category) count once.
+    ModifierSet hero;
+    hero.insert(ModList::Defense, 7, 0.25f, kPermanent, name_crc("AURA"), 10);
+    hero.insert(ModList::Defense, 7, 0.25f, kPermanent, name_crc("AURA"), 11);
+    CHECK_F(reduce_list(nullptr, &hero, ModList::Defense), 0.25f);
+    // Categories are summed in ASCENDING id order, whatever the insertion order:
+    // cat 1: 1e8, cat 2: -1e8, cat 3: 1 -> (1e8 - 1e8) + 1 = 1 (insertion order would give 0).
+    ModifierSet o;
+    o.insert(ModList::FireRange, 3, 1.0f, kPermanent);
+    o.insert(ModList::FireRange, 1, 1e8f, kPermanent);
+    o.insert(ModList::FireRange, 2, -1e8f, kPermanent);
+    CHECK_F(reduce_list(nullptr, &o, ModList::FireRange), 1.0f);
+    // Clamps: defense max 0.75, damage min -1.
+    ModifierSet c;
+    c.insert(ModList::Defense, 1, 0.5f, kPermanent);
+    c.insert(ModList::Defense, 2, 0.5f, kPermanent);
+    c.insert(ModList::Damage, 1, -0.7f, kPermanent);
+    c.insert(ModList::Damage, 2, -0.6f, kPermanent);
+    CHECK_F(reduce_list(nullptr, &c, ModList::Defense), 0.75f);
+    CHECK_F(reduce_list(nullptr, &c, ModList::Damage), -1.0f);
+    CHECK_F(reduce_list(nullptr, &c, ModList::MaxHealth), 0.0f);  // empty list
+    CHECK_F(defense_factor(0.75f), 0.25f);
+    // First of equal values kept (strictly greater replaces): -0.0 then +0.0 keeps -0.0.
+    ModifierSet z;
+    z.insert(ModList::FireRange, 4, -0.0f, kPermanent);
+    z.insert(ModList::FireRange, 4, 0.0f, kPermanent);
+    CHECK(std::signbit(reduce_list(nullptr, &z, ModList::FireRange)));
+    // Gather = player set + object set, per-category max across both.
+    ModifierSet pl, ob;
+    pl.insert(ModList::Damage, 1, 0.3f, kPermanent);
+    ob.insert(ModList::Damage, 1, 0.2f, kPermanent);
+    ob.insert(ModList::Damage, 2, 0.1f, kPermanent);
+    CHECK_F(reduce_list(&pl, &ob, ModList::Damage), 0.3f + 0.1f);
+    // MostExtreme (player reveal list): largest |value| per category.
+    ModifierSet me;
+    me.insert(ModList::RevealRange, 1, 0.3f, kPermanent);
+    me.insert(ModList::RevealRange, 1, -0.5f, kPermanent);
+    me.insert(ModList::RevealRange, 2, 0.1f, kPermanent);
+    CHECK_F(reduce_most_extreme(me.entries(), ModList::RevealRange), -0.5f + 0.1f);
+}
+
+void test_modifier_expiry() {
+    CHECK(expiry_frame(10, 2.0f, 30) == 70u);
+    CHECK(expiry_frame(10, 0.0f, 30) == 0u);
+    CHECK(expiry_frame(10, -1.0f, 30) == 0u);
+    CHECK(expiry_frame(10, 0.01f, 30) == 10u);  // int(0.3 + 0.5) = 0
+    ModifierSet s;
+    s.insert(ModList::Damage, 1, 0.5f, 100);         // expires after frame 100
+    s.insert(ModList::Damage, 2, 0.1f, kPermanent);  // -1: never
+    s.insert(ModList::Damage, 3, 0.2f, 0);           // duration <= 0: next purge
+    // Reads between purges still count expired entries.
+    CHECK_F(reduce_list(nullptr, &s, ModList::Damage), 0.5f + 0.1f + 0.2f);
+    CHECK(s.purge_expired(100) == 1);  // 0 < 100 erased; 100 < 100 false: kept
+    CHECK_F(reduce_list(nullptr, &s, ModList::Damage), 0.5f + 0.1f);
+    CHECK(s.purge_expired(101) == 1);
+    CHECK_F(reduce_list(nullptr, &s, ModList::Damage), 0.1f);
+    CHECK(s.purge_expired(0xFFFFFFF0u) == 0);  // unsigned compare: permanent survives
+    const uint32_t v = s.version();
+    s.insert(ModList::Damage, 5, 0.3f, kPermanent, 0, 42);
+    CHECK(s.version() != v);
+    CHECK(s.remove_source(42) == 1);
+    CHECK(s.entries().size() == 1);
+}
+
+void test_reduce_all_matches() {
+    uint32_t st = 1;
+    auto rnd = [&st]() {
+        st = st * 1103515245u + 12345u;
+        return (st >> 8) & 0xFFFFu;
+    };
+    for (int trial = 0; trial < 200; ++trial) {
+        ModifierSet p, o;
+        const uint32_t np = rnd() % 8, no = trial == 7 ? 90 : rnd() % 12;  // trial 7: > 64 entries (slow path)
+        for (uint32_t i = 0; i < np; ++i)
+            p.insert(static_cast<ModList>(rnd() % kModListCount), static_cast<int32_t>(rnd() % 5) - 1,
+                     static_cast<float>(rnd() % 200) / 100.0f - 1.0f, kPermanent);
+        for (uint32_t i = 0; i < no; ++i)
+            o.insert(static_cast<ModList>(rnd() % kModListCount), static_cast<int32_t>(rnd() % 7),
+                     static_cast<float>(rnd() % 200) / 100.0f - 1.0f, kPermanent);
+        std::array<float, kModListCount> all{};
+        reduce_all(&p, &o, default_list_clamps(), all);
+        for (uint32_t l = 0; l < kModListCount; ++l) {
+            const float one = reduce_list(&p, &o, static_cast<ModList>(l));
+            CHECK(std::memcmp(&one, &all[l], sizeof(float)) == 0);
+        }
+    }
+}
+
+void test_mod_multiplier() {
+    UnitAbilityDesc a, b, lucky;
+    a.ability_type = kAbilityPowerToWeapons;
+    a.mult[static_cast<size_t>(ModKind::FireRate) - 1] = 1.5f;
+    a.flag[kFlagAllowDiminishingFirepower] = 0;
+    b.ability_type = kAbilityDefend;
+    b.mult[static_cast<size_t>(ModKind::FireRate) - 1] = 2.0f;
+    lucky.ability_type = kAbilityLuckyShot;
+    lucky.mult[static_cast<size_t>(ModKind::FireRate) - 1] = 10.0f;
+    const UnitAbilityDesc* ab[2] = {&a, &b};
+    bool both[2] = {true, true}, first[2] = {true, false}, none[2] = {false, false};
+    CHECK_F(ability_product(ab, both, ModKind::FireRate), 3.0f);  // product over active slots
+    CHECK_F(ability_product(ab, first, ModKind::FireRate), 1.5f);
+    CHECK_F(ability_product(ab, none, ModKind::FireRate), 1.0f);
+    CHECK_F(ability_product(ab, both, ModKind::Speed), 1.0f);
+    const UnitAbilityDesc* al[2] = {&lucky, &a};
+    CHECK_F(ability_product(al, both, ModKind::FireRate), 1.5f);  // LUCKY_SHOT skipped
+    const float members[3] = {0.8f, 0.5f, 0.9f};
+    CHECK_F(squad_multiplier(1.0f, members), 0.5f);  // leader at 1 -> member minimum
+    CHECK_F(squad_multiplier(1.2f, members), 1.2f);
+    CHECK_F(squad_multiplier(1.0f, {}), 1.0f);
+    CHECK(!ability_flag(ab, both, kFlagAllowDiminishingFirepower));
+    CHECK(ability_flag(ab, none, kFlagAllowDiminishingFirepower));  // default true
+}
+
+void test_priority_sets() {
+    PrioritySet s;
+    s.attack.push_back({PriorityEntry::Kind::Type, 7, 0, 0.5f});
+    s.attack.push_back({PriorityEntry::Kind::Category, -1, 0x1, 2.0f});
+    s.attack.push_back({PriorityEntry::Kind::Category, -1, 0x2, 1.5f});
+    s.attack.push_back({PriorityEntry::Kind::Property, -1, 0x10, 4.0f});
+    s.attack.push_back({PriorityEntry::Kind::Property, -1, 0x20, 3.0f});
+    s.unit_exclusions = {9};
+    s.category_exclusions = 0x100;
+    s.property_exclusions = 0x1000;
+    CHECK_F(priority_score(s, 7, 0x100, 0x1000), 0.5f);  // exact type returns at once
+    CHECK_F(priority_score(s, 3, 0x3, 0), 1.5f);          // min over categories
+    CHECK_F(priority_score(s, 3, 0x1, 0x10), 4.0f);       // first property hit OVERWRITES (worse than 2)
+    CHECK_F(priority_score(s, 3, 0x1, 0x30), 3.0f);       // later property hits take the min
+    CHECK_F(priority_score(s, 3, 0x100, 0), -1.0f);       // category exclusion
+    CHECK_F(priority_score(s, 3, 0x100, 0x10), 4.0f);     // ... unless a property entry matched
+    CHECK_F(priority_score(s, 3, 0, 0x1000), -1.0f);      // property exclusion
+    CHECK_F(priority_score(s, 9, 0x1, 0), -1.0f);         // unit exclusion
+    CHECK_F(priority_score(s, 3, 0, 0), 1e18f);           // nothing matched
+    s.hardpoint_priorities = {name_crc("HP_A"), name_crc("HP_B")};
+    s.hardpoint_exclusions = {name_crc("HP_C")};
+    CHECK_F(hardpoint_rank(s, name_crc("HP_A")), 1.0f);
+    CHECK_F(hardpoint_rank(s, name_crc("HP_B")), 2.0f);
+    CHECK_F(hardpoint_rank(s, name_crc("HP_C")), -1.0f);
+    CHECK_F(hardpoint_rank(s, name_crc("HP_D")), 1e18f);
+}
+
+void test_damage_table() {
+    DamageArmorTable t;
+    const uint16_t laser = t.add_damage_type("Damage_Laser");
+    const uint16_t hull = t.add_armor_type("Armor_Hull");
+    const uint16_t sh = t.add_armor_type("Shield_Hull");
+    t.set(laser, hull, 2.0f);
+    t.set(laser, sh, -0.5f);  // negative cell -> 1.0
+    for (int i = 0; i < 40; ++i) t.add_armor_type("Armor_" + std::to_string(i));  // grow the stride
+    CHECK_F(t.factor(laser, hull), 2.0f);
+    CHECK_F(t.factor(laser, sh), 1.0f);
+    CHECK_F(t.factor(kNoTypeId, hull), 1.0f);
+    CHECK_F(t.factor(laser, t.armor_index("Armor_5")), 1.0f);  // unset cell
+    CHECK(t.damage_index("damage_laser") == laser);            // case-insensitive
+    CHECK(t.armor_index("nope") == kNoTypeId);
+}
+
+// ================================================================================================
+// system-level rules
+// ================================================================================================
+
+constexpr uint64_t kCatFighter = 0x1, kCatCapital = 0x8;
+
+// Shooter with one weapon hardpoint at its centre (no bone B, no muzzle draw) and a stationary target;
+// returns the first projectile's direction and fills `expected` from a copy of the RNG.
+void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float override_radius, bool use_table, float expect_r) {
+    World w;
+    w.data.projectiles.push_back(ProjectileDesc{});
+    w.data.projectiles[0].max_speed = 10.0f;
+    w.data.projectiles[0].damage = 1.0f;
+    HardpointDesc hd;
+    hd.kind = HardpointKind::WeaponLaser;
+    hd.health = 100.0f;
+    hd.projectile = 0;
+    hd.randomize_between_fire_bones = false;
+    hd.min_recharge = hd.max_recharge = 1.0f;
+    hd.fire_range = 1000.0f;
+    if (use_table) hd.inaccuracy.push_back({kCatCapital, 7.0f});
+    w.data.hardpoints.push_back(hd);
+    UnitAbilityDesc ab;
+    ab.ability_type = kAbilityPowerToWeapons;
+    ab.inaccuracy_override = override_radius;
+    w.data.abilities.push_back(ab);
+    UnitDesc shooter;
+    shooter.tactical_health = 100.0f;
+    shooter.max_attack_distance = 1000.0f;
+    shooter.hardpoints = {0};
+    shooter.fire_inaccuracy_fixed_radius = fixed_radius;
+    shooter.abilities = {override_radius > 0.0f ? 0 : -1, -1};
+    UnitDesc target;
+    target.tactical_health = 1e6f;
+    target.radius = 10.0f;
+    target.category_mask = kCatCapital;
+    const uint32_t ds = push_unit(w.data, shooter), dt = push_unit(w.data, target);
+    CombatConfig cfg;
+    cfg.mode = mode;
+    PlayerInfo p0;
+    p0.ai_accuracy = accuracy;
+    w.make(cfg, {p0, PlayerInfo{}});
+    w.add(1, ds, 0, Vec3{0, 0, 0});
+    w.add(2, dt, 1, Vec3{500, 0, 0});
+    if (override_radius > 0.0f) w.sys->set_ability_active(1, 0, true);
+    w.sys->order_attack(1, 2);
+    for (int i = 0; i < 40 && w.sys->projectile_count() == 0; ++i) {
+        SimRng copy = w.rng;
+        w.tick();
+        if (w.sys->projectile_count() == 1) {
+            const uint64_t tick_draws = w.rng.draws() - copy.draws();
+            Vec3 off;
+            off.x = copy.range_float(-expect_r, expect_r);
+            off.y = copy.range_float(-expect_r, expect_r);
+            off.z = copy.range_float(-expect_r, expect_r);
+            const Vec3 expect = norm(Vec3{500, 0, 0} + off);
+            CHECK(same(w.sys->projectile(0).dir, expect));
+            CHECK(tick_draws == 3);  // 3 inaccuracy; the full recharge Get_Int(100, 100) has no draw
+        }
+    }
+    CHECK(w.sys->projectile_count() == 1);
+}
+
+void test_inaccuracy_system() {
+    inaccuracy_case(GameMode::Space, 1.0f, 5.0f, 0.0f, false, 10.0f);  // fixed radius doubled in space
+    inaccuracy_case(GameMode::Space, 1.0f, 0.0f, 0.0f, true, 7.0f);    // table: 7 x 2 x 500 / 1000
+    inaccuracy_case(GameMode::Space, 1.0f, 5.0f, 5.0f, false, 5.0f);   // ability override: unscaled
+    inaccuracy_case(GameMode::Land, 0.6f, 5.0f, 0.0f, false, 5.0f * (1.0f - 0.6f) + 5.0f);  // (2 - acc) x
+}
+
+struct TargetWorld {
+    World w;
+    uint32_t attacker = 0, capital = 0, fighter = 0, hp_attacker = 0, hp_target = 0;
+    explicit TargetWorld(float low_threshold = 0.0f) {
+        w.data.projectiles.push_back(ProjectileDesc{});
+        w.data.projectiles[0].max_speed = 10.0f;
+        PrioritySet ps;
+        ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatCapital, 1.0f});
+        ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatFighter, 3.0f});
+        w.data.priority_sets.push_back(ps);
+        HardpointDesc cone;  // forward-only weapon, never fires (no projectile)
+        cone.kind = HardpointKind::WeaponLaser;
+        cone.fire_cone_width = 90.0f;
+        cone.fire_cone_height = 180.0f;
+        w.data.hardpoints.push_back(cone);
+        HardpointDesc tgt_hp;
+        tgt_hp.kind = HardpointKind::DummyArt;
+        tgt_hp.targetable = true;
+        tgt_hp.health = 10.0f;
+        w.data.hardpoints.push_back(tgt_hp);
+        UnitDesc a;
+        a.tactical_health = 100.0f;
+        a.max_attack_distance = 1000.0f;
+        a.weapon_projectile = 0;
+        a.weapon_recharge = 100.0f;  // never fires during the test
+        a.priority_set = 0;
+        attacker = push_unit(w.data, a);
+        UnitDesc ah = a;
+        ah.weapon_projectile = -1;
+        ah.hardpoints = {0};
+        hp_attacker = push_unit(w.data, ah);
+        UnitDesc c;
+        c.tactical_health = 100.0f;
+        c.radius = 10.0f;
+        c.category_mask = kCatCapital;
+        capital = push_unit(w.data, c);
+        UnitDesc f = c;
+        f.category_mask = kCatFighter;
+        fighter = push_unit(w.data, f);
+        UnitDesc ct = c;
+        ct.hardpoints = {1, 1};
+        hp_target = push_unit(w.data, ct);
+        CombatConfig cfg;
+        cfg.low_health_threshold = low_threshold;
+        w.make(cfg);
+    }
+};
+
+void test_targeting_rules() {
+    {  // No equality guard: a WORSE score that is closer in XY replaces the best.
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{500, 0, 0});  // score 1.0, first in id order
+        t.w.add(3, t.fighter, 1, Vec3{200, 0, 0});  // score 3.0, closer
+        const uint64_t d0 = t.w.rng.draws();
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 3);
+        CHECK(t.w.rng.draws() - d0 == 2);  // reschedule + start player
+        CHECK(t.w.sys->next_scan(1) >= 31 && t.w.sys->next_scan(1) <= 46);
+    }
+    {  // Same scene, ids swapped: the strictly lower score wins when it comes later.
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.fighter, 1, Vec3{200, 0, 0});
+        t.w.add(3, t.capital, 1, Vec3{500, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 3);
+    }
+    {  // Equal scores: the XY-closer one, whatever the order.
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{500, 0, 900});  // far in XY, Z ignored
+        t.w.add(3, t.capital, 1, Vec3{200, 0, -900});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 3);
+    }
+    {  // Attacker with hardpoints: the aimable candidate wins over a closer one behind the cone.
+        TargetWorld t;
+        t.w.add(1, t.hp_attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{-200, 0, 0});  // behind, closer
+        t.w.add(3, t.capital, 1, Vec3{600, 0, 0});   // in the forward cone
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 3);
+    }
+    {  // Low-health rule first: a damaged fighter beats a healthy, closer, better-scored capital.
+        TargetWorld t(0.5f);
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{200, 0, 0});
+        t.w.add(3, t.fighter, 1, Vec3{800, 0, 0}, {1, 0, 0}, 0.3f);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 3);
+    }
+    {  // Aim-point draws: one Get_Int per candidate with hardpoints; then the early exit keeps a 1.0 target.
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.hp_target, 1, Vec3{300, 0, 0});
+        t.w.add(3, t.hp_target, 1, Vec3{400, 0, 0});
+        uint64_t d0 = t.w.rng.draws();
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 2);
+        const uint64_t scan_draws = t.w.rng.draws() - d0;
+        CHECK(scan_draws >= 4);  // 2 + one Get_Int(0, 1) per candidate (each may redraw)
+        // Next scan: the current target is valid and scored exactly 1.0 -> no rescan, 1 draw only.
+        while (t.w.frame < t.w.sys->next_scan(1)) t.w.tick();
+        d0 = t.w.rng.draws();
+        t.w.tick();
+        CHECK(t.w.rng.draws() - d0 == 1);
+        CHECK(t.w.sys->auto_target(1) == 2);
+    }
+    {  // An attack order suppresses auto scans and is the fire target; a dead order is cleared.
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{300, 0, 0});
+        t.w.add(3, t.fighter, 1, Vec3{100, 0, 0});
+        t.w.sys->order_attack(1, 2);
+        const uint64_t d0 = t.w.rng.draws();
+        t.w.tick();
+        CHECK(t.w.rng.draws() == d0);
+        CHECK(t.w.sys->current_target(1) == 2);
+        DamageRequest kill;
+        kill.victim = 2;
+        kill.amount = 1e9f;
+        t.w.sys->take_damage(kill, t.w.frame);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 3);
+    }
+}
+
+// ---- OI tactical: circular lead, lobbed flight, team targeting ------------------------------------------------
+
+void test_circular_lead() {
+    const Vec3 m{0, 0, 0};
+    // Straight track (collinear history): exactly linear lead with V = (p2 - p1) x FPS.
+    {
+        const Vec3 p0{100, -2, 5}, p1{100, -1, 5}, p2{100, 0, 5};
+        const Vec3 a = circular_lead(m, p0, p1, p2, Vec3{}, 20.0f, 30);
+        const Vec3 b = linear_lead(m, p2, (p2 - p1) * 30.0f, 20.0f);
+        CHECK(same(a, b));
+        CHECK(same(circular_lead(m, p2, p2, p2, Vec3{}, 20.0f, 30), p2));  // stationary
+    }
+    // Target on a circle of radius 200 about (500, 0), 1 degree per frame (30 deg/s) counter-clockwise; shot 300 u/s.
+    {
+        const float r = 200.0f;
+        auto on = [&](float deg) {
+            float s = 0.0f, c = 0.0f;
+            dmath::sincos(deg * 0.017453292519943295f, s, c);
+            return Vec3{500.0f + r * c, r * s, 0.0f};
+        };
+        const Vec3 p0 = on(-2.0f), p1 = on(-1.0f), p2 = on(0.0f);
+        const Vec3 a = circular_lead(m, p0, p1, p2, Vec3{}, 300.0f, 30);
+        // The aim point lies on the circle (within float error) ...
+        const float dr = dmath::sqrt((a.x - 500.0f) * (a.x - 500.0f) + a.y * a.y);
+        CHECK_NEAR(dr, 200.0, 0.05);
+        // ... ahead of the target in the turn direction (positive y), and |aim| = S t for t = swept angle / 30 deg/s.
+        CHECK(a.y > 0.0f);
+        const float ang = dmath::atan2(a.y, a.x - 500.0f) * 57.29577951308232f;
+        const float t = ang / 30.0f;
+        CHECK_NEAR(dmath::sqrt(dot(a, a)), 300.0 * static_cast<double>(t), 0.5);
+        // Differs from the linear (tangent) lead.
+        CHECK(!same(a, linear_lead(m, p2, (p2 - p1) * 30.0f, 300.0f)));
+        // A hardpoint offset is added unrotated.
+        const Vec3 off{0, 0, 7};
+        const Vec3 ao = circular_lead(m, p0, p1, p2, off, 300.0f, 30);
+        CHECK_NEAR(ao.z, 7.0, 0.02);
+        // Radius > 1000: linear.
+        auto big = [&](float deg) {
+            float s = 0.0f, c = 0.0f;
+            dmath::sincos(deg * 0.017453292519943295f, s, c);
+            return Vec3{5000.0f + 1500.0f * c, 1500.0f * s, 0.0f};
+        };
+        const Vec3 q0 = big(-2.0f), q1 = big(-1.0f), q2 = big(0.0f);
+        CHECK(same(circular_lead(m, q0, q1, q2, Vec3{}, 300.0f, 30), linear_lead(m, q2, (q2 - q1) * 30.0f, 300.0f)));
+    }
+}
+
+void test_lob() {
+    // High arc: v = 10, g = 1, horizontal 50, dz 0: tan = (100 + sqrt(10000 - 2500)) / 50 = 3.732 (75 degrees).
+    const Vec3 d = lob_direction(Vec3{0, 0, 0}, Vec3{50, 0, 0}, 10.0f, 1.0f);
+    CHECK_NEAR(d.z / d.x, 3.7320508, 1e-4);
+    CHECK_NEAR(dot(d, d), 1.0, 1e-6);
+    // Out of reach (> v^2 / g = 100): 45 degrees.
+    const Vec3 e = lob_direction(Vec3{0, 0, 0}, Vec3{0, 150, 0}, 10.0f, 1.0f);
+    CHECK_NEAR(e.z, e.y, 1e-6);
+    // System: a category-3 shot from the WeaponBehavior arcs and comes down at the target's height.
+    World w;
+    ProjectileDesc g;
+    g.name = "Grenade";
+    g.max_speed = 6.0f;
+    g.damage = 10.0f;
+    g.lobbed = true;
+    g.category = ProjectileCategory::Grenade;
+    g.grenade_gravity = 0.5f;
+    g.lob_mod = 0.5f;  // g = 0.25 -> range 36 / 0.25 = 144
+    w.data.projectiles.push_back(g);
+    UnitDesc thrower;
+    thrower.tactical_health = 100.0f;
+    thrower.weapon_projectile = 0;
+    thrower.weapon_recharge = 5.0f;  // one shot inside the loop (first shot after 150 + 0..10 frames)
+    thrower.max_attack_distance = 500.0f;
+    const uint32_t td = push_unit(w.data, thrower);
+    UnitDesc target;
+    target.tactical_health = 1000.0f;
+    target.radius = 2.0f;
+    const uint32_t tg = push_unit(w.data, target);
+    CombatConfig cfg;
+    cfg.mode = GameMode::Land;
+    cfg.inaccuracy_enabled = false;
+    w.make(cfg);
+    w.add(1, td, 0, Vec3{0, 0, 0});
+    w.add(2, tg, 1, Vec3{100, 0, 0});
+    CHECK_F(w.sys->attack_range(1), 144.0f);  // per-type gravity x lob mod
+    bool spawned = false, peaked = false;
+    float max_z = 0.0f;
+    for (int i = 0; i < 400 && w.sys->stats().hits + w.sys->stats().expired == 0; ++i) {
+        w.tick();
+        if (w.sys->projectile_count() > 0) {
+            spawned = true;
+            const ProjectileView pv = w.sys->projectile(0);
+            CHECK(pv.speed > 0.0f);  // presentation view: velocity = dir x speed
+            CHECK(pv.spawn_frame <= w.frame);
+            max_z = std::max(max_z, pv.pos.z);
+            if (pv.dir.z < 0.0f) peaked = true;
+        }
+    }
+    CHECK(spawned);
+    CHECK(peaked);
+    CHECK(max_z > 50.0f);  // a high arc, not a straight shot along z = 0
+    CHECK(w.sys->stats().hits + w.sys->stats().expired == 1);
+}
+
+// Adds a squad unit (team id / team_leader) to a TargetWorld.
+void add_team_unit(TargetWorld& t, ObjectId id, uint32_t desc, int32_t owner, Vec3 p, uint32_t team, bool leader) {
+    UnitSpawn s;
+    s.id = id;
+    s.desc = desc;
+    s.owner = owner;
+    s.position = p;
+    s.team = team;
+    s.team_leader = leader;
+    CHECK(t.w.sys->add_unit(s, t.w.frame, t.w.rng));
+    TreeMembership m;
+    m.owner = owner;
+    CHECK(t.w.trees.add(static_cast<EntityHandle>(id), box_of(p, t.w.data.units[desc].radius), 1u, m));
+}
+
+void test_team_targeting() {
+    // 2.4: a team member scores with its leader's priority set. The member's own type has no set (every score 1.0:
+    // the closer fighter wins); with the leader's set (capital 1, fighter 3) the later, strictly better capital wins.
+    for (const bool in_team : {true, false}) {
+        TargetWorld t;
+        UnitDesc noset = t.w.data.units[t.attacker];
+        noset.priority_set = -1;
+        const uint32_t md = push_unit(t.w.data, noset);
+        t.w.make();
+        add_team_unit(t, 2, t.fighter, 1, Vec3{200, 0, 0}, 0, false);
+        add_team_unit(t, 3, t.capital, 1, Vec3{500, 0, 0}, 0, false);
+        add_team_unit(t, 10, t.attacker, 0, Vec3{0, 300, 0}, 7, true);  // leader (far from both: its pick is irrelevant)
+        add_team_unit(t, 11, md, 0, Vec3{0, 0, 0}, in_team ? 7u : 0u, false);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(11) == (in_team ? 3 : 2));
+    }
+    // 2.3 filter 9: the member's current target stays valid out of its own range while it is the head's target.
+    for (const bool in_team : {true, false}) {
+        TargetWorld t;
+        UnitDesc shortr = t.w.data.units[t.attacker];
+        shortr.priority_set = -1;
+        shortr.max_attack_distance = 300.0f;
+        const uint32_t md = push_unit(t.w.data, shortr);
+        t.w.make();
+        add_team_unit(t, 2, t.capital, 1, Vec3{900, 0, 0}, 0, false);
+        add_team_unit(t, 10, t.attacker, 0, Vec3{0, 0, 0}, 7, true);  // range 1000: acquires the capital
+        add_team_unit(t, 11, md, 0, Vec3{700, 0, 0}, in_team ? 7u : 0u, false);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(10) == 2);
+        CHECK(t.w.sys->auto_target(11) == 2);
+        t.w.sys->set_position(11, Vec3{300, 0, 0});  // 600 from the capital: out of its 300 range
+        t.w.trees.update(11, box_of(Vec3{300, 0, 0}, t.w.data.units[md].radius));
+        const uint32_t due = t.w.sys->next_scan(11);
+        while (t.w.frame <= due) t.w.tick();
+        CHECK(t.w.sys->auto_target(11) == (in_team ? 2 : kNoObject));
+    }
+    // Squad head = the container object when it is a combat unit (team id = its object id): the member scores with
+    // the container's set (capital first) although its own type has none.
+    {
+        TargetWorld t;
+        UnitDesc noset = t.w.data.units[t.attacker];
+        noset.priority_set = -1;
+        const uint32_t md = push_unit(t.w.data, noset);
+        t.w.make();
+        add_team_unit(t, 2, t.fighter, 1, Vec3{200, 0, 0}, 0, false);
+        add_team_unit(t, 3, t.capital, 1, Vec3{500, 0, 0}, 0, false);
+        add_team_unit(t, 9, t.attacker, 0, Vec3{0, -300, 0}, 0, false);  // the container
+        add_team_unit(t, 11, md, 0, Vec3{0, 0, 0}, 9, false);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(11) == 3);
+    }
+}
+// OI tactical: GameConstants fields, the diminishing-firepower spline, targeting slots 44 / 45.
+struct OneFileProvider final : FileProvider {  // serves Data\XML\GameConstants.xml from memory
+    std::string text;
+    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
+        if (!exists(path)) return false;
+        out.assign(text.begin(), text.end());
+        return true;
+    }
+    bool exists(std::string_view path) const override { return iequals(path, "Data\\XML\\GameConstants.xml"); }
+    std::string origin(std::string_view path) const override { return exists(path) ? "memory" : ""; }
+};
+
+void test_gaps_constants() {
+    OneFileProvider fp;
+    fp.text = "<GameConstants><Health_Low_Percent_Threshold>0.33</Health_Low_Percent_Threshold>"
+              "<Melee_Cutoff_Range>51.0</Melee_Cutoff_Range>"
+              "<Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>5.0</Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>"
+              "<Diminishing_Firepower>0, 0.6, 0.3, 0.7, 0.9, 0.9, 1, 1, 2, 1</Diminishing_Firepower></GameConstants>";
+    data::GameDatabase db;
+    std::vector<std::string> ignored;
+    db.load(fp, {}, &ignored);  // only GameConstants exists: the other loaders report missing files
+    CombatConfig cfg;
+    apply_game_constants(cfg, db.constants());
+    CHECK_F(cfg.low_health_threshold, 0.33f);
+    CHECK_F(cfg.short_range_cutoff, 51.0f);
+    CHECK_F(cfg.opportunity_recharge_cutoff, 5.0f);
+    CHECK(cfg.diminishing_firepower.size() == 5);
+    // Spline through the FoC points: knots reproduced, smooth in between, end values outside.
+    World w;
+    w.data.damage.add_damage_type("Laser");
+    UnitDesc v;
+    v.tactical_health = 1e6f;
+    const uint32_t vd = push_unit(w.data, v);
+    w.make(cfg);
+    w.add(1, vd, 0, Vec3{0, 0, 0});
+    auto hit = [&](uint32_t frame) {
+        DamageRequest r;
+        r.victim = 1;
+        r.amount = 100.0f;
+        return w.sys->take_damage(r, frame).after_multipliers;
+    };
+    CHECK_NEAR(hit(1000), 100.0, 1e-3);          // first hit: 999999 frames -> last y (1)
+    CHECK_NEAR(hit(1000), 60.0, 1e-3);           // 0 s -> 0.6
+    CHECK_NEAR(hit(1009), 70.0, 1e-2);           // 0.3 s -> 0.7 (knot)
+    const float mid = hit(1009 + 18);            // 0.6 s: between 0.7 and 0.9
+    CHECK(mid > 70.0f && mid < 90.0f);
+    CHECK_NEAR(hit(1027 + 90), 100.0, 1e-3);     // 3 s: past the last knot
+    // Slots 44 / 45: min range rejection and the footprint half-extent along the line of sight.
+    TargetWorld t;
+    UnitDesc mr = t.w.data.units[t.attacker];
+    mr.min_attack_distance = 300.0f;
+    const uint32_t mrd = push_unit(t.w.data, mr);
+    UnitDesc wide = t.w.data.units[t.capital];
+    wide.hard_x_extent = 200.0f;  // long ship: X extent along its facing
+    wide.hard_y_extent = 20.0f;
+    wide.radius = 200.0f;  // tree box (the query cube must reach it); E comes from the hard extents
+    const uint32_t wd = push_unit(t.w.data, wide);
+    t.w.make();
+    t.w.add(1, mrd, 0, Vec3{0, 0, 0});
+    t.w.add(2, t.capital, 1, Vec3{250, 0, 0});    // inside the min range (300 + radius 10)
+    t.w.add(3, t.capital, 1, Vec3{0, 600, 0});    // outside: taken
+    t.w.add(4, wd, 1, Vec3{1150, 0, 0}, {1, 0, 0});  // 1150 > 1000 + 20, but facing along the LOS: E = 200
+    t.w.tick();
+    CHECK(t.w.sys->auto_target(1) == 3 || t.w.sys->auto_target(1) == 4);
+    CHECK(t.w.sys->auto_target(1) != 2);
+    TargetWorld u;
+    UnitDesc wide2 = u.w.data.units[u.capital];
+    wide2.hard_x_extent = 200.0f;
+    wide2.hard_y_extent = 20.0f;
+    wide2.radius = 200.0f;
+    const uint32_t wd2 = push_unit(u.w.data, wide2);
+    u.w.make();
+    u.w.add(1, u.attacker, 0, Vec3{0, 0, 0});
+    u.w.add(2, wd2, 1, Vec3{1150, 0, 0}, {0, 1, 0});  // broadside: E = 20 -> out of range
+    u.w.tick();
+    CHECK(u.w.sys->auto_target(1) == kNoObject);
+    TargetWorld v2;
+    const uint32_t wd3 = push_unit(v2.w.data, wide2);
+    v2.w.make();
+    v2.w.add(1, v2.attacker, 0, Vec3{0, 0, 0});
+    v2.w.add(2, wd3, 1, Vec3{1150, 0, 0}, {1, 0, 0});  // end-on: E = 200 -> in range
+    v2.w.tick();
+    CHECK(v2.w.sys->auto_target(1) == 2);
+}
+
+// OI tactical: TACTICAL_GAPS 3.1 slot 43 with a LAND_OBSTACLE target (aim walk toward the attacker over the cells the
+// target occupies, cell-centre snap, E = sqrt(200)); OI abilities: the weapon index obj +0x324 into Projectile_Types.
+void test_land_obstacle_and_weapon_index() {
+    auto building = [](TargetWorld& t) {
+        UnitDesc b = t.w.data.units[t.capital];
+        b.land_obstacle = true;
+        b.radius = 300.0f;  // tree box; without the query E = radius
+        return push_unit(t.w.data, b);
+    };
+    // cells of 20: the building occupies |x - 1250| < 200 on the x axis
+    auto query = [](ObjectId, Vec3 p, Vec3& c) {
+        c = Vec3{std::floor(p.x / 20.0f) * 20.0f + 10.0f, std::floor(p.y / 20.0f) * 20.0f + 10.0f, p.z};
+        return std::fabs(p.x - 1250.0f) < 200.0f && std::fabs(p.y) < 200.0f;
+    };
+    {  // no query: E = radius 300 -> 1250 <= 1000 + 300, taken
+        TargetWorld t;
+        const uint32_t bd = building(t);
+        t.w.make();
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, bd, 1, Vec3{1250, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 2);
+    }
+    {  // walk 1250 -> 1050 (first free cell), centre 1050: 1050 > 1000 + 14.14 -> out of range
+        TargetWorld t;
+        const uint32_t bd = building(t);
+        t.w.make();
+        t.w.sys->set_obstacle_cell_query(query);
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, bd, 1, Vec3{1250, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == kNoObject);
+    }
+    {  // attacker at x = 40: the free cell at 1050 is 1010 away -> in range
+        TargetWorld t;
+        const uint32_t bd = building(t);
+        t.w.make();
+        t.w.sys->set_obstacle_cell_query(query);
+        t.w.add(1, t.attacker, 0, Vec3{40, 0, 0});
+        t.w.add(2, bd, 1, Vec3{1250, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 2);
+    }
+    {  // weapon index: Projectile_Types[obj +0x324]; a lobbed second entry changes Get_Max_Attack_Range
+        TargetWorld t;
+        ProjectileDesc lob;
+        lob.lobbed = true;
+        lob.max_speed = 20.0f;
+        lob.grenade_gravity = 1.0f;
+        t.w.data.projectiles.push_back(lob);
+        UnitDesc a = t.w.data.units[t.attacker];
+        a.weapon_projectiles = {0, 1};
+        const uint32_t ad = push_unit(t.w.data, a);
+        t.w.make();
+        t.w.add(1, ad, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.attacker, 0, Vec3{100, 0, 0});
+        const float r0 = t.w.sys->attack_range(1);
+        CHECK_F(r0, 1000.0f);
+        CHECK(t.w.sys->weapon_index(1) == 0 && t.w.sys->current_weapon_projectile(1) == 0);
+        StateHasher h0;
+        t.w.sys->hash_extended(h0);
+        CHECK(t.w.sys->set_weapon_index(1, 1) && t.w.sys->current_weapon_projectile(1) == 1);
+        CHECK(t.w.sys->attack_range(1) != r0);  // lob range
+        StateHasher h1;
+        t.w.sys->hash_extended(h1);
+        CHECK(h0.digest() != h1.digest());
+        CHECK(t.w.sys->set_weapon_index(1, 5) && t.w.sys->current_weapon_projectile(1) == -1);
+        CHECK_F(t.w.sys->attack_range(1), 1000.0f);  // [port] outside the list: weapon_projectile
+        CHECK(t.w.sys->set_weapon_index(2, 1) && t.w.sys->current_weapon_projectile(2) == -1 && t.w.sys->weapon_set_count(2) == 0);
+        CHECK(!t.w.sys->set_weapon_index(1, -1) && !t.w.sys->set_weapon_index(99, 0));
+    }
+}
+
+// Fog follow-up: targeting filter step 4 and the space-station special weapon through CombatHooks::target_hidden.
+struct FogHooks final : CombatHooks {
+    std::vector<ObjectId> hidden;  // hidden from player 0 (force 0) / from everyone (force 1)
+    bool human0 = true;            // player 0 human: fog applies at force 0 (the fog's AI gate otherwise)
+    mutable std::atomic<uint32_t> calls{0};
+    bool target_hidden(int32_t player, ObjectId target, bool force) const override {
+        calls.fetch_add(1, std::memory_order_relaxed);
+        if (!force && !(player == 0 && human0)) return false;
+        return std::find(hidden.begin(), hidden.end(), target) != hidden.end();
+    }
+};
+
+void test_fog_filter() {
+    {  // A hidden candidate is skipped by a human shooter; the next one is taken.
+        TargetWorld t;
+        FogHooks fh;
+        fh.hidden = {3};
+        t.w.sys->set_hooks(&fh);
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{500, 0, 0});
+        t.w.add(3, t.fighter, 1, Vec3{200, 0, 0});  // would win without fog (test_targeting_rules case 1)
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 2);
+        CHECK(fh.calls.load() > 0);
+        // The current target goes into the fog: dropped at the next scan, the revealed fighter is taken; both
+        // hidden: no target.
+        fh.hidden = {2};
+        uint32_t due = t.w.sys->next_scan(1);
+        while (t.w.frame <= due) t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 3);
+        fh.hidden = {2, 3};
+        due = t.w.sys->next_scan(1);
+        while (t.w.frame <= due) t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == kNoObject);
+        t.w.sys->set_hooks(nullptr);
+    }
+    {  // OI tactical (TACTICAL_GAPS 5.8): the targeting FOW test uses force 1 - an AI shooter skips the hidden fighter too;
+       // same for the parallel gather (4 workers).
+        TargetWorld t;
+        FogHooks fh;
+        fh.hidden = {3};
+        fh.human0 = false;
+        t.w.sys->set_hooks(&fh);
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{500, 0, 0});
+        t.w.add(3, t.fighter, 1, Vec3{200, 0, 0});
+        t.w.tick(alamo::tactical::testing::make_thread_parallel_for(4));
+        CHECK(t.w.sys->auto_target(1) == 2);
+        t.w.sys->set_hooks(nullptr);
+    }
+    {  // Space-station special weapon: first WEAPON_SPECIAL hard point; force 1 refuses hidden targets for AIs too.
+        World w;
+        w.data.projectiles.push_back(ProjectileDesc{});
+        HardpointDesc laser;
+        laser.kind = HardpointKind::WeaponLaser;
+        w.data.hardpoints.push_back(laser);
+        HardpointDesc sw;
+        sw.kind = HardpointKind::WeaponSpecial;
+        sw.fire_range = 1000.0f;
+        sw.fire_min_range = 100.0f;
+        sw.max_recharge = 10.0f;
+        sw.bone_a = {50.0f, 0.0f, 0.0f};
+        w.data.hardpoints.push_back(sw);
+        UnitDesc st;
+        st.tactical_health = 1000.0f;
+        st.hardpoints = {0, 1};
+        const uint32_t station = push_unit(w.data, st);
+        UnitDesc plain;
+        plain.tactical_health = 100.0f;
+        plain.radius = 10.0f;
+        const uint32_t ship = push_unit(w.data, plain);
+        w.make();
+        FogHooks fh;
+        fh.human0 = false;
+        w.sys->set_hooks(&fh);
+        w.add(1, station, 0, Vec3{0, 0, 0});
+        w.add(2, ship, 1, Vec3{500, 0, 0});
+        w.add(3, ship, 1, Vec3{1100, 0, 0});  // 1050 from the bone: beyond 1000 + 10
+        w.add(4, ship, 1, Vec3{120, 0, 0});   // 70 from the bone: inside the minimum range
+        w.add(5, ship, 0, Vec3{400, 0, 0});   // own unit
+        CHECK(w.sys->special_weapon_hardpoint(1) == 1 && w.sys->special_weapon_hardpoint(2) == -1);
+        CHECK(w.sys->special_weapon_readiness(2) < 0.0f);
+        CHECK(w.sys->special_weapon_can_fire(1, 2));
+        CHECK(!w.sys->special_weapon_can_fire(1, 3) && !w.sys->special_weapon_can_fire(1, 4) && !w.sys->special_weapon_can_fire(1, 5));
+        fh.hidden = {2};
+        CHECK(!w.sys->special_weapon_can_fire(1, 2) && !w.sys->special_weapon_fire(1, 2));
+        CHECK(w.sys->ordered_target(1) == kNoObject);
+        fh.hidden.clear();
+        CHECK(w.sys->special_weapon_fire(1, 2) && w.sys->ordered_target(1) == 2);
+        const float r = w.sys->special_weapon_readiness(1);
+        CHECK(r >= 0.0f && r <= 1.0f);
+        w.sys->set_hooks(nullptr);
+    }
+}
+
+struct DamageWorld {
+    World w;
+    uint32_t shielded = 0, plain = 0, attacker = 0, hp_unit = 0;
+    uint16_t laser = 0;
+    DamageWorld() {
+        laser = w.data.damage.add_damage_type("Laser");
+        const uint16_t hull = w.data.damage.add_armor_type("Hull");
+        const uint16_t sh = w.data.damage.add_armor_type("ShieldArmor");
+        w.data.damage.set(laser, hull, 2.0f);
+        w.data.damage.set(laser, sh, 0.5f);
+        ProjectileDesc p;  // 0: normal
+        p.damage = 10.0f;
+        w.data.projectiles.push_back(p);
+        p.does_hitpoint_damage = false;  // 1
+        w.data.projectiles.push_back(p);
+        p.does_hitpoint_damage = true;
+        p.does_shield_damage = false;  // 2
+        w.data.projectiles.push_back(p);
+        UnitAbilityDesc cause, take;
+        cause.ability_type = kAbilityPowerToWeapons;
+        cause.mult[static_cast<size_t>(ModKind::CauseDamage) - 1] = 2.0f;
+        take.ability_type = kAbilityDefend;
+        take.mult[static_cast<size_t>(ModKind::TakeDamage) - 1] = 1.5f;
+        w.data.abilities = {cause, take};
+        HardpointDesc hd;
+        hd.kind = HardpointKind::Engine;
+        hd.health = 100.0f;
+        hd.destroyable = true;
+        w.data.hardpoints.push_back(hd);
+        UnitDesc s;
+        s.tactical_health = 1000.0f;
+        s.shield_points = 20.0f;
+        s.armor_type = hull;
+        s.shield_armor_type = sh;
+        shielded = push_unit(w.data, s);
+        UnitDesc pl;
+        pl.tactical_health = 1000.0f;
+        pl.abilities = {1, -1};
+        plain = push_unit(w.data, pl);
+        UnitDesc a;
+        a.tactical_health = 100.0f;
+        a.abilities = {0, -1};
+        attacker = push_unit(w.data, a);
+        UnitDesc h;
+        h.tactical_health = 500.0f;
+        h.hardpoints = {0, 0};
+        h.destroy_when_all_hardpoints_destroyed = true;
+        hp_unit = push_unit(w.data, h);
+        CombatConfig cfg;
+        cfg.object_max_health_multiplier = 1.0f;
+        cfg.hardpoint_health_multiplier = 1.0f;
+        w.make(cfg);
+    }
+    DamageRequest req(ObjectId v, float amount, uint8_t kind = kKindNormal) {
+        DamageRequest r;
+        r.victim = v;
+        r.amount = amount;
+        r.damage_type = laser;
+        r.kind = kind;
+        return r;
+    }
+};
+
+void test_take_damage() {
+    {  // Shields absorb in shield-armor space, the rest converts to hull-armor space.
+        DamageWorld d;
+        d.w.add(1, d.shielded, 1, Vec3{});
+        CHECK_F(d.w.sys->shield(1), 20.0f);
+        DamageResult r = d.w.sys->take_damage(d.req(1, 100.0f), 10);
+        CHECK_F(r.absorbed, 20.0f);   // min(20, 100 x 0.5)
+        CHECK_F(r.to_hull, 120.0f);   // (50 - 20) / 0.5 x 2
+        CHECK_F(d.w.sys->health(1), 880.0f);
+        CHECK_F(d.w.sys->shield(1), 0.0f);
+        // Depleted lockout: no absorption for 5 s even with shield points back.
+        d.w.sys->set_shield(1, 10.0f);
+        r = d.w.sys->take_damage(d.req(1, 100.0f), 10 + 149);
+        CHECK_F(r.absorbed, 0.0f);
+        CHECK_F(r.to_hull, 200.0f);
+        r = d.w.sys->take_damage(d.req(1, 100.0f), 10 + 150);
+        CHECK_F(r.absorbed, 10.0f);
+        CHECK_F(r.to_hull, 160.0f);  // (50 - 10) / 0.5 x 2
+        // Kind 22 bypasses shields.
+        d.w.sys->set_shield(1, 20.0f);
+        r = d.w.sys->take_damage(d.req(1, 10.0f, kKindBypassShield), 1000);
+        CHECK_F(r.absorbed, 0.0f);
+        CHECK_F(r.to_hull, 20.0f);
+        // Projectile without Projectile_Does_Shield_Damage: shields do not absorb.
+        DamageRequest pr = d.req(1, 10.0f);
+        pr.source_is_projectile = true;
+        pr.projectile_desc = 2;
+        r = d.w.sys->take_damage(pr, 1000);
+        CHECK_F(r.absorbed, 0.0f);
+        CHECK_F(r.to_hull, 20.0f);
+        // Projectile_Does_Hitpoint_Damage false: shields absorb, hull takes nothing.
+        pr.projectile_desc = 1;
+        d.w.sys->set_shield(1, 1.0f);
+        r = d.w.sys->take_damage(pr, 1000);
+        CHECK_F(r.absorbed, 1.0f);
+        CHECK_F(r.to_hull, 0.0f);
+    }
+    {  // Multiplier order: TAKE (victim) x CAUSE (projectile shooter) x Get_Damage_Multiplier.
+        DamageWorld d;
+        d.w.add(1, d.attacker, 0, Vec3{});
+        d.w.add(2, d.plain, 1, Vec3{});
+        d.w.sys->set_ability_active(1, 0, true);
+        d.w.sys->set_ability_active(2, 0, true);
+        d.w.sys->player_modifiers(0).insert(ModList::Damage, 1, 0.25f, kPermanent);
+        d.w.sys->unit_modifiers(2)->insert(ModList::Defense, 1, 0.9f, kPermanent);  // clamped to 0.75
+        d.w.tick();  // refresh caches
+        DamageRequest r = d.req(2, 100.0f);
+        r.damage_type = kNoTypeId;
+        r.source = 1;
+        r.source_is_projectile = true;
+        r.projectile_desc = 0;
+        DamageResult res = d.w.sys->take_damage(r, d.w.frame);
+        CHECK_F(res.after_multipliers, 93.75f);  // 100 x 1.5 x 2 x (1.25 x 0.25)
+        CHECK_F(res.to_hull, 93.75f);
+        // Non-projectile source without the +0x3a1 bit: CAUSE does not apply.
+        r.source_is_projectile = false;
+        r.projectile_desc = -1;
+        res = d.w.sys->take_damage(r, d.w.frame);
+        CHECK_F(res.after_multipliers, 46.875f);
+    }
+    {  // AI damage multiplier and the gates.
+        DamageWorld d;
+        PlayerInfo ai;
+        ai.ai = true;
+        ai.ai_damage_multiplier = 0.5f;
+        d.w.make(d.w.sys->config(), {ai, PlayerInfo{}});
+        d.w.add(1, d.attacker, 0, Vec3{});
+        d.w.add(2, d.plain, 1, Vec3{});
+        DamageRequest r = d.req(2, 100.0f);
+        r.damage_type = kNoTypeId;
+        r.source = 1;
+        CHECK_F(d.w.sys->take_damage(r, 5).to_hull, 50.0f);
+        d.w.sys->set_flag(2, kUnitInvulnerable, true);
+        CHECK(!d.w.sys->take_damage(r, 5).applied);
+        r.kind = kKindDebug;
+        CHECK(d.w.sys->take_damage(r, 5).applied);
+        d.w.sys->set_flag(2, kUnitInvulnerable, false);
+        // Cannot die: health stays at max(1, old).
+        d.w.sys->set_flag(2, kUnitCannotDie, true);
+        d.w.sys->set_health(2, 30.0f);
+        r.kind = kKindNormal;
+        r.amount = 1000.0f;
+        d.w.sys->take_damage(r, 5);
+        CHECK_F(d.w.sys->health(2), 30.0f);
+        d.w.sys->set_health(2, 0.5f);
+        d.w.sys->take_damage(r, 5);
+        CHECK_F(d.w.sys->health(2), 1.0f);
+        d.w.sys->set_flag(2, kUnitCannotDie, false);
+        const DamageResult k = d.w.sys->take_damage(r, 5);
+        CHECK(k.killed);
+        CHECK(!d.w.sys->alive(2));
+        CHECK(d.w.sys->deaths().size() == 1 && d.w.sys->deaths()[0].id == 2 && d.w.sys->deaths()[0].killer == 1);
+    }
+    {  // Hardpoint routing: a named live destroyable hardpoint takes ALL the damage; no clamp;
+       // killing the last one of a type with Should_Be_Destroyed_When_All_Hardpoints_Destroyed kills the hull.
+        DamageWorld d;
+        d.w.add(1, d.hp_unit, 1, Vec3{});
+        DamageRequest r = d.req(1, 60.0f);
+        r.damage_type = kNoTypeId;
+        r.hardpoint = 0;
+        DamageResult res = d.w.sys->take_damage(r, 5);
+        CHECK_F(res.to_hardpoint, 60.0f);
+        CHECK_F(res.to_hull, 0.0f);
+        CHECK_F(d.w.sys->hardpoint_health(1, 0), 40.0f);
+        CHECK_F(d.w.sys->health(1), 500.0f);
+        r.amount = 50.0f;
+        d.w.sys->take_damage(r, 5);
+        CHECK_F(d.w.sys->hardpoint_health(1, 0), -10.0f);  // no clamp
+        CHECK(d.w.sys->hardpoint_destroyed(1, 0));
+        res = d.w.sys->take_damage(r, 5);  // destroyed hardpoint: the hull takes it
+        CHECK_F(res.to_hull, 50.0f);
+        r.hardpoint = 1;
+        r.amount = 100.0f;
+        res = d.w.sys->take_damage(r, 5);
+        CHECK(d.w.sys->hardpoint_destroyed(1, 1));
+        CHECK(res.killed);
+        CHECK(!d.w.sys->alive(1));
+    }
+}
+
+void test_shield_regen_system() {
+    World w;
+    UnitDesc s;
+    s.tactical_health = 100.0f;
+    s.shield_points = 100.0f;
+    s.shield_refresh_rate = 10.0f;
+    const uint32_t ds = push_unit(w.data, s);
+    w.make();
+    w.add(1, ds, 0, Vec3{});
+    DamageRequest r;
+    r.victim = 1;
+    r.amount = 100.0f;
+    w.sys->take_damage(r, 1);  // depleted at frame 1
+    CHECK_F(w.sys->shield(1), 0.0f);
+    // Regeneration every int(30 x 1 x 3 + 0.5) = 90 frames: frame 90 is inside the 5 s lockout
+    // (cap 0.25 absolute points), frame 180 is not.
+    while (w.frame <= 90) w.tick();
+    CHECK_F(w.sys->shield(1), 0.25f);
+    while (w.frame <= 179) w.tick();
+    CHECK_F(w.sys->shield(1), 0.25f);
+    w.tick();
+    CHECK_F(w.sys->shield(1), 0.25f + 10.0f);
+}
+
+void test_hull_hardpoint_coupling() {
+    World w;
+    HardpointDesc hd;
+    hd.kind = HardpointKind::Engine;
+    hd.health = 100.0f;
+    hd.destroyable = true;
+    w.data.hardpoints.push_back(hd);
+    UnitDesc u;
+    u.tactical_health = 1000.0f;
+    u.hardpoints = {0, 0};
+    u.destroy_when_all_hardpoints_destroyed = true;
+    const uint32_t du = push_unit(w.data, u);
+    CombatConfig cfg;
+    cfg.object_max_health_multiplier = 1.0f;  // hardpoints keep the space x1.5 -> 150 each, T = 300
+    w.make(cfg);
+    w.add(1, du, 0, Vec3{});
+    w.add(2, du, 0, Vec3{100, 0, 0});
+    CHECK_F(w.sys->hardpoint_health(1, 0), 150.0f);
+    // Unit 1: hull at 20% -> hardpoint cap: excess = (1 - min(1, 0.2 + 0.2)) x 300.
+    w.sys->set_health(1, 200.0f);
+    // Unit 2: hardpoints at 15/150 each -> hull capped at (0.1 + 0.2) x max.
+    DamageRequest r;
+    r.victim = 2;
+    r.amount = 135.0f;
+    r.hardpoint = 0;
+    w.sys->take_damage(r, 1);
+    r.hardpoint = 1;
+    w.sys->take_damage(r, 1);
+    w.tick();
+    const float excess = (1.0f - (200.0f / 1000.0f + 0.2f)) * 300.0f;
+    CHECK_F(w.sys->hardpoint_health(1, 0), 150.0f - 150.0f / 300.0f * excess);
+    CHECK_F(w.sys->hardpoint_health(1, 1), 150.0f - 150.0f / 300.0f * excess);
+    CHECK_F(w.sys->health(2), (30.0f / 300.0f + 0.2f) * 1000.0f);
+}
+
+// Hardpoint disabled flag (hp +0x6e): Update_Weapon returns before the cooldown countdown and Fire_At (TACTICAL_COMBAT
+// 3.1 step 1); a repair to max health clears it (TACTICAL_GAPS §1.12 step 4). Repair-capable = DUMMY_STAR_BASE.
+void test_hardpoint_disabled() {
+    World w;
+    w.data.projectiles.push_back(ProjectileDesc{});
+    w.data.projectiles[0].max_speed = 10.0f;
+    w.data.projectiles[0].damage = 1.0f;
+    HardpointDesc hd;
+    hd.kind = HardpointKind::WeaponLaser;
+    hd.health = 100.0f;
+    hd.destroyable = true;
+    hd.targetable = true;
+    hd.projectile = 0;
+    hd.randomize_between_fire_bones = false;
+    hd.min_recharge = hd.max_recharge = 1.0f;
+    hd.fire_range = 1000.0f;
+    hd.repair_amount_per_frame = 10.0f;
+    w.data.hardpoints.push_back(hd);
+    UnitDesc shooter;
+    shooter.tactical_health = 100.0f;
+    shooter.max_attack_distance = 1000.0f;
+    shooter.hardpoints = {0};
+    UnitDesc station = shooter;
+    station.repairs_hardpoints = true;
+    UnitDesc target;
+    target.tactical_health = 1e6f;
+    target.radius = 10.0f;
+    const uint32_t ds = push_unit(w.data, shooter), dst = push_unit(w.data, station), dt = push_unit(w.data, target);
+    CombatConfig cfg;
+    cfg.object_max_health_multiplier = 1.0f;
+    cfg.hardpoint_health_multiplier = 1.0f;
+    w.make(cfg);
+    w.add(1, ds, 0, Vec3{0, 0, 0});
+    w.add(2, dt, 1, Vec3{500, 0, 0});
+    w.add(3, dst, 0, Vec3{0, 500, 0});
+    CHECK(!w.sys->can_repair_hardpoints(1) && w.sys->can_repair_hardpoints(3) && !w.sys->can_repair_hardpoints(99));
+    CHECK(!w.sys->hardpoint_disabled(1, 0) && !w.sys->hardpoint_disabled(1, 5) && !w.sys->hardpoint_disabled(99, 0));
+    w.sys->set_hardpoint_disabled(1, 0, true);
+    w.sys->set_hardpoint_disabled(3, 0, true);
+    CHECK(w.sys->hardpoint_disabled(1, 0));
+    w.sys->order_attack(1, 2);
+    const int32_t cd0 = w.sys->hardpoint_cooldown(1, 0);
+    for (int i = 0; i < 60; ++i) w.tick();
+    CHECK(w.sys->projectile_count() == 0);              // disabled: never fires
+    CHECK(w.sys->hardpoint_cooldown(1, 0) == cd0);      // and does not count down
+    // Repair: below max nothing changes; at max the flag clears and the weapon fires again.
+    w.sys->set_hardpoint_health(1, 0, 85.0f);
+    CHECK(w.sys->add_hardpoint_repairer(1, 0, 0) && w.sys->hardpoint_repaired_by(1, 0, 0) &&
+          !w.sys->hardpoint_repaired_by(1, 0, 1));
+    w.tick();  // 95
+    CHECK(w.sys->hardpoint_disabled(1, 0) && w.sys->hardpoint_repaired_by(1, 0, 0));
+    w.tick();  // 100: list cleared, flag cleared
+    CHECK(!w.sys->hardpoint_disabled(1, 0) && !w.sys->hardpoint_repaired_by(1, 0, 0));
+    CHECK(w.sys->hardpoint_disabled(3, 0));  // untouched
+    for (int i = 0; i < 60 && w.sys->projectile_count() == 0; ++i) w.tick();
+    CHECK(w.sys->projectile_count() > 0);
+}
+
+// HARDPOINT_DISABLED.md §3-§5: station-upgrade copy, functioning counts, offline effects of a disabled hardpoint,
+// the per-player special-weapon flag (Allows_Special_Weapon_Use), re-enable on repair to max.
+void test_station_upgrade_copy() {
+    World w(3);
+    HardpointDesc wpn;
+    wpn.kind = HardpointKind::WeaponLaser;
+    wpn.health = 100.0f;
+    wpn.destroyable = wpn.targetable = true;
+    wpn.min_recharge = wpn.max_recharge = 1.0f;
+    wpn.fire_range = 1000.0f;
+    wpn.repair_amount_per_frame = 10.0f;
+    HardpointDesc sw = wpn;
+    sw.kind = HardpointKind::WeaponSpecial;
+    sw.allows_special_weapon_use = true;
+    HardpointDesc gen = wpn;
+    gen.kind = HardpointKind::ShieldGenerator;
+    HardpointDesc fixed = wpn;  // not destroyable: the 0.1 health write is ignored
+    fixed.destroyable = false;
+    w.data.hardpoints = {wpn, sw, gen, fixed};
+    UnitDesc st1;
+    st1.tactical_health = 1000.0f;
+    st1.shield_points = 500.0f;
+    st1.hardpoints = {0, 0, 0, 1, 3, 0};  // 6: one more than the new station (ignored)
+    UnitDesc st2 = st1;
+    st2.hardpoints = {0, 0, 0, 1, 3};
+    UnitDesc gens = st1;
+    gens.hardpoints = {2, 0};
+    const uint32_t d1 = push_unit(w.data, st1), d2 = push_unit(w.data, st2), dg = push_unit(w.data, gens);
+    CombatConfig cfg;
+    cfg.object_max_health_multiplier = 1.0f;
+    cfg.hardpoint_health_multiplier = 1.0f;
+    w.make(cfg, {PlayerInfo{}, PlayerInfo{}, PlayerInfo{}});
+    w.sys->set_enemy(0, 2, false);  // player 2 allied to 0
+    w.sys->set_enemy(2, 0, false);
+    w.add(1, d1, 0, Vec3{0, 0, 0});
+    w.add(3, dg, 0, Vec3{0, 3000, 0});
+    for (int32_t p = 0; p < 3; ++p) CHECK(w.sys->special_weapon_hp_enabled(p));
+    CHECK(w.sys->special_weapon_hp_enabled(-1) && w.sys->special_weapon_hp_enabled(7));
+
+    // Destroying an Allows_Special_Weapon_Use hardpoint: Set_System_Online(0, destroyed) -> owner + allies := 0.
+    DamageRequest r;
+    r.victim = 1;
+    r.amount = 1000.0f;
+    r.hardpoint = 3;
+    w.sys->take_damage(r, w.frame);
+    CHECK(w.sys->hardpoint_destroyed(1, 3) && !w.sys->hardpoint_disabled(1, 3));  // destruction does not disable
+    CHECK(!w.sys->special_weapon_hp_enabled(0) && w.sys->special_weapon_hp_enabled(1) && !w.sys->special_weapon_hp_enabled(2));
+    // Old station: [0] damaged and being repaired by 0 then 2, [1] destroyed, [2] disabled, [3] SW destroyed,
+    // [4] non-destroyable disabled, [5] beyond the new list.
+    w.sys->set_hardpoint_health(1, 0, 40.0f);
+    CHECK(w.sys->add_hardpoint_repairer(1, 0, 0) && w.sys->add_hardpoint_repairer(1, 0, 2));
+    r.hardpoint = 1;
+    w.sys->take_damage(r, w.frame);
+    w.sys->set_hardpoint_disabled(1, 2, true);
+    w.sys->set_hardpoint_disabled(1, 4, true);
+    CHECK(w.sys->hardpoint_disabled(1, 2) && w.sys->hardpoint_health(1, 2) == 100.0f);  // keeps its health
+    CHECK(w.sys->live_hardpoints(1, HardpointKind::WeaponLaser) == 2);                // [0] and [5]
+
+    w.add(4, d2, 0, Vec3{0, 0, 0});  // Next_Level_Base, spawned by the host
+    CHECK(w.sys->special_weapon_hp_enabled(0) == false);
+    CHECK(!w.sys->copy_upgrade_hardpoints(1, 99) && !w.sys->copy_upgrade_hardpoints(99, 4));
+    CHECK(w.sys->copy_upgrade_hardpoints(1, 4));
+    // [0] being repaired: disabled, old health, repairers re-added in list order.
+    CHECK(w.sys->hardpoint_disabled(4, 0) && w.sys->hardpoint_health(4, 0) == 40.0f);
+    CHECK(w.sys->hardpoint_repairers(4, 0) == 2 && w.sys->hardpoint_repaired_by(4, 0, 0) && w.sys->hardpoint_repaired_by(4, 0, 2));
+    // [1] destroyed / [2] disabled: disabled at 0.1; [3] SW destroyed: disabled at 0.1, flag := 0 for allies.
+    for (uint32_t i = 1; i <= 3; ++i) {
+        CHECK(w.sys->hardpoint_disabled(4, i) && !w.sys->hardpoint_destroyed(4, i));
+        CHECK_F(w.sys->hardpoint_health(4, i), 0.1f);
+    }
+    CHECK(!w.sys->special_weapon_hp_enabled(0) && w.sys->special_weapon_hp_enabled(1) && !w.sys->special_weapon_hp_enabled(2));
+    // [4] non-destroyable: disabled, health untouched.
+    CHECK(w.sys->hardpoint_disabled(4, 4) && w.sys->hardpoint_health(4, 4) == 100.0f);
+    CHECK(w.sys->live_hardpoints(4, HardpointKind::WeaponLaser) == 0 && w.sys->live_hardpoints(4, HardpointKind::WeaponSpecial) == 0);
+    CHECK(!w.sys->can_attack(4) && w.sys->special_weapon_readiness(4) == 0.0f);
+
+    // Repair to max re-enables (clear + Set_System_Online(1)): [0] from 40 at 10 / frame / repairer (2 repairers).
+    w.sys->remove_unit(1);
+    w.tick();  // 60
+    w.tick();  // 80
+    CHECK(w.sys->hardpoint_disabled(4, 0));
+    w.tick();  // 100
+    CHECK(!w.sys->hardpoint_disabled(4, 0) && w.sys->hardpoint_repairers(4, 0) == 0);
+    CHECK(w.sys->live_hardpoints(4, HardpointKind::WeaponLaser) == 1 && w.sys->can_attack(4));
+    // The SW hardpoint: repair from 0.1 -> flag back to 1 for the owner and allies when it reaches max.
+    CHECK(w.sys->add_hardpoint_repairer(4, 3, 1));  // any player may pay (no ownership check)
+    for (int i = 0; i < 9; ++i) w.tick();
+    CHECK(w.sys->hardpoint_disabled(4, 3) && !w.sys->special_weapon_hp_enabled(0));
+    w.tick();
+    CHECK(!w.sys->hardpoint_disabled(4, 3) && w.sys->special_weapon_hp_enabled(0) && w.sys->special_weapon_hp_enabled(2));
+    CHECK(w.sys->live_hardpoints(4, HardpointKind::WeaponSpecial) == 1);
+
+    // Disabling the only shield generator runs the offline effects (shield zeroed, last of kind).
+    CHECK(w.sys->shield(3) > 0.0f);
+    w.sys->set_hardpoint_disabled(3, 0, true);
+    CHECK(w.sys->shield(3) == 0.0f && w.sys->live_hardpoints(3, HardpointKind::ShieldGenerator) == 0);
+    // A disabled hardpoint can still be shot down; it then stays destroyed and disabled (repair refused).
+    r.victim = 3;
+    r.hardpoint = 0;
+    w.sys->take_damage(r, w.frame);
+    CHECK(w.sys->hardpoint_destroyed(3, 0) && w.sys->hardpoint_disabled(3, 0));
+    CHECK(w.sys->add_hardpoint_repairer(3, 0, 0));
+    w.tick();
+    CHECK(w.sys->hardpoint_repairers(3, 0) == 0 && w.sys->hardpoint_disabled(3, 0));
+}
+
+void test_modifier_cache() {
+    World w;
+    UnitDesc u;
+    u.tactical_health = 100.0f;
+    u.max_attack_distance = 800.0f;
+    u.weapon_projectile = 0;
+    w.data.projectiles.push_back(ProjectileDesc{});
+    const uint32_t du = push_unit(w.data, u);
+    w.make();
+    w.add(1, du, 0, Vec3{});
+    CHECK_F(w.sys->attack_range(1), 800.0f);
+    w.sys->player_modifiers(0).insert(ModList::FireRange, 1, 0.25f, kPermanent);
+    CHECK_F(w.sys->modifier(1, ModList::FireRange), 0.25f);  // player-set change invalidates the cache
+    CHECK_F(w.sys->attack_range(1), 1000.0f);
+    w.sys->unit_modifiers(1)->insert(ModList::FireRange, 2, 0.25f, expiry_frame(w.frame, 1.0f, 30));
+    CHECK_F(w.sys->attack_range(1), 1200.0f);
+    for (int i = 0; i < 32; ++i) w.tick();  // expiry frame 31 < frame 32: purged in that object update
+    CHECK_F(w.sys->modifier(1, ModList::FireRange), 0.25f);
+    CHECK_F(w.sys->max_health(1), 100.0f * 1.5f);
+    w.sys->unit_modifiers(1)->insert(ModList::MaxHealth, 1, 0.2f, kPermanent);
+    w.tick();
+    CHECK_F(w.sys->max_health(1), 100.0f * 1.5f * 1.0f * 1.2f);
+}
+
+// ================================================================================================
+// scripted 2-sided space engagement
+// ================================================================================================
+
+struct Battle {
+    World w;
+    struct Mover {
+        ObjectId id;
+        Vec3 start, dir;
+        float speed;
+        uint32_t frames;
+        float radius;
+    };
+    std::vector<Mover> movers;
+    CrcRegistry registry;
+
+    Battle() {
+        CombatData& d = w.data;
+        const uint16_t laser = d.damage.add_damage_type("Damage_Laser");
+        const uint16_t missile = d.damage.add_damage_type("Damage_Missile");
+        const uint16_t a_cap = d.damage.add_armor_type("Armor_Capital");
+        const uint16_t s_cap = d.damage.add_armor_type("Shield_Capital");
+        const uint16_t a_fig = d.damage.add_armor_type("Armor_Fighter");
+        d.damage.set(laser, a_cap, 0.5f);
+        d.damage.set(laser, s_cap, 1.0f);
+        d.damage.set(missile, a_cap, 1.5f);
+        d.damage.set(missile, s_cap, 0.75f);
+        d.damage.set(missile, a_fig, 0.25f);
+        ProjectileDesc turbo;
+        turbo.name = "Turbolaser";
+        turbo.max_speed = 25.0f;
+        turbo.damage = 15.0f;
+        turbo.damage_type = laser;
+        turbo.max_flight_distance = 2200.0f;
+        ProjectileDesc mis;
+        mis.name = "Missile";
+        mis.max_speed = 15.0f;
+        mis.damage = 40.0f;
+        mis.damage_type = missile;
+        mis.blast_area_damage = 20.0f;
+        mis.blast_area_range = 120.0f;
+        mis.blast_dropoff = true;
+        mis.blast_dropoff_tiers = 2;
+        mis.blast_max_victims = 3;
+        mis.damages_random_hardpoints = true;
+        mis.homing = true;
+        ProjectileDesc flak;
+        flak.name = "FighterLaser";
+        flak.max_speed = 30.0f;
+        flak.damage = 4.0f;
+        flak.damage_type = laser;
+        flak.damage_delay_secs = 0.2f;
+        d.projectiles = {turbo, mis, flak};
+
+        HardpointDesc lz;
+        lz.name = "HP_Laser";
+        lz.name_crc = name_crc(lz.name);
+        lz.kind = HardpointKind::WeaponLaser;
+        lz.health = 300.0f;
+        lz.destroyable = lz.targetable = true;
+        lz.attach_offset = Vec3{40, 0, 0};
+        lz.bone_a = Vec3{40, 10, 0};
+        lz.bone_b = Vec3{40, -10, 0};
+        lz.has_bone_b = true;
+        lz.fire_cone_width = 160.0f;
+        lz.fire_cone_height = 130.0f;
+        lz.projectile = 0;
+        lz.min_recharge = 3.0f;
+        lz.max_recharge = 4.0f;
+        lz.pulse_count = 4;
+        lz.pulse_delay = 0.2f;
+        lz.fire_range = 1500.0f;
+        lz.inaccuracy = {{kCatFighter, 70.0f}, {kCatCapital, 10.0f}};
+        lz.weapon_delay = {{kAbilityPowerToWeapons, 0.75f}};
+        HardpointDesc ml = lz;
+        ml.name = "HP_Missile";
+        ml.name_crc = name_crc(ml.name);
+        ml.kind = HardpointKind::WeaponMissile;
+        ml.health = 200.0f;
+        ml.has_bone_b = false;
+        ml.randomize_between_fire_bones = false;
+        ml.projectile = 1;
+        ml.min_recharge = 5.0f;
+        ml.max_recharge = 6.0f;
+        ml.pulse_count = 2;
+        ml.pulse_delay = 0.5f;
+        ml.fire_range = 1800.0f;
+        ml.fire_category_restrictions = kCatFighter;  // missiles never fire at fighters
+        HardpointDesc sg;
+        sg.name = "HP_Shield";
+        sg.name_crc = name_crc(sg.name);
+        sg.kind = HardpointKind::ShieldGenerator;
+        sg.health = 250.0f;
+        sg.destroyable = sg.targetable = true;
+        sg.attach_offset = Vec3{-20, 0, 10};
+        HardpointDesc en = sg;
+        en.name = "HP_Engine";
+        en.name_crc = name_crc(en.name);
+        en.kind = HardpointKind::Engine;
+        en.health = 200.0f;
+        en.attach_offset = Vec3{-60, 0, 0};
+        d.hardpoints = {lz, ml, sg, en};
+
+        PrioritySet cap;
+        cap.name = "Capital";
+        cap.attack = {{PriorityEntry::Kind::Category, -1, kCatCapital, 1.0f}, {PriorityEntry::Kind::Category, -1, kCatFighter, 3.0f}};
+        cap.hardpoint_priorities = {name_crc("HP_Shield"), name_crc("HP_Laser")};
+        PrioritySet fig;
+        fig.name = "Fighter";
+        fig.attack = {{PriorityEntry::Kind::Category, -1, kCatFighter, 1.0f}, {PriorityEntry::Kind::Category, -1, kCatCapital, 2.0f}};
+        d.priority_sets = {cap, fig};
+
+        UnitAbilityDesc ptw;
+        ptw.ability_type = kAbilityPowerToWeapons;
+        ptw.mult[static_cast<size_t>(ModKind::FireRate) - 1] = 1.5f;
+        ptw.mult[static_cast<size_t>(ModKind::WeaponDelay) - 1] = 0.75f;
+        d.abilities = {ptw};
+
+        UnitDesc ship;
+        ship.name = "Destroyer";
+        ship.tactical_health = 2000.0f;
+        ship.shield_points = 600.0f;
+        ship.shield_refresh_rate = 30.0f;
+        ship.armor_type = a_cap;
+        ship.shield_armor_type = s_cap;
+        ship.radius = 80.0f;
+        ship.max_attack_distance = 1500.0f;
+        ship.category_mask = kCatCapital;
+        ship.priority_set = 0;
+        ship.stickiness_threshold = 4.0f;
+        ship.hardpoints = {0, 0, 1, 2, 3};
+        ship.abilities = {0, -1};
+        ship.hit_particle_count = 3;
+        ship.shield_hit_particle_count = 2;
+        UnitDesc fighter;
+        fighter.name = "Fighter";
+        fighter.tactical_health = 60.0f;
+        fighter.armor_type = a_fig;
+        fighter.radius = 8.0f;
+        fighter.max_attack_distance = 400.0f;
+        fighter.fire_inaccuracy_fixed_radius = 3.0f;
+        fighter.category_mask = kCatFighter;
+        fighter.priority_set = 1;
+        fighter.weapon_projectile = 2;
+        fighter.weapon_recharge = 1.0f;
+        fighter.weapon_pulse_count = 3;
+        fighter.weapon_pulse_delay = 0.15f;
+        fighter.hit_particle_count = 2;
+        d.units = {ship, fighter};
+
+        CombatConfig cfg;
+        cfg.grain = 2;  // small ranges so 4/N threads really split the work
+        cfg.max_secs_for_ae_delayed_damage = 0.5f;
+        cfg.low_health_threshold = 0.25f;
+        w.make(cfg);
+        w.sys->reserve(64, 4096, 64, 1024);
+
+        // Player 0 on the left facing +x, player 1 on the right facing -x.
+        ObjectId id = 1;
+        for (int side = 0; side < 2; ++side) {
+            const float sx = side == 0 ? -1.0f : 1.0f;
+            const Vec3 facing{-sx, 0.0f, 0.0f};
+            for (int i = 0; i < 2; ++i) {
+                const Vec3 p{sx * 1000.0f, (i == 0 ? -300.0f : 300.0f), 0.0f};
+                spawn(id++, 0, side, p, facing, Vec3{-sx, 0, 0}, 0.5f, 600);
+            }
+            for (int i = 0; i < 8; ++i) {
+                const Vec3 p{sx * 900.0f, -210.0f + 60.0f * static_cast<float>(i), static_cast<float>(i % 3) * 10.0f};
+                const Vec3 dir = norm(Vec3{-sx * 750.0f, -p.y * 0.5f, 0.0f});
+                spawn(id++, 1, side, p, dir, dir, 4.0f, 190);
+            }
+        }
+        w.sys->player_modifiers(0).insert(ModList::Damage, 1, 0.2f, kPermanent, name_crc("AURA_A"), 1);
+        w.sys->player_modifiers(0).insert(ModList::Damage, 1, 0.1f, kPermanent, name_crc("AURA_A"), 2);
+        w.sys->player_modifiers(0).insert(ModList::Damage, 2, 0.05f, kPermanent);
+        w.sys->player_modifiers(1).insert(ModList::Defense, 3, 0.15f, kPermanent);
+        w.sys->register_crc(registry, "combat");
+        registry.add("rng", [this](StateHasher& h) { w.rng.hash(h); });
+    }
+    void spawn(ObjectId id, uint32_t desc, int32_t owner, Vec3 p, Vec3 facing, Vec3 dir, float speed, uint32_t frames) {
+        w.add(id, desc, owner, p, facing);
+        movers.push_back(Mover{id, p, dir, speed, frames, w.data.units[desc].radius});
+    }
+    void script(uint32_t f) {
+        if (f == 50) w.sys->order_attack(13, 1);  // a player-1 fighter is ordered onto destroyer 1
+        if (f == 100) {
+            if (ModifierSet* m = w.sys->unit_modifiers(11))
+                m->insert(ModList::FireRate, 4, 0.3f, expiry_frame(f, 10.0f, 30));
+        }
+        if (f == 300) w.sys->set_ability_active(1, 0, true);  // POWER_TO_WEAPONS on destroyer 1
+        for (const Mover& m : movers) {
+            if (!w.sys->alive(m.id)) continue;
+            const float t = static_cast<float>(f < m.frames ? f : m.frames);
+            const Vec3 p = m.start + m.dir * (m.speed * t);
+            w.sys->set_position(m.id, p);
+            w.trees.update(static_cast<EntityHandle>(m.id), box_of(p, m.radius));
+        }
+        w.trees.maintain(static_cast<double>(f) / 30.0);
+    }
+    CrcLog run(uint32_t ticks, const ParallelFor& pf, bool capture = true) {
+        CrcLog log;
+        if (capture) {
+            log.systems = registry.names();
+            log.comments.push_back("S8 scripted space engagement, 2 players x (2 destroyers + 8 fighters), seed 12345");
+        }
+        for (uint32_t i = 0; i < ticks; ++i) {
+            const uint32_t f = w.frame;
+            script(f);
+            w.tick(pf);
+            // OI fog: one shot event per fired shot, target owner = an enemy of the shooter.
+            for (const ShotEvent& e : w.sys->shot_events()) {
+                ++shot_events;
+                if (e.shooter == kNoObject || e.target == kNoObject || e.target_owner < 0) ++bad_shot_events;
+            }
+            if (capture) log.records.push_back(registry.capture(f));
+        }
+        return log;
+    }
+    uint64_t shot_events = 0, bad_shot_events = 0;  // OI fog
+};
+
+void test_battle(const char* golden, const char* write_golden) {
+    const uint32_t kTicks = 900;
+    Battle a;
+    const CrcLog serial = a.run(kTicks, serial_for);
+    const CombatStats& st = a.w.sys->stats();
+    std::printf("battle: %u ticks, scans %llu, shots %llu, hits %llu, expired %llu, deaths %llu, resweeps %llu, units left %zu\n",
+                kTicks, static_cast<unsigned long long>(st.scans), static_cast<unsigned long long>(st.shots),
+                static_cast<unsigned long long>(st.hits), static_cast<unsigned long long>(st.expired),
+                static_cast<unsigned long long>(st.deaths), static_cast<unsigned long long>(st.resweeps), a.w.sys->unit_count());
+    CHECK(st.shots > 100);
+    CHECK(a.shot_events == st.shots && a.bad_shot_events == 0);  // OI fog
+    CHECK(st.hits > 50);
+    CHECK(st.deaths > 0);
+    CHECK(a.w.sys->unit_count() < 20);
+
+    const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
+    for (unsigned threads : {1u, 4u, hw}) {
+        Battle b;
+        const CrcLog par = b.run(kTicks, alamo::tactical::testing::make_thread_parallel_for(threads));
+        const CrcDivergence dv = first_divergence(serial, par);
+        if (dv.diverged) std::printf("threads %u: %s\n", threads, dv.message.c_str());
+        CHECK(!dv.diverged);
+    }
+    if (write_golden) {
+        std::string err;
+        CHECK(serial.save(write_golden, &err));
+        std::printf("golden written: %s\n", write_golden);
+    }
+    if (golden) {
+        CrcLog g;
+        std::string err;
+        if (!CrcLog::load(golden, g, &err)) {
+            std::printf("FAIL golden %s: %s (generate with --write-golden)\n", golden, err.c_str());
+            ++g_fail;
+        } else {
+            const CrcDivergence dv = first_divergence(g, serial);
+            if (dv.diverged) std::printf("golden: %s\n", dv.message.c_str());
+            CHECK(!dv.diverged);
+        }
+    }
+    std::printf("battle final combined crc %016llx\n",
+                static_cast<unsigned long long>(serial.records.empty() ? 0 : serial.records.back().combined));
+}
+
+void test_allocations() {
+    Battle b;
+    b.run(60, serial_for, false);  // warm-up (first queries, tree rebuild scratch, contexts)
+    uint64_t in_script = 0, in_tick = 0, in_trees = 0;
+    const ParallelFor pf = serial_for;
+    for (uint32_t i = 0; i < 540; ++i) {
+        const uint32_t f = b.w.frame;
+        g_allocs = 0;
+        g_count = true;
+        b.script(f);  // host side: positions, tree refit / maintain
+        g_count = false;
+        in_script += g_allocs.load();
+        g_allocs = 0;
+        g_count = true;
+        b.w.sys->tick(f, b.w.trees, b.w.rng, pf);
+        g_count = false;
+        if (g_allocs.load()) std::printf("  tick %u: %llu allocation(s)\n", f, static_cast<unsigned long long>(g_allocs.load()));
+        in_tick += g_allocs.load();
+        g_allocs = 0;
+        g_count = true;
+        for (const DeathEvent& d : b.w.sys->deaths()) b.w.trees.remove(static_cast<EntityHandle>(d.id));
+        g_count = false;
+        in_trees += g_allocs.load();
+        ++b.w.frame;
+    }
+    std::printf("allocations in 540 steady-state ticks: combat tick %llu (host script %llu, tree removals %llu)\n",
+                static_cast<unsigned long long>(in_tick), static_cast<unsigned long long>(in_script),
+                static_cast<unsigned long long>(in_trees));
+    CHECK(in_tick == 0);
+    CHECK(in_trees == 0);  // OI tactical: TreeSet::remove no longer allocates (SpatialTree free list pre-sized)
+}
+
+// ================================================================================================
+// N1 stage 2: save / load in the middle of a battle (CombatSystem / ModifierSet / WeatherSystem write + read)
+// ================================================================================================
+
+// Every combat hash (incl. the S9 extension) and the synced RNG.
+uint64_t combat_digest(const CombatSystem& s, const SimRng& rng) {
+    StateHasher h;
+    s.hash_units(h);
+    s.hash_projectiles(h);
+    s.hash_modifiers(h);
+    s.hash_delayed(h);
+    s.hash_extended(h);
+    rng.hash(h);
+    return h.digest();
+}
+
+std::vector<uint8_t> combat_bytes(const CombatSystem& s) {
+    ByteWriter w;
+    s.write(w);
+    return w.bytes();
+}
+
+// A fresh battle `b` (built exactly like the saved one) takes the saved combat state, RNG and frame. The host side
+// (trees) drops the units the saved run removed; positions are pushed by script() before every tick, as in the run.
+bool load_battle(Battle& b, const std::vector<uint8_t>& combat, const std::vector<uint8_t>& rng, uint32_t frame) {
+    ByteReader r(combat);
+    if (!b.w.sys->read(r)) return false;
+    ByteReader rr(rng);
+    if (!b.w.rng.read(rr)) return false;
+    b.w.frame = frame;
+    for (const Battle::Mover& m : b.movers)
+        if (!b.w.sys->has_unit(m.id)) b.w.trees.remove(static_cast<EntityHandle>(m.id));
+    return true;
+}
+
+void test_save_load() {
+    const uint32_t kBefore = 330, kAfter = 420;
+    Battle a;
+    a.run(kBefore, serial_for, false);
+    // Mid-battle: projectiles in flight, deaths, the timed fire-rate modifier (frame 100, 10 s) and POWER_TO_WEAPONS.
+    CHECK(a.w.sys->projectile_count() > 0);
+    CHECK(a.w.sys->unit_count() > 0 && a.w.sys->unit_count() < 20);
+    if (a.w.sys->has_unit(1)) CHECK(a.w.sys->ability_active(1, 0));
+    const std::vector<uint8_t> saved = combat_bytes(*a.w.sys);
+    ByteWriter rng_w;
+    a.w.rng.write(rng_w);
+
+    Battle b;
+    CHECK(load_battle(b, saved, rng_w.bytes(), a.w.frame));
+    CHECK(combat_bytes(*b.w.sys) == saved);  // write -> read -> write: identical bytes
+    CHECK(combat_digest(*a.w.sys, a.w.rng) == combat_digest(*b.w.sys, b.w.rng));
+    CHECK(a.registry.capture(a.w.frame).combined == b.registry.capture(b.w.frame).combined);
+    CHECK(a.w.sys->modifier(11, ModList::FireRate) == b.w.sys->modifier(11, ModList::FireRate));
+
+    // Both continue (the loaded one on 4 threads): identical state every tick.
+    const ParallelFor pf4 = alamo::tactical::testing::make_thread_parallel_for(4);
+    uint32_t diverged = 0, shots = 0, deaths = 0;
+    for (uint32_t i = 0; i < kAfter; ++i) {
+        const uint32_t f = a.w.frame;
+        a.script(f);
+        a.w.tick();
+        b.script(f);
+        b.w.tick(pf4);
+        shots += static_cast<uint32_t>(a.w.sys->shot_events().size());
+        deaths += static_cast<uint32_t>(a.w.sys->deaths().size());
+        if (combat_digest(*a.w.sys, a.w.rng) != combat_digest(*b.w.sys, b.w.rng) ||
+            a.w.sys->deaths().size() != b.w.sys->deaths().size() ||
+            a.w.sys->damage_events().size() != b.w.sys->damage_events().size()) {
+            if (diverged == 0) std::printf("save/load: diverged at frame %u\n", f);
+            ++diverged;
+        }
+    }
+    CHECK(diverged == 0);
+    CHECK(shots > 0 && deaths > 0);  // the continuation really fought
+    CHECK(combat_bytes(*a.w.sys) == combat_bytes(*b.w.sys));
+    std::printf("combat save: %zu bytes at frame %u, %u ticks continued identically (%u shots, %u deaths)\n", saved.size(),
+                kBefore, kAfter, shots, deaths);
+}
+
+void put_u32_at(std::vector<uint8_t>& v, size_t off, uint32_t x) {
+    for (int i = 0; i < 4; ++i) v[off + static_cast<size_t>(i)] = static_cast<uint8_t>(x >> (8 * i));
+}
+
+void test_save_rejects() {
+    Battle a;
+    a.run(200, serial_for, false);
+    const std::vector<uint8_t> saved = combat_bytes(*a.w.sys);
+    Battle c;
+    c.run(20, serial_for, false);
+    const std::vector<uint8_t> before = combat_bytes(*c.w.sys);
+    const auto rejected = [&c](const std::vector<uint8_t>& bytes) {
+        ByteReader r(bytes);
+        return !c.w.sys->read(r);
+    };
+    // truncated anywhere
+    uint32_t cuts = 0, accepted = 0;
+    for (size_t len = 0; len < saved.size(); len += (len < 256 ? 1 : 61)) {
+        ++cuts;
+        if (!rejected(std::vector<uint8_t>(saved.begin(), saved.begin() + static_cast<std::ptrdiff_t>(len)))) ++accepted;
+    }
+    CHECK(rejected(std::vector<uint8_t>(saved.begin(), saved.end() - 1)));
+    CHECK(cuts > 100 && accepted == 0);
+    // trailing data, version, definition counts
+    std::vector<uint8_t> bad = saved;
+    bad.push_back(0);
+    CHECK(rejected(bad));
+    bad = saved;
+    put_u32_at(bad, 0, 99);
+    CHECK(rejected(bad));
+    bad = saved;
+    put_u32_at(bad, 4, 3);  // player count
+    CHECK(rejected(bad));
+    bad = saved;
+    put_u32_at(bad, 8, 7);  // unit descriptor count
+    CHECK(rejected(bad));
+    // the first unit's descriptor index out of range: header (version, 6 counts, frame, serial), relations P x P,
+    // special-weapon flags P, the player modifier sets (version, count, 21 bytes per entry), weather row, unit count, id
+    size_t off = 4 + 24 + 8 + 4 + 2;
+    for (int32_t p = 0; p < 2; ++p) off += 8 + 21 * a.w.sys->player_modifiers(p).entries().size();
+    off += 40 + 4 + 4;
+    bad = saved;
+    put_u32_at(bad, off, 1000);
+    CHECK(rejected(bad));
+    bad = saved;
+    // a valid descriptor with another hardpoint count (destroyer <-> fighter)
+    put_u32_at(bad, off, a.w.sys->desc_index(a.w.sys->unit_id_at(0)) == 0 ? 1u : 0u);
+    CHECK(rejected(bad));
+    CHECK(combat_bytes(*c.w.sys) == before);  // every rejected read left the system unchanged
+    ByteReader ok(saved);
+    CHECK(c.w.sys->read(ok));  // and the intact bytes still load
+    CHECK(combat_bytes(*c.w.sys) == saved);
+}
+
+void test_weather_save() {
+    WeatherData data;
+    WeatherScenario other;
+    other.name = "Calm";
+    other.phases.resize(1);
+    WeatherScenario storm;
+    storm.name = "Storm";
+    storm.phases.resize(3);
+    storm.phases[0] = WeatherPhase{0.2f, 0.0f, 0.1f, WeatherType::Clear, 4, 2};
+    storm.phases[1] = WeatherPhase{0.9f, 0.5f, 0.6f, WeatherType::Rain, 5, 3};
+    storm.phases[2] = WeatherPhase{0.7f, 0.2f, 0.3f, WeatherType::Sandstorm, 3, 2};
+    data.scenarios = {other, storm};
+    data.modifiers[1].accuracy[0] = 0.5f;
+    data.modifiers[3].accuracy[7] = 0.25f;
+
+    WeatherSystem a;
+    SimRng ra{77u};
+    a.start(&data.scenarios[1], &data, 1, ra);
+    for (uint32_t f = 2; f <= 333; ++f) {
+        a.clear_events();
+        a.service(f, ra);
+    }
+    ByteWriter wa;
+    a.write(wa);
+    const std::vector<uint8_t> saved = wa.bytes();
+
+    WeatherSystem b;
+    SimRng rb{77u};
+    b.start(&data.scenarios[1], &data, 1, rb);
+    ByteReader r(saved);
+    CHECK(b.read(r));
+    ByteWriter rng_w;
+    ra.write(rng_w);
+    ByteReader rng_r(rng_w.bytes());
+    CHECK(rb.read(rng_r));
+    ByteWriter wb;
+    b.write(wb);
+    CHECK(wb.bytes() == saved);
+    const auto digest = [](const WeatherSystem& s) {
+        StateHasher h;
+        s.hash(h);
+        return h.digest();
+    };
+    CHECK(digest(a) == digest(b) && a.events().size() == b.events().size());
+    uint32_t diverged = 0, advances = 0;
+    for (uint32_t f = 334; f <= 1500; ++f) {
+        a.clear_events();
+        b.clear_events();
+        const uint32_t phase = a.phase_index();
+        a.service(f, ra);
+        b.service(f, rb);
+        if (a.phase_index() != phase) ++advances;
+        if (digest(a) != digest(b) || a.accuracy_row() != b.accuracy_row() || ra.state() != rb.state() ||
+            a.events().size() != b.events().size())
+            ++diverged;
+    }
+    CHECK(diverged == 0 && advances > 2);
+
+    // rejects: truncation, an unknown scenario (other data), a phase index out of range; the system stays unchanged
+    WeatherSystem c;
+    SimRng rc{5u};
+    c.start(&data.scenarios[0], &data, 1, rc);
+    ByteWriter wc0;
+    c.write(wc0);
+    uint32_t accepted = 0;
+    for (size_t len = 0; len < saved.size(); ++len) {
+        ByteReader rt(std::span<const uint8_t>(saved.data(), len));
+        if (c.read(rt)) ++accepted;
+    }
+    CHECK(accepted == 0);
+    WeatherData renamed = data;
+    renamed.scenarios[1].name = "Hail";
+    WeatherSystem d;
+    SimRng rd{5u};
+    d.start(&renamed.scenarios[1], &renamed, 1, rd);
+    ByteWriter wd0;
+    d.write(wd0);
+    ByteReader rn(saved);
+    CHECK(!d.read(rn));
+    ByteWriter wd1;
+    d.write(wd1);
+    CHECK(wd1.bytes() == wd0.bytes());
+    ByteWriter wc1;
+    c.write(wc1);
+    CHECK(wc1.bytes() == wc0.bytes());
+}
+
+// ================================================================================================
+// FoC data (ALAMO_FOC_DATA)
+// ================================================================================================
+
+void test_foc_data() {
+    const char* root = std::getenv("ALAMO_FOC_DATA");
+    if (!root || !*root) {
+        std::printf("foc data: skipped (ALAMO_FOC_DATA unset)\n");
+        return;
+    }
+#ifdef ALAMO_COMBAT_TESTS_HAVE_VFS
+    // The shipped game keeps Data\XML inside Config.meg: read through the VFS (MEGs + loose overrides).
+    vfs::VfsConfig vcfg;
+    vcfg.foc_root = root;
+    std::string verr;
+    const std::unique_ptr<vfs::Vfs> vfs_ptr = vfs::Vfs::create(vcfg, &verr);
+    if (!vfs_ptr) {
+        std::printf("FAIL foc data: VFS on %s: %s\n", root, verr.c_str());
+        ++g_fail;
+        return;
+    }
+    const FileProvider& fs = *vfs_ptr;
+#else
+    DirectoryProvider fs(root);
+#endif
+    std::vector<uint8_t> bytes;
+    if (!fs.read("Data\\XML\\GameConstants.xml", bytes)) {
+        std::printf("FAIL foc data: GameConstants.xml not found under %s\n", root);
+        ++g_fail;
+        return;
+    }
+    const data::XmlDocument doc = data::XmlDocument::parse(bytes, "GameConstants.xml");
+    data::GameConstants gc;
+    for (data::XmlNode c : doc.root().children()) gc.fields.emplace_back(c.name(), c.text_trimmed());
+    std::vector<std::string> diag;
+    const DamageArmorTable t = DamageArmorTable::from_constants(gc, &diag);
+    std::printf("foc data: %u damage types, %u armor types, %zu diagnostics\n", t.damage_count(), t.armor_count(), diag.size());
+    CHECK(diag.empty());
+    CHECK(t.damage_count() > 20 && t.armor_count() > 20);
+    CHECK_F(t.factor(t.damage_index("Damage_Turbolaser"), t.armor_index("Armor_Fighter")), 0.3f);
+    CHECK_F(t.factor(t.damage_index("Damage_Turbolaser"), t.armor_index("Shield_Capital")), 0.75f);
+    CHECK_F(t.factor(t.damage_index("Damage_Default"), t.armor_index("Armor_Default")), 1.0f);
+
+    objects::EnumRegistry enums;
+    enums.load_dynamic(fs, nullptr);
+    if (!fs.read("Data\\XML\\SpaceUnitTargetingPriorities.xml", bytes)) {
+        std::printf("FAIL foc data: SpaceUnitTargetingPriorities.xml missing\n");
+        ++g_fail;
+        return;
+    }
+    const data::XmlDocument pdoc = data::XmlDocument::parse(bytes, "SpaceUnitTargetingPriorities.xml");
+    diag.clear();
+    const std::vector<PrioritySet> sets = load_priority_sets(pdoc.root(), enums, nullptr, &diag);
+    std::printf("foc data: %zu space priority sets, %zu diagnostics (unit-exclusion type names need a resolver)\n", sets.size(),
+                diag.size());
+    const PrioritySet* fighter = nullptr;
+    for (const PrioritySet& s : sets)
+        if (iequals(s.name, "Fighter")) fighter = &s;
+    CHECK(fighter != nullptr);
+    if (fighter) {
+        CHECK(fighter->attack.size() == 3);
+        if (fighter->attack.size() == 3) {
+            CHECK(fighter->attack[0].kind == PriorityEntry::Kind::Category);
+            CHECK_F(fighter->attack[0].weight, 1.0f);
+            CHECK_F(fighter->attack[2].weight, 3.0f);
+            const auto transport = enums.get(objects::EnumId::GameObjectCategory).lookup("Transport");
+            CHECK(transport && fighter->attack[0].mask == static_cast<uint64_t>(*transport));
+        }
+        CHECK(fighter->property_exclusions != 0);
+    }
+}
+
+// ================================================================================================
+// benchmark: modifier aggregation
+// ================================================================================================
+
+void bench_modifiers() {
+    for (const uint32_t n : {1000u, 10000u}) {
+        uint32_t st = 7;
+        auto rnd = [&st]() {
+            st = st * 1103515245u + 12345u;
+            return (st >> 8) & 0xFFFFu;
+        };
+        std::vector<ModifierSet> objs(n);
+        ModifierSet players[2];
+        for (ModifierSet& p : players)
+            for (int i = 0; i < 6; ++i)
+                p.insert(static_cast<ModList>(rnd() % kModListCount), static_cast<int32_t>(rnd() % 6),
+                         static_cast<float>(rnd() % 100) / 100.0f - 0.5f, kPermanent);
+        for (ModifierSet& o : objs)
+            for (int i = 0; i < 4; ++i)
+                o.insert(static_cast<ModList>(rnd() % kModListCount), static_cast<int32_t>(rnd() % 6),
+                         static_cast<float>(rnd() % 100) / 100.0f - 0.5f, kPermanent);
+        std::vector<std::array<float, kModListCount>> cache(n);
+        std::vector<uint32_t> ver(n, 0xFFFFFFFFu);
+        volatile float sink = 0.0f;
+        using clk = std::chrono::steady_clock;
+        const int reps = n >= 10000 ? 20 : 200;
+
+        auto t0 = clk::now();
+        for (int r = 0; r < reps; ++r)
+            for (uint32_t i = 0; i < n; ++i) {
+                float s = 0.0f;
+                for (uint32_t l = 0; l < kModListCount; ++l) s += reduce_list(&players[i & 1], &objs[i], static_cast<ModList>(l));
+                sink = sink + s;
+            }
+        const double per_query = std::chrono::duration<double, std::nano>(clk::now() - t0).count() / (reps * double(n));
+
+        t0 = clk::now();
+        for (int r = 0; r < reps; ++r)
+            for (uint32_t i = 0; i < n; ++i) {
+                reduce_all(&players[i & 1], &objs[i], default_list_clamps(), cache[i]);
+                sink = sink + cache[i][1];
+            }
+        const double per_all = std::chrono::duration<double, std::nano>(clk::now() - t0).count() / (reps * double(n));
+
+        // Steady state: version check + cached loads (11 lists), 2% of the objects dirty per tick.
+        t0 = clk::now();
+        for (int r = 0; r < reps; ++r) {
+            for (uint32_t i = static_cast<uint32_t>(r % 50); i < n; i += 50) objs[i].insert(ModList::Damage, 9, 0.01f, kPermanent);
+            for (uint32_t i = 0; i < n; ++i) {
+                if (ver[i] != objs[i].version()) {
+                    reduce_all(&players[i & 1], &objs[i], default_list_clamps(), cache[i]);
+                    ver[i] = objs[i].version();
+                }
+                float s = 0.0f;
+                for (uint32_t l = 0; l < kModListCount; ++l) s += cache[i][l];
+                sink = sink + s;
+            }
+        }
+        const double per_cached = std::chrono::duration<double, std::nano>(clk::now() - t0).count() / (reps * double(n));
+        std::printf("bench modifiers N=%u: 11 lists/object  per-query reduce_list %.1f ns  reduce_all %.1f ns  "
+                    "cached tick (2%% dirty) %.1f ns  -> %.2f ms/tick uncached vs %.3f ms/tick cached\n",
+                    n, per_query, per_all, per_cached, per_query * n / 1e6, per_cached * n / 1e6);
+        (void)sink;
+    }
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    const char* golden = nullptr;
+    const char* write_golden = nullptr;
+    bool bench = true;
+    for (int i = 1; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--golden") && i + 1 < argc) golden = argv[++i];
+        else if (!std::strcmp(argv[i], "--write-golden") && i + 1 < argc) write_golden = argv[++i];
+        else if (!std::strcmp(argv[i], "--no-bench")) bench = false;
+    }
+    test_scan_cadence();
+    test_recharge();
+    test_inaccuracy_formula();
+    test_range_lead_area();
+    test_modifier_stacking();
+    test_modifier_expiry();
+    test_reduce_all_matches();
+    test_mod_multiplier();
+    test_priority_sets();
+    test_damage_table();
+    test_inaccuracy_system();
+    test_targeting_rules();
+    test_circular_lead();  // OI tactical
+    test_lob();
+    test_team_targeting();
+    test_gaps_constants();
+    test_land_obstacle_and_weapon_index();
+    test_fog_filter();
+    test_take_damage();
+    test_shield_regen_system();
+    test_hull_hardpoint_coupling();
+    test_hardpoint_disabled();
+    test_station_upgrade_copy();
+    test_modifier_cache();
+    test_battle(golden, write_golden);
+    test_allocations();
+    test_save_load();  // N1 stage 2
+    test_save_rejects();
+    test_weather_save();
+    test_foc_data();
+    if (bench) bench_modifiers();
+    if (g_fail) {
+        std::printf("%d check(s) FAILED\n", g_fail);
+        return 1;
+    }
+    std::printf("all combat tests passed\n");
+    return 0;
+}

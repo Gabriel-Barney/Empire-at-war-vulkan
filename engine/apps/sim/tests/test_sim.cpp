@@ -1,0 +1,1890 @@
+// alamo_sim tests (no framework; non-zero exit on failure).
+//   * pacing: speed table, floor(1000/rate) gating, last = now (no catch-up), pause / step, fast,
+//     cinematic, wrap-around, stopped
+//   * mode stack: galactic -> push space -> pop; only the top mode ticks, global frame continuous,
+//     shared id counter, RNG not reseeded on push
+//   * per-tick step order (T1..T13 and the tactical / common sub-steps)
+//   * command handlers: select / move / attack / stop validation, wire id mapping, execute_direct
+//   * synthetic space map (no game data): record a 600-tick run with live orders + AI stand-ins,
+//     replay it at 0/1/4/N workers -> identical CRC logs, = the record run, = the checked-in golden
+//     (testdata/synthetic_golden.crc; stream testdata/synthetic_stream.acmd must regenerate
+//     byte-identically). Real time pacing gives the same CRCs as the fast runner.
+//   * real data (ALAMO_FOC_DATA set; skipped otherwise): FoC space map _SPACE_PLANET_CORELLIA_PIRACY
+//     and land map _LAND_PLANET_BYSS_KIDNAPPING: spawn with real stats, spatial queries = brute
+//     force, 600 ticks replayed from testdata/<map>.acmd at 0/1/4/N workers = golden.
+//   * S4 story (built with engine/lua): synthetic plot + Lua script over a synthetic galactic campaign,
+//     fired-event log identical for 0/1/4/N workers = testdata/story_synthetic_golden.txt; with
+//     ALAMO_FOC_DATA the opening of Full_Story_Campaign_Underworld = testdata/story_underworld_golden.txt.
+// `alamo_sim_tests --regen` rewrites the streams and goldens (MSVC is the reference compiler);
+// `--regen-story` only the story logs; `--story-only` runs pacing + the synthetic story test.
+#include <algorithm>
+#include <cinttypes>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "alamo/commands/recording.hpp"
+#include "alamo/core/file_provider.hpp"
+#include "alamo/core/hash.hpp"
+#include "alamo/core/log.hpp"
+#include "alamo/data/game_database.hpp"
+#include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/galactic_rules.hpp"
+#include "alamo/jobs/crc_recorder.hpp"
+#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/object_types.hpp"
+#include "alamo/sim/scenario.hpp"
+#include "alamo/terrain/ted.hpp"
+#include "alamo/vfs/vfs.hpp"
+#ifdef ALAMO_SIM_HAVE_STORY
+#include "alamo/lua/story_model.hpp"  // dialog_log (L1/S4 wave 1 test)
+#include "alamo/galactic/conflicts.hpp"  // BattleRequest (L1/S4 wave 2a test)
+#endif
+
+using namespace alamo;
+using namespace alamo::sim;
+namespace fs = std::filesystem;
+namespace cmd = alamo::commands;
+
+static int g_fail = 0;
+static bool g_regen = false;
+#define CHECK(c)                                                     \
+    do {                                                             \
+        if (!(c)) {                                                  \
+            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
+            ++g_fail;                                                \
+        }                                                            \
+    } while (0)
+
+static std::string env_or_empty(const char* name) {
+#ifdef _MSC_VER
+    char* v = nullptr;
+    size_t len = 0;
+    std::string out;
+    if (_dupenv_s(&v, &len, name) == 0 && v) {
+        out = v;
+        std::free(v);
+    }
+    return out;
+#else
+    const char* v = std::getenv(name);
+    return v ? std::string(v) : std::string();
+#endif
+}
+
+static std::string testdata(const std::string& name) { return std::string(ALAMO_SIM_TESTDATA) + "/" + name; }
+
+// ------------------------------------------------------------------------------------------ pacing
+static void test_pacing() {
+    FrameSynchronizer fs;
+    CHECK(!fs.pace(0));  // stopped until a mode starts
+    fs.reset();
+    fs.set_stopped(false);
+    CHECK(fs.rate() == 30 && fs.period_ms() == 33);
+    CHECK(fs.pace(1000));
+    CHECK(!fs.pace(1032));
+    CHECK(fs.pace(1033));
+    CHECK(fs.pace(2000));  // late: one tick, no catch-up
+    CHECK(!fs.pace(2001) && !fs.pace(2032) && fs.pace(2033));
+    fs.set_tactical_speed(4);
+    fs.select_active(true);
+    CHECK(fs.rate() == 60 && fs.period_ms() == 16);
+    fs.set_galactic_speed(0);
+    fs.select_active(false);
+    CHECK(fs.rate() == 10 && fs.period_ms() == 100);
+    fs.set_galactic_speed(99);
+    CHECK(fs.active_speed_index() == 4 && fs.rate() == 60);
+    fs.set_fast(true);
+    CHECK(fs.rate() == 120 && fs.period_ms() == 8);
+    fs.set_paused(true);
+    CHECK(!fs.fast() && !fs.pace(5000));
+    fs.request_step();
+    CHECK(fs.pace(5001));
+    CHECK(!fs.pace(9000));  // step consumed
+    fs.set_paused(false);
+    fs.set_cinematic_lock(true);
+    CHECK(fs.rate() == 30);
+    fs.set_fast(true);  // OI host: the cinematic lock wins over fast mode (MAIN_LOOP.md §1.2)
+    CHECK(fs.rate() == 30);
+    fs.reset();
+    CHECK(fs.pace(0xFFFFFFF0u) && !fs.pace(0x10u) && fs.pace(0x11u));  // timeGetTime wrap
+    fs.set_stopped(true);
+    CHECK(!fs.pace(0x1000u));
+}
+
+// ---------------------------------------------------------------------------------- synthetic world
+struct World {
+    std::unique_ptr<DirectoryProvider> files;
+    objects::ObjectTypeDatabase db;
+    objects::GameObjectTypes types;
+};
+
+static void write_file(const fs::path& p, const std::string& s) {
+    fs::create_directories(p.parent_path());
+    std::ofstream(p, std::ios::binary) << s;
+}
+
+static std::unique_ptr<World> make_world() {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_tests_types";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>SimTest.xml</File></GameObjectFiles>\n");
+    write_file(root / "Data/XML/SimTest.xml",
+               "<SimTest>\n"
+               " <SpaceUnit Name=\"Sim_Frigate\">\n"
+               "  <Tactical_Health>1200</Tactical_Health><Max_Speed>4.0</Max_Speed>\n"
+               "  <Targeting_Max_Attack_Distance>900</Targeting_Max_Attack_Distance>\n"
+               "  <Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>\n"
+               "  <Behavior>SELECTABLE, TARGETING</Behavior><SpaceBehavior>FIGHTER_LOCOMOTOR</SpaceBehavior>\n"
+               " </SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sim_Corvette\"><Variant_Of_Existing_Type>Sim_Frigate</Variant_Of_Existing_Type>\n"
+               "  <Max_Speed>6.5</Max_Speed><Tactical_Health>600</Tactical_Health></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sim_Station\"><Tactical_Health>8000</Tactical_Health>\n"
+               "  <Custom_Hard_XExtent>300</Custom_Hard_XExtent><Behavior>SELECTABLE</Behavior>\n"
+               "  <Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sim_Asteroid\"><Tactical_Health>50</Tactical_Health><Scale_Factor>2.0</Scale_Factor>\n"
+               "  <Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sim_Planet\"><Behavior>PLANET</Behavior></SpaceUnit>\n"
+               "</SimTest>\n");
+    auto w = std::make_unique<World>();
+    w->files = std::make_unique<DirectoryProvider>(path_to_utf8(root));
+    CHECK(w->db.load(*w->files));
+    CHECK(w->types.build(w->db));
+    return w;
+}
+
+// Two fleets + a station each, neutral asteroids (owner 3), deterministic placement.
+static terrain::MapData make_synthetic_map() {
+    terrain::MapData m;
+    uint32_t s = 12345u;
+    auto rnd = [&s](float lo, float hi) {
+        s = s * 1103515245u + 12345u;
+        return lo + (hi - lo) * static_cast<float>((s >> 8) & 0xFFFFu) / 65535.0f;
+    };
+    auto add = [&m](const char* type, uint32_t owner, float x, float y, float yaw, float health) {
+        terrain::ObjectPlacement p;
+        p.type_crc = name_crc(type);
+        p.owner = owner;
+        p.position[0] = x;
+        p.position[1] = y;
+        p.rotation_deg[2] = yaw;
+        p.health_fraction = health;
+        m.objects.push_back(p);
+    };
+    for (uint32_t side = 0; side < 2; ++side) {
+        const float cx = side == 0 ? -3000.0f : 3000.0f;
+        add("Sim_Station", side, cx * 1.3f, 0.0f, side ? 180.0f : 0.0f, 1.0f);
+        for (int i = 0; i < 8; ++i) add("Sim_Frigate", side, cx + rnd(-600, 600), rnd(-1500, 1500), rnd(0, 360), 1.0f);
+        for (int i = 0; i < 4; ++i) add("Sim_Corvette", side, cx + rnd(-400, 400), rnd(-1500, 1500), rnd(0, 360), 0.75f);
+    }
+    for (int i = 0; i < 30; ++i) add("SIM_ASTEROID", 3, rnd(-4500, 4500), rnd(-4500, 4500), rnd(0, 360), 1.0f);
+    add("No_Such_Type", 3, 0, 0, 0, 1.0f);
+    return m;
+}
+
+// ------------------------------------------------------------------------------------- mode stack
+static void test_mode_stack(const World& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 777;
+    SimHost host(w.types, js, cfg);
+    CHECK(!host.tick_once());  // empty stack: simulation stopped
+    GameMode& gal = host.start_game(ModeKind::Galactic);
+    const auto planet = gal.primary().create({w.types.resolve_name("Sim_Planet")});
+    CHECK(gal.primary().id(planet) == 1);
+    host.random().synced().next15();  // galactic draws continue into the battle
+    const uint32_t rng_before_push = host.random().synced().state();
+    CHECK(host.run_fast(10) == 10 && gal.frame() == 10 && gal.ticks() == 10 && host.frame() == 10);
+    GameMode& space = host.start_game(ModeKind::Space);
+    CHECK(host.modes().depth() == 2 && host.modes().top() == &space && gal.suspended());
+    CHECK(host.random().synced().state() == rng_before_push);  // not reseeded on push
+    objects::SpawnParams sp;
+    sp.type = w.types.resolve_name("Sim_Frigate");
+    sp.parent_mode_id = 1;
+    const ObjectHandle ship = host.tactical()->spawn(sp);
+    CHECK(space.primary().id(ship) == 2);  // shared id counter
+    CHECK(host.run_fast(20) == 20);
+    CHECK(gal.frame() == 10 && gal.ticks() == 10);  // suspended mode does not tick
+    CHECK(space.frame() == 20 && space.ticks() == 20 && host.frame() == 30);
+    CHECK(host.tactical()->tactical_frame() == 20);
+    // Parent-mode death marking reaches the galactic counterpart (type differs: container path).
+    host.tactical()->destroy(ship);
+    host.run_fast(1);
+    CHECK(space.primary().live_count() == 0 && host.tactical()->trees().size() == 0);
+    CHECK(host.end_game_mode());
+    CHECK(host.modes().depth() == 1 && !gal.suspended());
+    gal.set_paused(true);
+    CHECK(host.run_fast(5) == 5 && gal.frame() == 10 && gal.ticks() == 15 && host.frame() == 36);
+    gal.set_paused(false);
+    CHECK(host.run_fast(5) == 5 && gal.frame() == 15);
+    CHECK(host.crc_log().records.size() == 42 && host.crc_log().records.front().tick == 0 &&
+          host.crc_log().records.back().tick == 41);
+    CHECK(host.end_game_mode() && !host.tick_once() && !host.end_game_mode());
+    // A new session restarts at frame 0 with the seed and a fresh id counter.
+    GameMode& again = host.start_game(ModeKind::Land);
+    CHECK(host.frame() == 0 && host.random().synced().state() == 777u &&
+          again.primary().id(again.primary().create({w.types.resolve_name("Sim_Planet")})) == 1);
+    CHECK(host.run_fast(3) == 3 && host.crc_log().records.size() == 4);
+}
+
+static void test_tick_order(const World& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimHost host(w.types, js);
+    host.start_game(ModeKind::Land);
+    std::vector<std::string> trace;
+    host.set_trace(&trace);
+    host.tick_once();
+    const std::vector<std::string> expect = {
+        "T1.begin_tick", "T2.commands",     "T4.treecull",  "gmm.scoring",          "tactical.begin",
+        "tactical.ai_data", "tactical.motion_plan", "land.weather", "common.begin", "common.fow",
+        "store.refit",   "common.store.primary", "common.store.secondary", "common.end", "tactical.end",
+        "T5.gmm_update", "T7.players",      "T12.post_tick", "T13.end_tick"};
+    CHECK(trace == expect);
+    if (trace != expect)
+        for (const auto& s : trace) std::printf("  trace: %s\n", s.c_str());
+    host.end_game_mode();
+    host.start_game(ModeKind::Galactic);
+    trace.clear();
+    host.tick_once();
+    CHECK(trace.size() > 5 && trace[3] == "gmm.scoring" && trace[4] == "galactic.begin" && trace[5] == "common.begin");
+}
+
+// --------------------------------------------------------------------------------------- commands
+static void check_spatial(const TacticalMode& tm);
+
+static void test_commands(const World& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimHost host(w.types, js);
+    host.start_game(ModeKind::Space);
+    const TypeCrcIndex index(w.types);
+    const terrain::MapData map = make_synthetic_map();
+    const SpawnReport r = spawn_map(*host.tactical(), map, index);
+    CHECK(r.placements == 57 && r.spawned == 56 && r.unknown_type == 1 && r.units == 24 && r.structures == 2 &&
+          r.props == 30 && r.in_trees == 56);
+    CHECK(r.unknown_crcs.size() == 1 && r.unknown_crcs[0].first == name_crc("No_Such_Type"));
+    TacticalMode& tm = *host.tactical();
+    objects::ObjectStore& st = tm.primary();
+    check_spatial(tm);
+    // Real stats: corvette health = 0.75 x 600 (variant overrides the parent's 1200).
+    const ObjectHandle station0 = st.find(1), frig0 = st.find(2), corv0 = st.find(10), station1 = st.find(14);
+    CHECK(st.health(station0) == 8000.0f && st.health(frig0) == 1200.0f && st.health(corv0) == 450.0f);
+    CHECK(st.owner(station1) == 1 && tm.movable(frig0) && !tm.movable(station0));
+    CHECK(host.wire_id(frig0) == 2 && host.resolve(2) == frig0 && !host.resolve(cmd::kNoObject) && !host.resolve(999));
+    // Select own frigate + a foreign one: only the own unit stays selected.
+    CHECK(host.submit(0, cmd::ev::select({2, 15})).ok());
+    CHECK(host.submit(0, cmd::ev::move_to_position(-1000.0f, 500.0f, 0.0f)).ok());
+    CHECK(host.submit(1, cmd::ev::attack(2, {15, 16})).ok());   // player 1 attacks player 0's frigate
+    CHECK(host.submit(1, cmd::ev::attack(15, {16})).ok());      // own target: rejected
+    CHECK(host.submit(0, cmd::ev::move_to_position(9000.0f, 0.0f, 0.0f)).ok());  // out of bounds
+    CHECK(host.tactical()->order(2) == nullptr);
+    // SP delay 1: before the first drain the scheduler's now is tick 1, so these apply at tick 2.
+    host.tick_once();
+    CHECK(host.commands_applied() == 0 && tm.order(2) == nullptr);
+    host.tick_once();
+    CHECK(host.selection(0) == std::vector<ObjectId>{2});
+    const UnitOrder* mv = tm.order(2);
+    CHECK(mv && mv->kind == OrderKind::Move && mv->issued_frame == 2 && mv->goal.x == cmd::requantize(1, -1000.0f) &&
+          mv->goal.y == cmd::requantize(2, 500.0f));
+    const UnitOrder* at = tm.order(15);
+    CHECK(at && at->kind == OrderKind::Attack && at->target == 2 && tm.order(16) && tm.order(16)->player == 1);
+    CHECK(host.commands_applied() == 3 && host.commands_rejected() == 2);
+    // The stub locomotor moved the frigate by Max_Speed toward the goal during tick 2's service.
+    const Vec3 p0{map.objects[1].position[0], map.objects[1].position[1], 0.0f};
+    const Vec3 p1 = st.position(frig0);
+    const float moved = std::sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y));
+    CHECK(std::fabs(moved - 4.0f) < 1e-3f);
+    // Stop, and an AI order through execute_direct (applies at once, not recorded).
+    CHECK(host.submit(0, cmd::ev::stop()).ok());
+    host.tick_once();
+    CHECK(tm.order(2) == nullptr);
+    CHECK(host.execute_direct(0, cmd::CommandSource::AI, cmd::ev::attack(15, {3})) == cmd::RejectReason::None);
+    CHECK(tm.order(3) && tm.order(3)->kind == OrderKind::Attack && tm.order(3)->issued_frame == 3);
+    CHECK(host.execute_direct(0, cmd::CommandSource::AI, cmd::ev::attack(15, {20})) == cmd::RejectReason::InvalidUnit);
+    // Destroyed target: the attack order is dropped silently at the next tick.
+    tm.destroy(st.find(15));
+    host.tick_once();
+    CHECK(tm.order(3) == nullptr && tm.trees().size() == 55 && !host.resolve(15));
+}
+
+// Spatial: right after the map load the trees answer = brute force over the store.
+static void check_spatial(const TacticalMode& tm) {
+    const objects::ObjectStore& st = tm.primary();
+    tactical::QueryContext ctx;
+    tactical::Sphere sph{{-3000.0f, 0.0f, 0.0f}, 1200.0f};
+    std::vector<tactical::EntityHandle> brute;
+    for (ObjectHandle h : st.all_objects())
+        if (st.alive(h) && tactical::overlaps(sph, tm.bounds_of(h))) brute.push_back(static_cast<uint32_t>(st.id(h)));
+    std::sort(brute.begin(), brute.end());
+    const auto got = tm.trees().all().query_sphere(sph, tactical::kSkipDead, ctx);
+    CHECK(std::vector<tactical::EntityHandle>(got.begin(), got.end()) == brute && brute.size() > 5);
+}
+
+// --------------------------------------------------------------------------- determinism + golden
+static bool same_file(const std::string& path, const std::vector<uint8_t>& bytes) {
+    std::vector<uint8_t> have;
+    return read_host_file(path, have) && have == bytes;
+}
+
+// Records a live run of `map`, replays it at every worker count; compares with the stored stream
+// and golden (or rewrites them with --regen).
+static void determinism(const objects::GameObjectTypes& types, const terrain::MapData& map,
+                        const std::string& stem, uint64_t ticks) {
+    const TypeCrcIndex index(types);
+    cmd::CommandRecording rec;
+    MapRunSpec spec;
+    spec.ticks = ticks;
+    spec.seed = 4242;
+    spec.workers = 0;
+    spec.record = &rec;
+    const MapRunResult live = run_map(types, map, index, spec);
+    rec.meta = {{"map", stem}};
+    std::printf("%s: %" PRIu64 " ticks, %u spawned (%u units), %" PRIu64 " live orders, %zu recorded commands, applied %" PRIu64
+                " rejected %" PRIu64 ", orders pending %u, %.1f ms, final CRC %016" PRIx64 " parity %08x\n",
+                stem.c_str(), live.ticks, live.spawn.spawned, live.spawn.units, live.orders_live, rec.command_count(),
+                live.applied, live.rejected, live.orders_pending, live.run_ms, live.log.records.back().combined,
+                live.log.records.back().parity);
+    CHECK(live.ticks == ticks && live.log.records.size() == ticks + 1 && rec.command_count() > 50);
+    CHECK(live.applied > 20 && live.rejected > 5);
+    const std::string stream_path = testdata(stem + ".acmd"), golden_path = testdata(stem + "_golden.crc");
+    const std::vector<uint8_t> bytes = rec.to_bytes();
+    if (g_regen) {
+        std::string err;
+        CHECK(rec.save(stream_path, &err));
+    } else {
+        CHECK(same_file(stream_path, bytes));  // the record path regenerates the stream byte for byte
+    }
+    cmd::CommandRecording stored;
+    std::string err;
+    if (!cmd::CommandRecording::load(stream_path, stored, &err)) {
+        std::printf("FAIL %s: %s\n", stream_path.c_str(), err.c_str());
+        ++g_fail;
+        return;
+    }
+    CrcLog first;
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        MapRunSpec r;
+        r.ticks = ticks;
+        r.workers = workers;
+        r.replay = &stored;
+        const MapRunResult out = run_map(types, map, index, r);
+        const auto d = first_divergence(live.log, out.log);
+        std::printf("  replay workers %2d: %.1f ms, %s\n", workers, out.run_ms, d.message.c_str());
+        CHECK(!d.diverged && out.applied == live.applied && out.rejected == live.rejected);
+        if (first.records.empty()) first = out.log;
+    }
+    first.comments = {"G0 " + stem + " replay, seed 4242, " + std::to_string(ticks) + " ticks"};
+    if (g_regen) {
+        CHECK(first.save(golden_path, &err));
+        std::printf("  regenerated %s and %s\n", stream_path.c_str(), golden_path.c_str());
+    } else {
+        CrcLog golden;
+        if (!CrcLog::load(golden_path, golden, &err)) {
+            std::printf("FAIL golden %s: %s\n", golden_path.c_str(), err.c_str());
+            ++g_fail;
+        } else {
+            const auto d = first_divergence(golden, first);
+            std::printf("  golden %s: %s\n", (stem + "_golden.crc").c_str(), d.message.c_str());
+            CHECK(!d.diverged);
+        }
+    }
+}
+
+// --- N1 (owner: n1-host): session descriptor, save_allowed, load refusals and a host-chunk round trip (galactic mode
+// without a GalacticSim; the data-driven sessions are alamo_headless --save-check) ---
+static void test_save_session(const World& w) {
+    // Descriptor: round trip, compared fields, informational fields, truncated data.
+    SessionDescriptor d;
+    d.kind = "galactic";
+    d.campaign = "Save_Test";
+    d.data_root = "C:/game";
+    d.data_args = {"MODPATH=Mods/X"};
+    d.seed = 3;
+    d.players = 4;
+    d.setup = {{"Empire", true, false, "", ""}, {"Rebel", false, true, "Basic_AI", "Normal"}};
+    d.difficulty = "Normal";
+    d.set_option("b", "2");
+    d.set_option("a", "1");
+    d.data_fingerprint = 0x1234;
+    d.writer = "test";
+    ByteWriter dw;
+    d.write(dw);
+    SessionDescriptor e;
+    ByteReader dr(dw.bytes());
+    CHECK(e.read(dr) && dr.done());
+    CHECK(SessionDescriptor::mismatch(d, e).empty() && e.option("a") == "1" && e.option("zz", "x") == "x");
+    SessionDescriptor f = e;
+    f.data_root = "D:/elsewhere";
+    f.writer = "other";
+    f.options = {{"a", "1"}, {"b", "2"}};  // any order
+    CHECK(SessionDescriptor::mismatch(d, f).empty());
+    f = e;
+    f.data_fingerprint = 0x9999;
+    CHECK(SessionDescriptor::mismatch(d, f).find("fingerprint") != std::string::npos);
+    f = e;
+    f.seed = 4;
+    CHECK(!SessionDescriptor::mismatch(d, f).empty());
+    f = e;
+    f.setup[1].ai_type = "Other_AI";
+    CHECK(!SessionDescriptor::mismatch(d, f).empty());
+    f = e;
+    f.set_option("a", "2");
+    CHECK(!SessionDescriptor::mismatch(d, f).empty());
+    SessionDescriptor g;
+    g.kind = "keep";
+    ByteReader shortr(std::span<const uint8_t>(dw.bytes()).first(dw.size() - 3));
+    CHECK(!g.read(shortr) && g.kind == "keep");
+
+    // A host: galactic mode with two objects, a controller drawing the synced RNG, a participant with its own state.
+    struct Counter {
+        uint32_t value = 0;
+    };
+    struct Run {
+        std::unique_ptr<jobs::JobSystem> js;
+        Counter counter;
+        std::unique_ptr<SimHost> host;
+    };
+    auto build = [&w](uint32_t seed) {
+        auto r = std::make_unique<Run>();
+        r->js = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{0});
+        SimConfig cfg;
+        cfg.seed = seed;
+        r->host = std::make_unique<SimHost>(w.types, *r->js, cfg);
+        GameMode& gal = r->host->start_game(ModeKind::Galactic);
+        (void)gal.primary().create({w.types.resolve_name("Sim_Planet")});
+        (void)gal.primary().create({w.types.resolve_name("Sim_Station")});
+        Counter* c = &r->counter;
+        r->host->set_controller(0, [c](SimHost& h, uint8_t, uint64_t frame) {
+            h.random().synced().next15();
+            c->value += static_cast<uint32_t>(frame % 7u);
+        });
+        SaveParticipant p;
+        p.name = "test.counter";
+        p.write = [c](ByteWriter& out) { out.u32(c->value); };
+        p.read = [c](ByteReader& in) {
+            const uint32_t v = in.u32();
+            if (!in.ok()) return false;
+            c->value = v;
+            return true;
+        };
+        r->host->add_save_participant(std::move(p));
+        SessionDescriptor sd;
+        sd.kind = "test";
+        sd.campaign = "Save_Test";
+        r->host->set_session(sd);
+        return r;
+    };
+    auto a = build(11);
+    bool threw = false;
+    try {
+        a->host->add_save_participant({"test.counter", 1, [](ByteWriter&) {}, [](ByteReader&) { return true; }, {}, {}});
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);  // duplicate name
+    threw = false;
+    try {
+        a->host->add_save_participant({"rng", 1, [](ByteWriter&) {}, [](ByteReader&) { return true; }, {}, {}});
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);  // host chunk name
+    CHECK(a->host->run_fast(40) == 40 && a->host->save_allowed());
+    // A tactical mode on the stack blocks saving when no participant can rebuild it at load (stage 2; see below).
+    a->host->start_game(ModeKind::Space);
+    std::string why;
+    SaveFile blocked;
+    CHECK(!a->host->save_allowed(&why) && !why.empty() && !a->host->save(blocked));
+    CHECK(a->host->end_game_mode() && a->host->save_allowed());
+    CHECK(a->host->run_fast(20) == 20);
+    SaveFile save;
+    std::string err;
+    CHECK(a->host->save(save, &err) && save.tick == 60 && save.find("session") && save.find("test.counter"));
+    for (const char* c : {"frame", "objects", "galactic.state", "players", "rng", "commands", "globals"}) CHECK(save.find(c) != nullptr);
+    const uint32_t counter_at_save = a->counter.value;
+    CHECK(a->host->run_fast(60) == 60);
+    CrcLog log_a;
+    for (const CrcRecord& r : a->host->crc_log().records)
+        if (r.tick >= 60) log_a.records.push_back(r);
+    log_a.systems = a->host->crc_log().systems;
+    log_a.parity_parts = a->host->crc_log().parity_parts;
+
+    // Load into a fresh session: every chunk loads, the run continues with the original's CRCs.
+    auto b = build(11);
+    LoadReport rep;
+    CHECK(b->host->load(save, &err, &rep));
+    if (!rep.ok()) std::printf("  save test load: %s\n", rep.text().c_str());
+    CHECK(rep.failed.empty() && rep.missing.empty() && rep.unexpected.empty() && b->counter.value == counter_at_save);
+    CHECK(b->host->frame() == 60 && b->host->run_fast(60) == 60);
+    const CrcDivergence dv = first_divergence(log_a, b->host->crc_log());
+    if (dv.diverged) std::printf("  save test: %s\n", dv.message.c_str());
+    CHECK(!dv.diverged && b->counter.value == a->counter.value);
+    CHECK(!b->host->load(save, &err));  // not a fresh session any more
+
+    // Refusals: another seed (descriptor), a broken chunk (named), a missing chunk (named).
+    auto c = build(12);
+    CHECK(!c->host->load(save, &err, &rep) && !rep.descriptor_error.empty());
+    SaveFile broken, partial;
+    broken.tick = partial.tick = save.tick;
+    for (const SaveChunk& ch : save.chunks()) {
+        std::vector<uint8_t> bytes = ch.data;
+        if (ch.name == "players") bytes.resize(bytes.size() - 1);
+        broken.add(ch.name, ch.version, std::move(bytes));
+        if (ch.name != "rng") partial.add(ch.name, ch.version, ch.data);
+    }
+    auto d1 = build(11);
+    CHECK(!d1->host->load(broken, &err, &rep) && rep.failed == std::vector<std::string>{"players"} &&
+          err.find("players") != std::string::npos);
+    auto d2 = build(11);
+    CHECK(!d2->host->load(partial, &err, &rep) && rep.missing == std::vector<std::string>{"rng"});
+    std::printf("save session: descriptor, save_allowed, %zu chunks, load + %" PRIu64 " ticks %s, refusals checked\n", save.chunks().size(),
+                uint64_t{60}, dv.diverged ? "DIVERGED" : "identical");
+
+    // N1 stage 2 (n2-host): with a participant that can rebuild it, a tactical mode on the stack saves; the load runs the
+    // two passes (pass 1 stages, rebuild pushes the mode, pass 2 reads everything) and the run continues identically.
+    struct Glue {
+        SimHost* host = nullptr;
+        bool resume = false;
+        int reads = 0, rebuilds = 0;
+    };
+    auto add_glue = [](SimHost& h) {
+        auto g = std::make_shared<Glue>();
+        g->host = &h;
+        SaveParticipant p;
+        p.name = "test.battle";
+        p.write = [g](ByteWriter& w) { w.boolean(g->host->modes().depth() > 1); };
+        p.read = [g](ByteReader& r) {
+            const bool tactical = r.boolean();
+            if (!r.ok()) return false;
+            ++g->reads;
+            g->resume = tactical && g->host->modes().depth() == 1;
+            return true;
+        };
+        p.rebuild = [g] {
+            if (!g->resume) return std::string();
+            g->resume = false;
+            ++g->rebuilds;
+            g->host->start_game(ModeKind::Space);
+            return std::string();
+        };
+        h.add_save_participant(std::move(p));
+        return g;
+    };
+    auto ts = build(11);
+    add_glue(*ts->host);
+    CHECK(ts->host->run_fast(30) == 30);
+    ts->host->start_game(ModeKind::Space);
+    CHECK(ts->host->run_fast(10) == 10 && ts->host->save_allowed());
+    SaveFile tsave;
+    CHECK(ts->host->save(tsave, &err) && tsave.find("spatial") != nullptr);
+    CHECK(ts->host->run_fast(30) == 30);
+    CrcLog log_e;
+    for (const CrcRecord& r : ts->host->crc_log().records)
+        if (r.tick >= tsave.tick) log_e.records.push_back(r);
+    log_e.systems = ts->host->crc_log().systems;
+    log_e.parity_parts = ts->host->crc_log().parity_parts;
+    auto tl = build(11);
+    const auto fg = add_glue(*tl->host);
+    CHECK(tl->host->load(tsave, &err, &rep));
+    if (!rep.ok()) std::printf("  tactical save test load: %s\n", rep.text().c_str());
+    CHECK(tl->host->modes().depth() == 2 && fg->rebuilds == 1 && fg->reads == 2 && tl->host->frame() == tsave.tick);
+    CHECK(tl->host->run_fast(30) == 30);
+    const CrcDivergence tdv = first_divergence(log_e, tl->host->crc_log());
+    if (tdv.diverged) std::printf("  tactical save test: %s\n", tdv.message.c_str());
+    CHECK(!tdv.diverged);
+    // Without a participant that rebuilds: the load stops after pass 1 with a named reason.
+    auto g2 = build(11);
+    CHECK(!g2->host->load(tsave, &err, &rep) && !rep.descriptor_error.empty());
+    std::printf("save session (stage 2): tactical mode saved at %" PRIu64 ", rebuilt on load, 30 ticks %s; no rebuilder refused (%s)\n",
+                tsave.tick, tdv.diverged ? "DIVERGED" : "identical", rep.descriptor_error.c_str());
+}
+
+static void test_realtime_equals_fast(const World& w) {
+    const TypeCrcIndex index(w.types);
+    const terrain::MapData map = make_synthetic_map();
+    MapRunSpec fast;
+    fast.ticks = 45;
+    fast.workers = 0;
+    const MapRunResult a = run_map(w.types, map, index, fast);
+    MapRunSpec paced = fast;
+    paced.realtime = true;
+    paced.workers = 2;
+    const MapRunResult b = run_map(w.types, map, index, paced);
+    CHECK(!first_divergence(a.log, b.log).diverged);
+    // 45 ticks at 30 ticks/s with floor(1000/30) = 33 ms gating: at least 44 x 33 ms of wall time.
+    CHECK(b.run_ms >= 44.0 * 33.0 - 1.0);
+    std::printf("realtime: 45 ticks in %.0f ms (paced), %.2f ms (fast), identical CRCs\n", b.run_ms, a.run_ms);
+}
+
+// ------------------------------------------------------------------------------------ S4 story
+static bool g_regen_story = false;
+static bool g_story_only = false;
+
+static std::string read_text(const std::string& path) {
+    std::vector<uint8_t> b;
+    if (!read_host_file(path, b)) return {};
+    std::string s(b.begin(), b.end());
+    s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+    return s;
+}
+
+// Compares `text` with testdata/<name> (or rewrites it with --regen / --regen-story).
+static void check_text_golden(const std::string& name, const std::string& text) {
+    const std::string path = testdata(name);
+    if (g_regen_story) {
+        std::ofstream(path_from_utf8(path), std::ios::binary) << text;
+        std::printf("  regenerated %s\n", name.c_str());
+        return;
+    }
+    const std::string want = read_text(path);
+    if (want == text) {
+        std::printf("  golden %s: MATCH (%zu bytes)\n", name.c_str(), text.size());
+        return;
+    }
+    size_t i = 0;
+    while (i < want.size() && i < text.size() && want[i] == text[i]) ++i;
+    const size_t line = static_cast<size_t>(std::count(text.begin(), text.begin() + static_cast<std::ptrdiff_t>(i), '\n')) + 1;
+    std::printf("FAIL golden %s differs at line %zu\n", name.c_str(), line);
+    ++g_fail;
+}
+
+#ifdef ALAMO_SIM_HAVE_STORY
+namespace story_test {
+using namespace alamo::galactic;
+enum : uint32_t { tPA, tPB, tPC, tPD, tSB1, tCorvette, tInfantry, tBarracks, tFighters, tCount };
+enum : PlanetIndex { rCore = 0, rA = 1, rB = 2, rC = 3, rD = 4 };
+enum : int32_t { pEmpire = 0, pUnder = 1, pNeutral = 2 };
+
+static GalacticRules rules() {
+    GalacticRules r;
+    FactionRules emp;
+    emp.name = "Empire";
+    emp.can_control_planets = emp.is_playable = true;
+    FactionRules und;
+    und.name = "Underworld";
+    und.can_control_planets = und.is_playable = und.benefits_from_corruption = true;
+    FactionRules neu;
+    neu.name = "Neutral";
+    neu.is_neutral = true;
+    r.factions = {emp, und, neu};
+    r.difficulties = {{"Normal", 1.0f, 1.0f}};
+    r.types.resize(tCount);
+    const char* names[] = {"PlanetA", "PlanetB", "PlanetC", "PlanetD"};
+    for (uint32_t i = 0; i < 4; ++i) {
+        r.types[i].name = names[i];
+        r.types[i].kind = UnitKind::Planet;
+        r.types[i].credit_value = 10;
+        r.types[i].capture_bonus = 100;
+    }
+    auto unit = [&r](uint32_t id, const char* name, UnitKind k, int32_t cost, int32_t secs) -> TypeInfo& {
+        TypeInfo& t = r.types[id];
+        t.name = name;
+        t.kind = k;
+        t.build_cost = cost;
+        t.build_time_seconds = secs;
+        return t;
+    };
+    unit(tSB1, "SB1", UnitKind::StarBase, 1000, 15).base_level = 1;
+    TypeInfo& co = unit(tCorvette, "Corvette", UnitKind::SpaceUnit, 800, 10);
+    co.required_star_base = 1;
+    co.hyperspace = true;
+    co.hyperspace_speed = 2.0f;
+    co.ai_combat_power = 600.0f;
+    co.squadron_capacity = 2;
+    unit(tInfantry, "Infantry", UnitKind::GroundUnit, 300, 10).required_ground_base = 1;
+    unit(tBarracks, "Barracks", UnitKind::GroundStructure, 600, 20);
+    unit(tFighters, "Fighters", UnitKind::Squadron, 200, 2).required_star_base = 1;
+    return r;
+}
+
+static GalacticSetup setup() {
+    GalacticSetup s;
+    GalaxyMap& m = s.map;
+    m.campaign_name = "StoryTest";
+    const char* names[] = {"Core", "A", "B", "C", "D"};
+    const Vec3 pos[] = {{500, 500, 0}, {0, 0, 0}, {60, 0, 0}, {120, 0, 0}, {60, 80, 0}};
+    for (uint32_t i = 0; i < 5; ++i) {
+        m.planets.add(names[i]);
+        m.planets.position[i] = pos[i];
+        m.planets.flags[i] = i == 0 ? 0u : static_cast<uint32_t>(kPlanetHasPlanetBehavior);
+    }
+    auto route = [&m](const char* n, PlanetIndex a, PlanetIndex b) {
+        const uint32_t r = m.routes.add(n);
+        m.routes.point_a[r] = a;
+        m.routes.point_b[r] = b;
+        m.routes.hs_speed_factor[r] = 8.0f;
+    };
+    route("A_B", rA, rB);
+    route("B_C", rB, rC);
+    route("B_D", rB, rD);
+    s.planet_type = {kNoIndex, tPA, tPB, tPC, tPD};
+    PlayerSetup e;
+    e.faction = 0;
+    e.human = true;
+    e.credits = 5000.0f;
+    PlayerSetup u;
+    u.faction = 1;
+    u.ai = true;
+    u.difficulty = 0;
+    u.credits = 5000.0f;
+    PlayerSetup n;
+    n.faction = 2;
+    s.players = {e, u, n};
+    s.forces = {{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pUnder, rD, tCorvette}, {pUnder, rD, tInfantry}};
+    return s;
+}
+
+// Plots file + plot (every mapped trigger kind, a reward the host applies, a Lua round trip).
+static const char* kPlots =
+    "<Story_Mode_Plots><Lua_Script>Story_Host_Test</Lua_Script><Active_Plot>Story_Host_Test.xml</Active_Plot>"
+    "<Suspended_Plot /></Story_Mode_Plots>\n";
+static const char* kPlot =
+    "<Story>\n"
+    " <Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n"
+    " <Event Name=\"Raise_Tech\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_TECH_LEVEL</Reward_Type>"
+    "<Reward_Param1>Empire</Reward_Param1><Reward_Param2>3</Reward_Param2><Prereq>Begin</Prereq></Event>\n"
+    " <Event Name=\"Tech_Seen\"><Event_Type>STORY_TECH_LEVEL</Event_Type><Event_Param1>3</Event_Param1>"
+    "<Prereq>Raise_Tech</Prereq></Event>\n"
+    " <Event Name=\"Script_Ack\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>SCRIPT_SAW_TECH</Event_Param2>"
+    "<Reward_Type>SET_FLAG</Reward_Type><Reward_Param1>Acked</Reward_Param1><Reward_Param2>1</Reward_Param2></Event>\n"
+    " <Event Name=\"Enemy_Takes_C\"><Event_Type>STORY_CONQUER</Event_Type><Event_Param1>PlanetC</Event_Param1>"
+    "<Event_Param3>FILTER_ENEMY_ONLY</Event_Param3><Prereq>Begin</Prereq></Event>\n"
+    " <Event Name=\"Friendly_Takes_C\"><Event_Type>STORY_CONQUER</Event_Type><Event_Param1>PlanetC</Event_Param1>"
+    "<Event_Param3>FILTER_FRIENDLY_ONLY</Event_Param3></Event>\n"
+    " <Event Name=\"Corvette_At_C\"><Event_Type>STORY_ENTER</Event_Type><Event_Param1>PlanetC</Event_Param1>"
+    "<Event_Param3>Corvette</Event_Param3></Event>\n"
+    " <Event Name=\"Landed_C\"><Event_Type>STORY_LAND_ON</Event_Type><Event_Param1>PlanetC</Event_Param1></Event>\n"
+    " <Event Name=\"C_Corrupted\"><Event_Type>STORY_CORRUPTION_CHANGED</Event_Type><Event_Param1>PlanetC</Event_Param1>"
+    "<Event_Param2>RACKETEERING</Event_Param2></Event>\n"
+    " <Event Name=\"Two_Fighters\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Fighters</Event_Param1>"
+    "<Event_Param2>2</Event_Param2><Event_Param3>FILTER_FRIENDLY_ONLY</Event_Param3></Event>\n"
+    " <Event Name=\"Bonus\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>CREDITS</Reward_Type>"
+    "<Reward_Param1>1000</Reward_Param1><Prereq>Two_Fighters</Prereq></Event>\n"
+    " <Event Name=\"Two_Seconds\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>2</Event_Param1>"
+    "<Prereq>Begin</Prereq></Event>\n"
+    " <Event Name=\"Ack_Flag\"><Event_Type>STORY_FLAG</Event_Type><Event_Param1>Acked</Event_Param1>"
+    "<Event_Param2>1</Event_Param2></Event>\n"
+    "</Story>\n";
+static const char* kScript =
+    "function Base_Definitions() ServiceRate = 0.5 services = 0 end\n"
+    "function Story_Event_Trigger(name) if name == \"Tech_Seen\" then Story_Event(\"SCRIPT_SAW_TECH\") end end\n"
+    "function main() while true do services = services + 1 coroutine.yield(true) end end\n";
+
+struct Run {
+    std::string log;
+    CrcLog crc;
+    size_t fired = 0;
+    float empire_credits = 0;
+    int32_t empire_tech = 0;
+};
+
+static Run run(const World& w, const FileProvider& files, int32_t workers, uint64_t ticks) {
+    const GalacticRules r = rules();
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 7;
+    cfg.story_crc = true;
+    SimHost host(w.types, js, cfg);
+    GalacticSim* gs = host.start_galactic(r, setup());
+    CHECK(gs != nullptr);
+    if (!gs) return {};
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{pEmpire, "Story_Plots_Host_Test.xml"}};
+    std::vector<std::string> diag;
+    CHECK(host.start_story(st, &diag));
+    for (const auto& d : diag) std::printf("  story diag: %s\n", d.c_str());
+    if (!host.story()) return {};
+    CHECK(host.story()->script_count() == 1);
+    std::vector<std::string> trace;
+    host.set_trace(&trace);
+    host.tick_once();
+    CHECK(std::find(trace.begin(), trace.end(), "T9.story") != trace.end());
+    host.set_trace(nullptr);
+    // Scripted orders between ticks (state-driven, deterministic): Underworld loads the infantry, flies
+    // D -> B -> C and lands; the Empire builds two fighters at A; a space battle is pushed and popped.
+    const ObjectHandle inf = gs->planets()[rD].surface[0];
+    CHECK(gs->launch_units(pUnder, rD, std::vector<ObjectHandle>{inf}) == RejectReason::None);
+    const uint32_t fleet = gs->fleets_at(rD, pUnder)[0];
+    CHECK(gs->move_fleet(pUnder, fleet, rC) == RejectReason::None);
+    CHECK(gs->enqueue(pEmpire, rA, tFighters) == RejectReason::None);
+    CHECK(gs->enqueue(pEmpire, rA, tFighters) == RejectReason::None);
+    bool landed = false;
+    for (uint64_t t = 1; t < ticks; ++t) {
+        if (!landed && gs->fleets()[fleet].alive && !gs->fleets()[fleet].moving && gs->fleets()[fleet].planet == rC) {
+            CHECK(gs->invade(pUnder, rC, {}) == RejectReason::None);
+            landed = true;
+        }
+        if (t == 200) host.start_game(ModeKind::Space);
+        if (t == 230) host.end_game_mode();
+        host.tick_once();
+    }
+    Run out;
+    out.log = host.story()->log_text("S4 synthetic story campaign, seed 7, " + std::to_string(ticks) + " ticks");
+    out.crc = host.crc_log();
+    out.fired = host.story()->log().size();
+    out.empire_credits = gs->credits(pEmpire);
+    out.empire_tech = gs->players()[pEmpire].tech_level;
+    for (const auto& m : host.story()->lua_messages()) std::printf("  lua: %s\n", m.c_str());
+    CHECK(host.story()->lua_messages().empty());
+    return out;
+}
+}  // namespace story_test
+
+static void test_story_synthetic(const World& w) {
+    using namespace story_test;
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_story";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_Host_Test.xml", kPlots);
+    write_file(root / "Data/XML/Story_Host_Test.xml", kPlot);
+    write_file(root / "Data/Scripts/Story/Story_Host_Test.lua", kScript);
+    DirectoryProvider files(path_to_utf8(root));
+    const uint64_t ticks = 600;
+    const Run a = run(w, files, 0, ticks);
+    std::printf("story synthetic: %zu fired, Empire tech %d, credits %.0f, final CRC %016" PRIx64 "\n", a.fired, a.empire_tech,
+                static_cast<double>(a.empire_credits), a.crc.records.empty() ? 0 : a.crc.records.back().combined);
+    // Every mapped trigger fired once, in a documented order (golden), the host applied SET_TECH_LEVEL and CREDITS.
+    auto fired = [&a](const char* ev) { return a.log.find(std::string(" ") + ev + " ") != std::string::npos; };
+    for (const char* ev : {"Begin", "Raise_Tech", "Tech_Seen", "Script_Ack", "Ack_Flag", "Enemy_Takes_C", "Corvette_At_C",
+                           "Landed_C", "C_Corrupted", "Two_Fighters", "Bonus", "Two_Seconds"})
+        if (!fired(ev)) {
+            std::printf("FAIL story event %s did not fire\n", ev);
+            ++g_fail;
+        }
+    CHECK(!fired("Friendly_Takes_C"));
+    CHECK(a.empire_tech == 3);
+    CHECK(a.log.find("TacticalStarted") != std::string::npos && a.log.find("TacticalEnded") != std::string::npos);
+    CHECK(a.crc.records.size() == ticks + 1);
+    CHECK(!a.crc.records.empty() && a.crc.records.front().systems.size() == 8);  // + "story"
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        if (workers == 0) continue;
+        const Run b = run(w, files, workers, ticks);
+        const auto d = first_divergence(a.crc, b.crc);
+        std::printf("  story workers %2d: %s, log %s\n", workers, d.message.c_str(), b.log == a.log ? "identical" : "DIFFERS");
+        CHECK(!d.diverged && b.log == a.log);
+    }
+    check_text_golden("story_synthetic_golden.txt", a.log);
+}
+
+// --- OI lua: story rewards LOCK_UNIT (GalacticSim::lock_type for the plot's player) and REMOVE_CORRUPTION; REMAINING_GAPS
+// 1.4-1.5: BUILDABLE_UNIT (P1 unlock, P2 lock), ENABLE/DISABLE_BUILDABLE (production-disabled list), SET_TECH_LEVEL ---
+static void test_story_rewards_oi(const World& w) {
+    using namespace story_test;
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_story_oi";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_Oi.xml",
+               "<Story_Mode_Plots><Active_Plot>Story_Oi.xml</Active_Plot><Suspended_Plot /></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Oi.xml",
+               "<Story>\n"
+               " <Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n"
+               " <Event Name=\"Lock\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>LOCK_UNIT</Reward_Type>"
+               "<Reward_Param1>Corvette</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Lock_Bad\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>LOCK_UNIT</Reward_Type>"
+               "<Reward_Param1>No_Such_Unit</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Clean_C\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>REMOVE_CORRUPTION</Reward_Type>"
+               "<Reward_Param1>C</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Clean_Bad\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>REMOVE_CORRUPTION</Reward_Type>"
+               "<Reward_Param1>Nowhere</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Lock_F\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>LOCK_UNIT</Reward_Type>"
+               "<Reward_Param1>Fighters</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Unlock_F\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>BUILDABLE_UNIT</Reward_Type>"
+               "<Reward_Param1>Fighters</Reward_Param1><Reward_Param2>Barracks</Reward_Param2><Prereq>Lock_F</Prereq></Event>\n"
+               " <Event Name=\"Enable_I\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>ENABLE_BUILDABLE</Reward_Type>"
+               "<Reward_Param1>Infantry</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Disable_I\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>DISABLE_BUILDABLE</Reward_Type>"
+               "<Reward_Param1>Infantry</Reward_Param1><Prereq>Enable_I</Prereq></Event>\n"
+               " <Event Name=\"Disable_F\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>DISABLE_BUILDABLE</Reward_Type>"
+               "<Reward_Param1>Fighters</Reward_Param1><Prereq>Unlock_F</Prereq></Event>\n"
+               " <Event Name=\"Enable_F\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>ENABLE_BUILDABLE</Reward_Type>"
+               "<Reward_Param1>Fighters</Reward_Param1><Prereq>Disable_F</Prereq></Event>\n"
+               " <Event Name=\"Max_2\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_MAX_TECH_LEVEL</Reward_Type>"
+               "<Reward_Param1>Empire</Reward_Param1><Reward_Param2>2</Reward_Param2><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Tech_4\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_TECH_LEVEL</Reward_Type>"
+               "<Reward_Param1>Empire</Reward_Param1><Reward_Param2>4</Reward_Param2><Prereq>Max_2</Prereq></Event>\n"
+               // GRC 1.5 reveal rewards: REVEAL_PLANET needs both params (P2 0 clears), ENABLE_GALACTIC_REVEAL needs P1.
+               " <Event Name=\"Hide_B\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>REVEAL_PLANET</Reward_Type>"
+               "<Reward_Param1>PlanetB</Reward_Param1><Reward_Param2>0</Reward_Param2><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Reveal_Noop\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>REVEAL_PLANET</Reward_Type>"
+               "<Reward_Param1>PlanetD</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"No_Auto\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>ENABLE_GALACTIC_REVEAL</Reward_Type>"
+               "<Reward_Param1>0</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"No_Auto_Bad\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>ENABLE_GALACTIC_REVEAL</Reward_Type>"
+               "<Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Later\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>5</Event_Param1><Prereq>Hide_B</Prereq></Event>\n"
+               " <Event Name=\"Reveal_All\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>REVEAL_ALL_PLANETS</Reward_Type>"
+               "<Prereq>Later</Prereq></Event>\n"
+               // GRC 2.3 SET_PLANET_VISIBILITY_LEVEL: P1 planet, P2 faction, P3 level / "none", P4 key, P5 seconds (missing = never).
+               " <Event Name=\"Vis_Max\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_PLANET_VISIBILITY_LEVEL</Reward_Type>"
+               "<Reward_Param1>PlanetD</Reward_Param1><Reward_Param2>Empire</Reward_Param2><Reward_Param3>Maximum</Reward_Param3>"
+               "<Reward_Param4>Spy_D</Reward_Param4><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Vis_Short\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_PLANET_VISIBILITY_LEVEL</Reward_Type>"
+               "<Reward_Param1>PlanetC</Reward_Param1><Reward_Param2>Empire</Reward_Param2><Reward_Param3>Fleet_Presence</Reward_Param3>"
+               "<Reward_Param4>Spy_C</Reward_Param4><Reward_Param5>0.5</Reward_Param5><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Vis_Bad\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_PLANET_VISIBILITY_LEVEL</Reward_Type>"
+               "<Reward_Param1>Nowhere</Reward_Param1><Reward_Param2>Empire</Reward_Param2><Reward_Param3>Maximum</Reward_Param3>"
+               "<Reward_Param4>K</Reward_Param4><Prereq>Begin</Prereq></Event>\n"
+               "</Story>\n");
+    DirectoryProvider files(path_to_utf8(root));
+    std::string first_log;
+    for (int32_t workers : {0, 4}) {
+        GalacticRules r = rules();
+        r.types[tInfantry].build_initially_locked = true;
+        // SET_TECH_LEVEL 4 sweep (REMAINING_GAPS 1.4): SB1 (sliceable, Tech_Level 3 < 4) unlocks, Infantry (Tech_Level 4)
+        // does not.
+        r.types[tInfantry].sliceable = true;
+        r.types[tInfantry].tech_level = 4;
+        r.types[tSB1].build_initially_locked = r.types[tSB1].sliceable = true;
+        r.types[tSB1].tech_level = 3;
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimConfig cfg;
+        cfg.seed = 7;
+        cfg.story_crc = true;
+        SimHost host(w.types, js, cfg);
+        GalacticSim* gs = host.start_galactic(r, setup());
+        CHECK(gs != nullptr);
+        if (!gs) return;
+        gs->set_corruption(rC, kCorruptionRacketeering, pUnder);
+        CHECK(!gs->type_unlocked(pEmpire, tInfantry) && !gs->type_unlocked(pEmpire, tSB1));
+        CHECK(gs->corrupted(rC) && !gs->type_locked(pEmpire, tCorvette));
+        CHECK(gs->max_tech_level(pEmpire) == 5 && gs->players()[pEmpire].tech_level < 4);
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pEmpire, "Story_Plots_Oi.xml"}};
+        host.tick_once();  // the galactic pre-step: rA (held) and its neighbours revealed (auto-reveal on)
+        const bool d_before = gs->planet_revealed_raw(rD);
+        CHECK(gs->planet_auto_reveal() && gs->planet_revealed_raw(rA) && gs->planet_revealed_raw(rB));
+        CHECK(host.start_story(st, nullptr) && host.story());
+        if (!host.story()) return;
+        bool removing = false;
+        for (int t = 0; t < 40; ++t) {
+            host.tick_once();
+            removing = removing || gs->corruption_transition_active(rC);
+        }
+        CHECK(gs->type_locked(pEmpire, tCorvette) && !gs->type_locked(pUnder, tCorvette));
+        CHECK(gs->build_locked(pEmpire, tCorvette));
+        // REVEAL_PLANET PlanetB 0 cleared rB's byte, REVEAL_PLANET PlanetD without P2 is a no-op, ENABLE_GALACTIC_REVEAL 0
+        // turned auto-reveal off (no P1: logged); the pre-step does not set rB again (not held, no orbit presence, no spread).
+        std::printf("  oi reveal: B 1 -> %d, D %d -> %d, auto-reveal %d\n", gs->planet_revealed_raw(rB) ? 1 : 0, d_before ? 1 : 0,
+                    gs->planet_revealed_raw(rD) ? 1 : 0, gs->planet_auto_reveal() ? 1 : 0);
+        CHECK(!gs->planet_revealed_raw(rB) && gs->planet_revealed_raw(rD) == d_before && !gs->planet_auto_reveal());
+        // REMOVE_CORRUPTION without P2: the timed removal over 10 s (GRC 4.3), completed by the planet service.
+        CHECK(removing || !gs->corrupted(rC));
+        for (int t = 0; t < 4000 && gs->corrupted(rC); ++t) host.tick_once();
+        CHECK(!gs->corrupted(rC) && !gs->corruption_transition_active(rC));
+        // REVEAL_ALL_PLANETS (5 s after Hide_B) set every byte.
+        CHECK(gs->planet_revealed_raw(rA) && gs->planet_revealed_raw(rB) && gs->planet_revealed_raw(rC) && gs->planet_revealed_raw(rD));
+        // BUILDABLE_UNIT: P1 leaves the locked list and joins the unlocked list, P2 joins the locked list (Empire is not
+        // the Good_Side_Name faction: no tech raise).
+        CHECK(!gs->type_locked(pEmpire, tFighters) && gs->type_unlocked(pEmpire, tFighters) && !gs->build_locked(pEmpire, tFighters));
+        CHECK(gs->type_locked(pEmpire, tBarracks) && !gs->type_locked(pUnder, tBarracks));
+        // ENABLE/DISABLE_BUILDABLE edit the production-disabled list only: no unlock, no buildability change.
+        CHECK(gs->production_disabled(pEmpire, tInfantry) && !gs->production_disabled(pUnder, tInfantry));
+        CHECK(!gs->type_unlocked(pEmpire, tInfantry) && !gs->type_locked(pEmpire, tInfantry) && gs->build_locked(pEmpire, tInfantry));
+        CHECK(!gs->production_disabled(pEmpire, tFighters) && gs->type_unlocked(pEmpire, tFighters));
+        // SET_TECH_LEVEL 4 above max tech 2 raises the max first, then sets the tech with the sweep.
+        CHECK(gs->max_tech_level(pEmpire) == 4 && gs->players()[pEmpire].tech_level == 4);
+        CHECK(gs->type_unlocked(pEmpire, tSB1) && !gs->build_locked(pEmpire, tSB1) && !gs->type_unlocked(pUnder, tSB1));
+        // SET_PLANET_VISIBILITY_LEVEL: rD keeps the Maximum entry (never expires); rC's 0.5 s entry has expired.
+        {
+            const auto d_mods = gs->visibility_modifiers(rD, pEmpire);
+            CHECK(d_mods.size() == 1 && d_mods[0].value == galactic::kVisMaximum && d_mods[0].expiry == galactic::kVisNever);
+            CHECK(gs->visibility_mask(rD, pEmpire) == galactic::kVisMaximum);
+            CHECK(gs->visibility_modifiers(rC, pEmpire).empty());
+        }
+        const auto& msgs = host.story()->lua_messages();
+        size_t lock_err = 0, clean_err = 0, vis_err = 0;
+        for (const auto& m : msgs)
+            vis_err += m.find("SET_PLANET_VISIBILITY_LEVEL failed due to unknown planet 'Nowhere'") != std::string::npos ? 1u : 0u;
+        CHECK(vis_err == 1);
+        for (const auto& m : msgs) {
+            lock_err += m.find("LOCK_UNIT failed due to unknown unit type 'No_Such_Unit'") != std::string::npos ? 1u : 0u;
+            clean_err += m.find("REMOVE_CORRUPTION failed due to unknown planet 'Nowhere'") != std::string::npos ? 1u : 0u;
+        }
+        size_t reveal_err = 0;
+        for (const auto& m : msgs) reveal_err += m.find("ENABLE_GALACTIC_REVEAL failed due to missing Param1") != std::string::npos ? 1u : 0u;
+        CHECK(lock_err == 1 && clean_err == 1 && reveal_err == 1);
+        const std::string log = host.story()->log_text("oi rewards");
+        if (first_log.empty()) first_log = log;
+        CHECK(log == first_log && log.find("reward=LOCK_UNIT[Corvette]") != std::string::npos);
+    }
+    remove_all_long(root, ec);
+}
+// --- end OI lua ---
+
+// --- host follow-up: the T9 time argument. SimHost feeds StoryModel the (float)(galactic mode frame) x (1/30 as float)
+// clock (STORY.md 4.7 / 7.3), not the global frame and not wall time: time-based events (STORY_ELAPSED) fire at the
+// frame the spec gives, a pushed tactical mode stalls the story clock (the galactic mode frame does not advance),
+// and the whole series and the fired frames are identical for 0/1/4/15 workers. ---
+static void test_story_t9_clock(const World& w) {
+    using namespace story_test;
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_story_t9";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_T9.xml",
+               "<Story_Mode_Plots><Active_Plot>Story_T9.xml</Active_Plot><Suspended_Plot /></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_T9.xml",
+               "<Story>\n"
+               " <Event Name=\"Zero\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n"
+               " <Event Name=\"Five\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>5</Event_Param1></Event>\n"
+               " <Event Name=\"Half\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>12.5</Event_Param1></Event>\n"
+               "</Story>\n");
+    DirectoryProvider files(path_to_utf8(root));
+    constexpr uint64_t kTicks = 500, kBattleFrom = 100, kBattleTo = 160;  // a space battle on top of the galaxy for 60 ticks
+    constexpr float kSpf = 1.0f / 30.0f;
+    struct Sample {
+        uint64_t global = 0, galactic = 0;  // global frame, galactic mode frame after the tick
+        uint64_t seen = 0;                  // the galactic mode frame T9 saw (before the mode's end-of-tick increment)
+        double time = 0.0;
+    };
+    std::vector<Sample> first;
+    std::map<std::string, uint64_t> first_fired;  // event -> global frame
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimConfig cfg;
+        cfg.seed = 7;
+        cfg.story_crc = true;
+        SimHost host(w.types, js, cfg);
+        const GalacticRules r = rules();  // the sim keeps a reference to the rules
+        GalacticSim* gs = host.start_galactic(r, setup());
+        CHECK(gs != nullptr);
+        if (!gs) return;
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pEmpire, "Story_Plots_T9.xml"}};
+        CHECK(host.start_story(st, nullptr) && host.story());
+        if (!host.story()) return;
+        std::vector<Sample> series;
+        for (uint64_t t = 1; t <= kTicks; ++t) {
+            if (t == kBattleFrom) host.start_game(ModeKind::Space);
+            if (t == kBattleTo) host.end_game_mode();
+            const GalacticMode* g = host.galactic_mode();
+            CHECK(g != nullptr);
+            if (!g) return;
+            const uint64_t seen = g->frame();
+            host.tick_once();
+            series.push_back({host.frame(), g->frame(), seen, host.story()->model(0).time()});
+        }
+        // Every tick the story clock is the T9 time of the galactic mode frame T9 saw (bit-exact, computed in float).
+        bool exact = true, differs_from_double = false;
+        for (const Sample& s : series) {
+            const bool ok = s.time == lua::StoryModel::t9_seconds(s.seen, kSpf) && s.time == StorySession::t9_seconds(s.seen);
+            if (!ok && exact) std::printf("  t9 clock mismatch at global %" PRIu64 " seen %" PRIu64 " time %.9g\n", s.global, s.seen, s.time);
+            exact = exact && ok;
+            differs_from_double = differs_from_double || s.time != static_cast<double>(s.seen) / 30.0;
+        }
+        CHECK(exact);
+        CHECK(differs_from_double);  // the float product is the clock, not mode frame / 30 in double
+        // The pushed tactical mode stalls the clock: the global frame ran ahead of the galactic mode frame by the 60 battle ticks.
+        CHECK(series.back().global == kTicks && series.back().galactic == kTicks - (kBattleTo - kBattleFrom));
+        // Fired frames: Zero at the first T9; Five / Half where the accumulated T9 clock reaches 5 s / 12.5 s (replayed here
+        // from the recorded series: LastTime = first T9, accumulated += now - LastTime, fire at accumulated >= Param1).
+        std::map<std::string, uint64_t> fired;
+        for (const StoryLogEntry& e : host.story()->log()) fired[e.event] = e.frame;
+        auto expect = [&series](double threshold) -> uint64_t {
+            double last = 0.0, acc = 0.0;
+            for (size_t i = 0; i < series.size(); ++i) {
+                if (i) acc += series[i].time - last;
+                last = series[i].time;
+                if (acc >= threshold) return series[i].global;
+            }
+            return 0;
+        };
+        std::printf("  t9 clock, workers %2d: Zero @%" PRIu64 ", Five @%" PRIu64 ", Half @%" PRIu64 "\n", workers, fired["Zero"],
+                    fired["Five"], fired["Half"]);
+        CHECK(fired.size() == 3 && fired["Zero"] == 1);
+        CHECK(fired["Five"] == expect(5.0) && fired["Half"] == expect(12.5));
+        // The spec's frame: 5 s = 150 galactic frames after the first T9 (+-1 for the float rounding of the clock), and the
+        // 60 stalled battle ticks delay the global frame (Five lands after the battle, Half too).
+        const uint64_t stall = kBattleTo - kBattleFrom;
+        CHECK(fired["Five"] >= 151 - 1 + stall && fired["Five"] <= 151 + 1 + stall);
+        CHECK(fired["Half"] >= 376 - 1 + stall && fired["Half"] <= 376 + 1 + stall);
+        if (first.empty()) {
+            first = series;
+            first_fired = fired;
+        } else {
+            bool same = series.size() == first.size() && fired == first_fired;
+            for (size_t i = 0; same && i < series.size(); ++i)
+                same = series[i].global == first[i].global && series[i].galactic == first[i].galactic && series[i].seen == first[i].seen &&
+                       series[i].time == first[i].time;
+            CHECK(same);
+        }
+    }
+    remove_all_long(root, ec);
+}
+
+// L1/S4 wave 1: DEPLOY / DEFEAT_HERO (company members), PLANET_DESTROYED (poll), BEGIN_ERA (+ dialog
+// record), every notify_ui kind (player-scoped), and a story script's Change_Owner / Get_Parent_Object
+// through GalacticSim. Own type database in the rules' index order (so Company_Units / Is_Named_Hero
+// resolve), no golden: every event must fire once, identical logs for 0/1/4/15 workers.
+namespace story_wave1 {
+using namespace alamo::galactic;
+using story_test::pEmpire;
+using story_test::pUnder;
+enum : uint32_t { tHeroTeam = story_test::tCount, tHeroUnit, tCount2 };
+
+static const char* kPlot =
+    "<Story>\n"
+    " <Event Name=\"Deploy_C\"><Event_Type>STORY_DEPLOY</Event_Type><Event_Param1>Hero_Unit</Event_Param1>"
+    "<Event_Param2>PlanetC</Event_Param2></Event>\n"
+    " <Event Name=\"Hero_Lost\"><Event_Type>STORY_DEFEAT_HERO</Event_Type><Event_Param1>Hero_Unit</Event_Param1>"
+    "<Event_Param3>FILTER_ENEMY_ONLY</Event_Param3></Event>\n"
+    " <Event Name=\"Select_Infantry\"><Event_Type>STORY_SELECT_UNIT</Event_Type><Event_Param1>Infantry</Event_Param1>"
+    "<Event_Param3>FILTER_ENEMY_ONLY</Event_Param3></Event>\n"
+    " <Event Name=\"Select_A\"><Event_Type>STORY_SELECT_PLANET</Event_Type><Event_Param1>PlanetA</Event_Param1></Event>\n"
+    " <Event Name=\"Zoom_B\"><Event_Type>STORY_ZOOM_INTO_PLANET</Event_Type><Event_Param1>PlanetB</Event_Param1></Event>\n"
+    " <Event Name=\"Zoom_Out\"><Event_Type>STORY_ZOOM_OUT_PLANET</Event_Type></Event>\n"
+    " <Event Name=\"Gui\"><Event_Type>STORY_CLICK_GUI</Event_Type><Event_Param1>Button_X</Event_Param1></Event>\n"
+    " <Event Name=\"Speech\"><Event_Type>STORY_SPEECH_DONE</Event_Type><Event_Param1>Speech_1</Event_Param1></Event>\n"
+    " <Event Name=\"Movie\"><Event_Type>STORY_MOVIE_DONE</Event_Type></Event>\n"
+    " <Event Name=\"Generic\"><Event_Type>STORY_GENERIC</Event_Type><Event_Param1>battle_end_closed</Event_Param1></Event>\n"
+    " <Event Name=\"Lost\"><Event_Type>STORY_MISSION_LOST</Event_Type></Event>\n"
+    " <Event Name=\"Bought\"><Event_Type>STORY_BUY_BLACK_MARKET</Event_Type><Event_Param1>Disruptor_Tech</Event_Param1></Event>\n"
+    " <Event Name=\"Sabotage\"><Event_Type>STORY_GALACTIC_SABOTAGE</Event_Type><Event_Param1>SB1</Event_Param1></Event>\n"
+    " <Event Name=\"Open_C\"><Event_Type>STORY_OPEN_CORRUPTION</Event_Type><Event_Param1>PlanetC</Event_Param1></Event>\n"
+    " <Event Name=\"Destroyed_B\"><Event_Type>STORY_PLANET_DESTROYED</Event_Type><Event_Param1>PlanetB</Event_Param1></Event>\n"
+    " <Event Name=\"Era\"><Event_Type>STORY_BEGIN_ERA</Event_Type><Event_Param1>1</Event_Param1>"
+    "<Story_Dialog>Dialog_Test</Story_Dialog><Story_Chapter>2</Story_Chapter><Story_Tag>Era_Tag</Story_Tag>"
+    "<Story_Dialog_Popup>False</Story_Dialog_Popup></Event>\n"
+    " <Event Name=\"Owner_Done\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>OWNER_DONE</Event_Param2></Event>\n"
+    " <Event Name=\"Won_Two_At_C\"><Event_Type>STORY_WIN_BATTLES</Event_Type><Event_Param1>2</Event_Param1>"
+    "<Event_Param2>2</Event_Param2><Event_Param4>PlanetC</Event_Param4></Event>\n"
+    " <Event Name=\"Lost_One\"><Event_Type>STORY_LOSE_BATTLES</Event_Type><Event_Param1>1</Event_Param1></Event>\n"
+    " <Event Name=\"Retreat_C\"><Event_Type>STORY_RETREAT</Event_Type><Event_Param1>PlanetC</Event_Param1></Event>\n"
+    "</Story>\n";
+// The script moves the Underworld corvette to the Empire (GalacticSim::change_owner: a new Empire fleet in
+// orbit) and reports when the owner and the parent fleet changed.
+static const char* kScript =
+    "function Base_Definitions() ServiceRate = 0.1 done = false end\n"
+    "function main() while true do\n"
+    "  if not done then local c = Find_First_Object('Corvette') local f = c and c.Get_Parent_Object()\n"
+    "    if f then c.Change_Owner(Find_Player('Empire')) local g = c.Get_Parent_Object()\n"
+    "      if c.Get_Owner() == Find_Player('Empire') and g and g ~= f and g.Get_Owner() == c.Get_Owner() then\n"
+    "        Story_Event('OWNER_DONE') end\n"
+    "      done = true end end\n"
+    "  coroutine.yield(true) end end\n";
+
+struct Types {
+    std::unique_ptr<DirectoryProvider> files;
+    objects::ObjectTypeDatabase db;
+    objects::GameObjectTypes types;
+};
+static std::unique_ptr<Types> make_types(const fs::path& root) {
+    // Same order as story_test::rules() + Hero_Team / Hero_Unit.
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>Wave1.xml</File></GameObjectFiles>\n");
+    write_file(root / "Data/XML/Wave1.xml",
+               "<W>\n"
+               " <Planet Name=\"PlanetA\"><Behavior>PLANET</Behavior></Planet>\n"
+               " <Planet Name=\"PlanetB\"><Behavior>PLANET</Behavior></Planet>\n"
+               " <Planet Name=\"PlanetC\"><Behavior>PLANET</Behavior></Planet>\n"
+               " <Planet Name=\"PlanetD\"><Behavior>PLANET</Behavior></Planet>\n"
+               " <StarBase Name=\"SB1\"/>\n"
+               " <SpaceUnit Name=\"Corvette\"/>\n"
+               " <GroundInfantry Name=\"Infantry\"/>\n"
+               " <GroundStructure Name=\"Barracks\"/>\n"
+               " <SpaceUnit Name=\"Fighters\"/>\n"
+               " <GroundCompany Name=\"Hero_Team\"><Company_Units>Hero_Unit</Company_Units></GroundCompany>\n"
+               " <GroundInfantry Name=\"Hero_Unit\"><Is_Named_Hero>Yes</Is_Named_Hero></GroundInfantry>\n"
+               "</W>\n");
+    auto t = std::make_unique<Types>();
+    t->files = std::make_unique<DirectoryProvider>(path_to_utf8(root));
+    CHECK(t->db.load(*t->files));
+    CHECK(t->types.build(t->db));
+    CHECK(t->db.find("Hero_Team") == tHeroTeam && t->db.find("Hero_Unit") == tHeroUnit && t->db.find("Corvette") == story_test::tCorvette);
+    return t;
+}
+
+static GalacticRules rules() {
+    GalacticRules r = story_test::rules();
+    r.types.resize(tCount2);
+    r.types[tHeroTeam].name = "Hero_Team";
+    r.types[tHeroTeam].kind = UnitKind::GroundUnit;
+    r.types[tHeroUnit].name = "Hero_Unit";
+    r.types[tHeroUnit].kind = UnitKind::GroundUnit;
+    // P4 lua: one black-market item (BUY_BLACK_MARKET is routed from BlackMarketPurchase with the item's Name).
+    BlackMarketItemDef item;
+    item.name = "Disruptor_Tech";
+    item.name_crc = special_name_crc(item.name);
+    r.special.items.push_back(item);
+    return r;
+}
+
+struct Result {
+    std::string log;
+    std::vector<std::string> lua;
+    size_t dialogs = 0;
+    std::string dialog_tag;
+    int32_t dialog_chapter = -1;
+    bool scoped_ok = false;
+    bool battles_ok = false;
+    bool special_ok = false;  // P4 lua
+};
+
+static Result run(const objects::GameObjectTypes& types, const FileProvider& files, int32_t workers) {
+    const GalacticRules r = rules();
+    GalacticSetup setup = story_test::setup();
+    setup.forces.push_back({pUnder, story_test::rD, tHeroTeam});
+    setup.forces.push_back({pUnder, story_test::rD, story_test::tCorvette});  // newest: the script's Find_First_Object
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 11;
+    cfg.story_crc = true;
+    SimHost host(types, js, cfg);
+    GalacticSim* gs = host.start_galactic(r, setup);
+    CHECK(gs != nullptr);
+    if (!gs) return {};
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{pEmpire, "Story_Plots_Wave1.xml"}};
+    CHECK(host.start_story(st));
+    if (!host.story()) return {};
+    StorySession& story = *host.story();
+    host.tick_once();  // the script changes the corvette's owner at its first service
+    // Underworld: infantry + hero team leave D for C and land; the hero team is destroyed there later.
+    const std::vector<ObjectHandle> ground = gs->planets()[story_test::rD].surface;
+    CHECK(ground.size() == 2);
+    CHECK(gs->launch_units(pUnder, story_test::rD, ground) == RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(story_test::rD, pUnder);
+    CHECK(uf.size() == 1);
+    if (uf.size() != 1) return {};
+    CHECK(gs->move_fleet(pUnder, uf[0], story_test::rC) == RejectReason::None);
+    const int32_t infantry_id = gs->store().id(ground[0]);
+    Result out;
+    bool landed = false, killed = false;
+    for (uint64_t t = 1; t < 600; ++t) {
+        if (!landed && gs->fleets()[uf[0]].alive && !gs->fleets()[uf[0]].moving && gs->fleets()[uf[0]].planet == story_test::rC) {
+            CHECK(gs->invade(pUnder, story_test::rC, {}) == RejectReason::None);
+            landed = true;
+        } else if (landed && !killed) {
+            for (ObjectHandle h : gs->planets()[story_test::rC].surface)
+                if (gs->store().alive(h) && gs->store().type(h) == tHeroTeam) killed = gs->destroy_object(h);
+        }
+        if (t == 10) {
+            // Underworld's own click reaches no Empire plot (player-scoped); the Empire's does.
+            story.notify_ui({StoryUiEvent::ClickGui, pUnder, 0, "Button_X"});
+            story.notify_ui({StoryUiEvent::SelectUnit, pEmpire, infantry_id, ""});
+            story.notify_ui({StoryUiEvent::SelectPlanet, pEmpire, gs->store().id(gs->planets()[story_test::rA].object), ""});
+            story.notify_ui({StoryUiEvent::ZoomIntoPlanet, pEmpire, 0, "PlanetB"});
+            story.notify_ui({StoryUiEvent::ZoomOutPlanet, pEmpire, 0, ""});
+            story.notify_ui({StoryUiEvent::SpeechDone, -1, 0, "Speech_1"});
+            story.notify_ui({StoryUiEvent::MovieDone, pEmpire, 0, "Any_Movie"});
+            story.notify_ui({StoryUiEvent::Generic, pEmpire, 0, "battle_end_closed"});
+            story.notify_ui({StoryUiEvent::MissionLost, pEmpire, 0, "M01"});
+            // P4 lua: these two UI kinds are ignored now; an AI purchase (other_player 0) fires no BUY_BLACK_MARKET.
+            story.notify_ui({StoryUiEvent::BuyBlackMarket, pEmpire, 0, "Disruptor_Tech"});
+            story.notify_ui({StoryUiEvent::GalacticSabotage, pEmpire, 0, "SB1"});
+            story.notify_ui({StoryUiEvent::OpenCorruption, pEmpire, gs->store().id(gs->planets()[story_test::rC].object), ""});
+            GalacticEvent ai_buy;
+            ai_buy.kind = GalacticEventKind::BlackMarketPurchase;
+            ai_buy.player = pEmpire;
+            ai_buy.planet = story_test::rA;
+            ai_buy.value = 0;
+            ai_buy.other_player = 0;
+            gs->post_event(ai_buy);
+        }
+        if (t == 12) {
+            out.scoped_ok = story.log_text().find(" Gui ") == std::string::npos;  // not yet: only Underworld clicked
+            story.notify_ui({StoryUiEvent::ClickGui, pEmpire, 0, "Button_X"});
+            // P4 lua: nothing from the UI kinds / the AI purchase; then the sim events (human purchase, sabotage).
+            out.special_ok = story.log_text().find(" Bought ") == std::string::npos &&
+                             story.log_text().find(" Sabotage ") == std::string::npos &&
+                             story.log_text().find("UiBuyBlackMarket") == std::string::npos;
+            GalacticEvent buy;
+            buy.kind = GalacticEventKind::BlackMarketPurchase;
+            buy.player = pEmpire;
+            buy.planet = story_test::rA;
+            buy.value = 0;
+            buy.other_player = 1;
+            gs->post_event(buy);
+            GalacticEvent sab;
+            sab.kind = GalacticEventKind::GalacticSabotage;
+            sab.player = pEmpire;
+            sab.planet = story_test::rA;
+            sab.type = story_test::tSB1;
+            sab.value = kSabotageSpecialStructure;
+            gs->post_event(sab);
+        }
+        if (t == 400) gs->set_destroyed(story_test::rB, true);
+        // S10 battle results: the Empire wins at A (counted, planet not listed), Underworld loses (not the
+        // Empire's plot), the Empire wins at C (2nd win, listed: fires), then loses and retreats at C.
+        auto battle = [gs](GalacticEventKind k, int32_t player, int32_t other, PlanetIndex planet) {
+            GalacticEvent e;
+            e.kind = k;
+            e.player = player;
+            e.other_player = other;
+            e.planet = planet;
+            e.value = 2;
+            gs->post_event(e);
+        };
+        if (t == 450) {
+            battle(GalacticEventKind::BattleWon, pEmpire, pUnder, story_test::rA);
+            battle(GalacticEventKind::BattleLost, pUnder, pEmpire, story_test::rA);
+        }
+        if (t == 455) out.battles_ok = story.log_text().find(" Won_Two_At_C ") == std::string::npos &&
+                                       story.log_text().find(" Lost_One ") == std::string::npos;
+        if (t == 460) battle(GalacticEventKind::BattleWon, pEmpire, pUnder, story_test::rC);
+        if (t == 470) {
+            battle(GalacticEventKind::BattleLost, pEmpire, pUnder, story_test::rC);
+            battle(GalacticEventKind::BattleRetreat, pEmpire, -1, story_test::rC);
+        }
+        host.tick_once();
+    }
+    CHECK(landed && killed);
+    out.log = story.log_text("S4 wave 1 story notifications");
+    out.lua = story.lua_messages();
+    const auto& d = story.model(0).dialog_log();
+    out.dialogs = d.size();
+    if (!d.empty()) {
+        out.dialog_tag = d[0].tag;
+        out.dialog_chapter = d[0].chapter;
+    }
+    return out;
+}
+}  // namespace story_wave1
+
+static void test_story_wave1() {
+    using namespace story_wave1;
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_story_wave1";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    const auto types = make_types(root / "types");
+    write_file(root / "Data/XML/Story_Plots_Wave1.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Wave1</Lua_Script><Active_Plot>Story_Wave1.xml</Active_Plot></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Wave1.xml", kPlot);
+    write_file(root / "Data/Scripts/Story/Story_Wave1.lua", kScript);
+    DirectoryProvider files(path_to_utf8(root));
+    const Result a = run(types->types, files, 0);
+    Result b = a;
+    for (int32_t workers : jobs::determinism_worker_counts()) {  // 1 / 4 / 15: logs must not change
+        if (workers == 0) continue;
+        const Result r = run(types->types, files, workers);
+        if (r.log != a.log) b = r;
+    }
+    for (const auto& m : a.lua) std::printf("  lua: %s\n", m.c_str());
+    if (g_story_only) std::printf("%s", a.log.c_str());
+    CHECK(a.lua.empty());
+    for (const char* ev : {"Deploy_C", "Hero_Lost", "Select_Infantry", "Select_A", "Zoom_B", "Zoom_Out", "Gui", "Speech", "Movie",
+                           "Generic", "Lost", "Bought", "Sabotage", "Open_C", "Destroyed_B", "Era", "Owner_Done",
+                           "Won_Two_At_C", "Lost_One", "Retreat_C"})
+        if (a.log.find(std::string(" ") + ev + " ") == std::string::npos) {
+            std::printf("FAIL wave1 story event %s did not fire\n", ev);
+            ++g_fail;
+        }
+    CHECK(a.scoped_ok && a.battles_ok && a.dialogs == 1 && a.dialog_tag == "Era_Tag" && a.dialog_chapter == 2);
+    CHECK(a.special_ok);  // P4 lua
+    CHECK(a.log.find("UiSelectUnit") != std::string::npos && a.log.find("PlanetDestroyed") != std::string::npos);
+    CHECK(!a.log.empty() && a.log == b.log);
+    std::printf("story wave 1: %zu log bytes, identical for 0/1/4/15 workers: %s\n", a.log.size(), a.log == b.log ? "yes" : "NO");
+    remove_all_long(root, ec);
+}
+
+// L1/S4 wave 2a: a battle through StorySession::begin_battle / notify_tactical / end_battle on a pushed space mode
+// (no TacticalBattle: the test plays the battle host) - STORY_SPACE_TACTICAL loads the tactical plots named by
+// its Param1, the tactical plot set + Lua script run on the tactical store (UNIT_PROXIMITY, CHECK_DESTROYED,
+// ATTACK_HARDPOINT, COMMAND_UNIT, TACTICAL_DESTROY, DEFEAT_HERO, ELAPSED, AI_NOTIFICATION from the tactical
+// script), VICTORY at the end; then the S10 results with location / composition (WIN_BATTLES SPACE +
+// FRIENDLY_CONTAINS CLASS_Corvette) and a land loss of the invader (INVASION_BOUNCED). No golden: every event
+// must fire once (the negative ones never), identical logs for 0/1/4/15 workers.
+namespace story_wave2a {
+using namespace alamo::galactic;
+using story_test::pEmpire;
+using story_test::pUnder;
+enum : uint32_t { tHeroShip = story_test::tCount, tZone, tCount2 };
+
+static const char* kGalactic =
+    "<Story>\n"
+    " <Event Name=\"Go_Space\"><Event_Type>STORY_SPACE_TACTICAL</Event_Type>"
+    "<Event_Param1>Story_Plots_Wave2a_Tac.xml</Event_Param1><Event_Param2>PlanetC</Event_Param2></Event>\n"
+    " <Event Name=\"Go_Land_Never\"><Event_Type>STORY_LAND_TACTICAL</Event_Type><Event_Param1>X.xml</Event_Param1></Event>\n"
+    " <Event Name=\"Won_Space\"><Event_Type>STORY_WIN_BATTLES</Event_Type><Event_Param1>1</Event_Param1>"
+    "<Event_Param2>SPACE</Event_Param2><Event_Param3>FRIENDLY_CONTAINS CLASS_Corvette</Event_Param3></Event>\n"
+    " <Event Name=\"Won_Land_Never\"><Event_Type>STORY_WIN_BATTLES</Event_Type><Event_Param1>1</Event_Param1>"
+    "<Event_Param2>Land</Event_Param2></Event>\n"
+    " <Event Name=\"Won_Fighters_Never\"><Event_Type>STORY_WIN_BATTLES</Event_Type><Event_Param1>1</Event_Param1>"
+    "<Event_Param3>FRIENDLY_CONTAINS CLASS_Fighter</Event_Param3></Event>\n"
+    " <Event Name=\"Bounced_D\"><Event_Type>STORY_INVASION_BOUNCED</Event_Type><Event_Param1>PlanetD</Event_Param1></Event>\n"
+    // wave 2b: a pending corruption mission ends with the battle (SCRIPT_GAPS.md §4.7)
+    " <Event Name=\"Corrupt_C\"><Event_Type>STORY_CORRUPTION_TACTICAL_COMPLETE</Event_Type><Event_Param1>PlanetC</Event_Param1>"
+    "<Event_Param2>KIDNAPPING</Event_Param2></Event>\n"
+    " <Event Name=\"Corrupt_Failed_Never\"><Event_Type>STORY_CORRUPTION_TACTICAL_FAILED</Event_Type><Event_Param1>PlanetC</Event_Param1></Event>\n"
+    // L1/S4 wave 1 tactical UI: a battle-screen speech end also reaches the galactic sets; a tactical selection / HUD
+    // click never does (also not after the battle)
+    " <Event Name=\"Gal_Speech\"><Event_Type>STORY_SPEECH_DONE</Event_Type><Event_Param1>TAC_SPEECH_01</Event_Param1></Event>\n"
+    " <Event Name=\"Gal_Click_Never\"><Event_Type>STORY_CLICK_GUI</Event_Type><Event_Param1>b_reinforcement</Event_Param1></Event>\n"
+    " <Event Name=\"Gal_Select_Never\"><Event_Type>STORY_SELECT_UNIT</Event_Type></Event>\n"
+    "</Story>\n";
+static const char* kTactical =
+    "<Story>\n"
+    " <Event Name=\"Victory_Empire\"><Event_Type>STORY_VICTORY</Event_Type><Event_Param1>EMPIRE</Event_Param1></Event>\n"
+    " <Event Name=\"Victory_Under_Never\"><Event_Type>STORY_VICTORY</Event_Type><Event_Param1>Underworld</Event_Param1></Event>\n"
+    " <Event Name=\"Enemy_Gone\"><Event_Type>STORY_CHECK_DESTROYED</Event_Type><Event_Param1>Underworld</Event_Param1>"
+    "<Event_Param2>DESTROY_ALL</Event_Param2></Event>\n"
+    " <Event Name=\"Self_Gone_Never\"><Event_Type>STORY_CHECK_DESTROYED</Event_Type><Event_Param1>Empire</Event_Param1>"
+    "<Event_Param2>DESTROY_ALL_UNITS</Event_Param2></Event>\n"
+    " <Event Name=\"Near_Zone\"><Event_Type>STORY_UNIT_PROXIMITY</Event_Type><Event_Param2>Trigger_Zone</Event_Param2>"
+    "<Event_Param3>100</Event_Param3></Event>\n"
+    " <Event Name=\"Far_Zone_Never\"><Event_Type>STORY_UNIT_PROXIMITY</Event_Type><Event_Param1>Hero_Ship</Event_Param1>"
+    "<Event_Param2>Trigger_Zone</Event_Param2><Event_Param3>100</Event_Param3></Event>\n"
+    " <Event Name=\"Gun_Down\"><Event_Type>STORY_ATTACK_HARDPOINT</Event_Type><Event_Param1>HP_Gun</Event_Param1></Event>\n"
+    " <Event Name=\"Moved\"><Event_Type>STORY_COMMAND_UNIT</Event_Type><Event_Param1>Corvette</Event_Param1>"
+    "<Event_Param2>Trigger_Zone</Event_Param2><Event_Param3>500</Event_Param3></Event>\n"
+    " <Event Name=\"Corvette_Killed\"><Event_Type>STORY_TACTICAL_DESTROY</Event_Type><Event_Param1>Corvette</Event_Param1>"
+    "<Event_Param3>1</Event_Param3></Event>\n"
+    " <Event Name=\"Hero_Dies\"><Event_Type>STORY_DEFEAT_HERO</Event_Type><Event_Param1>Hero_Ship</Event_Param1>"
+    "<Event_Param3>FILTER_ENEMY_ONLY</Event_Param3></Event>\n"
+    " <Event Name=\"Tac_Elapsed\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>1</Event_Param1></Event>\n"
+    " <Event Name=\"Script_Saw\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>TAC_SCRIPT</Event_Param2></Event>\n"
+    // wave 2b: GUARD_UNIT pairs Param1[i] with Param2[i]; an empty Param2 never fires; DIFFICULTY_LEVEL is never dispatched
+    " <Event Name=\"Guarded\"><Event_Type>STORY_GUARD_UNIT</Event_Type><Event_Param1>Hero_Ship Corvette</Event_Param1>"
+    "<Event_Param2>Corvette Trigger_Zone</Event_Param2></Event>\n"
+    " <Event Name=\"Guard_Never\"><Event_Type>STORY_GUARD_UNIT</Event_Type><Event_Param1>Corvette</Event_Param1></Event>\n"
+    " <Event Name=\"Difficulty_Never\"><Event_Type>STORY_DIFFICULTY_LEVEL</Event_Type><Event_Param1>Normal</Event_Param1></Event>\n"
+    // wave 2b fog hooks (StoryBattleStart::fog_*_visible, the fog agent wires them)
+    // fog follow-up: ENABLE_FOW rewards reach StorySession::set_enable_fow_hook (no Param1 / Param1 0)
+    " <Event Name=\"Zone_Seen\"><Event_Type>STORY_FOG_OBJECT_REVEAL</Event_Type><Event_Param1>Trigger_Zone</Event_Param1>"
+    "<Reward_Type>ENABLE_FOW</Reward_Type></Event>\n"
+    " <Event Name=\"Point_Seen\"><Event_Type>STORY_FOG_POSITION_REVEAL</Event_Type><Event_Param1>60, 0, 0</Event_Param1>"
+    "<Reward_Type>ENABLE_FOW</Reward_Type><Reward_Param1>0</Reward_Param1></Event>\n"
+    " <Event Name=\"Far_Point_Never\"><Event_Type>STORY_FOG_POSITION_REVEAL</Event_Type><Event_Param1>9000 0 0</Event_Param1></Event>\n"
+    // L1/S4 wave 1 tactical UI (notify_ui with `tactical`): SELECT_UNIT by battle-store id, CLICK_GUI (player-scoped),
+    // SPEECH_DONE
+    " <Event Name=\"Tac_Select\"><Event_Type>STORY_SELECT_UNIT</Event_Type><Event_Param1>Corvette</Event_Param1></Event>\n"
+    " <Event Name=\"Tac_Select_Hero_Never\"><Event_Type>STORY_SELECT_UNIT</Event_Type><Event_Param1>Hero_Ship</Event_Param1></Event>\n"
+    " <Event Name=\"Tac_Click\"><Event_Type>STORY_CLICK_GUI</Event_Type><Event_Param1>b_reinforcement</Event_Param1></Event>\n"
+    " <Event Name=\"Tac_Click_Never\"><Event_Type>STORY_CLICK_GUI</Event_Type><Event_Param1>b_special_weapon</Event_Param1></Event>\n"
+    " <Event Name=\"Tac_Speech\"><Event_Type>STORY_SPEECH_DONE</Event_Type><Event_Param1>TAC_SPEECH_01</Event_Param1></Event>\n"
+    "</Story>\n";
+// The tactical script sees the tactical store (the Empire corvette, its hull) and reports once.
+static const char* kTacScript =
+    "function Base_Definitions() ServiceRate = 0.1 done = false end\n"
+    "function main() while true do\n"
+    "  if not done then local c = Find_First_Object('Corvette')\n"
+    "    if c and c.Get_Hull() >= 0 and c.Get_Parent_Mode_Object_ID() == nil then Story_Event('TAC_SCRIPT') done = true end end\n"
+    "  coroutine.yield(true) end end\n";
+
+struct Types {
+    std::unique_ptr<DirectoryProvider> files;
+    objects::ObjectTypeDatabase db;
+    objects::GameObjectTypes types;
+};
+static std::unique_ptr<Types> make_types(const fs::path& root) {
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>Wave2a.xml</File></GameObjectFiles>\n");
+    write_file(root / "Data/XML/Wave2a.xml",
+               "<W>\n"
+               " <Planet Name=\"PlanetA\"><Behavior>PLANET</Behavior></Planet>\n"
+               " <Planet Name=\"PlanetB\"><Behavior>PLANET</Behavior></Planet>\n"
+               " <Planet Name=\"PlanetC\"><Behavior>PLANET</Behavior></Planet>\n"
+               " <Planet Name=\"PlanetD\"><Behavior>PLANET</Behavior></Planet>\n"
+               " <StarBase Name=\"SB1\"><Tactical_Health>500</Tactical_Health><CategoryMask>Structure</CategoryMask></StarBase>\n"
+               // wave 2b: SELECTABLE (CHECK_DESTROYED counts live SELECTABLE objects, SCRIPT_GAPS.md §4.8)
+               " <SpaceUnit Name=\"Corvette\"><Behavior>SELECTABLE</Behavior><Tactical_Health>100</Tactical_Health>"
+               "<CategoryMask>Corvette</CategoryMask></SpaceUnit>\n"
+               " <GroundInfantry Name=\"Infantry\"><Tactical_Health>10</Tactical_Health><CategoryMask>Infantry</CategoryMask></GroundInfantry>\n"
+               " <GroundStructure Name=\"Barracks\"><Tactical_Health>200</Tactical_Health><CategoryMask>Structure</CategoryMask></GroundStructure>\n"
+               " <SpaceUnit Name=\"Fighters\"><CategoryMask>Fighter</CategoryMask></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Hero_Ship\"><Behavior>SELECTABLE</Behavior><Is_Named_Hero>Yes</Is_Named_Hero><Tactical_Health>300</Tactical_Health>"
+               "<CategoryMask>Frigate</CategoryMask></SpaceUnit>\n"
+               " <Marker Name=\"Trigger_Zone\"><Behavior>MARKER</Behavior></Marker>\n"
+               "</W>\n");
+    auto t = std::make_unique<Types>();
+    t->files = std::make_unique<DirectoryProvider>(path_to_utf8(root));
+    CHECK(t->db.load(*t->files));
+    CHECK(t->types.build(t->db));
+    CHECK(t->db.find("Hero_Ship") == tHeroShip && t->db.find("Trigger_Zone") == tZone && t->db.find("Corvette") == story_test::tCorvette);
+    return t;
+}
+
+static GalacticRules rules() {
+    GalacticRules r = story_test::rules();
+    r.types.resize(tCount2);
+    r.types[tHeroShip].name = "Hero_Ship";
+    r.types[tHeroShip].kind = UnitKind::SpaceUnit;
+    r.types[tZone].name = "Trigger_Zone";
+    r.types[tZone].kind = UnitKind::SpaceUnit;
+    return r;
+}
+
+struct Result {
+    std::string log;
+    std::vector<std::string> lua;
+    bool loaded = false, attached_during = false, detached_after = false;
+    std::vector<std::pair<bool, int32_t>> fow_rewards;  // fog follow-up: ENABLE_FOW (has Param1, atoi(Param1))
+};
+
+static objects::ObjectHandle spawn(objects::ObjectStore& st, uint32_t type, int32_t owner, Vec3 p) {
+    objects::SpawnParams sp;
+    sp.type = static_cast<objects::TypeIndex>(type);
+    sp.owner = owner;
+    sp.position = p;
+    sp.facing = {1.0f, 0.0f, 0.0f};
+    return st.create(sp);
+}
+
+static Result run(const objects::GameObjectTypes& types, const FileProvider& files, int32_t workers) {
+    const GalacticRules r = rules();
+    GalacticSetup setup = story_test::setup();
+    setup.forces.push_back({pEmpire, story_test::rA, story_test::tCorvette});
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 13;
+    cfg.story_crc = true;
+    SimHost host(types, js, cfg);
+    GalacticSim* gs = host.start_galactic(r, setup);
+    CHECK(gs != nullptr);
+    if (!gs) return {};
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{pEmpire, "Story_Plots_Wave2a.xml"}};
+    CHECK(host.start_story(st));
+    if (!host.story()) return {};
+    StorySession& story = *host.story();
+    for (int i = 0; i < 5; ++i) host.tick_once();
+    // The conflict at C: the galactic corvettes of both sides.
+    BattleRequest req;
+    req.info.kind = ConflictKind::Space;
+    req.info.planet = story_test::rC;
+    req.info.attacker = pEmpire;
+    req.info.defender = pUnder;
+    BattleForces def, att;
+    def.player = pUnder;
+    att.player = pEmpire;
+    for (const ObjectHandle h : gs->store().all_objects())
+        if (gs->store().alive(h) && gs->store().type(h) == story_test::tCorvette)
+            (gs->store().owner(h) == pEmpire ? att : def).start.push_back(h);
+    CHECK(att.start.size() == 1 && def.start.size() == 1);
+    req.forces = {def, att};
+    // The battle host: push the space mode, spawn the tactical objects, attach the tactical story.
+    GameMode& mode = host.start_game(ModeKind::Space);
+    objects::ObjectStore& ts = mode.primary();
+    const ObjectHandle mine = spawn(ts, story_test::tCorvette, pEmpire, {0, 0, 0});
+    const ObjectHandle theirs = spawn(ts, story_test::tCorvette, pUnder, {500, 0, 0});
+    const ObjectHandle hero = spawn(ts, tHeroShip, pUnder, {500, 60, 0});
+    const ObjectHandle zone = spawn(ts, tZone, -1, {60, 0, 0});
+    StoryBattleStart bs;
+    bs.request = &req;
+    bs.store = &ts;
+    bs.fog_point_visible = [](int32_t player, double x, double, double) { return player == pEmpire && x < 1000.0; };
+    bs.fog_object_visible = [&ts, zone](int32_t, int32_t id) { return id == ts.id(zone); };
+    std::vector<std::string> diag;
+    Result out;
+    story.set_enable_fow_hook([&out](bool has, int32_t v) { out.fow_rewards.emplace_back(has, v); });  // fog follow-up
+    out.loaded = story.begin_battle(bs, host.frame(), &diag);
+    for (const auto& d : diag) std::printf("  wave2a diag: %s\n", d.c_str());
+    for (uint32_t t = 0; t < 60; ++t) {
+        if (t == 2) story.notify_tactical({TacticalStoryEvent::HardpointDestroyed, ts.id(theirs), ts.id(mine), -1, "HP_Gun", -1.0});
+        if (t == 3) story.notify_tactical({TacticalStoryEvent::UnitCommanded, ts.id(mine), ts.id(zone), -1, "", 300.0});
+        if (t == 4) story.notify_tactical({TacticalStoryEvent::UnitGuarding, ts.id(mine), ts.id(zone), -1, "", -1.0});  // wave 2b
+        if (t == 5) {
+            story.notify_tactical({TacticalStoryEvent::Destroyed, ts.id(hero), 0, -1, "", -1.0});
+            ts.destroy(hero);
+        }
+        if (t == 7) {
+            story.notify_tactical({TacticalStoryEvent::Destroyed, ts.id(theirs), ts.id(mine), -1, "", -1.0});
+            ts.destroy(theirs);
+        }
+        if (t == 8) {  // L1/S4 wave 1 tactical UI (the game host's recorded command, applied by notify_ui)
+            story.notify_ui({StoryUiEvent::SelectUnit, pEmpire, static_cast<int32_t>(ts.id(mine)), "", true});
+            story.notify_ui({StoryUiEvent::ClickGui, pEmpire, 0, "b_reinforcement", true});
+            story.notify_ui({StoryUiEvent::ClickGui, pUnder, 0, "b_special_weapon", true});  // not the tactical plot owner
+            story.notify_ui({StoryUiEvent::SpeechDone, pEmpire, 0, "TAC_SPEECH_01", true});
+        }
+        host.tick_once();
+    }
+    out.attached_during = story.battle_attached() && story.tactical_model() != nullptr;
+    story.set_corruption_mission(pEmpire, 2);  // wave 2b: KIDNAPPING mission at C, won by the Empire
+    story.end_battle(pEmpire, host.frame());
+    out.detached_after = !story.battle_attached();
+    story.notify_ui({StoryUiEvent::SelectUnit, pEmpire, static_cast<int32_t>(ts.id(mine)), "", true});  // no battle: dropped
+    story.notify_ui({StoryUiEvent::ClickGui, pEmpire, 0, "b_reinforcement", true});
+    CHECK(host.end_game_mode());
+    // S10 results: the Empire won the space battle at C (snapshot: its corvette), then lost a land battle at D,
+    // which Underworld owns (an invasion that bounced; no snapshot of that battle).
+    auto battle = [gs](GalacticEventKind k, int32_t player, int32_t other, PlanetIndex planet, int32_t value) {
+        GalacticEvent e;
+        e.kind = k;
+        e.player = player;
+        e.other_player = other;
+        e.planet = planet;
+        e.value = value;
+        gs->post_event(e);
+    };
+    battle(GalacticEventKind::BattleWon, pEmpire, pUnder, story_test::rC, 2);
+    host.tick_once();
+    battle(GalacticEventKind::BattleLost, pEmpire, pUnder, story_test::rD, 1);
+    host.tick_once();
+    out.log = story.log_text("S4 wave 2a battles + tactical story");
+    out.lua = story.lua_messages();
+    return out;
+}
+}  // namespace story_wave2a
+
+static void test_story_wave2a() {
+    using namespace story_wave2a;
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_story_wave2a";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    const auto types = make_types(root / "types");
+    write_file(root / "Data/XML/Story_Plots_Wave2a.xml", "<Story_Mode_Plots><Active_Plot>Story_Wave2a.xml</Active_Plot></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Wave2a.xml", kGalactic);
+    write_file(root / "Data/XML/Story_Plots_Wave2a_Tac.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Wave2a_Tac</Lua_Script><Active_Plot>Story_Wave2a_Tac.xml</Active_Plot>"
+               "</Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Wave2a_Tac.xml", kTactical);
+    write_file(root / "Data/Scripts/Story/Story_Wave2a_Tac.lua", kTacScript);
+    DirectoryProvider files(path_to_utf8(root));
+    const Result a = run(types->types, files, 0);
+    Result b = a;
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        if (workers == 0) continue;
+        const Result r = run(types->types, files, workers);
+        if (r.log != a.log) b = r;
+    }
+    for (const auto& m : a.lua) std::printf("  lua: %s\n", m.c_str());
+    if (g_story_only) std::printf("%s", a.log.c_str());
+    CHECK(a.lua.empty() && a.loaded && a.attached_during && a.detached_after);
+    // fog follow-up: one ENABLE_FOW without Reward_Param1 (Zone_Seen) and one with 0 (Point_Seen).
+    CHECK(a.fow_rewards.size() == 2 && std::count(a.fow_rewards.begin(), a.fow_rewards.end(), std::make_pair(false, int32_t{0})) == 1 &&
+          std::count(a.fow_rewards.begin(), a.fow_rewards.end(), std::make_pair(true, int32_t{0})) == 1);
+    for (const char* ev : {"Go_Space", "Won_Space", "Bounced_D", "Victory_Empire", "Enemy_Gone", "Near_Zone", "Gun_Down", "Moved",
+                           "Corvette_Killed", "Hero_Dies", "Tac_Elapsed", "Script_Saw", "Corrupt_C", "Guarded", "Zone_Seen", "Point_Seen",
+                           "Tac_Select", "Tac_Click", "Tac_Speech", "Gal_Speech"})
+        if (a.log.find(std::string(" ") + ev + " ") == std::string::npos) {
+            std::printf("FAIL wave2a story event %s did not fire\n", ev);
+            ++g_fail;
+        }
+    // L1/S4 wave 1 tactical UI: fired by the notifications (not by SPEECH_DONE's 60 s timeout).
+    for (const char* want : {" Tac_Select STORY_SELECT_UNIT", " Tac_Click STORY_CLICK_GUI", " Tac_Speech STORY_SPEECH_DONE",
+                             " Gal_Speech STORY_SPEECH_DONE"}) {
+        const size_t at = a.log.find(want);
+        const std::string line = at == std::string::npos ? std::string() : a.log.substr(at, a.log.find('\n', at) - at);
+        const char* via = std::string_view(want).substr(0, 5) == " Gal_" ? "via=trigger:UiSpeechDone#" : "via=trigger:Tac";
+        if (line.find(via) == std::string::npos) {
+            std::printf("FAIL wave2a tactical UI:%s not fired by its notification (%s)\n", want, line.c_str());
+            ++g_fail;
+        }
+    }
+    for (const char* ev : {"Go_Land_Never", "Won_Land_Never", "Won_Fighters_Never", "Victory_Under_Never", "Self_Gone_Never",
+                           "Far_Zone_Never", "Corrupt_Failed_Never", "Guard_Never", "Difficulty_Never",
+                           "Far_Point_Never", "Tac_Select_Hero_Never", "Tac_Click_Never", "Gal_Click_Never",
+                           "Gal_Select_Never"})
+        if (a.log.find(std::string(" ") + ev + " ") != std::string::npos) {
+            std::printf("FAIL wave2a story event %s fired\n", ev);
+            ++g_fail;
+        }
+    CHECK(a.log.find("BattleStarted") != std::string::npos && a.log.find("BattleEnded") != std::string::npos &&
+          a.log.find("# tactical plot set 1:") != std::string::npos);
+    CHECK(!a.log.empty() && a.log == b.log);
+    std::printf("story wave 2a: %zu log bytes, identical for 0/1/4/15 workers: %s\n", a.log.size(), a.log == b.log ? "yes" : "NO");
+    remove_all_long(root, ec);
+}
+
+// Real FoC campaign opening: Full_Story_Campaign_Underworld (Story_Plots_Campaign_Underworld.XML +
+// Story_Campaign_Underworld.lua), 900 ticks hands-off.
+static void test_story_real(const FileProvider& files, const objects::GameObjectTypes& types) {
+    data::GameDatabase gdb;
+    galactic::GalacticRules rules;
+    std::vector<std::string> diag;
+    CHECK(gdb.load(files, {}, &diag) && galactic::load_galactic_rules(files, gdb, types, rules, &diag));
+    const char* name = "Full_Story_Campaign_Underworld";
+    const data::CampaignDef* camp = nullptr;
+    for (const auto& c : gdb.campaigns())
+        if (c.name == name) camp = &c;
+    CHECK(camp != nullptr);
+    if (!camp) return;
+    const galactic::GalacticSetup setup = galactic::build_campaign_setup(gdb, rules, name, {}, &diag);
+    auto run = [&](int32_t workers, std::string& log, CrcLog& crc) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimConfig cfg;
+        cfg.seed = 99;
+        cfg.story_crc = true;
+        SimHost host(types, js, cfg);
+        galactic::GalacticSim* gs = host.start_galactic(rules, setup);
+        CHECK(gs != nullptr);
+        if (!gs) return;
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = campaign_plot_sets(*camp, *gs);
+        CHECK(st.plot_sets.size() == 1);
+        std::vector<std::string> sd;
+        CHECK(host.start_story(st, &sd));
+        if (!host.story()) return;
+        host.run_fast(900);
+        log = host.story()->log_text(std::string(name) + ", seed 99, 900 ticks");
+        crc = host.crc_log();
+        std::printf("  %s workers %d: %zu story events fired, %zu triggers, %zu Lua messages, final CRC %016" PRIx64 "\n", name,
+                    workers, host.story()->log().size(), host.story()->triggers().size(), host.story()->lua_messages().size(),
+                    crc.records.back().combined);
+        if (workers == 0)
+            for (size_t i = 0; i < host.story()->lua_messages().size() && i < 5; ++i)
+                std::printf("    lua: %s\n", host.story()->lua_messages()[i].c_str());
+    };
+    std::string la, lb;
+    CrcLog ca, cb;
+    run(0, la, ca);
+    run(4, lb, cb);
+    CHECK(!la.empty() && la == lb && !first_divergence(ca, cb).diverged);
+    check_text_golden("story_underworld_golden.txt", la);
+}
+#endif
+
+// -------------------------------------------------------------------------------------- real data
+static void test_real_data() {
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
+    if (root.empty()) {
+        std::printf("real data: ALAMO_FOC_DATA not set, skipped\n");
+        return;
+    }
+    vfs::VfsConfig cfg;
+    cfg.foc_root = root;
+    std::string err;
+    auto files = vfs::Vfs::create(cfg, &err);
+    CHECK(files != nullptr);
+    if (!files) return;
+    objects::ObjectTypeDatabase db;
+    CHECK(db.load(*files));
+    objects::GameObjectTypes types;
+    CHECK(types.build(db, files.get()));
+    const TypeCrcIndex index(types);
+    // S3: a FoC galactic campaign with the real economy as the galactic mode tick, then a space battle
+    // pushed over it (the galaxy freezes), popped again.
+    {
+        data::GameDatabase gdb;
+        galactic::GalacticRules rules;
+        std::vector<std::string> diag;
+        CHECK(gdb.load(*files, {}, &diag) && galactic::load_galactic_rules(*files, gdb, types, rules, &diag));
+        const galactic::GalacticSetup setup =
+            galactic::build_campaign_setup(gdb, rules, "Sandbox_Heart_Of_The_Maw_Underworld", {}, &diag);
+        auto run = [&](int32_t workers, bool battle) {
+            jobs::JobSystem js(jobs::JobSystemConfig{workers});
+            SimConfig cfg;
+            cfg.seed = 99;
+            SimHost host(types, js, cfg);
+            galactic::GalacticSim* gs = host.start_galactic(rules, setup);
+            CHECK(gs != nullptr);
+            if (!gs) return CrcLog{};
+            host.run_fast(1500);
+            CHECK(gs->frame() == 1500 && gs->galactic_day() >= 1);
+            host.galactic_mode()->push_pause();
+            host.run_fast(30);
+            CHECK(gs->frame() == 1500 && host.galactic_mode()->frame() == 1500);
+            host.galactic_mode()->pop_pause();
+            if (battle) {
+                host.start_game(ModeKind::Space);
+                host.run_fast(60);
+                CHECK(gs->frame() == 1500 && host.frame() == 1590);
+                host.end_game_mode();
+            }
+            host.run_fast(1200);
+            CHECK(gs->frame() == 2700 && host.galactic_mode()->frame() == 2700);
+            std::printf("  galactic HotM workers %d: frame %d, cycles %d, objects %zu, final CRC %016" PRIx64 "\n", workers,
+                        gs->frame(), gs->galactic_day(), gs->store().live_count(), host.crc_log().records.back().combined);
+            return host.crc_log();
+        };
+        const CrcLog a = run(0, true);
+        const CrcLog b = run(4, true);
+        CHECK(!first_divergence(a, b).diverged && a.records.size() == 2791);
+        const std::string golden = testdata("galactic_hotm_golden.crc");
+        std::string gerr;
+        if (g_regen) {
+            CrcLog g = a;
+            g.comments = {"G0 + S3: Sandbox_Heart_Of_The_Maw_Underworld, seed 99, 1500 + 30 paused + 60 space + 1200 ticks"};
+            CHECK(g.save(golden, &gerr));
+        } else {
+            CrcLog g;
+            CHECK(CrcLog::load(golden, g, &gerr));
+            const auto d = first_divergence(g, a);
+            std::printf("  golden galactic_hotm_golden.crc: %s\n", d.message.c_str());
+            CHECK(!d.diverged);
+        }
+    }
+#ifdef ALAMO_SIM_HAVE_STORY
+    test_story_real(*files, types);
+#endif
+    for (const char* name : {"_SPACE_PLANET_CORELLIA_PIRACY", "_LAND_PLANET_BYSS_KIDNAPPING"}) {
+        terrain::MapData map;
+        const bool map_loaded = terrain::load_map(*files, name, map, &err);
+        if (!map_loaded && files->mounts().empty()) {  // maps live in maps.meg: text-only data (unzipped extracted/*.zip) has none
+            std::printf("%s: not in this data set (loose text data, no MEGs mounted): map checks skipped\n", name);
+            continue;
+        }
+        CHECK(map_loaded);
+        // Spawn + spatial query sanity on the real map.
+        jobs::JobSystem js(jobs::JobSystemConfig{4});
+        SimHost host(types, js);
+        host.start_game(map.is_space() ? ModeKind::Space : ModeKind::Land);
+        TacticalMode& tm = *host.tactical();
+        const SpawnReport r = spawn_map(tm, map, index, host.parallel_for());
+        CHECK(r.unknown_type == 0 && r.spawned == map.objects.size() && r.units > 10 && r.in_trees == r.spawned);
+        const objects::ObjectStore& st = tm.primary();
+        uint32_t health_ok = 0;
+        for (size_t i = 0; i < map.objects.size(); ++i) {
+            const ObjectHandle h = st.find(static_cast<ObjectId>(i + 1));
+            const float expect = map.objects[i].health_fraction * types.columns().tactical_health[st.type(h)];
+            if (st.health(h) == expect) ++health_ok;
+        }
+        CHECK(health_ok == map.objects.size());
+        tactical::QueryContext ctx;
+        uint32_t checked = 0;
+        for (size_t i = 0; i < st.all_objects().size(); i += 7) {
+            const ObjectHandle c = st.all_objects()[i];
+            const Vec3 p = st.position(c);
+            tactical::CircleXY circle;
+            circle.center = {p.x, p.y, p.z};
+            circle.radius = 1500.0f;
+            std::vector<tactical::EntityHandle> brute;
+            for (ObjectHandle h : st.all_objects()) {
+                const auto* m = tm.trees().membership(static_cast<uint32_t>(st.id(h)));
+                if (m && m->projectile_collidable && tactical::overlaps(circle, tm.bounds_of(h)))
+                    brute.push_back(static_cast<uint32_t>(st.id(h)));
+            }
+            std::sort(brute.begin(), brute.end());
+            const auto got = tm.trees().all().query_circle_xy(circle, tactical::kAllCategories, ctx);
+            if (std::vector<tactical::EntityHandle>(got.begin(), got.end()) == brute) ++checked;
+            else CHECK(false);
+        }
+        std::printf("%s: %u placements -> %u objects (%u units, %u structures, %u props), all() tree %u, %u radius queries = brute force\n",
+                    name, r.placements, r.spawned, r.units, r.structures, r.props, tm.trees().all().size(), checked);
+        determinism(types, map, name, 600);
+    }
+}
+
+int main(int argc, char** argv) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    log::set_min_level(log::Level::Error);
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], "--regen") == 0) g_regen = g_regen_story = true;
+        else if (std::strcmp(argv[i], "--regen-story") == 0) g_regen_story = true;
+        else if (std::strcmp(argv[i], "--story-only") == 0) g_story_only = true;
+    test_pacing();
+    const auto world = make_world();
+#ifdef ALAMO_SIM_HAVE_STORY
+    test_story_synthetic(*world);
+    test_story_rewards_oi(*world);  // OI lua
+    test_story_t9_clock(*world);    // host follow-up: T9 time argument
+    test_story_wave1();
+    test_story_wave2a();
+#else
+    std::printf("story: built without engine/lua, skipped\n");
+#endif
+    if (g_story_only) {
+        std::printf(g_fail ? "alamo_sim_tests: %d failure(s)\n" : "alamo_sim_tests: OK (story only)\n", g_fail);
+        return g_fail ? 1 : 0;
+    }
+    test_mode_stack(*world);
+    test_tick_order(*world);
+    test_commands(*world);
+    test_realtime_equals_fast(*world);
+    test_save_session(*world);  // N1
+    determinism(world->types, make_synthetic_map(), "synthetic", 600);
+    test_real_data();
+    std::printf(g_fail ? "alamo_sim_tests: %d failure(s)\n" : "alamo_sim_tests: OK\n", g_fail);
+    return g_fail ? 1 : 0;
+}

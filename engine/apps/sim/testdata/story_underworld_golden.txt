@@ -1,0 +1,66 @@
+# Full_Story_Campaign_Underworld, seed 99, 900 ticks
+# alamo story log v1: T frame index kind fields | F frame set:seq plot event type [params] reward=type[params] via=cause
+# plot set 0: player 5 Story_Plots_Campaign_Underworld.XML (1 plots, 1 scripts)
+T 1 0 GalacticDayPassed value=1 gframe=0
+F 1 0:0 Story_Campaign_Underworld.xml Underworld_Campaign_Begin STORY_ELAPSED [0] reward=- via=clock
+F 1 0:1 Story_Campaign_Underworld.xml Underworld_Mission_04_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_04_Win|0] via=clock
+F 1 0:2 Story_Campaign_Underworld.xml Set_Begining_Empire_Tech STORY_TRIGGER [] reward=SET_TECH_LEVEL[Empire|2] via=clock
+F 1 0:3 Story_Campaign_Underworld.xml Set_Begining_Rebel_Tech STORY_TRIGGER [] reward=SET_TECH_LEVEL[Rebel|1] via=clock
+F 1 0:4 Story_Campaign_Underworld.xml Set_Begining_Underworld_Tech STORY_TRIGGER [] reward=SET_TECH_LEVEL[Underworld|1] via=clock
+F 1 0:5 Story_Campaign_Underworld.xml Lock_MAL STORY_TRIGGER [] reward=LOCK_UNIT[MAL_Rocket_Vehicle_Company] via=clock
+F 1 0:6 Story_Campaign_Underworld.xml Lock_Crusader STORY_TRIGGER [] reward=LOCK_UNIT[Crusader_Gunship] via=clock
+F 1 0:7 Story_Campaign_Underworld.xml Prevent_Campaign_Victory_Triggering STORY_TRIGGER [] reward=ENABLE_VICTORY[0] via=clock
+F 1 0:8 Story_Campaign_Underworld.xml Underworld_Mission_01_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_01_Win|0] via=clock
+F 1 0:9 Story_Campaign_Underworld.xml Underworld_Mission_07_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_07_Win|0] via=clock
+F 1 0:10 Story_Campaign_Underworld.xml Underworld_Mission_01A_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_01A_Win|0] via=clock
+F 1 0:11 Story_Campaign_Underworld.xml Underworld_Mission_02_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_02_Win|0] via=clock
+F 1 0:12 Story_Campaign_Underworld.xml Underworld_Mission_03_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_03_Win|0] via=clock
+F 1 0:13 Story_Campaign_Underworld.xml Lock_Droid_Works STORY_TRIGGER [] reward=LOCK_UNIT[U_Ground_Droid_Works] via=clock
+F 1 0:14 Story_Campaign_Underworld.xml Underworld_Mission_06_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_06_Win|0] via=clock
+F 1 0:15 Story_Campaign_Underworld.xml Underworld_Disable_Victory STORY_TRIGGER [] reward=ENABLE_VICTORY[0] via=clock
+F 1 0:16 Story_Campaign_Underworld.xml Underworld_Mission_08_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_08_Win|0] via=clock
+F 1 0:17 Story_Campaign_Underworld.xml Underworld_Mission_09_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_09_Win|0] via=clock
+F 1 0:18 Story_Campaign_Underworld.xml Underworld_Mission_11_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_11_Win|0] via=clock
+F 1 0:19 Story_Campaign_Underworld.xml Underworld_Mission_12_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_12_Win|0] via=clock
+F 1 0:20 Story_Campaign_Underworld.xml Lock_Factory STORY_TRIGGER [] reward=LOCK_UNIT[U_Ground_Vehicle_Factory] via=clock
+F 1 0:21 Story_Campaign_Underworld.xml Lock_Cloak_Transport STORY_TRIGGER [] reward=LOCK_UNIT[F9TZ_Cloaking_Transport_Company] via=clock
+F 1 0:22 Story_Campaign_Underworld.xml Lock_Pulse_Tank STORY_TRIGGER [] reward=LOCK_UNIT[MZ8_Pulse_Cannon_Tank_Company] via=clock
+F 1 0:23 Story_Campaign_Underworld.xml Lock_Canderous_Tank STORY_TRIGGER [] reward=LOCK_UNIT[Canderous_Assault_Tank_Company] via=clock
+F 1 0:24 Story_Campaign_Underworld.xml Lock_Krayt STORY_TRIGGER [] reward=LOCK_UNIT[Krayt_Class_Destroyer] via=clock
+F 1 0:25 Story_Campaign_Underworld.xml Lock_Vengeance STORY_TRIGGER [] reward=LOCK_UNIT[Vengeance_Frigate] via=clock
+F 1 0:26 Story_Campaign_Underworld.xml Lock_Kedalbe STORY_TRIGGER [] reward=LOCK_UNIT[Kedalbe_Battleship] via=clock
+F 1 0:27 Story_Campaign_Underworld.xml All_Required_Units_Locked STORY_TRIGGER [] reward=- via=clock
+F 1 0:28 Story_Campaign_Underworld.xml Initial_Setup_Complete STORY_TRIGGER [] reward=- via=clock
+F 1 0:29 Story_Campaign_Underworld.xml Underworld_ActI_Reveal_01 STORY_TRIGGER [] reward=REVEAL_PLANET[Honoghr_Story|1] via=clock
+F 1 0:30 Story_Campaign_Underworld.xml Underworld_ActI_Reveal_02 STORY_TRIGGER [] reward=REVEAL_PLANET[Kessel|1] via=clock
+F 1 0:31 Story_Campaign_Underworld.xml Underworld_ActI_Reveal_03 STORY_TRIGGER [] reward=REVEAL_PLANET[Ryloth|1] via=clock
+F 1 0:32 Story_Campaign_Underworld.xml Underworld_ActI_Reveal_04 STORY_TRIGGER [] reward=REVEAL_PLANET[Shola|1] via=clock
+F 1 0:33 Story_Campaign_Underworld.xml Underworld_ActI_Reveal_05 STORY_TRIGGER [] reward=REVEAL_PLANET[NalHutta_Story|1] via=clock
+F 1 0:34 Story_Campaign_Underworld.xml OK_To_Begin_Underworld_ActI STORY_TRIGGER [] reward=- via=clock
+F 1 0:35 Story_Campaign_Underworld.xml Lock_Sabotage_Saleucami STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[Saleucami|1] via=clock
+F 1 0:36 Story_Campaign_Underworld.xml Lock_Corruption_Honoghr STORY_TRIGGER [] reward=RESTRICT_CORRUPTION[Honoghr_Story|1] via=clock
+F 1 0:37 Story_Campaign_Underworld.xml Mission_Lock_Mandalore_Invasion STORY_TRIGGER [] reward=ENABLE_INVASION[Mandalore_Story|0] via=clock
+F 1 0:38 Story_Campaign_Underworld.xml Lock_Sabotage_NalHutta STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[NalHutta_Story|1] via=clock
+F 1 0:39 Story_Campaign_Underworld.xml Lock_Corruption_Kessel STORY_TRIGGER [] reward=RESTRICT_CORRUPTION[Kessel|1] via=clock
+F 1 0:40 Story_Campaign_Underworld.xml Lock_Sabotage_Kamino STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[Kamino|1] via=clock
+F 1 0:41 Story_Campaign_Underworld.xml Lock_Sabotage_Honoghr STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[Honoghr_Story|1] via=clock
+F 1 0:42 Story_Campaign_Underworld.xml Mission_Lock_Saleucami_Invasion STORY_TRIGGER [] reward=ENABLE_INVASION[Saleucami|0] via=clock
+F 1 0:43 Story_Campaign_Underworld.xml Lock_Sabotage_The_Maw STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[The_Maw|1] via=clock
+F 1 0:44 Story_Campaign_Underworld.xml Lock_Corruption_Shola STORY_TRIGGER [] reward=RESTRICT_CORRUPTION[Shola|1] via=clock
+F 1 0:45 Story_Campaign_Underworld.xml Lock_Sabotage_Shola STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[Shola|1] via=clock
+F 1 0:46 Story_Campaign_Underworld.xml Underworld_ActI_M01_Load STORY_TRIGGER [] reward=LINK_TACTICAL[Kessel|LAND|Underworld|UM01_A_Crimelord_Unleashed.TED|Empire||Story_Plots_Underworld_M01_LAND.xml|0|0|1|1|RETREAT_PLAYER|0] via=clock
+F 1 0:47 Story_Campaign_Underworld.xml Mission_Lock_Honoghr_Invasion STORY_TRIGGER [] reward=ENABLE_INVASION[Honoghr_Story|0] via=clock
+F 1 0:48 Story_Campaign_Underworld.xml Lock_Sabotage_Kessel STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[Kessel|1] via=clock
+F 1 0:49 Story_Campaign_Underworld.xml Lock_Corruption_NalHutta STORY_TRIGGER [] reward=RESTRICT_CORRUPTION[NalHutta_Story|1] via=clock
+F 1 0:50 Story_Campaign_Underworld.xml Lock_Corruption_The_Maw STORY_TRIGGER [] reward=RESTRICT_CORRUPTION[The_Maw|1] via=clock
+F 1 0:51 Story_Campaign_Underworld.xml Mission_Lock_Kuat_Invasion STORY_TRIGGER [] reward=ENABLE_INVASION[Kuat|0] via=clock
+F 1 0:52 Story_Campaign_Underworld.xml Lock_Corruption_Hypori STORY_TRIGGER [] reward=RESTRICT_CORRUPTION[Hypori|1] via=clock
+F 1 0:53 Story_Campaign_Underworld.xml Lock_Sabotage_Yavin STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[Yavin|1] via=clock
+F 1 0:54 Story_Campaign_Underworld.xml Lock_Sabotage_Kuat STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[Kuat|1] via=clock
+F 1 0:55 Story_Campaign_Underworld.xml Lock_Sabotage_Carida STORY_TRIGGER [] reward=RESTRICT_SABOTAGE[Carida|1] via=clock
+F 1 0:56 Story_Campaign_Underworld.xml Lock_Autoresolve_Saleucami STORY_TRIGGER [] reward=RESTRICT_AUTORESOLVE[Saleucami|1] via=clock
+F 1 0:57 Story_Campaign_Underworld.xml Mission_Lock_Mandalore STORY_TRIGGER [] reward=SET_PLANET_RESTRICTED[Mandalore_Story|1] via=clock
+F 1 0:58 Story_Campaign_Underworld.xml Unlock_Buzz_Droids_From_Black_Market STORY_TRIGGER [] reward=GIVE_BLACK_MARKET[Buzz_Droid_Tech] via=clock
+F 1 0:59 Story_Campaign_Underworld.xml Mission_Lock_Shola_Invasion STORY_TRIGGER [] reward=ENABLE_INVASION[Shola|0] via=clock
+T 1 1 TechLevelChanged player=Empire value=2 gframe=1
+T 1 2 TechLevelChanged player=Rebel value=1 gframe=1

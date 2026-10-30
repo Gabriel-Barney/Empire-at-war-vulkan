@@ -1,0 +1,550 @@
+// MovementSystem: special locomotors (docs/re/REMAINING_GAPS.md §4.2-4.7). See movement_system.hpp and
+// special_locomotors.hpp for the contract.
+#include <algorithm>
+
+#include "alamo/tactical/movement/movement_system.hpp"
+
+namespace alamo::tactical::movement {
+
+bool MovementSystem::is_air(const Unit& u) const {
+    if (cfg_.mode != MoveMode::Land) return false;
+    const LocomotorKind k = u.d.locomotor;
+    return k == LocomotorKind::Jetpack || k == LocomotorKind::Flying || k == LocomotorKind::LandBomber;
+}
+
+bool MovementSystem::ground_collider(const Unit& u) const {
+    switch (u.d.locomotor) {
+        case LocomotorKind::Flying:
+        case LocomotorKind::LandBomber: return cfg_.mode != MoveMode::Land;
+        case LocomotorKind::Jetpack:
+            return !u.sm.airborne && u.sm.state != LocoState::WalkMoving && u.sm.state != LocoState::WalkEndMove;
+        default: return true;
+    }
+}
+
+ThreatFn MovementSystem::owner_threat(const Unit& u) const {
+    if (!threat_) return {};
+    const int32_t owner = u.d.owner;
+    return [this, owner](V2 p) { return threat_(owner, p); };
+}
+
+void MovementSystem::anim_play(Unit& u, int32_t anim, bool loop) const {
+    AnimPlay a;
+    a.id = anim;
+    a.loop = loop;
+    a.length = anim_len_ ? anim_len_(u.d.id, anim) : 0u;
+    u.sm.anim = a;
+}
+
+void MovementSystem::on_air_path(Unit& u, uint32_t frame) {
+    u.path_start = frame;
+    u.path_lag = 0.0f;
+    u.sm.clock = 0.0f;
+    switch (u.d.locomotor) {
+        case LocomotorKind::Jetpack:  // §4.3: airborne -> keep flying; on the ground -> 0 -> 0xF (turn, jump)
+            if (u.sm.airborne) {
+                u.sm.state = LocoState::WalkMoving;
+                u.following = true;
+            } else {
+                u.sm.state = LocoState::None;
+                u.following = false;
+            }
+            break;
+        case LocomotorKind::Flying:  // §4.4: 0 -> 0x13
+            u.sm.state = LocoState::WalkMoving;
+            u.sm.circling = false;
+            u.sm.circle_target = -1;
+            u.sm.path_idx = 0;
+            u.following = true;
+            break;
+        case LocomotorKind::LandBomber:  // §4.6: the pass
+            u.sm.state = LocoState::WalkMoving;
+            u.following = true;
+            break;
+        default: break;
+    }
+}
+
+SpacePose MovementSystem::air_follow(Unit& u, uint32_t frame) const {
+    u.path_lag += u.speed_factor - 1.0f;  // S10-int: playback runs at the speed factor (0 at factor 1)
+    const float t = static_cast<float>(frame - u.path_start + 1) + u.path_lag;
+    const SpacePose p = eval_space_path(u.wps, t);
+    u.m.pos = p.pos;
+    u.m.yaw = wrap_deg(p.heading);
+    u.m.speed = p.speed;
+    return p;
+}
+
+float MovementSystem::air_altitude(const Unit& u, uint32_t frame) const {
+    const float t0 = static_cast<float>(frame - u.path_start + 1) + u.path_lag;
+    const bool on_path = u.following && !u.wps.empty();
+    const V2 fwd = dir_from_deg(u.m.yaw) * u.m.speed;
+    const TrackFn track = [&](uint32_t i) {
+        return on_path ? eval_space_path(u.wps, t0 + static_cast<float>(i)).pos : u.m.pos + fwd * static_cast<float>(i);
+    };
+    const TerrainFn ter = [this](V2 p) { return terrain(p); };
+    const InsideFn inside = [this](V2 p) { return air_.inside_box(p); };
+    const float target = jetpack_altitude_target(track, ter, inside, u.sp.hover_offset, map_floor_, u.z);
+    return step_altitude(u.z, target, u.sp.max_lift, terrain(u.m.pos), map_floor_);
+}
+
+bool MovementSystem::land_spot_free(const Unit& u, V2 p) const {
+    if (!grid_.passable_world(p, u.lp.mask)) return false;  // movement-class test (0x50e280)
+    const float r = std::max(u.d.radius, 1.0f);
+    const tactical::Aabb q{{p.x - r - 80.0f, p.y - r - 80.0f, -1.0f}, {p.x + r + 80.0f, p.y + r + 80.0f, 1.0f}};
+    for (EntityHandle h : tree_.query_aabb(q, QueryFilter{}, qctx_)) {  // occupancy (0x538200) [port: ground units]
+        const int32_t oi = find(static_cast<ObjectId>(h));
+        if (oi < 0) continue;
+        const Unit& o = units_[static_cast<size_t>(oi)];
+        if (o.d.id == u.d.id || !ground_collider(o)) continue;
+        const float rr = r + o.d.radius;
+        if (length_sq(o.m.pos - p) < rr * rr) return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------- §4.3 JETPACK_LOCOMOTOR (vf6 0x641910)
+void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
+    SpecialMotion& s = u.sm;
+    const float rate = u.lp.turn_rate;
+    auto aim_heading = [&]() {
+        V2 aim = u.wps.empty() ? u.goal : u.wps.back().pos;
+        for (const SpaceWaypoint& w : u.wps)
+            if (!(w.pos == u.m.pos)) {
+                aim = w.pos;
+                break;
+            }
+        const V2 d = aim - u.m.pos;
+        return length_sq(d) > 0.0f ? heading_deg(d) : u.m.yaw;
+    };
+    switch (s.state) {
+        case LocoState::None:
+            if (u.has_goal && !u.need_path && !u.wps.empty()) s.state = LocoState::WalkStartTurn;
+            else if (!u.has_goal) s.state = LocoState::WalkStopped;
+            break;
+        case LocoState::WalkStartTurn: {  // 0xF
+            const float err = wrap_deg(aim_heading() - u.m.yaw);
+            s.turn_left = err > 0.0f;
+            if (u.sp.has_pre_turn_anim && std::fabs(err) > 0.0f)
+                anim_play(u, err > 0.0f && err < 180.0f ? kAnimTurnLeftBegin : kAnimTurnRightBegin, false);
+            s.state = LocoState::WalkTurning;
+            break;
+        }
+        case LocoState::WalkTurning: {  // 0x10 (0x642740)
+            const float desired = aim_heading();
+            const float err = wrap_deg(desired - u.m.yaw);
+            const TurnAnim ta = jetpack_turn_anim(err, rate, u.sp.has_pre_turn_anim);
+            if (ta.anim != kAnimNone && !s.anim.playing(ta.anim)) anim_play(u, ta.anim, true);
+            if (ta.anim != kAnimNone) s.anim.rate = ta.rate;
+            if (err != 0.0f) s.turn_left = err > 0.0f;
+            u.m.yaw = turn_toward(u.m.yaw, desired, rate);
+            if (std::fabs(wrap_deg(desired - u.m.yaw)) <= 0.01f) s.state = LocoState::WalkEndTurn;
+            break;
+        }
+        case LocoState::WalkEndTurn:  // 0x11 (0x640b30)
+            if (u.sp.has_pre_turn_anim) {
+                const int32_t end = s.turn_left ? kAnimTurnLeftEnd : kAnimTurnRightEnd;
+                if (!s.anim.playing(end)) anim_play(u, end, false);
+                if (!s.anim.done()) break;
+            }
+            s.state = LocoState::WalkStartMove;
+            break;
+        case LocoState::WalkStartMove:  // 0x12 (0x642530): Jump, then shift the path to now and fly
+            if (!s.anim.playing(kAnimJump)) anim_play(u, kAnimJump, false);
+            if (!s.anim.done()) break;
+            u.path_start = frame;  // every waypoint time += now - first waypoint time
+            u.path_lag = 0.0f;
+            u.following = true;
+            anim_play(u, kAnimFlyIdle, true);
+            s.airborne = true;
+            s.state = LocoState::WalkMoving;
+            break;
+        case LocoState::WalkMoving: {  // 0x13 (0x6420e0)
+            if (!u.following || u.wps.size() < 2) {  // no movement
+                s.state = LocoState::WalkStopped;
+                break;
+            }
+            const SpacePose p = air_follow(u, frame);
+            u.z = air_altitude(u, frame);
+            const float now = static_cast<float>(frame - u.path_start + 1) + u.path_lag;
+            if (!s.anim.playing(kAnimFlyLand) && !u.need_path && u.wps.back().time - now <= kJetpackLandingFrames) {
+                const V2 last = u.wps.back().pos;
+                if (land_spot_free(u, last)) {
+                    anim_play(u, kAnimFlyLand, false);
+                    s.airborne = false;
+                } else {
+                    // Re-issue a move to the same point (0x640880, radius 50) [port: nearest free cell centre within
+                    // 50 of it, ring scan order; the point itself when none].
+                    V2 best = last;
+                    float bd = 3.0e38f;
+                    const int32_t cx = world_to_cell(last.x), cy = world_to_cell(last.y);
+                    const auto rings = static_cast<int32_t>(kJetpackRelandRadius / kCellSize) + 1;
+                    for (int32_t y = cy - rings; y <= cy + rings; ++y)
+                        for (int32_t x = cx - rings; x <= cx + rings; ++x) {
+                            const V2 c = cell_center(x, y);
+                            const float d = distance(last, c);
+                            if (d <= kJetpackRelandRadius && d < bd && land_spot_free(u, c)) {
+                                bd = d;
+                                best = c;
+                            }
+                        }
+                    u.goal = best;
+                    u.need_path = true;
+                    u.start_frame = frame + 1;
+                }
+            }
+            if (p.done) s.state = LocoState::WalkEndMove;
+            break;
+        }
+        case LocoState::WalkEndMove: {  // 0x14 (0x641df0): landing sequence
+            u.m.speed = 0.0f;
+            u.following = false;
+            const float ground = std::max(terrain(u.m.pos), map_floor_);
+            if (s.anim.playing(kAnimFlyLand)) {
+                if (s.anim.done()) anim_play(u, kAnimFlyLandIdle, true);
+            } else if (s.anim.playing(kAnimFlyLandIdle)) {
+                u.z = std::max(ground, u.z - u.sp.max_lift);  // descend by at most Max_Lift
+                if (std::fabs(u.z - ground) <= 0.01f) anim_play(u, kAnimFlyLandDrop, false);
+            } else if (s.anim.playing(kAnimFlyLandDrop)) {
+                if (s.anim.done()) {
+                    s.state = LocoState::WalkStopped;
+                    s.airborne = false;
+                    s.anim = AnimPlay{};
+                    u.z = terrain(u.m.pos);  // snap to the terrain
+                    u.has_goal = false;
+                    u.arrived = true;
+                    u.wps.clear();
+                }
+            } else {
+                anim_play(u, kAnimFlyLand, false);  // FlyIdle (or nothing) playing -> FlyLand
+                s.airborne = false;
+            }
+            break;
+        }
+        case LocoState::WalkStopped:  // 0x16
+        default:
+            u.m.speed = 0.0f;
+            if (height_) u.z = terrain(u.m.pos);
+            break;
+    }
+}
+
+// ---------------------------------------------------------------- FLYING_LOCOMOTOR (vf6 0x63d7f0; FIGHTER_FLYING §6)
+// Unit mapping: P = (m.pos, z), O = (sm.lean roll, sm.pitch, m.yaw), V = (sm.vel, sm.vel_z), s = m.speed (pack +0xec).
+// The formation destination is sm.dest (z = the terrain there [port]: orders carry planar points).
+void MovementSystem::step_flying(Unit& u, uint32_t frame, SimRng& rng) {
+    SpecialMotion& s = u.sm;
+    FlyRates r;
+    r.turn = u.lp.turn_rate;
+    r.roll = u.sp.roll_rate;
+    r.lift = u.sp.max_lift;
+    r.bank = u.sp.bank_turn_angle;
+    r.max_speed = u.lp.max_speed;
+    r.hover_offset = u.sp.hover_offset;
+    r.prepare_strafe_height = u.sp.prepare_strafe_height;
+    FlyWorld w;
+    w.terrain = [this](V2 p) { return terrain(p); };
+    w.has_box = air_.has_box();
+    w.box_min = air_.box_min();
+    w.box_max = air_.box_max();
+    w.floor = map_floor_;
+    const ObjectId id = u.d.id;
+    if (fly_hooks_.clearance)
+        w.clearance = [this, id](FlyVec3 a, FlyVec3 b, float m) { return fly_hooks_.clearance(id, a, b, m); };
+    FlyBody b;
+    b.pos = {u.m.pos.x, u.m.pos.y, u.z};
+    b.o = {s.lean, s.pitch, u.m.yaw};
+    b.vel = {s.vel.x, s.vel.y, s.vel_z};
+    b.speed = u.m.speed;
+    auto store = [&]() {
+        u.m.pos = {b.pos.x, b.pos.y};
+        u.z = b.pos.z;
+        s.lean = b.o.roll;
+        s.pitch = b.o.pitch;
+        u.m.yaw = b.o.yaw;
+        s.vel = {b.vel.x, b.vel.y};
+        s.vel_z = b.vel.z;
+        u.m.speed = b.speed;
+    };
+    const FlyVec3 dest{s.dest.x, s.dest.y, terrain(s.dest)};
+    if (s.state == LocoState::None) s.state = LocoState::WalkMoving;  // 0 -> 0x13 ([M] runs 0x13 this frame)
+    switch (s.state) {
+        case LocoState::WalkMoving: {  // 0x13: timed follower (§6.1), then altitude (§6.3) with the tracker
+            if (!u.following || u.wps.empty()) {
+                s.state = LocoState::FlyNoPath;
+                s.idle_frames = 0;
+                break;
+            }
+            u.path_lag += u.speed_factor - 1.0f;  // S10-int: playback runs at the speed factor (0 at factor 1)
+            const float T = static_cast<float>(frame - u.path_start + 1) + u.path_lag;
+            const FlyFollow fo = flying_follow(u.wps, s.path_idx, T, b, r);
+            FlyVec3 p1 = fo.pos;
+            FlyOrient o1 = fo.o;
+            if (fly_hooks_.track) {
+                w.track = [this, id, frame](uint32_t i, FlyVec3& p, V2& f) { return fly_hooks_.track(id, frame + i, p, f); };
+            } else {  // [port] the unit's own reservation (linear in time), z = the current height
+                const float zt = p1.z;
+                w.track = [&u, T, zt](uint32_t i, FlyVec3& p, V2& f) {
+                    return flying_track_linear(u.wps, T + static_cast<float>(i), zt, p, f);
+                };
+            }
+            flying_altitude_step(p1, o1, fo.speed, true, &dest, r, w);
+            if (!(p1 == b.pos)) b.vel = p1 - b.pos;
+            b.pos = p1;
+            b.o = o1;
+            b.speed = fo.speed;
+            store();
+            if (fo.complete) {  // pop the path (0x557b10): no path left -> 0x27
+                s.state = LocoState::FlyNoPath;
+                s.idle_frames = 0;
+                u.following = false;
+                u.has_goal = false;
+                u.arrived = true;
+            }
+            break;
+        }
+        case LocoState::WalkStopped: break;  // 0x16: nothing
+        case LocoState::FlyCircling: {       // 0x26 (0x63db30)
+            FlyVec3 c;
+            const FlyVec3* cp = nullptr;
+            if (s.circle_target >= 0) {  // the target object: a mover of this system, else the host
+                const int32_t ti = find(s.circle_target);
+                if (ti >= 0) {
+                    const Unit& t = units_[static_cast<size_t>(ti)];
+                    c = {t.m.pos.x, t.m.pos.y, t.z};
+                    cp = &c;
+                } else if (fly_hooks_.object_position && fly_hooks_.object_position(s.circle_target, c)) {
+                    cp = &c;
+                }
+            } else if (s.circling) {  // [port] circle(): a fixed point
+                c = {s.circle_c.x, s.circle_c.y, s.circle_z};
+                cp = &c;
+            }
+            flying_circle_step(b, cp, s.circle_rmin, s.circle_rmax, r, w);
+            store();
+            break;
+        }
+        case LocoState::FlyNoPath: {  // 0x27 (0x63e2b0): loiter
+            flying_loiter_move(b, &dest, r, w);
+            store();
+            // Re-issue when the formation is not busy and has been idle for > 2 FPS + 1 frames ([port]: a frame
+            // counter for the +0x1dc stamp; signal 10 on +0x240 is not modelled [M]).
+            if (++s.idle_frames > kLoiterIdleFrames && !u.need_path) {
+                V2 point;
+                if (s.has_target) {
+                    point = flying_strafe_aim(u.m.pos, s.target, u.m.yaw, s.target_radius, u.sp.strafe_distance,
+                                              s.turn_back);
+                } else {
+                    const float L = kLoiterDistanceCoefficient * cfg_.constants.xy_expansion_distance_land;
+                    // [port] the issued move (0x41fd30 kind 4) does not replace the formation destination sm.dest
+                    // (the destination kinds of 0x583680 are open), so the loiter stays around the ordered point.
+                    point = flying_loiter_reissue(u.m.pos, s.dest, u.m.yaw, L, rng, s.turn_back);
+                }
+                u.goal = point;
+                u.has_goal = true;
+                u.need_path = true;
+                u.arrived = false;
+                u.start_frame = frame + 1;
+                u.formation_speed = u.sp.min_speed;  // 0x4205a0 (the air planner caps its plan speed with it)
+                s.idle_frames = 0;
+            }
+            break;
+        }
+        default: break;  // other states: the driver returns an error (no movement)
+    }
+}
+
+// ---------------------------------------------------------------- §4.6 LANDBOMBER_LOCOMOTOR (vf6 0x646800)
+void MovementSystem::step_bomber(Unit& u) {
+    SpecialMotion& s = u.sm;
+    if (s.state != LocoState::WalkMoving || !u.following) return;  // 0x16: waiting for the pass
+    s.clock += kLandBomberClockStep * u.speed_factor;
+    const SpacePose p = eval_space_path(u.wps, s.clock);
+    u.m.pos = p.pos;
+    u.m.yaw = wrap_deg(p.heading);
+    u.m.speed = p.speed;
+    u.z = s.pass_z;
+    if (p.done) {  // killed silently (0x391310 flag 1)
+        u.following = false;
+        u.has_goal = false;
+        despawned_.push_back(u.d.id);
+    }
+}
+
+void MovementSystem::tick_special(uint32_t frame, SimRng& rng) {
+    for (Unit& u : units_) {
+        if (!is_air(u)) continue;
+        if (u.sm.anim.id != kAnimNone) ++u.sm.anim.frames;
+        switch (u.d.locomotor) {
+            case LocomotorKind::Jetpack: step_jetpack(u, frame); break;
+            case LocomotorKind::Flying: step_flying(u, frame, rng); break;
+            case LocomotorKind::LandBomber: step_bomber(u); break;
+            default: break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- §4.5 BIKE_LOCOMOTOR (vf6 0x639e90)
+void MovementSystem::bike_frame(Unit& u, float yaw0, bool walked) const {
+    SpecialMotion& s = u.sm;
+    if (s.anim.id != kAnimNone) ++s.anim.frames;
+    const float dy = wrap_deg(u.m.yaw - yaw0);
+    const int32_t turn = dy > 0.0f ? kAnimTurnLeft : (dy < 0.0f ? kAnimTurnRight : kAnimNone);
+    s.lean = bike_lean(s.lean, turn, u.sp.roll_rate, u.sp.bank_turn_angle);
+    const LocoState prev = s.state;
+    const bool was_moving =
+        prev == LocoState::BikeStartMove || prev == LocoState::BikeMoving || prev == LocoState::BikeEndMove;
+    if (walked && u.m.state == LocoState::WalkStartTurn) {
+        s.state = LocoState::BikeTurningInPlace;
+    } else if (walked && u.m.speed > 0.0f && u.m.state != LocoState::WalkStopped) {
+        switch (prev) {
+            case LocoState::BikeStartMove:
+                if (u.m.state == LocoState::WalkEndMove) {
+                    s.state = LocoState::BikeEndMove;
+                    anim_play(u, kAnimMoveEnd, false);
+                } else if (s.anim.done()) {
+                    s.state = LocoState::BikeMoving;
+                    anim_play(u, kAnimMove, true);
+                }
+                break;
+            case LocoState::BikeMoving:
+                if (u.m.state == LocoState::WalkEndMove) {
+                    s.state = LocoState::BikeEndMove;
+                    anim_play(u, kAnimMoveEnd, false);
+                }
+                break;
+            case LocoState::BikeEndMove:
+                if (u.m.speed <= u.sp.min_speed + 0.0001f) s.state = LocoState::BikePreStopped;
+                break;
+            default:
+                s.state = LocoState::BikeStartMove;
+                anim_play(u, kAnimMoveStart, false);
+                break;
+        }
+    } else if (was_moving) {
+        s.state = LocoState::BikePreStopped;  // 0x24 (0x63a8e0)
+    } else if (prev == LocoState::BikePreStopped || prev == LocoState::None ||
+               (prev == LocoState::BikeTurningInPlace && !u.has_goal)) {
+        s.state = LocoState::BikeStopped;
+        s.anim = AnimPlay{};
+    }
+}
+
+// ---------------------------------------------------------------- API
+bool MovementSystem::set_attack_target(ObjectId id, bool has, V2 pos, float z) {
+    const int32_t i = find(id);
+    if (i < 0) return false;
+    SpecialMotion& s = units_[static_cast<size_t>(i)].sm;
+    s.has_target = has;
+    s.target = has ? pos : V2{};
+    s.target_z = has ? z : 0.0f;
+    return true;
+}
+
+bool MovementSystem::circle(ObjectId id, V2 centre, float z, float rmin, float rmax) {
+    const int32_t i = find(id);
+    if (i < 0) return false;
+    Unit& u = units_[static_cast<size_t>(i)];
+    if (u.d.locomotor != LocomotorKind::Flying || cfg_.mode != MoveMode::Land) return false;
+    u.sm.state = LocoState::FlyCircling;
+    u.sm.circling = true;
+    u.sm.circle_target = -1;
+    u.sm.circle_c = centre;
+    u.sm.circle_z = z;
+    u.sm.circle_rmin = rmin;
+    u.sm.circle_rmax = std::max(rmin, rmax);
+    u.following = false;
+    u.wps.clear();
+    u.has_goal = false;
+    u.need_path = false;
+    return true;
+}
+
+// FIGHTER_FLYING §6.5: Start_Circling (vf +0x278 = 0x63bf20), called by CableAttackAbilityClass (0x6f34d0) with the
+// cable target and the ability record's +0x178 / +0x17c (Activation_Min_Range / Activation_Max_Range [M]).
+bool MovementSystem::start_circling(ObjectId id, ObjectId target, float rmin, float rmax) {
+    const int32_t i = find(id);
+    if (i < 0 || target < 0 || !(rmin > 0.0f) || !(rmax > 0.0f)) return false;  // a target and both radii > 0
+    Unit& u = units_[static_cast<size_t>(i)];
+    if (u.d.locomotor != LocomotorKind::Flying || cfg_.mode != MoveMode::Land) return false;
+    u.sm.state = LocoState::FlyCircling;
+    u.sm.circling = false;
+    u.sm.circle_target = target;
+    u.sm.circle_rmin = rmin;
+    u.sm.circle_rmax = rmax;
+    u.following = false;  // [port] as circle(): the order is dropped (how 0x26 is left is untraced)
+    u.wps.clear();
+    u.has_goal = false;
+    u.need_path = false;
+    return true;
+}
+
+float MovementSystem::clearance_query(ObjectId flyer, FlyVec3 from, FlyVec3 to, float M, const ClearanceInfoFn& info) const {
+    if (!info) return M;
+    ClearanceInfo fi;
+    if (!info(flyer, fi)) return M;
+    const V2 a{from.x, from.y}, b{to.x, to.y};
+    const float qx = fi.half.x, qy = fi.half.y;
+    for (const Unit& o : units_) {  // ascending id
+        ClearanceInfo ci;
+        if (!info(o.d.id, ci)) continue;
+        const bool moving = o.m.speed > 0.0f || o.has_goal;
+        const uint32_t layer = object_tracking_layer(ci.uses_multiple_locomotors, locomotor_airborne_kind(o.d.locomotor, o.sm.state),
+                                                     moving, o.d.space_layer_type, ci.stationary_space_layer);
+        if ((layer & kLayerCorvette) != kLayerCorvette) continue;
+        ClearanceEntry e;
+        e.s = e.e = o.m.pos;
+        e.facing = dir_from_deg(o.m.yaw);
+        e.ex = ci.half.x;
+        e.ey = ci.half.y;
+        if (!clearance_candidate(a, b, qx, qy, e) || !clearance_hit(a, b, qx, qy, e, 0.0f)) continue;
+        if (!ci.has_box) continue;  // no model: no value
+        const float v = clearance_top(ci.box_lo_z, ci.box_hi_z, ci.scale_factor, o.z);
+        if (v >= M) M = v;
+    }
+    return M;
+}
+
+void MovementSystem::hash_special(StateHasher& h) const {
+    uint32_t count = 0;
+    for (const Unit& u : units_)
+        if (u.d.locomotor != LocomotorKind::Default || u.threat != kThreatOff) ++count;
+    if (count == 0 && despawned_.empty()) return;  // unchanged format for scenarios without §4.2-4.7 state
+    h.u32(count);
+    for (const Unit& u : units_) {
+        if (u.d.locomotor == LocomotorKind::Default && u.threat == kThreatOff) continue;
+        const SpecialMotion& s = u.sm;
+        h.i32(u.d.id);
+        h.u8(static_cast<uint8_t>(u.d.locomotor));
+        h.f32(u.threat);
+        h.u8(static_cast<uint8_t>(s.state));
+        h.i32(s.anim.id);
+        h.u32(s.anim.frames);
+        h.u32(s.anim.length);
+        h.boolean(s.anim.loop);
+        h.boolean(s.airborne);
+        h.boolean(s.turn_left);
+        h.f32(s.lean);
+        h.u32(s.idle_frames);
+        h.boolean(s.turn_back);
+        h.f32(s.dest.x);
+        h.f32(s.dest.y);
+        h.boolean(s.circling);
+        h.boolean(s.has_target);
+        h.f32(s.clock);
+        h.f32(s.pass_z);
+        h.f32(u.path_lag);
+        if (u.d.locomotor == LocomotorKind::Flying) {  // FIGHTER_FLYING §6 (flying units only: other formats unchanged)
+            h.f32(s.pitch);
+            h.f32(s.vel.x);
+            h.f32(s.vel.y);
+            h.f32(s.vel_z);
+            h.u32(s.path_idx);
+            h.i32(s.circle_target);
+        }
+    }
+    h.u32(static_cast<uint32_t>(despawned_.size()));
+    for (ObjectId id : despawned_) h.i32(id);
+}
+
+}  // namespace alamo::tactical::movement

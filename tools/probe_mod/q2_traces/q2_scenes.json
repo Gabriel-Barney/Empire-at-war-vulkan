@@ -1,0 +1,503 @@
+{
+  "notes": [
+    "Q2 menu steps for q2_ui.py drive. Coordinates are client pixels of a 1920x1080 window (the run starts the game WINDOWED SCREENWIDTH=1920 SCREENHEIGHT=1080).",
+    "Reference crops: main_menu, sp_menu, setup_start, loading_begin, hud_buttons come from tools/probe_mod/g1_capture/scenes.json (read-only); the others are refs/*.png here, cut from the 2026-10-30 calibration shots (FoC 1.121, English).",
+    "Each list ends at the moment the galaxy / battle runs. After that the driver never touches the window, so the traced session gets no player input (the command stream stays empty).",
+    "Galactic: the side dropdown and Advanced options are remembered by the game, so the steps set them explicitly (Empire, Medium, Advanced -> Default). Advanced defaults seen: starting credits 10000, tech 3, max tech 5, auto-resolve Ask.",
+    "The GC opening shows the 'Active Story Objectives' dialog, which pauses the galaxy; the last galactic step closes it (as the 2026-10-27 manual run did).",
+    "Skirmish: Space, map list scrolled to the top, slot 2 = Medium AI (Rebellion, Team 2), (2) Battle Over Geonosis, Advanced -> Default (credits 6000, heroes/free units/superweapons on, win = destroy enemy space station). sk_slots also checks the player name 'Gabriel' / Empire in slot 1, so it is machine-specific. Ends after Begin on the loading screen, once the HUD shows.",
+    "The game draws its cursor (which follows the real mouse, not the posted clicks) into the screenshot, so the sk_geonosis crop stops left of the map-name click point [464,460,592,482] (2026-10-30 runs failed at dist 1.5 with the cursor over the full-width crop)."
+  ],
+  "scenarios": {
+    "menu": {
+      "steps": [
+        {
+          "do": "wait_window",
+          "s": 180
+        },
+        {
+          "do": "fit_window"
+        },
+        {
+          "do": "expect_like",
+          "ref": "main_menu",
+          "timeout": 150,
+          "poll": 3,
+          "nudge_key": "ESC",
+          "label": "skip intro movies"
+        },
+        {
+          "do": "fit_window",
+          "gap": 2
+        },
+        {
+          "do": "expect_like",
+          "ref": "main_menu",
+          "timeout": 20
+        },
+        {
+          "do": "shot",
+          "label": "main_menu"
+        }
+      ]
+    },
+    "galactic": {
+      "steps": [
+        {
+          "do": "wait_window",
+          "s": 180
+        },
+        {
+          "do": "fit_window"
+        },
+        {
+          "do": "expect_like",
+          "ref": "main_menu",
+          "timeout": 150,
+          "poll": 3,
+          "nudge_key": "ESC",
+          "label": "skip intro movies"
+        },
+        {
+          "do": "fit_window",
+          "gap": 2
+        },
+        {
+          "do": "expect_like",
+          "ref": "main_menu",
+          "timeout": 20
+        },
+        {
+          "do": "click",
+          "x": 1678,
+          "y": 813,
+          "label": "Single Player",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "sp_menu",
+          "timeout": 20
+        },
+        {
+          "do": "click",
+          "x": 1678,
+          "y": 813,
+          "label": "Galactic Conquest",
+          "gap": 2
+        },
+        {
+          "do": "expect_like",
+          "ref": "gc_title",
+          "timeout": 30
+        },
+        {
+          "do": "click",
+          "x": 524,
+          "y": 339,
+          "label": "Heart of the Maw",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "gc_hotm_selected",
+          "timeout": 10
+        },
+        {
+          "do": "click",
+          "x": 606,
+          "y": 630,
+          "label": "difficulty Medium",
+          "gap": 1
+        },
+        {
+          "do": "click",
+          "x": 858,
+          "y": 742,
+          "label": "side dropdown",
+          "gap": 1.5
+        },
+        {
+          "do": "click",
+          "x": 557,
+          "y": 799,
+          "label": "Empire",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "gc_side_empire",
+          "timeout": 10,
+          "max_dist": 4
+        },
+        {
+          "do": "click",
+          "x": 955,
+          "y": 873,
+          "label": "Advanced...",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "gc_advanced",
+          "timeout": 10
+        },
+        {
+          "do": "shot",
+          "label": "gc_advanced_before"
+        },
+        {
+          "do": "click",
+          "x": 958,
+          "y": 812,
+          "label": "Default",
+          "gap": 1
+        },
+        {
+          "do": "shot",
+          "label": "gc_advanced_default"
+        },
+        {
+          "do": "click",
+          "x": 1290,
+          "y": 812,
+          "label": "Accept",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "gc_start",
+          "timeout": 10
+        },
+        {
+          "do": "expect_like",
+          "ref": "gc_side_empire",
+          "timeout": 5,
+          "max_dist": 4
+        },
+        {
+          "do": "shot",
+          "label": "gc_setup"
+        },
+        {
+          "do": "click",
+          "x": 1307,
+          "y": 873,
+          "label": "Start Game",
+          "gap": 2
+        },
+        {
+          "do": "expect_like",
+          "ref": "gc_objectives",
+          "timeout": 240,
+          "poll": 1
+        },
+        {
+          "do": "shot",
+          "label": "gc_objectives"
+        },
+        {
+          "do": "click",
+          "x": 1307,
+          "y": 912,
+          "label": "Close (story objectives)",
+          "gap": 3
+        },
+        {
+          "do": "expect_like",
+          "ref": "gal_buttons",
+          "timeout": 10
+        },
+        {
+          "do": "expect_gone",
+          "ref": "gc_objectives",
+          "timeout": 10
+        },
+        {
+          "do": "shot",
+          "label": "gc_running"
+        }
+      ]
+    },
+    "skirmish": {
+      "steps": [
+        {
+          "do": "wait_window",
+          "s": 180
+        },
+        {
+          "do": "fit_window"
+        },
+        {
+          "do": "expect_like",
+          "ref": "main_menu",
+          "timeout": 150,
+          "poll": 3,
+          "nudge_key": "ESC",
+          "label": "skip intro movies"
+        },
+        {
+          "do": "fit_window",
+          "gap": 2
+        },
+        {
+          "do": "expect_like",
+          "ref": "main_menu",
+          "timeout": 20
+        },
+        {
+          "do": "click",
+          "x": 1678,
+          "y": 813,
+          "label": "Single Player",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "sp_menu",
+          "timeout": 20
+        },
+        {
+          "do": "click",
+          "x": 1678,
+          "y": 864,
+          "label": "Skirmish Battles",
+          "gap": 2
+        },
+        {
+          "do": "expect_like",
+          "ref": "setup_start",
+          "timeout": 30
+        },
+        {
+          "do": "click",
+          "x": 600,
+          "y": 401,
+          "label": "game type Space",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "sk_space",
+          "timeout": 10,
+          "max_dist": 1.5
+        },
+        {
+          "do": "click",
+          "x": 866,
+          "y": 471,
+          "label": "map list scroll up",
+          "repeat": 20,
+          "gap": 0.25
+        },
+        {
+          "do": "click",
+          "x": 1216,
+          "y": 410,
+          "label": "slot 2 dropdown",
+          "gap": 1.5
+        },
+        {
+          "do": "click",
+          "x": 1007,
+          "y": 493,
+          "label": "Medium AI",
+          "gap": 1.5
+        },
+        {
+          "do": "click",
+          "x": 577,
+          "y": 471,
+          "label": "(2) Battle Over Geonosis",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "sk_geonosis",
+          "timeout": 10,
+          "max_dist": 1.5
+        },
+        {
+          "do": "click",
+          "x": 940,
+          "y": 798,
+          "label": "Advanced...",
+          "gap": 1.5
+        },
+        {
+          "do": "shot",
+          "label": "sk_advanced_before"
+        },
+        {
+          "do": "click",
+          "x": 955,
+          "y": 766,
+          "label": "Default",
+          "gap": 1
+        },
+        {
+          "do": "shot",
+          "label": "sk_advanced_default"
+        },
+        {
+          "do": "click",
+          "x": 1318,
+          "y": 766,
+          "label": "Accept",
+          "gap": 1.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "setup_start",
+          "timeout": 10
+        },
+        {
+          "do": "expect_like",
+          "ref": "sk_slots",
+          "timeout": 5,
+          "max_dist": 0.5
+        },
+        {
+          "do": "expect_like",
+          "ref": "sk_geonosis",
+          "timeout": 5,
+          "max_dist": 1.5
+        },
+        {
+          "do": "shot",
+          "label": "sk_setup"
+        },
+        {
+          "do": "click",
+          "x": 1572,
+          "y": 798,
+          "label": "Start Game",
+          "gap": 2
+        },
+        {
+          "do": "expect_like",
+          "ref": "loading_begin",
+          "timeout": 240,
+          "poll": 2
+        },
+        {
+          "do": "click",
+          "x": 1280,
+          "y": 993,
+          "label": "Begin",
+          "gap": 3
+        },
+        {
+          "do": "expect_like",
+          "ref": "hud_buttons",
+          "timeout": 30
+        },
+        {
+          "do": "shot",
+          "label": "sk_running"
+        }
+      ]
+    }
+  },
+  "refs": {
+    "gc_title": {
+      "png": "refs/gc_title.png",
+      "box": [
+        400,
+        170,
+        760,
+        212
+      ]
+    },
+    "gc_hotm_selected": {
+      "png": "refs/gc_hotm_selected.png",
+      "box": [
+        446,
+        330,
+        966,
+        350
+      ]
+    },
+    "gc_side_empire": {
+      "png": "refs/gc_side_empire.png",
+      "box": [
+        520,
+        730,
+        840,
+        756
+      ]
+    },
+    "gc_start": {
+      "png": "refs/gc_start.png",
+      "box": [
+        1150,
+        856,
+        1465,
+        892
+      ]
+    },
+    "gc_advanced": {
+      "png": "refs/gc_advanced.png",
+      "box": [
+        475,
+        238,
+        920,
+        270
+      ]
+    },
+    "gc_objectives": {
+      "png": "refs/gc_objectives.png",
+      "box": [
+        478,
+        148,
+        905,
+        182
+      ]
+    },
+    "gal_hud": {
+      "png": "refs/gal_hud.png",
+      "box": [
+        0,
+        700,
+        90,
+        800
+      ]
+    },
+    "gal_buttons": {
+      "png": "refs/gal_buttons.png",
+      "box": [
+        280,
+        820,
+        336,
+        1066
+      ]
+    },
+    "sk_space": {
+      "png": "refs/sk_space.png",
+      "box": [
+        464,
+        386,
+        888,
+        416
+      ]
+    },
+    "sk_geonosis": {
+      "png": "refs/sk_geonosis.png",
+      "box": [
+        464,
+        460,
+        592,
+        482
+      ]
+    },
+    "sk_slots": {
+      "png": "refs/sk_slots.png",
+      "box": [
+        950,
+        348,
+        1500,
+        426
+      ]
+    }
+  }
+}

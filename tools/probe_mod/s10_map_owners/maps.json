@@ -1,0 +1,14 @@
+{
+ "_comment": "Scenarios of the S10 map-owner probe. port_players = the port's battle player table for that scenario (index = player id the port compares raw map owners with): campaign = galactic/src/campaign_setup.cpp (factions the campaign names, FactionFiles order, compacted, + Neutral); skirmish = apps/game/src/game_data.cpp make_skirmish_galaxy ({human, ai, neutral}).",
+ "faction_order": ["Rebel", "Empire", "Pirates", "Neutral", "Hostile", "Sarlacc", "Underworld", "Hutts"],
+ "scenarios": [
+  {"id": "GC_TATOOINE", "mode": "campaign", "map": "_LAND_PLANET_TATOOINE_02", "planet": "Tatooine",
+   "attacker": "Underworld", "defender": "Empire", "port_players": ["Rebel", "Empire", "Pirates", "Neutral", "Underworld"]},
+  {"id": "GC_JABIIM", "mode": "campaign", "map": "_LAND_PLANET_JABIIM_02", "planet": "Jabiim",
+   "attacker": "Underworld", "defender": "Rebel", "port_players": ["Rebel", "Empire", "Pirates", "Neutral", "Underworld"]},
+  {"id": "SK_POLUS", "mode": "skirmish", "map": "_MP_LAND_POLUS", "slots": [["Empire", "human"], ["Rebel", "ai"]],
+   "port_players": ["Empire", "Rebel", "Neutral"]},
+  {"id": "SK_MANDALORE", "mode": "skirmish", "optional": true, "map": "_MP_LAND_MANDALORE",
+   "slots": [["Empire", "human"], ["Rebel", "ai"]], "port_players": ["Empire", "Rebel", "Neutral"]}
+ ]
+}

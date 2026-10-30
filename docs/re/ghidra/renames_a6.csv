@@ -1,0 +1,11 @@
+rva,namespace,name,source,confidence,function,note
+0x187d40,alSubMeshClass,Load_From_Chunks,a6,medium,existing,ALO submesh chunks 0x10002-0x10007
+0x1af110,alD3dEffectClass,Bind_Engine_Params,a6,medium,existing,semantic scan incl SKINMATRIXARRAY
+0x1aead0,alD3dEffectClass,Select_Technique,a6,medium,existing,annotations max_viewport/WaterLOD/VENDOR_FILTER/CPUSKIN
+0x1af410,alD3dEffectClass,Upload_Skin_Palette,a6,medium,existing,SetMatrixPointerArray vt+0x150
+0x1ac5f0,alRenderStateClass,Build_Skin_Palette,a6,medium,existing,3x4->4x4 into +0x9a0 when +0x99c dirty
+0x17f6b0,alRenderStateClass,Set_Current_Skin_Palette,a6,medium,existing,singleton+0x408
+0x3f2510,GalacticPathFinderClass,Is_Planet_Passable_For_Player,a6,medium,existing,uses request flags 0/1; was mislabeled ctor_or_dtor
+0x3f18c0,GalacticPathFinderClass,Is_Planet_Dangerous,a6,medium,existing,AI perception threat test; was mislabeled ctor_or_dtor
+0x3fa420,GalacticPathFinderClass,Is_Planet_Revealed,a6,medium,existing,fog test PlanetData+0x2c9/+0x2e0
+0x326ab0,GalacticPathFinderClass,Is_Planet_In_Conflict,a6,low,existing,scans active conflict list

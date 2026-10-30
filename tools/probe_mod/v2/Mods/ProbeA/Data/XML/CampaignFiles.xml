@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+
+<Campaign_Files>
+	<File>Campaigns_Underworld_GC.xml</File>
+	<File>Campaigns_Underworld_Story.xml</File>
+	<File>Campaigns_Multiplayer.xml</File>
+	<File>Campaigns_Tutorial.xml</File>
+	<File>Campaigns_Underworld_Tutorial.xml</File>	
+	<!--
+	<File>Campaigns_Underworld_Demo.xml</File>
+	<File>Campaigns_Test.xml</File>
+	<File>Campaigns_UW_GC_Test.xml</File>
+	-->
+	<!-- probe contests -->
+	<File>Probe_G1.xml</File>
+	<File>Probe_G2.xml</File>
+	<File>Probe_G3.xml</File>
+	<File>Probe_G4.xml</File>
+	<File>Probe_G5.xml</File>
+	<File>Probe_G6.xml</File>
+	<File>Probe_G7.xml</File>
+	<File>Probe_G8.xml</File>
+	<File>Probe_G9.xml</File>
+</Campaign_Files>

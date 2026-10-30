@@ -1,0 +1,8632 @@
+{
+ "game": "foc",
+ "load_order": [
+  "config",
+  "shaders",
+  "Patch",
+  "Patch2",
+  "64Patch"
+ ],
+ "files": [
+  {
+   "name": "DATA\\ART\\SHADERS\\ALAMOENGINE.FXO",
+   "size": 4024,
+   "crc": "2FE581D7",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\BATCHMESHALPHA.FXO",
+   "size": 13876,
+   "crc": "FB2CC06A",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\BATCHMESHGLOSS.FXO",
+   "size": 13604,
+   "crc": "6A91637D",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\BLOBSTENCILMASKED.FXO",
+   "size": 7520,
+   "crc": "D3740FE6",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\FRAMEEFFECTALPHA.FXO",
+   "size": 5336,
+   "crc": "5A8664E4",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\FRAMEEFFECTFAKEMOTIONBLUR.FXO",
+   "size": 5620,
+   "crc": "16200F53",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\FRAMEEFFECTWIPE.FXO",
+   "size": 8272,
+   "crc": "EEBE9BF8",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\GLOBAL.FXO",
+   "size": 10640,
+   "crc": "D4E1B15D",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASEBLOOM.FXO",
+   "size": 4084,
+   "crc": "5D7C2697",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASEFISSURE.FXO",
+   "size": 4084,
+   "crc": "2031D135",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASEHEAT.FXO",
+   "size": 4516,
+   "crc": "0AF00306",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASEOCCLUDED.FXO",
+   "size": 4180,
+   "crc": "73063B3B",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASEOPAQUE.FXO",
+   "size": 4660,
+   "crc": "2BF81593",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASESHADOW.FXO",
+   "size": 4948,
+   "crc": "8CF9C2EA",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASETERRAIN.FXO",
+   "size": 4756,
+   "crc": "9A1623F8",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASETERRAINMESH.FXO",
+   "size": 4084,
+   "crc": "434FE554",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASETRANSPARENT.FXO",
+   "size": 4084,
+   "crc": "0DB44929",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PHASEWATER.FXO",
+   "size": 4468,
+   "crc": "06DCDF79",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMADDITIVE.FXO",
+   "size": 5780,
+   "crc": "D8B4FB64",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMALPHA.FXO",
+   "size": 5840,
+   "crc": "0C34F320",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMALPHASCANLINES.FXO",
+   "size": 6436,
+   "crc": "FB6D9513",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMDECALBUMPALPHA.FXO",
+   "size": 7116,
+   "crc": "E17F5032",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMDEPTHSPRITEADDITIVE.FXO",
+   "size": 9892,
+   "crc": "7E54044F",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMDEPTHSPRITEALPHA.FXO",
+   "size": 9892,
+   "crc": "2B303375",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMDEPTHSPRITEMODULATE.FXO",
+   "size": 9892,
+   "crc": "C3F2BA1D",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMDIFFUSEALPHA.FXO",
+   "size": 8672,
+   "crc": "A82D078C",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMHEAT.FXO",
+   "size": 7264,
+   "crc": "18DC5A32",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMMODULATE.FXO",
+   "size": 6296,
+   "crc": "65124536",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMOPAQUE.FXO",
+   "size": 4860,
+   "crc": "82651D18",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\PRIMPARTICLEBUMPALPHA.FXO",
+   "size": 11716,
+   "crc": "456525B8",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\SCENEBLOOM.FXO",
+   "size": 9548,
+   "crc": "A0B00E5C",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\SCENEHEAT.FXO",
+   "size": 9344,
+   "crc": "A421B21C",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\STENCILDARKEN.FXO",
+   "size": 4948,
+   "crc": "4323B739",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\STENCILDARKENFINALBLUR.FXO",
+   "size": 6224,
+   "crc": "DF01C360",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\ENGINE\\STENCILDARKENTOALPHA.FXO",
+   "size": 5164,
+   "crc": "C35ADE2C",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\FILLRATETEST.FXO",
+   "size": 19392,
+   "crc": "DA02E485",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\GRASS.FXO",
+   "size": 17632,
+   "crc": "7BD4E838",
+   "from": "Patch2",
+   "shadows": [
+    "shaders"
+   ]
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHADDITIVE.FXO",
+   "size": 8500,
+   "crc": "34152097",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHADDITIVEOFFSET.FXO",
+   "size": 9196,
+   "crc": "F152A8A6",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHADDITIVEREFLECTION.FXO",
+   "size": 6576,
+   "crc": "0DA5130D",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHADDITIVEVCOLOR.FXO",
+   "size": 9148,
+   "crc": "C07C6601",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHALPHA.FXO",
+   "size": 10440,
+   "crc": "F24939B8",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHALPHAGLOSS.FXO",
+   "size": 15068,
+   "crc": "5A526A3D",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHALPHASCROLL.FXO",
+   "size": 11684,
+   "crc": "26B4D097",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHBUMPCOLORIZE.FXO",
+   "size": 18172,
+   "crc": "F9A94B56",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHBUMPREFLECTCOLORIZE.FXO",
+   "size": 14308,
+   "crc": "0EE8172D",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHCOLLISION.FXO",
+   "size": 6800,
+   "crc": "E3787EC6",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHGLOSS.FXO",
+   "size": 12116,
+   "crc": "63F49AAF",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHGLOSSCOLORIZE.FXO",
+   "size": 14040,
+   "crc": "B5FEBDC3",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHHEAT.FXO",
+   "size": 6148,
+   "crc": "B10DB4AA",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHLIGHTVISUALIZE.FXO",
+   "size": 8444,
+   "crc": "824F0973",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHOCCLUDEDUNIT.FXO",
+   "size": 8324,
+   "crc": "DAB98BCC",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHSHADOWVOLUME.FXO",
+   "size": 9140,
+   "crc": "A1EECAD5",
+   "from": "Patch2",
+   "shadows": [
+    "shaders"
+   ]
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHSHIELD.FXO",
+   "size": 18120,
+   "crc": "0F082320",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\MESHSOLIDCOLOR.FXO",
+   "size": 6704,
+   "crc": "E50EEDE9",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\NEBULA.FXO",
+   "size": 10816,
+   "crc": "C1B86C83",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\PLANET.FXO",
+   "size": 21332,
+   "crc": "3025ED6E",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINADDITIVE.FXO",
+   "size": 12660,
+   "crc": "CF3C4820",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINADDITIVEVCOLOR.FXO",
+   "size": 11660,
+   "crc": "0A5A05C5",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINALPHA.FXO",
+   "size": 15892,
+   "crc": "B0D25A17",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINALPHAGLOSS.FXO",
+   "size": 16744,
+   "crc": "B2BF4001",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINBUMPCOLORIZE.FXO",
+   "size": 27392,
+   "crc": "51E11392",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINBUMPREFLECTCOLORIZE.FXO",
+   "size": 19072,
+   "crc": "363B044D",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINGLOSS.FXO",
+   "size": 16432,
+   "crc": "216FF900",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINGLOSSCOLORIZE.FXO",
+   "size": 17936,
+   "crc": "295FF332",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINHEAT.FXO",
+   "size": 10560,
+   "crc": "98F67783",
+   "from": "Patch2",
+   "shadows": [
+    "shaders"
+   ]
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINOCCLUDEDUNIT.FXO",
+   "size": 11888,
+   "crc": "72F1D308",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\RSKINSHADOWVOLUME.FXO",
+   "size": 11688,
+   "crc": "09A69211",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\SKYDOME.FXO",
+   "size": 12500,
+   "crc": "E05FC4A6",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAINMESHBUMP.FXO",
+   "size": 17508,
+   "crc": "CFB33C74",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAINMESHGLOSS.FXO",
+   "size": 13568,
+   "crc": "B7454823",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\SPACEFOGOFWAR.FXO",
+   "size": 8212,
+   "crc": "0153B055",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINCLOUDS.FXO",
+   "size": 7908,
+   "crc": "B5A50323",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINFOGOFWAR.FXO",
+   "size": 10472,
+   "crc": "422DF8BA",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINICE.FXO",
+   "size": 15700,
+   "crc": "2885AA51",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINLAVA.FXO",
+   "size": 15688,
+   "crc": "84D30DA0",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINPASSABILITY.FXO",
+   "size": 9400,
+   "crc": "1A2B2B76",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINRENDERBAKED.FXO",
+   "size": 10748,
+   "crc": "69E83D69",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINRENDERBUMP.FXO",
+   "size": 18400,
+   "crc": "4990932F",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINRENDERBUMPDUAL.FXO",
+   "size": 11060,
+   "crc": "8C9EA472",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TERRAIN\\TERRAINWATER.FXO",
+   "size": 17360,
+   "crc": "11239434",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\ART\\SHADERS\\TREE.FXO",
+   "size": 15952,
+   "crc": "64AFA89E",
+   "from": "shaders",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\RESOURCES\\GUIDIALOG\\GUIDIALOGS.RC",
+   "size": 299624,
+   "crc": "903B0447",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\RESOURCES\\GUIDIALOG\\RESOURCE.H",
+   "size": 108602,
+   "crc": "16A42B40",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_EXPANSIONGENERIC_GENERATEMAGICCASHDROP.LUA",
+   "size": 2599,
+   "crc": "1F267443",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_EXPANSIONGENERIC_REMOVECORRUPTION.LUA",
+   "size": 2873,
+   "crc": "722F519D",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_UNDERWORLD_BLACKMARKET.LUA",
+   "size": 2613,
+   "crc": "55FBC1F9",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS.LUA",
+   "size": 2617,
+   "crc": "37436212",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS.LUA",
+   "size": 2627,
+   "crc": "89BE5430",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_UNDERWORLD_BUILDUNDERWORLDPALACE.LUA",
+   "size": 2609,
+   "crc": "2FEFE732",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY.LUA",
+   "size": 2643,
+   "crc": "72DB0212",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR.LUA",
+   "size": 3106,
+   "crc": "DE53E759",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\AI_PLAN_UNDERWORLD_HACKSUPERWEAPON.LUA",
+   "size": 2590,
+   "crc": "7B074D74",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDBASECOMPONENTADVANCEDVEHICLEFACTORY.LUA",
+   "size": 2945,
+   "crc": "9B46AD9C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDBASECOMPONENTBARRACKS.LUA",
+   "size": 3024,
+   "crc": "39D94803",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDBASECOMPONENTCOMMARRAY.LUA",
+   "size": 2915,
+   "crc": "7E28F14F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDBASECOMPONENTHEAVYVEHICLEFACTORY.LUA",
+   "size": 2964,
+   "crc": "4060C037",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDBASECOMPONENTLIGHTVEHICLEFACTORY.LUA",
+   "size": 3087,
+   "crc": "9DF6A11F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDBASECOMPONENTOFFICERACADEMY.LUA",
+   "size": 2936,
+   "crc": "9A9D1C11",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDBASECOMPONENTRESEARCHFACILITY.LUA",
+   "size": 3153,
+   "crc": "CF1DB2D7",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDBASESHIELDPLAN.LUA",
+   "size": 2928,
+   "crc": "E6C08925",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDCANTINAPLAN.LUA",
+   "size": 2991,
+   "crc": "0F117EF9",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDECONOMICSTRUCTUREPLAN.LUA",
+   "size": 2954,
+   "crc": "9ACFC3E8",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDGROUNDDEFENSIVESTRUCTUREPLAN.LUA",
+   "size": 3150,
+   "crc": "BC5F2294",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDGROUNDFORCESPLAN.LUA",
+   "size": 2698,
+   "crc": "ED7987BB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDHUTTPALACEPLAN.LUA",
+   "size": 2955,
+   "crc": "A5822AA5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDINFILTRATORFACILITY.LUA",
+   "size": 2927,
+   "crc": "D7DB01F9",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDJAMMINGSTATIONPLAN.LUA",
+   "size": 2948,
+   "crc": "36E06ED5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDSCANNERPLAN.LUA",
+   "size": 2937,
+   "crc": "2FD46573",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDSPACEDEFENSIVESTRUCTUREPLAN.LUA",
+   "size": 3045,
+   "crc": "D688F1AA",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDSPACEFORCESPLAN.LUA",
+   "size": 2926,
+   "crc": "B3962D00",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDTURBOLASERS.LUA",
+   "size": 2688,
+   "crc": "889171AE",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\BUILDWEAPONSTRUCTUREPLAN.LUA",
+   "size": 2995,
+   "crc": "9999891E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\CONQUEROPPONENTPLAN.LUA",
+   "size": 7105,
+   "crc": "F63D0AFD",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\CONQUERPIRATEPLAN.LUA",
+   "size": 3863,
+   "crc": "2780346C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\CONTRASTTORECONNECT.LUA",
+   "size": 7601,
+   "crc": "3A30F6EC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\CRUSHPLAN.LUA",
+   "size": 4902,
+   "crc": "AB57110D",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\DEATHSTARUSEPLAN.LUA",
+   "size": 3584,
+   "crc": "9C2CC3C2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\DEPLOYUNITONTARGET.LUA",
+   "size": 2953,
+   "crc": "0DAD1BC0",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\EMPIREADVANCETECHPLAN.LUA",
+   "size": 3190,
+   "crc": "452AC52E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\FLUSHMAJORITEMBUDGET.LUA",
+   "size": 2782,
+   "crc": "A6A2157C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\GENERATEMAGICGROUNDDEFENSE.LUA",
+   "size": 2985,
+   "crc": "C431BC0B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\GENERATEMAGICGROUNDDEFENSEEASY.LUA",
+   "size": 3003,
+   "crc": "F5B0C8BF",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\GENERATEMAGICGROUNDDEFENSEHARD.LUA",
+   "size": 3006,
+   "crc": "3D995DF8",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\GENERATEMAGICGROUNDSTRUCTURE.LUA",
+   "size": 2877,
+   "crc": "98E77680",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\GENERATEMAGICSPACEDEFENSE.LUA",
+   "size": 3017,
+   "crc": "4766ED33",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\GENERATEMAGICSPACEDEFENSEEASY.LUA",
+   "size": 2855,
+   "crc": "2C1A457F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\GENERATEMAGICSPACEDEFENSEHARD.LUA",
+   "size": 3034,
+   "crc": "E433D038",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AIRSTRIKE.LUA",
+   "size": 3117,
+   "crc": "465484C7",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AI_PLAN_EXPANSIONGENERIC_BUILDBUNKER.LUA",
+   "size": 2866,
+   "crc": "6D882D67",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AI_PLAN_EXPANSIONGENERIC_BUILDMDUITEM.LUA",
+   "size": 4458,
+   "crc": "9AD8FF7A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AI_PLAN_EXPANSIONGENERIC_DEPLOYTROOPTRANSPORTS.LUA",
+   "size": 2917,
+   "crc": "986A9143",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AI_PLAN_EXPANSIONGENERIC_GARRISONTARGET.LUA",
+   "size": 3827,
+   "crc": "8F40A333",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AI_PLAN_EXPANSIONGENERIC_ORBITALBOMBARDMENT.LUA",
+   "size": 2479,
+   "crc": "FCB0BD37",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AI_PLAN_UNDERWORLD_MINESTRUCTURE.LUA",
+   "size": 3184,
+   "crc": "83F51F74",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AI_PLAN_UNDERWORLD_REMOTEBOMBFRIENDLYUNIT.LUA",
+   "size": 3003,
+   "crc": "249E1106",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\AI_PLAN_UNDERWORLD_TYBERMANAGERLAND.LUA",
+   "size": 4716,
+   "crc": "3C3AC2FB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BOBAFETTFLAMEINFANTRY.LUA",
+   "size": 6997,
+   "crc": "43983AB6",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDANTIAIRTURRET.LUA",
+   "size": 2724,
+   "crc": "2659F86B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDANTIINFANTRYTURRET.LUA",
+   "size": 3030,
+   "crc": "E30A09E4",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDANTIVEHICLETURRET.LUA",
+   "size": 3054,
+   "crc": "9CA713A5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDBACTATANK.LUA",
+   "size": 2723,
+   "crc": "CE6F7D34",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDBARRACKSLAND.LUA",
+   "size": 2500,
+   "crc": "B6266848",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDCOMMANDCENTERLAND.LUA",
+   "size": 2521,
+   "crc": "9BFCFAE6",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDECONSTRUCTURE.LUA",
+   "size": 2686,
+   "crc": "952F1AD2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDINFANTRYEMERGENCY.LUA",
+   "size": 2662,
+   "crc": "79824EDB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDREPAIRFACILITY.LUA",
+   "size": 2761,
+   "crc": "9E90FB15",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BUILDSTRUCTURELAND.LUA",
+   "size": 3451,
+   "crc": "D633B037",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\BURNUNITSLAND.LUA",
+   "size": 5037,
+   "crc": "DE346B19",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\CLEANUPDUMB.LUA",
+   "size": 3796,
+   "crc": "797C0C34",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\CLEARINFANTRY.LUA",
+   "size": 3914,
+   "crc": "F1235008",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\CLEARVEHICLES.LUA",
+   "size": 4000,
+   "crc": "92C8DA90",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\DEFENDSTRUCTURE.LUA",
+   "size": 3829,
+   "crc": "50AD183E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\DEFENSIVERUSH.LUA",
+   "size": 3637,
+   "crc": "844F5A63",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\DESTROYLANDUNIT.LUA",
+   "size": 3480,
+   "crc": "9420037E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\DESTROYSTRUCTURE.LUA",
+   "size": 3431,
+   "crc": "09AE82AB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\DESTROYTURBOLASER.LUA",
+   "size": 3449,
+   "crc": "6EB4A10A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\DROIDS.LUA",
+   "size": 4587,
+   "crc": "29F991E5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\EWOKHUNTPLAN.LUA",
+   "size": 4466,
+   "crc": "F4A6DC01",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\FIREMAGNEPULSE.LUA",
+   "size": 3153,
+   "crc": "64E750A5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\FUNDTACTICALSTRUCTURES.LUA",
+   "size": 3735,
+   "crc": "79440654",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\HANSOLOASSISTS.LUA",
+   "size": 4005,
+   "crc": "D4EBDA01",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\HOLDPOSITION.LUA",
+   "size": 2701,
+   "crc": "08FCD560",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\LANDBOMBING.LUA",
+   "size": 2541,
+   "crc": "AA185362",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\LANDESCORTPLAN.LUA",
+   "size": 2745,
+   "crc": "A4B6526A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\LANDHEROES.LUA",
+   "size": 3042,
+   "crc": "38205CF3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\LANDSCOUT.LUA",
+   "size": 3325,
+   "crc": "B516EA45",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\OBIWANASSISTS.LUA",
+   "size": 4003,
+   "crc": "61AB2BE1",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\PALPATINEMANAGER.LUA",
+   "size": 5423,
+   "crc": "5869C5DD",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\PATROL.LUA",
+   "size": 3016,
+   "crc": "5E8EDB1A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\PREDEFENDSTRUCTURE.LUA",
+   "size": 4916,
+   "crc": "256DBAD7",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\PURCHASEEARLYLANDUPGRADES.LUA",
+   "size": 2772,
+   "crc": "DCF01808",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\PURCHASELANDUPGRADESGENERIC.LUA",
+   "size": 6321,
+   "crc": "BA7FFEF3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\SECUREBUILDPAD.LUA",
+   "size": 6127,
+   "crc": "E1B9FF1C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\SECUREBUILDPADESCORTED.LUA",
+   "size": 6133,
+   "crc": "BFC8E72E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\SECUREVICTORYCONTROLPOINT.LUA",
+   "size": 3714,
+   "crc": "FE5071EA",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\SELLTACTICALSTRUCTURE.LUA",
+   "size": 2895,
+   "crc": "E997ED4B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\STEALVEHICLE.LUA",
+   "size": 4628,
+   "crc": "CE073275",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\TACTICALMULTIPLAYERBUILDLANDUNITSGENERIC.LUA",
+   "size": 4968,
+   "crc": "1ECCA016",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\TECHUPGRADEEMERGENCY.LUA",
+   "size": 2899,
+   "crc": "F67E97F6",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LANDMODE\\VADERASSISTSLAND.LUA",
+   "size": 3700,
+   "crc": "CF70F7C2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\LIFTBLOCKADEPLAN.LUA",
+   "size": 2971,
+   "crc": "E773A1F2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\PATHBONUSFORDISTANTTARGETS.LUA",
+   "size": 3268,
+   "crc": "3A603740",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\PLANTSPYPLAN.LUA",
+   "size": 3045,
+   "crc": "039A1225",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\RAIDPLAN.LUA",
+   "size": 3679,
+   "crc": "1C9DA4CC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\REBELADVANCETECHPLAN.LUA",
+   "size": 3328,
+   "crc": "DCD21826",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SABOTAGEPOLITICALCONTROLPLAN.LUA",
+   "size": 2842,
+   "crc": "1EF9009C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SIPHONCREDITSPLAN.LUA",
+   "size": 3252,
+   "crc": "C60F14F6",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\AI_PLAN_EXPANSIONGENERIC_DEFENDSPACESTATION.LUA",
+   "size": 3150,
+   "crc": "7F960C0E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\AI_PLAN_EXPANSIONGENERIC_SKIRMISHUPGRADESPACESTATION.LUA",
+   "size": 2974,
+   "crc": "72831BE7",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\AREASWEEP.LUA",
+   "size": 4249,
+   "crc": "5F8A05BC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\BOMBINGRUN.LUA",
+   "size": 6234,
+   "crc": "B4CFCE43",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\BUILDREFINERYSPACE.LUA",
+   "size": 3737,
+   "crc": "1307AC19",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\BUILDSTRUCTURESPACE.LUA",
+   "size": 2826,
+   "crc": "D229C8D0",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\BURNUNITS.LUA",
+   "size": 4501,
+   "crc": "B87A9828",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\DESTROYUNIT.LUA",
+   "size": 3753,
+   "crc": "0AAB65FB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\DESTROYUNITMINIMAL.LUA",
+   "size": 3519,
+   "crc": "9AA891B5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\ESCORTPLAN.LUA",
+   "size": 3145,
+   "crc": "E262C867",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\FIREDEATHSTAR.LUA",
+   "size": 2829,
+   "crc": "75D18302",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\FLANKPLAN.LUA",
+   "size": 5053,
+   "crc": "4A06D25F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\GROUNDTOSPACEDAMAGE.LUA",
+   "size": 3257,
+   "crc": "7B5FE9F2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\GROUNDTOSPACEDISABLE.LUA",
+   "size": 3166,
+   "crc": "C067C354",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\HIDESURPRISEUNITS.LUA",
+   "size": 4368,
+   "crc": "9067AF3B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\HIDETRANSPORTS.LUA",
+   "size": 3250,
+   "crc": "98EF31C3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\MOVETOLOCATION.LUA",
+   "size": 2797,
+   "crc": "3FD077A3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\MOVETOLOCATIONRUSH.LUA",
+   "size": 5837,
+   "crc": "35F05710",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\PURCHASESPACEUPGRADESGENERIC.LUA",
+   "size": 4708,
+   "crc": "2323F9C5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\RETREATPLAN.LUA",
+   "size": 2817,
+   "crc": "8F4A9951",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\SPACEARTILLERY.LUA",
+   "size": 8143,
+   "crc": "6A1740E7",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\SPACESCOUT.LUA",
+   "size": 3471,
+   "crc": "F721CB88",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\SYSTEMATICDISABLE.LUA",
+   "size": 3575,
+   "crc": "18D62F80",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\TACTICALMULTIPLAYERBUILDSPACEUNITSGENERIC.LUA",
+   "size": 4684,
+   "crc": "C57E80A0",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\TURBOATTACK.LUA",
+   "size": 4859,
+   "crc": "E5E55A2B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\SPACEMODE\\TURBOATTACKLOCATION.LUA",
+   "size": 5286,
+   "crc": "7155578E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\UNRESTRICTEDGRABLAND.LUA",
+   "size": 3702,
+   "crc": "6FD036B4",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\UNRESTRICTEDGRABSPACE.LUA",
+   "size": 3523,
+   "crc": "750BF312",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\UPGRADEGROUNDBASEPLAN.LUA",
+   "size": 3347,
+   "crc": "7661E2BB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\AI\\UPGRADESTARBASEPLAN.LUA",
+   "size": 2957,
+   "crc": "4705FF35",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\EVALUATORS\\ANYBASESTRUCTURESTHREATENED.LUA",
+   "size": 2468,
+   "crc": "A3316F89",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\EVALUATORS\\ANYFREELANDSLOTS.LUA",
+   "size": 2409,
+   "crc": "CD7AB1D4",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\EVALUATORS\\EVALUATEINGALACTICCONTEXT.LUA",
+   "size": 3151,
+   "crc": "33BDBD89",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\EVALUATORS\\GETDISTANCETONEARESTSPACEFIELD.LUA",
+   "size": 2610,
+   "crc": "59E15F89",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\EVALUATORS\\GETDISTANCETONEARESTWITHPROPERTY.LUA",
+   "size": 2939,
+   "crc": "B961BFF3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\EVALUATORS\\TARGETHASPROPERTY.LUA",
+   "size": 2553,
+   "crc": "91E9D4F3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\FREESTORE\\BUSYTACTICALFREESTORE.LUA",
+   "size": 9129,
+   "crc": "EC1990F2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\FREESTORE\\GALACTICFREESTORE.LUA",
+   "size": 11132,
+   "crc": "5919EDD1",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\FREESTORE\\GALACTICHEROFREESTORE.LUA",
+   "size": 4136,
+   "crc": "651A4A2C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\FREESTORE\\GENERICFREESTORE.LUA",
+   "size": 2716,
+   "crc": "76066992",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\BOBAFETTPLAN.LUA",
+   "size": 3362,
+   "crc": "15D05CBF",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\CREDITPOWERUP.LUA",
+   "size": 3064,
+   "crc": "8EBC6767",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\DARTHVADER.LUA",
+   "size": 6000,
+   "crc": "43572331",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\DEATHSTARPLAN.LUA",
+   "size": 3405,
+   "crc": "509A030E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\DEMO_ATTRACT_CONTROLLER.LUA",
+   "size": 4687,
+   "crc": "A1881D72",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\DEMO_DEATHSTAR_CONTROLLER.LUA",
+   "size": 5051,
+   "crc": "6FB62D7D",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\DEMO_FELUCIA_CONTROLLER.LUA",
+   "size": 10006,
+   "crc": "8CCA13CE",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\DEMO_LAND_CONTROLLER.LUA",
+   "size": 7487,
+   "crc": "1DC842CB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\DEMO_LAND_CONTROLLER_E.LUA",
+   "size": 5411,
+   "crc": "4E9AF1C2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\DEMO_LAND_CONTROLLER_R.LUA",
+   "size": 7491,
+   "crc": "9C5ABA50",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\E3_FELUCIA_ZONE.LUA",
+   "size": 4258,
+   "crc": "BC97A188",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\FIELDCOMMANDER.LUA",
+   "size": 3468,
+   "crc": "95D5F072",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\FLEETCOMMANDER.LUA",
+   "size": 3486,
+   "crc": "71BB37FD",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\GENERICBOUNTYHUNTER.LUA",
+   "size": 3415,
+   "crc": "E4764B2C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\HANSOLO.LUA",
+   "size": 4748,
+   "crc": "FA104B1B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\HANSOLOPLAN.LUA",
+   "size": 3440,
+   "crc": "918E44B0",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\HEROPLANATTACH.LUA",
+   "size": 3124,
+   "crc": "84DF7CAF",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\INTERDICTOR.LUA",
+   "size": 4442,
+   "crc": "2F2CEC6E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\IONCANNON.LUA",
+   "size": 3186,
+   "crc": "FDE10403",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\JGS_FUNCTIONLIB.LUA",
+   "size": 5555,
+   "crc": "A592DE98",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\LUKEPLAN.LUA",
+   "size": 3340,
+   "crc": "D7497E3D",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\MARKERTRIGGER.LUA",
+   "size": 5450,
+   "crc": "F45928F3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBIWANPLAN.LUA",
+   "size": 7153,
+   "crc": "03BFD705",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_GARGANTUAN.LUA",
+   "size": 4756,
+   "crc": "701ACBC5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_IG2000.LUA",
+   "size": 3457,
+   "crc": "30EE6728",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_IG88.LUA",
+   "size": 5037,
+   "crc": "ED30D43A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_KRAYT.LUA",
+   "size": 4904,
+   "crc": "AAD9A16F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_MARAJADE.LUA",
+   "size": 4907,
+   "crc": "B3DF2EC9",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_MC30.LUA",
+   "size": 4846,
+   "crc": "C78245D1",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_MILLENNIUMFALCON.LUA",
+   "size": 3768,
+   "crc": "209178F3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_MISSILESHIELD.LUA",
+   "size": 4222,
+   "crc": "40482688",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_NIGHTSISTER.LUA",
+   "size": 3825,
+   "crc": "FF54C1A8",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_POINTDEFENSE.LUA",
+   "size": 4217,
+   "crc": "C472C166",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_POWERTOSHIELDS.LUA",
+   "size": 3596,
+   "crc": "78E23075",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_REMOTEBOMB.LUA",
+   "size": 3520,
+   "crc": "1E6762BD",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_SELFDESTRUCTLAND.LUA",
+   "size": 4975,
+   "crc": "2F153025",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_SILRI.LUA",
+   "size": 6881,
+   "crc": "0F70AE4B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_URAI.LUA",
+   "size": 5872,
+   "crc": "1B5DD641",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_VADERTIESQUADRON.LUA",
+   "size": 3613,
+   "crc": "DFA30DBB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\OBJECTSCRIPT_YODA.LUA",
+   "size": 3978,
+   "crc": "2A46E472",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\PALPATINE.LUA",
+   "size": 5907,
+   "crc": "27E709DC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\PROXIMITYSPAWNTRIGGER.LUA",
+   "size": 2708,
+   "crc": "23DE40E2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\PROXIMITYSPAWNTRIGGER_R.LUA",
+   "size": 2948,
+   "crc": "36127A81",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\SANDCRAWLER.LUA",
+   "size": 5659,
+   "crc": "BC63B0F0",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\SECONDARYHEAVYFACTORY.LUA",
+   "size": 2904,
+   "crc": "6BF7BD10",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\SECONDARYMININGFACILITY.LUA",
+   "size": 2888,
+   "crc": "6BFB8F11",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\SLAVE_I.LUA",
+   "size": 4801,
+   "crc": "BB12984A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\SPEEDERBIKE.LUA",
+   "size": 4662,
+   "crc": "CC1F558A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\SUNDERED_HEART.LUA",
+   "size": 5274,
+   "crc": "3C4A80AA",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\TARKIN.LUA",
+   "size": 3381,
+   "crc": "B721DDE2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\TECHPOWERUP.LUA",
+   "size": 3145,
+   "crc": "361F0E59",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\TRAINING_FACILITY.LUA",
+   "size": 2924,
+   "crc": "71301846",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM01_BLACKBOXPOWERUP.LUA",
+   "size": 3097,
+   "crc": "C961326C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM02_DESTROYER_SPAWN.LUA",
+   "size": 3957,
+   "crc": "DEF7599F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM02_DROIDCRATE.LUA",
+   "size": 3296,
+   "crc": "24A70B84",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM02_DROIDS_SPAWN.LUA",
+   "size": 3464,
+   "crc": "04C3DE4A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM02_MAGNETDOORS.LUA",
+   "size": 3311,
+   "crc": "63808850",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM02_MISSION_SCRIPT.LUA",
+   "size": 16851,
+   "crc": "4DBBF78F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM06_MISSION_SCRIPT.LUA",
+   "size": 3797,
+   "crc": "03561CD6",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM11_FORCEADEPTFOUR.LUA",
+   "size": 4898,
+   "crc": "DC66E093",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM11_FORCEADEPTONE.LUA",
+   "size": 3261,
+   "crc": "6AC350B2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM11_FORCEADEPTTHREE.LUA",
+   "size": 2832,
+   "crc": "AB1063A8",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UM11_FORCEADEPTTWO.LUA",
+   "size": 3310,
+   "crc": "6173D374",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UMP_ENSLAVED_PRISONERS.LUA",
+   "size": 3318,
+   "crc": "77E8A06C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UMP_ENSLAVED_WOOKIES.LUA",
+   "size": 3363,
+   "crc": "6578C484",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UMP_MISSION_SCRIPT.LUA",
+   "size": 3100,
+   "crc": "A36F2B8F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UMP_SPICEPOWERUP.LUA",
+   "size": 2974,
+   "crc": "20E29DB5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\UNDERWORLD_HUNT.LUA",
+   "size": 3334,
+   "crc": "C6C722ED",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\VEERS.LUA",
+   "size": 3364,
+   "crc": "6408647D",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\GAMEOBJECT\\WEDGEPLAN.LUA",
+   "size": 3389,
+   "crc": "2B3BBCBA",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGAICOMMANDS.LUA",
+   "size": 7160,
+   "crc": "6DFC6127",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGBASE.LUA",
+   "size": 8208,
+   "crc": "F7271DC9",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGBASEDEFINITIONS.LUA",
+   "size": 3775,
+   "crc": "0C8E5831",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGCOMMANDS.LUA",
+   "size": 18892,
+   "crc": "3F0B2D1F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGDEBUG.LUA",
+   "size": 3153,
+   "crc": "3CED440D",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGEVENTS.LUA",
+   "size": 18089,
+   "crc": "90B1FFBC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGINTERVENTIONS.LUA",
+   "size": 4083,
+   "crc": "3017EEFF",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGMOVEUNITS.LUA",
+   "size": 4480,
+   "crc": "1AC281C1",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGSPAWNUNITS.LUA",
+   "size": 5809,
+   "crc": "C2C2FB16",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGSTATEMACHINE.LUA",
+   "size": 5816,
+   "crc": "DEB5F156",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGSTORYMODE.LUA",
+   "size": 3295,
+   "crc": "DE7DA3F2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\LIBRARY\\PGTASKFORCE.LUA",
+   "size": 23364,
+   "crc": "62B28403",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\MISCELLANEOUS\\DUMMY.LUA",
+   "size": 4560,
+   "crc": "66F6C1CE",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\MISCELLANEOUS\\FLEETEVENTS.LUA",
+   "size": 3337,
+   "crc": "DB378622",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\MISCELLANEOUS\\GAMESCORING.LUA",
+   "size": 32527,
+   "crc": "2F877911",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTIII_M07.TXT",
+   "size": 976,
+   "crc": "25CBA22D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTIII_M08.TXT",
+   "size": 971,
+   "crc": "A79B35FC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTIII_M09.TXT",
+   "size": 971,
+   "crc": "9AFB1C4C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTII_M04.TXT",
+   "size": 955,
+   "crc": "72C706E0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTII_M05.TXT",
+   "size": 969,
+   "crc": "4FA72F50",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTII_M06.TXT",
+   "size": 1092,
+   "crc": "08075580",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTIV_M10.TXT",
+   "size": 966,
+   "crc": "3F62FE25",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTIV_M11.TXT",
+   "size": 981,
+   "crc": "0202D795",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTIV_M12.TXT",
+   "size": 560,
+   "crc": "45A2AD45",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTI_M02.TXT",
+   "size": 1464,
+   "crc": "8B23B4DA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTI_M03.TXT",
+   "size": 1884,
+   "crc": "B6439D6A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_ACTI_M04.TXT",
+   "size": 1492,
+   "crc": "0463417A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EMPIRE_STORY_CAMPAIGN.TXT",
+   "size": 8967,
+   "crc": "58F7FC3C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_EXPANSION_GC_SOLO.TXT",
+   "size": 8308,
+   "crc": "BA68E9E6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_FOCUSDEMO.TXT",
+   "size": 444,
+   "crc": "70806550",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_ACCUMULATE_CREDITS.TXT",
+   "size": 804,
+   "crc": "6D9EAEB5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_BUILD_GENERIC_STRUCTURE.TXT",
+   "size": 808,
+   "crc": "FE22C2E6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_BUILD_UNITS.TXT",
+   "size": 788,
+   "crc": "AC50A2AD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_CONQUER_PIRATE_PLANET.TXT",
+   "size": 841,
+   "crc": "280650D9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_CREDIT_WINDFALL.TXT",
+   "size": 379,
+   "crc": "DA531635",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_HUNT_CAPITAL_SHIPS.TXT",
+   "size": 886,
+   "crc": "584C7CE4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_IMPERIAL_TRAITOR.TXT",
+   "size": 735,
+   "crc": "25CF963F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_PIRATE_AMBUSH.TXT",
+   "size": 1035,
+   "crc": "4A543670",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_PIRATE_DEFECTION.TXT",
+   "size": 749,
+   "crc": "FCD98236",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_PLANET_WINDFALL.TXT",
+   "size": 379,
+   "crc": "9F87D100",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_REBEL_REVOLT.TXT",
+   "size": 728,
+   "crc": "3A2FC31A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_REBEL_SABOTAGE.TXT",
+   "size": 742,
+   "crc": "4E539BD8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_REBEL_SMUGGLER.TXT",
+   "size": 742,
+   "crc": "36088C07",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_SCOUT.TXT",
+   "size": 1253,
+   "crc": "80E752CC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_TECH_WINDFALL.TXT",
+   "size": 305,
+   "crc": "C16BF6A7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_UNIT_WINDFALL.TXT",
+   "size": 373,
+   "crc": "375EC60E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_UPGRADE_SPACE_STATION.TXT",
+   "size": 811,
+   "crc": "9B80AEF4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_INTERVENTION_VADER_FAVOR.TXT",
+   "size": 1029,
+   "crc": "081CE446",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_SANDBOX_EVENT_CONTRIVED_ATTACK.TXT",
+   "size": 1449,
+   "crc": "CCA4E874",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_SANDBOX_EVENT_FLEET_RAMPAGE.TXT",
+   "size": 1235,
+   "crc": "0445C3B4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_SANDBOX_EVENT_HERO_GATHERING.TXT",
+   "size": 1130,
+   "crc": "8EE0EEC0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_SANDBOX_EVENT_PLANET_OWNERSHIP_FLIP.TXT",
+   "size": 364,
+   "crc": "FE66543B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_SANDBOX_EVENT_TRAP.TXT",
+   "size": 1022,
+   "crc": "590EE7BE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_E_SANDBOX_INTRO.TXT",
+   "size": 6594,
+   "crc": "75415F12",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTIII_M07.TXT",
+   "size": 611,
+   "crc": "B67448BD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTIII_M07A.TXT",
+   "size": 563,
+   "crc": "B12DD715",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTIII_M08.TXT",
+   "size": 553,
+   "crc": "3424DF6C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTIII_M09.TXT",
+   "size": 549,
+   "crc": "0944F6DC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTIII_M10.TXT",
+   "size": 547,
+   "crc": "CF084708",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTII_M00.TXT",
+   "size": 506,
+   "crc": "3152ADAD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTII_M04.TXT",
+   "size": 885,
+   "crc": "C4D20B6D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTII_M05.TXT",
+   "size": 1163,
+   "crc": "F9B222DD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTII_M06.TXT",
+   "size": 1154,
+   "crc": "BE12580D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACTIV.TXT",
+   "size": 1627,
+   "crc": "0A09B67B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACT_4.TXT",
+   "size": 1057,
+   "crc": "3C7473D0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_ACT_I.TXT",
+   "size": 1726,
+   "crc": "3D3657AE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_REBEL_STORY_CAMPAIGN.TXT",
+   "size": 9048,
+   "crc": "4B993867",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_ACCUMULATE_CREDITS.TXT",
+   "size": 822,
+   "crc": "3B909BD7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_BUILD_GENERIC_STRUCTURE.TXT",
+   "size": 816,
+   "crc": "3C5A3980",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_BUILD_UNITS.TXT",
+   "size": 796,
+   "crc": "699E3797",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_CONFRONT_BOBA.TXT",
+   "size": 750,
+   "crc": "FCB70159",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_CONQUER_PIRATE_PLANET.TXT",
+   "size": 847,
+   "crc": "26DCA070",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_CREDIT_WINDFALL.TXT",
+   "size": 383,
+   "crc": "006AB814",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_EMPIRE_OPPRESSION.TXT",
+   "size": 764,
+   "crc": "1627F674",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_FLEET_RESCUE.TXT",
+   "size": 730,
+   "crc": "214209F8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_HUNT_CAPITAL_SHIPS.TXT",
+   "size": 874,
+   "crc": "0E424986",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_INDIGENOUS_REVOLT.TXT",
+   "size": 1521,
+   "crc": "56B0FA90",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_PIRATE_ENLIGHTENMENT.TXT",
+   "size": 2127,
+   "crc": "A72EFEB9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_PIRATE_ENLIGHTENMENT_B.TXT",
+   "size": 2127,
+   "crc": "51357E8C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_PIRATE_RESCUE.TXT",
+   "size": 736,
+   "crc": "020F6D12",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_PLANET_WINDFALL.TXT",
+   "size": 383,
+   "crc": "45BE7F21",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_REFUGEE_ESCORT.TXT",
+   "size": 1065,
+   "crc": "D92121D2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_SCOUT.TXT",
+   "size": 1269,
+   "crc": "CE941A86",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_SHOW_OF_STRENGTH.TXT",
+   "size": 750,
+   "crc": "FB70D067",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_TECH_WINDFALL.TXT",
+   "size": 379,
+   "crc": "64A78ADB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_UNIT_WINDFALL.TXT",
+   "size": 377,
+   "crc": "9292BA72",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_INTERVENTION_UPGRADE_SPACE_STATION.TXT",
+   "size": 819,
+   "crc": "955A5E5D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_SANDBOX_DEMO_INTRO.TXT",
+   "size": 462,
+   "crc": "8A5E851B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_SANDBOX_EVENT_CONTRIVED_ATTACK.TXT",
+   "size": 1407,
+   "crc": "7155A941",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_SANDBOX_EVENT_FLEET_RAMPAGE.TXT",
+   "size": 1261,
+   "crc": "5D5332DF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_SANDBOX_EVENT_HERO_GATHERING.TXT",
+   "size": 1096,
+   "crc": "54D940E1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_SANDBOX_EVENT_PLANET_OWNERSHIP_FLIP.TXT",
+   "size": 356,
+   "crc": "51629587",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_SANDBOX_EVENT_TRAP.TXT",
+   "size": 996,
+   "crc": "177DAFF4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_R_SANDBOX_INTRO.TXT",
+   "size": 6691,
+   "crc": "2C3DEF53",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_TUTORIAL_01.TXT",
+   "size": 3711,
+   "crc": "BABC60E3",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_TUTORIAL_02.TXT",
+   "size": 9018,
+   "crc": "FD1C1A33",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_TUTORIAL_03.TXT",
+   "size": 2952,
+   "crc": "C07C3383",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_TUTORIAL_04.TXT",
+   "size": 4266,
+   "crc": "725CEF93",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_TUTORIAL_05.TXT",
+   "size": 3766,
+   "crc": "4F3CC623",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_TUTORIAL_07.TXT",
+   "size": 1029,
+   "crc": "35FC9543",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_TUTORIAL_I.TXT",
+   "size": 328,
+   "crc": "63E1BD50",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_U_BLACK_MARKET_TUTORIAL.TXT",
+   "size": 1104,
+   "crc": "498FE64D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_U_CAMPAIGN_MISSION_BRIEFINGS.TXT",
+   "size": 8307,
+   "crc": "876CF528",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_U_CORRUPTION_TUTORIAL.TXT",
+   "size": 1202,
+   "crc": "4D854637",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_U_FOCUSDEMO_INTRO.TXT",
+   "size": 673,
+   "crc": "4EDB9476",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_U_SANDBOX_INTRO.TXT",
+   "size": 6522,
+   "crc": "66036418",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\DIALOG_U_TUTORIAL_MISSION_BRIEFINGS.TXT",
+   "size": 1538,
+   "crc": "CFCC4783",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_EMPIRE_ACT_I.LUA",
+   "size": 3126,
+   "crc": "6FF026D6",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_EMPIRE_ACT_III.LUA",
+   "size": 8254,
+   "crc": "EB564620",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_EMPIRE_ACT_IV.LUA",
+   "size": 4407,
+   "crc": "D9D2C260",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_REBEL_ACT_I.LUA",
+   "size": 2647,
+   "crc": "D31D6A80",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_REBEL_ACT_III.LUA",
+   "size": 3669,
+   "crc": "78DD0DA4",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_UNDERWORLD.LUA",
+   "size": 20807,
+   "crc": "6B9CA67C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_UNDERWORLD_DEMO.LUA",
+   "size": 23220,
+   "crc": "E1F86442",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_UNDERWORLD_EXEC_DEMO.LUA",
+   "size": 2876,
+   "crc": "42C16349",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_UNDERWORLD_EXEC_DEMO_1.LUA",
+   "size": 2942,
+   "crc": "07140253",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_UNDERWORLD_FOCUS_DEMO.LUA",
+   "size": 4665,
+   "crc": "4EF075E2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_UNDERWORLD_TEST_CAMPAIGN.LUA",
+   "size": 3950,
+   "crc": "0278426B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_UNDERWORLD_TEST_CAMPAIGN_MISSION_12.LUA",
+   "size": 2566,
+   "crc": "E7BAC485",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_CAMPAIGN_UNDERWORLD_TUTORIAL.LUA",
+   "size": 22905,
+   "crc": "1BD04DE2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTIII_M08_SPACE.LUA",
+   "size": 4674,
+   "crc": "310EFDE6",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTIII_M09_LAND.LUA",
+   "size": 20468,
+   "crc": "8131DAE6",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTII_M04_SPACE.LUA",
+   "size": 9910,
+   "crc": "5101D41C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTII_M05_LAND.LUA",
+   "size": 23085,
+   "crc": "3E96F579",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTII_M06_LAND.LUA",
+   "size": 18118,
+   "crc": "D5A14E7A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTIV_M10_SPACE.LUA",
+   "size": 36486,
+   "crc": "6A97B723",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTIV_M11_SPACE.LUA",
+   "size": 2311,
+   "crc": "AB1968E3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTIV_M12_SPACE.LUA",
+   "size": 3344,
+   "crc": "32FB0EE2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTI_M01_LAND.LUA",
+   "size": 3013,
+   "crc": "A6072F24",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTI_M02_FONDOR_LAND.LUA",
+   "size": 9665,
+   "crc": "567B64C3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTI_M02_LAND.LUA",
+   "size": 47747,
+   "crc": "4D309427",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTI_M03_SPACE.LUA",
+   "size": 54289,
+   "crc": "DDA10E8E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTI_M04_LAND.LUA",
+   "size": 10246,
+   "crc": "402EE460",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EMPIRE_ACTI_M04_SPACE.LUA",
+   "size": 10139,
+   "crc": "F49A1B0D",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EXEC_DEMO_ENDOR_LAND_TACTICAL.LUA",
+   "size": 5750,
+   "crc": "2F25BD94",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_EXEC_DEMO_NABOO_LAND_TACTICAL.LUA",
+   "size": 9634,
+   "crc": "57B7713C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_FOCUS_DEMO_FELUCIA_LAND_TACTICAL.LUA",
+   "size": 60638,
+   "crc": "CC02261F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_FOCUS_DEMO_FELUCIA_SPACE_TACTICAL.LUA",
+   "size": 12264,
+   "crc": "F1FE5CC8",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIII_M07A_SPACE.LUA",
+   "size": 14185,
+   "crc": "72E3ED97",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIII_M07_SPACE.LUA",
+   "size": 30548,
+   "crc": "9FB3F6F5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIII_M08_SPACE.LUA",
+   "size": 27090,
+   "crc": "0C4B0233",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIII_M09_LAND.LUA",
+   "size": 9049,
+   "crc": "1C5BD883",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIII_M09_SPACE.LUA",
+   "size": 19431,
+   "crc": "CDC5DDF3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIII_M10_LAND.LUA",
+   "size": 21174,
+   "crc": "21C02C89",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIII_M10_SPACE.LUA",
+   "size": 3951,
+   "crc": "2D2DAF19",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTII_M04_SPACE.LUA",
+   "size": 18757,
+   "crc": "CC6BD679",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTII_M06_LAND.LUA",
+   "size": 22625,
+   "crc": "6DD484FF",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIV_M11_GALACTIC.LUA",
+   "size": 4855,
+   "crc": "1A414D96",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTIV_M12_GALACTIC.LUA",
+   "size": 4755,
+   "crc": "6620684D",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTI_M01_SPACE.LUA",
+   "size": 62680,
+   "crc": "3DB87DCA",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTI_M02_LAND.LUA",
+   "size": 26778,
+   "crc": "855F1E10",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_ACTI_M03_LAND.LUA",
+   "size": 15617,
+   "crc": "6A9D752E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_PROLOGUE_M00_LAND.LUA",
+   "size": 8122,
+   "crc": "19B356EA",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_PROLOGUE_M01_LAND.LUA",
+   "size": 7054,
+   "crc": "F6713DD4",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_PROLOGUE_M02_SPACE.LUA",
+   "size": 4023,
+   "crc": "A1C25540",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_PROLOGUE_M03_LAND.LUA",
+   "size": 3049,
+   "crc": "F284EDE9",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_PROLOGUE_M07_SPACE.LUA",
+   "size": 3774,
+   "crc": "D095F902",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_REBEL_PROLOGUE_M08_SPACE.LUA",
+   "size": 4017,
+   "crc": "436D0DC4",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_TUTORIAL_M01_LAND.LUA",
+   "size": 29005,
+   "crc": "05DD9B79",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_TUTORIAL_M03_SPACE.LUA",
+   "size": 15356,
+   "crc": "C8D8F973",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_TUTORIAL_M04_GALACTIC.LUA",
+   "size": 3544,
+   "crc": "D7EBF52A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_TUTORIAL_M05_LAND.LUA",
+   "size": 6751,
+   "crc": "0C363B03",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_TUTORIAL_M06_LAND.LUA",
+   "size": 6102,
+   "crc": "E7018000",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_TUTORIAL_M07_SPACE.LUA",
+   "size": 4461,
+   "crc": "78018AF1",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UM00_CIN_TEST.LUA",
+   "size": 6100,
+   "crc": "E29DC376",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTIII_M11_LAND.LUA",
+   "size": 144420,
+   "crc": "5709DA98",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTIII_M12_SPACE.LUA",
+   "size": 71128,
+   "crc": "DE09201C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTII_M06_LAND.LUA",
+   "size": 111605,
+   "crc": "6F1811FC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTII_M07_LAND.LUA",
+   "size": 68799,
+   "crc": "80DA7AC2",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTII_M09_SPACE.LUA",
+   "size": 22597,
+   "crc": "9EF40651",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTI_M01_LAND.LUA",
+   "size": 100983,
+   "crc": "CF6EACD0",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTI_M02_SPACE.LUA",
+   "size": 24895,
+   "crc": "A6968EC8",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTI_M03_LAND.LUA",
+   "size": 24143,
+   "crc": "CB9B7CED",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ACTI_M04_LAND.LUA",
+   "size": 75653,
+   "crc": "29476794",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_AETENII_PIRACY.LUA",
+   "size": 11511,
+   "crc": "7220A96E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ALZOCIII_INTIMIDATION.LUA",
+   "size": 10630,
+   "crc": "5169145A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_ANAXES_INTIMIDATION.LUA",
+   "size": 7672,
+   "crc": "C6455101",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_BESPIN_PIRACY.LUA",
+   "size": 18379,
+   "crc": "90F0ACCE",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_BESPIN_PIRACY_STORY.LUA",
+   "size": 18169,
+   "crc": "29DA6A9A",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_BESTINE_KIDNAPPING.LUA",
+   "size": 12111,
+   "crc": "7E511A69",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_BOTHAWUI_INTIMIDATION.LUA",
+   "size": 12168,
+   "crc": "5A41CE6F",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_BYSS_KIDNAPPING.LUA",
+   "size": 9663,
+   "crc": "EFB30D76",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_CARIDA_KIDNAPPING.LUA",
+   "size": 11719,
+   "crc": "CCEEFAE8",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_CORELLIA_PIRACY.LUA",
+   "size": 7606,
+   "crc": "371CAFBC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_CORULAG_PIRACY.LUA",
+   "size": 6562,
+   "crc": "00772FC1",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_DANTOOINE_INTIMIDATION.LUA",
+   "size": 7968,
+   "crc": "2E9CE4A1",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_FONDOR_PIRACY.LUA",
+   "size": 7170,
+   "crc": "79CE10B9",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_HONOGHR_INTIMIDATION.LUA",
+   "size": 6897,
+   "crc": "DF90A044",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_HONOGHR_INTIMIDATION_STORY.LUA",
+   "size": 8188,
+   "crc": "13E18DDB",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_KESSEL_PIRACY.LUA",
+   "size": 9869,
+   "crc": "FBA62AAC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_KUAT_KIDNAPPING.LUA",
+   "size": 8257,
+   "crc": "139D186E",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_MANDALORE_PIRACY.LUA",
+   "size": 6929,
+   "crc": "719EC0EC",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_MANDALORE_PIRACY_PROLOGUE.LUA",
+   "size": 22349,
+   "crc": "1C3B8349",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_MANDALORE_PIRACY_STORY.LUA",
+   "size": 9324,
+   "crc": "4CA56E4C",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_MONCALAMARI_PIRACY.LUA",
+   "size": 7955,
+   "crc": "3D0BFFA5",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_MUUNILINST_KIDNAPPING.LUA",
+   "size": 8336,
+   "crc": "DCEA536B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_NABOO_INTIMIDATION.LUA",
+   "size": 9251,
+   "crc": "EA4E6793",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_NALHUTTA_KIDNAPPING.LUA",
+   "size": 8355,
+   "crc": "7684CCF3",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_SALEUCAMI_INTIMIDATION.LUA",
+   "size": 9545,
+   "crc": "34ACE575",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_TARIS_INTIMIDATION.LUA",
+   "size": 7557,
+   "crc": "9BEA4776",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_THYFERRA_KIDNAPPING.LUA",
+   "size": 8816,
+   "crc": "51877699",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\SCRIPTS\\STORY\\STORY_UNDERWORLD_UTAPAU_KIDNAPPING.LUA",
+   "size": 13133,
+   "crc": "1A77F13B",
+   "from": "64Patch",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\AITERRAINEFFECTIVENESS.XML",
+   "size": 1636,
+   "crc": "ED66697A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AITESTGAMECONSTANTS.XML",
+   "size": 4612,
+   "crc": "9EB45983",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GALACTICMARKUP\\ALDERAANSDEMISEHINTS.XML",
+   "size": 520,
+   "crc": "2D5E48BB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GALACTICMARKUP\\DEFAULTGALACTICHINTS.XML",
+   "size": 115,
+   "crc": "812A0C4F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GALACTICMARKUP\\SHIPYARDSOFKUATHINTS.XML",
+   "size": 580,
+   "crc": "4EB0B011",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\AI_GOALSET_EMPIRE_LAND.XML",
+   "size": 527,
+   "crc": "43A11169",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\AI_GOALSET_EXPANSIONGENERIC_GALACTIC.XML",
+   "size": 189,
+   "crc": "625DCBF3",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\AI_GOALSET_EXPANSIONGENERIC_LAND.XML",
+   "size": 928,
+   "crc": "22071B4E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\AI_GOALSET_REBEL_LAND.XML",
+   "size": 547,
+   "crc": "180E86A8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\AI_GOALSET_UNDERWORLD_GALACTIC.XML",
+   "size": 1744,
+   "crc": "B2D70E03",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\AI_GOALSET_UNDERWORLD_LAND.XML",
+   "size": 876,
+   "crc": "F2BA059B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\AI_GOALSET_UNDERWORLD_SPACE.XML",
+   "size": 180,
+   "crc": "4122077D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\BASICDEFENSIVEGALACTICSET.XML",
+   "size": 2373,
+   "crc": "2746AB54",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\BASICINFORMATIONGALACTICSET.XML",
+   "size": 158,
+   "crc": "2437B659",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\BASICINFRASTRUCTUREGALACTICSET.XML",
+   "size": 2932,
+   "crc": "808822BF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\BASICLANDGOALSET.XML",
+   "size": 6569,
+   "crc": "87C531B8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\BASICOFFENSIVEGALACTICSET.XML",
+   "size": 1850,
+   "crc": "DBB007FF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\BASICOFFENSIVESPACESET.XML",
+   "size": 4112,
+   "crc": "D808212B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALFUNCTIONS\\SYSTEMFUNCTIONS.XML",
+   "size": 597,
+   "crc": "0CB381D1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\AI_GOALS_EMPIRE_LAND.XML",
+   "size": 888,
+   "crc": "5D31E5AD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\AI_GOALS_EXPANSIONGENERIC_GALACTIC.XML",
+   "size": 421,
+   "crc": "F343022F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\AI_GOALS_EXPANSIONGENERIC_LAND.XML",
+   "size": 2568,
+   "crc": "80287461",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\AI_GOALS_REBEL_LAND.XML",
+   "size": 899,
+   "crc": "89082A3A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\AI_GOALS_UNDERWORLD_GALACTIC.XML",
+   "size": 3250,
+   "crc": "1EBC66A4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\AI_GOALS_UNDERWORLD_LAND.XML",
+   "size": 2088,
+   "crc": "321610BF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\AI_GOALS_UNDERWORLD_SPACE.XML",
+   "size": 303,
+   "crc": "7DE14FB9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\DEFENSIVEGALACTICGOALS.XML",
+   "size": 6380,
+   "crc": "1F0572AC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\INFORMATIONGALACTICGOALS.XML",
+   "size": 419,
+   "crc": "5D67A7BD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\INFRASTRUCTUREGALACTICGOALS.XML",
+   "size": 16091,
+   "crc": "D3D10216",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\LANDGOALS.XML",
+   "size": 18838,
+   "crc": "B1622AF0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\OFFENSIVEGALACTICGOALS.XML",
+   "size": 7358,
+   "crc": "8D9604BB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\OFFENSIVESPACEGOALS.XML",
+   "size": 10774,
+   "crc": "836A437B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\GOALS\\SYSTEMGOALS.XML",
+   "size": 1402,
+   "crc": "5F4CB4A6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\HINTSETS\\TESTHINTSETS.XML",
+   "size": 485,
+   "crc": "7B7B955C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_EMPIRE_LAND.XML",
+   "size": 1042,
+   "crc": "D2A3DF2C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_EXPANSIONGENERIC_GALACTIC.XML",
+   "size": 368,
+   "crc": "B4E45A68",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_EXPANSIONGENERIC_LAND.XML",
+   "size": 1772,
+   "crc": "210B7585",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_EXPANSIONGENERIC_LANDSKIRMISH.XML",
+   "size": 13949,
+   "crc": "2FBA53D4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_REBEL_LAND.XML",
+   "size": 693,
+   "crc": "7EAC54E6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_UNDERWORLD_BUDGETING.XML",
+   "size": 1114,
+   "crc": "3DB78760",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_UNDERWORLD_GALACTIC.XML",
+   "size": 6838,
+   "crc": "EE2689F7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_UNDERWORLD_LAND.XML",
+   "size": 1819,
+   "crc": "707FD78E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\AI_EQUATIONS_UNDERWORLD_SPACE.XML",
+   "size": 194,
+   "crc": "2C7D2644",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\BASICGALACTICEQUATIONS.XML",
+   "size": 1411,
+   "crc": "43785FDE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\BASICLANDEQUATIONS.XML",
+   "size": 40434,
+   "crc": "A89736FA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\BUDGETINGEQUATIONS.XML",
+   "size": 10799,
+   "crc": "943AEB7F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\DEFENSIVEGALACTICEQUATIONS.XML",
+   "size": 11702,
+   "crc": "D170B23A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\HEROEQUATIONS.XML",
+   "size": 671,
+   "crc": "E6A0BDB6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\INFORMATIONGALACTICEQUATIONS.XML",
+   "size": 1311,
+   "crc": "19CC3D76",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\INFRASTRUCTUREGALACTICEQUATIONS.XML",
+   "size": 26339,
+   "crc": "0FC9C646",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\OFFENSIVEGALATICEQUATIONS.XML",
+   "size": 19599,
+   "crc": "35D99413",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\OFFENSIVESPACEEQUATIONS.XML",
+   "size": 32215,
+   "crc": "39F8EA3D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PERCEPTUALEQUATIONS\\STORY_EMPIRE_EQUATIONS.XML",
+   "size": 1277,
+   "crc": "DB5BF39A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PLAYERS\\AI_PLAYER_UNDERWORLD.XML",
+   "size": 1137,
+   "crc": "FC484B2C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PLAYERS\\AI_PLAYER_UNDERWORLDSTORYOPPONENT.XML",
+   "size": 1061,
+   "crc": "134EC459",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PLAYERS\\BASICEMPIRENOGALACTICAI.XML",
+   "size": 675,
+   "crc": "F2B464DC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PLAYERS\\BASICEMPIREPLAYER.XML",
+   "size": 1108,
+   "crc": "4E991B0D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PLAYERS\\BASICREBELNOGALACTICAI.XML",
+   "size": 675,
+   "crc": "2A169B53",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PLAYERS\\BASICREBELPLAYER.XML",
+   "size": 1132,
+   "crc": "80AD7EB1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\PLAYERS\\PLAYER_NONE.XML",
+   "size": 902,
+   "crc": "024C0A07",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\TEMPLATES\\AI_TEMPLATES_UNDERWORLD.XML",
+   "size": 1363,
+   "crc": "8D8F13D5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\TEMPLATES\\BASICEMPIRETEMPLATES.XML",
+   "size": 3391,
+   "crc": "273F5214",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\TEMPLATES\\BASICGENERICTEMPLATES.XML",
+   "size": 5093,
+   "crc": "3A59BF93",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\TEMPLATES\\BASICREBELTEMPLATES.XML",
+   "size": 1505,
+   "crc": "4EA6273D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AI\\TEMPLATES\\NATIVELIFETEMPLATES.XML",
+   "size": 900,
+   "crc": "41A79945",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AMBIENTMAPSOUNDS.XML",
+   "size": 1177,
+   "crc": "1A63226A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\ANIMATIONSFXMAPS.TXT",
+   "size": 73093,
+   "crc": "7F60A678",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\AUDIO.XML",
+   "size": 8091,
+   "crc": "6217B3F0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\BLACKMARKETITEMS.XML",
+   "size": 7279,
+   "crc": "B7E9B748",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNFILES.XML",
+   "size": 413,
+   "crc": "46D245D3",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_ALPHA.XML",
+   "size": 96899,
+   "crc": "7CDF7E2F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_DEMOS.XML",
+   "size": 30884,
+   "crc": "282B291F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_DEMOS_02.XML",
+   "size": 103352,
+   "crc": "1CC60619",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_MAIN.XML",
+   "size": 18269,
+   "crc": "E2911FED",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_MULTIPLAYER.XML",
+   "size": 165352,
+   "crc": "4C27D836",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_P1.XML",
+   "size": 10104,
+   "crc": "751972B0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_P2.XML",
+   "size": 30164,
+   "crc": "32B90860",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_P3.XML",
+   "size": 67346,
+   "crc": "0FD921D0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_P4.XML",
+   "size": 89110,
+   "crc": "BDF9FDC0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_P5.XML",
+   "size": 65878,
+   "crc": "8099D470",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_P6.XML",
+   "size": 12389,
+   "crc": "C739AEA0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_P7.XML",
+   "size": 82680,
+   "crc": "FA598710",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_SINGLEPLAYER.XML",
+   "size": 336352,
+   "crc": "A6A375AB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_STANDARD.XML",
+   "size": 39083,
+   "crc": "74488933",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_STYLE_GUIDE.XML",
+   "size": 25532,
+   "crc": "24F25C0E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_TEST.XML",
+   "size": 11704,
+   "crc": "FD37BF20",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_TUTORIAL.XML",
+   "size": 19036,
+   "crc": "2BABACAC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_UNDERWORLD_DEMO.XML",
+   "size": 8597,
+   "crc": "55BFCE57",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_UNDERWORLD_E3_DEMO.XML",
+   "size": 69935,
+   "crc": "14C74D35",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_UNDERWORLD_EXEC_DEMO.XML",
+   "size": 12748,
+   "crc": "CAB063CD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_UNDERWORLD_GC.XML",
+   "size": 414641,
+   "crc": "30891AD9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_UNDERWORLD_STORY.XML",
+   "size": 38404,
+   "crc": "0E05148B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_UNDERWORLD_TUTORIAL.XML",
+   "size": 7392,
+   "crc": "B8CD8F7C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CAMPAIGNS_UW_GC_TEST.XML",
+   "size": 69223,
+   "crc": "66310319",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_GROUNDINFANTRY.XML",
+   "size": 8147,
+   "crc": "D16D28FB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_GROUNDPROPS.XML",
+   "size": 23741,
+   "crc": "96928BBA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_GROUNDTURRETS.XML",
+   "size": 771,
+   "crc": "B9508BA7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_GROUNDVEHICLES.XML",
+   "size": 6566,
+   "crc": "B286A263",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\CIN_HARDPOINTS.XML",
+   "size": 14647,
+   "crc": "E94D0C4E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_PROJECTILES.XML",
+   "size": 2874,
+   "crc": "E84E009B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_SPACEPROPS.XML",
+   "size": 15997,
+   "crc": "5522FDCC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_SPACEUNITSCAPITAL.XML",
+   "size": 13899,
+   "crc": "F84C89A3",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_SPACEUNITSCORVETTES.XML",
+   "size": 1073,
+   "crc": "F15C9449",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_SPACEUNITSFIGHTERS.XML",
+   "size": 4740,
+   "crc": "93558876",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_SPACEUNITSFRIGATES.XML",
+   "size": 757,
+   "crc": "34D3AE8D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CIN_TRANSPORTUNITS.XML",
+   "size": 1063,
+   "crc": "09EC5116",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\COMMANDBARCOMPONENTFILES.XML",
+   "size": 127,
+   "crc": "FA4C2611",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\COMMANDBARCOMPONENTS.XML",
+   "size": 683536,
+   "crc": "6B70666E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\CONTAINERS.XML",
+   "size": 76516,
+   "crc": "DE70780B",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\CORRUPTION_SPECIAL_UNITS.XML",
+   "size": 84016,
+   "crc": "59117A1B",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\DATAMINERXMLFILES.XML",
+   "size": 9484,
+   "crc": "E16CDD81",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\DECALS.XML",
+   "size": 107,
+   "crc": "A9003098",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\DIFFICULTYADJUSTMENTS.XML",
+   "size": 2996,
+   "crc": "9AFE036B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\DYNAMICTRACKFX.XML",
+   "size": 5340,
+   "crc": "67C96A74",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\ENUM\\AIGOALCATEGORYTYPE.XML",
+   "size": 678,
+   "crc": "E6E68489",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\ENUM\\GAMEOBJECTCATEGORYTYPE.XML",
+   "size": 2173,
+   "crc": "18C2025D",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\ENUM\\GAMEOBJECTPROPERTIESTYPE.XML",
+   "size": 719,
+   "crc": "60949476",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\ENUM\\MOVEMENTCLASSTYPE.XML",
+   "size": 644,
+   "crc": "A676FA5E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\ENUM\\OBJECTWEATHERCATEGORYTYPE.XML",
+   "size": 334,
+   "crc": "E3EDE1BC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\ENUM\\PERCEPTIONTOKENTYPE.XML",
+   "size": 12625,
+   "crc": "3F78AD66",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\ENUM\\SURFACEFXTRIGGERTYPE.XML",
+   "size": 1767,
+   "crc": "6C8D9569",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\EXPANSION_FACTIONS.XML",
+   "size": 60547,
+   "crc": "E59ED31C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\FACTIONFILES.XML",
+   "size": 127,
+   "crc": "A6B2B96A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\FACTIONS.XML",
+   "size": 124969,
+   "crc": "FB96C845",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GAMECONSTANTS.XML",
+   "size": 298649,
+   "crc": "FF71A53E",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GAMEOBJECTFILES.XML",
+   "size": 5544,
+   "crc": "E16B0ABA",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GENERICHEROUNITS.XML",
+   "size": 49196,
+   "crc": "38396570",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GRAPHICDETAILS.XML",
+   "size": 11684,
+   "crc": "4137B3BB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDBASES.XML",
+   "size": 22329,
+   "crc": "1C031436",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDBUILDABLESEMPIRE.XML",
+   "size": 11767,
+   "crc": "32E1D29A",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GROUNDBUILDABLESHUTTS.XML",
+   "size": 9360,
+   "crc": "E24B6A0B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDBUILDABLESPIRATE.XML",
+   "size": 10506,
+   "crc": "0919633D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDBUILDABLESREBEL.XML",
+   "size": 14089,
+   "crc": "892AEB56",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GROUNDBUILDABLESSKIRMISH.XML",
+   "size": 285662,
+   "crc": "E172AA7B",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GROUNDBUILDABLESUNDERWORLD.XML",
+   "size": 10444,
+   "crc": "F5AE2E47",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GROUNDCOMPANIESEMPIRE.XML",
+   "size": 33225,
+   "crc": "7585FE2F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDCOMPANIESINDIGENOUS.XML",
+   "size": 62471,
+   "crc": "3E2AAF77",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDCOMPANIESREBEL.XML",
+   "size": 32989,
+   "crc": "5FC921B8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDINDIGENOUS.XML",
+   "size": 217473,
+   "crc": "57768B4B",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GROUNDINFANTRY.XML",
+   "size": 105365,
+   "crc": "44614863",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GROUNDSTRUCTURES.XML",
+   "size": 160564,
+   "crc": "BC3C97F0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDSTRUCTURES_UNDERWORLD.XML",
+   "size": 5319,
+   "crc": "BED896C1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDTURRETS.XML",
+   "size": 88930,
+   "crc": "0A7A916F",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\GROUNDUNITTARGETINGPRIORITIES.XML",
+   "size": 11203,
+   "crc": "404840DD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GROUNDVEHICLES.XML",
+   "size": 148509,
+   "crc": "278AC2FB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\GUIDIALOGS.XML",
+   "size": 164089,
+   "crc": "8EAB335F",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\HARDPOINTDATAFILES.XML",
+   "size": 172,
+   "crc": "8F7E2BA7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\HARDPOINTS.XML",
+   "size": 328376,
+   "crc": "A9A70642",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\HARDPOINTS_UNDERWORLD.XML",
+   "size": 255294,
+   "crc": "EBCD51F8",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\HEROCLASH.XML",
+   "size": 20468,
+   "crc": "54CA47D9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\HEROCOMPANIES.XML",
+   "size": 62802,
+   "crc": "6F907B05",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\HUTT_FACTION_UNITS.XML",
+   "size": 105311,
+   "crc": "87CF4199",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\HYPERGAMECONSTANTS.XML",
+   "size": 4615,
+   "crc": "73D56351",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_ACCUMULATE_CREDITS.XML",
+   "size": 1118,
+   "crc": "E7585FB6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_BUILD_GENERIC_STRUCTURE.XML",
+   "size": 1508,
+   "crc": "7319F231",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_BUILD_UNITS.XML",
+   "size": 1001,
+   "crc": "871BBA1B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_CONFRONT_BOBA.XML",
+   "size": 1281,
+   "crc": "6549F844",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_CONQUER_PLANET.XML",
+   "size": 1030,
+   "crc": "F8CCB876",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_EMPIRE_OPPRESSION.XML",
+   "size": 1836,
+   "crc": "E4457483",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_FLEET_RESCUE.XML",
+   "size": 1398,
+   "crc": "3A418222",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_HUNT_CAPITAL_SHIPS.XML",
+   "size": 1105,
+   "crc": "D28A8DE7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_IMPERIAL_TRAITOR.XML",
+   "size": 1316,
+   "crc": "85552A45",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_INDIGENOUS_REVOLT.XML",
+   "size": 2817,
+   "crc": "A4D27867",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_PIRATE_AMBUSH.XML",
+   "size": 2622,
+   "crc": "7666B311",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_PIRATE_DEFECTION.XML",
+   "size": 1788,
+   "crc": "5C433E4C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_PIRATE_ENLIGHTENMENT.XML",
+   "size": 6912,
+   "crc": "DA00417C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_PIRATE_ENLIGHTENMENT_B.XML",
+   "size": 2045,
+   "crc": "21A7B1F6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_PIRATE_RESCUE.XML",
+   "size": 1354,
+   "crc": "9BF1940F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_REBEL_REVOLT.XML",
+   "size": 1459,
+   "crc": "E7E55FE7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_REBEL_SABOTAGE.XML",
+   "size": 1278,
+   "crc": "8B3939CF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_REBEL_SMUGGLER.XML",
+   "size": 1310,
+   "crc": "F3622E10",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_REFUGEE_ESCORT.XML",
+   "size": 2539,
+   "crc": "455D72AE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_SCOUT.XML",
+   "size": 2276,
+   "crc": "7F3939BB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_SHOW_OF_STRENGTH.XML",
+   "size": 1443,
+   "crc": "175945ED",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_UPGRADE_SPACE_STATION.XML",
+   "size": 1473,
+   "crc": "81CA8781",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_VADER_FAVOR.XML",
+   "size": 2025,
+   "crc": "2357FCF0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\INTERVENTION_WINDFALL.XML",
+   "size": 464,
+   "crc": "FD618CCD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\LANDBOMBINGRUNUNITS.XML",
+   "size": 15005,
+   "crc": "9CD50070",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\LANDPRIMARYSKYDOMES.XML",
+   "size": 14381,
+   "crc": "FF65BF93",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\LANDSECONDARYSKYDOMES.XML",
+   "size": 4832,
+   "crc": "B7A2A14E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\LENSFLARES.XML",
+   "size": 3484,
+   "crc": "564163A1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\LIGHTNINGEFFECTTYPES.XML",
+   "size": 10864,
+   "crc": "5E6342C1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\LIGHTSOURCES.XML",
+   "size": 907,
+   "crc": "31D4ADFB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MARKERS.XML",
+   "size": 64279,
+   "crc": "19EC30E7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MINOR_HEROES_EXPANSION.XML",
+   "size": 23923,
+   "crc": "AADA8412",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MISCOBJECTS.XML",
+   "size": 9115,
+   "crc": "C3487709",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\MOBILE_DEFENSE_UNITS.XML",
+   "size": 18839,
+   "crc": "3BC01CEB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MOUSEPOINTERFILES.XML",
+   "size": 104,
+   "crc": "58789C68",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MOUSEPOINTERS.XML",
+   "size": 14141,
+   "crc": "0EC48B28",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MOVEMENTCLASSTYPEDEFS.XML",
+   "size": 1194,
+   "crc": "5D0E6F8F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MOVIES.XML",
+   "size": 16644,
+   "crc": "E080B12C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MOV_CINEMATICS.XML",
+   "size": 12177,
+   "crc": "399F66BE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MULTIPLAYER_STRUCTURE_MARKERS.XML",
+   "size": 30928,
+   "crc": "C84D535F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\MUSICEVENTS.XML",
+   "size": 23644,
+   "crc": "A6DD6B32",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\NAMEDHEROUNITS.XML",
+   "size": 155841,
+   "crc": "45D96EB3",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PARTICLES.XML",
+   "size": 66753,
+   "crc": "89E0CDE9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PLANETS.XML",
+   "size": 334189,
+   "crc": "8284A156",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\PROJECTILES.XML",
+   "size": 241227,
+   "crc": "E1B8A6BA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_DESERT.XML",
+   "size": 27428,
+   "crc": "1E310BC4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_FELUCIA.XML",
+   "size": 33798,
+   "crc": "4EF019E7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_FOREST.XML",
+   "size": 24526,
+   "crc": "881C825C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_GENERIC.XML",
+   "size": 50231,
+   "crc": "665A1B90",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_SNOW.XML",
+   "size": 13032,
+   "crc": "4F04355E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_STORY.XML",
+   "size": 158821,
+   "crc": "9A12B5E5",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\PROPS_SWAMP.XML",
+   "size": 10617,
+   "crc": "BB321B64",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_TEMPERATE.XML",
+   "size": 39198,
+   "crc": "AF72D020",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_URBAN.XML",
+   "size": 32552,
+   "crc": "19329F8F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\PROPS_VOLCANIC.XML",
+   "size": 6897,
+   "crc": "E5F44C8F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\RADARMAP.XML",
+   "size": 8412,
+   "crc": "F0BBF6D0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_EVENT_CONTRIVED_ATTACK.XML",
+   "size": 2543,
+   "crc": "83372BB6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_EVENT_FLEET_RAMPAGE.XML",
+   "size": 1508,
+   "crc": "C12F61A3",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_EVENT_HERO_GATHERING.XML",
+   "size": 1922,
+   "crc": "F215C0F9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_EVENT_PLANET_OWNERSHIP_FLIP.XML",
+   "size": 560,
+   "crc": "21F05AFD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_EVENT_TRAP_GALACTIC.XML",
+   "size": 1602,
+   "crc": "171178F0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_EVENT_TRAP_LAND.XML",
+   "size": 332,
+   "crc": "D0B11C2C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_LAND_CAPTURE.XML",
+   "size": 4294,
+   "crc": "786DA598",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_LAND_DESTROY.XML",
+   "size": 4254,
+   "crc": "BECF79EC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SANDBOX_STANDARD.XML",
+   "size": 3925,
+   "crc": "41853AA2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SCRIPTMARKERS.XML",
+   "size": 1328,
+   "crc": "DEED9587",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SECONDARYSTRUCTURES.XML",
+   "size": 54788,
+   "crc": "B1645CB1",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTFILES.XML",
+   "size": 1201,
+   "crc": "BE3195B9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTPRESETS.XML",
+   "size": 15599,
+   "crc": "AAA7FD64",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTS.XML",
+   "size": 642,
+   "crc": "8072BECA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSAMBIENT.XML",
+   "size": 8969,
+   "crc": "D87542F2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSBUILDINGS.XML",
+   "size": 5642,
+   "crc": "036D0C2E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSCINEMATICS.XML",
+   "size": 3614,
+   "crc": "7865FDBB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSDEATHS.XML",
+   "size": 17218,
+   "crc": "92D60906",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSENGINES.XML",
+   "size": 30043,
+   "crc": "13ECB715",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSFOOTSTEPS.XML",
+   "size": 5684,
+   "crc": "CAFC05E1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSGUI.XML",
+   "size": 23161,
+   "crc": "39399979",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSHUD.XML",
+   "size": 195887,
+   "crc": "37E12D21",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITS.XML",
+   "size": 401,
+   "crc": "4078F517",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITSCAPITAL.XML",
+   "size": 41121,
+   "crc": "EB0AE62B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITSCORVETTES.XML",
+   "size": 65436,
+   "crc": "DF0BE985",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITSEMPIREHEROES.XML",
+   "size": 67695,
+   "crc": "EB7B83B8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITSFIGHTERS.XML",
+   "size": 84560,
+   "crc": "7025C50B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITSFRIGATES.XML",
+   "size": 73236,
+   "crc": "D7A3E3F0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITSGROUND.XML",
+   "size": 233332,
+   "crc": "79B53C39",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITSREBELHEROES.XML",
+   "size": 89083,
+   "crc": "08529AAF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSUNITSTRANSPORTS.XML",
+   "size": 17892,
+   "crc": "0A934038",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTSWEAPONS.XML",
+   "size": 18764,
+   "crc": "C1C89915",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTS_EXP.XML",
+   "size": 26560,
+   "crc": "8FC2846D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTS_EXP_HUD.XML",
+   "size": 114163,
+   "crc": "4AD135E2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTS_EXP_UNITSGROUND.XML",
+   "size": 138850,
+   "crc": "DC958D97",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTS_EXP_UNITSHEROES.XML",
+   "size": 130485,
+   "crc": "7928A589",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SFXEVENTS_EXP_UNITSSPACE.XML",
+   "size": 147505,
+   "crc": "49D64289",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SHADOWBLOBMATERIALS.XML",
+   "size": 7061,
+   "crc": "2376A58C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPACEBUILDABLESSKIRMISH.XML",
+   "size": 74160,
+   "crc": "B3FA4E63",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\SPACEPRIMARYSKYDOMES.XML",
+   "size": 5380,
+   "crc": "AB639CB1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPACEPROPS.XML",
+   "size": 168683,
+   "crc": "15C8F7C0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPACEPROPS_UNDERWORLD.XML",
+   "size": 61618,
+   "crc": "394DB79C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPACESECONDARYSKYDOMES.XML",
+   "size": 7811,
+   "crc": "B277C21A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPACEUNITSCAPITAL.XML",
+   "size": 25770,
+   "crc": "670747F2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPACEUNITSCORVETTES.XML",
+   "size": 73976,
+   "crc": "2E2088A0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPACEUNITSFIGHTERS.XML",
+   "size": 73101,
+   "crc": "8FA6A2DA",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\SPACEUNITSFRIGATES.XML",
+   "size": 82492,
+   "crc": "28208421",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\SPACEUNITSSUPERS.XML",
+   "size": 10551,
+   "crc": "89DD6C07",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPACEUNITTARGETINGPRIORITIES.XML",
+   "size": 8762,
+   "crc": "2E6E3F1F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPECIALEFFECTS.XML",
+   "size": 771,
+   "crc": "E38663CF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPECIALSTRUCTURES.XML",
+   "size": 316660,
+   "crc": "807897F3",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SPECIALSTRUCTURES_UNDERWORLD.XML",
+   "size": 38579,
+   "crc": "7626E4F9",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\SPEECHEVENTS.XML",
+   "size": 489963,
+   "crc": "C990BB90",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SQUADRONS.XML",
+   "size": 55872,
+   "crc": "CAFF2F48",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\STARBASES.XML",
+   "size": 132207,
+   "crc": "CB7D9CC1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STARBASES_UNDERWORLD.XML",
+   "size": 62691,
+   "crc": "C0A07627",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STARWARS3DTEXTCRAWL.XML",
+   "size": 11335,
+   "crc": "16643410",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_EMPIRE_ACT_I.XML",
+   "size": 77987,
+   "crc": "76F7F139",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_EMPIRE_ACT_II.XML",
+   "size": 53239,
+   "crc": "94AB9908",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_EMPIRE_ACT_III.XML",
+   "size": 49692,
+   "crc": "C597C55A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_EMPIRE_ACT_IV.XML",
+   "size": 81308,
+   "crc": "761B995B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_EMPIRE_CHEATS.XML",
+   "size": 17440,
+   "crc": "00E39FA8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_REBEL_ACT_I.XML",
+   "size": 46550,
+   "crc": "62BB5450",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_REBEL_ACT_II.XML",
+   "size": 76761,
+   "crc": "A0D10C51",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_REBEL_ACT_III.XML",
+   "size": 108910,
+   "crc": "D714569F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_REBEL_ACT_IV.XML",
+   "size": 37479,
+   "crc": "42610C02",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_REBEL_ACT_I_EMPIRESIDE.XML",
+   "size": 274,
+   "crc": "0E3AA91F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_REBEL_CHEATS.XML",
+   "size": 9847,
+   "crc": "34990AF1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD.XML",
+   "size": 345265,
+   "crc": "1C0CF201",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD_DEMO.XML",
+   "size": 214543,
+   "crc": "CE639EE6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD_E3_DEMO.XML",
+   "size": 277,
+   "crc": "E5851A22",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD_EXEC_DEMO.XML",
+   "size": 1307,
+   "crc": "3A3CD24E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD_EXEC_DEMO_1.XML",
+   "size": 3834,
+   "crc": "1BA35D5A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD_FOCUS_DEMO.XML",
+   "size": 69983,
+   "crc": "4F89BEF5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD_TEST_CAMPAIGN.XML",
+   "size": 3092,
+   "crc": "C7FE9BD9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD_TEST_CAMPAIGN_MISSION_12.XML",
+   "size": 1892,
+   "crc": "8C60BFB4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_CAMPAIGN_UNDERWORLD_TUTORIAL.XML",
+   "size": 197901,
+   "crc": "3BEF48EC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_DEMO_DEATHSTAR_CONTROLLER.XML",
+   "size": 957,
+   "crc": "188851BB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_DEMO_FELUCIA_CONTROLLER.XML",
+   "size": 483,
+   "crc": "3E76E600",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTIII_M08_SPACE.XML",
+   "size": 10623,
+   "crc": "1FCF7E9C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTIII_M09_LAND.XML",
+   "size": 11426,
+   "crc": "2EF881DD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTII_M04_SPACE.XML",
+   "size": 12828,
+   "crc": "FEC88F27",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTII_M05_LAND.XML",
+   "size": 23987,
+   "crc": "27912296",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTII_M06_LAND.XML",
+   "size": 36712,
+   "crc": "CCA69995",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTIV_M10_SPACE.XML",
+   "size": 71696,
+   "crc": "C55EEC18",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTIV_M11_SPACE.XML",
+   "size": 6461,
+   "crc": "04D033D8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTIV_M12_SPACE.XML",
+   "size": 366,
+   "crc": "9D3255D9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTI_M02_FONDOR_LAND.XML",
+   "size": 6962,
+   "crc": "DCBC79F0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTI_M02_LAND.XML",
+   "size": 51803,
+   "crc": "FC96AAF7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTI_M03_SPACE.XML",
+   "size": 50414,
+   "crc": "C4A6D961",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTI_M04_LAND.XML",
+   "size": 1778,
+   "crc": "F188DAB0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_ACTI_M04_SPACE.XML",
+   "size": 12654,
+   "crc": "ED9DCCE2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_AI_HEROES.XML",
+   "size": 2837,
+   "crc": "97D4A4D1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_AI_HEROES_EXP.XML",
+   "size": 3327,
+   "crc": "62E5ECFD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EMPIRE_AI_HEROES_TUTORIAL.XML",
+   "size": 2872,
+   "crc": "50FA5AAD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EXEC_DEMO_ENDOR_LAND_TACTICAL.XML",
+   "size": 3174,
+   "crc": "57D80C93",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_EXEC_DEMO_NABOO_LAND_TACTICAL.XML",
+   "size": 3216,
+   "crc": "2F4AC03B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_FOCUS_DEMO_FELUCIA_LAND_TACTICAL.XML",
+   "size": 48647,
+   "crc": "2AA78AE1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_FOCUS_DEMO_FELUCIA_SPACE_TACTICAL.XML",
+   "size": 10370,
+   "crc": "3478857A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_CAMPAIGN_EMPIRE.XML",
+   "size": 616,
+   "crc": "72820C94",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_CAMPAIGN_REBEL.XML",
+   "size": 830,
+   "crc": "35FF83BC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_CAMPAIGN_REBEL_CAMPAIGN_EMPIRESIDE.XML",
+   "size": 147,
+   "crc": "3640F28C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_CAMPAIGN_UNDERWORLD.XML",
+   "size": 212,
+   "crc": "AA6A38BA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_DEMO_DEATHSTAR.XML",
+   "size": 189,
+   "crc": "196058BB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_DEMO_FELUCIA.XML",
+   "size": 185,
+   "crc": "EA293D8E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTIII_M08_SPACE.XML",
+   "size": 195,
+   "crc": "58217E09",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTIII_M09_LAND.XML",
+   "size": 193,
+   "crc": "72376B33",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTII_M04_SPACE.XML",
+   "size": 185,
+   "crc": "A20765C9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTII_M05_LAND.XML",
+   "size": 184,
+   "crc": "5B11C82D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTII_M06_LAND.XML",
+   "size": 184,
+   "crc": "B026732E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTIV_M10_SPACE.XML",
+   "size": 193,
+   "crc": "999106F6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTIV_M11_SPACE.XML",
+   "size": 193,
+   "crc": "581FD936",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTIV_M12_SPACE.XML",
+   "size": 188,
+   "crc": "C1FDBF37",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTI_M01_LAND.XML",
+   "size": 189,
+   "crc": "4BA41D3A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTI_M02_FONDOR_LAND.XML",
+   "size": 198,
+   "crc": "7E676237",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTI_M02_LAND.XML",
+   "size": 179,
+   "crc": "A093A639",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTI_M03_SPACE.XML",
+   "size": 186,
+   "crc": "B82633DA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTI_M04_LAND.XML",
+   "size": 184,
+   "crc": "AD8DD67E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_ACTI_M04_SPACE.XML",
+   "size": 186,
+   "crc": "911D2659",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_AI_HEROES.XML",
+   "size": 133,
+   "crc": "A9C6A3DF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_AI_HEROES_EXP.XML",
+   "size": 137,
+   "crc": "3EE0E033",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EMPIRE_AI_HEROES_TUTORIAL.XML",
+   "size": 142,
+   "crc": "5CCC631C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EXEC_DEMO_ENDOR_LAND_TACTICAL.XML",
+   "size": 206,
+   "crc": "5906262D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_EXEC_DEMO_NABOO_LAND_TACTICAL.XML",
+   "size": 206,
+   "crc": "2194EA85",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_FOCUS_DEMO_FELUCIA_LAND_TACTICAL.XML",
+   "size": 212,
+   "crc": "EB676A0E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_FOCUS_DEMO_FELUCIA_SPACE_TACTICAL.XML",
+   "size": 211,
+   "crc": "040CBA73",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTIII_M07A_SPACE.XML",
+   "size": 185,
+   "crc": "1BCC6E78",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTIII_M07_SPACE.XML",
+   "size": 183,
+   "crc": "6CB54720",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTIII_M08_SPACE.XML",
+   "size": 183,
+   "crc": "FF4DB3E6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTIII_M09_LAND.XML",
+   "size": 181,
+   "crc": "79DCE5D7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTIII_M09_SPACE.XML",
+   "size": 187,
+   "crc": "3EC36C26",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTIII_M10_LAND.XML",
+   "size": 181,
+   "crc": "444711DD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTII_M04_SPACE.XML",
+   "size": 181,
+   "crc": "A9ECEB2D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTII_M06_LAND.XML",
+   "size": 179,
+   "crc": "8077B6E1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTI_M01_SPACE.XML",
+   "size": 184,
+   "crc": "D01B4FD4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTI_M02_LAND.XML",
+   "size": 182,
+   "crc": "44A980D6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_ACTI_M03_LAND.XML",
+   "size": 182,
+   "crc": "AB6BEBE8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_AI_HEROES.XML",
+   "size": 132,
+   "crc": "CFD5C8F7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_AI_HEROES_EXP.XML",
+   "size": 136,
+   "crc": "DADAC6DC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_AI_HEROES_TUTORIAL.XML",
+   "size": 141,
+   "crc": "60FF955E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_REBEL_STEVE_TEST.XML",
+   "size": 127,
+   "crc": "CE7819AA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_10A_EMPIRE.XML",
+   "size": 1513,
+   "crc": "B37CBAE1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_10A_REBEL.XML",
+   "size": 1666,
+   "crc": "AA545D82",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_10B_EMPIRE.XML",
+   "size": 1513,
+   "crc": "C4E26811",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_10B_REBEL.XML",
+   "size": 1666,
+   "crc": "33B63B83",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_12U_EMPIRE.XML",
+   "size": 156,
+   "crc": "DC3ED929",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_12U_REBEL.XML",
+   "size": 155,
+   "crc": "58407454",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_12U_UNDERWORLD.XML",
+   "size": 160,
+   "crc": "B72E367D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_15_EMPIRE.XML",
+   "size": 1512,
+   "crc": "A81D6239",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_15_REBEL.XML",
+   "size": 1665,
+   "crc": "CA29FED7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_21U_EMPIRE.XML",
+   "size": 156,
+   "crc": "1D95903C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_21U_REBEL.XML",
+   "size": 155,
+   "crc": "9214CA6A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_21U_UNDERWORLD.XML",
+   "size": 160,
+   "crc": "0E32B09B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_25_EMPIRE.XML",
+   "size": 1512,
+   "crc": "15D70EF7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_25_REBEL.XML",
+   "size": 1665,
+   "crc": "BDB72C27",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_27_EMPIRE.XML",
+   "size": 155,
+   "crc": "F9EC9068",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_27_REBEL.XML",
+   "size": 154,
+   "crc": "E5DB95E6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_27_UNDERWORLD.XML",
+   "size": 159,
+   "crc": "13C7CCB0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_33B_EMPIRE.XML",
+   "size": 156,
+   "crc": "9846C072",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_33B_REBEL.XML",
+   "size": 155,
+   "crc": "24745C38",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_33B_UNDERWORLD.XML",
+   "size": 160,
+   "crc": "2E825056",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_35_EMPIRE.XML",
+   "size": 1512,
+   "crc": "C841D772",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_35_REBEL.XML",
+   "size": 1665,
+   "crc": "26126048",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_36U_EMPIRE.XML",
+   "size": 156,
+   "crc": "FDE97712",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_36U_REBEL.XML",
+   "size": 155,
+   "crc": "3B1AFA60",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_36U_UNDERWORLD.XML",
+   "size": 160,
+   "crc": "C1F27A31",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_44_EMPIRE.XML",
+   "size": 1512,
+   "crc": "2E979D45",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_44_REBEL.XML",
+   "size": 1665,
+   "crc": "93045607",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_50_EMPIRE.XML",
+   "size": 1512,
+   "crc": "F0077FBF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_50_REBEL.XML",
+   "size": 1665,
+   "crc": "B87869EA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_56_EMPIRE.XML",
+   "size": 155,
+   "crc": "1F3ADA5F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_56_REBEL.XML",
+   "size": 154,
+   "crc": "50CDA3A9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_56_UNDERWORLD.XML",
+   "size": 159,
+   "crc": "9D3D216A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_60_EMPIRE.XML",
+   "size": 1512,
+   "crc": "4DCD1371",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_60_REBEL.XML",
+   "size": 1672,
+   "crc": "CFE6BB1A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_DEMO_REBEL.XML",
+   "size": 151,
+   "crc": "B7FD8672",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_SANDBOX_FOCUSDEMO_EMPIRE.XML",
+   "size": 1529,
+   "crc": "7E8D46DD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_I.XML",
+   "size": 119,
+   "crc": "41F251A2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_II.XML",
+   "size": 120,
+   "crc": "F341D664",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_III.XML",
+   "size": 124,
+   "crc": "81F40266",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_IV.XML",
+   "size": 180,
+   "crc": "11F1D637",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_M01_LAND.XML",
+   "size": 176,
+   "crc": "A9361B5F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_M03_SPACE.XML",
+   "size": 178,
+   "crc": "851C340B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_M05_LAND.XML",
+   "size": 176,
+   "crc": "A0DDBB25",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_M06_LAND.XML",
+   "size": 173,
+   "crc": "4BEA0026",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_M07_SPACE.XML",
+   "size": 175,
+   "crc": "35C54789",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_V.XML",
+   "size": 122,
+   "crc": "A34251F1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_VI.XML",
+   "size": 120,
+   "crc": "01C1662A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_VII.XML",
+   "size": 121,
+   "crc": "1062EE41",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_TUTORIAL_ZERO.XML",
+   "size": 122,
+   "crc": "BC4D8DDA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UM00_CIN_TEST.XML",
+   "size": 171,
+   "crc": "00AD1E18",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UM03_DARK_ALLY.XML",
+   "size": 185,
+   "crc": "20F3D58C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_AETENII_PIRACY.XML",
+   "size": 195,
+   "crc": "30E7CFD1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_AI_HEROES.XML",
+   "size": 137,
+   "crc": "E561D540",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_ALZOCIII_INTIMIDATION.XML",
+   "size": 209,
+   "crc": "760C584B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_ANAXES_INTIMIDATION.XML",
+   "size": 205,
+   "crc": "EBEBDAB7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_BESPIN_PIRACY.XML",
+   "size": 193,
+   "crc": "3F49DFA1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_BESPIN_PIRACY_STORY.XML",
+   "size": 205,
+   "crc": "0474E12C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_BESTINE_KIDNAPPING.XML",
+   "size": 203,
+   "crc": "087281D0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_BOTHAWUI_INTIMIDATION.XML",
+   "size": 209,
+   "crc": "7D24827E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_BYSS_KIDNAPPING.XML",
+   "size": 197,
+   "crc": "2B4AC708",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_CARIDA_KIDNAPPING.XML",
+   "size": 201,
+   "crc": "E97373EE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_CORELLIA_PIRACY.XML",
+   "size": 197,
+   "crc": "F3E565C2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_CORULAG_PIRACY.XML",
+   "size": 195,
+   "crc": "42B0497E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_DANTOOINE_INTIMIDATION.XML",
+   "size": 211,
+   "crc": "DB6E021A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_DEMO.XML",
+   "size": 196,
+   "crc": "810D4E33",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_E3_DEMO.XML",
+   "size": 140,
+   "crc": "45F564F6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_EXEC_DEMO.XML",
+   "size": 206,
+   "crc": "68D52E1E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_EXEC_DEMO_1.XML",
+   "size": 210,
+   "crc": "1513ECD0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_FOCUS_DEMO.XML",
+   "size": 208,
+   "crc": "24B006FD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_FONDOR_PIRACY.XML",
+   "size": 193,
+   "crc": "D67763D6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_HONOGHR_INTIMIDATION.XML",
+   "size": 207,
+   "crc": "62DABB73",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_HONOGHR_INTIMIDATION_STORY.XML",
+   "size": 219,
+   "crc": "FCA17E2C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_KESSEL_PIRACY.XML",
+   "size": 193,
+   "crc": "541F59C3",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_KUAT_KIDNAPPING.XML",
+   "size": 197,
+   "crc": "D764D210",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M01A_LAND.XML",
+   "size": 164,
+   "crc": "80686AD0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M01_LAND.XML",
+   "size": 193,
+   "crc": "0A35DA67",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M02_SPACE.XML",
+   "size": 198,
+   "crc": "6C335094",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M03_LAND.XML",
+   "size": 193,
+   "crc": "0EC00A5A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M04_LAND.XML",
+   "size": 196,
+   "crc": "EC1C1123",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M06_LAND.XML",
+   "size": 189,
+   "crc": "E8E9C11E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M07_LAND.XML",
+   "size": 189,
+   "crc": "072BAA20",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M08_SPACE.XML",
+   "size": 159,
+   "crc": "8E9C0810",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M09_SPACE.XML",
+   "size": 191,
+   "crc": "4F12D7D0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M11_LAND.XML",
+   "size": 190,
+   "crc": "CBBB05A7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_M12_SPACE.XML",
+   "size": 192,
+   "crc": "F7961CFB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_MANDALORE_PIRACY.XML",
+   "size": 199,
+   "crc": "5982C618",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_MANDALORE_PIRACY_PROLOGUE.XML",
+   "size": 217,
+   "crc": "539FFE4C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_MANDALORE_PIRACY_STORY.XML",
+   "size": 211,
+   "crc": "B95788F7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_MONCALAMARI_PIRACY.XML",
+   "size": 203,
+   "crc": "4B28641C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_MUUNILINST_KIDNAPPING.XML",
+   "size": 209,
+   "crc": "FB8F1F7A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_NABOO_INTIMIDATION.XML",
+   "size": 203,
+   "crc": "9C6DFC2A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_NALHUTTA_KIDNAPPING.XML",
+   "size": 205,
+   "crc": "5B2A4745",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_SALEUCAMI_INTIMIDATION.XML",
+   "size": 211,
+   "crc": "C15E03CE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_TARIS_INTIMIDATION.XML",
+   "size": 203,
+   "crc": "EDC9DCCF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_TEST_CAMPAIGN.XML",
+   "size": 214,
+   "crc": "BAF466B2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_TEST_CAMPAIGN_MISSION_12.XML",
+   "size": 236,
+   "crc": "B85CA73E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_THYFERRA_KIDNAPPING.XML",
+   "size": 205,
+   "crc": "7C29FD2F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_TUTORIAL.XML",
+   "size": 204,
+   "crc": "BAF12E5F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNDERWORLD_UTAPAU_KIDNAPPING.XML",
+   "size": 201,
+   "crc": "3FEA783D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNIVERSAL_TRIGGERS_E.XML",
+   "size": 1515,
+   "crc": "BA06F046",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNIVERSAL_TRIGGERS_E_EXP.XML",
+   "size": 1519,
+   "crc": "DF164864",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNIVERSAL_TRIGGERS_R.XML",
+   "size": 1669,
+   "crc": "68C6BBD4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNIVERSAL_TRIGGERS_R_EXP.XML",
+   "size": 1673,
+   "crc": "17B767DC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNIVERSAL_TRIGGERS_TACTICAL.XML",
+   "size": 128,
+   "crc": "A5ED06D5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_PLOTS_UNIVERSAL_TRIGGERS_U.XML",
+   "size": 1044,
+   "crc": "DAE667C4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTIII_M07A_SPACE.XML",
+   "size": 13945,
+   "crc": "5C226EED",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTIII_M07_SPACE.XML",
+   "size": 39580,
+   "crc": "307AADCE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTIII_M08_SPACE.XML",
+   "size": 52752,
+   "crc": "A3825908",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTIII_M09_SPACE.XML",
+   "size": 44192,
+   "crc": "620C86C8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTIII_M10_LAND.XML",
+   "size": 34402,
+   "crc": "38C7FB66",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTII_M04_SPACE.XML",
+   "size": 42962,
+   "crc": "D56C0196",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTII_M06_LAND.XML",
+   "size": 32414,
+   "crc": "DC72BA2F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTIV_M11_GALACTIC.XML",
+   "size": 14727,
+   "crc": "35DAB732",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTIV_M12_GALACTIC.XML",
+   "size": 22457,
+   "crc": "49BB92E9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTI_M01_SPACE.XML",
+   "size": 43408,
+   "crc": "8C1E431A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTI_M02_LAND.XML",
+   "size": 43103,
+   "crc": "F2CF4A6D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_ACTI_M03_LAND.XML",
+   "size": 36090,
+   "crc": "1D0D2153",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_AI_HEROES.XML",
+   "size": 3103,
+   "crc": "B3A51D10",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_AI_HEROES_EXP.XML",
+   "size": 3898,
+   "crc": "6CBC0C67",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_AI_HEROES_TUTORIAL.XML",
+   "size": 3131,
+   "crc": "E0DD1C95",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_REBEL_STEVE_TEST.XML",
+   "size": 854,
+   "crc": "F06A1EA4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_10A_EMPIRE.XML",
+   "size": 3391,
+   "crc": "B39B3CDE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_10A_REBEL.XML",
+   "size": 3631,
+   "crc": "4DD26282",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_10B_EMPIRE.XML",
+   "size": 3296,
+   "crc": "C405EE2E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_10B_REBEL.XML",
+   "size": 3592,
+   "crc": "D4300483",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_12U_EMPIRE.XML",
+   "size": 3624,
+   "crc": "DCD95F16",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_12U_REBEL.XML",
+   "size": 4190,
+   "crc": "BFC64B54",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_12U_UNDERWORLD.XML",
+   "size": 1790,
+   "crc": "EBE1DC93",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_15_EMPIRE.XML",
+   "size": 3308,
+   "crc": "4F9B5D39",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_15_REBEL.XML",
+   "size": 3596,
+   "crc": "F43BF9D9",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_21U_EMPIRE.XML",
+   "size": 3633,
+   "crc": "1D721603",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_21U_REBEL.XML",
+   "size": 4199,
+   "crc": "7592F56A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_21U_UNDERWORLD.XML",
+   "size": 1802,
+   "crc": "52FD5A75",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_25_EMPIRE.XML",
+   "size": 3295,
+   "crc": "F25131F7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_25_REBEL.XML",
+   "size": 3586,
+   "crc": "83A52B29",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_27_EMPIRE.XML",
+   "size": 3611,
+   "crc": "1E6AAF68",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_27_REBEL.XML",
+   "size": 4170,
+   "crc": "DBC992E8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_27_UNDERWORLD.XML",
+   "size": 1782,
+   "crc": "6F47260B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_33B_EMPIRE.XML",
+   "size": 3595,
+   "crc": "98A1464D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_33B_REBEL.XML",
+   "size": 4165,
+   "crc": "C3F26338",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_33B_UNDERWORLD.XML",
+   "size": 1762,
+   "crc": "724DBAB8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_35_EMPIRE.XML",
+   "size": 3293,
+   "crc": "2FC7E872",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_35_REBEL.XML",
+   "size": 3583,
+   "crc": "18006746",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_36U_EMPIRE.XML",
+   "size": 3632,
+   "crc": "FD0EF12D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_36U_REBEL.XML",
+   "size": 4201,
+   "crc": "DC9CC560",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_36U_UNDERWORLD.XML",
+   "size": 1800,
+   "crc": "9D3D90DF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_44_EMPIRE.XML",
+   "size": 3297,
+   "crc": "C911A245",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_44_REBEL.XML",
+   "size": 3590,
+   "crc": "AD165109",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_50_EMPIRE.XML",
+   "size": 3296,
+   "crc": "178140BF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_50_REBEL.XML",
+   "size": 3591,
+   "crc": "866A6EE4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_56_EMPIRE.XML",
+   "size": 3626,
+   "crc": "F8BCE55F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_56_REBEL.XML",
+   "size": 4190,
+   "crc": "6EDFA4A7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_56_UNDERWORLD.XML",
+   "size": 1797,
+   "crc": "E1BDCBD1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_60_EMPIRE.XML",
+   "size": 3306,
+   "crc": "AA4B2C71",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_60_REBEL.XML",
+   "size": 3605,
+   "crc": "F1F4BC14",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_DEMO_REBEL.XML",
+   "size": 2009,
+   "crc": "B71A004D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_SANDBOX_FOCUSDEMO_EMPIRE.XML",
+   "size": 27334,
+   "crc": "FEAFCF16",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TEST_PLOTS_TUTORIAL.XML",
+   "size": 131,
+   "crc": "521BF9DB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TEST_TUTORIAL_GALACTIC.XML",
+   "size": 12311,
+   "crc": "C3920D54",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_I.XML",
+   "size": 17264,
+   "crc": "E7C02C08",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_II.XML",
+   "size": 162436,
+   "crc": "C5E4AEEF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_III.XML",
+   "size": 17272,
+   "crc": "FBA8FDB6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_IV.XML",
+   "size": 99731,
+   "crc": "2754AEBC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_M01_LAND.XML",
+   "size": 81958,
+   "crc": "4EB0245F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_M03_SPACE.XML",
+   "size": 61142,
+   "crc": "85FBB234",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_M05_LAND.XML",
+   "size": 39846,
+   "crc": "475B8425",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_M06_LAND.XML",
+   "size": 30776,
+   "crc": "AC6C3F26",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_M07_SPACE.XML",
+   "size": 25565,
+   "crc": "3522C1B6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_SPACE_1.XML",
+   "size": 14842,
+   "crc": "DE8EF3A5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_V.XML",
+   "size": 22424,
+   "crc": "05702C5B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_VI.XML",
+   "size": 4528,
+   "crc": "37641EA1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_VII.XML",
+   "size": 5218,
+   "crc": "6A3E1191",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_TUTORIAL_ZERO.XML",
+   "size": 22474,
+   "crc": "3AE403F1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UM00_CIN_TEST.XML",
+   "size": 922,
+   "crc": "86049033",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_AETENII_PIRACY.XML",
+   "size": 11835,
+   "crc": "3CD1F660",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_AI_HEROES.XML",
+   "size": 1596,
+   "crc": "B964D98E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_ALZOCIII_INTIMIDATION.XML",
+   "size": 15700,
+   "crc": "B7CCB8A4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_ANAXES_INTIMIDATION.XML",
+   "size": 6921,
+   "crc": "C73C9A16",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_BESPIN_PIRACY.XML",
+   "size": 14747,
+   "crc": "BF6B566A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_BESPIN_PIRACY_STORY.XML",
+   "size": 16704,
+   "crc": "28A3A18D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_BESTINE_KIDNAPPING.XML",
+   "size": 10006,
+   "crc": "06ACAB6E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_BOTHAWUI_INTIMIDATION.XML",
+   "size": 9576,
+   "crc": "BCE46291",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_BYSS_KIDNAPPING.XML",
+   "size": 7229,
+   "crc": "9720722B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_CARIDA_KIDNAPPING.XML",
+   "size": 10294,
+   "crc": "ECD1FFE6",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_CORELLIA_PIRACY.XML",
+   "size": 6870,
+   "crc": "4F8FD0E1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_CORULAG_PIRACY.XML",
+   "size": 4575,
+   "crc": "4E8670CF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_DANTOOINE_INTIMIDATION.XML",
+   "size": 7063,
+   "crc": "EB1A3D13",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_FONDOR_PIRACY.XML",
+   "size": 7356,
+   "crc": "5655EA1D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_HONOGHR_INTIMIDATION.XML",
+   "size": 6527,
+   "crc": "C327FF4D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_HONOGHR_INTIMIDATION_STORY.XML",
+   "size": 8748,
+   "crc": "C3141F55",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_KESSEL_PIRACY.XML",
+   "size": 7433,
+   "crc": "D43DD008",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_KUAT_KIDNAPPING.XML",
+   "size": 6341,
+   "crc": "6B0E6733",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M01A_LAND.XML",
+   "size": 2971,
+   "crc": "DC6D661E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M01_LAND.XML",
+   "size": 78464,
+   "crc": "BC5310DC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M02_SPACE.XML",
+   "size": 51849,
+   "crc": "30365C5A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M03_LAND.XML",
+   "size": 13141,
+   "crc": "B8A6C0E1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M04_LAND.XML",
+   "size": 73731,
+   "crc": "5A7ADB98",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M06_LAND.XML",
+   "size": 78045,
+   "crc": "5E8F0BA5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M07_LAND.XML",
+   "size": 70831,
+   "crc": "B14D609B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M08_SPACE.XML",
+   "size": 5614,
+   "crc": "D29904DE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M09_SPACE.XML",
+   "size": 20395,
+   "crc": "1317DB1E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M11_LAND.XML",
+   "size": 70358,
+   "crc": "7DDDCF1C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_M12_SPACE.XML",
+   "size": 59799,
+   "crc": "AB931035",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_MANDALORE_PIRACY.XML",
+   "size": 5627,
+   "crc": "FB59DDDF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_MANDALORE_PIRACY_PROLOGUE.XML",
+   "size": 25738,
+   "crc": "53F85AEA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_MANDALORE_PIRACY_STORY.XML",
+   "size": 6129,
+   "crc": "8923B7FE",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_MONCALAMARI_PIRACY.XML",
+   "size": 6837,
+   "crc": "45F64EA2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_MUUNILINST_KIDNAPPING.XML",
+   "size": 6458,
+   "crc": "3A4FFF95",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_NABOO_INTIMIDATION.XML",
+   "size": 6831,
+   "crc": "92B3D694",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_NALHUTTA_KIDNAPPING.XML",
+   "size": 7258,
+   "crc": "77FD07E4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_SALEUCAMI_INTIMIDATION.XML",
+   "size": 8477,
+   "crc": "F12A3CC7",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_TARIS_INTIMIDATION.XML",
+   "size": 6783,
+   "crc": "E317F671",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_THYFERRA_KIDNAPPING.XML",
+   "size": 11854,
+   "crc": "50FEBD8E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNDERWORLD_UTAPAU_KIDNAPPING.XML",
+   "size": 10176,
+   "crc": "3A48F435",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNIVERSAL_TRIGGERS_E.XML",
+   "size": 3121,
+   "crc": "E603FC88",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNIVERSAL_TRIGGERS_E_EXP.XML",
+   "size": 3635,
+   "crc": "5F34C1AF",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNIVERSAL_TRIGGERS_R.XML",
+   "size": 3414,
+   "crc": "34C3B71A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNIVERSAL_TRIGGERS_R_EXP.XML",
+   "size": 4209,
+   "crc": "9795EE17",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\STORY_UNIVERSAL_TRIGGERS_U.XML",
+   "size": 1900,
+   "crc": "86E36B0A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\SURFACEFX.XML",
+   "size": 22667,
+   "crc": "C76B8205",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TACTICALCAMERAS.XML",
+   "size": 7326,
+   "crc": "258C348D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TARGETINGPRIORITYSETFILES.XML",
+   "size": 237,
+   "crc": "1C006DB5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TECHBUILDING.XML",
+   "size": 6591,
+   "crc": "1F578A84",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TERRAINDECALFX.XML",
+   "size": 6558,
+   "crc": "A99300CC",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TRADEROUTEFILES.XML",
+   "size": 100,
+   "crc": "F101EBA8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TRADEROUTELINES.XML",
+   "size": 1713,
+   "crc": "F3B0701F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TRADEROUTES.XML",
+   "size": 111460,
+   "crc": "E1CFDCC0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TRANSPORTUNITS.XML",
+   "size": 36248,
+   "crc": "9CE0318E",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\TURRETTARGETINGPRIORITIES.XML",
+   "size": 1382,
+   "crc": "F59A95C1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNDERWORLD_TRANSPORTUNITS.XML",
+   "size": 24112,
+   "crc": "CC18C217",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNIQUEUNITS.XML",
+   "size": 134902,
+   "crc": "67F37410",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\UNITABILITYTYPES.XML",
+   "size": 147,
+   "crc": "564CB50F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_EMPIRE_THRAWN.XML",
+   "size": 18366,
+   "crc": "4DA923B4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_REBEL_GARGANTUAN.XML",
+   "size": 13264,
+   "crc": "134FD444",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_REBEL_LUKESKYWALKER.XML",
+   "size": 24944,
+   "crc": "53F07A68",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_REBEL_ROGUE_SQUADRON.XML",
+   "size": 17801,
+   "crc": "3826991B",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_REBEL_YODA.XML",
+   "size": 17766,
+   "crc": "DC1F69DA",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_UNDERWORLD_BOSSK.XML",
+   "size": 21181,
+   "crc": "025FABE5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_UNDERWORLD_IG88.XML",
+   "size": 24231,
+   "crc": "C330B10C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_UNDERWORLD_SILRI.XML",
+   "size": 29980,
+   "crc": "5F8198B2",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_UNDERWORLD_TYBER_ZANN.XML",
+   "size": 33268,
+   "crc": "B9D44717",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_HERO_UNDERWORLD_URAI_FEN.XML",
+   "size": 20212,
+   "crc": "9065DC2C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_EMPIRE_DARKTROOPERS.XML",
+   "size": 51481,
+   "crc": "8E96DA22",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_EMPIRE_JUGGERNAUT.XML",
+   "size": 13544,
+   "crc": "53061EB5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_EMPIRE_LANCET.XML",
+   "size": 11335,
+   "crc": "DAE9D754",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_EMPIRE_NOGHRI.XML",
+   "size": 10872,
+   "crc": "8D35F23A",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_REBEL_GALLOFREE_HTT.XML",
+   "size": 11252,
+   "crc": "23362767",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_CANDEROUS_TANK.XML",
+   "size": 18750,
+   "crc": "0801769B",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_DESTROYERDROIDS.XML",
+   "size": 11989,
+   "crc": "7E737071",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_DISRUPTORINF.XML",
+   "size": 16767,
+   "crc": "C44B3BCD",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_EWOK_BOMBER.XML",
+   "size": 13822,
+   "crc": "78D196E1",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_F9TZ_TRANSPORT.XML",
+   "size": 13525,
+   "crc": "3B97B930",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_MAL.XML",
+   "size": 12830,
+   "crc": "6ACD207F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_MERCENARYINF.XML",
+   "size": 20491,
+   "crc": "99A1F333",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_NIGHTSISTER.XML",
+   "size": 25093,
+   "crc": "D3F9C69B",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_PULSETANK.XML",
+   "size": 13956,
+   "crc": "E9B020C5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_SCAVENGERDROIDS.XML",
+   "size": 9485,
+   "crc": "61338B25",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_LAND_UNDERWORLD_VORNSKR.XML",
+   "size": 10755,
+   "crc": "CDE047E5",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_EMPIRE_EXECUTOR.XML",
+   "size": 17447,
+   "crc": "1FB5377E",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_EMPIRE_TIE_DEFENDER.XML",
+   "size": 16133,
+   "crc": "93C980B4",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_EMPIRE_TIE_INTERCEPTOR.XML",
+   "size": 11471,
+   "crc": "FA13BC0C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_EMPIRE_TIE_PHANTOM.XML",
+   "size": 13125,
+   "crc": "B5F1B147",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_NEUTRAL_ECLIPSE.XML",
+   "size": 8438,
+   "crc": "81D46DD8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_REBEL_BWING.XML",
+   "size": 11234,
+   "crc": "E251338C",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_REBEL_MC30_FRIGATE.XML",
+   "size": 10505,
+   "crc": "1BA788C0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_UNDERWORLD_BUZZ_DROIDS.XML",
+   "size": 2938,
+   "crc": "A48AEA8D",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_UNDERWORLD_CRUSADER_GUNSHIP.XML",
+   "size": 12030,
+   "crc": "CAF7E4DD",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_UNDERWORLD_INTERCEPTOR4.XML",
+   "size": 9584,
+   "crc": "EEEC2362",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_UNDERWORLD_KADALBE_BATTLESHIP.XML",
+   "size": 12209,
+   "crc": "0426CE60",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_UNDERWORLD_KRAYT_DESTROYER.XML",
+   "size": 10070,
+   "crc": "DAC6FF84",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_UNDERWORLD_SKIPRAY.XML",
+   "size": 10999,
+   "crc": "1BF944CB",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_UNDERWORLD_STARVIPER.XML",
+   "size": 20162,
+   "crc": "E3CF461F",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UNITS_SPACE_UNDERWORLD_VENGEANCE.XML",
+   "size": 11289,
+   "crc": "4EF2C0E8",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UPGRADEOBJECTS.XML",
+   "size": 244427,
+   "crc": "296C22D0",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\UPGRADEOBJECTS_UNDERWORLD.XML",
+   "size": 152742,
+   "crc": "45A9A288",
+   "from": "Patch2",
+   "shadows": [
+    "config"
+   ]
+  },
+  {
+   "name": "DATA\\XML\\WEATHERAUDIO.XML",
+   "size": 8086,
+   "crc": "6F3F7F14",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\WEATHERMODIFIERS.XML",
+   "size": 11139,
+   "crc": "209F1336",
+   "from": "config",
+   "shadows": []
+  },
+  {
+   "name": "DATA\\XML\\WEATHERSCENARIOS.XML",
+   "size": 12097,
+   "crc": "757E0BE1",
+   "from": "config",
+   "shadows": []
+  }
+ ]
+}

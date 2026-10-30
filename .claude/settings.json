@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "ArtifactData",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/roadmap-store/roadmap_store.py\" hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

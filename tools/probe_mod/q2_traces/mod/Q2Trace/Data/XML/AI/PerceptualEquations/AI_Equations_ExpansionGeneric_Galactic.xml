@@ -1,0 +1,37 @@
+<?xml version="1.0" ?>
+
+<Equations>
+
+	<Should_Remove_Corruption>
+		50.0
+		*
+		Variable_Target.IsCorrupted
+		*
+		(Variable_Target.TimeSinceCorruptionChange > 180.0)
+	</Should_Remove_Corruption>
+
+	<Roaming_Empire_Fleet_Target>
+		Variable_Target.IsHumanControlled
+		*
+		Variable_Target.EnemyForce.SpaceTotal
+	</Roaming_Empire_Fleet_Target>
+
+	<!-- Q2 probe (tools/probe_mod/q2_traces): read-only equations evaluated from Q2_Trace_Galactic.lua.
+	     Nothing in the game references them. -->
+	<Q2_Space_Total>
+		Variable_Target.EnemyForce.SpaceTotalUnnormalized
+	</Q2_Space_Total>
+
+	<Q2_Ground_Total>
+		Variable_Target.EnemyForce.GroundTotalUnnormalized
+	</Q2_Ground_Total>
+
+	<Q2_Has_Space_Force>
+		Variable_Target.EnemyForce.HasSpaceForce
+	</Q2_Has_Space_Force>
+
+	<Q2_Target_Player>
+		Variable_Target.TargetPlayerID
+	</Q2_Target_Player>
+
+</Equations>
