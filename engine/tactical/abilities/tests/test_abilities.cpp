@@ -896,6 +896,10 @@ struct ShieldWorld : World {
         p.category = cat;
         p.max_flight_distance = 3000.0f;
         p.max_rate_of_turn = turn_rate;
+        if (cat == ProjectileCategory::Rocket) {  // refixf t01: spline flight (S9_DEATH_CLONE_SHIELDS.md §2.4)
+            p.rocket_curve_distance = 50.0f;
+            p.rocket_curve_offset = 10.0f;
+        }
         cd.projectiles = {p};
         UnitDesc sh;
         sh.name = "Shooter";
@@ -929,6 +933,7 @@ struct ShieldWorld : World {
     // change of one projectile between two consecutive ticks (degrees); changed: some heading changed at all (bits).
     bool seen_inside = false, changed = false;
     float max_turn = 0.0f;
+    float closest = 1e9f;  // refixf t01: smallest distance of a projectile from the emitter centre
     void run(int ticks) {
         std::map<uint32_t, Vec3> prev;
         for (int i = 0; i < ticks; ++i) {
@@ -938,6 +943,7 @@ struct ShieldWorld : World {
                 const ProjectileView v = sys->projectile(k);
                 if (!v.alive) continue;
                 if (dot(v.pos, v.pos) < 290.0f * 290.0f) seen_inside = true;
+                closest = std::min(closest, dmath::sqrt(dot(v.pos, v.pos)));
                 cur[v.serial] = v.dir;
                 const auto it = prev.find(v.serial);
                 if (it == prev.end()) continue;
@@ -986,17 +992,29 @@ void test_missile_shield() {
         w.run(150);
         CHECK(w.sys->health(2) < w.sys->max_health(2));
     }
-    {  // rockets (0x4cfc40): a passive emitter (radius overridden by ability 32) re-plans the path on the crossing
+    {  // rockets (0x4cfc40): a passive emitter (radius overridden by ability 32) re-plans the path on the crossing.
+       // refixf t01: the new spline bends around a sphere through B (2k = 60 ahead of the crossing point, §2.4.7) - the
+       // rockets, aimed at the emitter itself, pass it at about 240 instead of hitting it. A 0 turn rate keeps the
+       // facing (only the facing turns; the position comes from the spline).
         ShieldWorld w(ProjectileCategory::Rocket, true, 0.0f);
         CHECK_EQ(w.sys->emitter_radius(2), 300.0f);
         w.run(150);
-        CHECK(w.changed);  // the re-plan does not use the turn rate
+        CHECK(w.seen_inside && !w.changed);
+        CHECK(w.closest > 200.0f);
         CHECK_EQ(w.sys->health(2), w.sys->max_health(2));
     }
     {  // rockets: the active ability radius qualifies too (same rules as 0x4c6e30, §2.4), not only the passive one
         ShieldWorld w(ProjectileCategory::Rocket, false, 0.0f);
         w.run(150);
+        CHECK(w.closest > 200.0f);
         CHECK_EQ(w.sys->health(2), w.sys->max_health(2));
+    }
+    {  // without the shield the same rockets fly into the emitter
+        ShieldWorld w(ProjectileCategory::Rocket, false, 0.0f);
+        const ObjectId e[] = {2};
+        CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
+        w.run(150);
+        CHECK(w.sys->health(2) < w.sys->max_health(2));
     }
 }
 

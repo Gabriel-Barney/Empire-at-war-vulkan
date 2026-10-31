@@ -2024,6 +2024,615 @@ void test_weather_save() {
 // FoC data (ALAMO_FOC_DATA)
 // ================================================================================================
 
+// ================================================================================================
+// refixf t01: ROCKET / MPTL_ROCKET spline flight (docs/re/S9_DEATH_CLONE_SHIELDS.md §2.4)
+// ================================================================================================
+
+float dist3(Vec3 a, Vec3 b) {
+    const Vec3 d = a - b;
+    return dmath::sqrt(dot(d, d));
+}
+
+struct RocketKit {
+    RocketParams rp;
+    RocketTerrain tr;
+    SimRng rng{4242u};
+    RocketContext ctx(Vec3 launch) {
+        RocketContext c;
+        c.params = &rp;
+        c.terrain = &tr;
+        c.rng = &rng;
+        c.launch = launch;
+        return c;
+    }
+};
+
+RocketParams rocket_params(float cd, float co, float sd, float mfd, bool on_terrain, bool explode) {
+    RocketParams p;
+    p.curve_distance = cd;
+    p.curve_offset = co;
+    p.straight_distance = sd;
+    p.max_flight_distance = mfd;
+    p.target_on_terrain = on_terrain;
+    p.explode_at_target = explode;
+    return p;
+}
+
+void test_rocket_spline() {
+    // §2.4.3: never built -> no sample; fewer than 3 control points -> Build changes nothing.
+    RocketSpline s;
+    Vec3 out;
+    CHECK(!s.sample(0.0f, out));
+    s.append({0, 0, 0});
+    s.append({10, 0, 0});
+    s.build(10);
+    CHECK(!s.built() && s.total() == 0.0f && s.polyline().empty());
+    s.append({20, 0, 0});
+    s.append({30, 0, 0});
+    s.build(10);
+    // Evenly spaced collinear points: every K is 10, so each segment is the straight line (c = d = 0), length 10.
+    CHECK(s.built() && s.segments().size() == 3u);
+    for (const RocketSpline::Segment& sg : s.segments()) {
+        CHECK_NEAR(sg.length, 10.0, 1e-4);
+        CHECK_NEAR(sg.k[1], 10.0, 1e-4);
+        CHECK_NEAR(sg.k[2], 0.0, 1e-4);
+        CHECK_NEAR(sg.k[3], 0.0, 1e-4);
+    }
+    CHECK_NEAR(s.total(), 30.0, 1e-4);
+    uint32_t seg = 99;
+    CHECK(s.sample(15.0f, out, &seg) && seg == 1u);
+    CHECK_NEAR(out.x, 15.0, 1e-4);
+    CHECK(out.y == 0.0f && out.z == 0.0f);
+    CHECK(!s.sample(s.total(), out) && s.sample(29.9f, out));  // s >= total: past the end
+    CHECK(s.sample(-2.0f, out, &seg) && seg == 0u);           // negative s: segment 0, u < 0
+    CHECK_NEAR(out.x, -2.0, 1e-4);
+    CHECK(s.polyline().size() == 4u);  // entry 0 + ceil(10 / 10) per segment
+    s.build(3);
+    CHECK(s.polyline().size() == 13u);  // entry 0 + ceil(10 / 3) = 4 per segment
+    CHECK_NEAR(s.polyline()[5].x, 12.5, 1e-4);
+    // Erasing down to 2 points and building again keeps the old coefficients (the truncation quirk of §2.4.7).
+    const float total = s.total();
+    s.erase_from(2);
+    s.build(10);
+    CHECK(s.count() == 2u && s.segments().size() == 3u && s.total() == total);
+
+    // Curved data: a = y[i] exactly, interpolation at the next point, C1 joins, natural ends (y'' = 0), arc lengths.
+    RocketSpline c;
+    const Vec3 pts[] = {{0, 0, 0}, {50, 20, 5}, {100, -10, 10}, {160, 0, 0}, {200, 40, -5}};
+    for (const Vec3& p : pts) c.append(p);
+    c.build(10);
+    CHECK(c.segments().size() == 4u);
+    for (uint32_t i = 0; i < 4; ++i) {
+        CHECK(same(c.eval(i, 0.0f), pts[i]));
+        CHECK(dist3(c.eval(i, 1.0f), pts[i + 1]) < 1e-3f);
+        CHECK(c.segments()[i].length >= dist3(pts[i], pts[i + 1]) - 1e-3f);
+        if (i < 3) {
+            const auto& a = c.segments()[i].k;
+            const auto& b = c.segments()[i + 1].k;
+            for (size_t ax = 0; ax < 3; ++ax) CHECK_NEAR(a[ax * 4 + 1] + 2.0f * a[ax * 4 + 2] + 3.0f * a[ax * 4 + 3], b[ax * 4 + 1], 1e-2);
+        }
+    }
+    const auto& k0 = c.segments()[0].k;
+    const auto& k3 = c.segments()[3].k;
+    for (size_t ax = 0; ax < 3; ++ax) {
+        CHECK_NEAR(k0[ax * 4 + 2], 0.0, 1e-3);
+        CHECK_NEAR(2.0 * k3[ax * 4 + 2] + 6.0 * k3[ax * 4 + 3], 0.0, 1e-2);
+    }
+    float cum = 0.0f;
+    for (const RocketSpline::Segment& sg : c.segments()) cum = cum + sg.length;
+    CHECK(cum == c.total());
+    CHECK(c.sample(c.segments()[0].length, out, &seg) && seg == 1u && dist3(out, pts[1]) < 1e-3f);
+    double fine = 0.0;
+    Vec3 prev = c.eval(1, 0.0f);
+    for (int j = 1; j <= 4000; ++j) {
+        const Vec3 q = c.eval(1, static_cast<float>(j) / 4000.0f);
+        fine += static_cast<double>(dist3(q, prev));
+        prev = q;
+    }
+    CHECK_NEAR(c.segments()[1].length, fine, 2e-2);
+}
+
+void test_rocket_leg() {
+    RocketKit k;
+    k.rp = rocket_params(50.0f, 10.0f, 0.0f, 1000.0f, false, false);
+    const Vec3 from{0, 0, 0}, to{300, 0, 0};
+    {  // mode 0: n = ceil(300 / (1.1 x 50)) = 6 points; every point but the last jittered (2 draws each, theta then a)
+        RocketSpline p;
+        p.append(from);
+        const uint64_t d0 = k.rng.draws();
+        rocket_leg(p, from, to, 1.0f, 1.1f, 0, false, true, k.ctx(from));
+        CHECK(p.count() == 7u && k.rng.draws() - d0 == 10u);
+        for (size_t i = 1; i < p.count(); ++i) {
+            const Vec3 q = p.points()[i];
+            CHECK_NEAR(q.x, 50.0 * static_cast<double>(i), 1e-3);  // jitter is perpendicular to the leg
+            CHECK(dmath::sqrt(q.y * q.y + q.z * q.z) <= 10.0f + 1e-4f);  // |offset| = a <= amp x CO
+        }
+        CHECK(dist3(p.points().back(), to) < 1e-3f);
+        // the draw order: replay the first point with a copy of the stream
+        SimRng r(4242u);
+        const float theta = r.range_float(0.0f, 6.2831855f);
+        const float a = r.range_float(0.0f, 10.0f);
+        const Vec3 q1 = p.points()[1];
+        CHECK_NEAR(dmath::sqrt(q1.y * q1.y + q1.z * q1.z), a, 1e-4);
+        (void)theta;
+    }
+    {  // amp 0 still draws twice per jittered point; the points stay on the line
+        RocketSpline p;
+        p.append(from);
+        const uint64_t d0 = k.rng.draws();
+        rocket_leg(p, from, to, 0.0f, 1.1f, 0, false, true, k.ctx(from));
+        CHECK(p.count() == 7u && k.rng.draws() - d0 == 10u);
+        for (const Vec3& q : p.points()) CHECK(q.y == 0.0f && q.z == 0.0f);
+    }
+    {  // CD = 0: nothing (retail's (int) of an infinite count is negative), no draws
+        RocketKit z;
+        z.rp = rocket_params(0.0f, 10.0f, 0.0f, 1000.0f, false, false);
+        RocketSpline p;
+        p.append(from);
+        rocket_leg(p, from, to, 1.0f, 1.1f, 0, false, true, z.ctx(from));
+        CHECK(p.count() == 1u && z.rng.draws() == 0u);
+    }
+    {  // mode 1: box |x| <= 200 - (10 + 1); x = 200, 250, 300 are outside (not appended, no draws); the height clamp
+        RocketKit m;
+        m.rp = k.rp;
+        m.tr.height = [](float x, float) { return 20.0f + 0.1f * x; };
+        m.tr.has_box = true;
+        m.tr.hx = 200.0f;
+        m.tr.hy = 1000.0f;
+        const Vec3 l{0, 0, 25};  // launch altitude 5 above the ground
+        RocketSpline p;
+        p.append(l);
+        rocket_leg(p, l, Vec3{300, 0, 25}, 1.0f, 1.1f, 1, true, true, m.ctx(l));
+        CHECK(p.count() == 4u && m.rng.draws() == 6u);
+        float zp = 25.0f;
+        for (size_t i = 1; i < p.count(); ++i) {
+            const Vec3 q = p.points()[i];
+            CHECK(q.z >= 20.0f + 0.1f * q.x + 5.0f - 1e-4f);
+            CHECK(q.z >= 0.7f * zp - 1e-4f);
+            zp = q.z;
+        }
+        // whole leg on the map: the plain last point is not jittered and lands on the ground (groundEnd)
+        m.tr.hx = 5000.0f;
+        RocketSpline g;
+        g.append(l);
+        const uint64_t d0 = m.rng.draws();
+        rocket_leg(g, l, Vec3{300, 0, 25}, 1.0f, 1.1f, 1, true, true, m.ctx(l));
+        CHECK(g.count() == 7u && m.rng.draws() - d0 == 10u);
+        CHECK_NEAR(g.points().back().x, 300.0, 1e-3);
+        CHECK(g.points().back().z == m.tr.h(g.points().back().x, g.points().back().y));
+        // plainEnd off (initial leg 1): the last point is jittered and clamped too
+        RocketSpline j;
+        j.append(l);
+        const uint64_t d1 = m.rng.draws();
+        rocket_leg(j, l, Vec3{300, 0, 25}, 1.0f, 1.1f, 1, false, false, m.ctx(l));
+        CHECK(j.count() == 7u && m.rng.draws() - d1 == 12u);
+    }
+}
+
+void test_rocket_plans() {
+    {  // §2.4.10 step 4 example: Proj_Dark_Trooper_Missile (CD 50, CO 10, MFD 330), land, target 300 away on the map:
+       // leg 1 (150) 3 points x 2 draws (last included), leg 2 (~150) 3 points -> 4, leg 3 (~30) 1 point -> 0: 10 draws
+        RocketKit k;
+        k.rp = rocket_params(50.0f, 10.0f, 0.0f, 330.0f, false, false);
+        k.tr.has_box = true;
+        k.tr.hx = k.tr.hy = 5000.0f;
+        RocketSpline path;
+        float budget = 0.0f;
+        const Vec3 P{0, 0, 0}, T{300, 0, 0};
+        rocket_plan_land(path, P, T, Vec3{1, 0, 0}, budget, k.ctx(P));
+        CHECK(k.rng.draws() == 10u);
+        CHECK(budget == 330.0f);  // no Explode flag: the budget stays MFD
+        CHECK(path.built() && same(path.points().front(), P));
+        for (const Vec3& q : path.points()) CHECK(q.z >= 0.0f);  // never below the launch altitude above flat ground
+        // Leg 2 ends at T; the truncation at MFD erases the start of S's segment - here T itself - so the final path
+        // passes within the jitter of T instead of through it.
+        float near_t = 1e9f;
+        for (int j = 0; j <= 400; ++j) {
+            Vec3 o;
+            if (path.sample(path.total() * static_cast<float>(j) / 400.0f, o)) near_t = std::min(near_t, dist3(o, T));
+        }
+        CHECK(near_t < 12.0f);
+        CHECK(path.total() < 330.0f * 1.05f);  // cut at MFD
+    }
+    {  // Explode_When_Reached_Target_Radius on land: budget = the launch -> target length (Build(10) after leg 2)
+        RocketKit k;
+        k.rp = rocket_params(50.0f, 10.0f, 0.0f, 330.0f, false, true);
+        RocketSpline path;
+        float budget = 0.0f;
+        rocket_plan_land(path, Vec3{0, 0, 0}, Vec3{300, 0, 0}, Vec3{1, 0, 0}, budget, k.ctx(Vec3{0, 0, 0}));
+        CHECK(budget >= 300.0f && budget < 330.0f);
+        CHECK(k.rng.draws() == 10u);
+    }
+    {  // Target_Point_On_Terrain: no leg 3; the path ends on the ground at the target (flat ground at 7 here)
+        RocketKit k;
+        k.rp = rocket_params(50.0f, 10.0f, 0.0f, 330.0f, true, false);
+        k.tr.height = [](float, float) { return 7.0f; };
+        RocketSpline path;
+        float budget = 0.0f;
+        rocket_plan_land(path, Vec3{0, 0, 7}, Vec3{300, 0, 7}, Vec3{1, 0, 0}, budget, k.ctx(Vec3{0, 0, 7}));
+        CHECK(k.rng.draws() == 10u);
+        CHECK(path.points().back().z == 7.0f && dist3(path.points().back(), Vec3{300, 0, 7}) < 1e-2f);
+    }
+    {  // space, Explode flag: no leg 1 without Projectile_Rocket_Straight_Distance, leg 2 ceil(300 / 55) = 6 points ->
+       // 10 draws, no extension, the budget stays MFD
+        RocketKit k;
+        k.rp = rocket_params(50.0f, 10.0f, 0.0f, 330.0f, false, true);
+        RocketSpline path;
+        float budget = 0.0f;
+        rocket_plan_space(path, Vec3{0, 0, 0}, Vec3{300, 0, 0}, Vec3{1, 0, 0}, budget, k.ctx(Vec3{0, 0, 0}));
+        CHECK(k.rng.draws() == 10u && budget == 330.0f && path.count() == 7u);
+        CHECK(dist3(path.points().back(), Vec3{300, 0, 0}) < 1e-3f);
+    }
+    {  // space leg 1 = min(dh / 2, Straight) along the facing; positive pitch is nose DOWN, so an upward facing climbs
+        RocketKit k;
+        k.rp = rocket_params(50.0f, 10.0f, 100.0f, 330.0f, false, true);
+        RocketSpline path;
+        float budget = 0.0f;
+        const float h = 0.70710677f;
+        rocket_plan_space(path, Vec3{0, 0, 0}, Vec3{300, 0, 0}, Vec3{h, 0, h}, budget, k.ctx(Vec3{0, 0, 0}));
+        // leg 1: ceil(100 / 55) = 2 points (2 draws), its end K = P + f x 100 is not jittered
+        CHECK(dist3(path.points()[2], Vec3{70.710678f, 0, 70.710678f}) < 1e-2f);
+        const uint64_t leg2 = 2u * (static_cast<uint64_t>(std::ceil(dist3(path.points()[2], Vec3{300, 0, 0}) / 55.0f)) - 1u);
+        CHECK(k.rng.draws() == 2u + leg2);
+    }
+    {  // space without the flag: the extension leg runs on along the last polyline step (draws even, path past T)
+        RocketKit k;
+        k.rp = rocket_params(50.0f, 10.0f, 0.0f, 400.0f, false, false);
+        RocketSpline path;
+        float budget = 0.0f;
+        rocket_plan_space(path, Vec3{0, 0, 0}, Vec3{300, 0, 0}, Vec3{1, 0, 0}, budget, k.ctx(Vec3{0, 0, 0}));
+        CHECK(k.rng.draws() > 10u && k.rng.draws() % 2u == 0u);
+        CHECK(path.total() > 300.0f && path.total() < 400.0f * 1.05f);
+    }
+}
+
+void test_rocket_replan() {
+    RocketKit k;
+    k.rp = rocket_params(50.0f, 10.0f, 0.0f, 1000.0f, true, true);
+    const Vec3 E{0, 0, 0};
+    const Vec3 P{-320, 30, 0};
+    RocketSpline old;
+    for (int i = 0; i < 5; ++i) old.append(Vec3{-400.0f + 100.0f * static_cast<float>(i), 30.0f, 0.0f});
+    old.build(10);
+    const auto unchanged = [&old](const RocketSpline& q) { return q.count() == old.count() && q.total() == old.total(); };
+    {  // bail-outs: emitter behind, no move yet (D = 0), centre less than ~2k + 0.25 ahead -> nothing changes, no draws
+        RocketSpline q = old;
+        float s = 200.0f, b = 1000.0f;
+        CHECK(!rocket_replan_land(q, P, E, Vec3{-1, 0, 0}, s, b, k.ctx(P)));
+        CHECK(!rocket_replan_land(q, P, E, Vec3{0, 0, 0}, s, b, k.ctx(P)));
+        CHECK(!rocket_replan_land(q, Vec3{-30, 0, 0}, E, Vec3{1, 0, 0}, s, b, k.ctx(P)));
+        CHECK(!rocket_replan_space(q, Vec3{-50, 0, 0}, E, Vec3{1, 0, 0}, s, b, k.ctx(P)));
+        CHECK(unchanged(q) && s == 200.0f && b == 1000.0f && k.rng.draws() == 0u);
+    }
+    const float r = dmath::sqrt(280.0f * 280.0f + 30.0f * 30.0f);  // |B - E|, B = P + 2k D (land k = 20)
+    {  // land, Target_Point_On_Terrain: leg 1 is one point (CD 50 >= k) and nothing else draws; the arc lies on the
+       // sphere through B, on the side the rocket passes; the path ends 5 below the ground; s and the budget reset
+        RocketSpline q = old;
+        float s = 200.0f, b = 1000.0f;
+        CHECK(rocket_replan_land(q, P, E, Vec3{0.25f, 0, 0}, s, b, k.ctx(P)));
+        CHECK(k.rng.draws() == 0u);
+        CHECK(s == 0.0f && b == 800.0f);
+        CHECK(same(q.points()[0], P) && dist3(q.points()[1], Vec3{-300, 30, 0}) < 1e-3f);  // A = P + k D
+        CHECK(q.count() >= 5u);
+        for (size_t i = 2; i + 1 < q.count(); ++i) {
+            CHECK_NEAR(dist3(q.points()[i], E), r, 1e-2);
+            CHECK(q.points()[i].y > 0.0f);
+        }
+        CHECK(q.points().back().z == -5.0f);
+        CHECK(q.built());
+        Vec3 o;
+        CHECK(q.sample(0.0f, o) && dist3(o, P) < 1e-3f);
+    }
+    {  // land without it: leg 2 of length (MFD - s0) - 20 in CD steps, 2 draws per point but the last; truncated at
+       // MFD - s0 and dropped to the ground (- 5) outside the sphere
+        k.rp.target_on_terrain = false;
+        RocketSpline q = old;
+        float s = 100.0f, b = 1000.0f;
+        const uint64_t d0 = k.rng.draws();
+        CHECK(rocket_replan_land(q, P, E, Vec3{1, 0, 0}, s, b, k.ctx(P)));
+        CHECK(k.rng.draws() - d0 == 2u * (18u - 1u));  // n = ceil(880 / 50) = 18
+        CHECK(q.points().back().z == -5.0f);
+        CHECK(s == 0.0f && b == 900.0f);
+        CHECK(q.total() < 900.0f * 1.05f);
+    }
+    {  // space (k = 30): leg 2 draws 2 x (n - 1) even with CO = 0; no ground drop; arc on the sphere
+        k.rp = rocket_params(50.0f, 0.0f, 0.0f, 1000.0f, false, false);
+        RocketSpline q = old;
+        float s = 100.0f, b = 1000.0f;
+        const uint64_t d0 = k.rng.draws();
+        CHECK(rocket_replan_space(q, P, E, Vec3{1, 0, 0}, s, b, k.ctx(P)));
+        CHECK(k.rng.draws() - d0 == 2u * (18u - 1u));  // n = ceil(870 / 50) = 18
+        CHECK(s == 0.0f && b == 1000.0f);  // no Explode flag: budget untouched
+        const float rs = dmath::sqrt(260.0f * 260.0f + 30.0f * 30.0f);
+        bool on_sphere = false;
+        for (const Vec3& v : q.points()) {
+            CHECK(v.z == 0.0f);
+            on_sphere = on_sphere || std::fabs(static_cast<double>(dist3(v, E) - rs)) < 1e-2;
+        }
+        CHECK(on_sphere);
+    }
+    {  // [port] degenerate: aimed exactly at the centre (V = -U) -> the arc passes on the horizontal side, finite points
+        k.rp = rocket_params(50.0f, 10.0f, 0.0f, 1000.0f, true, false);
+        RocketSpline q = old;
+        float s = 100.0f, b = 1000.0f;
+        CHECK(rocket_replan_land(q, Vec3{-320, 0, 0}, E, Vec3{1, 0, 0}, s, b, k.ctx(P)));
+        for (const Vec3& v : q.points()) CHECK(is_finite(v.x) && is_finite(v.y) && is_finite(v.z));
+        CHECK(q.count() >= 5u && q.points()[2].y > 100.0f);
+        CHECK_NEAR(dist3(q.points()[2], E), 280.0, 1e-2);
+    }
+    {  // the subdivision: a dot rounding above 1 is clamped (retail NaN never stops); a half circle at thr gives
+       // 2^d - 1 midpoints, all on the unit sphere
+        std::vector<Vec3> out;
+        const Vec3 a{1.0000001f, 0.0f, 0.0f};  // a . a = 1.0000002
+        rocket_arc_subdivide(a, a, 1000.0f, 0.0f, out);
+        CHECK(out.empty());
+        rocket_arc_subdivide(Vec3{1, 0, 0}, Vec3{0, 1, 0}, 100.0f, 50.0f, out);  // 90 deg x 100 = 157 -> 3 mids (<= 39)
+        CHECK(out.size() == 3u);
+        for (const Vec3& v : out) CHECK_NEAR(dot(v, v), 1.0, 1e-5);
+        out.clear();
+        rocket_arc_subdivide(Vec3{1, 0, 0}, Vec3{0, 1, 0}, 1.0f, -1.0f, out);  // never converges: capped depth
+        CHECK(out.size() == (1u << kRocketArcMaxDepth) - 1u);
+    }
+}
+
+// A combat world with one rocket shooter (player 0) and a target (player 1), optionally a missile-shield emitter.
+struct RocketWorld {
+    World w;
+    explicit RocketWorld(GameMode mode, bool on_terrain = false, bool emitter = false, Vec3 emitter_pos = {-300, -40, 0},
+                         bool explode = false) {
+        ProjectileDesc rk;
+        rk.name = "Rocket";
+        rk.max_speed = 12.0f;
+        rk.damage = 5.0f;
+        rk.category = ProjectileCategory::Rocket;
+        rk.max_flight_distance = 1500.0f;
+        rk.rocket_curve_distance = 50.0f;
+        rk.rocket_curve_offset = 10.0f;
+        rk.rocket_straight_distance = 0.0f;
+        rk.target_point_on_terrain = on_terrain;
+        rk.explode_when_reached_target_radius = explode;
+        w.data.projectiles = {rk};
+        UnitDesc sh;
+        sh.name = "Shooter";
+        sh.tactical_health = 1e6f;
+        sh.radius = 5.0f;
+        sh.max_attack_distance = 1200.0f;
+        sh.weapon_projectile = 0;
+        sh.weapon_recharge = 1.0f;
+        const uint32_t s = push_unit(w.data, sh);
+        UnitDesc t;
+        t.name = "Target";
+        t.tactical_health = 1e6f;
+        t.radius = 20.0f;
+        const uint32_t ti = push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = mode;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        RocketTerrain tr;
+        tr.height = [](float x, float) { return 0.02f * x; };
+        tr.has_box = true;
+        tr.hx = tr.hy = 4000.0f;
+        w.sys->set_rocket_terrain(tr);
+        w.add(1, s, 0, Vec3{-800, 0, mode == GameMode::Land ? -16.0f : 0.0f});
+        w.add(2, ti, 1, Vec3{0, 0, 0});
+        w.add(3, ti, 1, emitter_pos);
+        if (emitter) {
+            w.sys->set_emitter_radius(3, 200.0f);
+            w.sys->add_emitter_entry(3);
+        }
+        w.sys->order_attack(1, 2);
+    }
+};
+
+uint64_t rocket_digest(const CombatSystem& s, const SimRng& rng) {
+    StateHasher h;
+    s.hash_projectiles(h);
+    s.hash_extended(h);
+    s.hash_units(h);
+    rng.hash(h);
+    return h.digest();
+}
+
+void test_rocket_flight_system() {
+    {  // one launch, nothing else in the world: the first flight step takes exactly the plan's draws (land example)
+        CombatData d;
+        ProjectileDesc rk;
+        rk.name = "Proj_Dark_Trooper_Missile";
+        rk.max_speed = 10.0f;
+        rk.category = ProjectileCategory::Rocket;
+        rk.max_flight_distance = 330.0f;
+        rk.rocket_curve_distance = 50.0f;
+        rk.rocket_curve_offset = 10.0f;
+        d.projectiles = {rk};
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        CombatSystem sys(d, cfg, {PlayerInfo{}, PlayerInfo{}});
+        TreeSet trees(2);
+        SimRng rng(99u);
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.projectile = 0;
+        l.from = Vec3{0, 0, 0};
+        l.point = Vec3{300, 0, 0};
+        CHECK(sys.launch_projectile(l, 1));
+        CHECK(sys.projectile(0).max_travel == 330.0f);  // MFD + 0 radius + |dz|
+        sys.tick(1, trees, rng);
+        CHECK(rng.draws() == 0u);  // spawned this frame: first stepped next tick
+        sys.tick(2, trees, rng);
+        CHECK(rng.draws() == 10u);
+        RocketView v;
+        CHECK(sys.rocket(0, v) && v.planned && v.budget == 330.0f && v.s == 10.0f);
+        Vec3 n;
+        CHECK(v.path->sample(10.0f, n) && same(sys.projectile(0).pos, n));  // the position comes from the spline
+        uint32_t frame = 3;
+        while (sys.projectile_count() > 0 && frame < 200) sys.tick(frame++, trees, rng);
+        CHECK(sys.projectile_count() == 0u && rng.draws() == 10u);  // no other draws; it expired at the travel limit
+        CHECK(sys.stats().expired == 1u);
+    }
+    {  // Explode_When_Reached_Target_Radius + Target_Point_On_Terrain (land): detonates at the launch -> target length
+        CombatData d;
+        ProjectileDesc rk;
+        rk.name = "Proj_MAL_Concussion_Missile";
+        rk.max_speed = 10.0f;
+        rk.category = ProjectileCategory::MptlRocket;
+        rk.max_flight_distance = 600.0f;
+        rk.rocket_curve_distance = 50.0f;
+        rk.rocket_curve_offset = 10.0f;
+        rk.target_point_on_terrain = true;
+        rk.explode_when_reached_target_radius = true;
+        d.projectiles = {rk};
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        CombatSystem sys(d, cfg, {PlayerInfo{}, PlayerInfo{}});
+        TreeSet trees(2);
+        SimRng rng(5u);
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.from = Vec3{0, 0, 0};
+        l.point = Vec3{300, 0, 0};
+        CHECK(sys.launch_projectile(l, 1));
+        Vec3 at;
+        bool detonated = false;
+        for (uint32_t f = 1; f < 200 && !detonated; ++f) {
+            sys.tick(f, trees, rng);
+            for (const HitEvent& e : sys.hit_events()) {
+                detonated = true;
+                at = e.position;
+            }
+        }
+        CHECK(detonated && dist3(at, Vec3{300, 0, 0}) < 15.0f);
+    }
+    {  // a shooter's rockets hit their target in both modes (path through the aim point, sweep P -> N)
+        for (GameMode m : {GameMode::Space, GameMode::Land}) {
+            RocketWorld rw(m);
+            for (int i = 0; i < 400; ++i) rw.w.tick();
+            CHECK(rw.w.sys->stats().shots > 3u && rw.w.sys->stats().hits > 0u);
+            CHECK(rw.w.sys->health(2) < rw.w.sys->max_health(2));
+        }
+    }
+    {  // missile shield (space): a crossing re-plans - that step still moves to the OLD path's N and resets s to 0 -
+       // and the rockets pass around the emitter instead of flying through it
+        RocketWorld rw(GameMode::Space, false, true);
+        uint32_t replans = 0, bad_move = 0;
+        float closest = 1e9f;
+        for (int i = 0; i < 400; ++i) {
+            std::vector<std::pair<uint32_t, Vec3>> next;  // serial -> N on the current path
+            for (size_t k = 0; k < rw.w.sys->projectile_count(); ++k) {
+                RocketView v;
+                const ProjectileView pv = rw.w.sys->projectile(k);
+                Vec3 n;
+                if (rw.w.sys->rocket(k, v) && v.planned && v.path->sample(v.s + pv.speed, n)) next.emplace_back(pv.serial, n);
+            }
+            rw.w.tick();
+            for (size_t k = 0; k < rw.w.sys->projectile_count(); ++k) {
+                RocketView v;
+                const ProjectileView pv = rw.w.sys->projectile(k);
+                if (!pv.alive || !rw.w.sys->rocket(k, v)) continue;
+                closest = std::min(closest, dist3(pv.pos, Vec3{-300, -40, 0}));
+                if (v.planned && v.s == 0.0f) {
+                    ++replans;
+                    bool found = false;
+                    for (const auto& [serial, n] : next)
+                        if (serial == pv.serial) found = same(n, pv.pos);
+                    if (!found) ++bad_move;
+                }
+            }
+        }
+        CHECK(replans > 0u && bad_move == 0u);
+        CHECK(closest > 60.0f);
+        std::printf("rockets vs missile shield (space): %u re-plans, closest approach to the emitter %.1f\n", replans,
+                    static_cast<double>(closest));
+        CHECK(rw.w.sys->health(3) == rw.w.sys->max_health(3));
+    }
+    {  // land with Target_Point_On_Terrain: the re-plan draws nothing (CD 50 >= k), so the synced stream is the same
+       // with and without the emitter; without the flag the leg-2 draws shift it
+        RocketWorld a(GameMode::Land, true, true), b(GameMode::Land, true, false);
+        RocketWorld c(GameMode::Land, false, true), d(GameMode::Land, false, false);
+        uint32_t replans = 0;
+        for (int i = 0; i < 300; ++i) {
+            a.w.tick();
+            b.w.tick();
+            c.w.tick();
+            d.w.tick();
+            for (size_t k = 0; k < a.w.sys->projectile_count(); ++k) {
+                RocketView v;
+                if (a.w.sys->rocket(k, v) && v.planned && v.s == 0.0f) ++replans;
+            }
+        }
+        CHECK(replans > 0u);
+        CHECK(a.w.rng.draws() == b.w.rng.draws());
+        CHECK(c.w.rng.draws() > d.w.rng.draws());
+    }
+    {  // worker counts: identical rocket state, hashes and draws every tick (shield re-plans included)
+        RocketWorld s(GameMode::Space, false, true), p4(GameMode::Space, false, true), p8(GameMode::Space, false, true);
+        const ParallelFor pf4 = alamo::tactical::testing::make_thread_parallel_for(4);
+        const ParallelFor pf8 = alamo::tactical::testing::make_thread_parallel_for(8);
+        uint32_t diverged = 0;
+        for (int i = 0; i < 300; ++i) {
+            s.w.tick();
+            p4.w.tick(pf4);
+            p8.w.tick(pf8);
+            const uint64_t h = rocket_digest(*s.w.sys, s.w.rng);
+            if (h != rocket_digest(*p4.w.sys, p4.w.rng) || h != rocket_digest(*p8.w.sys, p8.w.rng)) ++diverged;
+        }
+        CHECK(diverged == 0u);
+    }
+    {  // save / load mid-flight (planned paths, re-planned paths, unplanned launches): identical bytes and continuation
+        RocketWorld a(GameMode::Land, false, true);
+        uint32_t in_flight = 0;
+        for (int i = 0; i < 400 && in_flight < 2; ++i) {
+            a.w.tick();
+            in_flight = 0;
+            for (size_t k = 0; k < a.w.sys->projectile_count(); ++k) {
+                RocketView v;
+                if (a.w.sys->rocket(k, v) && v.planned) ++in_flight;
+            }
+        }
+        CHECK(in_flight >= 2u);
+        const std::vector<uint8_t> saved = combat_bytes(*a.w.sys);
+        ByteWriter rng_w;
+        a.w.rng.write(rng_w);
+        RocketWorld b(GameMode::Land, false, true);
+        ByteReader r(saved);
+        CHECK(b.w.sys->read(r));
+        ByteReader rr(rng_w.bytes());
+        CHECK(b.w.rng.read(rr));
+        b.w.frame = a.w.frame;
+        CHECK(combat_bytes(*b.w.sys) == saved);
+        CHECK(combat_digest(*a.w.sys, a.w.rng) == combat_digest(*b.w.sys, b.w.rng));
+        const ParallelFor pf4 = alamo::tactical::testing::make_thread_parallel_for(4);
+        uint32_t diverged = 0;
+        for (int i = 0; i < 300; ++i) {
+            a.w.tick();
+            b.w.tick(pf4);
+            if (combat_digest(*a.w.sys, a.w.rng) != combat_digest(*b.w.sys, b.w.rng)) ++diverged;
+        }
+        CHECK(diverged == 0u);
+        CHECK(combat_bytes(*a.w.sys) == combat_bytes(*b.w.sys));
+    }
+    {  // [port] a rocket type without curve data (the host did not read it: rocket_curve_distance < 0) flies straight
+        CombatData d;
+        ProjectileDesc rk;
+        rk.max_speed = 10.0f;
+        rk.category = ProjectileCategory::Rocket;
+        rk.max_flight_distance = 300.0f;
+        d.projectiles = {rk};
+        CombatSystem sys(d, CombatConfig{}, {PlayerInfo{}, PlayerInfo{}});
+        TreeSet trees(2);
+        SimRng rng(1u);
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.from = Vec3{0, 0, 0};
+        l.point = Vec3{200, 0, 0};
+        CHECK(sys.launch_projectile(l, 1));
+        sys.tick(1, trees, rng);
+        sys.tick(2, trees, rng);
+        RocketView v;
+        CHECK(!sys.rocket(0, v) && sys.projectile(0).pos.x == 10.0f && rng.draws() == 0u);
+    }
+}
+
 void test_foc_data() {
     const char* root = std::getenv("ALAMO_FOC_DATA");
     if (!root || !*root) {
@@ -2199,6 +2808,11 @@ int main(int argc, char** argv) {
     test_save_load();  // N1 stage 2
     test_save_rejects();
     test_weather_save();
+    test_rocket_spline();  // refixf t01
+    test_rocket_leg();
+    test_rocket_plans();
+    test_rocket_replan();
+    test_rocket_flight_system();
     test_foc_data();
     if (bench) bench_modifiers();
     if (g_fail) {

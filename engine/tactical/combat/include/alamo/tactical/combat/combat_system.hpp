@@ -75,6 +75,7 @@
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/combat/formulas.hpp"
 #include "alamo/tactical/combat/modifiers.hpp"
+#include "alamo/tactical/combat/rocket.hpp"
 #include "alamo/tactical/combat/tables.hpp"
 #include "alamo/tactical/geometry.hpp"
 #include "alamo/tactical/tree_set.hpp"
@@ -215,6 +216,16 @@ struct ProjectileDesc {
     uint8_t combat_mod = 0;                  // Projectile_Combat_Mod: ModList index + 1 (code 0x52 enum), 0 none
     float combat_mod_seconds = 0.0f, combat_mod_value = 0.0f;
     uint64_t combat_mod_mask = 0;
+    // ---- refixf t01: ROCKET / MPTL_ROCKET spline flight (S9_DEATH_CLONE_SHIELDS.md §2.4, rocket.hpp) ----
+    // The XML parses the three distances as ints (xml_field_tables: type +0x1fec / +0x1ff0 / +0x1ff4); stored as floats.
+    float rocket_straight_distance = 0.0f;  // Projectile_Rocket_Straight_Distance (space initial plan)
+    // Projectile_Rocket_Curve_Distance. [port] < 0 = not provided by the host (the default until the catalog reads it):
+    // the rocket keeps the pre-refixf straight flight. >= 0 = the spline flight (0 = retail: the path is never built and
+    // the rocket expires on its first flight step).
+    float rocket_curve_distance = -1.0f;
+    float rocket_curve_offset = 0.0f;              // Projectile_Rocket_Curve_Offset
+    bool target_point_on_terrain = false;          // Projectile_Target_Point_On_Terrain (type +0x7f)
+    bool explode_when_reached_target_radius = false;  // Explode_When_Reached_Target_Radius (type +0x7e)
 };
 
 struct InaccuracyEntry {
@@ -681,6 +692,17 @@ struct ProjectileView {
     uint32_t spawn_frame = 0;
 };
 
+// refixf t01: a spline rocket's flight state (projectile data pack fields of S9_DEATH_CLONE_SHIELDS.md §2.4.1).
+struct RocketView {
+    bool planned = false;      // +0x30 set (the initial plan ran)
+    float s = 0.0f;            // +0x38 RocketDistanceAlongSpline
+    float budget = 0.0f;       // +0x54 RocketMaxFlightDistance
+    Vec3 fire_at;              // +0x3c FireAtPosition
+    Vec3 launch;               // +0x80 launch point
+    Vec3 last_velocity;        // +0x98 LastKnownVelocity
+    const RocketSpline* path = nullptr;
+};
+
 // L1 systems: a projectile launched by a host system that is not a combat weapon (special weapons, lobbing
 // superweapons, bombardment / bombing-run shells; engine/tactical/abilities special_weapons.hpp). [port] No
 // draws: no muzzle / inaccuracy / recharge (those belong to the launching system); flies straight from `from`.
@@ -778,6 +800,12 @@ public:
     // radius for a unit target), so a point shot detonates at the point (expiry: area damage / ion stun). It is
     // first stepped on the next tick, as weapon shots. False for an unknown projectile or a dead / missing target.
     bool launch_projectile(const ProjectileLaunch& l, uint32_t frame);
+    // refixf t01: land rocket terrain (heightmap h(x, y) and its extent box, S9_DEATH_CLONE_SHIELDS.md §2.4.4 mode 1,
+    // §2.4.6 ground points). Read in the serial commit phase only. Unset [port]: flat ground at z 0, no box.
+    void set_rocket_terrain(RocketTerrain t) { rocket_terrain_ = std::move(t); }
+    const RocketTerrain& rocket_terrain() const { return rocket_terrain_; }
+    // Spline-rocket state of projectile i (serial order); false when it is not a spline rocket.
+    bool rocket(size_t i, RocketView& out) const;
     // Tactical weather (weather.hpp, L1_S4_REMAINING §3.2): accuracy modifier m per Projectile_Category; land shots'
     // inaccuracy radius / spread x (2 - m) (the ability inaccuracy override stays unscaled [M]). All 1 = no effect
     // (the default; bit-identical). [M: every owner is weather-affected.]
@@ -1104,6 +1132,22 @@ private:
         float gravity = 0.0f;
         float floor_z = 0.0f;
         float fuse = -1.0f;  // OI abilities: armed bomb lifetime override (seconds; < 0 none), hashed when set
+        uint8_t rocket = 0;  // refixf t01: spline rocket (state in rockets_, same serial); hashed in hash_extended
+    };
+    // refixf t01: spline-rocket flight state, one per Projectile with rocket != 0, serial order (S9 §2.4.1 pack fields).
+    struct Rocket {
+        uint32_t serial = 0;
+        uint8_t planned = 0;  // +0x30 non-null
+        float s = 0.0f;       // +0x38
+        float budget = 0.0f;  // +0x54
+        Vec3 fire_at;         // +0x3c
+        Vec3 launch;          // +0x80
+        Vec3 last_vel;        // +0x98
+        RocketSpline path;
+    };
+    struct RocketNext {  // phase E output per projectile: the next spline point N (sample at s + speed)
+        Vec3 n;
+        uint8_t ok = 0;
     };
     struct Repairer {  // OI abilities: hardpoint repair lists (insertion order per hardpoint)
         ObjectId unit;
@@ -1192,7 +1236,10 @@ private:
 
     // projectiles / damage
     void sweep(uint32_t pi, QueryContext& ctx);
-    void process_hit(Projectile& p, Unit& victim, float t, uint32_t frame, SimRng& rng);
+    SweepHit sweep_segment(const Projectile& p, Vec3 delta, QueryContext& ctx) const;  // ray p.pos -> p.pos + delta
+    // `segment` (rockets): the step's P -> N vector; the impact is p.pos + segment x t (else p.pos + dir x (speed x t)).
+    void process_hit(Projectile& p, Unit& victim, float t, uint32_t frame, SimRng& rng, const Vec3* segment = nullptr);
+    void expire_projectile(uint32_t i, uint32_t frame);  // 3.3 expiry: detonation at the projectile's position
     void area_damage(const Projectile& p, Vec3 center, ObjectId direct, uint32_t frame);
     void detonation_effects(const Projectile& p, Vec3 center, ObjectId direct, uint32_t frame);
     bool ion_stun_unit(Unit& v, uint32_t pdesc, uint32_t frame);
@@ -1208,7 +1255,14 @@ private:
     // S9 t05: Missile_Shield_Deflect_Test (0x4c6e30): true + the outward direction for the first qualifying emitter
     // (ascending id) whose sphere holds the projectile.
     bool shield_away(const Projectile& p, Vec3& away) const;
-    void rocket_replan(Projectile& p);  // 0x4cfc40 crossing test against every emitter
+    // [port] legacy stand-in for rockets whose type has no curve data (ProjectileDesc::rocket_curve_distance < 0).
+    void rocket_straight_replan(Projectile& p);
+    // refixf t01: one flight step of a spline rocket (0x4cfc40, §2.4.2), serial commit phase.
+    void rocket_step(uint32_t i, uint32_t frame, SimRng& rng);
+    bool spline_rocket(const ProjectileDesc& pd) const;
+    void add_rocket(const Projectile& p, Vec3 fire_at, Vec3 launch);
+    Rocket* find_rocket(uint32_t serial);
+    const Rocket* find_rocket(uint32_t serial) const;
     float projectile_turn_rate(const ProjectileDesc& pd) const;  // 0x372560
     bool has_energy_pool(const Unit& u) const { return desc_of(u).energy_capacity > 0.0f; }
     float unit_max_energy(const Unit& u) const;
@@ -1260,6 +1314,9 @@ private:
     void record_damage(const DamageRequest& r, const Unit& v, const Unit* src, int32_t hp, const DamageResult& out,
                        uint32_t frame);
     std::vector<uint32_t> emitters_;  // unit indices with emitter_radius > 0 (ascending id), phase F scratch
+    std::vector<Rocket> rockets_;          // refixf t01: spline-rocket state, serial order
+    std::vector<RocketNext> rocket_next_;  // refixf t01: phase E per-projectile scratch
+    RocketTerrain rocket_terrain_;         // refixf t01: host terrain (not saved: the host re-attaches it)
     CombatHooks* hooks_ = nullptr;
     SimRng* bound_rng_ = nullptr;
     SimRng* tick_rng_ = nullptr;
