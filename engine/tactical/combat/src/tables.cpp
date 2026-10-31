@@ -1,6 +1,7 @@
 #include "alamo/tactical/combat/tables.hpp"
 
 #include <cstdlib>
+#include <iterator>
 #include <string>
 
 #include "alamo/core/hash.hpp"
@@ -139,12 +140,25 @@ float priority_score(const PrioritySet& set, int32_t target_type, uint64_t targe
     return v;
 }
 
-float hardpoint_rank(const PrioritySet& set, uint32_t hardpoint_name_crc) {
+float hardpoint_rank(const PrioritySet& set, int32_t hardpoint_type) {
     for (size_t i = 0; i < set.hardpoint_priorities.size(); ++i)
-        if (set.hardpoint_priorities[i] == hardpoint_name_crc) return static_cast<float>(i + 1);
-    for (uint32_t c : set.hardpoint_exclusions)
-        if (c == hardpoint_name_crc) return -1.0f;
+        if (set.hardpoint_priorities[i] == hardpoint_type) return static_cast<float>(i + 1);
+    for (int32_t c : set.hardpoint_exclusions)
+        if (c == hardpoint_type) return -1.0f;
     return 1e18f;
+}
+
+int32_t hardpoint_type_value(std::string_view name) {
+    static constexpr std::string_view kNames[] = {
+        "ENGINE",          "SHIELD_GENERATOR",     "GRAVITY_WELL",  "FIGHTER_BAY",   "TRACTOR_BEAM",
+        "WEAPON_LASER",    "WEAPON_MISSILE",       "WEAPON_TORPEDO", "WEAPON_ION_CANNON", "WEAPON_MASS_DRIVER",
+        "WEAPON_SPECIAL",  "ENABLE_SPECIAL_ABILITY", "DUMMY_ART",
+    };
+    constexpr std::string_view kPrefix = "HARD_POINT_";
+    if (name.size() > kPrefix.size() && iequals(name.substr(0, kPrefix.size()), kPrefix)) name.remove_prefix(kPrefix.size());
+    for (size_t i = 0; i < std::size(kNames); ++i)
+        if (iequals(name, kNames[i])) return static_cast<int32_t>(i);
+    return -1;
 }
 
 std::vector<PrioritySet> load_priority_sets(const data::XmlNode& root, const objects::EnumRegistry& enums,
@@ -212,10 +226,16 @@ std::vector<PrioritySet> load_priority_sets(const data::XmlNode& root, const obj
                 ps.category_exclusions |= mask_of(cats, text, where);
             } else if (iequals(tag, "Property_Exclusions")) {
                 ps.property_exclusions |= mask_of(props, text, where);
-            } else if (iequals(tag, "Hard_Point_Priorities")) {
-                for (std::string_view n : tokens(text)) ps.hardpoint_priorities.push_back(name_crc(n));
-            } else if (iequals(tag, "Hard_Point_Exclusions")) {
-                for (std::string_view n : tokens(text)) ps.hardpoint_exclusions.push_back(name_crc(n));
+            } else if (iequals(tag, "Hard_Point_Priorities") || iequals(tag, "Hard_Point_Exclusions")) {
+                std::vector<int32_t>& list = iequals(tag, "Hard_Point_Priorities") ? ps.hardpoint_priorities : ps.hardpoint_exclusions;
+                for (std::string_view n : tokens(text)) {
+                    const int32_t v = hardpoint_type_value(n);
+                    if (v >= 0) {
+                        list.push_back(v);
+                    } else {
+                        warn(where + ": unknown hard point type '" + std::string(n) + "'");
+                    }
+                }
             }
         }
         out.push_back(std::move(ps));

@@ -239,7 +239,7 @@ struct WeaponDelayEntry {
 
 struct HardpointDesc {
     std::string name;
-    uint32_t name_crc = 0;  // name_crc(name): Hard_Point_Priorities key
+    uint32_t name_crc = 0;  // name_crc(name)
     HardpointKind kind = HardpointKind::DummyArt;
     float health = 0.0f;
     bool destroyable = false, targetable = false, turret = false;  // ctor defaults false [M]

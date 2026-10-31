@@ -25,6 +25,11 @@
 //     PortExtension LuaOrder AttackMove / Guard / MoveTo (Attack_Move, Guard_Target, Explore_Area: the L1
 //     object-order path), Reinforce (unit = pool key), Retreat, TacticalBuild. The same pipeline is the AI
 //     VMs' ObjectBridge pipeline (object orders of free-store / plan scripts).
+//     refixf t06 - ONE group order per task force (MOVEMENT §6.3 [H]: a task force's Attack_Move / Move_To builds one
+//     parameter block and one coordinator for all its units; AI_TACTICAL §7.3): a task-force Attack_Move / Guard_Target
+//     (and their follow re-orders) is one PortExtension LuaOrder whose payload is the 24-byte LuaOrder block (object =
+//     the first movable unit) followed by one u32 per further movable unit, task-force list order [port encoding; at
+//     most 4096 ids]. The host moves them as one formation.
 //   * Everything runs on the sim thread; the only RNG is the session's synced stream (§10 order).
 //
 // TARGET IDENTITY [port]: each AI player's target list is kept as append-only SLOTS with tombstones; the live

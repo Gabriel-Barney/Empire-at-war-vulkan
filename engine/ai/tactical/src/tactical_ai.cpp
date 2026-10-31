@@ -53,6 +53,7 @@ constexpr int32_t kSlotBits = 20;                    // AITarget id = (player <<
 constexpr int32_t kSlotMask = (1 << kSlotBits) - 1;
 constexpr uint32_t kNoWireObject = 0x3FFFFFu;        // commands::kNoObject
 constexpr int64_t kGuardRefresh = 150;               // [port] guard re-order cadence (frames)
+constexpr size_t kTfGroupOrderMaxUnits = 4096;       // [port] ids in one group order (payload < 16 KiB, header)
 
 int32_t target_id(int32_t player, int32_t slot) { return (player << kSlotBits) | slot; }
 
@@ -68,18 +69,21 @@ void put_u32(uint8_t* p, uint32_t v) {
     for (int i = 0; i < 4; ++i) p[i] = static_cast<uint8_t>(v >> (8 * i));
 }
 
-// The L1 object-order event (object_bridge.hpp: PortExtension, subtype kLuaOrderSubtype + order).
-cmd::EventData lua_order_event(lua::LuaOrder order, int32_t object, int32_t target, const Vec3f& p, uint32_t arg = 0) {
+// The L1 object-order event (object_bridge.hpp: PortExtension, subtype kLuaOrderSubtype + order) for the task force's
+// movable units as ONE group order (header: the 24-byte block for units[0], then one u32 per further unit).
+cmd::EventData lua_order_event(lua::LuaOrder order, std::span<const uint32_t> units, int32_t target, const Vec3f& p, uint32_t arg = 0) {
     cmd::EventData ev(cmd::EventType::PortExtension);
     ev.set("subtype", static_cast<uint32_t>(lua::kLuaOrderSubtype + static_cast<uint32_t>(order)));
-    uint8_t b[lua::kLuaOrderPayloadBytes] = {};
-    put_u32(b + 0, static_cast<uint32_t>(object));
-    put_u32(b + 4, target < 0 ? kNoWireObject : static_cast<uint32_t>(target));
-    put_u32(b + 8, std::bit_cast<uint32_t>(p.x));
-    put_u32(b + 12, std::bit_cast<uint32_t>(p.y));
-    put_u32(b + 16, std::bit_cast<uint32_t>(p.z));
-    put_u32(b + 20, arg);
-    ev.set_bytes("data", std::span<const uint8_t>(b, sizeof b));
+    const size_t n = std::min(units.size(), kTfGroupOrderMaxUnits);
+    std::vector<uint8_t> b(lua::kLuaOrderPayloadBytes + 4 * (n > 0 ? n - 1 : 0), 0);
+    put_u32(b.data() + 0, n > 0 ? units[0] : kNoWireObject);
+    put_u32(b.data() + 4, target < 0 ? kNoWireObject : static_cast<uint32_t>(target));
+    put_u32(b.data() + 8, std::bit_cast<uint32_t>(p.x));
+    put_u32(b.data() + 12, std::bit_cast<uint32_t>(p.y));
+    put_u32(b.data() + 16, std::bit_cast<uint32_t>(p.z));
+    put_u32(b.data() + 20, arg);
+    for (size_t i = 1; i < n; ++i) put_u32(b.data() + lua::kLuaOrderPayloadBytes + 4 * (i - 1), units[i]);
+    ev.set_bytes("data", std::span<const uint8_t>(b.data(), b.size()));
     return ev;
 }
 
@@ -402,6 +406,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
 
     // ---- tactical orders ----
     int32_t issue_move(TfRec& t, AiTacticalOrder order, const Vec3f& dest, int32_t target_object);
+    std::vector<uint32_t> movable_ids(const TfRec& t);  // the task force's movable units, list order
 
     // ================= lua::AiScriptHost (A2 family) =================
     bool tf_valid(int32_t tf) override { return tf_rec(tf) != nullptr; }
@@ -1710,8 +1715,8 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
                 if (now - s.last_order >= kGuardRefresh && (tp.x != s.dest.x || tp.y != s.dest.y)) {  // only a moved target
                     s.last_order = now;
                     s.dest = tp;
-                    for (const ObjectHandle u : t->units)
-                        if (movable(u)) order(t->player, lua_order_event(lua::LuaOrder::AttackMove, id_of(u), s.target, pos_of(h)), "attack-move follow");
+                    const std::vector<uint32_t> ids = movable_ids(*t);  // refixf t06: one group order (header)
+                    if (!ids.empty()) order(t->player, lua_order_event(lua::LuaOrder::AttackMove, ids, s.target, tp), "attack-move follow");
                 }
                 return false;
             }
@@ -1737,8 +1742,8 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             if (t->units.empty() || (s.target >= 0 && !store.alive(h))) return finish(false);
             if (s.target >= 0 && now - s.last_order >= kGuardRefresh) {  // follow the guarded object [port]
                 s.last_order = now;
-                for (const ObjectHandle u : t->units)
-                    if (movable(u)) order(t->player, lua_order_event(lua::LuaOrder::Guard, id_of(u), s.target, pos_of(h)), "guard follow");
+                const std::vector<uint32_t> ids = movable_ids(*t);  // refixf t06: one group order (header)
+                if (!ids.empty()) order(t->player, lua_order_event(lua::LuaOrder::Guard, ids, s.target, pos_of(h)), "guard follow");
             }
             return false;
         }
@@ -1748,10 +1753,15 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
 
 // ================================================================ tactical orders (§7.3)
 
-int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const Vec3f& dest, int32_t target_object) {
+std::vector<uint32_t> TacticalAiWorld::Impl::movable_ids(const TfRec& t) {
     std::vector<uint32_t> ids;
     for (const ObjectHandle u : t.units)
         if (movable(u)) ids.push_back(static_cast<uint32_t>(id_of(u)));
+    return ids;
+}
+
+int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const Vec3f& dest, int32_t target_object) {
+    const std::vector<uint32_t> ids = movable_ids(t);
     const char* what = kind == AiTacticalOrder::AttackMove ? "attack-move" : kind == AiTacticalOrder::GuardTarget ? "guard" : "move";
     char buf[96];
     std::snprintf(buf, sizeof buf, " %zu units -> (%.0f, %.0f)", ids.size(), static_cast<double>(dest.x), static_cast<double>(dest.y));
@@ -1762,16 +1772,11 @@ int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const 
         ev.set_f("x", dest.x).set_f("y", dest.y).set_f("z", dest.z).set_ids("units", ids);
         any = order(t.player, ev, std::string("tf ") + t.name + " " + what + buf) == cmd::RejectReason::None;
     } else {
+        // refixf t06 (MOVEMENT §6.3 [H], AI_TACTICAL §7.3): one group order for the whole task force (header). Before, one
+        // order per unit, which the battle host merged again.
         const lua::LuaOrder lo = kind == AiTacticalOrder::GuardTarget ? lua::LuaOrder::Guard : lua::LuaOrder::AttackMove;
-        uint32_t ok = 0;
-        for (const uint32_t id : ids) {
-            const cmd::RejectReason r = pipeline.execute_direct(static_cast<uint64_t>(now), static_cast<uint8_t>(t.player),
-                                                                cmd::CommandSource::AI,
-                                                                lua_order_event(lo, static_cast<int32_t>(id), target_object, dest));
-            ok += r == cmd::RejectReason::None ? 1u : 0u;
-        }
-        any = ok > 0;
-        decide(t.player, "order tf " + t.name + " " + what + buf + (any ? "" : " rejected"));
+        any = order(t.player, lua_order_event(lo, ids, target_object, dest), std::string("tf ") + t.name + " " + what + buf) ==
+              cmd::RejectReason::None;
     }
     if (!any) return new_status(t.plan, t.id, StatusKind::Failed);
     const int32_t id = new_status(t.plan, t.id, kind == AiTacticalOrder::GuardTarget ? StatusKind::Guard : StatusKind::Move);
@@ -1844,8 +1849,13 @@ int32_t TacticalAiWorld::Impl::tf_attack_target(int32_t tf, const lua::AiArg& ta
             const int32_t k = rng.synced().range_int(0, 13);  // 13 = any (§7.3, §10)
             ref2 = k >= 13 ? 0u : static_cast<uint32_t>(k + 1);
         } else {
-            for (uint32_t i = 0; i < std::size(kHardPointTypeNames); ++i)
-                if (ai_iequal(hardpoint, kHardPointTypeNames[i])) ref2 = i + 1;
+            // refixf t06 [M]: the shipped plans name the type in the short form (SystematicDisable: "Shield_Generator",
+            // "Engine"; the HardPoint XML <Type> uses HARD_POINT_SHIELD_GENERATOR): the "HARD_POINT_" prefix is optional.
+            constexpr std::string_view kPrefix = "HARD_POINT_";
+            for (uint32_t i = 0; i < std::size(kHardPointTypeNames); ++i) {
+                const std::string_view full = kHardPointTypeNames[i];
+                if (ai_iequal(hardpoint, full) || ai_iequal(hardpoint, full.substr(kPrefix.size()))) ref2 = i + 1;
+            }
         }
     }
     std::vector<uint32_t> ids;

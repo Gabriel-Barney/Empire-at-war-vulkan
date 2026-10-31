@@ -400,12 +400,21 @@ void test_priority_sets() {
     CHECK_F(priority_score(s, 3, 0, 0x1000), -1.0f);      // property exclusion
     CHECK_F(priority_score(s, 9, 0x1, 0), -1.0f);         // unit exclusion
     CHECK_F(priority_score(s, 3, 0, 0), 1e18f);           // nothing matched
-    s.hardpoint_priorities = {name_crc("HP_A"), name_crc("HP_B")};
-    s.hardpoint_exclusions = {name_crc("HP_C")};
-    CHECK_F(hardpoint_rank(s, name_crc("HP_A")), 1.0f);
-    CHECK_F(hardpoint_rank(s, name_crc("HP_B")), 2.0f);
-    CHECK_F(hardpoint_rank(s, name_crc("HP_C")), -1.0f);
-    CHECK_F(hardpoint_rank(s, name_crc("HP_D")), 1e18f);
+    // refixf t06: the hard-point lists hold HardPointType values (Shield_Generator, Engine, ...), not hardpoint names.
+    const auto hk = [](HardpointKind k) { return static_cast<int32_t>(k); };
+    s.hardpoint_priorities = {hk(HardpointKind::ShieldGenerator), hk(HardpointKind::Engine)};
+    s.hardpoint_exclusions = {hk(HardpointKind::FighterBay)};
+    CHECK_F(hardpoint_rank(s, hk(HardpointKind::ShieldGenerator)), 1.0f);
+    CHECK_F(hardpoint_rank(s, hk(HardpointKind::Engine)), 2.0f);
+    CHECK_F(hardpoint_rank(s, hk(HardpointKind::FighterBay)), -1.0f);
+    CHECK_F(hardpoint_rank(s, hk(HardpointKind::WeaponLaser)), 1e18f);
+    // HardPointType names: the short form of the priority sets / plans and the HardPoint XML's HARD_POINT_ form.
+    CHECK(hardpoint_type_value("Shield_Generator") == hk(HardpointKind::ShieldGenerator));
+    CHECK(hardpoint_type_value("HARD_POINT_SHIELD_GENERATOR") == hk(HardpointKind::ShieldGenerator));
+    CHECK(hardpoint_type_value("FIGHTER_BAY") == hk(HardpointKind::FighterBay));
+    CHECK(hardpoint_type_value("weapon_ion_cannon") == hk(HardpointKind::WeaponIonCannon));
+    CHECK(hardpoint_type_value("Dummy_Art") == hk(HardpointKind::DummyArt));
+    CHECK(hardpoint_type_value("HARD_POINT_") == -1 && hardpoint_type_value("HP_Shield") == -1 && hardpoint_type_value("") == -1);
 }
 
 void test_damage_table() {
@@ -1315,6 +1324,69 @@ void test_hull_hardpoint_coupling() {
     CHECK_F(w.sys->health(2), (30.0f / 300.0f + 0.2f) * 1000.0f);
 }
 
+// refixf t06: Choose_Target_Hardpoint (TACTICAL_COMBAT 2.6 [H]) ranks the target's live destroyable hardpoints by the
+// position of their TYPE in the attacker's Hard_Point_Priorities (Lua override first, then the type's set), skips the
+// Hard_Point_Exclusions, unlisted types rank 1e18 with ties to the closest in 3D; without a set, the closest targetable.
+void test_choose_target_hardpoint_by_type() {
+    World w;
+    auto hp = [&w](HardpointKind k, float x, bool targetable) {
+        HardpointDesc hd;
+        hd.name = "HP_" + std::to_string(w.data.hardpoints.size());
+        hd.name_crc = name_crc(hd.name);
+        hd.kind = k;
+        hd.health = 100.0f;
+        hd.destroyable = true;
+        hd.targetable = targetable;
+        hd.attach_offset = Vec3{x, 0, 0};
+        w.data.hardpoints.push_back(hd);
+        return static_cast<uint32_t>(w.data.hardpoints.size() - 1);
+    };
+    // Station hardpoints, nearest to the attacker (on -x) first: fighter bay, laser, engine, shield generator, missile.
+    const uint32_t bay = hp(HardpointKind::FighterBay, -200.0f, true), laser = hp(HardpointKind::WeaponLaser, -150.0f, true),
+                   engine = hp(HardpointKind::Engine, 100.0f, true), shield = hp(HardpointKind::ShieldGenerator, 200.0f, true),
+                   missile = hp(HardpointKind::WeaponMissile, 250.0f, false);
+    const auto hk = [](HardpointKind k) { return static_cast<int32_t>(k); };
+    PrioritySet cam;  // as Capital_Attack_Move: Shield_Generator, Engine, FIGHTER_BAY, ...
+    cam.name = "Capital_Attack_Move";
+    cam.hardpoint_priorities = {hk(HardpointKind::ShieldGenerator), hk(HardpointKind::Engine), hk(HardpointKind::FighterBay)};
+    PrioritySet excl;  // nothing listed, the fighter bay and the laser excluded
+    excl.name = "No_Bays";
+    excl.hardpoint_exclusions = {hk(HardpointKind::FighterBay), hk(HardpointKind::WeaponLaser)};
+    w.data.priority_sets = {cam, excl};
+    UnitDesc station;
+    station.tactical_health = 5000.0f;
+    station.radius = 300.0f;
+    station.hardpoints = {bay, laser, engine, shield, missile};
+    const uint32_t ds = push_unit(w.data, station);
+    UnitDesc ship;
+    ship.tactical_health = 1000.0f;
+    ship.radius = 50.0f;
+    ship.priority_set = 0;
+    const uint32_t dset = push_unit(w.data, ship);
+    ship.priority_set = -1;
+    const uint32_t dnone = push_unit(w.data, ship);
+    CombatConfig cfg;
+    cfg.hardpoint_health_multiplier = 1.0f;
+    w.make(cfg);
+    w.add(1, ds, 0, Vec3{0, 0, 0});
+    w.add(2, dset, 1, Vec3{-800, 0, 0});
+    w.add(3, dnone, 1, Vec3{-800, 0, 0});
+    CHECK(w.sys->choose_target_hardpoint(2, 1) == 3);  // the shield generator (rank 1), though the farthest listed
+    CHECK(w.sys->choose_target_hardpoint(3, 1) == 0);  // no set: the closest targetable (the fighter bay)
+    DamageRequest kill;  // shield generator destroyed -> the engine (rank 2)
+    kill.victim = 1;
+    kill.amount = 10000.0f;
+    kill.hardpoint = 3;
+    w.sys->take_damage(kill, w.frame);
+    w.tick();
+    CHECK(w.sys->alive(1) && w.sys->hardpoint_health(1, 3) <= 0.0f);
+    CHECK(w.sys->choose_target_hardpoint(2, 1) == 2);
+    CHECK(w.sys->set_priority_override(2, 1));         // Lua Set_Targeting_Priorities: the override wins over the type's set
+    CHECK(w.sys->choose_target_hardpoint(2, 1) == 2);  // bay and laser excluded, the rest 1e18: the closest of engine / missile
+    CHECK(w.sys->set_priority_override(2, -1));
+    CHECK(w.sys->choose_target_hardpoint(2, 1) == 2);
+}
+
 // Hardpoint disabled flag (hp +0x6e): Update_Weapon returns before the cooldown countdown and Fire_At (TACTICAL_COMBAT
 // 3.1 step 1); a repair to max health clears it (TACTICAL_GAPS §1.12 step 4). Repair-capable = DUMMY_STAR_BASE.
 void test_hardpoint_disabled() {
@@ -1609,7 +1681,7 @@ struct Battle {
         PrioritySet cap;
         cap.name = "Capital";
         cap.attack = {{PriorityEntry::Kind::Category, -1, kCatCapital, 1.0f}, {PriorityEntry::Kind::Category, -1, kCatFighter, 3.0f}};
-        cap.hardpoint_priorities = {name_crc("HP_Shield"), name_crc("HP_Laser")};
+        cap.hardpoint_priorities = {static_cast<int32_t>(HardpointKind::ShieldGenerator), static_cast<int32_t>(HardpointKind::WeaponLaser)};
         PrioritySet fig;
         fig.name = "Fighter";
         fig.attack = {{PriorityEntry::Kind::Category, -1, kCatFighter, 1.0f}, {PriorityEntry::Kind::Category, -1, kCatCapital, 2.0f}};
@@ -2699,6 +2771,21 @@ void test_foc_data() {
         }
         CHECK(fighter->property_exclusions != 0);
     }
+    // refixf t06: Capital_Attack_Move's Hard_Point_Priorities "Shield_Generator, Engine, FIGHTER_BAY, WEAPON_LASER,
+    // WEAPON_ION_CANNON, TRACTOR_BEAM" are HardPointType values in list order; no hard-point name is unknown.
+    const PrioritySet* cam = nullptr;
+    for (const PrioritySet& s : sets)
+        if (iequals(s.name, "Capital_Attack_Move")) cam = &s;
+    CHECK(cam != nullptr);
+    if (cam) {
+        const auto hk = [](HardpointKind k) { return static_cast<int32_t>(k); };
+        const std::vector<int32_t> want{hk(HardpointKind::ShieldGenerator), hk(HardpointKind::Engine),         hk(HardpointKind::FighterBay),
+                                        hk(HardpointKind::WeaponLaser),     hk(HardpointKind::WeaponIonCannon), hk(HardpointKind::TractorBeam)};
+        CHECK(cam->hardpoint_priorities == want && cam->hardpoint_exclusions.empty());
+        CHECK_F(hardpoint_rank(*cam, hk(HardpointKind::FighterBay)), 3.0f);
+        CHECK_F(hardpoint_rank(*cam, hk(HardpointKind::WeaponMissile)), 1e18f);
+    }
+    for (const std::string& m : diag) CHECK(m.find("hard point type") == std::string::npos);
 }
 
 // ================================================================================================
@@ -2787,6 +2874,7 @@ int main(int argc, char** argv) {
     test_reduce_all_matches();
     test_mod_multiplier();
     test_priority_sets();
+    test_choose_target_hardpoint_by_type();
     test_damage_table();
     test_inaccuracy_system();
     test_targeting_rules();

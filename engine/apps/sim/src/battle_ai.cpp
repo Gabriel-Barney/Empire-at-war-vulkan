@@ -785,7 +785,12 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (sub < lua::kLuaOrderSubtype || sub > lua::kLuaOrderSubtype + 0xFFu || b.size() < lua::kLuaOrderPayloadBytes) return R::Unhandled;
             const auto order = static_cast<lua::LuaOrder>(sub - lua::kLuaOrderSubtype);
             // battle host: a TEAM container's order goes to its live members (the container itself has no movement).
-            const std::vector<objects::ObjectId> ids = team_units(player, le32(b, 0));
+            // refixf t06: a task-force group order (tactical_ai.hpp HOST CONTRACT) carries its further units after the 24-byte
+            // block, one u32 each: all of them form one order (MOVEMENT §6.3 [H]: one coordinator for the task force).
+            std::vector<objects::ObjectId> ids = team_units(player, le32(b, 0));
+            for (size_t off = lua::kLuaOrderPayloadBytes; off + 4 <= b.size(); off += 4)
+                for (const objects::ObjectId mid : team_units(player, le32(b, off)))
+                    if (std::find(ids.begin(), ids.end(), mid) == ids.end()) ids.push_back(mid);
             if (ids.empty()) return R::InvalidUnit;
             if (order == lua::LuaOrder::Stop) {
                 for (const objects::ObjectId id : ids) {
@@ -823,33 +828,10 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (!std::isfinite(x) || !std::isfinite(y)) return R::InvalidPosition;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
-            // refixf t02 (MOVEMENT §6.3 [H]): Lua Attack_Move / Move_To on a task force build one parameter block and ONE
+            // refixf t02 / t06 (MOVEMENT §6.3 [H]): Lua Attack_Move / Move_To on a task force build one parameter block and ONE
             // coordinator for all its units, so the formation slots and the destination reservations (§2.4 step 4) give each
-            // unit its own spot. The tactical AI sends one order per unit (issue_move, the attack-move / guard follow), and
-            // each flew to the exact point: the ships stacked there (foc-station: Project_By_Unit_Range nil, Move_To failed).
-            // [port] space: this frame's orders of one player with the same order, target object, position and threshold
-            // join one group move, re-issued over every unit so far (list order = arrival order). Land keeps one move per
-            // unit (its collision resolution separates them).
-            if (b_->space_) {
-                if (!order_groups_.empty() && order_groups_.front().frame != b_->frame_) order_groups_.clear();
-                const uint32_t xb = std::bit_cast<uint32_t>(x), yb = std::bit_cast<uint32_t>(y);
-                OrderGroup* og = nullptr;
-                for (OrderGroup& g : order_groups_)
-                    if (g.player == player && g.subtype == sub && g.target == tw && g.x == xb && g.y == yb && g.threat == targ) og = &g;
-                if (!og) {
-                    order_groups_.push_back(OrderGroup{b_->frame_, player, sub, tw, xb, yb, targ, {}});
-                    og = &order_groups_.back();
-                }
-                std::vector<objects::ObjectId> merged;
-                for (const objects::ObjectId id : og->units)
-                    if (const TacticalBattle::Unit* m = b_->unit_by_id(id); m && m->alive && !m->retreated && m->movable &&
-                                                                           st.owner(m->h) == static_cast<int32_t>(player))
-                        merged.push_back(id);
-                for (const objects::ObjectId id : group.units)
-                    if (std::find(merged.begin(), merged.end(), id) == merged.end()) merged.push_back(id);
-                og->units = merged;
-                group.units = std::move(merged);
-            }
+            // unit its own spot. The tactical AI now sends that as one group order (the ids above); the t02 stand-in that
+            // merged one frame's per-unit orders here is gone. An object's own Lua order stays a one-unit move.
             if (group.units.size() == 1) {  // a single unit: unchanged path
                 if (order != lua::LuaOrder::AttackMove) b_->combat_->clear_order(u->id);
                 return move_unit(u->id, x, y, tt) ? R::None : R::InvalidUnit;
