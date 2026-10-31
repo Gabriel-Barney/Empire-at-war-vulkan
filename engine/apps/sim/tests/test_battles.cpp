@@ -10,6 +10,7 @@
 //     (MSVC writes it with --regen; clang / gcc must reproduce it).
 // With ALAMO_FOC_DATA (FoC "corruption" folder) a real FoC space map battle runs as well.
 #include <algorithm>
+#include <bit>
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
@@ -300,9 +301,24 @@ std::string prod_types() {
     return t;
 }
 
-std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false) {
+// refixf t02: the star base is a SPACE_OBSTACLE (as every FoC star base: STARBASES.XML) with a 250 footprint.
+std::string obstacle_types() {
+    std::string t = kTypes;
+    const std::string at = "<StarBase Name=\"S10_Star_Base_1\">";
+    const size_t p = t.find(at);
+    if (p != std::string::npos)
+        t.insert(p + at.size(), "<SpaceBehavior>SPACE_OBSTACLE</SpaceBehavior><Custom_Soft_Footprint_Radius>250</Custom_Soft_Footprint_Radius>");
+    // a weak one, so the attackers kill it inside the test's frames (its static entry must leave with it)
+    const std::string hp = "<Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>";
+    if (const size_t q = t.find(hp); q != std::string::npos) t.replace(q, hp.size(), "<Tactical_Health>300</Tactical_Health><Base_Level>1</Base_Level>");
+    return t;
+}
+
+std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
+                                bool obstacle = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (prod   ? "alamo_sim_battle_tests_prod"  // station production
+    d->root = fs::temp_directory_path() / (obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
+                                           : prod   ? "alamo_sim_battle_tests_prod"  // station production
                                            : s4   ? "alamo_sim_battle_tests_s4"  // S4
                                            : bm   ? "alamo_sim_battle_tests_bm"  // P4 tactical
                                            : anim ? "alamo_sim_battle_tests_anim"
@@ -312,7 +328,13 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", prod ? prod_types() : s4 ? s4_types() : bm ? bm_types() : anim ? anim_types() : fog ? fog_types() : std::string(kTypes));
+    write_file(x / "S10Types.xml", obstacle ? obstacle_types()
+                                   : prod   ? prod_types()
+                                   : s4     ? s4_types()
+                                   : bm     ? bm_types()
+                                   : anim   ? anim_types()
+                                   : fog    ? fog_types()
+                                            : std::string(kTypes));
     if (bm) write_file(x / "BlackMarketItems.xml", kBmItems);  // P4 tactical
     write_file(x / "HardPointDataFiles.xml", "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");
     write_file(x / "S10HardPoints.xml", kHardpoints);
@@ -2928,6 +2950,136 @@ void test_battle_ai_orders(const Data& d) {
     CHECK(issued && closer);
 }
 
+// refixf t02: no two space units on one exact point (foc-station seeds 1 / 4 stacked the rebel fleet on the station's centre):
+//   * a SPACE_OBSTACLE star base is a static entry of the space occupancy from the battle start (MOVEMENT §2.2) and leaves it
+//     when it dies;
+//   * the tactical AI's per-unit Lua Attack_Move orders on the station (one PortExtension per task-force unit, same frame)
+//     are one group move (MOVEMENT §6.3): every goal outside the station's footprint and no two goals on one point;
+//   * no two live movable units share a position at the start, after the orders or while they fly in and fight.
+void test_space_obstacle_orders() {
+    auto d = make_data(false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*d, false);
+    for (int i = 0; i < 3; ++i) gsetup.forces.push_back({0, 1, type_of(*d, "S10_Frigate")});  // the battle outlives the station
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, gsetup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test moves units
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup setup;
+    setup.defs = &defs;
+    setup.equations = &eqs;
+    setup.files = d->files.get();
+    setup.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    namespace mv = tactical::movement;
+    // Pairs of live movable battle units on one exact XY point.
+    auto stacked = [](const TacticalBattle& b, const objects::ObjectStore& st) {
+        std::vector<objects::ObjectId> ids;
+        for (const objects::ObjectHandle h : st.all_objects())
+            if (st.alive(h) && b.movement().has_unit(st.id(h))) ids.push_back(st.id(h));
+        int pairs = 0;
+        for (size_t i = 0; i < ids.size(); ++i)
+            for (size_t j = i + 1; j < ids.size(); ++j) {
+                const Vec3 p = st.position(st.find(ids[i])), q = st.position(st.find(ids[j]));
+                if (p.x == q.x && p.y == q.y) ++pairs;
+            }
+        return pairs;
+    };
+    objects::ObjectId station = objects::kNoObjectId;
+    Vec3 sp{};
+    std::vector<objects::ObjectId> attackers;
+    bool issued = false, station_died = false;
+    int stacks = 0;
+    uint32_t last = 0;
+    float closest = 1.0e9f;
+    for (uint64_t t = 0; t < 6000; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (issued) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        if (b->frame() == 3 && !issued) {
+            issued = true;
+            for (const objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h)) continue;
+                if (st.owner(h) == 0 && static_cast<uint32_t>(st.type(h)) == type_of(*d, "S10_Star_Base_1")) station = st.id(h);
+                if (st.owner(h) == 1 && b->movement().has_unit(st.id(h))) attackers.push_back(st.id(h));
+            }
+            CHECK(station != objects::kNoObjectId && attackers.size() >= 4);
+            if (station == objects::kNoObjectId || attackers.size() < 2) break;
+            sp = st.position(st.find(station));
+            const mv::SpaceOccupancy& occ = b->movement().space();
+            CHECK(occ.has_static(station));
+            CHECK((occ.query_static({sp.x, sp.y}, {sp.x, sp.y}, 1.0f) & mv::kSpaceStatic) != 0);
+            CHECK((occ.query_static({sp.x + 300.0f, sp.y}, {sp.x + 300.0f, sp.y}, 1.0f) & mv::kSpaceStatic) == 0);
+            CHECK(stacked(*b, st) == 0);  // the start placement
+            BattleAi ai(*b, *tm, host, setup);
+            for (const objects::ObjectId a : attackers) {  // as the tactical AI's issue_move: one order per task-force unit
+                std::vector<uint8_t> pay;
+                auto put = [&pay](uint32_t v) {
+                    for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+                };
+                put(static_cast<uint32_t>(a));
+                put(static_cast<uint32_t>(station));
+                put(std::bit_cast<uint32_t>(sp.x));
+                put(std::bit_cast<uint32_t>(sp.y));
+                put(std::bit_cast<uint32_t>(sp.z));
+                put(0u);
+                const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::AttackMove));
+                CHECK(ai.execute(1, commands::ev::port_extension(sub, pay)) == commands::RejectReason::None);
+            }
+            std::vector<mv::V2> goals;
+            for (const objects::ObjectId a : attackers) {
+                const auto v = b->movement().view(a);
+                CHECK(v.has_goal);
+                const float gd = std::sqrt((v.goal.x - sp.x) * (v.goal.x - sp.x) + (v.goal.y - sp.y) * (v.goal.y - sp.y));
+                CHECK(gd >= 250.0f);  // outside the station's footprint
+                closest = std::min(closest, gd);
+                for (const mv::V2& g : goals) CHECK(!(g.x == v.goal.x && g.y == v.goal.y));
+                goals.push_back(v.goal);
+            }
+            std::printf("  station %d at (%.0f, %.0f): %zu attack-move orders, nearest goal %.0f from its centre\n", station,
+                        static_cast<double>(sp.x), static_cast<double>(sp.y), attackers.size(), static_cast<double>(closest));
+            // then an explicit attack on it (the weak station dies, the defender's frigates keep the battle going)
+            std::vector<uint32_t> wire;
+            for (const objects::ObjectId a : attackers) wire.push_back(static_cast<uint32_t>(a));
+            CHECK(ai.execute(1, commands::ev::attack(static_cast<uint32_t>(station), wire)) == commands::RejectReason::None);
+        }
+        if (!issued || station == objects::kNoObjectId) continue;
+        last = b->frame();
+        stacks += stacked(*b, st);
+        if (!station_died && !st.alive(st.find(station))) {
+            station_died = true;
+            std::printf("  station died at frame %u\n", b->frame());
+        }
+        if (station_died) CHECK(!b->movement().space().has_static(station));  // removed with its object (same tick)
+        if (station_died || b->frame() >= 4000) break;
+    }
+    std::printf("  stacked pairs over frames 3-%u: %d, station died %d\n", last, stacks, station_died ? 1 : 0);
+    CHECK(issued && stacks == 0);
+}
+
 // t41: BattleAi::fill hands the perception the station's DUMMY_STAR_BASE and Base_Level (the inputs of Variable_Self.BaseLevel).
 void test_battle_ai_station_level(bool skirmish) {
     auto d = make_data(false, false, false, false, true);  // the star bases carry DUMMY_STAR_BASE here
@@ -3224,6 +3376,8 @@ int main(int argc, char** argv) {
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     std::printf("OI host: BattleAi MoveToObject, hijack_unit, AI Change_Owner\n");
     test_battle_ai_orders(*d);
+    std::printf("refixf t02: SPACE_OBSTACLE station as a static entry, per-unit Lua orders as one group move\n");
+    test_space_obstacle_orders();
     test_battle_ai_station_level(false);
     test_battle_ai_station_level(true);
     test_battle_ai_land_mode(false);

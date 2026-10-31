@@ -187,12 +187,12 @@ if(_alamo_sim)
     # t41: FoC space, an AI defender with a Level 2 station against a far larger fleet must not retreat; skipped (exit 0) without ALAMO_FOC_DATA.
     add_test(NAME alamo_headless_skirmish_ai_foc_station
              COMMAND alamo_headless --skirmish-ai foc-station --seed 3 --ticks 20000 --workers 4 --quiet --expect-battle-end)
-    # t48: seed 8 reaches QuickReinforce's anti-idle (8 calls, 4 with a particle as the nearest enemy); 0 Lua errors (it may run to
-    # the frame limit: half the seeds do, the station holds). refix (2026-10-31): moved off the default seed, which after the
-    # death-clone objects stacks AI and enemy ships on one point (3300,0,0): Project_By_Unit_Range gives nil and Move_To fails
-    # (also seed 4). Port stacking bug, follow-up group stack.
+    # t48: the default seed reaches QuickReinforce's anti-idle; 0 Lua errors (it may run to the frame limit: half the seeds do, the
+    # station holds). refixf t02 (2026-10-31): back on the default seed. It had stacked the rebel ships on the station's centre
+    # (3300,0,0) - Project_By_Unit_Range nil, Move_To failed (also seed 4): the station is now a space static entry and a task
+    # force's per-unit Lua move orders of one frame are one group move (TacticalBattle::space_obstacles_sync, BattleAi).
     add_test(NAME alamo_headless_skirmish_ai_foc_station_lua
-             COMMAND alamo_headless --skirmish-ai foc-station --seed 8 --ticks 20000 --workers 4 --quiet)
+             COMMAND alamo_headless --skirmish-ai foc-station --ticks 20000 --workers 4 --quiet)
     set_tests_properties(alamo_headless_skirmish_ai_foc_station alamo_headless_skirmish_ai_foc_station_lua PROPERTIES TIMEOUT 1800)
   endif()
   # --- end A1 ---

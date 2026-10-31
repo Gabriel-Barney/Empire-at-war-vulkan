@@ -14,6 +14,9 @@
 // space_from_map: playable box (0x103 04/05) and SPACE_OBSTACLE placements as static entries;
 //   radius = first positive Custom_Soft_Footprint_Radius / Space_Obstacle_Radius x Scale_Factor
 //   (PROVISIONAL [M]: the retail getter's "2R/20" conversion is unexplained and not applied).
+// space_obstacle_footprint: that static entry's radius and SpaceCollisionType bits for one type; false when the type has no
+//   SPACE_OBSTACLE behaviour or no positive radius. refixf t02: hosts use it for SPACE_OBSTACLE objects spawned at run time
+//   (MOVEMENT §2.2: SpaceObstacleBehaviorClass inserts the object as a static entry on attach, removes it on detach).
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -41,5 +44,6 @@ struct MapStampHooks {
 uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map, const objects::GameObjectTypes& types,
                              const MapStampHooks* hooks = nullptr);
 uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const objects::GameObjectTypes* types);
+bool space_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t type, float& radius, uint32_t& bits);
 
 }  // namespace alamo::tactical::movement
