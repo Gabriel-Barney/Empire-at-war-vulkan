@@ -116,7 +116,7 @@ set_tests_properties(alamo_ui_gui_tests PROPERTIES TIMEOUT 120)
 
 # P4 completion tests (CPU): in-game screens, advanced video, multiplayer screens (UI only), HUD panels, camera hotkeys;
 # real GUIDialogs.rc / CommandBarComponents through the VFS with ALAMO_FOC_DATA.
-add_executable(alamo_ui_screens_tests tests/test_gui_screens.cpp)
+add_executable(alamo_ui_screens_tests tests/test_gui_screens.cpp tests/test_gui_screens_a.cpp tests/test_gui_screens_b.cpp tests/test_gui_screens_c.cpp)
 target_link_libraries(alamo_ui_screens_tests PRIVATE alamo_ui_hud alamo_data)
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_ui_screens_tests PRIVATE alamo_vfs)
