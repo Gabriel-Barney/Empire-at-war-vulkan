@@ -257,7 +257,9 @@ void test_tsw_defender_path(StateHasher* out) {
     CHECK(!s.tsw_fire(4, true, f));
     // TSW_PLANET_DESTROY §3: power-up int(30 x 9) = 270 services, 6 (1 service), 7 (1: attack anim), 8 (75), 9 (planet
     // destroyed, F + 348), 10 (debris delay 33), 12 (post-destruction wait 350), 13 (1) -> 0 and the hold released at
-    // F + 732. The hold covers states 5..13.
+    // F + 732. The hold covers states 5..13. F is the frame of the between-ticks Fire call; its first power-up service
+    // is the next tick S = F + 1, so the kill is S + 347 and the release S + 731, as measured in the retail game
+    // (probe 2026-10-31: first frame with state 5 already at countdown 269, state 10 at +347, state 0 at +731).
     const uint32_t fired = f;
     CHECK_EQ(s.victory_holds(), 1u);
     uint32_t anim_frame = 0, destroyed_frame = 0, debris_frame = 0, done_frame = 0, last_held = 0;

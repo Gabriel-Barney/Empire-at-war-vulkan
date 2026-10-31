@@ -20,7 +20,7 @@ STRATEGIC_GAPS §1.4 (victory 7), P4_SIM_SYSTEMS §3.3 (hack path). Not repeated
 |---|---|---|
 | 1 | Answer in one paragraph | [H] |
 | 2 | Victory monitor hold (0x341fe0 / 0x3440a0): no battle can end during the TSW sequence | [H] |
-| 3 | TSW states 5..13 after Fire, with the frame budget | [H] transitions; frame offsets probed 2026-10-31 (one frame earlier than first estimated) |
+| 3 | TSW states 5..13 after Fire, with the frame budget | [H] transitions; frame offsets probed 2026-10-31 |
 | 4 | State 9 in detail: the planet is destroyed **in the galaxy, in that tactical frame** | [H] |
 | 5 | What 0x3f76c0 does (and does not do) | [H]; list naming [M] |
 | 6 | Victory 7 / tactical type 0x10 from the TSW | [H]; victim / list semantics [M] |
@@ -90,8 +90,9 @@ matters.
 **Probe 2026-10-31** (`tools/probe_mod/tsw_planet_destroy`, README "second session"; TSW state read from memory once per
 frame, Fire by hand): the first frame showing state 5 already has countdown 269, so the TSW is serviced in the Fire frame
 F itself. Seen: 6 at F+269, 7 at F+270, 8 at F+271, 9 at F+346, **10 and the dummy gone at F+347**, 12 and the
-debris at F+380, **13 at F+730, 0 (hold released) at F+731**. Use F+347 / F+731 (±1 on F from the once-per-frame
-sampling); two runs agree.
+debris at F+380, **13 at F+730, 0 (hold released) at F+731**, with F = the first frame that serviced state 5; two runs
+agree. A Fire issued between ticks (Lua, orders) and stamped with the last finished frame N is first serviced at N+1,
+so from that stamp the kill is N+348 and the release N+732, as above; the port does exactly this (2026-10-31 check).
 
 ## 4. State 9 step by step [H]
 

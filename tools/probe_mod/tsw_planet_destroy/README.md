@@ -139,8 +139,9 @@ the galactic status line adds `Get_Starbase_Level()`.
   frame's service has run): ready (state 4) 2447; state 6 at F+269, 7 at F+270, 8 at F+271 (countdown 75);
   9 at F+346; **state 10 and the dummy `Kuat_Backdrop_Large` gone at F+347** (countdown 33); state 12 and the
   debris at F+380 (countdown 350); **state 13 at F+730, state 0 (hold released) at F+731**. Run W2 matches (dummy
-  gone 3775, debris 3808 = +33). So the TSW is serviced in the Fire frame and every offset is one frame earlier than
-  the spec's F+348 / F+732. The reader samples once per frame; a ±1 uncertainty on F itself remains.
+  gone 3775, debris 3808 = +33). So the TSW is serviced in the frame the Fire takes effect. Measured from a Fire stamped
+  between ticks with the last finished frame (as Lua and the port do), that is the spec's F+348 / F+732; the port
+  matches (`test_special_weapons.cpp`). The reader samples once per frame; a ±1 uncertainty on F itself remains.
 - **P3 after W (won):** `destroyed=true owner=EMPIRE starbase=none sb_level=0` (the Star Destroyers killed the
   station), Rebel objects at Kuat 0 (barracks and infantry gone), the Death Star stays at Kuat (Empire objects there:
   Star Destroyers, Death Star II, the fleet, the planet).
