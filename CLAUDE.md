@@ -11,7 +11,7 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 | `docs/PHASE4.md` | Phase 4 status board (the game); roadmap steps are on `ROADMAP.html` |
 | **Project roadmap** | **The main roadmap and flowchart: `ROADMAP.html` in this folder (Gabriel, 2026-10-30). It opens with no sign-in and is generated, so never edit it by hand.** Update it with `python roadmap-store/roadmap_store.py write <file>`; ordered stages, boxes and arrows, task groups, tasks, build records and the activity log live in `roadmap-store/data/`. Rules and field list: `docs/ROADMAP_PROTOCOL.md`. Page shell source: `docs/ROADMAP.html`. When `ROADMAP.html` changes in the GitHub store repo, run `python roadmap-store/roadmap_store.py sync` (pulls and regenerates the local `ROADMAP.html`; `write` and the build scripts do the same), see "Keeping the local page current" in the protocol |
 | `roadmap-store/` | Own git repository holding the roadmap data, so every account shares one copy. Rules in its `README.md` |
-| `docs/PHASE3.md` | Phase 3 status board + flowchart (renderer) |
+| `docs/PHASE3.md` | Phase 3 status board + flowchart (renderer). Long details of finished work: `docs/archive/*.zip` (2026-10-30) |
 | `tools/` | Phase 1 tools: `meg` (MEG archives, used by the VFS), `formats` (ALO/ALA/…), `shaders`, `re`, `probe_mod` |
 | `docs/PHASE2.md` | Phase 2 status board + flowchart + design notes (determinism contract, file resolution order) |
 | `docs/re/` | Behavioural specs recovered from the binary (GALACTIC, HOTSPOTS, STRUCTS, SUBSYSTEMS, LUA_API, xml tags) |

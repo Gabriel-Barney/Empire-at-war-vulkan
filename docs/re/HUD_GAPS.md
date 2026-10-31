@@ -5,7 +5,7 @@ constants and timings only. Addresses are RVAs in StarWarsG.exe. This file adds 
 0x140b27f60, command bar, layers, tooltip delays) and **ABILITIES_HARDPOINTS.md** / **TACTICAL_COMBAT.md
 §2.6** (hardpoint instance fields, per-hardpoint targeting); it does not repeat them.
 
-> **Status 2026-10-30:** All six gaps are implemented in the port: reticles (§1) `engine/ui/include/alamo/ui/hud_markers.hpp:94`; tooltips and encyclopedia (§2) `engine/ui/include/alamo/ui/hud_panels.hpp`; hero bar (§3) `engine/ui/include/alamo/ui/tactical_hud.hpp:135-141` and `engine/apps/game/src/hud_feeds.cpp`; day pips (§4) `engine/ui/src/galactic_hud.cpp:1225`; order buttons (§5) `engine/ui/include/alamo/ui/tactical_hud.hpp:181` and `hud_feeds.cpp:23`; the "35" box (§6) see the note there. Still open per docs/PHASE4_HISTORY.md:93: the in-game probes for the hero click and sort key, the hard-point "disabled" state, and day pips on the advanced map.
+> **Status 2026-10-30:** All six gaps are implemented in the port: reticles (§1) `engine/ui/include/alamo/ui/hud_markers.hpp:94`; tooltips and encyclopedia (§2) `engine/ui/include/alamo/ui/hud_panels.hpp`; hero bar (§3) `engine/ui/include/alamo/ui/tactical_hud.hpp:135-141` and `engine/apps/game/src/hud_feeds.cpp`; day pips (§4) `engine/ui/src/galactic_hud.cpp:1225`; order buttons (§5) `engine/ui/include/alamo/ui/tactical_hud.hpp:181` and `hud_feeds.cpp:23`; the "35" box (§6) see the note there. Still open per docs/PHASE4_HISTORY.md:93 (now in docs/archive/PHASE4_HISTORY_full_2026-10-30.zip): the in-game probes for the hero click and sort key, the hard-point "disabled" state, and day pips on the advanced map.
 
 Confidence: **[H]** read in code or data and cross-checked, **[M]** read but the intent is inferred,
 **[L]** a guess that needs an in-game check.
@@ -379,7 +379,7 @@ Candidates, most likely first:
 **How to settle it (port side):** dump the component name under the box (the port resolves components
 by name) and check it against the list above. Watch whether the number ticks every 45 s.
 
-> **Status 2026-10-30:** Cause found and fixed (docs/PHASE4_HISTORY.md:93): a galactic planet element was showing through the story dialog. The port now blocks galactic hover while a GUI dialog is open (`engine/apps/game/app/game_main.cpp:2952, 3651`, comments "HUD_GAPS §6").
+> **Status 2026-10-30:** Cause found and fixed (docs/PHASE4_HISTORY.md:93 (now in docs/archive/PHASE4_HISTORY_full_2026-10-30.zip)): a galactic planet element was showing through the story dialog. The port now blocks galactic hover while a GUI dialog is open (`engine/apps/game/app/game_main.cpp:2952, 3651`, comments "HUD_GAPS §6").
 
 ---
 
