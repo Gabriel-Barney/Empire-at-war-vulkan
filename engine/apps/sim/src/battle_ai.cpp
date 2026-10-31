@@ -800,6 +800,13 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 const Vec3 tp = st.position(th);
                 x = tp.x;
                 y = tp.y;
+                // a1f t07 [port; MOVEMENT §6.3 attack staging M]: an Attack_Move to an object the target scan never picks
+                // (an Is_Neutral player's, TACTICAL_COMBAT §2.2: Destroy_Structure on a neutral Secondary_Abandoned_Sensor)
+                // orders the attack on it; the status (tactical_ai step_status) finishes when it dies.
+                const TacticalBattle::Unit* tu = b_->unit_by_id(static_cast<objects::ObjectId>(tw));
+                if (order == lua::LuaOrder::AttackMove && tu && tu->alive && !tu->retreated && b_->bt_owner_neutral(st.owner(th)) &&
+                    b_->combat_->is_enemy(player, st.owner(th)))
+                    for (const objects::ObjectId id : group.units) b_->combat_->order_attack(id, tu->id, -1);
             }
             if (!std::isfinite(x) || !std::isfinite(y)) return R::InvalidPosition;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)

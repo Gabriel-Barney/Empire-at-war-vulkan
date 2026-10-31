@@ -579,8 +579,19 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     cc.object_max_health_multiplier = space_ ? catalog_->space_health_multiplier() : catalog_->land_health_multiplier();
     cc.hardpoint_health_multiplier = space_ ? 1.5f : 1.0f;
     std::vector<tc::PlayerInfo> infos(players);
-    for (uint32_t p = 0; p < players && p < galaxy_->players().size(); ++p) infos[p].ai = !galaxy_->players()[p].human;
+    for (uint32_t p = 0; p < players && p < galaxy_->players().size(); ++p) {
+        infos[p].ai = !galaxy_->players()[p].human;
+        // TACTICAL_COMBAT §2.2: the target scan skips players whose faction is Is_Neutral (player +0x68 -> faction +0x108).
+        infos[p].active = !bt_owner_neutral(static_cast<int32_t>(p));
+    }
     combat_ = std::make_unique<tc::CombatSystem>(tables_->combat, cc, std::move(infos));
+    // [M] an Is_Neutral player attacks nobody (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"): its own row of
+    // the relation matrix is cleared, so its map structures (abandoned turrets) pick no targets until captured. The other
+    // players' rows keep it an enemy, so ordered attacks (Attack, an AI Attack_Move to the object) still reach its objects.
+    for (uint32_t p = 0; p < players; ++p)
+        if (bt_owner_neutral(static_cast<int32_t>(p)))
+            for (uint32_t q = 0; q < players; ++q)
+                if (q != p) combat_->set_enemy(static_cast<int32_t>(p), static_cast<int32_t>(q), false);
     combat_->reserve(256, 2048, 32, 256);
     abilities_ = std::make_unique<ta::AbilitySystem>(*combat_, tables_->abilities, catalog_->ability_config(space_, cfg_.skirmish));
     abilities_->reserve(256, 512);
