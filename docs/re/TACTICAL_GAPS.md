@@ -894,6 +894,76 @@ Palpatine / Vader), TR 26. No container-kind table; garrisoned units are hidden.
   first two participants (0 with fewer than 2). Older, less crowded collisions resolve first.
 - Port: stable sort by (priority, insertion order) — exact up to 32 collisions per frame.
 
+### 6.8 AI hint zones with duplicate zone names (A1 t03, 2026-10-31) [H unless tagged]
+**Short answer.** The original never links zones by name. Zone-graph links resolve by the zone's 02 id.
+Region targets are built per zone by pointer. Names matter in two places only:
+- **the perception name id:** the second zone with a repeated name shares the first zone's id, and its
+  location evaluator is refused, so `Variable_Target.*` for the second region reads the **first** zone;
+- **the post-load relink** (0x6b9580), which resolves every region by name to the **first** zone in list order.
+
+**Shipped data (FoC maps.meg + Patch2.meg, parsed 2026-10-31).** 11 repeated names in 5 maps, each one repeated twice:
+`_LAND_PLANET_HONOGHR_01` ("New Zone 106"), `_LAND_PLANET_SALEUCAMI_01` ("New Zone 101"),
+`_LAND_PLANET_TARIS_INTIMIDATION` ("New Zone 57"), and `_LAND_PLANET_UTAPAU_01` and `_MP_LAND_UTAPAU` ("New Zone 85"–"88" each).
+The repeated zones are distinct: different 02 ids, centres, links and cells. Every name repeats with the same case. No map
+repeats a 02 id, and every child E link key resolves to a zone id of the same map (8245 FoC zones, 44197 links, none
+unresolved). EaW maps.meg has no repeated names.
+
+**Zone layout read by the loader** (land mode vf46 0x3b8bc0 → one `AIHintZoneClass` (0x158 B) per 0x10B child,
+appended to mode +0x3a0; reader 0x5a9100):
+
+| .ted part | Zone field | Meaning |
+|---|---|---|
+| child 0, mini 01 | +0x10 string | name |
+| mini 02 | — | **editor pointer id**: registered as "old pointer → this zone" in the global save/load pointer-remap table (0x1fe2d0) |
+| minis 03, 04, 06, 0D | locals, +0x3c, +0x150 | not read by the AI |
+| mini 05 | +0x30..+0x38 | centre |
+| minis 08 + 09 | +0xd0 map name → u32 | per-zone **hint** values, keyed by hint name. Read by the land movement zone path cost 0x5a6940 through 0x5a8f50. Present in 36 EaW zones and no FoC zone. These are not zone links |
+| child 7 (minis 01 u32 `x \| y<<16`, 02 u8) | +0x50 hash set | the zone's cells; the point-in-zone test is 0x5a9a30 |
+| child E (per link: mini 01 key (u32 in this .ted format, u64 otherwise; flag 0x1fed00), mini 02 u32 flags) | +0x110 map: zone pointer → flags | **links by id**. Each key is queued for pointer remapping (0x1fe4a0). A post-remap callback (0x1ff040 → 0x3bc7c0 → 0x3bce10) inserts (remapped zone pointer, flags) into the map |
+| child F | +0x90 list | empty in every shipped zone |
+
+So `Edge_Weight` (§6.1, 0x5a9af0 on +0x110) and the movement zone path finder see each duplicate as its own
+node with its own neighbours. **Zone names play no part in the graph.** The port's id-based links
+(`HintZone::Link::zone` = target 02 id, `ZoneGraph::index_of_id`) match the original.
+
+**Region targets at battle start** (land perception slot 6 → 0x6b8d80). For each zone in index order (mode vf
++0x188 count, vf +0x190 get):
+1. The zone name is looked up in the global name-id table (0x140b310a8 vf +0x20). If it is absent, it is added with id = count + 1.
+   **A repeated name returns the id of its first zone.** [H] (Case: the table's comparison is not traced [M]. Shipped
+   repeats have identical case.)
+2. A `LandLocationPerceptualEvaluatorClass` is built for **this** zone (0x6d55a0). It is registered under the name id by
+   0x4db4f0, which **refuses an id that is already registered** (returns 0; the first evaluator stays). [H]
+3. The region target is built with **this** zone's pointer (+0x28), centre (+0x1c..+0x24) and its own
+   `ZoneReachabilityClass` (0x7253d0 → 0x73f1d0). It is stored in the zone → target map +0xf8 (key = zone pointer;
+   lookup vf10 0x6b8fd0) and appended to the target list. [H]
+
+Result: both duplicates are separate targets, with their own positions, their own reachability objects and their own zone
+→ target entries, but **one name id**. Every perception evaluation binds `Variable_Target` = the name id (AI_TACTICAL
+§3.5). For the second target it therefore evaluates the **first** zone's location evaluator: its force sums,
+`IsContestable`, `IsFriendlyStartLocation` distance, threat cells, and so on. [H for the refusal, M for "evaluation looks
+the evaluator up by the bound id"] `FindTarget` / `Reachable_Target` can still return the second target. Its
+position (slot 13), range test and reachability are its own.
+
+**Post-load relink** (land perception vf12 0x6b9580; land mode only, mode vf +0xe0 == 1) [H body, M "runs after load"]:
+- Run the base vf12 (0x4df960: re-register the saved evaluators and the `PLAYER_%d` ids).
+- Clear the zone → target map +0xf8.
+- For each target in list order that has no game object (slot +0x30 == 0, i.e. a region): take its name (slot +0x50), then
+  0x3b7b60 = **the first zone in +0x3a0 order whose name `_stricmp`-equals it**. If one is found, set map[zone] = target
+  (the later target overwrites) and set target +0x28 = zone.
+- With duplicates, both region targets point at the first zone after a load. map[first zone] = the later target. The
+  second zone has no entry, so vf10 on it returns null. A region whose name matches no zone keeps its saved zone field.
+  0x3b7b60 is called only from here: battle start never resolves zones by name.
+
+**Port consequences.**
+- Graph and links: no change (by id).
+- The region evaluator of a duplicate-named zone must evaluate the **first** zone with that name. Today the port
+  evaluates each region target with its own `zone` index. Map each region to the evaluator zone =
+  `first index with an equal name`. Keep `position`, `zone` (reachability) and the target order per zone.
+- The port saves in its own N1 format, and loading original saves is out of scope (CLAUDE.md). So the post-load
+  collapse need not be reproduced. A port relink should restore `zone` by **index or id**, not by name. Today
+  `TacticalTargetList::find_region` / `ZoneGraph::index_of_name` return the first match, which reproduces the original
+  collapse. Use them for diagnostics only.
+
 ---
 
 ## 7. L1 systems
