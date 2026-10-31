@@ -12,6 +12,8 @@ if not exist logs mkdir logs
 set TC=%CD%\toolchain
 set PD=python -I tools\visual\png_diff.py
 set SCALE=320
+rem Shots whose content depends on wall-clock timing (differ between two runs of the same build): not compared.
+set IGN=--ignore game_campaign_galactic_after.png --ignore game_campaign_video_options.png
 if /i "%~1"=="update" (
   %PD% update tests\visual_baselines\smoke build-msvc\smoke_out --scale %SCALE%
   %PD% update tests\visual_baselines\smoke_screens build-msvc\smoke_out\screens --scale %SCALE%
@@ -27,9 +29,9 @@ if /i "%~1"=="run" (
 )
 set RC=0
 > logs\visual_check.txt (
-  %PD% compare tests\visual_baselines\smoke build-msvc\smoke_out --scale %SCALE% --diff-dir logs\visual_diff\smoke --only "game_*.png"
+  %PD% compare tests\visual_baselines\smoke build-msvc\smoke_out --scale %SCALE% --diff-dir logs\visual_diff\smoke --only "game_*.png" %IGN%
   if errorlevel 1 set RC=1
-  %PD% compare tests\visual_baselines\smoke_screens build-msvc\smoke_out\screens --scale %SCALE% --diff-dir logs\visual_diff\smoke_screens --only "game_*.png"
+  %PD% compare tests\visual_baselines\smoke_screens build-msvc\smoke_out\screens --scale %SCALE% --diff-dir logs\visual_diff\smoke_screens --only "game_*.png" %IGN%
   if errorlevel 1 set RC=1
 )
 type logs\visual_check.txt | findstr /v /b "ok "

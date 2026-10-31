@@ -87,6 +87,9 @@ add_library(alamo_render STATIC
   src/map_scene.cpp
   src/pipelines.cpp
   src/renderer.cpp
+  src/renderer_xlat.cpp
+  src/renderer_draw.cpp
+  src/renderer_graph.cpp
   src/lasers.cpp
   src/beams.cpp
   src/beams_draw.cpp
