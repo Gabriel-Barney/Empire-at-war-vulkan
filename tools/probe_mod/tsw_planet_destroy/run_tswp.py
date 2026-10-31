@@ -26,9 +26,9 @@ import cleanup_tswp  # noqa: E402
 STEPS = r'''
 ==========================================================================================================
  TSW planet-destroy probe installed (Mods\TswPlanetProbe). Click path: README.md. In short:
- Single Player > Galactic Conquest > "TSWP PROBE: ALDERAAN" > Empire > Start.
+ Single Player > Galactic Conquest > "TSWP PROBE: KUAT" > Empire > Start.
  Wait for "TSWP PROBE: galactic plot loaded". Select the fleet at Byss (Death Star + 3 Star Destroyers), move it to
- Alderaan, fight the space battle (no auto-resolve). The hook fires the Death Star by itself.
+ Kuat, fight the space battle (no auto-resolve). The hook fires the Death Star by itself.
  Run W (won): give no orders until the battle ends (attack the station with the Star Destroyers if it drags on).
  Run L (lost): right after the "TSWP ... fired" box, press Retreat.
  Screenshot EVERY "TSWP ..." message box before clicking OK, and the galaxy map after each battle.

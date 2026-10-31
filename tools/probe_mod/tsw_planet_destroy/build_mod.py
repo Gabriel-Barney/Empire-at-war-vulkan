@@ -8,10 +8,10 @@ GameScoring.lua, CampaignFiles.xml and MasterTextFile_English.dat are read from 
 file order, the s10_map_owners reader) and patched:
   Data\\Scripts\\Miscellaneous\\GameScoring.lua   shipped script + tswp_hook.lua (fires the Death Star, stamps frames)
   Data\\XML\\CampaignFiles.xml                    shipped list + TSWP_Probe_Campaign.xml
-  Data\\XML\\TSWP_Probe_Campaign.xml              "TSWP PROBE: ALDERAAN" (Empire with the Death Star at Byss, Rebel
-                                                 Alderaan with a level-1 station, ships, barracks and infantry)
+  Data\\XML\\TSWP_Probe_Campaign.xml              "TSWP PROBE: KUAT" (Empire with the Death Star at Byss, Rebel
+                                                 Kuat with a level-1 station, ships, barracks and infantry)
   Data\\XML\\TSWP_Story_Plots.xml, TSWP_Story.xml  galactic plot: TSWP_Begin (3 s, proof) and TSWP_Heard
-                                                 (STORY_PLANET_DESTROYED Alderaan: SCREEN_TEXT, expected never)
+                                                 (STORY_PLANET_DESTROYED Kuat: SCREEN_TEXT, expected never)
   Data\\Scripts\\Story\\TSWP_Story.lua             from tswp_story.lua: owner / starbase status popups
   Data\\Text\\MasterTextFile_English.dat          shipped text + TEXTS
   TSWP_PROBE_MARKER.txt                           lets cleanup recognise the folder as ours
@@ -32,14 +32,14 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 MARKER = 'TSWP_PROBE_MARKER.txt'
 MOD_NAME = 'TswPlanetProbe'
-TARGET = 'Alderaan'
+TARGET = 'Kuat'  # FoC's Alderaan is the asteroid field with Planet_Is_Destroyable_By_TSW No
 SOURCE = 'Byss'
-ROUTE = 'Byss_Alderaan'
-DUMMY = 'Alderaan_Backdrop_Large'  # the SpaceProp with DUMMY_TACTICAL_SUPER_WEAPON_TARGET on Alderaan's space maps [M]
+ROUTE = 'Byss_Kuat'
+DUMMY = 'Kuat_Backdrop_Large'  # the SpaceProp with DUMMY_TACTICAL_SUPER_WEAPON_TARGET on Kuat's space maps [M]
 
 CAMPAIGN = r'''<?xml version="1.0"?>
 <Campaigns>
-	<!-- TSW planet-destroy probe (tools/probe_mod/tsw_planet_destroy): move the Death Star fleet from Byss to Alderaan;
+	<!-- TSW planet-destroy probe (tools/probe_mod/tsw_planet_destroy): move the Death Star fleet from Byss to Kuat;
 	     the space battle's GameScoring hook fires the TSW by itself and stamps frames. -->
 	<Campaign Name="TSWP_Probe_Empire">
 		<Campaign_Set> TSWP_Probe_Set </Campaign_Set>
@@ -134,8 +134,8 @@ STORY = '''<?xml version="1.0" ?>
 '''
 
 TEXTS = [
-    ('TEXT_TSWP_PROBE_NAME', 'TSWP PROBE: ALDERAAN'),
-    ('TEXT_TSWP_PROBE_DESC', 'TSW planet-destroy probe. Play the EMPIRE. Move the Death Star fleet from Byss to Alderaan '
+    ('TEXT_TSWP_PROBE_NAME', 'TSWP PROBE: KUAT'),
+    ('TEXT_TSWP_PROBE_DESC', 'TSW planet-destroy probe. Play the EMPIRE. Move the Death Star fleet from Byss to Kuat '
                              'and fight the space battle; the Death Star fires by itself.'),
     ('TEXT_TSWP_STORY_RUNNING', 'TSWP PROBE: galactic plot loaded'),
     ('TEXT_TSWP_STORY_LUA', 'TSWP PROBE: galactic story Lua running'),
