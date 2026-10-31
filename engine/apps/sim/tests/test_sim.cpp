@@ -932,9 +932,24 @@ static void test_story_rewards_oi(const World& w) {
                " <Event Name=\"Vis_Bad\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_PLANET_VISIBILITY_LEVEL</Reward_Type>"
                "<Reward_Param1>Nowhere</Reward_Param1><Reward_Param2>Empire</Reward_Param2><Reward_Param3>Maximum</Reward_Param3>"
                "<Reward_Param4>K</Reward_Param4><Prereq>Begin</Prereq></Event>\n"
+               // L1P4_LUA_GAPS 3 SABOTAGE_STRUCTURE: P1 = planet TYPE name (case-insensitive; the map name "A" is not
+               // matched), P2 = structure type; both required.
+               " <Event Name=\"Sab_Map\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SABOTAGE_STRUCTURE</Reward_Type>"
+               "<Reward_Param1>A</Reward_Param1><Reward_Param2>Barracks</Reward_Param2><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Sab_One\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SABOTAGE_STRUCTURE</Reward_Type>"
+               "<Reward_Param1>PlanetA</Reward_Param1><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Sab_None\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SABOTAGE_STRUCTURE</Reward_Type>"
+               "<Reward_Param1>PlanetB</Reward_Param1><Reward_Param2>Barracks</Reward_Param2><Prereq>Begin</Prereq></Event>\n"
+               " <Event Name=\"Sab_Ok\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SABOTAGE_STRUCTURE</Reward_Type>"
+               "<Reward_Param1>planeta</Reward_Param1><Reward_Param2>Barracks</Reward_Param2><Prereq>Begin</Prereq></Event>\n"
                "</Story>\n");
     DirectoryProvider files(path_to_utf8(root));
     std::string first_log;
+    auto barracks_at_a = [](const GalacticSim& g) {
+        size_t n = 0;
+        for (const ObjectHandle s : g.planets()[rA].structures) n += g.store().alive(s) && g.store().type(s) == tBarracks ? 1u : 0u;
+        return n;
+    };
     for (int32_t workers : {0, 4}) {
         GalacticRules r = rules();
         r.types[tInfantry].build_initially_locked = true;
@@ -956,6 +971,7 @@ static void test_story_rewards_oi(const World& w) {
         CHECK(!gs->type_unlocked(pEmpire, tInfantry) && !gs->type_unlocked(pEmpire, tSB1));
         CHECK(gs->corrupted(rC) && !gs->type_locked(pEmpire, tCorvette));
         CHECK(gs->max_tech_level(pEmpire) == 5 && gs->players()[pEmpire].tech_level < 4);
+        CHECK(barracks_at_a(*gs) == 1);
         StoryStart st;
         st.files = &files;
         st.plot_sets = {{pEmpire, "Story_Plots_Oi.xml"}};
@@ -1012,6 +1028,15 @@ static void test_story_rewards_oi(const World& w) {
         size_t reveal_err = 0;
         for (const auto& m : msgs) reveal_err += m.find("ENABLE_GALACTIC_REVEAL failed due to missing Param1") != std::string::npos ? 1u : 0u;
         CHECK(lock_err == 1 && clean_err == 1 && reveal_err == 1);
+        // SABOTAGE_STRUCTURE: "planeta" destroyed rA's Barracks; the map name "A", the missing P2 and PlanetB (no
+        // Barracks) are logged.
+        size_t sab_map = 0, sab_one = 0, sab_none = 0;
+        for (const auto& m : msgs) {
+            sab_map += m.find("SABOTAGE_STRUCTURE failed due to invalid planet A") != std::string::npos ? 1u : 0u;
+            sab_one += m.find("SABOTAGE_STRUCTURE takes two parameters") != std::string::npos ? 1u : 0u;
+            sab_none += m.find("SABOTAGE_STRUCTURE failed due to non-existent structure Barracks") != std::string::npos ? 1u : 0u;
+        }
+        CHECK(sab_map == 1 && sab_one == 1 && sab_none == 1 && barracks_at_a(*gs) == 0);
         const std::string log = host.story()->log_text("oi rewards");
         if (first_log.empty()) first_log = log;
         CHECK(log == first_log && log.find("reward=LOCK_UNIT[Corvette]") != std::string::npos);
@@ -1209,7 +1234,7 @@ static GalacticRules rules() {
     r.types[tHeroTeam].kind = UnitKind::GroundUnit;
     r.types[tHeroUnit].name = "Hero_Unit";
     r.types[tHeroUnit].kind = UnitKind::GroundUnit;
-    // P4 lua: one black-market item (BUY_BLACK_MARKET is routed from BlackMarketPurchase with the item's Name).
+    // P4 lua: one black-market item (BUY_BLACK_MARKET comes from the host's click-time UI notification, not from it).
     BlackMarketItemDef item;
     item.name = "Disruptor_Tech";
     item.name_crc = special_name_crc(item.name);
@@ -1278,35 +1303,33 @@ static Result run(const objects::GameObjectTypes& types, const FileProvider& fil
             story.notify_ui({StoryUiEvent::MovieDone, pEmpire, 0, "Any_Movie"});
             story.notify_ui({StoryUiEvent::Generic, pEmpire, 0, "battle_end_closed"});
             story.notify_ui({StoryUiEvent::MissionLost, pEmpire, 0, "M01"});
-            // P4 lua: these two UI kinds are ignored now; an AI purchase (other_player 0) fires no BUY_BLACK_MARKET.
-            story.notify_ui({StoryUiEvent::BuyBlackMarket, pEmpire, 0, "Disruptor_Tech"});
+            // P4 lua (L1P4_LUA_GAPS 2 / 2.5): the GalacticSabotage UI kind is ignored; an executed purchase (AI or human)
+            // fires no BUY_BLACK_MARKET (the host raises it at click time); a BuyBlackMarket naming another item fires
+            // nothing either.
             story.notify_ui({StoryUiEvent::GalacticSabotage, pEmpire, 0, "SB1"});
+            story.notify_ui({StoryUiEvent::BuyBlackMarket, pEmpire, 0, "Cloaking_Tech"});
             story.notify_ui({StoryUiEvent::OpenCorruption, pEmpire, gs->store().id(gs->planets()[story_test::rC].object), ""});
-            GalacticEvent ai_buy;
-            ai_buy.kind = GalacticEventKind::BlackMarketPurchase;
-            ai_buy.player = pEmpire;
-            ai_buy.planet = story_test::rA;
-            ai_buy.value = 0;
-            ai_buy.other_player = 0;
-            gs->post_event(ai_buy);
+            for (const int32_t human : {0, 1}) {
+                GalacticEvent buy;
+                buy.kind = GalacticEventKind::BlackMarketPurchase;
+                buy.player = pEmpire;
+                buy.planet = story_test::rA;
+                buy.value = 0;
+                buy.other_player = human;
+                gs->post_event(buy);
+            }
         }
         if (t == 12) {
             out.scoped_ok = story.log_text().find(" Gui ") == std::string::npos;  // not yet: only Underworld clicked
             story.notify_ui({StoryUiEvent::ClickGui, pEmpire, 0, "Button_X"});
-            // P4 lua: nothing from the UI kinds / the AI purchase; then the sim events (human purchase, sabotage).
+            // P4 lua: nothing yet; then Underworld's click-time BUY_BLACK_MARKET and Underworld's sabotage, both of which
+            // reach the Empire's plot set (no player scoping).
             out.special_ok = story.log_text().find(" Bought ") == std::string::npos &&
-                             story.log_text().find(" Sabotage ") == std::string::npos &&
-                             story.log_text().find("UiBuyBlackMarket") == std::string::npos;
-            GalacticEvent buy;
-            buy.kind = GalacticEventKind::BlackMarketPurchase;
-            buy.player = pEmpire;
-            buy.planet = story_test::rA;
-            buy.value = 0;
-            buy.other_player = 1;
-            gs->post_event(buy);
+                             story.log_text().find(" Sabotage ") == std::string::npos;
+            story.notify_ui({StoryUiEvent::BuyBlackMarket, pUnder, 0, "Disruptor_Tech"});
             GalacticEvent sab;
             sab.kind = GalacticEventKind::GalacticSabotage;
-            sab.player = pEmpire;
+            sab.player = pUnder;
             sab.planet = story_test::rA;
             sab.type = story_test::tSB1;
             sab.value = kSabotageSpecialStructure;

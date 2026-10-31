@@ -888,10 +888,14 @@ RejectReason GalacticSim::hack_execute(int32_t player, PlanetIndex planet, Objec
     return RejectReason::None;
 }
 
-bool GalacticSim::planet_destroy(PlanetIndex planet, int32_t destroyer) {
+bool GalacticSim::planet_destroy_core(PlanetIndex planet, int32_t destroyer, int32_t event_value) {
+    return planet_destroy_impl(planet, destroyer, event_value, false);
+}
+
+bool GalacticSim::planet_destroy_impl(PlanetIndex planet, int32_t destroyer, int32_t event_value, bool hack_orbit) {
     if (!valid_planet(planet) || planets_[planet].destroyed) return false;
     const int32_t old_owner = planets_[planet].owner;
-    emit_special(GalacticEventKind::PlanetDestroyed, destroyer, planet, planets_[planet].object, kNoIndex, 0, old_owner);
+    emit_special(GalacticEventKind::PlanetDestroyed, destroyer, planet, planets_[planet].object, kNoIndex, event_value, old_owner);
     {
         PlanetState& p = planets_[planet];
         p.siphon_player = kNoPlayer;  // siphon fields cleared
@@ -902,14 +906,15 @@ bool GalacticSim::planet_destroy(PlanetIndex planet, int32_t destroyer) {
         if (is_hero_type(static_cast<uint32_t>(store_->type(h)))) schedule_hero_respawn(h, planet, 0.0f);  // default time
         destroy_object(h);
     };
-    // Orbiting objects (reverse order; this includes the hacked super weapon).
-    const std::vector<uint32_t> orbit(planets_[planet].orbit.begin(), planets_[planet].orbit.end());
-    for (size_t i = orbit.size(); i-- > 0;) {
-        const uint32_t f = orbit[i];
-        if (!fleets_[f].alive) continue;
-        const std::vector<ObjectHandle> members = fleets_[f].contents;
-        for (size_t k = members.size(); k-- > 0;) remove(members[k]);
-        if (fleets_[f].alive) kill_fleet(f);
+    if (hack_orbit) {  // hack extra 0x4b7860: orbiting objects D +0xc8 (reverse; includes the hacked super weapon)
+        const std::vector<uint32_t> orbit(planets_[planet].orbit.begin(), planets_[planet].orbit.end());
+        for (size_t i = orbit.size(); i-- > 0;) {
+            const uint32_t f = orbit[i];
+            if (!fleets_[f].alive) continue;
+            const std::vector<ObjectHandle> members = fleets_[f].contents;
+            for (size_t k = members.size(); k-- > 0;) remove(members[k]);
+            if (fleets_[f].alive) kill_fleet(f);
+        }
     }
     {  // special structures (D +0x158), reverse
         const std::vector<ObjectHandle> s = planets_[planet].structures;
@@ -917,10 +922,16 @@ bool GalacticSim::planet_destroy(PlanetIndex planet, int32_t destroyer) {
     }
     set_corruption(planet, kCorruptionNone, kNoPlayer);  // with notifications
     planets_[planet].destroyed = true;                   // income: Planet_Destroyed_Credit_Value
-    {  // surface objects (reverse; heroes respawn at the default time)
+    {  // surface objects D +0xe0 (reverse; heroes respawn at the default time)
         const std::vector<ObjectHandle> s = planets_[planet].surface;
         for (size_t k = s.size(); k-- > 0;) remove(s[k]);
     }
+    return true;
+}
+
+bool GalacticSim::planet_destroy(PlanetIndex planet, int32_t destroyer) {
+    // The hack path 0x61b790: the core with the orbit removal (inside, at its old place), then starbase and owner.
+    if (!planet_destroy_impl(planet, destroyer, 0, true)) return false;
     if (store_->alive(planets_[planet].starbase)) destroy_object(planets_[planet].starbase);  // 0x4bda40
     // Owner := the NEUTRAL faction's player (0x3f8060); the leaning follows so the derivation keeps it.
     PlanetState& p = planets_[planet];

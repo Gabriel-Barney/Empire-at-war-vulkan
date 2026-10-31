@@ -182,11 +182,12 @@ enum class StoryHostEvent : uint8_t { TacticalStarted = 0, TacticalEnded = 1 };
 //   MovieDone        STORY_MOVIE_DONE       (MovieDone class; generic rule, Param1 = movie name)
 //   Generic          STORY_GENERIC
 //   MissionLost      STORY_MISSION_LOST
-//   BuyBlackMarket   } P4 lua: ignored by notify_ui. STORY_BUY_BLACK_MARKET (name = item Name; a human buyer's
-//   GalacticSabotage } purchase) and STORY_GALACTIC_SABOTAGE (name = structure type) are routed from the galactic
-//                      stream's BlackMarketPurchase / GalacticSabotage events (player-scoped; reward sabotage: all
-//                      sets), so they replay deterministically. Story rewards GIVE_BLACK_MARKET (bm_give_item, plot
-//                      player) and SABOTAGE_STRUCTURE (sabotage_structure_reward) are applied by the host.
+//   BuyBlackMarket   STORY_BUY_BLACK_MARKET (name = item Name), raised by the host's black-market buy handler at click
+//                      time (L1P4_LUA_GAPS 2); every plot set, not only the buyer's.
+//   GalacticSabotage   ignored by notify_ui: STORY_GALACTIC_SABOTAGE (name = structure type) is routed from the
+//                      galactic stream's GalacticSabotage events to every plot set (L1P4_LUA_GAPS 2.5). Story rewards
+//                      GIVE_BLACK_MARKET (bm_give_item, plot player) and SABOTAGE_STRUCTURE (sabotage_structure_reward;
+//                      Param1 = planet type name, case-insensitive) are applied by the host.
 //   OpenCorruption   STORY_OPEN_CORRUPTION  (name = the planet's type name, or the object's)
 enum class StoryUiEvent : uint8_t {
     SelectUnit = 0, SelectPlanet, ZoomIntoPlanet, ZoomOutPlanet, ClickGui, SpeechDone, MovieDone, Generic,
@@ -354,6 +355,10 @@ public:
     // Tactical notification (battle host, sim thread): names / owners resolved now from the battle's store,
     // queued and routed at the next service. Ignored without an attached battle.
     void notify_tactical(const TacticalStoryNotification& n);
+    // L1 systems (TSW_PLANET_DESTROY §7): a tactical super weapon destroyed galactic planet (destroyer = its owner)
+    // during the attached battle. STORY_PLANET_DESTROYED goes to the tactical plot set at once (the current mode's story
+    // manager); the galactic plots never hear it (the poll marks it seen; its stream event carries value 1 and is skipped).
+    void planet_destroyed_in_battle(PlanetIndex planet, int32_t destroyer, uint64_t frame);
     // The tactical plot set while a battle is attached (nullptr otherwise).
     const lua::StoryModel* tactical_model() const;
     lua::StoryModel* tactical_model();

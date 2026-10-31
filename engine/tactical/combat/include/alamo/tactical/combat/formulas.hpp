@@ -103,6 +103,12 @@ inline constexpr int kLeadRootIterations = 15;
 // no horizontal distance -> straight at the aim point. Returns a unit vector.
 Vec3 lob_direction(Vec3 muzzle, Vec3 aim, float speed, float gravity);
 
+// ---- projectile turn (Turn_Toward 0x3abe40 with rate -1, S9_DEATH_CLONE_SHIELDS.md §2.3) [H] -------------------
+// Turns the unit heading `dir` toward `goal` (any length): yaw (atan2(y, x)) and pitch (atan2(z, |xy|)) deltas, each
+// wrapped to (-180, 180], are clamped SEPARATELY to +-max_degrees; the result is the unit vector of the new yaw / pitch.
+// max_degrees <= 0 (a Max_Rate_Of_Turn of 0: vanilla lasers) or a zero goal returns `dir` unchanged, bit for bit.
+Vec3 turn_toward(Vec3 dir, Vec3 goal, float max_degrees);
+
 // ---- area damage (section 3.5) [H] --------------------------------------------------------------
 // factor = clamp(1 - floor(d x tiers / R) / (tiers + 1), 0, 1); R <= 0 -> 1.
 float area_falloff(float d, float R, int32_t tiers);

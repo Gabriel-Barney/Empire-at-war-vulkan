@@ -138,6 +138,8 @@ uint32_t slicer_ability(const galactic::GalacticSim& g, objects::ObjectHandle he
 // The slice dialog's rows (GalacticSim::slice_entries, candidate order: type, price, chance) for the slicer `hero_id`
 // of `player` at `planet`; empty when the hero is gone or has no Slicer ability (REMAINING_GAPS 1.3 step 3).
 std::vector<galactic::SliceEntry> slice_rows(const galactic::GalacticSim& g, int32_t player, PlanetIndex planet, uint32_t hero_id);
+// A black-market dialog row can be clicked (L1P4_LUA_GAPS 2.3): not purchased and int(price + 0.5) <= int(credits + 0.5).
+bool black_market_row_enabled(const galactic::BlackMarketOffer& o, float credits);
 
 class GameSession {
 public:
@@ -205,7 +207,9 @@ public:
     bool notify_story_ui(const sim::StoryUiNotification& n);
     // P4 host: galactic special abilities (SpecialAbility event 13; galactic special_systems.hpp). activate_special =
     // kind 1 (a hero or fleet of the local player at the planet). The dialog answers use the open special_dialog() and
-    // close it once submitted: buy_black_market (kind 4, item = SpecialRules::items index, price from bm_offers),
+    // close it once submitted: buy_black_market (kind 4, item = SpecialRules::items index, price from bm_offers;
+    // refuses purchased rows and int(price + 0.5) > int(credits + 0.5); sends StoryUiEvent::BuyBlackMarket with the
+    // item Name first, L1P4_LUA_GAPS 2),
     // sabotage_structure (kind 5, cost from sabotage_cost, R 0 as the retail dialog), hack_super_weapon (kind 7,
     // Hack_Super_Weapon_Cost), corrupt_planet (kind 6, apps/sim CampaignBattles), slice_tech (kind 2, the slice_rows
     // row of `type`: its price and chance, the dialog's R, only-one = a single row; REMAINING_GAPS 1.3.1). Cancel =

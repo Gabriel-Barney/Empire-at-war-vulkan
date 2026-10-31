@@ -30,8 +30,12 @@
 //   TSW_Attack_Distance_From_Target; the 0x42b560 progress rule is not in the docs] -> 4 + TswReady;
 //   4 ready (Fire_Tactical_Superweapon); fire (0x42a200: planet checks by the host, state 4 and a target) -> 5,
 //   countdown int(30 x TSW_Power_Up_Countdown_Seconds) -> 6 -> 7 attack animation (anim 5) + SFXEvent_Fire,
-//   countdown int(30 x TSW_Attack_Anim_Duration_Seconds) -> 9 planet destruction (debris type: synced Get_Int when
-//   the planet lists several) -> 10 aftermath (TSW_Post_Destruction_Wait_Frames) -> 11 done.
+//   countdown int(30 x TSW_Attack_Anim_Duration_Seconds) -> 9 planet destruction (TswPlanetDestroyed: the target
+//   dummy's Death_Explosions pick, synced Get_Int when it lists several; point = the target position from the
+//   acquisition [port: dummies do not move]) -> 10 for
+//   TSW_Explosion_Debris_Creation_Frame_Delay frames -> TswDebris -> 12 for TSW_Post_Destruction_Wait_Frames frames ->
+//   13 -> next service 0 for good (TswDone; never re-arms). The timers run in sequence (TSW_PLANET_DESTROY §3).
+//   victory_holds(): TSWs in states 5..13 hold the battle's victory checks (§2; the host defers them).
 //   First service with a target: placed toward it at TSW_Start_Distance_From_Target, or at
 //   TSW_Attack_Distance_From_Target when the owner is the battle attacker (GMM 0x28aec0 [M]) - then it starts in
 //   state 4 with the target set; otherwise state 2. TSW_Start_Pos_Match_Targets_Z: z = target z +
@@ -77,9 +81,13 @@ enum TswState : int32_t {
     kTswAttackAnim = 7,
     kTswAttackWait = 8,
     kTswDestruction = 9,
-    kTswAftermath = 10,
-    kTswDone = 11,
+    kTswDebrisWait = 10,  // TSW_Explosion_Debris_Creation_Frame_Delay, then the Death_By_TSW_Replacements (TswDebris)
+    kTswPostWait = 12,    // TSW_Post_Destruction_Wait_Frames (there is no state 11)
+    kTswRelease = 13,     // next service: -> 0 for good, victory hold released (TswDone)
 };
+// The tactical victory monitor hold (TSW_PLANET_DESTROY §2): a TSW holds it from a successful fire (state 5) until its
+// state-13 service (states 5..13).
+constexpr bool tsw_holds_victory(int32_t state) { return state >= kTswPowerUp && state <= kTswRelease; }
 
 struct SpecialWeaponDesc {
     uint8_t kinds = 0;                // SpecialWeaponKind bits
@@ -120,9 +128,9 @@ enum class SwEventKind : uint8_t {
     TswReady,         // 3 -> 4: "superweapon ready" speech (own / enemy text by relation)
     TswFiring,        // fire accepted: firing sequence (0x2ccf30), Activate voice, Power_Up SFX, victory monitor
     TswAttackAnim,    // state 7: attack animation (anim 5) + SFXEvent_Fire
-    TswPlanetDestroyed,  // state 9: value = the debris pick (-1 none)
-    TswDebris,        // TSW_Explosion_Debris_Creation_Frame_Delay frames later: the debris objects (value = pick)
-    TswDone,          // aftermath wait over
+    TswPlanetDestroyed,  // state 9: value = the Death_Explosions pick (-1 none), target = the dummy, point = its position
+    TswDebris,        // end of state 10: every Death_By_TSW_Replacements entry at the saved point (value = pick)
+    TswDone,          // state 13 serviced: back to 0 for good, victory hold released
 };
 
 struct SpecialWeaponEvent {
@@ -158,7 +166,7 @@ struct SpecialWeaponWorld {
     std::function<Vec3(ObjectId id)> position;                      // current position (TSW placement / approach)
     std::function<void(ObjectId id, Vec3 position, Vec3 facing)> place;  // move the TSW (store, combat, trees)
     std::function<bool(int32_t owner)> is_battle_attacker;          // 0x28aec0 [M] (unset: false)
-    std::function<uint32_t(ObjectId tsw)> debris_choices;           // planet debris types (unset: 0)
+    std::function<uint32_t(ObjectId target)> debris_choices;        // the target dummy's Death_Explosions count (unset: 0)
 };
 
 class SpecialWeaponSystem {
@@ -197,6 +205,10 @@ public:
     // 0x42a200 without the planet test (`planet_ok` = battle planet in the parent store, not destroyed and its type
     // Planet_Is_Destroyable_By_TSW: the host's): state 4 and a target -> 5. True = fired.
     bool tsw_fire(ObjectId id, bool planet_ok, uint32_t frame);
+    // Number of TSWs holding the victory monitor (tsw_holds_victory; 0x341fe0 / 0x3440a0). A pack removed mid-sequence
+    // stops holding [port: the original would stay held].
+    uint32_t victory_holds() const;
+    bool tsw_spent(ObjectId id) const;  // served state 13: sits in state 0 for good
 
     // ---- per tick (serial, after the combat events) ----
     // Due pulses -> shots(), readiness / TSW events -> events(). Outputs are cleared at the start of each tick.
@@ -233,13 +245,13 @@ private:
         uint8_t at_point = 0;
         // TSW
         int32_t tsw = -1;  // state, -1 = not a TSW
-        uint8_t tsw_init = 0;
+        uint8_t tsw_init = 0;  // 0 first service pending, 1 set up, 2 spent (after state 13)
         ObjectId tsw_target = kNoObject;
         Vec3 tsw_target_pos;
         int32_t countdown = 0;
         int32_t debris_pick = -1;
-        uint32_t debris_frame = 0;
-        uint8_t debris_pending = 0;
+        uint32_t debris_frame = 0;   // frame of the state-9 service (kept in the save layout; informational)
+        uint8_t debris_pending = 0;  // 1 between state 9 and TswDebris
     };
     int32_t find(ObjectId id) const;
     Pack* pack(ObjectId id);

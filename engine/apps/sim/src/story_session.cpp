@@ -288,9 +288,10 @@ std::string_view story_ui_event_type(StoryUiEvent e) {
 // object's type name, a planet's type name), planet = planet type name, faction = acting player.
 void StorySession::notify_ui(const StoryUiNotification& n) {
     if (story_ui_event_type(n.kind).empty()) return;
-    // --- P4 lua: BUY_BLACK_MARKET / GALACTIC_SABOTAGE come from the galactic stream (BlackMarketPurchase /
-    // GalacticSabotage, notifications()), so they replay with the commands; the UI kinds are ignored (no double fire).
-    if (n.kind == StoryUiEvent::BuyBlackMarket || n.kind == StoryUiEvent::GalacticSabotage) return;
+    // --- P4 lua (L1P4_LUA_GAPS 2 / 2.5): BUY_BLACK_MARKET is raised by the host's black-market buy handler at click
+    // time (name = item Name, every plot set, route()); GALACTIC_SABOTAGE comes from the galactic stream
+    // (GalacticSabotage, notifications()), so its UI kind is ignored (no double fire).
+    if (n.kind == StoryUiEvent::GalacticSabotage) return;
     // --- end P4 lua ---
     // L1/S4 wave 1 (tactical, header): battle-screen SELECT_UNIT / CLICK_GUI / SPEECH_DONE -> the tactical plot set
     // (notify_tactical: the object resolved in the battle's store); only SPEECH_DONE also continues to the galactic sets.
@@ -700,15 +701,10 @@ std::vector<std::pair<std::string, lua::StoryNotification>> StorySession::notifi
             out.emplace_back("STORY_RETREAT", n);
             break;
         // --- P4 lua (P4_SIM_SYSTEMS 1.4 / 2.4, STORY.md String class: Param1 empty or names `name`) ---
-        // BUY_BLACK_MARKET 0x38: the original's dialog dispatches it at click time for the local human only, with the item
-        // Name; the port takes the executed purchase of a human buyer (other_player 1) [port: a purchase refused for
-        // credits fires nothing]; AI purchases fire nothing [H].
-        case K::BlackMarketPurchase:
-            if (e.other_player != 1 || e.value < 0 || static_cast<size_t>(e.value) >= sim_->rules().special.items.size()) break;
-            n.name = sim_->rules().special.items[static_cast<size_t>(e.value)].name;
-            out.emplace_back("STORY_BUY_BLACK_MARKET", n);
-            break;
-        // GALACTIC_SABOTAGE 0x39: the command executor and the SABOTAGE_STRUCTURE reward (player -1), structure type name.
+        // BUY_BLACK_MARKET 0x38 is not derived from the executed BlackMarketPurchase: the dialog raises it at click time
+        // (L1P4_LUA_GAPS 2.1), so the host sends StoryUiEvent::BuyBlackMarket from its buy handler.
+        // GALACTIC_SABOTAGE 0x39: the command executor and the SABOTAGE_STRUCTURE reward, structure type name; every plot
+        // set (L1P4_LUA_GAPS 2.5, route()).
         case K::GalacticSabotage:
             n.name = t.type;
             out.emplace_back("STORY_GALACTIC_SABOTAGE", n);
@@ -725,9 +721,9 @@ void StorySession::route(const StoryTrigger& t) {
     // battle results go to the acting / winning / losing / retreating player's plot sets only.
     using K = galactic::GalacticEventKind;
     const bool battle = t.event.kind == K::BattleWon || t.event.kind == K::BattleLost || t.event.kind == K::BattleRetreat;
-    // P4 lua: the buyer's / saboteur's plot sets (as the UI kinds they replace); a reward sabotage (player -1) goes to all.
-    const bool special = t.kind.rfind("Ui", 0) != 0 && (t.event.kind == K::BlackMarketPurchase || t.event.kind == K::GalacticSabotage);
-    const bool scoped = (battle || special || t.kind.rfind("Ui", 0) == 0) && t.event.player >= 0;
+    // P4 lua (L1P4_LUA_GAPS 2.2 / 2.5): BUY_BLACK_MARKET and GALACTIC_SABOTAGE pass no player -> every plot set.
+    const bool unscoped = t.kind == "UiBuyBlackMarket";
+    const bool scoped = !unscoped && (battle || t.kind.rfind("Ui", 0) == 0) && t.event.player >= 0;
     for (size_t si = 0; si < sets_.size(); ++si) {
         if (scoped && sets_[si]->player != t.event.player) continue;
         for (const auto& [type, n] : list) {
@@ -796,15 +792,23 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         if (s.player >= 0) sim_->bm_give_item(s.player, trim(item));
     } else if (type == "SABOTAGE_STRUCTURE") {
         // 0x81: Param1 planet, Param2 structure type: the first structure of that type there is destroyed (no cost, no
-        // saboteur; GALACTIC_SABOTAGE with player -1, counter + 1). Planet by map name, else by planet type name [port].
-        const std::string p1 = at(0), p2 = at(1);
-        const std::string_view pn = trim(p1);
-        const uint32_t type_index = sim_->rules().find_type(trim(p2));
-        const auto& names = sim_->map().planets.name;
-        PlanetIndex row = kInvalidPlanet;
-        for (PlanetIndex i = 0; i < sim_->planets().size() && row == kInvalidPlanet; ++i)
-            if ((i < names.size() && iequal(names[i], pn)) || iequal(planet_type_name(i), pn)) row = i;
-        if (row != kInvalidPlanet && type_index != galactic::kNoIndex) sim_->sabotage_structure_reward(row, type_index);
+        // saboteur; GALACTIC_SABOTAGE to every plot set, counter + 1). L1P4_LUA_GAPS 3: both params required; Param1 is a
+        // game object type name (case-insensitive), the planet is the first planet row of that type (no map-name match);
+        // Param2 the structure type, ground special structures only (GalacticSim::sabotage_structure_reward).
+        const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
+        if (p1.empty() || p2.empty()) {
+            lua_messages_.push_back(std::to_string(frame_) +
+                                    " story: SABOTAGE_STRUCTURE takes two parameters, a planet name and building type");
+        } else {
+            PlanetIndex row = kInvalidPlanet;
+            for (PlanetIndex i = 0; i < sim_->planets().size() && row == kInvalidPlanet; ++i)
+                if (iequal(planet_type_name(i), p1)) row = i;
+            const uint32_t type_index = sim_->rules().find_type(p2);
+            if (row == kInvalidPlanet)
+                lua_messages_.push_back(std::to_string(frame_) + " story: SABOTAGE_STRUCTURE failed due to invalid planet " + p1);
+            else if (type_index == galactic::kNoIndex || !sim_->sabotage_structure_reward(row, type_index))
+                lua_messages_.push_back(std::to_string(frame_) + " story: SABOTAGE_STRUCTURE failed due to non-existent structure " + p2);
+        }
     }
     // --- end P4 lua ---
     // --- OI lua (P4_SIM_SYSTEMS 3.3 / 6.4) ---
@@ -835,7 +839,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         else if (type_index == galactic::kNoIndex)
             lua_messages_.push_back(std::to_string(frame_) + " story: " + type + " failed due to unknown unit type '" + p1 + "'");
     } else if (type == "REMOVE_CORRUPTION") {
-        // Param1 planet (map name, else planet type name [port], as SABOTAGE_STRUCTURE): a corrupted planet starts the
+        // Param1 planet (map name, else planet type name [port]): a corrupted planet starts the
         // timed removal (wrapper 0x3f6770, GRC 4.3) over Param2 seconds (default 10.0; the sim's guard refuses an
         // uncorrupted planet or a running transition). No shipped event uses it.
         const std::string p1 = at(0);
@@ -1104,7 +1108,9 @@ void StorySession::service(uint64_t frame, double mode_seconds) {
         if (drain_tap_ && !scratch_.empty()) drain_tap_(round, scratch_);  // OI host: presentation tap (read-only)
         std::vector<StoryTrigger> batch;
         batch.reserve(scratch_.size() + pending_host_.size() + pending_ui_.size());
-        for (const galactic::GalacticEvent& e : scratch_) batch.push_back(translate(e));
+        for (const galactic::GalacticEvent& e : scratch_)
+            if (!(e.kind == galactic::GalacticEventKind::PlanetDestroyed && e.value == 1))  // TSW: battle plots only (§7)
+                batch.push_back(translate(e));
         poll_planets(batch);  // wave 1: PLANET_DESTROYED (no stream event)
         for (StoryTrigger& h : pending_host_) batch.push_back(std::move(h));
         pending_host_.clear();
@@ -1546,6 +1552,35 @@ void StorySession::notify_tactical(const TacticalStoryNotification& n) {
     t.faction = faction_name(owner);
     if (!p.target.empty()) t.units.push_back(p.target);
     tactical_->pending.push_back(std::move(p));
+}
+
+void StorySession::planet_destroyed_in_battle(PlanetIndex planet, int32_t destroyer, uint64_t frame) {
+    if (planet >= sim_->planets().size()) return;
+    if (destroyed_init_) {  // the galactic poll must not raise it later
+        if (destroyed_seen_.size() < sim_->planets().size()) destroyed_seen_.resize(sim_->planets().size(), 0);
+        destroyed_seen_[planet] = sim_->planets()[planet].destroyed ? 1 : 0;
+    }
+    if (!tactical_ || !tactical_->set) return;
+    Set& s = *tactical_->set;
+    StoryTrigger t;  // 0x3f76c0 -> 0x32a7a0 on the tactical manager: dispatched at once (0x32e5f0)
+    t.kind = "TacPlanetDestroyed";
+    t.frame = frame;
+    t.index = static_cast<uint32_t>(triggers_.size());
+    t.event.kind = galactic::GalacticEventKind::Count;
+    t.event.planet = planet;
+    t.event.player = destroyer;
+    const auto& names = sim_->map().planets.name;
+    if (planet < names.size()) t.planet = names[planet];
+    t.faction = faction_name(destroyer);
+    lines_.push_back(t.text());
+    triggers_.push_back(t);
+    lua::StoryNotification n;
+    n.owner = destroyer;
+    n.owner_neutral = destroyer >= 0 && destroyer == sim_->neutral_player();
+    n.planet = planet_type_name(planet);
+    n.has_object = true;
+    s.model.dispatch("STORY_PLANET_DESTROYED", n);
+    collect_set(s, s.number, "trigger:" + t.kind + "#" + std::to_string(t.index));
 }
 
 // Queued notify_tactical() notifications -> the tactical plot set ("the running mode's story manager").

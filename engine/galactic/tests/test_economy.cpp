@@ -689,23 +689,27 @@ void test_event_stream() {
 // ---- 2f. A2 galactic: AI hooks (income ticks, production queries, FleetManagement) ------------------------------------
 
 void test_a2_income_hook() {
+    // A2 gal t03 (A2GAL_READINGS 1.1): per AI player inside the payment loop, raw income, none for humans or I = 0.
     World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}});
     GalacticSim& s = w.sim;
     std::vector<IncomeTick> ticks;
-    const uint32_t id = s.add_income_hook([&ticks, &s](const IncomeTick& t) {
+    std::vector<float> credits_at_tick;
+    const uint32_t id = s.add_income_hook([&](const IncomeTick& t) {
         ticks.push_back(t);
-        CHECK(s.galactic_day() == t.day);  // after the cycle
+        credits_at_tick.push_back(s.credits(t.player));
+        CHECK(s.galactic_day() + 1 == t.day);  // inside the loop: the counter increments after it
     });
     CHECK(id != 0 && s.last_income(pUnder) == 0.0f && s.last_income(99) == 0.0f);
+    const float under0 = s.credits(pUnder);
     w.run(1);  // frame 0: first fiscal cycle
-    CHECK(ticks.size() == 3);
-    if (ticks.size() == 3) {
-        CHECK(ticks[0].player == pEmpire && ticks[0].gain == 45.0f && ticks[0].period_seconds == 45.0f && ticks[0].day == 1 &&
-              ticks[0].frame == 0);
-        CHECK(ticks[1].player == pUnder && ticks[1].gain == 8.0f * 1.2f);  // Credit_Multiplier applied
-        CHECK(ticks[2].player == pNeutral && ticks[2].gain == 0.0f);
+    // Empire is human (no tick), Neutral earns nothing (no tick): only Underworld.
+    CHECK(ticks.size() == 1);
+    if (ticks.size() == 1) {
+        CHECK(ticks[0].player == pUnder && ticks[0].gain == 8.0f && ticks[0].period_seconds == 45.0f && ticks[0].day == 1 &&
+              ticks[0].frame == 0);  // raw income: Underworld's Credit_Multiplier 1.2 is not in it
+        CHECK(credits_at_tick[0] == under0 + 8.0f * 1.2f);  // fired after this player's Add_Credits
     }
-    CHECK(s.last_income(pEmpire) == 45.0f && s.last_income(pUnder) == 8.0f * 1.2f);
+    CHECK(s.last_income(pEmpire) == 45.0f && s.last_income(pUnder) == 8.0f && s.last_income(pNeutral) == 0.0f);
     // The AI pays a corvette as it goes from the frame before the cycle: the cycle frame's installment is in the
     // credit change but not in the income tick.
     while (s.frame() + 1 < s.next_cycle_frame()) w.run(1);
@@ -713,17 +717,29 @@ void test_a2_income_hook() {
     w.run(1);
     const float before = s.credits(pUnder);
     w.run(1);
-    CHECK(ticks.size() == 6 && ticks[4].gain == 8.0f * 1.2f && ticks[4].day == 2 && ticks[4].frame == 1350);
+    CHECK(ticks.size() == 2 && ticks[1].gain == 8.0f && ticks[1].day == 2 && ticks[1].frame == 1350);
     CHECK(s.credits(pUnder) - before < 8.0f * 1.2f - 1.0f);
-    // The gain is taken before the cap clamp.
-    s.add_credits(pEmpire, 79990.0f - s.credits(pEmpire));
-    while (s.frame() < s.next_cycle_frame()) w.run(1);
-    w.run(1);
-    CHECK(ticks.size() == 9 && ticks[6].gain == 45.0f && s.credits(pEmpire) == 80000.0f);
     s.remove_income_hook(id);
     const int32_t stop = s.next_cycle_frame();
     while (s.frame() <= stop) w.run(1);
-    CHECK(ticks.size() == 9);
+    CHECK(ticks.size() == 2);
+
+    // AI Empire: ticks in player order, the gain taken before the cap clamp.
+    World a({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}}, true);
+    GalacticSim& t = a.sim;
+    std::vector<IncomeTick> at;
+    t.add_income_hook([&at](const IncomeTick& k) { at.push_back(k); });
+    t.add_credits(pEmpire, 79990.0f - t.credits(pEmpire));
+    a.run(1);
+    CHECK(at.size() == 2 && t.credits(pEmpire) == 80000.0f);
+    if (at.size() == 2) CHECK(at[0].player == pEmpire && at[0].gain == 45.0f && at[1].player == pUnder);
+    // An AI player with no income this cycle (Underworld owns nothing here): no Add_Credits and no tick.
+    World z({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}}, true);
+    std::vector<IncomeTick> zt;
+    z.sim.add_income_hook([&zt](const IncomeTick& k) { zt.push_back(k); });
+    CHECK(z.sim.player_income(pUnder, false) == 0.0f);
+    z.run(1);
+    CHECK(zt.size() == 1 && !zt.empty() && zt[0].player == pEmpire && z.sim.last_income(pUnder) == 0.0f);
 }
 
 void test_a2_production_queries() {
@@ -788,6 +804,103 @@ void test_a2_spawn_convert() {
     CHECK(!s.blockaded(rA, pEmpire));
     s.spawn_unit(pUnder, rA, tCorvette);
     CHECK(s.blockaded(rA, pEmpire) && s.blockaded(rA, pUnder) && !s.blockaded(rB, pEmpire) && !s.blockaded(rCore, pEmpire));
+}
+
+// ---- A2 gal t04 / t05 / t06 (docs/re/A2GAL_READINGS.md §2-§4) -------------------------------------------------------
+
+void test_a2gal_population() {
+    // §2: the starbase counts through its planet (once, its Population_Value is not "used"); the non-human skip is
+    // "planet not revealed"; objects in transit are never skipped.
+    GalacticRules rules = make_rules();
+    rules.constants.ai_uses_galactic_pop_cap = true;
+    rules.types[tPlanetA].population_capacity = 4;
+    rules.types[tPlanetE].population_capacity = 5;
+    rules.types[tSB1].population_capacity = 10;
+    rules.types[tSB1].population = 7;
+    rules.types[tBarracks].population_capacity = 1;
+    rules.types[tFrigate].population = 3;
+    rules.factions[1].base_population_capacity = 2;
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store{objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids};
+    SimRng rng{1u};
+    GalacticSim s{rules, store, rng};
+    CHECK(s.start(make_setup({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}, {pUnder, rE, tFrigate}})));
+    CHECK(s.planets()[rE].owner == pUnder && store.alive(s.planets()[rE].starbase));
+    s.set_planet_auto_reveal(false);  // the reveal state decides (auto-reveal makes every planet revealed)
+    s.set_planet_revealed(rE, false);
+    CHECK(s.population_skips(pUnder, rE) && !s.population_skips(pEmpire, rE) && !s.population_skips(pUnder, kInvalidPlanet));
+    CHECK(s.population_capacity(pUnder) == 2 && s.population_used(pUnder, false) == 0);  // everything at E skipped
+    s.set_planet_revealed(rE, true);
+    // 2 base + planet E 5 + starbase type 10 (once) + barracks 1; used = frigate 3 (the starbase's 7 is not "used").
+    CHECK(s.population_capacity(pUnder) == 18 && s.population_used(pUnder, false) == 3);
+    // Human Empire: never skips; planet A 4 + its starbase 10.
+    s.set_planet_revealed(rA, false);
+    CHECK(s.population_capacity(pEmpire) == 14 && s.population_used(pEmpire, false) == 0);
+    // The frigate's fleet in transit has no planet: counted even while E is not revealed.
+    s.set_planet_revealed(rE, false);
+    const std::vector<uint32_t> fl = s.fleets_at(rE, pUnder);
+    CHECK(fl.size() == 1);
+    if (fl.size() == 1) {
+        const PlanetIndex hop[] = {rC};
+        const RejectReason mv = s.move_fleet_path(pUnder, fl[0], hop);
+        if (mv != RejectReason::None) std::printf("  a2gal pop: move refused %d\n", static_cast<int>(mv));
+        CHECK(mv == RejectReason::None);
+        s.update();
+        CHECK(s.fleets()[fl[0]].moving && s.fleets()[fl[0]].planet == kInvalidPlanet);
+        CHECK(s.population_used(pUnder, false) == 3 && s.population_capacity(pUnder) == 2);
+    }
+}
+
+void test_a2gal_steal_order() {
+    // §3: the owner's list newest first; a capture moves the object to the newest end; units in transit are stealable.
+    World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}});
+    GalacticSim& s = w.sim;
+    const ObjectHandle f1 = s.spawn_unit(pEmpire, rB, tFrigate);
+    const ObjectHandle f2 = s.spawn_unit(pEmpire, rC, tFrigate);
+    CHECK(s.steal_unit(pEmpire, tFrigate, rA, false));
+    CHECK(w.store.alive(f1) && !w.store.alive(f2));  // the newest goes first
+    const ObjectHandle u = s.spawn_unit(pUnder, rD, tFrigate);
+    const ObjectHandle f3 = s.spawn_unit(pEmpire, rB, tFrigate);
+    CHECK(w.store.set_owner(u, pEmpire));  // captured: now the Empire's newest, although created before f3
+    CHECK(s.steal_unit(pEmpire, tFrigate, rA, false) && !w.store.alive(u) && w.store.alive(f3) && w.store.alive(f1));
+    CHECK(s.steal_unit(pEmpire, tFrigate, rA, false) && !w.store.alive(f3) && w.store.alive(f1));
+    // In transit toward the destination: stealable; the newer one at the destination is not.
+    const uint32_t moving = s.fleet_containing(f1);
+    CHECK(moving != kNoFleet && s.move_fleet(pEmpire, moving, rA) == RejectReason::None);
+    w.run(1);
+    CHECK(w.fl(moving).moving);
+    const ObjectHandle at_dest = s.spawn_unit(pEmpire, rA, tFrigate);
+    CHECK(s.steal_unit(pEmpire, tFrigate, rA, false) && !w.store.alive(f1) && w.store.alive(at_dest));
+    CHECK(!s.steal_unit(pEmpire, tFrigate, rA, false) && s.steal_unit(pEmpire, tFrigate, rA, true));  // hero rule
+}
+
+void test_a2gal_ai_blockade() {
+    // §4: the first visible orbit fleet decides, relative to the planet owner; no combat filter, neutrals blockade.
+    World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}});
+    GalacticSim& s = w.sim;
+    CHECK(!s.ai_blockaded(rA) && !s.ai_blockaded(rCore) && !s.ai_blockaded(kInvalidPlanet));
+    const ObjectHandle own = s.spawn_unit(pEmpire, rA, tFrigate);
+    const ObjectHandle foe = s.spawn_unit(pUnder, rA, tCorvette);
+    CHECK(w.planet(rA).orbit.size() == 2);
+    CHECK(!s.ai_blockaded(rA) && s.blockaded(rA, pEmpire));  // the owner's own fleet is listed first
+    CHECK(s.destroy_object(own));
+    CHECK(s.ai_blockaded(rA));
+    s.set_galactic_stealth(foe, true);  // a fleet whose contents are all hidden is skipped
+    CHECK(!s.ai_blockaded(rA));
+    s.set_galactic_stealth(foe, false);
+    s.set_relation(pEmpire, pUnder, Relation::Ally);  // friendly to the planet owner
+    CHECK(!s.ai_blockaded(rA));
+    s.set_relation(pEmpire, pUnder, Relation::Enemy);
+    s.set_relation(pUnder, pEmpire, Relation::Enemy);
+    CHECK(s.ai_blockaded(rA));
+    // Relative to the planet owner: Underworld's fleet at its own planet E does not blockade E.
+    s.spawn_unit(pUnder, rE, tCorvette);
+    CHECK(!s.ai_blockaded(rE) && s.blockaded(rE, pEmpire));
+    // A neutral, unarmed fleet blockades (the HUD / starbase test ignores it).
+    w.rules.types[tFighters].ai_combat_power = 0.0f;
+    s.spawn_unit(pNeutral, rB, tFighters);
+    CHECK(s.ai_blockaded(rB) && !s.blockaded(rB, pEmpire));
 }
 
 void test_a2_population_terrain() {
@@ -1517,8 +1630,10 @@ void test_oi_victory() {
     CHECK(!w6.sim.resolve_battle_super_weapon(rC, pEmpire));
     CHECK(w6.sim.victory_claims().size() == 1 && w6.sim.victory_claims()[0].type == 6 && w6.sim.victory_claims()[0].player == pEmpire);
     // 7: planet destruction with the victim faction's leader on it; 8: no enemy leader on any planet.
+    // TSW_PLANET_DESTROY §6: victim = the planet's owner; the leader must be a team MEMBER (Company_Units) of a surface
+    // object - here Faction_Leader = the infantry unit inside the Company team.
     GalacticRules r7 = make_oi_rules();
-    r7.factions[1].leader = tCompany;
+    r7.factions[1].leader = tInfantry;
     r7.factions[1].leader_company = tCompany;
     objects::GameObjectTypes types;
     objects::IdCounter ids;
@@ -1527,9 +1642,23 @@ void test_oi_victory() {
     GalacticSim s7{r7, store, rng};
     CHECK(s7.start(make_setup({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}, {pUnder, rD, tCompany}})));
     VictorySide none;
+    CHECK(s7.planets()[rD].owner == pUnder && s7.super_weapon_leader_hit(rD) && !s7.super_weapon_leader_hit(rE));
     CHECK(!victory_condition_met(s7, none, VictoryCondition::KillEnemyLeader, pEmpire));
     CHECK(s7.super_weapon_destroy_planet(rD, pEmpire) && s7.planets()[rD].destroyed);
     CHECK(s7.victory_claims().size() == 1 && s7.victory_claims()[0].type == 7 && s7.victory_claims()[0].countdown == 30);
+    CHECK(!s7.super_weapon_destroy_planet(rD, pEmpire) && s7.victory_claims().size() == 1);  // already destroyed
+    {  // the leader type itself on the surface (not as a team member) does not count; nor does a leader in orbit
+        GalacticRules r = make_oi_rules();
+        r.factions[1].leader = tCompany;
+        objects::GameObjectTypes ty;
+        objects::IdCounter id2;
+        objects::ObjectStore st{objects::ModeKind::Galactic, objects::StoreKind::Primary, ty, &id2};
+        SimRng rg{9u};
+        GalacticSim sx{r, st, rg};
+        CHECK(sx.start(make_setup({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}, {pUnder, rD, tCompany}})));
+        CHECK(!sx.super_weapon_leader_hit(rD));
+        CHECK(sx.super_weapon_destroy_planet(rD, pEmpire) && sx.victory_claims().empty());
+    }
     CHECK(victory_condition_met(s7, none, VictoryCondition::KillEnemyLeader, pEmpire));
     // 5: home planet (Primary_Enemy's Home_Planet) owned and its leader company gone.
     r7.factions[0].primary_enemy = 1;
@@ -1537,6 +1666,44 @@ void test_oi_victory() {
     CHECK(!victory_condition_met(s7, none, VictoryCondition::ConquerEnemyHomeworldAndLeader, pEmpire));
     s7.change_owner(s7.planets()[rE].object, pEmpire);
     CHECK(victory_condition_met(s7, none, VictoryCondition::ConquerEnemyHomeworldAndLeader, pEmpire));
+}
+
+// L1 systems t02 (TSW_PLANET_DESTROY §5): the tactical super weapon and the galactic Death Star use the shared core only -
+// orbit fleets (the Death Star's own and the defender's), starbase and owner stay; the surface dies. The hack path still
+// does it all.
+void test_tsw_planet_destroy() {
+    std::printf("  oi: TSW / Death Star planet destruction (core only)\n");
+    auto fleets_ok = [](const GalacticSim& s, PlanetIndex p) {
+        return s.fleets_at(p, pEmpire).size() == 1 && s.fleets_at(p, pUnder).size() == 1;
+    };
+    for (int pass = 0; pass < 3; ++pass) {  // 0 tactical TSW, 1 galactic Death Star, 2 hack
+        OiWorld w({{pEmpire, rA, tSB1}, {pUnder, rC, tSB1}, {pUnder, rC, tCompany}, {pUnder, rC, tFrigate}, {pEmpire, rC, tDeathStar}});
+        GalacticSim& s = w.sim;
+        s.set_emit_events(true);
+        const int32_t owner = s.planets()[rC].owner;
+        const ObjectHandle sb = s.planets()[rC].starbase;
+        CHECK(owner == pUnder && w.store.alive(sb) && !s.planets()[rC].surface.empty() && fleets_ok(s, rC));
+        bool hit = true;
+        if (pass == 0) CHECK(s.tsw_destroy_planet(rC, pEmpire, &hit) && !hit);
+        if (pass == 1) CHECK(s.super_weapon_destroy_planet(rC, pEmpire));
+        if (pass == 2) CHECK(s.planet_destroy(rC, pEmpire));
+        CHECK(s.planets()[rC].destroyed && s.planets()[rC].surface.empty());
+        std::vector<GalacticEvent> ev;
+        s.drain_events(ev);
+        int32_t value = -1;
+        for (const GalacticEvent& e : ev)
+            if (e.kind == GalacticEventKind::PlanetDestroyed && e.planet == rC) value = e.value;
+        CHECK(value == (pass == 0 ? 1 : 0));
+        if (pass < 2) {
+            CHECK(fleets_ok(s, rC) && store_alive_type(s, tDeathStar));
+            CHECK(w.store.alive(sb) && s.planets()[rC].starbase == sb && s.planets()[rC].owner == owner);
+            CHECK(s.victory_claims().empty());
+            CHECK(!s.tsw_destroy_planet(rC, pEmpire) && !s.super_weapon_destroy_planet(rC, pEmpire));  // once
+        } else {
+            CHECK(s.fleets_at(rC, pEmpire).empty() && s.fleets_at(rC, pUnder).empty() && !store_alive_type(s, tDeathStar));
+            CHECK(!w.store.alive(sb) && s.planets()[rC].owner == s.neutral_player());
+        }
+    }
 }
 
 void test_a2_fleet_management() {
@@ -2356,6 +2523,9 @@ int main(int argc, char** argv) {
         test_fleet_slots();
         test_a2_spawn_convert();
         test_a2_population_terrain();
+        test_a2gal_population();
+        test_a2gal_steal_order();
+        test_a2gal_ai_blockade();
         test_a2_victory();
         test_a2_prerequisites_and_market_hook();
         test_diplomacy_and_build_locks();
@@ -2368,6 +2538,7 @@ int main(int argc, char** argv) {
         test_oi_base_info();
         test_oi_buildability();
         test_oi_victory();
+        test_tsw_planet_destroy();
     }
     if (!g_quick && (all || only == "synthetic")) test_synthetic_campaign();
     if (!g_quick && (all || only == "foc")) {

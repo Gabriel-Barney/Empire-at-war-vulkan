@@ -504,14 +504,27 @@ bool GameSession::slice_tech(uint32_t type) {
     return false;
 }
 
+bool black_market_row_enabled(const galactic::BlackMarketOffer& o, float credits) {
+    return !o.purchased && static_cast<int32_t>(o.price + 0.5f) <= static_cast<int32_t>(credits + 0.5f);
+}
+
 bool GameSession::buy_black_market(uint32_t item) {
     const galactic::GalacticSim* g = galaxy();
     if (!g || !dialog_open_ || dialog_.kind != galactic::kSpecialBlackMarket || item >= g->rules().special.items.size()) return false;
     const objects::ObjectHandle hero = g->store().find(static_cast<objects::ObjectId>(dialog_.hero_id));
-    for (const galactic::BlackMarketOffer& o : g->bm_offers(local_player_, dialog_.planet, hero))
-        if (o.item == item)
-            return submit_special(galactic::black_market_purchase_event(dialog_.planet_id, dialog_.hero_id, g->rules().special.items[item].name_crc,
-                                                                        o.price, dialog_.respawn_seconds));
+    for (const galactic::BlackMarketOffer& o : g->bm_offers(local_player_, dialog_.planet, hero)) {
+        if (o.item != item) continue;
+        if (!black_market_row_enabled(o, g->credits(local_player_))) return false;
+        // 2.1 / 2.4: STORY_BUY_BLACK_MARKET at click time with the item Name, ahead of the purchase command and
+        // whatever its outcome (story-UI command path, every plot set).
+        sim::StoryUiNotification n;
+        n.kind = sim::StoryUiEvent::BuyBlackMarket;
+        n.player = local_player_;
+        n.name = g->rules().special.items[item].name;
+        notify_story_ui(n);  // no story session: nothing to tell
+        return submit_special(galactic::black_market_purchase_event(dialog_.planet_id, dialog_.hero_id, g->rules().special.items[item].name_crc,
+                                                                    o.price, dialog_.respawn_seconds));
+    }
     return false;
 }
 

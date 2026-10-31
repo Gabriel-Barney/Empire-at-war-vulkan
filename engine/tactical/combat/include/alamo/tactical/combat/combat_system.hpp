@@ -182,6 +182,12 @@ struct ProjectileDesc {
     // Saber/redirect listeners (TACTICAL_COMBAT 3.8) [M]
     float redirect_chance_modifier = 1.0f;  // Projectile_Redirect_Chance_Modifier
     float block_chance_modifier = 1.0f;     // Projectile_Block_Chance_Modifier
+    // S9 t05 (S9_DEATH_CLONE_SHIELDS.md §2.3): Max_Rate_Of_Turn (type +0x38c, type default 2.3) in degrees per flight
+    // step, x the mode's Object_Max_Speed_Multiplier (CombatConfig). Homing steering and the missile-shield turn are
+    // limited by it; 0 (vanilla lasers) = never turned.
+    float max_rate_of_turn = 2.3f;
+    // S9 t04 (§1.5): Causes_Infection (+0xa7): a hit attaches / resumes the victim's INFECTION behaviour (kUnitInfected).
+    bool causes_infection = false;
     // ---- OI abilities: detonation effects 0x4cb070 (TACTICAL_GAPS §1.10). Category masks: 0 = every category [M]. ----
     bool stun = false;                       // Projectile_Stun_On_Detonation (land only)
     int32_t stun_frames = 0;                 // Projectile_Stun_Duration_Frames
@@ -265,11 +271,14 @@ struct HardpointDesc {
     float fighter_bay_flyout_distance = 0.0f;
 };
 
-// Death_Clone entry: damage kind -> clone object type (host TypeIndex).
+// Death_Clone entry (S9_DEATH_CLONE_SHIELDS.md §1.4): key -> clone object type (host TypeIndex). The key is the
+// tDamageType value of the XML name, else 0x18 + the name's index in GameConstants Damage_Types. A repeated key
+// appends to that key's list (list order = entry order here).
 struct DeathCloneEntry {
-    uint8_t kind = 0;
+    int32_t key = 0;
     int32_t type = -1;
 };
+inline constexpr int32_t kDeathCloneSubKeyBase = 0x18;
 
 struct UnitDesc {
     std::string name;
@@ -321,6 +330,7 @@ struct UnitDesc {
     float ranged_target_z_adjust = 0.0f;          // Ranged_Target_Z_Adjust
     float converted_die_time = 0.0f;              // Converted_To_Enemy_Die_Time_Seconds
     bool has_locomotor = true;                    // jamming victims need a locomotor
+    bool deploys = false;                         // Deploys (type +0xd1): the death-clone deploy remap (S9 t04)
     // HUD repair cursor (HUD_GAPS §1.4): the object has behaviour 0x5C DUMMY_STAR_BASE (behaviour slot obj +0x38e =
     // +0x332 + 0x5C, OBJECT_RUNTIME §4.3). Static type data; read by can_repair_hardpoints, not hashed.
     bool repairs_hardpoints = false;
@@ -400,6 +410,10 @@ struct CombatConfig {
     float energy_to_shield_exchange_rate = 5.0f; // EnergyToShieldExchangeRate
     float sensor_jamming_time = 0.5f;            // Sensor_Jamming_Time
     bool death_clones = true;                    // tactical mode: Die spawns death clones (kind != 15)
+    // S9 t05: Object_Max_Speed_Multiplier_Space / _Land (GC +0x15c0 / +0x15c4; FoC 1.2 / 1.56), the factor on a
+    // projectile's Max_Rate_Of_Turn (0x372560). apply_game_constants reads both; the mode picks one.
+    float turn_multiplier_space = 1.0f;
+    float turn_multiplier_land = 1.0f;
 };
 
 // OI tactical (TACTICAL_GAPS 3.2 / 3.3): the GameConstants fields combat reads - Health_Low_Percent_Threshold
@@ -503,6 +517,12 @@ enum UnitFlag : uint32_t {
     kUnitGarrisoned = 1u << 8,
     kUnitConverted = 1u << 9,          // obj +0x3a2 bit 4: converted-unit decay (4.10)
     kUnitLocomotorBusy = 1u << 10,     // locomotor vfunc +0x2b0 (hyperspace jump ...): no ion stun
+    // S9 t04 (S9_DEATH_CLONE_SHIELDS.md §1.2): deploy pending (locomotor pack +0x2b3) or Deployed (walk state 0x19).
+    // Set by the ability system's DEPLOY [port: on = deploying / deployed]. Read by the death-clone remap only.
+    kUnitDeploying = 1u << 11,
+    // S9 t04 (§1.5): an active INFECTION behaviour (0x54, suspend counter 0). Set by a Causes_Infection hit (or the
+    // host); never cleared [port: suspend not traced, spread 0x636ae0 not modelled]. Read by the death-clone remap.
+    kUnitInfected = 1u << 12,
 };
 
 struct UnitSpawn {
@@ -548,7 +568,9 @@ struct DeathEvent {
     ObjectId id = kNoObject;
     ObjectId killer = kNoObject;
     uint8_t kind = kKindNormal;  // damage kind of the killing hit
-    int32_t death_clone = -1;    // Death_Clone type to spawn (host; consumes an id), -1 none
+    // Death_Clone type to spawn (host; consumes an id), -1 none (kind 15, death clones off). S9 t04: when no list
+    // matched this is the dying unit's own UnitDesc::object_type (0x29f270 clones the dying type).
+    int32_t death_clone = -1;
     int32_t death_projectile = -1;  // Death_Projectiles entry fired (ProjectileDesc index), -1 none
     bool spin_away = false;      // OI abilities: DeathBehavior Initialise spin-away decision (TACTICAL_GAPS §1.9)
 };
@@ -781,8 +803,9 @@ public:
     // Laser defense (0x716230): detonate projectile i (serial order index) at its position (area
     // damage, ion stun) and remove it. False if it was not alive.
     bool detonate_projectile(size_t index, uint32_t frame);
-    // Die (0x39bdb0) for scripts / self-destruct: full death sequence (no-op on dead units).
-    void kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_t frame);
+    // Die (0x39bdb0) for scripts / self-destruct: full death sequence (no-op on dead units). `sub_key` = the killing
+    // projectile's Damage_Type index (DamageArmorTable damage index, GameConstants Damage_Types order), -1 none.
+    void kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key = -1);
     std::span<const HardpointEvent> hardpoint_events() const { return hp_events_; }  // this tick
     std::span<const SmokeEvent> smoke_events() const { return smoke_events_; }      // this tick
     std::span<const DamageEvent> damage_events() const { return damage_events_; }   // this tick (A1 AI)
@@ -1140,11 +1163,18 @@ private:
     bool ion_stun_unit(Unit& v, uint32_t pdesc, uint32_t frame);
     void apply_or_queue(const DamageRequest& r, float delay_secs, uint32_t frame);
     DamageResult take_damage_inner(const DamageRequest& r, uint32_t frame, int depth);
-    void hull_damage(Unit& v, float x, ObjectId source, DamageResult& out, uint32_t frame, uint8_t kind);
+    void hull_damage(Unit& v, float x, ObjectId source, DamageResult& out, uint32_t frame, uint8_t kind,
+                     int32_t sub_key = -1);
     void hardpoint_damage(Unit& v, Hardpoint& h, float x, ObjectId source, DamageResult& out, uint32_t frame,
-                          bool owner_dying = false);
-    void kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame);
-    void deflect(Projectile& p, const ProjectileDesc& pd);
+                          bool owner_dying = false, int32_t sub_key = -1);
+    void kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key = -1);
+    // S9 t04: Pick_Death_Clone (0x3718f0) with index -1; one synced draw for a list of >= 2. -1 when no entry.
+    int32_t pick_death_clone(const UnitDesc& vd, int32_t key, int32_t sub_key);
+    // S9 t05: Missile_Shield_Deflect_Test (0x4c6e30): true + the outward direction for the first qualifying emitter
+    // (ascending id) whose sphere holds the projectile.
+    bool shield_away(const Projectile& p, Vec3& away) const;
+    void rocket_replan(Projectile& p);  // 0x4cfc40 crossing test against every emitter
+    float projectile_turn_rate(const ProjectileDesc& pd) const;  // 0x372560
     bool has_energy_pool(const Unit& u) const { return desc_of(u).energy_capacity > 0.0f; }
     float unit_max_energy(const Unit& u) const;
     void burning_service(Unit& u, uint32_t frame);

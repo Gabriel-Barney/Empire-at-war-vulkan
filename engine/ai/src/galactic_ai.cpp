@@ -492,10 +492,9 @@ const std::vector<PlanetIndex>& PlayerAi::source_planets(int level) {
 // player's instantiated plans (PP+0x1A8 over the budget's goal structs).
 double GalacticAiWorld::Impl::ai_remaining_pop(int32_t player) const {
     double r = static_cast<double>(sim.population_capacity(player));
-    const auto& rules = sim.rules();
     for (const ObjectHandle u : free_units(player)) {
-        const PlanetIndex at = planet_of_unit(u);
-        if (valid_planet(at) && sim.planets()[at].type < rules.types.size() && !rules.types[sim.planets()[at].type].surface_accessible) continue;
+        // A2 gal t04: "unusable planet" = not revealed (Is_Planet_Revealed 0x3fa420, A2GAL_READINGS 2.3) [H].
+        if (sim.population_skips(player, planet_of_unit(u))) continue;
         r -= pop_of(store.type(u));
     }
     for (const auto& [id, pi] : plans) {
@@ -590,13 +589,15 @@ void PlayerAi::budget_weights() {
 }
 
 // Per galactic income tick (0x614340 from 0x4b2ef0, AI_GALACTIC_2 Â§3.1) [H]: GalacticSim's income-tick listener
-// (A2 galactic hook) after the cycle paid every player; for each AI player (not human, galactic context
-// initialised) with income = the gain Add_Credits applied (multiplier and cap included), T = the income period.
+// (A2 galactic hook), per AI player inside the payment loop right after its Add_Credits, never on a zero-income
+// cycle (A2GAL_READINGS 1.1); income = the raw Player_Income (before Credit_Multiplier, floor and cap) [H],
+// T = the income period; the drift reads the credits after this player's Add_Credits.
 void GalacticAiWorld::Impl::on_income(const gal::IncomeTick& t) {
     PlayerAi* pa = player_ai(t.player);
     if (!pa || !pa->ctx.budget.initialised()) return;
     if (t.player < 0 || static_cast<size_t>(t.player) >= sim.players().size() || sim.players()[static_cast<size_t>(t.player)].human) return;
     // T = 0x4b2010 = GameConstants Fiscal_Cycle_Time_In_Secs (AI_GALACTIC_3 Â§8) [H].
+    if (t.gain == 0.0f) return;  // the sim never ticks a zero-income cycle; keep the accrual off for it anyway
     pa->ctx.budget.tick(t.gain, sim.rules().constants.fiscal_cycle_seconds, sim.credits(t.player));
 }
 
@@ -1260,8 +1261,7 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             for (const ObjectHandle u : t.units)
                 if (on_surface(u)) by_planet[planet_of_unit(u)].push_back(u);
             for (const auto& [p, units] : by_planet) {
-                for (const uint32_t o : sim.planets()[p].orbit)
-                    if (sim.fleets()[o].alive && sim.is_hostile(t.player, sim.fleets()[o].owner)) return -1;
+                if (sim.ai_blockaded(p)) return -1;  // 0x3fa370 (A2GAL_READINGS 4)
                 // A2 galactic: FleetManagement launch (op 4) into the orbit fleet; the launched units form one fleet
                 // there (op 0 not needed: they share the orbit fleet) [port: no company transports, see launch_and_form].
                 for (const ObjectHandle u : units) launch_and_form(t.player, p, u, gal::kNoFleet);
@@ -1320,8 +1320,10 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             // P4 ai: GalacticTaskForce vf39 0x6cd180 -> 0x3a00b0 per member (P4_SIM_SYSTEMS Â§1.7 / Â§6.1): every member in
             // orbit (in a fleet that is not moving; landed units do not fire) tries its Ground_Activated abilities at its
             // fleet's planet, task-force order. The applies run inside GalacticSim (AI picks on the synced RNG).
+            // L1P4_LUA_GAPS 1.2: with a type argument, only the members of that type (tf_activate_ability).
             std::vector<std::pair<ObjectHandle, PlanetIndex>> at;
             for (const ObjectHandle u : t.units) {
+                if (activate_filter != gal::kNoIndex && static_cast<uint32_t>(store.type(u)) != activate_filter) continue;
                 const uint32_t f = fleet_of_unit(u);
                 if (f != gal::kNoFleet && !sim.fleets()[f].moving) at.emplace_back(u, sim.fleets()[f].planet);
             }
@@ -1335,6 +1337,16 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
 
 // P4 ai: GalacticSim::ground_activated_trigger (P4_SIM_SYSTEMS Â§6.1) for each (unit, planet), in the given order. A unit
 // the trigger removes (departure, vigilance, hack) is pruned from the task force by the next prune_tf.
+// L1P4_LUA_GAPS 1: GalacticTaskForce.Activate_Ability([object type]): the ActivateAbility order restricted to the members
+// of the named type (the binding validated the name; an unknown one here fires nothing).
+int32_t GalacticAiWorld::Impl::tf_activate_ability(int32_t tf, std::string_view ability, bool, const lua::AiArg& arg) {
+    activate_filter = ability.empty() ? gal::kNoIndex : sim.rules().find_type(ability);
+    if (!ability.empty() && activate_filter == gal::kNoIndex) return -1;
+    const int32_t id = tf_order(tf, lua::AiTfOrder::ActivateAbility, arg);
+    activate_filter = gal::kNoIndex;
+    return id;
+}
+
 void GalacticAiWorld::Impl::ground_trigger(TaskForceRec& t, const std::vector<std::pair<ObjectHandle, PlanetIndex>>& at) {
     for (const auto& [u, p] : at) {
         if (!store.alive(u) || !valid_planet(p)) continue;
@@ -1402,9 +1414,7 @@ bool GalacticAiWorld::Impl::free_store_move(int32_t script, ObjectHandle unit, c
     if (at == kInvalidPlanet) return false;
     if (unit_in_transit(unit)) return false;
     if (at == dest) return true;  // already there (on the surface or in a fleet orbiting it): true, nothing happens
-    if (on_surface(unit))         // 0x3fa370: a blockaded planet keeps its landed transports
-        for (const uint32_t o : sim.planets()[at].orbit)
-            if (o < sim.fleets().size() && sim.fleets()[o].alive && sim.is_hostile(player, sim.fleets()[o].owner)) return false;
+    if (on_surface(unit) && sim.ai_blockaded(at)) return false;  // 0x3fa370 (A2GAL_READINGS 4): landed units stay
     // Launches a landed unit, splits the unit into its own fleet, then moves hop by hop (step_free_store_move).
     // A2 galactic: FleetManagement launch + form / detach. A ground company jumps as its Company_Transport_Unit
     // (STRATEGIC_GAPS §1.7); a unit that cannot jump by itself stays in the orbit fleet, which then moves with it.

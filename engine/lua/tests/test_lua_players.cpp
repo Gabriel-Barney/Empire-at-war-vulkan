@@ -844,6 +844,11 @@ public:
         orders.push_back(o);
         return static_cast<int32_t>(orders.size());
     }
+    std::vector<std::string> abilities;  // L1P4_LUA_GAPS 1: the type name the galactic Activate_Ability passes
+    int32_t tf_activate_ability(int32_t tf, std::string_view ability, bool, const AiArg& a) override {
+        abilities.emplace_back(ability);
+        return tf_order(tf, AiTfOrder::ActivateAbility, a);
+    }
     bool tf_is_raid_capable(int32_t) override { return false; }
     void tf_release_forces(int32_t, double) override {}
     void tf_release_unit(int32_t, objects::ObjectHandle) override {}
@@ -974,35 +979,53 @@ uint64_t special_session() {
     CHECK(run(vm, "r3 = S.Is_Ability_Ready('STEALTH')") == "" && gtrue(vm, "r3"));
     CHECK(run(tvm, "T.Activate_Ability('STEALTH') a3 = T.Is_Ability_Active('STEALTH')") == "" && gtrue(tvm, "a3"));
 
-    // Galactic Activate_Ability -> ground_activated_trigger. The halt ability must be bought: nothing yet.
+    // Galactic Activate_Ability -> ground_activated_trigger; returns nothing (L1P4_LUA_GAPS 1.2). The halt ability must
+    // be bought: nothing yet.
     const int32_t halted_before = sim.planets()[0].halt_until;
-    CHECK(run(vm, "b = H1.Activate_Ability() bf = b.IsFinished()") == "" && gtrue(vm, "bf"));
+    CHECK(run(vm, "b = H1.Activate_Ability() bn = (b == nil)") == "" && gtrue(vm, "bn"));
     CHECK(g.store->alive(h[0]) && sim.planets()[0].halt_until == halted_before && sim.respawns_pending(0).empty());
     CHECK(sim.bm_give_item(1, "Halt_Tech"));
-    // The fleet with a type filter that matches no saboteur: nothing; then the unit itself: the halt applies, the hero
-    // departs (one synced draw, respawn queued at A).
-    CHECK(run(vm, "UFleet.Activate_Ability(ft)") == "" && g.store->alive(h[0]));
+    auto messages_with = [&vm](std::string_view what) {
+        size_t n = 0;
+        for (const std::string& m : vm.messages()) n += m.find(what) != std::string::npos ? 1u : 0u;
+        return n;
+    };
+    // L1P4_LUA_GAPS 1.1: bad arguments are script errors and fire nothing (more than one argument, an unknown type name,
+    // a number, an explicit nil); an ability name is not a type.
+    CHECK(run(vm, "UFleet.Activate_Ability(ft, ft) UFleet.Activate_Ability('UNUSED_NAME') H1.Activate_Ability('UNUSED_NAME') "
+                  "UFleet.Activate_Ability(5) UFleet.Activate_Ability(nil)") == "");
+    CHECK(g.store->alive(h[0]) && g.store->alive(h[1]) && g.store->alive(h[2]) && sim.respawns_pending(0).empty());
+    CHECK(messages_with("Expected 0 or 1, got 2") == 1 && messages_with("unknown object type UNUSED_NAME") == 2 &&
+          messages_with("Expected object type.") == 2);
+    // The fleet with a type filter (wrapper, or a type name in any case) that matches no saboteur: nothing; then the unit
+    // itself with the same filter, which the unit branch does not apply: the halt applies, the hero departs (one synced
+    // draw, respawn queued at A).
+    CHECK(run(vm, "UFleet.Activate_Ability(ft) UFleet.Activate_Ability('frigate_t')") == "" && g.store->alive(h[0]));
     const SimRng before = g.sim_rng;
-    CHECK(run(vm, "H1.Activate_Ability('UNUSED_NAME')") == "");
+    CHECK(run(vm, "H1.Activate_Ability('Frigate_T')") == "");
     CHECK(!g.store->alive(h[0]) && sim.planets()[0].halt_until > halted_before && sim.respawns_pending(0).size() == 1 &&
           !(g.sim_rng == before));
 
     // Task forces: Land_Units / Activate_Ability only forward to the AI host, which fires the trigger itself (engine/ai):
-    // the binding adds no second fire.
+    // the binding adds no second fire. Galactic Activate_Ability passes the argument's type name (any case in, the
+    // type's own name out; "" without one) and calls nothing on a bad argument.
     TriggerAi ai;
     attach_ai_host(vm, &ai, 1);
     set_task_force_global(vm, "TF", 3, AiTaskForceKind::Galactic);
     ai.units = {h[1], h[2]};
-    CHECK(run(vm, "st = TF.Land_Units() sf = st.IsFinished() TF.Activate_Ability()") == "" && gtrue(vm, "sf"));
-    CHECK(ai.orders.size() == 2 && ai.orders[0] == AiTfOrder::LandUnits && ai.orders[1] == AiTfOrder::ActivateAbility &&
-          g.store->alive(h[1]) && g.store->alive(h[2]) && sim.respawns_pending(0).size() == 1);
+    CHECK(run(vm, "st = TF.Land_Units() sf = st.IsFinished() TF.Activate_Ability() TF.Activate_Ability('halter_t') "
+                  "TF.Activate_Ability('UNUSED_NAME') TF.Activate_Ability(ft, true)") == "" && gtrue(vm, "sf"));
+    CHECK(ai.orders.size() == 3 && ai.orders[0] == AiTfOrder::LandUnits && ai.orders[1] == AiTfOrder::ActivateAbility &&
+          ai.orders[2] == AiTfOrder::ActivateAbility && ai.abilities.size() == 2 && ai.abilities[0].empty() &&
+          ai.abilities[1] == "Halter_T" && g.store->alive(h[1]) && g.store->alive(h[2]) && sim.respawns_pending(0).size() == 1);
     attach_ai_host(vm, nullptr, 0);
-    // The fleet itself: every carried unit (content order) tries its abilities - both remaining saboteurs apply.
-    CHECK(run(vm, "UFleet.Activate_Ability()") == "");
+    // The fleet itself with a matching type name: every carried unit of that type (content order) tries its abilities -
+    // both remaining saboteurs apply.
+    CHECK(run(vm, "UFleet.Activate_Ability('HALTER_T')") == "");
     CHECK(!g.store->alive(h[1]) && !g.store->alive(h[2]) && sim.respawns_pending(0).size() == 3);
-    // A landed unit (on a surface) fires nothing.
+    // A landed unit (on a surface) fires nothing ("is landed").
     vm.set_object_global("Landed", sim.planets()[0].surface.front());
-    CHECK(run(vm, "Landed.Activate_Ability()") == "");
+    CHECK(run(vm, "Landed.Activate_Ability()") == "" && messages_with("is landed") == 1);
 
     std::vector<galactic::GalacticEvent> evs;
     sim.drain_events(evs);

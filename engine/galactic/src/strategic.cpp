@@ -462,33 +462,37 @@ bool GalacticSim::resolve_battle_super_weapon(PlanetIndex planet, int32_t winner
     return false;
 }
 
-bool GalacticSim::super_weapon_destroy_planet(PlanetIndex planet, int32_t attacker) {
-    if (!valid_planet(planet) || planets_[planet].destroyed) return false;
-    // 7: the destroyed planet holds a victim faction's Faction_Leader among its units (orbit, then surface).
-    const auto holds_leader = [&](uint32_t leader) {
-        const auto is_leader = [&](ObjectHandle h) {
-            if (!store_->alive(h)) return false;
-            const uint32_t t = static_cast<uint32_t>(store_->type(h));
-            return t == leader || (t < rules_->types.size() && contains(rules_->types[t].company_units, leader));
-        };
-        for (uint32_t f : planets_[planet].orbit)
-            if (fleets_[f].alive)
-                for (ObjectHandle m : fleets_[f].contents)
-                    if (is_leader(m)) return true;
-        for (ObjectHandle u : planets_[planet].surface)
-            if (is_leader(u)) return true;
-        return false;
-    };
-    for (size_t q = 0; q < players_.size(); ++q) {
-        const int32_t pq = static_cast<int32_t>(q);
-        if (!valid_player(attacker) || !hostile(attacker, pq)) continue;
-        const uint32_t leader = faction_of(pq).leader;
-        if (leader != kNoIndex && holds_leader(leader)) {
-            claim_victory(attacker, 7, 30);
-            break;
-        }
+bool GalacticSim::super_weapon_leader_hit(PlanetIndex planet) const {
+    // TSW_PLANET_DESTROY §6 steps 2-4: victim = D +0x6c (the owner); its Faction_Leader among the team members
+    // (0x397bf0, object +0xc8 = Company_Units here) of an object in D +0xe0 (the surface list). Members only.
+    if (!valid_planet(planet)) return false;
+    const int32_t victim = planets_[planet].owner;
+    if (!valid_player(victim)) return false;
+    const uint32_t leader = faction_of(victim).leader;
+    if (leader == kNoIndex) return false;
+    for (ObjectHandle u : planets_[planet].surface) {
+        if (!store_->alive(u)) continue;
+        const uint32_t t = static_cast<uint32_t>(store_->type(u));
+        if (t < rules_->types.size() && contains(rules_->types[t].company_units, leader)) return true;
     }
-    return planet_destroy(planet, attacker);
+    return false;
+}
+
+bool GalacticSim::super_weapon_destroy_planet(PlanetIndex planet, int32_t attacker) {
+    // 0x707670: leader test (no name list) -> claim 7, then the shared routine only (+ the visual refresh, presentation).
+    if (!valid_planet(planet) || planets_[planet].destroyed) return false;
+    if (valid_player(attacker) && super_weapon_leader_hit(planet)) claim_victory(attacker, 7, 30);
+    return planet_destroy_core(planet, attacker);
+}
+
+bool GalacticSim::tsw_destroy_planet(PlanetIndex planet, int32_t tsw_owner, bool* leader_hit) {
+    // TSW_PLANET_DESTROY §4 steps 7-9: the victory test reads the surface list before the destroy empties it.
+    if (leader_hit) *leader_hit = false;
+    if (!valid_planet(planet) || planets_[planet].destroyed || !planets_[planet].is_planet) return false;
+    const bool hit = valid_player(tsw_owner) && super_weapon_leader_hit(planet);
+    if (hit) claim_victory(tsw_owner, 7, 30);  // 0x343b90 on the parent (galactic) monitor
+    if (leader_hit) *leader_hit = hit;
+    return planet_destroy_core(planet, tsw_owner, 1);  // value 1: tactical kill, the galactic plots do not hear it (§7)
 }
 
 // ---- CRC tail --------------------------------------------------------------------------------------------------------------

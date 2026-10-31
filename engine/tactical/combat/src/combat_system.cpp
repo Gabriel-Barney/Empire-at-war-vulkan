@@ -84,6 +84,8 @@ void apply_game_constants(CombatConfig& c, const data::GameConstants& gc) {
     c.low_health_threshold = gc.get_float("Health_Low_Percent_Threshold", c.low_health_threshold);
     c.short_range_cutoff = gc.get_float("Melee_Cutoff_Range", c.short_range_cutoff);
     c.opportunity_recharge_cutoff = gc.get_float("Hardpoint_Recharge_Cutoff_For_Opportunity_Fire", c.opportunity_recharge_cutoff);
+    c.turn_multiplier_space = gc.get_float("Object_Max_Speed_Multiplier_Space", c.turn_multiplier_space);  // S9 t05
+    c.turn_multiplier_land = gc.get_float("Object_Max_Speed_Multiplier_Land", c.turn_multiplier_land);
     if (const auto v = gc.get("Diminishing_Firepower")) {
         std::vector<float> nums;
         std::string_view s = *v;
@@ -1277,6 +1279,10 @@ void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, 
     const Vec3 impact = p.pos + p.dir * (p.speed * t);
     r.has_impact = true;
     r.impact = impact;
+    // S9 t04 (§1.5): a Causes_Infection hit attaches the INFECTION behaviour (or resumes it: counter 0). [port] Before
+    // Take_Damage (the order inside 0x4cb280 was not traced); the shooter's INFECTION-ability test is left to the data
+    // (vanilla: only Infection_Projectile, thrown by that ability).
+    if (pd.causes_infection) v.flags |= kUnitInfected;
     bool absorbed_all = false;
     HitEvent he;  // S10-int (R4): the detonation for the host's PARTICLE objects
     he.victim = v.id;
@@ -1526,7 +1532,25 @@ float CombatSystem::diminishing(uint32_t frame, const Unit& v) const {
 
 DamageResult CombatSystem::take_damage(const DamageRequest& r, uint32_t frame) { return take_damage_inner(r, frame, 0); }
 
-void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame) {
+int32_t CombatSystem::pick_death_clone(const UnitDesc& vd, int32_t key, int32_t sub_key) {
+    // Pick_Death_Clone (0x3718f0), index -1 (S9_DEATH_CLONE_SHIELDS.md §1.3 [H]): key 1 with a sub-key reads 0x18 +
+    // sub-key; one entry -> it; two or more -> one synced Get_Int(0, n - 1); none -> nothing (no draw).
+    if (key == kKindNormal && sub_key != -1) key = kDeathCloneSubKeyBase + sub_key;
+    int32_t n = 0;
+    for (const DeathCloneEntry& c : vd.death_clones)
+        if (c.key == key) ++n;
+    if (n == 0) return -1;
+    int32_t pick = 0;
+    if (n >= 2) {
+        SimRng* rng = listener_rng();
+        pick = rng ? rng->range_int(0, n - 1) : 0;  // [port] no RNG bound: first entry
+    }
+    for (const DeathCloneEntry& c : vd.death_clones)
+        if (c.key == key && pick-- == 0) return c.type;
+    return -1;
+}
+
+void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key) {
     // Die (0x39bdb0), ABILITIES_HARDPOINTS.md 4.9 [H unless tagged].
     if (v.flags & kUnitDead) return;
     // 1. dying flag, health 0, killer
@@ -1555,14 +1579,22 @@ void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame) 
     }
     // 7. world removal (0x391310): Tactical_Respawn, Destruction_Survivors (OI abilities, TACTICAL_GAPS §1.9)
     death_spawns(v, frame);
-    // 8. death clone (tactical modes, kind != 15); the deploy / infection key remaps are not modelled [M]
+    // 8. death clone (tactical modes, kind != 15), S9_DEATH_CLONE_SHIELDS.md §1.2 / §1.3 [H]:
+    //    key remap (deploying / deployed Deploys walker: 11 for kind 8, else 12; else an active INFECTION: 20), the
+    //    existence check (back to the kind when the remapped key has no list; its draw is consumed, its pick dropped),
+    //    then the spawn lookup with the Damage_Type sub-key, else key 1, else the dying unit's own type.
     const UnitDesc& vd = desc_of(v);
     if (cfg_.death_clones && kind != kKindNoDeathClone) {
-        for (const DeathCloneEntry& c : vd.death_clones)
-            if (c.kind == kind) {
-                deaths_[ei].death_clone = c.type;
-                break;
-            }
+        int32_t key = kind;
+        if (vd.deploys && vd.has_locomotor && (v.flags & kUnitDeploying))
+            key = kind == 8 ? kKindDeployed : kKindDeployedOther;
+        else if (v.flags & kUnitInfected)
+            key = kKindInfection;
+        if (pick_death_clone(vd, key, -1) < 0) key = kind;
+        int32_t clone = pick_death_clone(vd, key, sub_key);
+        if (clone < 0) clone = pick_death_clone(vd, kKindNormal, -1);
+        if (clone < 0) clone = vd.object_type;
+        deaths_[ei].death_clone = clone;
     }
     // 9. death projectile: one synced Get_Int(0, n - 1) (no draw for n = 1); spawned at the position +
     //    Ranged_Target_Z_Adjust, owned by the dying object's player, along its facing [L].
@@ -1639,7 +1671,8 @@ void CombatSystem::death_spawns(Unit& v, uint32_t frame) {
     }
 }
 
-void CombatSystem::hull_damage(Unit& v, float x, ObjectId source, DamageResult& out, uint32_t frame, uint8_t kind) {
+void CombatSystem::hull_damage(Unit& v, float x, ObjectId source, DamageResult& out, uint32_t frame, uint8_t kind,
+                               int32_t sub_key) {
     // Apply_Hull_Damage (0x3ab890).
     if (v.flags & kUnitDead) return;
     const UnitDesc& vd = desc_of(v);
@@ -1673,14 +1706,14 @@ void CombatSystem::hull_damage(Unit& v, float x, ObjectId source, DamageResult& 
         if (v.flags & kUnitCannotDie) {
             v.health = old > 1.0f ? old : 1.0f;  // max(1, old)
         } else {
-            kill(v, source, kind, frame);
+            kill(v, source, kind, frame, sub_key);
             out.killed = true;
         }
     }
 }
 
 void CombatSystem::hardpoint_damage(Unit& v, Hardpoint& h, float x, ObjectId source, DamageResult& out, uint32_t frame,
-                                    bool owner_dying) {
+                                    bool owner_dying, int32_t sub_key) {
     // HP_Take_Damage (0x387f50): destroyable, health > 0, amount > 0; subtract with NO clamp.
     if (!(h.health > 0.0f) || !(x > 0.0f)) return;
     h.health = h.health - x;
@@ -1711,7 +1744,7 @@ void CombatSystem::hardpoint_damage(Unit& v, Hardpoint& h, float x, ObjectId sou
             const Hardpoint& o = hps_[v.hp_begin + i];
             if (!o.destroyed && data_->hardpoints[o.desc].destroyable) any_live = true;
         }
-        if (!any_live) hull_damage(v, v.health, source, out, frame, kKindNormal);  // hull set to 0 -> the hull path kills [H]
+        if (!any_live) hull_damage(v, v.health, source, out, frame, kKindNormal, sub_key);  // hull set to 0 -> the hull path kills [H]
     }
 }
 
@@ -1865,18 +1898,20 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
         hx = x * hf;  // [L] shield factor 0: nothing to convert back from
     }
     if (pd && !pd->does_hitpoint_damage) hx = 0.0f;
+    // S9 t04 (§1.1): the death-clone sub-key = the source projectile's Damage_Type index (-1: not a projectile).
+    const int32_t sub_key = pd && pd->damage_type != kNoTypeId ? static_cast<int32_t>(pd->damage_type) : -1;
     // 17 hardpoint routing: a named live destroyable hardpoint takes everything
     if (hp_index >= 0 && static_cast<uint32_t>(hp_index) < v.hp_count) {
         Hardpoint& h = hps_[v.hp_begin + static_cast<uint32_t>(hp_index)];
         if (!h.destroyed && data_->hardpoints[h.desc].destroyable) {
-            hardpoint_damage(v, h, hx, r.source, out, frame);
+            hardpoint_damage(v, h, hx, r.source, out, frame, false, sub_key);
             track_damage(v, absorbed + hx, frame);
             record_damage(r, v, src, hp_index, out, frame);
             return out;
         }
     }
     // 18 hull
-    hull_damage(v, hx, r.source, out, frame, k);
+    hull_damage(v, hx, r.source, out, frame, k, sub_key);
     track_damage(v, absorbed + hx, frame);
     record_damage(r, v, src, -1, out, frame);
     return out;
@@ -2021,25 +2056,45 @@ void CombatSystem::converted_decay(Unit& u, uint32_t frame, SimRng& rng) {
     }
 }
 
-void CombatSystem::deflect(Projectile& p, const ProjectileDesc& pd) {
-    // Missile_Shield_Deflect_Test (0x4c6e30) via the flight dispatcher (0x4ce6a0) [H; M for lasers].
-    using C = ProjectileCategory;
-    const C c = pd.category;
-    if (c == C::Bomb || c == C::Grenade || c == C::StaticBomb || c == C::LightSaber || c == C::ClusterBomb) return;
-    const bool passive_only = c == C::Rocket || c == C::MptlRocket;  // 0x4cfc40 tests the passive radius itself [M]
+float CombatSystem::projectile_turn_rate(const ProjectileDesc& pd) const {
+    // 0x372560 (rate <= 0 path of Turn_Toward): Max_Rate_Of_Turn x Object_Max_Speed_Multiplier_{Space,Land} x 1.0.
+    // [port] the type flag (+0x790 byte 1 bit 0) that skips the multiplier is not read.
+    return pd.max_rate_of_turn * (cfg_.mode == GameMode::Space ? cfg_.turn_multiplier_space : cfg_.turn_multiplier_land);
+}
+
+bool CombatSystem::shield_away(const Projectile& p, Vec3& away) const {
+    // Missile_Shield_Deflect_Test (0x4c6e30), S9_DEATH_CLONE_SHIELDS.md §2.3 [H]: emitters not allied with the
+    // projectile's owner, radius = the ability system's qualifying radius (passive / ability 32 / jamming 63); the first
+    // (ascending id) with |p - e|^2 < r^2 gives the outward direction (+x when p = e).
     for (const uint32_t idx : emitters_) {
         const Unit& e = units_[idx];
         if (e.flags & kUnitDead) continue;
-        if (!is_enemy(e.owner, p.owner)) continue;  // not allied with the projectile's owner
-        // OI abilities: the ROCKET / MPTL passive-shield query skips jammed objects (0x1404ce8e0) [H query, M effect].
-        if (passive_only && is_jammed(e.id, frame_)) continue;
-        const float r = passive_only ? desc_of(e).passive_missile_shield_radius : e.emitter_radius;
+        if (!is_enemy(e.owner, p.owner)) continue;
+        const float r = e.emitter_radius;
         if (!(r > 0.0f)) continue;
         const Vec3 d = p.pos - e.pos;
-        if (dot(d, d) < r * r) {  // first emitter (ascending id) wins: point straight away from its centre
-            p.dir = normalize(d);
-            return;
+        if (dot(d, d) < r * r) {
+            away = dot(d, d) > 0.0f ? d : Vec3{1.0f, 0.0f, 0.0f};
+            return true;
         }
+    }
+    return false;
+}
+
+void CombatSystem::rocket_replan(Projectile& p) {
+    // ROCKET / MPTL_ROCKET (0x4cfc40), §2.4 [H]: every qualifying emitter (same rules as 0x4c6e30, no jam skip) is
+    // tested for a CROSSING - the next point inside (<= r), the current position outside (>= r) - and every crossing
+    // re-plans the path. [port] The re-planned path shape (builders 0x4cceb0 / 0x4cdb00) was not read and rockets fly
+    // straight here: a re-plan points the rocket away from that emitter's centre. The turn rate is not used.
+    for (const uint32_t idx : emitters_) {
+        const Unit& e = units_[idx];
+        if (e.flags & kUnitDead) continue;
+        if (!is_enemy(e.owner, p.owner)) continue;
+        const float r = e.emitter_radius;
+        if (!(r > 0.0f)) continue;
+        const Vec3 cur = p.pos - e.pos;
+        const Vec3 nxt = (p.pos + p.dir * p.speed) - e.pos;
+        if (dot(nxt, nxt) <= r * r && dot(cur, cur) >= r * r) p.dir = normalize(cur);
     }
 }
 
@@ -2229,13 +2284,31 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         const ProjectileDesc& pd = data_->projectiles[p.desc];
         // OI abilities (TACTICAL_GAPS §1.5 [H], disassembly 0x1404ce768): the MISSILE branch tests Is_Jammed on the
         // projectile's TARGET - no target or a jammed target -> straight flight.
+        // S9 t05 (S9_DEATH_CLONE_SHIELDS.md §2.2 / §2.3): the flight modes steer by Turn_Toward (0x3abe40) limited to
+        // Max_Rate_Of_Turn x the mode multiplier per step - homing toward the target, and in the straight / homing modes
+        // away from a missile-shield emitter holding the projectile (that goal replaces the target for the step).
+        // Rockets re-plan on crossing into an emitter; bombs, grenades and sabers are never shield-tested.
+        using PC = ProjectileCategory;
+        const PC cat = pd.category;
         const bool jammed = is_jammed(p.target, frame);
-        if ((pd.homing || pd.category == ProjectileCategory::Missile) && !jammed) {
-            // [L] homing: re-aim at the target's position, no turn limit
+        const Unit* homing_target = nullptr;
+        if ((pd.homing || cat == PC::Missile) && !jammed) {
             const Unit* t = unit(p.target);
-            if (live(t)) p.dir = normalize(t->pos - p.pos);
+            if (live(t)) homing_target = t;
         }
-        if (!emitters_.empty()) deflect(p, pd);
+        bool steer = false;
+        Vec3 goal;
+        if (cat == PC::Rocket || cat == PC::MptlRocket) {
+            if (!emitters_.empty()) rocket_replan(p);
+        } else if (cat != PC::Bomb && cat != PC::Grenade && cat != PC::StaticBomb && cat != PC::LightSaber &&
+                   cat != PC::ClusterBomb && !emitters_.empty()) {
+            steer = shield_away(p, goal);
+        }
+        if (!steer && homing_target) {
+            goal = homing_target->pos - p.pos;
+            steer = true;
+        }
+        if (steer) p.dir = turn_toward(p.dir, goal, projectile_turn_rate(pd));
         p.pos = p.pos + p.dir * p.speed;
         p.travelled = p.travelled + p.speed;
         bool expire;
@@ -2640,9 +2713,9 @@ bool CombatSystem::detonate_projectile(size_t index, uint32_t frame) {
     detonation_effects(pc, pc.pos, kNoObject, frame);
     return true;
 }
-void CombatSystem::kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_t frame) {
+void CombatSystem::kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key) {
     Unit* u = unit(id);
-    if (live(u)) kill(*u, killer, kind, frame);
+    if (live(u)) kill(*u, killer, kind, frame, sub_key);
 }
 
 // ---- OI abilities ----

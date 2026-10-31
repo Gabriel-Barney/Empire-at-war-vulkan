@@ -249,17 +249,38 @@ struct Run {
     bool fields = false, jump_timing = false;
     uint32_t deaths_before = 0;
     std::vector<std::string> log;
+    // TSW_PLANET_DESTROY follow-up runs (follow > 0): the battle runs on to its end.
+    uint32_t tsw_fire_frame = 0, destroy_frame = 0, debris_frame = 0, done_frame = 0, end_frame = 0;
+    uint32_t first_unheld = 0, last_held = 0;
+    bool galaxy_same_tick = false, fleets_kept = false, owner_kept = false, dummy_killed = false;
+    bool held_from_fire = true, finished_while_held = false, ended = false, story_pending = false;
+    size_t claims = 0;
+    std::string summary;
 };
 
-// Battle frame schedule (frames of the battle's own counter).
-Run run(const Data& d, int32_t workers) {
+// Battle frame schedule (frames of the battle's own counter). follow: 0 = the golden run (stops at the planet's
+// destruction); 1 = on to the end, the Empire (defender) retreats during the TSW sequence (victory hold, §2); 2 = on to
+// the end, the Empire's Faction_Leader is a member of a company on the battle planet's surface (victory 7 / 0x10, §6).
+Run run(const Data& d, int32_t workers, int follow = 0) {
     Run out;
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
     cfg.seed = 7;
     cfg.players = 4;
     SimHost host(d.types, js, cfg);
-    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d));
+    galactic::GalacticRules rules = d.rules;
+    galactic::ConflictRules crules = d.crules;
+    galactic::GalacticSetup setup = make_setup(d);
+    const uint32_t empire = d.rules.find_faction("Empire");
+    if (follow > 0) {  // a 1 s space retreat countdown for the Empire (the retreat completes inside the hold)
+        if (crules.factions.size() <= empire) crules.factions.resize(empire + 1);
+        crules.factions[empire].space_retreat_countdown = 1.0f;
+    }
+    if (follow == 2) {
+        rules.factions[empire].leader = type_of(d, "S10_Trooper");
+        setup.forces.push_back({0, 1, type_of(d, "S10_Squad")});  // on S10_B's surface
+    }
+    galactic::GalacticSim* gs = host.start_galactic(rules, setup);
     CHECK(gs != nullptr);
     if (!gs) return out;
     CampaignBattleOptions opt;
@@ -268,7 +289,7 @@ Run run(const Data& d, int32_t workers) {
     opt.battle.order_interval = 0;  // no stand-in orders: the sides stay at their anchors (12000 apart)
     opt.retreat_increment_frames = load_retreat_increments(*d.files, d.rules);
     opt.retreat_flight_increments = load_retreat_flight_increments(*d.files, d.rules);
-    CampaignBattles battles(host, d.crules, *d.catalog,
+    CampaignBattles battles(host, crules, *d.catalog,
                             [](const std::string& name, terrain::MapData& m) {
                                 if (name != "L1_Space_B") return false;
                                 m = space_map();
@@ -284,10 +305,18 @@ Run run(const Data& d, int32_t workers) {
                       corvette = objects::kNoObjectId, old = objects::kNoObjectId, slowed = objects::kNoObjectId, tsw = objects::kNoObjectId;
     float target_hp0 = 0.0f;
     uint32_t fire_frame = 0;
-    for (uint64_t t = 0; t < 4000 && !out.planet_destroyed; ++t) {
+    objects::ObjectId dummy = objects::kNoObjectId;
+    for (uint64_t t = 0; t < 4000 && (follow ? !out.ended : !out.planet_destroyed); ++t) {
         host.tick_once();
         TacticalBattle* b = battles.battle();
         TacticalMode* tm = host.tactical();
+        if (follow && out.fought && !b) {  // the battle ended in this tick's hook
+            out.ended = true;
+            out.summary = battles.log().empty() ? std::string() : battles.log().back();
+            const size_t at = out.summary.find("L1_Space_B: ");
+            if (at != std::string::npos) out.end_frame = static_cast<uint32_t>(std::strtoul(out.summary.c_str() + at + 12, nullptr, 10));
+            continue;
+        }
         if (!b || !tm) continue;
         out.fought = true;
         objects::ObjectStore& st = tm->primary();
@@ -350,6 +379,9 @@ Run run(const Data& d, int32_t workers) {
         if (out.fired && !out.hit && b->combat().has_unit(target) && b->combat().health(target) < target_hp0) out.hit = true;
         if (out.fired && f == fire_frame + 60 && !out.tsw_fired) {
             out.tsw_fired = b->tsw_fire(tsw);
+            out.tsw_fire_frame = f;
+            dummy = b->special_weapons().tsw_target(tsw);
+            if (follow == 1) CHECK(b->request_retreat(0));  // the Empire retreats: complete ~30 frames later, inside the hold
         }
         const TacticalBattle* cb = b;
         for (const auto& e : cb->special_weapon_events()) {
@@ -357,6 +389,33 @@ Run run(const Data& d, int32_t workers) {
             trace.i32(e.id);
             trace.i32(e.value);
             trace.u32(e.frame);
+            if (!follow) continue;
+            if (e.kind == tactical::abilities::SwEventKind::TswPlanetDestroyed) {
+                out.destroy_frame = f;
+                // §4 steps 7-9 in the same tick: the galactic planet is destroyed; the fleets (incl. the Death Star's),
+                // the owner and the TSW stay; the target dummy is killed.
+                out.galaxy_same_tick = gs->planets()[1].destroyed;
+                out.fleets_kept = !gs->fleets_at(1, 0).empty() && !gs->fleets_at(1, 1).empty();
+                bool ds_alive = false;  // the Death Star's galactic object
+                for (const objects::ObjectHandle h : gs->store().all_objects())
+                    ds_alive = ds_alive || (gs->store().alive(h) && static_cast<uint32_t>(gs->store().type(h)) == type_of(d, "L1_Death_Star"));
+                out.fleets_kept = out.fleets_kept && ds_alive;
+                out.owner_kept = gs->planets()[1].owner == 0;
+                out.dummy_killed = dummy != objects::kNoObjectId && !st.alive(st.find(dummy)) && st.alive(st.find(tsw));
+                out.story_pending = b->tsw_story_victory() >= 0;
+                out.claims = gs->victory_claims().size();
+            }
+            if (e.kind == tactical::abilities::SwEventKind::TswDebris) out.debris_frame = f;
+            if (e.kind == tactical::abilities::SwEventKind::TswDone) out.done_frame = f;
+        }
+        if (follow && out.tsw_fired) {
+            if (b->victory_held()) {
+                if (out.first_unheld) out.held_from_fire = false;
+                out.last_held = f;
+            } else if (!out.first_unheld) {
+                out.first_unheld = f;
+            }
+            if (b->finished() && b->victory_held()) out.finished_while_held = true;
         }
         if (f == 2 + 5 + 90) out.jumped_out = !b->combat().has_unit(jumper) && !st.alive(st.find(jumper));
         if (f == 2 + 89) out.jump_timing = b->combat().has_unit(jumper) && b->hyperspace().departing(corvette);
@@ -549,6 +608,41 @@ LandRun run_land(const Data& d, int32_t workers) {
     out.trace = trace.digest();
     out.crc = host.crc_log();
     return out;
+}
+
+// L1 systems t02/t03 (docs/re/TSW_PLANET_DESTROY.md): the galactic planet dies in the TSW's state-9 tick with the core
+// routine only (fleets incl. the Death Star's, owner kept; the target dummy killed); the timers run in sequence (fire
+// F, destroy F+48, debris +10, release +10+40+1 with the test type); no victory is declared while the TSW holds the
+// monitor, and the battle ends on the release frame: (1) the Empire's retreat completed inside the hold -> all-retreated;
+// (2) the Empire's leader was on the planet's surface -> galactic claim 7 at state 9 and the story victory 0x10 for the
+// TSW owner (Underworld) at the release, the Empire retreating. 0 / 4 workers identical.
+void test_tsw_follow(const Data& d) {
+    for (int follow = 1; follow <= 2; ++follow) {
+        const Run a = run(d, 0, follow);
+        std::printf("  TSW follow %d: fire %u destroy %u debris %u last held %u first unheld %u end %u; galaxy same tick %d fleets kept %d "
+                    "owner kept %d dummy killed %d story %d claims %zu; %s\n",
+                    follow, a.tsw_fire_frame, a.destroy_frame, a.debris_frame, a.last_held, a.first_unheld, a.end_frame, a.galaxy_same_tick,
+                    a.fleets_kept, a.owner_kept, a.dummy_killed, a.story_pending, a.claims, a.summary.c_str());
+        CHECK(a.tsw_fired && a.ended && a.planet_destroyed);
+        // 5 (30) + 6 + 7 + 8 (15) + 9 with the L1_Death_Star values: F + 30 + 1 + 1 + 15 + 1.
+        CHECK(a.destroy_frame == a.tsw_fire_frame + 48);
+        CHECK(a.debris_frame == a.destroy_frame + 10);
+        CHECK(a.galaxy_same_tick && a.fleets_kept && a.owner_kept && a.dummy_killed);
+        // Held on every frame from the fire to the one before the release (state 13 serviced at destroy + 10 + 40 + 1);
+        // the battle ends in the release tick (the TswDone event and the end are in the same tick).
+        CHECK(a.held_from_fire && !a.finished_while_held && a.first_unheld == 0);
+        CHECK(a.end_frame == a.destroy_frame + 10 + 40 + 1 && a.last_held == a.end_frame - 1);
+        if (follow == 1) {
+            CHECK(!a.story_pending && a.claims == 0);
+            CHECK(a.summary.find("winner Underworld, victory all-retreated, retreated Empire") != std::string::npos);
+        } else {
+            CHECK(a.story_pending && a.claims == 1);
+            CHECK(a.summary.find("winner Underworld, victory 16, retreated Empire") != std::string::npos);
+        }
+        const Run b = run(d, 4, follow);
+        const auto dv = first_divergence(a.crc, b.crc);
+        CHECK(!dv.diverged && b.trace == a.trace && b.end_frame == a.end_frame);
+    }
 }
 
 void test_land(const Data& d) {
@@ -753,6 +847,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) g_regen = g_regen || std::string(argv[i]) == "--regen";
     const auto d = make_data();
     test_battle(*d);
+    test_tsw_follow(*d);
     test_land(*d);
     test_pads(*d);  // Int-final
     test_foc();

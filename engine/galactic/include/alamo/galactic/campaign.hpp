@@ -286,15 +286,16 @@ struct FleetState {
 };
 
 // ---- A2 galactic: AI-facing hooks (docs/re/AI_GALACTIC_2.md §3.1, §5.4; COMMANDS.md id 8) -----------------------
-// Income tick (AI_GALACTIC_2 §3.1): after a fiscal cycle has paid every player, one call per player in player
-// order. gain = the cycle's income as Add_Credits takes it: after the AI Credit_Multiplier, before the cap clamp [M]
-// (0 when the player earned nothing); PAYG installments and refunds are not part of it. period_seconds = the income
-// period T = Fiscal_Cycle_Time_In_Secs (0x4b2010, AI_GALACTIC_3 §8).
+// Income tick (AI_GALACTIC_2 §3.1, A2GAL_READINGS §1) [H]: inside the fiscal cycle's payment loop, right after a
+// player's Add_Credits and before the next player is paid, one call for each non-human AI player whose cycle income
+// I is not 0 (no call at all on a zero-income cycle). gain = the raw Player_Income I: before the AI
+// Credit_Multiplier, the zero floor and the cap clamp; PAYG installments and refunds are not part of it.
+// period_seconds = the income period T = Fiscal_Cycle_Time_In_Secs (0x4b2010, AI_GALACTIC_3 §8).
 struct IncomeTick {
     int32_t player = kNoPlayer;
     float gain = 0.0f;
     float period_seconds = 0.0f;
-    int32_t day = 0;    // galactic_day() after the cycle
+    int32_t day = 0;    // galactic_day() once this cycle has finished (the counter increments after the loop)
     int32_t frame = 0;  // mode frame of the cycle
 };
 using IncomeHook = std::function<void(const IncomeTick&)>;
@@ -554,11 +555,11 @@ public:
     PlayerView player_view(int32_t player) const;
 
     // ---- A2 galactic: hooks for the galactic AI (src/ai_hooks.cpp) ---------------------------------------
-    // Income tick listeners (IncomeTick above). Called from update() (serial) on the fiscal-cycle frame, after the
-    // cycle; a listener may read the sim but must not change it. Not hashed, not saved: hosts re-register them.
+    // Income tick listeners (IncomeTick above). Called from update() (serial) on the fiscal-cycle frame, inside the
+    // payment loop; a listener may read the sim but must not change it. Not hashed, not saved: hosts re-register them.
     uint32_t add_income_hook(IncomeHook hook);  // returns an id for remove_income_hook (never 0)
     void remove_income_hook(uint32_t id);
-    // The gain of `player` at the last fiscal cycle (IncomeTick::gain); 0 before the first one.
+    // The raw income I of `player` at the last fiscal cycle (IncomeTick::gain for AI players); 0 before the first one.
     float last_income(int32_t player) const;
     // Production queries. queue_kind: kGroundQueue / kSpaceQueue, or -1 when the type cannot be queued (GE 2.1).
     int32_t queue_kind(uint32_t type) const;
@@ -571,17 +572,21 @@ public:
     bool buildable(PlanetIndex planet, int32_t player, uint32_t type) const;
     // Every buildable type at the planet for the player, type-index order.
     std::vector<uint32_t> buildable(PlanetIndex planet, int32_t player) const;
-    // Galactic population (AI_GALACTIC_3 §3.5). Applies to humans, and to AI players only with
+    // Galactic population (AI_GALACTIC_3 §3.5, A2GAL_READINGS §2 [H]). Applies to humans, and to AI players only with
     // AI_Uses_Galactic_Pop_Cap (never in shipped data). capacity = faction Base_Population_Capacity + Σ
-    // Additional_Population_Capacity of the player's planets and live objects (units, structures, starbases; a
-    // starbase once [M: 0x3f8b40]); used = (int)(Σ Population_Value of the player's live units, structures and
-    // starbases + 0.5), plus the queued entries' when include_queued; a non-human skips objects at planets whose
-    // surface is not accessible [M: 0x3fa420]. enqueue() refuses (kRejectPopulationCap) when pop(T, 0) >
-    // max(capacity - used incl. queued, 0), right after the queue-length check (GE 2.x step 3, 0x2ac320).
+    // Additional_Population_Capacity of the player's planets and live units / structures, + for each owned planet its
+    // current starbase type's (0x3f8b40: once per planet, the starbase's owner ignored); used = (int)(Σ
+    // Population_Value of the player's live units and structures + 0.5) (starbases are not objects in galactic mode),
+    // plus the queued entries' when include_queued. A non-human skips objects whose planet is not revealed
+    // (population_skips: Is_Planet_Revealed 0x3fa420; objects in transit are never skipped). enqueue() refuses
+    // (kRejectPopulationCap) when pop(T, 0) > max(capacity - used incl. queued, 0), right after the queue-length check
+    // (GE 2.x step 3, 0x2ac320).
     bool population_capped(int32_t player) const;
     int32_t population_capacity(int32_t player) const;
     int32_t population_used(int32_t player, bool include_queued = true) const;
     int32_t population_room(int32_t player) const;  // max(capacity - used incl. queued, 0)
+    // The non-human population skip for an object located at `at` (kInvalidPlanet = in transit: never skipped).
+    bool population_skips(int32_t player, PlanetIndex at) const;
     // Terrain (AI_GALACTIC_3 §6): the planet type's Terrain id (kTerrainNames, -1 none); whether the planet type
     // restricts `type` (Planet_Restricted_Unit_Categories overlap or Planet_Restricted_Unit_Types, 0x373490: the
     // TerrainType marshaller veto); AITerrainEffectiveness of `type` (its MovementClass) on the planet's terrain
@@ -595,16 +600,23 @@ public:
     // structures / starbases the planet. Returns the new object; null = refused (invalid player / planet / type, a
     // type with no galactic role) = the task's FAILED.
     ObjectHandle spawn_unit(int32_t player, PlanetIndex planet, uint32_t type);
-    // Step 2 (MagicPlanStealing or a named hero): the first live object of exactly `type` owned by `player`, in store
-    // order [M: the owner's object list], that is not at `destination` (include_destination: a hero is taken even from
-    // there) is killed silently (no story event). Returns true when one was removed.
+    // Step 2 (MagicPlanStealing or a named hero): the first live object of exactly `type` owned by `player`, walking
+    // the owner's object list newest first (A2GAL_READINGS 3 [H]: ObjectStore::owned_by in reverse, so a captured
+    // object counts as the owner's newest), that is not at `destination` (units in a fleet in transit never are;
+    // include_destination: a hero is taken even from there) is killed silently (no story event). Returns true when one
+    // was removed.
     bool steal_unit(int32_t player, uint32_t type, PlanetIndex destination, bool include_destination);
     // Steps 2-4 in order: steal (when `steal`), cancel the pending delayed-spawn entries of the type on every planet
     // (any owner), spawn. Step 5 (launch op 4 + form op 0 for a unit created on a surface; FAILED when
     // blockaded) is the caller's, through FleetManagement events.
     ObjectHandle magic_spawn(int32_t player, PlanetIndex planet, uint32_t type, bool steal, bool hero);
-    // Blockade test (0x3fa370 [M]): a hostile combat fleet in orbit of the planet (the starbase-drop rule's test).
+    // A hostile combat fleet in orbit of the planet for `player` (the starbase-drop rule's test; HUD / story use).
     bool blockaded(PlanetIndex planet, int32_t player) const { return valid_planet(planet) && enemy_fleet_in_orbit(planet, player); }
+    // The AI blockade test 0x3fa370 (A2GAL_READINGS 4 [H]; HIJACK_UNIT launch, the build task, FreeStore Move_Object,
+    // TaskForce Launch_Units): the first orbit fleet that is alive and not hidden decides; blockaded unless its owner is
+    // the planet's owner or an ally of it. No combat filter (neutrals and unarmed fleets blockade). Relative to the
+    // planet owner, not to the asking player.
+    bool ai_blockaded(PlanetIndex planet) const;
     // AI production market hook (AI_GALACTIC_3 §5): called for each planet inside the production service, in planet
     // service order (newest registered first), right before that planet's queues advance. The hook may enqueue or
     // cancel at that planet (the AIPlanetBuildQueue market). Not hashed. set_ fills the primary slot (null = none; the
@@ -725,11 +737,26 @@ public:
     // unlock (+ tech raise when only_one), respawn scheduling and the despawn. True on success.
     bool slice_execute(int32_t player, PlanetIndex planet, ObjectHandle slicer, const SliceEntry& e, float respawn_seconds,
                        bool only_one);
-    // Planet destruction (0x3f76c0, shared with the Death Star's Planet_Destruction_Ability): PLANET_DESTROYED event,
-    // siphon cleared, orbiting objects removed (reverse; heroes get a default-time respawn), structures removed,
-    // corruption cleared, destroyed set, surface objects removed (reverse; heroes respawn), starbase cleared, owner :=
-    // the neutral player. False for an invalid or already destroyed planet.
+    // Planet destruction, the IG-88 hack path (0x61b790; TSW_PLANET_DESTROY §5): planet_destroy_core() plus the hack's
+    // extras - orbiting objects removed (reverse; this includes the hacked weapon; heroes get a default-time respawn),
+    // starbase cleared, owner := the neutral player. False for an invalid or already destroyed planet. [port] the orbit
+    // removal runs inside the core, before the structures (the original runs it after the core): the destroy / respawn
+    // order of the earlier single routine, so hack CRCs do not move.
     bool planet_destroy(PlanetIndex planet, int32_t destroyer);
+    // The shared routine 0x3f76c0 (TSW_PLANET_DESTROY §5; hack, galactic Death Star and tactical super weapon):
+    // PLANET_DESTROYED event (value = `event_value`: 1 marks a tactical TSW kill, whose story event goes to the battle's
+    // plots only), siphon cleared, structures removed, corruption cleared, destroyed set, surface objects removed
+    // (reverse; heroes respawn). Orbit fleets, starbase and owner are NOT touched. False when invalid / already destroyed.
+    bool planet_destroy_core(PlanetIndex planet, int32_t destroyer, int32_t event_value = 0);
+    // Victory 7 leader test (§6; 0x42a7b0 / 0x707670): the victim = the planet's owner (D +0x6c); its faction's
+    // Faction_Leader must be a team member (Company_Units) of an object on the planet's surface (D +0xe0). Only members
+    // are compared, not the listed object itself; orbit fleets do not count. [port] the condition record's optional
+    // leader-name list is not modelled (the claim is granted by the side's condition list, victory.hpp).
+    bool super_weapon_leader_hit(PlanetIndex planet) const;
+    // Tactical super weapon, galactic part of state 9 (TSW_PLANET_DESTROY §4 steps 7-9), called by the battle host in the
+    // tactical frame of the shot: leader test -> claim 7 (countdown 30) for `tsw_owner`, then planet_destroy_core(value
+    // 1). Returns true when the planet was destroyed; *leader_hit = the test hit (the battle then ends with victory 0x10).
+    bool tsw_destroy_planet(PlanetIndex planet, int32_t tsw_owner, bool* leader_hit = nullptr);
     // Locked ("obsolete") list P +0x1C8 (hack step 1, story LOCK_UNIT / BUILDABLE_UNIT P2, Lua Lock_Tech): add 0x27f7c0 /
     // remove 0x286100. Removing does not unlock: Lua Unlock_Tech is unlock_tech().
     void lock_type(int32_t player, uint32_t type, bool locked);
@@ -856,8 +883,9 @@ public:
     // TACTICAL_GAPS 4.8 battle-end step 4: the weapon is alive, not the winner's, and the winner has no killer -> the
     // winner is the side that retreats (R := winner).
     bool super_weapon_forces_retreat(PlanetIndex planet, int32_t winner) const;
-    // Planet_Destruction_Ability (0x707670): claim 7 (countdown 30) when the planet holds an enemy faction's
-    // Faction_Leader, then planet_destroy(). False when nothing was destroyed.
+    // Planet_Destruction_Ability (0x707670): claim 7 (countdown 30) when super_weapon_leader_hit(), then
+    // planet_destroy_core() - the Death Star's own fleet, the starbase and the owner stay (TSW_PLANET_DESTROY §5).
+    // False when nothing was destroyed.
     bool super_weapon_destroy_planet(PlanetIndex planet, int32_t attacker);
     std::span<const VictoryClaim> victory_claims() const { return claims_; }
     void claim_victory(int32_t player, uint8_t type, int32_t countdown);
@@ -972,6 +1000,7 @@ private:
     void service_respawns();
     void service_income_abilities(PlanetIndex planet);
     RejectReason special_command(int32_t player, const commands::EventData& ev);
+    bool planet_destroy_impl(PlanetIndex planet, int32_t destroyer, int32_t event_value, bool hack_orbit);  // L1 TSW split
     void emit_special(GalacticEventKind kind, int32_t player, PlanetIndex planet, ObjectHandle object, uint32_t type,
                       int32_t value, int32_t other);
     void hash_special(StateHasher& h) const;

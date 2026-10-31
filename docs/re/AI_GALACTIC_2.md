@@ -416,7 +416,7 @@ The AIBudgetClass lives at goal system +0x190. Galactic only (context mode == 0)
 
 ### 3.1 Per-tick accrual 0x614340(budget, income) [H]
 
-Called from 0x4b2ef0 on each galactic income tick, after `Add_Credits` (multiplier already applied), for each AI player (not human, galactic context initialised). income is the player's gain for that tick.
+Called from 0x4b2ef0 inside the fiscal cycle's payment loop, per player right after that player's `Add_Credits` and before the next player is paid, for each AI player (has an AI system, not human, the AI context for the current mode exists and is active). income is the **raw** cycle income I returned by Player_Income: **before** the AI `Credit_Multiplier`, the zero floor and the cap clamp (Add_Credits adjusts its own copy and is called with notify off). No call at all when I = 0. Corrected 2026-10-31 from A2GAL_READINGS §1 [H]; the earlier "multiplier already applied" reading was wrong.
 - T = 0x4b2010(…) (income period in seconds) [M]. Skipped if T ≤ 0.
 - rate = income / T, stored at +0x68.
 - Σ = budget +0x80.

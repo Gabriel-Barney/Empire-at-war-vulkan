@@ -1491,6 +1491,15 @@ void TacticalBattle::check_victory() {
         if (frame_ >= end_hold_until_) finish(end_winner_, end_victory_, end_retreated_);
         return;
     }
+    // L1 systems: the TSW victory monitor hold (TSW_PLANET_DESTROY §2): nothing is declared from the TSW's fire until
+    // its state-13 service; this check is the replay on the release frame, the TSW's story victory (0x10) first.
+    if (l1_sw_.victory_holds() > 0) return;
+    if (l1_tsw_story_winner_ >= 0) {
+        const int32_t w = l1_tsw_story_winner_;
+        l1_tsw_story_winner_ = -1;
+        conclude(w, galactic::kVictoryStory, w == req_.info.attacker ? req_.info.defender : req_.info.attacker);
+        return;
+    }
     if (retreat_complete_) {
         conclude(side_player(static_cast<uint8_t>(1 - retreat_side_)), galactic::kVictoryAllRetreated, side_player(static_cast<uint8_t>(retreat_side_)));
         return;
@@ -1836,9 +1845,17 @@ void TacticalBattle::consume_events(TacticalMode& mode) {
         if (u->tracked) damage_tracking_.disable(u->id);
 #endif
         ++stats_.deaths;
+        // S9 t04: a death with no Death_Clone list hit clones the dying type (0x29f270), which consumes one id. [port]
+        // No object is made for it (the original flags that clone dying / removing, +0x3a0 |= 0xc0, which the store
+        // cannot express): the id is allocated and the unit keeps its own death clip / corpse.
+        tc::DeathEvent dc = d;
+        if (dc.death_clone >= 0 && dc.death_clone == static_cast<int32_t>(u->type)) {
+            store.id_counter().allocate();
+            dc.death_clone = -1;
+        }
 #ifdef ALAMO_SIM_HAVE_ANIM
         {  // R3 anim: death clip / corpse of the unit, or the clone's own death sequence
-            const objects::ObjectHandle ch = d.death_clone >= 0 ? spawn_prop(mode, d.death_clone, at, face, owner) : objects::ObjectHandle{};
+            const objects::ObjectHandle ch = dc.death_clone >= 0 ? spawn_prop(mode, dc.death_clone, at, face, owner) : objects::ObjectHandle{};
             if (ch) {
                 ++stats_.death_clones;
                 hooks_->anim_clone(ch);
@@ -1846,7 +1863,7 @@ void TacticalBattle::consume_events(TacticalMode& mode) {
             hooks_->anim_death(u->id, static_cast<bool>(ch), d.kind);
         }
 #else
-        if (d.death_clone >= 0 && spawn_prop(mode, d.death_clone, at, face, owner)) ++stats_.death_clones;
+        if (dc.death_clone >= 0 && spawn_prop(mode, dc.death_clone, at, face, owner)) ++stats_.death_clones;
 #endif
         if (const BattleTables::UnitVisuals* vis = visuals_of_type(u->type))
             if (!vis->death_explosions.empty()) spawn_particle(mode, vis->death_explosions.front(), at, owner);

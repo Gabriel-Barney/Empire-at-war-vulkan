@@ -64,7 +64,7 @@ enum class GalacticEventKind : uint8_t {
                              // (story BUY_BLACK_MARKET 0x38 with the item Name [port: at execute time; humans only])
     GalacticSabotage,        // story GALACTIC_SABOTAGE 0x39: player (-1 story reward), planet, type = structure type
     SabotageVigilance,       // sabotage failed on Planet_Vigilance: player = saboteur owner, other_player = planet owner, planet
-    PlanetDestroyed,         // story PLANET_DESTROYED 0x17: planet, player = destroyer, other_player = old owner
+    PlanetDestroyed,         // story PLANET_DESTROYED 0x17: planet, player = destroyer, other_player = old owner, value 1 = tactical TSW (battle plots only)
     SuperWeaponHacked,       // player = hacker owner, planet, type = super weapon type, other_player = its owner
     HeroRespawnScheduled,    // player = owner, planet = scheduling planet, type, value = due mode frame
     HeroRespawned,           // player, planet, type, object = the new object

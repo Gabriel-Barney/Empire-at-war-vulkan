@@ -94,10 +94,20 @@ ObjectHandle GalacticSim::spawn_unit(int32_t player, PlanetIndex planet, uint32_
 
 bool GalacticSim::steal_unit(int32_t player, uint32_t type, PlanetIndex destination, bool include_destination) {
     if (!valid_player(player) || type >= rules_->types.size()) return false;
-    for (ObjectHandle h : store_->all_objects()) {
+    // A2 gal t05 (A2GAL_READINGS 3) [H]: the owner's object list newest first (ObjectStore::owned_by is in "joined
+    // this owner" order: creation, load registration, and an owner change re-inserts at the newest end). The match is
+    // the representative type: the port's company object carries the company type, a squadron is its own object (its
+    // container fleet object is skipped with the other fleet and planet objects). No alive / stealth test in the
+    // original; the port's owned_by() also lists dead-pending objects, which are skipped.
+    const std::span<const ObjectHandle> owned = store_->owned_by(player);
+    for (size_t k = owned.size(); k-- > 0;) {
+        const ObjectHandle h = owned[k];
         if (!store_->alive(h) || store_->owner(h) != player || static_cast<uint32_t>(store_->type(h)) != type) continue;
         if (fleet_of(h) != kNoFleet || planet_of(h) != kInvalidPlanet) continue;
-        if (!include_destination && destination != kInvalidPlanet && location_of(h) == destination) continue;
+        // A unit of a fleet in hyperspace has no planet: always stealable (location_of = kInvalidPlanet in transit).
+        const uint32_t holder = fleet_containing(h);
+        const PlanetIndex at = holder != kNoFleet && fleets_[holder].moving ? kInvalidPlanet : location_of(h);
+        if (!include_destination && destination != kInvalidPlanet && at == destination) continue;
         const bool emit = emit_events_;  // Kill 0x391310 with flag 1: silently
         emit_events_ = false;
         const bool done = destroy_object(h);
@@ -119,6 +129,34 @@ ObjectHandle GalacticSim::magic_spawn(int32_t player, PlanetIndex planet, uint32
     return spawn_unit(player, planet, type);
 }
 
+// ---- AI blockade test (0x3fa370, A2GAL_READINGS 4) [H] -------------------------------------------------------------
+// Relative to the planet's owner X: the first orbit entry that is not being removed and not hidden decides; blockaded
+// unless its owner is X itself or an ally of X (an owner with no player is not friendly). No combat-power filter, so
+// neutrals, unarmed and empty fleets count; a fleet is hidden only when it has contents and every content is hidden.
+
+bool GalacticSim::ai_blockaded(PlanetIndex planet) const {
+    if (!valid_planet(planet)) return false;
+    const int32_t x = planets_[planet].owner;
+    for (const uint32_t f : planets_[planet].orbit) {
+        if (f >= fleets_.size()) return true;  // a null entry (defensive)
+        const FleetState& fl = fleets_[f];
+        if (!fl.alive) continue;  // being removed
+        bool any = false, all_hidden = true;
+        for (const ObjectHandle m : fl.contents) {
+            any = true;
+            if (!hidden(m)) {
+                all_hidden = false;
+                break;
+            }
+        }
+        if (any && all_hidden) continue;  // hidden (0x3a9760): an empty fleet is visible
+        if (!valid_player(fl.owner) || !valid_player(x)) return true;
+        const Relation r = relation(x, fl.owner);
+        return r != Relation::Self && r != Relation::Ally;
+    }
+    return false;
+}
+
 // ---- population (AI_GALACTIC_3 §3.5) -------------------------------------------------------------------------------
 
 bool GalacticSim::population_capped(int32_t player) const {
@@ -130,7 +168,9 @@ namespace {
 template <class F>
 void for_each_owned_object(const std::vector<PlanetState>& planets, const std::vector<FleetState>& fleets,
                            const objects::ObjectStore& store, int32_t player, F&& f) {
-    // Planet-located objects in row order (surface, structures, starbase), then fleet members (fleet order).
+    // Planet-located objects in row order (surface, structures), then fleet members (fleet order; `planet` is
+    // kInvalidPlanet in transit: no planet ancestor). A2 gal t04 (A2GAL_READINGS 2.1) [H]: a galactic starbase is not
+    // an object of the owner's list but a type on its planet, so the starbase object is not visited here.
     for (PlanetIndex i = 0; i < planets.size(); ++i) {
         const PlanetState& p = planets[i];
         if (!p.is_planet) continue;
@@ -138,7 +178,6 @@ void for_each_owned_object(const std::vector<PlanetState>& planets, const std::v
             if (store.alive(u) && store.owner(u) == player) f(u, i);
         for (ObjectHandle s : p.structures)
             if (store.alive(s) && store.owner(s) == player) f(s, i);
-        if (store.alive(p.starbase) && store.owner(p.starbase) == player) f(p.starbase, i);
     }
     for (const FleetState& fl : fleets) {
         if (!fl.alive) continue;
@@ -148,28 +187,37 @@ void for_each_owned_object(const std::vector<PlanetState>& planets, const std::v
 }
 }  // namespace
 
+// A2 gal t04 (A2GAL_READINGS 2.2) [H]: the non-human skip is "the object's nearest planet is not revealed"
+// (Is_Planet_Revealed 0x3fa420: the local reveal state, no player argument); an object with no planet (in transit) is
+// never skipped. Humans never skip.
+bool GalacticSim::population_skips(int32_t player, PlanetIndex at) const {
+    if (!valid_player(player) || players_[static_cast<size_t>(player)].human) return false;
+    return at < planets_.size() && planets_[at].is_planet && !is_planet_revealed(at);
+}
+
 int32_t GalacticSim::population_capacity(int32_t player) const {
     if (!valid_player(player)) return 0;
-    const bool human = players_[static_cast<size_t>(player)].human;
-    const auto usable = [this, human](PlanetIndex p) {
-        return human || p >= planets_.size() || !planets_[p].is_planet || rules_->types[planets_[p].type].surface_accessible;
-    };
     int32_t cap = faction_of(player).base_population_capacity;
-    for (PlanetIndex i = 0; i < planets_.size(); ++i)
-        if (planets_[i].is_planet && planets_[i].owner == player && usable(i)) cap += rules_->types[planets_[i].type].population_capacity;
+    // Owned planets: the planet type's capacity, plus its current starbase type's (once per planet, whoever owns the
+    // starbase, whatever its level) [H].
+    for (PlanetIndex i = 0; i < planets_.size(); ++i) {
+        const PlanetState& p = planets_[i];
+        if (!p.is_planet || p.owner != player || population_skips(player, i)) continue;
+        cap += rules_->types[p.type].population_capacity;
+        if (store_->alive(p.starbase)) cap += rules_->types[static_cast<size_t>(store_->type(p.starbase))].population_capacity;
+    }
     for_each_owned_object(planets_, fleets_, *store_, player, [&](ObjectHandle h, PlanetIndex at) {
-        if (usable(at)) cap += rules_->types[static_cast<size_t>(store_->type(h))].population_capacity;
+        if (!population_skips(player, at)) cap += rules_->types[static_cast<size_t>(store_->type(h))].population_capacity;
     });
     return cap;
 }
 
 int32_t GalacticSim::population_used(int32_t player, bool include_queued) const {
     if (!valid_player(player)) return 0;
-    const bool human = players_[static_cast<size_t>(player)].human;
     int32_t used = 0;
+    // No starbase term: galactic starbases are not objects, so their Population_Value is never "used" [H].
     for_each_owned_object(planets_, fleets_, *store_, player, [&](ObjectHandle h, PlanetIndex at) {
-        if (!human && at < planets_.size() && planets_[at].is_planet && !rules_->types[planets_[at].type].surface_accessible) return;
-        used += rules_->types[static_cast<size_t>(store_->type(h))].population;
+        if (!population_skips(player, at)) used += rules_->types[static_cast<size_t>(store_->type(h))].population;
     });
     if (include_queued)
         for (const PlanetState& p : planets_)

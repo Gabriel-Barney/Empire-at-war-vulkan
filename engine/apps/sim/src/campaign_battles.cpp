@@ -698,6 +698,19 @@ void CampaignBattles::hook(SimHost& host) {
     TacticalMode* tm = host.tactical();
     if (!tm) return;
     battle_->tick(*tm, host.random().synced(), host.parallel_for(), host.sim_time(), host.frame());
+    // L1 systems (TSW_PLANET_DESTROY §4 steps 7-9): the TSW's state-9 frame destroys the galactic planet now, mid-battle
+    // (the parent galaxy is mutated while the tactical mode runs); only with a parent conflict (not a map battle).
+    if (const int32_t tsw_owner = battle_->tsw_kill_owner(); tsw_owner >= 0 && !direct_ && cm_) {
+        GalacticMode* g = host.galactic_mode();
+        const PlanetIndex planet = battle_->request().info.planet;
+        bool leader = false;
+        if (g && g->sim() && g->sim()->tsw_destroy_planet(planet, tsw_owner, &leader)) {
+            if (leader) battle_->set_tsw_story_victory(tsw_owner);  // ends with 0x10 at the hold release (§6)
+#ifdef ALAMO_SIM_HAVE_STORY
+            if (StorySession* s = host.story()) s->planet_destroyed_in_battle(planet, tsw_owner, host.frame());
+#endif
+        }
+    }
     // STATION_HANGARS_SOUND §1.2 step 6: selections and control groups follow an upgraded station (same tick).
     for (; upgrades_seen_ < battle_->station_upgrades().size(); ++upgrades_seen_)
         host.station_replaced(battle_->station_upgrades()[upgrades_seen_].old_station, battle_->station_upgrades()[upgrades_seen_].new_station);
