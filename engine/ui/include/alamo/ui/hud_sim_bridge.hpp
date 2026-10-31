@@ -31,7 +31,7 @@ inline void hud_units_from_frame(const render::InterpolatedFrame& frame, std::sp
     out.reserve(frame.objects.size());
     auto to8 = [](float f) { return static_cast<uint8_t>(std::lround(std::clamp(f, 0.0f, 1.0f) * 255.0f)); };
     for (const render::SnapshotObject& o : frame.objects) {  // ascending id
-        if ((o.flags & render::kSnapDying) != 0 || o.fade <= 0.0f) continue;
+        if ((o.flags & (render::kSnapDying | render::kSnapDeathClone)) != 0 || o.fade <= 0.0f) continue;
         HudUnit u;
         const auto oid = static_cast<uint32_t>(o.id);  // objects::ObjectId is signed; ids are >= 1
         u.id = oid;

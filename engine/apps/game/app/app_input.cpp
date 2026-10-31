@@ -226,7 +226,7 @@ void App::respond(const commands::EventData& ev) {
     if (!top) return;
     const objects::ObjectStore& st = top->primary();
     objects::ObjectHandle h = st.find(static_cast<objects::ObjectId>(id));
-    if (!st.alive(h)) return;
+    if (!st.active(h)) return;
     if (kind == UnitResponse::FleetMove || (!top->tactical() && kind == UnitResponse::Select)) {
         // A galactic fleet answers with its first member.
         if (const galactic::GalacticSim* g = session_->galaxy())

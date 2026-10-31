@@ -193,6 +193,9 @@ enum SnapshotFlag : uint8_t {
     // R3: a spin-away corpse (Spin_Away_On_Death): add_snapshot_corpses applies the render-side spin motion; when it
     // leaves the frame SimDecorations plays the type's Spin_Away_On_Death_Explosion at its last position.
     kSnapSpinAway = 0x40,
+    // refix t01: a store death clone (objects::kFlagDeathClone, dying / removing): drawn while it plays its death, but
+    // not a HUD unit and never hovered or picked.
+    kSnapDeathClone = 0x80,
 };
 
 struct SnapshotObject {

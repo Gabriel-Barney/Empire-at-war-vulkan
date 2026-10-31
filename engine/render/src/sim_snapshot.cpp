@@ -451,6 +451,7 @@ void build_snapshot(const objects::ObjectStore& store, uint64_t tick, uint64_t m
             const bool dying = (store.flags(h) & objects::kFlagDead) != 0;
             o.fade = dying ? 0.0f : 1.0f;
             o.flags = dying ? kSnapDying : 0;
+            if ((store.flags(h) & objects::kFlagDeathClone) != 0) o.flags = static_cast<uint8_t>(o.flags | kSnapDeathClone);
             if (table.valid(o.type)) {
                 const SnapshotTypeInfo& ti = table[o.type];
                 o.lod_bias = ti.lod_bias;

@@ -500,7 +500,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     out.clear();
     std::map<objects::ObjectId, int32_t> stamps;
     for (const objects::ObjectHandle h : st.all_objects()) {
-        if (!st.alive(h) || st.has_behavior(h, objects::beh::Particle)) continue;
+        if (!st.active(h) || st.has_behavior(h, objects::beh::Particle)) continue;
         const objects::ObjectId id = st.id(h);
         const auto type = static_cast<int32_t>(st.type(h));
         const auto ti = st.type(h);
@@ -622,7 +622,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         fs.subobject_f8_nonempty = b_->garrison_holder_of(id) != objects::kNoObjectId || static_cast<bool>(st.attach_parent(h)) ||
                                    (u != nullptr && u->attached_to != objects::kNoObjectId);
         fs.in_mode_manager_set = !b_->space_ && std::binary_search(bombing_run_objects.begin(), bombing_run_objects.end(), id);
-        fs.dead_or_removing = (u != nullptr && !u->alive) || !st.alive(h);  // both skipped above: always false here
+        fs.dead_or_removing = (u != nullptr && !u->alive) || !st.alive(h);  // dead and dying (refix t01 clone) objects are skipped above: always false here
         fs.in_world = true;  // [M] obj +0x3c8: every listed battle object is in the world (retreated units are skipped above)
         fs.type_squadron_member = types.squadron_member(ti);
         fs.type_company_member = types.company_member(ti);
@@ -910,7 +910,7 @@ float BattleAi::population_cap(int32_t player) {
     const objects::GameObjectTypes& types = mode_->types();
     int32_t capacity = f < b_->galaxy_->rules().factions.size() ? b_->galaxy_->rules().factions[f].base_population_capacity : 0;
     for (const objects::ObjectHandle h : st.owned_by(player))
-        if (st.alive(h) && st.type(h) < types.size()) capacity += types.get_int(st.type(h), "Additional_Population_Capacity");
+        if (st.active(h) && st.type(h) < types.size()) capacity += types.get_int(st.type(h), "Additional_Population_Capacity");
     return std::min(planet_cap, static_cast<float>(capacity));
 }
 
@@ -944,7 +944,7 @@ std::vector<int32_t> BattleAi::tactical_builders(int32_t player, int32_t type) {
     if (!b_->production_enabled() || type < 0) return out;
     const objects::ObjectStore& st = mode_->primary();
     for (const objects::ObjectHandle h : st.owned_by(player)) {
-        if (!st.alive(h)) continue;
+        if (!st.active(h)) continue;
         const objects::ObjectId id = st.id(h);
         if (b_->hg_build_check(st, player, id, static_cast<objects::TypeIndex>(type)) != 1) out.push_back(static_cast<int32_t>(id));
     }

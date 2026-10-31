@@ -527,7 +527,7 @@ int g_find_hint(Call& c) {
     const ObjectBridge* b = bridge(c);
     if (!st || !b) return push_nil(c);
     for (const ObjectHandle h : st->objects_newest_first()) {
-        if (!st->alive(h) || !type_matches(c, h, t.name)) continue;
+        if (!st->active(h) || !type_matches(c, h, t.name)) continue;
         const ScriptObjectState* s = b->find_state(st->id(h));
         if (s && iequal(s->hint, hint)) {
             detail::push_object(c.L, *c.vm, h);
@@ -549,7 +549,7 @@ int g_find_all_with_hint(Call& c) {
     if (!st || !b) return 1;
     int n = 0;
     for (const ObjectHandle h : st->objects_newest_first()) {
-        if (!st->alive(h)) continue;
+        if (!st->active(h)) continue;
         const ScriptObjectState* s = b->find_state(st->id(h));
         if (!s || !iequal(s->hint, hint)) continue;
         detail::push_object(c.L, *c.vm, h);
@@ -571,7 +571,7 @@ int find_first(Call& c, bool planets_only) {
     const objects::GameObjectTypes* ty = types(c);
     const bool members = !planets_only && ty && !name.empty() && st->mode() == objects::ModeKind::Galactic;
     for (const ObjectHandle h : st->objects_newest_first()) {
-        if (!st->alive(h)) continue;
+        if (!st->active(h)) continue;
         if (!type_matches(c, h, name)) {
             if (!members) continue;
             const std::vector<TypeIndex> refs = ty->get_type_refs(st->type(h), "Company_Units");
@@ -598,7 +598,7 @@ int m_get_all_planets(Call& c) {
     if (!st) return 1;
     int n = 0;
     for (const ObjectHandle h : st->objects_newest_first()) {
-        if (!st->alive(h) || !st->has_behavior(h, objects::beh::Planet)) continue;
+        if (!st->active(h) || !st->has_behavior(h, objects::beh::Planet)) continue;
         detail::push_object(c.L, *c.vm, h);
         lua_rawseti(c.L, -2, ++n);
     }
@@ -661,7 +661,7 @@ int g_find_nearest(Call& c) {
     ObjectHandle best{};
     double best_d = 0.0;
     for (const ObjectHandle h : st->objects_newest_first()) {
-        if (h == self || !st->alive(h)) continue;
+        if (h == self || !st->active(h)) continue;
         if (have_player) {
             const int32_t owner = st->owner(h);
             if (friendly ? owner != player : !is_enemy(c, player, owner)) continue;
@@ -1979,7 +1979,7 @@ int m_get_space_station(Call& c) {
     const objects::GameObjectTypes* ty = types(c);
     if (!st || !ty) return push_nil(c);
     for (const ObjectHandle h : st->objects_newest_first()) {
-        if (!st->alive(h) || st->owner(h) != c.self->id) continue;
+        if (!st->active(h) || st->owner(h) != c.self->id) continue;
         const TypeIndex t = st->type(h);
         if (t < ty->raw().type_count() && iequal(ty->raw().element_name(t), "StarBase")) {
             detail::push_object(c.L, *c.vm, h);

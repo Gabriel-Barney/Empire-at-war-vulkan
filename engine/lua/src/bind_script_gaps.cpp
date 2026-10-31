@@ -400,7 +400,7 @@ int g_start_cinematic_space_retreat(Call& c) {
     };
     std::vector<Entry> units;
     for (const ObjectHandle h : st->owned_by(player)) {
-        if (!st->alive(h) || !st->has_behavior(h, objects::beh::Locomotor) || st->attach_parent(h) || st->container(h)) continue;
+        if (!st->active(h) || !st->has_behavior(h, objects::beh::Locomotor) || st->attach_parent(h) || st->container(h)) continue;
         const TypeIndex t = st->type(h);
         units.push_back({h, (ty && t < ty->size()) ? ty->get_float(t, "Max_Speed") : 0.0f, 0.0});
     }
@@ -408,7 +408,7 @@ int g_start_cinematic_space_retreat(Call& c) {
     std::stable_sort(units.begin(), units.end(), [](const Entry& a, const Entry& b) { return a.speed > b.speed; });
     ObjectHandle marker;
     for (const ObjectHandle h : st->all_objects())
-        if (st->alive(h) && iequal(type_name(c, st->type(h)), "Attacker Entry Position")) {
+        if (st->active(h) && iequal(type_name(c, st->type(h)), "Attacker Entry Position")) {
             marker = h;
             break;
         }

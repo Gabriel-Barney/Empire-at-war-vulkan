@@ -76,7 +76,7 @@ int g_find_all_objects_of_type(Call& c) {
     const bool members = have_type_filter && types && st->mode() == objects::ModeKind::Galactic;
     int n = 0;
     for (const objects::ObjectHandle h : st->objects_newest_first()) {
-        if (!st->alive(h)) continue;
+        if (!st->active(h)) continue;
         if (have_owner && st->owner(h) != owner) continue;
         if (have_type_filter) {
             bool match = false;
