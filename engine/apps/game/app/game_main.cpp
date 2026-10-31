@@ -164,7 +164,12 @@ bool App::init() {
             if (const auto v = gc.get(ui::ack_radar_constant(static_cast<ui::AckRadar>(i)))) ack_radar_[i] = std::string(*v);
         ack_scale_land_ = gc.get_float("GUI_Move_Acknowledge_Scale_Land", ack_scale_land_);
         ack_scale_space_ = gc.get_float("GUI_Move_Acknowledge_Scale_Space", ack_scale_space_);
+        // refixf t05: the in-game cinematic camera (TSW_PLANET_DESTROY.md §11.3)
+        cine_.enabled = gc.get_bool("In_Game_Cinematics", true);
+        cine_.letterbox_height = gc.get_float("Camera_FX_Manager_Letterbox_Height", 0.085f);
     }
+    // The unsynced presentation generator (0x140a2ab18, seeded from the performance counter at boot); smoke runs fixed.
+    cine_.rng.reseed(opt_.smoke.empty() ? static_cast<uint64_t>(Clock::now().time_since_epoch().count()) : 0xf0f0f0f0u);
     // Live play: the user's Windows double-click time / rectangle (P1_DOUBLE_CLICK_MOVE.md §0); smoke runs keep the defaults.
     if (live_input()) input_ = ui::InputState(ui::system_input_config());
     if (!audio_.init(data_, opt_.audio, opt_.seed ^ 0xA0D10u, &err)) std::fprintf(stderr, "audio: %s (continuing without)\n", err.c_str());

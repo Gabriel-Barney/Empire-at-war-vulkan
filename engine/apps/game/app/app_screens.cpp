@@ -709,6 +709,10 @@ void App::build_encyclopedia(ui::HudDrawList& dl, const ui::HudCanvas& canvas) {
 
 void App::update_cursor(ui::HudDrawList& dl) {
     // ui ask 1: one cursor - the OS arrow is hidden over the window while the game draws its own.
+    if (cinematic_hides_cursor()) {  // refixf t05: cinematic mode on hides the cursor (0x262490(..., 0))
+        set_os_cursor_hidden(true);
+        return;
+    }
     set_os_cursor_hidden(cursor_ok_ && !hardware_mouse_ && !opt_.hidden);
     if (!cursor_ok_ || hardware_mouse_) return;
     ui::CursorContext c;

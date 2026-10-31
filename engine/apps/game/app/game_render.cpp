@@ -749,6 +749,16 @@ float BattleView::type_radius(objects::TypeIndex t) {
     return m->drawn_sphere().radius * table_[t].scale;
 }
 
+ui::Vec3 BattleView::type_half_extents(objects::TypeIndex t) {
+    if (!models_ || t >= table_.size()) return {};
+    const render::GpuModel* m = models_->type_model(t);
+    if (!m) return {};
+    const assets::Aabb b = m->drawn_bounds();
+    if (!b.valid()) return {};
+    const float s = 0.5f * table_[t].scale;
+    return {(b.max.x - b.min.x) * s, (b.max.y - b.min.y) * s, (b.max.z - b.min.z) * s};
+}
+
 void BattleView::use_scene(GpuCore& gpu) {
     if (!scene_) return;
     gpu.renderer.set_lighting(scene_->lighting());

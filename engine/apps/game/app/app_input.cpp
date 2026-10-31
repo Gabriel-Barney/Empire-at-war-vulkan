@@ -139,8 +139,10 @@ void App::post_tick() {
         if (const sim::TacticalBattle* b = session_->battle()) {
             const objects::ObjectStore& st = session_->host().modes().top_tactical()->primary();
             audio_.battle_tick(*b, st, data_.types, local_player());
-            for (const TswCue& c : tsw_cues(b->special_weapon_events(), st))  // refix t06: 0x2cdbb0 at the dummy
-                if (c.kind == TswCue::Kind::PlanetDestroyed) shake_.start(c.position, kTswPlanetShake);
+            for (const TswCue& c : tsw_cues(b->special_weapon_events(), st)) {  // refixf t05: TSW_PLANET_DESTROY.md §11
+                if (c.kind == TswCue::Kind::Firing) tsw_shot_begin(c, *b, st);              // 0x2ccf30: the firing shot
+                else if (c.kind == TswCue::Kind::PlanetDestroyed) tsw_shake(c, *b);        // 0x2cdbb0 at the dummy
+            }
             {  // radar pings (deaths, capture-point transitions) and the story's blips: read-only presentation
                 const lua::StoryModel* tac_story = nullptr;
 #ifdef ALAMO_SIM_HAVE_STORY

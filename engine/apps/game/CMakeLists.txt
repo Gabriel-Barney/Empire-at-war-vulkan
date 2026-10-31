@@ -71,8 +71,8 @@ target_link_libraries(alamo_game_audio_host_tests PRIVATE alamo_core alamo_game_
 add_test(NAME alamo_game_audio_host_tests COMMAND alamo_game_audio_host_tests)
 set_tests_properties(alamo_game_audio_host_tests PROPERTIES TIMEOUT 120)
 
-# Data-free (refix t06): the tactical super weapon's presentation cues (battle_fx.hpp), the camera shake and
-# GameAudioHost::tsw_audio on a synthetic type set / audio tree with the null backend.
+# Data-free (refix t06, refixf t05): the tactical super weapon's presentation cues (battle_fx.hpp), the cinematic camera
+# (TSW firing shot, explosion shake, letterbox; TSW_PLANET_DESTROY.md §11) and GameAudioHost::tsw_audio on a synthetic type set / audio tree with the null backend.
 add_executable(alamo_game_battle_fx_tests tests/test_battle_fx.cpp)
 target_link_libraries(alamo_game_battle_fx_tests PRIVATE alamo_core alamo_game_core)
 add_test(NAME alamo_game_battle_fx_tests COMMAND alamo_game_battle_fx_tests)
@@ -90,7 +90,7 @@ function(alamo_game_add_exe)
     return()
   endif()
   add_executable(alamo_game ${_dir}/app/game_main.cpp ${_dir}/app/app_session.cpp ${_dir}/app/app_input.cpp ${_dir}/app/app_screens.cpp
-                           ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_script.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp
+                           ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_cinematic.cpp ${_dir}/app/app_script.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp
                            ${_dir}/app/game_info.cpp ${_dir}/app/game_display.cpp)
   # alamo_core first: tools/formats' inline ByteReader vs core's (LNK2005, see alamo_render_app).
   target_link_libraries(alamo_game PRIVATE alamo_core alamo_game_core alamo_render_galactic alamo_render_sim alamo_ui_draw alamo_ui_hud

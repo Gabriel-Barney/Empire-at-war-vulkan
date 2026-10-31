@@ -181,6 +181,9 @@ public:
     void use_scene(GpuCore& gpu);
     // World bounding radius of a type (drawn bounding sphere of its model x Scale_Factor); 0 until the model is loaded.
     float type_radius(objects::TypeIndex t);
+    // refixf t05: half-extents of the type's drawn model box x Scale_Factor (TSW firing shot E, TSW_PLANET_DESTROY.md §11.2
+    // [M: the model box]); zero until the model is loaded.
+    ui::Vec3 type_half_extents(objects::TypeIndex t);
     float load_progress() const;
     bool settled(const render::DrawStats& ds) const;
 
