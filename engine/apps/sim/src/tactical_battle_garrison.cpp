@@ -100,7 +100,7 @@ void TacticalBattle::s4_owner_changed(TacticalMode& mode, objects::ObjectId id, 
     const objects::ObjectHandle h = st.find(id);
     const Vec3 p = st.exists(h) ? st.position(h) : Vec3{};
     const Vec3 f = st.exists(h) ? st.facing(h) : Vec3{1.0f, 0.0f, 0.0f};
-    garrison_.set_owner(id, owner, p, f, frame_);  // a host with occupants ejects them (applied at the next s4_tick)
+    garrison_.set_owner(id, owner, p, f, frame_);  // ejects the occupants hostile to the new owner (applied at the next s4_tick)
 }
 
 bool TacticalBattle::s4_placement(TacticalMode& mode, objects::TypeIndex t, const objects::SpawnParams& sp, float health) {
