@@ -708,14 +708,21 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   a quad (V −0.00013..1.00013). These are bump footprint/track decals, **not master-atlas slots**.
   `D_master_decal.DDS` slot UVs therefore still come from DECORATIONS.md. A capture that shows a master-atlas decal
   (scorch, crater) is needed. Texture decode: scratchpad only, not saved under `out/`.
-- **Decal atlas capture attempt (g1f t05, 2026-10-31): not captured.** Scorch decals come from `EXPLOSION_SCORCH_*` entries
-  in `TERRAINDECALFX.XML` (slots `0,3` / `1,3`, `Random_Rotate`, `Random_Size_Offset` 0.1, DIFFUSE_ALPHA), spawned by
-  the `EXPLOSION_SCORCH_MARK_*` particle effects, so a capture needs ground explosions (a destroyed building or unit).
-  Two blockers: (1) no human unit arrives (t01), so combat needs the AI to attack, which takes unknown minutes; (2) the
-  game window now comes up 3840x2054 (display scaling), and `g1_ui.fit_window` shrinking it to 1920x1080 makes the game
-  re-lay out its UI with oversized fonts, so the `expect_like` refs fail. Driving without `fit_window` works, but clicks
-  scale to the 3840 window and the Endor map-list click picked Dagobah Rush. Scene `EB` in `scenes.json` (Endor, waits,
-  screenshot every 30 s) is the starting point. Also: a trace at 3840x2054 would be several times larger.
+- **Decal atlas capture attempt (g1f t05, 2026-10-31): not captured.** Scorch decals come from the `EXPLOSION_SCORCH_*`
+  entries in `TERRAINDECALFX.XML` (slots `0,3` / `1,3`, `Random_Rotate`, `Random_Size_Offset` 0.1, DIFFUSE_ALPHA),
+  spawned by the `EXPLOSION_SCORCH_MARK_*` particle effects, so a capture needs ground explosions (a unit or building
+  dying). What was tried:
+  - Window: with display scaling the game window opens 3840x2054 in real pixels; `g1_ui.fit_window` now fits to
+    3840x2160 (the game then sees 1920x1080) instead of shrinking it, which made the game redraw its UI with oversized
+    fonts. Screenshots are 3840 wide. Scene `EB` (Endor Xpress as Rebellion vs Easy AI Empire, shot every 30 s,
+    DXVK `dxvk_20261031_100605`) now reaches the battle.
+  - 6 minutes of Easy-AI play: the AI only captured build pads and its units fought neutral Ewoks off-screen (result
+    screen: 2 Dark Troopers, 3 Ewoks lost). Nothing came near the player's base, so there was no fight to frame.
+  - Land purchases: a structure queued on a build pad (850) is paid and its model appears, but the queue entry stays
+    at a full bar for 3+ minutes, the same stuck-purchase picture as t01. No player units were obtained.
+  - Not tried: a hand-played fight. Needs Gabriel (roadmap t06 style): play Endor Xpress under
+    `g1.py apitrace --non-interactive` (no `--drive`), get a unit or building destroyed on open ground, keep it in view
+    for 10 s, quit; then the `--vb-draws` decode of the lit FF draws with the master-atlas texture can run.
 - **Final-image comparison (g1f t04).** `g1_analyze.py --compare NAME REF PORT --regions "name=x0,y0,x1,y1;..."`
   compares a d3dretrace final with an `alamo_render --sim --map X --png` image (1920×1080; world regions exclude the HUD,
   y < 650). Output: `analysis/compare_<name>.json` and `compare_<name>_side_by_side.png` under the run folder
