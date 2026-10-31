@@ -561,13 +561,27 @@ int g_find_all_with_hint(Call& c) {
 // Find_First_Object(type name) / FindPlanet(name) (one class, FindPlanetClass): the first live
 // object of that type in the canonical newest-first walk [inferred: same walk as
 // Find_All_Objects_Of_Type]. FindPlanet keeps only objects with a PLANET behaviour [inferred].
+// refix t04: in the galactic store a company object also stands for its Company_Units members (vm_internal.hpp member
+// views): a member type name finds the company's first matching entry (Find_First_Object only).
 int find_first(Call& c, bool planets_only) {
     if (!c.is_string(1)) return c.fail("FindPlanet -- Parameter 1 is not a valid string");
     const std::string_view name = c.string(1);
     const objects::ObjectStore* st = store(c);
     if (!st) return push_nil(c);
+    const objects::GameObjectTypes* ty = types(c);
+    const bool members = !planets_only && ty && !name.empty() && st->mode() == objects::ModeKind::Galactic;
     for (const ObjectHandle h : st->objects_newest_first()) {
-        if (!st->alive(h) || !type_matches(c, h, name)) continue;
+        if (!st->alive(h)) continue;
+        if (!type_matches(c, h, name)) {
+            if (!members) continue;
+            const std::vector<TypeIndex> refs = ty->get_type_refs(st->type(h), "Company_Units");
+            for (uint32_t i = 0; i < refs.size(); ++i)
+                if (refs[i] != objects::kNone && iequal(type_name(c, refs[i]), name)) {
+                    detail::push_member_view(c.L, *c.vm, h, i);
+                    return 1;
+                }
+            continue;
+        }
         if (planets_only && !st->has_behavior(h, objects::beh::Planet)) continue;
         detail::push_object(c.L, *c.vm, h);
         return 1;
@@ -868,6 +882,12 @@ int m_get_game_scoring_type(Call& c) {  // [inferred] the object's own type
 // ParentContainerObject unless it is dead (OBJECT_RUNTIME.md §3).
 int m_get_parent_object(Call& c) {
     const objects::ObjectStore* st = store(c);
+    // refix t04 (L1P4_LUA_GAPS 1.3): a company member view's parent is the company object itself (the original's
+    // transport carrying that member), so smuggler.Get_Parent_Object().Activate_Ability() fires only that company.
+    if (detail::is_member_view(*c.self)) {
+        detail::push_object(c.L, *c.vm, self_object(c));
+        return 1;
+    }
     const ObjectHandle p = container_of(c, self_object(c));
     if (!p || !st->alive(p)) return push_nil(c);
     detail::push_object(c.L, *c.vm, p);

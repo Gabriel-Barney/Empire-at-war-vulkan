@@ -181,6 +181,11 @@ struct Galaxy {
                   "<GroundInfantry Name=\"Slice_B_T\"><Affiliation>Empire</Affiliation><Tech_Level>1</Tech_Level>"
                   "<Build_Initially_Locked>Yes</Build_Initially_Locked><Build_Can_Be_Unlocked_By_Slicer>Yes</Build_Can_Be_Unlocked_By_Slicer>"
                   "<Slice_Cost_Credits>200</Slice_Cost_Credits></GroundInfantry>\n"
+                  // refix t04: a galactic company (one port object) whose Company_Units the member views stand for.
+                  "<GroundInfantry Name=\"Smuggler_T\"><CategoryMask>Infantry</CategoryMask></GroundInfantry>\n"
+                  "<GroundInfantry Name=\"Crew_T\"><CategoryMask>Infantry</CategoryMask></GroundInfantry>\n"
+                  "<HeroCompany Name=\"Smuggler_Team_T\"><Company_Units>Smuggler_T, Crew_T, Smuggler_T</Company_Units>"
+                  "<Company_Transport_Unit>Frigate_T</Company_Transport_Unit></HeroCompany>\n"
                   "</R>");
         CHECK(raw.load(files));
         CHECK(types.build(raw));
@@ -1013,8 +1018,9 @@ uint64_t special_session() {
     attach_ai_host(vm, &ai, 1);
     set_task_force_global(vm, "TF", 3, AiTaskForceKind::Galactic);
     ai.units = {h[1], h[2]};
-    CHECK(run(vm, "st = TF.Land_Units() sf = st.IsFinished() TF.Activate_Ability() TF.Activate_Ability('halter_t') "
-                  "TF.Activate_Ability('UNUSED_NAME') TF.Activate_Ability(ft, true)") == "" && gtrue(vm, "sf"));
+    CHECK(run(vm, "st = TF.Land_Units() sf = st.IsFinished() tfr = TF.Activate_Ability() tfn = (tfr == nil) "
+                  "TF.Activate_Ability('halter_t') TF.Activate_Ability('UNUSED_NAME') TF.Activate_Ability(ft, true)") == "" &&
+          gtrue(vm, "sf") && gtrue(vm, "tfn"));  // refix t04: no return value (L1P4_LUA_GAPS 1.2 item 4)
     CHECK(ai.orders.size() == 3 && ai.orders[0] == AiTfOrder::LandUnits && ai.orders[1] == AiTfOrder::ActivateAbility &&
           ai.orders[2] == AiTfOrder::ActivateAbility && ai.abilities.size() == 2 && ai.abilities[0].empty() &&
           ai.abilities[1] == "Halter_T" && g.store->alive(h[1]) && g.store->alive(h[2]) && sim.respawns_pending(0).size() == 1);
@@ -1055,11 +1061,83 @@ void test_special_systems() {
                 (a == b && a == c) ? "yes" : "NO");
 }
 
+// refix t04 (L1P4_LUA_GAPS 1.3, STORY_TUTORIAL_M04_GALACTIC.LUA): Find_All_Objects_Of_Type(member type) gives company
+// member views; a view's Get_Parent_Object() is the company (the original's transport), whose Activate_Ability fires only
+// that company, not the rest of its fleet. The fleet's type filter matches representative types (company type), not
+// member types. A view's own Activate_Ability does nothing (a unit inside a transport).
+void test_company_member_views() {
+    Galaxy g({{0, 0, "Halter_T"}, {0, 0, "Smuggler_Team_T"}}, [](galactic::GalacticRules& r, const objects::ObjectTypeDatabase& raw) {
+        tune_special(r, raw);
+        const uint32_t team = raw.find("Smuggler_Team_T");
+        r.special.types[team].abilities = {0};  // the port's company carries its members' abilities
+        r.special.types[team].generic_hero = true;
+    });
+    galactic::GalacticSim& sim = *g.sim;
+    const uint32_t halter = g.raw.find("Halter_T"), team = g.raw.find("Smuggler_Team_T");
+    objects::ObjectHandle hal{}, comp{};
+    for (const objects::ObjectHandle u : sim.planets()[0].surface) {
+        if (g.store->type(u) == halter) hal = u;
+        if (g.store->type(u) == team) comp = u;
+    }
+    CHECK(static_cast<bool>(hal) && static_cast<bool>(comp));
+    if (!hal || !comp) return;
+    const objects::ObjectHandle launch[] = {hal, comp};
+    CHECK(sim.launch_units(0, 0, launch) == commands::RejectReason::None);
+    CHECK(sim.change_owner(hal, 1) && sim.change_owner(comp, 1));
+    const uint32_t f = sim.fleet_containing(comp);
+    CHECK(f != galactic::kNoFleet && f == sim.fleet_containing(hal) && sim.fleets()[f].planet == 0);
+    if (f == galactic::kNoFleet) return;
+    CHECK(sim.representative_type(comp) == team && sim.bm_give_item(1, "Halt_Tech"));
+
+    ObjectBridge bridge;  // as StorySession wires it
+    bridge.container_of = [&sim](objects::ObjectHandle h) { return sim.container_of(h); };
+    bridge.contents_of = [&sim](objects::ObjectHandle h) { return sim.contents_of(h); };
+    bridge.destroy_object = [&sim](objects::ObjectHandle h) { return sim.destroy_object(h); };
+    LuaHost host = g.host();
+    host.campaign = true;
+    LuaVm vm(host);
+    attach_player_world(vm, &g.world);
+    attach_object_bridge(vm, &bridge);
+    vm.set_object_global("Comp", comp);
+    vm.set_object_global("Fleet", sim.fleets()[f].object);
+    // The M04 lookup: views per matching Company_Units entry (entries 0 and 2), cached (same userdata every time),
+    // typed as the member, distinct from the company's own wrapper; Find_First_Object finds the first entry.
+    CHECK(run(vm, "list = Find_All_Objects_Of_Type('SMUGGLER_T') n = table.getn(list) sm = list[1] "
+                  "same = rawequal(Find_All_Objects_Of_Type('Smuggler_T')[1], sm) and rawequal(Find_First_Object('smuggler_t'), sm) "
+                  "two = not rawequal(list[2], sm) tn = sm.Get_Type().Get_Name() crew = Find_First_Object('Crew_T') "
+                  "cn = crew.Get_Type().Get_Name() ncrew = table.getn(Find_All_Objects_Of_Type('Crew_T')) "
+                  "differs = not (sm == Comp) and not rawequal(sm, Comp) valid = sm.Is_Valid() "
+                  "nemp = table.getn(Find_All_Objects_Of_Type('Smuggler_T', Find_Player('Empire'))) "
+                  "ct = Comp.Get_Type().Get_Name() pa = Comp.Get_Planet_Location() pl = pa ~= nil and rawequal(sm.Get_Planet_Location(), pa) "
+                  "smuggler_transport = sm.Get_Parent_Object() isc = rawequal(smuggler_transport, Comp) "
+                  "pf = rawequal(smuggler_transport.Get_Parent_Object(), Fleet) ts = tostring(sm)") == "");
+    CHECK(static_cast<int>(gnum(vm, "n")) == 2 && gtrue(vm, "same") && gtrue(vm, "two") && gstr(vm, "tn") == "Smuggler_T");
+    CHECK(gstr(vm, "cn") == "Crew_T" && static_cast<int>(gnum(vm, "ncrew")) == 1 && gtrue(vm, "differs") && gtrue(vm, "valid"));
+    CHECK(static_cast<int>(gnum(vm, "nemp")) == 0 && gstr(vm, "ct") == "Smuggler_Team_T" && gtrue(vm, "pl"));
+    CHECK(gtrue(vm, "isc") && gtrue(vm, "pf") && gstr(vm, "ts").find("Smuggler_T") != std::string::npos);
+    // Nothing fires: the view itself (inside a transport: silently), the fleet filtered by a member type (the members'
+    // representative types are Halter_T and Smuggler_Team_T).
+    CHECK(run(vm, "sm.Activate_Ability() Fleet.Activate_Ability('Smuggler_T')") == "");
+    CHECK(g.store->alive(comp) && g.store->alive(hal) && sim.respawns_pending(0).empty());
+    // smuggler_transport.Activate_Ability(): only the company tries its abilities (the halt applies, the hero departs);
+    // the halter in the same fleet, which has the same ability, does not fire.
+    CHECK(run(vm, "r = smuggler_transport.Activate_Ability() rn = (r == nil) gone = not sm.Is_Valid()") == "");
+    CHECK(gtrue(vm, "rn") && gtrue(vm, "gone") && !g.store->alive(comp) && g.store->alive(hal) &&
+          sim.respawns_pending(0).size() == 1);
+    CHECK(vm.errors().empty());
+    for (const std::string& m : vm.messages())
+        if (m.find("SCRIPT ERROR") != std::string::npos) {
+            std::printf("  member views: unexpected %s\n", m.c_str());
+            ++g_fail;
+        }
+}
+
 }  // namespace
 
 int main() {
     test_players();
     test_special_systems();
+    test_company_member_views();  // refix t04
     test_perception();
     test_shipped_equations();
     test_determinism();

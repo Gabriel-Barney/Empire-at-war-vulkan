@@ -850,6 +850,29 @@ void test_a2gal_population() {
         CHECK(s.fleets()[fl[0]].moving && s.fleets()[fl[0]].planet == kInvalidPlanet);
         CHECK(s.population_used(pUnder, false) == 3 && s.population_capacity(pUnder) == 2);
     }
+    // refix t05: starbase_type() (0x3f8b40) is the planet's starbase object's type, kNoIndex without one; a starbase
+    // removed behind the sim's back (a direct store destroy) adds nothing and is cleared at the next update (level 0,
+    // owner none, StarbaseLevelChanged), like destroy_object.
+    CHECK(s.starbase_type(rA) == tSB1 && s.starbase_type(rC) == kNoIndex && s.starbase_type(kInvalidPlanet) == kNoIndex);
+    CHECK(s.population_capacity(pEmpire) == 14 && s.planets()[rA].starbase_level == 1);
+    s.set_emit_events(true);
+    CHECK(store.destroy(s.planets()[rA].starbase));
+    CHECK(s.starbase_type(rA) == kNoIndex && s.population_capacity(pEmpire) == 4);
+    CHECK(s.planets()[rA].starbase_level == 1 && s.planets()[rA].starbase_owner == pEmpire);  // not seen yet
+    s.update();
+    CHECK(s.planets()[rA].starbase_level == 0 && s.planets()[rA].starbase_owner == kNoPlayer && !s.planets()[rA].starbase);
+    std::vector<GalacticEvent> evs;
+    s.drain_events(evs);
+    const auto cleared = std::count_if(evs.begin(), evs.end(), [](const GalacticEvent& e) {
+        return e.kind == GalacticEventKind::StarbaseLevelChanged && e.planet == rA && e.player == pEmpire && e.value == 0;
+    });
+    CHECK(cleared == 1);
+    // Planet E's starbase is untouched; a second update clears nothing more.
+    CHECK(s.starbase_type(rE) == tSB1 && s.planets()[rE].starbase_level == 1);
+    s.update();
+    evs.clear();
+    s.drain_events(evs);
+    CHECK(std::none_of(evs.begin(), evs.end(), [](const GalacticEvent& e) { return e.kind == GalacticEventKind::StarbaseLevelChanged; }));
 }
 
 void test_a2gal_steal_order() {
@@ -873,6 +896,13 @@ void test_a2gal_steal_order() {
     const ObjectHandle at_dest = s.spawn_unit(pEmpire, rA, tFrigate);
     CHECK(s.steal_unit(pEmpire, tFrigate, rA, false) && !w.store.alive(f1) && w.store.alive(at_dest));
     CHECK(!s.steal_unit(pEmpire, tFrigate, rA, false) && s.steal_unit(pEmpire, tFrigate, rA, true));  // hero rule
+    // refix t04: the match is GalacticSim::representative_type (= the store type in the port model; a fleet object's
+    // own type, never a member's type).
+    const ObjectHandle rep = s.spawn_unit(pEmpire, rB, tFrigate);
+    CHECK(s.representative_type(rep) == static_cast<uint32_t>(tFrigate));
+    const uint32_t rf = s.fleet_containing(rep);
+    CHECK(rf != kNoFleet && s.representative_type(w.fl(rf).object) == static_cast<uint32_t>(w.store.type(w.fl(rf).object)));
+    CHECK(s.representative_type(ObjectHandle{}) == kNoIndex);
 }
 
 void test_a2gal_ai_blockade() {

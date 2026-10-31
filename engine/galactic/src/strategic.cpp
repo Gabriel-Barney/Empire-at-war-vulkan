@@ -54,6 +54,11 @@ uint32_t GalacticSim::travel_type(ObjectHandle unit) const {
     return t;
 }
 
+uint32_t GalacticSim::representative_type(ObjectHandle object) const {
+    // Port model (campaign.hpp): squadron / company objects carry the squadron / company type, a fleet object its own.
+    return store_->exists(object) ? static_cast<uint32_t>(store_->type(object)) : kNoIndex;
+}
+
 bool GalacticSim::is_company_transport(ObjectHandle unit) const {
     if (!store_->exists(unit)) return false;
     const uint32_t t = static_cast<uint32_t>(store_->type(unit));

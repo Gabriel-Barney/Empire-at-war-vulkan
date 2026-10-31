@@ -170,7 +170,9 @@ public:
     // wrapper argument after the name. Land / Space / generic task forces: the binding has ALREADY called each unit's
     // GameObjectWrapper.Activate_Ability with the script's arguments (the tactical ability path, AI_TACTICAL §7.3), so the
     // host only answers the status and must not activate again. Galactic task forces: the host fires the Ground_Activated
-    // trigger per member (P4_SIM_SYSTEMS 6.1; the name selects nothing there). Default: tf_order(ActivateAbility, target).
+    // trigger per member (P4_SIM_SYSTEMS 6.1); `ability` is then the type name of the optional object-type argument
+    // (L1P4_LUA_GAPS 1.1, "" = no filter) and the script gets no return value (the status id is dropped, 1.2 item 4).
+    // Default: tf_order(ActivateAbility, target).
     virtual int32_t tf_activate_ability(int32_t tf, std::string_view /*ability*/, bool /*on*/, const AiArg& target) {
         return tf_order(tf, AiTfOrder::ActivateAbility, target);
     }

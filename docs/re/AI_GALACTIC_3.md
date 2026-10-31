@@ -232,9 +232,10 @@ Sum, over the player's object list in the current store (pop manager +0x548, per
 ### 3.5 Galactic population [H]
 
 - **Applies to a player only if the player is human (+0x62) or `AI_Uses_Galactic_Pop_Cap` is set.** In vanilla FoC the AI has no galactic cap. The A2 stand-in "no galactic pop cap" is correct for the AI with shipped data; mods that set the flag need §3.5–3.6.
-- Capacity 0x2ac700 (galactic mode): `Base_Population_Capacity` + Σ over the player's alive objects (+0x3A0 & 0x42 clear) of their type's `Additional_Population_Capacity`, plus, for a planet, the `Additional_Population_Capacity` of the type returned by 0x3f8b40 [M: the planet's orbital starbase type]. For a non-human, objects located at a planet whose surface is not usable (0x3fa420) are skipped.
-- Used 0x2ac320 (production legality): round(Σ `Population_Value` over the player's top-level objects + 0.5), skipping objects inside a container whose own pop is > 0 and (non-human) objects at unusable planets, plus, when asked, the pop of items queued at the player's production behaviours (0x401cf0). A type is producible when pop(T, 0) ≤ max(capacity − used, 0).
-- AI remaining pop for the solver (0x5f5080; PP Reset puts it in 0x140b3a530 when the flag is on): galactic only; capacity − Σ pop of the AI's galactic free-store units (skipping units at unusable planets) − Σ PP+0x1A8 over the budget's goal structs (the population committed by instantiated plans) [H; M "committed"].
+- Capacity 0x2ac700 (galactic mode): `Base_Population_Capacity` + Σ over the player's alive objects (+0x3A0 & 0x42 clear) of their type's `Additional_Population_Capacity`, plus, for a planet, the `Additional_Population_Capacity` of the type returned by 0x3f8b40 (the planet's current starbase type, planet data +0x140: once per owned planet, whoever owns the starbase, whatever its level; A2GAL_READINGS §2.2 [H]). For a non-human, objects whose nearest planet (the object or its +0x2B0 parents) is **not revealed** are skipped: 0x3fa420 is `Is_Planet_Revealed` (GALACTIC_REVEAL_CORRUPTION §1.1; local reveal state, no player argument, always true in multiplayer); objects with no planet ancestor (fleets in transit) are never skipped (A2GAL_READINGS §2.2–2.3 [H]; this line formerly read 0x3fa420 as "surface not usable", which was wrong).
+- Used 0x2ac320 (production legality): round(Σ `Population_Value` over the player's top-level objects + 0.5), skipping objects inside a container whose own pop is > 0 and (non-human) objects at planets that are not revealed (0x3fa420, as above), plus, when asked, the pop of items queued at the player's production behaviours (0x401cf0). A type is producible when pop(T, 0) ≤ max(capacity − used, 0). Galactic starbases are planet types, not objects, so their `Population_Value` is never "used".
+- AI remaining pop for the solver (0x5f5080; PP Reset puts it in 0x140b3a530 when the flag is on): galactic only; capacity − Σ pop of the AI's galactic free-store units (skipping units at planets that are not revealed, 0x3fa420) − Σ PP+0x1A8 over the budget's goal structs (the population committed by instantiated plans) [H; M "committed"].
+- Port (refix t05, 2026-10-31): the port keeps a galactic starbase as the planet's starbase **object**, so 0x3f8b40 is `GalacticSim::starbase_type(planet)` = that object's type. Level, owner and object are set and cleared together, and a starbase object removed outside the sim (a direct store destroy) is cleared to level 0 at the next galactic update, so the port never holds a starbase level without a starbase type [port decision; the original cannot reach that state because its starbase is not an object].
 
 ---
 
@@ -388,6 +389,7 @@ Static analysis cannot give the per-frame total: it depends on the candidate pop
 5. **A2 port:** K = 1.0, not 0 (§8).
 6. **GALACTIC_ECONOMY §5.1:** 0x3fc750 is the delayed-spawn service; build queues and the AI market run in ProductionBehavior::Service during the object loop (§5).
 7. **AI_GALACTIC_TOKENS open item 1 / AI_GALACTIC_2 open item 1:** closed: failure leaves the output untouched and propagates (§7.1).
+8. **§3.5 here, AI_GALACTIC_2 §2.1 ("surface usable"), AI_GALACTIC §2.8 ("restricted planet"):** 0x3fa420 is `Is_Planet_Revealed`, not a surface test (A2GAL_READINGS §2.3, 2026-10-31; §3.5 corrected in place).
 
 ---
 

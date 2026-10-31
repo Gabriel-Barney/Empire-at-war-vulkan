@@ -652,6 +652,14 @@ public:
     // Battle write-back: replaces the planet's starbase by `type` (level = its Base_Level, same owner);
     // kNoIndex destroys it (level 0). False when there is no starbase.
     bool replace_starbase(PlanetIndex planet, uint32_t type);
+    // The planet's current starbase type (0x3f8b40, planet data +0x140; A2GAL_READINGS 2.2), kNoIndex for none. refix t05
+    // [port] decision: the original keeps the starbase as a TYPE on the planet (no object); the port keeps it as the
+    // planet's starbase object, so the type is that object's type. starbase, starbase_level and starbase_owner are set
+    // and cleared together (create_unit, replace_starbase, destroy_object, the story capture, load), and update()
+    // clears level and owner of a planet whose starbase object was removed outside the sim (a direct ObjectStore
+    // destroy, e.g. a galactic Lua Take_Damage), as destroy_object does, so no "level without a starbase" state lasts
+    // past the next galactic frame.
+    uint32_t starbase_type(PlanetIndex planet) const;
     // Clears a production queue without refunds (capture after a won battle, §3.2).
     void clear_queue(PlanetIndex planet, uint32_t queue);
     // Appends a host-made event (battle results) to the S4 stream (stamped with the mode frame).
@@ -823,6 +831,12 @@ public:
     // nothing]. Launch / land / form: FleetManagement ops (FleetOp).
     uint32_t travel_type(ObjectHandle unit) const;          // transport type of a company, else the store type
     bool is_company_transport(ObjectHandle unit) const;     // a company with a Company_Transport_Unit
+    // The representative type 0x3973b0 (L1P4_LUA_GAPS 1.2, A2GAL_READINGS 3.2): a fleet's squadron type (FLEET
+    // behaviour), a transport's company type (TRANSPORT behaviour), a team's type, else the object's own type. Port
+    // model: a squadron and a company are single objects whose store type IS that squadron / company type, and a fleet
+    // object's own type stands for Galactic_Fleet, so this is the store type for every galactic object (kNoIndex for a
+    // stale handle). The galactic Activate_Ability fleet filter and steal_unit match on it.
+    uint32_t representative_type(ObjectHandle object) const;
     int32_t surface_forces(PlanetIndex planet) const;       // 0x3f9530 [M]: live surface units, any owner
     // Buildability 0x2804d0 in the SG 1.3 order. check_credits: step 6 for players with Is_Human (+0x62 [M]).
     // Build_Initially_Locked (step 9) only while initial_build_locks() is on.
@@ -1057,6 +1071,7 @@ private:
     bool auto_reveal_ = true;   // galactic mode +0x340
     bool reveal_sfx_ = false;   // presentation latch (not hashed)
     void reveal_prestep();      // 0x4b2600
+    void sync_starbases();      // refix t05: a starbase object removed outside the sim -> level 0 (starbase_type())
     bool reveal_one(PlanetIndex planet);  // pre-step step 4: true when the byte was clear
     bool begin_gain_raw(PlanetIndex planet, float seconds, int8_t type, int32_t player);  // 0x4b72e0
     bool begin_removal_raw(PlanetIndex planet, float seconds);                            // 0x4b7260

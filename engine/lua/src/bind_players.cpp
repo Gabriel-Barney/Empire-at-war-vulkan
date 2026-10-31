@@ -1466,10 +1466,12 @@ bool detail::galactic_block_finished(Call& c) {
 // Activate_Ability_Galactic (0x570670, P4_SIM_SYSTEMS 6.1, L1P4_LUA_GAPS 1): optional object-type argument (wrapper or
 // type name, galactic_ability_type_arg; a bad one fires nothing). Not an ability name: the trigger tries every
 // Ground_Activated ability of the unit's type. The object must be in orbit:
-//   - a fleet at a planet: each direct member (content order: the port's fleets carry the units of the original's
-//     transports directly) whose type is the argument's (the member's own type stands for the original's
-//     representative type: port members are the squadron / company objects themselves);
-//   - a unit in a fleet at a planet: that unit, the argument is not applied;
+//   - a fleet at a planet: each direct member (content order: the port's fleets carry the original's transports as
+//     the company objects themselves) whose representative type (GalacticSim::representative_type: squadron /
+//     company type) is the argument's;
+//   - a unit in a fleet at a planet (a company object = the original's transport: its cargo): that unit, the argument
+//     is not applied;
+//   - a company member view (refix t04: a unit inside a transport): silently nothing;
 //   - a fleet in transit, a planet or a free object: "is not at a planet"; a unit on the surface: "is landed"; nothing.
 // Returns no values (the caller pushes none).
 bool detail::galactic_activate_ability(Call& c) {
@@ -1477,6 +1479,7 @@ bool detail::galactic_activate_ability(Call& c) {
     if (!sim) return false;
     uint32_t filter = objects::kNone;
     if (!galactic_ability_type_arg(c, "GameObjectWrapper::Activate_Ability_Galactic", filter)) return true;
+    if (detail::is_member_view(*c.self)) return true;  // parent = a transport: not a planet, not a fleet (1.2 case 3)
     const objects::ObjectHandle self = detail::object_handle(*c.self);
     if (!sim->store().alive(self)) return true;
     uint32_t f = sim->fleet_of(self);
@@ -1497,7 +1500,7 @@ bool detail::galactic_activate_ability(Call& c) {
     std::vector<std::pair<objects::ObjectHandle, uint32_t>> todo;
     if (is_fleet) {
         for (const objects::ObjectHandle m : fl.contents)
-            if (sim->store().alive(m) && (filter == objects::kNone || static_cast<uint32_t>(sim->store().type(m)) == filter))
+            if (sim->store().alive(m) && (filter == objects::kNone || sim->representative_type(m) == filter))
                 todo.emplace_back(m, fl.planet);
     } else {
         todo.emplace_back(self, fl.planet);

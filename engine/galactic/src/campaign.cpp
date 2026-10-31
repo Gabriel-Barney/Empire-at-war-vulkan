@@ -1320,6 +1320,7 @@ void GalacticSim::arrive(uint32_t fleet) {
 // ---- frame --------------------------------------------------------------------------------------------------
 
 void GalacticSim::update() {
+    sync_starbases();  // refix t05: no planet keeps a starbase level without its starbase object
     reveal_prestep();  // GRC 1.3: first in the galactic frame, also while paused (step 2 tests the pause)
     if (pause_ > 0) {  // galactic pause: mode frame frozen, behaviours not serviced [H]
         if (conflicts_) conflicts_->on_service_tail();  // S10: the conflict state machine keeps running
@@ -1591,6 +1592,35 @@ bool GalacticSim::replace_starbase(PlanetIndex planet, uint32_t type) {
     ev.value = p.starbase_level;
     emit(ev);
     return true;
+}
+
+// refix t05 (A2GAL_READINGS 2.2, starbase_type()): the planet's starbase type is its starbase object's type.
+uint32_t GalacticSim::starbase_type(PlanetIndex planet) const {
+    if (!valid_planet(planet) || !store_->alive(planets_[planet].starbase)) return kNoIndex;
+    const auto t = static_cast<uint32_t>(store_->type(planets_[planet].starbase));
+    return t < rules_->types.size() ? t : kNoIndex;
+}
+
+// refix t05 [port]: a starbase object that left the store without destroy_object (no sim bookkeeping) is a destroyed
+// starbase: level 0, owner none, StarbaseLevelChanged as destroy_object emits it. Planet row order; nothing happens
+// while every planet's starbase state is consistent (the normal case), so no hashed state changes then.
+void GalacticSim::sync_starbases() {
+    for (PlanetIndex pi = 0; pi < planets_.size(); ++pi) {
+        PlanetState& p = planets_[pi];
+        if (store_->alive(p.starbase) || (!p.starbase && p.starbase_level == 0 && p.starbase_owner == kNoPlayer)) continue;
+        const bool had_level = p.starbase_level != 0;
+        p.starbase = {};
+        p.starbase_level = 0;
+        if (had_level) {
+            GalacticEvent ev;
+            ev.kind = GalacticEventKind::StarbaseLevelChanged;
+            ev.player = p.starbase_owner;
+            ev.planet = pi;
+            ev.value = 0;
+            emit(ev);
+        }
+        p.starbase_owner = kNoPlayer;
+    }
 }
 
 void GalacticSim::clear_queue(PlanetIndex planet, uint32_t queue) {
