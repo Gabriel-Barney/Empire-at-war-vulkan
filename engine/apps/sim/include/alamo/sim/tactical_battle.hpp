@@ -710,6 +710,11 @@ public:
     // FOW_Point_Test / FOW_Object_Hidden (FOG_OF_WAR §5) on the battle's mode; false while fog is off.
     bool fog_point_fogged(int32_t player, float x, float y, bool force) const;
     bool fog_object_hidden(int32_t player, objects::ObjectId id, bool force) const;
+    // refixf t03: the representative type 0x3973b0 (LUA_API.md "Find_All_Objects_Of_Type and the sibling finders") for
+    // the Lua finders (lua::ObjectBridge::representative_type): a TEAM container -> its Container::type (Create_Team_Type,
+    // else the company type). The battle has no tactical transport or fleet objects; anything else -> objects::kNone (the
+    // binding then uses the store type).
+    objects::TypeIndex representative_type(objects::ObjectId id) const;
     // The fog's view of a live object (Lua Reveal / Temporary_Reveal input); false when not alive.
     bool fog_object(objects::ObjectId id, tactical::fog::FogObject& out) const;
     // OI fog: host-level FOW-active flag / render option (FOG_OF_WAR §1.3, §6.5: Lua Disable_Rendering, story

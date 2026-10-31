@@ -108,6 +108,11 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     TacticalBattle* bt = b_;
     br.ability_frame = [bt] { return bt->frame(); };
     br.is_enemy = [bt](int32_t x, int32_t y) { return bt->combat().is_enemy(x, y); };
+    // refixf t03: Find_All_Objects_Of_Type / Find_Nearest match TEAM containers on their company / team type.
+    const objects::ObjectStore* rep_store = &mode.primary();
+    br.representative_type = [bt, rep_store](objects::ObjectHandle o) {
+        return rep_store->exists(o) ? bt->representative_type(rep_store->id(o)) : objects::kNone;
+    };
     br.order_finished = [bt](objects::ObjectId id, uint32_t) {
         return !bt->movement_->has_unit(id) || !bt->movement_->view(id).has_goal;
     };
@@ -202,6 +207,13 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
             bt->adopt_object(*md, o);
             return o;
         };
+#if defined(ALAMO_LUA_HAVE_FOG) && defined(ALAMO_SIM_HAVE_FOG)
+        // refixf t03: Find_Nearest(obj, filter, player, bool) skips objects fogged for the player (0x35f470, force = 1).
+        fog_hooks_.object_hidden = [bt, bid](objects::ObjectHandle o, int32_t player, bool force) {
+            return bt->fog_object_hidden(player, bid(o), force);
+        };
+        k.fog = &fog_hooks_;
+#endif
         br.tactical = &tactical_;
     }
     // --- end battle host ---

@@ -33,6 +33,7 @@
 
 #include "alamo/ai/tactical/tactical_ai.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/lua/fog_bridge.hpp"        // refixf t03: Find_Nearest's fog test in the tactical AI VMs
 #include "alamo/lua/script_gaps.hpp"       // battle host: the tactical AI VMs' TacticalScriptHooks
 #include "alamo/lua/script_remaining.hpp"  // L1 bindings: the tactical AI VMs' RemainingScriptHooks
 #include "alamo/tactical/movement/common.hpp"  // kThreatOff
@@ -140,6 +141,11 @@ private:
     std::map<objects::ObjectId, int32_t> unit_ai_stamps_;
     std::vector<objects::ObjectId> team_units(uint8_t player, uint32_t wire) const;  // battle host: unit or TEAM members
     lua::TacticalScriptHooks tactical_;    // battle host: script_gaps.hpp hooks of the tactical AI VMs (L1 final list)
+#ifdef ALAMO_LUA_HAVE_FOG
+    // refixf t03: only object_hidden is set (Find_Nearest's FOW_Object_Hidden test); fog stays null, so the AI VMs'
+    // FogOfWar.* bindings keep answering "Command only valid in a tactical game" as before.
+    lua::FogScriptHooks fog_hooks_;
+#endif
     lua::RemainingScriptHooks remaining_;  // L1 bindings: script_remaining.hpp hooks of the tactical AI VMs (Divert; Int-final: strikes, damage stats, fields, weather, shields)
 };
 

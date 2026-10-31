@@ -239,7 +239,8 @@ public:
     std::span<const ObjectHandle> all_objects() const { return all_; }
     std::span<const ObjectHandle> serviced() const { return serviced_; }
     std::vector<ObjectHandle> objects_newest_first() const;
-    // Lua Find_All_Objects_Of_Type: active() objects of `type` (dying / removing death clones skipped), newest first.
+    // active() objects of `type` (dying / removing death clones skipped), newest first. Not the Lua
+    // Find_All_Objects_Of_Type, which has no death-clone test and matches representative types (engine/lua bind_objects.cpp).
     std::vector<ObjectHandle> find_all_of_type(TypeIndex type) const;
     std::span<const ObjectHandle> owned_by(int32_t owner) const;  // insertion order
     const BehaviorTable& behavior_table(BehaviorTypeId id) const { return tables_[id]; }

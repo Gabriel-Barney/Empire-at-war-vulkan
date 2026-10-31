@@ -940,6 +940,11 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         if (battle_ && tm && tm->primary().alive(o)) battle_->set_garrison_spawn(tm->primary().id(o), on);
     };
     b.is_enemy = [this](int32_t x, int32_t y) { return battle_ && battle_->combat().is_enemy(x, y); };
+    // refixf t03: Find_All_Objects_Of_Type / Find_Nearest match TEAM containers on their company / team type.
+    b.representative_type = [this](objects::ObjectHandle o) {
+        TacticalMode* tm = host_->tactical();
+        return (battle_ && tm && tm->primary().exists(o)) ? battle_->representative_type(tm->primary().id(o)) : objects::kNone;
+    };
     b.pipeline = &host.pipeline();
     // --- L1/S4 wave 2b: Dummy_Barrage_Target for Lua position-targeted abilities, script hooks, feed state ---
     b.spawn_ability_target = [this, h](Vec3 p, int32_t owner) {
@@ -1197,6 +1202,11 @@ void CampaignBattles::story_fog_begin(StoryBattleStart& st) {
     story_fog_.object = [this](objects::ObjectHandle h, tactical::fog::FogObject& out) {
         TacticalMode* tm = host_->tactical();
         return battle_ && tm && battle_->fog_object(tm->primary().id(h), out);
+    };
+    // refixf t03: Find_Nearest with a player (FOW_Object_Hidden, FOG_OF_WAR §5).
+    story_fog_.object_hidden = [this](objects::ObjectHandle h, int32_t player, bool force) {
+        TacticalMode* tm = host_->tactical();
+        return battle_ && tm && tm->primary().exists(h) && battle_->fog_object_hidden(player, tm->primary().id(h), force);
     };
     story_fog_.set_globals = [this](bool fow_active, bool render_option) {
         fog_active_ = fow_active;

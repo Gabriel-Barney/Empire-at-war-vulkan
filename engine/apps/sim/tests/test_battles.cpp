@@ -35,6 +35,7 @@
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
 #include "alamo/ai/ai_definitions.hpp"        // OI host: BattleAi order test
 #include "alamo/ai/perception_equations.hpp"
+#include "alamo/lua/lua_vm.hpp"  // refixf t03: Find_All_Objects_Of_Type from a battle VM
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/sim/battle_ai.hpp"
 #endif
@@ -205,6 +206,18 @@ std::string anim_types() {
     return t;
 }
 
+// refixf t03: TEAM containers in land battles: S10_Trooper has Create_Team and S10_Squad no Create_Team_Type, so each
+// squad chunk gets one object of the type named "Team" whose representative type (0x3973b0) is S10_Squad.
+std::string team_types() {
+    std::string t = kTypes;
+    const std::string at = "<GroundInfantry Name=\"S10_Trooper\">";
+    const size_t p = t.find(at);
+    if (p != std::string::npos) t.insert(p + at.size(), "<Create_Team>Yes</Create_Team>");
+    const size_t end = t.find("</S10>");
+    if (end != std::string::npos) t.insert(end, " <Team Name=\"Team\"><Behavior>TEAM</Behavior></Team>\n");
+    return t;
+}
+
 // --- S4 (owner: S4 agent): garrison / capture / corruption test data: troopers are GARRISON_UNIT (Infantry); a
 // community bunker (GARRISON_STRUCTURE, GarrisonCanFire) and a capture post (CAPTURE_POINT, 1 s transition) are
 // placed on the land map; planet S10_B offers a Kidnapping corruption mission (land, S10_Land_B, mission plots) and a
@@ -300,9 +313,11 @@ std::string prod_types() {
     return t;
 }
 
-std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false) {
+std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
+                                bool team = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (prod   ? "alamo_sim_battle_tests_prod"  // station production
+    d->root = fs::temp_directory_path() / (team   ? "alamo_sim_battle_tests_team"  // refixf t03: TEAM containers
+                                           : prod ? "alamo_sim_battle_tests_prod"  // station production
                                            : s4   ? "alamo_sim_battle_tests_s4"  // S4
                                            : bm   ? "alamo_sim_battle_tests_bm"  // P4 tactical
                                            : anim ? "alamo_sim_battle_tests_anim"
@@ -312,7 +327,7 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", prod ? prod_types() : s4 ? s4_types() : bm ? bm_types() : anim ? anim_types() : fog ? fog_types() : std::string(kTypes));
+    write_file(x / "S10Types.xml", team ? team_types() : prod ? prod_types() : s4 ? s4_types() : bm ? bm_types() : anim ? anim_types() : fog ? fog_types() : std::string(kTypes));
     if (bm) write_file(x / "BlackMarketItems.xml", kBmItems);  // P4 tactical
     write_file(x / "HardPointDataFiles.xml", "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");
     write_file(x / "S10HardPoints.xml", kHardpoints);
@@ -3055,6 +3070,98 @@ void test_battle_ai_land_mode(bool skirmish) {
     }
     CHECK(checked);
 }
+
+// refixf t03: Find_All_Objects_Of_Type matches the representative type (LUA_API.md "Find_All_Objects_Of_Type and the
+// sibling finders"): in a land battle (team_types) a script's 'S10_Squad' finds the squads' TEAM containers (store type
+// "Team") through the battle's ObjectBridge::representative_type hook, and 'Team' finds none. Without the hook the store
+// type is matched instead.
+void test_battle_ai_find_team() {
+    auto d = make_data(false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d->files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    const objects::TypeIndex team = d->types.resolve_name("Team"), squad = d->types.resolve_name("S10_Squad"),
+                             trooper = d->types.resolve_name("S10_Trooper");
+    CHECK(team != objects::kNone && squad != objects::kNone && trooper != objects::kNone);
+    bool invaded = false, checked = false;
+    for (uint64_t t = 0; t < 2500 && !checked; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() < 3) continue;
+        objects::ObjectStore& st = tm->primary();
+        std::vector<objects::ObjectHandle> containers;
+        size_t troopers = 0;
+        for (const objects::ObjectHandle h : st.all_objects()) {
+            if (!st.alive(h)) continue;
+            if (st.type(h) == team) containers.push_back(h);
+            if (st.type(h) == trooper) ++troopers;
+        }
+        BattleAi ai(*b, *tm, host, ts);
+        lua::ObjectBridge& br = ai.world().object_bridge();
+        CHECK(static_cast<bool>(br.representative_type));
+        if (!br.representative_type) break;
+        for (const objects::ObjectHandle h : containers) CHECK(br.representative_type(h) == squad);
+        CHECK(br.representative_type(objects::ObjectHandle{}) == objects::kNone);
+        lua::LuaHost lh;
+        lh.store = &st;
+        lh.types = &d->types;
+        lua::LuaVm vm(lh);
+        lua::attach_object_bridge(vm, &br);
+        // The count goes back through the chunk's success: error() when the finder's result has another size.
+        auto finds = [&vm](const char* filter, size_t n) {
+            std::string err;
+            const std::string code = std::string("local n = 0 for _ in pairs(Find_All_Objects_Of_Type('") + filter +
+                                     "')) do n = n + 1 end if n ~= " + std::to_string(n) + " then error('found ' .. n) end";
+            const bool ok = vm.run(code, "find_team", &err);
+            if (!ok) std::printf("  find team: '%s' (expected %zu): %s\n", filter, n, err.c_str());
+            return ok;
+        };
+        std::printf("  find team: frame %u, %zu TEAM containers, %zu troopers\n", b->frame(), containers.size(), troopers);
+        CHECK(!containers.empty() && troopers > 0);
+        CHECK(finds("S10_Squad", containers.size()) && finds("Team", 0) && finds("S10_Trooper", troopers));
+        const auto hook = br.representative_type;  // without the hook: the store type
+        br.representative_type = nullptr;
+        CHECK(finds("S10_Squad", 0) && finds("Team", containers.size()));
+        br.representative_type = hook;
+        lua::attach_object_bridge(vm, nullptr);
+        checked = true;
+    }
+    CHECK(checked);
+}
 #endif
 // --- end OI host ---
 
@@ -3228,6 +3335,8 @@ int main(int argc, char** argv) {
     test_battle_ai_station_level(true);
     test_battle_ai_land_mode(false);
     test_battle_ai_land_mode(true);
+    std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
+    test_battle_ai_find_team();
 #endif
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);
