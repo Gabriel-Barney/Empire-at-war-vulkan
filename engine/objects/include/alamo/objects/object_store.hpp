@@ -98,6 +98,13 @@ struct SpawnParams {
 enum ObjectFlag : uint8_t {
     kFlagDead = 0x02,                // destroyed; unlinked at the next flush
     kFlagMarkedByChildMode = 0x04,   // a tactical counterpart died (parent-mode death marking)
+    // refix t01 (S9_DEATH_CLONE_SHIELDS.md §1.6 [H], AI_TACTICAL.md §2, L1_S4_REMAINING.md): +0x3a0 bit 0x40 = dying /
+    // dead state (Die sets it; death clones are created with it), bit 0x80 = removing. A death clone gets both (0xc0).
+    // Such an object still exists and is alive() (it is drawn and runs its death sequence), but gameplay searches skip
+    // it: use active() for "alive and not dying / removing" (the original's +0x3a0 & 0xc2 clear).
+    kFlagDying = 0x40,
+    kFlagRemoving = 0x80,
+    kFlagDeathClone = kFlagDying | kFlagRemoving,
 };
 
 // Per-behaviour component table. members: slots ascending (row = index); row_of_slot maps back.
@@ -199,6 +206,10 @@ public:
     // ---- queries ----
     bool exists(ObjectHandle h) const;  // live or dead-but-not-flushed
     bool alive(ObjectHandle h) const;   // exists and not dead (Lua Is_Valid)
+    // refix t01: dying / removing (kFlagDying or kFlagRemoving set: death clones). False for a stale handle.
+    bool dying(ObjectHandle h) const { return exists(h) && (flags_[h.slot()] & kFlagDeathClone) != 0; }
+    // alive() and not dying(): what gameplay searches see (Lua Find_* walks, AI perception, counts by type / owner).
+    bool active(ObjectHandle h) const { return alive(h) && (flags_[h.slot()] & kFlagDeathClone) == 0; }
     ObjectHandle find(ObjectId id) const;  // also finds dead-not-flushed objects; null if unknown
     ObjectHandle handle_of_slot(uint32_t slot) const;
     size_t live_count() const { return all_.size(); }  // registered (incl. dead pending flush)
@@ -228,7 +239,7 @@ public:
     std::span<const ObjectHandle> all_objects() const { return all_; }
     std::span<const ObjectHandle> serviced() const { return serviced_; }
     std::vector<ObjectHandle> objects_newest_first() const;
-    // Lua Find_All_Objects_Of_Type: live objects of `type`, newest first.
+    // Lua Find_All_Objects_Of_Type: active() objects of `type` (dying / removing death clones skipped), newest first.
     std::vector<ObjectHandle> find_all_of_type(TypeIndex type) const;
     std::span<const ObjectHandle> owned_by(int32_t owner) const;  // insertion order
     const BehaviorTable& behavior_table(BehaviorTypeId id) const { return tables_[id]; }

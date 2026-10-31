@@ -434,7 +434,7 @@ uint8_t TacticalBattle::hg_build_check(const objects::ObjectStore& st, int32_t p
         if (pre == objects::kNone) continue;
         bool have = false;
         for (const objects::ObjectHandle h : st.all_objects())
-            if (st.alive(h) && st.type(h) == pre && st.owner(h) == player) {
+            if (st.active(h) && st.type(h) == pre && st.owner(h) == player) {
                 have = true;
                 break;
             }
@@ -446,7 +446,7 @@ uint8_t TacticalBattle::hg_build_check(const objects::ObjectStore& st, int32_t p
         auto allied = [&](int32_t o) { return o == player || (o >= 0 && combat_ && !combat_->is_enemy(player, o)); };
         uint32_t n = 0;
         for (const objects::ObjectHandle h : st.all_objects())
-            if (st.alive(h) && st.type(h) == type && allied(st.owner(h))) ++n;
+            if (st.active(h) && st.type(h) == type && allied(st.owner(h))) ++n;
         for (uint32_t p = 0; p < bt_players_; ++p)
             if (allied(static_cast<int32_t>(p))) n += production_->count_type(static_cast<int32_t>(p), static_cast<int32_t>(type));
         if (n >= static_cast<uint32_t>(limit)) return 5;

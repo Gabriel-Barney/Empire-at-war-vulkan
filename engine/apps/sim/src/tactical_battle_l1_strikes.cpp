@@ -247,7 +247,7 @@ bool TacticalBattle::l1_base_shield_covers(Vec3 p) const {
     static const objects::BehaviorTypeId kBaseShield = objects::behavior_type_id("BASE_SHIELD");
     const objects::ObjectStore& st = l1_mode_->primary();
     for (const objects::ObjectHandle h : st.all_objects()) {
-        if (!st.alive(h) || kBaseShield == objects::kNoBehavior || !st.has_behavior(h, kBaseShield)) continue;
+        if (!st.active(h) || kBaseShield == objects::kNoBehavior || !st.has_behavior(h, kBaseShield)) continue;
         const float r = catalog_->types().get_float(st.type(h), "Base_Shield_Radius");  // [port] a live shield is active
         const Vec3 c = st.position(h);
         const float dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
@@ -269,7 +269,7 @@ bool TacticalBattle::bombing_run_target_valid(int32_t player, Vec3 target) const
     if (!bombardment_target_valid(player, target) || !l1_mode_) return false;
     const objects::ObjectStore& st = l1_mode_->primary();
     for (const objects::ObjectHandle h : st.all_objects()) {  // Bombing_Run_Prevention_Radius of objects not the player's
-        if (!st.alive(h) || st.owner(h) == player) continue;
+        if (!st.active(h) || st.owner(h) == player) continue;
         const float r = static_cast<float>(catalog_->types().get_int(st.type(h), "Bombing_Run_Prevention_Radius"));
         if (!(r > 0.0f)) continue;
         const Vec3 c = st.position(h);

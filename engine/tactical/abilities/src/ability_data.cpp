@@ -182,6 +182,9 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     s.damage_multiplier = f_or(e, "Damage_Multiplier", 1.0f);
     s.max_damage_per_victim = f_or(e, "Max_Damage_Per_Victim", 0.0f);
     s.damage_arc = f_or(e, "Damage_Arc_In_Degrees", 0.0f);
+    s.distance_to_infect = f_or(e, "Distance_To_Infect", 0.0f);
+    s.seconds_to_infect = f_or(e, "Seconds_To_Infect", 0.0f);
+    s.infection_categories = parse_category_mask(e.child_text("Infection_CategoryMask"), r);
     for (std::string_view tag : {"Ability_Name", "Special_Ability_Name"}) {
         const std::string_view n = data::trim(e.child_text(tag));
         if (!n.empty() && s.ability_name_crc == 0) s.ability_name_crc = name_crc(n);
@@ -430,6 +433,21 @@ void link_combat_abilities(const AbilityObjectDesc& d, combat::CombatData& cd, c
     for (size_t s = 0; s < 2 && s < d.unit_abilities.size(); ++s) {
         ud.abilities[s] = static_cast<int32_t>(cd.abilities.size());
         cd.abilities.push_back(d.unit_abilities[s].combat);
+    }
+}
+
+void link_infection(const AbilityObjectDesc& d, std::span<const SpecialAbilityDesc> specials, combat::UnitDesc& ud) {
+    ud.infection = combat::InfectionDesc{};
+    for (const uint32_t i : d.specials) {
+        if (i >= specials.size() || specials[i].cls != SpecialClass::Infection) continue;
+        const SpecialAbilityDesc& s = specials[i];
+        ud.infection.has = true;
+        ud.infection.distance_to_infect = s.distance_to_infect;
+        ud.infection.seconds_to_infect = s.seconds_to_infect;
+        ud.infection.duration_secs = s.duration_secs;
+        ud.infection.damage_per_second = s.damage_per_second;
+        ud.infection.category_mask = s.infection_categories;
+        return;
     }
 }
 

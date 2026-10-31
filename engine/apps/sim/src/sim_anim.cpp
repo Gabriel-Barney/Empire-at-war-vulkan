@@ -90,7 +90,7 @@ void SimAnimation::attach(SimHost& host, bool crc) {
 
 // ------------------------------------------------------------------------------------ N1 save / load
 namespace {
-constexpr uint32_t kAnimChunkVersion = 1;
+constexpr uint32_t kAnimChunkVersion = 2;  // 2: refix t01 pending clone death kinds
 constexpr uint32_t kMaxAnimCount = 1u << 24;
 
 void write_id_list(ByteWriter& w, const std::vector<ObjectId>& ids) {
@@ -120,6 +120,7 @@ void SimAnimation::write(const SimHost& host, ByteWriter& w) const {
         write_section(w, [mw](ByteWriter& sub) { mw->world->write(sub); });
         w.i32(mw->max_seen);
         write_id_list(w, mw->pending_clone_deaths);
+        for (const uint8_t k : mw->pending_clone_kinds) w.u8(k);
         write_id_list(w, mw->event_rows);
         w.u32(static_cast<uint32_t>(mw->muzzles.size()));
         for (const Muzzle& m : mw->muzzles) w.i32(m.id).i32(m.hardpoint).i32(m.bone).u64(m.until);
@@ -136,6 +137,7 @@ bool SimAnimation::read(SimHost& host, ByteReader& r) {
         std::span<const uint8_t> behaviors, world;
         ObjectId max_seen = INT32_MIN;
         std::vector<ObjectId> clone_deaths, event_rows;
+        std::vector<uint8_t> clone_kinds;
         std::vector<Muzzle> muzzles;
     };
     std::vector<ModeIn> in(depth);
@@ -147,7 +149,11 @@ bool SimAnimation::read(SimHost& host, ByteReader& r) {
         m.behaviors = r.raw(r.u32());
         m.world = r.raw(r.u32());
         m.max_seen = r.i32();
-        if (!r.ok() || !read_id_list(r, m.clone_deaths) || !read_id_list(r, m.event_rows)) return false;
+        if (!r.ok() || !read_id_list(r, m.clone_deaths)) return false;
+        if (m.clone_deaths.size() > r.remaining()) return false;
+        m.clone_kinds.resize(m.clone_deaths.size());
+        for (uint8_t& ck : m.clone_kinds) ck = r.u8();
+        if (!r.ok() || !read_id_list(r, m.event_rows)) return false;
         const uint32_t nm = r.u32();
         if (!r.ok() || nm > kMaxAnimCount || static_cast<uint64_t>(nm) * 20u > r.remaining()) return false;
         m.muzzles.resize(nm);
@@ -164,8 +170,9 @@ bool SimAnimation::read(SimHost& host, ByteReader& r) {
         return [this, &mode, &beh](ObjectId id) -> const anim::AnimModel* {
             const objects::ObjectStore& store = mode.primary();
             const ObjectHandle h = store.find(id);
-            if (store.exists(h)) return model_for(store.type(h), mode.kind());
+            // A corpse's record first: the infantry corpse path (corpse_clone) gives the dying unit's row its clone's model.
             if (const anim::Corpse* c = beh.corpse(id)) return model_for(c->info.object_type, mode.kind());
+            if (store.exists(h)) return model_for(store.type(h), mode.kind());
             return nullptr;
         };
     };
@@ -195,6 +202,7 @@ bool SimAnimation::read(SimHost& host, ByteReader& r) {
         if (!mw.behaviors->read(br) || !mw.world->read(wr, model_of(mode, *mw.behaviors))) return false;  // validated above
         mw.max_seen = m.max_seen;  // sync() creates rows above it only: the saved rows are not re-created (no synced draws)
         mw.pending_clone_deaths = m.clone_deaths;
+        mw.pending_clone_kinds = m.clone_kinds;
         mw.event_rows = m.event_rows;
         mw.muzzles = m.muzzles;
         mw.events.clear();
@@ -408,10 +416,11 @@ void SimAnimation::muzzle_flash(const GameMode& mode, ObjectId id, int32_t hardp
     ++stats_.muzzle_flashes;
 }
 
-anim::DeathResult SimAnimation::start_death(ModeWorld& mw, const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind) {
+anim::DeathResult SimAnimation::start_death(ModeWorld& mw, const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind,
+                                            objects::TypeIndex type_override) {
     const objects::ObjectStore& store = mode.primary();
     const ObjectHandle h = store.find(id);
-    const objects::TypeIndex t = store.type(h);
+    const objects::TypeIndex t = type_override != objects::kNone ? type_override : store.type(h);
     anim::CorpseInfo info;
     info.object_type = static_cast<uint32_t>(t);
     info.owner = store.owner(h);
@@ -441,7 +450,35 @@ anim::DeathResult SimAnimation::begin_death(const GameMode& mode, ObjectId id, S
     return start_death(mode_world(mode), mode, id, rng, frame, damage_kind);
 }
 
-void SimAnimation::death_clone_spawned(const GameMode& mode, ObjectId clone) { mode_world(mode).pending_clone_deaths.push_back(clone); }
+void SimAnimation::death_clone_spawned(const GameMode& mode, ObjectId clone, uint8_t damage_kind) {
+    ModeWorld& mw = mode_world(mode);
+    mw.pending_clone_deaths.push_back(clone);
+    mw.pending_clone_kinds.push_back(damage_kind);
+}
+
+anim::DeathResult SimAnimation::corpse_clone(const GameMode& mode, ObjectId dying, objects::TypeIndex clone_type, SimRng& rng,
+                                             uint64_t frame, uint8_t damage_kind) {
+    const objects::ObjectStore& store = mode.primary();
+    if (!store.exists(store.find(dying))) return anim::DeathResult::NoRow;
+    ModeWorld& mw = mode_world(mode);
+    const anim::AnimModel* m = model_for(clone_type, mode.kind());
+    if (!m) {  // no animated model for the clone: nothing to show
+        if (mw.world->contains(dying)) mw.world->remove(dying);
+        mw.behaviors->remove(dying);
+        return anim::DeathResult::NoRow;
+    }
+    if (!mw.world->contains(dying) || mw.world->model(dying) != m) {  // same model (own type): the row is kept
+        if (mw.world->contains(dying)) mw.world->remove(dying);
+        mw.world->add(dying, m, frame);  // [port] no idle clip / start-frame draw: the death clip starts at once
+        if (model_has_events(m)) {
+            const auto it = std::lower_bound(mw.event_rows.begin(), mw.event_rows.end(), dying);
+            if (it == mw.event_rows.end() || *it != dying) mw.event_rows.insert(it, dying);
+        }
+    }
+    const anim::DeathResult r = start_death(mw, mode, dying, rng, frame, damage_kind, clone_type);
+    ++stats_.clone_deaths;
+    return r;
+}
 
 // ---- animation events ----------------------------------------------------------------------------------
 
@@ -587,12 +624,15 @@ void SimAnimation::sync(const GameMode& mode, SimRng& rng, uint64_t frame) {
         if (model_has_events(m)) mw.event_rows.push_back(id);  // ascending: ids above every earlier one
     }
     // Death clones spawned since the last sync die now (request order), after their model creation.
-    for (ObjectId id : mw.pending_clone_deaths) {
+    for (size_t i = 0; i < mw.pending_clone_deaths.size(); ++i) {
+        const ObjectId id = mw.pending_clone_deaths[i];
         if (!store.alive(store.find(id)) || beh.is_corpse(id)) continue;
         ++stats_.clone_deaths;
-        if (start_death(mw, mode, id, rng, frame) == anim::DeathResult::RemoveNow) scratch_destroy_.push_back(id);
+        const uint8_t kind = i < mw.pending_clone_kinds.size() ? mw.pending_clone_kinds[i] : uint8_t{1};
+        if (start_death(mw, mode, id, rng, frame, kind) == anim::DeathResult::RemoveNow) scratch_destroy_.push_back(id);
     }
     mw.pending_clone_deaths.clear();
+    mw.pending_clone_kinds.clear();
     stats_.rows = static_cast<uint32_t>(w.size());
 }
 

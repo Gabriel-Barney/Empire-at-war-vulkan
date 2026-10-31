@@ -1004,9 +1004,25 @@ void TacticalAiWorld::Impl::release_to_free_store(int32_t player, ObjectHandle u
 
 void TacticalAiWorld::Impl::refresh() {
     host.fill(w, facts);
+    if (facts.size() != w.objects.size()) facts.resize(w.objects.size());
+    // refix t01: dying / removing objects (death clones: +0x3a0 |= 0xc0, S9_DEATH_CLONE_SHIELDS.md §1.6) are not
+    // perceived - the perception adds (AI_TACTICAL §2 slot 11), the FreeStore base test and the target lists all skip
+    // +0x3a0 bits 0x40 / 0x80. A host whose store walk lists them is filtered here (order of the rest kept).
+    {
+        size_t keep = 0;
+        for (size_t i = 0; i < w.objects.size(); ++i) {
+            if (store.dying(facts[i].handle)) continue;
+            if (keep != i) {
+                w.objects[keep] = std::move(w.objects[i]);
+                facts[keep] = std::move(facts[i]);
+            }
+            ++keep;
+        }
+        w.objects.resize(keep);
+        facts.resize(keep);
+    }
     w.frame = mode_frame;
     w.index();
-    if (facts.size() != w.objects.size()) facts.resize(w.objects.size());
     gate.suspend(world.ai_suspended());
     // Object signals by snapshot comparison (header comment).
     std::vector<std::pair<int32_t, int32_t>> cur;
@@ -1948,7 +1964,7 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
         t->pending.erase(t->pending.begin() + static_cast<std::ptrdiff_t>(i));
         const auto owned = store.owned_by(t->player);
         for (size_t k = before; k < owned.size(); ++k)
-            if (store.alive(owned[k]) && store.has_behavior(owned[k], objects::beh::Locomotor)) {
+            if (store.active(owned[k]) && store.has_behavior(owned[k], objects::beh::Locomotor)) {
                 t->units.push_back(owned[k]);
                 ++spawned;
             }

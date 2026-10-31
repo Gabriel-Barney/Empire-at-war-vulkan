@@ -655,6 +655,7 @@ void BattleCatalog::build_units(const std::vector<uint32_t>& unit_types, std::ve
         if (s.full) {
             ta::AbilityObjectDesc ad = t < types_->size() ? ability_desc(t, s) : ta::AbilityObjectDesc{};
             ta::link_combat_abilities(ad, *s.d, s.d->units[idx]);
+            ta::link_infection(ad, s.full->abilities.specials, s.d->units[idx]);  // refix t02
             s.full->abilities.objects.push_back(std::move(ad));
         }
         unit_index[t] = idx;

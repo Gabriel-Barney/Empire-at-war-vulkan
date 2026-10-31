@@ -977,6 +977,18 @@ static void test_store() {
     CHECK(newest.size() == 6 && st.owner(newest[0]) == 5 && st.owner(newest[1]) == 6);  // last queued created first
     CHECK(st.find_all_of_type(trooper).size() == 6 && st.find_all_of_type(trooper)[0] == newest[0]);
     CHECK(st.owned_by(5).size() == 1 && st.owned_by(1).size() == 4);
+    // refix t01: a death clone (kFlagDying | kFlagRemoving) exists, is alive and keeps its id / lists, but active()
+    // and find_all_of_type skip it; destroy() still works on it.
+    {
+        const ObjectHandle clone = newest[0];
+        CHECK(st.active(clone) && !st.dying(clone));
+        st.set_flag(clone, kFlagDeathClone);
+        CHECK((st.flags(clone) & kFlagDeathClone) == kFlagDeathClone && !(st.flags(clone) & kFlagDead));
+        CHECK(st.alive(clone) && st.dying(clone) && !st.active(clone) && st.find(st.id(clone)) == clone);
+        CHECK(st.find_all_of_type(trooper).size() == 5 && st.find_all_of_type(trooper)[0] == newest[1]);
+        CHECK(st.owned_by(5).size() == 1);  // the lists keep it (callers filter with active())
+        CHECK(!st.dying(ObjectHandle{}) && !st.active(ObjectHandle{}));
+    }
     st.update(9, {});
     CHECK(st.live_count() == 7);
 

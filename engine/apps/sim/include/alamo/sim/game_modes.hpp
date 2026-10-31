@@ -203,6 +203,10 @@ public:
     // Spawns into the primary store with health = fraction x Tactical_Health and links the object
     // into the trees by its object id. fraction is clamped to finite (non-finite -> 1).
     ObjectHandle spawn(const objects::SpawnParams& p, float health_fraction = 1.0f);
+    // refix t01: a death clone (0x29f270, S9_DEATH_CLONE_SHIELDS.md §1.6 [H]): spawned like spawn() but created with
+    // object flags kFlagDeathClone (+0x3a0 |= 0xc0), so its player-tree membership reads Collidable_By_Projectile_Dead
+    // (type +0x42, TACTICAL_COMBAT §1.3: objects in the dead / death-clone state) instead of _Living.
+    ObjectHandle spawn_death_clone(const objects::SpawnParams& p);
     // Destroy_Object + tree dead flag; unlinked from the trees after the store's flush.
     bool destroy(ObjectHandle h);
 

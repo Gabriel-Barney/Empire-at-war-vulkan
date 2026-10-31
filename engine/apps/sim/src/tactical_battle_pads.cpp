@@ -118,7 +118,7 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
         const Vec3 pp = st.position(ph);
         for (const objects::ObjectHandle h : st.all_objects()) {
             if (blocked) break;
-            if (!st.alive(h) || h == ph) continue;
+            if (!st.active(h) || h == ph) continue;
             const objects::TypeIndex t = st.type(h);
             if (t >= types.size() || !types.get_bool(t, "Influences_Capture_Point")) continue;
             const int32_t o = st.owner(h);
@@ -234,7 +234,7 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                         const int32_t po = st.owner(ph);
                         std::vector<objects::ObjectHandle> victims;
                         for (const objects::ObjectHandle h : st.all_objects()) {
-                            if (!st.alive(h) || h == bh || st.type(h) != pv) continue;
+                            if (!st.active(h) || h == bh || st.type(h) != pv) continue;
                             const int32_t o = st.owner(h);
                             if (o == po || (combat_ && o >= 0 && po >= 0 && !combat_->is_enemy(o, po))) victims.push_back(h);
                         }

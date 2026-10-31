@@ -280,6 +280,19 @@ struct DeathCloneEntry {
 };
 inline constexpr int32_t kDeathCloneSubKeyBase = 0x18;
 
+// refix t02: the Infection_Ability parameters (xml_field_tables "fields of Infection_Ability objects"; vanilla IG-88:
+// Distance_To_Infect 70, Seconds_To_Infect 2, Duration_Of_Infection 30, Damage_Per_Second 2, Infection_CategoryMask
+// Infantry). An INFECTION behaviour started by a Causes_Infection hit of a unit whose type has them (and every behaviour
+// spread from it) runs with them; `has` false = none (the behaviour then only marks the unit infected).
+struct InfectionDesc {
+    bool has = false;
+    float distance_to_infect = 0.0f;   // Distance_To_Infect
+    float seconds_to_infect = 0.0f;    // Seconds_To_Infect: consecutive time in range before a neighbour is infected
+    float duration_secs = 0.0f;        // Duration_Of_Infection (<= 0: no expiry)
+    float damage_per_second = 0.0f;    // Damage_Per_Second
+    uint64_t category_mask = 0;        // Infection_CategoryMask (0 = every category [M])
+};
+
 struct UnitDesc {
     std::string name;
     int32_t object_type = -1;  // host TypeIndex (priority-set Type entries)
@@ -331,6 +344,7 @@ struct UnitDesc {
     float converted_die_time = 0.0f;              // Converted_To_Enemy_Die_Time_Seconds
     bool has_locomotor = true;                    // jamming victims need a locomotor
     bool deploys = false;                         // Deploys (type +0xd1): the death-clone deploy remap (S9 t04)
+    InfectionDesc infection;                      // refix t02: this type's Infection_Ability (the infector's side)
     // HUD repair cursor (HUD_GAPS §1.4): the object has behaviour 0x5C DUMMY_STAR_BASE (behaviour slot obj +0x38e =
     // +0x332 + 0x5C, OBJECT_RUNTIME §4.3). Static type data; read by can_repair_hardpoints, not hashed.
     bool repairs_hardpoints = false;
@@ -520,8 +534,9 @@ enum UnitFlag : uint32_t {
     // S9 t04 (S9_DEATH_CLONE_SHIELDS.md §1.2): deploy pending (locomotor pack +0x2b3) or Deployed (walk state 0x19).
     // Set by the ability system's DEPLOY [port: on = deploying / deployed]. Read by the death-clone remap only.
     kUnitDeploying = 1u << 11,
-    // S9 t04 (§1.5): an active INFECTION behaviour (0x54, suspend counter 0). Set by a Causes_Infection hit (or the
-    // host); never cleared [port: suspend not traced, spread 0x636ae0 not modelled]. Read by the death-clone remap.
+    // S9 t04 (§1.5): an active INFECTION behaviour (0x54, suspend counter 0). refix t02: mirrors the behaviour state
+    // (attached by a Causes_Infection hit or a spread, cleared while suspended); set_flag(kUnitInfected) attaches /
+    // suspends it like the behaviour calls. Read by the death-clone remap.
     kUnitInfected = 1u << 12,
 };
 
@@ -571,6 +586,9 @@ struct DeathEvent {
     // Death_Clone type to spawn (host; consumes an id), -1 none (kind 15, death clones off). S9 t04: when no list
     // matched this is the dying unit's own UnitDesc::object_type (0x29f270 clones the dying type).
     int32_t death_clone = -1;
+    // refix t03: the final death-clone key K of Die step 8 (after the remap and the existence check), -1 when no clone.
+    // The host's infantry corpse path (S9 §1.6) reads it (K != 4).
+    int32_t clone_key = -1;
     int32_t death_projectile = -1;  // Death_Projectiles entry fired (ProjectileDesc index), -1 none
     bool spin_away = false;      // OI abilities: DeathBehavior Initialise spin-away decision (TACTICAL_GAPS §1.9)
 };
@@ -800,6 +818,14 @@ public:
     float max_energy(ObjectId id);
     void set_energy(ObjectId id, float e);
     bool burning(ObjectId id) const;
+    // refix t02: INFECTION behaviour (0x54, S9_DEATH_CLONE_SHIELDS.md §1.5). infection_attached: the unit has the
+    // behaviour (active or suspended); infection_suspend_count: its suspend counter (+0x3c; 0 = active = kUnitInfected).
+    // suspend_infection = vfunc +0xc0 (counter + 1), resume_infection = vfunc +0xb8 (counter - 1, floored at 0); both
+    // are no-ops without the behaviour (the Lua behaviour switch 0x393570 ignores a missing behaviour).
+    bool infection_attached(ObjectId id) const;
+    uint32_t infection_suspend_count(ObjectId id) const;
+    void suspend_infection(ObjectId id);
+    void resume_infection(ObjectId id, uint32_t frame);
     // Laser defense (0x716230): detonate projectile i (serial order index) at its position (area
     // damage, ion stun) and remove it. False if it was not alive.
     bool detonate_projectile(size_t index, uint32_t frame);
@@ -1021,6 +1047,15 @@ private:
         uint8_t ever_jammed = 0;
         uint8_t regen_blocked = 0;      // CD +0x130/+0x131: last shield generator destroyed
         float emitter_radius = 0.0f;    // missile-shield emitter (0 = none)
+        // ---- refix t02: INFECTION behaviour (hash_extended only while attached) ----
+        uint8_t infect_attached = 0;
+        uint32_t infect_suspend = 0;           // suspend counter (+0x3c)
+        int32_t infect_desc = -1;              // UnitDesc whose InfectionDesc drives it (-1 none: flag only)
+        int32_t infect_player = -1;            // the infecting player (spread targets its enemies [L])
+        ObjectId infect_source = kNoObject;    // the infecting unit (damage source)
+        uint32_t infect_end = 0;               // expiry frame (Duration_Of_Infection; 0 = none)
+        uint32_t infect_next_damage = 0;       // next Damage_Per_Second frame
+        std::vector<std::pair<ObjectId, uint32_t>> infect_exposure;  // neighbours in range: (id, first frame), id order
         // ---- OI abilities (hash_extended) ----
         int32_t priority_override = -1;  // Lua Set_Targeting_Priorities (data pack +0x160)
         uint32_t stun_end = 0;           // STUNNABLE end frame (stunned while > frame)
@@ -1178,6 +1213,9 @@ private:
     bool has_energy_pool(const Unit& u) const { return desc_of(u).energy_capacity > 0.0f; }
     float unit_max_energy(const Unit& u) const;
     void burning_service(Unit& u, uint32_t frame);
+    // refix t02: INFECTION update (0x636ae0) of one unit, and attaching / resuming the behaviour on a victim.
+    void infection_service(Unit& u, uint32_t frame);
+    void infect(Unit& v, int32_t desc, int32_t player, ObjectId source, uint32_t frame);
     void converted_decay(Unit& u, uint32_t frame, SimRng& rng);
     SimRng* listener_rng() const { return tick_rng_ ? tick_rng_ : bound_rng_; }
     void track_damage(Unit& v, float amount, uint32_t frame);
@@ -1218,6 +1256,7 @@ private:
     bool effect_match(const Unit& v, uint64_t mask, const std::vector<int32_t>* types) const;
     void effect_victims(int32_t owner, bool enemies, Vec3 center, float radius, std::vector<Unit*>& out);
     std::vector<Unit*> effect_scratch_;
+    std::vector<std::pair<ObjectId, uint32_t>> infect_scratch_;  // refix t02: infection_service exposure scratch
     void record_damage(const DamageRequest& r, const Unit& v, const Unit* src, int32_t hp, const DamageResult& out,
                        uint32_t frame);
     std::vector<uint32_t> emitters_;  // unit indices with emitter_radius > 0 (ascending id), phase F scratch

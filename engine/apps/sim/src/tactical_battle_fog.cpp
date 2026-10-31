@@ -79,7 +79,7 @@ void TacticalBattle::fog_after_deploy(TacticalMode& mode) {
     const fw::BattleScaleSides sides = fw::battle_scale_sides(fog_.mode(),req_.info.attacker, req_.info.defender);
     std::vector<float> mods;
     for (const objects::ObjectHandle h : store.all_objects()) {
-        if (!store.alive(h)) continue;
+        if (!store.active(h)) continue;  // refix t01: death clones skipped
         const objects::TypeIndex t = store.type(h);
         if (t >= types.size()) continue;
         if (obstacle != objects::kNoBehavior && store.has_behavior(h, obstacle) &&
@@ -299,7 +299,7 @@ std::vector<fw::FogSetupObject> TacticalBattle::fog_setup_objects() const {
     const objects::GameObjectTypes& types = catalog_->types();
     const objects::BehaviorTypeId powered = objects::behavior_type_id("POWERED");
     for (const objects::ObjectHandle h : store.all_objects()) {
-        if (!store.alive(h)) continue;
+        if (!store.active(h)) continue;  // refix t01: death clones skipped
         const objects::TypeIndex t = store.type(h);
         if (t >= types.size()) continue;
         fw::FogSetupObject so;
@@ -354,7 +354,7 @@ std::vector<fw::PreventionCircle> TacticalBattle::fog_prevention_circles() const
     const objects::ObjectStore& store = fog_mode_->primary();
     const objects::GameObjectTypes& types = catalog_->types();
     for (const objects::ObjectHandle h : store.all_objects()) {
-        if (!store.alive(h)) continue;
+        if (!store.active(h)) continue;  // refix t01: death clones skipped
         const objects::TypeIndex t = store.type(h);
         if (t >= types.size()) continue;
         const float r = types.get_float(t, "Reinforcement_Prevention_Radius");

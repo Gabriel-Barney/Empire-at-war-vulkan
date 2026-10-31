@@ -99,8 +99,16 @@ public:
         anim_->begin_death(*mode_, id, *rng_, gframe_, kind);
     }
     const GameMode* anim_mode() const { return mode_; }
-    void anim_clone(objects::ObjectHandle clone) {
-        if (anim_ && mode_) anim_->death_clone_spawned(*mode_, mode_->primary().id(clone));
+    bool anim_clone(objects::ObjectHandle clone, uint8_t kind) {  // false: no animation service attached
+        if (!anim_ || !mode_) return false;
+        anim_->death_clone_spawned(*mode_, mode_->primary().id(clone), kind);
+        return true;
+    }
+    // refix t03: the infantry corpse path - the dying unit's row becomes the clone type's corpse (no clone object).
+    bool anim_corpse_clone(objects::ObjectId dying, int32_t clone_type, uint8_t kind) {
+        if (!anim_ || !mode_ || !rng_ || clone_type < 0) return false;
+        return anim_->corpse_clone(*mode_, dying, static_cast<objects::TypeIndex>(clone_type), *rng_, gframe_, kind) !=
+               anim::DeathResult::NoRow;
     }
     // --- end R3 anim ---
 #endif
@@ -1758,6 +1766,38 @@ void TacticalBattle::spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, 
     ++stats_.particles;
 }
 
+objects::ObjectHandle TacticalBattle::spawn_death_clone(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner) {
+    if (type < 0 || static_cast<size_t>(type) >= catalog_->types().size()) return {};
+    objects::SpawnParams sp;
+    sp.type = static_cast<objects::TypeIndex>(type);
+    sp.owner = owner;
+    sp.position = pos;
+    sp.facing = facing;
+    return mode.spawn_death_clone(sp);
+}
+
+bool TacticalBattle::death_clone_corpse_path(uint32_t dying_type, int32_t clone_type, int32_t key) const {
+    // S9_DEATH_CLONE_SHIELDS.md §1.6 [L]: the clone is made by the mode's other object manager (mode +0x20, the
+    // secondary / local store of OBJECT_RUNTIME §1 [M]) when the dying type is in category Infantry, the clone type has
+    // none of HIDE_WHEN_FOGGED (0x19), IMPOSING_PRESENCE (0x40), LAND_OBSTACLE (0x14), PROXIMITY_MINE (0x55) and the
+    // key is not 4 (Force lightning). [port] The 0x5051d0 test is not read (taken as passing). A secondary-store object
+    // takes no sim id, so the port makes no object at all: the clone lives only as the dying unit's corpse row
+    // (SimAnimation::corpse_clone). Vanilla: the typed infantry clones (Infantry_*_Death_Clone_*: melt, disruptor) take
+    // it; the own-type infantry clones keep the primary path (their types have HIDE_WHEN_FOGGED).
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (clone_type < 0 || static_cast<size_t>(clone_type) >= types.size() || dying_type >= types.size() || key == 4) return false;
+    if (!infantry_category_) {
+        const auto m = types.enums().get(objects::EnumId::GameObjectCategory).lookup("Infantry");
+        infantry_category_ = m ? static_cast<uint64_t>(*m) : ~uint64_t{0};
+    }
+    if (*infantry_category_ == ~uint64_t{0} || (types.get_mask(dying_type, "CategoryMask") & *infantry_category_) == 0) return false;
+    const auto ct = static_cast<objects::TypeIndex>(clone_type);
+    for (const objects::BehaviorTypeId b : {objects::BehaviorTypeId{0x19}, objects::BehaviorTypeId{0x40}, objects::BehaviorTypeId{0x14},
+                                            objects::BehaviorTypeId{0x55}})
+        if (types.has_behavior(ct, objects::BehaviorSet::Union, b)) return false;
+    return true;
+}
+
 objects::ObjectHandle TacticalBattle::spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner) {
     if (type < 0 || static_cast<size_t>(type) >= catalog_->types().size()) return {};
     objects::SpawnParams sp;
@@ -1856,26 +1896,35 @@ void TacticalBattle::consume_events(TacticalMode& mode) {
         if (u->tracked) damage_tracking_.disable(u->id);
 #endif
         ++stats_.deaths;
-        // S9 t04: a death with no Death_Clone list hit clones the dying type (0x29f270), which consumes one id. [port]
-        // No object is made for it (the original flags that clone dying / removing, +0x3a0 |= 0xc0, which the store
-        // cannot express): the id is allocated and the unit keeps its own death clip / corpse.
-        tc::DeathEvent dc = d;
-        if (dc.death_clone >= 0 && dc.death_clone == static_cast<int32_t>(u->type)) {
-            store.id_counter().allocate();
-            dc.death_clone = -1;
+        // Die step 8 clone (0x29f270, S9_DEATH_CLONE_SHIELDS.md §1.1 / §1.6 [H]): every tactical death with kind != 15
+        // makes one - the picked Death_Clone type, else the dying type itself (S9 t04) - at the dying object's transform,
+        // owned by its player, with +0x3a0 |= 0xc0 (refix t01: TacticalMode::spawn_death_clone; the store's active()
+        // searches skip it), carrying the death sequence (anim: the clone's own, by the killing kind). refix t03: the
+        // infantry corpse path takes no object (death_clone_corpse_path).
+        objects::ObjectHandle ch{};
+        bool corpse_path = false;
+        if (d.death_clone >= 0) {
+            corpse_path = death_clone_corpse_path(u->type, d.death_clone, d.clone_key);
+            if (!corpse_path) ch = spawn_death_clone(mode, d.death_clone, at, face, owner);
+            if (ch) ++stats_.death_clones;
         }
+        bool clone_animated = false;
 #ifdef ALAMO_SIM_HAVE_ANIM
-        {  // R3 anim: death clip / corpse of the unit, or the clone's own death sequence
-            const objects::ObjectHandle ch = dc.death_clone >= 0 ? spawn_prop(mode, dc.death_clone, at, face, owner) : objects::ObjectHandle{};
-            if (ch) {
-                ++stats_.death_clones;
-                hooks_->anim_clone(ch);
-            }
-            hooks_->anim_death(u->id, static_cast<bool>(ch), d.kind);
+        {  // R3 anim: death clip / corpse of the unit, or the clone's death sequence
+            bool carried = static_cast<bool>(ch);
+            if (ch) clone_animated = hooks_->anim_clone(ch, d.kind);
+            else if (corpse_path) carried = hooks_->anim_corpse_clone(u->id, d.death_clone, d.kind);
+            hooks_->anim_death(u->id, carried, d.kind);
         }
-#else
-        if (dc.death_clone >= 0 && spawn_prop(mode, dc.death_clone, at, face, owner)) ++stats_.death_clones;
 #endif
+        // [port] Without the animation service nothing runs the clone's DeathBehavior: an own-type clone (S9 t04; before
+        // refix t01 it made no object at all) and a clone whose type has Remove_Upon_Death (no death clip to play, the
+        // anim rule RemoveNow) are removed at once, so headless runs do not keep one dying object per death; the typed
+        // clones stay (as before, and as the anim's corpse rule keeps them when they have no row).
+        if (ch && !clone_animated &&
+            (d.death_clone == static_cast<int32_t>(u->type) ||
+             catalog_->types().get_bool(static_cast<objects::TypeIndex>(d.death_clone), "Remove_Upon_Death")))
+            mode.destroy(ch);
         if (const BattleTables::UnitVisuals* vis = visuals_of_type(u->type))
             if (!vis->death_explosions.empty()) spawn_particle(mode, vis->death_explosions.front(), at, owner);
         unit_gone(mode, *u);
@@ -2075,7 +2124,7 @@ std::vector<objects::ObjectId> TacticalBattle::owned_ids(const TacticalMode& mod
     for (uint32_t w : wire) {
         if (w == cmd::kNoObject || w > 0x7FFFFFFFu) continue;
         const objects::ObjectHandle h = store.find(static_cast<objects::ObjectId>(w));
-        if (!store.alive(h) || store.owner(h) != static_cast<int32_t>(player)) continue;
+        if (!store.active(h) || store.owner(h) != static_cast<int32_t>(player)) continue;
         const objects::ObjectId id = store.id(h);
         if (!abilities_->has_object(id) || std::find(out.begin(), out.end(), id) != out.end()) continue;
         out.push_back(id);
