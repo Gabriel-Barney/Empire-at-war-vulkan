@@ -175,6 +175,30 @@ Vec3 lob_direction(Vec3 muzzle, Vec3 aim, float v, float g) {
     return Vec3{hx * c, hy * c, tan_t * c};
 }
 
+namespace {
+float wrap_degrees(float a) {  // (-180, 180]
+    while (a > 180.0f) a = a - 360.0f;
+    while (a <= -180.0f) a = a + 360.0f;
+    return a;
+}
+float clamp_abs(float v, float m) { return v > m ? m : (v < -m ? -m : v); }
+}  // namespace
+
+Vec3 turn_toward(Vec3 dir, Vec3 goal, float max_degrees) {
+    if (!(max_degrees > 0.0f)) return dir;
+    const float gl = dot(goal, goal);
+    if (!(gl > 0.0f)) return dir;
+    constexpr float kDeg = 180.0f / dmath::kPiF, kRad = dmath::kPiF / 180.0f;
+    const float yaw0 = dmath::atan2(dir.y, dir.x) * kDeg;
+    const float pitch0 = dmath::atan2(dir.z, dmath::sqrt(dir.x * dir.x + dir.y * dir.y)) * kDeg;
+    const float yaw1 = dmath::atan2(goal.y, goal.x) * kDeg;
+    const float pitch1 = dmath::atan2(goal.z, dmath::sqrt(goal.x * goal.x + goal.y * goal.y)) * kDeg;
+    const float yaw = (yaw0 + clamp_abs(wrap_degrees(yaw1 - yaw0), max_degrees)) * kRad;
+    const float pitch = (pitch0 + clamp_abs(wrap_degrees(pitch1 - pitch0), max_degrees)) * kRad;
+    const float cp = dmath::cos(pitch);
+    return Vec3{cp * dmath::cos(yaw), cp * dmath::sin(yaw), dmath::sin(pitch)};
+}
+
 float area_falloff(float d, float R, int32_t tiers) {
     if (!(R > 0.0f)) return 1.0f;
     const float k = std::floor(d * static_cast<float>(tiers) / R);

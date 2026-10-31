@@ -244,6 +244,8 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
     p.damage_type = damage_.damage_index(trim(ty.get_string(t, "Damage_Type")));
     const int32_t cat = ty.get_int(t, "Projectile_Category");
     p.homing = cat == 1;
+    p.max_rate_of_turn = ty.get_float(t, "Max_Rate_Of_Turn");  // S9 t05: missile-shield / homing turn limit
+    p.causes_infection = ty.get_bool(t, "Causes_Infection");    // S9 t04: INFECTION behaviour on hit
     p.lobbed = cat == 3;
     // --- OI tactical: per-type grenade gravity / lob mod (TACTICAL_COMBAT 2.2, 3.3; lobbed flight in combat) ---
     if (ty.get_float(t, "Projectile_Grenade_Gravity") > 0.0f) p.grenade_gravity = ty.get_float(t, "Projectile_Grenade_Gravity");
@@ -498,15 +500,24 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
     u.ranged_target_z_adjust = ty.get_float(t, "Ranged_Target_Z_Adjust");
     u.converted_die_time = ty.get_float(t, "Converted_To_Enemy_Die_Time_Seconds");
     u.has_locomotor = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Locomotor);
-    // Death_Clone: (damage kind name, type) pairs; the kind through the static DamageType enum.
+    // Death_Clone: (key name, type) pairs (S9_DEATH_CLONE_SHIELDS.md §1.4): the static tDamageType enum first, else
+    // 0x18 + the name's index in GameConstants Damage_Types (e.g. Damage_Disruptor_Hand). S9 t04.
     const auto clones = ty.get_list(t, "Death_Clone");
     const objects::EnumConverter& kinds = ty.enums().get(objects::EnumId::DamageType);
     for (size_t i = 0; i + 1 < clones.size(); i += 2) {
-        const auto k = kinds.lookup(trim(clones[i]));
+        const std::string_view kn = trim(clones[i]);
         const int32_t ct = type_or_none(clones[i + 1]);
-        if (!k || ct < 0 || *k < 0 || *k > 255) continue;
-        u.death_clones.push_back({static_cast<uint8_t>(*k), ct});
+        if (ct < 0) continue;
+        int32_t key = -1;
+        if (const auto k = kinds.lookup(kn)) {
+            key = static_cast<int32_t>(*k);
+        } else if (const uint16_t di = damage_.damage_index(kn); di != tc::kNoTypeId) {
+            key = tc::kDeathCloneSubKeyBase + static_cast<int32_t>(di);
+        }
+        if (key < 0) continue;
+        u.death_clones.push_back({key, ct});
     }
+    u.deploys = ty.get_bool(t, "Deploys");
     for (std::string_view n : ty.get_list(t, "Death_Projectiles")) {
         const int32_t pt = type_or_none(n);
         if (pt >= 0) u.death_projectiles.push_back(projectile(static_cast<uint32_t>(pt), s));

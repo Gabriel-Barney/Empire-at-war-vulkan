@@ -663,6 +663,124 @@ void test_last_hardpoint_kills() {
     CHECK(w.sys->deaths()[0].death_clone == 55);  // the hull path kills with kind 1
 }
 
+void test_death_clone_remap() {
+    // S9 t04 (S9_DEATH_CLONE_SHIELDS.md §1.2 - §1.4): key remap, existence check, sub-key, fallbacks, synced draws.
+    World w;
+    ProjectileDesc dis;
+    dis.name = "Disruptor";
+    dis.max_speed = 20.0f;
+    dis.damage = 1000.0f;
+    dis.damage_type = 3;  // Damage_Types index 3 -> sub-key 3 -> key 0x18 + 3
+    dis.max_flight_distance = 3000.0f;
+    ProjectileDesc inf = dis;
+    inf.name = "Infection_Projectile";
+    inf.damage = 1.0f;
+    inf.damage_type = kNoTypeId;
+    inf.causes_infection = true;
+    w.cd.projectiles = {dis, inf};
+    UnitDesc walker;
+    walker.name = "Walker";
+    walker.object_type = 40;
+    walker.tactical_health = 100.0f;
+    walker.radius = 5.0f;
+    walker.deploys = true;
+    walker.death_clones = {{1, 50}, {1, 51}, {1, 52}, {12, 53}, {8, 54}, {20, 55}};
+    UnitDesc trooper;
+    trooper.name = "Trooper";
+    trooper.object_type = 41;
+    trooper.tactical_health = 100.0f;
+    trooper.radius = 5.0f;
+    trooper.death_clones = {{1, 60}, {kDeathCloneSubKeyBase + 3, 61}, {kDeathCloneSubKeyBase + 3, 62}, {20, 63}};
+    UnitDesc plain;
+    plain.name = "Plain";
+    plain.object_type = 42;
+    plain.tactical_health = 100.0f;
+    plain.radius = 5.0f;
+    UnitDesc shooter = plain;
+    shooter.name = "Shooter";
+    const uint32_t wd = push(w.cd, w.ad, walker, AbilityObjectDesc{});
+    const uint32_t td = push(w.cd, w.ad, trooper, AbilityObjectDesc{});
+    const uint32_t pd = push(w.cd, w.ad, plain, AbilityObjectDesc{});
+    const uint32_t sd = push(w.cd, w.ad, shooter, AbilityObjectDesc{});
+    w.make();
+    w.add(1, sd, 0, {-2000, 0, 0});
+    ObjectId next = 10;
+    auto spawn = [&](uint32_t desc, uint32_t flags) {
+        const ObjectId id = next++;
+        w.add(id, desc, 1, {static_cast<float>(id) * 100.0f, 0, 0});
+        if (flags) w.sys->set_flag(id, flags, true);
+        return id;
+    };
+    auto die = [&](ObjectId id, uint8_t kind, int32_t sub_key = -1) {
+        w.sys->kill_unit(id, 1, kind, w.frame, sub_key);
+        CHECK(!w.sys->deaths().empty() && w.sys->deaths().back().id == id);
+        return w.sys->deaths().empty() ? -2 : w.sys->deaths().back().death_clone;
+    };
+    // deploying / deployed Deploys walker: kind 1 -> key 12; kind 8 -> key 11 (missing) -> back to 8; no draws
+    SimRng p = w.rng;
+    CHECK(die(spawn(wd, kUnitDeploying), kKindNormal) == 53);
+    CHECK(die(spawn(wd, kUnitDeploying), 8) == 54);
+    CHECK(die(spawn(wd, kUnitDeploying | kUnitInfected), kKindFire) == 53);  // the deploy remap wins over infection
+    CHECK(die(spawn(wd, kUnitInfected), kKindNormal) == 55);                   // infection -> key 20
+    CHECK(w.rng.state() == p.state());
+    // not deployed: kind 1 hits the 3-entry list twice (existence check, then spawn), one Get_Int(0, 2) each
+    {
+        p = w.rng;
+        (void)p.range_int(0, 2);
+        const int32_t pick = p.range_int(0, 2);
+        CHECK(die(spawn(wd, 0), kKindNormal) == 50 + pick);
+        CHECK(w.rng.state() == p.state());
+    }
+    // a walker without a locomotor is never remapped (kind 7: no list -> key 1, one draw at the spawn step only)
+    {
+        w.cd.units[wd].has_locomotor = false;
+        p = w.rng;
+        const int32_t pick = p.range_int(0, 2);
+        CHECK(die(spawn(wd, kUnitDeploying), kKindFire) == 50 + pick);
+        CHECK(w.rng.state() == p.state());
+        w.cd.units[wd].has_locomotor = true;
+    }
+    // Damage_Type sub-key: key 1 exists (check, no draw), the spawn reads 0x18 + 3 (two entries: one draw)
+    {
+        p = w.rng;
+        const int32_t pick = p.range_int(0, 1);
+        CHECK(die(spawn(td, 0), kKindNormal, 3) == 61 + pick);
+        CHECK(w.rng.state() == p.state());
+        // through Take_Damage: a projectile source gives its Damage_Type index as the sub-key
+        const ObjectId t = spawn(td, 0);
+        DamageRequest r;
+        r.victim = t;
+        r.amount = 1000.0f;
+        r.kind = kKindNormal;
+        r.source = 1;
+        r.source_is_projectile = true;
+        r.projectile_desc = 0;
+        p = w.rng;
+        const int32_t pick2 = p.range_int(0, 1);
+        CHECK(w.sys->take_damage(r, w.frame).killed);
+        CHECK(!w.sys->deaths().empty() && w.sys->deaths().back().id == t && w.sys->deaths().back().death_clone == 61 + pick2);
+        // a sub-key with no list falls back to key 1
+        CHECK(die(spawn(td, 0), kKindNormal, 7) == 60);
+    }
+    CHECK(die(spawn(td, 0), 4) == 60);                    // kind 4 (no list) -> key 1
+    CHECK(die(spawn(pd, 0), kKindNormal) == 42);          // no list at all: the dying unit's own type
+    CHECK(die(spawn(pd, 0), kKindNoDeathClone) == -1);    // Eat: no clone
+    // Causes_Infection hit: INFECTION attached, the next death reads key 20
+    {
+        const ObjectId t = spawn(td, 0);
+        ProjectileLaunch l;
+        l.shooter = 1;
+        l.owner = 0;
+        l.projectile = 1;
+        l.from = w.sys->position(t) - Vec3{200, 0, 0};
+        l.target = t;
+        CHECK(w.sys->launch_projectile(l, w.frame));
+        for (int i = 0; i < 20 && !(w.sys->flags(t) & kUnitInfected); ++i) w.tick();
+        CHECK((w.sys->flags(t) & kUnitInfected) != 0 && w.sys->alive(t));
+        CHECK(die(t, kKindNormal) == 63);
+    }
+}
+
 void test_fire_and_decay() {
     HpWorld w;
     w.add(1, w.small, 0, {0, 0, 0});
@@ -769,13 +887,15 @@ void test_ion_stun() {
 }
 
 struct ShieldWorld : World {
-    ShieldWorld(ProjectileCategory cat, bool passive_only) {
+    // S9 t05: `turn_rate` = the projectile's Max_Rate_Of_Turn, `turn_mult` = Object_Max_Speed_Multiplier_Space.
+    ShieldWorld(ProjectileCategory cat, bool passive_only, float turn_rate, float turn_mult = 1.0f) {
         ProjectileDesc p;
         p.name = "P";
         p.max_speed = 20.0f;
         p.damage = 5.0f;
         p.category = cat;
         p.max_flight_distance = 3000.0f;
+        p.max_rate_of_turn = turn_rate;
         cd.projectiles = {p};
         UnitDesc sh;
         sh.name = "Shooter";
@@ -799,43 +919,83 @@ struct ShieldWorld : World {
         const uint32_t e = push(cd, ad, em, ea);
         CombatConfig cfg;
         cfg.inaccuracy_enabled = false;
+        cfg.turn_multiplier_space = turn_mult;
         make(cfg);
         add(1, s, 0, {-1000, 0, 0});
         add(2, e, 1, {0, 0, 0});
         sys->order_attack(1, 2);
     }
+    // Runs `ticks` frames. seen_inside: a projectile came within 290 of the emitter; max_turn: the largest heading
+    // change of one projectile between two consecutive ticks (degrees); changed: some heading changed at all (bits).
+    bool seen_inside = false, changed = false;
+    float max_turn = 0.0f;
+    void run(int ticks) {
+        std::map<uint32_t, Vec3> prev;
+        for (int i = 0; i < ticks; ++i) {
+            tick();
+            std::map<uint32_t, Vec3> cur;
+            for (size_t k = 0; k < sys->projectile_count(); ++k) {
+                const ProjectileView v = sys->projectile(k);
+                if (!v.alive) continue;
+                if (dot(v.pos, v.pos) < 290.0f * 290.0f) seen_inside = true;
+                cur[v.serial] = v.dir;
+                const auto it = prev.find(v.serial);
+                if (it == prev.end()) continue;
+                const Vec3 a = it->second, b = v.dir;
+                if (a.x != b.x || a.y != b.y || a.z != b.z) changed = true;
+                float c = dot(a, b) / dmath::sqrt(dot(a, a) * dot(b, b));
+                c = c > 1.0f ? 1.0f : (c < -1.0f ? -1.0f : c);
+                const float deg = dmath::acos(c) * 180.0f / dmath::kPiF;
+                if (deg > max_turn) max_turn = deg;
+            }
+            prev = std::move(cur);
+        }
+    }
 };
 
 void test_missile_shield() {
-    {  // an active MISSILE_SHIELD turns projectiles away (lasers too: category 7 goes to 0x4cec80)
-        ShieldWorld w(ProjectileCategory::Laser, false);
+    {  // S9 t05 (S9_DEATH_CLONE_SHIELDS.md §2.3 / §2.5): lasers (category 7 -> 0x4cec80) are TESTED by an active
+       // MISSILE_SHIELD, but the turn is limited by their Max_Rate_Of_Turn - 0 in vanilla - so they fly through and hit.
+        ShieldWorld w(ProjectileCategory::Laser, false, 0.0f);
         CHECK(w.ab->is_active(2, kMissileShield) && w.ab->immobilize_count(2) == 1);
         CHECK_EQ(w.sys->emitter_radius(2), 300.0f);
-        bool seen_inside = false;
-        for (int i = 0; i < 150; ++i) {
-            w.tick();
-            for (size_t k = 0; k < w.sys->projectile_count(); ++k) {
-                const ProjectileView v = w.sys->projectile(k);
-                const Vec3 d = v.pos - Vec3{0, 0, 0};
-                if (dot(d, d) < 290.0f * 290.0f) seen_inside = true;
-            }
-        }
-        CHECK(seen_inside);
-        CHECK_EQ(w.sys->health(2), w.sys->max_health(2));  // never hit
+        w.run(150);
+        CHECK(w.seen_inside && !w.changed);  // never turned, not even by a rounding bit
+        CHECK(w.sys->health(2) < w.sys->max_health(2));
         // off: immobilise released, emitter gone
         const ObjectId e[] = {2};
         CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
         CHECK(w.ab->immobilize_count(2) == 0 && w.sys->emitter_radius(2) == 0.0f);
     }
+    {  // §2.6 step 3: the same laser with a turn rate bends away (30 deg per step: never hits)
+        ShieldWorld w(ProjectileCategory::Laser, false, 30.0f);
+        w.run(150);
+        CHECK(w.seen_inside && w.changed);
+        CHECK_EQ(w.sys->health(2), w.sys->max_health(2));
+    }
+    {  // MISSILE (homing mode): inside the sphere the goal is "away from the emitter"; the turn per step is capped at
+       // Max_Rate_Of_Turn x Object_Max_Speed_Multiplier_Space = 3.0 x 1.2 = 3.6 degrees (no heading snap)
+        ShieldWorld w(ProjectileCategory::Missile, false, 3.0f, 1.2f);
+        w.run(150);
+        CHECK(w.seen_inside && w.changed);
+        CHECK(w.max_turn <= 3.6f + 1e-3f);
+        CHECK(w.max_turn > 3.5f);  // a head-on entry saturates the clamp
+    }
     {  // bombs are never deflected
-        ShieldWorld w(ProjectileCategory::Bomb, false);
-        for (int i = 0; i < 150; ++i) w.tick();
+        ShieldWorld w(ProjectileCategory::Bomb, false, 30.0f);
+        w.run(150);
         CHECK(w.sys->health(2) < w.sys->max_health(2));
     }
-    {  // rockets: only the passive radius (here the passive emitter also has the ability record)
-        ShieldWorld w(ProjectileCategory::Rocket, true);
-        CHECK_EQ(w.sys->emitter_radius(2), 300.0f);  // passive emitter, radius overridden by ability 32
-        for (int i = 0; i < 150; ++i) w.tick();
+    {  // rockets (0x4cfc40): a passive emitter (radius overridden by ability 32) re-plans the path on the crossing
+        ShieldWorld w(ProjectileCategory::Rocket, true, 0.0f);
+        CHECK_EQ(w.sys->emitter_radius(2), 300.0f);
+        w.run(150);
+        CHECK(w.changed);  // the re-plan does not use the turn rate
+        CHECK_EQ(w.sys->health(2), w.sys->max_health(2));
+    }
+    {  // rockets: the active ability radius qualifies too (same rules as 0x4c6e30, §2.4), not only the passive one
+        ShieldWorld w(ProjectileCategory::Rocket, false, 0.0f);
+        w.run(150);
         CHECK_EQ(w.sys->health(2), w.sys->max_health(2));
     }
 }
@@ -2255,9 +2415,11 @@ void test_oi_class_bodies() {
         CHECK(w.ab->add_container(5, sqd, 0, mem, w.frame, &w.rng));
         const ObjectId one[] = {1}, squad[] = {5};
         CHECK(w.ab->set_unit_ability_mode(one, kDeploy, true, w.frame) == 1 && w.ab->deployed(1) && w.ab->is_active(1, kDeploy));
+        CHECK((w.sys->flags(1) & kUnitDeploying) != 0);  // S9 t04: the death-clone deploy remap's state
         w.collect();
         CHECK(w.count(AbilityEventKind::Deployed, 1) == 1 && w.count(AbilityEventKind::StopOrder, 1) == 1);
         CHECK(w.ab->set_unit_ability_mode(one, kDeploy, false, w.frame) == 1 && !w.ab->deployed(1));
+        CHECK((w.sys->flags(1) & kUnitDeploying) == 0);
         CHECK(w.ab->set_unit_ability_mode(squad, kSpreadOut, true, w.frame) >= 1 && w.ab->spread_out(3) && w.ab->spread_out(4));
         const size_t p0 = w.sys->projectile_count();
         CHECK(w.ab->set_unit_ability_mode(one, kAreaEffectStun, true, w.frame, 2) == 1);  // M = 0: no slot byte
@@ -3224,6 +3386,7 @@ int main(int argc, char** argv) {
     test_black_market_gate();
     test_hardpoints();
     test_last_hardpoint_kills();
+    test_death_clone_remap();
     test_fire_and_decay();
     test_energy();
     test_ion_stun();
