@@ -805,7 +805,7 @@ as ready; keep it.
 
 ## 6. Object runtime, movement, AI zones and models
 
-### 6.1 A1 land zone graph: Edge_Weight / Node_Weight [H; M link direction]
+### 6.1 A1 land zone graph: Edge_Weight / Node_Weight [H; direction now H, A1_READINGS §2]
 `LandExecutionPathFinderClass` (vtable 0x890498) reuses the galactic all-pairs recompute 0x6913e0.
 - Nodes (vf1 0x694140): the land mode's zones (mode vf +0x188 count, vf +0x190 get) in index order.
 - **Edge_Weight(i → j)** (vf2 0x694010): −1 unless zone j's link table (keyed by zone i, 0x5a9af0, mask −1)

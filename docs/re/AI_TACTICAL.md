@@ -185,7 +185,7 @@ Object destroyed or owner changed (signals), or taken by a task force: erase fro
 
 ### 5.3 Service cadence and order (0x4d5a70, every Execution service = 3 frames) [H]
 - `now = (float)F × (1/30)` seconds of mode time; `FreeStoreService()` (the script's `main` loop: one call per resume) runs when `now − LastService > ServiceRate`; `On_Unit_Service(unit)` runs for each free-store entry **in the map's list order** whose entry field +0x30 is 0 [M: the order-lock that `Lock_Current_Orders` sets], when `now − LastUnitService > UnitServiceRate`. Both stamps start at 0, so both fire on the first service with now > rate.
-- BusyTacticalFreeStore: `ServiceRate = 20`, `UnitServiceRate = 2` → `FreeStoreService` about every 20.1 s; each unit about every 2.1 s (first > 2.0 s on a 0.1 s grid).
+- BusyTacticalFreeStore: `ServiceRate = 20`, `UnitServiceRate = 2` → `FreeStoreService` about every 20.1 s; each unit about every 2.1 s (first > 2.0 s on a 0.1 s grid). Corrected in A1_READINGS §9: with the float frame clock the first eligible frames are F = 600 (then 1200) and F = 61 for units, then the next 3-frame Execution service.
 - **Iteration order hazard:** the map is an MSVC hash container keyed by object id (bucket = `(id ^ 0xdeadbeef) & mask`), whose list order depends on insertion history and rehashes. The port must use a container with a defined order. Recommended: ascending object id (deviation from vanilla only in which unit acts first within one service; each unit's decision only reads its own state and the world, but orders issued earlier in the same pass can change later units' `Find_Nearest` results). [H container, M impact]
 
 ### 5.4 `Lock_Current_Orders` (0x57cd40) [H code, M effect]
