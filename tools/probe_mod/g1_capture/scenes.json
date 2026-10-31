@@ -2001,6 +2001,465 @@
      "timeout": 60
     }
    ]
+  },
+  {
+   "id": "EB",
+   "title": "Endor Xpress: wait for the AI to fight, shots every 30 s (scorch decal search)",
+   "modes": [
+    "dxvk",
+    "apitrace"
+   ],
+   "answers": [],
+   "manual": [],
+   "ui_steps": [],
+   "triggers": [],
+   "auto": [
+    {
+     "do": "wait_window",
+     "s": 180,
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 150,
+     "poll": 3,
+     "nudge_key": "ESC",
+     "label": "skip intro movies",
+     "menu": true,
+     "max_dist": 45
+    },
+    {
+     "do": "fit_window",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 20,
+     "menu": true,
+     "max_dist": 45
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 813,
+     "label": "Single Player",
+     "gap": 1.5,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "sp_menu",
+     "timeout": 20,
+     "menu": true,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 864,
+     "label": "Skirmish Battles",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 30,
+     "menu": true,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 600,
+     "y": 369,
+     "label": "Land game type",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 866,
+     "y": 713,
+     "repeat": 20,
+     "gap": 0.25,
+     "label": "map list to bottom"
+    },
+    {
+     "do": "click",
+     "x": 580,
+     "y": 580,
+     "label": "(6) Endor Xpress",
+     "gap": 1
+    },
+    {
+     "do": "shot",
+     "label": "E_setup"
+    },
+    {
+     "do": "click",
+     "x": 1572,
+     "y": 798,
+     "label": "Start Game",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "loading_begin",
+     "timeout": 240,
+     "poll": 2,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 1280,
+     "y": 993,
+     "label": "Begin",
+     "gap": 2
+    },
+    {
+     "do": "expect_like",
+     "ref": "hud_buttons",
+     "timeout": 60,
+     "max_dist": 30
+    },
+    {
+     "do": "park",
+     "x": 960,
+     "y": 150
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "shot",
+     "label": "E_start"
+    },
+    {
+     "do": "click",
+     "x": 28,
+     "y": 880,
+     "label": "minimap: own command centre",
+     "gap": 3
+    },
+    {
+     "do": "shot",
+     "label": "EB_base"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t30"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t60"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t90"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t120"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t150"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t180"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t210"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t240"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t270"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t300"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t330"
+    },
+    {
+     "do": "wait",
+     "s": 30
+    },
+    {
+     "do": "shot",
+     "label": "EB_t360"
+    },
+    {
+     "do": "key",
+     "key": "ESC",
+     "gap": 1.5,
+     "label": "pause menu"
+    },
+    {
+     "do": "expect_like",
+     "ref": "esc_quit",
+     "timeout": 15,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 959,
+     "y": 659,
+     "label": "Quit Game",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "confirm_yes",
+     "timeout": 15,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 804,
+     "y": 595,
+     "label": "Yes",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "result_exit",
+     "timeout": 30,
+     "max_dist": 30
+    },
+    {
+     "do": "shot",
+     "label": "E_result"
+    },
+    {
+     "do": "click",
+     "x": 1383,
+     "y": 950,
+     "label": "Exit",
+     "gap": 3
+    },
+    {
+     "do": "park",
+     "on": false
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 60,
+     "max_dist": 30
+    }
+   ]
+  },
+  {
+   "id": "EC",
+   "title": "Endor Xpress: stop at the base view (use with --drive-keep-open) to try land purchases by hand",
+   "modes": [
+    "dxvk",
+    "apitrace"
+   ],
+   "answers": [],
+   "manual": [],
+   "ui_steps": [],
+   "triggers": [],
+   "auto": [
+    {
+     "do": "wait_window",
+     "s": 180,
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 150,
+     "poll": 3,
+     "nudge_key": "ESC",
+     "label": "skip intro movies",
+     "menu": true,
+     "max_dist": 45
+    },
+    {
+     "do": "fit_window",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 20,
+     "menu": true,
+     "max_dist": 45
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 813,
+     "label": "Single Player",
+     "gap": 1.5,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "sp_menu",
+     "timeout": 20,
+     "menu": true,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 864,
+     "label": "Skirmish Battles",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 30,
+     "menu": true,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 600,
+     "y": 369,
+     "label": "Land game type",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 866,
+     "y": 713,
+     "repeat": 20,
+     "gap": 0.25,
+     "label": "map list to bottom"
+    },
+    {
+     "do": "click",
+     "x": 580,
+     "y": 580,
+     "label": "(6) Endor Xpress",
+     "gap": 1
+    },
+    {
+     "do": "shot",
+     "label": "E_setup"
+    },
+    {
+     "do": "click",
+     "x": 1572,
+     "y": 798,
+     "label": "Start Game",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "loading_begin",
+     "timeout": 240,
+     "poll": 2,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 1280,
+     "y": 993,
+     "label": "Begin",
+     "gap": 2
+    },
+    {
+     "do": "expect_like",
+     "ref": "hud_buttons",
+     "timeout": 60,
+     "max_dist": 30
+    },
+    {
+     "do": "park",
+     "x": 960,
+     "y": 150
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "shot",
+     "label": "E_start"
+    },
+    {
+     "do": "click",
+     "x": 28,
+     "y": 880,
+     "label": "minimap: own command centre",
+     "gap": 3
+    },
+    {
+     "do": "shot",
+     "label": "EB_base"
+    }
+   ]
   }
  ],
  "refs": {
