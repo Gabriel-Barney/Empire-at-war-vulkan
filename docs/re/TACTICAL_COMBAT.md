@@ -222,8 +222,9 @@ land/space pair selected by this id.
   - players whose relation in attacker player +0x370[id] is not "enemy" (1);
   - all players, when the attacker sits inside an `Is_Nebula` object and the fog test 0x35f3b0 applies [M].
 - **Query:** for each visited player, `Scan_Player` (0x5662b0) runs `Query_AABB` on that player's tree with a
-  cube of half-extent R centred on the attacker. The scan never does a sphere test itself. Per-candidate range
-  acceptance goes through vfunc slots 44/45 (not identified, §8).
+  cube of half-extent R centred on the attacker (R + the formation's chase / response range while the unit is in a
+  formation move, 0x566f50, §2.8). The scan never does a sphere test itself. Per-candidate range acceptance goes
+  through vfunc slots 44/45 (TACTICAL_GAPS §3.1) or the formation tests of §2.8.
 
 ### 2.3 Candidate filters, in order [H]
 These apply in `Scan_Player` and again in `Validate_Current_Target` (0x567c50).
@@ -259,6 +260,27 @@ These apply in `Scan_Player` and again in `Validate_Current_Target` (0x567c50).
     `Category_Exclusions`, `Property_Exclusions`, `Hard_Point_Priorities` and `Hard_Point_Exclusions`.
   - Set layout: +0x20 attack priorities, +0x30/+0x38 unit exclusions, +0x48 category exclusions, +0x50 property
     exclusions, +0x58 hard-point priorities, +0x70 hard-point exclusions.
+  - **Hard-point names (refixf t06) [H].** The tag table at 0x140a409f0 gives `Hard_Point_Priorities` /
+    `Hard_Point_Exclusions` field code 0x45 (comma-separated enum list; each token trimmed, converted, appended
+    in file order) with the converter `EnumConversionClass<HardPointType>` at **0x140b310a0** (ctor 0x53f7b0).
+    That converter holds **only the short names**: `Engine` 0, `Shield_Generator` 1, `Gravity_Well` 2,
+    `Fighter_Bay` 3, `Tractor_Beam` 4, `Weapon_Laser` 5, `Weapon_Missile` 6, `Weapon_Torpedo` 7,
+    `Weapon_Ion_Cannon` 8, `Weapon_Mass_Driver` 9, `Weapon_Special` 10, `Dummy_Art` 12 (value 11 has no name).
+    Both the stored keys and the looked-up token are trimmed and upper-cased (0x200350, 0x200ad0), so the match
+    is **case-insensitive** (`FIGHTER_BAY`, `WEAPON_LASER` resolve). A `HARD_POINT_*` token does **not**
+    resolve: it logs "Failed to convert value" and is skipped (the list keeps only the converted tokens, in
+    order, so ranks are 1-based positions among them). The long names `HARD_POINT_ENGINE` …
+    `HARD_POINT_DUMMY_ART` (13, with `HARD_POINT_ENABLE_SPECIAL_ABILITY` = 11) are a separate string table at
+    0x140a436d0, matched with `_stricmp` only by the hardpoint XML `Type` tag (0x53e3b0, 0x540000). Shipped
+    FoC `SpaceUnitTargetingPriorities.xml` uses `Shield_Generator` and `Shield_Generator, Engine, FIGHTER_BAY,
+    WEAPON_LASER, WEAPON_ION_CANNON, TRACTOR_BEAM`; no `Hard_Point_Exclusions`.
+  - **Lua hard-point strings** use the same converter (lookup vf4 0x1dc260, also trimmed + upper-cased):
+    `SpaceTaskForce.Attack_Target(obj, "Shield_Generator" [, repeat bool] [, threat number] [, avoidance
+    string])` (0x6e54d0; vanilla SYSTEMATICDISABLE.LUA passes `"Shield_Generator", 500` and `"Engine", 500`,
+    500 being the threat tolerance). The literal `"Random"` (exact case, 6 chars) instead draws a **synced**
+    `Get_Int(0, 13)`, 13 → no hard point. Any other unconverted string is an error ("Unrecognized hard point
+    type"), except in a 2-argument call, where it is parsed as the avoidance `SpaceCollisionType` instead.
+    The hard-point type then selects the target's live hardpoint of that type (§2.8 step A.1).
 - **`PrioritySet_Score`** (0x54dc00). **Lower is better.** Evaluated in this order:
   1. An `Attack_Priorities` entry that names the target's exact **type** returns its weight immediately.
   2. Otherwise the running value starts at **1e18**. Every category entry whose mask hits the target
@@ -293,12 +315,20 @@ These apply in `Scan_Player` and again in `Validate_Current_Target` (0x567c50).
 ### 2.5 Switching and stickiness [M]
 - **Two target slots:** an **ordered** target (player or script, +0x148) and an **auto** target (+8). An order
   drops the auto target (0x565e50), and finished orders are cleared (0x565de0).
+  - **Correction (refixf t06) [H]:** in the targeting data pack (obj +0xf0) +0x148 / +0x150 / +0x154 are the
+    **pending targeted ability** (target, ability name CRC, ability type; written by slot 38 0x5688f0, ABILITIES
+    §2.9), not a general ordered-target slot. A player / script / formation order lives in the normal current
+    target **+8** with the **lock byte +0xf4** set (slot 33 0x566b40 reads it, slot 32 0x568c30 writes it).
+    While the lock is set the service never rescans (§2.8 B). 0x565e50 clears +8 (slot 27) only when +8 differs
+    from the pending-ability target and is neither hostile to the owner nor a MARKER object; 0x565de0 fires a
+    pending ability. Neither one handles attack orders.
 - **Sticky** (0x569000): a target is sticky when its estimated time-to-kill is at most the threshold.
   - The threshold is the Lua override (+0x158) or the type's `Targeting_Stickiness_Time_Threshold` (+0x528).
   - Time-to-kill = (current health, or the sum of destroyable-hardpoint health, plus 0x396420) / the damage
     rate from `DamageTrackingBehavior` (0x58ba40, +0xc).
 - **Auto targets** are issued through 0x38d730. `Set_Target` (0x569160) and `Replace_Target_Ref` (0x569310)
-  manage the references.
+  manage the references. 0x38d730 is the general attack order (`Order_Attack`, §2.8 C): auto acquisition calls
+  it with ordered = 0, orders with ordered = 1.
 
 ### 2.6 Capital ships: per-hardpoint targeting [H]
 - **Update order:** the object update 0x3a76b0 updates every hardpoint each frame **in `HardPoints` list
@@ -334,6 +364,201 @@ These apply in `Scan_Player` and again in `Validate_Current_Target` (0x567c50).
 There is **no line-of-fire or terrain line-of-sight test before firing**, in space or on land; no candidate
 function or string was found. Obstruction happens only in flight: the projectile's swept segment hits the first
 enemy-tree object (§3.4), the ground test on land, or a passive missile shield deflects it (§3.3).
+
+### 2.8 Attack_Move on an object: ordered target and staging (refixf t06) [H unless tagged]
+Question: when `SpaceTaskForce.Attack_Move(obj)` (0x6e4fc0) or `unit.Attack_Move(obj)` (0x5730e0) gets an
+**enemy object**, do the units take it as their target? **Yes, but never through `Scan_Player`.** The object
+reaches the units by two paths, and neither applies the priority score (§2.4), `Category_Exclusions`,
+`Unit_Exclusions`, `Property_Exclusions` or `Attack_Category_Restrictions`:
+- **A, at order time** (task-force orders only): the movement block status issues `Order_Attack(unit, obj,
+  ordered = 1)` (0x38d730) to every member. In space this aims the members' **weapon hardpoints** at the object
+  at once; squadron containers get it as a locked target.
+- **B, every targeting service** (all object-goal attack orders, land and space): the formation's goal object
+  becomes the unit's **locked current target** (+8 with lock +0xf4) as soon as it is inside the unit's weapon
+  range. The lock stops all rescans until the object dies or becomes untargetable.
+
+So a Frigate whose `Attack_Move` set excludes Capital, ordered `Attack_Move(station)`, still locks the station
+once it is in weapon range; until then its hardpoints shoot targets of opportunity chosen by the scan (which
+does apply the set). This is how vanilla AI kills stations; a port that only feeds the object to the scan
+cannot.
+
+**Data used below.**
+- Targeting data pack TD = obj +0xf0: +8 current target, +0x10 its target hardpoint, +0x18 state (slot 31),
+  +0x20 next scan frame, +0xf4 **lock** (slot 33 0x566b40 reads; slot 32 0x568c30 writes, and only when +8 ≠ null
+  or the new value is 0), +0xf5 order flag of the last `Set_Target` (Service_Land re-applies it on a re-target)
+  [M meaning], +0x148.. pending ability (§2.5 correction).
+- Movement parameter block, 0x68 bytes (MOVEMENT §6.2): +0x00 position, +0x24 kind (1 position, 3 object),
+  +0x28 object, +0x30 target hardpoint, +0x48 flags (0x01 attack-move, 0x02 guard; P1_DOUBLE_CLICK §3), +0x4c
+  avoidance mask, +0x50 int [L], +0x54 threat tolerance (1e18 = none), +0x5c..+0x63 bytes.
+- A unit's formation = locomotor pack (obj +0xa8) +0x1f0; its queued blocks are at formation +0xf8..+0x100.
+- Type flags: +0x41 `Collidable_By_Projectile_Living`, +0x6b `Is_Valid_Target`, +0x88 / +0x89
+  `Last_` / `Initial_State_Visible_Under_FOW`, +0xa4 `Target_Stealth_Units`, +0xaf `Fire_Weapon_When_Undeployed`,
+  +0xd1 `Deploys`, +0xe9 `Disregard_Space_Layer_For_Guard_Attack_Move`, +0x504 `Targeting_Min_Attack_Distance`,
+  +0x52c / +0x530 / +0x538 `Guard_Chase_Range` / `Idle_Chase_Range` / `Attack_Move_Response_Range`.
+
+**Formation attack target** `Formation_Attack_Target(F, &hp, i)` (0x41a2e0):
+1. F needs at least one member; P = the first member's owner.
+2. Walk the queued blocks from index min(i, last) down to 0 (i = −1 means last). The first block that has an
+   object, has guard bit 0x02 **clear**, and whose object is **hostile to P** (relation table == 1, 0x39a450;
+   planets / capture points use their controller) is the answer. hp = that block's hardpoint index when the
+   hardpoint exists and is not destroyed (destroyable +0x4d and health ≤ 0), else −1.
+3. Otherwise walk all blocks from last to 0 with the same tests plus block +0x50 == 1 [M].
+4. Otherwise null.
+- The targeting service calls it with i = 0 (the current goal); `Scan_Player` / `Validate_Current_Target` with
+  i = −1.
+- Allied, own and relation-neutral objects never qualify. An `Is_Neutral` player whose relation is enemy **does**
+  qualify: the "inactive player" skip of §2.2 belongs to the scan, not to this path. This is the vanilla source
+  of the port's a1f t07 neutral-target rule.
+
+**B. Promotion in the targeting service.** At the top of `Service_Space` (0x634810) and, identically, of
+`Service_Land` (0x633ae0), after the pending-ability step (0x565de0):
+1. Skip unless the lock is clear (slot 33 false) and the unit has a formation.
+2. t, hp = `Formation_Attack_Target(F, &hp, 0)`; skip if null.
+3. t must pass 0x5680b0: a TEAM container, or type +0x41 and +0x6b set; and not garrisoned (+0x3a7), not dead
+   (+0x3a0 & 0x40), not inside a transport (0x397060), not +0x3b4, and the +0x361 / +0x38e test (§2.3 steps 2–3).
+   **No fog, stealth, `Attack_Category_Restrictions`, weapon-state or priority test here.**
+4. Range: slot 44 "in max range" true **and** slot 45 "inside min range" false (TACTICAL_GAPS §3.1: XY distance
+   to the target (or to its hardpoint) ≤ `Get_Max_Attack_Range` + the target's footprint half-extent along the
+   line of sight; min range = `Targeting_Min_Attack_Distance`, ignored when 0). `Attack_Move_Response_Range` is
+   **not** used here.
+5. `Set_Target(t, hp, order 1, lock 1)` (0x569160): a target that is a team member is replaced by its
+   container; refused (no change) when t is garrisoned, dead, not `Is_Valid_Target`, or +0x3b4. Otherwise
+   unsubscribe the old +8, store t / hp, subscribe to t's signals 0x28 and 1, +0xf5 := 1, slot 32(1) → lock
+   +0xf4 := 1, slot 31(1). This **replaces** any auto target the unit had.
+6. Then every hardpoint of type 5..10 (weapons), in list order: `HP_Set_Target(hp_i, t, hp)` (0x387b70).
+- **While locked** the rest of the service skips the whole validate / rescan block (§2.1): its gate is "lock clear
+  **and** (deployed (0x39a390) **or** the type does not `Deploys` **or** `Fire_Weapon_When_Undeployed`)". The
+  target is only dropped (slot 27, which also clears the lock through slot 32(0)) when it is garrisoned, +0x3b4,
+  dying or dead (+0x3a0 & 0x42), stealthed (`Is_Stealthed` 0x39b140) for an attacker without
+  `Target_Stealth_Units`, or hidden by fog for the attacker's player (0x35f470, force 1). When the target dies
+  the subscription clears +8 as well. A locked target that leaves weapon range is kept (state 2) [M].
+- After the target is dropped, the normal scan resumes at the next due scan frame; the dead object's formation
+  goal has become a position (MOVEMENT §6.3), so step 2 finds nothing.
+
+**A. Order-time issue (task-force orders).** `SpaceTaskForce.Attack_Move(dest [, threat] [, avoidance])`
+(0x6e4fc0): dest = object, task force or position; threat default 1e18 (none); avoidance string → complement of
+the `SpaceCollisionType` bits, default 0x3f. It creates a `SpaceMovementBlockStatus` (0x738870, Lua id 0x817,
+0x80 bytes) and inits it: object 0x7390e0, task force 0x738f80 (its current object, else its position), position
+0x738ee0. The object init stores (issueAttack +0x41 = 1, repeat +0x42 = 1, hardpoint type = −1, threat +0x60,
+flags +0x64 = **0x01 attack-move**, avoidance +0x68), subscribes to the object's signals 0x1a and 0x10, then
+0x738b90(obj, collect = 1, hpType):
+1. Only when issueAttack and hpType < 13 (Attack_Target with a hard point): the target hardpoint (+0x58) = the
+   object's hardpoint of type hpType with +0x4c set and the **lowest health fraction** (0x385a70; first minimum in
+   `HardPoints` order). None → release the object and finish the block (nobody moves).
+2. Collect members (0x739200): each TF member whose type byte +0x1e is clear [L meaning], that is not
+   order-locked (0x39ad40) and is admitted to coordinators (0x425e30); subscribe the block to its signals 9, 10,
+   0xb, 0x10; list +0x78.
+3. For each member in list order: if issueAttack and the member has TEAM (+0x348) or TARGETING (+0x33b):
+   `Order_Attack(member, obj, hpKey (the chosen hardpoint's type +0x20, else 0), ordered 1, ability 0, −1, force
+   0)`. A refusal (return ≠ 1) **removes the member from the order: it does not move**. Accepted members leave
+   other coordinators and join one new coordinator (moving list +0x70).
+4. Coordinator `Move_To` (0x4f8200) with {kind 3, object, chosen hardpoint or null, flags 0x01, avoidance,
+   threat (1e18 → none)}.
+- `LandTaskForce.Attack_Move` (0x6e9440 → 0x73c4f0 → 0x73c140) does the same (attack flag +0x56, Order_Attack
+  per member, refusals dropped, kind 3).
+- `unit.Attack_Move(dest)` (0x5730e0) is `Move_Internal` (0x57da90) with flags 1: an object that is not the unit
+  itself or its container gives a kind 3 block with flags 0x01. **It does not call `Order_Attack`**: only path B
+  applies. `unit.Move_To(obj)` (flags 0) moves to a **snapshot of the object's position** (kind 1): no target.
+
+**C. `Order_Attack` (0x38d730, listed in §7 as `Issue_Auto_Target`).** Arguments (unit, target, hpKey,
+ordered, abilityCRC, abilityType, force).
+1. Refusals (return 0): the target's owner is not an enemy of the unit's owner (unless force); the target is
+   stealthed (inline `Is_Stealthed`) and the unit type lacks `Target_Stealth_Units` and the owners differ; a
+   melee unit (`Melee_Cutoff_Range`, 0x372210) against a target whose locomotor pack +0x2a8 == 1 [M: airborne];
+   target garrisoned or +0x3a0 & 0x42; with no ability argument, the autofire fallback (TACTICAL_GAPS §1.3)
+   triggered an ability.
+2. **Weapon path**, taken in space (mode 2) unless the unit's BARRAGE (5) is active, and on land when ordered = 1:
+   clear the unit's team target if it is a container; slot 32(0) (lock **cleared**); clear the pending ability
+   (ordered and no autofire pick) or store it (ability call); every weapon hardpoint (type 5..10) whose
+   `Allow_Opportunity_Fire_When_Targeting` (+0x3d6) is false gets `HP_Set_Target(target, hp)`. Then a unit that is
+   not a team container **returns 1 without touching +8**, unless its LUCKY_SHOT (34) is active [M on the id
+   name]; containers, LUCKY_SHOT units and units inside a team go on to step 3.
+3. **Set path** (also the direct path for land with ordered = 0 and for space BARRAGE units): the team (own
+   container, or the parent container's TEAM) gets its target slots set (0x4061f0(0), 0x4061d0(ordered),
+   0x406370(target, hp index)); then `Set_Target(target, hp, ordered, ordered)` (lock = ordered) and every weapon
+   hardpoint `HP_Set_Target`.
+- Consequence in space: a ship given `TF.Attack_Move(station)` points its weapon hardpoints at the station at
+  once, but its unit target and lock come only from B. Until B fires, the next due scan (§2.1) issues
+  `Order_Attack(unit, scanPick, ordered 0)`, which re-aims those hardpoints at the scan's pick: **targets of
+  opportunity on the way are the scan's choices** (priority set applied). Fighter / bomber squadron containers
+  get a locked team target immediately.
+
+**Targets of opportunity and `Attack_Move_Response_Range`** (the scan, §2.2–2.4):
+- Scan cube half-extent (0x566f50): R = `Get_Max_Attack_Range`; when deployed, R; otherwise, for a unit in a
+  formation (a space squadron member uses its container's), R + Rr when 0x4160a0(F, unit, none) ≠ 0; otherwise R
+  in space, and on land R only for units with a TURRET slot (+0x33d), else 0 [M for land].
+- Rr and the answer of 0x4160a0(F, unit, candidate) [M for the geometry of the non-attack-move branch]:
+  1. 0 when: the unit is not in F; F has no blocks; candidate = the object of the first or last block (the goal
+     is handled by B / by step 9 below); deployed with type +0x23b0 = 0; unit order-locked (0x39ad40); in space,
+     the unit has a space layer (0x397900(unit, 1) ≠ 0) and its type lacks
+     `Disregard_Space_Layer_For_Guard_Attack_Move`; last block flag 0x40.
+  2. Rr from the **first** block's flags: 0x02 → `Guard_Chase_Range`, else 0x01 → `Attack_Move_Response_Range`,
+     else `Idle_Chase_Range`; Rr < 0 → 0.
+  3. Guard of an object: a candidate attacking the guarded object adds type +0x211c to Rr.
+  4. F state +0x1d0 ≠ 3 and (first block 0x01 or last block +0x5e): 2 when the unit is within Rr (XY) of F's
+     current path point (0x5c4ee0 on F +0x230, else the last path node), else 0.
+  5. Otherwise (guard / idle): distance from the slot goal, then whether the candidate is reachable within Rr
+     along the line (0x5672b0).
+- §2.3 step 9 "in range" is: candidate == `Formation_Attack_Target(F, −1)` (or TD+8 when the unit has no
+  formation), **or** slot 44 && !slot 45, **or** 0x4160a0 ≠ 0. The goal object therefore bypasses the range test
+  in the scan but **not** the score: a set that scores it −1 (`Category_Exclusions`) or 1e18 loses it there.
+  Path B is what makes it the target.
+
+**Staging and movement** [M unless tagged].
+- The formation goal is the object. In the path set-up 0x417520, a formation of type +0x218 = 2 heads for the
+  object's position; in space the end point is snapped to a free spot by 0x59caa0.
+- Staging 0x40e260 runs always for type 1 formations, and for type 2 formations **only when more than one block
+  is queued** [H for the condition]; a single TF.Attack_Move in space is therefore not staged [M: that space
+  formations are type 2]. If the last block is an object and not guard: take the member M with the
+  largest `Targeting_Min_Attack_Distance` (or a larger pending-ability min range); if M is **inside** that min
+  range of the target (slot 45), the goal becomes a point at d = min + 0.2 × (`Get_Base_Attack_Range`(M) − min)
+  from the target (type 1: path request with stand-off d; otherwise 0x59caa0 ring). Type 1 special case: a one-member
+  formation whose member has the +0x358 slot, and target `Is_Squashable`, or member `Is_Supercrusher` and target
+  `Is_Squashable_By_Supercrusher`: goal = the target's position (crush). Staging only backs off min-range units;
+  it does not stop a formation at weapon range. Stopping is not traced here [L].
+
+**Completion of the task-force order** (`SpaceMovementBlockStatus`, what Lua `BlockOnCommand` waits on):
+- `IsFinished` (vf19 0x7394f0): if the chosen target hardpoint is destroyed: repeat (+0x42) → pick another of the
+  same type (0x738b90, collect = 0), else finish. Finished when +0x40 is set or the task force is empty
+  (0x5fca10).
+- Signal handler (0x739890):
+  - object signal 0x10 (destroyed) or 0xb: finish, release the object, TF signal 0xb (0x5f6c60);
+  - object signal 0x1a [M: owner change]: finish when issueAttack is set and the object is no longer hostile
+    (or, with flags 0x02, when it became hostile);
+  - unit signal 10 (movement finished): remove the unit from the moving list, TF Lua event 0x12 for it; when the
+    moving list is empty: finish if there is no object; otherwise (flags 0x02 clear) finish only when the object
+    is no longer hostile, fails 0x5680b0, or (type +0x88 and +0x89 both 0) is fogged for the TF's player.
+    **Otherwise the block stays open after arrival**;
+  - unit signals 0xb / 0x10 / 0x1a: remove the unit from both lists; same tests when the moving list empties;
+    finish when the TF list empties.
+- So `BlockOnCommand(TF.Attack_Move(station))` returns when the station dies (or turns invalid), not when the
+  ships arrive. BurnUnits' `while TestValid(target) do Attack_Move(target)` therefore re-issues only after a
+  failure.
+
+**Summary by order** [H unless tagged]
+
+| Order | Block (kind, flags) | `Order_Attack` at order time | Path B | Response range used by the scan |
+|---|---|---|---|---|
+| TF.Attack_Move(enemy object), space or land | 3, 0x01 | yes, ordered 1; refusing members do not move | yes | `Attack_Move_Response_Range` |
+| TF.Attack_Move(position) | 1, 0x01 | no | no (no object) | `Attack_Move_Response_Range` |
+| TF.Attack_Move(non-hostile object) | 3, 0x01 | refused for every armed member → only unarmed members move [M on the block's end] | no | — |
+| unit.Attack_Move(object) | 3, 0x01 | no | yes | `Attack_Move_Response_Range` |
+| unit.Move_To(object) | 1 (position snapshot) | no | no | `Idle_Chase_Range` |
+| TF.Attack_Target(obj [, hpType] [, repeat] [, threat] [, avoid]) (0x6e54d0) | 3, **0x00**, hardpoint +0x30 = chosen | yes, with the hardpoint key | yes, with hp: the lock carries the hard point | `Idle_Chase_Range` |
+| unit.Attack_Target(obj) (0x5730f0) | 3, 0x00 | yes, ordered 1, hp 0, for each listed unit sorted by object id | yes | `Idle_Chase_Range` |
+
+- A hard-point target (Attack_Target with a type) differs only by the chosen hardpoint: it goes into the block
+  (+0x30), so `Formation_Attack_Target` returns its index while it lives and the lock holds that hardpoint (TD
+  +0x10). Without one, each weapon hardpoint picks its sub-hardpoint by the set's `Hard_Point_Priorities` (§2.6).
+- Land vs space: path B is identical. Path A differs only in C step 2's condition (space: always the weapon path;
+  land: weapon path for ordered = 1, set path for auto targets).
+
+**Port notes (refixf t06).** (1) Add path B: per targeting service, before the scan, if the unit holds no locked
+target and its formation's current goal is a hostile object that passes 0x5680b0 and is inside weapon range (max
+range + footprint half-extent, outside min range), make it the locked target with no score / exclusion /
+category test, and keep it until it is invalid (list above). (2) TF.Attack_Move(object) must not complete on
+arrival; it completes when the object dies or turns invalid. (3) Units for which `Order_Attack` refuses (non-enemy
+target, stealth) are dropped from the move.
 
 ---
 
@@ -950,7 +1175,15 @@ Names are proposals. The Ghidra project was not updated. Grouped by section:
 | 0x565e50 / 0x565de0 | order reconciliation |
 | 0x569160 | `Set_Target` |
 | 0x569310 | `Replace_Target_Ref` |
-| 0x38d730 | `Issue_Auto_Target` |
+| 0x38d730 | `Issue_Auto_Target` = `Order_Attack` (auto and ordered attacks, §2.8 C) |
+| 0x566b40 / 0x568c30 | targeting slots 33 / 32: read / write the order lock TD +0xf4 (§2.8) |
+| 0x41a2e0 | `Formation_Attack_Target` (§2.8) |
+| 0x4160a0 | formation response-range test (§2.8) |
+| 0x566f50 | scan cube half-extent (§2.8) |
+| 0x5680b0 | formation-target targetability test (§2.8 B) |
+| 0x40e260 | formation attack staging (§2.8) |
+| 0x738870 / 0x7390e0 / 0x738b90 / 0x739890 / 0x7394f0 | `SpaceMovementBlockStatus` ctor / object init / issue / signal handler / IsFinished (§2.8) |
+| 0x53f7b0 | `EnumConversionClass<HardPointType>` ctor (global 0x140b310a0, §2.4) |
 | 0x394610 | `Choose_Target_Hardpoint` |
 | 0x387b70 | `HP_Set_Target` |
 | 0x385190 | `HP_Scan_Player` |
@@ -1100,7 +1333,8 @@ Names are proposals. The Ghidra project was not updated. Grouped by section:
    LURE/STUN ids.
 
 **Not identified**
-9. Targeting vfunc slots 33 (probably "is player ordered"), 44 and 45 (range and can-attack tests). **44 / 45
+9. Targeting vfunc slots 33 (probably "is player ordered"), 44 and 45 (range and can-attack tests). **33
+   resolved** (refixf t06): it returns the order lock TD +0xf4 (§2.8). **44 / 45
    resolved** (max-range test with footprint extent, min-range test): TACTICAL_GAPS.md §3.1. Note: the
    targeting FOW filter (§2.3 step 4) calls 0x35f470 with **force = 1**, and obj +0x343 is the MARKER slot
    (bombing-run markers skip the FOW test): TACTICAL_GAPS §5.8.
