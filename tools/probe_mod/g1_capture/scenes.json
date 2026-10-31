@@ -2460,6 +2460,340 @@
      "label": "EB_base"
     }
    ]
+  },
+  {
+   "id": "KH",
+   "title": "Kuat space skirmish (Empire, max credits), menus driven, then left open for hand play (g1f t06: does a bought ship arrive?)",
+   "modes": [
+    "dxvk",
+    "apitrace"
+   ],
+   "answers": [
+    "a bought ship arrives for a human player (g1f t06)",
+    "Thrawn close-up with Bloom/Heat (with g1_options.py)"
+   ],
+   "manual": [
+    "Run with --drive KH --drive-keep-open --timeout N; the driver stops on the station view at battle start.",
+    "By hand: select the station, buy a cheap ship (and the Admonitor if credits allow), wait for the queue to finish, look for the ship; if it arrives, frame the Admonitor lit by the sun for 10 s; Esc > Quit Game."
+   ],
+   "ui_steps": [],
+   "triggers": [],
+   "auto": [
+    {
+     "do": "wait_window",
+     "s": 180,
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 150,
+     "poll": 3,
+     "nudge_key": "ESC",
+     "label": "skip intro movies",
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 813,
+     "label": "Single Player",
+     "gap": 1.5,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "sp_menu",
+     "timeout": 20,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 864,
+     "label": "Skirmish Battles",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 30,
+     "menu": true
+    },
+    {
+     "do": "click",
+     "x": 600,
+     "y": 401,
+     "label": "Space game type",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 866,
+     "y": 471,
+     "repeat": 20,
+     "gap": 0.25,
+     "label": "map list to top"
+    },
+    {
+     "do": "click",
+     "x": 560,
+     "y": 713,
+     "label": "(4) Shipyards of Kuat",
+     "gap": 1
+    },
+    {
+     "do": "shot",
+     "label": "K_setup"
+    },
+    {
+     "do": "click",
+     "x": 940,
+     "y": 798,
+     "label": "Advanced",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "advanced_accept",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 1232,
+     "y": 575,
+     "repeat": 15,
+     "gap": 0.25,
+     "label": "starting credits to max"
+    },
+    {
+     "do": "shot",
+     "label": "K_advanced"
+    },
+    {
+     "do": "click",
+     "x": 1318,
+     "y": 766,
+     "label": "Accept",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 15
+    },
+    {
+     "do": "click",
+     "x": 1572,
+     "y": 798,
+     "label": "Start Game",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "loading_begin",
+     "timeout": 240,
+     "poll": 2
+    },
+    {
+     "do": "click",
+     "x": 1280,
+     "y": 993,
+     "label": "Begin",
+     "gap": 2
+    },
+    {
+     "do": "expect_like",
+     "ref": "hud_buttons",
+     "timeout": 60
+    },
+    {
+     "do": "park",
+     "x": 960,
+     "y": 150
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "shot",
+     "label": "K_start"
+    }
+   ]
+  },
+  {
+   "id": "EH",
+   "title": "Endor Xpress land skirmish (Rebellion vs Easy AI), menus driven, then left open for hand play (g1f t05 scorch decal)",
+   "modes": [
+    "dxvk",
+    "apitrace"
+   ],
+   "answers": [
+    "master-atlas scorch decal draws (EXPLOSION_SCORCH_*) for the --vb-draws decode (g1f t05)"
+   ],
+   "manual": [
+    "Run with --drive EH --drive-keep-open --timeout N; the driver stops on the own command centre at battle start.",
+    "By hand: get a unit or building destroyed on open ground (attack Ewoks / AI units), keep the scorch mark in view for 10 s, then Esc > Quit Game."
+   ],
+   "ui_steps": [],
+   "triggers": [],
+   "auto": [
+    {
+     "do": "wait_window",
+     "s": 180,
+     "menu": true
+    },
+    {
+     "do": "fit_window",
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 150,
+     "poll": 3,
+     "nudge_key": "ESC",
+     "label": "skip intro movies",
+     "menu": true,
+     "max_dist": 45
+    },
+    {
+     "do": "fit_window",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "main_menu",
+     "timeout": 20,
+     "menu": true,
+     "max_dist": 45
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 813,
+     "label": "Single Player",
+     "gap": 1.5,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "sp_menu",
+     "timeout": 20,
+     "menu": true,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 1678,
+     "y": 864,
+     "label": "Skirmish Battles",
+     "gap": 2,
+     "menu": true
+    },
+    {
+     "do": "expect_like",
+     "ref": "setup_start",
+     "timeout": 30,
+     "menu": true,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 600,
+     "y": 369,
+     "label": "Land game type",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 866,
+     "y": 713,
+     "repeat": 20,
+     "gap": 0.25,
+     "label": "map list to bottom"
+    },
+    {
+     "do": "click",
+     "x": 580,
+     "y": 580,
+     "label": "(6) Endor Xpress",
+     "gap": 1
+    },
+    {
+     "do": "shot",
+     "label": "E_setup"
+    },
+    {
+     "do": "click",
+     "x": 1572,
+     "y": 798,
+     "label": "Start Game",
+     "gap": 3
+    },
+    {
+     "do": "expect_like",
+     "ref": "loading_begin",
+     "timeout": 240,
+     "poll": 2,
+     "max_dist": 30
+    },
+    {
+     "do": "click",
+     "x": 1280,
+     "y": 993,
+     "label": "Begin",
+     "gap": 2
+    },
+    {
+     "do": "expect_like",
+     "ref": "hud_buttons",
+     "timeout": 60,
+     "max_dist": 30
+    },
+    {
+     "do": "park",
+     "x": 960,
+     "y": 150
+    },
+    {
+     "do": "wait",
+     "s": 3
+    },
+    {
+     "do": "shot",
+     "label": "E_start"
+    },
+    {
+     "do": "click",
+     "x": 28,
+     "y": 880,
+     "label": "minimap: own command centre",
+     "gap": 3
+    },
+    {
+     "do": "shot",
+     "label": "EB_base"
+    }
+   ]
   }
  ],
  "refs": {
