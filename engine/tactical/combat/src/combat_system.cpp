@@ -123,6 +123,7 @@ void CombatSystem::reserve(uint32_t units, uint32_t projectiles, uint32_t candid
     for (auto& c : cands_) c.reserve(candidates_per_unit);
     projectiles_.reserve(projectiles);
     sweep_.reserve(projectiles);
+    rocket_next_.reserve(projectiles);  // refixf t01
     delayed_.reserve(delayed);
     deaths_.reserve(units);
     hp_events_.reserve(static_cast<size_t>(units) * 4);
@@ -1203,6 +1204,8 @@ void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t
     p.kind = pd.damage_kind;
     // Maximum travel (+0x6c) = Get_Fire_Range (Projectile_Max_Flight_Distance when <= 0) + target
     // radius + |aim.z - muzzle.z|; 0 -> lifetime expiry.
+    // refixf t01 (S9 §2.4.10 step 1, MaxTravelDistance +0x6c): the same rule for rockets [H]; [M] the target radius term
+    // is the retail radius helper 0x397780 (+ its container's when garrisoned), here UnitDesc::radius.
     const float base = range > 0.0f ? range : pd.max_flight_distance;
     p.max_travel = base > 0.0f ? base + desc_of(target).radius + abs_f(aim.z - muzzle.z) : 0.0f;
     // OI tactical: lobbed shots (category 3) leave on the ballistic arc to the aim point (formulas.hpp lob_direction).
@@ -1212,6 +1215,14 @@ void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t
         p.floor_z = aim.z;
         p.dir = lob_direction(muzzle, aim, pd.max_speed, g);
     }
+    // refixf t01 (S9 §2.4.10 step 1): a spline rocket keeps FireAtPosition = `aim` and the launch point. [M] `aim` is the
+    // shared fire path's aim point (target / hardpoint position, circular lead, then the fire-time inaccuracy) standing in
+    // for 0x54a270 + 0x549f80 (not re-read). [M/port] Facing: retail leaves along the x axis of the fire-bone (or shooter
+    // world) transform; the port has no bone orientations, so the shared path's muzzle -> aim direction (p.dir) is used.
+    if (spline_rocket(pd)) {
+        p.rocket = 1;
+        add_rocket(p, aim, muzzle);
+    }
     projectiles_.push_back(p);
 }
 
@@ -1219,22 +1230,43 @@ void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t
 // projectiles (sections 3.3-3.5)
 // ================================================================================================
 
+CombatSystem::SweepHit CombatSystem::sweep_segment(const Projectile& p, Vec3 delta, QueryContext& ctx) const {
+    SweepHit best{kNoObject, 0.0f};
+    const Ray ray{p.pos, delta, 1.0f};
+    const auto np = static_cast<int32_t>(std::min<uint32_t>(player_count(), trees_->player_count()));
+    // Hostile players' trees; the port takes the minimum (t, object id) over all of them (the
+    // original returns the first hit in tree order, section 3.4).
+    for (int32_t q = 0; q < np; ++q) {
+        if (!is_enemy(p.owner, q)) continue;
+        for (const RayHit& hit : trees_->player(static_cast<uint32_t>(q)).query_ray(ray, kSkipDead, ctx)) {
+            const Unit* v = unit(static_cast<ObjectId>(hit.handle));
+            if (!live(v)) continue;
+            if (best.id == kNoObject || hit.t < best.t || (hit.t == best.t && v->id < best.id)) best = SweepHit{v->id, hit.t};
+            break;  // hits are sorted by (t, id): the first live one is this tree's minimum
+        }
+    }
+    return best;
+}
+
 void CombatSystem::sweep(uint32_t pi, QueryContext& ctx) {
     const Projectile& p = projectiles_[pi];
     SweepHit best{kNoObject, 0.0f};
     if (p.alive && p.spawn_frame < frame_ && p.fuse < 0.0f) {  // OI abilities: armed bombs only detonate on the fuse
-        const Ray ray{p.pos, p.dir * p.speed, 1.0f};
-        const auto np = static_cast<int32_t>(std::min<uint32_t>(player_count(), trees_->player_count()));
-        // Hostile players' trees; the port takes the minimum (t, object id) over all of them (the
-        // original returns the first hit in tree order, section 3.4).
-        for (int32_t q = 0; q < np; ++q) {
-            if (!is_enemy(p.owner, q)) continue;
-            for (const RayHit& hit : trees_->player(static_cast<uint32_t>(q)).query_ray(ray, kSkipDead, ctx)) {
-                const Unit* v = unit(static_cast<ObjectId>(hit.handle));
-                if (!live(v)) continue;
-                if (best.id == kNoObject || hit.t < best.t || (hit.t == best.t && v->id < best.id)) best = SweepHit{v->id, hit.t};
-                break;  // hits are sorted by (t, id): the first live one is this tree's minimum
+        if (p.rocket) {
+            // refixf t01: a planned spline rocket sweeps P -> N, N = the path sampled at s + speed (§2.4.2 steps 2 / 5;
+            // read-only here, the commit phase advances s). An unplanned one (first flight step) is planned and swept in
+            // the serial commit phase (its plan draws).
+            RocketNext& rn = rocket_next_[pi];
+            rn.ok = 0;
+            const Rocket* rk = find_rocket(p.serial);
+            Vec3 n;
+            if (rk && rk->planned && rk->path.sample(rk->s + p.speed, n)) {
+                rn.n = n;
+                rn.ok = 1;
+                best = sweep_segment(p, n - p.pos, ctx);
             }
+        } else {
+            best = sweep_segment(p, p.dir * p.speed, ctx);
         }
     }
     sweep_[pi] = best;
@@ -1258,7 +1290,7 @@ void CombatSystem::apply_or_queue(const DamageRequest& r, float delay_secs, uint
     }
 }
 
-void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, SimRng& rng) {
+void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, SimRng& rng, const Vec3* segment) {
     // Process_Hit (0x4cb280) [H unless tagged].
     const ProjectileDesc& pd = data_->projectiles[p.desc];
     const UnitDesc& vd = desc_of(v);
@@ -1288,7 +1320,7 @@ void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, 
     r.source_is_projectile = true;
     r.projectile_desc = static_cast<int32_t>(p.desc);
     r.hardpoint = hp;
-    const Vec3 impact = p.pos + p.dir * (p.speed * t);
+    const Vec3 impact = segment ? p.pos + *segment * t : p.pos + p.dir * (p.speed * t);
     r.has_impact = true;
     r.impact = impact;
     // S9 t04 (§1.5): a Causes_Infection hit attaches the INFECTION behaviour (or resumes it: counter - 1). [port] Before
@@ -2174,11 +2206,11 @@ bool CombatSystem::shield_away(const Projectile& p, Vec3& away) const {
     return false;
 }
 
-void CombatSystem::rocket_replan(Projectile& p) {
-    // ROCKET / MPTL_ROCKET (0x4cfc40), §2.4 [H]: every qualifying emitter (same rules as 0x4c6e30, no jam skip) is
-    // tested for a CROSSING - the next point inside (<= r), the current position outside (>= r) - and every crossing
-    // re-plans the path. [port] The re-planned path shape (builders 0x4cceb0 / 0x4cdb00) was not read and rockets fly
-    // straight here: a re-plan points the rocket away from that emitter's centre. The turn rate is not used.
+void CombatSystem::rocket_straight_replan(Projectile& p) {
+    // [port] Legacy stand-in, kept only for rocket types without curve data (ProjectileDesc::rocket_curve_distance < 0:
+    // the host did not read Projectile_Rocket_Curve_Distance): they fly straight and a crossing (the next point inside
+    // (<= r), the current position outside (>= r)) points the rocket away from that emitter's centre. Spline rockets use
+    // rocket_step (S9_DEATH_CLONE_SHIELDS.md §2.4).
     for (const uint32_t idx : emitters_) {
         const Unit& e = units_[idx];
         if (e.flags & kUnitDead) continue;
@@ -2189,6 +2221,161 @@ void CombatSystem::rocket_replan(Projectile& p) {
         const Vec3 nxt = (p.pos + p.dir * p.speed) - e.pos;
         if (dot(nxt, nxt) <= r * r && dot(cur, cur) >= r * r) p.dir = normalize(cur);
     }
+}
+
+// ---- refixf t01: spline rockets (S9_DEATH_CLONE_SHIELDS.md §2.4) -------------------------------------------------------
+
+bool CombatSystem::spline_rocket(const ProjectileDesc& pd) const {
+    return (pd.category == ProjectileCategory::Rocket || pd.category == ProjectileCategory::MptlRocket) &&
+           pd.rocket_curve_distance >= 0.0f;
+}
+
+void CombatSystem::add_rocket(const Projectile& p, Vec3 fire_at, Vec3 launch) {
+    // Spawn (§2.4.10 step 1): FireAtPosition, launch point, s = 0, no path yet; the budget is set by the initial plan.
+    Rocket rk;
+    rk.serial = p.serial;
+    rk.fire_at = fire_at;
+    rk.launch = launch;
+    rk.budget = data_->projectiles[p.desc].max_flight_distance;
+    rockets_.push_back(std::move(rk));  // serials only grow: rockets_ stays in serial order
+}
+
+CombatSystem::Rocket* CombatSystem::find_rocket(uint32_t serial) {
+    const auto it = std::lower_bound(rockets_.begin(), rockets_.end(), serial,
+                                     [](const Rocket& r, uint32_t v) { return r.serial < v; });
+    return (it == rockets_.end() || it->serial != serial) ? nullptr : &*it;
+}
+
+const CombatSystem::Rocket* CombatSystem::find_rocket(uint32_t serial) const {
+    const auto it = std::lower_bound(rockets_.begin(), rockets_.end(), serial,
+                                     [](const Rocket& r, uint32_t v) { return r.serial < v; });
+    return (it == rockets_.end() || it->serial != serial) ? nullptr : &*it;
+}
+
+bool CombatSystem::rocket(size_t i, RocketView& out) const {
+    if (i >= projectiles_.size() || !projectiles_[i].rocket) return false;
+    const Rocket* rk = find_rocket(projectiles_[i].serial);
+    if (!rk) return false;
+    out.planned = rk->planned != 0;
+    out.s = rk->s;
+    out.budget = rk->budget;
+    out.fire_at = rk->fire_at;
+    out.launch = rk->launch;
+    out.last_velocity = rk->last_vel;
+    out.path = &rk->path;
+    return true;
+}
+
+void CombatSystem::expire_projectile(uint32_t i, uint32_t frame) {
+    Projectile& p = projectiles_[i];
+    const ProjectileDesc& pd = data_->projectiles[p.desc];
+    ++stats_.expired;
+    p.alive = 0;
+    const Projectile pc = p;  // copy: the detonation may spawn projectiles
+    HitEvent he;  // S10-int (R4): lifetime detonation particle
+    he.shooter = pc.shooter;
+    he.owner = pc.owner;
+    he.projectile_desc = pc.desc;
+    he.position = pc.pos;
+    hit_events_.push_back(he);
+    if (pd.blast_area_damage > 0.0f && pd.blast_area_range > 0.0f) area_damage(pc, pc.pos, kNoObject, frame);
+    detonation_effects(pc, pc.pos, kNoObject, frame);
+}
+
+void CombatSystem::rocket_step(uint32_t i, uint32_t frame, SimRng& rng) {
+    // One ROCKET / MPTL_ROCKET flight step (0x4cfc40, S9_DEATH_CLONE_SHIELDS.md §2.4.2) [H unless tagged]. Serial commit
+    // phase in projectile serial order, so the plan / re-plan draws come at this projectile's place in the stream, before
+    // its hit draws (the original re-plans before the sweep). No reference into rockets_ / projectiles_ is used after a
+    // call that can spawn (hit processing, expiry).
+    Rocket* rk = find_rocket(projectiles_[i].serial);
+    if (!rk) {  // [port] cannot happen (spawn / read keep rockets_ in step with the projectiles)
+        projectiles_[i].alive = 0;
+        return;
+    }
+    const ProjectileDesc& pd = data_->projectiles[projectiles_[i].desc];
+    RocketParams rp;
+    rp.curve_distance = pd.rocket_curve_distance;
+    rp.curve_offset = pd.rocket_curve_offset;
+    rp.straight_distance = pd.rocket_straight_distance;
+    rp.max_flight_distance = pd.max_flight_distance;
+    rp.target_on_terrain = pd.target_point_on_terrain;
+    rp.explode_at_target = pd.explode_when_reached_target_radius;
+    RocketContext ctx;
+    ctx.params = &rp;
+    ctx.terrain = &rocket_terrain_;
+    ctx.rng = &rng;
+    ctx.launch = rk->launch;
+    const bool land = cfg_.mode == GameMode::Land;  // mode 1 = land builders, mode 2 = space
+    const Vec3 P = projectiles_[i].pos;
+    // 1. No path yet: the initial plan (first flight step, before the facing turns). [port] FireAtPosition is always set.
+    const bool fresh = rk->planned == 0;
+    if (fresh) {
+        if (land) rocket_plan_land(rk->path, P, rk->fire_at, projectiles_[i].dir, rk->budget, ctx);
+        else rocket_plan_space(rk->path, P, rk->fire_at, projectiles_[i].dir, rk->budget, ctx);
+        rk->planned = 1;
+        rk->s = 0.0f;
+    }
+    // 2. s += speed, N = sample(s) (phase E sampled the same s + speed for planned rockets). Past the path's end the
+    //    rocket expires where it is (forced expiry: detonation at P).
+    rk->s = rk->s + projectiles_[i].speed;
+    Vec3 N;
+    bool ok = false;
+    if (fresh) {
+        ok = rk->path.sample(rk->s, N);
+    } else {
+        ok = rocket_next_[i].ok != 0;
+        N = rocket_next_[i].n;
+    }
+    if (!ok) {
+        expire_projectile(i, frame);
+        return;
+    }
+    Projectile& p = projectiles_[i];
+    // 3. Turn_Toward P -> N at the type turn rate: only the facing turns (the position comes from the spline) [M].
+    p.dir = turn_toward(p.dir, N - P, projectile_turn_rate(pd));
+    // 4. Every qualifying emitter (§2.3 rules, no jamming skip), in list order, with the same P and N: a crossing (N inside,
+    //    P outside; squares summed y, x, z) re-plans. A second crossing in the same step re-plans again from s = 0.
+    for (const uint32_t idx : emitters_) {
+        const Unit& e = units_[idx];
+        if (e.flags & kUnitDead) continue;
+        if (!is_enemy(e.owner, p.owner)) continue;
+        const float R = e.emitter_radius;
+        if (!(R > 0.0f)) continue;
+        const Vec3 dn = N - e.pos, dp = P - e.pos;
+        const float n2 = (dn.y * dn.y + dn.x * dn.x) + dn.z * dn.z;
+        const float p2 = (dp.y * dp.y + dp.x * dp.x) + dp.z * dp.z;
+        const float R2 = R * R;
+        if (n2 <= R2 && R2 <= p2) {
+            if (land) rocket_replan_land(rk->path, P, e.pos, rk->last_vel, rk->s, rk->budget, ctx);
+            else rocket_replan_space(rk->path, P, e.pos, rk->last_vel, rk->s, rk->budget, ctx);
+        }
+    }
+    // 5. Sweep P -> N (on a re-plan step still the OLD path's N), hit processing, else move to N.
+    const Vec3 seg = N - P;
+    SweepHit hit = fresh ? sweep_segment(p, seg, serial_ctx_) : sweep_[i];
+    if (hit.id != kNoObject && !live(unit(hit.id))) {  // victim died earlier in this phase
+        ++stats_.resweeps;
+        hit = sweep_segment(p, seg, serial_ctx_);
+    }
+    if (hit.id != kNoObject) {
+        Unit* v = unit(hit.id);
+        p.alive = 0;
+        Projectile pc = p;
+        process_hit(pc, *v, hit.t, frame, rng, &seg);
+        return;
+    }
+    // LastKnownVelocity (+0x98) = the move's displacement x the frame-time float 0x140b0a344 [M: 1 / FPS].
+    rk->last_vel = seg * (1.0f / static_cast<float>(cfg_.fps));
+    p.pos = N;
+    p.travelled = p.travelled + p.speed;  // DistanceTravelled += speed
+    // 6. End of flight (0x4c7050): Explode_When_Reached_Target_Radius and s >= budget, or the travel / lifetime rule of
+    //    every projectile.
+    bool expire = pd.explode_when_reached_target_radius && rk->s >= rk->budget;
+    if (!expire)
+        expire = p.max_travel > 0.0f
+                     ? p.travelled >= p.max_travel
+                     : static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps) > pd.max_lifetime;
+    if (expire) expire_projectile(i, frame);
 }
 
 // ================================================================================================
@@ -2347,6 +2534,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     // E. projectile sweeps (parallel)
     const auto np = static_cast<uint32_t>(projectiles_.size());
     sweep_.resize(np);
+    rocket_next_.resize(np);  // refixf t01
     {
         const RangeFn fn = [this](uint32_t b, uint32_t e) {
             QueryContext* c = acquire_ctx();
@@ -2362,6 +2550,10 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         if (!(units_[i].flags & kUnitDead) && units_[i].emitter_radius > 0.0f && units_[i].emitter_entries > 0) emitters_.push_back(i);
     for (uint32_t i = 0; i < np; ++i) {
         if (!projectiles_[i].alive || projectiles_[i].spawn_frame >= frame) continue;
+        if (projectiles_[i].rocket) {  // refixf t01: spline rocket (0x4cfc40)
+            rocket_step(i, frame, rng);
+            continue;
+        }
         SweepHit hit = sweep_[i];
         if (hit.id != kNoObject && !live(unit(hit.id))) {  // victim died earlier in this phase
             ++stats_.resweeps;
@@ -2394,7 +2586,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         bool steer = false;
         Vec3 goal;
         if (cat == PC::Rocket || cat == PC::MptlRocket) {
-            if (!emitters_.empty()) rocket_replan(p);
+            if (!emitters_.empty()) rocket_straight_replan(p);
         } else if (cat != PC::Bomb && cat != PC::Grenade && cat != PC::StaticBomb && cat != PC::LightSaber &&
                    cat != PC::ClusterBomb && !emitters_.empty()) {
             steer = shield_away(p, goal);
@@ -2428,19 +2620,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
                          ? p.travelled >= p.max_travel
                          : static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps) > pd.max_lifetime;
         }
-        if (expire) {
-            ++stats_.expired;
-            p.alive = 0;
-            const Projectile pc = p;
-            HitEvent he;  // S10-int (R4): lifetime detonation particle
-            he.shooter = pc.shooter;
-            he.owner = pc.owner;
-            he.projectile_desc = pc.desc;
-            he.position = pc.pos;
-            hit_events_.push_back(he);
-            if (pd.blast_area_damage > 0.0f && pd.blast_area_range > 0.0f) area_damage(pc, pc.pos, kNoObject, frame);
-            detonation_effects(pc, pc.pos, kNoObject, frame);
-        }
+        if (expire) expire_projectile(i, frame);
     }
     // G. velocity history (OI tactical: two steps for the circular-lead fit), flush
     for (Unit& u : units_) {
@@ -2486,6 +2666,18 @@ void CombatSystem::flush() {
     for (size_t i = 0; i < projectiles_.size(); ++i)
         if (projectiles_[i].alive) projectiles_[w++] = projectiles_[i];
     projectiles_.resize(w);
+    // refixf t01: rocket states follow their projectiles (both in serial order).
+    if (!rockets_.empty()) {
+        size_t rw = 0, j = 0;
+        for (size_t k = 0; k < rockets_.size(); ++k) {
+            while (j < projectiles_.size() && projectiles_[j].serial < rockets_[k].serial) ++j;
+            if (j < projectiles_.size() && projectiles_[j].serial == rockets_[k].serial) {
+                if (rw != k) rockets_[rw] = std::move(rockets_[k]);
+                ++rw;
+            }
+        }
+        rockets_.resize(rw);
+    }
 }
 
 // ================================================================================================
@@ -2668,6 +2860,12 @@ bool CombatSystem::launch_projectile(const ProjectileLaunch& l, uint32_t frame) 
         p.speed = 0.0f;
         p.max_travel = 0.0f;
         p.fuse = l.fuse_seconds;
+    } else if (spline_rocket(pd)) {
+        // refixf t01: a host-launched spline rocket flies the §2.4.10 path to `aim`; its travel limit is Spawn_Projectile's
+        // (MFD with no override + the target radius + |aim z - launch z|) [M], since the path is longer than the line.
+        p.rocket = 1;
+        if (pd.max_flight_distance > 0.0f) p.max_travel = pd.max_flight_distance + radius + abs_f(aim.z - l.from.z);
+        add_rocket(p, aim, l.from);
     }
     projectiles_.push_back(p);
     ++stats_.shots;
@@ -3269,6 +3467,31 @@ void CombatSystem::hash_extended(StateHasher& h) const {
             h.f32(p.floor_z);
         }
         if (p.fuse >= 0.0f) h.f32(p.fuse);  // OI abilities: armed bombs only
+        if (p.rocket) {  // refixf t01: spline-rocket state (absent for other projectiles: format unchanged)
+            h.u8(0x52);
+            const Rocket* rk = find_rocket(p.serial);
+            if (!rk) continue;
+            h.u8(rk->planned);
+            h.f32(rk->s);
+            h.f32(rk->budget);
+            for (const Vec3& v : {rk->fire_at, rk->launch, rk->last_vel}) {
+                h.f32(v.x);
+                h.f32(v.y);
+                h.f32(v.z);
+            }
+            h.u32(static_cast<uint32_t>(rk->path.count()));
+            for (const Vec3& v : rk->path.points()) {
+                h.f32(v.x);
+                h.f32(v.y);
+                h.f32(v.z);
+            }
+            h.u32(static_cast<uint32_t>(rk->path.segments().size()));
+            for (const RocketSpline::Segment& sg : rk->path.segments()) {
+                for (const float c : sg.k) h.f32(c);
+                h.f32(sg.length);
+            }
+            h.f32(rk->path.total());
+        }
     }
     // OI abilities: base-power entries, hardpoint repair lists (insertion order).
     h.u32(static_cast<uint32_t>(base_power_.size()));

@@ -14,12 +14,15 @@
 //         were taken at, the own / squad Mod_Multiplier products, the per-tick scratch bytes - restored verbatim, so
 //         reads before the next phase A see the saved values)
 //   u32 + flat hardpoint table (each unit's [hp_begin, hp_begin + hp_count) range is validated)
-//   u32 + projectiles (dead-not-flushed ones too), u32 + delayed damage queue
+//   u32 + projectiles (dead-not-flushed ones too), u32 + spline-rocket states (refixf t01, serial order: one per
+//         projectile with the rocket flag; flags, s, budget, FireAtPosition, launch point, last velocity, the spline's
+//         control points, segments (12 coefficients + length) and total), u32 + delayed damage queue
 //   u32 + base-power entries, u32 + hardpoint repairers, u32 + team heads (phase A output read by const queries)
 //   this tick's outputs: deaths, hardpoint events, smoke, damage, hit, shot, survivor events
 //   6 x u64 stats
 // Rebuilt on read, not saved: per-unit candidate lists and sweep results (phase C / E scratch, written before read),
-// emitter / leader / effect scratch, query contexts, the diminishing-firepower spline (from the config).
+// emitter / leader / effect scratch, query contexts, the diminishing-firepower spline (from the config), the rocket
+// splines' polyline tables (plan-time scratch) and the rocket terrain (host-attached).
 //
 // WeatherSystem layout (version kWeatherSaveVersion): bool active; u32 scenario index in the WeatherData (0xFFFFFFFF
 // when not found) + str scenario name (active only); every state field; u32 + events.
@@ -40,7 +43,7 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 2;  // 2: refix t02 INFECTION state, refix t03 death clone key
+constexpr uint32_t kCombatSaveVersion = 3;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -154,7 +157,22 @@ void CombatSystem::write(ByteWriter& w) const {
         put_vec3(w, p.pos);
         put_vec3(w, p.dir);
         w.f32(p.speed).f32(p.travelled).f32(p.max_travel).u32(p.spawn_frame).f32(p.damage).u16(p.damage_type).u8(p.kind);
-        w.u8(p.alive).u32(p.jammed_frame).u8(p.ever_jammed).f32(p.gravity).f32(p.floor_z).f32(p.fuse);
+        w.u8(p.alive).u32(p.jammed_frame).u8(p.ever_jammed).f32(p.gravity).f32(p.floor_z).f32(p.fuse).u8(p.rocket);
+    }
+    w.u32(static_cast<uint32_t>(rockets_.size()));
+    for (const Rocket& rk : rockets_) {
+        w.u32(rk.serial).u8(rk.planned).f32(rk.s).f32(rk.budget);
+        put_vec3(w, rk.fire_at);
+        put_vec3(w, rk.launch);
+        put_vec3(w, rk.last_vel);
+        w.u32(static_cast<uint32_t>(rk.path.count()));
+        for (const Vec3& v : rk.path.points()) put_vec3(w, v);
+        w.u32(static_cast<uint32_t>(rk.path.segments().size()));
+        for (const RocketSpline::Segment& sg : rk.path.segments()) {
+            for (const float c : sg.k) w.f32(c);
+            w.f32(sg.length);
+        }
+        w.f32(rk.path.total());
     }
 
     w.u32(static_cast<uint32_t>(delayed_.size()));
@@ -371,7 +389,42 @@ bool CombatSystem::read(ByteReader& r) {
         p.gravity = r.f32();
         p.floor_z = r.f32();
         p.fuse = r.f32();
-        if (!r.ok() || p.desc >= proj_descs) return false;
+        p.rocket = r.u8();
+        if (!r.ok() || p.desc >= proj_descs || p.rocket > 1) return false;
+    }
+    // refixf t01: rocket states, exactly one per rocket-flagged projectile, in the same (serial) order.
+    if (!get_count(r, n, 61)) return false;
+    std::vector<Rocket> rockets(n);
+    {
+        size_t j = 0;
+        for (Rocket& rk : rockets) {
+            rk.serial = r.u32();
+            rk.planned = r.u8();
+            rk.s = r.f32();
+            rk.budget = r.f32();
+            rk.fire_at = get_vec3(r);
+            rk.launch = get_vec3(r);
+            rk.last_vel = get_vec3(r);
+            uint32_t npts = 0;
+            if (!get_count(r, npts, 12)) return false;
+            std::vector<Vec3> pts(npts);
+            for (Vec3& v : pts) v = get_vec3(r);
+            uint32_t ns = 0;
+            if (!get_count(r, ns, 52)) return false;
+            std::vector<RocketSpline::Segment> segs(ns);
+            for (RocketSpline::Segment& sg : segs) {
+                for (float& c : sg.k) c = r.f32();
+                sg.length = r.f32();
+            }
+            const float total = r.f32();
+            if (!r.ok() || rk.planned > 1) return false;
+            rk.path.restore(std::move(pts), std::move(segs), total);
+            while (j < projectiles.size() && !projectiles[j].rocket) ++j;
+            if (j >= projectiles.size() || projectiles[j].serial != rk.serial) return false;
+            ++j;
+        }
+        while (j < projectiles.size() && !projectiles[j].rocket) ++j;
+        if (j != projectiles.size()) return false;  // a rocket-flagged projectile without a state
     }
 
     if (!get_count(r, n, 28)) return false;
@@ -514,6 +567,7 @@ bool CombatSystem::read(ByteReader& r) {
     units_ = std::move(units);
     hps_ = std::move(hps);
     projectiles_ = std::move(projectiles);
+    rockets_ = std::move(rockets);
     delayed_ = std::move(delayed);
     base_power_ = std::move(base_power);
     repairs_ = std::move(repairs);
