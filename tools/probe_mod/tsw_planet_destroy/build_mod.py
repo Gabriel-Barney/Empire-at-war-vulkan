@@ -104,6 +104,72 @@ CAMPAIGN = r'''<?xml version="1.0"?>
 		<Starting_Forces> Rebel, @@TARGET@@, Rebel_Infantry_Squad </Starting_Forces>
 		<Starting_Forces> Rebel, @@SPARE@@, R_Ground_Barracks </Starting_Forces>
 	</Campaign>
+
+	<!-- L1 systems t06, run LOST: the Death Star with one light escort against a strong defender. Keep the escort out
+	     of range, Fire by hand, then send the escort in: the Empire loses the battle after the planet kill (Retreat is
+	     greyed out after a kill, so a retreat cannot lose it). Question: owner / starbase of Kuat afterwards, and
+	     whether the Death Star alone keeps the battle open (does it count as a living attacker unit?). -->
+	<Campaign Name="TSWP_Probe_Lost_Empire">
+		<Campaign_Set> TSWP_Probe_Lost_Set </Campaign_Set>
+		<Sort_Order>1</Sort_Order>
+		<Text_ID> TEXT_TSWP_PROBE_LOST_NAME </Text_ID>
+		<Description_Text> TEXT_TSWP_PROBE_LOST_DESC </Description_Text>
+		<Camera_Shift_X> 0.0 </Camera_Shift_X>
+		<Camera_Shift_Y> 0.0 </Camera_Shift_Y>
+		<Camera_Distance> 1200.0 </Camera_Distance>
+
+		<Locations>
+				Galaxy_Core_Art_Model,
+				@@SOURCE@@,
+				@@TARGET@@,
+				@@SPARE@@
+		</Locations>
+
+		<Trade_Routes>
+				@@ROUTE@@
+		</Trade_Routes>
+
+		<Home_Location> Empire, @@SOURCE@@ </Home_Location>
+		<Home_Location> Rebel, @@TARGET@@ </Home_Location>
+
+		<Starting_Active_Player> Empire </Starting_Active_Player>
+		<Empire_Story_Name>TSWP_Story_Plots.xml</Empire_Story_Name>
+
+		<AI_Player_Control> Rebel, None </AI_Player_Control>
+		<AI_Player_Control> Pirates, None </AI_Player_Control>
+		<AI_Player_Control> Underworld, None </AI_Player_Control>
+
+		<Human_Victory_Conditions>
+				Galactic_All_Planets_Controlled
+		</Human_Victory_Conditions>
+		<AI_Victory_Conditions>
+				Galactic_All_Planets_Controlled
+		</AI_Victory_Conditions>
+
+		<Markup_Filename>Empire, DefaultGalacticHints </Markup_Filename>
+		<Markup_Filename>Rebel, DefaultGalacticHints </Markup_Filename>
+
+		<Supports_Custom_Settings>False</Supports_Custom_Settings>
+		<Show_Completed_Tab>False</Show_Completed_Tab>
+
+		<Starting_Credits> Empire, 0 </Starting_Credits>
+		<Starting_Tech_Level> Empire, 5 </Starting_Tech_Level>
+		<Max_Tech_Level> Empire, 5 </Max_Tech_Level>
+		<Starting_Forces> Empire, @@SOURCE@@, Empire_Star_Base_1 </Starting_Forces>
+		<Starting_Forces> Empire, @@SOURCE@@, Death_Star_II </Starting_Forces>
+		<Starting_Forces> Empire, @@SOURCE@@, Tartan_Patrol_Cruiser </Starting_Forces>
+
+		<Starting_Credits> Rebel, 0 </Starting_Credits>
+		<Starting_Tech_Level> Rebel, 3 </Starting_Tech_Level>
+		<Max_Tech_Level> Rebel, 3 </Max_Tech_Level>
+		<Starting_Forces> Rebel, @@TARGET@@, Rebel_Star_Base_3 </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, Calamari_Cruiser </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, Nebulon_B_Frigate </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, Nebulon_B_Frigate </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, R_Ground_Barracks </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, Rebel_Infantry_Squad </Starting_Forces>
+		<Starting_Forces> Rebel, @@SPARE@@, R_Ground_Barracks </Starting_Forces>
+	</Campaign>
 </Campaigns>
 '''
 
@@ -140,6 +206,9 @@ TEXTS = [
     ('TEXT_TSWP_PROBE_NAME', 'TSWP PROBE: KUAT'),
     ('TEXT_TSWP_PROBE_DESC', 'TSW planet-destroy probe. Play the EMPIRE. Move the Death Star fleet from Byss to Kuat '
                              'and fight the space battle; the Death Star fires by itself.'),
+    ('TEXT_TSWP_PROBE_LOST_NAME', 'TSWP PROBE: KUAT LOST'),
+    ('TEXT_TSWP_PROBE_LOST_DESC', 'TSW lost-battle probe. Play the EMPIRE. Move the Death Star and its one patrol cruiser '
+                                  'from Byss to Kuat; keep the cruiser away, Fire by hand, then let the defenders kill it.'),
     ('TEXT_TSWP_STORY_RUNNING', 'TSWP PROBE: galactic plot loaded'),
     ('TEXT_TSWP_STORY_LUA', 'TSWP PROBE: galactic story Lua running'),
     ('TEXT_TSWP_HOOK_ALIVE', 'TSWP PROBE: GameScoring hook running in this space battle'),

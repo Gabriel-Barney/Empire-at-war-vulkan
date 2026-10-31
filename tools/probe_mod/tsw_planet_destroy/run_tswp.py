@@ -31,7 +31,9 @@ STEPS = r'''
  Wait for "TSWP PROBE: galactic plot loaded". Select the fleet at Byss (Death Star + 3 Star Destroyers), move it to
  Kuat, fight the space battle (no auto-resolve). The hook fires the Death Star by itself.
  Run W (won): give no orders until the battle ends (attack the station with the Star Destroyers if it drags on).
- Run L (lost): right after the "TSWP ... fired" box, press Retreat.
+ Run L (retreat): right after the "TSWP ... fired" box, press Retreat (greyed out after the kill in retail).
+ Run LOST (campaign "TSWP PROBE: KUAT LOST", Death Star + 1 Tartan): keep the Tartan out of range, Fire by hand,
+ then send the Tartan into the Rebel fleet so the Empire loses after the kill.
  The probe records go to out\<run>\reader.log (retail shows no message boxes); screenshot the galaxy map after each battle.
 ==========================================================================================================
 '''
