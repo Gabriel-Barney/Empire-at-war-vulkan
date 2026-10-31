@@ -850,6 +850,29 @@ void test_a2gal_population() {
         CHECK(s.fleets()[fl[0]].moving && s.fleets()[fl[0]].planet == kInvalidPlanet);
         CHECK(s.population_used(pUnder, false) == 3 && s.population_capacity(pUnder) == 2);
     }
+    // refix t05: starbase_type() (0x3f8b40) is the planet's starbase object's type, kNoIndex without one; a starbase
+    // removed behind the sim's back (a direct store destroy) adds nothing and is cleared at the next update (level 0,
+    // owner none, StarbaseLevelChanged), like destroy_object.
+    CHECK(s.starbase_type(rA) == tSB1 && s.starbase_type(rC) == kNoIndex && s.starbase_type(kInvalidPlanet) == kNoIndex);
+    CHECK(s.population_capacity(pEmpire) == 14 && s.planets()[rA].starbase_level == 1);
+    s.set_emit_events(true);
+    CHECK(store.destroy(s.planets()[rA].starbase));
+    CHECK(s.starbase_type(rA) == kNoIndex && s.population_capacity(pEmpire) == 4);
+    CHECK(s.planets()[rA].starbase_level == 1 && s.planets()[rA].starbase_owner == pEmpire);  // not seen yet
+    s.update();
+    CHECK(s.planets()[rA].starbase_level == 0 && s.planets()[rA].starbase_owner == kNoPlayer && !s.planets()[rA].starbase);
+    std::vector<GalacticEvent> evs;
+    s.drain_events(evs);
+    const auto cleared = std::count_if(evs.begin(), evs.end(), [](const GalacticEvent& e) {
+        return e.kind == GalacticEventKind::StarbaseLevelChanged && e.planet == rA && e.player == pEmpire && e.value == 0;
+    });
+    CHECK(cleared == 1);
+    // Planet E's starbase is untouched; a second update clears nothing more.
+    CHECK(s.starbase_type(rE) == tSB1 && s.planets()[rE].starbase_level == 1);
+    s.update();
+    evs.clear();
+    s.drain_events(evs);
+    CHECK(std::none_of(evs.begin(), evs.end(), [](const GalacticEvent& e) { return e.kind == GalacticEventKind::StarbaseLevelChanged; }));
 }
 
 void test_a2gal_steal_order() {
@@ -873,6 +896,13 @@ void test_a2gal_steal_order() {
     const ObjectHandle at_dest = s.spawn_unit(pEmpire, rA, tFrigate);
     CHECK(s.steal_unit(pEmpire, tFrigate, rA, false) && !w.store.alive(f1) && w.store.alive(at_dest));
     CHECK(!s.steal_unit(pEmpire, tFrigate, rA, false) && s.steal_unit(pEmpire, tFrigate, rA, true));  // hero rule
+    // refix t04: the match is GalacticSim::representative_type (= the store type in the port model; a fleet object's
+    // own type, never a member's type).
+    const ObjectHandle rep = s.spawn_unit(pEmpire, rB, tFrigate);
+    CHECK(s.representative_type(rep) == static_cast<uint32_t>(tFrigate));
+    const uint32_t rf = s.fleet_containing(rep);
+    CHECK(rf != kNoFleet && s.representative_type(w.fl(rf).object) == static_cast<uint32_t>(w.store.type(w.fl(rf).object)));
+    CHECK(s.representative_type(ObjectHandle{}) == kNoIndex);
 }
 
 void test_a2gal_ai_blockade() {
@@ -1658,6 +1688,25 @@ void test_oi_victory() {
         CHECK(sx.start(make_setup({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}, {pUnder, rD, tCompany}})));
         CHECK(!sx.super_weapon_leader_hit(rD));
         CHECK(sx.super_weapon_destroy_planet(rD, pEmpire) && sx.victory_claims().empty());
+    }
+    {  // refix t06 [port]: the leader as a bare ground unit on the surface (its own one-unit transport) counts for the TSW
+        GalacticRules r = make_oi_rules();
+        r.factions[1].leader = tInfantry;
+        objects::GameObjectTypes ty;
+        objects::IdCounter id2;
+        objects::ObjectStore st{objects::ModeKind::Galactic, objects::StoreKind::Primary, ty, &id2};
+        SimRng rg{9u};
+        GalacticSim sx{r, st, rg};
+        CHECK(sx.start(make_setup({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}, {pUnder, rD, tBarracks}})));
+        CHECK(sx.planets()[rD].owner == pUnder && !sx.super_weapon_leader_hit(rD));
+        const ObjectHandle lead = sx.spawn_unit(pUnder, rD, tInfantry);
+        CHECK(static_cast<bool>(lead) && std::find(sx.planets()[rD].surface.begin(), sx.planets()[rD].surface.end(), lead) !=
+                                             sx.planets()[rD].surface.end());
+        CHECK(sx.super_weapon_leader_hit(rD) && !sx.super_weapon_leader_hit(rE));
+        bool hit = false;
+        CHECK(sx.tsw_destroy_planet(rD, pEmpire, &hit) && hit && sx.planets()[rD].destroyed);
+        CHECK(sx.victory_claims().size() == 1 && sx.victory_claims()[0].type == 7 && sx.victory_claims()[0].player == pEmpire &&
+              sx.victory_claims()[0].countdown == 30);
     }
     CHECK(victory_condition_met(s7, none, VictoryCondition::KillEnemyLeader, pEmpire));
     // 5: home planet (Primary_Enemy's Home_Planet) owned and its leader company gone.

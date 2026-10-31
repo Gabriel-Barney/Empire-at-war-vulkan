@@ -811,7 +811,7 @@ There is no hero-specific engine code in GalacticTaskForceClass. Hero plans are 
 - `Is_Unit_In_Transit` (0x68efb0): true with no parent, in a fleet not at a planet, with a hyperspace destination, or with a pending free-store move.
 - `Is_Unit_Safe` (0x6902b0): only ground units in orbiting fleets can be unsafe.
 - `Move_Object(unit, dest)` (0x68f5b0):
-  - fails while paused or a battle is pending, or when 0x3fa420 on the current planet is false ("restricted planet");
+  - fails while paused or a battle is pending, or when 0x3fa420 on the current planet is false (`Is_Planet_Revealed`: the planet is not revealed in the local reveal state; always true in multiplayer; GALACTIC_REVEAL_CORRUPTION §1.1, A2GAL_READINGS §2.3; formerly read here as "restricted planet");
   - launches landed transports;
   - **splits the unit into its own fleet**;
   - moves hop by hop with the **AI execution path finder** (PHASE2_ANSWERS §10, mode Friendly_only), executing MoveObjectToObject directly, only through hops with no other owner present.

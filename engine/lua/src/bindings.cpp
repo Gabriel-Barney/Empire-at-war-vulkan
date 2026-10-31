@@ -255,7 +255,7 @@ objects::ObjectHandle object_handle(const Ud& ud) { return objects::ObjectHandle
 bool object_alive(const LuaVm::Impl& vm, const Ud& ud) {
     const objects::ObjectStore* st = vm.host.store;
     const objects::ObjectHandle h = object_handle(ud);
-    return ud.reserved == vm.store_tag && st && h && st->alive(h) && st->id(h) == ud.id;
+    return store_tag_of(ud) == vm.store_tag && st && h && st->alive(h) && st->id(h) == ud.id;
 }
 
 namespace {
@@ -268,8 +268,8 @@ objects::ObjectStore* parent_store_of(LuaVm::Impl& vm) {
 
 // The store a game-object wrapper belongs to, from outside a binding (tostring, sweep).
 const objects::ObjectStore* wrapper_store(LuaVm::Impl& vm, const Ud& ud) {
-    if (ud.reserved == vm.store_tag) return vm.host.store;
-    return ud.reserved == kParentStoreTag ? parent_store_of(vm) : nullptr;
+    if (store_tag_of(ud) == vm.store_tag) return vm.host.store;
+    return store_tag_of(ud) == kParentStoreTag ? parent_store_of(vm) : nullptr;
 }
 
 bool alive_in(const objects::ObjectStore* st, const Ud& ud) {
@@ -311,7 +311,7 @@ struct StoreSwap {
     objects::ObjectStore* store;
     int32_t tag;
     StoreSwap(LuaVm::Impl* v, const Ud* self) : vm(v), store(v->host.store), tag(v->store_tag) {
-        if (self && self->cls == cls_game_object() && self->reserved == kParentStoreTag && v->store_tag != kParentStoreTag) {
+        if (self && self->cls == cls_game_object() && store_tag_of(*self) == kParentStoreTag && v->store_tag != kParentStoreTag) {
             v->host.store = parent_store_of(*v);
             v->store_tag = kParentStoreTag;
         }
@@ -420,7 +420,8 @@ int mt_tostring(lua_State* L) {
         const bool alive = alive_in(st, *ud);
         std::string_view type_name = "?";
         if (alive && types) {
-            const objects::TypeIndex t = st->type(object_handle(*ud));
+            const uint32_t mt = member_view_type(*vm, *ud);  // refix t04: a member view prints its member type
+            const objects::TypeIndex t = mt != objects::kNone ? mt : st->type(object_handle(*ud));
             if (t < types->raw().type_count()) type_name = types->raw().types().name[t];
         }
         std::snprintf(buf, sizeof buf, "GameObject %.*s (id %d)%s", static_cast<int>(type_name.size()),
@@ -573,6 +574,37 @@ void push_parent_object(lua_State* L, LuaVm::Impl& vm, objects::ObjectHandle h) 
     push_cached(L, kObjCacheParentKey, static_cast<lua_Number>(ud.id), ud);
 }
 objects::ObjectStore* parent_store(LuaVm::Impl& vm) { return parent_store_of(vm); }
+
+// refix t04: company member views (vm_internal.hpp).
+lua_Number object_cache_key(const Ud& ud) {
+    if (!is_member_view(ud)) return static_cast<lua_Number>(ud.id);
+    return -(static_cast<lua_Number>(ud.id) * static_cast<lua_Number>(kMaxMemberViews) + static_cast<lua_Number>(member_index(ud)) + 1.0);
+}
+
+void push_member_view(lua_State* L, LuaVm::Impl& vm, objects::ObjectHandle h, uint32_t index) {
+    const objects::ObjectStore* st = vm.host.store;
+    if (!st || !h || !st->exists(h) || index >= kMaxMemberViews) {
+        lua_pushnil(L);
+        return;
+    }
+    Ud ud;
+    ud.cls = cls_game_object();
+    ud.value = h.value;
+    ud.id = st->id(h);
+    ud.reserved = vm.store_tag | kMemberViewFlag | static_cast<int32_t>(index << 16);
+    push_cached(L, vm.store_tag == kParentStoreTag ? kObjCacheParentKey : kObjCacheKey, object_cache_key(ud), ud);
+}
+
+uint32_t member_view_type(const LuaVm::Impl& vm, const Ud& ud) {
+    if (ud.cls != cls_game_object() || !is_member_view(ud) || store_tag_of(ud) != vm.store_tag) return objects::kNone;
+    const objects::ObjectStore* st = vm.host.store;
+    const objects::GameObjectTypes* types = vm.host.types;
+    const objects::ObjectHandle h = object_handle(ud);
+    if (!st || !types || !st->exists(h)) return objects::kNone;
+    const std::vector<objects::TypeIndex> members = types->get_type_refs(st->type(h), "Company_Units");
+    const uint32_t i = member_index(ud);
+    return i < members.size() ? members[i] : objects::kNone;
+}
 
 void push_type(lua_State* L, LuaVm::Impl& vm, uint32_t type_index) {
     if (!vm.host.types || type_index >= vm.host.types->raw().type_count()) {

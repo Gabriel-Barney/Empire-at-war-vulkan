@@ -1132,15 +1132,16 @@ int m_is_in_nebula(Call& c) { return m_is_in_field(c, kFieldNebula); }
 // nothing.
 int m_release(Call& c) {
     lua_State* L = c.L;
-    lua_pushstring(L, c.self->reserved == detail::kParentStoreTag ? "alamo.objcache.parent" : "alamo.objcache");
+    lua_pushstring(L, detail::store_tag_of(*c.self) == detail::kParentStoreTag ? "alamo.objcache.parent" : "alamo.objcache");
     lua_rawget(L, LUA_REGISTRYINDEX);
     if (lua_type(L, -1) == LUA_TTABLE) {
-        lua_pushnumber(L, static_cast<lua_Number>(c.self->id));
+        const lua_Number key = detail::object_cache_key(*c.self);  // refix t04: member views have their own key
+        lua_pushnumber(L, key);
         lua_rawget(L, -2);
         const bool same = lua_touserdata(L, -1) == static_cast<const void*>(c.self);
         lua_pop(L, 1);
         if (same) {
-            lua_pushnumber(L, static_cast<lua_Number>(c.self->id));
+            lua_pushnumber(L, key);
             lua_pushnil(L);
             lua_rawset(L, -3);
         }

@@ -1320,10 +1320,11 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             // P4 ai: GalacticTaskForce vf39 0x6cd180 -> 0x3a00b0 per member (P4_SIM_SYSTEMS Â§1.7 / Â§6.1): every member in
             // orbit (in a fleet that is not moving; landed units do not fire) tries its Ground_Activated abilities at its
             // fleet's planet, task-force order. The applies run inside GalacticSim (AI picks on the synced RNG).
-            // L1P4_LUA_GAPS 1.2: with a type argument, only the members of that type (tf_activate_ability).
+            // L1P4_LUA_GAPS 1.2: with a type argument, only the members whose representative type (squadron / company
+            // type, GalacticSim::representative_type) is that type (tf_activate_ability).
             std::vector<std::pair<ObjectHandle, PlanetIndex>> at;
             for (const ObjectHandle u : t.units) {
-                if (activate_filter != gal::kNoIndex && static_cast<uint32_t>(store.type(u)) != activate_filter) continue;
+                if (activate_filter != gal::kNoIndex && sim.representative_type(u) != activate_filter) continue;
                 const uint32_t f = fleet_of_unit(u);
                 if (f != gal::kNoFleet && !sim.fleets()[f].moving) at.emplace_back(u, sim.fleets()[f].planet);
             }

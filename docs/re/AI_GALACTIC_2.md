@@ -339,7 +339,7 @@ Called from 0x6bfcf0 after each solver commit. Inputs: the selection with free-s
   - The initial queue time comes from the planet's AIPlanetBuildQueue 0x53bb20(…, 1, 0) (§2.3).
 - For each selected unit, in selection order:
   - **Structure or generic type** (0x5C/0x5B/0x5F/0x60): source = target planet; structureSum += btime(T, target). If the first planet of the list is the target, its queue time also grows.
-  - **Other types:** over the pool's planets in list order, a planet is eligible if 0x3fa420 (surface usable) and 0x2804d0(player, T, planet) (can build T there). Then:
+  - **Other types:** over the pool's planets in list order, a planet is eligible if 0x3fa420 (`Is_Planet_Revealed`: the local reveal state, always true in multiplayer; GALACTIC_REVEAL_CORRUPTION §1.1, A2GAL_READINGS §2.3; formerly misread here as "surface usable") and 0x2804d0(player, T, planet) (can build T there). Then:
     - c = queueTime + |pos(target) − pos(planet)| / (speed × factionSpeed (faction +0x3B0) × FPS), where speed = type +0x648 (first variant's for behaviour 0x5D), and the travel term is added only if speed > 0;
     - c ×= 1 + (planetBaseLevel − requiredLevel) × K, using starbase level 0x3f8b30 − type +0xF10 when +0xF0C == 0, else ground base level 0x3f8aa0 − +0xF0C, with K = 0x140b16c8c;
     - choose the strict minimum (first wins ties); mark it used; its queue time += btime(T, planet); record the planet in PP+0x180.

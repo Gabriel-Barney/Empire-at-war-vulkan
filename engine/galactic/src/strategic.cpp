@@ -54,6 +54,11 @@ uint32_t GalacticSim::travel_type(ObjectHandle unit) const {
     return t;
 }
 
+uint32_t GalacticSim::representative_type(ObjectHandle object) const {
+    // Port model (campaign.hpp): squadron / company objects carry the squadron / company type, a fleet object its own.
+    return store_->exists(object) ? static_cast<uint32_t>(store_->type(object)) : kNoIndex;
+}
+
 bool GalacticSim::is_company_transport(ObjectHandle unit) const {
     if (!store_->exists(unit)) return false;
     const uint32_t t = static_cast<uint32_t>(store_->type(unit));
@@ -465,6 +470,12 @@ bool GalacticSim::resolve_battle_super_weapon(PlanetIndex planet, int32_t winner
 bool GalacticSim::super_weapon_leader_hit(PlanetIndex planet) const {
     // TSW_PLANET_DESTROY §6 steps 2-4: victim = D +0x6c (the owner); its Faction_Leader among the team members
     // (0x397bf0, object +0xc8 = Company_Units here) of an object in D +0xe0 (the surface list). Members only.
+    // refix t06 [port]: a bare ground unit on the surface (a type without Company_Units) stands for a one-unit transport
+    // whose cargo is itself (as the auto-resolve cargo model, conflicts.cpp), so its own type is its member list. A
+    // company object's own type is still not compared (the original compares members only).
+    // [M] kept: members one level deep (no nested teams); orbit fleets do not count; exact type match only (a variant
+    // such as Tyber_Zann_Passenger in Tyber_Zann_Team_No_Peacebringer is not the leader Tyber_Zann); the condition's
+    // optional leader-name list (§6 step 3) is not modelled.
     if (!valid_planet(planet)) return false;
     const int32_t victim = planets_[planet].owner;
     if (!valid_player(victim)) return false;
@@ -473,7 +484,9 @@ bool GalacticSim::super_weapon_leader_hit(PlanetIndex planet) const {
     for (ObjectHandle u : planets_[planet].surface) {
         if (!store_->alive(u)) continue;
         const uint32_t t = static_cast<uint32_t>(store_->type(u));
-        if (t < rules_->types.size() && contains(rules_->types[t].company_units, leader)) return true;
+        if (t >= rules_->types.size()) continue;
+        const std::vector<uint32_t>& members = rules_->types[t].company_units;
+        if (members.empty() ? t == leader : contains(members, leader)) return true;
     }
     return false;
 }

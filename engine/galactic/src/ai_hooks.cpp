@@ -102,7 +102,7 @@ bool GalacticSim::steal_unit(int32_t player, uint32_t type, PlanetIndex destinat
     const std::span<const ObjectHandle> owned = store_->owned_by(player);
     for (size_t k = owned.size(); k-- > 0;) {
         const ObjectHandle h = owned[k];
-        if (!store_->alive(h) || store_->owner(h) != player || static_cast<uint32_t>(store_->type(h)) != type) continue;
+        if (!store_->alive(h) || store_->owner(h) != player || representative_type(h) != type) continue;
         if (fleet_of(h) != kNoFleet || planet_of(h) != kInvalidPlanet) continue;
         // A unit of a fleet in hyperspace has no planet: always stealable (location_of = kInvalidPlanet in transit).
         const uint32_t holder = fleet_containing(h);
@@ -198,13 +198,13 @@ bool GalacticSim::population_skips(int32_t player, PlanetIndex at) const {
 int32_t GalacticSim::population_capacity(int32_t player) const {
     if (!valid_player(player)) return 0;
     int32_t cap = faction_of(player).base_population_capacity;
-    // Owned planets: the planet type's capacity, plus its current starbase type's (once per planet, whoever owns the
-    // starbase, whatever its level) [H].
+    // Owned planets: the planet type's capacity, plus its current starbase type's (0x3f8b40 = starbase_type(): once per
+    // planet, whoever owns the starbase, whatever its level) [H].
     for (PlanetIndex i = 0; i < planets_.size(); ++i) {
         const PlanetState& p = planets_[i];
         if (!p.is_planet || p.owner != player || population_skips(player, i)) continue;
         cap += rules_->types[p.type].population_capacity;
-        if (store_->alive(p.starbase)) cap += rules_->types[static_cast<size_t>(store_->type(p.starbase))].population_capacity;
+        if (const uint32_t sb = starbase_type(i); sb != kNoIndex) cap += rules_->types[sb].population_capacity;
     }
     for_each_owned_object(planets_, fleets_, *store_, player, [&](ObjectHandle h, PlanetIndex at) {
         if (!population_skips(player, at)) cap += rules_->types[static_cast<size_t>(store_->type(h))].population_capacity;

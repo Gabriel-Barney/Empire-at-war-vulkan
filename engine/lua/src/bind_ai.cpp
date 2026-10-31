@@ -245,11 +245,12 @@ int m_tf_force_test_space_conflict(Call& c) {
 // resolves an AI target / task force target argument), then the host's status. GalacticTaskForceClass (0x6cd180,
 // P4_SIM_SYSTEMS 6.1, L1P4_LUA_GAPS 1): only the host, which fires the Ground_Activated trigger per member (the trigger
 // tries every Ground_Activated ability; shipped galactic plans pass no argument); the optional argument is an object
-// type (galactic_ability_type_arg) whose name the host gets as `ability`. Other task forces: the host gets the name,
-// the on flag and the target (AiScriptHost::tf_activate_ability).
+// type (galactic_ability_type_arg) whose name the host gets as `ability`; like Activate_Ability_Galactic it returns no
+// values (refix t04, L1P4_LUA_GAPS 1.2 item 4: the host's status id is dropped). Other task forces: the host gets the
+// name, the on flag and the target (AiScriptHost::tf_activate_ability).
 int m_tf_activate_ability(Call& c) {
     AiScriptHost* h = host_of(c.L);
-    if (!h) return push_nil(c);
+    if (!h) return c.self->cls == cls_tf(AiTaskForceKind::Galactic) ? 0 : push_nil(c);
     const bool named = c.is_string(1);
     const std::string name = named ? std::string(c.string(1)) : std::string();
     const int ti = named ? 2 : 1;
@@ -264,7 +265,8 @@ int m_tf_activate_ability(Call& c) {
         const objects::GameObjectTypes* types = c.vm->host.types;
         const std::string type_name =
             filter != objects::kNone && types && filter < types->raw().type_count() ? std::string(types->raw().types().name[filter]) : std::string();
-        return push_status(c, h->tf_activate_ability(c.self->id, type_name, on, AiArg{}));
+        h->tf_activate_ability(c.self->id, type_name, on, AiArg{});
+        return 0;
     }
     for (const objects::ObjectHandle u : h->tf_units(c.self->id)) detail::call_object_method(c, u, "Activate_Ability", c.first, c.nargs);
     return push_status(c, h->tf_activate_ability(c.self->id, name, on, target));

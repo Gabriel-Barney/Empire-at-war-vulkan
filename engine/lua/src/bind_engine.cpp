@@ -1,7 +1,9 @@
 // The implemented bindings (L1 stage 1). Everything else in the RE table is an "unbound" stub.
 // Contracts and messages follow docs/re/LUA_API.md ("Binding map": the original's own
 // argument-validation strings). Implementations follow the error discipline of vm_internal.hpp.
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
@@ -66,6 +68,12 @@ int g_find_all_objects_of_type(Call& c) {
     lua_newtable(c.L);
     const objects::ObjectStore* st = c.vm->host.store;
     if (!st) return 1;
+    // refix t04 (L1P4_LUA_GAPS 1.3): in the galactic store a company object also stands for its Company_Units members
+    // (the original's cargo objects): a member type in the filter gives one member view per matching entry, entry order,
+    // right after the company's place in the walk [port order: the original's cargo objects have their own creation
+    // order].
+    const objects::GameObjectTypes* types = c.vm->host.types;
+    const bool members = have_type_filter && types && st->mode() == objects::ModeKind::Galactic;
     int n = 0;
     for (const objects::ObjectHandle h : st->objects_newest_first()) {
         if (!st->alive(h)) continue;
@@ -73,7 +81,17 @@ int g_find_all_objects_of_type(Call& c) {
         if (have_type_filter) {
             bool match = false;
             for (const objects::TypeIndex t : type_filter) match = match || (t == st->type(h));
-            if (!match) continue;
+            if (!match) {
+                if (!members) continue;
+                const std::vector<objects::TypeIndex> refs = types->get_type_refs(st->type(h), "Company_Units");
+                for (uint32_t i = 0; i < refs.size(); ++i) {
+                    if (refs[i] == objects::kNone || std::find(type_filter.begin(), type_filter.end(), refs[i]) == type_filter.end())
+                        continue;
+                    detail::push_member_view(c.L, *c.vm, h, i);
+                    lua_rawseti(c.L, -2, ++n);
+                }
+                continue;
+            }
         }
         detail::push_object(c.L, *c.vm, h);
         lua_rawseti(c.L, -2, ++n);
@@ -91,7 +109,9 @@ int m_object_get_id(Call& c) {
 }
 
 int m_object_get_type(Call& c) {
-    detail::push_type(c.L, *c.vm, c.vm->host.store->type(self_object(c)));
+    // refix t04: a company member view's type is its Company_Units entry (vm_internal.hpp).
+    const uint32_t member = detail::member_view_type(*c.vm, *c.self);
+    detail::push_type(c.L, *c.vm, member != objects::kNone ? member : c.vm->host.store->type(self_object(c)));
     return 1;
 }
 

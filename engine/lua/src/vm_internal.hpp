@@ -231,6 +231,26 @@ bool black_market_allows(Call& c, int32_t player, std::string_view ability_name,
 // mode's store (L1/S4 wave 2b, Get_Parent_Mode_Object).
 inline constexpr int32_t kParentStoreTag = 1;
 
+// refix t04 (L1P4_LUA_GAPS 1.3): company member views. The original's galactic company is a transport object carrying
+// one object per Company_Units entry; the port's is ONE object of the company type (campaign.hpp "Company transports").
+// A member view is a GameObjectWrapper of that company object standing for its Company_Units entry `index`: Ud::reserved
+// = store tag (low byte) | kMemberViewFlag | index << 16. Galactic Find_All_Objects_Of_Type / Find_First_Object return
+// views for member type names; Get_Type gives the member type, Get_Parent_Object the company's plain wrapper (the
+// original's transport), the galactic Activate_Ability does nothing (a unit inside a transport). Every other method acts
+// on the company object [port]. Views are cached in the object cache under object_cache_key (negative keys).
+inline constexpr int32_t kStoreTagMask = 0xff;
+inline constexpr int32_t kMemberViewFlag = 0x100;
+inline constexpr uint32_t kMaxMemberViews = 256;  // Company_Units entries past this get no view
+inline int32_t store_tag_of(const Ud& ud) { return ud.reserved & kStoreTagMask; }
+inline bool is_member_view(const Ud& ud) { return (ud.reserved & kMemberViewFlag) != 0; }
+inline uint32_t member_index(const Ud& ud) { return static_cast<uint32_t>(ud.reserved) >> 16; }
+// The object-cache key of a GameObjectWrapper: its id, or -(id * 256 + index + 1) for a member view.
+lua_Number object_cache_key(const Ud& ud);
+// Pushes the cached member view of company object `h`, Company_Units entry `index` (nil for a missing object).
+void push_member_view(lua_State* L, LuaVm::Impl& vm, objects::ObjectHandle h, uint32_t index);
+// A member view's member type (the company type's Company_Units[index]); objects::kNone for a plain wrapper.
+uint32_t member_view_type(const LuaVm::Impl& vm, const Ud& ud);
+
 void install_metatable(lua_State* L, LuaVm::Impl& vm);  // also sets global LuaWrapperMetaTable
 void push_engine_userdata(lua_State* L, const Ud& ud);   // new userdata with the shared metatable
 void install_globals(lua_State* L, LuaVm::Impl& vm);
