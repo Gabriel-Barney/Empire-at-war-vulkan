@@ -182,11 +182,12 @@ enum class StoryHostEvent : uint8_t { TacticalStarted = 0, TacticalEnded = 1 };
 //   MovieDone        STORY_MOVIE_DONE       (MovieDone class; generic rule, Param1 = movie name)
 //   Generic          STORY_GENERIC
 //   MissionLost      STORY_MISSION_LOST
-//   BuyBlackMarket   } P4 lua: ignored by notify_ui. STORY_BUY_BLACK_MARKET (name = item Name; a human buyer's
-//   GalacticSabotage } purchase) and STORY_GALACTIC_SABOTAGE (name = structure type) are routed from the galactic
-//                      stream's BlackMarketPurchase / GalacticSabotage events (player-scoped; reward sabotage: all
-//                      sets), so they replay deterministically. Story rewards GIVE_BLACK_MARKET (bm_give_item, plot
-//                      player) and SABOTAGE_STRUCTURE (sabotage_structure_reward) are applied by the host.
+//   BuyBlackMarket   STORY_BUY_BLACK_MARKET (name = item Name), raised by the host's black-market buy handler at click
+//                      time (L1P4_LUA_GAPS 2); every plot set, not only the buyer's.
+//   GalacticSabotage   ignored by notify_ui: STORY_GALACTIC_SABOTAGE (name = structure type) is routed from the
+//                      galactic stream's GalacticSabotage events to every plot set (L1P4_LUA_GAPS 2.5). Story rewards
+//                      GIVE_BLACK_MARKET (bm_give_item, plot player) and SABOTAGE_STRUCTURE (sabotage_structure_reward;
+//                      Param1 = planet type name, case-insensitive) are applied by the host.
 //   OpenCorruption   STORY_OPEN_CORRUPTION  (name = the planet's type name, or the object's)
 enum class StoryUiEvent : uint8_t {
     SelectUnit = 0, SelectPlanet, ZoomIntoPlanet, ZoomOutPlanet, ClickGui, SpeechDone, MovieDone, Generic,

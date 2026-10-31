@@ -1320,8 +1320,10 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             // P4 ai: GalacticTaskForce vf39 0x6cd180 -> 0x3a00b0 per member (P4_SIM_SYSTEMS Â§1.7 / Â§6.1): every member in
             // orbit (in a fleet that is not moving; landed units do not fire) tries its Ground_Activated abilities at its
             // fleet's planet, task-force order. The applies run inside GalacticSim (AI picks on the synced RNG).
+            // L1P4_LUA_GAPS 1.2: with a type argument, only the members of that type (tf_activate_ability).
             std::vector<std::pair<ObjectHandle, PlanetIndex>> at;
             for (const ObjectHandle u : t.units) {
+                if (activate_filter != gal::kNoIndex && static_cast<uint32_t>(store.type(u)) != activate_filter) continue;
                 const uint32_t f = fleet_of_unit(u);
                 if (f != gal::kNoFleet && !sim.fleets()[f].moving) at.emplace_back(u, sim.fleets()[f].planet);
             }
@@ -1335,6 +1337,16 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
 
 // P4 ai: GalacticSim::ground_activated_trigger (P4_SIM_SYSTEMS Â§6.1) for each (unit, planet), in the given order. A unit
 // the trigger removes (departure, vigilance, hack) is pruned from the task force by the next prune_tf.
+// L1P4_LUA_GAPS 1: GalacticTaskForce.Activate_Ability([object type]): the ActivateAbility order restricted to the members
+// of the named type (the binding validated the name; an unknown one here fires nothing).
+int32_t GalacticAiWorld::Impl::tf_activate_ability(int32_t tf, std::string_view ability, bool, const lua::AiArg& arg) {
+    activate_filter = ability.empty() ? gal::kNoIndex : sim.rules().find_type(ability);
+    if (!ability.empty() && activate_filter == gal::kNoIndex) return -1;
+    const int32_t id = tf_order(tf, lua::AiTfOrder::ActivateAbility, arg);
+    activate_filter = gal::kNoIndex;
+    return id;
+}
+
 void GalacticAiWorld::Impl::ground_trigger(TaskForceRec& t, const std::vector<std::pair<ObjectHandle, PlanetIndex>>& at) {
     for (const auto& [u, p] : at) {
         if (!store.alive(u) || !valid_planet(p)) continue;

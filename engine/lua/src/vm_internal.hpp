@@ -214,6 +214,11 @@ bool galactic_block_finished(Call& c);  // c.self = the BlockingStatus
 // when the VM's store is the galactic sim's (the trigger path ran; the caller returns a finished BlockingStatus), false
 // otherwise (the caller continues with its tactical paths).
 bool galactic_activate_ability(Call& c);
+// L1P4_LUA_GAPS 1.1: the optional argument of the galactic Activate_Ability (GameObjectWrapper and GalacticTaskForce,
+// bind_ai.cpp): 0 or 1 arguments, an object type given as a GameObjectTypeWrapper or a type name (case-insensitive).
+// `filter` = that type (objects::kNone without an argument). False after a script error (logged, no unwind): more than
+// one argument, an unknown type name, any other value (explicit nil included); the caller then fires nothing.
+bool galactic_ability_type_arg(Call& c, const char* who, uint32_t& filter);
 // GalacticSim::ground_activated_trigger(unit, planet row) for each pair still alive, in order (galactic scripts only).
 // The task-force orders (Land_Units, GalacticTaskForce Activate_Ability) fire it in the AI host (engine/ai).
 void galactic_trigger(Call& c, const std::vector<std::pair<objects::ObjectHandle, uint32_t>>& units);
