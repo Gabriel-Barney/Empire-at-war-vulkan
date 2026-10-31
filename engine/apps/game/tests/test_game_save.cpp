@@ -9,9 +9,12 @@
 //   the check with the chunk's name).
 //   N1 stage 2: a space and a land skirmish (animation on) saved DURING their battle, checked the same way (C and B).
 //   N1f: a human conflict saved while it waits for the choice (Vote) and saved with the answer sent but not yet drained; a
-//   battle accepted but not yet pushed ("battles" v2 in flight = 1); a human-fought campaign battle saved mid-battle.
+//   battle accepted but not yet pushed ("battles" v2 in flight = 1); a human-fought campaign battle saved mid-battle;
+//   t07: a human-fought campaign land battle (the human launches ground units, hops and invades) saved mid-battle;
+//   t08: the FoC story campaign (human Underworld) saved mid-battle, with a file size guard.
 // Human conflicts (ask_battle_choice) are answered 10 ticks after they are asked (Auto-Resolve, or Fight where a check asks
 // for it), in A and in the child; a question open at the save carries its ask tick over to the child.
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -80,7 +83,9 @@ struct Answerer {
     uint64_t asked = 0;
     bool seen = false;
     galactic::BattleChoice choice = galactic::BattleChoice::AutoResolve;
-    uint64_t order_at = 0;  // host frame of one order_units (0 = none)
+    galactic::BattleChoice land_choice = galactic::BattleChoice::AutoResolve;  // t07: the answer for a land conflict
+    bool land_differs = false;  // land conflicts get land_choice (else `choice` for every conflict)
+    uint64_t order_at = 0;      // host frame of one order_units (0 = none)
     void step(game::GameSession& s) {
         if (order_at != 0 && s.host().frame() == order_at) order_units(s);
         if (!s.battle_choice_pending()) {
@@ -91,7 +96,9 @@ struct Answerer {
             seen = true;
             asked = s.host().frame();
         }
-        if (s.host().frame() >= asked + 10) s.choose_battle(choice);
+        const galactic::ConflictInfo* c = s.conflict_head();
+        const bool land = land_differs && c && c->kind == galactic::ConflictKind::Land;
+        if (s.host().frame() >= asked + 10) s.choose_battle(land ? land_choice : choice);
     }
 };
 
@@ -121,7 +128,7 @@ bool load_data(const char* foc, game::GameData& data) {
 }
 
 // --child SAVE TICKS CRC_OUT ANSWERER: load SAVE through the menus' load path, run TICKS, write the CRC log. ANSWERER =
-// the saving run's answer policy at the save ("choice,seen,asked,order_at").
+// the saving run's answer policy at the save ("choice,seen,asked,order_at,land_choice,land_differs").
 int child(const char* foc, const std::string& save, uint64_t ticks, const std::string& crc_out, const Answerer& policy) {
     game::GameData data;
     if (!load_data(foc, data)) return 2;
@@ -180,6 +187,113 @@ bool order_attack(game::GameSession& s, size_t pick) {
     return false;
 }
 
+// N1f t07: a human land invasion (ordinary recorded commands). Candidate `pick` (in the order found) = a human planet
+// with own ground units on its surface and a revealed hostile neighbour defended on the ground (surface units or
+// structures). Heart of the Maw has a starbase and a fleet at every planet and one fleet loses the space conflict, so
+// start() launches the ground units into the orbit fleet and sends every other human fleet there; step() merges them
+// into the carrier once all are in, sends it to the neighbour and, once it stopped there with no hostile fleet or
+// starbase left in orbit and no conflict open (the space conflict on arrival is over), invades (a land conflict: the
+// choice is asked, Fight starts the land battle).
+struct Invasion {
+    size_t pick = static_cast<size_t>(-1);  // -1 = none
+    PlanetIndex from = kInvalidPlanet, to = kInvalidPlanet;
+    int stage = 0;  // 1 gathering, 2 merging, 3 moving, 4 invaded
+    std::vector<uint32_t> gather;  // object ids of the fleets ordered to `from`
+
+    static bool ground(const galactic::GalacticSim& g, objects::ObjectHandle u) {
+        return g.store().alive(u) && g.rules().types[g.store().type(u)].kind == galactic::UnitKind::GroundUnit;
+    }
+    static bool hostile_orbit(const galactic::GalacticSim& g, PlanetIndex p, int32_t me) {
+        for (const uint32_t fi : g.planets()[p].orbit) {
+            const galactic::FleetState& o = g.fleets()[fi];
+            if (o.alive && o.owner != me && o.owner != g.neutral_player()) return true;
+        }
+        const galactic::PlanetState& ps = g.planets()[p];
+        return g.store().alive(ps.starbase) && ps.starbase_owner != me;
+    }
+    static bool defended(const galactic::GalacticSim& g, PlanetIndex p, int32_t me) {
+        const galactic::PlanetState& ps = g.planets()[p];
+        if (ps.owner == me || ps.owner == g.neutral_player()) return false;
+        for (const objects::ObjectHandle u : ps.surface)
+            if (g.store().alive(u) && g.store().owner(u) != me) return true;
+        for (const objects::ObjectHandle u : ps.structures)
+            if (g.store().alive(u) && g.store().owner(u) != me) return true;
+        return false;
+    }
+    // False when there is no candidate `pick`.
+    bool start(game::GameSession& s) {
+        const galactic::GalacticSim* g = s.galaxy();
+        if (!g) return false;
+        const int32_t me = s.local_player();
+        size_t n = 0;
+        for (PlanetIndex p = 0; p < g->planets().size(); ++p) {
+            const galactic::PlanetState& ps = g->planets()[p];
+            std::vector<uint32_t> units;
+            for (const objects::ObjectHandle u : ps.surface)
+                if (ground(*g, u) && g->store().owner(u) == me) units.push_back(static_cast<uint32_t>(g->store().id(u)));
+            if (ps.owner != me || units.empty()) continue;
+            for (const uint32_t r : ps.links) {
+                const auto& routes = g->map().routes;
+                const PlanetIndex t = routes.point_a[r] == p ? routes.point_b[r] : routes.point_a[r];
+                if (!g->is_planet_revealed(t) || !defended(*g, t, me) || n++ != pick) continue;
+                from = p;
+                to = t;
+                std::printf("  invasion %zu: %zu ground units at planet %u -> planet %u (%s)\n", pick, units.size(), p, t,
+                            t < g->map().planets.name.size() ? g->map().planets.name[t].c_str() : "?");
+                for (const uint32_t u : units)
+                    CHECK(s.submit(galactic::fleet_management_event(galactic::kFleetLaunch, commands::kNoObject, commands::kNoObject, u)).ok());
+                for (const galactic::FleetState& f : g->fleets())
+                    if (f.alive && f.owner == me && f.planet != p) {
+                        gather.push_back(static_cast<uint32_t>(g->store().id(f.object)));
+                        CHECK(s.submit(commands::ev::move_object_to_object(gather.back(), static_cast<uint32_t>(g->store().id(ps.object)))).ok());
+                    }
+                stage = 1;
+                return true;
+            }
+        }
+        return false;
+    }
+    // The fleet of the human at `at` that carries ground units and is not moving (-1: none).
+    int64_t carrier(const galactic::GalacticSim& g, PlanetIndex at, int32_t me) const {
+        for (const uint32_t fi : g.fleets_at(at, me)) {
+            const galactic::FleetState& f = g.fleets()[fi];
+            if (f.moving) continue;
+            for (const objects::ObjectHandle m : f.contents)
+                if (ground(g, m)) return fi;
+        }
+        return -1;
+    }
+    void step(game::GameSession& s) {
+        const galactic::GalacticSim* g = s.galaxy();
+        if (!g || s.in_battle() || stage == 0 || stage == 4) return;
+        const int32_t me = s.local_player();
+        const auto id = [g](objects::ObjectHandle h) { return static_cast<uint32_t>(g->store().id(h)); };
+        const int64_t c = carrier(*g, stage == 3 ? to : from, me);
+        if (c < 0) return;
+        const galactic::FleetState& cf = g->fleets()[static_cast<size_t>(c)];
+        if (stage == 1) {  // the ordered fleets are in (or merged into the carrier on arrival): merge the rest
+            for (const galactic::FleetState& f : g->fleets())
+                if (f.alive && std::find(gather.begin(), gather.end(), id(f.object)) != gather.end() && (f.planet != from || f.moving)) return;
+            for (const uint32_t fi : g->fleets_at(from, me))
+                if (fi != static_cast<uint32_t>(c))
+                    CHECK(s.submit(galactic::fleet_management_event(galactic::kFleetMerge, id(cf.object), id(g->fleets()[fi].object), commands::kNoObject)).ok());
+            stage = 2;
+        } else if (stage == 2 && g->fleets_at(from, me).size() == 1) {
+            std::printf("  invasion %zu: %zu units leave planet %u at tick %" PRIu64 "\n", pick, cf.contents.size(), from, s.host().frame());
+            CHECK(s.submit(commands::ev::move_object_to_object(id(cf.object), id(g->planets()[to].object))).ok());
+            stage = 3;
+        } else if (stage == 3 && !hostile_orbit(*g, to, me) && s.conflict_head() == nullptr) {
+            commands::EventData ev(commands::EventType::Invade);
+            ev.set("planet", id(g->planets()[to].object));
+            CHECK(s.submit(std::move(ev)).ok());
+            stage = 4;
+        }
+    }
+};
+
+// A land battle runs (TacticalBattle::ground_height: -3e38 in space).
+bool land_battle(const game::GameSession& s) { return s.in_battle() && s.battle()->ground_height(0.0f, 0.0f) > -1e30f; }
+
 struct SaveCheck {
     const char* name = "";
     std::string title;
@@ -187,7 +301,9 @@ struct SaveCheck {
     SavePoint point = SavePoint::Galactic;
     uint64_t at = 0, after = 0;
     galactic::BattleChoice choice = galactic::BattleChoice::AutoResolve;
-    size_t attack = kNoAttack;  // order_attack's pick, right after the session starts
+    size_t attack = kNoAttack;  // order_attack's pick, `attack_at` ticks after the session starts
+    uint64_t attack_at = 0;
+    size_t invade = kNoAttack;  // Invasion's pick (t07), right after the session starts; Battle then waits for a land battle
     static constexpr size_t kNoAttack = static_cast<size_t>(-1);
     bool expect_battle_after = false;  // A must be in (or past) a battle by the end of the run
     bool orders = false;               // Battle: the human orders units before and after the save
@@ -222,12 +338,28 @@ std::string save_check(const game::GameData& data, jobs::JobSystem& js, const ch
                     a.galactic_ai_running() ? "on" : "off", a.story_running() ? "on" : "off", spec.animation ? "on" : "off");
         Answerer ans;
         ans.choice = chk.choice;
-        if (chk.attack != SaveCheck::kNoAttack) CHECK(order_attack(a, chk.attack));
+        if (chk.invade != SaveCheck::kNoAttack) {  // t07: the space conflict on arrival auto-resolved, the land one fought
+            ans.choice = galactic::BattleChoice::AutoResolve;
+            ans.land_choice = chk.choice;
+            ans.land_differs = true;
+        }
+        if (chk.attack != SaveCheck::kNoAttack) {
+            run(a, ans, chk.attack_at);
+            CHECK(order_attack(a, chk.attack));
+        }
+        Invasion inv;
+        inv.pick = chk.invade;
+        if (chk.invade != SaveCheck::kNoAttack) CHECK(inv.start(a));
         if (battle) {
-            for (uint64_t i = 0; i < 6000 && !a.in_battle(); ++i) run(a, ans, 1);
+            for (uint64_t i = 0; i < 6000 && !a.in_battle(); ++i) {
+                inv.step(a);
+                run(a, ans, 1);
+            }
             CHECK(a.in_battle());
             if (!a.in_battle()) return {};
-            std::printf("%s A: battle started at tick %" PRIu64 "\n", name, a.host().frame());
+            if (chk.invade != SaveCheck::kNoAttack) CHECK(land_battle(a));
+            std::printf("%s A: %s battle started at tick %" PRIu64 "\n", name,
+                        a.battle()->ground_height(0.0f, 0.0f) > -1e30f ? "land" : "space", a.host().frame());
             if (chk.orders) order_units(a);
         }
         if (chk.point == SavePoint::Vote || chk.point == SavePoint::VoteAnswered) {
@@ -321,7 +453,8 @@ std::string save_check(const game::GameData& data, jobs::JobSystem& js, const ch
         const std::string crc_c = path_to_utf8(dir / (std::string(name) + ".child.crc"));
         std::string cmd = quote_arg(self) + " --child " + quote_arg(path) + " " + std::to_string(after) + " " + quote_arg(crc_c) + " " +
                           std::to_string(static_cast<uint32_t>(at_save.choice)) + "," + (at_save.seen ? "1," : "0,") + std::to_string(at_save.asked) + "," +
-                          std::to_string(at_save.order_at);
+                          std::to_string(at_save.order_at) + "," + std::to_string(static_cast<uint32_t>(at_save.land_choice)) +
+                          (at_save.land_differs ? ",1" : ",0");
 #ifdef _WIN32
         cmd = "\"" + cmd + "\"";  // cmd.exe /c strips one outer pair of quotes
 #endif
@@ -380,7 +513,9 @@ int main(int argc, char** argv) {
         policy.choice = static_cast<galactic::BattleChoice>(std::strtoul(p, &p, 10));
         policy.seen = std::strtoul(p + 1, &p, 10) != 0;
         policy.asked = std::strtoull(p + 1, &p, 10);
-        policy.order_at = std::strtoull(p + 1, nullptr, 10);
+        policy.order_at = std::strtoull(p + 1, &p, 10);
+        policy.land_choice = static_cast<galactic::BattleChoice>(std::strtoul(p + 1, &p, 10));
+        policy.land_differs = std::strtoul(p + 1, nullptr, 10) != 0;
         return child(foc, argv[2], std::strtoull(argv[3], nullptr, 10), argv[4], policy);
     }
     if (!foc || !*foc) {
@@ -508,6 +643,67 @@ int main(int argc, char** argv) {
     pending.at = 30;
     pending.after = 300;
     CHECK(!save_check(data, js, argv[0], dir, saves, pending).empty());
+    // t07: a human-fought campaign land battle (the human invades, answers Fight) saved mid-battle. The first invasion
+    // that reaches a land battle (the space conflict on arrival auto-resolved; picks whose fleet loses it never land).
+    size_t invade = SaveCheck::kNoAttack;
+    for (size_t pick = 0; pick < 16 && invade == SaveCheck::kNoAttack; ++pick) {
+        game::GameSession probe(data, js, fought_campaign());
+        CHECK(probe.start(nullptr, nullptr, nullptr));
+        Invasion inv;
+        inv.pick = pick;
+        if (!probe.started() || !inv.start(probe)) break;
+        Answerer ans;
+        ans.land_choice = galactic::BattleChoice::Fight;
+        ans.land_differs = true;
+        for (uint64_t i = 0; i < 6000 && !probe.in_battle(); ++i) {
+            inv.step(probe);
+            run(probe, ans, 1);
+        }
+        std::printf("  invasion %zu: stage %d, %s at tick %" PRIu64 "\n", pick, inv.stage,
+                    !probe.in_battle() ? "no battle" : land_battle(probe) ? "land battle" : "space battle", probe.host().frame());
+        if (land_battle(probe)) invade = pick;
+    }
+    std::printf("human invasion: %zu\n", invade);
+    CHECK(invade != SaveCheck::kNoAttack);
+    if (invade != SaveCheck::kNoAttack) {
+        SaveCheck land_fought;
+        land_fought.name = "Campaign land battle";
+        land_fought.spec = fought_campaign();
+        land_fought.point = SavePoint::Battle;
+        land_fought.at = 150;
+        land_fought.after = 300;
+        land_fought.choice = galactic::BattleChoice::Fight;
+        land_fought.invade = invade;
+        land_fought.orders = true;
+        CHECK(!save_check(data, js, argv[0], dir, saves, land_fought).empty());
+    }
+    // t08: the FoC story campaign (Full_Story_Campaign_Underworld as the human Underworld: story plots and their Lua VMs,
+    // the battle's tactical story VMs) saved mid-battle: the human's first attack, fought. The campaign's own story
+    // missions (LINK_TACTICAL) cannot be used: the opening Kessel land mission is queued without units and dropped by the
+    // conflict validation. Size guard: about twice the 2026-10-31 size.
+    {
+        game::SessionSpec story = fought_campaign();
+        story.campaign = "Full_Story_Campaign_Underworld";
+        story.faction = "Underworld";
+        SaveCheck c;
+        c.name = "Story battle";
+        c.spec = story;
+        c.point = SavePoint::Battle;
+        c.at = 150;
+        c.after = 300;
+        c.choice = galactic::BattleChoice::Fight;
+        c.attack = 0;
+        c.attack_at = 60;  // no idle fleet next to a revealed enemy at the start
+        c.orders = true;
+        const std::string p = save_check(data, js, argv[0], dir, saves, c);
+        CHECK(!p.empty());
+        if (!p.empty()) {
+            constexpr uintmax_t kStoryBattleMaxBytes = 300000;  // 2026-10-31: 142916 bytes at battle tick 150
+            const uintmax_t size = fs::file_size(path_from_utf8(p), ec);
+            std::printf("story battle save: %" PRIuMAX " bytes (guard %" PRIuMAX ")\n", size, kStoryBattleMaxBytes);
+            CHECK(size > 0 && size <= kStoryBattleMaxBytes);
+        }
+    }
     remove_all_long(dir, ec);
     if (g_fail) {
         std::printf("alamo_game_save_tests: %d failure(s)\n", g_fail);

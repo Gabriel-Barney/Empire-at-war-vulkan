@@ -62,6 +62,7 @@ if(TARGET alamo_lua AND TARGET alamo_lua_vm AND TARGET alamo_galactic_sim)
   add_test(NAME alamo_ai_galactic_tests COMMAND alamo_ai_galactic_tests)
   set_tests_properties(alamo_ai_galactic_tests PROPERTIES TIMEOUT 900)
   # N1 save size guard: the whole FoC story campaign save, about twice the 2026-10-30 sizes (50 KB file, 334 KB of chunks).
+  # The same guard holds late in the game (N1f t08, below); mid-battle story saves: alamo_game_save_tests "Story battle".
   # alamo_headless is configured after this folder (engine/apps), so the check is on the module list.
   set(_ai_story_guard_needs apps vfs objects commands tactical terrain)
   set(_ai_story_guard ON)
@@ -75,6 +76,12 @@ if(TARGET alamo_lua AND TARGET alamo_lua_vm AND TARGET alamo_galactic_sim)
              COMMAND ${CMAKE_COMMAND} -DHEADLESS=$<TARGET_FILE:alamo_headless> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/n1_story_size.alsv
                      -DMAX_FILE=120000 -DMAX_RAW=800000 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/story_save_size.cmake)
     set_tests_properties(alamo_ai_story_save_size PROPERTIES TIMEOUT 300 SKIP_REGULAR_EXPRESSION "SKIP: ")
+    # N1f t08: late game, 2 h of game time (2026-10-31: 53775 bytes in the file, 356692 bytes of chunks; 4 h: 57848 / 384324).
+    add_test(NAME alamo_ai_story_save_size_late
+             COMMAND ${CMAKE_COMMAND} -DHEADLESS=$<TARGET_FILE:alamo_headless> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/n1_story_size_late.alsv
+                     -DSAVE_AT=216000 -DMAX_FILE=120000 -DMAX_RAW=800000 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/story_save_size.cmake)
+    set_tests_properties(alamo_ai_story_save_size_late PROPERTIES TIMEOUT 600 SKIP_REGULAR_EXPRESSION "SKIP: ")
+    alamo_label_slow(alamo_ai_story_save_size_late)
   endif()
 endif()
 # --- end A2 ----------------------------------------------------------------------------------------------
