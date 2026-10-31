@@ -1,17 +1,19 @@
 # Project roadmap: how sessions update it
 
-The main roadmap and flowchart is `docs/ROADMAP.html` (Gabriel, 2026-10-30; made the default local roadmap 2026-10-31). It opens in
-any browser, and in the Claude desktop Browser pane, with no claude.ai sign-in: the page carries a read-only copy of the roadmap
-data inside it, between the `<!--roadmap-data:begin-->` and `<!--roadmap-data:end-->` markers.
+The main roadmap and flowchart is `ROADMAP.html` in the project root (Gabriel, 2026-10-30; confirmed 2026-10-31 as the project's
+local roadmap on this device). It opens in any browser, and in the Claude desktop Browser pane, with no claude.ai sign-in. It is
+generated, so never edit it by hand: change the documents in `roadmap-store/` and it is rebuilt, along with the copy in that
+repository that other accounts pull. `docs/ROADMAP.html` is its page shell, and it also opens on its own: it carries the same
+read-only copy of the data between the `<!--roadmap-data:begin-->` and `<!--roadmap-data:end-->` markers.
 
-One file is both the page source and the loadable page. Edit only the shell, which is everything outside the two markers (layout,
+`docs/ROADMAP.html` is both the page source and a loadable page. Edit only the shell, which is everything outside the two markers (layout,
 script, `PRESETS`). Never edit the block between the markers by hand: `roadmap_store.py` rewrites it on every `write`, build record,
 `sync` and `render`, so changes to the data go through `roadmap-store/` and the page is rebuilt from it. A shell without the
 markers still works: the generator then injects the data into the generated copies only (the old behaviour).
 
 Copies, so nobody edits the wrong one: `roadmap-store/page_shell.html` is the shell with the data block emptied, refreshed from
-`docs/ROADMAP.html` on every render (the fallback when the store is cloned alone). `ROADMAP.html` in the project root and in
-`roadmap-store/` are byte-identical single-file copies of the loaded page (handy to send or open on its own), and
+`docs/ROADMAP.html` on every render (the fallback when the store is cloned alone). `ROADMAP.html` in the project root (the main roadmap) and in
+`roadmap-store/` are byte-identical to the loaded `docs/ROADMAP.html`, and
 `roadmap-store/ROADMAP.md` is the text form. These and the data block are regenerated on every write, and a diff in them is never a
 change to review.
 
