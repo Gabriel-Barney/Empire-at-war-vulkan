@@ -76,7 +76,9 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
 - Group finished (Gabriel, 2026-10-30, required project-wide): whichever session closes a group's last `todo` task marks
   the group done in the same write: `update` `{"status":"done"}` (drop `preset`: `{"preset":{"__delete__":true}}`). Never
   leave a group open with no `todo` task. Before you end a task, re-read every group you touched (`roadmap-store/data/items/<id>.json`):
-  if all its tasks are `done` or `oos`, it must already be `done`; if it is not, fix it now.
+  if all its tasks are `done` or `oos`, it must already be `done`; if it is not, fix it now. A flowchart box's status is separate and
+  the page never derives it: when every group in a box is `done`, set the box done in the same write (`update` `nodes/<ID>`
+  `{"status":"done"}`). `PROC` was left at `partly` after `pa` and `paf` finished, which is how this rule came about (2026-10-31).
 - New group: `set` `items/<new-id>` with `title, node, status, preset, mod, order, after, tasks, updated, by`.
 - Follow-up group (Gabriel, 2026-10-29): when a group is finished and its leftovers go into a new follow-up group
   (e.g. `n1` -> `n1f`), the follow-up group always gets a `preset`: the recommended model and effort level for

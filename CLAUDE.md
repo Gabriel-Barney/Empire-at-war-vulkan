@@ -68,7 +68,8 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
    Mermaid flowchart node, record results and open items. Keep edits minimal and factual. When all tasks in a roadmap group
    are finished, mark the group `done` on the roadmap in the same update (Gabriel, 2026-10-30, 2026-10-31): after closing tasks, re-read
    each group you touched, and if it has no `todo` task left set `status: done` (and drop its `preset`) in that same write; a group
-   left open with every task closed is a mistake to fix before ending the task. When a finished roadmap
+   left open with every task closed is a mistake to fix before ending the task. A flowchart box's status is not derived from its
+   groups: when the last group in a box is done, also set the box `done` (`nodes/<ID>`, same write). When a finished roadmap
    group gets a follow-up group, give the follow-up a `preset` (recommended model + effort level; see `docs/ROADMAP_PROTOCOL.md`).
 7. In-game probes need Gabriel to launch the game; prepare them under `tools/probe_mod/` with run and cleanup scripts.
 
