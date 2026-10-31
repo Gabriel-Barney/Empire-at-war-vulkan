@@ -495,7 +495,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             return true;
         }
 
-        case C::Infection: {  // throws Infection_Projectile (the INFECTION behaviour's death-clone remap is not modelled)
+        case C::Infection: {  // throws Infection_Projectile (Causes_Infection: combat sets kUnitInfected on the hit)
             if (!alive_unit(target) || !range_ok(o, s, target) || s.projectile < 0) return false;
             combat::ProjectileLaunch l;
             l.shooter = o.combat_unit ? o.id : kNoObject;

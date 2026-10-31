@@ -669,6 +669,31 @@ void test_circular_lead() {
     }
 }
 
+void test_turn_toward() {
+    // S9 t05 (S9_DEATH_CLONE_SHIELDS.md §2.3): Turn_Toward clamps the yaw and pitch deltas separately; rate 0 keeps
+    // the heading bit for bit (vanilla lasers vs missile shields).
+    const Vec3 fwd{1, 0, 0};
+    const Vec3 a = turn_toward(fwd, Vec3{-1, 0, 0}, 0.0f);
+    CHECK(a.x == fwd.x && a.y == fwd.y && a.z == fwd.z);
+    const Vec3 z = turn_toward(fwd, Vec3{0, 0, 0}, 10.0f);  // no goal: unchanged
+    CHECK(z.x == fwd.x && z.y == fwd.y && z.z == fwd.z);
+    // goal behind (yaw delta 180): +3.6 degrees of yaw, no pitch
+    const Vec3 b = turn_toward(fwd, Vec3{-1, 0, 0}, 3.6f);
+    CHECK_NEAR(dmath::atan2(b.y, b.x) * 180.0f / dmath::kPiF, 3.6, 1e-4);
+    CHECK_NEAR(b.z, 0.0, 1e-7);
+    // from yaw 180 to yaw -10: delta -190 wraps to +170 (the short side), clamped to +5 -> yaw 185 = -175
+    const Vec3 c = turn_toward(Vec3{-1, 0, 0}, Vec3{1, -0.1763269f, 0}, 5.0f);
+    CHECK_NEAR(dmath::atan2(c.y, c.x) * 180.0f / dmath::kPiF, -175.0, 1e-3);
+    // pitch and yaw clamped separately: goal up-left (yaw 90, pitch 45) -> yaw 2, pitch 2
+    const Vec3 d = turn_toward(fwd, Vec3{0, 1, 1.4142135f}, 2.0f);
+    CHECK_NEAR(dmath::atan2(d.y, d.x) * 180.0f / dmath::kPiF, 2.0, 1e-4);
+    CHECK_NEAR(dmath::asin(d.z) * 180.0f / dmath::kPiF, 2.0, 1e-3);
+    // within the rate: the goal heading (unit length)
+    const Vec3 e = turn_toward(fwd, Vec3{10, 1, 0}, 30.0f);
+    CHECK_NEAR(e.y / e.x, 0.1, 1e-5);
+    CHECK_NEAR(dot(e, e), 1.0, 1e-6);
+}
+
 void test_lob() {
     // High arc: v = 10, g = 1, horizontal 50, dz 0: tan = (100 + sqrt(10000 - 2500)) / 50 = 3.732 (75 degrees).
     const Vec3 d = lob_direction(Vec3{0, 0, 0}, Vec3{50, 0, 0}, 10.0f, 1.0f);
@@ -808,6 +833,8 @@ void test_gaps_constants() {
     fp.text = "<GameConstants><Health_Low_Percent_Threshold>0.33</Health_Low_Percent_Threshold>"
               "<Melee_Cutoff_Range>51.0</Melee_Cutoff_Range>"
               "<Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>5.0</Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>"
+              "<Object_Max_Speed_Multiplier_Space> 1.2 </Object_Max_Speed_Multiplier_Space>"
+              "<Object_Max_Speed_Multiplier_Land> 1.56 </Object_Max_Speed_Multiplier_Land>"
               "<Diminishing_Firepower>0, 0.6, 0.3, 0.7, 0.9, 0.9, 1, 1, 2, 1</Diminishing_Firepower></GameConstants>";
     data::GameDatabase db;
     std::vector<std::string> ignored;
@@ -817,6 +844,8 @@ void test_gaps_constants() {
     CHECK_F(cfg.low_health_threshold, 0.33f);
     CHECK_F(cfg.short_range_cutoff, 51.0f);
     CHECK_F(cfg.opportunity_recharge_cutoff, 5.0f);
+    CHECK_F(cfg.turn_multiplier_space, 1.2f);  // S9 t05
+    CHECK_F(cfg.turn_multiplier_land, 1.56f);
     CHECK(cfg.diminishing_firepower.size() == 5);
     // Spline through the FoC points: knots reproduced, smooth in between, end values outside.
     World w;
@@ -2154,6 +2183,7 @@ int main(int argc, char** argv) {
     test_targeting_rules();
     test_circular_lead();  // OI tactical
     test_lob();
+    test_turn_toward();  // S9 t05
     test_team_targeting();
     test_gaps_constants();
     test_land_obstacle_and_weapon_index();

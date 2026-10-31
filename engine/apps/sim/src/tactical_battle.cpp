@@ -1822,9 +1822,17 @@ void TacticalBattle::consume_events(TacticalMode& mode) {
         if (u->tracked) damage_tracking_.disable(u->id);
 #endif
         ++stats_.deaths;
+        // S9 t04: a death with no Death_Clone list hit clones the dying type (0x29f270), which consumes one id. [port]
+        // No object is made for it (the original flags that clone dying / removing, +0x3a0 |= 0xc0, which the store
+        // cannot express): the id is allocated and the unit keeps its own death clip / corpse.
+        tc::DeathEvent dc = d;
+        if (dc.death_clone >= 0 && dc.death_clone == static_cast<int32_t>(u->type)) {
+            store.id_counter().allocate();
+            dc.death_clone = -1;
+        }
 #ifdef ALAMO_SIM_HAVE_ANIM
         {  // R3 anim: death clip / corpse of the unit, or the clone's own death sequence
-            const objects::ObjectHandle ch = d.death_clone >= 0 ? spawn_prop(mode, d.death_clone, at, face, owner) : objects::ObjectHandle{};
+            const objects::ObjectHandle ch = dc.death_clone >= 0 ? spawn_prop(mode, dc.death_clone, at, face, owner) : objects::ObjectHandle{};
             if (ch) {
                 ++stats_.death_clones;
                 hooks_->anim_clone(ch);
@@ -1832,7 +1840,7 @@ void TacticalBattle::consume_events(TacticalMode& mode) {
             hooks_->anim_death(u->id, static_cast<bool>(ch), d.kind);
         }
 #else
-        if (d.death_clone >= 0 && spawn_prop(mode, d.death_clone, at, face, owner)) ++stats_.death_clones;
+        if (dc.death_clone >= 0 && spawn_prop(mode, dc.death_clone, at, face, owner)) ++stats_.death_clones;
 #endif
         if (const BattleTables::UnitVisuals* vis = visuals_of_type(u->type))
             if (!vis->death_explosions.empty()) spawn_particle(mode, vis->death_explosions.front(), at, owner);
