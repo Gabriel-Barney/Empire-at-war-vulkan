@@ -324,11 +324,37 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects
     }
     last_serial_ = max_serial;
     have_serial_ = true;
+    tsw_audio(tsw_cues(battle.special_weapon_events(), store), types);  // refix t06
     if (combat) {
         audio::CombatEvent ce;
         ce.local_player_involved = true;
         game_->combat(ce);
         ++stats_.combat_notes;
+    }
+}
+
+void GameAudioHost::tsw_audio(std::span<const TswCue> cues, const objects::GameObjectTypes& types) {
+    if (!game_) return;
+    for (const TswCue& c : cues) {
+        if (c.type == objects::kNone || c.type >= types.size()) continue;
+        const uint64_t id = static_cast<uint64_t>(c.object);
+        const Vec3 p = v3(c.position);
+        switch (c.kind) {
+            case TswCue::Kind::Firing:
+                game_->object_sfx(id, types.get_string(c.type, "TSW_SFXEvent_Activate_Voice"), p);
+                game_->object_sfx(id, types.get_string(c.type, "TSW_SFXEvent_Weapon_Power_Up"), p);
+                game_->super_weapon_activation(types.get_string(c.type, "TSW_MusicEvent_Activation_Start"));
+                ++stats_.tsw_activations;
+                break;
+            case TswCue::Kind::AttackAnim:
+                game_->weapon_fire(id, sounds(types, c.type).fire, p);
+                ++stats_.tsw_fires;
+                break;
+            case TswCue::Kind::PlanetDestroyed:
+                game_->unit_death(id, sounds(types, c.type).death_start, p);
+                ++stats_.tsw_planet_deaths;
+                break;
+        }
     }
 }
 
@@ -466,6 +492,7 @@ void GameAudioHost::battle_reset() {  // same bookkeeping as with audio (nothing
     retreating_player_ = -1;
 }
 void GameAudioHost::battle_end(bool, std::string_view) {}
+void GameAudioHost::tsw_audio(std::span<const TswCue>, const objects::GameObjectTypes&) {}
 void GameAudioHost::sim_tick() {}
 void GameAudioHost::music(MusicScene scene, std::string_view, bool, std::string_view) {
     if (scene != scene_) pending_played_ = false;
