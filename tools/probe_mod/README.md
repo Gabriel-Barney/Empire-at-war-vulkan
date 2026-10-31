@@ -176,3 +176,16 @@ Possible deviations:
 2. Delete `GAME\corruption\Mods\ProbeE` and `ProbeE_FB`.
 
 Rebuild: `python3 -I tools/probe_mod/build_probe.py probeE <extracted/foc root> <MasterTextFile_English.dat> tools/probe_mod/probeE`
+
+---
+
+# A1 tactical-AI probes (`tools\probe_mod\a1_tactical\`)
+
+Two probes for roadmap A1, one game session: **free-store timing** (A1 t02: do `FreeStoreService` /
+`On_Unit_Service` first run at mode frame 600 / 63, AI_TACTICAL §5.3 and §12 item 10) and **landing-point
+ownership** (A1 t04: does the campaign attacker own its landing reinforcement point at battle start, and what is its
+land cap +0x404). Double-click `a1_tactical\run_a1.cmd` (or `freestore_timing\run_freestore.cmd` /
+`landing_points\run_landing.cmd`), play skirmish land Utapau and space Kuat (90 s each) and the campaign
+"S10 PROBE A: TATOOINE" as Empire (fight the invasion, 60 s), giving no orders; send back
+`a1_tactical\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_a1.cmd` after a crash).
+Full instructions and how to read the result: `a1_tactical\README.md`.
