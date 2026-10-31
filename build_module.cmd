@@ -4,14 +4,19 @@ rem Usage: build_module.cmd <module> [module list]   e.g. build_module.cmd rhi
 rem The module list defaults to "core;<module>"; modules with dependencies need them listed, e.g.
 rem   build_module.cmd render "core;vfs;data;jobs;galactic;assets;rhi;shaderxlat;materials;terrain;render"
 rem Uses build-<module>\ so module agents can build in parallel. Logs: logs\module_<module>.txt
+rem Runs the module's fast tier (ctest -LE slow); set ALAMO_TESTS=all to include the slow tests.
+rem Output: a short summary (tools\lint\build_summary.py); set ALAMO_FULL_LOG=1 to also print the whole log.
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 if "%~1"=="" (echo usage: build_module.cmd ^<module^> [module list]& exit /b 2)
 set MODULES=core;%~1
 if not "%~2"=="" set MODULES=%~2
 if not exist logs mkdir logs
+set SLOWFILTER=-LE slow
+if /i "%ALAMO_TESTS%"=="all" set SLOWFILTER=
 set LOG=logs\module_%~1.txt
 call toolchain\msvc\setup_x64.bat >nul
+call "%~dp0tools\cache_env.cmd"
 set PATH=%~dp0toolchain\venv\Scripts;%PATH%
 > %LOG% (
   cmake -S . -B build-%~1 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl "-DALAMO_ENGINE_MODULES=!MODULES!" 2>&1
@@ -22,9 +27,11 @@ set PATH=%~dp0toolchain\venv\Scripts;%PATH%
   if not exist build-%~1\tmp mkdir build-%~1\tmp
   set "TMP=%~dp0build-%~1\tmp"
   set "TEMP=%~dp0build-%~1\tmp"
-  ctest --test-dir build-%~1 --output-on-failure -j 4 -R "%~1" 2>&1
+  ctest --test-dir build-%~1 --output-on-failure -j 4 !SLOWFILTER! -R "%~1" 2>&1
   echo ctest exit !ERRORLEVEL!
 )
 echo MODULE_DONE>> %LOG%
 python roadmap-store\roadmap_store.py record-build msvc build-%~1 %LOG%
-type %LOG%
+python tools\lint\build_summary.py %LOG%
+echo full log: %LOG%
+if defined ALAMO_FULL_LOG type %LOG%

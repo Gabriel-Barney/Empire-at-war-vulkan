@@ -16,6 +16,7 @@ set PATH=%TC%\llvm\bin;%TC%\venv\Scripts;%PATH%
 set CMAKE=%TC%\venv\Scripts\cmake.exe
 set CTEST=%TC%\venv\Scripts\ctest.exe
 call "%~dp0tools\test_env.cmd"
+call "%~dp0tools\cache_env.cmd"
 > logs\clang_configure.txt (
   "%TC%\llvm\bin\clang++.exe" --version 2>&1
   rem -U drops a cached module list so the full build always gets every module (engine/CMakeLists.txt default).
@@ -35,4 +36,5 @@ call "%~dp0tools\test_env.cmd"
   python tools\lint\ctest_skips.py "%~dp0build-clang\ctest_junit.xml"
 )
 echo BUILD_DONE>> logs\clang_configure.txt
+python tools\lint\build_summary.py logs\clang_configure.txt logs\clang_build.txt
 python roadmap-store\roadmap_store.py record-build clang build-clang logs\clang_configure.txt logs\clang_build.txt

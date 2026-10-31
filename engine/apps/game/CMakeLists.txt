@@ -55,6 +55,7 @@ add_executable(alamo_game_save_tests tests/test_game_save.cpp)
 target_link_libraries(alamo_game_save_tests PRIVATE alamo_core alamo_game_core)
 add_test(NAME alamo_game_save_tests COMMAND alamo_game_save_tests)
 set_tests_properties(alamo_game_save_tests PROPERTIES TIMEOUT 1200)
+alamo_label_slow(alamo_game_save_tests)
 
 # Playtest 2 t13: auto-resolve results screen figures (battle time, bounty, efficiency): pure rules data-free, bounty data
 # on the FoC data (ALAMO_FOC_DATA, skipped without).
@@ -147,5 +148,8 @@ function(alamo_game_add_exe)
                    -DGOLDEN=${PROJECT_SOURCE_DIR}/engine/apps/game/testdata/game_smoke_campaign
                    -P ${PROJECT_SOURCE_DIR}/engine/apps/game/compare_smoke.cmake)
   set_tests_properties(alamo_game_smoke_screens_golden PROPERTIES TIMEOUT 120 FIXTURES_REQUIRED alamo_game_smoke_screens_run)
+  alamo_label_slow(alamo_game_smoke_skirmish alamo_game_smoke_campaign alamo_game_smoke_land alamo_game_smoke_screens
+                   alamo_game_smoke_skirmish_golden alamo_game_smoke_campaign_golden alamo_game_smoke_land_golden
+                   alamo_game_smoke_screens_golden)
 endfunction()
 cmake_language(DEFER DIRECTORY ${PROJECT_SOURCE_DIR} CALL alamo_game_add_exe)

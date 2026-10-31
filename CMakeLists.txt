@@ -7,6 +7,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Compiler cache: when toolchain/sccache/sccache.exe exists (toolchain/10_sccache.cmd) every compile goes through it, so build
+# trees and git worktrees share objects. The cache never changes the output (same bytes as an uncached compile), only
+# whether the compiler runs. -DALAMO_COMPILER_CACHE=OFF compiles without it; tools/cache_env.cmd sets its cache folder.
+option(ALAMO_COMPILER_CACHE "Compile through toolchain/sccache when it is installed" ON)
+if(ALAMO_COMPILER_CACHE AND NOT "$ENV{ALAMO_COMPILER_CACHE}" STREQUAL "OFF" AND NOT CMAKE_CXX_COMPILER_LAUNCHER AND EXISTS "${CMAKE_SOURCE_DIR}/toolchain/sccache/sccache.exe")
+  set(CMAKE_CXX_COMPILER_LAUNCHER "${CMAKE_SOURCE_DIR}/toolchain/sccache/sccache.exe")
+  message(STATUS "Compiler cache: ${CMAKE_CXX_COMPILER_LAUNCHER}")
+endif()
+
 # Static CRT so the tools run on any Windows box without the VC++ redistributable. Applies to every
 # compiler targeting the MSVC ABI (cl, and clang++ in build_clang.cmd); ignored by MinGW GCC.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

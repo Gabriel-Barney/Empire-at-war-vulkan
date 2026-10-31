@@ -69,6 +69,18 @@ target_compile_features(alamo_engine_flags INTERFACE cxx_std_20)
 
 find_package(Threads REQUIRED)
 
+# Test tiers: tests that take more than a few seconds carry the ctest label "slow". The inner loop runs the fast tier
+# (ctest -LE slow, what build_agent.cmd / build_module.cmd do by default); the gate scripts run everything. Call from the
+# directory that created the tests (set_property(TEST) only sees tests of the current directory). Labels a test that
+# does not exist as a no-op, so a list can name tests that are only built with some modules.
+function(alamo_label_slow)
+  foreach(_t IN LISTS ARGN)
+    if(TEST ${_t})
+      set_property(TEST ${_t} APPEND PROPERTY LABELS slow)
+    endif()
+  endforeach()
+endfunction()
+
 foreach(m core vfs data jobs galactic objects anim commands tactical lua ai assets rhi shaderxlat materials terrain render ui audio video apps)
   if(m IN_LIST ALAMO_ENGINE_MODULES AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${m}/CMakeLists.txt)
     add_subdirectory(${m})

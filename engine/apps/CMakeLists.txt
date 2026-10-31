@@ -271,6 +271,12 @@ add_test(NAME alamo_headless_replay_golden
                  --crc-out ${CMAKE_CURRENT_BINARY_DIR}/replay_actual.crc --golden ${_q1_data}/replay_golden.crc)
 set_tests_properties(alamo_headless_replay_workers alamo_headless_replay_golden PROPERTIES TIMEOUT 300)
 
+# Slow tier (label "slow", see engine/CMakeLists.txt): the long headless runs; ctest -LE slow skips them. The land-outcome
+# worker-count tests and the golden checks stay labelled together with the run whose CRC log they need (fixtures).
+get_directory_property(_alamo_apps_tests TESTS)
+list(FILTER _alamo_apps_tests INCLUDE REGEX "^alamo_headless_(skirmish_ai_foc|galactic_ai_human|save_hotm|save_skirmish)")
+alamo_label_slow(${_alamo_apps_tests})
+
 # --- P host (owner: game host agent): alamo_game, the playable game exe (menus/HUD/renderer/sim/audio per frame) ---
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/game/CMakeLists.txt)
   add_subdirectory(game)
