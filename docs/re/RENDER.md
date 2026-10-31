@@ -755,13 +755,23 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   - Open (Gabriel, roadmap g1f t06): does a hand-played Kuat skirmish deliver a bought ship? If not, Steam "Verify
     integrity of game files" and repeat. If a bought ship appears, re-run `run_3_apitrace.cmd` with Bloom/Heat on
     (`g1_options.py --set Bloom=1 HeatDistortion=1 -- apitrace ...`) for the Thrawn close-up.
-- **Planet clip wrap: still open (g1f t03, 2026-10-30).** `apitrace_20261030_160054` is a 302 s Kuat idle trace with camera
-  wheel markers (times in its `status.json`). `g1_planet_wrap.py` is written, but the extraction of that trace did not finish.
-  The kit's first-draw "median step" series mixes several objects drawn with the same mesh shader (`vs#156`), so it must not be
-  read as the planet's spin. The angle per clip frame is fixed by the ALA at 360/239°, so the wrap shows only as a one-clip-frame
-  pause at the turn point: against a second clock, a 1.506° jump means 240, no jump means 239.
+- **Planet clip wrap: not observable in this trace (g1f t03, 2026-10-31).** `g1_planet_wrap.py extract` over the whole
+  `apitrace_20261030_160054` (6.5 GB, 83 240 frames, 52.5 M filtered calls, about 20 min) now finishes: it holds 669 185
+  `m_world` rows in 11 (shader, row-scale) groups, all on the one mesh shader (`vs#156`). Results of `survey` / `analyse`:
+  - Only one object turns steadily: the scale-1.8 group, frames 2 100 to 2 928, about 0 to 177° unwrapped, 0.359° per drawn update
+    (7.15 ticks of 0.0502°/tick, i.e. the rate matches 360/239° per clip frame at 30 Hz to within the 0.4% that separates 239
+    from 240). It is then not drawn for 80 000 frames and reappears at frames 83 105 to 83 239 with an unrelated orientation.
+  - The scale-1.0 group (80 443 frames) holds one angle for 78 490 frames (2 954 to 81 444): a static object.
+  - So the trace covers under half a turn (about 118 s of the 239 s revolution) and no turn point. **Whether the clip holds one
+    frame at the wrap (240) or loops seamlessly (239) is still not read from a capture.** The step-size fit cannot decide it
+    either (see above), and `UVOffset` pairing was not needed.
+  - Cause: this run was a Kuat idle scene with camera-wheel markers, not a planet view; the planet is not on screen for most of it.
+  - **Candidate task (needs Gabriel to launch the game):** capture >= 260 s of one fixed planet view (galactic map planet zoomed
+    in, or a planet-flyby-free space scene), then `python -I g1_planet_wrap.py extract <run>` and `analyse --scale <planet>`;
+    a 240-frame wrap shows as a 30-tick hold (1.5°-equivalent pause) at the turn point against `UVOffset`. No engine change is
+    indicated: ANIM_PARTICLES.md §A.9 (wrap at count - 1 = 239) is what `anim_state.cpp` does, and nothing here contradicts it.
 
-  > **Status 2026-10-30:** The 239-frame wrap is settled by ANIM_PARTICLES.md §A.9 and implemented in `engine/anim/src/anim_state.cpp:31-37`; only this capture-side confirmation remains unfinished.
+  > **Status 2026-10-31:** extraction fixed by running it to the end (no script change was needed; the earlier run was cut short); the wrap question stays open on capture evidence, settled in the port by §A.9.
 
 Unattended runs on 2026-10-29: the menus were driven by `g1_ui.py` with `--drive K,E` and `--probe-mod admonitor`,
 which builds Thrawn's SD at station level 1.
