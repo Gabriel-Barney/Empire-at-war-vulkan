@@ -7,8 +7,9 @@ exit, clean up (always, also after an error or Ctrl+C).
   --no-launch        install only; start the game yourself (StarWarsG.exe MODPATH=Mods\\TswPlanetProbe), quit it, then
                      press Enter here (with --non-interactive the run waits for StarWarsG.exe to start and exit)
   --rate             GameScoring ServiceRate of the hook (default 0 = every service; see README)
-The results are the game's message boxes ("TSWP ..."): screenshot each one before clicking OK (README "Click path").
-out\\<yyyymmdd-hhmmss>\\run.txt records what was installed and when the game ran.
+The results are the probe Lua's records ("TSWP1|...|END" strings in the game's heap; retail shows no message boxes):
+tswp_reader.py scans for them while the game runs and writes out\\<yyyymmdd-hhmmss>\\reader.log; run.txt records what
+was installed and when the game ran, and gets the records copied at the end.
 """
 import argparse
 import datetime
@@ -26,12 +27,14 @@ import cleanup_tswp  # noqa: E402
 STEPS = r'''
 ==========================================================================================================
  TSW planet-destroy probe installed (Mods\TswPlanetProbe). Click path: README.md. In short:
- Single Player > Galactic Conquest > "TSWP PROBE: ALDERAAN" > Empire > Start.
+ Single Player > Galactic Conquest > "TSWP PROBE: KUAT" > Empire > Start.
  Wait for "TSWP PROBE: galactic plot loaded". Select the fleet at Byss (Death Star + 3 Star Destroyers), move it to
- Alderaan, fight the space battle (no auto-resolve). The hook fires the Death Star by itself.
+ Kuat, fight the space battle (no auto-resolve). The hook fires the Death Star by itself.
  Run W (won): give no orders until the battle ends (attack the station with the Star Destroyers if it drags on).
- Run L (lost): right after the "TSWP ... fired" box, press Retreat.
- Screenshot EVERY "TSWP ..." message box before clicking OK, and the galaxy map after each battle.
+ Run L (retreat): right after the "TSWP ... fired" box, press Retreat (greyed out after the kill in retail).
+ Run LOST (campaign "TSWP PROBE: KUAT LOST", Death Star + 1 Tartan): keep the Tartan out of range, Fire by hand,
+ then send the Tartan into the Rebel fleet so the Empire loses after the kill.
+ The probe records go to out\<run>\reader.log (retail shows no message boxes); screenshot the galaxy map after each battle.
 ==========================================================================================================
 '''
 
@@ -62,6 +65,8 @@ def main():
         log.flush()
 
     rc = 0
+    reader = None
+    reader_log = os.path.join(run_dir, 'reader.log')
     try:
         corruption = os.path.join(a.game, 'corruption')
         exe = os.path.join(corruption, 'StarWarsG.exe')
@@ -73,6 +78,10 @@ def main():
             return 21
         build_mod.build(a.game, os.path.join(corruption, 'Mods', build_mod.MOD_NAME), a.rate)
         note('installed Mods\\%s (ServiceRate %s)' % (build_mod.MOD_NAME, a.rate))
+        reader = subprocess.Popen([sys.executable, '-I', os.path.join(HERE, 'tswp_reader.py'), '--out', reader_log,
+                                   '--wait-process-sec', str(a.wait_start_sec)],
+                                  stdout=subprocess.DEVNULL, stderr=open(os.path.join(run_dir, 'reader_err.txt'), 'w'))
+        note('reader started: ' + reader_log)
         print(STEPS)
         if a.no_launch:
             if a.non_interactive:
@@ -97,6 +106,15 @@ def main():
         note('error: %r' % (e,))
         rc = 31
     finally:
+        if reader is not None:
+            try:
+                reader.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                reader.terminate()
+        if os.path.exists(reader_log):
+            for line in open(reader_log, encoding='ascii', errors='replace'):
+                if ' REC ' in line or ' EXIT ' in line:
+                    note('reader: ' + line.strip())
         ok, msg = cleanup_tswp.cleanup(a.game)
         note('cleanup: ' + msg)
         print('TSWP_RUN_DONE exit=%d cleanup=%s' % (rc, 'ok' if ok else 'INCOMPLETE'))

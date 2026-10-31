@@ -246,7 +246,7 @@ void test_auto_resolve_rules() {
 }
 
 // ---- 3. force split -----------------------------------------------------------------------------------------------
-enum TypeId : uint32_t { tPlanetA, tPlanetB, tPlanetC, tSB1, tSB2, tFrigate, tFighters, tInfantry, tBarracks, tCorvette, tTypeCount };
+enum TypeId : uint32_t { tPlanetA, tPlanetB, tPlanetC, tSB1, tSB2, tFrigate, tFighters, tInfantry, tBarracks, tCorvette, tDeathStar, tTypeCount };
 enum Row : PlanetIndex { rA = 0, rB = 1, rC = 2 };
 enum PlayerId : int32_t { pEmpire = 0, pUnder = 1, pNeutral = 2 };
 
@@ -291,6 +291,10 @@ GalacticRules make_rules() {
     TypeInfo& co = unit(tCorvette, "Corvette", UnitKind::SpaceUnit, 400.0f);
     co.hyperspace = true;
     co.hyperspace_speed = 2.0f;
+    TypeInfo& ds = unit(tDeathStar, "Death_Star", UnitKind::SpaceUnit, 5000.0f);  // the galactic super weapon
+    ds.hyperspace = true;
+    ds.hyperspace_speed = 1.0f;
+    ds.planet_destruction = true;
     return r;
 }
 
@@ -309,6 +313,8 @@ ConflictRules make_conflict_rules() {
     c.types[tFighters].categories = kCatFighter;
     c.types[tInfantry].categories = kCatInfantry;
     c.types[tBarracks].categories = kCatStructure;
+    c.types[tDeathStar].categories = kCatSuper;
+    c.types[tDeathStar].population = 1;
     for (uint32_t p : {tPlanetA, tPlanetB, tPlanetC}) c.types[p].terrain = 0;  // Temperate
     ConflictFactionInfo f;
     f.space_unit_cap = 10.0f;
@@ -316,7 +322,7 @@ ConflictRules make_conflict_rules() {
     return c;
 }
 
-GalacticSetup make_setup(std::vector<StartingForce> forces, bool empire_human) {
+GalacticSetup make_setup(std::vector<StartingForce> forces, bool empire_human, bool route_bc = true) {
     GalacticSetup s;
     GalaxyMap& m = s.map;
     m.campaign_name = "S10";
@@ -334,7 +340,8 @@ GalacticSetup make_setup(std::vector<StartingForce> forces, bool empire_human) {
         m.routes.hs_speed_factor[r] = 5.0f;
     };
     route("A_B", rA, rB);
-    route("B_C", rB, rC);
+    if (route_bc) route("B_C", rB, rC);
+    else m.max_fleet_move_distance = 0.0f;  // no free (route-less) hop for the path finder either
     s.planet_type = {tPlanetA, tPlanetB, tPlanetC};
     PlayerSetup e;
     e.faction = 0;
@@ -361,9 +368,9 @@ struct World {
     SimRng rng{0x5150u};
     GalacticSim sim{rules, store, rng};
     std::unique_ptr<ConflictManager> cm;
-    World(std::vector<StartingForce> forces, bool empire_human) {
+    World(std::vector<StartingForce> forces, bool empire_human, bool route_bc = true) {
         std::vector<std::string> diag;
-        CHECK(sim.start(make_setup(std::move(forces), empire_human), &diag));
+        CHECK(sim.start(make_setup(std::move(forces), empire_human, route_bc), &diag));
         sim.set_emit_events(true);
         cm = std::make_unique<ConflictManager>(sim, crules, rng);
         cm->attach();
@@ -763,6 +770,115 @@ void test_oi_transitions() {
     }
 }
 
+// BATTLE_TRANSITIONS §3.3a: the retreat (0x2ba6c0) is one direct hop [P, dest] that ignores trade routes. Probe L1 systems
+// t06 (retail FoC, 2026-10-31): A = Byss (Empire) - B = Kuat (Rebel station + fleet); C = Dantooine (Rebel barracks, no
+// route). The Death Star fleet destroys Kuat with the TSW and loses the space battle (escort dead, Death Star alive, 0xb,
+// winner Rebel). The Rebels have no Is_Super_Weapon_Killer -> R := the winner (TACTICAL_GAPS 4.8); the Rebel fleet jumps
+// to Dantooine (finder 0x2aa400) without a route, the Rebel starbase is cleared, the Death Star stays, Kuat's derived
+// owner is the Empire. pUnder plays the Rebels. `fighters_only`: the Rebel fleet has base speed 0 and stays in orbit.
+struct ProbeRun {
+    bool battle = false, retreat_r = false, departed = false, direct = false, arrived = false, stays = false;
+    bool starbase_cleared = false, death_star_stays = false, owner_empire = false, destroyed = false, no_rebels = false;
+    bool no_surface = false, invade_refused = false;  // 0x375220: a destroyed planet has no surface
+    uint64_t digest = 0;
+};
+
+ProbeRun run_retreat_probe(bool fighters_only) {
+    ProbeRun out;
+    World w({{pEmpire, rA, tBarracks}, {pEmpire, rA, tDeathStar}, {pEmpire, rA, tFrigate}, {pUnder, rB, tSB2},
+             {pUnder, rB, fighters_only ? tFighters : tFrigate}, {pUnder, rC, tBarracks}},
+            true, false);
+    w.cm->config().human_choice = BattleChoice::Fight;
+    BattleRequest got;
+    w.cm->start_battle = [&](const BattleRequest& r) {
+        got = r;
+        return true;
+    };
+    const uint32_t ef = w.fleet(rA, pEmpire), rf = w.fleet(rB, pUnder);
+    CHECK(ef != kNoFleet && rf != kNoFleet);
+    if (ef == kNoFleet || rf == kNoFleet) return out;
+    const PlanetIndex hop[] = {rA, rB};
+    CHECK(w.sim.move_fleet_path(pEmpire, ef, hop) == commands::RejectReason::None);
+    for (int n = 0; n < 5000 && !w.cm->battle_active(); ++n) w.sim.update();
+    out.battle = w.cm->battle_active() && got.info.planet == rB && got.info.attacker == pEmpire && got.info.defender == pUnder;
+    if (!out.battle) return out;
+    // TSW state 9: the shared destroy core only (orbit, starbase and owner stay; TSW_PLANET_DESTROY §5).
+    CHECK(w.sim.tsw_destroy_planet(rB, pEmpire));
+    objects::ObjectHandle escort{}, death_star{};
+    for (uint32_t f : w.sim.fleets_at(rB, pEmpire))
+        for (objects::ObjectHandle h : w.sim.fleets()[f].contents) {
+            if (static_cast<uint32_t>(w.store.type(h)) == tFrigate) escort = h;
+            if (static_cast<uint32_t>(w.store.type(h)) == tDeathStar) death_star = h;
+        }
+    CHECK(w.store.alive(escort) && w.store.alive(death_star));
+    BattleResult res;
+    res.winner = pUnder;
+    res.victory = kVictoryAllDestroyed;
+    res.destroyed = {escort};
+    w.cm->finish_battle(res);
+    out.retreat_r = !w.cm->log().empty() && w.cm->log().back().retreating == pUnder && w.cm->log().back().winner == pUnder;
+    const PlanetState& kuat = w.sim.planets()[rB];
+    out.starbase_cleared = !w.store.alive(kuat.starbase) && kuat.starbase_level == 0;
+    const FleetState& rebel = w.sim.fleets()[rf];
+    out.departed = rebel.alive && rebel.moving && rebel.to == rC && rebel.from == rB;
+    // No route: hop factor 1.0, so the hop speed is the base speed (a route hop would be 5x).
+    out.direct = out.departed && rebel.hop_speed == rebel.base_speed && rebel.base_speed > 0.0f;
+    out.stays = rebel.alive && !rebel.moving && rebel.planet == rB;
+    for (int n = 0; n < 5000 && w.sim.fleets()[rf].alive && w.sim.fleets()[rf].moving; ++n) w.sim.update();
+    for (int n = 0; n < 3; ++n) w.sim.update();  // derived owner service
+    out.arrived = !w.sim.fleets_at(rC, pUnder).empty() && w.sim.fleets_at(rB, pUnder).empty();
+    out.death_star_stays = w.store.alive(death_star) && w.sim.fleet_containing(death_star) != kNoFleet &&
+                           w.sim.fleets()[w.sim.fleet_containing(death_star)].planet == rB;
+    out.destroyed = kuat.destroyed;
+    out.owner_empire = kuat.owner == pEmpire;
+    out.no_surface = w.sim.surface_accessible(rA) && !w.sim.surface_accessible(rB);
+    out.invade_refused = w.sim.invade(pEmpire, rB, {}) == commands::RejectReason::NotAllowed;
+    bool rebels = !w.sim.fleets_at(rB, pUnder).empty() || (w.store.alive(kuat.starbase) && kuat.starbase_owner == pUnder);
+    for (objects::ObjectHandle h : kuat.structures) rebels = rebels || (w.store.alive(h) && w.store.owner(h) == pUnder);
+    for (objects::ObjectHandle h : kuat.surface) rebels = rebels || (w.store.alive(h) && w.store.owner(h) == pUnder);
+    out.no_rebels = !rebels;
+    out.digest = w.digest();
+    return out;
+}
+
+void test_retreat_direct_hop() {
+    {   // (a) the probe: retail Kuat destroyed=true owner=EMPIRE starbase none, no Rebel object, Death Star still there.
+        const ProbeRun r = run_retreat_probe(false);
+        CHECK(r.battle && r.retreat_r && r.starbase_cleared);
+        CHECK(r.departed && r.direct);
+        CHECK(r.arrived && r.death_star_stays && r.destroyed && r.owner_empire && r.no_rebels);
+        CHECK(r.no_surface && r.invade_refused);
+        CHECK(run_retreat_probe(false).digest == r.digest);  // determinism
+    }
+    {   // (b) base speed 0 (fighters, no hyperspace member): refused, the fleet stays in orbit (not destroyed); the
+        // starbase is still cleared (the starbase step does not depend on any fleet leaving).
+        const ProbeRun r = run_retreat_probe(true);
+        CHECK(r.battle && r.retreat_r && r.starbase_cleared);
+        CHECK(!r.departed && r.stays && r.death_star_stays && r.destroyed);
+    }
+    {   // (c) the entry point: moving / own planet refused; connected planets get the route factor.
+        World w({{pEmpire, rA, tFrigate}, {pUnder, rC, tBarracks}}, false, false);
+        const uint32_t f = w.fleet(rA, pEmpire);
+        CHECK(f != kNoFleet);
+        if (f == kNoFleet) return;
+        using commands::RejectReason;
+        CHECK(w.sim.move_fleet_direct(pEmpire, f, rA) == RejectReason::NotAllowed);  // destination = its planet
+        CHECK(!w.sim.fleets()[f].moving && w.sim.fleets()[f].planet == rA);
+        CHECK(w.sim.move_fleet_direct(pUnder, f, rB) == RejectReason::NotOwner);
+        CHECK(w.sim.move_fleet_direct(pEmpire, f, rB) == RejectReason::None);  // A - B joined: HS_Speed_Factor 5
+        const FleetState& fl = w.sim.fleets()[f];
+        CHECK(fl.moving && fl.to == rB && fl.hop_speed == fl.base_speed * 5.0f && fl.path.size() == 2);
+        CHECK(w.sim.move_fleet_direct(pEmpire, f, rC) == RejectReason::NotAllowed);  // already in transit
+        CHECK(fl.moving && fl.to == rB);
+        for (int n = 0; n < 5000 && w.sim.fleets()[f].moving; ++n) w.sim.update();
+        CHECK(!w.sim.fleets()[f].moving && w.sim.fleets()[f].planet == rB);
+        // B - C has no route here: move_fleet's path finder fails, the direct hop does not.
+        CHECK(w.sim.move_fleet(pEmpire, f, rC) != RejectReason::None && !w.sim.fleets()[f].moving);
+        CHECK(w.sim.move_fleet_direct(pEmpire, f, rC) == RejectReason::None);
+        CHECK(w.sim.fleets()[f].moving && w.sim.fleets()[f].hop_speed == w.sim.fleets()[f].base_speed);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -789,6 +905,8 @@ int main() {
     test_p4_resolve_battle();  // P4 sim
     std::printf("oi transitions\n");
     test_oi_transitions();  // OI galactic
+    std::printf("retreat direct hop\n");
+    test_retreat_direct_hop();  // BATTLE_TRANSITIONS §3.3a
     if (g_fail) {
         std::printf("%d check(s) FAILED\n", g_fail);
         return 1;

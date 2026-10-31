@@ -1525,13 +1525,22 @@ void TacticalBattle::check_victory() {
     }
     bool has[2] = {false, false};
     bool station_lost = false;
+    // BT §3.1a item 1 (0x372230): an object keeps its side alive for 0xb only when its own type (not its container's) is
+    // victory-relevant in this mode: Victory_Relevant, else Space_ / Land_Victory_Relevant (all default false). Data only:
+    // no behaviour / category test, so the Death Stars (Victory_Relevant No / unset) never count (TSW_PLANET_DESTROY §8;
+    // probe 2026-10-31 (l1sys t06): the defender won 0xb with the attacker's Death Star alive). [port] polled every tick,
+    // not the retail event trigger (a relevant object leaving a player), so a side with no relevant object at all loses at
+    // once instead of never by 0xb.
     for (const Unit& u : units_)
-        if (u.alive && !u.retreated && !parts_[u.participant].third) has[u.side] = true;  // §3.1: third-party map objects
+        if (u.alive && !u.retreated && !parts_[u.participant].third && victory_relevant(u.type))  // §3.1: third-party map objects
+            has[u.side] = true;
     // battle host: BT §2.5 land victory 0xe (ALL_ENEMY_BASE_COMPONENTS_DESTROYED, Land_Base_Destruction_Forces_Retreat) for
     // the attacker once every defender ground structure died. [port] 0xd (rogue-faction base components) not modelled.
     uint32_t base_parts = 0, base_alive = 0;
     for (const Participant& p : parts_) {
-        if (!p.deployed) has[p.side] = true;
+        // [port] a never-deployed participant (reserve / pool) still counts when one of its spawn types is victory-relevant;
+        // BT §3.1a says pool units are not GOM objects and never count [M], not adopted until probed.
+        if (!p.deployed && victory_relevant(p)) has[p.side] = true;
         if (p.starbase && p.deployed && p.alive == 0) station_lost = true;
         if (p.structure && p.side == 0) {
             ++base_parts;
@@ -1549,6 +1558,28 @@ void TacticalBattle::check_victory() {
     } else if (cfg_.max_frames > 0 && frame_ >= cfg_.max_frames) {
         finish(req_.info.defender, galactic::kVictoryAllRetreated, req_.info.attacker);  // [port] time limit
     }
+}
+
+bool TacticalBattle::victory_relevant(uint32_t type) {
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (type >= types.size()) return false;
+    if (vr_cache_.size() != types.size()) vr_cache_.assign(types.size(), 0);
+    uint8_t& c = vr_cache_[type];
+    if (c == 0) {
+        const auto t = static_cast<objects::TypeIndex>(type);
+        const bool r = types.get_bool(t, "Victory_Relevant") || types.get_bool(t, space_ ? "Space_Victory_Relevant" : "Land_Victory_Relevant");
+        c = r ? 2 : 1;
+    }
+    return c == 2;
+}
+
+bool TacticalBattle::victory_relevant(const Participant& p) {
+    if (p.other_type >= 0) return victory_relevant(static_cast<uint32_t>(p.other_type));  // §3.2 step 3
+    const galactic::ConflictTypeInfo& ti = rules_->type(p.type);
+    if (ti.members.empty()) return victory_relevant(p.type);
+    for (const auto& [mt, n] : ti.members)
+        if (n > 0 && victory_relevant(mt)) return true;
+    return false;
 }
 
 void TacticalBattle::apply_speed_factors() {

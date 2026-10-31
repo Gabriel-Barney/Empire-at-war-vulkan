@@ -20,12 +20,12 @@ STRATEGIC_GAPS §1.4 (victory 7), P4_SIM_SYSTEMS §3.3 (hack path). Not repeated
 |---|---|---|
 | 1 | Answer in one paragraph | [H] |
 | 2 | Victory monitor hold (0x341fe0 / 0x3440a0): no battle can end during the TSW sequence | [H] |
-| 3 | TSW states 5..13 after Fire, with the frame budget | [H] transitions; [M] exact frame offsets |
+| 3 | TSW states 5..13 after Fire, with the frame budget | [H] transitions; frame offsets probed 2026-10-31 |
 | 4 | State 9 in detail: the planet is destroyed **in the galaxy, in that tactical frame** | [H] |
 | 5 | What 0x3f76c0 does (and does not do) | [H]; list naming [M] |
 | 6 | Victory 7 / tactical type 0x10 from the TSW | [H]; victim / list semantics [M] |
-| 7 | Story events | [H] call; [M] which story manager hears it |
-| 8 | Battle end afterwards; ownership | [H] no TSW-specific step; ownership [M] |
+| 7 | Story events | [H] call; galactic plot does not hear it (probe 2026-10-31) |
+| 8 | Battle end afterwards; ownership | [H] no TSW-specific step; owner after a won and a lost battle probed 2026-10-31 (lost: R = winner, direct retreat jump) |
 | 9 | Corrections to other docs | [H] |
 | 10 | Port-affecting findings | — |
 | 11 | Presentation: camera shake 0x2cdbb0 and the firing camera 0x2ccf30 (no synced state) | [H] formulas, constants, keys; [M] field names, box source; [L] end-of-shot chaining |
@@ -87,6 +87,13 @@ With vanilla data the planet dies about F+348 and the hold is released about F+7
 the battle can end on that release frame at the earliest. Exact ±1 offsets depend on whether the TSW is
 serviced on frame F after the Lua/command Fire and on the vf +0x28 step [M] — **probe** if bit-exact timing
 matters.
+
+**Probe 2026-10-31** (`tools/probe_mod/tsw_planet_destroy`, README "second session"; TSW state read from memory once per
+frame, Fire by hand): the first frame showing state 5 already has countdown 269, so the TSW is serviced in the Fire frame
+F itself. Seen: 6 at F+269, 7 at F+270, 8 at F+271, 9 at F+346, **10 and the dummy gone at F+347**, 12 and the
+debris at F+380, **13 at F+730, 0 (hold released) at F+731**, with F = the first frame that serviced state 5; two runs
+agree. A Fire issued between ticks (Lua, orders) and stamped with the last finished frame N is first serviced at N+1,
+so from that stamp the kill is N+348 and the release N+732, as above; the port does exactly this (2026-10-31 check).
 
 ## 4. State 9 step by step [H]
 
@@ -179,7 +186,8 @@ The galactic Death Star path (0x707670) does the same leader test (without the n
   to the tactical plots (0x32e5f0). The galactic story manager is not called, and no delayed event is queued
   for it [M]. The only vanilla consumer, `STORY_EMPIRE_ACTIV_M11_SPACE.XML` (`STORY_PLANET_DESTROYED`
   ALDERAAN → VICTORY Empire), is a tactical plot, which fits. **probe**: whether a galactic plot waiting for
-  PLANET_DESTROYED ever fires after a tactical TSW kill (expected: no).
+  PLANET_DESTROYED ever fires after a tactical TSW kill (expected: no). **Probe 2026-10-31: no** — the plot ran,
+  Kuat read destroyed after the battle, and its PLANET_DESTROYED event never fired.
 - No story event is sent at battle end for the destroyed planet; the normal battle-end events
   (BATTLE_TRANSITIONS §3.1 step 7) fire as for any space battle.
 
@@ -193,8 +201,17 @@ The galactic Death Star path (0x707670) does the same leader test (without the n
   planet].
 - The TSW path never sets the owner. The owner is then the per-frame derived owner (GALACTIC_ECONOMY §4.1):
   no surface units are left, the residual-influence step is skipped for destroyed planets (0x3f3830 tests
-  +0x2c8), so starbase / orbital control / leaning decide [M]. **probe**: owner and starbase of a planet after
-  a won and after a lost TSW battle.
+  +0x2c8), so starbase / orbital control / leaning decide [M]. **Probe 2026-10-31, won battle** (station killed
+  by the fleet, surface barracks and infantry gone): destroyed, owner = the attacker (Empire), starbase level 0,
+  the Death Star stays in orbit. **Probe 2026-10-31, lost battle** (L1 systems t06: Byss – Kuat, Dantooine Rebel
+  with no route; Kuat destroyed by the TSW, then all escorts killed, Death Star alive, defender wins by 0xb):
+  Kuat destroyed, owner = Empire, no starbase, **no Rebel object left at Kuat**. Code [H]: the Death Star is not
+  counted for 0xb because its type is not victory-relevant (BATTLE_TRANSITIONS §3.1a); at battle end the
+  super-weapon rule sets R := winner (Rebel, no `Is_Super_Weapon_Killer`; BATTLE_TRANSITIONS §3.1 step 4, any
+  victory type); 0x28bf10 then retreats every Rebel fleet in Kuat's orbit with 0x2ba6c0, which sends it on a
+  **direct two-planet path that ignores trade routes** (to Dantooine, 0x2aa400) and clears a Rebel-owned
+  starbase; the Empire side is not retreated, so the Death Star alone holds the orbit and the derived owner is
+  the Empire (BATTLE_TRANSITIONS §3.3a). During the battle the Retreat button was greyed out after the kill.
 - Income: destroyed planets use `Planet_Destroyed_Credit_Value` (GALACTIC_ECONOMY §1.4) from the next income.
 - `SpecialWeaponsAllowed` (SCRIPT_GAPS §1.1) and TSW Fire (0x42a720) read D +0x2c8 of the battle planet, so both
   turn false in the same battle from state 9 on [H].
@@ -257,7 +274,8 @@ Current port: `special_weapons.cpp` runs the TSW machine and emits `TswPlanetDes
    is whatever the normal write-back plus the derived-owner rules give; do not force neutral.
 10. Skirmish (no galaxy): only the tactical part and the hold.
 
-Probes (paused): story routing (§7), exact frame offsets (§3), owner / starbase after a TSW battle (§8).
+Probes: story routing (§7) and frame offsets (§3) done 2026-10-31; owner / starbase (§8) done for a won battle,
+lost battle open (retreat unavailable after the kill).
 
 ---
 

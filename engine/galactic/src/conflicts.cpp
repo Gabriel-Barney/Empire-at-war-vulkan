@@ -1199,12 +1199,17 @@ PlanetIndex ConflictManager::retreat_destination_ground(int32_t player, PlanetIn
 }
 
 void ConflictManager::retreat_fleets(int32_t player, PlanetIndex planet) {
+    // 0x2ba6c0, BATTLE_TRANSITIONS §3.3a [H]: destination = first finder hit (no hit -> P itself: nobody moves). Every
+    // fleet of the player in P's orbit (walked last to first, not only the first fleet) gets the two-planet path
+    // [P, dest]: one direct hop that ignores trade routes (GalacticSim::move_fleet_direct). A fleet in transit, with
+    // base speed 0, or whose destination is its planet is refused and stays in orbit (never destroyed).
     const PlanetIndex dest = retreat_destination(player, planet);
-    if (dest == kInvalidPlanet) return;
-    const std::vector<uint32_t> fleets = sim_->fleets_at(planet, player);
-    for (uint32_t f : fleets) {
+    if (dest == kInvalidPlanet || dest == planet) return;
+    const std::vector<uint32_t> fleets = sim_->fleets_at(planet, player);  // snapshot: split-off fleets are not walked
+    for (size_t k = fleets.size(); k-- > 0;) {
+        const uint32_t f = fleets[k];
         if (f >= sim_->fleets().size() || !sim_->fleets()[f].alive || sim_->fleets()[f].moving) continue;
-        sim_->move_fleet(player, f, dest);  // stays when it cannot jump / no path [port]
+        sim_->move_fleet_direct(player, f, dest);
     }
 }
 
