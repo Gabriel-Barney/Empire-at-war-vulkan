@@ -550,8 +550,8 @@ The owner is the first non-empty result in this order (0x3f3830):
 2. the owner of the first non-hidden ground unit on the surface (D +0xe0 list);
 3. the starbase owner (D +0x13c), when the starbase level D +0x148 > 0;
 4. the owner of an active production entry (0x401960);
-5. orbital control by fleets in orbit (D +0xc8). Only when the type test 0x375220 holds, presumably
-   surface-inaccessible planets [L];
+5. orbital control by fleets in orbit (D +0xc8). Only when 0x375220 returns **false**: surface-inaccessible
+   type, or a destroyed planet (data +0x2C8 = 1), see STRATEGIC_GAPS §1.3 after step 24 [H];
 6. the planet's political leaning (0x3f5710, type data, 0..5);
 7. the first `Is_Neutral` faction's player.
 

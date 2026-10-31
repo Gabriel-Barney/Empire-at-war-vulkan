@@ -139,7 +139,7 @@ static std::unique_ptr<World> make_world() {
     write_file(root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>SimTest.xml</File></GameObjectFiles>\n");
     write_file(root / "Data/XML/SimTest.xml",
                "<SimTest>\n"
-               " <SpaceUnit Name=\"Sim_Frigate\">\n"
+               " <SpaceUnit Name=\"Sim_Frigate\"><Victory_Relevant>Yes</Victory_Relevant>\n"
                "  <Tactical_Health>1200</Tactical_Health><Max_Speed>4.0</Max_Speed>\n"
                "  <Targeting_Max_Attack_Distance>900</Targeting_Max_Attack_Distance>\n"
                "  <Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>\n"
@@ -147,10 +147,10 @@ static std::unique_ptr<World> make_world() {
                " </SpaceUnit>\n"
                " <SpaceUnit Name=\"Sim_Corvette\"><Variant_Of_Existing_Type>Sim_Frigate</Variant_Of_Existing_Type>\n"
                "  <Max_Speed>6.5</Max_Speed><Tactical_Health>600</Tactical_Health></SpaceUnit>\n"
-               " <SpaceUnit Name=\"Sim_Station\"><Tactical_Health>8000</Tactical_Health>\n"
+               " <SpaceUnit Name=\"Sim_Station\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>8000</Tactical_Health>\n"
                "  <Custom_Hard_XExtent>300</Custom_Hard_XExtent><Behavior>SELECTABLE</Behavior>\n"
                "  <Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living></SpaceUnit>\n"
-               " <SpaceUnit Name=\"Sim_Asteroid\"><Tactical_Health>50</Tactical_Health><Scale_Factor>2.0</Scale_Factor>\n"
+               " <SpaceUnit Name=\"Sim_Asteroid\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>50</Tactical_Health><Scale_Factor>2.0</Scale_Factor>\n"
                "  <Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living></SpaceUnit>\n"
                " <SpaceUnit Name=\"Sim_Planet\"><Behavior>PLANET</Behavior></SpaceUnit>\n"
                "</SimTest>\n");
@@ -1217,7 +1217,7 @@ static std::unique_ptr<Types> make_types(const fs::path& root) {
                " <GroundStructure Name=\"Barracks\"/>\n"
                " <SpaceUnit Name=\"Fighters\"/>\n"
                " <GroundCompany Name=\"Hero_Team\"><Company_Units>Hero_Unit</Company_Units></GroundCompany>\n"
-               " <GroundInfantry Name=\"Hero_Unit\"><Is_Named_Hero>Yes</Is_Named_Hero></GroundInfantry>\n"
+               " <GroundInfantry Name=\"Hero_Unit\"><Victory_Relevant>Yes</Victory_Relevant><Is_Named_Hero>Yes</Is_Named_Hero></GroundInfantry>\n"
                "</W>\n");
     auto t = std::make_unique<Types>();
     t->files = std::make_unique<DirectoryProvider>(path_to_utf8(root));
@@ -1506,14 +1506,14 @@ static std::unique_ptr<Types> make_types(const fs::path& root) {
                " <Planet Name=\"PlanetB\"><Behavior>PLANET</Behavior></Planet>\n"
                " <Planet Name=\"PlanetC\"><Behavior>PLANET</Behavior></Planet>\n"
                " <Planet Name=\"PlanetD\"><Behavior>PLANET</Behavior></Planet>\n"
-               " <StarBase Name=\"SB1\"><Tactical_Health>500</Tactical_Health><CategoryMask>Structure</CategoryMask></StarBase>\n"
+               " <StarBase Name=\"SB1\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>500</Tactical_Health><CategoryMask>Structure</CategoryMask></StarBase>\n"
                // wave 2b: SELECTABLE (CHECK_DESTROYED counts live SELECTABLE objects, SCRIPT_GAPS.md §4.8)
-               " <SpaceUnit Name=\"Corvette\"><Behavior>SELECTABLE</Behavior><Tactical_Health>100</Tactical_Health>"
+               " <SpaceUnit Name=\"Corvette\"><Victory_Relevant>Yes</Victory_Relevant><Behavior>SELECTABLE</Behavior><Tactical_Health>100</Tactical_Health>"
                "<CategoryMask>Corvette</CategoryMask></SpaceUnit>\n"
-               " <GroundInfantry Name=\"Infantry\"><Tactical_Health>10</Tactical_Health><CategoryMask>Infantry</CategoryMask></GroundInfantry>\n"
-               " <GroundStructure Name=\"Barracks\"><Tactical_Health>200</Tactical_Health><CategoryMask>Structure</CategoryMask></GroundStructure>\n"
-               " <SpaceUnit Name=\"Fighters\"><CategoryMask>Fighter</CategoryMask></SpaceUnit>\n"
-               " <SpaceUnit Name=\"Hero_Ship\"><Behavior>SELECTABLE</Behavior><Is_Named_Hero>Yes</Is_Named_Hero><Tactical_Health>300</Tactical_Health>"
+               " <GroundInfantry Name=\"Infantry\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>10</Tactical_Health><CategoryMask>Infantry</CategoryMask></GroundInfantry>\n"
+               " <GroundStructure Name=\"Barracks\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>200</Tactical_Health><CategoryMask>Structure</CategoryMask></GroundStructure>\n"
+               " <SpaceUnit Name=\"Fighters\"><Victory_Relevant>Yes</Victory_Relevant><CategoryMask>Fighter</CategoryMask></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Hero_Ship\"><Victory_Relevant>Yes</Victory_Relevant><Behavior>SELECTABLE</Behavior><Is_Named_Hero>Yes</Is_Named_Hero><Tactical_Health>300</Tactical_Health>"
                "<CategoryMask>Frigate</CategoryMask></SpaceUnit>\n"
                " <Marker Name=\"Trigger_Zone\"><Behavior>MARKER</Behavior></Marker>\n"
                "</W>\n");

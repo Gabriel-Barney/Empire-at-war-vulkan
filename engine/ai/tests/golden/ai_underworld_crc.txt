@@ -3,63 +3,63 @@ frame 300 a59c0af1f881b5f3
 frame 600 640ec87e061b36b5
 frame 900 c2344019b4b16098
 frame 1200 04d9c22a7d22faee
-frame 1500 8b523de0b8c850fb
-frame 1800 7b7a0e6bc91650bb
-frame 2100 173efd1465fecf83
-frame 2400 e932372af53015f4
-frame 2700 1c156552f5b6f672
-frame 3000 2eb85c9e1bda0544
-frame 3300 a30a5e2f07081245
-frame 3600 d8ff5711be28bf7a
-frame 3900 c5b55ee5bfe8e4ee
-frame 4200 4c5b5db990370a39
-frame 4500 f1655203b4899118
-frame 4800 96302b0201d803a3
-frame 5100 4c174b24d8c0c8ea
-frame 5400 9f056f829ef9124c
-frame 5700 6ae8b50dcd34c53a
-frame 6000 7d81148b6b8ed50b
-frame 6300 a98cabff13a7db18
-frame 6600 5d14c9c24ddd6f59
-frame 6900 578c0bbafb9fce6e
-frame 7200 f9f6cb9c285d290d
-frame 7500 78887df646610178
-frame 7800 ae7d5592c22320c3
-frame 8100 68209fda335be298
-frame 8400 8a338525b117e8f2
-frame 8700 982569c284dddc5f
-frame 9000 2742f703abe5be77
-frame 9300 83d848ef58dbef63
-frame 9600 facbe56b5df1cfc3
-frame 9900 221c7f19ca69aa05
-frame 10200 1a3f100f11e52515
-frame 10500 c02bbd4b422ff9ce
-frame 10800 7192bca375f1c39b
-frame 11100 a95bc4c1fc2b90fe
-frame 11400 1cdfa0e0c584271a
-frame 11700 f4abc04dcfef8e82
-frame 12000 2b6f1e2fc19c3c1b
-frame 12300 4333f4d7111c1bf3
-frame 12600 e4eea3b747f939fc
-frame 12900 af60b4a072ab4954
-frame 13200 eee11fe087f713de
-frame 13500 e972533d5ad9b87b
-frame 13800 f802ee4371988288
-frame 14100 90b6bd6e4bf23f58
-frame 14400 2df5668f712ae5fd
-frame 14700 1e16a153d3555730
-frame 15000 ff53205160c54b29
-frame 15300 d34cefa4f968d7ee
-frame 15600 31b53b7613ab0feb
-frame 15900 31a4f8a97353fa14
-frame 16200 be75033f33d32112
-frame 16500 0e1a020b4cd804ea
-frame 16800 6acddfd644dd9146
-frame 17100 77ad352d23feaa45
-frame 17400 254d14fd2d5b5986
-frame 17700 5f5015c489631fe3
-frame 18000 0917b526d08c1fc4
-frames 18000 P1 corruption 6 (black-market corruptions 3) P2 sabotages 1 purchased 2 P3 destroyed 1 DS locked 1 DS alive 0 credits U=4294 orders 55
+frame 1500 302e4599c5aeb1c1
+frame 1800 191cbb29976335c2
+frame 2100 f247603248f9355c
+frame 2400 54417b29a6b90abe
+frame 2700 ca7354f280918ae7
+frame 3000 353d86330ad86a76
+frame 3300 762145f6f1dbec34
+frame 3600 0e2637d78025fad4
+frame 3900 fbe4ff10e5ad85a0
+frame 4200 e56961faa6f97068
+frame 4500 2390edf99d8b7dd3
+frame 4800 b06b9ed4f00958f5
+frame 5100 6b5f528aff35d653
+frame 5400 d2042dcbc4affcb1
+frame 5700 afde4270ea8f8f9a
+frame 6000 d0fd4fd966d34835
+frame 6300 884b9e6d041579e2
+frame 6600 96684787b0b76ed8
+frame 6900 70f40ce2d6901794
+frame 7200 d150ce172f9bdb74
+frame 7500 e95440279b49c262
+frame 7800 d2aac1c58caa9d82
+frame 8100 6230cbd2a2f613d4
+frame 8400 f4423092d2e18caa
+frame 8700 1472f63701cbbb7d
+frame 9000 697e6057a2cc24b5
+frame 9300 04ac363df6c0a898
+frame 9600 c8862625ab509f3b
+frame 9900 022cab2a3b747dfd
+frame 10200 297d5dd909eca2f7
+frame 10500 df3b9e34a829455f
+frame 10800 15a85556b6b0a7bd
+frame 11100 5d9571319012a447
+frame 11400 f01f5653a265e048
+frame 11700 394efc090a12cf34
+frame 12000 f4531e6c6e0e3c03
+frame 12300 671f06d6e971c2ea
+frame 12600 60dfa32afdbd1983
+frame 12900 6ebae937131ad00f
+frame 13200 a1804276aa39a85e
+frame 13500 b086ed34e792935d
+frame 13800 f30825eb29bfc7b4
+frame 14100 e55c00c034ebf4d1
+frame 14400 8aa6c6d596971f28
+frame 14700 2241c8b3585b1615
+frame 15000 5159c240d47a9ee0
+frame 15300 a6ff67001c8051bd
+frame 15600 2bc38747c1895dd3
+frame 15900 2c7d60ae56237530
+frame 16200 7c03f32c6f2baa5c
+frame 16500 b4f37fb9c192dbe5
+frame 16800 ecc83cb56b5cb288
+frame 17100 d1e323f29bbee4ec
+frame 17400 47a1d923cf7b56b5
+frame 17700 5fc5693b8d4cb175
+frame 18000 043ecad813f778db
+frames 18000 P1 corruption 6 (black-market corruptions 3) P2 sabotages 1 purchased 2 P3 destroyed 1 DS locked 1 DS alive 0 credits U=4294 orders 58
 1 p1 opponent 0
 1 p1 templates Uw_Default
 3 p1 plan 1 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Sabotage_Planet @U2 MainForce(0+1) net 600 gross 600 eta 15.0
@@ -122,60 +122,62 @@ frames 18000 P1 corruption 6 (black-market corruptions 3) P2 sabotages 1 purchas
 1550 p1 order build Underworld_Saboteur_Team at U0
 1582 p1 plan 4 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 1597 p1 order move fleet 28 -> U2
-1606 p1 tf MainForce move to U1
-1606 p1 order launch 29 at U0
-1606 p1 order form 29 alone
-1606 p1 order move fleet 30 -> U1
 1687 p1 order move fleet 28 -> U3
-1699 p1 tf MainForce ability Underworld_Saboteur_Team 29 at U1 applied
-1709 p1 plan 7 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
 1777 p1 order move fleet 25 -> U4
 1870 p1 tf MainForce ability Underworld_Saboteur_Team 27 at U4 applied
-1877 p1 plan 5 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-2087 p1 plan 11 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @U5 MainForce(1+0) net 0 gross 600 eta 0.0
-2089 p1 order move fleet 25 -> U0
-2101 p1 plan 12 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @U4 MainForce(1+0) net 0 gross 600 eta 0.0
-2107 p1 tf MainForce move to U4
-2107 p1 order launch 24 at U0
-2107 p1 order form 24 alone
-2107 p1 order move fleet 32 -> U1
-2114 p1 plan 13 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Sabotage_Planet @U4 MainForce(1+0) net 0 gross 600 eta 0.0
-2114 p1 plan 12 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-2122 p1 tf MainForce move to U4
-2122 p1 order launch 31 at U0
-2122 p1 order form 31 alone
-2122 p1 order move fleet 33 -> U1
-2127 p1 plan 14 AI_PLAN_UNDERWORLD_BLACKMARKET for Black_Market_Purchase @U4 MainForce(1+0) net 0 gross 0 eta 0.0
-2128 p1 order launch 26 at U0
-2128 p1 order form 26 alone
-2131 p1 order move fleet 34 -> U4
-2212 p1 order move fleet 32 -> U2
-2302 p1 order move fleet 32 -> U3
-2392 p1 order move fleet 32 -> U4
-2446 p1 tf MainForce move to U5
-2446 p1 order move fleet 25 -> U1
-2485 p1 tf MainForce ability Underworld_Saboteur_Team 31 at U4 applied
-2487 p1 plan 13 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-2488 p1 tf MainForce move to U4
-2494 p1 tf MainForce ability Tyber_Zann_Team 26 at U4 applied
-2494 p1 plan 14 AI_PLAN_UNDERWORLD_BLACKMARKET ended success
-2514 p1 plan 15 AI_PLAN_UNDERWORLD_BLACKMARKET for Black_Market_Purchase @U4 MainForce(0+1) net 0 gross 0 eta 0.0
-2514 p1 plan 10 AI_PLAN_UNDERWORLD_BLACKMARKET ended failure (released)
-2515 p1 build task 7 Tyber_Zann_Team for MainForce
-2528 p1 plan 15 AI_PLAN_UNDERWORLD_BLACKMARKET ended failure (released)
-2536 p1 order move fleet 25 -> U2
-2626 p1 order move fleet 25 -> U3
-2716 p1 order move fleet 25 -> U4
-2806 p1 order move fleet 32 -> U5
-2899 p1 tf MainForce ability Underworld_Saboteur_Team 23 at U5 applied
-2963 p1 plan 11 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-3059 p1 plan 16 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Sabotage_Planet @U5 MainForce(1+0) net 0 gross 600 eta 0.0
-3061 p1 order move fleet 32 -> U0
-3505 p1 tf MainForce move to U5
-3505 p1 order move fleet 32 -> U1
-3595 p1 order move fleet 32 -> U2
-3685 p1 order move fleet 32 -> U3
-3775 p1 order move fleet 32 -> U4
-3865 p1 order move fleet 32 -> U5
-3958 p1 tf MainForce ability Underworld_Saboteur_Team 24 at U5 applied
-3959 p1 plan 16 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1930 p1 plan 5 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+2005 p1 tf MainForce move to U1
+2005 p1 order launch 30 at U0
+2005 p1 order form 30 alone
+2005 p1 order move fleet 31 -> U1
+2084 p1 plan 11 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @U4 MainForce(1+0) net 0 gross 600 eta 0.0
+2086 p1 order move fleet 25 -> U0
+2097 p1 plan 12 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @U5 MainForce(1+0) net 0 gross 600 eta 0.0
+2098 p1 tf MainForce ability Underworld_Saboteur_Team 30 at U1 applied
+2098 p1 order launch 29 at U3
+2098 p1 order form 29 alone
+2101 p1 order move fleet 32 -> U0
+2109 p1 plan 13 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Sabotage_Planet @U4 MainForce(1+0) net 0 gross 600 eta 0.0
+2109 p1 plan 7 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+2109 p1 plan 11 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+2116 p1 tf MainForce move to U4
+2116 p1 order launch 24 at U0
+2116 p1 order form 24 alone
+2116 p1 order move fleet 33 -> U1
+2122 p1 plan 14 AI_PLAN_UNDERWORLD_BLACKMARKET for Black_Market_Purchase @U4 MainForce(1+0) net 0 gross 0 eta 0.0
+2122 p1 order launch 26 at U0
+2122 p1 order form 26 alone
+2125 p1 order move fleet 34 -> U4
+2206 p1 order move fleet 33 -> U2
+2296 p1 order move fleet 33 -> U3
+2368 p1 tf MainForce move to U5
+2368 p1 order move fleet 32 -> U1
+2386 p1 order move fleet 33 -> U4
+2440 p1 order auto-land 23 at U0
+2458 p1 order move fleet 32 -> U2
+2479 p1 tf MainForce ability Underworld_Saboteur_Team 24 at U4 applied
+2482 p1 plan 13 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+2482 p1 tf MainForce move to U4
+2488 p1 tf MainForce ability Tyber_Zann_Team 26 at U4 applied
+2488 p1 plan 14 AI_PLAN_UNDERWORLD_BLACKMARKET ended success
+2509 p1 plan 15 AI_PLAN_UNDERWORLD_BLACKMARKET for Black_Market_Purchase @U4 MainForce(0+1) net 0 gross 0 eta 0.0
+2509 p1 plan 10 AI_PLAN_UNDERWORLD_BLACKMARKET ended failure (released)
+2509 p1 build task 7 Tyber_Zann_Team for MainForce
+2523 p1 plan 15 AI_PLAN_UNDERWORLD_BLACKMARKET ended failure (released)
+2548 p1 order move fleet 32 -> U3
+2638 p1 order move fleet 32 -> U4
+2728 p1 order move fleet 32 -> U5
+2821 p1 tf MainForce ability Underworld_Saboteur_Team 29 at U5 applied
+2868 p1 plan 12 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+3044 p1 plan 16 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Sabotage_Planet @U5 MainForce(1+0) net 0 gross 600 eta 0.0
+3046 p1 order launch 35 at U3
+3046 p1 order form 35 alone
+3049 p1 order move fleet 37 -> U0
+3316 p1 tf MainForce move to U5
+3316 p1 order move fleet 37 -> U1
+3406 p1 order move fleet 37 -> U2
+3496 p1 order move fleet 37 -> U3
+3586 p1 order move fleet 37 -> U4
+3676 p1 order move fleet 37 -> U5
+3769 p1 tf MainForce ability Underworld_Saboteur_Team 35 at U5 applied
+3779 p1 plan 16 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)

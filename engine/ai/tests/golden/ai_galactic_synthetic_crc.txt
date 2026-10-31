@@ -10,13 +10,13 @@ frame 1200 ffc67ceb47899429
 frame 1350 e9b8b5854af0e7f2
 frame 1500 f93f2b763f1274a8
 frame 1650 9aa8b176fc9a8989
-frame 1800 2f29fc46a531c514
-frame 1950 2103a10687d9fa01
-frame 2100 5a09ae8c4d1b982a
-frame 2250 ddc8638ae8ac4843
-frame 2400 c1c9ec5ddc937947
-frame 2550 cfaf8033f612e634
-frame 2700 4f32ff9846c43b50
+frame 1800 9dde990b6e164163
+frame 1950 b690605d99ac9e93
+frame 2100 038654666709426f
+frame 2250 abbb8cc5fc3459fc
+frame 2400 6db1661030536af3
+frame 2550 b80e5dfd29cb0372
+frame 2700 79392b5c9489a16d
 frame 2850 68d6ecc8edfb2272
 frame 3000 147cd1f0e89aef27
 frame 3150 91e0a4ea0f849419
@@ -306,9 +306,9 @@ frames 27000 planets E=0 R=8 N=0 credits E=764 R=58 orders 153 rejected 1 confli
 2092 p1 tf SpaceForce move to P3
 2092 p1 order move fleet 26 -> P3
 2320 p1 tf GroundForce move to P3
-2320 p1 order move fleet 22 -> P5
-2491 p1 order move fleet 22 -> P4
-2662 p1 order move fleet 22 -> P3
+2320 p1 order move fleet 42 -> P5
+2491 p1 order move fleet 42 -> P4
+2662 p1 order move fleet 42 -> P3
 2836 p1 order invade P3 with 1
 2842 p1 plan 18 CONQUER ended success
 2852 p1 plan 19 CONQUER for Conquer_Planet @P2 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0

@@ -58,7 +58,7 @@ const char* kTypes = R"(<L1>
   <Projectile_Max_Flight_Distance>2500</Projectile_Max_Flight_Distance></Projectile>
  <Projectile Name="L1_Ion_Proj"><Max_Speed>200</Max_Speed><Projectile_Damage>250</Projectile_Damage>
   <Projectile_Max_Lifetime>10</Projectile_Max_Lifetime></Projectile>
- <SpaceUnit Name="S10_Frigate">
+ <SpaceUnit Name="S10_Frigate"><Victory_Relevant>Yes</Victory_Relevant>
   <Tactical_Health>3000</Tactical_Health><Max_Speed>3.0</Max_Speed><Max_Rate_Of_Turn>2.0</Max_Rate_Of_Turn>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><AI_Combat_Power>1000</AI_Combat_Power>
   <CategoryMask>Frigate</CategoryMask><Targeting_Max_Attack_Distance>1400</Targeting_Max_Attack_Distance>
@@ -77,7 +77,7 @@ const char* kTypes = R"(<L1>
   <TSW_Attack_Anim_Duration_Seconds>0.5</TSW_Attack_Anim_Duration_Seconds><TSW_Explosion_Debris_Creation_Frame_Delay>10</TSW_Explosion_Debris_Creation_Frame_Delay>
   <TSW_Post_Destruction_Wait_Frames>40</TSW_Post_Destruction_Wait_Frames><TSW_Z_Adjust_Relative_To_Target_Pos>300.0</TSW_Z_Adjust_Relative_To_Target_Pos>
  </SpaceUnit>
- <SpecialStructure Name="L1_Ion_Cannon"><SpaceBehavior>SPECIAL_WEAPON</SpaceBehavior><Tactical_Health>1500</Tactical_Health>
+ <SpecialStructure Name="L1_Ion_Cannon"><Victory_Relevant>Yes</Victory_Relevant><SpaceBehavior>SPECIAL_WEAPON</SpaceBehavior><Tactical_Health>1500</Tactical_Health>
   <Projectile_Types>L1_Ion_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>10.0</Projectile_Fire_Recharge_Seconds>
   <Projectile_Fire_Pulse_Count>2</Projectile_Fire_Pulse_Count><Projectile_Fire_Pulse_Delay_Seconds>0.5</Projectile_Fire_Pulse_Delay_Seconds>
   <Is_Special_Weapon_In_Space>Yes</Is_Special_Weapon_In_Space><Special_Weapon_Index>0</Special_Weapon_Index>
@@ -89,7 +89,7 @@ const char* kTypes = R"(<L1>
   <Projectile_Blast_Area_Damage>30</Projectile_Blast_Area_Damage><Projectile_Blast_Area_Range>150</Projectile_Blast_Area_Range></Projectile>
  <Projectile Name="L1_Bombard_Proj"><Max_Speed>40</Max_Speed><Projectile_Damage>0</Projectile_Damage>
   <Projectile_Blast_Area_Damage>40</Projectile_Blast_Area_Damage><Projectile_Blast_Area_Range>200</Projectile_Blast_Area_Range></Projectile>
- <GroundInfantry Name="S10_Trooper"><Tactical_Health>2000</Tactical_Health><Max_Speed>1.0</Max_Speed>
+ <GroundInfantry Name="S10_Trooper"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>2000</Tactical_Health><Max_Speed>1.0</Max_Speed>
   <AI_Combat_Power>50</AI_Combat_Power><CategoryMask>Infantry</CategoryMask><Targeting_Max_Attack_Distance>250</Targeting_Max_Attack_Distance>
   <MovementClass>Infantry</MovementClass><Weather_Category>Infantry</Weather_Category>
   <Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>
@@ -98,16 +98,16 @@ const char* kTypes = R"(<L1>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
  <SpaceUnit Name="L1_Bomber_Squadron"><Variant_Of_Existing_Type>S10_Frigate</Variant_Of_Existing_Type><Ship_Class>bomber</Ship_Class>
   <Land_Bomber_Type>L1_Bomber</Land_Bomber_Type></SpaceUnit>
- <LandBombingUnit Name="L1_Bomber"><Max_Speed>6.0</Max_Speed><Tactical_Health>50</Tactical_Health>
+ <LandBombingUnit Name="L1_Bomber"><Victory_Relevant>Yes</Victory_Relevant><Max_Speed>6.0</Max_Speed><Tactical_Health>50</Tactical_Health>
   <LandBehavior>LANDBOMBER_LOCOMOTOR, WEAPON</LandBehavior><Targeting_Max_Attack_Distance>500.0</Targeting_Max_Attack_Distance>
   <Projectile_Types>L1_Bomb</Projectile_Types><Projectile_Fire_Recharge_Seconds>0.2</Projectile_Fire_Recharge_Seconds></LandBombingUnit>
  <Marker Name="IN_GAME_BOMBING_RUN_MARKER"><Behavior>MARKER</Behavior></Marker>
- <SpecialStructure Name="L1_Build_Pad"><Behavior>TACTICAL_BUILD_OBJECTS</Behavior><Capture_Point_Radius>100</Capture_Point_Radius>
+ <SpecialStructure Name="L1_Build_Pad"><Victory_Relevant>Yes</Victory_Relevant><Behavior>TACTICAL_BUILD_OBJECTS</Behavior><Capture_Point_Radius>100</Capture_Point_Radius>
   <Tactical_Buildable_Objects_Campaign>Empire, L1_UC_Turret, Underworld, L1_UC_Turret</Tactical_Buildable_Objects_Campaign>
   <Minimum_Time_Before_Pad_Can_Build_Again>1.0</Minimum_Time_Before_Pad_Can_Build_Again></SpecialStructure>
- <SpecialStructure Name="L1_UC_Turret"><Tactical_Health>100</Tactical_Health><Tactical_Build_Time_Seconds>2</Tactical_Build_Time_Seconds>
+ <SpecialStructure Name="L1_UC_Turret"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>100</Tactical_Health><Tactical_Build_Time_Seconds>2</Tactical_Build_Time_Seconds>
   <Tactical_Buildable_Constructed>L1_Turret</Tactical_Buildable_Constructed></SpecialStructure>
- <SpecialStructure Name="L1_Turret"><Tactical_Health>500</Tactical_Health></SpecialStructure>
+ <SpecialStructure Name="L1_Turret"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>500</Tactical_Health></SpecialStructure>
  <GroundInfantry Name="L1_Scout"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type><Land_FOW_Reveal_Range>300</Land_FOW_Reveal_Range>
   <Behavior>SELECTABLE, REVEAL</Behavior></GroundInfantry>
 </L1>
@@ -256,11 +256,17 @@ struct Run {
     bool held_from_fire = true, finished_while_held = false, ended = false, story_pending = false;
     size_t claims = 0;
     std::string summary;
+    // follow 3: the attacker's escort killed after the release; the Death Star as last seen in the battle.
+    uint32_t kill_frame = 0;
+    size_t escorts_killed = 0;
+    bool ds_alive = false;
+    float ds_health0 = 0.0f, ds_health = 0.0f;  // at frame 2 and as last seen
 };
 
 // Battle frame schedule (frames of the battle's own counter). follow: 0 = the golden run (stops at the planet's
 // destruction); 1 = on to the end, the Empire (defender) retreats during the TSW sequence (victory hold, §2); 2 = on to
-// the end, the Empire's Faction_Leader is a member of a company on the battle planet's surface (victory 7 / 0x10, §6).
+// the end, the Empire's Faction_Leader is a member of a company on the battle planet's surface (victory 7 / 0x10, §6);
+// 3 = on to the end, the Underworld escort frigates die (Hyperspace_Away) on the release frame, the Death Star is left.
 Run run(const Data& d, int32_t workers, int follow = 0) {
     Run out;
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
@@ -306,6 +312,7 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
     float target_hp0 = 0.0f;
     uint32_t fire_frame = 0;
     objects::ObjectId dummy = objects::kNoObjectId;
+    std::vector<objects::ObjectId> escorts;  // the Underworld (attacker) frigates
     for (uint64_t t = 0; t < 4000 && (follow ? !out.ended : !out.planet_destroyed); ++t) {
         host.tick_once();
         TacticalBattle* b = battles.battle();
@@ -329,6 +336,7 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
                 const auto ty = static_cast<uint32_t>(st.type(h));
                 if (ty == type_of(d, "L1_Death_Star")) tsw = id;
                 if (ty == type_of(d, "S10_Frigate") && st.owner(h) == 1) {
+                    escorts.push_back(id);
                     if (target == objects::kNoObjectId) target = id;
                     else if (jumper == objects::kNoObjectId) jumper = id;
                 }
@@ -416,6 +424,16 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
                 out.first_unheld = f;
             }
             if (b->finished() && b->victory_held()) out.finished_while_held = true;
+        }
+        if (follow == 3 && out.first_unheld == f && out.kill_frame == 0) {
+            out.kill_frame = f;
+            for (const objects::ObjectId e : escorts)
+                if (e != jumper && b->hyperspace_out(e, 0, true)) ++out.escorts_killed;  // a death, 90 frames on
+        }
+        if (follow == 3) {
+            if (f == 2) out.ds_health0 = b->combat().health(tsw);
+            out.ds_alive = st.alive(st.find(tsw)) && b->combat().has_unit(tsw);
+            out.ds_health = out.ds_alive ? b->combat().health(tsw) : 0.0f;
         }
         if (f == 2 + 5 + 90) out.jumped_out = !b->combat().has_unit(jumper) && !st.alive(st.find(jumper));
         if (f == 2 + 89) out.jump_timing = b->combat().has_unit(jumper) && b->hyperspace().departing(corvette);
@@ -645,6 +663,26 @@ void test_tsw_follow(const Data& d) {
     }
 }
 
+// L1 systems t06 (docs/re/BATTLE_TRANSITIONS.md §3.1a item 1, TSW_PLANET_DESTROY.md §8; probe 2026-10-31, l1sys t06):
+// only victory-relevant types keep a side alive. The test types set Victory_Relevant Yes, L1_Death_Star sets none of the
+// three flags (like Death_Star_II). After the planet kill and the hold release the Underworld (attacker) escort frigates
+// die (the third one retreated at frame 2+5+90); with only the Death Star left the battle ends at once: the Empire
+// (defender) wins all-destroyed 90 frames after the Hyperspace_Away, the Death Star alive and undamaged. 0 / 4 workers.
+void test_tsw_lost(const Data& d) {
+    const Run a = run(d, 0, 3);
+    std::printf("  TSW lost: destroy %u first unheld %u kill %u (escorts %zu) end %u; Death Star alive %d health %.1f (start %.1f); %s\n",
+                a.destroy_frame, a.first_unheld, a.kill_frame, a.escorts_killed, a.end_frame, a.ds_alive, static_cast<double>(a.ds_health),
+                static_cast<double>(a.ds_health0), a.summary.c_str());
+    CHECK(a.tsw_fired && a.planet_destroyed && a.ended);
+    CHECK(a.first_unheld == a.destroy_frame + 10 + 40 + 1 && a.kill_frame == a.first_unheld && a.escorts_killed == 2);
+    CHECK(a.end_frame == a.kill_frame + 90);
+    CHECK(a.ds_alive && a.ds_health0 > 0.0f && a.ds_health == a.ds_health0);  // alive and undamaged
+    CHECK(a.summary.find("winner Empire, victory all-destroyed") != std::string::npos);
+    const Run b = run(d, 4, 3);
+    const auto dv = first_divergence(a.crc, b.crc);
+    CHECK(!dv.diverged && b.trace == a.trace && b.end_frame == a.end_frame);
+}
+
 void test_land(const Data& d) {
     const LandRun a = run_land(d, 0);
     std::printf("  land: fought %d; weather on %d advanced %d forced %d rain sight %d; bombardment refused-before-ready %d started %d hit %d "
@@ -848,6 +886,7 @@ int main(int argc, char** argv) {
     const auto d = make_data();
     test_battle(*d);
     test_tsw_follow(*d);
+    test_tsw_lost(*d);
     test_land(*d);
     test_pads(*d);  // Int-final
     test_foc();

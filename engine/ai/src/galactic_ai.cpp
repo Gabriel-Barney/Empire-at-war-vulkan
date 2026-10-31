@@ -1517,7 +1517,7 @@ void GalacticAiWorld::Impl::auto_land_free_units(int32_t player) {
         if (!valid_planet(p)) continue;
         const gal::PlanetState& ps = sim.planets()[p];
         if (ps.owner != player || ps.in_battle) continue;
-        if (ps.type < rules.types.size() && !rules.types[ps.type].surface_accessible) continue;
+        if (!sim.surface_accessible(p)) continue;  // 0x375220: a destroyed planet has no surface
         if (static_cast<int32_t>(ps.surface.size()) >= rules.constants.max_ground_forces_on_planet) continue;
         fleet_op(player, gal::kFleetLand, static_cast<uint32_t>(store.id(ps.object)), static_cast<uint32_t>(store.id(sim.fleets()[f].object)),
                  static_cast<uint32_t>(store.id(u)), "auto-land " + std::to_string(store.id(u)) + " at " + planet_name(p));

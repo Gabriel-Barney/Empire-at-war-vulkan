@@ -8,10 +8,10 @@ GameScoring.lua, CampaignFiles.xml and MasterTextFile_English.dat are read from 
 file order, the s10_map_owners reader) and patched:
   Data\\Scripts\\Miscellaneous\\GameScoring.lua   shipped script + tswp_hook.lua (fires the Death Star, stamps frames)
   Data\\XML\\CampaignFiles.xml                    shipped list + TSWP_Probe_Campaign.xml
-  Data\\XML\\TSWP_Probe_Campaign.xml              "TSWP PROBE: ALDERAAN" (Empire with the Death Star at Byss, Rebel
-                                                 Alderaan with a level-1 station, ships, barracks and infantry)
+  Data\\XML\\TSWP_Probe_Campaign.xml              "TSWP PROBE: KUAT" (Empire with the Death Star at Byss, Rebel
+                                                 Kuat with a level-1 station, ships, barracks and infantry)
   Data\\XML\\TSWP_Story_Plots.xml, TSWP_Story.xml  galactic plot: TSWP_Begin (3 s, proof) and TSWP_Heard
-                                                 (STORY_PLANET_DESTROYED Alderaan: SCREEN_TEXT, expected never)
+                                                 (STORY_PLANET_DESTROYED Kuat: SCREEN_TEXT, expected never)
   Data\\Scripts\\Story\\TSWP_Story.lua             from tswp_story.lua: owner / starbase status popups
   Data\\Text\\MasterTextFile_English.dat          shipped text + TEXTS
   TSWP_PROBE_MARKER.txt                           lets cleanup recognise the folder as ours
@@ -32,14 +32,15 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 MARKER = 'TSWP_PROBE_MARKER.txt'
 MOD_NAME = 'TswPlanetProbe'
-TARGET = 'Alderaan'
+TARGET = 'Kuat'  # FoC's Alderaan is the asteroid field with Planet_Is_Destroyable_By_TSW No
 SOURCE = 'Byss'
-ROUTE = 'Byss_Alderaan'
-DUMMY = 'Alderaan_Backdrop_Large'  # the SpaceProp with DUMMY_TACTICAL_SUPER_WEAPON_TARGET on Alderaan's space maps [M]
+ROUTE = 'Byss_Kuat'
+SPARE = 'Dantooine'  # second Rebel planet, no route: keeps the Rebels alive so the conquest does not end after run W
+DUMMY = 'Kuat_Backdrop_Large'  # the SpaceProp with DUMMY_TACTICAL_SUPER_WEAPON_TARGET on Kuat's space maps [M]
 
 CAMPAIGN = r'''<?xml version="1.0"?>
 <Campaigns>
-	<!-- TSW planet-destroy probe (tools/probe_mod/tsw_planet_destroy): move the Death Star fleet from Byss to Alderaan;
+	<!-- TSW planet-destroy probe (tools/probe_mod/tsw_planet_destroy): move the Death Star fleet from Byss to Kuat;
 	     the space battle's GameScoring hook fires the TSW by itself and stamps frames. -->
 	<Campaign Name="TSWP_Probe_Empire">
 		<Campaign_Set> TSWP_Probe_Set </Campaign_Set>
@@ -53,7 +54,8 @@ CAMPAIGN = r'''<?xml version="1.0"?>
 		<Locations>
 				Galaxy_Core_Art_Model,
 				@@SOURCE@@,
-				@@TARGET@@
+				@@TARGET@@,
+				@@SPARE@@
 		</Locations>
 
 		<Trade_Routes>
@@ -100,6 +102,73 @@ CAMPAIGN = r'''<?xml version="1.0"?>
 		<Starting_Forces> Rebel, @@TARGET@@, Corellian_Corvette </Starting_Forces>
 		<Starting_Forces> Rebel, @@TARGET@@, R_Ground_Barracks </Starting_Forces>
 		<Starting_Forces> Rebel, @@TARGET@@, Rebel_Infantry_Squad </Starting_Forces>
+		<Starting_Forces> Rebel, @@SPARE@@, R_Ground_Barracks </Starting_Forces>
+	</Campaign>
+
+	<!-- L1 systems t06, run LOST: the Death Star with one light escort against a strong defender. Keep the escort out
+	     of range, Fire by hand, then send the escort in: the Empire loses the battle after the planet kill (Retreat is
+	     greyed out after a kill, so a retreat cannot lose it). Question: owner / starbase of Kuat afterwards, and
+	     whether the Death Star alone keeps the battle open (does it count as a living attacker unit?). -->
+	<Campaign Name="TSWP_Probe_Lost_Empire">
+		<Campaign_Set> TSWP_Probe_Lost_Set </Campaign_Set>
+		<Sort_Order>1</Sort_Order>
+		<Text_ID> TEXT_TSWP_PROBE_LOST_NAME </Text_ID>
+		<Description_Text> TEXT_TSWP_PROBE_LOST_DESC </Description_Text>
+		<Camera_Shift_X> 0.0 </Camera_Shift_X>
+		<Camera_Shift_Y> 0.0 </Camera_Shift_Y>
+		<Camera_Distance> 1200.0 </Camera_Distance>
+
+		<Locations>
+				Galaxy_Core_Art_Model,
+				@@SOURCE@@,
+				@@TARGET@@,
+				@@SPARE@@
+		</Locations>
+
+		<Trade_Routes>
+				@@ROUTE@@
+		</Trade_Routes>
+
+		<Home_Location> Empire, @@SOURCE@@ </Home_Location>
+		<Home_Location> Rebel, @@TARGET@@ </Home_Location>
+
+		<Starting_Active_Player> Empire </Starting_Active_Player>
+		<Empire_Story_Name>TSWP_Story_Plots.xml</Empire_Story_Name>
+
+		<AI_Player_Control> Rebel, None </AI_Player_Control>
+		<AI_Player_Control> Pirates, None </AI_Player_Control>
+		<AI_Player_Control> Underworld, None </AI_Player_Control>
+
+		<Human_Victory_Conditions>
+				Galactic_All_Planets_Controlled
+		</Human_Victory_Conditions>
+		<AI_Victory_Conditions>
+				Galactic_All_Planets_Controlled
+		</AI_Victory_Conditions>
+
+		<Markup_Filename>Empire, DefaultGalacticHints </Markup_Filename>
+		<Markup_Filename>Rebel, DefaultGalacticHints </Markup_Filename>
+
+		<Supports_Custom_Settings>False</Supports_Custom_Settings>
+		<Show_Completed_Tab>False</Show_Completed_Tab>
+
+		<Starting_Credits> Empire, 0 </Starting_Credits>
+		<Starting_Tech_Level> Empire, 5 </Starting_Tech_Level>
+		<Max_Tech_Level> Empire, 5 </Max_Tech_Level>
+		<Starting_Forces> Empire, @@SOURCE@@, Empire_Star_Base_1 </Starting_Forces>
+		<Starting_Forces> Empire, @@SOURCE@@, Death_Star_II </Starting_Forces>
+		<Starting_Forces> Empire, @@SOURCE@@, Tartan_Patrol_Cruiser </Starting_Forces>
+
+		<Starting_Credits> Rebel, 0 </Starting_Credits>
+		<Starting_Tech_Level> Rebel, 3 </Starting_Tech_Level>
+		<Max_Tech_Level> Rebel, 3 </Max_Tech_Level>
+		<Starting_Forces> Rebel, @@TARGET@@, Rebel_Star_Base_3 </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, Calamari_Cruiser </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, Nebulon_B_Frigate </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, Nebulon_B_Frigate </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, R_Ground_Barracks </Starting_Forces>
+		<Starting_Forces> Rebel, @@TARGET@@, Rebel_Infantry_Squad </Starting_Forces>
+		<Starting_Forces> Rebel, @@SPARE@@, R_Ground_Barracks </Starting_Forces>
 	</Campaign>
 </Campaigns>
 '''
@@ -134,9 +203,12 @@ STORY = '''<?xml version="1.0" ?>
 '''
 
 TEXTS = [
-    ('TEXT_TSWP_PROBE_NAME', 'TSWP PROBE: ALDERAAN'),
-    ('TEXT_TSWP_PROBE_DESC', 'TSW planet-destroy probe. Play the EMPIRE. Move the Death Star fleet from Byss to Alderaan '
+    ('TEXT_TSWP_PROBE_NAME', 'TSWP PROBE: KUAT'),
+    ('TEXT_TSWP_PROBE_DESC', 'TSW planet-destroy probe. Play the EMPIRE. Move the Death Star fleet from Byss to Kuat '
                              'and fight the space battle; the Death Star fires by itself.'),
+    ('TEXT_TSWP_PROBE_LOST_NAME', 'TSWP PROBE: KUAT LOST'),
+    ('TEXT_TSWP_PROBE_LOST_DESC', 'TSW lost-battle probe. Play the EMPIRE. Move the Death Star and its one patrol cruiser '
+                                  'from Byss to Kuat; keep the cruiser away, Fire by hand, then let the defenders kill it.'),
     ('TEXT_TSWP_STORY_RUNNING', 'TSWP PROBE: galactic plot loaded'),
     ('TEXT_TSWP_STORY_LUA', 'TSWP PROBE: galactic story Lua running'),
     ('TEXT_TSWP_HOOK_ALIVE', 'TSWP PROBE: GameScoring hook running in this space battle'),
@@ -150,7 +222,7 @@ MASTERTEXT = 'DATA\\TEXT\\MASTERTEXTFILE_ENGLISH.DAT'
 
 
 def subst(text, rate=0.0):
-    for k, v in (('@@TARGET@@', TARGET), ('@@SOURCE@@', SOURCE), ('@@ROUTE@@', ROUTE), ('@@DUMMY@@', DUMMY),
+    for k, v in (('@@TARGET@@', TARGET), ('@@SOURCE@@', SOURCE), ('@@ROUTE@@', ROUTE), ('@@SPARE@@', SPARE), ('@@DUMMY@@', DUMMY),
                  ('@@RATE@@', repr(float(rate)))):
         text = text.replace(k, v)
     assert '@@' not in text, text

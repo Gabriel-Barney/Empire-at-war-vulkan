@@ -128,6 +128,19 @@ by the GUI tooltip and Lua); steps without a code just fail.
     not 0x5B / 0x5D / 0x5F **or** `Is_Generic_Hero` (+0x14)) **and** (no planet data, or not
     `Build_Requires_Initial_Placement` (+0xC3), or T is in planet data +0x110 list).
 
+**0x375220 `Is_Surface_Accessible(type, obj)` and destroyed planets (2026-10-31).** The override is inside the function, not
+in callers: it returns false when obj ≠ null, obj +0xB8 (planet data) ≠ null and data +0x2C8 (destroyed) = 1; otherwise the
+type byte +0xB9 (`Planet_Surface_Accessible`). Every caller passes (planet +0x298 type, planet object), so a Death Star
+destroyed planet counts as inaccessible everywhere [H]. Consequences: owner derivation 0x3f3830 runs the orbital-control
+step only when the owner is still −1 and 0x375220 is **false**, so on a destroyed planet the first eligible fleet in
+orbit (D +0xC8, not hidden, 0x3a9760 false) sets the owner, which matches the Kuat probe (BATTLE_TRANSITIONS §3.3a) [H for
+the gate, M for "first fleet wins"]. Landing refusals are in the callers; the transport Land 0x4f3bd0 / FleetManagement
+op 5 itself does not test it [H]: AI free-store unit hook 0x68fde0 step 2 (direct test, and `Is_Unit_Safe` 0x6902b0),
+`GalacticTaskForce.Land_Units` 0x6cec80, `Invade` 0x6ce600, Lua `Can_Land_On_Planet` 0x5742b0 and the fleet-arrival
+auto-land 0x433eb0 (from the fleet locomotor 0x56a1e0) all refuse [H]; galactic UI paths 0x3d5640 / 0x3d6c50 return early
+[M: probably the human land/drop UI]. AI token `IsSurfaceAccessible` 0x65e320 passes the target object, so it gives
+0.0 for a destroyed planet [H]. Build gate step 24 above inherits the same override [H].
+
 This closes GALACTIC_ECONOMY open item 12 (tech gate = step 16, a plain ≥ compare) and the A2 gal "0x2804d0 untraced"
 note. GalacticSim::buildable should follow this order exactly (the AI copies in galactic_ai_tokens.cpp become
 redundant).

@@ -484,8 +484,9 @@ int32_t GalacticSim::derive_owner(PlanetIndex planet) const {
     if (p.starbase_level > 0 && valid_player(p.starbase_owner)) return p.starbase_owner;  // 3.
     for (uint32_t q = 0; q < 2; ++q)  // 4. active production (head of ground, then space) [M]
         if (!p.queue[q].empty()) return p.queue[q][0].player;
-    // 5. orbital control: only on surface-inaccessible planets (type test 0x375220) [L].
-    if (!rules_->types[p.type].surface_accessible)
+    // 5. orbital control: only when the surface test 0x375220 fails [H], which includes a destroyed planet (STRATEGIC_GAPS
+    // 1.3 step 24; BT §3.3a probe: Kuat destroyed by the TSW, the Rebels retreated, the Death Star alone in orbit -> Empire).
+    if (!surface_accessible(planet))
         for (uint32_t f : p.orbit)
             if (fleets_[f].alive && !fleets_[f].moving) return fleets_[f].owner;
     if (valid_player(p.leaning)) return p.leaning;  // 6. political leaning [L: updated on capture]
@@ -1032,6 +1033,7 @@ RejectReason GalacticSim::launch_units(int32_t player, PlanetIndex planet, std::
 RejectReason GalacticSim::invade(int32_t player, PlanetIndex planet, std::span<const ObjectHandle> units) {
     if (!valid_player(player)) return RejectReason::InvalidPlayer;
     if (!valid_planet(planet)) return RejectReason::InvalidTarget;
+    if (!surface_accessible(planet)) return RejectReason::NotAllowed;  // Invade 0x6ce600 / Land_Units 0x6cec80: 0x375220
     PlanetState& p = planets_[planet];
     bool defended = false;
     for (ObjectHandle s : p.structures)
@@ -1107,6 +1109,20 @@ RejectReason GalacticSim::move_fleet_path(int32_t player, uint32_t fleet, std::s
         if (!adjacent) return RejectReason::InvalidTarget;
     }
     return begin_move(fleet, std::move(p));
+}
+
+RejectReason GalacticSim::move_fleet_direct(int32_t player, uint32_t fleet, PlanetIndex destination) {
+    // BATTLE_TRANSITIONS §3.3a [H]: 0x2ba6c0 builds the path [P, destination] and hands it to the move-order handler
+    // 0x39f380 -> departure 0x431c80 (GE 3.1). No A* / trade-route test: the hop is a straight line; depart_hop gives
+    // it the route factor only when the two planets are joined (0x3f7b30), otherwise 1.0 (GE 3.2).
+    if (!valid_player(player)) return RejectReason::InvalidPlayer;
+    if (fleet >= fleets_.size() || !fleets_[fleet].alive) return RejectReason::InvalidUnit;
+    const FleetState& f = fleets_[fleet];
+    if (f.owner != player) return RejectReason::NotOwner;
+    if (f.moving || f.planet == kInvalidPlanet) return RejectReason::NotAllowed;  // GE 3.1 step 1
+    if (!valid_planet(destination)) return RejectReason::InvalidTarget;
+    if (destination == f.planet) return RejectReason::NotAllowed;  // destination = current planet: stays
+    return begin_move(fleet, {f.planet, destination});            // base speed 0 -> NotAllowed, stays in orbit
 }
 
 RejectReason GalacticSim::begin_move(uint32_t fleet, std::vector<PlanetIndex> path) {
