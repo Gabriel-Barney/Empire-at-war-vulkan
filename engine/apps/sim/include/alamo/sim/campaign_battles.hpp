@@ -77,9 +77,9 @@ struct CampaignBattleOptions {
     // conflict processing (single player). Source (REMAINING_GAPS §6.4): 0x140b154d0 is the queued-battle record flag
     // (GalacticSim::linked_battle_pending, set by LINK_TACTICAL / the corruption mission), the list is never written.
     // Retail holds the record outside the conflict queues until 0x28f590 promotes it (and clears the flag); the port
-    // queues the linked conflict at the queue front at once, so the block has no window here and is left unset by
-    // default: wiring it to linked_battle_pending (cleared only when that conflict's battle starts, through the manager)
-    // would stop the linked conflict itself. The flag's other effects are in GalacticSim::paused(). Tests / hosts only.
+    // starts a linked battle at once (BT §2.9.3) and holds the record (flag set) only while another conflict is active,
+    // so the block is left unset by default: wiring it to linked_battle_pending would stop that active conflict (a human
+    // Vote never answered). The flag's other effects are in GalacticSim::paused(). Tests / hosts only.
     std::function<bool()> story_sequence_active;
     // BT §1.6 story lock 0x4472a0 (story rewards DISABLE / ENABLE / RESTRICT_AUTORESOLVE, global flag +0x41 or the planet
     // list +0x308): "this planet's battle must be fought". A human-involved locked conflict is fought (the pending choice
@@ -272,7 +272,8 @@ private:
     // Script hooks of the battle (spawn through the tactical mode, cinematic transports serviced each battle tick),
     // the Dummy_Barrage_Target spawner, the feeds STORY_REINFORCE (reserve deployments), STORY_UNIT_ARRIVED /
     // STORY_FULL_STOP (movement transitions [inferred]), STORY_DESTROY_BASE (the starbase / a ground structure died)
-    // and story-forced battles from StorySession::linked_tactical() (LINK_TACTICAL -> ConflictManager).
+    // and story-forced battles from StorySession::linked_tactical() (LINK_TACTICAL -> ConflictManager::start_linked,
+    // pushed in the same hook).
     lua::TacticalScriptHooks story_hooks_;
     lua::RemainingScriptHooks story_remaining_;  // L1 bindings: script_remaining.hpp hooks of the tactical story VMs
     lua::CinematicTransports story_transports_;

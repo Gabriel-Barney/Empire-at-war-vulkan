@@ -1032,29 +1032,43 @@ StoryRun run_story_battle(const Data& d, const FileProvider& files, int32_t work
     return out;
 }
 
-// REMAINING_GAPS §6.4: a galactic plot's LINK_TACTICAL (STORY_ELAPSED 1 s) queues a space battle at S10_B; from the queue
-// until that battle starts GalacticSim::linked_battle_pending() is set and paused() refuses FleetManagement; the flag is
-// cleared when the battle starts (CampaignBattles start_battle) and the battle runs.
-void test_linked_battle(const Data& d) {
+// BT §2.9 / REMAINING_GAPS §6.4: a galactic plot's LINK_TACTICAL (STORY_ELAPSED 1 s) starts its battle at the battle
+// hook right after the reward (ConflictManager::start_linked: queued at the front, no validation / decide). The story flag
+// (GalacticSim::linked_battle_pending, paused() refuses FleetManagement) is set by the record and cleared at the start, so
+// no tick ends with it set. Cases: space at S10_B (an Underworld frigate already orbits it); land at S10_B with no
+// Underworld unit anywhere near (the record has no units: the validation used to drop it); land sandbox (Param8 1: the
+// human defender's surface units start, the AI attacker gets nothing).
+struct LinkedRun {
+    bool started = false, land = false, flag_after_tick = false;
+    uint64_t reward_tick = 0, start_tick = 0;
+    size_t forces = 0, def_start = 0, att_start = 0, att_reserve = 0;
+    uint32_t fought = 0;
+    std::string log, conflicts;
+};
+
+LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
+    LinkedRun out;
     const fs::path x = d.root / "Data/XML";
     write_file(x / "Story_Plots_Link.xml", "<Story_Mode_Plots><Active_Plot>Story_Link.xml</Active_Plot></Story_Mode_Plots>\n");
     write_file(x / "Story_Link.xml",
-               "<Story>\n"
-               " <Event Name=\"Link\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>1</Event_Param1>"
-               "<Reward_Type>LINK_TACTICAL</Reward_Type><Reward_Param1>S10_B</Reward_Param1><Reward_Param2>SPACE</Reward_Param2>"
-               "<Reward_Param3>Underworld</Reward_Param3><Reward_Param4>S10_Space_B</Reward_Param4><Reward_Param5>Empire</Reward_Param5></Event>\n"
-               "</Story>\n");
+               std::string("<Story>\n"
+                           " <Event Name=\"Link\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>1</Event_Param1>"
+                           "<Reward_Type>LINK_TACTICAL</Reward_Type><Reward_Param1>S10_B</Reward_Param1><Reward_Param2>") +
+                   (space ? "SPACE" : "LAND") + "</Reward_Param2><Reward_Param3>Underworld</Reward_Param3><Reward_Param4> " +
+                   (space ? "S10_Space_B" : "S10_Land_B") + " </Reward_Param4><Reward_Param5>Empire</Reward_Param5>"
+                   "<Reward_Param6></Reward_Param6><Reward_Param7></Reward_Param7><Reward_Param8>" + (sandbox ? "1" : "0") +
+                   "</Reward_Param8></Event>\n</Story>\n");
     DirectoryProvider files(path_to_utf8(d.root));
     jobs::JobSystem js(jobs::JobSystemConfig{0});
     SimConfig cfg;
     cfg.seed = 2026;
     cfg.players = 4;
     SimHost host(d.types, js, cfg);
-    galactic::GalacticSetup setup = make_setup(d, false);
-    setup.forces.push_back({1, 1, type_of(d, "S10_Frigate")});  // an Underworld frigate already orbits S10_B (no arrival conflict)
+    galactic::GalacticSetup setup = make_setup(d, !space);
+    if (space) setup.forces.push_back({1, 1, type_of(d, "S10_Frigate")});  // an Underworld frigate already orbits S10_B
     galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
     CHECK(gs != nullptr);
-    if (!gs) return;
+    if (!gs) return out;
     StoryStart st;
     st.files = &files;
     st.plot_sets = {{0, "Story_Plots_Link.xml"}};
@@ -1062,31 +1076,59 @@ void test_linked_battle(const Data& d) {
     CHECK(host.start_story(st, &diag));
     CampaignBattleOptions opt;
     opt.conflict.human_choice = galactic::BattleChoice::Fight;
-    opt.battle.max_frames = 600;
+    opt.battle.max_frames = 300;
     CampaignBattles battles(host, d.crules, *d.catalog,
                             [](const std::string& name, terrain::MapData& m) {
-                                if (name != "S10_Space_B") return false;
-                                m = space_map();
+                                if (name == "S10_Space_B") m = space_map();
+                                else if (name == "S10_Land_B") m = land_map();
+                                else return false;
                                 return true;
                             },
                             opt);
     CHECK(battles.attach());
-    bool seen_pending = false, refused = false, cleared_at_start = false;
-    for (uint64_t t = 0; t < 400 && !cleared_at_start; ++t) {
-        const bool before = gs->linked_battle_pending();
+    for (uint64_t t = 0; t < 400 && battles.battles_fought() == 0; ++t) {
+        const size_t fired = host.story() ? host.story()->linked_tactical().size() : 0;
         host.tick_once();
-        if (gs->linked_battle_pending()) {
-            seen_pending = true;
-            refused = refused || gs->execute(0, commands::EventData(commands::EventType::FleetManagement)) ==
-                                     commands::RejectReason::NotAllowed;
+        out.flag_after_tick = out.flag_after_tick || gs->linked_battle_pending();
+        if (host.story() && fired == 0 && !host.story()->linked_tactical().empty()) out.reward_tick = host.frame();
+        if (battles.battle() && !out.started) {
+            out.started = true;
+            out.start_tick = host.frame();
+            out.land = battles.battle()->ground_height(0.0f, 0.0f) > -1e30f;
+            const galactic::BattleRequest& r = battles.conflicts().active_request();
+            out.forces = r.forces.size();
+            if (r.forces.size() == 2) {
+                out.def_start = r.forces[0].start.size();
+                out.att_start = r.forces[1].start.size();
+                out.att_reserve = r.forces[1].reserve.size();
+            }
         }
-        if (before && !gs->linked_battle_pending() && battles.battle()) cleared_at_start = true;
     }
-    std::string log;
-    for (const std::string& s : battles.log()) log += s + "; ";
-    std::printf("  linked battle: flag seen %d, FleetManagement refused %d, cleared at the battle start %d, pending at the end %d, fought %u (%s)\n", seen_pending ? 1 : 0,
-                refused ? 1 : 0, cleared_at_start ? 1 : 0, gs->linked_battle_pending() ? 1 : 0, battles.battles_fought(), log.c_str());
-    CHECK(seen_pending && refused && cleared_at_start && !gs->linked_battle_pending());
+    for (int t = 0; t < 400 && battles.battle(); ++t) host.tick_once();  // run the battle out
+    out.fought = battles.battles_fought();
+    for (const std::string& l : battles.log()) out.log += l + "; ";
+    for (const auto& e : battles.conflicts().log()) out.conflicts += e.text(*gs) + "; ";
+    return out;
+}
+
+void test_linked_battle(const Data& d) {
+    for (int c = 0; c < 3; ++c) {
+        const bool space = c == 0, sandbox = c == 2;
+        const LinkedRun r = run_linked(d, space, sandbox);
+        std::printf("  linked %s%s: reward tick %" PRIu64 ", battle tick %" PRIu64 " (%s), flag after a tick %d, forces %zu (defender start %zu, "
+                    "attacker start %zu reserve %zu), fought %u\n    battles: %s\n    conflicts: %s\n",
+                    space ? "space" : "land", sandbox ? " sandbox" : "", r.reward_tick, r.start_tick, r.land ? "land" : "space",
+                    r.flag_after_tick ? 1 : 0, r.forces, r.def_start, r.att_start, r.att_reserve, r.fought, r.log.c_str(), r.conflicts.c_str());
+        CHECK(r.started && r.land == !space);
+        // §2.9.3 (Param13 0): started by the reward itself. [port] the reward is recorded in the story service, which runs
+        // after the battle hook, so the battle starts at the next hook (the retail load also spans frames).
+        CHECK(r.reward_tick != 0 && r.start_tick == r.reward_tick + 1);
+        CHECK(!r.flag_after_tick);
+        CHECK(r.forces == 2 && r.att_start == 0 && r.att_reserve == 0);
+        CHECK(r.def_start == (sandbox ? 1u : 0u));  // not sandbox: no galactic unit; sandbox: the human defender's squad
+        CHECK(r.fought == 1 && r.log.find("LINK_TACTICAL S10_B") != std::string::npos && r.log.find(" started") != std::string::npos);
+        CHECK(r.conflicts.find(space ? " space S10_B " : " land S10_B ") != std::string::npos);
+    }
 }
 
 void test_story_battle(const Data& d) {

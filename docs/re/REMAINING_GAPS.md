@@ -704,7 +704,11 @@ No sim effect. Data: FoC 1 planet with starbase stealth and 7 with ground-base s
   - the corruption-mission start 0x52bf50.
 
   The same call sets 0x140b30545 and 0x140b305ed.
-- **Cleared by** 0x28c640 when the queued battle starts (0x28f590), and by 0x289840 / 0x28e890 [M: reset / load].
+- **Cleared by** 0x28c640 when the queued battle starts (0x28f590), by 0x28e890 (new game / map setup) and by the
+  record destructor 0x289840 (GMM dtor 0x289750). Correction 2026-10-31 (BATTLE_TRANSITIONS §2.9): with the default
+  LINK_TACTICAL Param13 = 1 the record stays set while the one-button pending banner is up (pause raised, the
+  conflict not yet queued, so the state-machine block does not apply); with Param13 = 0 (all Underworld links)
+  0x28f590 clears it in the same call that wrote it, so the block is never seen.
 - **The list at 0x140b2b360** has no writer anywhere in the binary (reads plus the destructor 0x7ef5b0 only), so it is always empty.
 - **Effect.** While set, in SP and when the local player is in a queued conflict (0x2b0350):
   - conflict state machines do not run (0x2be640);

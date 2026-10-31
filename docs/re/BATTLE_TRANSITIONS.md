@@ -135,7 +135,7 @@ object services earlier in the same service pass, so in practice it can start in
 | 7 | auto-resolve running; timer at GOM+0x30 (space) / +0x28 (land) |
 | 2 | tactical battle chosen, pre-battle cinematic playing |
 | 3 | start the tactical battle (0x28fda0) |
-| 9 | battle set up from a queued record (§2.7) |
+| 9 | sandbox linked battle set up from the queued record (§2.9); no branch handles it (idle until the battle end resets −1) |
 
 **Validation** (space 0x2befe0, land 0x2becb0) runs first on every pass. The head is dropped when
 attacker == defender, or when one side has no alive unit that `Can_Participate_In_Space_Battle`
@@ -298,6 +298,8 @@ event 0x341f00) gets:
 - space with `Space_Station_Destruction_Forces_Retreat` (+0x11e6e): type 0xf
   (`SUB_TACTICAL_SPACE_ENEMY_STARBASE_DESTROYED`) for the attacker.
 
+How and when these are evaluated (event-driven 0xb, hold counter, story rules): §3.1a.
+
 VictoryType values (enum table 0x341ff0): 0 `Galactic_All_Planets_Controlled` … 10
 `Galactic_Cycles_Elapsed`, 0xb..0x11 as above plus 0x10 `SUB_TACTICAL_STORY_MODE_TRIGGERED_VICTORY`,
 0x11 `SUB_TACTICAL_ENEMY_LEADER`, 0x12..0x16 skirmish types.
@@ -312,13 +314,17 @@ player at a found marker (0x2a8b50, 0x29f810) [L].
 
 ### 2.7 Queued battle record (GMM+0xf0) [H for fields, M for use]
 
-0x28f590 starts a battle from a stored record (story `STORY_LOAD_TACTICAL_MAP`, save/load during a
-pending battle, MP): kind (+0xf4: 1 land, 2 space), attacker (+0xf8), planet (+0xfc), map (+0x100),
-faction name (+0x120), forced type (+0x140), strings (+0x148), "set up" flag (+0x168), game options
-(+0x16c..+0x174, copied to GOM+0x61c). It re-queues the conflict at the front (`at_front` = 1), then
-either jumps to state 9 and builds the force split immediately (0x2bce30 / 0x2bc6a0), or lets the state
-machine run. It is also called after every battle end and from the galactic resume path (0x28bc80) to
-start the next pending battle.
+0x28f590 starts a battle from the one stored "linked battle" record, written by 0x28bd70 from the story
+reward LINK_TACTICAL and the corruption-mission start (not by `STORY_LOAD_TACTICAL_MAP`, see L1_S4_REMAINING
+§4.4): kind (+0xf4: 1 land, 2 space), attacker player id (+0xf8), planet id (+0xfc), map (+0x100),
+**defender** faction name (+0x120), forced/hero type (+0x140), Story_Plots script (+0x148), sandbox flag
+(+0x168), presentation options (+0x16c..+0x171), post-battle resolution (+0x174, copied to GOM+0x61c),
+"banner shown" (+0x178), "show banner first" (+0x179), space flagship split (+0x17a). It re-queues the
+conflict at the front (`at_front` = 1) and then **always starts the tactical battle at once** (0x28fda0);
+the sandbox flag only chooses between state 9 + a human-only force split (0x2bce30 / 0x2bc6a0) and
+clearing both force maps (no galactic units carried in). The state machine never decides such a battle.
+Callers: the LINK_TACTICAL handler, the corruption mission, every battle end (0x3639d0 tail), the
+state 1/2 path of 0x2be640 after the pending banner, and the post-load path 0x28bc80. Full detail §2.9.
 
 ### 2.8 RNG and story hand-off
 
@@ -329,6 +335,192 @@ start the next pending battle.
 - If the story allows tactical story mode (0x140b30544 and the local player's flag +0x3c0 clear), the
   new mode's +0x2cf is set and the story manager is told the defender (0x329530); the tactical story
   scripts then run on the tactical mode's +0xa0 (T9). [M]
+
+### 2.9 Story-linked battles (LINK_TACTICAL) and the queued-record start
+
+Answers how a story mission battle starts, including a LAND one with no invading units. Sources: handler
+0x45f9c0, 0x28bd70, 0x28f590, 0x2b0520, 0x2af7c0, 0x2bc6a0, 0x2b76a0, 0x2be640, 0x28bf10 → 0x2a7580 →
+0x2aa510 / 0x2aa8e0, 0x87770, shipped FoC Story XMLs.
+
+**2.9.1 Reward params (reward 0x3e, handler 0x45f9c0)** [H]. Param N is the string at reward +0x50 +
+0x20·(N−1); the handler's own log line names them "Planet, Mode, Attacker, Map, Defender, Hero, Script,
+sandbox". P1–P5 must be non-empty, else the reward silently does nothing.
+
+| P | meaning | conversion | default |
+|---|---|---|---|
+| 1 | planet | object **type** name → first object of that type in the galactic GOM (0x407e00, 0x2a87d0); unknown → log `Invalid planet %s in Link_Tactical` and continue with a null planet (null dereference in the original, [M]; port: refuse) | — |
+| 2 | mode | story keyword map 0x140b30728 (0x45c3f0): GROUND 0 → kind 1 (land), SPACE 1 → kind 2 (space); any other mapped value (EITHER 2) → log `Invalid combat location`, no battle. **A word missing from the map returns 0 = land**, so the shipped `LAND` works | — |
+| 3 | attacking faction | faction (0x3303d0) → its player (0x294d30) → id (+0x4c); unknown → log `Invalid attacking faction`, no battle | — |
+| 4 | map file | string, used as `Data\Art\Maps\<P4>` by 0x28fda0 (§2.1 step 1.4) | — |
+| 5 | defender faction | kept as a **string** (+0x120); resolved to a player only when the battle starts | — |
+| 6 | hero / forced type | object type (0x407e00), null when absent or unknown | none |
+| 7 | Story_Plots file | string → +0x148 | empty |
+| 8 | sandbox | `atoi ≠ 0` | false |
+| 9 | arrival options | int → 0x2cbb50(0x140b27a10, v): 0 → +0x34e = 0, +0x34f = 0; 2 → both 1; anything else → +0x34e = 1 only. +0x34f is the reinforcement **hyperspace-hold flag 0x140b27d5f** (L1_S4_REMAINING §3.4 "Hyperspace in"; cleared by Lua `Resume_Hyperspace_In`; this is its writer); +0x34e (0x140b27d5e) is read with `In_Game_Cinematics` by the formation code 0x4fbb10 [M: arrival cinematic on]. Also stored in GMM+0x30 | 1 |
+| 10 | presentation flag A | bool → overlay object 0x140a28c10 +0xf, 0x140a28c93 = !v; when v and P9 ≠ 1 also 0x140b27ee0 = 0, 0x140b27ee4 = 6, 0x140a28c20 = 1 [L: letterbox / fade setup]; stored in GMM+0x34 | false |
+| 11 | presentation flag B | bool → 0x140a28c10 +0xe and the cinematic input-block flag 0x140a28c91 (UI.md) [M: battle opens in cinematic mode] | false |
+| 12 | post-battle resolution | keyword: RETREAT_PLAYER 1, RETREAT_AI 2, DESTROY_AI 3; unknown (0) → log `Unknown resolution`, use 3 | **3 (DESTROY_AI)** |
+| 13 | show the pending banner first | bool | **true** |
+| 14 | space flagship split | bool (0x2bd500 rule 3) | true |
+
+The handler then calls **0x28bd70**(GMM, planet id, kind, attacker id, P4, P5, P6 type, P7, P8, P9, P10,
+P11, P12, P13, P14) and, **if the current mode is galactic** (mode vf +0xe0 == 0), calls 0x28f590 at once.
+It ignores 0x28bd70's result.
+
+**2.9.2 0x28bd70: write the record** [H]. Refused (returns 0, nothing written) when planet id = 0x3fffff,
+kind ∉ {1, 2}, attacker = −1, P4 or P5 empty, **a record is already present (GMM+0xf0)**, or no current
+mode. Otherwise: reset the record (0x28c640: present 0, ids −1 / 0x3fffff, strings empty, +0x168 0,
++0x16c 1, +0x170/+0x171 0, +0x174 0, +0x178 0, +0x179 1, +0x17a 1), then present := 1 and the fields as
+listed in §2.7; the script is copied only when non-empty. Also sets **0x140b30545** (linked-battle flag) and
+**0x140b305ed** (skip the battle-end dialog, §2.9.6). Rewards run synchronously (STORY.md §1), so the
+record is written in the same tick as the triggering story event.
+
+**2.9.3 0x28f590: start the record** [H]
+1. **Wait while a pending-battle banner is up**: if `Strategic_Queue_Tactical_Battles` (GameConstants
+   +0x118a1 = 0x140b270a1), the galactic pause counter > 0 and the galactic GOM state is 0, return 0; the
+   record stays.
+2. **Banner stage** (record present, +0x178 = 0, +0x179 = 1): galactic GOM state := 0, raise one pause
+   level (0x28bb80 logic inline), 0x28d7f0(GMM, record planet, kind == land) shows the pending banner (the
+   one-button `story_pending_battle_shell` is chosen because 0x140b30545 is set, 0x3ca480), +0x178 := 1,
+   return 0. The player's Begin (0x28c7e0) sets state 1 in SP (state 3 in MP); the GOM service 0x2be640
+   then plays the zoom-in (state 1 → 2, record planet GMM+0xfc) and, once 0x140b303c0 is clear: state 3,
+   release the pause, hide the banner, and **because the record is present: state −1 and 0x28f590 again**
+   (now +0x178 = 1, so it starts). That path also wins over a normal conflict whose banner was up when a
+   record arrived (the normal conflict stays queued behind it) [M].
+3. Copy the record locally and clear it (0x28c640: GMM+0xf0 = 0, the §6.4 story block ends here). Stop
+   (return 0) unless kind ∈ {1, 2}, attacker ≠ −1, planet id ≠ 0x3fffff, map non-empty and the planet object
+   exists.
+4. Defender = the player of faction name +0x120 (−1 if unknown). GOM+0x61c := resolution;
+   0x140b30548 := script (or empty: read and cleared by the tactical mode init 0x3b81b0 / 0x4d7820, which
+   loads it as the battle's story plot for the local player, 0x329aa0); apply P9–P11 (table above);
+   GMM+0x30 / +0x34 := P9 / P10 (re-applied after a save load by 0x52d10); GMM+0x1e3 := 0.
+5. **Space**: `Initiate_Space_Conflict`(planet, attacker, defender, P4, at_front 1). Not sandbox → clear both
+   force maps (0x2b6f90 = 0x4f2fb0 on GOM+0x498: start map, reserve map +0x4d8, planet snapshot +0x518).
+   Sandbox → state 9; orbit units split (0x2ad100: defender list, attacker list); a side's list is emptied
+   when its player is AI (defender = the P5 player, so an unknown P5 crashes here [M]); 0x2bce30(defender
+   list, attacker list, forced type P6, flagship P14).
+6. **Land**: `Land_Invade`(planet id, **unit list = the global int vector 0x140a172b0**, attacker, defender,
+   P4, at_front 1), then that vector is cleared (0x32ba40(0, 0)). The vector holds the unit ids of the last
+   invade command (0x48ff50, every id of the event) or single-unit landing (FleetManagement 0x5af260 case 5)
+   and is cleared by nothing else, so: a LINK_TACTICAL fired by STORY_LAND_ON / STORY_DEPLOY gets the units
+   the player just landed; one fired by STORY_TRIGGER / ENTER / MOVE gets whatever ids are left from an
+   earlier landing, usually none [M]. Not sandbox → clear the force maps (as space). Sandbox → state 9 and
+   0x2bc6a0(GOM, humanOnly 1, forced type P6).
+7. 0x140b30544 := 0 (the new tactical mode's +0x2cf story flag stays 0 and 0x329530 is not called, §2.8);
+   then **0x28fda0(GMM, kind, planet, defender, P4, 1)** (or the alternate callback GMM+0xa8 with {kind,
+   planet, defender, map}). The battle load starts inside this call, so with P13 = 0 the battle begins in
+   the same tick as the story event; with P13 = 1 after the banner and zoom.
+
+**Who starts it when.** Reward fired in galactic mode → at once (or after the banner). Reward fired while a
+tactical mode is current (none in shipped data) → the record waits and the battle-end tail's 0x28f590
+starts it right after that battle. After loading a save with a record present, 0x28bc80 clears +0x178 and
+calls 0x28f590 (the banner is shown again if P13). [H]
+
+**2.9.4 Validation and decide** [H]. Neither runs for a linked battle in practice: 0x28f590 starts the
+battle itself, the galactic GOM does not tick during the battle, and the battle end (0x28bf10 → 0x2a7580)
+sets the state to −1 and removes the head. In the state machines the order is: (land only) **return at once
+when the head's unit list is empty** (0x2b76a0 first test, record +0x20), then validation (0x2becb0 /
+0x2befe0, on every pass, any state), then states 0 / 3 / −1(decide); **state 9 has no branch** (idle). So
+validation is not skipped by state 9, but it is only reached if 0x28fda0 failed (e.g. a planet with an
+unknown `Terrain`) and the record stayed queued: a land record with no units then sits at the head forever
+and blocks the land queue; one with units is validated and then idles (sandbox) or is decided normally
+(not sandbox, state −1) [M]. No overrun test, auto-resolve, MP vote or normal pending dialog is used; the
+only choice is the optional one-button banner (no auto-resolve).
+
+**2.9.5 Forces** [H]
+- **Not sandbox (P8 = 0, e.g. Underworld M01 Kessel, M11 Coruscant):** both force maps are cleared, so no
+  galactic unit of either side enters the battle; P6 and P14 are unused. Everything comes from the map
+  (objects placed in the .ted, e.g. `UMP_TYBER_ZANN` found by `Find_First_Object` in
+  STORY_UNDERWORLD_ACTI_M01_LAND.LUA) and the P7 plot's Lua spawns.
+- **Sandbox land (0x2bc6a0, humanOnly = 1):** clears both maps; defender: every surface object (0x397120)
+  → start, **only when the defender is human**; attacker (only when human): lead from the record units with
+  P6 as forced type (TACTICAL_GAPS §4.2; the lead is landed, raid rules apply); every attacker transport in
+  attacker fleets in orbit → reserve. **With an empty unit list there is no lead: the attacker's start list
+  is created empty and only its orbiting transports go to the reserve.** Planet snapshot +0x518 (base
+  fields only when the defender is human). If the land queue is empty (Land_Invade refused) it returns
+  before clearing anything.
+- **Sandbox space:** human sides' orbit units through 0x2bce30 with P6 as `forced_type` (that type starts,
+  all others reserve) else the P14 flagship rule, else the population split (§2.3). AI sides get nothing
+  from the galaxy.
+
+**2.9.6 Battle end** [H unless tagged]. The normal path (§3.1–3.3), not the corruption skip: tail of
+0x3639d0 reads the parent's queue head (the linked record, at the front), 0x2bff60 planet write-back,
+0x28bf10(kind, winner, R, P, flag 0x140b30545). Differences:
+- 0x28bf10 skips the retreat of R (land; space: only the defender side's fleet retreat) when the local player
+  won and GOM+0x61c ≠ 0.
+- 0x2a7580 (end of 0x28bf10) sets state −1, lands the record's units if the attacker won (none when the
+  list is empty), sets GMM+0x1e3 := 1 if the state was 9 [L: read by the tactical tick 0x364b20], and, **if
+  the winner is human and GOM+0x61c ≠ 0, applies the resolution** (land 0x2aa510, space 0x2aa8e0), then
+  GOM+0x61c := 0 and the head is removed:
+  - RETREAT_PLAYER: retreat (0x2ba850 / 0x2ba6c0) the ground units (fleets) of attacker and defender that
+    are human; if the ground base (starbase) owner is human, the base is cut to level 0 (0x4bb1a0 removes
+    structures above level 0) [M for the base step];
+  - RETREAT_AI: the same for AI players; if the base owner is AI, its structures are processed (0x27f370
+    per type) and the base cut to level 0 [M];
+  - DESTROY_AI: every AI-owned surface object (space: AI fleets and members in orbit) is destroyed
+    (containers released first), then as RETREAT_AI for the base [M].
+  Default P12 is 3, so every link without P12 destroys the AI's units at the planet on a human win.
+- The battle-end dialog callback 0x87770 sees 0x140b305ed: clears it, releases every galactic pause
+  level, runs 0x32e910 on the galactic story (0x5303b0 per active plot), sets galactic mode +0x188 = 1 and
+  **returns without the battle-summary dialog** [M for the dialog meaning].
+- 0x140b30545 is cleared when the galactic pause counter reaches 0 (0x28c720), so with a banner (P13 = 1)
+  it is usually 0 again at the battle end; without one it is still 1 and 0x2ba850 uses its alternative
+  destination order (§3.3) [M].
+- The tail then calls 0x28f590 (no record left → nothing).
+
+**2.9.7 Refusals** [H]. `Land_Invade` queues only when attacker ≠ defender (defender derived only when −1,
+§1.3); `Initiate_Space_Conflict` with an explicit defender always queues, with −1 only when an enemy
+fleet/starbase defender exists. Both are void: 0x28f590 does not check, logs nothing and does not restore
+the record (already cleared). It still sets state 9 / clears the force maps and **starts the battle**; at
+the end the tail dereferences the parent's (empty or unrelated) queue head [M: crash or wrong record]. Not
+reached by shipped data (P3 ≠ P5 everywhere). Port: refuse the start and log.
+
+**2.9.8 Shipped FoC LINK_TACTICAL rewards** (foc_data_text.zip, Story_*.xml; Underworld rows in full, P4 /
+P7 elsewhere follow the mission name). "–" = absent (default).
+
+| file / event | trigger | P1 | P2 | P3 → P5 | P6 | P8 | P9 | P10 | P11 | P12 | P13 | P14 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| UNDERWORLD `Underworld_ActI_M01_Load` (UM01_A_Crimelord_Unleashed.TED, Story_Plots_Underworld_M01_LAND) | TRIGGER | Kessel | LAND | Underworld → Empire | "" | 0 | 0 | 1 | 1 | RETREAT_PLAYER | 0 | – |
+| UNDERWORLD `..._M02_Start` (UM02) | ENTER | Yavin | SPACE | Underworld → Rebel | "" | 1 | 0 | 1 | 0 | RETREAT_PLAYER | 0 | 0 |
+| UNDERWORLD `..._M03_Start` (UM03) | DEPLOY | Saleucami | LAND | Underworld → Hutts | "" | 1 | 0 | 1 | 0 | DESTROY_AI | 0 | – |
+| UNDERWORLD `..._M04_Start` (UM04) | DEPLOY | Hypori | LAND | Underworld → Pirates | "" | 1 | 0 | 1 | 0 | – | 0 | – |
+| UNDERWORLD `Underworld_ActII_M06_Start` (UM06) | ENTER | Dathomir | LAND | Underworld → Empire | "" | 1 | 0 | 1 | 0 | RETREAT_PLAYER | 0 | – |
+| UNDERWORLD `..._M07_Start` (UM07) | DEPLOY | Bespin_Story | LAND | Underworld → Empire | Tyber_Zann_Passenger | 1 | 2 | 1 | 1 | RETREAT_PLAYER | 0 | – |
+| UNDERWORLD `..._M09_Start` (UM09) | ENTER | Carida | SPACE | Underworld → Empire | "" | 1 | 0 | 1 | 0 | RETREAT_PLAYER | 0 | 0 |
+| UNDERWORLD `..._M11_Start` (UM11) | ENTER | Coruscant | LAND | Underworld → Empire | "" | 0 | 0 | 1 | 0 | RETREAT_PLAYER | 0 | – |
+| UNDERWORLD `..._M12_Start` (UM12) | ENTER | Kuat | SPACE | Underworld → Empire | "" | 1 | 0 | 1 | 0 | – | 0 | – |
+| EMPIRE_ACT_I M02 / M03 / M04 | TRIGGER / MOVE / MOVE | Thyferra / Ilum / Geonosis | GROUND / SPACE / SPACE | Empire → Rebel / Pirates / Rebel | Darth_Vader / Boba_Fett_Team / – | 0 / 1 / 1 | 0 / 0 / 2 | 1 | 1 / 0 / 0 | – | 0 / – / – | – |
+| EMPIRE_ACT_II M04 / M05 / M06 (+ restart) | ENTER / LAND_ON / MOVE (TRIGGER) | MonCalimari / Kashyyyk / Carida | SPACE / LAND / LAND | Empire → Rebel; M06: Rebel → Empire | – | 1 | – / 0 / 0 | – / 1 / 1 | – / 0 / 1 | – | – | – |
+| EMPIRE_ACT_III M09 (+ restart) | MOVE (TRIGGER) | Bothawui | GROUND | Empire → Rebel | Emperor_Palpatine_Team (restart: –) | 1 | 0 | 1 | 0 | – | – | – |
+| EMPIRE_ACT_IV M10 / M11 | ENTER | Tatooine / Alderaan | SPACE | Empire → Rebel | – / Death_Star | 1 | 2 / – | 1 / – | 0 / – | – / RETREAT_PLAYER | – | – |
+| REBEL_ACT_I M01 / M02 / M03 | TRIGGER / DEPLOY / LAND_ON | Kuat / Wayland / Fresia | SPACE / GROUND / GROUND | Rebel → Empire | "" / Droids_Team / "" | 1 | 0 | 1 | 0 | – / RETREAT_PLAYER ×2 | 0 / – / – | – |
+| REBEL_ACT_II M04 / M06 | ENTER / LAND_ON | Kessel / Kashyyyk | SPACE / LAND | Rebel → Empire | – | 1 | 0 | 1 | 0 | RETREAT_PLAYER / – | – | – |
+| REBEL_ACT_III M07 / M07A / M08 / M09 / M10 | MOVE / ENTER ×3 / TRIGGER | Atzerri / Corellia / VergessoAsteroids / Corulag / Carida | SPACE ×4, LAND | Rebel → Empire | M08: HAN_SOLO_TEAM | 1 | 2 / 2 / – / 2 / 0 | 1 (M08 –) | 0 (M08 –) | – | – | – |
+| TUTORIAL I / III / V / VI / VII | TRIGGER / ENTER / LAND_ON / TRIGGER / TRIGGER | Kashyyyk / Kashyyyk / Ryloth / Endor / Tatooine | LAND / SPACE / LAND / LAND / SPACE | I, VI, VII: Rebel → Empire; III, V: Empire → Rebel | – | 1 | I: 0 | I: 1 | I: 1 | – | I, VI, VII: 0 | – |
+| demos / tests (UNDERWORLD_DEMO, _EXEC_DEMO, _FOCUS_DEMO ×2, _TUTORIAL, _TEST_CAMPAIGN(_MISSION_12), REBEL_STEVE_TEST, SANDBOX_FOCUSDEMO_EMPIRE ×2) | various | Felucia, endor, Bespin, Kuat, Coruscant, Ilum, Bothawui | LAND / SPACE / GROUND | Underworld → Empire / Rebel; copies of campaign links | Tyber_Zann(_Prologue), Vengeance_Frigate, … | 1 (exec demo 0) | 0 | see XML | see XML | RETREAT_PLAYER / RETREAT_AI / "" / – | 0 (steve test, sandbox –) | – |
+
+Observations: 19 of the 45 links use the non-keyword `LAND` (works as land, §2.9.1; 6 use GROUND, 20 SPACE). Every Underworld campaign link
+sets P13 = 0 (starts in the same tick, no banner); most EaW-campaign links leave P13 at the default and get
+the banner. Land links fired by DEPLOY / LAND_ON (UM03, UM04, UM07, Empire M05, Rebel M02/M03/M06, Tutorial
+V) carry the just-landed units into a sandbox battle; the TRIGGER / ENTER / MOVE land links (UM01 Kessel,
+UM06, UM11, Empire M02, M06, M09, Rebel M10, Tutorial I / VI) carry no planned units (empty or stale
+vector), and three of them (UM01, UM11, Empire M02) are not sandbox at all.
+
+**2.9.9 Open items**
+1. Exact meaning of P10 and P11 (overlay 0x140a28c10 +0xe / +0xf, 0x140b27ee0/ee4, 0x140a28c20) and of
+   0x140b27d5e; reader of GMM+0x30 / +0x34 besides the save-load restore.
+2. 0x4bb1a0 / 0x27f370 in the resolutions (base cut and the per-type player call) — [M] only.
+3. GMM+0x1e3 reader 0x364b20 (one-shot check 10 s into the next tactical battle) and 0x140b30391 (no reader
+   found).
+4. Linked record arriving while a normal conflict's banner is up and the player picks auto-resolve
+   (0x28c7e0 with param 1 → 0x29c020): when the record is then started was not traced.
+5. A link fired by STORY_ENTER / MOVE can coexist with a normal space conflict queued by the same fleet
+   arrival (no suppression like the invade's, 0x326a30); the normal conflict is left behind the linked one.
+   Probe: Empire Act I M03 (Ilum) — does a second battle or auto-resolve follow the mission?
+6. Probe LT1: Underworld M01 Kessel — no galactic units in the battle, no battle-summary dialog, AI units
+   at Kessel after the win (RETREAT_PLAYER keeps them; Empire M02 Thyferra with default DESTROY_AI removes
+   them). Probe LT2: P9 = 2 mission (Bespin UM07 or Rebel M07 Atzerri) — reinforcements hold in hyperspace
+   until the script calls `Resume_Hyperspace_In`.
 
 ---
 
@@ -362,6 +554,114 @@ winner id) and the mode is tactical with a parent:
 7. Story events on the galactic story manager: land 0x32f4d0(P, winner) + 0x32a340(P, loser player);
    space 0x32f570 + 0x32a3b0; if R ≠ −1, 0x32b330(R) (retreat event). Visibility refresh for the local
    player (0x2b59b0). Then 0x28f590 starts the next pending battle, if any.
+
+### 3.1a Victory monitor: what counts and when (2026-10-31)
+
+Answers why a story battle with no player units at frame 0 (Underworld M01 Kessel) does not end at once.
+Sources: 0x344710 (evaluate), 0x346460 / 0x28f570 (test wrappers), 0x343b90 (declare), 0x342d80 / 0x342dc0
+(result ready), 0x344670 (per-frame countdown), 0x341fe0 / 0x3440a0 / 0x343f80 (hold), 0x2c0340 (object-loss
+trigger), 0x2a64f0, 0x4ca2f0, 0x5b07c0, 0x63fae0, 0x340750, 0x28fda0 registration, reward switch 0x456970,
+0x462b70, 0x372230, 0x39a450, 0x2a9ff0; shipped FoC XML / Lua; maps.meg UM01 TED.
+
+**Monitor layout** (`VictoryMonitorClass`, mode +0x28) [H fields, M names]: +0x00 mode; +0x08..+0x18 vector
+of condition records (0x30 bytes: +0 type, +4 player id, +8 countdown frames, +0xc int, +0x10 float, +0x14
+"satisfied" byte, +0x15 "silent" byte = no win/lose text, +0x18 vector of faction-name strings); +0x20
+declared; +0x24 countdown; +0x28 declared record (copy); +0x58 last frame seen; +0x5c **hold counter**;
++0x60 `DynamicVectorClass<AwaitingVictoryTestType>` (data +0x68, count +0x70: deferred {type, player} pairs);
++0x79 / +0x7a end-wait flags. Records added at setup (§2.5) carry countdown 0xd2 = 210 frames (7 s).
+
+**1. Counting rule for 0xb `SUB_TACTICAL_ALL_ENEMY_UNITS_DESTROYED` (test for player E)** [H]
+- Only tested when E is the battle's attacker or defender (0x28a780 / 0x28a910); otherwise no victory.
+- Candidates: every object in the tactical GOM's full object list (gom +0x38) whose owner (+0x58) ≠ E
+  (0x2a9ff0 with no behaviour / list / radius filter). An object **blocks** E's victory when all hold:
+  - its own type (+0x298, not a container's) is victory-relevant in this mode (0x372230): `Victory_Relevant`
+    (type +0x5e) → always; else land → `Land_Victory_Relevant` (+0x60), space → `Space_Victory_Relevant`
+    (+0x5f). All three default false (OBJECT_TYPES §2);
+  - not dying / removed (obj +0x3a0 bits 0x40 and 0x02 clear);
+  - its effective owner is an **enemy** of E (0x39a450 → `Is_Enemy` 0x2824f0); the effective owner is +0x58,
+    or, for a galactic planet object (+0x335 ≠ −1), the planet's owner (not relevant in tactical).
+- No blocker → E wins type 0xb. Nothing else is looked at: **no** behaviour test (SELECTABLE, LOCOMOTOR,
+  UNIT_AI), no prop / structure / unit category, no Hide, invulnerability, Prevent_All_Fire, cinematic or
+  letterbox state, no Is_Neutral test of the object's owner (a Neutral player is simply not an enemy). Garrisoned
+  or transported objects are GOM objects with their own type and count like any other [M]. Units still in the
+  reinforcement pool / reserve are not GOM objects and never count [M]. `Variant_Of_Existing_Type` children
+  copy the parent's flags (OBJECT_TYPES §3.2), so a story variant of a hero counts if the hero does.
+- 0xc `..._ALL_CAPABLE_ENEMY_UNITS_RETREATED` (player E): needs the retreat coordinator (mode +0x30) with
+  0x33fe20 true and a retreating player R (+0x1c ≠ −1), R ≠ E and R an enemy of E → E wins. It does not count
+  objects at all [H].
+
+**2. When it is evaluated** [H]
+- **0xb is not polled.** Its only trigger is 0x2c0340(gom, object, old owner P), called when a victory-relevant
+  object (0x372230 on its type) **leaves** player P in a tactical mode: removal from the GOM (0x2a64f0, every
+  death / despawn), owner change (0x4ca2f0 capture-style change incl. contained objects, 0x5b07c0, vehicle
+  thief 0x63fae0). For every player E ≠ P that is an enemy of P: if the mode has a parent (campaign battle,
+  0x28aa00) and E is attacker or defender → test 0xb, then (land base bytes +0x394 / +0x38e) 0xd / 0xe, or space
+  0xf; without a parent (skirmish) the 0x12 / 0x13 / 0x14 / 0x16 types instead. So a side that **never had or
+  lost** a victory-relevant object cannot lose by 0xb, and nothing is evaluated at frame 0 / 1 [H].
+- 0xc only from 0x340750 (retreat coordinator reaches state 3, "retreat_complete"), for every enemy of R that is
+  attacker or defender. 0x340750 first releases **all** hold levels without replay (0x343f80(…, 0)).
+- **Gates inside 0x344710** (every type): hold +0x5c > 0 → append {type, player} to the deferred queue
+  (0x341f40, no duplicates) and answer "no"; already declared (+0x20) → "yes" only for the declared {type,
+  player}; no records → "no"; global byte 0x140b303c1 set → "no" (no direct writer found, [L]); a further
+  galactic-only gate (player +0x62, mode kind 0). A record whose +0x14 is already set is declared directly.
+- **Declare** (0x343b90): only if {type, player} is a registered record and nothing is declared yet. Sets
+  +0x20, copies the record, countdown +0x24 := record +8, logs `VICTORY - Victory type %d, player ID …`, for the
+  tactical types (0xb..0x11, 0x12..0x16) notifies the mode's story (0x32f3e0) and shows TEXT_WIN_TACTICAL /
+  TEXT_LOSE_TACTICAL (corruption-mission variants) unless +0x15 is set.
+- **Per frame** only the countdown runs (0x344670 from the tactical tick, skipped while 0x140b15490 is set):
+  +0x24 −= frames elapsed; at ≤ 0 with +0x79 set it waits on callbacks 0x140b30720 / 0x140b30718 (countdown
+  held at 1) [L purpose]. The battle ends (§3.1) when 0x342d80 / 0x342dc0 report: hold ≤ 0 **and** declared
+  **and** countdown ≤ 0. A hold raised after a declaration therefore also delays the end.
+- **No start delay and no "has had units" latch** exist; the event-driven trigger plays that role.
+
+**3. Hold counter +0x5c and story rules** [H]
+- Raise (0x341fe0, +1): story reward **ENABLE_VICTORY** (enum 0x1d in 0x456970) with `atoi(P1) == 0` (P1 must be
+  non-empty; note `Rebel` also gives 0, REBEL_ACTIII_M09); TSW Fire 0x42a200 (TSW_PLANET_DESTROY §2); full-screen
+  movie start 0x60330.
+- Release one level (0x3440a0, replay 1 → when it reaches 0 the deferred tests are re-run in order, first
+  declaration stops): ENABLE_VICTORY with `atoi(P1) ≠ 0` **only if** +0x5c > 0 (extra `1`s are no-ops); TSW
+  state 13; movie end 0x61fe0.
+- Release all levels **without** replay (0x343f80(…, 0); the deferred queue is kept but not re-run): the
+  **VICTORY** reward (0x462b70) and retreat completion 0x340750. (TSW_PLANET_DESTROY §2 calls 0x343f80 a variant
+  "with the same replay"; every caller passes 0.)
+- **VICTORY reward** (0x462b70): P1 faction → its player W (else log `Unable to find faction %s to force
+  victory`); release all holds; add record {0x10 `SUB_TACTICAL_STORY_MODE_TRIGGERED_VICTORY`, W, countdown 7 s ×
+  FPS} (P2 ≠ 0: 1 s and +0x15 silent) and test it at once (0x28f570). Type 0x10 always succeeds when tested.
+- **Not** victory-related: Lua `Suspend_AI`, `Lock_Controls`, `Fade_Screen_Out`, letterbox / cinematic mode,
+  Story_Event; none of them calls the monitor (only the callers listed above exist). The linked-battle flag
+  0x140b30545, the LINK_TACTICAL P10 / P11 flags and the story-mode byte +0x2cf are not read by any victory
+  function. 0x364b20 is the 10-s battle-start advisor line (faction SFX by situation), not a victory check.
+- **Registration** (0x28fda0, §2.5) is unconditional for every non-Is_Neutral player: story / linked battles get
+  0xb and 0xc like any battle; no reward or Lua removes records. Story missions instead **hold** the monitor and
+  end through the VICTORY reward. ENABLE_VICTORY 0 is used by 60+ shipped FoC story XMLs (every Underworld
+  campaign tactical mission UM01–UM11 (not UM12), most EaW campaign tactical missions, the tutorials and the corruption missions).
+
+**4. Kessel UM01 at frame 0 / 1** [H unless tagged]
+- Map: one `UMP_TYBER_ZANN` placement (TED object id 0x13234, mini 02 owner = 6 = Underworld in campaign,
+  REMAINING_GAPS §3.3). `UMP_TYBER_ZANN` is `Variant_Of_Existing_Type TYBER_ZANN`, and `Tyber_Zann`
+  (UNITS_HERO_UNDERWORLD_TYBER_ZANN.XML) has `Victory_Relevant yes`, so the jailed prop **is a victory-relevant
+  Underworld object** from frame 0, even under a polled check.
+- Plot STORY_UNDERWORLD_M01_LAND.XML: `Underworld_A01M01_Begin` (STORY_ELAPSED 0) → TRIGGER children:
+  `Underworld_A01M01_Prevent_Victory` = **ENABLE_VICTORY 0** (hold 1, never released in this plot), also
+  DISABLE_RETREAT for EMPIRE and UNDERWORLD, HIDE_AUTORESOLVE, USE_RETRY_DIALOG. The mission ends only by
+  VICTORY rewards: `Underworld_A01M01_Victory` (Underworld, after the Lua's `Underworld_A01M01_Win_from_LUA`)
+  or `Some_Hero_Died_You_Lose` (Empire, after the Tyber / Urai lose messages from Lua) → type 0x10.
+- Lua (STORY_UNDERWORLD_ACTI_M01_LAND.LUA) `State_Underworld_A01M01_Begin` OnEnter: finds players, hints, spawns
+  an Empire `IMPERIAL_MEDIUM_STORMTROOPER_SQUAD` (invulnerable, no fire), registers prox / death events, starts
+  the intro cinematic thread. Tyber is the map object (`Find_First_Object` / `Find_Nearest(pad2,
+  "UMP_TYBER_ZANN")`, unhidden and freed later); Urai is spawned later (`Create_Generic_Object("URAI_FEN", …)`).
+- So three independent reasons keep the Underworld alive at frame 1: (a) 0xb is only tested when a
+  victory-relevant object is lost, and nothing is lost at frame 0 / 1; (b) the Underworld owns a
+  victory-relevant object (UMP_TYBER_ZANN); (c) from the first story service the monitor is held, and every
+  later 0xb / 0xc test is only queued. [M] for the frame on which the first tactical story service runs.
+- **Port:** (1) evaluate 0xb on loss of a victory-relevant object (removal / owner change), not every frame;
+  (2) count by the three `*_Victory_Relevant` flags only, with variant inheritance and map owners; (3) implement
+  the hold (ENABLE_VICTORY, movie, TSW) with the deferred queue, the VICTORY reward (type 0x10, 7 s / 1 s) and
+  the 210-frame end countdown.
+
+**Open items:** writer of 0x140b303c1; the +0x79 end-wait callbacks 0x140b30720 / 0x140b30718; the galactic-only
+gate (0x35f6b0 argument); whether a hero death (Tyber) is caught by the plot before any 0xb test of the
+Empire — with the hold up it is only queued, so the plot's VICTORY decides [M].
 
 ### 3.2 Planet write-back — 0x2bff60(winner) [H]
 
@@ -637,7 +937,10 @@ of the two sides [M].
 | 0x2ab880, 0x395d10 | side strength for the overrun test |
 | 0x2bce30, 0x2bd500 | force lists (start vs reinforcement), space population split |
 | 0x28fda0 | start tactical battle (map choice, load, victory conditions) |
-| 0x28f590 | start a queued/pending battle |
+| 0x28f590 | start the linked-battle record (§2.9.3) |
+| 0x45f9c0 / 0x28bd70 / 0x28c640 | LINK_TACTICAL handler / write the record / reset the record |
+| 0x2a7580 | conflict completion at battle end (land units, resolution, remove head) |
+| 0x2aa510 / 0x2aa8e0 | linked-battle resolution land / space (RETREAT_PLAYER, RETREAT_AI, DESTROY_AI) |
 | 0x3639d0 (tail) | battle end detection |
 | 0x28f520 → 0x2bff60 | planet write-back (starbase level, queues) |
 | 0x28bf10 | apply battle result (retreats, production) |
@@ -683,6 +986,7 @@ of the two sides [M].
 13. ~~Base layouts, §2.4 starting positions, map ownership, TEAM objects~~ — resolved [H]: REMAINING_GAPS §3. The §1.4
     step 2 story flag is the GMM+0xF0 linked-battle record (REMAINING_GAPS §6.4). Still a probe: map owner ids vs
     campaign player ids (REMAINING_GAPS §3.3).
+14. Story-linked battles (LINK_TACTICAL): open items and probes LT1 / LT2 in §2.9.9.
 12. Runtime confirmation of the auto-resolve formula: Q2 probe with two fixed fleets, a logged RNG
     seed (`RANDOMLOGFILE=`) and the per-unit outcome.
 
