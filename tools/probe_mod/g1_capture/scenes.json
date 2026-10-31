@@ -134,8 +134,7 @@
      "poll": 3,
      "nudge_key": "ESC",
      "label": "skip intro movies",
-     "menu": true,
-     "max_dist": 45
+     "menu": true
     },
     {
      "do": "fit_window",
@@ -146,8 +145,7 @@
      "do": "expect_like",
      "ref": "main_menu",
      "timeout": 20,
-     "menu": true,
-     "max_dist": 45
+     "menu": true
     },
     {
      "do": "click",
@@ -161,8 +159,7 @@
      "do": "expect_like",
      "ref": "sp_menu",
      "timeout": 20,
-     "menu": true,
-     "max_dist": 30
+     "menu": true
     },
     {
      "do": "click",
@@ -176,8 +173,7 @@
      "do": "expect_like",
      "ref": "setup_start",
      "timeout": 30,
-     "menu": true,
-     "max_dist": 30
+     "menu": true
     },
     {
      "do": "click",
@@ -1768,8 +1764,7 @@
      "poll": 3,
      "nudge_key": "ESC",
      "label": "skip intro movies",
-     "menu": true,
-     "max_dist": 45
+     "menu": true
     },
     {
      "do": "fit_window",
@@ -1780,8 +1775,7 @@
      "do": "expect_like",
      "ref": "main_menu",
      "timeout": 20,
-     "menu": true,
-     "max_dist": 45
+     "menu": true
     },
     {
      "do": "click",
@@ -1795,8 +1789,7 @@
      "do": "expect_like",
      "ref": "sp_menu",
      "timeout": 20,
-     "menu": true,
-     "max_dist": 30
+     "menu": true
     },
     {
      "do": "click",
@@ -1810,8 +1803,7 @@
      "do": "expect_like",
      "ref": "setup_start",
      "timeout": 30,
-     "menu": true,
-     "max_dist": 30
+     "menu": true
     },
     {
      "do": "click",
@@ -2519,8 +2511,7 @@
      "poll": 3,
      "nudge_key": "ESC",
      "label": "skip intro movies",
-     "menu": true,
-     "max_dist": 45
+     "menu": true
     },
     {
      "do": "fit_window",
@@ -2531,8 +2522,7 @@
      "do": "expect_like",
      "ref": "main_menu",
      "timeout": 20,
-     "menu": true,
-     "max_dist": 45
+     "menu": true
     },
     {
      "do": "click",
@@ -2546,8 +2536,7 @@
      "do": "expect_like",
      "ref": "sp_menu",
      "timeout": 20,
-     "menu": true,
-     "max_dist": 30
+     "menu": true
     },
     {
      "do": "click",
@@ -2561,8 +2550,7 @@
      "do": "expect_like",
      "ref": "setup_start",
      "timeout": 30,
-     "menu": true,
-     "max_dist": 30
+     "menu": true
     },
     {
      "do": "click",
