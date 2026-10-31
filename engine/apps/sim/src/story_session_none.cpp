@@ -28,6 +28,7 @@ std::string StorySession::tactical_plots_file() const { return {}; }  // L1/S4 w
 void StorySession::load_tactical_map(PlanetIndex, bool, uint64_t) {}  // S4
 std::string StorySession::take_tactical_map(bool) { return {}; }   // S4
 void StorySession::notify_tactical(const TacticalStoryNotification&) {}
+void StorySession::planet_destroyed_in_battle(PlanetIndex, int32_t, uint64_t) {}  // L1 systems
 const lua::StoryModel* StorySession::tactical_model() const { return nullptr; }
 lua::StoryModel* StorySession::tactical_model() { return nullptr; }
 

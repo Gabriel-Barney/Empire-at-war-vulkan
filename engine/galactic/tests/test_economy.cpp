@@ -1517,8 +1517,10 @@ void test_oi_victory() {
     CHECK(!w6.sim.resolve_battle_super_weapon(rC, pEmpire));
     CHECK(w6.sim.victory_claims().size() == 1 && w6.sim.victory_claims()[0].type == 6 && w6.sim.victory_claims()[0].player == pEmpire);
     // 7: planet destruction with the victim faction's leader on it; 8: no enemy leader on any planet.
+    // TSW_PLANET_DESTROY §6: victim = the planet's owner; the leader must be a team MEMBER (Company_Units) of a surface
+    // object - here Faction_Leader = the infantry unit inside the Company team.
     GalacticRules r7 = make_oi_rules();
-    r7.factions[1].leader = tCompany;
+    r7.factions[1].leader = tInfantry;
     r7.factions[1].leader_company = tCompany;
     objects::GameObjectTypes types;
     objects::IdCounter ids;
@@ -1527,9 +1529,23 @@ void test_oi_victory() {
     GalacticSim s7{r7, store, rng};
     CHECK(s7.start(make_setup({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}, {pUnder, rD, tCompany}})));
     VictorySide none;
+    CHECK(s7.planets()[rD].owner == pUnder && s7.super_weapon_leader_hit(rD) && !s7.super_weapon_leader_hit(rE));
     CHECK(!victory_condition_met(s7, none, VictoryCondition::KillEnemyLeader, pEmpire));
     CHECK(s7.super_weapon_destroy_planet(rD, pEmpire) && s7.planets()[rD].destroyed);
     CHECK(s7.victory_claims().size() == 1 && s7.victory_claims()[0].type == 7 && s7.victory_claims()[0].countdown == 30);
+    CHECK(!s7.super_weapon_destroy_planet(rD, pEmpire) && s7.victory_claims().size() == 1);  // already destroyed
+    {  // the leader type itself on the surface (not as a team member) does not count; nor does a leader in orbit
+        GalacticRules r = make_oi_rules();
+        r.factions[1].leader = tCompany;
+        objects::GameObjectTypes ty;
+        objects::IdCounter id2;
+        objects::ObjectStore st{objects::ModeKind::Galactic, objects::StoreKind::Primary, ty, &id2};
+        SimRng rg{9u};
+        GalacticSim sx{r, st, rg};
+        CHECK(sx.start(make_setup({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}, {pUnder, rD, tCompany}})));
+        CHECK(!sx.super_weapon_leader_hit(rD));
+        CHECK(sx.super_weapon_destroy_planet(rD, pEmpire) && sx.victory_claims().empty());
+    }
     CHECK(victory_condition_met(s7, none, VictoryCondition::KillEnemyLeader, pEmpire));
     // 5: home planet (Primary_Enemy's Home_Planet) owned and its leader company gone.
     r7.factions[0].primary_enemy = 1;
@@ -1537,6 +1553,44 @@ void test_oi_victory() {
     CHECK(!victory_condition_met(s7, none, VictoryCondition::ConquerEnemyHomeworldAndLeader, pEmpire));
     s7.change_owner(s7.planets()[rE].object, pEmpire);
     CHECK(victory_condition_met(s7, none, VictoryCondition::ConquerEnemyHomeworldAndLeader, pEmpire));
+}
+
+// L1 systems t02 (TSW_PLANET_DESTROY §5): the tactical super weapon and the galactic Death Star use the shared core only -
+// orbit fleets (the Death Star's own and the defender's), starbase and owner stay; the surface dies. The hack path still
+// does it all.
+void test_tsw_planet_destroy() {
+    std::printf("  oi: TSW / Death Star planet destruction (core only)\n");
+    auto fleets_ok = [](const GalacticSim& s, PlanetIndex p) {
+        return s.fleets_at(p, pEmpire).size() == 1 && s.fleets_at(p, pUnder).size() == 1;
+    };
+    for (int pass = 0; pass < 3; ++pass) {  // 0 tactical TSW, 1 galactic Death Star, 2 hack
+        OiWorld w({{pEmpire, rA, tSB1}, {pUnder, rC, tSB1}, {pUnder, rC, tCompany}, {pUnder, rC, tFrigate}, {pEmpire, rC, tDeathStar}});
+        GalacticSim& s = w.sim;
+        s.set_emit_events(true);
+        const int32_t owner = s.planets()[rC].owner;
+        const ObjectHandle sb = s.planets()[rC].starbase;
+        CHECK(owner == pUnder && w.store.alive(sb) && !s.planets()[rC].surface.empty() && fleets_ok(s, rC));
+        bool hit = true;
+        if (pass == 0) CHECK(s.tsw_destroy_planet(rC, pEmpire, &hit) && !hit);
+        if (pass == 1) CHECK(s.super_weapon_destroy_planet(rC, pEmpire));
+        if (pass == 2) CHECK(s.planet_destroy(rC, pEmpire));
+        CHECK(s.planets()[rC].destroyed && s.planets()[rC].surface.empty());
+        std::vector<GalacticEvent> ev;
+        s.drain_events(ev);
+        int32_t value = -1;
+        for (const GalacticEvent& e : ev)
+            if (e.kind == GalacticEventKind::PlanetDestroyed && e.planet == rC) value = e.value;
+        CHECK(value == (pass == 0 ? 1 : 0));
+        if (pass < 2) {
+            CHECK(fleets_ok(s, rC) && store_alive_type(s, tDeathStar));
+            CHECK(w.store.alive(sb) && s.planets()[rC].starbase == sb && s.planets()[rC].owner == owner);
+            CHECK(s.victory_claims().empty());
+            CHECK(!s.tsw_destroy_planet(rC, pEmpire) && !s.super_weapon_destroy_planet(rC, pEmpire));  // once
+        } else {
+            CHECK(s.fleets_at(rC, pEmpire).empty() && s.fleets_at(rC, pUnder).empty() && !store_alive_type(s, tDeathStar));
+            CHECK(!w.store.alive(sb) && s.planets()[rC].owner == s.neutral_player());
+        }
+    }
 }
 
 void test_a2_fleet_management() {
@@ -2368,6 +2422,7 @@ int main(int argc, char** argv) {
         test_oi_base_info();
         test_oi_buildability();
         test_oi_victory();
+        test_tsw_planet_destroy();
     }
     if (!g_quick && (all || only == "synthetic")) test_synthetic_campaign();
     if (!g_quick && (all || only == "foc")) {

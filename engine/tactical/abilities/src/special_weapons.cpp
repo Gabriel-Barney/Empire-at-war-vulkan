@@ -246,6 +246,7 @@ void SpecialWeaponSystem::tsw_service(Pack& p, const SpecialWeaponDesc& d, uint3
         if (w.place) w.place(p.id, pos, facing);
         return pos;
     };
+    if (p.tsw_init == 2) return;  // spent: the dummy is dead, it never re-arms (§3)
     if (!p.tsw_init) {
         // First service (§1.2): with a target dummy, placed toward it; the battle attacker starts ready.
         if (!find_target()) {
@@ -285,40 +286,59 @@ void SpecialWeaponSystem::tsw_service(Pack& p, const SpecialWeaponDesc& d, uint3
         case kTswPowerUp:
             if (--p.countdown <= 0) set_tsw_state(p, kTswFire, frame);
             break;
-        case kTswFire: {
-            set_tsw_state(p, kTswAttackAnim, frame);
+        case kTswFire: set_tsw_state(p, kTswAttackAnim, frame); break;  // state 6: one service (TSW_PLANET_DESTROY §3)
+        case kTswAttackAnim: {  // state 7: attack animation (anim 5) + SFXEvent_Fire, countdown, one service
             event(SwEventKind::TswAttackAnim, p, frame, 5, p.tsw_target);
             const float f = 30.0f * d.tsw_attack_anim_seconds;
             p.countdown = f > 0.0f ? static_cast<int32_t>(f) : 0;
             set_tsw_state(p, kTswAttackWait, frame);
             break;
         }
-        case kTswAttackAnim: set_tsw_state(p, kTswAttackWait, frame); break;
         case kTswAttackWait:
             if (--p.countdown <= 0) set_tsw_state(p, kTswDestruction, frame);
             break;
         case kTswDestruction: {
-            const uint32_t n = w.debris_choices ? w.debris_choices(p.id) : 0u;
-            p.debris_pick = n > 1 ? rng.range_int(0, static_cast<int32_t>(n) - 1) : (n == 1 ? 0 : -1);  // synced 0x1ffb40
-            event(SwEventKind::TswPlanetDestroyed, p, frame, p.debris_pick, p.tsw_target, p.tsw_target_pos);
+            // TSW_PLANET_DESTROY §4: state := 10 first, countdown := the debris delay; then the Death_Explosions pick
+            // (synced 0x1ffb40; no draw for one entry) and the destruction (the host: explosion, dummy kill, galaxy).
+            set_tsw_state(p, kTswDebrisWait, frame);
+            p.countdown = d.tsw_debris_delay_frames;
+            const uint32_t n = w.debris_choices ? w.debris_choices(p.tsw_target) : 0u;
+            p.debris_pick = n > 1 ? rng.range_int(0, static_cast<int32_t>(n) - 1) : (n == 1 ? 0 : -1);
             p.debris_pending = 1;
-            p.debris_frame = frame + static_cast<uint32_t>(std::max(0, d.tsw_debris_delay_frames));
-            p.countdown = std::max(0, d.tsw_post_destruction_frames);
-            set_tsw_state(p, kTswAftermath, frame);
+            p.debris_frame = frame;
+            event(SwEventKind::TswPlanetDestroyed, p, frame, p.debris_pick, p.tsw_target, p.tsw_target_pos);
             break;
         }
-        case kTswAftermath:
+        case kTswDebrisWait:  // §3: countdown; at 0 every Death_By_TSW_Replacements entry, then the post-destruction wait
             if (--p.countdown <= 0) {
-                set_tsw_state(p, kTswDone, frame);
-                event(SwEventKind::TswDone, p, frame, 0, p.tsw_target);
+                p.debris_pending = 0;
+                event(SwEventKind::TswDebris, p, frame, p.debris_pick, p.tsw_target, p.tsw_target_pos);
+                p.countdown = d.tsw_post_destruction_frames;
+                set_tsw_state(p, kTswPostWait, frame);
             }
+            break;
+        case kTswPostWait:
+            if (--p.countdown <= 0) set_tsw_state(p, kTswRelease, frame);
+            break;
+        case kTswRelease:  // 0x42a7b0 state 13: state 0, target cleared, screen effect off, hold released with replay
+            p.tsw_init = 2;
+            set_tsw_state(p, kTswIdle, frame);
+            event(SwEventKind::TswDone, p, frame, 0, p.tsw_target);
+            p.tsw_target = kNoObject;
             break;
         default: break;
     }
-    if (p.debris_pending && frame >= p.debris_frame) {
-        p.debris_pending = 0;
-        event(SwEventKind::TswDebris, p, frame, p.debris_pick, p.tsw_target, p.tsw_target_pos);
-    }
+}
+
+uint32_t SpecialWeaponSystem::victory_holds() const {
+    uint32_t n = 0;
+    for (const Pack& p : packs_) n += tsw_holds_victory(p.tsw) ? 1u : 0u;
+    return n;
+}
+
+bool SpecialWeaponSystem::tsw_spent(ObjectId id) const {
+    const Pack* p = pack(id);
+    return p && p->tsw_init == 2;
 }
 
 // ---- tick ----

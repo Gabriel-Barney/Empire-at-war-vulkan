@@ -354,6 +354,10 @@ public:
     // Tactical notification (battle host, sim thread): names / owners resolved now from the battle's store,
     // queued and routed at the next service. Ignored without an attached battle.
     void notify_tactical(const TacticalStoryNotification& n);
+    // L1 systems (TSW_PLANET_DESTROY §7): a tactical super weapon destroyed galactic planet (destroyer = its owner)
+    // during the attached battle. STORY_PLANET_DESTROYED goes to the tactical plot set at once (the current mode's story
+    // manager); the galactic plots never hear it (the poll marks it seen; its stream event carries value 1 and is skipped).
+    void planet_destroyed_in_battle(PlanetIndex planet, int32_t destroyer, uint64_t frame);
     // The tactical plot set while a battle is attached (nullptr otherwise).
     const lua::StoryModel* tactical_model() const;
     lua::StoryModel* tactical_model();

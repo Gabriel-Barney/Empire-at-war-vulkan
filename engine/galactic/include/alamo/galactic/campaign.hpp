@@ -725,11 +725,26 @@ public:
     // unlock (+ tech raise when only_one), respawn scheduling and the despawn. True on success.
     bool slice_execute(int32_t player, PlanetIndex planet, ObjectHandle slicer, const SliceEntry& e, float respawn_seconds,
                        bool only_one);
-    // Planet destruction (0x3f76c0, shared with the Death Star's Planet_Destruction_Ability): PLANET_DESTROYED event,
-    // siphon cleared, orbiting objects removed (reverse; heroes get a default-time respawn), structures removed,
-    // corruption cleared, destroyed set, surface objects removed (reverse; heroes respawn), starbase cleared, owner :=
-    // the neutral player. False for an invalid or already destroyed planet.
+    // Planet destruction, the IG-88 hack path (0x61b790; TSW_PLANET_DESTROY §5): planet_destroy_core() plus the hack's
+    // extras - orbiting objects removed (reverse; this includes the hacked weapon; heroes get a default-time respawn),
+    // starbase cleared, owner := the neutral player. False for an invalid or already destroyed planet. [port] the orbit
+    // removal runs inside the core, before the structures (the original runs it after the core): the destroy / respawn
+    // order of the earlier single routine, so hack CRCs do not move.
     bool planet_destroy(PlanetIndex planet, int32_t destroyer);
+    // The shared routine 0x3f76c0 (TSW_PLANET_DESTROY §5; hack, galactic Death Star and tactical super weapon):
+    // PLANET_DESTROYED event (value = `event_value`: 1 marks a tactical TSW kill, whose story event goes to the battle's
+    // plots only), siphon cleared, structures removed, corruption cleared, destroyed set, surface objects removed
+    // (reverse; heroes respawn). Orbit fleets, starbase and owner are NOT touched. False when invalid / already destroyed.
+    bool planet_destroy_core(PlanetIndex planet, int32_t destroyer, int32_t event_value = 0);
+    // Victory 7 leader test (§6; 0x42a7b0 / 0x707670): the victim = the planet's owner (D +0x6c); its faction's
+    // Faction_Leader must be a team member (Company_Units) of an object on the planet's surface (D +0xe0). Only members
+    // are compared, not the listed object itself; orbit fleets do not count. [port] the condition record's optional
+    // leader-name list is not modelled (the claim is granted by the side's condition list, victory.hpp).
+    bool super_weapon_leader_hit(PlanetIndex planet) const;
+    // Tactical super weapon, galactic part of state 9 (TSW_PLANET_DESTROY §4 steps 7-9), called by the battle host in the
+    // tactical frame of the shot: leader test -> claim 7 (countdown 30) for `tsw_owner`, then planet_destroy_core(value
+    // 1). Returns true when the planet was destroyed; *leader_hit = the test hit (the battle then ends with victory 0x10).
+    bool tsw_destroy_planet(PlanetIndex planet, int32_t tsw_owner, bool* leader_hit = nullptr);
     // Locked ("obsolete") list P +0x1C8 (hack step 1, story LOCK_UNIT / BUILDABLE_UNIT P2, Lua Lock_Tech): add 0x27f7c0 /
     // remove 0x286100. Removing does not unlock: Lua Unlock_Tech is unlock_tech().
     void lock_type(int32_t player, uint32_t type, bool locked);
@@ -856,8 +871,9 @@ public:
     // TACTICAL_GAPS 4.8 battle-end step 4: the weapon is alive, not the winner's, and the winner has no killer -> the
     // winner is the side that retreats (R := winner).
     bool super_weapon_forces_retreat(PlanetIndex planet, int32_t winner) const;
-    // Planet_Destruction_Ability (0x707670): claim 7 (countdown 30) when the planet holds an enemy faction's
-    // Faction_Leader, then planet_destroy(). False when nothing was destroyed.
+    // Planet_Destruction_Ability (0x707670): claim 7 (countdown 30) when super_weapon_leader_hit(), then
+    // planet_destroy_core() - the Death Star's own fleet, the starbase and the owner stay (TSW_PLANET_DESTROY §5).
+    // False when nothing was destroyed.
     bool super_weapon_destroy_planet(PlanetIndex planet, int32_t attacker);
     std::span<const VictoryClaim> victory_claims() const { return claims_; }
     void claim_victory(int32_t player, uint8_t type, int32_t countdown);
@@ -972,6 +988,7 @@ private:
     void service_respawns();
     void service_income_abilities(PlanetIndex planet);
     RejectReason special_command(int32_t player, const commands::EventData& ev);
+    bool planet_destroy_impl(PlanetIndex planet, int32_t destroyer, int32_t event_value, bool hack_orbit);  // L1 TSW split
     void emit_special(GalacticEventKind kind, int32_t player, PlanetIndex planet, ObjectHandle object, uint32_t type,
                       int32_t value, int32_t other);
     void hash_special(StateHasher& h) const;

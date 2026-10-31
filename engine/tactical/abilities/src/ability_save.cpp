@@ -460,7 +460,9 @@ bool SpecialWeaponSystem::read(ByteReader& r) {
         p.debris_pick = r.i32();
         p.debris_frame = r.u32();
         p.debris_pending = r.u8();
-        if (!r.ok() || p.desc >= nd || (!first && p.id <= prev) || p.tsw < -1 || p.tsw > static_cast<int32_t>(kTswDone)) return false;
+        if (!r.ok() || p.desc >= nd || (!first && p.id <= prev) || p.tsw < -1 || p.tsw > static_cast<int32_t>(kTswRelease) ||
+            p.tsw == 11 || p.tsw_init > 2)  // no state 11 (TSW_PLANET_DESTROY §3)
+            return false;
         first = false;
         prev = p.id;
     }

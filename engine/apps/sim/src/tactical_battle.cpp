@@ -1491,6 +1491,15 @@ void TacticalBattle::check_victory() {
         if (frame_ >= end_hold_until_) finish(end_winner_, end_victory_, end_retreated_);
         return;
     }
+    // L1 systems: the TSW victory monitor hold (TSW_PLANET_DESTROY §2): nothing is declared from the TSW's fire until
+    // its state-13 service; this check is the replay on the release frame, the TSW's story victory (0x10) first.
+    if (l1_sw_.victory_holds() > 0) return;
+    if (l1_tsw_story_winner_ >= 0) {
+        const int32_t w = l1_tsw_story_winner_;
+        l1_tsw_story_winner_ = -1;
+        conclude(w, galactic::kVictoryStory, w == req_.info.attacker ? req_.info.defender : req_.info.attacker);
+        return;
+    }
     if (retreat_complete_) {
         conclude(side_player(static_cast<uint8_t>(1 - retreat_side_)), galactic::kVictoryAllRetreated, side_player(static_cast<uint8_t>(retreat_side_)));
         return;

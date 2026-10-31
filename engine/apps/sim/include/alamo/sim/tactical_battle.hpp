@@ -352,6 +352,17 @@ public:
     int32_t tsw_state(objects::ObjectId tsw) const;                         // < 0: not a TSW
     bool tsw_fire(objects::ObjectId tsw);                                   // 0x42a200 incl. the planet checks
     bool tsw_planet_destroyed() const { return l1_planet_destroyed_; }      // the TSW destroyed the battle planet
+    // TSW planet destruction (docs/re/TSW_PLANET_DESTROY.md): state 9 kills the target dummy (its Death_Explosions pick
+    // for the neutral player) and latches the destroyed planet; the battle host then destroys the galactic planet in the
+    // same tick (tsw_kill_owner() = the TSW owner on that tick, else -1; GalacticSim::tsw_destroy_planet) and, when the
+    // leader test hit, calls set_tsw_story_victory(owner). State-10 end: every Death_By_TSW_Replacements entry at the
+    // saved dummy transform (neutral). Victory hold (§2): while a TSW is in states 5..13 no victory check runs (retreat,
+    // all destroyed, station / base, time limit); at the release the checks run once that frame, a pending story victory
+    // first: (TSW owner, 0x10, the other side retreats).
+    int32_t tsw_kill_owner() const { return l1_tsw_kill_owner_; }
+    void set_tsw_story_victory(int32_t player) { l1_tsw_story_winner_ = player; }
+    int32_t tsw_story_victory() const { return l1_tsw_story_winner_; }
+    bool victory_held() const { return l1_sw_.victory_holds() > 0; }
     // Teleport (0x3a8f90): store, movement (stops the unit), combat, trees. False when the object is not alive.
     bool teleport(TacticalMode& mode, objects::ObjectId id, Vec3 position, Vec3 facing);
     // Locomotor vf +0x2a8(keep_parent_link, delay) (L1_S4_REMAINING §3.4): a live battle unit with a FIGHTER /
@@ -1031,6 +1042,18 @@ private:
     TacticalMode* l1_mode_ = nullptr;
     bool l1_used_ = false;               // some pack / jump / engine entry existed (CRC section on from then)
     bool l1_planet_destroyed_ = false;
+    // TSW planet destruction (TSW_PLANET_DESTROY): this tick's state-9 TSW owner (not saved: the host reads it in the
+    // same tick), the story victory 0x10 pending at the hold release, the saved dummy transforms for the state-10 debris.
+    struct L1TswDebris {
+        objects::ObjectId tsw = objects::kNoObjectId;
+        int32_t type = -1;  // the dead dummy's type (Death_By_TSW_Replacements)
+        Vec3 pos{}, facing{};
+    };
+    int32_t l1_tsw_kill_owner_ = -1;
+    int32_t l1_tsw_story_winner_ = -1;
+    std::vector<L1TswDebris> l1_tsw_debris_;
+    void l1_tsw_destruction(TacticalMode& mode, const tactical::abilities::SpecialWeaponEvent& e);
+    void l1_tsw_debris(TacticalMode& mode, const tactical::abilities::SpecialWeaponEvent& e);
     // --- end L1 systems ---
     // --- Int-final: build pads (tactical_battle_pads.cpp) ---
     struct PadState {
