@@ -1108,7 +1108,9 @@ void StorySession::service(uint64_t frame, double mode_seconds) {
         if (drain_tap_ && !scratch_.empty()) drain_tap_(round, scratch_);  // OI host: presentation tap (read-only)
         std::vector<StoryTrigger> batch;
         batch.reserve(scratch_.size() + pending_host_.size() + pending_ui_.size());
-        for (const galactic::GalacticEvent& e : scratch_) batch.push_back(translate(e));
+        for (const galactic::GalacticEvent& e : scratch_)
+            if (!(e.kind == galactic::GalacticEventKind::PlanetDestroyed && e.value == 1))  // TSW: battle plots only (§7)
+                batch.push_back(translate(e));
         poll_planets(batch);  // wave 1: PLANET_DESTROYED (no stream event)
         for (StoryTrigger& h : pending_host_) batch.push_back(std::move(h));
         pending_host_.clear();
@@ -1550,6 +1552,35 @@ void StorySession::notify_tactical(const TacticalStoryNotification& n) {
     t.faction = faction_name(owner);
     if (!p.target.empty()) t.units.push_back(p.target);
     tactical_->pending.push_back(std::move(p));
+}
+
+void StorySession::planet_destroyed_in_battle(PlanetIndex planet, int32_t destroyer, uint64_t frame) {
+    if (planet >= sim_->planets().size()) return;
+    if (destroyed_init_) {  // the galactic poll must not raise it later
+        if (destroyed_seen_.size() < sim_->planets().size()) destroyed_seen_.resize(sim_->planets().size(), 0);
+        destroyed_seen_[planet] = sim_->planets()[planet].destroyed ? 1 : 0;
+    }
+    if (!tactical_ || !tactical_->set) return;
+    Set& s = *tactical_->set;
+    StoryTrigger t;  // 0x3f76c0 -> 0x32a7a0 on the tactical manager: dispatched at once (0x32e5f0)
+    t.kind = "TacPlanetDestroyed";
+    t.frame = frame;
+    t.index = static_cast<uint32_t>(triggers_.size());
+    t.event.kind = galactic::GalacticEventKind::Count;
+    t.event.planet = planet;
+    t.event.player = destroyer;
+    const auto& names = sim_->map().planets.name;
+    if (planet < names.size()) t.planet = names[planet];
+    t.faction = faction_name(destroyer);
+    lines_.push_back(t.text());
+    triggers_.push_back(t);
+    lua::StoryNotification n;
+    n.owner = destroyer;
+    n.owner_neutral = destroyer >= 0 && destroyer == sim_->neutral_player();
+    n.planet = planet_type_name(planet);
+    n.has_object = true;
+    s.model.dispatch("STORY_PLANET_DESTROYED", n);
+    collect_set(s, s.number, "trigger:" + t.kind + "#" + std::to_string(t.index));
 }
 
 // Queued notify_tactical() notifications -> the tactical plot set ("the running mode's story manager").

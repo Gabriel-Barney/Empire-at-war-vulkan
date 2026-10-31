@@ -110,7 +110,8 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
         });
         x(s.total);
     });
-    a(b.l1_used_, b.l1_planet_destroyed_);
+    a(b.l1_used_, b.l1_planet_destroyed_, b.l1_tsw_story_winner_);
+    a.seq(b.l1_tsw_debris_, [](auto& x, auto& d) { x(d.tsw, d.type, d.pos, d.facing); });
     // Int-final: build pads
     a.seq(b.pads_, [](auto& x, auto& p) {
         x(p.pad, p.uc, p.built, p.builder, p.uc_end, p.cooldown_start, p.cooldown_end, p.locked, p.built_type);

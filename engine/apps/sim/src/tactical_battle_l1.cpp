@@ -280,7 +280,12 @@ ta::SpecialWeaponWorld TacticalBattle::l1_world(const TacticalMode& mode) {
         if (m) teleport(*m, id, to_s(p), to_s(f));
     };
     w.is_battle_attacker = [this](int32_t owner) { return owner == req_.info.attacker; };  // 0x28aec0 [M]
-    w.debris_choices = [](tc::ObjectId) { return 0u; };  // [port] the planet's debris list field is not identified
+    // TSW_PLANET_DESTROY §4 step 4: the target dummy type's Death_Explosions count (0 when the dummy is gone: no draw).
+    const objects::GameObjectTypes* types = &catalog_->types();
+    w.debris_choices = [st, types](tc::ObjectId target) {
+        const objects::ObjectHandle h = st->find(target);
+        return st->alive(h) ? static_cast<uint32_t>(types->get_type_refs(st->type(h), "Death_Explosions").size()) : 0u;
+    };
     return w;
 }
 
@@ -498,6 +503,7 @@ void TacticalBattle::l1_motion(TacticalMode& mode, SimRng& rng) {
 
 void TacticalBattle::l1_weapons(TacticalMode& mode, SimRng& rng) {
     l1_sw_events_.clear();    l1_damage_stats();
+    l1_tsw_kill_owner_ = -1;  // this tick's TSW planet kill (read by the battle host after the tick)
     l1_strikes(mode, rng);
 
     if (l1_sw_.empty()) return;
@@ -518,9 +524,49 @@ void TacticalBattle::l1_weapons(TacticalMode& mode, SimRng& rng) {
     }
     for (const ta::SpecialWeaponEvent& e : l1_sw_.events()) {
         l1_sw_events_.push_back(e);
-        if (e.kind == ta::SwEventKind::TswPlanetDestroyed) l1_planet_destroyed_ = true;
+        if (e.kind == ta::SwEventKind::TswPlanetDestroyed) l1_tsw_destruction(mode, e);
+        if (e.kind == ta::SwEventKind::TswDebris) l1_tsw_debris(mode, e);
     }
     l1_sw_.clear_outputs();
+}
+
+// TSW_PLANET_DESTROY §4 steps 3-6 (the galactic steps 7-9 are the battle host's, CampaignBattles::hook): no live target
+// dummy -> nothing; else the Death_Explosions pick at the dummy for the neutral player (0x294aa0), [presentation:
+// camera shake, Death_SFXEvent_Start_Die], the dummy killed (0x391310), its transform saved for the state-10 debris.
+void TacticalBattle::l1_tsw_destruction(TacticalMode& mode, const ta::SpecialWeaponEvent& e) {
+    objects::ObjectStore& st = mode.primary();
+    const objects::ObjectHandle dh = st.find(e.target);
+    if (!st.alive(dh)) return;
+    const objects::GameObjectTypes& types = catalog_->types();
+    const objects::TypeIndex dt = st.type(dh);
+    const Vec3 pos = st.position(dh), facing = st.facing(dh);
+    const int32_t neutral = galaxy_->neutral_player();
+    const auto explosions = types.get_type_refs(dt, "Death_Explosions");
+    if (e.value >= 0 && static_cast<size_t>(e.value) < explosions.size() && explosions[static_cast<size_t>(e.value)] != objects::kNone)
+        spawn_particle(mode, static_cast<int32_t>(explosions[static_cast<size_t>(e.value)]), pos, neutral);
+    bt_kill_silently(mode, dh);
+    L1TswDebris d;
+    d.tsw = e.id;
+    d.type = static_cast<int32_t>(dt);
+    d.pos = pos;
+    d.facing = facing;
+    std::erase_if(l1_tsw_debris_, [&d](const L1TswDebris& x) { return x.tsw == d.tsw; });
+    l1_tsw_debris_.push_back(d);
+    l1_planet_destroyed_ = true;  // D +0x2c8 of the battle planet (SpecialWeaponsAllowed, TSW Fire)
+    const objects::ObjectHandle th = st.find(e.id);
+    l1_tsw_kill_owner_ = st.alive(th) ? st.owner(th) : -1;  // the galactic part (host, same tick)
+}
+
+// State-10 end (§3 / §4): every Death_By_TSW_Replacements entry of the dead dummy's type at its saved transform, for
+// the neutral player, in the main store. No draw.
+void TacticalBattle::l1_tsw_debris(TacticalMode& mode, const ta::SpecialWeaponEvent& e) {
+    const auto it = std::find_if(l1_tsw_debris_.begin(), l1_tsw_debris_.end(), [&e](const L1TswDebris& x) { return x.tsw == e.id; });
+    if (it == l1_tsw_debris_.end()) return;  // no dummy at state 9
+    const L1TswDebris d = *it;
+    l1_tsw_debris_.erase(it);
+    const int32_t neutral = galaxy_->neutral_player();
+    for (const objects::TypeIndex t : catalog_->types().get_type_refs(static_cast<objects::TypeIndex>(d.type), "Death_By_TSW_Replacements"))
+        if (t != objects::kNone && spawn_prop(mode, static_cast<int32_t>(t), d.pos, d.facing, neutral)) ++stats_.props;
 }
 
 // ---- tactical weather (land; L1_S4_REMAINING §3.2) ----
@@ -734,6 +780,20 @@ void TacticalBattle::l1_hash(StateHasher& h) const {
     l1_jumps_.hash(h);
     l1_engines_.hash(h);
     h.boolean(l1_planet_destroyed_);
+    if (l1_planet_destroyed_ || l1_tsw_story_winner_ >= 0 || !l1_tsw_debris_.empty()) {  // TSW destruction (others keep bytes)
+        h.i32(l1_tsw_story_winner_);
+        h.u32(static_cast<uint32_t>(l1_tsw_debris_.size()));
+        for (const L1TswDebris& d : l1_tsw_debris_) {
+            h.i32(d.tsw);
+            h.i32(d.type);
+            h.f32(d.pos.x);
+            h.f32(d.pos.y);
+            h.f32(d.pos.z);
+            h.f32(d.facing.x);
+            h.f32(d.facing.y);
+            h.f32(d.facing.z);
+        }
+    }
     l1_weather_.hash(h);
     h.u32(static_cast<uint32_t>(l1_bombard_.size()));
     for (const L1Bombard& r : l1_bombard_) {

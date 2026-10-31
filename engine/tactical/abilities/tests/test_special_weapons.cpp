@@ -255,28 +255,48 @@ void test_tsw_defender_path(StateHasher* out) {
     CHECK(s.tsw_fire(4, true, f));
     CHECK_EQ(s.tsw_state(4), kTswPowerUp);
     CHECK(!s.tsw_fire(4, true, f));
-    // Power-up countdown int(30 x 9) = 270 services, then 6 -> 7 / 8 (attack anim 75 frames) -> 9 -> 10.
+    // TSW_PLANET_DESTROY §3: power-up int(30 x 9) = 270 services, 6 (1 service), 7 (1: attack anim), 8 (75), 9 (planet
+    // destroyed, F + 348), 10 (debris delay 33), 12 (post-destruction wait 350), 13 (1) -> 0 and the hold released at
+    // F + 732. The hold covers states 5..13.
     const uint32_t fired = f;
-    uint32_t anim_frame = 0, destroyed_frame = 0, debris_frame = 0, done_frame = 0;
+    CHECK_EQ(s.victory_holds(), 1u);
+    uint32_t anim_frame = 0, destroyed_frame = 0, debris_frame = 0, done_frame = 0, last_held = 0;
     int32_t pick = -2;
+    bool seen11 = false;
+    std::vector<int32_t> states;
     for (++f; f < fired + 1200; ++f) {
         s.tick(f, rng, w);
+        if (s.victory_holds() > 0) last_held = f;
         for (const SpecialWeaponEvent& e : s.events()) {
             if (e.kind == SwEventKind::TswAttackAnim) anim_frame = f;
             if (e.kind == SwEventKind::TswPlanetDestroyed) {
                 destroyed_frame = f;
                 pick = e.value;
+                CHECK(e.target == 77 && e.point.z == 50.0f);
             }
             if (e.kind == SwEventKind::TswDebris) debris_frame = f;
             if (e.kind == SwEventKind::TswDone) done_frame = f;
+            if (e.kind == SwEventKind::TswState) {
+                states.push_back(e.value);
+                seen11 = seen11 || e.value == 11;
+            }
         }
     }
-    CHECK_EQ(anim_frame, fired + 270 + 1);
-    CHECK_EQ(destroyed_frame, anim_frame + 75 + 1);
+    CHECK_EQ(anim_frame, fired + 270 + 2);
+    CHECK_EQ(destroyed_frame, fired + 348);
     CHECK(pick >= 0 && pick < 3);
     CHECK_EQ(debris_frame, destroyed_frame + 33);
-    CHECK_EQ(done_frame, destroyed_frame + 350);
-    CHECK_EQ(s.tsw_state(4), kTswDone);
+    CHECK_EQ(done_frame, destroyed_frame + 33 + 350 + 1);
+    CHECK_EQ(done_frame, fired + 732);
+    CHECK_EQ(last_held, done_frame - 1);  // released in the state-13 service
+    CHECK(states == (std::vector<int32_t>{kTswFire, kTswAttackAnim, kTswAttackWait, kTswDestruction, kTswDebrisWait, kTswPostWait,
+                                          kTswRelease, kTswIdle}));
+    CHECK(!seen11);
+    CHECK_EQ(s.tsw_state(4), kTswIdle);
+    CHECK(s.tsw_spent(4) && s.tsw_target(4) == kNoObject && s.victory_holds() == 0u);
+    CHECK(!s.tsw_fire(4, true, f));
+    s.tick(f, rng, w);  // spent: no new search / acquisition
+    CHECK(s.tsw_state(4) == kTswIdle && s.events().empty());
     if (out) s.hash(*out);
 }
 
@@ -295,7 +315,23 @@ void test_tsw_attacker() {
     CHECK(s.tsw_fire(4, true, 1));
     for (uint32_t f = 2; f < 400; ++f) s.tick(f, rng, w);
     CHECK_EQ(rng.draws(), before);  // one debris type: no draw
-    CHECK(s.tsw_state(4) >= kTswAftermath);
+    CHECK(s.tsw_state(4) >= kTswDebrisWait);
+    // Debris delay 0 / wait 0: still one service per state (10 -> 12 -> 13 -> 0), the debris at the first state-10 service.
+    SpecialWeaponDesc d0 = death_star();
+    d0.tsw_debris_delay_frames = 0;
+    d0.tsw_post_destruction_frames = 0;
+    SpecialWeaponSystem z({d0});
+    CHECK(z.add(4, 0, 1, 0));
+    z.tick(1, rng, w);
+    CHECK(z.tsw_fire(4, true, 1));
+    uint32_t destroyed = 0, debris = 0, done = 0;
+    for (uint32_t f = 2; f < 500; ++f) {
+        z.tick(f, rng, w);
+        if (count(z.events(), SwEventKind::TswPlanetDestroyed)) destroyed = f;
+        if (count(z.events(), SwEventKind::TswDebris)) debris = f;
+        if (count(z.events(), SwEventKind::TswDone)) done = f;
+    }
+    CHECK(destroyed == 1 + 348 && debris == destroyed + 1 && done == destroyed + 3 && z.victory_holds() == 0u);
 }
 
 // ---- combat pieces ----
@@ -631,7 +667,7 @@ void test_special_weapon_save() {
         destroyed = destroyed || count(a.events(), SwEventKind::TswPlanetDestroyed) > 0;
         if (!same_outputs(a, b) || sw_digest(a, ra, ha) != sw_digest(b, rb, hb)) ++diverged;
     }
-    CHECK(diverged == 0 && destroyed && shots >= 5 && a.tsw_state(4) == kTswDone);
+    CHECK(diverged == 0 && destroyed && shots >= 5 && (a.tsw_state(4) == kTswPostWait || a.tsw_spent(4)));
     CHECK(bytes_of(a) == bytes_of(b) && ra.draws() == rb.draws());
 
     // Rejected data leaves the system unchanged: truncation, trailing bytes, version, a pack's descriptor, a TSW state.
@@ -658,7 +694,9 @@ void test_special_weapon_save() {
     bad[packs + 4] = 3;  // the first pack's descriptor index: past the table
     CHECK(rejected(bad));
     bad = saved;
-    bad[packs + 85 + 51] = 12;  // the Death Star pack's TSW state: past kTswDone
+    bad[packs + 85 + 51] = 11;  // the Death Star pack's TSW state: there is no state 11
+    CHECK(rejected(bad));
+    bad[packs + 85 + 51] = 14;  // past kTswRelease
     CHECK(rejected(bad));
     bad = saved;
     bad[packs + 85] = 0x7F;  // the second pack's id (127 > 5): ids out of order

@@ -29,7 +29,7 @@
 //   bm_execute_purchase(...), sabotage_execute_structure(...), hack_execute(...)   the command executors
 //   bm_give_item(player, name) (story GIVE_BLACK_MARKET), sabotage_structure_reward(planet, type) (SABOTAGE_STRUCTURE)
 //   corruption_ai_pick, corruption_charge, count_corruption   corruption executor helpers (apps/sim kind 6 path)
-//   planet_destroy(planet, destroyer)           the shared planet destruction routine (hack; Death Star later)
+//   planet_destroy(planet, destroyer)           the hack's planet destruction (planet_destroy_core + orbit, starbase, owner)
 //   lock_type(player, type, on), set_bm_tutorial / set_sabotage_tutorial (Lua Lock_Tech, Set_*_Tutorial)
 // Commands: SpecialAbility (13) kinds 1 activate, 2 slice, 4 buy, 5 sabotage a structure, 7 hack are executed by
 // GalacticSim::execute; kind 6 (corruption) stays Unhandled for apps/sim CampaignBattles (campaign_battles.hpp).
