@@ -1,5 +1,6 @@
-// alamo_game App: the scripted smoke steps (split from game_main.cpp).
-#include "game_app.hpp"
+// alamo_game App: the scripted smoke steps (split from game_main.cpp). The step helpers shared with the save / load smoke
+// (app_script_saveload.cpp) are declared in app_script.hpp.
+#include "app_script.hpp"
 
 namespace alamo_game_app {
 
@@ -16,13 +17,10 @@ ui::InputFrame App::idle_frame() const {
     return f;
 }
 
-namespace {
+namespace script {
 
 // A click as three frames: move, press, release (InputState: a click without a drag).
-struct ClickState {
-    int phase = 0;
-};
-bool click_at(ClickState& c, ui::InputFrame& f, int32_t x, int32_t y, ui::Button b, bool shift = false) {
+bool click_at(ClickState& c, ui::InputFrame& f, int32_t x, int32_t y, ui::Button b, bool shift) {
     if (shift) f.keys_down.set(ui::vk::kShift);  // the queue modifier held through the click
     f.mouse_x = x;
     f.mouse_y = y;
@@ -37,7 +35,7 @@ bool click_at(ClickState& c, ui::InputFrame& f, int32_t x, int32_t y, ui::Button
     return ++c.phase > 3;
 }
 
-ScriptStep step_wait(std::string name, std::function<bool(App&)> cond, uint32_t timeout = 3600) {
+ScriptStep step_wait(std::string name, std::function<bool(App&)> cond, uint32_t timeout) {
     return {std::move(name), [cond = std::move(cond)](App& a, ui::InputFrame&) { return cond(a); }, timeout};
 }
 
@@ -1019,7 +1017,9 @@ ScriptStep step_galactic_move(bool drag) {
             6000};
 }
 
-}  // namespace
+}  // namespace script
+
+using namespace script;
 
 void App::make_script() {
     auto& s = script_;
@@ -1031,11 +1031,17 @@ void App::make_script() {
                          f.keys_down.set(ui::vk::kEscape);
                          f.keys_pressed.set(ui::vk::kEscape);
                      }
-                     if (n == 10 && a.full_movie_.has_frame() && !a.opt_.png_dir.empty()) a.shot_path_ = a.opt_.png_dir + "/game_intro_movie.png";
+                     // (not the save / load smoke: it shares the PNG folder and writes only game_smoke_saveload_*.png)
+                     if (n == 10 && a.full_movie_.has_frame() && !a.opt_.png_dir.empty() && a.opt_.smoke != "saveload")
+                         a.shot_path_ = a.opt_.png_dir + "/game_intro_movie.png";
                      return false;
                  },
                  1200});
     s.push_back(step_wait("menu shown", [](App& a) { return a.ui_.gui.top() != nullptr && a.frames_ > 2; }, 600));
+    if (opt_.smoke == "saveload") {  // N1 follow-up: the save / load menus driven like a player (app_script_saveload.cpp)
+        add_saveload_steps(s);
+        return;
+    }
     s.push_back(step_shot("game_main_menu.png"));
     if (opt_.smoke == "skirmish") {
         // OI host: the attract demo behind the main menu (MAIN_MENU_BACKGROUND.md; started here as the menu-open path would,
