@@ -49,6 +49,7 @@ Conventions:
 | 27 | Fog at battle start | everything starts fogged with last-seen 0; own and allied REVEAL units uncover their circles on their first service; no start radius and no map-wide reveal for AI players | [H] / [M] where tagged |
 | 28 | Free-store entry +0x30 = the `Lock_Current_Orders` order lock [M] (a1f t03) | **corrected**: +0x30 is the owning PotentialPlan pointer. Set when a goal is accepted or kept in Resolve_Category (0x6c2d60), not at proposal; cleared at every Commit start (0x6c0be0) and by the PP destructor. `Lock_Current_Orders` is an object counter (+0x3a8) that On_Unit_Service does not test | [H] |
 | 29 | TEAM containers in the threat grid (a1f t04) | teams with UNIT_AI get one whole-object entry, no TEAM exclusion; members (no UNIT_AI) get nothing. 0x396380(team) = the company type (team data +0x58), 0x3973b0 = `Create_Team_Type`. Power = the company's load-derived sum × clamp(`Max_Squad_Size` / `Company_Units` count, 0, 1), a static share, not live fill (stormtrooper team: 126 × 0.5 = 63); radius from the first member type (140) | [H] |
+| 30 | A1 [M] / [port] choices reviewed (a1f t06) | **change**: §12 cell order (exact stdext hash_set emulation; zone +0x90 order differs from evaluator +0xb0 order), §7 clamp the recorded hull loss, §19 gate (game type 1..4 or no parent id, else the parent object's type), §21 bombing test gets the real BASE_SHIELD test and a 3-D prevention distance, Reinforce placement (8-spot ring per ranked point). **Keep**: §15 full removal, §14 stamp draw point, Reinforce mixed keys (the original's), TF link mask −1 (+0x94 is a CellPassabilityType mask, unset in every shipped plan); IsInside*Shield leaves are always 0 in shipped data | [H] / [M] where tagged |
 
 ---
 
@@ -775,3 +776,158 @@ Team data pack = obj +0x110 (TeamDataPackClass, ctor 0x4ec680 zeroes +0x50 / +0x
   with the container's state. Example: 140.
 - **`position` / transform:** the container's.
 - **`health`:** the mean of the members' hull fractions.
+
+## 30. A1 [M] / [port] choices reviewed (a1f t06) [H unless tagged]
+
+Eight port choices left by A1, checked against the binary. "Port" = the code today; "Rule" = what to implement when
+the verdict is **change**.
+
+### 30.1 §12 zone threat-cell order: first insertion vs stdext hash_set → **change** (medium)
+
+- Port: `TacticalPerception::init` (tactical_perception.cpp ~1132-1145) keeps one list per zone in first-insertion
+  order of the .ted child-7 cells. The same list feeds zone danger, TimeLastSeen, the flood, path node costs and
+  Get_Most_Defended_Position.
+- Original: three containers of one MSVC `stdext::hash_map<uint32, uint8>` type (insert 0x5a84f0 / 0x5a8770,
+  rehash 0x2d3220, grow 0x3f28e0, copy-assign 0x6d66a0, ctor 0x5a8c40 / 0x72c560). Iteration is the container's list
+  order. No pointer, address or seed enters it, so the order is a pure function of the insertion sequence and
+  **can be reproduced exactly with integer code**.
+  - h(k) = minstd((k ^ 0xdeadbeef) & 0x7fffffff): q = x / 127773, r = x % 127773, v = 16807·r − 2836·q (int32),
+    v += 0x7fffffff if v < 0. Bucket = h & (B − 1).
+  - Start: B = 8, max load factor 1.0 (both ctors).
+  - Insert k: duplicate (equal key in its bucket) → nothing. Else, when (float)(size + 1) / (float)B > 1.0, grow
+    first: B' = B × 8 while B < 512, else the next power of two ≥ size + 1; rehash; then place k.
+  - Place: bucket empty → append k at the list end. Else insert k into the bucket's run, keeping the run ascending
+    by key (after the last key < k, else before the run's first).
+  - Rehash(B'): walk the old list in order, placing each node with the same rule. Result: buckets in order of their
+    first member in the old list, each run ascending.
+  - Copy-assign (dest := src): dest list = src list, then rehash dest to n' = max(8, size): keep dest B if ≥ n';
+    else dest B × 8 if dest B < 512 and that is ≥ n'; else n' rounded up to a power of two. The dest regroups, so
+    its order differs from src whenever its B differs (e.g. 65..256 cells: src B = 512, dest B = 128 / 256).
+- Chain per zone:
+  1. Zone +0x50 = the .ted child-7 cells (0x5a8260), inserted in file order (key x | y << 16).
+  2. Evaluator +0xb0: 0x6d65d0 walks +0x50 in its list order. Each cell → world (x·20, y·20) → threat cell
+     (0x654210) → insert key col | row << 16 (0x72cd00).
+  3. Zone +0x90 := evaluator +0xb0 by copy-assign (rcx = zone + 0x90, checked in the disassembly).
+- Readers: evaluator +0xb0 order is used by Location.ForceUnnormalized (0x72cf10) and the zone TimeLastSeen (0x72e410).
+  Zone +0x90 order is used by the flood (0x5a7390 / 0x5a7880), the path node cost (0x6940e0), the TF zone route
+  (0x5a6940) and land Get_Most_Defended_Position (0x69f3a0 → 0x6556c0).
+- Why change: §17 draws on every tie, so the last tied cells in iteration order win most often (1/2, 1/4, …).
+  Chunk order (raster-like) biases defended positions toward one side of the zone; hash order does not. Float sums
+  differ only in rounding.
+- Rule: a ~60-line `stdext` order emulator, run once at load per zone. Keep two orders per zone: `eval_order`
+  (steps 1-2) for ForceUnnormalized / TimeLastSeen, and `zone_order` (step 3, dest B starting at 8) for the flood,
+  the path costs and Most_Defended.
+- Test vector (alamo_ai_tactical_tests): insert the 16 keys of threat cells (c, r), r = 0..3 outer, c = 0..3 inner,
+  into an empty set → B = 64. Order (c, r): (0,0) (0,1) (1,0) (1,1) (2,0) (2,1) (3,0) (3,1) (0,2) (0,3) (1,2) (1,3)
+  (2,2) (2,3) (3,2) (3,3). After the first 5 keys (B = 8): (0,0) (0,1) (1,0) (2,0) (3,0).
+- Not reproduced, stays [port]: vf13 never clears +0xb0. A unit-bound evaluator that re-links on a zone change
+  (0x6d5690, 0x6d5760, 0x6d5860, 0x6d5950, 0x6d5a10, 0x6d5ac0) adds the new zone's cells to its old set and copies
+  that **union** into the new zone's +0x90. That zone's flood and Most_Defended then see foreign cells until another
+  evaluator re-links into it. [H code; M how often it fires]
+
+### 30.2 §7 overkill not clamped → **change** (small, low priority)
+
+- Port: tactical_battle.cpp ~1763-1786 records `absorbed + to_hull`. `to_hull` = the full hit x
+  (combat_system.cpp ~1690, `v.health = old − x`, no clamp).
+- Original: the health setter 0x3a89d0 clamps health to [0, max] (maxss / minss). Apply_Hull_Damage (0x3ab890)
+  sets old − x through it. When the object cannot die (+0x3a1 & 0x80), it then restores max(1, old). Take_Damage
+  (0x3a9e30) records (shieldBefore + hullBefore) − hullAfter − shieldAfter. That includes the killing hit, capped at
+  the remaining hull, and 0 hull loss for a cannot-die object.
+- Today nothing reads a dead victim's entries (it leaves the store the same tick), so the gap shows only for
+  cannot-die objects (port flag `kUnitCannotDie`, not set by the host yet) and for a future running total (+0x8).
+- Rule: hull part = hullBefore − hullAfter, with hullAfter clamped to ≥ 0 and replaced by max(1, old) for cannot-die
+  objects (e.g. `min(to_hull, hullBefore)`, and 0 when the cannot-die restore ran). Test: a tracked 50-hull victim
+  hit for 200 records 50.
+
+### 30.3 §19 game-mode gate → **change** (small)
+
+- Port (tactical_perception.cpp ~464-478): includes an object when `w.campaign || o.rep_type < 0`, and adds
+  `o.combat_power`. `w.campaign` is also true in land skirmish (battle_ai.cpp ~308).
+- Original (0x6d4180, disassembly at 0x6d42a4..0x6d42d1): mpOrSkirmish = GMM current mode (+0x38) ≠ 0, GMM +0x20 ≠ 1,
+  and game type (+0x18) ∈ {1, 2, 3, 4}. 0x28af80 tests {1, 2, 4} (networked) and 0x28b060 tests 3. [M] 3 = local
+  skirmish: the network code treats 0 and 3 alike as local. For each TRANSPORT_LANDING object in the GOM behaviour
+  list (0x36) order, with 0x39a2c0(obj, P, 0) == friendly:
+  - src = obj when mpOrSkirmish or obj +0x54 (parent-mode id) == 0x3fffff;
+  - otherwise src = the parent-mode object with that id (0x28aa50, OBJECT_RUNTIME §1.4). When it is not found, the
+    object is skipped;
+  - T = 0x3973b0(src). It needs T ≠ null and T's category & mask ≠ 0. Then sum += 0x370e60(T), the **type's**
+    power (no health or attenuator factor).
+- Rule: add `skirmish_or_mp` to PerceptionWorld (game type ∈ {1..4}) and `parent_object` per object (+0x54; −1 =
+  none). Include as above. Power = the AI_Combat_Power rule of `rep_type` (for a TRANSPORT, 0x3973b0 gives transport
+  +0x48 [M: the carried type]), not the landing object's own power. Test: one landing object in (a) skirmish,
+  (b) campaign with a resolvable parent (the parent's type's power), (c) campaign with an unresolvable parent
+  (skipped).
+
+### 30.4 §21 `inside_shield` not filled → leaves **keep** 0; IsValidBombingTarget **change** (small)
+
+- Port: `PerceptionWorld::inside_shield` is never set by the host. So IsInsideEnemyShield / IsInsideFriendlyShield
+  (tactical_perception.cpp ~755, ~867) return 0. The bombing test (~481-497) skips its shield step and uses a 2-D
+  prevention distance.
+- Original leaves (0x6d7210 unit, 0x6d5760 location) → 0x3b8790. It walks the land store list (+0x2f0) for an
+  object with the BASE_SHIELD slot (+0x36b), but reads the active state through behaviour **0x10 (SHIELDED)**
+  (vf+0x10(0x10) → +0x28 → +0x1c8 → +8 == 1, disassembly 0x3b8818). No shipped type has both BASE_SHIELD and
+  SHIELDED: 14 BASE_SHIELD types, none with SHIELDED, and STARSHIP_COMBATANT is the only implicit behaviour. So the
+  leaves are **always 0** in shipped data, which the port already gives.
+- Original bombing test 0x494540 uses behaviour 0x39 (checked at 0x49461b). The point fails inside **any**
+  player's active BASE_SHIELD: GOM list 0x39 order, `Base_Shield_Radius` (+0x21f4) > 0, state == 1,
+  sqrtf(dx² + dy² + dz²) < r. The prevention test is **3-D**: dx² + dy² + dz² ≤ (+0x1dfc)², over Self's objects.
+- Rule: give the bombing test its own host callback (e.g. `in_active_base_shield(p)` = the existing
+  `TacticalBattle::l1_base_shield_covers`), and make the prevention distance 3-D. Leave `inside_shield` unset, or
+  require SHIELDED on the shield object if it is ever wired. Test: a location inside an enemy or own active shield →
+  IsValidBombingTarget 0; IsInsideEnemyShield stays 0.
+
+### 30.5 §15 full memory removal on destroy → **keep** [port]
+
+- Port: threat_grid.cpp ~341-357 removes the entries from every player's memory lists.
+- Original (0x6585f0): removes memory entries over the snapshot rect only for players with 0x4f57d0(pack, p)
+  (fogged). It stops at a destroyed hard point (r < 0). Then it removes the live entries (0x656d10), the owner list
+  entry (+0x88) and the signal subscription.
+- The other players keep pointers to the destroyed pack's entries until the cell refogs. CellForce (§10) reads them,
+  which reads freed memory: undefined behaviour that no port can reproduce deterministically. Full removal is the
+  only deterministic choice. It is already labelled [port].
+
+### 30.6 §14 stamps drawn at first fill → **keep** [port]
+
+- Port: battle_ai.cpp ~651-661 draws Get_Int(0, 300) and Get_Int(0, 150) when `fill()` first lists a UNIT_AI object.
+- Original: the attach loop 0x38cb30 calls UnitAIBehavior vf+0x38 = 0x4f52f0 (vtable 0x87af98) → 0x390140 → the
+  pack ctor 0x550ed0, inside object creation (0x3989a0), in the type's behaviour-list order, for every UNIT_AI object
+  in any mode.
+- Same draw count and value distribution, and stamp ≤ F either way, so the first check is at the first service and
+  the 300-frame phase is uniform (§14). Only the synced-stream position differs. Parity is checked by behaviour
+  (CLAUDE.md), so moving the draws into object creation (cross-module: objects / spawn) gains nothing.
+
+### 30.7 TF.Reinforce mixed cost / distance keys → keys **keep** (now [H]); placement **change** (medium)
+
+- Port: `tf_reinforce` rank (tactical_ai.cpp ~1906-1925) and `reinforce_landing_point` (~1848-1884). It drops points
+  outside the flood set. The key is the slot-7 cost for a point with a zone, or the 2-D distance (double) for one
+  without. It takes the **single** best point and moves from it toward the target by min(d, r/2).
+- Original 0x6eaf60 (land only, mode vf+0xe0 == 1). D = region target at the destination position (target list
+  vf+0x48), with its reachability object (vf+0x38). Level = the TF goal's `Reachability`.
+  1. Candidates: the land store list (+0x2f0) in order. The type's `Reinforcement_Enabling_Radius` (+0x1e20) must be
+     > 0, and 0x39a2c0(obj, player, 0) must hold.
+  2. Key (float): R = region target at the point. If D's reachability or R is null, key = sqrtf(dx² + dy²) to the
+     destination. Otherwise the point is skipped unless slot 5(D, R, level) holds, and key = slot 7(D, R, level).
+     A failed path sum gives 1e18; that point is kept and sorted last. **The mixed keys are the original's.**
+  3. Sort in a float multimap: ascending, and equal keys keep list order.
+  4. For each point in key order, for θ = 0, π/4, …, 7π/4 (float step 0.7853982 while < 6.2831855): try to land the
+     **last** pending unit at (px + (r/2)·cos θ, py + (r/2)·sin θ, pz), r = that point's radius, via mode vf+0x280.
+     On success, pop the unit and take its population off the cap read once (0x2acb10). Then pop trailing units
+     that are null or do not fit (this clears the "all placed" flag). Stop when the cap is < 1 or no unit is left.
+  5. It returns true only when every unit was placed and none was skipped.
+- Rule: keep the keys, but compute them in float, sort stably, and use the 8-spot ring per point. Units go one per
+  accepted spot, cascading to the next point. The landing does not move toward the target. Test: two allied
+  reinforcement points and three pending units → spots (p1 + r/2·(1, 0)), (p1 + r/2·(0.7071, 0.7071)), … in that
+  order.
+
+### 30.8 TF link mask −1 → **keep** (equal to shipped data); parsing optional (small)
+
+- Port: Setup A stages call `flood_pick(..., 0xFFFFFFFF, ...)` (tactical_ai.cpp ~1283-1299, flood_pick ~723-739).
+- Original: TF definition +0x94 starts at −1 (0x66f5d0). In the token loop (0x66fcc0), after the stage keywords, each
+  token is offered to the `BitfieldConversionClass<CellPassabilityType>` converter (0x140b310c8, built by 0x5dd090),
+  which writes +0x94. So +0x94 is a **CellPassabilityType link-flag mask** (Clear 1, Steep 2, Obstacle 4, RebelWall
+  8, EmpireWall 0x10, Water 0x20, Shield 0x40, InfantryOnly 0x80, Impassable 0x100). AI_GALACTIC_2 §1.2 calls it a
+  "unit-filter mask"; that name is wrong. Setup A passes it as slot 6's linkMask (0x7287a0 reads TF +0x94).
+- No shipped FoC or EaW AI script has such a token in a task-force definition, so +0x94 = −1 in every shipped plan.
+  The port's −1 is exact.
+- Optional rule (for mods): parse a TF token that names a CellPassabilityType ([M] `|`-separated, case-insensitive)
+  into the mask, and pass it to `flood_pick`.
