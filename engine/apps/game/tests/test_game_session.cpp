@@ -695,6 +695,14 @@ bool special_run(const game::GameData& data, const game::SessionSpec& spec, comm
     const uint32_t item = g->rules().special.find_item_by_name("GS_Item_Empire");
     const std::vector<galactic::BlackMarketOffer> offers = g->bm_offers(me, p, g->store().find(static_cast<objects::ObjectId>(ids.smuggler)));
     CHECK(offers.size() == 1 && offers[0].item == item && offers[0].price == 1000.0f && !offers[0].purchased);
+    {   // L1P4_LUA_GAPS 2.3: the row is clickable when not purchased and the ROUNDED price fits the ROUNDED credits.
+        galactic::BlackMarketOffer o;
+        o.price = 1000.3f;
+        CHECK(game::black_market_row_enabled(o, 999.6f) && game::black_market_row_enabled(o, 1000.0f));
+        CHECK(!game::black_market_row_enabled(o, 999.4f));
+        o.purchased = true;
+        CHECK(!game::black_market_row_enabled(o, 1.0e6f));
+    }
     const float c0 = g->credits(me);
     CHECK(s.buy_black_market(item) && !s.special_dialog());
     run(2);

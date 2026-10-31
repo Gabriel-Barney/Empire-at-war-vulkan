@@ -1463,32 +1463,43 @@ bool detail::galactic_block_finished(Call& c) {
 
 // --- P4 lua: FoC galactic special systems (vm_internal.hpp) ----------------------------------------------------------
 
-// Activate_Ability_Galactic (0x570670, P4_SIM_SYSTEMS 6.1): the object must be in orbit, not landed - a member of a
-// stationary fleet (that unit), or the fleet itself (each carried unit, content order: the port's fleets carry the
-// units of the original's transports directly). Optional type filter: a GameObjectTypeWrapper parameter 1 keeps the
-// units of that type [inferred: the filter's argument is not documented]; an ability name is not used (the trigger
-// tries every Ground_Activated ability of the unit's type, P4 6.1). Landed units, planets, moving fleets: nothing.
+// Activate_Ability_Galactic (0x570670, P4_SIM_SYSTEMS 6.1, L1P4_LUA_GAPS 1): optional object-type argument (wrapper or
+// type name, galactic_ability_type_arg; a bad one fires nothing). Not an ability name: the trigger tries every
+// Ground_Activated ability of the unit's type. The object must be in orbit:
+//   - a fleet at a planet: each direct member (content order: the port's fleets carry the units of the original's
+//     transports directly) whose type is the argument's (the member's own type stands for the original's
+//     representative type: port members are the squadron / company objects themselves);
+//   - a unit in a fleet at a planet: that unit, the argument is not applied;
+//   - a fleet in transit, a planet or a free object: "is not at a planet"; a unit on the surface: "is landed"; nothing.
+// Returns no values (the caller pushes none).
 bool detail::galactic_activate_ability(Call& c) {
     galactic::GalacticSim* sim = galactic_mut(c);
     if (!sim) return false;
+    uint32_t filter = objects::kNone;
+    if (!galactic_ability_type_arg(c, "GameObjectWrapper::Activate_Ability_Galactic", filter)) return true;
     const objects::ObjectHandle self = detail::object_handle(*c.self);
     if (!sim->store().alive(self)) return true;
-    const Ud* ft = c.has(1) ? c.userdata(1, detail::cls_type()) : nullptr;
-    const uint32_t filter = ft ? static_cast<uint32_t>(ft->value) : galactic::kNoIndex;
     uint32_t f = sim->fleet_of(self);
     const bool is_fleet = f != galactic::kNoFleet;
     if (!is_fleet) f = sim->fleet_containing(self);
-    if (f == galactic::kNoFleet) return true;
+    auto error = [&c](const char* what) { c.vm->message(std::string("SCRIPT ERROR: GameObjectWrapper::Activate_Ability_Galactic -- ") + what); };
+    if (f == galactic::kNoFleet) {
+        const PlanetIndex at = planet_row(sim, sim->container_of(self));
+        if (at != kInvalidPlanet) error("object is landed. Must be in orbit to activate abilities.");
+        else if (!sim->container_of(self) || sim->planet_of(self) != kInvalidPlanet) error("object is not at a planet");
+        return true;  // inside a transport / team: silently nothing
+    }
     const galactic::FleetState& fl = sim->fleets()[f];
-    if (fl.moving || fl.planet == kInvalidPlanet) return true;
-    auto keep = [sim, filter](objects::ObjectHandle h) {
-        return sim->store().alive(h) && (filter == galactic::kNoIndex || static_cast<uint32_t>(sim->store().type(h)) == filter);
-    };
+    if (fl.moving || fl.planet == kInvalidPlanet) {
+        error("object is not at a planet");
+        return true;
+    }
     std::vector<std::pair<objects::ObjectHandle, uint32_t>> todo;
     if (is_fleet) {
         for (const objects::ObjectHandle m : fl.contents)
-            if (keep(m)) todo.emplace_back(m, fl.planet);
-    } else if (keep(self)) {
+            if (sim->store().alive(m) && (filter == objects::kNone || static_cast<uint32_t>(sim->store().type(m)) == filter))
+                todo.emplace_back(m, fl.planet);
+    } else {
         todo.emplace_back(self, fl.planet);
     }
     galactic_trigger(c, todo);

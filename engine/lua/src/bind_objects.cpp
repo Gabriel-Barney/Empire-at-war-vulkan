@@ -1064,8 +1064,8 @@ AbilityArg ability_arg_family(uint8_t t) {
 // ability [inferred]. An ability the unit does not have is a no-op [inferred].
 int m_activate_ability(Call& c) {
     // P4 lua: in a galactic script the Ground_Activated hero trigger (Activate_Ability_Galactic 0x570670,
-    // P4_SIM_SYSTEMS 6.1) through the players family; returns a finished BlockingStatus.
-    if (detail::galactic_activate_ability(c)) return push_block(c, c.self->id, 0);
+    // P4_SIM_SYSTEMS 6.1) through the players family; returns nothing (L1P4_LUA_GAPS 1.2 item 4).
+    if (detail::galactic_activate_ability(c)) return 0;
     const ObjectHandle self = self_object(c);
     uint8_t id = 0;
     if (c.has(1) && c.is_string(1)) {

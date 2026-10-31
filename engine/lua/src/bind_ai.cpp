@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "alamo/lua/ai_bridge.hpp"
+#include "alamo/objects/game_object_types.hpp"
 #include "vm_internal.hpp"
 
 namespace alamo::lua {
@@ -242,9 +243,10 @@ int m_tf_force_test_space_conflict(Call& c) {
 // OI lua: Activate_Ability([name] [, on | target]). Land / Space / generic task forces (0x5f9890, AI_TACTICAL §7.3):
 // each unit's GameObjectWrapper.Activate_Ability with the same arguments (task-force unit order; the objects family
 // resolves an AI target / task force target argument), then the host's status. GalacticTaskForceClass (0x6cd180,
-// P4_SIM_SYSTEMS 6.1): only the host, which fires the Ground_Activated trigger per member (the name selects nothing
-// there: the trigger tries every Ground_Activated ability; shipped galactic plans pass none). The host gets the name,
-// the on flag and the target either way (AiScriptHost::tf_activate_ability).
+// P4_SIM_SYSTEMS 6.1, L1P4_LUA_GAPS 1): only the host, which fires the Ground_Activated trigger per member (the trigger
+// tries every Ground_Activated ability; shipped galactic plans pass no argument); the optional argument is an object
+// type (galactic_ability_type_arg) whose name the host gets as `ability`. Other task forces: the host gets the name,
+// the on flag and the target (AiScriptHost::tf_activate_ability).
 int m_tf_activate_ability(Call& c) {
     AiScriptHost* h = host_of(c.L);
     if (!h) return push_nil(c);
@@ -253,8 +255,18 @@ int m_tf_activate_ability(Call& c) {
     const int ti = named ? 2 : 1;
     const AiArg target = arg(c, ti);
     const bool on = is_bool(c, ti) ? to_bool(c, ti) : true;
-    if (c.self->cls != cls_tf(AiTaskForceKind::Galactic))
-        for (const objects::ObjectHandle u : h->tf_units(c.self->id)) detail::call_object_method(c, u, "Activate_Ability", c.first, c.nargs);
+    if (c.self->cls == cls_tf(AiTaskForceKind::Galactic)) {
+        // L1P4_LUA_GAPS 1: the galactic body (0x6cd180) takes an optional object type (wrapper or name), not an ability
+        // name; a bad argument fires nothing. The host gets the type's name ("" = no filter) and keeps the task-force
+        // members of that type.
+        uint32_t filter = objects::kNone;
+        if (!detail::galactic_ability_type_arg(c, "GalacticTaskForce::Activate_Ability", filter)) return 0;
+        const objects::GameObjectTypes* types = c.vm->host.types;
+        const std::string type_name =
+            filter != objects::kNone && types && filter < types->raw().type_count() ? std::string(types->raw().types().name[filter]) : std::string();
+        return push_status(c, h->tf_activate_ability(c.self->id, type_name, on, AiArg{}));
+    }
+    for (const objects::ObjectHandle u : h->tf_units(c.self->id)) detail::call_object_method(c, u, "Activate_Ability", c.first, c.nargs);
     return push_status(c, h->tf_activate_ability(c.self->id, name, on, target));
 }
 int m_tf_is_raid_capable(Call& c) {
@@ -575,6 +587,33 @@ bool push_global_function(lua_State* L, std::string_view name) {
 }  // namespace
 
 std::span<const detail::ImplEntry> detail::impl_ai() { return kImpl; }
+
+// L1P4_LUA_GAPS 1.1 (vm_internal.hpp). Error texts as the original's Activate_Ability_Galactic.
+bool detail::galactic_ability_type_arg(Call& c, const char* who, uint32_t& filter) {
+    filter = objects::kNone;
+    if (c.nargs > 1) {
+        c.vm->message(std::string("SCRIPT ERROR: ") + who + " -- invalid number of parameters. Expected 0 or 1, got " +
+                      std::to_string(c.nargs));
+        return false;
+    }
+    if (c.nargs == 0) return true;
+    if (const Ud* t = c.userdata(1, detail::cls_type())) {
+        filter = static_cast<uint32_t>(t->value);
+        return true;
+    }
+    if (c.is_string(1)) {
+        const objects::GameObjectTypes* types = c.vm->host.types;
+        const objects::TypeIndex t = types ? types->raw().find(c.string(1)) : objects::kNone;  // case-insensitive
+        if (t != objects::kNone) {
+            filter = t;
+            return true;
+        }
+        c.vm->message(std::string("SCRIPT ERROR: ") + who + " -- unknown object type " + std::string(c.string(1)));
+        return false;
+    }
+    c.vm->message(std::string("SCRIPT ERROR: ") + who + " -- invalid type for parameter 1. Expected object type.");
+    return false;
+}
 
 // OI lua (A1 ask 2): an AITargetLocationWrapper -> its game object, a task force -> its first live unit (the rule
 // of the former Find_Nearest shim). 0 = not an AI wrapper; 1 = an AI wrapper (out = null when it has no live object

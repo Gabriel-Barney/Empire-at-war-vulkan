@@ -430,6 +430,9 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     }
     bool tf_all_on_free_store(int32_t tf) override;
     int32_t tf_order(int32_t tf, lua::AiTfOrder order, const lua::AiArg& arg) override;
+    // L1P4_LUA_GAPS 1: `ability` = the object type name the galactic binding validated ("" = every member).
+    int32_t tf_activate_ability(int32_t tf, std::string_view ability, bool on, const lua::AiArg& arg) override;
+    uint32_t activate_filter = gal::kNoIndex;  // tf_order(ActivateAbility): members of this type only
     bool tf_is_raid_capable(int32_t tf) override { return tf_valid(tf); }
     void tf_release_forces(int32_t tf, double fraction) override;
     void tf_release_unit(int32_t tf, ObjectHandle unit) override;
