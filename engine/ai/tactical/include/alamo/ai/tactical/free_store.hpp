@@ -3,27 +3,40 @@
 // FreeStoreService resume, On_Unit_Service / On_Unit_Added calls, AIBuildTask hand-off) rides on
 // the A2 plan / Lua work and is stage 2.
 //
-// Admission (Land 0x690a10 -> base 0x4d2c90) [H unless tagged]: see FreeStoreObjectInfo; all of
-//   owned by this AI player; not TRANSPORT; type not Create_Team, not Is_Dummy, not
-//   Stay_In_Transport_During_Ground_Battle; no INDIGENOUS_UNIT/EXPLOSION behaviour;
-//   LOBBING_SUPERWEAPON, or (locomotor and (STARSHIP_COMBATANT or TEAM) and not type bit 0x5f [M]);
-//   a TEAM with a container/member type bit 0x20 refused; type bit 0x5b refused; obj +0x2b0/+0xf8
-//   empty; not in the mode's +0x38 manager set [M]; base: not dead/removing, in world [M].
-// Space (0x6904b0): PROVISIONAL [L] - its own rule list is not in the spec; this port applies the
-// land list without the land-only Stay_In_Transport_During_Ground_Battle test.
+// Admission (A1_READINGS 6 [H]; the 0x20 / 0x5B / 0x5C / 0x5F / 0x60 tests are behaviour-in-type tests 0x370320).
+// Land (0x690a10), all of:
+//   type not Create_Team; no TRANSPORT;
+//   LOBBING_SUPERWEAPON (0x37), or all of: type lacks DUMMY_GROUND_STRUCTURE (0x5F), STARSHIP_COMBATANT or TEAM,
+//   a locomotor, type not Is_Dummy (so a dummy with LOBBING_SUPERWEAPON is admitted);
+//   no INDIGENOUS_UNIT (0x20): a TEAM's representative type and every member type must lack it too;
+//   type lacks DUMMY_GROUND_BASE (0x5B); owned by this AI player; not Stay_In_Transport_During_Ground_Battle;
+//   obj +0x2b0 and +0xf8 empty; not in the land mode's +0x38 set (the bombing-run manager, 0x4944e0);
+//   base test 0x4d2c90 (not dead / removing, in world) [M: AT 5.1 places it on the land path too].
+// Space (0x6904b0), a separate list (none of the TRANSPORT / Create_Team / Stay_In_Transport / INDIGENOUS_UNIT /
+// DUMMY_GROUND_BASE / bombing-manager tests), all of:
+//   type neither a squadron member (+0x29) nor a company member (+0x2a);
+//   SPECIAL_WEAPON (0x2F, obj +0x361), or all of: type not Is_Dummy, STARSHIP_COMBATANT or TEAM, a locomotor;
+//   type lacks DUMMY_ORBITAL_STRUCTURE (0x60) and DUMMY_STAR_BASE (0x5C); no TACTICAL_SUPER_WEAPON (0x2C, obj +0x35e);
+//   owned by this AI player; obj +0x2b0 and +0xf8 empty; base test 0x4d2c90.
 //
 // [port] ORDER: the retail map is an MSVC hash container keyed by object id (list order depends on
 // insertion history and rehashes). Here the store is ordered by ASCENDING OBJECT ID (std::map), so
 // On_Unit_Service visits free units lowest id first. Deviation from vanilla only in which unit acts
 // first within one service pass (AI_TACTICAL 5.3 recommendation).
 //
-// Service (0x4d5a70, called on each Execution service = every 3 frames) [H]:
-//   now = (float)F * (1/30) (mode frame F);
+// Service (0x4d5a70, called on each Execution service = every 3 frames) [H] (A1_READINGS 9 [H static]):
+//   now = (float)F * 0.033333335f (mode frame F, the float at 0x140b0a344);
 //   FreeStoreService runs when ServiceRate exists and now - LastService > ServiceRate (strict),
 //   then LastService = now; afterwards On_Unit_Service(unit) for every entry whose order lock is
 //   clear, in store order, when UnitServiceRate exists and now - LastUnitService > UnitServiceRate,
-//   then LastUnitService = now. Both stamps start at 0. [M]: the stamps are Lua numbers (double);
-//   the comparison is done in double with now widened from float.
+//   then LastUnitService = now. Both stamps start at 0. The stamps are Lua numbers (double); the comparison
+//   is done in double with now widened from float [H].
+//   Result with BusyTacticalFreeStore (20 / 2): FreeStoreService is first eligible at F = 600 (now =
+//   20.0000019), then F = 1200, ...; On_Unit_Service at F = 61 (now(60) is exactly 2.0, which does not pass).
+//   Each fires on the next Execution service at or after that frame [H]. With Execution services on
+//   multiples of 3 that is F = 600 and F = 63 [M: the player's cadence phase was not traced].
+//   Note: A1_READINGS 9.1 words the test "rate <= now - LastService", but its own F = 60 result (now = 2.0
+//   exactly, not passed) needs the strict form kept here.
 #pragma once
 #include <cstdint>
 #include <map>
@@ -44,18 +57,26 @@ struct FreeStoreObjectInfo {
     bool type_create_team = false;              // type +0x67
     bool type_is_dummy = false;                 // type +0x10
     bool type_stay_in_transport = false;        // Stay_In_Transport_During_Ground_Battle (+0x2d), land only
-    bool has_indigenous_or_explosion = false;   // behaviour 0x20
+    bool has_indigenous_or_explosion = false;   // INDIGENOUS_UNIT 0x20 (land only)
     bool has_lobbing_superweapon = false;       // behaviour 0x37
     bool has_locomotor = false;                 // behaviour 0x01
     bool is_starship_combatant = false;         // STARSHIP_COMBATANT behaviour
     bool is_team = false;                       // TEAM behaviour
-    bool type_category_bit_5f = false;          // type bitfield +0x790 bit 0x5f [M]
-    bool team_has_bit_20 = false;               // TEAM: container or any member type has bit 0x20 [M]
-    bool type_bit_5b = false;                   // type bit 0x5b [M]
-    bool subobject_f8_nonempty = false;         // obj +0x2b0 -> +0xf8 not empty [M]
-    bool in_mode_manager_set = false;           // in the mode's +0x38 set (0x4944e0) [M]
+    bool type_category_bit_5f = false;          // type has DUMMY_GROUND_STRUCTURE 0x5F (land only)
+    bool team_has_bit_20 = false;               // TEAM: representative or any member type has INDIGENOUS_UNIT 0x20 (land)
+    bool type_bit_5b = false;                   // type has DUMMY_GROUND_BASE 0x5B (land only)
+    bool subobject_f8_nonempty = false;         // obj +0x2b0 or +0xf8 not empty: contained or attached
+    bool in_mode_manager_set = false;           // in the land mode's +0x38 set (bombing-run manager, 0x4944e0)
     bool dead_or_removing = false;              // +0x3a0 & 0x42, or bit 0x80
     bool in_world = true;                       // obj +0x3c8 set [M]
+    // Space-only facts (A1_READINGS 6.1), appended after the 17 facts above. The defaults keep the old result
+    // for hosts that do not fill them.
+    bool type_squadron_member = false;          // type +0x29
+    bool type_company_member = false;           // type +0x2a
+    bool has_special_weapon = false;            // SPECIAL_WEAPON 0x2F (obj +0x361)
+    bool type_dummy_orbital_structure = false;  // type has DUMMY_ORBITAL_STRUCTURE 0x60
+    bool type_dummy_star_base = false;          // type has DUMMY_STAR_BASE 0x5C
+    bool has_tactical_super_weapon = false;     // TACTICAL_SUPER_WEAPON 0x2C (obj +0x35e)
 };
 
 bool land_free_store_admits(const FreeStoreObjectInfo& o);

@@ -1,13 +1,16 @@
 // alamo_ai_tactical_readings_tests (no framework; non-zero exit on failure).
-// A1 t01 (docs/re/A1_READINGS.md): the settled threat-grid readings.
+// A1 t01 (docs/re/A1_READINGS.md): the settled threat-grid and free-store readings.
 //   13  nFow rounds away from zero (ceil), clamped 0..512
 //   14  the UnitAI data-pack stamps (two synced draws) and the first re-projection check at the first service,
 //       then +300 per service without re-basing (catch up)
 //   15  destroyed objects leave every player's memory lists [port]
+//   6   free-store admission: land (0x690a10) and the separate space list (0x6904b0)
+//   9   FreeStoreService first eligible at F = 600 (then 1200), On_Unit_Service at F = 61
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
+#include "alamo/ai/tactical/free_store.hpp"
 #include "alamo/ai/tactical/perception_world.hpp"
 #include "alamo/ai/tactical/threat_grid.hpp"
 #include "alamo/core/sim_rng.hpp"
@@ -217,10 +220,170 @@ static void test_destroy_memory() {
     CHECK(g.memory_entries(0, c1).empty() && g.memory_entries(0, c2).empty());
 }
 
+// ---------------------------------------------------------------- 6 free-store admission
+static void test_admission() {
+    // land: a TEAM with a locomotor owned by the AI
+    FreeStoreObjectInfo land;
+    land.owned_by_player = true;
+    land.has_locomotor = true;
+    land.is_team = true;
+    CHECK(land_free_store_admits(land));
+    auto land_refuses = [&](auto mutate) {
+        FreeStoreObjectInfo x = land;
+        mutate(x);
+        return !land_free_store_admits(x);
+    };
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.type_create_team = true; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.is_transport = true; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.type_category_bit_5f = true; }));  // DUMMY_GROUND_STRUCTURE
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.type_is_dummy = true; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.has_locomotor = false; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.has_indigenous_or_explosion = true; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.team_has_bit_20 = true; }));  // INDIGENOUS member type
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.type_bit_5b = true; }));      // DUMMY_GROUND_BASE
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.owned_by_player = false; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.type_stay_in_transport = true; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.subobject_f8_nonempty = true; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.in_mode_manager_set = true; }));  // bombing-run manager
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.dead_or_removing = true; }));
+    CHECK(land_refuses([](FreeStoreObjectInfo& x) { x.in_world = false; }));
+    {
+        FreeStoreObjectInfo x = land;
+        x.is_team = false;
+        x.team_has_bit_20 = true;  // the member test applies to TEAMs only
+        x.is_starship_combatant = true;
+        CHECK(land_free_store_admits(x));
+        // a dummy with LOBBING_SUPERWEAPON qualifies (Is_Dummy belongs to the second branch), also without a
+        // locomotor and with DUMMY_GROUND_STRUCTURE
+        x = land;
+        x.is_team = false;
+        x.has_locomotor = false;
+        x.type_is_dummy = true;
+        x.type_category_bit_5f = true;
+        x.has_lobbing_superweapon = true;
+        CHECK(land_free_store_admits(x));
+        // the space-only facts do not affect land
+        x = land;
+        x.type_squadron_member = x.type_company_member = x.type_dummy_orbital_structure = true;
+        x.type_dummy_star_base = x.has_tactical_super_weapon = true;
+        CHECK(land_free_store_admits(x));
+        // SPECIAL_WEAPON is not a land qualifier
+        x = land;
+        x.is_team = false;
+        x.has_special_weapon = true;
+        CHECK(!land_free_store_admits(x));
+    }
+
+    // space: a STARSHIP_COMBATANT with a locomotor owned by the AI
+    FreeStoreObjectInfo space;
+    space.owned_by_player = true;
+    space.has_locomotor = true;
+    space.is_starship_combatant = true;
+    CHECK(space_free_store_admits(space));
+    auto space_refuses = [&](auto mutate) {
+        FreeStoreObjectInfo x = space;
+        mutate(x);
+        return !space_free_store_admits(x);
+    };
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.type_squadron_member = true; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.type_company_member = true; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.type_is_dummy = true; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.has_locomotor = false; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.is_starship_combatant = false; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.type_dummy_orbital_structure = true; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.type_dummy_star_base = true; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.has_tactical_super_weapon = true; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.owned_by_player = false; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.subobject_f8_nonempty = true; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.dead_or_removing = true; }));
+    CHECK(space_refuses([](FreeStoreObjectInfo& x) { x.in_world = false; }));
+    {
+        // none of the land-only tests apply in space
+        FreeStoreObjectInfo x = space;
+        x.is_transport = true;
+        x.type_create_team = true;
+        x.type_stay_in_transport = true;
+        x.has_indigenous_or_explosion = true;
+        x.type_bit_5b = true;
+        x.type_category_bit_5f = true;
+        x.in_mode_manager_set = true;
+        CHECK(space_free_store_admits(x));
+        x.is_starship_combatant = false;
+        x.is_team = true;
+        x.team_has_bit_20 = true;
+        CHECK(space_free_store_admits(x));  // TEAM with a locomotor qualifies too
+        // SPECIAL_WEAPON qualifies alone: dummy, no locomotor, not a combatant
+        x = space;
+        x.is_starship_combatant = false;
+        x.has_locomotor = false;
+        x.type_is_dummy = true;
+        x.has_special_weapon = true;
+        CHECK(space_free_store_admits(x));
+        x.has_tactical_super_weapon = true;  // ... but the later tests still refuse
+        CHECK(!space_free_store_admits(x));
+        // LOBBING_SUPERWEAPON is not a space qualifier
+        x = space;
+        x.is_starship_combatant = false;
+        x.has_lobbing_superweapon = true;
+        CHECK(!space_free_store_admits(x));
+    }
+}
+
+// ---------------------------------------------------------------- 9 service timing
+static void test_service_timing() {
+    TacticalFreeStore fs;
+    CHECK(fs.admit(5, 1));
+    FreeStoreServiceStep step;
+    // every frame: the first eligible frames
+    {
+        FreeStoreSchedule s = busy_tactical_schedule();
+        std::vector<uint32_t> svc, unit;
+        for (uint32_t f = 0; f <= 1260; ++f) {
+            free_store_service(s, fs, f, step);
+            if (step.run_service) svc.push_back(f);
+            if (step.run_unit_service && unit.size() < 2) unit.push_back(f);
+        }
+        CHECK(svc == (std::vector<uint32_t>{600, 1200}));  // now(600) = 20.0000019 > 20; not 599
+        CHECK(unit.size() == 2 && unit[0] == 61);           // now(60) is exactly 2.0: not passed
+        CHECK(unit[1] == 121);                               // now(121) - now(61) = 2.0000002 > 2 (float clock)
+        std::printf("free store (every frame): FreeStoreService at F = %u, %u; On_Unit_Service from F = %u, %u\n", svc[0],
+                    svc[1], unit[0], unit[1]);
+    }
+    CHECK(free_store_mode_time(600) == 20.0000019f && free_store_mode_time(1200) == 40.0000038f);
+    CHECK(free_store_mode_time(60) == 2.0f && free_store_mode_time(599) < 20.0f);
+    CHECK(free_store_mode_time(1) == 0.033333335f);
+    // Execution services every 3 frames from F = 0: the next service at or after those frames
+    {
+        FreeStoreSchedule s = busy_tactical_schedule();
+        std::vector<uint32_t> svc;
+        uint32_t unit0 = 0;
+        for (uint32_t f = 0; f <= 1806; f += 3) {
+            free_store_service(s, fs, f, step);
+            if (step.run_service) svc.push_back(f);
+            if (step.run_unit_service && unit0 == 0) unit0 = f;
+        }
+        // now(1800) - now(1200) is exactly 20.0, which does not pass the strict test: the third service is at 1803
+        CHECK(svc == (std::vector<uint32_t>{600, 1200, 1803}) && unit0 == 63);
+    }
+    // another cadence phase (Execution on F = 1 mod 3): 601 and 61
+    {
+        FreeStoreSchedule s = busy_tactical_schedule();
+        uint32_t svc0 = 0, unit0 = 0;
+        for (uint32_t f = 1; f <= 700; f += 3) {
+            free_store_service(s, fs, f, step);
+            if (step.run_service && svc0 == 0) svc0 = f;
+            if (step.run_unit_service && unit0 == 0) unit0 = f;
+        }
+        CHECK(svc0 == 601 && unit0 == 61);
+    }
+}
+
 int main() {
     test_fow_rounding();
     test_unit_ai_stamps();
     test_destroy_memory();
+    test_admission();
+    test_service_timing();
     if (g_fail) {
         std::printf("alamo_ai_tactical_readings_tests: %d failure(s)\n", g_fail);
         return 1;
