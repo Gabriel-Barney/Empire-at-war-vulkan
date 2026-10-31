@@ -9,7 +9,8 @@
 //                 loops) and object_moving from the movement state (ascending id); deaths -> unit_death
 //                 (Death_SFXEvent_Start_Die); projectile hits -> impact (Projectile_SFXEvent_Detonate); new projectiles
 //                 -> weapon_fire (shooter's SFXEvent_Fire [port: the hardpoint's Fire_SFXEvent is not in the battle
-//                 catalog]); any of them involving the local player -> combat (battle music, mode 7).
+//                 catalog]); any of them involving the local player -> combat (battle music, mode 7); the tactical super
+//                 weapon's cues (battle_fx.hpp tsw_cues -> tsw_audio).
 //   modes         front end / galactic / battle pending + load screen / tactical (enter_tactical) / leave_mode.
 //   listener      set_camera from the active camera (AUDIO.md 1.8).
 // Unit sounds come from the typed object view (GameObjectTypes::get_string), cached per type.
@@ -18,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -26,6 +28,7 @@
 #include <vector>
 
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/game/battle_fx.hpp"
 #include "alamo/game/game_data.hpp"
 #include "alamo/objects/object_store.hpp"
 
@@ -59,6 +62,7 @@ struct GameAudioStats {
     uint64_t battle_pending = 0;                    // GALACTIC_DIALOGS §1.3 battle prompt sound + music
     uint64_t engine_loop_requests = 0, removed = 0, station_upgrades = 0;  // STATION_HANGARS_SOUND §1.2 / §3
     uint64_t movie_music = 0, movie_halts = 0, movie_cues = 0, movie_restores = 0;  // movie music modes 14 / 17 (STRATEGIC_GAPS §7.4)
+    uint64_t tsw_activations = 0, tsw_fires = 0, tsw_planet_deaths = 0;  // refix t06: tsw_audio cues played
 };
 
 class GameAudioHost {
@@ -109,6 +113,12 @@ public:
     void battle_tick(const sim::TacticalBattle& battle, const objects::ObjectStore& store, const objects::GameObjectTypes& types,
                      int32_t local_player);
     void battle_reset();
+    // refix t06 (TSW_PLANET_DESTROY §3 / §4 step 5; battle_fx.hpp): the tactical super weapon's sounds, in cue order.
+    // Firing: the TSW type's TSW_SFXEvent_Activate_Voice and TSW_SFXEvent_Weapon_Power_Up attached to the TSW (2D or 3D
+    // by the event's data) and TSW_MusicEvent_Activation_Start as music mode 8; AttackAnim: its SFXEvent_Fire (weapon
+    // fire rules); PlanetDestroyed: the target dummy's Death_SFXEvent_Start_Die at the dummy (unit_death: the dummy's own
+    // sounds stop). Every owner's TSW is heard [M: the spec lists no owner test]. battle_tick calls it.
+    void tsw_audio(std::span<const TswCue> cues, const objects::GameObjectTypes& types);
     void sim_tick();  // once per sim tick
 
     // Mode / music scene with the local faction ("" keeps the previous); `space` / `environment` for battles.

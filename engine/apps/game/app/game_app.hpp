@@ -22,6 +22,7 @@
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/game/attract_mode.hpp"
+#include "alamo/game/battle_fx.hpp"
 #include "alamo/game/battle_summary.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_controls.hpp"
@@ -199,6 +200,9 @@ public:
     GameAudioHost audio_;
     GalacticView gview_;
     BattleView bview_;
+    // refix t06: the TSW planet kill's camera shake (battle_fx.hpp; presentation only: added to the rendered battle
+    // camera, never to the controller, picking or the listener), started from post_tick, advanced by the frame's dt.
+    CameraShake shake_;
     std::unique_ptr<GameSession> session_;
     commands::CommandRecording recording_;
     // Bink movies: the full-screen slot (intro / logos, Lua Play_Bink_Movie) and the HUD advisor loop slot.

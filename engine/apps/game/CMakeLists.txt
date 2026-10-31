@@ -14,6 +14,7 @@ add_library(alamo_game_core STATIC
   src/game_session.cpp
   src/battle_orders.cpp
   src/game_audio_host.cpp
+  src/battle_fx.cpp
   src/story_script.cpp
   src/game_controls.cpp
   src/attract_mode.cpp
@@ -69,6 +70,13 @@ add_executable(alamo_game_audio_host_tests tests/test_game_audio_host.cpp)
 target_link_libraries(alamo_game_audio_host_tests PRIVATE alamo_core alamo_game_core)
 add_test(NAME alamo_game_audio_host_tests COMMAND alamo_game_audio_host_tests)
 set_tests_properties(alamo_game_audio_host_tests PROPERTIES TIMEOUT 120)
+
+# Data-free (refix t06): the tactical super weapon's presentation cues (battle_fx.hpp), the camera shake and
+# GameAudioHost::tsw_audio on a synthetic type set / audio tree with the null backend.
+add_executable(alamo_game_battle_fx_tests tests/test_battle_fx.cpp)
+target_link_libraries(alamo_game_battle_fx_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_battle_fx_tests COMMAND alamo_game_battle_fx_tests)
+set_tests_properties(alamo_game_battle_fx_tests PROPERTIES TIMEOUT 120)
 
 function(alamo_game_add_exe)
   foreach(_dep alamo_render_sim alamo_render_galactic alamo_ui_draw alamo_ui_hud alamo_ui_rhi)

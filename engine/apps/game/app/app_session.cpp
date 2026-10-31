@@ -563,6 +563,7 @@ void App::start_battle_view() {
     bview_.camera().set_tuning(option_tuning(bview_.camera().tuning()));  // P1_CAMERA_INPUT.md §3.1 options
     bview_.capture(*session_);
     audio_.battle_reset();
+    shake_.reset();  // refix t06
     radar_fog_uploads_ = ~uint64_t{0};
     radar_events_.clear();
     radar_feed_.reset();

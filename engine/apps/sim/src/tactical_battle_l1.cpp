@@ -531,8 +531,10 @@ void TacticalBattle::l1_weapons(TacticalMode& mode, SimRng& rng) {
 }
 
 // TSW_PLANET_DESTROY §4 steps 3-6 (the galactic steps 7-9 are the battle host's, CampaignBattles::hook): no live target
-// dummy -> nothing; else the Death_Explosions pick at the dummy for the neutral player (0x294aa0), [presentation:
-// camera shake, Death_SFXEvent_Start_Die], the dummy killed (0x391310), its transform saved for the state-10 debris.
+// dummy -> nothing; else the Death_Explosions pick at the dummy for the neutral player (0x294aa0), the dummy killed
+// (0x391310), its transform saved for the state-10 debris. The presentation steps (camera shake 0x2cdbb0 at the dummy,
+// its Death_SFXEvent_Start_Die) are the game host's: it reads the TswPlanetDestroyed event from special_weapon_events()
+// after the tick, while the dummy is dead but not flushed (engine/apps/game battle_fx.hpp, GameAudioHost::tsw_audio).
 void TacticalBattle::l1_tsw_destruction(TacticalMode& mode, const ta::SpecialWeaponEvent& e) {
     objects::ObjectStore& st = mode.primary();
     const objects::ObjectHandle dh = st.find(e.target);

@@ -73,7 +73,12 @@ bool App::render_frame() {
         else bview_.set_selection_blobs({});  // load screen / attract demo: no selection
         bview_.prepare(gpu_, render_alpha());
         bview_.use_scene(gpu_);
-        const ui::CameraParams cp = bview_.camera_params(w, h);
+        ui::CameraParams cp = bview_.camera_params(w, h);
+        if (shake_.active()) {  // refix t06: the TSW camera shake moves the drawn view only
+            const tactical::Vec3 o = shake_.offset(cp.eye, cp.target);
+            cp.eye = cp.eye + o;
+            cp.target = cp.target + o;
+        }
         const float env_scale = detail_options_ ? environment_fade_scale(adv_video_.environment) : 1.0f;  // Environment detail [M]
         gpu_.renderer.set_object_fade(cp.fade_begin * env_scale, cp.fade_end * env_scale);
         for (int i = 0; i < 4; ++i) pt.clear[i] = bview_.clear_color(i);
@@ -320,6 +325,7 @@ void App::frame() {
     const double now = script_.empty() ? ms_since(t0_) / 1000.0 : static_cast<double>(frames_) / 30.0;
     dt_ = static_cast<float>(std::clamp(now - now_s_, 0.0, 0.1));
     now_s_ = now;
+    shake_.update(dt_);  // refix t06 (presentation)
     if (win_.take_resized() && win_.width() > 0 && win_.height() > 0) {
         gpu_.ring.wait_idle();
         sc_.recreate(win_.width(), win_.height());
