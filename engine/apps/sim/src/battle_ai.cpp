@@ -254,14 +254,14 @@ void BattleAi::hash(StateHasher& h) const { world_->hash(h); }
 
 // ---- N1 stage 2 save / load (owner: n2-host): chunk "battle.ai" ---------------------------------------------------
 namespace {
-constexpr uint32_t kBattleAiSaveVersion = 1;
+constexpr uint32_t kBattleAiSaveVersion = 2;  // 2: UnitAI re-projection stamps
 }
 
 void BattleAi::write(ByteWriter& w) const {
     w.u32(kBattleAiSaveVersion);
     write_section(w, [this](ByteWriter& sub) { write_if_saveable(*world_, sub); });
     save_io::Out o(w);
-    o(ai_side_, stale_, executed_, opp_prev_);
+    o(ai_side_, stale_, executed_, opp_prev_, unit_ai_stamps_);
 }
 
 bool BattleAi::read(ByteReader& r) {
@@ -271,14 +271,23 @@ bool BattleAi::read(ByteReader& r) {
     uint32_t stale = 0;
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed;
     std::vector<std::pair<uint64_t, int32_t>> opp;
+    std::map<objects::ObjectId, int32_t> stamps;
     save_io::In in(r);
-    in(side, stale, executed, opp);
+    in(side, stale, executed, opp, stamps);
     if (!r.ok() || !r.done() || side != ai_side_) return false;  // the AI players are rebuilt by start()
+    const std::map<objects::ObjectId, int32_t> stamps_before = unit_ai_stamps_;
+    unit_ai_stamps_ = std::move(stamps);  // before relink(): its fill() must find every listed object stamped (no draws)
     ByteReader wr(world);
-    if (!read_if_saveable(*world_, wr) || !wr.ok() || !wr.done()) return false;
+    if (!read_if_saveable(*world_, wr) || !wr.ok() || !wr.done()) {
+        unit_ai_stamps_ = stamps_before;
+        return false;
+    }
     // battle.ai is the last battle chunk (CampaignBattles registers it after the battle parts): every other battle
     // system is restored, so the world takes its types / host callbacks now (tactical_ai.hpp relink).
-    if (!world_->relink()) return false;
+    if (!world_->relink()) {
+        unit_ai_stamps_ = stamps_before;
+        return false;
+    }
     stale_ = stale;
     executed_ = std::move(executed);
     opp_prev_ = std::move(opp);
@@ -457,6 +466,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     std::sort(bombing_run_objects.begin(), bombing_run_objects.end());
     w.objects.clear();
     out.clear();
+    std::map<objects::ObjectId, int32_t> stamps;
     for (const objects::ObjectHandle h : st.all_objects()) {
         if (!st.alive(h) || st.has_behavior(h, objects::beh::Particle)) continue;
         const objects::ObjectId id = st.id(h);
@@ -585,9 +595,21 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             }
         }
         a.damage_tracking = o.has_damage_tracking || st.has_behavior(h, kDamageTracking);
+        // UnitAI data pack (A1_READINGS §14): two synced draws per UNIT_AI object, F + Get_Int(0, 300) - 300 then
+        // F + Get_Int(0, 150) - 150. [port] drawn when fill() first lists the object (store order, after the battle tick
+        // of its creation frame), not inside the object's construction.
+        if (st.has_behavior(h, kUnitAi)) {
+            const auto it = unit_ai_stamps_.find(id);
+            const int32_t stamp = it != unit_ai_stamps_.end()
+                                      ? it->second
+                                      : at::draw_unit_ai_stamps(host_->random().synced(), b_->frame_).reprojection_check;
+            stamps.emplace(id, stamp);
+            a.reprojection_stamp = stamp;
+        }
         w.objects.push_back(std::move(o));
         out.push_back(std::move(a));
     }
+    unit_ai_stamps_ = std::move(stamps);  // objects no longer listed drop out
 }
 
 // ---- order execution ----------------------------------------------------------------------------------------------

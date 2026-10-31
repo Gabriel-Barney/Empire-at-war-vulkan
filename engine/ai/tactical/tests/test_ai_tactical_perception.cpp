@@ -286,10 +286,11 @@ static void test_grid_projection() {
     w.index();
     TacticalPerceptionGrid g;
     g.init(TacticalMode::Land, w.map, 4, threat_grid_config(TacticalMode::Land, c));
-    CHECK(g.register_object(w, 1, 10));
-    CHECK(!g.register_object(w, 1, 10));  // once
-    CHECK(g.register_object(w, 2, 10));
-    CHECK(!g.register_object(w, 3, 10));
+    // stamps as drawn at creation frame 10 (A1_READINGS §14: F + Get_Int(0, 300) - 300, here Get_Int = 300)
+    CHECK(g.register_object(w, 1, 10, 10));
+    CHECK(!g.register_object(w, 1, 10, 10));  // once
+    CHECK(g.register_object(w, 2, 10, 10));
+    CHECK(!g.register_object(w, 3, 10, 10));
     CHECK(g.entry_count() == 3);          // trooper whole + tank 2 hard points
     // trooper: v = 100 * 60 * 60 / (4 * 50^2) = 36 in 6 cells, hostile to players 0 and 2 (relation 1)
     const uint32_t c010 = 0 * 20 + 10;
@@ -344,25 +345,24 @@ static void test_grid_projection() {
     w.objects.push_back(tiny);
     w.objects.push_back(huge);
     w.index();
-    CHECK(g.register_object(w, 4, 10) && g.register_object(w, 5, 10));
+    CHECK(g.register_object(w, 4, 10, 10) && g.register_object(w, 5, 10, 10));
     const float hd = g.half_diagonal();
     const auto ct = static_cast<uint32_t>(g.cell_clamped(300.0f, 300.0f));
     CHECK(g.threat(0, ct) == 10.0f * 3600.0f / (4.0f * hd * hd));
     CHECK(g.threat(0, 399) == 10.0f * 3600.0f / (4.0f * 500.0f * 500.0f));  // cap 500 covers the corner
 
-    // ---- re-projection gate: next check = 10 + 300; only when the transform changed ----
+    // ---- re-projection gate (A1_READINGS §14): the first check at the first service at F >= stamp (10), then
+    // stamp += 300 per check without re-basing; re-projected only when the transform changed ----
     move_obj(w.objects[0], 30.0f, 330.0f);
-    CHECK(!g.service_object(w, 1, 100));  // gate closed
-    CHECK(g.threat(0, c010) == 36.0f);
-    CHECK(g.service_object(w, 1, 310));   // moved -> re-projected
+    CHECK(g.service_object(w, 1, 100));   // first service: check, moved -> re-projected; next stamp 310
     CHECK(g.threat(0, c010) == 0.0f);
     CHECK(g.threat(0, static_cast<uint32_t>(g.cell_clamped(30.0f, 330.0f))) == 36.0f);
     CHECK(g.snapshot(0, c010) == 0.0f);   // removal subtracts again, clamped at 0
-    CHECK(!g.service_object(w, 1, 500));  // next gate 610
-    CHECK(!g.service_object(w, 1, 610));  // not moved
+    CHECK(!g.service_object(w, 1, 200));  // gate closed
+    CHECK(!g.service_object(w, 1, 310));  // check, not moved; next stamp 610
     move_obj(w.objects[0], 30.0f, 570.0f);
-    CHECK(!g.service_object(w, 1, 700));
-    CHECK(g.service_object(w, 1, 910));
+    CHECK(!g.service_object(w, 1, 500));  // gate closed
+    CHECK(g.service_object(w, 1, 610));
     CHECK(g.threat(0, c010) == 36.0f);
     // destroyed destroyable hard point: r = -1 at the next re-projection
     w.objects[1].hard_points[2].destroyed = true;
@@ -400,7 +400,7 @@ static void test_grid_projection() {
     w.object_fogged = [&](int32_t p, int32_t id) { return fog_on && p == 1 && id == 2; };
     TacticalPerceptionGrid h;
     h.init(TacticalMode::Land, w.map, 4, threat_grid_config(TacticalMode::Land, c));
-    CHECK(h.register_object(w, 2, 0));
+    CHECK(h.register_object(w, 2, 0, 0));
     const auto tcell = static_cast<uint32_t>(h.cell_clamped(-300.0f, -301.0f));
     CHECK(h.snapshot(1, tcell) == 0.0f);  // TEAM/HIDE objects do not touch the snapshot
     h.refog(1, tcell, 50);  // human remembers the tank
@@ -472,7 +472,7 @@ struct Fixture {
         w.index();
         TacticalAiConstants c;
         p.init(TacticalMode::Land, c, w.map, 4, zones, test_config());
-        for (const PerceptionObject& o : w.objects) p.grid().register_object(w, o.id, 1);
+        for (const PerceptionObject& o : w.objects) p.grid().register_object(w, o.id, 1, 1);
         h_tank = p.register_unit(w, 10);
         h_trooper = p.register_unit(w, 11);
         h_pad = p.register_unit(w, 12);
@@ -690,7 +690,7 @@ static void test_duplicate_zone_names() {
     f.zones[3].name = "ZONE2";  // repeats zone 2's name ("Zone2") in another case
     TacticalAiConstants c;
     f.p.init(TacticalMode::Land, c, f.w.map, 4, f.zones, test_config());
-    for (const PerceptionObject& o : f.w.objects) f.p.grid().register_object(f.w, o.id, 1);
+    for (const PerceptionObject& o : f.w.objects) f.p.grid().register_object(f.w, o.id, 1, 1);
     const int32_t h3 = f.p.register_zone(3);  // the later zone registered first: it owns the shared name id
     const int32_t h2 = f.p.register_zone(2);
     const int32_t h4 = f.p.register_zone(4);
@@ -844,7 +844,7 @@ static void test_lua_functions() {
     lw.index();
     TacticalPerceptionGrid g;
     g.init(TacticalMode::Land, lw.map, 4, threat_grid_config(TacticalMode::Land, TacticalAiConstants()));
-    for (int32_t id = 1; id <= 3; ++id) CHECK(g.register_object(lw, id, 0));
+    for (int32_t id = 1; id <= 3; ++id) CHECK(g.register_object(lw, id, 0, 0));
     const uint32_t cells[] = {0, 1, 2, 3};
     SimRng rng(77), ref(77);
     const DefendedPosition d = most_defended_position_cells(g, lw, cells, 0, rng);
@@ -923,7 +923,7 @@ static uint64_t scenario_crc(const ParallelFor& pf, TacticalMode mode, uint32_t 
         }
         w.objects.push_back(o);
         w.index();
-        p->grid().register_object(w, o.id, w.frame);
+        p->grid().register_object(w, o.id, w.frame, draw_unit_ai_stamps(rng, w.frame).reprojection_check);
         p->register_unit(w, o.id);
     };
     for (int i = 0; i < 40; ++i) spawn();
@@ -1141,7 +1141,7 @@ static void test_real_data() {
         w.index();
         std::vector<int32_t> handles;
         for (const PerceptionObject& o : w.objects) {
-            p.grid().register_object(w, o.id, 1);
+            p.grid().register_object(w, o.id, 1, 1);
             handles.push_back(p.register_unit(w, o.id));
         }
         if (mode == TacticalMode::Land)

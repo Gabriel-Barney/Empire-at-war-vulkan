@@ -97,6 +97,11 @@ struct TacticalAiObject {
     bool moving = false;                  // has a movement goal
     int32_t attack_target = -1;           // object id it is attacking (ordered or automatic), -1 none
     bool damage_tracking = false;         // DAMAGE_TRACKING (FindDeadlyEnemy radius form)
+    // UnitAI data-pack re-projection stamp (+0x20, A1_READINGS §14): UnitAiStamps::reprojection_check drawn by the host
+    // when the UNIT_AI object was created (draw_unit_ai_stamps). kNoReprojectionStamp: the host does not carry it, the
+    // grid uses its [port] legacy registration + 300.
+    static constexpr int32_t kNoReprojectionStamp = INT32_MIN;
+    int32_t reprojection_stamp = kNoReprojectionStamp;
 };
 
 // One entry of a player's reinforcement pool (campaign: units in orbit = the battle's reserves; skirmish: the
@@ -272,7 +277,7 @@ public:
     void register_crc(CrcRegistry& registry, const std::string& name = "ai.tactical") const;
 
     // ---- N1 save / load (contract: alamo/core/save_file.hpp; the battle host's AI chunk) ----
-    // write(): u32 version (2: the free-store facts carry the six space facts); the shape (AI player pattern, plan
+    // write(): u32 version (3: the facts carry the six space free-store facts and the re-projection stamp); the shape (AI player pattern, plan
     // library size, plan runtime size, mode: checked against the reader's rebuilt session); now, mode frame, current plan, the plan / task-force / status /
     // PotentialPlan id counters, orders / rejected; the enable gate; the PerceptionWorld of the last update
     // (PerceptionWorld::write: types by count + digest only) and the per-object facts (handles as value + id) and the

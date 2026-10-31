@@ -1006,7 +1006,11 @@ void TacticalAiWorld::Impl::refresh() {
         if (!o.alive) continue;
         const auto* old = in(prev, o.id);
         if (!old) {
-            if (o.has_unit_ai) perc.grid().register_object(w, o.id, mode_frame);
+            if (o.has_unit_ai) {  // first check at the stamp the host drew at creation (A1_READINGS §14)
+                const int32_t stamp = facts[i].reprojection_stamp;
+                if (stamp != TacticalAiObject::kNoReprojectionStamp) perc.grid().register_object(w, o.id, mode_frame, stamp);
+                else perc.grid().register_object(w, o.id, mode_frame);
+            }
             const bool produced = claim_produced(o, facts[i].handle);
             for (auto& pa : ai)
                 if (pa && pa->ctx.initialised()) {
@@ -2393,7 +2397,7 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 2;  // 2: six space free-store facts per object
+constexpr uint32_t kTacticalAiSaveVersion = 3;  // 2: six space free-store facts per object; 3: re-projection stamp
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
@@ -2522,6 +2526,7 @@ void put_fact(ByteWriter& w, const objects::ObjectStore& st, const TacticalAiObj
     w.boolean(f.moving);
     w.i32(f.attack_target);
     w.boolean(f.damage_tracking);
+    w.i32(f.reprojection_stamp);
 }
 
 bool get_fact(ByteReader& r, const objects::ObjectStore& st, TacticalAiObject& f) {
@@ -2546,6 +2551,7 @@ bool get_fact(ByteReader& r, const objects::ObjectStore& st, TacticalAiObject& f
     f.moving = r.boolean();
     f.attack_target = r.i32();
     f.damage_tracking = r.boolean();
+    f.reprojection_stamp = r.i32();
     return r.ok();
 }
 
