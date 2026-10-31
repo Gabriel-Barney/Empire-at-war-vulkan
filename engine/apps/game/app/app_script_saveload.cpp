@@ -13,7 +13,8 @@
 //      before the first tick after the load) equals the one captured right after the save.
 //   5. a human battle (galactic attack order, Fight, Begin); the tactical HUD's options button (b_option_t); Save
 //      "smoke_battle" during the battle; Load it from the in-game menu: same tick / state CRC, the session is in the
-//      battle, its load screen comes up, Begin resumes the battle and it runs on.
+//      battle, its load screen is up at once (no tick before Begin), Begin resumes the battle, the first tick after the
+//      load is a battle tick and it runs on.
 // PNGs (--png-dir): game_smoke_saveload_*.png. Saves: --saves-dir (default <png-dir>/saves); the run deletes its own three
 // save names there before it starts (a re-run would otherwise meet the overwrite question on the first save).
 // The run ends with the usual presentation-on/off check of the last loaded session (its save + the stream recorded after
@@ -301,7 +302,7 @@ ScriptStep step_question(std::string what, const char* name, uint64_t written) {
 // before any tick: the sim is held from the click on), in the battle when the save was; the menus closed.
 ScriptStep step_loaded(std::string where, uint64_t loads, const Mark* m) {
     auto n = std::make_shared<uint32_t>(0);
-    return {"loaded " + m->name + " from the " + where, [where, loads, m, n](App& a, ui::InputFrame&) {
+    return {"load checked (" + where + ")", [where, loads, m, n](App& a, ui::InputFrame&) {
                 const std::string step = "load from the " + where;
                 if (a.saves_loaded_ < loads) {
                     if (++*n > 90) return stop(a, step, "nothing loaded (loads " + std::to_string(a.saves_loaded_) + ")");
@@ -320,6 +321,9 @@ ScriptStep step_loaded(std::string where, uint64_t loads, const Mark* m) {
                 if (crc.combined != m->crc.combined || crc.parity != m->crc.parity) fail(a, step, "state CRC differs from the save's: " + crc_diff(a, m->crc, crc));
                 if (battle != m->battle) fail(a, step, battle ? "in a battle the save was not in" : "not in the saved battle");
                 if (!m->battle && a.screen_ != Screen::Galactic) fail(a, step, std::string("screen ") + screen_name(a.screen_) + ", not the galactic map");
+                // A battle save opens its battle at once (the load screen, no tick on the galactic map first).
+                if (m->battle && a.screen_ != Screen::BattleLoad) fail(a, step, std::string("screen ") + screen_name(a.screen_) + ", not the battle's load screen");
+                if (a.session_->ticks() != 0) fail(a, step, "the session ticked before the check");
                 if (a.menu_dialog_open() || a.paused_) fail(a, step, "the menus are still open / the session is paused");
                 return true;
             },
@@ -464,10 +468,23 @@ void add_saveload_steps(std::vector<ScriptStep>& s) {
     s.push_back(step_dialog_open(kLoad));
     select_save(s, kLoad, kBattleSave);
     load_selected(s, kLoad, "in-game menu (battle save)", 3, &run->battle);
-    s.push_back(step_wait("the battle's load screen", [](App& a) { return a.screen_ == Screen::BattleLoad && a.ui_.load.ready(); }, 600));
+    s.push_back(step_wait("the battle's load screen, no tick yet", [run](App& a) {
+        if (a.screen_ != Screen::BattleLoad) return stop(a, "battle load", std::string("screen ") + screen_name(a.screen_) + " before the load screen was ready");
+        if (!a.ui_.load.ready()) return false;
+        if (a.session_->ticks() != 0 || a.session_->host().frame() != run->battle.tick)
+            fail(a, "battle load", "ticked before Begin (" + std::to_string(a.session_->ticks()) + " ticks, frame " + std::to_string(a.session_->host().frame()) + ")");
+        return true;
+    }, 600));
     s.push_back(step_shot(png + "battle_load_screen.png"));
     s.push_back(step_begin_battle());
     s.push_back(step_wait("back in the battle", [](App& a) { return a.screen_ == Screen::Battle && a.bview_.active(); }, 600));
+    s.push_back(step_wait("the first tick after the load is a battle tick", [run](App& a) {
+        if (a.session_->ticks() == 0) return false;
+        std::printf("saveload: first tick after the battle load: tick %" PRIu64 " on the %s screen\n", a.session_->host().frame(), screen_name(a.screen_));
+        if (a.screen_ != Screen::Battle || !a.session_->in_battle() || a.session_->host().frame() <= run->battle.tick)
+            fail(a, "battle load", "the first tick after the load did not run in the battle");
+        return true;
+    }, 120));
     s.push_back(step_ticks("the loaded battle runs", 30));
     s.push_back(step_wait("the battle resumed", [run](App& a) {
         const bool in = a.session_ && a.session_->in_battle() && a.screen_ == Screen::Battle;
