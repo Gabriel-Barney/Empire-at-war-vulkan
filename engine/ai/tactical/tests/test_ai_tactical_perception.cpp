@@ -621,6 +621,16 @@ static void test_tokens() {
     // (TimeLastSeenUnnormalized has a 7 s cache; the frame-30 value was 0 -> recompute at 600)
     CHECK(f.val("Variable_Target.TimeLastSeenUnnormalized", 0, f.h_zone2) == 10.0);
     CHECK(f.val("Variable_Target.TimeLastSeen", 0, f.h_zone2) == 10.0 * 30.0 / 600.0);
+    // A1_READINGS §26: a blocked cell (Steep / Water / off the grid) leaves the sum and the count. The unfogged right
+    // half blocked: 8 fogged cells of 8 counted, 8 * 1200 / (8 * 30) = 40 s.
+    f.w.point_blocked = [](float x, float) { return x >= kLandOff; };
+    f.w.frame = 1200;
+    CHECK(f.val("Variable_Target.TimeLastSeenUnnormalized", 0, f.h_zone2) == 40.0);
+    f.w.point_blocked = [](float x, float) { return x < kLandOff; };  // the fogged half blocked: sum 0 -> 0
+    f.w.frame = 1500;
+    CHECK(f.val("Variable_Target.TimeLastSeenUnnormalized", 0, f.h_zone2) == 0.0);
+    f.w.point_blocked = nullptr;
+    f.w.frame = 600;  // the cache-lifetime checks below count from frame 600
     f.w.fow_active = false;
     f.w.point_fogged = nullptr;
     // point danger (Location.ForceUnnormalized) at the tank, zone total for the region

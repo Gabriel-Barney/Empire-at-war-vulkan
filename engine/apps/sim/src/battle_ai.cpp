@@ -435,6 +435,21 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         w.players[a].reinforcements.clear();
         for (const at::TacticalReinforcement& r : reinforcement_pool(static_cast<int32_t>(a))) w.players[a].reinforcements.push_back(r.type);
     }
+    // A1_READINGS §26: TimeLastSeen's cell test - the base passability word (.ted 0x10A, not the effective word with
+    // stamped objects) of cell ((int)((x + 10) / 20), (int)((y + 10) / 20)); off the grid counts as blocked. A map
+    // without a passability chunk keeps base Clear (MOVEMENT §1.1).
+    if (!b_->space_ && !w.point_blocked) {
+        const terrain::MapData* map = &b_->map_;
+        w.point_blocked = [map](float x, float y) {
+            const float fx = (x + 10.0f) / 20.0f, fy = (y + 10.0f) / 20.0f;
+            if (!(fx > -1.0f) || !(fy > -1.0f) || !(fx < 65536.0f) || !(fy < 65536.0f)) return true;
+            const auto cx = static_cast<uint32_t>(static_cast<int32_t>(fx));
+            const auto cy = static_cast<uint32_t>(static_cast<int32_t>(fy));
+            if (cx >= map->terrain.width || cy >= map->terrain.height) return true;
+            if (!map->passability_present) return false;
+            return (map->passability_at(cx, cy) & (terrain::kPassSteep | terrain::kPassWater)) != 0u;
+        };
+    }
 #ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent): the real fog with force = 1 (the AI target-selection form); the AI gate
     // (non-human players unfogged while AIUsesFogOfWar is False) is applied by the perception's own force-0

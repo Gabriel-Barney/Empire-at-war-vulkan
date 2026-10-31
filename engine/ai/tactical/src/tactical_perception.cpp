@@ -579,18 +579,22 @@ struct Eval {
             out = 0.0;
             return true;
         }
+        // A1_READINGS §26 [H]: land skips a threat cell whose passability cell is off the grid or has base Steep |
+        // Water (0x22; the host's point_blocked) from both the sum and the count. Result = sum / (count x FPS) when
+        // sum > 0, else 0.
         const TacticalPerceptionGrid& g = p.grid();
         float sum = 0.0f;
+        uint32_t count = 0;
         for (const uint32_t cell : a.cells) {
             const auto col = static_cast<int32_t>(cell % static_cast<uint32_t>(g.nx()));
             const auto row = static_cast<int32_t>(cell / static_cast<uint32_t>(g.nx()));
             const Vec3f c = g.cell_center(col, row);
-            if (land() && w.point_blocked && w.point_blocked(c.x, c.y)) continue;  // counts as 0 [M]
+            if (land() && w.point_blocked && w.point_blocked(c.x, c.y)) continue;
+            ++count;
             const bool fogged = w.fow_active && w.point_fogged && w.point_fogged(ctx.self, c.x, c.y);
             if (fogged) sum += static_cast<float>(static_cast<int64_t>(w.frame) - g.last_seen(ctx.self, cell));
         }
-        const float mean = sum / static_cast<float>(a.cells.size());
-        out = static_cast<double>(mean / static_cast<float>(kFramesPerSecond));
+        out = sum > 0.0f ? static_cast<double>(sum / (static_cast<float>(count) * static_cast<float>(kFramesPerSecond))) : 0.0;
         return true;
     }
 

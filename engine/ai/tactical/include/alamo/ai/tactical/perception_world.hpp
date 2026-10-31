@@ -161,7 +161,8 @@ struct PerceptionWorld {
     std::function<bool(int32_t player, int32_t object_id)> object_fogged;
     // Real fog at a point (cell centre) for player p. Absent => never fogged.
     std::function<bool(int32_t player, float x, float y)> point_fogged;
-    // Land terrain flags & 0x22 at a point (TimeLastSeen skips those cells) [M]. Absent => none.
+    // Land: the passability cell at a point ((int)((x + 10) / 20), (int)((y + 10) / 20)) is off the grid or its base
+    // word (.ted 0x10A) has Steep | Water (0x22); TimeLastSeen skips those cells (A1_READINGS §26). Absent => none.
     std::function<bool(float x, float y)> point_blocked;
     // Base shield test (land mode 0x3b8790): point inside an enemy (true) / allied (false) shield of `self`.
     std::function<bool(const Vec3f& p, int32_t self, bool enemy)> inside_shield;
