@@ -238,7 +238,8 @@ def main():
                   'points_at_first_sight', 'first_frame_owning')}, fails)
         check(cp300 and cp300[0]['popcap'] == 4 and cp300[0]['held'] == 4 and cp300[0]['base'] == 0,
               'attacker 6 at F=300: +0x404 4, held 4, base 0 (%s)' % cp300, fails)
-        check(list(bats[0]['players']) == ['6'], 'attacker set = [6] (%s)' % list(bats[0]['players']), fails)
+        holders = [pid for pid, pl in bats[0]['players'].items() if pl['first_frame_owning'] is not None]
+        check('6' in holders, 'attacker 6 holds a landing point (%s)' % holders, fails)
     print('SELFTEST %s' % ('OK' if not fails else 'FAILED: ' + '; '.join(fails)))
     return 0 if not fails else 1
 

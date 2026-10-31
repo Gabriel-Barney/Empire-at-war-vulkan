@@ -34,6 +34,7 @@ import a1_parse  # noqa: E402
 import build_a1_mod  # noqa: E402
 
 MODPATH = 'MODPATH=Mods\\' + build_a1_mod.MOD_NAME
+WINDOWED = ['WINDOWED', 'SCREENWIDTH=1920', 'SCREENHEIGHT=1080']
 
 STEPS = {
     'freestore': r'''
@@ -137,8 +138,9 @@ def main():
             input('Start the game with %s, play, quit it, then press Enter here... ' % MODPATH)
         else:
             if not a.no_launch:
-                subprocess.Popen([exe, MODPATH], cwd=corr)
-                say('Game launched: StarWarsG.exe %s' % MODPATH)
+                # Windowed: an exclusive-fullscreen game minimises on the first focus change and cannot be driven.
+                subprocess.Popen([exe] + WINDOWED + [MODPATH], cwd=corr)
+                say('Game launched: StarWarsG.exe %s %s' % (' '.join(WINDOWED), MODPATH))
             set_state(run_dir, state='waiting_for_game_start', run_dir=run_dir)
             while not running('StarWarsG.exe'):
                 if time.time() - t0 > a.wait_start_sec:

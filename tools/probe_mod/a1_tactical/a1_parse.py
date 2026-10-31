@@ -246,9 +246,11 @@ def landing_report(rows, out):
         human = [pid for pid, p, _, _ in info if p.get('human') == '1']
         active = [pid for pid, p, calc, own in info if own and p.get('neutral') != '1'
                   and p.get('faction') not in ('NEUTRAL', 'HOSTILE')]
-        attackers = [pid for pid in active if pid not in human] if campaign else active
-        out.append('   answers (%s):' % ('campaign: attacker = the non-human side with units; defender = the human, as the '
-                                         'README scenario sets up' if campaign else 'skirmish: every playing side'))
+        # Every playing side: in the fallback run (human = Underworld) the human is the attacker, so the side that
+        # holds a landing point at first sight is the attacker, not "the non-human side".
+        attackers = active
+        out.append('   answers (%s):' % ('campaign: every playing side; the attacker is the one holding its landing point '
+                                         'at first sight' if campaign else 'skirmish: every playing side'))
         bat = {'n': n, 'campaign': campaign, 'first_frame': md.get('frame'), 'players': {}}
         f_first = int(md.get('frame') or 0)
         f_last = max([f_first] + [int(kv['frame']) for kv in m['pcap'] + m['calc_hist'] + m['pown']
@@ -276,8 +278,8 @@ def landing_report(rows, out):
                 held = int(at(calc_hist, F, 0))
                 rows_.append({'frame': F, 'popcap': pc, 'held': held, 'base': pc - held,
                               'cap': min(10, pc) if campaign else pc})
-            out.append('     player %s (%s): %d reinforcement point(s) owned at first sight%s; first frame owning one: %s' % (
-                pid, p.get('faction'), len(pts0),
+            out.append('     player %s (%s%s): %d reinforcement point(s) owned at first sight%s; first frame owning one: %s' % (
+                pid, p.get('faction'), ', human' if pid in human else '', len(pts0),
                 ' (' + ', '.join('%s @F%s' % (pt['type'], pt['frame0']) for pt in pts0) + ')' if pts0 else '',
                 first_own))
             for r in rows_:
@@ -287,10 +289,6 @@ def landing_report(rows, out):
                                    '(skirmish cap = min(+0x404, unit-cap curve 10))'))
             bat['players'][pid] = {'faction': p.get('faction'), 'points_at_first_sight': len(pts0),
                                    'first_frame_owning': first_own, 'checkpoints': rows_}
-        if campaign:
-            for pid in human:
-                out.append('     defender (human) player %s: +0x404 = %s; effective cap = Max_Ground_Forces_On_Planet (10)'
-                           ' whatever +0x404 says' % (pid, m['players'][pid].get('popcap0')))
         result['battles'].append(bat)
     return result
 
