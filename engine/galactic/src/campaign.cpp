@@ -435,15 +435,25 @@ float GalacticSim::player_income(int32_t player, bool consume) {
 
 void GalacticSim::fiscal_cycle() {
     // GE 1.2 [H]
-    last_income_.assign(players_.size(), 0.0f);  // A2 galactic: the applied gain per player
+    last_income_.assign(players_.size(), 0.0f);  // A2 galactic: the raw cycle income per player
+    // A2 gal t03 (A2GAL_READINGS 1.1) [H]: the AI income tick fires per player inside the payment loop, right after
+    // that player's Add_Credits, with the raw Player_Income I (before the AI Credit_Multiplier, the zero floor and the
+    // cap clamp), only for a non-human AI player, and never on a zero-income cycle. The accrual (0x614340) belongs to
+    // engine/ai: it listens through the income hooks; listeners only read the sim.
+    const std::vector<std::pair<uint32_t, IncomeHook>> hooks = income_hooks_;  // a listener may unregister
+    IncomeTick tick;
+    tick.period_seconds = rules_->constants.fiscal_cycle_seconds;  // T = Fiscal_Cycle_Time_In_Secs (AI_GALACTIC_3 §8)
+    tick.day = cycle_counter_ + 1;  // the day this cycle completes (the counter itself increments after the loop)
+    tick.frame = frame_;
     for (size_t i = 0; i < players_.size(); ++i) {
         const float income = player_income(static_cast<int32_t>(i), true);
-        if (income != 0.0f) {
-            add_credits(static_cast<int32_t>(i), income, false);
-            // The gain the AI sees: Add_Credits' amount after the AI Credit_Multiplier (before the cap clamp) [M].
-            last_income_[i] = income > 0.0f && players_[i].ai ? income * credit_multiplier(static_cast<int32_t>(i)) : income;
-        }
-        // The AI income history (0x614340) belongs to engine/ai: fed by the income hooks below.
+        if (income == 0.0f) continue;  // no Add_Credits, no AI tick [H]
+        add_credits(static_cast<int32_t>(i), income, false);
+        last_income_[i] = income;
+        if (!players_[i].ai || players_[i].human) continue;
+        tick.player = static_cast<int32_t>(i);
+        tick.gain = income;
+        for (const auto& h : hooks) h.second(tick);
     }
     last_cycle_frame_ = next_cycle_frame_;
     next_cycle_frame_ += econ::fiscal_period_frames(rules_->constants.fiscal_cycle_seconds);
@@ -460,20 +470,6 @@ void GalacticSim::fiscal_cycle() {
     ev.kind = GalacticEventKind::GalacticDayPassed;
     ev.value = cycle_counter_;
     emit(ev);
-    // A2 galactic: AI income tick (AI_GALACTIC_2 §3.1, "after Add_Credits"), every player in player order [M:
-    // the original calls the AI budget from the galactic frame 0x4b2ef0 after the cycle].
-    if (!income_hooks_.empty()) {
-        IncomeTick tick;
-        tick.period_seconds = rules_->constants.fiscal_cycle_seconds;  // T = Fiscal_Cycle_Time_In_Secs (AI_GALACTIC_3 §8)
-        tick.day = cycle_counter_;
-        tick.frame = frame_;
-        const std::vector<std::pair<uint32_t, IncomeHook>> hooks = income_hooks_;  // a listener may unregister
-        for (size_t i = 0; i < players_.size(); ++i) {
-            tick.player = static_cast<int32_t>(i);
-            tick.gain = last_income_[i];
-            for (const auto& h : hooks) h.second(tick);
-        }
-    }
 }
 
 // ---- ownership ----------------------------------------------------------------------------------------------
