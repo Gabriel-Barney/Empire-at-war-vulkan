@@ -1,6 +1,6 @@
 """Screenshot diffs for the render_* / ui_gui_* / game_* PNGs against stored baselines (PAF t05). Standard library only.
 
-  python tools/visual/png_diff.py compare BASELINE_DIR NEW_DIR [--scale 320] [--tol 4] [--max-frac 0.005] [--diff-dir DIR] [--only GLOB] [--strict]
+  python tools/visual/png_diff.py compare BASELINE_DIR NEW_DIR [--scale 320] [--tol 4] [--max-frac 0.005] [--diff-dir DIR] [--only GLOB] [--ignore GLOB]... [--strict]
   python tools/visual/png_diff.py update  BASELINE_DIR NEW_DIR [--scale 320] [--only GLOB]   store NEW_DIR's PNGs as the baselines
   python tools/visual/png_diff.py --selftest
 
@@ -166,13 +166,13 @@ def compare_images(base_path, new_path, tol, diff_path=None, scale=0):
     return frac, worst, ""
 
 
-def list_pngs(folder, only):
+def list_pngs(folder, only, ignore=()):
     names = sorted(n for n in os.listdir(folder) if n.lower().endswith(".png"))
-    return [n for n in names if not only or fnmatch.fnmatch(n, only)]
+    return [n for n in names if (not only or fnmatch.fnmatch(n, only)) and not any(fnmatch.fnmatch(n, g) for g in ignore)]
 
 
 def cmd_compare(args):
-    base, new = list_pngs(args.baseline, args.only), list_pngs(args.new, args.only)
+    base, new = list_pngs(args.baseline, args.only, args.ignore), list_pngs(args.new, args.only, args.ignore)
     if args.diff_dir:
         os.makedirs(args.diff_dir, exist_ok=True)
     failures = 0
@@ -200,7 +200,7 @@ def cmd_compare(args):
 
 def cmd_update(args):
     os.makedirs(args.baseline, exist_ok=True)
-    names = list_pngs(args.new, args.only)
+    names = list_pngs(args.new, args.only, args.ignore)
     for n in names:
         dst = os.path.join(args.baseline, n)
         if not args.scale:
@@ -294,6 +294,7 @@ def main():
         p.add_argument("baseline")
         p.add_argument("new")
         p.add_argument("--only", help="glob on the file name, e.g. 'ui_gui_*'")
+        p.add_argument("--ignore", action="append", default=[], help="glob on file names to skip (repeatable): shots that are not deterministic")
         p.add_argument("--scale", type=int, default=0, help="shrink images wider than this many pixels before comparing / storing")
         if name == "compare":
             p.add_argument("--tol", type=int, default=4)

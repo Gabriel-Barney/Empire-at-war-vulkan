@@ -87,6 +87,9 @@ add_library(alamo_render STATIC
   src/map_scene.cpp
   src/pipelines.cpp
   src/renderer.cpp
+  src/renderer_xlat.cpp
+  src/renderer_draw.cpp
+  src/renderer_graph.cpp
   src/lasers.cpp
   src/beams.cpp
   src/beams_draw.cpp
@@ -190,7 +193,7 @@ add_test(NAME alamo_render_app_sync COMMAND alamo_render_app --clear --frame-gra
 set_tests_properties(alamo_render_app_sync PROPERTIES TIMEOUT 120 ENVIRONMENT "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true")
 
 # ---------------------------------------------------------------- tests
-add_executable(alamo_render_tests tests/test_render.cpp)
+add_executable(alamo_render_tests tests/test_render.cpp tests/test_render_gpu.cpp)
 target_link_libraries(alamo_render_tests PRIVATE alamo_render)
 target_compile_definitions(alamo_render_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 # CPU checks always; GPU checks skip cleanly without a Vulkan 1.3 device. The test sets
