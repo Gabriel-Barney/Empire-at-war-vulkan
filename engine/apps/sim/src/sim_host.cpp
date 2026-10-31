@@ -335,7 +335,7 @@ ObjectHandle SimHost::resolve(uint32_t wire) const {
     const GameMode* t = modes_.top();
     if (!t || wire == cmd::kNoObject || wire > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) return {};
     const ObjectHandle h = t->primary().find(static_cast<ObjectId>(wire));
-    return t->primary().alive(h) ? h : ObjectHandle{};
+    return t->primary().active(h) ? h : ObjectHandle{};  // refix t01: dying / removing objects (death clones) are not targets
 }
 
 std::vector<ObjectHandle> SimHost::owned_units(uint8_t player, const std::vector<uint32_t>& ids) const {
@@ -448,7 +448,7 @@ cmd::RejectReason SimHost::apply(uint8_t player, const cmd::EventData& ev) {
         case T::SelectAll: {
             sel.clear();
             for (ObjectHandle h : store.owned_by(player))
-                if (store.alive(h) && store.has_behavior(h, objects::beh::Selectable)) sel.push_back(store.id(h));
+                if (store.active(h) && store.has_behavior(h, objects::beh::Selectable)) sel.push_back(store.id(h));
             return R::None;
         }
         case T::MoveToPosition: {
@@ -527,7 +527,7 @@ void SimHost::story_order_feed(uint8_t player, const cmd::EventData& ev, const s
     std::vector<ObjectId> done;
     for (const ObjectId id : units) {
         const ObjectHandle h = st.find(id);
-        if (!st.alive(h) || st.owner(h) != static_cast<int32_t>(player) || id == target) continue;
+        if (!st.active(h) || st.owner(h) != static_cast<int32_t>(player) || id == target) continue;
         if (std::find(done.begin(), done.end(), id) != done.end()) continue;
         done.push_back(id);
         TacticalStoryNotification n;

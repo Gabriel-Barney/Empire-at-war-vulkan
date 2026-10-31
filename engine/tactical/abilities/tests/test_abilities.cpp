@@ -3365,6 +3365,153 @@ void test_hardpoint_online_effects() {
     CHECK(w.sys->shield(1) > 0.0f && w.sys->shield(1) < 200.0f);  // regen resumes from 0
 }
 
+// refix t02 (S9_DEATH_CLONE_SHIELDS.md §1.5): the INFECTION behaviour - Infection_Ability fields parsed and linked, the
+// hit attaches it with the shooter's parameters, spread after Seconds_To_Infect x FPS consecutive frames in range (enemy
+// of the infecting player, Infection_CategoryMask, Distance_To_Infect), Damage_Per_Second once a second, expiry after
+// Duration_Of_Infection (suspend), resume by a spread / the API, the death-clone key 20 only while active, save round trip.
+void test_infection() {
+    {  // XML -> SpecialAbilityDesc -> UnitDesc::infection
+        const data::XmlDocument doc = data::XmlDocument::parse(
+            "<Infection_Ability Name=\"IG88_Infection\"><Activation_Style> User_Input </Activation_Style>"
+            "<Damage_Per_Second>2</Damage_Per_Second><Duration_Of_Infection>30.0</Duration_Of_Infection>"
+            "<Infection_CategoryMask>Infantry</Infection_CategoryMask><Distance_To_Infect>70.0</Distance_To_Infect>"
+            "<Projectile_Type>Infection_Projectile</Projectile_Type><Seconds_To_Infect>2.0</Seconds_To_Infect></Infection_Ability>",
+            "inf.xml");
+        AbilityResolvers r;
+        r.category = [](std::string_view n) -> uint64_t { return iequals(n, "Infantry") ? 16u : 0u; };
+        std::vector<SpecialAbilityDesc> specials{SpecialAbilityDesc{}, parse_special_ability(doc.root(), r, nullptr)};
+        const SpecialAbilityDesc& s = specials[1];
+        CHECK(s.cls == SpecialClass::Infection && s.distance_to_infect == 70.0f && s.seconds_to_infect == 2.0f);
+        CHECK(s.duration_secs == 30.0f && s.damage_per_second == 2.0f && s.infection_categories == 16u);
+        AbilityObjectDesc a;
+        a.specials = {0, 1};
+        UnitDesc ud;
+        link_infection(a, specials, ud);
+        CHECK(ud.infection.has && ud.infection.distance_to_infect == 70.0f && ud.infection.seconds_to_infect == 2.0f &&
+              ud.infection.duration_secs == 30.0f && ud.infection.damage_per_second == 2.0f && ud.infection.category_mask == 16u);
+        a.specials = {0};
+        link_infection(a, specials, ud);
+        CHECK(!ud.infection.has);
+    }
+    constexpr uint64_t kInf = 16;
+    World w;
+    ProjectileDesc inf;
+    inf.name = "Infection_Projectile";
+    inf.max_speed = 20.0f;
+    inf.damage = 1.0f;
+    inf.max_flight_distance = 3000.0f;
+    inf.causes_infection = true;
+    w.cd.projectiles = {inf};
+    UnitDesc ig;
+    ig.name = "IG88";
+    ig.tactical_health = 500.0f;
+    ig.radius = 5.0f;
+    ig.category_mask = kInf;
+    ig.infection.has = true;
+    ig.infection.distance_to_infect = 70.0f;
+    ig.infection.seconds_to_infect = 2.0f;
+    ig.infection.duration_secs = 5.0f;
+    ig.infection.damage_per_second = 2.0f;
+    ig.infection.category_mask = kInf;
+    UnitDesc trooper;
+    trooper.name = "Trooper";
+    trooper.object_type = 41;
+    trooper.tactical_health = 100.0f;
+    trooper.radius = 5.0f;
+    trooper.category_mask = kInf;
+    trooper.death_clones = {{1, 60}, {20, 63}};
+    UnitDesc tank = trooper;
+    tank.name = "Tank";
+    tank.category_mask = 2;
+    const uint32_t igd = push(w.cd, w.ad, ig, AbilityObjectDesc{});
+    const uint32_t trd = push(w.cd, w.ad, trooper, AbilityObjectDesc{});
+    const uint32_t tkd = push(w.cd, w.ad, tank, AbilityObjectDesc{});
+    w.make();
+    w.add(1, igd, 0, {-1000, 0, 0});
+    w.add(10, trd, 1, {0, 0, 0});    // A: hit by the projectile
+    w.add(11, trd, 1, {50, 0, 0});   // B: in range of A
+    w.add(12, tkd, 1, {0, 30, 0});   // in range, not in the category mask
+    w.add(13, trd, 0, {0, -40, 0});  // in range, the infecting player's own
+    w.add(14, trd, 1, {200, 0, 0});  // out of range (150 from B)
+    w.add(15, trd, 1, {0, 60, 0});   // D: in range of A (78 from B), leaves for one frame
+    auto infected = [&w](ObjectId id) { return (w.sys->flags(id) & kUnitInfected) != 0; };
+    ProjectileLaunch l;
+    l.shooter = 1;
+    l.owner = 0;
+    l.projectile = 0;
+    l.from = {-100, 0, 0};
+    l.target = 10;
+    CHECK(w.sys->launch_projectile(l, w.frame));
+    for (int i = 0; i < 20 && !w.sys->infection_attached(10); ++i) w.tick();
+    CHECK(w.sys->infection_attached(10) && infected(10) && w.sys->infection_suspend_count(10) == 0);
+    const float h0 = w.sys->health(10);
+    const float hb0 = w.sys->health(11);  // the spawn health (difficulty / faction scaled)
+    const uint32_t fa = w.frame - 1;  // the frame of the hit
+    for (int i = 0; i < 30; ++i) w.tick();  // fa + 1 .. fa + 30
+    w.move(15, {0, 300, 0});
+    w.tick();  // fa + 31: D out of range, forgotten
+    w.move(15, {0, 60, 0});
+    for (int i = 0; i < 27; ++i) w.tick();  // fa + 32 .. fa + 58
+    CHECK(!infected(11) && !infected(15));
+    w.tick();
+    w.tick();  // fa + 60: B has been in range for 60 consecutive frames (fa + 1 .. fa + 60)
+    CHECK(w.frame - 1 == fa + 60);
+    CHECK(infected(11) && w.sys->infection_attached(11) && !infected(15));
+    CHECK(!w.sys->infection_attached(12) && !w.sys->infection_attached(13) && !w.sys->infection_attached(14));
+    for (int i = 0; i < 30; ++i) w.tick();  // fa + 61 .. fa + 90
+    CHECK(!infected(15));
+    w.tick();  // fa + 91: D, counted again from fa + 32
+    CHECK(infected(15));
+    // Damage_Per_Second: 2 at fa + 30, + 60, + 90 on A; B (infected at fa + 60) once at fa + 90.
+    CHECK_EQ(w.sys->health(10), h0 - 6.0f);
+    CHECK_EQ(w.sys->health(11), hb0 - 2.0f);
+    // Expiry: Duration_Of_Infection 5 s -> A suspends at fa + 150 (flag cleared, no more damage).
+    for (int i = 0; i < 58; ++i) w.tick();  // .. fa + 149
+    CHECK(infected(10));
+    w.tick();  // fa + 150
+    CHECK(!infected(10) && w.sys->infection_attached(10) && w.sys->infection_suspend_count(10) == 1);
+    const float h1 = w.sys->health(10);
+    // A suspended is a spread candidate again: D (60 away, active until fa + 241) resumes it after 60 frames
+    // (fa + 151 .. fa + 210); B expires at fa + 210 itself before it would.
+    for (int i = 0; i < 59; ++i) w.tick();  // .. fa + 209
+    CHECK(!infected(10) && w.sys->health(10) == h1 && infected(11));
+    w.tick();  // fa + 210
+    CHECK(infected(10) && w.sys->infection_suspend_count(10) == 0 && !infected(11) && w.sys->infection_suspend_count(11) == 1);
+    // vfunc +0xc0 / +0xb8 through the API: counter +1 / -1 (floored), the flag follows counter 0.
+    w.sys->suspend_infection(10);
+    w.sys->suspend_infection(10);
+    CHECK(w.sys->infection_suspend_count(10) == 2 && !infected(10));
+    w.sys->resume_infection(10, w.frame);
+    CHECK(w.sys->infection_suspend_count(10) == 1 && !infected(10));
+    w.sys->resume_infection(10, w.frame);
+    w.sys->resume_infection(10, w.frame);
+    CHECK(w.sys->infection_suspend_count(10) == 0 && infected(10));
+    w.sys->suspend_infection(12);  // no behaviour: nothing
+    CHECK(!w.sys->infection_attached(12) && w.sys->infection_suspend_count(12) == 0);
+    // Save round trip (the infection state and its exposure lists).
+    {
+        ByteWriter a;
+        w.sys->write(a);
+        const uint64_t d0 = battle_digest(*w.sys, *w.ab, w.rng);
+        ByteReader r(a.bytes());
+        CHECK(w.sys->read(r));
+        ByteWriter b;
+        w.sys->write(b);
+        CHECK(a.bytes() == b.bytes() && battle_digest(*w.sys, *w.ab, w.rng) == d0);
+        CHECK(infected(10) && w.sys->infection_suspend_count(11) == 1 && w.sys->infection_attached(15));
+    }
+    // Die: the active INFECTION remaps the key to 20; a suspended one does not.
+    w.sys->kill_unit(10, 1, kKindNormal, w.frame);
+    CHECK(!w.sys->deaths().empty() && w.sys->deaths().back().death_clone == 63 && w.sys->deaths().back().clone_key == 20);
+    w.sys->kill_unit(11, 1, kKindNormal, w.frame);
+    CHECK(!w.sys->deaths().empty() && w.sys->deaths().back().death_clone == 60 && w.sys->deaths().back().clone_key == 1);
+    // set_flag mirrors the behaviour (host / tests): on attaches an active one, off suspends it.
+    w.sys->set_flag(14, kUnitInfected, true);
+    CHECK(w.sys->infection_attached(14) && infected(14) && w.sys->infection_suspend_count(14) == 0);
+    w.sys->set_flag(14, kUnitInfected, false);
+    CHECK(w.sys->infection_attached(14) && !infected(14) && w.sys->infection_suspend_count(14) == 1);
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -3387,6 +3534,7 @@ int main(int argc, char** argv) {
     test_hardpoints();
     test_last_hardpoint_kills();
     test_death_clone_remap();
+    test_infection();
     test_fire_and_decay();
     test_energy();
     test_ion_stun();

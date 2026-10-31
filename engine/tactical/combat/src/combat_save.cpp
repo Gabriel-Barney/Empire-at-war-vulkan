@@ -40,7 +40,7 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 1;
+constexpr uint32_t kCombatSaveVersion = 2;  // 2: refix t02 INFECTION state, refix t03 death clone key
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -129,6 +129,10 @@ void CombatSystem::write(ByteWriter& w) const {
         // OI abilities
         w.i32(u.priority_override).u32(u.stun_end).u32(u.invuln_end).u32(u.emitter_entries).i32(u.weapon_index);
         w.u8(u.acquired);
+        // refix t02: INFECTION behaviour
+        w.u8(u.infect_attached).u32(u.infect_suspend).i32(u.infect_desc).i32(u.infect_player).i32(u.infect_source);
+        w.u32(u.infect_end).u32(u.infect_next_damage).u32(static_cast<uint32_t>(u.infect_exposure.size()));
+        for (const auto& [id, f] : u.infect_exposure) w.i32(id).u32(f);
         u.mods.write(w);
         // caches
         for (const float v : u.mod_r) w.f32(v);
@@ -169,7 +173,7 @@ void CombatSystem::write(ByteWriter& w) const {
     // this tick's outputs
     w.u32(static_cast<uint32_t>(deaths_.size()));
     for (const DeathEvent& e : deaths_)
-        w.i32(e.id).i32(e.killer).u8(e.kind).i32(e.death_clone).i32(e.death_projectile).boolean(e.spin_away);
+        w.i32(e.id).i32(e.killer).u8(e.kind).i32(e.death_clone).i32(e.clone_key).i32(e.death_projectile).boolean(e.spin_away);
     w.u32(static_cast<uint32_t>(hp_events_.size()));
     for (const HardpointEvent& e : hp_events_) {
         w.i32(e.owner).u32(e.index).u8(static_cast<uint8_t>(e.kind)).boolean(e.owner_dying).boolean(e.last_of_kind);
@@ -281,6 +285,22 @@ bool CombatSystem::read(ByteReader& r) {
         u.emitter_entries = r.u32();
         u.weapon_index = r.i32();
         u.acquired = r.u8();
+        u.infect_attached = r.u8();
+        u.infect_suspend = r.u32();
+        u.infect_desc = r.i32();
+        u.infect_player = r.i32();
+        u.infect_source = r.i32();
+        u.infect_end = r.u32();
+        u.infect_next_damage = r.u32();
+        uint32_t nx = 0;
+        if (!get_count(r, nx, 8) || u.infect_attached > 1 || u.infect_desc < -1 ||
+            (u.infect_desc >= 0 && static_cast<uint32_t>(u.infect_desc) >= unit_descs))
+            return false;
+        u.infect_exposure.resize(nx);
+        for (auto& [id, f] : u.infect_exposure) {
+            id = r.i32();
+            f = r.u32();
+        }
         if (!r.ok() || !u.mods.read(r)) return false;
         for (float& v : u.mod_r) v = r.f32();
         u.mod_ver = r.u32();
@@ -393,13 +413,14 @@ bool CombatSystem::read(ByteReader& r) {
     }
     if (!r.ok()) return false;
 
-    if (!get_count(r, n, 18)) return false;
+    if (!get_count(r, n, 22)) return false;
     std::vector<DeathEvent> deaths(n);
     for (DeathEvent& e : deaths) {
         e.id = r.i32();
         e.killer = r.i32();
         e.kind = r.u8();
         e.death_clone = r.i32();
+        e.clone_key = r.i32();
         e.death_projectile = r.i32();
         e.spin_away = r.boolean();
         if (!r.ok() || !proj_ok(e.death_projectile)) return false;

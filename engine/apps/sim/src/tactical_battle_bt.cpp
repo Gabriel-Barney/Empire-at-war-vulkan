@@ -480,7 +480,7 @@ void TacticalBattle::bt_landing_points(TacticalMode& mode) {
     const objects::ObjectStore& st = mode.primary();
     std::vector<objects::ObjectId> mine;
     for (const objects::ObjectHandle h : st.all_objects())
-        if (st.alive(h) && st.has_behavior(h, kPoint) && st.owner(h) == attacker) mine.push_back(st.id(h));
+        if (st.active(h) && st.has_behavior(h, kPoint) && st.owner(h) == attacker) mine.push_back(st.id(h));
     if (mine.empty()) {
         // [probe 2026-10-29] the attacker lands on a Neutral (map owner 3) reinforcement point - 3 / 17 units from its
         // start centroid - that it owns at the first frame; every other point stays Neutral. [inferred] the point = the
@@ -489,7 +489,7 @@ void TacticalBattle::bt_landing_points(TacticalMode& mode) {
         objects::ObjectId best = objects::kNoObjectId;
         double best_d = 0.0;
         for (const objects::ObjectHandle h : st.all_objects()) {
-            if (!st.alive(h) || !st.has_behavior(h, kPoint) || !bt_owner_neutral(st.owner(h))) continue;
+            if (!st.active(h) || !st.has_behavior(h, kPoint) || !bt_owner_neutral(st.owner(h))) continue;
             const Vec3 p = st.position(h);
             const double dx = static_cast<double>(p.x) - static_cast<double>(anchor_[1].x);
             const double dy = static_cast<double>(p.y) - static_cast<double>(anchor_[1].y);
@@ -890,7 +890,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
         Vec3 block{};
         if (kDummy != objects::kNoBehavior)
             for (const objects::ObjectHandle h : st.all_objects()) {
-                if (!st.alive(h) || !st.has_behavior(h, kDummy) || st.owner(h) == att) continue;
+                if (!st.active(h) || !st.has_behavior(h, kDummy) || st.owner(h) == att) continue;
                 if (types.get_float(st.type(h), "Reinforcement_Prevention_Radius") == 0.0f) continue;
                 block = st.position(h);
                 have_block = true;
@@ -1002,7 +1002,7 @@ void TacticalBattle::bt_pad_restore(TacticalMode& mode) {
     objects::ObjectStore& st = mode.primary();
     std::vector<objects::ObjectHandle> pads;
     for (const objects::ObjectHandle h : st.all_objects())
-        if (st.alive(h) && st.has_behavior(h, kPad)) pads.push_back(h);
+        if (st.active(h) && st.has_behavior(h, kPad)) pads.push_back(h);
     for (const objects::ObjectHandle ph : pads) {
         const Vec3 pp = st.position(ph);
         const PadRecord* rec = nullptr;
@@ -1045,7 +1045,7 @@ void TacticalBattle::bt_shield_stamps(const TacticalMode& mode) {
     });
     // New: the store's object list order, inserted sorted.
     for (const objects::ObjectHandle h : st.all_objects()) {
-        if (!st.alive(h) || !st.has_behavior(h, kBaseShield)) continue;
+        if (!st.active(h) || !st.has_behavior(h, kBaseShield)) continue;
         const float r = types.get_float(st.type(h), "Base_Shield_Radius");
         // MOVEMENT §1.1 step 3: the occupant's SecondaryOccupationPassability (+0x1694; shipped "Shield" on the 740-radius
         // generators) over the shield radius [inferred footprint]. Types without the field are no secondary occupants.

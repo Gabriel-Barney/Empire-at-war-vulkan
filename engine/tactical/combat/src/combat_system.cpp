@@ -172,6 +172,7 @@ bool CombatSystem::add_unit(const UnitSpawn& s, uint32_t frame, SimRng& rng) {
     u.team_leader = s.team_leader ? 1 : 0;
     u.damage_parent = s.damage_parent;
     u.flags = s.flags & ~(kUnitDead | kUnitRemoved);
+    if (u.flags & kUnitInfected) u.infect_attached = 1;  // refix t02: spawned infected = the behaviour, no parameters
     u.pos = s.position;
     u.last_pos = s.position;
     u.prev_pos = s.position;  // OI tactical
@@ -255,6 +256,17 @@ void CombatSystem::set_flag(ObjectId id, uint32_t flag, bool on) {
     Unit* u = unit(id);
     if (!u) return;
     flag &= ~(kUnitDead | kUnitRemoved);
+    if (flag & kUnitInfected) {  // refix t02: the flag mirrors the INFECTION behaviour (attach + active / suspended)
+        flag &= ~kUnitInfected;
+        if (on) {
+            u->infect_attached = 1;
+            u->infect_suspend = 0;
+            u->flags |= kUnitInfected;
+        } else if (u->infect_attached) {
+            u->infect_suspend = std::max<uint32_t>(u->infect_suspend, 1);
+            u->flags &= ~kUnitInfected;
+        }
+    }
     if (on) {
         u->flags |= flag;
     } else {
@@ -1279,10 +1291,15 @@ void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, 
     const Vec3 impact = p.pos + p.dir * (p.speed * t);
     r.has_impact = true;
     r.impact = impact;
-    // S9 t04 (§1.5): a Causes_Infection hit attaches the INFECTION behaviour (or resumes it: counter 0). [port] Before
+    // S9 t04 (§1.5): a Causes_Infection hit attaches the INFECTION behaviour (or resumes it: counter - 1). [port] Before
     // Take_Damage (the order inside 0x4cb280 was not traced); the shooter's INFECTION-ability test is left to the data
-    // (vanilla: only Infection_Projectile, thrown by that ability).
-    if (pd.causes_infection) v.flags |= kUnitInfected;
+    // (vanilla: only Infection_Projectile, thrown by that ability). refix t02: the behaviour runs with the shooter type's
+    // Infection_Ability parameters; a shooter that is gone or has none starts a parameterless one (flag only) [port].
+    if (pd.causes_infection) {
+        const Unit* sh = unit(p.shooter);
+        const int32_t idesc = sh && desc_of(*sh).infection.has ? static_cast<int32_t>(sh->desc) : -1;
+        infect(v, idesc, p.owner, p.shooter, frame);
+    }
     bool absorbed_all = false;
     HitEvent he;  // S10-int (R4): the detonation for the host's PARTICLE objects
     he.victim = v.id;
@@ -1595,6 +1612,7 @@ void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, 
         if (clone < 0) clone = pick_death_clone(vd, kKindNormal, -1);
         if (clone < 0) clone = vd.object_type;
         deaths_[ei].death_clone = clone;
+        deaths_[ei].clone_key = key;
     }
     // 9. death projectile: one synced Get_Int(0, n - 1) (no draw for n = 1); spawned at the position +
     //    Ranged_Target_Z_Adjust, owned by the dying object's player, along its facing [L].
@@ -2043,6 +2061,81 @@ void CombatSystem::burning_service(Unit& u, uint32_t frame) {
     take_damage(r, frame);
 }
 
+void CombatSystem::infect(Unit& v, int32_t desc, int32_t player, ObjectId source, uint32_t frame) {
+    // refix t02 (S9_DEATH_CLONE_SHIELDS.md §1.5 [H]): attach INFECTION (behaviour factory 0x4c3520) to a victim without
+    // it; a victim that has it is resumed instead (vfunc +0xb8: counter - 1, floored at 0). [L] A behaviour that becomes
+    // active (attached, or resumed to 0) restarts its Duration_Of_Infection and its once-per-second damage; it keeps the
+    // parameters, infecting player and source of its first attach. Resuming an active one changes nothing.
+    if (v.flags & kUnitDead) return;
+    if (v.infect_attached) {
+        if (v.infect_suspend == 0) return;
+        if (--v.infect_suspend != 0) return;
+    } else {
+        v.infect_attached = 1;
+        v.infect_suspend = 0;
+        v.infect_desc = desc >= 0 && static_cast<size_t>(desc) < data_->units.size() ? desc : -1;
+        v.infect_player = player;
+        v.infect_source = source;
+    }
+    v.flags |= kUnitInfected;
+    v.infect_exposure.clear();
+    v.infect_end = 0;
+    v.infect_next_damage = frame + cfg_.fps;
+    if (v.infect_desc >= 0) {
+        const InfectionDesc& in = data_->units[static_cast<size_t>(v.infect_desc)].infection;
+        if (in.duration_secs > 0.0f)
+            v.infect_end = frame + static_cast<uint32_t>(std::max(1.0f, in.duration_secs * static_cast<float>(cfg_.fps)));
+    }
+}
+
+void CombatSystem::infection_service(Unit& u, uint32_t frame) {
+    // INFECTION update (0x636ae0), S9_DEATH_CLONE_SHIELDS.md §1.5 [H for the shape: it spreads the behaviour to nearby
+    // objects that stay in range for consecutive frames, and resumes suspended ones]. The rules below are [L] (the update
+    // was not read), built on the Infection_Ability fields:
+    //   * serviced every frame while active (counter 0) and parameterised; a suspended one does nothing;
+    //   * expiry: at Duration_Of_Infection after it became active it suspends itself (counter + 1, flag cleared);
+    //   * spread: every live unit (index order) other than this one, not actively infected, enemy of the infecting
+    //     player, whose CategoryMask meets Infection_CategoryMask, within Distance_To_Infect (XY). The first frame a
+    //     neighbour is seen in range is kept while it stays in range on every service; after Seconds_To_Infect x FPS
+    //     consecutive frames it is infected (attached with these parameters, or resumed) and dropped from the list;
+    //   * damage: Damage_Per_Second once per second, kind 20 (Damage_Infection), source = the infecting unit.
+    if (!u.infect_attached || u.infect_suspend != 0 || u.infect_desc < 0 || (u.flags & kUnitDead)) return;
+    const InfectionDesc& in = data_->units[static_cast<size_t>(u.infect_desc)].infection;
+    if (u.infect_end != 0 && frame >= u.infect_end) {
+        suspend_infection(u.id);
+        return;
+    }
+    if (in.distance_to_infect > 0.0f) {
+        const float r2 = in.distance_to_infect * in.distance_to_infect;
+        const auto need = static_cast<uint32_t>(std::max(1.0f, in.seconds_to_infect * static_cast<float>(cfg_.fps)));
+        infect_scratch_.clear();
+        for (Unit& c : units_) {
+            if (&c == &u || (c.flags & kUnitDead) || (c.infect_attached && c.infect_suspend == 0)) continue;
+            if (!is_enemy(u.infect_player, c.owner)) continue;
+            if (in.category_mask != 0 && (desc_of(c).category_mask & in.category_mask) == 0) continue;
+            if (distance2_xy(u.pos, c.pos) > r2) continue;
+            uint32_t first = frame;
+            for (const auto& [id, f] : u.infect_exposure)
+                if (id == c.id) first = f;
+            if (frame + 1 - first >= need) {
+                infect(c, u.infect_desc, u.infect_player, u.infect_source, frame);
+            } else {
+                infect_scratch_.emplace_back(c.id, first);
+            }
+        }
+        u.infect_exposure.assign(infect_scratch_.begin(), infect_scratch_.end());
+    }
+    if (in.damage_per_second > 0.0f && frame >= u.infect_next_damage) {
+        u.infect_next_damage = frame + cfg_.fps;
+        DamageRequest r;
+        r.victim = u.id;
+        r.amount = in.damage_per_second;
+        r.kind = kKindInfection;
+        r.source = u.infect_source;
+        take_damage(r, frame);
+    }
+}
+
 void CombatSystem::converted_decay(Unit& u, uint32_t frame, SimRng& rng) {
     // GameObject::Update (0x3a6b80) step 7 (4.10) [H]; draw bounds +-d/10 [M].
     if (!(u.flags & kUnitConverted) || (u.flags & kUnitDead)) return;
@@ -2231,6 +2324,8 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             if (u.flags & kUnitDead) continue;
         }
         burning_service(u, frame);
+        if (u.flags & kUnitDead) continue;
+        infection_service(u, frame);  // refix t02 [M: slot next to the other damage-over-time behaviour]
         if (u.flags & kUnitDead) continue;
         // OI abilities: a stunned unit's targeting / turret behaviours are suspended (0x647290); its STUNNABLE service
         // at the end frame releases it [inferred]. Requires_Base_Power units do not act without base power (0x632270).
@@ -2704,6 +2799,26 @@ bool CombatSystem::burning(ObjectId id) const {
     const Unit* u = unit(id);
     return u && u->burning != 0;
 }
+bool CombatSystem::infection_attached(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u && u->infect_attached != 0;
+}
+uint32_t CombatSystem::infection_suspend_count(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? u->infect_suspend : 0;
+}
+void CombatSystem::suspend_infection(ObjectId id) {
+    Unit* u = unit(id);
+    if (!u || !u->infect_attached) return;
+    ++u->infect_suspend;
+    u->flags &= ~kUnitInfected;
+    u->infect_exposure.clear();
+}
+void CombatSystem::resume_infection(ObjectId id, uint32_t frame) {
+    Unit* u = unit(id);
+    if (!u || !u->infect_attached || (u->flags & kUnitDead)) return;
+    infect(*u, u->infect_desc, u->infect_player, u->infect_source, frame);
+}
 bool CombatSystem::detonate_projectile(size_t index, uint32_t frame) {
     if (index >= projectiles_.size() || !projectiles_[index].alive) return false;
     projectiles_[index].alive = 0;
@@ -3122,6 +3237,20 @@ void CombatSystem::hash_extended(StateHasher& h) const {
         if (u.weapon_index != 0) {  // OI abilities: swapped weapons only (format unchanged otherwise)
             h.u8(0x24);
             h.i32(u.weapon_index);
+        }
+        if (u.infect_attached) {  // refix t02: INFECTION behaviour state (format unchanged without one)
+            h.u8(0x54);
+            h.u32(u.infect_suspend);
+            h.i32(u.infect_desc);
+            h.i32(u.infect_player);
+            h.i32(u.infect_source);
+            h.u32(u.infect_end);
+            h.u32(u.infect_next_damage);
+            h.u32(static_cast<uint32_t>(u.infect_exposure.size()));
+            for (const auto& [id, f] : u.infect_exposure) {
+                h.i32(id);
+                h.u32(f);
+            }
         }
         for (uint32_t i = 0; i < u.hp_count; ++i) {
             const Hardpoint& hp = hps_[u.hp_begin + i];

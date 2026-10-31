@@ -226,6 +226,19 @@ ObjectHandle TacticalMode::spawn(const objects::SpawnParams& p, float health_fra
     return h;
 }
 
+ObjectHandle TacticalMode::spawn_death_clone(const objects::SpawnParams& p) {
+    const ObjectHandle h = primary_.create(p);
+    primary_.set_flag(h, objects::kFlagDeathClone);
+    const objects::TypeIndex t = p.type;
+    primary_.set_health(h, t < types_->size() ? types_->columns().tactical_health[t] : 0.0f);
+    tactical::TreeMembership m;
+    m.owner = p.owner;
+    m.projectile_collidable = t < types_->size() && types_->get_bool(t, "Collidable_By_Projectile_Dead");
+    const tactical::Aabb box = bounds_of(h);
+    if (tactical::valid(box)) trees_.add(static_cast<tactical::EntityHandle>(primary_.id(h)), box, category_of(h), m);
+    return h;
+}
+
 bool TacticalMode::destroy(ObjectHandle h) {
     if (!primary_.destroy(h)) return false;
     const ObjectId id = primary_.id(h);

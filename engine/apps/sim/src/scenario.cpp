@@ -16,7 +16,7 @@ std::vector<ObjectHandle> alive_owned(const objects::ObjectStore& s, int32_t pla
                                       const TacticalMode& tm) {
     std::vector<ObjectHandle> out;
     for (ObjectHandle h : s.owned_by(player))
-        if (s.alive(h) && (!movable_only || tm.movable(h))) out.push_back(h);
+        if (s.active(h) && (!movable_only || tm.movable(h))) out.push_back(h);
     return out;
 }
 
@@ -87,7 +87,7 @@ void AiStandIn::operator()(SimHost& host, uint8_t player, uint64_t frame) const 
     c.radius = radius;
     for (tactical::EntityHandle e : tm->trees().all().query_circle_xy(c, tactical::kSkipDead, ctx)) {
         const ObjectHandle t = store.find(static_cast<ObjectId>(e));
-        if (!store.alive(t)) continue;
+        if (!store.active(t)) continue;
         const int32_t owner = store.owner(t);
         if (owner == static_cast<int32_t>(player) || owner < 0 || owner >= static_cast<int32_t>(host.players())) continue;
         host.execute_direct(player, cmd::CommandSource::AI, cmd::ev::attack(host.wire_id(t), {host.wire_id(u)}));

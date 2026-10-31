@@ -28,8 +28,11 @@
 //                    by the battle BEFORE it destroys the unit; the unit's row then lives on as a CORPSE row
 //                    ([port]: the battle removes the store object at death, so the corpse is a detached row +
 //                    anim::Corpse record holding the type / owner / position / facing captured at death);
-//   * death_clone_spawned()  a Death_Clone object runs its own death sequence (its type's Specific_Death_Anim_*)
-//                    right after its model is created at the next sync [port: clones die at once];
+//   * death_clone_spawned()  a Death_Clone object runs its own death sequence (its type's Specific_Death_Anim_*,
+//                    else the clip of the killing damage kind) right after its model is created at the next sync [port:
+//                    clones die at once]; refix t01: also the dying type's own clone (0x29f270 always makes one);
+//   * corpse_clone() refix t03, the infantry corpse path (S9_DEATH_CLONE_SHIELDS.md §1.6 [L]): no clone object; the
+//                    dying unit's row becomes a corpse of the clone type's model running the clone's death sequence;
 //   * service: before the advance, flinch holds end and the corpse countdown runs (Death_Persistence_Duration
 //     after the death clip, then Death_Fade_Time); a finished corpse loses its row, and a store object that is
 //     still alive (death clones) is destroyed (TacticalMode::destroy).
@@ -116,7 +119,14 @@ public:
     // `damage_kind` = the killing hit's DamageType (death type by kind, anim_behaviors.hpp).
     anim::DeathResult begin_death(const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind = 1);
     // A Death_Clone object was spawned: its death sequence runs after its model creation at the next sync.
-    void death_clone_spawned(const GameMode& mode, ObjectId clone);
+    // `damage_kind` = the killing hit's kind (the death clip when the clone type sets no Specific_Death_Anim_*).
+    void death_clone_spawned(const GameMode& mode, ObjectId clone, uint8_t damage_kind = 1);
+    // refix t03: infantry corpse path (S9 §1.6 [L]: the clone goes to a lighter corpse list, not the sim store). Call
+    // before the battle destroys `dying`: its row (created when absent) gets `clone_type`'s model without a clip (no
+    // draw), then the clone type's death sequence starts with the CorpseInfo of `clone_type`, so the row lives on as a
+    // detached corpse drawn with the clone's model. RemoveNow / no model: nothing stays (the row is dropped).
+    anim::DeathResult corpse_clone(const GameMode& mode, ObjectId dying, objects::TypeIndex clone_type, SimRng& rng,
+                                   uint64_t frame, uint8_t damage_kind);
     // Corpses of `mode` (ascending id). `detached` ones have no store object: the renderer draws them from
     // Corpse::info with the row's pose (AnimWorld row of the same id) and Corpse::alpha(frame); `spin_away`
     // ones spin until removal (the spin motion and Spin_Away_On_Death_Explosion are render-side).
@@ -180,6 +190,7 @@ private:
         std::unique_ptr<anim::AnimBehaviors> behaviors;
         std::unique_ptr<anim::AnimWorld> secondary;
         std::vector<ObjectId> pending_clone_deaths;  // request order
+        std::vector<uint8_t> pending_clone_kinds;    // parallel: the killing damage kind of each
         ObjectId max_seen = INT32_MIN;               // highest store id considered for model creation
         ObjectId max_seen_secondary = INT32_MIN;
         std::vector<ObjectId> event_rows;            // rows whose model has event clips (ascending)
@@ -200,7 +211,8 @@ private:
     bool model_has_events(const anim::AnimModel* m);
     ModeWorld& mode_world(const GameMode& mode);
     const ModeWorld* find_mode_world(const GameMode& mode) const;
-    anim::DeathResult start_death(ModeWorld& mw, const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind = 1);
+    anim::DeathResult start_death(ModeWorld& mw, const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind = 1,
+                                  objects::TypeIndex type_override = objects::kNone);
     struct TypeEntry {
         anim::TypeAnimParams params;
         const anim::AnimModel* model = nullptr;

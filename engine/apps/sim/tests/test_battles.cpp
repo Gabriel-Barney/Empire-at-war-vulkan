@@ -1977,6 +1977,9 @@ struct AnimRun {
     uint32_t max_detached = 0, max_corpses = 0, flinch_seen = 0, muzzles_seen = 0, hp_muzzles_seen = 0, foot_events = 0, impact_events = 0;
     uint64_t events_digest = 0;  // per-tick events (id, name, bone, position bits)
     std::vector<std::string> battles;
+    // refix t01 / t03: death clone objects (+0x3a0 |= 0xc0) seen in the tactical store, battle clone count, searches
+    uint32_t max_dying = 0, clone_objects = 0, dying_found = 0;
+    bool corpse_path_trooper = false, corpse_path_trooper_k4 = true, corpse_path_frigate = true;
 };
 
 AnimRun run_anim_campaign(const Data& d, bool land, int32_t workers, uint64_t ticks) {
@@ -2034,7 +2037,26 @@ AnimRun run_anim_campaign(const Data& d, bool land, int32_t workers, uint64_t ti
     StateHasher ev_hash;
     for (uint64_t t = 0; t < ticks; ++t) {
         host.tick_once();
+        if (const TacticalBattle* b = battles.battle()) {
+            out.clone_objects = std::max(out.clone_objects, b->stats().death_clones);
+            const uint32_t trooper_type = type_of(d, "S10_Trooper");
+            out.corpse_path_trooper = b->death_clone_corpse_path(trooper_type, static_cast<int32_t>(trooper_type), 1);
+            out.corpse_path_trooper_k4 = b->death_clone_corpse_path(trooper_type, static_cast<int32_t>(trooper_type), 4);
+            out.corpse_path_frigate =
+                b->death_clone_corpse_path(type_of(d, "S10_Frigate"), static_cast<int32_t>(type_of(d, "S10_Frigate_Death_Clone")), 1);
+        }
         if (TacticalMode* tm = host.tactical()) {
+            {  // death clones: in the store (find by id, owner), dying, never in the active searches
+                const objects::ObjectStore& st = tm->primary();
+                uint32_t dying = 0;
+                for (objects::ObjectHandle h : st.all_objects()) {
+                    if (!st.alive(h) || !st.dying(h)) continue;  // (a clone the anim removed is dead until the flush)
+                    ++dying;
+                    CHECK(!st.active(h) && st.find(st.id(h)) == h);
+                    for (objects::ObjectHandle o : st.find_all_of_type(st.type(h))) out.dying_found += o == h ? 1u : 0u;
+                }
+                out.max_dying = std::max(out.max_dying, dying);
+            }
             out.muzzles_seen += static_cast<uint32_t>(animation.muzzles(*tm).size());
             for (const SimAnimation::Muzzle& mz : animation.muzzles(*tm)) out.hp_muzzles_seen += mz.hardpoint >= 0 ? 1u : 0u;
             for (const SimAnimation::FrameEvent& e : animation.events(*tm)) {
@@ -2087,6 +2109,8 @@ void test_anim_battles() {
         std::printf("  %s + anim: turns %u, muzzle-frames %u (flashes %u), events %llu (foot plants %u, impacts %u), digest %016" PRIx64 "\n",
                     land ? "land" : "space", s.turns, a.muzzles_seen, s.muzzle_flashes, static_cast<unsigned long long>(s.events), a.foot_events,
                     a.impact_events, a.events_digest);
+        std::printf("  %s + anim: death clone objects %u, max dying in the store %u\n", land ? "land" : "space", a.clone_objects, a.max_dying);
+        CHECK(a.dying_found == 0);  // find_all_of_type skips dying objects
         bool has_anim_system = false;
         for (const std::string& n : a.crc.systems) has_anim_system = has_anim_system || n == "anim";
         CHECK(has_anim_system && !a.battles.empty());
@@ -2097,11 +2121,17 @@ void test_anim_battles() {
             // Foot plants from the moving troopers' MOVE clip, impacts from the DIE clip (detached corpses too),
             // muzzle flashes from their blasters.
             CHECK(a.foot_events > 0 && a.impact_events > 0 && a.muzzles_seen > 0 && s.muzzle_flashes > 0);
+            // refix t03: S10_Trooper (Infantry, no HIDE_WHEN_FOGGED) clones itself on the corpse path: no clone object,
+            // the dying row plays the clone's death (clone_deaths); key 4 (Force lightning) and ships keep the object.
+            CHECK(a.corpse_path_trooper && !a.corpse_path_trooper_k4 && !a.corpse_path_frigate);
+            CHECK(s.clone_deaths > 0);
         } else {
-            // Star base (no model) + Remove_Upon_Death -> removed at once; frigates / corvettes: the death clone
-            // plays DIE and is removed (store object destroyed) after 2 s + 1 s.
-            CHECK(s.removed_at_death > 0);
+            // Frigates / corvettes: the death clone plays DIE and is removed (store object destroyed) after 2 s + 1 s.
+            // (refix t01: the star base's own-type clone - no model, Remove_Upon_Death: removed at once - is made on the
+            // battle's last tick, which ends the battle before the anim sync starts clone deaths: removed_at_death 0.)
             CHECK(s.clone_deaths > 0 && s.corpses_removed > 0);
+            // refix t01: the clones are store objects flagged dying / removing until their death sequence removes them.
+            CHECK(a.clone_objects > 0 && a.max_dying > 0);
             // Ships fire from hardpoints: their muzzle records carry the HardPoints index.
             CHECK(a.hp_muzzles_seen > 0);
         }

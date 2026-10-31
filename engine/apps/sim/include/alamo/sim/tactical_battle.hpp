@@ -54,6 +54,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -755,6 +756,10 @@ public:
     void write_part(SavePart p, ByteWriter& w) const;
     bool read_part(SavePart p, ByteReader& r);
 
+    // refix t03 (S9_DEATH_CLONE_SHIELDS.md §1.6 [L]): true when the death clone of a dying_type unit takes the infantry
+    // corpse path (no clone object; the dying unit's corpse row plays the clone type) instead of a store object.
+    bool death_clone_corpse_path(uint32_t dying_type, int32_t clone_type, int32_t key) const;
+
 private:
     template <class Ar, class Self>
     static void state_io(Ar& a, Self& b);  // tactical_battle_save.cpp
@@ -845,6 +850,9 @@ private:
     void consume_events(TacticalMode& mode);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
+    // refix t01 / t03: Die step 8's clone object (flags 0xc0), and the infantry corpse-path test (S9 §1.6).
+    objects::ObjectHandle spawn_death_clone(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
+    mutable std::optional<uint64_t> infantry_category_;  // GameObjectCategoryType "Infantry" bit (lazy; ~0 = unknown)
     void expire_objects(TacticalMode& mode);
     std::vector<objects::ObjectId> owned_ids(const TacticalMode& mode, uint8_t player, const std::vector<uint32_t>& wire) const;
     // --- [port: Gabriel] queueable unit actions (tactical_battle.cpp "order queue") ---

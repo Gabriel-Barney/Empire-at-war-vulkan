@@ -339,7 +339,7 @@ std::vector<ObjectHandle> ObjectStore::objects_newest_first() const {
 std::vector<ObjectHandle> ObjectStore::find_all_of_type(TypeIndex type) const {
     std::vector<ObjectHandle> out;
     for (size_t i = all_.size(); i-- > 0;)
-        if (alive(all_[i]) && type_[all_[i].slot()] == type) out.push_back(all_[i]);
+        if (active(all_[i]) && type_[all_[i].slot()] == type) out.push_back(all_[i]);
     return out;
 }
 

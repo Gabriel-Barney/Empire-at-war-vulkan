@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <utility>
 #include <string>
 #include <string_view>
@@ -152,6 +153,10 @@ struct SpecialAbilityDesc {
     float damage_multiplier = 1.0f;       // Damage_Multiplier (Leech_Shields / Blast) [L: application not traced]
     float max_damage_per_victim = 0.0f;   // Max_Damage_Per_Victim (Shield_Flare)
     float damage_arc = 0.0f;              // Damage_Arc_In_Degrees (flame thrower)
+    // Infection (refix t02; Damage_Per_Second above, Duration_Of_Infection -> duration_secs)
+    float distance_to_infect = 0.0f;      // Distance_To_Infect
+    float seconds_to_infect = 0.0f;       // Seconds_To_Infect
+    uint64_t infection_categories = 0;    // Infection_CategoryMask
     // Enable_Ability / Cancel_Special
     uint32_t ability_name_crc = 0;        // Ability_Name / Special_Ability_Name
     // Permanent_Weapon_Swap
@@ -226,5 +231,8 @@ const UnitAbilityRecord* find_record(const AbilityObjectDesc& d, uint8_t type);
 // Fills UnitDesc::abilities (the first two Unit_Abilities_Data entries, Mod_Multiplier system B)
 // by appending their combat descriptors to `cd.abilities`.
 void link_combat_abilities(const AbilityObjectDesc& d, combat::CombatData& cd, combat::UnitDesc& ud);
+// refix t02: UnitDesc::infection from the type's first Infection_Ability special (`specials` = AbilityData::specials, the
+// pool d.specials indexes); no such special -> has = false.
+void link_infection(const AbilityObjectDesc& d, std::span<const SpecialAbilityDesc> specials, combat::UnitDesc& ud);
 
 }  // namespace alamo::tactical::abilities
