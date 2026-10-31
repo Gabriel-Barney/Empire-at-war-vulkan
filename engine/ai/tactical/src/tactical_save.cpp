@@ -647,6 +647,7 @@ bool TacticalPerception::read(ByteReader& r) {
     unit_handles_ = std::move(uh);
     zone_handles_ = std::move(zh);
     cell_handles_ = std::move(ch);
+    rebuild_zone_name_handles();  // TACTICAL_GAPS 6.8 (derived from the zones and the targets in handle order)
     return true;
 }
 

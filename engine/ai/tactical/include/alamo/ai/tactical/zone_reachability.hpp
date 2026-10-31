@@ -72,7 +72,9 @@ public:
     uint32_t size() const { return static_cast<uint32_t>(zones_.size()); }
     const HintZone& zone(uint32_t i) const { return zones_[i]; }
     int32_t index_of_id(uint32_t id) const;
-    int32_t index_of_name(std::string_view name) const;  // case-insensitive
+    // First zone with this name, case-insensitive. Diagnostics only: 11 shipped land maps repeat a zone name and the
+    // original links zones by 02 id, never by name (TACTICAL_GAPS 6.8); use index_of_id for links.
+    int32_t index_of_name(std::string_view name) const;
     // PROVISIONAL [L] locator (the land mode's position -> zone slot +0x180 is not traced): the zone
     // with the nearest centre in XY (squared distance, float); ties -> lowest index; -1 if no zones.
     int32_t nearest_zone(float x, float y) const;

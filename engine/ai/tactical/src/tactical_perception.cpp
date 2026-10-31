@@ -342,7 +342,7 @@ struct Eval {
             case Root::Enemy: n = {Ev::Player, ctx.enemy}; return w.is_player(ctx.enemy);
             case Root::Human: n = {Ev::Player, ctx.human}; return w.is_player(ctx.human);
             case Root::Target: case Root::Location: {
-                const int32_t h = root == Root::Target ? ctx.target : ctx.location;
+                const int32_t h = p.evaluator_handle(root == Root::Target ? ctx.target : ctx.location);  // 6.8 shared name id
                 const PerceptionTarget* t = target_of(h);
                 if (!t) return false;
                 switch (t->kind) {
@@ -417,10 +417,10 @@ struct Eval {
             key.eval_a = n.a;
             key.leaf = static_cast<uint16_t>(l);
             key.self = ctx.self;
-            key.target = ctx.target;
+            key.target = p.evaluator_handle(ctx.target);  // 6.8: duplicate-named zones share the binding
             key.enemy = ctx.enemy;
             key.human = ctx.human;
-            key.location = ctx.location;
+            key.location = p.evaluator_handle(ctx.location);
             key.params = canonical_params(params, hint);
             if (p.cache().lookup(key, life, w.frame, out)) return true;
         }
@@ -1016,6 +1016,17 @@ uint64_t default_category_mask(std::string_view name) {
     return v ? static_cast<uint64_t>(*v) : 0;
 }
 
+// TACTICAL_GAPS 6.8 name-id match [M: ASCII case-insensitive].
+bool zone_names_equal(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const char x = (a[i] >= 'A' && a[i] <= 'Z') ? static_cast<char>(a[i] - 'A' + 'a') : a[i];
+        const char y = (b[i] >= 'A' && b[i] <= 'Z') ? static_cast<char>(b[i] - 'A' + 'a') : b[i];
+        if (x != y) return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------------- resolver
@@ -1071,6 +1082,17 @@ void TacticalPerception::init(TacticalMode mode, const TacticalAiConstants& c, c
     zones_.assign(zones.begin(), zones.end());
     zone_cells_.assign(zones_.size(), {});
     for (size_t i = 0; i < zones_.size(); ++i) grid_.zone_cells(zones_[i], zone_cells_[i]);
+    // TACTICAL_GAPS 6.8: the name id a zone's evaluator is registered under (a repeated name shares the first zone's).
+    zone_name_first_.assign(zones_.size(), -1);
+    for (size_t i = 0; i < zones_.size(); ++i) {
+        zone_name_first_[i] = static_cast<int32_t>(i);
+        for (size_t j = 0; j < i; ++j)
+            if (zone_names_equal(zones_[j].name, zones_[i].name)) {
+                zone_name_first_[i] = static_cast<int32_t>(j);
+                break;
+            }
+    }
+    zone_name_handle_.assign(zones_.size(), -1);
     targets_.clear();
     unit_handles_.clear();
     zone_handles_.clear();
@@ -1115,7 +1137,35 @@ int32_t TacticalPerception::register_zone(int32_t zone) {
     const auto h = static_cast<int32_t>(targets_.size());
     targets_.push_back(t);
     zone_handles_.emplace_back(zone, h);
+    // 6.8: the first registration under a name id keeps it; later zones with that name evaluate through it.
+    if (const int32_t f = first_zone_with_name(zone); f >= 0 && zone_name_handle_[static_cast<size_t>(f)] < 0)
+        zone_name_handle_[static_cast<size_t>(f)] = h;
     return h;
+}
+
+int32_t TacticalPerception::first_zone_with_name(int32_t zone) const {
+    if (zone < 0 || static_cast<size_t>(zone) >= zone_name_first_.size()) return -1;
+    return zone_name_first_[static_cast<size_t>(zone)];
+}
+
+int32_t TacticalPerception::evaluator_handle(int32_t handle) const {
+    if (!is_target(handle)) return handle;
+    const PerceptionTarget& t = targets_[static_cast<size_t>(handle)];
+    if (t.kind != PerceptionTarget::Kind::LandZone) return handle;
+    const int32_t f = first_zone_with_name(t.zone);
+    if (f < 0) return handle;
+    const int32_t e = zone_name_handle_[static_cast<size_t>(f)];
+    return e >= 0 ? e : handle;
+}
+
+void TacticalPerception::rebuild_zone_name_handles() {
+    zone_name_handle_.assign(zones_.size(), -1);
+    for (size_t i = 0; i < targets_.size(); ++i) {
+        const PerceptionTarget& t = targets_[i];
+        if (t.kind != PerceptionTarget::Kind::LandZone) continue;
+        if (const int32_t f = first_zone_with_name(t.zone); f >= 0 && zone_name_handle_[static_cast<size_t>(f)] < 0)
+            zone_name_handle_[static_cast<size_t>(f)] = static_cast<int32_t>(i);
+    }
 }
 
 int32_t TacticalPerception::register_cell(int32_t x, int32_t y, const Rect2& rect) {

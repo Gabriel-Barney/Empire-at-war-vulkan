@@ -18,6 +18,16 @@
 //   <unit>.Owner                  -> the player evaluator of the owner AT REGISTRATION [M: not re-pointed]
 //   <unit>.Type.IsType            -> 1 iff the object's type name is one of Parameter_Type [L]
 //   <land location>.Hints.<name>  -> PerceptionWorld::zone_hint (absent: 0) [L: value rule open item 2]
+//
+// Duplicate zone names (TACTICAL_GAPS 6.8, A1 t03) [H; M for "evaluation looks the evaluator up by the bound id"]:
+// every hint zone gets its own region target (own handle, centre, reachability, list position), but the
+// original registers location evaluators under the zone's NAME id and refuses a second registration, so a
+// zone whose name repeats an earlier zone's evaluates through the evaluator of the first REGISTERED zone with
+// that name (its force sums, cells, centre, hints and leaf-cache entries). Port: evaluator_handle() maps a
+// zone handle to that handle; the resolver binds Variable_Target / Variable_Location through it. Name match =
+// ASCII case-insensitive [M: the name table's comparison is not traced; shipped repeats have identical case].
+// Zone links stay by 02 id; nothing resolves zones by name (the original's post-load relink to the first zone
+// by name, 0x6b9580, is not reproduced: N1 saves restore region targets by zone index).
 // A token that is not registered on the evaluator it is applied to fails the evaluation.
 //
 // Leaf cache (1.2): every leaf goes through LeafCache with its lifetime from section 3 (seconds; -1
@@ -125,6 +135,12 @@ public:
     // Every target of the list, in list order; handles[i] for targets()[i].
     void register_targets(const PerceptionWorld& w, const TacticalTargetList& list, std::vector<int32_t>* handles = nullptr);
     int32_t handle_for(const TacticalTarget& t) const;  // -1 if not registered
+    // The handle whose evaluator answers for `handle`: for a land zone, the first registered zone with the same name
+    // (TACTICAL_GAPS 6.8); every other handle (units, cells, unique zone names, unknown handles) maps to itself.
+    int32_t evaluator_handle(int32_t handle) const;
+    // First zone index (list order) whose name equals zone `zone`'s (ASCII case-insensitive); `zone` itself if unique,
+    // -1 for an index outside the zone list.
+    int32_t first_zone_with_name(int32_t zone) const;
     int32_t handle_of_object(int32_t object_id) const;
     void on_object_destroyed(int32_t object_id);         // releases the unit evaluator (handle kept)
     size_t target_count() const { return targets_.size(); }
@@ -163,6 +179,9 @@ private:
     std::vector<PerceptionTarget> targets_;
     std::vector<std::pair<int32_t, int32_t>> unit_handles_;  // sorted (object id, handle); lookup only
     std::vector<std::pair<int32_t, int32_t>> zone_handles_;  // (zone, handle)
+    std::vector<int32_t> zone_name_first_;                    // zone -> first zone with an equal name (init)
+    std::vector<int32_t> zone_name_handle_;                   // first-of-name zone -> first registered handle, -1
+    void rebuild_zone_name_handles();                         // zone_name_handle_ from targets_ in handle order
     std::vector<std::pair<int64_t, int32_t>> cell_handles_;  // ((x << 32) | y, handle)
     mutable LeafCache cache_;
     TacticalScriptEvaluator script_;

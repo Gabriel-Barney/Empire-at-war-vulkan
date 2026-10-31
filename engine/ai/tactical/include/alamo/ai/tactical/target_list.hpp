@@ -94,7 +94,9 @@ public:
     size_t size() const { return targets_.size(); }
     const TacticalTarget& operator[](size_t i) const { return targets_[i]; }
     int32_t find_object(int32_t object_id) const;     // index or -1
-    // Region by name, case-insensitive (the post-load relink 0x6b9580 matches zones this way).
+    // First region with this name, case-insensitive (as the original's post-load relink 0x6b9580, which collapses
+    // duplicate-named zones onto the first, TACTICAL_GAPS 6.8). Diagnostics only: nothing relinks by name in the port
+    // (N1 saves keep each region's zone index).
     int32_t find_region(std::string_view name) const;
     bool is_registered(int32_t object_id) const;
 

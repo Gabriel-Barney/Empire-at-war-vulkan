@@ -677,6 +677,41 @@ static void test_tokens() {
 // Script_<File>.Evaluate (AI_GALACTIC_2 §4.4): without a hook every Script_ reference fails the evaluation; with one
 // the hook gets the context (Self, Target handle) and the reference's parameters in order, and its value / failure is
 // the leaf's (no cache: every evaluation calls it again).
+// A1 t03 (TACTICAL_GAPS 6.8): a zone repeating an earlier zone's name (any case) keeps its own handle and target, but
+// evaluates through the evaluator of the first registered zone with that name; save / load keeps the mapping.
+static void test_duplicate_zone_names() {
+    Fixture f;
+    f.zones[3].name = "ZONE2";  // repeats zone 2's name ("Zone2") in another case
+    TacticalAiConstants c;
+    f.p.init(TacticalMode::Land, c, f.w.map, 4, f.zones, test_config());
+    for (const PerceptionObject& o : f.w.objects) f.p.grid().register_object(f.w, o.id, 1);
+    const int32_t h3 = f.p.register_zone(3);  // the later zone registered first: it owns the shared name id
+    const int32_t h2 = f.p.register_zone(2);
+    const int32_t h4 = f.p.register_zone(4);
+    CHECK(h3 != h2 && f.p.target(h2).zone == 2 && f.p.target(h3).zone == 3);
+    CHECK(f.p.first_zone_with_name(3) == 2 && f.p.first_zone_with_name(2) == 2 && f.p.first_zone_with_name(4) == 4);
+    CHECK(f.p.first_zone_with_name(9) == -1);
+    CHECK(f.p.evaluator_handle(h2) == h3 && f.p.evaluator_handle(h3) == h3 && f.p.evaluator_handle(h4) == h4);
+    CHECK(f.p.evaluator_handle(-1) == -1 && f.p.evaluator_handle(999) == 999);
+    // zone 2's tokens read zone 3's evaluator (its hints, its centre for distances)
+    f.w.zone_hint = [](int32_t z, std::string_view n) { return (z == 3 && iequal(n, "High_Ground")) ? 1.0 : 0.0; };
+    CHECK(f.val("Variable_Target.Hints.High_Ground", 0, h2) == 1.0);
+    CHECK(f.val("Variable_Target.Hints.High_Ground", 0, h4) == 0.0);
+    CHECK(f.val("Variable_Target.DistanceToNearestEnemy", 0, h2) == f.val("Variable_Target.DistanceToNearestEnemy", 0, h3));
+    CHECK(f.val("Variable_Target.DistanceToNearestEnemy", 0, h2) != f.val("Variable_Target.DistanceToNearestEnemy", 0, h4));
+    // save / load: the handles keep their zones and the shared evaluator
+    ByteWriter sw;
+    f.p.write(sw);
+    TacticalPerception q;
+    q.init(TacticalMode::Land, c, f.w.map, 4, f.zones, test_config());
+    ByteReader sr(sw.bytes());
+    CHECK(q.read(sr) && sr.done());
+    CHECK(q.evaluator_handle(h2) == h3 && q.evaluator_handle(h3) == h3 && q.evaluator_handle(h4) == h4);
+    // unique names: every zone is its own evaluator
+    Fixture g;
+    CHECK(g.p.evaluator_handle(g.h_zone2) == g.h_zone2 && g.p.evaluator_handle(g.h_outside) == g.h_outside);
+}
+
 static void test_script_hook() {
     Fixture f;
     double v = 0;
@@ -1168,6 +1203,7 @@ int main(int argc, char** argv) {
     test_grid_geometry();
     test_grid_projection();
     test_tokens();
+    test_duplicate_zone_names();
     test_script_hook();
     test_zone_threat();
     test_lua_functions();
