@@ -117,6 +117,14 @@ Useful options:
 | `--ui-method post` | `post` (default): PostMessage to the game window, no focus needed. `input`: SendInput. While in a battle the real cursor is parked at client (960,150), because the game edge-scrolls on the real cursor position. |
 | `--drive-keep-open` | Leaves the game running after the steps. |
 | `--probe-mod admonitor` | Starts the game with `MODPATH=` a mod built under `out\mods\g1_admonitor` (never in the game folder): `STARBASES.XML` from `Data\config.meg` with `Admonitor_Star_Destroyer` added to `Skirmish_Empire_Star_Base_1`, so Thrawn's SD can be built at station level 1. |
+| `--probe-mod admonitor4` | Same place; `Skirmish_Empire_Star_Base_1` becomes a copy of the level-4 station, which offers the Admonitor as shipped. |
+| `--probe-mod admonitor_spawn` | Same place; the level-1 station's garrison (`Starting_Spawned_Units_Tech_0`) gets one `Admonitor_Star_Destroyer`. Tried 2026-10-31: the ship was not launched. |
+
+> **2026-10-31: bought units never arrive in this install** (RENDER.md §7.3, g1f t01). In every driven run a human
+> player's tactical space purchase is paid and finishes but no unit appears (any map, faction, frame rate or input
+> method tried). So scene K cannot frame the Admonitor until a hand-played check (roadmap g1f t06) shows bought ships
+> arriving. To look around by hand in a kept-open game: `--drive KX --drive-keep-open`, then
+> `g1_ui.py --method post shot|click|key|wheel ...`, and `g1.py quit` when done.
 | `--game-dir` | Overrides game detection. Otherwise the order is `ALAMO_GAME_DIR`, then `F:\SteamLibrary\…`, then the Steam library folders. |
 
 Results:

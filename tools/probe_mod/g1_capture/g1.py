@@ -541,8 +541,11 @@ class Kit:
                      normally it needs space station level 4), so a short Kuat skirmish can build it at once.
                      (g1f: the item is paid and finishes, but no ship ever appears on a level-1 station.)
           admonitor4: Skirmish_Empire_Star_Base_1 is replaced by a copy of Skirmish_Empire_Star_Base_4 (renamed), i.e.
-                     the start station is a level-4 station that offers Admonitor_Star_Destroyer as the game ships it."""
-        if name not in ("admonitor", "admonitor4"):
+                     the start station is a level-4 station that offers Admonitor_Star_Destroyer as the game ships it.
+          admonitor_spawn: Skirmish_Empire_Star_Base_1 launches one Admonitor_Star_Destroyer from its garrison
+                     (SPAWN_SQUADRON starting list), so the ship appears without the tactical build path, which
+                     never delivered a human player's unit in the 2026-10-30/31 runs."""
+        if name not in ("admonitor", "admonitor4", "admonitor_spawn"):
             raise G1Exit(1, "unknown probe mod " + name)
         sys.path.insert(0, os.path.join(ROOT, "tools", "meg"))
         import megtool
@@ -563,6 +566,13 @@ class Kit:
                 raise G1Exit(3, "Skirmish_Empire_Star_Base_1/4 blocks not in the expected form")
             blk = b4.group(0).replace('Name="Skirmish_Empire_Star_Base_4"', 'Name="Skirmish_Empire_Star_Base_1"', 1)
             new = txt[:b1.start()] + blk + txt[b1.end():]
+        elif name == "admonitor_spawn":
+            m = re.search(r'<StarBase Name="Skirmish_Empire_Star_Base_1">.*?(</Tactical_Buildable_Objects_Multiplayer>)', txt, re.S)
+            if not m or "Spawned_Units" in m.group(0):
+                raise G1Exit(3, "Skirmish_Empire_Star_Base_1 not in the expected form")
+            nl = "\r\n" if "\r\n" in m.group(0) else "\n"
+            new = (txt[:m.end()] + nl + "\t\t<Starting_Spawned_Units_Tech_0>Admonitor_Star_Destroyer, 1</Starting_Spawned_Units_Tech_0>"
+                   + nl + "\t\t<Reserve_Spawned_Units_Tech_0>Admonitor_Star_Destroyer, 0</Reserve_Spawned_Units_Tech_0>" + txt[m.end():])
         else:
             m = re.search(r'(<StarBase Name="Skirmish_Empire_Star_Base_1">.*?ES_Level_Two_Starbase_Upgrade,)', txt, re.S)
             if not m or "Admonitor" in m.group(1):
@@ -577,7 +587,8 @@ class Kit:
         if not path:
             raise G1Exit(1, "no space-free 8.3 path for " + mod)
         self.status["probe_mod"] = {"name": name, "dir": mod, "modpath": path,
-                                    "change": ("Skirmish_Empire_Star_Base_1 := copy of Skirmish_Empire_Star_Base_4" if name == "admonitor4" else "Skirmish_Empire_Star_Base_1 += Admonitor_Star_Destroyer"),
+                                    "change": {"admonitor4": "Skirmish_Empire_Star_Base_1 := copy of Skirmish_Empire_Star_Base_4",
+                                               "admonitor_spawn": "Skirmish_Empire_Star_Base_1 garrison += Admonitor_Star_Destroyer x1"}.get(name, "Skirmish_Empire_Star_Base_1 += Admonitor_Star_Destroyer"),
                                     "starbases_sha": sha(os.path.join(xml_dir, "STARBASES.XML"))}
         self.step("probe mod %s at %s (MODPATH=%s)" % (name, mod, path))
         return path
@@ -920,8 +931,8 @@ def main(argv):
     ap.add_argument("--skip-steam-check", action="store_true")
     ap.add_argument("--start-steam", action="store_true")
     ap.add_argument("--no-analyze", action="store_true")
-    ap.add_argument("--probe-mod", default="", choices=["", "admonitor", "admonitor4"],
-                    help="start the game with a probe mod built under out\\mods (admonitor: Thrawn's SD at station level 1)")
+    ap.add_argument("--probe-mod", default="", choices=["", "admonitor", "admonitor4", "admonitor_spawn"],
+                    help="start the game with a probe mod built under out\\mods (admonitor: Thrawn's SD buildable at station level 1; admonitor_spawn: the level-1 station launches it from its garrison)")
     ap.add_argument("--drive", default="", help="drive the menus through these scenes.json scenes, e.g. K or K,E")
     ap.add_argument("--ui-method", default="post", choices=["input", "post"], help="input injection method (post: PostMessage to the game window, no focus needed; input: SendInput)")
     ap.add_argument("--drive-keep-open", action="store_true", help="do not quit the game after the driven scenes")
