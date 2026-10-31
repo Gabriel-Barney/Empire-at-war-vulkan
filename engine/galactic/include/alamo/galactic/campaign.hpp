@@ -758,8 +758,11 @@ public:
     bool planet_destroy_core(PlanetIndex planet, int32_t destroyer, int32_t event_value = 0);
     // Victory 7 leader test (§6; 0x42a7b0 / 0x707670): the victim = the planet's owner (D +0x6c); its faction's
     // Faction_Leader must be a team member (Company_Units) of an object on the planet's surface (D +0xe0). Only members
-    // are compared, not the listed object itself; orbit fleets do not count. [port] the condition record's optional
-    // leader-name list is not modelled (the claim is granted by the side's condition list, victory.hpp).
+    // are compared, not a company object itself; orbit fleets do not count. [port] (refix t06) a bare ground unit (a
+    // type without Company_Units) is its own one-unit transport, so a surface unit of the leader type itself counts.
+    // [M] members one level deep only; exact type match (variants such as Tyber_Zann_Passenger do not count).
+    // [port] the condition record's optional leader-name list is not modelled (the claim is granted by the side's
+    // condition list, victory.hpp).
     bool super_weapon_leader_hit(PlanetIndex planet) const;
     // Tactical super weapon, galactic part of state 9 (TSW_PLANET_DESTROY §4 steps 7-9), called by the battle host in the
     // tactical frame of the shot: leader test -> claim 7 (countdown 30) for `tsw_owner`, then planet_destroy_core(value

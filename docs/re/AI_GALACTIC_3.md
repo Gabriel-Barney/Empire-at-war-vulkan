@@ -389,7 +389,7 @@ Static analysis cannot give the per-frame total: it depends on the candidate pop
 5. **A2 port:** K = 1.0, not 0 (§8).
 6. **GALACTIC_ECONOMY §5.1:** 0x3fc750 is the delayed-spawn service; build queues and the AI market run in ProductionBehavior::Service during the object loop (§5).
 7. **AI_GALACTIC_TOKENS open item 1 / AI_GALACTIC_2 open item 1:** closed: failure leaves the output untouched and propagates (§7.1).
-8. **§3.5 here, AI_GALACTIC_2 §2.1 ("surface usable"), AI_GALACTIC §2.8 ("restricted planet"):** 0x3fa420 is `Is_Planet_Revealed`, not a surface test (A2GAL_READINGS §2.3, 2026-10-31; §3.5 corrected in place).
+8. **§3.5 here, AI_GALACTIC_2 §2.1 ("surface usable"), AI_GALACTIC §2.8 ("restricted planet"):** 0x3fa420 is `Is_Planet_Revealed`, not a surface test (A2GAL_READINGS §2.3, 2026-10-31; all three corrected in place).
 
 ---
 
