@@ -217,12 +217,10 @@ struct ProjectileDesc {
     float combat_mod_seconds = 0.0f, combat_mod_value = 0.0f;
     uint64_t combat_mod_mask = 0;
     // ---- refixf t01: ROCKET / MPTL_ROCKET spline flight (S9_DEATH_CLONE_SHIELDS.md §2.4, rocket.hpp) ----
-    // The XML parses the three distances as ints (xml_field_tables: type +0x1fec / +0x1ff0 / +0x1ff4); stored as floats.
+    // The three distances: type +0x1fec / +0x1ff0 / +0x1ff4 (schema "int", read by the float converter 0x8); floats here.
     float rocket_straight_distance = 0.0f;  // Projectile_Rocket_Straight_Distance (space initial plan)
-    // Projectile_Rocket_Curve_Distance. [port] < 0 = not provided by the host (the default until the catalog reads it):
-    // the rocket keeps the pre-refixf straight flight. >= 0 = the spline flight (0 = retail: the path is never built and
-    // the rocket expires on its first flight step).
-    float rocket_curve_distance = -1.0f;
+    // Projectile_Rocket_Curve_Distance. Every ROCKET / MPTL_ROCKET flies the spline; 0 (the XML default) builds no legs.
+    float rocket_curve_distance = 0.0f;
     float rocket_curve_offset = 0.0f;              // Projectile_Rocket_Curve_Offset
     bool target_point_on_terrain = false;          // Projectile_Target_Point_On_Terrain (type +0x7f)
     bool explode_when_reached_target_radius = false;  // Explode_When_Reached_Target_Radius (type +0x7e)
@@ -1255,8 +1253,6 @@ private:
     // S9 t05: Missile_Shield_Deflect_Test (0x4c6e30): true + the outward direction for the first qualifying emitter
     // (ascending id) whose sphere holds the projectile.
     bool shield_away(const Projectile& p, Vec3& away) const;
-    // [port] legacy stand-in for rockets whose type has no curve data (ProjectileDesc::rocket_curve_distance < 0).
-    void rocket_straight_replan(Projectile& p);
     // refixf t01: one flight step of a spline rocket (0x4cfc40, §2.4.2), serial commit phase.
     void rocket_step(uint32_t i, uint32_t frame, SimRng& rng);
     bool spline_rocket(const ProjectileDesc& pd) const;

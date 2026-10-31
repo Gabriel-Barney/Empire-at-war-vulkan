@@ -225,7 +225,9 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             return get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done();
         case SavePart::Combat:
             if (!all_saveable(combat_.get(), &l1_weather_)) return false;
-            return get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done();
+            if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done())) return false;
+            attach_rocket_terrain();  // refixf t01: the host terrain is not part of the save
+            return true;
         case SavePart::Abilities:
             if (!all_saveable(abilities_.get(), &l1_sw_, &l1_fields_)) return false;
             return get_system(r, abilities_.get()) && get_system(r, &l1_sw_) && get_system(r, &l1_fields_) && r.done();

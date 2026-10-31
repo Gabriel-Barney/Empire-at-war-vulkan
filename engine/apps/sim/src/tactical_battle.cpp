@@ -602,6 +602,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
             for (uint32_t q = 0; q < players; ++q)
                 if (q != p) combat_->set_enemy(static_cast<int32_t>(p), static_cast<int32_t>(q), false);
     combat_->reserve(256, 2048, 32, 256);
+    attach_rocket_terrain();  // refixf t01
     abilities_ = std::make_unique<ta::AbilitySystem>(*combat_, tables_->abilities, catalog_->ability_config(space_, cfg_.skirmish));
     abilities_->reserve(256, 512);
     // --- P4 tactical: campaign Black Market gate, before any unit is added (Active_By_Default / automatic specials) ---
@@ -630,6 +631,28 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     space_obstacles_sync(mode);  // refixf t02: the starbase / structures as space static entries (MOVEMENT §2.2)
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants (land)
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
+}
+
+void TacticalBattle::attach_rocket_terrain() {
+    // refixf t01 (S9_DEATH_CLONE_SHIELDS.md §2.4.5 mode 1, §2.4.6): land spline rockets follow the heightmap and stay
+    // inside its extent box (0x1320d0: centre (W c / 2, H c / 2), half sizes W c / 2, H c / 2). [M] W c, H c are taken as
+    // the port grid's covered extent ((width - 1) x kVertexSpacing, origin 0: the frame of Terrain::sample_height).
+    // Space battles and maps without a heightmap: flat ground at z 0, no box. Not saved: re-attached after a load.
+    if (!combat_) return;
+    tc::RocketTerrain rt;
+    const terrain::Terrain& tr = map_.terrain;
+    if (!space_ && tr.present && tr.width >= 2 && tr.height >= 2) {
+        const terrain::Terrain* tp = &tr;
+        rt.height = [tp](float x, float y) { return tp->sample_height(x, y); };
+        const float w = static_cast<float>(tr.width - 1) * terrain::kVertexSpacing;
+        const float h = static_cast<float>(tr.height - 1) * terrain::kVertexSpacing;
+        rt.has_box = true;
+        rt.cx = 0.5f * w;
+        rt.cy = 0.5f * h;
+        rt.hx = 0.5f * w;
+        rt.hy = 0.5f * h;
+    }
+    combat_->set_rocket_terrain(std::move(rt));
 }
 
 Vec3 TacticalBattle::slot_position(uint8_t side, uint32_t mask) {
