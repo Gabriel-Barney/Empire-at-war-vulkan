@@ -66,7 +66,9 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 6. When a task finishes, update the roadmap (`roadmap_store.py write`, see `docs/ROADMAP_PROTOCOL.md`) and the current phase status (project docs
    `claude/roadmap.md`, `claude/phase2-status.md`, and `docs/PHASE2.md` here): tick the item, update the
    Mermaid flowchart node, record results and open items. Keep edits minimal and factual. When all tasks in a roadmap group
-   are finished, mark the group `done` on the roadmap in the same update (Gabriel, 2026-10-30). When a finished roadmap
+   are finished, mark the group `done` on the roadmap in the same update (Gabriel, 2026-10-30, 2026-10-31): after closing tasks, re-read
+   each group you touched, and if it has no `todo` task left set `status: done` (and drop its `preset`) in that same write; a group
+   left open with every task closed is a mistake to fix before ending the task. When a finished roadmap
    group gets a follow-up group, give the follow-up a `preset` (recommended model + effort level; see `docs/ROADMAP_PROTOCOL.md`).
 7. In-game probes need Gabriel to launch the game; prepare them under `tools/probe_mod/` with run and cleanup scripts.
 
