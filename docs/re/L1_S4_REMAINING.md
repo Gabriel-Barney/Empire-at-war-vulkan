@@ -676,7 +676,9 @@ setter]. `Cinematic_Hyperspace_In(delay_frames)` (0x574e50, space, 1 number; nee
 +0x24 and vf +0x2b8) → 0x5c9a80: lock +1, leave coordinator, destination := position, start point from
 vf +0x2a0, timer := 25 − delay, hidden, state 0x2c (like state 4 but **no draw, no hold**; SFX at 45,
 finish ≥ 150), so it lands delay + 125 frames after the call. `Resume_Hyperspace_In()` (0x543570)
-clears hold flag 0x140b27d5f, which starts at 0 and has no other writer found → a no-op in 1.121 [M].
+clears hold flag 0x140b27d5f. Correction 2026-10-31 [H]: its writer is 0x2cbb50 (16-bit store at 0x140b27a10 +0x34e /
++0x34f), called with LINK_TACTICAL Param9 by 0x28f590 and on save load (0x52d10): Param9 = 2 sets the hold, so story
+missions with Param9 = 2 keep reinforcements in hyperspace until the script resumes them (BATTLE_TRANSITIONS §2.9.1).
 
 **End-cinematic flag obj +0x3c9**: written only by Lua `In_End_Cinematic(bool)` (0x57ab30), the
 cinematic retreat (:= 1) and the clone path 0x472560; nothing clears it. `Do_End_Cinematic_Cleanup`
@@ -1140,8 +1142,8 @@ GMM predicate 0x28af30 false [M: multiplayer / online]; debug flag 0x140b39070 c
 2. Space fields: exact Take_Damage arguments of an asteroid hit; service cadence of the three field
    behaviours; ability set 0x140b2f2e0 cancelled in nebulae and the exit step 0x39fb40; whether
    combined strings parse in `Find_Nearest_Space_Field`.
-3. Hyperspace: setter of locomotor pack +0x260 (arrival finish) and +0x2b2; writer of hold flag
-   0x140b27d5f; whether the departure kill counts as TACTICAL_DESTROY / stats; driver of the retreat
+3. Hyperspace: setter of locomotor pack +0x260 (arrival finish) and +0x2b2; ~~writer of hold flag
+   0x140b27d5f~~ (0x2cbb50, LINK_TACTICAL Param9 = 2, §3.4); whether the departure kill counts as TACTICAL_DESTROY / stats; driver of the retreat
    counter 0x140b27b64 and whether the arrival min/max globals are sim state (determinism risk, feeds a
    synced draw count).
 4. Garrison: host vf +0xD8 (may occupants fire?); arrival constant 0x140a28bcc; eject locomotor-state

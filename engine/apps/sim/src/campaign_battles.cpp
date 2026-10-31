@@ -1,6 +1,7 @@
 #include "alamo/sim/campaign_battles.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/corruption.hpp"  // S4: corruption missions
@@ -680,6 +681,10 @@ void CampaignBattles::hook(SimHost& host) {
     }
 #ifdef ALAMO_SIM_HAVE_STORY
     if (!battle_) story_linked(host);  // L1/S4 wave 2b: story-forced battles (LINK_TACTICAL)
+    if (pending_) {  // BT §2.9.3: a linked battle is pushed in the hook that started it (the hook after its reward)
+        push_battle(host);
+        return;
+    }
 #endif
     if (!battle_) corruption_prune();  // S4: corruption missions whose conflict was dropped
     if (!battle_ && cm_) {  // REMAINING_GAPS 6.4 [port]: a linked conflict that left the queues without a start (dropped by
@@ -1206,10 +1211,14 @@ void CampaignBattles::story_fog_reward(bool has_param, int32_t value) {
 }
 // --- end fog follow-up ---
 
-// --- L1/S4 wave 2b: story-forced battles. Each new StorySession::linked_tactical() entry (a LINK_TACTICAL reward:
-// Reward_Param1 planet (map name or planet type name), Param2 SPACE / LAND / GROUND, Param3 attacker faction, Param4
-// map, Param5 defender faction [inferred order, story_session.hpp]) queues a conflict at the front of the
-// ConflictManager queue (initiate_space_conflict / land_invade without units); started on a later galactic tick.
+// --- L1/S4 wave 2b: story-forced battles. Each new StorySession::linked_tactical() entry (a LINK_TACTICAL reward,
+// BT §2.9.1: Param1 planet (map name or planet type name), Param2 SPACE / GROUND (a word the keyword map lacks, as
+// LAND, is land; EITHER is refused), Param3 attacker faction, Param4 map, Param5 defender faction, Param8 sandbox)
+// starts its battle at once (ConflictManager::start_linked, BT §2.9.3: queued at the front, no validation / decide;
+// not sandbox = no galactic units, the map and the mission plots supply them). While another conflict is active the
+// entry waits for a later hook with the story flag set [port: the original waits only on the pending-battle banner]. Not modelled (BT §2.9.9):
+// Param6 forced type, Param9-11 presentation, Param12 post-battle resolution, Param13 banner, Param14 flagship split,
+// the last-invade unit vector (a sandbox land record has no units).
 void CampaignBattles::story_linked(SimHost& host) {
     StorySession* s = host.story();
     GalacticMode* g = host.galactic_mode();
@@ -1225,9 +1234,18 @@ void CampaignBattles::story_linked(SimHost& host) {
         }
         return true;
     };
+    auto trimmed = [](std::string_view v) {
+        while (!v.empty() && (v.front() == ' ' || v.front() == '	')) v.remove_prefix(1);
+        while (!v.empty() && (v.back() == ' ' || v.back() == '	')) v.remove_suffix(1);
+        return std::string(v);
+    };
     for (; story_linked_ < linked.size(); ++story_linked_) {
         const StoryLinkedTactical& l = linked[story_linked_];
         if (l.params.size() < 3) continue;
+        if (cm_->state() != galactic::ConflictState::Idle) {  // another conflict is active: the record waits (flag set,
+            gs.queue_linked_battle();                          // REMAINING_GAPS 6.4) and is retried at a later hook
+            return;
+        }
         PlanetIndex planet = kInvalidPlanet;
         const auto& names = gs.map().planets.name;
         for (PlanetIndex i = 0; i < gs.planets().size() && planet == kInvalidPlanet; ++i) {
@@ -1238,16 +1256,29 @@ void CampaignBattles::story_linked(SimHost& host) {
         }
         const int32_t attacker = gs.player_of_faction(l.params[2]);
         const int32_t defender = l.params.size() > 4 && !l.params[4].empty() ? gs.player_of_faction(l.params[4]) : galactic::kNoPlayer;
-        const std::string map = l.params.size() > 3 ? l.params[3] : std::string();
-        if (planet == kInvalidPlanet || attacker < 0) {
-            log_.push_back("story: LINK_TACTICAL " + l.params[0] + " not started (planet / attacker unknown)");
+        const std::string mode = trimmed(l.params[1]);
+        if (planet == kInvalidPlanet || attacker < 0 || same(mode, "EITHER")) {
+            log_.push_back("story: LINK_TACTICAL " + l.params[0] + " not started (planet / mode / attacker invalid)");
             continue;
         }
-        const bool space = same(l.params[1], "SPACE");
-        const bool ok = space ? cm_->initiate_space_conflict(planet, attacker, defender, map, true)
-                              : cm_->land_invade(planet, {}, attacker, defender, map, true);
-        if (ok) gs.queue_linked_battle();  // REMAINING_GAPS 6.4: the battle-blocking story flag (cleared at its start)
-        log_.push_back("story: LINK_TACTICAL " + l.params[0] + (space ? " space" : " land") + (ok ? " queued" : " refused"));
+        galactic::ConflictManager::LinkedBattle b;
+        b.kind = same(mode, "SPACE") ? galactic::ConflictKind::Space : galactic::ConflictKind::Land;
+        b.planet = planet;
+        b.attacker = attacker;
+        b.defender = defender;
+        b.map = l.params.size() > 3 ? trimmed(l.params[3]) : std::string();
+        b.sandbox = l.params.size() > 7 && std::atoi(trimmed(l.params[7]).c_str()) != 0;
+        const bool space = b.kind == galactic::ConflictKind::Space;
+        const bool sandbox = b.sandbox;
+        gs.queue_linked_battle();  // REMAINING_GAPS 6.4: the record's story flag; the start (start_battle) clears it
+        const bool ok = cm_->start_linked(std::move(b));
+        if (!ok) gs.clear_linked_battle();
+        log_.push_back("story: LINK_TACTICAL " + l.params[0] + (space ? " space" : " land") + (sandbox ? " sandbox" : "") +
+                       (ok ? " started" : " refused"));
+        if (ok) {  // the battle is pending (pushed by the caller in this hook)
+            ++story_linked_;
+            return;
+        }
     }
 }
 // --- end L1/S4 wave 2b ---
