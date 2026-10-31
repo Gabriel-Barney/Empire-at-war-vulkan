@@ -240,6 +240,7 @@ uint64_t PerceptionWorld::types_digest() const {
         h.u64(t.category);
         h.f32(t.combat_power);
         h.boolean(t.is_hero);
+        h.f32(t.bombing_run_prevention_radius);
         h.boolean(t.community_property);
         h.i32(t.builds_into);
         h.i32(t.tech_level);

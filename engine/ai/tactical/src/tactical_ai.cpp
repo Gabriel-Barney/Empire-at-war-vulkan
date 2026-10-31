@@ -736,8 +736,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         if (static_cast<int>(lvl) < static_cast<int>(Reachability::NoThreat)) return false;
         const int32_t src = home();
         if (src < 0) return false;
-        return zone_reachability_cost(zone_paths(), src, s.t.zone, lvl, w->cfg.constants, w->perc.zone_threat_fn(w->w, player)) >=
-               kUnreachable;
+        return zone_reachability_cost(zone_paths(), src, s.t.zone, lvl, w->cfg.constants) >= kUnreachable;
     }
     bool evaluate(const std::string& function, int32_t target, double& out) override {
         const int32_t h = target >= 0 && static_cast<size_t>(target) < slots.size() ? slots[static_cast<size_t>(target)].handle : -1;
@@ -926,7 +925,8 @@ void PlayerAi::first_service(int64_t) {
     if (w->cfg.mode == TacticalMode::Land)
         list.add_land_regions(w->cfg.zones);
     else
-        list.build_space_grid(w->cfg.map, w->cfg.constants.space_region_size, w->perc.grid().valid());
+        list.build_space_grid(w->cfg.region_map == Rect2{} ? w->cfg.map : w->cfg.region_map, w->cfg.constants.space_region_size,
+                              w->perc.grid().valid());
     mirror(before);
     // Goal slot 6: base init (the land campaign credit transfer is the battle host's, CampaignBattles).
     // Execution slot 6 (0x526120): the land path finder (the player's zone graph, TACTICAL_GAPS §6.1) with one
@@ -1933,20 +1933,21 @@ int32_t TacticalAiWorld::Impl::find_target(int32_t script, const lua::AiFindTarg
     }
     const auto max_range = static_cast<float>(r.max_distance > 0.0 ? r.max_distance : 0.0);
     std::vector<ScoredTarget> cands;
-    ZoneThreatFn threat;
     for (size_t i = 0; i < pa->slots.size(); ++i) {
         const Slot& s = pa->slots[i];
         if (!s.alive || !pa->slot_applies(static_cast<int32_t>(i), flags)) continue;
+        // A1_READINGS §5 [H]: Applies, reachability (targets with a reachability object, a source given), then binding +
+        // Evaluate, then the range test: a filtered target makes no leaf-cache stores and no '#' draws. A source
+        // without a zone gives 1e18 (§3.1), so every reachability target is skipped then.
+        if (reachable && have_origin && s.t.has_reachability() && cfg.mode == TacticalMode::Land &&
+            zone_reachability_cost(pa->zone_paths(), source_zone, s.t.zone, level, cfg.constants) >= kUnreachable)
+            continue;
         double v = 0.0;
         if (!evaluate(player, r.perception, s.handle, v)) continue;
         if (max_range > 0.0f && have_origin) {
             const Vec3f q = slot_position(s);
             const float dx = q.x - origin.x, dy = q.y - origin.y, dz = q.z - origin.z;
             if (dx * dx + dy * dy + dz * dz > max_range * max_range) continue;
-        }
-        if (reachable && source_zone >= 0 && s.t.has_reachability() && cfg.mode == TacticalMode::Land) {
-            if (!threat) threat = perc.zone_threat_fn(w, player);
-            if (zone_reachability_cost(pa->zone_paths(), source_zone, s.t.zone, level, cfg.constants, threat) >= kUnreachable) continue;
         }
         cands.push_back({static_cast<uint32_t>(i), v});
     }

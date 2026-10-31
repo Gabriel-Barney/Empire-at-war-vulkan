@@ -129,6 +129,7 @@ private:
     TacticalMode* mode_;
     SimHost* host_;
     std::vector<ai::tactical::HintZone> zones_;
+    ai::tactical::ZoneLocator zone_locator_;  // position -> zone (A1_READINGS §4)
     std::unique_ptr<ai::tactical::TacticalAiWorld> world_;
     std::vector<uint8_t> ai_side_;  // per player: has a tactical AI
     uint32_t stale_ = 0;  // object orders whose target died before execution (no-ops)

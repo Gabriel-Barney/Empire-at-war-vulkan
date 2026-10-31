@@ -18,9 +18,10 @@ namespace alamo::ai::tactical {
 // no area-scale factor. Scan: land = the cells of the position's hint zone (list order); space = the
 // cells overlapped by a square of side AI_SpaceEvaluatorRegionSize centred on the position (rows
 // outer, columns inner, clamped). The maximum wins; an EXACT tie draws ONE Get_Float01 (synced) and
-// switches to the new cell if the draw > 0.5. PROVISIONAL [M]: the running best starts at 0 with no
-// cell, so only cells scoring > 0 are picked and zero-score ties draw nothing. Result: the chosen
-// cell's centre (z = 0), or kNoDefendedPosition when nothing scored.
+// switches to the new cell if the draw > 0.5. A1_READINGS §17 [H]: the running best starts at -1.0f, so
+// the first cell is taken without a draw and every later tie draws (0 == 0 included); a grid whose category union
+// misses the mask returns kNoDefendedPosition with no draws. Result: the chosen cell's centre (z = 0), or
+// kNoDefendedPosition (no cells).
 inline constexpr float kNoDefendedPosition = 1.0e18f;
 struct DefendedPosition {
     Vec3f position{kNoDefendedPosition, kNoDefendedPosition, kNoDefendedPosition};

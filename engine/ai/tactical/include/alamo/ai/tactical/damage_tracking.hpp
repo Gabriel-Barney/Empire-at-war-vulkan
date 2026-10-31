@@ -84,9 +84,10 @@ int32_t find_deadly_enemy(const DamageTrackingStore& store, std::span<const int3
                           const std::function<bool(int32_t attacker)>& exists = {});
 
 #if defined(ALAMO_AI_TACTICAL_HAVE_COMBAT)
-// Combat adapter: records one applied CombatSystem::take_damage result. PROVISIONAL [L]: the
-// tracked amount is the damage after multipliers (DamageResult::after_multipliers); skipped when
-// not applied or when the source is kNoObject. The attacker is the request's source object.
+// Combat adapter: records one applied CombatSystem::take_damage result. A1_READINGS §7 [H]: the tracked amount is the
+// actual shield + hull loss (DamageResult::absorbed + to_hull; a hard-point hit changes neither), recorded only when
+// > 0; skipped when not applied or when the source is kNoObject. The attacker is the request's source object (the
+// source-type gates and the TEAM-parent key are the host's: TacticalBattle::consume_events).
 void record_combat_damage(DamageTrackingStore& store, const ::alamo::tactical::combat::DamageRequest& req,
                           const ::alamo::tactical::combat::DamageResult& res);
 #endif

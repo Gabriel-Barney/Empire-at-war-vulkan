@@ -160,27 +160,32 @@ static void add_players(PerceptionWorld& w) {
     w.relation.assign(r, r + 16);
 }
 
-// Land world: map -600..600 (land FOW 15 -> 80 FOW cells -> 20 x 20 threat cells of 60).
-static PerceptionWorld land_world() {
+// Land world: map -600..600 (land FOW 15 -> 80 FOW cells -> 20 x 20 threat cells of 60), shifted by `off` on both
+// axes. Worlds with hint zones use kLandOff: zone passability cells sit at world (x * 20, y * 20) (A1_READINGS §12),
+// so the zones need a map in the non-negative quadrant, as on real land maps.
+constexpr float kLandOff = 600.0f;
+static PerceptionWorld land_world(float off = 0.0f) {
     PerceptionWorld w;
     w.mode = TacticalMode::Land;
-    w.map = {-600.0f, -600.0f, 600.0f, 600.0f};
+    w.map = {-600.0f + off, -600.0f + off, 600.0f + off, 600.0f + off};
     add_players(w);
     add_types(w);
     return w;
 }
 
 static std::vector<HintZone> land_zones() {
-    // zone i covers threat cells (cols 4i..4i+3, rows 8..11), packed x | y << 16
+    // For land_world(kLandOff): zone i covers threat cells (cols 4i..4i+3, rows 8..11), i.e. world x 240i..240i+239,
+    // y 481..720. Its passability cells (packed x | y << 16, world (20x, 20y)) are x 12i..12i+11, y 25..36, row by row,
+    // so the threat-cell list comes out rows 8..11, columns ascending.
     std::vector<HintZone> zs;
     for (uint32_t i = 0; i < 5; ++i) {
         HintZone z;
         z.id = 100 + i;
         z.name = "Zone" + std::to_string(i);
-        z.center[0] = -600.0f + 60.0f * (4.0f * static_cast<float>(i) + 2.0f);
-        z.center[1] = 0.0f;
-        for (uint32_t row = 8; row < 12; ++row)
-            for (uint32_t col = 4 * i; col < 4 * i + 4; ++col) z.cells.push_back(col | (row << 16));
+        z.center[0] = kLandOff - 600.0f + 60.0f * (4.0f * static_cast<float>(i) + 2.0f);
+        z.center[1] = kLandOff;
+        for (uint32_t py = 36; py >= 25; --py)
+            for (uint32_t px = 12 * i; px < 12 * i + 12; ++px) z.cells.push_back(px | (py << 16));
         if (i > 0) z.links.push_back({100 + i - 1, 1});
         if (i < 4) z.links.push_back({100 + i + 1, 1});  // non-zero flags (TACTICAL_GAPS §6.1)
         zs.push_back(z);
@@ -427,31 +432,32 @@ static void test_grid_projection() {
 
 // ---------------------------------------------------------------------------------- tokens
 struct Fixture {
-    PerceptionWorld w = land_world();
+    PerceptionWorld w = land_world(kLandOff);
     TacticalPerception p;
     EquationSet set;
     std::vector<HintZone> zones = land_zones();
     int32_t h_tank = -1, h_trooper = -1, h_pad = -1, h_hero = -1, h_zone2 = -1, h_outside = -1;
 
     Fixture() {
+        constexpr float O = kLandOff;  // positions below are relative to the unshifted world
         // Empire (0): tank 10 at zone 2 (x ~ 0, y 0), build pad 12 with barracks built, hero 13
         // Rebel (1): trooper 11 near the tank; Underworld (2): tank 14; neutral (3): trooper 15
-        w.objects.push_back(make_obj(10, 0, kTank, 0.0f, 0.0f, 100.0f, 100.0f));
-        w.objects.push_back(make_obj(11, 1, kTrooper, 60.0f, 0.0f, 10.0f, 50.0f));
-        PerceptionObject pad = make_obj(12, 0, kPad, -100.0f, 20.0f, 0.0f, 0.0f);
+        w.objects.push_back(make_obj(10, 0, kTank, O + 0.0f, O + 0.0f, 100.0f, 100.0f));
+        w.objects.push_back(make_obj(11, 1, kTrooper, O + 60.0f, O + 0.0f, 10.0f, 50.0f));
+        PerceptionObject pad = make_obj(12, 0, kPad, O - 100.0f, O + 20.0f, 0.0f, 0.0f);
         pad.is_build_pad = true;
         pad.built_type = kBarracks;
         w.objects.push_back(pad);
-        PerceptionObject hero = make_obj(13, 0, kHero, -500.0f, 500.0f, 300.0f, 120.0f);
+        PerceptionObject hero = make_obj(13, 0, kHero, O - 500.0f, O + 500.0f, 300.0f, 120.0f);
         hero.contained_types = {kTrooper};
         w.objects.push_back(hero);
-        w.objects.push_back(make_obj(14, 2, kTank, 120.0f, 0.0f, 100.0f, 100.0f));
-        w.objects.push_back(make_obj(15, 3, kTrooper, 0.0f, 60.0f, 10.0f, 50.0f));
-        PerceptionObject open_pad = make_obj(16, -1, kPad, 200.0f, 200.0f, 0.0f, 0.0f);
+        w.objects.push_back(make_obj(14, 2, kTank, O + 120.0f, O + 0.0f, 100.0f, 100.0f));
+        w.objects.push_back(make_obj(15, 3, kTrooper, O + 0.0f, O + 60.0f, 10.0f, 50.0f));
+        PerceptionObject open_pad = make_obj(16, -1, kPad, O + 200.0f, O + 200.0f, 0.0f, 0.0f);
         open_pad.is_build_pad = true;
         open_pad.has_unit_ai = false;
         w.objects.push_back(open_pad);
-        PerceptionObject barracks = make_obj(17, 0, kBarracks, -100.0f, 20.0f, 50.0f, 0.0f);
+        PerceptionObject barracks = make_obj(17, 0, kBarracks, O - 100.0f, O + 20.0f, 50.0f, 0.0f);
         barracks.built_structure = true;
         barracks.dummy_ground_structure = true;
         w.objects.push_back(barracks);
@@ -460,8 +466,8 @@ struct Fixture {
         w.objects[3].zone = -1;  // hero outside every zone
         w.players[0].reinforcements = {kTank, kTrooper};
         w.players[0].production_queue = {kHero};
-        w.markers.push_back({StartMarker::Kind::PlayerPosition, 1, {0.0f, 0.0f, 0.0f}});
-        w.markers.push_back({StartMarker::Kind::PlayerPosition, 2, {500.0f, 500.0f, 0.0f}});
+        w.markers.push_back({StartMarker::Kind::PlayerPosition, 1, {O, O, 0.0f}});
+        w.markers.push_back({StartMarker::Kind::PlayerPosition, 2, {O + 500.0f, O + 500.0f, 0.0f}});
         w.frame = 30;
         w.index();
         TacticalAiConstants c;
@@ -609,7 +615,7 @@ static void test_tokens() {
     // time last seen: no fog -> 0
     CHECK(f.val("Variable_Target.TimeLastSeenUnnormalized", 0, f.h_zone2) == 0.0);
     f.w.fow_active = true;
-    f.w.point_fogged = [](int32_t, float x, float) { return x < 0.0f; };  // the left half of zone 2 is fogged
+    f.w.point_fogged = [](int32_t, float x, float) { return x < kLandOff; };  // the left half of zone 2 is fogged
     f.w.frame = 600;
     // 8 of 16 cells fogged, never re-fogged (last seen 0): mean = 8 * 600 / 16 = 300 frames = 10 s
     // (TimeLastSeenUnnormalized has a 7 s cache; the frame-30 value was 0 -> recompute at 600)
@@ -760,9 +766,13 @@ static void test_zone_threat() {
     const ZoneThreatFn threat = f.p.zone_threat_fn(f.w, 0);
     CHECK(threat(2) > 0.0 && threat(4) == 0.0);
     CHECK(threat(2) == static_cast<double>(f.p.grid().cells_danger(f.w, 0, f.p.zone_threat_cells(2))));
-    CHECK(zone_reachability_cost(g, 4, 3, Reachability::NoThreat, c, threat) != kUnreachable);
-    CHECK(zone_reachability_cost(g, 4, 1, Reachability::NoThreat, c, threat) == kUnreachable);  // through zone 2
-    CHECK(zone_reachability_cost(g, 4, 1, Reachability::AnyThreat, c, threat) != kUnreachable);
+    // A1_READINGS §3: the path sum over the graph's weights (threat folded in by recompute_with_threat); every hop adds
+    // at least 100 to the path threat, so No_Threat accepts only the source zone itself
+    g.recompute_with_threat(threat);
+    CHECK(zone_reachability_cost(g, 4, 4, Reachability::NoThreat, c) == 0.0);
+    CHECK(zone_reachability_cost(g, 4, 3, Reachability::NoThreat, c) == kUnreachable);
+    CHECK(zone_reachability_cost(g, 4, 3, Reachability::LowThreat, c) != kUnreachable);
+    CHECK(zone_reachability_cost(g, 4, 1, Reachability::AnyThreat, c) != kUnreachable);  // through zone 2
 }
 
 // ---------------------------------------------------------------------------------- Lua functions
@@ -844,9 +854,17 @@ static void test_lua_functions() {
     CHECK(rng.state() == ref.state());
     const Vec3f expect = g.cell_center(d.cell, 0);
     CHECK(d.position.x == expect.x && d.position.y == expect.y && d.position.z == 0.0f);
+    // §17: the running best starts at -1, so zero-force cells still give a result: the first is taken, the 0 == 0 tie draws
     const uint32_t empty_cells[] = {3, 4};
-    const DefendedPosition none = most_defended_position_cells(g, lw, empty_cells, 0, rng);
+    const float zdraw = ref.inline_unit_float();
+    const DefendedPosition zero = most_defended_position_cells(g, lw, empty_cells, 0, rng);
+    CHECK(zero.found() && zero.draws == 1 && zero.cell == (zdraw > 0.5f ? 4 : 3) && rng.state() == ref.state());
+    const DefendedPosition none = most_defended_position_cells(g, lw, std::span<const uint32_t>(), 0, rng);
     CHECK(!none.found() && none.position.x == kNoDefendedPosition && none.draws == 0);
+    TacticalPerceptionGrid empty_grid;  // nothing registered: category union 0 -> no position, no draws
+    empty_grid.init(TacticalMode::Land, lw.map, 4, threat_grid_config(TacticalMode::Land, TacticalAiConstants()));
+    const DefendedPosition unmasked = most_defended_position_cells(empty_grid, lw, cells, 0, rng);
+    CHECK(!unmasked.found() && unmasked.draws == 0 && rng.state() == ref.state());
     const DefendedPosition enemy_view = most_defended_position_cells(g, lw, cells, 1, rng);
     // the enemy tank (radius = half diagonal) spreads over cells 1..3 equally: ties draw
     CHECK(enemy_view.found() && enemy_view.cell >= 1 && enemy_view.draws == 2);
@@ -871,7 +889,7 @@ static uint64_t g_scn_ok = 0, g_scn_total = 0;
 static size_t g_scn_save_bytes = 0;
 static uint64_t scenario_crc(const ParallelFor& pf, TacticalMode mode, uint32_t save_at = 0) {
     SimRng rng(mode == TacticalMode::Land ? 0xA1B0u : 0xA1B1u);
-    PerceptionWorld w = land_world();
+    PerceptionWorld w = land_world(kLandOff);
     w.mode = mode;
     if (mode == TacticalMode::Space) w.map = {-5000.0f, -5000.0f, 5000.0f, 5000.0f};
     const float span = w.map.max_x - w.map.min_x;
@@ -1099,19 +1117,23 @@ static void test_real_data() {
     std::vector<uint8_t> ok_in(set.size(), 0), script_in(set.size(), 0), galactic_tokens(set.size(), 0);
     uint32_t unimpl = 0, paths = 0;
     for (const TacticalMode mode : {TacticalMode::Land, TacticalMode::Space}) {
-        PerceptionWorld w = land_world();
+        const float off = mode == TacticalMode::Land ? kLandOff : 0.0f;
+        PerceptionWorld w = land_world(off);
         w.mode = mode;
         w.frame = 900;
         if (mode == TacticalMode::Space) w.map = {-5000, -5000, 5000, 5000};
-        w.markers.push_back({StartMarker::Kind::PlayerPosition, 1, {0, 0, 0}});
-        w.markers.push_back({StartMarker::Kind::PlayerPosition, 2, {300, 300, 0}});
+        w.markers.push_back({StartMarker::Kind::PlayerPosition, 1, {off, off, 0}});
+        w.markers.push_back({StartMarker::Kind::PlayerPosition, 2, {off + 300, off + 300, 0}});
+        // Shipped FoC zones carry no hints, so Hints.<name> fails there (A1_READINGS §22; e.g. Is_Strong_Position's
+        // Hints.High_Ground). A host hint of 0 stands in so the check still covers the rest of those equations.
+        if (mode == TacticalMode::Land) w.zone_hint = [](int32_t, std::string_view) { return 0.0; };
         const std::vector<HintZone> zones = mode == TacticalMode::Land ? land_zones() : std::vector<HintZone>{};
         TacticalPerception p;
         p.init(mode, TacticalAiConstants(), w.map, 4, zones);  // default (objects) category table
         for (int32_t i = 0; i < 24; ++i) {
             const int32_t type = i % 8;
-            PerceptionObject o = make_obj(100 + i, i % 4, type, static_cast<float>(i * 37 % 1000) - 500.0f,
-                                          static_cast<float>(i * 53 % 1000) - 500.0f, 10.0f * static_cast<float>(i + 1), 150.0f);
+            PerceptionObject o = make_obj(100 + i, i % 4, type, off + static_cast<float>(i * 37 % 1000) - 500.0f,
+                                          off + static_cast<float>(i * 53 % 1000) - 500.0f, 10.0f * static_cast<float>(i + 1), 150.0f);
             o.zone = mode == TacticalMode::Land ? i % 5 : -1;
             o.is_build_pad = type == kPad;
             w.objects.push_back(o);

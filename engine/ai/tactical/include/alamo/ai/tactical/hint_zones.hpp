@@ -9,6 +9,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace alamo::terrain {
@@ -31,7 +32,28 @@ struct HintZone {
         uint32_t kind = 0;  // meaning not established; kept for the edge-weight function
     };
     std::vector<Link> links;
-    std::vector<uint32_t> cells;  // packed x | y << 16, list order (Get_Most_Defended_Position, 6.4)
+    std::vector<uint32_t> cells;  // passability cells (20 x 20 world units), packed x | y << 16, chunk order
+    // Hints (A1_READINGS §22): the zone's hint map from header minis 08 (name) / 09 (u32 value), in chunk order. No
+    // shipped FoC zone has any (36 EaW zones do); a zone without hints has an empty Hints evaluator.
+    struct Hint {
+        std::string name;
+        uint32_t value = 0;
+    };
+    std::vector<Hint> hints;
+};
+
+// Position -> zone (A1_READINGS §4, land mode vf48 0x3b7f50 / vf55 0x3b7c10) [H]: cell = ((int)((x + 10) / 20),
+// (int)((y + 10) / 20)) truncated; the first zone in list order whose cell set holds (cx | cy << 16). A cell outside
+// the u16 cell range or held by no zone gives -1 [M: the passability-grid bound is read as "no zone holds the cell"].
+class ZoneLocator {
+public:
+    void build(const std::vector<HintZone>& zones);
+    int32_t zone_at(float x, float y) const;
+    // Passability cell of a world point, -1 outside the u16 range (packed cx | cy << 16 otherwise).
+    static int64_t cell_of(float x, float y);
+
+private:
+    std::vector<std::pair<uint32_t, int32_t>> first_;  // sorted (packed cell, first zone index)
 };
 
 #if defined(ALAMO_AI_TACTICAL_HAVE_TERRAIN)
@@ -41,6 +63,9 @@ std::vector<HintZone> hint_zones_from_map(const terrain::MapData& map);
 // 05/06 or the terrain extent; space 0x103 04/05, default +-5000). [M]: the retail space mode's
 // bounds getter (mode vtable +0x208) is assumed to return the playable box. False if none.
 bool map_bounds(const terrain::MapData& map, Rect2& out);
+// Space region-grid bounds (A1_READINGS §8 [H]): the space camera box (0x103 minis 07/08, SpaceMapDesc camera_min/max;
+// loader default = the playable box shrunk by 400 in X and Y). False for a land map.
+bool space_region_bounds(const terrain::MapData& map, Rect2& out);
 #endif
 
 }  // namespace alamo::ai::tactical

@@ -375,17 +375,18 @@ struct Eval {
                 return true;
             case Leaf::Hints: {
                 if (!land()) return false;
+                int32_t z = -1;
                 if (n.kind == Ev::Zone) {
-                    n = {Ev::Hints, target_of(n.a)->zone};
-                    return true;
-                }
-                if (n.kind == Ev::UnitLocation) {
+                    z = target_of(n.a)->zone;
+                } else if (n.kind == Ev::UnitLocation) {
                     const PerceptionObject* o = unit_object(n.a);
                     if (!o) return false;
-                    n = {Ev::Hints, o->zone};
-                    return true;
+                    z = o->zone;
+                } else {
+                    return false;
                 }
-                return false;
+                n = {Ev::Hints, z};
+                return true;
             }
             default: return false;
         }
@@ -461,15 +462,38 @@ struct Eval {
             }
         }
         if (land_transports && P >= 0) {
-            for (const PerceptionObject& o : w.objects) {  // [M] reinforcements still in the air
+            // A1_READINGS §19 [H gates, M meaning]: TRANSPORT_LANDING objects (reinforcements still in the air) whose
+            // friendly test equals the flag asked for, that pass the game-state gate, with the representative type in
+            // the category mask; AI_Combat_Power with no attenuator / health factor. Game-state gate = any of: the mode
+            // has a conflict parent (w.campaign); obj +0x54 == none [port: read as "not inside a container", rep_type
+            // unset]; the game-mode-manager type test [port: not modelled].
+            for (const PerceptionObject& o : w.objects) {
                 if (!o.transport_landing || !o.alive || !w.is_player(o.owner)) continue;
                 if ((w.rel(P, o.owner) == 0) != friendly) continue;
-                const PerceptionType* t = w.type_of(o);
+                if (!(w.campaign || o.rep_type < 0)) continue;
+                const PerceptionType* t = w.rep_type_of(o);
                 if (!t || (t->category & cat) == 0) continue;
-                sum += o.combat_power * (1.0f - (1.0f - o.health) * a);
+                sum += o.combat_power;
             }
         }
         return sum;
+    }
+
+    // IsValidBombingTarget test 0x494540 (A1_READINGS §21) [H call, M meaning]: Self exists; the point is not fogged for
+    // Self; not inside an active BASE_SHIELD (either side's); no object of the player (read literally: Self) whose type
+    // has Bombing_Run_Prevention_Radius > 0 covers it (2-D distance <= radius [M]).
+    bool valid_bombing_target(const Vec3f& c) const {
+        if (!w.is_player(ctx.self)) return false;
+        if (w.fow_active && w.point_fogged && w.point_fogged(ctx.self, c.x, c.y)) return false;
+        if (w.inside_shield && (w.inside_shield(c, ctx.self, true) || w.inside_shield(c, ctx.self, false))) return false;
+        for (const PerceptionObject& o : w.objects) {
+            if (!o.alive || o.owner != ctx.self) continue;
+            const PerceptionType* t = w.type_of(o);
+            if (!t || !(t->bombing_run_prevention_radius > 0.0f)) continue;
+            const float dx = o.position.x - c.x, dy = o.position.y - c.y;
+            if (dx * dx + dy * dy <= t->bombing_run_prevention_radius * t->bombing_run_prevention_radius) return false;
+        }
+        return true;
     }
 
     bool qualifies(int32_t self, int32_t q, bool friendly) const {
@@ -625,13 +649,27 @@ struct Eval {
                 if (!o) return false;
                 std::vector<std::string_view> types;
                 param_names(ps, "Parameter_Type", types);
-                const PerceptionType* t = w.type_of(*o);
-                out = (t && listed(types, t->name)) ? 1.0 : 0.0;
+                const PerceptionType* t = w.type_of(*o);  // A1_READINGS §23: the object's OWN type; none -> fail
+                if (!t) return false;
+                out = listed(types, t->name) ? 1.0 : 0.0;
                 return true;
             }
-            case Ev::Hints:
-                out = (w.zone_hint && n.a >= 0) ? w.zone_hint(n.a, hint) : 0.0;
-                return true;
+            case Ev::Hints: {
+                // A1_READINGS §22: the zone's hint map (minis 08/09); no zone / no such hint -> fail (FoC zones have none).
+                // PerceptionWorld::zone_hint, when installed, replaces the map (host / test hook).
+                if (w.zone_hint) {
+                    if (n.a < 0) return false;
+                    out = w.zone_hint(n.a, hint);
+                    return true;
+                }
+                if (n.a < 0 || static_cast<uint32_t>(n.a) >= p.zone_count()) return false;
+                for (const HintZone::Hint& h : p.zone(static_cast<uint32_t>(n.a)).hints)
+                    if (iequal(h.name, hint)) {
+                        out = static_cast<double>(h.value);
+                        return true;
+                    }
+                return false;
+            }
         }
         return false;
     }
@@ -713,7 +751,7 @@ struct Eval {
             case Leaf::IsInsideEnemyShield: case Leaf::IsInsideFriendlyShield:
                 out = (w.inside_shield && w.inside_shield(o->position, ctx.self, l == Leaf::IsInsideEnemyShield)) ? 1.0 : 0.0;
                 return true;
-            case Leaf::IsValidBombingTarget: out = o->valid_bombing_target ? 1.0 : 0.0; return true;
+            case Leaf::IsValidBombingTarget: out = valid_bombing_target(o->position) ? 1.0 : 0.0; return true;
             case Leaf::HardPointHealth: {  // [L] mean health of the hard points of that type
                 bool has = false;
                 const double ht = param_number(ps, "Parameter_Hard_Point_Type", 0.0, &has);
@@ -767,13 +805,11 @@ struct Eval {
                 return ratio(n, Leaf::FriendlyForceUnnormalized, ps, self, Leaf::FriendlyForceUnnormalized, out);
             case Leaf::EnemyForceNBTD: return ratio(n, Leaf::EnemyForceUnnormalized, ps, self, Leaf::EnemyForceUnnormalized, out);
             case Leaf::ForceUnnormalized: {
+                // A1_READINGS §24 [H]: zone danger whenever the location holds a zone (unit-bound locations too); point
+                // danger only without one (at the unit, else at the rect centre).
                 if (!w.is_player(ctx.self)) return false;
-                if (a.zero) {
-                    out = 0.0;
-                    return true;
-                }
-                out = static_cast<double>(a.zone_total ? g.cells_danger(w, ctx.self, a.cells)
-                                                       : g.point_danger(w, ctx.self, a.center.x, a.center.y));
+                out = static_cast<double>(land() && a.zone >= 0 ? g.cells_danger(w, ctx.self, zcells(a.zone))
+                                                                : g.point_danger(w, ctx.self, a.center.x, a.center.y));
                 return true;
             }
             case Leaf::FriendlyUnitConcentrationUnnormalized: case Leaf::EnemyUnitConcentrationUnnormalized: {
@@ -833,7 +869,15 @@ struct Eval {
                 out = (w.inside_shield && w.inside_shield(c, ctx.self, l == Leaf::IsInsideEnemyShield)) ? 1.0 : 0.0;
                 return true;
             }
-            case Leaf::IsValidBombingTarget: out = 0.0; return true;  // [L] body not traced
+            case Leaf::IsValidBombingTarget: {  // A1_READINGS §21: at the zone centre; no zone -> 0
+                if (a.zone < 0 || static_cast<uint32_t>(a.zone) >= p.zone_count()) {
+                    out = 0.0;
+                    return true;
+                }
+                const HintZone& z = p.zone(static_cast<uint32_t>(a.zone));
+                out = valid_bombing_target({z.center[0], z.center[1], z.center[2]}) ? 1.0 : 0.0;
+                return true;
+            }
             default: return false;
         }
     }
@@ -1081,7 +1125,18 @@ void TacticalPerception::init(TacticalMode mode, const TacticalAiConstants& c, c
     grid_.init(mode, map, players, threat_grid_config(mode, c));
     zones_.assign(zones.begin(), zones.end());
     zone_cells_.assign(zones_.size(), {});
-    for (size_t i = 0; i < zones_.size(); ++i) grid_.zone_cells(zones_[i], zone_cells_[i]);
+    // A1_READINGS §12 [H]: each passability cell -> world (x * 20, y * 20) -> threat cell (truncate, clamp), de-duplicated.
+    // [port] order: first insertion (the zone's cells in chunk order); the original keeps the stdext hash_set order.
+    for (size_t i = 0; i < zones_.size(); ++i) {
+        std::vector<uint32_t>& out = zone_cells_[i];
+        for (const uint32_t packed : zones_[i].cells) {
+            const float x = static_cast<float>(packed & 0xFFFFu) * 20.0f, y = static_cast<float>(packed >> 16) * 20.0f;
+            const int32_t cell = grid_.cell_clamped(x, y);
+            if (cell < 0) continue;
+            const auto cu = static_cast<uint32_t>(cell);
+            if (std::find(out.begin(), out.end(), cu) == out.end()) out.push_back(cu);
+        }
+    }
     // TACTICAL_GAPS 6.8: the name id a zone's evaluator is registered under (a repeated name shares the first zone's).
     zone_name_first_.assign(zones_.size(), -1);
     for (size_t i = 0; i < zones_.size(); ++i) {

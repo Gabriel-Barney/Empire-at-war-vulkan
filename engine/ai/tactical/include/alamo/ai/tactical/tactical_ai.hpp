@@ -201,7 +201,10 @@ struct TacticalAiConfig {
     int32_t attacker = -1, defender = -1;           // conflict record (opponent preference, §1.2)
     bool campaign = false;                          // galactic parent (campaign battle)
     TacticalAiConstants constants;
-    Rect2 map;                                      // map bounds (region grid, threat grid)
+    Rect2 map;                                      // playable box: the threat grid (and the region grid if no region_map)
+    // Space region grid bounds (A1_READINGS §8 [H]: mode vf65 = the space CAMERA box, .ted 0x103 minis 07/08; default the
+    // playable box shrunk by 400 in X and Y). Empty (all 0) = use `map`.
+    Rect2 region_map;
     std::vector<HintZone> zones;                    // land hint zones
     std::vector<std::string> plan_files;            // load order (the mode's plan folder)
     bool log_decisions = true;

@@ -70,7 +70,9 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
 #ifdef ALAMO_AI_TACTICAL_HAVE_TERRAIN
     if (!b_->space_) zones_ = at::hint_zones_from_map(b_->map_);
+    if (b_->space_) at::space_region_bounds(b_->map_, cfg.region_map);  // A1_READINGS §8: the camera box
 #endif
+    zone_locator_.build(zones_);
     cfg.zones = zones_;
     cfg.plan_files = b_->space_ ? setup.space_plans : setup.land_plans;
     const uint32_t players = host.players();
@@ -336,6 +338,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
                 for (const std::string_view n : types.get_list(ti, "CategoryMask")) pt.category |= mask(n);
             pt.combat_power = types.get_float(ti, "AI_Combat_Power");
             pt.is_hero = types.get_bool(ti, "Is_Named_Hero");
+            pt.bombing_run_prevention_radius = static_cast<float>(types.get_int(ti, "Bombing_Run_Prevention_Radius"));
             pt.community_property = types.get_bool(ti, "Is_Community_Property");
             // --- A2 tactical: PotentialPlan inputs (tactical_pp.hpp) ---
             pt.tech_level = types.get_int(ti, "Tech_Level");
@@ -503,16 +506,8 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
         o.transport_landing = st.has_behavior(h, objects::beh::TransportLanding);
         o.visible_to = ~0ull;
-        if (!zones_.empty()) {  // land: the nearest hint-zone centre [L, as zone_reachability's locator]
-            float best = 0.0f;
-            for (size_t z = 0; z < zones_.size(); ++z) {
-                const float dx = zones_[z].center[0] - p.x, dy = zones_[z].center[1] - p.y, d = dx * dx + dy * dy;
-                if (o.zone < 0 || d < best) {
-                    o.zone = static_cast<int32_t>(z);
-                    best = d;
-                }
-            }
-        }
+        // land: the first zone (list order) whose cell set holds the position's cell (A1_READINGS §4, ZoneLocator)
+        if (!zones_.empty()) o.zone = zone_locator_.zone_at(p.x, p.y);
         const auto mt = members.find(id);
         at::TacticalAiObject a;
         a.handle = h;

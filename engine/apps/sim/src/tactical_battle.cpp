@@ -1752,14 +1752,28 @@ void TacticalBattle::consume_events(TacticalMode& mode) {
     objects::ObjectStore& store = mode.primary();
     // a. damage events -> DAMAGE_TRACKING (call order, before the deaths disable the victims).
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
-    for (const tc::DamageEvent& e : combat_->damage_events()) {
-        tc::DamageRequest rq;
-        rq.victim = e.victim;
-        rq.source = e.source;
-        tc::DamageResult rs;
-        rs.applied = true;
-        rs.after_multipliers = e.after_multipliers;
-        ai::tactical::record_combat_damage(damage_tracking_, rq, rs);
+    // A1_READINGS §7 [H; M flag names]: amount = the actual hull + shield loss (shield absorbed + hull damage; a hit
+    // routed to a hard point changes neither), recorded only when > 0 and only for DAMAGE_TRACKING victims. A per-attacker
+    // entry needs the source type's Is_Valid_Target (+0x6b) and Collidable_By_Projectile_Living (+0x41); its key is the
+    // source's TEAM parent when it has one. [port] The killing hit's overkill is not clamped (the victim leaves the store
+    // this tick); the running total / last-damage frame (+0x8 / +0x50) are not kept (nothing reads them yet).
+    {
+        const objects::GameObjectTypes& dtypes = catalog_->types();
+        for (const tc::DamageEvent& e : combat_->damage_events()) {
+            if (e.source == tc::kNoObject || !damage_tracking_.tracks(static_cast<int32_t>(e.victim))) continue;
+            const float amount = e.absorbed + (e.hardpoint < 0 ? e.to_hull : 0.0f);
+            if (!(amount > 0.0f)) continue;
+            const objects::ObjectHandle sh = store.find(static_cast<objects::ObjectId>(e.source));
+            if (!store.alive(sh)) continue;
+            const objects::TypeIndex st = store.type(sh);
+            if (st >= dtypes.size() || !dtypes.get_bool(st, "Is_Valid_Target") || !dtypes.get_bool(st, "Collidable_By_Projectile_Living"))
+                continue;
+            auto key = static_cast<int32_t>(e.source);
+            if (const Unit* su = unit_by_id(static_cast<objects::ObjectId>(e.source)); su && su->container != 0xFFFFFFFFu &&
+                                                                                       containers_[su->container].team)
+                key = static_cast<int32_t>(containers_[su->container].id);
+            damage_tracking_.record(static_cast<int32_t>(e.victim), key, amount);
+        }
     }
 #endif
     // b. projectile detonations -> PARTICLE objects: detonation particle, then the synced hit pick.
