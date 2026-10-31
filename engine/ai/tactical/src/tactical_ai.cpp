@@ -720,6 +720,24 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         return f.zones;
     }
 
+    // Flood slot 6 (A1_READINGS §25.2): the first zone of `zone`'s flood set at `level`; with a link mask other than
+    // -1 or a list, the first one `zone` links with (flags & mask) != 0, not in `exclude`, in `include` when given.
+    // -1 = null (empty set, level outside 6..10, no match).
+    int32_t flood_pick(int32_t zone, Reachability level, uint32_t mask, const std::vector<int32_t>* exclude,
+                       const std::vector<int32_t>* include) {
+        const std::vector<uint32_t>& set = flood_set(zone, level);
+        if (set.empty()) return -1;
+        if (mask == 0xFFFFFFFFu && !exclude && !include) return static_cast<int32_t>(set.front());
+        for (const uint32_t z : set) {
+            const auto zi = static_cast<int32_t>(z);
+            if (!w->zones.links_to(static_cast<uint32_t>(zone), z, mask)) continue;
+            if (exclude && std::find(exclude->begin(), exclude->end(), zi) != exclude->end()) continue;
+            if (include && std::find(include->begin(), include->end(), zi) == include->end()) continue;
+            return zi;
+        }
+        return -1;
+    }
+
     // ---- GoalModeHooks ----
     uint32_t target_count() override { return static_cast<uint32_t>(slots.size()); }
     bool applies(int32_t target, uint32_t flags) override { return slot_applies(target, flags); }
@@ -1262,6 +1280,33 @@ bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, 
     }
     in.types = &w.types;
     in.category_mask = perc.config().category_mask;
+    // FreeStore Setup A stages (A1_READINGS §25.3), land with a target: per TF the flood slot 6 pick around the goal
+    // target's zone at the goal type's Reachability (link mask: TF +0x94 is not parsed [port: -1]; RequireUniqueStage
+    // excludes / RequireMatchingStage restricts to the stages so far), else the goal target itself.
+    struct Stage {
+        int32_t zone = -1;
+        Vec3f position;
+    };
+    std::vector<Stage> stages;
+    if (cfg.mode == TacticalMode::Land && in.has_target && zones.size() > 0) {
+        const Reachability lvl = g.type < defs.goals.size() ? defs.goals[g.type].reachability : Reachability::Any;
+        std::vector<int32_t> so_far;
+        for (const TaskForceDef& d : in.def->task_forces) {
+            const int32_t z = in.target_zone < 0 ? -1
+                                                 : p.flood_pick(in.target_zone, lvl, 0xFFFFFFFFu, d.require_unique_stage ? &so_far : nullptr,
+                                                                d.require_matching_stage ? &so_far : nullptr);
+            Stage st;
+            st.zone = z >= 0 ? z : in.target_zone;
+            if (z >= 0) {
+                const HintZone& hz = zones.zone(static_cast<uint32_t>(z));
+                st.position = {hz.center[0], hz.center[1], hz.center[2]};
+            } else {
+                st.position = in.target_position;
+            }
+            so_far.push_back(z);  // [port] a null stage (the goal target) enters the lists as -1
+            stages.push_back(st);
+        }
+    }
     std::vector<int32_t> ids;
     p.fs.units(ids, false);
     for (const int32_t id : ids) {
@@ -1273,6 +1318,24 @@ bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, 
         u.position = o->position;
         u.health = o->health;
         u.reserved = unit_reserved.count(id) != 0;
+        if (!stages.empty()) {
+            // AI_GALACTIC_3 §1.2: Σ (Low_Threat slot-7 cost from the unit's zone)² over the finite stages + Σ 2-D
+            // distance² to each stage, divided by the stage count when a cost was finite.
+            const int32_t uz = o->zone >= 0 ? o->zone : zone_at(o->position);
+            double sum = 0.0;
+            bool finite = false;
+            for (const Stage& st : stages) {
+                const double c = zone_reachability_cost(p.zone_paths(), uz, st.zone, Reachability::LowThreat, cfg.constants);
+                if (c < kUnreachable) {
+                    sum += c * c;
+                    finite = true;
+                }
+                const double dx = static_cast<double>(o->position.x) - st.position.x;
+                const double dy = static_cast<double>(o->position.y) - st.position.y;
+                sum += dx * dx + dy * dy;
+            }
+            if (finite) u.stage_key = sum / static_cast<double>(stages.size());
+        }
         in.free_units.push_back(u);
     }
     std::set<int32_t> held;
@@ -1784,24 +1847,31 @@ int32_t TacticalAiWorld::Impl::tf_attack_target(int32_t tf, const lua::AiArg& ta
 
 // S10 AI land reinforcement (header comment of reinforce_landing_point).
 bool reinforce_landing_point(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
-                             bool use_reinforcement_points, Vec3f& at) {
+                             bool use_reinforcement_points, Vec3f& at, const ReinforcePointRank& rank) {
     if (!use_reinforcement_points) return true;
     const PerceptionObject* best = nullptr;
-    float best_d2 = 0.0f, radius = 0.0f;
+    double best_key = 0.0;
+    float radius = 0.0f;
     for (size_t i = 0; i < w.objects.size() && i < facts.size(); ++i) {
         const PerceptionObject& o = w.objects[i];
         const float r = facts[i].applies.reinforcement_enabling_radius;
         if (!o.alive || r <= 0.0f || o.owner < 0 || !(o.owner == player || w.allied(player, o.owner))) continue;
-        const float dx = at.x - o.position.x, dy = at.y - o.position.y;
-        const float d2 = dx * dx + dy * dy;
-        if (!best || d2 < best_d2) {
+        double key = 0.0;
+        if (rank) {
+            if (!rank(o.position, key)) continue;
+        } else {
+            const float dx = at.x - o.position.x, dy = at.y - o.position.y;
+            key = static_cast<double>(dx * dx + dy * dy);
+        }
+        if (!best || key < best_key) {
             best = &o;
-            best_d2 = d2;
+            best_key = key;
             radius = r;
         }
     }
     if (!best) return false;
-    const float d = std::sqrt(best_d2);
+    const float bx = at.x - best->position.x, by = at.y - best->position.y;
+    const float d = std::sqrt(bx * bx + by * by);
     const float step = std::min(d, radius * 0.5f);
     Vec3f p = best->position;
     if (d > 0.0f) {
@@ -1824,8 +1894,38 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
     if (!host.can_reinforce(t->player) || (cap >= 0.0f && remaining < 1.0f)) return new_status(t->plan, tf, StatusKind::Failed);
     Vec3f p;
     if (!arg_position(target, point, p)) return -1;
-    // S10 AI land reinforcement: landing position near the target (0x6eaf60, AI_TACTICAL §7.4 [M position rules]).
-    if (cfg.mode == TacticalMode::Land && !reinforce_landing_point(w, facts, t->player, cfg.constants.use_reinforcement_points, p)) {
+    // S10 AI land reinforcement: landing position near the target (0x6eaf60, AI_TACTICAL §7.4, A1_READINGS §25.3). The
+    // destination zone: a region target's zone, else the zone at the position. Points in a zone outside the
+    // destination's flood set at the TF goal's Reachability are dropped; the rest are ranked by the slot-7 path cost
+    // from their zone at that level; a point without a zone ranks by its 2-D distance [M: mixed keys]. A destination
+    // without a zone keeps the 2-D ranking.
+    ReinforcePointRank rank;
+    if (cfg.mode == TacticalMode::Land && zones.size() > 0) {
+        int32_t dest = -1;
+        if (!point.present && target.target >= 0)
+            if (const Slot* s = slot_of(target.target); s && !s->t.is_unit() && s->t.has_reachability()) dest = s->t.zone;
+        if (dest < 0) dest = zone_at(p);
+        const auto pi = plans.find(t->plan);
+        PlayerAi* pa = player_ai(t->player);
+        if (dest >= 0 && pi != plans.end() && pi->second.goal_type < defs.goals.size() && pa) {
+            const Reachability lvl = defs.goals[pi->second.goal_type].reachability;
+            const std::vector<uint32_t>& set = pa->flood_set(dest, lvl);
+            const Vec3f to = p;
+            rank = [this, pa, dest, lvl, &set, to](const Vec3f& at, double& key) {
+                const int32_t z = zone_at(at);
+                if (z < 0) {
+                    const double dx = static_cast<double>(at.x) - to.x, dy = static_cast<double>(at.y) - to.y;
+                    key = std::sqrt(dx * dx + dy * dy);
+                    return true;
+                }
+                if (std::find(set.begin(), set.end(), static_cast<uint32_t>(z)) == set.end()) return false;
+                key = zone_reachability_cost(pa->zone_paths(), z, dest, lvl, cfg.constants);
+                return true;
+            };
+        }
+    }
+    if (cfg.mode == TacticalMode::Land &&
+        !reinforce_landing_point(w, facts, t->player, cfg.constants.use_reinforcement_points, p, rank)) {
         ++stats["Reinforce: no allied reinforcement point"];
         return new_status(t->plan, tf, StatusKind::Failed);
     }

@@ -96,6 +96,8 @@ public:
     uint32_t edge_count() const { return static_cast<uint32_t>(raw_.nbr.size()); }
     // Flood around `start` (header comment): zones in BFS order. `passes(zone)` is asked at most once per zone.
     void flood(int32_t start, const std::function<bool(uint32_t zone)>& passes, std::vector<uint32_t>& out) const;
+    // Zone `from`'s link map holds zone `to` with (flags & mask) != 0 (flood slot 6 filter, A1_READINGS §25.2).
+    bool links_to(uint32_t from, uint32_t to, uint32_t mask) const;
     // The undirected flood neighbours of a zone (built once from the links).
     std::span<const uint32_t> flood_neighbours(uint32_t zone) const { return flood_nbr_[zone]; }
     uint32_t unresolved_links() const { return unresolved_; }

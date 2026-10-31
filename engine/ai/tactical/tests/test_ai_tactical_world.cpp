@@ -1306,6 +1306,20 @@ void test_reinforce_landing() {
     CHECK(std::fabs(at.x - (500.0f + 500.0f * 125.0f / 640.3124f)) < 0.01f && std::fabs(at.y - (400.0f - 400.0f * 125.0f / 640.3124f)) < 0.01f);
     Vec3f near{10.0f, 20.0f, 0.0f};  // within half the radius of point 2: the target itself
     CHECK(reinforce_landing_point(w, facts, 0, true, near) && near.x == 10.0f && near.y == 20.0f);
+    {
+        // A1_READINGS §25.3 ranking: the allied point (x 500) is dropped (zone outside the flood set), the own point
+        // keeps the lower key of the rest; a tie keeps the first in snapshot order.
+        int asked = 0;
+        Vec3f ranked{1000.0f, 0.0f, 0.0f};
+        CHECK(reinforce_landing_point(w, facts, 0, true, ranked, [&asked](const Vec3f& pt, double& key) {
+            ++asked;
+            key = 3.0;
+            return pt.x != 500.0f;
+        }));
+        CHECK(asked == 2 && ranked.x == 125.0f && ranked.y == 0.0f);  // point 2 moved 125 toward the target
+        Vec3f dropped{1000.0f, 0.0f, 0.0f};
+        CHECK(!reinforce_landing_point(w, facts, 0, true, dropped, [](const Vec3f&, double&) { return false; }));
+    }
     Vec3f none{1000.0f, 0.0f, 0.0f};
     CHECK(reinforce_landing_point(w, facts, 1, true, none));  // player 1 owns point 1
     CHECK(none.x == 900.0f + 100.0f && none.y == 0.0f);

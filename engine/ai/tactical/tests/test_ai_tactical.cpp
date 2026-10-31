@@ -298,6 +298,8 @@ static void test_reachability() {
         ZoneGraph fg;
         fg.build(f);
         CHECK(fg.flood_neighbours(1).size() == 3 && fg.flood_neighbours(3).empty());
+        CHECK(fg.links_to(1, 2, 0xFFFFFFFFu) && fg.links_to(3, 1, 0xFFFFFFFFu) && !fg.links_to(1, 3, 0xFFFFFFFFu) &&
+              !fg.links_to(1, 2, 0u) && !fg.links_to(9, 1, 0xFFFFFFFFu));
         std::vector<uint32_t> out;
         int asked = 0;
         const auto fails = [&](std::initializer_list<uint32_t> bad) {

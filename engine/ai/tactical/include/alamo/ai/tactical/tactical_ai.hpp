@@ -310,16 +310,22 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// S10 AI land reinforcement - the landing position of a land TF.Reinforce near `at` (0x6eaf60 [M]; drop validity
+// Ranks one reinforcement point for reinforce_landing_point: false drops it, otherwise `key` (lower first).
+using ReinforcePointRank = std::function<bool(const Vec3f& point, double& key)>;
+
+// S10 AI land reinforcement - the landing position of a land TF.Reinforce near `at` (0x6eaf60; drop validity
 // TACTICAL_GAPS §4.2 [H radius rule]). With Use_Reinforcement_Points a drop slot is valid only within 2-D <=
-// Reinforcement_Enabling_Radius of an allied live object, so [inferred]: the own / allied live object with an enabling
-// radius > 0 nearest to `at` (2-D, strict <: the first in snapshot (GOM) order wins a tie), and `at` := that object's
-// position moved toward `at` by min(distance, radius / 2) [port: the host lays its formation slots around the point;
-// half the radius keeps them inside]. False = no such object (nothing can land; Reinforce fails). Without
-// Use_Reinforcement_Points `at` is kept. The host keeps its own drop checks (passability, fog, footprint, prevention
-// radius) [port: not repeated here]. `facts` has the same order as `w.objects`. No RNG.
+// Reinforcement_Enabling_Radius of an allied live object. The candidates are the own / allied live objects with an
+// enabling radius > 0; `rank` drops and orders them (A1_READINGS §25.3: points whose zone is not in the destination's
+// flood set at the TF goal's level are dropped, the rest sorted by the slot-7 path cost from the point's zone; without a
+// region on either side by the 2-D distance). Without `rank` the key is the 2-D distance² to `at`. The lowest key wins
+// (strict <: the first in snapshot (GOM) order wins a tie), and `at` := that object's position moved toward `at` by
+// min(distance, radius / 2) [port: the host lays its formation slots around the point; half the radius keeps them
+// inside]. False = no candidate left (nothing can land; Reinforce fails). Without Use_Reinforcement_Points `at` is
+// kept. The host keeps its own drop checks (passability, fog, footprint, prevention radius) [port: not repeated
+// here]. `facts` has the same order as `w.objects`. No RNG.
 bool reinforce_landing_point(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
-                             bool use_reinforcement_points, Vec3f& at);
+                             bool use_reinforcement_points, Vec3f& at, const ReinforcePointRank& rank = {});
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);

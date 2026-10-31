@@ -147,6 +147,15 @@ void ZoneGraph::flood(int32_t start, const std::function<bool(uint32_t)>& passes
     }
 }
 
+bool ZoneGraph::links_to(uint32_t from, uint32_t to, uint32_t mask) const {
+    if (from >= size()) return false;
+    size_t li = 0;
+    for (uint32_t i = 0; i < from; ++i) li += zones_[i].links.size();
+    for (const HintZone::Link& l : zones_[from].links)
+        if (link_target_[li++] == static_cast<int32_t>(to) && (l.kind & mask) != 0) return true;
+    return false;
+}
+
 void ZoneGraph::recompute_with_threat(const ZoneThreatFn& threat, const ParallelFor& pf) {
     node_cost_.assign(zones_.size(), 0u);
     if (threat)  // Node_Weight (vf3), node index order

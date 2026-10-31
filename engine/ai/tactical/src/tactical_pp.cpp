@@ -186,13 +186,17 @@ public:
             if (u.health < p_.in.health_threshold) continue;  // Health_Low_Percent_Threshold (AI_GALACTIC_3 §8)
             FsUnit f;
             f.index = static_cast<int32_t>(i);
-            // Tactical key (AI_GALACTIC_3 §1.2): stage costs are not modelled [port: no tactical TF stage / reach mode 7],
-            // so no stage cost is finite and the key is the 2-D distance² from the unit to the goal target; no target ->
-            // key 0.
+            // Tactical key (AI_GALACTIC_3 §1.2, A1_READINGS §25.3): the host's stage key when a stage cost was
+            // finite, else the 2-D distance² from the unit to the goal target; no target -> key 0. The "in transit"
+            // unit (0x3a9760, key 0) is not modelled [port].
             if (p_.in.has_target) {
-                const double dx = static_cast<double>(u.position.x) - p_.in.target_position.x;
-                const double dy = static_cast<double>(u.position.y) - p_.in.target_position.y;
-                f.key = dx * dx + dy * dy;
+                if (u.stage_key >= 0.0) {
+                    f.key = u.stage_key;
+                } else {
+                    const double dx = static_cast<double>(u.position.x) - p_.in.target_position.x;
+                    const double dy = static_cast<double>(u.position.y) - p_.in.target_position.y;
+                    f.key = dx * dx + dy * dy;
+                }
             }
             p_.max_key = std::max(p_.max_key, f.key);
             p_.units.push_back(f);
