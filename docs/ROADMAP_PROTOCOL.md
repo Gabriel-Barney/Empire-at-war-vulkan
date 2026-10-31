@@ -1,14 +1,19 @@
 # Project roadmap: how sessions update it
 
-The main roadmap and flowchart is `ROADMAP.html` in the project root (Gabriel, 2026-10-30). It opens in any browser with no
-claude.ai sign-in. It is generated, so never edit it by hand: change the documents in `roadmap-store/` and it is rebuilt,
-along with the copy in that repository that other accounts pull. `docs/ROADMAP.html` is its page shell.
+The main roadmap and flowchart is `docs/ROADMAP.html` (Gabriel, 2026-10-30; made the default local roadmap 2026-10-31). It opens in
+any browser, and in the Claude desktop Browser pane, with no claude.ai sign-in: the page carries a read-only copy of the roadmap
+data inside it, between the `<!--roadmap-data:begin-->` and `<!--roadmap-data:end-->` markers.
 
-Copies, so nobody edits the wrong one: `docs/ROADMAP.html` is the **only** hand-edited page file (the shell: layout, script,
-`PRESETS`). `roadmap-store/page_shell.html` is a copy of it that `roadmap_store.py` refreshes on every render (the fallback when
-the store is cloned alone). `ROADMAP.html` in the project root and in `roadmap-store/` are the shell plus a read-only data
-snapshot, and `roadmap-store/ROADMAP.md` is the text form; all of these are regenerated on every write, marked generated in
-`.gitattributes`, and a diff in them is never a change to review.
+One file is both the page source and the loadable page. Edit only the shell, which is everything outside the two markers (layout,
+script, `PRESETS`). Never edit the block between the markers by hand: `roadmap_store.py` rewrites it on every `write`, build record,
+`sync` and `render`, so changes to the data go through `roadmap-store/` and the page is rebuilt from it. A shell without the
+markers still works: the generator then injects the data into the generated copies only (the old behaviour).
+
+Copies, so nobody edits the wrong one: `roadmap-store/page_shell.html` is the shell with the data block emptied, refreshed from
+`docs/ROADMAP.html` on every render (the fallback when the store is cloned alone). `ROADMAP.html` in the project root and in
+`roadmap-store/` are byte-identical single-file copies of the loaded page (handy to send or open on its own), and
+`roadmap-store/ROADMAP.md` is the text form. These and the data block are regenerated on every write, and a diff in them is never a
+change to review.
 
 To update, write a JSON list of `{"op", "collection", "doc_id", "data"}` to a scratch file, then run:
 
@@ -98,18 +103,18 @@ updates the same way (`roadmap-store/README.md`). Until a remote is set, updates
 ### Keeping the local page current (Gabriel, 2026-10-30)
 
 When `ROADMAP.html` changes in the GitHub store repository (another account or machine wrote to the roadmap), the local
-`ROADMAP.html` in the project root must change with it. The page is generated from `roadmap-store/data/`, so this happens
+`docs/ROADMAP.html` data block and the `ROADMAP.html` copy in the project root must change with it. The page is generated from `roadmap-store/data/`, so this happens
 whenever the store is brought up to date through the script:
 
-- `python roadmap-store/roadmap_store.py sync` pulls the remote (`git pull --rebase`), then regenerates **both** copies of
-  `ROADMAP.html` (in `roadmap-store/` and in the project root) and `ROADMAP.md`, commits and pushes. Run it at the start of a
+- `python roadmap-store/roadmap_store.py sync` pulls the remote (`git pull --rebase`), then regenerates the data block of
+  `docs/ROADMAP.html`, both copies of `ROADMAP.html` (in `roadmap-store/` and in the project root) and `ROADMAP.md`, commits and pushes. Run it at the start of a
   session, and whenever the roadmap on GitHub may have changed.
 - `write` and every build record (`record-build`, called by the build scripts) pull first and regenerate both copies the same
   way, so any roadmap update on this machine refreshes the local page too.
 - A plain `git pull` inside `roadmap-store/` updates the store's own `ROADMAP.html` but **not** the project-root copy. If you
   pulled by hand, run `python roadmap-store/roadmap_store.py render` (or `sync`) afterwards.
-- The project-root `ROADMAP.html` is also tracked in the engine repository, so after a refresh it shows as modified there:
-  commit it with the work that triggered the update (it is generated, never reviewed or edited by hand).
+- `docs/ROADMAP.html` and the project-root `ROADMAP.html` are tracked in the engine repository, so after a refresh they show as
+  modified there: commit them with the work that triggered the update (the data block is generated, never reviewed or edited by hand).
 
 Check that the two copies agree with `python roadmap-store/roadmap_store.py sync` (prints `in sync with origin/main`) and by
 comparing `ROADMAP.html` with `roadmap-store/ROADMAP.html` (byte-identical after any refresh).
