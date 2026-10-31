@@ -686,7 +686,8 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   angles over 24,626 frames, −209.8° in total, ≈ 4,471 steps per turn. The trace never covers a full turn, so
   **whether the clip wraps at 239 or 240 frames stays open.** The optional long planet-spin run was not made.
 
-  > **Status 2026-10-30:** Settled in ANIM_PARTICLES.md §A.9 (wraps at count − 1 = 239, 239 s per revolution), and the port does this: `advance_loop` and `sample_keys` wrap at count − 1 (`engine/anim/src/anim_state.cpp:31-37, 50-60`). No capture confirms it; the g1f t03 trace extraction is still unfinished (below).
+  > **Status 2026-10-30:** Settled in ANIM_PARTICLES.md §A.9 (wraps at count − 1 = 239, 239 s per revolution), and the port does this: `advance_loop` and `sample_keys` wrap at count − 1 (`engine/anim/src/anim_state.cpp:31-37, 50-60`).
+  > **Status 2026-10-31 (g1f t07):** confirmed by capture (planet clip wrap bullet below): 239 s per revolution, no hold at the wrap. The 0.0805° / 4,471-steps figures above came from a non-planet object (`UVOffset` is not a Planet.fx register); the planet turns 0.0502° per tick.
 - **Legacy vertex colour** (partly).
   - Every draw whose layout carries COLOR0 runs with `LIGHTING FALSE`, `COLORVERTEX FALSE` and
     `DIFFUSEMATERIALSOURCE MATERIAL`:
@@ -787,6 +788,31 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
     indicated: ANIM_PARTICLES.md §A.9 (wrap at count - 1 = 239) is what `anim_state.cpp` does, and nothing here contradicts it.
 
   > **Status 2026-10-31:** extraction fixed by running it to the end (no script change was needed; the earlier run was cut short); the wrap question stays open on capture evidence, settled in the port by §A.9.
+- **Planet clip wrap (g1f t07, 2026-10-31): wraps at 239, confirmed by capture.** `apitrace_20261031_175322` (scene PF: Kuat
+  space skirmish, fixed camera; 48 272 frames, 28.2 M filtered calls). Two corrections first: the t03 / "Planet spin" series used
+  the register `UVOffset`, which belongs to the generic bump-mesh vertex shader (`m_sphFill`, 62 instructions), so those
+  "planets" were ordinary meshes (here: static station parts plus four debris-like objects turning 0.2000 deg per change).
+  Planet.fx has no `UVOffset`; its vertex shader is the one that declares `CloudScrollRate` (c31) and `m_time` (c25), and
+  `g1_planet_wrap.py extract` now selects on `CloudScrollRate` and stores `m_time` per row (the engine clock, so no frame-rate
+  guesswork is left). Result of `extract` + `wrap` on the planet draw (scale 500, one object at (241, -57, -4400), 43 216 frames
+  3270..46485, 6 460 pose changes):
+  - `m_time` advances 0.03 per sim tick and the pose changes once per tick (two dropped ticks show as 0.06). m_time 0 to 193.85
+    = 6 462 ticks = 215.4 s at 30 Hz, **324.4 deg of turn (90% of a revolution)**.
+  - Angle per tick: median 0.050207 deg; 360/239/30 = 0.050209 (239 clip frames per turn), 360/240/30 = 0.050000. Linear fit
+    1.67357 deg per m_time unit = 0.050207 deg per tick, max residual 0.0072 deg (0.14 tick) over the whole run: one revolution
+    = 7 170.3 ticks = **239.0 s**.
+  - Frames 3270 to 3686 draw the bind pose (m_time 0, before the first tick); at the first tick (frame 3687) the planet jumps
+    170.16 deg to its random start phase (126.03 clip frames), then turns steadily. The angle returns to the bind pose (clip
+    frame 239 = frame 0) 3 390 ticks later, at m_time 101.73 (frame 27 426); the steps around it are 0.0502 deg per tick with no
+    pause (angles -0.0659, -0.0157, +0.0346, +0.0848), and the rate is the same on both sides (1.67349 before, 1.67370 after,
+    deg per m_time unit).
+  - A 240-frame wrap would hold the pose for 30 ticks (0.9 m_time units, a 1.5 deg deficit): the longest gap between pose changes
+    in the whole run is 0.06 m_time units (a dropped tick), and the residual above rules out the deficit. So **the wrap is at
+    count - 1 = 239, seamless, 239 s per revolution at rate 1.0**, as ANIM_PARTICLES.md §A.9 and `anim_state.cpp` have it.
+  - Limit: the check rests on the pose at m_time 0 being clip frame 0 (bone rest, 0 deg), which fits the return to it after
+    exactly (239 - 126.03) x 30 ticks. The 35.6 deg (708 ticks) of the turn the run did not cover cannot hide the wrap, because
+    the wrap is at the bind pose. A longer hold (>= 240 s of sim time) is not needed.
+  - Tool: `g1_planet_wrap.py wrap <planet.pkl> --scale 500` prints the above in 0.5 s; extraction took 18 m 47 s.
 
 Unattended runs on 2026-10-29: the menus were driven by `g1_ui.py` with `--drive K,E` and `--probe-mod admonitor`,
 which builds Thrawn's SD at station level 1.

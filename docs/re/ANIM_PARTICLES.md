@@ -286,6 +286,8 @@ second of each cycle (frame 238 → 0); a faithful port reproduces that small hi
 (A.7, model created). Background planets are primary-store objects, so their start phase is drawn from the
 synced RNG [M].
 
+**Capture check (g1f t07, 2026-10-31): confirmed.** `apitrace_20261031_175322` (Kuat space, planet draw `m_world` against `m_time`): 0.050207° per tick (360/239/30 = 0.050209), 239.0 s per revolution, the pose returns to the bind pose after 3 390 ticks and passes it without a pause (a 240-frame wrap would hold 30 ticks). See RENDER.md §7.3.
+
 ### A.10 Port notes for R3
 
 - Sim side (deterministic, `/fp:precise`, no FMA): ALA metadata (frame count, fps, bone count, per-type

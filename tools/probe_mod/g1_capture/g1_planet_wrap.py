@@ -7,6 +7,10 @@ and UVOffset. Output: <out>.json (series) and a text summary on stdout.
   python -I g1_planet_wrap.py extract <run-dir or trace> [--out series.json] [--max-calls N]
   python -I g1_planet_wrap.py survey rows.pkl                 rotation per (shader, scale) group: pick the planet
   python -I g1_planet_wrap.py analyse rows.pkl --scale S      steps / ticks of that group
+  python -I g1_planet_wrap.py wrap rows.pkl [--scale S]       (g1f t07) angle against m_time: start phase, return to the bind
+                                                              pose, rate before / after, stalls
+  `extract` selects the Planet.fx draws by the register CloudScrollRate (--marker) and stores m_time (--clock) per row. The t03
+  version selected UVOffset, which is a register of the generic bump-mesh shader, so its "planet" was not the planet.
 
 Method (see the summary printed by `analyse`):
   1. Rotation about the spin axis, unwrapped: successive relative rotations M[i-1]^-1 M[i] of the (scale-normalised)
@@ -34,8 +38,11 @@ TOOLCHAIN = os.path.abspath(os.path.join(KIT, "..", "..", "..", "toolchain"))
 APITRACE = os.path.join(TOOLCHAIN, "capture", "apitrace-14.0", "bin", "apitrace.exe")
 
 
-def extract(trace, out, max_calls=0):
-    st = A.TraceState(["m_world", "UVOffset", "m_worldViewProj"])
+def extract(trace, out, max_calls=0, marker="CloudScrollRate", clock="m_time"):
+    # g1f t07: Planet.fx has no UVOffset (that register belongs to the generic bump-mesh shaders); its vertex shader is the one
+    # declaring CloudScrollRate and it also carries m_time (the engine's clock), which gives the time axis the t03 run lacked.
+    st = A.TraceState(["m_world", clock, "m_worldViewProj"])
+    st.marker = marker
     cmd = [APITRACE, "dump", "--color=never", "--grep=" + A.DUMP_GREP, trace]
     if max_calls:
         cmd.insert(2, "--calls=0-%d" % max_calls)
@@ -78,7 +85,7 @@ def extract(trace, out, max_calls=0):
     seen = set()
     for h in {h for (h, _) in st.tracked}:
         mw = st.tracked.get((h, "m_world"), [])
-        uv = st.tracked.get((h, "UVOffset"), [])
+        uv = st.tracked.get((h, clock), [])      # "u" in the rows = the clock register (m_time), or UVOffset with --marker UVOffset
         wv = st.tracked.get((h, "m_worldViewProj"), [])
         for i, (fr, v) in enumerate(mw):
             try:
@@ -264,22 +271,90 @@ def analyse(path, key_scale=None, tick_hz=30.0, markers=None):
         json.dump({"frames": [fr for fr, _ in th], "deg": deg}, open(path + ".%s_%.1f.json" % (key[0], key[1]), "w"))
 
 
+def wrap(path, key_scale=None, tick_hz=30.0, clip_frames=239, step_m_time=None):
+    """g1f t07: angle against the engine clock (m_time, stored as the row's `u`) for the planet (the most-drawn object of the
+    given scale; Planet.fx rows from `extract`). Reports the tick rate, the angle per tick against 360/clip_frames/tick_hz, the
+    first change (jump from the bind pose to the clip's start phase), the tick at which the angle returns to the bind pose
+    (clip frame 239 = frame 0), stalls (a 240-frame wrap holds the pose for 30 ticks there) and the rate before / after."""
+    import pickle
+    d = pickle.load(open(path, "rb"))
+    pos = {}
+    for fr, h, r, u, w in d["rows"]:
+        if key_scale is not None and abs(math.sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2) - key_scale) > 0.06:
+            continue
+        pos.setdefault((round(r[3]), round(r[7]), round(r[11])), []).append((fr, r, u[0][0] if u and u[0] else None))
+    key = max(pos, key=lambda k: len(pos[k]))
+    lst, last = [], None
+    for e in pos[key]:
+        if e[0] != last and e[2] is not None:
+            lst.append(e)
+            last = e[0]
+    th = unwrap([(fr, r) for fr, r, _ in lst])
+    t = [e[2] for e in lst]
+    deg = [b for _, b in th]
+    ch = [i for i in range(1, len(deg)) if abs(deg[i] - deg[i - 1]) > 1e-5]
+    print("planet object at %s: %d frames (%d..%d), m_time %.3f..%.3f, %d pose changes" %
+          (key, len(lst), lst[0][0], lst[-1][0], t[0], t[-1], len(ch)))
+    tick = Counter_mode([round(t[i] - t[i - 1], 4) for i in ch[1:] if t[i] > t[i - 1]])
+    print("  m_time step per tick: %s (so ticks = m_time / %s)" % (tick, tick))
+    # first change = start phase; the rest is the steady turn (travel direction made positive)
+    first = ch[0]
+    sgn = -1.0 if deg[ch[1]] < deg[first] else 1.0
+    rel = [sgn * (x - deg[first - 1]) for x in deg]       # 0 = bind pose (frames before the first tick); travel direction positive
+    steps = [abs(deg[i] - deg[i - 1]) for i in ch[1:] if t[i] - t[i - 1] < 1.5 * tick]
+    steps.sort()
+    q = 360.0 / clip_frames / tick_hz
+    print("  first change at frame %d, m_time %.3f: jump %.4f deg from the bind pose (start phase = %.3f clip frames)" %
+          (lst[first][0], t[first], rel[first], (360.0 + rel[first]) / (360.0 / clip_frames) if rel[first] < 0 else rel[first] / (360.0 / clip_frames)))
+    print("  angle per tick (single-tick steps): median %.6f deg; 360/%d/%g = %.6f; 360/240/%g = %.6f" %
+          (steps[len(steps) // 2], clip_frames, tick_hz, q, tick_hz, 360.0 / 240 / tick_hz))
+    a, b = fit_line([t[i] for i in ch[1:]], [rel[i] for i in ch[1:]])
+    res = max(abs(rel[i] - (a * t[i] + b)) for i in ch[1:])
+    print("  linear fit over %.1f m_time (%d ticks, %.1f deg): %.5f deg per m_time unit (%.6f per tick), max residual %.4f deg" %
+          (t[-1] - t[first], round((t[-1] - t[first]) / tick), rel[-1] - rel[first], a, a * tick, res))
+    print("  one revolution = %.1f ticks = %.1f s at %g Hz" % (360.0 / (a * tick), 360.0 / (a * tick) / tick_hz, tick_hz))
+    gaps = sorted(((t[ch[j]] - t[ch[j - 1]], t[ch[j - 1]]) for j in range(1, len(ch))), reverse=True)[:5]
+    print("  longest gaps between pose changes (m_time units, at m_time): %s   (a 240-frame hold would be %.1f)" %
+          ([(round(g, 3), round(at, 2)) for g, at in gaps], 30 * tick))
+    cross = [i for i in range(first + 1, len(rel)) if rel[i - 1] < 0 <= rel[i]]
+    for i in cross:
+        print("  bind pose reached again at frame %d, m_time %.3f = %.0f ticks after the start phase (clip frame 239 = frame 0); "
+              "rel angles around it: %s" % (lst[i][0], t[i], (t[i] - t[first]) / tick, [round(rel[j], 4) for j in range(i - 3, i + 3)]))
+        for lo, hi in ((t[first], t[i]), (t[i], t[-1])):
+            ii = [k for k in ch[1:] if lo <= t[k] < hi]
+            if len(ii) > 10:
+                a2, _ = fit_line([t[k] for k in ii], [rel[k] for k in ii])
+                print("    rate %.5f deg per m_time unit over m_time %.1f..%.1f" % (a2, lo, hi))
+    return 0
+
+
+def Counter_mode(vals):
+    c = {}
+    for v in vals:
+        c[v] = c.get(v, 0) + 1
+    return max(c, key=c.get) if c else 0.0
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["extract", "survey", "analyse"])
+    ap.add_argument("cmd", choices=["extract", "survey", "analyse", "wrap"])
     ap.add_argument("--scale", type=float, default=None)
     ap.add_argument("path")
     ap.add_argument("--out", default="")
     ap.add_argument("--max-calls", type=int, default=0)
     ap.add_argument("--tick", type=float, default=30.0)
+    ap.add_argument("--marker", default="CloudScrollRate", help="extract: register that selects the shaders (default CloudScrollRate = Planet.fx)")
+    ap.add_argument("--clock", default="m_time", help="extract: register stored as the per-row clock value (default m_time)")
     a = ap.parse_args(argv)
     if a.cmd == "extract":
         trace = a.path if a.path.endswith(".trace") else os.path.join(a.path, "eaw.trace")
         out = a.out or os.path.join(os.path.dirname(trace), "analysis", "planet_series.json")
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        extract(trace, out, a.max_calls)
+        extract(trace, out, a.max_calls, a.marker, a.clock)
     elif a.cmd == "survey":
         survey(a.path)
+    elif a.cmd == "wrap":
+        wrap(a.path, a.scale, a.tick)
     else:
         analyse(a.path, a.scale, a.tick)
     return 0
