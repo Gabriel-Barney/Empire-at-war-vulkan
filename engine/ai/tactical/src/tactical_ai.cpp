@@ -2393,7 +2393,7 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 1;
+constexpr uint32_t kTacticalAiSaveVersion = 2;  // 2: six space free-store facts per object
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
@@ -2487,15 +2487,17 @@ bool get_value(ByteReader& r, lua::AiGlobalValue& v, int depth) {
     return r.ok();
 }
 
-// The 17 admission facts of FreeStoreObjectInfo in declaration order.
+// The 23 admission facts of FreeStoreObjectInfo in declaration order (the 17 land / common facts, then the six
+// space facts of A1_READINGS §6.1, save version 2).
 template <class F>
 auto free_store_flags(F& f) {
-    return std::array<decltype(&f.owned_by_player), 17>{
+    return std::array<decltype(&f.owned_by_player), 23>{
         &f.owned_by_player,         &f.is_transport,         &f.type_create_team,     &f.type_is_dummy,
         &f.type_stay_in_transport,  &f.has_indigenous_or_explosion, &f.has_lobbing_superweapon, &f.has_locomotor,
         &f.is_starship_combatant,   &f.is_team,              &f.type_category_bit_5f, &f.team_has_bit_20,
         &f.type_bit_5b,             &f.subobject_f8_nonempty, &f.in_mode_manager_set, &f.dead_or_removing,
-        &f.in_world};
+        &f.in_world,                &f.type_squadron_member, &f.type_company_member,  &f.has_special_weapon,
+        &f.type_dummy_orbital_structure, &f.type_dummy_star_base, &f.has_tactical_super_weapon};
 }
 
 void put_fact(ByteWriter& w, const objects::ObjectStore& st, const TacticalAiObject& f) {

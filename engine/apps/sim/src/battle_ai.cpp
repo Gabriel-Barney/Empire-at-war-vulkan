@@ -30,6 +30,9 @@ namespace {
 constexpr objects::BehaviorTypeId kUnitAi = 0x12, kTeam = 0x16, kHideWhenFogged = 0x19, kIndigenous = 0x20,
                                   kBuildObjects = 0x29, kLobbing = 0x37, kCashPoint = 0x3C, kCapturePoint = 0x3D,
                                   kDamageTracking = 0x3E;
+// Free-store admission behaviours (A1_READINGS §6; behaviours.cpp numbering = the original's)
+constexpr objects::BehaviorTypeId kTacticalSuperWeapon = 0x2C, kSpecialWeapon = 0x2F, kDummyGroundBase = 0x5B,
+                                  kDummyStarBaseBeh = 0x5C, kDummyGroundStructureBeh = 0x5F, kDummyOrbitalStructure = 0x60;
 constexpr uint32_t kStandinInterval = 60;  // the S10 stand-in cadence (BattleConfig::order_interval default)
 
 uint32_t le32(std::span<const uint8_t> b, size_t o) {
@@ -447,6 +450,11 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     if (const auto pl = b_->req_.info.planet; !b_->space_ && static_cast<size_t>(pl) < g.planets().size())
         for (const objects::ObjectHandle s : g.planets()[pl].structures)
             if (g.store().alive(s)) ++w.conflict_ground_structures;
+    // Objects of a live bombing run (the land mode's +0x38 bombing-run manager set, A1_READINGS §6.2 item 9), ascending.
+    std::vector<objects::ObjectId> bombing_run_objects;
+    for (const TacticalBattle::L1BombingRun& run : b_->l1_runs_)
+        for (const TacticalBattle::L1Bomber& bm : run.bombers) bombing_run_objects.push_back(bm.id);
+    std::sort(bombing_run_objects.begin(), bombing_run_objects.end());
     w.objects.clear();
     out.clear();
     for (const objects::ObjectHandle h : st.all_objects()) {
@@ -532,6 +540,33 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         fs.has_locomotor = a.applies.has_locomotor && o.mobile;
         fs.is_starship_combatant = st.has_behavior(h, objects::beh::StarshipCombatant) || (u != nullptr && o.mobile);  // [port] battle units
         fs.is_team = st.has_behavior(h, kTeam);
+        // Behaviour-in-type tests (0x370320) read the type's behaviour union [M: which set]; the rest are object tests.
+        const auto type_has = [&](objects::BehaviorTypeId b) { return types.has_behavior(ti, objects::BehaviorSet::Union, b); };
+        fs.type_category_bit_5f = type_has(kDummyGroundStructureBeh);
+        fs.type_bit_5b = type_has(kDummyGroundBase);
+        // TEAM: the representative (container) type or any live member type has INDIGENOUS_UNIT
+        if (fs.is_team) {
+            fs.team_has_bit_20 = type_has(kIndigenous);
+            if (mt != members.end())
+                for (const int32_t m : mt->second)
+                    if (const objects::ObjectHandle mh = st.find(static_cast<objects::ObjectId>(m));
+                        mh && types.has_behavior(st.type(mh), objects::BehaviorSet::Union, kIndigenous))
+                        fs.team_has_bit_20 = true;
+        }
+        // obj +0x2b0 / +0xf8 (contained or attached): inside a garrison, a hard point / attached child (store attach
+        // parent), or a DEPLOY_TROOPERS member pinned to its carrier. [port] a team member's link to its TEAM container
+        // (TacticalBattle::Unit::container, store container) is not read as "contained" here.
+        fs.subobject_f8_nonempty = b_->garrison_holder_of(id) != objects::kNoObjectId || static_cast<bool>(st.attach_parent(h)) ||
+                                   (u != nullptr && u->attached_to != objects::kNoObjectId);
+        fs.in_mode_manager_set = !b_->space_ && std::binary_search(bombing_run_objects.begin(), bombing_run_objects.end(), id);
+        fs.dead_or_removing = (u != nullptr && !u->alive) || !st.alive(h);  // both skipped above: always false here
+        fs.in_world = true;  // [M] obj +0x3c8: every listed battle object is in the world (retreated units are skipped above)
+        fs.type_squadron_member = types.squadron_member(ti);
+        fs.type_company_member = types.company_member(ti);
+        fs.has_special_weapon = st.has_behavior(h, kSpecialWeapon);
+        fs.type_dummy_orbital_structure = type_has(kDummyOrbitalStructure);
+        fs.type_dummy_star_base = type_has(kDummyStarBaseBeh);
+        fs.has_tactical_super_weapon = st.has_behavior(h, kTacticalSuperWeapon);
         if (mt != members.end()) a.team_members = mt->second;
         a.moving = o.mobile && b_->movement_->has_unit(id) && b_->movement_->view(id).has_goal;
         a.attack_target = c.has_unit(id) && c.current_target(id) != tc::kNoObject ? c.current_target(id) : -1;

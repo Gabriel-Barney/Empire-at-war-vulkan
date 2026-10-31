@@ -272,8 +272,8 @@ public:
     void register_crc(CrcRegistry& registry, const std::string& name = "ai.tactical") const;
 
     // ---- N1 save / load (contract: alamo/core/save_file.hpp; the battle host's AI chunk) ----
-    // write(): u32 version (1); the shape (AI player pattern, plan library size, plan runtime size, mode: checked
-    // against the reader's rebuilt session); now, mode frame, current plan, the plan / task-force / status /
+    // write(): u32 version (2: the free-store facts carry the six space facts); the shape (AI player pattern, plan
+    // library size, plan runtime size, mode: checked against the reader's rebuilt session); now, mode frame, current plan, the plan / task-force / status /
     // PotentialPlan id counters, orders / rejected; the enable gate; the PerceptionWorld of the last update
     // (PerceptionWorld::write: types by count + digest only) and the per-object facts (handles as value + id) and the
     // previous snapshot's (id, owner) list; the shared perception (threat grid, evaluator targets, leaf cache:
