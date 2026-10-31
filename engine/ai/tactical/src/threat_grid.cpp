@@ -482,21 +482,29 @@ float TacticalPerceptionGrid::cells_force(const PerceptionWorld& w, std::span<co
     return sum;
 }
 
+// A1_READINGS §16 (0x656800) [H]: each counted entry adds AI_Combat_Power of the object's type (0x396380), not the
+// hard-point value; the location's own unit is not excluded.
 float TacticalPerceptionGrid::cell_concentration(const PerceptionWorld& w, uint32_t cell, const GridQuery& q) const {
     if (!valid() || cell >= cell_count() || (q.category & category_union_) == 0) return 0.0f;
+    GridQuery all = q;
+    all.exclude = -1;
+    auto power = [&w](const PerceptionObject& o) {
+        const PerceptionType* t = w.type_of(o);
+        return t ? t->combat_power : 0.0f;
+    };
     float sum = 0.0f;
     for (const uint32_t ei : live_[cell]) {
         const Entry& e = entries_[ei];
         if (e.center_cell != static_cast<int32_t>(cell) || fogged_for(e.object, q.self)) continue;
         const PerceptionObject* o = w.object(e.object);
-        if (o && owner_passes(w, *o, q)) sum += entry_power_now(w, *o, e);
+        if (o && owner_passes(w, *o, all)) sum += power(*o);
     }
     if (q.self >= 0 && static_cast<uint32_t>(q.self) < players_) {
         for (const uint32_t ei : memory_[static_cast<size_t>(q.self)][cell]) {
             const Entry& e = entries_[ei];
             if (e.center_cell != static_cast<int32_t>(cell) || !fogged_for(e.object, q.self)) continue;
             const PerceptionObject* o = w.object(e.object);
-            if (o && owner_passes(w, *o, q)) sum += entry_power_now(w, *o, e);
+            if (o && owner_passes(w, *o, all)) sum += power(*o);
         }
     }
     return sum;

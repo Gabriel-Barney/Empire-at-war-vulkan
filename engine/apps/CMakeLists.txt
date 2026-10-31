@@ -155,15 +155,14 @@ if(_alamo_sim)
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 3600 --workers 4 --quiet
                      --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_land_golden.crc)
     set_tests_properties(alamo_headless_skirmish_ai_foc_land PROPERTIES TIMEOUT 1200)
-    # S10 land outcome: the same invasion run to its end or the 14400-frame limit (0/1/4/N workers identical); skipped
-    # (exit 0) without ALAMO_FOC_DATA. No --expect-battle-end since A1 (2026-10-31): with the A1_READINGS §12 zone cells and
-    # the §25 flood reachability the Utapau battle runs to the limit on every seed, and whether the original ends it is an
-    # open follow-up (roadmap group a1f). One ctest entry per worker count so they run
+    # S10 land outcome: the same invasion run to its end (0/1/4/N workers identical); skipped (exit 0) without
+    # ALAMO_FOC_DATA. a1f (2026-10-31): with TEAM containers in the threat grid (A1_READINGS §29) Clear_Infantry runs and the
+    # Utapau battle ends on every seed checked (1-6); the 0-worker entry asserts it again. One ctest entry per worker count so they run
     # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
     # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
     set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome
-             COMMAND alamo_headless --skirmish-ai foc-land --ticks 20000 --workers 0 --quiet
+             COMMAND alamo_headless --skirmish-ai foc-land --ticks 20000 --workers 0 --quiet --expect-battle-end
                      --crc-out ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome PROPERTIES TIMEOUT 1800
                          FIXTURES_SETUP alamo_land_outcome_w0)

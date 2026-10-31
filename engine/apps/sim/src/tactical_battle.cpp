@@ -2013,7 +2013,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     oi_crush_.assign(movement_->crush_events().begin(), movement_->crush_events().end());  // OI tactical
     l1_motion(mode, rng);  // L1 systems: hyperspace jumps, engine re-enables
     hg_engine_service();   // engine loops: SimpleSpace locomotor services (moving first, then idle)
-    bt_team_positions(mode);  // battle host: TEAM containers follow their first live member
+    bt_team_positions(mode);  // battle host: TEAM containers at their members' box centre (A1_READINGS §29.4)
     profile::lap("tac.motion_post");
     for (const Unit& u : units_)
         if (u.alive && !u.retreated && u.movable && store.alive(u.h))

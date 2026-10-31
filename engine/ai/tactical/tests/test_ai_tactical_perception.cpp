@@ -386,7 +386,10 @@ static void test_grid_projection() {
     q.memory_counted_when_not_fogged = true;
     const uint32_t ctr = static_cast<uint32_t>(g.cell_clamped(30.0f, 570.0f));
     const uint32_t one[] = {ctr};
-    CHECK(g.cells_concentration(w, one, q) == 100.0f);
+    CHECK(g.cells_concentration(w, one, q) == 10.0f);  // §16: the type's AI_Combat_Power (trooper 10), not the object's 100
+    q.exclude = 1;
+    CHECK(g.cells_concentration(w, one, q) == 10.0f);  // §16: no exclusion of the location's own unit
+    q.exclude = -1;
     // destroyed: removed everywhere
     CHECK(g.on_object_destroyed(1));
     CHECK(g.threat(0, c010) == 0.0f && g.memory_entries(0, c010).empty() && g.live_entries(c010).empty());
@@ -601,6 +604,7 @@ static void test_tokens() {
     CHECK(f.val("Variable_Target.EnemyUnitConcentrationUnnormalized", 0, f.h_zone2) == 10.0);
     // tank 10 (100) + barracks 17 (50) + pad 12 (0) centred in zone 2; the Underworld tank (x 120) is in zone 3
     CHECK(f.val("Variable_Target.FriendlyUnitConcentrationUnnormalized", 0, f.h_zone2) == 150.0);
+    CHECK(f.val("Variable_Target.Location.FriendlyUnitConcentrationUnnormalized", 0, f.h_tank) == 150.0);  // §16: tank counted
     CHECK(near_eq(f.val("Variable_Target.EnemyUnitConcentrationNBTD", 0, f.h_zone2), 10.0 / 20.0, 1e-12));
     // bitfield: types first, then categories
     CHECK(f.val("Variable_Target.EnemyUnitsBitfield {Parameter_Type = \"Rebel_Trooper\", Parameter_Type = \"Empire_Tank\", "

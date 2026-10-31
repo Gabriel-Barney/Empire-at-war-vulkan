@@ -74,7 +74,7 @@ struct PerceptionHardPoint {
 struct PerceptionObject {
     int32_t id = -1;
     int32_t owner = kNoPlayerIndex;  // player list index (obj +0x58 -> player)
-    int32_t type = -1;               // own / container type (0x396380) index
+    int32_t type = -1;               // own / container type (0x396380) index; a TEAM: its company type (A1_READINGS §29)
     int32_t rep_type = -1;           // representative type (0x3973b0) index; -1 = same as `type`
     bool alive = true;               // obj +0x3a0 bit 0x40 clear
     bool has_unit_ai = false;        // UNIT_AI behaviour 0x12: the object is in the threat grid

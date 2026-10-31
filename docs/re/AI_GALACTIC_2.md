@@ -131,7 +131,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 *Setup A* 0x7287a0 [H]:
 - For each TF: compute the stage location 0x140b3a660[tf] through the target's reachability object, using the goal Reachability and TF +0x94; it uses RequireUnique/MatchingStage (+0x98/+0x99). If there is no target, use the goal's own location.
 - Only if AllowFreeStoreUnits && !MagicPlan: walk the free store's unit list in list order. A unit is eligible when all of these hold:
-  - it is not reserved by another PP (entry +0x30 == 0);
+  - it is not reserved by a PP (entry +0x30 == 0), **except on the PP's first solve** (PP+0x104 == 0: Init at proposal), which takes reserved units too; the re-solve at accept (0x6c4a50) applies the test. Who sets +0x30 and when: A1_READINGS §28;
   - its health fraction 0x396470 ≥ the constant at 0x140b27338;
   - **engaged test:** the unit is reserved by this PP, or AllowEngagedUnits, or it is not in a battle-pending state (+0x348 / +0x1C4 checks); and either it is not in a fleet with pending orders (+0x361 / +0x369), or (+0x158 set, the 0x4914e0 value ≥ 1.0, and the 0x527620 check passes) [M field names];
   - it is not building or moving (+0x210, +0x3A7, +0x3B4, 0x39ad40);

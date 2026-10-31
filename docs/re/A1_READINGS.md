@@ -47,6 +47,8 @@ Conventions:
 | 25 | Reachability source = the AI's home zone (port choice, follow-up question) | **corrected**: there is no home zone. Each call site has its own source, and the goal-proposal filter has no source at all (a per-zone flood around the target) | [H] |
 | 26 | TimeLastSeen land cells with flags & 0x22 count as 0 | **corrected**: 0x22 = Steep \| Water in the passability cell's **base** word; such cells (and cells outside the passability grid) are left out of both the sum and the count | [H] |
 | 27 | Fog at battle start | everything starts fogged with last-seen 0; own and allied REVEAL units uncover their circles on their first service; no start radius and no map-wide reveal for AI players | [H] / [M] where tagged |
+| 28 | Free-store entry +0x30 = the `Lock_Current_Orders` order lock [M] (a1f t03) | **corrected**: +0x30 is the owning PotentialPlan pointer. Set when a goal is accepted or kept in Resolve_Category (0x6c2d60), not at proposal; cleared at every Commit start (0x6c0be0) and by the PP destructor. `Lock_Current_Orders` is an object counter (+0x3a8) that On_Unit_Service does not test | [H] |
+| 29 | TEAM containers in the threat grid (a1f t04) | teams with UNIT_AI get one whole-object entry, no TEAM exclusion; members (no UNIT_AI) get nothing. 0x396380(team) = the company type (team data +0x58), 0x3973b0 = `Create_Team_Type`. Power = the company's load-derived sum × clamp(`Max_Squad_Size` / `Company_Units` count, 0, 1), a static share, not live fill (stormtrooper team: 126 × 0.5 = 63); radius from the first member type (140) | [H] |
 
 ---
 
@@ -556,3 +558,220 @@ For each threat cell (zone: the evaluator's threat-cell set in list order; rect:
   - Lower for zones near own units.
   - 0 for fully seen zones.
 - It is **not** F/30 for every zone.
+
+## 28. Free-store entry +0x30 (a1f t03) [H unless tagged]
+
+### 28.1 Entry layout
+
+- The free store's unit map is at free store +0x40: an MSVC hash list, key = object id, bucket = (id ^ 0xdeadbeef) & mask.
+- Each list node is 0x38 bytes (allocated in 0x4d19e0):
+
+| Offset | Size | Content |
+|---|---|---|
+| +0x00 / +0x08 | 8 + 8 | list next / prev |
+| +0x10 | 8 | the game object (key: its id at obj +0x50) |
+| +0x18 / +0x20 / +0x28 | 24 | vector of AIBuildTask pointers that claimed this unit (FREESTORE_ALLOC path; filled at admission, pruned by 0x4d4ee0 and 0x4d5150) [M purpose] |
+| +0x30 | 8 | **owning PotentialPlan** (PotentialPlanClass*, 0x210 B). 0 = unreserved |
+
+- Admission (0x4d2c90) builds every new entry with +0x30 = 0.
+- Removal (0x4d5000, vf+0xa0; galactic override 0x6907d0) erases the whole node. A unit that leaves the store and
+  comes back gets a fresh entry with +0x30 = 0.
+- The debug owner string 0x5259d0 confirms the meaning: +0x30 = 0 prints "Freestore", otherwise "<goal>(<plan>)",
+  read through PP+0x20 (the goal).
+
+### 28.2 `Lock_Current_Orders` does not touch +0x30
+
+- `Lock_Current_Orders` (0x57cd40) increments an object counter, obj +0x3a8 (0x3a8e50(obj, 1)). The free store
+  subscribes to the object's signals 10 and 11.
+- The free store's signal handler (0x4d4aa0) decrements the counter on signal 10 or 11 (0x3a8e50(obj, 0)) and
+  re-applies the default abilities (0x3a82a0). `Unlock_Current_Orders` (0x581fd0) decrements it too.
+- 0x39ad40 ("is locked") is true when obj +0x3a8 > 0 (or for some locomotor states).
+- The lock is read by FreeStore Setup A: a locked unit is not a candidate.
+- **On_Unit_Service does not read the lock.** The loop in 0x4d5a70 tests only entry +0x30.
+
+### 28.3 PotentialPlan fields used here
+
+- PP+0x100: reserved flag. Set by the first 0x6c2d60 call; never cleared.
+- PP+0x4E: "reservations suspended" flag. Set by 0x6c0be0; cleared by 0x6c2d60 and by Init 0x6c0d00.
+- PP+0x104: solve counter. The constructor (0x6be9c0) sets −1; each solver run (0x6c3da0) first adds 1. So the first
+  solve (Init, at proposal) runs with 0.
+- PP+0x108: the PP's unit list (one object pointer per selected free unit; null = "to be produced").
+- PP+0x198: mode (0 galactic, otherwise tactical).
+
+### 28.4 Writers
+
+| Function | Writes | Called from | Moment in the goal's life |
+|---|---|---|---|
+| 0x4d2c90 admission | new entry, +0x30 = 0 | free store Add_Object (vf+0x98) and the per-mode admission scans | the unit enters the store |
+| **0x6c2b20**, from **0x6c2d60** (reserve / refresh) | +0x30 = PP for every PP+0x108 unit still on the store. It overwrites any other PP's value (no check) | Resolve_Category 0x6c8970: the greedy accept and the weighted random accept, just before Activate; step 3, each active goal that is kept with a valid plan. Maintenance 0x722a30: each surviving goal | **accept** of a new proposal; **re-assert** for kept goals in every Commit |
+| **0x6c2320** (unreserve) | +0x30 = 0 where +0x30 == PP (only if PP+0x100) | **0x6c0be0**, Commit_Proposed_Goals 0x6c8710 step 4, once for every active goal with a PP, before any Resolve_Category; the PP destructor 0x6bec20 | start of every Commit: all reservations are suspended. Destructor: the goal is released or its PP replaced |
+| 0x6c27d0 (PP, unit) | +0x30 = 0 if == PP. A unit not on the store is re-admitted (vf+0x98, fresh entry) | TaskForce vf49 0x5ff610 (a unit leaves a task force: `Release_Unit`, `Release_Forces`, plan end 0x5f6a50 step 3); AIBuildTask FSM 0x64aec0, state WAIT_FOR_FREESTORE_ALLOC, when the claimed unit is ready | the unit leaves the plan. It is also removed from PP+0x108, so later re-asserts skip it |
+| 0x6bf3d0 (PP, unit) | admits the unit if needed; +0x30 = PP; adds the unit to PP+0x108 (into a null slot of the same type, else appended) | ReinforceBlockStatus code 0x6a1440 (a unit delivered for a plan's `Reinforce`) [M caller name] | a running plan receives a new unit |
+| 0x4d5000 removal | erases the node | vf+0xa0: the free store's signal handler on destroy (0x10) or owner change (0x1a); a task force taking the unit | death, capture, or the TF takes the unit |
+
+- Nothing else writes node +0x30. All users of the map lookup helpers (0x4d2930, 0x4d2940, 0x6be900) were read.
+- Unit death needs no separate clear: the node is erased.
+
+### 28.5 Readers
+
+| Function | Test |
+|---|---|
+| 0x4d5a70 free-store service | `On_Unit_Service(unit)` runs only for entries with +0x30 == 0. No other per-unit test (no lock test) |
+| 0x7287a0 FreeStore Setup A | a candidate needs PP+0x104 == 0 **or** +0x30 == 0. The engaged test passes when +0x30 == this PP |
+| 0x6c45e0 (from 0x6c47c0, reserved PP) | the plan is **invalid** if a PP+0x108 unit still on the store has +0x30 ≠ 0 and ≠ this PP (stolen) |
+| 0x4d3c60 (fs, obj, PP, any) | on the store and (any or +0x30 == PP). Its only callers (galactic `Is_Unit_In_Transit` 0x68f270, `Is_Unit_Safe` 0x68f410, `Move_Object` 0x68f5b0) pass any = 1, so they ignore +0x30 |
+| 0x5259d0 | debug owner string only |
+
+Lua `Get_Object_Count` (0x4d4690) and `Is_Object_On_Free_Store` (0x4d48c0) do **not** read +0x30:
+- `Is_Object_On_Free_Store(obj)`: map membership only.
+- `Get_Object_Count()`: the map size (+0x10). With a boolean argument it walks the list and counts entries whose
+  obj +0x337 == −1 (true) or ≠ −1 (false) [M: meaning of +0x337 not read].
+
+### 28.6 Order of events (shared by galactic, land and space)
+
+1. **Proposal** (slot 10, `Find_Plan_For_Goal` 0x6bae50): Init 0x6c0d00 runs the first solve (counter 0).
+   - Setup A **ignores** reservations.
+   - Nothing is reserved.
+2. **Commit start** (0x6c8710 step 4, 0x6c0be0), for every active goal's PP:
+   - PP+0x4E = 1;
+   - its queue slots are flagged (0x53bee0 with 1);
+   - its +0x30 entries are cleared.
+3. **Resolve_Category**, per category in budget-weight order:
+   - Kept active goals: validity 0x6c47c0 → 0x6c45e0 fails if another PP took a unit meanwhile. Then 0x6c2d60
+     clears PP+0x4E, re-flags the queue slots (0) and sets +0x30 = PP again.
+   - New proposals at accept: 0x6c4a50 **re-solves** (counter ≥ 1, so units with +0x30 ≠ 0 are skipped and PP+0x108
+     is rebuilt). Then 0x6c2d60 sets PP+0x100 = 1 and reserves: the production queue slots, the tactical
+     reinforcement-pool and build-pad slots, the tactical credits, and +0x30 = PP on the new PP+0x108 units.
+4. **Finalize**: kept goals go to Planning (0x6bad60). Discarded proposals' PPs are destroyed; they had reserved
+   nothing.
+
+Consequences:
+- A unit is reserved from the accept of its goal until one of: the task force takes it off the store
+  (Produce_Force / Collect), it leaves the PP (0x6c27d0), or the goal is released.
+- Step 2 suspends every reservation first. So a goal kept in a later category can lose a unit to a goal accepted in
+  an earlier category. Its validity check (0x6c45e0) then fails.
+
+### 28.7 Shared code
+
+- Tactical and galactic free stores share all of this. LandFreeStoreClass (0x8b6b68), SpaceFreeStoreClass (0x8b6a38)
+  and GalacticFreeStoreClass (0x8b63f8) derive from AIFreeStoreClass (0x878f80). The node layout, admission insert,
+  service loop and Lua methods are base-class code.
+- The PP functions (0x6c2d60, 0x6c2b20, 0x6c2320, 0x6c27d0, 0x6c45e0, 0x6bf3d0) and FreeStore Setup A (0x7287a0, the
+  first marshaller in all three lists) are mode-independent.
+- Only their PP+0x198 ≠ 0 branches add the tactical reinforcement-pool reservations (free store vf+0xe0 / +0xe8 /
+  +0xf0 / +0xf8) and build-pad reservations (0x4d2b00 / 0x4d34b0 / 0x4d6440, pad table +0xe8..+0x110). Those are
+  separate tables, not +0x30.
+
+## 29. TEAM containers in the threat grid (a1f t04) [H unless tagged]
+
+Example throughout: a land skirmish, company `Imperial_Stormtrooper_Squad` (18 `Company_Units` =
+`Squad_Stormtrooper`, `Max_Squad_Size` 9, `Create_Team_Type` `Stormtrooper_Team`, no `AI_Combat_Power`),
+spawned as two `Stormtrooper_Team` containers of 9 members each.
+
+### 29.1 Which objects are in the grid
+
+- Registration (0x6537d0) needs only the UNIT_AI behaviour (0x12). There is **no TEAM exclusion**:
+  - GOM add hook 0x2b3670: mode type ≠ 0 and obj +0x344 (UNIT_AI slot) ≠ −1 → 0x4f5950 → 0x6537d0;
+  - first UNIT_AI service 0x4f6070: registers when the pack has no entries yet.
+- `Stormtrooper_Team` has UNIT_AI, so each team gets entries. A team has no hard points (0x294df0 = 0), so it gets
+  **one whole-object entry** (hard-point index −1).
+- Members (`Squad_Stormtrooper`) have no UNIT_AI: 0x6537d0 returns at once and 0x4f5950 never runs. Members have no
+  entries and are **not** in the owner lists (+0x88).
+- Order at spawn (team helper 0x2a5a60): the generic create 0x29f810 skips its own 0x2b3670 call for objects with a
+  TEAM slot (obj +0x348 ≠ −1). The helper calls 0x2b3670 itself, after it has set team data +0x50 / +0x58 and added
+  the members. So the first registration already sees the company type (§29.2).
+
+### 29.2 Representative types of a team
+
+Team data pack = obj +0x110 (TeamDataPackClass, ctor 0x4ec680 zeroes +0x50 / +0x58). The helper 0x2a5a60 fills:
+
+| Field | Set by | Value |
+|---|---|---|
+| +0x50 | 0x406210 | the company's `Create_Team_Type` (+0x1e58) when set; else the company type (the "Team" fallback type is only used to spawn) |
+| +0x58 | 0x406180 | the company type (the helper's type argument; always non-null there) |
+
+- **0x396380(team)** = +0x58 (via 0x404be0) when non-null, else 0x3973b0. Checked in the disassembly.
+  For the example: `Imperial_Stormtrooper_Squad`.
+- **0x3973b0(team)** = FLEET (4) → fleet +0x70; else TRANSPORT (5) → transport +0x48; else TEAM → +0x50 (0x404c20);
+  else, or when that is null, the object's own type (+0x298). For the example: `Stormtrooper_Team`.
+- A container spawned without the helper (both fields 0) gives its own type for both [M: no such path traced].
+
+### 29.3 AI_Combat_Power of that type
+
+- The field +0xdf0 defaults to 0.0. No shipped GroundCompany (0 of 119) and no `Stormtrooper_Team` has the tag.
+- It is **derived at load** (0x377500, OBJECT_TYPES §6.2 / §9.5):
+  - a type with `Company_Units` gets +0xdf0 = the float sum, in list order, of each member's power;
+  - here each member is plain 7 (the variant copies `Stormtrooper`'s 7, 0x36c000), so 18 × 7 = **126**.
+  - The team type `Stormtrooper_Team` has no member list, so its value stays **0**.
+- 0x370e60(T) at run time:
+  - when the mode type ≠ 0 (tactical) and T has `Company_Units` (+0x960 > 0; else `Squadron_Units` +0x980 > 0),
+    and the first list entry's type has `Create_Team` (+0x67):
+    `power = clamp(T.Max_Squad_Size (+0x1e44) / list count, 0, 1) × T.+0xdf0`;
+  - otherwise `power = +0xdf0`.
+- So the "squad fill" is a **static share of the company per team**: `Max_Squad_Size` / `Company_Units` count. It
+  does not depend on how many members are alive.
+  - This corrects "scaled by squad fill" in GALACTIC_ECONOMY ~l.699 [M] and L1_S4_REMAINING ~l.89.
+  - A last, partial team counts a full share too (e.g. 10 units / size 3 → 4 teams × 0.3 P).
+- Example: 9 / 18 = 0.5 → **0.5 × 126 = 63.0** per team, i.e. 9 × 7.
+
+### 29.4 Entry radius and position (0x653a50)
+
+- Type for the range: R = 0x396380(obj). If R has `Squadron_Units`, use its first entry's type. Else, if it has
+  `Company_Units`, use its first entry's type. Else use R itself.
+- For a team this is the **first company member type** (`Squad_Stormtrooper`). The team type's own
+  `Targeting_Max_Attack_Distance` is not read.
+- r = 0x3749d0(that member type, **the team object**):
+  - the ability, garrison (obj +0x3a7) and deployed (0x39a390) tests read the container;
+  - `SPREAD_OUT` has no range override, so the example gives r = 140;
+  - then the usual steps: + speed × look-ahead (0x370f00 = min(member max speed, team speed 0x4049e0); shipped
+    look-ahead 0), max(r, half cell diagonal), min(r, land cap 500);
+  - area = 4r² = 78400.
+- Position = the container's own position (obj +0x78 / +0x7c).
+  - At spawn it is the members' centroid.
+  - After that, each TEAM service (0x405b10) sets it to the centre of the members' joint bounding box. It is skipped
+    when the locomotor's vf+0x230 says so [M: when that applies].
+  - Re-projection follows the container's transform (§14).
+
+### 29.5 Values for one fresh team (9 live members, land)
+
+| Use | Formula | Example |
+|---|---|---|
+| Entry power (add 0x656a10 / CellForce 0x6545d0) | 0x370e60(0x396380(obj)) | 63 |
+| Threat layer per covered cell | 63 × cellW × cellH / (4 × 140²) | 63 × cellW·cellH / 78400 |
+| CellForce per covered cell | the same × (1 − (1 − h) × A) | |
+| §16 concentration (0x656800), per entry in the cell | 0x370e60(0x396380(obj)), no area or health factor | 63 |
+| Player sums 0x656400 (Friendly / EnemyForceUnnormalized of a player, Game.ForceUnnormalized) | per registered object: 63 × (1 − (1 − h) × A) | 63 at A = 0 |
+
+- Team health h = 0x396df0 → 0x405230 = the **mean of the members' hull fractions**: Σ over non-null list entries
+  ÷ the list count, float, in list order (from the disassembly).
+- Category tests use the mask of 0x396380's type. That is the company, whose mask 0x377500 replaces with the OR of
+  its members' masks (Infantry). A TRANSPORT object (obj +0x337 ≠ −1) uses its own type for the mask and power
+  (0x6537d0, 0x656400, 0x6545d0).
+
+### 29.6 Player sums iterate the owner lists
+
+- 0x656400 walks, for each player passing the relation filter, that player's grid owner list (+0x88) in
+  registration order. Only objects registered by 0x6537d0 are in it, so **teams count once and their members never
+  do**.
+- It sums per object, not per entry: hard points are not split.
+- So a team's contribution stays at 63 until the container dies, however many members are lost; only h moves when
+  A > 0. When members die, h is the mean over the members still in the list [M: dead members leave the list].
+
+### 29.7 Rule for the port's battle host (PerceptionObject of a TEAM container)
+
+- **In the grid:** `has_unit_ai` = the container type has UNIT_AI (true for shipped teams), and
+  `team_or_hide_when_fogged` = true.
+- **Members:** `has_unit_ai` = false. They are not in the grid or the owner lists.
+- **`type` (0x396380):** the company type the team was spawned from. Use the container's own type only for a
+  container with no company.
+- **`rep_type` (0x3973b0):** the company's `Create_Team_Type`, else the company type.
+- **`combat_power`:**
+  - start from the company's derived `AI_Combat_Power` = Σ over its `Company_Units` of each member's power (load
+    rule, OBJECT_TYPES §9.5);
+  - multiply it by clamp(company `Max_Squad_Size` / `Company_Units` count, 0, 1) when the first member type has
+    `Create_Team`;
+  - it is a constant per company type, not tied to live members. Example: 63.
+- **`max_attack_range`:** 0x3749d0 of the company's first member type (`Squadron_Units` checked first), evaluated
+  with the container's state. Example: 140.
+- **`position` / transform:** the container's.
+- **`health`:** the mean of the members' hull fractions.

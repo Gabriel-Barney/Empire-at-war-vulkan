@@ -192,7 +192,8 @@ public:
     // ---- queries (const) ----
     float cell_force(const PerceptionWorld& w, uint32_t cell, const GridQuery& q) const;
     float cells_force(const PerceptionWorld& w, std::span<const uint32_t> cells, const GridQuery& q) const;
-    // FriendlyUnitConcentration: entries whose centre cell is the cell; memory only while fogged.
+    // FriendlyUnitConcentration: entries whose centre cell is the cell; memory only while fogged. Each entry adds its object's
+    // type AI_Combat_Power, with no exclusion of the location's own unit (A1_READINGS §16).
     float cell_concentration(const PerceptionWorld& w, uint32_t cell, const GridQuery& q) const;
     float cells_concentration(const PerceptionWorld& w, std::span<const uint32_t> cells, const GridQuery& q) const;
     // *UnitsBitfield: bit i set if a matching entry is in the cells (memory only while fogged).

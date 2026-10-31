@@ -349,6 +349,23 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             if (pt.category == 0)
                 for (const std::string_view n : types.get_list(ti, "CategoryMask")) pt.category |= mask(n);
             pt.combat_power = types.get_float(ti, "AI_Combat_Power");
+            // A1_READINGS §29 [H]: in a tactical mode 0x370e60 scales a company / squadron type whose first member has
+            // Create_Team by clamp(Max_Squad_Size / member count, 0, 1) (the load-time power is the members' sum).
+            {
+                auto trimmed = [](std::string_view v) {
+                    while (!v.empty() && (v.front() == ' ' || v.front() == '	')) v.remove_prefix(1);
+                    while (!v.empty() && (v.back() == ' ' || v.back() == '	')) v.remove_suffix(1);
+                    return v;
+                };
+                std::span<const std::string_view> list = types.get_list(ti, "Company_Units");
+                if (list.empty()) list = types.get_list(ti, "Squadron_Units");
+                const objects::TypeIndex first = list.empty() ? objects::kNone : types.resolve_name(trimmed(list.front()));
+                if (first != objects::kNone && first < types.size() && types.get_bool(first, "Create_Team")) {
+                    float r = static_cast<float>(types.get_int(ti, "Max_Squad_Size")) / static_cast<float>(list.size());
+                    r = r < 0.0f ? 0.0f : (r > 1.0f ? 1.0f : r);
+                    pt.combat_power = pt.combat_power * r;
+                }
+            }
             pt.is_hero = types.get_bool(ti, "Is_Named_Hero");
             pt.bombing_run_prevention_radius = static_cast<float>(types.get_int(ti, "Bombing_Run_Prevention_Radius"));
             pt.community_property = types.get_bool(ti, "Is_Community_Property");
@@ -516,6 +533,27 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         }
         if (o.mobile && b_->movement_->has_unit(id)) o.speed = b_->movement_->view(id).speed * 30.0f;  // [M] units per second
         o.combat_power = u ? u->power : (static_cast<size_t>(type) < w.types.size() ? w.types[static_cast<size_t>(type)].combat_power : 0.0f);
+        // A1_READINGS §29 [H]: a TEAM container is in the threat grid (UNIT_AI from its own type) as one whole-object entry
+        // of its company type (0x396380, team data +0x58), with that type's tactical power, the first member's attack range
+        // and the mean of the members' hull fractions; the members (no UNIT_AI) have no entries.
+        if (!u && st.has_behavior(h, kTeam))
+            for (const TacticalBattle::Container& ct : b_->containers_) {
+                if (ct.id != id || !ct.team) continue;
+                if (ct.squad_type < w.types.size()) {
+                    o.type = static_cast<int32_t>(ct.squad_type);
+                    o.rep_type = type;  // 0x3973b0: Create_Team_Type, else the company type
+                    o.combat_power = w.types[ct.squad_type].combat_power;
+                }
+                o.has_unit_ai = st.has_behavior(h, kUnitAi);
+                if (const auto tm = members.find(id); tm != members.end() && !tm->second.empty()) {
+                    float hull = 0.0f;
+                    for (const int32_t m : tm->second)
+                        hull += c.has_unit(m) && c.max_health(m) > 0.0f ? c.health(m) / c.max_health(m) : 1.0f;
+                    o.health = hull / static_cast<float>(tm->second.size());
+                    if (const TacticalBattle::Unit* mu = b_->unit_by_id(tm->second.front())) o.max_attack_range = mu->range;
+                }
+                break;
+            }
         o.has_damage_tracking = b_->damage_tracking_.tracks(id);
         o.is_build_pad = st.has_behavior(h, kBuildObjects);
         o.is_cash_point = st.has_behavior(h, kCashPoint);

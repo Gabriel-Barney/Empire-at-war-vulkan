@@ -447,14 +447,25 @@ bool TacticalBattle::bt_team(uint32_t company_type, uint32_t first_member, uint3
 }
 
 void TacticalBattle::bt_team_positions(TacticalMode& mode) {
+    // A1_READINGS §29.4: each TEAM service (0x405b10) moves the container to the centre of its members' joint bounding box
+    // [H]; [M] the members' boxes are taken as equal, so the centre of their positions' box is used.
     objects::ObjectStore& st = mode.primary();
     for (const Container& c : containers_) {
         if (!c.team || c.removed || !st.alive(c.h)) continue;
-        for (const Unit& u : units_)  // first live member, ascending id
+        bool any = false;
+        Vec3 lo{0.0f, 0.0f, 0.0f}, hi{0.0f, 0.0f, 0.0f};
+        for (const Unit& u : units_)
             if (u.alive && !u.retreated && u.container != 0xFFFFFFFFu && containers_[u.container].id == c.id) {
-                st.set_position(c.h, st.position(u.h));
-                break;
+                const Vec3 p = st.position(u.h);
+                if (!any) {
+                    lo = hi = p;
+                    any = true;
+                    continue;
+                }
+                lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+                hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
             }
+        if (any) st.set_position(c.h, Vec3{(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f});
     }
 }
 
