@@ -13,19 +13,19 @@ Spec: `docs/re/TSW_PLANET_DESTROY.md`. Three open **probe** items:
 `build_mod.py` builds `corruption\Mods\TswPlanetProbe` from the installed game's own files (nothing from the game is
 stored in the repository; it reuses the `s10_map_owners` install reader):
 
-- **Campaign "TSWP PROBE: ALDERAAN"** (play the **Empire**): Byss (Empire: level-1 station, `Death_Star_II`, 3
-  `Star_Destroyer`) - route `Byss_Alderaan` - Alderaan (Rebel: `Rebel_Star_Base_1`, 2 `Corellian_Corvette`,
+- **Campaign "TSWP PROBE: KUAT"** (play the **Empire**): Byss (Empire: level-1 station, `Death_Star_II`, 3
+  `Star_Destroyer`) - route `Byss_Kuat` - Kuat (Rebel: `Rebel_Star_Base_1`, 2 `Corellian_Corvette`,
   `R_Ground_Barracks`, `Rebel_Infantry_Squad`). Rebel AI off (`None`).
 - **Galactic plot** (`TSWP_Story.xml` + `TSWP_Story.lua`): `TSWP_Begin` (3 s, on-screen "TSWP PROBE: galactic plot
   loaded") starts a status thread that shows a message box `TSWP galaxy t=... destroyed=... owner=... starbase=...
-  death_star=... ds_at=... Rebel_objects_here=... Empire_objects_here=...` every time the status of Alderaan changes.
-  `TSWP_Heard` (`STORY_PLANET_DESTROYED`, Param1 Alderaan) shows the on-screen line **"TSWP PROBE: THE GALACTIC PLOT
+  death_star=... ds_at=... Rebel_objects_here=... Empire_objects_here=...` every time the status of Kuat changes.
+  `TSWP_Heard` (`STORY_PLANET_DESTROYED`, Param1 Kuat) shows the on-screen line **"TSWP PROBE: THE GALACTIC PLOT
   HEARD PLANET_DESTROYED (spec: never)"** and a message box if it ever fires (P1).
 - **GameScoring hook** (`tswp_hook.lua`, appended to the shipped `GameScoring.lua`), in every space battle:
   fires the Death Star by itself (`Fire_Tactical_Superweapon`) at the first service where
   `Is_Tactical_Superweapon_Ready()` is true and stamps the Lua frame F = round(`GetCurrentTime()` x 30) (mode time,
-  frame exact); then stamps the first service where the target dummy `Alderaan_Backdrop_Large` is gone (the state-9
-  kill) and where `FindPlanet("Alderaan").Is_Planet_Destroyed()` turns true (D +0x2c8), and the frame of
+  frame exact); then stamps the first service where the target dummy `Kuat_Backdrop_Large` is gone (the state-9
+  kill) and where `FindPlanet("Kuat").Is_Planet_Destroyed()` turns true (D +0x2c8), and the frame of
   `Game_Mode_Ending_Event` (battle end). Message boxes: `TSWP fired at frame F=...`, `TSWP dummy ... gone at frame
   ... = F+...`, `TSWP Is_Planet_Destroyed true at frame ... = F+...`, `TSWP battle 1 END frame=... = F+...; ...
   services=... min step=...`. `ServiceRate` is 0 (every service the game gives the script); `min step` says how fine
@@ -39,12 +39,12 @@ press Enter). Do the two runs in one session or in two sessions (the cleanup run
 
 ### Click path
 
-**Screenshot every message box whose text starts with `TSWP` before clicking OK**, and the galaxy map (Alderaan's
+**Screenshot every message box whose text starts with `TSWP` before clicking OK**, and the galaxy map (Kuat's
 owner colour, station icon, fleets) after each battle.
 
-1. Main menu > **Single Player** > **Galactic Conquest** > **TSWP PROBE: ALDERAAN** > **Empire** > Start.
+1. Main menu > **Single Player** > **Galactic Conquest** > **TSWP PROBE: KUAT** > **Empire** > Start.
 2. Wait for "TSWP PROBE: galactic plot loaded" and the first `TSWP galaxy ...` box (the start status).
-3. Select the Byss fleet (Death Star + 3 Star Destroyers), move it to **Alderaan**. Battle prompt: **fight** (not
+3. Select the Byss fleet (Death Star + 3 Star Destroyers), move it to **Kuat**. Battle prompt: **fight** (not
    auto-resolve).
 4. In the space battle expect "TSWP PROBE: GameScoring hook running ..." and `TSWP hook alive`. Give no orders. The
    Death Star moves in; the hook fires it as soon as it is ready (`TSWP fired ...`, on-screen "the hook fired the
@@ -65,7 +65,7 @@ owner colour, station icon, fleets) after each battle.
 | P2 dummy gone | F+348 (vanilla 270 + 1 + 1 + 75 + 1), `Is_Planet_Destroyed` the same frame | F+347 / F+349: the Lua Fire is serviced in frame F (or the step is not 1); the port's `special_weapons.cpp` state 6/7 services need the shift |
 | P2 battle end (W) | not before F+732 (hold release); with a dead station the end is at the release frame or the next | earlier end: the hold (`TacticalBattle::check_victory`) is wrong; a later end with everything dead: a post-release countdown we do not model |
 | P2 retreat (L) | the retreat may finish early, but the battle ends only at ~F+732 | an end at the retreat: no hold for retreats |
-| P3 after W | `destroyed=true`; starbase = what the battle left (the station was killed: none), owner by the derived-owner rules (no surface units; Empire fleet in orbit) [M]; the Death Star still at Alderaan | starbase / owner forced (e.g. Neutral): the TSW path does the hack's extras |
+| P3 after W | `destroyed=true`; starbase = what the battle left (the station was killed: none), owner by the derived-owner rules (no surface units; Empire fleet in orbit) [M]; the Death Star still at Kuat | starbase / owner forced (e.g. Neutral): the TSW path does the hack's extras |
 | P3 after L | `destroyed=true`, owner Rebel, `Rebel_Star_Base_1` kept, Death Star fleet back at Byss (retreated) | Rebel loses the station / owner: same |
 | `Rebel_objects_here` | the infantry squad and barracks are gone after the explosion (surface list killed) | the surface survives: the core routine's list naming (§5 [M]) is wrong |
 
@@ -85,9 +85,69 @@ file is modified.
 | `cleanup_tswp.cmd` -> `cleanup_tswp.py` | idempotent cleanup (`--dry-run`) |
 | `build_mod.py` | builds the mod from the install; `--check` = offline self-check (XML parses, placeholders filled) |
 | `tswp_hook.lua` | the Lua appended to GameScoring.lua (fires the TSW, stamps frames) |
-| `tswp_story.lua` | the galactic story script (status popups) |
+| `tswp_story.lua` | the galactic story script (status records) |
+| `tswp_reader.py` | read-only recorder (started by `run_tswp.py`): heap scan for the `TSWP1` Lua records, mode / frame poll, tactical object-store walk with the Death Star's TSW state (pack pointer obj +0x148, state +0x20, countdown +0x30); writes `out\<run>\reader.log` |
 
 Offline validation (2026-10-31): `build_mod.py --check` OK. Not validated (needs the retail game): the Lua under the
 real engine (`Fire_Tactical_Superweapon` / `Is_Tactical_Superweapon_Ready` on a `Find_All_Objects_Of_Type` result,
 `FindPlanet(...).Is_Planet_Destroyed()` inside a space battle, `Find_First_Object` of the backdrop prop), whether
 `ServiceRate = 0` gives one service per frame, and whether `Death_Star_II` is accepted in `Starting_Forces`.
+
+## Run log 2026-10-31 (Claude via computer use; W done, L incomplete)
+
+Kit fixes and findings from the first real run. Launching `StarWarsG.exe` from a Claude shell exits at once with code 0
+(also without the mod); starting it through `explorer.exe <launcher.cmd>` works.
+
+- **Target moved from Alderaan to Kuat.** In FoC `PLANETS.XML` Alderaan is the asteroid field
+  (`W_planet_Asteroids.alo`) with `Planet_Is_Destroyable_By_TSW No` (also The_Maw, VergessoAsteroids). The kit now
+  uses Kuat, route `Byss_Kuat`, dummy `Kuat_Backdrop_Large`.
+- **`_MessagePopup` shows nothing in the retail game**, so none of the `TSWP ...` boxes (frame stamps, galaxy
+  status) appeared. `Game_Message` works: "GameScoring hook running in this space battle" showed in run L.
+- **The hook never fired the Death Star.** Ready (green button, timer at 0) for 20+ s in both runs with no Fire, so
+  `TSWP_FindDS` / `Fire_Tactical_Superweapon` fail silently (every call is inside `pcall`). The Death Star was fired by
+  hand in both runs, so there are no frame stamps: **P2 is still open.**
+- **Galactic plot:** the `TSWP_Begin` screen text ("galactic plot loaded") never showed and no "GALACTIC PLOT HEARD"
+  line came either. Since the proof line is missing too, **P1 is inconclusive** (plot wiring not proven).
+- **Run W (won):** Kuat destroyed by the manual Fire about 12 s later, station killed by the Star Destroyers, battle
+  time 6:21; enemy losses 2 Corellian Corvette + Space Station Level 1. The galactic conquest then ended at once
+  (credits, "Victory": "removed the Rebellion from the galaxy"): after a won TSW battle the Rebels no longer hold Kuat
+  (their barracks and infantry did not keep it). **P3 after W is only half answered** (owner left the Rebel; Empire or
+  neutral not seen), and the campaign needs a second Rebel planet so the galaxy map survives.
+- **Run L:** fired by hand, then pressed Retreat twice (button "Retreat from battle", bottom of the column next to the
+  minimap) right after the Fire; the planet blew up without the cinematic and the fleet did not leave in 30 s. The run
+  was stopped there. **P3 after L is open.**
+
+Open kit work before the next run: an output channel that works in retail (`Game_Message` with fixed text IDs, or a
+process-memory reader like `s10_map_owners` / `a1_tactical`), find out why the hook does not fire, a second Rebel planet,
+and the retreat rule (when the button is allowed).
+
+## Run log 2026-10-31, second session (Claude via computer use; kit v2, runs W2 and L)
+
+Kit changes: Lua output goes to heap records `TSWP1|KIND|seq|text|END` read by `tswp_reader.py` (started by
+`run_tswp.py`); the reader also walks the tactical object store every frame and logs the Death Star's TSW state and
+countdown; the campaign gives the Rebels a second planet (Dantooine, barracks) so the galaxy map survives a won battle;
+the galactic status line adds `Get_Starbase_Level()`.
+
+- **The GameScoring hook never runs its service.** LOAD and BASEDEF records arrive (ServiceRate 0 and 0.0333) but
+  no `GameService` call ever does: retail calls GameScoring's service only from its `main()` loop, which never runs.
+  `Game_Mode_Starting_Event` did run in run 1 (on-screen line). So the Death Star was fired by hand in both runs and
+  the frames come from the reader's TSW state readout, not from Lua stamps.
+- **P1 (galactic plot hears PLANET_DESTROYED): no.** The plot ran (STORYDEF, STORYBEGIN, GALAXY records, on-screen
+  "galactic plot loaded"); after the W battle Kuat reads `destroyed=true` and no HEARD record came in over a minute of
+  galactic time. Matches §7.
+- **P2 (frame offsets), run L** (F = first frame with state 5 = 2635; its countdown already reads 269, so the Fire
+  frame's service has run): ready (state 4) 2447; state 6 at F+269, 7 at F+270, 8 at F+271 (countdown 75);
+  9 at F+346; **state 10 and the dummy `Kuat_Backdrop_Large` gone at F+347** (countdown 33); state 12 and the
+  debris at F+380 (countdown 350); **state 13 at F+730, state 0 (hold released) at F+731**. Run W2 matches (dummy
+  gone 3775, debris 3808 = +33). So the TSW is serviced in the frame the Fire takes effect. Measured from a Fire stamped
+  between ticks with the last finished frame (as Lua and the port do), that is the spec's F+348 / F+732; the port
+  matches (`test_special_weapons.cpp`). The reader samples once per frame; a ±1 uncertainty on F itself remains.
+- **P3 after W (won):** `destroyed=true owner=EMPIRE starbase=none sb_level=0` (the Star Destroyers killed the
+  station), Rebel objects at Kuat 0 (barracks and infantry gone), the Death Star stays at Kuat (Empire objects there:
+  Star Destroyers, Death Star II, the fleet, the planet).
+- **P3 after L (retreat): not reachable.** After the planet kill the Retreat button is greyed out; clicks on it did
+  nothing, and the fleet was still in the battle 3,000 frames (100 s) after the hold release. The game was stopped
+  there. A lost TSW battle needs another route (for example a weak TSW fleet against a strong defender), or the retreat
+  rule after a TSW kill becomes its own probe question.
+- Reader note: in run L the store walk kept running (7083 walks) but logged no object changes after frame 3800;
+  not investigated.
