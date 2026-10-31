@@ -6,6 +6,13 @@ Not covered: test source quality, render output correctness, runtime performance
 that needs the game launched. The "art" and "design" pipelines are asset *integration* (the port ships no new art);
 there are no dedicated art or design teams in this tree.
 
+## Status on 2026-10-31
+The findings below are kept as written at 18:20 on 2026-10-30. Checked against the tree on 2026-10-31:
+- **Fixed:** 1 (git, `origin` remote, both repos private), 3 (`build_asan.cmd`, 11 sim modules, in `build_gate.cmd`), 4 (`tools\test_env.cmd` defaults the data folders and every script logs `skips:`; 1 data skip left), 7 (`game_main.cpp`, `renderer.cpp`, `test_render.cpp`, `test_gui_screens.cpp` split), 9 (`tools\visual\visual_check.cmd` against `tests/visual_baselines/`), 11, 12 (`modest-wiles`, `build-core` and the `agent_*` logs are gone), 14 (the store has a remote and `record-build` records land).
+- **Partly done:** 2 (no hosted CI; `tools\gate_scheduled.cmd` and `build_gate.cmd` run the gate on this PC), 5 (OPT1 done except t07; LP5 and the rest of the performance lane not started).
+- **Still open:** 6 (probes), 8 (`engine/apps` single owner), 10 (shader precompile and asset preload, roadmap SP and LP groups), 13 (docs size and duplication), 16 (debt not triaged). Current counts: 129 tests on MSVC and clang, 113 `add_test` entries.
+- **Not checked:** 15 (roadmap data quality).
+
 ## What is healthy
 - Build/test: MSVC and clang both 127/127 tests, 0 warnings. Full ctest dropped from 641 s to 109 s (MSVC) / 99 s (clang) after `-j 8`.
 - Build records land on the roadmap automatically (6 records, all pass); module boundaries are clean (21 modules, each with a test exe).
