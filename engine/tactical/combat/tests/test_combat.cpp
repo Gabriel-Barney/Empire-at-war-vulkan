@@ -2683,7 +2683,8 @@ void test_rocket_flight_system() {
         CHECK(diverged == 0u);
         CHECK(combat_bytes(*a.w.sys) == combat_bytes(*b.w.sys));
     }
-    {  // [port] a rocket type without curve data (the host did not read it: rocket_curve_distance < 0) flies straight
+    {  // a rocket type without curve data (Projectile_Rocket_Curve_Distance absent = 0): spline flight, but no legs and no
+       // draws; the path is not buildable, so the rocket expires on its first flight step (refixf t01: no straight fallback)
         CombatData d;
         ProjectileDesc rk;
         rk.max_speed = 10.0f;
@@ -2700,8 +2701,7 @@ void test_rocket_flight_system() {
         CHECK(sys.launch_projectile(l, 1));
         sys.tick(1, trees, rng);
         sys.tick(2, trees, rng);
-        RocketView v;
-        CHECK(!sys.rocket(0, v) && sys.projectile(0).pos.x == 10.0f && rng.draws() == 0u);
+        CHECK(sys.projectile_count() == 0u && rng.draws() == 0u);
     }
 }
 

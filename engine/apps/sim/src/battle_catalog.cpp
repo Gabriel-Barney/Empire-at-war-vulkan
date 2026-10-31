@@ -263,6 +263,13 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
     if (s.full) {
         // S10-int: S9 projectile fields (ABILITIES_HARDPOINTS 4.3, 4.4, 4.7; TACTICAL_COMBAT 3.5).
         if (cat >= 0 && cat <= 9) p.category = static_cast<tc::ProjectileCategory>(cat);
+        // refixf t01: ROCKET / MPTL_ROCKET spline flight (S9_DEATH_CLONE_SHIELDS.md §2.4). The distances use converter 0x8
+        // (float; type +0x1fec / +0x1ff0 / +0x1ff4), 0 when absent; the two flags are type +0x7f / +0x7e.
+        p.rocket_straight_distance = ty.get_float(t, "Projectile_Rocket_Straight_Distance");
+        p.rocket_curve_distance = ty.get_float(t, "Projectile_Rocket_Curve_Distance");
+        p.rocket_curve_offset = ty.get_float(t, "Projectile_Rocket_Curve_Offset");
+        p.target_point_on_terrain = ty.get_bool(t, "Projectile_Target_Point_On_Terrain");
+        p.explode_when_reached_target_radius = ty.get_bool(t, "Explode_When_Reached_Target_Radius");
         p.damage_delay_secs = ty.get_float(t, "Projectile_Damage_Delay_Secs");
         p.ion_stun = ty.get_bool(t, "Projectile_Ion_Stun_On_Detonation");
         p.ion_stun_duration = ty.get_float(t, "Projectile_Ion_Stun_Duration");

@@ -1884,6 +1884,25 @@ void test_foc() {
     std::printf("foc battle: contrast rows %zu, hardpoint records %zu, priority sets %zu, damage types %u\n", crules.contrast.size(),
                 catalog.hardpoint_records(), catalog.priority_sets().size(), catalog.damage().damage_count());
     CHECK(crules.contrast.size() == 11 && catalog.hardpoint_records() > 100 && !catalog.priority_sets().empty());
+    {  // refixf t01: rocket curve fields reach the battle tables (MPTL fires Proj_Ground_Proton_Torpedo: MPTL_Rocket,
+       // straight 100, curve 50, offset 7, Target_Point_On_Terrain, Explode_When_Reached_Target_Radius)
+        std::vector<uint32_t> idx;
+        const BattleTables bt = catalog.build_battle({static_cast<uint32_t>(types.resolve_name("MPTL"))}, idx);
+        const tactical::combat::ProjectileDesc* torp = nullptr;
+        for (const tactical::combat::ProjectileDesc& pd : bt.combat.projectiles)
+            if (pd.name == "Proj_Ground_Proton_Torpedo") torp = &pd;
+        CHECK(torp != nullptr);
+        if (torp) {
+            std::printf("foc rocket: %s cat %d straight %.0f curve %.0f offset %.0f tpot %d explode %d mfd %.0f\n", torp->name.c_str(),
+                        static_cast<int>(torp->category), static_cast<double>(torp->rocket_straight_distance),
+                        static_cast<double>(torp->rocket_curve_distance), static_cast<double>(torp->rocket_curve_offset),
+                        torp->target_point_on_terrain ? 1 : 0, torp->explode_when_reached_target_radius ? 1 : 0,
+                        static_cast<double>(torp->max_flight_distance));
+            CHECK(torp->category == tactical::combat::ProjectileCategory::MptlRocket && torp->rocket_straight_distance == 100.0f &&
+                  torp->rocket_curve_distance == 50.0f && torp->rocket_curve_offset == 7.0f && torp->target_point_on_terrain &&
+                  torp->explode_when_reached_target_radius && torp->max_flight_distance == 720.0f);
+        }
+    }
     {  // --- S4 (owner: S4 agent): shipped corruption options (PLANETS.XML) and garrison / capture descriptors ---
         const std::vector<galactic::CorruptionOption> ae = galactic::corruption_options(types, types.resolve_name("AetenII"));
         size_t missions = 0, options = 0;

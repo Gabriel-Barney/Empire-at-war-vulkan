@@ -2206,28 +2206,10 @@ bool CombatSystem::shield_away(const Projectile& p, Vec3& away) const {
     return false;
 }
 
-void CombatSystem::rocket_straight_replan(Projectile& p) {
-    // [port] Legacy stand-in, kept only for rocket types without curve data (ProjectileDesc::rocket_curve_distance < 0:
-    // the host did not read Projectile_Rocket_Curve_Distance): they fly straight and a crossing (the next point inside
-    // (<= r), the current position outside (>= r)) points the rocket away from that emitter's centre. Spline rockets use
-    // rocket_step (S9_DEATH_CLONE_SHIELDS.md §2.4).
-    for (const uint32_t idx : emitters_) {
-        const Unit& e = units_[idx];
-        if (e.flags & kUnitDead) continue;
-        if (!is_enemy(e.owner, p.owner)) continue;
-        const float r = e.emitter_radius;
-        if (!(r > 0.0f)) continue;
-        const Vec3 cur = p.pos - e.pos;
-        const Vec3 nxt = (p.pos + p.dir * p.speed) - e.pos;
-        if (dot(nxt, nxt) <= r * r && dot(cur, cur) >= r * r) p.dir = normalize(cur);
-    }
-}
-
 // ---- refixf t01: spline rockets (S9_DEATH_CLONE_SHIELDS.md §2.4) -------------------------------------------------------
 
 bool CombatSystem::spline_rocket(const ProjectileDesc& pd) const {
-    return (pd.category == ProjectileCategory::Rocket || pd.category == ProjectileCategory::MptlRocket) &&
-           pd.rocket_curve_distance >= 0.0f;
+    return pd.category == ProjectileCategory::Rocket || pd.category == ProjectileCategory::MptlRocket;
 }
 
 void CombatSystem::add_rocket(const Projectile& p, Vec3 fire_at, Vec3 launch) {
@@ -2574,7 +2556,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         // S9 t05 (S9_DEATH_CLONE_SHIELDS.md §2.2 / §2.3): the flight modes steer by Turn_Toward (0x3abe40) limited to
         // Max_Rate_Of_Turn x the mode multiplier per step - homing toward the target, and in the straight / homing modes
         // away from a missile-shield emitter holding the projectile (that goal replaces the target for the step).
-        // Rockets re-plan on crossing into an emitter; bombs, grenades and sabers are never shield-tested.
+        // Rockets fly rocket_step (spline, re-plan on crossing); bombs, grenades and sabers are never shield-tested.
         using PC = ProjectileCategory;
         const PC cat = pd.category;
         const bool jammed = is_jammed(p.target, frame);
@@ -2585,9 +2567,8 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         }
         bool steer = false;
         Vec3 goal;
-        if (cat == PC::Rocket || cat == PC::MptlRocket) {
-            if (!emitters_.empty()) rocket_straight_replan(p);
-        } else if (cat != PC::Bomb && cat != PC::Grenade && cat != PC::StaticBomb && cat != PC::LightSaber &&
+        // ROCKET / MPTL_ROCKET never get here (rocket_step above, refixf t01).
+        if (cat != PC::Bomb && cat != PC::Grenade && cat != PC::StaticBomb && cat != PC::LightSaber &&
                    cat != PC::ClusterBomb && !emitters_.empty()) {
             steer = shield_away(p, goal);
         }
