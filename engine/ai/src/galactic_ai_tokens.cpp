@@ -1010,7 +1010,7 @@ struct GalacticSimTokenResolver::Impl {
         if (k == "HASSTRUCTURE") return has_structure(p, params, false, out);
         if (k == "STRUCTURECOUNT") return has_structure(p, params, true, out);
         if (k == "HASCREDITSIPHON") return out = b2d(ps.siphon_player >= 0), true;
-        if (k == "ISSURFACEACCESSIBLE") return out = b2d(ps.type >= rules.types.size() || rules.types[ps.type].surface_accessible), true;
+        if (k == "ISSURFACEACCESSIBLE") return out = b2d(sim.surface_accessible(static_cast<PlanetIndex>(p))), true;  // 0x375220 (destroyed -> 0)
         if (k == "ISCORRUPTED")
             return leaf("T:ISCORRUPTED", ip, 3, params, [&](double& v) {
                 v = b2d(ps.corruption != gal::kCorruptionNone);  // false leaves the output unwritten (0) [H]

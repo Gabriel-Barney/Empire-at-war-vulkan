@@ -43,8 +43,8 @@
 //      damaged-smoke events -> attached_effects() (render); ability events (EnginesOffline); clear_events;
 //      PARTICLE objects whose Particle_Lifetime_Frames ran out are destroyed; dummy targets without a
 //      pending ability are removed;
-//   6. victory: a side without units on the map and in its pool loses (0xb); a completed retreat (0xc);
-//      station destroyed (0xf); max_frames [port time limit: the defender holds, the attacker withdraws].
+//   6. victory: a side without victory-relevant units (BT §3.1a) on the map and in its pool loses (0xb); a
+//      completed retreat (0xc); station destroyed (0xf); max_frames [port time limit: the defender holds, the attacker withdraws].
 // RESULT: winner, victory type, retreated player, galactic objects whose every tactical counterpart died
 // (never-deployed reserves and retreated units survive), starbase destroyed.
 // Determinism: units and participants in vectors by id / request order; all draws on the synced RNG in
@@ -827,6 +827,10 @@ private:
     void complete_retreat(TacticalMode& mode, uint8_t side);
     void conclude(int32_t winner, uint8_t victory, int32_t retreated);  // finish(), after end_hold_frames
     void check_victory();
+    // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type (participant: any spawn
+    // type). Cached per type in vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
+    bool victory_relevant(uint32_t type);
+    bool victory_relevant(const Participant& p);
     void finish(int32_t winner, uint8_t victory, int32_t retreated);
     float side_power(uint8_t side) const;
     int32_t side_player(uint8_t side) const { return side == 0 ? req_.info.defender : req_.info.attacker; }
@@ -1098,6 +1102,7 @@ private:
     void bt_battle_end();                                      // finish(): lead object step 4
     void bt_hash(StateHasher& h) const;
     bool bt_is_super_weapon(uint32_t type) const;
+    std::vector<uint8_t> vr_cache_;  // victory_relevant() per type
     // Land: live BASE_SHIELD objects (Base_Shield_Radius > 0) are secondary occupants of the cells in their radius
     // (PassabilityGrid::stamp_secondary_circle, kPassShield [inferred]); unstamped when they die / leave. Setup + per tick.
     void bt_shield_stamps(const TacticalMode& mode);

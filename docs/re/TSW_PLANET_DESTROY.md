@@ -25,7 +25,7 @@ STRATEGIC_GAPS §1.4 (victory 7), P4_SIM_SYSTEMS §3.3 (hack path). Not repeated
 | 5 | What 0x3f76c0 does (and does not do) | [H]; list naming [M] |
 | 6 | Victory 7 / tactical type 0x10 from the TSW | [H]; victim / list semantics [M] |
 | 7 | Story events | [H] call; galactic plot does not hear it (probe 2026-10-31) |
-| 8 | Battle end afterwards; ownership | [H] no TSW-specific step; owner after a won battle probed 2026-10-31; lost battle open |
+| 8 | Battle end afterwards; ownership | [H] no TSW-specific step; owner after a won and a lost battle probed 2026-10-31 (lost: R = winner, direct retreat jump) |
 | 9 | Corrections to other docs | [H] |
 | 10 | Port-affecting findings | — |
 
@@ -200,10 +200,17 @@ The galactic Death Star path (0x707670) does the same leader test (without the n
   planet].
 - The TSW path never sets the owner. The owner is then the per-frame derived owner (GALACTIC_ECONOMY §4.1):
   no surface units are left, the residual-influence step is skipped for destroyed planets (0x3f3830 tests
-  +0x2c8), so starbase / orbital control / leaning decide [M]. **probe**: owner and starbase of a planet after
-  a won and after a lost TSW battle. **Probe 2026-10-31, won battle** (station killed by the fleet, surface
-  barracks and infantry gone): destroyed, owner = the attacker (Empire), starbase level 0, the Death Star stays in
-  orbit. **Lost battle: open** — after the kill the Retreat button was greyed out and the fleet could not leave.
+  +0x2c8), so starbase / orbital control / leaning decide [M]. **Probe 2026-10-31, won battle** (station killed
+  by the fleet, surface barracks and infantry gone): destroyed, owner = the attacker (Empire), starbase level 0,
+  the Death Star stays in orbit. **Probe 2026-10-31, lost battle** (L1 systems t06: Byss – Kuat, Dantooine Rebel
+  with no route; Kuat destroyed by the TSW, then all escorts killed, Death Star alive, defender wins by 0xb):
+  Kuat destroyed, owner = Empire, no starbase, **no Rebel object left at Kuat**. Code [H]: the Death Star is not
+  counted for 0xb because its type is not victory-relevant (BATTLE_TRANSITIONS §3.1a); at battle end the
+  super-weapon rule sets R := winner (Rebel, no `Is_Super_Weapon_Killer`; BATTLE_TRANSITIONS §3.1 step 4, any
+  victory type); 0x28bf10 then retreats every Rebel fleet in Kuat's orbit with 0x2ba6c0, which sends it on a
+  **direct two-planet path that ignores trade routes** (to Dantooine, 0x2aa400) and clears a Rebel-owned
+  starbase; the Empire side is not retreated, so the Death Star alone holds the orbit and the derived owner is
+  the Empire (BATTLE_TRANSITIONS §3.3a). During the battle the Retreat button was greyed out after the kill.
 - Income: destroyed planets use `Planet_Destroyed_Credit_Value` (GALACTIC_ECONOMY §1.4) from the next income.
 - `SpecialWeaponsAllowed` (SCRIPT_GAPS §1.1) and TSW Fire (0x42a720) read D +0x2c8 of the battle planet, so both
   turn false in the same battle from state 9 on [H].

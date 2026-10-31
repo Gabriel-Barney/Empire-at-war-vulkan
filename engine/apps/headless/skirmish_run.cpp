@@ -60,7 +60,7 @@ const char* kTypes = R"(<A1S>
  <Planet Name="A1S_C"><Behavior>PLANET</Behavior><Terrain>Desert</Terrain><Planet_Credit_Value>10</Planet_Credit_Value></Planet>
  <Projectile Name="A1S_Laser_Proj"><Max_Speed>40</Max_Speed><Projectile_Damage>120</Projectile_Damage>
   <Projectile_Max_Flight_Distance>2500</Projectile_Max_Flight_Distance><Damage_Type>Damage_Laser</Damage_Type></Projectile>
- <SpaceUnit Name="A1S_Frigate">
+ <SpaceUnit Name="A1S_Frigate"><Victory_Relevant>Yes</Victory_Relevant>
   <Tactical_Health>900</Tactical_Health><Max_Speed>3.0</Max_Speed><Max_Rate_Of_Turn>2.0</Max_Rate_Of_Turn>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><AI_Combat_Power>1000</AI_Combat_Power>
   <CategoryMask>Frigate</CategoryMask><Targeting_Max_Attack_Distance>1400</Targeting_Max_Attack_Distance>
@@ -73,7 +73,7 @@ const char* kTypes = R"(<A1S>
   <Tactical_Health>400</Tactical_Health><Max_Speed>5.0</Max_Speed><AI_Combat_Power>400</AI_Combat_Power>
   <CategoryMask>Corvette</CategoryMask><Population_Value>1</Population_Value><HardPoints>HP_A1S_Laser_B</HardPoints>
   <Custom_Soft_Footprint_Radius>30</Custom_Soft_Footprint_Radius></SpaceUnit>
- <StarBase Name="A1S_Star_Base_1"><Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>
+ <StarBase Name="A1S_Star_Base_1"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>
   <AI_Combat_Power>600</AI_Combat_Power><CategoryMask>Structure</CategoryMask><HardPoints>HP_A1S_Laser_A</HardPoints>
   <Targeting_Max_Attack_Distance>1500</Targeting_Max_Attack_Distance><Has_Space_Evaluator>Yes</Has_Space_Evaluator>
   <Behavior>SELECTABLE, UNIT_AI, DAMAGE_TRACKING</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living></StarBase>

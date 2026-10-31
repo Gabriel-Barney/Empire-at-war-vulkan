@@ -82,7 +82,7 @@ bool GalacticSim::hostile_visible_in_orbit(PlanetIndex planet, int32_t player) c
 bool GalacticSim::place_company(int32_t player, PlanetIndex planet, uint32_t type) {
     PlanetState& p = planets_[planet];
     const TypeInfo& t = rules_->types[type];
-    const bool accessible = rules_->types[p.type].surface_accessible;
+    const bool accessible = surface_accessible(planet);  // 0x375220 (destroyed -> false)
     const bool room = surface_forces(planet) < rules_->constants.max_ground_forces_on_planet;
     bool orbit_member = t.always_spawn_in_orbit;
     for (uint32_t m : t.company_units) orbit_member = orbit_member || (m < rules_->types.size() && rules_->types[m].always_spawn_in_orbit);
@@ -266,7 +266,7 @@ BuildCheck GalacticSim::build_check(int32_t player, PlanetIndex planet, uint32_t
     if (t.limit_current > 0 && live_count(player, type) + queued_count(player, type) >= t.limit_current) return fail(23, kBuildLimit);
     // 24. surface access for ground bases / companies / ground structures (generic heroes excepted), initial placement
     // (the planet's initial-placement list +0x110 is not modelled: such types are never buildable [port]).
-    const bool accessible = pt.surface_accessible && !p.destroyed;  // [M] planet data +0x2C8 override
+    const bool accessible = surface_accessible(planet);  // 0x375220 [H]: planet data +0x2C8 (destroyed) -> false
     const bool needs_surface = t.dummy != 0 ? (t.dummy == kDummyGroundBase || t.dummy == kDummyGroundCompany || t.dummy == kDummyGroundStructure)
                                             : (t.kind == UnitKind::GroundUnit || t.kind == UnitKind::GroundStructure);
     if (!(accessible || !needs_surface || t.generic_hero)) return fail(24);

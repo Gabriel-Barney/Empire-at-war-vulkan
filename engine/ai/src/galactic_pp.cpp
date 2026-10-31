@@ -203,7 +203,7 @@ struct GalPp {
             for (size_t k = 0; k < list.size(); ++k) {
                 const PlanetIndex p = list[k];
                 const gal::PlanetState& ps = planets[p];
-                const bool surface = ps.type >= w.sim.rules().types.size() || w.sim.rules().types[ps.type].surface_accessible;
+                const bool surface = w.sim.surface_accessible(p);  // 0x375220
                 if (!surface || !w.can_build_at(player, t, p)) continue;  // 0x3fa420 + 0x2804d0
                 float c = pool[k].time;
                 if (has_target() && speed > 0.0f) {
@@ -560,7 +560,6 @@ public:
     explicit ProductionM(GalPp& p) : p_(p) {}
     bool permanent_veto() const override { return true; }
     void setup_c() override {  // 0x725c50 [H]
-        const auto planets = p_.w.sim.planets();
         for (PpRec& r : p_.recs) {
             const uint32_t t = r.type;
             if (!(p_.has_target() && p_.is_structure(t))) {
@@ -571,8 +570,7 @@ public:
                 int32_t n = 0;
                 const uint32_t q = p_.w.sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
                 for (const PlanetIndex k : p_.pa.source_planets(std::min(p_.reach_level, 5))) {
-                    const gal::PlanetState& ps = planets[k];
-                    const bool surface = ps.type >= p_.w.sim.rules().types.size() || p_.w.sim.rules().types[ps.type].surface_accessible;
+                    const bool surface = p_.w.sim.surface_accessible(k);  // 0x375220
                     if (!surface || !p_.w.can_build_at(p_.player, t, k)) continue;
                     sum += static_cast<double>(p_.w.btime_at(p_.player, t, k)) + static_cast<double>(p_.w.planet_queue_time(k, q));
                     ++n;
@@ -611,7 +609,7 @@ public:
             if (!p_.has_target()) return kVeto;
             const gal::PlanetState& ps = p_.w.sim.planets()[static_cast<size_t>(p_.target)];
             const auto& rules = p_.w.sim.rules();
-            if (ps.type < rules.types.size() && !rules.types[ps.type].surface_accessible) return kVeto;
+            if (!p_.w.sim.surface_accessible(static_cast<PlanetIndex>(p_.target))) return kVeto;  // 0x375220
             int32_t used = static_cast<int32_t>(ps.structures.size());  // 0x3f8af0 [M: + queued structures]
             for (const gal::BuildEntry& e : p_.w.sim.queue_of(p_.tplanet(), gal::kGroundQueue))
                 if (e.type < rules.types.size() && rules.types[e.type].kind == gal::UnitKind::GroundStructure) ++used;

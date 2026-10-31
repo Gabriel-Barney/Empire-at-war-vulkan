@@ -78,7 +78,7 @@ const char* kTypes = R"(<S10>
   <Projectile_Max_Flight_Distance>2500</Projectile_Max_Flight_Distance><Damage_Type>Damage_Laser</Damage_Type></Projectile>
  <Projectile Name="S10_Blaster_Proj"><Max_Speed>30</Max_Speed><Projectile_Damage>8</Projectile_Damage>
   <Projectile_Max_Flight_Distance>600</Projectile_Max_Flight_Distance></Projectile>
- <SpaceUnit Name="S10_Frigate">
+ <SpaceUnit Name="S10_Frigate"><Victory_Relevant>Yes</Victory_Relevant>
   <Tactical_Health>900</Tactical_Health><Max_Speed>3.0</Max_Speed><Max_Rate_Of_Turn>2.0</Max_Rate_Of_Turn>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><AI_Combat_Power>1000</AI_Combat_Power>
   <CategoryMask>Frigate</CategoryMask><Targeting_Max_Attack_Distance>1400</Targeting_Max_Attack_Distance>
@@ -96,10 +96,10 @@ const char* kTypes = R"(<S10>
   <Tactical_Health>400</Tactical_Health><Max_Speed>5.0</Max_Speed><AI_Combat_Power>400</AI_Combat_Power>
   <CategoryMask>Corvette</CategoryMask><Population_Value>1</Population_Value><HardPoints>HP_S10_Laser_B</HardPoints>
   <Custom_Soft_Footprint_Radius>30</Custom_Soft_Footprint_Radius></SpaceUnit>
- <StarBase Name="S10_Star_Base_1"><Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>
+ <StarBase Name="S10_Star_Base_1"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>
   <AI_Combat_Power>600</AI_Combat_Power><CategoryMask>Structure</CategoryMask><HardPoints>HP_S10_Laser_A</HardPoints>
   <Targeting_Max_Attack_Distance>1500</Targeting_Max_Attack_Distance><Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living></StarBase>
- <GroundInfantry Name="S10_Trooper"><Tactical_Health>100</Tactical_Health><Max_Speed>1.0</Max_Speed>
+ <GroundInfantry Name="S10_Trooper"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>100</Tactical_Health><Max_Speed>1.0</Max_Speed>
   <AI_Combat_Power>50</AI_Combat_Power><CategoryMask>Infantry</CategoryMask><Targeting_Max_Attack_Distance>250</Targeting_Max_Attack_Distance>
   <Projectile_Types>S10_Blaster_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>1.0</Projectile_Fire_Recharge_Seconds>
   <Projectile_Fire_Pulse_Count>1</Projectile_Fire_Pulse_Count><MovementClass>Infantry</MovementClass>
@@ -227,12 +227,12 @@ std::string s4_types() {
                 "  <Corruption_2_Required_Mission_Type> Corruption_Kidnapping </Corruption_2_Required_Mission_Type>"
                 "<Corruption_2_Required_Mission_Count>1</Corruption_2_Required_Mission_Count>");
     replace_all("</S10>",
-                " <SpecialStructure Name=\"S4_Bunker\"><Behavior>SELECTABLE, CAPTURE_POINT</Behavior><LandBehavior>GARRISON_STRUCTURE</LandBehavior>"
+                " <SpecialStructure Name=\"S4_Bunker\"><Victory_Relevant>Yes</Victory_Relevant><Behavior>SELECTABLE, CAPTURE_POINT</Behavior><LandBehavior>GARRISON_STRUCTURE</LandBehavior>"
                 "<Garrison_Category>Infantry</Garrison_Category><Num_Garrison_Slots>4</Num_Garrison_Slots><Garrison_Exit_Dist>30</Garrison_Exit_Dist>"
                 "<Is_Community_Property>Yes</Is_Community_Property><Property_Flags>GarrisonCanFire</Property_Flags>"
                 "<Capture_Point_Radius>20</Capture_Point_Radius><Capture_Point_Transition_Time_Seconds>1.0</Capture_Point_Transition_Time_Seconds>"
                 "<Tactical_Health>500</Tactical_Health><CategoryMask>Structure</CategoryMask></SpecialStructure>\n"
-                " <SpecialStructure Name=\"S4_Barracks\"><Behavior>SELECTABLE, DUMMY_GROUND_STRUCTURE</Behavior>"  // t48: land BaseLevel
+                " <SpecialStructure Name=\"S4_Barracks\"><Victory_Relevant>Yes</Victory_Relevant><Behavior>SELECTABLE, DUMMY_GROUND_STRUCTURE</Behavior>"  // t48: land BaseLevel
                 "<Tactical_Health>500</Tactical_Health><CategoryMask>Structure</CategoryMask></SpecialStructure>\n"
                 " <GroundInfantry Name=\"S4_Hero\"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>"
                 "<Is_Named_Hero>Yes</Is_Named_Hero><Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed>"
@@ -284,7 +284,7 @@ std::string prod_types() {
                                 "<Next_Level_Base>S10_Star_Base_2</Next_Level_Base>");
     const size_t end = t.find("</S10>");
     if (end != std::string::npos)
-        t.insert(end, " <StarBase Name=\"S10_Star_Base_2\"><Tactical_Health>3000</Tactical_Health><Base_Level>2</Base_Level>"
+        t.insert(end, " <StarBase Name=\"S10_Star_Base_2\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>3000</Tactical_Health><Base_Level>2</Base_Level>"
                       "<AI_Combat_Power>800</AI_Combat_Power><CategoryMask>Structure</CategoryMask><HardPoints>HP_S10_Laser_A</HardPoints>"
                       "<Targeting_Max_Attack_Distance>1500</Targeting_Max_Attack_Distance><Behavior>SELECTABLE</Behavior>"
                       "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><SpaceBehavior>DUMMY_STAR_BASE</SpaceBehavior></StarBase>\n"
@@ -2969,7 +2969,7 @@ void test_oi_objects_scheduling() {
     remove_all_long(root, ec);
     write_file(root / "Data/XML/GameObjectFiles.xml", "<L><File>U.xml</File></L>");
     write_file(root / "Data/XML/U.xml",
-               "<R><SpaceUnit Name=\"OI_Ship\"><Tactical_Health>100</Tactical_Health><Max_Speed>2</Max_Speed>\n"
+               "<R><SpaceUnit Name=\"OI_Ship\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>100</Tactical_Health><Max_Speed>2</Max_Speed>\n"
                "  <Behavior>SELECTABLE, SHIELDED, POWERED, HUNT, AMBIENT_SFX</Behavior><SpaceBehavior>STARSHIP_LOCOMOTOR</SpaceBehavior>\n"
                "</SpaceUnit></R>");
     DirectoryProvider dp(path_to_utf8(root));

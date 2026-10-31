@@ -546,7 +546,13 @@ winner id) and the mode is tactical with a parent:
      −1.
 4. Hero/story checks: if the record's lead object (+0x28) exists and is not the winner's, and the
    winner has a unit flagged `Is_Super_Weapon_Killer`-style type flag +0x1f … the lead object is
-   destroyed and victory events are queued (type 3/6 records, 0x343b90). [L]
+   destroyed and victory events are queued (type 3/6 records, 0x343b90). [L] → Settled (TACTICAL_GAPS §4.8,
+   re-read 2026-10-31 at 0x3639d0 ≈ 0x364240–0x364330) [H]: +0x28 is the spawned super weapon; when it resolves,
+   is not the winner's and is not dying (+0x3a0 & 0x42), the winner's tactical objects (0x2a9ff0, never null)
+   are scanned for type +0x1f `Is_Super_Weapon_Killer` (FoC: Luke_Skywalker, Luke_XWing, Wedge_XWing_Rogue). A
+   killer → the super weapon is killed and R is left as step 3 set it; **no killer (or no objects) → R := the
+   winner**. This runs after step 3, so it overrides R for **every victory type** (0xb, 0xc, 0xe, 0xf, 0x10),
+   attacker or defender win alike.
 5. The parent galactic mode stores the result: +0x2bc winner, +0x2c0 loser, +0x2c4 planet id, +0x2c8
    battle kind.
 6. 0x28f520 → parent GOM 0x2bff60(winner) (§3.2), **pop the tactical mode** (0x28f320), then
@@ -586,6 +592,10 @@ declared; +0x24 countdown; +0x28 declared record (copy); +0x58 last frame seen; 
   or transported objects are GOM objects with their own type and count like any other [M]. Units still in the
   reinforcement pool / reserve are not GOM objects and never count [M]. `Variant_Of_Existing_Type` children
   copy the parent's flags (OBJECT_TYPES §3.2), so a story variant of a hero counts if the hero does.
+- **Super weapons** are excluded by data only, through this same 0x372230 test: FoC `Death_Star` has
+  `Victory_Relevant No` and no `Space_Victory_Relevant`; `Death_Star_II` sets neither (defaults false). There is
+  no TACTICAL_SUPER_WEAPON (behaviour 0x2c) test, no `Super` category test and no separate list in 0x344710 / the
+  0xb trigger [H]. Probe 2026-10-31 (§3.3a): a defender wins by 0xb while the attacker's Death Star is alive.
 - 0xc `..._ALL_CAPABLE_ENEMY_UNITS_RETREATED` (player E): needs the retreat coordinator (mode +0x30) with
   0x33fe20 true and a retreating player R (+0x1c ≠ −1), R ≠ E and R an enemy of E → E wins. It does not count
   objects at all [H].
@@ -698,7 +708,59 @@ On the parent GOM, for the head record:
 
 The four destination finders (0x2a9dd0, 0x2aa400, 0x2a9ee0, 0x2a8dd0) were not traced; their order
 and the "came from" planet in `Lua_Retreat` suggest: previous planet on the fleet's path, nearest owned
-planet, nearest allied, nearest any [L].
+planet, nearest allied, nearest any [L]. → Traced: TACTICAL_GAPS §4.5 (nearest planet by straight-line
+distance per filter; **no route or connectivity test**) [H].
+
+### 3.3a Fleet retreat movement 0x2ba6c0 and the space-side details (2026-10-31) [H unless tagged]
+
+Read from 0x28bf10 (space branch), 0x2ad100, 0x2ba6c0, 0x39f380, 0x431c80, 0x56a010, 0x569d50, 0x397470,
+0x4bda40, 0x4b7450, 0x2c0510.
+
+**Who is retreated (0x28bf10, kind 2).** Returns at once if the winner is −1. 0x2ad100 splits the battle
+planet's orbit objects (0x395900, not removed) into a defender list and an attacker list by owner. For each
+non-empty list, its **first** object's fleet data gives the planet (0x432c40 = fleet +0xc0 → +0x40) and owner O;
+0x2b4660 releases the units; then if (R = −1 and O ≠ winner) or (R ≠ −1 and O = R): 0x2ba6c0(planet, O), and
+**then, unconditionally**, if planet data +0x13c (starbase owner) = O: 0x4bda40(data, 0) clears the starbase
+(+0x138/+0x13c := −1, type +0x140 := 0, level +0x148 := 0) and 0x4b7450 removes the planet's orbital structure
+list (+0x170). The starbase step does not depend on whether any fleet actually left. The defender list alone is
+skipped when the local player won with GOM+0x61c ≠ 0 (§2.9.6).
+
+**0x2ba6c0(planet P, owner O).**
+1. Destination = first non-null of 0x2a9dd0, 0x2aa400, 0x2a9ee0, 0x2a8dd0, each excluding P; **all null →
+   destination = P itself**.
+2. Builds a path of exactly two planet ids: [P, destination]. No A* / trade-route path finding is run.
+3. Walks P's orbit list (data +0xc8, last to first) and, for **every** object owned by O and not removed (not
+   only the first fleet), calls the move-order handler 0x39f380(object, path), then raises a signal on the
+   object (code not recovered by the decompiler [L]).
+
+**Move-order handler 0x39f380 (shared with player / AI galactic moves).** Refuses (returns false, nothing
+raised) for an empty path or an object that is not a galactic fleet (+0x333 / +0x336 = −1) or has no
+locomotor (slot 1). Otherwise departure 0x431c80(fleet, destination = last path entry), GALACTIC_ECONOMY §3.1:
+- **refused** when the fleet is not at a planet, is already in transit (+0x50 ≠ 0), the destination equals
+  the current planet, or the base speed is 0 (no hyperspace-capable, non-carried member) → signal 0xb, the
+  fleet **stays in orbit** at P (not destroyed);
+- otherwise it leaves P's orbit, `Galactic_Fleet_Hyperspace` plays when the local player owns or sees the fleet, signal 9,
+  and 0x56a010 copies the path into the locomotor (+0xb8, index +0x80 := 0) and starts the hop path[0] →
+  path[1]: a **straight line between the two planets** (0x569d50, orbit radius to orbit radius).
+
+So a retreat **jumps directly to the destination whether or not a trade route joins it** [H]. The route only
+changes the speed: hop factor 0x397470 = 1.0 (corruption bonus if both corrupted), raised to the route's
+`HS_Speed_Factor` only if P and the destination are connected (0x3f7b30); unconnected hops therefore run at
+factor 1 (GALACTIC_ECONOMY §3.2: ≈ 5× slower than a route hop). Arrival is the normal final-hop arrival
+(GALACTIC_ECONOMY §3.3: inaccessible → turn back to P; enemy presence at the destination → a new conflict).
+Every finder failing (no other planet with an owner) or a fleet that cannot jump leaves the fleet at P.
+
+The ground retreat 0x2ba850 instead queues a MoveObjectToObjectEvent (0x3af290 / 0x3af450: fleet id,
+destination id); whether that event path-finds was not traced [L].
+
+**Probe 2026-10-31 (L1 systems t06, retail FoC).** Galaxy Byss (Empire) – Kuat (Rebel), Dantooine (Rebel ground
+barracks, **no route**). The Death Star fleet destroyed Kuat with the TSW and then lost the space battle (all
+escorts dead, Death Star alive; type 0xb, winner Rebel). Afterwards: Kuat destroyed, owner Empire, no starbase,
+**no Rebel object at Kuat**. Code: R = winner (Rebel) by the super-weapon rule (TACTICAL_GAPS §4.8; the Rebels had
+no `Is_Super_Weapon_Killer`), so 0x2ba6c0 moved the Rebel fleet; 0x2a9dd0 finds nothing (no Rebel-controlled
+orbit) [M], 0x2aa400 finds Dantooine (ground owner Rebel), and the fleet jumped there without a route. The Empire's
+side is not retreated (O ≠ R), so the Death Star stays and the derived owner is the Empire. The probe did not
+read Dantooine [M for the fleet's arrival there].
 
 ### 3.4 Retreat inside a tactical battle [H for timers, M for flow]
 

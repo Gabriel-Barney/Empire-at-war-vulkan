@@ -406,6 +406,11 @@ public:
     RejectReason move_fleet(int32_t player, uint32_t fleet, PlanetIndex destination);
     // Explicit hop list (source first, consecutive planets must be graph neighbours).
     RejectReason move_fleet_path(int32_t player, uint32_t fleet, std::span<const PlanetIndex> path);
+    // Battle retreat (0x2ba6c0 -> 0x39f380, BATTLE_TRANSITIONS §3.3a): the two-planet path [current, destination], one
+    // straight hop whether or not a trade route joins them (no path finding). The normal departure / hop / arrival
+    // machinery runs; the hop factor is the route's HS_Speed_Factor only when the planets are connected, else 1.0.
+    // Refused (the fleet stays) when moving, not at a planet, the destination is its planet, or it cannot jump.
+    RejectReason move_fleet_direct(int32_t player, uint32_t fleet, PlanetIndex destination);
     // Lua Launch_Units stand-in: the player's surface units at `planet` join the player's orbiting fleet.
     RejectReason launch_units(int32_t player, PlanetIndex planet, std::span<const ObjectHandle> units);
     // Invade stand-in: the player's ground units in orbit land (empty list = all of them). Refused when
@@ -924,6 +929,13 @@ public:
     // unit's type and its Company_Units [port: a company is one galactic object]; R <= 0 -> the launch planet's influence
     // set only, else every planet within R (squared 3-D distance <=, planet row order).
     void launch_reveal(PlanetIndex planet, ObjectHandle unit);
+    // Surface test 0x375220 (STRATEGIC_GAPS 1.3 step 24) [H]: the type's Planet_Surface_Accessible, false once the planet
+    // is destroyed (planet data +0x2C8). Every retail caller goes through it (land, invade, auto-land, AI token, build).
+    bool surface_accessible(PlanetIndex planet) const {
+        if (planet >= planets_.size()) return false;
+        const PlanetState& p = planets_[planet];
+        return !p.destroyed && (p.type >= rules_->types.size() || rules_->types[p.type].surface_accessible);
+    }
 
 private:
     struct Derived {

@@ -58,7 +58,7 @@ const char* kTypes = R"(<GS>
  <Planet Name="GS_Planet"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain><Planet_Credit_Value>10</Planet_Credit_Value></Planet>
  <Projectile Name="GS_Laser_Proj"><Max_Speed>40</Max_Speed><Projectile_Damage>60</Projectile_Damage>
   <Projectile_Max_Flight_Distance>2500</Projectile_Max_Flight_Distance><Damage_Type>Damage_Laser</Damage_Type></Projectile>
- <SpaceUnit Name="GS_Frigate">
+ <SpaceUnit Name="GS_Frigate"><Victory_Relevant>Yes</Victory_Relevant>
   <Tactical_Health>900</Tactical_Health><Max_Speed>3.0</Max_Speed><Max_Rate_Of_Turn>2.0</Max_Rate_Of_Turn>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><AI_Combat_Power>1000</AI_Combat_Power>
   <CategoryMask>Frigate</CategoryMask><Targeting_Max_Attack_Distance>1400</Targeting_Max_Attack_Distance>
@@ -72,7 +72,7 @@ const char* kTypes = R"(<GS>
   <Tactical_Health>400</Tactical_Health><Max_Speed>5.0</Max_Speed><AI_Combat_Power>400</AI_Combat_Power>
   <CategoryMask>Corvette</CategoryMask><Population_Value>1</Population_Value>
   <Custom_Soft_Footprint_Radius>30</Custom_Soft_Footprint_Radius></SpaceUnit>
- <GroundInfantry Name="GS_Trooper"><Tactical_Health>100</Tactical_Health><AI_Combat_Power>50</AI_Combat_Power>
+ <GroundInfantry Name="GS_Trooper"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>100</Tactical_Health><AI_Combat_Power>50</AI_Combat_Power>
   <Population_Value>1</Population_Value></GroundInfantry>
  <SpaceUnit Name="GS_Smuggler"><Variant_Of_Existing_Type>GS_Corvette</Variant_Of_Existing_Type><Is_Named_Hero>Yes</Is_Named_Hero>
   <Abilities SubObjectList="Yes"><Black_Market_Ability Name="GS_Smuggler_Black_Market">
@@ -93,7 +93,7 @@ const char* kTypes = R"(<GS>
   <Tech_Level>1</Tech_Level><Build_Initially_Locked>Yes</Build_Initially_Locked>
   <Build_Can_Be_Unlocked_By_Slicer>Yes</Build_Can_Be_Unlocked_By_Slicer><Slice_Cost_Credits>1500</Slice_Cost_Credits></SpaceUnit>
  <SpaceUnit Name="GS_DeathStar"><Variant_Of_Existing_Type>GS_Frigate</Variant_Of_Existing_Type></SpaceUnit>
- <GroundStructure Name="GS_Cantina"><Tactical_Health>500</Tactical_Health><Sabotage_Cost_Credits>800</Sabotage_Cost_Credits></GroundStructure>
+ <GroundStructure Name="GS_Cantina"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>500</Tactical_Health><Sabotage_Cost_Credits>800</Sabotage_Cost_Credits></GroundStructure>
 </GS>
 )";
 // P4 host: one Empire item (offered at Empire planets) and one Rebel item.

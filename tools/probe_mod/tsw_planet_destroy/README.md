@@ -151,3 +151,26 @@ the galactic status line adds `Get_Starbase_Level()`.
   rule after a TSW kill becomes its own probe question.
 - Reader note: in run L the store walk kept running (7083 walks) but logged no object changes after frame 3800;
   not investigated.
+
+## Run log 2026-10-31, third session (Claude via computer use; run LOST, l1sys t06)
+
+New campaign **"TSWP PROBE: KUAT LOST"** (`build_mod.py` builds both): Byss (Empire: level-1 station, `Death_Star_II`,
+one `Tartan_Patrol_Cruiser`) - Kuat (Rebel: `Rebel_Star_Base_3`, `Calamari_Cruiser`, 2 `Nebulon_B_Frigate`, barracks,
+infantry) - Dantooine (Rebel barracks, no route). Click path as above; in the battle keep the Imperial ships at the
+start, Fire by hand when the button turns green, then send every ship into the Rebel station.
+
+- **The Death Star brings its own tactical escort** (`Space_Escort_Unit_Types`: 2 `TIE_Interceptor_Squadron`,
+  `TIE_Defender_Squadron`, 2 `Tartan_Patrol_Cruiser`, 2 `Victory_Destroyer`, `Star_Destroyer`), so the Empire side
+  had 3 Tartans, 2 Victory, 1 ISD and fighters; the level-3 station and its fleet still won.
+- Frames (reader): ready 2447, state 5 at 2639, kill (state 10) 2986, state 12 3019, state 13 3369, state 0 3370 -
+  the same offsets as runs L and W2.
+- **Battle end: "You have lost the battle!"** (battle time 9:04) when the last Tartan died (frame 14772). The
+  `DEATH_STAR_II` object was never removed from the tactical store: **a TACTICAL_SUPER_WEAPON unit does not count as a
+  living unit of its side** for the all-destroyed check. Losses shown: Imperial Star Destroyer, 3 Tartan Patrol
+  Cruiser, 2 Victory Cruiser (no Death Star). Whether the defenders can target the Death Star was not seen (it stayed
+  at the start, out of their reach).
+- **P3 after a LOST TSW battle:** `destroyed=true owner=EMPIRE starbase=none sb_level=0 death_star=true ds_at=KUAT
+  Rebel_objects_here=0 Empire_objects_here=3[DEATH_STAR_II,GALACTIC_FLEET,KUAT]`. The winning defender loses the
+  station and its fleet leaves Kuat; the Death Star stays and the Empire owns the debris. Kuat's only route leads to
+  Empire-held Byss, so whether the Rebel fleet jumped to Dantooine (no route) or died was not seen.
+- No HEARD record (P1 still no). Cleanup ok.
