@@ -12,7 +12,7 @@ if defined DIRTY (
   echo %DATE% %TIME% !SHA! skipped: uncommitted changes>> logs\gate_history.txt
   exit /b 3
 )
-call "%~dp0..uild_gate.cmd"
+call "%~dp0..\build_gate.cmd"
 set RC=!ERRORLEVEL!
 echo %DATE% %TIME% !SHA! gate exit !RC!>> logs\gate_history.txt
 exit /b !RC!
