@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdarg>
+#include <cstdio>
 #include <iterator>
 #include <cstring>
 #include <string>
@@ -23,6 +25,7 @@
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/lua/object_bridge.hpp"
+#include "alamo/lua/players.hpp"
 #include "alamo/lua/script_gaps.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "vm_internal.hpp"
@@ -243,6 +246,84 @@ bool is_enemy(Call& c, int32_t a, int32_t b) {
     const ObjectBridge* br = bridge(c);
     if (br && br->is_enemy) return br->is_enemy(a, b);
     return a != b && a >= 0 && b >= 0;  // PROVISIONAL (object_bridge.hpp)
+}
+
+// ---------------------------------------------------------------- object finders (refixf t03)
+//
+// docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling finders" (0x540b20 / 0x6970a0 / 0x69e7c0). Their errors
+// go through the original's script error helper 0x248190: logged, no unwind, the binding returns no value (nil).
+
+int script_error(Call& c, const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    c.vm->message(std::string("SCRIPT ERROR: ") + buf);
+    return 0;
+}
+
+// The filters of Find_All_Objects_Of_Type / Find_Nearest; all set filters must pass (AND).
+struct ObjectFilter {
+    bool have_owner = false;
+    int32_t owner = -1;
+    bool have_type = false;
+    TypeIndex type = objects::kNone;
+    bool have_props = false;  // GameObjectPropertiesType mask (any bit of the representative type's Property_Flags)
+    uint64_t props = 0;
+    bool have_cat = false;    // GameObjectCategoryType mask (any bit of the representative type's CategoryMask)
+    uint64_t cat = 0;
+    bool any() const { return have_owner || have_type || have_props || have_cat; }
+};
+
+// The string chain [H]: a GameObjectPropertiesType bitfield (while no properties mask is set), else a
+// GameObjectCategoryType bitfield (while no category mask is set), else an object type name (while no type is set;
+// case-insensitive, first definition of a name). The bitfields split on '|', space, ',', tab and LF, every token must
+// be known (case-insensitive), and an all-delimiter string is mask 0 (EnumConverter::convert, same rules as the loader).
+// False: no step takes the string.
+bool parse_filter_string(Call& c, std::string_view s, ObjectFilter& f) {
+    const objects::GameObjectTypes* ty = types(c);
+    if (!ty) return false;
+    if (!f.have_props)
+        if (const auto m = ty->enums().get(objects::EnumId::GameObjectProperties).convert(s)) {
+            f.have_props = true;
+            f.props = static_cast<uint64_t>(*m);
+            return true;
+        }
+    if (!f.have_cat)
+        if (const auto m = ty->enums().get(objects::EnumId::GameObjectCategory).convert(s)) {
+            f.have_cat = true;
+            f.cat = static_cast<uint64_t>(*m);
+            return true;
+        }
+    if (!f.have_type) {
+        const TypeIndex t = ty->raw().find(s);
+        if (t != objects::kNone) {
+            f.have_type = true;
+            f.type = t;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Representative type 0x3973b0: the host's (ObjectBridge::representative_type), else the store type.
+TypeIndex representative_type(Call& c, const ObjectBridge* b, ObjectHandle h) {
+    if (b && b->representative_type) {
+        const TypeIndex t = b->representative_type(h);
+        if (t != objects::kNone) return t;
+    }
+    return store(c)->type(h);
+}
+
+// Type / properties / category filters on representative type `rep` (the owner filter is the caller's).
+bool type_filters_pass(const objects::GameObjectTypes& ty, const ObjectFilter& f, TypeIndex rep) {
+    if (f.have_type && rep != f.type) return false;
+    if (!f.have_props && !f.have_cat) return true;
+    if (rep >= ty.raw().type_count()) return false;
+    if (f.have_props && (f.props & ty.get_mask(rep, "Property_Flags")) == 0) return false;
+    if (f.have_cat && (f.cat & ty.get_mask(rep, "CategoryMask")) == 0) return false;
+    return true;
 }
 
 // ---------------------------------------------------------------- abilities
@@ -558,38 +639,96 @@ int g_find_all_with_hint(Call& c) {
     return 1;
 }
 
-// Find_First_Object(type name) / FindPlanet(name) (one class, FindPlanetClass): the first live
-// object of that type in the canonical newest-first walk [inferred: same walk as
-// Find_All_Objects_Of_Type]. FindPlanet keeps only objects with a PLANET behaviour [inferred].
-// refix t04: in the galactic store a company object also stands for its Company_Units members (vm_internal.hpp member
-// views): a member type name finds the company's first matching entry (Find_First_Object only).
-int find_first(Call& c, bool planets_only) {
-    if (!c.is_string(1)) return c.fail("FindPlanet -- Parameter 1 is not a valid string");
-    const std::string_view name = c.string(1);
-    const objects::ObjectStore* st = store(c);
-    if (!st) return push_nil(c);
+// Find_All_Objects_Of_Type(filter, [filter, ...]) (0x540b20, refixf t03). Arguments in any order: a PlayerWrapper
+// sets the owner filter (a later one replaces it), a GameObjectTypeWrapper the type filter (a second type is an
+// error), a string goes through parse_filter_string, anything else is an error. Errors ("unknown filter parameter %d"
+// with the 1-based index, no argument, no filter at all) return nothing. Result: a table (1..n) of every object of the
+// current mode's primary store, newest-added first, whose representative type passes the set filters (AND) and whose
+// owner is the player when one is given. No alive-state, death-clone, hidden, parent, selectable or neutral tests:
+// objects in the dying / death-clone state are returned like any other [H].
+// [port] Objects already killed (ObjectStore::destroy, kFlagDead) but not yet flushed are skipped; the original wraps
+// them as its shared dead wrapper in their slot (LUA_API.md [M] on how that reaches Lua).
+// refix t04: in the galactic store a company object also stands for its Company_Units members (the original's cargo
+// objects; vm_internal.hpp member views): each entry that passes the filters gives a member view right after the
+// company's place in the walk [port order], with the company's owner and the entry type as its representative type.
+int g_find_all_objects_of_type(Call& c) {
+    if (c.nargs < 1) return script_error(c, "FindAllObjectsOfType -- Expected a filter parameter.");
     const objects::GameObjectTypes* ty = types(c);
-    const bool members = !planets_only && ty && !name.empty() && st->mode() == objects::ModeKind::Galactic;
-    for (const ObjectHandle h : st->objects_newest_first()) {
-        if (!st->active(h)) continue;
-        if (!type_matches(c, h, name)) {
-            if (!members) continue;
-            const std::vector<TypeIndex> refs = ty->get_type_refs(st->type(h), "Company_Units");
-            for (uint32_t i = 0; i < refs.size(); ++i)
-                if (refs[i] != objects::kNone && iequal(type_name(c, refs[i]), name)) {
-                    detail::push_member_view(c.L, *c.vm, h, i);
-                    return 1;
-                }
-            continue;
+    ObjectFilter f;
+    for (int i = 1; i <= c.nargs; ++i) {
+        if (const Ud* p = player_arg(c, i)) {
+            if (p->id < 0) continue;  // a null player wrapper sets nothing [port: the port has none]
+            f.have_owner = true;
+            f.owner = p->id;
+        } else if (const Ud* t = c.userdata(i, detail::cls_type())) {
+            if (!ty || t->value >= ty->raw().type_count()) continue;  // a null type wrapper sets nothing
+            if (f.have_type) return script_error(c, "FindAllObjectsOfType -- unknown filter parameter %d.", i);
+            f.have_type = true;
+            f.type = static_cast<TypeIndex>(t->value);
+        } else if (!c.is_string(i) || !parse_filter_string(c, c.string(i), f)) {
+            return script_error(c, "FindAllObjectsOfType -- unknown filter parameter %d.", i);
         }
-        if (planets_only && !st->has_behavior(h, objects::beh::Planet)) continue;
-        detail::push_object(c.L, *c.vm, h);
-        return 1;
+    }
+    if (!f.any()) return script_error(c, "FindAllObjectsOfType -- Invalid parameters.  You must pass a filter.");
+    lua_newtable(c.L);
+    const objects::ObjectStore* st = store(c);
+    if (!st || !ty) return 1;
+    const ObjectBridge* b = bridge(c);
+    const bool members = st->mode() == objects::ModeKind::Galactic;
+    int n = 0;
+    for (const ObjectHandle h : st->objects_newest_first()) {
+        if (!st->alive(h)) continue;  // [port] killed, not yet flushed (see above)
+        if (f.have_owner && st->owner(h) != f.owner) continue;
+        if (type_filters_pass(*ty, f, representative_type(c, b, h))) {
+            detail::push_object(c.L, *c.vm, h);
+            lua_rawseti(c.L, -2, ++n);
+        }
+        if (!members) continue;
+        const std::vector<TypeIndex> refs = ty->get_type_refs(st->type(h), "Company_Units");
+        for (uint32_t i = 0; i < refs.size(); ++i) {
+            if (refs[i] == objects::kNone || !type_filters_pass(*ty, f, refs[i])) continue;
+            detail::push_member_view(c.L, *c.vm, h, i);
+            lua_rawseti(c.L, -2, ++n);
+        }
+    }
+    return 1;
+}
+
+// Find_First_Object(type name) / FindPlanet(name) (one class, FindPlanetClass 0x6970a0, refixf t03): the name is a
+// type name only (case-insensitive, first definition; no category / property names); an unknown name returns nothing
+// without an error. The first object in the newest-first walk of the current mode's primary store whose OWN type is
+// that type (not the representative type); no alive / death-clone / parent tests [H]. Extra arguments are ignored.
+// FindPlanet is the same function: no planet test [H].
+// [port] Killed objects pending the flush are skipped (Find_All_Objects_Of_Type above).
+// refix t04: in the galactic store a company object also stands for its Company_Units members (vm_internal.hpp member
+// views): a member type name finds the company's first matching entry.
+int find_first(Call& c) {
+    if (c.nargs < 1) return script_error(c, "FindPlanet -- No planet name set");
+    if (!c.is_string(1)) return script_error(c, "FindPlanet -- Parameter 1 is not a valid string");
+    const objects::ObjectStore* st = store(c);
+    const objects::GameObjectTypes* ty = types(c);
+    if (!st || !ty) return push_nil(c);
+    const TypeIndex t = ty->raw().find(c.string(1));
+    if (t == objects::kNone) return push_nil(c);
+    const bool members = st->mode() == objects::ModeKind::Galactic;
+    for (const ObjectHandle h : st->objects_newest_first()) {
+        if (!st->alive(h)) continue;
+        if (st->type(h) == t) {
+            detail::push_object(c.L, *c.vm, h);
+            return 1;
+        }
+        if (!members) continue;
+        const std::vector<TypeIndex> refs = ty->get_type_refs(st->type(h), "Company_Units");
+        for (uint32_t i = 0; i < refs.size(); ++i)
+            if (refs[i] == t) {
+                detail::push_member_view(c.L, *c.vm, h, i);
+                return 1;
+            }
     }
     return push_nil(c);
 }
-int g_find_first_object(Call& c) { return find_first(c, false); }
-int g_find_planet(Call& c) { return find_first(c, true); }
+int g_find_first_object(Call& c) { return find_first(c); }
+int g_find_planet(Call& c) { return find_first(c); }
 
 // FindPlanet.Get_All_Planets(): every live object with a PLANET behaviour, newest first [inferred order].
 int m_get_all_planets(Call& c) {
@@ -605,83 +744,85 @@ int m_get_all_planets(Call& c) {
     return 1;
 }
 
-// Find_Nearest(source, [type / category / property name], [player], [owned_by_player]).
-// Candidates: live objects other than the source; a string filter matches the type name, else a
-// GameObjectCategoryType mask (any bit), else a GameObjectPropertiesType mask (any bit) [inferred
-// resolution order]; with a player, `true` keeps that player's objects and `false` (or absent
-// [inferred]) the player's enemies. Nearest by 3D distance; ties keep the newest object.
+// Find_Nearest(source, [filter_string], [player, friendly_bool]) (0x69e7c0, refixf t03).
+//   * 1..4 arguments; tactical modes only; source = a live game object, an AI target or a task force (OI lua: the
+//     target's object / the task force's first live unit, excluded from the candidates [port for a task force]).
+//   * Argument 2 is the filter only when it is a string (parse_filter_string; unknown -> error, nothing returned);
+//     the player (PlayerWrapper) and the bool are read only when BOTH slots exist, so (obj, "Infantry", player) and
+//     (obj, player) ignore the player. Wrong types in those slots: error [inferred].
+//   * Candidates [H]: the objects of each player in player order (owner id ascending), skipping players whose faction
+//     Is_Neutral and, with a player P, keeping only players whose "allied or self" relation to P equals the bool; per
+//     player the UNIT_AI objects (the perception grid list) newest first. Each must not be dying (+0x3A0 bit 0x40;
+//     ObjectStore::active(), which also drops killed objects, no longer in the grid [port]), not be the source, have
+//     the representative type if a type was given, a properties-mask hit if one was given, and a CategoryMask hit
+//     against the category filter, which DEFAULTS TO ALL ONES (a representative type with CategoryMask 0 is never
+//     found); with a player, not fogged for P (FOW_Object_Hidden, force = 1).
+//   * Smallest squared 3-D distance, strict <: ties keep the lowest player, then the newest object.
+// [port] Ownerless objects (owner -1) are in no player's list and never found; the player list is the owner ids; the
+// "allied or self" relation is !ObjectBridge::is_enemy (self always); without a player world no player is neutral.
 int g_find_nearest(Call& c) {
     if (c.nargs < 1 || c.nargs > 4)
-        return c.fail("Find_Nearest - invalid number of parameters. Expected between 1 and 4, got %d.", c.nargs);
+        return script_error(c, "Find_Nearest - invalid number of parameters. Expected between 1 and 4, got %d.", c.nargs);
+    objects::ObjectStore* st = store(c);
+    if (!st || st->mode() == objects::ModeKind::Galactic)
+        return script_error(c, "Find_Nearest - this function may only be used in tactical modes.");
     const Ud* src = c.userdata(1, detail::cls_game_object());
     // OI lua (A1 ask 2): an AI target -> its game object, a task force -> its first live unit; none -> nil (the rule
     // of the former Find_Nearest shim in the AI VMs).
     ObjectHandle ai_src{};
     if (!src && detail::ai_wrapper_object(c, 1, ai_src) && !ai_src) return push_nil(c);
-    if (!src && !ai_src) return c.fail("Find_Nearest - invalid type for parameter 1; expected game object, ai target or taskforce.");
+    if (!src && !ai_src)
+        return script_error(c, "Find_Nearest - invalid type for parameter 1; expected game object, ai target or taskforce.");
     if (src && !detail::object_alive(*c.vm, *src))
-        return c.fail("Find_Nearest - parameter 1 is already dead; cannot extract a position from it.");
-    std::string_view filter;
-    bool have_filter = false, have_player = false, friendly = false;
+        return script_error(c, "Find_Nearest - parameter 1 is already dead; cannot extract a position from it.");
+    ObjectFilter f;
+    int player_index = 2;
+    if (c.is_string(2)) {
+        if (!parse_filter_string(c, c.string(2), f))
+            return script_error(c, "Find_Nearest - unknown game object type, properties mask or catefory %s.",
+                                std::string(c.string(2)).c_str());
+        player_index = 3;
+    }
+    bool have_player = false, friendly = true;
     int32_t player = -1;
-    for (int i = 2; i <= c.nargs; ++i) {
-        if (c.is_string(i)) {
-            filter = c.string(i);
-            have_filter = true;
-        } else if (const Ud* p = player_arg(c, i)) {
-            player = p->id;
-            have_player = true;
-        } else if (is_bool(c, i)) {
-            friendly = to_bool(c, i);
-        } else {
-            return c.fail("Find_Nearest - invalid type for parameter %d.", i);  // [inferred]
-        }
+    if (player_index + 1 <= c.nargs) {
+        const Ud* p = player_arg(c, player_index);
+        if (!p) return script_error(c, "Find_Nearest - invalid type for parameter %d.", player_index);  // [inferred]
+        if (!is_bool(c, player_index + 1))
+            return script_error(c, "Find_Nearest - invalid type for parameter %d.", player_index + 1);  // [inferred]
+        have_player = true;
+        player = p->id;
+        friendly = to_bool(c, player_index + 1);
     }
-    objects::ObjectStore* st = store(c);
     const objects::GameObjectTypes* ty = types(c);
-    // Filter resolution.
-    enum class F : uint8_t { None, Type, Category, Property, Nothing } mode = F::None;
-    uint64_t mask = 0;
-    if (have_filter) {
-        mode = F::Nothing;
-        if (ty && ty->raw().find(filter) != objects::kNone) {
-            mode = F::Type;
-        } else if (ty) {
-            if (const auto m = ty->enums().get(objects::EnumId::GameObjectCategory).convert(filter); m && *m != 0) {
-                mode = F::Category;
-                mask = static_cast<uint64_t>(*m);
-            } else if (const auto pm = ty->enums().get(objects::EnumId::GameObjectProperties).convert(filter); pm && *pm != 0) {
-                mode = F::Property;
-                mask = static_cast<uint64_t>(*pm);
-            }
-        }
-    }
+    if (!ty) return push_nil(c);
+    const ObjectBridge* b = bridge(c);
+#if ALAMO_LUA_PLAYERS
+    const LuaPlayerWorld* world = c.vm->owner ? player_world(*c.vm->owner) : nullptr;
+#endif
+    static const objects::BehaviorTypeId unit_ai = objects::behavior_type_id("UNIT_AI");
+    const uint64_t cat = f.have_cat ? f.cat : ~uint64_t{0};
     const ObjectHandle self = src ? detail::object_handle(*src) : ai_src;
     const Vec3 from = st->position(self);
     ObjectHandle best{};
+    int32_t best_owner = 0;
     double best_d = 0.0;
     for (const ObjectHandle h : st->objects_newest_first()) {
         if (h == self || !st->active(h)) continue;
-        if (have_player) {
-            const int32_t owner = st->owner(h);
-            if (friendly ? owner != player : !is_enemy(c, player, owner)) continue;
-        }
-        switch (mode) {
-            case F::None: break;
-            case F::Nothing: continue;
-            case F::Type:
-                if (!type_matches(c, h, filter)) continue;
-                break;
-            case F::Category:
-                if ((ty->get_mask(st->type(h), "CategoryMask") & mask) == 0) continue;
-                break;
-            case F::Property:
-                if ((ty->get_mask(st->type(h), "Property_Flags") & mask) == 0) continue;
-                break;
-        }
+        const int32_t q = st->owner(h);
+        if (q < 0 || !st->has_behavior(h, unit_ai)) continue;
+#if ALAMO_LUA_PLAYERS
+        if (world && world->is_neutral(q)) continue;
+#endif
+        if (have_player && (q == player || !is_enemy(c, player, q)) != friendly) continue;
+        const TypeIndex rep = representative_type(c, b, h);
+        if (rep >= ty->raw().type_count() || !type_filters_pass(*ty, f, rep)) continue;
+        if ((cat & ty->get_mask(rep, "CategoryMask")) == 0) continue;
+        if (have_player && detail::object_fogged_for(c, player, h, true)) continue;
         const double d = distance_sq(from, st->position(h));
-        if (!best || d < best_d) {
+        if (!best || d < best_d || (d == best_d && q < best_owner)) {
             best = h;
+            best_owner = q;
             best_d = d;
         }
     }
@@ -2165,6 +2306,7 @@ constexpr detail::ImplEntry kImpl[] = {
     // globals
     {G, "", "Find_Hint", g_find_hint},
     {G, "", "Find_All_Objects_With_Hint", g_find_all_with_hint},
+    {G, "", "Find_All_Objects_Of_Type", g_find_all_objects_of_type},
     {G, "", "Find_First_Object", g_find_first_object},
     {G, "", "FindPlanet", g_find_planet},
     {G, "", "Find_Nearest", g_find_nearest},

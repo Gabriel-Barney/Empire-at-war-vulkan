@@ -225,6 +225,36 @@ constexpr detail::ImplEntry kImpl[] = {
 
 std::span<const detail::ImplEntry> detail::impl_fog() { return kImpl; }
 
+// refixf t03: FOW_Object_Hidden 0x35f470 for Find_Nearest (fog_bridge.hpp FogScriptHooks::object_hidden). False
+// without fog hooks or a fog (outside tactical modes, builds without the fog library).
+bool detail::object_fogged_for(Call& c, int32_t player, ObjectHandle h, bool force) {
+#ifdef ALAMO_LUA_HAVE_FOG
+    FogScriptHooks* hk = fog_hooks(c);
+    if (!hk) return false;
+    if (hk->object_hidden) return hk->object_hidden(h, player, force);
+    const objects::ObjectStore* st = c.vm->host.store;
+    if (!hk->fog || !st || !st->alive(h)) return false;
+    static const objects::BehaviorTypeId hide = objects::behavior_type_id("HIDE_WHEN_FOGGED");
+    static const objects::BehaviorTypeId reveal = objects::behavior_type_id("REVEAL");
+    fw::FogHideQuery q;
+    q.owner = st->owner(h);
+    q.team_or_hide_when_fogged = st->has_behavior(h, objects::beh::Team) ||
+                                 (hide != objects::kNoBehavior && st->has_behavior(h, hide));
+    q.has_reveal = reveal != objects::kNoBehavior && st->has_behavior(h, reveal);
+    const Vec3 p = st->position(h);
+    q.x = p.x;
+    q.y = p.y;
+    q.z = p.z;
+    return hk->fog->object_hidden(player, q, force);  // [port] no Multisample_FOW_Check corners without the host hook
+#else
+    (void)c;
+    (void)player;
+    (void)h;
+    (void)force;
+    return false;
+#endif
+}
+
 #ifdef ALAMO_LUA_HAVE_FOG
 // ---------------------------------------------------------------- FogScriptCells
 

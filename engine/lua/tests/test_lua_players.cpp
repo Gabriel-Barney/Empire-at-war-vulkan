@@ -1115,6 +1115,11 @@ void test_company_member_views() {
     CHECK(gstr(vm, "cn") == "Crew_T" && static_cast<int>(gnum(vm, "ncrew")) == 1 && gtrue(vm, "differs") && gtrue(vm, "valid"));
     CHECK(static_cast<int>(gnum(vm, "nemp")) == 0 && gstr(vm, "ct") == "Smuggler_Team_T" && gtrue(vm, "pl"));
     CHECK(gtrue(vm, "isc") && gtrue(vm, "pf") && gstr(vm, "ts").find("Smuggler_T") != std::string::npos);
+    // refixf t03: every filter kind sees the member views (the original's cargo objects): a player alone lists the
+    // company followed by its matching entries (company first, entry order).
+    CHECK(run(vm, "own = Find_All_Objects_Of_Type(Comp.Get_Owner()) ci = 0 vi = 0 "
+                  "for i, o in ipairs(own) do if rawequal(o, Comp) then ci = i elseif rawequal(o, sm) then vi = i end end") == "");
+    CHECK(gnum(vm, "ci") >= 1.0 && gnum(vm, "vi") == gnum(vm, "ci") + 1.0);
     // Nothing fires: the view itself (inside a transport: silently), the fleet filtered by a member type (the members'
     // representative types are Halter_T and Smuggler_Team_T).
     CHECK(run(vm, "sm.Activate_Ability() Fleet.Activate_Ability('Smuggler_T')") == "");

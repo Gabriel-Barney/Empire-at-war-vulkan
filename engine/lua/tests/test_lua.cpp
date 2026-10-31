@@ -494,8 +494,11 @@ static void test_objects() {
                   "peq = (all[1].Get_Owner() == again[1].Get_Owner()) and 1 or 0") == "");
     CHECK(gstr(vm, "k1") == "o" && gstr(vm, "k2") == "t" && gstr(vm, "k3") == "p" && gstr(vm, "k4") == "nil");
     CHECK(gnum(vm, "pid") == 1.0 && gnum(vm, "peq") == 1.0);
-    CHECK(run(vm, "bad = Find_All_Objects_Of_Type(5)").find("unknown filter parameter 1") != std::string::npos);
-    CHECK(run(vm, "Find_All_Objects_Of_Type()").find("Expected a filter parameter") != std::string::npos);
+    // refixf t03: the original's script error helper logs and returns nothing (no unwind).
+    CHECK(run(vm, "bad = Find_All_Objects_Of_Type(5) bad = tostring(bad)") == "" && gstr(vm, "bad") == "nil" &&
+          vm.messages().back().find("unknown filter parameter 1") != std::string::npos);
+    CHECK(run(vm, "Find_All_Objects_Of_Type()") == "" &&
+          vm.messages().back().find("Expected a filter parameter") != std::string::npos);
 
     // Dead object: Is_Valid false immediately (before the flush), methods raise "this object is dead!".
     CHECK(store.destroy(t2));
