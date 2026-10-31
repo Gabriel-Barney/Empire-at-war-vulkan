@@ -20,7 +20,18 @@
 // Accepted iff (float)((S >> 16) * 100) <= tolerance (the high half = summed node costs, at least 1 per hop); the
 // returned cost is (float)(S & 0xFFFF) / 10 (summed hop distances in tenths; carries into the high half are kept). So an
 // unreachable target passes only Any_Threat, with cost 6553.5. The threat is in the edge weights (node costs of the last
-// recompute); the ZoneThreatFn argument is not read.
+// recompute); the ZoneThreatFn argument is not read. Callers (A1_READINGS §25.3): Reachable_Target with a source (6th
+// argument), the FreeStore distance key (Low_Threat, from each free unit's zone) and the TF.Reinforce point ranking.
+//
+// ZoneGraph::flood (A1_READINGS §25.2, ZoneReachabilityClass slots 5 / 6) [H]: the set of zones reachable around a
+// target zone over the UNDIRECTED zone graph (for each zone i, each zone j > i in i's link map, any flags: i - j in both
+// neighbour lists, in that order; a link stored only in the higher-index zone is ignored). A zone passes when its own
+// zone danger is 0 or <= the tolerance; a failing zone is not entered (nothing is summed). The start passes: BFS from it
+// (start first, neighbours in list order). The start fails: each unvisited neighbour in turn - a failing one is marked
+// visited, a passing one runs its own BFS (sharing the visited marks) - and the largest result is kept (the first of
+// equal sizes [M]); the start is not in it. Empty only when the start and every direct neighbour fail, or the start is
+// not a zone. Callers: the goal proposal skip (land slot 9: skipped when the set is empty), the FreeStore stage and the
+// TF.Reinforce point filter; the caller caches per (target, level) for 10 s.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -83,6 +94,10 @@ public:
     // Get_Path (PHASE2_ANSWERS 10) over zone indices. False if unreachable / invalid.
     bool path(uint32_t from, uint32_t to, std::vector<uint32_t>& zones) const;
     uint32_t edge_count() const { return static_cast<uint32_t>(raw_.nbr.size()); }
+    // Flood around `start` (header comment): zones in BFS order. `passes(zone)` is asked at most once per zone.
+    void flood(int32_t start, const std::function<bool(uint32_t zone)>& passes, std::vector<uint32_t>& out) const;
+    // The undirected flood neighbours of a zone (built once from the links).
+    std::span<const uint32_t> flood_neighbours(uint32_t zone) const { return flood_nbr_[zone]; }
     uint32_t unresolved_links() const { return unresolved_; }
     const ::alamo::galactic::AllPairsMatrices& matrices() const { return m_; }
 
@@ -97,6 +112,7 @@ private:
     std::vector<HintZone> zones_;
     ZoneLocator locator_;
     std::vector<int32_t> link_target_;  // per (zone, link) flattened: resolved index or -1
+    std::vector<std::vector<uint32_t>> flood_nbr_;  // undirected flood graph (A1_READINGS §25.2)
     std::vector<uint32_t> node_cost_;   // per zone (Node_Weight / 100)
     ::alamo::galactic::detail::RawOwned raw_;
     ::alamo::galactic::AllPairsMatrices m_;

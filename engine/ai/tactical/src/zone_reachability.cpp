@@ -94,8 +94,57 @@ void ZoneGraph::build(std::span<const HintZone> zones, const ZoneEdgeWeightFn& w
             link_target_.push_back(j);
         }
     }
+    // A1_READINGS §25.2: the global undirected zone graph (0x5a7da0): zone i's links to a higher index, any flags.
+    flood_nbr_.assign(zones_.size(), {});
+    size_t li = 0;
+    for (uint32_t i = 0; i < zones_.size(); ++i)
+        for (size_t k = 0; k < zones_[i].links.size(); ++k) {
+            const int32_t j = link_target_[li++];
+            if (j <= static_cast<int32_t>(i)) continue;
+            flood_nbr_[i].push_back(static_cast<uint32_t>(j));
+            flood_nbr_[static_cast<size_t>(j)].push_back(i);
+        }
     node_cost_.assign(zones_.size(), 0u);
     recompute(weight, pf);
+}
+
+void ZoneGraph::flood(int32_t start, const std::function<bool(uint32_t)>& passes, std::vector<uint32_t>& out) const {
+    out.clear();
+    const uint32_t n = size();
+    if (start < 0 || static_cast<uint32_t>(start) >= n || flood_nbr_.size() != n) return;
+    std::vector<uint8_t> pass(n, 2);  // 2 = not asked yet
+    const auto ok = [&](uint32_t z) {
+        if (pass[z] == 2) pass[z] = passes(z) ? 1 : 0;
+        return pass[z] == 1;
+    };
+    std::vector<uint8_t> visited(n, 0);
+    const auto bfs = [&](uint32_t s, std::vector<uint32_t>& res) {
+        res.push_back(s);
+        visited[s] = 1;
+        for (size_t q = 0; q < res.size(); ++q)
+            for (const uint32_t nb : flood_nbr_[res[q]]) {
+                if (visited[nb]) continue;
+                visited[nb] = 1;
+                if (ok(nb)) res.push_back(nb);
+            }
+    };
+    const auto s = static_cast<uint32_t>(start);
+    if (ok(s)) {
+        bfs(s, out);
+        return;
+    }
+    visited[s] = 1;
+    std::vector<uint32_t> part;
+    for (const uint32_t nb : flood_nbr_[s]) {
+        if (visited[nb]) continue;
+        if (!ok(nb)) {
+            visited[nb] = 1;
+            continue;
+        }
+        part.clear();
+        bfs(nb, part);
+        if (part.size() > out.size()) out = part;
+    }
 }
 
 void ZoneGraph::recompute_with_threat(const ZoneThreatFn& threat, const ParallelFor& pf) {

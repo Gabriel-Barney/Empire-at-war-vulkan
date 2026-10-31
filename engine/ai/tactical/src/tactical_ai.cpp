@@ -654,8 +654,12 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     FreeStoreSchedule sched;
     std::unique_ptr<lua::LuaVm> fs_vm;
     std::vector<PendingBonus> bonuses;
-    int64_t home_frame = -1;
-    int32_t home_zone = -1;
+    // A1_READINGS §25.2: flood sets per (target zone, level), BFS order; rebuilt when used after 10 s (mode frames).
+    struct FloodSet {
+        uint32_t stamp = 0;
+        std::vector<uint32_t> zones;
+    };
+    std::map<std::pair<int32_t, uint8_t>, FloodSet> floods;
     float contrast_mult = 1.0f;  // A2 tactical: Land_ / Space_AI_Contrast_Multiplier of the difficulty
     // Land execution path finder (TACTICAL_GAPS §6.1): the player's own zone graph (node costs from its threat grid),
     // created at Execution slot 6 (first service) and recomputed on the PHASE2_ANSWERS Q11 cadence.
@@ -696,16 +700,24 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
                 break;
             }
     }
-    int32_t home() {
-        if (home_frame == w->now) return home_zone;
-        home_frame = w->now;
-        home_zone = -1;
-        for (const PerceptionObject& o : w->w.objects)
-            if (o.alive && o.owner == player) {
-                home_zone = o.zone >= 0 ? o.zone : w->zone_at(o.position);
-                break;
-            }
-        return home_zone;
+    // The flood set around `zone` at `level` (ZoneGraph::flood; zone danger for this player [M which player field]).
+    // Levels outside 6..10 and non-land modes give an empty set.
+    const std::vector<uint32_t>& flood_set(int32_t zone, Reachability level) {
+        static const std::vector<uint32_t> kNone;
+        const double tol = reachability_tolerance(level, w->cfg.constants);
+        if (tol < 0.0 || w->cfg.mode != TacticalMode::Land || zone < 0) return kNone;
+        const std::pair<int32_t, uint8_t> key{zone, static_cast<uint8_t>(level)};
+        if (const auto it = floods.find(key);
+            it != floods.end() && w->mode_frame - it->second.stamp <= static_cast<uint32_t>(10 * kFramesPerSecond))
+            return it->second.zones;
+        FloodSet& f = floods[key];
+        f.stamp = w->mode_frame;
+        const ZoneThreatFn danger = w->perc.grid().valid() ? w->perc.zone_threat_fn(w->w, player) : ZoneThreatFn{};
+        w->zones.flood(zone, [&](uint32_t z) {
+            const double d = danger ? danger(z) : 0.0;
+            return d == 0.0 || d <= tol;
+        }, f.zones);
+        return f.zones;
     }
 
     // ---- GoalModeHooks ----
@@ -728,15 +740,14 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         return unit_applies(flags, u, [&pw, self](int32_t id) { return pw.object_fogged && pw.object_fogged(self, id); });
     }
     bool blocked(uint32_t goal_type, int32_t target) override {
-        // Land slot 9: the reachability-keyed lookup (levels 6-10, land regions only) [port: source = home zone].
+        // Land slot 9 (0x6b8710, A1_READINGS §25.3) [H]: the target's flood slot 6 (mask -1, no lists): skipped when the
+        // region's flood set at the goal type's Reachability is empty (its zone and every neighbour above the tolerance).
+        // No path from any unit is measured. A target without a reachability object is not skipped; a region target
+        // with a level outside 6..10 always is.
         if (w->cfg.mode != TacticalMode::Land || target < 0 || static_cast<size_t>(target) >= slots.size()) return false;
         const Slot& s = slots[static_cast<size_t>(target)];
         if (!s.t.has_reachability()) return false;
-        const Reachability lvl = w->defs.goals[goal_type].reachability;
-        if (static_cast<int>(lvl) < static_cast<int>(Reachability::NoThreat)) return false;
-        const int32_t src = home();
-        if (src < 0) return false;
-        return zone_reachability_cost(zone_paths(), src, s.t.zone, lvl, w->cfg.constants) >= kUnreachable;
+        return flood_set(s.t.zone, w->defs.goals[goal_type].reachability).empty();
     }
     bool evaluate(const std::string& function, int32_t target, double& out) override {
         const int32_t h = target >= 0 && static_cast<size_t>(target) < slots.size() ? slots[static_cast<size_t>(target)].handle : -1;
@@ -2397,7 +2408,7 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 3;  // 2: six space free-store facts per object; 3: re-projection stamp
+constexpr uint32_t kTacticalAiSaveVersion = 4;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
@@ -2698,8 +2709,13 @@ void TacticalAiWorld::write(ByteWriter& w) const {
             w.f32(b.bonus);
             w.i64(b.deadline);
         }
-        w.i64(p.home_frame);
-        w.i32(p.home_zone);
+        io::put_count(w, p.floods.size());
+        for (const auto& [key, f] : p.floods) {
+            w.i32(key.first);
+            w.u8(key.second);
+            w.u32(f.stamp);
+            io::put_vec(w, f.zones);
+        }
         w.boolean(p.paths_built);
         w.i32(p.next_recompute);
         if (p.paths_built) p.paths.write(w);
@@ -2887,8 +2903,7 @@ bool TacticalAiWorld::read(ByteReader& r) {
         bool has_fs = false;
         std::unique_ptr<lua::LuaVm> fs_vm;
         std::vector<PendingBonus> bonuses;
-        int64_t home_frame = -1;
-        int32_t home_zone = -1;
+        std::map<std::pair<int32_t, uint8_t>, PlayerAi::FloodSet> floods;
         bool paths_built = false;
         int32_t next_recompute = 0;
         ZoneGraph paths;
@@ -2933,8 +2948,19 @@ bool TacticalAiWorld::read(ByteReader& r) {
             b.deadline = r.i64();
             if (b.goal_type >= goal_types) r.fail();
         }
-        sp.home_frame = r.i64();
-        sp.home_zone = r.i32();
+        const uint32_t nf = io::count(r, 4 + 1 + 4 + 4);
+        for (uint32_t k = 0; k < nf && r.ok(); ++k) {
+            const int32_t zone = r.i32();
+            const uint8_t level = r.u8();
+            PlayerAi::FloodSet f;
+            f.stamp = r.u32();
+            if (!io::get_vec(r, f.zones)) return false;
+            for (const uint32_t z : f.zones)
+                if (z >= m.zones.size()) return io::bad(r);
+            if (zone < 0 || static_cast<uint32_t>(zone) >= m.zones.size() || level > static_cast<uint8_t>(Reachability::AnyThreat))
+                return io::bad(r);
+            sp.floods[{zone, level}] = std::move(f);
+        }
         sp.paths_built = r.boolean();
         sp.next_recompute = r.i32();
         if (!r.ok()) return false;
@@ -3175,8 +3201,7 @@ bool TacticalAiWorld::read(ByteReader& r) {
         else
             pa.fs_vm.reset();
         pa.bonuses = std::move(sp.bonuses);
-        pa.home_frame = sp.home_frame;
-        pa.home_zone = sp.home_zone;
+        pa.floods = std::move(sp.floods);
         pa.paths_built = sp.paths_built;
         pa.next_recompute = sp.next_recompute;
         pa.paths = sp.paths_built ? std::move(sp.paths) : ZoneGraph{};

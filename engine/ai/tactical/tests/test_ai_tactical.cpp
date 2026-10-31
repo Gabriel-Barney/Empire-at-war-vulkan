@@ -289,6 +289,39 @@ static void test_reachability() {
         CHECK(dg.weight(0, 1) == ::alamo::galactic::kUnlinked);     // Q has no link to P
         CHECK(dg.weight(1, 2) == ::alamo::galactic::kUnlinked && dg.edge_count() == 1);
     }
+    // A1_READINGS §25.2 flood: undirected edges from the lower-index zone's links; failing zones are not entered;
+    // a failing start floods from each passing neighbour and keeps the largest part.
+    {
+        // 0-1, 1-2, 1-4, 2-4; zone 3 links zone 1 but zone 1 (lower index) has no link back: no flood edge.
+        std::vector<HintZone> f = {zone(10, "A", 0, 0, {20}), zone(20, "B", 100, 0, {30, 50}),
+                                   zone(30, "C", 200, 0, {50}), zone(40, "D", 0, 300, {20}), zone(50, "E", 300, 0, {})};
+        ZoneGraph fg;
+        fg.build(f);
+        CHECK(fg.flood_neighbours(1).size() == 3 && fg.flood_neighbours(3).empty());
+        std::vector<uint32_t> out;
+        int asked = 0;
+        const auto fails = [&](std::initializer_list<uint32_t> bad) {
+            const std::vector<uint32_t> failing(bad);
+            return [&asked, failing](uint32_t z) {
+                ++asked;
+                return std::find(failing.begin(), failing.end(), z) == failing.end();
+            };
+        };
+        fg.flood(0, fails({}), out);
+        CHECK(out == (std::vector<uint32_t>{0, 1, 2, 4}) && asked == 4);  // each zone asked once
+        fg.flood(3, fails({}), out);
+        CHECK(out == (std::vector<uint32_t>{3}));
+        fg.flood(0, fails({1}), out);
+        CHECK(out == (std::vector<uint32_t>{0}));
+        fg.flood(1, fails({1}), out);  // parts {0} and {2, 4}: the larger
+        CHECK(out == (std::vector<uint32_t>{2, 4}));
+        fg.flood(1, fails({1, 2}), out);  // parts {0} and {4}: equal, the first kept
+        CHECK(out == (std::vector<uint32_t>{0}));
+        fg.flood(1, fails({0, 1, 2, 4}), out);  // start and every direct neighbour fail: empty
+        CHECK(out.empty());
+        fg.flood(-1, fails({}), out);
+        CHECK(out.empty());
+    }
     // custom edge weights (drop B -> C)
     g.recompute([](uint32_t from, uint32_t to, uint32_t) { return (from == 1 && to == 2) ? ::alamo::galactic::kUnlinked : 7u; });
     CHECK(g.weight(0, 1) == 7u && !g.path(0, 2, p) && g.weight(2, 0) == 14u);
