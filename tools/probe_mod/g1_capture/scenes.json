@@ -134,7 +134,8 @@
      "poll": 3,
      "nudge_key": "ESC",
      "label": "skip intro movies",
-     "menu": true
+     "menu": true,
+     "max_dist": 45
     },
     {
      "do": "fit_window",
@@ -145,7 +146,8 @@
      "do": "expect_like",
      "ref": "main_menu",
      "timeout": 20,
-     "menu": true
+     "menu": true,
+     "max_dist": 45
     },
     {
      "do": "click",
@@ -159,7 +161,8 @@
      "do": "expect_like",
      "ref": "sp_menu",
      "timeout": 20,
-     "menu": true
+     "menu": true,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -173,7 +176,8 @@
      "do": "expect_like",
      "ref": "setup_start",
      "timeout": 30,
-     "menu": true
+     "menu": true,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -211,7 +215,8 @@
     {
      "do": "expect_like",
      "ref": "advanced_accept",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -235,7 +240,8 @@
     {
      "do": "expect_like",
      "ref": "setup_start",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -248,7 +254,8 @@
      "do": "expect_like",
      "ref": "loading_begin",
      "timeout": 240,
-     "poll": 2
+     "poll": 2,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -260,7 +267,8 @@
     {
      "do": "expect_like",
      "ref": "hud_buttons",
-     "timeout": 60
+     "timeout": 60,
+     "max_dist": 30
     },
     {
      "do": "park",
@@ -357,7 +365,8 @@
     {
      "do": "expect_like",
      "ref": "esc_quit",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -369,7 +378,8 @@
     {
      "do": "expect_like",
      "ref": "confirm_yes",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -381,7 +391,8 @@
     {
      "do": "expect_like",
      "ref": "result_exit",
-     "timeout": 30
+     "timeout": 30,
+     "max_dist": 30
     },
     {
      "do": "shot",
@@ -401,7 +412,8 @@
     {
      "do": "expect_like",
      "ref": "setup_start",
-     "timeout": 60
+     "timeout": 60,
+     "max_dist": 30
     }
    ]
   },
@@ -1756,7 +1768,8 @@
      "poll": 3,
      "nudge_key": "ESC",
      "label": "skip intro movies",
-     "menu": true
+     "menu": true,
+     "max_dist": 45
     },
     {
      "do": "fit_window",
@@ -1767,7 +1780,8 @@
      "do": "expect_like",
      "ref": "main_menu",
      "timeout": 20,
-     "menu": true
+     "menu": true,
+     "max_dist": 45
     },
     {
      "do": "click",
@@ -1781,7 +1795,8 @@
      "do": "expect_like",
      "ref": "sp_menu",
      "timeout": 20,
-     "menu": true
+     "menu": true,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -1795,7 +1810,8 @@
      "do": "expect_like",
      "ref": "setup_start",
      "timeout": 30,
-     "menu": true
+     "menu": true,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -1833,7 +1849,8 @@
     {
      "do": "expect_like",
      "ref": "advanced_accept",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -1857,7 +1874,8 @@
     {
      "do": "expect_like",
      "ref": "setup_start",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -1870,7 +1888,8 @@
      "do": "expect_like",
      "ref": "loading_begin",
      "timeout": 240,
-     "poll": 2
+     "poll": 2,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -1882,7 +1901,8 @@
     {
      "do": "expect_like",
      "ref": "hud_buttons",
-     "timeout": 60
+     "timeout": 60,
+     "max_dist": 30
     },
     {
      "do": "park",
@@ -1954,7 +1974,8 @@
     {
      "do": "expect_like",
      "ref": "esc_quit",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -1966,7 +1987,8 @@
     {
      "do": "expect_like",
      "ref": "confirm_yes",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -1978,7 +2000,8 @@
     {
      "do": "expect_like",
      "ref": "result_exit",
-     "timeout": 30
+     "timeout": 30,
+     "max_dist": 30
     },
     {
      "do": "shot",
@@ -1998,7 +2021,8 @@
     {
      "do": "expect_like",
      "ref": "setup_start",
-     "timeout": 60
+     "timeout": 60,
+     "max_dist": 30
     }
    ]
   },
@@ -2495,7 +2519,8 @@
      "poll": 3,
      "nudge_key": "ESC",
      "label": "skip intro movies",
-     "menu": true
+     "menu": true,
+     "max_dist": 45
     },
     {
      "do": "fit_window",
@@ -2506,7 +2531,8 @@
      "do": "expect_like",
      "ref": "main_menu",
      "timeout": 20,
-     "menu": true
+     "menu": true,
+     "max_dist": 45
     },
     {
      "do": "click",
@@ -2520,7 +2546,8 @@
      "do": "expect_like",
      "ref": "sp_menu",
      "timeout": 20,
-     "menu": true
+     "menu": true,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -2534,7 +2561,8 @@
      "do": "expect_like",
      "ref": "setup_start",
      "timeout": 30,
-     "menu": true
+     "menu": true,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -2572,7 +2600,8 @@
     {
      "do": "expect_like",
      "ref": "advanced_accept",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -2596,7 +2625,8 @@
     {
      "do": "expect_like",
      "ref": "setup_start",
-     "timeout": 15
+     "timeout": 15,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -2609,7 +2639,8 @@
      "do": "expect_like",
      "ref": "loading_begin",
      "timeout": 240,
-     "poll": 2
+     "poll": 2,
+     "max_dist": 30
     },
     {
      "do": "click",
@@ -2621,7 +2652,8 @@
     {
      "do": "expect_like",
      "ref": "hud_buttons",
-     "timeout": 60
+     "timeout": 60,
+     "max_dist": 30
     },
     {
      "do": "park",
