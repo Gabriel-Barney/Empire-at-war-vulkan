@@ -31,11 +31,15 @@
 //   * death_clone_spawned()  a Death_Clone object runs its own death sequence (its type's Specific_Death_Anim_*,
 //                    else the clip of the killing damage kind) right after its model is created at the next sync [port:
 //                    clones die at once]; refix t01: also the dying type's own clone (0x29f270 always makes one);
+//                    refixf t04: with the plan the battle made (plan_clone_death: spin / death type / variant already drawn,
+//                    so the service draws nothing for it). The battle owns the clone's REMOVAL (from the same plan, with or
+//                    without this service); the service never destroys store objects, its corpse row only follows;
 //   * corpse_clone() refix t03, the infantry corpse path (S9_DEATH_CLONE_SHIELDS.md §1.6 [L]): no clone object; the
 //                    dying unit's row becomes a corpse of the clone type's model running the clone's death sequence;
 //   * service: before the advance, flinch holds end and the corpse countdown runs (Death_Persistence_Duration
-//     after the death clip, then Death_Fade_Time); a finished corpse loses its row, and a store object that is
-//     still alive (death clones) is destroyed (TacticalMode::destroy).
+//     after the death clip, then Death_Fade_Time); a finished corpse loses its row. refixf t04: a death clone's store
+//     object is removed by the battle at the frame plan_death gives (the same frame as this countdown when both read the
+//     same model); a corpse row whose store object went first lives on detached until its countdown ends (render only).
 // Rows whose store object left are removed unless they are corpses (then marked detached).
 // CRC: opt-in "anim" (attach(host, true)): per mode bottom -> top, has-world flag + AnimWorld::hash_state +
 // AnimBehaviors::hash.
@@ -88,9 +92,10 @@ public:
     // outlive the host's ticks / CRC captures / saves.
     void attach(SimHost& host, bool crc);
     void detach(SimHost& host);
-    // N1 save chunk "anim" (owner: n2-host): u32 version 1, u32 mode depth, then per mode bottom -> top: bool has-world;
+    // N1 save chunk "anim" (owner: n2-host): u32 version 3, u32 mode depth, then per mode bottom -> top: bool has-world;
     // if so a section with AnimBehaviors::write, a section with AnimWorld::write (primary world), i32 max_seen, the
-    // pending death-clone ids, the event-row ids, the muzzles (id, hardpoint, bone, until). read() validates every mode
+    // pending death clones (u32 count; per clone i32 id, u8 kind, bool planned, bool spin, i32 type, u32 variant; version 2:
+    // the id list then the kinds, unplanned), the event-row ids, the muzzles (id, hardpoint, bone, until). read() validates every mode
     // on scratch copies, then reads the live worlds in place (battle hooks / script bridges hold pointers to them): rows
     // come back with the host's model choice (the store object's type, else the corpse's), nothing is re-created at
     // the next sync (max_seen restored) and no RNG is drawn. Not saved: the secondary (cosmetic) worlds - re-created at
@@ -120,7 +125,11 @@ public:
     anim::DeathResult begin_death(const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind = 1);
     // A Death_Clone object was spawned: its death sequence runs after its model creation at the next sync.
     // `damage_kind` = the killing hit's kind (the death clip when the clone type sets no Specific_Death_Anim_*).
-    void death_clone_spawned(const GameMode& mode, ObjectId clone, uint8_t damage_kind = 1);
+    // `plan` (refixf t04): the battle's plan_clone_death result - played as planned, no draws; null = drawn at the sync.
+    void death_clone_spawned(const GameMode& mode, ObjectId clone, uint8_t damage_kind = 1, const anim::DeathPlan* plan = nullptr);
+    // refixf t04: anim::plan_death for a clone of `type` in `mode` (the type's DeathBehavior fields, the model model_for
+    // gives: the same clip data the clone's row plays). Draws on `rng` like the death would. Usable without attach().
+    anim::DeathPlan plan_clone_death(objects::TypeIndex type, objects::ModeKind mode, uint8_t damage_kind, SimRng& rng);
     // refix t03: infantry corpse path (S9 §1.6 [L]: the clone goes to a lighter corpse list, not the sim store). Call
     // before the battle destroys `dying`: its row (created when absent) gets `clone_type`'s model without a clip (no
     // draw), then the clone type's death sequence starts with the CorpseInfo of `clone_type`, so the row lives on as a
@@ -189,8 +198,13 @@ private:
         std::unique_ptr<anim::AnimWorld> world;
         std::unique_ptr<anim::AnimBehaviors> behaviors;
         std::unique_ptr<anim::AnimWorld> secondary;
-        std::vector<ObjectId> pending_clone_deaths;  // request order
-        std::vector<uint8_t> pending_clone_kinds;    // parallel: the killing damage kind of each
+        struct PendingClone {
+            ObjectId id = 0;
+            uint8_t kind = 1;      // the killing damage kind
+            bool planned = false;  // refixf t04: `plan` holds the battle's spin / type / variant
+            anim::DeathPlan plan;
+        };
+        std::vector<PendingClone> pending_clones;  // request order
         ObjectId max_seen = INT32_MIN;               // highest store id considered for model creation
         ObjectId max_seen_secondary = INT32_MIN;
         std::vector<ObjectId> event_rows;            // rows whose model has event clips (ascending)
@@ -212,13 +226,13 @@ private:
     ModeWorld& mode_world(const GameMode& mode);
     const ModeWorld* find_mode_world(const GameMode& mode) const;
     anim::DeathResult start_death(ModeWorld& mw, const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind = 1,
-                                  objects::TypeIndex type_override = objects::kNone);
+                                  objects::TypeIndex type_override = objects::kNone, const anim::DeathPlan* plan = nullptr);
     struct TypeEntry {
         anim::TypeAnimParams params;
         const anim::AnimModel* model = nullptr;
     };
     void prune(const SimHost& host);
-    void sync(const GameMode& mode, SimRng& rng, uint64_t frame);  // appends objects to destroy to scratch_destroy_
+    void sync(const GameMode& mode, SimRng& rng, uint64_t frame);
 
     const objects::GameObjectTypes* types_;
     const FileProvider* files_;

@@ -69,6 +69,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     auto timed = [](auto& x, auto& t) { x(t.id, t.h, t.frame); };
     a.seq(b.particles_, timed);
     a.seq(b.dummies_, timed);
+    a.seq(b.death_clones_, timed);  // refixf t04
     a.seq(b.effects_, [](auto& x, auto& e) { x(e.id, e.asset, e.percent, e.frame); });
     a(b.anchor_[0], b.anchor_[1], b.facing_[0], b.facing_[1], b.placed_[0], b.placed_[1]);
     a(b.frame_, b.retreat_allowed_frame_, b.retreat_side_, b.retreat_done_frame_, b.retreat_complete_, b.finished_);
@@ -78,7 +79,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
         auto& s = b.stats_;
         a(s.frames, s.spawned, s.reinforcements, s.deaths, s.orders, s.shots, s.hits, s.containers, s.ability_events);
         a(s.activations, s.ability_commands, s.hardpoints_destroyed, s.particles, s.props, s.death_clones, s.smoke, s.dummies,
-          s.anim_plays);
+          s.anim_plays, s.death_clones_removed);
     }
     // [port: Gabriel] order queues
     a.seq(b.queues_, [](auto& x, auto& q) {
