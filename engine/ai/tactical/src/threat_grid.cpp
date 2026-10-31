@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_rng.hpp"
 
 namespace alamo::ai::tactical {
 
@@ -16,6 +17,12 @@ int32_t trunc_i(float v) {
     if (v >= 2.0e9f) return 2000000000;
     return static_cast<int32_t>(v);
 }
+
+// 0x22f9f0: rounds away from zero (ceil for x >= 0, floor below) [H].
+float round_away_from_zero(float x) { return x >= 0.0f ? std::ceil(x) : std::floor(x); }
+
+// Stamp <= frame on wrapping u32 frames (signed difference).
+bool stamp_due(uint32_t stamp, uint32_t frame) { return static_cast<int32_t>(frame - stamp) >= 0; }
 
 bool is_grid_hard_point(const PerceptionHardPoint& hp) {
     return hp.type >= kFirstGridHardPointType && hp.type <= kLastGridHardPointType && hp.grid_flag;
@@ -34,6 +41,14 @@ float hard_point_power(const PerceptionWorld& w, const PerceptionObject& o, int3
 }
 
 }  // namespace
+
+UnitAiStamps draw_unit_ai_stamps(SimRng& rng, uint32_t frame) {
+    const auto f = static_cast<int32_t>(frame);
+    UnitAiStamps s;
+    s.reprojection_check = f + rng.range_int(0, kUnitAiCheckSpread) - kUnitAiCheckSpread;  // first draw (+0x20)
+    s.second = f + rng.range_int(0, kUnitAiSecondSpread) - kUnitAiSecondSpread;            // second draw (+0x34)
+    return s;
+}
 
 ThreatGridConfig threat_grid_config(TacticalMode mode, const TacticalAiConstants& c) {
     ThreatGridConfig g;
@@ -58,7 +73,7 @@ void TacticalPerceptionGrid::init(TacticalMode mode, const Rect2& map, uint32_t 
     const float ex = right_ - left_, ey = top_ - bottom_;
     auto fow_cells = [&](float extent) {
         if (!(cfg.desired_fow_cell_size > 0.0f) || !(extent > 0.0f)) return 0;
-        const float n = std::floor(extent / cfg.desired_fow_cell_size + 0.5f);  // [M] rounding of 0x22f9f0
+        const float n = round_away_from_zero(extent / cfg.desired_fow_cell_size);  // 0x22f9f0 [H]
         if (!(n > 0.0f)) return 0;
         return n >= static_cast<float>(kMaxFowCellsPerAxis) ? kMaxFowCellsPerAxis : static_cast<int32_t>(n);
     };
@@ -232,6 +247,10 @@ void TacticalPerceptionGrid::remove_entry(uint32_t ei) {
 }
 
 bool TacticalPerceptionGrid::register_object(const PerceptionWorld& w, int32_t id, uint32_t frame) {
+    return register_object(w, id, frame, static_cast<int32_t>(frame + cfg_.reprojection_frames));  // [port] legacy
+}
+
+bool TacticalPerceptionGrid::register_object(const PerceptionWorld& w, int32_t id, uint32_t /*frame*/, int32_t check_stamp) {
     if (!valid() || objects_.count(id)) return false;
     const PerceptionObject* o = w.object(id);
     if (!o || !o->has_unit_ai) return false;
@@ -240,7 +259,7 @@ bool TacticalPerceptionGrid::register_object(const PerceptionWorld& w, int32_t i
     GridObject g;
     g.owner = w.is_player(o->owner) ? o->owner : kNoPlayerIndex;
     std::memcpy(g.transform, o->transform, sizeof g.transform);
-    g.next_check = frame + cfg_.reprojection_frames;
+    g.next_check = static_cast<uint32_t>(check_stamp);
     g.fogged.assign(players_, 0);
     g.team_or_hide = o->team_or_hide_when_fogged;
     std::vector<int32_t> hp_index;
@@ -300,8 +319,8 @@ bool TacticalPerceptionGrid::service_object(const PerceptionWorld& w, int32_t id
         g.fogged[p] = now;
     }
     // re-projection gate
-    if (frame < g.next_check) return false;
-    g.next_check += cfg_.reprojection_frames;
+    if (!stamp_due(g.next_check, frame)) return false;
+    g.next_check += cfg_.reprojection_frames;  // no re-base on F: a stamp that is behind catches up per service
     if (std::memcmp(g.transform, o->transform, sizeof g.transform) == 0) return false;
     std::memcpy(g.transform, o->transform, sizeof g.transform);
     std::vector<PerceptionHardPoint> hps;
@@ -325,6 +344,7 @@ bool TacticalPerceptionGrid::on_object_destroyed(int32_t id) {
     GridObject& g = it->second;
     for (const uint32_t ei : g.entries) {
         remove_entry(ei);
+        // [port] every player's memory lists (the original: only players that see it fogged, A1_READINGS 15).
         for (auto& per_player : memory_)
             for (auto& cell : per_player) erase_value(cell, ei);
         entries_[ei] = Entry();
