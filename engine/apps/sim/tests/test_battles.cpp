@@ -237,6 +237,13 @@ std::string s4_types() {
                 " <GroundInfantry Name=\"S4_Hero\"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>"
                 "<Is_Named_Hero>Yes</Is_Named_Hero><Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed>"
                 "<Population_Value>1</Population_Value></GroundInfantry>\n"
+                // a1f t07: Secondary_Abandoned_Sensor's combat-relevant tags (a selectable neutral capture structure, no weapon; health
+                // 250 instead of 700 so three troopers kill it before the Underworld wins)
+                " <SecondaryStructure Name=\"S4_Sensor\"><Behavior>CAPTURE_POINT, SELECTABLE, DUMMY_GROUND_STRUCTURE</Behavior>"
+                "<Is_Dummy>Yes</Is_Dummy><Tactical_Health>250</Tactical_Health><CategoryMask>Structure</CategoryMask>"
+                "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><Influences_Capture_Point>False</Influences_Capture_Point>"
+                "<Capture_Point_Transition_Time_Seconds>10.0</Capture_Point_Transition_Time_Seconds><Victory_Relevant>No</Victory_Relevant>"
+                "</SecondaryStructure>\n"
                 " <Marker Name=\"S4_Post\"><Behavior>CAPTURE_POINT</Behavior><Capture_Point_Radius>300</Capture_Point_Radius>"
                 "<Capture_Point_Transition_Time_Seconds>1.0</Capture_Point_Transition_Time_Seconds></Marker>\n"
                 // S10 map owners: a landing reinforcement point (REMAINING_GAPS §3.3 probe 2026-10-29)
@@ -1224,6 +1231,11 @@ struct S4Run {
     CrcLog crc;
     bool garrison_flag = false, left = false, readded = false, bunker_taken = false, post_taken = false;
     bool fire_query = false, can_query = false, hero_changed = false, contained = false;
+    // a1f t07 (attack_sensor runs): the neutral sensor is a combat unit and a capture point, untouched by the target scan,
+    // killed by an attack order, then gone from the capture system.
+    bool sensor_combat = false, sensor_point = false, sensor_untouched = false, sensor_killed = false, sensor_point_removed = false;
+    int attack_order = -1;
+    float sensor_health = -1.0f;  // last health fraction seen
     uint32_t garrisoned_frames = 0;
     int mission = -1, piracy = -1;
     int32_t winner = -2;
@@ -1231,7 +1243,7 @@ struct S4Run {
     float credits_before = -1.0f, credits_after = -1.0f;
 };
 
-terrain::MapData s4_map() {
+terrain::MapData s4_map(bool sensor = false) {
     terrain::MapData m = land_map();
     auto place = [&m](const char* type, float x, float y, uint32_t owner, float yaw = 0.0f) {
         terrain::ObjectPlacement p;
@@ -1249,10 +1261,13 @@ terrain::MapData s4_map() {
     place("Defending Forces Position", 900.0f, 660.0f, 0, 90.0f);  // the defenders' anchor (marker, no type needed)
     place("S4_Post", 900.0f, 660.0f, 2, 90.0f);                    // on the defender anchor
     place("S4_Bunker", 900.0f, 700.0f, 2, 90.0f);                  // among the defenders' first row
+    if (sensor) place("S4_Sensor", 940.0f, 660.0f, 2, 90.0f);      // a1f t07: next to the defenders, neutral
     return m;
 }
 
-S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, int corruption) {  // 0 none, 1 mission, 2 hero alone
+// corruption: 0 none, 1 mission, 2 hero alone; attack_sensor (a1f t07): the map gets a neutral S4_Sensor and the Empire
+// troopers only attack it (frame 60), no other scripted orders.
+S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, int corruption, bool attack_sensor = false) {
     using R = commands::RejectReason;
     using T = commands::EventType;
     S4Run out;
@@ -1284,10 +1299,10 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     opt.battle.land_capture_countdown = 0.0f;
     std::vector<std::string>* maps = &out.maps;
     CampaignBattles battles(host, d.crules, *d.catalog,
-                            [maps](const std::string& name, terrain::MapData& m) {
+                            [maps, attack_sensor](const std::string& name, terrain::MapData& m) {
                                 maps->push_back(name);
                                 if (name != "S10_Land_B" && name != "S4_Land_Alt") return false;
-                                m = s4_map();
+                                m = s4_map(attack_sensor);
                                 return true;
                             },
                             opt);
@@ -1317,7 +1332,7 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == R::None);
     bool invaded = false;
     std::vector<objects::ObjectId> troopers;
-    objects::ObjectId bunker = objects::kNoObjectId, post = objects::kNoObjectId;
+    objects::ObjectId bunker = objects::kNoObjectId, post = objects::kNoObjectId, sensor = objects::kNoObjectId;
     const objects::TypeIndex trooper_t = d.types.resolve_name("S10_Trooper");
     for (uint64_t t = 0; t < 3000; ++t) {
         host.tick_once();
@@ -1363,9 +1378,26 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
                 for (objects::ObjectHandle h : s.all_objects()) {
                     if (s.type(h) == d.types.resolve_name("S4_Bunker")) bunker = s.id(h);
                     if (s.type(h) == d.types.resolve_name("S4_Post")) post = s.id(h);
+                    if (s.type(h) == d.types.resolve_name("S4_Sensor")) sensor = s.id(h);
                 }
             }
             const uint32_t f = b->frame();
+            if (attack_sensor) {  // a1f t07
+                if (troopers.empty() || sensor == objects::kNoObjectId) continue;
+                const tactical::combat::CombatSystem& c = b->combat();
+                if (f == 2) {
+                    out.sensor_combat = c.has_unit(sensor) && c.alive(sensor) && c.max_health(sensor) > 0.0f;
+                    out.sensor_point = b->captures() && b->captures()->is_point(sensor);
+                }
+                if (f == 60) {  // the troopers stood next to it for 60 frames: the target scan never picked it
+                    out.sensor_untouched = out.sensor_combat && c.health(sensor) == c.max_health(sensor);
+                    out.attack_order = static_cast<int>(b->order_attack(*tm, 0, troopers, sensor, host.random().synced()));
+                }
+                if (out.sensor_combat && c.alive(sensor)) out.sensor_health = c.health(sensor) / c.max_health(sensor);
+                if (out.sensor_combat && !out.sensor_killed && !c.alive(sensor)) out.sensor_killed = true;
+                if (out.sensor_killed && b->captures() && !b->captures()->is_point(sensor)) out.sensor_point_removed = true;
+                continue;
+            }
             if (std::getenv("S4_DEBUG") && (f % 50) == 1 && !troopers.empty()) {
                 for (const objects::ObjectId id : troopers) {
                     const objects::ObjectHandle h = s.find(id);
@@ -1542,6 +1574,21 @@ void test_s4_battle(const Data& d) {
     for (const int32_t w : {1, 4, 15}) {
         const S4Run b = run_s4_battle(d, files, w, 0);
         CHECK(b.log == a.log && !first_divergence(a.crc, b.crc).diverged);
+    }
+    // a1f t07: a map-placed neutral SELECTABLE capture structure (Secondary_Abandoned_Sensor stand-in) is a battle combat
+    // unit as well as a capture point; the target scan skips the Is_Neutral player's objects (TACTICAL_COMBAT §2.2), so
+    // the Empire troopers next to it leave it alone until ordered; the attack order is accepted and kills it, and the dead
+    // point leaves the capture system.
+    {
+        const S4Run s = run_s4_battle(d, files, 0, 0, true);
+        std::printf("  neutral sensor: combat %d, capture point %d, untouched %d, attack order %d, health %.2f, killed %d, point removed %d\n",
+                    s.sensor_combat ? 1 : 0, s.sensor_point ? 1 : 0, s.sensor_untouched ? 1 : 0, s.attack_order,
+                    static_cast<double>(s.sensor_health), s.sensor_killed ? 1 : 0, s.sensor_point_removed ? 1 : 0);
+        for (const auto& m : s.battles) std::printf("  %s\n", m.c_str());
+        CHECK(s.sensor_combat && s.sensor_point && s.sensor_untouched);
+        CHECK(s.attack_order == static_cast<int>(commands::RejectReason::None) && s.sensor_killed && s.sensor_point_removed);
+        const S4Run s4 = run_s4_battle(d, files, 4, 0, true);
+        CHECK(!first_divergence(s.crc, s4.crc).diverged);
     }
     // Corruption mission (human Underworld).
     const S4Run c = run_s4_battle(d, files, 0, 1);

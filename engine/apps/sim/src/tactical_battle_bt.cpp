@@ -640,7 +640,8 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
     // r1; a spawn only when r1 >= 1 - W (W = the last cumulative weight); then r2 = synced float(0, W) [M upper bound], the
     // first cumulative >= r2; owner = the first player whose faction is in the chosen type's Affiliation, else the
     // marker's owner; the placeholder is removed. Spawned objects:
-    //   * CAPTURE_POINT / garrison structures without a locomotor: S4 placement with the map owner (§3.3);
+    //   * CAPTURE_POINT / garrison structures without a locomotor: S4 placement with the map owner (§3.3); the selectable
+    //     ones are also third-party battle combat units of that owner (any owner, Is_Neutral included);
     //   * selectable / mobile objects (map units, turrets, base layouts) of a non-Is_Neutral owner: battle combat units
     //     (map participants; a third party when owned by neither side) [port: Is_Neutral-owned ones stay inert store
     //     objects (every player is an enemy of every other in CombatSystem); company types placed on the map are not
@@ -710,7 +711,18 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
         }
         const bool mobile = types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Locomotor);
         const bool selectable = types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Selectable);
-        if (!mobile && s4_placement(mode, t, sp, pl.health_fraction)) continue;  // S4: capture points / garrison structures
+        objects::ObjectHandle placed{};
+        if (!mobile && s4_placement(mode, t, sp, pl.health_fraction, &placed)) {  // S4: capture points / garrison structures
+            // a1f t07: a SELECTABLE one (Secondary_Abandoned_Sensor: Tactical_Health 700, Structure, Neutral at start) is a
+            // combat object too, so Destroy_Structure / attack orders can kill it; whatever its map owner (the Is_Neutral
+            // player's objects are skipped by the target scan, TACTICAL_COMBAT §2.2). [port] a third party: never decides
+            // victory nor counts in a side's power (the shipped ones are Victory_Relevant No).
+            if (selectable && placed && rules_->type(static_cast<uint32_t>(t)).members.empty()) {
+                const uint32_t pi = bt_adopt_built(mode, placed, owner, pl.health_fraction, &rng, true);
+                if (pi < parts_.size()) parts_[pi].third = true;
+            }
+            continue;
+        }
         if (mobile || selectable) {
             if (!rules_->type(static_cast<uint32_t>(t)).members.empty()) continue;  // [port] map-placed companies
             const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);

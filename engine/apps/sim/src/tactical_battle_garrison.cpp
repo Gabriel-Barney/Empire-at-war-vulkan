@@ -9,8 +9,10 @@
 //   * they leave the MovementSystem while inside and are re-added at the exit point (no fade / walk-out);
 //   * relations: allied = same owner or not CombatSystem::is_enemy; the galaxy's neutral player's hosts are open (§2.5);
 //   * map placements with CAPTURE_POINT or a garrison behaviour and no locomotor are spawned for their map owner (mini 02
-//     = player id, REMAINING_GAPS §3.3; probe: the campaign map ids vs the player order) as store objects (not combat
-//     units); the capture countdown skips points of the neutral player / an Is_Neutral faction;
+//     = player id, REMAINING_GAPS §3.3; probe: the campaign map ids vs the player order); the SELECTABLE ones (abandoned
+//     sensor / turbolaser, mining facility, outfitter, capturable bunker) are also battle combat units of that owner
+//     (bt_map_load, third party: health, damage and death; a destroyed one leaves the capture system), the others stay
+//     store objects; the capture countdown skips points of the neutral player / an Is_Neutral faction;
 //   * §6.5 capture reset (s4_capture_reset): a pad's capture point goes back to the neutral player when its child goes;
 //   * an owner change of a non-combat object (capture point / placed host) = ObjectStore::set_owner + TreeSet::set_owner;
 //     battle units go through change_owner();
@@ -38,7 +40,7 @@ void TacticalBattle::s4_init() {}
 void TacticalBattle::s4_capture_reset(TacticalMode&, objects::ObjectId) {}
 void TacticalBattle::s4_capture_grant(TacticalMode&, objects::ObjectId, int32_t) {}
 bool TacticalBattle::s4_board(TacticalMode&, objects::ObjectId, objects::ObjectId) { return false; }
-bool TacticalBattle::s4_placement(TacticalMode&, objects::TypeIndex, const objects::SpawnParams&, float) { return false; }
+bool TacticalBattle::s4_placement(TacticalMode&, objects::TypeIndex, const objects::SpawnParams&, float, objects::ObjectHandle*) { return false; }
 void TacticalBattle::s4_register(TacticalMode&, const Unit&) {}
 void TacticalBattle::s4_positions(TacticalMode&) {}
 void TacticalBattle::s4_tick(TacticalMode&, SimRng&) {}
@@ -103,7 +105,9 @@ void TacticalBattle::s4_owner_changed(TacticalMode& mode, objects::ObjectId id, 
     garrison_.set_owner(id, owner, p, f, frame_);  // ejects the occupants hostile to the new owner (applied at the next s4_tick)
 }
 
-bool TacticalBattle::s4_placement(TacticalMode& mode, objects::TypeIndex t, const objects::SpawnParams& sp, float health) {
+bool TacticalBattle::s4_placement(TacticalMode& mode, objects::TypeIndex t, const objects::SpawnParams& sp, float health,
+                                  objects::ObjectHandle* spawned) {
+    if (spawned) *spawned = objects::ObjectHandle{};
     if (!cfg_.garrisons) return false;
     const objects::GameObjectTypes& types = catalog_->types();
     tg::CapturePointDesc cd;
@@ -116,6 +120,7 @@ bool TacticalBattle::s4_placement(TacticalMode& mode, objects::TypeIndex t, cons
     const objects::SpawnParams& p = sp;  // REMAINING_GAPS §3.3: the map owner (mini 02) is kept
     const objects::ObjectHandle h = mode.spawn(p, health);
     if (!h) return true;
+    if (spawned) *spawned = h;
     const objects::ObjectId id = mode.primary().id(h);
     if (capture) captures_->add_point(id, p.owner, p.position, cd, frame_);
     if (holder) {
@@ -307,6 +312,7 @@ void TacticalBattle::s4_tick(TacticalMode& mode, SimRng&) {
     // 1. dead / retreated battle units leave the garrison state (a host ejects / kills its occupants).
     for (const Unit& u : units_) {
         if (u.alive && !u.retreated) continue;
+        if (captures_ && captures_->is_point(u.id)) captures_->remove(u.id);  // a destroyed capture structure (combat unit)
         if (!garrison_.is_holder(u.id) && !garrison_.is_unit(u.id)) continue;
         const Vec3 at = store.exists(u.h) ? store.position(u.h) : Vec3{};
         const Vec3 f = store.exists(u.h) ? store.facing(u.h) : Vec3{1.0f, 0.0f, 0.0f};

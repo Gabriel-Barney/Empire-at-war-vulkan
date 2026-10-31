@@ -906,7 +906,9 @@ private:
     std::vector<StoryCaptureEvent> story_captured_;
     void s4_owner_changed(TacticalMode& mode, objects::ObjectId id, int32_t old_owner, int32_t owner);  // change_owner()
     void s4_init();  // relations / neutral player of the garrison and capture systems (first registration)
-    bool s4_placement(TacticalMode& mode, objects::TypeIndex t, const objects::SpawnParams& sp, float health);  // setup
+    // setup; `spawned` (optional) receives the placed object (null when the spawn failed)
+    bool s4_placement(TacticalMode& mode, objects::TypeIndex t, const objects::SpawnParams& sp, float health,
+                      objects::ObjectHandle* spawned = nullptr);
     void s4_register(TacticalMode& mode, const Unit& u);  // deploy: holder / occupant registration
     void s4_positions(TacticalMode& mode);                // tick step 5: occupants on their holders
     void s4_tick(TacticalMode& mode, SimRng& rng);        // tick after the combat events
