@@ -424,6 +424,13 @@ void TacticalBattle::bt_battle_end() {
 
 // ---- battle host follow-up: TEAM containers (REMAINING_GAPS §3.4), landing reinforcement points (§3.3) --------------
 
+objects::TypeIndex TacticalBattle::representative_type(objects::ObjectId id) const {
+    if (id == objects::kNoObjectId) return objects::kNone;
+    for (const Container& ct : containers_)  // container order; ids are unique
+        if (ct.id == id) return ct.team && ct.type != 0xFFFFFFFFu ? static_cast<objects::TypeIndex>(ct.type) : objects::kNone;
+    return objects::kNone;
+}
+
 bool TacticalBattle::bt_team(uint32_t company_type, uint32_t first_member, uint32_t& object_type, uint32_t& behavior_type,
                              uint32_t& squad) const {
     const objects::GameObjectTypes& types = catalog_->types();
