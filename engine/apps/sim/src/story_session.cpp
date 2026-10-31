@@ -266,6 +266,16 @@ StorySession::StorySession(galactic::GalacticSim& sim, objects::ObjectStore& sto
     lua_->bridge.container_of = [gs](objects::ObjectHandle h) { return gs->container_of(h); };
     lua_->bridge.contents_of = [gs](objects::ObjectHandle h) { return gs->contents_of(h); };
     lua_->bridge.destroy_object = [gs](objects::ObjectHandle h) { return gs->destroy_object(h); };
+    // a1f t08: BlockOnCommand(fleet.Move_To(planet)) waits until the fleet has stopped (arrived, stopped short or gone:
+    // merged into a fleet in orbit, destroyed). [inferred] from the shipped story scripts, which test
+    // fleet.Get_Planet_Location() == target right after the block (Story_Campaign_Underworld.lua Empire_Attack /
+    // rebel retaliation, then Invade()), and from the task-force Move_To's MovementBlockStatus, which ends at arrival
+    // (AI_GALACTIC §2.5). Other orders (and objects that are not fleets) still finish at once (PROVISIONAL default,
+    // object_bridge.hpp). Without this, Invade() ran while the fleet was in hyperspace and was dropped (S10 PROBE A).
+    lua_->bridge.order_finished = [gs](objects::ObjectId id, uint32_t) {
+        const uint32_t f = gs->fleet_of(gs->store().find(id));
+        return f == galactic::kNoFleet || !gs->fleets()[f].alive || !gs->fleets()[f].moving;
+    };
 }
 
 std::string_view story_ui_event_name(StoryUiEvent e) {
