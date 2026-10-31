@@ -44,6 +44,9 @@ Conventions:
 | 22 | Hints [L] | **corrected**: built from zone minis 08/09; no shipped FoC zone has any | [H] |
 | 23 | IsType [L] | **corrected**: global evaluator keyed by the object's own type name id | [H] |
 | 24 | Location.ForceUnnormalized of a land unit = point danger [M] | **corrected**: zone danger whenever the evaluator holds a zone | [H] |
+| 25 | Reachability source = the AI's home zone (port choice, follow-up question) | **corrected**: there is no home zone. Each call site has its own source, and the goal-proposal filter has no source at all (a per-zone flood around the target) | [H] |
+| 26 | TimeLastSeen land cells with flags & 0x22 count as 0 | **corrected**: 0x22 = Steep \| Water in the passability cell's **base** word; such cells (and cells outside the passability grid) are left out of both the sum and the count | [H] |
+| 27 | Fog at battle start | everything starts fogged with last-seen 0; own and allied REVEAL units uncover their circles on their first service; no start radius and no map-wide reveal for AI players | [H] / [M] where tagged |
 
 ---
 
@@ -422,3 +425,134 @@ All of these must hold:
 ### 24.2 Self
 
 Self = binding +0x58 → +0x50. [M] That the zone sum receives Self.
+
+---
+
+## 25. Reachability: sources, tolerances and the two tests (follow-up, 2026-10-31) [H unless tagged]
+
+### 25.1 Two different tests
+
+ZoneReachabilityClass (vtable 0x8cf750; one per land region target) answers reachability in two ways. Both
+use only levels 6..10 (No / Low / Medium / High / Any_Threat) and the tolerance table of §3.2.
+
+| Test | Slots | Source | What is compared with the tolerance |
+|---|---|---|---|
+| **Path sum** | slot 7 (0x73f5f0) | a second target given by the caller (its zone, target vf+0x40) | the wrapping sum of the Get_Path weights from the source zone to this zone (§3): one test over the **whole** path (up to 1000 entries), threat = high 16 bits × 100 |
+| **Flood** | slot 5 (0x73f8c0, "is the source zone in my set"), slot 6 (0x73f710, "pick a zone from my set") | none: the set is built around **this** target's zone | each zone's own zone danger (0x653e90, the raw sum over the zone's threat cells, AI player [M which player field]) separately; a zone above the tolerance is not entered, so the flood stops there |
+
+### 25.2 The flood (0x740430 → 0x5a7880 → 0x5a7390)
+
+- Per (target, level) a cached set: a list of zones in BFS order plus a bit set by zone index.
+  - Rebuilt when used if it was never built or is more than 10 s old (frame − stamp > 10 × FPS).
+  - Built only in land mode.
+- Graph: a global zone graph (0x140a28810, built once by 0x5a7da0):
+  - nodes = the land mode's zones in list order;
+  - **undirected** edges: for each zone i, for each zone j in i's link map (any flags) with index j > i, add the
+    pair i–j to both neighbour lists. A link stored only in the higher-index zone is ignored. Shipped data has 2
+    such links (§2).
+- A zone passes when its danger == 0 or danger ≤ tolerance.
+- Start = this target's zone:
+  1. If the start passes: BFS from it. Neighbours are visited in list order, and each passing neighbour is
+     added. The start is always first in the list.
+  2. If the start fails: each neighbour in turn, skipping visited ones:
+     - a failing neighbour is marked visited;
+     - a passing one runs its own BFS.
+     The largest of these BFS results is kept, and the start zone is not in it.
+  3. The set is empty only when the start zone **and every direct neighbour** fail, or when the zone is not in
+     the graph.
+- Slot 6 (level, linkMask, exclude, include):
+  - with linkMask −1 and no lists, it returns the target of the first zone in the set;
+  - otherwise it returns the target of the first zone in set order for which all of these hold:
+    - this zone's link map holds that zone with (flags & linkMask) ≠ 0;
+    - the zone is not in `exclude`;
+    - the zone is in `include` when `include` is given.
+  - Empty set or a level outside 6..10 → null.
+- Slot 5 (source, level, noRefresh) = bit test of the source target's zone index in this target's set. It
+  refreshes the set first unless noRefresh is set.
+
+### 25.3 Call sites in tactical (land)
+
+| Call site | Test | Source (path FROM) | Level / tolerance | Effect |
+|---|---|---|---|---|
+| **Goal proposal skip**, land slot 9 (0x6b8710) | flood, slot 6 (mask −1, no lists) | **none** | the goal type's `Reachability` (goal type +0x2c) | the candidate (type, target) is skipped when the target's region set is empty, i.e. the target zone and all its neighbours have zone danger > tolerance. No path from any AI unit or home is measured. A target without a reachability object (target vf+0x38 null) is **not** skipped by this test; a region target with a level outside 6..10 always is (slot 6 returns null) |
+| **Lua `FindTarget.Reachable_Target`** (0x698360) | path sum, slot 7 | the 6th argument: an AI target, or a game object / task force wrapper resolved through the target list (vf+0x40) to its target [M resolution]. **No 6th argument → no reachability test at all** | the 4th argument | candidates whose slot 7 returns 1e18 are skipped before Evaluate (§5). Only `AI_Plan_Underworld_TyberManagerLand.lua` passes a source in shipped tactical scripts (the Tyber unit; level `threat_threshold`). BusyTacticalFreeStore, the hero assist scripts and the evaluators pass none and use `Any_Threat` |
+| **Tactical FreeStore Setup A** (0x7287a0), stage choice per TF | flood, slot 6 | none (the set is around the goal target's zone; when the goal target has no reachability object, the region at the goal target's position via target-list vf+0x48) | the goal type's `Reachability`; linkMask = TF definition +0x94; exclude = stages so far when TF +0x98 (RequireUnique); include = them when +0x99 (MatchingStage) [M names] | stage = the slot-6 result, or the goal target when null |
+| Tactical FreeStore Setup A, distance key per free unit | path sum, slot 7 | the region at **each unit's position** (target-list vf+0x48 on unit +0x78) | always **7 (Low_Threat)** | not a filter: (cost)² is added only when finite. If no stage is finite, the key is the 2-D distance² to the goal target |
+| **TF.Reinforce landing points** (0x6eaf60) | flood, slot 5, then path sum, slot 7 | the region at **each candidate reinforcement point** | the TF goal's `Reachability` | points whose zone is not in the destination's set are dropped; the rest are sorted by the slot-7 cost. Without a region on either side, the 2-D distance is used |
+| `TF.Move_To(dest, threat, useZonePath)` (0x73c360 → 0x73bc50) | zone route through the global zone graph (0x5a6d00), tolerance = threat × 2 | the region at the TF position | the 2nd argument | only with `useZonePath` true. No shipped land plan passes the 3rd argument, so the threat number has no effect in shipped data |
+
+No other tactical caller compares a slot-7 result with 1e18 (a search for 1e18 compares over the AI code range finds only
+0x698360 and 0x7287a0).
+
+### 25.4 Consequences
+
+- The original has no "home zone". Plan proposal never measures a path. A Low_Threat (1000) goal on a land region
+  is refused only when that region's zone and all its neighbours each hold more than 1000 hostile zone danger.
+- The path-sum rule of §3 (≥ 100 threat per hop) only acts where a source is given: Tyber's Reachable_Target, the
+  FreeStore distance key (a soft term), and Reinforce point ranking.
+
+## 26. TimeLastSeen and the 0x22 cell test (0x655ed0 rect, 0x6561d0 zone) [H]
+
+This was read from the instruction stream; the decompiler drops the sums.
+
+### 26.1 Per threat cell
+
+For each threat cell (zone: the evaluator's threat-cell set in list order; rect: rows then columns):
+1. The cell centre is (x0 + (col + 0.5)·cellW, y1 − (row + 0.5)·cellH).
+2. fogged = FOW_Point_Test(mode, Self's player index, centre, force = 1) (0x35f3b0). It uses real fog for AI
+   players regardless of `AIUsesFogOfWarLand`.
+3. In land mode only (mode vf+0xe0 == 1):
+   - Passability cell = (int)((x + 10) / 20), (int)((y + 10) / 20), using the grid header at 0x140b36b90.
+   - The threat cell is **skipped** (not counted, not summed) when:
+     - the passability cell is outside the grid; or
+     - its **base** passability word (cell record +0x10, from .ted 0x10A) has bit 0x02 **Steep** or 0x20
+       **Water** (MOVEMENT §1.1 enum).
+   - The effective word (+0x14, objects stamped on the cell) is not read.
+4. Otherwise count += 1, and when fogged: sum += F − lastSeen[player][threat cell] (int, added as float).
+
+### 26.2 Result
+
+- If sum > 0: result = sum / (count × FPS). Otherwise 0.
+- AI_TACTICAL_PERCEPTION's "counts as 0" is wrong: a skipped cell does not enlarge the denominator.
+
+### 26.3 Other users
+
+- A scan of the AI code range (0x590000–0x760000) for tests of 0x22 finds only these two functions.
+  - The zone danger (0x653e90), the flood, the path finder node costs and the threat projection do **not** skip
+    Steep or Water cells.
+
+## 27. Fog state at battle start [H unless tagged]
+
+### 27.1 Start state
+
+- Land tactical start (FOG_OF_WAR §1.3): every non-neutral player, AI players included, gets a FOW grid.
+  - All states start at 0 (fogged) with count 0.
+  - The land FOW-active flag is set.
+- The threat grid's last-seen arrays (+0x70, per player × threat cell) are sized at creation and filled with **0**
+  (0x657fc0).
+  - A last-seen stamp is written only by the refog event: a FOW cell going from seen to fully fogged sets
+    lastSeen = F.
+  - A cell that was never seen keeps 0 and contributes F − 0 = F.
+
+### 27.2 What reveals cells
+
+- Every REVEAL (behaviour 0x18) object is marked dirty at mode start and reveals on its next service.
+  - The service interval is 1 frame [M].
+  - Revealed circles use `Land_FOW_Reveal_Range` × weather and battle scale, for the owner and every allied player.
+  - A count 0 → 1 on a state-0 cell sets the state to 0xEF at once, which is "not fogged" for game logic.
+  - So from the first frames, the cells inside the AI's own (and allies') unit and structure reveal circles are
+    visible. Everything else stays fogged.
+- No start-radius reveal and no map-wide reveal exist for AI players:
+  - `SetupPhaseEnabled` is False in shipped GameConstants, so the setup-phase reveal and binarise do not run.
+  - Reveal_All happens only through Force Sight, the overrun reveal (multiplayer game types, ≥ 30 s, 3:1 power),
+    Lua / story calls, or a loaded save.
+
+### 27.3 TimeLastSeen at the first AI service (frame F)
+
+- For a zone, it is (fogged counted cells / counted cells) × F / 30 s, with Steep / Water / off-grid cells left
+  out.
+- Normalised TimeLastSeen (§18) = that fraction.
+  - 1.0 only for zones with no counted cell inside any reveal circle.
+  - Lower for zones near own units.
+  - 0 for fully seen zones.
+- It is **not** F/30 for every zone.

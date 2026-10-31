@@ -145,7 +145,7 @@ Every tactical evaluation (proposal, FindTarget, EvaluatePerception) binds `Vari
 | Retreat | Space_Retreat (Global, Time_Limit 240); Debug_Goal_Space = `Want_To_Retreat_From_Space` (NoBudget) | RetreatPlan |
 | Hero | Tyber_Manager_Space | — |
 
-Space goals use `Reachability Any` (5); land uses the threat levels. Reachability only filters through `Reachable_Target` and land slot 9 (AI_GALACTIC §1.5); proposal itself does not path-test.
+Space goals use `Reachability Any` (5); land uses the threat levels. Reachability only filters through `Reachable_Target` and land slot 9 (AI_GALACTIC §1.5); proposal itself does not path-test. Sources, the per-zone flood used by slot 9 and every tactical call site: A1_READINGS §25.
 
 ### 4.4 Tactical slot overrides of the framework [H]
 - Slot 9 (skip): land 0x6b8710 = active-set test plus the reachability-keyed lookup (AI_GALACTIC §1.5); space 0x6b8900 = active-set test only.
