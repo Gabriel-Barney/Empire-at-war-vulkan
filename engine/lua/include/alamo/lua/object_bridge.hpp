@@ -186,6 +186,13 @@ public:
     // pool). Without a hook [inferred stand-in]: created directly like Spawn_Unit.
     std::function<std::vector<objects::ObjectHandle>(objects::TypeIndex type, int32_t player, Vec3 position)>
         spawn_from_pool;
+    // refixf t03: the representative type 0x3973b0 (docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling
+    // finders"; A1_READINGS §29) that Find_All_Objects_Of_Type and Find_Nearest match on: a team container -> the
+    // company's Create_Team_Type, else the company type; a transport -> its company type; a squadron fleet -> its
+    // squadron type; else the object's own type. Unset, or kNone returned: the object's store type, which is the
+    // representative type for every galactic object of the port model (GalacticSim::representative_type) and for
+    // tactical objects other than team containers without a Create_Team_Type (store type "Team") and transports.
+    std::function<objects::TypeIndex(objects::ObjectHandle)> representative_type;
 
     // ---- L1/S4 wave 2a: tactical systems (see the header comment) ----
     // S9 ability system of the battle (object ids = store ids). Used only in builds where engine/lua links

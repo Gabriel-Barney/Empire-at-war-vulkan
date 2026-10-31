@@ -660,8 +660,9 @@ static void test_task_forces(const Db& db) {
     // OI lua (A1 ask 2): objects-family position arguments take AI targets (-> their object) and task forces (-> the
     // first live unit), without the AI VMs' Lua shim.
     set_ai_target_global(vm, "Gone", 9);  // not a valid target: no object
-    CHECK(run(vm, "n1 = Find_Nearest(TF, 'Ship'); n2 = Find_Nearest(Tgt, 'Ship'); n3 = Find_Nearest(Gone)") == "");
-    CHECK(gid(vm, "n1") == e.store.id(ship) && gid(vm, "n2") == e.store.id(ship) && gnil(vm, "n3"));
+    // refixf t03: Find_Nearest candidates are UNIT_AI objects (the troopers; the ship has no UNIT_AI).
+    CHECK(run(vm, "n1 = Find_Nearest(TF, 'Trooper'); n2 = Find_Nearest(Tgt, 'Trooper'); n3 = Find_Nearest(Gone)") == "");
+    CHECK(gid(vm, "n1") == e.store.id(t2) && gid(vm, "n2") == e.store.id(t2) && gnil(vm, "n3"));
     const uint32_t before = e.bridge.orders_issued;
     CHECK(run(vm, "s1 = Ship.Attack_Move(Tgt); s2 = Ship.Move_To(TF); s3 = Ship.Guard_Target(Tgt)") == "");
     CHECK(e.bridge.orders_issued == before + 3 && !gnil(vm, "s1") && !gnil(vm, "s2"));
