@@ -563,7 +563,7 @@ void App::start_battle_view() {
     bview_.camera().set_tuning(option_tuning(bview_.camera().tuning()));  // P1_CAMERA_INPUT.md §3.1 options
     bview_.capture(*session_);
     audio_.battle_reset();
-    shake_.reset();  // refix t06
+    cinematic_reset();  // refixf t05
     radar_fog_uploads_ = ~uint64_t{0};
     radar_events_.clear();
     radar_feed_.reset();
@@ -590,6 +590,7 @@ void App::end_battle() {
                     as.models_with_clips, as.created, as.muzzle_flashes, as.flinches, as.death_clips);
     }
 #endif
+    cinematic_reset();  // refixf t05: a shot still running when the battle ends (the hold is released before frame 765)
     bview_.stop(gpu_);
     if (ui_.load.is_open()) ui_.load.close();
     orders_.set_selection({});

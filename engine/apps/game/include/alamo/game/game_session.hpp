@@ -236,6 +236,11 @@ public:
     uint64_t rate_lock_ticks() const { return rate_lock_ticks_; }  // ticks captured with the lock (diagnostics)
     // Tests: replaces the story presentation as the lock's source (nullptr = back to the story).
     void set_rate_lock_source(std::function<bool()> fn) { rate_lock_source_ = std::move(fn); }
+    // refixf t05: the in-game cinematic camera's lock (TSW firing shot, TSW_PLANET_DESTROY.md §11.2 step 2: FS +0x37 while
+    // the shot runs). Pacing only (30 ticks/s, wins over fast mode): [port] the parity options stay with the story lock,
+    // because the shot is presentation (input can skip it) and must not reach a CRC.
+    void set_presentation_rate_lock(bool on);
+    bool presentation_rate_lock() const { return pres_lock_; }
     // OI host: single-player fast mode (the HUD's b_fast_forward / b_fast_forward_t; MAIN_LOOP.md §1.5: 120 ticks/s,
     // the cinematic lock wins). Wall-clock pacing only (FrameSynchronizer::set_fast), mirrored into the Lua presentation
     // state (PresentationLog::set_fast_forward); Lua Cancel_Fast_Forward ends it at the next tick; a pause / resume
@@ -312,6 +317,7 @@ private:
     void after_story(sim::SimHost& h);
     std::function<bool()> rate_lock_source_;
     bool rate_lock_ = false;
+    bool pres_lock_ = false;  // refixf t05 (pacing only)
     uint64_t rate_lock_ticks_ = 0;
     size_t events_seen_ = 0;  // GalacticSim::events() already tapped
     std::vector<galactic::GalacticEvent> special_events_;
