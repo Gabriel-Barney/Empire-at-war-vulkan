@@ -413,6 +413,8 @@ std::string save_check(const game::GameData& data, jobs::JobSystem& js, const ch
                     why.empty() ? "ok" : why.c_str());
         CHECK(why.empty());
         if (battle) CHECK(a.in_battle());
+        if (battle && !a.in_battle())
+            for (const std::string& l : a.battles()->log()) std::printf("  %s battles: %s\n", name, l.c_str());
         const game::SaveMeta meta = a.save_meta("x", 0);
         CHECK(meta.tick == a.host().frame() && (spec.kind == game::SessionKind::Campaign ? meta.week >= 1 : meta.kind == "skirmish"));
         CHECK(game::save_game(a, saves, name, title, game::unix_now(), &path, &err));
@@ -677,10 +679,29 @@ int main(int argc, char** argv) {
         land_fought.orders = true;
         CHECK(!save_check(data, js, argv[0], dir, saves, land_fought).empty());
     }
+    // L1 story t05: the opening Kessel land mission (LINK_TACTICAL UM01, BT §2.9) starts as a tactical land battle on its
+    // map at the hook after its reward, with no galactic units (the map and the M01 plot supply them). [port] it then ends
+    // at once: the victory hold (ENABLE_VICTORY 0 in the M01 plot), the VICTORY reward and the Victory_Relevant counting
+    // (BT §3.1a) are not modelled yet, so the story save below uses a human-fought battle instead.
+    {
+        game::SessionSpec story = fought_campaign();
+        story.campaign = "Full_Story_Campaign_Underworld";
+        story.faction = "Underworld";
+        game::GameSession s(data, js, story);
+        CHECK(s.start(nullptr, nullptr, nullptr));
+        for (uint64_t i = 0; i < 60 && s.started() && !s.in_battle(); ++i) s.tick();
+        const bool kessel = land_battle(s);
+        const std::string map = kessel ? s.battles()->conflicts().active_request().map : std::string();
+        std::printf("story link: %s battle at tick %" PRIu64 " on %s\n", kessel ? "land" : "no land", s.host().frame(), map.c_str());
+        CHECK(kessel && map.find("UM01_A_Crimelord_Unleashed") != std::string::npos);
+        if (kessel) {
+            const galactic::BattleRequest& r = s.battles()->conflicts().active_request();
+            CHECK(r.forces.size() == 2 && r.forces[0].start.empty() && r.forces[1].start.empty() && r.forces[1].reserve.empty());
+        }
+    }
     // t08: the FoC story campaign (Full_Story_Campaign_Underworld as the human Underworld: story plots and their Lua VMs,
-    // the battle's tactical story VMs) saved mid-battle: the human's first attack, fought. The campaign's own story
-    // missions (LINK_TACTICAL) cannot be used: the opening Kessel land mission is queued without units and dropped by the
-    // conflict validation. Size guard: about twice the 2026-10-31 size.
+    // the battle's tactical story VMs) saved mid-battle: the human's first attack, fought (the Kessel mission above ends
+    // at once). Size guard: about twice the 2026-10-31 size.
     {
         game::SessionSpec story = fought_campaign();
         story.campaign = "Full_Story_Campaign_Underworld";

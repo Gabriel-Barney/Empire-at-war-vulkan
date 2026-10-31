@@ -25,6 +25,7 @@
 // callback (the host pushes the tactical mode) -> InBattle until finish_battle(); without a host (or when
 // it refuses) the conflict is auto-resolved instead. The galactic pause (BT §1.6 end) is raised while a
 // choice or an auto-resolve waits and released on every exit; the battle itself suspends the galaxy.
+// Story-linked battles (BT §2.9, start_linked) bypass the machine: queued at the front and started at once.
 //
 // BATTLE SETUP (BT §2.1-2.3): map = planet type Space/Land_Tactical_Map, else the planet's stored map,
 // else the host's random picker (stored on the planet), then the record's explicit map, then the
@@ -209,6 +210,23 @@ public:
                                  std::string map = {}, bool at_front = false);
     bool land_invade(PlanetIndex planet, std::vector<ObjectHandle> units, int32_t attacker, int32_t defender = kNoPlayer,
                      std::string map = {}, bool at_front = false);
+    // Story-linked battle (BT §2.9.3, LINK_TACTICAL record 0x28bd70 started by 0x28f590): the conflict is queued at the
+    // front (land_invade / initiate_space_conflict, at_front) and its tactical battle starts within this call. The state
+    // machine never sees it (no validation, overrun, auto-resolve or pending choice); the battle end is the normal
+    // finish_battle. Forces (§2.9.5): not sandbox = none (the map and the mission's plots supply every unit); sandbox =
+    // the space / land split for the human sides only, AI sides get nothing. False, nothing queued, when another
+    // conflict is active (state not Idle: the caller retries) or the queueing is refused (attacker == defender, no
+    // defender; [port] the original starts anyway, §2.9.7); false, dropped and logged, when the start fails (no host,
+    // map not loaded; [port] the original leaves it queued, §2.9.4).
+    struct LinkedBattle {
+        ConflictKind kind = ConflictKind::Land;
+        PlanetIndex planet = kInvalidPlanet;
+        int32_t attacker = kNoPlayer, defender = kNoPlayer;
+        std::string map;                  // Reward_Param4
+        bool sandbox = false;             // Reward_Param8
+        std::vector<ObjectHandle> units;  // land: the record's units (the original's last-invade vector)
+    };
+    bool start_linked(LinkedBattle b);
     // Answer to a Pending choice (Vote state). Ignored otherwise.
     void choose(BattleChoice c);
     // The host's tactical battle ended (state InBattle): write-back, next conflict.
@@ -291,7 +309,8 @@ private:
     void auto_finish(const ConflictInfo& head);
     ArCombatant combatant_of(ObjectHandle h, bool space) const;
     // battle
-    bool begin_battle(const ConflictInfo& head);
+    enum class Linked : uint8_t { No, Plain, Sandbox };  // start_linked's force rule (BT §2.9.5)
+    bool begin_battle(const ConflictInfo& head, Linked linked = Linked::No);
     std::string choose_map(const ConflictInfo& head, int32_t base_level, bool* ok);
     // write-back
     PlanetIndex nearest_planet(PlanetIndex from, PlanetIndex exclude, int32_t filter, int32_t player) const;

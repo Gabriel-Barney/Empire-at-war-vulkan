@@ -918,7 +918,22 @@ std::string ConflictManager::choose_map(const ConflictInfo& head, int32_t base_l
     return name;
 }
 
-bool ConflictManager::begin_battle(const ConflictInfo& head) {
+bool ConflictManager::start_linked(LinkedBattle b) {
+    if (state_ != ConflictState::Idle) return false;
+    const bool space = b.kind == ConflictKind::Space;
+    const bool queued = space ? initiate_space_conflict(b.planet, b.attacker, b.defender, std::move(b.map), true)
+                              : land_invade(b.planet, std::move(b.units), b.attacker, b.defender, std::move(b.map), true);
+    if (!queued) return false;
+    active_ = b.kind;
+    if (begin_battle(queue(b.kind).front(), b.sandbox ? Linked::Sandbox : Linked::Plain)) {
+        state_ = ConflictState::InBattle;
+        return true;
+    }
+    drop_head(b.kind, true);
+    return false;
+}
+
+bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked) {
     BattleRequest req;
     req.info = head;
     const bool space = head.kind == ConflictKind::Space;
@@ -936,15 +951,27 @@ bool ConflictManager::begin_battle(const ConflictInfo& head) {
     bool ok = true;
     req.map = choose_map(head, req.base_level, &ok);
     if (!ok) return false;
-    if (space) {
+    if (linked == Linked::Plain) {  // BT §2.9.5: both force maps cleared, no galactic unit enters the battle
         for (int32_t pl : {head.defender, head.attacker}) {
             BattleForces f;
-            split_space_forces(pl, orbit_units(head.planet, pl, true), f);
+            f.player = pl;
             req.forces.push_back(std::move(f));
         }
-    } else {  // OI galactic: TACTICAL_GAPS 4.2 land split
+    } else if (space) {
+        for (int32_t pl : {head.defender, head.attacker}) {
+            BattleForces f;
+            if (linked == Linked::Sandbox && !human(pl)) f.player = pl;  // §2.9.5 sandbox: AI sides get nothing
+            else split_space_forces(pl, orbit_units(head.planet, pl, true), f);
+            req.forces.push_back(std::move(f));
+        }
+    } else {  // OI galactic: TACTICAL_GAPS 4.2 land split (sandbox, BT §2.9.5: humanOnly = 1)
         BattleForces d, a;
         split_land_forces(head, d, a);
+        for (BattleForces* f : {&d, &a})
+            if (linked == Linked::Sandbox && !human(f->player)) {
+                f->start.clear();
+                f->reserve.clear();
+            }
         req.forces.push_back(std::move(d));
         req.forces.push_back(std::move(a));
     }
