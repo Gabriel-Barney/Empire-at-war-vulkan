@@ -35,6 +35,7 @@ MOD_NAME = 'TswPlanetProbe'
 TARGET = 'Kuat'  # FoC's Alderaan is the asteroid field with Planet_Is_Destroyable_By_TSW No
 SOURCE = 'Byss'
 ROUTE = 'Byss_Kuat'
+SPARE = 'Dantooine'  # second Rebel planet, no route: keeps the Rebels alive so the conquest does not end after run W
 DUMMY = 'Kuat_Backdrop_Large'  # the SpaceProp with DUMMY_TACTICAL_SUPER_WEAPON_TARGET on Kuat's space maps [M]
 
 CAMPAIGN = r'''<?xml version="1.0"?>
@@ -53,7 +54,8 @@ CAMPAIGN = r'''<?xml version="1.0"?>
 		<Locations>
 				Galaxy_Core_Art_Model,
 				@@SOURCE@@,
-				@@TARGET@@
+				@@TARGET@@,
+				@@SPARE@@
 		</Locations>
 
 		<Trade_Routes>
@@ -100,6 +102,7 @@ CAMPAIGN = r'''<?xml version="1.0"?>
 		<Starting_Forces> Rebel, @@TARGET@@, Corellian_Corvette </Starting_Forces>
 		<Starting_Forces> Rebel, @@TARGET@@, R_Ground_Barracks </Starting_Forces>
 		<Starting_Forces> Rebel, @@TARGET@@, Rebel_Infantry_Squad </Starting_Forces>
+		<Starting_Forces> Rebel, @@SPARE@@, R_Ground_Barracks </Starting_Forces>
 	</Campaign>
 </Campaigns>
 '''
@@ -150,7 +153,7 @@ MASTERTEXT = 'DATA\\TEXT\\MASTERTEXTFILE_ENGLISH.DAT'
 
 
 def subst(text, rate=0.0):
-    for k, v in (('@@TARGET@@', TARGET), ('@@SOURCE@@', SOURCE), ('@@ROUTE@@', ROUTE), ('@@DUMMY@@', DUMMY),
+    for k, v in (('@@TARGET@@', TARGET), ('@@SOURCE@@', SOURCE), ('@@ROUTE@@', ROUTE), ('@@SPARE@@', SPARE), ('@@DUMMY@@', DUMMY),
                  ('@@RATE@@', repr(float(rate)))):
         text = text.replace(k, v)
     assert '@@' not in text, text

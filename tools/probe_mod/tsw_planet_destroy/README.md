@@ -85,7 +85,8 @@ file is modified.
 | `cleanup_tswp.cmd` -> `cleanup_tswp.py` | idempotent cleanup (`--dry-run`) |
 | `build_mod.py` | builds the mod from the install; `--check` = offline self-check (XML parses, placeholders filled) |
 | `tswp_hook.lua` | the Lua appended to GameScoring.lua (fires the TSW, stamps frames) |
-| `tswp_story.lua` | the galactic story script (status popups) |
+| `tswp_story.lua` | the galactic story script (status records) |
+| `tswp_reader.py` | read-only recorder (started by `run_tswp.py`): heap scan for the `TSWP1` Lua records, mode / frame poll, tactical object-store walk with the Death Star's TSW state (pack pointer obj +0x148, state +0x20, countdown +0x30); writes `out\<run>\reader.log` |
 
 Offline validation (2026-10-31): `build_mod.py --check` OK. Not validated (needs the retail game): the Lua under the
 real engine (`Fire_Tactical_Superweapon` / `Is_Tactical_Superweapon_Ready` on a `Find_All_Objects_Of_Type` result,
@@ -119,3 +120,33 @@ Kit fixes and findings from the first real run. Launching `StarWarsG.exe` from a
 Open kit work before the next run: an output channel that works in retail (`Game_Message` with fixed text IDs, or a
 process-memory reader like `s10_map_owners` / `a1_tactical`), find out why the hook does not fire, a second Rebel planet,
 and the retreat rule (when the button is allowed).
+
+## Run log 2026-10-31, second session (Claude via computer use; kit v2, runs W2 and L)
+
+Kit changes: Lua output goes to heap records `TSWP1|KIND|seq|text|END` read by `tswp_reader.py` (started by
+`run_tswp.py`); the reader also walks the tactical object store every frame and logs the Death Star's TSW state and
+countdown; the campaign gives the Rebels a second planet (Dantooine, barracks) so the galaxy map survives a won battle;
+the galactic status line adds `Get_Starbase_Level()`.
+
+- **The GameScoring hook never runs its service.** LOAD and BASEDEF records arrive (ServiceRate 0 and 0.0333) but
+  no `GameService` call ever does: retail calls GameScoring's service only from its `main()` loop, which never runs.
+  `Game_Mode_Starting_Event` did run in run 1 (on-screen line). So the Death Star was fired by hand in both runs and
+  the frames come from the reader's TSW state readout, not from Lua stamps.
+- **P1 (galactic plot hears PLANET_DESTROYED): no.** The plot ran (STORYDEF, STORYBEGIN, GALAXY records, on-screen
+  "galactic plot loaded"); after the W battle Kuat reads `destroyed=true` and no HEARD record came in over a minute of
+  galactic time. Matches §7.
+- **P2 (frame offsets), run L** (F = first frame with state 5 = 2635; its countdown already reads 269, so the Fire
+  frame's service has run): ready (state 4) 2447; state 6 at F+269, 7 at F+270, 8 at F+271 (countdown 75);
+  9 at F+346; **state 10 and the dummy `Kuat_Backdrop_Large` gone at F+347** (countdown 33); state 12 and the
+  debris at F+380 (countdown 350); **state 13 at F+730, state 0 (hold released) at F+731**. Run W2 matches (dummy
+  gone 3775, debris 3808 = +33). So the TSW is serviced in the Fire frame and every offset is one frame earlier than
+  the spec's F+348 / F+732. The reader samples once per frame; a ±1 uncertainty on F itself remains.
+- **P3 after W (won):** `destroyed=true owner=EMPIRE starbase=none sb_level=0` (the Star Destroyers killed the
+  station), Rebel objects at Kuat 0 (barracks and infantry gone), the Death Star stays at Kuat (Empire objects there:
+  Star Destroyers, Death Star II, the fleet, the planet).
+- **P3 after L (retreat): not reachable.** After the planet kill the Retreat button is greyed out; clicks on it did
+  nothing, and the fleet was still in the battle 3,000 frames (100 s) after the hold release. The game was stopped
+  there. A lost TSW battle needs another route (for example a weak TSW fleet against a strong defender), or the retreat
+  rule after a TSW kill becomes its own probe question.
+- Reader note: in run L the store walk kept running (7083 walks) but logged no object changes after frame 3800;
+  not investigated.
