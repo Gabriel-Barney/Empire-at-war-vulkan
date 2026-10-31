@@ -133,16 +133,6 @@ private:
     std::unique_ptr<ai::tactical::TacticalAiWorld> world_;
     std::vector<uint8_t> ai_side_;  // per player: has a tactical AI
     uint32_t stale_ = 0;  // object orders whose target died before execution (no-ops)
-    // refixf t02: this battle frame's per-unit Lua move orders (PortExtension MoveTo / AttackMove / Guard) with one key (player,
-    // order, target, position bits, threat bits) -> one group move (execute_order). Transient: only the current frame's entries
-    // are read (a frame change clears them), so it is not saved.
-    struct OrderGroup {
-        uint32_t frame = 0;
-        uint8_t player = 0;
-        uint32_t subtype = 0, target = 0, x = 0, y = 0, threat = 0;
-        std::vector<objects::ObjectId> units;
-    };
-    std::vector<OrderGroup> order_groups_;
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed_;  // event name -> (applied, rejected) [diagnostic]
     std::vector<std::pair<uint64_t, int32_t>> opp_prev_;  // battle host: (unit id << 8 | hp, target), ascending key
     // UnitAI data-pack re-projection stamps (A1_READINGS §14) of the listed UNIT_AI objects, drawn once per object

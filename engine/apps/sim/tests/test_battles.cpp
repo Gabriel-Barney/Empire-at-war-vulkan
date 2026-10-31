@@ -2953,8 +2953,9 @@ void test_battle_ai_orders(const Data& d) {
 // refixf t02: no two space units on one exact point (foc-station seeds 1 / 4 stacked the rebel fleet on the station's centre):
 //   * a SPACE_OBSTACLE star base is a static entry of the space occupancy from the battle start (MOVEMENT §2.2) and leaves it
 //     when it dies;
-//   * the tactical AI's per-unit Lua Attack_Move orders on the station (one PortExtension per task-force unit, same frame)
-//     are one group move (MOVEMENT §6.3): every goal outside the station's footprint and no two goals on one point;
+//   * the tactical AI's task-force Attack_Move on the station (refixf t06: one PortExtension group order, the further units
+//     after the 24-byte block) is one group move (MOVEMENT §6.3): every goal outside the station's footprint and no two goals
+//     on one point;
 //   * no two live movable units share a position at the start, after the orders or while they fly in and fight.
 void test_space_obstacle_orders() {
     auto d = make_data(false, false, false, false, false, true);
@@ -3006,7 +3007,8 @@ void test_space_obstacle_orders() {
     objects::ObjectId station = objects::kNoObjectId;
     Vec3 sp{};
     std::vector<objects::ObjectId> attackers;
-    bool issued = false, station_died = false;
+    bool issued = false, station_died = false, hp_hit = false, hull_hit = false;
+    float hp_max = 0.0f, hull_max = 0.0f;
     int stacks = 0;
     uint32_t last = 0;
     float closest = 1.0e9f;
@@ -3035,17 +3037,18 @@ void test_space_obstacle_orders() {
             CHECK((occ.query_static({sp.x + 300.0f, sp.y}, {sp.x + 300.0f, sp.y}, 1.0f) & mv::kSpaceStatic) == 0);
             CHECK(stacked(*b, st) == 0);  // the start placement
             BattleAi ai(*b, *tm, host, setup);
-            for (const objects::ObjectId a : attackers) {  // as the tactical AI's issue_move: one order per task-force unit
+            {  // as the tactical AI's issue_move (refixf t06): ONE group order for the task force, further units after the block
                 std::vector<uint8_t> pay;
                 auto put = [&pay](uint32_t v) {
                     for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
                 };
-                put(static_cast<uint32_t>(a));
+                put(static_cast<uint32_t>(attackers.front()));
                 put(static_cast<uint32_t>(station));
                 put(std::bit_cast<uint32_t>(sp.x));
                 put(std::bit_cast<uint32_t>(sp.y));
                 put(std::bit_cast<uint32_t>(sp.z));
                 put(0u);
+                for (size_t i = 1; i < attackers.size(); ++i) put(static_cast<uint32_t>(attackers[i]));
                 const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::AttackMove));
                 CHECK(ai.execute(1, commands::ev::port_extension(sub, pay)) == commands::RejectReason::None);
             }
@@ -3061,10 +3064,17 @@ void test_space_obstacle_orders() {
             }
             std::printf("  station %d at (%.0f, %.0f): %zu attack-move orders, nearest goal %.0f from its centre\n", station,
                         static_cast<double>(sp.x), static_cast<double>(sp.y), attackers.size(), static_cast<double>(closest));
-            // then an explicit attack on it (the weak station dies, the defender's frigates keep the battle going)
+            // then an explicit attack on it (the weak station dies, the defender's frigates keep the battle going); refixf t06:
+            // as the tactical AI's Attack_Target(station, "WEAPON_LASER"): ref2 = 1 + HardPointType, the laser is hardpoint 0
             std::vector<uint32_t> wire;
             for (const objects::ObjectId a : attackers) wire.push_back(static_cast<uint32_t>(a));
-            CHECK(ai.execute(1, commands::ev::attack(static_cast<uint32_t>(station), wire)) == commands::RejectReason::None);
+            commands::EventData atk = commands::ev::attack(static_cast<uint32_t>(station), wire);
+            atk.set("ref2", 1u + static_cast<uint32_t>(tactical::combat::HardpointKind::WeaponLaser));
+            CHECK(ai.execute(1, atk) == commands::RejectReason::None);
+            for (const objects::ObjectId a : attackers)
+                CHECK(b->combat().ordered_target(a) == station && b->combat().ordered_hardpoint(a) == 0);
+            hp_max = b->combat().hardpoint_max(station, 0);
+            hull_max = b->combat().health(station);
         }
         if (!issued || station == objects::kNoObjectId) continue;
         last = b->frame();
@@ -3073,11 +3083,17 @@ void test_space_obstacle_orders() {
             station_died = true;
             std::printf("  station died at frame %u\n", b->frame());
         }
+        if (!station_died) {  // refixf t06: the ordered attack damages the ordered hardpoint and the hull
+            hp_hit = hp_hit || b->combat().hardpoint_health(station, 0) < hp_max;
+            hull_hit = hull_hit || b->combat().health(station) < hull_max;
+        }
         if (station_died) CHECK(!b->movement().space().has_static(station));  // removed with its object (same tick)
         if (station_died || b->frame() >= 4000) break;
     }
-    std::printf("  stacked pairs over frames 3-%u: %d, station died %d\n", last, stacks, station_died ? 1 : 0);
+    std::printf("  stacked pairs over frames 3-%u: %d, station died %d, hardpoint hit %d, hull hit %d\n", last, stacks,
+                station_died ? 1 : 0, hp_hit ? 1 : 0, hull_hit ? 1 : 0);
     CHECK(issued && stacks == 0);
+    CHECK(station_died && hp_hit && hull_hit);
 }
 
 // t41: BattleAi::fill hands the perception the station's DUMMY_STAR_BASE and Base_Level (the inputs of Variable_Self.BaseLevel).

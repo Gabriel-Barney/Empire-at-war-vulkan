@@ -839,7 +839,7 @@ int32_t CombatSystem::closest_hardpoint(const Unit& t, Vec3 from, bool targetabl
 }
 
 int32_t CombatSystem::choose_target_hardpoint(const Unit& a, const Unit& t) const {
-    // Choose_Target_Hardpoint (0x394610) [H]: with a priority set, rank = position in
+    // Choose_Target_Hardpoint (0x394610) [H]: with a priority set, rank = position of the hardpoint's TYPE in
     // Hard_Point_Priorities (excluded = -1: skipped [M]), else 1e18; lowest rank, ties closest 3D.
     if (t.hp_count == 0) return -1;
     const int32_t ps = a.priority_override >= 0 ? a.priority_override : desc_of(a).priority_set;  // OI abilities
@@ -851,7 +851,7 @@ int32_t CombatSystem::choose_target_hardpoint(const Unit& a, const Unit& t) cons
         const Hardpoint& h = hps_[t.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
         if (h.destroyed || !hd.destroyable) continue;
-        const float rank = hardpoint_rank(set, hd.name_crc);
+        const float rank = hardpoint_rank(set, static_cast<int32_t>(hd.kind));  // refixf t06: by HardPointType
         if (rank < 0.0f) continue;
         const Vec3 d = hp_world(t, hd) - a.pos;
         const float d2 = dot(d, d);
