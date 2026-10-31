@@ -73,7 +73,7 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
             if (PlayerAi* owner = player_ai(tf.player)) owner->known.insert(store.id(o));  // not an On_Unit_Added: the task takes it
             // Step 5: a non-structure created on the surface is launched (op 4) and formed (op 0), FAILED when blockaded.
             if (ti && !structure_kind(ti->kind) && on_surface(o)) {
-                if (sim.blockaded(at, tf.player)) {
+                if (sim.ai_blockaded(at)) {  // 0x3fa370 (A2GAL_READINGS 4)
                     fail_build(t, "blockaded");
                     continue;
                 }

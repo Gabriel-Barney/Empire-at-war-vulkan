@@ -1065,7 +1065,7 @@ at::TacticalReinforcement BattleAi::hijack_unit(int32_t player, int32_t type, bo
     const auto& surface = gs.planets()[planet].surface;
     if (std::find(surface.begin(), surface.end(), h) != surface.end()) {
         const objects::ObjectHandle one[] = {h};
-        if (gs.blockaded(planet, player) || gs.launch_units(player, planet, one) != cmd::RejectReason::None) return fail;
+        if (gs.ai_blockaded(planet) || gs.launch_units(player, planet, one) != cmd::RejectReason::None) return fail;
     }
     if (!b_->add_reserve(h, player)) return fail;
     const auto key = static_cast<int32_t>(gs.store().id(h));

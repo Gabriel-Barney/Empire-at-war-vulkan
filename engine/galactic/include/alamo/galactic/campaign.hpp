@@ -286,15 +286,16 @@ struct FleetState {
 };
 
 // ---- A2 galactic: AI-facing hooks (docs/re/AI_GALACTIC_2.md §3.1, §5.4; COMMANDS.md id 8) -----------------------
-// Income tick (AI_GALACTIC_2 §3.1): after a fiscal cycle has paid every player, one call per player in player
-// order. gain = the cycle's income as Add_Credits takes it: after the AI Credit_Multiplier, before the cap clamp [M]
-// (0 when the player earned nothing); PAYG installments and refunds are not part of it. period_seconds = the income
-// period T = Fiscal_Cycle_Time_In_Secs (0x4b2010, AI_GALACTIC_3 §8).
+// Income tick (AI_GALACTIC_2 §3.1, A2GAL_READINGS §1) [H]: inside the fiscal cycle's payment loop, right after a
+// player's Add_Credits and before the next player is paid, one call for each non-human AI player whose cycle income
+// I is not 0 (no call at all on a zero-income cycle). gain = the raw Player_Income I: before the AI
+// Credit_Multiplier, the zero floor and the cap clamp; PAYG installments and refunds are not part of it.
+// period_seconds = the income period T = Fiscal_Cycle_Time_In_Secs (0x4b2010, AI_GALACTIC_3 §8).
 struct IncomeTick {
     int32_t player = kNoPlayer;
     float gain = 0.0f;
     float period_seconds = 0.0f;
-    int32_t day = 0;    // galactic_day() after the cycle
+    int32_t day = 0;    // galactic_day() once this cycle has finished (the counter increments after the loop)
     int32_t frame = 0;  // mode frame of the cycle
 };
 using IncomeHook = std::function<void(const IncomeTick&)>;
@@ -554,11 +555,11 @@ public:
     PlayerView player_view(int32_t player) const;
 
     // ---- A2 galactic: hooks for the galactic AI (src/ai_hooks.cpp) ---------------------------------------
-    // Income tick listeners (IncomeTick above). Called from update() (serial) on the fiscal-cycle frame, after the
-    // cycle; a listener may read the sim but must not change it. Not hashed, not saved: hosts re-register them.
+    // Income tick listeners (IncomeTick above). Called from update() (serial) on the fiscal-cycle frame, inside the
+    // payment loop; a listener may read the sim but must not change it. Not hashed, not saved: hosts re-register them.
     uint32_t add_income_hook(IncomeHook hook);  // returns an id for remove_income_hook (never 0)
     void remove_income_hook(uint32_t id);
-    // The gain of `player` at the last fiscal cycle (IncomeTick::gain); 0 before the first one.
+    // The raw income I of `player` at the last fiscal cycle (IncomeTick::gain for AI players); 0 before the first one.
     float last_income(int32_t player) const;
     // Production queries. queue_kind: kGroundQueue / kSpaceQueue, or -1 when the type cannot be queued (GE 2.1).
     int32_t queue_kind(uint32_t type) const;
@@ -571,17 +572,21 @@ public:
     bool buildable(PlanetIndex planet, int32_t player, uint32_t type) const;
     // Every buildable type at the planet for the player, type-index order.
     std::vector<uint32_t> buildable(PlanetIndex planet, int32_t player) const;
-    // Galactic population (AI_GALACTIC_3 §3.5). Applies to humans, and to AI players only with
+    // Galactic population (AI_GALACTIC_3 §3.5, A2GAL_READINGS §2 [H]). Applies to humans, and to AI players only with
     // AI_Uses_Galactic_Pop_Cap (never in shipped data). capacity = faction Base_Population_Capacity + Σ
-    // Additional_Population_Capacity of the player's planets and live objects (units, structures, starbases; a
-    // starbase once [M: 0x3f8b40]); used = (int)(Σ Population_Value of the player's live units, structures and
-    // starbases + 0.5), plus the queued entries' when include_queued; a non-human skips objects at planets whose
-    // surface is not accessible [M: 0x3fa420]. enqueue() refuses (kRejectPopulationCap) when pop(T, 0) >
-    // max(capacity - used incl. queued, 0), right after the queue-length check (GE 2.x step 3, 0x2ac320).
+    // Additional_Population_Capacity of the player's planets and live units / structures, + for each owned planet its
+    // current starbase type's (0x3f8b40: once per planet, the starbase's owner ignored); used = (int)(Σ
+    // Population_Value of the player's live units and structures + 0.5) (starbases are not objects in galactic mode),
+    // plus the queued entries' when include_queued. A non-human skips objects whose planet is not revealed
+    // (population_skips: Is_Planet_Revealed 0x3fa420; objects in transit are never skipped). enqueue() refuses
+    // (kRejectPopulationCap) when pop(T, 0) > max(capacity - used incl. queued, 0), right after the queue-length check
+    // (GE 2.x step 3, 0x2ac320).
     bool population_capped(int32_t player) const;
     int32_t population_capacity(int32_t player) const;
     int32_t population_used(int32_t player, bool include_queued = true) const;
     int32_t population_room(int32_t player) const;  // max(capacity - used incl. queued, 0)
+    // The non-human population skip for an object located at `at` (kInvalidPlanet = in transit: never skipped).
+    bool population_skips(int32_t player, PlanetIndex at) const;
     // Terrain (AI_GALACTIC_3 §6): the planet type's Terrain id (kTerrainNames, -1 none); whether the planet type
     // restricts `type` (Planet_Restricted_Unit_Categories overlap or Planet_Restricted_Unit_Types, 0x373490: the
     // TerrainType marshaller veto); AITerrainEffectiveness of `type` (its MovementClass) on the planet's terrain
@@ -595,16 +600,23 @@ public:
     // structures / starbases the planet. Returns the new object; null = refused (invalid player / planet / type, a
     // type with no galactic role) = the task's FAILED.
     ObjectHandle spawn_unit(int32_t player, PlanetIndex planet, uint32_t type);
-    // Step 2 (MagicPlanStealing or a named hero): the first live object of exactly `type` owned by `player`, in store
-    // order [M: the owner's object list], that is not at `destination` (include_destination: a hero is taken even from
-    // there) is killed silently (no story event). Returns true when one was removed.
+    // Step 2 (MagicPlanStealing or a named hero): the first live object of exactly `type` owned by `player`, walking
+    // the owner's object list newest first (A2GAL_READINGS 3 [H]: ObjectStore::owned_by in reverse, so a captured
+    // object counts as the owner's newest), that is not at `destination` (units in a fleet in transit never are;
+    // include_destination: a hero is taken even from there) is killed silently (no story event). Returns true when one
+    // was removed.
     bool steal_unit(int32_t player, uint32_t type, PlanetIndex destination, bool include_destination);
     // Steps 2-4 in order: steal (when `steal`), cancel the pending delayed-spawn entries of the type on every planet
     // (any owner), spawn. Step 5 (launch op 4 + form op 0 for a unit created on a surface; FAILED when
     // blockaded) is the caller's, through FleetManagement events.
     ObjectHandle magic_spawn(int32_t player, PlanetIndex planet, uint32_t type, bool steal, bool hero);
-    // Blockade test (0x3fa370 [M]): a hostile combat fleet in orbit of the planet (the starbase-drop rule's test).
+    // A hostile combat fleet in orbit of the planet for `player` (the starbase-drop rule's test; HUD / story use).
     bool blockaded(PlanetIndex planet, int32_t player) const { return valid_planet(planet) && enemy_fleet_in_orbit(planet, player); }
+    // The AI blockade test 0x3fa370 (A2GAL_READINGS 4 [H]; HIJACK_UNIT launch, the build task, FreeStore Move_Object,
+    // TaskForce Launch_Units): the first orbit fleet that is alive and not hidden decides; blockaded unless its owner is
+    // the planet's owner or an ally of it. No combat filter (neutrals and unarmed fleets blockade). Relative to the
+    // planet owner, not to the asking player.
+    bool ai_blockaded(PlanetIndex planet) const;
     // AI production market hook (AI_GALACTIC_3 §5): called for each planet inside the production service, in planet
     // service order (newest registered first), right before that planet's queues advance. The hook may enqueue or
     // cancel at that planet (the AIPlanetBuildQueue market). Not hashed. set_ fills the primary slot (null = none; the

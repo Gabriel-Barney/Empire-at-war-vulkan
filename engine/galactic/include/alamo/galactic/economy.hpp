@@ -90,7 +90,7 @@ struct FactionRules {
     ForceSide force_alignment = ForceSide::Neutral;  // Force_Alignment (+0x110)
     std::array<float, 2> corruption_time_mult{1.0f, 1.0f};   // Corruption_Galactic_Production_Time_Multipliers
     std::array<float, 2> corruption_price_mult{1.0f, 1.0f};  // Corruption_Galactic_Production_Price_Multipliers
-    int32_t base_population_capacity = 0;  // Base_Population_Capacity (+0x2EE8), not in shipped XML; default [L] 0
+    int32_t base_population_capacity = 0;  // Base_Population_Capacity (+0x2EE8), not in shipped XML; default 0 [H] (A2GAL 2.2)
     int32_t displayed_tech_level_adjustment = 0;  // P4 sim: Displayed_Tech_Level_Adjustment (+0x2FB0; FoC Rebel +1)
     // REMAINING_GAPS 6.3 base-level info fallback: faction +0x20ac <= the base level -> the level is shown [M: field meaning
     // and XML tag unknown, not loaded]. Default INT32_MAX = the fallback never fires.
