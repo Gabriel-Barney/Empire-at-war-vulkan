@@ -540,6 +540,20 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         if (mt != members.end()) a.team_members = mt->second;
         a.moving = o.mobile && b_->movement_->has_unit(id) && b_->movement_->view(id).has_goal;
         a.attack_target = c.has_unit(id) && c.current_target(id) != tc::kNoObject ? c.current_target(id) : -1;
+        // A1 t06 [port]: a TEAM container has no movement / combat entry of its own (its orders go to the live members,
+        // team_units), so its move and attack state is its members': moving while any member has a movement goal, the
+        // attack target of the first member (ascending id) that has one. The original's TEAM object moves as one unit, so
+        // its blocking move statuses run until the team arrives. Before, the container always read idle: every TF move of
+        // an infantry squad (Land_Scout_Area's Attack_Move / Explore_Area, Destroy_Structure's Attack_Move) completed one
+        // Planning service after the order, and the order-lock clearing handed the squad back to the free store at once.
+        if (!u && mt != members.end()) {
+            for (const int32_t m : mt->second) {
+                const auto mid = static_cast<objects::ObjectId>(m);
+                const TacticalBattle::Unit* mu = b_->unit_by_id(mid);
+                if (mu && mu->movable && b_->movement_->has_unit(mid) && b_->movement_->view(mid).has_goal) a.moving = true;
+                if (a.attack_target < 0 && c.has_unit(mid) && c.current_target(mid) != tc::kNoObject) a.attack_target = c.current_target(mid);
+            }
+        }
         a.damage_tracking = o.has_damage_tracking || st.has_behavior(h, kDamageTracking);
         w.objects.push_back(std::move(o));
         out.push_back(std::move(a));
