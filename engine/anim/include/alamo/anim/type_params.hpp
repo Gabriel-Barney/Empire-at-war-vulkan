@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 
+#include "alamo/anim/anim_behaviors.hpp"
 #include "alamo/anim/anim_types.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
@@ -38,5 +39,7 @@ struct TypeAnimParams {
 };
 
 TypeAnimParams type_anim_params(const objects::GameObjectTypes& types, objects::TypeIndex t, objects::ModeKind mode);
+// The DeathBehavior fields of a type (AnimBehaviors::begin_death / plan_death).
+DeathParams death_params(const TypeAnimParams& p);
 
 }  // namespace alamo::anim

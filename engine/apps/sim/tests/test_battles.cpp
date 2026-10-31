@@ -193,12 +193,15 @@ std::string anim_types() {
         if (p != std::string::npos) t.insert(p + at.size(), what);
     };
     insert_after("<GroundInfantry Name=\"S10_Trooper\">", "<Death_Persistence_Duration>1.0</Death_Persistence_Duration><Death_Fade_Time>0.5</Death_Fade_Time>");
-    insert_after("<StarBase Name=\"S10_Star_Base_1\">", "<Remove_Upon_Death>Yes</Remove_Upon_Death>");
+    // refixf t04: the star base's typed clone (no Remove_Upon_Death, 30 s persistence) is made on the battle's last tick.
+    insert_after("<StarBase Name=\"S10_Star_Base_1\">",
+                 "<Remove_Upon_Death>Yes</Remove_Upon_Death><Death_Clone>Damage_Normal, S10_Star_Base_Death_Clone</Death_Clone>");
     insert_after("<SpaceUnit Name=\"S10_Frigate\">", "<Death_Clone>Damage_Normal, S10_Frigate_Death_Clone</Death_Clone>");
     const size_t end = t.find("</S10>");
     if (end != std::string::npos)
         t.insert(end, " <SpaceUnit Name=\"S10_Frigate_Death_Clone\"><Death_Persistence_Duration>2</Death_Persistence_Duration>"
-                      "<Death_Fade_Time>1</Death_Fade_Time></SpaceUnit>\n");
+                      "<Death_Fade_Time>1</Death_Fade_Time></SpaceUnit>\n"
+                      " <SpaceUnit Name=\"S10_Star_Base_Death_Clone\"><Death_Persistence_Duration>30</Death_Persistence_Duration></SpaceUnit>\n");
     return t;
 }
 
@@ -2145,6 +2148,138 @@ void test_anim_battles() {
         }
     }
 }
+
+// ---- refixf t04: death clone removal, headless and with the animation service ----
+// The space campaign on the anim data: frigate / corvette clones (S10_Frigate_Death_Clone: 2 s persistence + 1 s fade, no
+// Remove_Upon_Death) must leave the store at the planned frame; the star base's typed clone (30 s) is made on the battle's
+// last tick and must not outlive the battle. `anim`: the SimAnimation service is attached (no "anim" CRC system, so the
+// CRC logs compare); otherwise the same SimAnimation is only the battle's clone-model source. `wreck`: the clone type gets
+// a 30-frame DIE clip (both paths), so the plan includes the clip length.
+struct CloneRun {
+    CrcLog crc;
+    std::vector<std::string> battles;
+    std::map<ObjectId, std::pair<uint64_t, uint64_t>> life;  // clone id -> (frame first alive, frame first gone; 0 = never)
+    std::map<ObjectId, uint32_t> type;
+    uint64_t end_frame = 0;      // frame of the battle's end (object_removed callback)
+    uint32_t alive_at_end = ~0u;  // dying objects still alive in the store at the battle's end
+    uint32_t rows_missing = 0, detached_corpses = 0;  // anim: alive clone without its row; corpse whose store object left
+    SimAnimStats stats;
+};
+
+CloneRun run_clone_campaign(const Data& d, bool anim_service, bool wreck, int32_t workers, uint64_t ticks) {
+    CloneRun out;
+    const auto wreck_model = anim_model({{anim::kAnimDie, {1, 30}}});
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    SimAnimation animation(d.types, *d.files);
+    if (wreck) animation.set_model(d.types.resolve_name("S10_Frigate_Death_Clone"), objects::ModeKind::Space, wreck_model.get());
+    if (anim_service) animation.attach(host, false);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    if (anim_service) opt.animation = &animation;
+    else opt.clone_models = &animation;
+    opt.object_removed = [&host, &out](int32_t, uint32_t, uint32_t, bool) {  // after the battle's final tick, before the pop
+        TacticalMode* tm = host.tactical();
+        if (!tm || out.end_frame == host.frame()) return;
+        out.end_frame = host.frame();
+        out.alive_at_end = 0;
+        const objects::ObjectStore& st = tm->primary();
+        for (objects::ObjectHandle h : st.all_objects()) {  // dead-but-not-flushed too: clones made and removed on this tick
+            if (!st.dying(h)) continue;
+            out.alive_at_end += st.alive(h) ? 1u : 0u;
+            const ObjectId id = st.id(h);
+            if (out.life.emplace(id, std::make_pair(out.end_frame, out.end_frame)).second) out.type[id] = static_cast<uint32_t>(st.type(h));
+        }
+    };
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    for (uint64_t t = 0; t < ticks; ++t) {
+        host.tick_once();
+        const uint64_t f = host.frame();
+        TacticalMode* tm = host.tactical();
+        std::vector<ObjectId> present;
+        if (tm) {
+            const objects::ObjectStore& st = tm->primary();
+            const anim::AnimWorld* w = anim_service ? animation.find_world(*tm) : nullptr;
+            for (objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h) || !st.dying(h)) continue;
+                const ObjectId id = st.id(h);
+                present.push_back(id);
+                if (out.life.emplace(id, std::make_pair(f, uint64_t{0})).second) out.type[id] = static_cast<uint32_t>(st.type(h));
+                if (w && wreck && out.type[id] == type_of(d, "S10_Frigate_Death_Clone") && !w->contains(id)) ++out.rows_missing;
+            }
+            if (anim_service)
+                for (const anim::Corpse& c : animation.corpses(*tm)) out.detached_corpses += c.detached ? 1u : 0u;
+        }
+        for (auto& [id, l] : out.life)
+            if (l.second == 0 && std::find(present.begin(), present.end(), id) == present.end()) l.second = f;
+    }
+    out.crc = host.crc_log();
+    out.battles = battles.log();
+    out.stats = animation.stats();
+    if (anim_service) animation.detach(host);
+    return out;
+}
+
+void test_death_clone_removal() {
+    auto d = make_data(false, true);
+    const uint32_t frigate_clone = type_of(*d, "S10_Frigate_Death_Clone"), base_clone = type_of(*d, "S10_Star_Base_Death_Clone");
+    for (const bool wreck : {false, true}) {
+        const CloneRun h = run_clone_campaign(*d, false, wreck, 0, 2500);
+        // Planned lifetime: no clip 60 + 30 frames; with the 30-frame DIE clip (finished 28 advances after its start, seen
+        // by the corpse service one frame later) 28 + 1 + 60 + 30.
+        const uint64_t expect = wreck ? 119 : 90;
+        uint32_t removed = 0, other = 0, base_clones = 0;
+        uint64_t base_made = 0;
+        for (const auto& [id, l] : h.life) {
+            const uint32_t t = h.type.at(id);
+            if (t == frigate_clone && l.second != 0 && l.second < h.end_frame) {
+                ++removed;
+                if (l.second - l.first != expect) ++other;
+            }
+            if (t == base_clone) {
+                ++base_clones;
+                base_made = l.first;
+            }
+        }
+        for (const std::string& s : h.battles) std::printf("  %s\n", s.c_str());
+        std::printf("  death clones %s: %zu clone objects, %u frigate clones removed after %llu frames (%u other), star base clone made "
+                    "at %llu, battle end %llu, dying alive at the end %u\n",
+                    wreck ? "(DIE clip)" : "(no clip)", h.life.size(), removed, static_cast<unsigned long long>(expect), other,
+                    static_cast<unsigned long long>(base_made), static_cast<unsigned long long>(h.end_frame), h.alive_at_end);
+        CHECK(removed > 0 && other == 0);              // headless: removed at the planned frame (were never removed before)
+        CHECK(base_clones == 1 && base_made == h.end_frame);  // made on the last tick ...
+        CHECK(h.alive_at_end == 0);                    // ... and gone with the battle, like every clone left
+        for (const auto& [id, l] : h.life) CHECK(l.second != 0);  // no clone object after the battle
+        // The animation service changes nothing in the sim: same CRC log, same clone lifetimes; its corpse rows follow
+        // the battle's removals frame for frame (no clone without its row, no detached clone corpse).
+        const CloneRun a = run_clone_campaign(*d, true, wreck, 0, 2500);
+        const auto dv = first_divergence(h.crc, a.crc);
+        std::printf("  death clones + anim service: %s; clone deaths %u, corpses removed %u, rows missing %u, detached %u\n",
+                    dv.message.c_str(), a.stats.clone_deaths, a.stats.corpses_removed, a.rows_missing, a.detached_corpses);
+        CHECK(!dv.diverged && a.battles == h.battles && a.life == h.life && a.end_frame == h.end_frame && a.alive_at_end == 0);
+        CHECK(a.stats.clone_deaths > 0 && a.rows_missing == 0);
+        if (wreck) CHECK(a.detached_corpses == 0 && a.stats.corpses_removed >= removed);
+        // Worker counts: identical.
+        const CloneRun w4 = run_clone_campaign(*d, false, wreck, 4, 2500);
+        CHECK(!first_divergence(h.crc, w4.crc).diverged && w4.life == h.life);
+    }
+}
 #endif
 
 // --- P4 tactical: campaign Black Market gate (ABILITIES_HARDPOINTS 2.4, P4_SIM_SYSTEMS 1.5) -------------------------
@@ -3071,6 +3206,8 @@ int main(int argc, char** argv) {
 #ifdef ALAMO_SIM_HAVE_ANIM
     std::printf("anim battles (R3: flinch, death clips, corpses)\n");
     test_anim_battles();
+    std::printf("death clone removal, headless and with the anim service (refixf t04)\n");
+    test_death_clone_removal();
 #endif
     std::printf("black market gate (P4 tactical)\n");
     test_black_market_battle();

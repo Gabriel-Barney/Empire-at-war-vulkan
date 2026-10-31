@@ -631,6 +631,7 @@ void CampaignBattles::push_battle(SimHost& host) {
     battle_ = std::make_unique<TacticalBattle>(*catalog_, *g->sim(), *rules_, pending_req_, bc);
     upgrades_seen_ = 0;
     battle_->set_animation(opt_.animation);  // S10-int (null: no sim-owned animation)
+    battle_->set_clone_models(opt_.clone_models);  // refixf t04 (null: the battle's own, from the catalog files)
     battle_->set_retreat_increments(opt_.retreat_increment_frames);  // L1 systems
     battle_->set_retreat_flight_increments(opt_.retreat_flight_increments);  // L1 systems
     battle_->set_l1_constants(opt_.l1_constants);  // L1 systems

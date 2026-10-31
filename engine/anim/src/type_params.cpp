@@ -49,4 +49,18 @@ TypeAnimParams type_anim_params(const objects::GameObjectTypes& types, objects::
     return p;
 }
 
+DeathParams death_params(const TypeAnimParams& p) {
+    DeathParams d;
+    d.type = p.death_type;
+    d.type_explicit = p.death_type_explicit;
+    d.index = p.death_index;
+    d.remove_upon_death = p.remove_upon_death;
+    d.persistence_seconds = p.death_persistence_seconds;
+    d.fade_seconds = p.death_fade_seconds;
+    d.spin_away = p.spin_away_on_death;
+    d.spin_away_chance = p.spin_away_chance;
+    d.spin_away_seconds = p.spin_away_seconds;
+    return d;
+}
+
 }  // namespace alamo::anim

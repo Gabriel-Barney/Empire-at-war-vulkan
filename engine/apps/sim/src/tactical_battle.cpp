@@ -99,9 +99,9 @@ public:
         anim_->begin_death(*mode_, id, *rng_, gframe_, kind);
     }
     const GameMode* anim_mode() const { return mode_; }
-    bool anim_clone(objects::ObjectHandle clone, uint8_t kind) {  // false: no animation service attached
+    bool anim_clone(objects::ObjectHandle clone, uint8_t kind, const anim::DeathPlan* plan) {  // false: no animation service
         if (!anim_ || !mode_) return false;
-        anim_->death_clone_spawned(*mode_, mode_->primary().id(clone), kind);
+        anim_->death_clone_spawned(*mode_, mode_->primary().id(clone), kind, plan);
         return true;
     }
     // refix t03: the infantry corpse path - the dying unit's row becomes the clone type's corpse (no clone object).
@@ -1808,7 +1808,7 @@ objects::ObjectHandle TacticalBattle::spawn_prop(TacticalMode& mode, int32_t typ
     return mode.spawn(sp, 1.0f);
 }
 
-void TacticalBattle::consume_events(TacticalMode& mode) {
+void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
     objects::ObjectStore& store = mode.primary();
     // a. damage events -> DAMAGE_TRACKING (call order, before the deaths disable the victims).
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
@@ -1908,23 +1908,20 @@ void TacticalBattle::consume_events(TacticalMode& mode) {
             if (!corpse_path) ch = spawn_death_clone(mode, d.death_clone, at, face, owner);
             if (ch) ++stats_.death_clones;
         }
-        bool clone_animated = false;
+        // refixf t04: the clone's DeathBehavior (spin-away, death clip, Remove_Upon_Death, persistence, fade) is planned
+        // here from data and the battle removes the clone object at the planned frame - identical with and without the
+        // animation service, which only plays the planned clip (schedule_death_clone).
+        const bool carried_by_clone = static_cast<bool>(ch);
+        if (ch) schedule_death_clone(mode, ch, d.death_clone, d.kind, rng);
 #ifdef ALAMO_SIM_HAVE_ANIM
-        {  // R3 anim: death clip / corpse of the unit, or the clone's death sequence
-            bool carried = static_cast<bool>(ch);
-            if (ch) clone_animated = hooks_->anim_clone(ch, d.kind);
-            else if (corpse_path) carried = hooks_->anim_corpse_clone(u->id, d.death_clone, d.kind);
+        {  // R3 anim: death clip / corpse of the unit (unless a clone carries it), or the infantry corpse path
+            bool carried = carried_by_clone;
+            if (!ch && corpse_path) carried = hooks_->anim_corpse_clone(u->id, d.death_clone, d.kind);
             hooks_->anim_death(u->id, carried, d.kind);
         }
+#else
+        (void)carried_by_clone;
 #endif
-        // [port] Without the animation service nothing runs the clone's DeathBehavior: an own-type clone (S9 t04; before
-        // refix t01 it made no object at all) and a clone whose type has Remove_Upon_Death (no death clip to play, the
-        // anim rule RemoveNow) are removed at once, so headless runs do not keep one dying object per death; the typed
-        // clones stay (as before, and as the anim's corpse rule keeps them when they have no row).
-        if (ch && !clone_animated &&
-            (d.death_clone == static_cast<int32_t>(u->type) ||
-             catalog_->types().get_bool(static_cast<objects::TypeIndex>(d.death_clone), "Remove_Upon_Death")))
-            mode.destroy(ch);
         if (const BattleTables::UnitVisuals* vis = visuals_of_type(u->type))
             if (!vis->death_explosions.empty()) spawn_particle(mode, vis->death_explosions.front(), at, owner);
         unit_gone(mode, *u);
@@ -2007,7 +2004,75 @@ void TacticalBattle::oi_apply_crush(uint32_t frame) {
 }
 // --- end OI tactical ---
 
+// refixf t04: DeathBehavior of a death clone object (ANIM_PARTICLES §A.7 death / corpse rows, TACTICAL_GAPS §1.9 [H]):
+// spin-away decision, death clip (Specific_Death_Anim_Type / _Index, by damage kind), removal at once (no clip, no spin,
+// Remove_Upon_Death), else the corpse countdown (death clip length, Death_Persistence_Duration < 0 = forever, then
+// Death_Fade_Time) - anim::plan_death, with the clip data of the clone's model read from the files (the clip length is
+// sim-visible, §A.8). The draws (spin float, random variant) happen here, at the spawn, in the sim's draw order, with or
+// without the animation service; the service plays the planned clip and draws nothing more for the clone. [port] The
+// original runs this in the clone's DEATH behaviour (0x58cdb0 / 0x58d430) and removes the object there; the port keeps
+// the removal frame with the battle so a headless run removes the same objects on the same frame as alamo_game.
+void TacticalBattle::schedule_death_clone(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type, uint8_t kind, SimRng& rng) {
+    const auto t = static_cast<objects::TypeIndex>(clone_type);
+#ifdef ALAMO_SIM_HAVE_ANIM
+    SimAnimation* src = anim_ ? anim_ : clone_models_;
+    if (!src && catalog_->files()) {
+        if (!own_clone_models_) own_clone_models_ = std::make_unique<SimAnimation>(catalog_->types(), *catalog_->files());
+        src = own_clone_models_.get();
+    }
+    const anim::DeathPlan plan = src ? src->plan_clone_death(t, mode.kind(), kind, rng)
+                                     : anim::plan_death(nullptr, anim::death_params(anim::type_anim_params(catalog_->types(), t, mode.kind())),
+                                                        kind, rng);
+    const bool remove_now = plan.remove_now, forever = plan.forever;
+    const uint64_t lifetime = plan.lifetime;
+#else
+    // [port] a build without engine/anim has no clip data and no spin-away: Remove_Upon_Death -> at once, else
+    // Death_Persistence_Duration (< 0 forever, default) + Death_Fade_Time (default 0.25 s), int(30 x s) each.
+    (void)rng, (void)kind;
+    const objects::GameObjectTypes& types = catalog_->types();
+    const auto seconds = [&types, t](const char* field, float def) {
+        return types.get_string(t, field).empty() ? def : types.get_float(t, field);
+    };
+    const auto frames = [](float s) { return s > 0.0f ? static_cast<uint64_t>(s * 30.0f) : uint64_t{0}; };
+    const bool remove_now = types.get_bool(t, "Remove_Upon_Death");
+    const float persist = seconds("Death_Persistence_Duration", -1.0f);
+    const bool forever = !remove_now && persist < 0.0f;
+    const uint64_t lifetime = frames(persist) + frames(seconds("Death_Fade_Time", 0.25f));
+#endif
+    if (remove_now || (!forever && lifetime == 0)) {
+        mode.destroy(clone);
+        ++stats_.death_clones_removed;
+        return;
+    }
+    uint32_t at = kForeverFrame;
+    if (!forever) at = lifetime >= static_cast<uint64_t>(kForeverFrame - 1u - frame_) ? kForeverFrame - 1u : frame_ + static_cast<uint32_t>(lifetime);
+    death_clones_.push_back({mode.primary().id(clone), clone, at});
+#ifdef ALAMO_SIM_HAVE_ANIM
+    hooks_->anim_clone(clone, kind, &plan);
+#endif
+}
+
+void TacticalBattle::remove_death_clones(TacticalMode& mode, bool all) {
+    // Due clones go at their planned frame; at the battle's end (all) every clone left - forever ones included - goes with
+    // it [port]: the tactical store is dropped when the mode pops (BT §3.1), and nothing of a clone (a removing object, no
+    // battle unit) reaches the galactic write-back (units / participants only), the removal records or a later save.
+    objects::ObjectStore& store = mode.primary();
+    size_t w = 0;
+    for (size_t i = 0; i < death_clones_.size(); ++i) {
+        if (all || frame_ >= death_clones_[i].frame) {
+            if (store.alive(death_clones_[i].h)) {
+                mode.destroy(death_clones_[i].h);
+                ++stats_.death_clones_removed;
+            }
+            continue;
+        }
+        death_clones_[w++] = death_clones_[i];
+    }
+    death_clones_.resize(w);
+}
+
 void TacticalBattle::expire_objects(TacticalMode& mode) {
+    remove_death_clones(mode, false);  // refixf t04
     objects::ObjectStore& store = mode.primary();
     size_t w = 0;
     for (size_t i = 0; i < particles_.size(); ++i) {
@@ -2037,7 +2102,10 @@ void TacticalBattle::expire_objects(TacticalMode& mode) {
 }
 
 void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf, double sim_time, uint64_t global_frame) {
-    if (finished_) return;
+    if (finished_) {  // finished outside a tick (auto-resolve stop): the clones go before the mode pops (refixf t04)
+        if (!death_clones_.empty()) remove_death_clones(mode, true);
+        return;
+    }
     ++frame_;
     oi_global_frame_ = global_frame;
     stats_.frames = frame_;
@@ -2093,7 +2161,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     hooks_->set_tick(&rng, global_frame);
     abilities_->tick(frame_, mode.trees(), rng, pf);
     profile::lap("tac.combat");
-    consume_events(mode);
+    consume_events(mode, rng);
     oi_respawn_due(mode);  // OI abilities: Tactical_Respawn creations due this frame
     profile::lap("tac.events");
     hg_tick(mode, rng);    // hangars: SPAWN_SQUADRON services and the launches they request
@@ -2112,6 +2180,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     stats_.hits = combat_->stats().hits;
     // 6. victory.
     check_victory();
+    if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
     hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
     profile::lap("tac.victory");
 }
@@ -2402,6 +2471,13 @@ void TacticalBattle::hash_abilities(StateHasher& h) const {
     for (const TimedObject& d : dummies_) {
         h.i32(d.id);
         h.u32(d.frame);
+    }
+    if (!death_clones_.empty()) {  // refixf t04 (absent while none)
+        h.u32(static_cast<uint32_t>(death_clones_.size()));
+        for (const TimedObject& c : death_clones_) {
+            h.i32(c.id);
+            h.u32(c.frame);
+        }
     }
     if (l1_used_) l1_hash(h);  // L1 systems (absent until a pack / jump / engine entry existed)
     if (pads_used_) pads_hash(h);  // Int-final: build pads (absent until a pad was used)
