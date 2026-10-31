@@ -734,6 +734,27 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   2350-credit ship were queued, paid and finished, but no ship appeared on screen, on the minimap or in the select-all list.
   Extra TIE fighters bought at a level-1 station without a probe mod did not add squadrons either. So the cause is not
   specific to the Admonitor or the level-1 hack; it is unknown. No Bloom/Heat Thrawn trace exists.
+  - **Narrowed 2026-10-31 (g1f t01, runs `dxvk_20261031_063002`, `063242`, `063806`, driven by hand through `g1_ui.py`
+    with the game kept open).** In this install a **human player's tactical space purchase never arrives**: the item is
+    paid, the queue reaches 100 % and empties, the population counter stays at 0/20 (0/25 as the Rebellion) and no
+    unit appears. The result does not change with any of these:
+    - map: Kuat and Naboo Blockade;
+    - faction: Empire (TIE Interceptor squadron) and Rebellion (X-wing squadron);
+    - frame rate: about 370, 118 and 60 FPS (`--extra-args FPSCAP=30`);
+    - input: PostMessage and real SendInput clicks (the window was in the foreground);
+    - probe mod: none.
+    What does work: the station's starting garrison (two squadrons launch at battle start) and the AI's purchases
+    (its ships reach and attack the player's station). So the build queue works and the delivery of the human's unit is
+    where it stops; why is still unknown. A new probe mod `--probe-mod admonitor_spawn` (Admonitor added to the level-1 station's
+    `Starting_Spawned_Units_Tech_0`) did **not** launch the ship either: after about 60 s only the two garrison squadrons
+    were out.
+  - The game folder matched the kit's checks: `StarWarsG.exe` SHA-256 07daeeae… (= PE_OVERVIEW.md), no loose XML
+    in `corruption\Data\XML`, no prior patch chain. One file is newer than the Steam install of 2026-10-10:
+    `corruption\PerceptionFunctionG.dll`, 2026-10-15, SHA-256 c3a4ae28…, size equal to PE_OVERVIEW.md's 1,074,176
+    bytes; its provenance is unknown.
+  - Open (Gabriel, roadmap g1f t06): does a hand-played Kuat skirmish deliver a bought ship? If not, Steam "Verify
+    integrity of game files" and repeat. If a bought ship appears, re-run `run_3_apitrace.cmd` with Bloom/Heat on
+    (`g1_options.py --set Bloom=1 HeatDistortion=1 -- apitrace ...`) for the Thrawn close-up.
 - **Planet clip wrap: still open (g1f t03, 2026-10-30).** `apitrace_20261030_160054` is a 302 s Kuat idle trace with camera
   wheel markers (times in its `status.json`). `g1_planet_wrap.py` is written, but the extraction of that trace did not finish.
   The kit's first-draw "median step" series mixes several objects drawn with the same mesh shader (`vs#156`), so it must not be
