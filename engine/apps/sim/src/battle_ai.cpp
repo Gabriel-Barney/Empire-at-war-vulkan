@@ -30,6 +30,9 @@ namespace {
 constexpr objects::BehaviorTypeId kUnitAi = 0x12, kTeam = 0x16, kHideWhenFogged = 0x19, kIndigenous = 0x20,
                                   kBuildObjects = 0x29, kLobbing = 0x37, kCashPoint = 0x3C, kCapturePoint = 0x3D,
                                   kDamageTracking = 0x3E;
+// Free-store admission behaviours (A1_READINGS §6; behaviours.cpp numbering = the original's)
+constexpr objects::BehaviorTypeId kTacticalSuperWeapon = 0x2C, kSpecialWeapon = 0x2F, kDummyGroundBase = 0x5B,
+                                  kDummyStarBaseBeh = 0x5C, kDummyGroundStructureBeh = 0x5F, kDummyOrbitalStructure = 0x60;
 constexpr uint32_t kStandinInterval = 60;  // the S10 stand-in cadence (BattleConfig::order_interval default)
 
 uint32_t le32(std::span<const uint8_t> b, size_t o) {
@@ -70,7 +73,9 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
 #ifdef ALAMO_AI_TACTICAL_HAVE_TERRAIN
     if (!b_->space_) zones_ = at::hint_zones_from_map(b_->map_);
+    if (b_->space_) at::space_region_bounds(b_->map_, cfg.region_map);  // A1_READINGS §8: the camera box
 #endif
+    zone_locator_.build(zones_);
     cfg.zones = zones_;
     cfg.plan_files = b_->space_ ? setup.space_plans : setup.land_plans;
     const uint32_t players = host.players();
@@ -249,14 +254,14 @@ void BattleAi::hash(StateHasher& h) const { world_->hash(h); }
 
 // ---- N1 stage 2 save / load (owner: n2-host): chunk "battle.ai" ---------------------------------------------------
 namespace {
-constexpr uint32_t kBattleAiSaveVersion = 1;
+constexpr uint32_t kBattleAiSaveVersion = 2;  // 2: UnitAI re-projection stamps
 }
 
 void BattleAi::write(ByteWriter& w) const {
     w.u32(kBattleAiSaveVersion);
     write_section(w, [this](ByteWriter& sub) { write_if_saveable(*world_, sub); });
     save_io::Out o(w);
-    o(ai_side_, stale_, executed_, opp_prev_);
+    o(ai_side_, stale_, executed_, opp_prev_, unit_ai_stamps_);
 }
 
 bool BattleAi::read(ByteReader& r) {
@@ -266,14 +271,23 @@ bool BattleAi::read(ByteReader& r) {
     uint32_t stale = 0;
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed;
     std::vector<std::pair<uint64_t, int32_t>> opp;
+    std::map<objects::ObjectId, int32_t> stamps;
     save_io::In in(r);
-    in(side, stale, executed, opp);
+    in(side, stale, executed, opp, stamps);
     if (!r.ok() || !r.done() || side != ai_side_) return false;  // the AI players are rebuilt by start()
+    const std::map<objects::ObjectId, int32_t> stamps_before = unit_ai_stamps_;
+    unit_ai_stamps_ = std::move(stamps);  // before relink(): its fill() must find every listed object stamped (no draws)
     ByteReader wr(world);
-    if (!read_if_saveable(*world_, wr) || !wr.ok() || !wr.done()) return false;
+    if (!read_if_saveable(*world_, wr) || !wr.ok() || !wr.done()) {
+        unit_ai_stamps_ = stamps_before;
+        return false;
+    }
     // battle.ai is the last battle chunk (CampaignBattles registers it after the battle parts): every other battle
     // system is restored, so the world takes its types / host callbacks now (tactical_ai.hpp relink).
-    if (!world_->relink()) return false;
+    if (!world_->relink()) {
+        unit_ai_stamps_ = stamps_before;
+        return false;
+    }
     stale_ = stale;
     executed_ = std::move(executed);
     opp_prev_ = std::move(opp);
@@ -336,6 +350,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
                 for (const std::string_view n : types.get_list(ti, "CategoryMask")) pt.category |= mask(n);
             pt.combat_power = types.get_float(ti, "AI_Combat_Power");
             pt.is_hero = types.get_bool(ti, "Is_Named_Hero");
+            pt.bombing_run_prevention_radius = static_cast<float>(types.get_int(ti, "Bombing_Run_Prevention_Radius"));
             pt.community_property = types.get_bool(ti, "Is_Community_Property");
             // --- A2 tactical: PotentialPlan inputs (tactical_pp.hpp) ---
             pt.tech_level = types.get_int(ti, "Tech_Level");
@@ -420,6 +435,21 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         w.players[a].reinforcements.clear();
         for (const at::TacticalReinforcement& r : reinforcement_pool(static_cast<int32_t>(a))) w.players[a].reinforcements.push_back(r.type);
     }
+    // A1_READINGS §26: TimeLastSeen's cell test - the base passability word (.ted 0x10A, not the effective word with
+    // stamped objects) of cell ((int)((x + 10) / 20), (int)((y + 10) / 20)); off the grid counts as blocked. A map
+    // without a passability chunk keeps base Clear (MOVEMENT §1.1).
+    if (!b_->space_ && !w.point_blocked) {
+        const terrain::MapData* map = &b_->map_;
+        w.point_blocked = [map](float x, float y) {
+            const float fx = (x + 10.0f) / 20.0f, fy = (y + 10.0f) / 20.0f;
+            if (!(fx > -1.0f) || !(fy > -1.0f) || !(fx < 65536.0f) || !(fy < 65536.0f)) return true;
+            const auto cx = static_cast<uint32_t>(static_cast<int32_t>(fx));
+            const auto cy = static_cast<uint32_t>(static_cast<int32_t>(fy));
+            if (cx >= map->terrain.width || cy >= map->terrain.height) return true;
+            if (!map->passability_present) return false;
+            return (map->passability_at(cx, cy) & (terrain::kPassSteep | terrain::kPassWater)) != 0u;
+        };
+    }
 #ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent): the real fog with force = 1 (the AI target-selection form); the AI gate
     // (non-human players unfogged while AIUsesFogOfWar is False) is applied by the perception's own force-0
@@ -444,8 +474,14 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     if (const auto pl = b_->req_.info.planet; !b_->space_ && static_cast<size_t>(pl) < g.planets().size())
         for (const objects::ObjectHandle s : g.planets()[pl].structures)
             if (g.store().alive(s)) ++w.conflict_ground_structures;
+    // Objects of a live bombing run (the land mode's +0x38 bombing-run manager set, A1_READINGS §6.2 item 9), ascending.
+    std::vector<objects::ObjectId> bombing_run_objects;
+    for (const TacticalBattle::L1BombingRun& run : b_->l1_runs_)
+        for (const TacticalBattle::L1Bomber& bm : run.bombers) bombing_run_objects.push_back(bm.id);
+    std::sort(bombing_run_objects.begin(), bombing_run_objects.end());
     w.objects.clear();
     out.clear();
+    std::map<objects::ObjectId, int32_t> stamps;
     for (const objects::ObjectHandle h : st.all_objects()) {
         if (!st.alive(h) || st.has_behavior(h, objects::beh::Particle)) continue;
         const objects::ObjectId id = st.id(h);
@@ -503,16 +539,8 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
         o.transport_landing = st.has_behavior(h, objects::beh::TransportLanding);
         o.visible_to = ~0ull;
-        if (!zones_.empty()) {  // land: the nearest hint-zone centre [L, as zone_reachability's locator]
-            float best = 0.0f;
-            for (size_t z = 0; z < zones_.size(); ++z) {
-                const float dx = zones_[z].center[0] - p.x, dy = zones_[z].center[1] - p.y, d = dx * dx + dy * dy;
-                if (o.zone < 0 || d < best) {
-                    o.zone = static_cast<int32_t>(z);
-                    best = d;
-                }
-            }
-        }
+        // land: the first zone (list order) whose cell set holds the position's cell (A1_READINGS §4, ZoneLocator)
+        if (!zones_.empty()) o.zone = zone_locator_.zone_at(p.x, p.y);
         const auto mt = members.find(id);
         at::TacticalAiObject a;
         a.handle = h;
@@ -537,13 +565,66 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         fs.has_locomotor = a.applies.has_locomotor && o.mobile;
         fs.is_starship_combatant = st.has_behavior(h, objects::beh::StarshipCombatant) || (u != nullptr && o.mobile);  // [port] battle units
         fs.is_team = st.has_behavior(h, kTeam);
+        // Behaviour-in-type tests (0x370320) read the type's behaviour union [M: which set]; the rest are object tests.
+        const auto type_has = [&](objects::BehaviorTypeId b) { return types.has_behavior(ti, objects::BehaviorSet::Union, b); };
+        fs.type_category_bit_5f = type_has(kDummyGroundStructureBeh);
+        fs.type_bit_5b = type_has(kDummyGroundBase);
+        // TEAM: the representative (container) type or any live member type has INDIGENOUS_UNIT
+        if (fs.is_team) {
+            fs.team_has_bit_20 = type_has(kIndigenous);
+            if (mt != members.end())
+                for (const int32_t m : mt->second)
+                    if (const objects::ObjectHandle mh = st.find(static_cast<objects::ObjectId>(m));
+                        mh && types.has_behavior(st.type(mh), objects::BehaviorSet::Union, kIndigenous))
+                        fs.team_has_bit_20 = true;
+        }
+        // obj +0x2b0 / +0xf8 (contained or attached): inside a garrison, a hard point / attached child (store attach
+        // parent), or a DEPLOY_TROOPERS member pinned to its carrier. [port] a team member's link to its TEAM container
+        // (TacticalBattle::Unit::container, store container) is not read as "contained" here.
+        fs.subobject_f8_nonempty = b_->garrison_holder_of(id) != objects::kNoObjectId || static_cast<bool>(st.attach_parent(h)) ||
+                                   (u != nullptr && u->attached_to != objects::kNoObjectId);
+        fs.in_mode_manager_set = !b_->space_ && std::binary_search(bombing_run_objects.begin(), bombing_run_objects.end(), id);
+        fs.dead_or_removing = (u != nullptr && !u->alive) || !st.alive(h);  // both skipped above: always false here
+        fs.in_world = true;  // [M] obj +0x3c8: every listed battle object is in the world (retreated units are skipped above)
+        fs.type_squadron_member = types.squadron_member(ti);
+        fs.type_company_member = types.company_member(ti);
+        fs.has_special_weapon = st.has_behavior(h, kSpecialWeapon);
+        fs.type_dummy_orbital_structure = type_has(kDummyOrbitalStructure);
+        fs.type_dummy_star_base = type_has(kDummyStarBaseBeh);
+        fs.has_tactical_super_weapon = st.has_behavior(h, kTacticalSuperWeapon);
         if (mt != members.end()) a.team_members = mt->second;
         a.moving = o.mobile && b_->movement_->has_unit(id) && b_->movement_->view(id).has_goal;
         a.attack_target = c.has_unit(id) && c.current_target(id) != tc::kNoObject ? c.current_target(id) : -1;
+        // A1 t06 [port]: a TEAM container has no movement / combat entry of its own (its orders go to the live members,
+        // team_units), so its move and attack state is its members': moving while any member has a movement goal, the
+        // attack target of the first member (ascending id) that has one. The original's TEAM object moves as one unit, so
+        // its blocking move statuses run until the team arrives. Before, the container always read idle: every TF move of
+        // an infantry squad (Land_Scout_Area's Attack_Move / Explore_Area, Destroy_Structure's Attack_Move) completed one
+        // Planning service after the order, and the order-lock clearing handed the squad back to the free store at once.
+        if (!u && mt != members.end()) {
+            for (const int32_t m : mt->second) {
+                const auto mid = static_cast<objects::ObjectId>(m);
+                const TacticalBattle::Unit* mu = b_->unit_by_id(mid);
+                if (mu && mu->movable && b_->movement_->has_unit(mid) && b_->movement_->view(mid).has_goal) a.moving = true;
+                if (a.attack_target < 0 && c.has_unit(mid) && c.current_target(mid) != tc::kNoObject) a.attack_target = c.current_target(mid);
+            }
+        }
         a.damage_tracking = o.has_damage_tracking || st.has_behavior(h, kDamageTracking);
+        // UnitAI data pack (A1_READINGS §14): two synced draws per UNIT_AI object, F + Get_Int(0, 300) - 300 then
+        // F + Get_Int(0, 150) - 150. [port] drawn when fill() first lists the object (store order, after the battle tick
+        // of its creation frame), not inside the object's construction.
+        if (st.has_behavior(h, kUnitAi)) {
+            const auto it = unit_ai_stamps_.find(id);
+            const int32_t stamp = it != unit_ai_stamps_.end()
+                                      ? it->second
+                                      : at::draw_unit_ai_stamps(host_->random().synced(), b_->frame_).reprojection_check;
+            stamps.emplace(id, stamp);
+            a.reprojection_stamp = stamp;
+        }
         w.objects.push_back(std::move(o));
         out.push_back(std::move(a));
     }
+    unit_ai_stamps_ = std::move(stamps);  // objects no longer listed drop out
 }
 
 // ---- order execution ----------------------------------------------------------------------------------------------

@@ -240,6 +240,7 @@ uint64_t PerceptionWorld::types_digest() const {
         h.u64(t.category);
         h.f32(t.combat_power);
         h.boolean(t.is_hero);
+        h.f32(t.bombing_run_prevention_radius);
         h.boolean(t.community_property);
         h.i32(t.builds_into);
         h.i32(t.tech_level);
@@ -647,6 +648,7 @@ bool TacticalPerception::read(ByteReader& r) {
     unit_handles_ = std::move(uh);
     zone_handles_ = std::move(zh);
     cell_handles_ = std::move(ch);
+    rebuild_zone_name_handles();  // TACTICAL_GAPS 6.8 (derived from the zones and the targets in handle order)
     return true;
 }
 

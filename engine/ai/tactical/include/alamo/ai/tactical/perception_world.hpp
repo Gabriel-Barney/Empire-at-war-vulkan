@@ -38,6 +38,7 @@ struct PerceptionType {
     uint64_t category = 0;            // GameObjectCategoryType mask (type +0x1648)
     float combat_power = 0.0f;        // AI_Combat_Power of the type (reinforcement pools, HasUnit)
     bool is_hero = false;             // type +0x13
+    float bombing_run_prevention_radius = 0.0f;  // Bombing_Run_Prevention_Radius (+0x1dfc): IsValidBombingTarget
     bool community_property = false;  // Is_Community_Property (+0x27)
     int32_t builds_into = -1;         // type +0x9f0 "builds into" (index), -1 none
     // --- A2 tactical: PotentialPlan inputs (tactical_pp.hpp) ---
@@ -102,7 +103,7 @@ struct PerceptionObject {
     int32_t garrison_occupants = 0;  // obj +0x210 -> +0x34
     float additional_population_capacity = 0.0f;  // [L]
     std::vector<int32_t> contained_types;  // garrison / contained objects (+0xf8) and team members (types)
-    bool valid_bombing_target = false;     // [L]
+    bool valid_bombing_target = false;     // unused: IsValidBombingTarget is computed (A1_READINGS §21); kept for saves
     bool engines_online = true;            // [L]
     // player-token inputs
     bool dummy_ground_structure = false;   // behaviour 0x5F (BaseLevel, land skirmish)
@@ -160,11 +161,13 @@ struct PerceptionWorld {
     std::function<bool(int32_t player, int32_t object_id)> object_fogged;
     // Real fog at a point (cell centre) for player p. Absent => never fogged.
     std::function<bool(int32_t player, float x, float y)> point_fogged;
-    // Land terrain flags & 0x22 at a point (TimeLastSeen skips those cells) [M]. Absent => none.
+    // Land: the passability cell at a point ((int)((x + 10) / 20), (int)((y + 10) / 20)) is off the grid or its base
+    // word (.ted 0x10A) has Steep | Water (0x22); TimeLastSeen skips those cells (A1_READINGS §26). Absent => none.
     std::function<bool(float x, float y)> point_blocked;
     // Base shield test (land mode 0x3b8790): point inside an enemy (true) / allied (false) shield of `self`.
     std::function<bool(const Vec3f& p, int32_t self, bool enemy)> inside_shield;
-    // Hint evaluator value (Hints.<name>) of zone z [L]. Absent => 0.
+    // Hint evaluator override (Hints.<name>) of zone z. Absent => the zone's own hint map (HintZone::hints; a missing
+    // name or a zone without hints fails, A1_READINGS §22).
     std::function<double(int32_t zone, std::string_view hint)> zone_hint;
     // Free-store visible open pads within `range` of object id (0x4d3770). Absent => computed from objects [port].
     std::function<uint32_t(int32_t object_id, float range)> nearby_open_pads;

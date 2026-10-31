@@ -150,11 +150,14 @@ void test_rules() {
     g.set_owner(10, 2);
     g.service(71, pose);
     CHECK(g.pending_holder(6) == kNoObject && g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::OrderDropped);
-    // Owner change of an occupied host ejects; host death ejects (behaviour) or kills (CanContainGarrison only).
+    // Owner change of an occupied host to a hostile owner ejects (an allied one keeps them, test_owner_change); host
+    // death ejects (behaviour) or kills (CanContainGarrison only).
     g.clear_events();
-    g.set_owner(20, 3, {1000, 0, 0}, {1, 0, 0}, 72);
+    g.set_owner(20, 2, {1000, 0, 0}, {1, 0, 0}, 72);
     CHECK(g.holder_of(3) == kNoObject && g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::Ejected &&
           g.events()[0].position.x == 1000.0f);
+    g.set_owner(20, 3);  // empty host: no events
+    CHECK(g.events().size() == 1);
     w.set(30, {500, 0, 0});
     w.set(4, {520, 0, 0});
     CHECK(g.order_enter(4, 30));
@@ -202,6 +205,75 @@ uint64_t scripted_hash() {
     StateHasher hs;
     g.hash(hs);
     return hs.digest() ^ static_cast<uint64_t>(g.occupants(50).size());
+}
+
+// A1 t08: a host captured by its own garrison keeps it. Capture complete (§4.2) hands an occupied host to the first
+// occupant's owner (rule b) and the host applies that owner change to the garrison: occupants allied with the new owner
+// stay, the others are ejected (entry order, at the exit point); a hostile owner change (bribe / Change_Owner) or a
+// neutral one ejects everyone.
+void test_owner_change() {
+    constexpr int32_t kNeutral = 9;
+    auto allied13 = [](int32_t a, int32_t b) { return (a == 1 && b == 3) || (a == 3 && b == 1); };
+    GarrisonSystem g;
+    g.set_neutral_player(kNeutral);
+    g.set_allied(allied13);
+    HolderDesc bunker;
+    bunker.accepts = kInf;
+    bunker.slots = 4;
+    bunker.exit_dist = 40.0f;
+    CHECK(g.add_holder(10, kNeutral, bunker));
+    const OccupantDesc trooper{kInf, 1, 5.0f};
+    auto owner_of = [](ObjectId u) -> int32_t { return u == 1 ? 1 : (u == 2 ? 3 : 2); };  // units 1, 2, 3
+    for (ObjectId u = 1; u <= 3; ++u) CHECK(g.add_unit(u, owner_of(u), trooper));
+    // A neutral bunker is open to every side: owner 1, its ally 3 and the enemy 2 are all inside.
+    CHECK(g.can_garrison(1, 10) && g.can_garrison(3, 10));
+    CHECK(g.board(1, 10, {0, 0, 0}, 1) && g.board(2, 10, {0, 0, 0}, 1) && g.board(3, 10, {0, 0, 0}, 1));
+    CHECK(g.occupants(10).size() == 3);
+
+    // The garrison captures the point: controller = the first occupant's owner (1); capture completes at progress 1.
+    CapturePointSystem c(kNeutral, 4, 0);
+    c.set_allied(allied13);
+    c.set_occupant_owner([&g, &owner_of](ObjectId point) -> int32_t {
+        const auto in = g.occupants(point);
+        return in.empty() ? -1 : owner_of(in.front());
+    });
+    CapturePointDesc d;
+    d.radius = 100.0f;
+    d.transition_seconds = 0.0f;  // instant
+    CHECK(c.add_point(10, kNeutral, {0, 0, 0}, d));
+    c.service(0, {});
+    CHECK(c.events().size() == 1 && c.events()[0].old_owner == kNeutral && c.events()[0].new_owner == 1);
+    g.clear_events();
+    g.set_owner(10, c.events()[0].new_owner, {0, 0, 0}, {1, 0, 0}, 2);
+    c.clear_events();
+    // Own side (1) and its ally (3) stay; the enemy (2) is ejected to the exit point.
+    CHECK(g.holder_of(1) == 10 && g.holder_of(2) == 10 && g.holder_of(3) == kNoObject);
+    CHECK(g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::Ejected && g.events()[0].unit == 3 &&
+          g.events()[0].owner == 2 && g.events()[0].position.x == 40.0f && g.events()[0].frame == 2);
+    CHECK(g.occupants(10).size() == 2 && g.occupants(10)[0] == 1 && g.occupants(10)[1] == 2);
+    // The garrison keeps control: no further capture while it stays inside.
+    for (uint32_t f = 4; f <= 40; f += 4) c.service(f, {});
+    CHECK(c.events().empty() && c.owner(10) == 1);
+    // Owner change to an ally of the occupants: nobody leaves.
+    g.clear_events();
+    g.set_owner(10, 3, {0, 0, 0}, {1, 0, 0}, 50);
+    CHECK(g.events().empty() && g.occupants(10).size() == 2);
+    // The enemy captures the host (bribe / Change_Owner): every occupant hostile to it is ejected, in entry order.
+    g.set_owner(10, 2, {100, 0, 0}, {0, 1, 0}, 60);
+    CHECK(g.occupants(10).empty() && g.holder_of(1) == kNoObject && g.holder_of(2) == kNoObject);
+    CHECK(g.events().size() == 2 && g.events()[0].unit == 1 && g.events()[1].unit == 2 &&
+          g.events()[0].kind == GarrisonEventKind::Ejected && g.events()[1].kind == GarrisonEventKind::Ejected &&
+          g.events()[0].position.x == 100.0f && g.events()[0].position.y == 40.0f);
+    // A neutral new owner is allied with nobody: the enemy's own occupant leaves too.
+    CHECK(g.board(3, 10, {100, 0, 0}, 61) && g.holder_of(3) == 10);
+    g.clear_events();
+    g.set_owner(10, kNeutral, {100, 0, 0}, {1, 0, 0}, 70);
+    CHECK(g.holder_of(3) == kNoObject && g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::Ejected);
+    // Same owner again: no change, no events.
+    CHECK(g.board(1, 10, {100, 0, 0}, 71));
+    g.clear_events();
+    g.set_owner(10, kNeutral, {100, 0, 0}, {1, 0, 0}, 72);
+    CHECK(g.events().empty() && g.holder_of(1) == 10);
 }
 
 void test_capture() {
@@ -524,6 +596,7 @@ int main() {
     const uint64_t h1 = scripted_hash(), h2 = scripted_hash();
     CHECK(h1 == h2);
     test_capture();
+    test_owner_change();  // A1 t08
     test_types();
     test_garrison_save();  // N1 stage 2
     test_capture_save();

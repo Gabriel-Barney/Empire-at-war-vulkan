@@ -6,26 +6,34 @@ namespace alamo::ai::tactical {
 
 namespace {
 
+// 0x4d2c90
 bool base_admits(const FreeStoreObjectInfo& o) { return !o.dead_or_removing && o.in_world; }
-
-bool common_admits(const FreeStoreObjectInfo& o) {
-    if (!base_admits(o)) return false;
-    if (!o.owned_by_player || o.is_transport) return false;
-    if (o.type_create_team || o.type_is_dummy || o.has_indigenous_or_explosion) return false;
-    const bool mobile_combat =
-        o.has_lobbing_superweapon ||
-        (o.has_locomotor && (o.is_starship_combatant || o.is_team) && !o.type_category_bit_5f);
-    if (!mobile_combat) return false;
-    if (o.is_team && o.team_has_bit_20) return false;
-    if (o.type_bit_5b || o.subobject_f8_nonempty || o.in_mode_manager_set) return false;
-    return true;
-}
 
 }  // namespace
 
-bool land_free_store_admits(const FreeStoreObjectInfo& o) { return !o.type_stay_in_transport && common_admits(o); }
+// 0x690a10 (A1_READINGS 6.2), in the original's order.
+bool land_free_store_admits(const FreeStoreObjectInfo& o) {
+    if (o.type_create_team || o.is_transport) return false;
+    const bool qualifies = o.has_lobbing_superweapon ||
+                           (!o.type_category_bit_5f && (o.is_starship_combatant || o.is_team) && o.has_locomotor &&
+                            !o.type_is_dummy);
+    if (!qualifies) return false;
+    if (o.has_indigenous_or_explosion || (o.is_team && o.team_has_bit_20)) return false;
+    if (o.type_bit_5b || !o.owned_by_player || o.type_stay_in_transport) return false;
+    if (o.subobject_f8_nonempty || o.in_mode_manager_set) return false;
+    return base_admits(o);
+}
 
-bool space_free_store_admits(const FreeStoreObjectInfo& o) { return common_admits(o); }
+// 0x6904b0 (A1_READINGS 6.1), in the original's order.
+bool space_free_store_admits(const FreeStoreObjectInfo& o) {
+    if (o.type_squadron_member || o.type_company_member) return false;
+    const bool qualifies =
+        o.has_special_weapon || (!o.type_is_dummy && (o.is_starship_combatant || o.is_team) && o.has_locomotor);
+    if (!qualifies) return false;
+    if (o.type_dummy_orbital_structure || o.type_dummy_star_base || o.has_tactical_super_weapon) return false;
+    if (!o.owned_by_player || o.subobject_f8_nonempty) return false;
+    return base_admits(o);
+}
 
 bool TacticalFreeStore::admit(int32_t object_id, uint32_t type_id) {
     const auto [it, inserted] = entries_.try_emplace(object_id, Entry{type_id, false});
@@ -96,6 +104,7 @@ FreeStoreSchedule busy_tactical_schedule() {
     return s;
 }
 
+// 1.0f / 30.0f is the float 0.033333335f (0x140b0a344).
 float free_store_mode_time(uint32_t mode_frame) { return static_cast<float>(mode_frame) * (1.0f / 30.0f); }
 
 void free_store_service(FreeStoreSchedule& sched, const TacticalFreeStore& store, uint32_t mode_frame,

@@ -1,7 +1,8 @@
 // A1 stage 1b - TacticalPerceptionGridClass, the tactical threat grid
 // (docs/re/AI_TACTICAL_PERCEPTION.md section 4; consumers 3.3, 4.5, 4.6, 5).
 //
-// Geometry [H]: nFow = round(extent / DesiredFOWCellSize) clamped 0..512 per axis [M: rounding];
+// Geometry [H]: nFow = ceil(extent / DesiredFOWCellSize) clamped 0..512 per axis (0x22f9f0 rounds away from
+// zero: ceil for x >= 0, floor below; A1_READINGS 13 [H]);
 // nx = ceil(nFowX / k), ny = ceil(nFowY / k), k = AI_FogCellsPerThreatCell (4);
 // cellW = (right - left) / nx, cellH = (top - bottom) / ny, half diagonal sqrt(cellW^2 + cellH^2) / 2.
 // Cell index = row * nx + col, ROW 0 AT THE TOP: row = trunc((top - y) / cellH), col = trunc((x - left) / cellW).
@@ -14,10 +15,15 @@
 //
 // Projection [H]: the square of half-side r around the entry, v = power x cellW x cellH / (4 r^2) per
 // covered cell, added to threat[p][cell] for every player p the object is hostile to (relation 1), and
-// (objects without TEAM / HIDE_WHEN_FOGGED) SUBTRACTED from snapshot[p][cell] (open item 3b; removal
-// subtracts again, both clamped at 0 on removal). Appended to each covered cell's live list.
-// Re-projection: the object's next-check stamp advances by 300 frames; at a check, if the 3x4 transform
-// differs from the stored copy every entry is removed, refreshed and re-added, else nothing. No decay.
+// (objects without TEAM / HIDE_WHEN_FOGGED) SUBTRACTED from snapshot[p][cell] (0x656a10, ATP open item 3b,
+// A1_READINGS 11 [H]: add does not clamp, removal subtracts again and clamps at 0). Loop order: rows outer,
+// columns inner; per cell the players in player-list order; then the live-list append [H].
+// Re-projection (0x4f6070, A1_READINGS 14 [H]): the UnitAI data pack (0x550ed0) stamps the next check in the
+// past at object creation (two synced draws, draw_unit_ai_stamps); the service runs the check when
+// stamp <= F, so the first check is at the object's first service; every check then does stamp += 300
+// without re-basing on F (a stamp that is behind catches up one step per service). At a check, if the 3x4
+// transform differs from the stored copy every entry is removed, refreshed and re-added, else nothing.
+// No decay. Stamps are wrapping u32 frames compared by signed difference (a stamp before frame 0 is fine).
 //
 // Fog memory [H]: per (object, player) a "fogged" byte, updated on every service while the global FOW
 // flag is set and the object has TEAM / HIDE_WHEN_FOGGED (else 0); the test is false for a non-human
@@ -26,15 +32,21 @@
 // snapshot; fogged -> not fogged removes the entry from the player's memory lists over that snapshot's
 // footprint. Refog event (FOW decay, one of p's FOW cells became fully fogged): for the threat cell:
 // lastSeen = F, memory list cleared and refilled with the live list, snapshot layer = threat layer.
+// Destroyed objects [port] (A1_READINGS 15): the original (0x6585f0) removes the memory entries only for players
+// that currently see the object fogged (over that player's snapshot rect); other players keep stale entries
+// until the cell refogs and then read the dead object's data. The port removes the entries from every
+// player's memory lists, because the dead object's data (power, owner, type) is not in PerceptionWorld after
+// destruction and a kept entry slot would dangle. With shipped data (AIUsesFogOfWar False) an AI player never
+// has fogged objects, so the difference reaches only the human player's memory lists.
 //
 // Cell force (0x6545d0) [H]: sum over the cell's live entries, then Self's memory entries, of
 // power / area x cellW x cellH x (1 - (1 - health) x A) (power and health read NOW, area = current
 // 4 r^2), filters: not excluded, faction filter, category, owned by a non-neutral-faction player,
 // relation(owner -> Self) == 0 (ally) / != 0 (enemy), live entries skipped when fogged for Self.
-// MEMORY ENTRIES [M] (open item 3a): the decompiled test is the same as for live entries (counted when
-// NOT fogged), so with shipped data an AI player's memory entries are counted a SECOND time.
-// `GridQuery::memory_counted_when_not_fogged` (default true = the documented behaviour) selects it;
-// false gives the concentration / bitfield rule (memory counted only while fogged).
+// MEMORY ENTRIES [H] (ATP open item 3a, A1_READINGS 10): the memory branch skips an entry only when it has
+// UNIT_AI and is fogged for Self (the same test as for live entries), so with shipped data an AI player's
+// memory entries are counted a SECOND time. `GridQuery::memory_counted_when_not_fogged` (default true = the
+// original) selects it; false gives the concentration / bitfield rule (memory counted only while fogged).
 //
 // Determinism: every list is a vector in insertion order (append on add, ordered erase on remove);
 // per-player loops are in player list order; sums are float in that order. Projection / service /
@@ -51,6 +63,7 @@
 #include "alamo/ai/tactical/perception_world.hpp"
 
 namespace alamo {
+class SimRng;
 class StateHasher;
 class ByteWriter;
 class ByteReader;
@@ -59,6 +72,8 @@ class ByteReader;
 namespace alamo::ai::tactical {
 
 inline constexpr uint32_t kReprojectionFrames = 300;  // 10 s gate [H]
+inline constexpr int32_t kUnitAiCheckSpread = 300;     // data pack +0x20: F + Get_Int(0, 300) - 300 [H]
+inline constexpr int32_t kUnitAiSecondSpread = 150;    // data pack +0x34: F + Get_Int(0, 150) - 150 [H]
 inline constexpr int32_t kMaxFowCellsPerAxis = 512;
 inline constexpr int32_t kFirstGridHardPointType = 5, kLastGridHardPointType = 10;
 // Point-danger scale squares (0x653ff0): 4000^2 space, 800^2 land [H].
@@ -83,7 +98,7 @@ struct GridQuery {
     float attenuator = 0.0f;      // Parameter_Attenuator
     int32_t exclude = -1;         // the location's attached object
     std::string_view faction;     // Parameter_Faction (owner faction, case-insensitive [M]); empty = any
-    bool memory_counted_when_not_fogged = true;  // [M] cell-force quirk, see the header comment
+    bool memory_counted_when_not_fogged = true;  // [H] cell-force rule, see the header comment
 };
 
 // One matcher of the *UnitsBitfield tokens: exact type name, or category intersect.
@@ -91,6 +106,17 @@ struct BitfieldMatcher {
     std::string_view type_name;   // non-empty: exact (case-insensitive) type name
     uint64_t category = 0;
 };
+
+// The UnitAI data-pack stamps (0x550ed0, A1_READINGS 14 [H]): set when an object with UNIT_AI is created, from
+// two synced draws in this order: reprojection_check = F + Get_Int(0, 300) - 300 (data pack +0x20, the threat-grid
+// re-projection gate), then second = F + Get_Int(0, 150) - 150 (+0x34; its consumer is outside the grid). Both lie
+// in [F - spread, F], so the first re-projection check is at the object's first service. Frames may be < 0.
+struct UnitAiStamps {
+    int32_t reprojection_check = 0;
+    int32_t second = 0;
+};
+// Makes the two draws (exactly two range_int calls on `rng`, the synchronized RNG, in the order above).
+UnitAiStamps draw_unit_ai_stamps(SimRng& rng, uint32_t frame);
 
 class TacticalPerceptionGrid {
 public:
@@ -126,17 +152,23 @@ public:
     uint64_t category_union() const { return category_union_; }
 
     // ---- UNIT_AI hooks (serial) ----
-    // First UNIT_AI service / GOM add hook: creates the entries and projects them. The next-check
-    // stamp is frame + reprojection_frames [M: first-service frame, open item 8]. False if the object
-    // is unknown to the world, has no UNIT_AI, or is registered already.
+    // First UNIT_AI service / GOM add hook: creates the entries and projects them. `check_stamp` is the
+    // object's data-pack re-projection stamp (UnitAiStamps::reprojection_check, A1_READINGS 14 [H]): the next
+    // service at F >= stamp runs the check. False if the object is unknown to the world, has no UNIT_AI, or is
+    // registered already.
+    bool register_object(const PerceptionWorld& w, int32_t id, uint32_t frame, int32_t check_stamp);
+    // [port] legacy form for hosts that do not yet carry the data-pack stamp: stamp = frame + reprojection_frames
+    // (the old ATP open item 8 reading). The original checks at the first service (the 4-argument form);
+    // callers move to it once the host draws the stamps at UNIT_AI object creation.
     bool register_object(const PerceptionWorld& w, int32_t id, uint32_t frame);
-    // UNIT_AI service: fog bytes (every call), then the 300-frame re-projection gate.
+    // UNIT_AI service: fog bytes (every call), then the re-projection gate (stamp <= frame: check, stamp += 300).
     // Returns true when the object was re-projected.
     bool service_object(const PerceptionWorld& w, int32_t id, uint32_t frame);
     // Every registered object in registration order.
     void service_all(const PerceptionWorld& w, uint32_t frame);
     // Destroyed signal: removed from the live lists (threat subtracted), the owner list and every
-    // player's memory lists [M: the original removes it for players that have it fogged].
+    // player's memory lists [port: the original removes the memory entries only for players that see it
+    // fogged, A1_READINGS 15; see the header comment].
     bool on_object_destroyed(int32_t id);
     // Owner change (0x658930): remove, re-owner, re-add; appended to the new owner's list [M].
     bool on_owner_changed(const PerceptionWorld& w, int32_t id);
@@ -208,7 +240,7 @@ private:
     struct GridObject {
         int32_t owner = kNoPlayerIndex;
         std::vector<uint32_t> entries;
-        uint32_t next_check = 0;
+        uint32_t next_check = 0;        // wrapping frame stamp (data pack +0x20)
         float transform[12] = {};
         std::vector<uint8_t> fogged;    // per player
         bool team_or_hide = false;

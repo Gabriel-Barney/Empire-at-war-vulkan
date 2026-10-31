@@ -11,21 +11,21 @@ DefendedPosition most_defended_position_cells(const TacticalPerceptionGrid& g, c
                                               std::span<const uint32_t> cells, int32_t player, SimRng& rng,
                                               bool memory_counted_when_not_fogged) {
     DefendedPosition r;
-    if (!g.valid()) return r;
+    if (!g.valid() || (g.category_union() & ~0ull) == 0) return r;  // §17: grid mask & category mask 0 -> 1e18, no draws
     GridQuery q;
     q.category = ~0ull;
     q.self = player;
     q.ally = true;
     q.attenuator = 0.0f;
     q.memory_counted_when_not_fogged = memory_counted_when_not_fogged;
-    float best = 0.0f;
+    float best = -1.0f;  // §17: the first cell is always taken (no draw); every later tie draws, 0 == 0 included
     for (const uint32_t cell : cells) {
         if (cell >= g.cell_count()) continue;
         const float s = g.cell_force(w, cell, q);
         if (s > best) {
             best = s;
             r.cell = static_cast<int32_t>(cell);
-        } else if (s == best && r.cell >= 0) {
+        } else if (s == best) {
             ++r.draws;
             if (rng.inline_unit_float() > 0.5f) r.cell = static_cast<int32_t>(cell);
         }

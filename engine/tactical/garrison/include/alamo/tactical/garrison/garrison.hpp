@@ -22,7 +22,12 @@
 //     no locomotor wait]; on a unit still approaching it cancels the approach. Eject_Garrison / command 52 with unit
 //     0x3FFFFF: every occupant (Ejected).
 //   * host death [H]: occupants are ejected (Ejected) when the host has a garrison behaviour, else killed (Killed: the
-//     host kills them, credit to the host's killer). Host owner change [H]: every occupant is ejected.
+//     host kills them, credit to the host's killer). Host owner change: occupants not allied with the new owner are
+//     ejected (Ejected, entry order); occupants allied with it stay [port: §3.5 names the mass owner change 0x4ca2f0
+//     and the bribe 0x5b07c0 as ejecting all occupants - both hand the host to a side hostile to them, so the result
+//     is the same; capture complete 0x500e30 (§4.2) changes the owner through 0x38e5a0 to the controller, which for an
+//     occupied host is the first occupant's owner (rule b), and ejecting there would throw out the capturers; doc open
+//     item 4]. A neutral / unowned new owner is not allied with anyone: every occupant is ejected.
 //   * Can_Garrison (Lua, §2.5) [H]: the host has a host behaviour; its owner is allied, unowned or the neutral player
 //     (faction byte +0x108); the unit is known (GARRISON_UNIT), not inside / entering, masks match and free - reserved
 //     (units walking in) - the unit's value > 0 (stricter than the engine's entry rule free >= value). The order uses
@@ -84,7 +89,7 @@ enum class GarrisonEventKind : uint8_t {
     EnterStarted = 0,  // the unit reached the approach point: the host stops it (position = the approach point)
     Entered = 1,       // the unit is inside (STORY_GARRISON_UNIT); position = the host's
     Exited = 2,        // Leave_Garrison / command 52: the unit left to `position`
-    Ejected = 3,       // the host was destroyed / changed owner / Eject_Garrison: the unit left to `position`
+    Ejected = 3,       // the host was destroyed / changed to a hostile owner / Eject_Garrison: left to `position`
     Killed = 4,        // the host died without a garrison behaviour: the host kills the unit
     OrderDropped = 5,  // a pending approach / entering was cancelled (host gone / hostile / full / Leave_Garrison)
 };
@@ -118,7 +123,8 @@ public:
     // Death / retreat / removal at `pose` of the host: a host ejects (garrison behaviour) or kills (Property) its
     // occupants; approaches to it are dropped; a unit leaves its host silently. Unknown ids: no-op.
     void remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame);
-    // Owner change: a host with occupants ejects them all (at the given pose); a unit only changes owner.
+    // Owner change: a host ejects the occupants not allied with the new owner (at the exit point of the given pose),
+    // allied ones stay; approaches are re-checked at the next service; a unit only changes owner.
     void set_owner(ObjectId id, int32_t owner, Vec3 pos = {}, Vec3 facing = {}, uint32_t frame = 0);
     bool is_holder(ObjectId id) const { return holder_index(id) >= 0; }
     bool is_unit(ObjectId id) const { return unit_index(id) >= 0; }

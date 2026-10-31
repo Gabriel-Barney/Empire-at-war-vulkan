@@ -67,6 +67,12 @@ if(TARGET alamo_ai_lua)
   set_tests_properties(alamo_ai_tactical_world_tests PROPERTIES TIMEOUT 600)
 endif()
 
+# A1 t01 settled readings (docs/re/A1_READINGS.md 6, 9, 13-15): nFow rounding, UnitAI data-pack stamps and the first
+# re-projection check, destroyed objects' memory entries, free-store land / space admission and service timing.
+add_executable(alamo_ai_tactical_readings_tests tests/test_ai_tactical_readings.cpp)
+target_link_libraries(alamo_ai_tactical_readings_tests PRIVATE alamo_ai_tactical)
+add_test(NAME alamo_ai_tactical_readings_tests COMMAND alamo_ai_tactical_readings_tests)
+
 add_executable(alamo_ai_tactical_tests tests/test_ai_tactical.cpp)
 target_link_libraries(alamo_ai_tactical_tests PRIVATE alamo_ai_tactical Threads::Threads)
 # Real data (ALAMO_FOC_DATA): every shipped map's hint zones / space grid through the VFS.

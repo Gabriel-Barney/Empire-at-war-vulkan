@@ -129,11 +129,15 @@ private:
     TacticalMode* mode_;
     SimHost* host_;
     std::vector<ai::tactical::HintZone> zones_;
+    ai::tactical::ZoneLocator zone_locator_;  // position -> zone (A1_READINGS §4)
     std::unique_ptr<ai::tactical::TacticalAiWorld> world_;
     std::vector<uint8_t> ai_side_;  // per player: has a tactical AI
     uint32_t stale_ = 0;  // object orders whose target died before execution (no-ops)
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed_;  // event name -> (applied, rejected) [diagnostic]
     std::vector<std::pair<uint64_t, int32_t>> opp_prev_;  // battle host: (unit id << 8 | hp, target), ascending key
+    // UnitAI data-pack re-projection stamps (A1_READINGS §14) of the listed UNIT_AI objects, drawn once per object
+    // (draw_unit_ai_stamps, two synced draws) when fill() first lists it; ascending id.
+    std::map<objects::ObjectId, int32_t> unit_ai_stamps_;
     std::vector<objects::ObjectId> team_units(uint8_t player, uint32_t wire) const;  // battle host: unit or TEAM members
     lua::TacticalScriptHooks tactical_;    // battle host: script_gaps.hpp hooks of the tactical AI VMs (L1 final list)
     lua::RemainingScriptHooks remaining_;  // L1 bindings: script_remaining.hpp hooks of the tactical AI VMs (Divert; Int-final: strikes, damage stats, fields, weather, shields)

@@ -97,6 +97,11 @@ struct TacticalAiObject {
     bool moving = false;                  // has a movement goal
     int32_t attack_target = -1;           // object id it is attacking (ordered or automatic), -1 none
     bool damage_tracking = false;         // DAMAGE_TRACKING (FindDeadlyEnemy radius form)
+    // UnitAI data-pack re-projection stamp (+0x20, A1_READINGS §14): UnitAiStamps::reprojection_check drawn by the host
+    // when the UNIT_AI object was created (draw_unit_ai_stamps). kNoReprojectionStamp: the host does not carry it, the
+    // grid uses its [port] legacy registration + 300.
+    static constexpr int32_t kNoReprojectionStamp = INT32_MIN;
+    int32_t reprojection_stamp = kNoReprojectionStamp;
 };
 
 // One entry of a player's reinforcement pool (campaign: units in orbit = the battle's reserves; skirmish: the
@@ -201,7 +206,10 @@ struct TacticalAiConfig {
     int32_t attacker = -1, defender = -1;           // conflict record (opponent preference, §1.2)
     bool campaign = false;                          // galactic parent (campaign battle)
     TacticalAiConstants constants;
-    Rect2 map;                                      // map bounds (region grid, threat grid)
+    Rect2 map;                                      // playable box: the threat grid (and the region grid if no region_map)
+    // Space region grid bounds (A1_READINGS §8 [H]: mode vf65 = the space CAMERA box, .ted 0x103 minis 07/08; default the
+    // playable box shrunk by 400 in X and Y). Empty (all 0) = use `map`.
+    Rect2 region_map;
     std::vector<HintZone> zones;                    // land hint zones
     std::vector<std::string> plan_files;            // load order (the mode's plan folder)
     bool log_decisions = true;
@@ -269,8 +277,8 @@ public:
     void register_crc(CrcRegistry& registry, const std::string& name = "ai.tactical") const;
 
     // ---- N1 save / load (contract: alamo/core/save_file.hpp; the battle host's AI chunk) ----
-    // write(): u32 version (1); the shape (AI player pattern, plan library size, plan runtime size, mode: checked
-    // against the reader's rebuilt session); now, mode frame, current plan, the plan / task-force / status /
+    // write(): u32 version (3: the facts carry the six space free-store facts and the re-projection stamp); the shape (AI player pattern, plan
+    // library size, plan runtime size, mode: checked against the reader's rebuilt session); now, mode frame, current plan, the plan / task-force / status /
     // PotentialPlan id counters, orders / rejected; the enable gate; the PerceptionWorld of the last update
     // (PerceptionWorld::write: types by count + digest only) and the per-object facts (handles as value + id) and the
     // previous snapshot's (id, owner) list; the shared perception (threat grid, evaluator targets, leaf cache:
@@ -302,16 +310,22 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// S10 AI land reinforcement - the landing position of a land TF.Reinforce near `at` (0x6eaf60 [M]; drop validity
+// Ranks one reinforcement point for reinforce_landing_point: false drops it, otherwise `key` (lower first).
+using ReinforcePointRank = std::function<bool(const Vec3f& point, double& key)>;
+
+// S10 AI land reinforcement - the landing position of a land TF.Reinforce near `at` (0x6eaf60; drop validity
 // TACTICAL_GAPS §4.2 [H radius rule]). With Use_Reinforcement_Points a drop slot is valid only within 2-D <=
-// Reinforcement_Enabling_Radius of an allied live object, so [inferred]: the own / allied live object with an enabling
-// radius > 0 nearest to `at` (2-D, strict <: the first in snapshot (GOM) order wins a tie), and `at` := that object's
-// position moved toward `at` by min(distance, radius / 2) [port: the host lays its formation slots around the point;
-// half the radius keeps them inside]. False = no such object (nothing can land; Reinforce fails). Without
-// Use_Reinforcement_Points `at` is kept. The host keeps its own drop checks (passability, fog, footprint, prevention
-// radius) [port: not repeated here]. `facts` has the same order as `w.objects`. No RNG.
+// Reinforcement_Enabling_Radius of an allied live object. The candidates are the own / allied live objects with an
+// enabling radius > 0; `rank` drops and orders them (A1_READINGS §25.3: points whose zone is not in the destination's
+// flood set at the TF goal's level are dropped, the rest sorted by the slot-7 path cost from the point's zone; without a
+// region on either side by the 2-D distance). Without `rank` the key is the 2-D distance² to `at`. The lowest key wins
+// (strict <: the first in snapshot (GOM) order wins a tie), and `at` := that object's position moved toward `at` by
+// min(distance, radius / 2) [port: the host lays its formation slots around the point; half the radius keeps them
+// inside]. False = no candidate left (nothing can land; Reinforce fails). Without Use_Reinforcement_Points `at` is
+// kept. The host keeps its own drop checks (passability, fog, footprint, prevention radius) [port: not repeated
+// here]. `facts` has the same order as `w.objects`. No RNG.
 bool reinforce_landing_point(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
-                             bool use_reinforcement_points, Vec3f& at);
+                             bool use_reinforcement_points, Vec3f& at, const ReinforcePointRank& rank = {});
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);

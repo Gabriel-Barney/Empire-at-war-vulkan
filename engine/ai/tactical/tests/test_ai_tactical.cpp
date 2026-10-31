@@ -234,29 +234,45 @@ static void test_reachability() {
     std::vector<uint32_t> p;
     CHECK(g.path(0, 2, p) && p == (std::vector<uint32_t>{0, 1, 2}));
     CHECK(!g.path(0, 3, p));
-    CHECK(g.nearest_zone(140.0f, 10.0f) == 1 && g.nearest_zone(150.0f, 0.0f) == 1);  // tie -> lower index
+    CHECK(g.nearest_zone(140.0f, 10.0f) == -1);  // A1_READINGS §4: by cell set, and these zones hold no cells
+    {
+        // cell = ((int)((x + 10) / 20), (int)((y + 10) / 20)); the first zone (list order) holding it.
+        std::vector<HintZone> cz = {zone(1, "A", 0, 0, {}), zone(2, "B", 0, 0, {})};
+        cz[0].cells = {3u | (4u << 16)};
+        cz[1].cells = {3u | (4u << 16), 5u};
+        ZoneLocator loc;
+        loc.build(cz);
+        CHECK(loc.zone_at(60.0f, 80.0f) == 0 && loc.zone_at(69.9f, 89.9f) == 0 && loc.zone_at(70.0f, 80.0f) == -1);
+        CHECK(loc.zone_at(100.0f, -5.0f) == 1 && loc.zone_at(-1.0e9f, 0.0f) == -1);
+    }
     const TacticalAiConstants c;
     const ZoneThreatFn threat = [](uint32_t z) { return z == 1 ? 500.0 : (z == 2 ? 2000.0 : 0.0); };
-    const double w02 = 2.0 * (0x10000 + 10), w01 = 0x10000 + 10;
-    CHECK(zone_reachability_cost(g, 0, 2, Reachability::AnyThreat, c, threat) == w02);
-    CHECK(zone_reachability_cost(g, 0, 2, Reachability::HighThreat, c, threat) == w02);
-    CHECK(zone_reachability_cost(g, 0, 2, Reachability::MediumThreat, c, threat) == w02);
-    CHECK(zone_reachability_cost(g, 0, 2, Reachability::LowThreat, c, threat) == kUnreachable);  // C 2000 > 1000
-    CHECK(zone_reachability_cost(g, 0, 1, Reachability::LowThreat, c, threat) == w01);
-    CHECK(zone_reachability_cost(g, 0, 1, Reachability::NoThreat, c, threat) == kUnreachable);
-    CHECK(zone_reachability_cost(g, 0, 0, Reachability::NoThreat, c, threat) == 0.0);
-    CHECK(zone_reachability_cost(g, 1, 1, Reachability::NoThreat, c, threat) == kUnreachable);  // own zone threat
-    CHECK(zone_reachability_cost(g, 0, 3, Reachability::AnyThreat, c, threat) == kUnreachable);
-    CHECK(zone_reachability_cost(g, 0, 1, Reachability::Any, c, threat) == kUnreachable);       // levels < 6
+    // A1_READINGS §3: S = wrapping sum of the hop weights; accept iff (S >> 16) * 100 <= tolerance; cost = (S & 0xFFFF) / 10.
+    // Node costs 0: 0 -> 2 = 2 hops of 0x10000 + 10 -> threat 200, cost 2.0; 0 -> 1 -> threat 100, cost 1.0.
+    CHECK(zone_reachability_cost(g, 0, 2, Reachability::AnyThreat, c, threat) == 2.0);
+    CHECK(zone_reachability_cost(g, 0, 2, Reachability::HighThreat, c) == 2.0);
+    CHECK(zone_reachability_cost(g, 0, 2, Reachability::LowThreat, c) == 2.0);
+    CHECK(zone_reachability_cost(g, 0, 2, Reachability::NoThreat, c) == kUnreachable);
+    CHECK(zone_reachability_cost(g, 0, 1, Reachability::LowThreat, c) == 1.0);
+    CHECK(zone_reachability_cost(g, 0, 1, Reachability::NoThreat, c) == kUnreachable);
+    CHECK(zone_reachability_cost(g, 0, 0, Reachability::NoThreat, c) == 0.0);  // [src, src]: S = 0
+    CHECK(zone_reachability_cost(g, 1, 1, Reachability::NoThreat, c) == 0.0);
+    // unreachable / unknown target: S = 0xFFFFFFFF -> only Any_Threat, cost 6553.5
+    CHECK(zone_reachability_cost(g, 0, 3, Reachability::AnyThreat, c) == static_cast<double>(6553.5f));
+    CHECK(zone_reachability_cost(g, 0, 3, Reachability::HighThreat, c) == kUnreachable);
+    CHECK(zone_reachability_cost(g, 0, 7, Reachability::AnyThreat, c) == static_cast<double>(6553.5f));
+    CHECK(zone_reachability_cost(g, 0, 1, Reachability::Any, c) == kUnreachable);  // levels < 6
     CHECK(zone_reachability_cost(g, 0, 1, Reachability::FriendlyOnly, c) == kUnreachable);
-    CHECK(zone_reachability_cost(g, -1, 1, Reachability::AnyThreat, c) == kUnreachable);
-    CHECK(zone_reachability_cost(g, 0, 7, Reachability::AnyThreat, c) == kUnreachable);
+    CHECK(zone_reachability_cost(g, -1, 1, Reachability::AnyThreat, c) == kUnreachable);  // no source zone
     CHECK(reachability_tolerance(Reachability::MediumThreat, c) == 3000.0);
     // Node_Weight: node cost = (uint32)(int64)max(0, threat) / 100; edge into j = n(j) x 65536 + hop.
     CHECK(land_zone_node_cost(-5.0) == 0u && land_zone_node_cost(99.9) == 0u && land_zone_node_cost(2050.7) == 20u);
     g.recompute_with_threat(threat);  // zone 1: 500 -> 5, zone 2: 2000 -> 20
     CHECK(g.node_costs()[1] == 5u && g.node_costs()[2] == 20u && g.node_costs()[0] == 0u);
     CHECK(g.weight(0, 1) == 5u * 65536u + 10u && g.weight(1, 2) == 20u * 65536u + 10u && g.weight(1, 0) == 0x10000u + 10u);
+    // 0 -> 2 now sums 25 x 65536 + 20: threat 2500 fails Low (1000), passes Medium (3000), cost 2.0
+    CHECK(zone_reachability_cost(g, 0, 2, Reachability::LowThreat, c) == kUnreachable);
+    CHECK(zone_reachability_cost(g, 0, 2, Reachability::MediumThreat, c) == 2.0);
     {
         HintZone hz = zone(1, "H", 0, 0, {});
         HintZone hz2 = zone(2, "H2", 30, 40, {});
@@ -272,6 +288,41 @@ static void test_reachability() {
         CHECK(dg.weight(1, 0) == 0x10000u + 10u);                   // P links Q -> edge Q -> P
         CHECK(dg.weight(0, 1) == ::alamo::galactic::kUnlinked);     // Q has no link to P
         CHECK(dg.weight(1, 2) == ::alamo::galactic::kUnlinked && dg.edge_count() == 1);
+    }
+    // A1_READINGS §25.2 flood: undirected edges from the lower-index zone's links; failing zones are not entered;
+    // a failing start floods from each passing neighbour and keeps the largest part.
+    {
+        // 0-1, 1-2, 1-4, 2-4; zone 3 links zone 1 but zone 1 (lower index) has no link back: no flood edge.
+        std::vector<HintZone> f = {zone(10, "A", 0, 0, {20}), zone(20, "B", 100, 0, {30, 50}),
+                                   zone(30, "C", 200, 0, {50}), zone(40, "D", 0, 300, {20}), zone(50, "E", 300, 0, {})};
+        ZoneGraph fg;
+        fg.build(f);
+        CHECK(fg.flood_neighbours(1).size() == 3 && fg.flood_neighbours(3).empty());
+        CHECK(fg.links_to(1, 2, 0xFFFFFFFFu) && fg.links_to(3, 1, 0xFFFFFFFFu) && !fg.links_to(1, 3, 0xFFFFFFFFu) &&
+              !fg.links_to(1, 2, 0u) && !fg.links_to(9, 1, 0xFFFFFFFFu));
+        std::vector<uint32_t> out;
+        int asked = 0;
+        const auto fails = [&](std::initializer_list<uint32_t> bad) {
+            const std::vector<uint32_t> failing(bad);
+            return [&asked, failing](uint32_t z) {
+                ++asked;
+                return std::find(failing.begin(), failing.end(), z) == failing.end();
+            };
+        };
+        fg.flood(0, fails({}), out);
+        CHECK(out == (std::vector<uint32_t>{0, 1, 2, 4}) && asked == 4);  // each zone asked once
+        fg.flood(3, fails({}), out);
+        CHECK(out == (std::vector<uint32_t>{3}));
+        fg.flood(0, fails({1}), out);
+        CHECK(out == (std::vector<uint32_t>{0}));
+        fg.flood(1, fails({1}), out);  // parts {0} and {2, 4}: the larger
+        CHECK(out == (std::vector<uint32_t>{2, 4}));
+        fg.flood(1, fails({1, 2}), out);  // parts {0} and {4}: equal, the first kept
+        CHECK(out == (std::vector<uint32_t>{0}));
+        fg.flood(1, fails({0, 1, 2, 4}), out);  // start and every direct neighbour fail: empty
+        CHECK(out.empty());
+        fg.flood(-1, fails({}), out);
+        CHECK(out.empty());
     }
     // custom edge weights (drop B -> C)
     g.recompute([](uint32_t from, uint32_t to, uint32_t) { return (from == 1 && to == 2) ? ::alamo::galactic::kUnlinked : 7u; });
@@ -427,9 +478,17 @@ static void test_damage_tracking() {
     rq.source = 5;
     cb::DamageResult rs;
     rs.applied = true;
-    rs.after_multipliers = 4.0f;
+    rs.after_multipliers = 9.0f;  // A1_READINGS §7: not the tracked amount
+    rs.absorbed = 1.5f;
+    rs.to_hull = 2.5f;
     record_combat_damage(s, rq, rs);
     CHECK(s.entries(11)->at(5) == 4.0f);
+    rs.absorbed = 0.0f;
+    rs.to_hull = 0.0f;
+    record_combat_damage(s, rq, rs);  // nothing lost: no record
+    CHECK(s.entries(11)->at(5) == 4.0f);
+    rs.absorbed = 1.5f;
+    rs.to_hull = 2.5f;
     rs.applied = false;
     record_combat_damage(s, rq, rs);
     rq.source = cb::kNoObject;
@@ -699,6 +758,7 @@ static void test_real_data() {
     const auto maps = fs->list("Data\\Art\\Maps\\*.ted");
     uint32_t land_maps = 0, land_zoned = 0, zones_total = 0, links_total = 0, unresolved = 0, empty_names = 0, dup_names = 0;
     uint32_t space_maps = 0, cells_total = 0, parse_fail = 0, zero_flag_links = 0;
+    uint32_t zones_with_cells = 0, centre_in_cells = 0, cells_on_map = 0;
     uint64_t pairs = 0, reachable = 0;
     ParallelFor pf = make_thread_pf(4);
     for (const std::string& path : maps) {
@@ -732,6 +792,22 @@ static void test_real_data() {
                 CHECK(t[i].name == zones[i].name && t[i].zone == static_cast<int32_t>(i));
                 if (have_bounds) {  // zone centres lie on the map (with a cell of slack)
                     CHECK(zones[i].center[0] >= bounds.min_x - 2000.0f && zones[i].center[0] <= bounds.max_x + 2000.0f);
+                }
+                // A1_READINGS §4 / §12: passability cell (x, y) is the world square around (20x, 20y); the zone's 05 centre
+                // lies in the box of its cells, and the cells lie on the map
+                if (!zones[i].cells.empty()) {
+                    ++zones_with_cells;
+                    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+                    for (const uint32_t pc : zones[i].cells) {
+                        const float wx = static_cast<float>(pc & 0xFFFFu) * 20.0f, wy = static_cast<float>(pc >> 16) * 20.0f;
+                        x0 = std::min(x0, wx - 10.0f), x1 = std::max(x1, wx + 10.0f);
+                        y0 = std::min(y0, wy - 10.0f), y1 = std::max(y1, wy + 10.0f);
+                    }
+                    const float cx = zones[i].center[0], cy = zones[i].center[1];
+                    if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) ++centre_in_cells;
+                    if (have_bounds && x0 >= bounds.min_x - 20.0f && x1 <= bounds.max_x + 20.0f && y0 >= bounds.min_y - 20.0f &&
+                        y1 <= bounds.max_y + 20.0f)
+                        ++cells_on_map;
                 }
             }
             ZoneGraph g, gp;
@@ -769,6 +845,9 @@ static void test_real_data() {
                 maps.size(), parse_fail, land_maps, land_zoned, zones_total, links_total, unresolved, empty_names, dup_names,
                 reachable, pairs, space_maps, cells_total);
     std::printf("real data: %u links with zero flags (no edge, TACTICAL_GAPS §6.1)\n", zero_flag_links);
+    std::printf("real data: %u zones with cells: centre inside the cells' box %u, cells on the map %u\n", zones_with_cells,
+                centre_in_cells, cells_on_map);
+    CHECK(centre_in_cells * 100 >= zones_with_cells * 99);  // 8922 of 8923 on the shipped data
     CHECK(land_maps > 0 && space_maps > 0 && land_zoned > 0);
 }
 #endif

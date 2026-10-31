@@ -133,7 +133,19 @@ void GarrisonSystem::set_owner(ObjectId id, int32_t owner, Vec3 pos, Vec3 facing
         Holder& h = holders_[static_cast<size_t>(hi)];
         if (h.owner != owner) {
             h.owner = owner;
-            if (!h.inside.empty()) eject_all(id, pos, facing, frame);
+            // Occupants allied with the new owner stay (a capture by the garrison itself, rule (b) of capture.hpp);
+            // the rest are ejected in entry order at the exit point (see the header).
+            if (!h.inside.empty()) {
+                const std::vector<ObjectId> inside = h.inside;
+                const Vec3 at = exit_point(id, pos, facing);
+                for (const ObjectId uid : inside) {
+                    const int32_t ui = unit_index(uid);
+                    if (ui < 0) continue;
+                    Unit& u = units_[static_cast<size_t>(ui)];
+                    if (allied(u.owner, owner)) continue;
+                    leave(u, holders_[static_cast<size_t>(hi)], GarrisonEventKind::Ejected, at, frame);
+                }
+            }
         }
     }
     if (const int32_t ui = unit_index(id); ui >= 0) units_[static_cast<size_t>(ui)].owner = owner;

@@ -78,7 +78,7 @@ The goal system proposes `(goal type × target)` pairs; targets come from the pe
 - Space init (0x6ba320) tests `Has_Space_Evaluator` on the object's own type, while the runtime path tests the representative type. [H; keep both]
 
 ### 3.2 Region targets (`TacticalRegionAITargetLocationClass`, vt 0x8ce548) [H]
-- **Land:** one region per **AI hint zone** of the map (land mode list +0x3a0, filled by the map loader 0x3b8bc0 with `AIHintZoneClass` objects). Name = zone name (interned), centre = zone +0x30..+0x38, evaluator `LandLocationPerceptualEvaluatorClass` (0x6d55a0). Each land region owns a `ZoneReachabilityClass` (0x73f1d0, §3.4). A map without hint zones has **no land Tactical_Location targets** (and `Get_Most_Defended_Position` fails, §6.4). Regions are appended after the unit targets, in zone-list order. After load, regions re-link to zones by name (0x6b9580, case-insensitive).
+- **Land:** one region per **AI hint zone** of the map (land mode list +0x3a0, filled by the map loader 0x3b8bc0 with `AIHintZoneClass` objects). Name = zone name (interned), centre = zone +0x30..+0x38, evaluator `LandLocationPerceptualEvaluatorClass` (0x6d55a0). Each land region owns a `ZoneReachabilityClass` (0x73f1d0, §3.4). A map without hint zones has **no land Tactical_Location targets** (and `Get_Most_Defended_Position` fails, §6.4). Regions are appended after the unit targets, in zone-list order. After load, regions re-link to zones by name (0x6b9580, case-insensitive, first zone in list order); maps with duplicate zone names: TACTICAL_GAPS §6.8 (zone links are by 02 id, never by name; a repeated name shares the first zone's name id and evaluator).
 - **Space:** a grid over the map bounds (mode vtable +0x208) with square cells of **`AI_SpaceEvaluatorRegionSize`** (GameConstants +0x10d0 = 0x140b168d0; shipped 2000). `nx = ceil(width/size)`, `ny = ceil(height/size)`; loop x outer, y inner; cell name `"CELL_<x>_<y>"` (0x4dc570); evaluator rect = the cell clipped to the map; target position = cell centre with z = 0 (computed from the unclipped cell). No reachability object. Built only when the threat grid exists (0x140b31900 ≠ 0).
 - Region rect for perception (slot 14 0x7254f0): square of `AI_SpaceEvaluatorRegionSize` (space) or `AI_LandEvaluatorRegionSize` (+0x10d4, shipped 2000) centred on the region.
 
@@ -145,7 +145,7 @@ Every tactical evaluation (proposal, FindTarget, EvaluatePerception) binds `Vari
 | Retreat | Space_Retreat (Global, Time_Limit 240); Debug_Goal_Space = `Want_To_Retreat_From_Space` (NoBudget) | RetreatPlan |
 | Hero | Tyber_Manager_Space | — |
 
-Space goals use `Reachability Any` (5); land uses the threat levels. Reachability only filters through `Reachable_Target` and land slot 9 (AI_GALACTIC §1.5); proposal itself does not path-test.
+Space goals use `Reachability Any` (5); land uses the threat levels. Reachability only filters through `Reachable_Target` and land slot 9 (AI_GALACTIC §1.5); proposal itself does not path-test. Sources, the per-zone flood used by slot 9 and every tactical call site: A1_READINGS §25.
 
 ### 4.4 Tactical slot overrides of the framework [H]
 - Slot 9 (skip): land 0x6b8710 = active-set test plus the reachability-keyed lookup (AI_GALACTIC §1.5); space 0x6b8900 = active-set test only.
@@ -185,7 +185,7 @@ Object destroyed or owner changed (signals), or taken by a task force: erase fro
 
 ### 5.3 Service cadence and order (0x4d5a70, every Execution service = 3 frames) [H]
 - `now = (float)F × (1/30)` seconds of mode time; `FreeStoreService()` (the script's `main` loop: one call per resume) runs when `now − LastService > ServiceRate`; `On_Unit_Service(unit)` runs for each free-store entry **in the map's list order** whose entry field +0x30 is 0 [M: the order-lock that `Lock_Current_Orders` sets], when `now − LastUnitService > UnitServiceRate`. Both stamps start at 0, so both fire on the first service with now > rate.
-- BusyTacticalFreeStore: `ServiceRate = 20`, `UnitServiceRate = 2` → `FreeStoreService` about every 20.1 s; each unit about every 2.1 s (first > 2.0 s on a 0.1 s grid).
+- BusyTacticalFreeStore: `ServiceRate = 20`, `UnitServiceRate = 2` → `FreeStoreService` about every 20.1 s; each unit about every 2.1 s (first > 2.0 s on a 0.1 s grid). Corrected in A1_READINGS §9: with the float frame clock the first eligible frames are F = 600 (then 1200) and F = 61 for units, then the next 3-frame Execution service.
 - **Iteration order hazard:** the map is an MSVC hash container keyed by object id (bucket = `(id ^ 0xdeadbeef) & mask`), whose list order depends on insertion history and rehashes. The port must use a container with a defined order. Recommended: ascending object id (deviation from vanilla only in which unit acts first within one service; each unit's decision only reads its own state and the world, but orders issued earlier in the same pass can change later units' `Find_Nearest` results). [H container, M impact]
 
 ### 5.4 `Lock_Current_Orders` (0x57cd40) [H code, M effect]

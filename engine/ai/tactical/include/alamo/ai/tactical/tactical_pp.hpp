@@ -37,6 +37,10 @@ struct PpFreeUnit {
     Vec3f position;
     float health = 1.0f;      // hull fraction
     bool reserved = false;    // entry +0x30: reserved by another PotentialPlan of this player
+    // FreeStore distance key over the TF stages (AI_GALACTIC_3 §1.2, A1_READINGS §25.3), computed by the host:
+    // (Σ finite Low_Threat path cost² from the unit's zone + Σ 2-D distance² to each stage) / stages, when at least one
+    // cost was finite; < 0 = none finite (the key is then the 2-D distance² to the goal target).
+    double stage_key = -1.0;
 };
 
 // One reinforcement-pool slot (pool order = the source order: campaign = the parent's reinforcement record, skirmish

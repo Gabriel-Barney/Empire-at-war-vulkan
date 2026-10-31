@@ -1,0 +1,177 @@
+A1 tactical probes: out/20261031-075727-both/reader.log
+   GAME pid=22344 base=0x7ff76f8f0000 timestamp=0x67002393 size_of_image=0xcc0000 identity=ok
+   EXIT reason=game_exited modes=8 scans=96 records=175 points=6 failed_reads=14
+   tactical modes: #1 space stack=1, #2 land stack=1, #3 space stack=1, #4 space stack=1, #5 space stack=1, #6 space stack=1, #7 land stack=2, #8 space stack=1
+
+== Free-store timing probe (A1 t02) ==
+heap scans: 96 (25 MB per scan); probe source text seen in memory: no; records found: 175
+
+-- instance sid=00000252F8F26D90 player id=0 faction=REBEL mode=Space
+   LOAD     F=None  t=?
+   BASEDEF  F=0  t=0
+   MAIN     F=600  t=20.0000019
+   FAC      F=63  t=2.10000014 Rebel=0 Empire=1 Pirates=2 Neutral=3 Hostile=4 Sarlacc=5 Underworld=6 Hutts=7
+   FreeStoreService calls: #1 F=600 (t=20.0000019)
+   On_Unit_Service passes: #1 F=63, #2 F=123, #3 F=186, #4 F=246, #5 F=309, #6 F=372, #7 F=435, #8 F=498, #9 F=561, #10 F=624, #11 F=687, #12 F=750, #13 F=813
+      units per pass: 8, 10, 7, 8, 8, 8, 7, 7, 8, 6, 6, 8 (pass 1 unit: Y_WING_SQUADRON_CONTAINER)
+   On_Unit_Added: #1 F=0 Y_WING_SQUADRON_CONTAINER, #2 F=0 B-WING_SQUADRON, #3 F=0 B-WING_SQUADRON, #4 F=0 A_WING_SQUADRON, #5 F=0 REBEL_X-WING_SQUADRON, #6 F=0 REBEL_X-WING_SQUADRON
+   GetCurrentTime.Frame() - F: [-786, -725, -665, -604, -580, -543, -482, -421, -360, -299, -238, -180, -119, -61, 0]
+   readings that reproduce the FreeStoreService frames [600]: float/p0
+   readings whose unit-pass frames contain every observed pass: float/p0
+   => A1 reading CONFIRMED: scheduled FreeStoreService at F=[600] (float clock, phase 0)
+   => first On_Unit_Service pass at F=63 (matches the A1 reading F=63)
+
+-- instance sid=00000252F90B0FD0 player id=6 faction=UNDERWORLD mode=Space
+   LOAD     F=None  t=?
+   BASEDEF  F=0  t=0
+   MAIN     F=600  t=20.0000019
+   FAC      F=63  t=2.10000014 Rebel=0 Empire=1 Pirates=2 Neutral=3 Hostile=4 Sarlacc=5 Underworld=6 Hutts=7
+   FreeStoreService calls: #1 F=600 (t=20.0000019)
+   On_Unit_Service passes: #1 F=63, #2 F=123, #3 F=186, #4 F=372
+      units per pass: 16, 1, 1 (pass 1 unit: KRAYT_CLASS_DESTROYER)
+   On_Unit_Added: #1 F=0 STARVIPER_TEAM, #2 F=0 STARVIPER_TEAM, #3 F=0 STARVIPER_TEAM, #4 F=0 STARVIPER_TEAM, #5 F=0 STARVIPER_TEAM, #6 F=0 SKIPRAY_SQUADRON
+   GetCurrentTime.Frame() - F: [-580, -360, -180, -119, -61, 0]
+   readings that reproduce the FreeStoreService frames [600]: float/p0
+   readings whose unit-pass frames contain every observed pass: float/p0
+   => A1 reading CONFIRMED: scheduled FreeStoreService at F=[600] (float clock, phase 0)
+   => first On_Unit_Service pass at F=63 (matches the A1 reading F=63)
+
+-- instance sid=00000252EF2E8590 player id=1 faction=EMPIRE mode=Land
+   LOAD     F=None  t=?
+   BASEDEF  F=0  t=0
+   BASEDEF  F=3330  t=111.000008
+   BASEDEF  F=456  t=15.2000008
+   MAIN     F=600  t=20.0000019
+   FAC      F=63  t=2.10000014 Rebel=0 Empire=1 Pirates=2 Neutral=3 Hostile=4 Sarlacc=5 Underworld=none Hutts=6
+   FreeStoreService calls: #1 F=600 (t=20.0000019), #2 F=1200 (t=40.0000038), #3 F=1803 (t=60.1000023), #4 F=2403 (t=80.1000061), #5 F=3006 (t=100.200005)
+   On_Unit_Service passes: #1 F=63, #2 F=123, #3 F=186, #4 F=246, #5 F=309, #6 F=372, #7 F=3204, #8 F=3267, #9 F=63, #10 F=123, #11 F=186, #12 F=246, #13 F=309, #14 F=372
+      units per pass: 4, 4, 4, 4, 4, 4, 2, 2, 8, 11, 7, 8, 7 (pass 1 unit: STORMTROOPER_TEAM)
+   On_Unit_Added: #1 F=0 STORMTROOPER_TEAM, #2 F=0 STORMTROOPER_TEAM, #3 F=0 STORMTROOPER_TEAM, #4 F=0 STORMTROOPER_TEAM, #5 F=0 Y_WING_SQUADRON_CONTAINER, #6 F=0 B-WING_SQUADRON
+   GetCurrentTime.Frame() - F: [-3219, -3159, -3098, -2906, -2323, -1743, -1160, -580, -441, -360, -299, -238, -180, -119, -61, 0]
+   readings that reproduce the FreeStoreService frames [600, 1200, 1803, 2403, 3006]: float/p0
+   readings whose unit-pass frames contain every observed pass: float/p0
+   => A1 reading CONFIRMED: scheduled FreeStoreService at F=[600, 1200, 1803, 2403, 3006] (float clock, phase 0)
+   => first On_Unit_Service pass at F=63 (matches the A1 reading F=63)
+
+-- instance sid=00000252F294AD80 player id=6 faction=UNDERWORLD mode=Space
+   LOAD     F=None  t=?
+   BASEDEF  F=0  t=0
+   BASEDEF  F=456  t=15.2000008
+   FAC      F=63  t=2.10000014 Rebel=0 Empire=1 Pirates=2 Neutral=3 Hostile=4 Sarlacc=5 Underworld=6 Hutts=7
+   FreeStoreService calls: none
+   On_Unit_Service passes: #1 F=63
+      units per pass:  (pass 1 unit: KRAYT_CLASS_DESTROYER)
+   On_Unit_Added: #1 F=0 STARVIPER_TEAM, #2 F=0 STARVIPER_TEAM, #3 F=0 STARVIPER_TEAM, #4 F=0 STARVIPER_TEAM, #5 F=0 STARVIPER_TEAM, #6 F=0 SKIPRAY_SQUADRON
+   GetCurrentTime.Frame() - F: [-441, -61, 0]
+   readings that reproduce the FreeStoreService frames []: NONE
+   readings whose unit-pass frames contain every observed pass: float/p0, exact/p0
+   => first On_Unit_Service pass at F=63 (matches the A1 reading F=63)
+
+-- instance sid=00000252F0C97270 player id=1 faction=EMPIRE mode=Space
+   LOAD     F=None  t=?
+   BASEDEF  F=0  t=0
+   BASEDEF  F=2888  t=96.2666702
+   MAIN     F=600  t=20.0000019
+   MAIN     F=600  t=20.0000019
+   MAIN     F=600  t=20.0000019
+   MAIN     F=600  t=20.0000019
+   FAC      F=63  t=2.10000014 Rebel=0 Empire=1 Pirates=2 Neutral=3 Hostile=4 Sarlacc=5 Underworld=none Hutts=6
+   FreeStoreService calls: #1 F=600 (t=20.0000019), #2 F=1200 (t=40.0000038), #3 F=1803 (t=60.1000023), #4 F=2403 (t=80.1000061), #5 F=600 (t=20.0000019), #6 F=600 (t=20.0000019), #7 F=600 (t=20.0000019), #8 F=1200 (t=40.0000038), #9 F=1803 (t=60.1000023), #10 F=2403 (t=80.1000061)
+   On_Unit_Service passes: #1 F=63, #2 F=123, #3 F=186, #4 F=246, #5 F=309, #6 F=372, #7 F=435, #8 F=498, #9 F=561, #10 F=624, #11 F=687, #12 F=750, #13 F=813, #14 F=876, #15 F=939, #16 F=999
+      units per pass: 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 (pass 1 unit: TIE_INTERCEPTOR_SQUADRON)
+   On_Unit_Added: #1 F=0 TIE_INTERCEPTOR_SQUADRON, #2 F=0 TIE_INTERCEPTOR_SQUADRON, #3 F=0 GROUND_EMPIRE_HYPERVELOCITY_GUN, #4 F=0 Y_WING_SQUADRON_CONTAINER, #5 F=0 B-WING_SQUADRON, #6 F=0 B-WING_SQUADRON
+   GetCurrentTime.Frame() - F: [-2792, -2323, -2286, -1743, -1706, -1160, -1123, -966, -908, -847, -786, -725, -665, -604, -580, -543, -482, -421, -360, -299, -238, -180, -119, -61, 0]
+   readings that reproduce the FreeStoreService frames [600, 1200, 1803, 2403, 600, 600, 600, 1200, 1803, 2403]: NONE
+   readings whose unit-pass frames contain every observed pass: float/p0
+   => A1 reading PARTLY confirmed: first scheduled FreeStoreService at F=600, but the later calls [1200, 1803, 2403, 600, 600, 600, 1200, 1803, 2403] fit no reading (see the readings line)
+   => first On_Unit_Service pass at F=63 (matches the A1 reading F=63)
+
+-- instance sid=00000252F0091380 player id=6 faction=UNDERWORLD mode=Space
+   LOAD     F=None  t=?
+   BASEDEF  F=0  t=0
+   BASEDEF  F=2562  t=85.4000015
+   MAIN     F=600  t=20.0000019
+   MAIN     F=600  t=20.0000019
+   MAIN     F=600  t=20.0000019
+   FAC      F=63  t=2.10000014 Rebel=0 Empire=1 Pirates=2 Neutral=3 Hostile=4 Sarlacc=5 Underworld=6 Hutts=7
+   FreeStoreService calls: #1 F=600 (t=20.0000019), #2 F=600 (t=20.0000019), #3 F=600 (t=20.0000019), #4 F=1200 (t=40.0000038), #5 F=1803 (t=60.1000023), #6 F=2403 (t=80.1000061)
+   On_Unit_Service passes: #1 F=63, #2 F=123, #3 F=186, #4 F=309, #5 F=372, #6 F=624, #7 F=687, #8 F=63, #9 F=123, #10 F=186, #11 F=246, #12 F=309, #13 F=372, #14 F=435, #15 F=498, #16 F=561
+      units per pass: 16, 1, 1, 1, 1, 1, 1, 8, 12, 11, 11, 7, 9, 5, 4 (pass 1 unit: KRAYT_CLASS_DESTROYER)
+   On_Unit_Added: #1 F=0 STARVIPER_TEAM, #2 F=0 STARVIPER_TEAM, #3 F=0 STARVIPER_TEAM, #4 F=0 STARVIPER_TEAM, #5 F=0 STARVIPER_TEAM, #6 F=0 SKIPRAY_SQUADRON
+   GetCurrentTime.Frame() - F: [-2440, -2286, -1706, -1123, -665, -604, -580, -543, -482, -421, -360, -299, -238, -180, -119, -61, 0]
+   readings that reproduce the FreeStoreService frames [600, 600, 600, 1200, 1803, 2403]: NONE
+   readings whose unit-pass frames contain every observed pass: float/p0
+   => A1 reading PARTLY confirmed: first scheduled FreeStoreService at F=600, but the later calls [600, 600, 1200, 1803, 2403] fit no reading (see the readings line)
+   => first On_Unit_Service pass at F=63 (matches the A1 reading F=63)
+
+-- instance sid=00000252A2CC5600 player id=2 faction=PIRATES mode=Land
+   LOAD     F=None  t=?
+   BASEDEF  F=0  t=0
+   MAIN     F=600  t=20.0000019
+   FAC      F=600  t=20.0000019 Rebel=0 Empire=1 Pirates=2 Neutral=3 Hostile=4 Sarlacc=5 Underworld=6 Hutts=7
+   FreeStoreService calls: #1 F=600 (t=20.0000019), #2 F=1200 (t=40.0000038), #3 F=1803 (t=60.1000023), #4 F=2403 (t=80.1000061)
+   On_Unit_Service passes: #1 F=63, #2 F=123, #3 F=186, #4 F=246, #5 F=309
+      units per pass: 8, 12, 11, 11 (pass 1 unit: Y_WING_SQUADRON_CONTAINER)
+   On_Unit_Added: #1 F=0 Y_WING_SQUADRON_CONTAINER, #2 F=0 B-WING_SQUADRON, #3 F=0 B-WING_SQUADRON, #4 F=0 A_WING_SQUADRON, #5 F=0 REBEL_X-WING_SQUADRON, #6 F=0 REBEL_X-WING_SQUADRON
+   GetCurrentTime.Frame() - F: [-2286, -1706, -1123, -543, -299, -238, -180, -119, -61, 0, 37]
+   readings that reproduce the FreeStoreService frames [600, 1200, 1803, 2403]: float/p0
+   readings whose unit-pass frames contain every observed pass: float/p0
+   => A1 reading CONFIRMED: scheduled FreeStoreService at F=[600, 1200, 1803, 2403] (float clock, phase 0)
+   => first On_Unit_Service pass at F=63 (matches the A1 reading F=63)
+
+== Landing-point ownership probe (A1 t04) ==
+
+-- land battle 2: skirmish (game_type=3, stack=1), first seen at mode frame 0
+   player  faction      human neutral  +0x404 first -> changes           held cap first   objects (top types)
+   0       REBEL        1     0        100    -                        100@F0          62 (SQUAD_REBEL_TROOPER:30,REBEL_TROOPER_TEAM:6,REBEL_BUILD_PAD:5,R_GROUND_TURBOLASER_TOWER:2,R_GROUND_TURBOLASER_TOWER_BUILD_PAD:2)
+   1       EMPIRE       0     0        100    -                        100@F0          66 (SQUAD_STORMTROOPER:36,EMPIRE_BUILD_PAD:5,STORMTROOPER_TEAM:4,E_GROUND_TURBOLASER_TOWER:2,E_GROUND_TURBOLASER_TOWER_BUILD_PAD:2)
+   2       PIRATES      0     0        0      -                        -               -
+   3       NEUTRAL      0     1        100    -                        100@F0          748 (PROP_BUSHES_TAN04:153,PROP_ROCKS_CLUSTER02:118,PROP_URBAN_HALFWALL_B:112,PROP_BUSHES_GREEN08:93,PROP_BUSHES_GREEN09:57)
+   4       HOSTILE      0     0        0      -                        -               -
+   5       SARLACC      0     0        0      -                        -               -
+   6       HUTTS        0     0        0      -                        -               -
+   reinforcement points (first sight owner @ frame -> changes):
+     obj 81784  REINFORCEMENT_POINT                      cap 100  at (1188, 1011): owner 3 @F0
+     obj 161285 REINFORCEMENT_POINT_REBEL                cap 100  at (4650, 1850): owner 0 @F0
+     obj 161311 REINFORCEMENT_POINT_EMPIRE               cap 100  at (2180, 4465): owner 1 @F0
+   answers (skirmish: every playing side):
+     player 0 (REBEL, human): 1 reinforcement point(s) owned at first sight (REINFORCEMENT_POINT_REBEL @F0); first frame owning one: 0
+       F=0      +0x404=100  held capacity=100  -> Base_Population_Capacity = +0x404 - held = 0    (skirmish cap = min(+0x404, unit-cap curve 10))
+       F=30     +0x404=100  held capacity=100  -> Base_Population_Capacity = +0x404 - held = 0    (skirmish cap = min(+0x404, unit-cap curve 10))
+       F=300    +0x404=100  held capacity=100  -> Base_Population_Capacity = +0x404 - held = 0    (skirmish cap = min(+0x404, unit-cap curve 10))
+     player 1 (EMPIRE): 1 reinforcement point(s) owned at first sight (REINFORCEMENT_POINT_EMPIRE @F0); first frame owning one: 0
+       F=0      +0x404=100  held capacity=100  -> Base_Population_Capacity = +0x404 - held = 0    (skirmish cap = min(+0x404, unit-cap curve 10))
+       F=30     +0x404=100  held capacity=100  -> Base_Population_Capacity = +0x404 - held = 0    (skirmish cap = min(+0x404, unit-cap curve 10))
+       F=300    +0x404=100  held capacity=100  -> Base_Population_Capacity = +0x404 - held = 0    (skirmish cap = min(+0x404, unit-cap curve 10))
+
+-- land battle 7: campaign battle (game_type=0, stack=2), first seen at mode frame 0
+   player  faction      human neutral  +0x404 first -> changes           held cap first   objects (top types)
+   0       REBEL        0     0        0      -                        0@F0            5 (DESERT_CIVILIAN_SPAWN_HOUSE_REBEL:4,JAWA_SANDCRAWLER:1)
+   1       EMPIRE       0     0        0      -                        0@F0            75 (SQUAD_STORMTROOPER:54,EMPIRE_WALL:9,STORMTROOPER_TEAM:6,EMPIRE_WALL_CORNER:4,E_GROUND_BARRACKS:1)
+   2       PIRATES      0     0        0      -                        0@F0            2 (PIRATE_COMMAND_CENTER_POSITION:1,PIRATE_SHIELD_STRUCTURE_POSITION:1)
+   3       NEUTRAL      0     1        0      F0:0->6                  6@F0            323 (PROP_ROCK_CLUSTER_02:128,PROP_TATOOINE_TREE_ALIEN_BIG:57,PROP_TATOOINE_TREE_ALIEN_SML:25,PROP_TATOOINE_ROCKFORM01:18,PROP_MOISTURECOLLECTOR:14)
+   4       HOSTILE      0     0        0      -                        -               -
+   5       SARLACC      0     0        0      -                        -               -
+   6       UNDERWORLD   1     0        0      F0:0->4                  4@F0            16 (UNDERWORLD_MERC:12,UNDERWORLD_MERC_TEAM:3,REINFORCEMENT_POINT_PLUS4_CAP:1)
+   7       HUTTS        0     0        0      -                        -               -
+   reinforcement points (first sight owner @ frame -> changes):
+     obj 34284  REINFORCEMENT_POINT_PLUS3_CAP            cap 3    at (780, 1436): owner 3 @F0
+     obj 34285  REINFORCEMENT_POINT_PLUS3_CAP            cap 3    at (2945, 2315): owner 3 @F0
+     obj 34286  REINFORCEMENT_POINT_PLUS4_CAP            cap 4    at (1765, 712): owner 6 @F0
+   answers (campaign: every playing side; the attacker is the one holding its landing point at first sight):
+     player 0 (REBEL): 0 reinforcement point(s) owned at first sight; first frame owning one: None
+       F=0      +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+       F=30     +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+       F=300    +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+     player 1 (EMPIRE): 0 reinforcement point(s) owned at first sight; first frame owning one: None
+       F=0      +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+       F=30     +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+       F=300    +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+     player 2 (PIRATES): 0 reinforcement point(s) owned at first sight; first frame owning one: None
+       F=0      +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+       F=30     +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+       F=300    +0x404=0    held capacity=0    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 0
+     player 6 (UNDERWORLD, human): 1 reinforcement point(s) owned at first sight (REINFORCEMENT_POINT_PLUS4_CAP @F0); first frame owning one: 0
+       F=0      +0x404=4    held capacity=4    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 4
+       F=30     +0x404=4    held capacity=4    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 4
+       F=300    +0x404=4    held capacity=4    -> Base_Population_Capacity = +0x404 - held = 0    effective land cap min(10, +0x404) = 4
