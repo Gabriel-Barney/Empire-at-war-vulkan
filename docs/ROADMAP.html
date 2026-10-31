@@ -24,12 +24,8 @@
   --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
 }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #11141c; --surface: #191d28; --line: #2c3242; --fg: #e6e8ef; --muted: #9aa1b5; --accent: #f0a23b; --edge: #6d7690;
-  --ok: #4fc28a; --bad: #ef8b84;
-  --s-next: #4fc28a; --s-partly: #e5a83a; --s-spec: #a891f0; --s-open: #6aa6ec; --s-probe: #4cc6cc; --s-gab: #ec7c9a; --s-big: #d9a457; --s-done: #9aa4b2; --s-out: #6b707b;
-  --chip-bg: #222736; --lane: #151925; --table: #0d1017; --on-accent: #1a1204; --on-pill: #11141c; --bn: #ff6b5e; color-scheme: dark } }
-:root[data-theme="dark"] {
+/* Dark is the default (Gabriel, 2026-10-31); a host can still force light with data-theme="light". */
+:root:not([data-theme="light"]), :root[data-theme="dark"] {
   --bg: #11141c; --surface: #191d28; --line: #2c3242; --fg: #e6e8ef; --muted: #9aa1b5; --accent: #f0a23b; --edge: #6d7690;
   --ok: #4fc28a; --bad: #ef8b84;
   --s-next: #4fc28a; --s-partly: #e5a83a; --s-spec: #a891f0; --s-open: #6aa6ec; --s-probe: #4cc6cc; --s-gab: #ec7c9a; --s-big: #d9a457; --s-done: #9aa4b2; --s-out: #6b707b;
@@ -37,6 +33,7 @@
 
 html, body { height: 100%; }
 body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; overflow: hidden; }
+[hidden] { display: none !important; }
 h1, h2, h3 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; margin: 0; letter-spacing: .01em; }
 h2 { font-size: 18px; }
 code { font-family: var(--font-mono); font-size: .9em; }
@@ -67,10 +64,11 @@ h1 { font-size: 21px; line-height: 1.2; }
 .mile.fin b { color: var(--ok); }
 .live { display: flex; flex-wrap: wrap; gap: 0 12px; }
 
-.main { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 36vw, 620px); min-height: 0; }
+.main { display: grid; grid-template-columns: clamp(230px, 20vw, 340px) minmax(0, 1fr) clamp(340px, 30vw, 560px); grid-template-areas: "side chart panel"; min-height: 0; }
+.side { grid-area: side; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; display: grid; gap: 14px; align-content: start; padding-block: 14px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 12px; background: var(--bg); border-right: 1px solid var(--line); overscroll-behavior: contain; }
 
 /* Chart pane: stage strip above, chart table below. */
-.chartpane { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+.chartpane { grid-area: chart; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
 .route { display: flex; gap: 4px; overflow-x: auto; padding-block: 6px; padding-left: max(8px, env(safe-area-inset-left, 0px)); padding-right: 8px; background: var(--surface); border-bottom: 1px solid var(--line); scrollbar-width: thin; }
 .stop { flex: 1 0 104px; min-width: 0; text-align: left; background: none; border: 1px solid transparent; border-radius: 5px; padding: 3px 7px; display: grid; gap: 2px; align-content: start; cursor: pointer; opacity: .62; }
 .stop:hover { background: var(--chip-bg); opacity: 1; }
@@ -136,7 +134,7 @@ h1 { font-size: 21px; line-height: 1.2; }
 .key hr { width: 100%; border: 0; border-top: 1px solid var(--line); margin: 5px 0; }
 
 /* Panel. */
-.panel { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--bg); border-left: 1px solid var(--line); }
+.panel { grid-area: panel; display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--bg); border-left: 1px solid var(--line); }
 .tabs { display: flex; gap: 2px; overflow-x: auto; padding-left: 8px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .tab { background: none; border: 0; border-bottom: 3px solid transparent; padding: 8px 12px 6px; font-family: var(--font-display); font-weight: 600; font-size: 14.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .tab:hover { color: var(--fg); }
@@ -179,7 +177,8 @@ h1 { font-size: 21px; line-height: 1.2; }
 .exit b { font-weight: 600; color: var(--fg); }
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.toolbar input[type=search] { flex: 1 1 100%; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); font: inherit; }
+.psearch { padding: 8px 8px 8px 16px; padding-right: max(8px, env(safe-area-inset-right, 0px)); background: var(--surface); border-bottom: 1px solid var(--line); }
+.psearch input[type=search] { display: block; width: 100%; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
 .chip { border: 1px solid var(--line); background: var(--chip-bg); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; }
 .chip[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .chip.bn { border-color: var(--bn); color: var(--bn); background: color-mix(in srgb, var(--bn) 8%, var(--chip-bg)); }
@@ -259,8 +258,11 @@ pre.code { overflow-x: auto; background: var(--lane); border: 1px solid var(--li
 
 @media (max-width: 1240px) { .top .miles { display: none; } }
 /* Phone and narrow window: the chart stays pinned on top, the panel scrolls under it. */
+@media (max-width: 900px) {
+  .main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 38%) auto minmax(0, 1fr); grid-template-areas: "chart" "side" "panel"; }
+  .side { max-height: 22vh; border-right: 0; border-top: 1px solid var(--line); padding-block: 10px 14px; padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+}
 @media (max-width: 760px) {
-  .main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 50%) minmax(0, 1fr); }
   .panel { border-left: 0; border-top: 1px solid var(--line); }
   .scroll { padding-left: max(16px, env(safe-area-inset-left, 0px)); }
   .eyebrow { display: none; }
@@ -289,6 +291,20 @@ pre.code { overflow-x: auto; background: var(--lane); border: 1px solid var(--li
   </header>
 
   <div class="main">
+    <aside class="side" id="side" aria-label="Where to start">
+      <div class="card go">
+        <h2>Start here</h2>
+        <p class="small">Open work with nothing in front of it, in plan order. Select one, or any box on the chart.</p>
+        <ul class="nextlist" id="nextlist"></ul>
+        <button class="chip morefin" type="button" id="seeReady" hidden></button>
+      </div>
+      <div class="card gab">
+        <h2>Needs Gabriel</h2>
+        <p class="small">Steps only Gabriel can do. Everything else runs without waiting.</p>
+        <ul class="nextlist" id="gablist"></ul>
+      </div>
+    </aside>
+
     <div class="chartpane">
       <nav class="route" id="route" aria-label="Stages in order"></nav>
       <div class="table" id="chart">
@@ -305,24 +321,16 @@ pre.code { overflow-x: auto; background: var(--lane); border: 1px solid var(--li
     </div>
 
     <aside class="panel" id="panel" aria-label="Task groups">
+      <div class="psearch">
+        <input type="search" id="q" placeholder="Search groups, tasks, modules" aria-label="Search task groups">
+      </div>
       <div class="tabs" role="tablist" aria-label="Panel views">
-        <button class="tab" role="tab" type="button" id="tab-now" data-v="now">Start here</button>
+        <button class="tab" role="tab" type="button" id="tab-now" data-v="now">Overview</button>
         <button class="tab" role="tab" type="button" id="tab-plan" data-v="plan">All groups</button>
         <button class="tab" role="tab" type="button" id="tab-changes" data-v="changes">Changes</button>
       </div>
       <div class="scroll" id="scroll">
         <section class="view" id="v-now">
-          <div class="card go">
-            <h2>Start here</h2>
-            <p class="small">Open work with nothing in front of it, in plan order. Select one, or any box on the chart.</p>
-            <ul class="nextlist" id="nextlist"></ul>
-            <button class="chip morefin" type="button" id="seeReady" hidden></button>
-          </div>
-          <div class="card gab">
-            <h2>Needs Gabriel</h2>
-            <p class="small">Steps only Gabriel can do. Everything else runs without waiting.</p>
-            <ul class="nextlist" id="gablist"></ul>
-          </div>
           <div class="miles2" id="miles2" aria-label="Projected milestone dates"></div>
           <div class="about">
             <p class="small" id="lede">Loading the shared roadmap…</p>
@@ -336,7 +344,6 @@ pre.code { overflow-x: auto; background: var(--lane); border: 1px solid var(--li
 
         <section class="view" id="v-plan" hidden>
           <div class="toolbar">
-            <input type="search" id="q" placeholder="Search groups, tasks, modules" aria-label="Search task groups">
             <button class="chip" type="button" id="fReady">Ready now</button>
             <button class="chip" type="button" id="fGab">Needs Gabriel</button>
             <button class="chip bn" type="button" id="fBn">Bottlenecks</button>
@@ -966,7 +973,7 @@ function flashCard(id) {
 document.querySelectorAll(".tab").forEach(t => t.onclick = () => { V.sel = null; V.hot = null; if (t.dataset.v === "plan") F.stage = null; if (V.view === t.dataset.v) { renderAll(); return; } setView(t.dataset.v); renderHead(stages()); });
 
 /* All panel clicks and edits arrive here, so re-rendering a view never loses a handler. */
-$("panel").addEventListener("click", e => {
+[$("panel"), $("side")].forEach(host => host.addEventListener("click", e => {
   const c = sel => e.target.closest(sel);
   let b;
   if ((b = c(".tk[data-k]"))) { toggleTask(b.dataset.item, b.dataset.k); return; }
@@ -978,19 +985,21 @@ $("panel").addEventListener("click", e => {
   if ((b = c("[data-toggle]"))) { const id = b.dataset.toggle; V.openGroups.has(id) ? V.openGroups.delete(id) : V.openGroups.add(id); renderPanel(stages()); refocus("g-" + id); return; }
   if ((b = c("[data-stage]"))) { const id = b.dataset.stage; V.stageToggled.set(id, b.getAttribute("aria-expanded") !== "true"); renderPanel(stages()); refocus("s-" + id); return; }
   if ((b = c("[data-act=addtask]"))) addTask(b.dataset.item);
-});
+}));
 $("panel").addEventListener("change", e => {
   const t = e.target;
   if (t.matches("[data-act=status]")) setStatus(t.dataset.item, t.value);
   if (t.matches("[data-act=nodestatus]")) { const n = S.nodes[V.sel], id = V.sel; if (n) write(() => db.doc("nodes/" + id).update({ status: t.value }), `Box "${n.label}" set to ${stOf(t.value).label}`); }
 });
 $("panel").addEventListener("toggle", e => { const d = e.target; if (d.matches && d.matches("details.edit")) { d.open ? V.openEdit.add(d.dataset.id) : V.openEdit.delete(d.dataset.id); } }, true);
-$("panel").addEventListener("mouseover", e => {
-  const b = e.target.closest("[data-go], [data-box]");
-  const id = b ? (b.dataset.box || (S.items[b.dataset.go] && S.items[b.dataset.go].node)) : null;
-  if (id !== V.hot) { V.hot = id || null; lightChart(); }
+[$("panel"), $("side")].forEach(host => {
+  host.addEventListener("mouseover", e => {
+    const b = e.target.closest("[data-go], [data-box]");
+    const id = b ? (b.dataset.box || (S.items[b.dataset.go] && S.items[b.dataset.go].node)) : null;
+    if (id !== V.hot) { V.hot = id || null; lightChart(); }
+  });
+  host.addEventListener("mouseleave", () => { if (V.hot) { V.hot = null; lightChart(); } });
 });
-$("panel").addEventListener("mouseleave", () => { if (V.hot) { V.hot = null; lightChart(); } });
 
 /* ---------- writes ---------- */
 async function write(fn, text) {
@@ -1037,10 +1046,10 @@ function renderLog() {
   }).join("") : `<li><span></span><span>No builds recorded yet.</span></li>`;
 }
 function renderPanel(sts) {
+  renderNow(sts);
   if (V.view === "box") renderBox(sts);
   else if (V.view === "plan") renderPlan(sts);
   else if (V.view === "changes") renderLog();
-  else renderNow(sts);
 }
 function renderAll() {
   const a = document.activeElement;
@@ -1061,7 +1070,11 @@ function openHash() {
 }
 function schedule() { if (!raf) raf = setTimeout(() => { raf = 0; renderAll(); }, 30); }
 $("panel").addEventListener("focusout", () => { setTimeout(() => { if (pendingRender) renderAll(); }, 0); });
-$("q").addEventListener("input", e => { F.q = e.target.value; renderPlan(stages()); lightChart(); });
+$("q").addEventListener("input", e => {
+  F.q = e.target.value;
+  if (V.view !== "plan") { V.sel = null; V.hot = null; F.stage = null; setView("plan"); renderHead(stages()); return; }
+  renderPlan(stages()); lightChart();
+});
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   if (!$("key").hidden) { $("key").hidden = true; $("cKey").setAttribute("aria-expanded", "false"); return; }
