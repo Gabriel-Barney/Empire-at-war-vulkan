@@ -820,6 +820,7 @@ private:
     void service_damage_tracking();
     void add_participant(objects::ObjectHandle g, int32_t owner, uint8_t side, bool reserve, bool starbase, bool structure);
     void deploy(TacticalMode& mode, uint32_t participant, SimRng& rng);
+    void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);

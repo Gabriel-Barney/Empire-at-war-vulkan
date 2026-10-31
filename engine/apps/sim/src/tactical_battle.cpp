@@ -1,6 +1,7 @@
 #include "alamo/sim/tactical_battle.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include "alamo/core/dmath.hpp"
@@ -626,6 +627,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     bt_place_forces(mode, rng);  // §3.2: starbase, structures, defender / attacker start forces
     bt_landing_points(mode);     // §3.3: the attacker's map-owned reinforcement points
     mode.finish_load(pf);
+    space_obstacles_sync(mode);  // refixf t02: the starbase / structures as space static entries (MOVEMENT §2.2)
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants (land)
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
 }
@@ -800,6 +802,37 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
     }
     for (size_t k = 0; k < groups.size(); ++k)  // OI abilities: + the container's SAP-init draws
         abilities_->add_container(containers_[c0 + k].id, desc_of(team_beh), P.owner, groups[k], frame_, &rng);
+}
+
+// refixf t02 (MOVEMENT §2.2 [H]): SpaceObstacleBehaviorClass inserts its object into the space occupancy as a static entry on
+// attach and removes it on detach. Map placements enter through mv::space_from_map (ids -(placement index + 1)); battle units
+// whose type has SPACE_OBSTACLE (the starbase, space structures, upgraded / built stations) enter here under their object id,
+// so the destination search (§2.4) and the planner keep ships off them. Before, the starbase was no obstacle: an Attack_Move /
+// Move_To on it (one order per task-force unit) sent each ship to its exact centre, the ships stacked on one point and
+// Project_By_Unit_Range gave nil (foc-station seeds 1 and 4). [port] attach = the first sync (end of setup, end of each tick)
+// with the unit live, detach = the first sync after it died or retreated; footprint as space_from_map (radius) at the attach
+// position + Space_Obstacle_Offset rotated by the facing [M: rotation sense]; units adopted from the map keep space_from_map's
+// entry (not added twice).
+void TacticalBattle::space_obstacles_sync(const TacticalMode& mode) {
+    if (!space_ || !movement_) return;
+    mv::SpaceOccupancy& occ = movement_->space();
+    const objects::ObjectStore& st = mode.primary();
+    const objects::GameObjectTypes& types = catalog_->types();
+    for (const Unit& u : units_) {
+        if (!u.alive || u.retreated || !st.alive(u.h)) {
+            occ.remove_static(u.id);
+            continue;
+        }
+        if (parts_[u.participant].map || occ.has_static(u.id)) continue;
+        float r = 0.0f;
+        uint32_t bits = 0;
+        if (!mv::space_obstacle_footprint(types, u.type, r, bits)) continue;
+        const Vec3 p = st.position(u.h), f = st.facing(u.h);
+        const std::array<float, 4> off = types.get_vec(static_cast<objects::TypeIndex>(u.type), "Space_Obstacle_Offset");
+        const float len = dmath::sqrt(f.x * f.x + f.y * f.y);
+        const float fx = len > 0.0f ? f.x / len : 1.0f, fy = len > 0.0f ? f.y / len : 0.0f;
+        occ.add_static(u.id, {p.x + off[0] * fx - off[1] * fy, p.y + off[0] * fy + off[1] * fx}, r, bits);
+    }
 }
 
 // ---- tick ----------------------------------------------------------------------------------------------------------
@@ -2112,6 +2145,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     stats_.hits = combat_->stats().hits;
     // 6. victory.
     check_victory();
+    space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units
     hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
     profile::lap("tac.victory");
 }
