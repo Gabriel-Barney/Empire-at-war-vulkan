@@ -658,7 +658,7 @@ void App::build_encyclopedia(ui::HudDrawList& dl, const ui::HudCanvas& canvas) {
                 if (static_cast<uint32_t>(p.id) == object) type = p.type;
         }
     } else if (screen_ == Screen::Battle && bview_.active()) {
-        // HUD_GAPS §2.2: the hover pick of build_tactical_hud (bounding-sphere ray pick, reticle owner kept).
+        // HUD_GAPS §2.2: the hover pick of build_tactical_hud (the world pick, refixf t08; reticle owner kept).
         for (const ui::HudUnit& u : hud_units_)
             if (u.id == hover_ship_ && hover_ship_ != 0 && u.type < data_.types.size()) {
                 object = u.id;
