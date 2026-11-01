@@ -746,6 +746,7 @@ and `Converted_To_Enemy_Die_Time_Seconds` (+0x234c) > 0: d = max hull / that tim
 d + draw > 0, `Apply_Hull_Damage(kind 0x11, d + draw)`.
 
 ### 4.11 Lobbed and circular lead [M]
+The lob solver itself (0x54a6f0) is closed form and does not use this root finder: LOB_SOLVER.md.
 Already in TACTICAL §3.1 step 9. Implementation detail: the circular solver (0x399450) calls a generic 1-D root
 finder (0x7d68e0) on 0x3aba90 with bracket [0.1, 1000], tolerance 0.001, 15 iterations, passing its context
 through **globals** 0x140b2c380–0x140b2c394. The port must pass that context explicitly (thread safety). The

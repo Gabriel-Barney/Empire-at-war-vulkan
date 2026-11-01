@@ -424,7 +424,8 @@ Damage_Percentage +0x188, Damage_Interval_In_Secs +0x18c) [H]
 Grenade_Type +0x1b0, Toss_Anim +0x1c0, Spawn_Frame +0x1c4, Spawn_Bone +0x1c8, Explode_Timer +0x1e8) [H]
 - Accepts: enemy, filter, target type +0x41, alive, model. Apply: with Requires_Direct_Player_Command and no
   direct command, AI / non-human users refused (0x2814d0 / player +0x62); in range; Grenade_Type is a lobbed
-  projectile (type +0x1fe8 = 3) with a solution (0x54a6f0); unit ability 22's counter ≤ 0. Face, stop, lock
+  projectile (type +0x1fe8 = 3) with a solution (0x54a6f0, unit position → target position, no z adjust;
+  LOB_SOLVER.md §3.4); unit ability 22's counter ≤ 0. Face, stop, lock
   (0x3a8e50 1), throw pending (+0x17c), store target, suspend targeting.
 - Update: once not moving/turning, toss animation (−1 = at once); at frame ≥ Spawn_Frame throw once
   (0x700a70): spawn from the bone through the projectile spawner (**one id**), arm its BOMB with the timer,
@@ -546,6 +547,9 @@ min range"). `Scan_Player` 0x5662b0 accepts a candidate when slot 44 is true **a
 container contribution through 0x4160a0 can also accept).
 - **Slot 44:** current weapon's projectile (slot 42, weapon set obj +0x324) of `Projectile_Category` 3
   (grenade) → lob solver 0x54a6f0; otherwise slot 43 (0x5673b0).
+  **Spec of the solver, the grenade launch and flight: [LOB_SOLVER.md](LOB_SOLVER.md)** (S8 t03, 2026-11-01): in range ⇔ a
+  closed-form high arc from the attacker position to the target + `Ranged_Target_Z_Adjust` exists at `Max_Speed` under
+  G = gravity × lob mod; none of slot 43's R / E / redirect rules apply.
 - **Slot 43:** in range iff XY distance(attacker, aim point) ≤ R + E; zero offset counts as in range.
   - R = slot 40 `Get_Max_Attack_Range`; **override**: combatant pack ordered target (+0x148 / +0x150 ≠ 0)
     equal to the candidate or its container and a pending special ability → R = the ability's vfunc +0xd8
