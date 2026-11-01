@@ -290,6 +290,9 @@ void CombatSystem::order_attack(ObjectId attacker, ObjectId target, int32_t hard
     if (!u) return;
     u->ordered_target = target;
     u->ordered_hp = hardpoint;
+    u->locked = 0;
+    u->aim_target = kNoObject;  // refixf t06: the order re-aims the hardpoints
+    u->aim_hp = -1;
     u->auto_target = kNoObject;  // an order drops the auto target (0x565e50)
     u->target_score = 0.0f;
 }
@@ -297,7 +300,84 @@ void CombatSystem::clear_order(ObjectId attacker) {
     if (Unit* u = unit(attacker)) {
         u->ordered_target = kNoObject;
         u->ordered_hp = -1;
+        u->locked = 0;
     }
+}
+// ---- refixf t06: Attack_Move on an object (TACTICAL_COMBAT §2.8) ----
+void CombatSystem::set_attack_goal(ObjectId attacker, ObjectId target, int32_t hardpoint) {
+    if (Unit* u = unit(attacker)) {
+        u->goal_target = target;
+        u->goal_hp = target == kNoObject ? -1 : hardpoint;
+    }
+}
+ObjectId CombatSystem::attack_goal(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? u->goal_target : kNoObject;
+}
+ObjectId CombatSystem::weapon_aim(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? u->aim_target : kNoObject;
+}
+bool CombatSystem::order_locked(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u && u->ordered_target != kNoObject && u->locked != 0;
+}
+bool CombatSystem::ability_type_active(const Unit& u, int32_t type) const {
+    for (int s = 0; s < 2; ++s)
+        if (const UnitAbilityDesc* a = ability(u, s); a && u.ability_active[static_cast<size_t>(s)] && a->ability_type == type) return true;
+    return false;
+}
+bool CombatSystem::order_attack_issue(ObjectId attacker, ObjectId target, int32_t hardpoint) {
+    Unit* u = unit(attacker);
+    const Unit* t = unit(target);
+    if (!u || !live(t)) return false;
+    // C step 1: refusals.
+    if (!is_enemy(u->owner, t->owner)) return false;
+    if ((t->flags & kUnitStealthed) && !desc_of(*u).target_stealth_units && u->owner != t->owner) return false;
+    if (t->flags & kUnitGarrisoned) return false;
+    // Members without TEAM / TARGETING get no Order_Attack (0x739200 step 3): a unit with no weapon at all [port].
+    bool armed = desc_of(*u).weapon_projectile >= 0;
+    for (uint32_t i = 0; i < u->hp_count && !armed; ++i) armed = is_weapon(data_->hardpoints[hps_[u->hp_begin + i].desc].kind);
+    if (!armed && u->team == 0) return true;
+    const int32_t hp = hardpoint >= 0 && static_cast<uint32_t>(hardpoint) < t->hp_count ? hardpoint : -1;
+    const bool space = cfg_.mode == GameMode::Space;
+    const bool weapon_path = !(space && ability_type_active(*u, 5));  // space unless BARRAGE; land: ordered = 1
+    if (weapon_path && u->team == 0 && !ability_type_active(*u, 34)) {
+        // C step 2: lock released (slot 32(0): a locked target stays the current target, unlocked), the weapon hardpoints
+        // aim at the target; the unit's own target is untouched.
+        if (u->ordered_target != kNoObject && u->locked) {
+            u->auto_target = u->ordered_target;
+            u->target_score = 0.0f;
+            u->ordered_target = kNoObject;
+            u->ordered_hp = -1;
+            u->locked = 0;
+        }
+        u->aim_target = t->id;
+        u->aim_hp = hp;
+        return true;
+    }
+    // C step 3: the set path - Set_Target(target, hp, ordered 1, lock 1).
+    order_attack(attacker, target, hp);
+    u->locked = 1;
+    return true;
+}
+float CombatSystem::base_attack_range_of(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? base_attack_range(*u) : 0.0f;
+}
+float CombatSystem::min_attack_distance(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? desc_of(*u).min_attack_distance : 0.0f;
+}
+bool CombatSystem::inside_min_range(ObjectId attacker, ObjectId target) const {
+    const Unit* a = unit(attacker);
+    const Unit* t = unit(target);
+    if (!a || !t) return false;
+    const float mn = desc_of(*a).min_attack_distance;
+    if (!(mn > 0.0f)) return false;
+    float d = 0.0f, E = 0.0f;
+    range_geometry(*t, a->pos, d, E);
+    return d <= mn + E;
 }
 ObjectId CombatSystem::ordered_target(ObjectId id) const {
     const Unit* u = unit(id);
@@ -766,13 +846,59 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
     }
 }
 
+bool CombatSystem::lock_holds(const Unit& u, const Unit& t) const {
+    // §2.8 B "while locked" [H]: dropped when the target is garrisoned, stealthed for an attacker without
+    // Target_Stealth_Units, or hidden by fog for the attacker's player (0x35f470, force 1). Dying / dead: live().
+    // [port: the +0x3b4 test is not modelled.]
+    if (t.flags & kUnitGarrisoned) return false;
+    if ((t.flags & kUnitStealthed) && !desc_of(u).target_stealth_units) return false;
+    return !target_hidden(u.owner, t.id, true);
+}
+
+bool CombatSystem::promote_goal(Unit& u) {
+    // §2.8 B steps 2-6 [H]: Formation_Attack_Target(F, &hp, 0) -> 0x5680b0 -> slot 44 && !slot 45 -> Set_Target(t, hp,
+    // order 1, lock 1) and every weapon hardpoint HP_Set_Target (update_weapons pushes the current target each frame).
+    const Unit* t = unit(u.goal_target);
+    if (!live(t)) {  // the dead object's formation goal has become a position
+        u.goal_target = kNoObject;
+        u.goal_hp = -1;
+        return false;
+    }
+    if (t == &u || !is_enemy(u.owner, t->owner)) return false;  // hostile to the unit's owner (relation table == 1)
+    if (t->flags & (kUnitSkipTargeting | kUnitDead | kUnitGarrisoned)) return false;  // 0x5680b0 [M: +0x361 / +0x38e]
+    if (!desc_of(*t).is_valid_target) return false;
+    float d = 0.0f, E = 0.0f;
+    range_geometry(*t, u.pos, d, E);
+    const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
+    if (!(d <= range + E)) return false;  // slot 44
+    const float mn = desc_of(u).min_attack_distance;
+    if (mn > 0.0f && d <= mn + E) return false;  // slot 45
+    int32_t hp = -1;
+    if (u.goal_hp >= 0 && static_cast<uint32_t>(u.goal_hp) < t->hp_count && !hps_[t->hp_begin + static_cast<uint32_t>(u.goal_hp)].destroyed)
+        hp = u.goal_hp;
+    u.ordered_target = t->id;
+    u.ordered_hp = hp;
+    u.locked = 1;
+    u.auto_target = kNoObject;  // replaces any auto target
+    u.target_score = 0.0f;
+    u.aim_target = kNoObject;
+    u.aim_hp = -1;
+    return true;
+}
+
 void CombatSystem::decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng) {
+    bool dropped = false;
     if (u.ordered_target != kNoObject) {
         const Unit* o = unit(u.ordered_target);
-        if (live(o) && is_enemy(u.owner, o->owner)) return;
+        if (live(o) && is_enemy(u.owner, o->owner) && (!u.locked || lock_holds(u, *o))) return;
         u.ordered_target = kNoObject;  // finished order cleared (0x565de0)
         u.ordered_hp = -1;
+        u.locked = 0;
+        dropped = true;
     }
+    // refixf t06 (TACTICAL_COMBAT §2.8 B): the formation's attack goal becomes the locked target inside weapon range,
+    // before the scan; a promotion skips the scan of this service. [port: not in the service that dropped a target.]
+    if (!dropped && u.goal_target != kNoObject && promote_goal(u)) return;
     if (!u.scan_due) return;
     u.next_scan = next_scan_frame(frame, cfg_.fps, rng);  // synced draw 1
     ++stats_.scans;
@@ -815,6 +941,8 @@ done:
     if (best) {
         u.auto_target = best->id;
         u.target_score = best->score;
+        u.aim_target = kNoObject;  // refixf t06: Order_Attack(unit, pick, ordered 0) re-aims the hardpoints (§2.8 C)
+        u.aim_hp = -1;
         u.acquired = 1;  // OI abilities: Issue_Auto_Target for the acquired target (the autofire driver, abilities)
     } else {
         u.auto_target = kNoObject;
@@ -903,7 +1031,18 @@ ObjectId CombatSystem::current_target(ObjectId id) const {
 }
 
 void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
-    const ObjectId tgt = current_target(u.id);
+    ObjectId tgt = current_target(u.id);
+    // refixf t06 (TACTICAL_COMBAT §2.8 C step 2): a path-A aim holds the weapon hardpoints until the next scan pick, a lock
+    // or another order replaces it [port: kept while the aimed object is a live enemy].
+    if (u.aim_target != kNoObject) {
+        const Unit* a = unit(u.aim_target);
+        if (!live(a) || !is_enemy(u.owner, a->owner)) {
+            u.aim_target = kNoObject;
+            u.aim_hp = -1;
+        } else if (u.ordered_target == kNoObject) {
+            tgt = u.aim_target;
+        }
+    }
     const Unit* t = unit(tgt);
     int32_t sub = -1;
     if (live(t)) {
@@ -911,6 +1050,9 @@ void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
         if (tgt == u.ordered_target && u.ordered_hp >= 0 && static_cast<uint32_t>(u.ordered_hp) < t->hp_count &&
             !hps_[t->hp_begin + static_cast<uint32_t>(u.ordered_hp)].destroyed) {
             sub = u.ordered_hp;
+        } else if (tgt == u.aim_target && u.aim_hp >= 0 && static_cast<uint32_t>(u.aim_hp) < t->hp_count &&
+                   !hps_[t->hp_begin + static_cast<uint32_t>(u.aim_hp)].destroyed) {
+            sub = u.aim_hp;
         } else {
             sub = choose_target_hardpoint(u, *t);
         }
@@ -2897,6 +3039,9 @@ void CombatSystem::clear_targets(ObjectId id) {
     u->auto_target = kNoObject;
     u->ordered_target = kNoObject;
     u->ordered_hp = -1;
+    u->locked = 0;
+    u->aim_target = kNoObject;  // refixf t06
+    u->aim_hp = -1;
     u->target_score = 0.0f;
     for (uint32_t i = 0; i < u->hp_count; ++i) {  // 0x38f840 per hardpoint
         Hardpoint& h = hps_[u->hp_begin + i];
@@ -3416,6 +3561,14 @@ void CombatSystem::hash_extended(StateHasher& h) const {
         if (u.weapon_index != 0) {  // OI abilities: swapped weapons only (format unchanged otherwise)
             h.u8(0x24);
             h.i32(u.weapon_index);
+        }
+        if (u.goal_target != kNoObject || u.aim_target != kNoObject || u.locked) {  // refixf t06 (format unchanged otherwise)
+            h.u8(0x28);
+            h.i32(u.goal_target);
+            h.i32(u.goal_hp);
+            h.i32(u.aim_target);
+            h.i32(u.aim_hp);
+            h.u8(u.locked);
         }
         if (u.infect_attached) {  // refix t02: INFECTION behaviour state (format unchanged without one)
             h.u8(0x54);

@@ -980,8 +980,10 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
     o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
     if (std::isfinite(facing_deg)) o.facing_deg = facing_deg;
     movement_->move(o, rng, frame_);
-    if (!attack_move)
-        for (const objects::ObjectId id : o.units) combat_->clear_order(id);
+    for (const objects::ObjectId id : o.units) {
+        if (!attack_move) combat_->clear_order(id);
+        combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: a position block has no attack goal (§2.8)
+    }
 }
 
 // Attack rule of BattleAi::execute_order: order_attack, then a move into 70 % of max(range, 100) beyond 80 %.
@@ -1131,7 +1133,10 @@ cmd::RejectReason TacticalBattle::order_stop(TacticalMode& mode, uint8_t player,
     for (const Unit* u : own) {
         all.push_back(u->id);
         if (u->movable) movers.push_back(u->id);
-        if (combat_->has_unit(u->id)) combat_->clear_order(u->id);
+        if (combat_->has_unit(u->id)) {
+            combat_->clear_order(u->id);
+            combat_->set_attack_goal(u->id, tc::kNoObject);  // refixf t06
+        }
     }
     clear_queues(all);  // [port: Gabriel] Stop clears the queue
     if (!movers.empty()) movement_->stop(movers);

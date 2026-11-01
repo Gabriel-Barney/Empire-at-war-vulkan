@@ -43,6 +43,8 @@ struct TacticalAiConstants {
     float allow_reinforcement_percentage = 0.0f;   // Allow_Reinforcement_Percentage_Normalized (+0x10CC)
     // S10 AI land reinforcement (TACTICAL_GAPS §4.2): land drops only near allied reinforcement points.
     bool use_reinforcement_points = true;          // Use_Reinforcement_Points (+0x118a0), True in FoC and TR
+    // refixf t06 (TACTICAL_GAPS §4.2 space drop validity): the occupancy sweep length behind a space drop point.
+    float space_reinforcement_collision_check_distance = 200.0f;  // Space_Reinforcement_Collision_Check_Distance (FoC 200, TR 150)
 
     // Reads the tags above (missing tags keep the current value).
     void load(const data::GameConstants& gc);

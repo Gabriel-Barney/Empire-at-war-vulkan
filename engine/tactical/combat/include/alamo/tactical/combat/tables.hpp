@@ -85,10 +85,9 @@ float priority_score(const PrioritySet& set, int32_t target_type, uint64_t targe
 // listed in Hard_Point_Exclusions, otherwise 1e18.
 float hardpoint_rank(const PrioritySet& set, int32_t hardpoint_type);
 
-// HardPointType name -> value (HardpointKind order: Engine 0 ... Dummy_Art 12), -1 if unknown. Case-insensitive; the
-// "HARD_POINT_" prefix is optional [M: the HardPoint XML <Type> uses HARD_POINT_SHIELD_GENERATOR, the priority sets, the
-// perception equations (HardPointType[Shield_Generator]) and the space plans' Attack_Target use the short form; the
-// converter's name table was not traced, both forms are accepted].
+// HardPointType name -> value (HardpointKind order: Engine 0 ... Dummy_Art 12), -1 if unknown (TACTICAL_COMBAT §2.4,
+// refixf t06 [H]: EnumConversionClass<HardPointType>). Short names only (Engine, Shield_Generator, ..., Dummy_Art; value
+// 11 has no name), trimmed, case-insensitive. A HARD_POINT_* token (the hardpoint XML <Type> spelling) does not resolve.
 int32_t hardpoint_type_value(std::string_view name);
 
 // Loader for a <Targeting_Priority_Sets> document root. Names in Attack_Priorities are resolved as

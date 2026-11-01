@@ -24,6 +24,7 @@
 #include "alamo/ai/tactical/target_list.hpp"
 #include "alamo/ai/tactical/zone_reachability.hpp"
 #include "alamo/commands/pipeline.hpp"
+#include "alamo/core/dmath.hpp"  // refixf t06: space reinforcement ring directions
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: crc32 (perception '#' reseed)
 #include "alamo/core/sim_crc.hpp"
@@ -57,12 +58,12 @@ constexpr size_t kTfGroupOrderMaxUnits = 4096;       // [port] ids in one group 
 
 int32_t target_id(int32_t player, int32_t slot) { return (player << kSlotBits) | slot; }
 
+// EnumConversionClass<HardPointType> (TACTICAL_COMBAT §2.4, refixf t06 [H]): the short names only, value = index; 11 has
+// no name. Lookups trim and upper-case the token (case-insensitive); a HARD_POINT_* token does not resolve.
 const char* kHardPointTypeNames[] = {
-    "HARD_POINT_ENGINE",          "HARD_POINT_SHIELD_GENERATOR", "HARD_POINT_GRAVITY_WELL",
-    "HARD_POINT_FIGHTER_BAY",     "HARD_POINT_TRACTOR_BEAM",     "HARD_POINT_WEAPON_LASER",
-    "HARD_POINT_WEAPON_MISSILE",  "HARD_POINT_WEAPON_TORPEDO",   "HARD_POINT_WEAPON_ION_CANNON",
-    "HARD_POINT_WEAPON_MASS_DRIVER", "HARD_POINT_WEAPON_SPECIAL", "HARD_POINT_ENABLE_SPECIAL_ABILITY",
-    "HARD_POINT_DUMMY_ART",
+    "ENGINE",         "SHIELD_GENERATOR", "GRAVITY_WELL",      "FIGHTER_BAY",        "TRACTOR_BEAM",
+    "WEAPON_LASER",   "WEAPON_MISSILE",   "WEAPON_TORPEDO",    "WEAPON_ION_CANNON",  "WEAPON_MASS_DRIVER",
+    "WEAPON_SPECIAL", "",                 "DUMMY_ART",
 };
 
 void put_u32(uint8_t* p, uint32_t v) {
@@ -119,7 +120,7 @@ struct TfRec {
     bool had_units = false, no_units_sent = false;
 };
 
-enum class StatusKind : uint8_t { Done, Failed, ProduceForce, Move, AttackTarget, Guard };
+enum class StatusKind : uint8_t { Done, Failed, ProduceForce, Move, AttackTarget, Guard, SpaceReinforce };
 
 struct StatusRec {
     int32_t id = -1;
@@ -131,7 +132,12 @@ struct StatusRec {
     int64_t started = 0, last_order = 0;
     ObjectHandle unit{};  // L1 final: a one-unit Move status (GameObjectWrapper.Explore_Area), tf = -1
     int32_t target = -1;  // object id (attack / guard)
-    Vec3f dest;
+    Vec3f dest;           // SpaceReinforce: the ring centre T (+0x68, z = 0)
+    // refixf t06 - SpaceReinforceBlockStatus (AI_TACTICAL §7.4): timeout frame (+0x74, -1 none), ring radius R (+0x7c),
+    // T inside a non-allied prevention radius at creation (R resets to 1000, else 0).
+    int64_t timeout = -1;
+    float ring = 0.0f;
+    bool prevent = false;
 };
 
 struct PlanInstance {
@@ -383,6 +389,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     void opportunity_events(const std::vector<OpportunityTargetEvent>& events);  // STRATEGIC_GAPS §5.3
     void service_statuses(int32_t player);
     bool step_status(StatusRec& s);
+    void space_reinforce_poll(StatusRec& s);  // refixf t06: SpaceReinforceBlockStatus IsFinished (AI_TACTICAL §7.4)
     void claim_force(TfRec& t);
     // A new object of a type a task force of its owner is producing (TfRec::producing, task forces in id order, first
     // entry of the type) joins that task force instead of the free store (AI_GALACTIC_3 §1.11: the build task registers
@@ -470,7 +477,10 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     bool tf_collect_free_units(int32_t tf) override;
     bool status_finished(int32_t status) override {
         const auto it = statuses.find(status);
-        return it == statuses.end() || it->second.finished;
+        if (it == statuses.end()) return true;
+        // refixf t06 (AI_TACTICAL §7.4): the space reinforcement places its units inside IsFinished, once per Lua poll.
+        if (it->second.kind == StatusKind::SpaceReinforce && !it->second.finished) space_reinforce_poll(it->second);
+        return it->second.finished;
     }
     lua::AiStatusResult status_result(int32_t status) override {
         const auto it = statuses.find(status);
@@ -1727,6 +1737,7 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             }
             return finish(true);
         }
+        case StatusKind::SpaceReinforce: return false;  // refixf t06: advanced only by the Lua poll (status_finished)
         case StatusKind::AttackTarget: {
             const ObjectHandle h = store.find(s.target);
             if (!store.alive(h)) return finish(true);
@@ -1775,7 +1786,10 @@ int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const 
         // refixf t06 (MOVEMENT §6.3 [H], AI_TACTICAL §7.3): one group order for the whole task force (header). Before, one
         // order per unit, which the battle host merged again.
         const lua::LuaOrder lo = kind == AiTacticalOrder::GuardTarget ? lua::LuaOrder::Guard : lua::LuaOrder::AttackMove;
-        any = order(t.player, lua_order_event(lo, ids, target_object, dest), std::string("tf ") + t.name + " " + what + buf) ==
+        // refixf t06 (TACTICAL_COMBAT §2.8 A): a task-force Attack_Move on an object issues Order_Attack to every unit at
+        // order time (the host drops refusing units). The follow re-orders below carry arg 0 [port: re-aim not repeated].
+        const uint32_t arg = lo == lua::LuaOrder::AttackMove && target_object >= 0 ? kTfAttackMoveIssueAttack : 0u;
+        any = order(t.player, lua_order_event(lo, ids, target_object, dest, arg), std::string("tf ") + t.name + " " + what + buf) ==
               cmd::RejectReason::None;
     }
     if (!any) return new_status(t.plan, t.id, StatusKind::Failed);
@@ -1845,17 +1859,19 @@ int32_t TacticalAiWorld::Impl::tf_attack_target(int32_t tf, const lua::AiArg& ta
     if (!store.alive(h)) return -1;
     uint32_t ref2 = 0;  // [port encoding] 1 + HardPointType, 0 = no ordered hard point
     if (cfg.mode == TacticalMode::Space && !hardpoint.empty()) {
-        if (ai_iequal(hardpoint, "Random")) {
+        if (hardpoint == "Random") {  // TACTICAL_COMBAT §2.4 [H]: the exact-case literal, one synced draw
             const int32_t k = rng.synced().range_int(0, 13);  // 13 = any (§7.3, §10)
             ref2 = k >= 13 ? 0u : static_cast<uint32_t>(k + 1);
         } else {
-            // refixf t06 [M]: the shipped plans name the type in the short form (SystematicDisable: "Shield_Generator",
-            // "Engine"; the HardPoint XML <Type> uses HARD_POINT_SHIELD_GENERATOR): the "HARD_POINT_" prefix is optional.
-            constexpr std::string_view kPrefix = "HARD_POINT_";
-            for (uint32_t i = 0; i < std::size(kHardPointTypeNames); ++i) {
-                const std::string_view full = kHardPointTypeNames[i];
-                if (ai_iequal(hardpoint, full) || ai_iequal(hardpoint, full.substr(kPrefix.size()))) ref2 = i + 1;
-            }
+            // refixf t06 (TACTICAL_COMBAT §2.4 [H]): the HardPointType converter, short names only, trimmed, case-insensitive.
+            std::string_view n = hardpoint;
+            while (!n.empty() && (n.front() == ' ' || n.front() == '\t')) n.remove_prefix(1);
+            while (!n.empty() && (n.back() == ' ' || n.back() == '\t')) n.remove_suffix(1);
+            for (uint32_t i = 0; i < std::size(kHardPointTypeNames); ++i)
+                if (*kHardPointTypeNames[i] && ai_iequal(n, kHardPointTypeNames[i])) ref2 = i + 1;
+            // The original raises "Unrecognized hard point type" (a 2-argument call parses the string as the avoidance
+            // SpaceCollisionType instead) [port: counted and ignored; the order targets the object with no hard point].
+            if (ref2 == 0) ++stats["Attack_Target: unrecognized hard point type"];
         }
     }
     std::vector<uint32_t> ids;
@@ -1909,10 +1925,26 @@ bool reinforce_landing_point(const PerceptionWorld& w, const std::vector<Tactica
     return true;
 }
 
-int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target, const lua::AiPoint& point, double) {
+int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target, const lua::AiPoint& point, double max_wait) {
     TfRec* t = tf_rec(tf);
     if (!t) return -1;
     if (t->pending.empty()) return -2;
+    if (cfg.mode == TacticalMode::Space) {
+        // refixf t06 - SpaceReinforceBlockStatus (0x6e8620 / init 0x7235c0, AI_TACTICAL §7.4 [H]): the target T is the centre
+        // of a ring search (z := 0), not a drop point; the units are placed by the status's IsFinished, one per Lua poll
+        // (space_reinforce_poll). Optional max wait in seconds -> timeout frame. R = 1000 when T lies inside a non-allied
+        // Reinforcement_Prevention_Radius, else 0. [port: the campaign "no allied DUMMY_STAR_BASE" refusal is not modelled.]
+        Vec3f p;
+        if (!arg_position(target, point, p)) return -1;
+        p.z = 0.0f;
+        const int32_t id = new_status(t->plan, tf, StatusKind::SpaceReinforce);
+        StatusRec& s = statuses[id];
+        s.dest = p;
+        s.timeout = max_wait >= 0.0 ? now + static_cast<int64_t>(static_cast<double>(kFramesPerSecond) * max_wait) : -1;
+        s.prevent = host.space_prevention_hit(t->player, p);
+        s.ring = s.prevent ? 1000.0f : 0.0f;
+        return id;
+    }
     // S10 AI land reinforcement: "can reinforce" 0x2b03e0 = the battle allows it (host) and room for one unit
     // (AI_GALACTIC_3 §3.3: (int)(1.0 + 0.5) <= cap - used); otherwise an immediately-failing ReinforceBlockStatus.
     const float cap = host.population_cap(t->player);
@@ -1981,6 +2013,81 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
     }
     if (spawned > 0) t->had_units = true;
     return new_status(t->plan, tf, spawned > 0 ? StatusKind::Done : StatusKind::Failed);
+}
+
+// refixf t06 - SpaceReinforceBlockStatus IsFinished (vf19 0x7236f0 -> placement 0x722e80, AI_TACTICAL §7.4 [H]): one placement
+// attempt per Lua poll, then the finish test.
+//   1. The TF's LAST pending entry [port: the TF list itself, not a copy taken at creation; a pool entry that left the
+//      host's pool is dropped].
+//   2. Population room for its type (0x2b03e0: can_reinforce and pop <= cap - max(used, 0)); none -> nothing this poll.
+//   3. u = (-cos θ, -sin θ), θ = the player's entry facing. Up to 10 tries (1 with R = 0): P = T + R u clamped into the
+//      playable box, z = 0, tested with the host's space_drop_ok; a failure rotates u by +36°.
+//   4. All failed -> R += 500 (the next poll tries the next ring). Pass -> the Reinforce event at P (the host spawns the
+//      unit), the entry is popped, its spawned objects join the TF, R resets (1000 inside a prevention radius, else 0).
+// Finished = timed out (0 <= timeout <= now) or no pending entry left; result = every entry placed. [port: the arrival
+// signal 0x19 / in-flight count +0x78 are not modelled - the host's units exist at once and join the TF at the drop.]
+void TacticalAiWorld::Impl::space_reinforce_poll(StatusRec& s) {
+    TfRec* t = tf_rec(s.tf);
+    auto done = [&s](bool ok) {
+        s.finished = true;
+        s.result = ok ? lua::AiStatusResult::True : lua::AiStatusResult::False;
+    };
+    if (!t) return done(false);
+    if (!t->pending.empty()) {
+        const TacticalReinforcement r = t->pending.back();
+        const std::vector<TacticalReinforcement> pool = host.reinforcement_pool(t->player);
+        const bool in_pool = std::any_of(pool.begin(), pool.end(), [&r](const TacticalReinforcement& e) { return e.key == r.key; });
+        if (r.type < 0 || !in_pool) {
+            t->pending.pop_back();  // step 1: no type -> pop it, stop for this call
+            ++stats["Reinforce (space): pending entry dropped"];
+        } else {
+            const float cap = host.population_cap(t->player);
+            const bool room = host.can_reinforce(t->player) &&
+                              (cap < 0.0f || r.population <= cap - std::max(host.population_used(t->player), 0.0f));
+            if (room) {
+                SpaceDropFrame f;
+                if (!host.space_drop_frame(t->player, f)) f = SpaceDropFrame{};
+                double sn = 0.0, cs = 1.0;
+                dmath::sincos(static_cast<double>(f.entry_facing_deg) * (dmath::kPi / 180.0), sn, cs);
+                float ux = static_cast<float>(-cs), uy = static_cast<float>(-sn);
+                double s36 = 0.0, c36 = 1.0;
+                dmath::sincos(36.0 * (dmath::kPi / 180.0), s36, c36);
+                const auto cos36 = static_cast<float>(c36), sin36 = static_cast<float>(s36);
+                const int tries = s.ring == 0.0f ? 1 : 10;
+                bool placed = false;
+                for (int k = 0; k < tries && !placed; ++k) {
+                    Vec3f p{s.dest.x + s.ring * ux, s.dest.y + s.ring * uy, 0.0f};
+                    if (f.has_box) {
+                        p.x = std::clamp(p.x, f.min_x, f.max_x);
+                        p.y = std::clamp(p.y, f.min_y, f.max_y);
+                    }
+                    if (host.space_drop_ok(t->player, r.key, p, f.entry_facing_deg, cfg.constants.space_reinforcement_collision_check_distance)) {
+                        const size_t before = store.owned_by(t->player).size();
+                        cmd::EventData ev(cmd::EventType::Reinforce);
+                        ev.set("unit", static_cast<uint32_t>(r.key)).set_f("x", p.x).set_f("y", p.y).set_f("z", p.z);
+                        if (order(t->player, ev, std::string(cfg.campaign ? "campaign" : "skirmish") + " reinforce " + type_name(r.type) +
+                                                     " (tf " + t->name + ")") == cmd::RejectReason::None) {
+                            placed = true;
+                            t->pending.pop_back();
+                            const auto owned = store.owned_by(t->player);
+                            for (size_t i = before; i < owned.size(); ++i)
+                                if (store.active(owned[i]) && store.has_behavior(owned[i], objects::beh::Locomotor)) t->units.push_back(owned[i]);
+                            t->had_units = true;
+                            s.ring = s.prevent ? 1000.0f : 0.0f;
+                            break;
+                        }
+                    }
+                    const float nx = ux * cos36 - uy * sin36;
+                    const float ny = ux * sin36 + uy * cos36;
+                    ux = nx;
+                    uy = ny;
+                }
+                if (!placed) s.ring = s.ring + 500.0f;
+            }
+        }
+    }
+    const bool timed_out = s.timeout >= 0 && s.timeout <= now;
+    if (timed_out || t->pending.empty()) done(t->pending.empty());
 }
 
 int32_t TacticalAiWorld::Impl::tf_build_all(int32_t tf) {
@@ -2534,7 +2641,8 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 4;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets
+constexpr uint32_t kTacticalAiSaveVersion = 5;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
+                                                 // 5: refixf t06 space reinforcement status fields
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
@@ -2542,7 +2650,7 @@ constexpr size_t kSlotBytes = io::kTargetBytes + 5;
 constexpr size_t kPlanBytes = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 3 + 4 + 1;
 constexpr size_t kTfBytes = 4 + 4 + 4 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 2;
 constexpr size_t kReinforcementBytes = 4 + 4 + 4 + 4 + 4 + 1 + 4;
-constexpr size_t kStatusBytes = 4 + 4 + 4 + 1 + 1 + 1 + 8 + 8 + 12 + 4 + 12;
+constexpr size_t kStatusBytes = 4 + 4 + 4 + 1 + 1 + 1 + 8 + 8 + 12 + 4 + 12 + 8 + 4 + 1;
 
 void put_handle(ByteWriter& w, const objects::ObjectStore& st, ObjectHandle h) {
     w.u64(h.value);
@@ -2896,6 +3004,7 @@ void TacticalAiWorld::write(ByteWriter& w) const {
         put_handle(w, st, s.unit);
         w.i32(s.target);
         io::put_vec3(w, s.dest);
+        w.i64(s.timeout).f32(s.ring).boolean(s.prevent);  // refixf t06
     }
     // ---- PotentialPlans + reservations ----
     io::put_count(w, m.pps.size());
@@ -3170,7 +3279,7 @@ bool TacticalAiWorld::read(ByteReader& r) {
             const uint8_t kind = r.u8();
             s.finished = r.boolean();
             const uint8_t result = r.u8();
-            if (kind > static_cast<uint8_t>(StatusKind::Guard) || result > static_cast<uint8_t>(lua::AiStatusResult::False)) r.fail();
+            if (kind > static_cast<uint8_t>(StatusKind::SpaceReinforce) || result > static_cast<uint8_t>(lua::AiStatusResult::False)) r.fail();
             s.kind = static_cast<StatusKind>(kind);
             s.result = static_cast<lua::AiStatusResult>(result);
             s.started = r.i64();
@@ -3178,6 +3287,9 @@ bool TacticalAiWorld::read(ByteReader& r) {
             s.unit = get_handle(r, st);
             s.target = r.i32();
             s.dest = io::get_vec3(r);
+            s.timeout = r.i64();  // refixf t06
+            s.ring = r.f32();
+            s.prevent = r.boolean();
             if (!r.ok() || s.id < 0 || s.id >= next[2] || (!new_statuses.empty() && new_statuses.rbegin()->first >= s.id))
                 return io::bad(r);
             const int32_t id = s.id;

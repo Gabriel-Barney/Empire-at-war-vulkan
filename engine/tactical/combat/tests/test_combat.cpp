@@ -408,12 +408,16 @@ void test_priority_sets() {
     CHECK_F(hardpoint_rank(s, hk(HardpointKind::Engine)), 2.0f);
     CHECK_F(hardpoint_rank(s, hk(HardpointKind::FighterBay)), -1.0f);
     CHECK_F(hardpoint_rank(s, hk(HardpointKind::WeaponLaser)), 1e18f);
-    // HardPointType names: the short form of the priority sets / plans and the HardPoint XML's HARD_POINT_ form.
+    // HardPointType names (TACTICAL_COMBAT §2.4, refixf t06): short names only, trimmed, case-insensitive; value 11 has
+    // no name; the HardPoint XML's HARD_POINT_ spelling does not resolve.
     CHECK(hardpoint_type_value("Shield_Generator") == hk(HardpointKind::ShieldGenerator));
-    CHECK(hardpoint_type_value("HARD_POINT_SHIELD_GENERATOR") == hk(HardpointKind::ShieldGenerator));
+    CHECK(hardpoint_type_value(" Engine ") == hk(HardpointKind::Engine));
+    CHECK(hardpoint_type_value("HARD_POINT_SHIELD_GENERATOR") == -1);
     CHECK(hardpoint_type_value("FIGHTER_BAY") == hk(HardpointKind::FighterBay));
     CHECK(hardpoint_type_value("weapon_ion_cannon") == hk(HardpointKind::WeaponIonCannon));
+    CHECK(hardpoint_type_value("Weapon_Special") == hk(HardpointKind::WeaponSpecial));
     CHECK(hardpoint_type_value("Dummy_Art") == hk(HardpointKind::DummyArt));
+    CHECK(hardpoint_type_value("Enable_Special_Ability") == -1);
     CHECK(hardpoint_type_value("HARD_POINT_") == -1 && hardpoint_type_value("HP_Shield") == -1 && hardpoint_type_value("") == -1);
 }
 
@@ -1080,6 +1084,124 @@ void test_fog_filter() {
         CHECK(r >= 0.0f && r <= 1.0f);
         w.sys->set_hooks(nullptr);
     }
+}
+
+// refixf t06 (TACTICAL_COMBAT §2.8): Attack_Move on an object. Path B locks the formation goal in weapon range with no
+// score / exclusion / fog test; the lock drops on stealth / fog / garrison; path A (Order_Attack) aims the weapon hardpoints
+// or, for BARRAGE / team units, locks at once; refusals.
+void test_attack_move_object() {
+    World w;
+    w.data.projectiles.push_back(ProjectileDesc{});
+    PrioritySet ps;  // a Frigate_Attack_Move-like set: Capital excluded
+    ps.attack.push_back({PriorityEntry::Kind::Category, -1, kCatFighter, 1.0f});
+    ps.category_exclusions = kCatCapital;
+    w.data.priority_sets.push_back(ps);
+    HardpointDesc laser;  // never fires (no projectile)
+    laser.kind = HardpointKind::WeaponLaser;
+    w.data.hardpoints.push_back(laser);
+    UnitAbilityDesc barrage;
+    barrage.ability_type = 5;
+    w.data.abilities.push_back(barrage);
+    UnitDesc a;
+    a.tactical_health = 100.0f;
+    a.max_attack_distance = 1000.0f;
+    a.weapon_projectile = 0;
+    a.weapon_recharge = 100.0f;
+    a.priority_set = 0;
+    const uint32_t attacker = push_unit(w.data, a);
+    UnitDesc ah = a;
+    ah.weapon_projectile = -1;
+    ah.hardpoints = {0};
+    ah.abilities = {0, -1};
+    const uint32_t hp_attacker = push_unit(w.data, ah);
+    UnitDesc am = a;
+    am.min_attack_distance = 200.0f;
+    const uint32_t min_attacker = push_unit(w.data, am);
+    UnitDesc c;
+    c.tactical_health = 100.0f;
+    c.radius = 10.0f;
+    c.category_mask = kCatCapital;
+    const uint32_t station = push_unit(w.data, c);
+    UnitDesc f = c;
+    f.category_mask = kCatFighter;
+    const uint32_t fighter = push_unit(w.data, f);
+    w.make();
+    FogHooks fh;
+    fh.human0 = false;
+    w.sys->set_hooks(&fh);
+    w.add(1, attacker, 0, Vec3{0, 0, 0});
+    w.add(2, station, 1, Vec3{1500, 0, 0});
+    w.add(3, fighter, 1, Vec3{300, 0, 0});
+    w.sys->set_attack_goal(1, 2);
+    w.tick();
+    // Out of weapon range: the scan picks the fighter; the excluded station is never scored in.
+    CHECK(w.sys->auto_target(1) == 3 && w.sys->ordered_target(1) == kNoObject && w.sys->attack_goal(1) == 2);
+    // In range (XY 800 <= 1000 + 10): path B locks it although the set excludes Capital; it replaces the auto target.
+    w.sys->set_position(2, Vec3{800, 0, 0});
+    w.tick();
+    CHECK(w.sys->ordered_target(1) == 2 && w.sys->order_locked(1) && w.sys->current_target(1) == 2 && w.sys->auto_target(1) == kNoObject);
+    // The lock drops when the target is stealthed (no Target_Stealth_Units) and, at the next service, B locks it again.
+    w.sys->set_flag(2, kUnitStealthed, true);
+    w.tick();
+    CHECK(w.sys->ordered_target(1) == kNoObject && !w.sys->order_locked(1));
+    w.sys->set_flag(2, kUnitStealthed, false);
+    w.tick();
+    CHECK(w.sys->ordered_target(1) == 2 && w.sys->order_locked(1));
+    // Hidden by fog for the attacker's player (force 1): dropped.
+    fh.hidden = {2};
+    w.tick();
+    CHECK(w.sys->ordered_target(1) == kNoObject);
+    fh.hidden.clear();
+    w.tick();
+    CHECK(w.sys->ordered_target(1) == 2);
+    // A plain order (no lock) is not dropped by fog; B is idle while any ordered target is held.
+    w.sys->order_attack(1, 3);
+    CHECK(!w.sys->order_locked(1));
+    fh.hidden = {3};
+    w.tick();
+    CHECK(w.sys->ordered_target(1) == 3);
+    fh.hidden.clear();
+    // The goal dies: the lock and the goal are gone.
+    w.sys->clear_order(1);
+    w.tick();
+    CHECK(w.sys->ordered_target(1) == 2);
+    DamageRequest kill;
+    kill.victim = 2;
+    kill.amount = 1e9f;
+    w.sys->take_damage(kill, w.frame);
+    w.tick();
+    w.tick();
+    CHECK(w.sys->ordered_target(1) != 2 && w.sys->attack_goal(1) == kNoObject);
+
+    // Min range (slot 45): inside Targeting_Min_Attack_Distance + extent no promotion; outside it, promotion.
+    w.add(4, min_attacker, 0, Vec3{0, 500, 0});
+    w.add(5, station, 1, Vec3{100, 500, 0});
+    w.sys->set_attack_goal(4, 5);
+    CHECK(w.sys->inside_min_range(4, 5) && w.sys->min_attack_distance(4) == 200.0f && w.sys->base_attack_range_of(4) == 1000.0f);
+    w.tick();
+    CHECK(w.sys->ordered_target(4) == kNoObject);
+    w.sys->set_position(5, Vec3{600, 500, 0});
+    CHECK(!w.sys->inside_min_range(4, 5));
+    w.tick();
+    CHECK(w.sys->ordered_target(4) == 5);
+
+    // Path A (Order_Attack ordered 1): refusals - own unit, stealthed target; then the weapon path aims the hardpoints and
+    // leaves the unit's own target alone.
+    w.add(6, hp_attacker, 0, Vec3{0, -4000, 0});
+    w.add(7, station, 1, Vec3{3000, -4000, 0});
+    CHECK(!w.sys->order_attack_issue(6, 4));  // own
+    w.sys->set_flag(7, kUnitStealthed, true);
+    CHECK(!w.sys->order_attack_issue(6, 7));
+    w.sys->set_flag(7, kUnitStealthed, false);
+    CHECK(w.sys->order_attack_issue(6, 7));
+    CHECK(w.sys->weapon_aim(6) == 7 && w.sys->ordered_target(6) == kNoObject);
+    w.tick();
+    CHECK(w.sys->weapon_aim(6) == 7);  // nothing in range: the scan picks nothing, the aim holds
+    // BARRAGE active in space: the set path locks the target at once.
+    w.sys->set_ability_active(6, 0, true);
+    CHECK(w.sys->order_attack_issue(6, 7));
+    CHECK(w.sys->ordered_target(6) == 7 && w.sys->order_locked(6) && w.sys->weapon_aim(6) == kNoObject);
+    w.sys->set_hooks(nullptr);
 }
 
 struct DamageWorld {
@@ -2885,6 +3007,7 @@ int main(int argc, char** argv) {
     test_gaps_constants();
     test_land_obstacle_and_weapon_index();
     test_fog_filter();
+    test_attack_move_object();
     test_take_damage();
     test_shield_regen_system();
     test_hull_hardpoint_coupling();
