@@ -89,7 +89,7 @@ shadow earlier ones.
 |---|---|
 | `include/alamo/meg/meg.h`, `src/meg.cpp` | `alamo_meg` static library (C++20, no deps). Reads through a memory map (mmap / CreateFileMapping) or a streamed `FILE*` with mutex-guarded seek+read. `Archive::find()` does the engine-style CRC lookup, `view()` gives zero-copy access when the file is mapped, and `FileSystem` is the override overlay. |
 | `src/megtool.cpp` | `megtool list|extract|verify|info` |
-| `tests/meg_selftest.cpp` | Synthetic v1/v2/v3/encrypted archives, CRC check value, glob, overlay |
+| `tools/meg/tests/meg_selftest.cpp` | Synthetic v1/v2/v3/encrypted archives, CRC check value, glob, overlay |
 | `megtool.py` | Python reference: `list`, `extract [--filter GLOB]`, `catalog` (merges into an existing JSON), `create` (writes a retail-style v1 archive) |
 | `megindex.py` | Standalone, stdlib only. Dumps just the header and index of any MEG to JSON, reading by seek, so it works for archives too large to stage. Usage: `py megindex.py "<GameData>\Data\models.meg" eaw/models -o eaw_models_index.json` |
 | `alomats.py` | Standalone, stdlib only. Streams a MEG and writes ALO name → per-mesh `{shader, params}` JSON (texture names, float/float3/float4/int params) without extracting. Usage: `py alomats.py "<GameData>\Data\models.meg" -o eaw_alo_materials.json` |
