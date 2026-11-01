@@ -119,10 +119,12 @@ public:
     // orbit fleet (FAILED when that fails, e.g. blockaded), TacticalBattle::add_reserve; returns the new pool entry.
     // Refused before spawning when the type is not in the battle tables. [port] the galactic AI free store is not touched.
     ai::tactical::TacticalReinforcement hijack_unit(int32_t player, int32_t type, bool steal) override;
-    // Active_By_Default re-apply (TACTICAL_GAPS §1.2): AbilitySystem::apply_active_by_default for the player's live
-    // battle object. [port] the hook does not tell the free-store path from the task-force path: a unit with HUNT
-    // active is skipped on both; the un-immobilise step (0x3a8e50(obj, 0)) has no AbilitySystem entry point (not done).
-    void unit_released(int32_t player, int32_t object_id) override;
+    // Active_By_Default re-apply (TACTICAL_GAPS §1.2, A1_READINGS §28.8): AbilitySystem::apply_active_by_default for the
+    // player's live battle object. OrderLockDone: always (the AI released the script lock, 0x3a8e50(obj, 0), first; the
+    // ability share of the counter is not touched). TaskForce: skipped while movement is locked (0x39ad40: ability
+    // share AbilitySystem::immobilize_count > 0, script orders_locked / locomotor_suspended; [port] HUNT active stands
+    // in for the locomotor term).
+    void unit_released(int32_t player, int32_t object_id, ai::tactical::TacticalAiHost::UnitRelease path) override;
     // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4, TACTICAL_GAPS §4.2). Entry facing = the player's side
     // deploy facing (TacticalBattle facing_ [port: stands in for the mode +0x288 record]); playable box = the mode bounds.
     // Prevention = live objects with Reinforcement_Prevention_Radius whose owner is not allied (not the player, and an

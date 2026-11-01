@@ -190,6 +190,17 @@ void test_counts() {
     // Saturation.
     for (int i = 0; i < 70000; ++i) g.count_cell(5u, 400);
     CHECK(g.count_at(5u) == 0xFFFF);
+    // Binarise (0x4c1830, FOG_OF_WAR §3.4 [H]): every fade byte of both grids := 0; the other grid's uncounted cells
+    // elsewhere fogged, its counted ones 0xFF / count 1.
+    FogGrid bo = land_grid();
+    bo.count_cell(7u, 300);  // fade 15 on the other grid's counted cell
+    bo.count_cell(8u, 300);  // ... and on a cell this grid sees
+    const uint32_t eight[] = {8u};
+    bo.undo(eight);          // uncounted, state 0xEF, fade 15
+    g.binarise(&bo);
+    CHECK(g.fade_at(c) == 0 && g.state_at(c) == 0xFF && g.fade_at(d) == 0);
+    CHECK(bo.state_at(7u) == 0xFF && bo.count_at(7u) == 1 && bo.fade_at(7u) == 0);
+    CHECK(bo.state_at(8u) == 0 && bo.fade_at(8u) == 0);
     // Flash: state 255, counts untouched.
     FogGrid f = land_grid();
     f.flash(cx_of(10), cy_of(10), 15.0f);
@@ -326,7 +337,10 @@ void test_sources() {
     // Garrisoned: undone.
     fog.source_service(5, b, true);
     CHECK(count_sum(*fog.grid(1)) == 0u);
-    fog.source_service(5, b);  // [port] re-reveals on exit
+    fog.source_service(5, b);  // exit (FOG_OF_WAR §3.2 [H]): not dirty, within one cell of the last reveal -> nothing
+    CHECK(count_sum(*fog.grid(1)) == 0u);
+    b.x += 16.0f;  // one cell from the last reveal: re-reveals
+    fog.source_service(5, b);
     CHECK(count_sum(*fog.grid(1)) == 21u);
     // Removal.
     fog.source_remove(5);

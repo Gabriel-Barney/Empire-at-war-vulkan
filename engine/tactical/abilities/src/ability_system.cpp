@@ -398,6 +398,7 @@ void AbilitySystem::update_emitter(Obj& o) {
 }
 
 void AbilitySystem::immobilize(Obj& o, int32_t delta, uint32_t frame) {
+    // 0x3a8e50 (A1_READINGS §28.8): +1 / -1 clamped at 0.
     const int32_t before = o.immobilize;
     o.immobilize = std::max<int32_t>(0, before + delta);
     if (before == 0 && o.immobilize > 0) event(AbilityEventKind::Immobilised, 0, o.id, kNoObject, frame);
@@ -1366,6 +1367,12 @@ bool AbilitySystem::interdicted(int32_t player) const {
 int32_t AbilitySystem::immobilize_count(ObjectId id) const {
     const Obj* o = obj(id);
     return o ? o->immobilize : 0;
+}
+bool AbilitySystem::lock_movement(ObjectId id, bool lock, uint32_t frame) {
+    Obj* o = obj(id);
+    if (!o) return false;
+    immobilize(*o, lock ? +1 : -1, frame);
+    return true;
 }
 bool AbilitySystem::special_applied(ObjectId id, uint32_t crc) const {
     const Obj* o = obj(id);
