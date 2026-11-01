@@ -452,7 +452,10 @@ Ops 6, 7, 15–18 and 20–22 run at the wait speed (max × 0.2 in space).
 **Space footprint** is a circle centred at position + `Space_Obstacle_Offset` (+0x16e4) rotated by yaw.
 - Radius getter `0x373b50` = Scale_Factor × 2R/20, where R is the first positive value of `Custom_Soft_Footprint_Radius` (+0x16b8), `Space_Obstacle_Radius` (+0x16f0), or the larger model x/y extent.
 - The /20 conversion is unexplained. [M]
-- `SpaceObstacleBehaviorClass` (vftable `0x8b0988`; vf3/vf13 `0x632610`, vf15 `0x6326b0`) inserts the object as a static entry on attach and removes it on detach.
+- **Model-extent fallback** (2026-11-01, S7 t08) [H]: the getter takes the type's model for the current mode (`0x3729f0`; in space, mode 2, type +0x2a8), asks it for its local box (ModelClass vf +0x58 = `0x264920`, the **collision bound**: the bind-pose union of the collision-enabled ALO meshes, SPACE_AVOIDANCE §3.2), and takes max(|half x|, |half y|). The two XML radii replace it when positive. A model without a collision mesh, or whose render object is not an ALO model, gives half 1; a type with no model for the mode gives radius 0.
+  - So `Orbital_Construction_Pod` (`EB_construction_pod.alo`) and its capture-point variants `N_Orbital_Construction_Pod` / `Skirmish_Merchant_Dock` (no radius tag in FoC) are sized by their model.
+- `SpaceObstacleBehaviorClass` (vftable `0x8b0988`; vf3/vf13 `0x632610`, vf9 `0x632670`, vf15 `0x6326b0`) inserts the object as a static entry on attach and removes it on detach.
+  - The insert (`0x53acf0`) skips a contained object (obj +0x3a7) and, in space, removes a type with `Use_Special_Submit_Rules` (FoC: transports only). It does **not** read the model's collide switch, so capture points and orbital props stay planner obstacles (SPACE_AVOIDANCE §5.5).
 
 **Layers** (`0x397900`):
 - The unit's layer is `Space_Layer` (+0x16dc), or `Stationary_Space_Layer` (+0x16e0) while not moving.

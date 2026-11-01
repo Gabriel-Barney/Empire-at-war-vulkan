@@ -78,7 +78,8 @@ uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map,
     return n;
 }
 
-uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const objects::GameObjectTypes* types) {
+uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const objects::GameObjectTypes* types,
+                        const SpaceObstacleHooks* hooks) {
     float mn[2], mx[2];
     if (map.playable_box(mn, mx)) occ.set_box({mn[0], mn[1]}, {mx[0], mx[1]});
     if (!types) return 0;
@@ -90,18 +91,31 @@ uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const 
         if (it == idx.end()) continue;
         float r = 0.0f;
         uint32_t bits = 0;
-        if (!space_obstacle_footprint(*types, it->second, r, bits)) continue;
-        occ.add_static(-static_cast<ObjectId>(i) - 1, {o.position[0], o.position[1]}, r, bits);
+        if (!space_obstacle_footprint(*types, it->second, r, bits, hooks)) continue;
+        // S7 t07: + Space_Obstacle_Offset, x along the placement facing Rz(yaw) (0, -1), y to its left [M: rotation sense].
+        const std::array<float, 4> off = types->get_vec(it->second, "Space_Obstacle_Offset");
+        const V2 d = dir_from_deg(o.rotation_deg[2]);  // (cos, sin): facing = (sin, -cos), left = (cos, sin)
+        const V2 f{d.y, -d.x};
+        occ.add_static(-static_cast<ObjectId>(i) - 1,
+                       {o.position[0] + off[0] * f.x - off[1] * f.y, o.position[1] + off[0] * f.y + off[1] * f.x}, r, bits);
         ++n;
     }
     return n;
 }
 
-bool space_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t t, float& radius, uint32_t& bits) {
+bool space_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t t, float& radius, uint32_t& bits,
+                              const SpaceObstacleHooks* hooks) {
     if (t >= types.size() || !types.has_behavior(t, objects::BehaviorSet::Union, kSpaceObstacle)) return false;
     float r = types.get_float(t, "Custom_Soft_Footprint_Radius");
     if (!(r > 0.0f)) r = types.get_float(t, "Space_Obstacle_Radius");
-    if (!(r > 0.0f)) return false;
+    if (!(r > 0.0f)) {
+        // S7 t07 (MOVEMENT §2.2, getter 0x373b50): the larger x / y half extent of the space model's collision bound.
+        // [port] no model data: no entry (retail: radius 0 without a model).
+        float hx = 0.0f, hy = 0.0f;
+        if (!hooks || !hooks->model_half_extents || !hooks->model_half_extents(t, hx, hy)) return false;
+        r = std::max(std::fabs(hx), std::fabs(hy));
+        if (!(r > 0.0f)) return false;
+    }
     const float scale = types.get_float(t, "Scale_Factor") > 0.0f ? types.get_float(t, "Scale_Factor") : 1.0f;
     radius = r * scale;
     bits = kSpaceStatic;

@@ -793,6 +793,14 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
 #endif
 }
 
+bool BattleCatalog::space_model_half_extents(uint32_t type, float& half_x, float& half_y) const {
+    const tactical::movement::AvoidModel* m = avoid_model(type, true);
+    if (!m) return false;
+    half_x = m->bound_h.x;
+    half_y = m->bound_h.y;
+    return true;
+}
+
 int32_t BattleCatalog::ModelInfo::find(std::string_view bone) const {
     const std::string key = upper_str(trim(bone));
     for (size_t i = 0; i < bones.size(); ++i)
