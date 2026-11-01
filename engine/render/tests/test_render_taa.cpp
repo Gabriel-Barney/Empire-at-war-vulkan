@@ -122,6 +122,26 @@ void test_cpu() {
     CHECK(!render::taa_history_usable(c0, render::taa_camera(render::make_view(cam, 1920, 1080, 10.0f, 7000.0f))));  // resize
     // The jittered camera passes the test against its own un-jittered self (rules use the un-jittered camera only).
     CHECK(render::taa_history_usable(c0, render::taa_camera(j)));
+
+    // Linear depth (the disocclusion test's unit): NDC 0 / 1 are the near / far planes, and a projected point comes back as
+    // its distance along the view direction. The jittered camera linearises the same (jitter only touches rows 0 / 1).
+    CHECK(c0.perspective);
+    CHECK(close_to(render::taa_linear_depth(c0, 0.0f), 10.0f, 1e-3f) && close_to(render::taa_linear_depth(c0, 1.0f), 7000.0f, 1.0f));
+    for (const render::Float3 p : {render::Float3{10, -20, 5}, render::Float3{60, 40, 0}, render::Float3{-90, 10, 30}}) {
+        const float along = (p.x - v.eye.x) * c0.forward.x + (p.y - v.eye.y) * c0.forward.y + (p.z - v.eye.z) * c0.forward.z;
+        const float d = render::taa_linear_depth(c0, project(v, p).z);
+        CHECK(std::fabs(d - along) <= 2e-3f * along);
+        CHECK(close_to(render::taa_linear_depth(render::taa_camera(j), project(j, p).z), d, 1e-3f * d));
+    }
+    CHECK(!render::taa_linear_depth(render::TaaCamera{}, 0.5f));  // no camera: 0
+    {
+        render::TaaCamera o;  // orthographic, near 1 / far 101: NDC 0 -> 1, NDC 1 -> 101
+        o.valid = true;
+        o.perspective = false;
+        o.depth_a = 1.0f / (1.0f - 101.0f);
+        o.depth_b = 1.0f / (1.0f - 101.0f);
+        CHECK(close_to(render::taa_linear_depth(o, 0.0f), 1.0f, 1e-4f) && close_to(render::taa_linear_depth(o, 1.0f), 101.0f, 1e-3f));
+    }
     std::printf("cpu: %s\n", g_failures ? "FAILED" : "ok");
 }
 
@@ -372,6 +392,102 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
             CHECK(frame(g, rr, o, render::make_view(far_cam, W, H, render::MapScene::kNear, render::MapScene::kFar), scene.instances(), ro,
                         st, clear, scene.sky()));
             CHECK(st.taa && st.taa_reset);
+
+            // Moving objects. The materials have no motion vectors, so the resolve has to tell a mover from the background
+            // by depth. Fixed camera; the (up to 8) instances nearest the screen centre slide sideways ~3 px per frame for
+            // kSlide frames. Ghost = how far TAA strays from the TAA-off picture over the slid path (mean |on - off| luma),
+            // minus how far it strays there with nothing moving (plain AA differences).
+            {
+                const render::ViewMatrices v0 = view_at(0);
+                const std::span<const render::Instance> all = scene.instances();
+                struct Pick {
+                    size_t index;
+                    float dist2;
+                    float step;  // world units per frame along the camera's right axis
+                };
+                std::vector<Pick> picks;
+                for (size_t i = 0; i < all.size(); ++i) {
+                    if (!all[i].model) continue;
+                    const render::Float4 c = v0.view_proj * render::Float4{all[i].transform.m[0][3], all[i].transform.m[1][3],
+                                                                           all[i].transform.m[2][3], 1.0f};
+                    if (c.w <= 0.0f) continue;
+                    const float nx = c.x / c.w, ny = c.y / c.w, nz = c.z / c.w;
+                    if (std::fabs(nx) > 0.9f || std::fabs(ny) > 0.9f || nz < 0.0f || nz > 1.0f) continue;
+                    picks.push_back({i, nx * nx + ny * ny, 3.0f * 2.0f * c.w / (v0.proj.m[0][0] * static_cast<float>(W))});
+                }
+                std::sort(picks.begin(), picks.end(), [](const Pick& a, const Pick& b) { return a.dist2 < b.dist2; });
+                if (picks.size() > 8) picks.resize(8);
+                if (picks.empty()) std::printf("moving objects: no instance near the screen centre, skipped\n");
+                if (!picks.empty()) {
+                    constexpr int kSlide = 24;
+                    const render::Float3 right{v0.view.m[0][0], v0.view.m[0][1], v0.view.m[0][2]};
+                    std::vector<render::Instance> moving(all.begin(), all.end());
+                    // Screen box of the slid paths (start and end positions) plus a margin for the objects' own size.
+                    float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+                    auto cover = [&](const render::Instance& in) {
+                        const render::Float4 c = v0.view_proj * render::Float4{in.transform.m[0][3], in.transform.m[1][3],
+                                                                               in.transform.m[2][3], 1.0f};
+                        const float px = (c.x / c.w * 0.5f + 0.5f) * static_cast<float>(W), py = (0.5f - c.y / c.w * 0.5f) * static_cast<float>(H);
+                        x0 = std::min(x0, px);
+                        x1 = std::max(x1, px);
+                        y0 = std::min(y0, py);
+                        y1 = std::max(y1, py);
+                    };
+                    for (const Pick& p : picks) cover(all[p.index]);
+                    auto shifted = [&](int k) {
+                        for (const Pick& p : picks) {
+                            render::Instance& in = moving[p.index];
+                            const float s = p.step * static_cast<float>(k);
+                            in.transform = all[p.index].transform;
+                            in.transform.m[0][3] += right.x * s;
+                            in.transform.m[1][3] += right.y * s;
+                            in.transform.m[2][3] += right.z * s;
+                        }
+                    };
+                    shifted(kSlide);
+                    for (const Pick& p : picks) cover(moving[p.index]);
+                    const uint32_t bx0 = static_cast<uint32_t>(std::clamp(x0 - 60.0f, 0.0f, static_cast<float>(W - 1)));
+                    const uint32_t bx1 = static_cast<uint32_t>(std::clamp(x1 + 60.0f, 1.0f, static_cast<float>(W)));
+                    const uint32_t by0 = static_cast<uint32_t>(std::clamp(y0 - 60.0f, 0.0f, static_cast<float>(H - 1)));
+                    const uint32_t by1 = static_cast<uint32_t>(std::clamp(y1 + 60.0f, 1.0f, static_cast<float>(H)));
+                    // The frame after `slide` slid steps (k frames run, the last one drawn at step k).
+                    auto run = [&](bool taa, bool slide, std::vector<uint8_t>& out) {
+                        ro.taa = taa;
+                        rr.reset_taa_history();
+                        for (int k = 0; k <= kSlide; ++k) {
+                            if (slide) shifted(k);
+                            else shifted(0);
+                            CHECK(frame(g, rr, o, v0, moving, ro, st, clear, scene.sky()));
+                        }
+                        out.assign(o.data(), o.data() + bytes);
+                    };
+                    auto region_diff = [&](const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+                        double s = 0;
+                        for (uint32_t y = by0; y < by1; ++y)
+                            for (uint32_t x = bx0; x < bx1; ++x) {
+                                const size_t i = (static_cast<size_t>(y) * W + x) * 4;
+                                s += std::fabs(luma(&a[i]) - luma(&b[i]));
+                            }
+                        return s / (static_cast<double>(bx1 - bx0) * (by1 - by0));
+                    };
+                    std::vector<uint8_t> off_move, on_move, off_still, on_still;
+                    run(false, true, off_move);
+                    run(true, true, on_move);
+                    run(false, false, off_still);
+                    run(true, false, on_still);
+                    const double moved = region_diff(off_move, off_still);  // sanity: the objects really moved
+                    const double d_move = region_diff(on_move, off_move), d_still = region_diff(on_still, off_still);
+                    std::printf("moving objects: %zu instances slid %d frames, region %ux%u: |off moved - off still| %.2f; |on - off| moving %.2f"
+                                " / still %.2f, ghost %.2f\n",
+                                picks.size(), kSlide, bx1 - bx0, by1 - by0, moved, d_move, d_still, d_move - d_still);
+                    CHECK(moved > 5.0);                   // the slid objects really changed the picture
+                    CHECK(d_move - d_still < 2.4);        // measured 1.97 with the depth rejection, 2.71 without it (RX 9070 XT)
+                    CHECK(save_crop(src_dir + "/logs/render_taa_move_off.png", off_move, W, bx0, by0, std::min(bx1 - bx0, 300u),
+                                    std::min(by1 - by0, 200u), 3));
+                    CHECK(save_crop(src_dir + "/logs/render_taa_move_on.png", on_move, W, bx0, by0, std::min(bx1 - bx0, 300u),
+                                    std::min(by1 - by0, 200u), 3));
+                }
+            }
         } else {
             std::printf("map: %s\n", err.c_str());
         }

@@ -110,7 +110,7 @@ endif()
 # ---------------------------------------------------------------- [port] TAA (shaders/taa.hlsl, src/taa.cpp)
 set(_render_taa_headers)
 # name : entry : profile : define
-foreach(spec "taa_vs:VSMain:vs_6_0:" "taa_ps_resolve:PSResolve:ps_6_0:RESOLVE" "taa_ps_sharpen:PSSharpen:ps_6_0:SHARPEN")
+foreach(spec "taa_vs:VSMain:vs_6_0:" "taa_ps_resolve:PSResolve:ps_6_0:RESOLVE" "taa_ps_sharpen:PSSharpen:ps_6_0:SHARPEN" "taa_ps_depth:PSDepth:ps_6_0:DEPTH")
   string(REPLACE ":" ";" parts "${spec}")
   list(GET parts 0 _name)
   list(GET parts 1 _entry)
