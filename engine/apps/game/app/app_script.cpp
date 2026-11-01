@@ -418,13 +418,63 @@ ScriptStep step_attack_enemy(bool shift = false) {
             600};
 }
 
-// Battle: right-click the ground next to the local units (MoveToPosition).
+// Battle: jump the camera to the centroid of the local player's units (presentation only).
+void camera_on_local_units(App& a) {
+    double x = 0, y = 0;
+    uint32_t n = 0;
+    for (const render::SnapshotObject& o : a.bview_.frame().objects)
+        if (o.owner == a.local_player() && a.session_ && a.session_->battle() && a.session_->battle()->movement().has_unit(o.id)) {
+            x += o.position.x;
+            y += o.position.y;
+            ++n;
+        }
+    if (n) a.bview_.camera().jump_to({static_cast<float>(x / n), static_cast<float>(y / n), 0.0f});
+}
+
+// Battle: right-click the ground next to the local units (MoveToPosition). The pixel is (w / 2, h / 3) unless an object's
+// tree box is under it there (refixf: since t07 the tree boxes are the model collision bounds, and a station's box can
+// cover that pixel, which would turn the click into an Attack): then the camera goes back to the local units (the queued
+// clicks follow the enemy click, which aimed the camera at the enemy) and the click takes the first pixel of a fixed
+// spiral around (w / 2, h / 3), inside the middle of the screen, that picks nothing. Fixed for the whole click.
+bool ground_pixel_free(App& a, int32_t x, int32_t y) {
+    const sim::TacticalMode* tm = a.session_ ? a.session_->host().modes().top_tactical() : nullptr;
+    if (!tm) return true;
+    const ui::View v = ui::make_view(a.bview_.camera_params(a.targets_.width, a.targets_.height), a.targets_.width, a.targets_.height);
+    tactical::QueryContext qc;
+    return !ui::pick(tm->trees().all(), ui::pixel_ray(v, x, y), tactical::kSkipDead, qc).has_value();
+}
+std::pair<int32_t, int32_t> free_ground_pixel(App& a) {
+    const int32_t w = static_cast<int32_t>(a.targets_.width), h = static_cast<int32_t>(a.targets_.height);
+    const std::pair<int32_t, int32_t> base{w / 2, h / 3};
+    const auto free_at = [&](int32_t x, int32_t y) { return ground_pixel_free(a, x, y); };
+    if (free_at(base.first, base.second)) return base;
+    static constexpr int32_t kDir[8][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}, {1, -1}, {1, 1}, {-1, 1}, {-1, -1}};
+    const int32_t step = std::max(h / 24, 1);
+    for (int32_t r = 1; r <= 12; ++r)
+        for (const auto& d : kDir) {
+            const int32_t x = base.first + d[0] * r * step, y = base.second + d[1] * r * step;
+            if (x < w / 5 || x > w - w / 5 || y < h / 8 || y > (h * 3) / 5) continue;  // no edge scroll, no HUD
+            if (free_at(x, y)) return {x, y};
+        }
+    return base;
+}
 ScriptStep step_move_ground(bool shift = false) {
     auto st = std::make_shared<ClickState>();
-    return {shift ? "shift+right-click the ground" : "right-click the ground", [st, shift](App& a, ui::InputFrame& f) {
+    auto px = std::make_shared<std::pair<int32_t, int32_t>>(0, 0);
+    auto settle = std::make_shared<int>(0);
+    return {shift ? "shift+right-click the ground" : "right-click the ground", [st, px, settle, shift](App& a, ui::InputFrame& f) {
                 if (!a.bview_.active() || a.screen_ != Screen::Battle) return false;
-                return click_at(*st, f, static_cast<int32_t>(a.targets_.width / 2), static_cast<int32_t>(a.targets_.height / 3), ui::Button::Right,
-                                shift);
+                if (st->phase == 0) {
+                    const int32_t bx = static_cast<int32_t>(a.targets_.width / 2), by = static_cast<int32_t>(a.targets_.height / 3);
+                    if (*settle == 0 && !ground_pixel_free(a, bx, by)) {
+                        camera_on_local_units(a);
+                        *settle = 1;
+                        return false;
+                    }
+                    if (*settle > 0 && ++*settle < 10) return false;  // let the camera settle
+                    *px = free_ground_pixel(a);
+                }
+                return click_at(*st, f, px->first, px->second, ui::Button::Right, shift);
             },
             100};
 }
@@ -1197,15 +1247,7 @@ void App::make_script() {
         s.push_back(step_wait("attack routed into the battle", [](App& a) { return a.session_ && a.session_->order_stats().attacks >= 1; }, 600));
         s.push_back(step_ticks("battle runs", 60));
         s.push_back(step_wait("camera on the local units", [](App& a) {
-            double x = 0, y = 0;
-            uint32_t n = 0;
-            for (const render::SnapshotObject& o : a.bview_.frame().objects)
-                if (o.owner == a.local_player() && a.session_ && a.session_->battle() && a.session_->battle()->movement().has_unit(o.id)) {
-                    x += o.position.x;
-                    y += o.position.y;
-                    ++n;
-                }
-            if (n) a.bview_.camera().jump_to({static_cast<float>(x / n), static_cast<float>(y / n), 0.0f});
+            camera_on_local_units(a);
             return true;
         }));
         s.push_back(step_shot(prefix + "_battle.png"));

@@ -291,36 +291,89 @@ bool AnimBehaviors::deploy(AnimWorld& w, ObjectId id, bool undeploy, float rate,
 
 // ---- death / corpse ----------------------------------------------------------------------------------
 
+uint64_t one_shot_frames(uint32_t frame_count, float fps, float speed) {
+    // AnimWorld::advance_row of a one-shot slot started at frame 0: frame += fps x dt x speed per sim frame, finished once
+    // it reaches max(count - 2, 0). [port] dt = float(1 / 30) every frame (the world's dt is float(t - last) of double
+    // times, equal to it but for a rounding at large t; the sim schedule does not depend on the world).
+    if (frame_count <= 2) return 0;  // last frame 0: finished by the (dt = 0) advance of the start frame itself
+    const float dt = static_cast<float>(1.0 / kSimTicksPerSecond);
+    const float step = fps * dt * speed;
+    float f = 0.0f;
+    constexpr uint64_t kCap = 1ull << 24;  // ~6 days of sim time: treated as never
+    for (uint64_t n = 1; n <= kCap; ++n) {
+        bool finished = false;
+        f = advance_one_shot(f, step, frame_count, finished);
+        if (finished) return n;
+        if (!(step > 0.0f)) break;
+    }
+    return kNeverFrames;
+}
+
+DeathPlan plan_death(const AnimModel* m, const DeathParams& p, uint8_t damage_kind, SimRng& rng) {
+    DeathPlan d;
+    if (p.spin_away) {
+        if (p.spin_away_chance > 0.0f && p.spin_away_chance < 1.0f) d.spin = rng.range_float(0.0f, 1.0f) < p.spin_away_chance;
+        else d.spin = true;  // [port] chance >= 1 or unset
+    }
+    if (d.spin) {
+        d.lifetime = seconds_to_frames(p.spin_away_seconds);
+        return d;
+    }
+    int32_t type = p.type;
+    if (!p.type_explicit && m) {
+        const int32_t k = death_type_for_kind(damage_kind);
+        if (k != kNoAnimType && m->variant_count(k) > 0) type = k;
+    }
+    uint32_t index = p.index;
+    const uint32_t count = m ? m->variant_count(type) : 0u;
+    if (index == kRandomVariant) index = count > 0 ? static_cast<uint32_t>(rng.range_int(0, static_cast<int32_t>(count) - 1)) : 0u;
+    const ClipRef* c = m ? m->clip(type, index) : nullptr;
+    uint64_t clip_frames = 0;
+    if (c && c->clip) {
+        d.type = type;
+        d.variant = index;
+        clip_frames = one_shot_frames(c->clip->frame_count, c->clip->fps, 1.0f);
+    } else if (p.remove_upon_death) {
+        d.remove_now = true;
+        return d;
+    }
+    if (p.persistence_seconds < 0.0f || clip_frames == kNeverFrames) {
+        d.forever = true;
+        return d;
+    }
+    d.lifetime = (d.type != kNoAnimType ? clip_frames + 1 : 0) + seconds_to_frames(p.persistence_seconds) + seconds_to_frames(p.fade_seconds);
+    return d;
+}
+
 DeathResult AnimBehaviors::begin_death(AnimWorld& w, ObjectId id, const DeathParams& p, const CorpseInfo& info, SimRng& rng, uint64_t frame,
                                        uint8_t damage_kind) {
+    // The draws of plan_death are AnimWorld::play's (random variant of the row's model), so planning first and then
+    // playing the planned variant draws exactly what playing with a random index did.
+    const DeathPlan plan = plan_death(w.contains(id) ? w.model(id) : nullptr, p, damage_kind, rng);
+    return begin_death(w, id, p, plan, info, frame, damage_kind);
+}
+
+DeathResult AnimBehaviors::begin_death(AnimWorld& w, ObjectId id, const DeathParams& p, const DeathPlan& plan, const CorpseInfo& info,
+                                       uint64_t frame, uint8_t damage_kind) {
     // Die step 5: animation states reset (overlay cleared, behaviour state dropped, berserker off).
     entries_.erase(std::remove_if(entries_.begin(), entries_.end(), [id](const Entry& e) { return e.id == id; }), entries_.end());
     const bool has_row = w.contains(id);
-    bool spin = false;
-    if (p.spin_away) {
-        if (p.spin_away_chance > 0.0f && p.spin_away_chance < 1.0f) spin = rng.range_float(0.0f, 1.0f) < p.spin_away_chance;
-        else spin = true;  // [port] chance >= 1 or unset
-    }
-    int32_t type = p.type;
-    if (!p.type_explicit && has_row) {
-        const int32_t k = death_type_for_kind(damage_kind);
-        const AnimModel* m = w.model(id);
-        if (k != kNoAnimType && m && m->variant_count(k) > 0) type = k;
-    }
+    const bool spin = plan.spin;
+    const int32_t type = plan.type;
     bool played = false;
     if (has_row) {
         w.clear_overlay(id);
         w.set_berserker(id, false);
     }
-    if (has_row && !spin) {
+    if (has_row && !spin && type != kNoAnimType) {
         PlayRequest r;
         r.type = type;
-        r.index = p.index;
+        r.index = plan.variant;
         r.loop = false;
         r.blend_seconds = kDeathBlendSeconds;
         r.speed = 1.0f;
         r.lock = true;  // [port]
-        played = w.play(id, r, &rng, frame) == PlayResult::Played;
+        played = w.play(id, r, nullptr, frame) == PlayResult::Played;
     }
     if (!played && !spin && p.remove_upon_death) {
         if (has_row) w.remove(id);

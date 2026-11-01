@@ -725,11 +725,16 @@ void GameSession::sync_rate_lock(sim::SimHost& h) {
     }
     if (lock != rate_lock_) {
         rate_lock_ = lock;
-        h.pacing().set_cinematic_lock(lock);
+        h.pacing().set_cinematic_lock(lock || pres_lock_);
         ParityFrameOptions po;
         po.invert = !lock;
         h.crc_registry().set_parity_options(po);
     }
+}
+
+void GameSession::set_presentation_rate_lock(bool on) {
+    pres_lock_ = on;
+    if (host_) host_->pacing().set_cinematic_lock(rate_lock_ || pres_lock_);
 }
 
 void GameSession::set_fast_forward(bool on) {

@@ -27,6 +27,8 @@ void TacticalAiConstants::load(const data::GameConstants& gc) {
     max_ground_forces_on_planet = gc.get_int("Max_Ground_Forces_On_Planet", max_ground_forces_on_planet);
     allow_reinforcement_percentage = gc.get_float("Allow_Reinforcement_Percentage_Normalized", allow_reinforcement_percentage);
     use_reinforcement_points = gc.get_bool("Use_Reinforcement_Points", use_reinforcement_points);  // S10 AI land reinforcement
+    space_reinforcement_collision_check_distance =  // refixf t06
+        gc.get_float("Space_Reinforcement_Collision_Check_Distance", space_reinforcement_collision_check_distance);
 }
 
 }  // namespace alamo::ai::tactical

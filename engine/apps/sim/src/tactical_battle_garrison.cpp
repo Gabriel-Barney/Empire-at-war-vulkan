@@ -124,7 +124,7 @@ bool TacticalBattle::s4_placement(TacticalMode& mode, objects::TypeIndex t, cons
     const objects::ObjectId id = mode.primary().id(h);
     if (capture) captures_->add_point(id, p.owner, p.position, cd, frame_);
     if (holder) {
-        const tactical::Aabb b = mode.bounds_of(h);
+        const tactical::Aabb b = mode.extent_box(h);
         const float dx = b.max.x - b.min.x, dy = b.max.y - b.min.y;
         hd.half_diagonal = 0.5f * dmath::sqrt(dx * dx + dy * dy);
         garrison_.add_holder(id, p.owner, hd);
@@ -177,7 +177,7 @@ void TacticalBattle::s4_register(TacticalMode& mode, const Unit& u) {
     if (tg::holder_desc_from_type(types, u.type, hd)) {
         s4_store_ = &mode.primary();
         s4_init();
-        const tactical::Aabb b = mode.bounds_of(u.h);
+        const tactical::Aabb b = mode.extent_box(u.h);
         const float dx = b.max.x - b.min.x, dy = b.max.y - b.min.y;
         hd.half_diagonal = 0.5f * dmath::sqrt(dx * dx + dy * dy);
         garrison_.add_holder(u.id, owner, hd);

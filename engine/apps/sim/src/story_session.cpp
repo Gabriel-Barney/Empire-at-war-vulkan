@@ -266,6 +266,11 @@ StorySession::StorySession(galactic::GalacticSim& sim, objects::ObjectStore& sto
     lua_->bridge.container_of = [gs](objects::ObjectHandle h) { return gs->container_of(h); };
     lua_->bridge.contents_of = [gs](objects::ObjectHandle h) { return gs->contents_of(h); };
     lua_->bridge.destroy_object = [gs](objects::ObjectHandle h) { return gs->destroy_object(h); };
+    // refixf t03: the Lua finders' representative type (in the port model the store type of every galactic object).
+    lua_->bridge.representative_type = [gs](objects::ObjectHandle h) {
+        const uint32_t t = gs->representative_type(h);
+        return t == galactic::kNoIndex ? objects::kNone : static_cast<objects::TypeIndex>(t);
+    };
     // a1f t08: BlockOnCommand(fleet.Move_To(planet)) waits until the fleet has stopped (arrived, stopped short or gone:
     // merged into a fleet in orbit, destroyed). [inferred] from the shipped story scripts, which test
     // fleet.Get_Planet_Location() == target right after the block (Story_Campaign_Underworld.lua Empire_Attack /

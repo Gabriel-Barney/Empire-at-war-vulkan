@@ -200,9 +200,33 @@ public:
     GameAudioHost audio_;
     GalacticView gview_;
     BattleView bview_;
-    // refix t06: the TSW planet kill's camera shake (battle_fx.hpp; presentation only: added to the rendered battle
-    // camera, never to the controller, picking or the listener), started from post_tick, advanced by the frame's dt.
-    CameraShake shake_;
+    // refixf t05: the in-game cinematic camera (TSW_PLANET_DESTROY.md §11; battle_fx.hpp, app_cinematic.cpp): the TSW
+    // firing shot started by the Fire cue, its shake trackers (the state-9 explosion), the letterbox, the saved RTS camera.
+    // Presentation only: driven by the tactical frame count, overrides the rendered battle camera and the listener, hides
+    // the HUD and the cursor, swallows mouse input; never written into the sim.
+    struct Cinematic {
+        TswFiringShot shot;
+        CameraShake shake;
+        Letterbox letterbox;
+        UnsyncedRandom rng;  // the unsynced generator (NoiseOffset draws), reseeded from the wall clock at init
+        objects::ObjectId tsw = objects::kNoObjectId;
+        SavedCamera<ui::TacticalCameraController> saved_camera;  // +0x2c8: the mode camera saved once at cinematic mode on
+        int32_t clock = 0;  // shot clock of the frame being drawn
+        bool enabled = true;                  // GameConstants In_Game_Cinematics
+        float letterbox_height = 0.085f;      // GameConstants Camera_FX_Manager_Letterbox_Height
+        uint32_t shots = 0, skipped = 0, completed = 0, shakes = 0;  // diagnostics
+    } cine_;
+    void tsw_shot_begin(const TswCue& c, const sim::TacticalBattle& b, const objects::ObjectStore& st);
+    void tsw_shake(const TswCue& c, const sim::TacticalBattle& b);
+    void tsw_shot_end();      // End_Cinematic_Mode + letterbox out
+    void cinematic_reset();   // a battle view starts / stops: everything off at once
+    void cinematic_step();    // per frame after the sim: shot clock, timer end, letterbox slide
+    void cinematic_input(ui::InputFrame& raw);  // §11.2 input skip rules (before the HUD / world routing)
+    bool cinematic_camera(ui::CameraParams& cp);  // the shot's camera over the RTS params; false when no shot runs
+    bool cinematic_hides_hud() const { return cine_.shot.active(); }
+    // The cursor is hidden unless the attract demo runs; [port] a GUI dialog with the focus (pause menu) shows it again.
+    bool cinematic_hides_cursor() const { return cine_.shot.active() && !demo_session() && !ui_.gui.has_focus(); }
+    void draw_letterbox(ui::HudDrawList& dl, const ui::HudCanvas& canvas, uint32_t w, uint32_t h) const;
     std::unique_ptr<GameSession> session_;
     commands::CommandRecording recording_;
     // Bink movies: the full-screen slot (intro / logos, Lua Play_Bink_Movie) and the HUD advisor loop slot.
