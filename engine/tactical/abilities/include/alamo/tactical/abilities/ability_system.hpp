@@ -192,6 +192,14 @@ struct AbilityHost {
     // (a unit or its team container) starts circling the cable target between Activation_Min_Range and
     // Activation_Max_Range of the ability record (the host: MovementSystem::start_circling). Unset: no circling.
     std::function<void(ObjectId user, ObjectId target, float r_min, float r_max)> cable_attack;
+    // OI t02 (ABILITIES_HARDPOINTS §4.12 [port]): the map has a water plane above the terrain under `p` (XY). Unset: no
+    // water anywhere (Destroy_When_Stunned_Over_Water never fires).
+    std::function<bool(Vec3 p)> over_water;
+    // OI t03 (ABILITIES_HARDPOINTS §4.13 [port]): frame count and fps of animation `anim_type` (a ModelAnimType id; < 0:
+    // the XML name `anim_name`, e.g. an Attack_Animation / Toss_Anim value) of `id`'s sim model, variant 0. Static model
+    // data only, never a playing clock. False when the object has no model or the model lacks the clip. Unset: no clips
+    // (every animation-driven timing uses its fixed fallback).
+    std::function<bool(ObjectId id, int32_t anim_type, std::string_view anim_name, uint32_t& frame_count, float& fps)> anim_clip;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -630,6 +638,15 @@ private:
     bool range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;
     void heal_pass(Obj& o, const SpecialAbilityDesc& s, uint32_t frame);
     uint32_t wave_victims(Obj& o, SpecialState& sp, float radius, std::vector<ObjectId>& out);
+    // OI t03: an animation's timing on sim frames (§4.13). rate = clip frames per sim frame at speed 1 (clip fps / 30,
+    // the sim animation's clock); count = clip frames, end = max(count - 2, 0) (where a one-shot finishes); count = 0:
+    // no clip (rate 1, the fixed fallbacks).
+    struct ClipTiming {
+        float rate = 1.0f;
+        float count = 0.0f;
+        float end = 0.0f;
+    };
+    ClipTiming clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name) const;
     void lightning_targets(Obj& o, const SpecialAbilityDesc& s, ObjectId primary, std::vector<ObjectId>& out);
 
     AbilityHost host_;
