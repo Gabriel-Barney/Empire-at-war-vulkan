@@ -1250,13 +1250,19 @@ at::TacticalReinforcement BattleAi::hijack_unit(int32_t player, int32_t type, bo
 }
 // --- end battle host ---
 
-void BattleAi::unit_released(int32_t player, int32_t object_id) {
+void BattleAi::unit_released(int32_t player, int32_t object_id, ai::tactical::TacticalAiHost::UnitRelease path) {
     if (b_->finished_ || !b_->abilities_ || object_id < 0) return;
     const objects::ObjectStore& st = mode_->primary();
     const objects::ObjectHandle h = st.find(static_cast<objects::ObjectId>(object_id));
     if (!st.alive(h) || st.owner(h) != player) return;
     alamo::tactical::abilities::AbilitySystem& ab = *b_->abilities_;
-    if (!ab.has_object(object_id) || ab.hunting(object_id)) return;  // [port] HUNT skip on both paths
+    if (!ab.has_object(object_id)) return;
+    if (path == ai::tactical::TacticalAiHost::UnitRelease::TaskForce) {
+        // 0x5ff610: no Active_By_Default while movement is locked (0x39ad40).
+        const lua::ScriptObjectState* s = world_->object_bridge().find_state(static_cast<objects::ObjectId>(object_id));
+        const bool script_lock = s && (s->orders_locked || s->locomotor_suspended);
+        if (ab.immobilize_count(object_id) > 0 || script_lock || ab.hunting(object_id)) return;
+    }
     ab.apply_active_by_default(object_id, b_->frame_);
 }
 
