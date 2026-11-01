@@ -120,14 +120,14 @@ Useful options:
 | `--probe-mod admonitor4` | Same place; `Skirmish_Empire_Star_Base_1` becomes a copy of the level-4 station, which offers the Admonitor as shipped. |
 | `--probe-mod admonitor_spawn` | Same place; the level-1 station's garrison (`Starting_Spawned_Units_Tech_0`) gets one `Admonitor_Star_Destroyer`. Tried 2026-10-31: the ship was not launched. |
 
-> **2026-10-31: bought units never arrive in this install** (RENDER.md §7.3, g1f t01). In every driven run a human
-> player's tactical space purchase is paid and finishes but no unit appears (any map, faction, frame rate or input
-> method tried). So scene K cannot frame the Admonitor until a hand-played check (roadmap g1f t06) shows bought ships
-> arriving. To look around by hand in a kept-open game: `--drive KX --drive-keep-open`, then
+> **2026-10-31 (corrected the same night): bought units go to the reinforcement pool.** A finished tactical purchase
+> does not spawn by itself: open **Call for Reinforcements** (third button in the column left of the command bar) and
+> drag the unit's icon onto the map (green ghost = valid drop: near the own station in space, inside an own reinforcement
+> point's ring on land). The earlier "bought units never arrive" note (RENDER.md §7.3, g1f t01) was this misunderstanding.
+> The driven scenes do not do the drag yet; the Admonitor close-up and the Endor scorch run of 2026-10-31 were played by
+> hand (Claude via computer use, menus by hand: start `g1.py apitrace --non-interactive` without `--drive`).
+> To look around by hand in a kept-open game: `--drive KX --drive-keep-open`, then
 > `g1_ui.py --method post shot|click|key|wheel ...`, and `g1.py quit` when done.
-> Also by hand (2026-10-31, computer use, real foreground clicks, run `dxvk_20261031_215539`): the bought X-wing
-> squadron never arrived. Next step is Steam "Verify integrity of game files" (g1f t08). apitrace runs end on their own
-> about 6 minutes in, so check arrival with a DXVK run before an apitrace one.
 | `--game-dir` | Overrides game detection. Otherwise the order is `ALAMO_GAME_DIR`, then `F:\SteamLibrary\…`, then the Steam library folders. |
 
 Results:
