@@ -11,6 +11,7 @@
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/economy.hpp"
 #include "alamo/sim/save_session.hpp"
+#include "alamo/sim/tactical_battle.hpp"
 #include "alamo/terrain/ted.hpp"
 #ifdef ALAMO_GAME_HAVE_UI
 #include "alamo/ui/orders.hpp"  // pause_event / read_pause_event
@@ -628,6 +629,85 @@ void GameSession::after_tick() {
 void GameSession::after_story(sim::SimHost& h) {
     sync_rate_lock(h);
     if (rate_lock_) ++rate_lock_ticks_;
+    if (spec_.attract && !attract_script_done_) attract_demo_script(h);
+}
+
+// OI host: Demo_Attract_Controller.lua, the Lua_Script of the DEMO_CONTROLLER marker (MAIN_MENU_BACKGROUND.md §4), as its
+// effects in script order [port: the port hosts no GameObject scripts]. Once, at the first after-T9 point with the attract
+// battle running [port: when the original first services an object script is not traced], for every live DEMO_CONTROLLER
+// (each object runs its own copy), newest first:
+//   1. FogOfWar.Reveal_All for Find_Player("Empire"), ("Rebel"), ("Underworld") (the first player of that faction); a
+//      missing player is only a script message;
+//   2. Find_All_Objects_Of_Type(player) for the three (live store objects, newest first), then STORY_TRIGGER_ZONE_02 /
+//      _00 / _01; a missing player stops the script here (Find_All_Objects_Of_Type(nil) is a Lua error);
+//   3. Move_Fleet Empire -> zone 02, Rebel -> 00, Underworld -> 01: every listed object not of the ten excluded types
+//      (GROUND_EMPIRE_HYPERVELOCITY_GUN, GROUND_ION_CANNON, REBEL_STAR_BASE_3, STARVIPER_FIGHTER, TIE_PHANTOM, TIE_FIGHTER,
+//      TIE_BOMBER, B-WING, X-WING, A-WING) draws GameRandom(1, 3) from the synced stream and Attack_Moves to that entry's
+//      position; an entry past the end of the zone list stops the script (indexing nil).
+// Attack_Move = TacticalBattle::order_move with attack_move, one object per order; an object that is not a movable battle
+// unit of the player is not moved [port: a TEAM container is not expanded to its members].
+// Data (2026-10-31, type CRCs in the .ted files): of the demo maps only Demo_Attract_Geonosis places a DEMO_CONTROLLER
+// (and three of each zone); the shipped FoC list (Demo_Attract_Kamino) and EaW's Front_end_demo_attract place none, so
+// there this does nothing, as in the original.
+void GameSession::attract_demo_script(sim::SimHost& h) {
+    sim::TacticalBattle* b = battles_ ? battles_->battle() : nullptr;
+    sim::TacticalMode* tm = h.tactical();
+    const galactic::GalacticSim* gs = galaxy();
+    if (!b || !tm || !gs || b->finished()) return;
+    attract_script_done_ = true;
+    const objects::GameObjectTypes& types = data_->types;
+    const objects::ObjectStore& st = tm->primary();
+    const auto type_of = [&types](std::string_view name) { return types.raw().find(name); };  // Find_Object_Type (kNone = nil)
+    const auto find_all = [&st](auto&& keep) {
+        std::vector<objects::ObjectHandle> out;
+        for (const objects::ObjectHandle o : st.objects_newest_first())
+            if (st.active(o) && keep(o)) out.push_back(o);
+        return out;
+    };
+    const objects::TypeIndex controller = type_of("DEMO_CONTROLLER");
+    if (controller == objects::kNone) return;
+    const size_t controllers = find_all([&](objects::ObjectHandle o) { return st.type(o) == controller; }).size();
+    const auto find_player = [gs](std::string_view faction) {
+        const uint32_t f = gs->rules().find_faction(faction);
+        for (size_t p = 0; f != galactic::kNoIndex && p < gs->players().size(); ++p)
+            if (gs->players()[p].faction == f) return static_cast<int32_t>(p);
+        return int32_t{-1};
+    };
+    const std::array<int32_t, 3> players = {find_player("Empire"), find_player("Rebel"), find_player("Underworld")};
+    const std::array<objects::TypeIndex, 3> zone_types = {type_of("STORY_TRIGGER_ZONE_02"), type_of("STORY_TRIGGER_ZONE_00"),
+                                                          type_of("STORY_TRIGGER_ZONE_01")};
+    const std::array<objects::TypeIndex, 10> excluded = {
+        type_of("GROUND_EMPIRE_HYPERVELOCITY_GUN"), type_of("GROUND_ION_CANNON"), type_of("REBEL_STAR_BASE_3"),
+        type_of("STARVIPER_FIGHTER"), type_of("TIE_PHANTOM"), type_of("TIE_FIGHTER"), type_of("TIE_BOMBER"),
+        type_of("A-WING"), type_of("X-WING"), type_of("B-WING")};
+    SimRng& rng = h.random().synced();
+    for (size_t c = 0; c < controllers; ++c) {
+        ++attract_controllers_;
+        for (const int32_t p : players)
+            if (p >= 0)
+                if (tactical::fog::FogOfWar* fog = b->fog()) fog->reveal_all(p);
+        if (std::find(players.begin(), players.end(), -1) != players.end()) continue;
+        std::array<std::vector<objects::ObjectHandle>, 3> units, zones;
+        for (size_t i = 0; i < 3; ++i) {
+            units[i] = find_all([&](objects::ObjectHandle o) { return st.owner(o) == players[i]; });
+            zones[i] = find_all([&](objects::ObjectHandle o) { return zone_types[i] != objects::kNone && st.type(o) == zone_types[i]; });
+        }
+        bool error = false;
+        for (size_t i = 0; i < 3 && !error; ++i)
+            for (const objects::ObjectHandle u : units[i]) {
+                if (!st.alive(u) || std::find(excluded.begin(), excluded.end(), st.type(u)) != excluded.end()) continue;
+                const int32_t k = rng.range_int(1, 3);
+                if (static_cast<size_t>(k) > zones[i].size()) {
+                    error = true;
+                    break;
+                }
+                const Vec3 to = st.position(zones[i][static_cast<size_t>(k - 1)]);
+                const objects::ObjectId id[] = {st.id(u)};
+                if (b->order_move(*tm, static_cast<uint8_t>(players[i]), id, to.x, to.y, rng, tactical::movement::kNoFacing, true) ==
+                    commands::RejectReason::None)
+                    ++attract_moves_;
+            }
+    }
 }
 
 void GameSession::sync_rate_lock(sim::SimHost& h) {

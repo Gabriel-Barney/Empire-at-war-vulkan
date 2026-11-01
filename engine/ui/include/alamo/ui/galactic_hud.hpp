@@ -180,7 +180,9 @@ struct GalacticBattlePrompt {
 };
 // A screen-text line (GALACTIC_DIALOGS §2.1 / §3.1): "The mission holocron has been updated." (white), the auto-resolve
 // result line TEXT_AR_* (red 255, 24, 39). The host owns the timing (alpha = fade). [port] drawn centred, stacked down
-// from 140 canvas units below the top edge, EmpireAtWar-Medium 9, outlined.
+// from 140 canvas units below the top edge, EmpireAtWar-Medium 9, outlined, on kScreenTextLayer: the last HUD layer before
+// the GUI dialogs (hud_frame_steps), so an open dialog covers them.
+inline constexpr uint32_t kScreenTextLayer = kHudLayers - 3;
 struct GalacticScreenText {
     std::u32string text;
     Rgba8 color{255, 255, 255, 255};

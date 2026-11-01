@@ -741,7 +741,8 @@ void App::update_cursor(ui::HudDrawList& dl) {
                 if (targeting_.target_kind() == ui::TargetKind::Object) {
                     const ui::View v = ui::make_view(bview_.camera_params(targets_.width, targets_.height), targets_.width, targets_.height);
                     tactical::QueryContext qc;
-                    const auto hit = ui::pick(tm->trees().all(), ui::pixel_ray(v, input_.mouse_x(), input_.mouse_y()), tactical::kSkipDead, qc);
+                    const auto hit = ui::pick_world(tm->trees().all(), v, ui::pixel_ray(v, input_.mouse_x(), input_.mouse_y()),
+                                                    tactical::kSkipDead, qc, world_pick_tests());
                     c.target_valid = hit.has_value();  // no object under the cursor: the pick keeps waiting
                     hit_friendly = hit && !tb->combat().is_enemy(local_player(), tb->combat().owner(static_cast<tactical::combat::ObjectId>(hit->id)));
                 }

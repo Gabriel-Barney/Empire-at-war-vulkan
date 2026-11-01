@@ -32,6 +32,7 @@
 #include "alamo/game/radar_feed.hpp"
 #include "alamo/game/save_games.hpp"
 #include "alamo/game/story_ui.hpp"
+#include "alamo/game/world_pick.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
 #include "alamo/render/galactic/galactic_session.hpp"
 #include "alamo/render/png.hpp"
@@ -151,7 +152,7 @@ inline int usage() {
                  "usage: alamo_game [--game DIR] [--width W] [--height H] [--hidden] [--audio device|null|off] [--seed S]\n"
                  "                  [--workers N] [--frames N] [--battle-max-frames N] [--cache-dir DIR] [--mailbox|--immediate]\n"
                  "                  [--frame-cap N|display] [--video-options FILE] [--saves-dir DIR]\n"
-                 "                  [--movie NAME]... [--no-intro] [--attract] [--smoke skirmish|land|campaign --png-dir DIR] [MODPATH=..]\n"
+                 "                  [--movie NAME]... [--no-intro] [--attract] [--smoke skirmish|land|campaign|saveload --png-dir DIR] [MODPATH=..]\n"
                  "                  [FALLBACKPATH=..]\n"
                  "       game data: --game DIR or ALAMO_FOC_DATA (the corruption folder)\n");
     return 2;
@@ -247,6 +248,10 @@ public:
     ui::InputRouter router_;
     ui::RoutedInput routed_;
     ui::OrderTranslator orders_;
+    // refixf t08: the tactical world pick's model / sphere tests (HUD_GAPS §2.2, world_pick.hpp), refreshed by
+    // world_pick_tests() for the current battle; Mouse_Collide_Override_Sphere_Radius per type.
+    ui::WorldPickTests pick_tests_;
+    std::vector<float> pick_radii_;
     // Targeted-ability mode (TargetingController, UI.md §4.1): while it is active the router gives it the presses, so it
     // reads the RAW frame through its own InputState (the world's input_ never sees those clicks).
     ui::TargetingController targeting_;
@@ -573,6 +578,8 @@ public:
     void step_sim();
     void galactic_input();
     void battle_input();
+    // refixf t08: the world pick tests over the top tactical mode (null outside a battle). Valid until the next tick.
+    const ui::WorldPickTests* world_pick_tests();
     void submit(commands::EventData ev, bool voice = true);
     void respond(const commands::EventData& ev);
     bool render_frame();

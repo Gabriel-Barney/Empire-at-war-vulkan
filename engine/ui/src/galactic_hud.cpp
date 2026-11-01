@@ -1391,7 +1391,10 @@ void GalacticHud::build_battle_prompt(const GalacticHudFrame& f) {
     stats_.battle_prompt_shell = from_shell;
 }
 
-// Screen-text lines (§2.1 / §3.1) [port placement]: centred, stacked down from 140 units below the top edge.
+// Screen-text lines (§2.1 / §3.1) [port placement]: centred, stacked down from 140 units below the top edge. Layer
+// kScreenTextLayer, the last HUD layer drawn before the GUI dialogs (hud_frame_steps: L9-10, dialogs, L11-12), so an open
+// dialog (the in-game menu, Save / Load) covers the lines like the rest of the HUD; L11-12 stay for what follows the
+// cursor (drag icons) [port].
 void GalacticHud::build_screen_text(const GalacticHudFrame& f) {
     if (f.screen_text.empty() || !fonts_) return;
     HudTextStyle st;
@@ -1404,7 +1407,7 @@ void GalacticHud::build_screen_text(const GalacticHudFrame& f) {
         if (l.text.empty() || l.alpha == 0) continue;
         st.color = with_alpha(l.color, l.alpha);
         st.outline_color = with_alpha(Rgba8{0, 0, 0, 255}, l.alpha);
-        add_text(dl_, kHudLayers - 2, HudList::Text, *fonts_, canvas_, l.text, {0.0f, y}, st);
+        add_text(dl_, kScreenTextLayer, HudList::Text, *fonts_, canvas_, l.text, {0.0f, y}, st);
         y -= 16.0f;
         ++stats_.screen_text_lines;
     }

@@ -179,6 +179,11 @@ public:
     const sim::TacticalBattle* battle() const { return battles_ ? battles_->battle() : nullptr; }
     bool in_battle() const { return battle() != nullptr && host_->modes().top_tactical() != nullptr; }
     int32_t local_player() const { return local_player_; }
+    // Attract demo: the map's Demo_Attract_Controller ran (game_session.cpp attract_demo_script): at least one
+    // DEMO_CONTROLLER object revealed the map, so the view draws the sim's fog. False before the battle runs and on maps
+    // without a controller (the shipped Demo_Attract_Kamino).
+    bool attract_controller_ran() const { return attract_controllers_ > 0; }
+    uint32_t attract_moves() const { return attract_moves_; }  // its Attack_Move orders the battle accepted
     const BattleOrderStats& order_stats() const { return order_stats_; }
     uint64_t ticks() const { return ticks_; }
     // Skirmish: the battle ran and ended (the session is over).
@@ -302,6 +307,9 @@ private:
     int32_t local_player_ = 0;
     bool started_ = false;
     std::array<uint32_t, 2> attract_sides_{};  // attract demo: attacker / defender faction = player index (§6)
+    bool attract_script_done_ = false;          // attract demo: the controller script's State_Init point has passed
+    uint32_t attract_controllers_ = 0;          // DEMO_CONTROLLER objects whose script ran
+    uint32_t attract_moves_ = 0;                // their Attack_Move orders the battle accepted
     bool replay_ = false, invaded_ = false;
     bool paused_ = false, pause_pending_ = false;
     uint64_t pause_events_ = 0;
@@ -315,6 +323,7 @@ private:
     void after_tick();
     // OI host: after-T9 hook (rate lock -> pacing + parity) and its state.
     void after_story(sim::SimHost& h);
+    void attract_demo_script(sim::SimHost& h);
     std::function<bool()> rate_lock_source_;
     bool rate_lock_ = false;
     bool pres_lock_ = false;  // refixf t05 (pacing only)

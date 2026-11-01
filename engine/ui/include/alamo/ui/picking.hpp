@@ -7,6 +7,7 @@
 // tree key), which are the commands' wire ids (OBJECT_RUNTIME id space).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <vector>
@@ -51,6 +52,37 @@ std::optional<PickHit> pick(const tactical::SpatialTree& tree, const tactical::R
 // All hits in (t, id) order (valid until ctx is reused).
 std::span<const tactical::RayHit> pick_all(const tactical::SpatialTree& tree, const tactical::Ray& ray,
                                            tactical::QueryFilter filter, tactical::QueryContext& ctx);
+
+// refixf t08: the tactical world pick 0x36600 (docs/re/HUD_GAPS.md §2.2). Per candidate: the precise model test (0x38f900,
+// SPACE_AVOIDANCE §5); when it misses and the type's Mouse_Collide_Override_Sphere_Radius (type +0x4e0) is > 0, a
+// ray-sphere test at the object centre with that radius. The nearest hit wins; a contained child resolves to its
+// container. The tests are host callbacks (the model data lives in the sim host); all of them are const reads.
+enum class PreciseOutcome : uint8_t {
+    Miss = 0,
+    Hit = 1,
+    NotModelled = 2,  // no model data for the object: [port] its tree box stands in (the pre-t08 pick)
+};
+struct WorldPickTests {
+    // Precise test of object `id` against the segment ray.origin -> ray.origin + ray.dir * ray.max_t. Hit: `t` = the hit
+    // parameter on the ray (same units as Ray::max_t). Required: without it pick_world is the tree-box pick.
+    std::function<PreciseOutcome(uint32_t id, const tactical::Ray& ray, float& t)> precise;
+    // Mouse_Collide_Override_Sphere_Radius of the object's type (<= 0: none) and the sphere centre (the object position).
+    std::function<float(uint32_t id, Vec3& centre)> sphere;
+    // Candidates the pick skips (HUD_GAPS §2.2: garrisoned objects, flag +0x3a7). Optional.
+    std::function<bool(uint32_t id)> skip;
+    // The picked id for a hit candidate (a container child -> its container). Optional: identity.
+    std::function<uint32_t(uint32_t id)> resolve;
+};
+// Ray-sphere entry parameter: origin inside -> 0 [port]; else the first intersection in [0, ray.max_t].
+bool ray_sphere(const tactical::Ray& ray, Vec3 centre, float radius, float& t);
+// The view frustum (near / far planes, full screen) used as the visible-set stand-in.
+tactical::Frustum view_frustum(const View& v);
+// The world pick. Candidates [port: the render scene's visible set]: the tree entries whose box meets the view frustum
+// (`filter`, minus `ignore` and tests.skip), ascending id. Nearest hit by (t, resolved id) [port: equal t -> lower id].
+// tests == nullptr or no tests->precise: pick() (tree boxes only).
+std::optional<PickHit> pick_world(const tactical::SpatialTree& tree, const View& v, const tactical::Ray& ray,
+                                  tactical::QueryFilter filter, tactical::QueryContext& ctx, const WorldPickTests* tests,
+                                  uint32_t ignore = tactical::kNoEntity);
 
 // Galactic map / any non-tree pickable: a sphere with an owner and a kind.
 enum class PickKind : uint8_t { Object = 0, Fleet = 1, Planet = 2 };

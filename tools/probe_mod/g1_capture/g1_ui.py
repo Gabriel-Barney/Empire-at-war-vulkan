@@ -162,6 +162,9 @@ def fit_window(hwnd, w=REF_W, h=REF_H):
     """Resize the window so its client area is w x h again (the game window can come up stretched to the monitor
     height; the game keeps rendering its 1920x1080 back buffer and Present scales it). Keeps the top-left corner."""
     ox, oy, cw, ch = client_rect(hwnd)
+    if cw >= 1.4 * w:   # display scaling: the DPI-virtualized game window is s times larger in real pixels
+        s = max(1, round(cw / w))
+        w, h = w * s, h * s
     if (cw, ch) == (w, h):
         return False
     r = wt.RECT()

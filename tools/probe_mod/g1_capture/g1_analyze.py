@@ -178,6 +178,7 @@ class TraceState:
         self.colorization_examples = []
         self.texfactor = Counter()
         self.tracked = defaultdict(list)   # (shader handle, name) -> [(frame, values)]
+        self.marker = "UVOffset"           # a draw is tracked only when its vs / ps declares this register (g1f t07: planet = "CloudScrollRate")
         self.pending_heat = None
         self.present = 0
         # added 2026-10-29 (G1 t02/t04)
@@ -363,7 +364,7 @@ def handle_call(st, no, fn, text):
                     st.colorization_examples.append({"call": no, "frame": st.frame, "shader": h, "register": "c%d" % ri,
                                                      "value": v})
             for name in st.track:
-                if name in regs and ("UVOffset" in st.regs_of(st.ps) or "UVOffset" in st.regs_of(st.vs)):
+                if name in regs and (st.marker in st.regs_of(st.ps) or st.marker in st.regs_of(st.vs)):
                     rs, ri, size = regs[name]
                     st.tracked[(h, name)].append((st.frame, [bank.get(ri + k) for k in range(min(size, 4))]))
         if st.ps is None or not st.regs_of(st.ps):

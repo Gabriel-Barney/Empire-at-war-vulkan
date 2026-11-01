@@ -686,7 +686,8 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   angles over 24,626 frames, −209.8° in total, ≈ 4,471 steps per turn. The trace never covers a full turn, so
   **whether the clip wraps at 239 or 240 frames stays open.** The optional long planet-spin run was not made.
 
-  > **Status 2026-10-30:** Settled in ANIM_PARTICLES.md §A.9 (wraps at count − 1 = 239, 239 s per revolution), and the port does this: `advance_loop` and `sample_keys` wrap at count − 1 (`engine/anim/src/anim_state.cpp:31-37, 50-60`). No capture confirms it; the g1f t03 trace extraction is still unfinished (below).
+  > **Status 2026-10-30:** Settled in ANIM_PARTICLES.md §A.9 (wraps at count − 1 = 239, 239 s per revolution), and the port does this: `advance_loop` and `sample_keys` wrap at count − 1 (`engine/anim/src/anim_state.cpp:31-37, 50-60`).
+  > **Status 2026-10-31 (g1f t07):** confirmed by capture (planet clip wrap bullet below): 239 s per revolution, no hold at the wrap. The 0.0805° / 4,471-steps figures above came from a non-planet object (`UVOffset` is not a Planet.fx register); the planet turns 0.0502° per tick.
 - **Legacy vertex colour** (partly).
   - Every draw whose layout carries COLOR0 runs with `LIGHTING FALSE`, `COLORVERTEX FALSE` and
     `DIFFUSEMATERIALSOURCE MATERIAL`:
@@ -708,6 +709,21 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   a quad (V −0.00013..1.00013). These are bump footprint/track decals, **not master-atlas slots**.
   `D_master_decal.DDS` slot UVs therefore still come from DECORATIONS.md. A capture that shows a master-atlas decal
   (scorch, crater) is needed. Texture decode: scratchpad only, not saved under `out/`.
+- **Decal atlas capture attempt (g1f t05, 2026-10-31): not captured.** Scorch decals come from the `EXPLOSION_SCORCH_*`
+  entries in `TERRAINDECALFX.XML` (slots `0,3` / `1,3`, `Random_Rotate`, `Random_Size_Offset` 0.1, DIFFUSE_ALPHA),
+  spawned by the `EXPLOSION_SCORCH_MARK_*` particle effects, so a capture needs ground explosions (a unit or building
+  dying). What was tried:
+  - Window: with display scaling the game window opens 3840x2054 in real pixels; `g1_ui.fit_window` now fits to
+    3840x2160 (the game then sees 1920x1080) instead of shrinking it, which made the game redraw its UI with oversized
+    fonts. Screenshots are 3840 wide. Scene `EB` (Endor Xpress as Rebellion vs Easy AI Empire, shot every 30 s,
+    DXVK `dxvk_20261031_100605`) now reaches the battle.
+  - 6 minutes of Easy-AI play: the AI only captured build pads and its units fought neutral Ewoks off-screen (result
+    screen: 2 Dark Troopers, 3 Ewoks lost). Nothing came near the player's base, so there was no fight to frame.
+  - Land purchases: a structure queued on a build pad (850) is paid and its model appears, but the queue entry stays
+    at a full bar for 3+ minutes, the same stuck-purchase picture as t01. No player units were obtained.
+  - Not tried: a hand-played fight. Needs Gabriel (roadmap t06 style): play Endor Xpress under
+    `g1.py apitrace --non-interactive` (no `--drive`), get a unit or building destroyed on open ground, keep it in view
+    for 10 s, quit; then the `--vb-draws` decode of the lit FF draws with the master-atlas texture can run.
 - **Final-image comparison (g1f t04).** `g1_analyze.py --compare NAME REF PORT --regions "name=x0,y0,x1,y1;..."`
   compares a d3dretrace final with an `alamo_render --sim --map X --png` image (1920×1080; world regions exclude the HUD,
   y < 650). Output: `analysis/compare_<name>.json` and `compare_<name>_side_by_side.png` under the run folder
@@ -755,13 +771,48 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   - Open (Gabriel, roadmap g1f t06): does a hand-played Kuat skirmish deliver a bought ship? If not, Steam "Verify
     integrity of game files" and repeat. If a bought ship appears, re-run `run_3_apitrace.cmd` with Bloom/Heat on
     (`g1_options.py --set Bloom=1 HeatDistortion=1 -- apitrace ...`) for the Thrawn close-up.
-- **Planet clip wrap: still open (g1f t03, 2026-10-30).** `apitrace_20261030_160054` is a 302 s Kuat idle trace with camera
-  wheel markers (times in its `status.json`). `g1_planet_wrap.py` is written, but the extraction of that trace did not finish.
-  The kit's first-draw "median step" series mixes several objects drawn with the same mesh shader (`vs#156`), so it must not be
-  read as the planet's spin. The angle per clip frame is fixed by the ALA at 360/239°, so the wrap shows only as a one-clip-frame
-  pause at the turn point: against a second clock, a 1.506° jump means 240, no jump means 239.
+- **Planet clip wrap: not observable in this trace (g1f t03, 2026-10-31).** `g1_planet_wrap.py extract` over the whole
+  `apitrace_20261030_160054` (6.5 GB, 83 240 frames, 52.5 M filtered calls, about 20 min) now finishes: it holds 669 185
+  `m_world` rows in 11 (shader, row-scale) groups, all on the one mesh shader (`vs#156`). Results of `survey` / `analyse`:
+  - Only one object turns steadily: the scale-1.8 group, frames 2 100 to 2 928, about 0 to 177° unwrapped, 0.359° per drawn update
+    (7.15 ticks of 0.0502°/tick, i.e. the rate matches 360/239° per clip frame at 30 Hz to within the 0.4% that separates 239
+    from 240). It is then not drawn for 80 000 frames and reappears at frames 83 105 to 83 239 with an unrelated orientation.
+  - The scale-1.0 group (80 443 frames) holds one angle for 78 490 frames (2 954 to 81 444): a static object.
+  - So the trace covers under half a turn (about 118 s of the 239 s revolution) and no turn point. **Whether the clip holds one
+    frame at the wrap (240) or loops seamlessly (239) is still not read from a capture.** The step-size fit cannot decide it
+    either (see above), and `UVOffset` pairing was not needed.
+  - Cause: this run was a Kuat idle scene with camera-wheel markers, not a planet view; the planet is not on screen for most of it.
+  - **Candidate task (needs Gabriel to launch the game):** capture >= 260 s of one fixed planet view (galactic map planet zoomed
+    in, or a planet-flyby-free space scene), then `python -I g1_planet_wrap.py extract <run>` and `analyse --scale <planet>`;
+    a 240-frame wrap shows as a 30-tick hold (1.5°-equivalent pause) at the turn point against `UVOffset`. No engine change is
+    indicated: ANIM_PARTICLES.md §A.9 (wrap at count - 1 = 239) is what `anim_state.cpp` does, and nothing here contradicts it.
 
-  > **Status 2026-10-30:** The 239-frame wrap is settled by ANIM_PARTICLES.md §A.9 and implemented in `engine/anim/src/anim_state.cpp:31-37`; only this capture-side confirmation remains unfinished.
+  > **Status 2026-10-31:** extraction fixed by running it to the end (no script change was needed; the earlier run was cut short); the wrap question stays open on capture evidence, settled in the port by §A.9.
+- **Planet clip wrap (g1f t07, 2026-10-31): wraps at 239, confirmed by capture.** `apitrace_20261031_175322` (scene PF: Kuat
+  space skirmish, fixed camera; 48 272 frames, 28.2 M filtered calls). Two corrections first: the t03 / "Planet spin" series used
+  the register `UVOffset`, which belongs to the generic bump-mesh vertex shader (`m_sphFill`, 62 instructions), so those
+  "planets" were ordinary meshes (here: static station parts plus four debris-like objects turning 0.2000 deg per change).
+  Planet.fx has no `UVOffset`; its vertex shader is the one that declares `CloudScrollRate` (c31) and `m_time` (c25), and
+  `g1_planet_wrap.py extract` now selects on `CloudScrollRate` and stores `m_time` per row (the engine clock, so no frame-rate
+  guesswork is left). Result of `extract` + `wrap` on the planet draw (scale 500, one object at (241, -57, -4400), 43 216 frames
+  3270..46485, 6 460 pose changes):
+  - `m_time` advances 0.03 per sim tick and the pose changes once per tick (two dropped ticks show as 0.06). m_time 0 to 193.85
+    = 6 462 ticks = 215.4 s at 30 Hz, **324.4 deg of turn (90% of a revolution)**.
+  - Angle per tick: median 0.050207 deg; 360/239/30 = 0.050209 (239 clip frames per turn), 360/240/30 = 0.050000. Linear fit
+    1.67357 deg per m_time unit = 0.050207 deg per tick, max residual 0.0072 deg (0.14 tick) over the whole run: one revolution
+    = 7 170.3 ticks = **239.0 s**.
+  - Frames 3270 to 3686 draw the bind pose (m_time 0, before the first tick); at the first tick (frame 3687) the planet jumps
+    170.16 deg to its random start phase (126.03 clip frames), then turns steadily. The angle returns to the bind pose (clip
+    frame 239 = frame 0) 3 390 ticks later, at m_time 101.73 (frame 27 426); the steps around it are 0.0502 deg per tick with no
+    pause (angles -0.0659, -0.0157, +0.0346, +0.0848), and the rate is the same on both sides (1.67349 before, 1.67370 after,
+    deg per m_time unit).
+  - A 240-frame wrap would hold the pose for 30 ticks (0.9 m_time units, a 1.5 deg deficit): the longest gap between pose changes
+    in the whole run is 0.06 m_time units (a dropped tick), and the residual above rules out the deficit. So **the wrap is at
+    count - 1 = 239, seamless, 239 s per revolution at rate 1.0**, as ANIM_PARTICLES.md §A.9 and `anim_state.cpp` have it.
+  - Limit: the check rests on the pose at m_time 0 being clip frame 0 (bone rest, 0 deg), which fits the return to it after
+    exactly (239 - 126.03) x 30 ticks. The 35.6 deg (708 ticks) of the turn the run did not cover cannot hide the wrap, because
+    the wrap is at the bind pose. A longer hold (>= 240 s of sim time) is not needed.
+  - Tool: `g1_planet_wrap.py wrap <planet.pkl> --scale 500` prints the above in 0.5 s; extraction took 18 m 47 s.
 
 Unattended runs on 2026-10-29: the menus were driven by `g1_ui.py` with `--drive K,E` and `--probe-mod admonitor`,
 which builds Thrawn's SD at station level 1.

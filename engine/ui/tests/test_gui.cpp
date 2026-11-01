@@ -1242,9 +1242,22 @@ void test_galactic_dialogs() {
         const GalacticScreenText lines[2] = {{U"The mission holocron has been updated.", Rgba8{255, 255, 255, 255}, 255},
                                              {ar, kAutoResolveTextColor, 255}};
         GalacticHudFrame g = f;
+        // Text quads per layer without the lines, then with them: the lines land on kScreenTextLayer only, a layer the
+        // frame order draws before the GUI dialogs (an open Save dialog covers them).
+        hud.build(f);
+        std::vector<size_t> before(kHudLayers);
+        for (uint32_t l = 0; l < kHudLayers; ++l) before[l] = hud.draw_list().items(l, HudList::Text).size();
         g.screen_text = lines;
         hud.build(g);
         CHECK(hud.stats().screen_text_lines == 2);
+        for (uint32_t l = 0; l < kHudLayers; ++l)
+            CHECK((hud.draw_list().items(l, HudList::Text).size() > before[l]) == (l == kScreenTextLayer));
+        bool text_drawn = false, dialogs_after = false;
+        for (const HudFrameStep& step : hud_frame_steps()) {
+            if (step.kind == HudStepKind::Layers && step.first <= kScreenTextLayer && kScreenTextLayer <= step.last) text_drawn = true;
+            if (step.kind == HudStepKind::Dialogs) dialogs_after = text_drawn;
+        }
+        CHECK(dialogs_after);
     }
     // GALAXY_MAP_PRESENTATION §1: fleet buttons around the planet (slot 0 / 2 at -/+36, 42; slot 1 at 0, 47), land forces
     // at (0, 5); enemy fleet to slot 0 and the own slot-0 fleet to slot 2 when the orbit is not the local player's; the

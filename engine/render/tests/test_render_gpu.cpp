@@ -975,6 +975,15 @@ int run_gpu(const std::string& src_dir) {
             // -- Thrawn's Star Destroyer: lit and unlit.
             render::GpuModel* gm = load(streamer, "EV_STARDESTOYER_THRAWN.ALO");
             CHECK(gm != nullptr);
+            {  // Scripted runs' blocking path: finish_pending makes a fresh request Ready without a polled frame.
+                render::ModelStreamer blocking(rr, cache, js);
+                const uint32_t h = blocking.request("EV_STARDESTOYER_THRAWN.ALO");
+                blocking.finish_pending();
+                const bool ready = blocking.state(h) == render::ModelStreamer::State::Ready;
+                std::printf("model streamer finish_pending: %s\n", ready ? "Ready without a polled frame" : blocking.error(h).c_str());
+                CHECK(ready);
+                blocking.destroy_all();  // never drawn: nothing in flight reads it
+            }
             if (gm) {
                 const auto ps = rr.pipelines().stats();
                 std::printf("thrawn: %u pipelines (%u failed, %.1f ms summed creation, %u reloaded from the cache dir)\n",

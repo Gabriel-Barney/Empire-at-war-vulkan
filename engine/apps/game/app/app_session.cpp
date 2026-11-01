@@ -498,6 +498,9 @@ void App::session_started(const std::vector<std::string>& diag) {
         std::printf("  session: loaded from %s at tick %" PRIu64 "%s\n", loaded_save_.c_str(), session_->host().frame(),
                     session_->pause_requested() ? " (paused)" : "");
     for (const std::string& d : diag) std::printf("  session: %s\n", d.c_str());
+    // N1: a save taken during a battle comes back in it: the battle opens now (its load screen, then Begin), before any
+    // tick - post_tick would only notice the pushed battle after a first tick on the galactic map / hidden skirmish galaxy.
+    if (session_->in_battle()) begin_battle();
 }
 
 void App::end_session() {
@@ -549,6 +552,7 @@ void App::begin_battle() {
 void App::start_battle_view() {
     battle_view_pending_ = false;
     std::string err;
+    bview_.set_blocking_models(!script_.empty());  // scripted runs: a new model draws on its first frame (screenshots)
     if (!bview_.start(gpu_, data_, *session_, targets_.width, targets_.height, &err)) {
         std::fprintf(stderr, "battle view: %s\n", err.c_str());
         notes_.push_back("battle view failed: " + err);
