@@ -639,13 +639,11 @@ ScriptStep step_combat(bool land) {
                     cx += store.position(h).x;
                     cy += store.position(h).y;
                 }
+                uint32_t target = 0;  // the enemy unit nearest to the local units' centroid
+                double tx = 0, ty = 0;
                 if (!mine.empty()) {
                     cx /= static_cast<double>(mine.size());
                     cy /= static_cast<double>(mine.size());
-                    a.bview_.camera().jump_to({static_cast<float>(cx), static_cast<float>(cy), 0.0f});
-                }
-                if (st->n++ % 150 == 0 && !mine.empty()) {
-                    uint32_t target = 0;
                     double best = 0;
                     for (const objects::ObjectId id : b->movement().unit_ids()) {
                         const objects::ObjectHandle h = store.find(id);
@@ -654,10 +652,15 @@ ScriptStep step_combat(bool land) {
                         if (target == 0 || d < best) {
                             target = static_cast<uint32_t>(id);
                             best = d;
+                            tx = store.position(h).x;
+                            ty = store.position(h).y;
                         }
                     }
-                    if (target != 0) a.submit(commands::ev::attack(target, mine));
+                    // The camera between the local units and that enemy, so the shot shows the engagement (presentation only).
+                    if (target != 0) a.bview_.camera().jump_to({static_cast<float>((cx + tx) / 2), static_cast<float>((cy + ty) / 2), 0.0f});
+                    else a.bview_.camera().jump_to({static_cast<float>(cx), static_cast<float>(cy), 0.0f});
                 }
+                if (st->n++ % 150 == 0 && target != 0) a.submit(commands::ev::attack(target, mine));
                 const sim::BattleStats& bs = b->stats();
                 if (bs.deaths > 0 && st->first_death == 0) st->first_death = st->n;
                 // Sim-only end condition (frame counts, no render state): the run's ticks stay machine independent.

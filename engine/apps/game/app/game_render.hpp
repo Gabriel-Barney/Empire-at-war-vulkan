@@ -157,6 +157,7 @@ public:
 
 // ---- battle -------------------------------------------------------------------------------------------------
 struct BattleViewStats {
+    // corpses: detached corpses + drawable death-clone objects, summed over captures.
     uint32_t objects = 0, drawn = 0, fog_hidden = 0, effects = 0, corpses = 0;
     uint64_t particles_spawned = 0;
     bool fog = false, fog_drawn = false;
@@ -175,6 +176,10 @@ public:
     void set_particle_detail(float detail) {
         if (pworld_) pworld_->set_detail(detail);
     }
+    // Scripted runs: every model the frame requests is loaded and resident before it is built (ModelStreamer::
+    // finish_pending), so a new type's first drawn frame and its particles do not depend on load timing; likewise each
+    // snapshot's fog texture (WorldRenderer::finish_fow_upload).
+    void set_blocking_models(bool on) { blocking_models_ = on; }
     void capture(const GameSession& session);  // after every battle tick (const reads)
     void pre_frame();  // before begin_frame (fog uploads)
     void prepare(GpuCore& gpu, float alpha);
@@ -216,6 +221,7 @@ public:
 private:
     GpuCore* gpu_ = nullptr;
     bool space_ = true;
+    bool blocking_models_ = false;
     int32_t local_ = 0;
     render::SnapshotTypeTable table_;
     render::SnapshotBuffer buffer_;
