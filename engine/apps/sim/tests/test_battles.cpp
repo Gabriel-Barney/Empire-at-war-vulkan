@@ -42,6 +42,7 @@
 #endif
 #include "alamo/sim/map_spawn.hpp"
 #include "alamo/sim/sim_host.hpp"
+#include "alamo/tactical/movement/ted_grid.hpp"  // S7 t07: SPACE_OBSTACLE footprints
 #include "alamo/vfs/vfs.hpp"
 #ifdef ALAMO_SIM_HAVE_GARRISON
 #include "alamo/tactical/garrison/garrison_types.hpp"  // S4
@@ -1936,6 +1937,30 @@ void test_foc() {
               cd.transition_seconds == 10.0f && cd.sticky);
 #endif
     }  // --- end S4 ---
+    {  // S7 t07 (MOVEMENT §2.2): the FoC construction / capture pods have no radius tag; with model data their footprint is
+       // the space model's collision-bound half extent x Scale_Factor (N_Orbital_Construction_Pod: x 1.75)
+        namespace mv = tactical::movement;
+        mv::SpaceObstacleHooks hooks;
+        hooks.model_half_extents = [&catalog](uint32_t t, float& hx, float& hy) { return catalog.space_model_half_extents(t, hx, hy); };
+        for (const char* name : {"Orbital_Construction_Pod", "N_Orbital_Construction_Pod", "Skirmish_Merchant_Dock"}) {
+            const uint32_t t = static_cast<uint32_t>(types.resolve_name(name));
+            CHECK(t < types.size());
+            if (t >= types.size()) continue;
+            float r = 0.0f;
+            uint32_t bits = 0;
+            CHECK(!mv::space_obstacle_footprint(types, t, r, bits));  // no radius tag: needs the model
+            float hx = 0.0f, hy = 0.0f;
+            if (!catalog.space_model_half_extents(t, hx, hy)) {
+                std::printf("foc space obstacle: %s: no model data (sim built without assets), skipped\n", name);
+                continue;
+            }
+            const float scale = types.get_float(t, "Scale_Factor") > 0.0f ? types.get_float(t, "Scale_Factor") : 1.0f;
+            CHECK(mv::space_obstacle_footprint(types, t, r, bits, &hooks) && bits == mv::kSpaceStatic);
+            CHECK(r == std::max(std::fabs(hx), std::fabs(hy)) * scale && r > 10.0f);
+            std::printf("foc space obstacle: %s half %.1f x %.1f, scale %.2f -> radius %.1f\n", name, static_cast<double>(hx),
+                        static_cast<double>(hy), static_cast<double>(scale), static_cast<double>(r));
+        }
+    }
 #ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war on real data (owner: fog agent): shipped GameConstants; grids, dense mask and REVEAL placements of
     // two real maps.
