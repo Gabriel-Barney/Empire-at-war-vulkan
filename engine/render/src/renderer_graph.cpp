@@ -1109,6 +1109,19 @@ void ModelStreamer::wait_jobs() {
     if (counter_) js_.wait(*counter_);
 }
 
+void ModelStreamer::finish_pending() {
+    bool pending = false;
+    for (const auto& e : entries_) pending = pending || e->state.load() < static_cast<int>(State::Ready);
+    if (!pending) return;
+    wait_jobs();
+    for (auto& e : entries_)
+        if (e->state.load() == static_cast<int>(State::Uploading) && !renderer_.finish_uploads(e->model)) {
+            e->error = "upload failed";
+            e->state.store(static_cast<int>(State::Failed));
+        }
+    update();
+}
+
 void ModelStreamer::destroy_all() {
     wait_jobs();
     for (auto& e : entries_) renderer_.destroy_model(e->model);

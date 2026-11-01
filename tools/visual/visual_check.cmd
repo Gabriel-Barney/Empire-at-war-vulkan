@@ -13,8 +13,9 @@ set TC=%CD%\toolchain
 set PD=python -I tools\visual\png_diff.py
 set SCALE=320
 rem Shots whose content depends on wall-clock timing (differ between two runs of the same build): not compared. The save /
-rem load smoke's shots list saves with their wall-clock save time.
-set IGN=--ignore game_campaign_galactic_after.png --ignore game_campaign_video_options.png --ignore "game_smoke_saveload_*.png"
+rem load smoke's shots list saves with their wall-clock save time. The video options shots list this PC's display modes
+rem (resolution / refresh rate rows), which change with the monitor setup.
+set IGN=--ignore game_campaign_galactic_after.png --ignore game_campaign_video_options.png --ignore "game_smoke_saveload_*.png" --ignore game_campaign_screen_video.png
 if /i "%~1"=="update" (
   %PD% update tests\visual_baselines\smoke build-msvc\smoke_out --scale %SCALE%
   %PD% update tests\visual_baselines\smoke_screens build-msvc\smoke_out\screens --scale %SCALE%

@@ -94,6 +94,10 @@ const char* kTypes = R"(<GS>
   <Build_Can_Be_Unlocked_By_Slicer>Yes</Build_Can_Be_Unlocked_By_Slicer><Slice_Cost_Credits>1500</Slice_Cost_Credits></SpaceUnit>
  <SpaceUnit Name="GS_DeathStar"><Variant_Of_Existing_Type>GS_Frigate</Variant_Of_Existing_Type></SpaceUnit>
  <GroundStructure Name="GS_Cantina"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>500</Tactical_Health><Sabotage_Cost_Credits>800</Sabotage_Cost_Credits></GroundStructure>
+ <Marker Name="DEMO_CONTROLLER"><Is_Marker>Yes</Is_Marker><Lua_Script>Demo_Attract_Controller</Lua_Script></Marker>
+ <Marker Name="Story_Trigger_Zone_00"><Is_Marker>Yes</Is_Marker></Marker>
+ <Marker Name="Story_Trigger_Zone_01"><Is_Marker>Yes</Is_Marker></Marker>
+ <Marker Name="Story_Trigger_Zone_02"><Is_Marker>Yes</Is_Marker></Marker>
 </GS>
 )";
 // P4 host: one Empire item (offered at Empire planets) and one Rebel item.
@@ -117,6 +121,7 @@ const char* kFactions = R"(<Factions>
  <Faction Name="Rebel"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>5</Space_Tactical_Unit_Cap><Space_Retreat_Countdown_Seconds>5</Space_Retreat_Countdown_Seconds></Faction>
  <Faction Name="Neutral"><Is_Neutral>Yes</Is_Neutral></Faction>
+ <Faction Name="Underworld"><Can_Control_Planets>Yes</Can_Control_Planets></Faction>
 </Factions>
 )";
 
@@ -923,6 +928,92 @@ void rate_lock_test(const game::GameData& data, const game::SessionSpec& spec) {
     CHECK(combined_diff == 0 && parity_diff == kTo - kFrom && outside_same);
 }
 
+// OI host: the attract demo's Demo_Attract_Controller (GameSession::attract_demo_script) on a map that places one. Factions
+// in order Empire 0, Rebel 1, Neutral 2, Underworld 3 (= map owners = players); the controller and three zones of each type
+// owned by Neutral, two Empire frigates, two Rebel corvettes, one Underworld frigate. Once the battle runs: the three
+// players' grids are Reveal_All, every unit got its Attack_Move (none excluded, three zones each: no early stop) and moved
+// towards one of its side's zones; a 0-worker run matches a 2-worker one. Without the controller nothing happens.
+void attract_demo_script_test(const game::GameData& data, const game::SessionSpec& base) {
+    const auto& names = data.types.raw().types().name_crc;
+    auto crc = [&](const char* type) {
+        const objects::TypeIndex t = data.types.raw().find(type);
+        CHECK(t != objects::kNone);
+        return t == objects::kNone ? 0u : names[t];
+    };
+    auto place = [&](terrain::MapData& m, const char* type, uint32_t owner, float x, float y) {
+        terrain::ObjectPlacement pl;
+        pl.object_id = static_cast<uint32_t>(m.objects.size() + 1);
+        pl.type_crc = crc(type);
+        pl.owner = owner;
+        pl.position[0] = x;
+        pl.position[1] = y;
+        m.objects.push_back(pl);
+    };
+    auto map = std::make_shared<terrain::MapData>(*space_map());
+    place(*map, "DEMO_CONTROLLER", 2, 0.0f, 0.0f);
+    for (int i = 0; i < 3; ++i) {
+        const float d = 400.0f * static_cast<float>(i);
+        place(*map, "Story_Trigger_Zone_02", 2, -2000.0f, -1000.0f + d);  // Empire's
+        place(*map, "Story_Trigger_Zone_00", 2, 2000.0f, -1000.0f + d);   // Rebel's
+        place(*map, "Story_Trigger_Zone_01", 2, -1000.0f + d, 2000.0f);   // Underworld's
+    }
+    place(*map, "GS_Frigate", 0, 0.0f, -2500.0f);
+    place(*map, "GS_Frigate", 0, 300.0f, -2500.0f);
+    place(*map, "GS_Corvette", 1, -2500.0f, 0.0f);
+    place(*map, "GS_Corvette", 1, -2500.0f, 300.0f);
+    place(*map, "GS_Frigate", 3, 2500.0f, 0.0f);
+    game::SessionSpec spec = base;
+    spec.attract = true;
+    spec.ask_battle_choice = false;
+    spec.skirmish_map_data = map;
+    auto run = [&](int32_t workers, CrcLog& out) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        game::GameSession s(data, js, spec);
+        std::vector<std::string> diag;
+        CHECK(s.start(&diag));
+        for (const std::string& d : diag) std::printf("  attract script diag: %s\n", d.c_str());
+        if (!s.started()) return;
+        uint64_t t = 0;
+        while (t < 600 && !s.attract_controller_ran()) {
+            s.tick();
+            ++t;
+        }
+        CHECK(s.attract_controller_ran() && s.attract_moves() == 5);
+        const sim::TacticalBattle* b = s.battle();
+        CHECK(b != nullptr);
+        if (!b) return;
+        const tactical::fog::FogOfWar* fog = b->fog();
+        CHECK(fog != nullptr);
+        for (const int32_t p : {0, 1, 3})
+            CHECK(fog && fog->grid(p) && fog->grid(p)->reveal_all_active());
+        // Each unit heads for its side's zone column / row: 200 ticks later every one has moved towards it.
+        std::vector<std::pair<objects::ObjectId, Vec3>> start;
+        const objects::ObjectStore& st = s.host().modes().top_tactical()->primary();
+        for (const objects::ObjectHandle h : st.objects_newest_first())
+            if (st.active(h) && st.owner(h) != 2 && st.owner(h) >= 0) start.emplace_back(st.id(h), st.position(h));
+        for (int i = 0; i < 200 && s.in_battle(); ++i) s.tick();
+        uint32_t closer = 0;
+        for (const auto& [id, p0] : start) {
+            const objects::ObjectHandle h = st.find(id);
+            if (!st.alive(h)) continue;
+            const Vec3 p1 = st.position(h);
+            const int32_t o = st.owner(h);
+            const float before = o == 0 ? p0.x : o == 1 ? -p0.x : -p0.y, after = o == 0 ? p1.x : o == 1 ? -p1.x : -p1.y;
+            if (after < before - 50.0f) ++closer;
+        }
+        std::printf("attract script (%d workers): controller ran at tick %" PRIu64 ", %u moves, %u of %zu units closer to their zones\n",
+                    workers, t, s.attract_moves(), closer, start.size());
+        CHECK(closer > 0);
+        out = s.host().crc_log();
+    };
+    CrcLog a, b;
+    run(2, a);
+    run(0, b);
+    const CrcDivergence d = first_divergence(a, b);
+    std::printf("attract script replay (0 vs 2 workers): %s\n", d.message.c_str());
+    CHECK(!d.diverged && a.records.size() == b.records.size());
+}
+
 // The attract demo session: a space skirmish with no human (both sides AI controlled), player 0's fleet hop done at setup
 // (no command), the AI-vs-AI battle fought, nothing recorded; a fresh session replays it bit-identically.
 void attract_session_test(const game::GameData& data, const game::SessionSpec& base) {
@@ -945,7 +1036,7 @@ void attract_session_test(const game::GameData& data, const game::SessionSpec& b
             s.tick();
             ++t;
         }
-        CHECK(s.skirmish_over());
+        CHECK(s.skirmish_over() && !s.attract_controller_ran() && s.attract_moves() == 0);  // no DEMO_CONTROLLER on this map
         fought = s.battles() ? s.battles()->battles_fought() : 0;
         recorded = 0;
         for (const auto& b : rec.batches) recorded += b.commands.size();
@@ -1883,6 +1974,7 @@ int main() {
         // OI host.
         rate_lock_test(data, spec);
         attract_session_test(data, spec);
+        attract_demo_script_test(data, spec);
         attract_controller_test(data);
         attract_camera_pure_test();
         attract_rec_test();

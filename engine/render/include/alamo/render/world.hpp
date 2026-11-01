@@ -158,6 +158,10 @@ public:
     void set_decorations_visible(bool on) { deco_visible_ = on; }
     bool fow_enabled() const { return fow_enabled_ && fow_image_ok_; }
     bool fow_upload_pending() const { return fow_next_pending_; }  // a set_fog_of_war upload not yet resident
+    // Blocking (scripted runs, before the frame's record_acquires): waits for a pending set_fog_of_war upload and
+    // acquires it on the graphics queue, so this frame draws it. Without it a fog changing every frame keeps superseding
+    // its own in-flight upload and the plane keeps an old texture. False when nothing was pending or the wait failed.
+    bool finish_fow_upload();
     // R5 space reinforcement overlay: the SpaceFogOfWar plane's stage-1 grid = W_Space_Reinforce_FOW_Grid.tga instead of
     // W_Space_FOW_Grid.tga (DECORATIONS §2.1 +0x388). Space worlds only.
     void set_space_fow_reinforce(bool on) { space_reinforce_ = on; }

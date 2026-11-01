@@ -348,6 +348,11 @@ bool WorldRenderer::set_fog_of_war(const terrain::FowGrid& grid) {
     return true;
 }
 
+bool WorldRenderer::finish_fow_upload() {
+    if (!fow_next_pending_ || !r_ || !fow_ticket_) return false;
+    return r_->up_->ready(fow_ticket_) || r_->up_->finish(fow_ticket_);
+}
+
 bool WorldRenderer::upload_fow_pending() {
     if (!fow_next_pending_ || !r_ || !r_->up_->ready(fow_ticket_)) return false;
     if (fow_image_) r_->release_texture(fow_slot_, &fow_image_);  // deferred until frames using it retired

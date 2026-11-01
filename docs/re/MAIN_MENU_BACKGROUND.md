@@ -148,6 +148,14 @@ dialog. **The demo battle and the overlay stay**: the sub-menus show the same mo
 - `Demo_Attract_Controller.lua` (marker `DEMO_CONTROLLER`) reveals the map for Empire/Rebel/Underworld and
   Attack_Moves every non-fighter unit to a random `STORY_TRIGGER_ZONE_00/01/02`. **No DEMO_CONTROLLER CRC was
   found in the Kamino map**, so on Kamino the battle runs on the two AI players alone [M].
+  > **Data check 2026-10-31** [H, data]: the script is the `Lua_Script` of the `DEMO_CONTROLLER` marker (Markers.xml), so it
+  > runs only on a map that places that marker. Type-name CRCs counted in every demo `.ted` (FoC and EaW maps.meg):
+  > `Demo_Attract_Kamino`, `Demo_Attract_Korriban`, `Demo_Attract_FocDemo`, `Front_end_demo_attract` (both games),
+  > `Space_Demo_Myrkyr` and the `Skirmish_Demo_*` maps place no `DEMO_CONTROLLER` and no `STORY_TRIGGER_ZONE_00/01/02`;
+  > only `Demo_Attract_Geonosis` (not in either game's `Demo_Attract_Maps`) places 1 controller and 3 of each zone. So in
+  > the shipped demos the controller never runs: their fog is not revealed by it. Script details: Empire → zone 02,
+  > Rebel → 00, Underworld → 01; `GameRandom(1, 3)` indexes the zone list, so a map with fewer than three zones of a
+  > type stops the script with a Lua error. The port reproduces the script in the session (`GameSession::attract_demo_script`).
 - During the demo (attract-running = 1): 3D SFX voices are silent (AUDIO §1.6), mode-based music is suppressed
   (0x28e800), so only the menu theme plays; the music lock stops re-requests of mode 13 from restarting the
   theme while it is already current (0x2d21f0: refused only when current mode = 13, lock set, not forced) [H].
@@ -213,6 +221,12 @@ black fade rect, cursor.
 
 ## 7. Open items
 - TextureRect draw path (blend state, filtering) — confirm straight alpha in a capture.
-- Exact owner split of the Kamino units and whether any object carries a Lua script (DEMO_CONTROLLER absent).
+- Exact owner split of the Kamino units. (Whether any object carries a Lua script: settled 2026-10-31, §4 data check:
+  no `DEMO_CONTROLLER` on any shipped demo map.)
+- **Fog in the attract view.** No demo map the games ship reveals the map, yet the original's attract menus show no space
+  FOW grid (G1 capture `apitrace_20261027_103544`, EaW attract frames: `analysis/snap/f_0012738515.png`,
+  `f_0013907249.png`) [M, picture only]. Not traced: which player is the attract demo's viewpoint (a player without a
+  grid, e.g. the first neutral one, would see no fog and hide nothing: FOG_OF_WAR §5.2), or whether the FOW draw is
+  skipped while the demo runs. The port draws no fog in the attract view unless a controller revealed the map [port].
 - Role of byte +0x3cb set on the 0x1a-category objects at demo start.
 - How the EaW exe plays `.rec` attract entries.

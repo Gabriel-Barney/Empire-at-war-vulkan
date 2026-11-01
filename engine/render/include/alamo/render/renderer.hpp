@@ -428,6 +428,9 @@ public:
     bool upload_model(std::shared_ptr<const assets::ModelAsset> model, const TextureSource& textures, GpuModel& out,
                       jobs::JobSystem* js = nullptr, std::string* error = nullptr);
     bool make_resident(GpuModel& m);
+    // Blocking: waits for `m`'s buffer / texture uploads and records their acquires on the graphics queue
+    // (Uploader::finish), so the next make_resident(m) succeeds. False when an upload failed.
+    bool finish_uploads(const GpuModel& m);
     void destroy_model(GpuModel& m);
     // Requests the pipelines `m` needs (so they start compiling before the first draw).
     void prepare_pipelines(const GpuModel& m, float light_scale_w = 1.0f);
@@ -807,6 +810,10 @@ public:
     enum class State : int { Loading = 0, Uploading = 1, Ready = 2, Failed = 3 };
     uint32_t request(std::string model_name);
     void update();  // frame thread, after record_acquires
+    // Blocking (frame thread, scripted runs): waits for every load job, finishes the uploads of the models still
+    // uploading (Renderer::finish_uploads), then update(): every requested model is Ready or Failed afterwards, so the
+    // frame a model first draws no longer depends on load timing.
+    void finish_pending();
     State state(uint32_t handle) const;
     GpuModel* model(uint32_t handle);
     const std::string& error(uint32_t handle) const;

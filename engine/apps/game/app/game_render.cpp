@@ -607,7 +607,11 @@ void BattleView::capture(const GameSession& session) {
         // Int-final: garrisoned objects (the battle's garrison host) are not drawn (R3 kSnapContained).
         render::apply_contained(*snap, [b](const render::SnapshotObject& o) { return b->contained_by(o.id) != objects::kNoObjectId; });
 #ifdef ALAMO_SIM_HAVE_FOG
-        render::apply_battle_fog(*b, local_, *snap);  // R5: the local player's FOW grid + HideWhenFogged marks
+        // R5: the local player's FOW grid + HideWhenFogged marks. The attract demo draws the sim's fog once the map's
+        // DEMO_CONTROLLER revealed it (GameSession::attract_demo_script). A demo map without one (the shipped
+        // Demo_Attract_Kamino) draws none [port: presentation only, the demo's sim fog is unchanged]: the original's attract
+        // menus show no space fog grid (G1 capture, EaW map without a controller), why is open (MAIN_MENU_BACKGROUND.md §7).
+        if (!session.spec().attract || session.attract_controller_ran()) render::apply_battle_fog(*b, local_, *snap);
 #endif
         // --- OI render: space reinforcement overlay cells (TACTICAL_GAPS §5.5) while the overlay is shown; Lua
         // Attach_Particle_Effect requests of the story VMs (lua::PresentationLog::particle_effects, made since this
@@ -634,6 +638,10 @@ void BattleView::capture(const GameSession& session) {
             const std::vector<render::SnapshotCorpse> corpses = render::snapshot_corpses(a->corpses(*top), host.frame());
             render::add_snapshot_corpses(*snap, table_, corpses);
             stats_.corpses += static_cast<uint32_t>(corpses.size());
+            // refix t01: a death clone (the dying unit's own-type clone included) is a store object that plays the death
+            // and stays until its corpse is done, so it is drawn through the store path, never as a detached corpse.
+            for (const render::SnapshotObject& o : snap->objects)
+                if ((o.flags & render::kSnapDeathClone) != 0 && (o.flags & render::kSnapDrawable) != 0) ++stats_.corpses;
             // --- R3/R5 render: muzzle flashes (shown while frame < until) and SURFACE animation events (foot plants) ---
             render::set_snapshot_muzzles(*snap, render::snapshot_muzzles(a->muzzles(*top), host.frame()));
             stats_.muzzles += snap->muzzles.size();
@@ -670,6 +678,7 @@ void BattleView::prepare(GpuCore& gpu, float alpha) {
     if (p.curr && scene_) {
         render::interpolate(p.prev.get(), *p.curr, alpha, render::InterpMode::Smooth, frame_);  // alpha 1 = the current snapshot (Original)
         models_->request(frame_);
+        if (blocking_models_) gpu.streamer->finish_pending();
         builder_->build(frame_, *models_, main, bg_, &istats_);
         stats_.drawn = istats_.drawn;
         stats_.fog_hidden = istats_.fog_hidden;
@@ -731,6 +740,7 @@ void BattleView::pre_frame() {
     fog_tick_ = p.curr->tick;
     if (p.curr->fog) fog_.update(scene_->world(), *p.curr->fog, space_);
     else if (fog_.active()) fog_.update(scene_->world(), render::FogFrameInput{}, space_);
+    if (blocking_models_) scene_->world().finish_fow_upload();  // scripted runs: this snapshot's fog draws this frame
     stats_.fog_drawn = fog_.active();
 }
 

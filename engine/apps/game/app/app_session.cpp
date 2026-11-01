@@ -552,6 +552,7 @@ void App::begin_battle() {
 void App::start_battle_view() {
     battle_view_pending_ = false;
     std::string err;
+    bview_.set_blocking_models(!script_.empty());  // scripted runs: a new model draws on its first frame (screenshots)
     if (!bview_.start(gpu_, data_, *session_, targets_.width, targets_.height, &err)) {
         std::fprintf(stderr, "battle view: %s\n", err.c_str());
         notes_.push_back("battle view failed: " + err);
