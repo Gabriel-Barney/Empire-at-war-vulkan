@@ -41,7 +41,7 @@ struct Lighting {
     assets::Float3 shadow_color{0.5f, 0.5f, 0.5f};
     float bloom_strength = 1.0f, bloom_cutoff = 0.9f, bloom_size = 0.25f;
     std::string environment;            // name of the source record ("" = built-in)
-    bool space = false;                 // space mode: fills off, no stencil shadows (RENDER.md 1.2)
+    bool space = false;                 // space mode (the background scene: fills off, no stencil shadows; SPACE_AND_OPEN A)
     // Scene fog (TEE 0F/10/11/12; linear vertex fog, FOG_VALS = (1/(start-end), -end/(start-end))).
     bool fog_enabled = false;
     assets::Float3 fog_color{1, 1, 1};

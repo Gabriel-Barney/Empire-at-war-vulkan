@@ -869,7 +869,8 @@ static void test_runtime_decals(const render::SurfaceFxLibrary& lib) {
     b.spawn(t, d, 300, 300, 100.0f, 0, 0);
     b.spawn(t, d, 300, 300, 0, 0, 0);
     CHECK(b.size() == 1 && b.record(0).rotation == a.record(0).rotation && b.record(0).width == a.record(0).width);
-    CHECK(a.record(0).width >= 16.0f && a.record(0).width <= 24.0f && a.record(0).height / a.record(0).width > 1.49f);
+    // Exactly Scale: Random_Size_Offset 0.2 is parsed but not applied (captured factor 1, DECORATIONS 4.2).
+    CHECK(d.random_size_offset == 0.2f && a.record(0).width == 20.0f && a.record(0).height == 30.0f && a.record(1).width == 20.0f);
     CHECK(a.record(0).slot_row == 3 && a.record(0).render_mode == static_cast<uint32_t>(terrain::RenderMode::DiffuseAlpha));
     // Fade: intensity (L - age) / L, dead past L.
     a.update(5.0f);

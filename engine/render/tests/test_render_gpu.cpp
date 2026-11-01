@@ -1604,6 +1604,14 @@ int run_gpu(const std::string& src_dir) {
                     CHECK(kuat.space && near3(k->light_color[0], 0.918f, 1.0f, 0.988f) && near_eq(k->intensity[0], 0.646f, 2e-3f));
                     CHECK(near_eq(k->yaw[0] * 57.29578f, 217.1f, 0.1f) && near_eq(k->elevation[0] * 57.29578f, 12.5f, 0.1f));
                     CHECK(near3(k->ambient, 0.027f, 0.051f, 0.055f) && near_eq(k->bloom_strength, 1.0f) && near_eq(k->bloom_size, 0.25f));
+                    // g1f t06 capture (Kuat, Admonitor): BloomCutoff 0.9 and the soft-shadow resolve quad's vertex grey 0x8B (the
+                    // prim vertices carry the scene shadow colour, TEE 17, truncated to a byte as in Renderer::post_darken).
+                    unsigned sh8[3] = {};
+                    for (size_t sci = 0; sci < 3; ++sci)
+                        sh8[sci] = static_cast<unsigned>(static_cast<uint8_t>(std::clamp(k->shadow_color[sci], 0.0f, 1.0f) * 255.0f));
+                    std::printf("env: Kuat cutoff %.3f, shadow colour (%.7f,%.7f,%.7f) -> 0x%02X%02X%02X\n", k->bloom_cutoff,
+                                k->shadow_color[0], k->shadow_color[1], k->shadow_color[2], sh8[0], sh8[1], sh8[2]);
+                    CHECK(near_eq(k->bloom_cutoff, 0.9f) && sh8[0] == 0x8B && sh8[1] == 0x8B && sh8[2] == 0x8B);
                     const render::Lighting kl = render::Lighting::from_environment(*k, kuat.space);
                     const render::Lighting kd = render::Lighting::space_default();
                     CHECK(kl.fill[0].intensity == 0.0f && near_eq(kl.sun.intensity, kd.sun.intensity, 2e-3f) &&
@@ -1975,7 +1983,22 @@ int run_gpu(const std::string& src_dir) {
                 g.ring.wait_idle();
                 rr.destroy_model(sg);
             }
-            {   // (c) heat: MeshHeat quad over a striped background; DistortionAmount 0 = 1-texel shifted copy
+            {   // (c) heat: MeshHeat quad over a striped background; DistortionAmount 0 = the SceneHeat half-texel shift only
+                // Technique pick with the original's vendor filter: SceneHeat t0 carries VENDOR_FILTER_0 = 4098 (AMD).
+                const auto heat_any = effects.get_for_vendor("SceneHeat", 0), heat_amd = effects.get_for_vendor("SceneHeat", 0x1002),
+                           heat_nv = effects.get_for_vendor("SceneHeat", 0x10DE);
+                CHECK(heat_any && heat_amd && heat_nv && heat_any->technique_name == "t0" && heat_amd->technique_name == "t1_ati" &&
+                      heat_nv == heat_any && heat_any == effects.get("SceneHeat"));
+                if (heat_any && heat_amd && heat_any->passes.size() == heat_amd->passes.size() && !heat_any->passes.empty()) {
+                    const materials::ResolvedPass &p0 = heat_any->passes[0], &p1 = heat_amd->passes[0];
+                    materials::PsoKey k0 = p0.pso[0], k1 = p1.pso[0];
+                    k0.vs_id = k1.vs_id = 0;  // program ids follow the bytecode
+                    CHECK(p1.program_status == materials::ProgramStatus::Translated && p0.ps_bytecode == p1.ps_bytecode &&
+                          p0.vs_bytecode != p1.vs_bytecode && k0 == k1);  // same states and PS, the ATI VS
+                }
+                const auto pds = effects.get("PrimDepthSpriteAlpha");  // its filters (0x10DE) only reject DX8 techniques
+                CHECK(!pds || effects.get_for_vendor("PrimDepthSpriteAlpha", 0x10DE) == pds);
+                const bool ati_heat = g.ctx.caps().vendor_id == 0x1002;
                 const uint8_t dist_texel[4] = {160, 128, 128, 255};  // +x distortion
                 auto heat_tex = [&](std::string_view name, assets::TextureRole) -> std::shared_ptr<const assets::TextureAsset> {
                     auto tx = std::make_shared<assets::TextureAsset>();
@@ -1986,11 +2009,14 @@ int run_gpu(const std::string& src_dir) {
                         tx->width = tx->height = 1;
                         tx->data.assign(dist_texel, dist_texel + 4);
                     } else if (name == "stripes.dds") {
+                        // 16 x 16 separable stripes (x and y gradients under linear filtering): 30 + 100 (i odd) + 100 (j odd).
                         tx->name = "stripes.dds";
                         tx->width = 16;
-                        tx->height = 1;
-                        for (int i = 0; i < 16; ++i)
-                            for (int ch = 0; ch < 4; ++ch) tx->data.push_back(ch == 3 ? 255 : (i % 2 ? 230 : 30));
+                        tx->height = 16;
+                        for (int j = 0; j < 16; ++j)
+                            for (int i = 0; i < 16; ++i)
+                                for (int ch = 0; ch < 4; ++ch)
+                                    tx->data.push_back(static_cast<uint8_t>(ch == 3 ? 255 : 30 + (i % 2) * 100 + (j % 2) * 100));
                     } else {
                         return nullptr;
                     }
@@ -2034,11 +2060,43 @@ int run_gpu(const std::string& src_dir) {
                     img[k].assign(px, px + static_cast<size_t>(512) * 512 * 4);
                 }
                 auto at = [&](int k, uint32_t x, uint32_t y) { return &img[k][(static_cast<size_t>(y) * 512 + x) * 4]; };
-                size_t shift_bad = 0, inside_moved = 0, outside_bad = 0, checked = 0;
+                // Sub-pixel shift (sx, sy) of frame k against the no-post frame 0, out(p) = in(p + s): least squares on the
+                // red channel with central-difference gradients of frame 0 over the background, outside the box [skip0, skip1).
+                auto measure_shift = [&](int k, uint32_t skip0, uint32_t skip1, double& sx, double& sy) {
+                    double gxx = 0, gxy = 0, gyy = 0, bx = 0, by = 0;
+                    for (uint32_t y = 48; y < 464; ++y)
+                        for (uint32_t x = 48; x < 464; ++x) {
+                            if (x >= skip0 && x < skip1 && y >= skip0 && y < skip1) continue;
+                            const double gx = 0.5 * (at(0, x + 1, y)[0] - at(0, x - 1, y)[0]);
+                            const double gy = 0.5 * (at(0, x, y + 1)[0] - at(0, x, y - 1)[0]);
+                            const double d = static_cast<double>(at(k, x, y)[0]) - static_cast<double>(at(0, x, y)[0]);
+                            gxx += gx * gx;
+                            gxy += gx * gy;
+                            gyy += gy * gy;
+                            bx += gx * d;
+                            by += gy * d;
+                        }
+                    const double det = gxx * gyy - gxy * gxy;
+                    sx = det > 0 ? (bx * gyy - by * gxy) / det : 99.0;
+                    sy = det > 0 ? (by * gxx - bx * gxy) / det : 99.0;
+                };
+                // SceneHeat VS: t0 = uv - (0.5/W, 0.5/H) (t0) or (0.5/W, 0.25/H) (t1_ati, AMD), from RESOLUTION_CONSTANTS of the
+                // bound target; D3D9 pixel centres add another -1/2 texel against Vulkan's. PS: uv + 2 DistortionAmount (d - 0.5),
+                // the 0x80 clear is d = 128/255 (g1f t06 capture on AMD: +2.765 / +1.264 px at 3840x2054).
+                const double y0 = ati_heat ? -0.75 : -1.0, dist80 = 2.0 * 0.25 * (128.0 / 255.0 - 0.5) * 512.0;
+                double s1x = 0, s1y = 0, s2x = 0, s2y = 0;
+                measure_shift(1, 0, 0, s1x, s1y);      // amount 0: the half-texel terms only, whole background
+                measure_shift(2, 130, 382, s2x, s2y);  // FXO default 0.25 outside the heat quad: flat 0x80 buffer
+                std::printf("heat shift (%s): amount 0 (%.3f, %.3f) px, expected (-1, %.2f); amount 0.25 over 0x80 (%.3f, %.3f), expected "
+                            "(%.3f, %.3f)\n",
+                            ati_heat ? "t1_ati" : "t0", s1x, s1y, y0, s2x, s2y, -1.0 + dist80, y0 + dist80);
+                // Tolerance 0.08 px (the estimator reads quarter-pixel shifts about 0.04 px short on this pattern); t0 and t1_ati
+                // differ by 0.25 px in y.
+                CHECK(std::fabs(s1x + 1.0) < 0.08 && std::fabs(s1y - y0) < 0.08);
+                CHECK(std::fabs(s2x - (-1.0 + dist80)) < 0.08 && std::fabs(s2y - (y0 + dist80)) < 0.08);
+                size_t inside_moved = 0, outside_bad = 0, checked = 0;
                 for (uint32_t y = 140; y < 372; y += 3)
                     for (uint32_t x = 20; x < 492; x += 3) {
-                        const uint8_t* base = at(0, x - 1, y - 1);  // documented SceneHeat -1 texel (x and y)
-                        for (int ch = 0; ch < 3; ++ch) shift_bad += std::abs(at(1, x, y)[ch] - base[ch]) > 1;
                         const bool inside = x > 160 && x < 352 && y > 160 && y < 352;
                         const bool edge = (x > 140 && x < 372 && y > 140 && y < 372) && !inside;
                         if (inside) inside_moved += std::abs(at(2, x, y)[0] - at(1, x, y)[0]) > 40;
@@ -2049,11 +2107,9 @@ int run_gpu(const std::string& src_dir) {
                         }
                         ++checked;
                     }
-                std::printf("heat: %u heat draws, composite %s; amount 0: %zu channel mismatches vs the 1-texel shifted scene (%zu px); "
-                            "default: %zu pixels moved inside the heat quad, %zu changed outside\n",
-                            heat_draws, heat_ran[2] ? "ran" : "skipped", shift_bad, checked, inside_moved, outside_bad);
+                std::printf("heat: %u heat draws, composite %s; default: %zu pixels moved inside the heat quad, %zu of %zu changed outside\n",
+                            heat_draws, heat_ran[2] ? "ran" : "skipped", inside_moved, outside_bad, checked);
                 CHECK(heat_ran[1] && heat_ran[2] && !heat_ran[0] && heat_draws == 1);
-                CHECK(shift_bad == 0);       // strength 0: identity up to the documented 1-texel shift
                 CHECK(inside_moved > 100);   // the stripes behind the quad are displaced
                 CHECK(outside_bad * 50 < checked);  // cleared 0x8080FF = (almost) no offset elsewhere
                 g.ring.wait_idle();

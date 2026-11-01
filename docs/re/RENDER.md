@@ -105,7 +105,8 @@ mode's own 2D scene (0x25c8c0 on mode+0x48). [H]
   sun specular (env +0x60), sun direction from two angles (env +0xa8 yaw, +0xb4 elevation; see §2.3),
   and sets fill-light 1 and 2 intensities to 0 and clears the shadow-volume flag (alScene +0x269 = 0)
   — **on the background scene only** (corrected 2026-10-27, SPACE_AND_OPEN.md §A): the main space scene
-  keeps the environment's fill lights and keeps stencil shadows. [H]
+  keeps the environment's fill lights and keeps stencil shadows. [H] The port draws them in the main space scene
+  since g1r t04 (2026-11-01); before that it switched stencil shadows off for every space frame.
 - **Galactic** (`GalacticModeClass::vf21` 0x4b2bc0): set camera, common tail. [H]
 
 `GameModeClass::sub_2b6aa0` 0x2b6aa0 renders up to four scenes from the mode's scene object:
@@ -788,8 +789,10 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
     SceneHeat strip, but no heat-casting draws occur in the battle (only in the attract menu), so the buffer stays flat
     0x80. The shift comes from the SceneHeat shaders: VS `t0 = uv − (0.5/W, 0.25/H)`, PS `uv' = t0 + 2·0.25·(d − 0.5)`;
     predicted +2.765 / +1.264 px at 3840×2054, **measured +2.775 / +1.275 px** (calls 66927984 → 66928016). At 1920×1080
-    the same formula gives +0.88 / +0.31, which explains the earlier +0.8 / +0.3. The x/y difference is in the vertex
-    shader, not `t1_ati`.
+    the same formula gives +0.88 / +0.31, which explains the earlier +0.8 / +0.3. The 0.25/H term is SceneHeat's
+    `t1_ati` vertex shader: technique `t0` carries `VENDOR_FILTER_0=4098`, so the original draws `t1_ati` on AMD (the
+    capture GPU) and `t0` (0.5/H, +0.88 / +0.06 px at 1920×1080) elsewhere. The port picks by the Vulkan vendor id
+    (g1r t02, `EffectCache::get_for_vendor`; checked by the heat block of `alamo_render_tests`).
   - **Bloom chain (confirms the 5-draw ping-pong, adds values):** 6 full-size and 4 quarter-size (960×513, height
     rounded down) A8R8G8B8 targets; depth-stencil unbound during the chain. Bright pass reads the **undistorted scene copy
     A, not the heat output**: `BloomCutoff` 0.9, keeps colour where luma > cutoff, colour⁵ elsewhere. Four blurs a→b→a→b→a,
@@ -799,7 +802,8 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   - **Frame order (confirms, adds a soft-shadow resolve):** clear → 10 background draws (planet) → `Clear(Z|S)` → 87
     scene draws ending with shadow volumes and the alpha-only darken → StretchRect→A → **soft-shadow resolve**: a
     full-screen quad blurs A's alpha with a 4-tap cross (`blurAmt` 0.0015 uv) and multiplies `lerp(0x8B8B8B, 1, alpha)` into
-    the back buffer (ZERO / SRCCOLOR; the 0x8B grey is vertex colour, blob at call 66927756) → 17 effect draws →
+    the back buffer (ZERO / SRCCOLOR; the 0x8B grey is vertex colour, blob at call 66927756: Kuat's shadow colour
+    0.5490196 converted to a byte by **truncation**, which rounding would make 0x8C; the port truncates since g1r t04) → 17 effect draws →
     StretchRect→A → heat → bloom + composite → `Clear(Z)` → 36 UI draws → Present. First CULLMODE set still CCW (call 7508).
   - **Final image** (frame 32075): whole-frame mean RGB (30.5, 38.8, 41.1); bloom adds only +0.9 luma on the ship; the
     shadow resolve darkens the ship region 43.6 → 39.1 luma. Images: the run's `analysis\` folder (`final_*.png`,

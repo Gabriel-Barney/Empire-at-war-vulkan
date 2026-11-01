@@ -15,13 +15,13 @@
 // 4 water, 5 concrete, 6 mud, 7 ice, 8 lava; others -> default. [port] names 1..8 inferred from SPEC §14 / texture
 // names; 9..11 (special cover types) are not mapped.
 //
-// Runtime decals (TerrainDecalFX.xml, §4.2): spawn = Intensity, Scale (w, h) x one random factor in [1 - Random_Size_
-// Offset, 1 + Random_Size_Offset], a random (column, row) pair from UV_Slot, Slot_Scale, Fadeout_Time, Permanent,
-// Render_Mode, slot count 16 (Master_Decal_Slot_Count absent in vanilla); rotation = the spawning heading, or uniform in
+// Runtime decals (TerrainDecalFX.xml, §4.2): spawn = Intensity, Scale (w, h) exactly (Random_Size_Offset is parsed but
+// has no effect: the 2026-10-31 capture drew every decal at its Scale), a random (column, row) pair from UV_Slot,
+// Slot_Scale, Fadeout_Time, Permanent, Render_Mode, slot count 16 (Master_Decal_Slot_Count absent in vanilla); rotation = the spawning heading, or uniform in
 // [-2pi, 2pi] with Random_Rotate; Z_Angle and Texture_Name have no effect (the atlas D_master_decal.tga is always bound).
 // Rejected when |terrain height - spawn z| > 0.53 max(w, h), or when at least two live decals with current alpha >= 0.3
 // already cover the point. Fade = intensity (L - age) / L for L = Fadeout_Time > 0; dead past L. [port] draw order of the
-// random values: size, slot, rotation; a cap of kMaxRuntimeDecals live decals (oldest non-permanent dropped first, then
+// random values: slot, rotation; a cap of kMaxRuntimeDecals live decals (oldest non-permanent dropped first, then
 // the oldest) - the original's cap and removal are not traced (DECORATIONS §8 item 5).
 #pragma once
 #include <array>
@@ -66,7 +66,7 @@ struct DecalFxDef {
     uint32_t slot_scale = 1;
     float fadeout_time = 0.0f;
     bool permanent = false, random_rotate = false;
-    float random_size_offset = 0.0f;
+    float random_size_offset = 0.0f;  // parsed only: the captured original applies no size jitter (factor 1)
 };
 bool parse_terrain_decal_fx(std::span<const uint8_t> xml, std::vector<DecalFxDef>& inout, std::string* error = nullptr);
 
