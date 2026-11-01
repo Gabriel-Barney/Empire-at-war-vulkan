@@ -80,6 +80,8 @@ public:
     float space_health_multiplier() const { return space_health_mult_; }
     // GameConstants SpaceIdleMovementSpeed (STATION_HANGARS_SOUND §3: engine loops moving at >= 1.1 x this speed).
     float space_idle_movement_speed() const { return space_idle_speed_; }
+    // GameConstants Unit_Presence_Relaxation_Time (R3 presence map lifetime, ANIM_PARTICLES §A.11; default 5 s).
+    float presence_relaxation_seconds() const { return presence_relaxation_; }
     float land_health_multiplier() const { return land_health_mult_; }
     // GameConstants Land_ / Space_Capture_Allowed_Countdown_Seconds, Garrisoned_Max_Attack_Distance_Multiplier
     // (REMAINING_GAPS §3.3); < 0 = not read (the battle keeps its config value).
@@ -174,6 +176,7 @@ private:
     std::map<std::string, Tags> hardpoints_;  // upper-cased name -> tags (lookup only)
     float space_health_mult_ = 1.5f, land_health_mult_ = 1.0f;
     float space_idle_speed_ = 0.0f;
+    float presence_relaxation_ = 5.0f;
     float land_capture_countdown_ = -1.0f, space_capture_countdown_ = -1.0f, garrisoned_range_mult_ = -1.0f;
     float threat_decay_step_ = 0.05f;
     float engines_disabled_speed_ = 0.4f;

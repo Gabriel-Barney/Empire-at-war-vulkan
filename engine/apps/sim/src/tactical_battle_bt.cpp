@@ -216,6 +216,7 @@ uint32_t TacticalBattle::bt_adopt_built(TacticalMode& mode, objects::ObjectHandl
     const auto it = std::lower_bound(units_.begin(), units_.end(), u.id, [](const Unit& a, objects::ObjectId v) { return a.id < v; });
     const Unit& placed = *units_.insert(it, u);
     hg_adopt(placed, *rng);  // hangars: engine mode enter, SPAWN_SQUADRON add_carrier (attach order)
+    presence_adopt(placed, *rng);  // R3: IMPOSING_PRESENCE first-due draw (attach order)
     ++stats_.spawned;
     s4_register(mode, placed);
     l1_register(mode, placed.h, static_cast<int32_t>(placed.type));

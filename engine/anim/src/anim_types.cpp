@@ -171,6 +171,10 @@ bool is_idle_like(int32_t id) { return id == 0 || id == 1 || id == 71 || id == 7
 bool is_turn(int32_t id) { return id == 3 || id == 4 || (id >= 21 && id <= 24) || id == 72 || id == 73; }
 bool is_crouch(int32_t id) { return id == 67 || (id >= 71 && id <= 73); }
 bool is_flinch(int32_t id) { return id >= 79 && id <= 86; }
+bool idle_class_restart(int32_t c, int32_t t) {
+    if (c == kNoAnimType || c == t || is_crouch(c) == is_crouch(t)) return false;
+    return is_crouch(c) || (is_idle_like(c) && !is_flinch(c));
+}
 bool is_one_shot_pose(int32_t id) {
     switch (id) {
         case 7: case 9: case 10: case 11: case 32: case 36: case 41: case 58: case 62:
