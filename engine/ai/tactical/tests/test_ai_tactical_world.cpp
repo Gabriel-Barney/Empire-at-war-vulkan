@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <tuple>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -746,8 +747,10 @@ public:
         add_pool(player, key, type, 1.0f);
         return pool_[player].back();
     }
-    // TACTICAL_GAPS §1.2: Active_By_Default re-apply requests (free-store entry / task-force release), in call order.
-    void unit_released(int32_t player, int32_t object_id) override { released.emplace_back(player, object_id); }
+    // A1_READINGS §28.8: Active_By_Default re-apply requests (script lock's order done / task-force release), in call order.
+    void unit_released(int32_t player, int32_t object_id, UnitRelease path) override {
+        released.emplace_back(player, object_id, static_cast<int32_t>(path));
+    }
     // refixf t06 (AI_TACTICAL §7.4): with ring_test the space drop test refuses every point with |x| > 3200 (the strips
     // behind both stations), so a reinforcement at a station needs the ring search; entry facing 0 -> first direction -x.
     bool space_drop_frame(int32_t, SpaceDropFrame& f) override {
@@ -799,7 +802,7 @@ public:
     uint32_t built = 0;
     uint32_t opp_frame = 0;
     std::vector<std::string> hijacks;
-    std::vector<std::pair<int32_t, int32_t>> released;
+    std::vector<std::tuple<int32_t, int32_t, int32_t>> released;  // (player, object id, UnitRelease)
 
     void hash(StateHasher& h) const {
         h.u32(static_cast<uint32_t>(units_.size()));
@@ -907,16 +910,20 @@ struct RunResult {
     std::map<int32_t, int32_t> deaths;
     std::string summary;
     std::vector<std::string> pp_stats;  // A2 tactical
-    std::vector<std::pair<int32_t, int32_t>> released;  // host unit_released calls (player, object id)
+    std::vector<std::tuple<int32_t, int32_t, int32_t>> released;  // host unit_released calls (player, id, path)
     std::map<std::string, uint32_t> stats;              // world.stats() at the end
     size_t released_at_start = 0;                       // ... after frame 1
     uint32_t built = 0;                                 // variant 2: units the host built
+    int32_t lock_probe = -1;                            // the station a script lock was put on at frame 1 (-1: none)
+    bool lock_kept = false;                             // ... still locked when frame 2 starts
+    int32_t lock_released_frame = -1;                   // ... frame of its OrderLockDone call (-1: none)
 };
 
 // variant 0: the golden skirmish; 1: only the opportunity-fire and MagicPlan plans, the host emits acquisitions and
 // accepts HIJACK spawns (STRATEGIC_GAPS §5.3, AI_GALACTIC_3 §4.3); 2: production; 3: Script_ evaluators (kEvalProbe);
 // 4: refixf t06 group orders (kPlanGroupAttack).
-RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<std::string>* hijacks = nullptr) {
+RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<std::string>* hijacks = nullptr,
+              bool lock_probe = false) {
     RunResult out;
     MemoryFiles files;
     AiDefinitions defs;
@@ -979,6 +986,8 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     for (const std::string& d : diag) std::printf("  diag: %s\n", d.c_str());
     for (int32_t f = 1; f <= frames; ++f) {
         host.tick(static_cast<uint32_t>(f));
+        if (f == 2 && out.lock_probe >= 0)
+            out.lock_kept = world.object_bridge().state(static_cast<objects::ObjectId>(station0)).orders_locked;
         world.update(f, static_cast<uint32_t>(f));
         if (f == 1) {
             out.opponent0 = world.opponent(0);
@@ -986,6 +995,17 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
             out.targets0 = world.live_targets(0);
             out.fs0 = world.free_store_size(0);
             out.released_at_start = host.released.size();
+            if (lock_probe) {  // Lock_Current_Orders on the (idle) station, as a script would
+                world.object_bridge().state(static_cast<objects::ObjectId>(station0)).orders_locked = true;
+                out.lock_probe = station0;
+            }
+        } else if (out.lock_probe >= 0 && out.lock_released_frame < 0) {
+            for (const auto& [pl, id, path] : host.released)
+                if (id == station0 && path == static_cast<int32_t>(TacticalAiHost::UnitRelease::OrderLockDone)) {
+                    CHECK(pl == 0);
+                    CHECK(!world.object_bridge().state(static_cast<objects::ObjectId>(station0)).orders_locked);
+                    out.lock_released_frame = f;
+                }
         }
         if (difficulty0 == 0 && out.countdown_easy < 0 && world.context(0) && world.context(0)->goals.commits() > 0)
             out.countdown_easy = world.context(0)->goals.countdown();
@@ -1039,15 +1059,22 @@ void test_opportunity_and_hijack() {
     CHECK(reinforced);    // ... and was dropped by TF.Reinforce from the pool
     const RunResult again = run(30 * 60, 1, 1);
     CHECK(again.crc == r.crc && again.decisions == r.decisions);
-    // TACTICAL_GAPS §1.2: every free-store admission asks the host to re-apply Active_By_Default (both players' start
-    // admissions on frame 1), and units coming back from task forces / new units ask again later.
-    size_t p0_start = 0;
-    for (size_t i = 0; i < r.released_at_start; ++i) p0_start += r.released[i].first == 0 ? 1u : 0u;
-    std::printf("active-by-default requests: %zu at start (%zu player 0, free store %zu), %zu total\n", r.released_at_start, p0_start,
-                r.fs0, r.released.size());
-    CHECK(r.fs0 > 0 && p0_start >= r.fs0);
-    CHECK(r.released.size() > r.released_at_start);
+    // A1_READINGS §28.8 (corrects TACTICAL_GAPS §1.2): free-store admission does not re-apply Active_By_Default (none
+    // on frame 1 although both stores filled); task forces releasing units do; no script lock in this run, so no
+    // OrderLockDone.
+    size_t tf = 0;
+    for (const auto& [pl, id, path] : r.released) tf += path == static_cast<int32_t>(TacticalAiHost::UnitRelease::TaskForce) ? 1u : 0u;
+    std::printf("active-by-default requests: %zu at start (free store %zu), %zu total, %zu task-force\n", r.released_at_start,
+                r.fs0, r.released.size(), tf);
+    CHECK(r.fs0 > 0 && r.released_at_start == 0);
+    CHECK(tf > 0 && tf == r.released.size());
     CHECK(again.released == r.released);
+    // A script lock (Lock_Current_Orders) on an idle unit is released when the AI sees it idle (port stand-in for
+    // signal 10/11): orders_locked cleared, then one OrderLockDone call for it.
+    const RunResult lk = run(60, 1, 1, nullptr, true);
+    std::printf("order lock probe: station %d, released at frame %d\n", lk.lock_probe, lk.lock_released_frame);
+    CHECK(lk.lock_probe >= 0 && lk.lock_kept);
+    CHECK(lk.lock_released_frame == 2);
 }
 
 std::string golden_text(const RunResult& r) {
