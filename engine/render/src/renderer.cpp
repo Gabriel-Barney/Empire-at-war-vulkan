@@ -871,6 +871,16 @@ bool Renderer::make_resident(GpuModel& m) {
     return m.resident();
 }
 
+bool Renderer::finish_uploads(const GpuModel& m) {
+    if (!up_) return false;
+    rhi::UploadTicket last;  // one timeline: finishing the highest value completes and acquires every lower one
+    for (const rhi::UploadTicket& t : m.buffer_tickets)
+        if (t.value > last.value) last = t;
+    for (const GpuTexture& t : m.textures)
+        if (t.ticket.value > last.value) last = t.ticket;
+    return !last || up_->ready(last) || up_->finish(last);
+}
+
 uint32_t Renderer::allocate_texture_slot(VkImageView view, const char* what) {
     const uint32_t slot = table_.allocate(view);
     if (slot == rhi::kInvalidBindlessSlot) {
