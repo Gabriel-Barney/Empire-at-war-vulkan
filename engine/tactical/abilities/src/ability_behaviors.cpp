@@ -935,6 +935,12 @@ void AbilitySystem::unit_effect(ObjectId id, combat::UnitEffect effect, int32_t 
             e.value = 1;
             e.frame = frame;
             events_.push_back(e);
+            // OI t02 [port] (ABILITIES_HARDPOINTS §4.12, no RE pass): Destroy_When_Stunned_Over_Water - a unit whose stun
+            // starts over water (the host's water plane above the terrain under it) loses its hover and is destroyed at
+            // once: Die with kind 1, no killer. A stunned unit cannot move, so the test at the stun start is the only one.
+            if (o->combat_unit && desc(*o).destroy_when_stunned_over_water && host_.over_water &&
+                host_.over_water(combat_->position(id)))
+                combat_->kill_unit(id, kNoObject, combat::kKindNormal, frame);
             break;
         }
         case E::StunEnded: {

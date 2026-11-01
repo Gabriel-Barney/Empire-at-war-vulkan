@@ -753,6 +753,55 @@ through **globals** 0x140b2c380–0x140b2c394. The port must pass that context e
 root-finder method is not identified; any deterministic method with the same bracket and stop rule is
 acceptable for our own clients.
 
+### 4.12 `Destroy_When_Stunned_Over_Water` (type +0xe6) — port guess, no RE pass [port]
+Not traced (Gabriel 2026-10-30, `docs/PHASE4.md` "Roadmap trim": a documented guess instead of an RE pass). The
+only vanilla user is `MAL_Rocket_Vehicle` (`UNITS_LAND_UNDERWORLD_MAL.XML`): a `Hover` movement-class vehicle with
+`STUNNABLE` in its land behaviours, so it is the one STUNNABLE unit that can stand on water cells (`Hover`
+passability includes `Water`). The port's reading of the name: a stunned hover vehicle loses its lift and sinks.
+**Rule (engine/tactical/abilities, `AbilitySystem::unit_effect`, Stunned):** when a STUNNABLE stun is applied
+(`CombatSystem::stun_unit`: the land stun of `Projectile_Stun_*` detonations or a `Stun_Ability` wave, §4.4 and
+TACTICAL_GAPS §2.3.7) to a unit whose type sets the tag, and the unit is over water, the unit dies at once:
+`Die` (§4.9) with kind 1 and no killer, so its normal death clone / death projectile apply. "Over water" = the
+map has a water plane (`water_type` ≠ None) and the terrain height under the unit's XY is below the water height
+(battle host `AbilityHost::over_water`). The test is made only when the stun starts: a stunned unit cannot move,
+so its position does not change during the stun. Not included: the ion stun (§4.4, a separate behaviour), Confuse,
+Earthquake and other immobilisations. Space battles and maps without water never trigger it.
+Why this guess: the tag is a per-type bool that only a hover vehicle sets, and the only state a STUNNABLE unit
+changes is "stunned"; destroying at the stun start keeps the sim simple (no per-frame water scan, no save state).
+**Probe** (if the guess ever matters): stun a MAL rocket vehicle on water and on land with a stun grenade in a
+FoC skirmish; check whether it dies at once, at the stun end, or only on deep water.
+
+### 4.13 Animation-driven ability timings on sim frames [port]
+Several special-ability classes time their effects from the owner's animation (TACTICAL_GAPS §2.3: "at animation
+frame N", "at the animation end", Berserker's 20 %–80 % window). The port never reads a playing animation clock in
+sim code (determinism rule 3); instead a clip position is a pure function of fixed data and the sim frame count:
+- **Position** after n sim frames since the clip started = n × rate × speed. rate = clip fps / 30, the sim
+  animation's clock (`engine/anim` advances at t = frame / 30); speed = `Attack_Animation_Speedup` for the melee
+  classes, 1 for the others. With no clip data rate = 1 (one clip frame per sim frame, as for a clip at the format's default 30 fps).
+- **"At animation frame N"** = the first update whose position ≥ N: Generic `Damage_Frame_Number`, Arc
+  `Begin_Applying_Damage_Frame`, Eat `Attachment_Frame` / `Target_Destruction_Frame` (all on `Attack_Animation`),
+  Grenade `Spawn_Frame` (on `Toss_Anim`), Super_Laser `Fire_Frame` (on the attack clip, type 5).
+- **"At the animation end"** = position ≥ max(count − 2, 0), the frame where a one-shot clip finishes
+  (anim_state.hpp `advance_one_shot`). Generic / Eat / Arc_Sweep hold the unit (the special stays applied) until
+  then, after their last frame-numbered event; Grenade until the end of `Toss_Anim` after the throw; Hack / Repair
+  change the owner / repair at the end of animation 0x5a: ceil(max(count − 2, 0) / rate) sim frames after the apply.
+- **Berserker window**: animation 0x68 is taken as looping [port]: position = (n × rate) mod (count − 1), n = the
+  frames since the apply (int(FPS × duration) − counter); a damage pass needs counter % 5 = 0 and 0.2 × count <
+  position < 0.8 × count.
+- **Clip data**: frame count and fps of variant 0 of the clip, from the type's sim model (`AbilityHost::anim_clip`,
+  battle host `TacticalBattle::anim_clip_info`; XML names such as `Attack_Animation` / `Toss_Anim` values resolve to
+  ModelAnimType ids with `anim::find_anim_type`). This is static model data loaded from the ALA files, the same for
+  every run, worker count and compiler.
+- **Fallbacks** (no host query, no sim animation, the type has no model or the model lacks the clip): rate 1; the
+  melee and grenade classes end with their last frame-numbered event (the pre-t03 behaviour); Hack / Repair end after
+  60 frames (`kHackFrames`); the Berserker window is always open. Headless runs without models therefore keep the
+  old timings and CRCs.
+- Not modelled: the "not in animation X unless ending" apply gates (Earthquake 0x25–0x27, Telekinesis 0x21–0x23,
+  Force_Lightning 0x28, Force_Sight 0x69–0x6b, melee "animation not 5"): they read the playing state, which the
+  abilities do not track; Super_Laser's `Attack_Anim_Sub_Index` (variant 0 is used).
+**Probe** to settle the [port] choices (prepared only when needed): compare in-game kill timings of a Rancor
+(`Rancor_Pound_Vehicles`, `Rancor_Eat_Infantry`), an Infiltrator grenade toss and Yoda's Berserker with the port's frame counts.
+
 ---
 
 ## 5. Lua API semantics [H unless tagged]

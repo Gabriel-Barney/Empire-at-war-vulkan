@@ -1693,7 +1693,7 @@ void CombatSystem::detonation_effects(const Projectile& p, Vec3 center, ObjectId
         effect_victims(p.owner, true, center, pd.stun_radius, vs);
         for (Unit* v : vs)
             if (desc_of(*v).stunnable && effect_match(*v, pd.stun_mask, &pd.stun_types)) stun_unit(v->id, pd.stun_frames, frame);
-        // [port] Destroy_When_Stunned_Over_Water (scene water height) is not modelled.
+        // Destroy_When_Stunned_Over_Water: the abilities' Stunned hook (ABILITIES_HARDPOINTS §4.12 [port]).
     }
     // Distract: enemies in radius matching the mask get an order toward the detonation (0x2a7b80) [M] - the host's.
     if (pd.distract && pd.distract_radius > 0.0f && hooks_) {
