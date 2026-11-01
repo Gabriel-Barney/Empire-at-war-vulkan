@@ -283,9 +283,9 @@ struct Session {
     galactic::GalacticSetup setup;
     std::string map;
     bool land = false;  // battle host: foc-land - a land invasion instead of a space conflict
-    // t48: BattleConfig::skirmish, for the kinds that are skirmishes: synthetic and foc. foc-land invades on a campaign map with no
-    // skirmish base (the shipped land skirmish equations want barracks, command center and refinery; without them the AI only
-    // scouts); foc-station guards the campaign-only defender retreat rule (t41).
+    // t48: BattleConfig::skirmish, for the kinds that are skirmishes: synthetic, foc and (t50) foc-land, a land skirmish on an _MP_LAND_
+    // map with its pre-built base and MP_Default_Credits. foc-land-campaign keeps the old invasion of a campaign map (the campaign
+    // rules); foc-station guards the campaign-only defender retreat rule (t41).
     bool skirmish = true;
 };
 
@@ -300,7 +300,7 @@ bool load_game(Session& s, std::vector<std::string>& diag) {
 
 // 3 planets A - B - C; the defender (player 0) holds B's orbit, the attacker (player 1) moves in from C.
 galactic::GalacticSetup make_galaxy(const Session& s, uint32_t planet_type, const std::vector<uint32_t>& defender,
-                                    const std::vector<uint32_t>& attacker) {
+                                    const std::vector<uint32_t>& attacker, float credits = 0.0f) {
     galactic::GalacticSetup g;
     GalaxyMap& m = g.map;
     m.campaign_name = "A1_Skirmish";
@@ -319,6 +319,7 @@ galactic::GalacticSetup make_galaxy(const Session& s, uint32_t planet_type, cons
     galactic::PlayerSetup e;
     e.faction = s.rules.find_faction("Empire");
     e.ai = true;
+    e.credits = credits;
     galactic::PlayerSetup r = e;
     r.faction = s.rules.find_faction("Rebel");
     galactic::PlayerSetup n;
@@ -383,7 +384,9 @@ bool synthetic_session(Session& s, std::vector<std::string>& diag) {
     return true;
 }
 
-bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, bool land, bool station = false) {
+// land: a land battle; land_skirmish (t50): that battle is a skirmish (an _MP_LAND_ map, MP_Default_Credits), else the campaign invasion.
+bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, bool land, bool station = false,
+                 bool land_skirmish = false) {
     const std::string root = opt.game_dir.empty() ? env_value("ALAMO_FOC_DATA") : opt.game_dir;
     std::error_code ec;
     if (root.empty() || !fs::is_directory(path_from_utf8(root) / "Data", ec)) {
@@ -412,7 +415,7 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
     std::vector<uint32_t> emp, reb;
     if (land) {  // battle host: --skirmish-ai foc-land - Empire companies hold the planet, Rebel companies invade
         s.land = true;
-        s.skirmish = false;
+        s.skirmish = land_skirmish;
         for (const char* n : {"Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Heavy_Assault_Company", "Imperial_Anti_Infantry_Brigade"})
             if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
         for (const char* n : {"Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Heavy_Tank_Brigade", "Rebel_Infantry_Squad"})
@@ -436,10 +439,11 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
         diag.push_back("FoC skirmish: unit / planet types not found");
         return false;
     }
-    s.setup = make_galaxy(s, planet, emp, reb);
-    // S10 skirmish follow-up: land default = Utapau's Land_Tactical_Map (a campaign map: Defending Forces + Attacker Entry
-    // markers, REMAINING_GAPS §3.2); the MP maps carry no Attacker Entry Position, so the invaders stood at the fallback.
-    s.map = opt.map.empty() ? std::string(land ? "_Land_Planet_Utapau_01" : "_MP_SPACE_KUAT") : opt.map;
+    const float credits = land && land_skirmish ? static_cast<float>(std::max(0, s.db.constants().get_int("MP_Default_Credits", 0))) : 0.0f;
+    s.setup = make_galaxy(s, planet, emp, reb, credits);
+    // S10 skirmish follow-up: foc-land-campaign = Utapau's Land_Tactical_Map (a campaign map: Defending Forces + Attacker Entry
+    // markers, REMAINING_GAPS §3.2). t50: foc-land is a skirmish on _MP_LAND_UTAPAU (explicit faction pads and Player_N_Spawn_Point_Marker).
+    s.map = opt.map.empty() ? std::string(!land ? "_MP_SPACE_KUAT" : land_skirmish ? "_MP_LAND_UTAPAU" : "_Land_Planet_Utapau_01") : opt.map;
     return true;
 }
 
@@ -449,8 +453,9 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     Session s;
     std::vector<std::string> diag;
     bool skipped = false;
-    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-station";
-    const bool ok = foc ? foc_session(s, opt, diag, skipped, kind == "foc-land", kind == "foc-station") : synthetic_session(s, diag);
+    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign" || kind == "foc-station";
+    const bool ok = foc ? foc_session(s, opt, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign", kind == "foc-station", kind == "foc-land")
+                        : synthetic_session(s, diag);
     if (skipped) {
         std::printf("skirmish-ai %s: ALAMO_FOC_DATA / --game not set: skipped\n", kind.c_str());
         return 0;
@@ -491,6 +496,9 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         bool ended = false, starbase_lost = false;
         unsigned long battle_frames = 0;
         std::string winner, victory;
+        // t50 (land skirmish): the battle's BattleStats as last seen while it ran (the summary only exists once it has ended).
+        unsigned long prebuilt = 0, pads = 0, structures = 0, shots = 0;
+        uint64_t orders = 0;
     };
     constexpr uint32_t kBattleFrames = 30 * 480;  // [port] the 15-min battle limit (S10)
     std::string log_text;
@@ -529,6 +537,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         uint64_t t = 0;
         uint64_t orders = 0, rejected = 0;
         size_t decisions = 0, lua_errors = 0;
+        unsigned long prebuilt = 0, pads = 0, structures = 0, shots = 0;
         std::vector<std::string> error_list;
         for (; t < max_ticks; ++t) {
             host.tick_once();
@@ -540,6 +549,13 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                 decisions = a->world().decision_log().size();
                 error_list = a->world().lua_errors();
                 lua_errors = error_list.size();
+            }
+            if (const sim::TacticalBattle* tb = battles.battle()) {
+                const sim::BattleStats& bs = tb->stats();
+                prebuilt = bs.skirmish_prebuilt;
+                pads = bs.skirmish_pads;
+                structures = bs.pad_builds;
+                shots = static_cast<unsigned long>(bs.shots);
             }
             if (battles.battles_fought() > 0 && !battles.battle() && host.modes().depth() == 1) {
                 ++t;
@@ -555,6 +571,11 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                       orders, rejected, decisions, lua_errors, out.crc.records.empty() ? 0 : out.crc.records.back().combined);
         out.text = buf;
         out.lua_errors = lua_errors;
+        out.orders = orders;
+        out.prebuilt = prebuilt;
+        out.pads = pads;
+        out.structures = structures;
+        out.shots = shots;
         for (const std::string& e : error_list) out.text += "  Lua error: " + e + "\n";
         for (const std::string& l : battles.log()) {
             out.text += "  " + l + "\n";
@@ -615,6 +636,15 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
             }
         }
     }
+    if (opt.expect_skirmish_base) {  // t50: the land skirmish starts from its base and the shipped AI plays from it
+        // Both slots' Command Center and Barracks pads start built (4), the AI issues orders, shots are fired, no Lua errors. Whether
+        // the battle reaches a result in the frame limit is not asked here: the skirmish AI does not take the enemy base in 15 minutes.
+        const bool base_ok = kind == "foc-land" && first.prebuilt >= 4 && first.pads >= first.prebuilt && first.shots > 0 && first.orders > 0 &&
+                             first.lua_errors == 0;
+        std::printf("skirmish base: %s (%lu pre-built of %lu pads, %lu structures started, %lu shots, %" PRIu64 " AI orders, %zu Lua errors)\n",
+                    base_ok ? "ok" : "MISSING", first.prebuilt, first.pads, first.structures, first.shots, first.orders, first.lua_errors);
+        if (!base_ok) good = false;
+    }
     first.crc.comments = {"A1 skirmish-ai " + kind + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(first.ticks)};
     std::string err;
     if (!opt.crc_out.empty() && first.crc.save(opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
@@ -648,16 +678,17 @@ std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, co
     Session& s = d->s;
     std::vector<std::string> diag;
     skipped = false;
-    const bool foc = kind == "foc" || kind == "foc-land";
+    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign";
     if (!foc && kind != "synthetic") {
-        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-land)";
+        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-land | foc-land-campaign)";
         return nullptr;
     }
     MapRunOptions mo;
     mo.game_dir = game_dir;
     mo.game_args = game_args;
     mo.map = map;
-    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land") : synthetic_session(s, diag);
+    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign", false, kind == "foc-land")
+                        : synthetic_session(s, diag);
     if (skipped) {
         err = "ALAMO_FOC_DATA / --game not set";
         return nullptr;

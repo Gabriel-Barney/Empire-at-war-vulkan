@@ -44,9 +44,10 @@
 //   alamo_headless --economy --galactic-ai [--battles auto|fight|fight-all] [--ai-log FILE] [--ai-golden FILE] ...
 //       A2: AI-vs-AI galactic campaign, every playable faction a galactic AI player (ai_run.hpp).
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
-//   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-station [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
+//   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-land-campaign|foc-station [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
-//       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land invasion.
+//       [--expect-skirmish-base]: foc-land only (t50): fail unless both sides start with a pre-built base, the AI acts and shots are fired.
+//       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land skirmish (t50), foc-land-campaign: the campaign-rules land invasion.
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
 //       reward, cause) with the game-side trigger stream, and per-tick CRCs incl. "story". Campaign
 //       default Full_Story_Campaign_Underworld.
@@ -159,6 +160,7 @@ struct Options {
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
     std::string skirmish_ai;
     bool expect_battle_end = false;  // S10 land outcome: --expect-battle-end
+    bool expect_skirmish_base = false;  // t50: --expect-skirmish-base
     // N1 save / load (save_run.hpp)
     std::string save_session, save_file, load_file;
     std::string save_when = "any";  // N1 stage 2: --save-when any|battle|galactic|pending
@@ -802,6 +804,7 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--galactic-ai") opt.galactic_ai = true;  // A2
         else if (a == "--skirmish-ai") opt.skirmish_ai = next();  // A1 stage 2
         else if (a == "--expect-battle-end") opt.expect_battle_end = true;  // S10 land outcome
+        else if (a == "--expect-skirmish-base") opt.expect_skirmish_base = true;  // t50
         else if (a == "--ai-log") opt.ai_log = next();
         else if (a == "--ai-golden") opt.ai_golden = next();
         else if (a == "--human") opt.ai_human = next();                // A2 galactic
@@ -885,6 +888,7 @@ static int headless_main(int argc, char** argv) {
         if (!opt.skirmish_ai.empty()) {  // A1 stage 2: --skirmish-ai synthetic|foc [--map NAME]
             m.map = opt.map;
             m.expect_battle_end = opt.expect_battle_end;
+            m.expect_skirmish_base = opt.expect_skirmish_base;
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
         }
         if (opt.story) {

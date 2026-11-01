@@ -64,6 +64,20 @@ const ConflictFactionInfo& ConflictRules::faction(uint32_t f) const {
     return f < factions.size() ? factions[f] : kDefault;
 }
 
+float ConflictFactionInfo::unit_cap_for_players(float players) const {
+    const auto& c = land_skirmish_unit_cap;
+    if (c.empty()) return -1.0f;
+    if (!(players > c.front().first)) return c.front().second;
+    for (size_t i = 1; i < c.size(); ++i) {
+        if (players > c[i].first) continue;
+        const float span = c[i].first - c[i - 1].first;
+        if (!(span > 0.0f)) return c[i].second;
+        const float t = (players - c[i - 1].first) / span;
+        return c[i - 1].second + (c[i].second - c[i - 1].second) * t;
+    }
+    return c.back().second;
+}
+
 bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase& db, const objects::GameObjectTypes& types,
                          const GalacticRules& galactic, ConflictRules& out, std::vector<std::string>* diag) {
     const data::GameConstants& g = db.constants();
@@ -179,6 +193,21 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
                 ci.space_unit_cap = num("Space_Tactical_Unit_Cap", ci.space_unit_cap);
                 ci.space_retreat_countdown = num("Space_Retreat_Countdown_Seconds", ci.space_retreat_countdown);
                 ci.land_retreat_countdown = num("Land_Retreat_Countdown_Seconds", ci.land_retreat_countdown);
+                {  // t50: "players, cap, players, cap, ..." (numbers separated by commas / blanks)
+                    const std::string_view curve = n.child_text("Land_Skirmish_Unit_Cap_By_Player_Count");
+                    std::vector<float> v;
+                    size_t at = 0;
+                    const auto sep = [](char ch) { return ch == ',' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
+                    while (at < curve.size()) {
+                        while (at < curve.size() && sep(curve[at])) ++at;
+                        size_t end = at;
+                        while (end < curve.size() && !sep(curve[end])) ++end;
+                        if (end > at) v.push_back(static_cast<float>(objects::c_atof(curve.substr(at, end - at))));
+                        at = end;
+                    }
+                    ci.land_skirmish_unit_cap.clear();
+                    for (size_t k = 0; k + 1 < v.size(); k += 2) ci.land_skirmish_unit_cap.emplace_back(v[k], v[k + 1]);
+                }
             }
         }
     } else {

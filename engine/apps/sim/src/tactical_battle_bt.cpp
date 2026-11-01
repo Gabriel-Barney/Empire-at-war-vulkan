@@ -148,7 +148,7 @@ void TacticalBattle::bt_add_pad_types(const terrain::MapData& map) {
         if (std::find(types_used_.begin(), types_used_.end(), t) == types_used_.end()) types_used_.push_back(t);
     };
     for (const uint32_t pt : pads)
-        for (const std::string_view tok : types.get_list(pt, "Tactical_Buildable_Objects_Campaign")) {
+        for (const std::string_view tok : types.get_list(pt, pad_list_tag())) {
             const objects::TypeIndex uc = types.raw().find(tok);
             if (uc == objects::kNone || uc >= types.size()) continue;  // a faction name (row header)
             use(uc);
@@ -241,6 +241,8 @@ float TacticalBattle::build_cost(objects::TypeIndex uc_type) const {
     const objects::GameObjectTypes& types = catalog_->types();
     if (uc_type >= types.size()) return 0.0f;
     // Both are int fields (the float view of an int field is 0).
+    // t50 0x3744e0: a skirmish pad is priced from Tactical_Build_Cost_Multiplayer alone (no campaign fallback).
+    if (skirmish_land()) return static_cast<float>(std::max(0, types.get_int(uc_type, "Tactical_Build_Cost_Multiplayer")));
     int32_t c = types.get_int(uc_type, "Tactical_Build_Cost_Campaign");
     if (c <= 0) c = types.get_int(uc_type, "Tactical_Build_Cost_Multiplayer");
     return static_cast<float>(std::max(0, c));
@@ -291,7 +293,7 @@ cmd::RejectReason TacticalBattle::tactical_sell(TacticalMode& mode, uint8_t play
     float cost = 0.0f;
     const objects::ObjectHandle ph = st.find(s->pad);
     if (st.alive(ph))
-        for (const std::string_view tok : types.get_list(st.type(ph), "Tactical_Buildable_Objects_Campaign")) {
+        for (const std::string_view tok : types.get_list(st.type(ph), pad_list_tag())) {
             const objects::TypeIndex uc = types.raw().find(tok);
             if (uc == objects::kNone || uc >= types.size()) continue;
             if (types.resolve_name(types.get_string(uc, "Tactical_Buildable_Constructed")) == bt) {
@@ -548,6 +550,19 @@ int32_t placement_base_level(const terrain::ObjectPlacement& pl) {
     return (m && !m->data.empty()) ? static_cast<int32_t>(m->data[0]) : 0;
 }
 
+// t50: the slot of a skirmish team marker "Team_NN_<what>" (MultiplayerStructureMarker / Marker types of the MP maps): NN as a
+// number, -1 when the name has another shape. [M] team NN = skirmish slot NN.
+int32_t team_marker_slot(std::string_view name) {
+    if (name.size() < 9) return -1;
+    static constexpr std::string_view kTeam = "TEAM_";
+    for (size_t i = 0; i < kTeam.size(); ++i) {
+        const char c = (name[i] >= 'a' && name[i] <= 'z') ? static_cast<char>(name[i] - 'a' + 'A') : name[i];
+        if (c != kTeam[i]) return -1;
+    }
+    if (name[5] < '0' || name[5] > '9' || name[6] < '0' || name[6] > '9' || name[7] != '_') return -1;
+    return (name[5] - '0') * 10 + (name[6] - '0');
+}
+
 // Facing of a map placement: its yaw rotates the model as authored, whose nose is model -Y (ALO convention), so the
 // facing is Rz(yaw) x (0, -1, 0) (render::object_transform of it equals the placement transform).
 Vec3 yaw_facing(float yaw_deg) {
@@ -632,8 +647,47 @@ void TacticalBattle::bt_map_prepass() {
                 types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Selectable)) &&
                rules_->type(static_cast<uint32_t>(t)).members.empty();
     };
+    // t50: land skirmish team markers ("Team_NN_Command Center", "_Barracks", "_BuildPads_Position", "_Reinforcement_Point_Plus2_Cap",
+    // ...): the marker stands for the pad (or point) of slot NN's faction, i.e. the Marker_For_Specific_Object_Type entry whose
+    // Affiliation names that faction. [M] the retail skirmish setup creates these at game start; the rule is read from the
+    // marker data (MULTIPLAYER_STRUCTURE_MARKERS.XML), the slot -> player map is skirmish_slot_player. The pad takes the marker's place.
+    const auto& type_crcs = types.raw().types().name_crc;
+    auto team_pad = [&](const terrain::ObjectPlacement& marker, objects::TypeIndex mt, terrain::ObjectPlacement& out) -> bool {
+        const int32_t slot = team_marker_slot(types.raw().types().name[mt]);
+        const int32_t player = slot >= 0 ? skirmish_slot_player(slot) : -1;
+        if (player < 0 || static_cast<size_t>(player) >= galaxy_->players().size()) return false;
+        const uint32_t f = galaxy_->players()[static_cast<size_t>(player)].faction;
+        if (f >= galaxy_->rules().factions.size()) return false;
+        const std::string& faction = galaxy_->rules().factions[f].name;
+        for (const std::string_view tok : types.get_list(mt, "Marker_For_Specific_Object_Type")) {
+            const objects::TypeIndex x = types.resolve_name(trim(tok));
+            if (x == objects::kNone || x >= types.size() || x >= type_crcs.size()) continue;
+            for (const std::string_view a : types.get_list(x, "Affiliation"))
+                if (iequal_trim(a, faction)) {
+                    out = marker;
+                    out.type_crc = type_crcs[x];
+                    out.owner = static_cast<uint32_t>(player);
+                    return true;
+                }
+        }
+        return false;
+    };
     for (terrain::ObjectPlacement& pl : map_.objects) {
         if (placement_base_level(pl) > base) continue;
+        if (skirmish_land()) {  // t50: the team marker is replaced by its pad (the marker is not kept: it would block the pad)
+            const objects::TypeIndex mt = index.find(pl.type_crc);
+            terrain::ObjectPlacement pad;
+            if (mt != objects::kNone && mt < types.size() && team_pad(pl, mt, pad)) {
+                const objects::TypeIndex et = index.find(pad.type_crc);
+                if (et != objects::kNone && et < types.size()) {
+                    if (combat_candidate(et)) use(static_cast<uint32_t>(et));
+                    for (const auto& [x, w] : spawn_table(types, et))
+                        if (combat_candidate(x)) use(static_cast<uint32_t>(x));
+                }
+                kept.push_back(std::move(pad));
+                continue;
+            }
+        }
         const int32_t o = bt_map_owner(pl.owner);  // [probe 2026-10-29] faction index -> player
         if (!bt_owner_valid(o)) continue;
         pl.owner = static_cast<uint32_t>(o);  // map_ owners are player ids from here on (bt_map_load, markers)
@@ -918,6 +972,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
     //    [M: the 0x2a9ff0 filter], else the nearest to the first Defending Forces marker. Space: the attacker looks at the
     //    last Defending Forces marker. [port] Formation placement 0x2a00b0 = rows of 6 behind the anchor along the facing;
     //    Space_Escort_Unit_Types and the planet-specific upgrades (step 5) are not spawned.
+    if (skirmish_land()) bt_skirmish_anchors();  // t50
     const std::vector<size_t> dm = of_kind(kMkDefend), am = of_kind(kMkAttack);
     if (!dm.empty()) {
         anchor_[0] = flat(bt_markers_[dm.front()].pos);
@@ -1071,6 +1126,124 @@ void TacticalBattle::bt_pad_restore(TacticalMode& mode) {
         s->built = st.id(bh);
         s->built_type = sp.type;
         bt_used_ = true;
+    }
+}
+
+// ---- land skirmish base (t50) ---------------------------------------------------------------------------------------
+
+int32_t TacticalBattle::skirmish_slot_player(int32_t slot) const {
+    // [M] a skirmish's slots are its two battle sides' players in ascending player order (the host builds the galaxy with
+    // the human first; the headless runs with the first AI first), so slot 0 / 1 = "Player_0" / "Team_00" and "Player_1" / "Team_01".
+    int32_t ids[2] = {req_.info.defender, req_.info.attacker};
+    if (ids[0] > ids[1]) std::swap(ids[0], ids[1]);
+    int32_t out[2] = {-1, -1};
+    int32_t n = 0;
+    for (const int32_t v : ids)
+        if (v >= 0 && bt_owner_valid(v) && (n == 0 || out[n - 1] != v)) out[n++] = v;
+    return slot >= 0 && slot < n ? out[slot] : -1;
+}
+
+float TacticalBattle::skirmish_land_unit_cap(int32_t player) const {
+    if (!galaxy_ || player < 0 || static_cast<size_t>(player) >= galaxy_->players().size()) return -1.0f;
+    int32_t count = 0;
+    for (int32_t slot = 0; slot < 2; ++slot) count += skirmish_slot_player(slot) >= 0 ? 1 : 0;
+    return rules_->faction(galaxy_->players()[static_cast<size_t>(player)].faction).unit_cap_for_players(static_cast<float>(count));
+}
+
+void TacticalBattle::bt_skirmish_base(TacticalMode& mode) {
+    // t50 [M]: MP_Default_Pre_Built_Base (GameConstants, shipped yes) with a pad type that respects the option
+    // (Respects_Skirmish_Pre_Build_Bases_Option, L1_S4_REMAINING §3.6 "pre-placed types spawn at start"): the pads of the
+    // MultiplayerStructureMarkers "Team_00_Command Center" and "Team_00_Barracks" start built, for the two slots' factions, at
+    // no charge: the pad's first buildable under-construction type of the owner's faction row, as its Tactical_Buildable_Constructed
+    // type. The other pads (factories, research, power, communications array, generic and resource pads) start empty. The retail
+    // pre-placed type itself is not decoded (.ted mini 0x2B is 3 on exactly the base pads); which pads it builds is the open item.
+    if (!skirmish_land() || !combat_ || pad_behavior() == objects::kNoBehavior || uc_behavior() == objects::kNoBehavior) return;
+    const objects::GameObjectTypes& types = catalog_->types();
+    std::vector<objects::TypeIndex> pre;
+    for (const char* name : {"Team_00_Command Center", "Team_00_Barracks"}) {
+        const objects::TypeIndex mt = types.resolve_name(name);
+        if (mt == objects::kNone || mt >= types.size()) continue;
+        for (const std::string_view tok : types.get_list(mt, "Marker_For_Specific_Object_Type")) {
+            const objects::TypeIndex x = types.resolve_name(trim(tok));
+            if (x != objects::kNone && x < types.size()) pre.push_back(x);
+        }
+    }
+    if (pre.empty()) return;
+    objects::ObjectStore& st = mode.primary();
+    std::vector<objects::ObjectHandle> pads;
+    for (const objects::ObjectHandle h : st.all_objects())
+        if (st.active(h) && st.has_behavior(h, pad_behavior()) && std::find(pre.begin(), pre.end(), st.type(h)) != pre.end()) pads.push_back(h);
+    for (const objects::ObjectHandle ph : pads) {
+        const int32_t owner = st.owner(ph);
+        if (owner < 0 || (owner != skirmish_slot_player(0) && owner != skirmish_slot_player(1))) continue;
+        if (pad_contents(st.id(ph)) != objects::kNoObjectId) continue;
+        const uint32_t f = galaxy_->players()[static_cast<size_t>(owner)].faction;
+        if (f >= galaxy_->rules().factions.size()) continue;
+        const std::string& faction = galaxy_->rules().factions[f].name;
+        objects::TypeIndex uc = objects::kNone;
+        bool in_row = false;
+        for (const std::string_view tok : types.get_list(st.type(ph), pad_list_tag())) {
+            const objects::TypeIndex x = types.raw().find(tok);
+            if (x == objects::kNone || x >= types.size()) {
+                in_row = iequal_trim(tok, faction);
+                continue;
+            }
+            if (in_row && uc == objects::kNone && types.has_behavior(x, objects::BehaviorSet::Union, uc_behavior())) uc = x;
+        }
+        if (uc == objects::kNone) continue;
+        const objects::TypeIndex ft = types.resolve_name(types.get_string(uc, "Tactical_Buildable_Constructed"));
+        if (ft == objects::kNone || ft >= types.size() ||
+            std::find(types_used_.begin(), types_used_.end(), static_cast<uint32_t>(ft)) == types_used_.end())
+            continue;
+        objects::SpawnParams sp;
+        sp.type = ft;
+        sp.owner = owner;
+        sp.position = bt_pad_attach_point(mode, ph);
+        sp.position.z += 0.1f;
+        sp.facing = st.facing(ph);
+        const objects::ObjectHandle bh = mode.spawn(sp);
+        if (!st.alive(bh)) continue;
+        bt_adopt_built(mode, bh, owner, 1.0f, bt_rng_);
+        PadState* s = pad_state(st.id(ph), true);
+        pads_mode_ = &mode;
+        s->built = st.id(bh);
+        s->built_type = ft;
+        bt_used_ = true;
+        ++stats_.skirmish_prebuilt;
+    }
+    for (const objects::ObjectHandle h : st.all_objects())
+        if (st.active(h) && st.has_behavior(h, pad_behavior()) &&
+            (st.owner(h) == skirmish_slot_player(0) || st.owner(h) == skirmish_slot_player(1)))
+            ++stats_.skirmish_pads;
+}
+
+void TacticalBattle::bt_skirmish_anchors() {
+    // t50 [M]: a land skirmish side starts at its slot's map marker: "Player_<slot>_Spawn_Point_Marker" owned by the slot's player
+    // (the explicit-faction MP maps carry one per faction and slot), else "Team_0<slot>_Spawn_Point_Marker" /
+    // "Team_0<slot>_Base_Position_Marker" (the team maps; the first in map order). No marker: the fallback anchor stays.
+    if (!skirmish_land()) return;
+    const objects::GameObjectTypes& types = catalog_->types();
+    for (uint8_t side = 0; side < 2; ++side) {
+        const int32_t player = side_player(side);
+        int32_t slot = -1;
+        for (int32_t k = 0; k < 2; ++k)
+            if (skirmish_slot_player(k) == player) slot = k;
+        if (slot < 0) continue;
+        const std::string player_marker = "Player_" + std::to_string(slot) + "_Spawn_Point_Marker";
+        const std::string team_spawn = "Team_0" + std::to_string(slot) + "_Spawn_Point_Marker";
+        const std::string team_base = "Team_0" + std::to_string(slot) + "_Base_Position_Marker";
+        const MapMarker* pick = nullptr;
+        for (const std::string* want : {&player_marker, &team_spawn, &team_base}) {
+            for (const MapMarker& m : bt_markers_) {
+                if (m.type == objects::kNone || m.type >= types.size()) continue;
+                if (!iequal_trim(types.raw().types().name[m.type], *want)) continue;
+                if (want == &player_marker && m.owner != player) continue;
+                pick = &m;
+                break;
+            }
+            if (pick) break;
+        }
+        if (pick) anchor_[side] = Vec3{pick->pos.x, pick->pos.y, 0.0f};
     }
 }
 

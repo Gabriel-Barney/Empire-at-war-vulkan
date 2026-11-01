@@ -145,6 +145,8 @@ struct BattleStats {
     uint32_t containers = 0, ability_events = 0, activations = 0, ability_commands = 0, hardpoints_destroyed = 0;
     uint32_t particles = 0, props = 0, death_clones = 0, smoke = 0, dummies = 0, anim_plays = 0;
     uint32_t death_clones_removed = 0;  // refixf t04: clone objects removed by their death plan (at once included)
+    // t50 (land skirmish): pads of the two slots, pads that started built, structures started on a pad during the battle.
+    uint32_t skirmish_pads = 0, skirmish_prebuilt = 0, pad_builds = 0;
 };
 
 // A render-side attachment reported by the sim (Damaged_Smoke_Asset_Name at 75 % / 50 %).
@@ -632,6 +634,16 @@ public:
     // Pad price 0x3744e0 (campaign): Tactical_Build_Cost_Campaign, else Tactical_Build_Cost_Multiplayer when <= 0
     // [port: the corruption planet factor 0x33e440 is not applied].
     float build_cost(objects::TypeIndex uc_type) const;
+    // t50: the land skirmish rules. A land skirmish (BattleConfig::skirmish, land map) prices pads from
+    // Tactical_Build_Cost_Multiplayer and lists their buildable types from Tactical_Buildable_Objects_Multiplayer
+    // (L1_S4_REMAINING §3.6: "skirmish ... Multiplayer", else Campaign), and gets the skirmish base (bt_skirmish_base).
+    bool skirmish_land() const { return cfg_.skirmish && !space_; }
+    const char* pad_list_tag() const { return skirmish_land() ? "Tactical_Buildable_Objects_Multiplayer" : "Tactical_Buildable_Objects_Campaign"; }
+    // t50: the skirmish slot -> player map [M: slot N = the N-th battle participant by ascending player id]; -1 = none.
+    int32_t skirmish_slot_player(int32_t slot) const;
+    // t50: Land_Skirmish_Unit_Cap_By_Player_Count of the player's faction at the battle's player count [M: linear
+    // interpolation between the curve's keys, clamped to its ends]; -1 = no curve.
+    float skirmish_land_unit_cap(int32_t player) const;
     // §6.5 galactic persistence (0x42f160 / 0x4b6c70 / 0x4bb3a0 / 0x4b7c00): records of the battle planet's persistent
     // pad children {type, pad x / y / z, small int <= 5 [M: level], int [port: the builder]}. [port] The planet data
     // vector (D +0x10) has no galactic-side storage yet: CampaignBattles keeps one list per planet and passes it here
@@ -1281,6 +1293,8 @@ private:
     Vec3 bt_pad_attach_point(const TacticalMode& mode, objects::ObjectHandle pad) const;  // §6.5 UC attachment bone
     std::vector<PadRecord>* pad_records_ = nullptr;  // §6.5 galactic persistence (host-owned, per planet)
     void bt_pad_restore(TacticalMode& mode);          // setup: persistent pad children back on their pads
+    void bt_skirmish_base(TacticalMode& mode);        // t50 setup: the land skirmish's pre-built base (command center, barracks)
+    void bt_skirmish_anchors();                       // t50 setup: land skirmish start positions from the slot's map markers
     void bt_team_positions(TacticalMode& mode);                            // tick, after the movement commit
     std::vector<RemovalRecord> bt_removals_;
     std::vector<objects::ObjectId> bt_landing_;

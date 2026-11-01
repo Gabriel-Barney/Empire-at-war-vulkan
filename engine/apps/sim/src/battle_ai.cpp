@@ -63,9 +63,9 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.difficulties = setup.difficulties;
     cfg.attacker = b_->req_.info.attacker;
     cfg.defender = b_->req_.info.defender;
-    // t48: the port's skirmish battles also run under a galaxy, but are not campaign battles. [port] land skirmish stays on the
-    // campaign rules: it has no skirmish base, and without barracks, command center and refinery the shipped equations only scout.
-    cfg.campaign = !b_->cfg_.skirmish || !b_->space_;
+    // t48: the port's skirmish battles also run under a galaxy, but are not campaign battles. t50: that holds for land skirmish
+    // too now that it has its skirmish base (TacticalBattle::bt_skirmish_base): the shipped skirmish equations and plans run.
+    cfg.campaign = !b_->cfg_.skirmish;
     cfg.constants = setup.constants;
     cfg.log_decisions = setup.log_decisions;
     cfg.game_seed = host.session_seed();  // A2 tactical: perception '#' reseed (AI_GALACTIC_3 §7.3)
@@ -351,7 +351,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     if (w.types.empty()) {
         // Static parts (types indexed by objects::TypeIndex, players, relations, map, hard points).
         w.mode = b_->space_ ? at::TacticalMode::Space : at::TacticalMode::Land;
-        w.campaign = !b_->cfg_.skirmish || !b_->space_;  // as TacticalAiConfig::campaign above
+        w.campaign = !b_->cfg_.skirmish;  // as TacticalAiConfig::campaign above
         const tactical::Aabb& bb = mode_->bounds();
         w.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
         // S10 land outcome: the campaign start markers behind IsFriendly / IsEnemyStartLocation (AI_TACTICAL_PERCEPTION
@@ -1097,11 +1097,25 @@ bool BattleAi::can_reinforce(int32_t player) {
 // --- A2 tactical: tactical population caps (AI_GALACTIC_3 §3.3) [H]: space = the faction's Space_Tactical_Unit_Cap;
 // land campaign battle = Max_Ground_Forces_On_Planet for the defender, min(that, capacity) for any other player, where
 // capacity = Base_Population_Capacity + Σ Additional_Population_Capacity of the player's live objects in the battle
-// (the reinforcement points it holds). [port] land skirmish takes the same rule: no Land_Skirmish_Unit_Cap curve yet. ---
+// (the reinforcement points it holds). t50: a land skirmish is min(capacity, Land_Skirmish_Unit_Cap_By_Player_Count at the player
+// count), the capacity counting the player's and its allies' objects (§3.3 / §3.3 "plus, in skirmish, those of allied players"). ---
 float BattleAi::population_cap(int32_t player) {
     const auto& ps = b_->galaxy_->players();
     const uint32_t f = player >= 0 && static_cast<size_t>(player) < ps.size() ? ps[static_cast<size_t>(player)].faction : galactic::kNoIndex;
     if (b_->space_) return b_->rules_->faction(f).space_unit_cap;
+    if (b_->skirmish_land()) {
+        const float curve = b_->skirmish_land_unit_cap(player);
+        const objects::ObjectStore& st = mode_->primary();
+        const objects::GameObjectTypes& types = mode_->types();
+        int32_t capacity = f < b_->galaxy_->rules().factions.size() ? b_->galaxy_->rules().factions[f].base_population_capacity : 0;
+        for (int32_t q = 0; q < static_cast<int32_t>(ps.size()); ++q) {
+            if (q != player && b_->combat_->is_enemy(player, q)) continue;
+            for (const objects::ObjectHandle h : st.owned_by(q))
+                if (st.active(h) && st.type(h) < types.size()) capacity += types.get_int(st.type(h), "Additional_Population_Capacity");
+        }
+        const float cap = static_cast<float>(capacity);
+        return curve < 0.0f ? cap : std::min(cap, curve);
+    }
     const float planet_cap = static_cast<float>(b_->galaxy_->rules().constants.max_ground_forces_on_planet);
     if (player == b_->req_.info.defender) return planet_cap;
     const objects::ObjectStore& st = mode_->primary();
@@ -1200,7 +1214,7 @@ std::vector<at::TacticalPad> BattleAi::build_pads(int32_t player) {
         const Vec3 q = st.position(h);
         p.position = {q.x, q.y, q.z};
         bool in_row = false;
-        for (const std::string_view tok : types.get_list(st.type(h), "Tactical_Buildable_Objects_Campaign")) {
+        for (const std::string_view tok : types.get_list(st.type(h), b_->pad_list_tag())) {
             const objects::TypeIndex t = types.resolve_name(tok);
             if (t == objects::kNone || t >= types.size()) {
                 in_row = pad_name_equal(tok, faction);

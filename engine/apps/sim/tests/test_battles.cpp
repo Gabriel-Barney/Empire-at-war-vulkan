@@ -3768,13 +3768,18 @@ void test_battle_ai_land_mode(bool skirmish) {
         ai::tactical::PerceptionWorld w;
         std::vector<ai::tactical::TacticalAiObject> facts;
         ai.fill(w, facts);
-        CHECK(w.campaign);  // [port] land skirmish stays on the campaign rules: it has no skirmish base
+        CHECK(w.campaign == !skirmish);  // t50: a land skirmish runs the skirmish rules too (it has its skirmish base now)
         CHECK(w.conflict_ground_structures == 1);  // set in both modes; the token picks by mode
         int own = 0, other = 0;
         for (const ai::tactical::PerceptionObject& o : w.objects)
             if (o.dummy_ground_structure) ++(o.owner == 0 ? own : other);
         CHECK(own == 1 && other == 0);
-        for (const ai::tactical::StartMarker& m : w.markers) CHECK(m.kind != ai::tactical::StartMarker::Kind::PlayerPosition);
+        if (skirmish) {  // the battle anchors stand for Player_%d_Position_Marker
+            CHECK(w.markers.size() == 2);
+            for (const ai::tactical::StartMarker& m : w.markers) CHECK(m.kind == ai::tactical::StartMarker::Kind::PlayerPosition);
+        } else {
+            for (const ai::tactical::StartMarker& m : w.markers) CHECK(m.kind != ai::tactical::StartMarker::Kind::PlayerPosition);
+        }
         checked = true;
     }
     CHECK(checked);

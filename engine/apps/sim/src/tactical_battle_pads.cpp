@@ -96,7 +96,7 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
     const bool empty = !cur || (cur->uc == objects::kNoObjectId && cur->built == objects::kNoObjectId);
     const int32_t owner = st.owner(ph);
     if (check_rules) {
-        // Buildable list (0x372c10): the pad owner's faction row of Tactical_Buildable_Objects_Campaign.
+        // Buildable list (0x372c10): the pad owner's faction row of Tactical_Buildable_Objects_Campaign (t50: _Multiplayer in a land skirmish).
         std::string faction;
         if (owner >= 0 && static_cast<size_t>(owner) < galaxy_->players().size()) {
             const uint32_t f = galaxy_->players()[static_cast<size_t>(owner)].faction;
@@ -104,7 +104,7 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
         }
         const std::string_view name = types.raw().types().name[type];
         bool listed = false, in_row = false;
-        for (const std::string_view tok : types.get_list(st.type(ph), "Tactical_Buildable_Objects_Campaign")) {
+        for (const std::string_view tok : types.get_list(st.type(ph), pad_list_tag())) {
             if (types.raw().find(tok) == objects::kNone) {
                 in_row = same_name(tok, faction);
                 continue;
@@ -156,6 +156,7 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
         const auto it = std::lower_bound(bt_ramps_.begin(), bt_ramps_.end(), id, [](const UcRamp& r, objects::ObjectId v) { return r.id < v; });
         bt_ramps_.insert(it, UcRamp{id, rate});
     }
+    ++stats_.pad_builds;
     return 1;
 }
 
