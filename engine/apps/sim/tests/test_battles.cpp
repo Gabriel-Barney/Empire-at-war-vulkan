@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/bytes.hpp"  // FOW t01: fog save round trip
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"  // S4: name_crc for map placements
 #include "alamo/data/game_database.hpp"
@@ -188,6 +189,19 @@ std::string fog_types() {
     return t;
 }
 
+// FOW t01: the fog data plus a Space_Automatic Battlefield_Modifier with FOW_Reveal_Range_Multiplier 1.5 on the corvettes
+// (Empire has one, the Underworld four), as the shipped Hutt_Field_Commander_FOW_Increase (Ground_Automatic) is built.
+std::string fog_bm_types() {
+    std::string t = fog_types();
+    const std::string at = "<CategoryMask>Corvette</CategoryMask>";
+    const size_t p = t.find(at);
+    if (p != std::string::npos)
+        t.insert(p + at.size(), "<Abilities SubObjectList=\"Yes\"><Battlefield_Modifier_Ability Name=\"S10_FOW_Boost\">"
+                                "<Activation_Style>Space_Automatic</Activation_Style><FOW_Reveal_Range_Multiplier>1.5</FOW_Reveal_Range_Multiplier>"
+                                "<Stacking_Category>0</Stacking_Category></Battlefield_Modifier_Ability></Abilities>");
+    return t;
+}
+
 // R3 anim test data: the same types plus corpse / removal fields and a frigate death clone.
 std::string anim_types() {
     std::string t = kTypes;
@@ -329,9 +343,10 @@ std::string obstacle_types() {
 }
 
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
-                                bool obstacle = false, bool team = false) {
+                                bool obstacle = false, bool team = false, bool fog_bm = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
+    d->root = fs::temp_directory_path() / (fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
+                                           : obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
                                            : team     ? "alamo_sim_battle_tests_team"  // refixf t03: TEAM containers
                                            : prod   ? "alamo_sim_battle_tests_prod"  // station production
                                            : s4   ? "alamo_sim_battle_tests_s4"  // S4
@@ -343,7 +358,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", obstacle ? obstacle_types()
+    write_file(x / "S10Types.xml", fog_bm ? fog_bm_types()
+                                   : obstacle ? obstacle_types()
                                    : team     ? team_types()
                                    : prod   ? prod_types()
                                    : s4     ? s4_types()
@@ -497,6 +513,10 @@ struct Run {
     // OI fog: shots (REVEAL vf26 flashes) seen, host API round trips (FOW-active flag, reinforcement overlay)
     uint64_t fog_shots = 0, fog_flashed = 0;
     bool fog_api_ok = true, fog_api_checked = false;
+    // FOW t01: Battlefield_Modifier FOW_Reveal_Range_Multiplier (fog_bm data: S10_FOW_Boost on the corvettes), per player
+    uint32_t bm_on_frames[2] = {0, 0}, bm_off_after_on[2] = {0, 0}, bm_bad_frames = 0;
+    float bm_r_on = 0.0f, bm_r_off = 0.0f;  // a REVEAL unit's sight radius with / without the bonus
+    bool bm_saved = false, bm_save_ok = false, bm_grid_ok = false;
 };
 
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
@@ -580,6 +600,60 @@ void fog_probe(TacticalBattle& b, TacticalMode& tm, Run& out, StateHasher& acc, 
     StateHasher h;
     f->hash(h);
     acc.u64(h.digest());
+}
+
+// FOW t01: the Battlefield_Modifier reveal list end to end. While a player has a live S10_FOW_Boost corvette its +0x1f8
+// bonus is 0.5 (MostExtreme in one category: several corvettes count once) and its REVEAL units reveal with sight x 1.5;
+// when the last one dies the bonus is 0 again. Once, with the bonus on: the grid reveal of a REVEAL unit covers the cells
+// of a 1.5 x sight circle (on a copy read back from FogOfWar::write, so the copy also checks the list survives a save),
+// and the battle's Fog save part reads back into the running battle unchanged. Read-only otherwise.
+void fog_bm_probe(TacticalBattle& b, TacticalMode& tm, Run& out) {
+    tactical::fog::FogOfWar* f = b.fog();
+    if (!f) return;
+    const objects::ObjectStore& st = tm.primary();
+    const objects::TypeIndex corvette = tm.types().resolve_name("S10_Corvette");
+    for (int32_t p = 0; p < 2; ++p) {
+        bool live = false;
+        for (objects::ObjectHandle h : st.owned_by(p)) live = live || (st.alive(h) && st.active(h) && st.type(h) == corvette);  // not a death clone
+        const float bonus = f->player_reveal_bonus(p);
+        if (bonus != (live ? 0.5f : 0.0f)) ++out.bm_bad_frames;
+        if (bonus == 0.5f) ++out.bm_on_frames[p];
+        else if (out.bm_on_frames[p] > 0) ++out.bm_off_after_on[p];
+        for (objects::ObjectHandle h : st.owned_by(p)) {
+            tactical::fog::FogObject o;
+            if (!st.alive(h) || !f->has_source(st.id(h)) || !b.fog_object(st.id(h), o) || o.object_modifier != 0.0f) continue;
+            float cx = 0.0f, cy = 0.0f, r = 0.0f, rd = 0.0f;
+            f->sight_radii(p, o, false, cx, cy, r, rd);
+            if (r != o.sight_range * (1.0f + bonus)) ++out.bm_bad_frames;
+            (bonus == 0.5f ? out.bm_r_on : out.bm_r_off) = r;
+            if (out.bm_saved || bonus != 0.5f || p != 0 || b.frame() < 30) continue;
+            out.bm_saved = true;
+            StateHasher before;
+            f->hash(before);
+            ByteWriter w;
+            f->write(w);
+            tactical::fog::FogOfWar copy;
+            ByteReader r1(w.bytes());
+            StateHasher copied;
+            const bool read = copy.read(r1) && r1.done();
+            copy.hash(copied);
+            tactical::fog::CellList cells;
+            copy.reveal_object(0, o, cells, false);
+            const tactical::fog::FogCells wide = copy.lua_reveal_position(0, o.x, o.y, 1.5f * o.sight_range, 1.5f * o.sight_range * o.dense_multiplier);
+            const tactical::fog::FogCells base = copy.lua_reveal_position(0, o.x, o.y, o.sight_range, o.sight_range * o.dense_multiplier);
+            out.bm_grid_ok = read && cells.size() == wide.cells.size() && cells.size() > base.cells.size();
+            ByteWriter part;
+            b.write_part(TacticalBattle::SavePart::Fog, part);
+            ByteReader r2(part.bytes());
+            StateHasher after;
+            const bool loaded = b.read_part(TacticalBattle::SavePart::Fog, r2);
+            f = b.fog();
+            if (f) f->hash(after);
+            out.bm_save_ok = read && copy.player_reveal_bonus(0) == 0.5f && copied.digest() == before.digest() && loaded && f &&
+                             f->player_reveal_bonus(0) == 0.5f && after.digest() == before.digest();
+            if (!f) return;
+        }
+    }
 }
 
 // fog follow-up (S9 fog hooks): at battle frame 30 the human's first unit with FOW_REVEAL_PING (space frigates) /
@@ -689,7 +763,10 @@ Run run_campaign(const Data& d, bool land, bool fight, int32_t workers, uint64_t
             out.activations = battles.battle()->stats().activations;
             out.particles = battles.battle()->stats().particles;
 #ifdef ALAMO_SIM_HAVE_FOG
-            if (TacticalMode* tm = host.tactical()) fog_probe(*battles.battle(), *tm, out, fog_acc, fog_refog_set);
+            if (TacticalMode* tm = host.tactical()) {
+                fog_probe(*battles.battle(), *tm, out, fog_acc, fog_refog_set);
+                fog_bm_probe(*battles.battle(), *tm, out);  // FOW t01
+            }
 #endif
         }
         if (std::getenv("S10_DEBUG") && battles.battle() && (t % 300) == 0) {
@@ -1856,6 +1933,22 @@ void test_fog_battle(const Data& d) {
                     land ? "land" : "space", a.fog_shots, a.fog_flashed, a.fog_api_ok ? "ok" : "FAILED");
         CHECK(a.fog_shots > 0 && a.fog_flashed > 0 && a.fog_api_ok && a.fog_api_checked);
     }
+}
+#endif
+
+#ifdef ALAMO_SIM_HAVE_FOG
+// FOW t01: Battlefield_Modifier feeds the fog reveal list (space battle, fog_bm data; see fog_bm_probe).
+void test_fog_bm_battle(const Data& d) {
+    const Run a = run_campaign(d, false, true, 0, 2500, 0.0f, true);
+    std::printf("  bonus frames: Empire %u (then off %u), Underworld %u (then off %u); sight radius on %.1f / off %.1f; bad frames %u; "
+                "grid %s, save %s\n",
+                a.bm_on_frames[0], a.bm_off_after_on[0], a.bm_on_frames[1], a.bm_off_after_on[1], static_cast<double>(a.bm_r_on),
+                static_cast<double>(a.bm_r_off), a.bm_bad_frames, a.bm_grid_ok ? "ok" : "FAILED", a.bm_save_ok ? "ok" : "FAILED");
+    CHECK(a.fought == 1 && a.fog_frames > 100);
+    CHECK(a.bm_on_frames[0] > 0 && a.bm_on_frames[1] > 0 && a.bm_bad_frames == 0);
+    CHECK(a.bm_off_after_on[0] > 0 || a.bm_off_after_on[1] > 0);  // a side lost its last corvette: the bonus left with it
+    CHECK(a.bm_r_on == 1350.0f && a.bm_r_off == 900.0f);
+    CHECK(a.bm_saved && a.bm_grid_ok && a.bm_save_ok);
 }
 #endif
 
@@ -3520,6 +3613,11 @@ int main(int argc, char** argv) {
     {
         auto dfog = make_data(true);
         test_fog_battle(*dfog);
+    }
+    std::printf("fog of war: Battlefield_Modifier reveal multiplier (FOW t01)\n");
+    {
+        auto dbm = make_data(true, false, false, false, false, false, false, true);
+        test_fog_bm_battle(*dbm);
     }
 #endif
 #ifdef ALAMO_SIM_HAVE_ANIM

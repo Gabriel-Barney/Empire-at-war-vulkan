@@ -91,8 +91,10 @@ others are listed here for their owners):
   record with +0x1c set it calls `Set_Unit_Ability_Active(obj, t, on, pos 0, owner, no target)`. Skipped when
   obj +0x3a0 bit 0x02 is set.
 - Callers: creation 0x29f810 (object not dying and not a team container); team/company spawn 0x2a5a60;
-  `AIFreeStoreClass` vf1 0x4d4aa0 (unit released to the free store, after un-immobilising it with
-  0x3a8e50(obj, 0)); `TaskForceClass` vf49 0x5ff610 (unit leaves a task force and is not hunting, 0x39ad40).
+  `AIFreeStoreClass` vf1 0x4d4aa0 (**corrected, A1_READINGS §28.8**: only the signal 10/11 branch - a unit a script
+  locked with `Lock_Current_Orders` finished its order - after releasing that lock with 0x3a8e50(obj, 0); admission
+  does not call it); `TaskForceClass` vf49 0x5ff610 (unit leaves a task force and its movement is not locked,
+  0x39ad40 - not a HUNT test).
 - So the AI layer re-applies default modes: the Interdictor's gravity well, REPLENISH_WINGMEN and TR's 17
   INTERDICT users come back on after task-force release.
 

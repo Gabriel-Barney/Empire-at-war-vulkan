@@ -417,6 +417,19 @@ static void test_abilities(const Db& db) {
     CHECK(run(vm, "TF.Set_Targeting_Priorities('Fighter_Attack', 'Hauler')") == "" && w.combat->priority_override(ship) == 0);
     CHECK(run(vm, "s.Set_Targeting_Priorities('No_Such_Set')") == "" && w.combat->priority_override(ship) == -1);
     attach_ai_host(vm, nullptr, -1);
+    // OI abilities t01 (A1_READINGS §28.8): Lock / Unlock_Current_Orders and the ability share of the obj +0x3a8 counter.
+    auto stack_warnings = [&vm] {
+        size_t n = 0;
+        for (const std::string& m : vm.messages()) n += m.find("Script cannot stack locks") != std::string::npos ? 1u : 0u;
+        return n;
+    };
+    CHECK(run(vm, "s.Lock_Current_Orders()") == "" && bridge.state(ship).orders_locked && a.immobilize_count(ship) == 0);
+    CHECK(run(vm, "s.Lock_Current_Orders()") == "" && stack_warnings() == 1 && bridge.state(ship).orders_locked);
+    CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && !bridge.state(ship).orders_locked);
+    CHECK(a.lock_movement(ship, true, w.frame));  // a Disable_Movement ability holds the counter
+    CHECK(run(vm, "s.Lock_Current_Orders()") == "" && stack_warnings() == 2 && !bridge.state(ship).orders_locked);
+    CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && a.immobilize_count(ship) == 0);  // releases the ability's share
+    CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && a.immobilize_count(ship) == 0);  // nothing locked: no change
     CHECK(vm.errors().empty());
     std::printf("  abilities: S9 AbilitySystem bindings OK\n");
 }

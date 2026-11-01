@@ -973,6 +973,38 @@ void test_missile_shield() {
         CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
         CHECK(w.ab->immobilize_count(2) == 0 && w.sys->emitter_radius(2) == 0.0f);
     }
+    {  // OI abilities t01 (A1_READINGS §28.8): 0x3a8e50 lock_movement shares the Disable_Movement counter. Lock +1
+       // (Immobilised only on 0 -> 1), unlock -1 clamped at 0 (Released only on 1 -> 0).
+        ShieldWorld w(ProjectileCategory::Laser, false, 0.0f);
+        const ObjectId e[] = {2};
+        auto count = [&](AbilityEventKind k) {
+            size_t n = 0;
+            for (const AbilityEvent& ev : w.ab->events()) n += (ev.kind == k && ev.id == 2) ? 1u : 0u;
+            return n;
+        };
+        w.ab->clear_events();
+        CHECK(w.ab->lock_movement(2, true, w.frame) && w.ab->immobilize_count(2) == 2);
+        CHECK(count(AbilityEventKind::Immobilised) == 0);  // already held by the shield
+        CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
+        CHECK(w.ab->immobilize_count(2) == 1 && count(AbilityEventKind::Released) == 0);  // the extra lock still holds
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(count(AbilityEventKind::Released) == 1);
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);  // clamped, no event
+        CHECK(count(AbilityEventKind::Released) == 1);
+        CHECK(w.ab->lock_movement(2, true, w.frame) && w.ab->immobilize_count(2) == 1);
+        CHECK(count(AbilityEventKind::Immobilised) == 1);
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(!w.ab->lock_movement(999, true, w.frame) && w.ab->immobilize_count(999) == 0);  // unknown object
+    }
+    {  // The shared counter lets an unlock release an ability's lock (Unlock_Current_Orders without a script lock):
+       // the shield stays active but the unit is free; switching the shield off later clamps at 0.
+        ShieldWorld w(ProjectileCategory::Laser, false, 0.0f);
+        const ObjectId e[] = {2};
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(w.ab->is_active(2, kMissileShield));
+        CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
+        CHECK(w.ab->immobilize_count(2) == 0);
+    }
     {  // §2.6 step 3: the same laser with a turn rate bends away (30 deg per step: never hits)
         ShieldWorld w(ProjectileCategory::Laser, false, 30.0f);
         w.run(150);

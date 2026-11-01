@@ -326,9 +326,17 @@ public:
     std::span<const SpawnRequest> spawn_requests() const { return spawns_; }
     bool bind_spawn(uint32_t serial, ObjectId id);
     // Active_By_Default (0x3a82a0, §1.2 [H]): the first two Unit_Abilities_Data entries with Active_By_Default are
-    // switched on. add_unit / add_container call it at creation; the A1/A2 AI layer calls it when a unit is released
-    // to the free store (after un-immobilising it) or leaves a task force without hunting.
+    // switched on. add_unit / add_container call it at creation; the A1/A2 AI layer calls it when a script-locked
+    // unit's order finishes (free store, after the lock is released) or a task force releases a unit whose movement
+    // is not locked (A1_READINGS §28.8).
     void apply_active_by_default(ObjectId id, uint32_t frame);
+    // Movement lock 0x3a8e50(obj, lock) (A1_READINGS §28.8 [H]) on the ability-held share of the obj +0x3a8 counter:
+    // lock adds 1 (0 -> 1 raises Immobilised: the host stops the unit); unlock subtracts 1, clamped at 0 (1 -> 0
+    // raises Released), with no other effect. The Disable_Movement handlers (MISSILE_SHIELD, INTERDICT) use it; so
+    // does a Lua Unlock_Current_Orders on a unit that holds no script lock (the shared counter lets it release an
+    // ability's lock). [port] Lock_Current_Orders' own share is the script state's orders_locked. False for an
+    // unknown object.
+    bool lock_movement(ObjectId id, bool lock, uint32_t frame);
     // Order cancel 0x38f5d0 (§1.1 [H]): every new move / attack / escort order (commands, Lua, AI) switches off
     // BARRAGE, LUCKY_SHOT, ION_CANNON_SHOT (on the team container) and HUNT when active. Not called for the moves
     // abilities issue themselves (MoveOrder events).
