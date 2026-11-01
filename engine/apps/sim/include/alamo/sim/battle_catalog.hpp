@@ -114,6 +114,7 @@ public:
         bool has_bounds = false;
         std::vector<std::string> bones;       // upper-cased bone names
         std::vector<std::array<float, 3>> bone_pos;  // bind-world translation per bone
+        std::vector<std::array<float, 9>> bone_rot;  // refixf t06: bind-world 3x3 part per bone (row-major)
         int32_t find(std::string_view bone) const;  // -1 when absent
     };
     // `space`: Space_Model_Name else Land_Model_Name; `fallback`: then the other mode's field, then Galactic_Model_Name.

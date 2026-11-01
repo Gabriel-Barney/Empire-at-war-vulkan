@@ -117,7 +117,7 @@ const char* kHardpoints = R"(<HardPoints>
  <HardPoint Name="HP_L1_Laser"><Type>HARD_POINT_WEAPON_LASER</Type><Health>500</Health>
   <Is_Targetable>Yes</Is_Targetable><Is_Destroyable>Yes</Is_Destroyable>
   <Fire_Projectile_Type>L1_Laser_Proj</Fire_Projectile_Type><Fire_Min_Recharge_Seconds>2.0</Fire_Min_Recharge_Seconds>
-  <Fire_Max_Recharge_Seconds>3.0</Fire_Max_Recharge_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance></HardPoint>
+  <Fire_Max_Recharge_Seconds>3.0</Fire_Max_Recharge_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance><Fire_Cone_Width>360</Fire_Cone_Width><Fire_Cone_Height>180</Fire_Cone_Height></HardPoint>
 </HardPoints>
 )";
 

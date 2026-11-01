@@ -9,6 +9,7 @@
 #include "alamo/assets/model.hpp"  // battle host: model bounds / bind-pose bones
 #endif
 
+#include "alamo/core/dmath.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/xml.hpp"
@@ -360,8 +361,9 @@ int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
     h.destroyable = flag("IS_DESTROYABLE", false);
     h.targetable = flag("IS_TARGETABLE", false);
     h.turret = flag("IS_TURRET", false);
-    h.fire_cone_width = num("FIRE_CONE_WIDTH", h.fire_cone_width);
-    h.fire_cone_height = num("FIRE_CONE_HEIGHT", h.fire_cone_height);
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q2 step 4): unset Fire_Cone_Width / Height are 0 (hardpoint type ctor 0x53e3b0).
+    h.fire_cone_width = num("FIRE_CONE_WIDTH", 0.0f);
+    h.fire_cone_height = num("FIRE_CONE_HEIGHT", 0.0f);
     h.turret_rotate_extent = num("TURRET_ROTATE_EXTENT_DEGREES", h.turret_rotate_extent);
     const std::string_view proj = tag("FIRE_PROJECTILE_TYPE");
     if (!proj.empty()) {
@@ -448,6 +450,9 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
             break;
         }
     u.stickiness_threshold = ty.get_float(t, "Targeting_Stickiness_Time_Threshold");
+    // refixf t06 (TACTICAL_COMBAT §2.9): type +0xa8, default TRUE (flag-block initialiser 0x367100): the hull <->
+    // hardpoint 0.2 coupling and death with the last destroyable hardpoint.
+    u.destroy_when_all_hardpoints_destroyed = ty.get_bool(t, "Should_Be_Destroyed_When_All_Hardpoints_Destroyed");
     u.category_mask = ty.get_mask(t, "CategoryMask");
     u.property_flags = ty.get_mask(t, "Property_Flags");
     u.attack_category_restrictions = ty.get_mask(t, "Attack_Category_Restrictions");
@@ -820,6 +825,7 @@ const BattleCatalog::ModelInfo* BattleCatalog::model_info(uint32_t type, bool sp
                 info->bones.push_back(upper_str(m.skeleton.names[b]));
                 const assets::Mat3x4& w = m.skeleton.bind_world[b];
                 info->bone_pos.push_back({w.m[0][3], w.m[1][3], w.m[2][3]});
+                info->bone_rot.push_back({w.m[0][0], w.m[0][1], w.m[0][2], w.m[1][0], w.m[1][1], w.m[1][2], w.m[2][0], w.m[2][1], w.m[2][2]});
             }
         }
         break;  // the first named model field decides (a missing file: no model data)
@@ -876,6 +882,23 @@ int32_t BattleCatalog::hardpoint_on_model(int32_t base, uint32_t unit_type, Buil
     h.attach_offset = pos(at >= 0 ? at : ba, h.attach_offset);
     h.bone_a = pos(ba, h.attach_offset);
     h.bone_b = pos(bb, h.bone_a);
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q2 step 5): the bones' bind-pose axes in the unit-local frame (model column k ->
+    // (-y, x, z), normalised; a degenerate axis leaves the frame unset).
+    auto frame = [&](int32_t b, decltype(h.attach_offset)& x, decltype(h.attach_offset)& y, decltype(h.attach_offset)& z) {
+        if (b < 0 || static_cast<size_t>(b) >= m->bone_rot.size()) return false;
+        const auto& r = m->bone_rot[static_cast<size_t>(b)];
+        decltype(h.attach_offset)* out[3] = {&x, &y, &z};
+        for (int k = 0; k < 3; ++k) {
+            const float ax = -r[static_cast<size_t>(3 + k)], ay = r[static_cast<size_t>(k)], az = r[static_cast<size_t>(6 + k)];
+            const float l2 = ax * ax + ay * ay + az * az;
+            if (!(l2 > 1e-12f)) return false;
+            const float inv = 1.0f / dmath::sqrt(l2);
+            *out[k] = decltype(h.attach_offset){ax * inv, ay * inv, az * inv};
+        }
+        return true;
+    };
+    h.has_fire_frame = frame(ba, h.fire_x, h.fire_y, h.fire_z);
+    h.has_attach_frame = frame(at >= 0 ? at : ba, h.attach_x, h.attach_y, h.attach_z);
     const int32_t idx = static_cast<int32_t>(s.d->hardpoints.size());
     s.d->hardpoints.push_back(std::move(h));
     s.full->fire_bones.push_back(s.full->fire_bones[static_cast<size_t>(base)]);

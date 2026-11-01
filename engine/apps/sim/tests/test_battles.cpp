@@ -117,7 +117,7 @@ const char* kHardpoints = R"(<HardPoints>
   <Is_Targetable>Yes</Is_Targetable><Is_Destroyable>Yes</Is_Destroyable>
   <Fire_Projectile_Type>S10_Laser_Proj</Fire_Projectile_Type><Fire_Min_Recharge_Seconds>2.0</Fire_Min_Recharge_Seconds>
   <Fire_Max_Recharge_Seconds>3.0</Fire_Max_Recharge_Seconds><Fire_Pulse_Count>2</Fire_Pulse_Count>
-  <Fire_Pulse_Delay_Seconds>0.2</Fire_Pulse_Delay_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance>
+  <Fire_Pulse_Delay_Seconds>0.2</Fire_Pulse_Delay_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance><Fire_Cone_Width>360</Fire_Cone_Width><Fire_Cone_Height>180</Fire_Cone_Height>
   <Fire_Inaccuracy_Distance>Corvette, 5.0</Fire_Inaccuracy_Distance></HardPoint>
  <HardPoint Name="HP_S10_Laser_B"><Variant_Of_Existing_Type>HP_S10_Laser_A</Variant_Of_Existing_Type><Health>100</Health></HardPoint>
 </HardPoints>

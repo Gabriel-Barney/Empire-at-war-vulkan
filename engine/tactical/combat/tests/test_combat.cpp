@@ -1204,6 +1204,125 @@ void test_attack_move_object() {
     w.sys->set_hooks(nullptr);
 }
 
+// refixf t06 round 3 (TACTICAL_COMBAT §2.9): damage to hardpointed targets and close-range fire.
+void test_hardpoint_fire_routing() {
+    auto build = [](World& w, GameMode mode) {
+        ProjectileDesc pj;
+        pj.max_speed = 50.0f;
+        pj.damage = 5.0f;
+        w.data.projectiles.push_back(pj);  // 0
+        pj.damages_random_hardpoints = true;
+        w.data.projectiles.push_back(pj);  // 1
+        HardpointDesc gun;
+        gun.kind = HardpointKind::WeaponLaser;
+        gun.health = 100.0f;
+        gun.destroyable = gun.targetable = true;
+        gun.projectile = 0;
+        gun.randomize_between_fire_bones = false;
+        gun.min_recharge = gun.max_recharge = 0.2f;
+        gun.fire_range = 2000.0f;
+        w.data.hardpoints.push_back(gun);  // 0
+        HardpointDesc gen;
+        gen.kind = HardpointKind::ShieldGenerator;
+        gen.health = 20.0f;
+        gen.destroyable = gen.targetable = true;
+        gen.attach_offset = Vec3{0.0f, 40.0f, 0.0f};
+        w.data.hardpoints.push_back(gen);  // 1
+        HardpointDesc dummy;  // DUMMY_ART: not targetable, not destroyable, closest to the shooter
+        dummy.kind = HardpointKind::DummyArt;
+        dummy.attach_offset = Vec3{-40.0f, 0.0f, 0.0f};
+        w.data.hardpoints.push_back(dummy);  // 2
+        HardpointDesc eng = gen;
+        eng.kind = HardpointKind::Engine;
+        eng.attach_offset = Vec3{0.0f, -40.0f, 0.0f};
+        w.data.hardpoints.push_back(eng);  // 3
+        HardpointDesc gun_r = gun;
+        gun_r.projectile = 1;
+        w.data.hardpoints.push_back(gun_r);  // 4
+        HardpointDesc gun_c = gun;  // a model fire frame along +x, 90 x 90 cone
+        gun_c.has_fire_frame = true;
+        gun_c.fire_x = Vec3{1.0f, 0.0f, 0.0f};
+        gun_c.fire_y = Vec3{0.0f, 1.0f, 0.0f};
+        gun_c.fire_z = Vec3{0.0f, 0.0f, 1.0f};
+        gun_c.fire_cone_width = gun_c.fire_cone_height = 90.0f;
+        w.data.hardpoints.push_back(gun_c);  // 5
+        UnitDesc sh;
+        sh.tactical_health = 100.0f;
+        sh.max_attack_distance = 2000.0f;
+        sh.hardpoints = {0};
+        push_unit(w.data, sh);  // 0
+        sh.hardpoints = {4};
+        push_unit(w.data, sh);  // 1
+        sh.hardpoints = {5};
+        push_unit(w.data, sh);  // 2
+        UnitDesc st;
+        st.tactical_health = 1000.0f;
+        st.radius = 50.0f;
+        st.hardpoints = {1, 2, 3};
+        st.destroy_when_all_hardpoints_destroyed = true;
+        push_unit(w.data, st);  // 3
+        CombatConfig cfg;
+        cfg.mode = mode;
+        cfg.object_max_health_multiplier = 1.0f;
+        cfg.hardpoint_health_multiplier = 1.0f;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+    };
+    {  // Ordered hardpoint (Engine) takes every hit; after it dies the per-shot fallback skips the non-targetable dummy,
+       // the hull follows the hardpoint fraction + 0.2, and the station dies with its last destroyable hardpoint.
+        World w;
+        build(w, GameMode::Space);
+        CHECK(w.sys->closest_hardpoint(ObjectId{0}, Vec3{}, true) == -1);  // unknown id
+        w.add(1, 0, 0, Vec3{-600.0f, 0.0f, 0.0f});
+        w.add(2, 3, 1, Vec3{0.0f, 0.0f, 0.0f});
+        CHECK(w.sys->closest_hardpoint(2, Vec3{-600.0f, 0.0f, 0.0f}, false) == 1);  // the dummy
+        CHECK(w.sys->closest_hardpoint(2, Vec3{-600.0f, 0.0f, 0.0f}, true) == 0);   // targetable only: the generator
+        w.sys->order_attack(1, 2, 2);
+        for (int i = 0; i < 20 && w.sys->hardpoint_health(2, 2) == 20.0f; ++i) w.tick();
+        CHECK(w.sys->hardpoint_health(2, 2) < 20.0f && w.sys->hardpoint_health(2, 0) == 20.0f);
+        for (int i = 0; i < 200 && !w.sys->hardpoint_destroyed(2, 2); ++i) w.tick();
+        CHECK(w.sys->hardpoint_destroyed(2, 2) && w.sys->hardpoint_health(2, 0) == 20.0f);
+        w.tick();
+        CHECK(w.sys->health(2) <= (0.5f + 0.2f) * 1000.0f + 0.01f);  // hull <= hardpoint fraction + 0.2
+        for (int i = 0; i < 400 && w.sys->alive(2); ++i) w.tick();
+        CHECK(!w.sys->alive(2) && w.sys->hardpoint_destroyed(2, 0));
+    }
+    {  // Damages_Random_Hard_Points: the targeted hardpoint still wins (the draw is made, the pick is overridden).
+        World w;
+        build(w, GameMode::Space);
+        w.add(1, 1, 0, Vec3{-600.0f, 0.0f, 0.0f});
+        w.add(2, 3, 1, Vec3{0.0f, 0.0f, 0.0f});
+        w.sys->order_attack(1, 2, 2);
+        for (int i = 0; i < 60 && !w.sys->hardpoint_destroyed(2, 2); ++i) w.tick();
+        CHECK(w.sys->hardpoint_destroyed(2, 2) && w.sys->hardpoint_health(2, 0) == 20.0f);
+    }
+    {  // Fire-bone frame cone: a target behind the bone's +x axis gets no shot; in front it does.
+        World w;
+        build(w, GameMode::Space);
+        w.add(1, 2, 0, Vec3{-600.0f, 0.0f, 0.0f}, Vec3{-1.0f, 0.0f, 0.0f});
+        w.add(2, 3, 1, Vec3{0.0f, 0.0f, 0.0f});
+        w.sys->order_attack(1, 2);
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0 && w.sys->hardpoint_health(2, 0) == 20.0f && w.sys->hardpoint_health(2, 2) == 20.0f);
+        w.sys->set_facing(1, Vec3{1.0f, 0.0f, 0.0f});
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->hardpoint_health(2, 0) < 20.0f || w.sys->hardpoint_health(2, 2) < 20.0f);
+    }
+    {  // Service_Space: a formation unit (attack goal) promoted without a goal hardpoint gets one by
+       // Choose_Target_Hardpoint (no set: the closest live targetable = the generator); land has no such step.
+        for (const GameMode mode : {GameMode::Space, GameMode::Land}) {
+            World w;
+            build(w, mode);
+            w.add(1, 0, 0, Vec3{-600.0f, 0.0f, 0.0f});
+            w.add(2, 3, 1, Vec3{0.0f, 0.0f, 0.0f});
+            w.sys->set_attack_goal(1, 2);
+            w.tick();
+            CHECK(w.sys->ordered_target(1) == 2);
+            CHECK(w.sys->ordered_hardpoint(1) == (mode == GameMode::Space ? 0 : -1));
+        }
+    }
+}
+
 struct DamageWorld {
     World w;
     uint32_t shielded = 0, plain = 0, attacker = 0, hp_unit = 0;
@@ -1376,8 +1495,10 @@ void test_take_damage() {
         d.w.sys->take_damage(r, 5);
         CHECK_F(d.w.sys->hardpoint_health(1, 0), -10.0f);  // no clamp
         CHECK(d.w.sys->hardpoint_destroyed(1, 0));
-        res = d.w.sys->take_damage(r, 5);  // destroyed hardpoint: the hull takes it
-        CHECK_F(res.to_hull, 50.0f);
+        res = d.w.sys->take_damage(r, 5);  // refixf t06 (§2.9 Q1 step 5): a dead destroyable hardpoint swallows the hit
+        CHECK_F(res.to_hull, 0.0f);
+        CHECK_F(res.to_hardpoint, 0.0f);
+        CHECK_F(d.w.sys->health(1), 500.0f);
         r.hardpoint = 1;
         r.amount = 100.0f;
         res = d.w.sys->take_damage(r, 5);
@@ -3008,6 +3129,7 @@ int main(int argc, char** argv) {
     test_land_obstacle_and_weapon_index();
     test_fog_filter();
     test_attack_move_object();
+    test_hardpoint_fire_routing();
     test_take_damage();
     test_shield_regen_system();
     test_hull_hardpoint_coupling();
