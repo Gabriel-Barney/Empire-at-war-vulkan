@@ -27,3 +27,8 @@ __pycache__/
 *.pkl
 *.trace
 /tools/probe_mod/**/*.dat
+
+# Test output written next to goldens, probe-kit build products and run logs
+*.actual
+/tools/probe_mod/**/bin/
+/tools/probe_mod/**/*.log
