@@ -1987,6 +1987,18 @@ static void test_real_data() {
     objects::GameObjectTypes types;
     const bool have_types = raw.load(*fs) && types.build(raw, fs.get());
     CHECK(have_types);
+    if (have_types) {  // S7 t06: Uses_Multiple_Locomotors type data (FoC: the jetpack users; Bossk has no secondary)
+        const auto desc = [&types](const char* name) { return unit_desc_from_type(types, types.resolve_name(name)); };
+        const UnitDesc dt2 = desc("Dark_Trooper_PhaseII"), boba = desc("Boba_Fett"), bossk = desc("Bossk");
+        const UnitDesc dt1 = desc("Dark_Trooper_PhaseI");
+        CHECK(dt2.uses_multiple_locomotors && dt2.has_secondary_locomotor && dt2.secondary_locomotor == LocomotorKind::Jetpack &&
+              dt2.max_speed == 1.0f && dt2.alt_max_speed == 2.5f && dt2.alt_turn_rate == 0.0f && dt2.hover_offset == 70.0f);
+        CHECK(boba.uses_multiple_locomotors && boba.secondary_locomotor == LocomotorKind::Jetpack && boba.alt_max_speed == 2.5f &&
+              boba.alt_turn_rate == 6.0f);
+        CHECK(bossk.uses_multiple_locomotors && !bossk.has_secondary_locomotor);
+        CHECK(!dt1.uses_multiple_locomotors && !dt1.has_secondary_locomotor);
+        CHECK(locomotor_kind_from_type(types, types.resolve_name("Dark_Trooper_PhaseII"), MoveMode::Land) == LocomotorKind::Default);
+    }
     const auto maps = fs->list("Data\\Art\\Maps\\*.ted");
     uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0;
     uint32_t space_units = 0, space_arrived = 0, space_hits = 0, space_obstacles = 0, plan_fail = 0, plan_invalid = 0, plans = 0;
