@@ -335,7 +335,7 @@ The response sound afterwards is local-player audio only.
 | 18 CAPTURE_VEHICLE | | turning off restarts recharge and ejects (EJECT 46 logic) |
 | 19, 23–26, 28, 35, 36, 42 | 0x3a3e20 | targeted/area "instant" effects at position or target |
 | 22, 30, 31, 34, 37, 41, 45, 55 | none | only the active byte; the work is done by the forwarded special ability (§3) |
-| 32 MISSILE_SHIELD | inline | **on**: (correction, TACTICAL_GAPS.md §1.7: the unit is already an emitter from spawn; activation only makes it "active"); with `Disable_Movement`, increments the immobilise counter obj +0x3a8 (first increment stops the unit, 0x39bcb0) and pauses deploy; starts the active phase. **off**: decrements the counter, restarts recharge. Both toggle animation state 7 |
+| 32 MISSILE_SHIELD | inline | **on**: (correction, TACTICAL_GAPS.md §1.7: the unit is already an emitter from spawn; activation only makes it "active"); with `Disable_Movement`, increments the immobilise counter obj +0x3a8 (0x3a8e50; the first increment splits the unit into a formation of its own, A1_READINGS §28.8) and pauses deploy; starts the active phase. **off**: decrements the counter, restarts recharge. Both toggle animation state 7 |
 | 33 INVULNERABILITY | inline | turns the countdown on/off only; effect = `TAKE_DAMAGE_MULTIPLIER 0` |
 | 40 SPRINT, 68 STIM_PACK | inline | needs a squad/locomotor path; STIM_PACK **on** first applies self-damage `Take_Damage(kind 1, Damage_Percent_When_Activated × max hull)`; then countdown on/off; animation state 4 |
 | 44 REPLENISH_WINGMEN | 0x3a2970 | |
@@ -593,7 +593,8 @@ missile shield).
 
 ### 3.9 Interdict (INTERDICT 3, gravity well; Interdictor, gravity well station) [M]
 Handler 0x3a2240: needs the gravity well intact (obj +0x3ca = 0). On: start countdown; with
-`Disable_Movement` immobilise (0x3a8e50); raise story event `Interdict_Activated`; in space, insert a
+`Disable_Movement` immobilise (0x3a8e50(obj, 1); off: 0x3a8e50(obj, 0) while ability 3 is active; counter shared with
+script locks, A1_READINGS §28.8); raise story event `Interdict_Activated`; in space, insert a
 **permanent entry keyed by (owner, "INTERDICT")** into a per-player list (player tactical data +0x180) of every
 player returned by 0x294910 for the owner [L: the enemy players]; off: remove those entries. The Interdictor
 has `Active_By_Default` = Yes. The consumer of the per-player list is the retreat/hyperspace logic [L, not

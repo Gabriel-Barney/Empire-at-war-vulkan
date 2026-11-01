@@ -1701,12 +1701,41 @@ int m_set_targeting_priorities(Call& c) {
     return 0;
 }
 
+// Lock_Current_Orders (0x57cd40) / Unlock_Current_Orders (0x581fd0), A1_READINGS §28.8: one obj +0x3a8 movement lock
+// counter. [port] The script's share is orders_locked; the ability system holds the Disable_Movement share.
+int32_t ability_movement_locks(Call& c, ObjectId id) {
+#if ALAMO_LUA_HAVE_ABILITIES
+    if (ab::AbilitySystem* a = ability_system(c, id)) return a->immobilize_count(id);
+#endif
+    (void)c;
+    (void)id;
+    return 0;
+}
 int m_lock_current_orders(Call& c) {
-    if (ScriptObjectState* s = edit_self(c)) s->orders_locked = true;
+    ScriptObjectState* s = edit_self(c);
+    if (!s) return 0;
+    // Already movement-locked (0x39ad40): "Script cannot stack locks", nothing changes.
+    if (s->orders_locked || s->locomotor_suspended || ability_movement_locks(c, c.self->id) > 0) {
+        c.vm->message("SCRIPT WARNING: GameObjectWrapper::Lock_Current_Orders - object is already locked.  Script cannot stack locks.");
+        return 0;
+    }
+    s->orders_locked = true;
     return 0;
 }
 int m_unlock_current_orders(Call& c) {
-    if (ScriptObjectState* s = edit_self(c)) s->orders_locked = false;
+    ScriptObjectState* s = edit_self(c);
+    if (!s) return 0;
+    if (s->orders_locked) {
+        s->orders_locked = false;
+        return 0;
+    }
+#if ALAMO_LUA_HAVE_ABILITIES
+    // No script lock but the counter is held by an ability: 0x3a8e50(obj, 0) releases that share.
+    if (ab::AbilitySystem* a = ability_system(c, c.self->id); a && a->immobilize_count(c.self->id) > 0) {
+        a->lock_movement(c.self->id, false, ability_frame(c));
+        return 0;
+    }
+#endif
     return 0;
 }
 
