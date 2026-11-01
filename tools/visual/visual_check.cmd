@@ -14,11 +14,7 @@ set PD=python -I tools\visual\png_diff.py
 set SCALE=320
 rem Shots whose content depends on wall-clock timing (differ between two runs of the same build): not compared. The save /
 rem load smoke's shots list saves with their wall-clock save time.
-set IGN=--ignore game_campaign_galactic_after.png --ignore game_campaign_video_options.png
-rem The space combat shot differs by about 0.5% between two runs of the same build (render particle counts vary at the
-rem same frame and tick; up to 1.9% between builds with an identical sim): compared on its own with a looser fraction,
-rem which still catches a missing texture, pass or laser.
-set LOOSE=game_skirmish_combat.png --ignore "game_smoke_saveload_*.png"
+set IGN=--ignore game_campaign_galactic_after.png --ignore game_campaign_video_options.png --ignore "game_smoke_saveload_*.png"
 if /i "%~1"=="update" (
   %PD% update tests\visual_baselines\smoke build-msvc\smoke_out --scale %SCALE%
   %PD% update tests\visual_baselines\smoke_screens build-msvc\smoke_out\screens --scale %SCALE%
@@ -34,9 +30,7 @@ if /i "%~1"=="run" (
 )
 set RC=0
 > logs\visual_check.txt (
-  %PD% compare tests\visual_baselines\smoke build-msvc\smoke_out --scale %SCALE% --diff-dir logs\visual_diff\smoke --only "game_*.png" %IGN% --ignore %LOOSE%
-  if errorlevel 1 set RC=1
-  %PD% compare tests\visual_baselines\smoke build-msvc\smoke_out --scale %SCALE% --diff-dir logs\visual_diff\smoke --only %LOOSE% --max-frac 0.03
+  %PD% compare tests\visual_baselines\smoke build-msvc\smoke_out --scale %SCALE% --diff-dir logs\visual_diff\smoke --only "game_*.png" %IGN%
   if errorlevel 1 set RC=1
   %PD% compare tests\visual_baselines\smoke_screens build-msvc\smoke_out\screens --scale %SCALE% --diff-dir logs\visual_diff\smoke_screens --only "game_*.png" %IGN%
   if errorlevel 1 set RC=1
