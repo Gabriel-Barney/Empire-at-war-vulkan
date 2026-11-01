@@ -125,6 +125,9 @@ Useful options:
 > method tried). So scene K cannot frame the Admonitor until a hand-played check (roadmap g1f t06) shows bought ships
 > arriving. To look around by hand in a kept-open game: `--drive KX --drive-keep-open`, then
 > `g1_ui.py --method post shot|click|key|wheel ...`, and `g1.py quit` when done.
+> Also by hand (2026-10-31, computer use, real foreground clicks, run `dxvk_20261031_215539`): the bought X-wing
+> squadron never arrived. Next step is Steam "Verify integrity of game files" (g1f t08). apitrace runs end on their own
+> about 6 minutes in, so check arrival with a DXVK run before an apitrace one.
 | `--game-dir` | Overrides game detection. Otherwise the order is `ALAMO_GAME_DIR`, then `F:\SteamLibrary\…`, then the Steam library folders. |
 
 Results:

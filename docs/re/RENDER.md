@@ -724,6 +724,10 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   - Not tried: a hand-played fight. Needs Gabriel (roadmap t06 style): play Endor Xpress under
     `g1.py apitrace --non-interactive` (no `--drive`), get a unit or building destroyed on open ground, keep it in view
     for 10 s, quit; then the `--vb-draws` decode of the lit FF draws with the master-atlas texture can run.
+  - **Hand-played try (2026-10-31, Claude via computer use): no fight possible.** Run `apitrace_20261031_215822` (scene
+    EH, kept open): the player starts with no units (population 0/9), only the base structures and build pads, and land
+    purchases are stuck the same way as space ones (t06 above), so nothing could be destroyed on open ground. t05 waits on
+    the same Steam "Verify integrity" step (roadmap g1f t08).
 - **Final-image comparison (g1f t04).** `g1_analyze.py --compare NAME REF PORT --regions "name=x0,y0,x1,y1;..."`
   compares a d3dretrace final with an `alamo_render --sim --map X --png` image (1920×1080; world regions exclude the HUD,
   y < 650). Output: `analysis/compare_<name>.json` and `compare_<name>_side_by_side.png` under the run folder
@@ -771,6 +775,17 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   - Open (Gabriel, roadmap g1f t06): does a hand-played Kuat skirmish deliver a bought ship? If not, Steam "Verify
     integrity of game files" and repeat. If a bought ship appears, re-run `run_3_apitrace.cmd` with Bloom/Heat on
     (`g1_options.py --set Bloom=1 HeatDistortion=1 -- apitrace ...`) for the Thrawn close-up.
+  - **Hand-played check (g1f t06, 2026-10-31, Claude via computer use, real mouse input in the foreground): the bought
+    ship does not arrive either.** Run `dxvk_20261031_215539` (scene KH, `--probe-mod admonitor`, kept open): the
+    station was selected by hand and one X-wing squadron bought; it was paid, the queue reached 100 % and emptied in about
+    20 s, and after another 40 s the population counter still read 0/25 with only the two garrison squadrons out. The
+    station showed a Rebel garrison (X-wing, Y-wing) and a 25 cap, so this KH run played the Rebellion, not the Empire.
+    So the stuck delivery is not caused by the kit's input method. Still open (Gabriel, roadmap g1f t08): Steam
+    "Verify integrity of game files", then repeat. No Thrawn close-up was possible.
+  - **apitrace runs end on their own about 6 minutes in (2026-10-31).** Run `apitrace_20261031_214805` (scene KH,
+    Bloom/Heat on, `--drive-keep-open`, nobody playing) exited by itself about 6 minutes after launch (trace 10.7 GB),
+    with no crash entry in the Windows Application log. So hand play under apitrace has to fit in roughly 5 minutes
+    from battle start; check ship arrival with a DXVK run first.
 - **Planet clip wrap: not observable in this trace (g1f t03, 2026-10-31).** `g1_planet_wrap.py extract` over the whole
   `apitrace_20261030_160054` (6.5 GB, 83 240 frames, 52.5 M filtered calls, about 20 min) now finishes: it holds 669 185
   `m_world` rows in 11 (shader, row-scale) groups, all on the one mesh shader (`vs#156`). Results of `survey` / `analyse`:
