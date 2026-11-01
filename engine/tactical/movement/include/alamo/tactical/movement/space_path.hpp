@@ -111,6 +111,7 @@ public:
 
     void add_static(ObjectId id, V2 center, float radius, uint32_t bits = kSpaceStatic);
     bool remove_static(ObjectId id);
+    bool has_static(ObjectId id) const { return statics_.find(id) != statics_.end(); }
     // Replaces the track of `id`. `start_frame` = absolute frame of waypoint time 0.
     void set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps);
     void clear_track(ObjectId id);

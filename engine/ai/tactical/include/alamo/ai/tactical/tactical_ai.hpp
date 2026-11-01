@@ -25,6 +25,20 @@
 //     PortExtension LuaOrder AttackMove / Guard / MoveTo (Attack_Move, Guard_Target, Explore_Area: the L1
 //     object-order path), Reinforce (unit = pool key), Retreat, TacticalBuild. The same pipeline is the AI
 //     VMs' ObjectBridge pipeline (object orders of free-store / plan scripts).
+//     refixf t06 - ONE group order per task force (MOVEMENT §6.3 [H]: a task force's Attack_Move / Move_To builds one
+//     parameter block and one coordinator for all its units; AI_TACTICAL §7.3): a task-force Attack_Move / Guard_Target
+//     (and their follow re-orders) is one PortExtension LuaOrder whose payload is the 24-byte LuaOrder block (object =
+//     the first movable unit) followed by one u32 per further movable unit, task-force list order [port encoding; at
+//     most 4096 ids]. The host moves them as one formation.
+//     refixf t06 - Attack_Move on an object (TACTICAL_COMBAT §2.8): an AttackMove LuaOrder with a target object makes the
+//     object the units' formation attack goal (path B: the host locks it as their target once it is in weapon range).
+//     The task-force order (not its follow re-orders) sets payload arg bit kTfAttackMoveIssueAttack: the host also
+//     issues Order_Attack (ordered 1) to each unit at once (path A); a unit that refuses (non-enemy, stealthed, garrisoned
+//     or dead target) is dropped from the move, and when no unit is left the order is rejected (InvalidTarget). An
+//     object's own Lua Attack_Move (arg 0) has path B only.
+//     refixf t06 - space TF.Reinforce (AI_TACTICAL §7.4): the drop point is searched in rings around the target, one
+//     attempt per Lua poll of the block status (BlockOnCommand -> status IsFinished), one unit per poll; the host answers
+//     space_drop_frame / space_prevention_hit / space_drop_ok (below) and executes the Reinforce event at the point found.
 //   * Everything runs on the sim thread; the only RNG is the session's synced stream (§10 order).
 //
 // TARGET IDENTITY [port]: each AI player's target list is kept as append-only SLOTS with tombstones; the live
@@ -39,7 +53,8 @@
 // FIRST-CUT PARTS (docs/PHASE4.md A1 open items): blocking-status
 // completion rules (open item 3) are this port's: move = every live unit without a movement goal (A2 tactical: an
 // Attack_Move to an object completes when the object dies, units re-ordered only when it moved), attack =
-// target dead, guard = never (fails when the guarded object dies), reinforce / build = at once; land slot 9
+// target dead, guard = never (fails when the guarded object dies), land reinforce / build = at once (space reinforce:
+// AI_TACTICAL §7.4 ring search, refixf t06); land slot 9
 // reachability source = the zone of the player's first live object; Has_Active_Orders / order locks are
 // cleared when the unit is idle (no movement goal, no attack target).
 #pragma once
@@ -120,6 +135,16 @@ struct TacticalReinforcement {
 
 enum class PadCheck : uint8_t { Ok = 0, NotFriendlyOrVisible = 1, Blocked = 2, RebuildCooldown = 3 };
 
+// refixf t06: payload arg bit of a task-force AttackMove LuaOrder: issue Order_Attack per unit (HOST CONTRACT above).
+inline constexpr uint32_t kTfAttackMoveIssueAttack = 1u;
+
+// refixf t06 (AI_TACTICAL §7.4 space): what the space reinforcement ring search needs from the mode.
+struct SpaceDropFrame {
+    float entry_facing_deg = 0.0f;  // the player's reinforcement entry facing (mode +0x288 record, field +8), degrees
+    bool has_box = false;           // the playable box (mode vf 0x208): ring points are clamped into it
+    float min_x = 0.0f, min_y = 0.0f, max_x = 0.0f, max_y = 0.0f;
+};
+
 // A hard point acquired an opportunity target (STRATEGIC_GAPS §5.3: signal 0x21 OpportunityTargetAcquiredDataClass, sent
 // to the hard point's owner, or to the team object for a team member). Object ids; hardpoint_type = HardPointType value.
 struct OpportunityTargetEvent {
@@ -184,6 +209,18 @@ public:
     // AbilitySystem::apply_active_by_default(id, frame) - skipping a unit whose HUNT is active (0x39ad40) on the
     // task-force path - and un-immobilises it first (0x3a8e50(obj, 0)). Called during the AI update. Default: nothing.
     virtual void unit_released(int32_t /*player*/, int32_t /*object_id*/) {}
+    // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4). space_drop_frame: the player's entry facing and the
+    // playable box (false: facing 0, no box). space_prevention_hit (0x4d8d10): `p` lies inside the
+    // Reinforcement_Prevention_Radius (2-D, strict) of a live object whose owner is not allied with `player`.
+    // space_drop_ok (SpaceMode vf80 0x4d6fd0, force 0): `p` is inside the playable box, not fogged for `player` (force 1),
+    // outside every non-allied prevention radius, and the occupancy sweep of pool entry `key`'s type from
+    // p - sweep x (cos, sin)(facing) to p over frames [now, now + 115] on its Space_Layer (default 4) and layer 8 is
+    // clear. Defaults: no frame, no prevention, every point valid (hosts without the hooks drop at the target).
+    virtual bool space_drop_frame(int32_t /*player*/, SpaceDropFrame& /*out*/) { return false; }
+    virtual bool space_prevention_hit(int32_t /*player*/, const Vec3f& /*p*/) { return false; }
+    virtual bool space_drop_ok(int32_t /*player*/, int32_t /*key*/, const Vec3f& /*p*/, float /*facing_deg*/, float /*sweep*/) {
+        return true;
+    }
 };
 
 struct TacticalAiPlayerConfig {

@@ -39,12 +39,14 @@
 //      ran at the command phase), then in this order: damage events -> DAMAGE_TRACKING; projectile hits /
 //      expiries -> PARTICLE objects (detonation particle, then the synced hit-particle pick); hardpoint
 //      destructions -> Death_Explosion_Particles (PARTICLE) + Death_Breakoff_Prop objects; deaths ->
-//      TacticalMode::destroy + movement removal, death clone object, first Death_Explosions entry [port];
+//      TacticalMode::destroy + movement removal, death clone object (refixf t04: its death plan - spin / variant
+//      draws, removal frame - schedule_death_clone), first Death_Explosions entry [port];
 //      damaged-smoke events -> attached_effects() (render); ability events (EnginesOffline); clear_events;
-//      PARTICLE objects whose Particle_Lifetime_Frames ran out are destroyed; dummy targets without a
-//      pending ability are removed;
+//      death clones whose planned removal frame came are destroyed; PARTICLE objects whose
+//      Particle_Lifetime_Frames ran out are destroyed; dummy targets without a pending ability are removed;
 //   6. victory: a side without victory-relevant units (BT §3.1a) on the map and in its pool loses (0xb); a
 //      completed retreat (0xc); station destroyed (0xf); max_frames [port time limit: the defender holds, the attacker withdraws].
+//      The tick that finishes the battle removes every death clone left (forever ones too) [port].
 // RESULT: winner, victory type, retreated player, galactic objects whose every tactical counterpart died
 // (never-deployed reserves and retreated units survive), starbase destroyed.
 // Determinism: units and participants in vectors by id / request order; all draws on the synced RNG in
@@ -142,6 +144,7 @@ struct BattleStats {
     // S10-int
     uint32_t containers = 0, ability_events = 0, activations = 0, ability_commands = 0, hardpoints_destroyed = 0;
     uint32_t particles = 0, props = 0, death_clones = 0, smoke = 0, dummies = 0, anim_plays = 0;
+    uint32_t death_clones_removed = 0;  // refixf t04: clone objects removed by their death plan (at once included)
 };
 
 // A render-side attachment reported by the sim (Damaged_Smoke_Asset_Name at 75 % / 50 %).
@@ -162,6 +165,12 @@ public:
 
     // S10-int: sim-owned animation (SimAnimation::world of the tactical mode). Call before setup; null = none.
     void set_animation(SimAnimation* anim) { anim_ = anim; }
+    // refixf t04: model / DeathBehavior source of the death-clone plans when no animation service is set (an unattached
+    // SimAnimation, e.g. a session cache or a test's injected models; must outlive the battle). Null = the battle makes its
+    // own from the catalog's files. With set_animation the service's own models are used (same files, same answer).
+    void set_clone_models(SimAnimation* models) { clone_models_ = models; }
+    // refixf t04: death clone objects still in the store (removal pending; forever ones until the battle ends).
+    size_t death_clones_pending() const { return death_clones_.size(); }
     // Spawns the battle into `mode` (pushed, nothing in it yet). `players` = the host's player count.
     void setup(TacticalMode& mode, terrain::MapData map, SimRng& rng, uint32_t players, const ParallelFor& pf);
     // One battle tick (after the tactical mode tick). Sets finished() when a victory condition holds.
@@ -701,6 +710,11 @@ public:
     // FOW_Point_Test / FOW_Object_Hidden (FOG_OF_WAR §5) on the battle's mode; false while fog is off.
     bool fog_point_fogged(int32_t player, float x, float y, bool force) const;
     bool fog_object_hidden(int32_t player, objects::ObjectId id, bool force) const;
+    // refixf t03: the representative type 0x3973b0 (LUA_API.md "Find_All_Objects_Of_Type and the sibling finders") for
+    // the Lua finders (lua::ObjectBridge::representative_type): a TEAM container -> its Container::type (Create_Team_Type,
+    // else the company type). The battle has no tactical transport or fleet objects; anything else -> objects::kNone (the
+    // binding then uses the store type).
+    objects::TypeIndex representative_type(objects::ObjectId id) const;
     // The fog's view of a live object (Lua Reveal / Temporary_Reveal input); false when not alive.
     bool fog_object(objects::ObjectId id, tactical::fog::FogObject& out) const;
     // OI fog: host-level FOW-active flag / render option (FOG_OF_WAR §1.3, §6.5: Lua Disable_Rendering, story
@@ -764,6 +778,7 @@ private:
     template <class Ar, class Self>
     static void state_io(Ar& a, Self& b);  // tactical_battle_save.cpp
     void resume_tick_context();            // tactical_battle.cpp (BattleHooks is defined there)
+    void attach_rocket_terrain();          // refixf t01: land heightmap for spline rockets (setup and after a load)
     friend class BattleHooks;
     friend class BattleAi;  // A1 tactical AI hookup (battle_ai.hpp): perception snapshot + AI order execution
     struct Participant {
@@ -820,6 +835,7 @@ private:
     void service_damage_tracking();
     void add_participant(objects::ObjectHandle g, int32_t owner, uint8_t side, bool reserve, bool starbase, bool structure);
     void deploy(TacticalMode& mode, uint32_t participant, SimRng& rng);
+    void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);
@@ -851,7 +867,7 @@ private:
     void forward_fighter_events();
     objects::ObjectId fighter_combat_unit(objects::ObjectId id) const;  // a squadron container -> its leader
     void drive_animation(SimRng& rng, uint64_t global_frame);
-    void consume_events(TacticalMode& mode);
+    void consume_events(TacticalMode& mode, SimRng& rng);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
     // refix t01 / t03: Die step 8's clone object (flags 0xc0), and the infantry corpse-path test (S9 §1.6).
@@ -911,6 +927,16 @@ private:
     std::vector<Container> containers_;
     std::vector<TimedObject> particles_;  // spawn order; frame = death frame
     std::vector<TimedObject> dummies_;    // spawn order; frame = spawn frame
+    // refixf t04: death clone objects (kFlagDeathClone) in spawn order; frame = battle frame of the removal from the
+    // death plan (kForeverFrame: kept until the battle ends). The battle owns their removal (headless and with anim).
+    std::vector<TimedObject> death_clones_;
+    static constexpr uint32_t kForeverFrame = 0xFFFFFFFFu;
+    SimAnimation* clone_models_ = nullptr;
+#ifdef ALAMO_SIM_HAVE_ANIM
+    std::unique_ptr<SimAnimation> own_clone_models_;  // made on first use when neither anim_ nor clone_models_ is set
+#endif
+    void schedule_death_clone(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type, uint8_t kind, SimRng& rng);
+    void remove_death_clones(TacticalMode& mode, bool all);  // due ones (expire_objects), or all (battle end)
     std::vector<AttachedEffect> effects_;
     std::vector<objects::ObjectId> story_reinforced_;  // L1/S4 wave 2b: reserve units deployed this tick
     // --- S4 garrisons / capture (owner: S4 agent; tactical_battle_garrison.cpp; no-ops without the garrison lib) ---

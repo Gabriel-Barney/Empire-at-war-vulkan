@@ -112,7 +112,7 @@ void OrderTranslator::tactical(const InputState& in, const OrderContext& ctx) {
         if (in.shift()) ids.insert(ids.end(), sel_.begin(), sel_.end());
         if (!ids.empty() || !sel_.empty()) emit_select(std::move(ids));
     } else if (lb.click) {
-        const auto hit = pick(all, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_);
+        const auto hit = pick_world(all, ctx.view, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_, ctx.pick_tests);
         if (hit && is_selectable(ctx, hit->id)) {
             if (lb.double_click && ctx.type_of) {
                 const uint32_t type = ctx.type_of(hit->id);
@@ -177,7 +177,7 @@ uint8_t OrderTranslator::move_flags(const InputState& in, bool dbl) {
 
 // Order button release (default scheme action 13 -> `0x41f70`): the cursor action at the release point.
 void OrderTranslator::right_release(const InputState& in, const OrderContext& ctx) {
-    const auto hit = pick(ctx.trees->all(), pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_);
+    const auto hit = pick_world(ctx.trees->all(), ctx.view, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_, ctx.pick_tests);
     if (hit) {
         waypoint_mode_ = false;  // any other order ends an Alt run
         if (is_hostile(ctx, hit->id)) {
@@ -194,7 +194,7 @@ void OrderTranslator::right_release(const InputState& in, const OrderContext& ct
 
 // Double click of the order button (action 14, spec §1.3): acts at the press point; tactical modes only.
 void OrderTranslator::right_double(const InputState& in, const OrderContext& ctx) {
-    const auto hit = pick(ctx.trees->all(), pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_);
+    const auto hit = pick_world(ctx.trees->all(), ctx.view, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_, ctx.pick_tests);
     if (hit) {
         if (!is_hostile(ctx, hit->id)) return;  // a double click on a friendly object adds nothing
         waypoint_mode_ = false;
@@ -227,7 +227,7 @@ void OrderTranslator::ground_move(const InputState& in, const OrderContext& ctx,
             Vec3 a;
             if (!ground_point(ctx, rb.drag.x0, rb.drag.y0, a)) return;
             const float ang = angle_deg(a, p);
-            const auto on = pick(ctx.trees->all(), pixel_ray(ctx.view, rb.drag.x0, rb.drag.y0), ctx.pick_filter, qctx_);
+            const auto on = pick_world(ctx.trees->all(), ctx.view, pixel_ray(ctx.view, rb.drag.x0, rb.drag.y0), ctx.pick_filter, qctx_, ctx.pick_tests);
             if (on && std::binary_search(sel_.begin(), sel_.end(), on->id)) {
                 e = commands::EventData(commands::EventType::Facing);  // rotate only
                 e.set_f("angle", ang).set_ids("units", std::vector<uint32_t>{});

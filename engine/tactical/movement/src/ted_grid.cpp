@@ -88,18 +88,25 @@ uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const 
         const terrain::ObjectPlacement& o = map.objects[i];
         auto it = idx.find(o.type_crc);
         if (it == idx.end()) continue;
-        const uint32_t t = it->second;
-        if (!types->has_behavior(t, objects::BehaviorSet::Union, kSpaceObstacle)) continue;
-        float r = types->get_float(t, "Custom_Soft_Footprint_Radius");
-        if (!(r > 0.0f)) r = types->get_float(t, "Space_Obstacle_Radius");
-        if (!(r > 0.0f)) continue;
-        const float scale = types->get_float(t, "Scale_Factor") > 0.0f ? types->get_float(t, "Scale_Factor") : 1.0f;
-        uint32_t bits = kSpaceStatic;
-        if (types->get_bool(t, "Is_Impassable_Asteroid")) bits |= kSpaceImpassableAsteroid;
-        occ.add_static(-static_cast<ObjectId>(i) - 1, {o.position[0], o.position[1]}, r * scale, bits);
+        float r = 0.0f;
+        uint32_t bits = 0;
+        if (!space_obstacle_footprint(*types, it->second, r, bits)) continue;
+        occ.add_static(-static_cast<ObjectId>(i) - 1, {o.position[0], o.position[1]}, r, bits);
         ++n;
     }
     return n;
+}
+
+bool space_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t t, float& radius, uint32_t& bits) {
+    if (t >= types.size() || !types.has_behavior(t, objects::BehaviorSet::Union, kSpaceObstacle)) return false;
+    float r = types.get_float(t, "Custom_Soft_Footprint_Radius");
+    if (!(r > 0.0f)) r = types.get_float(t, "Space_Obstacle_Radius");
+    if (!(r > 0.0f)) return false;
+    const float scale = types.get_float(t, "Scale_Factor") > 0.0f ? types.get_float(t, "Scale_Factor") : 1.0f;
+    radius = r * scale;
+    bits = kSpaceStatic;
+    if (types.get_bool(t, "Is_Impassable_Asteroid")) bits |= kSpaceImpassableAsteroid;
+    return true;
 }
 
 }  // namespace alamo::tactical::movement

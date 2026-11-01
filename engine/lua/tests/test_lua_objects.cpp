@@ -17,8 +17,10 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/lua/bindings.hpp"
+#include "alamo/lua/fog_bridge.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/object_bridge.hpp"
+#include "alamo/lua/script_gaps.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
@@ -75,6 +77,10 @@ static double gnum(LuaVm& vm, const char* name) {
     return d;
 }
 static bool contains(const std::string& s, const char* what) { return s.find(what) != std::string::npos; }
+// The original's script error helper (Find_All_Objects_Of_Type / Find_First_Object / Find_Nearest): logged, no unwind.
+static bool last_message_has(LuaVm& vm, const char* text) {
+    return !vm.messages().empty() && vm.messages().back().find(text) != std::string::npos;
+}
 
 static void write_file(const fs::path& p, const std::string& s) {
     fs::create_directories(p.parent_path());
@@ -99,14 +105,14 @@ struct Db {
                    "<R>\n"
                    "<GroundInfantry Name=\"Trooper\"><Tactical_Health>100</Tactical_Health>"
                    "<CategoryMask>Infantry</CategoryMask><Property_Flags>Fodder</Property_Flags>"
-                   "<Behavior>SELECTABLE, WALK_LOCOMOTOR</Behavior>"
+                   "<Behavior>SELECTABLE, WALK_LOCOMOTOR, UNIT_AI</Behavior>"
                    "<Unit_Abilities_Data SubObjectList=\"Yes\">"
                    "<Unit_Ability><Type>SPRINT</Type><Recharge_Seconds>5</Recharge_Seconds></Unit_Ability>"
                    "<Unit_Ability><Type> STEALTH </Type></Unit_Ability>"
                    "</Unit_Abilities_Data></GroundInfantry>\n"
                    "<GroundVehicle Name=\"Tank\"><Tactical_Health>400</Tactical_Health><Shield_Points>50</Shield_Points>"
                    "<CategoryMask>Vehicle</CategoryMask><Property_Flags>HealsInfantry</Property_Flags>"
-                   "<Behavior>SELECTABLE</Behavior></GroundVehicle>\n"
+                   "<Behavior>SELECTABLE, UNIT_AI</Behavior></GroundVehicle>\n"
                    "<GroundCompany Name=\"Trooper_Team\"><Company_Units>Trooper, Trooper</Company_Units>"
                    "<Behavior>TEAM</Behavior></GroundCompany>\n"
                    "<Marker Name=\"Marker_Generic\"><Behavior>MARKER</Behavior></Marker>\n"
@@ -122,6 +128,14 @@ struct Db {
                    "<StarBase Name=\"Station\"><Tactical_Health>5000</Tactical_Health></StarBase>\n"
                    "<GroundStructure Name=\"Bunker\"><Behavior>GARRISON_STRUCTURE</Behavior>"
                    "<Garrison_Category>Infantry</Garrison_Category></GroundStructure>\n"
+                   // refixf t03 finder tests (test_find_filters).
+                   "<GroundInfantry Name=\"Probe_Droid\"><Behavior>UNIT_AI</Behavior></GroundInfantry>\n"
+                   "<GroundStructure Name=\"Depot\"><CategoryMask>Structure</CategoryMask>"
+                   "<Property_Flags>CanContainGarrison | TacticalStructure</Property_Flags></GroundStructure>\n"
+                   "<SpaceUnit Name=\"Cruiser\"><CategoryMask>Capital</CategoryMask><Behavior>UNIT_AI</Behavior></SpaceUnit>\n"
+                   "<Team Name=\"Team_Box\"><Behavior>TEAM, UNIT_AI</Behavior></Team>\n"
+                   "<GroundCompany Name=\"Squad_Co\"><CategoryMask>Air</CategoryMask>"
+                   "</GroundCompany>\n"
                    "</R>");
         dp = std::make_unique<DirectoryProvider>(root.string());
         ok = raw.load(*dp) && types.build(raw);
@@ -217,23 +231,34 @@ static void test_find(const Db& db) {
     // Find_First_Object: newest first, case-insensitive type name.
     CHECK(run(vm, "f1 = Find_First_Object('trooper').Get_Object_ID() f2 = tostring(Find_First_Object('Nope'))") == "");
     CHECK(gnum(vm, "f1") == 2.0 && gstr(vm, "f2") == "nil");
-    CHECK(contains(run(vm, "Find_First_Object(3)"), "FindPlanet -- Parameter 1 is not a valid string"));
-    // Find_Nearest: type filter, enemies of a player, owned by a player, category, property.
+    // refixf t03: errors log and return nothing (no unwind); category names are not type names.
+    CHECK(run(vm, "fe = Find_First_Object(3) fe = tostring(fe) fc = tostring(Find_First_Object('Infantry'))") == "" &&
+          gstr(vm, "fe") == "nil" && gstr(vm, "fc") == "nil");
+    CHECK(run(vm, "Find_First_Object(3)") == "" && last_message_has(vm, "FindPlanet -- Parameter 1 is not a valid string"));
+    CHECK(run(vm, "Find_First_Object()") == "" && last_message_has(vm, "FindPlanet -- No planet name set"));
+    // Find_Nearest (refixf t03): type filter, enemies of a player, owned by a player, category, property. Candidates are
+    // UNIT_AI objects of players (the markers are ownerless, the gun has no UNIT_AI and no CategoryMask).
     CHECK(run(vm, "n1 = Find_Nearest(t1, 'Tank').Get_Object_ID() "
-                  "n2 = Find_Nearest(t1, p1, false).Get_Object_ID() "     // enemies of p1: tank @5 (gun @5,1 farther)
+                  "n2 = Find_Nearest(t1, p1, false).Get_Object_ID() "     // enemies of p1: tank @5
                   "n3 = tostring(Find_Nearest(t1, p1, true)) "            // p1 owns nothing else
                   "n4 = Find_Nearest(t1, 'Infantry').Get_Object_ID() "    // category -> trooper 2
                   "n5 = Find_Nearest(t1, 'HealsInfantry', p2, true).Get_Object_ID() "  // property, owned by p2
-                  "n6 = Find_Nearest(tank, 'Fodder').Get_Object_ID() "    // trooper 1 and 2 both at 5: newest (2)
-                  "n7 = tostring(Find_Nearest(t1, 'NoSuchThing')) "
-                  "n8 = Find_Nearest(t1).Get_Object_ID()") == "");
+                  "n6 = Find_Nearest(tank, 'Fodder').Get_Object_ID() "    // trooper 1 and 2 both at 5: lowest player (1)
+                  "n8 = Find_Nearest(t1).Get_Object_ID() "
+                  "n10 = Find_Nearest(t1, p1).Get_Object_ID() "           // one slot only: the player is ignored
+                  "n11 = Find_Nearest(t1, 'Infantry', p1).Get_Object_ID() "  // ditto after a filter
+                  "n12 = Find_Nearest(t1, 'Infantry | Vehicle').Get_Object_ID()") == "");
     CHECK(gnum(vm, "n1") == 3.0 && gnum(vm, "n2") == 3.0 && gstr(vm, "n3") == "nil" && gnum(vm, "n4") == 2.0);
-    CHECK(gnum(vm, "n5") == 3.0 && gnum(vm, "n6") == 2.0 && gstr(vm, "n7") == "nil" && gnum(vm, "n8") == 3.0);
-    CHECK(contains(run(vm, "Find_Nearest()"), "Expected between 1 and 4, got 0."));
-    CHECK(contains(run(vm, "Find_Nearest(5)"), "invalid type for parameter 1; expected game object"));
-    // Bridge relation hook overrides the provisional enemy rule.
-    s.bridge.is_enemy = [](int32_t a, int32_t b) { return a == 1 && b == -1; };  // only neutral markers are p1's enemies
-    CHECK(run(vm, "n9 = Find_Nearest(t1, p1, false).Get_Object_ID()") == "" && gnum(vm, "n9") == 4.0);
+    CHECK(gnum(vm, "n5") == 3.0 && gnum(vm, "n6") == 1.0 && gnum(vm, "n8") == 3.0);
+    CHECK(gnum(vm, "n10") == 3.0 && gnum(vm, "n11") == 2.0 && gnum(vm, "n12") == 3.0);
+    CHECK(run(vm, "n7 = Find_Nearest(t1, 'NoSuchThing') n7 = tostring(n7)") == "" && gstr(vm, "n7") == "nil" &&
+          last_message_has(vm, "Find_Nearest - unknown game object type, properties mask or catefory NoSuchThing."));
+    CHECK(run(vm, "Find_Nearest()") == "" && last_message_has(vm, "Expected between 1 and 4, got 0."));
+    CHECK(run(vm, "Find_Nearest(5)") == "" && last_message_has(vm, "invalid type for parameter 1; expected game object"));
+    // Bridge relation hook: "allied or self" = not an enemy. Nothing is p1's enemy -> p2's tank is a friend of p1.
+    s.bridge.is_enemy = [](int32_t, int32_t) { return false; };
+    CHECK(run(vm, "n9 = Find_Nearest(t1, p1, true).Get_Object_ID() n13 = tostring(Find_Nearest(t1, p1, false))") == "" &&
+          gnum(vm, "n9") == 3.0 && gstr(vm, "n13") == "nil");
     s.bridge.is_enemy = nullptr;
     // Positions.
     CHECK(run(vm, "pos = tank.Get_Position() x, y, z = pos.Get_XYZ() d = t1.Get_Distance(tank) d2 = t1.Get_Distance(Create_Position(3, 4, 0)) "
@@ -323,6 +348,88 @@ static void test_stage3(const Db& db) {
     s.bridge.hash(h2);
     CHECK(h1.digest() != h2.digest());
     CHECK(vm.errors().empty());
+}
+
+// refixf t03 (docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling finders"): the string chain (properties
+// mask, category mask, type name), "A | B" masks, AND-combined filters, the owner filter, newest-first order, the
+// error cases (nothing returned), the representative type (ObjectBridge::representative_type), death clones / killed
+// objects, Find_Nearest's fog test.
+static std::string ids_of(LuaVm& vm, const std::string& args) {
+    const std::string code = "r = Find_All_Objects_Of_Type(" + args + ") ids = 'nil' if r then ids = '' "
+                             "for _, o in ipairs(r) do ids = ids .. o.Get_Object_ID() .. ',' end end";
+    const std::string err = run(vm, code);
+    return err.empty() ? gstr(vm, "ids") : "error: " + err;
+}
+static void test_find_filters(const Db& db) {
+    objects::IdCounter ids;
+    objects::ObjectStore st(objects::ModeKind::Land, objects::StoreKind::Primary, db.types, &ids);
+    make(st, db.t("Trooper"), 1, {0, 0, 0});                                     // 1
+    make(st, db.t("Depot"), 1, {50, 0, 0});                                      // 2
+    const objects::ObjectHandle tank = make(st, db.t("Tank"), 2, {5, 0, 0});     // 3
+    make(st, db.t("Cruiser"), 1, {30, 0, 0});                                    // 4
+    const objects::ObjectHandle tr5 = make(st, db.t("Trooper"), 2, {10, 0, 0});  // 5
+    const objects::ObjectHandle team = make(st, db.t("Team_Box"), 2, {12, 0, 0});  // 6
+    const objects::ObjectHandle probe = make(st, db.t("Probe_Droid"), 2, {1, 0, 0});  // 7
+    ObjectBridge bridge;
+    LuaHost host;
+    host.store = &st;
+    host.types = &db.types;
+    LuaVm vm(host);
+    attach_object_bridge(vm, &bridge);
+    CHECK(run(vm, "t1 = Find_All_Objects_Of_Type('Trooper')[2] p1 = Find_First_Object('Depot').Get_Owner() "
+                  "p2 = Find_First_Object('Tank').Get_Owner() tt = Find_Object_Type('Trooper')") == "");
+    // Category / properties names, case-insensitive, "|" / "," / space separators, AND with the other filters.
+    CHECK(ids_of(vm, "'Structure'") == "2,");
+    CHECK(ids_of(vm, "p1, 'Capital'") == "4," && ids_of(vm, "'Capital', p2") == "");
+    CHECK(ids_of(vm, "'Infantry'") == "5,1,");
+    CHECK(ids_of(vm, "'infantry | VEHICLE'") == "5,3,1," && ids_of(vm, "'Infantry,Vehicle'") == "5,3,1," &&
+          ids_of(vm, "' Infantry \\t Vehicle\\n'") == "5,3,1,");
+    CHECK(ids_of(vm, "'Fighter | Bomber'") == "");  // a valid mask with no match: an empty table, not nil
+    CHECK(ids_of(vm, "'Capital', 'HealsInfantry'") == "" && ids_of(vm, "'HealsInfantry', 'Vehicle'") == "3,");
+    CHECK(ids_of(vm, "'CanContainGarrison', p1") == "2," && ids_of(vm, "'TacticalStructure | Turret'") == "2,");
+    CHECK(ids_of(vm, "'TROOPER', p2") == "5," && ids_of(vm, "p1, tt") == "1," && ids_of(vm, "tt, 'Fodder', p1") == "1,");
+    CHECK(ids_of(vm, "''") == "");  // all-delimiter string: properties mask 0, which no object passes
+    // A player alone; a later player replaces an earlier one; newest first.
+    CHECK(ids_of(vm, "p2") == "7,6,5,3," && ids_of(vm, "p1, p2") == "7,6,5,3," && ids_of(vm, "p2, p1") == "4,2,1,");
+    // Errors: logged, nothing returned (nil), no unwind.
+    CHECK(ids_of(vm, "'Trooper', 'Tank'") == "nil" && last_message_has(vm, "FindAllObjectsOfType -- unknown filter parameter 2."));
+    CHECK(ids_of(vm, "'Infantry', 'Vehicle'") == "nil" && last_message_has(vm, "unknown filter parameter 2."));
+    CHECK(ids_of(vm, "tt, 'Tank'") == "nil" && last_message_has(vm, "unknown filter parameter 2."));
+    CHECK(ids_of(vm, "tt, Find_Object_Type('Tank')") == "nil" && last_message_has(vm, "unknown filter parameter 2."));
+    CHECK(ids_of(vm, "p1, 'Bogus'") == "nil" && last_message_has(vm, "unknown filter parameter 2."));
+    CHECK(ids_of(vm, "5") == "nil" && last_message_has(vm, "unknown filter parameter 1."));
+    CHECK(ids_of(vm, "") == "nil" && last_message_has(vm, "FindAllObjectsOfType -- Expected a filter parameter."));
+    // Representative type: the Team_Box container stands for Squad_Co (Air) through the host hook.
+    CHECK(ids_of(vm, "'Team_Box'") == "6," && ids_of(vm, "'Air'") == "");
+    bridge.representative_type = [&](objects::ObjectHandle h) { return h == team ? db.t("Squad_Co") : objects::kNone; };
+    CHECK(ids_of(vm, "'Team_Box'") == "" && ids_of(vm, "'Squad_Co'") == "6," && ids_of(vm, "'Air', p2") == "6,");
+    CHECK(run(vm, "f6 = Find_First_Object('Team_Box').Get_Object_ID() n6 = Find_Nearest(t1, 'Squad_Co').Get_Object_ID() "
+                  "a6 = Find_Nearest(t1, 'Air').Get_Object_ID()") == "");
+    CHECK(gnum(vm, "f6") == 6.0 && gnum(vm, "n6") == 6.0 && gnum(vm, "a6") == 6.0);  // Find_First_Object: own type
+    // Find_Nearest never finds a representative type with CategoryMask 0 (the probe, nearest at 1).
+    CHECK(run(vm, "q1 = Find_Nearest(t1).Get_Object_ID() q2 = tostring(Find_Nearest(t1, 'Probe_Droid'))") == "");
+    CHECK(gnum(vm, "q1") == 3.0 && gstr(vm, "q2") == "nil");    // Death clones (dying state): found by Find_All_Objects_Of_Type / Find_First_Object as valid wrappers, never by
+    // Find_Nearest. Killed objects pending the flush are skipped [port].
+    st.set_flag(tank, objects::kFlagDeathClone);
+    CHECK(ids_of(vm, "'Tank'") == "3," && run(vm, "v3 = Find_First_Object('Tank').Is_Valid() and 1 or 0 "
+                                               "q3 = Find_Nearest(t1).Get_Object_ID() q4 = tostring(Find_Nearest(t1, 'Vehicle'))") == "");
+    CHECK(gnum(vm, "v3") == 1.0 && gnum(vm, "q3") == 5.0 && gstr(vm, "q4") == "nil");
+    CHECK(st.destroy(probe));
+    CHECK(ids_of(vm, "p2") == "6,5,3," && run(vm, "fp = tostring(Find_First_Object('Probe_Droid'))") == "" && gstr(vm, "fp") == "nil");
+#ifdef ALAMO_LUA_HAVE_FOG
+    // Find_Nearest with a player skips objects fogged for that player (FOW_Object_Hidden, force = 1).
+    FogScriptHooks fog;
+    TacticalScriptHooks tac;
+    tac.fog = &fog;
+    bridge.tactical = &tac;
+    fog.object_hidden = [&](objects::ObjectHandle h, int32_t player, bool force) { return h == tr5 && player == 1 && force; };
+    CHECK(run(vm, "h1 = Find_Nearest(t1, p1, false).Get_Object_ID() "  // trooper 5 hidden from p1 -> the team (Squad_Co)
+                  "h2 = Find_Nearest(t1, 'Infantry').Get_Object_ID()") == "");  // no player: no fog test
+    CHECK(gnum(vm, "h1") == 6.0 && gnum(vm, "h2") == 5.0);
+    bridge.tactical = nullptr;
+#else
+    (void)tr5;
+#endif
 }
 
 static void test_queries(const Db& db) {
@@ -470,7 +577,8 @@ static void test_dead_handles(const Db& db) {
         const std::string e = run(vm, std::string("victim.") + m);
         CHECK(contains(e, ("GameObjectWrapper::" + method + " -- this object is dead!").c_str()));
     }
-    CHECK(contains(run(vm, "Find_Nearest(victim)"), "Find_Nearest - parameter 1 is already dead; cannot extract a position from it."));
+    CHECK(run(vm, "Find_Nearest(victim)") == "" &&
+          last_message_has(vm, "Find_Nearest - parameter 1 is already dead; cannot extract a position from it."));
     CHECK(contains(run(vm, "t1.Get_Distance(victim)"), "could not extract a position from parameter 1."));
     CHECK(contains(run(vm, "t1.Attack_Target(victim)"), "Attack_Target -- Parameter 1 is not a valid destination for unit Trooper"));
     CHECK(contains(run(vm, "t1.Teleport_And_Face(victim)"), "Teleport_And_Face -- Invalid game object given for parameter 1."));
@@ -605,17 +713,22 @@ static void test_galactic(const Db& db) {
     });
     bridge.pipeline = &pipe;
     attach_object_bridge(vm, &bridge);
-    CHECK(run(vm, "px = FindPlanet('planet_x') py = FindPlanet('Planet_Y') pn = tostring(FindPlanet('Fleet')) "
+    // refixf t03: FindPlanet is Find_First_Object (one class): no planet test, so a fleet type name finds the fleet.
+    CHECK(run(vm, "px = FindPlanet('planet_x') py = FindPlanet('Planet_Y') pn = FindPlanet('Fleet').Get_Object_ID() "
                   "all = FindPlanet.Get_All_Planets() an = table.getn(all) a1 = all[1].Get_Object_ID() "
                   "ship = Find_First_Object('Hero_Ship') loc = ship.Get_Planet_Location().Get_Object_ID() "
                   "fl = ship.Get_Parent_Object() floc = fl.Get_Planet_Location().Get_Object_ID() "
                   "pl = tostring(px.Get_Planet_Location()) fl.Move_To(py) "
                   "sp = Spawn_Unit(Find_Object_Type('Tank'), py, py.Get_Owner())[1] spl = sp.Get_Planet_Location().Get_Object_ID()") == "");
-    CHECK(gstr(vm, "pn") == "nil" && gnum(vm, "an") == 2.0 && gnum(vm, "a1") == 2.0 && gnum(vm, "loc") == 1.0 &&
+    CHECK(gnum(vm, "pn") == 3.0 && gnum(vm, "an") == 2.0 && gnum(vm, "a1") == 2.0 && gnum(vm, "loc") == 1.0 &&
           gnum(vm, "floc") == 1.0 && gstr(vm, "pl") == "nil" && gnum(vm, "spl") == 2.0);
     CHECK(cmds.size() == 1 && cmds[0].payload.type() == commands::EventType::MoveObjectToObject &&
           cmds[0].payload.u("object") == 3 && cmds[0].payload.u("target") == 2);
-    CHECK(contains(run(vm, "FindPlanet()"), "FindPlanet -- Parameter 1 is not a valid string"));
+    CHECK(run(vm, "FindPlanet(5)") == "" && last_message_has(vm, "FindPlanet -- Parameter 1 is not a valid string"));
+    CHECK(run(vm, "FindPlanet()") == "" && last_message_has(vm, "FindPlanet -- No planet name set"));
+    // Find_Nearest is tactical only.
+    CHECK(run(vm, "gn = Find_Nearest(px) gn = tostring(gn)") == "" && gstr(vm, "gn") == "nil" &&
+          last_message_has(vm, "Find_Nearest - this function may only be used in tactical modes."));
     // Mark_Parent_Mode_Object_For_Death on a tactical store whose parent mode is this one.
     objects::IdCounter tids;
     objects::ObjectStore tac(objects::ModeKind::Space, objects::StoreKind::Primary, db.types, &tids);
@@ -768,6 +881,7 @@ int main() {
     if (!db.ok) return 1;
     test_registry_rows();
     test_find(db);
+    test_find_filters(db);
     test_queries(db);
     test_stage3(db);
     test_spawn_and_state(db);

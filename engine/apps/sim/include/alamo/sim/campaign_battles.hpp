@@ -60,6 +60,9 @@ struct CampaignBattleOptions {
     // S10-int: sim-owned animation (sim_anim.hpp, attached to the host separately); battles drive its tactical
     // world (weapon Attack, flinch gate, locomotor Move / Walk, idles, animated fire bones). Null = none.
     SimAnimation* animation = nullptr;
+    // refixf t04: model source of the death-clone plans when `animation` is null (TacticalBattle::set_clone_models; an
+    // unattached SimAnimation, e.g. with a test's injected models). Null = each battle reads the catalog's files.
+    SimAnimation* clone_models = nullptr;
     // --- L1 systems (owner: tactical-systems agent) ---
     // Space_Retreat_Unit_Increment_Wait_Frames per galactic faction index (load_retreat_increments below; FoC data: 1
     // for the factions that set it). Empty = 0 for every faction [port] (Start_Cinematic_Space_Retreat stagger).

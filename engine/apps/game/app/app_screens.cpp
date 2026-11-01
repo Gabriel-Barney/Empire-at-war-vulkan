@@ -658,7 +658,7 @@ void App::build_encyclopedia(ui::HudDrawList& dl, const ui::HudCanvas& canvas) {
                 if (static_cast<uint32_t>(p.id) == object) type = p.type;
         }
     } else if (screen_ == Screen::Battle && bview_.active()) {
-        // HUD_GAPS §2.2: the hover pick of build_tactical_hud (bounding-sphere ray pick, reticle owner kept).
+        // HUD_GAPS §2.2: the hover pick of build_tactical_hud (the world pick, refixf t08; reticle owner kept).
         for (const ui::HudUnit& u : hud_units_)
             if (u.id == hover_ship_ && hover_ship_ != 0 && u.type < data_.types.size()) {
                 object = u.id;
@@ -709,6 +709,10 @@ void App::build_encyclopedia(ui::HudDrawList& dl, const ui::HudCanvas& canvas) {
 
 void App::update_cursor(ui::HudDrawList& dl) {
     // ui ask 1: one cursor - the OS arrow is hidden over the window while the game draws its own.
+    if (cinematic_hides_cursor()) {  // refixf t05: cinematic mode on hides the cursor (0x262490(..., 0))
+        set_os_cursor_hidden(true);
+        return;
+    }
     set_os_cursor_hidden(cursor_ok_ && !hardware_mouse_ && !opt_.hidden);
     if (!cursor_ok_ || hardware_mouse_) return;
     ui::CursorContext c;
@@ -737,7 +741,8 @@ void App::update_cursor(ui::HudDrawList& dl) {
                 if (targeting_.target_kind() == ui::TargetKind::Object) {
                     const ui::View v = ui::make_view(bview_.camera_params(targets_.width, targets_.height), targets_.width, targets_.height);
                     tactical::QueryContext qc;
-                    const auto hit = ui::pick(tm->trees().all(), ui::pixel_ray(v, input_.mouse_x(), input_.mouse_y()), tactical::kSkipDead, qc);
+                    const auto hit = ui::pick_world(tm->trees().all(), v, ui::pixel_ray(v, input_.mouse_x(), input_.mouse_y()),
+                                                    tactical::kSkipDead, qc, world_pick_tests());
                     c.target_valid = hit.has_value();  // no object under the cursor: the pick keeps waiting
                     hit_friendly = hit && !tb->combat().is_enemy(local_player(), tb->combat().owner(static_cast<tactical::combat::ObjectId>(hit->id)));
                 }

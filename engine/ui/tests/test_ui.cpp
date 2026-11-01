@@ -616,6 +616,59 @@ void test_picking() {
     // miss
     CHECK(!pick(trees.all(), screen_ray(v, 5.0f, 5.0f), tactical::kSkipDead, ctx));
 
+    // refixf t08 world pick (HUD_GAPS §2.2) with host tests: precise per candidate, then the override sphere; nearest hit
+    // by (t, resolved id); skip / resolve; NotModelled -> the tree box.
+    {
+        WorldPickTests wt;
+        wt.precise = [r](uint32_t id, const tactical::Ray& ray, float& t) {
+            const bool centre = ray.dir.x == r.dir.x && ray.dir.y == r.dir.y && ray.dir.z == r.dir.z;
+            if (centre && (id == 3 || id == 5)) {  // the two origin cubes, centre ray: a precise hit at the same t
+                t = 0.4f;
+                return PreciseOutcome::Hit;
+            }
+            if (id == 20) return PreciseOutcome::NotModelled;
+            return PreciseOutcome::Miss;  // 9 (nearer box) and 12: no mesh on the ray
+        };
+        auto first_w = pick_world(trees.all(), v, r, tactical::kSkipDead, ctx, &wt);
+        CHECK(first_w && first_w->id == 3 && first_w->t == 0.4f);  // 9's box is nearer but its mesh misses; tie -> 3
+        wt.skip = [](uint32_t id) { return id == 3; };
+        first_w = pick_world(trees.all(), v, r, tactical::kSkipDead, ctx, &wt);
+        CHECK(first_w && first_w->id == 5);
+        wt.resolve = [](uint32_t id) { return id == 5 ? 77u : id; };
+        first_w = pick_world(trees.all(), v, r, tactical::kSkipDead, ctx, &wt);
+        CHECK(first_w && first_w->id == 77);
+        wt.skip = nullptr;
+        wt.resolve = [](uint32_t id) { return id == 3 ? 90u : id; };  // tie between 90 (from 3) and 5 -> 5
+        first_w = pick_world(trees.all(), v, r, tactical::kSkipDead, ctx, &wt);
+        CHECK(first_w && first_w->id == 5);
+        wt.resolve = nullptr;
+        // Sphere override on 12 (precise misses): a sphere at its centre around the ray's point.
+        float sxx = 0, syy = 0;
+        CHECK(project(v, {340, 0, 0}, sxx, syy));
+        const tactical::Ray r12 = screen_ray(v, sxx, syy);  // through (340, 0, 0): off 12's 10-unit box
+        CHECK(!pick(trees.all(), r12, tactical::kSkipDead, ctx));
+        CHECK(!pick_world(trees.all(), v, r12, tactical::kSkipDead, ctx, &wt));
+        wt.sphere = [](uint32_t id, Vec3& c) {
+            if (id != 12) return 0.0f;
+            c = {300, 0, 0};
+            return 150.0f;
+        };
+        first_w = pick_world(trees.all(), v, r12, tactical::kSkipDead, ctx, &wt);
+        CHECK(first_w && first_w->id == 12);
+        // NotModelled: object 20's tree box.
+        float s20x = 0, s20y = 0;
+        CHECK(project(v, {-300, 0, 0}, s20x, s20y));
+        first_w = pick_world(trees.all(), v, screen_ray(v, s20x, s20y), tactical::kSkipDead, ctx, &wt);
+        CHECK(first_w && first_w->id == 20);
+        // ray_sphere: entry t, origin inside -> 0, behind / beyond max_t -> miss.
+        float ts = -1.0f;
+        CHECK(ray_sphere({{0, -100, 0}, {0, 200, 0}, 1.0f}, {0, 0, 0}, 10.0f, ts) && near(ts, 0.45f, 1e-6f));
+        CHECK(ray_sphere({{0, 5, 0}, {0, 200, 0}, 1.0f}, {0, 0, 0}, 10.0f, ts) && ts == 0.0f);
+        CHECK(!ray_sphere({{0, 100, 0}, {0, 200, 0}, 1.0f}, {0, 0, 0}, 10.0f, ts));
+        CHECK(!ray_sphere({{0, -100, 0}, {0, 200, 0}, 0.4f}, {0, 0, 0}, 10.0f, ts));
+        CHECK(!ray_sphere({{20, -100, 0}, {0, 200, 0}, 1.0f}, {0, 0, 0}, 10.0f, ts));
+    }
+
     // box select: rectangle around the centre takes 3, 5, 9 but not +-300 ones
     float ax = 0, ay = 0, bx = 0, by = 0;
     CHECK(project(v, {300, 0, 0}, ax, ay) && project(v, {-300, 0, 0}, bx, by));

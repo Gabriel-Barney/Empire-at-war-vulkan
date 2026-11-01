@@ -64,6 +64,7 @@ const char* kTypes = R"(<GS>
   <CategoryMask>Frigate</CategoryMask><Targeting_Max_Attack_Distance>1400</Targeting_Max_Attack_Distance>
   <Population_Value>2</Population_Value><Armor_Type>Armor_Ship</Armor_Type>
   <HardPoints>HP_GS_Laser</HardPoints>
+  <Should_Be_Destroyed_When_All_Hardpoints_Destroyed>No</Should_Be_Destroyed_When_All_Hardpoints_Destroyed>
   <Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><SpaceBehavior>STARSHIP_LOCOMOTOR, REVEAL</SpaceBehavior>
   <Space_FOW_Reveal_Range>1500</Space_FOW_Reveal_Range>
   <Custom_Soft_Footprint_Radius>60</Custom_Soft_Footprint_Radius>
@@ -112,7 +113,7 @@ const char* kHardpoints = R"(<HardPoints>
   <Is_Targetable>Yes</Is_Targetable><Is_Destroyable>Yes</Is_Destroyable>
   <Fire_Projectile_Type>GS_Laser_Proj</Fire_Projectile_Type><Fire_Min_Recharge_Seconds>2.0</Fire_Min_Recharge_Seconds>
   <Fire_Max_Recharge_Seconds>3.0</Fire_Max_Recharge_Seconds><Fire_Pulse_Count>2</Fire_Pulse_Count>
-  <Fire_Pulse_Delay_Seconds>0.2</Fire_Pulse_Delay_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance></HardPoint>
+  <Fire_Pulse_Delay_Seconds>0.2</Fire_Pulse_Delay_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance><Fire_Cone_Width>360</Fire_Cone_Width><Fire_Cone_Height>180</Fire_Cone_Height></HardPoint>
 </HardPoints>
 )";
 const char* kFactions = R"(<Factions>

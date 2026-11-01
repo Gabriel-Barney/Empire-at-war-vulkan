@@ -10,6 +10,7 @@
 //     (MSVC writes it with --regen; clang / gcc must reproduce it).
 // With ALAMO_FOC_DATA (FoC "corruption" folder) a real FoC space map battle runs as well.
 #include <algorithm>
+#include <bit>
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
@@ -35,6 +36,7 @@
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
 #include "alamo/ai/ai_definitions.hpp"        // OI host: BattleAi order test
 #include "alamo/ai/perception_equations.hpp"
+#include "alamo/lua/lua_vm.hpp"  // refixf t03: Find_All_Objects_Of_Type from a battle VM
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/sim/battle_ai.hpp"
 #endif
@@ -115,7 +117,7 @@ const char* kHardpoints = R"(<HardPoints>
   <Is_Targetable>Yes</Is_Targetable><Is_Destroyable>Yes</Is_Destroyable>
   <Fire_Projectile_Type>S10_Laser_Proj</Fire_Projectile_Type><Fire_Min_Recharge_Seconds>2.0</Fire_Min_Recharge_Seconds>
   <Fire_Max_Recharge_Seconds>3.0</Fire_Max_Recharge_Seconds><Fire_Pulse_Count>2</Fire_Pulse_Count>
-  <Fire_Pulse_Delay_Seconds>0.2</Fire_Pulse_Delay_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance>
+  <Fire_Pulse_Delay_Seconds>0.2</Fire_Pulse_Delay_Seconds><Fire_Range_Distance>1400</Fire_Range_Distance><Fire_Cone_Width>360</Fire_Cone_Width><Fire_Cone_Height>180</Fire_Cone_Height>
   <Fire_Inaccuracy_Distance>Corvette, 5.0</Fire_Inaccuracy_Distance></HardPoint>
  <HardPoint Name="HP_S10_Laser_B"><Variant_Of_Existing_Type>HP_S10_Laser_A</Variant_Of_Existing_Type><Health>100</Health></HardPoint>
 </HardPoints>
@@ -193,12 +195,27 @@ std::string anim_types() {
         if (p != std::string::npos) t.insert(p + at.size(), what);
     };
     insert_after("<GroundInfantry Name=\"S10_Trooper\">", "<Death_Persistence_Duration>1.0</Death_Persistence_Duration><Death_Fade_Time>0.5</Death_Fade_Time>");
-    insert_after("<StarBase Name=\"S10_Star_Base_1\">", "<Remove_Upon_Death>Yes</Remove_Upon_Death>");
+    // refixf t04: the star base's typed clone (no Remove_Upon_Death, 30 s persistence) is made on the battle's last tick.
+    insert_after("<StarBase Name=\"S10_Star_Base_1\">",
+                 "<Remove_Upon_Death>Yes</Remove_Upon_Death><Death_Clone>Damage_Normal, S10_Star_Base_Death_Clone</Death_Clone>");
     insert_after("<SpaceUnit Name=\"S10_Frigate\">", "<Death_Clone>Damage_Normal, S10_Frigate_Death_Clone</Death_Clone>");
     const size_t end = t.find("</S10>");
     if (end != std::string::npos)
         t.insert(end, " <SpaceUnit Name=\"S10_Frigate_Death_Clone\"><Death_Persistence_Duration>2</Death_Persistence_Duration>"
-                      "<Death_Fade_Time>1</Death_Fade_Time></SpaceUnit>\n");
+                      "<Death_Fade_Time>1</Death_Fade_Time></SpaceUnit>\n"
+                      " <SpaceUnit Name=\"S10_Star_Base_Death_Clone\"><Death_Persistence_Duration>30</Death_Persistence_Duration></SpaceUnit>\n");
+    return t;
+}
+
+// refixf t03: TEAM containers in land battles: S10_Trooper has Create_Team and S10_Squad no Create_Team_Type, so each
+// squad chunk gets one object of the type named "Team" whose representative type (0x3973b0) is S10_Squad.
+std::string team_types() {
+    std::string t = kTypes;
+    const std::string at = "<GroundInfantry Name=\"S10_Trooper\">";
+    const size_t p = t.find(at);
+    if (p != std::string::npos) t.insert(p + at.size(), "<Create_Team>Yes</Create_Team>");
+    const size_t end = t.find("</S10>");
+    if (end != std::string::npos) t.insert(end, " <Team Name=\"Team\"><Behavior>TEAM</Behavior></Team>\n");
     return t;
 }
 
@@ -297,9 +314,25 @@ std::string prod_types() {
     return t;
 }
 
-std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false) {
+// refixf t02: the star base is a SPACE_OBSTACLE (as every FoC star base: STARBASES.XML) with a 250 footprint.
+std::string obstacle_types() {
+    std::string t = kTypes;
+    const std::string at = "<StarBase Name=\"S10_Star_Base_1\">";
+    const size_t p = t.find(at);
+    if (p != std::string::npos)
+        t.insert(p + at.size(), "<SpaceBehavior>SPACE_OBSTACLE</SpaceBehavior><Custom_Soft_Footprint_Radius>250</Custom_Soft_Footprint_Radius>");
+    // a weak one, so the attackers kill it inside the test's frames (its static entry must leave with it)
+    const std::string hp = "<Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>";
+    if (const size_t q = t.find(hp); q != std::string::npos) t.replace(q, hp.size(), "<Tactical_Health>300</Tactical_Health><Base_Level>1</Base_Level>");
+    return t;
+}
+
+std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
+                                bool obstacle = false, bool team = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (prod   ? "alamo_sim_battle_tests_prod"  // station production
+    d->root = fs::temp_directory_path() / (obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
+                                           : team     ? "alamo_sim_battle_tests_team"  // refixf t03: TEAM containers
+                                           : prod   ? "alamo_sim_battle_tests_prod"  // station production
                                            : s4   ? "alamo_sim_battle_tests_s4"  // S4
                                            : bm   ? "alamo_sim_battle_tests_bm"  // P4 tactical
                                            : anim ? "alamo_sim_battle_tests_anim"
@@ -309,7 +342,14 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", prod ? prod_types() : s4 ? s4_types() : bm ? bm_types() : anim ? anim_types() : fog ? fog_types() : std::string(kTypes));
+    write_file(x / "S10Types.xml", obstacle ? obstacle_types()
+                                   : team     ? team_types()
+                                   : prod   ? prod_types()
+                                   : s4     ? s4_types()
+                                   : bm     ? bm_types()
+                                   : anim   ? anim_types()
+                                   : fog    ? fog_types()
+                                            : std::string(kTypes));
     if (bm) write_file(x / "BlackMarketItems.xml", kBmItems);  // P4 tactical
     write_file(x / "HardPointDataFiles.xml", "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");
     write_file(x / "S10HardPoints.xml", kHardpoints);
@@ -1844,6 +1884,25 @@ void test_foc() {
     std::printf("foc battle: contrast rows %zu, hardpoint records %zu, priority sets %zu, damage types %u\n", crules.contrast.size(),
                 catalog.hardpoint_records(), catalog.priority_sets().size(), catalog.damage().damage_count());
     CHECK(crules.contrast.size() == 11 && catalog.hardpoint_records() > 100 && !catalog.priority_sets().empty());
+    {  // refixf t01: rocket curve fields reach the battle tables (MPTL fires Proj_Ground_Proton_Torpedo: MPTL_Rocket,
+       // straight 100, curve 50, offset 7, Target_Point_On_Terrain, Explode_When_Reached_Target_Radius)
+        std::vector<uint32_t> idx;
+        const BattleTables bt = catalog.build_battle({static_cast<uint32_t>(types.resolve_name("MPTL"))}, idx);
+        const tactical::combat::ProjectileDesc* torp = nullptr;
+        for (const tactical::combat::ProjectileDesc& pd : bt.combat.projectiles)
+            if (pd.name == "Proj_Ground_Proton_Torpedo") torp = &pd;
+        CHECK(torp != nullptr);
+        if (torp) {
+            std::printf("foc rocket: %s cat %d straight %.0f curve %.0f offset %.0f tpot %d explode %d mfd %.0f\n", torp->name.c_str(),
+                        static_cast<int>(torp->category), static_cast<double>(torp->rocket_straight_distance),
+                        static_cast<double>(torp->rocket_curve_distance), static_cast<double>(torp->rocket_curve_offset),
+                        torp->target_point_on_terrain ? 1 : 0, torp->explode_when_reached_target_radius ? 1 : 0,
+                        static_cast<double>(torp->max_flight_distance));
+            CHECK(torp->category == tactical::combat::ProjectileCategory::MptlRocket && torp->rocket_straight_distance == 100.0f &&
+                  torp->rocket_curve_distance == 50.0f && torp->rocket_curve_offset == 7.0f && torp->target_point_on_terrain &&
+                  torp->explode_when_reached_target_radius && torp->max_flight_distance == 720.0f);
+        }
+    }
     {  // --- S4 (owner: S4 agent): shipped corruption options (PLANETS.XML) and garrison / capture descriptors ---
         const std::vector<galactic::CorruptionOption> ae = galactic::corruption_options(types, types.resolve_name("AetenII"));
         size_t missions = 0, options = 0;
@@ -2143,6 +2202,138 @@ void test_anim_battles() {
             CHECK(!dv.diverged && b.battles == a.battles && b.stats.flinches == s.flinches && b.stats.corpses_removed == s.corpses_removed &&
                   b.events_digest == a.events_digest && b.muzzles_seen == a.muzzles_seen);
         }
+    }
+}
+
+// ---- refixf t04: death clone removal, headless and with the animation service ----
+// The space campaign on the anim data: frigate / corvette clones (S10_Frigate_Death_Clone: 2 s persistence + 1 s fade, no
+// Remove_Upon_Death) must leave the store at the planned frame; the star base's typed clone (30 s) is made on the battle's
+// last tick and must not outlive the battle. `anim`: the SimAnimation service is attached (no "anim" CRC system, so the
+// CRC logs compare); otherwise the same SimAnimation is only the battle's clone-model source. `wreck`: the clone type gets
+// a 30-frame DIE clip (both paths), so the plan includes the clip length.
+struct CloneRun {
+    CrcLog crc;
+    std::vector<std::string> battles;
+    std::map<ObjectId, std::pair<uint64_t, uint64_t>> life;  // clone id -> (frame first alive, frame first gone; 0 = never)
+    std::map<ObjectId, uint32_t> type;
+    uint64_t end_frame = 0;      // frame of the battle's end (object_removed callback)
+    uint32_t alive_at_end = ~0u;  // dying objects still alive in the store at the battle's end
+    uint32_t rows_missing = 0, detached_corpses = 0;  // anim: alive clone without its row; corpse whose store object left
+    SimAnimStats stats;
+};
+
+CloneRun run_clone_campaign(const Data& d, bool anim_service, bool wreck, int32_t workers, uint64_t ticks) {
+    CloneRun out;
+    const auto wreck_model = anim_model({{anim::kAnimDie, {1, 30}}});
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    SimAnimation animation(d.types, *d.files);
+    if (wreck) animation.set_model(d.types.resolve_name("S10_Frigate_Death_Clone"), objects::ModeKind::Space, wreck_model.get());
+    if (anim_service) animation.attach(host, false);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    if (anim_service) opt.animation = &animation;
+    else opt.clone_models = &animation;
+    opt.object_removed = [&host, &out](int32_t, uint32_t, uint32_t, bool) {  // after the battle's final tick, before the pop
+        TacticalMode* tm = host.tactical();
+        if (!tm || out.end_frame == host.frame()) return;
+        out.end_frame = host.frame();
+        out.alive_at_end = 0;
+        const objects::ObjectStore& st = tm->primary();
+        for (objects::ObjectHandle h : st.all_objects()) {  // dead-but-not-flushed too: clones made and removed on this tick
+            if (!st.dying(h)) continue;
+            out.alive_at_end += st.alive(h) ? 1u : 0u;
+            const ObjectId id = st.id(h);
+            if (out.life.emplace(id, std::make_pair(out.end_frame, out.end_frame)).second) out.type[id] = static_cast<uint32_t>(st.type(h));
+        }
+    };
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    for (uint64_t t = 0; t < ticks; ++t) {
+        host.tick_once();
+        const uint64_t f = host.frame();
+        TacticalMode* tm = host.tactical();
+        std::vector<ObjectId> present;
+        if (tm) {
+            const objects::ObjectStore& st = tm->primary();
+            const anim::AnimWorld* w = anim_service ? animation.find_world(*tm) : nullptr;
+            for (objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h) || !st.dying(h)) continue;
+                const ObjectId id = st.id(h);
+                present.push_back(id);
+                if (out.life.emplace(id, std::make_pair(f, uint64_t{0})).second) out.type[id] = static_cast<uint32_t>(st.type(h));
+                if (w && wreck && out.type[id] == type_of(d, "S10_Frigate_Death_Clone") && !w->contains(id)) ++out.rows_missing;
+            }
+            if (anim_service)
+                for (const anim::Corpse& c : animation.corpses(*tm)) out.detached_corpses += c.detached ? 1u : 0u;
+        }
+        for (auto& [id, l] : out.life)
+            if (l.second == 0 && std::find(present.begin(), present.end(), id) == present.end()) l.second = f;
+    }
+    out.crc = host.crc_log();
+    out.battles = battles.log();
+    out.stats = animation.stats();
+    if (anim_service) animation.detach(host);
+    return out;
+}
+
+void test_death_clone_removal() {
+    auto d = make_data(false, true);
+    const uint32_t frigate_clone = type_of(*d, "S10_Frigate_Death_Clone"), base_clone = type_of(*d, "S10_Star_Base_Death_Clone");
+    for (const bool wreck : {false, true}) {
+        const CloneRun h = run_clone_campaign(*d, false, wreck, 0, 2500);
+        // Planned lifetime: no clip 60 + 30 frames; with the 30-frame DIE clip (finished 28 advances after its start, seen
+        // by the corpse service one frame later) 28 + 1 + 60 + 30.
+        const uint64_t expect = wreck ? 119 : 90;
+        uint32_t removed = 0, other = 0, base_clones = 0;
+        uint64_t base_made = 0;
+        for (const auto& [id, l] : h.life) {
+            const uint32_t t = h.type.at(id);
+            if (t == frigate_clone && l.second != 0 && l.second < h.end_frame) {
+                ++removed;
+                if (l.second - l.first != expect) ++other;
+            }
+            if (t == base_clone) {
+                ++base_clones;
+                base_made = l.first;
+            }
+        }
+        for (const std::string& s : h.battles) std::printf("  %s\n", s.c_str());
+        std::printf("  death clones %s: %zu clone objects, %u frigate clones removed after %llu frames (%u other), star base clone made "
+                    "at %llu, battle end %llu, dying alive at the end %u\n",
+                    wreck ? "(DIE clip)" : "(no clip)", h.life.size(), removed, static_cast<unsigned long long>(expect), other,
+                    static_cast<unsigned long long>(base_made), static_cast<unsigned long long>(h.end_frame), h.alive_at_end);
+        CHECK(removed > 0 && other == 0);              // headless: removed at the planned frame (were never removed before)
+        CHECK(base_clones == 1 && base_made == h.end_frame);  // made on the last tick ...
+        CHECK(h.alive_at_end == 0);                    // ... and gone with the battle, like every clone left
+        for (const auto& [id, l] : h.life) CHECK(l.second != 0);  // no clone object after the battle
+        // The animation service changes nothing in the sim: same CRC log, same clone lifetimes; its corpse rows follow
+        // the battle's removals frame for frame (no clone without its row, no detached clone corpse).
+        const CloneRun a = run_clone_campaign(*d, true, wreck, 0, 2500);
+        const auto dv = first_divergence(h.crc, a.crc);
+        std::printf("  death clones + anim service: %s; clone deaths %u, corpses removed %u, rows missing %u, detached %u\n",
+                    dv.message.c_str(), a.stats.clone_deaths, a.stats.corpses_removed, a.rows_missing, a.detached_corpses);
+        CHECK(!dv.diverged && a.battles == h.battles && a.life == h.life && a.end_frame == h.end_frame && a.alive_at_end == 0);
+        CHECK(a.stats.clone_deaths > 0 && a.rows_missing == 0);
+        if (wreck) CHECK(a.detached_corpses == 0 && a.stats.corpses_removed >= removed);
+        // Worker counts: identical.
+        const CloneRun w4 = run_clone_campaign(*d, false, wreck, 4, 2500);
+        CHECK(!first_divergence(h.crc, w4.crc).diverged && w4.life == h.life);
     }
 }
 #endif
@@ -2793,6 +2984,152 @@ void test_battle_ai_orders(const Data& d) {
     CHECK(issued && closer);
 }
 
+// refixf t02: no two space units on one exact point (foc-station seeds 1 / 4 stacked the rebel fleet on the station's centre):
+//   * a SPACE_OBSTACLE star base is a static entry of the space occupancy from the battle start (MOVEMENT §2.2) and leaves it
+//     when it dies;
+//   * the tactical AI's task-force Attack_Move on the station (refixf t06: one PortExtension group order, the further units
+//     after the 24-byte block) is one group move (MOVEMENT §6.3): every goal outside the station's footprint and no two goals
+//     on one point;
+//   * no two live movable units share a position at the start, after the orders or while they fly in and fight.
+void test_space_obstacle_orders() {
+    auto d = make_data(false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*d, false);
+    for (int i = 0; i < 3; ++i) gsetup.forces.push_back({0, 1, type_of(*d, "S10_Frigate")});  // the battle outlives the station
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, gsetup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test moves units
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup setup;
+    setup.defs = &defs;
+    setup.equations = &eqs;
+    setup.files = d->files.get();
+    setup.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    namespace mv = tactical::movement;
+    // Pairs of live movable battle units on one exact XY point.
+    auto stacked = [](const TacticalBattle& b, const objects::ObjectStore& st) {
+        std::vector<objects::ObjectId> ids;
+        for (const objects::ObjectHandle h : st.all_objects())
+            if (st.alive(h) && b.movement().has_unit(st.id(h))) ids.push_back(st.id(h));
+        int pairs = 0;
+        for (size_t i = 0; i < ids.size(); ++i)
+            for (size_t j = i + 1; j < ids.size(); ++j) {
+                const Vec3 p = st.position(st.find(ids[i])), q = st.position(st.find(ids[j]));
+                if (p.x == q.x && p.y == q.y) ++pairs;
+            }
+        return pairs;
+    };
+    objects::ObjectId station = objects::kNoObjectId;
+    Vec3 sp{};
+    std::vector<objects::ObjectId> attackers;
+    bool issued = false, station_died = false, hp_hit = false, hull_hit = false;
+    float hp_max = 0.0f, hull_max = 0.0f;
+    int stacks = 0;
+    uint32_t last = 0;
+    float closest = 1.0e9f;
+    for (uint64_t t = 0; t < 6000; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (issued) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        if (b->frame() == 3 && !issued) {
+            issued = true;
+            for (const objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h)) continue;
+                if (st.owner(h) == 0 && static_cast<uint32_t>(st.type(h)) == type_of(*d, "S10_Star_Base_1")) station = st.id(h);
+                if (st.owner(h) == 1 && b->movement().has_unit(st.id(h))) attackers.push_back(st.id(h));
+            }
+            CHECK(station != objects::kNoObjectId && attackers.size() >= 4);
+            if (station == objects::kNoObjectId || attackers.size() < 2) break;
+            sp = st.position(st.find(station));
+            const mv::SpaceOccupancy& occ = b->movement().space();
+            CHECK(occ.has_static(station));
+            CHECK((occ.query_static({sp.x, sp.y}, {sp.x, sp.y}, 1.0f) & mv::kSpaceStatic) != 0);
+            CHECK((occ.query_static({sp.x + 300.0f, sp.y}, {sp.x + 300.0f, sp.y}, 1.0f) & mv::kSpaceStatic) == 0);
+            CHECK(stacked(*b, st) == 0);  // the start placement
+            BattleAi ai(*b, *tm, host, setup);
+            {  // as the tactical AI's issue_move (refixf t06): ONE group order for the task force, further units after the block
+                std::vector<uint8_t> pay;
+                auto put = [&pay](uint32_t v) {
+                    for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+                };
+                put(static_cast<uint32_t>(attackers.front()));
+                put(static_cast<uint32_t>(station));
+                put(std::bit_cast<uint32_t>(sp.x));
+                put(std::bit_cast<uint32_t>(sp.y));
+                put(std::bit_cast<uint32_t>(sp.z));
+                put(0u);
+                for (size_t i = 1; i < attackers.size(); ++i) put(static_cast<uint32_t>(attackers[i]));
+                const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::AttackMove));
+                CHECK(ai.execute(1, commands::ev::port_extension(sub, pay)) == commands::RejectReason::None);
+            }
+            std::vector<mv::V2> goals;
+            for (const objects::ObjectId a : attackers) {
+                const auto v = b->movement().view(a);
+                CHECK(v.has_goal);
+                const float gd = std::sqrt((v.goal.x - sp.x) * (v.goal.x - sp.x) + (v.goal.y - sp.y) * (v.goal.y - sp.y));
+                CHECK(gd >= 250.0f);  // outside the station's footprint
+                closest = std::min(closest, gd);
+                for (const mv::V2& g : goals) CHECK(!(g.x == v.goal.x && g.y == v.goal.y));
+                goals.push_back(v.goal);
+            }
+            std::printf("  station %d at (%.0f, %.0f): %zu attack-move orders, nearest goal %.0f from its centre\n", station,
+                        static_cast<double>(sp.x), static_cast<double>(sp.y), attackers.size(), static_cast<double>(closest));
+            // then an explicit attack on it (the weak station dies, the defender's frigates keep the battle going); refixf t06:
+            // as the tactical AI's Attack_Target(station, "WEAPON_LASER"): ref2 = 1 + HardPointType, the laser is hardpoint 0
+            std::vector<uint32_t> wire;
+            for (const objects::ObjectId a : attackers) wire.push_back(static_cast<uint32_t>(a));
+            commands::EventData atk = commands::ev::attack(static_cast<uint32_t>(station), wire);
+            atk.set("ref2", 1u + static_cast<uint32_t>(tactical::combat::HardpointKind::WeaponLaser));
+            CHECK(ai.execute(1, atk) == commands::RejectReason::None);
+            for (const objects::ObjectId a : attackers)
+                CHECK(b->combat().ordered_target(a) == station && b->combat().ordered_hardpoint(a) == 0);
+            hp_max = b->combat().hardpoint_max(station, 0);
+            hull_max = b->combat().health(station);
+        }
+        if (!issued || station == objects::kNoObjectId) continue;
+        last = b->frame();
+        stacks += stacked(*b, st);
+        if (!station_died && !st.alive(st.find(station))) {
+            station_died = true;
+            std::printf("  station died at frame %u\n", b->frame());
+        }
+        if (!station_died) {  // refixf t06: the ordered attack damages the ordered hardpoint and the hull
+            hp_hit = hp_hit || b->combat().hardpoint_health(station, 0) < hp_max;
+            hull_hit = hull_hit || b->combat().health(station) < hull_max;
+        }
+        if (station_died) CHECK(!b->movement().space().has_static(station));  // removed with its object (same tick)
+        if (station_died || b->frame() >= 4000) break;
+    }
+    std::printf("  stacked pairs over frames 3-%u: %d, station died %d, hardpoint hit %d, hull hit %d\n", last, stacks,
+                station_died ? 1 : 0, hp_hit ? 1 : 0, hull_hit ? 1 : 0);
+    CHECK(issued && stacks == 0);
+    CHECK(station_died && hp_hit && hull_hit);
+}
+
 // t41: BattleAi::fill hands the perception the station's DUMMY_STAR_BASE and Base_Level (the inputs of Variable_Self.BaseLevel).
 void test_battle_ai_station_level(bool skirmish) {
     auto d = make_data(false, false, false, false, true);  // the star bases carry DUMMY_STAR_BASE here
@@ -2916,6 +3253,98 @@ void test_battle_ai_land_mode(bool skirmish) {
             if (o.dummy_ground_structure) ++(o.owner == 0 ? own : other);
         CHECK(own == 1 && other == 0);
         for (const ai::tactical::StartMarker& m : w.markers) CHECK(m.kind != ai::tactical::StartMarker::Kind::PlayerPosition);
+        checked = true;
+    }
+    CHECK(checked);
+}
+
+// refixf t03: Find_All_Objects_Of_Type matches the representative type (LUA_API.md "Find_All_Objects_Of_Type and the
+// sibling finders"): in a land battle (team_types) a script's 'S10_Squad' finds the squads' TEAM containers (store type
+// "Team") through the battle's ObjectBridge::representative_type hook, and 'Team' finds none. Without the hook the store
+// type is matched instead.
+void test_battle_ai_find_team() {
+    auto d = make_data(false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d->files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    const objects::TypeIndex team = d->types.resolve_name("Team"), squad = d->types.resolve_name("S10_Squad"),
+                             trooper = d->types.resolve_name("S10_Trooper");
+    CHECK(team != objects::kNone && squad != objects::kNone && trooper != objects::kNone);
+    bool invaded = false, checked = false;
+    for (uint64_t t = 0; t < 2500 && !checked; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() < 3) continue;
+        objects::ObjectStore& st = tm->primary();
+        std::vector<objects::ObjectHandle> containers;
+        size_t troopers = 0;
+        for (const objects::ObjectHandle h : st.all_objects()) {
+            if (!st.alive(h)) continue;
+            if (st.type(h) == team) containers.push_back(h);
+            if (st.type(h) == trooper) ++troopers;
+        }
+        BattleAi ai(*b, *tm, host, ts);
+        lua::ObjectBridge& br = ai.world().object_bridge();
+        CHECK(static_cast<bool>(br.representative_type));
+        if (!br.representative_type) break;
+        for (const objects::ObjectHandle h : containers) CHECK(br.representative_type(h) == squad);
+        CHECK(br.representative_type(objects::ObjectHandle{}) == objects::kNone);
+        lua::LuaHost lh;
+        lh.store = &st;
+        lh.types = &d->types;
+        lua::LuaVm vm(lh);
+        lua::attach_object_bridge(vm, &br);
+        // The count goes back through the chunk's success: error() when the finder's result has another size.
+        auto finds = [&vm](const char* filter, size_t n) {
+            std::string err;
+            const std::string code = std::string("local n = 0 for _ in pairs(Find_All_Objects_Of_Type('") + filter +
+                                     "')) do n = n + 1 end if n ~= " + std::to_string(n) + " then error('found ' .. n) end";
+            const bool ok = vm.run(code, "find_team", &err);
+            if (!ok) std::printf("  find team: '%s' (expected %zu): %s\n", filter, n, err.c_str());
+            return ok;
+        };
+        std::printf("  find team: frame %u, %zu TEAM containers, %zu troopers\n", b->frame(), containers.size(), troopers);
+        CHECK(!containers.empty() && troopers > 0);
+        CHECK(finds("S10_Squad", containers.size()) && finds("Team", 0) && finds("S10_Trooper", troopers));
+        const auto hook = br.representative_type;  // without the hook: the store type
+        br.representative_type = nullptr;
+        CHECK(finds("S10_Squad", 0) && finds("Team", containers.size()));
+        br.representative_type = hook;
+        lua::attach_object_bridge(vm, nullptr);
         checked = true;
     }
     CHECK(checked);
@@ -3071,6 +3500,8 @@ int main(int argc, char** argv) {
 #ifdef ALAMO_SIM_HAVE_ANIM
     std::printf("anim battles (R3: flinch, death clips, corpses)\n");
     test_anim_battles();
+    std::printf("death clone removal, headless and with the anim service (refixf t04)\n");
+    test_death_clone_removal();
 #endif
     std::printf("black market gate (P4 tactical)\n");
     test_black_market_battle();
@@ -3087,10 +3518,14 @@ int main(int argc, char** argv) {
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     std::printf("OI host: BattleAi MoveToObject, hijack_unit, AI Change_Owner\n");
     test_battle_ai_orders(*d);
+    std::printf("refixf t02: SPACE_OBSTACLE station as a static entry, per-unit Lua orders as one group move\n");
+    test_space_obstacle_orders();
     test_battle_ai_station_level(false);
     test_battle_ai_station_level(true);
     test_battle_ai_land_mode(false);
     test_battle_ai_land_mode(true);
+    std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
+    test_battle_ai_find_team();
 #endif
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);

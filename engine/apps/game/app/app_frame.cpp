@@ -69,16 +69,13 @@ bool App::render_frame() {
         ok = gpu_.renderer.render(*f, cmd, pt, ui::to_view_matrices(cp, w, h), gview_.main, render::DrawMode::Lit, gro, &draw_stats_,
                                   nullptr, gview_.background);
     } else if (battle) {
-        if (screen_ == Screen::Battle) bview_.set_selection_blobs(ui_.tactical_hud.selection_blobs());  // last HUD build's circles (one frame behind)
+        if (screen_ == Screen::Battle && !cinematic_hides_hud())
+            bview_.set_selection_blobs(ui_.tactical_hud.selection_blobs());  // last HUD build's circles (one frame behind)
         else bview_.set_selection_blobs({});  // load screen / attract demo: no selection
         bview_.prepare(gpu_, render_alpha());
         bview_.use_scene(gpu_);
         ui::CameraParams cp = bview_.camera_params(w, h);
-        if (shake_.active()) {  // refix t06: the TSW camera shake moves the drawn view only
-            const tactical::Vec3 o = shake_.offset(cp.eye, cp.target);
-            cp.eye = cp.eye + o;
-            cp.target = cp.target + o;
-        }
+        cinematic_camera(cp);  // refixf t05: the TSW firing shot + its shake replace the drawn view (the controller is untouched)
         const float env_scale = detail_options_ ? environment_fade_scale(adv_video_.environment) : 1.0f;  // Environment detail [M]
         gpu_.renderer.set_object_fade(cp.fade_begin * env_scale, cp.fade_end * env_scale);
         for (int i = 0; i < 4; ++i) pt.clear[i] = bview_.clear_color(i);
@@ -122,7 +119,7 @@ bool App::render_frame() {
             shells = &ui_.galactic_shells;
             layout = &ui_.galactic_hud.layout();
         }
-    } else if (screen_ == Screen::Battle && battle) {
+    } else if (screen_ == Screen::Battle && battle && !cinematic_hides_hud()) {  // refixf t05: no HUD during the cinematic
         build_tactical_hud();
         hud_list = ui_.tactical_hud.draw_list();
         canvas = &ui_.tactical_hud.canvas();
@@ -150,9 +147,11 @@ bool App::render_frame() {
     // Panels (hero roster, black market, sabotage, corruption, hack) on top of the HUD list; their shells draw at the
     // HUD's ShellModels step.
     std::vector<ui::HudDrawList> panel_lists;
-    if (galactic || (screen_ == Screen::Battle && battle)) build_panels(panel_lists);
+    const bool battle_hud = screen_ == Screen::Battle && battle && !cinematic_hides_hud();
+    if (galactic || battle_hud) build_panels(panel_lists);
     for (const ui::HudDrawList& pl : panel_lists) merge_lists(hud_list, pl);
-    if (galactic || (screen_ == Screen::Battle && battle)) build_encyclopedia(hud_list, *canvas);
+    if (galactic || battle_hud) build_encyclopedia(hud_list, *canvas);
+    if (battle) draw_letterbox(dialogs, *canvas, w, h);  // refixf t05: cinematic letterbox, over the world, under the dialogs
     // OI host: the attract demo world under the menu. GuiManager's backdrop paints an opaque black fill under the
     // MenuBack_overlay quad, which would hide the world: left out while the demo is drawn [port: until engine/ui draws the
     // overlay alone - stretched to the window, straight alpha - over a world, MAIN_MENU_BACKGROUND.md §6.4].
@@ -210,7 +209,7 @@ bool App::render_frame() {
     if (panel_shells_ok_) panel_drawer_.make_resident(gpu_.renderer);
     // Radar event models (tactical HUD only): uploaded the first time a ping names them, drawn at the Models2 step.
     std::span<const ui::HudModelDraw> radar_models;
-    if (ui_.radar_models_ok && screen_ == Screen::Battle && battle && !galactic) {
+    if (ui_.radar_models_ok && battle_hud && !galactic) {
         radar_models = ui_.tactical_hud.radar_models();
         std::string merr;
         if (!radar_models.empty() && !ui_.radar_drawer.prepare(gpu_.renderer, radar_models, &merr))
@@ -325,7 +324,6 @@ void App::frame() {
     const double now = script_.empty() ? ms_since(t0_) / 1000.0 : static_cast<double>(frames_) / 30.0;
     dt_ = static_cast<float>(std::clamp(now - now_s_, 0.0, 0.1));
     now_s_ = now;
-    shake_.update(dt_);  // refix t06 (presentation)
     if (win_.take_resized() && win_.width() > 0 && win_.height() > 0) {
         gpu_.ring.wait_idle();
         sc_.recreate(win_.width(), win_.height());
@@ -367,6 +365,7 @@ void App::frame() {
     } else {
         raw = ui::capture_input(win_, now_s_, dt_);
     }
+    cinematic_input(raw);  // refixf t05: the cinematic controller takes the mouse first (TSW_PLANET_DESTROY.md §11.2)
     std::u32string typed = printable(win_.take_text());
     // OI host: attract demo (idle clock, idle pause, map cycle); input reaches the menus as usual.
     attract_step(raw);
@@ -444,6 +443,7 @@ void App::frame() {
     // 3. Sim, then the story's presentation ops (movies, audio) of the ticks just run; Lua movies advance.
     if (battle_view_pending_ && load_intro_frames_ == 0) start_battle_view();  // QA t11: the load screen is already up
     step_sim();
+    cinematic_step();  // refixf t05: shot clock from the tactical frame, timer end, letterbox slide
     if (screen_ == Screen::Menu && demo_session()) {  // OI host: the attract demo's camera; a finished demo battle restarts
         if (session_->skirmish_over() && !start_attract_map()) stop_attract();
         else demo_camera();
@@ -472,12 +472,13 @@ void App::frame() {
         return;
     }
     end_load_intro_frame();
-    const bool cinematic = presentation_cinematic();  // OI host: Lua cinematic camera -> listener rules
+    const bool cinematic = presentation_cinematic() || cine_.shot.active();  // OI host: Lua / TSW cinematic camera -> listener rules
     if (screen_ == Screen::Galactic) {
         const ui::CameraParams cp = gview_.camera_params(targets_.width, targets_.height);
         audio_.set_listener({cp.eye.x, cp.eye.y, cp.eye.z}, {cp.target.x, cp.target.y, cp.target.z}, cinematic);
     } else if ((screen_ == Screen::Battle || (screen_ == Screen::Menu && demo_session())) && bview_.active()) {
-        const ui::CameraParams cp = bview_.camera_params(targets_.width, targets_.height);
+        ui::CameraParams cp = bview_.camera_params(targets_.width, targets_.height);
+        cinematic_camera(cp);
         audio_.set_listener({cp.eye.x, cp.eye.y, cp.eye.z}, {cp.target.x, cp.target.y, cp.target.z}, cinematic);
     }
     audio_flags();  // OI host: modal / GUI-only / attract

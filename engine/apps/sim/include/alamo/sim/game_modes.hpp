@@ -32,6 +32,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -47,6 +48,10 @@
 namespace alamo::galactic {
 class GalacticSim;
 }
+namespace alamo::tactical::movement {
+struct AvoidModel;
+struct AvoidObstacle;
+}  // namespace alamo::tactical::movement
 
 namespace alamo::sim {
 
@@ -210,7 +215,33 @@ public:
     // Destroy_Object + tree dead flag; unlinked from the trees after the store's flush.
     bool destroy(ObjectHandle h);
 
+    // The tree box (GameObject::Get_World_AABB 0x3982b0, SPACE_AVOIDANCE §3.1, refixf t07): with a model source, the
+    // type model's collision bound (§3.2) through the object transform with Scale_Factor (OBB -> AABB), [P, P + 0.1]
+    // for a type without a model; extent_box() when the source has no data for the type, for TEAM objects [port: the
+    // team list's box is not modelled; no FoC TEAM type is projectile-collidable] and without a source (synthetic
+    // runs without model files). Serial callers only (it fills the per-type model cache).
     tactical::Aabb bounds_of(ObjectHandle h) const;
+    // The pre-t07 box: the per-type half extent (max Custom_Hard_X/YExtent, else 40 (space) / 10 (land) x Scale_Factor)
+    // around the position. [port] Still the model box stand-in of the fog (FogObject) and the garrison holder.
+    tactical::Aabb extent_box(ObjectHandle h) const;
+    // refixf t07: per-type model collision data for bounds_of and the precise projectile test. known = false: no data
+    // (the model did not load); known with a null model: the type has no model.
+    struct ModelRef {
+        bool known = false;
+        const tactical::movement::AvoidModel* model = nullptr;
+    };
+    using ModelSource = std::function<ModelRef(objects::TypeIndex)>;
+    void set_model_source(ModelSource src);
+    bool has_model_source() const { return static_cast<bool>(model_source_); }
+    // The cached entry; resolves it first when `resolve` (serial callers only). Unresolved without `resolve`: unknown.
+    ModelRef model_ref(objects::TypeIndex t, bool resolve) const;
+    // Resolves the types of every live object after set_model_source / a load (serial; no-op otherwise), so that
+    // read-only callers (the parallel projectile sweeps) find every tree member's type resolved.
+    void resolve_models();
+    // The object as an avoidance obstacle (position, planar facing, Scale_Factor, model, shield behaviour; avoid_place
+    // applied). False when there is no model data for its type (see ModelRef).
+    bool obstacle_of(ObjectHandle h, tactical::movement::AvoidObstacle& o, bool resolve) const;
+    float collision_box_modifier(objects::TypeIndex t) const { return t < box_modifier_.size() ? box_modifier_[t] : 0.0f; }
     uint32_t category_of(ObjectHandle h) const;
     bool movable(ObjectHandle h) const;
     // Map load end (Rebuild_With_Threshold on every tree).
@@ -250,6 +281,13 @@ private:
     void compute_step(Step& s) const;
 
     std::vector<float> half_extent_;  // per type
+    // refixf t07: per type: Scale_Factor (invalid -> 1), Collision_Box_Modifier, TEAM / shield behaviour flags.
+    std::vector<float> scale_, box_modifier_;
+    std::vector<uint8_t> team_, shielded_;
+    ModelSource model_source_;
+    mutable std::vector<ModelRef> models_;          // per type, valid where model_done_ is set (definition cache)
+    mutable std::vector<uint8_t> model_done_;
+    bool models_dirty_ = false;
     tactical::TreeSet trees_;
     tactical::Aabb bounds_{{-1.0e6f, -1.0e6f, -1.0e6f}, {1.0e6f, 1.0e6f, 1.0e6f}};
     std::map<ObjectId, UnitOrder> orders_;

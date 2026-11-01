@@ -75,6 +75,7 @@
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/combat/formulas.hpp"
 #include "alamo/tactical/combat/modifiers.hpp"
+#include "alamo/tactical/combat/rocket.hpp"
 #include "alamo/tactical/combat/tables.hpp"
 #include "alamo/tactical/geometry.hpp"
 #include "alamo/tactical/tree_set.hpp"
@@ -215,6 +216,14 @@ struct ProjectileDesc {
     uint8_t combat_mod = 0;                  // Projectile_Combat_Mod: ModList index + 1 (code 0x52 enum), 0 none
     float combat_mod_seconds = 0.0f, combat_mod_value = 0.0f;
     uint64_t combat_mod_mask = 0;
+    // ---- refixf t01: ROCKET / MPTL_ROCKET spline flight (S9_DEATH_CLONE_SHIELDS.md §2.4, rocket.hpp) ----
+    // The three distances: type +0x1fec / +0x1ff0 / +0x1ff4 (schema "int", read by the float converter 0x8); floats here.
+    float rocket_straight_distance = 0.0f;  // Projectile_Rocket_Straight_Distance (space initial plan)
+    // Projectile_Rocket_Curve_Distance. Every ROCKET / MPTL_ROCKET flies the spline; 0 (the XML default) builds no legs.
+    float rocket_curve_distance = 0.0f;
+    float rocket_curve_offset = 0.0f;              // Projectile_Rocket_Curve_Offset
+    bool target_point_on_terrain = false;          // Projectile_Target_Point_On_Terrain (type +0x7f)
+    bool explode_when_reached_target_radius = false;  // Explode_When_Reached_Target_Radius (type +0x7e)
 };
 
 struct InaccuracyEntry {
@@ -228,7 +237,8 @@ struct WeaponDelayEntry {
 
 struct HardpointDesc {
     std::string name;
-    uint32_t name_crc = 0;  // name_crc(name): Hard_Point_Priorities key
+    uint32_t name_crc = 0;  // name_crc(name)
+    std::string collision_mesh;  // refixf t07: Collision_Mesh (type +0xa0), upper case; "" = none (§2.9 Q1 step 4)
     HardpointKind kind = HardpointKind::DummyArt;
     float health = 0.0f;
     bool destroyable = false, targetable = false, turret = false;  // ctor defaults false [M]
@@ -237,7 +247,15 @@ struct HardpointDesc {
     bool has_bone_b = false;
     bool randomize_between_fire_bones = true;  // default true [M]
     float fire_yaw_deg = 0.0f;                  // fire direction relative to the unit's forward [L]
-    float fire_cone_width = 360.0f, fire_cone_height = 180.0f;  // [L] defaults: unrestricted
+    // Struct default unrestricted [L] (synthetic tables); the XML catalog uses the type ctor default 0 (TACTICAL_COMBAT
+    // §2.9 Q2 step 4).
+    float fire_cone_width = 360.0f, fire_cone_height = 180.0f;
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q2 step 5): bind-pose orientation of Fire_Bone_A (fire_*) and of the attachment
+    // bone (attach_*) from the unit model, as unit-local unit axes (x forward, y left, z up). The cone test reads the
+    // point in that frame; without a model frame it uses the unit facing + fire_yaw_deg stand-in [port].
+    bool has_fire_frame = false, has_attach_frame = false;
+    Vec3 fire_x, fire_y, fire_z;
+    Vec3 attach_x, attach_y, attach_z;
     float turret_rotate_extent = 180.0f;
     int32_t projectile = -1;           // Fire_Projectile_Type
     // OI abilities (REMAINING_GAPS §5.5): Blast_Ability_Fire_Projectile_Type (+0x220), fired instead of `projectile` while
@@ -406,6 +424,10 @@ struct CombatConfig {
     float retreat_damage_mod_factor = 1.0f;        // Space/Land_Retreat_Units_Damaged_Mod_Factor
     float base_shield_vulnerability = 1.0f;        // Base_Shield_Vulnerability_Modifier
     float max_secs_for_ae_delayed_damage = 0.0f;   // Max_Secs_For_AE_Delayed_Damage
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q1 step 1, port difference 1) [port]: a space hit on a non-target keeps the render
+    // mesh it struck; the port has no collision meshes, so the hit goes to the closest live hardpoint whose bone lies
+    // within this distance of the impact point (a stand-in for the hardpoint's Collision_Mesh extent), else the hull.
+    float hardpoint_mesh_radius = 40.0f;
     float grenade_gravity = 1.0f;
     // Diminishing_Firepower curve as (seconds since last hit, factor) points (OI tactical, TACTICAL_GAPS 3.3: a
     // natural cubic spline through the points sorted by x, float; before the first / past the last point the end
@@ -438,6 +460,26 @@ void apply_game_constants(CombatConfig& c, const data::GameConstants& gc);
 // Hooks the ability system (S9, engine/tactical/abilities) installs into the combat tick. Every call
 // is made from a serial phase, in the order given, so implementations may draw from the synced RNG
 // and call back into CombatSystem (no unit is added or removed while a hook runs).
+// refixf t07 (TACTICAL_COMBAT §3.4, HOTSPOTS 0x2abcf0, SPACE_AVOIDANCE §5): the per-entry test of the projectile
+// segment query, supplied by the host that owns the models. Called from the sweep phase (worker threads: read-only).
+struct PreciseQuery {
+    ObjectId victim = kNoObject;
+    Vec3 a, b;               // the swept segment a -> b (world)
+    uint32_t mask = 5;       // collision mask: 7 with Projectile_Does_Shield_Damage, else 5
+    bool shield_up = false;  // shield points > 0: the victim's SHIELD mesh carries mask 2 (else 0) [port: no disable state]
+    bool collide = true;     // model collide switch (§5.5): off while garrisoned
+};
+struct PreciseResult {
+    float t = 1.0f;                     // segment fraction of the hit
+    const std::string* mesh = nullptr;  // the struck sub-object's name (upper case); null: none recorded
+};
+enum class PreciseOutcome : uint8_t {
+    NotModelled,  // no model data for this victim: the tree-box hit stands (the pre-t07 rule) [port]
+    Miss,
+    Hit,
+};
+using PreciseHitFn = std::function<PreciseOutcome(const PreciseQuery&, PreciseResult&)>;
+
 class CombatHooks {
 public:
     virtual ~CombatHooks() = default;
@@ -681,6 +723,17 @@ struct ProjectileView {
     uint32_t spawn_frame = 0;
 };
 
+// refixf t01: a spline rocket's flight state (projectile data pack fields of S9_DEATH_CLONE_SHIELDS.md §2.4.1).
+struct RocketView {
+    bool planned = false;      // +0x30 set (the initial plan ran)
+    float s = 0.0f;            // +0x38 RocketDistanceAlongSpline
+    float budget = 0.0f;       // +0x54 RocketMaxFlightDistance
+    Vec3 fire_at;              // +0x3c FireAtPosition
+    Vec3 launch;               // +0x80 launch point
+    Vec3 last_velocity;        // +0x98 LastKnownVelocity
+    const RocketSpline* path = nullptr;
+};
+
 // L1 systems: a projectile launched by a host system that is not a combat weapon (special weapons, lobbing
 // superweapons, bombardment / bombing-run shells; engine/tactical/abilities special_weapons.hpp). [port] No
 // draws: no muzzle / inaccuracy / recharge (those belong to the launching system); flies straight from `from`.
@@ -736,6 +789,33 @@ public:
     void clear_order(ObjectId attacker);
     ObjectId ordered_target(ObjectId id) const;
     int32_t ordered_hardpoint(ObjectId id) const;
+    // ---- refixf t06: Attack_Move on an object (TACTICAL_COMBAT §2.8) ----
+    // The unit formation's attack goal (Formation_Attack_Target(F, &hp, 0) 0x41a2e0: the current movement block's object
+    // when the block is not a guard). The host sets it with every move order of the unit (kNoObject: a position, guard or
+    // stop). Path B (decide, before the scan): while the unit holds no ordered target, a goal that is an enemy, passes
+    // 0x5680b0 (valid target, not dead / garrisoned / skip-targeting) and lies inside weapon range (XY distance <= max
+    // attack range + footprint extent, outside Targeting_Min_Attack_Distance) becomes the LOCKED ordered target - no
+    // priority score, exclusions, category restrictions or fog test. Attack_Move_Response_Range is not used. A dead goal
+    // is cleared (the formation goal became a position).
+    void set_attack_goal(ObjectId unit, ObjectId target, int32_t hardpoint = -1);
+    ObjectId attack_goal(ObjectId unit) const;
+    // Order_Attack (0x38d730, §2.8 C) with ordered = 1, as a task-force movement block issues it at order time (path A).
+    // False = refused (C step 1: target not an enemy of the unit's owner; stealthed and the unit lacks
+    // Target_Stealth_Units; garrisoned or dead) - the caller drops the unit from the move. A unit without any weapon has
+    // no TARGETING behaviour: nothing is issued, true. Otherwise the weapon path (space unless BARRAGE (5) is active; land
+    // always, ordered = 1): the lock is released (a locked ordered target becomes the auto target) and the weapon
+    // hardpoints aim at the target (weapon_aim) until the next scan pick, path B or another order replaces it; the unit's
+    // own target is untouched. Team members, LUCKY_SHOT (34) units and space BARRAGE units take the set path: the target
+    // becomes their locked ordered target at once. [port: the melee-vs-airborne refusal and the autofire fallback are not
+    // modelled.]
+    bool order_attack_issue(ObjectId attacker, ObjectId target, int32_t hardpoint = -1);
+    ObjectId weapon_aim(ObjectId id) const;  // path-A hardpoint aim (kNoObject: none)
+    bool order_locked(ObjectId id) const;    // the ordered target carries the lock (TD +0xf4: path B / set path)
+    // Get_Base_Attack_Range and Targeting_Min_Attack_Distance of a unit (staging, §2.8; 0 for an unknown id).
+    float base_attack_range_of(ObjectId id) const;
+    float min_attack_distance(ObjectId id) const;
+    // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids.
+    bool inside_min_range(ObjectId attacker, ObjectId target) const;
 
     // ---- S9: hooks and ability-facing API ----
     void set_hooks(CombatHooks* hooks) { hooks_ = hooks; }
@@ -778,6 +858,12 @@ public:
     // radius for a unit target), so a point shot detonates at the point (expiry: area damage / ion stun). It is
     // first stepped on the next tick, as weapon shots. False for an unknown projectile or a dead / missing target.
     bool launch_projectile(const ProjectileLaunch& l, uint32_t frame);
+    // refixf t01: land rocket terrain (heightmap h(x, y) and its extent box, S9_DEATH_CLONE_SHIELDS.md §2.4.4 mode 1,
+    // §2.4.6 ground points). Read in the serial commit phase only. Unset [port]: flat ground at z 0, no box.
+    void set_rocket_terrain(RocketTerrain t) { rocket_terrain_ = std::move(t); }
+    const RocketTerrain& rocket_terrain() const { return rocket_terrain_; }
+    // Spline-rocket state of projectile i (serial order); false when it is not a spline rocket.
+    bool rocket(size_t i, RocketView& out) const;
     // Tactical weather (weather.hpp, L1_S4_REMAINING §3.2): accuracy modifier m per Projectile_Category; land shots'
     // inaccuracy radius / spread x (2 - m) (the ability inaccuracy override stays unscaled [M]). All 1 = no effect
     // (the default; bit-identical). [M: every owner is weather-affected.]
@@ -899,6 +985,9 @@ public:
     void set_obstacle_cell_query(std::function<bool(ObjectId target, Vec3 p, Vec3& centre)> occupied) {
         obstacle_cell_ = std::move(occupied);
     }
+    // refixf t07: the projectile segment query's per-entry test (precise model test, then the Collision_Box_Modifier
+    // sphere). Unset: every tree-box hit is a hit (synthetic data without models).
+    void set_precise_hit(PreciseHitFn fn) { precise_hit_ = std::move(fn); }
     // Credit hooks for the repair (CampaignBattles: the galactic account). Unset: repairs are free [port].
     void set_credit_hooks(std::function<float(int32_t)> get, std::function<void(int32_t, float)> add) {
         credits_get_ = std::move(get);
@@ -1063,6 +1152,15 @@ private:
         uint32_t emitter_entries = 0;    // Add_Emitter registrations (multiset count)
         int32_t weapon_index = 0;        // obj +0x324 (hashed only when != 0)
         uint8_t acquired = 0;            // scan picked a target this tick (not hashed: transient)
+        // ---- refixf t06 (TACTICAL_COMBAT §2.8; hash_extended only when set) ----
+        ObjectId goal_target = kNoObject;  // formation attack goal (path B)
+        int32_t goal_hp = -1;
+        ObjectId aim_target = kNoObject;   // path-A weapon-hardpoint aim (Order_Attack weapon path)
+        int32_t aim_hp = -1;
+        uint8_t locked = 0;                // the ordered target carries the lock (dropped on garrison / stealth / fog)
+        // refixf t06 (TACTICAL_COMBAT §2.9 Q3): TD +0x10 for the scan target, fixed when the scan sets a new target
+        // (Choose_Target_Hardpoint) and re-chosen only by the space formation step; -1 none.
+        int32_t auto_hp = -1;
         ModifierSet mods;
         // ---- caches (never hashed) ----
         std::array<float, kModListCount> mod_r{};
@@ -1104,6 +1202,22 @@ private:
         float gravity = 0.0f;
         float floor_z = 0.0f;
         float fuse = -1.0f;  // OI abilities: armed bomb lifetime override (seconds; < 0 none), hashed when set
+        uint8_t rocket = 0;  // refixf t01: spline rocket (state in rockets_, same serial); hashed in hash_extended
+    };
+    // refixf t01: spline-rocket flight state, one per Projectile with rocket != 0, serial order (S9 §2.4.1 pack fields).
+    struct Rocket {
+        uint32_t serial = 0;
+        uint8_t planned = 0;  // +0x30 non-null
+        float s = 0.0f;       // +0x38
+        float budget = 0.0f;  // +0x54
+        Vec3 fire_at;         // +0x3c
+        Vec3 launch;          // +0x80
+        Vec3 last_vel;        // +0x98
+        RocketSpline path;
+    };
+    struct RocketNext {  // phase E output per projectile: the next spline point N (sample at s + speed)
+        Vec3 n;
+        uint8_t ok = 0;
     };
     struct Repairer {  // OI abilities: hardpoint repair lists (insertion order per hardpoint)
         ObjectId unit;
@@ -1121,9 +1235,13 @@ private:
         int32_t projectile_desc;
         int32_t hardpoint;
     };
+    // mesh_hp (refixf t07): the hardpoint the struck mesh names (§2.9 Q1 step 4), -1 none (hull), kMeshUnknown when
+    // the hit came without a precise test (the mesh_hardpoint stand-in decides).
+    static constexpr int32_t kMeshUnknown = -2;
     struct SweepHit {
         ObjectId id;
         float t;
+        int32_t mesh_hp = kMeshUnknown;
     };
 
     int32_t find(ObjectId id) const;  // unit index or -1
@@ -1146,6 +1264,13 @@ private:
     float hp_max(const Unit& u, const Hardpoint& h) const;
     float hp_fraction(const Unit& u) const;  // destroyable hardpoints: sum cur / sum max (0 if all dead)
     bool hp_out(const Hardpoint& h) const;  // (Is_Destroyable && health <= 0) || destroyed || disabled
+    bool hp_dead(const Hardpoint& h) const;  // refixf t06: Is_Destroyable && (destroyed || health <= 0)
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q1 port difference 1) [port]: the hardpoint standing in for the struck mesh.
+    int32_t mesh_hardpoint(const Unit& v, Vec3 impact) const;
+    // refixf t06 (§2.9 Q2 step 3, 0x383f70): the aim point without a target hardpoint; false = no shot.
+    bool pick_aim_point(const Unit& u, const Hardpoint& h, const Unit& t, Vec3 ref, float range, SimRng& rng, Vec3& out) const;
+    // refixf t06 (§2.9 Q3): Service_Space re-chooses a null / dead target hardpoint for formation units.
+    void service_space_hardpoint(Unit& u);
     void set_system_online(Unit& u, uint32_t index, bool online, bool destroyed, uint32_t frame);  // 0x384d00
     float min_health_fraction(const Unit& u) const;
     float base_attack_range(const Unit& u) const;
@@ -1173,7 +1298,11 @@ private:
     bool aimable(const Unit& a, const Unit& t) const;
     bool in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const;
     void gather(uint32_t unit_index, QueryContext& ctx);
-    void decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);
+    void decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);  // decide_target + space hp step
+    void decide_target(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);
+    bool lock_holds(const Unit& u, const Unit& t) const;  // refixf t06: §2.8 B "while locked" drop rules
+    bool promote_goal(Unit& u);                           // refixf t06: §2.8 B promotion
+    bool ability_type_active(const Unit& u, int32_t type) const;
     int32_t choose_target_hardpoint(const Unit& a, const Unit& t) const;
     int32_t closest_hardpoint(const Unit& t, Vec3 from, bool targetable_only) const;
     uint16_t aim_point_count(const Unit& t) const;
@@ -1192,7 +1321,12 @@ private:
 
     // projectiles / damage
     void sweep(uint32_t pi, QueryContext& ctx);
-    void process_hit(Projectile& p, Unit& victim, float t, uint32_t frame, SimRng& rng);
+    SweepHit sweep_segment(const Projectile& p, Vec3 delta, QueryContext& ctx) const;  // ray p.pos -> p.pos + delta
+    // `segment` (rockets): the step's P -> N vector; the impact is p.pos + segment x t (else p.pos + dir x (speed x t)).
+    void process_hit(Projectile& p, Unit& victim, float t, uint32_t frame, SimRng& rng, const Vec3* segment = nullptr,
+                     int32_t mesh_hp = kMeshUnknown);
+    int32_t hardpoint_by_mesh(const Unit& v, const std::string& mesh) const;  // §2.9 Q1 step 4 (0x394d40)
+    void expire_projectile(uint32_t i, uint32_t frame);  // 3.3 expiry: detonation at the projectile's position
     void area_damage(const Projectile& p, Vec3 center, ObjectId direct, uint32_t frame);
     void detonation_effects(const Projectile& p, Vec3 center, ObjectId direct, uint32_t frame);
     bool ion_stun_unit(Unit& v, uint32_t pdesc, uint32_t frame);
@@ -1208,7 +1342,12 @@ private:
     // S9 t05: Missile_Shield_Deflect_Test (0x4c6e30): true + the outward direction for the first qualifying emitter
     // (ascending id) whose sphere holds the projectile.
     bool shield_away(const Projectile& p, Vec3& away) const;
-    void rocket_replan(Projectile& p);  // 0x4cfc40 crossing test against every emitter
+    // refixf t01: one flight step of a spline rocket (0x4cfc40, §2.4.2), serial commit phase.
+    void rocket_step(uint32_t i, uint32_t frame, SimRng& rng);
+    bool spline_rocket(const ProjectileDesc& pd) const;
+    void add_rocket(const Projectile& p, Vec3 fire_at, Vec3 launch);
+    Rocket* find_rocket(uint32_t serial);
+    const Rocket* find_rocket(uint32_t serial) const;
     float projectile_turn_rate(const ProjectileDesc& pd) const;  // 0x372560
     bool has_energy_pool(const Unit& u) const { return desc_of(u).energy_capacity > 0.0f; }
     float unit_max_energy(const Unit& u) const;
@@ -1249,6 +1388,7 @@ private:
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order
     std::vector<Repairer> repairs_;
     std::function<bool(ObjectId, Vec3, Vec3&)> obstacle_cell_;  // OI tactical: LAND_OBSTACLE aim walk
+    PreciseHitFn precise_hit_;                                  // refixf t07: projectile segment entry test
     std::function<float(int32_t)> credits_get_;
     std::function<void(int32_t, float)> credits_add_;
     void service_repairs(Unit& u, uint32_t frame);
@@ -1260,6 +1400,9 @@ private:
     void record_damage(const DamageRequest& r, const Unit& v, const Unit* src, int32_t hp, const DamageResult& out,
                        uint32_t frame);
     std::vector<uint32_t> emitters_;  // unit indices with emitter_radius > 0 (ascending id), phase F scratch
+    std::vector<Rocket> rockets_;          // refixf t01: spline-rocket state, serial order
+    std::vector<RocketNext> rocket_next_;  // refixf t01: phase E per-projectile scratch
+    RocketTerrain rocket_terrain_;         // refixf t01: host terrain (not saved: the host re-attaches it)
     CombatHooks* hooks_ = nullptr;
     SimRng* bound_rng_ = nullptr;
     SimRng* tick_rng_ = nullptr;

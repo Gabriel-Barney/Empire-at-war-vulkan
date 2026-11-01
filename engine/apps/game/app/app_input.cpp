@@ -139,8 +139,10 @@ void App::post_tick() {
         if (const sim::TacticalBattle* b = session_->battle()) {
             const objects::ObjectStore& st = session_->host().modes().top_tactical()->primary();
             audio_.battle_tick(*b, st, data_.types, local_player());
-            for (const TswCue& c : tsw_cues(b->special_weapon_events(), st))  // refix t06: 0x2cdbb0 at the dummy
-                if (c.kind == TswCue::Kind::PlanetDestroyed) shake_.start(c.position, kTswPlanetShake);
+            for (const TswCue& c : tsw_cues(b->special_weapon_events(), st)) {  // refixf t05: TSW_PLANET_DESTROY.md §11
+                if (c.kind == TswCue::Kind::Firing) tsw_shot_begin(c, *b, st);              // 0x2ccf30: the firing shot
+                else if (c.kind == TswCue::Kind::PlanetDestroyed) tsw_shake(c, *b);        // 0x2cdbb0 at the dummy
+            }
             {  // radar pings (deaths, capture-point transitions) and the story's blips: read-only presentation
                 const lua::StoryModel* tac_story = nullptr;
 #ifdef ALAMO_SIM_HAVE_STORY
@@ -597,6 +599,14 @@ void App::galactic_input() {
     route_commands(cmds);
 }
 
+const ui::WorldPickTests* App::world_pick_tests() {
+    const sim::TacticalMode* tm = session_ ? session_->host().modes().top_tactical() : nullptr;
+    if (!tm) return nullptr;
+    if (pick_radii_.size() != data_.types.size()) pick_radii_ = game::mouse_sphere_radii(data_.types);
+    pick_tests_ = game::tactical_pick_tests(*tm, session_->battle(), pick_radii_);
+    return &pick_tests_;
+}
+
 void App::battle_input() {
     const sim::TacticalMode* tm = session_ ? session_->host().modes().top_tactical() : nullptr;
     if (!tm || !bview_.active()) return;
@@ -608,6 +618,7 @@ void App::battle_input() {
     ctx.local_player = local_player();
     ctx.view = ui::make_view(cp, w, h);
     ctx.trees = &tm->trees();  // const reads between ticks (P1 picking contract)
+    ctx.pick_tests = world_pick_tests();  // refixf t08: precise model test, then the override sphere (HUD_GAPS §2.2)
     if (!bview_.space() && bview_.scene()) {
         const terrain::MapData* m = &bview_.scene()->map();
         ctx.ground_height = [m](float x, float y) { return m->terrain.sample_height(x, y); };

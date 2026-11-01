@@ -413,7 +413,7 @@ vfunc +0x28) and the user is not a squad member → `Issue_Auto_Target(user, tar
 abilityNameCRC, t, …)` (0x38d730). This is an attack order that **also stores the pending ability** in the
 user's CD (+0x148 target, +0x150 name CRC, +0x154 type). Successful users are added to a new AI/selection
 group and moved toward the target (attack order).
-**Firing:** every targeting service (`Targeting::Service_Space/_Land` 0x634810/0x633ae0 and team targeting
+**Firing:** every targeting service (`Targeting::Service_Land/_Space` 0x634810/0x633ae0 and team targeting
 0x62eeb0) calls 0x565de0 first: if a pending ability exists, it calls the activate-by-name function
 (0x37b8a0 → enabled 0x37c270, ready 0x37be10, apply vfunc +0xf0). The class's apply checks range (0x48d820 /
 0x48e100: the targeting behaviour's in-range/needs-to-close tests evaluated with the ability temporarily set as

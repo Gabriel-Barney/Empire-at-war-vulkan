@@ -86,6 +86,9 @@ bool ai_target_position(Call& c, int i, Vec3& out);
 // bind_ai_tactical.cpp: EvaluatePerception(name, player [, target at target_index; 0 = none]) through the attached
 // tactical AI host (AI targets and task forces accepted). Pushes the result and returns 1; -2 = no tactical host.
 int tactical_evaluate_perception(Call& c, std::string_view name, int32_t player, int target_index);
+// refixf t03, bind_fog.cpp: FOW_Object_Hidden 0x35f470(player, object, force) through the attached fog hooks
+// (fog_bridge.hpp FogScriptHooks::object_hidden); false without fog.
+bool object_fogged_for(Call& c, int32_t player, objects::ObjectHandle h, bool force);
 
 // Class registry (sorted names; ids are indices). Built once from the binding table.
 const std::vector<std::string>& class_names();
@@ -234,8 +237,9 @@ inline constexpr int32_t kParentStoreTag = 1;
 // refix t04 (L1P4_LUA_GAPS 1.3): company member views. The original's galactic company is a transport object carrying
 // one object per Company_Units entry; the port's is ONE object of the company type (campaign.hpp "Company transports").
 // A member view is a GameObjectWrapper of that company object standing for its Company_Units entry `index`: Ud::reserved
-// = store tag (low byte) | kMemberViewFlag | index << 16. Galactic Find_All_Objects_Of_Type / Find_First_Object return
-// views for member type names; Get_Type gives the member type, Get_Parent_Object the company's plain wrapper (the
+// = store tag (low byte) | kMemberViewFlag | index << 16. Galactic Find_All_Objects_Of_Type returns views for the entries
+// that pass its filters (refixf t03: member type, category / properties masks, owner), Find_First_Object for member type
+// names; Get_Type gives the member type, Get_Parent_Object the company's plain wrapper (the
 // original's transport), the galactic Activate_Ability does nothing (a unit inside a transport). Every other method acts
 // on the company object [port]. Views are cached in the object cache under object_cache_key (negative keys).
 inline constexpr int32_t kStoreTagMask = 0xff;

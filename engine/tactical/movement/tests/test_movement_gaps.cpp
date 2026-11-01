@@ -1032,6 +1032,42 @@ static void test_space_avoid() {
     CHECK(!avoid_precise(none, {80.0f, 0.0f, 0.0f}, {120.0f, 0.0f, 0.0f}, inside));
     CHECK(!inside);
 
+    // refixf t07: the projectile form (nearest hit, masks). A SHIELD wall in front of the hull wall: model y = 10 is
+    // world x = 90 (t 0.25 on 80 -> 120), the hull at t 0.5.
+    {
+        AvoidModel two_walls = wall_model();
+        AvoidModel::Mesh sh = two_walls.meshes[0];
+        for (F3& p : sh.tris) p.y = 10.0f;
+        sh.lo.y = sh.hi.y = 10.0f;
+        sh.shield = true;
+        sh.name = "SHIELD";
+        two_walls.meshes.push_back(sh);
+        AvoidObstacle po = wo;
+        po.model = &two_walls;
+        po.skip_shield = true;  // the shield behaviour: the SHIELD mesh carries the shield mask
+        const F3 a{80.0f, 0.0f, 0.0f}, b{120.0f, 0.0f, 0.0f};
+        AvoidSegmentHit h;
+        CHECK(avoid_precise_segment(po, a, b, 7u, 2u, h) && h.mesh == 1 && near(h.t, 0.25f, 1e-6f));  // shield up
+        h = {};
+        CHECK(avoid_precise_segment(po, a, b, 5u, 2u, h) && h.mesh == 0 && near(h.t, 0.5f, 1e-6f));   // no shield damage
+        h = {};
+        CHECK(avoid_precise_segment(po, a, b, 7u, 0u, h) && h.mesh == 0);                               // shield down
+        po.skip_shield = false;  // no shield behaviour: the SHIELD mesh keeps mask 1
+        h = {};
+        CHECK(avoid_precise_segment(po, a, b, 5u, 0u, h) && h.mesh == 1);
+        h = {};
+        CHECK(!avoid_precise_segment(po, a, {85.0f, 0.0f, 0.0f}, 7u, 2u, h) && h.mesh == -1 && h.t == 1.0f);  // short
+        po.collide = false;
+        CHECK(!avoid_precise_segment(po, a, b, 7u, 2u, h));
+        po.model = nullptr;
+        CHECK(!avoid_precise_segment(po, a, b, 7u, 2u, h));
+        AvoidModel cbox;
+        cbox.has_collision_box = true;
+        cbox.cbox_h = {30.0f, 30.0f, 30.0f};
+        po.model = &cbox;  // COLLISIONBOX: the box path even with the collide switch off; a start inside is t 0
+        CHECK(avoid_precise_segment(po, a, b, 5u, 0u, h) && h.t == 0.0f && h.mesh == -1);
+    }
+
     // The query: overlap (inclusive) with the box around the fighter, then the first hit decides.
     F3 hit;
     const std::vector<AvoidObstacle> one{wo};

@@ -12,6 +12,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -306,6 +307,31 @@ end
 )";
 // STRATEGIC_GAPS §5.3: a TF subscribed to laser opportunity fire gets Hardpoint_Opportunity_Target_Acquired(tf, unit,
 // target); torpedo acquisitions are not subscribed.
+// refixf t06 (variant 4): a task force of two or more units attack-moves onto the target object (ONE group order with
+// every movable unit, tactical_ai.hpp HOST CONTRACT), then attacks it at a hard-point type named in the short form.
+const char* kPlanGroupAttack = R"(
+require("SynAICommands")
+ScriptPoolCount = 1
+function Definitions()
+  Category = "Syn_Destroy_Unit"
+  TaskForce = { { "MainForce", "Frigate | Corvette = 2,3" } }
+end
+function MainForce_Thread()
+  BlockOnCommand(MainForce.Produce_Force())
+  if MainForce.Get_Force_Count() < 2 or not TestValid(Target) then
+    ScriptExit()
+  end
+  BlockOnCommand(MainForce.Attack_Move(Target), 5)
+  if TestValid(Target) then
+    BlockOnCommand(MainForce.Attack_Target(Target, "Shield_Generator"), 5)
+  end
+  MainForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+function MainForce_No_Units_Remaining()
+  ScriptExit()
+end
+)";
 const char* kPlanOpportunity = R"(
 require("SynAICommands")
 ScriptPoolCount = 1
@@ -628,16 +654,21 @@ public:
                     return static_cast<uint32_t>(b[o]) | (static_cast<uint32_t>(b[o + 1]) << 8) | (static_cast<uint32_t>(b[o + 2]) << 16) |
                            (static_cast<uint32_t>(b[o + 3]) << 24);
                 };
-                MockUnit* u = own(u32(0));
-                if (!u || speed_of(u->type) <= 0.0f) {
+                // refixf t06: a task-force group order lists its further units after the 24-byte block (tactical_ai.hpp).
+                std::vector<MockUnit*> movers;
+                for (size_t o = 0; o + 4 <= b.size(); o = o == 0 ? 24 : o + 4)
+                    if (MockUnit* u = own(u32(o)); u && speed_of(u->type) > 0.0f) movers.push_back(u);
+                if (movers.empty()) {
                     r = R::InvalidUnit;
                     break;
                 }
                 const uint32_t tid = u32(4);
                 const MockUnit* t = tid != 0x3FFFFFu ? unit(static_cast<int32_t>(tid)) : nullptr;
-                u->goal = t ? t->pos : Vec3f{std::bit_cast<float>(u32(8)), std::bit_cast<float>(u32(12)), 0.0f};
-                u->has_goal = true;
-                line += " sub " + std::to_string(ev.u("subtype") - 0x4C00u);
+                for (MockUnit* u : movers) {
+                    u->goal = t ? t->pos : Vec3f{std::bit_cast<float>(u32(8)), std::bit_cast<float>(u32(12)), 0.0f};
+                    u->has_goal = true;
+                }
+                line += " sub " + std::to_string(ev.u("subtype") - 0x4C00u) + " units " + std::to_string(movers.size());
                 break;
             }
             case T::Reinforce: {
@@ -650,6 +681,7 @@ public:
                     break;
                 }
                 line += " key " + std::to_string(it->key);
+                if (ring_test) line += " at " + std::to_string(static_cast<int>(ev.f("x"))) + "," + std::to_string(static_cast<int>(ev.f("y")));
                 spawn(player, it->type, ev.f("x"), ev.f("y"));
                 pool.erase(it);
                 break;
@@ -716,6 +748,21 @@ public:
     }
     // TACTICAL_GAPS §1.2: Active_By_Default re-apply requests (free-store entry / task-force release), in call order.
     void unit_released(int32_t player, int32_t object_id) override { released.emplace_back(player, object_id); }
+    // refixf t06 (AI_TACTICAL §7.4): with ring_test the space drop test refuses every point with |x| > 3200 (the strips
+    // behind both stations), so a reinforcement at a station needs the ring search; entry facing 0 -> first direction -x.
+    bool space_drop_frame(int32_t, SpaceDropFrame& f) override {
+        if (!ring_test) return false;
+        f = SpaceDropFrame{};
+        f.has_box = true;
+        f.min_x = f.min_y = -4000.0f;
+        f.max_x = f.max_y = 4000.0f;
+        return true;
+    }
+    bool space_drop_ok(int32_t, int32_t, const Vec3f& p, float, float sweep) override {
+        ++drop_tests;
+        if (ring_test && sweep != 200.0f) return false;  // the GameConstants default reaches the host
+        return !ring_test || (p.x >= -3200.0f && p.x <= 3200.0f);
+    }
     // N1 save / load test support: the host's own battle state as a save restores it (units keep their handles: the
     // ObjectStore comes back with identical handle values); the damage-tracking store goes through its save format.
     bool copy_state_from(const MockHost& o) {
@@ -731,6 +778,8 @@ public:
         pad_ = o.pad_;
         emit_opportunity = o.emit_opportunity;
         allow_hijack = o.allow_hijack;
+        ring_test = o.ring_test;
+        drop_tests = o.drop_tests;
         built = o.built;
         opp_frame = o.opp_frame;
         hijacks = o.hijacks;
@@ -745,6 +794,8 @@ public:
     }
     const DamageTrackingStore& damage_store() const { return dt_; }
     bool emit_opportunity = false, allow_hijack = false;
+    bool ring_test = false;   // refixf t06
+    uint32_t drop_tests = 0;
     uint32_t built = 0;
     uint32_t opp_frame = 0;
     std::vector<std::string> hijacks;
@@ -863,7 +914,8 @@ struct RunResult {
 };
 
 // variant 0: the golden skirmish; 1: only the opportunity-fire and MagicPlan plans, the host emits acquisitions and
-// accepts HIJACK spawns (STRATEGIC_GAPS §5.3, AI_GALACTIC_3 §4.3); 2: production; 3: Script_ evaluators (kEvalProbe).
+// accepts HIJACK spawns (STRATEGIC_GAPS §5.3, AI_GALACTIC_3 §4.3); 2: production; 3: Script_ evaluators (kEvalProbe);
+// 4: refixf t06 group orders (kPlanGroupAttack).
 RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<std::string>* hijacks = nullptr) {
     RunResult out;
     MemoryFiles files;
@@ -871,6 +923,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     EquationSet eqs;
     syn_data(files, defs, eqs, variant == 3);
     if (variant == 2) files.add("Data\\Scripts\\AI\\SpaceMode\\SynBuild.lua", kPlanProduce);
+    if (variant == 4) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanGroupAttack);
     if (variant == 1) {
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanMagic);
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynSweep.lua", kPlanOpportunity);
@@ -881,6 +934,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     GameRandom rng(2027u, 5u);
     MockHost host(store);
     host.emit_opportunity = host.allow_hijack = variant == 1;
+    host.ring_test = variant == 4;  // refixf t06
     // Player 0 (Empire) at -x, player 1 (Rebel) at +x; a pad; pools.
     const int32_t station0 = host.spawn(0, tStation, -3500.0f, 0.0f);
     host.spawn(0, tFrigate, -3000.0f, -200.0f);
@@ -1387,6 +1441,7 @@ struct SaveSession {
             files.add("Data\\Scripts\\AI\\SpaceMode\\SynSweep.lua", kPlanOpportunity);
         }
         host.emit_opportunity = host.allow_hijack = variant == 1;
+        host.ring_test = variant == 4;  // refixf t06
         host.spawn(0, tStation, -3500.0f, 0.0f);
         host.spawn(0, tFrigate, -3000.0f, -200.0f);
         host.spawn(0, tCorvette, -3000.0f, 200.0f);
@@ -1607,6 +1662,40 @@ void test_damage_tracking_save() {
 // The AI pipeline's event bus gets a CommandResult per direct order, and nothing subscribes to it or reads it: it must be
 // empty after every AI frame however many orders the battle gives. Together with test_save_load (a loaded world, whose
 // bus was never saved, continues identically) this is the whole contract of the bus.
+// refixf t06: a task force's Attack_Move is ONE PortExtension order carrying all its movable units (MOVEMENT §6.3: one
+// coordinator), and Attack_Target(x, "Shield_Generator") orders hard-point type 1 (ref2 = 1 + type) [M: short name form].
+void test_group_orders() {
+    const RunResult r = run(30 * 120, 1, 4);
+    size_t groups = 0, single = 0, shield = 0;
+    for (const std::string& e : r.executed) {
+        if (e.find("PortExtension sub 2 units ") != std::string::npos) {
+            const int n = std::atoi(e.c_str() + e.find(" units ") + 7);
+            (n >= 2 ? groups : single) += 1;
+        }
+        if (e.find(" Attack ref2 2") != std::string::npos) ++shield;
+    }
+    // refixf t06 (AI_TACTICAL §7.4): every space drop passed the host's drop test - a ring point, never behind a station.
+    size_t drops = 0, bad_drops = 0, ring_drops = 0;
+    for (const std::string& e : r.executed) {
+        if (e.find(" Reinforce key ") == std::string::npos || e.find("REJECTED") != std::string::npos) continue;
+        const size_t p = e.find(" at ");
+        if (p == std::string::npos) continue;
+        const int x = std::atoi(e.c_str() + p + 4);
+        if (drops++ < 6) std::printf("  %s\n", e.c_str());
+        bad_drops += (x < -3200 || x > 3200) ? 1u : 0u;
+        ring_drops += ((x >= -3200 && x <= -2900) || (x >= 2900 && x <= 3200)) ? 1u : 0u;  // ring 500 around a station at +-3500
+    }
+    std::printf("space reinforce ring search: %zu drops (%zu on ring 500 at a station), %zu outside the allowed strip\n", drops, ring_drops,
+                bad_drops);
+    CHECK(drops > 0 && bad_drops == 0 && ring_drops > 0);
+    std::printf("group orders: %zu attack-move group orders (2+ units), %zu one-unit, %zu Shield_Generator attacks, %zu Lua errors\n",
+                groups, single, shield, r.errors.size());
+    for (size_t i = 0; i < r.errors.size() && i < 5; ++i) std::printf("  lua error: %s\n", r.errors[i].c_str());
+    CHECK(r.errors.empty());
+    CHECK(groups > 0);
+    CHECK(shield > 0);
+}
+
 void test_order_results_bounded(int variant, int32_t frames) {
     SaveSession a(variant);
     size_t worst = 0;
@@ -1627,6 +1716,7 @@ int main(int argc, char** argv) {
     test_potential_plan();
     test_skirmish();
     test_opportunity_and_hijack();
+    test_group_orders();
     test_tactical_production();
     test_reinforce_landing();
     test_script_evaluators();
