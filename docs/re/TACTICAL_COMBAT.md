@@ -192,7 +192,7 @@ land/space pair selected by this id.
 
 ### 2.1 Behaviours and cadence [H]
 - **Units:** `TargetingBehaviorClass` (vtable 0x8b0d88, 49 slots). Its service (slot 6, 0x633a30) dispatches to
-  `Service_Space` (0x634810) in mode 2 or `Service_Land` (0x633ae0) in mode 1.
+  `Service_Land` (0x634810) in mode 1 or `Service_Space` (0x633ae0) in mode 2 (dispatcher 0x633a30 compares the mode with 1, then 2; labels corrected in refixf t06 round 2).
 - **Squads and teams:** `TeamTargetingBehaviorClass` (0x8afd90; 0x62ee00 → 0x62eeb0) runs in space only and
   shares the helpers below.
 - **The service runs every behaviour service call.** It writes the next service frame to +0x30 as the frame
@@ -385,7 +385,7 @@ cannot.
 **Data used below.**
 - Targeting data pack TD = obj +0xf0: +8 current target, +0x10 its target hardpoint, +0x18 state (slot 31),
   +0x20 next scan frame, +0xf4 **lock** (slot 33 0x566b40 reads; slot 32 0x568c30 writes, and only when +8 ≠ null
-  or the new value is 0), +0xf5 order flag of the last `Set_Target` (Service_Land re-applies it on a re-target)
+  or the new value is 0), +0xf5 order flag of the last `Set_Target` (Service_Space re-applies it on a hardpoint re-target, §2.9)
   [M meaning], +0x148.. pending ability (§2.5 correction).
 - Movement parameter block, 0x68 bytes (MOVEMENT §6.2): +0x00 position, +0x24 kind (1 position, 3 object),
   +0x28 object, +0x30 target hardpoint, +0x48 flags (0x01 attack-move, 0x02 guard; P1_DOUBLE_CLICK §3), +0x4c
@@ -410,8 +410,8 @@ cannot.
   qualify: the "inactive player" skip of §2.2 belongs to the scan, not to this path. This is the vanilla source
   of the port's a1f t07 neutral-target rule.
 
-**B. Promotion in the targeting service.** At the top of `Service_Space` (0x634810) and, identically, of
-`Service_Land` (0x633ae0), after the pending-ability step (0x565de0):
+**B. Promotion in the targeting service.** At the top of `Service_Land` (0x634810) and, identically, of
+`Service_Space` (0x633ae0), after the pending-ability step (0x565de0):
 1. Skip unless the lock is clear (slot 33 false) and the unit has a formation.
 2. t, hp = `Formation_Attack_Target(F, &hp, 0)`; skip if null.
 3. t must pass 0x5680b0: a TEAM container, or type +0x41 and +0x6b set; and not garrisoned (+0x3a7), not dead
@@ -549,7 +549,9 @@ ordered, abilityCRC, abilityType, force).
 
 - A hard-point target (Attack_Target with a type) differs only by the chosen hardpoint: it goes into the block
   (+0x30), so `Formation_Attack_Target` returns its index while it lives and the lock holds that hardpoint (TD
-  +0x10). Without one, each weapon hardpoint picks its sub-hardpoint by the set's `Hard_Point_Priorities` (§2.6).
+  +0x10). Without one, path A/B hand the weapon hardpoints **no** sub-hardpoint; `Service_Space` then picks one
+  by the set's `Hard_Point_Priorities` in the same service (§2.9 Q3), and until then each shot takes the target's
+  live targetable hardpoint closest to the shooter.
 - Land vs space: path B is identical. Path A differs only in C step 2's condition (space: always the weapon path;
   land: weapon path for ordered = 1, set path for auto targets).
 
@@ -559,6 +561,146 @@ range + footprint half-extent, outside min range), make it the locked target wit
 category test, and keep it until it is invalid (list above). (2) TF.Attack_Move(object) must not complete on
 arrival; it completes when the object dies or turns invalid. (3) Units for which `Order_Attack` refuses (non-enemy
 target, stealth) are dropped from the move.
+
+### 2.9 Damage to hardpointed targets and close-range fire (refixf t06) [H unless tagged]
+Context: capitals locked on a station (§2.8) whose shield falls to 0 while almost no damage reaches the hull or
+the hardpoints. Mode ids: 1 land, 2 space (§0.3; confirmed by Take_Damage choosing
+`Space_Retreat_Units_Damaged_Mod_Factor` (GC +0x20b8) for mode 2).
+
+**Q1. Where a hit on a hardpointed object goes.**
+1. **Hit test** (`Sweep` 0x4c97a0 → 0x2abcf0): the precise model test (0x38f900, SPACE_AVOIDANCE §5) leaves the
+   **render sub-object it hit** in the query (+0x08); 0x2abcf0 stores that sub-object's name (its vf +0x30) in
+   the hit record +0x28. `Process_Hit` (0x4cb280) passes this **mesh name** to the direct-damage step 0x4c73d0 as
+   the hardpoint name (the `Collision_Box_Modifier` sphere fallback passes the name only if a render object was
+   recorded).
+2. **Random hardpoints** (0x4c73d0): with `Projectile_Damages_Random_Hard_Points` (type +0x49) the name is
+   replaced by the `Collision_Mesh` of the hardpoint picked by 0x395190 (one synced `Get_Int`, §3.5).
+3. **Name override in `Take_Damage`** (0x3a9e30, only when its "explicit name" argument (13th) is 0, as for direct
+   hits; pack = source +0xe8):
+   - pack target (+8) == victim **and** pack target-hardpoint index (+0x10) ≥ 0 → name = **that hardpoint's
+     `Collision_Mesh`**, whatever mesh was physically hit and even if a random pick was made in step 2;
+   - otherwise, **land only** (mode 1): name = `Collision_Mesh` of the victim's hardpoint closest (3D) to the
+     **source's position** (projectile +0x78) among those that are `Is_Targetable` and not (destroyable and dead)
+     (0x394a80(victim, pos, 0, 0));
+   - otherwise (space): the hit mesh name stays.
+4. **Lookup** (0x394d40): the first hardpoint in `HardPoints` order whose type +0xa0 (**`Collision_Mesh`**) equals
+   the name, `_stricmp`. A lucky shot (ability 0x22) whose name finds nothing switches to the closest hardpoint as
+   in §5.1.
+5. **Routing** (after shield absorption and armor, §3.6 steps 14–16):
+   - found, `Is_Destroyable`, health > 0 → `HP_Take_Damage` (0x387f50) takes **all** of it, the hull nothing;
+   - found, `Is_Destroyable`, health ≤ 0 → **no damage at all** (neither hardpoint nor hull; the shield
+     absorption already done stays);
+   - found but not destroyable (e.g. `DUMMY_ART`), or no match, or no name → **hull** (0x3ab890);
+   - killing the last live destroyable hardpoint of a type with +0xa8 set → hull health := 0 and the hull path runs
+     (death).
+6. Shields come **first** for every hit (§3.6 step 15): the station's shield absorbs while it has points; a
+   hardpoint is damaged only by the part that gets through. Destroying the last `SHIELD_GENERATOR` zeroes the
+   shield and blocks regeneration (§5.1); while one lives, regeneration is `Shield_Refresh_Rate` × the live
+   generator fraction, with the 5 s / 0.25-point depleted lockout (§3.7).
+- **`Should_Be_Destroyed_When_All_Hardpoints_Destroyed` (type +0xa8, bool tag at 0x140a32550) defaults to TRUE.**
+  The type ctor 0x367250 calls the flag-block initialiser 0x367100 with this = type + 0x10; its `movl $0x10100,
+  0x97(%rcx)` sets type +0xa8 = 1. Shipped FoC XML sets it only once (`No`, SPECIALSTRUCTURES_UNDERWORLD.XML), so
+  **every star base has the coupling** of §5.1: each frame (0x3a6b80) hull fraction ≤ min(1, hardpoint fraction +
+  `Hull_Vs_Hard_Points_Health_Constraint` 0.2), and hardpoint fraction ≤ hull fraction + 0.2 (0x3a76b0).
+- **So for a station:** hull damage is not blocked, but direct hits from hardpoint-targeting weapons almost never
+  reach the hull (step 3 sends them to the targeted hardpoint). The station's health bar falls because the hull is
+  capped at hardpoint fraction + 0.2 as hardpoints lose health, and it dies when its last destroyable hardpoint
+  dies. Lua `Get_Hull` reports min(hull fraction, hardpoint fraction) (ABILITIES_HARDPOINTS §1.3).
+- **No station-only rule** on this path: `Take_Damage` reads no `Base_Level` (type +0x8a0) [M: absent from the
+  decompiled body]; the only gates are the invulnerable flag (+0x37d), `Immune_To_Damage` (type +0xa3) and the
+  global damage switch (§3.6 step 3). There is no `Damage_To_Hull` tag in the executable.
+- Area damage on a hardpointed victim is split across its live destroyable hardpoints in range and never reaches
+  the hull (§3.5).
+
+**Q2. Firing at close range.** `Fire_At` (0x3825b0) has **no unit-level minimum range**:
+`Targeting_Min_Attack_Distance` (+0x504) is read only by the scan / promotion (slot 45, §2.8 B step 4). Per shot:
+1. **Target hardpoint:** the one pushed by `HP_Set_Target` (hp +0x48). `Update_Weapon` (0x387400) clears it first
+   when it belongs to another object or is destroyable and dead. If none: the target's hardpoint closest (3D) to
+   the shooter's position (0x398440) among those that are `Is_Targetable` and not (destroyable and dead)
+   (0x394a80(target, pos, 0, 0)), **chosen per shot**.
+2. **Turret pre-check** (`Is_Turret`): the X axis of the turret bone (hp +0x94, resolved from `Turret_Bone_Name`
+   by `HP_Update` 0x387010) · the unit direction from that bone to the **target object's position** ≥
+   cos(`Fire_Cone_Width`°) (full width, not half), else no shot [M: axis choice].
+3. **Aim point:** with a target hardpoint, its bone's world position (0x385c70: attachment bone hp +0x2c, else the
+   bone at hp +0x38; **(0, 0, 0)** if neither resolves). Without one, 0x383f70: the first entry of a type bone
+   list (+0xe68, count +0xe70) [L: tag], then the hardpoints from a **synced random start** (`Get_Int(0, n − 1)`,
+   wrapping, skipping destroyable dead ones), then the object's position, each accepted only when its 3D distance
+   from the fire-bone reference ≤ `Get_Fire_Range` (+ target radius when the shooter type has weapon list +0xc48)
+   and it passes the cone; none → no shot. **Never the nearest surface point.**
+4. **Range, XY:** d = XY distance from the fire-bone reference (bone A, or the A–B midpoint) to the aim point;
+   need `Fire_Min_Range_Distance` ≤ d ≤ `Get_Fire_Range` + target radius (0x397780). Hardpoint type defaults
+   (ctor 0x53e3b0): `Fire_Range_Distance` 0, `Fire_Min_Range_Distance` 0, `Fire_Cone_Width` / `Height` **0**,
+   `Turret_Rotate_Extent_Degrees` 180. No FoC capital or star-base weapon hardpoint sets a min range, so in
+   vanilla a ship at any distance passes this test as long as the targeted hardpoint is within range.
+5. **Lead** (0x399450) on the aim point, then the **cone test on the lead point** (0x383ba0):
+   - Not a turret: the point is transformed into the **fire bone's full world frame** (the matrix 0x385e70 returns:
+     bone orientation × the ship's yaw, pitch and roll); yaw (wrapped to ±180) must be ≤ `Fire_Cone_Width` / 2 and
+     pitch ≤ `Fire_Cone_Height` / 2.
+   - Turret: the point in the attachment-bone frame; |yaw + 90°| (normalised) ≤ `Turret_Rotate_Extent_Degrees`;
+     no elevation limit here.
+   - Fail → `Fire_At` returns 0 (the cooldown stays expired; opportunity fire may shoot something else, §2.6).
+6. Then muzzle, inaccuracy, spawn as in §3.1.
+
+So a very close ship **does** fire while each targeted hardpoint bone stays inside the firing bone's cone. Vanilla
+side batteries are narrow vertically (e.g. `Calamari_Cruiser` 160–170° × 130°, `Alliance_Assault_Frigate` 160–170°
+× 90°), so a target hardpoint far above or below the firing bone (pitch over 65° / 45°), or on the far side of
+the ship, blocks that battery. Ships do not sit inside a station in vanilla: stations carry `SPACE_OBSTACLE` and
+the movement / avoidance code keeps hulls apart (SPACE_AVOIDANCE) [M: not re-traced here].
+
+**Q3. Which hardpoint a capital aims at, and after it dies.**
+- **Choice** `Choose_Target_Hardpoint(target, shooter)` (0x394610):
+  - set = the shooter's Lua override (TD +0x160, e.g. `SetClassPriorities(tf, "Attack_Move")` in the space AI
+    plans → `Capital_Attack_Move`), else the type's `Targeting_Priority_Set` (0x566ed0). Shooters without
+    targeting, or without a set, use the no-set branch.
+  - **With a set:** candidates = destroyable and alive (`Is_Targetable` **not** required); rank (0x54dd80) = 1-based
+    position of the hardpoint's **type** in `Hard_Point_Priorities`, −1 (skipped) if in `Hard_Point_Exclusions`,
+    else 1e18; lowest rank wins; equal rank → smaller 3D distance from (shooter x, y, z +
+    `Ranged_Target_Z_Adjust` (type +0x4dc)) to the hardpoint position 0x396ce0; first in list order on exact ties.
+    `Capital_Attack_Move` = Shield_Generator, Engine, Fighter_Bay, Weapon_Laser, Weapon_Ion_Cannon, Tractor_Beam;
+    missiles, torpedoes etc. rank 1e18 (closest first) after them.
+  - **Without a set:** the closest `Is_Targetable` hardpoint that is not (destroyable and dead), position 0x385c70.
+- **When it is chosen:** only when a target is set: the scan (0x568a00 calls it for its pick) → `Set_Target`; and
+  `Service_Space` (0x633ae0) after the keep / switch step, **only when TD +0x10 is null or a dead destroyable
+  hardpoint and the unit has a formation** (locomotor pack +0x1f0): hp = the formation goal's hardpoint index if
+  that hardpoint is not dead, else `Choose_Target_Hardpoint(target, unit)`; then `Set_Target(target, hp, +0xf5,
+  lock)` and `HP_Set_Target(·, target, hp)` on every weapon hardpoint. A rescan that finds the **same** target does
+  not re-set it, and `Service_Land` (0x634810) has no such step.
+  - `Order_Attack` (path A) with hpKey 0 and the path-B promotion with no goal hardpoint push **no**
+    sub-hardpoint, so the formation case above fills it in the same service.
+- **After the hardpoint dies:**
+  - each weapon hardpoint's `Update_Weapon` drops its +0x48 at once, and `Fire_At` then shoots, **per shot**, the
+    target's live targetable hardpoint **closest to the shooter**, not the next priority;
+  - for a unit in a formation, `Service_Space` re-chooses **by priority** on its next run (the next service, not
+    every frame) and pushes it to all weapon hardpoints;
+  - projectiles already in flight toward the dead hardpoint keep its index, so their hits do **no damage** (Q1
+    step 5).
+- When the target object dies the subscriptions (signals 1 / 0x28) clear the targets (§2.8).
+
+**Port differences (combat_system.cpp, refixf t06 round 2).**
+1. `process_hit`: hardpoint = `p.target_hp` only when victim == target, else −1 → hull. Vanilla space keeps the
+   **physically hit mesh** (a hit on a hardpoint's `Collision_Mesh` damages that hardpoint); vanilla land uses the
+   closest targetable live hardpoint to the projectile. The port has no meshes: route a non-target hit in space to
+   the hardpoint whose collision mesh contains the impact [port decision], else hull.
+2. `process_hit` random hardpoints: vanilla's targeted hardpoint (victim == target, index ≥ 0) **overrides** the
+   random pick (the synced draw is still made); the port lets the random pick win.
+3. `take_damage` step 17: a named **dead** destroyable hardpoint must swallow the damage (no hull damage); the port
+   sends it to the hull. A named non-destroyable hardpoint → hull (port agrees).
+4. `fire_hardpoint` fallback (`thp < 0`): vanilla requires `Is_Targetable` (0x394a80 with 0, 0); the port calls
+   `closest_hardpoint(t, u.pos, false)`, which can pick a non-targetable `DUMMY_ART` hardpoint (stations have
+   `*_Comm_Array_Dummy` / `*_Supply_Dock_Dummy`): its hits then go to the **hull**. Use `true`.
+5. `update_weapons`: re-chooses the sub-hardpoint by priority **every frame**. Vanilla pins it at `Set_Target` and
+   re-chooses only per §Q3 (formation units, next `Service_Space`); otherwise closest-to-shooter per shot.
+6. `choose_target_hardpoint`: tie distance from the shooter position + `Ranged_Target_Z_Adjust`, not `a.pos`; the
+   no-set branch also accepts targetable **non-destroyable** hardpoints (they are never dead).
+7. `in_cone`: vanilla uses the fire bone's full 3D frame (ship pitch / roll and bone orientation) and the
+   **lead-adjusted** point; the port uses unit yaw + `fire_yaw_deg` [L] on the pre-lead point, and treats a cone of
+   ≥ 360 × ≥ 180 as open. Unset `Fire_Cone_Width` / `Height` are **0** in vanilla (fires only dead ahead). Turrets
+   also need the barrel-direction pre-check (Q2 step 2).
+8. Aim point without a target hardpoint: vanilla 0x383f70 (bone list, random-start hardpoints with one synced
+   draw, then centre; each must be in 3D range and cone) instead of `t.pos`.
+9. The observed run (ships 30–900 units from the station centre) is outside vanilla geometry: from inside the
+   station, many target bones fall outside the 130° / 90° vertical cones (Q2), so few shots fire; and every hit
+   that resolves to a dummy hardpoint (item 4) lands on the hull.
 
 ---
 
@@ -775,7 +917,9 @@ flag, out-invulnerable.
    last hit (999999 on the first hit).
 8. × `Under_Construction_Damage_Multiplier`.
 9. × `Space/Land_Retreat_Units_Damaged_Mod_Factor` while the victim is retreating.
-10. **Hardpoint name [M]:** the projectile's targeted hardpoint; on land, the hardpoint closest to the source.
+10. **Hardpoint name [H, §2.9 Q1]:** the projectile's targeted hardpoint when the victim is its target and the index
+    is ≥ 0; otherwise on land the targetable live hardpoint closest to the projectile, in space the `Collision_Mesh`
+    of the mesh the projectile hit.
 11. **Lucky shot** (ability id 0x22) on the shooter: it is consumed and its CAUSE multiplier applies [M].
 12. × **`Get_Damage_Multiplier`** (0x38e0c0), the product of:
     - (1 + attacker list 1, "damage");
@@ -990,7 +1134,8 @@ and ascending-category summation are kept.
 - **Routing from `Take_Damage`:**
   - A named hardpoint is looked up by name (0x394d40).
   - A lucky shot at the hull switches to the hardpoint closest to the impact (0x394a80).
-  - A live destroyable hardpoint takes **all** of the damage.
+  - A live destroyable hardpoint takes **all** of the damage; a **dead** destroyable one takes it and nothing else
+    does (the damage is lost, §2.9); a non-destroyable one passes it to the hull.
   - Killing the last one with type +0xa8 set zeroes the hull.
   - Otherwise the damage goes to the hull.
 - **Targetability:** with `Is_Targetable`, the target position is the hardpoint's attachment-bone position
@@ -1156,7 +1301,7 @@ Names are proposals. The Ghidra project was not updated. Grouped by section:
 
 | RVA | Proposed name |
 |---|---|
-| 0x633a30 / 0x634810 / 0x633ae0 | `Targeting::Service` / `_Space` / `_Land` |
+| 0x633a30 / 0x634810 / 0x633ae0 | `Targeting::Service` / `_Land` (mode 1) / `_Space` (mode 2) |
 | 0x62ee00 / 0x62eeb0 | `TeamTargeting::Service` / `_Space` |
 | 0x568a00 | `Acquire_Target` |
 | 0x5662b0 | `Scan_Player` |
@@ -1295,7 +1440,12 @@ Names are proposals. The Ghidra project was not updated. Grouped by section:
 | 0x396070 | `Get_Hardpoint_Health_Fraction` |
 | 0x396470 | `Get_Min_Health_Fraction` |
 | 0x397c10 | `Count_Live_Hardpoints_Of_Type` |
-| 0x394d40 / 0x394a80 | hardpoint by name / closest |
+| 0x394d40 / 0x394a80 | hardpoint by `Collision_Mesh` name (`_stricmp`) / closest (args: include dead destroyable, include non-targetable) (§2.9) |
+| 0x367250 / 0x367100 | GameObjectType ctor / its flag-block initialiser (this = type + 0x10; sets +0xa8 = 1, §2.9) |
+| 0x383f70 | HP aim point on an object without a target hardpoint (bone list, random-start hardpoints, centre; §2.9) |
+| 0x385c70 | hardpoint world position (attachment bone, else hp +0x38 bone, else 0) |
+| 0x566ed0 | priority set of a targeting behaviour (Lua override TD +0x160, else type +0x520) |
+| 0x54dd80 | hard-point rank in a priority set (1-based, −1 excluded, 1e18 unlisted) |
 | 0x396ce0 | `Get_Target_Position` |
 | 0x3728f0 | `Get_Max_Speed` |
 | 0x5545a0 | `Locomotor_Set_Engines` |
