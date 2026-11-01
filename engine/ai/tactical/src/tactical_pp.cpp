@@ -8,6 +8,7 @@
 #include <map>
 
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/galactic/auto_resolve.hpp"
 
 namespace alamo::ai::tactical {
@@ -98,7 +99,7 @@ struct TacPp {
         if (!x) return false;
         if (x->affiliation.empty()) return true;
         for (const std::string& f : x->affiliation)
-            if (iequal(f, in.faction)) return true;
+            if (ascii_iequals(f, in.faction)) return true;
         return false;
     }
     bool is_space_type(int32_t t) const { return space_category(mask_of(t), in.category_mask); }
@@ -679,7 +680,7 @@ std::vector<int32_t> pp_team_types(const TaskForceDef& d, const TeamDef& t, cons
     } else {
         for (const std::string& n : t.names)
             for (size_t ty = 0; ty < types.size(); ++ty)
-                if (iequal(types[ty].name, ai_trim(n))) {
+                if (ascii_iequals(types[ty].name, ai_trim(n))) {
                     if (!types[ty].pp_excluded && std::find(out.begin(), out.end(), static_cast<int32_t>(ty)) == out.end())
                         out.push_back(static_cast<int32_t>(ty));
                     break;
@@ -687,7 +688,7 @@ std::vector<int32_t> pp_team_types(const TaskForceDef& d, const TeamDef& t, cons
     }
     for (const std::string& x : d.excluded_types)
         for (size_t ty = 0; ty < types.size(); ++ty)
-            if (iequal(types[ty].name, ai_trim(x))) out.erase(std::remove(out.begin(), out.end(), static_cast<int32_t>(ty)), out.end());
+            if (ascii_iequals(types[ty].name, ai_trim(x))) out.erase(std::remove(out.begin(), out.end(), static_cast<int32_t>(ty)), out.end());
     return out;
 }
 

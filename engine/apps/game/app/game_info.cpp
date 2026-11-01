@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <iterator>
 
+#include "alamo/core/text.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/corruption.hpp"  // P4 host: corruption mission lines
@@ -61,11 +62,6 @@ std::string icon_of(std::span<const ui::HudTypeInfo> hud_types, objects::TypeInd
 std::vector<std::string> ability_icons(const GameData& d, objects::TypeIndex t) {
     const objects::ObjectTypeDatabase& raw = d.types.raw();
     const objects::FieldColumns& fc = raw.fields();
-    auto ieq = [](std::string_view a, std::string_view b) {
-        return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-                   return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-               });
-    };
     std::vector<uint8_t> slots;
     std::vector<std::string> out;
     for (const objects::FieldIndex sub : d.types.get_sub_objects(t, "Unit_Abilities_Data")) {
@@ -73,9 +69,9 @@ std::vector<std::string> ability_icons(const GameData& d, objects::TypeIndex t) 
         std::string alternate;
         for (objects::FieldIndex f = sub + 1; f < fc.size() && fc.depth[f] > fc.depth[sub]; ++f) {
             if (fc.parent[f] != sub) continue;
-            if (ieq(raw.tag_name(f), "Type")) {
+            if (ascii_iequals(raw.tag_name(f), "Type")) {
                 for (const std::string& w : words(fc.text[f])) type = tactical::abilities::ability_type_from_name(w);
-            } else if (ieq(raw.tag_name(f), "Alternate_Icon_Name")) {
+            } else if (ascii_iequals(raw.tag_name(f), "Alternate_Icon_Name")) {
                 for (const std::string& w : words(fc.text[f])) alternate = w;
             }
         }
@@ -383,8 +379,7 @@ std::vector<ui::StoryDialogInfo> new_story_dialogs(const GameSession& s, const G
                 StoryDialogMeta md;
                 md.popup = e.popup;
                 const std::string& pn = e.plot < m.plot_count() ? m.plot(e.plot).name : std::string();
-                md.random_plot = pn.size() >= 11 && std::equal(pn.begin(), pn.begin() + 11, "random_plot",
-                                                               [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; });
+                md.random_plot = pn.size() >= 11 && ascii_iequals(std::string_view(pn).substr(0, 11), "random_plot");
                 md.dialog = e.dialog;
                 md.chapter = e.chapter;
                 meta->push_back(std::move(md));

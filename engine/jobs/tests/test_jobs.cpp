@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "alamo/core/test_support.hpp"
 #include "alamo/jobs/jobs.hpp"
 
 using namespace alamo::jobs;
@@ -30,15 +31,6 @@ constexpr uint32_t kScale = 10;  // TSan is ~10-20x slower
 #else
 constexpr uint32_t kScale = 1;
 #endif
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 static const std::array<int32_t, 5> kWorkerCounts = {0, 1, 2, 4, 16};
 

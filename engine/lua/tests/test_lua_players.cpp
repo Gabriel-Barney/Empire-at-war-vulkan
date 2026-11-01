@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "alamo/core/test_support.hpp"
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 
@@ -42,15 +43,6 @@
 
 using namespace alamo;
 using namespace alamo::lua;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 #if defined(ALAMO_LUA_PLAYERS)
 
@@ -98,23 +90,6 @@ bool gtrue(LuaVm& vm, const char* name) {
 }
 bool same_bits(double a, double b) { return std::memcmp(&a, &b, sizeof a) == 0; }
 
-class MemProvider final : public FileProvider {
-public:
-    void add(std::string_view path, std::string text) { files_[normalize_path(path)] = std::move(text); }
-    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
-        out.clear();
-        const auto it = files_.find(normalize_path(path));
-        if (it == files_.end()) return false;
-        out.assign(it->second.begin(), it->second.end());
-        return true;
-    }
-    bool exists(std::string_view path) const override { return files_.count(normalize_path(path)) != 0; }
-    std::string origin(std::string_view path) const override { return exists(path) ? "mem:" + std::string(path) : ""; }
-
-private:
-    std::map<std::string, std::string> files_;
-};
-
 // Resolves every token path (deterministically) except paths containing a token named MISSING.
 class TestResolver final : public ai::TokenResolver {
 public:
@@ -138,7 +113,7 @@ public:
 
 // Synthetic galaxy: Empire (human) / Underworld (AI, Hard_Default) / Neutral over planets A - B - C.
 struct Galaxy {
-    MemProvider files;
+    alamo::testing::MemoryProvider files;
     objects::ObjectTypeDatabase raw;
     objects::GameObjectTypes types;
     galactic::GalacticRules rules;

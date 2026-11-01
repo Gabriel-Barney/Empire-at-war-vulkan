@@ -104,7 +104,6 @@ public:
 
     VkSemaphore timeline() const { return timeline_.handle(); }
     bool dedicated_queue() const { return dedicated_; }
-    uint64_t ring_capacity() const { return ring_.capacity(); }
 
     // Test hook (device-loss simulation). The next `fail_submits` queue submits fail without
     // reaching the queue (as vkQueueSubmit2 returning an error). fail_waits: the upload timeline

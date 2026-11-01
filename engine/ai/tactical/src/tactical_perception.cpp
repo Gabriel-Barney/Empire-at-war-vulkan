@@ -7,6 +7,7 @@
 #include <string>
 
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/objects/enums.hpp"
 
 namespace alamo::ai::tactical {
@@ -94,9 +95,9 @@ Leaf leaf_of(TokenId id, const TokenTable* tokens) {
     if (tokens && id < tokens->size()) name = tokens->name(id);
     else if (TokenTable::is_registered(id)) name = registry_token_names()[id];
     if (name.empty()) return Leaf::None;
-    if (iequal(name, "Type")) return Leaf::Type;
+    if (ascii_iequals(name, "Type")) return Leaf::Type;
     for (const LeafName& ln : kLeafNames)
-        if (iequal(ln.name, name)) return ln.leaf;
+        if (ascii_iequals(ln.name, name)) return ln.leaf;
     return Leaf::None;
 }
 
@@ -189,7 +190,7 @@ bool leaf_info(Ev ev, Leaf l, TacticalMode mode, int32_t& life) {
 // ---------------------------------------------------------------------------------- parameters
 const Param* find_param(std::span<const Param> ps, std::string_view name) {
     for (const Param& p : ps)
-        if (iequal(p.name, name)) return &p;
+        if (ascii_iequals(p.name, name)) return &p;
     return nullptr;
 }
 
@@ -209,7 +210,7 @@ double param_number(std::span<const Param> ps, std::string_view name, double fal
 void param_names(std::span<const Param> ps, std::string_view name, std::vector<std::string_view>& out) {
     out.clear();
     for (const Param& p : ps) {
-        if (!iequal(p.name, name)) continue;
+        if (!ascii_iequals(p.name, name)) continue;
         if (p.value.kind == ParamValue::Kind::Enum) {
             for (const std::string& v : p.value.enum_values) out.emplace_back(v);
             continue;
@@ -263,7 +264,7 @@ std::string canonical_params(std::span<const Param> ps, std::string_view hint) {
 
 bool listed(std::span<const std::string_view> names, std::string_view n) {
     for (const std::string_view x : names)
-        if (iequal(x, n)) return true;
+        if (ascii_iequals(x, n)) return true;
     return false;
 }
 
@@ -326,7 +327,7 @@ struct Eval {
     }
     int32_t type_index(std::string_view name) const {
         for (size_t i = 0; i < w.types.size(); ++i)
-            if (iequal(w.types[i].name, name)) return static_cast<int32_t>(i);
+            if (ascii_iequals(w.types[i].name, name)) return static_cast<int32_t>(i);
         return -1;
     }
     std::string_view type_name(int32_t t) const {
@@ -668,7 +669,7 @@ struct Eval {
                 }
                 if (n.a < 0 || static_cast<uint32_t>(n.a) >= p.zone_count()) return false;
                 for (const HintZone::Hint& h : p.zone(static_cast<uint32_t>(n.a)).hints)
-                    if (iequal(h.name, hint)) {
+                    if (ascii_iequals(h.name, hint)) {
                         out = static_cast<double>(h.value);
                         return true;
                     }
@@ -843,7 +844,7 @@ struct Eval {
                 std::vector<BitfieldMatcher> m;
                 for (const std::string_view t : types) m.push_back({t, 0});
                 for (const Param& prm : ps) {  // one matcher per Parameter_Category entry, in order
-                    if (!iequal(prm.name, "Parameter_Category")) continue;
+                    if (!ascii_iequals(prm.name, "Parameter_Category")) continue;
                     const std::span<const Param> one(&prm, 1);
                     m.push_back({{}, category(one)});
                 }
@@ -1065,15 +1066,7 @@ uint64_t default_category_mask(std::string_view name) {
 }
 
 // TACTICAL_GAPS 6.8 name-id match [M: ASCII case-insensitive].
-bool zone_names_equal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'A' && a[i] <= 'Z') ? static_cast<char>(a[i] - 'A' + 'a') : a[i];
-        const char y = (b[i] >= 'A' && b[i] <= 'Z') ? static_cast<char>(b[i] - 'A' + 'a') : b[i];
-        if (x != y) return false;
-    }
-    return true;
-}
+bool zone_names_equal(std::string_view a, std::string_view b) { return ascii_iequals(a, b); }
 
 }  // namespace
 

@@ -33,6 +33,8 @@
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
+#include "alamo/core/text.hpp"
 
 #if defined(ALAMO_AI_TACTICAL_HAVE_VFS)
 #include "alamo/vfs/vfs.hpp"
@@ -41,15 +43,6 @@
 using namespace alamo;
 using namespace alamo::ai;
 using namespace alamo::ai::tactical;
-
-static int g_fail = 0;
-#define CHECK(c)                                                         \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
-            ++g_fail;                                                    \
-        }                                                                \
-    } while (0)
 
 static bool near_eq(double a, double b, double eps = 1e-4) { return std::fabs(a - b) <= eps * std::max(1.0, std::fabs(b)); }
 
@@ -77,12 +70,12 @@ static ParallelFor make_thread_pf(unsigned threads) {
 
 // Test category table (the default resolver is the objects module's GameObjectCategoryType).
 static uint64_t test_category(std::string_view n) {
-    if (iequal(n, "Infantry")) return 0x1;
-    if (iequal(n, "Vehicle")) return 0x2;
-    if (iequal(n, "Structure")) return 0x4;
-    if (iequal(n, "LandHero")) return 0x8;
-    if (iequal(n, "Capital")) return 0x10;
-    if (iequal(n, "Fighter")) return 0x20;
+    if (ascii_iequals(n, "Infantry")) return 0x1;
+    if (ascii_iequals(n, "Vehicle")) return 0x2;
+    if (ascii_iequals(n, "Structure")) return 0x4;
+    if (ascii_iequals(n, "LandHero")) return 0x8;
+    if (ascii_iequals(n, "Capital")) return 0x10;
+    if (ascii_iequals(n, "Fighter")) return 0x20;
     return 0;
 }
 
@@ -641,7 +634,7 @@ static void test_tokens() {
     CHECK(f.val("Variable_Target.Location.ForceUnnormalized", 0, f.h_tank) > 0.0);
     CHECK(f.val("Variable_Target.ForceUnnormalized", 0, f.h_zone2) > 0.0);
     // hints
-    f.w.zone_hint = [](int32_t z, std::string_view n) { return (z == 2 && iequal(n, "High_Ground")) ? 1.0 : 0.0; };
+    f.w.zone_hint = [](int32_t z, std::string_view n) { return (z == 2 && ascii_iequals(n, "High_Ground")) ? 1.0 : 0.0; };
     CHECK(f.val("Variable_Target.Hints.High_Ground", 0, f.h_zone2) == 1.0);
     CHECK(f.val("Variable_Target.Location.Hints.High_Ground", 0, f.h_tank) == 1.0);
     CHECK(f.val("Variable_Target.Hints.OffenseDelayGround", 0, f.h_zone2) == 0.0);
@@ -714,7 +707,7 @@ static void test_duplicate_zone_names() {
     CHECK(f.p.evaluator_handle(h2) == h3 && f.p.evaluator_handle(h3) == h3 && f.p.evaluator_handle(h4) == h4);
     CHECK(f.p.evaluator_handle(-1) == -1 && f.p.evaluator_handle(999) == 999);
     // zone 2's tokens read zone 3's evaluator (its hints, its centre for distances)
-    f.w.zone_hint = [](int32_t z, std::string_view n) { return (z == 3 && iequal(n, "High_Ground")) ? 1.0 : 0.0; };
+    f.w.zone_hint = [](int32_t z, std::string_view n) { return (z == 3 && ascii_iequals(n, "High_Ground")) ? 1.0 : 0.0; };
     CHECK(f.val("Variable_Target.Hints.High_Ground", 0, h2) == 1.0);
     CHECK(f.val("Variable_Target.Hints.High_Ground", 0, h4) == 0.0);
     CHECK(f.val("Variable_Target.DistanceToNearestEnemy", 0, h2) == f.val("Variable_Target.DistanceToNearestEnemy", 0, h3));
@@ -1101,8 +1094,7 @@ static void test_scenario_save() {
 // ---------------------------------------------------------------------------------- real data
 #if defined(ALAMO_AI_TACTICAL_HAVE_VFS)
 static bool is_tactical_file(std::string_view path) {
-    std::string up(path);
-    for (char& ch : up) ch = static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
+    const std::string up = ascii_upper(path);
     if (up.find("GALACTIC") != std::string::npos || up.find("BUDGET") != std::string::npos || up.find("STORY") != std::string::npos)
         return false;
     return up.find("LAND") != std::string::npos || up.find("SPACE") != std::string::npos || up.find("HERO") != std::string::npos;

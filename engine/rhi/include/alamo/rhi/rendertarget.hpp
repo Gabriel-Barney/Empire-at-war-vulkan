@@ -65,7 +65,6 @@ public:
     bool has_color() const { return color_.handle != VK_NULL_HANDLE; }
     bool has_depth() const { return depth_.handle != VK_NULL_HANDLE; }
     ImageState color_state() const { return color_state_; }
-    ImageState depth_state() const { return depth_state_; }
     // For external changes (e.g. after a cmd_stretch_rect into the colour image).
     void set_color_state(ImageState s) { color_state_ = s; }
     void set_depth_state(ImageState s) { depth_state_ = s; }

@@ -36,6 +36,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #ifdef ALAMO_ANIM_HAVE_JOBS
 #include "alamo/jobs/job_system.hpp"
 #endif
@@ -47,15 +48,6 @@ using namespace alamo::anim;
 using alamo::SimRng;
 
 namespace {
-
-int g_fail = 0;
-#define CHECK(c)                                                                  \
-    do {                                                                          \
-        if (!(c)) {                                                               \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);              \
-            ++g_fail;                                                             \
-        }                                                                         \
-    } while (0)
 
 // ---- synthetic data -----------------------------------------------------------------------------------
 

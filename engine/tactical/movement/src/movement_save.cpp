@@ -49,12 +49,6 @@ bool get_section(ByteReader& r, F&& fn) {
     return fn(sub) && sub.ok() && sub.done();
 }
 
-// A count followed by items of at least `min_bytes` each: false when it cannot fit in the remaining data.
-bool get_count(ByteReader& r, size_t min_bytes, uint32_t& n) {
-    n = r.u32();
-    return r.ok() && (min_bytes == 0 || n <= r.remaining() / min_bytes);
-}
-
 // ---- enum validation (switches without default: -Wswitch flags a new enumerator here) ---------------------------
 bool valid_loco_state(uint8_t v) {
     switch (static_cast<LocoState>(v)) {
@@ -219,25 +213,25 @@ public:
     }
     void v2s(std::vector<V2>& v) {
         uint32_t n = 0;
-        if (!get_count(r_, 8, n)) return r_.fail();
+        if (!read_count(r_, n, 8)) return r_.fail();
         v.assign(n, V2{});
         for (V2& p : v) v2(p);
     }
     void f3s(std::vector<F3>& v) {
         uint32_t n = 0;
-        if (!get_count(r_, 12, n)) return r_.fail();
+        if (!read_count(r_, n, 12)) return r_.fail();
         v.assign(n, F3{});
         for (F3& p : v) f3(p);
     }
     void ids(std::vector<ObjectId>& v) {
         uint32_t n = 0;
-        if (!get_count(r_, 4, n)) return r_.fail();
+        if (!read_count(r_, n, 4)) return r_.fail();
         v.assign(n, 0);
         for (ObjectId& id : v) id = r_.i32();
     }
     void wps(std::vector<SpaceWaypoint>& v) {
         uint32_t n = 0;
-        if (!get_count(r_, 20, n)) return r_.fail();
+        if (!read_count(r_, n, 20)) return r_.fail();
         v.assign(n, SpaceWaypoint{});
         for (SpaceWaypoint& p : v) {
             p.pos.x = r_.f32();
@@ -462,15 +456,6 @@ uint64_t collision_pair_key(ObjectId a, ObjectId b) {  // as collision.cpp pair_
     return (static_cast<uint64_t>(x) << 32) | y;
 }
 
-void put_vec3(ByteWriter& w, Vec3 v) { w.f32(v.x).f32(v.y).f32(v.z); }
-Vec3 get_vec3(ByteReader& r) {
-    Vec3 v;
-    v.x = r.f32();
-    v.y = r.f32();
-    v.z = r.f32();
-    return v;
-}
-
 }  // namespace
 
 // ================================================================ PassabilityGrid
@@ -512,7 +497,7 @@ bool PassabilityGrid::read(ByteReader& r) {
     if (counted) counts.assign(cells, std::array<uint16_t, 9>{});
     const auto get = [&](std::map<ObjectId, Stamp>& m) {
         uint32_t n = 0;
-        if (!get_count(r, 12, n)) return false;
+        if (!read_count(r, n, 12)) return false;
         bool first = true;
         ObjectId prev = 0;
         for (uint32_t k = 0; k < n; ++k) {
@@ -520,7 +505,7 @@ bool PassabilityGrid::read(ByteReader& r) {
             Stamp s;
             s.bits = r.u32();
             uint32_t nc = 0;
-            if (!get_count(r, 4, nc) || (!first && id <= prev) || (s.bits & ~0x1FFu) != 0) return false;
+            if (!read_count(r, nc, 4) || (!first && id <= prev) || (s.bits & ~0x1FFu) != 0) return false;
             if (nc > 0 && counts.empty()) return false;  // stamps always allocate the counts
             s.cells.resize(nc);
             for (uint32_t i = 0; i < nc; ++i) {
@@ -567,7 +552,7 @@ bool SpaceOccupancy::read(ByteReader& r) {
     std::map<ObjectId, Static> statics;
     std::map<ObjectId, Track> tracks;
     uint32_t n = 0;
-    if (!get_count(r, 20, n)) return false;
+    if (!read_count(r, n, 20)) return false;
     for (uint32_t k = 0; k < n; ++k) {
         const ObjectId id = r.i32();
         Static s{};
@@ -578,7 +563,7 @@ bool SpaceOccupancy::read(ByteReader& r) {
         if (!r.ok() || (!statics.empty() && id <= statics.rbegin()->first)) return false;
         statics.emplace_hint(statics.end(), id, s);
     }
-    if (!get_count(r, 20, n)) return false;
+    if (!read_count(r, n, 20)) return false;
     In in(r);
     for (uint32_t k = 0; k < n; ++k) {
         const ObjectId id = r.i32();
@@ -623,7 +608,7 @@ bool CollisionLayer::read(ByteReader& r) {
     if (r.u32() != kCollisionSaveVersion || !r.ok()) return false;
     const uint32_t next_seq = r.u32();
     uint32_t n = 0;
-    if (!get_count(r, 35, n)) return false;  // u32 seq, 3 x u8, i32 a / b, u32 x 2, f32 x 2, u32 retry
+    if (!read_count(r, n, 35)) return false;  // u32 seq, 3 x u8, i32 a / b, u32 x 2, f32 x 2, u32 retry
     std::vector<CollisionObject> list(n);
     std::vector<uint64_t> pairs;
     pairs.reserve(n);
@@ -648,7 +633,7 @@ bool CollisionLayer::read(ByteReader& r) {
     }
     std::sort(pairs.begin(), pairs.end());
     if (std::adjacent_find(pairs.begin(), pairs.end()) != pairs.end()) return false;  // one collision per pair
-    if (!get_count(r, 5, n)) return false;
+    if (!read_count(r, n, 5)) return false;
     std::vector<Step> order(n);
     for (Step& s : order) {
         s.seq = r.u32();
@@ -699,12 +684,12 @@ bool FighterCellGrid::read(ByteReader& r) {
     g.build(c, h, size, capacity, extra, flag);  // the same parameters give the same geometry
     if (g.nx_ != nx || g.ny_ != ny) return false;
     uint32_t used = 0;
-    if (!get_count(r, 16, used)) return false;
+    if (!read_count(r, used, 16)) return false;
     int64_t prev = -1;
     for (uint32_t u = 0; u < used; ++u) {
         const uint32_t k = r.u32();
         uint32_t n = 0;
-        if (!get_count(r, 8, n) || n == 0 || static_cast<int64_t>(k) <= prev || k >= g.cells_.size()) return false;
+        if (!read_count(r, n, 8) || n == 0 || static_cast<int64_t>(k) <= prev || k >= g.cells_.size()) return false;
         std::vector<Entry>& cell = g.cells_[k];
         cell.resize(n);
         for (uint32_t i = 0; i < n; ++i) {
@@ -746,8 +731,8 @@ void HyperspaceDepartures::write(ByteWriter& w) const {
     w.u32(static_cast<uint32_t>(jumps_.size()));
     for (const Jump& j : jumps_) {
         w.i32(j.id).i32(j.timer).u8(j.keep).f32(j.increment);
-        put_vec3(w, j.pos);
-        put_vec3(w, j.dir);
+        write_vec3(w, j.pos);
+        write_vec3(w, j.dir);
     }
     w.u32(static_cast<uint32_t>(events_.size()));
     for (const HyperspaceEvent& e : events_) w.u8(static_cast<uint8_t>(e.kind)).i32(e.id).boolean(e.keep_parent_link).u32(e.frame);
@@ -756,7 +741,7 @@ void HyperspaceDepartures::write(ByteWriter& w) const {
 bool HyperspaceDepartures::read(ByteReader& r) {
     if (r.u32() != kDeparturesSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!get_count(r, 37, n)) return false;
+    if (!read_count(r, n, 37)) return false;
     std::vector<Jump> jumps(n);
     for (uint32_t k = 0; k < n; ++k) {
         Jump& j = jumps[k];
@@ -764,11 +749,11 @@ bool HyperspaceDepartures::read(ByteReader& r) {
         j.timer = r.i32();
         j.keep = r.u8();
         j.increment = r.f32();
-        j.pos = get_vec3(r);
-        j.dir = get_vec3(r);
+        j.pos = read_vec3<Vec3>(r);
+        j.dir = read_vec3<Vec3>(r);
         if (!r.ok() || j.keep > 1 || (k > 0 && j.id <= jumps[k - 1].id)) return false;  // ascending id
     }
-    if (!get_count(r, 10, n)) return false;
+    if (!read_count(r, n, 10)) return false;
     std::vector<HyperspaceEvent> events(n);
     for (HyperspaceEvent& e : events) {
         const uint8_t kind = r.u8();
@@ -795,7 +780,7 @@ void EngineControl::write(ByteWriter& w) const {
 bool EngineControl::read(ByteReader& r) {
     if (r.u32() != kEnginesSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!get_count(r, 11, n)) return false;
+    if (!read_count(r, n, 11)) return false;
     std::vector<Entry> list(n);
     for (uint32_t k = 0; k < n; ++k) {
         Entry& e = list[k];
@@ -806,7 +791,7 @@ bool EngineControl::read(ByteReader& r) {
         e.reenable = r.u32();
         if (!r.ok() || e.online > 1 || e.destroyed > 1 || e.indefinite > 1 || (k > 0 && e.id <= list[k - 1].id)) return false;
     }
-    if (!get_count(r, 9, n)) return false;
+    if (!read_count(r, n, 9)) return false;
     std::vector<EngineEvent> events(n);
     for (EngineEvent& e : events) {
         const uint8_t kind = r.u8();
@@ -876,13 +861,13 @@ bool MovementSystem::read(ByteReader& r) {
     MovementStats stats;
     io_stats(in, stats);
     uint32_t n = 0;
-    if (!get_count(r, 200, n)) return false;  // a unit is well over 200 bytes
+    if (!read_count(r, n, 200)) return false;  // a unit is well over 200 bytes
     std::vector<Unit> units(n);
     for (uint32_t k = 0; k < n; ++k)
         if (!read_unit(r, units[k]) || (k > 0 && units[k].d.id <= units[k - 1].d.id)) return false;
     CollisionLayer coll;
     if (!get_section(r, [&](ByteReader& s) { return coll.read(s); })) return false;
-    if (!get_count(r, 8, n)) return false;
+    if (!read_count(r, n, 8)) return false;
     std::vector<CrushEvent> crush(n);
     for (CrushEvent& e : crush) {
         e.crusher = r.i32();
@@ -890,7 +875,7 @@ bool MovementSystem::read(ByteReader& r) {
     }
     std::vector<ObjectId> despawned;
     in.ids(despawned);
-    if (!get_count(r, 60, n)) return false;
+    if (!read_count(r, n, 60)) return false;
     std::vector<FighterSquad> squads(n);
     for (uint32_t k = 0; k < n; ++k) {
         io_squad(in, squads[k]);
@@ -898,7 +883,7 @@ bool MovementSystem::read(ByteReader& r) {
     }
     FighterCellGrids fgrids;
     if (!get_section(r, [&](ByteReader& s) { return fgrids.read(s); })) return false;
-    if (!get_count(r, 9, n)) return false;
+    if (!read_count(r, n, 9)) return false;
     std::vector<FighterEvent> fevents(n);
     for (FighterEvent& e : fevents) {
         const uint8_t kind = r.u8();

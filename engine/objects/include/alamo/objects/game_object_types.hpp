@@ -123,7 +123,6 @@ public:
     size_t size() const { return state_.size(); }
     const TypeLoadStats& stats() const { return stats_; }
 
-    bool is_variant(TypeIndex t) const { return !variant_name(t).empty(); }
     std::string_view variant_name(TypeIndex t) const;
     bool resolved(TypeIndex t) const { return resolved_[t] != 0; }
     // Pass in which the type resolved (0..9); 0xFF while unresolved.
@@ -132,7 +131,6 @@ public:
 
     // Field state; nullptr = never set (the default applies).
     const FieldValue* value(TypeIndex t, FieldId f) const;
-    const FieldValue& default_value(FieldId f) const { return defaults_[f]; }
     const FieldValue& effective(TypeIndex t, FieldId f) const;  // value or default
     std::span<const FieldValue> values(TypeIndex t) const { return state_[t]; }  // sorted by field
 

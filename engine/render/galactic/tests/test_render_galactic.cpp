@@ -30,6 +30,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/render/galactic/galactic_session.hpp"
@@ -41,35 +42,14 @@
 #include "alamo/render/png.hpp"
 #include "alamo/render/sim_view.hpp"
 #include "alamo/rhi/rhi.hpp"
+#include "alamo/rhi/test_fixture.hpp"
 #include "alamo/vfs/vfs.hpp"
 
 using namespace alamo;
+using alamo::testing::Offscreen;
+using alamo::testing::env_or_empty;
+
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
 
 static bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
 
@@ -92,18 +72,6 @@ struct FakeModels final : render::GalacticModelSource {
 };
 
 // ----------------------------------------------------------------------------------------- R2 answered items
-struct MemFiles final : FileProvider {
-    std::map<std::string, std::string> files;  // path as asked
-    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
-        const auto it = files.find(std::string(path));
-        if (it == files.end()) return false;
-        out.assign(it->second.begin(), it->second.end());
-        return true;
-    }
-    bool exists(std::string_view path) const override { return files.count(std::string(path)) != 0; }
-    std::string origin(std::string_view path) const override { return exists(path) ? "memory" : ""; }
-};
-
 // STRATEGIC_GAPS §6.1: TradeRouteLines parser layout (ENEMY 0 / ALLY 1 / other 2 / GOOD 3 / EVIL 4 / CORRUPT 5, block
 // field defaults), the galactic light record (ambient 0.05, sun 0.5 from the zoom-out angles, zoom lerp).
 static void test_r2_records() {
@@ -111,18 +79,18 @@ static void test_r2_records() {
           render::route_settings_index("Neutral") == render::kRouteNeutral && render::route_settings_index("Pirates") == render::kRouteNeutral &&
           render::route_settings_index("good") == render::kRouteGood && render::route_settings_index("Evil") == render::kRouteEvil &&
           render::route_settings_index("Corrupt") == render::kRouteCorrupt);
-    MemFiles mf;
-    mf.files["Data\\XML\\TradeRouteLines.xml"] =
+    testing::MemoryProvider mf;
+    mf.add("Data\\XML\\TradeRouteLines.xml",
         "<TradeRouteLines><TradeRouteLine Name=\"Default\">"
         "<Settings_For_Faction Name=\"Ally\"><Color_Zoomed_Out>0, 255, 0, 255</Color_Zoomed_Out><Width>2.5</Width></Settings_For_Faction>"
         "<Settings_For_Faction Name=\"Smugglers\"><Render_Mode>alpha</Render_Mode></Settings_For_Faction>"
-        "</TradeRouteLine></TradeRouteLines>";
-    mf.files["Data\\XML\\GameConstants.xml"] =
+        "</TradeRouteLine></TradeRouteLines>");
+    mf.add("Data\\XML\\GameConstants.xml",
         "<GameConstants><Galactic_Zoom_Out_Light_Angle>0 90 30</Galactic_Zoom_Out_Light_Angle>"
         "<Galactic_Zoom_In_Light_Angle>0, 180, 10</Galactic_Zoom_In_Light_Angle><Galactic_Zoom_Light_Level>0.8</Galactic_Zoom_Light_Level>"
         "<Corruption_Particle_Name> Light_Galactic_Corruption_Particles </Corruption_Particle_Name>"
         "<Particle_Brightness_Per_Corruption_Level> 0.25, 0.75 </Particle_Brightness_Per_Corruption_Level>"
-        "</GameConstants>";
+        "</GameConstants>");
     const render::RouteLineStyle s = render::load_route_line_style(mf);
     const render::RouteLineSettings& ally = s.of(render::RouteClass::Ally);
     CHECK(near(ally.zoomed_out.y, 1.0f) && near(ally.width, 2.5f) && near(ally.zoomed_in.x, 0.5f) && ally.render_mode == "ADDITIVE" &&
@@ -155,15 +123,15 @@ static void test_r2_records() {
     }
     // R2 t01: faction colour table (Color / Display_Font_Color / Big_Fleet_Color; map vs text colour lookups).
     {
-        MemFiles ff;
-        ff.files["Data\\XML\\FactionFiles.xml"] = "<Factions><File>Factions.xml</File></Factions>";
-        ff.files["Data\\XML\\Factions.xml"] =
+        testing::MemoryProvider ff;
+        ff.add("Data\\XML\\FactionFiles.xml", "<Factions><File>Factions.xml</File></Factions>");
+        ff.add("Data\\XML\\Factions.xml",
             "<Factions>"
             "<Faction Name=\"Empire\"><Color> 54, 134, 242, 255 </Color><Display_Font_Color> 24, 133, 251, 255 </Display_Font_Color>"
             "<Big_Fleet_Color> 54, 134, 242, 150 </Big_Fleet_Color><No_Colorization_Color> 255, 255, 255, 255 </No_Colorization_Color></Faction>"
             "<Faction Name=\"Modded\"><Color> 10, 20, 30, 255 </Color></Faction>"
             "<Faction Name=\"Neutral\"><Is_Neutral>Yes</Is_Neutral><Color> 100, 100, 100, 255 </Color>"
-            "<Display_Font_Color> 128, 128, 128, 255 </Display_Font_Color></Faction></Factions>";
+            "<Display_Font_Color> 128, 128, 128, 255 </Display_Font_Color></Faction></Factions>");
         const std::vector<render::FactionColor> tab = render::load_faction_colors(ff);
         CHECK(tab.size() == 3 && tab[0].has_display_font && tab[0].has_big_fleet && near(tab[0].big_fleet.w, 150 / 255.0f) && !tab[1].has_display_font);
         materials::float4 c;
@@ -956,34 +924,8 @@ static void test_fleets_and_selection(const render::GalacticWorld& w) {
 }
 
 // ------------------------------------------------------------------------------------------- GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : alamo::testing::Gpu {
     render::Renderer renderer;
-};
-
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(readback);
-    }
 };
 
 static void test_gpu(const render::GalacticWorld& w, const std::string& src_dir) {
@@ -1019,7 +961,7 @@ static void test_gpu(const render::GalacticWorld& w, const std::string& src_dir)
     g.renderer.set_frame_ring(&g.ring);
     g.renderer.set_lighting(render::galactic_lighting());
     Offscreen o;
-    CHECK(o.create(g, 640, 360));
+    CHECK(o.create(g, 640, 360, false));
     if (rinit) {
         RunSpec off;
         off.ticks = 120;

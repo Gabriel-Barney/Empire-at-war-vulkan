@@ -25,6 +25,7 @@
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "thread_parallel_for.hpp"
@@ -32,25 +33,7 @@
 #include "alamo/vfs/vfs.hpp"
 #endif
 
-namespace {
-std::atomic<uint64_t> g_allocs{0};
-std::atomic<bool> g_count{false};
-}  // namespace
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
-#endif
-void* operator new(std::size_t n) {
-    if (g_count.load(std::memory_order_relaxed)) g_allocs.fetch_add(1, std::memory_order_relaxed);
-    void* p = std::malloc(n ? n : 1);
-    if (!p) throw std::bad_alloc();
-    return p;
-}
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
+#include "alloc_counter.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical;
@@ -63,14 +46,6 @@ using alamo::tactical::Vec3;
 using alamo::tactical::combat::ObjectId;
 using alamo::tactical::combat::kNoObject;
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 #define CHECK_EQ(a, b)                                                                                              \
     do {                                                                                                            \
         const double va_ = static_cast<double>(a), vb_ = static_cast<double>(b);                                    \

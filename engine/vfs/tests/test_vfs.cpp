@@ -15,31 +15,18 @@
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/meg/meg.h"
 #include "alamo/vfs/vfs.hpp"
 
 namespace fs = std::filesystem;
 using alamo::vfs::Vfs;
 using alamo::vfs::VfsConfig;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using alamo::testing::write_file;
 
 namespace {
 
 using Files = std::vector<std::pair<std::string, std::string>>;  // name, content
-
-void write_file(const fs::path& p, const std::string& content) {
-    fs::create_directories(p.parent_path());
-    std::ofstream f(p, std::ios::binary);
-    f.write(content.data(), static_cast<std::streamsize>(content.size()));
-}
 
 void put_u16(std::string& s, uint32_t v) {
     s.push_back(static_cast<char>(v & 0xFFu));

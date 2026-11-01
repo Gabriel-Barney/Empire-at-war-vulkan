@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "alamo/core/text.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/render/galactic/galactic_session.hpp"
 #include "alamo/render/pipelines.hpp"
@@ -235,7 +236,6 @@ void GalacticView::prepare(float alpha, double now_s, uint32_t selected_planet, 
     // animates while paused too [port]).
     corruption_fx_.clear();
     render::galactic_corruption_effects(frame_, corruption_, corruption_fx_);
-    corruption_live_ = 0;
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     if (pattach_) {
         pattach_->begin();
@@ -247,7 +247,6 @@ void GalacticView::prepare(float alpha, double now_s, uint32_t selected_planet, 
             if (!def) continue;
             pattach_->sync_effect(e.key, std::move(def), e.transform, 1.0f);
             if (e.scalars) pattach_->set_effect_scalars(e.key, e.brightness, e.scale, e.energy);  // GRC 4.5 transition ramp
-            ++corruption_live_;
         }
         pattach_->end();
         const double dt = now_s >= 0.0 && last_frame_s_ >= 0.0 ? std::clamp(now_s - last_frame_s_, 0.0, 0.1) : 1.0 / 30.0;
@@ -501,18 +500,9 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
 bool BattleView::spawn_move_ack(std::string_view type, ui::Vec3 p, float scale, bool normal) {
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     if (!pworld_ || !plib_ || type.empty()) return false;
-    const auto ieq = [](std::string_view a, std::string_view b) {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i) {
-            const char x = a[i] >= 'a' && a[i] <= 'z' ? static_cast<char>(a[i] - 32) : a[i];
-            const char y = b[i] >= 'a' && b[i] <= 'z' ? static_cast<char>(b[i] - 32) : b[i];
-            if (x != y) return false;
-        }
-        return true;
-    };
     std::string model(type);  // a particle file name when no type of that name exists
     for (size_t t = 0; t < table_.size(); ++t)
-        if (ieq(table_[static_cast<objects::TypeIndex>(t)].name, type)) {
+        if (ascii_iequals(table_[static_cast<objects::TypeIndex>(t)].name, type)) {
             model = table_[static_cast<objects::TypeIndex>(t)].model;
             break;
         }
@@ -528,7 +518,6 @@ bool BattleView::spawn_move_ack(std::string_view type, ui::Vec3 p, float scale, 
     if (h == 0) return false;
     std::erase_if(acks_, [this](const MoveAckFx& a) { return !pworld_->valid(a.handle); });
     acks_.push_back({h, p, normal});
-    ++acks_spawned_;
     return true;
 #else
     (void)type, (void)p, (void)scale, (void)normal;

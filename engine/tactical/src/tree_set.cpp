@@ -96,10 +96,6 @@ uint32_t TreeSet::maintain(double game_time, const ParallelFor& pf) {
     return n;
 }
 
-void TreeSet::rebuild_all(const ParallelFor& pf) {
-    for_all_trees([&](SpatialTree& t) { t.rebuild(pf); });
-}
-
 void TreeSet::rebuild_all_with_threshold(float large_threshold, const ParallelFor& pf) {
     for_all_trees([&](SpatialTree& t) { t.rebuild_with_threshold(large_threshold, pf); });
 }

@@ -24,6 +24,7 @@
 #include "alamo/assets/model.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/render/particles/particle_attach.hpp"
 #include "alamo/render/particles/particle_data.hpp"
 #include "alamo/render/particles/particle_gpu.hpp"
@@ -32,6 +33,7 @@
 #include "alamo/render/png.hpp"
 #include "alamo/render/renderer.hpp"
 #include "alamo/rhi/rhi.hpp"
+#include "alamo/rhi/test_fixture.hpp"
 #include "alamo/vfs/vfs.hpp"
 #if defined(ALAMO_PARTICLES_HAVE_SIM)
 #include "alamo/core/sim_crc.hpp"
@@ -41,36 +43,15 @@
 #include "alamo/render/sim_session.hpp"
 #include "alamo/render/sim_snapshot.hpp"
 #include "alamo/render/sim_view.hpp"
+#include "../../tests/test_fakes.hpp"
 #endif
 
 using namespace alamo;
+using alamo::testing::Offscreen;
+using alamo::testing::env_or_empty;
+
 using namespace alamo::render::particles;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
 
 static SystemPtr one(EmitterDef e, const char* name = "T", bool leave = false) {
     auto s = std::make_shared<SystemDef>();
@@ -535,34 +516,8 @@ static void test_real_data() {
 }
 
 // ------------------------------------------------------------------------------------------ GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : alamo::testing::Gpu {
     render::Renderer renderer;
-};
-
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(readback);
-    }
 };
 
 static bool frame(Gpu& g, Offscreen& o, const render::ViewMatrices& vm, std::span<const render::Instance> inst, render::RecordOptions ro) {
@@ -632,7 +587,7 @@ static void test_gpu(const std::string& src_dir) {
     const bool pinit = rinit && pr.init(g.ctx, g.alloc, g.up, world, nullptr);
     CHECK(pinit);
     Offscreen o;
-    CHECK(o.create(g, 640, 360));
+    CHECK(o.create(g, 640, 360, false));
     if (pinit) {
         g.renderer.set_scene_hook(&pr);
         const std::vector<SystemPtr> syn = synthetic_systems();
@@ -849,11 +804,7 @@ static void test_sim_effects() {
 // OI render / Int-final: Lua Attach_Particle_Effect requests (lua::ParticleEffectRequest-shaped records) -> snapshot_lua_effects
 // -> SimSnapshot -> interpolate -> sync_sim_frame: one system per request, at the named bone, kept while the request and the
 // object stay listed, released with the object. Render-side only (the sim CRC with particles on / off: test_sim).
-struct FakeLuaRequest {
-    uint32_t frame = 0, seq = 0;
-    int32_t object = 0, type = -1;
-    std::string type_name, bone;
-};
+using alamo::testing::FakeLuaRequest;
 
 static void test_sim_lua_effects() {
     std::string err;

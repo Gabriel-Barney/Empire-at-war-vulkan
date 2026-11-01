@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <vector>
 
+#include "alamo/core/text.hpp"
 #include "alamo/audio/audio_system.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
@@ -28,15 +29,6 @@ MovieSlot::~MovieSlot() = default;  // owners call stop() first (it needs the au
 bool movies_available(std::string* err) { return video::ffmpeg_available(err); }
 
 namespace {
-bool ieq(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = a[i] >= 'A' && a[i] <= 'Z' ? static_cast<char>(a[i] - 'A' + 'a') : a[i];
-        const char y = b[i] >= 'A' && b[i] <= 'Z' ? static_cast<char>(b[i] - 'A' + 'a') : b[i];
-        if (x != y) return false;
-    }
-    return true;
-}
 // "Event, frame, Event2, frame2" (the SFXEvent_Frame list shape [port: MusicEvent_Frame has no sample in the data]).
 std::vector<std::pair<int64_t, std::string>> parse_frame_list(std::string_view text) {
     std::vector<std::string> tok;
@@ -78,7 +70,7 @@ bool MovieSlot::open(const GameData& data, GameAudioHost& audio, std::string_vie
                 have_entry = true;
                 // The music fields of the same record (the last <Movie> of that Name, like find_movie).
                 for (data::XmlNode n : doc.root().children("Movie")) {
-                    if (!ieq(n.attribute("Name"), entry.name)) continue;
+                    if (!ascii_iequals(n.attribute("Name"), entry.name)) continue;
                     credits_flag = data::parse_bool_or(n.child_text("Has_Credits"), false);
                     halt_flag = data::parse_bool_or(n.child_text("Halt_Game_Music"), false);
                     cues.clear();

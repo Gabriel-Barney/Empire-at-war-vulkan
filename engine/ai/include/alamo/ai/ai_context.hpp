@@ -88,7 +88,6 @@ public:
         per_mode_ = {true, true, true};
     }
     bool enabled(AiMode m) const { return master_ && per_mode_[static_cast<size_t>(m)]; }
-    void set_mode_enabled(AiMode m, bool on) { per_mode_[static_cast<size_t>(m)] = on; }
     void suspend(bool suspended) { master_ = !suspended; }
     bool suspended() const { return !master_; }
     // Galactic pause counter edges.

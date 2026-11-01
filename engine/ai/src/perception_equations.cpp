@@ -8,6 +8,7 @@
 
 #include "alamo/core/hash.hpp"  // A2 tactical: crc32 ('#' reseed)
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/xml.hpp"
 
 namespace alamo::ai {
@@ -19,35 +20,14 @@ constexpr std::string_view kRegistry[] = {
 };
 constexpr uint32_t kRegistrySize = static_cast<uint32_t>(sizeof(kRegistry) / sizeof(kRegistry[0]));
 
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-std::string to_upper(std::string_view s) {
-    std::string r(s);
-    for (char& c : r) c = upper(c);
-    return r;
-}
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
 bool istarts_with(std::string_view s, std::string_view prefix) {
-    return s.size() >= prefix.size() && iequals(s.substr(0, prefix.size()), prefix);
+    return s.size() >= prefix.size() && ascii_iequals(s.substr(0, prefix.size()), prefix);
 }
 
 bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 bool is_digit(char c) { return c >= '0' && c <= '9'; }
 bool is_ident_start(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; }
 bool is_ident(char c) { return is_ident_start(c) || is_digit(c); }
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && is_space(s.front())) s.remove_prefix(1);
-    while (!s.empty() && is_space(s.back())) s.remove_suffix(1);
-    return s;
-}
 
 class Parser {
 public:
@@ -261,7 +241,7 @@ private:
         }
         ExprNode n;
         const std::string_view head = parts[0];
-        if (parts.size() == 1 && iequals(head, "clamp") && peek("(")) {
+        if (parts.size() == 1 && ascii_iequals(head, "clamp") && peek("(")) {
             ++pos_;
             n.op = Op::Clamp;
             if (!expr(n.a)) return false;
@@ -280,7 +260,7 @@ private:
         };
         bool is_root = false;
         for (const auto& [name, root] : kRoots) {
-            if (iequals(head, name)) {
+            if (ascii_iequals(head, name)) {
                 is_root = true;
                 n.op = Op::Token;
                 n.root = root;
@@ -298,7 +278,7 @@ private:
             n.name = std::string(head.substr(fn ? 9 : 7));
             n.ref = kUnresolved;
             if (n.name.empty()) return fail("empty function name");
-            if (parts.size() != 2 || !iequals(parts[1], "Evaluate"))
+            if (parts.size() != 2 || !ascii_iequals(parts[1], "Evaluate"))
                 return fail(std::string(head) + ": expected '.Evaluate'");
         } else {
             return fail("unknown reference '" + std::string(head) + "'");
@@ -503,7 +483,7 @@ TokenTable::TokenTable() {
 }
 
 TokenId TokenTable::intern(std::string_view name) {
-    std::string key = to_upper(name);
+    std::string key = ascii_upper(name);
     const auto it = index_.find(key);
     if (it != index_.end()) return it->second;
     const auto id = static_cast<TokenId>(names_.size());
@@ -513,13 +493,13 @@ TokenId TokenTable::intern(std::string_view name) {
 }
 
 TokenId TokenTable::find(std::string_view name) const {
-    const auto it = index_.find(to_upper(name));
+    const auto it = index_.find(ascii_upper(name));
     return it == index_.end() ? kNoToken : it->second;
 }
 
 TokenId registry_token(std::string_view name) {
     for (uint32_t i = 0; i < kRegistrySize; ++i)
-        if (iequals(kRegistry[i], name)) return i;
+        if (ascii_iequals(kRegistry[i], name)) return i;
     return kNoToken;
 }
 
@@ -569,8 +549,8 @@ bool precedence_sensitive(std::string_view text) {
 uint32_t EquationSet::add(std::string_view name, std::string_view text, LoadReport* report) {
     Equation e;
     e.name = std::string(name);
-    e.text = std::string(trim(text));
-    std::string key = to_upper(name);
+    e.text = std::string(ascii_trim(text));
+    std::string key = ascii_upper(name);
     if (index_.count(key)) {
         if (report) {
             ++report->duplicates;
@@ -634,7 +614,7 @@ void EquationSet::link(LoadReport* report) {
 }
 
 uint32_t EquationSet::find(std::string_view name) const {
-    const auto it = index_.find(to_upper(name));
+    const auto it = index_.find(ascii_upper(name));
     return it == index_.end() ? kUnresolved : it->second;
 }
 

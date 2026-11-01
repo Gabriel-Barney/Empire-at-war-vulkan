@@ -106,7 +106,6 @@ public:
     explicit AnimWorld(AnimTunables tunables = {}) : tunables_(tunables) {}
 
     const AnimTunables& tunables() const { return tunables_; }
-    void set_tunables(const AnimTunables& t) { tunables_ = t; }
 
     // ---- membership ----
     // Model created (§A.7 first row). `model` must outlive the world (or the row). `rng`: synced for
@@ -201,7 +200,7 @@ public:
     // field come back as saved: nothing is re-drawn). False and unchanged on bad data; reads its own fields only
     // (the owner checks done()).
     // N1 stage 2: the host does NOT re-create the saved rows after read (SimAnimation restores its max_seen so
-    // sync() skips them) and keeps calling set_tunables() as for a new game.
+    // sync() skips them).
     void write(ByteWriter& w) const;
     bool read(ByteReader& r, const std::function<const AnimModel*(ObjectId id)>& model_of);
 

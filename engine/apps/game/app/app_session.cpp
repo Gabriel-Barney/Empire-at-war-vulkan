@@ -237,8 +237,7 @@ void App::lua_presentation() {
         lua_seq_ = e.seq + 1;
         if (e.op == lua::PresentationOp::PlayBinkMovie && !e.args.empty()) {
             const std::string& name = e.args.front().text;
-            std::string up = name;
-            for (char& c : up) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            const std::string up = ascii_upper(name);
             std::string err;
             MovieSlot& slot = up.find("_LOOP") != std::string::npos ? advisor_movie_ : full_movie_;
             if (!slot.open(data_, audio_, name, &slot == &advisor_movie_, &err)) std::fprintf(stderr, "Lua movie %s: %s\n", name.c_str(), err.c_str());

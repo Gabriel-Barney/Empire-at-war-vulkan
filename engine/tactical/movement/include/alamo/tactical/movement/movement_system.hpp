@@ -276,7 +276,6 @@ public:
     bool fighter_dead_stop(ObjectId id);
     std::span<const FighterEvent> fighter_events() const { return fevents_; }  // this tick
     // Save / load access (the grids' membership and the per-unit / per-squadron fighter state are sim state).
-    void build_fighter_grids();  // (re)build from the playable box; membership is cleared
     const FighterCellGrids& fighter_grids() const { return fgrids_; }
     FighterCellGrids& fighter_grids() { return fgrids_; }
     const FighterState* fighter_state(ObjectId id) const;
@@ -415,7 +414,6 @@ private:
     bool fpath_open(Unit& u);  // F (the container = the leader, else own) has a current path that is not complete
     void freset_path(Unit& u);
     void fleave(FighterCellGrid& g, Unit& u, bool dogfight);
-    bool fjoin(FighterCellGrid& g, Unit& u, FighterCell c, bool dogfight);
     void tick_fighters(uint32_t frame);
     void fighter_squad_estimates();
     void fighter_step(Unit& u, uint32_t frame);

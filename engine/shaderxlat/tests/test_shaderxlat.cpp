@@ -25,8 +25,6 @@
 
 namespace alamo::shaderxlat::test {
 
-int g_fail = 0;
-
 namespace {
 
 bool g_write_golden = false;

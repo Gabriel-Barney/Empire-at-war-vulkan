@@ -1,27 +1,14 @@
 #include "alamo/render/png.hpp"
 
 #include <algorithm>
-#include <array>
 #include <fstream>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/hash.hpp"
 
 namespace alamo::render {
 
 namespace {
-const std::array<uint32_t, 256>& crc_table() {
-    static const std::array<uint32_t, 256> t = [] {
-        std::array<uint32_t, 256> r{};
-        for (uint32_t n = 0; n < 256; ++n) {
-            uint32_t c = n;
-            for (int k = 0; k < 8; ++k) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-            r[n] = c;
-        }
-        return r;
-    }();
-    return t;
-}
-
 void put_be32(std::vector<uint8_t>& out, uint32_t v) {
     out.push_back(static_cast<uint8_t>(v >> 24));
     out.push_back(static_cast<uint8_t>(v >> 16));
@@ -38,12 +25,8 @@ void put_chunk(std::vector<uint8_t>& out, const char type[4], std::span<const ui
 }
 }  // namespace
 
-uint32_t crc32(std::span<const uint8_t> bytes, uint32_t crc) {
-    const auto& t = crc_table();
-    uint32_t c = crc ^ 0xFFFFFFFFu;
-    for (uint8_t b : bytes) c = t[(c ^ b) & 0xFFu] ^ (c >> 8);
-    return c ^ 0xFFFFFFFFu;
-}
+// Standard CRC-32 (IEEE): the same function as alamo::crc32, which also chains through its seed.
+uint32_t crc32(std::span<const uint8_t> bytes, uint32_t crc) { return alamo::crc32(bytes.data(), bytes.size(), crc); }
 
 uint32_t adler32(std::span<const uint8_t> bytes, uint32_t adler) {
     uint32_t a = adler & 0xFFFFu, b = adler >> 16;

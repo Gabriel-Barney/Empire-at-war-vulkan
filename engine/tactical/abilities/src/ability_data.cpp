@@ -421,13 +421,6 @@ std::vector<uint32_t> parse_special_abilities(const data::XmlNode& type_element,
     return out;
 }
 
-const UnitAbilityRecord* find_record(const AbilityObjectDesc& d, uint8_t type) {
-    const UnitAbilityRecord* found = nullptr;
-    for (const UnitAbilityRecord& r : d.unit_abilities)
-        if (r.type == type) found = &r;  // later entries replace earlier ones
-    return found;
-}
-
 void link_combat_abilities(const AbilityObjectDesc& d, combat::CombatData& cd, combat::UnitDesc& ud) {
     ud.abilities = {-1, -1};
     for (size_t s = 0; s < 2 && s < d.unit_abilities.size(); ++s) {

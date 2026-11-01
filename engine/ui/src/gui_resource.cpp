@@ -6,33 +6,16 @@
 #include <iterator>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/text.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 
 namespace alamo::ui {
 
 namespace {
 
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return o;
-}
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
-    return s;
-}
-
 bool parse_int(std::string_view s, int32_t& out) {
-    s = trim(s);
+    s = data::trim(s);
     if (s.empty()) return false;
     bool neg = false;
     if (s.front() == '-' || s.front() == '+') {
@@ -161,7 +144,7 @@ public:
     }
     bool at_end() const { return pos_ >= t_.size(); }
     void next() { ++pos_; }
-    bool word_is(size_t k, std::string_view w) const { return peek(k).kind == Token::Kind::Word && iequal(peek(k).text, w); }
+    bool word_is(size_t k, std::string_view w) const { return peek(k).kind == Token::Kind::Word && ascii_iequals(peek(k).text, w); }
 
     Arg arg() {
         Arg a;
@@ -169,7 +152,7 @@ public:
         while (!at_end()) {
             const Token& t = peek();
             if (want_term) {
-                if (t.kind == Token::Kind::Word && iequal(t.text, "NOT") && peek(1).kind == Token::Kind::Word) {
+                if (t.kind == Token::Kind::Word && ascii_iequals(t.text, "NOT") && peek(1).kind == Token::Kind::Word) {
                     a.terms.push_back("!" + peek(1).text);
                     pos_ += 2;
                 } else if (t.kind == Token::Kind::Word || t.kind == Token::Kind::String) {
@@ -226,16 +209,16 @@ int32_t arg_int(const Arg& a) {
 }
 
 RcControlKind control_kind(std::string_view kw) {
-    if (iequal(kw, "PUSHBUTTON")) return RcControlKind::PushButton;
-    if (iequal(kw, "DEFPUSHBUTTON")) return RcControlKind::DefPushButton;
-    if (iequal(kw, "LTEXT")) return RcControlKind::LText;
-    if (iequal(kw, "RTEXT")) return RcControlKind::RText;
-    if (iequal(kw, "CTEXT")) return RcControlKind::CText;
-    if (iequal(kw, "EDITTEXT")) return RcControlKind::EditText;
-    if (iequal(kw, "COMBOBOX")) return RcControlKind::ComboBox;
-    if (iequal(kw, "LISTBOX")) return RcControlKind::ListBox;
-    if (iequal(kw, "GROUPBOX")) return RcControlKind::GroupBox;
-    if (iequal(kw, "CONTROL")) return RcControlKind::Control;
+    if (ascii_iequals(kw, "PUSHBUTTON")) return RcControlKind::PushButton;
+    if (ascii_iequals(kw, "DEFPUSHBUTTON")) return RcControlKind::DefPushButton;
+    if (ascii_iequals(kw, "LTEXT")) return RcControlKind::LText;
+    if (ascii_iequals(kw, "RTEXT")) return RcControlKind::RText;
+    if (ascii_iequals(kw, "CTEXT")) return RcControlKind::CText;
+    if (ascii_iequals(kw, "EDITTEXT")) return RcControlKind::EditText;
+    if (ascii_iequals(kw, "COMBOBOX")) return RcControlKind::ComboBox;
+    if (ascii_iequals(kw, "LISTBOX")) return RcControlKind::ListBox;
+    if (ascii_iequals(kw, "GROUPBOX")) return RcControlKind::GroupBox;
+    if (ascii_iequals(kw, "CONTROL")) return RcControlKind::Control;
     return RcControlKind::Other;
 }
 
@@ -244,7 +227,7 @@ bool is_control_keyword(std::string_view kw) {
                                                   "AUTO3STATE",   "ICON",            "SCROLLBAR", "PUSHBOX"};
     if (control_kind(kw) != RcControlKind::Other) return true;
     for (std::string_view k : kOther)
-        if (iequal(kw, k)) return true;
+        if (ascii_iequals(kw, k)) return true;
     return false;
 }
 
@@ -261,16 +244,16 @@ size_t ResourceIds::parse(std::string_view text) {
     while (i < text.size()) {
         size_t e = text.find('\n', i);
         if (e == std::string_view::npos) e = text.size();
-        std::string_view line = trim(text.substr(i, e - i));
+        std::string_view line = data::trim(text.substr(i, e - i));
         i = e + 1;
         if (line.substr(0, 7) != "#define") continue;
-        line = trim(line.substr(7));
+        line = data::trim(line.substr(7));
         const size_t sp = line.find_first_of(" \t");
         if (sp == std::string_view::npos) continue;
         const std::string_view name = line.substr(0, sp);
-        std::string_view value = trim(line.substr(sp));
+        std::string_view value = data::trim(line.substr(sp));
         const size_t cm = value.find("//");
-        if (cm != std::string_view::npos) value = trim(value.substr(0, cm));
+        if (cm != std::string_view::npos) value = data::trim(value.substr(0, cm));
         int32_t v = 0;
         if (!parse_int(value, v)) continue;
         by_name_[std::string(name)] = v;
@@ -314,19 +297,19 @@ const char* gadget_type_name(GuiGadgetType t) {
 
 bool RcControl::has_style(std::string_view s) const {
     for (const std::string& t : styles)
-        if (iequal(t, s)) return true;
+        if (ascii_iequals(t, s)) return true;
     return false;
 }
 
 bool RcDialog::has_style(std::string_view s) const {
     for (const std::string& t : styles)
-        if (iequal(t, s)) return true;
+        if (ascii_iequals(t, s)) return true;
     return false;
 }
 
 int32_t RcDialog::find(std::string_view id) const {
     for (size_t i = 0; i < controls.size(); ++i)
-        if (iequal(controls[i].id, id)) return static_cast<int32_t>(i);
+        if (ascii_iequals(controls[i].id, id)) return static_cast<int32_t>(i);
     return -1;
 }
 
@@ -344,13 +327,13 @@ GuiGadgetType gadget_type_of(const RcControl& c) {
         default: break;
     }
     const std::string& k = c.keyword;
-    if (iequal(k, "AUTOCHECKBOX") || iequal(k, "CHECKBOX") || iequal(k, "STATE3") || iequal(k, "AUTO3STATE"))
+    if (ascii_iequals(k, "AUTOCHECKBOX") || ascii_iequals(k, "CHECKBOX") || ascii_iequals(k, "STATE3") || ascii_iequals(k, "AUTO3STATE"))
         return GuiGadgetType::CheckBox;
-    if (iequal(k, "AUTORADIOBUTTON") || iequal(k, "RADIOBUTTON")) return GuiGadgetType::RadioButton;
-    if (iequal(k, "ICON")) return GuiGadgetType::CustomImage;
-    if (iequal(k, "SCROLLBAR")) return GuiGadgetType::VScrollbar;
+    if (ascii_iequals(k, "AUTORADIOBUTTON") || ascii_iequals(k, "RADIOBUTTON")) return GuiGadgetType::RadioButton;
+    if (ascii_iequals(k, "ICON")) return GuiGadgetType::CustomImage;
+    if (ascii_iequals(k, "SCROLLBAR")) return GuiGadgetType::VScrollbar;
     const std::string& cls = c.class_name;
-    if (iequal(cls, "Button")) {
+    if (ascii_iequals(cls, "Button")) {
         if (c.has_style("BS_AUTOCHECKBOX") || c.has_style("BS_CHECKBOX") || c.has_style("BS_3STATE") ||
             c.has_style("BS_AUTO3STATE"))
             return GuiGadgetType::CheckBox;
@@ -358,16 +341,16 @@ GuiGadgetType gadget_type_of(const RcControl& c) {
         if (c.has_style("BS_GROUPBOX")) return GuiGadgetType::Frame;
         return GuiGadgetType::PushButton;
     }
-    if (iequal(cls, "msctls_trackbar32")) return GuiGadgetType::TrackbarSlider;
-    if (iequal(cls, "msctls_progress32")) return GuiGadgetType::ProgressBar;
-    if (iequal(cls, "PETROGLYPH_DIALOG_IMAGE")) return GuiGadgetType::CustomImage;
-    if (iequal(cls, "IMEEditBox")) return GuiGadgetType::IMEEditBox;
-    if (iequal(cls, "IMELocaleIndicator")) return GuiGadgetType::IMELocaleIndicator;
-    if (iequal(cls, "Static")) return GuiGadgetType::Text;
-    if (iequal(cls, "Edit")) return GuiGadgetType::EditBox;
-    if (iequal(cls, "ListBox")) return GuiGadgetType::ListBox;
-    if (iequal(cls, "ComboBox")) return GuiGadgetType::ComboBox;
-    if (iequal(cls, "ScrollBar")) return GuiGadgetType::VScrollbar;
+    if (ascii_iequals(cls, "msctls_trackbar32")) return GuiGadgetType::TrackbarSlider;
+    if (ascii_iequals(cls, "msctls_progress32")) return GuiGadgetType::ProgressBar;
+    if (ascii_iequals(cls, "PETROGLYPH_DIALOG_IMAGE")) return GuiGadgetType::CustomImage;
+    if (ascii_iequals(cls, "IMEEditBox")) return GuiGadgetType::IMEEditBox;
+    if (ascii_iequals(cls, "IMELocaleIndicator")) return GuiGadgetType::IMELocaleIndicator;
+    if (ascii_iequals(cls, "Static")) return GuiGadgetType::Text;
+    if (ascii_iequals(cls, "Edit")) return GuiGadgetType::EditBox;
+    if (ascii_iequals(cls, "ListBox")) return GuiGadgetType::ListBox;
+    if (ascii_iequals(cls, "ComboBox")) return GuiGadgetType::ComboBox;
+    if (ascii_iequals(cls, "ScrollBar")) return GuiGadgetType::VScrollbar;
     return GuiGadgetType::Unknown;
 }
 
@@ -448,7 +431,7 @@ bool DialogScript::parse(std::string_view text, std::string* error) {
                     continue;
                 }
                 RcControl c;
-                c.keyword = upper(kw.text);
+                c.keyword = ascii_upper(kw.text);
                 c.kind = control_kind(kw.text);
                 c.line = kw.line;
                 p.next();
@@ -456,7 +439,7 @@ bool DialogScript::parse(std::string_view text, std::string* error) {
                 auto num = [&](size_t i) { return i < a.size() ? arg_int(a[i]) : 0; };
                 size_t k = 0;
                 const bool no_text = c.kind == RcControlKind::EditText || c.kind == RcControlKind::ComboBox ||
-                                     c.kind == RcControlKind::ListBox || iequal(c.keyword, "SCROLLBAR");
+                                     c.kind == RcControlKind::ListBox || ascii_iequals(c.keyword, "SCROLLBAR");
                 if (!no_text && k < a.size()) c.caption = a[k++].first();
                 if (k < a.size()) c.id = a[k++].first();
                 if (c.kind == RcControlKind::Control) {
@@ -474,7 +457,7 @@ bool DialogScript::parse(std::string_view text, std::string* error) {
                 d.controls.push_back(std::move(c));
             }
             p.next();  // END
-            index_.emplace(upper(d.name), static_cast<uint32_t>(dialogs_.size()));
+            index_.emplace(ascii_upper(d.name), static_cast<uint32_t>(dialogs_.size()));
             dialogs_.push_back(std::move(d));
             continue;
         }
@@ -488,7 +471,7 @@ bool DialogScript::parse(std::string_view text, std::string* error) {
 }
 
 const RcDialog* DialogScript::find(std::string_view name) const {
-    const auto it = index_.find(upper(name));
+    const auto it = index_.find(ascii_upper(name));
     return it == index_.end() ? nullptr : &dialogs_[it->second];
 }
 
@@ -496,11 +479,11 @@ bool DialogScript::merge(std::string_view text, std::string* error) {
     DialogScript more;
     if (!more.parse(text, error)) return false;
     for (RcDialog& d : more.dialogs_) {
-        const auto it = index_.find(upper(d.name));
+        const auto it = index_.find(ascii_upper(d.name));
         if (it != index_.end()) {
             dialogs_[it->second] = std::move(d);
         } else {
-            index_.emplace(upper(d.name), static_cast<uint32_t>(dialogs_.size()));
+            index_.emplace(ascii_upper(d.name), static_cast<uint32_t>(dialogs_.size()));
             dialogs_.push_back(std::move(d));
         }
     }
@@ -512,12 +495,12 @@ bool DialogScript::extend(std::string_view text, std::string* error) {
     DialogScript more;
     if (!more.parse(text, error)) return false;
     for (RcDialog& d : more.dialogs_) {
-        const auto it = index_.find(upper(d.name));
+        const auto it = index_.find(ascii_upper(d.name));
         if (it != index_.end()) {
             std::vector<RcControl>& c = dialogs_[it->second].controls;
             c.insert(c.end(), std::make_move_iterator(d.controls.begin()), std::make_move_iterator(d.controls.end()));
         } else {
-            index_.emplace(upper(d.name), static_cast<uint32_t>(dialogs_.size()));
+            index_.emplace(ascii_upper(d.name), static_cast<uint32_t>(dialogs_.size()));
             dialogs_.push_back(std::move(d));
         }
     }
@@ -565,8 +548,8 @@ Rgba8 parse_color(std::string_view s, Rgba8 fallback) {
 }
 
 bool yes(std::string_view s) {
-    s = trim(s);
-    return iequal(s, "yes") || iequal(s, "true") || s == "1";
+    s = data::trim(s);
+    return ascii_iequals(s, "yes") || ascii_iequals(s, "true") || s == "1";
 }
 
 bool is_font_entry(const data::XmlNode& n) { return static_cast<bool>(n.child("Name")) || static_cast<bool>(n.child("Size")); }
@@ -602,12 +585,12 @@ bool GuiSkin::parse(const data::XmlNode& root) {
         if (const auto f = tex.attribute("File"); !f.empty()) atlas_file = std::string(f);
         compressed_atlas_file = std::string(tex.attribute("Compressed_File"));
         for (data::XmlNode set = tex.first_child(); set; set = set.next_sibling()) {
-            const std::string name = upper(set.name());
+            const std::string name = ascii_upper(set.name());
             KeyMap& km = name == "DEFAULT" ? default_ : overrides_[name];  // duplicate sets merge, later keys win [port]
             for (data::XmlNode k = set.first_child(); k; k = k.next_sibling()) {
-                std::string v(trim(k.text()));
-                if (iequal(v, "none")) v.clear();
-                km[upper(k.name())] = std::move(v);
+                std::string v(data::trim(k.text()));
+                if (ascii_iequals(v, "none")) v.clear();
+                km[ascii_upper(k.name())] = std::move(v);
             }
         }
     }
@@ -618,12 +601,12 @@ bool GuiSkin::parse(const data::XmlNode& root) {
             if (const data::XmlNode g = def.child("Global_Default")) global_ = read_font(g, global_);
             for (data::XmlNode e = def.first_child(); e; e = e.next_sibling()) {
                 if (!is_font_entry(e)) continue;
-                default_fonts_[upper(e.name())] = read_font(e, global_);
+                default_fonts_[ascii_upper(e.name())] = read_font(e, global_);
                 ++font_entries_;
             }
         }
         for (data::XmlNode e = fonts.first_child(); e; e = e.next_sibling()) {
-            const std::string name = upper(e.name());
+            const std::string name = ascii_upper(e.name());
             if (name == "DEFAULT") continue;
             if (is_font_entry(e)) {
                 control_fonts_[name] = read_font(e, global_);
@@ -632,7 +615,7 @@ bool GuiSkin::parse(const data::XmlNode& root) {
                 auto& m = dialog_fonts_[name];
                 for (data::XmlNode n = e.first_child(); n; n = n.next_sibling()) {
                     if (!is_font_entry(n)) continue;
-                    m[upper(n.name())] = read_font(n, global_);
+                    m[ascii_upper(n.name())] = read_font(n, global_);
                     ++font_entries_;
                 }
             }
@@ -641,17 +624,17 @@ bool GuiSkin::parse(const data::XmlNode& root) {
     if (const data::XmlNode tips = root.child("Tooltips")) {
         for (data::XmlNode e = tips.first_child(); e; e = e.next_sibling()) {
             const auto key = e.child_text("TextID");
-            if (!key.empty()) tooltips_[upper(e.name())] = std::string(key);
+            if (!key.empty()) tooltips_[ascii_upper(e.name())] = std::string(key);
         }
     }
     return static_cast<bool>(tex) || static_cast<bool>(fonts);
 }
 
 std::string_view GuiSkin::texture(std::string_view dialog, std::string_view control, std::string_view key) const {
-    const std::string k = upper(key);
+    const std::string k = ascii_upper(key);
     for (std::string_view owner : {control, dialog}) {
         if (owner.empty()) continue;
-        const auto it = overrides_.find(upper(owner));
+        const auto it = overrides_.find(ascii_upper(owner));
         if (it == overrides_.end()) continue;
         const auto kt = it->second.find(k);
         if (kt != it->second.end()) return kt->second;
@@ -660,11 +643,11 @@ std::string_view GuiSkin::texture(std::string_view dialog, std::string_view cont
     return it == default_.end() ? std::string_view() : std::string_view(it->second);
 }
 
-bool GuiSkin::has_override(std::string_view owner) const { return overrides_.count(upper(owner)) != 0; }
+bool GuiSkin::has_override(std::string_view owner) const { return overrides_.count(ascii_upper(owner)) != 0; }
 
 const GuiFontSpec& GuiSkin::font(std::string_view dialog, std::string_view control, GuiGadgetType type,
                                  TextAlign align) const {
-    const std::string d = upper(dialog), c = upper(control), g(gadget_font_key(type, align));
+    const std::string d = ascii_upper(dialog), c = ascii_upper(control), g(gadget_font_key(type, align));
     const auto dit = dialog_fonts_.find(d);
     if (dit != dialog_fonts_.end() && !c.empty())
         if (const auto it = dit->second.find(c); it != dit->second.end()) return it->second;
@@ -679,7 +662,7 @@ const GuiFontSpec& GuiSkin::font(std::string_view dialog, std::string_view contr
 }
 
 std::string_view GuiSkin::tooltip(std::string_view control) const {
-    const auto it = tooltips_.find(upper(control));
+    const auto it = tooltips_.find(ascii_upper(control));
     return it == tooltips_.end() ? std::string_view() : std::string_view(it->second);
 }
 

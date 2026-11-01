@@ -142,7 +142,6 @@ struct DeviceState {
     uint32_t get(RS s) const { return rs[static_cast<size_t>(s)].value; }
     const StateSlot& slot(RS s) const { return rs[static_cast<size_t>(s)]; }
     uint32_t get(int stg, TSS s) const { return tss[static_cast<size_t>(stg)][static_cast<size_t>(s)].value; }
-    uint32_t get_ss(int sampler, SS s) const { return ss[static_cast<size_t>(sampler)][static_cast<size_t>(s)].value; }
 };
 
 // D3D9 device defaults (IDirect3DDevice9 documented reset values; ZENABLE = TRUE as with an

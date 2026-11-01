@@ -9,20 +9,12 @@
 #include <algorithm>
 #include <cstdlib>
 
+#include "alamo/core/text.hpp"
 #include "alamo/galactic/campaign.hpp"
 
 namespace alamo::galactic {
 
 namespace {
-
-char lower(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
-
-bool ieq(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (lower(a[i]) != lower(b[i])) return false;
-    return true;
-}
 
 struct LevelName {
     const char* name;
@@ -46,7 +38,7 @@ constexpr LevelName kLevelNames[] = {
 
 bool parse_token(std::string_view t, uint32_t* out) {
     for (const LevelName& n : kLevelNames)
-        if (ieq(t, n.name)) {
+        if (ascii_iequals(t, n.name)) {
             *out = n.bits;
             return true;
         }
@@ -55,7 +47,7 @@ bool parse_token(std::string_view t, uint32_t* out) {
     const bool hex = t.size() > 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X');
     uint64_t v = 0;
     for (size_t i = hex ? 2 : 0; i < t.size(); ++i) {
-        const char c = lower(t[i]);
+        const char c = ascii_lower(t[i]);
         uint32_t d = 0;
         if (c >= '0' && c <= '9') d = static_cast<uint32_t>(c - '0');
         else if (hex && c >= 'a' && c <= 'f') d = static_cast<uint32_t>(c - 'a' + 10);
@@ -93,7 +85,7 @@ bool parse_visibility_level(std::string_view text, uint32_t* out) {
 
 uint32_t faction_default_visibility(std::string_view faction_name) {
     // GRC 2.3 baseline: "Rebel" 0x11, "Empire" 0, "Underworld" 0x11, other 0.
-    if (ieq(faction_name, "Rebel") || ieq(faction_name, "Underworld")) return kVisGoodDefault;
+    if (ascii_iequals(faction_name, "Rebel") || ascii_iequals(faction_name, "Underworld")) return kVisGoodDefault;
     return kVisEvilDefault;
 }
 
@@ -254,7 +246,7 @@ bool GalacticSim::story_set_planet_visibility(PlanetIndex planet, std::string_vi
     std::string_view lv = level;
     while (!lv.empty() && (lv.front() == ' ' || lv.front() == '\t')) lv.remove_prefix(1);
     while (!lv.empty() && (lv.back() == ' ' || lv.back() == '\t' || lv.back() == '\r' || lv.back() == '\n')) lv.remove_suffix(1);
-    if (ieq(lv, "none")) return remove_visibility_modifier(planet, player, k);  // 0x3fdbc0
+    if (ascii_iequals(lv, "none")) return remove_visibility_modifier(planet, player, k);  // 0x3fdbc0
     uint32_t mask = 0;
     if (!parse_visibility_level(lv, &mask)) return false;
     return add_visibility_modifier(planet, player, k, mask, seconds, h);  // 0x3feb90

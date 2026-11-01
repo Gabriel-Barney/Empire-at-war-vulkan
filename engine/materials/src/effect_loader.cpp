@@ -9,18 +9,12 @@
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/shaderxlat/bytecode.hpp"
 #include "fx2_reader.hpp"
 
 namespace alamo::materials {
 namespace {
-
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
 
 struct PhaseInfo { RenderPhase p; const char* name; const char* file; };
 constexpr PhaseInfo kPhases[] = {
@@ -50,13 +44,13 @@ uint32_t blob_id(std::span<const uint8_t> b) {
 }
 
 bool contains_ci(std::string_view hay, std::string_view needle) {
-    return upper(hay).find(upper(needle)) != std::string::npos;
+    return ascii_upper(hay).find(ascii_upper(needle)) != std::string::npos;
 }
 
 // Lookup that answers LIGHT_SCALE with a fixed value (fade probing) and nothing else.
 ParamLookup light_scale_lookup(float w) {
     return [w](const fx::Parameter& p, std::span<float> out) {
-        if (upper(p.type.semantic) != "LIGHT_SCALE" || out.size() < 4) return false;
+        if (ascii_upper(p.type.semantic) != "LIGHT_SCALE" || out.size() < 4) return false;
         out[0] = out[1] = out[2] = 1.0f;
         out[3] = w;
         return true;
@@ -73,9 +67,9 @@ int eval_state_int(const fx::Effect& e, const fx::State& s, const ParamLookup& l
 }  // namespace
 
 RenderPhase render_phase_from_name(std::string_view s) {
-    const std::string u = upper(s);
+    const std::string u = ascii_upper(s);
     for (const auto& p : kPhases)
-        if (u == upper(p.name)) return p.p;
+        if (u == ascii_upper(p.name)) return p.p;
     return RenderPhase::None;
 }
 const char* render_phase_name(RenderPhase p) {
@@ -90,13 +84,13 @@ const char* phase_effect_file(RenderPhase p) {
 }
 
 TechniqueLod technique_lod_from_string(std::string_view lod, std::string_view name) {
-    const std::string u = upper(lod);
+    const std::string u = ascii_upper(lod);
     if (u == "DX9") return TechniqueLod::DX9;
     if (u == "DX8ATI") return TechniqueLod::DX8ATI;
     if (u == "DX8") return TechniqueLod::DX8;
     if (u == "FIXEDFUNCTION") return TechniqueLod::FixedFunction;
     if (u == "FF") return TechniqueLod::FF;
-    if (upper(name) == "MAX_VIEWPORT") return TechniqueLod::MaxViewport;
+    if (ascii_upper(name) == "MAX_VIEWPORT") return TechniqueLod::MaxViewport;
     return TechniqueLod::Unknown;
 }
 const char* technique_lod_name(TechniqueLod l) {
@@ -148,7 +142,7 @@ ResolvedPass resolve_pass(const fx::Effect& e, int technique, int pass_index, co
     // RENDER.md 2.1: a pass annotated AlamoCleanup = true is excluded from the draw passes; the
     // annotation, when present, overrides the heuristic.
     for (const auto& a : pass.annotations)
-        if (upper(a.type.name) == "ALAMOCLEANUP" && !a.value.words.empty()) r.restore_only = a.value.words[0] != 0;
+        if (ascii_upper(a.type.name) == "ALAMOCLEANUP" && !a.value.words.empty()) r.restore_only = a.value.words[0] != 0;
     r.fixed_function = !st.has_vertex_shader && !st.has_pixel_shader;
     const bool mixed = st.has_vertex_shader != st.has_pixel_shader;
 
@@ -367,7 +361,7 @@ std::string effect_base_name(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     const size_t dot = n.find_last_of('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    return upper(n);
+    return ascii_upper(n);
 }
 
 EffectRemap normalize_remap(const EffectRemap& in) {
@@ -486,7 +480,7 @@ std::optional<MaterialEffect> EffectLibrary::load_parsed(std::string_view name_o
         if (slash != std::string_view::npos) n = n.substr(slash + 1);
         const size_t dot = n.find_last_of('.');
         if (dot != std::string_view::npos) n = n.substr(0, dot);
-        m.name = upper(n);
+        m.name = ascii_upper(n);
         m.path = std::string(name_or_path);
     }
     m.effect = e;
@@ -694,7 +688,7 @@ MaterialEffect EffectLibrary::load_or_default(std::string_view effect, std::stri
         if (slash != std::string_view::npos) n = n.substr(slash + 1);
         const size_t dot = n.find_last_of('.');
         if (dot != std::string_view::npos) n = n.substr(0, dot);
-        d.name = upper(n);
+        d.name = ascii_upper(n);
         d.path = *find_effect_path(effect);
         d.fallback = EffectFallback::Failed;
     } else {

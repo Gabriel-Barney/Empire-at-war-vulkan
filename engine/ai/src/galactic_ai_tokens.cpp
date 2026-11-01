@@ -394,13 +394,12 @@ std::string GalacticSimTokenResolver::path_key(Root root, std::span<const TokenI
     return k;
 }
 
-bool GalacticSimTokenResolver::implements(Root root, std::span<const TokenId> path, const TokenTable& tokens) const {
+bool GalacticSimTokenResolver::implements(Root, std::span<const TokenId> path, const TokenTable& tokens) const {
     std::string k;
     for (const TokenId id : path) {
         if (!k.empty()) k += '.';
         k += ai_upper_copy(tokens.name(id));
     }
-    (void)root;
     for (const std::string_view p : kKnownPaths)
         if (p == k) return true;
     return false;

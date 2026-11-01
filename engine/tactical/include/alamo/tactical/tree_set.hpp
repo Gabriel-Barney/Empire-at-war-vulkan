@@ -58,7 +58,6 @@ public:
 
     // Original Rebuild_All_Dirty pass; returns the number of trees rebuilt.
     uint32_t maintain(double game_time, const ParallelFor& pf = serial_for);
-    void rebuild_all(const ParallelFor& pf = serial_for);
     // Map load / GOM reinit (Rebuild_With_Threshold on every tree).
     void rebuild_all_with_threshold(float large_threshold, const ParallelFor& pf = serial_for);
 

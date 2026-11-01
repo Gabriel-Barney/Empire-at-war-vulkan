@@ -8,18 +8,13 @@
 
 #include "alamo/assets/model.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/formats/alo.hpp"
 #include "alamo/formats/particle.hpp"
 
 namespace alamo::render::particles {
 
 namespace {
-
-std::string upper(std::string_view s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
-}
 
 Shape to_shape(const particle::SpawnShape& s) {
     Shape o;
@@ -129,7 +124,7 @@ bool SystemDef::has_non_heat() const {
 
 std::string texture_base_name(std::string_view name) {
     const size_t p = name.find_last_of("\\/");
-    return upper(p == std::string_view::npos ? name : name.substr(p + 1));
+    return ascii_upper(p == std::string_view::npos ? name : name.substr(p + 1));
 }
 
 float sample_track(const TrackTable& t, float f) {
@@ -215,7 +210,7 @@ bool load_system(std::span<const uint8_t> bytes, std::string_view name, SystemDe
         }
         const particle::ParticleSystem& ps = f.particles;
         SystemDef s;
-        std::string n = upper(name);
+        std::string n = ascii_upper(name);
         const size_t slash = n.find_last_of("\\/");
         if (slash != std::string::npos) n = n.substr(slash + 1);
         if (n.size() > 4 && n.compare(n.size() - 4, 4, ".ALO") == 0) n.resize(n.size() - 4);
@@ -305,7 +300,7 @@ bool load_system(std::span<const uint8_t> bytes, std::string_view name, SystemDe
 
 ProxyName parse_proxy_name(std::string_view name) {
     ProxyName p;
-    const std::string u = upper(name);
+    const std::string u = ascii_upper(name);
     auto index_after = [&](const char* tag, size_t& at) {
         at = u.find(tag);
         if (at == std::string::npos) return -1;
@@ -327,7 +322,7 @@ ProxyName parse_proxy_name(std::string_view name) {
 }
 
 SystemPtr ParticleLibrary::get(std::string_view name) {
-    std::string key = upper(name);
+    std::string key = ascii_upper(name);
     if (key.size() > 4 && key.compare(key.size() - 4, 4, ".ALO") == 0) key.resize(key.size() - 4);
     {
         std::lock_guard<std::mutex> l(mutex_);
@@ -364,7 +359,7 @@ SystemPtr ParticleLibrary::get(std::string_view name) {
 void ParticleLibrary::add(SystemPtr system) {
     if (!system) return;
     std::lock_guard<std::mutex> l(mutex_);
-    cache_[upper(system->name)] = std::move(system);
+    cache_[ascii_upper(system->name)] = std::move(system);
 }
 
 ParticleLibrary::Stats ParticleLibrary::stats() const {

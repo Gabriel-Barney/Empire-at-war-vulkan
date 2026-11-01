@@ -226,8 +226,6 @@ SpecialAbilityDesc parse_special_ability(const data::XmlNode& e, const AbilityRe
 std::vector<uint32_t> parse_special_abilities(const data::XmlNode& type_element, AbilityData& data, const AbilityResolvers& r,
                                               std::vector<std::string>* diag = nullptr);
 
-// The record of `type` in a type's list: a later entry of the same Type replaces an earlier one (2.3).
-const UnitAbilityRecord* find_record(const AbilityObjectDesc& d, uint8_t type);
 // Fills UnitDesc::abilities (the first two Unit_Abilities_Data entries, Mod_Multiplier system B)
 // by appending their combat descriptors to `cd.abilities`.
 void link_combat_abilities(const AbilityObjectDesc& d, combat::CombatData& cd, combat::UnitDesc& ud);

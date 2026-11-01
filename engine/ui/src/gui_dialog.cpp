@@ -1,21 +1,14 @@
 #include "alamo/ui/gui_dialog.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 
+#include "alamo/core/text.hpp"
 #include "alamo/ui/hud_font.hpp"
 
 namespace alamo::ui {
 
 namespace {
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
 
 bool focusable(const GuiControl& c) {
     return c.def && c.def->tabstop && c.visible && c.enabled;
@@ -312,7 +305,7 @@ void GuiManager::place(GuiDialog& d) const {
 GuiDialog* GuiManager::open(std::string_view name, GuiOpenOptions opt) {
     if (!script_) return nullptr;
     for (size_t i = 0; i < stack_.size(); ++i) {
-        if (iequal(stack_[i]->name(), name)) {
+        if (ascii_iequals(stack_[i]->name(), name)) {
             std::unique_ptr<GuiDialog> d = std::move(stack_[i]);
             stack_.erase(stack_.begin() + static_cast<std::ptrdiff_t>(i));
             d->opt_ = opt;
@@ -352,7 +345,7 @@ GuiDialog* GuiManager::open(std::string_view name, GuiOpenOptions opt) {
 
 void GuiManager::close(std::string_view name) {
     for (size_t i = 0; i < stack_.size(); ++i) {
-        if (!iequal(stack_[i]->name(), name)) continue;
+        if (!ascii_iequals(stack_[i]->name(), name)) continue;
         GuiDialog* p = stack_[i].get();
         if (hover_dialog_ == p) {
             hover_dialog_ = nullptr;
@@ -377,12 +370,12 @@ void GuiManager::close_all() {
 
 GuiDialog* GuiManager::find(std::string_view name) {
     for (auto& d : stack_)
-        if (iequal(d->name(), name)) return d.get();
+        if (ascii_iequals(d->name(), name)) return d.get();
     return nullptr;
 }
 const GuiDialog* GuiManager::find(std::string_view name) const {
     for (const auto& d : stack_)
-        if (iequal(d->name(), name)) return d.get();
+        if (ascii_iequals(d->name(), name)) return d.get();
     return nullptr;
 }
 
@@ -510,7 +503,7 @@ bool GuiManager::set_paragraphs(GuiDialog& d, std::string_view control, const st
     GuiControl* c = d.get(control);
     if (!c) return false;
     if (max_width > 0.0f && c->def && static_cast<float>(c->def->w) > max_width) c->scale.x = max_width / static_cast<float>(c->def->w);
-    if (max_width > 0.0f && c->def && c->def->h > 0 && iequal(control, "IDC_LIST_TACTICAL")) {
+    if (max_width > 0.0f && c->def && c->def->h > 0 && ascii_iequals(control, "IDC_LIST_TACTICAL")) {
         c->offset.y = -kPlanetTacticalListDrop;
         c->scale.y = (static_cast<float>(c->def->h) - kPlanetTacticalListDrop) / static_cast<float>(c->def->h);
     }
@@ -1349,7 +1342,7 @@ void GuiManager::build(HudDrawList& dl, double now) {
             GuiControl& c = d[i];
             if (!c.def) continue;
             bool hot = false;
-            for (const std::string& id : backdrop_hotspots_) hot = hot || iequal(c.def->id, id);
+            for (const std::string& id : backdrop_hotspots_) hot = hot || ascii_iequals(c.def->id, id);
             if (!hot) continue;
             const float base_left = base_x + static_cast<float>(c.def->x);
             c.scale.x = sx;

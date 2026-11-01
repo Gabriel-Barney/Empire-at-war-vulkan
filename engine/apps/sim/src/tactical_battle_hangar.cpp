@@ -26,6 +26,7 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/tactical_battle.hpp"
@@ -41,12 +42,6 @@ namespace th = alamo::tactical::hangar;
 
 namespace {
 Vec3 hg_sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
-std::string_view hg_trim(std::string_view s) {
-    auto ws = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
-    while (!s.empty() && ws(s.front())) s.remove_prefix(1);
-    while (!s.empty() && ws(s.back())) s.remove_suffix(1);
-    return s;
-}
 objects::BehaviorTypeId spawn_squadron_behavior() {
     static const objects::BehaviorTypeId id = objects::behavior_type_id("SPAWN_SQUADRON");
     return id;
@@ -59,17 +54,7 @@ objects::BehaviorTypeId dummy_upgrade_behavior() {
     static const objects::BehaviorTypeId id = objects::behavior_type_id("DUMMY_UPGRADE");
     return id;
 }
-bool hg_same(std::string_view a, std::string_view b) {
-    a = hg_trim(a);
-    b = hg_trim(b);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 32) : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 32) : b[i];
-        if (x != y) return false;
-    }
-    return true;
-}
+bool hg_same(std::string_view a, std::string_view b) { return ascii_iequals(ascii_trim(a), ascii_trim(b)); }
 constexpr const char* kBuildList = "Tactical_Buildable_Objects_Multiplayer";
 }  // namespace
 
@@ -111,7 +96,7 @@ void TacticalBattle::hg_add_types() {
             // Skirmish space: the tactical production lists (every faction row) join the tables.
             if (cfg_.skirmish && space_)
                 for (const std::string_view tok : types.get_list(ti, kBuildList)) {
-                    const objects::TypeIndex x = types.resolve_name(hg_trim(tok));
+                    const objects::TypeIndex x = types.resolve_name(ascii_trim(tok));
                     if (x != objects::kNone) use_spawnable(static_cast<int32_t>(x));
                 }
             if (hg_is_spawner(t))
@@ -124,7 +109,7 @@ void TacticalBattle::hg_add_types() {
                         });
                         for (const th::SpawnEntry& e : list) use_spawnable(e.type);
                     }
-            const std::string_view next = hg_trim(types.get_string(ti, "Next_Level_Base"));
+            const std::string_view next = ascii_trim(types.get_string(ti, "Next_Level_Base"));
             if (!next.empty()) use(types.resolve_name(next));
         }
         if (types_used_.size() == before) break;
@@ -153,7 +138,7 @@ void TacticalBattle::hg_setup(TacticalMode& mode) {
             d.reserve[k] = th::parse_spawn_list(types.get_list(ti, "Reserve_Spawned_Units_Tech_" + std::to_string(k)), resolve);
         }
         // The schema types it as an int; the value as written (default "5.0") is read as a float.
-        const std::string delay(hg_trim(types.get_string(ti, "Spawned_Squadron_Delay_Seconds")));
+        const std::string delay(ascii_trim(types.get_string(ti, "Spawned_Squadron_Delay_Seconds")));
         if (!delay.empty()) d.delay_seconds = std::strtof(delay.c_str(), nullptr);
         d.community_property = types.get_bool(ti, "Is_Community_Property");
         d.station = star_base_behavior() != objects::kNoBehavior &&
@@ -365,7 +350,7 @@ void TacticalBattle::hg_station_upgrade(TacticalMode& mode, const tactical::abil
     objects::ObjectStore& store = mode.primary();
     Unit* s = unit_by_id(q.source);
     if (!s || !s->alive || s->retreated || !store.alive(s->h)) return;
-    const objects::TypeIndex next = types.resolve_name(hg_trim(types.get_string(static_cast<objects::TypeIndex>(s->type), "Next_Level_Base")));
+    const objects::TypeIndex next = types.resolve_name(ascii_trim(types.get_string(static_cast<objects::TypeIndex>(s->type), "Next_Level_Base")));
     if (next == objects::kNone || next >= types.size()) return;  // top level: no upgrade
     const objects::ObjectHandle sh = s->h;
     const int32_t owner = store.owner(sh);
@@ -421,7 +406,7 @@ uint8_t TacticalBattle::hg_build_check(const objects::ObjectStore& st, int32_t p
     const std::string name = type < galaxy_->rules().types.size() ? galaxy_->rules().types[type].name : std::string();
     bool listed = false, in_row = false;
     for (const std::string_view tok : types.get_list(st.type(bh), kBuildList)) {
-        if (types.resolve_name(hg_trim(tok)) == objects::kNone) {
+        if (types.resolve_name(ascii_trim(tok)) == objects::kNone) {
             in_row = hg_same(tok, faction);
             continue;
         }
@@ -430,7 +415,7 @@ uint8_t TacticalBattle::hg_build_check(const objects::ObjectStore& st, int32_t p
     if (!listed) return 1;
     // Tactical_Build_Prerequisites: every listed type owned alive by the player [port: all-of].
     for (const std::string_view tok : types.get_list(type, "Tactical_Build_Prerequisites")) {
-        const objects::TypeIndex pre = types.resolve_name(hg_trim(tok));
+        const objects::TypeIndex pre = types.resolve_name(ascii_trim(tok));
         if (pre == objects::kNone) continue;
         bool have = false;
         for (const objects::ObjectHandle h : st.all_objects())
@@ -467,7 +452,7 @@ std::vector<TacticalBattle::BuildOptionInfo> TacticalBattle::station_build_optio
     const float credits = credits_get_ ? credits_get_(player) : 0.0f;
     bool in_row = false;
     for (const std::string_view tok : types.get_list(st.type(bh), kBuildList)) {
-        const objects::TypeIndex t = types.resolve_name(hg_trim(tok));
+        const objects::TypeIndex t = types.resolve_name(ascii_trim(tok));
         if (t == objects::kNone) {
             in_row = hg_same(tok, faction);
             continue;

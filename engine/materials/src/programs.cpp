@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/materials/constants.hpp"
 
 #define ALAMO_SPV(name, src, ep, stage, defs)
@@ -171,10 +172,7 @@ std::string effect_key(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     size_t dot = n.find_last_of('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    std::string k(n);
-    for (char& c : k)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return k;
+    return ascii_upper(n);
 }
 
 const ProgramInterface* iface_for(ProgramFamily f) {

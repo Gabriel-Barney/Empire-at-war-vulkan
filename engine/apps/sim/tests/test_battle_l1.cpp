@@ -16,8 +16,11 @@
 #include <string>
 #include <vector>
 
+#include "battle_fixture.hpp"
+
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
@@ -32,22 +35,13 @@ using namespace alamo;
 using namespace alamo::sim;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
 static bool g_regen = false;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using alamo::testing::write_file;
+using battle_fixture::Data;
+using battle_fixture::type_of;
 
 const char* kTypes = R"(<L1>
  <Planet Name="S10_A"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain><Planet_Credit_Value>10</Planet_Credit_Value></Planet>
@@ -133,16 +127,6 @@ const char* kFactions = R"(<Factions>
 </Factions>
 )";
 
-struct Data {
-    fs::path root;
-    std::unique_ptr<DirectoryProvider> files;
-    data::GameDatabase db;
-    objects::ObjectTypeDatabase raw;
-    objects::GameObjectTypes types;
-    galactic::GalacticRules rules;
-    galactic::ConflictRules crules;
-    std::unique_ptr<BattleCatalog> catalog;
-};
 
 std::unique_ptr<Data> make_data() {
     auto d = std::make_unique<Data>();
@@ -164,14 +148,7 @@ std::unique_ptr<Data> make_data() {
     write_file(d->root / "Data/Scripts/Library/PGAICommands.lua",
                "function Set_Contrast_Values()\n\tEnemyContrastTypes[1] = \"Frigate\"\n\tFriendlyContrastTypeNames = {\"Frigate\"}\n"
                "\tFriendlyContrastWeights =\t{1.0}\n\tFriendlyContrastTypes[1].Parse(FriendlyContrastTypeNames, FriendlyContrastWeights)\nend\n");
-    d->files = std::make_unique<DirectoryProvider>(path_to_utf8(d->root));
-    std::vector<std::string> diag;
-    CHECK(d->db.load(*d->files, {}, &diag));
-    CHECK(d->raw.load(*d->files));
-    CHECK(d->types.build(d->raw, d->files.get(), &diag));
-    CHECK(galactic::load_galactic_rules(*d->files, d->db, d->types, d->rules, &diag));
-    CHECK(galactic::load_conflict_rules(*d->files, d->db, d->types, d->rules, d->crules, &diag));
-    d->catalog = std::make_unique<BattleCatalog>(d->types, d->files.get(), &d->db.constants(), &diag);
+    battle_fixture::load_data(*d);
     return d;
 }
 
@@ -202,27 +179,9 @@ terrain::MapData space_map() {
     return m;
 }
 
-uint32_t type_of(const Data& d, const char* name) { return static_cast<uint32_t>(d.types.resolve_name(name)); }
-
 galactic::GalacticSetup make_setup(const Data& d) {
     galactic::GalacticSetup s;
-    GalaxyMap& m = s.map;
-    m.campaign_name = "L1";
-    const char* names[] = {"S10_A", "S10_B", "S10_C"};
-    for (uint32_t i = 0; i < 3; ++i) {
-        m.planets.add(names[i]);
-        m.planets.position[i] = {static_cast<float>(i) * 60.0f, 0.0f, 0.0f};
-        m.planets.flags[i] = static_cast<uint32_t>(kPlanetHasPlanetBehavior);
-    }
-    auto route = [&m](const char* n, PlanetIndex a, PlanetIndex b) {
-        const uint32_t r = m.routes.add(n);
-        m.routes.point_a[r] = a;
-        m.routes.point_b[r] = b;
-        m.routes.hs_speed_factor[r] = 5.0f;
-    };
-    route("A_B", 0, 1);
-    route("B_C", 1, 2);
-    s.planet_type = {type_of(d, "S10_A"), type_of(d, "S10_B"), type_of(d, "S10_C")};
+    battle_fixture::triangle_map(s, d, "L1");
     galactic::PlayerSetup e;
     e.faction = d.rules.find_faction("Empire");
     e.human = true;
@@ -815,21 +774,7 @@ void test_pads(const Data& d) {
 }
 // --- end Int-final ---
 
-std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using alamo::testing::env_or_empty;
 
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");

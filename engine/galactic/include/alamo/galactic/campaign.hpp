@@ -633,7 +633,6 @@ public:
     // ---- story / script event stream (S4, galactic_events.hpp) --------------------------------------------
     // Off by default. Events are appended in emission order; the stream is not part of hash_state.
     void set_emit_events(bool on) { emit_events_ = on; }
-    bool emit_events() const { return emit_events_; }
     const std::vector<GalacticEvent>& events() const { return events_; }
     // Moves the pending events to the end of `out` (stream order) and clears the stream.
     void drain_events(std::vector<GalacticEvent>& out);

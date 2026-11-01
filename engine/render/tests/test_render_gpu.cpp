@@ -791,7 +791,7 @@ int run_gpu(const std::string& src_dir) {
                                 static_cast<unsigned long long>(worst), static_cast<unsigned long long>(growth));
                     for (uint64_t k = 0; k < std::min<uint64_t>(worst, 8); ++k) std::printf("%s%zu B", k ? ", " : " (", g_alloc_sizes[k]);
                     std::printf("%s\n", worst ? ")" : "");
-                    if (cfg == 0 || !kStdDequeNodeChurn) CHECK(worst == 0);
+                    CHECK(worst == 0);
                     CHECK(growth == 0);
                 }
             }
@@ -1234,7 +1234,7 @@ int run_gpu(const std::string& src_dir) {
                                     static_cast<unsigned long long>(worst));
                         for (uint64_t k = 0; k < std::min<uint64_t>(worst, 8); ++k) std::printf("%s%zu B", k ? ", " : " (", g_alloc_sizes[k]);
                         std::printf("%s\n", worst ? ")" : "");
-                        if (acfg == 0 || !kStdDequeNodeChurn) CHECK(worst == 0);
+                        CHECK(worst == 0);
                     }
                     size_t checked = 0, mismatched = 0;
                     for (const render::Instance& in : inst)

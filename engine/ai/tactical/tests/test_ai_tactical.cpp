@@ -33,6 +33,7 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 
 #if defined(ALAMO_AI_TACTICAL_HAVE_DATA) && defined(ALAMO_AI_TACTICAL_HAVE_TERRAIN)
 #include "alamo/data/game_database.hpp"
@@ -44,15 +45,6 @@
 using namespace alamo;
 using namespace alamo::ai::tactical;
 namespace econ = ::alamo::galactic::econ;
-
-static int g_fail = 0;
-#define CHECK(c)                                                         \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
-            ++g_fail;                                                    \
-        }                                                                \
-    } while (0)
 
 static ParallelFor make_thread_pf(unsigned threads) {
     return [threads](uint32_t count, uint32_t grain, const RangeFn& fn) {
@@ -249,7 +241,7 @@ static void test_reachability() {
     const ZoneThreatFn threat = [](uint32_t z) { return z == 1 ? 500.0 : (z == 2 ? 2000.0 : 0.0); };
     // A1_READINGS §3: S = wrapping sum of the hop weights; accept iff (S >> 16) * 100 <= tolerance; cost = (S & 0xFFFF) / 10.
     // Node costs 0: 0 -> 2 = 2 hops of 0x10000 + 10 -> threat 200, cost 2.0; 0 -> 1 -> threat 100, cost 1.0.
-    CHECK(zone_reachability_cost(g, 0, 2, Reachability::AnyThreat, c, threat) == 2.0);
+    CHECK(zone_reachability_cost(g, 0, 2, Reachability::AnyThreat, c) == 2.0);
     CHECK(zone_reachability_cost(g, 0, 2, Reachability::HighThreat, c) == 2.0);
     CHECK(zone_reachability_cost(g, 0, 2, Reachability::LowThreat, c) == 2.0);
     CHECK(zone_reachability_cost(g, 0, 2, Reachability::NoThreat, c) == kUnreachable);
@@ -668,8 +660,7 @@ static uint64_t scenario_crc(const ParallelFor& pf) {
         f.applies = [](const TacticalTarget& t) { return !t.is_unit(); };
         const int32_t src = static_cast<int32_t>(frame % 40u);
         f.reachability = [&](const TacticalTarget& t) {
-            return zone_reachability_cost(g, src, t.zone, Reachability::MediumThreat, c,
-                                          [salt](uint32_t z) { return static_cast<double>((z * 977u + salt) % 4000u); });
+            return zone_reachability_cost(g, src, t.zone, Reachability::MediumThreat, c);
         };
         collect_candidates(land.targets(), f, cand);
         picks.push_back(select_target(cand, pick_weight(0.75f), rng).target);

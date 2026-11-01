@@ -142,10 +142,6 @@ public:
     void set_berserker(const GameMode& mode, ObjectId id, bool active);
     // Per-object frozen flag (object +0x3a7 [L]): the row's advance is skipped.
     void set_frozen(const GameMode& mode, ObjectId id, bool frozen);
-    // Default-idle hook (garrison container mapping, 0x395920): returns the idle type for a garrisoned object or
-    // anim::kNoAnimType. Unset = no garrison mapping. The S4 garrison system plugs in here.
-    using IdleTypeHook = std::function<int32_t(const GameMode&, ObjectId)>;
-    void set_idle_type_hook(IdleTypeHook hook) { idle_hook_ = std::move(hook); }
 
     // Muzzle flash (§A.7 attack row: muzzle sub-objects shown, re-hidden after 4 ticks [M]). hardpoint = index into
     // the unit's HardPoints list of the shooting hardpoint (-1 = the unit's own weapon); bone = that fire bone
@@ -175,9 +171,6 @@ public:
     const anim::AnimEventMap& event_map();
     void set_event_map(anim::AnimEventMap map);
 
-    // Secondary (local, cosmetic) store animation: free RNG, never hashed (§A.8).
-    const anim::AnimWorld* find_secondary_world(const GameMode& mode) const;
-
     // One service (what the hook runs): prune, sync the top mode, behaviours, advance it.
     void service(SimHost& host);
     void hash(const SimHost& host, StateHasher& h) const;
@@ -205,7 +198,7 @@ private:
         float frame;
         bool loop;
     };
-    anim::IdleParams idle_params(const GameMode& mode, ObjectId id, objects::TypeIndex t, const anim::AnimModel* m);
+    anim::IdleParams idle_params(const GameMode& mode, objects::TypeIndex t, const anim::AnimModel* m);
     void sync_secondary(ModeWorld& mw, const GameMode& mode, SimRng& rng, uint64_t frame);
     void collect_events(ModeWorld& mw, const GameMode& mode);
     bool model_has_events(const anim::AnimModel* m);
@@ -229,7 +222,6 @@ private:
     std::map<uint64_t, TypeEntry> types_cache_;                       // (mode << 32 | type) (lookup)
     std::vector<ObjectId> scratch_ids_, scratch_remove_, scratch_destroy_;
     SimAnimStats stats_;
-    IdleTypeHook idle_hook_;
     anim::AnimEventMap events_map_;
     bool events_loaded_ = false;
     std::map<const anim::AnimModel*, bool> model_events_;                                // lookup only

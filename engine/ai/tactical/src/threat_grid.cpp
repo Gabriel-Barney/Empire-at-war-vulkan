@@ -6,6 +6,7 @@
 
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/text.hpp"
 
 namespace alamo::ai::tactical {
 
@@ -445,7 +446,7 @@ bool TacticalPerceptionGrid::owner_passes(const PerceptionWorld& w, const Percep
     if (!w.is_player(o.owner)) return false;
     const PerceptionPlayerInfo& owner = w.players[static_cast<size_t>(o.owner)];
     if (owner.neutral_faction) return false;
-    if (!q.faction.empty() && !iequal(owner.faction, q.faction)) return false;
+    if (!q.faction.empty() && !ascii_iequals(owner.faction, q.faction)) return false;
     const bool allied = w.rel(o.owner, q.self) == 0;
     return q.ally ? allied : !allied;
 }
@@ -526,7 +527,7 @@ uint64_t TacticalPerceptionGrid::cells_bitfield(const PerceptionWorld& w, std::s
         const PerceptionType* t = w.type_of(*o);
         for (size_t i = 0; i < matchers.size() && i < 64; ++i) {
             const BitfieldMatcher& m = matchers[i];
-            const bool hit = m.type_name.empty() ? (t && (t->category & m.category) != 0) : (t && iequal(t->name, m.type_name));
+            const bool hit = m.type_name.empty() ? (t && (t->category & m.category) != 0) : (t && ascii_iequals(t->name, m.type_name));
             if (hit) bits |= uint64_t{1} << i;
         }
     };

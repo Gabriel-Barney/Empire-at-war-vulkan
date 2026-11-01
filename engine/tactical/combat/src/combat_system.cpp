@@ -2786,15 +2786,6 @@ float CombatSystem::energy(ObjectId id) const {
     const Unit* u = unit(id);
     return u ? u->energy : 0.0f;
 }
-float CombatSystem::max_energy(ObjectId id) {
-    Unit* u = unit(id);
-    if (!u) return 0.0f;
-    ensure_cache(*u);
-    return unit_max_energy(*u);
-}
-void CombatSystem::set_energy(ObjectId id, float e) {
-    if (Unit* u = unit(id)) u->energy = e;
-}
 bool CombatSystem::burning(ObjectId id) const {
     const Unit* u = unit(id);
     return u && u->burning != 0;

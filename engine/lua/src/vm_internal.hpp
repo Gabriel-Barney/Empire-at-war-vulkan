@@ -28,6 +28,9 @@
 
 namespace alamo::lua {
 
+class ObjectBridge;
+ObjectBridge* attached_object_bridge(LuaVm& vm);  // object_bridge.hpp: nullptr when none is attached
+
 namespace detail {
 
 inline constexpr uint32_t kNoBinding = 0xFFFFFFFFu;
@@ -195,6 +198,35 @@ bool object_alive(const LuaVm::Impl& vm, const Ud& ud);
 objects::ObjectHandle object_handle(const Ud& ud);
 // Saturating double -> int32 (truncation toward zero; NaN -> 0).
 int32_t to_int(double d);
+
+// Small helpers shared by the bind_*.cpp families. Every binding takes a Call, which lives in this namespace, so
+// the families call them unqualified (argument-dependent lookup).
+// Push one result and return the value count, like an ImplFn.
+inline int push_nil(Call& c) {
+    lua_pushnil(c.L);
+    return 1;
+}
+inline int push_bool(Call& c, bool b) {
+    lua_pushboolean(c.L, b ? 1 : 0);
+    return 1;
+}
+inline int push_num(Call& c, double d) {
+    lua_pushnumber(c.L, d);
+    return 1;
+}
+inline int push_str(Call& c, std::string_view s) {
+    lua_pushlstring(c.L, s.data(), s.size());
+    return 1;
+}
+// Script argument i is a boolean / a table; to_bool = its Lua truth value (nil and false are false).
+inline bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TBOOLEAN; }
+inline bool is_table(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TTABLE; }
+inline bool to_bool(const Call& c, int i) { return lua_toboolean(c.L, c.idx(i)) != 0; }
+// The host the VM runs against: its object bridge (nullptr when none is attached), object store and type table.
+inline ObjectBridge* bridge(Call& c) { return c.vm->owner ? attached_object_bridge(*c.vm->owner) : nullptr; }
+inline objects::ObjectStore* store(Call& c) { return c.vm->host.store; }
+inline const objects::GameObjectTypes* types(Call& c) { return c.vm->host.types; }
+inline objects::ObjectHandle self_object(Call& c) { return object_handle(*c.self); }
 
 // GetEvent queue (one per VM, FIFO, kept in the Lua registry): appends the value at `fn_index` (a
 // function, or a global function NAME resolved when GetEvent pops it) with the table at

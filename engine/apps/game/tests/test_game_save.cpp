@@ -25,21 +25,13 @@
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/game/game_data.hpp"
 #include "alamo/game/game_session.hpp"
 #include "alamo/game/save_games.hpp"
 
 using namespace alamo;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 

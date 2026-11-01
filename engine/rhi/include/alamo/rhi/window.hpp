@@ -29,7 +29,6 @@ public:
     // Processes pending messages without blocking. Returns false once the window was closed.
     bool pump();
     bool is_open() const { return hwnd_ != nullptr && !close_requested_; }
-    void request_close() { close_requested_ = true; }
 
     uint32_t width() const { return width_; }   // client size
     uint32_t height() const { return height_; }
@@ -67,11 +66,6 @@ public:
         wheel_ = 0;
         return w;
     }
-    float take_wheel_horizontal() {
-        const float w = static_cast<float>(hwheel_) / 120.0f;
-        hwheel_ = 0;
-        return w;
-    }
     // Text input (integration fixes, alamo_game): the characters typed since the last call, in order, from
     // WM_CHAR / WM_UNICHAR (layout, dead keys, IME and Alt codes applied by Windows; UTF-16 surrogate pairs joined;
     // lone surrogates dropped). Control characters are included (0x08 backspace, 0x09 tab, 0x0D enter, 0x1B
@@ -80,7 +74,6 @@ public:
     static constexpr size_t kMaxTextPerFrame = 256;
     std::u32string take_text();
     std::string take_text_utf8();  // the same, UTF-8 encoded
-    void clear_text() { text_.clear(); }
     void set_title(const char* utf8);
 
     void* native_handle() const { return hwnd_; }      // HWND
@@ -99,7 +92,7 @@ private:
     bool pressed_[256] = {};
     void set_button(MouseButton b, bool down);
     int32_t mouse_x_ = 0, mouse_y_ = 0;
-    int32_t wheel_ = 0, hwheel_ = 0;  // WHEEL_DELTA units
+    int32_t wheel_ = 0;  // WHEEL_DELTA units
     bool buttons_[static_cast<size_t>(MouseButton::Count)] = {};
     bool pressed_buttons_[static_cast<size_t>(MouseButton::Count)] = {};
     bool released_buttons_[static_cast<size_t>(MouseButton::Count)] = {};

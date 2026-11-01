@@ -22,7 +22,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
-#include "taa.hpp"  // [port] TAA
+#include "taa_pass.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
 namespace alamo::render {

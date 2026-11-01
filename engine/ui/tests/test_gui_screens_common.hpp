@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/camera.hpp"
 #include "alamo/ui/galactic_hud.hpp"
@@ -44,15 +45,6 @@
 
 using namespace alamo;
 using namespace alamo::ui;
-
-inline int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace test_gui_screens_t {
 

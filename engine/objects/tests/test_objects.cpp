@@ -20,6 +20,8 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/test_support.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/coverage.hpp"
@@ -39,15 +41,7 @@
 using namespace alamo;
 using namespace alamo::objects;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using alamo::testing::write_file;
 
 static void test_schema() {
     const auto rows = field_schema();
@@ -116,11 +110,6 @@ static void test_classify() {
           shape_of("1.5") == ValueShape::Float && shape_of("1, 2, 3") == ValueShape::NumberList &&
           shape_of("A_B") == ValueShape::Name && shape_of("A, B") == ValueShape::NameList &&
           shape_of("") == ValueShape::Empty && shape_of("a = b") == ValueShape::Text);
-}
-
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
 }
 
 // Every element below a file root, once per walk: must equal types + fields (nothing dropped).
@@ -1358,19 +1347,8 @@ static void test_store_save() {
 // Real data
 
 static std::string env_or(const char* name, const char* fallback) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out = fallback;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        if (*v) out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return (v && *v) ? std::string(v) : std::string(fallback);
-#endif
+    std::string v = alamo::testing::env_or_empty(name);
+    return v.empty() ? std::string(fallback) : v;
 }
 
 static std::unique_ptr<FileProvider> open_source(const std::string& root, bool foc, std::string& kind) {
@@ -1563,8 +1541,7 @@ static void integration(const std::string& root, const char* label, bool foc) {
     const std::string text = format_coverage(r, db, label);
     CHECK(text == format_coverage(build_coverage(again), again, label));
 
-    std::string name = label;
-    for (char& c : name) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+    const std::string name = ascii_lower(label);
     // Report under the build tree (ALAMO_OBJECTS_LOG_DIR = <build>/logs). Written to a temporary file and
     // renamed into place; any failure is reported, never fatal (the report is informational).
     const fs::path out = path_from_utf8(ALAMO_OBJECTS_LOG_DIR) / ("objects_coverage_" + name + ".txt");

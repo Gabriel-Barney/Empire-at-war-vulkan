@@ -124,7 +124,6 @@ public:
     // Secondary occupation of every cell whose centre lies within `radius` of `center` [inferred: base shields].
     uint32_t stamp_secondary_circle(ObjectId id, V2 center, float radius, uint32_t bits);
     bool unstamp_secondary(ObjectId id);
-    bool secondary_stamped(ObjectId id) const { return secondary_.find(id) != secondary_.end(); }
 
     // Incremented whenever any effective value changes ("regions dirty", §1.1 step 5).
     uint64_t version() const { return version_; }

@@ -14,19 +14,11 @@
 #include <vector>
 
 #include "alamo/core/log.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/render/jam_fx.hpp"
 #include "alamo/render/sim_snapshot.hpp"
 
 using namespace alamo;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 static render::SnapshotObject object(objects::ObjectId id, int32_t owner, float x, float y, float z, uint8_t flags = 0, float fade = 1.0f) {
     render::SnapshotObject o;

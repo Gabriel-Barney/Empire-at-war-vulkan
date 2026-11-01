@@ -22,6 +22,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/enums.hpp"
@@ -32,28 +33,7 @@
 #include "alamo/vfs/vfs.hpp"
 #endif
 
-// ---- allocation counter (counts only while enabled) -------------------------------------------
-namespace {
-std::atomic<uint64_t> g_allocs{0};
-std::atomic<bool> g_count{false};
-}  // namespace
-// GCC flags free() inside a replaced operator delete (-Wmismatched-new-delete) although the replaced
-// operator new allocates with malloc(); the pairing is correct by construction (as in test_render).
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
-#endif
-void* operator new(std::size_t n) {
-    if (g_count.load(std::memory_order_relaxed)) g_allocs.fetch_add(1, std::memory_order_relaxed);
-    void* p = std::malloc(n ? n : 1);
-    if (!p) throw std::bad_alloc();
-    return p;
-}
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
+#include "alloc_counter.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical;
@@ -63,14 +43,6 @@ namespace {
 
 using alamo::tactical::Vec3;  // hides alamo::Vec3 (galaxy.hpp) inside this namespace
 
-int g_fail = 0;
-#define CHECK(c)                                                         \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
-            ++g_fail;                                                    \
-        }                                                                \
-    } while (0)
 #define CHECK_F(a, b)                                                                                     \
     do {                                                                                                  \
         const float va_ = (a), vb_ = (b);                                                                 \
@@ -817,25 +789,15 @@ void test_team_targeting() {
     }
 }
 // OI tactical: GameConstants fields, the diminishing-firepower spline, targeting slots 44 / 45.
-struct OneFileProvider final : FileProvider {  // serves Data\XML\GameConstants.xml from memory
-    std::string text;
-    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
-        if (!exists(path)) return false;
-        out.assign(text.begin(), text.end());
-        return true;
-    }
-    bool exists(std::string_view path) const override { return iequals(path, "Data\\XML\\GameConstants.xml"); }
-    std::string origin(std::string_view path) const override { return exists(path) ? "memory" : ""; }
-};
-
 void test_gaps_constants() {
-    OneFileProvider fp;
-    fp.text = "<GameConstants><Health_Low_Percent_Threshold>0.33</Health_Low_Percent_Threshold>"
-              "<Melee_Cutoff_Range>51.0</Melee_Cutoff_Range>"
-              "<Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>5.0</Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>"
-              "<Object_Max_Speed_Multiplier_Space> 1.2 </Object_Max_Speed_Multiplier_Space>"
-              "<Object_Max_Speed_Multiplier_Land> 1.56 </Object_Max_Speed_Multiplier_Land>"
-              "<Diminishing_Firepower>0, 0.6, 0.3, 0.7, 0.9, 0.9, 1, 1, 2, 1</Diminishing_Firepower></GameConstants>";
+    alamo::testing::MemoryProvider fp;
+    fp.add("Data\\XML\\GameConstants.xml",
+           "<GameConstants><Health_Low_Percent_Threshold>0.33</Health_Low_Percent_Threshold>"
+           "<Melee_Cutoff_Range>51.0</Melee_Cutoff_Range>"
+           "<Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>5.0</Hardpoint_Recharge_Cutoff_For_Opportunity_Fire>"
+           "<Object_Max_Speed_Multiplier_Space> 1.2 </Object_Max_Speed_Multiplier_Space>"
+           "<Object_Max_Speed_Multiplier_Land> 1.56 </Object_Max_Speed_Multiplier_Land>"
+           "<Diminishing_Firepower>0, 0.6, 0.3, 0.7, 0.9, 0.9, 1, 1, 2, 1</Diminishing_Firepower></GameConstants>");
     data::GameDatabase db;
     std::vector<std::string> ignored;
     db.load(fp, {}, &ignored);  // only GameConstants exists: the other loaders report missing files

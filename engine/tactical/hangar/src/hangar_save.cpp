@@ -28,21 +28,6 @@ constexpr uint32_t kContentsSaveVersion = 1;
 constexpr uint32_t kProductionSaveVersion = 1;
 constexpr uint32_t kEngineLoopsSaveVersion = 1;
 
-bool get_count(ByteReader& r, uint32_t& n, size_t min_bytes) {
-    n = r.u32();
-    return r.ok() && static_cast<uint64_t>(n) * static_cast<uint64_t>(min_bytes) <= static_cast<uint64_t>(r.remaining());
-}
-
-void put_vec3(ByteWriter& w, const Vec3& v) { w.f32(v.x).f32(v.y).f32(v.z); }
-
-Vec3 get_vec3(ByteReader& r) {
-    Vec3 v;
-    v.x = r.f32();
-    v.y = r.f32();
-    v.z = r.f32();
-    return v;
-}
-
 void put_order(ByteWriter& w, const BuildOrder& o) {
     w.u32(o.id).i32(o.player).i32(o.builder).i32(o.type).u32(o.total_frames).u32(o.frames_left).u32(o.issued);
 }
@@ -81,10 +66,10 @@ void HangarSystem::write(ByteWriter& w) const {
     w.u32(static_cast<uint32_t>(requests_.size()));
     for (const LaunchRequest& q : requests_) {
         w.u32(q.serial).i32(q.carrier).i32(q.owner).i32(q.type).i32(q.entry).boolean(q.from_pending).i32(q.bay);
-        put_vec3(w, q.origin);
-        put_vec3(w, q.flyout);
-        put_vec3(w, q.direction);
-        put_vec3(w, q.facing);
+        write_vec3(w, q.origin);
+        write_vec3(w, q.flyout);
+        write_vec3(w, q.direction);
+        write_vec3(w, q.facing);
         w.boolean(q.escort);
     }
     w.u32(static_cast<uint32_t>(events_.size()));
@@ -96,7 +81,7 @@ bool HangarSystem::read(ByteReader& r) {
     const uint32_t ndesc = r.u32(), serial = r.u32();
     if (!r.ok() || ndesc != descs_.size()) return false;
     uint32_t n = 0;
-    if (!get_count(r, n, 40)) return false;
+    if (!read_count(r, n, 40)) return false;
     std::vector<Carrier> carriers(n);
     for (size_t i = 0; i < carriers.size(); ++i) {
         Carrier& c = carriers[i];
@@ -112,10 +97,10 @@ bool HangarSystem::read(ByteReader& r) {
         c.bays_gone = r.u8();
         if (!r.ok() || c.desc >= ndesc || (i > 0 && c.id <= carriers[i - 1].id)) return false;
         uint32_t m = 0;
-        if (!get_count(r, m, 4)) return false;
+        if (!read_count(r, m, 4)) return false;
         c.bays.resize(m);
         for (uint32_t& b : c.bays) b = r.u32();
-        if (!get_count(r, m, 16)) return false;
+        if (!read_count(r, m, 16)) return false;
         c.entries.resize(m);
         for (Entry& e : c.entries) {
             e.type = r.i32();
@@ -123,7 +108,7 @@ bool HangarSystem::read(ByteReader& r) {
             e.max = r.i32();
             e.remaining = r.i32();
         }
-        if (!get_count(r, m, 17)) return false;
+        if (!read_count(r, m, 17)) return false;
         c.spawned.resize(m);
         const auto entries = static_cast<int32_t>(c.entries.size());
         for (Spawned& s : c.spawned) {
@@ -136,7 +121,7 @@ bool HangarSystem::read(ByteReader& r) {
         }
         if (!r.ok()) return false;
     }
-    if (!get_count(r, n, 74)) return false;
+    if (!read_count(r, n, 74)) return false;
     std::vector<LaunchRequest> requests(n);
     for (LaunchRequest& q : requests) {
         q.serial = r.u32();
@@ -146,13 +131,13 @@ bool HangarSystem::read(ByteReader& r) {
         q.entry = r.i32();
         q.from_pending = r.boolean();
         q.bay = r.i32();
-        q.origin = get_vec3(r);
-        q.flyout = get_vec3(r);
-        q.direction = get_vec3(r);
-        q.facing = get_vec3(r);
+        q.origin = read_vec3<Vec3>(r);
+        q.flyout = read_vec3<Vec3>(r);
+        q.direction = read_vec3<Vec3>(r);
+        q.facing = read_vec3<Vec3>(r);
         q.escort = r.boolean();
     }
-    if (!get_count(r, n, 17)) return false;
+    if (!read_count(r, n, 17)) return false;
     std::vector<HangarEvent> events(n);
     for (HangarEvent& e : events) {
         const uint8_t kind = r.u8();
@@ -185,13 +170,13 @@ void ContentsSystem::write(ByteWriter& w) const {
 bool ContentsSystem::read(ByteReader& r) {
     if (r.u32() != kContentsSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!get_count(r, n, 8)) return false;
+    if (!read_count(r, n, 8)) return false;
     std::vector<List> lists(n);
     for (size_t i = 0; i < lists.size(); ++i) {
         List& l = lists[i];
         l.container = r.i32();
         uint32_t m = 0;
-        if (!get_count(r, m, 4) || (i > 0 && l.container <= lists[i - 1].container)) return false;
+        if (!read_count(r, m, 4) || (i > 0 && l.container <= lists[i - 1].container)) return false;
         l.objects.resize(m);
         for (ObjectId& id : l.objects) id = r.i32();
         if (!r.ok()) return false;
@@ -219,16 +204,16 @@ bool TacticalProduction::read(ByteReader& r) {
     if (r.u32() != kProductionSaveVersion || !r.ok()) return false;
     const uint32_t next_id = r.u32();
     uint32_t n = 0;
-    if (!get_count(r, n, 4)) return false;
+    if (!read_count(r, n, 4)) return false;
     std::vector<std::vector<BuildOrder>> players(n);
     for (std::vector<BuildOrder>& list : players) {
         uint32_t m = 0;
-        if (!get_count(r, m, 28)) return false;
+        if (!read_count(r, m, 28)) return false;
         list.resize(m);
         for (BuildOrder& o : list) o = get_order(r);
         if (!r.ok()) return false;
     }
-    if (!get_count(r, n, 28)) return false;
+    if (!read_count(r, n, 28)) return false;
     std::vector<BuildOrder> done(n);
     for (BuildOrder& o : done) o = get_order(r);
     if (!r.ok() || !r.done()) return false;
@@ -251,7 +236,7 @@ void EngineLoops::write(ByteWriter& w) const {
 bool EngineLoops::read(ByteReader& r) {
     if (r.u32() != kEngineLoopsSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!get_count(r, n, 7)) return false;
+    if (!read_count(r, n, 7)) return false;
     std::vector<Obj> objs(n);
     for (size_t i = 0; i < objs.size(); ++i) {
         Obj& o = objs[i];
@@ -261,7 +246,7 @@ bool EngineLoops::read(ByteReader& r) {
         o.suppressed = r.u8();
         if (!r.ok() || (i > 0 && o.id <= objs[i - 1].id)) return false;
     }
-    if (!get_count(r, n, 10)) return false;
+    if (!read_count(r, n, 10)) return false;
     std::vector<EngineLoopRequest> requests(n);
     for (EngineLoopRequest& q : requests) {
         q.id = r.i32();

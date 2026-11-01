@@ -162,7 +162,7 @@ bool find_land_path(const PassabilityGrid& grid, const RegionMap& regions, const
 
 // Building blocks (exposed for tests).
 // Region A* only (no smoothing / clearance); points as built in step 3. False if unreachable.
-bool region_astar(const PassabilityGrid& grid, const RegionMap& regions, V2 start, V2 goal, uint32_t mask,
+bool region_astar(const RegionMap& regions, V2 start, V2 goal, uint32_t mask,
                   LandPathScratch& scratch, std::vector<V2>& points, uint32_t max_nodes, uint32_t* expansions,
                   const ThreatCost* threat = nullptr);
 // 4-connected cell A* between cell centres (start / goal exact points prepended / appended).

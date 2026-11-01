@@ -5,19 +5,11 @@
 #include <cstdint>
 
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 
 namespace alamo::ai::tactical {
 
 namespace {
-
-char lower_ascii(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (lower_ascii(a[i]) != lower_ascii(b[i])) return false;
-    return true;
-}
 
 constexpr size_t kMaxPathEntries = 1000;  // A1_READINGS §3.3: entries summed (not a path-length refusal)
 
@@ -78,7 +70,7 @@ int32_t ZoneGraph::index_of_id(uint32_t id) const {
 
 int32_t ZoneGraph::index_of_name(std::string_view name) const {
     for (size_t i = 0; i < zones_.size(); ++i)
-        if (iequals(zones_[i].name, name)) return static_cast<int32_t>(i);
+        if (ascii_iequals(zones_[i].name, name)) return static_cast<int32_t>(i);
     return -1;
 }
 
@@ -225,7 +217,7 @@ double reachability_tolerance(Reachability level, const TacticalAiConstants& c) 
 }
 
 double zone_reachability_cost(const ZoneGraph& graph, int32_t source_zone, int32_t target_zone, Reachability level,
-                              const TacticalAiConstants& c, const ZoneThreatFn&) {
+                              const TacticalAiConstants& c) {
     const double tol = reachability_tolerance(level, c);
     if (tol < 0.0) return kUnreachable;
     const uint32_t n = graph.size();

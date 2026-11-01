@@ -25,6 +25,8 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/parallel.hpp"
+#include "alamo/core/test_support.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
@@ -38,14 +40,6 @@ using namespace alamo;
 using namespace alamo::galactic;
 using commands::RejectReason;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
@@ -334,7 +328,7 @@ void run_scenario(const Scenario& sc) {
     int32_t loaded = 0, compared = 0;
     for (size_t i = 0; i < saves.size(); ++i) {
         const SavePoint& sp = saves[i];
-        const ParallelFor pf = (i & 1) ? testing::make_thread_parallel_for(4) : ParallelFor(serial_for);
+        const ParallelFor pf = (i & 1) ? galactic::testing::make_thread_parallel_for(4) : ParallelFor(serial_for);
         GalacticSim c(*sc.rules, store, rng);
         c.set_parallel_for(pf);
         CHECK(c.start(sc.setup));  // the loader builds the session from the same data first
@@ -679,26 +673,10 @@ void test_synthetic() {
 
 // ---- 3. FoC data ----------------------------------------------------------------------------------------------------------
 
-std::string env_or(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
-
 void test_foc() {
-    const std::string root = env_or("ALAMO_FOC_DATA");
+    const std::string root = alamo::testing::env_or_empty("ALAMO_FOC_DATA");
     std::string how;
-    std::unique_ptr<FileProvider> provider = testing::open_foc_data(root, how);
+    std::unique_ptr<FileProvider> provider = galactic::testing::open_foc_data(root, how);
     if (!provider) {
         std::printf("ALAMO_FOC_DATA unset or without Data\\XML: FoC save / load run skipped\n");
         return;

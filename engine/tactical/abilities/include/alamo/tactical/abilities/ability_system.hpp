@@ -265,7 +265,6 @@ public:
     bool is_stealthed(ObjectId id, uint32_t frame) const;  // Is_Stealthed (0x39b140)
     bool tractored(ObjectId id) const;                     // CD +0x132
     bool interdicting(ObjectId id) const;
-    bool interdicted(int32_t player) const;  // some enemy interdict entry targets this player [L]
     int32_t immobilize_count(ObjectId id) const;
     bool special_applied(ObjectId id, uint32_t ability_name_crc) const;
     ObjectId special_target(ObjectId id, uint32_t ability_name_crc) const;
@@ -273,7 +272,6 @@ public:
     // its update jams with (unit ability 63 Effective_Radius, else the type's Passive_Missile_Shield_Radius).
     const SpecialAbilityDesc* jamming_special(ObjectId id, float& radius) const;
     float get_hull(ObjectId id) const { return combat_->script_hull(id); }      // Lua Get_Hull
-    float get_shield(ObjectId id) const { return combat_->shield_fraction(id); }  // Lua Get_Shield
 
     // ---- Lua helpers (5) ----
     bool force_recharge(ObjectId id, uint8_t type, float seconds = -1.0f);  // Force_Ability_Recharge
@@ -339,9 +337,6 @@ public:
     bool set_ability_autofire(ObjectId id, uint8_t type, bool on);
     // 0x48d5e0: the map entry when set, else true for AI-controlled (non-human) owners.
     bool autofire_on(ObjectId id, uint8_t type) const;
-    // Retreat permission (0x282750 / 0x2825e0, §1.5): true while some interdict / Retreat_Prevention entry targets the
-    // player (the original returns the entry's reason code +0x38 [M]).
-    bool retreat_blocked(int32_t player) const;
     // Command 45 RepairHardpointEvent (§1.12): adds `player` as a repairer of the hardpoint (CombatSystem).
     bool repair_hardpoint(ObjectId id, uint32_t hp, int32_t player);
     // Lua Set_Targeting_Priorities(name) on a unit or container (members follow their head): the named
@@ -349,8 +344,6 @@ public:
     bool set_targeting_priorities(ObjectId id, std::string_view set_name);
     // Battlefield_Modifier player lists (max-then-sum over stacking categories, ascending; 0 when empty).
     float player_list(int32_t player, PlayerList l) const;
-    // Weatherproof (§7.4): weather-affected = no entry for the player (every Weatherproof entry is false).
-    bool weather_affected(int32_t player) const;
     bool hunting(ObjectId id) const;     // HUNT behaviour enabled
     bool deployed(ObjectId id) const;    // DEPLOY state (DEPLOY 2 Is_Active)
     bool spread_out(ObjectId id) const;  // SPREAD_OUT member flag obj +0x448 (default idle: Idle Crouch)
@@ -616,7 +609,7 @@ private:
     void mines_update(uint32_t frame);
     // special-ability class bodies (ability_classes.cpp)
     bool class_accepts(const Obj& o, const SpecialAbilityDesc& s, ObjectId target, uint32_t frame) const;
-    bool class_apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp, uint32_t frame);
+    bool class_apply(Obj& o, SpecialState& sp, ObjectId target, uint32_t frame);
     void class_update(Obj& o, SpecialState& sp, uint32_t frame);
     void class_remove(Obj& o, SpecialState& sp, uint32_t frame);
     bool range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;

@@ -412,9 +412,9 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                 }
                 // P1_DOUBLE_CLICK_MOVE.md §2.1: the attack-move / waypoint / guard order buttons (c_button01 / 03 / 05) arm the
                 // one-shot move toggles of the next move order.
-                if (screen_ == Screen::Battle && (iequal(a.name, "c_button01") || iequal(a.name, "c_button03") || iequal(a.name, "c_button05"))) {
-                    orders_.arm_move_toggle(iequal(a.name, "c_button01")   ? ui::MoveToggle::AttackMove
-                                            : iequal(a.name, "c_button03") ? ui::MoveToggle::Waypoint
+                if (screen_ == Screen::Battle && (ascii_iequals(a.name, "c_button01") || ascii_iequals(a.name, "c_button03") || ascii_iequals(a.name, "c_button05"))) {
+                    orders_.arm_move_toggle(ascii_iequals(a.name, "c_button01")   ? ui::MoveToggle::AttackMove
+                                            : ascii_iequals(a.name, "c_button03") ? ui::MoveToggle::Waypoint
                                                                            : ui::MoveToggle::GuardMove);
                     break;
                 }
@@ -731,7 +731,7 @@ void App::move_ack(const ui::MoveAck& a) {
         const std::string& click = ack_radar_[static_cast<size_t>(ui::AckRadar::Click)];
         std::vector<uint32_t> gone;
         for (const ui::RadarEvent& e : radar_events_.items())
-            if (iequal(e.type, click)) gone.push_back(e.id);
+            if (ascii_iequals(e.type, click)) gone.push_back(e.id);
         for (const uint32_t id : gone) radar_events_.remove(id);
     }
     const std::string& radar = ack_radar_[static_cast<size_t>(a.radar())];
@@ -779,8 +779,8 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 s.skirmish_map = a.map;
                 s.skirmish.human_faction = a.factions.size() > 0 && !a.factions[0].empty() ? a.factions[0] : "Rebel";
                 s.skirmish.ai_faction = a.factions.size() > 1 && !a.factions[1].empty() ? a.factions[1] : "Empire";
-                if (iequal(s.skirmish.ai_faction, s.skirmish.human_faction))  // [port] the AI needs a hostile faction
-                    s.skirmish.ai_faction = iequal(s.skirmish.human_faction, "Empire") ? "Rebel" : "Empire";
+                if (ascii_iequals(s.skirmish.ai_faction, s.skirmish.human_faction))  // [port] the AI needs a hostile faction
+                    s.skirmish.ai_faction = ascii_iequals(s.skirmish.human_faction, "Empire") ? "Rebel" : "Empire";
                 s.seed = opt_.seed;
                 s.battle_max_frames = opt_.battle_max_frames;
                 s.battle_end_hold_frames = kBattleEndHoldFrames;

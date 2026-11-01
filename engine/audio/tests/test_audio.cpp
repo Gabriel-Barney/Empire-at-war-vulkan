@@ -33,41 +33,15 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/vfs/vfs.hpp"
 
 using namespace alamo;
 using namespace alamo::audio;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
 namespace {
 
 // ------------------------------------------------------------------ fixtures
-
-class MemoryProvider final : public FileProvider {
-public:
-    void add(const std::string& path, const std::string& text) {
-        files_[normalize_path(path)] = std::vector<uint8_t>(text.begin(), text.end());
-    }
-    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
-        auto it = files_.find(normalize_path(path));
-        if (it == files_.end()) return false;
-        out = it->second;
-        return true;
-    }
-    bool exists(std::string_view path) const override { return files_.count(normalize_path(path)) != 0; }
-    std::string origin(std::string_view path) const override { return exists(path) ? "mem:" + std::string(path) : ""; }
-
-private:
-    std::map<std::string, std::vector<uint8_t>> files_;
-};
 
 const char* kPresets = R"(<?xml version="1.0"?>
 <SFXEvents>
@@ -269,8 +243,8 @@ const char* kAudio = R"(<?xml version="1.0" ?>
 </Audio>
 )";
 
-MemoryProvider make_tree() {
-    MemoryProvider p;
+alamo::testing::MemoryProvider make_tree() {
+    alamo::testing::MemoryProvider p;
     p.add("Data\\XML\\SFXEventFiles.xml",
           "<SFXEvent_Files><File> SFXEventPresets.xml </File><File>SFXEventsTest.xml</File>"
           "<File>Missing.xml</File></SFXEvent_Files>");
@@ -341,7 +315,7 @@ constexpr float kSfxBus = 0.8f * 0.8f;  // default bus level x master (§4)
 // ------------------------------------------------------------------ XML (§1.1)
 
 void test_parse() {
-    MemoryProvider tree = make_tree();
+    alamo::testing::MemoryProvider tree = make_tree();
     AudioDatabase db;
     AudioLoadReport r;
     CHECK(db.load(tree, &r));
@@ -400,7 +374,7 @@ void test_parse() {
 // ------------------------------------------------------------------ SFX rules (§1.2 .. §1.5)
 
 struct Rig {
-    MemoryProvider tree = make_tree();
+    alamo::testing::MemoryProvider tree = make_tree();
     AudioDatabase db;
     NullBackend backend{test_duration};
     SimRng rng{0x1234u};
@@ -602,7 +576,7 @@ void test_state_machine() {
         CHECK(a.live_instances() == 0 && a.active_voices(Bus::Sfx3D) == 0);
     }
     {  // Missing sample: the stage is skipped.
-        MemoryProvider tree = make_tree();
+        alamo::testing::MemoryProvider tree = make_tree();
         tree.add("Data\\XML\\SFXEventsTest.xml",
                  R"(<SFXEvents><SFXEvent Name="M"><Is_3D>No</Is_3D><Samples>MISSING.WAV</Samples></SFXEvent></SFXEvents>)");
         AudioDatabase db;
@@ -837,7 +811,7 @@ void test_speech() {
 
 // Scripted session: identical inputs -> identical logs; only the free RNG instance is drawn.
 std::string scripted_session(uint32_t seed, GameRandom& gr) {
-    MemoryProvider tree = make_tree();
+    alamo::testing::MemoryProvider tree = make_tree();
     AudioDatabase db;
     db.load(tree);
     NullBackend nb{test_duration};
@@ -950,7 +924,7 @@ void test_decode_backend() {
     CHECK(be->read_mix(mix.data(), 4410) == 4410);  // 0.2 s pulled > 0.1 s tone
     CHECK(!be->playing(1));
     // Through the AudioSystem: the same rules drive the real backend.
-    MemoryProvider tree = make_tree();
+    alamo::testing::MemoryProvider tree = make_tree();
     tree.add("Data\\XML\\SFXEventsTest.xml", R"(<SFXEvents><SFXEvent Name="Tone"><Samples>TONE.WAV</Samples><Min_Pitch>200</Min_Pitch><Max_Pitch>200</Max_Pitch></SFXEvent></SFXEvents>)");
     AudioDatabase db;
     db.load(tree);
@@ -1105,7 +1079,7 @@ void test_streams() {
             bool playing(uint32_t) const override { return false; }
             void advance(double) override {}
         } ns;
-        MemoryProvider tree = make_tree();
+        alamo::testing::MemoryProvider tree = make_tree();
         AudioDatabase db;
         db.load(tree);
         SimRng rng{1};
@@ -1122,7 +1096,7 @@ void test_streams() {
         auto be = MiniaudioBackend::create(ms, mc);
         CHECK(be != nullptr);
         if (!be) return;
-        MemoryProvider tree = make_tree();
+        alamo::testing::MemoryProvider tree = make_tree();
         AudioDatabase db;
         db.load(tree);
         SimRng rng{1};
@@ -1213,11 +1187,6 @@ void test_lua_bridge() {
 #endif
 
 // ------------------------------------------------------------------ real data
-
-std::string env(const char* name) {
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-}
 
 void write_report(const std::string& game, const std::string& text) {
 #ifdef ALAMO_AUDIO_LOG_DIR
@@ -1391,7 +1360,7 @@ int main() {
 #else
     std::printf("lua bridge: lua module not configured, skipped\n");
 #endif
-    const std::string foc = env("ALAMO_FOC_DATA"), eaw = env("ALAMO_EAW_DATA");
+    const std::string foc = alamo::testing::env_or_empty("ALAMO_FOC_DATA"), eaw = alamo::testing::env_or_empty("ALAMO_EAW_DATA");
     if (foc.empty() && eaw.empty()) std::printf("real data: ALAMO_FOC_DATA / ALAMO_EAW_DATA not set, skipped\n");
     if (!foc.empty()) test_real("foc", foc, false);
     if (!eaw.empty()) test_real("eaw", eaw, true);

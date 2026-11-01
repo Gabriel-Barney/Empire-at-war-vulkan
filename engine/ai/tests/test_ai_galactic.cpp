@@ -34,6 +34,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/fleet_path.hpp"
@@ -52,7 +53,8 @@ using namespace alamo;
 using namespace alamo::ai;
 namespace gal = alamo::galactic;
 
-static int g_fail = 0, g_checks = 0;
+#undef CHECK  // this test also counts the checks run
+static int g_checks = 0;
 #define CHECK(c)                                                                  \
     do {                                                                          \
         ++g_checks;                                                               \
@@ -2139,24 +2141,10 @@ static void test_save_synthetic() {
 // ================================================================ FoC data
 
 #ifdef ALAMO_AI_HAVE_VFS
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using alamo::testing::env_or_empty;
 
 static void test_foc_data() {
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     std::error_code ec;
     if (root.empty() || !std::filesystem::is_directory(path_from_utf8(root) / "Data", ec)) {
         std::printf("FoC data: ALAMO_FOC_DATA not set: skipped\n");
@@ -2349,7 +2337,7 @@ static void test_foc_data() {
 
 // N1 save / load on the shipped scripts (HotM, as test_foc_data).
 static void test_save_foc() {
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     std::error_code ec;
     if (root.empty() || !std::filesystem::is_directory(path_from_utf8(root) / "Data", ec)) {
         std::printf("N1 save FoC: ALAMO_FOC_DATA not set: skipped\n");

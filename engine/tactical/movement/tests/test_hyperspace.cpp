@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/tactical/movement/hyperspace.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 
@@ -13,14 +14,6 @@ using namespace alamo::tactical::movement;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 #define CHECK_EQ(a, b)                                                                                  \
     do {                                                                                                \
         const double va_ = static_cast<double>(a), vb_ = static_cast<double>(b);                        \

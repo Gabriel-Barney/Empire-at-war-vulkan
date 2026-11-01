@@ -56,7 +56,6 @@ public:
     EventType type() const noexcept { return type_; }
     uint8_t type_id() const noexcept { return static_cast<uint8_t>(type_); }
     const EventDef& def() const noexcept { return *event_def(type_); }
-    size_t field_count() const noexcept { return values_.size(); }
     const FieldValue& value(size_t i) const { return values_.at(i); }
     FieldValue& value(size_t i) { return values_.at(i); }
 
@@ -65,7 +64,6 @@ public:
     float f(std::string_view field) const;  // dequantized
     const std::vector<uint32_t>& ids(std::string_view field) const { return values_[index(field)].ids; }
     const std::string& str(std::string_view field) const { return values_[index(field)].bytes; }
-    const std::u16string& wstr(std::string_view field) const { return values_[index(field)].wide; }
     EventData& set(std::string_view field, uint32_t v);
     EventData& set_f(std::string_view field, float v);  // quantizes
     EventData& set_ids(std::string_view field, std::vector<uint32_t> v);  // CountedIds also sets the count

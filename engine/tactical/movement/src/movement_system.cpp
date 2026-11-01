@@ -1392,12 +1392,6 @@ void MovementSystem::fleave(FighterCellGrid& g, Unit& u, bool dogfight) {
     else g.leave(u.d.id, dogfight ? u.fs.dog : u.fs.park);
 }
 
-bool MovementSystem::fjoin(FighterCellGrid& g, Unit& u, FighterCell cell, bool dogfight) {
-    const FighterAlliedFn allied = [this](int32_t a, int32_t b) { return fallied(a, b); };
-    if (FighterSquad* c = fsquad(u)) return g.join(c->id, u.d.owner, cell, dogfight ? c->dog : c->park, allied);
-    return g.join(u.d.id, u.d.owner, cell, dogfight ? u.fs.dog : u.fs.park, allied);
-}
-
 // [port] estimates of the team list's formation error E (+0x88) and spread S (+0x8c), whose writers are untraced:
 // E = the largest 3-D distance of a member from its slot (L.P + (slot(m) - slot(L))), S = the per-axis largest
 // |m.P - L.P|. Computed once per frame before the fighter pass, squadrons in ascending id, members in index order.
@@ -2100,19 +2094,6 @@ bool MovementSystem::fighter_dead_stop(ObjectId id) {
     u->fs.stored = u->fs.b.o;
     freset_path(*u);
     return true;
-}
-
-void MovementSystem::build_fighter_grids() {
-    fgrids_ = FighterCellGrids{};
-    if (space_.has_box()) fgrids_.build(space_.box_min(), space_.box_max());
-    for (Unit& u : units_) {
-        u.fs.dog = FighterCell{};
-        u.fs.park = FighterCell{};
-    }
-    for (FighterSquad& s : squads_) {
-        s.dog = FighterCell{};
-        s.park = FighterCell{};
-    }
 }
 
 const FighterState* MovementSystem::fighter_state(ObjectId id) const {

@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/objects/field_schema.hpp"
 
 namespace alamo::objects {
@@ -40,11 +41,10 @@ const FieldIndexTable& table() {
 bool c_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r'; }
 bool digit(char c) { return c >= '0' && c <= '9'; }
 bool hexdigit(char c) { return digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
-char lower(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
 bool starts_ci(std::string_view s, std::string_view p) {
     if (s.size() < p.size()) return false;
     for (size_t i = 0; i < p.size(); ++i)
-        if (lower(s[i]) != p[i]) return false;
+        if (ascii_lower(s[i]) != p[i]) return false;
     return true;
 }
 
@@ -128,7 +128,7 @@ double c_atof(std::string_view s) {
     if (starts_ci(r, "inf")) return sign * std::numeric_limits<double>::infinity();
     if (starts_ci(r, "nan")) return std::numeric_limits<double>::quiet_NaN();
     // Hex: "0x" followed by a hex digit (or '.' + hex digit).
-    if (r.size() > 2 && r[0] == '0' && lower(r[1]) == 'x' &&
+    if (r.size() > 2 && r[0] == '0' && ascii_lower(r[1]) == 'x' &&
         (hexdigit(r[2]) || (r[2] == '.' && r.size() > 3 && hexdigit(r[3])))) {
         double v = 0;
         const auto res = std::from_chars(r.data() + 2, r.data() + r.size(), v, std::chars_format::hex);
@@ -156,7 +156,7 @@ double c_atof(std::string_view s) {
     }
     if (mant == 0) return 0.0;
     int64_t exp10 = 0;
-    if (j < r.size() && lower(r[j]) == 'e') {
+    if (j < r.size() && ascii_lower(r[j]) == 'e') {
         size_t k = j + 1;
         bool eneg = false;
         if (k < r.size() && (r[k] == '+' || r[k] == '-')) eneg = r[k++] == '-';

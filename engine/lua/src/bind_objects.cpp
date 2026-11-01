@@ -22,6 +22,7 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/script_gaps.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -53,34 +54,6 @@ constexpr char kBridgeKey[] = "alamo.objects.bridge";
 
 // ---------------------------------------------------------------- small helpers
 
-int push_nil(Call& c) {
-    lua_pushnil(c.L);
-    return 1;
-}
-int push_bool(Call& c, bool b) {
-    lua_pushboolean(c.L, b ? 1 : 0);
-    return 1;
-}
-int push_num(Call& c, double d) {
-    lua_pushnumber(c.L, d);
-    return 1;
-}
-int push_str(Call& c, std::string_view s) {
-    lua_pushlstring(c.L, s.data(), s.size());
-    return 1;
-}
-
-bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TBOOLEAN; }
-bool to_bool(const Call& c, int i) { return lua_toboolean(c.L, c.idx(i)) != 0; }
-
-char upper(char ch) { return (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch; }
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
 uint32_t cls_position() {
     static const uint32_t c = detail::class_id("PositionWrapper");
     return c;
@@ -89,18 +62,6 @@ uint32_t cls_blocking() {
     static const uint32_t c = detail::class_id("BlockingStatus");
     return c;
 }
-
-ObjectBridge* bridge(Call& c) {
-    lua_pushstring(c.L, kBridgeKey);
-    lua_rawget(c.L, LUA_REGISTRYINDEX);
-    auto* b = static_cast<ObjectBridge*>(lua_touserdata(c.L, -1));
-    lua_pop(c.L, 1);
-    return b;
-}
-
-objects::ObjectStore* store(Call& c) { return c.vm->host.store; }
-const objects::GameObjectTypes* types(Call& c) { return c.vm->host.types; }
-ObjectHandle self_object(Call& c) { return detail::object_handle(*c.self); }
 
 // Containment / removal through the bridge's hooks when the host keeps membership outside the store
 // (object_bridge.hpp, L1/S4 wave 1); else the store's container links.
@@ -234,7 +195,7 @@ TypeArg type_arg(Call& c, int i) {
     return a;
 }
 bool type_matches(Call& c, ObjectHandle h, std::string_view name) {
-    return !name.empty() && iequal(object_type_name(c, h), name);
+    return !name.empty() && ascii_iequals(object_type_name(c, h), name);
 }
 
 const Ud* player_arg(Call& c, int i) { return c.userdata(i, detail::cls_player()); }
@@ -283,7 +244,7 @@ std::vector<uint8_t> type_abilities(Call& c, TypeIndex t) {
     const objects::FieldColumns& fc = raw.fields();
     for (const objects::FieldIndex sub : ty->get_sub_objects(t, "Unit_Abilities_Data")) {
         for (objects::FieldIndex f = sub + 1; f < fc.size() && fc.depth[f] > fc.depth[sub]; ++f) {
-            if (fc.parent[f] != sub || !iequal(raw.tag_name(f), "Type")) continue;
+            if (fc.parent[f] != sub || !ascii_iequals(raw.tag_name(f), "Type")) continue;
             const uint8_t id = ability_id(fc.text[f]);
             if (id != 0) out.push_back(id);
         }
@@ -308,23 +269,18 @@ bool black_market_ok(Call& c, ObjectHandle h, uint8_t id) {
     if (!ty || t >= ty->raw().type_count()) return true;
     const objects::ObjectTypeDatabase& raw = ty->raw();
     const objects::FieldColumns& fc = raw.fields();
-    auto trim = [](std::string_view s) {
-        while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-        while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-        return s;
-    };
     for (const objects::FieldIndex sub : ty->get_sub_objects(t, "Unit_Abilities_Data")) {
         bool match = false, must = false;
         std::string_view name;
         for (objects::FieldIndex f = sub + 1; f < fc.size() && fc.depth[f] > fc.depth[sub]; ++f) {
             if (fc.parent[f] != sub) continue;
             const std::string_view tag = raw.tag_name(f);
-            if (iequal(tag, "Type")) match = ability_id(fc.text[f]) == id;
-            else if (iequal(tag, "Must_Be_Bought_On_Black_Market")) {
-                const std::string_view v = trim(fc.text[f]);
-                must = iequal(v, "yes") || iequal(v, "true") || v == "1";
-            } else if (iequal(tag, "GUI_Activated_Ability_Name")) {
-                name = trim(fc.text[f]);
+            if (ascii_iequals(tag, "Type")) match = ability_id(fc.text[f]) == id;
+            else if (ascii_iequals(tag, "Must_Be_Bought_On_Black_Market")) {
+                const std::string_view v = ascii_trim(fc.text[f]);
+                must = ascii_iequals(v, "yes") || ascii_iequals(v, "true") || v == "1";
+            } else if (ascii_iequals(tag, "GUI_Activated_Ability_Name")) {
+                name = ascii_trim(fc.text[f]);
             }
         }
         if (match) return detail::black_market_allows(c, store(c)->owner(h), name, must);
@@ -529,7 +485,7 @@ int g_find_hint(Call& c) {
     for (const ObjectHandle h : st->objects_newest_first()) {
         if (!st->active(h) || !type_matches(c, h, t.name)) continue;
         const ScriptObjectState* s = b->find_state(st->id(h));
-        if (s && iequal(s->hint, hint)) {
+        if (s && ascii_iequals(s->hint, hint)) {
             detail::push_object(c.L, *c.vm, h);
             return 1;
         }
@@ -551,7 +507,7 @@ int g_find_all_with_hint(Call& c) {
     for (const ObjectHandle h : st->objects_newest_first()) {
         if (!st->active(h)) continue;
         const ScriptObjectState* s = b->find_state(st->id(h));
-        if (!s || !iequal(s->hint, hint)) continue;
+        if (!s || !ascii_iequals(s->hint, hint)) continue;
         detail::push_object(c.L, *c.vm, h);
         lua_rawseti(c.L, -2, ++n);
     }
@@ -576,7 +532,7 @@ int find_first(Call& c, bool planets_only) {
             if (!members) continue;
             const std::vector<TypeIndex> refs = ty->get_type_refs(st->type(h), "Company_Units");
             for (uint32_t i = 0; i < refs.size(); ++i)
-                if (refs[i] != objects::kNone && iequal(type_name(c, refs[i]), name)) {
+                if (refs[i] != objects::kNone && ascii_iequals(type_name(c, refs[i]), name)) {
                     detail::push_member_view(c.L, *c.vm, h, i);
                     return 1;
                 }
@@ -1716,7 +1672,7 @@ int m_type_is_affected_by_missile_shield(Call& c) {
     const auto t = static_cast<TypeIndex>(c.self->value);
     if (!ty || t >= ty->size()) return push_bool(c, false);
     const std::string_view cat = ty->get_string(t, "Projectile_Category");
-    if (!cat.empty()) return push_bool(c, iequal(cat, "ROCKET") || iequal(cat, "MPTL_ROCKET"));
+    if (!cat.empty()) return push_bool(c, ascii_iequals(cat, "ROCKET") || ascii_iequals(cat, "MPTL_ROCKET"));
     const int32_t v = ty->get_enum(t, "Projectile_Category");
     return push_bool(c, v == 4 || v == 6);
 }
@@ -1981,7 +1937,7 @@ int m_get_space_station(Call& c) {
     for (const ObjectHandle h : st->objects_newest_first()) {
         if (!st->active(h) || st->owner(h) != c.self->id) continue;
         const TypeIndex t = st->type(h);
-        if (t < ty->raw().type_count() && iequal(ty->raw().element_name(t), "StarBase")) {
+        if (t < ty->raw().type_count() && ascii_iequals(ty->raw().element_name(t), "StarBase")) {
             detail::push_object(c.L, *c.vm, h);
             return 1;
         }
@@ -2303,7 +2259,7 @@ void detail::task_force_set_targeting_priorities(Call& c, const std::vector<obje
     for (const ObjectHandle u : units) {
         if (!st->alive(u)) continue;
         if (filtered) {
-            const bool by_name = iequal(object_type_name(c, u), c.string(2));
+            const bool by_name = ascii_iequals(object_type_name(c, u), c.string(2));
             const bool by_cat = mask != 0 && ty && (ty->get_mask(st->type(u), "CategoryMask") & mask) != 0;
             if (!by_name && !by_cat) continue;
         }
@@ -2316,7 +2272,7 @@ uint8_t unit_ability_id(std::string_view name) {
     return tactical::abilities::ability_type_from_name(name);  // S9's table: one name table for the engine
 #else
     for (size_t i = 1; i < std::size(kAbilityNames); ++i)
-        if (iequal(kAbilityNames[i], name)) return static_cast<uint8_t>(i);
+        if (ascii_iequals(kAbilityNames[i], name)) return static_cast<uint8_t>(i);
     return 0;
 #endif
 }

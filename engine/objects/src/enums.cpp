@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/type_fields.hpp"
 
@@ -86,16 +87,7 @@ const Pair kCorruption[] = {
 };
 const Pair kSubMode[] = {{"Galactic", 0}, {"Land", 1}, {"Space", 2}};
 
-bool trim_char(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
 bool mask_delim(char c) { return c == '|' || c == ' ' || c == ',' || c == '\t' || c == '\n'; }
-
-std::string_view trim(std::string_view s) {
-    size_t b = 0, e = s.size();
-    while (b < e && trim_char(s[b])) ++b;
-    while (e > b && trim_char(s[e - 1])) --e;
-    return s.substr(b, e - b);
-}
 
 template <size_t N>
 void fill(EnumConverter& c, std::string_view name, bool bitfield, bool dynamic, const Pair (&table)[N]) {
@@ -121,10 +113,7 @@ const DynamicFile kDynamicFiles[] = {
 }  // namespace
 
 std::string normalize_enum_name(std::string_view s) {
-    const std::string_view t = trim(s);
-    std::string out(t);
-    for (char& c : out) c = upper(c);
-    return out;
+    return ascii_upper(ascii_trim(s));
 }
 
 uint64_t scan_hex_u64(std::string_view s) {
@@ -174,7 +163,7 @@ std::optional<int64_t> EnumConverter::convert(std::string_view text) const {
         const size_t b = i;
         while (i < text.size() && !mask_delim(text[i])) ++i;
         if (i == b) continue;
-        const std::string_view tok = trim(text.substr(b, i - b));
+        const std::string_view tok = ascii_trim(text.substr(b, i - b));
         if (tok.empty()) continue;  // a lone CR between delimiters
         const std::optional<int64_t> v = lookup(tok);
         if (!v) return std::nullopt;  // one unknown token rejects the whole value
@@ -232,7 +221,7 @@ void EnumRegistry::load_dynamic(const FileProvider& provider, std::vector<std::s
         fresh.from_file = true;
         uint32_t index = 0;
         for (data::XmlNode e = doc.root().first_child(); e && fresh.valid; e = e.next_sibling(), ++index) {
-            const std::string_view text = trim(e.text());
+            const std::string_view text = ascii_trim(e.text());
             int64_t value;
             if (fresh.bitfield) {
                 if (index >= 64) {
@@ -320,8 +309,7 @@ std::optional<int32_t> ship_class_value(std::string_view text) {
 int32_t projectile_category_value(std::string_view text) {
     static constexpr std::string_view kCat[] = {"DEFAULT", "MISSILE", "BOMB",  "GRENADE",    "ROCKET",
                                                 "STATIC_BOMB", "MPTL_ROCKET", "LASER", "LIGHT_SABER", "CLUSTER_BOMB"};
-    std::string u(text);
-    for (char& c : u) c = upper(c);
+    const std::string u = ascii_upper(text);
     for (size_t i = 0; i < std::size(kCat); ++i)
         if (u == kCat[i]) return static_cast<int32_t>(i);
     return -1;
@@ -337,8 +325,7 @@ std::optional<int32_t> combat_mod_value(std::string_view text) {
     size_t e = b;
     while (e < text.size() && !delim(text[e])) ++e;
     if (e == b) return std::nullopt;
-    std::string u(text.substr(b, e - b));
-    for (char& c : u) c = upper(c);
+    std::string u = ascii_upper(text.substr(b, e - b));
     // The data writes COMBAT_MOD_<NAME> (FoC PROJECTILES.XML: COMBAT_MOD_SPEED); the spec lists the bare names.
     // [port] both spellings accepted until the table's exact strings are confirmed (PHASE4 S1 open item).
     constexpr std::string_view kPrefix = "COMBAT_MOD_";

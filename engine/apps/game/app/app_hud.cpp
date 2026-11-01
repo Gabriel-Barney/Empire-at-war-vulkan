@@ -10,8 +10,7 @@ int32_t App::galactic_faction_icon(const galactic::GalacticSim& g, int32_t playe
     if (player < 0 || static_cast<size_t>(player) >= g.players().size()) return -1;
     const uint32_t fi = g.players()[static_cast<size_t>(player)].faction;
     if (fi >= g.rules().factions.size()) return -1;
-    std::string n = g.rules().factions[fi].name;
-    for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string n = ascii_lower(g.rules().factions[fi].name);
     if (n.find("rebel") != std::string::npos) return 0;
     if (n.find("empire") != std::string::npos) return 1;
     if (n.find("pirate") != std::string::npos) return 2;

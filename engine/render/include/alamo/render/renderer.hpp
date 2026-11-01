@@ -325,7 +325,7 @@ struct PassTarget;
 struct EngineFrame;  // render_internal.hpp
 class WorldRenderer;  // world.hpp: terrain + water of a land map
 class SsaoPass;       // ssao.hpp: [port] screen-space ambient occlusion
-class TaaPass;        // src/taa.hpp: [port] temporal anti-aliasing
+class TaaPass;        // src/taa_pass.hpp: [port] temporal anti-aliasing
 class GammaPass;      // src/gamma.hpp: [port] output gamma
 struct WorldBindStats;
 

@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/hash.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/video/video.hpp"
 #if defined(ALAMO_VIDEO_HAVE_VFS)
 #include "alamo/vfs/vfs.hpp"
@@ -31,7 +33,6 @@
 
 namespace {
 
-int g_fail = 0;
 int g_checks = 0;
 
 void check(bool ok, const char* what) {
@@ -43,15 +44,6 @@ void check(bool ok, const char* what) {
 }
 
 // ---- minimal PNG writer (stored deflate) -----------------------------------------------------------------
-uint32_t crc32(const uint8_t* p, size_t n, uint32_t c = 0) {
-    c = ~c;
-    for (size_t i = 0; i < n; ++i) {
-        c ^= p[i];
-        for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
-    }
-    return ~c;
-}
-
 void put32(std::vector<uint8_t>& v, uint32_t x) {
     v.push_back(static_cast<uint8_t>(x >> 24));
     v.push_back(static_cast<uint8_t>(x >> 16));
@@ -64,7 +56,7 @@ void chunk(std::vector<uint8_t>& out, const char* type, const std::vector<uint8_
     std::vector<uint8_t> td(type, type + 4);
     td.insert(td.end(), data.begin(), data.end());
     out.insert(out.end(), td.begin(), td.end());
-    put32(out, crc32(td.data(), td.size()));
+    put32(out, alamo::crc32(td.data(), td.size()));
 }
 
 bool write_png(const std::string& path, const uint8_t* rgba, int w, int h) {
@@ -155,11 +147,6 @@ bool test_runtime() {
 
 // ---- real data -------------------------------------------------------------------------------------------
 #if defined(ALAMO_VIDEO_HAVE_VFS)
-std::string env(const char* n) {
-    const char* v = std::getenv(n);
-    return v ? std::string(v) : std::string();
-}
-
 std::string fourcc(uint32_t t) {
     std::string s;
     for (int i = 0; i < 4; ++i) {
@@ -328,14 +315,14 @@ void full_decode(const alamo::FileProvider& vfs, const std::string& path) {
 
 void test_real_data() {
     using namespace alamo::video;
-    const std::string foc = env("ALAMO_FOC_DATA");
+    const std::string foc = alamo::testing::env_or_empty("ALAMO_FOC_DATA");
     if (foc.empty()) {
         std::printf("real data: ALAMO_FOC_DATA not set, skipped\n");
         return;
     }
     alamo::vfs::VfsConfig cfg;
     cfg.foc_root = foc;
-    const std::string eaw = env("ALAMO_EAW_DATA");
+    const std::string eaw = alamo::testing::env_or_empty("ALAMO_EAW_DATA");
     if (!eaw.empty()) cfg.eaw_root = eaw;
     std::string err;
     auto vfs = alamo::vfs::Vfs::create(cfg, &err);

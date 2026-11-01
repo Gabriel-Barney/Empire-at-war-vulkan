@@ -19,6 +19,7 @@
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/materials/constants.hpp"
 #include "alamo/materials/d3d9_state.hpp"
 #include "alamo/materials/effect_loader.hpp"
@@ -35,15 +36,6 @@
 
 using namespace alamo;
 using namespace alamo::materials;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
@@ -172,15 +164,6 @@ fx::Effect make_effect(std::vector<fx::State> states, std::vector<fx::Parameter>
     return e;
 }
 
-uint64_t ref_fnv(const void* d, size_t n) {
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (size_t i = 0; i < n; ++i) {
-        h ^= static_cast<const uint8_t*>(d)[i];
-        h *= 0x100000001b3ull;
-    }
-    return h;
-}
-
 // ------------------------------------------------------------------ unit tests
 void test_layouts() {
     CHECK(sizeof(FrameCB) == 992);
@@ -218,7 +201,7 @@ void test_defaults_and_keys() {
     // hashing: FNV-1a over the bytes, independent of instance and stable
     PsoKey k2 = k;
     CHECK(hash(k) == hash(k2));
-    CHECK(hash(k) == ref_fnv(&k, sizeof k));
+    CHECK(hash(k) == alamo::fnv1a64(&k, sizeof k));
     CHECK(std::hash<PsoKey>{}(k) == static_cast<size_t>(hash(k)));
     k2.cull = CullMode::None;
     CHECK(hash(k) != hash(k2));

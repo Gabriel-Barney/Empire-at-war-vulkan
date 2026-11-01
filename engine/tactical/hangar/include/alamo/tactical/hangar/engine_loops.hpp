@@ -74,7 +74,6 @@ public:
     }
     void engines_offline(combat::ObjectId id, uint32_t frame) { both_off(id, frame); }
     void timed_disable(combat::ObjectId id, uint32_t frame) { both_off(id, frame); }
-    void land_transform(combat::ObjectId id, uint32_t frame) { both_off(id, frame); }
     void engines_online(combat::ObjectId id, uint32_t frame) { set(get(id), EngineLoop::Idle, true, frame); }
     void suppress(combat::ObjectId id, uint32_t frame) {
         Obj& o = get(id);

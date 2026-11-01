@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 
+#include "alamo/core/text.hpp"
+
 namespace alamo::render {
 
 int max_lod(std::span<const assets::MeshInfo> meshes) {
@@ -38,12 +40,6 @@ bool contains_upper(std::string_view n, std::string_view w) {
     }
     return false;
 }
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
 }  // namespace
 
 bool is_state_mesh(std::string_view n) {
@@ -59,7 +55,7 @@ std::vector<uint8_t> hidden_mesh_mask(const assets::ModelAsset& model, std::span
     for (size_t i = 0; i < model.meshes.size(); ++i) {
         const std::string& n = model.meshes[i].name;
         bool h = model.meshes[i].hidden || is_state_mesh(n);
-        for (const std::string& d : decals) h = h || iequal(n, d);
+        for (const std::string& d : decals) h = h || ascii_iequals(n, d);
         mask[i] = h ? 1 : 0;
     }
     return mask;
@@ -76,7 +72,7 @@ uint32_t set_hardpoint_destroyed(std::vector<uint8_t>& mask, const assets::Model
     uint32_t changed = 0;
     if (mask.size() < model.meshes.size()) mask.resize(model.meshes.size(), 0);
     for (size_t i = 0; i < model.meshes.size(); ++i) {
-        if (decal.empty() || !iequal(model.meshes[i].name, decal)) continue;
+        if (decal.empty() || !ascii_iequals(model.meshes[i].name, decal)) continue;
         const uint8_t v = destroyed ? 0 : 1;
         changed += mask[i] != v ? 1u : 0u;
         mask[i] = v;

@@ -1183,7 +1183,6 @@ void test_determinism() {
 // ---- 4. FoC data ------------------------------------------------------------------------------------------------------
 
 std::string env_or(const char* name) {
-#ifdef _MSC_VER
     char* v = nullptr;
     size_t len = 0;
     std::string out;
@@ -1192,10 +1191,6 @@ std::string env_or(const char* name) {
         std::free(v);
     }
     return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
 }
 
 const SpecialAbilityDef* find_ability(const GalacticRules& r, uint32_t type, SpecialAbilityClass cls) {

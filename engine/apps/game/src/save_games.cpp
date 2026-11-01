@@ -11,6 +11,7 @@
 #include <system_error>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/text.hpp"
 
 namespace alamo::game {
 
@@ -22,19 +23,10 @@ constexpr const char* kMarker = "alamo_game_save 1";
 constexpr uint32_t kHeaderFormat = 1;          // the SaveFile layout read_save_header understands without a full decode
 constexpr size_t kHeaderBytes = 64u * 1024u;   // description longer than this: full read
 
-char lower(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (lower(a[i]) != lower(b[i])) return false;
-    return true;
-}
-
 bool iless(std::string_view a, std::string_view b) {
     const size_t n = std::min(a.size(), b.size());
     for (size_t i = 0; i < n; ++i) {
-        const char x = lower(a[i]), y = lower(b[i]);
+        const char x = ascii_lower(a[i]), y = ascii_lower(b[i]);
         if (x != y) return x < y;
     }
     return a.size() < b.size();
@@ -72,8 +64,8 @@ int64_t file_time_seconds(const fs::path& p) {
 bool reserved_device(std::string_view s) {
     static constexpr const char* kNames[] = {"CON", "PRN", "AUX", "NUL"};
     for (const char* n : kNames)
-        if (iequal(s, n)) return true;
-    if (s.size() == 4 && (iequal(s.substr(0, 3), "COM") || iequal(s.substr(0, 3), "LPT")) && s[3] >= '1' && s[3] <= '9') return true;
+        if (ascii_iequals(s, n)) return true;
+    if (s.size() == 4 && (ascii_iequals(s.substr(0, 3), "COM") || ascii_iequals(s.substr(0, 3), "LPT")) && s[3] >= '1' && s[3] <= '9') return true;
     return false;
 }
 
@@ -289,7 +281,7 @@ std::vector<SaveEntry> list_saves(const std::string& dir) {
     for (fs::directory_iterator it(d, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& p = it->path();
         std::error_code ec2;
-        if (!it->is_regular_file(ec2) || !iequal(p.extension().string(), kSaveExtension)) continue;
+        if (!it->is_regular_file(ec2) || !ascii_iequals(p.extension().string(), kSaveExtension)) continue;
         SaveEntry e;
         e.name = p.stem().string();
         e.path = p.string();
@@ -306,7 +298,7 @@ std::vector<SaveEntry> list_saves(const std::string& dir) {
     }
     std::sort(out.begin(), out.end(), [](const SaveEntry& a, const SaveEntry& b) {
         if (a.sort_time != b.sort_time) return a.sort_time > b.sort_time;
-        if (!iequal(a.name, b.name)) return iless(a.name, b.name);
+        if (!ascii_iequals(a.name, b.name)) return iless(a.name, b.name);
         return a.name < b.name;
     });
     return out;

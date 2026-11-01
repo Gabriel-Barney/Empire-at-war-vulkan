@@ -3,16 +3,12 @@
 #include <cctype>
 #include <vector>
 
+#include "alamo/core/text.hpp"
 #include "alamo/vfs/vfs.hpp"
 
 namespace alamo::render {
 
 namespace {
-std::string upper(std::string_view s) {
-    std::string r(s);
-    for (char& c : r) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return r;
-}
 std::string trim(std::string s) {
     while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
     size_t i = 0;
@@ -25,11 +21,11 @@ std::string find_object_model(const FileProvider& files, std::string_view object
     if (object_type.empty()) return {};
     const auto* vfs = dynamic_cast<const vfs::Vfs*>(&files);
     if (!vfs) return {};
-    const std::string want = "NAME=\"" + upper(object_type) + "\"";
+    const std::string want = "NAME=\"" + ascii_upper(object_type) + "\"";
     std::vector<uint8_t> bytes;
     for (const std::string& path : vfs->list("Data\\XML\\*.XML")) {
         if (!files.read(path, bytes)) continue;
-        const std::string text = upper(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        const std::string text = ascii_upper(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
         const size_t at = text.find(want);
         if (at == std::string::npos) continue;
         // The element ends at the next object definition (next Name=" attribute) at the latest.

@@ -283,7 +283,7 @@ void GoalSystem::release(Goal& g, bool by_goal_system) {
     g.state = GoalState::Released;
 }
 
-void GoalSystem::maintenance(int32_t category, int64_t now) {
+void GoalSystem::maintenance(int32_t category) {
     std::vector<Goal>& a = active_[static_cast<size_t>(category)];
     std::vector<Goal> keep;
     for (Goal& g : a) {
@@ -304,7 +304,6 @@ void GoalSystem::maintenance(int32_t category, int64_t now) {
         keep.push_back(std::move(g));
     }
     a = std::move(keep);
-    (void)now;
 }
 
 void GoalSystem::commit(int64_t now) {
@@ -371,7 +370,7 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
     }
     P.clear();
     if (props.empty()) {
-        maintenance(category, now);
+        maintenance(category);
         return;
     }
     sort_by_eff(props);

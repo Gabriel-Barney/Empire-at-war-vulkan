@@ -16,6 +16,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
@@ -26,15 +27,7 @@
 using namespace alamo;
 using namespace alamo::data;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using alamo::testing::write_file;
 
 static bool has_warning(const XmlDocument& d, uint32_t line, std::string_view needle) {
     for (const auto& w : d.diagnostics())
@@ -245,11 +238,6 @@ static void test_values() {
     CHECK(pr2 && pr2->first == "Empire" && pr2->second == "Thyferra");
     CHECK(!parse_pair("Rebel,"));
     CHECK(!parse_pair("Rebel"));
-}
-
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
 }
 
 static void test_database_synthetic() {
@@ -525,19 +513,8 @@ static void test_database_install_layout() {
 // Integration over the real data
 
 static std::string env_or(const char* name, const char* fallback) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out = fallback;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        if (*v) out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return (v && *v) ? std::string(v) : std::string(fallback);
-#endif
+    std::string v = alamo::testing::env_or_empty(name);
+    return v.empty() ? std::string(fallback) : v;
 }
 
 struct TreeStats {

@@ -7,6 +7,7 @@
 
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "vm_internal.hpp"
 
@@ -15,19 +16,6 @@ namespace alamo::lua {
 using detail::Call;
 
 namespace {
-
-int push_nil(Call& c) {
-    lua_pushnil(c.L);
-    return 1;
-}
-int push_bool(Call& c, bool b) {
-    lua_pushboolean(c.L, b ? 1 : 0);
-    return 1;
-}
-int push_num(Call& c, double d) {
-    lua_pushnumber(c.L, d);
-    return 1;
-}
 
 GameRandom* rng(Call& c) { return c.vm->host.rng; }
 
@@ -98,8 +86,6 @@ int g_find_all_objects_of_type(Call& c) {
     }
     return 1;
 }
-
-objects::ObjectHandle self_object(Call& c) { return detail::object_handle(*c.self); }
 
 int m_object_is_valid(Call& c) { return push_bool(c, detail::object_alive(*c.vm, *c.self)); }
 
@@ -477,13 +463,7 @@ int g_get_game_mode(Call& c) {
 int g_string_compare(Call& c) {
     if (c.nargs != 2 || !c.is_string(1) || !c.is_string(2)) return push_bool(c, false);
     const std::string_view a = c.string(1), b = c.string(2);
-    if (a.size() != b.size()) return push_bool(c, false);
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-        if (x != y) return push_bool(c, false);
-    }
-    return push_bool(c, true);
+    return push_bool(c, ascii_iequals(a, b));
 }
 
 constexpr BindingKind G = BindingKind::Global;

@@ -1,15 +1,10 @@
 #include "alamo/anim/anim_events.hpp"
 
+#include "alamo/core/text.hpp"
+
 namespace alamo::anim {
 
 namespace {
-
-std::string upper(std::string_view s) {
-    std::string out(s);
-    for (char& c : out)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return out;
-}
 
 bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\v' || c == '\f'; }
 
@@ -42,10 +37,10 @@ std::string clip_stem(std::string_view path) {
     const size_t slash = path.find_last_of("\\/");
     if (slash != std::string_view::npos) path = path.substr(slash + 1);
     if (path.size() > 4) {
-        const std::string ext = upper(path.substr(path.size() - 4));
+        const std::string ext = ascii_upper(path.substr(path.size() - 4));
         if (ext == ".ALA") path = path.substr(0, path.size() - 4);
     }
-    return upper(path);
+    return ascii_upper(path);
 }
 
 size_t AnimEventMap::parse(std::string_view text, std::vector<std::string>* diagnostics) {
@@ -59,7 +54,7 @@ size_t AnimEventMap::parse(std::string_view text, std::vector<std::string>* diag
         ++line_no;
         const std::vector<std::string_view> f = fields(line);
         if (f.empty() || f[0][0] == ';' || f[0][0] == '#' || f[0].substr(0, 2) == "//") continue;
-        const std::string k = upper(f[0]);
+        const std::string k = ascii_upper(f[0]);
         const bool sound = k == "SOUND", surface = k == "SURFACE";
         AnimEventDef e;
         if (!((sound && f.size() >= 4) || (surface && f.size() >= 5)) || !parse_ms(f[2], e.time_ms)) {

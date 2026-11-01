@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/game/attract_mode.hpp"
 #include "alamo/game/game_controls.hpp"
@@ -42,15 +43,6 @@
 
 using namespace alamo;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
@@ -125,9 +117,10 @@ const char* kFactions = R"(<Factions>
 </Factions>
 )";
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
+using alamo::testing::write_file;
+
+void tick_n(game::GameSession& s, int n) {
+    for (int i = 0; i < n; ++i) s.tick();
 }
 
 std::string make_data() {
@@ -300,30 +293,30 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
     // Select, then attack with the selection; a few ticks later move the first unit away, then stop it.
     CHECK(s.submit(commands::ev::select(mine)).ok());
     CHECK(s.submit(commands::ev::attack(enemy, {})).ok());
-    for (int i = 0; i < 5; ++i) s.tick();
+    tick_n(s, 5);
     t += 5;
     CHECK(s.order_stats().attacks == 1);
     if (s.battle()) CHECK(s.battle()->combat().current_target(static_cast<tactical::combat::ObjectId>(mine[0])) ==
                           static_cast<tactical::combat::ObjectId>(enemy));
     CHECK(s.submit(commands::ev::select({mine[0]})).ok());
     CHECK(s.submit(commands::ev::move_to_position(1500.0f, -1200.0f, 0.0f)).ok());
-    for (int i = 0; i < 3; ++i) s.tick();
+    tick_n(s, 3);
     t += 3;
     CHECK(s.order_stats().moves == 1);
     if (s.battle()) CHECK(s.battle()->movement().view(static_cast<objects::ObjectId>(mine[0])).has_goal);
     CHECK(s.submit(commands::ev::stop()).ok());
-    for (int i = 0; i < 3; ++i) s.tick();
+    tick_n(s, 3);
     t += 3;
     CHECK(s.order_stats().stops == 1 && s.order_stats().rejected == 0);
     // Control groups (SimHost P host block): Ctrl+3 assigns the selection, a recall restores it.
     CHECK(s.submit(commands::ev::select(mine)).ok());
     CHECK(s.submit(commands::ev::control_group(3, true)).ok());
     CHECK(s.submit(commands::ev::select({mine[0]})).ok());
-    for (int i = 0; i < 3; ++i) s.tick();
+    tick_n(s, 3);
     CHECK(s.host().control_group(static_cast<uint8_t>(s.local_player()), 3).size() == mine.size());
     CHECK(s.host().selection(static_cast<uint8_t>(s.local_player())).size() == 1);
     CHECK(s.submit(commands::ev::control_group(3, false)).ok());
-    for (int i = 0; i < 3; ++i) s.tick();
+    tick_n(s, 3);
     t += 6;
     CHECK(s.host().selection(static_cast<uint8_t>(s.local_player())).size() == mine.size());
     // MoveToPositionFacing (id 47: point + facing in degrees, explicit units) through the order hook.
@@ -331,7 +324,7 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
         commands::EventData mf(commands::EventType::MoveToPositionFacing);
         mf.set_f("x", 1200.0f).set_f("y", -1000.0f).set_f("angle", 90.0f).set_ids("units", {mine[0]});
         CHECK(s.submit(std::move(mf)).ok());
-        for (int i = 0; i < 3; ++i) s.tick();
+        tick_n(s, 3);
         t += 3;
         CHECK(s.order_stats().moves == 2 && s.order_stats().rejected == 0);
         if (s.battle()) CHECK(s.battle()->movement().view(static_cast<objects::ObjectId>(mine[0])).has_goal);
@@ -339,13 +332,13 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
 #ifdef ALAMO_GAME_HAVE_UI
     // Pause / resume through the command stream: once the pause entry drained, no tick runs until the resume.
     CHECK(s.set_paused(true));
-    for (int i = 0; i < 3; ++i) s.tick();
+    tick_n(s, 3);
     CHECK(s.paused());
     const uint64_t paused_at = s.host().frame();
     for (int i = 0; i < 10; ++i) CHECK(!s.tick());
     CHECK(s.host().frame() == paused_at);
     CHECK(s.set_paused(false) && !s.paused());
-    for (int i = 0; i < 3; ++i) s.tick();
+    tick_n(s, 3);
     CHECK(s.pause_events() == 2);
     std::printf("pause: paused at frame %" PRIu64 ", resumed\n", paused_at);
 #endif
@@ -363,7 +356,7 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
         mv.set_queued(true);
         CHECK(s.submit(std::move(atk)).ok());
         CHECK(s.submit(std::move(mv)).ok());
-        for (int i = 0; i < 3; ++i) s.tick();
+        tick_n(s, 3);
         if (const sim::TacticalBattle* bt = s.battle()) {
             const auto q = bt->queued_orders(static_cast<objects::ObjectId>(mine[1]));
             std::printf("queue: unit %u has %zu queued order(s) behind its current one\n", mine[1], q.size());
@@ -406,7 +399,7 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
     if (reserve != 0) {
         const uint64_t rej0 = s.order_stats().rejected;
         CHECK(s.submit(commands::EventData(commands::EventType::Reinforce).set("unit", reserve).set_f("x", rx).set_f("y", ry)).ok());
-        for (int i = 0; i < 3; ++i) s.tick();
+        tick_n(s, 3);
         t += 3;
         CHECK(s.order_stats().reinforcements == 0 && s.order_stats().rejected == rej0 + 1);  // QueueFull: the cap is used
         uint64_t waited = 0;
@@ -490,7 +483,7 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
             commands::EventData det(commands::EventType::FleetManagement);
             det.set("target", planet_id).set("fleet", fleet_id).set("unit", unit_id).set("op", 2u);
             CHECK(s.submit(std::move(det)).ok());
-            for (int i = 0; i < 3; ++i) s.tick();
+            tick_n(s, 3);
             t += 3;
             const std::vector<uint32_t> mid = human_fleets();
             CHECK(mid.size() == before.size() + 1);
@@ -502,7 +495,7 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
             commands::EventData mrg(commands::EventType::FleetManagement);
             mrg.set("target", fleet_id).set("fleet", lone).set("unit", commands::kNoObject).set("op", 3u);
             CHECK(s.submit(std::move(mrg)).ok());
-            for (int i = 0; i < 3; ++i) s.tick();
+            tick_n(s, 3);
             t += 3;
             CHECK(human_fleets().size() == before.size());
             const uint32_t back = g->fleet_of(gst.find(static_cast<objects::ObjectId>(fleet_id)));
@@ -536,11 +529,11 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
             const auto planet_id = static_cast<uint32_t>(gst.id(g->planets()[at].object));
             const size_t n0 = g->fleets()[fleet].contents.size(), s0 = g->planets()[at].surface.size();
             CHECK(s.submit(galactic::fleet_management_event(galactic::kFleetLaunch, fleet_id, commands::kNoObject, trooper)).ok());
-            for (int i = 0; i < 3; ++i) s.tick();
+            tick_n(s, 3);
             t += 3;
             CHECK(g->fleets()[fleet].contents.size() == n0 + 1 && g->planets()[at].surface.size() == s0 - 1);
             CHECK(s.submit(galactic::fleet_management_event(galactic::kFleetLand, planet_id, fleet_id, trooper)).ok());
-            for (int i = 0; i < 3; ++i) s.tick();
+            tick_n(s, 3);
             t += 3;
             CHECK(g->fleets()[fleet].contents.size() == n0 && g->planets()[at].surface.size() == s0);
             std::printf("fleet management: launched trooper %u into fleet %u and landed it again\n", trooper, fleet_id);
@@ -576,7 +569,7 @@ bool auto_resolve_run(const game::GameData& data, const game::SessionSpec& spec,
         s.tick();
         ++t;
     }
-    for (int i = 0; i < 5; ++i) s.tick();  // the Withdraw drains (if it was sent on the last tick)
+    tick_n(s, 5);  // the Withdraw drains (if it was sent on the last tick)
     t += 5;
     const auto& log = s.battles()->conflicts().log();
     CHECK(chose && log.size() == 1);
@@ -593,7 +586,7 @@ bool auto_resolve_run(const game::GameData& data, const game::SessionSpec& spec,
     // A late Withdraw (the auto-resolve has its result): dropped silently, the command itself succeeds (§9.2).
     const uint64_t rej0 = s.host().commands_rejected();
     CHECK(s.withdraw());
-    for (int i = 0; i < 3; ++i) s.tick();
+    tick_n(s, 3);
     t += 3;
     CHECK(s.port_stats().withdraw == early + 1 && s.port_stats().withdraw_dropped == 1 && s.host().commands_rejected() == rej0);
     out.crc = s.host().crc_log();
@@ -686,9 +679,7 @@ bool special_run(const game::GameData& data, const game::SessionSpec& spec, comm
     if (!g || !ids.smuggler) return false;
     const PlanetIndex p = game::kSkirmishBattlePlanet;
     const int32_t me = s.local_player();
-    auto run = [&](int n) {
-        for (int i = 0; i < n; ++i) s.tick();
-    };
+    auto run = [&](int n) { tick_n(s, n); };
     auto dialog_kind = [&]() { return s.special_dialog() ? s.special_dialog()->kind : 0u; };
     // Executors charge the q8-requantized amount (COMMANDS 3.2 local round-trip).
     auto q8 = [](float v) { return commands::requantize(galactic::kQuantAmount, v); };

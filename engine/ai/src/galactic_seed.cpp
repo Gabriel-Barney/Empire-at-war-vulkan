@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/objects/game_object_types.hpp"
 
@@ -11,25 +12,12 @@ namespace alamo::ai {
 
 namespace {
 
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-std::string_view trim(std::string_view s) {
-    auto sp = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
-    while (!s.empty() && sp(s.front())) s.remove_prefix(1);
-    while (!s.empty() && sp(s.back())) s.remove_suffix(1);
-    return s;
-}
 std::vector<std::string_view> split_commas(std::string_view s) {
     std::vector<std::string_view> out;
     size_t start = 0;
     for (;;) {
         const size_t c = s.find(',', start);
-        out.push_back(trim(s.substr(start, c == std::string_view::npos ? std::string_view::npos : c - start)));
+        out.push_back(ascii_trim(s.substr(start, c == std::string_view::npos ? std::string_view::npos : c - start)));
         if (c == std::string_view::npos) break;
         start = c + 1;
     }
@@ -40,7 +28,7 @@ bool space_category(std::span<const std::string_view> mask) {
     static constexpr std::string_view kSpace[] = {"Fighter", "Bomber", "Corvette", "Frigate", "Capital", "SpaceHero"};
     for (std::string_view m : mask)
         for (std::string_view k : kSpace)
-            if (iequals(m, k)) return true;
+            if (ascii_iequals(m, k)) return true;
     return false;
 }
 
@@ -64,20 +52,20 @@ ForceTypeLookup make_force_type_lookup(const objects::GameObjectTypes& types) {
         f.valid = true;
         f.combat_power = types.columns().ai_combat_power[t];
         const std::string_view el = types.raw().element_name(t);
-        if (iequals(el, "StarBase")) {
+        if (ascii_iequals(el, "StarBase")) {
             f.starbase = true;
             f.layer = UnitLayer::Space;
             f.base_level = types.get_int(t, "Base_Level");
-        } else if (iequals(el, "GroundStructure") || iequals(el, "SpecialStructure")) {
+        } else if (ascii_iequals(el, "GroundStructure") || ascii_iequals(el, "SpecialStructure")) {
             f.structure = true;
             f.layer = UnitLayer::Ground;
-        } else if (iequals(el, "SpaceUnit") || iequals(el, "Squadron") || iequals(el, "SpaceProp")) {
+        } else if (ascii_iequals(el, "SpaceUnit") || ascii_iequals(el, "Squadron") || ascii_iequals(el, "SpaceProp")) {
             f.layer = UnitLayer::Space;
-        } else if (iequals(el, "GroundCompany") || iequals(el, "GroundInfantry") || iequals(el, "GroundVehicle")) {
+        } else if (ascii_iequals(el, "GroundCompany") || ascii_iequals(el, "GroundInfantry") || ascii_iequals(el, "GroundVehicle")) {
             f.layer = UnitLayer::Ground;
         } else {
             bool space = space_category(types.get_list(t, "CategoryMask"));
-            if (!space && iequals(el, "HeroCompany")) {
+            if (!space && ascii_iequals(el, "HeroCompany")) {
                 const auto members = types.get_list(t, "Company_Units");
                 if (!members.empty()) {
                     const objects::TypeIndex m = types.resolve_name(members.front());
@@ -100,13 +88,13 @@ CampaignSeed seed_campaign_snapshot(const data::CampaignDef& campaign, const Gal
     // [port] the synthetic seed couples the two: no fog also means auto-reveal (keeps the headless goldens).
     s.planet_auto_reveal = !options.fog;
 
-    auto is_neutral = [&](std::string_view f) { return options.is_neutral ? options.is_neutral(f) : iequals(f, "Neutral"); };
+    auto is_neutral = [&](std::string_view f) { return options.is_neutral ? options.is_neutral(f) : ascii_iequals(f, "Neutral"); };
     auto corrupt = [&](std::string_view f) {
-        return options.benefits_from_corruption ? options.benefits_from_corruption(f) : iequals(f, "Underworld");
+        return options.benefits_from_corruption ? options.benefits_from_corruption(f) : ascii_iequals(f, "Underworld");
     };
     auto player_of = [&](std::string_view faction) -> PlayerId {
         for (size_t i = 0; i < out.player_names.size(); ++i)
-            if (iequals(out.player_names[i], faction)) return static_cast<PlayerId>(i);
+            if (ascii_iequals(out.player_names[i], faction)) return static_cast<PlayerId>(i);
         out.player_names.emplace_back(faction);
         return static_cast<PlayerId>(out.player_names.size() - 1);
     };
@@ -114,7 +102,7 @@ CampaignSeed seed_campaign_snapshot(const data::CampaignDef& campaign, const Gal
         const auto f = split_commas(e);
         if (!f.empty() && !f[0].empty()) player_of(f[0]);
     }
-    for (const auto& [faction, planet] : campaign.home_locations) player_of(trim(faction));
+    for (const auto& [faction, planet] : campaign.home_locations) player_of(ascii_trim(faction));
     struct Force {
         PlayerId player;
         uint32_t planet;

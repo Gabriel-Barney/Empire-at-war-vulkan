@@ -2,6 +2,7 @@
 #include <string>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/lua/script_loader.hpp"
 
 namespace alamo::lua {
@@ -16,14 +17,7 @@ constexpr std::string_view kRoots[] = {
 };
 
 bool ends_with_icase(std::string_view s, std::string_view suffix) {
-    if (s.size() < suffix.size()) return false;
-    for (size_t i = 0; i < suffix.size(); ++i) {
-        char a = s[s.size() - suffix.size() + i], b = suffix[i];
-        if (a >= 'A' && a <= 'Z') a = static_cast<char>(a - 'A' + 'a');
-        if (b >= 'A' && b <= 'Z') b = static_cast<char>(b - 'A' + 'a');
-        if (a != b) return false;
-    }
-    return true;
+    return s.size() >= suffix.size() && ascii_iequals(s.substr(s.size() - suffix.size()), suffix);
 }
 
 }  // namespace

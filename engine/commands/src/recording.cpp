@@ -5,6 +5,7 @@
 #include <iterator>
 #include <stdexcept>
 
+#include "alamo/core/bytes.hpp"
 #include "wire.hpp"
 
 namespace alamo::commands {
@@ -152,9 +153,8 @@ bool CommandRecording::save(const std::string& path, std::string* err) const {
 }
 
 bool CommandRecording::load(const std::string& path, CommandRecording& out, std::string* err) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return fail(err, "cannot open " + path);
-    const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> bytes;
+    if (!read_file_bytes(path, bytes, err)) return false;
     return from_bytes(bytes, out, err);
 }
 

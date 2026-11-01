@@ -16,6 +16,8 @@
 #include "alamo/assets/asset_cache.hpp"
 #include "alamo/core/parallel.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/test_support.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/render/lod.hpp"
@@ -23,74 +25,15 @@
 #include "alamo/render/pipelines.hpp"
 #include "alamo/render/png.hpp"
 #include "alamo/rhi/rhi.hpp"
+#include "alamo/rhi/test_fixture.hpp"
 #include "alamo/shaderxlat/interpreter.hpp"
 #include "alamo/assets/vertex_layout.hpp"
 #include "alamo/vfs/vfs.hpp"
 
 using namespace alamo;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
-
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
-};
-
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback,
-                                     readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-    std::vector<uint8_t> pixels() const {
-        const auto* p = static_cast<const uint8_t*>(readback.mapped());
-        return std::vector<uint8_t>(p, p + static_cast<size_t>(w) * h * 4);
-    }
-};
+using alamo::testing::Gpu;
+using alamo::testing::Offscreen;
+using alamo::testing::env_or_empty;
 
 static bool render_frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices& vm, std::span<const render::Instance> inst,
                          render::DrawStats& stats, const render::RecordOptions& ro, std::span<const render::Instance> sky, const float* clear) {
@@ -141,11 +84,6 @@ static void write_png(const std::string& path, uint32_t w, uint32_t h, std::vect
     CHECK(render::write_png_rgba(path, w, h, rgba));
 }
 
-static std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
-
 static const char* bucket_name(render::PhaseBucket b) {
     switch (b) {
     case render::PhaseBucket::Terrain: return "Terrain";
@@ -168,8 +106,7 @@ static std::string stem_lower(const std::string& path) {
     if (slash != std::string::npos) s = s.substr(slash + 1);
     const size_t dot = s.find_last_of('.');
     if (dot != std::string::npos) s = s.substr(0, dot);
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
+    return ascii_lower(s);
 }
 
 static void print_model(const char* what, const render::Instance& in, size_t count) {
@@ -221,7 +158,7 @@ static void check_nebula_vs(render::Renderer& rr, const render::Instance& in, co
     const render::GpuModel& gm = *in.model;
     const render::GpuSubmesh* gs = nullptr;
     for (const render::GpuSubmesh& s : gm.submeshes)
-        if (upper(s.effect_name) == "NEBULA") gs = &s;
+        if (ascii_upper(s.effect_name) == "NEBULA") gs = &s;
     CHECK(gs && !gs->passes.empty());
     if (!gs || gs->passes.empty()) return;
     const render::GpuPass& gp = gs->passes.front();
@@ -324,7 +261,7 @@ static void space_map_order(Gpu& g, render::Renderer& rr, Offscreen& o, vfs::Vfs
     for (size_t i = 0; i < sky.size(); ++i) {
         if (!sky[i].model || !sky[i].model->asset) continue;
         print_model("background", sky[i], 1);
-        if (upper(sky[i].model->asset->name).find("W_PLANET_") != std::string::npos) planets.push_back(i);
+        if (ascii_upper(sky[i].model->asset->name).find("W_PLANET_") != std::string::npos) planets.push_back(i);
     }
     std::vector<render::Instance> nebulae, others;  // main scene: Nebula.fx props / everything else
     {
@@ -332,7 +269,7 @@ static void space_map_order(Gpu& g, render::Renderer& rr, Offscreen& o, vfs::Vfs
         for (const render::Instance& in : main) {
             if (!in.model || !in.model->asset) continue;
             bool nebula = false;
-            for (const render::GpuSubmesh& s : in.model->submeshes) nebula = nebula || upper(s.effect_name) == "NEBULA";
+            for (const render::GpuSubmesh& s : in.model->submeshes) nebula = nebula || ascii_upper(s.effect_name) == "NEBULA";
             (nebula ? nebulae : others).push_back(in);
             if (std::find(seen.begin(), seen.end(), in.model) != seen.end()) continue;
             seen.push_back(in.model);

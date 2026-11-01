@@ -16,6 +16,7 @@
 
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "alamo/tactical/hangar/contents.hpp"
@@ -36,14 +37,6 @@ namespace ta = alamo::tactical::abilities;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 bool near(float a, float b) { return a - b < 0.01f && b - a < 0.01f; }
 bool near3(Vec3 a, Vec3 b) { return near(a.x, b.x) && near(a.y, b.y) && near(a.z, b.z); }

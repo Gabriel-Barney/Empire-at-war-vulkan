@@ -7,6 +7,7 @@
 // Behaviour the docs do not give is marked [inferred].
 #include <string>
 
+#include "alamo/core/text.hpp"
 #include "alamo/lua/presentation.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "vm_internal.hpp"
@@ -20,9 +21,6 @@ namespace {
 
 PresentationLog& log_of(Call& c) { return detail::presentation_of(c.L); }
 uint32_t frame_of(const Call& c) { return c.vm->frame; }
-
-bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TBOOLEAN; }
-bool boolean(const Call& c, int i) { return lua_toboolean(c.L, c.idx(i)) != 0; }
 
 const detail::Ud* engine_ud(const Call& c, int i) {
     if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return nullptr;
@@ -50,7 +48,7 @@ Arg to_arg(const Call& c, int i) {
         case LUA_TNIL: break;
         case LUA_TBOOLEAN:
             a.kind = Arg::Kind::Bool;
-            a.b = boolean(c, i);
+            a.b = to_bool(c, i);
             break;
         case LUA_TNUMBER:
             a.kind = Arg::Kind::Number;
@@ -202,7 +200,7 @@ int g_start_cinematic_camera(Call& c) {
     record(c, PresentationOp::StartCinematicCamera);
     PresentationState& s = state(c);
     s.camera = CameraMode::Cinematic;
-    s.cinematic_letterbox_arg = is_bool(c, 1) ? boolean(c, 1) : true;
+    s.cinematic_letterbox_arg = is_bool(c, 1) ? to_bool(c, 1) : true;
     s.tactical_blend.set(0.0, frame_of(c));
     return 0;
 }
@@ -325,7 +323,7 @@ int g_cinematic_zoom(Call& c) {
 int g_set_cinematic_environment(Call& c) {
     if (!need_bool1(c, "LuaSetCinematicEnvironment")) return -1;
     record(c, PresentationOp::SetCinematicEnvironment);
-    state(c).cinematic_environment = boolean(c, 1);
+    state(c).cinematic_environment = to_bool(c, 1);
     return 0;
 }
 
@@ -410,7 +408,7 @@ int g_cancel_fast_forward(Call& c) {
 int g_enable_fog(Call& c) {
     if (!need_bool1(c, "LuaEnableFog")) return -1;
     record(c, PresentationOp::EnableFog);
-    state(c).fog_enabled = boolean(c, 1);
+    state(c).fog_enabled = to_bool(c, 1);
     return 0;
 }
 
@@ -418,7 +416,7 @@ int g_enable_distance_fog(Call& c) {
     if (!need_count(c, "Enable_Distance_Fog", 1)) return -1;
     if (!is_bool(c, 1)) return c.fail("Enable_Distance_Fog -- invalid type for parameter 1. Expected boolean.");
     record(c, PresentationOp::EnableDistanceFog);
-    state(c).distance_fog_enabled = boolean(c, 1);
+    state(c).distance_fog_enabled = to_bool(c, 1);
     return 0;
 }
 
@@ -427,14 +425,14 @@ int g_enable_distance_fog(Call& c) {
 int g_allow_localized_sfx(Call& c) {
     if (!need_bool1(c, "LuaAllowLocalizedSFX")) return -1;
     record(c, PresentationOp::AllowLocalizedSfx);
-    state(c).localized_sfx = boolean(c, 1);
+    state(c).localized_sfx = to_bool(c, 1);
     return 0;
 }
 
 int g_weather_audio_pause(Call& c) {
     if (!need_bool1(c, "LuaWeatherAudioPause")) return -1;
     record(c, PresentationOp::WeatherAudioPause);
-    state(c).weather_audio_paused = boolean(c, 1);
+    state(c).weather_audio_paused = to_bool(c, 1);
     return 0;
 }
 
@@ -476,7 +474,7 @@ int g_master_volume_restore(Call& c) {
 int sfx_flag(Call& c, const char* name, PresentationOp op, bool PresentationState::*flag) {
     if (!is_bool(c, 1)) return c.fail("LuaSFXCommandsClassClass::%s -- Expected bool parameter 1", name);
     record(c, op);
-    state(c).*flag = boolean(c, 1);
+    state(c).*flag = to_bool(c, 1);
     return 0;
 }
 int m_allow_ambient_vo(Call& c) {
@@ -515,12 +513,6 @@ int m_stop_sfx_event(Call& c) { return object_sfx(c, "Stop_SFX_Event", Presentat
 // Visual only: recorded for R1 (visibility of sub-objects / emitters) and R4 (particles); none of them
 // touches sim state. [inferred] Hide_Sub_Object's float: non-zero hides.
 
-std::string upper_copy(std::string_view s) {
-    std::string out(s);
-    for (char& ch : out) ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
-    return out;
-}
-
 int g_hide_sub_object(Call& c) {
     if (c.nargs != 3)
         return c.fail("LuaHideSubObject -- Expected gameobject pointer parameter 1, float parameter 2, string parameter 3");
@@ -529,7 +521,7 @@ int g_hide_sub_object(Call& c) {
     if (!c.is_string(3)) return c.fail("LuaHideSubObject -- invalid type for parameter 3. Expected string.");
     record(c, PresentationOp::HideSubObject);
     const int32_t id = engine_ud(c, 1)->id;
-    state(c).hidden_sub_objects[std::to_string(id) + "|" + upper_copy(c.string(3))] = c.number(2) != 0.0;
+    state(c).hidden_sub_objects[std::to_string(id) + "|" + ascii_upper(c.string(3))] = c.number(2) != 0.0;
     return 0;
 }
 
@@ -581,7 +573,7 @@ int m_cinematic_hyperspace_in(Call& c) {
 int m_in_end_cinematic(Call& c) {
     if (!is_bool(c, 1)) return c.fail("GameObjectWrapper::Lua_Is_In_End_Cinematic -- Missing required boolean parameter.");
     record(c, PresentationOp::ObjectInEndCinematic, true);
-    state(c).in_end_cinematic[c.self->id] = boolean(c, 1);
+    state(c).in_end_cinematic[c.self->id] = to_bool(c, 1);
     return 0;
 }
 
@@ -596,7 +588,7 @@ int m_show_emitter(Call& c) {
     if (!c.is_string(1)) return c.fail("GameObjectWrapper::Show_Emitter -- invalid type for parameter 1. Expected string.");
     if (!is_bool(c, 2)) return c.fail("GameObjectWrapper::Show_Emitter -- invalid type for parameter 2. Expected boolean.");
     record(c, PresentationOp::ObjectShowEmitter, true);
-    state(c).emitters[std::to_string(c.self->id) + "|" + upper_copy(c.string(1))] = boolean(c, 2);
+    state(c).emitters[std::to_string(c.self->id) + "|" + ascii_upper(c.string(1))] = to_bool(c, 2);
     return 0;
 }
 

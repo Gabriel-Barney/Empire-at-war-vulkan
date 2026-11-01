@@ -10,6 +10,8 @@
 #include <functional>
 #include <iterator>
 
+#include "alamo/core/bytes.hpp"
+
 namespace alamo::reftest {
 
 const Json* Json::get(const std::string& k) const {
@@ -191,12 +193,8 @@ void Dmat4::apply(const double p[3], double out[3]) const {
 }
 
 bool Gltf::load(const std::string& path, std::string* err) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        if (err) *err = "cannot open " + path;
-        return false;
-    }
-    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::string text;
+    if (!read_text_file(path, text, err)) return false;
     if (!parse_json(text, json, err)) return false;
     const Json* buffers = json.get("buffers");
     if (!buffers || buffers->arr.empty()) return false;

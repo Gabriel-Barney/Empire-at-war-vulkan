@@ -8,6 +8,7 @@
 
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -45,13 +46,6 @@ std::string trim(std::string_view s) {
 
 bool yes(std::string_view v) {
     return !v.empty() && (v[0] == 'y' || v[0] == 'Y' || v[0] == 't' || v[0] == 'T' || v == "1");
-}
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
 }
 
 }  // namespace
@@ -142,7 +136,7 @@ std::vector<FactionColor> load_faction_colors(const FileProvider& files) {
 
 bool faction_map_color(std::span<const FactionColor> table, std::string_view name, materials::float4& out) {
     for (const FactionColor& f : table)
-        if (iequal(f.name, name)) {
+        if (ascii_iequals(f.name, name)) {
             if (!f.has_color) return false;
             out = f.color;
             return true;
@@ -152,7 +146,7 @@ bool faction_map_color(std::span<const FactionColor> table, std::string_view nam
 
 bool faction_text_color(std::span<const FactionColor> table, std::string_view name, materials::float4& out) {
     for (const FactionColor& f : table)
-        if (iequal(f.name, name)) {
+        if (ascii_iequals(f.name, name)) {
             if (f.has_display_font) out = f.display_font;
             else if (f.has_color) out = f.color;
             else return false;
@@ -181,7 +175,7 @@ GalacticPalette make_galactic_palette(const galactic::GalacticSim& sim, std::spa
         const bool neutral = fi < rules.factions.size() && rules.factions[fi].is_neutral;
         materials::float4 c = mp.color[p % kMpPaletteSize];
         for (const FactionColor& f : factions)
-            if (iequal(f.name, fname)) {
+            if (ascii_iequals(f.name, fname)) {
                 if (neutral) c = f.no_colorization;
                 else if (f.has_color) c = f.color;
                 break;

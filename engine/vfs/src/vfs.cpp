@@ -9,6 +9,7 @@
 
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/meg/meg.h"
 
 namespace fs = std::filesystem;
@@ -48,13 +49,6 @@ std::string join_host(std::string_view base, std::string_view rel) {
     if (!out.empty()) out.push_back(kHostSep);
     out += to_host(rel);
     return out;
-}
-
-std::string_view trim(std::string_view s) {
-    const auto ws = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
-    while (!s.empty() && ws(s.front())) s.remove_prefix(1);
-    while (!s.empty() && ws(s.back())) s.remove_suffix(1);
-    return s;
 }
 
 // Long-path-safe file system queries: every std::filesystem call goes through long_path() (Windows
@@ -201,10 +195,7 @@ std::vector<std::string> parse_megafiles_xml(std::span<const uint8_t> bytes) {
         const size_t e = text.find("-->", c + 4);
         text.erase(c, e == std::string::npos ? std::string::npos : e + 3 - c);
     }
-    std::string upper = text;
-    for (char& ch : upper) {
-        if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
-    }
+    const std::string upper = ascii_upper(text);
     std::vector<std::string> out;
     size_t pos = 0;
     while (true) {
@@ -225,7 +216,7 @@ std::vector<std::string> parse_megafiles_xml(std::span<const uint8_t> bytes) {
         }
         const size_t close = upper.find("</FILE", gt + 1);
         if (close == std::string::npos) break;
-        const std::string_view v = trim(std::string_view(text).substr(gt + 1, close - gt - 1));
+        const std::string_view v = ascii_trim(std::string_view(text).substr(gt + 1, close - gt - 1));
         if (!v.empty()) out.emplace_back(v);
         pos = close + 6;
     }
@@ -241,15 +232,15 @@ bool path_glob_match(std::string_view pattern, std::string_view path) {
 bool parse_command_line(std::span<const std::string> args, VfsConfig& cfg) {
     bool ok = true;
     for (const std::string& raw : args) {
-        std::string_view a = trim(raw);
+        std::string_view a = ascii_trim(raw);
         if (a.size() >= 2 && a.front() == '"' && a.back() == '"') a = a.substr(1, a.size() - 2);
         const size_t eq = a.find('=');
         if (eq == std::string_view::npos) continue;
-        const std::string_view key = trim(a.substr(0, eq));
-        std::string_view val = trim(a.substr(eq + 1));
+        const std::string_view key = ascii_trim(a.substr(0, eq));
+        std::string_view val = ascii_trim(a.substr(eq + 1));
         if (!val.empty() && val.front() == '"') val.remove_prefix(1);
         if (!val.empty() && val.back() == '"') val.remove_suffix(1);
-        val = trim(val);
+        val = ascii_trim(val);
         const bool is_mod = iequals(key, "MODPATH");
         const bool is_fb = iequals(key, "FALLBACKPATH");
         const bool is_steam = iequals(key, "STEAMMOD");

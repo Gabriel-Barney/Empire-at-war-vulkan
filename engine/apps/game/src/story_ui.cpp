@@ -5,6 +5,8 @@
 #include <iterator>
 #include <span>
 
+#include "alamo/core/text.hpp"
+
 namespace alamo::game {
 
 commands::EventData story_ui_event(const sim::StoryUiNotification& n) {
@@ -47,9 +49,7 @@ void story_reward_media(std::string_view reward_type, const std::vector<std::str
     // FIXPASS_GALACTIC §4.2 (capture C2): Reward_Param9 = the talking head; the data also holds "" and "-1" (no head).
     if (reward_type == "MULTIMEDIA" && param(8).size() > 5) {
         const std::string_view tail = param(8).substr(param(8).size() - 5);
-        bool loop = true;
-        for (size_t i = 0; i < 5; ++i) loop = loop && std::tolower(static_cast<unsigned char>(tail[i])) == "_loop"[i];
-        if (loop) out.push_back({StoryMediaCue::Kind::AdvisorMovie, std::string(param(8))});
+        if (ascii_iequals(tail, "_loop")) out.push_back({StoryMediaCue::Kind::AdvisorMovie, std::string(param(8))});
     }
     if (reward_type == "STOP_COMMANDBAR_MOVIE") out.push_back({StoryMediaCue::Kind::AdvisorStop, {}});
 }

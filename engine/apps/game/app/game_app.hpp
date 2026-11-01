@@ -21,6 +21,7 @@
 
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/game/attract_mode.hpp"
 #include "alamo/game/battle_fx.hpp"
 #include "alamo/game/battle_summary.hpp"
@@ -95,16 +96,6 @@ inline std::string env_or_empty(const char* name) {
 
 inline double ms_since(Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); }
 inline uint64_t final_crc(const CrcLog& log) { return log.records.empty() ? 0 : log.records.back().combined; }
-
-inline bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-        if (x != y) return false;
-    }
-    return true;
-}
 
 // The planet row of a galactic planet object id (kInvalidPlanet when none).
 inline PlanetIndex planet_index(const galactic::GalacticSim& g, uint32_t planet_id) {

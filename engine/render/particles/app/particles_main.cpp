@@ -29,6 +29,7 @@
 #include "alamo/assets/asset_cache.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/render/particles/particle_attach.hpp"
 #include "alamo/render/particles/particle_data.hpp"
 #include "alamo/render/particles/particle_gpu.hpp"
@@ -43,6 +44,7 @@
 #include "alamo/render/renderer.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "../../app/app_common.hpp"
 #if defined(ALAMO_PARTICLES_HAVE_SIM)
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
@@ -58,6 +60,7 @@ int run_particles_main(int argc, char** argv);
 namespace {
 
 using namespace alamo;
+using render_app::env_or_empty;
 using namespace alamo::render::particles;
 
 struct Opt {
@@ -70,22 +73,6 @@ struct Opt {
     uint32_t width = 1280, height = 720;
     float detail = 1.0f;
 };
-
-std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
 
 int usage() {
     std::fprintf(stderr,
@@ -220,11 +207,6 @@ struct Gpu {
     }
 };
 
-std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
-
 // ------------------------------------------------------------------------------------------- dump
 void dump_system(const SystemDef& s) {
     std::printf("%s: leave_particles %d, %zu emitters\n", s.name.c_str(), s.leave_particles ? 1 : 0, s.emitters.size());
@@ -290,7 +272,7 @@ int run_showcase(const Opt& opt) {
             for (const std::string& p : files->list("Data\\Art\\Models\\*.alo")) {
                 std::vector<uint8_t> b;
                 if (!files->read(p, b) || !is_particle_file(b)) continue;
-                std::string n = upper(p.substr(p.find_last_of("\\/") + 1));
+                std::string n = ascii_upper(p.substr(p.find_last_of("\\/") + 1));
                 n.resize(n.size() - 4);
                 all.push_back(n);
             }

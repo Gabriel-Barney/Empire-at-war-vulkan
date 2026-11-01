@@ -202,7 +202,4 @@ private:
     std::vector<std::pair<int32_t, uint32_t>> id_index_;  // sorted (id, index); lookup only
 };
 
-// ASCII case-insensitive equality (names, factions).
-bool iequal(std::string_view a, std::string_view b);
-
 }  // namespace alamo::ai::tactical

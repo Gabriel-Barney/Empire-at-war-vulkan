@@ -12,6 +12,7 @@
 
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/tactical/movement/corridor.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"
@@ -20,14 +21,6 @@
 using namespace alamo;
 using namespace alamo::tactical::movement;
 
-static int g_fail = 0;
-#define CHECK(c)                                                              \
-    do {                                                                      \
-        if (!(c)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);          \
-            ++g_fail;                                                         \
-        }                                                                     \
-    } while (0)
 
 static ParallelFor make_thread_pf(unsigned threads) {
     return [threads](uint32_t count, uint32_t grain, const RangeFn& fn) {

@@ -37,21 +37,6 @@ constexpr uint32_t kAbilitySaveVersion = 1;
 constexpr uint32_t kSpecialWeaponSaveVersion = 1;
 constexpr uint32_t kSpaceFieldSaveVersion = 1;
 
-bool get_count(ByteReader& r, uint32_t& n, size_t min_bytes) {
-    n = r.u32();
-    return r.ok() && static_cast<uint64_t>(n) * static_cast<uint64_t>(min_bytes) <= static_cast<uint64_t>(r.remaining());
-}
-
-void put_vec3(ByteWriter& w, const Vec3& v) { w.f32(v.x).f32(v.y).f32(v.z); }
-
-Vec3 get_vec3(ByteReader& r) {
-    Vec3 v;
-    v.x = r.f32();
-    v.y = r.f32();
-    v.z = r.f32();
-    return v;
-}
-
 void put_ids(ByteWriter& w, const std::vector<ObjectId>& v) {
     w.u32(static_cast<uint32_t>(v.size()));
     for (const ObjectId id : v) w.i32(id);
@@ -59,7 +44,7 @@ void put_ids(ByteWriter& w, const std::vector<ObjectId>& v) {
 
 bool get_ids(ByteReader& r, std::vector<ObjectId>& v) {
     uint32_t n = 0;
-    if (!get_count(r, n, 4)) return false;
+    if (!read_count(r, n, 4)) return false;
     v.assign(n, kNoObject);
     for (ObjectId& id : v) id = r.i32();
     return r.ok();
@@ -100,7 +85,7 @@ void AbilitySystem::write(ByteWriter& w) const {
             w.u32(sp.desc).u32(sp.due).u8(sp.applied).u8(sp.fired).u8(sp.trigger).i32(sp.target).i32(sp.hp);
             w.i32(sp.frames).i32(sp.cooldown).i32(sp.player).u32(sp.next).i32(sp.counter).u8(sp.phase).u8(sp.direct);
             w.u8(sp.aura).f32(sp.radius).f32(sp.value);
-            put_vec3(w, sp.point);
+            write_vec3(w, sp.point);
             put_ids(w, sp.victims);
         }
         w.u32(o.heal_due);
@@ -115,14 +100,14 @@ void AbilitySystem::write(ByteWriter& w) const {
     w.u32(static_cast<uint32_t>(spawns_.size()));
     for (const SpawnRequest& s : spawns_) {
         w.u32(s.serial).u8(static_cast<uint8_t>(s.purpose)).i32(s.object_type);
-        put_vec3(w, s.position);
-        put_vec3(w, s.facing);
+        write_vec3(w, s.position);
+        write_vec3(w, s.facing);
         w.i32(s.owner).i32(s.source).i32(s.target).u8(s.ability_type).f32(s.fuse_seconds).i32(s.bone);
     }
     w.u32(static_cast<uint32_t>(mines_.size()));
     for (const Mine& m : mines_) {
         w.u32(m.serial).i32(m.id).i32(m.owner);
-        put_vec3(w, m.pos);
+        write_vec3(w, m.pos);
         w.f32(m.trigger).f32(m.detect).u32(m.arm).u8(m.detected).u8(m.dead);
     }
     w.u32(static_cast<uint32_t>(player_entries_.size()));
@@ -134,7 +119,7 @@ void AbilitySystem::write(ByteWriter& w) const {
     w.u32(static_cast<uint32_t>(events_.size()));
     for (const AbilityEvent& e : events_) {
         w.u8(static_cast<uint8_t>(e.kind)).u8(e.type).i32(e.id).i32(e.target).u32(e.frame);
-        put_vec3(w, e.point);
+        write_vec3(w, e.point);
         w.i32(e.value);
     }
     w.u32(static_cast<uint32_t>(overrides_.size()));
@@ -161,7 +146,7 @@ bool AbilitySystem::read(ByteReader& r) {
     if (!r.ok()) return false;
 
     uint32_t n = 0;
-    if (!get_count(r, n, 1000)) return false;
+    if (!read_count(r, n, 1000)) return false;
     std::vector<Obj> objs(n);
     bool first = true;
     ObjectId prev = 0;
@@ -216,7 +201,7 @@ bool AbilitySystem::read(ByteReader& r) {
         o.lucky_fired = r.u8();
         if (!r.ok() || o.pending_type < -1 || o.pending_type >= static_cast<int32_t>(kAbilitySlots)) return false;
         uint32_t ns = 0;
-        if (!get_count(r, ns, 64)) return false;
+        if (!read_count(r, ns, 64)) return false;
         o.specials.resize(ns);
         for (SpecialState& sp : o.specials) {
             sp.desc = r.u32();
@@ -236,12 +221,12 @@ bool AbilitySystem::read(ByteReader& r) {
             sp.aura = r.u8();
             sp.radius = r.f32();
             sp.value = r.f32();
-            sp.point = get_vec3(r);
+            sp.point = read_vec3<Vec3>(r);
             if (!r.ok() || sp.desc >= c_specials || !get_ids(r, sp.victims)) return false;
         }
         o.heal_due = r.u32();
         uint32_t na = 0;
-        if (!get_count(r, na, 5)) return false;
+        if (!read_count(r, na, 5)) return false;
         o.autofire_map.resize(na);
         for (auto& [crc, on] : o.autofire_map) {
             crc = r.u32();
@@ -261,14 +246,14 @@ bool AbilitySystem::read(ByteReader& r) {
         if (!r.ok() || !get_ids(r, o.troopers)) return false;
     }
 
-    if (!get_count(r, n, 51)) return false;
+    if (!read_count(r, n, 51)) return false;
     std::vector<SpawnRequest> spawns(n);
     for (SpawnRequest& s : spawns) {
         s.serial = r.u32();
         const uint8_t purpose = r.u8();
         s.object_type = r.i32();
-        s.position = get_vec3(r);
-        s.facing = get_vec3(r);
+        s.position = read_vec3<Vec3>(r);
+        s.facing = read_vec3<Vec3>(r);
         s.owner = r.i32();
         s.source = r.i32();
         s.target = r.i32();
@@ -278,20 +263,20 @@ bool AbilitySystem::read(ByteReader& r) {
         if (!r.ok() || purpose > static_cast<uint8_t>(SpawnPurpose::StationUpgrade)) return false;
         s.purpose = static_cast<SpawnPurpose>(purpose);
     }
-    if (!get_count(r, n, 38)) return false;
+    if (!read_count(r, n, 38)) return false;
     std::vector<Mine> mines(n);
     for (Mine& m : mines) {
         m.serial = r.u32();
         m.id = r.i32();
         m.owner = r.i32();
-        m.pos = get_vec3(r);
+        m.pos = read_vec3<Vec3>(r);
         m.trigger = r.f32();
         m.detect = r.f32();
         m.arm = r.u32();
         m.detected = r.u8();
         m.dead = r.u8();
     }
-    if (!get_count(r, n, 21)) return false;
+    if (!read_count(r, n, 21)) return false;
     std::vector<PlayerEntry> player_entries(n);
     for (PlayerEntry& e : player_entries) {
         e.player = r.i32();
@@ -301,7 +286,7 @@ bool AbilitySystem::read(ByteReader& r) {
         e.source = r.i32();
         e.crc = r.u32();
     }
-    if (!get_count(r, n, 13)) return false;
+    if (!read_count(r, n, 13)) return false;
     std::vector<SourceEntry> source_entries(n);
     for (SourceEntry& e : source_entries) {
         e.player = r.i32();
@@ -309,13 +294,13 @@ bool AbilitySystem::read(ByteReader& r) {
         e.crc = r.u32();
         e.kind = r.u8();
     }
-    if (!get_count(r, n, 8)) return false;
+    if (!read_count(r, n, 8)) return false;
     std::vector<RemoteBomb> remote_bombs(n);
     for (RemoteBomb& b : remote_bombs) {
         b.player = r.i32();
         b.serial = r.u32();
     }
-    if (!get_count(r, n, 30)) return false;
+    if (!read_count(r, n, 30)) return false;
     std::vector<AbilityEvent> events(n);
     for (AbilityEvent& e : events) {
         const uint8_t kind = r.u8();
@@ -323,19 +308,19 @@ bool AbilitySystem::read(ByteReader& r) {
         e.id = r.i32();
         e.target = r.i32();
         e.frame = r.u32();
-        e.point = get_vec3(r);
+        e.point = read_vec3<Vec3>(r);
         e.value = r.i32();
         if (!r.ok() || kind > static_cast<uint8_t>(AbilityEventKind::RemoveSilently)) return false;
         e.kind = static_cast<AbilityEventKind>(kind);
     }
-    if (!get_count(r, n, 9)) return false;
+    if (!read_count(r, n, 9)) return false;
     std::vector<PlayerOverride> overrides(n);
     for (PlayerOverride& p : overrides) {
         p.player = r.i32();
         p.crc = r.u32();
         p.enabled = r.u8();
     }
-    if (!get_count(r, n, 13)) return false;
+    if (!read_count(r, n, 13)) return false;
     std::vector<TypeOverride> type_overrides(n);
     for (TypeOverride& t : type_overrides) {
         t.player = r.i32();
@@ -343,14 +328,14 @@ bool AbilitySystem::read(ByteReader& r) {
         t.crc = r.u32();
         t.enabled = r.u8();
     }
-    if (!get_count(r, n, 4)) return false;
+    if (!read_count(r, n, 4)) return false;
     std::vector<float> stealth_bonus(n);
     for (float& s : stealth_bonus) s = r.f32();
-    if (!get_count(r, n, 4)) return false;
+    if (!read_count(r, n, 4)) return false;
     std::vector<std::vector<uint32_t>> bm_blocked(n);
     for (std::vector<uint32_t>& list : bm_blocked) {
         uint32_t nl = 0;
-        if (!get_count(r, nl, 4)) return false;
+        if (!read_count(r, nl, 4)) return false;
         list.resize(nl);
         for (uint32_t& crc : list) crc = r.u32();
     }
@@ -390,28 +375,28 @@ void SpecialWeaponSystem::write(ByteWriter& w) const {
     for (const Pack& p : packs_) {
         w.i32(p.id).u32(p.desc).i32(p.owner).u32(p.start).u32(p.ready).u8(p.targeting_flag).u8(p.ready_signalled);
         w.i32(p.pulses_left).u32(p.pulse_index).u32(p.next_pulse).i32(p.shot_target);
-        put_vec3(w, p.shot_point);
+        write_vec3(w, p.shot_point);
         w.u8(p.at_point).i32(p.tsw).u8(p.tsw_init).i32(p.tsw_target);
-        put_vec3(w, p.tsw_target_pos);
+        write_vec3(w, p.tsw_target_pos);
         w.i32(p.countdown).i32(p.debris_pick).u32(p.debris_frame).u8(p.debris_pending);
     }
     w.u32(static_cast<uint32_t>(shots_.size()));
     for (const SpecialWeaponShot& s : shots_) {
         w.i32(s.weapon).i32(s.owner).i32(s.projectile).i32(s.target);
-        put_vec3(w, s.point);
+        write_vec3(w, s.point);
         w.boolean(s.at_point).u32(s.pulse);
     }
     w.u32(static_cast<uint32_t>(events_.size()));
     for (const SpecialWeaponEvent& e : events_) {
         w.u8(static_cast<uint8_t>(e.kind)).i32(e.id).i32(e.target).i32(e.value).u32(e.frame);
-        put_vec3(w, e.point);
+        write_vec3(w, e.point);
     }
 }
 
 bool SpecialWeaponSystem::read(ByteReader& r) {
     if (r.u32() != kSpecialWeaponSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!get_count(r, n, 63)) return false;
+    if (!read_count(r, n, 63)) return false;
     std::vector<SpecialWeaponDesc> descs(n);
     for (SpecialWeaponDesc& d : descs) {
         d.kinds = r.u8();
@@ -434,7 +419,7 @@ bool SpecialWeaponSystem::read(ByteReader& r) {
         if (!r.ok()) return false;
     }
     const auto nd = static_cast<uint32_t>(descs.size());
-    if (!get_count(r, n, 85)) return false;
+    if (!read_count(r, n, 85)) return false;
     std::vector<Pack> packs(n);
     bool first = true;
     ObjectId prev = 0;
@@ -450,12 +435,12 @@ bool SpecialWeaponSystem::read(ByteReader& r) {
         p.pulse_index = r.u32();
         p.next_pulse = r.u32();
         p.shot_target = r.i32();
-        p.shot_point = get_vec3(r);
+        p.shot_point = read_vec3<Vec3>(r);
         p.at_point = r.u8();
         p.tsw = r.i32();
         p.tsw_init = r.u8();
         p.tsw_target = r.i32();
-        p.tsw_target_pos = get_vec3(r);
+        p.tsw_target_pos = read_vec3<Vec3>(r);
         p.countdown = r.i32();
         p.debris_pick = r.i32();
         p.debris_frame = r.u32();
@@ -466,18 +451,18 @@ bool SpecialWeaponSystem::read(ByteReader& r) {
         first = false;
         prev = p.id;
     }
-    if (!get_count(r, n, 33)) return false;
+    if (!read_count(r, n, 33)) return false;
     std::vector<SpecialWeaponShot> shots(n);
     for (SpecialWeaponShot& s : shots) {
         s.weapon = r.i32();
         s.owner = r.i32();
         s.projectile = r.i32();
         s.target = r.i32();
-        s.point = get_vec3(r);
+        s.point = read_vec3<Vec3>(r);
         s.at_point = r.boolean();
         s.pulse = r.u32();
     }
-    if (!get_count(r, n, 29)) return false;
+    if (!read_count(r, n, 29)) return false;
     std::vector<SpecialWeaponEvent> events(n);
     for (SpecialWeaponEvent& e : events) {
         const uint8_t kind = r.u8();
@@ -485,7 +470,7 @@ bool SpecialWeaponSystem::read(ByteReader& r) {
         e.target = r.i32();
         e.value = r.i32();
         e.frame = r.u32();
-        e.point = get_vec3(r);
+        e.point = read_vec3<Vec3>(r);
         if (!r.ok() || kind > static_cast<uint8_t>(SwEventKind::TswDone)) return false;
         e.kind = static_cast<SwEventKind>(kind);
     }
@@ -508,7 +493,7 @@ void SpaceFieldIndex::write(ByteWriter& w) const {
 bool SpaceFieldIndex::read(ByteReader& r) {
     if (r.u32() != kSpaceFieldSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!get_count(r, n, 20)) return false;
+    if (!read_count(r, n, 20)) return false;
     std::vector<SpaceField> fields(n);
     for (SpaceField& f : fields) {
         f.id = r.i32();

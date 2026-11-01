@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_data.hpp"
 #ifdef ALAMO_GAME_HAVE_AUDIO
@@ -19,34 +20,9 @@
 using namespace alamo;
 using namespace alamo::game;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
 namespace {
 
-class MemoryProvider final : public FileProvider {
-public:
-    void add(const std::string& path, const std::string& text) {
-        files_[normalize_path(path)] = std::vector<uint8_t>(text.begin(), text.end());
-    }
-    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
-        auto it = files_.find(normalize_path(path));
-        if (it == files_.end()) return false;
-        out = it->second;
-        return true;
-    }
-    bool exists(std::string_view path) const override { return files_.count(normalize_path(path)) != 0; }
-    std::string origin(std::string_view path) const override { return exists(path) ? "mem:" + std::string(path) : ""; }
-
-private:
-    std::map<std::string, std::vector<uint8_t>> files_;
-};
+using alamo::testing::MemoryProvider;
 
 const char* kSfx = R"(<?xml version="1.0"?>
 <SFXEvents>

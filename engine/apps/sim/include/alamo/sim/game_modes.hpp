@@ -174,12 +174,10 @@ public:
     void push_pause();
     void pop_pause();
     bool paused() const override { return paused_ || pause_count_ > 0; }
-    // Income: every income_interval mode frames (GALACTIC_ECONOMY.md fiscal cycle; S3 owns the
-    // amounts). Counted here so the cadence is in the CRC.
-    void set_income_interval(uint32_t frames) { income_interval_ = frames ? frames : 1; }
-    uint64_t income_events() const { return income_events_; }
 
 private:
+    // Income: every income_interval_ mode frames (GALACTIC_ECONOMY.md fiscal cycle; S3 owns the
+    // amounts). Counted here so the cadence is in the CRC.
     uint32_t income_interval_ = 1350;
     uint64_t next_income_frame_ = 0;
     uint64_t income_events_ = 0;
@@ -228,8 +226,6 @@ public:
     // next store update and the dying objects not yet flushed. The spatial trees are the host's "spatial" chunk.
     void write_state(ByteWriter& w) const override;
     bool read_state(ByteReader& r) override;
-
-    uint64_t ai_services() const { return ai_services_; }
 
 protected:
     void pre_service(objects::ObjectStore& store, const ModeTickContext& ctx) override;

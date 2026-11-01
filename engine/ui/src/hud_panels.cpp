@@ -1,12 +1,12 @@
 #include "alamo/ui/hud_panels.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/ui/hud_font.hpp"
 
 namespace alamo::ui {
@@ -139,11 +139,6 @@ void EncyclopediaPanel::update(int32_t component, uint32_t object, double now) {
 }
 
 Vec2f EncyclopediaPanel::hint_anchor(const HudLayout& layout, const HudCanvas& cv, bool zoomed) const {
-    auto ieq = [](std::string_view x, std::string_view y) {
-        return x.size() == y.size() && std::equal(x.begin(), x.end(), y.begin(), [](char p, char q) {
-                   return std::tolower(static_cast<unsigned char>(p)) == std::tolower(static_cast<unsigned char>(q));
-               });
-    };
     Vec2f at{-0.5f * cv.width + 65.0f, -0.5f * cv.height + 309.0f};  // [port] fallback
     bool found = false;
     const std::vector<uint32_t> shells = layout.shells();
@@ -152,7 +147,7 @@ Vec2f EncyclopediaPanel::hint_anchor(const HudLayout& layout, const HudCanvas& c
             if (!layout.shell_active(sh)) continue;
             const Vec2f off = layout.shell_offset(sh);
             for (const ShellBone& b : layout.shell_bones(sh))
-                if (ieq(b.name, name)) {
+                if (ascii_iequals(b.name, name)) {
                     at = {b.x + off.x, b.y + off.y};
                     found = true;
                     break;
@@ -535,9 +530,7 @@ void HeroPanel::fallback_layout() {
 
 uint32_t hero_tie_key(std::string_view type_name) {
     // FoC type fix-up: CRC-32 of an _strupr copy of the name (ASCII upper case, C locale).
-    std::string up(type_name);
-    for (char& c : up)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    const std::string up = ascii_upper(type_name);
     return alamo::crc32(up.data(), up.size());
 }
 

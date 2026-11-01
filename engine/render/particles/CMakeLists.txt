@@ -4,34 +4,12 @@
 # Render particles are visual only (B.6): nothing here is read by the simulation.
 
 # ---------------------------------------------------------------- shaders (DXC -> SPIR-V headers)
-set(_pt_dxc "${ALAMO_DXC}")
-if(NOT EXISTS "${_pt_dxc}")
-  find_program(_pt_dxc_found NAMES dxc)
-  set(_pt_dxc "${_pt_dxc_found}")
-endif()
-set(_pt_src ${CMAKE_CURRENT_SOURCE_DIR}/shaders/particles.hlsl)
 set(_pt_gen ${CMAKE_CURRENT_BINARY_DIR}/generated)
-file(MAKE_DIRECTORY ${_pt_gen})
 set(_pt_headers)
-# name : entry : profile : define (CS = compute entries with read-write particle buffers)
-foreach(spec "particles_cs_update:CSUpdate:cs_6_0:CS" "particles_cs_spawn:CSSpawn:cs_6_0:CS" "particles_cs_sort:CSSort:cs_6_0:CS"
-             "particles_cs_clear:CSClear:cs_6_0:CS"
-             "particles_vs:VSMain:vs_6_0:GFX" "particles_ps:PSMain:ps_6_0:GFX")
-  string(REPLACE ":" ";" parts "${spec}")
-  list(GET parts 0 _name)
-  list(GET parts 1 _entry)
-  list(GET parts 2 _profile)
-  list(GET parts 3 _def)
-  set(_hdr ${_pt_gen}/${_name}.h)
-  add_custom_command(
-    OUTPUT ${_hdr}
-    COMMAND "${_pt_dxc}" -nologo -spirv -fspv-target-env=vulkan1.3 -WX -O3 -D ${_def}
-            -T ${_profile} -E ${_entry} -Fh ${_hdr} -Vn g_${_name} "${_pt_src}"
-    DEPENDS ${_pt_src}
-    COMMENT "DXC ${_name} (particles.hlsl ${_entry} ${_profile})"
-    VERBATIM)
-  list(APPEND _pt_headers ${_hdr})
-endforeach()
+# CS = compute entries with read-write particle buffers, GFX = vertex/pixel entries
+alamo_dxc_headers(_pt_headers NO_DX_LAYOUT SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/shaders/particles.hlsl" GEN_DIR "${_pt_gen}"
+  SPECS "particles_cs_update:CSUpdate:cs_6_0:CS" "particles_cs_spawn:CSSpawn:cs_6_0:CS" "particles_cs_sort:CSSort:cs_6_0:CS"
+        "particles_cs_clear:CSClear:cs_6_0:CS" "particles_vs:VSMain:vs_6_0:GFX" "particles_ps:PSMain:ps_6_0:GFX")
 add_custom_target(alamo_render_particles_shaders DEPENDS ${_pt_headers})
 
 # ---------------------------------------------------------------- library

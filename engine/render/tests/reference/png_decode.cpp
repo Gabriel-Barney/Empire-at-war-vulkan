@@ -4,8 +4,8 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
-#include <iterator>
+
+#include "alamo/core/bytes.hpp"
 
 namespace alamo::reftest {
 namespace {
@@ -277,12 +277,8 @@ bool decode_png(std::span<const uint8_t> f, Image& img, std::string* err) {
 }
 
 bool read_png(const std::string& path, Image& out, std::string* err) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        if (err) *err = "cannot open " + path;
-        return false;
-    }
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> bytes;
+    if (!read_file_bytes(path, bytes, err)) return false;
     return decode_png(bytes, out, err);
 }
 

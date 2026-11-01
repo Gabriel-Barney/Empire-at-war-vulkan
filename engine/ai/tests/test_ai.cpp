@@ -29,6 +29,7 @@
 #include "alamo/core/hash.hpp"  // A2 tactical: '#' reseed CRC
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/all_pairs.hpp"
 #include "alamo/galactic/planet_graph.hpp"
@@ -44,15 +45,6 @@
 using namespace alamo;
 using namespace alamo::ai;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 // ---- equation language --------------------------------------------------------------------------
 
@@ -660,19 +652,8 @@ static void test_path_finder_determinism() {
 // ---- real data -----------------------------------------------------------------------------------
 
 static std::string env_or(const char* name, const char* fallback) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out = fallback;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        if (*v) out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return (v && *v) ? std::string(v) : std::string(fallback);
-#endif
+    const std::string v = alamo::testing::env_or_empty(name);
+    return v.empty() ? std::string(fallback) : v;
 }
 
 static void real_data(const std::string& root, const char* label, bool foc) {

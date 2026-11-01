@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 
+#include "alamo/core/text.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/hud_font.hpp"
 #include "alamo/ui/picking.hpp"
@@ -215,10 +216,7 @@ void TacticalHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
     for (uint32_t i = 0; i < table.size(); ++i) {
         const std::string& n = table[i].name;
         auto starts = [&](std::string_view p) {
-            if (n.size() < p.size()) return false;
-            for (size_t k = 0; k < p.size(); ++k)
-                if (std::tolower(static_cast<unsigned char>(n[k])) != p[k]) return false;
-            return true;
+            return n.size() >= p.size() && ascii_iequals(std::string_view(n).substr(0, p.size()), p);
         };
         if (starts("st_") || starts("tooltip_") || starts("encyclopedia_") || starts("generic_flytext") ||
             starts("reinforcement_window"))

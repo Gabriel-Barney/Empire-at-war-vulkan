@@ -2,6 +2,7 @@
 #include "alamo/terrain/decorations.hpp"
 
 #include "alamo/core/log.hpp"
+#include "alamo/core/text.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -11,21 +12,6 @@
 namespace alamo::terrain {
 
 namespace {
-
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
-std::string_view trim_ws(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
 
 float clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 
@@ -98,10 +84,10 @@ bool terrain_ok(const Terrain& t) {
 
 // ---------------------------------------------------------------- render modes
 RenderMode render_mode_from_string(std::string_view s) {
-    s = trim_ws(s);
+    s = ascii_trim(s);
     for (uint32_t i = 0; i < kRenderModeCount; ++i) {
         const std::string_view n = render_mode_name(static_cast<RenderMode>(i));
-        if (!n.empty() && iequals(n, s)) return static_cast<RenderMode>(i);
+        if (!n.empty() && ascii_iequals(n, s)) return static_cast<RenderMode>(i);
     }
     return RenderMode::Opaque;
 }
@@ -459,7 +445,7 @@ std::vector<ShadowBlobMaterial> builtin_blob_materials() {
 
 uint32_t find_blob_material(const std::vector<ShadowBlobMaterial>& materials, std::string_view name) {
     for (size_t i = 0; i < materials.size(); ++i)
-        if (iequals(materials[i].name, name)) return static_cast<uint32_t>(i);
+        if (ascii_iequals(materials[i].name, name)) return static_cast<uint32_t>(i);
     return 0;
 }
 
@@ -791,7 +777,7 @@ float smoothstep01(float t) {
 
 const DynamicTrackParams* find_dynamic_track(const std::vector<DynamicTrackParams>& all, std::string_view name) {
     for (const DynamicTrackParams& p : all)
-        if (iequals(p.name, name)) return &p;
+        if (ascii_iequals(p.name, name)) return &p;
     return nullptr;
 }
 

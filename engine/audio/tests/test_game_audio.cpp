@@ -36,6 +36,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
@@ -44,34 +45,7 @@
 using namespace alamo;
 using namespace alamo::audio;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
 namespace {
-
-class MemoryProvider final : public FileProvider {
-public:
-    void add(const std::string& path, const std::string& text) {
-        files_[normalize_path(path)] = std::vector<uint8_t>(text.begin(), text.end());
-    }
-    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
-        auto it = files_.find(normalize_path(path));
-        if (it == files_.end()) return false;
-        out = it->second;
-        return true;
-    }
-    bool exists(std::string_view path) const override { return files_.count(normalize_path(path)) != 0; }
-    std::string origin(std::string_view path) const override { return exists(path) ? "mem:" + std::string(path) : ""; }
-
-private:
-    std::map<std::string, std::vector<uint8_t>> files_;
-};
 
 const char* kSfx = R"(<?xml version="1.0"?>
 <SFXEvents>
@@ -225,8 +199,8 @@ const char* kFactions = R"(<?xml version="1.0" ?>
 </Factions>
 )";
 
-MemoryProvider make_tree() {
-    MemoryProvider p;
+alamo::testing::MemoryProvider make_tree() {
+    alamo::testing::MemoryProvider p;
     p.add("Data\\XML\\SFXEventFiles.xml", "<SFXEvent_Files><File>SFXEventsTest.xml</File></SFXEvent_Files>");
     p.add("Data\\XML\\SFXEventsTest.xml", kSfx);
     p.add("Data\\XML\\MusicEvents.xml", kMusic);
@@ -276,7 +250,7 @@ float dist(const Vec3& a, const Vec3& b) {
 }
 
 struct Rig {
-    MemoryProvider tree = make_tree();
+    alamo::testing::MemoryProvider tree = make_tree();
     AudioDatabase db;
     GameAudioData data;
     GameAudioLoadReport report;
@@ -1124,7 +1098,7 @@ void test_lua_game() {
 
 // Same inputs -> same log; only the free RNG is drawn.
 std::string scripted(uint32_t seed, GameRandom& gr) {
-    MemoryProvider tree = make_tree();
+    alamo::testing::MemoryProvider tree = make_tree();
     AudioDatabase db;
     db.load(tree);
     GameAudioData data;
@@ -1169,11 +1143,6 @@ void test_determinism() {
 }
 
 // ------------------------------------------------------------------ real data
-
-std::string env(const char* name) {
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-}
 
 void test_real(const std::string& game, const std::string& root, bool is_eaw) {
     vfs::VfsConfig vc;
@@ -1457,7 +1426,7 @@ int main() {
     std::printf("lua bridge: lua module not configured, skipped\n");
 #endif
     test_determinism();
-    const std::string foc = env("ALAMO_FOC_DATA"), eaw = env("ALAMO_EAW_DATA");
+    const std::string foc = alamo::testing::env_or_empty("ALAMO_FOC_DATA"), eaw = alamo::testing::env_or_empty("ALAMO_EAW_DATA");
     if (foc.empty() && eaw.empty()) std::printf("real data: ALAMO_FOC_DATA / ALAMO_EAW_DATA not set, skipped\n");
     if (!foc.empty()) test_real("foc", foc, false);
     if (!eaw.empty()) test_real("eaw", eaw, true);

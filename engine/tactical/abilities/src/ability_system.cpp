@@ -937,7 +937,7 @@ bool AbilitySystem::apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp,
         }
         case SpecialClass::RedirectBlaster:
         case SpecialClass::AbsorbBlaster: return false;  // only through the Take_Damage trigger
-        default: return class_apply(o, sp, target, hp, frame);  // OI abilities (ability_classes.cpp)
+        default: return class_apply(o, sp, target, frame);  // OI abilities (ability_classes.cpp)
         case SpecialClass::ForceSight: {  // fog follow-up: ForceSightAbilityClass 0x713ba0 (FOG_OF_WAR.md §3.3)
             // While channelling (Force_Sight_Duration_In_Secs [M]): Reveal_All for the owner; the recharge starts at
             // activation [port].
@@ -1357,11 +1357,6 @@ bool AbilitySystem::tractored(ObjectId id) const {
 bool AbilitySystem::interdicting(ObjectId id) const {
     const Obj* o = obj(id);
     return o && o->interdicting;
-}
-bool AbilitySystem::interdicted(int32_t player) const {
-    for (const SourceEntry& e : source_entries_)  // OI abilities: the player's interdict list (+0x180)
-        if (e.player == player && e.kind == 0) return true;
-    return false;
 }
 int32_t AbilitySystem::immobilize_count(ObjectId id) const {
     const Obj* o = obj(id);

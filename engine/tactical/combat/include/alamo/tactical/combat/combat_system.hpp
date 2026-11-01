@@ -815,8 +815,6 @@ public:
     bool ion_stunned(ObjectId id, uint32_t frame) const;
     uint32_t ion_stun_end(ObjectId id) const;
     float energy(ObjectId id) const;
-    float max_energy(ObjectId id);
-    void set_energy(ObjectId id, float e);
     bool burning(ObjectId id) const;
     // refix t02: INFECTION behaviour (0x54, S9_DEATH_CLONE_SHIELDS.md §1.5). infection_attached: the unit has the
     // behaviour (active or suspended); infection_suspend_count: its suspend counter (+0x3c; 0 = active = kUnitInfected).
@@ -1149,7 +1147,6 @@ private:
     void set_system_online(Unit& u, uint32_t index, bool online, bool destroyed, uint32_t frame);  // 0x384d00
     float min_health_fraction(const Unit& u) const;
     float base_attack_range(const Unit& u) const;
-    float unit_fire_range(const Unit& u) const;
     Vec3 local_to_world(const Unit& u, Vec3 local) const;
     Vec3 hp_world(const Unit& u, const HardpointDesc& hd) const;
     Vec3 velocity(const Unit& u) const;

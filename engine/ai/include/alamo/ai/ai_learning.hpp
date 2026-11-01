@@ -57,8 +57,6 @@ public:
     void write(ByteWriter& w) const;  // N1 save / load: every table, key order
     bool read(ByteReader& r);
 
-    const std::map<Key, std::vector<Record>>& recent_goals() const { return recent_goal_; }
-
 private:
     static int64_t expiry_of(float duration, int64_t now);
     static int32_t failures(const std::map<Key, std::vector<Record>>& m, Key k, int64_t now);

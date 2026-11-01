@@ -24,6 +24,7 @@
 #include "alamo/assets/asset_cache.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/render/fog_view.hpp"
@@ -38,6 +39,7 @@
 #include "alamo/render/sim_view.hpp"
 #include "alamo/render/surface_fx.hpp"
 #include "alamo/rhi/rhi.hpp"
+#include "alamo/rhi/test_fixture.hpp"
 #include "alamo/vfs/vfs.hpp"
 #ifdef ALAMO_R5_HAVE_FOG
 #include "alamo/tactical/fog/fog_of_war.hpp"
@@ -46,35 +48,15 @@
 #include "alamo/anim/anim_behaviors.hpp"
 #include "alamo/anim/anim_state.hpp"
 #include "alamo/render/anim/anim_pose_cache.hpp"
+#include "test_fakes.hpp"
 #endif
 
 using namespace alamo;
+using alamo::testing::Gpu;
+using alamo::testing::Offscreen;
+using alamo::testing::env_or_empty;
+
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
 
 static std::span<const uint8_t> bytes_of(std::string_view s) { return {reinterpret_cast<const uint8_t*>(s.data()), s.size()}; }
 
@@ -250,12 +232,7 @@ static void test_snapshot_plumbing() {
 }
 
 // ------------------------------------------------------------------------------------------- OI render (R1 / R5)
-// Request record shaped like lua::ParticleEffectRequest (snapshot_lua_effects is a template over its fields).
-struct FakeLuaRequest {
-    uint32_t frame = 0, seq = 0;
-    int32_t object = 0, type = -1;
-    std::string type_name, bone;
-};
+using alamo::testing::FakeLuaRequest;
 
 static void test_oi_snapshot() {
     // R1 _ALT rule (TACTICAL_GAPS §6.3): last match of every threshold in list order; the data quirk 1 / 3 kept.
@@ -1087,44 +1064,6 @@ static void test_real_surface_data() {
 }
 
 // ------------------------------------------------------------------------------------------- GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
-};
-
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback,
-                                     readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-    std::vector<uint8_t> pixels() const {
-        const auto* p = static_cast<const uint8_t*>(readback.mapped());
-        return std::vector<uint8_t>(p, p + static_cast<size_t>(w) * h * 4);
-    }
-};
-
 static bool render_frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices& vm, std::span<const render::Instance> inst,
                          render::GpuModel* resident, render::DrawStats& stats, render::DrawMode mode, const render::RecordOptions& ro,
                          std::span<const render::Instance> sky = {}, const float* clear = nullptr,

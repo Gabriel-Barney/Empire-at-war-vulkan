@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "alamo/core/text.hpp"
 #include "alamo/data/xml.hpp"
 
 namespace alamo::ai {
@@ -34,15 +35,6 @@ bool plan_event_code(std::string_view name, PlanEvent& out) {
     return false;
 }
 
-const char* ai_mode_name(AiMode m) {
-    switch (m) {
-        case AiMode::Galactic: return "Galactic";
-        case AiMode::Land: return "Land";
-        case AiMode::Space: return "Space";
-    }
-    return "?";
-}
-
 bool parse_ai_mode(std::string_view s, AiMode& out) {
     s = ai_trim(s);
     if (ai_iequal(s, "Galactic")) out = AiMode::Galactic;
@@ -52,27 +44,9 @@ bool parse_ai_mode(std::string_view s, AiMode& out) {
     return true;
 }
 
-char ai_upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool ai_iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (ai_upper(a[i]) != ai_upper(b[i])) return false;
-    return true;
-}
-
-std::string ai_upper_copy(std::string_view s) {
-    std::string o(s);
-    for (char& c : o) c = ai_upper(c);
-    return o;
-}
-
-std::string_view ai_trim(std::string_view s) {
-    size_t b = 0, e = s.size();
-    while (b < e && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r' || s[b] == '\n')) ++b;
-    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r' || s[e - 1] == '\n')) --e;
-    return s.substr(b, e - b);
-}
+bool ai_iequal(std::string_view a, std::string_view b) { return ascii_iequals(a, b); }
+std::string ai_upper_copy(std::string_view s) { return ascii_upper(s); }
+std::string_view ai_trim(std::string_view s) { return ascii_trim(s); }
 
 std::vector<std::string> ai_split(std::string_view s, std::string_view seps) {
     std::vector<std::string> out;

@@ -1,17 +1,13 @@
 #include "alamo/ui/hud_model_draw.hpp"
 
+#include "alamo/core/text.hpp"
 #include "alamo/ui/hud_renderer.hpp"
 #include "alamo/ui/hud_shell_draw.hpp"
 
 namespace alamo::ui {
 
 namespace {
-std::string key_of(std::string_view n) {
-    std::string k(n);
-    for (char& c : k)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return k;
-}
+std::string key_of(std::string_view n) { return ascii_upper(n); }
 }  // namespace
 
 void HudModelDrawer::set_loader(ShellSet::ModelLoader loader, render::TextureSource textures) {

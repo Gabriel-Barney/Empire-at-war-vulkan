@@ -33,6 +33,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/galactic/auto_resolve.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/objects/behaviors.hpp"
@@ -42,15 +43,7 @@ using namespace alamo;
 using namespace alamo::ai;
 using namespace alamo::ai::tactical;
 
-static int g_fail = 0;
 static bool g_write_golden = false;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 

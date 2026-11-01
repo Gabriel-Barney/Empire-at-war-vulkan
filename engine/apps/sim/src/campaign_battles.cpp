@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 
+#include "alamo/core/text.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/corruption.hpp"  // S4: corruption missions
 #ifdef ALAMO_SIM_HAVE_STORY
@@ -1238,15 +1239,6 @@ void CampaignBattles::story_linked(SimHost& host) {
     if (!s || !g || !g->sim() || !cm_) return;
     galactic::GalacticSim& gs = *g->sim();
     const std::vector<StoryLinkedTactical>& linked = s->linked_tactical();
-    auto same = [](std::string_view a, std::string_view b) {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i) {
-            const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-            const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-            if (x != y) return false;
-        }
-        return true;
-    };
     auto trimmed = [](std::string_view v) {
         while (!v.empty() && (v.front() == ' ' || v.front() == '	')) v.remove_prefix(1);
         while (!v.empty() && (v.back() == ' ' || v.back() == '	')) v.remove_suffix(1);
@@ -1263,19 +1255,19 @@ void CampaignBattles::story_linked(SimHost& host) {
         const auto& names = gs.map().planets.name;
         for (PlanetIndex i = 0; i < gs.planets().size() && planet == kInvalidPlanet; ++i) {
             const uint32_t ty = gs.planets()[i].type;
-            if ((i < names.size() && same(names[i], l.params[0])) ||
-                (ty < gs.rules().types.size() && same(gs.rules().types[ty].name, l.params[0])))
+            if ((i < names.size() && ascii_iequals(names[i], l.params[0])) ||
+                (ty < gs.rules().types.size() && ascii_iequals(gs.rules().types[ty].name, l.params[0])))
                 planet = i;
         }
         const int32_t attacker = gs.player_of_faction(l.params[2]);
         const int32_t defender = l.params.size() > 4 && !l.params[4].empty() ? gs.player_of_faction(l.params[4]) : galactic::kNoPlayer;
         const std::string mode = trimmed(l.params[1]);
-        if (planet == kInvalidPlanet || attacker < 0 || same(mode, "EITHER")) {
+        if (planet == kInvalidPlanet || attacker < 0 || ascii_iequals(mode, "EITHER")) {
             log_.push_back("story: LINK_TACTICAL " + l.params[0] + " not started (planet / mode / attacker invalid)");
             continue;
         }
         galactic::ConflictManager::LinkedBattle b;
-        b.kind = same(mode, "SPACE") ? galactic::ConflictKind::Space : galactic::ConflictKind::Land;
+        b.kind = ascii_iequals(mode, "SPACE") ? galactic::ConflictKind::Space : galactic::ConflictKind::Land;
         b.planet = planet;
         b.attacker = attacker;
         b.defender = defender;

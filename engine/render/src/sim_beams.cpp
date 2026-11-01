@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
@@ -14,19 +15,12 @@ namespace alamo::render {
 
 namespace {
 
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
-
 uint8_t kind_of_tag(std::string_view tag) {
-    if (iequals(tag, "Tractor_Beam_Attack_Ability")) return kBeamTractor;
-    if (iequals(tag, "Energy_Weapon_Attack_Ability")) return kBeamEnergyWeapon;
-    if (iequals(tag, "Super_Laser_Ability")) return kBeamSuperLaser;
-    if (iequals(tag, "Laser_Defense_Ability")) return kBeamLaserZap;
-    if (iequals(tag, "Leech_Shields_Ability")) return kBeamLeech;
+    if (ascii_iequals(tag, "Tractor_Beam_Attack_Ability")) return kBeamTractor;
+    if (ascii_iequals(tag, "Energy_Weapon_Attack_Ability")) return kBeamEnergyWeapon;
+    if (ascii_iequals(tag, "Super_Laser_Ability")) return kBeamSuperLaser;
+    if (ascii_iequals(tag, "Laser_Defense_Ability")) return kBeamLaserZap;
+    if (ascii_iequals(tag, "Leech_Shields_Ability")) return kBeamLeech;
     return 0;
 }
 
@@ -49,7 +43,7 @@ struct Fields {
     std::vector<std::pair<std::string_view, std::string_view>> kv;
     std::string_view get(std::string_view tag) const {
         for (const auto& [k, v] : kv)
-            if (iequals(k, tag)) return v;
+            if (ascii_iequals(k, tag)) return v;
         return {};
     }
     std::string_view get2(std::string_view a, std::string_view b) const {
@@ -119,7 +113,7 @@ void BeamStyleTable::build(const objects::GameObjectTypes& types, const BeamCons
             std::string_view name;
             for (uint32_t a = 0; a < fc.attr_count[f]; ++a) {
                 const objects::XmlAttr& at = db.attributes()[fc.attr_begin[f] + a];
-                if (iequals(at.name, "Name")) name = at.value;
+                if (ascii_iequals(at.name, "Name")) name = at.value;
             }
             if (name.empty()) continue;
             Fields fields;

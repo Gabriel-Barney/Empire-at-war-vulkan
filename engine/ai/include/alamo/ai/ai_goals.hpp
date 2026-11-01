@@ -120,7 +120,6 @@ public:
     const std::vector<std::vector<Goal>>& proposed() const { return proposed_; }  // per category
     uint32_t quota() const { return quota_; }
     int32_t countdown() const { return countdown_; }
-    uint32_t evaluations_last_pass() const { return evals_last_; }
     uint32_t passes() const { return passes_; }
     uint32_t commits() const { return commits_; }
     int32_t exclusion_count(uint32_t goal_type) const;
@@ -140,7 +139,6 @@ public:
     // is proposed or activated.
     void block_proposals(uint32_t goal_serial);
     void unblock_proposals(uint32_t goal_serial);
-    bool proposals_blocked() const { return !block_list_.empty(); }
 
     void hash(StateHasher& h) const;
     // N1 save / load (alamo/core/save_file.hpp): every field except the init() wiring (definitions, sources, hooks,
@@ -155,7 +153,7 @@ private:
     void insert(Goal g);
     void commit(int64_t now);
     void resolve(int32_t category, int64_t now);
-    void maintenance(int32_t category, int64_t now);
+    void maintenance(int32_t category);
     void activate(Goal& g, int64_t now, bool is_new);
     void release(Goal& g, bool by_goal_system);
     bool fundable(const Goal& g);

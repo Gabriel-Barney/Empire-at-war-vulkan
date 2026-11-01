@@ -37,6 +37,56 @@ else()
   set(_alamo_dxc_default "dxc")
 endif()
 set(ALAMO_DXC "${_alamo_dxc_default}" CACHE FILEPATH "DXC executable (HLSL -> SPIR-V)")
+
+# Compiles HLSL entry points to SPIR-V C-array headers (DXC, -Fh) and appends the header paths to <out_var> in the
+# caller's scope. SPECS are "name:entry:profile" or "name:entry:profile:DEFINE" (header <GEN_DIR>/<name>.h, symbol
+# g_<name>). Also stamps DEPENDS onto every header. NO_DX_LAYOUT drops -fvk-use-dx-layout (compute/particle shaders).
+function(alamo_dxc_headers out_var)
+  cmake_parse_arguments(A "NO_DX_LAYOUT" "SOURCE;GEN_DIR" "SPECS;INCLUDES;DEPENDS" ${ARGN})
+  set(dxc "${ALAMO_DXC}")
+  if(NOT EXISTS "${dxc}")
+    find_program(_alamo_dxc_found NAMES dxc)
+    if(NOT _alamo_dxc_found)
+      message(FATAL_ERROR "DXC not found (ALAMO_DXC='${ALAMO_DXC}'); run toolchain/3_renderer_deps.cmd")
+    endif()
+    set(dxc "${_alamo_dxc_found}")
+  endif()
+  set(layout)
+  if(NOT A_NO_DX_LAYOUT)
+    set(layout -fvk-use-dx-layout)
+  endif()
+  set(includes)
+  foreach(dir IN LISTS A_INCLUDES)
+    list(APPEND includes -I "${dir}")
+  endforeach()
+  get_filename_component(src_name "${A_SOURCE}" NAME)
+  file(MAKE_DIRECTORY "${A_GEN_DIR}")
+  set(headers ${${out_var}})
+  foreach(spec IN LISTS A_SPECS)
+    string(REPLACE ":" ";" parts "${spec}")
+    list(GET parts 0 name)
+    list(GET parts 1 entry)
+    list(GET parts 2 profile)
+    set(defs)
+    list(LENGTH parts nparts)
+    if(nparts GREATER 3)
+      list(GET parts 3 def)
+      if(NOT def STREQUAL "")
+        set(defs -D ${def})
+      endif()
+    endif()
+    set(hdr "${A_GEN_DIR}/${name}.h")
+    add_custom_command(
+      OUTPUT "${hdr}"
+      COMMAND "${dxc}" -nologo -spirv ${layout} -fspv-target-env=vulkan1.3 -WX -O3
+              -T ${profile} -E ${entry} ${defs} ${includes} -Fh "${hdr}" -Vn g_${name} "${A_SOURCE}"
+      DEPENDS "${A_SOURCE}" ${A_DEPENDS}
+      COMMENT "DXC ${name} (${src_name} ${entry} ${profile})"
+      VERBATIM)
+    list(APPEND headers "${hdr}")
+  endforeach()
+  set(${out_var} "${headers}" PARENT_SCOPE)
+endfunction()
 # Runtime DXC (approved by Gabriel 2026-10-26): shaderxlat loads dxcompiler.dll dynamically to translate mod FXOs
 # at load time. Apps copy it (and dxil.dll) next to the exe; nothing links against it.
 if(WIN32)

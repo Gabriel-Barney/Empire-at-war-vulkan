@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../app/game_display.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/render/renderer.hpp"
 
 #ifdef _WIN32
@@ -16,14 +17,6 @@
 #endif
 
 namespace {
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 using namespace alamo;
 using game::DisplayMode;

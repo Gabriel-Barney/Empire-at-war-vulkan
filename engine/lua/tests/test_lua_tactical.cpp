@@ -14,6 +14,7 @@
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/lua/ai_bridge.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/object_bridge.hpp"
@@ -37,15 +38,6 @@ using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
     if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
@@ -67,10 +59,7 @@ static double gnum(LuaVm& vm, const char* name) {
     lua_pop(L, 1);
     return d;
 }
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using alamo::testing::write_file;
 
 struct Db {
     fs::path root;

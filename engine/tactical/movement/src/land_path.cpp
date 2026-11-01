@@ -193,10 +193,9 @@ float path_length(std::span<const V2> points) {
 }
 
 // ---------------------------------------------------------------- region A*
-bool region_astar(const PassabilityGrid& grid, const RegionMap& regions, V2 start, V2 goal, uint32_t mask,
+bool region_astar(const RegionMap& regions, V2 start, V2 goal, uint32_t mask,
                   LandPathScratch& sc, std::vector<V2>& points, uint32_t max_nodes, uint32_t* expansions,
                   const ThreatCost* threat) {
-    (void)grid;
     points.clear();
     const int32_t scx = world_to_cell(start.x), scy = world_to_cell(start.y);
     const int32_t gcx = world_to_cell(goal.x), gcy = world_to_cell(goal.y);
@@ -557,7 +556,7 @@ bool find_land_path(const PassabilityGrid& grid, const RegionMap& regions, const
 
     std::vector<V2> pts;
     bool ok = false;
-    if (!req.use_cell_astar) ok = region_astar(grid, regions, start, goal, mask, sc, pts, req.max_nodes, &out.expansions, &req.threat);
+    if (!req.use_cell_astar) ok = region_astar(regions, start, goal, mask, sc, pts, req.max_nodes, &out.expansions, &req.threat);
     if (ok) {
         for (size_t i = 1; i < pts.size() && ok; ++i) ok = segment_passable(grid, pts[i - 1], pts[i], mask);
     }

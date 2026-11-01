@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "alamo/core/text.hpp"
 #include "alamo/render/lod.hpp"
 
 namespace alamo::render {
@@ -35,17 +36,12 @@ bool muzzle_bone(const assets::Skeleton& sk, const SnapshotMuzzle& m, int32_t bo
         if (std::toupper(static_cast<unsigned char>(n[i])) != "MUZZLE"[i]) return false;
     return true;
 }
-std::string upper(const std::string& s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
-}
 
 }  // namespace
 
 // --------------------------------------------------------------------------------- streamed models
 uint32_t StreamedSimModels::handle(const std::string& name) {
-    auto [it, inserted] = by_name_.try_emplace(upper(name), 0u);
+    auto [it, inserted] = by_name_.try_emplace(ascii_upper(name), 0u);
     if (inserted) {
         it->second = streamer_->request(name);
         handles_.push_back(it->second);

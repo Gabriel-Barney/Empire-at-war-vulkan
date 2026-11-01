@@ -7,6 +7,7 @@
 #include <string>
 
 #include "alamo/core/log.hpp"
+#include "alamo/core/text.hpp"
 
 namespace alamo::render {
 
@@ -39,16 +40,10 @@ bool to_rhi_swizzle(const assets::ComponentMapping& m, rhi::Swizzle& out) {
 
 namespace {
 
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
 bool icontains(std::string_view s, std::string_view needle) {
     if (needle.size() > s.size()) return false;
     for (size_t i = 0; i + needle.size() <= s.size(); ++i)
-        if (iequals(s.substr(i, needle.size()), needle)) return true;
+        if (ascii_iequals(s.substr(i, needle.size()), needle)) return true;
     return false;
 }
 
@@ -87,7 +82,7 @@ ML from_traits(const assets::VertexFormatTraits& t) {
 
 materials::VertexLayout vertex_layout_for(std::string_view name, const assets::VertexFormatTraits& traits) {
     for (const NameMap& n : kNames)
-        if (iequals(name, n.name)) return n.layout;
+        if (ascii_iequals(name, n.name)) return n.layout;
     if (!traits.known && !traits.skinned && !traits.tangent_frame && traits.uv_sets == 0 && !traits.color &&
         !icontains(name, "alD3dVert"))
         return ML::Unknown;

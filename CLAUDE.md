@@ -74,6 +74,7 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
    left open with every task closed is a mistake to fix before ending the task. A flowchart box's status is not derived from its
    groups: when the last group in a box is done, also set the box `done` (`nodes/<ID>`, same write). When a finished roadmap
    group gets a follow-up group, give the follow-up a `preset` (recommended model + effort level; see `docs/ROADMAP_PROTOCOL.md`).
+8. Shared helpers (2026-11-01): ASCII text helpers live in `engine/core/include/alamo/core/text.hpp` (`ascii_iequals`, `ascii_trim`, ...; `alamo::iequals` in `hash.hpp` is a path compare that also folds `/` and `\`), test executables use `core/test_support.hpp` (`CHECK`, `g_fail`, `MemoryProvider`, `env_or_empty`, `write_file`) and `rhi/test_fixture.hpp` (`Gpu`, `Offscreen`), save code uses `read_count` / `write_vec3` / `read_vec3` from `core/bytes.hpp`, and HLSL is compiled with `alamo_dxc_headers()` (`engine/CMakeLists.txt`). Use them instead of adding another local copy.
 7. In-game probes need Gabriel to launch the game; prepare them under `tools/probe_mod/` with run and cleanup scripts.
 
 ## Parallel work

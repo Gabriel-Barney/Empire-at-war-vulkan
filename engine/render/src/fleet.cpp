@@ -5,6 +5,7 @@
 #include <set>
 
 #include "alamo/assets/asset_cache.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/materials/effect_loader.hpp"
@@ -32,23 +33,8 @@ void shuffle(std::vector<T>& v, Rng& r) {
     for (size_t i = v.size(); i > 1; --i) std::swap(v[i - 1], v[static_cast<size_t>(r.next() % i)]);
 }
 
-char upper_c(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-std::string upper(std::string_view s) {
-    std::string r(s);
-    for (char& c : r) c = upper_c(c);
-    return r;
-}
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper_c(a[i]) != upper_c(b[i])) return false;
-    return true;
-}
-
 bool iends_with(std::string_view s, std::string_view suffix) {
-    return s.size() >= suffix.size() && iequals(s.substr(s.size() - suffix.size()), suffix);
+    return s.size() >= suffix.size() && ascii_iequals(s.substr(s.size() - suffix.size()), suffix);
 }
 
 // Upper-cased CategoryMask tokens of every <CategoryMask> child (repeated tags append).
@@ -61,7 +47,7 @@ std::vector<std::string> category_tokens(const data::XmlNode& element) {
             while (i < t.size() && (t[i] == '|' || t[i] == ',' || t[i] == ' ' || t[i] == '\t' || t[i] == '\r' || t[i] == '\n')) ++i;
             const size_t b = i;
             while (i < t.size() && !(t[i] == '|' || t[i] == ',' || t[i] == ' ' || t[i] == '\t' || t[i] == '\r' || t[i] == '\n')) ++i;
-            if (i > b) out.push_back(upper(t.substr(b, i - b)));
+            if (i > b) out.push_back(ascii_upper(t.substr(b, i - b)));
         }
     }
     return out;
@@ -99,13 +85,13 @@ std::vector<FleetShipType> fleet_ship_types(const data::GameDatabase& db) {
     std::set<std::string> seen_models;  // only membership is used (no iteration)
     for (const data::GameObjectRecord& rec : db.game_objects()) {
         if (rec.duplicate || !rec.element) continue;
-        if (!iequals(rec.type, "SpaceUnit") && !iequals(rec.type, "UniqueUnit")) continue;
+        if (!ascii_iequals(rec.type, "SpaceUnit") && !ascii_iequals(rec.type, "UniqueUnit")) continue;
         if (iends_with(rec.name, "_Death_Clone")) continue;
         const std::string_view model = rec.element.child_text("Space_Model_Name");
         if (model.empty()) continue;
         const int cls = classify(category_tokens(rec.element));
         if (cls < 0) continue;
-        std::string path = "Data\\Art\\Models\\" + upper(model);
+        std::string path = "Data\\Art\\Models\\" + ascii_upper(model);
         if (!seen_models.insert(path).second) continue;
         out.push_back({std::string(rec.name), std::move(path), static_cast<FleetClass>(cls)});
     }

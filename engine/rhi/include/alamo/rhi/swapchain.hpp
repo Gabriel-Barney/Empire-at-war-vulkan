@@ -64,7 +64,6 @@ public:
     // True when the surface offers `mode` (as of the last build; Fifo always). Mailbox / Immediate fall back otherwise.
     bool supports(PresentMode mode) const;
     VkImageUsageFlags usage() const { return usage_; }
-    bool supports_transfer_src() const { return (usage_ & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0; }
 
 private:
     bool build(uint32_t width, uint32_t height);

@@ -3,21 +3,13 @@
 #include <cmath>
 #include <cstdio>
 
+#include "alamo/core/test_support.hpp"
 #include "alamo/render/camera.hpp"
 #include "alamo/ui/camera.hpp"
 #include "alamo/ui/picking.hpp"
 #include "alamo/ui/render_bridge.hpp"
 
 using namespace alamo;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 

@@ -28,6 +28,7 @@
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/players.hpp"
@@ -49,15 +50,6 @@
 using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
@@ -89,25 +81,8 @@ static bool contains(const std::vector<std::string>& v, const std::string& s, si
         if (v[i] == s) return true;
     return false;
 }
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? v : "";
-#endif
-}
+using alamo::testing::write_file;
+using alamo::testing::env_or_empty;
 
 // A store with three troopers (ids 1..3).
 struct World {
@@ -298,7 +273,7 @@ static std::vector<uint8_t> test_lockstep(const World& w) {
                 static_cast<unsigned long long>(a.heap_info().bytes), a.heap_info().serial, a.heap_info().strings);
     CHECK(save(a) == saved);  // write() changes nothing
     // Cross-compiler comparison: ALAMO_LUA_SAVE_DUMP=<file> writes this record.
-    if (const std::string dump = env("ALAMO_LUA_SAVE_DUMP"); !dump.empty())
+    if (const std::string dump = env_or_empty("ALAMO_LUA_SAVE_DUMP"); !dump.empty())
         std::ofstream(dump, std::ios::binary).write(reinterpret_cast<const char*>(saved.data()),
                                                      static_cast<std::streamsize>(saved.size()));
 
@@ -783,7 +758,7 @@ static void test_bridges() {
 // Every shipped script's top level (with its requires): save, load into a fresh VM, save again; both VMs then run a
 // few services in lockstep.
 static void test_shipped_scripts() {
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
         std::printf("  ALAMO_FOC_DATA unset: shipped scripts skipped\n");
         return;
@@ -791,7 +766,7 @@ static void test_shipped_scripts() {
 #ifdef ALAMO_LUA_HAVE_VFS
     vfs::VfsConfig cfg;
     cfg.foc_root = root;
-    const std::string eaw = env("ALAMO_EAW_DATA");
+    const std::string eaw = env_or_empty("ALAMO_EAW_DATA");
     cfg.eaw_root = eaw;
     std::string verr;
     std::unique_ptr<vfs::Vfs> files = vfs::Vfs::create(cfg, &verr);
@@ -874,7 +849,7 @@ int main() {
         uint64_t h = 0xcbf29ce484222325ull;
         for (const std::string& a : al) h = fnv1a64(a.data(), a.size(), h);
         std::printf("C function aliases: %zu, digest %016llx\n", al.size(), static_cast<unsigned long long>(h));
-        if (!env("ALAMO_LUA_SAVE_ALIASES").empty())
+        if (!env_or_empty("ALAMO_LUA_SAVE_ALIASES").empty())
             for (const std::string& a : al) std::printf("  alias %s\n", a.c_str());
     }
     std::printf("lockstep\n");

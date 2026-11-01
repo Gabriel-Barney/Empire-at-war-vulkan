@@ -4,6 +4,7 @@
 #include <cctype>
 #include <filesystem>
 
+#include "alamo/core/text.hpp"
 #include "alamo/sim/save_session.hpp"
 #include "alamo/vfs/vfs.hpp"
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
@@ -32,11 +33,6 @@ bool load_common(GameData& out, std::string* err) {
     galactic::load_conflict_rules(*out.files, out.db, out.types, out.rules, out.crules, &diag);  // missing parts: defaults
     out.catalog = std::make_unique<sim::BattleCatalog>(out.types, out.files.get(), &out.db.constants(), &diag);
     return true;
-}
-
-std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
 }
 
 uint32_t neutral_faction(const galactic::GalacticRules& rules) {
@@ -100,7 +96,7 @@ uint64_t GameData::types_fingerprint() const {
 }
 
 std::string ai_type_for(const std::string& faction) {
-    const std::string f = upper(faction);
+    const std::string f = ascii_upper(faction);
     if (f == "EMPIRE") return "BasicEmpire";
     if (f == "REBEL") return "BasicRebel";
     if (f == "UNDERWORLD") return "AI_Player_Underworld";
@@ -115,7 +111,7 @@ bool load_game_data_dir(const std::string& dir, GameData& out, std::string* err)
 }
 
 std::vector<std::string> default_skirmish_fleet(const std::string& faction) {
-    const std::string f = upper(faction);
+    const std::string f = ascii_upper(faction);
     if (f == "EMPIRE")
         return {"Star_Destroyer", "Tartan_Patrol_Cruiser", "Tartan_Patrol_Cruiser", "Acclamator_Assault_Ship", "Broadside_Class_Cruiser"};
     if (f == "REBEL")
@@ -126,7 +122,7 @@ std::vector<std::string> default_skirmish_fleet(const std::string& faction) {
 }
 
 std::vector<std::string> default_skirmish_ground(const std::string& faction) {
-    const std::string f = upper(faction);
+    const std::string f = ascii_upper(faction);
     if (f == "EMPIRE") return {"Imperial_Stormtrooper_Squad", "Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Anti_Infantry_Brigade"};
     if (f == "REBEL") return {"Rebel_Infantry_Squad", "Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Tank_Buster_Squad"};
     if (f == "UNDERWORLD") return {"Underworld_Merc_Squad", "Underworld_Merc_Squad", "Underworld_Disruptor_Merc_Squad", "MZ8_Pulse_Cannon_Tank_Company"};
@@ -214,7 +210,7 @@ std::vector<std::string> list_maps(const GameData& data, const char* glob) {
         std::string stem = p;
         if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
         if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
-        stem = upper(stem);
+        stem = ascii_upper(stem);
         if (std::find(out.begin(), out.end(), stem) == out.end()) out.push_back(stem);
     }
     std::sort(out.begin(), out.end());
@@ -228,7 +224,7 @@ std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::
     std::string stem(map);
     if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
     if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
-    stem = upper(stem);
+    stem = ascii_upper(stem);
     for (const std::string_view prefix : {std::string_view("_MP_SPACE_"), std::string_view("_MP_LAND_")}) {
         if (stem.size() <= prefix.size() || stem.compare(0, prefix.size(), prefix) != 0) continue;
         const uint32_t t = rules.find_type(std::string_view(stem).substr(prefix.size()));
@@ -244,7 +240,7 @@ std::vector<std::string> skirmish_space_maps(const GameData& data) {
         std::string stem = p;
         if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
         if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
-        stem = upper(stem);
+        stem = ascii_upper(stem);
         if (std::find(out.begin(), out.end(), stem) == out.end()) out.push_back(stem);
     }
     std::sort(out.begin(), out.end());

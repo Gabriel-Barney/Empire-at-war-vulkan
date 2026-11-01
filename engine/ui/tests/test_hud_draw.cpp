@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "alamo/assets/texture.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/render/png.hpp"
 #include "alamo/render/renderer.hpp"
 #include "alamo/rhi/context.hpp"
@@ -32,6 +33,7 @@
 #include "alamo/ui/selection_blob.hpp"
 #include "alamo/ui/tactical_hud.hpp"
 #include "hud_test_data.hpp"
+#include "ui_gpu_fixture.hpp"
 #ifdef ALAMO_UI_HAVE_VFS
 #include <cstdlib>
 
@@ -46,15 +48,7 @@
 #endif
 
 using namespace alamo;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using namespace alamo::ui_test;
 
 namespace {
 
@@ -138,41 +132,6 @@ void test_cpu() {
 }
 
 // ------------------------------------------------------------------------------------------------ GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
-    render::Renderer renderer;
-    ui::HudRenderer hud;
-};
-
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-};
-
 // Unit box (+-0.5), effect-less (unlit stand-in), grey levels per face (render::debug_box_model lives in
 // alamo_render_sim, which this test does not link).
 std::shared_ptr<assets::ModelAsset> box_model() {

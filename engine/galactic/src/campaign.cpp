@@ -528,12 +528,10 @@ void GalacticSim::apply_ownership(PlanetIndex planet, int32_t derived) {
     const ForceSide side = valid_player(p.owner) ? faction_of(p.owner).force_alignment : ForceSide::Neutral;
     const float m = econ::influence_alignment_factor(side, ti.the_force, ti.force_strength, c.influence_alignment_bonus,
                                                      c.influence_alignment_penalty);
-    const float before = p.control;
     p.control = econ::political_ramp(p.control, p.target_control,
                                      econ::political_delta(1, m, c.political_control_change_seconds));
     // GE 4.2: dropping from >= 1 to < 1 calls 0x403490 for both queues ([M] "re-checks the head"): no
     // observable effect is modelled yet.
-    (void)before;
 }
 
 void GalacticSim::on_owner_change(PlanetIndex planet, int32_t old_owner) {
@@ -605,7 +603,6 @@ bool GalacticSim::prerequisites_met(int32_t player, PlanetIndex planet, const Ty
     if (t.tech_level > ps.tech_level) return false;
     // P4 sim: Lock_Tech list (hack step 1 / story LOCK_UNIT / Lua Lock_Tech) and Build_Initially_Locked.
     if (build_locked(player, static_cast<uint32_t>(&t - rules_->types.data()))) return false;
-    (void)planet;
     return true;
 }
 

@@ -6,6 +6,7 @@
 
 #include "alamo/commands/command.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 
 namespace alamo::render {
 
@@ -110,12 +111,7 @@ bool same_name(std::string_view a, std::string_view b) {
         while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.remove_suffix(1);
         return v;
     };
-    a = trimmed(a);
-    b = trimmed(b);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
+    return ascii_iequals(trimmed(a), trimmed(b));
 }
 }  // namespace
 

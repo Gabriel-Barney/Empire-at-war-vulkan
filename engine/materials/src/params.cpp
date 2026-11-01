@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "fx2_reader.hpp"
 
 namespace alamo::materials {
@@ -18,12 +19,6 @@ void matrix_rows_from_d3dx(const float* m, float4* out, int rows) {
 namespace {
 bool is_numeric(fx::ParamType t) {
     return t == fx::ParamType::Bool || t == fx::ParamType::Int || t == fx::ParamType::Float;
-}
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
 }
 }  // namespace
 
@@ -54,16 +49,16 @@ std::vector<float> param_value(const fx::Parameter& p, const ParamLookup& lookup
 }
 
 void ParamStore::set(std::string_view name, std::vector<float> values) {
-    by_name_[upper(name)] = std::move(values);
+    by_name_[ascii_upper(name)] = std::move(values);
 }
 void ParamStore::set_semantic(std::string_view semantic, std::vector<float> values) {
-    by_semantic_[upper(semantic)] = std::move(values);
+    by_semantic_[ascii_upper(semantic)] = std::move(values);
 }
 bool ParamStore::get(const fx::Parameter& p, std::span<float> out) const {
     const std::vector<float>* v = nullptr;
-    if (auto it = by_name_.find(upper(p.type.name)); it != by_name_.end()) v = &it->second;
+    if (auto it = by_name_.find(ascii_upper(p.type.name)); it != by_name_.end()) v = &it->second;
     else if (!p.type.semantic.empty()) {
-        if (auto is = by_semantic_.find(upper(p.type.semantic)); is != by_semantic_.end()) v = &is->second;
+        if (auto is = by_semantic_.find(ascii_upper(p.type.semantic)); is != by_semantic_.end()) v = &is->second;
     }
     if (!v) return false;
     std::fill(out.begin(), out.end(), 0.0f);
@@ -87,7 +82,7 @@ bool is_engine_parameter(const fx::Parameter& p) {
         "SHADOW_EXTRUSION_DISTANCE", "DIFFUSEMAP", "HEAT_TEXTURE", "MATERIALDIFFUSE",
         "MATERIALSPECULAR", "POWER", "REFRACTION"};
     if (p.type.semantic.empty()) return false;
-    const std::string s = upper(p.type.semantic);
+    const std::string s = ascii_upper(p.type.semantic);
     for (const char* k : kSemantics)
         if (s == k) return true;
     return false;

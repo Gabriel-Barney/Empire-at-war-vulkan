@@ -265,12 +265,6 @@ void AbilitySystem::order_cancel(ObjectId id, uint32_t frame) {
 // queries
 // ================================================================================================
 
-bool AbilitySystem::retreat_blocked(int32_t player) const {
-    for (const SourceEntry& e : source_entries_)
-        if (e.player == player && e.kind <= 1) return true;
-    return false;
-}
-
 bool AbilitySystem::repair_hardpoint(ObjectId id, uint32_t hp, int32_t player) {
     return combat_->add_hardpoint_repairer(id, hp, player);
 }
@@ -319,13 +313,6 @@ float AbilitySystem::player_reduce(int32_t player, uint8_t list) const {
 }
 
 float AbilitySystem::player_list(int32_t player, PlayerList l) const { return player_reduce(player, static_cast<uint8_t>(l)); }
-
-bool AbilitySystem::weather_affected(int32_t player) const {
-    // player +0x410: empty or the AND of the values; every Weatherproof entry is false (§7.4).
-    for (const SourceEntry& e : source_entries_)
-        if (e.player == player && e.kind == 2) return false;
-    return true;
-}
 
 bool AbilitySystem::hunting(ObjectId id) const {
     const Obj* o = obj(id);

@@ -6,65 +6,20 @@ if(NOT TARGET alamo_rhi OR NOT TARGET alamo_materials OR NOT TARGET alamo_assets
 endif()
 
 # ---------------------------------------------------------------- unlit shaders (DXC -> SPIR-V headers)
-set(_render_dxc "${ALAMO_DXC}")
-if(NOT EXISTS "${_render_dxc}")
-  find_program(_render_dxc_found NAMES dxc)
-  if(_render_dxc_found)
-    set(_render_dxc "${_render_dxc_found}")
-  else()
-    message(FATAL_ERROR "render: DXC not found (ALAMO_DXC='${ALAMO_DXC}'); run toolchain\\3_renderer_deps.cmd")
-  endif()
-endif()
 set(_render_shader_dir ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set(_render_common_dir ${CMAKE_CURRENT_SOURCE_DIR}/../materials/shaders)  # common.hlsli (hot-set interface)
 set(_render_gen_dir ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${_render_gen_dir})
 set(_render_shader_headers)
-# name : entry : profile : defines
-foreach(spec "unlit_vs:VSMain:vs_6_0:" "unlit_vs_skin:VSMain:vs_6_0:SKINNED" "unlit_ps:PSMain:ps_6_0:")
-  string(REPLACE ":" ";" parts "${spec}")
-  list(GET parts 0 _name)
-  list(GET parts 1 _entry)
-  list(GET parts 2 _profile)
-  list(LENGTH parts _np)
-  set(_defs)
-  if(_np GREATER 3)
-    list(GET parts 3 _d)
-    if(NOT _d STREQUAL "")
-      set(_defs -D ${_d})
-    endif()
-  endif()
-  set(_hdr ${_render_gen_dir}/${_name}.h)
-  add_custom_command(
-    OUTPUT ${_hdr}
-    COMMAND "${_render_dxc}" -nologo -spirv -fvk-use-dx-layout -fspv-target-env=vulkan1.3 -WX -O3
-            -T ${_profile} -E ${_entry} ${_defs} -I "${_render_common_dir}"
-            -Fh ${_hdr} -Vn g_${_name} "${_render_shader_dir}/unlit.hlsl"
-    DEPENDS ${_render_shader_dir}/unlit.hlsl ${_render_common_dir}/common.hlsli
-    COMMENT "DXC ${_name} (unlit.hlsl ${_entry} ${_profile})"
-    VERBATIM)
-  list(APPEND _render_shader_headers ${_hdr})
-endforeach()
+alamo_dxc_headers(_render_shader_headers SOURCE "${_render_shader_dir}/unlit.hlsl" GEN_DIR "${_render_gen_dir}"
+  INCLUDES "${_render_common_dir}" DEPENDS "${_render_common_dir}/common.hlsli"
+  SPECS "unlit_vs:VSMain:vs_6_0" "unlit_vs_skin:VSMain:vs_6_0:SKINNED" "unlit_ps:PSMain:ps_6_0")
 add_custom_target(alamo_render_shaders DEPENDS ${_render_shader_headers})
 
 # ---------------------------------------------------------------- [port] SSAO shaders (shaders/ssao.hlsl, src/ssao.cpp)
 set(_render_ssao_headers)
-# name : entry : profile
-foreach(spec "ssao_vs:VSFull:vs_6_0" "ssao_ps_ao:PSAo:ps_6_0" "ssao_ps_blur:PSBlur:ps_6_0" "ssao_ps_apply:PSApply:ps_6_0")
-  string(REPLACE ":" ";" parts "${spec}")
-  list(GET parts 0 _name)
-  list(GET parts 1 _entry)
-  list(GET parts 2 _profile)
-  set(_hdr ${_render_gen_dir}/${_name}.h)
-  add_custom_command(
-    OUTPUT ${_hdr}
-    COMMAND "${_render_dxc}" -nologo -spirv -fvk-use-dx-layout -fspv-target-env=vulkan1.3 -WX -O3
-            -T ${_profile} -E ${_entry} -Fh ${_hdr} -Vn g_${_name} "${_render_shader_dir}/ssao.hlsl"
-    DEPENDS ${_render_shader_dir}/ssao.hlsl
-    COMMENT "DXC ${_name} (ssao.hlsl ${_entry} ${_profile})"
-    VERBATIM)
-  list(APPEND _render_ssao_headers ${_hdr})
-endforeach()
+alamo_dxc_headers(_render_ssao_headers SOURCE "${_render_shader_dir}/ssao.hlsl" GEN_DIR "${_render_gen_dir}"
+  SPECS "ssao_vs:VSFull:vs_6_0" "ssao_ps_ao:PSAo:ps_6_0" "ssao_ps_blur:PSBlur:ps_6_0" "ssao_ps_apply:PSApply:ps_6_0")
 add_custom_target(alamo_render_ssao_shaders DEPENDS ${_render_ssao_headers})
 
 # ---------------------------------------------------------------- library
@@ -109,51 +64,16 @@ endif()
 
 # ---------------------------------------------------------------- [port] TAA (shaders/taa.hlsl, src/taa.cpp)
 set(_render_taa_headers)
-# name : entry : profile : define
-foreach(spec "taa_vs:VSMain:vs_6_0:" "taa_ps_resolve:PSResolve:ps_6_0:RESOLVE" "taa_ps_sharpen:PSSharpen:ps_6_0:SHARPEN")
-  string(REPLACE ":" ";" parts "${spec}")
-  list(GET parts 0 _name)
-  list(GET parts 1 _entry)
-  list(GET parts 2 _profile)
-  list(LENGTH parts _np)
-  set(_defs)
-  if(_np GREATER 3)
-    list(GET parts 3 _d)
-    if(NOT _d STREQUAL "")
-      set(_defs -D ${_d})
-    endif()
-  endif()
-  set(_hdr ${_render_gen_dir}/${_name}.h)
-  add_custom_command(
-    OUTPUT ${_hdr}
-    COMMAND "${_render_dxc}" -nologo -spirv -fvk-use-dx-layout -fspv-target-env=vulkan1.3 -WX -O3
-            -T ${_profile} -E ${_entry} ${_defs} -Fh ${_hdr} -Vn g_${_name} "${_render_shader_dir}/taa.hlsl"
-    DEPENDS ${_render_shader_dir}/taa.hlsl
-    COMMENT "DXC ${_name} (taa.hlsl ${_entry} ${_profile})"
-    VERBATIM)
-  list(APPEND _render_taa_headers ${_hdr})
-endforeach()
+alamo_dxc_headers(_render_taa_headers SOURCE "${_render_shader_dir}/taa.hlsl" GEN_DIR "${_render_gen_dir}"
+  SPECS "taa_vs:VSMain:vs_6_0" "taa_ps_resolve:PSResolve:ps_6_0:RESOLVE" "taa_ps_sharpen:PSSharpen:ps_6_0:SHARPEN")
 add_custom_target(alamo_render_taa_shaders DEPENDS ${_render_taa_headers})
 target_sources(alamo_render PRIVATE src/taa.cpp ${_render_taa_headers})
 add_dependencies(alamo_render alamo_render_taa_shaders)
 
 # ---------------------------------------------------------------- [port] output gamma (shaders/gamma.hlsl, src/gamma.cpp)
 set(_render_gamma_headers)
-foreach(spec "gamma_vs:VSMain:vs_6_0" "gamma_ps:PSMain:ps_6_0")
-  string(REPLACE ":" ";" parts "${spec}")
-  list(GET parts 0 _name)
-  list(GET parts 1 _entry)
-  list(GET parts 2 _profile)
-  set(_hdr ${_render_gen_dir}/${_name}.h)
-  add_custom_command(
-    OUTPUT ${_hdr}
-    COMMAND "${_render_dxc}" -nologo -spirv -fvk-use-dx-layout -fspv-target-env=vulkan1.3 -WX -O3
-            -T ${_profile} -E ${_entry} -Fh ${_hdr} -Vn g_${_name} "${_render_shader_dir}/gamma.hlsl"
-    DEPENDS ${_render_shader_dir}/gamma.hlsl
-    COMMENT "DXC ${_name} (gamma.hlsl ${_entry} ${_profile})"
-    VERBATIM)
-  list(APPEND _render_gamma_headers ${_hdr})
-endforeach()
+alamo_dxc_headers(_render_gamma_headers SOURCE "${_render_shader_dir}/gamma.hlsl" GEN_DIR "${_render_gen_dir}"
+  SPECS "gamma_vs:VSMain:vs_6_0" "gamma_ps:PSMain:ps_6_0")
 add_custom_target(alamo_render_gamma_shaders DEPENDS ${_render_gamma_headers})
 target_sources(alamo_render PRIVATE src/gamma.cpp ${_render_gamma_headers})
 add_dependencies(alamo_render alamo_render_gamma_shaders)

@@ -20,7 +20,7 @@
 // Accepted iff (float)((S >> 16) * 100) <= tolerance (the high half = summed node costs, at least 1 per hop); the
 // returned cost is (float)(S & 0xFFFF) / 10 (summed hop distances in tenths; carries into the high half are kept). So an
 // unreachable target passes only Any_Threat, with cost 6553.5. The threat is in the edge weights (node costs of the last
-// recompute); the ZoneThreatFn argument is not read. Callers (A1_READINGS §25.3): Reachable_Target with a source (6th
+// recompute). Callers (A1_READINGS §25.3): Reachable_Target with a source (6th
 // argument), the FreeStore distance key (Low_Threat, from each free unit's zone) and the TF.Reinforce point ranking.
 //
 // ZoneGraph::flood (A1_READINGS §25.2, ZoneReachabilityClass slots 5 / 6) [H]: the set of zones reachable around a
@@ -124,8 +124,8 @@ private:
 // Threat tolerance of a reachability level (levels 6-10); negative for the other levels.
 double reachability_tolerance(Reachability level, const TacticalAiConstants& c);
 
-// Path cost from `source_zone` to `target_zone`, or kUnreachable (header comment). The last argument is unused.
+// Path cost from `source_zone` to `target_zone`, or kUnreachable (header comment).
 double zone_reachability_cost(const ZoneGraph& graph, int32_t source_zone, int32_t target_zone, Reachability level,
-                              const TacticalAiConstants& c, const ZoneThreatFn& threat = {});
+                              const TacticalAiConstants& c);
 
 }  // namespace alamo::ai::tactical

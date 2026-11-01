@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <string>
 
+#include "alamo/core/text.hpp"
 #include "alamo/lua/story_model.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "vm_internal.hpp"
@@ -35,15 +36,6 @@ uint32_t cls_plot() {
 uint32_t cls_event() {
     static const uint32_t c = detail::class_id("StoryEventWrapper");
     return c;
-}
-
-int push_nil(Call& c) {
-    lua_pushnil(c.L);
-    return 1;
-}
-int push_bool(Call& c, bool b) {
-    lua_pushboolean(c.L, b ? 1 : 0);
-    return 1;
 }
 
 void push_plot(Call& c, uint32_t plot) {
@@ -270,8 +262,7 @@ int m_event_set_reward_type(Call& c) {
     if (!c.is_string(1))
         return c.fail("StoryEventWrapper::Set_Reward_Type -- invalid type for parameter 1. Expected string.");
     if (!self_event_valid(c)) return 0;
-    std::string t(c.string(1));
-    for (char& ch : t) ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
+    std::string t = ascii_upper(c.string(1));
     self_event(c).reward_type = std::move(t);
     ++self_event_state(c).lua_edits;
     return 0;

@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/tactical/spatial_tree.hpp"
 #include "alamo/tactical/tree_set.hpp"
 
@@ -24,14 +25,6 @@ using namespace alamo::tactical;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 // splitmix64 (test data only).
 struct Rng {

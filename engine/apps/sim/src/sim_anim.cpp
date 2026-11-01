@@ -4,19 +4,13 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/sim_host.hpp"
 
 namespace alamo::sim {
 
 namespace {
-
-std::string upper_key(std::string_view s) {
-    std::string out(s);
-    for (char& c : out)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return out;
-}
 
 anim::FlinchParams flinch_of(const anim::TypeAnimParams& p) {
     anim::FlinchParams f;
@@ -242,11 +236,6 @@ const anim::AnimWorld* SimAnimation::find_world(const GameMode& mode) const {
     return w ? w->world.get() : nullptr;
 }
 
-const anim::AnimWorld* SimAnimation::find_secondary_world(const GameMode& mode) const {
-    const ModeWorld* w = find_mode_world(mode);
-    return w ? w->secondary.get() : nullptr;
-}
-
 anim::AnimBehaviors& SimAnimation::behaviors(const GameMode& mode) { return *mode_world(mode).behaviors; }
 
 const anim::AnimBehaviors* SimAnimation::find_behaviors(const GameMode& mode) const {
@@ -288,7 +277,7 @@ const anim::AnimModel* SimAnimation::model_for(objects::TypeIndex type, objects:
     TypeEntry e;
     if (type < types_->size()) e.params = anim::type_anim_params(*types_, type, mode);
     if (!e.params.model.empty()) {
-        const std::string mk = upper_key(e.params.model) + "|" + upper_key(e.params.anim_override);
+        const std::string mk = ascii_upper(e.params.model) + "|" + ascii_upper(e.params.anim_override);
         auto& slot = models_[mk];
         if (!slot) {
             slot = std::make_unique<anim::AnimModel>();
@@ -315,7 +304,7 @@ void SimAnimation::prune(const SimHost& host) {
                   worlds_.end());
 }
 
-anim::IdleParams SimAnimation::idle_params(const GameMode& mode, ObjectId id, objects::TypeIndex t, const anim::AnimModel* m) {
+anim::IdleParams SimAnimation::idle_params(const GameMode& mode, objects::TypeIndex t, const anim::AnimModel* m) {
     const anim::TypeAnimParams& p = params_for(t, mode.kind());
     anim::IdleParams i;
     i.idle_type = anim::kAnimIdle;
@@ -325,11 +314,6 @@ anim::IdleParams SimAnimation::idle_params(const GameMode& mode, ObjectId id, ob
     // with SPACE_IDLE clips idles on Space Idle.
     if (mode.kind() == objects::ModeKind::Space && m && m->variant_count(anim::kAnimIdle) == 0 && m->variant_count(anim::kAnimSpaceIdle) > 0)
         i.idle_type = anim::kAnimSpaceIdle;
-    // Garrison container mapping (0x395920) through the hook (S4 garrison system).
-    if (idle_hook_) {
-        const int32_t g = idle_hook_(mode, id);
-        if (g != anim::kNoAnimType && m && m->variant_count(g) > 0) i.idle_type = g;
-    }
     return i;
 }
 
@@ -343,7 +327,7 @@ bool SimAnimation::hit(const GameMode& mode, ObjectId victim, Vec3 facing, Vec3 
     if (!store.alive(h)) return false;
     const objects::TypeIndex t = store.type(h);
     const anim::TypeAnimParams& p = params_for(t, mode.kind());
-    const bool played = mw.behaviors->on_hit(*mw.world, victim, flinch_of(p), idle_params(mode, victim, t, mw.world->model(victim)), facing.x,
+    const bool played = mw.behaviors->on_hit(*mw.world, victim, flinch_of(p), idle_params(mode, t, mw.world->model(victim)), facing.x,
                                              facing.y, travel.x, travel.y, rng, frame);
     if (played) ++stats_.flinches;
     return played;
@@ -355,7 +339,7 @@ bool SimAnimation::service_idle(const GameMode& mode, ObjectId id, SimRng& rng, 
     const objects::ObjectStore& store = mode.primary();
     const ObjectHandle h = store.find(id);
     if (!store.exists(h)) return false;
-    return mw.behaviors->service_idle(*mw.world, id, idle_params(mode, id, store.type(h), mw.world->model(id)), rng, frame);
+    return mw.behaviors->service_idle(*mw.world, id, idle_params(mode, store.type(h), mw.world->model(id)), rng, frame);
 }
 
 uint32_t SimAnimation::service_locomotor(const GameMode& mode, ObjectId id, anim::LocomotorInput in, float walk_ratio, float min_ratio, SimRng& rng,
@@ -372,8 +356,7 @@ uint32_t SimAnimation::service_locomotor(const GameMode& mode, ObjectId id, anim
     lp.deployed_walk_anim_speed = tp.deployed_walk_anim_speed;
     lp.walk_speed_ratio = walk_ratio;
     lp.min_move_ratio = min_ratio;
-    lp.idle = idle_params(mode, id, t, mw.world->model(id));
-    if (idle_hook_ && in.idle_type == anim::kNoAnimType) in.idle_type = idle_hook_(mode, id);
+    lp.idle = idle_params(mode, t, mw.world->model(id));
     const uint32_t n = mw.behaviors->service_locomotor(*mw.world, id, lp, in, rng, frame);
     if (n > 0 && anim::is_turn(mw.world->current_type(id))) ++stats_.turns;
     return n;
@@ -614,7 +597,7 @@ void SimAnimation::sync(const GameMode& mode, SimRng& rng, uint64_t frame) {
         const objects::TypeIndex t = store.type(h);
         const anim::AnimModel* m = model_for(t, mode.kind());
         if (!m) continue;
-        const anim::IdleParams ip = idle_params(mode, id, t, m);
+        const anim::IdleParams ip = idle_params(mode, t, m);
         anim::AnimCreateParams cp;
         cp.idle_type = ip.idle_type;  // default idle (Space Idle / garrison mapping above; crouch: not at creation)
         cp.loop_idle = ip.loop_idle;

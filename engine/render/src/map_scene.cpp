@@ -15,6 +15,7 @@
 #include "alamo/assets/asset_cache.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/game_database.hpp"
 
 namespace alamo::render {
@@ -108,12 +109,6 @@ bool parse_rgb(std::string_view s, materials::float4& out) {
     return true;
 }
 
-std::string upper(std::string_view s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
-}
-
 // Comma / whitespace separated names.
 std::vector<std::string> split_names(std::string_view s) {
     std::vector<std::string> out;
@@ -167,8 +162,8 @@ bool GameTypeResolver::load_render_xml(const FileProvider& files) {
             for (data::XmlNode hp : doc.root().children()) {
                 const std::string_view name = hp.attribute("Name");
                 if (name.empty()) continue;
-                if (hardpoint_defs_.find(upper(name)) == hardpoint_defs_.end())  // first definition wins
-                    hardpoint_defs_.emplace(upper(name), parse_hardpoint(hp));
+                if (hardpoint_defs_.find(ascii_upper(name)) == hardpoint_defs_.end())  // first definition wins
+                    hardpoint_defs_.emplace(ascii_upper(name), parse_hardpoint(hp));
             }
         }
     }
@@ -270,7 +265,7 @@ TypeRenderInfo GameTypeResolver::render_info(uint32_t crc) const {
 }
 
 const HardpointDef* GameTypeResolver::hardpoint(std::string_view name) const {
-    const auto it = hardpoint_defs_.find(upper(name));
+    const auto it = hardpoint_defs_.find(ascii_upper(name));
     return it == hardpoint_defs_.end() ? nullptr : &it->second;
 }
 
@@ -456,7 +451,7 @@ bool MapScene::load_impl(const FileProvider& files, std::string_view map, const 
             for (size_t h = 0; h < ti.hardpoint_defs.size(); ++h) {
                 const std::string& m = ti.hardpoint_defs[h].model_to_attach;
                 if (m.empty()) continue;
-                auto [ai, ins] = attach_index.try_emplace(upper(m), static_cast<uint32_t>(attach_models_.size()));
+                auto [ai, ins] = attach_index.try_emplace(ascii_upper(m), static_cast<uint32_t>(attach_models_.size()));
                 if (ins) attach_models_.push_back(m);
                 pa[h] = ai->second;
             }

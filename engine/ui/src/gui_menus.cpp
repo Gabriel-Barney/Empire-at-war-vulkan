@@ -1,38 +1,23 @@
 #include "alamo/ui/gui_menus.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <initializer_list>
 #include <iterator>
 
+#include "alamo/core/text.hpp"
 #include "alamo/data/game_database.hpp"
+#include "alamo/data/values.hpp"
 
 namespace alamo::ui {
 
 namespace {
 
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
-bool istarts(std::string_view s, std::string_view p) { return s.size() >= p.size() && iequal(s.substr(0, p.size()), p); }
+bool istarts(std::string_view s, std::string_view p) { return s.size() >= p.size() && ascii_iequals(s.substr(0, p.size()), p); }
 
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return o;
-}
-
-std::string trimmed(std::string_view s) {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
-    return std::string(s);
-}
+std::string trimmed(std::string_view s) { return std::string(data::trim(s)); }
 
 std::u32string ascii32(std::string_view s) {
     std::u32string o;
@@ -87,11 +72,11 @@ constexpr const char* kKeyboardPages[5] = {"IDD_KEYBOARD_OPTIONS_DIALOG", "IDD_K
 constexpr const char* kDifficultyKeys[3] = {"TEXT_DIFFICULTY_EASY_NAME", "TEXT_DIFFICULTY_NORMAL_NAME",
                                             "TEXT_DIFFICULTY_HARD_NAME"};
 
-bool is_port_controls(std::string_view dialog) { return iequal(dialog, kPortControlsDialog); }
+bool is_port_controls(std::string_view dialog) { return ascii_iequals(dialog, kPortControlsDialog); }
 
 int32_t keyboard_page(std::string_view dialog) {
     for (int32_t i = 0; i < 5; ++i)
-        if (iequal(dialog, kKeyboardPages[i])) return i;
+        if (ascii_iequals(dialog, kKeyboardPages[i])) return i;
     return -1;
 }
 
@@ -316,7 +301,7 @@ int32_t keyboard_edit_slot(std::string_view control_id) {
         if (d >= '0' && d <= '9') return d == '0' ? 9 : d - '1';  // slot 0..8 = groups 1..9, slot 9 = group 0
     }
     for (const EditSlot& e : kEditSlots)
-        if (iequal(control_id, e.edit)) return hotkey_slot(e.slot);
+        if (ascii_iequals(control_id, e.edit)) return hotkey_slot(e.slot);
     return -1;
 }
 
@@ -386,7 +371,7 @@ CampaignMenu build_campaign_menu(std::span<const data::CampaignDef* const> sorte
                   const std::string& faction, bool custom) {
         CampaignSetInfo* s = nullptr;
         for (CampaignSetInfo& e : list)
-            if (iequal(e.set, set)) s = &e;
+            if (ascii_iequals(e.set, set)) s = &e;
         if (!s) {
             CampaignSetInfo n;
             n.set = set;
@@ -398,7 +383,7 @@ CampaignMenu build_campaign_menu(std::span<const data::CampaignDef* const> sorte
             s = &list.back();
         }
         for (const CampaignChoice& f : s->factions)
-            if (iequal(f.faction, faction)) return;  // first campaign of a faction wins
+            if (ascii_iequals(f.faction, faction)) return;  // first campaign of a faction wins
         s->factions.push_back({c.name, faction});
     };
     for (const data::CampaignDef* c : sorted) {
@@ -407,7 +392,7 @@ CampaignMenu build_campaign_menu(std::span<const data::CampaignDef* const> sorte
         if (faction.empty()) continue;  // multiplayer sets
         const std::string set = trimmed(c->campaign_set).empty() ? c->name : trimmed(c->campaign_set);
         const std::string_view cs = c->raw_value("Supports_Custom_Settings");
-        const bool custom = iequal(trimmed(cs), "true") || iequal(trimmed(cs), "yes") || trimmed(cs) == "1";
+        const bool custom = ascii_iequals(trimmed(cs), "true") || ascii_iequals(trimmed(cs), "yes") || trimmed(cs) == "1";
         if (istarts(set, "Tutorial")) add(m.tutorials, *c, set, faction, custom);
         else add(custom ? m.custom : m.story, *c, set, faction, custom);
     }
@@ -434,7 +419,7 @@ std::u32string FrontEnd::text_or(std::string_view key, std::u32string fallback) 
 }
 
 std::u32string FrontEnd::faction_label(std::string_view faction) const {
-    const std::string key = "TEXT_FACTION_" + upper(faction);
+    const std::string key = "TEXT_FACTION_" + ascii_upper(faction);
     if (gui_->text_db() && gui_->text_db()->find(key)) return gui_->caption_text(key);
     return ascii32(faction);
 }
@@ -735,43 +720,43 @@ void FrontEnd::fill_keyboard(GuiDialog& d) {
 
 void FrontEnd::setup(GuiDialog& d) {
     const std::string_view n = d.name();
-    if (iequal(n, kMain)) {
+    if (ascii_iequals(n, kMain)) {
         d.show("IDC_MAIN_MENU_PLAY_DEMO", p_.demo);
         d.show("IDC_MAIN_MENU_SINGLE_PLAYER_GAMES", !p_.demo);
-    } else if (iequal(n, kSingle)) {
+    } else if (ascii_iequals(n, kSingle)) {
         d.show("IDC_DEBUG_LOAD_SKIRMISH_MAP_BUTTON", false);
         d.enable("IDC_NEW_CAMPAIGN_BUTTON", !menu_.story.empty());
         d.enable("IDC_CUSTOM_CAMPAIGN_BUTTON", !menu_.custom.empty());
-    } else if (iequal(n, kCampaignSelect)) {
+    } else if (ascii_iequals(n, kCampaignSelect)) {
         d.set_value("IDC_CAMPAIGN_DIFFICULTY_SLIDER", 1);
         fill_campaign_select(d);
-    } else if (iequal(n, kCustomStaging)) {
+    } else if (ascii_iequals(n, kCustomStaging)) {
         d.set_checked("IDC_RADIO_CUSTOM_MEDIUM", true);
         for (int32_t i = 0; i < 3; ++i) {
             const char* labels[3] = {"IDC_DIFFICULTY1", "IDC_DIFFICULTY2", "IDC_DIFFICULTY3"};
             d.set_text(labels[i], text(kDifficultyKeys[i]));
         }
         fill_custom_staging(d);
-    } else if (iequal(n, kSkirmish)) {
+    } else if (ascii_iequals(n, kSkirmish)) {
         fill_skirmish(d);
-    } else if (iequal(n, kTutorial)) {
+    } else if (ascii_iequals(n, kTutorial)) {
         std::vector<std::u32string> items;
         for (const CampaignSetInfo& s : menu_.tutorials) items.push_back(text(s.text_id.empty() ? s.set : s.text_id));
         d.set_items("IDC_STAGING_MAP_LIST", std::move(items), menu_.tutorials.empty() ? -1 : 0);
-    } else if (iequal(n, kOptions) || iequal(n, kInGameOptions)) {
+    } else if (ascii_iequals(n, kOptions) || ascii_iequals(n, kInGameOptions)) {
         // [port: Gabriel] the hidden Mods / Network slot opens the camera and controls dialog when it is merged.
-        const char* slot = iequal(n, kOptions) ? "IDC_MAIN_OPTIONS_MODS" : "IDC_IN_GAME_OPTIONS_NETWORK";
+        const char* slot = ascii_iequals(n, kOptions) ? "IDC_MAIN_OPTIONS_MODS" : "IDC_IN_GAME_OPTIONS_NETWORK";
         const bool port = gui_->has_dialog(kPortControlsDialog);
         d.show(slot, port);
         if (port) d.set_text(slot, gui_->port_text(U"Camera and Controls"));
     } else if (is_port_controls(n)) {
         fill_port_controls(d, p_.camera_settings ? p_.camera_settings() : CameraSettings{});
-    } else if (iequal(n, kAudio)) {
+    } else if (ascii_iequals(n, kAudio)) {
         audio_before_ = p_.audio ? p_.audio() : AudioVolumes{};
         fill_audio(d, audio_before_);
-    } else if (iequal(n, kVideo)) {
+    } else if (ascii_iequals(n, kVideo)) {
         fill_video(d);
-    } else if (iequal(n, kAdvancedVideo)) {
+    } else if (ascii_iequals(n, kAdvancedVideo)) {
         AdvancedVideoSettings s = p_.advanced_video ? p_.advanced_video() : AdvancedVideoSettings{};
         // t19 / D9: opened from the Video dialog, the combo shows that dialog's slider, moved or not.
         if (const GuiDialog* vd = gui_->find(kVideo)) {
@@ -780,20 +765,20 @@ void FrontEnd::setup(GuiDialog& d) {
             if (const GuiControl* c = vd->get("IDC_DETAIL_LEVEL_SLIDER"); c && p_.video && c->value != p_.video().detail) set_advanced_detail(s, c->value);
         }
         fill_advanced_video(d, s);
-    } else if (iequal(n, kGameplay)) {
+    } else if (ascii_iequals(n, kGameplay)) {
         fill_gameplay(d, p_.gameplay ? p_.gameplay() : GameplaySettings{});
     } else if (keyboard_page(n) >= 0) {
         fill_keyboard(d);
-    } else if (iequal(n, kSave) || iequal(n, kLoad)) {
+    } else if (ascii_iequals(n, kSave) || ascii_iequals(n, kLoad)) {
         fill_saves(d);
-        if (iequal(n, kSave)) {  // N1 / t09: a game that cannot be saved now shows why instead of a name
+        if (ascii_iequals(n, kSave)) {  // N1 / t09: a game that cannot be saved now shows why instead of a name
             const std::u32string why = p_.save_blocker ? p_.save_blocker() : std::u32string();
             save_blocked_ = !why.empty();
             d.enable("IDC_SAVE_GAME_BUTTON", !save_blocked_);
             d.enable("IDC_SAVE_GAME_NAME_EDIT", !save_blocked_);
             d.set_text("IDC_SAVE_GAME_NAME_EDIT", why);
         }
-    } else if (iequal(n, kQuit)) {
+    } else if (ascii_iequals(n, kQuit)) {
         const bool overwrite = quit_action_ == "overwrite", del = quit_action_ == "delete";
         d.set_text("IDC_CAPTION", overwrite ? text_or("TEXT_SAVE_CONFIRM", U"Overwrite Save Game?")
                                   : del     ? text_or("TEXT_DELETE_CONFIRM", U"Delete saved game?")
@@ -805,7 +790,7 @@ void FrontEnd::setup(GuiDialog& d) {
             d.set_text("IDC_USER_TEXT_STRING_1", ascii32(confirm_save_));
             d.show("IDC_USER_TEXT_STRING_1", true);
         }
-    } else if (iequal(n, kPause)) {
+    } else if (ascii_iequals(n, kPause)) {
         d.enable("IDC_SAVE_GAME", in_game_);
         if (const float gap = pause_menu_gap(d); gap > 0.0f) {
             for (const char* id : {"IDC_GAME_OPTIONS_QUIT", "IDC_GAME_OPTIONS_RESUME"})
@@ -868,26 +853,26 @@ void FrontEnd::end_resolution_confirm(bool keep, std::vector<MenuAction>& out) {
 
 void FrontEnd::on_cancel(const GuiEvent& e, std::vector<MenuAction>& out) {
     const std::string_view n = e.dialog;
-    if (res_confirm_ && iequal(n, kResConfirm)) {  // Esc = No
+    if (res_confirm_ && ascii_iequals(n, kResConfirm)) {  // Esc = No
         end_resolution_confirm(false, out);
         return;
     }
-    if (iequal(n, kResConfirm)) return;  // a late Esc after the dialog already answered
-    if (iequal(n, kMain)) return;  // Esc on the main menu does nothing [port]
-    if (iequal(n, kPause)) {
+    if (ascii_iequals(n, kResConfirm)) return;  // a late Esc after the dialog already answered
+    if (ascii_iequals(n, kMain)) return;  // Esc on the main menu does nothing [port]
+    if (ascii_iequals(n, kPause)) {
         close_pause_menu();
         out.push_back(act(MenuAction::Kind::ResumeGame));
         return;
     }
-    if (iequal(n, kSingle) || iequal(n, kOptions)) {
+    if (ascii_iequals(n, kSingle) || ascii_iequals(n, kOptions)) {
         go(kMain);
         return;
     }
-    if (iequal(n, kCampaignSelect) || iequal(n, kCustomStaging) || iequal(n, kSkirmish) || iequal(n, kTutorial)) {
+    if (ascii_iequals(n, kCampaignSelect) || ascii_iequals(n, kCustomStaging) || ascii_iequals(n, kSkirmish) || ascii_iequals(n, kTutorial)) {
         go(kSingle);
         return;
     }
-    if (iequal(n, kAudio)) {
+    if (ascii_iequals(n, kAudio)) {
         out.push_back(act(MenuAction::Kind::PreviewAudio));
         out.back().audio = audio_before_;
     }
@@ -898,17 +883,17 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
     GuiDialog* d = gui_->find(e.dialog);
     if (!d) return;
     const std::string_view n = e.dialog;
-    if (iequal(n, kCampaignSelect)) fill_campaign_select(*d);
-    else if (iequal(n, kCustomStaging) && e.control == "IDC_STAGING_MAP_LIST") fill_custom_staging(*d);
-    else if (iequal(n, kAudio) && e.kind == GuiEvent::Kind::ValueChanged) {
+    if (ascii_iequals(n, kCampaignSelect)) fill_campaign_select(*d);
+    else if (ascii_iequals(n, kCustomStaging) && e.control == "IDC_STAGING_MAP_LIST") fill_custom_staging(*d);
+    else if (ascii_iequals(n, kAudio) && e.kind == GuiEvent::Kind::ValueChanged) {
         MenuAction a = act(MenuAction::Kind::PreviewAudio);
         a.audio = read_audio(*d);
         out.push_back(std::move(a));
-    } else if (iequal(n, kSave) && e.control == "IDC_SAVE_GAME_LIST" && e.value >= 0 &&
+    } else if (ascii_iequals(n, kSave) && e.control == "IDC_SAVE_GAME_LIST" && e.value >= 0 &&
                static_cast<size_t>(e.value) < saves_.size()) {
         // N1 / t09: the save's name (the file), not its label.
         if (!save_blocked_) d->set_text("IDC_SAVE_GAME_NAME_EDIT", ascii32(saves_[static_cast<size_t>(e.value)].name));
-    } else if (iequal(n, kLoad) && e.kind == GuiEvent::Kind::DoubleClicked && e.value >= 0 &&
+    } else if (ascii_iequals(n, kLoad) && e.kind == GuiEvent::Kind::DoubleClicked && e.value >= 0 &&
                static_cast<size_t>(e.value) < saves_.size()) {
         MenuAction a = act(MenuAction::Kind::LoadGame);
         a.save = saves_[static_cast<size_t>(e.value)].name;
@@ -916,26 +901,26 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
     } else if (is_port_controls(n) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port: Gabriel] FOV value labels
         if (e.control == "IDC_PORT_GALACTIC_FOV_SLIDER") d->set_text("IDC_PORT_GALACTIC_FOV_VALUE", fov_text(static_cast<float>(e.value)));
         if (e.control == "IDC_PORT_TACTICAL_FOV_SLIDER") d->set_text("IDC_PORT_TACTICAL_FOV_VALUE", fov_text(static_cast<float>(e.value)));
-    } else if (iequal(n, kVideo) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port] the values beside the sliders (U8)
+    } else if (ascii_iequals(n, kVideo) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port] the values beside the sliders (U8)
         if (e.control == "IDC_ANTI_ALIAS_SLIDER") d->set_text("IDC_PORT_ANTI_ALIAS_VALUE", value_text(e.value));
         if (e.control == "IDC_DETAIL_LEVEL_SLIDER") d->set_text("IDC_PORT_DETAIL_VALUE", value_text(e.value));
         if (e.control == "IDC_GAMMA_SLIDER") d->set_text("IDC_PORT_GAMMA_VALUE", value_text(e.value));
-    } else if (iequal(n, kVideo) && e.kind == GuiEvent::Kind::Checked && e.control == "IDC_VSYNC_ENABLED") {  // U9: one setting
+    } else if (ascii_iequals(n, kVideo) && e.kind == GuiEvent::Kind::Checked && e.control == "IDC_VSYNC_ENABLED") {  // U9: one setting
         d->set_selected("IDC_PORT_VSYNC_MODE", e.value != 0 ? vsync_on_row_ : 0);
-    } else if (iequal(n, kVideo) && e.kind == GuiEvent::Kind::SelectionChanged && e.control == "IDC_PORT_VSYNC_MODE") {
+    } else if (ascii_iequals(n, kVideo) && e.kind == GuiEvent::Kind::SelectionChanged && e.control == "IDC_PORT_VSYNC_MODE") {
         if (e.value > 0) vsync_on_row_ = e.value;
         d->set_checked("IDC_VSYNC_ENABLED", e.value > 0);
     } else if (keyboard_page(n) >= 0 && e.kind == GuiEvent::Kind::Checked && istarts(e.control, "IDC_KEYBOARD_OPTIONS_")) {
         const int32_t page = e.control.back() - '1';
-        if (page >= 0 && page < 5 && !iequal(n, kKeyboardPages[page])) go(kKeyboardPages[page]);
+        if (page >= 0 && page < 5 && !ascii_iequals(n, kKeyboardPages[page])) go(kKeyboardPages[page]);
     }
 }
 
 void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
     const std::string_view n = e.dialog, c = e.control;
     GuiDialog* d = gui_->find(n);
-    auto is = [&](std::string_view id) { return iequal(c, id); };
-    if (iequal(n, kMain)) {
+    auto is = [&](std::string_view id) { return ascii_iequals(c, id); };
+    if (ascii_iequals(n, kMain)) {
         if (is("IDC_MAIN_MENU_TUTORIAL")) go(kTutorial);
         else if (is("IDC_MAIN_MENU_SINGLE_PLAYER_GAMES") || is("IDC_MAIN_MENU_PLAY_DEMO")) go(kSingle);
         else if (is("IDC_MAIN_MENU_MULTIPLAYER")) out.push_back(act(MenuAction::Kind::OpenMultiplayer));
@@ -946,13 +931,13 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             quit_action_ = "exit";
             push(kQuit);
         }
-    } else if (iequal(n, kSingle)) {
+    } else if (ascii_iequals(n, kSingle)) {
         if (is("IDC_NEW_CAMPAIGN_BUTTON")) go(kCampaignSelect);
         else if (is("IDC_CUSTOM_CAMPAIGN_BUTTON")) go(kCustomStaging);
         else if (is("IDC_SKIRMISH_GAMES_BUTTON")) go(kSkirmish);
         else if (is("IDC_BACK_BUTTON_MAIN")) go(kMain);
         else if (is("IDC_MENU_CREDITS")) out.push_back(act(MenuAction::Kind::ShowCredits));
-    } else if (iequal(n, kCampaignSelect) && d) {
+    } else if (ascii_iequals(n, kCampaignSelect) && d) {
         if (is("IDC_CANCEL_BUTTON")) go(kSingle);
         else if (is("IDC_PLAY_FACTION_A_BUTTON") || is("IDC_PLAY_FACTION_B_BUTTON")) {
             const GuiControl* list = d->get("IDC_CAMPAIGNS_LIST");
@@ -968,7 +953,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 }
             }
         }
-    } else if (iequal(n, kCustomStaging) && d) {
+    } else if (ascii_iequals(n, kCustomStaging) && d) {
         if (is("IDC_CANCEL_BUTTON")) go(kSingle);
         else if (is("IDC_SELECT_OPTIONS")) push(kAdvanced);
         else if (is("IDC_PLAY_BUTTON")) {
@@ -986,9 +971,9 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 }
             }
         }
-    } else if (iequal(n, kAdvanced)) {
+    } else if (ascii_iequals(n, kAdvanced)) {
         if (is("IDC_CANCEL_BUTTON") || is("IDC_BUTTON_ACCEPT")) pop();
-    } else if (iequal(n, kSkirmish) && d) {
+    } else if (ascii_iequals(n, kSkirmish) && d) {
         if (is("IDC_CANCEL_BUTTON")) go(kSingle);
         else if (is("IDC_SELECT_OPTIONS")) push(kAdvanced);
         else if (is("IDC_SKIRMISH_START_GAME_BUTTON")) {
@@ -1006,7 +991,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 out.push_back(std::move(a));
             }
         }
-    } else if (iequal(n, kTutorial) && d) {
+    } else if (ascii_iequals(n, kTutorial) && d) {
         if (is("IDC_CANCEL_BUTTON")) go(kMain);
         else if (is("IDC_PLAY_BUTTON")) {
             const GuiControl* list = d->get("IDC_STAGING_MAP_LIST");
@@ -1019,7 +1004,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 out.push_back(std::move(a));
             }
         }
-    } else if (iequal(n, kOptions) || iequal(n, kInGameOptions)) {
+    } else if (ascii_iequals(n, kOptions) || ascii_iequals(n, kInGameOptions)) {
         if (is("IDC_MAIN_OPTIONS_AUDIO") || is("IDC_IN_GAME_OPTIONS_AUDIO")) push(kAudio);
         else if (is("IDC_MAIN_OPTIONS_VIDEO") || is("IDC_IN_GAME_OPTIONS_VIDEO")) push(kVideo);
         else if (is("IDC_MAIN_OPTIONS_GAMEPLAY") || is("IDC_IN_GAME_OPTIONS_GAMEPLAY")) push(kGameplay);
@@ -1034,7 +1019,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         } else if (is("IDC_OK_MAIN")) go(kMain);
         else if (is("IDC_OK_IN_GAME")) pop();
         else if (is("IDC_MENU_CREDITS")) out.push_back(act(MenuAction::Kind::ShowCredits));
-    } else if (iequal(n, kAudio) && d) {
+    } else if (ascii_iequals(n, kAudio) && d) {
         if (is("IDC_OK")) {
             MenuAction a = act(MenuAction::Kind::ApplyAudio);
             a.audio = read_audio(*d);
@@ -1051,7 +1036,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             a.audio = read_audio(*d);
             out.push_back(std::move(a));
         }
-    } else if (iequal(n, kVideo) && d) {
+    } else if (ascii_iequals(n, kVideo) && d) {
         if (is("IDC_OK") || is("IDC_APPLY")) {
             MenuAction a = act(MenuAction::Kind::ApplyVideo);
             VideoSettings v = p_.video ? p_.video() : VideoSettings{};
@@ -1092,7 +1077,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         } else if (is("IDC_AUTO_DETECT")) {
             out.push_back(act(MenuAction::Kind::AutoDetectVideo));
         }
-    } else if (iequal(n, kAdvancedVideo) && d) {
+    } else if (ascii_iequals(n, kAdvancedVideo) && d) {
         if (is("IDC_OK") || is("IDC_APPLY")) {
             MenuAction a = act(MenuAction::Kind::ApplyAdvancedVideo);
             a.advanced = read_advanced_video(*d);
@@ -1115,7 +1100,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         } else if (is("IDC_CANCEL")) {
             pop();
         }
-    } else if (iequal(n, kGameplay) && d) {
+    } else if (ascii_iequals(n, kGameplay) && d) {
         if (is("IDC_BUTTON_ACCEPT")) {
             MenuAction a = act(MenuAction::Kind::ApplyGameplay);
             a.gameplay = read_gameplay(*d);
@@ -1163,7 +1148,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             keys_dirty_ = true;
             fill_port_controls(*d, CameraSettings{});
         }
-    } else if (iequal(n, kPause)) {
+    } else if (ascii_iequals(n, kPause)) {
         if (is("IDC_SAVE_GAME")) push(kSave);
         else if (is("IDC_LOAD_GAME")) push(kLoad);
         else if (is("IDC_INGAME_OPTIONS")) push(kInGameOptions);
@@ -1174,7 +1159,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             close_pause_menu();
             out.push_back(act(MenuAction::Kind::ResumeGame));
         }
-    } else if (iequal(n, kSave) && d) {
+    } else if (ascii_iequals(n, kSave) && d) {
         if (is("IDC_SAVE_CANCEL_BUTTON")) pop();
         else if (is("IDC_SAVE_GAME_BUTTON") && !save_blocked_) {
             const GuiControl* ed = d->get("IDC_SAVE_GAME_NAME_EDIT");
@@ -1199,7 +1184,7 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 push(kQuit);
             }
         }
-    } else if (iequal(n, kLoad) && d) {
+    } else if (ascii_iequals(n, kLoad) && d) {
         if (is("IDC_LOAD_CANCEL_BUTTON")) pop();
         else if (is("IDC_LOAD_GAME_BUTTON") || is("IDC_DELETE_GAME_BUTTON")) {
             const GuiControl* l = d->get("IDC_SAVE_GAME_LIST");
@@ -1216,17 +1201,17 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 }
             }
         }
-    } else if (iequal(n, kResConfirm) && res_confirm_) {
+    } else if (ascii_iequals(n, kResConfirm) && res_confirm_) {
         if (is("IDC_DIALOG_BOX_BUTTON_LEFT")) end_resolution_confirm(true, out);
         else if (is("IDC_DIALOG_BOX_BUTTON_RIGHT")) end_resolution_confirm(false, out);
-    } else if (iequal(n, kQuit)) {
+    } else if (ascii_iequals(n, kQuit)) {
         if (is("IDC_DIALOG_BOX_BUTTON_LEFT")) {
             pop();
             if (quit_action_ == "overwrite" || quit_action_ == "delete") {  // N1 / t09: the confirmed save request
                 MenuAction a = act(quit_action_ == "overwrite" ? MenuAction::Kind::SaveGame : MenuAction::Kind::DeleteSave);
                 a.save = confirm_save_;
                 out.push_back(std::move(a));
-                if (quit_action_ == "overwrite" && iequal(top(), kSave)) pop();  // saved: the Save dialog closes
+                if (quit_action_ == "overwrite" && ascii_iequals(top(), kSave)) pop();  // saved: the Save dialog closes
                 quit_action_.clear();
             } else {
                 out.push_back(act(quit_action_ == "exit" ? MenuAction::Kind::ExitGame : MenuAction::Kind::QuitToMainMenu));
@@ -1280,7 +1265,7 @@ void FrontEnd::update(std::span<const GuiEvent> events, const InputFrame& raw, s
             case GuiEvent::Kind::DoubleClicked:
             case GuiEvent::Kind::ValueChanged: on_change(e, out); break;
             case GuiEvent::Kind::Submitted:
-                if (iequal(e.dialog, kSave)) {
+                if (ascii_iequals(e.dialog, kSave)) {
                     GuiEvent b = e;
                     b.kind = GuiEvent::Kind::Clicked;
                     b.control = "IDC_SAVE_GAME_BUTTON";

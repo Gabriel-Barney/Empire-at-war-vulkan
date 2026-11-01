@@ -6,6 +6,7 @@
 #include <array>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
@@ -360,7 +361,7 @@ bool TacticalBattle::hyperspace_out(objects::ObjectId id, int32_t delay_frames, 
         for (std::string_view b : types.get_list(st.type(u->h), tag)) {
             std::string up;
             for (char ch : b)
-                if (ch != ' ' && ch != '\t' && ch != ',') up.push_back(ch >= 'a' && ch <= 'z' ? static_cast<char>(ch - 'a' + 'A') : ch);
+                if (ch != ' ' && ch != '\t' && ch != ',') up.push_back(ascii_upper(ch));
             implemented = implemented || up == "FIGHTER_LOCOMOTOR" || up == "SIMPLE_SPACE_LOCOMOTOR";
         }
     if (!implemented) return false;

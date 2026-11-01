@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/camera.hpp"
 #include "alamo/ui/hotkeys.hpp"
@@ -36,15 +37,6 @@ using namespace alamo;
 using namespace alamo::ui;
 
 namespace {
-
-int g_fail2 = 0;
-#define CHECK2(c)                                                    \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail2;                                               \
-        }                                                            \
-    } while (0)
 
 bool near2(float a, float b, float eps = 1e-3f) { return std::fabs(a - b) <= eps; }
 
@@ -189,21 +181,21 @@ std::shared_ptr<assets::ModelAsset> synthetic_shell() {
 }
 
 void test_shell_models() {
-    CHECK2(shell_alt_index("Empire_Faceplate_ALT0") == 0 && shell_alt_index("b_Help_Droid_Rebel_alt1") == 1 &&
+    CHECK(shell_alt_index("Empire_Faceplate_ALT0") == 0 && shell_alt_index("b_Help_Droid_Rebel_alt1") == 1 &&
            shell_alt_index("x_ALT12") == 12 && shell_alt_index("a_ALT") == -1 && shell_alt_index("a_ALTx") == -1 &&
            shell_alt_index("radar") == -1 && shell_alt_index("reinforcement_window_ALT4") == 4);
     const auto model = synthetic_shell();
     const ShellModelInfo info = shell_model_info(*model);
-    CHECK2(info.bones.size() == 6 && info.meshes.size() == 5);
+    CHECK(info.bones.size() == 6 && info.meshes.size() == 5);
     const ShellBone* b22 = nullptr;
     for (const ShellBone& b : info.bones)
         if (b.name == "special_button_22") b22 = &b;
-    CHECK2(b22 && near2(b22->x, 985) && near2(b22->y, 132) && near2(b22->z, 2) && near2(b22->half_size.x, 12));
-    CHECK2(info.bones[0].name == "s_select_00" && near2(info.bones[0].half_size.x, 25) && near2(info.bones[0].z, 4));
-    CHECK2(info.bones[4].name == "Empire_Faceplate_ALT0" && near2(info.bones[4].rect_center.x, 27));
-    CHECK2(info.meshes[3].alt == 0 && info.meshes[4].alt == 1 && info.meshes[0].alt == -1 && info.meshes[0].hidden);
+    CHECK(b22 && near2(b22->x, 985) && near2(b22->y, 132) && near2(b22->z, 2) && near2(b22->half_size.x, 12));
+    CHECK(info.bones[0].name == "s_select_00" && near2(info.bones[0].half_size.x, 25) && near2(info.bones[0].z, 4));
+    CHECK(info.bones[4].name == "Empire_Faceplate_ALT0" && near2(info.bones[4].rect_center.x, 27));
+    CHECK(info.meshes[3].alt == 0 && info.meshes[4].alt == 1 && info.meshes[0].alt == -1 && info.meshes[0].hidden);
     const std::vector<uint8_t> m0 = shell_mesh_hidden(info, 0), m1 = shell_mesh_hidden(info, 1);
-    CHECK2((m0 == std::vector<uint8_t>{1, 1, 1, 0, 1}) && (m1 == std::vector<uint8_t>{1, 1, 1, 1, 0}));
+    CHECK((m0 == std::vector<uint8_t>{1, 1, 1, 0, 1}) && (m1 == std::vector<uint8_t>{1, 1, 1, 1, 0}));
 
     const ComponentTable t = stage2_table();
     ShellSet set;
@@ -213,24 +205,24 @@ void test_shell_models() {
             return name == "i_tactical_controls.alo" ? model : nullptr;
         },
         {}, &missing);
-    CHECK2(n == 1 && missing.empty() && set.shells()[0].component == static_cast<uint32_t>(t.find("i_main_skirmish")));
+    CHECK(n == 1 && missing.empty() && set.shells()[0].component == static_cast<uint32_t>(t.find("i_main_skirmish")));
     set.set_alt(set.shells()[0].component, 1);
-    CHECK2(set.shells()[0].mesh_hidden == m1);
+    CHECK(set.shells()[0].mesh_hidden == m1);
     HudLayout layout;
     set.apply(layout);
     for (auto [w, h] : {std::pair{1024u, 768u}, std::pair{1920u, 1080u}, std::pair{1280u, 1024u}}) {
         const HudCanvas cv = HudCanvas::make(w, h);
         layout.update(cv, t);
         const ComponentPlacement& p = layout.placement(static_cast<uint32_t>(t.find("s_select_00")));
-        CHECK2(p.placed && p.from_bone && near2(p.center.x, -0.5f * cv.width + 380) && near2(p.center.y, -0.5f * cv.height + 93) &&
+        CHECK(p.placed && p.from_bone && near2(p.center.x, -0.5f * cv.width + 380) && near2(p.center.y, -0.5f * cv.height + 93) &&
                near2(p.size.x, 50) && near2(p.size.y, 50));
         const ComponentPlacement& r = layout.placement(static_cast<uint32_t>(t.find("radar")));
-        CHECK2(r.placed && near2(r.size.x, 175) && near2(r.rect_center.x, r.center.x));
+        CHECK(r.placed && near2(r.size.x, 175) && near2(r.rect_center.x, r.center.x));
     }
     set.set_visible(set.shells()[0].component, false);
     set.apply(layout);
     layout.update(HudCanvas::make(1024, 768), t);
-    CHECK2(!layout.placement(static_cast<uint32_t>(t.find("radar"))).placed);
+    CHECK(!layout.placement(static_cast<uint32_t>(t.find("radar"))).placed);
 }
 
 #ifdef ALAMO_UI_HAVE_VFS
@@ -244,10 +236,10 @@ void test_real_shell() {
     cfg.foc_root = root;
     std::string err;
     auto files = vfs::Vfs::create(cfg, &err);
-    CHECK2(files != nullptr);
+    CHECK(files != nullptr);
     if (!files) return;
     ComponentTable table;
-    CHECK2(table.load(*files, &err));
+    CHECK(table.load(*files, &err));
     ShellSet set;
     std::vector<std::string> missing;
     const std::string names[] = {"i_main_skirmish", "i_main_reinforce", "i_main_commandbar"};
@@ -261,9 +253,9 @@ void test_real_shell() {
         },
         names, &missing);
     for (const std::string& m : missing) std::printf("real shell: missing %s\n", m.c_str());
-    CHECK2(set.shells().size() == 3);
+    CHECK(set.shells().size() == 3);
     const ShellSet::Shell* tac = set.find(static_cast<uint32_t>(table.find("i_main_skirmish")));
-    CHECK2(tac != nullptr);
+    CHECK(tac != nullptr);
     if (!tac) return;
     // Model-space convention (the stage-1 [port] assumption corrected): canvas units, +Y up, origin bottom-left.
     float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
@@ -278,8 +270,8 @@ void test_real_shell() {
         if (m.alt >= 0 && m.alt < 3 && !m.hidden) ++alts[m.alt];
     std::printf("real i_tactical_controls.alo: %zu bones, %zu meshes, bones x %.1f..%.1f y %.1f..%.1f, ALT meshes %u/%u/%u\n",
                 tac->info.bones.size(), tac->info.meshes.size(), minx, maxx, miny, maxy, alts[0], alts[1], alts[2]);
-    CHECK2(tac->info.bones.size() >= 150 && minx >= -1.0f && maxx <= 1100.0f && miny >= -150.0f && maxy <= 768.0f);
-    CHECK2(alts[0] >= 1 && alts[1] >= 1 && alts[2] >= 1);
+    CHECK(tac->info.bones.size() >= 150 && minx >= -1.0f && maxx <= 1100.0f && miny >= -150.0f && maxy <= 768.0f);
+    CHECK(alts[0] >= 1 && alts[1] >= 1 && alts[2] >= 1);
     // FIXPASS_GALACTIC §4.2 / capture C2: the bottom-left advisor bones, model units from the bottom-left corner.
     for (const ShellBone& b : tac->info.bones) {
         const auto is = [&b](const char* n) { return _stricmp(b.name.c_str(), n) == 0; };
@@ -288,9 +280,9 @@ void test_real_shell() {
                         static_cast<double>(b.x), static_cast<double>(b.y), static_cast<double>(b.half_size.x),
                         static_cast<double>(b.half_size.y), static_cast<double>(b.rect_center.x),
                         static_cast<double>(b.rect_center.y));
-        if (is("Movie_tactical")) CHECK2(near2(b.x, 50, 1.0f) && near2(b.y, 288, 1.0f));
-        if (is("b_droid_help_tactical")) CHECK2(near2(b.x, 19, 1.0f) && near2(b.y, 255, 1.0f));
-        if (is("Text_Planet_tactical")) CHECK2(near2(b.x, 179, 1.0f) && near2(b.y, 239, 1.0f));
+        if (is("Movie_tactical")) CHECK(near2(b.x, 50, 1.0f) && near2(b.y, 288, 1.0f));
+        if (is("b_droid_help_tactical")) CHECK(near2(b.x, 19, 1.0f) && near2(b.y, 255, 1.0f));
+        if (is("Text_Planet_tactical")) CHECK(near2(b.x, 179, 1.0f) && near2(b.y, 239, 1.0f));
     }
     // FIXPASS_GALACTIC §4.2 / capture C2: Movie_galactic on the galactic bar.
     if (const ShellSet::Shell* gal = set.find(static_cast<uint32_t>(table.find("i_main_commandbar")))) {
@@ -300,7 +292,7 @@ void test_real_shell() {
                 std::printf("real advisor bone %s (%.1f, %.1f)\n", b.name.c_str(), static_cast<double>(b.x), static_cast<double>(b.y));
                 movie_bone = near2(b.x, 51, 1.0f) && near2(b.y, 288, 1.0f);
             }
-        CHECK2(movie_bone);
+        CHECK(movie_bone);
     }
     HudLayout layout;
     set.apply(layout);
@@ -313,10 +305,10 @@ void test_real_shell() {
         std::printf("real layout %ux%u: s_select_00 (%.1f, %.1f) %gx%g, radar (%.1f, %.1f) %gx%g, r_0000 (%.1f, %.1f)\n", w, h,
                     s0.center.x, s0.center.y, s0.size.x, s0.size.y, rd.center.x, rd.center.y, rd.size.x, rd.size.y, r0.center.x,
                     r0.center.y);
-        CHECK2(s0.placed && s0.from_bone && near2(s0.size.x, 50) && s0.center.y < -0.5f * cv.height + 120.0f);
-        CHECK2(rd.placed && near2(rd.size.x, 175, 1.0f) && rd.center.x < -0.5f * cv.width + 120.0f);
+        CHECK(s0.placed && s0.from_bone && near2(s0.size.x, 50) && s0.center.y < -0.5f * cv.height + 120.0f);
+        CHECK(rd.placed && near2(rd.size.x, 175, 1.0f) && rd.center.x < -0.5f * cv.width + 120.0f);
         // Land reinforcement window: top-left (bones y <= 0 -> origin on the top edge).
-        CHECK2(r0.placed && r0.center.y > 0.5f * cv.height - 80.0f && r0.center.x < -0.5f * cv.width + 60.0f);
+        CHECK(r0.placed && r0.center.y > 0.5f * cv.height - 80.0f && r0.center.x < -0.5f * cv.width + 60.0f);
     }
 }
 #endif
@@ -333,96 +325,96 @@ void test_hotkeys() {
     for (uint16_t i = 0; i < kHotkeySlots; ++i) {
         names_ok = names_ok && slots[i].name != nullptr && hotkey_slot(slots[i].name) == i;
     }
-    CHECK2(names_ok);
+    CHECK(names_ok);
     HotkeyTable t;
-    CHECK2(t.binding(0) == (HotkeyBinding{'1', HotkeyMod::None}) && t.binding(9) == (HotkeyBinding{'0', HotkeyMod::None}));
-    CHECK2(t.binding(hk::kSelectAll) == (HotkeyBinding{'Y', HotkeyMod::Ctrl}) && t.binding(hk::kStop) == (HotkeyBinding{'H', HotkeyMod::None}));  // [port: Gabriel] S -> H
-    CHECK2(t.binding(123) == (HotkeyBinding{'1', HotkeyMod::Ctrl}) && t.binding(142) == (HotkeyBinding{'0', HotkeyMod::Shift}) &&
+    CHECK(t.binding(0) == (HotkeyBinding{'1', HotkeyMod::None}) && t.binding(9) == (HotkeyBinding{'0', HotkeyMod::None}));
+    CHECK(t.binding(hk::kSelectAll) == (HotkeyBinding{'Y', HotkeyMod::Ctrl}) && t.binding(hk::kStop) == (HotkeyBinding{'H', HotkeyMod::None}));  // [port: Gabriel] S -> H
+    CHECK(t.binding(123) == (HotkeyBinding{'1', HotkeyMod::Ctrl}) && t.binding(142) == (HotkeyBinding{'0', HotkeyMod::Shift}) &&
            t.binding(152) == (HotkeyBinding{'0', HotkeyMod::Alt}));
-    CHECK2(t.binding(hk::kScrollUp).key == 'W' && t.binding(hk::kYawLeft).key == vk::kLeft && t.binding(hk::kScreenshot).key == 0x7B && t.binding(slot_of("Ability_HomeOne")).key == 0xBA);
-    CHECK2(hotkey_slot("Stop") == 16 && hotkey_slot("Ability_ProximityMines") == 45 && hotkey_slot("Ability_FullSalvo") == 65 &&
+    CHECK(t.binding(hk::kScrollUp).key == 'W' && t.binding(hk::kYawLeft).key == vk::kLeft && t.binding(hk::kScreenshot).key == 0x7B && t.binding(slot_of("Ability_HomeOne")).key == 0xBA);
+    CHECK(hotkey_slot("Stop") == 16 && hotkey_slot("Ability_ProximityMines") == 45 && hotkey_slot("Ability_FullSalvo") == 65 &&
            hotkey_slot("TogglePlayerList") == 89 && hotkey_slot("Ability_FoCSensorJamming") == 122);
-    CHECK2(hotkey_group(0) == 1 && hotkey_group(9) == 0 && hotkey_group(124) == 2 && hotkey_group(142) == 0 && hotkey_group(10) == -1);
+    CHECK(hotkey_group(0) == 1 && hotkey_group(9) == 0 && hotkey_group(124) == 2 && hotkey_group(142) == 0 && hotkey_group(10) == -1);
     // Rebinding the recall key moves the derived slots and frees the keys they now use.
     t.bind(0, {'Z', HotkeyMod::None});
-    CHECK2(t.binding(123) == (HotkeyBinding{'Z', HotkeyMod::Ctrl}) && t.binding(133) == (HotkeyBinding{'Z', HotkeyMod::Shift}) &&
+    CHECK(t.binding(123) == (HotkeyBinding{'Z', HotkeyMod::Ctrl}) && t.binding(133) == (HotkeyBinding{'Z', HotkeyMod::Shift}) &&
            t.binding(143) == (HotkeyBinding{'Z', HotkeyMod::Alt}));
-    CHECK2(t.binding(slot_of("Ability_SpreadOut")).key == -1 && t.binding(slot_of("Ability_BuzzDroids")).key == -1 &&
+    CHECK(t.binding(slot_of("Ability_SpreadOut")).key == -1 && t.binding(slot_of("Ability_BuzzDroids")).key == -1 &&
            t.binding(slot_of("Ability_TargetedInvulnerability")).key == -1);
     t.bind(hk::kStop, {'G', HotkeyMod::None});  // takes G from Guard
-    CHECK2(t.binding(hk::kGuard).key == -1 && t.binding(hk::kStop).key == 'G');
+    CHECK(t.binding(hk::kGuard).key == -1 && t.binding(hk::kStop).key == 'G');
     // Profile round trip.
     HotkeyProfile prof;
     t.save(prof);
-    CHECK2(prof.at("KeySettingsCount") == kHotkeySlots && prof.at("KeySettingKeycode0") == 'Z' && prof.at("KeySettingModifier123") == 2 &&
+    CHECK(prof.at("KeySettingsCount") == kHotkeySlots && prof.at("KeySettingKeycode0") == 'Z' && prof.at("KeySettingModifier123") == 2 &&
            prof.at("KeySettingKeycode14") == -1);
     HotkeyTable u;
-    CHECK2(u.load(prof));
+    CHECK(u.load(prof));
     bool same = true;
     for (uint16_t i = 0; i < kHotkeySlots; ++i) same = same && u.binding(i) == t.binding(i);
-    CHECK2(same);
+    CHECK(same);
     HotkeyProfile partial{{"KeySettingsCount", 1}, {"KeySettingKeycode0", 'P'}, {"KeySettingModifier0", 7}};
     HotkeyTable p;
-    CHECK2(p.load(partial) && p.binding(0) == (HotkeyBinding{'P', HotkeyMod::None}) && p.binding(1).key == '2');
-    CHECK2(!p.load(HotkeyProfile{}));
+    CHECK(p.load(partial) && p.binding(0) == (HotkeyBinding{'P', HotkeyMod::None}) && p.binding(1).key == '2');
+    CHECK(!p.load(HotkeyProfile{}));
     // Exact modifier matching.
     HotkeyTable d;
     std::vector<uint16_t> fired;
     d.pressed(keys_frame({'S'}), fired);
-    CHECK2(fired == (std::vector<uint16_t>{hk::kScrollDown}));  // [port: Gabriel] S scrolls
+    CHECK(fired == (std::vector<uint16_t>{hk::kScrollDown}));  // [port: Gabriel] S scrolls
     d.pressed(keys_frame({kOem4}, true), fired);
-    CHECK2(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_SpaceSelfDestruct"))}));
+    CHECK(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_SpaceSelfDestruct"))}));
     d.pressed(keys_frame({'S'}, true), fired);  // [port: Gabriel] W A S D only move the camera
-    CHECK2(fired.empty());
+    CHECK(fired.empty());
     d.pressed(keys_frame({kOemPeriod}, false, true), fired);
-    CHECK2(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_StimPack"))}));
+    CHECK(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_StimPack"))}));
     d.pressed(keys_frame({kOemPlus}, false, false, true), fired);
-    CHECK2(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_ForceSight"))}));
+    CHECK(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_ForceSight"))}));
     // P1_CAMERA_INPUT.md §6: a modified slot fires when its modifier is held, others ignored; the first match wins.
     d.pressed(keys_frame({kOemPeriod}, true, true), fired);  // Shift+Ctrl+. -> Ctrl+. (stim pack)
-    CHECK2(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_StimPack"))}));
+    CHECK(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_StimPack"))}));
     d.pressed(keys_frame({'1'}, true, true), fired);  // Shift+Ctrl+1 -> assign (slot 123 before add 133)
-    CHECK2(fired == (std::vector<uint16_t>{hk::kAssignBase}));
+    CHECK(fired == (std::vector<uint16_t>{hk::kAssignBase}));
     d.pressed(keys_frame({'H'}, true), fired);  // Shift+H: Hunt, never the unmodified Stop
-    CHECK2(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_Hunt"))}));
+    CHECK(fired == (std::vector<uint16_t>{static_cast<uint16_t>(hotkey_slot("Ability_Hunt"))}));
     // Dispatch: control groups (recall / Ctrl assign / Shift add), double recall camera jump, stop needs a selection.
     HotkeyDispatcher disp;
     std::vector<commands::EventData> cmds;
     std::vector<HotkeyEvent> evs;
     const uint32_t sel[2] = {5, 9};
     disp.update(keys_frame({'1'}), d, sel, 10.0, cmds, evs);
-    CHECK2(cmds.size() == 1 && cmds[0] == commands::ev::control_group(1, false) && evs.empty());
+    CHECK(cmds.size() == 1 && cmds[0] == commands::ev::control_group(1, false) && evs.empty());
     disp.update(keys_frame({'1'}), d, sel, 10.6, cmds, evs);
-    CHECK2(cmds.size() == 2 && evs.size() == 1 && evs[0].camera_jump && evs[0].group == 1);
+    CHECK(cmds.size() == 2 && evs.size() == 1 && evs[0].camera_jump && evs[0].group == 1);
     disp.update(keys_frame({'3'}, false, true), d, sel, 12.0, cmds, evs);
     disp.update(keys_frame({'0'}, true), d, sel, 12.1, cmds, evs);
-    CHECK2(cmds.size() == 4 && cmds[2] == commands::ev::control_group(3, true, false) && cmds[3] == commands::ev::control_group(0, true, true));
+    CHECK(cmds.size() == 4 && cmds[2] == commands::ev::control_group(3, true, false) && cmds[3] == commands::ev::control_group(0, true, true));
     disp.update(keys_frame({'H'}), d, {}, 13.0, cmds, evs);
-    CHECK2(cmds.size() == 4);
+    CHECK(cmds.size() == 4);
     disp.update(keys_frame({'H'}), d, sel, 13.1, cmds, evs);
     disp.update(keys_frame({'Y'}, false, true), d, sel, 13.2, cmds, evs);
     disp.update(keys_frame({'E'}), d, sel, 13.3, cmds, evs);
-    CHECK2(cmds.size() == 7 && cmds[4] == commands::ev::stop() && cmds[5] == commands::ev::select_all() && cmds[6] == commands::ev::retreat(true));
+    CHECK(cmds.size() == 7 && cmds[4] == commands::ev::stop() && cmds[5] == commands::ev::select_all() && cmds[6] == commands::ev::retreat(true));
     const size_t e0 = evs.size();
     disp.update(keys_frame({'G'}), d, sel, 14.0, cmds, evs);
     disp.update(keys_frame({'K'}, false, false, true), d, sel, 14.1, cmds, evs);
-    CHECK2(evs.size() == e0 + 2 && evs[e0].slot == hk::kGuard && evs[e0 + 1].kind == HotkeyKind::Ability &&
+    CHECK(evs.size() == e0 + 2 && evs[e0].slot == hk::kGuard && evs[e0 + 1].kind == HotkeyKind::Ability &&
            evs[e0 + 1].slot == hotkey_slot("Ability_LuckyShot"));
     // P1 Bindings follow the table.
     Bindings b;
     t.apply_to_bindings(b);
-    CHECK2(b.binding(Action::Stop, 0).key == 'G' && b.binding(Action::Stop, 0).mods == kModNone);
-    CHECK2(b.binding(Action::ControlGroup1, 0).key == 'Z' && b.binding(Action::SelectAll, 0).mods == kModCtrl &&
+    CHECK(b.binding(Action::Stop, 0).key == 'G' && b.binding(Action::Stop, 0).mods == kModNone);
+    CHECK(b.binding(Action::ControlGroup1, 0).key == 'Z' && b.binding(Action::SelectAll, 0).mods == kModCtrl &&
            b.binding(Action::ScrollUp, 0).mods == kModAny && b.binding(Action::ScrollUp, 0).key == 'W');
     // OrderTranslator leaves the keyboard to the dispatcher when asked.
     OrderTranslator ot;
     ot.set_keyboard_orders(false);
     OrderContext ctx;
     ot.update(keys_frame({'Y'}, false, true), Bindings{}, ctx);
-    CHECK2(ot.pending().empty());
+    CHECK(ot.pending().empty());
     OrderTranslator ot2;
     ot2.update(keys_frame({'Y'}, false, true), Bindings{}, ctx);
-    CHECK2(ot2.pending().size() == 1);
+    CHECK(ot2.pending().size() == 1);
 }
 
 // ------------------------------------------------------------------------------------------- text wrap
@@ -430,21 +422,21 @@ void test_wrap() {
     auto box = make_box_rasterizer();
     FontCache fonts(*box);
     const int32_t f = fonts.font("EmpireAtWar-Medium", 9, 768);  // 15 px em, 9 px advance
-    CHECK2(fonts.measure(f, U"a") == 9);
-    CHECK2(wrap_text(fonts, f, U"aaa bbb ccc", 70) == (std::vector<std::u32string>{U"aaa bbb", U"ccc"}));
-    CHECK2(wrap_text(fonts, f, U"aaa bbb ccc", 0) == (std::vector<std::u32string>{U"aaa bbb ccc"}));
-    CHECK2(wrap_text(fonts, f, U"abcdefghij", 40) == (std::vector<std::u32string>{U"abcd", U"efgh", U"ij"}));
-    CHECK2(wrap_text(fonts, f, U"ab\ncd ef", 1000) == (std::vector<std::u32string>{U"ab", U"cd ef"}));
-    CHECK2(wrap_text(fonts, f, U"aa   bb", 30) == (std::vector<std::u32string>{U"aa", U"bb"}));
+    CHECK(fonts.measure(f, U"a") == 9);
+    CHECK(wrap_text(fonts, f, U"aaa bbb ccc", 70) == (std::vector<std::u32string>{U"aaa bbb", U"ccc"}));
+    CHECK(wrap_text(fonts, f, U"aaa bbb ccc", 0) == (std::vector<std::u32string>{U"aaa bbb ccc"}));
+    CHECK(wrap_text(fonts, f, U"abcdefghij", 40) == (std::vector<std::u32string>{U"abcd", U"efgh", U"ij"}));
+    CHECK(wrap_text(fonts, f, U"ab\ncd ef", 1000) == (std::vector<std::u32string>{U"ab", U"cd ef"}));
+    CHECK(wrap_text(fonts, f, U"aa   bb", 30) == (std::vector<std::u32string>{U"aa", U"bb"}));
     const HudCanvas c800 = HudCanvas::make(800, 600), c1024 = HudCanvas::make(1024, 768);
-    CHECK2(near2(wrap_width_px(c800, 128), 95.0f) && near2(wrap_width_px(c1024, 110), 110.0f) && wrap_width_px(c1024, 0) == 0.0f);
+    CHECK(near2(wrap_width_px(c800, 128), 95.0f) && near2(wrap_width_px(c1024, 110), 110.0f) && wrap_width_px(c1024, 0) == 0.0f);
     HudDrawList dl;
     HudTextStyle st;
     st.font = f;
     const TextBlock tb = add_text_block(dl, 3, HudList::Text, fonts, c1024, U"aaa bbb ccc", {0, 0}, 70, st);
-    CHECK2(tb.lines == 2 && near2(tb.width, 63) && dl.items(3, HudList::Text).size() == 9);
+    CHECK(tb.lines == 2 && near2(tb.width, 63) && dl.items(3, HudList::Text).size() == 9);
     const TextBlock mb = measure_text_block(fonts, c1024, U"aaa bbb ccc", 70, st);
-    CHECK2(mb.lines == 2 && near2(mb.height, tb.height));
+    CHECK(mb.lines == 2 && near2(mb.height, tb.height));
 }
 
 // ------------------------------------------------------------------------------------------- buttons
@@ -460,33 +452,33 @@ void test_buttons() {
     b.set_sfx_hook([&](std::string_view e, int32_t) { sfx.emplace_back(e); });
     const auto opt = static_cast<uint32_t>(t.find("b_option_t"));
     const auto hidden = static_cast<uint32_t>(t.find("b_hidden_t"));
-    CHECK2(b.visual(opt) == ButtonVisual::Normal && b.state(hidden).hidden && !b.state(opt).hidden);
+    CHECK(b.visual(opt) == ButtonVisual::Normal && b.state(hidden).hidden && !b.state(opt).hidden);
     std::vector<ButtonClick> clicks;
     b.update(static_cast<int32_t>(opt), {}, false, false, 1.0, clicks);
     b.update(static_cast<int32_t>(opt), {}, false, false, 1.1, clicks);  // no second hover SFX
-    CHECK2(sfx == (std::vector<std::string>{"GUI_Highlight_Mouse_Over"}) && b.visual(opt) == ButtonVisual::MouseOver);
+    CHECK(sfx == (std::vector<std::string>{"GUI_Highlight_Mouse_Over"}) && b.visual(opt) == ButtonVisual::MouseOver);
     // Full-art mouse-over replaces the icon: still one icon quad.
     HudDrawList dl;
     b.draw(dl, atlas, &fonts, cv, opt, {0, 0}, {}, 1, 1.1);
-    CHECK2(dl.items(0, HudList::Alpha).size() == 1 && near2(dl.items(0, HudList::Alpha)[0].uv0.x, 130.0f / 256.0f));
+    CHECK(dl.items(0, HudList::Alpha).size() == 1 && near2(dl.items(0, HudList::Alpha)[0].uv0.x, 130.0f / 256.0f));
     const HudPointerEvent press{HudPointerEvent::Kind::Press, Button::Left, static_cast<int32_t>(opt), 5, 5};
     b.update(static_cast<int32_t>(opt), std::span<const HudPointerEvent>(&press, 1), false, false, 1.2, clicks);
-    CHECK2(b.visual(opt) == ButtonVisual::Pressed && b.pressed() == static_cast<int32_t>(opt));
+    CHECK(b.visual(opt) == ButtonVisual::Pressed && b.pressed() == static_cast<int32_t>(opt));
     const HudPointerEvent rel[2] = {{HudPointerEvent::Kind::Release, Button::Left, static_cast<int32_t>(opt), 5, 5},
                                     {HudPointerEvent::Kind::Click, Button::Left, static_cast<int32_t>(opt), 5, 5}};
     b.update(static_cast<int32_t>(opt), rel, true, false, 1.3, clicks);
-    CHECK2(clicks.size() == 1 && clicks[0].component == static_cast<int32_t>(opt) && clicks[0].shift && b.state(opt).selected &&
+    CHECK(clicks.size() == 1 && clicks[0].component == static_cast<int32_t>(opt) && clicks[0].shift && b.state(opt).selected &&
            b.visual(opt) == ButtonVisual::Selected && sfx.size() == 2 && sfx[1] == "GUI_Button_Press_2_SFX");
     // Disabled: click swallowed, darkened icon replaced by the disabled art.
     b.state(opt).disabled = true;
     b.update(static_cast<int32_t>(opt), std::span<const HudPointerEvent>(&rel[1], 1), false, false, 1.4, clicks);
-    CHECK2(clicks.size() == 1 && b.visual(opt) == ButtonVisual::Disabled);
+    CHECK(clicks.size() == 1 && b.visual(opt) == ButtonVisual::Disabled);
     // Frame-style mouse-over (different size than the icon): drawn on top.
     const auto ret = static_cast<uint32_t>(t.find("b_retreat"));
     b.update(static_cast<int32_t>(ret), {}, false, false, 2.0, clicks);
     HudDrawList dl2;
     b.draw(dl2, atlas, &fonts, cv, ret, {0, 0}, {}, 1, 2.0, 2);
-    CHECK2(dl2.items(2, HudList::Alpha).size() == 3);
+    CHECK(dl2.items(2, HudList::Alpha).size() == 3);
     {  // No-alpha hover frame (r_NN, i_button_unit_frame_select, QA D11): additive over the icon, also for a same-size portrait.
         TextureAtlas fa = stage2_atlas();
         fa.add({"i_button_unit_frame_select.tga", 300, 0, 48, 48, false});
@@ -498,7 +490,7 @@ void test_buttons() {
             b.state(rb).icon_override = icon;
             HudDrawList dlf;
             b.draw(dlf, fa, &fonts, cv, rb, {0, 0}, {}, 1, 2.5);
-            CHECK2(dlf.items(0, HudList::Alpha).size() == 1 && dlf.items(0, HudList::Additive).size() == 1 &&
+            CHECK(dlf.items(0, HudList::Alpha).size() == 1 && dlf.items(0, HudList::Additive).size() == 1 &&
                    near2(dlf.items(0, HudList::Additive)[0].uv0.x, 300.0f / 256.0f));
         }
         b.state(rb).icon_override.clear();
@@ -520,13 +512,13 @@ void test_buttons() {
                 ++dials;
                 dial_at = i;
             }
-        CHECK2(dials == 1 && near2(items[dial_at].fill, 50.0f) && dial_at + 1 < items.size() &&
+        CHECK(dials == 1 && near2(items[dial_at].fill, 50.0f) && dial_at + 1 < items.size() &&
                dl3.items(4, HudList::Text).size() == 1);
     }
-    CHECK2(b.draw(dl3, atlas, &fonts, cv, hidden, {0, 0}, {}, 1, 2.0).x == 0.0f);  // Hidden data
+    CHECK(b.draw(dl3, atlas, &fonts, cv, hidden, {0, 0}, {}, 1, 2.0).x == 0.0f);  // Hidden data
     // Blink: Blink_Rate = half period, Blink_Duration seconds.
     const CommandBarComponent& oc = t[opt];
-    CHECK2(blink_alpha(oc, -1.0, 5.0) == 1.0f && blink_alpha(oc, 0.0, 0.1) == 1.0f && blink_alpha(oc, 0.0, 0.2) == 0.0f &&
+    CHECK(blink_alpha(oc, -1.0, 5.0) == 1.0f && blink_alpha(oc, 0.0, 0.1) == 1.0f && blink_alpha(oc, 0.0, 0.2) == 0.0f &&
            blink_alpha(oc, 0.0, 3.5) == 1.0f);
     // Tooltip after Tooltip_Delay, key per tooltip index, drawn on layer 10.
     b.state(opt).disabled = false;
@@ -536,16 +528,16 @@ void test_buttons() {
     TooltipState tip;
     const TooltipConfig cfg;
     tip.update(b, t, cfg, 10.2);
-    CHECK2(!tip.active());
+    CHECK(!tip.active());
     tip.update(b, t, cfg, 10.34);
-    CHECK2(tip.active() && tip.key(b, t) == "TEXT_SECOND");
+    CHECK(tip.active() && tip.key(b, t) == "TEXT_SECOND");
     TextDatabase text;
     text.add("TEXT_SECOND", u"Opens the in-game menu with options, save and load");
     HudDrawList dl4;
-    CHECK2(tip.draw(dl4, atlas, fonts, cv, t, b, &text, {500, 400}, 1, cfg));
-    CHECK2(dl4.items(10, HudList::Alpha).size() >= 1 && dl4.items(10, HudList::Text).size() > 20);
+    CHECK(tip.draw(dl4, atlas, fonts, cv, t, b, &text, {500, 400}, 1, cfg));
+    CHECK(dl4.items(10, HudList::Alpha).size() >= 1 && dl4.items(10, HudList::Text).size() > 20);
     for (const HudQuad& q : dl4.items(10, HudList::Text))
-        CHECK2(q.max.x <= 0.5f * cv.width + 1.0f && q.max.y <= 0.5f * cv.height + 1.0f);
+        CHECK(q.max.x <= 0.5f * cv.width + 1.0f && q.max.y <= 0.5f * cv.height + 1.0f);
     // HUD_GAPS §2.1 anchor: below-right of the cursor (+8 px, -24 px), flipped at the right / bottom edges.
     auto tip_box = [&](Vec2f px) {
         HudDrawList d;
@@ -556,21 +548,21 @@ void test_buttons() {
     {
         const Vec2f c0 = cv.pixel_to_canvas(300, 300), c8 = cv.pixel_to_canvas(308, 324);
         const auto [mn, mx] = tip_box({300, 300});
-        CHECK2(near2(mn.x, c8.x) && near2(mx.y, c8.y) && mn.x > c0.x && mx.y < c0.y);
+        CHECK(near2(mn.x, c8.x) && near2(mx.y, c8.y) && mn.x > c0.x && mx.y < c0.y);
         const Vec2f rc = cv.pixel_to_canvas(static_cast<float>(cv.screen_width) - 2.0f, static_cast<float>(cv.screen_height) - 2.0f);
         const auto [fmn, fmx] = tip_box({static_cast<float>(cv.screen_width) - 2.0f, static_cast<float>(cv.screen_height) - 2.0f});
-        CHECK2(fmx.x < rc.x && fmn.y > rc.y);  // flipped to above-left
+        CHECK(fmx.x < rc.x && fmn.y > rc.y);  // flipped to above-left
     }
     // GameConstants delays and GUIDialogs tooltips.
     const data::XmlDocument gc = data::XmlDocument::parse(std::string_view(
         "<GameConstants><Tooltip_Delay>500</Tooltip_Delay><Encyclopedia_Delay>900</Encyclopedia_Delay></GameConstants>"));
     const TooltipConfig c2 = tooltip_config_from(gc.root());
-    CHECK2(near2(static_cast<float>(c2.delay), 0.5f) && near2(static_cast<float>(c2.encyclopedia_delay), 0.9f) &&
+    CHECK(near2(static_cast<float>(c2.delay), 0.5f) && near2(static_cast<float>(c2.encyclopedia_delay), 0.9f) &&
            near2(static_cast<float>(c2.long_encyclopedia_delay), 4.0f));
     const data::XmlDocument gd = data::XmlDocument::parse(std::string_view(
         "<GUIDialogs><Tooltips><IDC_COMBAT_EFF_TIP><TextID>TEXT_COMBAT_EFF_TOOLTIP</TextID></IDC_COMBAT_EFF_TIP></Tooltips></GUIDialogs>"));
     const auto dt = parse_dialog_tooltips(gd.root());
-    CHECK2(dt.size() == 1 && dt.at("IDC_COMBAT_EFF_TIP") == "TEXT_COMBAT_EFF_TOOLTIP");
+    CHECK(dt.size() == 1 && dt.at("IDC_COMBAT_EFF_TIP") == "TEXT_COMBAT_EFF_TOOLTIP");
 }
 
 // ------------------------------------------------------------------------------------------- radar
@@ -589,14 +581,14 @@ void test_radar() {
       </RadarMapSettings></RadarMap>)";
     const data::XmlDocument doc = data::XmlDocument::parse(std::string_view(xml));
     RadarSettings s;
-    CHECK2(s.parse(doc.root()));
+    CHECK(s.parse(doc.root()));
     const RadarEventType* click = s.event("default_click");
-    CHECK2(click && near2(click->duration, 0.8f) && click->model == "I_minimap_default_click.alo" && !click->single_instance);
+    CHECK(click && near2(click->duration, 0.8f) && click->model == "I_minimap_default_click.alo" && !click->single_instance);
     const RadarEventType* inter = s.event("Interdict_Activated");
-    CHECK2(inter && inter->persistent && inter->single_instance);
-    CHECK2(s.space_fow == (Rgba8{25, 66, 120, 100}) && s.land_fow == (Rgba8{10, 10, 10, 100}));
+    CHECK(inter && inter->persistent && inter->single_instance);
+    CHECK(s.space_fow == (Rgba8{25, 66, 120, 100}) && s.land_fow == (Rgba8{10, 10, 10, 100}));
     const PassabilityPalette temp = s.palette("temperate"), def = s.palette("Volcanic");
-    CHECK2(temp[static_cast<size_t>(Passability::Clear)] == (Rgba8{152, 203, 95, 255}) &&
+    CHECK(temp[static_cast<size_t>(Passability::Clear)] == (Rgba8{152, 203, 95, 255}) &&
            temp[static_cast<size_t>(Passability::Water)] == (Rgba8{140, 176, 200, 255}) &&
            def[static_cast<size_t>(Passability::Clear)] == (Rgba8{228, 228, 228, 255}));
     // Image: 2x2 terrain (row 0 = south), fog 2x1 (west fogged, east visible), out 4x4 (row 0 = north).
@@ -606,16 +598,16 @@ void test_radar() {
     const uint8_t fog[2] = {0, 255};
     RadarImage img;
     img.build(4, terrain, 2, 2, fog, 2, 1, s.land_fow);
-    CHECK2(img.width() == 4 && img.rgba().size() == 64 && img.generation() == 1);
+    CHECK(img.width() == 4 && img.rgba().size() == 64 && img.generation() == 1);
     const uint8_t* west = &img.rgba()[0];        // north-west: clear, fogged
     const uint8_t* east = &img.rgba()[3 * 4];    // north-east: water, visible
     const float a = 100.0f / 255.0f;
-    CHECK2(west[0] == static_cast<uint8_t>(std::lround(152 + (10 - 152) * a)) && east[0] == 140 && east[3] == 255);
+    CHECK(west[0] == static_cast<uint8_t>(std::lround(152 + (10 - 152) * a)) && east[0] == 140 && east[3] == 255);
     img.build(4, terrain, 2, 2, fog, 2, 1, s.land_fow);
-    CHECK2(img.generation() == 1);  // unchanged inputs: no re-upload
+    CHECK(img.generation() == 1);  // unchanged inputs: no re-upload
     const uint8_t fog2[2] = {255, 255};
     img.build(4, {}, 0, 0, fog2, 2, 1, s.space_fow);
-    CHECK2(img.generation() == 2 && img.rgba()[3] == 0);  // space: visible = transparent
+    CHECK(img.generation() == 2 && img.rgba()[3] == 0);  // space: visible = transparent
     // Asteroid fields (Space_Asteroid_Field_Color / _Border_Color): a disc of radius 900 at the map centre on an 8 x 8
     // space radar over a 2000 x 2000 box (250 world units per texel): centre texels = fill, the outer texel ring
     // (650 < d <= 900) = border, the corners untouched.
@@ -632,37 +624,37 @@ void test_radar() {
         const auto texel = [&](uint32_t x, uint32_t y) { return &af.rgba()[(static_cast<size_t>(y) * 8 + x) * 4]; };
         // output texel (3, 3) = world (-125, 125): d 177 -> fill; (0, 0) = (-875, 875): d 1237 -> empty; (0, 3) =
         // (-875, 125): d 884 -> border
-        CHECK2(texel(3, 3)[0] == s.space_asteroid.r && texel(3, 3)[3] == s.space_asteroid.a && texel(0, 0)[3] == 0);
-        CHECK2(texel(0, 3)[0] == s.space_asteroid_border.r && texel(0, 3)[3] == s.space_asteroid_border.a);
+        CHECK(texel(3, 3)[0] == s.space_asteroid.r && texel(3, 3)[3] == s.space_asteroid.a && texel(0, 0)[3] == 0);
+        CHECK(texel(0, 3)[0] == s.space_asteroid_border.r && texel(0, 3)[3] == s.space_asteroid_border.a);
     }
     // Events.
     RadarEvents ev;
     ev.add(s, "Default_Click", 10, 20);
     ev.add(s, "Interdict_Activated", 0, 0);
     ev.add(s, "Interdict_Activated", 5, 5);  // single instance: replaces
-    CHECK2(ev.items().size() == 2);
+    CHECK(ev.items().size() == 2);
     ev.update(0.5f);
-    CHECK2(ev.items().size() == 2);
+    CHECK(ev.items().size() == 2);
     ev.update(0.5f);
-    CHECK2(ev.items().size() == 1 && ev.items()[0].type == "Interdict_Activated" && near2(ev.items()[0].x, 5));
+    CHECK(ev.items().size() == 1 && ev.items()[0].type == "Interdict_Activated" && near2(ev.items()[0].x, 5));
     ev.remove(ev.items()[0].id);
-    CHECK2(ev.items().empty());
+    CHECK(ev.items().empty());
     // Story blips (Lua Add_Radar_Blip / Remove_Radar_Blip): persistent named markers, upserted by case-insensitive name,
     // never expired by update(), untouched by single-instance event replacement.
     {
         RadarEvents mk;
         const uint32_t m1 = mk.set_marker("starbase_01_blip", 1, 2);
         mk.set_marker("objective_blip", 3, 4);
-        CHECK2(mk.set_marker("STARBASE_01_BLIP", 10, 20) == m1 && mk.items().size() == 2);  // upsert: same id, new place
-        CHECK2(near2(mk.items()[0].x, 10) && near2(mk.items()[0].y, 20) && mk.items()[0].marker && mk.items()[0].persistent);
+        CHECK(mk.set_marker("STARBASE_01_BLIP", 10, 20) == m1 && mk.items().size() == 2);  // upsert: same id, new place
+        CHECK(near2(mk.items()[0].x, 10) && near2(mk.items()[0].y, 20) && mk.items()[0].marker && mk.items()[0].persistent);
         mk.add(s, "Interdict_Activated", 0, 0);
         mk.add(s, "Interdict_Activated", 5, 5);  // replaces the event, not a marker
-        CHECK2(mk.items().size() == 3);
+        CHECK(mk.items().size() == 3);
         mk.update(100.0f);
-        CHECK2(mk.items().size() == 3 && mk.items()[0].age >= 100.0f);  // the event is persistent too; markers stay
-        CHECK2(mk.marker_names().size() == 2 && mk.marker_names()[1] == "objective_blip");
-        CHECK2(mk.remove_marker("Objective_Blip") && !mk.remove_marker("objective_blip") && mk.items().size() == 2);
-        CHECK2(!mk.remove_marker("Interdict_Activated") && mk.items().size() == 2);  // events are not markers
+        CHECK(mk.items().size() == 3 && mk.items()[0].age >= 100.0f);  // the event is persistent too; markers stay
+        CHECK(mk.marker_names().size() == 2 && mk.marker_names()[1] == "objective_blip");
+        CHECK(mk.remove_marker("Objective_Blip") && !mk.remove_marker("objective_blip") && mk.items().size() == 2);
+        CHECK(!mk.remove_marker("Interdict_Activated") && mk.items().size() == 2);  // events are not markers
     }
     // Mapping.
     RadarView rv;
@@ -673,13 +665,13 @@ void test_radar() {
     rv.min_y = -500;
     rv.max_y = 500;
     const Vec2f c = rv.to_canvas(500, 250);
-    CHECK2(near2(c.x, -400 + 0.25f * 175) && near2(c.y, -290 + 0.25f * 175) && rv.inside(c));
+    CHECK(near2(c.x, -400 + 0.25f * 175) && near2(c.y, -290 + 0.25f * 175) && rv.inside(c));
     const Vec2f w = rv.to_world(c);
-    CHECK2(near2(w.x, 500, 0.1f) && near2(w.y, 250, 0.1f));
+    CHECK(near2(w.x, 500, 0.1f) && near2(w.y, 250, 0.1f));
     const Vec2f clamped = rv.to_world({1000, 1000});
-    CHECK2(near2(clamped.x, 1000) && near2(clamped.y, 500) && !rv.inside({1000, 1000}));
+    CHECK(near2(clamped.x, 1000) && near2(clamped.y, 500) && !rv.inside({1000, 1000}));
     const auto fp = camera_footprint(top_view2(1024, 768), 0.0f);
-    CHECK2(fp[0].x < 0 && fp[0].y > 0 && fp[2].x > 0 && fp[2].y < 0 && near2(fp[0].x, -fp[1].x, 1.0f));
+    CHECK(fp[0].x < 0 && fp[0].y > 0 && fp[2].x > 0 && fp[2].y < 0 && near2(fp[0].x, -fp[1].x, 1.0f));
 }
 
 // ------------------------------------------------------------------------------------------- markers
@@ -690,7 +682,7 @@ void test_markers() {
     HudWaypointLine line;
     line.points = {{0, 0, 0}, {200, 0, 0}, {200, 200, 0}};
     const uint32_t dots = add_waypoint_lines(dl, cv, v, std::span<const HudWaypointLine>(&line, 1));
-    CHECK2(dots > 10 && dl.items(0, HudList::Alpha).size() == dots);
+    CHECK(dots > 10 && dl.items(0, HudList::Alpha).size() == dots);
     const data::XmlDocument gc = data::XmlDocument::parse(std::string_view(R"(<GameConstants>
       <GUI_Move_Command_Ack_Effect> GUI_Move_Command_Particle </GUI_Move_Command_Ack_Effect>
       <GUI_Attack_Move_Command_Ack_Effect> GUI_Attack_Move_Command_Particle </GUI_Attack_Move_Command_Ack_Effect>
@@ -706,34 +698,34 @@ void test_markers() {
     mc.parse(gc.root());
     MoveAcks acks;
     const MoveAckRequest req = acks.add(mc, MoveAckKind::AttackMove, {50, 50, 0}, false);
-    CHECK2(req.effect == "GUI_Attack_Move_Command_Particle" && near2(req.scale, 5.0f) && req.radar_event == "Default_Attack_Click");
+    CHECK(req.effect == "GUI_Attack_Move_Command_Particle" && near2(req.scale, 5.0f) && req.radar_event == "Default_Attack_Click");
     const MoveAckRequest r2 = acks.add(mc, MoveAckKind::DoubleClick, {0, 0, 0}, true);
-    CHECK2(r2.radar_event == "Default_Double_Click" && near2(r2.scale, 1.0f) && acks.size() == 2);
+    CHECK(r2.radar_event == "Default_Double_Click" && near2(r2.scale, 1.0f) && acks.size() == 2);
     HudDrawList dl2;
-    CHECK2(acks.draw(dl2, cv, v) == 24);
+    CHECK(acks.draw(dl2, cv, v) == 24);
     acks.update(1.0f);
-    CHECK2(acks.size() == 0);
+    CHECK(acks.size() == 0);
     ReticleTable rt;
     rt.parse(gc.root());
-    CHECK2(rt.size() == 4 && near2(rt.enemy_screen_size, 0.03f));
+    CHECK(rt.size() == 4 && near2(rt.enemy_screen_size, 0.03f));
     HudHardPoint hp;
     hp.position = {0, 0, 0};
     hp.type = "Hard_Point_Engine";
-    CHECK2(rt.texture(hp) == "I_Hard_Point_Reticle_Engines");
+    CHECK(rt.texture(hp) == "I_Hard_Point_Reticle_Engines");
     hp.tracked = true;
-    CHECK2(rt.texture(hp) == "I_Hard_Point_Reticle_Engines_Tracked");
+    CHECK(rt.texture(hp) == "I_Hard_Point_Reticle_Engines_Tracked");
     hp.enemy = false;
     hp.repairing = true;
-    CHECK2(rt.texture(hp) == "I_Hard_Point_Reticle_Engines_Repair");
+    CHECK(rt.texture(hp) == "I_Hard_Point_Reticle_Engines_Repair");
     TextureAtlas atlas;
     atlas.texture_width = atlas.texture_height = 256;
     atlas.add({"I_Hard_Point_Reticle_Weapons.tga", 0, 0, 32, 32, true});
     const HudHardPoint pts[2] = {{{0, 0, 0}, "HARD_POINT_WEAPON_LASER", true, false, false, false},
                                  {{100, 0, 0}, "HARD_POINT_UNKNOWN", true, false, false, false}};
     HudDrawList dl3;
-    CHECK2(add_hardpoint_reticles(dl3, atlas, cv, v, rt, pts) == 2);
+    CHECK(add_hardpoint_reticles(dl3, atlas, cv, v, rt, pts) == 2);
     const auto q = dl3.items(1, HudList::Alpha);
-    CHECK2(q.size() == 1 + 8 && near2(q[0].max.x - q[0].min.x, 0.03f * 1024.0f) && near2(q[0].max.y - q[0].min.y, 0.04f * 768.0f) &&
+    CHECK(q.size() == 1 + 8 && near2(q[0].max.x - q[0].min.x, 0.03f * 1024.0f) && near2(q[0].max.y - q[0].min.y, 0.04f * 768.0f) &&
            q[0].page == kHudPageAtlas);
     // Playtest: the vanilla reticle textures are stand-alone DDS files - the image-page resolver draws them ("<name>.tga"
     // first, then the bare name); unresolved ones keep the corner outline.
@@ -759,11 +751,11 @@ void test_markers() {
         b.type = "HARD_POINT_ENGINE";
         const HudHardPoint p2[2] = {a, b};
         HudDrawList dl4;
-        CHECK2(add_hardpoint_reticles(dl4, atlas, cv, v, rt2, p2, 1, &images) == 2);
+        CHECK(add_hardpoint_reticles(dl4, atlas, cv, v, rt2, p2, 1, &images) == 2);
         const auto q4 = dl4.items(1, HudList::Alpha);
-        CHECK2(q4.size() == 1 + 8 && q4[0].page == kHudPageImageBase + 3 && near2(q4[0].max.x - q4[0].min.x, 0.03f * 1024.0f));
-        CHECK2(q4[0].color == (Rgba8{32, 255, 32, 255}));  // full health: green
-        CHECK2(asked.size() == 3 && asked[0] == "I_Hard_Point_Reticle_Shield_Gen.tga" &&
+        CHECK(q4.size() == 1 + 8 && q4[0].page == kHudPageImageBase + 3 && near2(q4[0].max.x - q4[0].min.x, 0.03f * 1024.0f));
+        CHECK(q4[0].color == (Rgba8{32, 255, 32, 255}));  // full health: green
+        CHECK(asked.size() == 3 && asked[0] == "I_Hard_Point_Reticle_Shield_Gen.tga" &&
                asked[1] == "I_Hard_Point_Reticle_Engines.tga" && asked[2] == "I_Hard_Point_Reticle_Engines");
         // Hover filter: parent 0 always, otherwise only the hovered ship's points (a selected one gets none).
         HudHardPoint c = a, d = a, e = a;
@@ -779,35 +771,35 @@ void test_markers() {
         u9.id = 9;
         const HudUnit units[3] = {u9, u8, u7};
         const std::vector<HudHardPoint> shown = filter_hardpoints(all, units);
-        CHECK2(shown.size() == 2 && shown[0].parent == 0 && shown[1].parent == 7);  // hover only (HUD_GAPS §1.1)
-        CHECK2(filter_hardpoints(all, {}).size() == 1);
+        CHECK(shown.size() == 2 && shown[0].parent == 0 && shown[1].parent == 7);  // hover only (HUD_GAPS §1.1)
+        CHECK(filter_hardpoints(all, {}).size() == 1);
         {  // R5 stealth (ABILITY_VISUALS 1.4): no reticles on a hovered hostile stealthed ship
             HudUnit s7 = u7;
             s7.stealthed = true;
             const HudUnit su[3] = {u9, u8, s7};
             const std::vector<HudHardPoint> hidden = filter_hardpoints(all, su);
-            CHECK2(hidden.size() == 1 && hidden[0].parent == 0);
+            CHECK(hidden.size() == 1 && hidden[0].parent == 0);
         }
         // Health tint, flash (half size on the "on" phase: frames 0-2, 6-8, ... of 60 at 30 fps) and the hit test.
         HudHardPoint t = a;
         t.health = 0.5f;
-        CHECK2(reticle_tint(t) == (Rgba8{255, 255, 32, 255}));
+        CHECK(reticle_tint(t) == (Rgba8{255, 255, 32, 255}));
         t.health = 0.2f;
-        CHECK2(reticle_tint(t) == (Rgba8{255, 32, 32, 255}));
+        CHECK(reticle_tint(t) == (Rgba8{255, 32, 32, 255}));
         t.disabled = true;
-        CHECK2(reticle_tint(t) == (Rgba8{128, 128, 128, 255}));
+        CHECK(reticle_tint(t) == (Rgba8{128, 128, 128, 255}));
         t.flash_start = 10.0;
-        CHECK2(reticle_flash_on(t, 10.01) && !reticle_flash_on(t, 10.0 + 4.0 / 30.0) && reticle_flash_on(t, 10.0 + 6.5 / 30.0) &&
+        CHECK(reticle_flash_on(t, 10.01) && !reticle_flash_on(t, 10.0 + 4.0 / 30.0) && reticle_flash_on(t, 10.0 + 6.5 / 30.0) &&
                !reticle_flash_on(t, 12.5) && !reticle_flash_on(t, 9.0));
-        CHECK2(near2(reticle_size(t, rt2, cv, 10.01).x, 0.015f * 1024.0f) && near2(reticle_size(t, rt2, cv, 13.0).x, 0.03f * 1024.0f));
+        CHECK(near2(reticle_size(t, rt2, cv, 10.01).x, 0.015f * 1024.0f) && near2(reticle_size(t, rt2, cv, 13.0).x, 0.03f * 1024.0f));
         float rx = 0, ry = 0;
-        CHECK2(project(v, b.position, rx, ry));
-        CHECK2(reticle_at(cv, v, rt2, p2, rx + 2.0f, ry - 2.0f) == 1 && reticle_at(cv, v, rt2, p2, 0.0f, 0.0f) == -1);
+        CHECK(project(v, b.position, rx, ry));
+        CHECK(reticle_at(cv, v, rt2, p2, rx + 2.0f, ry - 2.0f) == 1 && reticle_at(cv, v, rt2, p2, 0.0f, 0.0f) == -1);
     }
     // Hover pick by bounding sphere (pick_hud_unit): the first sphere the cursor ray enters; neutral units optional.
     {
         float sx = 0, sy = 0;
-        CHECK2(project(v, Vec3{0, 0, 0}, sx, sy));
+        CHECK(project(v, Vec3{0, 0, 0}, sx, sy));
         HudUnit n0, n1, n2;
         n0.id = 3;
         n0.position = {0, 0, 0};
@@ -824,10 +816,10 @@ void test_markers() {
         const HudUnit us[3] = {n1, n0, n2};
         const auto px = static_cast<int32_t>(sx), py = static_cast<int32_t>(sy);
         const std::optional<size_t> h1 = pick_hud_unit(us, v, px, py);
-        CHECK2(h1 && us[*h1].id == 3);  // the larger sphere is entered first
+        CHECK(h1 && us[*h1].id == 3);  // the larger sphere is entered first
         const std::optional<size_t> h2 = pick_hud_unit(us, v, px, py, true);
-        CHECK2(h2 && us[*h2].id == 5);
-        CHECK2(!pick_hud_unit(us, v, 0, 0));
+        CHECK(h2 && us[*h2].id == 5);
+        CHECK(!pick_hud_unit(us, v, 0, 0));
     }
 }
 
@@ -842,7 +834,7 @@ void test_order_buttons() {
     xml += "</CommandBarComponents>";
     ComponentTable t;
     const data::XmlDocument doc = data::XmlDocument::parse(std::string_view(xml), "orders.xml");
-    CHECK2(doc.ok());
+    CHECK(doc.ok());
     t.parse(doc.root());
     const TextureAtlas atlas = stage2_atlas();
     auto box = make_box_rasterizer();
@@ -860,44 +852,44 @@ void test_order_buttons() {
     auto shown = [&](int i) { return state(i) && !state(i)->hidden; };
     // Empty selection: all six shown and disabled.
     hud.build(fr, {}, {});
-    for (int i = 0; i < 6; ++i) CHECK2(shown(i) && !enabled(i));
-    CHECK2(hud.stats().buttons == 6);
+    for (int i = 0; i < 6; ++i) CHECK(shown(i) && !enabled(i));
+    CHECK(hud.stats().buttons == 6);
     // Can move but not attack (e.g. a transport): attack off, the rest on.
     fr.order_buttons.can_move = true;
     hud.build(fr, {}, {});
-    CHECK2(!enabled(0) && enabled(1) && enabled(2) && enabled(3) && enabled(4) && enabled(5));
+    CHECK(!enabled(0) && enabled(1) && enabled(2) && enabled(3) && enabled(4) && enabled(5));
     // Can attack but not move (e.g. a turret): attack, attack-move, guard on; move / waypoint / stop off.
     fr.order_buttons = {};
     fr.order_buttons.can_attack = true;
     hud.build(fr, {}, {});
-    CHECK2(enabled(0) && enabled(1) && !enabled(2) && !enabled(3) && !enabled(4) && enabled(5));
+    CHECK(enabled(0) && enabled(1) && !enabled(2) && !enabled(3) && !enabled(4) && enabled(5));
     // Locked controls: all disabled, still shown.
     fr.order_buttons.can_move = true;
     fr.order_buttons.controls_locked = true;
     hud.build(fr, {}, {});
-    for (int i = 0; i < 6; ++i) CHECK2(shown(i) && !enabled(i));
-    for (uint32_t k = 0; k < 6; ++k) CHECK2(!order_button_enabled(k, fr.order_buttons));
+    for (int i = 0; i < 6; ++i) CHECK(shown(i) && !enabled(i));
+    for (uint32_t k = 0; k < 6; ++k) CHECK(!order_button_enabled(k, fr.order_buttons));
     // A stray per-frame hidden flag no longer sticks; a mod's script override does.
     fr.order_buttons.controls_locked = false;
     hud.buttons().state(static_cast<uint32_t>(t.find("c_button02"))).hidden = true;
     hud.build(fr, {}, {});
-    CHECK2(shown(2) && enabled(2));
+    CHECK(shown(2) && enabled(2));
     GuiScriptCall hide;
     hide.op = GuiScriptOp::ComponentVisibility;
     hide.args = {GuiScriptArg::of(std::string("c_button02")), GuiScriptArg::of(false)};
     GuiScriptCall dis;
     dis.op = GuiScriptOp::ComponentEnable;
     dis.args = {GuiScriptArg::of(std::string("c_button03")), GuiScriptArg::of(false)};
-    CHECK2(apply_gui_script(hide, t, hud.buttons(), nullptr, 0.0) && apply_gui_script(dis, t, hud.buttons(), nullptr, 0.0));
+    CHECK(apply_gui_script(hide, t, hud.buttons(), nullptr, 0.0) && apply_gui_script(dis, t, hud.buttons(), nullptr, 0.0));
     hud.build(fr, {}, {});
-    CHECK2(!shown(2) && shown(3) && !enabled(3) && enabled(4) && hud.stats().buttons == 5);
+    CHECK(!shown(2) && shown(3) && !enabled(3) && enabled(4) && hud.stats().buttons == 5);
 }
 
 // Drag-select box (Playtest 3): drawn from the drag threshold on, over exactly the bounds box_select uses on release.
 void test_drag_box() {
     ComponentTable t;
     const data::XmlDocument doc = data::XmlDocument::parse(std::string_view("<CommandBarComponents></CommandBarComponents>"), "e.xml");
-    CHECK2(doc.ok());
+    CHECK(doc.ok());
     t.parse(doc.root());
     const TextureAtlas atlas = stage2_atlas();
     auto box = make_box_rasterizer();
@@ -928,18 +920,18 @@ void test_drag_box() {
     auto drag_quads = [&] { return hud.draw_list().items(kDragBoxLayer, HudList::Alpha); };
     // Press, then 3 px (3.6 px from the press): below the 4 px threshold -> no box, a release here would be a click.
     step(200, 150, lb, lb, 0);
-    CHECK2(!hud.stats().drag_box && drag_quads().empty());
+    CHECK(!hud.stats().drag_box && drag_quads().empty());
     step(203, 152, lb, 0, 0);
-    CHECK2(!in.button(Button::Left).dragging && !hud.stats().drag_box && drag_quads().empty());
+    CHECK(!in.button(Button::Left).dragging && !hud.stats().drag_box && drag_quads().empty());
     // Past the threshold: the box, press pixel -> cursor pixel inclusive (drag_select_bounds), resizing with the cursor.
     step(204, 153, lb, 0, 0);
-    CHECK2(in.button(Button::Left).dragging && hud.stats().drag_box);
+    CHECK(in.button(Button::Left).dragging && hud.stats().drag_box);
     step(520, 400, lb, 0, 0);
-    CHECK2(hud.stats().drag_box);
+    CHECK(hud.stats().drag_box);
     const PixelBounds pb = drag_select_bounds(in.button(Button::Left).drag);
-    CHECK2(pb.x0 == 200.0f && pb.y0 == 150.0f && pb.x1 == 521.0f && pb.y1 == 401.0f);
+    CHECK(pb.x0 == 200.0f && pb.y0 == 150.0f && pb.x1 == 521.0f && pb.y1 == 401.0f);
     const auto q = drag_quads();
-    CHECK2(q.size() == 5);
+    CHECK(q.size() == 5);
     if (q.size() == 5) {
         const HudCanvas& c = hud.canvas();
         float lo_x = 1e9f, lo_y = 1e9f, hi_x = -1e9f, hi_y = -1e9f;
@@ -949,15 +941,15 @@ void test_drag_box() {
             lo_y = std::min(lo_y, a.y);
             hi_x = std::max(hi_x, b.x);
             hi_y = std::max(hi_y, b.y);
-            CHECK2(e.page == kHudPageWhite);
+            CHECK(e.page == kHudPageWhite);
         }
-        CHECK2(near2(lo_x, pb.x0, 0.01f) && near2(lo_y, pb.y0, 0.01f) && near2(hi_x, pb.x1, 0.01f) && near2(hi_y, pb.y1, 0.01f));
+        CHECK(near2(lo_x, pb.x0, 0.01f) && near2(lo_y, pb.y0, 0.01f) && near2(hi_x, pb.x1, 0.01f) && near2(hi_y, pb.y1, 0.01f));
         // Fill first (inset by the 1-pixel outline), then the four outline edges.
-        CHECK2(q[0].color == kDragBoxFill);
+        CHECK(q[0].color == kDragBoxFill);
         const Vec2f fa = c.canvas_to_pixel(q[0].min.x, q[0].max.y), fb = c.canvas_to_pixel(q[0].max.x, q[0].min.y);
-        CHECK2(near2(fa.x, pb.x0 + 1, 0.01f) && near2(fa.y, pb.y0 + 1, 0.01f) && near2(fb.x, pb.x1 - 1, 0.01f) &&
+        CHECK(near2(fa.x, pb.x0 + 1, 0.01f) && near2(fa.y, pb.y0 + 1, 0.01f) && near2(fb.x, pb.x1 - 1, 0.01f) &&
                near2(fb.y, pb.y1 - 1, 0.01f));
-        for (size_t i = 1; i < 5; ++i) CHECK2(q[i].color == kDragBoxOutline);
+        for (size_t i = 1; i < 5; ++i) CHECK(q[i].color == kDragBoxOutline);
     }
     // The release selects what the drawn box covers: a unit projected in the box's last pixel column is in, one pixel
     // further right is out (box_select over the same DragRect).
@@ -965,7 +957,7 @@ void test_drag_box() {
     const View& v = fr.world.view;
     auto put = [&](uint32_t id, float px, float py) {
         Vec3 g;
-        CHECK2(ray_plane_z(screen_ray(v, px, py), 0.0f, g));
+        CHECK(ray_plane_z(screen_ray(v, px, py), 0.0f, g));
         trees.add(id, {{g.x - 0.01f, g.y - 0.01f, -0.01f}, {g.x + 0.01f, g.y + 0.01f, 0.01f}}, 1, {0});
     };
     put(1, 520.5f, 300.5f);  // last column inside
@@ -973,13 +965,13 @@ void test_drag_box() {
     put(3, 200.5f, 150.5f);  // the press pixel
     put(4, 360.0f, 149.5f);  // above the top row
     step(520, 400, 0, 0, lb);
-    CHECK2(in.button(Button::Left).drag_ended && !hud.stats().drag_box && drag_quads().empty());  // gone on release
+    CHECK(in.button(Button::Left).drag_ended && !hud.stats().drag_box && drag_quads().empty());  // gone on release
     tactical::QueryContext qc;
     const std::vector<uint32_t> sel = box_select(trees.player(0), v, in.button(Button::Left).drag, tactical::kSkipDead, qc);
-    CHECK2((sel == std::vector<uint32_t>{1, 3}));
+    CHECK((sel == std::vector<uint32_t>{1, 3}));
     // A single-pixel-wide drag (vertical line): no fill, top + bottom + left only, still inside the bounds.
     HudDrawList thin;
-    CHECK2(add_drag_box(thin, hud.canvas(), DragRect{10, 10, 10, 40}) == 3);
+    CHECK(add_drag_box(thin, hud.canvas(), DragRect{10, 10, 10, 40}) == 3);
 }
 
 // ------------------------------------------------------------------------------------------- tactical HUD stage 2
@@ -1040,9 +1032,9 @@ void test_tactical_stage2() {
     fr.radar_events = &pings;
     hud.build(fr, units, types);
     const TacticalHudStats& st = hud.stats();
-    CHECK2(st.panel_slots == 2 && st.ability_buttons == 2 && st.queue_entries == 1 && st.reinforcements == 1 && st.radar_events == 1);
-    CHECK2(st.buttons >= 2);  // b_retreat, b_option_t (b_hidden_t stays hidden)
-    CHECK2(st.radar_blips == 3 && st.radar_icons == 0 && hud.radar_models().empty());  // no settings: the ring stand-in
+    CHECK(st.panel_slots == 2 && st.ability_buttons == 2 && st.queue_entries == 1 && st.reinforcements == 1 && st.radar_events == 1);
+    CHECK(st.buttons >= 2);  // b_retreat, b_option_t (b_hidden_t stays hidden)
+    CHECK(st.radar_blips == 3 && st.radar_icons == 0 && hud.radar_models().empty());  // no settings: the ring stand-in
     {  // Radar_Icon_Name per type, Is_Visible_On_Enemy_Radar, radar event models (UI.md §1.7)
         std::vector<HudTypeInfo> rt = types;
         rt[1].radar_icon = "i_icon_unit.tga";
@@ -1054,21 +1046,21 @@ void test_tactical_stage2() {
             R"(<RadarMap><RadarMapEvents><Radar_Map_Event name="Default_Click"><Event_Model_Name>I_minimap_default_click.alo</Event_Model_Name>
                <Event_Model_Scale>0.002</Event_Model_Scale><Event_Duration>.8</Event_Duration></Radar_Map_Event></RadarMapEvents></RadarMap>)"));
         RadarSettings rs2;
-        CHECK2(rs2.parse(rd.root()));
+        CHECK(rs2.parse(rd.root()));
         TacticalHudFrame f2 = fr;
         f2.radar_settings = &rs2;
         f2.radar_event_models = true;
         hud.build(f2, ru, rt);
         const TacticalHudStats& s2 = hud.stats();
-        CHECK2(s2.radar_blips == 2 && s2.radar_icons == 1 && s2.radar_models == 1 && s2.radar_events == 1);
+        CHECK(s2.radar_blips == 2 && s2.radar_icons == 1 && s2.radar_models == 1 && s2.radar_events == 1);
         const auto& models = hud.radar_models();
-        CHECK2(models.size() == 1 && models[0].model == "I_minimap_default_click.alo" &&
+        CHECK(models.size() == 1 && models[0].model == "I_minimap_default_click.alo" &&
                near2(models[0].scale, 0.002f * 0.5f * hud.canvas().width) && near2(models[0].center.x, hud.radar_view().center.x));
         bool icon_sized = false;  // the icon quad: 0.1 x radar size / 2
         for (uint32_t l = 0; l < kHudLayers; ++l)
             for (const HudQuad& q : hud.draw_list().items(l, HudList::Alpha))
                 icon_sized = icon_sized || near2(q.max.x - q.min.x, 0.05f * hud.radar_view().size.x, 0.01f);
-        CHECK2(icon_sized);
+        CHECK(icon_sized);
         {  // R5 sensor jamming (ABILITY_VISUALS 3): hostile jammed units drop off the radar; own / allied jammed ones stay
             std::vector<HudUnit> ju = units;
             ju[0].owner = 1;
@@ -1076,18 +1068,18 @@ void test_tactical_stage2() {
             ju[1].jammed = true;   // own + jammed: still shown
             ju[2].owner = 1;       // hostile, not jammed: shown
             hud.build(fr, ju, types);
-            CHECK2(hud.stats().radar_blips == 2);
+            CHECK(hud.stats().radar_blips == 2);
             ju[0].jammed = false;
             hud.build(fr, ju, types);
-            CHECK2(hud.stats().radar_blips == 3);
+            CHECK(hud.stats().radar_blips == 3);
             // R5 stealth (ABILITY_VISUALS 1.4, same filter 0x35b4d0): hostile stealthed units drop off the radar, own ones stay
             ju[0].stealthed = true;  // hostile + stealthed: no blip
             ju[1].stealthed = true;  // own + stealthed: still shown
             hud.build(fr, ju, types);
-            CHECK2(hud.stats().radar_blips == 2);
+            CHECK(hud.stats().radar_blips == 2);
             ju[0].stealthed = false;
             hud.build(fr, ju, types);
-            CHECK2(hud.stats().radar_blips == 3);
+            CHECK(hud.stats().radar_blips == 3);
         }
         {  // a story blip draws a gold ring + centre dot (no event model: the Lua name is not a RadarMap.xml type)
             RadarEvents blips;
@@ -1097,12 +1089,12 @@ void test_tactical_stage2() {
             f3.radar_events = &blips;
             hud.build(f3, ru, rt);
             const TacticalHudStats& s3 = hud.stats();
-            CHECK2(s3.radar_events == 1 && s3.radar_models == 0 && hud.radar_models().empty());
+            CHECK(s3.radar_events == 1 && s3.radar_models == 0 && hud.radar_models().empty());
             bool gold = false;
             for (uint32_t l = 0; l < kHudLayers; ++l)
                 for (const HudQuad& q : hud.draw_list().items(l, HudList::Alpha))
                     gold = gold || (q.color.r == 255 && q.color.g == 214 && q.color.b == 64 && q.color.a == 255);
-            CHECK2(gold);
+            CHECK(gold);
         }
         hud.build(fr, units, types);  // back to the plain frame
     }
@@ -1127,24 +1119,24 @@ void test_tactical_stage2() {
         hud.update_input(ri, shift, false, 2.0, cmds, &acts);
         return std::pair{std::move(cmds), std::move(acts)};
     };
-    CHECK2(hud.hit_test(center_px("special_button_00").first, center_px("special_button_00").second) == t.find("special_button_00"));
+    CHECK(hud.hit_test(center_px("special_button_00").first, center_px("special_button_00").second) == t.find("special_button_00"));
     {
         auto [cmds, acts] = click("special_button_00", Button::Left);
-        CHECK2(cmds.size() == 1 && acts.empty());
+        CHECK(cmds.size() == 1 && acts.empty());
         if (cmds.size() == 1) {
             const uint32_t users[3] = {20, 21, 22};
-            CHECK2(cmds[0] == ability_mode_event(users, 7, true));
-            CHECK2(cmds[0].u("count") == 3 && cmds[0].ids("units") == (std::vector<uint32_t>{20, 21, 22}));
+            CHECK(cmds[0] == ability_mode_event(users, 7, true));
+            CHECK(cmds[0].u("count") == 3 && cmds[0].ids("units") == (std::vector<uint32_t>{20, 21, 22}));
         }
     }
     {
         auto [cmds, acts] = click("special_button_00", Button::Right);
         const uint32_t users[3] = {20, 21, 22};
-        CHECK2(cmds.size() == 1 && cmds[0] == ability_autofire_event(users, 7, true));
+        CHECK(cmds.size() == 1 && cmds[0] == ability_autofire_event(users, 7, true));
     }
     {
         auto [cmds, acts] = click("special_button_01", Button::Left);
-        CHECK2(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::BeginAbilityTargeting &&
+        CHECK(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::BeginAbilityTargeting &&
                acts[0].ability_type == 12 && acts[0].ids == (std::vector<uint32_t>{22}));
     }
     {
@@ -1156,7 +1148,7 @@ void test_tactical_stage2() {
                     if (q.color == (Rgba8{128, 128, 128, 255})) ++n;
             return n;
         };
-        CHECK2(dimmed_icons() == 0);
+        CHECK(dimmed_icons() == 0);
         TacticalHudFrame off = fr;
         off.providers.abilities = [](const SelectedGroup&, std::vector<HudAbility>& out) {
             HudAbility a;
@@ -1166,12 +1158,12 @@ void test_tactical_stage2() {
             out.push_back(a);
         };
         hud.build(off, units, types);
-        CHECK2(hud.stats().ability_buttons == 1 && dimmed_icons() == 1);
+        CHECK(hud.stats().ability_buttons == 1 && dimmed_icons() == 1);
         hud.build(fr, units, types);  // back to the enabled buttons for the clicks below
     }
     {
         auto [cmds, acts] = click("tqueue00", Button::Left);
-        CHECK2(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::TacticalCancel && acts[0].unit == 900 &&
+        CHECK(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::TacticalCancel && acts[0].unit == 900 &&
                acts[0].value == 33 && acts[0].ids == (std::vector<uint32_t>{0, 1}));
     }
     {  // Tactical buy buttons: Build_00 enabled (cost text2), Build_01 blocked by funds (disabled, tooltip index 2).
@@ -1181,10 +1173,10 @@ void test_tactical_stage2() {
         f3.builder = 777;
         f3.build_options = opts;
         hud.build(f3, units, types);
-        CHECK2(hud.stats().build_options == 2);
+        CHECK(hud.stats().build_options == 2);
         const ButtonRuntime* b0 = hud.buttons().find_state(static_cast<uint32_t>(t.find("Build_00")));
         const ButtonRuntime* b1 = hud.buttons().find_state(static_cast<uint32_t>(t.find("Build_01")));
-        CHECK2(b0 && b1 && b0->text2 == U"1200" && !b0->disabled && b0->tooltip_index == -1 && b1->disabled &&
+        CHECK(b0 && b1 && b0->text2 == U"1200" && !b0->disabled && b0->tooltip_index == -1 && b1->disabled &&
                b1->tooltip_index == 2 && b1->text == U"2");
         auto buy_click = [&](const char* name, Button b) {
             const int32_t ci = t.find(name);
@@ -1193,7 +1185,7 @@ void test_tactical_stage2() {
                 if (h.component == ci) c = {0.5f * (h.min.x + h.max.x), 0.5f * (h.min.y + h.max.y)};
             const Vec2f px = hud.canvas().canvas_to_pixel(c.x, c.y);
             const auto x = static_cast<int32_t>(px.x), y = static_cast<int32_t>(px.y);
-            CHECK2(hud.hit_test(x, y) == ci);
+            CHECK(hud.hit_test(x, y) == ci);
             RoutedInput ri;
             ri.hover_component = ci;
             ri.hud = {{HudPointerEvent::Kind::Press, b, ci, x, y}, {HudPointerEvent::Kind::Release, b, ci, x, y},
@@ -1201,13 +1193,13 @@ void test_tactical_stage2() {
             std::vector<commands::EventData> cmds;
             std::vector<HudAction> acts;
             hud.update_input(ri, false, false, 3.0, cmds, &acts);
-            CHECK2(cmds.empty());
+            CHECK(cmds.empty());
             return acts;
         };
         std::vector<HudAction> a = buy_click("Build_00", Button::Left);
-        CHECK2(a.size() == 1 && a[0].kind == HudAction::Kind::TacticalBuy && a[0].unit == 777 && a[0].value == 41);
-        CHECK2(buy_click("Build_01", Button::Left).empty());   // disabled
-        CHECK2(buy_click("Build_00", Button::Right).empty());
+        CHECK(a.size() == 1 && a[0].kind == HudAction::Kind::TacticalBuy && a[0].unit == 777 && a[0].value == 41);
+        CHECK(buy_click("Build_01", Button::Left).empty());   // disabled
+        CHECK(buy_click("Build_00", Button::Right).empty());
         // Anchored on the builder's pixel: Build_00 at anchor + (-54, -67).
         f3.has_build_anchor = true;
         f3.build_anchor_px = hud.canvas().canvas_to_pixel(100.0f, 200.0f);
@@ -1216,39 +1208,39 @@ void test_tactical_stage2() {
         for (const HudHitBox& h : hud.hit_boxes())
             if (h.component == t.find("Build_00"))
                 at = near2(0.5f * (h.min.x + h.max.x), 100.0f - 54.0f + 1.0f, 0.01f) && near2(0.5f * (h.min.y + h.max.y), 200.0f - 67.0f - 4.0f, 0.01f);
-        CHECK2(at);
+        CHECK(at);
         hud.build(fr, units, types);  // no builder: no buttons
-        CHECK2(hud.stats().build_options == 0);
+        CHECK(hud.stats().build_options == 0);
     }
     {
         auto [cmds, acts] = click("r_0000", Button::Left);
-        CHECK2(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::BeginReinforcement && acts[0].unit == 555);
+        CHECK(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::BeginReinforcement && acts[0].unit == 555);
         const commands::EventData re = reinforce_event(555, {10, 20, 0});
-        CHECK2(re.type() == commands::EventType::Reinforce && re.u("unit") == 555 && re.valid());
+        CHECK(re.type() == commands::EventType::Reinforce && re.u("unit") == 555 && re.valid());
     }
     {
         auto [cmds, acts] = click("b_retreat", Button::Left);
-        CHECK2(cmds.size() == 1 && cmds[0] == commands::ev::retreat(true));
+        CHECK(cmds.size() == 1 && cmds[0] == commands::ev::retreat(true));
     }
     {
         auto [cmds, acts] = click("b_option_t", Button::Left);
-        CHECK2(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::Button && acts[0].name == "b_option_t");
+        CHECK(cmds.empty() && acts.size() == 1 && acts[0].kind == HudAction::Kind::Button && acts[0].name == "b_option_t");
     }
     {
         auto [cmds, acts] = click("s_select_00", Button::Left, true);  // shift: drop group 0 (ids 20, 21)
-        CHECK2(cmds.size() == 1 && cmds[0] == commands::ev::select({22}));
+        CHECK(cmds.size() == 1 && cmds[0] == commands::ev::select({22}));
     }
     {
         // Radar: left press = camera jump to the point under the cursor; right click = move there + ping.
         const ComponentPlacement& rp = hud.layout().placement(static_cast<uint32_t>(t.find("radar")));
         const RadarView& rv = hud.radar_view();
-        CHECK2(rv.valid() && near2(rv.center.x, rp.center.x));
+        CHECK(rv.valid() && near2(rv.center.x, rp.center.x));
         const Vec2f target = rv.to_canvas(250, -500);
         const Vec2f px = hud.canvas().canvas_to_pixel(target.x, target.y);
         const auto x = static_cast<int32_t>(px.x), y = static_cast<int32_t>(px.y);
         RoutedInput ri;
         ri.hover_component = hud.hit_test(x, y);
-        CHECK2(ri.hover_component == t.find("radar"));
+        CHECK(ri.hover_component == t.find("radar"));
         ri.hud = {{HudPointerEvent::Kind::Press, Button::Left, ri.hover_component, x, y}};
         ri.owner[static_cast<size_t>(Button::Left)] = PointerTarget::Hud;
         ri.world.mouse_x = x;
@@ -1256,24 +1248,24 @@ void test_tactical_stage2() {
         std::vector<commands::EventData> cmds;
         std::vector<HudAction> acts;
         hud.update_input(ri, false, false, 3.0, cmds, &acts);
-        CHECK2(acts.size() == 1 && acts[0].kind == HudAction::Kind::RadarCameraJump && near2(acts[0].x, 250, 15) &&
+        CHECK(acts.size() == 1 && acts[0].kind == HudAction::Kind::RadarCameraJump && near2(acts[0].x, 250, 15) &&
                near2(acts[0].y, -500, 15));
         // Drag: still held, cursor moved -> another jump; release ends it.
         ri.hud.clear();
         ri.world.mouse_x = x + 10;
         acts.clear();
         hud.update_input(ri, false, false, 3.1, cmds, &acts);
-        CHECK2(acts.size() == 1 && acts[0].x > 250);
+        CHECK(acts.size() == 1 && acts[0].x > 250);
         ri.hud = {{HudPointerEvent::Kind::Release, Button::Left, ri.hover_component, x, y}};
         ri.owner[static_cast<size_t>(Button::Left)] = PointerTarget::None;
         acts.clear();
         hud.update_input(ri, false, false, 3.2, cmds, &acts);
-        CHECK2(acts.empty() && cmds.empty());
+        CHECK(acts.empty() && cmds.empty());
         ri.hud = {{HudPointerEvent::Kind::Press, Button::Right, ri.hover_component, x, y},
                   {HudPointerEvent::Kind::Release, Button::Right, ri.hover_component, x, y},
                   {HudPointerEvent::Kind::Click, Button::Right, ri.hover_component, x, y}};
         hud.update_input(ri, false, false, 3.3, cmds, &acts);
-        CHECK2(cmds.size() == 1 && cmds[0].type() == commands::EventType::MoveToPosition && acts.size() == 1 &&
+        CHECK(cmds.size() == 1 && cmds[0].type() == commands::EventType::MoveToPosition && acts.size() == 1 &&
                acts[0].kind == HudAction::Kind::RadarPing && acts[0].name == "Default_Click");
     }
     // Tooltip: hover b_retreat past the delay -> drawn on the next build.
@@ -1287,12 +1279,12 @@ void test_tactical_stage2() {
         fr.time = 10.5;
         fr.cursor_px = {static_cast<float>(x), static_cast<float>(y)};
         hud.build(fr, units, types);
-        CHECK2(hud.stats().tooltip && hud.tooltip().component() == t.find("b_retreat"));
+        CHECK(hud.stats().tooltip && hud.tooltip().component() == t.find("b_retreat"));
     }
     // Determinism of the full stage-2 draw list.
     const uint64_t d1 = hud.draw_list().digest();
     hud.build(fr, units, types);
-    CHECK2(hud.draw_list().digest() == d1);
+    CHECK(hud.draw_list().digest() == d1);
 }
 
 }  // namespace
@@ -1314,5 +1306,5 @@ int run_stage2_tests() {
     test_tactical_stage2();
     test_order_buttons();
     test_drag_box();
-    return g_fail2;
+    return 0;  // failures are counted in g_fail (CHECK); test_hud.cpp main reports them
 }

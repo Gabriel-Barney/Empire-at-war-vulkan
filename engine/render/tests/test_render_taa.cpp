@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "alamo/assets/asset_cache.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/render/camera.hpp"
@@ -30,20 +31,13 @@
 #include "alamo/render/taa.hpp"
 #include "alamo/render/world.hpp"
 #include "alamo/rhi/rhi.hpp"
+#include "alamo/rhi/test_fixture.hpp"
 #include "alamo/vfs/vfs.hpp"
 
 using namespace alamo;
+using alamo::testing::Offscreen;
 
 namespace {
-
-int g_failures = 0;
-#define CHECK(cond)                                                              \
-    do {                                                                         \
-        if (!(cond)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);          \
-            ++g_failures;                                                        \
-        }                                                                        \
-    } while (0)
 
 bool close_to(float a, float b, float eps = 1e-6f) { return std::fabs(a - b) <= eps; }
 
@@ -122,41 +116,13 @@ void test_cpu() {
     CHECK(!render::taa_history_usable(c0, render::taa_camera(render::make_view(cam, 1920, 1080, 10.0f, 7000.0f))));  // resize
     // The jittered camera passes the test against its own un-jittered self (rules use the un-jittered camera only).
     CHECK(render::taa_history_usable(c0, render::taa_camera(j)));
-    std::printf("cpu: %s\n", g_failures ? "FAILED" : "ok");
+    std::printf("cpu: %s\n", g_fail ? "FAILED" : "ok");
 }
 
 // ------------------------------------------------------------------------------------------- GPU
 
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : alamo::testing::Gpu {
     rhi::GpuTimer timer;
-};
-
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback,
-                                     readback);
-    }
-    void destroy(Gpu& g) {
-        if (color) g.alloc.destroy(color);
-        if (readback) g.alloc.destroy(readback);
-    }
-    const uint8_t* data() const { return static_cast<const uint8_t*>(readback.mapped()); }
 };
 
 struct GpuTimes {
@@ -276,7 +242,7 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
     CHECK(resolver.load_render_xml(*files));
     const uint32_t W = 1280, H = 720;
     Offscreen o;
-    CHECK(o.create(g, W, H));
+    CHECK(o.create(g, W, H, false));
     {
         render::ModelStreamer streamer(rr, cache, js);
         const alamo::ParallelFor pf = jobs::make_parallel_for(js);
@@ -417,7 +383,7 @@ int run_gpu(const std::string& src_dir) {
         const bool ok = r.init(g.ctx, g.alloc, g.up, rd);
         CHECK(ok);
         Offscreen o, o2;
-        CHECK(o.create(g, 64, 48) && o2.create(g, 80, 40));
+        CHECK(o.create(g, 64, 48, false) && o2.create(g, 80, 40, false));
         if (ok) {
             r.set_frame_ring(&g.ring);
             render::OrbitCamera cam;
@@ -478,6 +444,6 @@ int run_gpu(const std::string& src_dir) {
 int main() {
     test_cpu();
     run_gpu(ALAMO_RENDER_SOURCE_DIR);
-    std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
-    return g_failures ? 1 : 0;
+    std::printf("%s (%d failures)\n", g_fail ? "FAILED" : "PASSED", g_fail);
+    return g_fail ? 1 : 0;
 }

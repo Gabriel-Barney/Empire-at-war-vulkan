@@ -60,18 +60,6 @@ void push_position(lua_State* L, float x, float y, float z) {
     detail::push_engine_userdata(L, u);
 }
 
-int push_nil(Call& c) {
-    lua_pushnil(c.L);
-    return 1;
-}
-int push_bool(Call& c, bool b) {
-    lua_pushboolean(c.L, b ? 1 : 0);
-    return 1;
-}
-int push_num(Call& c, double d) {
-    lua_pushnumber(c.L, d);
-    return 1;
-}
 int push_status(Call& c, int32_t status) {
     if (status < 0) return push_nil(c);
     Ud ud;
@@ -85,8 +73,6 @@ int push_object(Call& c, objects::ObjectHandle h) {
     detail::push_object(c.L, *c.vm, h);
     return 1;
 }
-
-bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TBOOLEAN; }
 
 // Any wrapper argument -> AiArg (bind_ai.cpp's rule) plus PositionWrapper -> AiPoint.
 void arg_of(Call& c, int i, AiArg& a, AiPoint& p) {

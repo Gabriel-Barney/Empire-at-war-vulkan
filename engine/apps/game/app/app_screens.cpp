@@ -182,7 +182,7 @@ void App::show_battle_end() {
     if (const size_t w = log.find("winner "); w != std::string::npos) {
         const size_t e = log.find(',', w);
         winner = log.substr(w + 7, e == std::string::npos ? std::string::npos : e - w - 7);
-        info.victory = iequal(winner, local_faction());
+        info.victory = ascii_iequals(winner, local_faction());
     }
     // Battle-end win / lose music, mode 16 (STRATEGIC_GAPS §7.4); a lost battle names the winner as the enemy faction.
     audio_.battle_end(info.victory, info.victory ? std::string_view() : std::string_view(winner));
@@ -291,9 +291,8 @@ std::u32string App::faction_label(int32_t player) const {
     const uint32_t f = g->players()[static_cast<size_t>(player)].faction;
     if (f >= g->rules().factions.size()) return {};
     const std::string& name = g->rules().factions[f].name;
-    std::string id = "TEXT_FACTION_";
-    for (const char c : name) id.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-    if (iequal(name, "Rebel")) id = "TEXT_FACTION_REBELS";
+    std::string id = "TEXT_FACTION_" + ascii_upper(name);
+    if (ascii_iequals(name, "Rebel")) id = "TEXT_FACTION_REBELS";
     return txt(id, ui::utf8_to_utf32(name));
 }
 

@@ -108,8 +108,7 @@ bool AbilitySystem::range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId
 // apply (vf30)
 // ================================================================================================
 
-bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp, uint32_t frame) {
-    (void)hp;
+bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, uint32_t frame) {
     const SpecialAbilityDesc& s = data_->specials[sp.desc];
     const uint32_t fps = cfg_.fps;
     const Vec3 me = position(o);

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "alamo/assets/model.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/render/anim/anim_pose_cache.hpp"
 #include "alamo/render/anim/sim_anim_driver.hpp"
 #ifdef ALAMO_RENDER_ANIM_HAVE_JOBS
@@ -24,15 +25,6 @@
 #endif
 
 namespace {
-
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 using namespace alamo;
 

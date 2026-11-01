@@ -110,11 +110,9 @@ public:
     void set_window(uint32_t tree_count, uint32_t interval) { window_ = tree_count * interval; }
 
     void add_static(ObjectId id, V2 center, float radius, uint32_t bits = kSpaceStatic);
-    bool remove_static(ObjectId id);
     // Replaces the track of `id`. `start_frame` = absolute frame of waypoint time 0.
     void set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps);
     void clear_track(ObjectId id);
-    bool has_track(ObjectId id) const { return tracks_.find(id) != tracks_.end(); }
 
     // OR of the bits of every entry the circle (radius) swept a -> b over absolute frames [t0, t1]
     // touches. `layer`: tracks of that layer are tested; statics are tested when `with_static`.

@@ -36,7 +36,6 @@ void SpaceOccupancy::set_box(V2 min_xy, V2 max_xy) {
 void SpaceOccupancy::add_static(ObjectId id, V2 center, float radius, uint32_t bits) {
     statics_[id] = Static{center, radius, bits};
 }
-bool SpaceOccupancy::remove_static(ObjectId id) { return statics_.erase(id) != 0; }
 
 void SpaceOccupancy::set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps) {
     if (wps.empty()) {

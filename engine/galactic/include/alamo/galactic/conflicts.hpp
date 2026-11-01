@@ -255,8 +255,6 @@ public:
     bool battle_active() const { return state_ == ConflictState::InBattle; }
     const BattleRequest& active_request() const { return request_; }
     const std::vector<ConflictLogEntry>& log() const { return log_; }
-    const std::vector<std::string>& planet_maps() const { return planet_map_; }
-    const AutoResolveResult& last_auto_resolve() const { return last_ar_; }
     // Space force split 0x2bd500 (§2.3 rule 4) for one player's units (list order).
     void split_space_forces(int32_t player, const std::vector<ObjectHandle>& units, BattleForces& out) const;
     // OI galactic: land force split 0x2bc6a0 (TACTICAL_GAPS 4.2): the defender's surface units all start (no cap); the

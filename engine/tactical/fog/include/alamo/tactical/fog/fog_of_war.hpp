@@ -262,7 +262,6 @@ public:
     void reward_enable_fow(bool has_param, int32_t value);      // story reward ENABLE_FOW
     bool fow_active() const { return fow_active_; }
     bool render_option() const { return render_option_; }
-    void set_fow_active(bool on) { fow_active_ = on; }
     void set_flags(bool fow_active, bool render_option) {
         fow_active_ = fow_active;
         render_option_ = render_option;

@@ -15,6 +15,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/presentation.hpp"
@@ -28,15 +29,6 @@
 using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;

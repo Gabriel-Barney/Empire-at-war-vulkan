@@ -3,23 +3,13 @@
 #ifdef ALAMO_GAME_HAVE_CONTROLS
 #include <algorithm>
 
+#include "alamo/core/text.hpp"
 #include "alamo/data/values.hpp"
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/lua/story_model.hpp"
 #endif
 
 namespace alamo::game {
-
-namespace {
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const auto up = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; };
-        if (up(a[i]) != up(b[i])) return false;
-    }
-    return true;
-}
-}  // namespace
 
 std::vector<ui::RadarField> radar_asteroid_fields(std::span<const tactical::abilities::SpaceField> fields) {
     std::vector<ui::RadarField> out;
@@ -62,7 +52,7 @@ void RadarFeed::blips(std::span<const RadarBlipNote> notes, ui::RadarEvents& eve
     for (const RadarBlipNote& n : notes)
         if (n.valid) events.set_marker(n.name, n.x, n.y);
     for (const std::string& name : events.marker_names()) {
-        const bool listed = std::any_of(notes.begin(), notes.end(), [&](const RadarBlipNote& n) { return iequals(n.name, name); });
+        const bool listed = std::any_of(notes.begin(), notes.end(), [&](const RadarBlipNote& n) { return ascii_iequals(n.name, name); });
         if (!listed) events.remove_marker(name);
     }
 }

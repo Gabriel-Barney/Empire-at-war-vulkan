@@ -9,6 +9,24 @@ and, for sim code, identical per-tick CRCs.
 Overall: the code is in good shape. No `#if 0`, no commented-out code, 2 real TODO-type markers. The payoff is in
 (1) copy-pasted helpers and test boilerplate, (2) subsystems nothing calls, (3) a few oversized files, (4) repo clutter.
 
+## Status 2026-11-01 (section A done, except as noted)
+Gate: MSVC 133/133, clang 133/133, ASan/UBSan 53/53, 0 warnings, golden CRCs unchanged. About 260 files, +1,700 / -4,600 lines.
+- **Done:** A1 text helpers (`core/text.hpp`: `ascii_upper/lower/iequals/trim`), A2 test helpers (`core/test_support.hpp`: `CHECK`,
+  `g_fail`, `MemoryProvider`, `env_or_empty`, `write_file`; `rhi/test_fixture.hpp`: `Gpu`, `Offscreen`; per-module fixtures
+  `apps/sim/tests/battle_fixture.hpp`, `render/tests/test_fakes.hpp`, `render/app/app_common.hpp`, `ui/tests/ui_gpu_fixture.hpp`,
+  `tactical/tests/alloc_counter.hpp`), A3 Lua bind helpers (now in `lua/src/vm_internal.hpp`), A4 per-module save helpers
+  (`read_count`, `write_vec3`, `read_vec3` in `core/bytes.hpp`), A5 FNV-1a / CRC-32 / `read_file_bytes` where identical,
+  A6 dead code in the lists above, A7 `alamo_dxc_headers()` in `engine/CMakeLists.txt` (render x4, ui, particles), A8 untracked
+  probe PNGs and exes, `taa.hpp` -> `taa_pass.hpp`.
+- **Left on purpose (differs from the copy it looked like):** helpers that strip `\v\f` (`std::isspace`) or compare while
+  stripping (`weather.cpp`, `tactical_battle_pads.cpp`, `objects.cpp`, `galactic_snapshot.cpp`, `data::trim`); `programs.cpp`
+  constexpr FNV; `FakeModels`; the `parse_int` / `parse_float` family; test files that count checks (`g_checks`) or define a
+  different `CHECK` (tactical fog / garrison, galactic grc_visibility / special, `test_ai_galactic`); `corruption_requirements`'s
+  unused `planet` argument (public API called from apps); `GalacticSimTokenResolver::clear_cache` (in `ai`, not removed).
+- **Not done in A:** the `rhi` and `materials` DXC loops (different shape: per-file specs, `.spv` + header step); the three
+  save archive headers (`save_io.hpp` and the two `ai` copies); `thread_parallel_for.hpp` test headers (need a core test
+  header); `MemoryProvider::list()` (would let `MemoryFiles` in two ai tests go); PNG writers in `ui` / `video` tests.
+
 ## Corrections to reviewer advice
 - **Do not swap local `iequal` copies for `alamo::iequals`.** `engine/core/src/hash.cpp:43` folds `/` to `\` as well
   (`up()` at :17), so it is a path comparison, not a plain case-insensitive one. Add a new `core/text.hpp`

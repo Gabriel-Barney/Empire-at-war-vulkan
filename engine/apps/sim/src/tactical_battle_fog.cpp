@@ -326,13 +326,6 @@ void TacticalBattle::fog_begin_setup_phase() {
     fog_.begin_setup(objs, req_.info.attacker, req_.info.defender);
 }
 
-void TacticalBattle::fog_end_setup_phase() {
-    if (!fog_on_ || !fog_.setup_phase()) return;
-    fog_.set_frame(frame_);
-    const std::vector<fw::FogSetupObject> objs = fog_setup_objects();
-    fog_.end_setup(objs, req_.info.attacker, req_.info.defender);
-}
-
 bool TacticalBattle::fog_setup_phase() const { return fog_on_ && fog_.setup_phase(); }
 
 // ---- OI fog: player reveal-range list --------------------------------------------------------------------------

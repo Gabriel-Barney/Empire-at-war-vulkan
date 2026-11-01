@@ -4,6 +4,7 @@
 #include <string>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/xml.hpp"
 
 namespace alamo::tactical::movement {
@@ -27,12 +28,6 @@ constexpr BitName kBitNames[] = {
     {"None", 0},
 };
 
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
 }  // namespace
 
 bool parse_passability_bits(std::string_view text, uint32_t& out) {
@@ -41,7 +36,7 @@ bool parse_passability_bits(std::string_view text, uint32_t& out) {
     while (pos <= text.size()) {
         size_t bar = text.find('|', pos);
         if (bar == std::string_view::npos) bar = text.size();
-        const std::string_view tok = trim(text.substr(pos, bar - pos));
+        const std::string_view tok = ascii_trim(text.substr(pos, bar - pos));
         if (!tok.empty()) {
             bool found = false;
             for (const BitName& b : kBitNames) {

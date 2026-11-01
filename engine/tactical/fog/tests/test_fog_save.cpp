@@ -19,6 +19,7 @@
 
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/tactical/fog/fog_of_war.hpp"
 
 using namespace alamo;
@@ -26,14 +27,6 @@ using namespace alamo::tactical::fog;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 using Bytes = std::vector<uint8_t>;
 

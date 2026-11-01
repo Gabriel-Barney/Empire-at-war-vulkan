@@ -1,5 +1,5 @@
-// alamo_render temporal anti-aliasing [port] (alamo/render/taa.hpp, src/taa.hpp, shaders/taa.hlsl).
-#include "taa.hpp"
+// alamo_render temporal anti-aliasing [port] (alamo/render/taa.hpp, src/taa_pass.hpp, shaders/taa.hlsl).
+#include "taa_pass.hpp"
 
 #include <algorithm>
 #include <array>

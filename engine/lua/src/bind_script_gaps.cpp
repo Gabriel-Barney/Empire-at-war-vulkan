@@ -15,6 +15,7 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/lua/ai_bridge.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/script_gaps.hpp"
@@ -39,15 +40,6 @@ constexpr objects::BehaviorTypeId kBehSpecialWeapon = 0x2F, kBehLobbing = 0x37, 
                                   kBehWeaponSource = 0x63, kBehDestroyAfterFire = 0x67;
 
 // ---------------------------------------------------------------- small helpers
-
-int push_nil(Call& c) {
-    lua_pushnil(c.L);
-    return 1;
-}
-int push_bool(Call& c, bool b) {
-    lua_pushboolean(c.L, b ? 1 : 0);
-    return 1;
-}
 
 // The original's script error / warning helpers: logged, no unwind; the binding returns nothing.
 int vlog(Call& c, const char* prefix, const char* fmt, va_list ap) {
@@ -85,21 +77,9 @@ uint32_t cls_markup() {
     return c;
 }
 
-ObjectBridge* bridge(Call& c) { return c.vm->owner ? attached_object_bridge(*c.vm->owner) : nullptr; }
 TacticalScriptHooks* hooks(Call& c) {
     ObjectBridge* b = bridge(c);
     return b ? b->tactical : nullptr;
-}
-objects::ObjectStore* store(Call& c) { return c.vm->host.store; }
-const objects::GameObjectTypes* types(Call& c) { return c.vm->host.types; }
-ObjectHandle self_object(Call& c) { return detail::object_handle(*c.self); }
-
-char upper(char ch) { return (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch; }
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
 }
 
 std::string_view type_name(Call& c, TypeIndex t) {
@@ -296,7 +276,7 @@ int m_type_is_affected_by_laser_defense(Call& c) {
     if (!ty || t >= ty->size()) return push_bool(c, false);
     // Projectile_Category MISSILE (1), ROCKET (4), MPTL_ROCKET (6): mask 0x52 [H]. The field's text, else its enum.
     const std::string_view cat = ty->get_string(t, "Projectile_Category");
-    if (!cat.empty()) return push_bool(c, iequal(cat, "MISSILE") || iequal(cat, "ROCKET") || iequal(cat, "MPTL_ROCKET"));
+    if (!cat.empty()) return push_bool(c, ascii_iequals(cat, "MISSILE") || ascii_iequals(cat, "ROCKET") || ascii_iequals(cat, "MPTL_ROCKET"));
     const int32_t v = ty->get_enum(t, "Projectile_Category");
     return push_bool(c, v >= 0 && v < 32 && ((0x52u >> v) & 1u) != 0);
 }
@@ -408,7 +388,7 @@ int g_start_cinematic_space_retreat(Call& c) {
     std::stable_sort(units.begin(), units.end(), [](const Entry& a, const Entry& b) { return a.speed > b.speed; });
     ObjectHandle marker;
     for (const ObjectHandle h : st->all_objects())
-        if (st->active(h) && iequal(type_name(c, st->type(h)), "Attacker Entry Position")) {
+        if (st->active(h) && ascii_iequals(type_name(c, st->type(h)), "Attacker Entry Position")) {
             marker = h;
             break;
         }

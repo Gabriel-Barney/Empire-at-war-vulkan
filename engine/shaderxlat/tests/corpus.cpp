@@ -432,10 +432,7 @@ const std::vector<HardCase>& vkd3d_hard_cases() {
 
 // ---------------------------------------------------------------- real install
 namespace {
-std::string env(const char* n) {
-    const char* v = std::getenv(n);
-    return v ? std::string(v) : std::string();
-}
+using ::alamo::testing::env_or_empty;
 
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
 bool is_shader_object(const std::vector<uint8_t>& d) {
@@ -532,7 +529,7 @@ std::vector<Blob> corpus_blobs(std::string* note) {
     std::vector<Blob> out;
     std::string n;
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
-    const std::string foc = env("ALAMO_FOC_DATA"), eaw = env("ALAMO_EAW_DATA");
+    const std::string foc = env_or_empty("ALAMO_FOC_DATA"), eaw = env_or_empty("ALAMO_EAW_DATA");
     std::map<std::string, Blob> m;
     if (!foc.empty()) collect_game(foc, "foc", m, n);
     if (!eaw.empty()) collect_game(eaw, "eaw", m, n);

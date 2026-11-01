@@ -473,7 +473,6 @@ public:
     // BombingBlockStatus: IsFinished = no bomber left; Result = undamaged / total ([port] bombers are not targets: 1).
     bool bombing_run_finished(int32_t player) const;
     float bombing_run_result(int32_t player) const;
-    uint32_t bombing_run_frames_until_available(int32_t player) const;  // UI query 0x4950f0
     const L1Constants& l1_constants() const { return l1_k_; }
     // --- end L1 systems ---
 
@@ -565,9 +564,6 @@ public:
     // the winner. The galactic victory records 3 / 6 are the galactic side's (not posted here).
     objects::ObjectId lead_object() const { return bt_lead_; }
     bool super_weapon_killed() const { return bt_sw_killed_; }
-    // Retreat attrition (§4.9): units killed when the retreat countdown ended (one synced draw per eligible unit even at
-    // probability 0).
-    uint32_t retreat_attrition_kills() const { return bt_attrition_kills_; }
     // Object removal records (0x3a8380: every object leaving the battle mode; the galactic AI's survival learning,
     // GalacticAiWorld::record_object_removal): battle units and team containers that died, in death-event order, then at
     // the battle end every unit / container still on the map or retreated (survived = true), ascending id. original_type
@@ -609,7 +605,6 @@ public:
     std::span<const tactical::hangar::EngineLoopRequest> engine_loop_requests() const { return engine_loop_requests_; }
     float engine_moving_threshold() const { return engine_loops_.moving_threshold(); }
     const tactical::hangar::HangarSystem* hangars() const { return hangars_.get(); }
-    uint32_t hangar_launches() const { return hg_launches_; }
     // Station upgrades done so far (battle order): the host copies selection / control groups old -> new and plays the
     // announcement (owner = the upgrade object's owner: own / ally / enemy SFXEvent_Starbase_*_Upgraded).
     struct StationUpgrade {
@@ -710,10 +705,9 @@ public:
     bool fog_active() const;
     bool fog_render_option() const;
     // OI fog: land setup phase (FOG_OF_WAR §3.4, TACTICAL_GAPS §5.4). setup() starts it on land when SetupPhaseEnabled
-    // (False in FoC and TR); the host ends it (the original's "begin battle" trigger is not traced). No-ops in space,
+    // (False in FoC and TR); nothing ends it yet (the original's "begin battle" trigger is not traced). No-ops in space,
     // without fog, or when not in that state.
     void fog_begin_setup_phase();
-    void fog_end_setup_phase();
     bool fog_setup_phase() const;
     // OI fog: player FOW reveal-range list (+0x1f8) for the Battlefield_Modifier writer (TACTICAL_GAPS §2.3.11:
     // FOW_Reveal_Range_Multiplier per affected player, category Stacking_Category, source = (ability, user)).
@@ -1146,7 +1140,7 @@ private:
     std::function<void(int32_t, float)> credits_add_;
     SimRng* bt_rng_ = nullptr;                 // the host's synced RNG (setup / commands): pad objects' add_unit draws
     std::vector<objects::ObjectId> bt_attrition_ids_;
-    uint32_t bt_attrition_kills_ = 0;
+    uint32_t bt_attrition_kills_ = 0;           // retreat attrition (§4.9): units killed when the countdown ended (one synced draw per eligible unit even at probability 0)
     objects::ObjectId bt_lead_ = objects::kNoObjectId;
     uint32_t bt_lead_participant_ = 0xFFFFFFFFu;
     bool bt_raid_ = false, bt_sw_killed_ = false, bt_used_ = false;

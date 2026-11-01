@@ -13,6 +13,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/lua/lua_vm.hpp"
 
@@ -28,30 +29,9 @@ constexpr uint32_t kMaxFireDepth = 256;  // cascade / TRIGGER_EVENT recursion gu
 constexpr uint32_t kMaxResetDepth = 3;   // RESET_BRANCH (0x140b3073c, Â§4.5)
 constexpr double kSpeechDoneTimeout = 60.0;
 
-char up(char ch) { return (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch; }
-
-std::string upper(std::string_view s) {
-    std::string out(s);
-    for (char& ch : out) ch = up(ch);
-    return out;
-}
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (up(a[i]) != up(b[i])) return false;
-    return true;
-}
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
 // Strict decimal number (whole string). Locale: the engine runs in the "C" locale.
 bool parse_number(std::string_view s, double& out) {
-    s = trim(s);
+    s = ascii_trim(s);
     if (s.empty() || s.size() > 63) return false;
     char buf[64];
     s.copy(buf, s.size());
@@ -63,7 +43,7 @@ bool parse_number(std::string_view s, double& out) {
 
 // atoi-like (leading integer part; "2.0" -> 2, "" / junk -> fallback).
 int32_t parse_int(std::string_view s, int32_t fallback) {
-    s = trim(s);
+    s = ascii_trim(s);
     size_t i = 0;
     bool neg = false;
     if (i < s.size() && (s[i] == '-' || s[i] == '+')) neg = s[i++] == '-';
@@ -83,7 +63,7 @@ double parse_float(std::string_view s, double fallback) {
 
 // "Event_Param12" -> 12 for prefix "EVENT_PARAM"; 0 if not that form.
 uint32_t param_index(std::string_view tag, std::string_view prefix) {
-    if (tag.size() <= prefix.size() || !iequal(tag.substr(0, prefix.size()), prefix)) return 0;
+    if (tag.size() <= prefix.size() || !ascii_iequals(tag.substr(0, prefix.size()), prefix)) return 0;
     uint32_t n = 0;
     for (char ch : tag.substr(prefix.size())) {
         if (ch < '0' || ch > '9' || n > 1000) return 0;
@@ -101,7 +81,7 @@ const StoryParam& param_at(const std::vector<StoryParam>& v, size_t i) {
     static const StoryParam kEmpty;
     return i < v.size() ? v[i] : kEmpty;
 }
-std::string_view text_at(const std::vector<StoryParam>& v, size_t i) { return trim(param_at(v, i).text); }
+std::string_view text_at(const std::vector<StoryParam>& v, size_t i) { return ascii_trim(param_at(v, i).text); }
 
 std::string base_name(std::string_view path) {
     const size_t cut = path.find_last_of("\\/");
@@ -117,21 +97,21 @@ std::vector<std::string> name_list(std::string_view s) {
         while (!s.empty() && is_sep(s.front())) s.remove_prefix(1);
         size_t n = 0;
         while (n < s.size() && !is_sep(s[n])) ++n;
-        if (n) out.push_back(upper(s.substr(0, n)));
+        if (n) out.push_back(ascii_upper(s.substr(0, n)));
         s.remove_prefix(n);
     }
     return out;
 }
 bool list_has(const std::vector<std::string>& list, std::string_view name) {
     for (const std::string& s : list)
-        if (iequal(s, name)) return true;
+        if (ascii_iequals(s, name)) return true;
     return false;
 }
 
 // Event parameter (from XML or Lua) against a pushed parameter (generic rule).
 bool param_matches(const StoryParam& want, const StoryParam& got) {
     if (want.kind != StoryParam::Kind::Text) return got.kind == want.kind && got.id == want.id;
-    if (iequal(trim(want.text), trim(got.text))) return true;
+    if (ascii_iequals(ascii_trim(want.text), ascii_trim(got.text))) return true;
     double a = 0, b = 0;
     return parse_number(want.text, a) && parse_number(got.text, b) && a == b;
 }
@@ -144,9 +124,9 @@ int32_t enum_value(std::string_view s) {
         {"FILTER_FRIENDLY_AND_NEUTRAL", 4}, {"FILTER_ENEMY_AND_NEUTRAL", 5}, {"FILTER_FRIENDLY_AND_ENEMY", 6},
         {"GREATER_THAN", 1}, {"LESS_THAN", 2}, {"EQUAL_TO", 3}, {"NOT_EQUAL_TO", 4},
         {"GREATER_THAN_EQUAL_TO", 5}, {"LESS_THAN_EQUAL_TO", 6}};
-    s = trim(s);
+    s = ascii_trim(s);
     for (const auto& [n, v] : kNames)
-        if (iequal(n, s)) return v;
+        if (ascii_iequals(n, s)) return v;
     return parse_int(s, 0);
 }
 
@@ -182,7 +162,7 @@ bool compare(double a, int32_t op, double b) {
 int32_t corruption_keyword(std::string_view s) {
     static constexpr std::string_view kNames[] = {"INTIMIDATION",    "PIRACY",  "KIDNAPPING",   "RACKETEERING",
                                                   "CORRUPT_MILITIA", "BRIBERY", "BLACK_MARKET", "BONDED_CITIZENS"};
-    s = trim(s);
+    s = ascii_trim(s);
     if (s.empty() || s == "CORRUPTION_ANY") return 8;
     if (s == "CORRUPTION_NONE") return -1;
     for (int32_t i = 0; i < 8; ++i)
@@ -209,7 +189,7 @@ bool is_enter_family(std::string_view t) {
 // (n.location 2 / 1); BASE_SPACE / BASE_LAND (BASE_GROUND) that kind with a base taking part; anything else
 // (unknown name: the enum table gives 0) any battle. A notification without a location matches only "any".
 bool battle_location_ok(std::string_view p, const StoryNotification& n) {
-    const std::string s = upper(trim(p));
+    const std::string s = ascii_upper(ascii_trim(p));
     if (s.empty() || s == "EITHER" || s == "2") return true;
     if (s == "SPACE") return n.location == 2;
     if (s == "LAND" || s == "GROUND") return n.location == 1;
@@ -329,50 +309,50 @@ std::vector<uint32_t> table_order(const std::vector<uint32_t>& keys, std::vector
 uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, bool active, std::string_view lua_script,
                               std::string* err) {
     const data::XmlDocument doc = data::XmlDocument::parse(xml, std::string(plot_name));
-    if (!doc.ok() || !iequal(doc.root().name(), "Story")) {
+    if (!doc.ok() || !ascii_iequals(doc.root().name(), "Story")) {
         if (err) *err = std::string(plot_name) + ": not a <Story> file";
         return kNone;
     }
     StoryPlot plot;
     plot.name = std::string(plot_name);
-    plot.lua_script = std::string(trim(lua_script));
+    plot.lua_script = std::string(ascii_trim(lua_script));
     plot.active = active;
     std::vector<std::vector<std::string>> prereq_text;  // per event: one string per <Prereq>
     for (const data::XmlNode ev : doc.root().children()) {
-        if (!iequal(ev.name(), "Event")) continue;
+        if (!ascii_iequals(ev.name(), "Event")) continue;
         StoryEventDef def;
-        def.name = std::string(trim(ev.attribute("Name")));
+        def.name = std::string(ascii_trim(ev.attribute("Name")));
         std::vector<std::string> pre;
         bool timeout_set = false;
         for (const data::XmlNode c : ev.children()) {
             const std::string_view tag = c.name();
             const std::string_view text = c.text_trimmed();
-            if (iequal(tag, "Event_Type")) {
-                def.type = upper(text);
-            } else if (iequal(tag, "Reward_Type")) {
-                def.reward_type = upper(text);
-            } else if (iequal(tag, "Prereq")) {
+            if (ascii_iequals(tag, "Event_Type")) {
+                def.type = ascii_upper(text);
+            } else if (ascii_iequals(tag, "Reward_Type")) {
+                def.reward_type = ascii_upper(text);
+            } else if (ascii_iequals(tag, "Prereq")) {
                 pre.emplace_back(text);
-            } else if (iequal(tag, "Branch")) {
+            } else if (ascii_iequals(tag, "Branch")) {
                 def.branch = std::string(text);
-            } else if (iequal(tag, "Perpetual")) {
-                def.perpetual = iequal(text, "true") || iequal(text, "yes") || text == "1";
-            } else if (iequal(tag, "Multiplayer")) {
-                def.multiplayer = iequal(text, "true") || iequal(text, "yes") || text == "1";
-            } else if (iequal(tag, "Timeout")) {
+            } else if (ascii_iequals(tag, "Perpetual")) {
+                def.perpetual = ascii_iequals(text, "true") || ascii_iequals(text, "yes") || text == "1";
+            } else if (ascii_iequals(tag, "Multiplayer")) {
+                def.multiplayer = ascii_iequals(text, "true") || ascii_iequals(text, "yes") || text == "1";
+            } else if (ascii_iequals(tag, "Timeout")) {
                 def.timeout = parse_float(text, 0.0);
                 timeout_set = true;
-            } else if (iequal(tag, "Inactive_Delay")) {
+            } else if (ascii_iequals(tag, "Inactive_Delay")) {
                 def.inactive_delay = parse_float(text, 0.0);
-            } else if (iequal(tag, "Story_Dialog")) {
+            } else if (ascii_iequals(tag, "Story_Dialog")) {
                 def.story_dialog = std::string(text);
-            } else if (iequal(tag, "Story_Tag")) {
+            } else if (ascii_iequals(tag, "Story_Tag")) {
                 def.story_tag = std::string(text);
-            } else if (iequal(tag, "Story_Chapter")) {
+            } else if (ascii_iequals(tag, "Story_Chapter")) {
                 def.story_chapter = parse_int(text, -1);
-            } else if (iequal(tag, "Story_Dialog_Popup")) {
-                def.story_dialog_popup = iequal(text, "true") || iequal(text, "yes") || text == "1";
-            } else if (iequal(tag, "Reward_Param_List")) {
+            } else if (ascii_iequals(tag, "Story_Dialog_Popup")) {
+                def.story_dialog_popup = ascii_iequals(text, "true") || ascii_iequals(text, "yes") || text == "1";
+            } else if (ascii_iequals(tag, "Reward_Param_List")) {
                 for (std::string& n : name_list(text)) def.reward_param_list.push_back(std::move(n));
             } else if (const uint32_t i = param_index(tag, "Event_Param")) {
                 set_param(def.event_params, i, StoryParam::of_text(text));
@@ -386,7 +366,7 @@ uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, 
             continue;
         }
         def.has_prereq_tags = !pre.empty();
-        const std::string key = upper(def.name);
+        const std::string key = ascii_upper(def.name);
         if (!plot.by_name.emplace(key, static_cast<uint32_t>(plot.events.size())).second) {
             warnings_.push_back(plot.name + ": duplicate event " + def.name + " (only the first is in the table)");
             def.in_table = false;
@@ -398,7 +378,7 @@ uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, 
     std::vector<uint32_t> keys;
     keys.reserve(plot.events.size());
     for (const StoryEventDef& d : plot.events) {
-        const std::string k = upper(d.name);
+        const std::string k = ascii_upper(d.name);
         keys.push_back(crc32(k.data(), k.size()));
     }
     plot.walk = table_order(keys, nullptr);
@@ -451,7 +431,7 @@ bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_fi
         return false;
     }
     const data::XmlDocument doc = data::XmlDocument::parse(bytes, path);
-    if (!doc.ok() || !iequal(doc.root().name(), "Story_Mode_Plots")) {
+    if (!doc.ok() || !ascii_iequals(doc.root().name(), "Story_Mode_Plots")) {
         if (err) *err = path + ": not a <Story_Mode_Plots> file";
         return false;
     }
@@ -459,7 +439,7 @@ bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_fi
     for (const data::XmlNode c : doc.root().children()) {
         const std::string_view tag = c.name();
         const std::string_view text = c.text_trimmed();
-        if (iequal(tag, "Lua_Script")) {
+        if (ascii_iequals(tag, "Lua_Script")) {
             pending_script = std::string(text);
             continue;
         }
@@ -485,15 +465,15 @@ bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_fi
 // ------------------------------------------------------------------------------------------ lookup
 
 uint32_t StoryModel::find_plot(std::string_view name) const {
-    const std::string want = base_name(trim(name));
+    const std::string want = base_name(ascii_trim(name));
     for (uint32_t p = 0; p < plots_.size(); ++p)
-        if (iequal(base_name(plots_[p].name), want)) return p;
+        if (ascii_iequals(base_name(plots_[p].name), want)) return p;
     return kNone;
 }
 
 uint32_t StoryModel::find_event(uint32_t plot, std::string_view name) const {
     if (plot >= plots_.size()) return kNone;
-    const auto it = plots_[plot].by_name.find(upper(trim(name)));
+    const auto it = plots_[plot].by_name.find(ascii_upper(ascii_trim(name)));
     return it == plots_[plot].by_name.end() ? kNone : it->second;
 }
 
@@ -650,7 +630,7 @@ bool StoryModel::fire(uint32_t p, uint32_t e, bool forced) {
 
 StoryObjective* StoryModel::find_objective(std::string_view text) {
     for (StoryObjective& o : objectives_)
-        if (iequal(o.text, text)) return &o;
+        if (ascii_iequals(o.text, text)) return &o;
     return nullptr;
 }
 
@@ -669,9 +649,9 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
     const std::vector<StoryParam> rp = plots_[p].events[e].reward_params;
     const std::string p1(text_at(rp, 0)), p2(text_at(rp, 1)), p3(text_at(rp, 2));
     if (type == "SET_FLAG") {
-        if (!p2.empty()) flags_[upper(p1)] = parse_int(p2, 0);
+        if (!p2.empty()) flags_[ascii_upper(p1)] = parse_int(p2, 0);
     } else if (type == "INCREMENT_FLAG") {
-        const auto it = flags_.find(upper(p1));
+        const auto it = flags_.find(ascii_upper(p1));
         if (!p2.empty() && it != flags_.end()) it->second += parse_int(p2, 0);  // undefined: nothing
     } else if (type == "ADD_OBJECTIVE") {
         add_objective(p1, false);
@@ -682,7 +662,7 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
         if (StoryObjective* o = find_objective(p1)) o->text = p2;
     } else if (type == "REMOVE_OBJECTIVE") {
         for (size_t i = 0; i < objectives_.size(); ++i)
-            if (iequal(objectives_[i].text, p1)) {
+            if (ascii_iequals(objectives_[i].text, p1)) {
                 objectives_.erase(objectives_.begin() + static_cast<std::ptrdiff_t>(i));
                 break;
             }
@@ -783,7 +763,7 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
         const std::vector<std::string> names = name_list(text_at(ep, 0));
         size_t idx = names.size();
         for (size_t i = 0; i < names.size(); ++i)
-            if (iequal(names[i], n.name)) idx = i;
+            if (ascii_iequals(names[i], n.name)) idx = i;
         if (idx == names.size()) return false;
         if (!n.has_object) return true;
         const std::string_view f = text_at(ep, 2);
@@ -844,7 +824,7 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     //     it. An empty Param1 is never parsed: never fires (likewise an unknown faction - it never equals a winner).
     if (type == "STORY_VICTORY") {
         const std::string_view faction = text_at(ep, 0);
-        return !faction.empty() && iequal(faction, n.name);
+        return !faction.empty() && ascii_iequals(faction, n.name);
     }
     //   COMMAND_UNIT (§4.3, 0x454190): Param1 = unit type names (one must equal n.name), then Param2 empty or
     //     Param3 == 0 -> fire; else fire when some object of a Param2 type is within (3D, strictly) Param3 of the
@@ -867,7 +847,7 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     if (type == "STORY_GUARD_UNIT") {
         const std::vector<std::string> units = name_list(text_at(ep, 0)), guarded = name_list(text_at(ep, 1));
         for (size_t i = 0; i < units.size(); ++i)
-            if (iequal(units[i], n.name) && i < guarded.size() && iequal(guarded[i], n.target)) return true;
+            if (ascii_iequals(units[i], n.name) && i < guarded.size() && ascii_iequals(guarded[i], n.target)) return true;
         return false;
     }
     // S4 (docs/re/L1_S4_REMAINING.md §4.2, 0x4540b0): CAPTURE_STRUCTURE fires when the structure's type name is in Param1
@@ -875,15 +855,15 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     //   never). No filter, no counter.
     if (type == "STORY_CAPTURE_STRUCTURE") {
         const std::string_view faction = text_at(ep, 1);
-        return !faction.empty() && iequal(faction, n.faction) && list_has(name_list(text_at(ep, 0)), n.name);
+        return !faction.empty() && ascii_iequals(faction, n.faction) && list_has(name_list(text_at(ep, 0)), n.name);
     }
     //   LOAD_TACTICAL_MAP (§4.4, 0x455130): data2 (n.value: 0 land, 1 space) == the Param3 keyword (GROUND / LAND 0, SPACE
     //   1, EITHER 2 [M: never equal], numbers as themselves, unknown / absent 0) and the battle planet's type name in
     //   Param1; then Param2 empty -> fire, else entry i fires when load_map_hero(type, i) (the original indexes the
     //   instance list by the Param2 position; i past the instances never matches).
     if (type == "STORY_LOAD_TACTICAL_MAP") {
-        const std::string_view k = trim(text_at(ep, 2));
-        const int32_t kind = iequal(k, "SPACE") ? 1 : iequal(k, "EITHER") ? 2 : (iequal(k, "GROUND") || iequal(k, "LAND")) ? 0 : parse_int(k, 0);
+        const std::string_view k = ascii_trim(text_at(ep, 2));
+        const int32_t kind = ascii_iequals(k, "SPACE") ? 1 : ascii_iequals(k, "EITHER") ? 2 : (ascii_iequals(k, "GROUND") || ascii_iequals(k, "LAND")) ? 0 : parse_int(k, 0);
         if (kind != static_cast<int32_t>(n.value) || !list_has(name_list(text_at(ep, 0)), n.planet)) return false;
         const std::vector<std::string> heroes = name_list(text_at(ep, 1));
         if (heroes.empty()) return true;
@@ -918,7 +898,7 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
         const std::vector<std::string> names = name_list(text_at(ep, 0));
         size_t i = names.size();
         for (size_t k = 0; k < names.size() && i == names.size(); ++k)
-            if (iequal(names[k], n.name)) i = k;
+            if (ascii_iequals(names[k], n.name)) i = k;
         if (i == names.size()) return false;
         if (st.countdowns.empty()) {  // initialised from the parameters (vf4 Reset restores them: cleared)
             const std::vector<std::string> counts = name_list(text_at(ep, 2));
@@ -932,7 +912,7 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
         const std::string_view f = text_at(ep, 3);
         const int32_t filter = f.empty() ? 0 : enum_value(f);
         for (size_t j = 0; j < second.size(); ++j) {
-            if (!iequal(second[j], n.planet) || !filter_ok(filter, same_side(n.planet_owner), n.planet_owner_neutral)) continue;
+            if (!ascii_iequals(second[j], n.planet) || !filter_ok(filter, same_side(n.planet_owner), n.planet_owner_neutral)) continue;
             if (j >= st.countdowns.size()) return false;  // past the counters (undefined in the original)
             return --st.countdowns[j] <= 0;
         }
@@ -941,7 +921,7 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     if (type == "STORY_MOVE" || type == "STORY_DEPLOY") {  // [port] Param1 unit in the fleet, Param2 planet
         const std::vector<std::string> units = name_list(text_at(ep, 0));
         bool hit = units.empty();
-        for (const std::string& u : units) hit = hit || list_has(n.units, u) || iequal(u, n.name);
+        for (const std::string& u : units) hit = hit || list_has(n.units, u) || ascii_iequals(u, n.name);
         const std::vector<std::string> planets = name_list(text_at(ep, 1));
         return hit && (planets.empty() || list_has(planets, n.planet));
     }
@@ -967,7 +947,7 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
 }
 
 uint32_t StoryModel::dispatch(std::string_view type_in, const StoryNotification& n) {
-    const std::string type = upper(trim(type_in));
+    const std::string type = ascii_upper(ascii_trim(type_in));
     const size_t before = fired_.size();
     if (type == "STORY_TRIGGER") return 0;  // nobody dispatches STORY_TRIGGER (Â§1.3)
     // L1/S4 wave 2b (SCRIPT_GAPS.md §4.6): no call site dispatches STORY_DIFFICULTY_LEVEL in 1.121 - parsed, never
@@ -988,7 +968,7 @@ uint32_t StoryModel::dispatch(std::string_view type_in, const StoryNotification&
 
 uint32_t StoryModel::story_event(std::string_view name, std::string_view object_type, bool has_object) {
     StoryNotification n;
-    n.name = std::string(trim(name));
+    n.name = std::string(ascii_trim(name));
     n.has_object = has_object;
     if (has_object) n.params.push_back(StoryParam::of_text(object_type));
     return dispatch("STORY_AI_NOTIFICATION", n);
@@ -1018,7 +998,7 @@ uint32_t StoryModel::trigger_event_by_name(std::string_view name) {
 }
 
 uint32_t StoryModel::poll(std::string_view type_in, const std::function<bool(const StoryEventDef&)>& match) {
-    const std::string type = upper(trim(type_in));
+    const std::string type = ascii_upper(ascii_trim(type_in));
     const size_t before = fired_.size();
     for (const uint32_t p : plot_walk_) {
         if (!plots_[p].active) continue;
@@ -1106,17 +1086,17 @@ void StoryModel::update(uint32_t frame, double seconds, bool paused) {
 // ------------------------------------------------------------------------------------------ state
 
 int32_t StoryModel::flag(std::string_view name) const {
-    const auto it = flags_.find(upper(trim(name)));
+    const auto it = flags_.find(ascii_upper(ascii_trim(name)));
     return it == flags_.end() ? kUndefinedFlag : it->second;
 }
 
-bool StoryModel::has_flag(std::string_view name) const { return flags_.count(upper(trim(name))) != 0; }
+bool StoryModel::has_flag(std::string_view name) const { return flags_.count(ascii_upper(ascii_trim(name))) != 0; }
 
-void StoryModel::set_flag(std::string_view name, int32_t value) { flags_[upper(trim(name))] = value; }
+void StoryModel::set_flag(std::string_view name, int32_t value) { flags_[ascii_upper(ascii_trim(name))] = value; }
 
 void StoryModel::add_blip(std::string_view name, int32_t object_id) {
     for (StoryBlip& b : blips_)
-        if (iequal(b.name, name)) {
+        if (ascii_iequals(b.name, name)) {
             b.object_id = object_id;
             return;
         }
@@ -1125,7 +1105,7 @@ void StoryModel::add_blip(std::string_view name, int32_t object_id) {
 
 bool StoryModel::remove_blip(std::string_view name) {
     for (size_t i = 0; i < blips_.size(); ++i)
-        if (iequal(blips_[i].name, name)) {
+        if (ascii_iequals(blips_[i].name, name)) {
             blips_.erase(blips_.begin() + static_cast<std::ptrdiff_t>(i));
             return true;
         }
@@ -1134,7 +1114,7 @@ bool StoryModel::remove_blip(std::string_view name) {
 
 void StoryModel::add_highlight(std::string_view name, int32_t object_id) {
     for (StoryHighlight& h : highlights_)
-        if (iequal(h.name, name)) {
+        if (ascii_iequals(h.name, name)) {
             h.object_id = object_id;
             return;
         }
@@ -1143,7 +1123,7 @@ void StoryModel::add_highlight(std::string_view name, int32_t object_id) {
 
 bool StoryModel::remove_highlight(std::string_view name) {
     for (size_t i = 0; i < highlights_.size(); ++i)
-        if (iequal(highlights_[i].name, name)) {
+        if (ascii_iequals(highlights_[i].name, name)) {
             highlights_.erase(highlights_.begin() + static_cast<std::ptrdiff_t>(i));
             return true;
         }
@@ -1152,7 +1132,7 @@ bool StoryModel::remove_highlight(std::string_view name) {
 
 namespace {
 std::string ai_flag_key(int32_t player, std::string_view name, int32_t location) {
-    return std::to_string(player) + "|" + upper(trim(name)) + "|" + std::to_string(location);
+    return std::to_string(player) + "|" + ascii_upper(ascii_trim(name)) + "|" + std::to_string(location);
 }
 }  // namespace
 

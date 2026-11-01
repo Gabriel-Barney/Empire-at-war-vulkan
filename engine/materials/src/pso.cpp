@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 
 namespace alamo::materials {
 
@@ -27,23 +28,13 @@ constexpr LayoutName kLayouts[] = {
     {VertexLayout::Terrain, "Terrain"},
 };
 
-bool iequal(const char* a, const char* b) {
-    for (; *a && *b; ++a, ++b) {
-        char x = *a, y = *b;
-        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return *a == *b;
-}
-
 bool is_default(const StateSlot& s) { return s.origin == StateOrigin::Default; }
 }  // namespace
 
 VertexLayout vertex_layout_from_name(const char* n) {
     if (!n) return VertexLayout::Unknown;
     for (const auto& e : kLayouts)
-        if (iequal(e.name, n)) return e.l;
+        if (ascii_iequals(e.name, n)) return e.l;
     return VertexLayout::Unknown;
 }
 

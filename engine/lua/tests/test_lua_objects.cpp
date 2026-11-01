@@ -16,6 +16,7 @@
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/object_bridge.hpp"
@@ -34,15 +35,6 @@
 using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
@@ -76,10 +68,7 @@ static double gnum(LuaVm& vm, const char* name) {
 }
 static bool contains(const std::string& s, const char* what) { return s.find(what) != std::string::npos; }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using alamo::testing::write_file;
 
 // ------------------------------------------------------------------------------------------
 // Synthetic type database.
@@ -662,26 +651,12 @@ static void test_determinism(const Db& db) {
 
 // The shipped scripts' patterns: TestValid / Find_Hint / Spawn_Unit / Teleport_And_Face / BlockOnCommand in a
 // thread. With ALAMO_FOC_DATA the real PGBase.lua drives BlockOnCommand; otherwise a minimal stand-in.
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using alamo::testing::env_or_empty;
 
 static void test_script_patterns(const Db& db) {
     Scene s(db);
     std::unique_ptr<FileProvider> files;
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
 #ifdef ALAMO_LUA_HAVE_VFS
     if (!root.empty()) {
         vfs::VfsConfig cfg;

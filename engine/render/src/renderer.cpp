@@ -13,6 +13,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/materials/constants.hpp"
 #include "alamo/materials/params.hpp"
@@ -22,7 +23,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
-#include "taa.hpp"  // [port] TAA
+#include "taa_pass.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
 // SPIR-V of shaders/unlit.hlsl (DXC -Fh byte arrays, see CMakeLists.txt).
@@ -34,12 +35,6 @@ namespace alamo::render {
 using namespace detail;
 
 namespace {
-
-std::string lower(std::string_view s) {
-    std::string r(s);
-    for (char& c : r) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return r;
-}
 
 const Mat3x4& bone_or_identity(std::span<const Mat3x4> world, uint32_t b) {
     static const Mat3x4 kIdentity{};
@@ -199,7 +194,7 @@ BlendMode blend_mode_for_key(const materials::PsoKey& k) {
 
 std::string diffuse_texture_name(const assets::MaterialRef& m) {
     for (const auto& p : m.params)
-        if (p.type == assets::ParamType::Texture && !p.texture.empty() && lower(p.name) == "basetexture") return p.texture;
+        if (p.type == assets::ParamType::Texture && !p.texture.empty() && ascii_lower(p.name) == "basetexture") return p.texture;
     for (const auto& p : m.params)
         if (p.type == assets::ParamType::Texture && !p.texture.empty() &&
             assets::texture_role_for_param(p.name) == assets::TextureRole::Color)
@@ -773,7 +768,7 @@ bool Renderer::upload_model(std::shared_ptr<const assets::ModelAsset> model, con
     };
     std::vector<TexReq> reqs;
     auto add_texture = [&](const std::string& name, assets::TextureRole role) -> int {
-        const std::string key = lower(name) + "#" + std::to_string(static_cast<int>(role));
+        const std::string key = ascii_lower(name) + "#" + std::to_string(static_cast<int>(role));
         for (size_t i = 0; i < reqs.size(); ++i)
             if (reqs[i].key == key) return static_cast<int>(i);
         reqs.push_back({name, key, role});

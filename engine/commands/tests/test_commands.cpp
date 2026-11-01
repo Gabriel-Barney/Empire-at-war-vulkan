@@ -22,18 +22,10 @@
 #include "alamo/commands/wire_codec.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/test_support.hpp"
 
 using namespace alamo;
 using namespace alamo::commands;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
@@ -990,15 +982,11 @@ void test_old_streams() {
     size_t checked = 0;
     for (const char* f : files) {
         const std::string path = std::string(ALAMO_COMMANDS_APPS_DIR) + f;
-        std::FILE* fp = std::fopen(path.c_str(), "rb");
-        if (!fp) {
+        std::vector<uint8_t> bytes;
+        if (!read_file_bytes(path, bytes)) {
             std::printf("old streams: %s missing, skipped\n", path.c_str());
             continue;
         }
-        std::vector<uint8_t> bytes;
-        uint8_t buf[4096];
-        for (size_t n; (n = std::fread(buf, 1, sizeof buf, fp)) > 0;) bytes.insert(bytes.end(), buf, buf + n);
-        std::fclose(fp);
         CommandRecording rec;
         std::string err;
         CHECK(CommandRecording::from_bytes(bytes, rec, &err));

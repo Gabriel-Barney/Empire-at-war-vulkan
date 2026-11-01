@@ -14,6 +14,7 @@
 #include <process.h>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/rhi/context.hpp"
 
@@ -60,14 +61,7 @@ namespace {
 constexpr uint8_t kCacheMagic[4] = {'A', 'L', 'P', 'C'};
 constexpr uint32_t kCacheVersion = 1;
 
-uint64_t fnv1a64(std::span<const uint8_t> bytes) {
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (uint8_t b : bytes) {
-        h ^= b;
-        h *= 0x100000001b3ull;
-    }
-    return h;
-}
+uint64_t fnv1a64(std::span<const uint8_t> bytes) { return alamo::fnv1a64(bytes.data(), bytes.size()); }
 
 void put_le(std::vector<uint8_t>& out, uint64_t v, int bytes) {
     for (int i = 0; i < bytes; ++i) out.push_back(static_cast<uint8_t>(v >> (8 * i)));

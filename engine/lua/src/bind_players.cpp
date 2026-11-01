@@ -22,6 +22,7 @@
 #endif
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/economy.hpp"
 #include "alamo/galactic/fleet_path.hpp"
@@ -30,19 +31,6 @@
 #include "alamo/objects/game_object_types.hpp"
 
 namespace alamo::lua {
-
-namespace {
-
-char ascii_upper(char ch) { return (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch; }
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (ascii_upper(a[i]) != ascii_upper(b[i])) return false;
-    return true;
-}
-
-}  // namespace
 
 // ================================================================ LuaPlayerWorld
 
@@ -146,7 +134,7 @@ void LuaPlayerWorld::set_tech_level(int32_t p, int32_t level) {
 
 int32_t LuaPlayerWorld::find_faction_player(std::string_view faction) const {
     for (size_t p = 0; p < state_.size(); ++p)
-        if (iequals(faction_name(static_cast<int32_t>(p)), faction)) return static_cast<int32_t>(p);
+        if (ascii_iequals(faction_name(static_cast<int32_t>(p)), faction)) return static_cast<int32_t>(p);
     return -1;
 }
 
@@ -408,27 +396,6 @@ using detail::Ud;
 
 namespace {
 
-int push_nil(Call& c) {
-    lua_pushnil(c.L);
-    return 1;
-}
-int push_bool(Call& c, bool b) {
-    lua_pushboolean(c.L, b ? 1 : 0);
-    return 1;
-}
-int push_num(Call& c, double d) {
-    lua_pushnumber(c.L, d);
-    return 1;
-}
-int push_str(Call& c, std::string_view s) {
-    lua_pushlstring(c.L, s.data(), s.size());
-    return 1;
-}
-
-bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TBOOLEAN; }
-bool to_bool(const Call& c, int i) { return lua_toboolean(c.L, c.idx(i)) != 0; }
-bool is_table(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) == LUA_TTABLE; }
-
 uint32_t cls_weighted_list() {
     static const uint32_t c = detail::class_id("WeightedTypeListClass");
     return c;
@@ -547,7 +514,7 @@ int g_find_player(Call& c) {
     const LuaPlayerWorld* w = world_of(c.L);
     if (!w) return push_nil(c);
     const std::string_view name = c.string(1);
-    const int32_t p = iequals(name, "local") ? w->local_player() : w->find_faction_player(name);
+    const int32_t p = ascii_iequals(name, "local") ? w->local_player() : w->find_faction_player(name);
     if (!w->valid(p)) return push_nil(c);
     detail::push_player(c.L, *c.vm, p);
     return 1;
@@ -1012,17 +979,17 @@ int g_evaluate_type_list(Call& c) {
         const bool known = types && t < types->raw().type_count();
         for (size_t i = 0; i < items.size(); ++i) {
             if (found[i]) continue;
-            if (iequals(items[i], "All")) {
+            if (ascii_iequals(items[i], "All")) {
                 found[i] = 1;
                 continue;
             }
             if (!known) continue;
-            if (iequals(types->raw().types().name[t], items[i])) {
+            if (ascii_iequals(types->raw().types().name[t], items[i])) {
                 found[i] = 1;
                 continue;
             }
             for (const std::string_view tok : types->get_list(t, "CategoryMask"))
-                if (iequals(tok, items[i])) found[i] = 1;
+                if (ascii_iequals(tok, items[i])) found[i] = 1;
         }
     }
     lua_newtable(c.L);
@@ -1138,7 +1105,7 @@ int m_type_is_affiliated_with(Call& c) {
     if (p < 0 || !ty || c.self->value >= ty->raw().type_count()) return push_bool(c, false);
     const std::string faction = w->faction_name(p);
     for (const std::string_view a : ty->raw().get_list(static_cast<objects::TypeIndex>(c.self->value), "Affiliation"))
-        if (iequals(a, faction)) return push_bool(c, true);
+        if (ascii_iequals(a, faction)) return push_bool(c, true);
     return push_bool(c, false);
 }
 

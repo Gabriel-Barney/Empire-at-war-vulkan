@@ -10,6 +10,7 @@
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/terrain/chunk.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/behaviors.hpp"
@@ -27,23 +28,7 @@ namespace cmd = alamo::commands;
 
 namespace {
 
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
-bool iequal_trim(std::string_view a, std::string_view b) {
-    a = trim(a);
-    b = trim(b);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-        if (x != y) return false;
-    }
-    return true;
-}
+bool iequal_trim(std::string_view a, std::string_view b) { return ascii_iequals(ascii_trim(a), ascii_trim(b)); }
 
 objects::BehaviorTypeId pad_behavior() {
     static const objects::BehaviorTypeId id = objects::behavior_type_id("TACTICAL_BUILD_OBJECTS");
@@ -435,7 +420,7 @@ bool TacticalBattle::bt_team(uint32_t company_type, uint32_t first_member, uint3
     // Create_Team_Type (+0x1e50 / +0x1e58), else the type named "Team"; neither resolves -> nothing is created.
     const std::string_view name = types.get_string(company_type, "Create_Team_Type");
     objects::TypeIndex tt = objects::kNone;
-    if (!trim(name).empty()) tt = types.resolve_name(trim(name));
+    if (!ascii_trim(name).empty()) tt = types.resolve_name(ascii_trim(name));
     const bool named = tt != objects::kNone && tt < types.size();
     if (!named) tt = types.resolve_name("Team");
     if (tt == objects::kNone || tt >= types.size()) return false;
@@ -555,8 +540,8 @@ std::vector<std::pair<objects::TypeIndex, float>> spawn_table(const objects::Gam
     const std::span<const std::string_view> list = types.get_list(t, "Map_Load_Spawn_Table");
     float cum = 0.0f;
     for (size_t i = 0; i + 1 < list.size(); i += 2) {
-        const objects::TypeIndex x = types.resolve_name(trim(list[i]));
-        const float w = std::strtof(std::string(trim(list[i + 1])).c_str(), nullptr);
+        const objects::TypeIndex x = types.resolve_name(ascii_trim(list[i]));
+        const float w = std::strtof(std::string(ascii_trim(list[i + 1])).c_str(), nullptr);
         if (x == objects::kNone || x >= types.size()) continue;
         cum = cum + w;
         out.emplace_back(x, cum);
@@ -750,7 +735,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
             m.pos = pos;
             m.facing = face;
             for (const std::string_view s : types.get_list(t, "Marker_For_Specific_Object_Type")) {
-                const objects::TypeIndex x = types.resolve_name(trim(s));
+                const objects::TypeIndex x = types.resolve_name(ascii_trim(s));
                 if (x != objects::kNone && x < types.size()) m.specific.push_back(x);
             }
             bt_markers_.push_back(std::move(m));
@@ -803,7 +788,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
     const size_t n0 = parts_.size();
     for (size_t i = 0; i < n0; ++i) {
         if (!parts_[i].structure || parts_[i].built) continue;
-        const objects::TypeIndex x = types.resolve_name(trim(types.get_string(parts_[i].type, "Tactical_Additional_Structure_Type")));
+        const objects::TypeIndex x = types.resolve_name(ascii_trim(types.get_string(parts_[i].type, "Tactical_Additional_Structure_Type")));
         if (x == objects::kNone || x >= types.size()) continue;
         bool have = false;
         for (const Participant& q : parts_) have = have || (q.structure && q.type == static_cast<uint32_t>(x));
@@ -822,7 +807,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
     //    structure behaviour slot filter is not modelled].
     for (Participant& p : parts_) {
         if (!p.structure) continue;
-        const objects::TypeIndex o = types.resolve_name(trim(types.get_string(p.type, "Place_Other_Type_At_Every_Specific_Marker_Position")));
+        const objects::TypeIndex o = types.resolve_name(ascii_trim(types.get_string(p.type, "Place_Other_Type_At_Every_Specific_Marker_Position")));
         if (o == objects::kNone || o >= types.size()) continue;
         p.other_type = static_cast<int32_t>(o);
         for (size_t i = 0; i < bt_markers_.size(); ++i) {
@@ -851,7 +836,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
                     pick = static_cast<int64_t>(i);
             }
             if (pick < 0) {
-                const std::string_view bp = trim(types.get_string(p.type, "Base_Position"));
+                const std::string_view bp = ascii_trim(types.get_string(p.type, "Base_Position"));
                 if (iequal_trim(bp, "Orbital")) pick = first_free(kMkOrbital);
                 else if (iequal_trim(bp, "In_Base")) pick = first_free(kMkInBase) >= 0 ? first_free(kMkInBase) : first_free(kMkOutBase);
                 else if (iequal_trim(bp, "Out_Base")) pick = first_free(kMkOutBase) >= 0 ? first_free(kMkOutBase) : first_free(kMkInBase);
@@ -938,7 +923,7 @@ Vec3 TacticalBattle::bt_pad_attach_point(const TacticalMode& mode, objects::Obje
     const objects::GameObjectTypes& types = catalog_->types();
     const objects::TypeIndex t = st.type(pad);
     if (t >= types.size()) return p;
-    const std::string_view bone = trim(types.get_string(t, "Tactical_Build_Attachment_Bone_Name"));
+    const std::string_view bone = ascii_trim(types.get_string(t, "Tactical_Build_Attachment_Bone_Name"));
     if (bone.empty()) return p;
     Vec3 out = p;
     return model_bone_point(st, pad, bone, out) > 0 ? out : p;
@@ -952,8 +937,7 @@ int TacticalBattle::model_bone_point(const objects::ObjectStore& st, objects::Ob
     if (t >= types.size()) return -1;
     const BattleCatalog::ModelInfo* mi = catalog_->model_info(static_cast<uint32_t>(t), space_, true);
     if (!mi) return -1;
-    std::string upper(trim(bone));
-    for (char& c : upper) c = (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
+    const std::string upper = ascii_upper(ascii_trim(bone));
     const int32_t b = mi->find(upper);
     if (b < 0 || static_cast<size_t>(b) >= mi->bone_pos.size()) return 0;
     const Vec3 p = st.position(h);

@@ -19,6 +19,8 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/core/test_support.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/script_loader.hpp"
@@ -36,15 +38,6 @@
 using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
-
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 #ifndef ALAMO_LUA_LOG_DIR
 #define ALAMO_LUA_LOG_DIR "logs"
@@ -76,10 +69,7 @@ static double gnum(LuaVm& vm, const char* name) {
     return d;
 }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using alamo::testing::write_file;
 
 static void write_log(const std::string& name, const std::string& text) {
     std::error_code ec;
@@ -573,25 +563,10 @@ static void test_static_scan() {
 // ------------------------------------------------------------------------------------------
 // Shipped scripts (ALAMO_FOC_DATA / ALAMO_EAW_DATA).
 
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using alamo::testing::env_or_empty;
 
 static bool has_script_ext(const std::string& p) {
-    auto lower = p;
-    for (char& c : lower) c = static_cast<char>((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+    const std::string lower = ascii_lower(p);
     return (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".lua") == 0) ||
            (lower.size() > 3 && lower.compare(lower.size() - 3, 3, ".lc") == 0);
 }
@@ -609,7 +584,7 @@ static void list_loose(const fs::path& dir, const std::string& rel, std::vector<
 }
 
 static void test_shipped_scripts(const char* var, const char* game) {
-    const std::string root = env(var);
+    const std::string root = env_or_empty(var);
     if (root.empty()) {
         std::printf("  %s unset: shipped %s scripts skipped\n", var, game);
         return;

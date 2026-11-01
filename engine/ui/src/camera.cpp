@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <utility>
 
+#include "alamo/core/text.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 
@@ -178,15 +179,8 @@ size_t parse_tactical_cameras(const data::XmlNode& root, std::vector<TacticalCam
 }
 
 const TacticalCameraConstants* find_camera(const std::vector<TacticalCameraConstants>& v, std::string_view name) {
-    for (const TacticalCameraConstants& c : v) {
-        if (c.name.size() != name.size()) continue;
-        bool eq = true;
-        for (size_t i = 0; i < name.size() && eq; ++i) {
-            const auto lo = [](char ch) { return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch; };
-            eq = lo(c.name[i]) == lo(name[i]);
-        }
-        if (eq) return &c;
-    }
+    for (const TacticalCameraConstants& c : v)
+        if (ascii_iequals(c.name, name)) return &c;
     return nullptr;
 }
 

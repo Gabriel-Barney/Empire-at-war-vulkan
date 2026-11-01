@@ -1,8 +1,8 @@
 #include "alamo/ui/hud_abilities.hpp"
 
 #include <algorithm>
-#include <cctype>
 
+#include "alamo/core/text.hpp"
 #include "alamo/ui/targeting.hpp"
 
 #ifdef ALAMO_UI_HAVE_ABILITIES
@@ -55,8 +55,7 @@ std::string ability_icon(uint8_t t) {
     }
     std::string n = ability_type_info(t).name;
     if (n.empty()) return {};
-    for (char& ch : n) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    return "i_sa_" + n + ".tga";
+    return "i_sa_" + ascii_lower(n) + ".tga";
 #else
     return {};
 #endif

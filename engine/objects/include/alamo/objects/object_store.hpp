@@ -175,13 +175,11 @@ public:
     // The draw needs bind_sync_rng(); an unbound store (secondary stores, unit tests) makes no draw
     // and uses offset 0 (next = mode frame). Never bind a secondary store: it is local / cosmetic.
     void bind_sync_rng(SimRng* rng) { rng_ = rng; }
-    SimRng* sync_rng() const { return rng_; }
     // Mode frame source (GameMode +0x10); without it the frame of the last update() is used.
     void bind_mode_frame(const uint64_t* mode_frame) { mode_frame_src_ = mode_frame; }
     uint32_t mode_frame() const;
     // Inputs of the computed intervals (FPS, GameConstants shield / energy recharge seconds).
     void set_interval_config(const BehaviorIntervalConfig& c) { interval_cfg_ = c; }
-    const BehaviorIntervalConfig& interval_config() const { return interval_cfg_; }
     // Per-instance overrides for the behaviour systems (no-ops on stale handles / bad indices).
     void set_behavior_next_service(ObjectHandle h, uint32_t index, uint32_t frame);
     void set_behavior_interval(ObjectHandle h, uint32_t index, uint32_t interval);
@@ -258,7 +256,7 @@ public:
     // Lua) stays valid / stale exactly as before. Types are saved by TypeIndex, guarded by the type count
     // and a digest of the types' name CRCs in definition order.
     // NOT saved (host wiring / definitions, re-established when the session is rebuilt): the sync RNG and
-    // mode-frame bindings, interval_config(), on_parent_mode_death. The behaviour tables' slot-sorted
+    // mode-frame bindings, the interval config, on_parent_mode_death. The behaviour tables' slot-sorted
     // member lists and the per-object type -> index tables are rebuilt.
     // read() into a store built with the same mode, kind and GameObjectTypes; it also sets the id
     // counter (a primary store's shared counter gets the same value from every store of that game).

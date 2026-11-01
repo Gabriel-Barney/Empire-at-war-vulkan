@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/test_support.hpp"
 #include "alamo/galactic/auto_resolve.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
@@ -19,14 +20,6 @@
 using namespace alamo;
 using namespace alamo::galactic;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 

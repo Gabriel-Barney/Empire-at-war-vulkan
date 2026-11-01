@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "alamo/core/test_support.hpp"
 #include "alamo/tactical/spatial_tree.hpp"
 #include "alamo/tactical/tree_set.hpp"
 #include "thread_parallel_for.hpp"
@@ -37,14 +38,6 @@ void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 using namespace alamo;
 using namespace alamo::tactical;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
@@ -324,7 +317,7 @@ void test_random_streams() {
             SpatialTree t(cfg);
             Model m;
             QueryContext ctx;
-            const auto pf = testing::make_thread_parallel_for(4);
+            const auto pf = tactical::testing::make_thread_parallel_for(4);
             double game_time = 0.0;
             const bool large_handles = (seed & 1) == 0;
             for (int op = 0; op < 6000; ++op) {
@@ -502,7 +495,7 @@ void test_history_and_thread_independence() {
     CHECK(a.structure_digest() == b.structure_digest());
     const uint64_t serial_digest = a.structure_digest();
     for (unsigned threads : {1u, 4u, std::max(2u, std::thread::hardware_concurrency())}) {
-        const auto pf = testing::make_thread_parallel_for(threads);
+        const auto pf = tactical::testing::make_thread_parallel_for(threads);
         for (int rep = 0; rep < 3; ++rep) {
             b.rebuild(pf);
             CHECK(b.validate());
@@ -572,7 +565,7 @@ void test_batch_determinism() {
     }
     for (unsigned threads : {1u, 4u, std::max(2u, std::thread::hardware_concurrency())}) {
         BatchResults par;
-        t.query_batch(qs, par, testing::make_thread_parallel_for(threads));
+        t.query_batch(qs, par, tactical::testing::make_thread_parallel_for(threads));
         for (size_t i = 0; i < qs.size(); ++i) {
             CHECK(same(par.handles(i), std::vector<EntityHandle>(serial.handles(i).begin(), serial.handles(i).end())));
             CHECK(same_hits(par.hits(i), std::vector<RayHit>(serial.hits(i).begin(), serial.hits(i).end())));

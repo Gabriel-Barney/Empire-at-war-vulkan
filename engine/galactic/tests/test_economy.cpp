@@ -21,6 +21,8 @@
 #include "alamo/commands/pipeline.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/test_support.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/economy.hpp"
@@ -37,14 +39,6 @@ using namespace alamo;
 using namespace alamo::galactic;
 using commands::RejectReason;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
@@ -2079,7 +2073,7 @@ std::vector<std::pair<unsigned, ParallelFor>> worker_configs() {
     std::vector<std::pair<unsigned, ParallelFor>> v;
     v.push_back({0u, ParallelFor(serial_for)});
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
-    for (unsigned n : {1u, 4u, hw}) v.push_back({n, testing::make_thread_parallel_for(n)});
+    for (unsigned n : {1u, 4u, hw}) v.push_back({n, galactic::testing::make_thread_parallel_for(n)});
     return v;
 }
 
@@ -2104,22 +2098,6 @@ void test_synthetic_campaign() {
 }
 
 // ---- 4. real FoC data -------------------------------------------------------------------------------------------------
-
-std::string env_or(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
 
 struct FocData {
     std::unique_ptr<FileProvider> provider;
@@ -2449,11 +2427,11 @@ void test_foc_corellia_kuat_hop(const FocData& d) {
 // the `|` OR groups of Required_Special_Structures (SG 1.3 step 14, NR_Government.xml / Research_Dummies.xml).
 void test_oi_thrawns_revenge() {
 #ifdef ALAMO_GALACTIC_TESTS_HAVE_VFS
-    std::string tr = env_or("ALAMO_TR_DATA");
-    std::string foc = env_or("ALAMO_FOC_INSTALL");
+    std::string tr = alamo::testing::env_or_empty("ALAMO_TR_DATA");
+    std::string foc = alamo::testing::env_or_empty("ALAMO_FOC_INSTALL");
     if (tr.empty()) {
         // Same Steam library as a Steam FoC install: <lib>\steamapps\common\Star Wars Empire at War\corruption.
-        const std::string f = env_or("ALAMO_FOC_DATA");
+        const std::string f = alamo::testing::env_or_empty("ALAMO_FOC_DATA");
         const size_t at = f.find("\\steamapps\\common\\");
         if (at != std::string::npos) tr = f.substr(0, at) + "\\steamapps\\workshop\\content\\32470\\1125571106";
         if (foc.empty() && at != std::string::npos) foc = f;
@@ -2496,10 +2474,10 @@ void test_oi_thrawns_revenge() {
 }
 
 void test_foc_campaign() {
-    const std::string root = env_or("ALAMO_FOC_DATA");
+    const std::string root = alamo::testing::env_or_empty("ALAMO_FOC_DATA");
     FocData d;
     std::string how;
-    d.provider = testing::open_foc_data(root, how);
+    d.provider = galactic::testing::open_foc_data(root, how);
     if (!d.provider) {
         std::printf("ALAMO_FOC_DATA unset or without Data\\XML (loose, or a FoC install through the VFS): FoC campaign run skipped\n");
         return;

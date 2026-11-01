@@ -15,6 +15,7 @@
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/test_support.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/camera.hpp"
 #include "alamo/ui/hud_abilities.hpp"
@@ -35,34 +36,9 @@
 using namespace alamo;
 using namespace alamo::ui;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
-
 namespace {
 
 bool near(float a, float b, float eps = 1e-3f) { return std::fabs(a - b) <= eps; }
-
-class MemProvider final : public FileProvider {
-public:
-    void put(std::string path, std::vector<uint8_t> bytes) { files_[normalize_path(path)] = std::move(bytes); }
-    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
-        const auto it = files_.find(normalize_path(path));
-        if (it == files_.end()) return false;
-        out = it->second;
-        return true;
-    }
-    bool exists(std::string_view path) const override { return files_.count(normalize_path(path)) != 0; }
-    std::string origin(std::string_view path) const override { return exists(path) ? "mem" : ""; }
-
-private:
-    std::map<std::string, std::vector<uint8_t>> files_;
-};
 
 void put32(std::vector<uint8_t>& b, uint32_t v) {
     for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i)));
@@ -285,12 +261,12 @@ void test_atlas_text() {
     TextDatabase e2;
     CHECK(!e2.parse(bad) && e2.size() == 0);
     // Language fallback to English.
-    MemProvider files;
-    files.put("Data\\Text\\MasterTextFile_ENGLISH.DAT", make_dat(kv));
+    alamo::testing::MemoryProvider files;
+    files.add("Data\\Text\\MasterTextFile_ENGLISH.DAT", make_dat(kv));
     TextDatabase g;
     std::string log;
     CHECK(load_master_text(files, "german", g, &log) && g.language == "ENGLISH" && log.find("GERMAN") != std::string::npos);
-    files.put("Data\\Text\\MasterTextFile_GERMAN.DAT", make_dat({{"TEXT_BUTTON_BEGIN", u"Beginnen"}}));
+    files.add("Data\\Text\\MasterTextFile_GERMAN.DAT", make_dat({{"TEXT_BUTTON_BEGIN", u"Beginnen"}}));
     TextDatabase g2;
     CHECK(load_master_text(files, "German", g2) && g2.language == "GERMAN" && g2.text("TEXT_BUTTON_BEGIN") == u"Beginnen");
     CHECK(utf16_to_utf32(u"a\U0001F600") == U"a\U0001F600" && utf8_to_utf32("x\xc3\xa9") == U"x\u00e9");

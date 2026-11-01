@@ -128,28 +128,10 @@ set_tests_properties(alamo_ui_screens_tests PROPERTIES TIMEOUT 120)
 # P2 HUD, GPU side (only with the renderer): the HUD Vulkan pass after the post chain (hud_renderer.hpp),
 # selection circles as 3D primitives (selection_blob.hpp), header-only snapshot bridge (hud_sim_bridge.hpp).
 if(TARGET alamo_render AND TARGET alamo_rhi)
-  set(_ui_dxc "${ALAMO_DXC}")
-  if(NOT EXISTS "${_ui_dxc}")
-    find_program(_ui_dxc_found NAMES dxc)
-    set(_ui_dxc "${_ui_dxc_found}")
-  endif()
   set(_ui_gen ${CMAKE_CURRENT_BINARY_DIR}/generated)
-  file(MAKE_DIRECTORY ${_ui_gen})
   set(_ui_shader_headers)
-  foreach(spec "hud_vs:VSMain:vs_6_0" "hud_ps:PSMain:ps_6_0")
-    string(REPLACE ":" ";" parts "${spec}")
-    list(GET parts 0 _name)
-    list(GET parts 1 _entry)
-    list(GET parts 2 _profile)
-    add_custom_command(
-      OUTPUT ${_ui_gen}/${_name}.h
-      COMMAND "${_ui_dxc}" -nologo -spirv -fvk-use-dx-layout -fspv-target-env=vulkan1.3 -WX -O3
-              -T ${_profile} -E ${_entry} -Fh ${_ui_gen}/${_name}.h -Vn g_${_name} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hud.hlsl"
-      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/hud.hlsl
-      COMMENT "DXC ${_name} (hud.hlsl ${_entry} ${_profile})"
-      VERBATIM)
-    list(APPEND _ui_shader_headers ${_ui_gen}/${_name}.h)
-  endforeach()
+  alamo_dxc_headers(_ui_shader_headers SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hud.hlsl" GEN_DIR "${_ui_gen}"
+    SPECS "hud_vs:VSMain:vs_6_0" "hud_ps:PSMain:ps_6_0")
   add_custom_target(alamo_ui_draw_shaders DEPENDS ${_ui_shader_headers})
   add_library(alamo_ui_draw STATIC src/hud_renderer.cpp src/selection_blob.cpp src/hud_shell_draw.cpp src/hud_model_draw.cpp
               ${_ui_shader_headers})

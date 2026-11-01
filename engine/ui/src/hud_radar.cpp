@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/text.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 
@@ -11,12 +12,7 @@ namespace alamo::ui {
 
 namespace {
 
-std::string upper(std::string_view s) {
-    std::string o(data::trim(s));
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
+std::string upper(std::string_view s) { return ascii_upper(data::trim(s)); }
 
 Rgba8 color(std::string_view text, Rgba8 fallback) {
     float v[4] = {static_cast<float>(fallback.r), static_cast<float>(fallback.g), static_cast<float>(fallback.b),

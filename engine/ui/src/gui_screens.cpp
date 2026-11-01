@@ -5,18 +5,11 @@
 #include <cstdio>
 #include <initializer_list>
 
+#include "alamo/core/text.hpp"
+
 namespace alamo::ui {
 
 namespace {
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const auto lo = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
-        if (lo(a[i]) != lo(b[i])) return false;
-    }
-    return true;
-}
 
 std::u32string ascii32(std::string_view s) {
     std::u32string o;
@@ -134,7 +127,7 @@ std::u32string GameScreens::text(std::string_view key, std::u32string_view fallb
 void GameScreens::close(std::string_view dialog) {
     if (!gui_) return;
     gui_->close(dialog);
-    if (iequal(dialog, msg_dialog_)) {
+    if (ascii_iequals(dialog, msg_dialog_)) {
         msg_dialog_.clear();
         msg_tag_.clear();
         msg_buttons_.clear();
@@ -370,7 +363,7 @@ std::string planet_info_weather_icon(std::string_view icon) {
 
 std::string planet_info_map_icon(std::string_view map) {
     if (map.empty()) return {};
-    if (map.size() >= 4 && iequal(map.substr(map.size() - 4), ".ted")) return std::string(map.substr(0, map.size() - 4)) + ".dds";
+    if (map.size() >= 4 && ascii_iequals(map.substr(map.size() - 4), ".ted")) return std::string(map.substr(0, map.size() - 4)) + ".dds";
     return std::string(map) + ".dds";
 }
 
@@ -447,9 +440,9 @@ bool GameScreens::show_select_map(std::span<const SkirmishMapInfo> maps) {
 // ---- events -----------------------------------------------------------------------------------------------
 void GameScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out, std::vector<commands::EventData>& cmds) {
     const std::string_view n = e.dialog, c = e.control;
-    auto is = [&](std::string_view id) { return iequal(c, id); };
+    auto is = [&](std::string_view id) { return ascii_iequals(c, id); };
     GuiDialog* d = gui_->find(n);
-    if (!msg_dialog_.empty() && iequal(n, msg_dialog_)) {
+    if (!msg_dialog_.empty() && ascii_iequals(n, msg_dialog_)) {
         for (size_t i = 0; i < msg_buttons_.size(); ++i) {
             if (!is(msg_buttons_[i])) continue;
             ScreenAction a = act(ScreenAction::Kind::MessageBoxResult);
@@ -461,7 +454,7 @@ void GameScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out, st
         }
         return;
     }
-    if (iequal(n, dlg::kBattleEnd)) {
+    if (ascii_iequals(n, dlg::kBattleEnd)) {
         if (is("IDC_CONTINUE_BUTTON")) {
             gui_->close(n);
             out.push_back(act(ScreenAction::Kind::BattleEndContinue));
@@ -471,12 +464,12 @@ void GameScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out, st
         } else if (is("IDC_SAVE_REPLAY_BUTTON")) {
             out.push_back(act(ScreenAction::Kind::SaveReplay));
         }
-    } else if (iequal(n, dlg::kCampaignScore)) {
+    } else if (ascii_iequals(n, dlg::kCampaignScore)) {
         if (is("IDC_QUIT_BUTTON")) {
             gui_->close(n);
             out.push_back(act(ScreenAction::Kind::CampaignScoreClosed));
         }
-    } else if (iequal(n, dlg::kRetreat)) {
+    } else if (ascii_iequals(n, dlg::kRetreat)) {
         if (is("IDC_RETREAT")) {
             gui_->close(n);
             cmds.push_back(commands::ev::retreat(true));
@@ -488,17 +481,17 @@ void GameScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out, st
             gui_->close(n);
             out.push_back(act(ScreenAction::Kind::RetreatCancelled));
         }
-    } else if (iequal(n, dlg::kPlanetInfo)) {
+    } else if (ascii_iequals(n, dlg::kPlanetInfo)) {
         if (is("IDC_CLOSE_BUTTON")) {
             gui_->close(n);
             ScreenAction a = act(ScreenAction::Kind::PlanetInfoClosed);
             a.object = planet_info_;
             out.push_back(std::move(a));
         }
-    } else if (iequal(n, dlg::kAutoResolve)) {
+    } else if (ascii_iequals(n, dlg::kAutoResolve)) {
         const GuiControl* w = d ? d->get("IDC_WITHDRAW_BUTTON") : nullptr;
         if (is("IDC_WITHDRAW_BUTTON") && (!w || w->enabled)) out.push_back(act(ScreenAction::Kind::Withdraw));
-    } else if (iequal(n, dlg::kSelectMap) && d) {
+    } else if (ascii_iequals(n, dlg::kSelectMap) && d) {
         if (is("IDC_LOAD_MAP_BUTTON")) {
             const GuiControl* l = d->get("IDC_SAVED_MAPS_LIST");
             if (l && l->selected >= 0 && static_cast<size_t>(l->selected) < maps_.size()) {
@@ -516,24 +509,24 @@ void GameScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out, st
 
 void GameScreens::on_cancel(const GuiEvent& e, std::vector<ScreenAction>& out) {
     const std::string_view n = e.dialog;
-    if (!msg_dialog_.empty() && iequal(n, msg_dialog_)) {
+    if (!msg_dialog_.empty() && ascii_iequals(n, msg_dialog_)) {
         ScreenAction a = act(ScreenAction::Kind::MessageBoxResult);
         a.tag = msg_tag_;
         a.button = -1;
         close(std::string(msg_dialog_));
         out.push_back(std::move(a));
-    } else if (iequal(n, dlg::kRetreat)) {
+    } else if (ascii_iequals(n, dlg::kRetreat)) {
         gui_->close(n);
         out.push_back(act(ScreenAction::Kind::RetreatCancelled));
-    } else if (iequal(n, dlg::kChat)) {
+    } else if (ascii_iequals(n, dlg::kChat)) {
         gui_->close(n);
         out.push_back(act(ScreenAction::Kind::ChatClosed));
-    } else if (iequal(n, dlg::kPlanetInfo)) {
+    } else if (ascii_iequals(n, dlg::kPlanetInfo)) {
         gui_->close(n);
         ScreenAction a = act(ScreenAction::Kind::PlanetInfoClosed);
         a.object = planet_info_;
         out.push_back(std::move(a));
-    } else if (iequal(n, dlg::kSelectMap)) {
+    } else if (ascii_iequals(n, dlg::kSelectMap)) {
         gui_->close(n);
         out.push_back(act(ScreenAction::Kind::MapSelectCancelled));
     }
@@ -548,7 +541,7 @@ void GameScreens::update(std::span<const GuiEvent> events, std::vector<ScreenAct
             case GuiEvent::Kind::Clicked: on_click(e, out, cmds); break;
             case GuiEvent::Kind::Cancel: on_cancel(e, out); break;
             case GuiEvent::Kind::Submitted:
-                if (iequal(e.dialog, dlg::kChat)) {
+                if (ascii_iequals(e.dialog, dlg::kChat)) {
                     const GuiDialog* d = gui_->find(e.dialog);
                     ScreenAction a = act(ScreenAction::Kind::SendChat);
                     a.text = e.text;
@@ -562,9 +555,9 @@ void GameScreens::update(std::span<const GuiEvent> events, std::vector<ScreenAct
                 }
                 break;
             case GuiEvent::Kind::ValueChanged:
-                if (iequal(e.dialog, dlg::kBattleEnd)) {
-                    const bool enemy = iequal(e.control, "IDC_ENEMY_SCROLLBAR");
-                    if (!enemy && !iequal(e.control, "IDC_YOUR_SCROLLBAR")) break;
+                if (ascii_iequals(e.dialog, dlg::kBattleEnd)) {
+                    const bool enemy = ascii_iequals(e.control, "IDC_ENEMY_SCROLLBAR");
+                    if (!enemy && !ascii_iequals(e.control, "IDC_YOUR_SCROLLBAR")) break;
                     const size_t n = enemy ? end_.enemy_losses.size() : end_.your_losses.size();
                     const int32_t extra = n > static_cast<size_t>(kLossRows) ? static_cast<int32_t>(n) - kLossRows : 0;
                     end_off_[enemy ? 1 : 0] = static_cast<int32_t>(std::lround(std::clamp(e.value, 0, 100) / 100.0 * extra));
@@ -572,7 +565,7 @@ void GameScreens::update(std::span<const GuiEvent> events, std::vector<ScreenAct
                 }
                 break;
             case GuiEvent::Kind::DoubleClicked:
-                if (iequal(e.dialog, dlg::kSelectMap)) {
+                if (ascii_iequals(e.dialog, dlg::kSelectMap)) {
                     GuiEvent b = e;
                     b.kind = GuiEvent::Kind::Clicked;
                     b.control = "IDC_LOAD_MAP_BUTTON";
