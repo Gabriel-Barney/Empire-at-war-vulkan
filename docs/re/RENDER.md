@@ -782,6 +782,16 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
     station showed a Rebel garrison (X-wing, Y-wing) and a 25 cap, so this KH run played the Rebellion, not the Empire.
     So the stuck delivery is not caused by the kit's input method. Still open (Gabriel, roadmap g1f t08): Steam
     "Verify integrity of game files", then repeat. No Thrawn close-up was possible.
+  - **After the Steam verify (g1f t08, 2026-10-31 evening): still no delivery.** Gabriel ran "Verify integrity of game
+    files"; it changed nothing (`StarWarsG.exe` 07daeeae…, `PerceptionFunctionG.dll` c3a4ae28… unchanged, so that DLL
+    is Steam's own file). Run `dxvk_20261031_231304` (KH, `--probe-mod admonitor`): a hand-bought X-wing squadron again
+    never arrived. In the same game Claude then quit to the menu and started a second Kuat skirmish **entirely by hand**
+    with Advanced options on Default (Allow Heroes, **Free Starting Units** and Super Weapons ticked, 6000 credits): no
+    starting units either (population 0/25 from the start), and the bought squadron again did not arrive within 40 s.
+    So the human player gets neither starting units nor purchases; only the station garrison launches. The Mods folder
+    is not loaded (no `MODPATH` other than the kit's), and `corruption\Data` / `GameData\Data` hold no loose XML or Lua.
+    The kit always starts `StarWarsG.exe` directly; whether a normal launch from the Steam library behaves the same is
+    not checked (roadmap g1f t09).
   - **apitrace runs end on their own about 6 minutes in (2026-10-31).** Run `apitrace_20261031_214805` (scene KH,
     Bloom/Heat on, `--drive-keep-open`, nobody playing) exited by itself about 6 minutes after launch (trace 10.7 GB),
     with no crash entry in the Windows Application log. So hand play under apitrace has to fit in roughly 5 minutes
