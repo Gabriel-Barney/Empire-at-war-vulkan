@@ -458,7 +458,7 @@ Ops 6, 7, 15–18 and 20–22 run at the wait speed (max × 0.2 in space).
 - The unit's layer is `Space_Layer` (+0x16dc), or `Stationary_Space_Layer` (+0x16e0) while not moving.
 - SpaceLayerType (`0x5e0c00`): Capital 1, Frigate 2, Corvette 4, StaticObject 8, Land 0x10, SuperCapital 0x20 (corrected per FIGHTER_FLYING §6.3.1).
 - **A ship plans only around entries in its own layer, plus the static map (layer 8).** Ships in different layers pass through each other in planning.
-- A multi-locomotor unit whose secondary locomotor is active uses layer 4. [M]
+- A `Uses_Multiple_Locomotors` unit whose current locomotor answers vf +0x240 (JetPack yes, Walk no) with kind 2 (JetPack pack state 0 or 0xF–0x13) uses layer 4 (`0x397900`; FIGHTER_FLYING §6.3.1, §3.1.1). [H]
 
 **Obstacle test** (`0x59a630` → `0x59a860` → `0x5d7c00`):
 1. Each motion is swept in space-time against the unit's layer map, plus the static map when the mask has any of the bits 0x3e. The static test is offset by SpaceStaticObstacleAvoidanceBonusDistance (0 in vanilla).
@@ -617,7 +617,7 @@ All locomotors derive from `LocomotorCommonClass` (ctor `0x42b9f0`, 97-slot vfta
 | LAND_TEAM_CONTAINER_LOCOMOTOR | LandTeamContainer (`0x8a3630`) | infantry squad/team containers |
 | LAND_TEAM_INFANTRY_LOCOMOTOR | LandTeamInfantry (`0x8af8d0`) | some squad members |
 | FLYING_LOCOMOTOR | Flying (`0x8b2738`) | snowspeeder, gunships |
-| JETPACK_LOCOMOTOR | JetPack (`0x8b2e80`) | Boba Fett, Bossk, IG-88 (secondary) |
+| JETPACK_LOCOMOTOR | JetPack (`0x8b2e80`) | Boba_Fett, Dark_Trooper_PhaseII / III, only as `Secondary_Locomotor_Name` (§3.1.1) |
 | LANDBOMBER_LOCOMOTOR | LandBomber (`0x8b3568`) | bombing runs |
 | FIGHTER_LOCOMOTOR | Fighter (`0x8a6198`) | space fighters/bombers; birds on land |
 | SIMPLE_SPACE_LOCOMOTOR | SimpleSpace (`0x8aeaf8`) | corvettes … capitals |
@@ -625,10 +625,133 @@ All locomotors derive from `LocomotorCommonClass` (ctor `0x42b9f0`, 97-slot vfta
 | FLEET_LOCOMOTOR | Fleet (`0x899c58`) | galactic fleets |
 | STARSHIP_LOCOMOTOR / SIMPLE_LOCOMOTOR | Starship (`0x8ae250`) / LocomotorBehaviorClass (`0x8adda0`) | none in vanilla FoC [M] |
 
-**Two locomotors** (`0x3a9910`) apply only when `Uses_Multiple_Locomotors` (+0x74) is set:
-- The unit swaps between `Primary_Locomotor_Name` (+0x2058) and `Secondary_Locomotor_Name` (+0x2078).
-- Going to the secondary saves the unit's coordinator order and leaves the coordinator.
-- It is triggered by the 1-bit flag of MoveToPosition (§6.1).
+**Two locomotors** (`0x3a9910`) apply only when `Uses_Multiple_Locomotors` (+0x74) is set: the unit swaps between
+`Primary_Locomotor_Name` (+0x2058) and `Secondary_Locomotor_Name` (+0x2078). Details, callers and the alternate
+speed / turn rate: §3.1.1.
+
+#### 3.1.1 Locomotor swap `0x3a9910(obj, coordinatorSystem, toPrimary)` [H unless tagged]
+(S7 t11, 2026-11-01.) `coordinatorSystem` is the mode's `MovementCoordinatorSystemClass` (mode vf +0x228); every caller
+passes it and skips the call when the mode has none.
+
+**It is a set, not a toggle.** Steps:
+1. Type +0x74 (`Uses_Multiple_Locomotors`) clear → return.
+2. **"Already there" test:** L = the current locomotor (behaviour slot 1). If L vf96 (+0x300) == `toPrimary`, return.
+   vf96 is a class trait, not a record of which name was built: it answers **0 only for JetPack** (`0x13b7d0`) and 1
+   for every other locomotor class (`0x17dc70`, LocomotorCommon and all twelve others). So "on the secondary" means
+   "the current locomotor is a JETPACK_LOCOMOTOR".
+   - Consequence for mods [H]: with a non-JetPack secondary, a to-secondary call rebuilds the secondary every time
+     (vf96 = 1 ≠ 0) and a to-primary call never swaps back (1 = 1). With a JetPack primary, the jetpack's own swap-back
+     (below) rebuilds the primary every stopped frame. Vanilla never does either.
+3. Name = `Primary_Locomotor_Name` when `toPrimary`, else `Secondary_Locomotor_Name`. The null test on the name is
+   dead (the std::string buffer is never null), so an empty name continues.
+4. **To the secondary only** (`toPrimary` = 0), the order hand-over, done **before** the locomotor changes:
+   - B = a default move-parameter block (§6.1 layout): destination = the unit's own position (obj +0x78…+0x80),
+     facings 1e18, type 1 (position), mask 0x3f at +0x4c, +0x54 = 1e18, +0x60 = 0x1000001, everything else 0;
+   - C = the coordinator holding the unit (`0x426140`); if there is one, B := C's current order block (coordinator
+     +0x40…+0xa4, all fields);
+   - the unit leaves every coordinator (`0x426d50`, coordinator vf4 +0x20);
+   - a new coordinator is made (`0x426010`, land or space kind by the system's mode), the unit is added (vf3 +0x18,
+     `0x438b40` → `0x4f6b60`) and **`Coordinator::Move_To(B)` (`0x4f8200`) re-issues the order**.
+
+   So the saved order **is re-issued**: the unit continues its current move (or holds its position when it had no
+   coordinator) alone in a coordinator of its own. Any RNG drawn by that `Move_To` (formation stagger, §1.6) is drawn
+   here [M: whether a one-unit `Move_To` draws was not traced]. This happens even when the name is empty.
+5. Build the new locomotor with the behaviour factory (`0x4c3520`). It refuses names of length 0 or ≥ 256 and names
+   that match no table row, and returns null. **Null → return**: no other change. An empty
+   `Secondary_Locomotor_Name` therefore never swaps, but step 4 has already split the unit off with its order.
+6. With the new locomotor N:
+   - remove L (`0x3a54c0`: out of the behaviour array, slot table fixed up, reference released);
+   - `Add_Behavior(N, loading = 0)` (`0x38c570`, OBJECT_RUNTIME §4.2): attach, then Initialise:
+     - JetPack Initialise (`0x640ef0`): conform/commit at the current position (vf95), **pack state := 0 (None)**,
+       pack +0x28d := 1;
+     - Walk Initialise (`0x61dea0`): conform/commit at the current position (vf95, skipped when obj +0x3a0 bit 7 is
+       set), **pack state := 0x16 (Walk Stopped)**, pack +0x268…+0x270 := the object's orientation (obj +0x84…+0x8c).
+
+     The locomotor data pack (obj +0xa8: path stack, speed, formation pointer +0x1f0) belongs to the object and
+     **survives the swap**; only the state is reset by the new locomotor.
+   - engine sounds off: moving loop `0x3a7e30(obj, 0)`, idle loop `0x3a7cf0(obj, 0)` (STATION_HANGARS_SOUND §3.3);
+   - **weapons:** behaviours TARGETING (9), WEAPON (10) and SPECIAL_WEAPON (0x2F), each if present:
+     - to the secondary: Disable (vf24 +0xc0: suspend count +0x3c + 1; the WEAPON override `0x54ac30` also clears the
+       hardpoints' fire state and hides their muzzle meshes);
+     - to the primary: Enable (vf23 +0xb8, `0x4c30a0`: count − 1, floor 0), then object signal **0x29** (`0x220ed0`
+       on obj +0x38; the signal abilities raise when their state changes [M: meaning]).
+
+     A suspended behaviour is not serviced (§3.3), so **a unit on its jetpack neither targets nor fires**.
+7. The current **order is left alone on the to-primary path**: no coordinator change, the unit stays in the
+   coordinator it was in; the walk locomotor starts stopped (0x16).
+
+**Callers** (five functions, six call sites) [H]:
+
+| caller | direction | when |
+|---|---|---|
+| JET_PACK ability `0x3a38d0` (REMAINING_GAPS §5.3) | to secondary | after the gates pass, when the unit has a locomotor (obj +0x333 ≠ −1) and type +0x74 = 1; then the ability's own group move (`0x2a7b80`, flags 0x04) moves the unit out of the step-4 coordinator into a new one |
+| MoveToPosition execute `0x3ad100` (§6.1, §6.2) | to secondary | event +0x58 (the 1-bit field) = 1: every unit of the player's selection, in list order, with a locomotor and type +0x74; then the group move (`0x2a7b80`) or, with flag 0x08, the waypoint queue (`0x2a8240`), which appends to the step-4 coordinator so the re-issued order runs first. **No FoC sender sets the bit:** the event is made only by `0x3b090` and `0x3b360` (the UI move, via `0x3ad330(event, point, flags, 0)`), and the ctor `0x3acee0` clears it. The path is dead in vanilla |
+| hero clash `MoveActionClass` vf5 `0x5e9ce0` (Begin) | to secondary | `Move_Use_Jetpack` (action +0xe4) = Yes, before the action's own move (type 1 `0x5e9ed0`; type 2 `0x5e9f30` + `0x5ea910`). Begin also saves "locomotor suspended" (vf66 +0x210, pack +0x260) at +0xe8 and resumes it (vf65) when the move starts |
+| `MoveActionClass` vf5, failure path | to primary | the move could not start: swap back, and re-suspend the locomotor (vf64 +0x200) if it was suspended |
+| `MoveActionClass` vf9 `0x5ea820` (End) | to primary | always when `Move_Use_Jetpack`, after releasing the movement lock (`0x3a8e50(obj, 0)`), **whether or not the unit has landed**; then re-suspend if it was suspended |
+| JetPack vf6 `0x641910`, state 0x16 | to primary | below |
+
+`MoveActionClass` (vftable `0x8a8460`) is an action of `ActionDrivenHeroClashClass` (`0x8bd978`; starts actions in
+`0x6aae80`, ends them in vf2 `0x6ab6f0` / vf5 `0x6ab4d0`). The only FoC `Move_Use_Jetpack` user is the
+`ObiWan_BobaFett` clash in HEROCLASH.XML (three `Move_Past_Target` actions). Hero clashes have no port code (TACTICAL_COMBAT
+item 24).
+
+**Swap back in the JetPack locomotor** (vf6 `0x641910`) [H]:
+- vf6 runs only in land mode (mode vf +0xe0 = 1) and while the locomotor is not suspended (vf66 +0x210 false); the
+  state must be in {0, 0xF…0x14, 0x16} (mask 0x5f8001), else it returns an error.
+- **State 0x16 (every service):** pack +0x28d := 0, speed (+0xec) := 0, play the idle animation (`0x395920`), then,
+  because JetPack vf96 = 0, call `0x3a9910(obj, system, 1)`. So the jetpack swaps back on the **first service in
+  state 0x16**, with no other condition (no pending-order test).
+- The handlers return "continue" (0) when they change state, and the switch re-dispatches in the same service. So the
+  swap happens **in the same frame** the state becomes 0x16 from:
+  - Moving 0x13 (`0x6420e0`) with no current path;
+  - End Move 0x14 (`0x641df0`) when FlyLandDrop (0x34) has finished (after it snaps to the terrain).
+- It happens **one service later** from:
+  - None 0 (vf6 case 0) with no current path or path +0x6d clear: state := 0x16 and return;
+  - Moving 0x13 when the frame's follower step left position and orientation unchanged: state := 0x16, and the path
+    is not done (done → 0x14 overrides). This can swap a unit back while it is still in the air [H for the flow; M
+    whether it occurs in play].
+- The timed-path follower vf +0x1d8 (`0x641010`, Hermite playback of the 0x34-byte waypoints) never swaps.
+- Pack state 0 after the to-secondary Initialise means **the jetpack needs a current path at its first service**,
+  or it reverts on the next one. In the JET_PACK ability the group move runs right after the swap; whether
+  `Formation::Set_Move` (`0x423c10`) has given the pack a path by the jetpack's first service was not traced [M].
+
+**Alternate_Max_Speed (+0x380) / Alternate_Max_Rate_Of_Turn (+0x390)** [H]: read **only by the JetPack locomotor**,
+and only while it is airborne-kind:
+- JetPack vf74 (+0x250, `0x640c00`, max speed) and vf75 (+0x258, `0x640bb0`, turn rate) ask the kind (vf71 +0x238,
+  `0x640f90`): kind 2 when there is no pack or the pack state is 0, 0xF, 0x10, 0x11, 0x12 or 0x13; kind 1 otherwise
+  (0x14 End Move / landing, 0x16 Stopped).
+  - kind 1: the normal values: max speed `0x370f00` (`Max_Speed`, capped by the team minimum, then the §3.4 chain
+    `0x376990`); turn rate `0x372560` (`Max_Rate_Of_Turn`);
+  - kind 2: `0x371060` = the same chain `0x376990` applied to `Alternate_Max_Speed` (no team-minimum cap); turn rate
+    `0x370fd0` = `Alternate_Max_Rate_Of_Turn` × the mode multiplier × the global factor (the `0x372560` pattern).
+- Walk and LocomotorCommon vf74 / vf75 are the normal getters (`0x42c5e0` / `0x42c5c0`), so a walking unit never
+  uses the alternate values.
+- The only callers of `0x371060` and `0x370fd0` are those two JetPack getters. **Where the getters are read:**
+  - the planner request record (`0x59d120`, §2.1 "Request record" +0xf0 max speed / +0xf4 turn rate), filled when
+    the path is requested. After the swap the pack state is 0 and the re-land move (0x640880) is issued in 0x13,
+    both kind 2, so **the timed flight path is planned with the alternate speed and turn rate**, and the flight (0x13
+    plays that path back) moves at the alternate speed [M: the exact frame of the request was not traced; a request
+    made after the landing starts would get the normal values];
+  - the formation speed (`0x41b2a0`, the slowest member's vf74; P1_DOUBLE_CLICK_MOVE): the alternate speed while the
+    member is airborne-kind.
+- **Not** read through them: the jetpack's take-off turn (0x10, `0x642740`) uses pack +0xe8 or, when that is ≤ 0,
+  `Max_Rate_Of_Turn` (`0x372560`) directly; the landing (0x14) and the stopped state set no speed from them.
+- Defaults (type ctor `0x367250`): `Alternate_Max_Speed` **1.0**, `Alternate_Max_Rate_Of_Turn` **2.0**. FoC data:
+  Boba_Fett 2.5 / 6.0; Dark_Trooper_PhaseII 2.5 / unset (2.0); Dark_Trooper_PhaseIII 1.8 / unset (2.0). Bossk, IG-88,
+  Silri, Tyber_Zann and Urai_Fen also set them (2.5–2.7 / 6.0) but never fly; Dark_Trooper_PhaseI sets only the turn.
+
+**Spawn locomotor** [H]: only `0x3a9910` reads +0x2058 / +0x2078 (besides the type copy `0x36c000`). At spawn the unit
+gets the locomotor of its behaviour list (§3.1 factory); `Primary_Locomotor_Name` is used only by the swap back. Every
+FoC user lists WALK_LOCOMOTOR in its LandBehavior and names WALK_LOCOMOTOR as primary, so the two agree in vanilla.
+
+**FoC users** (extracted XML, 2026-11-01): `Uses_Multiple_Locomotors` = Yes on Boba_Fett, Dark_Trooper_PhaseII,
+Dark_Trooper_PhaseIII (Primary WALK, Secondary JETPACK; each has the JET_PACK ability) and on Bossk, IG-88, Silri,
+Silri_No_Abilities, Tyber_Zann, Tyber_Zann_Prisoner, Urai_Fen (no `Secondary_Locomotor_Name`; Bossk and IG-88 name a
+WALK primary). No FoC type lists JETPACK_LOCOMOTOR in a behaviour list.
+
+**Open** [M]: whether a one-unit `Move_To` in step 4 draws synced RNG; whether the JET_PACK move's path exists at the
+jetpack's first service; the meaning of signal 0x29.
 
 ### 3.2 Locomotor state (`LocomotorStateType`, enum `0x5e2e30`, data pack +0x48) [H]
 
@@ -712,7 +835,10 @@ The collision system is serviced by the land mode (§5.2). Its order relative to
 - **If the override is ≤ 0, the value is the full effective max speed**, i.e. full speed in one frame.
 - Units with `Walk_Transition` (+0x35) derive acceleration from the frame counts of their start/end-move animations instead. [M]
 
-**Turn rate** (`0x372560`) = `Max_Rate_Of_Turn` (+0x38c) × the mode multiplier × the global factor. The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
+**Turn rate** (`0x372560`) = `Max_Rate_Of_Turn` (+0x38c) × the mode multiplier × the global factor. While
+airborne-kind, the JetPack's speed / turn-rate getters (vf74 / vf75, read by the planner request and the formation
+speed) answer `Alternate_Max_Speed` / `Alternate_Max_Rate_Of_Turn` instead (§3.1.1); no other locomotor reads them.
+The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
 
 **Defaults:** from OBJECT_TYPES.md, Max_Speed 0.25, Max_Rate_Of_Turn 2.3, Mass 0.995.
 
@@ -1044,7 +1170,7 @@ Three separate spatial structures exist. The port can unify them only if every q
 
 | event | read / execute | payload |
 |---|---|---|
-| MoveToPosition | `0x3acf70` / `0x3ad100` | position, u8 flags, 1 bit "switch locomotor" |
+| MoveToPosition | `0x3acf70` / `0x3ad100` | position, u8 flags, 1 bit "switch locomotor" (+0x58; no FoC sender sets it, §3.1.1) |
 | MoveToPositionFacing | `0x3ade20` | position, facing, flags, u32 count + IDs |
 | MoveToRay | `0x3ae4e0` / `0x3ae6c0` | two points, flags (formation laid along a dragged line) |
 | MoveToRayFacing | `0x3ae990` / `0x3aebb0` | two points, facing, flags |
@@ -1080,7 +1206,7 @@ Three separate spatial structures exist. The port can unify them only if every q
 - With flag 0x08 clear, they call the **group move** (`0x2a7b80`).
 - With it set, they call the **waypoint-queue move** (`0x2a8240`).
 - Either way they then record the order for waypoint display (`0x32ea20`).
-- With the 1-bit flag set, multi-locomotor units swap locomotor first (§3.1).
+- With the 1-bit flag set (MoveToPosition only), every selected unit with a locomotor and `Uses_Multiple_Locomotors` first swaps to its secondary (`0x3a9910(unit, system, 0)`, §3.1.1). Vanilla never sets the bit.
 
 **Group move** (`0x2a7b80`):
 1. Create a coordinator.
