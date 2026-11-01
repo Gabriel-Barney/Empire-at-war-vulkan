@@ -276,6 +276,9 @@ public:
     std::u32string caption_text(std::string_view caption) const;
     // [port] t47: English the port adds in code, on the same text path (TextDatabase::port_text).
     std::u32string port_text(std::u32string_view english) const;
+    // [port] How many rows the open list of combo box `i` shows: all its items when the control's height (the RC height holds
+    // the drop-down) has room for them, else as many as fit (the list then scrolls).
+    int32_t combo_rows(const GuiDialog& d, size_t i) const;
 
     // Opens a dialog on top of the stack (an open one is brought to the top). Null when the script has no such dialog.
     GuiDialog* open(std::string_view name, GuiOpenOptions opt = {});
