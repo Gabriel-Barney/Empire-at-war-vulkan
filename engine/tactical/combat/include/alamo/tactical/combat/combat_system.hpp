@@ -246,7 +246,15 @@ struct HardpointDesc {
     bool has_bone_b = false;
     bool randomize_between_fire_bones = true;  // default true [M]
     float fire_yaw_deg = 0.0f;                  // fire direction relative to the unit's forward [L]
-    float fire_cone_width = 360.0f, fire_cone_height = 180.0f;  // [L] defaults: unrestricted
+    // Struct default unrestricted [L] (synthetic tables); the XML catalog uses the type ctor default 0 (TACTICAL_COMBAT
+    // §2.9 Q2 step 4).
+    float fire_cone_width = 360.0f, fire_cone_height = 180.0f;
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q2 step 5): bind-pose orientation of Fire_Bone_A (fire_*) and of the attachment
+    // bone (attach_*) from the unit model, as unit-local unit axes (x forward, y left, z up). The cone test reads the
+    // point in that frame; without a model frame it uses the unit facing + fire_yaw_deg stand-in [port].
+    bool has_fire_frame = false, has_attach_frame = false;
+    Vec3 fire_x, fire_y, fire_z;
+    Vec3 attach_x, attach_y, attach_z;
     float turret_rotate_extent = 180.0f;
     int32_t projectile = -1;           // Fire_Projectile_Type
     // OI abilities (REMAINING_GAPS §5.5): Blast_Ability_Fire_Projectile_Type (+0x220), fired instead of `projectile` while
@@ -415,6 +423,10 @@ struct CombatConfig {
     float retreat_damage_mod_factor = 1.0f;        // Space/Land_Retreat_Units_Damaged_Mod_Factor
     float base_shield_vulnerability = 1.0f;        // Base_Shield_Vulnerability_Modifier
     float max_secs_for_ae_delayed_damage = 0.0f;   // Max_Secs_For_AE_Delayed_Damage
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q1 step 1, port difference 1) [port]: a space hit on a non-target keeps the render
+    // mesh it struck; the port has no collision meshes, so the hit goes to the closest live hardpoint whose bone lies
+    // within this distance of the impact point (a stand-in for the hardpoint's Collision_Mesh extent), else the hull.
+    float hardpoint_mesh_radius = 40.0f;
     float grenade_gravity = 1.0f;
     // Diminishing_Firepower curve as (seconds since last hit, factor) points (OI tactical, TACTICAL_GAPS 3.3: a
     // natural cubic spline through the points sorted by x, float; before the first / past the last point the end
@@ -1122,6 +1134,9 @@ private:
         ObjectId aim_target = kNoObject;   // path-A weapon-hardpoint aim (Order_Attack weapon path)
         int32_t aim_hp = -1;
         uint8_t locked = 0;                // the ordered target carries the lock (dropped on garrison / stealth / fog)
+        // refixf t06 (TACTICAL_COMBAT §2.9 Q3): TD +0x10 for the scan target, fixed when the scan sets a new target
+        // (Choose_Target_Hardpoint) and re-chosen only by the space formation step; -1 none.
+        int32_t auto_hp = -1;
         ModifierSet mods;
         // ---- caches (never hashed) ----
         std::array<float, kModListCount> mod_r{};
@@ -1221,6 +1236,13 @@ private:
     float hp_max(const Unit& u, const Hardpoint& h) const;
     float hp_fraction(const Unit& u) const;  // destroyable hardpoints: sum cur / sum max (0 if all dead)
     bool hp_out(const Hardpoint& h) const;  // (Is_Destroyable && health <= 0) || destroyed || disabled
+    bool hp_dead(const Hardpoint& h) const;  // refixf t06: Is_Destroyable && (destroyed || health <= 0)
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q1 port difference 1) [port]: the hardpoint standing in for the struck mesh.
+    int32_t mesh_hardpoint(const Unit& v, Vec3 impact) const;
+    // refixf t06 (§2.9 Q2 step 3, 0x383f70): the aim point without a target hardpoint; false = no shot.
+    bool pick_aim_point(const Unit& u, const Hardpoint& h, const Unit& t, Vec3 ref, float range, SimRng& rng, Vec3& out) const;
+    // refixf t06 (§2.9 Q3): Service_Space re-chooses a null / dead target hardpoint for formation units.
+    void service_space_hardpoint(Unit& u);
     void set_system_online(Unit& u, uint32_t index, bool online, bool destroyed, uint32_t frame);  // 0x384d00
     float min_health_fraction(const Unit& u) const;
     float base_attack_range(const Unit& u) const;
@@ -1248,7 +1270,8 @@ private:
     bool aimable(const Unit& a, const Unit& t) const;
     bool in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const;
     void gather(uint32_t unit_index, QueryContext& ctx);
-    void decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);
+    void decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);  // decide_target + space hp step
+    void decide_target(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);
     bool lock_holds(const Unit& u, const Unit& t) const;  // refixf t06: §2.8 B "while locked" drop rules
     bool promote_goal(Unit& u);                           // refixf t06: §2.8 B promotion
     bool ability_type_active(const Unit& u, int32_t type) const;

@@ -294,6 +294,7 @@ void CombatSystem::order_attack(ObjectId attacker, ObjectId target, int32_t hard
     u->aim_target = kNoObject;  // refixf t06: the order re-aims the hardpoints
     u->aim_hp = -1;
     u->auto_target = kNoObject;  // an order drops the auto target (0x565e50)
+    u->auto_hp = -1;
     u->target_score = 0.0f;
 }
 void CombatSystem::clear_order(ObjectId attacker) {
@@ -347,6 +348,7 @@ bool CombatSystem::order_attack_issue(ObjectId attacker, ObjectId target, int32_
         // aim at the target; the unit's own target is untouched.
         if (u->ordered_target != kNoObject && u->locked) {
             u->auto_target = u->ordered_target;
+            u->auto_hp = u->ordered_hp;
             u->target_score = 0.0f;
             u->ordered_target = kNoObject;
             u->ordered_hp = -1;
@@ -484,6 +486,61 @@ float CombatSystem::hp_fraction(const Unit& u) const {
 bool CombatSystem::hp_out(const Hardpoint& h) const {
     // HARDPOINT_DISABLED.md §5: every gate tests (Is_Destroyable && health <= 0) || disabled.
     return h.destroyed || h.disabled || (data_->hardpoints[h.desc].destroyable && !(h.health > 0.0f));
+}
+
+bool CombatSystem::hp_dead(const Hardpoint& h) const {
+    return data_->hardpoints[h.desc].destroyable && (h.destroyed || !(h.health > 0.0f));
+}
+
+int32_t CombatSystem::mesh_hardpoint(const Unit& v, Vec3 impact) const {
+    // TACTICAL_COMBAT §2.9 Q1 steps 1 / 4 (port difference 1) [port]: retail names the render sub-object the precise model
+    // test struck and damages the hardpoint whose Collision_Mesh it is. The port has no collision meshes: the closest
+    // (3D, first in list order on ties) hardpoint that is not (destroyable and dead) stands in, when its bone is within
+    // CombatConfig::hardpoint_mesh_radius of the impact point; else no name (hull). A non-destroyable match routes to
+    // the hull in take_damage, as retail does for a non-destroyable mesh.
+    int32_t best = -1;
+    float best_d2 = 0.0f;
+    for (uint32_t i = 0; i < v.hp_count; ++i) {
+        const Hardpoint& h = hps_[v.hp_begin + i];
+        if (hp_dead(h)) continue;
+        const Vec3 d = hp_world(v, data_->hardpoints[h.desc]) - impact;
+        const float d2 = dot(d, d);
+        if (best < 0 || d2 < best_d2) {
+            best = static_cast<int32_t>(i);
+            best_d2 = d2;
+        }
+    }
+    const float r = cfg_.hardpoint_mesh_radius;
+    return best >= 0 && best_d2 <= r * r ? best : -1;
+}
+
+bool CombatSystem::pick_aim_point(const Unit& u, const Hardpoint& h, const Unit& t, Vec3 ref, float range, SimRng& rng,
+                                  Vec3& out) const {
+    // TACTICAL_COMBAT §2.9 Q2 step 3, 0x383f70 [H unless tagged]: candidates accepted when their 3D distance from the
+    // fire-bone reference <= Get_Fire_Range (+ the target radius when the shooter type has a weapon list +0xc48) and the
+    // point passes the cone. [L] The type bone list (+0xe68, tag unknown) is not modelled. Then the hardpoints from a
+    // synced random start (one Get_Int(0, n - 1); [M] no draw without hardpoints), wrapping, skipping destroyable dead
+    // ones; then the object's position.
+    const UnitDesc& sd = desc_of(u);
+    const float lim = range + ((sd.weapon_projectile >= 0 || !sd.weapon_projectiles.empty()) ? desc_of(t).radius : 0.0f);
+    auto ok = [&](Vec3 p) { return distance3(ref, p) <= lim && in_cone(u, h, p); };
+    if (t.hp_count > 0) {
+        const auto start = static_cast<uint32_t>(rng.range_int(0, static_cast<int32_t>(t.hp_count) - 1));
+        for (uint32_t k = 0; k < t.hp_count; ++k) {
+            const Hardpoint& th = hps_[t.hp_begin + (start + k) % t.hp_count];
+            if (hp_dead(th)) continue;
+            const Vec3 p = hp_world(t, data_->hardpoints[th.desc]);
+            if (ok(p)) {
+                out = p;
+                return true;
+            }
+        }
+    }
+    if (ok(t.pos)) {
+        out = t.pos;
+        return true;
+    }
+    return false;
 }
 
 void CombatSystem::set_system_online(Unit& v, uint32_t index, bool online, bool destroyed, uint32_t frame) {
@@ -672,14 +729,15 @@ bool CombatSystem::unit_can_attack(const Unit& u) const {
 }
 
 bool CombatSystem::in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const {
-    // HP_In_Fire_Cone (0x383ba0) [M]: aim point in the hardpoint's frame; |yaw| <= width/2 and
-    // |pitch| <= height/2; turrets: |yaw| <= Turret_Rotate_Extent_Degrees. The fire-bone frame is
-    // approximated by the unit's facing (yaw only) plus fire_yaw_deg [L].
+    // HP_In_Fire_Cone (0x383ba0), TACTICAL_COMBAT §2.9 Q2 step 5: not a turret: the point in the fire bone's world frame,
+    // |yaw| (wrapped) <= Fire_Cone_Width / 2 and |pitch| <= Fire_Cone_Height / 2; turret: the point in the attachment-bone
+    // frame, |yaw + 90| (normalised) <= Turret_Rotate_Extent_Degrees, no elevation limit. refixf t06 [port]: the bone
+    // frames are the model's bind-pose bone axes (HardpointDesc::fire_* / attach_*) turned by the unit's yaw (the port's
+    // units have no pitch / roll; animated bone orientations are not read); without a model frame the unit's facing (yaw
+    // only) + fire_yaw_deg [L] stands in. A cone of >= 360 x >= 180 (or a turret extent >= 180) passes every point.
     const HardpointDesc& hd = data_->hardpoints[h.desc];
     if (!hd.turret && hd.fire_cone_width >= 360.0f && hd.fire_cone_height >= 180.0f) return true;
     if (hd.turret && hd.turret_rotate_extent >= 180.0f) return true;
-    const Vec3 o = hp_world(a, hd);
-    const Vec3 d = aim - o;
     float fx = a.facing.x, fy = a.facing.y;
     const float len2 = fx * fx + fy * fy;
     if (len2 > 0.0f) {
@@ -690,6 +748,20 @@ bool CombatSystem::in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const {
         fx = 1.0f;
         fy = 0.0f;
     }
+    auto turn = [fx, fy](Vec3 l) { return Vec3{l.x * fx - l.y * fy, l.x * fy + l.y * fx, l.z}; };
+    if (hd.turret ? hd.has_attach_frame : hd.has_fire_frame) {
+        const Vec3 o = local_to_world(a, hd.turret ? hd.attach_offset : hd.bone_a);
+        const Vec3 d = aim - o;
+        const float lx = dot(d, turn(hd.turret ? hd.attach_x : hd.fire_x));
+        const float ly = dot(d, turn(hd.turret ? hd.attach_y : hd.fire_y));
+        if (hd.turret) return abs_f(wrap_deg(dmath::atan2(ly, lx) * kRadToDeg + 90.0f)) <= hd.turret_rotate_extent;
+        const float lz = dot(d, turn(hd.fire_z));
+        const float yaw = dmath::atan2(ly, lx) * kRadToDeg;
+        const float pitch = dmath::atan2(lz, dmath::sqrt(lx * lx + ly * ly)) * kRadToDeg;
+        return abs_f(yaw) <= hd.fire_cone_width * 0.5f && abs_f(pitch) <= hd.fire_cone_height * 0.5f;
+    }
+    const Vec3 o = hp_world(a, hd);
+    const Vec3 d = aim - o;
     const float lx = d.x * fx + d.y * fy;
     const float ly = d.y * fx - d.x * fy;
     const float yaw = wrap_deg(dmath::atan2(ly, lx) * kRadToDeg - hd.fire_yaw_deg);
@@ -874,19 +946,44 @@ bool CombatSystem::promote_goal(Unit& u) {
     const float mn = desc_of(u).min_attack_distance;
     if (mn > 0.0f && d <= mn + E) return false;  // slot 45
     int32_t hp = -1;
-    if (u.goal_hp >= 0 && static_cast<uint32_t>(u.goal_hp) < t->hp_count && !hps_[t->hp_begin + static_cast<uint32_t>(u.goal_hp)].destroyed)
-        hp = u.goal_hp;
+    if (u.goal_hp >= 0 && static_cast<uint32_t>(u.goal_hp) < t->hp_count && !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(u.goal_hp)]))
+        hp = u.goal_hp;  // no goal hardpoint: none pushed (§2.9 Q3; the space formation step fills it in)
     u.ordered_target = t->id;
     u.ordered_hp = hp;
     u.locked = 1;
     u.auto_target = kNoObject;  // replaces any auto target
+    u.auto_hp = -1;
     u.target_score = 0.0f;
     u.aim_target = kNoObject;
     u.aim_hp = -1;
     return true;
 }
 
+void CombatSystem::service_space_hardpoint(Unit& u) {
+    // TACTICAL_COMBAT §2.9 Q3 [H]: Service_Space (0x633ae0), after the keep / switch step, when TD +0x10 is null or a
+    // dead destroyable hardpoint and the unit has a formation: the formation goal's hardpoint when it is not dead, else
+    // Choose_Target_Hardpoint(target, unit). Service_Land has no such step. [port] "has a formation" = the unit has an
+    // attack goal (the port's movement keeps no formation objects for space; group object orders set the goal).
+    if (cfg_.mode != GameMode::Space || u.goal_target == kNoObject) return;
+    const bool ord = u.ordered_target != kNoObject && live(unit(u.ordered_target));
+    const Unit* t = unit(ord ? u.ordered_target : u.auto_target);
+    if (!live(t) || t->hp_count == 0) return;
+    int32_t& hp = ord ? u.ordered_hp : u.auto_hp;
+    if (hp >= 0 && static_cast<uint32_t>(hp) < t->hp_count && !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(hp)])) return;
+    if (t->id == u.goal_target && u.goal_hp >= 0 && static_cast<uint32_t>(u.goal_hp) < t->hp_count &&
+        !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(u.goal_hp)])) {
+        hp = u.goal_hp;
+    } else {
+        hp = choose_target_hardpoint(u, *t);
+    }
+}
+
 void CombatSystem::decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng) {
+    decide_target(u, cands, frame, rng);
+    service_space_hardpoint(u);
+}
+
+void CombatSystem::decide_target(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng) {
     bool dropped = false;
     if (u.ordered_target != kNoObject) {
         const Unit* o = unit(u.ordered_target);
@@ -939,6 +1036,11 @@ void CombatSystem::decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame
     }
 done:
     if (best) {
+        // §2.9 Q3: Set_Target fixes the target hardpoint (Choose_Target_Hardpoint); the same target is not re-set.
+        if (best->id != u.auto_target) {
+            const Unit* bt = unit(best->id);
+            u.auto_hp = bt ? choose_target_hardpoint(u, *bt) : -1;
+        }
         u.auto_target = best->id;
         u.target_score = best->score;
         u.aim_target = kNoObject;  // refixf t06: Order_Attack(unit, pick, ordered 0) re-aims the hardpoints (§2.8 C)
@@ -946,6 +1048,7 @@ done:
         u.acquired = 1;  // OI abilities: Issue_Auto_Target for the acquired target (the autofire driver, abilities)
     } else {
         u.auto_target = kNoObject;
+        u.auto_hp = -1;
         u.target_score = 0.0f;
     }
 }
@@ -956,7 +1059,7 @@ int32_t CombatSystem::closest_hardpoint(const Unit& t, Vec3 from, bool targetabl
     for (uint32_t i = 0; i < t.hp_count; ++i) {
         const Hardpoint& h = hps_[t.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
-        if (h.destroyed || (targetable_only && !hd.targetable)) continue;
+        if (hp_dead(h) || (targetable_only && !hd.targetable)) continue;  // 0x394a80: not (destroyable and dead)
         const Vec3 d = hp_world(t, hd) - from;
         const float d2 = dot(d, d);
         if (best < 0 || d2 < best_d2) {
@@ -974,15 +1077,17 @@ int32_t CombatSystem::choose_target_hardpoint(const Unit& a, const Unit& t) cons
     const int32_t ps = a.priority_override >= 0 ? a.priority_override : desc_of(a).priority_set;  // OI abilities
     if (ps < 0 || static_cast<size_t>(ps) >= data_->priority_sets.size()) return closest_hardpoint(t, a.pos, true);
     const PrioritySet& set = data_->priority_sets[static_cast<size_t>(ps)];
+    // §2.9 Q3: ties by the 3D distance from (shooter x, y, z + Ranged_Target_Z_Adjust).
+    const Vec3 from{a.pos.x, a.pos.y, a.pos.z + desc_of(a).ranged_target_z_adjust};
     int32_t best = -1;
     float best_rank = 0.0f, best_d2 = 0.0f;
     for (uint32_t i = 0; i < t.hp_count; ++i) {
         const Hardpoint& h = hps_[t.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
-        if (h.destroyed || !hd.destroyable) continue;
+        if (!hd.destroyable || hp_dead(h)) continue;
         const float rank = hardpoint_rank(set, static_cast<int32_t>(hd.kind));  // refixf t06: by HardPointType
         if (rank < 0.0f) continue;
-        const Vec3 d = hp_world(t, hd) - a.pos;
+        const Vec3 d = hp_world(t, hd) - from;
         const float d2 = dot(d, d);
         if (best < 0 || rank < best_rank || (rank == best_rank && d2 < best_d2)) {
             best = static_cast<int32_t>(i);
@@ -1046,16 +1151,12 @@ void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
     const Unit* t = unit(tgt);
     int32_t sub = -1;
     if (live(t)) {
-        // S9: an ordered hardpoint (command 40/45 index) is kept while it is alive.
-        if (tgt == u.ordered_target && u.ordered_hp >= 0 && static_cast<uint32_t>(u.ordered_hp) < t->hp_count &&
-            !hps_[t->hp_begin + static_cast<uint32_t>(u.ordered_hp)].destroyed) {
-            sub = u.ordered_hp;
-        } else if (tgt == u.aim_target && u.aim_hp >= 0 && static_cast<uint32_t>(u.aim_hp) < t->hp_count &&
-                   !hps_[t->hp_begin + static_cast<uint32_t>(u.aim_hp)].destroyed) {
-            sub = u.aim_hp;
-        } else {
-            sub = choose_target_hardpoint(u, *t);
-        }
+        // refixf t06 (TACTICAL_COMBAT §2.9 Q2 step 1 / Q3): the hardpoint fixed when the target was set (TD +0x10: the
+        // order's, the aim's or the scan's). Update_Weapon drops it when it is destroyable and dead; Fire_At then picks
+        // the closest live targetable hardpoint per shot.
+        const int32_t fixed = tgt == u.ordered_target ? u.ordered_hp : tgt == u.aim_target ? u.aim_hp : tgt == u.auto_target ? u.auto_hp : -1;
+        if (fixed >= 0 && static_cast<uint32_t>(fixed) < t->hp_count && !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(fixed)]))
+            sub = fixed;
     }
     const bool idle = !live(t);
     for (uint32_t i = 0; i < u.hp_count; ++i) {
@@ -1175,32 +1276,42 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
     if (hd.projectile < 0 || static_cast<size_t>(hd.projectile) >= data_->projectiles.size()) return false;
     // L1 systems: a special-weapon hard point never fires at a target hidden for its owner with force 1.
     if (hd.kind == HardpointKind::WeaponSpecial && target_hidden(u.owner, t.id, true)) return false;
-    // 2. target hardpoint: closest to the shooter when none was chosen (0x394a80)
+    // 2. target hardpoint (§2.9 Q2 step 1): dropped when destroyable and dead; none -> the closest live targetable one to
+    //    the shooter, per shot (0x398440 -> 0x394a80(target, pos, 0, 0)).
     int32_t thp = h.target_hp;
-    if (thp < 0 && t.hp_count > 0) thp = closest_hardpoint(t, u.pos, false);
+    if (thp >= 0 && (static_cast<uint32_t>(thp) >= t.hp_count || hp_dead(hps_[t.hp_begin + static_cast<uint32_t>(thp)]))) thp = -1;
+    if (thp < 0 && t.hp_count > 0) thp = closest_hardpoint(t, u.pos, true);
     // S9: ability projectile override / suppression (ion cannon shot, lucky shot).
     int32_t proj = hd.projectile;
     float dscale = 1.0f;  // OI abilities: Blast state gate / projectile / damage multiplier (REMAINING_GAPS §5.5)
     if (hooks_ && !hooks_->fire_gate(u.id, &hd, proj, dscale)) return false;
     if (hooks_ && !hooks_->shot_allowed(u.id, t.id, thp, proj)) return false;
     if (proj < 0 || static_cast<size_t>(proj) >= data_->projectiles.size()) return false;
-    // 5. aim point
-    const Vec3 aim0 = thp >= 0 ? hp_world(t, data_->hardpoints[hps_[t.hp_begin + static_cast<uint32_t>(thp)].desc]) : t.pos;
-    // 3. cone (turret test / fire cone)
-    if (!in_cone(u, h, aim0)) return false;
-    // 6. fire bones: A, or the A-B midpoint (C and D never read)
+    // fire bones: A, or the A-B midpoint (C and D never read)
     Vec3 a = local_to_world(u, hd.bone_a);
     Vec3 b = hd.has_bone_b ? local_to_world(u, hd.bone_b) : a;
     if (hooks_) hooks_->fire_bones(u.id, static_cast<uint32_t>(&h - &hps_[u.hp_begin]), a, b);  // S10-int: animated bones
     const Vec3 ref = hd.has_bone_b ? (a + b) * 0.5f : a;
-    // 7. range, XY only
     const float range = fire_range(hd.fire_range, mod_r(u, ModList::FireRange));
+    // 3. aim point (§2.9 Q2 step 3): the target hardpoint's bone, else 0x383f70 (range + cone per candidate; none: no shot).
+    //    [port] Turret pre-check (Q2 step 2) not modelled: the port has no turret rotation state (the barrel is taken
+    //    as on target).
+    Vec3 aim0;
+    if (thp >= 0) {
+        aim0 = hp_world(t, data_->hardpoints[hps_[t.hp_begin + static_cast<uint32_t>(thp)].desc]);
+    } else if (!pick_aim_point(u, h, t, ref, range, rng, aim0)) {
+        return false;
+    }
+    // 4. range, XY only
     const float dist = distance_xy(ref, aim0);
     if (!in_fire_range(dist, hd.fire_min_range, range, td.radius)) return false;
     const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(proj)];
     // S9 energy pool (0x56bee0): a shot with Projectile_Energy_Per_Shot needs that much energy [H];
     // tested before the shot's draws [M].
     if (pd.energy_per_shot > 0.0f && has_energy_pool(u) && u.energy < pd.energy_per_shot) return false;
+    // 5. lead (0x399450) on the aim point [M: from the fire-bone reference], then the cone test on the lead point.
+    Vec3 aim = lead_point(t, ref, aim0, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
+    if (!in_cone(u, h, aim)) return false;
     // 8. muzzle: 3 synced Get_Float (arguments lost [M]: per axis between the two bones), else
     //    bone A without B, else Percent(50) picks A or B.
     Vec3 muzzle;
@@ -1213,8 +1324,6 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
     } else {
         muzzle = rng.percent(50) ? a : b;
     }
-    // 9. lead
-    Vec3 aim = lead_point(t, muzzle, aim0, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
     // 10. inaccuracy: always 3 synced draws unless disabled (debug flag)
     if (cfg_.inaccuracy_enabled) {
         const float f = inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy);
@@ -1439,19 +1548,30 @@ void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, 
     ++stats_.hits;
     float dmg = p.damage;
     if (dmg == 0.0f) dmg = pd.blast_area_damage;
-    int32_t hp = v.id == p.target ? p.target_hp : -1;  // the projectile's targeted hardpoint [M]
+    const Vec3 impact = segment ? p.pos + *segment * t : p.pos + p.dir * (p.speed * t);
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q1 steps 1-3): the hardpoint the hit names.
+    int32_t random_hp = -1;
     if (pd.damages_random_hardpoints && v.hp_count > 0) {
         // synced Get_Int(0, count - 1), then probe forward (wrapping) to a live destroyable one
         const auto start = static_cast<uint32_t>(rng.range_int(0, static_cast<int32_t>(v.hp_count) - 1));
-        hp = -1;
         for (uint32_t k = 0; k < v.hp_count; ++k) {
             const uint32_t j = (start + k) % v.hp_count;
             const Hardpoint& h = hps_[v.hp_begin + j];
-            if (!h.destroyed && data_->hardpoints[h.desc].destroyable) {
-                hp = static_cast<int32_t>(j);
+            if (!hp_dead(h) && data_->hardpoints[h.desc].destroyable) {
+                random_hp = static_cast<int32_t>(j);
                 break;
             }
         }
+    }
+    int32_t hp = -1;
+    if (v.id == p.target && p.target_hp >= 0) {
+        hp = p.target_hp;  // Take_Damage name override: the targeted hardpoint wins (the random draw is still made)
+    } else if (cfg_.mode == GameMode::Land) {
+        hp = closest_hardpoint(v, impact, true);  // land: closest live targetable to the projectile [M: impact point]
+    } else if (pd.damages_random_hardpoints) {
+        hp = random_hp;  // space: the random pick's Collision_Mesh
+    } else {
+        hp = mesh_hardpoint(v, impact);  // space: the struck mesh [port]
     }
     DamageRequest r;
     r.victim = v.id;
@@ -1462,7 +1582,6 @@ void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, 
     r.source_is_projectile = true;
     r.projectile_desc = static_cast<int32_t>(p.desc);
     r.hardpoint = hp;
-    const Vec3 impact = segment ? p.pos + *segment * t : p.pos + p.dir * (p.speed * t);
     r.has_impact = true;
     r.impact = impact;
     // S9 t04 (§1.5): a Causes_Infection hit attaches the INFECTION behaviour (or resumes it: counter - 1). [port] Before
@@ -2092,12 +2211,14 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
     if (pd && !pd->does_hitpoint_damage) hx = 0.0f;
     // S9 t04 (§1.1): the death-clone sub-key = the source projectile's Damage_Type index (-1: not a projectile).
     const int32_t sub_key = pd && pd->damage_type != kNoTypeId ? static_cast<int32_t>(pd->damage_type) : -1;
-    // 17 hardpoint routing: a named live destroyable hardpoint takes everything
+    // 17 hardpoint routing: a named live destroyable hardpoint takes everything; a named dead destroyable one swallows the
+    //    hit (refixf t06, TACTICAL_COMBAT §2.9 Q1 step 5: neither hardpoint nor hull; the shield part stays absorbed); a
+    //    named non-destroyable one -> hull.
     if (hp_index >= 0 && static_cast<uint32_t>(hp_index) < v.hp_count) {
         Hardpoint& h = hps_[v.hp_begin + static_cast<uint32_t>(hp_index)];
-        if (!h.destroyed && data_->hardpoints[h.desc].destroyable) {
-            hardpoint_damage(v, h, hx, r.source, out, frame, false, sub_key);
-            track_damage(v, absorbed + hx, frame);
+        if (data_->hardpoints[h.desc].destroyable) {
+            if (!hp_dead(h)) hardpoint_damage(v, h, hx, r.source, out, frame, false, sub_key);
+            track_damage(v, absorbed + out.to_hardpoint, frame);
             record_damage(r, v, src, hp_index, out, frame);
             return out;
         }
@@ -3037,6 +3158,7 @@ void CombatSystem::clear_targets(ObjectId id) {
     Unit* u = unit(id);
     if (!u) return;
     u->auto_target = kNoObject;
+    u->auto_hp = -1;
     u->ordered_target = kNoObject;
     u->ordered_hp = -1;
     u->locked = 0;
@@ -3356,6 +3478,7 @@ bool CombatSystem::stun_unit(ObjectId id, int32_t frames, uint32_t frame) {
     v->stun_end = frame + static_cast<uint32_t>(frames);  // plain assignment (not extended) [H]
     // targeting / turret suspended: drop the current targets so the release starts from a fresh scan [M]
     v->auto_target = kNoObject;
+    v->auto_hp = -1;
     v->target_score = 0.0f;
     if (hooks_) hooks_->unit_effect(id, UnitEffect::Stunned, v->owner, v->pos, frame);  // stealth break, host freeze
     return true;
@@ -3561,6 +3684,10 @@ void CombatSystem::hash_extended(StateHasher& h) const {
         if (u.weapon_index != 0) {  // OI abilities: swapped weapons only (format unchanged otherwise)
             h.u8(0x24);
             h.i32(u.weapon_index);
+        }
+        if (u.auto_hp >= 0) {  // refixf t06 round 3: the scan target's fixed hardpoint (format unchanged without one)
+            h.u8(0x29);
+            h.i32(u.auto_hp);
         }
         if (u.goal_target != kNoObject || u.aim_target != kNoObject || u.locked) {  // refixf t06 (format unchanged otherwise)
             h.u8(0x28);
