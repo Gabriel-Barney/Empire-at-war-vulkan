@@ -16,6 +16,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/sim_host.hpp"
 #include "alamo/sim/tactical_battle.hpp"
+#include "alamo/tactical/movement/unit_params.hpp"  // refixf t06: space drop footprint
 #include "save_io.hpp"
 
 namespace alamo::sim {
@@ -718,7 +719,10 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (!std::isfinite(x) || !std::isfinite(y)) return R::InvalidPosition;
             o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
             b_->movement_->move(o, host_->random().synced(), b_->frame_);
-            for (const objects::ObjectId id : o.units) b_->combat_->clear_order(id);
+            for (const objects::ObjectId id : o.units) {
+                b_->combat_->clear_order(id);
+                b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: a position block
+            }
             return R::None;
         }
         case T::MoveToObject: {
@@ -738,6 +742,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                         o.units.push_back(mid);
             if (o.units.empty()) return R::InvalidUnit;
             const Vec3 tp = st.position(th);
+            for (const objects::ObjectId id : o.units) b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: kind 1
             if (o.units.size() == 1) {
                 b_->combat_->clear_order(o.units.front());
                 return move_unit(o.units.front(), tp.x, tp.y) ? R::None : R::InvalidUnit;
@@ -767,6 +772,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 const TacticalBattle::Unit* u = b_->unit_by_id(aid);
                 if (!u) continue;
                 b_->combat_->order_attack(u->id, t->id, hp);
+                b_->combat_->set_attack_goal(u->id, t->id, hp);  // refixf t06: Attack_Target block (kind 3, hard point, §2.8)
                 ++n;
                 if (!u->movable) continue;
                 const Vec3 up = st.position(u->h);
@@ -797,6 +803,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     const objects::ObjectId one[] = {id};
                     if (b_->unit_by_id(id)->movable) b_->movement_->stop(one);
                     b_->combat_->clear_order(id);
+                    b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06
                 }
                 return R::None;
             }
@@ -817,14 +824,51 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 const Vec3 tp = st.position(th);
                 x = tp.x;
                 y = tp.y;
-                // a1f t07 [port; MOVEMENT §6.3 attack staging M]: an Attack_Move to an object the target scan never picks
-                // (an Is_Neutral player's, TACTICAL_COMBAT §2.2: Destroy_Structure on a neutral Secondary_Abandoned_Sensor)
-                // orders the attack on it; the status (tactical_ai step_status) finishes when it dies.
                 const TacticalBattle::Unit* tu = b_->unit_by_id(static_cast<objects::ObjectId>(tw));
-                if (order == lua::LuaOrder::AttackMove && tu && tu->alive && !tu->retreated && b_->bt_owner_neutral(st.owner(th)) &&
-                    b_->combat_->is_enemy(player, st.owner(th)))
-                    for (const objects::ObjectId id : group.units) b_->combat_->order_attack(id, tu->id, -1);
+                if (order == lua::LuaOrder::AttackMove && tu && tu->alive && !tu->retreated && b_->combat_->has_unit(tu->id)) {
+                    // refixf t06 (TACTICAL_COMBAT §2.8): an Attack_Move on an object. A: a task-force order (arg bit, header)
+                    // issues Order_Attack (ordered 1) to every unit now; a refusing unit is dropped from the move, none left
+                    // -> the order fails. B: the object is each moving unit's formation attack goal (the combat system locks
+                    // it in weapon range). This replaces the a1f t07 neutral-target stand-in (§2.8: an enemy Is_Neutral
+                    // player's object qualifies for B). An object's own Lua Attack_Move (arg 0) gets B only.
+                    if (le32(b, 20) & at::kTfAttackMoveIssueAttack) {
+                        std::vector<objects::ObjectId> kept;
+                        for (const objects::ObjectId id : group.units)
+                            if (!b_->combat_->has_unit(id) || b_->combat_->order_attack_issue(id, tu->id, -1)) kept.push_back(id);
+                        for (const objects::ObjectId id : ids)  // members that do not move still get the order
+                            if (std::find(group.units.begin(), group.units.end(), id) == group.units.end() && b_->combat_->has_unit(id))
+                                b_->combat_->order_attack_issue(id, tu->id, -1);
+                        if (kept.empty()) return R::InvalidTarget;
+                        group.units = std::move(kept);
+                        u = b_->unit_by_id(group.units.front());
+                    }
+                    for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tu->id, -1);
+                    // Staging (0x40e260 [M], §2.8): land formations (type 1) only - a single space Attack_Move is not staged.
+                    // The member M with the largest Targeting_Min_Attack_Distance, when inside that min range of the target,
+                    // moves the goal to d = min + 0.2 x (Get_Base_Attack_Range(M) - min) from the target [port: on the line
+                    // from the target to M].
+                    if (!b_->space_) {
+                        objects::ObjectId m = objects::kNoObjectId;
+                        float mn = 0.0f;
+                        for (const objects::ObjectId id : group.units)
+                            if (b_->combat_->has_unit(id) && b_->combat_->min_attack_distance(id) > mn) {
+                                mn = b_->combat_->min_attack_distance(id);
+                                m = id;
+                            }
+                        if (m != objects::kNoObjectId && b_->combat_->inside_min_range(m, tu->id)) {
+                            const float d = mn + 0.2f * (b_->combat_->base_attack_range_of(m) - mn);
+                            const Vec3 mp = st.position(b_->unit_by_id(m)->h);
+                            const float dx = mp.x - tp.x, dy = mp.y - tp.y, len = dmath::sqrt(dx * dx + dy * dy);
+                            x = len > 0.0f ? tp.x + dx / len * d : tp.x + d;
+                            y = len > 0.0f ? tp.y + dy / len * d : tp.y;
+                        }
+                    }
+                } else if (order == lua::LuaOrder::AttackMove) {
+                    for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
+                }
             }
+            if (order != lua::LuaOrder::AttackMove || tw == cmd::kNoObject)  // refixf t06: position / guard / move blocks
+                for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
             if (!std::isfinite(x) || !std::isfinite(y)) return R::InvalidPosition;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
@@ -1073,6 +1117,71 @@ at::PadCheck BattleAi::build_pad_check(int32_t player, int32_t pad, int32_t) {
 // --- end A2 tactical ---
 
 // --- battle host follow-up: TEAM order expansion, opportunity targets, HIJACK -----------------------------------------
+
+// ---- refixf t06: space TF.Reinforce ring search (header) ----
+bool BattleAi::space_drop_frame(int32_t player, at::SpaceDropFrame& out) {
+    uint8_t side = 0;
+    for (const TacticalBattle::Participant& p : b_->parts_)
+        if (p.owner == player) {
+            side = p.side;
+            break;
+        }
+    const Vec3 f = b_->facing_[side];
+    out.entry_facing_deg = static_cast<float>(dmath::atan2(static_cast<double>(f.y), static_cast<double>(f.x)) * (180.0 / dmath::kPi));
+    const tactical::Aabb& bb = mode_->bounds();
+    out.has_box = true;
+    out.min_x = bb.min.x;
+    out.min_y = bb.min.y;
+    out.max_x = bb.max.x;
+    out.max_y = bb.max.y;
+    return true;
+}
+
+bool BattleAi::space_prevention_hit(int32_t player, const at::Vec3f& p) {
+    const objects::ObjectStore& st = mode_->primary();
+    const objects::GameObjectTypes& types = mode_->types();
+    for (const objects::ObjectHandle h : st.all_objects()) {  // GOM list +0x2f0 stand-in: GOM order
+        if (!st.active(h)) continue;
+        const objects::TypeIndex t = st.type(h);
+        if (t >= types.size()) continue;
+        const float r = types.get_float(t, "Reinforcement_Prevention_Radius");
+        if (!(r > 0.0f)) continue;
+        const int32_t o = st.owner(h);
+        if (o >= 0 && (o == player || !b_->combat_->is_enemy(player, o))) continue;  // allied (0x39a230)
+        const Vec3 q = st.position(h);
+        const float dx = p.x - q.x, dy = p.y - q.y;
+        if (dx * dx + dy * dy < r * r) return true;
+    }
+    return false;
+}
+
+bool BattleAi::space_drop_ok(int32_t player, int32_t key, const at::Vec3f& p, float facing_deg, float sweep) {
+    const tactical::Aabb& bb = mode_->bounds();
+    if (!(p.x >= bb.min.x && p.x <= bb.max.x && p.y >= bb.min.y && p.y <= bb.max.y)) return false;
+    if (space_prevention_hit(player, p)) return false;
+#ifdef ALAMO_SIM_HAVE_FOG
+    if (!b_->fog_reinforce_point_ok(player, p.x, p.y)) return false;  // fogged for the player (force 1)
+#endif
+    const TacticalBattle::Participant* part = nullptr;
+    for (const TacticalBattle::Participant& q : b_->parts_)
+        if (q.galactic_id == static_cast<objects::ObjectId>(key) && q.owner == player && q.reserve && !q.deployed) {
+            part = &q;
+            break;
+        }
+    if (!part || !b_->movement_) return false;
+    const objects::GameObjectTypes& types = mode_->types();
+    const auto ti = static_cast<objects::TypeIndex>(part->type);
+    if (ti >= types.size()) return false;
+    const mv::UnitDesc ud = mv::unit_desc_from_type(types, ti);
+    auto layer = static_cast<uint32_t>(types.get_mask(ti, "Space_Layer"));
+    if (layer == 0) layer = 4u;
+    double sn = 0.0, cs = 1.0;
+    dmath::sincos(static_cast<double>(facing_deg) * (dmath::kPi / 180.0), sn, cs);
+    const mv::V2 to{p.x, p.y};
+    const mv::V2 from{p.x - sweep * static_cast<float>(cs), p.y - sweep * static_cast<float>(sn)};
+    const float now = static_cast<float>(b_->frame_);
+    return b_->movement_->space().query_segment(from, to, now, now + 115.0f, ud.radius, layer | 8u, tc::kNoObject, true, b_->frame_) == 0;
+}
 
 std::vector<objects::ObjectId> BattleAi::team_units(uint8_t player, uint32_t wire) const {
     std::vector<objects::ObjectId> out;

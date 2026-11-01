@@ -43,7 +43,8 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 3;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets
+constexpr uint32_t kCombatSaveVersion = 4;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+                                            // 4: refixf t06 attack goal / weapon aim / order lock
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -132,6 +133,7 @@ void CombatSystem::write(ByteWriter& w) const {
         // OI abilities
         w.i32(u.priority_override).u32(u.stun_end).u32(u.invuln_end).u32(u.emitter_entries).i32(u.weapon_index);
         w.u8(u.acquired);
+        w.i32(u.goal_target).i32(u.goal_hp).i32(u.aim_target).i32(u.aim_hp).u8(u.locked);  // refixf t06
         // refix t02: INFECTION behaviour
         w.u8(u.infect_attached).u32(u.infect_suspend).i32(u.infect_desc).i32(u.infect_player).i32(u.infect_source);
         w.u32(u.infect_end).u32(u.infect_next_damage).u32(static_cast<uint32_t>(u.infect_exposure.size()));
@@ -303,6 +305,11 @@ bool CombatSystem::read(ByteReader& r) {
         u.emitter_entries = r.u32();
         u.weapon_index = r.i32();
         u.acquired = r.u8();
+        u.goal_target = r.i32();  // refixf t06
+        u.goal_hp = r.i32();
+        u.aim_target = r.i32();
+        u.aim_hp = r.i32();
+        u.locked = r.u8();
         u.infect_attached = r.u8();
         u.infect_suspend = r.u32();
         u.infect_desc = r.i32();

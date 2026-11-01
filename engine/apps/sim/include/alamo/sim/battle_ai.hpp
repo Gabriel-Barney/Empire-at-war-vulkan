@@ -5,8 +5,14 @@
 // movement / combat / abilities paths:
 //   MoveToPositionFacing        -> MovementSystem::move (the unit list, clamped to the mode bounds)
 //   Attack                      -> CombatSystem::order_attack (ref2 = 1 + HardPointType -> the target's first
-//                                  targetable hard point of that type) + a move into 80 % of the attack range
-//   PortExtension LuaOrder      -> MoveTo / AttackMove / Guard: a move to the target object / point; Stop
+//                                  targetable hard point of that type) + a move into 80 % of the attack range;
+//                                  the target is also the units' attack goal (refixf t06)
+//   PortExtension LuaOrder      -> MoveTo / AttackMove / Guard: a move to the target object / point; Stop.
+//                                  refixf t06 (TACTICAL_COMBAT §2.8): AttackMove on an enemy combat object sets it as
+//                                  each unit's attack goal (CombatSystem::set_attack_goal, path B); the task-force order
+//                                  (arg bit kTfAttackMoveIssueAttack) first issues Order_Attack per unit
+//                                  (order_attack_issue, path A) and drops refusing units; land: min-range staging [M].
+//                                  Every other move / stop clears the attack goal
 //   Reinforce                   -> A2 tactical: TacticalBattle::order_reinforce (the human path: undeployed reserve,
 //                                  side not retreating, space unit cap, rows of 6 around the clamped point [port])
 //   Retreat                     -> TacticalBattle::request_retreat
@@ -117,6 +123,16 @@ public:
     // battle object. [port] the hook does not tell the free-store path from the task-force path: a unit with HUNT
     // active is skipped on both; the un-immobilise step (0x3a8e50(obj, 0)) has no AbilitySystem entry point (not done).
     void unit_released(int32_t player, int32_t object_id) override;
+    // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4, TACTICAL_GAPS §4.2). Entry facing = the player's side
+    // deploy facing (TacticalBattle facing_ [port: stands in for the mode +0x288 record]); playable box = the mode bounds.
+    // Prevention = live objects with Reinforcement_Prevention_Radius whose owner is not allied (not the player, and an
+    // enemy in the combat relation table, or no owner). Drop test: box, prevention, fog (force 1; fog builds), then the
+    // space occupancy sweep (SpaceOccupancy::query_segment, statics included [M]) of the pool entry's type footprint
+    // (movement radius) from p - sweep x (cos, sin)(facing) to p over frames [now, now + 115] on its Space_Layer (raw
+    // mask, 0 -> 4) | 8 [M: the moving query stands in for the swept box; state-4 reservations are not tolerated].
+    bool space_drop_frame(int32_t player, ai::tactical::SpaceDropFrame& out) override;
+    bool space_prevention_hit(int32_t player, const ai::tactical::Vec3f& p) override;
+    bool space_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p, float facing_deg, float sweep) override;
     // --- end battle host ---
 
 private:

@@ -152,12 +152,16 @@ int32_t hardpoint_type_value(std::string_view name) {
     static constexpr std::string_view kNames[] = {
         "ENGINE",          "SHIELD_GENERATOR",     "GRAVITY_WELL",  "FIGHTER_BAY",   "TRACTOR_BEAM",
         "WEAPON_LASER",    "WEAPON_MISSILE",       "WEAPON_TORPEDO", "WEAPON_ION_CANNON", "WEAPON_MASS_DRIVER",
-        "WEAPON_SPECIAL",  "ENABLE_SPECIAL_ABILITY", "DUMMY_ART",
+        "WEAPON_SPECIAL",  "",                     "DUMMY_ART",  // value 11 has no name
     };
-    constexpr std::string_view kPrefix = "HARD_POINT_";
-    if (name.size() > kPrefix.size() && iequals(name.substr(0, kPrefix.size()), kPrefix)) name.remove_prefix(kPrefix.size());
+    // refixf t06 (TACTICAL_COMBAT §2.4 [H]): EnumConversionClass<HardPointType> 0x140b310a0 holds only the short names;
+    // the token is trimmed and upper-cased, so the match is case-insensitive. A HARD_POINT_* token does not resolve.
+    auto space = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    while (!name.empty() && space(name.front())) name.remove_prefix(1);
+    while (!name.empty() && space(name.back())) name.remove_suffix(1);
+    if (name.empty()) return -1;
     for (size_t i = 0; i < std::size(kNames); ++i)
-        if (iequals(name, kNames[i])) return static_cast<int32_t>(i);
+        if (!kNames[i].empty() && iequals(name, kNames[i])) return static_cast<int32_t>(i);
     return -1;
 }
 

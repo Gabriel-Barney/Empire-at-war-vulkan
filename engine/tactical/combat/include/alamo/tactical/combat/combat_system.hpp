@@ -756,6 +756,33 @@ public:
     void clear_order(ObjectId attacker);
     ObjectId ordered_target(ObjectId id) const;
     int32_t ordered_hardpoint(ObjectId id) const;
+    // ---- refixf t06: Attack_Move on an object (TACTICAL_COMBAT §2.8) ----
+    // The unit formation's attack goal (Formation_Attack_Target(F, &hp, 0) 0x41a2e0: the current movement block's object
+    // when the block is not a guard). The host sets it with every move order of the unit (kNoObject: a position, guard or
+    // stop). Path B (decide, before the scan): while the unit holds no ordered target, a goal that is an enemy, passes
+    // 0x5680b0 (valid target, not dead / garrisoned / skip-targeting) and lies inside weapon range (XY distance <= max
+    // attack range + footprint extent, outside Targeting_Min_Attack_Distance) becomes the LOCKED ordered target - no
+    // priority score, exclusions, category restrictions or fog test. Attack_Move_Response_Range is not used. A dead goal
+    // is cleared (the formation goal became a position).
+    void set_attack_goal(ObjectId unit, ObjectId target, int32_t hardpoint = -1);
+    ObjectId attack_goal(ObjectId unit) const;
+    // Order_Attack (0x38d730, §2.8 C) with ordered = 1, as a task-force movement block issues it at order time (path A).
+    // False = refused (C step 1: target not an enemy of the unit's owner; stealthed and the unit lacks
+    // Target_Stealth_Units; garrisoned or dead) - the caller drops the unit from the move. A unit without any weapon has
+    // no TARGETING behaviour: nothing is issued, true. Otherwise the weapon path (space unless BARRAGE (5) is active; land
+    // always, ordered = 1): the lock is released (a locked ordered target becomes the auto target) and the weapon
+    // hardpoints aim at the target (weapon_aim) until the next scan pick, path B or another order replaces it; the unit's
+    // own target is untouched. Team members, LUCKY_SHOT (34) units and space BARRAGE units take the set path: the target
+    // becomes their locked ordered target at once. [port: the melee-vs-airborne refusal and the autofire fallback are not
+    // modelled.]
+    bool order_attack_issue(ObjectId attacker, ObjectId target, int32_t hardpoint = -1);
+    ObjectId weapon_aim(ObjectId id) const;  // path-A hardpoint aim (kNoObject: none)
+    bool order_locked(ObjectId id) const;    // the ordered target carries the lock (TD +0xf4: path B / set path)
+    // Get_Base_Attack_Range and Targeting_Min_Attack_Distance of a unit (staging, §2.8; 0 for an unknown id).
+    float base_attack_range_of(ObjectId id) const;
+    float min_attack_distance(ObjectId id) const;
+    // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids.
+    bool inside_min_range(ObjectId attacker, ObjectId target) const;
 
     // ---- S9: hooks and ability-facing API ----
     void set_hooks(CombatHooks* hooks) { hooks_ = hooks; }
@@ -1089,6 +1116,12 @@ private:
         uint32_t emitter_entries = 0;    // Add_Emitter registrations (multiset count)
         int32_t weapon_index = 0;        // obj +0x324 (hashed only when != 0)
         uint8_t acquired = 0;            // scan picked a target this tick (not hashed: transient)
+        // ---- refixf t06 (TACTICAL_COMBAT §2.8; hash_extended only when set) ----
+        ObjectId goal_target = kNoObject;  // formation attack goal (path B)
+        int32_t goal_hp = -1;
+        ObjectId aim_target = kNoObject;   // path-A weapon-hardpoint aim (Order_Attack weapon path)
+        int32_t aim_hp = -1;
+        uint8_t locked = 0;                // the ordered target carries the lock (dropped on garrison / stealth / fog)
         ModifierSet mods;
         // ---- caches (never hashed) ----
         std::array<float, kModListCount> mod_r{};
@@ -1216,6 +1249,9 @@ private:
     bool in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const;
     void gather(uint32_t unit_index, QueryContext& ctx);
     void decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);
+    bool lock_holds(const Unit& u, const Unit& t) const;  // refixf t06: §2.8 B "while locked" drop rules
+    bool promote_goal(Unit& u);                           // refixf t06: §2.8 B promotion
+    bool ability_type_active(const Unit& u, int32_t type) const;
     int32_t choose_target_hardpoint(const Unit& a, const Unit& t) const;
     int32_t closest_hardpoint(const Unit& t, Vec3 from, bool targetable_only) const;
     uint16_t aim_point_count(const Unit& t) const;

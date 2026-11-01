@@ -681,6 +681,7 @@ public:
                     break;
                 }
                 line += " key " + std::to_string(it->key);
+                if (ring_test) line += " at " + std::to_string(static_cast<int>(ev.f("x"))) + "," + std::to_string(static_cast<int>(ev.f("y")));
                 spawn(player, it->type, ev.f("x"), ev.f("y"));
                 pool.erase(it);
                 break;
@@ -747,6 +748,21 @@ public:
     }
     // TACTICAL_GAPS §1.2: Active_By_Default re-apply requests (free-store entry / task-force release), in call order.
     void unit_released(int32_t player, int32_t object_id) override { released.emplace_back(player, object_id); }
+    // refixf t06 (AI_TACTICAL §7.4): with ring_test the space drop test refuses every point with |x| > 3200 (the strips
+    // behind both stations), so a reinforcement at a station needs the ring search; entry facing 0 -> first direction -x.
+    bool space_drop_frame(int32_t, SpaceDropFrame& f) override {
+        if (!ring_test) return false;
+        f = SpaceDropFrame{};
+        f.has_box = true;
+        f.min_x = f.min_y = -4000.0f;
+        f.max_x = f.max_y = 4000.0f;
+        return true;
+    }
+    bool space_drop_ok(int32_t, int32_t, const Vec3f& p, float, float sweep) override {
+        ++drop_tests;
+        if (ring_test && sweep != 200.0f) return false;  // the GameConstants default reaches the host
+        return !ring_test || (p.x >= -3200.0f && p.x <= 3200.0f);
+    }
     // N1 save / load test support: the host's own battle state as a save restores it (units keep their handles: the
     // ObjectStore comes back with identical handle values); the damage-tracking store goes through its save format.
     bool copy_state_from(const MockHost& o) {
@@ -762,6 +778,8 @@ public:
         pad_ = o.pad_;
         emit_opportunity = o.emit_opportunity;
         allow_hijack = o.allow_hijack;
+        ring_test = o.ring_test;
+        drop_tests = o.drop_tests;
         built = o.built;
         opp_frame = o.opp_frame;
         hijacks = o.hijacks;
@@ -776,6 +794,8 @@ public:
     }
     const DamageTrackingStore& damage_store() const { return dt_; }
     bool emit_opportunity = false, allow_hijack = false;
+    bool ring_test = false;   // refixf t06
+    uint32_t drop_tests = 0;
     uint32_t built = 0;
     uint32_t opp_frame = 0;
     std::vector<std::string> hijacks;
@@ -914,6 +934,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     GameRandom rng(2027u, 5u);
     MockHost host(store);
     host.emit_opportunity = host.allow_hijack = variant == 1;
+    host.ring_test = variant == 4;  // refixf t06
     // Player 0 (Empire) at -x, player 1 (Rebel) at +x; a pad; pools.
     const int32_t station0 = host.spawn(0, tStation, -3500.0f, 0.0f);
     host.spawn(0, tFrigate, -3000.0f, -200.0f);
@@ -1420,6 +1441,7 @@ struct SaveSession {
             files.add("Data\\Scripts\\AI\\SpaceMode\\SynSweep.lua", kPlanOpportunity);
         }
         host.emit_opportunity = host.allow_hijack = variant == 1;
+        host.ring_test = variant == 4;  // refixf t06
         host.spawn(0, tStation, -3500.0f, 0.0f);
         host.spawn(0, tFrigate, -3000.0f, -200.0f);
         host.spawn(0, tCorvette, -3000.0f, 200.0f);
@@ -1652,6 +1674,20 @@ void test_group_orders() {
         }
         if (e.find(" Attack ref2 2") != std::string::npos) ++shield;
     }
+    // refixf t06 (AI_TACTICAL §7.4): every space drop passed the host's drop test - a ring point, never behind a station.
+    size_t drops = 0, bad_drops = 0, ring_drops = 0;
+    for (const std::string& e : r.executed) {
+        if (e.find(" Reinforce key ") == std::string::npos || e.find("REJECTED") != std::string::npos) continue;
+        const size_t p = e.find(" at ");
+        if (p == std::string::npos) continue;
+        const int x = std::atoi(e.c_str() + p + 4);
+        if (drops++ < 6) std::printf("  %s\n", e.c_str());
+        bad_drops += (x < -3200 || x > 3200) ? 1u : 0u;
+        ring_drops += ((x >= -3200 && x <= -2900) || (x >= 2900 && x <= 3200)) ? 1u : 0u;  // ring 500 around a station at +-3500
+    }
+    std::printf("space reinforce ring search: %zu drops (%zu on ring 500 at a station), %zu outside the allowed strip\n", drops, ring_drops,
+                bad_drops);
+    CHECK(drops > 0 && bad_drops == 0 && ring_drops > 0);
     std::printf("group orders: %zu attack-move group orders (2+ units), %zu one-unit, %zu Shield_Generator attacks, %zu Lua errors\n",
                 groups, single, shield, r.errors.size());
     for (size_t i = 0; i < r.errors.size() && i < 5; ++i) std::printf("  lua error: %s\n", r.errors[i].c_str());
