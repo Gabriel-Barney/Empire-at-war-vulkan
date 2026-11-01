@@ -8,7 +8,8 @@
 //
 // Usage: alamo_game [--game DIR] [--width W --height H] [--hidden] [--audio device|null|off] [--seed S] [--workers N]
 //                   [--frames N] [--battle-max-frames N] [--cache-dir DIR] [--mailbox|--immediate] [MODPATH=..]
-//        alamo_game --smoke skirmish|campaign --png-dir DIR [...]   scripted input through the real menus (tests);
+//        alamo_game --smoke skirmish|campaign|land|saveload --png-dir DIR [...]   scripted input through the real menus
+//                   (tests; saveload: the save / load menus, app_script_saveload.cpp);
 //                   ends with the presentation-on/off check (the run's per-tick CRC log == a fresh presentation-free
 //                   replay of its recorded command stream) and 0 validation messages. Exit 0 "skipped" without data.
 // Game data: --game DIR or ALAMO_FOC_DATA (the FoC "corruption" folder).
@@ -355,7 +356,7 @@ int main(int argc, char** argv) {
         else return usage();
     }
     if (opt.width == 0 || opt.height == 0) return usage();
-    if (!opt.smoke.empty() && opt.smoke != "skirmish" && opt.smoke != "campaign" && opt.smoke != "land") return usage();
+    if (!opt.smoke.empty() && opt.smoke != "skirmish" && opt.smoke != "campaign" && opt.smoke != "land" && opt.smoke != "saveload") return usage();
     log::set_min_level(log::Level::Warn);
     if (opt.movies.empty() && opt.intro) opt.movies = {"Logo1", "Logo2"};  // Movies.xml names (MAIN_LOOP 5.1 step 13): LucasArtsLogo.bik, PetroglyphLogo.bik
     if (!opt.smoke.empty()) {

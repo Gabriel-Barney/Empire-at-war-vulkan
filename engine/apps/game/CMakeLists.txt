@@ -90,7 +90,7 @@ function(alamo_game_add_exe)
     return()
   endif()
   add_executable(alamo_game ${_dir}/app/game_main.cpp ${_dir}/app/app_session.cpp ${_dir}/app/app_input.cpp ${_dir}/app/app_screens.cpp
-                           ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_script.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp
+                           ${_dir}/app/app_hud.cpp ${_dir}/app/app_frame.cpp ${_dir}/app/app_script.cpp ${_dir}/app/app_script_saveload.cpp ${_dir}/app/game_render.cpp ${_dir}/app/game_ui.cpp ${_dir}/app/game_movies.cpp
                            ${_dir}/app/game_info.cpp ${_dir}/app/game_display.cpp)
   # alamo_core first: tools/formats' inline ByteReader vs core's (LNK2005, see alamo_render_app).
   target_link_libraries(alamo_game PRIVATE alamo_core alamo_game_core alamo_render_galactic alamo_render_sim alamo_ui_draw alamo_ui_hud
@@ -156,8 +156,16 @@ function(alamo_game_add_exe)
                    -DGOLDEN=${PROJECT_SOURCE_DIR}/engine/apps/game/testdata/game_smoke_campaign
                    -P ${PROJECT_SOURCE_DIR}/engine/apps/game/compare_smoke.cmake)
   set_tests_properties(alamo_game_smoke_screens_golden PROPERTIES TIMEOUT 120 FIXTURES_REQUIRED alamo_game_smoke_screens_run)
+  # N1 follow-up t01: the save / load menus driven like a player (app_script_saveload.cpp): Save with a typed name, the
+  # overwrite and delete questions (No / Yes), Load from the in-game menu and from the main menu (tick + state CRC == the
+  # save's), a save during a battle loaded back into it. PNGs game_smoke_saveload_*.png; its own saves folder (the run
+  # replaces only its own three save names there). No golden: the .rec holds the loaded save's digest, which covers the
+  # save's wall-clock time (the .crc matched across MSVC / clang); the checks are the smoke's own plus presentation on/off.
+  add_test(NAME alamo_game_smoke_saveload COMMAND alamo_game --smoke saveload --hidden --audio null --png-dir ${_smoke_out}
+                                                 --saves-dir ${_smoke_out}/saveload_saves)
+  set_tests_properties(alamo_game_smoke_saveload PROPERTIES TIMEOUT 1800)
   alamo_label_slow(alamo_game_smoke_skirmish alamo_game_smoke_campaign alamo_game_smoke_land alamo_game_smoke_screens
                    alamo_game_smoke_skirmish_golden alamo_game_smoke_campaign_golden alamo_game_smoke_land_golden
-                   alamo_game_smoke_screens_golden)
+                   alamo_game_smoke_screens_golden alamo_game_smoke_saveload)
 endfunction()
 cmake_language(DEFER DIRECTORY ${PROJECT_SOURCE_DIR} CALL alamo_game_add_exe)

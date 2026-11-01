@@ -151,7 +151,7 @@ inline int usage() {
                  "usage: alamo_game [--game DIR] [--width W] [--height H] [--hidden] [--audio device|null|off] [--seed S]\n"
                  "                  [--workers N] [--frames N] [--battle-max-frames N] [--cache-dir DIR] [--mailbox|--immediate]\n"
                  "                  [--frame-cap N|display] [--video-options FILE] [--saves-dir DIR]\n"
-                 "                  [--movie NAME]... [--no-intro] [--attract] [--smoke skirmish|land|campaign --png-dir DIR] [MODPATH=..]\n"
+                 "                  [--movie NAME]... [--no-intro] [--attract] [--smoke skirmish|land|campaign|saveload --png-dir DIR] [MODPATH=..]\n"
                  "                  [FALLBACKPATH=..]\n"
                  "       game data: --game DIR or ALAMO_FOC_DATA (the corruption folder)\n");
     return 2;

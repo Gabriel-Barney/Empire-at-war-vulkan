@@ -498,6 +498,9 @@ void App::session_started(const std::vector<std::string>& diag) {
         std::printf("  session: loaded from %s at tick %" PRIu64 "%s\n", loaded_save_.c_str(), session_->host().frame(),
                     session_->pause_requested() ? " (paused)" : "");
     for (const std::string& d : diag) std::printf("  session: %s\n", d.c_str());
+    // N1: a save taken during a battle comes back in it: the battle opens now (its load screen, then Begin), before any
+    // tick - post_tick would only notice the pushed battle after a first tick on the galactic map / hidden skirmish galaxy.
+    if (session_->in_battle()) begin_battle();
 }
 
 void App::end_session() {
