@@ -82,6 +82,13 @@ std::string ByteReader::str() {
     return std::string(s.begin(), s.end());
 }
 
+bool read_file_bytes(const std::string& path, std::vector<uint8_t>& out, std::string* err) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return fail(err, "cannot open " + path);
+    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    return true;
+}
+
 bool read_text_file(const std::string& path, std::string& out, std::string* err) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return fail(err, "cannot open " + path);

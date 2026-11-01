@@ -60,7 +60,30 @@ private:
     bool ok_ = true;
 };
 
+// Element count for a load: false when the reader failed or `n` elements of at least `min_bytes` each cannot fit in
+// the bytes left, so a corrupt count never allocates.
+inline bool read_count(ByteReader& r, uint32_t& n, size_t min_bytes) {
+    n = r.u32();
+    return r.ok() && static_cast<uint64_t>(n) * static_cast<uint64_t>(min_bytes) <= static_cast<uint64_t>(r.remaining());
+}
+
+// Three floats x, y, z (any vector type with those members).
+template <class V>
+ByteWriter& write_vec3(ByteWriter& w, const V& v) {
+    return w.f32(v.x).f32(v.y).f32(v.z);
+}
+
+template <class V>
+V read_vec3(ByteReader& r) {
+    V v;
+    v.x = r.f32();
+    v.y = r.f32();
+    v.z = r.f32();
+    return v;
+}
+
 // Whole-file helpers (binary mode, so text is byte-identical on every platform/CRT).
+bool read_file_bytes(const std::string& path, std::vector<uint8_t>& out, std::string* err = nullptr);
 bool read_text_file(const std::string& path, std::string& out, std::string* err = nullptr);
 bool write_text_file(const std::string& path, std::string_view text, std::string* err = nullptr);
 

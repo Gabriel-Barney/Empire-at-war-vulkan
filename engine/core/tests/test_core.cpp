@@ -8,10 +8,13 @@
 #include <random>
 #include <string>
 
+#include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/galaxy.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/parallel.hpp"
+#include "alamo/core/test_support.hpp"
+#include "alamo/core/text.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -21,15 +24,6 @@
 #endif
 #include <windows.h>
 #include <winioctl.h>
-
-static int g_fail = 0;
-#define CHECK(c)                                                       \
-    do {                                                               \
-        if (!(c)) {                                                    \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);   \
-            ++g_fail;                                                  \
-        }                                                              \
-    } while (0)
 
 // Turns the empty directory `link` into a junction (IO_REPARSE_TAG_MOUNT_POINT) to `target` with
 // FSCTL_SET_REPARSE_POINT. Junctions need no privilege (unlike symlinks).
@@ -224,6 +218,49 @@ int main() {
     uint32_t sum = 0;
     alamo::serial_for(10, 1, [&](uint32_t s, uint32_t e) { for (uint32_t i = s; i < e; ++i) sum += i; });
     CHECK(sum == 45);
+
+    // text.hpp: locale-free ASCII helpers (no '/' folding, unlike iequals).
+    CHECK(alamo::ascii_upper('a') == 'A' && alamo::ascii_upper('Z') == 'Z' && alamo::ascii_upper('1') == '1');
+    CHECK(alamo::ascii_lower("MiXed_1") == "mixed_1" && alamo::ascii_upper("MiXed_1") == "MIXED_1");
+    CHECK(alamo::ascii_iequals("Data", "DATA") && !alamo::ascii_iequals("a/b", "a\\b") && !alamo::ascii_iequals("ab", "abc"));
+    CHECK(alamo::ascii_trim(" \t x y\r\n") == "x y" && alamo::ascii_trim("  ").empty() && alamo::ascii_trim("").empty());
+
+    // bytes.hpp: read_count bounds, write_vec3 / read_vec3 round trip, read_file_bytes.
+    {
+        struct V3 {
+            float x, y, z;
+        };
+        alamo::ByteWriter w;
+        w.u32(3);
+        alamo::write_vec3(w, V3{1.f, 2.f, 3.f});
+        alamo::ByteReader rd(w.bytes());
+        uint32_t n = 0;
+        CHECK(alamo::read_count(rd, n, 4) && n == 3);  // 3 * 4 <= 12 bytes left
+        const V3 v = alamo::read_vec3<V3>(rd);
+        CHECK(v.x == 1.f && v.y == 2.f && v.z == 3.f && rd.ok() && rd.done());
+        alamo::ByteReader rd2(w.bytes());
+        CHECK(!alamo::read_count(rd2, n, 5));  // 3 * 5 > 12
+        alamo::ByteReader rd3(std::span<const uint8_t>{});
+        CHECK(!alamo::read_count(rd3, n, 0));  // short read clears ok()
+
+        const fs::path f = fs::temp_directory_path() / ("alamo_core_bytes_" + std::to_string(std::random_device{}()) + ".bin");
+        alamo::testing::write_file(f, std::string_view("a\0b", 3));
+        std::vector<uint8_t> got;
+        CHECK(alamo::read_file_bytes(f.string(), got) && got.size() == 3 && got[1] == 0);
+        std::error_code ec;
+        fs::remove(f, ec);
+        std::string err;
+        CHECK(!alamo::read_file_bytes(f.string(), got, &err) && !err.empty());
+    }
+
+    // test_support.hpp MemoryProvider: normalised keys, text and byte overloads.
+    {
+        alamo::testing::MemoryProvider mp;
+        mp.add("Data/XML/A.xml", "<a/>");
+        mp.add("b.bin", std::vector<uint8_t>{1, 2});
+        CHECK(mp.exists("data\\xml\\a.XML") && mp.read("b.bin", buf) && buf.size() == 2);
+        CHECK(!mp.read("c", buf) && buf.empty() && mp.origin("c").empty());
+    }
 
     std::printf(g_fail ? "alamo_core_tests: %d failure(s)\n" : "alamo_core_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;

@@ -27,3 +27,7 @@ __pycache__/
 *.pkl
 *.trace
 /tools/probe_mod/**/*.dat
+
+# Probe screenshots and probe-built helper exes (rebuilt from the tracked sources by each probe's build script)
+/tools/probe_mod/fixpass_capture/*.png
+/tools/probe_mod/**/bin/*.exe
