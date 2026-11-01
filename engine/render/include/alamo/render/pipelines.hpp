@@ -45,6 +45,9 @@ namespace alamo::render {
 
 // "MeshBumpColorize.fx" / "Data\Art\Shaders\MESHBUMPCOLORIZE.FXO" -> "MESHBUMPCOLORIZE".
 std::string effect_key(std::string_view effect);
+// True when technique `technique` of `e` carries a VENDOR_FILTER_0..9 annotation (int, or a decimal string) equal
+// to `vendor_id` (RENDER.md "Technique selection"). False for vendor_id 0 or an index out of range.
+bool technique_vendor_filtered(const fx::Effect& e, size_t technique, uint32_t vendor_id);
 
 class EffectCache {
 public:
@@ -59,6 +62,16 @@ public:
     // green TNoShader default (EffectLibrary::load_or_default, is_default_effect()). nullptr only without a
     // file provider. Post / engine effects keep using get() (nullptr = pass skipped).
     std::shared_ptr<const materials::MaterialEffect> get_or_default(std::string_view effect);
+    // get(), with the original's vendor filter applied (RENDER.md "Technique selection": a technique is rejected
+    // when one of its VENDOR_FILTER_0..9 int annotations equals the adapter's PCI vendor id). When the technique
+    // get() picked is rejected for `vendor_id`, the best remaining technique (same rule as
+    // materials::pick_best_technique) is resolved instead and cached per (name, vendor); otherwise get()'s effect
+    // is returned. vendor_id 0 = no filter. In the vanilla shaders only SceneHeat's DX9 technique matters: t0 has
+    // VENDOR_FILTER_0 = 4098 (0x1002, AMD), so AMD adapters draw t1_ati (V half-texel -1/4 instead of -1/2,
+    // g1f t06 capture). The PrimDepthSprite* filters (0x10DE) only reject DX8 techniques, never the best one.
+    // Used for the post effects (Renderer::post_effect); mesh effects keep get() / get_or_default().
+    std::shared_ptr<const materials::MaterialEffect> get_for_vendor(std::string_view effect, uint32_t vendor_id,
+                                                                    std::string* err = nullptr);
     // assets::ModelLoadOptions whose vertex_type_override returns the material effect's _ALAMO_VERTEX_TYPE
     // (MaterialEffect::vertex_type_override(), SPACE_AND_OPEN.md D.2: Planet.fx -> alD3dVertNU2U3U3), "" to keep
     // the ALO format. Runs on loader threads through get() (mutex; deterministic per material). The cache must
@@ -84,6 +97,7 @@ private:
     materials::EffectLoadOrder head_;  // without a file provider: the engine head only
     std::unordered_map<std::string, std::shared_ptr<const materials::MaterialEffect>> defaults_;  // D.3 per failed name
     std::unordered_map<std::string, std::shared_ptr<const materials::MaterialEffect>> map_;
+    std::unordered_map<std::string, std::shared_ptr<const materials::MaterialEffect>> vendor_map_;  // "KEY#vendor"
     Stats stats_;
 };
 

@@ -930,6 +930,67 @@ void test_decal_geometry() {
           render_mode_from_u32(99) == RenderMode::Opaque);
 }
 
+// Atlas UVs against the rule captured from the original (g1f t05, DECORATIONS 4.3): with
+// X^ = (cos t, sin t), Y^ = X^ turned +90 deg about +z, lx = (P - C).X^, ly = (P - C).Y^:
+// u = (col + 0.5 + lx/w)/4 - 1, v = (row + 0.5 - ly/h)/4 - 1, compared mod 1 (WRAP addressing).
+float wrap_diff(float a, float b) {
+    const double d = static_cast<double>(a) - static_cast<double>(b);
+    return static_cast<float>(std::fabs(d - std::round(d)));
+}
+
+void test_decal_atlas_uv() {
+    const Terrain t = tiny_terrain();
+    const float headings[] = {0.0f, 0.6f, 2.3f, -1.1f, 3.9f};
+    const uint32_t slots[][2] = {{0, 3}, {1, 3}, {2, 1}, {3, 0}};
+    float worst_vertex = 0.0f, worst_corner = 0.0f;
+    size_t checked = 0;
+    for (const float th : headings)
+        for (const auto& sl : slots) {
+            TerrainDecal d = sample_decal(150.0f, 170.0f);
+            d.width = 25.0f;
+            d.height = 30.0f;
+            d.rotation = th;
+            d.slot_column = sl[0];
+            d.slot_row = sl[1];
+            DecalGeometry g;
+            CHECK(build_decal_geometry(t, d, g) && !g.mesh.vertices.empty());
+            const float c = std::cos(th), s = std::sin(th);
+            const float xh[2] = {c, s}, yh[2] = {-s, c};  // Y^ = X^ turned +90 deg about +z
+            auto rule = [&](float px, float py, float& u, float& v) {
+                const float dx = px - d.position[0], dy = py - d.position[1];
+                const float lx = dx * xh[0] + dy * xh[1], ly = dx * yh[0] + dy * yh[1];
+                u = (static_cast<float>(d.slot_column) + 0.5f + lx / d.width) / 4.0f - 1.0f;
+                v = (static_cast<float>(d.slot_row) + 0.5f - ly / d.height) / 4.0f - 1.0f;
+            };
+            auto matrix = [&](float px, float py, float pz, float& u, float& v) {
+                u = g.atlas_u[0] * px + g.atlas_u[1] * py + g.atlas_u[2] * pz + g.atlas_u[3];
+                v = g.atlas_v[0] * px + g.atlas_v[1] * py + g.atlas_v[2] * pz + g.atlas_v[3];
+            };
+            for (const LitVertex& vx : g.mesh.vertices) {
+                float u = 0, v = 0;
+                rule(vx.position[0], vx.position[1], u, v);
+                worst_vertex = std::max({worst_vertex, wrap_diff(vx.texcoord[0], u), wrap_diff(vx.texcoord[1], v)});
+                ++checked;
+            }
+            // The four corners: (-X,+Y) -> slot (u min, v min), (+X,+Y) -> (u max, v min),
+            // (+X,-Y) -> (u max, v max), (-X,-Y) -> (u min, v max).
+            const float sx[4] = {-1, 1, 1, -1}, sy[4] = {1, 1, -1, -1};
+            for (int k = 0; k < 4; ++k) {
+                const float px = d.position[0] + 0.5f * (sx[k] * d.width * xh[0] + sy[k] * d.height * yh[0]);
+                const float py = d.position[1] + 0.5f * (sx[k] * d.width * xh[1] + sy[k] * d.height * yh[1]);
+                float u = 0, v = 0, ru = 0, rv = 0;
+                matrix(px, py, kDecalLift, u, v);
+                rule(px, py, ru, rv);
+                const float eu = (static_cast<float>(d.slot_column) + (sx[k] > 0 ? 1.0f : 0.0f)) / 4.0f;
+                const float ev = (static_cast<float>(d.slot_row) + (sy[k] > 0 ? 0.0f : 1.0f)) / 4.0f;
+                worst_corner = std::max({worst_corner, wrap_diff(u, eu), wrap_diff(v, ev), wrap_diff(u, ru), wrap_diff(v, rv)});
+            }
+        }
+    std::printf("decal atlas uv: %zu vertices, worst |uv - rule| mod 1 = %g, worst corner = %g\n", checked,
+                static_cast<double>(worst_vertex), static_cast<double>(worst_corner));
+    CHECK(checked > 0 && worst_vertex < 1e-4f && worst_corner < 1e-4f);
+}
+
 void test_blob_geometry() {
     Terrain t = tiny_terrain();
     ShadowBlob b;
@@ -1939,6 +2000,7 @@ int main() {
     test_fuzz();
     test_decoration_records();
     test_decal_geometry();
+    test_decal_atlas_uv();
     test_blob_geometry();
     test_track_geometry();
     test_track_budget();

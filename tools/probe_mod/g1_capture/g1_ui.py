@@ -165,7 +165,11 @@ def fit_window(hwnd, w=REF_W, h=REF_H):
     if cw >= 1.4 * w:   # display scaling: the DPI-virtualized game window is s times larger in real pixels
         s = max(1, round(cw / w))
         w, h = w * s, h * s
-    if (cw, ch) == (w, h):
+    if (cw, ch) != (w, h) and ch < h and ch >= 0.8 * h and cw > 1.4 * REF_W:
+        # the monitor is too small for s*1080 rows (e.g. 4K with the taskbar: 2054 of 2160): keep the HUD's 16:9 shape
+        # by narrowing the window instead, so one scale maps the 1920x1080 reference to client pixels everywhere
+        w, h = int(round(ch * REF_W / REF_H)), ch
+    if abs(cw - w) <= 1 and abs(ch - h) <= 1:
         return False
     r = wt.RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(r))
@@ -240,6 +244,7 @@ def click(hwnd, x, y, method="input", button="left", double=False):
     n = 2 if double else 1
     if method == "post":
         dn, upm, wp = (WM_LBUTTONDOWN, WM_LBUTTONUP, 1) if button == "left" else (WM_RBUTTONDOWN, WM_RBUTTONUP, 2)
+        _real_cursor(hwnd, x, y)    # targeting commands (ability, move ghost) take the point from the hardware cursor
         user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lparam(cx, cy))
         for _ in range(n):
             user32.PostMessageW(hwnd, dn, wp, _lparam(cx, cy))
@@ -260,28 +265,59 @@ def click(hwnd, x, y, method="input", button="left", double=False):
         time.sleep(0.07)
 
 
-def drag(hwnd, x0, y0, x1, y1, steps=12, method="input"):
+def _real_cursor(hwnd, x, y):
+    """Put the real cursor at a point given in 1920x1080 space (the game reads the hardware cursor for drag ghosts)."""
+    ox, oy, w, h = client_rect(hwnd)
+    user32.SetCursorPos(int(ox + x * w / REF_W), int(oy + y * h / REF_H))
+
+
+def mouse_button(hwnd, x, y, down, method="input", button="left"):
+    """One button press (down=True) or release at a point; with method post the real cursor is moved there too."""
+    cx, cy = to_client(hwnd, x, y)
     if method == "post":
-        a, b = to_client(hwnd, x0, y0)
-        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lparam(a, b))
-        time.sleep(0.05)
-        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, 1, _lparam(a, b))
-        for k in range(1, steps + 1):
-            a, b = to_client(hwnd, x0 + (x1 - x0) * k / steps, y0 + (y1 - y0) * k / steps)
-            user32.PostMessageW(hwnd, WM_MOUSEMOVE, 1, _lparam(a, b))  # MK_LBUTTON
-            time.sleep(0.04)
-        time.sleep(0.1)
-        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lparam(a, b))
+        _real_cursor(hwnd, x, y)
+        if button == "left":
+            user32.PostMessageW(hwnd, WM_LBUTTONDOWN if down else WM_LBUTTONUP, 1 if down else 0, _lparam(cx, cy))
+        else:
+            user32.PostMessageW(hwnd, WM_RBUTTONDOWN if down else WM_RBUTTONUP, 2 if down else 0, _lparam(cx, cy))
         return
     foreground(hwnd)
-    move(hwnd, x0, y0)
-    time.sleep(0.1)
-    _send([_mouse(MOUSEEVENTF_LEFTDOWN)])
+    move(hwnd, x, y)
+    f = {("left", True): MOUSEEVENTF_LEFTDOWN, ("left", False): MOUSEEVENTF_LEFTUP,
+         ("right", True): MOUSEEVENTF_RIGHTDOWN, ("right", False): MOUSEEVENTF_RIGHTUP}[(button, down)]
+    _send([_mouse(f)])
+
+
+def drag(hwnd, x0, y0, x1, y1, steps=12, method="input", hold=0.1, press=0.1, step_gap=0.03, at_end=None,
+         button="left"):
+    """Press at (x0,y0), move to (x1,y1) in `steps` moves, wait `hold` s there (at_end() is called then, e.g. to take a
+    screenshot of the drag ghost), release. With method post the real cursor follows the moves as well (the game takes the
+    drag position from the hardware cursor), the button goes by window message."""
+    if method == "post":
+        a, b = to_client(hwnd, x0, y0)
+        _real_cursor(hwnd, x0, y0)
+        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lparam(a, b))
+        time.sleep(0.15)
+    else:
+        foreground(hwnd)
+        move(hwnd, x0, y0)
+        time.sleep(0.1)
+    mouse_button(hwnd, x0, y0, True, method, button)
+    time.sleep(press)
+    mk = 1 if button == "left" else 2
     for k in range(1, steps + 1):
-        move(hwnd, x0 + (x1 - x0) * k / steps, y0 + (y1 - y0) * k / steps)
-        time.sleep(0.03)
-    time.sleep(0.1)
-    _send([_mouse(MOUSEEVENTF_LEFTUP)])
+        px, py = x0 + (x1 - x0) * k / steps, y0 + (y1 - y0) * k / steps
+        if method == "post":
+            a, b = to_client(hwnd, px, py)
+            _real_cursor(hwnd, px, py)
+            user32.PostMessageW(hwnd, WM_MOUSEMOVE, mk, _lparam(a, b))
+        else:
+            move(hwnd, px, py)
+        time.sleep(step_gap)
+    time.sleep(hold)
+    if at_end is not None:
+        at_end()
+    mouse_button(hwnd, x1, y1, False, method, button)
 
 
 def wheel(hwnd, x, y, delta, count=1, method="input"):
@@ -481,7 +517,10 @@ class Driver:
       {"do": "wait_window", "s": 120}                          until the game window has its full client size
       {"do": "key", "key": "ESC", "repeat": 1, "gap": 0.5}
       {"do": "click", "x": 960, "y": 540, "label": "Single Player", "button": "left"|"right", "double": false}
-      {"do": "drag", "x": .., "y": .., "x1": .., "y1": ..}
+      {"do": "drag", "x": .., "y": .., "x1": .., "y1": .., "steps": 12, "hold": 0.1, "shot_at_end": "ghost"}
+               press at (x,y), move in `steps` moves, wait `hold` s, optional screenshot while still pressed, release
+      {"do": "mouse", "op": "move"|"down"|"up", "x": .., "y": .., "held": false}   low-level pieces of a drag
+      expect_like also takes "absent": true (wait until the crop is no longer on screen)
       {"do": "wheel", "x": .., "y": .., "delta": 120, "count": 5}
       {"do": "shot", "label": "name"}
       {"do": "burst", "label": "B", "n": 40, "gap": 0.3}      n screenshots ui_NNN_B00.. a short time apart
@@ -601,11 +640,15 @@ class Driver:
                 if img is not None:
                     dist = self.like_dist(img, s["ref"])
                     best = min(best, dist)
-                    if dist <= s.get("max_dist", 10):
+                    if s.get("absent"):     # wait until the crop is NOT on screen (dist above max_dist)
+                        if dist > s.get("max_dist", 10):
+                            self.note("expect_like %s gone (dist %.1f)" % (s["ref"], dist))
+                            return
+                    elif dist <= s.get("max_dist", 10):
                         self.note("expect_like %s ok (dist %.1f)" % (s["ref"], dist))
                         return
                 if time.time() > end:
-                    raise DriveError("screen never showed '%s' (best dist %.1f)" % (s["ref"], best))
+                    raise DriveError("screen %s '%s' (best dist %.1f)" % ("still showed" if s.get("absent") else "never showed", s["ref"], best))
                 if s.get("nudge_key"):
                     key(self.h(), s["nudge_key"], 1, self.method)
                 if s.get("nudge_click"):
@@ -613,9 +656,28 @@ class Driver:
                 self.park()
                 time.sleep(s.get("poll", 1))
         elif d == "drag":
-            drag(self.h(), s["x"], s["y"], s["x1"], s["y1"], method=self.method)
+            cb = None
+            if s.get("shot_at_end"):    # screenshot taken while the button is still down (the drag ghost is visible)
+                cb = lambda: self.shot(s["shot_at_end"])
+            drag(self.h(), s["x"], s["y"], s["x1"], s["y1"], steps=s.get("steps", 12), method=self.method,
+                 hold=s.get("hold", 0.1), press=s.get("press", 0.1), step_gap=s.get("step_gap", 0.03), at_end=cb,
+                 button=s.get("button", "left"))
             self.note("drag (%d,%d)->(%d,%d) %s" % (s["x"], s["y"], s["x1"], s["y1"], lab))
             time.sleep(s.get("gap", 0.5))
+        elif d == "mouse":          # low-level: {"do":"mouse","op":"move|down|up","x":..,"y":..}
+            op = s["op"]
+            if op == "move":
+                if self.method == "post":
+                    _real_cursor(self.h(), s["x"], s["y"])
+                    cx, cy = to_client(self.h(), s["x"], s["y"])
+                    user32.PostMessageW(self.h(), WM_MOUSEMOVE, 1 if s.get("held") else 0, _lparam(cx, cy))
+                else:
+                    foreground(self.h())
+                    move(self.h(), s["x"], s["y"])
+            else:
+                mouse_button(self.h(), s["x"], s["y"], op == "down", self.method, s.get("button", "left"))
+            self.note("mouse %s (%d,%d) %s" % (op, s["x"], s["y"], lab))
+            time.sleep(s.get("gap", 0.3))
         elif d == "wheel":
             wheel(self.h(), s["x"], s["y"], s.get("delta", 120), s.get("count", 1), self.method)
             self.note("wheel %d x%d %s" % (s.get("delta", 120), s.get("count", 1), lab))
@@ -692,6 +754,8 @@ def main(argv):
     ap.add_argument("--method", default="input", choices=["input", "post"])
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--count", type=int, default=1)
+    ap.add_argument("--steps", type=int, default=12)
+    ap.add_argument("--hold", type=float, default=0.1, help="drag: seconds held at the end before the release")
     a = ap.parse_args(argv)
     if a.cmd == "like":     # like <screenshot.png> <ref name> ...: distance to each scenes.json reference crop
         refs = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "scenes.json"))).get("refs", {})
@@ -716,7 +780,7 @@ def main(argv):
     elif a.cmd in ("click", "rclick", "dclick"):
         click(h, float(a.args[0]), float(a.args[1]), a.method, "right" if a.cmd == "rclick" else "left", a.cmd == "dclick")
     elif a.cmd == "drag":
-        drag(h, *[float(v) for v in a.args[:4]], method=a.method)
+        drag(h, *[float(v) for v in a.args[:4]], steps=a.steps, method=a.method, hold=a.hold)
     elif a.cmd == "key":
         key(h, a.args[0], a.repeat, a.method)
     elif a.cmd == "wheel":

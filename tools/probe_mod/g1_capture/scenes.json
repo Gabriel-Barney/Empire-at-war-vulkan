@@ -198,6 +198,20 @@
      "gap": 1
     },
     {
+     "do": "click",
+     "x": 1354,
+     "y": 363,
+     "label": "player faction list",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1300,
+     "y": 419,
+     "label": "faction Empire",
+     "gap": 1
+    },
+    {
      "do": "shot",
      "label": "K_setup"
     },
@@ -323,6 +337,50 @@
     {
      "do": "shot",
      "label": "K_after_build"
+    },
+    {
+     "do": "click",
+     "x": 307,
+     "y": 950,
+     "label": "Call for Reinforcements",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "reinf_close",
+     "timeout": 10,
+     "max_dist": 30
+    },
+    {
+     "do": "shot",
+     "label": "K_pool_panel"
+    },
+    {
+     "do": "drag",
+     "x": 43,
+     "y": 221,
+     "x1": 640,
+     "y1": 400,
+     "steps": 20,
+     "hold": 1.0,
+     "shot_at_end": "K_ghost",
+     "label": "pool icon (Admonitor) to the map next to the station",
+     "gap": 3
+    },
+    {
+     "do": "click",
+     "x": 136,
+     "y": 262,
+     "label": "panel Close",
+     "gap": 1
+    },
+    {
+     "do": "wait",
+     "s": 12
+    },
+    {
+     "do": "shot",
+     "label": "K_admonitor_arrived"
     },
     {
      "do": "trigger",
@@ -552,8 +610,22 @@
     {
      "do": "click",
      "x": 580,
-     "y": 559,
+     "y": 580,
      "label": "(6) Endor Xpress",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1354,
+     "y": 363,
+     "label": "player faction list",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1300,
+     "y": 419,
+     "label": "faction Empire",
      "gap": 1
     },
     {
@@ -599,19 +671,143 @@
      "label": "E_start"
     },
     {
+     "do": "click",
+     "x": 33,
+     "y": 888,
+     "label": "minimap: own light factory",
+     "gap": 2.5
+    },
+    {
+     "do": "click",
+     "x": 960,
+     "y": 500,
+     "label": "select the light factory",
+     "gap": 1.5
+    },
+    {
+     "do": "shot",
+     "label": "E_factory_selected"
+    },
+    {
+     "do": "click",
+     "x": 611,
+     "y": 950,
+     "label": "buy AT-ST company (900)",
+     "gap": 1.5
+    },
+    {
+     "do": "shot",
+     "label": "E_atst_queued"
+    },
+    {
+     "do": "wait",
+     "s": 32
+    },
+    {
+     "do": "click",
+     "x": 66,
+     "y": 939,
+     "label": "minimap: own reinforcement point",
+     "gap": 2.5
+    },
+    {
+     "do": "click",
+     "x": 307,
+     "y": 950,
+     "label": "Call for Reinforcements",
+     "gap": 1.5
+    },
+    {
+     "do": "expect_like",
+     "ref": "reinf_close",
+     "timeout": 10,
+     "max_dist": 30
+    },
+    {
+     "do": "shot",
+     "label": "E_pool_panel"
+    },
+    {
+     "do": "drag",
+     "x": 43,
+     "y": 221,
+     "x1": 1344,
+     "y1": 614,
+     "steps": 20,
+     "hold": 1.0,
+     "shot_at_end": "E_ghost",
+     "label": "pool icon (AT-ST company) into the reinforcement ring",
+     "gap": 3
+    },
+    {
+     "do": "click",
+     "x": 136,
+     "y": 262,
+     "label": "panel Close",
+     "gap": 1
+    },
+    {
+     "do": "wait",
+     "s": 12
+    },
+    {
+     "do": "shot",
+     "label": "E_atst_landed"
+    },
+    {
+     "do": "drag",
+     "x": 1181,
+     "y": 422,
+     "x1": 1536,
+     "y1": 735,
+     "steps": 14,
+     "hold": 0.3,
+     "label": "box-select the walkers",
+     "gap": 1.5
+    },
+    {
+     "do": "click",
+     "x": 960,
+     "y": 640,
+     "button": "right",
+     "label": "move to open ground",
+     "gap": 1
+    },
+    {
+     "do": "wait",
+     "s": 8
+    },
+    {
+     "do": "shot",
+     "label": "E_atst_moved"
+    },
+    {
+     "do": "click",
+     "x": 653,
+     "y": 895,
+     "label": "ability: Barrage Area",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1250,
+     "y": 500,
+     "label": "barrage target",
+     "gap": 1
+    },
+    {
+     "do": "burst",
+     "label": "E_barrage",
+     "n": 8,
+     "gap": 2
+    },
+    {
      "do": "trigger",
      "label": "endor_decal"
     },
     {
-     "do": "click",
-     "x": 28,
-     "y": 880,
-     "label": "minimap: own command centre",
-     "gap": 3
-    },
-    {
      "do": "shot",
-     "label": "E_base"
+     "label": "E_scorch"
     },
     {
      "do": "trigger",
@@ -1625,6 +1821,20 @@
      "gap": 1
     },
     {
+     "do": "click",
+     "x": 1354,
+     "y": 363,
+     "label": "player faction list",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1300,
+     "y": 419,
+     "label": "faction Empire",
+     "gap": 1
+    },
+    {
      "do": "shot",
      "label": "K_setup"
     },
@@ -2114,6 +2324,20 @@
      "gap": 1
     },
     {
+     "do": "click",
+     "x": 1354,
+     "y": 363,
+     "label": "player faction list",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1300,
+     "y": 419,
+     "label": "faction Empire",
+     "gap": 1
+    },
+    {
      "do": "shot",
      "label": "E_setup"
     },
@@ -2421,6 +2645,20 @@
      "gap": 1
     },
     {
+     "do": "click",
+     "x": 1354,
+     "y": 363,
+     "label": "player faction list",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1300,
+     "y": 419,
+     "label": "faction Empire",
+     "gap": 1
+    },
+    {
      "do": "shot",
      "label": "E_setup"
     },
@@ -2572,6 +2810,20 @@
      "x": 560,
      "y": 713,
      "label": "(4) Shipyards of Kuat",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1354,
+     "y": 363,
+     "label": "player faction list",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1300,
+     "y": 419,
+     "label": "faction Empire",
      "gap": 1
     },
     {
@@ -2759,6 +3011,20 @@
      "gap": 1
     },
     {
+     "do": "click",
+     "x": 1354,
+     "y": 363,
+     "label": "player faction list",
+     "gap": 1
+    },
+    {
+     "do": "click",
+     "x": 1300,
+     "y": 419,
+     "label": "faction Empire",
+     "gap": 1
+    },
+    {
      "do": "shot",
      "label": "E_setup"
     },
@@ -2898,7 +3164,16 @@
     1483,
     968
    ]
+  },
+  "reinf_close": {
+   "png": "refs/reinf_close.png",
+   "box": [
+    43,
+    248,
+    230,
+    278
+   ]
   }
  },
- "auto_notes": "auto steps: g1.py <mode> --drive K,E --probe-mod admonitor --ui-method post. Each scene's list starts from the main menu or the skirmish setup screen (the main-menu steps are skipped automatically when the setup screen is already up) and ends back on the skirmish setup screen. Kuat needs --probe-mod admonitor (Thrawn's SD at station level 1). The player row (Empire, team 1, one Easy AI) is the setup the game remembers."
+ "auto_notes": "auto steps: g1.py <mode> --drive K,E --probe-mod admonitor --ui-method post. Each scene's list starts from the main menu or the skirmish setup screen (the main-menu steps are skipped automatically when the setup screen is already up) and ends back on the skirmish setup screen. Kuat needs --probe-mod admonitor (Thrawn's SD at station level 1). The scenes set the player faction to Empire themselves (faction list (1354,363), then Empire (1300,419)). Scene K buys the Admonitor, waits for the build, opens Call for Reinforcements (307,950), drags the pool icon (43,221) next to the station and closes the panel; scene E buys an AT-ST company at the light factory, calls it in inside the reinforcement ring, moves it and fires Barrage Area. Coordinates were found at a client of 3652x2054 (4K minus taskbar; fit_window narrows the window to 16:9) and are scaled to any client size."
 }

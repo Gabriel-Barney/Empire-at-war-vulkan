@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -11,6 +13,7 @@
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/materials/programs.hpp"
 #include "alamo/render/convert.hpp"
+#include "fx2_reader.hpp"
 #include "alamo/vfs/vfs.hpp"
 
 namespace alamo::render {
@@ -112,6 +115,80 @@ std::shared_ptr<const materials::MaterialEffect> EffectCache::get_or_default(std
     }
     defaults_[key] = d;
     return d;
+}
+
+bool technique_vendor_filtered(const fx::Effect& e, size_t technique, uint32_t vendor_id) {
+    if (vendor_id == 0 || technique >= e.techniques.size()) return false;
+    for (const fx::Annotation& a : e.techniques[technique].annotations) {
+        const std::string_view n = a.type.name;
+        if (n.size() != 15 || n.substr(0, 14) != "VENDOR_FILTER_" || n[14] < '0' || n[14] > '9') continue;
+        int64_t v = -1;
+        if ((a.type.type == fx::ParamType::Int || a.type.type == fx::ParamType::Bool) && !a.value.words.empty()) {
+            v = static_cast<int32_t>(a.value.words[0]);
+        } else if (a.type.type == fx::ParamType::Float && !a.value.words.empty()) {
+            float f = 0.0f;
+            std::memcpy(&f, &a.value.words[0], 4);
+            if (std::isfinite(f) && f >= 0.0f && f < 4294967296.0f) v = static_cast<int64_t>(f);
+        } else if (a.type.type == fx::ParamType::String && !a.value.objects.empty()) {
+            if (const auto str = e.string(a.value.objects[0])) {
+                v = 0;
+                bool digits = false;
+                for (const char c : *str) {
+                    if (c == '\0') break;
+                    if (c < '0' || c > '9' || v > 0xFFFFFFFFll) {
+                        digits = false;
+                        break;
+                    }
+                    v = v * 10 + (c - '0');
+                    digits = true;
+                }
+                if (!digits) v = -1;
+            }
+        }
+        if (v == static_cast<int64_t>(vendor_id)) return true;
+    }
+    return false;
+}
+
+std::shared_ptr<const materials::MaterialEffect> EffectCache::get_for_vendor(std::string_view effect, uint32_t vendor_id,
+                                                                             std::string* err) {
+    std::shared_ptr<const materials::MaterialEffect> e = get(effect, err);
+    if (!e || !e->effect || vendor_id == 0 || e->technique < 0 || e->is_default_effect() || !lib_) return e;
+    const fx::Effect& fe = *e->effect;
+    if (!technique_vendor_filtered(fe, static_cast<size_t>(e->technique), vendor_id)) return e;
+    char vend[16];
+    std::snprintf(vend, sizeof vend, "#%04X", vendor_id);
+    const std::string key = effect_key(effect) + vend;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (auto it = vendor_map_.find(key); it != vendor_map_.end()) return it->second;
+    // Best remaining technique: lowest LOD, first in file order on ties (materials::pick_best_technique).
+    int best = -1;
+    materials::TechniqueLod best_lod = materials::TechniqueLod::MaxViewport;
+    for (size_t i = 0; i < fe.techniques.size(); ++i) {
+        if (technique_vendor_filtered(fe, i, vendor_id)) continue;
+        const materials::TechniqueLod l = materials::technique_lod_from_string(fe.techniqueLod(fe.techniques[i]), fe.techniques[i].name);
+        if (best < 0 || static_cast<int>(l) < static_cast<int>(best_lod)) {
+            best = static_cast<int>(i);
+            best_lod = l;
+        }
+    }
+    std::shared_ptr<const materials::MaterialEffect> out = e;  // nothing left: keep the unfiltered pick [port]
+    if (best >= 0) {
+        materials::MaterialEffect m = *e;
+        m.technique = best;
+        m.lod = best_lod;
+        m.technique_name = fe.techniques[static_cast<size_t>(best)].name;
+        m.used_ff_fallback = false;
+        m.passes.clear();
+        const materials::DeviceState& base = lib_->phase_baseline(m.phase);
+        for (size_t p = 0; p < fe.techniques[static_cast<size_t>(best)].passes.size(); ++p)
+            m.passes.push_back(materials::resolve_pass(fe, best, static_cast<int>(p), base, lib_->options(), m.name, m.layout));
+        log::debugf("render", "effect %s: technique %s rejected for vendor 0x%04X, using %s", m.name.c_str(),
+                    e->technique_name.c_str(), vendor_id, m.technique_name.c_str());
+        out = std::make_shared<const materials::MaterialEffect>(std::move(m));
+    }
+    vendor_map_[key] = out;
+    return out;
 }
 
 assets::ModelLoadOptions EffectCache::model_load_options() {

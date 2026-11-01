@@ -18,6 +18,14 @@ G1f additions (2026-10-30):
   --vb-draws A-B   the vertex-buffer bytes read by the draws in call range A-B (apitrace --blobs), decoded for the 36-byte
                    lit layout (colour / UV / position ranges per draw) -> analysis\\vb_draws_A-B.json
                    (--vs-filter TEXT: only draws whose 'vs | ps' description contains TEXT; --facts PATH)
+                   g1f t05 (2026-10-31): index buffers too, any XYZ FVF (decode_fvf), stage-0 texture / sampler /
+                   texture-stage and FF render states per draw, and per draw the connected UV patches (uv_patches: one
+                   per terrain decal: UV rectangle, atlas slot, inset in texels, the world->UV affine map, decal size
+                   and heading). --tex-filter H1,H2: only draws with one of these stage-0 textures; --draw-calls C1,C2: only
+                   these draws; --lock-window N:
+                   index buffer locks only from N calls before A (the whole-trace index is slow and large);
+                   --keep-verts N: keep the first N vertices / triangles of each draw; --slots S, --tex-size T.
+                   --selftest-decode: checks the FVF / patch decoders on synthetic data (no trace needed).
   --compare NAME REF.png PORT.png [--regions "n=x0,y0,x1,y1;..."]   per-region colour statistics + side-by-side PNG
 """
 import argparse
@@ -545,38 +553,80 @@ def analyse_rdoc(summary_path, calib):
 
 # ---------------------------------------------------------------------------------------------- vertex buffers (G1f t02)
 # `apitrace dump --blobs` writes every memcpy blob of the selected calls to blob_call<N>.bin in the current directory.
-# A D3D9 vertex buffer is filled as  Lock (call L) / memcpy (call L+1, blob) / Unlock (call L+2),  so the bytes a draw
-# reads are the blobs of the write locks after the latest creation of that handle (handles are reused: match by the
-# creation call, not by the handle alone).
+# A D3D9 vertex / index buffer is filled as  Lock (call L) / ... / memcpy (call U-1, blob) / Unlock (call U): apitrace
+# writes the blob just before the Unlock, which is L+1 only when nothing happens in between (g1f t05: the terrain decal
+# fill locks the lit VB and the IB, writes both, then unlocks both, so the blobs are far from the locks). The bytes a
+# draw reads are the blobs of the write locks after the latest creation of that handle (handles are reused: match by
+# the creation call, not by the handle alone). SizeToLock = 0 locks the whole buffer from OffsetToLock (g1f t05).
 VB_GREP = r"(CreateVertexBuffer|VertexBuffer9::Lock)$"
+BUF_GREP = r"(Create(Vertex|Index)Buffer|(Vertex|Index)Buffer9::(Lock|Unlock))$"
+UNLOCK_RE = re.compile(r"^(\d+) IDirect3D(Vertex|Index)Buffer9::Unlock\(this = (0x[0-9a-fA-F]+)\)")
 VB_CREATE_RE = re.compile(r"^(\d+) IDirect3DDevice9::CreateVertexBuffer\(.*Length = (\d+), Usage = ([^,]*), FVF = (.*?), "
                           r"Pool = (\w+), ppVertexBuffer = &(0x[0-9a-fA-F]+)")
 VB_LOCK_RE = re.compile(r"^(\d+) IDirect3DVertexBuffer9::Lock\(this = (0x[0-9a-fA-F]+), OffsetToLock = (\d+), "
                         r"SizeToLock = (\d+).*Flags = ([^)]*)\)")
-DRAW_GREP = (r"(SetStreamSource|SetFVF|SetVertexDeclaration|SetVertexShader|SetPixelShader|SetTexture|SetRenderState"
-             r"|Draw\w+|Present)$")
+IB_CREATE_RE = re.compile(r"^(\d+) IDirect3DDevice9::CreateIndexBuffer\(.*Length = (\d+), Usage = ([^,]*), Format = (\w+), "
+                          r"Pool = (\w+), ppIndexBuffer = &(0x[0-9a-fA-F]+)")
+IB_LOCK_RE = re.compile(r"^(\d+) IDirect3DIndexBuffer9::Lock\(this = (0x[0-9a-fA-F]+), OffsetToLock = (\d+), "
+                        r"SizeToLock = (\d+).*Flags = ([^)]*)\)")
+DRAW_GREP = (r"(SetStreamSource|SetIndices|SetFVF|SetVertexDeclaration|SetVertexShader|SetPixelShader|SetTexture"
+             r"|SetTextureStageState|SetSamplerState|SetTransform|SetRenderState|Draw\w+|Present)$")
+# render / stage-0 states recorded with every draw of --vb-draws (g1f t05)
+DRAW_RS = ("D3DRS_LIGHTING", "D3DRS_ALPHABLENDENABLE", "D3DRS_SRCBLEND", "D3DRS_DESTBLEND", "D3DRS_ZWRITEENABLE",
+           "D3DRS_ZFUNC", "D3DRS_CULLMODE", "D3DRS_COLORVERTEX", "D3DRS_DIFFUSEMATERIALSOURCE", "D3DRS_TEXTUREFACTOR",
+           "D3DRS_ALPHATESTENABLE", "D3DRS_ALPHAREF", "D3DRS_DEPTHBIAS", "D3DRS_SLOPESCALEDEPTHBIAS", "D3DRS_FOGENABLE")
+DRAW_TSS0 = ("D3DTSS_COLOROP", "D3DTSS_COLORARG1", "D3DTSS_COLORARG2", "D3DTSS_ALPHAOP", "D3DTSS_ALPHAARG1",
+             "D3DTSS_ALPHAARG2", "D3DTSS_TEXCOORDINDEX", "D3DTSS_TEXTURETRANSFORMFLAGS")
+DRAW_SAMP0 = ("D3DSAMP_ADDRESSU", "D3DSAMP_ADDRESSV", "D3DSAMP_MINFILTER", "D3DSAMP_MAGFILTER", "D3DSAMP_MIPFILTER")
+PRIM_VERTS = {"D3DPT_TRIANGLELIST": lambda n: 3 * n, "D3DPT_TRIANGLESTRIP": lambda n: n + 2,
+              "D3DPT_TRIANGLEFAN": lambda n: n + 2, "D3DPT_LINELIST": lambda n: 2 * n, "D3DPT_LINESTRIP": lambda n: n + 1,
+              "D3DPT_POINTLIST": lambda n: n}
+
+
+def build_buf_index(trace, apitrace, last_call=None, locks_from=0):
+    """{"vb": {handle: {"creates": [(call, length, usage, fvf, pool)], "locks": [(call, offset, size, flags, blob)]}},
+        "ib": {handle: {"creates": [(call, length, usage, format, pool)], "locks": [...]}}} in call order.
+    Creations are read from call 0; locks only from `locks_from` on (a dynamic buffer is refilled every frame, so a
+    window of a few frames before the draws is enough and keeps the index small). blob = the memcpy call holding the
+    lock's bytes (the call before its Unlock; L+1 when no Unlock was seen)."""
+    cmd = [apitrace, "dump", "--color=never", "--grep=" + BUF_GREP, trace]
+    if last_call:
+        cmd.insert(2, "--calls=0-%d" % last_call)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                         errors="replace", bufsize=1 << 20)
+    idx = {"vb": defaultdict(lambda: {"creates": [], "locks": []}), "ib": defaultdict(lambda: {"creates": [], "locks": []})}
+    for line in p.stdout:
+        m = UNLOCK_RE.match(line)
+        if m:
+            e = idx["vb" if m.group(2) == "Vertex" else "ib"].get(m.group(3))
+            if e and e["locks"] and e["locks"][-1][4] == e["locks"][-1][0] + 1:
+                lk = e["locks"][-1]
+                e["locks"][-1] = (lk[0], lk[1], lk[2], lk[3], int(m.group(1)) - 1)
+            continue
+        for kind, cre, lck in (("vb", VB_CREATE_RE, VB_LOCK_RE), ("ib", IB_CREATE_RE, IB_LOCK_RE)):
+            m = cre.match(line)
+            if m:
+                idx[kind][m.group(6)]["creates"].append((int(m.group(1)), int(m.group(2)), m.group(3), m.group(4), m.group(5)))
+                break
+            m = lck.match(line)
+            if m:
+                if int(m.group(1)) >= locks_from:
+                    idx[kind][m.group(2)]["locks"].append((int(m.group(1)), int(m.group(3)), int(m.group(4)), m.group(5),
+                                                           int(m.group(1)) + 1))
+                break
+    p.wait()
+    return {k: dict(v) for k, v in idx.items()}
 
 
 def build_vb_index(trace, apitrace):
-    """handle -> {"creates": [(call, length, usage, fvf, pool)], "locks": [(call, offset, size, flags)]} in call order."""
-    p = subprocess.Popen([apitrace, "dump", "--color=never", "--grep=" + VB_GREP, trace], stdout=subprocess.PIPE,
-                         stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", bufsize=1 << 20)
-    idx = defaultdict(lambda: {"creates": [], "locks": []})
-    for line in p.stdout:
-        m = VB_CREATE_RE.match(line)
-        if m:
-            idx[m.group(6)]["creates"].append((int(m.group(1)), int(m.group(2)), m.group(3), m.group(4), m.group(5)))
-            continue
-        m = VB_LOCK_RE.match(line)
-        if m:
-            idx[m.group(2)]["locks"].append((int(m.group(1)), int(m.group(3)), int(m.group(4)), m.group(5)))
-    p.wait()
-    return dict(idx)
+    """handle -> {"creates": [...], "locks": [...]} of the vertex buffers (whole trace)."""
+    return build_buf_index(trace, apitrace)["vb"]
 
 
-def vb_contents_calls(idx, handle, draw_call):
+def buffer_writes(idx, handle, draw_call, lo=None, hi=None):
     """(creation, writes) of the buffer a draw at `draw_call` reads: the latest creation of `handle` before the draw and
-    its write locks [(lock_call, offset, size, flags)] (READONLY and zero-size locks are reads, not writes)."""
+    the write locks [(lock_call, offset, size, flags, blob_call)] after it, in call order (READONLY locks are reads; SizeToLock 0
+    means the rest of the buffer). With a byte range [lo, hi), only the latest locks that together cover it."""
     e = idx.get(handle)
     if not e:
         return None, []
@@ -584,17 +634,50 @@ def vb_contents_calls(idx, handle, draw_call):
     if not cs:
         return None, []
     c = cs[-1]
-    return c, [lk for lk in e["locks"] if c[0] < lk[0] < draw_call and "READONLY" not in lk[3] and lk[2] != 0]
+    ws = [(lk[0], lk[1], lk[2] or (c[1] - lk[1]), lk[3], lk[4] if len(lk) > 4 else lk[0] + 1) for lk in e["locks"]
+          if c[0] < lk[0] < draw_call and "READONLY" not in lk[3]]
+    if lo is None:
+        return c, ws
+    need, picked = [(lo, hi)], []
+    for lk in reversed(ws):
+        a, b = lk[1], lk[1] + lk[2]
+        if any(a < y and x < b for x, y in need):
+            picked.append(lk)
+            rest = []
+            for x, y in need:
+                if a < y and x < b:
+                    if x < a:
+                        rest.append((x, a))
+                    if b < y:
+                        rest.append((b, y))
+                else:
+                    rest.append((x, y))
+            need = rest
+            if not need:
+                break
+    return c, sorted(picked)
+
+
+def vb_contents_calls(idx, handle, draw_call):
+    """G1f t02 interface: (creation, all write locks) of a vertex buffer."""
+    return buffer_writes(idx, handle, draw_call)
 
 
 def fetch_blobs(trace, apitrace, calls, out_dir):
-    """One `apitrace dump --blobs --calls=...` pass; returns {call: path} of the blob files it wrote."""
+    """`apitrace dump --blobs --calls=...` passes (blobs already on disk are reused); returns {call: path}."""
     os.makedirs(out_dir, exist_ok=True)
-    cs = ",".join(str(c) for c in sorted(set(calls)))
-    subprocess.run([apitrace, "dump", "--color=never", "--blobs", "--calls=" + cs, trace], cwd=out_dir,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    got = {}
-    for c in set(calls):
+    got, todo = {}, []
+    for c in sorted(set(calls)):
+        pth = os.path.join(out_dir, "blob_call%d.bin" % c)
+        if os.path.isfile(pth):
+            got[c] = pth
+        else:
+            todo.append(c)
+    for i in range(0, len(todo), 2000):       # each pass re-reads the trace from the start; stay under 32K chars
+        cs = ",".join(str(c) for c in todo[i:i + 2000])
+        subprocess.run([apitrace, "dump", "--color=never", "--blobs", "--calls=" + cs, trace], cwd=out_dir,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for c in todo:
         pth = os.path.join(out_dir, "blob_call%d.bin" % c)
         if os.path.isfile(pth):
             got[c] = pth
@@ -623,15 +706,180 @@ def summarise_lit36(verts):
             "z_range": [round(min(v[2] for v in verts), 3), round(max(v[2] for v in verts), 3)]}
 
 
-def analyse_vb_draws(trace, apitrace, out_dir, call_range, facts_path=None, vs_filter=None, max_draws=64):
+def fvf_layout(fvf):
+    """FVF text ('D3DFVF_XYZ | D3DFVF_NORMAL | ...') -> (struct format, field names), or None when it cannot be decoded
+    (blend weights, texture coordinate sizes other than 2, a hex FVF apitrace did not name)."""
+    t = set(re.findall(r"D3DFVF_(\w+)", fvf or ""))
+    if not t or any(x.startswith("XYZB") or x.startswith("TEXCOORDSIZE") for x in t):
+        return None
+    fmt, names = "<", []
+    if "XYZ" in t:
+        fmt, names = fmt + "3f", names + ["x", "y", "z"]
+    elif "XYZRHW" in t:
+        fmt, names = fmt + "4f", names + ["x", "y", "z", "rhw"]
+    else:
+        return None
+    for flag, f, nm in (("NORMAL", "3f", ["nx", "ny", "nz"]), ("PSIZE", "f", ["psize"]), ("DIFFUSE", "I", ["diffuse"]),
+                        ("SPECULAR", "I", ["specular"])):
+        if flag in t:
+            fmt, names = fmt + f, names + nm
+    ntex = max([int(x[3:]) for x in t if re.match(r"TEX\d$", x)] or [0])
+    for k in range(ntex):
+        fmt, names = fmt + "2f", names + ["u%d" % k, "v%d" % k]
+    return fmt, names
+
+
+def decode_fvf(data, fvf, stride, first, count):
+    """[{field: value}] for vertices first..first+count-1 of a buffer laid out by `fvf` with `stride` bytes per vertex."""
+    lay = fvf_layout(fvf)
+    if lay is None or struct.calcsize(lay[0]) > stride:
+        return None
+    fmt, names = lay
+    n = len(data) // stride
+    return [dict(zip(names, struct.unpack_from(fmt, data, (first + i) * stride)))
+            for i in range(max(0, min(count, n - first)))]
+
+
+def solve3(m, r):
+    """Gaussian elimination for a 3x3 system (None when singular)."""
+    a = [list(m[i]) + [r[i]] for i in range(3)]
+    for c in range(3):
+        p = max(range(c, 3), key=lambda i: abs(a[i][c]))
+        if abs(a[p][c]) < 1e-12:
+            return None
+        a[c], a[p] = a[p], a[c]
+        for i in range(3):
+            if i != c:
+                f = a[i][c] / a[c][c]
+                a[i] = [x - f * y for x, y in zip(a[i], a[c])]
+    return [a[i][3] / a[i][i] for i in range(3)]
+
+
+def affine_fit(pts, vals):
+    """Least squares val = a x + b y + c over pts [(x, y)] -> ((a, b, c), max abs residual) or (None, None).
+    Centred on the mean point so that large world coordinates do not cost precision."""
+    if len(pts) < 3:
+        return None, None
+    mx = sum(x for x, _ in pts) / len(pts)
+    my = sum(y for _, y in pts) / len(pts)
+    q = [(x - mx, y - my) for x, y in pts]
+    sxx = sum(x * x for x, _ in q); sxy = sum(x * y for x, y in q); syy = sum(y * y for _, y in q)
+    sx = sum(x for x, _ in q); sy = sum(y for _, y in q); n = float(len(q))
+    sol = solve3([(sxx, sxy, sx), (sxy, syy, sy), (sx, sy, n)],
+                 [sum(x * v for (x, _), v in zip(q, vals)), sum(y * v for (_, y), v in zip(q, vals)), sum(vals)])
+    if sol is None:
+        return None, None
+    res = max(abs(sol[0] * x + sol[1] * y + sol[2] - v) for (x, y), v in zip(q, vals))
+    return [sol[0], sol[1], sol[2] - sol[0] * mx - sol[1] * my], res
+
+
+def uv_patches(verts, tris, slots=4, tex_size=None):
+    """One entry per terrain decal (or blob) in a textured triangle batch: the connected pieces of the batch, merged
+    when they share one affine map world (x, y) -> (u, v) (a clipped decal mesh is not welded along every clip edge,
+    so one decal can be several pieces). Per decal: UV rectangle, the atlas slot it falls in (`slots` x `slots`
+    grid, row 0 = v 0 = the top of the image) and its inset from the slot edges in texels (tex_size), the map's
+    axes, sizes and heading, handedness, the decal centre (world point at the slot centre) and which decal-local
+    corner (X = the u axis, Y = X turned 90 deg ccw about +z; -1 / +1 = the half-extents) holds the UV minimum.
+    verts: [{x, y, z, u0, v0, diffuse}], tris: [(i, j, k)]."""
+    import math
+    parent = list(range(len(verts)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for t in tris:
+        for k in (1, 2):
+            a, b = find(t[0]), find(t[k])
+            if a != b:
+                parent[b] = a
+    comps = defaultdict(list)
+    for t in tris:
+        comps[find(t[0])].append(t)
+    # fit each piece, then merge pieces with the same map (same gradients, same UV predicted at the first piece)
+    decals = []                                    # [fu, fv, tris]
+    for g in sorted(comps.values(), key=lambda g: min(min(t) for t in g)):
+        ids = sorted({i for t in g for i in t})
+        pts = [(verts[i]["x"], verts[i]["y"]) for i in ids]
+        fu, _ = affine_fit(pts, [verts[i]["u0"] for i in ids])
+        fv, _ = affine_fit(pts, [verts[i]["v0"] for i in ids])
+        for dc in decals:
+            if fu and fv and dc[0] and dc[1]:
+                x, y = pts[0]
+                if (max(abs(fu[k] - dc[0][k]) + abs(fv[k] - dc[1][k]) for k in (0, 1)) < 1e-5 and
+                        abs(fu[0] * x + fu[1] * y + fu[2] - (dc[0][0] * x + dc[0][1] * y + dc[0][2])) < 1e-4 and
+                        abs(fv[0] * x + fv[1] * y + fv[2] - (dc[1][0] * x + dc[1][1] * y + dc[1][2])) < 1e-4):
+                    dc[2].append(g)
+                    break
+        else:
+            decals.append([fu, fv, [g]])
+    out = []
+    for _, _, gs in decals:
+        g = [t for p in gs for t in p]
+        ids = sorted({i for t in g for i in t})
+        vs = [verts[i] for i in ids]
+        us, ws = [v["u0"] for v in vs], [v["v0"] for v in vs]
+        pts = [(v["x"], v["y"]) for v in vs]
+        fu, ru = affine_fit(pts, us)
+        fv, rv = affine_fit(pts, ws)
+        p = {"first_vertex": ids[0], "pieces": len(gs), "vertices": len(ids), "triangles": len(g),
+             "vertex_mean": [round(sum(v[c] for v in vs) / len(vs), 2) for c in ("x", "y", "z")],
+             "z_range": [round(min(v["z"] for v in vs), 4), round(max(v["z"] for v in vs), 4)],
+             "u_range": [round(min(us), 6), round(max(us), 6)], "v_range": [round(min(ws), 6), round(max(ws), 6)],
+             "argb": sorted({"0x%08X" % v.get("diffuse", 0) for v in vs})[:6]}
+        col, row = math.floor(min(us) * slots + 1e-3), math.floor(min(ws) * slots + 1e-3)
+        p["slot_col_row"] = [col % slots, row % slots]
+        p["slot_integer_offset"] = [col // slots, row // slots]
+        if tex_size:
+            p["inset_texels"] = {"u_lo": round((min(us) * slots - col) * tex_size / slots, 4),
+                                 "u_hi": round((col + 1 - max(us) * slots) * tex_size / slots, 4),
+                                 "v_lo": round((min(ws) * slots - row) * tex_size / slots, 4),
+                                 "v_hi": round((row + 1 - max(ws) * slots) * tex_size / slots, 4)}
+        if fu and fv:
+            gu, gv = math.hypot(fu[0], fu[1]), math.hypot(fv[0], fv[1])
+            det = fu[0] * fv[1] - fu[1] * fv[0]
+            p.update({"du_dxy": [round(fu[0], 7), round(fu[1], 7)], "dv_dxy": [round(fv[0], 7), round(fv[1], 7)],
+                      "fit_residual_uv": [round(ru, 7), round(rv, 7)],
+                      "world_per_uv": [round(1 / gu, 3) if gu else None, round(1 / gv, 3) if gv else None],
+                      "size_one_slot": [round(1 / (gu * slots), 3) if gu else None, round(1 / (gv * slots), 3) if gv else None],
+                      "u_axis_heading_deg": round(math.degrees(math.atan2(fu[1], fu[0])), 3),
+                      "v_axis_heading_deg": round(math.degrees(math.atan2(fv[1], fv[0])), 3),
+                      "uv_handedness": "u x v = +z (v axis 90 deg ccw of u, seen from above)" if det > 0 else
+                                       "u x v = -z (v axis 90 deg cw of u, seen from above)"})
+            if det and gu and gv:
+                def world(u, v):
+                    du, dv = u - fu[2], v - fv[2]
+                    return ((du * fv[1] - dv * fu[1]) / det, (dv * fu[0] - du * fv[0]) / det)
+                cx, cy = world((col + 0.5) / slots, (row + 0.5) / slots)
+                p["decal_centre_xy"] = [round(cx, 3), round(cy, 3)]
+                wx, wy = world(min(us), min(ws))
+                xa = (fu[0] / gu, fu[1] / gu)             # decal X axis = u direction; Y = X turned 90 deg ccw
+                hw, hh = 0.5 / (gu * slots), 0.5 / (gv * slots)
+                p["uv_min_corner_local"] = [round(((wx - cx) * xa[0] + (wy - cy) * xa[1]) / hw, 3),
+                                            round(((wx - cx) * -xa[1] + (wy - cy) * xa[0]) / hh, 3)]
+        out.append(p)
+    return out
+
+
+def analyse_vb_draws(trace, apitrace, out_dir, call_range, facts_path=None, vs_filter=None, max_draws=64,
+                     tex_filter=None, lock_window=0, keep_verts=0, slots=4, tex_size=None, draw_calls=None):
     """Draws in `call_range` ("A-B"): the vertex-buffer bytes each one reads, decoded when the layout is the 36-byte lit
-    one. Needs the trace's VB index (one pass over the trace, cached in out_dir\\vb_index.json) and one blob pass."""
+    one. Needs the trace's VB index (one pass over the trace, cached in out_dir\\buf_index.json) and one blob pass.
+    g1f t05: also index buffers, any XYZ FVF layout, stage-0 texture / states, and per draw the connected UV patches
+    (uv_patches). tex_filter: only draws whose stage-0 texture is one of these handles. lock_window: index only the
+    locks of the last N calls before A (cache buf_index_<A-B>_<N>.json). keep_verts: keep up to N decoded vertices.
+    draw_calls: only the draws with these call numbers."""
     os.makedirs(out_dir, exist_ok=True)
-    cache = os.path.join(out_dir, "vb_index.json")
+    a0, b0 = (int(x) for x in call_range.split("-"))
+    if lock_window:
+        cache = os.path.join(out_dir, "buf_index_%s_%d.json" % (call_range, lock_window))
+    else:
+        cache = os.path.join(out_dir, "buf_index.json")
     if os.path.isfile(cache):
         idx = json.load(open(cache, encoding="utf-8"))
     else:
-        idx = build_vb_index(trace, apitrace)
+        idx = build_buf_index(trace, apitrace, b0 if lock_window else None, max(0, a0 - lock_window) if lock_window else 0)
         json.dump(idx, open(cache, "w", encoding="utf-8"))
     desc = {}
     if facts_path and os.path.isfile(facts_path):
@@ -640,59 +888,140 @@ def analyse_vb_draws(trace, apitrace, out_dir, call_range, facts_path=None, vs_f
             desc = next(iter(f.get("apitrace", {}).values())).get("shaders_desc", {})
         except Exception:
             desc = {}
-    p = subprocess.run([apitrace, "dump", "--color=never", "--calls=" + call_range, "--grep=" + DRAW_GREP, trace],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
-    cur = {"stream": None, "stride": None, "off": 0, "vs": None, "ps": None, "fvf": None, "tex0": None, "bl": {}}
+    p = subprocess.Popen([apitrace, "dump", "--color=never", "--calls=" + call_range, "--grep=" + DRAW_GREP, trace],
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                         bufsize=1 << 20)     # streamed: a range of a few million calls is hundreds of MB of text
+    cur = {"stream": None, "stride": None, "off": 0, "vs": None, "ps": None, "fvf": None, "tex0": None, "bl": {},
+           "ib": None, "rs": {}, "tss0": {}, "samp0": {}, "world": None, "frame": 0}
     draws = []
-    for line in p.stdout.split("\n"):
+    for line in p.stdout:
+        line = line.rstrip("\n")
         m = CALL_RE.match(line)
         if not m:
             continue
         no, short, text = int(m.group(1)), m.group(2).split("::")[-1], line
         if short == "SetStreamSource" and "StreamNumber = 0" in text:
             cur["stream"], cur["stride"], cur["off"] = arg(text, "pStreamData"), int(arg(text, "Stride") or 0), int(arg(text, "OffsetInBytes") or 0)
+        elif short == "SetIndices":
+            cur["ib"] = arg(text, "pIndexData")
         elif short == "SetVertexShader":
             cur["vs"] = arg(text, "pShader")
         elif short == "SetPixelShader":
             cur["ps"] = arg(text, "pShader")
         elif short == "SetFVF":
             cur["fvf"] = re.search(r"FVF = (.*?)\)", text).group(1)
+        elif short == "SetVertexDeclaration":
+            cur["fvf"] = "decl " + str(arg(text, "pDecl"))
         elif short == "SetTexture" and "Stage = 0," in text:
             cur["tex0"] = arg(text, "pTexture")
-        elif short == "SetRenderState" and arg(text, "State") in ("D3DRS_SRCBLEND", "D3DRS_DESTBLEND"):
-            cur["bl"][arg(text, "State")[8:]] = arg(text, "Value")
-        elif short.startswith("Draw") and short != "DrawPrimitiveUP":
+        elif short == "SetTextureStageState" and "Stage = 0," in text and arg(text, "Type") in DRAW_TSS0:
+            cur["tss0"][arg(text, "Type")[7:]] = arg(text, "Value")
+        elif short == "SetSamplerState" and "Sampler = 0," in text and arg(text, "Type") in DRAW_SAMP0:
+            cur["samp0"][arg(text, "Type")[8:]] = arg(text, "Value")
+        elif short == "SetTransform" and "D3DTS_WORLD" in text:
+            mm = re.search(r"m = \{(.*)\}\}", text)
+            cur["world"] = mm.group(1) + "}" if mm else None
+        elif short == "SetRenderState" and arg(text, "State") in DRAW_RS:
+            cur["rs"][arg(text, "State")[6:]] = arg(text, "Value")
+            if arg(text, "State") in ("D3DRS_SRCBLEND", "D3DRS_DESTBLEND"):
+                cur["bl"][arg(text, "State")[8:]] = arg(text, "Value")
+        elif short in ("Present", "PresentEx"):
+            cur["frame"] += 1
+        elif short.startswith("Draw") and not short.endswith("UP"):
             sh = "%s | %s" % (desc.get(cur["vs"], cur["vs"]), desc.get(cur["ps"], cur["ps"]))
             if vs_filter and vs_filter not in sh:
                 continue
-            draws.append({"call": no, "fn": short, "stream": cur["stream"], "stride": cur["stride"], "offset": cur["off"],
+            if tex_filter and cur["tex0"] not in tex_filter:
+                continue
+            if draw_calls and no not in draw_calls:
+                continue
+            pt = arg(text, "PrimitiveType")
+            pc = int(arg(text, "PrimitiveCount") or arg(text, "primCount") or 0)
+            draws.append({"call": no, "frame_in_range": cur["frame"], "fn": short, "prim": pt, "prim_count": pc,
+                          "stream": cur["stream"], "stride": cur["stride"], "offset": cur["off"], "ib": cur["ib"],
                           "fvf": cur["fvf"], "shaders": sh, "tex0": cur["tex0"], "blend": dict(cur["bl"]),
+                          "rs": dict(cur["rs"]), "tss0": dict(cur["tss0"]), "samp0": dict(cur["samp0"]),
+                          "world": cur["world"],
                           "base_vertex": int(arg(text, "BaseVertexIndex") or 0), "min_vertex": int(arg(text, "MinVertexIndex") or 0),
                           "num_vertices": int(arg(text, "NumVertices") or 0) or None,
-                          "start_vertex": int(arg(text, "StartVertex") or 0)})
+                          "start_vertex": int(arg(text, "StartVertex") or 0),
+                          "start_index": int(arg(text, "startIndex") or 0)})
+    p.wait()
     draws = draws[:max_draws]
     need = {}
+    vb_idx, ib_idx = (idx["vb"], idx.get("ib", {})) if "vb" in idx else (idx, {})
     for d in draws:
-        c, writes = vb_contents_calls(idx, d["stream"], d["call"])
-        d["vb_create"] = c
-        d["vb_writes"] = writes[-4:]
-        for lk in d["vb_writes"]:
-            need[lk[0] + 1] = lk
+        stride = d["stride"] or 1
+        if d["fn"] == "DrawIndexedPrimitive":
+            first = d["base_vertex"] + d["min_vertex"]
+            nv = d["num_vertices"] or 0
+        else:
+            first = d["start_vertex"]
+            nv = PRIM_VERTS.get(d["prim"], lambda n: 0)(d["prim_count"])
+        d["vertex_first"], d["vertex_count"] = first, nv
+        lo = d["offset"] + first * stride
+        c, writes = buffer_writes(vb_idx, d["stream"], d["call"], lo, lo + nv * stride)
+        d["vb_create"], d["vb_writes"] = c, writes
+        for lk in writes:
+            need[lk[4]] = lk
+        if d["fn"] == "DrawIndexedPrimitive" and d["ib"]:
+            ec = [x for x in (ib_idx.get(d["ib"]) or {}).get("creates", []) if x[0] < d["call"]]
+            isz = 4 if ec and "INDEX32" in ec[-1][3] else 2
+            ni = PRIM_VERTS.get(d["prim"], lambda n: 0)(d["prim_count"])
+            ci, iw = buffer_writes(ib_idx, d["ib"], d["call"], d["start_index"] * isz, (d["start_index"] + ni) * isz)
+            d["ib_create"], d["ib_writes"], d["index_size"], d["index_count"] = ci, iw, isz, ni
+            for lk in iw:
+                need[lk[4]] = lk
     blobs = fetch_blobs(trace, apitrace, list(need), os.path.join(out_dir, "blobs")) if need else {}
+
+    def assemble(c, writes):
+        if not c or not writes or not all(lk[4] in blobs for lk in writes):
+            return None
+        buf = bytearray(c[1])            # later writes overwrite earlier ones at their offset
+        for lk in writes:
+            b = open(blobs[lk[4]], "rb").read()
+            buf[lk[1]:lk[1] + len(b)] = b
+        return bytes(buf[:c[1]])
     out = []
     for d in draws:
         r = dict(d)
         c = d["vb_create"]
-        if c and d["vb_writes"] and all((lk[0] + 1) in blobs for lk in d["vb_writes"]):
-            buf = bytearray(c[1])            # later writes overwrite earlier ones at their offset
-            for lk in d["vb_writes"]:
-                b = open(blobs[lk[0] + 1], "rb").read()
-                buf[lk[1]:lk[1] + len(b)] = b
-            r["vb_blob_calls"] = [lk[0] + 1 for lk in d["vb_writes"]]
-            if d["stride"] == 36 and "NORMAL" in (c[3] or "") and "DIFFUSE" in (c[3] or "") and "TEX1" in (c[3] or ""):
-                first = d["offset"] // 36 + d["base_vertex"] + d["min_vertex"]
-                nv = d["num_vertices"] or (len(buf) // 36 - first)
-                r["lit36"] = summarise_lit36(decode_lit36(bytes(buf), first, nv))
+        buf = assemble(c, d["vb_writes"])
+        if buf is None:
+            out.append(r)
+            continue
+        r["vb_blob_calls"] = [lk[4] for lk in d["vb_writes"]]
+        if d["stride"] == 36 and "NORMAL" in (c[3] or "") and "DIFFUSE" in (c[3] or "") and "TEX1" in (c[3] or ""):
+            first = d["offset"] // 36 + d["vertex_first"]
+            nv = d["vertex_count"] or (len(buf) // 36 - first)
+            r["lit36"] = summarise_lit36(decode_lit36(buf, first, nv))
+        fvf = d["fvf"] if d["fvf"] and not d["fvf"].startswith("decl") else c[3]
+        verts = None
+        if d["stride"] and d["offset"] % d["stride"] == 0:
+            verts = decode_fvf(buf, fvf, d["stride"], d["offset"] // d["stride"] + d["vertex_first"], d["vertex_count"])
+        tris = None
+        if verts is not None and d["fn"] == "DrawIndexedPrimitive" and d.get("ib_create"):
+            ib = assemble(d["ib_create"], d["ib_writes"])
+            if ib is not None:
+                fmt = "<%d%s" % (d["index_count"], "I" if d["index_size"] == 4 else "H")
+                ix = struct.unpack_from(fmt, ib, d["start_index"] * d["index_size"])
+                rel = [i - d["min_vertex"] for i in ix]     # indices are relative to BaseVertexIndex
+                if d["prim"] == "D3DPT_TRIANGLELIST":
+                    tris = [tuple(rel[k:k + 3]) for k in range(0, len(rel) - 2, 3)]
+                elif d["prim"] == "D3DPT_TRIANGLESTRIP":
+                    tris = [tuple(rel[k:k + 3]) for k in range(len(rel) - 2)]
+                r["index_range"] = [min(ix), max(ix)] if ix else None
+        elif verts is not None and d["prim"] == "D3DPT_TRIANGLELIST":
+            tris = [(k, k + 1, k + 2) for k in range(0, len(verts) - 2, 3)]
+        if verts is not None:
+            r["decoded_fvf"] = fvf
+            if tris is not None and verts and "u0" in verts[0] and all(0 <= i < len(verts) for t in tris for i in t):
+                r["uv_patches"] = uv_patches(verts, tris, slots, tex_size)
+            if keep_verts:
+                r["vertices"] = [{k: (round(v, 5) if isinstance(v, float) else ("0x%08X" % v if k in ("diffuse", "specular") else v))
+                                  for k, v in vx.items()} for vx in verts[:keep_verts]]
+                if tris is not None:
+                    r["triangles"] = tris[:keep_verts]
         out.append(r)
     return out
 
@@ -824,9 +1153,70 @@ def md(facts):
     return "\n".join(L) + "\n"
 
 
+def selftest_decode():
+    """Synthetic checks of fvf_layout / decode_fvf / buffer_writes / uv_patches (g1f t05). Exit code 0 = all pass."""
+    import math
+    ok = True
+
+    def check(name, cond, detail=""):
+        nonlocal ok
+        ok = ok and bool(cond)
+        print("%s %s %s" % ("PASS" if cond else "FAIL", name, detail))
+    lay = fvf_layout("D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX1")
+    check("fvf lit36", lay and lay[0] == "<3f3fI2f" and struct.calcsize(lay[0]) == 36, str(lay))
+    lay = fvf_layout("D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1")
+    check("fvf prelit24", lay and struct.calcsize(lay[0]) == 24, str(lay))
+    check("fvf hex", fvf_layout("0x0") is None)
+    # two decals, slot (1, 3) and (0, 3) of a 4x4 atlas, 25 x 30 and 10 x 10, headings 30 and -100 degrees, each a
+    # 3 x 3 vertex grid over its rectangle (u along the decal x axis, v along its y axis), plus an integer UV offset
+    verts, tris = [], []
+    for (col, row, w, h, hd, cx, cy, off) in ((1, 3, 25.0, 30.0, 30.0, 100.0, 200.0, 2), (0, 3, 10.0, 10.0, -100.0, -50.0, 7.0, 0)):
+        c, s = math.cos(math.radians(hd)), math.sin(math.radians(hd))
+        base = len(verts)
+        for j in range(3):
+            for i in range(3):
+                lx, ly = i / 2.0, j / 2.0
+                x = cx + (lx - 0.5) * w * c - (ly - 0.5) * h * s
+                y = cy + (lx - 0.5) * w * s + (ly - 0.5) * h * c
+                verts.append(struct.pack("<3f3fI2f", x, y, 5.0, 0, 0, 1, 0x80FFFFFF, off + (col + lx) / 4.0, (row + ly) / 4.0))
+        for j in range(2):
+            for i in range(2):
+                a = base + j * 3 + i
+                tris += [(a, a + 1, a + 4), (a, a + 4, a + 3)]
+    data = b"".join(verts)
+    vs = decode_fvf(data, "D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX1", 36, 0, len(verts))
+    check("decode_fvf count", vs is not None and len(vs) == 18)
+    ps = sorted(uv_patches(vs, tris, 4, 512), key=lambda q: q["first_vertex"])
+    check("patches", len(ps) == 2, str(len(ps)))
+    if len(ps) == 2:
+        a, b = ps
+        check("slot a", a["slot_col_row"] == [1, 3] and a["slot_integer_offset"] == [2, 0], str(a["slot_col_row"]))
+        check("slot b", b["slot_col_row"] == [0, 3], str(b["slot_col_row"]))
+        check("size a", abs(a["size_one_slot"][0] - 25) < 0.01 and abs(a["size_one_slot"][1] - 30) < 0.01, str(a["size_one_slot"]))
+        check("heading a", abs(a["u_axis_heading_deg"] - 30) < 0.01, str(a["u_axis_heading_deg"]))
+        check("heading b", abs(b["u_axis_heading_deg"] + 100) < 0.01, str(b["u_axis_heading_deg"]))
+        check("handedness", a["uv_handedness"].startswith("u x v = +z"), a["uv_handedness"])
+        check("inset 0", all(abs(v) < 1e-3 for v in a["inset_texels"].values()), str(a["inset_texels"]))
+        check("fit exact", max(a["fit_residual_uv"]) < 1e-5, str(a["fit_residual_uv"]))
+        check("centre a", abs(a["decal_centre_xy"][0] - 100) < 1e-3 and abs(a["decal_centre_xy"][1] - 200) < 1e-3,
+              str(a["decal_centre_xy"]))
+        check("uv min corner", a["uv_min_corner_local"] == [-1.0, -1.0], str(a["uv_min_corner_local"]))
+    # one decal cut into two pieces (no shared vertex along the cut) is still one decal
+    split = vs[:9] + [dict(vs[1]), dict(vs[4]), dict(vs[7])]
+    st = [(0, 1, 4), (0, 4, 3), (3, 4, 7), (3, 7, 6), (9, 2, 5), (9, 5, 10), (10, 5, 8), (10, 8, 11)]
+    q = uv_patches(split, st, 4, 512)
+    check("merge pieces", len(q) == 1 and q[0]["pieces"] == 2, str([(x["pieces"], x["vertices"]) for x in q]))
+    # lock coverage: the latest locks covering [100, 300) of a 1000-byte buffer created at call 1
+    idx = {"h": {"creates": [[1, 1000, "", "", ""]], "locks": [[5, 0, 0, "0x0"], [7, 100, 100, "NOOVERWRITE"],
+                                                                 [9, 150, 100, "0x0"], [11, 0, 50, "READONLY"]]}}
+    c, ws = buffer_writes(idx, "h", 20, 100, 300)
+    check("lock cover", [w[0] for w in ws] == [5, 7, 9] and ws[0][2] == 1000, str(ws))
+    return 0 if ok else 1
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--run-dir", required=True)
+    ap.add_argument("--run-dir", default="", help="capture run folder (required except with --selftest-decode)")
     ap.add_argument("--apitrace", default="")
     ap.add_argument("--d3dretrace", default="")
     ap.add_argument("--track", nargs="*", default=["m_world"])
@@ -839,9 +1229,20 @@ def main(argv):
     ap.add_argument("--vs-filter", default="", help="--vb-draws: only draws whose 'vs | ps' description contains this text")
     ap.add_argument("--facts", default="", help="--vb-draws: facts.json with the shader descriptions (default analysisacts.json)")
     ap.add_argument("--max-draws", type=int, default=64)
+    ap.add_argument("--draw-calls", default="", help="--vb-draws: comma list of draw call numbers; only these draws")
+    ap.add_argument("--tex-filter", default="", help="--vb-draws: comma list of texture handles; only draws with one of them on stage 0")
+    ap.add_argument("--lock-window", type=int, default=0, help="--vb-draws: index buffer locks only from N calls before A (0 = all)")
+    ap.add_argument("--keep-verts", type=int, default=0, help="--vb-draws: keep the first N decoded vertices / triangles per draw")
+    ap.add_argument("--slots", type=int, default=4, help="--vb-draws: atlas grid size for uv_patches (4 = 16 decal slots)")
+    ap.add_argument("--tex-size", type=int, default=0, help="--vb-draws: atlas size in texels (inset_texels in uv_patches)")
+    ap.add_argument("--selftest-decode", action="store_true", help="check the FVF / UV-patch decoders on synthetic data")
     ap.add_argument("--compare", nargs=3, metavar=("NAME", "REF_PNG", "PORT_PNG"), help="colour statistics of two images + side-by-side PNG")
     ap.add_argument("--regions", default="whole=0,0,1920,650", help="--compare: 'name=x0,y0,x1,y1;...'")
     a = ap.parse_args(argv)
+    if a.selftest_decode:
+        return selftest_decode()
+    if not a.run_dir:
+        ap.error("--run-dir is required")
     if a.compare:
         name, ref, port = a.compare
         out = os.path.join(os.path.abspath(a.run_dir), "analysis")
@@ -854,7 +1255,10 @@ def main(argv):
     if a.vb_draws:
         out = os.path.join(rd, "analysis")
         trace = os.path.join(rd, "eaw.trace")
-        res = analyse_vb_draws(trace, a.apitrace, out, a.vb_draws, a.facts or os.path.join(out, "facts.json"), a.vs_filter or None, a.max_draws)
+        res = analyse_vb_draws(trace, a.apitrace, out, a.vb_draws, a.facts or os.path.join(out, "facts.json"), a.vs_filter or None,
+                               a.max_draws, set(a.tex_filter.split(",")) if a.tex_filter else None, a.lock_window,
+                               a.keep_verts, a.slots, a.tex_size or None,
+                               {int(x) for x in a.draw_calls.split(",")} if a.draw_calls else None)
         pth = os.path.join(out, "vb_draws_%s.json" % a.vb_draws)
         json.dump(res, open(pth, "w", encoding="utf-8"), indent=2)
         print("%d draws written to %s" % (len(res), pth))

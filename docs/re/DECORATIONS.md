@@ -303,7 +303,9 @@ attaches each decal (0x14f060), stores the terrain clock as birth time (+0x148) 
 
 Spawned by 0x5f0d40 from a `Decal` entry (`xml_field_tables.md` Decal segment): Intensity → +0xB0,
 Scale (w, h) × a random factor in [1 − `Random_Size_Offset`, 1 + `Random_Size_Offset`] (same factor on
-both axes), slot = a random pair from `UV_Slot`, `Slot_Scale` → +0x160, `Fadeout_Time` → +0x150,
+both axes; **capture 2026-10-31 (RENDER.md §7.3, g1f t05): every drawn decal is exactly its Scale, ~700 decals
+of `EXPLOSION_SCORCH_SMALL` 25×30 and `_TINY` 10×10 within 0.005, so the factor is 1 in this build**; the port
+applies no factor since g1r t01 and still parses the field), slot = a random pair from `UV_Slot`, `Slot_Scale` → +0x160, `Fadeout_Time` → +0x150,
 `Permanent` → +0x224, `Render_Mode` → +0x21C, slot count = GameConstants `Master_Decal_Slot_Count` (not
 in vanilla XML → keeps 16 [M]). Rotation = the spawning transform's heading in the XY plane, or uniform
 random in [−2π, 2π] when `Random_Rotate`; **the `Z_Angle` field is overwritten and has no effect**.
@@ -318,8 +320,14 @@ current alpha ≥ 0.3 already cover the point. [H]
 2. **Atlas UV matrix** (0x14fb60): with s = √N (N = slot count) the decal's unit square maps to
    u = (column + scale·lx)/s, v = (row + scale·ly)/s, up to an integer offset that WRAP addressing
    ignores (lx, ly = decal-local coordinates from the inverse frame; ly runs against the height axis).
-   Stored as two rows at +0x170/+0x180 applied to the lifted world position. [H] matrix, [M] for which
-   texture corner is the slot origin.
+   Stored as two rows at +0x170/+0x180 applied to the lifted world position. [H] matrix; **slot origin
+   settled by capture (2026-10-31, g1f t05) [H]:** with X̂ = (cos θ, sin θ), Ŷ = X̂ turned +90° about +z,
+   lx = (P−C)·X̂, ly = (P−C)·Ŷ, w, h = Scale: `u = (col + 0.5 + lx/w)/4 − 1`, `v = (row + 0.5 − ly/h)/4 − 1`
+   (every decoded vertex within 2.4e-5 uv). So `UV_Slot` "col,row" is a 4×4 grid with row 0 at the top of the
+   DDS (v = 0); the slot's (u min, v min) corner sits at the decal's (−X, +Y) corner; u runs along +X, v along −Y
+   (upright, not mirrored, seen from above); no half-texel inset (the rectangle covers the whole slot); the
+   integer offset is −1 on both axes (harmless under WRAP). The port's matrix matches (`test_decal_atlas_uv` in
+  `alamo_terrain_tests`: 5 headings × 4 slots, worst error 3e-7, g1r t01).
 3. For every terrain quad in the range, both triangles (same winding as the terrain, TERRAIN_WATER_POST
    §2.2) are clipped against the four vertical planes through the rectangle's edges (each plane through
    two adjacent corners and a point 100 units above their midpoint). The clipped polygon is fan-

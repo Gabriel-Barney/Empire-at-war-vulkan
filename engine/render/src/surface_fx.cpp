@@ -223,10 +223,11 @@ uint32_t RenderRng::below(uint32_t n) { return n == 0 ? 0u : static_cast<uint32_
 DecalSpawn RuntimeDecals::spawn(const terrain::Terrain& terrain, const DecalFxDef& fx, float x, float y, float z, float heading,
                                 float now) {
     if (!terrain.present || terrain.width < 2 || terrain.height < 2) return DecalSpawn::NoTerrain;
-    // Random values: size factor, slot pair, rotation [port order].
-    const float o = std::clamp(fx.random_size_offset, 0.0f, 1.0f);
-    const float factor = o > 0.0f ? rng_.range(1.0f - o, 1.0f + o) : 1.0f;
-    const float w = fx.scale_w * factor, h = fx.scale_h * factor;
+    // Size = Scale exactly. Random_Size_Offset is parsed but not applied: the g1f t05 capture (RENDER.md 7.3,
+    // DECORATIONS 4.2) showed every drawn EXPLOSION_SCORCH_SMALL / _TINY decal at its Scale within 0.005 (offset 0.1 in
+    // the XML), i.e. a size factor of 1 in this build.
+    // Random values: slot pair, rotation [port order].
+    const float w = fx.scale_w, h = fx.scale_h;
     std::array<uint32_t, 2> slot{0, 0};
     if (!fx.uv_slots.empty()) slot = fx.uv_slots[fx.uv_slots.size() > 1 ? rng_.below(static_cast<uint32_t>(fx.uv_slots.size())) : 0u];
     const float kTwoPi = 6.28318530718f;

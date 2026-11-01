@@ -513,7 +513,8 @@ always 0xFF (0x13cf40); the heat clear is 0x008080FF (A=0, R=G=0x80, B=0xFF). [H
 - UVs are generated in the vertex shaders: uv = (x·0.5 + 0.5, −y·0.5 + 0.5) plus a half-texel term from
   `RESOLUTION_CONSTANTS.zw` = (0.5/width, 0.5/height) of the **currently bound engine render target**
   (back buffer when none). SceneBloom **adds** the half texel; SceneHeat **subtracts** it (both
-  techniques). [H] (0x1ad710, 0x1784f0, lifted VS)
+  techniques). [H] (0x1ad710, 0x1784f0, lifted VS) Exception: SceneHeat's `t1_ati`, drawn on AMD adapters
+  (technique `t0` has `VENDOR_FILTER_0=4098`), subtracts only **¼** texel in V (g1f t06 capture, RENDER.md §7.3).
 - Vulkan: pixel centres are already at +0.5, so the D3D9 +½-texel correction must be dropped for the
   bloom passes (sample at exactly uv) and SceneHeat's −½ texel becomes a −1 texel shift relative to
   Vulkan centres; keep it for parity. Use a single full-screen triangle and reproduce the ±1.005 overscan
@@ -525,7 +526,8 @@ always 0xFF (0x13cf40); the heat clear is 0x008080FF (A=0, R=G=0x80, B=0xFF). [H
 ### 4.3 Stencil shadows: darken and soft blur
 
 After the Shadow bucket (RENDER.md §1.4): z-bias reset, then 0x183580:
-1. Vertex colour = scene shadow colour (TEE `17` via the scene; default (0.5,0.5,0.5)) as RGB, alpha 0;
+1. Vertex colour = scene shadow colour (TEE `17` via the scene; default (0.5,0.5,0.5)) as RGB, converted to
+   bytes by truncation (Kuat 0.5490196 → 0x8B, g1f t06 capture), alpha 0;
    texture stage 0 unbound; draw with prim mode 8. [H]
 2. Mode 8 picks **`StencilDarken`** when Soft Shadows (0x140a626ba) is off or shader detail is 0:
    FIXEDFUNCTION, blend ZERO/SRCCOLOR (back buffer × shadow colour), stencil test NOTEQUAL ref 0 with
@@ -640,7 +642,8 @@ On load end and on every environment change:
 4. land only: terrain cloud scale/velocity/texture from `2D`/`2E`/`2B`/`2F` (overriding the terrain
    header), scene wind from `2C`/`2B`. [H]
 5. Space mode zeroes the fill intensities and disables stencil shadows on its background scene only;
-   the main space scene keeps both (corrected 2026-10-27, SPACE_AND_OPEN.md §A; RENDER.md §1.2). [H]
+   the main space scene keeps both (corrected 2026-10-27, SPACE_AND_OPEN.md §A; RENDER.md §1.2). [H] The port
+   draws main-scene space shadows since g1r t04 (2026-11-01).
 
 Default record (ctor 0x271d20) for a scene without environments: sun white × 0.75 at yaw 0°,
 elevation 45°; fills grey 0.75 × 0.5 at yaw 120°/210°, elevation −10°; ambient black; specular white;

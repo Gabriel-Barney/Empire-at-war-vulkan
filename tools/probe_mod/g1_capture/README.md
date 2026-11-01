@@ -113,18 +113,25 @@ Useful options:
 | `--extra-args "..."` | More game arguments. |
 | `--start-steam` | Starts Steam if it is not running. |
 | `--keep-patch-chain` | Captures with the patch chain on (not a parity capture). |
-| `--drive K,E` | Drives the menus itself (`g1_ui.py`, ctypes only): runs each scene's `auto` steps from `scenes.json` (clicks in 1920×1080 client space, `expect_like` checks against the crops in `refs\`, screenshots `shots\ui_*.png`), then quits the game. A failed step saves `FAIL_<scene>_<n>.png` and ends the run normally (restore as usual). |
+| `--drive K,E` | Drives the game itself (`g1_ui.py`, ctypes only): runs each scene's `auto` steps from `scenes.json` (clicks and drags in 1920×1080 client space, `expect_like` checks against the crops in `refs\`, screenshots `shots\ui_*.png`): menus, faction Empire, buy, call in from the reinforcement pool (K: the Admonitor; E: an AT-ST company, moved and fired with Barrage Area), then quits the game. A failed step saves `FAIL_<scene>_<n>.png` and ends the run normally (restore as usual). |
 | `--ui-method post` | `post` (default): PostMessage to the game window, no focus needed. `input`: SendInput. While in a battle the real cursor is parked at client (960,150), because the game edge-scrolls on the real cursor position. |
 | `--drive-keep-open` | Leaves the game running after the steps. |
 | `--probe-mod admonitor` | Starts the game with `MODPATH=` a mod built under `out\mods\g1_admonitor` (never in the game folder): `STARBASES.XML` from `Data\config.meg` with `Admonitor_Star_Destroyer` added to `Skirmish_Empire_Star_Base_1`, so Thrawn's SD can be built at station level 1. |
 | `--probe-mod admonitor4` | Same place; `Skirmish_Empire_Star_Base_1` becomes a copy of the level-4 station, which offers the Admonitor as shipped. |
 | `--probe-mod admonitor_spawn` | Same place; the level-1 station's garrison (`Starting_Spawned_Units_Tech_0`) gets one `Admonitor_Star_Destroyer`. Tried 2026-10-31: the ship was not launched. |
 
-> **2026-10-31: bought units never arrive in this install** (RENDER.md §7.3, g1f t01). In every driven run a human
-> player's tactical space purchase is paid and finishes but no unit appears (any map, faction, frame rate or input
-> method tried). So scene K cannot frame the Admonitor until a hand-played check (roadmap g1f t06) shows bought ships
-> arriving. To look around by hand in a kept-open game: `--drive KX --drive-keep-open`, then
-> `g1_ui.py --method post shot|click|key|wheel ...`, and `g1.py quit` when done.
+> **2026-10-31 (corrected the same night): bought units go to the reinforcement pool.** A finished tactical purchase
+> does not spawn by itself: open **Call for Reinforcements** (third button in the column left of the command bar) and
+> drag the unit's icon onto the map (green ghost = valid drop: near the own station in space, inside an own reinforcement
+> point's ring on land). The earlier "bought units never arrive" note (RENDER.md §7.3, g1f t01) was this misunderstanding.
+>
+> **2026-11-01 (g1r t05): the driven scenes now do the call-in.** `--drive K` / `--drive E` run unattended (`--ui-method post` works, also for the drag):
+> - Both set the player faction to **Empire** themselves (faction list at (1354,363), "Empire" at (1300,419)). The setup the game remembers can be Rebellion, which is why the 2026-10-31 K run had a Rebel garrison.
+> - **K** (`--probe-mod admonitor`): select the station, buy the Admonitor, wait 48 s, open the pool panel (button at (307,950); `expect_like reinf_close` checks the panel's Close strip), drag the pool icon (43,221) to (640,400) next to the station (screenshot `K_ghost` while the button is down), close the panel, wait 12 s. `K_admonitor_arrived` shows the SD (population 4/20: the SD, Thrawn and two TIE squadrons). Then the existing `kuat_thrawn` / `kuat_wide` triggers.
+> - **E** (Endor Xpress as the Empire): the light factory (minimap (33,888); the command centre at (28,880) offers only turrets) sells the AT-ST company (first icon, 900 credits, about 30 s). The pool icon is dragged into the ring of the own reinforcement point (minimap (66,939), drop at (1344,614)) and a dropship lands the 4 walkers (`E_atst_landed`, population 1/9). The walkers are box-selected, sent to open ground (right click), **Barrage Area** (ability button at (653,895)) is fired at (1250,500); `E_barrage00..07` and `E_scorch` show the fire and the scorch decals.
+> - New in `g1_ui.py`: `drag` takes `steps`, `hold`, `press` and `shot_at_end` (screenshot while the button is still down: the ghost); `mouse` step (op `move|down|up`); `expect_like` takes `absent`. In `post` mode the **real** cursor is moved along the drag and before every click (the game reads the hardware cursor for ghosts and targeting; the window need not be in front). `fit_window` keeps the 16:9 shape on a 4K screen whose height cannot hold 2160 rows (it narrows the window; before, it stayed at 3840x2054 and every HUD coordinate was off).
+> - Verified runs (DXVK, unattended, restore verified): E `dxvk_20261101_053031` (`shots\ui_007_E_atst_landed.png`, `ui_012_E_barrage03.png`, `ui_017_E_scorch.png`), K `dxvk_20261101_053332` (`shots\ui_008_K_pool_panel.png`, `ui_009_K_ghost.png`, `ui_010_K_admonitor_arrived.png`).
+> - `KH` / `EH` / `EC` still stop before the purchase (hand play); they set the faction too. To look around by hand in a kept-open game: `--drive KX --drive-keep-open`, then `g1_ui.py --method post shot|click|key|wheel|drag ...`, and `g1.py quit` when done.
 | `--game-dir` | Overrides game detection. Otherwise the order is `ALAMO_GAME_DIR`, then `F:\SteamLibrary\…`, then the Steam library folders. |
 
 Results:

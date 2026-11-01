@@ -105,7 +105,8 @@ mode's own 2D scene (0x25c8c0 on mode+0x48). [H]
   sun specular (env +0x60), sun direction from two angles (env +0xa8 yaw, +0xb4 elevation; see §2.3),
   and sets fill-light 1 and 2 intensities to 0 and clears the shadow-volume flag (alScene +0x269 = 0)
   — **on the background scene only** (corrected 2026-10-27, SPACE_AND_OPEN.md §A): the main space scene
-  keeps the environment's fill lights and keeps stencil shadows. [H]
+  keeps the environment's fill lights and keeps stencil shadows. [H] The port draws them in the main space scene
+  since g1r t04 (2026-11-01); before that it switched stencil shadows off for every space frame.
 - **Galactic** (`GalacticModeClass::vf21` 0x4b2bc0): set camera, common tail. [H]
 
 `GameModeClass::sub_2b6aa0` 0x2b6aa0 renders up to four scenes from the mode's scene object:
@@ -709,6 +710,24 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   a quad (V −0.00013..1.00013). These are bump footprint/track decals, **not master-atlas slots**.
   `D_master_decal.DDS` slot UVs therefore still come from DECORATIONS.md. A capture that shows a master-atlas decal
   (scorch, crater) is needed. Texture decode: scratchpad only, not saved under `out/`.
+- **Decal atlas UVs: answered (g1f t05, 2026-10-31, `apitrace_20261031_232822`).** Endor Xpress as the Empire; two
+  AT-ST companies fired "Barrage Area" on open ground (peak around frame 59155: 5 124 triangles, 416 decals in one
+  draw). The atlas is texture `0x19bb52e4d20` (512×512 A8R8G8B8, 10 levels, created at call 5 817 473; its level-0 blob
+  is byte-identical to `D_MASTER_DECAL.DDS` from `textures.meg`). 14 905 fixed-function DIFFUSE_ALPHA scorch draws and
+  8 922 DECAL_BUMP_ALPHA footprint draws bind it. Decoded with `g1_analyze.py --vb-draws ... --draw-calls ... --tex-filter`
+  (analyser extended for index buffers, any FVF, per-draw state and per-decal `uv_patches`; `--selftest-decode`).
+  - **UV rule and slot origin:** now in DECORATIONS.md §4.3 (4×4 grid, row 0 at the top of the DDS, slot (u min, v min)
+    at the decal's (−X, +Y) corner, v along −Y, no inset, integer offset −1/−1, WRAP/WRAP linear + mips).
+  - **Entries seen:** only `EXPLOSION_SCORCH_SMALL` (25×30, slots 0,3 / 1,3) and `_TINY` (10×10); one of each per
+    explosion at the same centre, each with its own slot and heading. MED / LARGE (slots 2,3 / 3,3) not seen.
+  - **Rotation** is uniform over the full circle; **size jitter is absent** (factor 1, correcting DECORATIONS.md §4.2).
+  - **Fade:** vertex RGB white, alpha = 255 × Intensity × (1 − age / Fadeout_Time), linear (SMALL 0.2033 / TINY 0.2516
+    bytes per frame, ratio 1.2376 = (0.33/10)/(0.40/15)); decals at alpha 0 are still drawn; batch order is spawn order.
+  - **Geometry:** each decal is the terrain clipped to its rectangle (7–30 vertices, pieces not welded), normals (0,0,1).
+  - **DIFFUSE_ALPHA state:** FF lighting on, COLORVERTEX, DIFFUSEMATERIALSOURCE COLOR1, COLOROP MODULATE2X, ALPHAOP
+    MODULATE, SRCALPHA / INVSRCALPHA, ZWRITE off, CULL NONE, world = identity. **DECAL_BUMP_ALPHA** (DESTCOLOR / SRCCOLOR,
+    shader pair) also binds the master atlas (AT-ST footprint, slot 1,1), vertex RGB = floor((X̂ + 1) × 127.5); the 64×64
+    DXT5 "footprint" draws of the t02 bullet below are something else (probably dynamic tracks).
 - **Decal atlas capture attempt (g1f t05, 2026-10-31): not captured.** Scorch decals come from the `EXPLOSION_SCORCH_*`
   entries in `TERRAINDECALFX.XML` (slots `0,3` / `1,3`, `Random_Rotate`, `Random_Size_Offset` 0.1, DIFFUSE_ALPHA),
   spawned by the `EXPLOSION_SCORCH_MARK_*` particle effects, so a capture needs ground explosions (a unit or building
@@ -724,6 +743,10 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   - Not tried: a hand-played fight. Needs Gabriel (roadmap t06 style): play Endor Xpress under
     `g1.py apitrace --non-interactive` (no `--drive`), get a unit or building destroyed on open ground, keep it in view
     for 10 s, quit; then the `--vb-draws` decode of the lit FF draws with the master-atlas texture can run.
+  - **Hand-played try (2026-10-31, Claude via computer use): no fight possible.** Run `apitrace_20261031_215822` (scene
+    EH, kept open): wrongly read as "no units": the kit's last step had moved the camera to the base, the starting
+    stormtrooper squads stand elsewhere (and garrison-type units do not count in the 0/9 population), and purchases wait
+    in the reinforcement pool (correction above). Redone the same night as `apitrace_20261031_232822`, see the decal result.
 - **Final-image comparison (g1f t04).** `g1_analyze.py --compare NAME REF PORT --regions "name=x0,y0,x1,y1;..."`
   compares a d3dretrace final with an `alamo_render --sim --map X --png` image (1920×1080; world regions exclude the HUD,
   y < 650). Output: `analysis/compare_<name>.json` and `compare_<name>_side_by_side.png` under the run folder
@@ -745,7 +768,49 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
     so views can be matched pixel-for-pixel.
 
     > **Status 2026-10-30:** "Land pitch 55°" applies to the game, not to `alamo_render`: the renderer's map scene still starts at pitch 50 (`kLandPitch = 50.0f` in `engine/render/include/alamo/render/map_scene.hpp:188`, used at `engine/render/src/map_scene.cpp:844-855`). The game-side camera is `engine/ui/include/alamo/ui/camera.hpp`; this renderer task is not done.
-- **Admonitor close-up: not captured (g1f t01, 2026-10-30).** In five driven DXVK runs (`dxvk_20261030_152344`, `153453`,
+- **Correction (2026-10-31 night, from Gabriel's video): bought units DO arrive; they go to the reinforcement pool.** In a
+  tactical battle a finished purchase is not spawned: it waits in the reinforcement pool, opened with **Call for
+  Reinforcements** (third button in the column left of the command bar), and the player drags its icon onto the map; a
+  green ghost marks a valid drop (space: near the own station; land: inside the ring of an own reinforcement point),
+  red an invalid one. Only then does the population counter rise (Gabriel's video: X-wing squadron dragged in, 0/25 to
+  1/25). Every "never arrives" result below (g1f t01, t06, t08) is this misunderstanding, not a fault of the install,
+  the kit or the Steam files. With it the Admonitor close-up was captured (`apitrace_20261031_232425`, Bloom/Heat on)
+  and land units were obtained on Endor (`apitrace_20261031_232822`). Probe kits must add the reinforcement drag.
+- **Admonitor close-up with Bloom and Heat on (g1f t06, 2026-10-31, `apitrace_20261031_232425`, 32 076 frames).**
+  Kuat as the Empire, `--probe-mod admonitor`, Bloom=1 HeatDistortion=1; close-up frames ~25500–32075, analysed in detail
+  at frame 32075 (calls 66926573–66929022). Note: the back buffer is **3840×2054** here (display-scaling window fit),
+  not 1920×1080 as in the earlier traces; every size below follows from it.
+  - **Colorization (confirms):** the Admonitor (`ps_2_0` #154, hull draw 66927510) and the TIEs (`ps_1_1` #121) get
+    (0.3058824, 0.5882353, 0.9294118, 1), the player's palette blue; neutral Kuat shipyard parts (1,1,1,1); 1 152 draws
+    at (0.392, 0.392, 0.392, 1), object not identified. The FXO default (0,1,0,1) never reaches a draw.
+    D3DRS_TEXTUREFACTOR is never set in the trace. Both shaders do `base = lerp(base, base*Colorization, base.a)`. So the
+    blue cast on Thrawn's ship is team colour. Ship pixels in the final image: mean RGB (35.3, 49.9, 65.8).
+  - **Heat (corrects the kit README's expectation):** every battle frame does `Clear(0x008080FF)` → StretchRect → one
+    SceneHeat strip, but no heat-casting draws occur in the battle (only in the attract menu), so the buffer stays flat
+    0x80. The shift comes from the SceneHeat shaders: VS `t0 = uv − (0.5/W, 0.25/H)`, PS `uv' = t0 + 2·0.25·(d − 0.5)`;
+    predicted +2.765 / +1.264 px at 3840×2054, **measured +2.775 / +1.275 px** (calls 66927984 → 66928016). At 1920×1080
+    the same formula gives +0.88 / +0.31, which explains the earlier +0.8 / +0.3. The 0.25/H term is SceneHeat's
+    `t1_ati` vertex shader: technique `t0` carries `VENDOR_FILTER_0=4098`, so the original draws `t1_ati` on AMD (the
+    capture GPU) and `t0` (0.5/H, +0.88 / +0.06 px at 1920×1080) elsewhere. The port picks by the Vulkan vendor id
+    (g1r t02, `EffectCache::get_for_vendor`; checked by the heat block of `alamo_render_tests`).
+  - **Bloom chain (confirms the 5-draw ping-pong, adds values):** 6 full-size and 4 quarter-size (960×513, height
+    rounded down) A8R8G8B8 targets; depth-stencil unbound during the chain. Bright pass reads the **undistorted scene copy
+    A, not the heat output**: `BloomCutoff` 0.9, keeps colour where luma > cutoff, colour⁵ elsewhere. Four blurs a→b→a→b→a,
+    `BloomIteration` 0–3, `BloomSize` 0.25, 4 diagonal taps at ±0.25·(i+0.5) texels. Composite after restoring the back
+    buffer and `Clear(Z|S, 0)`: `BloomStrength` **1.0** (FX default 0.1), blend ONE / INVSRCCOLOR (screen). Linear filtering,
+    half-texel term from `m_resolutionConstants`.
+  - **Frame order (confirms, adds a soft-shadow resolve):** clear → 10 background draws (planet) → `Clear(Z|S)` → 87
+    scene draws ending with shadow volumes and the alpha-only darken → StretchRect→A → **soft-shadow resolve**: a
+    full-screen quad blurs A's alpha with a 4-tap cross (`blurAmt` 0.0015 uv) and multiplies `lerp(0x8B8B8B, 1, alpha)` into
+    the back buffer (ZERO / SRCCOLOR; the 0x8B grey is vertex colour, blob at call 66927756: Kuat's shadow colour
+    0.5490196 converted to a byte by **truncation**, which rounding would make 0x8C; the port truncates since g1r t04) → 17 effect draws →
+    StretchRect→A → heat → bloom + composite → `Clear(Z)` → 36 UI draws → Present. First CULLMODE set still CCW (call 7508).
+  - **Final image** (frame 32075): whole-frame mean RGB (30.5, 38.8, 41.1); bloom adds only +0.9 luma on the ship; the
+    shadow resolve darkens the ship region 43.6 → 39.1 luma. Images: the run's `analysis\` folder (`final_*.png`,
+    `heat_*.png`) and per-pass snapshots made during the analysis (not kept in git).
+  - Analyser notes: `--apitrace` / `--d3dretrace` must be passed explicitly (an empty default skips the trace silently);
+    the heat snapshot is taken at the middle heat pass of the whole trace, not of `--focus-frames`.
+- **Admonitor close-up: not captured (g1f t01, 2026-10-30; superseded by the correction above).** In five driven DXVK runs (`dxvk_20261030_152344`, `153453`,
   `154000`, `154357`, `155457`, one set with a level-4 start station, `--probe-mod admonitor4`) the Thrawn item and a plain
   2350-credit ship were queued, paid and finished, but no ship appeared on screen, on the minimap or in the select-all list.
   Extra TIE fighters bought at a level-1 station without a probe mod did not add squadrons either. So the cause is not
@@ -771,6 +836,27 @@ The analysis is in `analysis/report.md` and `facts.json`, with focus frames 2195
   - Open (Gabriel, roadmap g1f t06): does a hand-played Kuat skirmish deliver a bought ship? If not, Steam "Verify
     integrity of game files" and repeat. If a bought ship appears, re-run `run_3_apitrace.cmd` with Bloom/Heat on
     (`g1_options.py --set Bloom=1 HeatDistortion=1 -- apitrace ...`) for the Thrawn close-up.
+  - **Hand-played check (g1f t06, 2026-10-31, Claude via computer use, real mouse input in the foreground): the bought
+    ship does not arrive either.** Run `dxvk_20261031_215539` (scene KH, `--probe-mod admonitor`, kept open): the
+    station was selected by hand and one X-wing squadron bought; it was paid, the queue reached 100 % and emptied in about
+    20 s, and after another 40 s the population counter still read 0/25 with only the two garrison squadrons out. The
+    station showed a Rebel garrison (X-wing, Y-wing) and a 25 cap, so this KH run played the Rebellion, not the Empire.
+    So the stuck delivery is not caused by the kit's input method. Still open (Gabriel, roadmap g1f t08): Steam
+    "Verify integrity of game files", then repeat. No Thrawn close-up was possible.
+  - **After the Steam verify (g1f t08, 2026-10-31 evening): still no delivery.** Gabriel ran "Verify integrity of game
+    files"; it changed nothing (`StarWarsG.exe` 07daeeae…, `PerceptionFunctionG.dll` c3a4ae28… unchanged, so that DLL
+    is Steam's own file). Run `dxvk_20261031_231304` (KH, `--probe-mod admonitor`): a hand-bought X-wing squadron again
+    never arrived. In the same game Claude then quit to the menu and started a second Kuat skirmish **entirely by hand**
+    with Advanced options on Default (Allow Heroes, **Free Starting Units** and Super Weapons ticked, 6000 credits): no
+    starting units either (population 0/25 from the start), and the bought squadron again did not arrive within 40 s.
+    So the human player gets neither starting units nor purchases; only the station garrison launches. The Mods folder
+    is not loaded (no `MODPATH` other than the kit's), and `corruption\Data` / `GameData\Data` hold no loose XML or Lua.
+    The kit always starts `StarWarsG.exe` directly; whether a normal launch from the Steam library behaves the same is
+    not checked (roadmap g1f t09).
+  - **One apitrace run ended on its own (2026-10-31).** Run `apitrace_20261031_214805` (scene KH, Bloom/Heat on,
+    `--drive-keep-open`, nobody playing) exited by itself about 6 minutes after launch (trace 10.7 GB), with no crash
+    entry in the Windows Application log. Not a fixed limit: the Endor run `apitrace_20261031_232822` ran about 11
+    minutes (16.9 GB, 60 040 frames). Cause unknown (an idle space battle lost by the player is one guess).
 - **Planet clip wrap: not observable in this trace (g1f t03, 2026-10-31).** `g1_planet_wrap.py extract` over the whole
   `apitrace_20261030_160054` (6.5 GB, 83 240 frames, 52.5 M filtered calls, about 20 min) now finishes: it holds 669 185
   `m_world` rows in 11 (shader, row-scale) groups, all on the one mesh shader (`vs#156`). Results of `survey` / `analyse`:

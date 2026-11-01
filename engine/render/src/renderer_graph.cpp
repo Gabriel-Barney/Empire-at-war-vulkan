@@ -71,7 +71,10 @@ bool Renderer::ensure_targets(VkExtent2D ext) {
 const materials::MaterialEffect* Renderer::post_effect(int which) {
     static const char* const kNames[5] = {"StencilDarken", "StencilDarkenToAlpha", "StencilDarkenFinalBlur", "SceneBloom",
                                           "SceneHeat"};
-    if (!fx_post_[which] && desc_.effects) fx_post_[which] = desc_.effects->get(kNames[which]);
+    // The original's technique selection rejects techniques whose VENDOR_FILTER_n equals the adapter vendor: on AMD
+    // SceneHeat draws t1_ati (V half-texel -1/4), elsewhere t0 (-1/2) (EffectCache::get_for_vendor, g1f t06 capture).
+    if (!fx_post_[which] && desc_.effects)
+        fx_post_[which] = desc_.effects->get_for_vendor(kNames[which], ctx_ ? ctx_->caps().vendor_id : 0u);
     return fx_post_[which].get();
 }
 
@@ -405,7 +408,9 @@ bool Renderer::post_darken(rhi::Frame& frame, VkCommandBuffer cmd, const materia
     const VkPipeline pipe = psos_.get(key);
     if (!pipe) return false;
     // Prim vertices: BGRA8 colour = shadow colour, alpha 0 (reset: 1); uv (0,1) at (-1,-1) .. (1,0) at (1,1); z in front.
-    auto b8 = [](float v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    // Float -> byte by truncation: Kuat's shadow colour 0.549 reaches the darken / resolve quad as 0x8B (g1f t06 capture,
+    // vertex blob at call 66927756), where rounding would give 0x8C.
+    auto b8 = [](float v) { return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
     const uint8_t col[4] = {b8(lighting_.shadow_color.z), b8(lighting_.shadow_color.y), b8(lighting_.shadow_color.x),
                             static_cast<uint8_t>(reset_alpha ? 255 : 0)};
     const float pos[6][2] = {{-1, -1}, {1, -1}, {-1, 1}, {1, -1}, {1, 1}, {-1, 1}};
@@ -425,7 +430,9 @@ bool Renderer::post_darken(rhi::Frame& frame, VkCommandBuffer cmd, const materia
     materials::DrawData dd{};
     store_rows(Mat3x4{}, dd.world);
     dd.light_scale = {1, 1, 1, 1};
-    const materials::ParamStore store;
+    // One empty store for every call: MSVC's std::map allocates its head node on construction, which made each darken
+    // draw allocate twice (Q3 steady-state allocation check, first hit once space frames drew stencil shadows).
+    static const materials::ParamStore store;
     materials::FfDrawData ffd = materials::build_ff_draw_data(*pass->ff, *fx.effect, store.lookup(), true);
     // Neither StencilDarken FXO sets texture stage states, so the prim path's stage 0 state applies:
     // colour and alpha = TEXTURE x DIFFUSE with stage 0 unbound (white). The D3D9 default ALPHAOP
@@ -594,7 +601,10 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     scene.set_depth_state(rhi::ImageState::Undefined);
     const bool depth = scene.has_depth();
     const float clear[4] = {target.clear[0], target.clear[1], target.clear[2], 1.0f};  // frame clear alpha is 0xFF
-    const bool shadows_on = opts.shadows && opts.shader_detail > 0 && !lighting_.space && ds_format_ != VK_FORMAT_UNDEFINED;
+    // Space too: the "no stencil shadows" rule of space mode applies to the background scene only (SPACE_AND_OPEN.md A
+    // item 2); the main space scene draws its shadow volumes, the darken and the soft-shadow resolve (RENDER.md 7.3:
+    // ~20 volumes per frame in a space battle; g1f t06 Kuat frame order). The background build never draws Shadow items.
+    const bool shadows_on = opts.shadows && opts.shader_detail > 0 && ds_format_ != VK_FORMAT_UNDEFINED;
     const bool soft_on = opts.soft_shadows && opts.shader_detail > 0;  // shader detail 0: StencilDarken (hard)
     const float bloom_strength = opts.bloom_strength >= 0.0f ? opts.bloom_strength : lighting_.bloom_strength;
     const bool bloom_on = opts.post && !opts.galactic && bloom_strength > 0.0f;
