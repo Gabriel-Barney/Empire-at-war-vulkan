@@ -73,7 +73,7 @@ uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map,
             const auto* mr = &hooks->mesh_ray_hit;
             fp.fine_tune = [mr, i](V2 xy) { return (*mr)(i, xy); };
         }
-        if (grid.stamp(-static_cast<ObjectId>(i) - 1, fp) > 0) ++n;
+        if (grid.stamp(map_stamp_id(i), fp) > 0) ++n;
     }
     return n;
 }

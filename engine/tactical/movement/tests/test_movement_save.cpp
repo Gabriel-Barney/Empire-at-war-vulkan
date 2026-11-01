@@ -210,6 +210,18 @@ void test_grid() {
     a.unstamp_secondary(600);
     b.unstamp_secondary(600);
     CHECK(hash_of(a) == hash_of(b) && bytes_of(a) == bytes_of(b));
+    // S8 t01: a map stamp handed to its object (rekey) round-trips under the object id; the loader's own stamp under the
+    // placement id is replaced.
+    {
+        PassabilityGrid r = build(5);
+        r.stamp(-3, make_footprint(cell_center(36, 26), 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f, 0));
+        CHECK(r.rekey(-3, 77) && r.stamped(77) && !r.stamped(-3));
+        const Bytes rb = bytes_of(r);
+        PassabilityGrid l = build(5);
+        l.stamp(-3, make_footprint(cell_center(36, 26), 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f, 0));
+        CHECK(load(l, rb) && bytes_of(l) == rb && hash_of(l) == hash_of(r) && l.stamped(77) && !l.stamped(-3));
+        CHECK(l.occupies(77, 36, 26) && !l.occupies(-3, 36, 26));
+    }
     // Another map, or the same map with another playable box: rejected, unchanged.
     PassabilityGrid other = build(6);
     CHECK(rejects(other, good));

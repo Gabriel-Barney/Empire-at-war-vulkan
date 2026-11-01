@@ -620,6 +620,19 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
                 if (q != p) combat_->set_enemy(static_cast<int32_t>(p), static_cast<int32_t>(q), false);
     combat_->reserve(256, 2048, 32, 256);
     attach_rocket_terrain();  // refixf t01
+    if (!space_) {
+        // S8 t01 (TACTICAL_GAPS 3.1 slot 43): LAND_OBSTACLE targets' aim walk over the cells their stamp occupies (map
+        // placements' stamps move to the spawned objects in bt_map_load); an unstamped target keeps the half-extent rule.
+        const mv::MovementSystem* ms = movement_.get();
+        combat_->set_obstacle_cell_query([ms](tc::ObjectId id, tactical::Vec3 p, tactical::Vec3& c) {
+            const mv::PassabilityGrid& g = ms->grid();
+            if (!g.stamped(id)) return tc::ObstacleCell::NoFootprint;
+            const int32_t cx = mv::world_to_cell(p.x), cy = mv::world_to_cell(p.y);
+            const mv::V2 cc = mv::cell_center(cx, cy);
+            c = tactical::Vec3{cc.x, cc.y, p.z};
+            return g.occupies(id, cx, cy) ? tc::ObstacleCell::Occupied : tc::ObstacleCell::Free;
+        });
+    }
     abilities_ = std::make_unique<ta::AbilitySystem>(*combat_, tables_->abilities, catalog_->ability_config(space_, cfg_.skirmish));
     abilities_->reserve(256, 512);
     // --- P4 tactical: campaign Black Market gate, before any unit is added (Active_By_Default / automatic specials) ---

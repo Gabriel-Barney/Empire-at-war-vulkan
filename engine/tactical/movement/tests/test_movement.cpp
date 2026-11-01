@@ -279,6 +279,31 @@ static void test_grid() {
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
     g.stamp(79, fp3);
     CHECK(g.effective(15, 15) == kPassObstacle && g.effective(15, 18) == kPassObstacle && g.effective(18, 15) == kPassClear);
+    // S8 t01: per-object cell query (0x59efa0) and rekey (map placement stamp -> object id).
+    CHECK(g.occupies(79, 15, 15) && g.occupies(79, 15, 18) && !g.occupies(79, 18, 15) && !g.occupies(79, 16, 15));
+    CHECK(g.occupies_world(79, {300.0f, 330.0f}) && !g.occupies_world(79, {340.0f, 300.0f}));
+    CHECK(!g.occupies(80, 15, 15) && !g.occupies(79, -1, 15) && !g.occupies(79, 15, 99));
+    CHECK(g.stamp_cells(79).size() == 4 && g.stamp_cells(80).empty());  // y 300..360: cells 15..18 of column 15
+    {
+        ObstacleFootprint wall = make_footprint({100.0f, 100.0f}, 0.0f, 40.0f, 20.0f, -20.0f, -10.0f, 0, 0, 1.0f, 0);
+        PassabilityGrid a, b;
+        a.init(32, 32);
+        b.init(32, 32);
+        a.stamp(-5, wall);  // map placement 4
+        b.stamp(12, wall);  // stamped under the object id directly
+        b.stamp(-6, wall);
+        a.stamp(-6, wall);
+        const uint64_t va = a.version();
+        CHECK(a.occupies(-5, 5, 5) && !a.occupies(12, 5, 5));
+        CHECK(!a.rekey(-5, -5) && !a.rekey(-9, 13) && !a.rekey(-5, -6));  // same id, unknown id, target taken
+        CHECK(a.rekey(-5, 12));
+        CHECK(a.occupies(12, 5, 5) && !a.occupies(-5, 5, 5) && !a.stamped(-5) && a.stamped(12) && a.version() == va);
+        StateHasher ha, hb;
+        a.hash(ha);
+        b.hash(hb);
+        CHECK(ha.digest() == hb.digest());  // same as stamping under the object id
+        CHECK(a.unstamp(12) && a.effective(5, 5) == kPassObstacle && a.unstamp(-6) && a.effective(5, 5) == kPassClear);
+    }
     // Water rule: a low object over water does not block.
     PassabilityGrid gw;
     gw.init(16, 16);
