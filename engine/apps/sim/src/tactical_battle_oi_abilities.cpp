@@ -190,6 +190,9 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
             case ta::AbilityEventKind::MoveOrder: {  // 0x2a7b80 moves (HUNT, JET_PACK, CONFUSE, ...): not an order cancel
                 Unit* u = unit_by_id(e.id);
                 if (u && u->alive && !u->retreated && u->movable && bt_rng_) {
+                    // S7 t06: JET_PACK (0x3a38d0) swaps a Uses_Multiple_Locomotors unit to its secondary locomotor
+                    // (0x3a9910, MOVEMENT §3.1) before the move; the JETPACK locomotor flies it and swaps back on landing.
+                    if (e.type == ta::kJetPack && movement_) movement_->use_secondary_locomotor(e.id, true);
                     const objects::ObjectId ids[] = {e.id};
                     exec_move(mode, ids, e.point.x, e.point.y, *bt_rng_, mv::kNoFacing, false);
                 }

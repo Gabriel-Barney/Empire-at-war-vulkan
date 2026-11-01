@@ -530,6 +530,15 @@ void build_land(World& w, uint32_t seed) {
     bm.locomotor = LocomotorKind::LandBomber;
     bm.prepare_strafe_height = 100.0f;
     CHECK(w.sys.add_unit(bm));
+    // S7 t06: a Uses_Multiple_Locomotors trooper (WALK primary, JETPACK secondary, Alternate speeds).
+    UnitDesc dt = land_unit(304, cell_center(26, 16), 0, 1.0f, 6.0f, kUccInfantry);
+    dt.uses_multiple_locomotors = true;
+    dt.has_secondary_locomotor = true;
+    dt.secondary_locomotor = LocomotorKind::Jetpack;
+    dt.alt_max_speed = 2.5f;
+    dt.alt_turn_rate = 6.0f;
+    dt.hover_offset = 40.0f;
+    CHECK(w.sys.add_unit(dt));
 }
 
 std::vector<ObjectId> land_walkers(const World& w) {
@@ -566,6 +575,10 @@ void land_before(World& w, uint32_t f) {
             o.units = {303};
             o.destination = cell_center(60, 45);
             s.move(o, w.rng, f);
+            o.units = {304};  // S7 t06: jetpack jump (switch bit), back on WALK after the landing
+            o.destination = cell_center(12, 8);
+            o.switch_locomotor = true;
+            s.move(o, w.rng, f);
             break;
         case 30: s.grid().stamp_secondary_circle(950, cell_center(45, 75), 45.0f, kPassShield); break;
         case 50:
@@ -591,6 +604,16 @@ void land_before(World& w, uint32_t f) {
             o.units = existing(w, {1, 4, 7, 22, 25, 300});
             o.destination = cell_center(10, 10);
             o.flags = kMoveFlagQueue;
+            s.move(o, w.rng, f);
+            o = MoveOrder{};
+            o.units = {304};  // S7 t06: a second jump
+            o.destination = cell_center(20, 14);
+            o.switch_locomotor = true;
+            s.move(o, w.rng, f);
+            break;
+        case 450:
+            o.units = {304};  // S7 t06: a plain move (walks when landed)
+            o.destination = cell_center(28, 20);
             s.move(o, w.rng, f);
             break;
         case 420:
@@ -811,7 +834,9 @@ void test_rejections() {
     land.build(u);
     CHECK(rejects_truncation(u.sys, good, 41));
     Bytes bad = good;
-    put_u32(bad, 0, 2);  // version
+    put_u32(bad, 0, 1);  // version (1: before the S7 t06 multi-locomotor fields)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 3);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
@@ -859,6 +884,22 @@ int main() {
     const Coverage lc = check_resume(land, 1, 0);
     CHECK(lc.crushes > 0 && lc.max_collisions > 0);
     for (uint32_t at : {45u, 160u, 333u, 480u}) check_resume(land, at, 0);
+    {  // S7 t06: the saves above cover the secondary locomotor (45, 333) and the WALK primary after it (480)
+        World w(land.cfg);
+        land.build(w);
+        bool sec45 = false, sec333 = false, walk480 = false, swapped_back = false;
+        for (uint32_t f = 0; f < 480; ++f) {
+            step(land, w, f, serial_for);
+            const UnitView v = w.sys.view(304);
+            if (f > 0 && !v.secondary_locomotor && f < 300) swapped_back = true;
+            if (f + 1 == 45) sec45 = v.secondary_locomotor && v.locomotor == LocomotorKind::Jetpack;
+            if (f + 1 == 333) sec333 = v.secondary_locomotor;
+        }
+        walk480 = !w.sys.view(304).secondary_locomotor && w.sys.view(304).locomotor == LocomotorKind::Default;
+        CHECK(sec45 && swapped_back && sec333 && walk480);
+        std::printf("multi-locomotor coverage: secondary at 45 %d, back on WALK before 300 %d, on the jetpack at 333 %d, walking at "
+                    "480 %d\n", sec45, swapped_back, sec333, walk480);
+    }
     check_resume(land, 250, 37);  // the loader already ran: read() replaces everything
     const Scenario space = space_scenario();
     const Coverage sc = check_resume(space, 1, 0);
