@@ -115,7 +115,7 @@ bool TargetingController::update(const InputState& in, const Bindings& keys, con
     switch (kind_) {
         case TargetKind::Object: {
             if (!ctx.trees) return true;
-            const auto hit = pick(ctx.trees->all(), pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_);
+            const auto hit = pick_world(ctx.trees->all(), ctx.view, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_, ctx.pick_tests);
             if (!hit) return true;  // keep waiting for an object
             commands::EventData e = commands::ev::ability(capped_users(users_), ability_, hit->id);
             out.push_back({std::move(e), queued});

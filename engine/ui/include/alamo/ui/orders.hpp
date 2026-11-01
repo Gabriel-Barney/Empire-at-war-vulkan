@@ -112,6 +112,8 @@ struct OrderContext {
     // tactical
     const tactical::TreeSet* trees = nullptr;
     tactical::QueryFilter pick_filter = tactical::kSkipDead;
+    // refixf t08: the world pick's model / sphere tests (HUD_GAPS §2.2, pick_world); null: tree boxes only (pick).
+    const WorldPickTests* pick_tests = nullptr;
     float ground_z = 0.0f;  // move-order plane (space: z = 0)
     // Optional land terrain height (x, y) -> z, refined by fixed-point iteration from ground_z [port].
     std::function<float(float, float)> ground_height;

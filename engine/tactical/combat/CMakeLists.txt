@@ -13,6 +13,7 @@ add_library(alamo_tactical_combat STATIC
   src/combat_system.cpp
   src/weather.cpp  # L1 systems
   src/combat_save.cpp  # N1 stage 2: CombatSystem / ModifierSet / WeatherSystem write + read
+  src/rocket.cpp  # refixf t01: ROCKET / MPTL_ROCKET spline flight
 )
 add_library(alamo::tactical_combat ALIAS alamo_tactical_combat)
 target_include_directories(alamo_tactical_combat PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

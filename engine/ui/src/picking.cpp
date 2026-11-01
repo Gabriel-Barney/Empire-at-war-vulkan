@@ -14,6 +14,20 @@ Vec3 normalize(Vec3 v) {
 }
 }  // namespace
 
+namespace {
+// Sub-frustum of the pixel-edge rectangle [x0, x1] x [y0, y1] between the near and far planes.
+tactical::Frustum rect_frustum(const View& v, float x0, float y0, float x1, float y1) {
+    const float xs[4] = {x0, x1, x1, x0}, ys[4] = {y0, y0, y1, y1};
+    Vec3 nq[4], fq[4];
+    for (int i = 0; i < 4; ++i) {
+        const Vec3 d = view_dir(v, xs[i], ys[i]);
+        nq[i] = v.eye + d * v.znear;
+        fq[i] = v.eye + d * v.zfar;
+    }
+    return tactical::frustum_from_corners(nq, fq);
+}
+}  // namespace
+
 View make_view(const CameraParams& p, uint32_t width, uint32_t height) {
     View v;
     v.width = width ? width : 1;
@@ -71,28 +85,74 @@ std::optional<PickHit> pick(const tactical::SpatialTree& tree, const tactical::R
     return PickHit{h.handle, h.t};
 }
 
+tactical::Frustum view_frustum(const View& v) {
+    return rect_frustum(v, 0.0f, 0.0f, static_cast<float>(v.width), static_cast<float>(v.height));
+}
+
+// HUD_GAPS §2.2 (0x36600): every candidate is tested (the precise test is not ordered by box entry), so the result is the
+// nearest hit over the whole candidate set.
+std::optional<PickHit> pick_world(const tactical::SpatialTree& tree, const View& v, const tactical::Ray& ray,
+                                  tactical::QueryFilter filter, tactical::QueryContext& ctx, const WorldPickTests* tests,
+                                  uint32_t ignore) {
+    if (!tests || !tests->precise) return pick(tree, ray, filter, ctx, ignore);
+    const tactical::PreparedRay pr(ray);
+    std::optional<PickHit> best;
+    for (const tactical::EntityHandle h : tree.query_frustum(view_frustum(v), filter, ctx)) {
+        if (h == ignore || (tests->skip && tests->skip(h))) continue;
+        float t = 0.0f;
+        bool hit = false;
+        switch (tests->precise(h, ray, t)) {
+            case PreciseOutcome::Hit: hit = true; break;
+            case PreciseOutcome::NotModelled: {
+                const tactical::Aabb* b = tree.bounds(h);
+                hit = b && tactical::ray_aabb(pr, *b, t);
+                break;
+            }
+            case PreciseOutcome::Miss: break;
+        }
+        if (!hit && tests->sphere) {
+            Vec3 c{};
+            const float r = tests->sphere(h, c);
+            hit = r > 0.0f && ray_sphere(ray, c, r, t);
+        }
+        if (!hit) continue;
+        const uint32_t id = tests->resolve ? tests->resolve(h) : h;
+        if (id == tactical::kNoEntity) continue;
+        if (!best || t < best->t || (t == best->t && id < best->id)) best = PickHit{id, t};
+    }
+    return best;
+}
+
 std::span<const tactical::RayHit> pick_all(const tactical::SpatialTree& tree, const tactical::Ray& ray,
                                            tactical::QueryFilter filter, tactical::QueryContext& ctx) {
     return tree.query_ray(ray, filter, ctx);
 }
 
+bool ray_sphere(const tactical::Ray& ray, Vec3 centre, float radius, float& t) {
+    const float a = dot(ray.dir, ray.dir);
+    if (!(a > 0.0f)) return false;
+    const Vec3 oc = ray.origin - centre;
+    const float c = dot(oc, oc) - radius * radius;
+    if (!(c > 0.0f)) {  // origin inside (or on) the sphere
+        t = 0.0f;
+        return true;
+    }
+    const float b = dot(ray.dir, oc);
+    const float disc = b * b - a * c;
+    if (b > 0.0f || disc < 0.0f) return false;  // pointing away / missing
+    const float te = (-b - std::sqrt(disc)) / a;
+    if (te < 0.0f || te > ray.max_t) return false;
+    t = te;
+    return true;
+}
+
 std::optional<size_t> pick_spheres(std::span<const PickSphere> items, const tactical::Ray& ray, float* t_out) {
     std::optional<size_t> best;
     float best_t = 0.0f;
-    const float a = dot(ray.dir, ray.dir);
-    if (!(a > 0.0f)) return best;
     for (size_t i = 0; i < items.size(); ++i) {
         const PickSphere& s = items[i];
-        const Vec3 oc = ray.origin - s.center;
-        const float c = dot(oc, oc) - s.radius * s.radius;
         float t = 0.0f;
-        if (c > 0.0f) {
-            const float b = dot(ray.dir, oc);
-            const float disc = b * b - a * c;
-            if (b > 0.0f || disc < 0.0f) continue;  // pointing away / missing
-            t = (-b - std::sqrt(disc)) / a;
-            if (t < 0.0f || t > ray.max_t) continue;
-        }
+        if (!ray_sphere(ray, s.center, s.radius, t)) continue;
         if (!best || t < best_t || (t == best_t && s.id < items[*best].id)) {
             best = i;
             best_t = t;
@@ -111,14 +171,7 @@ std::vector<uint32_t> box_select(const tactical::SpatialTree& tree, const View& 
                                  tactical::QueryFilter filter, tactical::QueryContext& ctx) {
     const PixelBounds pb = drag_select_bounds(rect);
     const float x0 = pb.x0, x1 = pb.x1, y0 = pb.y0, y1 = pb.y1;
-    const float xs[4] = {x0, x1, x1, x0}, ys[4] = {y0, y0, y1, y1};
-    Vec3 nq[4], fq[4];
-    for (int i = 0; i < 4; ++i) {
-        const Vec3 d = view_dir(v, xs[i], ys[i]);
-        nq[i] = v.eye + d * v.znear;
-        fq[i] = v.eye + d * v.zfar;
-    }
-    const tactical::Frustum f = tactical::frustum_from_corners(nq, fq);
+    const tactical::Frustum f = rect_frustum(v, x0, y0, x1, y1);
     std::vector<uint32_t> out;
     for (tactical::EntityHandle h : tree.query_frustum(f, filter, ctx)) {
         const tactical::Aabb* b = tree.bounds(h);

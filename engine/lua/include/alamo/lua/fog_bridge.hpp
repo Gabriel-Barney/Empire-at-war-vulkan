@@ -79,6 +79,11 @@ struct FogScriptHooks {
     tactical::fog::FogOfWar* fog = nullptr;  // the mode's fog; null = fog off (tactical commands then refuse)
     // The fog's view of a live object of the VM's store (TacticalBattle::fog_object). Unset / false: no position.
     std::function<bool(objects::ObjectHandle, tactical::fog::FogObject&)> object;
+    // refixf t03: FOW_Object_Hidden 0x35f470 (FOG_OF_WAR.md §5) of a live object of the VM's store for player p
+    // (TacticalBattle::fog_object_hidden), used by Find_Nearest with a player (force = true). Unset: `fog`'s
+    // object_hidden with a query built from the store (TEAM / HIDE_WHEN_FOGGED / REVEAL behaviours, position; no
+    // Multisample_FOW_Check corners [port]).
+    std::function<bool(objects::ObjectHandle, int32_t player, bool force)> object_hidden;
     // Disable_Rendering while `fog` is null: the host's carried FOW-active / render option (CampaignBattles keeps them
     // between battles, FOG_OF_WAR §8 item 2). Unset: ignored.
     std::function<void(bool fow_active, bool render_option)> set_globals;

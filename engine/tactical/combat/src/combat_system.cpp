@@ -123,6 +123,7 @@ void CombatSystem::reserve(uint32_t units, uint32_t projectiles, uint32_t candid
     for (auto& c : cands_) c.reserve(candidates_per_unit);
     projectiles_.reserve(projectiles);
     sweep_.reserve(projectiles);
+    rocket_next_.reserve(projectiles);  // refixf t01
     delayed_.reserve(delayed);
     deaths_.reserve(units);
     hp_events_.reserve(static_cast<size_t>(units) * 4);
@@ -289,14 +290,96 @@ void CombatSystem::order_attack(ObjectId attacker, ObjectId target, int32_t hard
     if (!u) return;
     u->ordered_target = target;
     u->ordered_hp = hardpoint;
+    u->locked = 0;
+    u->aim_target = kNoObject;  // refixf t06: the order re-aims the hardpoints
+    u->aim_hp = -1;
     u->auto_target = kNoObject;  // an order drops the auto target (0x565e50)
+    u->auto_hp = -1;
     u->target_score = 0.0f;
 }
 void CombatSystem::clear_order(ObjectId attacker) {
     if (Unit* u = unit(attacker)) {
         u->ordered_target = kNoObject;
         u->ordered_hp = -1;
+        u->locked = 0;
     }
+}
+// ---- refixf t06: Attack_Move on an object (TACTICAL_COMBAT §2.8) ----
+void CombatSystem::set_attack_goal(ObjectId attacker, ObjectId target, int32_t hardpoint) {
+    if (Unit* u = unit(attacker)) {
+        u->goal_target = target;
+        u->goal_hp = target == kNoObject ? -1 : hardpoint;
+    }
+}
+ObjectId CombatSystem::attack_goal(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? u->goal_target : kNoObject;
+}
+ObjectId CombatSystem::weapon_aim(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? u->aim_target : kNoObject;
+}
+bool CombatSystem::order_locked(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u && u->ordered_target != kNoObject && u->locked != 0;
+}
+bool CombatSystem::ability_type_active(const Unit& u, int32_t type) const {
+    for (int s = 0; s < 2; ++s)
+        if (const UnitAbilityDesc* a = ability(u, s); a && u.ability_active[static_cast<size_t>(s)] && a->ability_type == type) return true;
+    return false;
+}
+bool CombatSystem::order_attack_issue(ObjectId attacker, ObjectId target, int32_t hardpoint) {
+    Unit* u = unit(attacker);
+    const Unit* t = unit(target);
+    if (!u || !live(t)) return false;
+    // C step 1: refusals.
+    if (!is_enemy(u->owner, t->owner)) return false;
+    if ((t->flags & kUnitStealthed) && !desc_of(*u).target_stealth_units && u->owner != t->owner) return false;
+    if (t->flags & kUnitGarrisoned) return false;
+    // Members without TEAM / TARGETING get no Order_Attack (0x739200 step 3): a unit with no weapon at all [port].
+    bool armed = desc_of(*u).weapon_projectile >= 0;
+    for (uint32_t i = 0; i < u->hp_count && !armed; ++i) armed = is_weapon(data_->hardpoints[hps_[u->hp_begin + i].desc].kind);
+    if (!armed && u->team == 0) return true;
+    const int32_t hp = hardpoint >= 0 && static_cast<uint32_t>(hardpoint) < t->hp_count ? hardpoint : -1;
+    const bool space = cfg_.mode == GameMode::Space;
+    const bool weapon_path = !(space && ability_type_active(*u, 5));  // space unless BARRAGE; land: ordered = 1
+    if (weapon_path && u->team == 0 && !ability_type_active(*u, 34)) {
+        // C step 2: lock released (slot 32(0): a locked target stays the current target, unlocked), the weapon hardpoints
+        // aim at the target; the unit's own target is untouched.
+        if (u->ordered_target != kNoObject && u->locked) {
+            u->auto_target = u->ordered_target;
+            u->auto_hp = u->ordered_hp;
+            u->target_score = 0.0f;
+            u->ordered_target = kNoObject;
+            u->ordered_hp = -1;
+            u->locked = 0;
+        }
+        u->aim_target = t->id;
+        u->aim_hp = hp;
+        return true;
+    }
+    // C step 3: the set path - Set_Target(target, hp, ordered 1, lock 1).
+    order_attack(attacker, target, hp);
+    u->locked = 1;
+    return true;
+}
+float CombatSystem::base_attack_range_of(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? base_attack_range(*u) : 0.0f;
+}
+float CombatSystem::min_attack_distance(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? desc_of(*u).min_attack_distance : 0.0f;
+}
+bool CombatSystem::inside_min_range(ObjectId attacker, ObjectId target) const {
+    const Unit* a = unit(attacker);
+    const Unit* t = unit(target);
+    if (!a || !t) return false;
+    const float mn = desc_of(*a).min_attack_distance;
+    if (!(mn > 0.0f)) return false;
+    float d = 0.0f, E = 0.0f;
+    range_geometry(*t, a->pos, d, E);
+    return d <= mn + E;
 }
 ObjectId CombatSystem::ordered_target(ObjectId id) const {
     const Unit* u = unit(id);
@@ -403,6 +486,62 @@ float CombatSystem::hp_fraction(const Unit& u) const {
 bool CombatSystem::hp_out(const Hardpoint& h) const {
     // HARDPOINT_DISABLED.md §5: every gate tests (Is_Destroyable && health <= 0) || disabled.
     return h.destroyed || h.disabled || (data_->hardpoints[h.desc].destroyable && !(h.health > 0.0f));
+}
+
+bool CombatSystem::hp_dead(const Hardpoint& h) const {
+    return data_->hardpoints[h.desc].destroyable && (h.destroyed || !(h.health > 0.0f));
+}
+
+int32_t CombatSystem::mesh_hardpoint(const Unit& v, Vec3 impact) const {
+    // TACTICAL_COMBAT §2.9 Q1 steps 1 / 4 (port difference 1) [port]: retail names the render sub-object the precise model
+    // test struck and damages the hardpoint whose Collision_Mesh it is (refixf t07: hardpoint_by_mesh, when the host's
+    // precise test supplied the hit). Without a precise test (no model data / synthetic runs): the closest
+    // (3D, first in list order on ties) hardpoint that is not (destroyable and dead) stands in, when its bone is within
+    // CombatConfig::hardpoint_mesh_radius of the impact point; else no name (hull). A non-destroyable match routes to
+    // the hull in take_damage, as retail does for a non-destroyable mesh.
+    int32_t best = -1;
+    float best_d2 = 0.0f;
+    for (uint32_t i = 0; i < v.hp_count; ++i) {
+        const Hardpoint& h = hps_[v.hp_begin + i];
+        if (hp_dead(h)) continue;
+        const Vec3 d = hp_world(v, data_->hardpoints[h.desc]) - impact;
+        const float d2 = dot(d, d);
+        if (best < 0 || d2 < best_d2) {
+            best = static_cast<int32_t>(i);
+            best_d2 = d2;
+        }
+    }
+    const float r = cfg_.hardpoint_mesh_radius;
+    return best >= 0 && best_d2 <= r * r ? best : -1;
+}
+
+bool CombatSystem::pick_aim_point(const Unit& u, const Hardpoint& h, const Unit& t, Vec3 ref, float range, SimRng& rng,
+                                  Vec3& out) const {
+    // TACTICAL_COMBAT §2.9 Q2 step 3, 0x383f70 [H unless tagged]: candidates accepted when their 3D distance from the
+    // fire-bone reference <= Get_Fire_Range (+ the target radius when the shooter type has a weapon list +0xc48) and the
+    // point passes the cone. [L] The type bone list (+0xe68, tag unknown) is not modelled. Then the hardpoints from a
+    // synced random start (one Get_Int(0, n - 1); [M] no draw without hardpoints), wrapping, skipping destroyable dead
+    // ones; then the object's position.
+    const UnitDesc& sd = desc_of(u);
+    const float lim = range + ((sd.weapon_projectile >= 0 || !sd.weapon_projectiles.empty()) ? desc_of(t).radius : 0.0f);
+    auto ok = [&](Vec3 p) { return distance3(ref, p) <= lim && in_cone(u, h, p); };
+    if (t.hp_count > 0) {
+        const auto start = static_cast<uint32_t>(rng.range_int(0, static_cast<int32_t>(t.hp_count) - 1));
+        for (uint32_t k = 0; k < t.hp_count; ++k) {
+            const Hardpoint& th = hps_[t.hp_begin + (start + k) % t.hp_count];
+            if (hp_dead(th)) continue;
+            const Vec3 p = hp_world(t, data_->hardpoints[th.desc]);
+            if (ok(p)) {
+                out = p;
+                return true;
+            }
+        }
+    }
+    if (ok(t.pos)) {
+        out = t.pos;
+        return true;
+    }
+    return false;
 }
 
 void CombatSystem::set_system_online(Unit& v, uint32_t index, bool online, bool destroyed, uint32_t frame) {
@@ -591,14 +730,15 @@ bool CombatSystem::unit_can_attack(const Unit& u) const {
 }
 
 bool CombatSystem::in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const {
-    // HP_In_Fire_Cone (0x383ba0) [M]: aim point in the hardpoint's frame; |yaw| <= width/2 and
-    // |pitch| <= height/2; turrets: |yaw| <= Turret_Rotate_Extent_Degrees. The fire-bone frame is
-    // approximated by the unit's facing (yaw only) plus fire_yaw_deg [L].
+    // HP_In_Fire_Cone (0x383ba0), TACTICAL_COMBAT §2.9 Q2 step 5: not a turret: the point in the fire bone's world frame,
+    // |yaw| (wrapped) <= Fire_Cone_Width / 2 and |pitch| <= Fire_Cone_Height / 2; turret: the point in the attachment-bone
+    // frame, |yaw + 90| (normalised) <= Turret_Rotate_Extent_Degrees, no elevation limit. refixf t06 [port]: the bone
+    // frames are the model's bind-pose bone axes (HardpointDesc::fire_* / attach_*) turned by the unit's yaw (the port's
+    // units have no pitch / roll; animated bone orientations are not read); without a model frame the unit's facing (yaw
+    // only) + fire_yaw_deg [L] stands in. A cone of >= 360 x >= 180 (or a turret extent >= 180) passes every point.
     const HardpointDesc& hd = data_->hardpoints[h.desc];
     if (!hd.turret && hd.fire_cone_width >= 360.0f && hd.fire_cone_height >= 180.0f) return true;
     if (hd.turret && hd.turret_rotate_extent >= 180.0f) return true;
-    const Vec3 o = hp_world(a, hd);
-    const Vec3 d = aim - o;
     float fx = a.facing.x, fy = a.facing.y;
     const float len2 = fx * fx + fy * fy;
     if (len2 > 0.0f) {
@@ -609,6 +749,20 @@ bool CombatSystem::in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const {
         fx = 1.0f;
         fy = 0.0f;
     }
+    auto turn = [fx, fy](Vec3 l) { return Vec3{l.x * fx - l.y * fy, l.x * fy + l.y * fx, l.z}; };
+    if (hd.turret ? hd.has_attach_frame : hd.has_fire_frame) {
+        const Vec3 o = local_to_world(a, hd.turret ? hd.attach_offset : hd.bone_a);
+        const Vec3 d = aim - o;
+        const float lx = dot(d, turn(hd.turret ? hd.attach_x : hd.fire_x));
+        const float ly = dot(d, turn(hd.turret ? hd.attach_y : hd.fire_y));
+        if (hd.turret) return abs_f(wrap_deg(dmath::atan2(ly, lx) * kRadToDeg + 90.0f)) <= hd.turret_rotate_extent;
+        const float lz = dot(d, turn(hd.fire_z));
+        const float yaw = dmath::atan2(ly, lx) * kRadToDeg;
+        const float pitch = dmath::atan2(lz, dmath::sqrt(lx * lx + ly * ly)) * kRadToDeg;
+        return abs_f(yaw) <= hd.fire_cone_width * 0.5f && abs_f(pitch) <= hd.fire_cone_height * 0.5f;
+    }
+    const Vec3 o = hp_world(a, hd);
+    const Vec3 d = aim - o;
     const float lx = d.x * fx + d.y * fy;
     const float ly = d.y * fx - d.x * fy;
     const float yaw = wrap_deg(dmath::atan2(ly, lx) * kRadToDeg - hd.fire_yaw_deg);
@@ -765,13 +919,84 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
     }
 }
 
+bool CombatSystem::lock_holds(const Unit& u, const Unit& t) const {
+    // §2.8 B "while locked" [H]: dropped when the target is garrisoned, stealthed for an attacker without
+    // Target_Stealth_Units, or hidden by fog for the attacker's player (0x35f470, force 1). Dying / dead: live().
+    // [port: the +0x3b4 test is not modelled.]
+    if (t.flags & kUnitGarrisoned) return false;
+    if ((t.flags & kUnitStealthed) && !desc_of(u).target_stealth_units) return false;
+    return !target_hidden(u.owner, t.id, true);
+}
+
+bool CombatSystem::promote_goal(Unit& u) {
+    // §2.8 B steps 2-6 [H]: Formation_Attack_Target(F, &hp, 0) -> 0x5680b0 -> slot 44 && !slot 45 -> Set_Target(t, hp,
+    // order 1, lock 1) and every weapon hardpoint HP_Set_Target (update_weapons pushes the current target each frame).
+    const Unit* t = unit(u.goal_target);
+    if (!live(t)) {  // the dead object's formation goal has become a position
+        u.goal_target = kNoObject;
+        u.goal_hp = -1;
+        return false;
+    }
+    if (t == &u || !is_enemy(u.owner, t->owner)) return false;  // hostile to the unit's owner (relation table == 1)
+    if (t->flags & (kUnitSkipTargeting | kUnitDead | kUnitGarrisoned)) return false;  // 0x5680b0 [M: +0x361 / +0x38e]
+    if (!desc_of(*t).is_valid_target) return false;
+    float d = 0.0f, E = 0.0f;
+    range_geometry(*t, u.pos, d, E);
+    const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
+    if (!(d <= range + E)) return false;  // slot 44
+    const float mn = desc_of(u).min_attack_distance;
+    if (mn > 0.0f && d <= mn + E) return false;  // slot 45
+    int32_t hp = -1;
+    if (u.goal_hp >= 0 && static_cast<uint32_t>(u.goal_hp) < t->hp_count && !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(u.goal_hp)]))
+        hp = u.goal_hp;  // no goal hardpoint: none pushed (§2.9 Q3; the space formation step fills it in)
+    u.ordered_target = t->id;
+    u.ordered_hp = hp;
+    u.locked = 1;
+    u.auto_target = kNoObject;  // replaces any auto target
+    u.auto_hp = -1;
+    u.target_score = 0.0f;
+    u.aim_target = kNoObject;
+    u.aim_hp = -1;
+    return true;
+}
+
+void CombatSystem::service_space_hardpoint(Unit& u) {
+    // TACTICAL_COMBAT §2.9 Q3 [H]: Service_Space (0x633ae0), after the keep / switch step, when TD +0x10 is null or a
+    // dead destroyable hardpoint and the unit has a formation: the formation goal's hardpoint when it is not dead, else
+    // Choose_Target_Hardpoint(target, unit). Service_Land has no such step. [port] "has a formation" = the unit has an
+    // attack goal (the port's movement keeps no formation objects for space; group object orders set the goal).
+    if (cfg_.mode != GameMode::Space || u.goal_target == kNoObject) return;
+    const bool ord = u.ordered_target != kNoObject && live(unit(u.ordered_target));
+    const Unit* t = unit(ord ? u.ordered_target : u.auto_target);
+    if (!live(t) || t->hp_count == 0) return;
+    int32_t& hp = ord ? u.ordered_hp : u.auto_hp;
+    if (hp >= 0 && static_cast<uint32_t>(hp) < t->hp_count && !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(hp)])) return;
+    if (t->id == u.goal_target && u.goal_hp >= 0 && static_cast<uint32_t>(u.goal_hp) < t->hp_count &&
+        !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(u.goal_hp)])) {
+        hp = u.goal_hp;
+    } else {
+        hp = choose_target_hardpoint(u, *t);
+    }
+}
+
 void CombatSystem::decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng) {
+    decide_target(u, cands, frame, rng);
+    service_space_hardpoint(u);
+}
+
+void CombatSystem::decide_target(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng) {
+    bool dropped = false;
     if (u.ordered_target != kNoObject) {
         const Unit* o = unit(u.ordered_target);
-        if (live(o) && is_enemy(u.owner, o->owner)) return;
+        if (live(o) && is_enemy(u.owner, o->owner) && (!u.locked || lock_holds(u, *o))) return;
         u.ordered_target = kNoObject;  // finished order cleared (0x565de0)
         u.ordered_hp = -1;
+        u.locked = 0;
+        dropped = true;
     }
+    // refixf t06 (TACTICAL_COMBAT §2.8 B): the formation's attack goal becomes the locked target inside weapon range,
+    // before the scan; a promotion skips the scan of this service. [port: not in the service that dropped a target.]
+    if (!dropped && u.goal_target != kNoObject && promote_goal(u)) return;
     if (!u.scan_due) return;
     u.next_scan = next_scan_frame(frame, cfg_.fps, rng);  // synced draw 1
     ++stats_.scans;
@@ -812,11 +1037,19 @@ void CombatSystem::decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame
     }
 done:
     if (best) {
+        // §2.9 Q3: Set_Target fixes the target hardpoint (Choose_Target_Hardpoint); the same target is not re-set.
+        if (best->id != u.auto_target) {
+            const Unit* bt = unit(best->id);
+            u.auto_hp = bt ? choose_target_hardpoint(u, *bt) : -1;
+        }
         u.auto_target = best->id;
         u.target_score = best->score;
+        u.aim_target = kNoObject;  // refixf t06: Order_Attack(unit, pick, ordered 0) re-aims the hardpoints (§2.8 C)
+        u.aim_hp = -1;
         u.acquired = 1;  // OI abilities: Issue_Auto_Target for the acquired target (the autofire driver, abilities)
     } else {
         u.auto_target = kNoObject;
+        u.auto_hp = -1;
         u.target_score = 0.0f;
     }
 }
@@ -827,7 +1060,7 @@ int32_t CombatSystem::closest_hardpoint(const Unit& t, Vec3 from, bool targetabl
     for (uint32_t i = 0; i < t.hp_count; ++i) {
         const Hardpoint& h = hps_[t.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
-        if (h.destroyed || (targetable_only && !hd.targetable)) continue;
+        if (hp_dead(h) || (targetable_only && !hd.targetable)) continue;  // 0x394a80: not (destroyable and dead)
         const Vec3 d = hp_world(t, hd) - from;
         const float d2 = dot(d, d);
         if (best < 0 || d2 < best_d2) {
@@ -839,21 +1072,23 @@ int32_t CombatSystem::closest_hardpoint(const Unit& t, Vec3 from, bool targetabl
 }
 
 int32_t CombatSystem::choose_target_hardpoint(const Unit& a, const Unit& t) const {
-    // Choose_Target_Hardpoint (0x394610) [H]: with a priority set, rank = position in
+    // Choose_Target_Hardpoint (0x394610) [H]: with a priority set, rank = position of the hardpoint's TYPE in
     // Hard_Point_Priorities (excluded = -1: skipped [M]), else 1e18; lowest rank, ties closest 3D.
     if (t.hp_count == 0) return -1;
     const int32_t ps = a.priority_override >= 0 ? a.priority_override : desc_of(a).priority_set;  // OI abilities
     if (ps < 0 || static_cast<size_t>(ps) >= data_->priority_sets.size()) return closest_hardpoint(t, a.pos, true);
     const PrioritySet& set = data_->priority_sets[static_cast<size_t>(ps)];
+    // §2.9 Q3: ties by the 3D distance from (shooter x, y, z + Ranged_Target_Z_Adjust).
+    const Vec3 from{a.pos.x, a.pos.y, a.pos.z + desc_of(a).ranged_target_z_adjust};
     int32_t best = -1;
     float best_rank = 0.0f, best_d2 = 0.0f;
     for (uint32_t i = 0; i < t.hp_count; ++i) {
         const Hardpoint& h = hps_[t.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
-        if (h.destroyed || !hd.destroyable) continue;
-        const float rank = hardpoint_rank(set, hd.name_crc);
+        if (!hd.destroyable || hp_dead(h)) continue;
+        const float rank = hardpoint_rank(set, static_cast<int32_t>(hd.kind));  // refixf t06: by HardPointType
         if (rank < 0.0f) continue;
-        const Vec3 d = hp_world(t, hd) - a.pos;
+        const Vec3 d = hp_world(t, hd) - from;
         const float d2 = dot(d, d);
         if (best < 0 || rank < best_rank || (rank == best_rank && d2 < best_d2)) {
             best = static_cast<int32_t>(i);
@@ -902,17 +1137,27 @@ ObjectId CombatSystem::current_target(ObjectId id) const {
 }
 
 void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
-    const ObjectId tgt = current_target(u.id);
+    ObjectId tgt = current_target(u.id);
+    // refixf t06 (TACTICAL_COMBAT §2.8 C step 2): a path-A aim holds the weapon hardpoints until the next scan pick, a lock
+    // or another order replaces it [port: kept while the aimed object is a live enemy].
+    if (u.aim_target != kNoObject) {
+        const Unit* a = unit(u.aim_target);
+        if (!live(a) || !is_enemy(u.owner, a->owner)) {
+            u.aim_target = kNoObject;
+            u.aim_hp = -1;
+        } else if (u.ordered_target == kNoObject) {
+            tgt = u.aim_target;
+        }
+    }
     const Unit* t = unit(tgt);
     int32_t sub = -1;
     if (live(t)) {
-        // S9: an ordered hardpoint (command 40/45 index) is kept while it is alive.
-        if (tgt == u.ordered_target && u.ordered_hp >= 0 && static_cast<uint32_t>(u.ordered_hp) < t->hp_count &&
-            !hps_[t->hp_begin + static_cast<uint32_t>(u.ordered_hp)].destroyed) {
-            sub = u.ordered_hp;
-        } else {
-            sub = choose_target_hardpoint(u, *t);
-        }
+        // refixf t06 (TACTICAL_COMBAT §2.9 Q2 step 1 / Q3): the hardpoint fixed when the target was set (TD +0x10: the
+        // order's, the aim's or the scan's). Update_Weapon drops it when it is destroyable and dead; Fire_At then picks
+        // the closest live targetable hardpoint per shot.
+        const int32_t fixed = tgt == u.ordered_target ? u.ordered_hp : tgt == u.aim_target ? u.aim_hp : tgt == u.auto_target ? u.auto_hp : -1;
+        if (fixed >= 0 && static_cast<uint32_t>(fixed) < t->hp_count && !hp_dead(hps_[t->hp_begin + static_cast<uint32_t>(fixed)]))
+            sub = fixed;
     }
     const bool idle = !live(t);
     for (uint32_t i = 0; i < u.hp_count; ++i) {
@@ -1032,32 +1277,42 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
     if (hd.projectile < 0 || static_cast<size_t>(hd.projectile) >= data_->projectiles.size()) return false;
     // L1 systems: a special-weapon hard point never fires at a target hidden for its owner with force 1.
     if (hd.kind == HardpointKind::WeaponSpecial && target_hidden(u.owner, t.id, true)) return false;
-    // 2. target hardpoint: closest to the shooter when none was chosen (0x394a80)
+    // 2. target hardpoint (§2.9 Q2 step 1): dropped when destroyable and dead; none -> the closest live targetable one to
+    //    the shooter, per shot (0x398440 -> 0x394a80(target, pos, 0, 0)).
     int32_t thp = h.target_hp;
-    if (thp < 0 && t.hp_count > 0) thp = closest_hardpoint(t, u.pos, false);
+    if (thp >= 0 && (static_cast<uint32_t>(thp) >= t.hp_count || hp_dead(hps_[t.hp_begin + static_cast<uint32_t>(thp)]))) thp = -1;
+    if (thp < 0 && t.hp_count > 0) thp = closest_hardpoint(t, u.pos, true);
     // S9: ability projectile override / suppression (ion cannon shot, lucky shot).
     int32_t proj = hd.projectile;
     float dscale = 1.0f;  // OI abilities: Blast state gate / projectile / damage multiplier (REMAINING_GAPS §5.5)
     if (hooks_ && !hooks_->fire_gate(u.id, &hd, proj, dscale)) return false;
     if (hooks_ && !hooks_->shot_allowed(u.id, t.id, thp, proj)) return false;
     if (proj < 0 || static_cast<size_t>(proj) >= data_->projectiles.size()) return false;
-    // 5. aim point
-    const Vec3 aim0 = thp >= 0 ? hp_world(t, data_->hardpoints[hps_[t.hp_begin + static_cast<uint32_t>(thp)].desc]) : t.pos;
-    // 3. cone (turret test / fire cone)
-    if (!in_cone(u, h, aim0)) return false;
-    // 6. fire bones: A, or the A-B midpoint (C and D never read)
+    // fire bones: A, or the A-B midpoint (C and D never read)
     Vec3 a = local_to_world(u, hd.bone_a);
     Vec3 b = hd.has_bone_b ? local_to_world(u, hd.bone_b) : a;
     if (hooks_) hooks_->fire_bones(u.id, static_cast<uint32_t>(&h - &hps_[u.hp_begin]), a, b);  // S10-int: animated bones
     const Vec3 ref = hd.has_bone_b ? (a + b) * 0.5f : a;
-    // 7. range, XY only
     const float range = fire_range(hd.fire_range, mod_r(u, ModList::FireRange));
+    // 3. aim point (§2.9 Q2 step 3): the target hardpoint's bone, else 0x383f70 (range + cone per candidate; none: no shot).
+    //    [port] Turret pre-check (Q2 step 2) not modelled: the port has no turret rotation state (the barrel is taken
+    //    as on target).
+    Vec3 aim0;
+    if (thp >= 0) {
+        aim0 = hp_world(t, data_->hardpoints[hps_[t.hp_begin + static_cast<uint32_t>(thp)].desc]);
+    } else if (!pick_aim_point(u, h, t, ref, range, rng, aim0)) {
+        return false;
+    }
+    // 4. range, XY only
     const float dist = distance_xy(ref, aim0);
     if (!in_fire_range(dist, hd.fire_min_range, range, td.radius)) return false;
     const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(proj)];
     // S9 energy pool (0x56bee0): a shot with Projectile_Energy_Per_Shot needs that much energy [H];
     // tested before the shot's draws [M].
     if (pd.energy_per_shot > 0.0f && has_energy_pool(u) && u.energy < pd.energy_per_shot) return false;
+    // 5. lead (0x399450) on the aim point [M: from the fire-bone reference], then the cone test on the lead point.
+    Vec3 aim = lead_point(t, ref, aim0, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
+    if (!in_cone(u, h, aim)) return false;
     // 8. muzzle: 3 synced Get_Float (arguments lost [M]: per axis between the two bones), else
     //    bone A without B, else Percent(50) picks A or B.
     Vec3 muzzle;
@@ -1070,8 +1325,6 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
     } else {
         muzzle = rng.percent(50) ? a : b;
     }
-    // 9. lead
-    Vec3 aim = lead_point(t, muzzle, aim0, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
     // 10. inaccuracy: always 3 synced draws unless disabled (debug flag)
     if (cfg_.inaccuracy_enabled) {
         const float f = inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy);
@@ -1203,6 +1456,8 @@ void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t
     p.kind = pd.damage_kind;
     // Maximum travel (+0x6c) = Get_Fire_Range (Projectile_Max_Flight_Distance when <= 0) + target
     // radius + |aim.z - muzzle.z|; 0 -> lifetime expiry.
+    // refixf t01 (S9 §2.4.10 step 1, MaxTravelDistance +0x6c): the same rule for rockets [H]; [M] the target radius term
+    // is the retail radius helper 0x397780 (+ its container's when garrisoned), here UnitDesc::radius.
     const float base = range > 0.0f ? range : pd.max_flight_distance;
     p.max_travel = base > 0.0f ? base + desc_of(target).radius + abs_f(aim.z - muzzle.z) : 0.0f;
     // OI tactical: lobbed shots (category 3) leave on the ballistic arc to the aim point (formulas.hpp lob_direction).
@@ -1212,6 +1467,14 @@ void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t
         p.floor_z = aim.z;
         p.dir = lob_direction(muzzle, aim, pd.max_speed, g);
     }
+    // refixf t01 (S9 §2.4.10 step 1): a spline rocket keeps FireAtPosition = `aim` and the launch point. [M] `aim` is the
+    // shared fire path's aim point (target / hardpoint position, circular lead, then the fire-time inaccuracy) standing in
+    // for 0x54a270 + 0x549f80 (not re-read). [M/port] Facing: retail leaves along the x axis of the fire-bone (or shooter
+    // world) transform; the port has no bone orientations, so the shared path's muzzle -> aim direction (p.dir) is used.
+    if (spline_rocket(pd)) {
+        p.rocket = 1;
+        add_rocket(p, aim, muzzle);
+    }
     projectiles_.push_back(p);
 }
 
@@ -1219,22 +1482,72 @@ void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t
 // projectiles (sections 3.3-3.5)
 // ================================================================================================
 
+CombatSystem::SweepHit CombatSystem::sweep_segment(const Projectile& p, Vec3 delta, QueryContext& ctx) const {
+    SweepHit best{kNoObject, 0.0f};
+    const Ray ray{p.pos, delta, 1.0f};
+    const auto np = static_cast<int32_t>(std::min<uint32_t>(player_count(), trees_->player_count()));
+    // Find_First_Object_Hit_By_Segment_All_Enemies (0x2abcf0, §3.4): hostile players' trees, Query_Ray, then per entry
+    // the precise model test (0x38f900) or the Collision_Box_Modifier sphere (refixf t07: the host's precise_hit_; the
+    // query mask is 7 with Projectile_Does_Shield_Damage, else 5). The original returns the first passing entry in tree
+    // order; the port takes the minimum (segment fraction, object id) over every passing entry of every hostile tree.
+    PreciseQuery pq;
+    pq.a = p.pos;
+    pq.b = p.pos + delta;
+    pq.mask = data_->projectiles[p.desc].does_shield_damage ? 7u : 5u;
+    for (int32_t q = 0; q < np; ++q) {
+        if (!is_enemy(p.owner, q)) continue;
+        for (const RayHit& hit : trees_->player(static_cast<uint32_t>(q)).query_ray(ray, kSkipDead, ctx)) {
+            const Unit* v = unit(static_cast<ObjectId>(hit.handle));
+            if (!live(v)) continue;
+            SweepHit c{v->id, hit.t};
+            if (precise_hit_) {
+                pq.victim = v->id;
+                pq.shield_up = v->shield > 0.0f;
+                pq.collide = (v->flags & kUnitGarrisoned) == 0;
+                PreciseResult r;
+                const PreciseOutcome o = precise_hit_(pq, r);
+                if (o == PreciseOutcome::Miss) continue;
+                if (o == PreciseOutcome::Hit) {
+                    c.t = r.t;
+                    c.mesh_hp = r.mesh ? hardpoint_by_mesh(*v, *r.mesh) : -1;
+                }
+            }
+            if (best.id == kNoObject || c.t < best.t || (c.t == best.t && c.id < best.id)) best = c;
+            // Without the precise test the entries are sorted by (t, id): the first live one is this tree's minimum.
+            if (!precise_hit_) break;
+        }
+    }
+    return best;
+}
+
+int32_t CombatSystem::hardpoint_by_mesh(const Unit& v, const std::string& mesh) const {
+    // 0x394d40 (§2.9 Q1 step 4): the first hardpoint in HardPoints order whose Collision_Mesh equals the name (_stricmp;
+    // both sides are upper case); -1 when none.
+    if (mesh.empty()) return -1;
+    for (uint32_t i = 0; i < v.hp_count; ++i)
+        if (data_->hardpoints[hps_[v.hp_begin + i].desc].collision_mesh == mesh) return static_cast<int32_t>(i);
+    return -1;
+}
+
 void CombatSystem::sweep(uint32_t pi, QueryContext& ctx) {
     const Projectile& p = projectiles_[pi];
     SweepHit best{kNoObject, 0.0f};
     if (p.alive && p.spawn_frame < frame_ && p.fuse < 0.0f) {  // OI abilities: armed bombs only detonate on the fuse
-        const Ray ray{p.pos, p.dir * p.speed, 1.0f};
-        const auto np = static_cast<int32_t>(std::min<uint32_t>(player_count(), trees_->player_count()));
-        // Hostile players' trees; the port takes the minimum (t, object id) over all of them (the
-        // original returns the first hit in tree order, section 3.4).
-        for (int32_t q = 0; q < np; ++q) {
-            if (!is_enemy(p.owner, q)) continue;
-            for (const RayHit& hit : trees_->player(static_cast<uint32_t>(q)).query_ray(ray, kSkipDead, ctx)) {
-                const Unit* v = unit(static_cast<ObjectId>(hit.handle));
-                if (!live(v)) continue;
-                if (best.id == kNoObject || hit.t < best.t || (hit.t == best.t && v->id < best.id)) best = SweepHit{v->id, hit.t};
-                break;  // hits are sorted by (t, id): the first live one is this tree's minimum
+        if (p.rocket) {
+            // refixf t01: a planned spline rocket sweeps P -> N, N = the path sampled at s + speed (§2.4.2 steps 2 / 5;
+            // read-only here, the commit phase advances s). An unplanned one (first flight step) is planned and swept in
+            // the serial commit phase (its plan draws).
+            RocketNext& rn = rocket_next_[pi];
+            rn.ok = 0;
+            const Rocket* rk = find_rocket(p.serial);
+            Vec3 n;
+            if (rk && rk->planned && rk->path.sample(rk->s + p.speed, n)) {
+                rn.n = n;
+                rn.ok = 1;
+                best = sweep_segment(p, n - p.pos, ctx);
             }
+        } else {
+            best = sweep_segment(p, p.dir * p.speed, ctx);
         }
     }
     sweep_[pi] = best;
@@ -1258,26 +1571,39 @@ void CombatSystem::apply_or_queue(const DamageRequest& r, float delay_secs, uint
     }
 }
 
-void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, SimRng& rng) {
+void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, SimRng& rng, const Vec3* segment,
+                               int32_t mesh_hp) {
     // Process_Hit (0x4cb280) [H unless tagged].
     const ProjectileDesc& pd = data_->projectiles[p.desc];
     const UnitDesc& vd = desc_of(v);
     ++stats_.hits;
     float dmg = p.damage;
     if (dmg == 0.0f) dmg = pd.blast_area_damage;
-    int32_t hp = v.id == p.target ? p.target_hp : -1;  // the projectile's targeted hardpoint [M]
+    const Vec3 impact = segment ? p.pos + *segment * t : p.pos + p.dir * (p.speed * t);
+    // refixf t06 (TACTICAL_COMBAT §2.9 Q1 steps 1-3): the hardpoint the hit names.
+    int32_t random_hp = -1;
     if (pd.damages_random_hardpoints && v.hp_count > 0) {
         // synced Get_Int(0, count - 1), then probe forward (wrapping) to a live destroyable one
         const auto start = static_cast<uint32_t>(rng.range_int(0, static_cast<int32_t>(v.hp_count) - 1));
-        hp = -1;
         for (uint32_t k = 0; k < v.hp_count; ++k) {
             const uint32_t j = (start + k) % v.hp_count;
             const Hardpoint& h = hps_[v.hp_begin + j];
-            if (!h.destroyed && data_->hardpoints[h.desc].destroyable) {
-                hp = static_cast<int32_t>(j);
+            if (!hp_dead(h) && data_->hardpoints[h.desc].destroyable) {
+                random_hp = static_cast<int32_t>(j);
                 break;
             }
         }
+    }
+    int32_t hp = -1;
+    if (v.id == p.target && p.target_hp >= 0) {
+        hp = p.target_hp;  // Take_Damage name override: the targeted hardpoint wins (the random draw is still made)
+    } else if (cfg_.mode == GameMode::Land) {
+        hp = closest_hardpoint(v, impact, true);  // land: closest live targetable to the projectile [M: impact point]
+    } else if (pd.damages_random_hardpoints) {
+        hp = random_hp;  // space: the random pick's Collision_Mesh
+    } else {
+        // space: the struck mesh's hardpoint (refixf t07: from the precise test; without one the mesh_hardpoint stand-in)
+        hp = mesh_hp == kMeshUnknown ? mesh_hardpoint(v, impact) : mesh_hp;
     }
     DamageRequest r;
     r.victim = v.id;
@@ -1288,7 +1614,6 @@ void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, 
     r.source_is_projectile = true;
     r.projectile_desc = static_cast<int32_t>(p.desc);
     r.hardpoint = hp;
-    const Vec3 impact = p.pos + p.dir * (p.speed * t);
     r.has_impact = true;
     r.impact = impact;
     // S9 t04 (§1.5): a Causes_Infection hit attaches the INFECTION behaviour (or resumes it: counter - 1). [port] Before
@@ -1918,12 +2243,14 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
     if (pd && !pd->does_hitpoint_damage) hx = 0.0f;
     // S9 t04 (§1.1): the death-clone sub-key = the source projectile's Damage_Type index (-1: not a projectile).
     const int32_t sub_key = pd && pd->damage_type != kNoTypeId ? static_cast<int32_t>(pd->damage_type) : -1;
-    // 17 hardpoint routing: a named live destroyable hardpoint takes everything
+    // 17 hardpoint routing: a named live destroyable hardpoint takes everything; a named dead destroyable one swallows the
+    //    hit (refixf t06, TACTICAL_COMBAT §2.9 Q1 step 5: neither hardpoint nor hull; the shield part stays absorbed); a
+    //    named non-destroyable one -> hull.
     if (hp_index >= 0 && static_cast<uint32_t>(hp_index) < v.hp_count) {
         Hardpoint& h = hps_[v.hp_begin + static_cast<uint32_t>(hp_index)];
-        if (!h.destroyed && data_->hardpoints[h.desc].destroyable) {
-            hardpoint_damage(v, h, hx, r.source, out, frame, false, sub_key);
-            track_damage(v, absorbed + hx, frame);
+        if (data_->hardpoints[h.desc].destroyable) {
+            if (!hp_dead(h)) hardpoint_damage(v, h, hx, r.source, out, frame, false, sub_key);
+            track_damage(v, absorbed + out.to_hardpoint, frame);
             record_damage(r, v, src, hp_index, out, frame);
             return out;
         }
@@ -2174,21 +2501,158 @@ bool CombatSystem::shield_away(const Projectile& p, Vec3& away) const {
     return false;
 }
 
-void CombatSystem::rocket_replan(Projectile& p) {
-    // ROCKET / MPTL_ROCKET (0x4cfc40), §2.4 [H]: every qualifying emitter (same rules as 0x4c6e30, no jam skip) is
-    // tested for a CROSSING - the next point inside (<= r), the current position outside (>= r) - and every crossing
-    // re-plans the path. [port] The re-planned path shape (builders 0x4cceb0 / 0x4cdb00) was not read and rockets fly
-    // straight here: a re-plan points the rocket away from that emitter's centre. The turn rate is not used.
+// ---- refixf t01: spline rockets (S9_DEATH_CLONE_SHIELDS.md §2.4) -------------------------------------------------------
+
+bool CombatSystem::spline_rocket(const ProjectileDesc& pd) const {
+    return pd.category == ProjectileCategory::Rocket || pd.category == ProjectileCategory::MptlRocket;
+}
+
+void CombatSystem::add_rocket(const Projectile& p, Vec3 fire_at, Vec3 launch) {
+    // Spawn (§2.4.10 step 1): FireAtPosition, launch point, s = 0, no path yet; the budget is set by the initial plan.
+    Rocket rk;
+    rk.serial = p.serial;
+    rk.fire_at = fire_at;
+    rk.launch = launch;
+    rk.budget = data_->projectiles[p.desc].max_flight_distance;
+    rockets_.push_back(std::move(rk));  // serials only grow: rockets_ stays in serial order
+}
+
+CombatSystem::Rocket* CombatSystem::find_rocket(uint32_t serial) {
+    const auto it = std::lower_bound(rockets_.begin(), rockets_.end(), serial,
+                                     [](const Rocket& r, uint32_t v) { return r.serial < v; });
+    return (it == rockets_.end() || it->serial != serial) ? nullptr : &*it;
+}
+
+const CombatSystem::Rocket* CombatSystem::find_rocket(uint32_t serial) const {
+    const auto it = std::lower_bound(rockets_.begin(), rockets_.end(), serial,
+                                     [](const Rocket& r, uint32_t v) { return r.serial < v; });
+    return (it == rockets_.end() || it->serial != serial) ? nullptr : &*it;
+}
+
+bool CombatSystem::rocket(size_t i, RocketView& out) const {
+    if (i >= projectiles_.size() || !projectiles_[i].rocket) return false;
+    const Rocket* rk = find_rocket(projectiles_[i].serial);
+    if (!rk) return false;
+    out.planned = rk->planned != 0;
+    out.s = rk->s;
+    out.budget = rk->budget;
+    out.fire_at = rk->fire_at;
+    out.launch = rk->launch;
+    out.last_velocity = rk->last_vel;
+    out.path = &rk->path;
+    return true;
+}
+
+void CombatSystem::expire_projectile(uint32_t i, uint32_t frame) {
+    Projectile& p = projectiles_[i];
+    const ProjectileDesc& pd = data_->projectiles[p.desc];
+    ++stats_.expired;
+    p.alive = 0;
+    const Projectile pc = p;  // copy: the detonation may spawn projectiles
+    HitEvent he;  // S10-int (R4): lifetime detonation particle
+    he.shooter = pc.shooter;
+    he.owner = pc.owner;
+    he.projectile_desc = pc.desc;
+    he.position = pc.pos;
+    hit_events_.push_back(he);
+    if (pd.blast_area_damage > 0.0f && pd.blast_area_range > 0.0f) area_damage(pc, pc.pos, kNoObject, frame);
+    detonation_effects(pc, pc.pos, kNoObject, frame);
+}
+
+void CombatSystem::rocket_step(uint32_t i, uint32_t frame, SimRng& rng) {
+    // One ROCKET / MPTL_ROCKET flight step (0x4cfc40, S9_DEATH_CLONE_SHIELDS.md §2.4.2) [H unless tagged]. Serial commit
+    // phase in projectile serial order, so the plan / re-plan draws come at this projectile's place in the stream, before
+    // its hit draws (the original re-plans before the sweep). No reference into rockets_ / projectiles_ is used after a
+    // call that can spawn (hit processing, expiry).
+    Rocket* rk = find_rocket(projectiles_[i].serial);
+    if (!rk) {  // [port] cannot happen (spawn / read keep rockets_ in step with the projectiles)
+        projectiles_[i].alive = 0;
+        return;
+    }
+    const ProjectileDesc& pd = data_->projectiles[projectiles_[i].desc];
+    RocketParams rp;
+    rp.curve_distance = pd.rocket_curve_distance;
+    rp.curve_offset = pd.rocket_curve_offset;
+    rp.straight_distance = pd.rocket_straight_distance;
+    rp.max_flight_distance = pd.max_flight_distance;
+    rp.target_on_terrain = pd.target_point_on_terrain;
+    rp.explode_at_target = pd.explode_when_reached_target_radius;
+    RocketContext ctx;
+    ctx.params = &rp;
+    ctx.terrain = &rocket_terrain_;
+    ctx.rng = &rng;
+    ctx.launch = rk->launch;
+    const bool land = cfg_.mode == GameMode::Land;  // mode 1 = land builders, mode 2 = space
+    const Vec3 P = projectiles_[i].pos;
+    // 1. No path yet: the initial plan (first flight step, before the facing turns). [port] FireAtPosition is always set.
+    const bool fresh = rk->planned == 0;
+    if (fresh) {
+        if (land) rocket_plan_land(rk->path, P, rk->fire_at, projectiles_[i].dir, rk->budget, ctx);
+        else rocket_plan_space(rk->path, P, rk->fire_at, projectiles_[i].dir, rk->budget, ctx);
+        rk->planned = 1;
+        rk->s = 0.0f;
+    }
+    // 2. s += speed, N = sample(s) (phase E sampled the same s + speed for planned rockets). Past the path's end the
+    //    rocket expires where it is (forced expiry: detonation at P).
+    rk->s = rk->s + projectiles_[i].speed;
+    Vec3 N;
+    bool ok = false;
+    if (fresh) {
+        ok = rk->path.sample(rk->s, N);
+    } else {
+        ok = rocket_next_[i].ok != 0;
+        N = rocket_next_[i].n;
+    }
+    if (!ok) {
+        expire_projectile(i, frame);
+        return;
+    }
+    Projectile& p = projectiles_[i];
+    // 3. Turn_Toward P -> N at the type turn rate: only the facing turns (the position comes from the spline) [M].
+    p.dir = turn_toward(p.dir, N - P, projectile_turn_rate(pd));
+    // 4. Every qualifying emitter (§2.3 rules, no jamming skip), in list order, with the same P and N: a crossing (N inside,
+    //    P outside; squares summed y, x, z) re-plans. A second crossing in the same step re-plans again from s = 0.
     for (const uint32_t idx : emitters_) {
         const Unit& e = units_[idx];
         if (e.flags & kUnitDead) continue;
         if (!is_enemy(e.owner, p.owner)) continue;
-        const float r = e.emitter_radius;
-        if (!(r > 0.0f)) continue;
-        const Vec3 cur = p.pos - e.pos;
-        const Vec3 nxt = (p.pos + p.dir * p.speed) - e.pos;
-        if (dot(nxt, nxt) <= r * r && dot(cur, cur) >= r * r) p.dir = normalize(cur);
+        const float R = e.emitter_radius;
+        if (!(R > 0.0f)) continue;
+        const Vec3 dn = N - e.pos, dp = P - e.pos;
+        const float n2 = (dn.y * dn.y + dn.x * dn.x) + dn.z * dn.z;
+        const float p2 = (dp.y * dp.y + dp.x * dp.x) + dp.z * dp.z;
+        const float R2 = R * R;
+        if (n2 <= R2 && R2 <= p2) {
+            if (land) rocket_replan_land(rk->path, P, e.pos, rk->last_vel, rk->s, rk->budget, ctx);
+            else rocket_replan_space(rk->path, P, e.pos, rk->last_vel, rk->s, rk->budget, ctx);
+        }
     }
+    // 5. Sweep P -> N (on a re-plan step still the OLD path's N), hit processing, else move to N.
+    const Vec3 seg = N - P;
+    SweepHit hit = fresh ? sweep_segment(p, seg, serial_ctx_) : sweep_[i];
+    if (hit.id != kNoObject && !live(unit(hit.id))) {  // victim died earlier in this phase
+        ++stats_.resweeps;
+        hit = sweep_segment(p, seg, serial_ctx_);
+    }
+    if (hit.id != kNoObject) {
+        Unit* v = unit(hit.id);
+        p.alive = 0;
+        Projectile pc = p;
+        process_hit(pc, *v, hit.t, frame, rng, &seg, hit.mesh_hp);
+        return;
+    }
+    // LastKnownVelocity (+0x98) = the move's displacement x the frame-time float 0x140b0a344 [M: 1 / FPS].
+    rk->last_vel = seg * (1.0f / static_cast<float>(cfg_.fps));
+    p.pos = N;
+    p.travelled = p.travelled + p.speed;  // DistanceTravelled += speed
+    // 6. End of flight (0x4c7050): Explode_When_Reached_Target_Radius and s >= budget, or the travel / lifetime rule of
+    //    every projectile.
+    bool expire = pd.explode_when_reached_target_radius && rk->s >= rk->budget;
+    if (!expire)
+        expire = p.max_travel > 0.0f
+                     ? p.travelled >= p.max_travel
+                     : static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps) > pd.max_lifetime;
+    if (expire) expire_projectile(i, frame);
 }
 
 // ================================================================================================
@@ -2347,6 +2811,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     // E. projectile sweeps (parallel)
     const auto np = static_cast<uint32_t>(projectiles_.size());
     sweep_.resize(np);
+    rocket_next_.resize(np);  // refixf t01
     {
         const RangeFn fn = [this](uint32_t b, uint32_t e) {
             QueryContext* c = acquire_ctx();
@@ -2362,6 +2827,10 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         if (!(units_[i].flags & kUnitDead) && units_[i].emitter_radius > 0.0f && units_[i].emitter_entries > 0) emitters_.push_back(i);
     for (uint32_t i = 0; i < np; ++i) {
         if (!projectiles_[i].alive || projectiles_[i].spawn_frame >= frame) continue;
+        if (projectiles_[i].rocket) {  // refixf t01: spline rocket (0x4cfc40)
+            rocket_step(i, frame, rng);
+            continue;
+        }
         SweepHit hit = sweep_[i];
         if (hit.id != kNoObject && !live(unit(hit.id))) {  // victim died earlier in this phase
             ++stats_.resweeps;
@@ -2372,7 +2841,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             Unit* v = unit(hit.id);
             projectiles_[i].alive = 0;
             Projectile pc = projectiles_[i];
-            process_hit(pc, *v, hit.t, frame, rng);
+            process_hit(pc, *v, hit.t, frame, rng, nullptr, hit.mesh_hp);
             continue;
         }
         Projectile& p = projectiles_[i];
@@ -2382,7 +2851,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         // S9 t05 (S9_DEATH_CLONE_SHIELDS.md §2.2 / §2.3): the flight modes steer by Turn_Toward (0x3abe40) limited to
         // Max_Rate_Of_Turn x the mode multiplier per step - homing toward the target, and in the straight / homing modes
         // away from a missile-shield emitter holding the projectile (that goal replaces the target for the step).
-        // Rockets re-plan on crossing into an emitter; bombs, grenades and sabers are never shield-tested.
+        // Rockets fly rocket_step (spline, re-plan on crossing); bombs, grenades and sabers are never shield-tested.
         using PC = ProjectileCategory;
         const PC cat = pd.category;
         const bool jammed = is_jammed(p.target, frame);
@@ -2393,9 +2862,8 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         }
         bool steer = false;
         Vec3 goal;
-        if (cat == PC::Rocket || cat == PC::MptlRocket) {
-            if (!emitters_.empty()) rocket_replan(p);
-        } else if (cat != PC::Bomb && cat != PC::Grenade && cat != PC::StaticBomb && cat != PC::LightSaber &&
+        // ROCKET / MPTL_ROCKET never get here (rocket_step above, refixf t01).
+        if (cat != PC::Bomb && cat != PC::Grenade && cat != PC::StaticBomb && cat != PC::LightSaber &&
                    cat != PC::ClusterBomb && !emitters_.empty()) {
             steer = shield_away(p, goal);
         }
@@ -2428,19 +2896,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
                          ? p.travelled >= p.max_travel
                          : static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps) > pd.max_lifetime;
         }
-        if (expire) {
-            ++stats_.expired;
-            p.alive = 0;
-            const Projectile pc = p;
-            HitEvent he;  // S10-int (R4): lifetime detonation particle
-            he.shooter = pc.shooter;
-            he.owner = pc.owner;
-            he.projectile_desc = pc.desc;
-            he.position = pc.pos;
-            hit_events_.push_back(he);
-            if (pd.blast_area_damage > 0.0f && pd.blast_area_range > 0.0f) area_damage(pc, pc.pos, kNoObject, frame);
-            detonation_effects(pc, pc.pos, kNoObject, frame);
-        }
+        if (expire) expire_projectile(i, frame);
     }
     // G. velocity history (OI tactical: two steps for the circular-lead fit), flush
     for (Unit& u : units_) {
@@ -2486,6 +2942,18 @@ void CombatSystem::flush() {
     for (size_t i = 0; i < projectiles_.size(); ++i)
         if (projectiles_[i].alive) projectiles_[w++] = projectiles_[i];
     projectiles_.resize(w);
+    // refixf t01: rocket states follow their projectiles (both in serial order).
+    if (!rockets_.empty()) {
+        size_t rw = 0, j = 0;
+        for (size_t k = 0; k < rockets_.size(); ++k) {
+            while (j < projectiles_.size() && projectiles_[j].serial < rockets_[k].serial) ++j;
+            if (j < projectiles_.size() && projectiles_[j].serial == rockets_[k].serial) {
+                if (rw != k) rockets_[rw] = std::move(rockets_[k]);
+                ++rw;
+            }
+        }
+        rockets_.resize(rw);
+    }
 }
 
 // ================================================================================================
@@ -2668,6 +3136,12 @@ bool CombatSystem::launch_projectile(const ProjectileLaunch& l, uint32_t frame) 
         p.speed = 0.0f;
         p.max_travel = 0.0f;
         p.fuse = l.fuse_seconds;
+    } else if (spline_rocket(pd)) {
+        // refixf t01: a host-launched spline rocket flies the §2.4.10 path to `aim`; its travel limit is Spawn_Projectile's
+        // (MFD with no override + the target radius + |aim z - launch z|) [M], since the path is longer than the line.
+        p.rocket = 1;
+        if (pd.max_flight_distance > 0.0f) p.max_travel = pd.max_flight_distance + radius + abs_f(aim.z - l.from.z);
+        add_rocket(p, aim, l.from);
     }
     projectiles_.push_back(p);
     ++stats_.shots;
@@ -2716,8 +3190,12 @@ void CombatSystem::clear_targets(ObjectId id) {
     Unit* u = unit(id);
     if (!u) return;
     u->auto_target = kNoObject;
+    u->auto_hp = -1;
     u->ordered_target = kNoObject;
     u->ordered_hp = -1;
+    u->locked = 0;
+    u->aim_target = kNoObject;  // refixf t06
+    u->aim_hp = -1;
     u->target_score = 0.0f;
     for (uint32_t i = 0; i < u->hp_count; ++i) {  // 0x38f840 per hardpoint
         Hardpoint& h = hps_[u->hp_begin + i];
@@ -3032,6 +3510,7 @@ bool CombatSystem::stun_unit(ObjectId id, int32_t frames, uint32_t frame) {
     v->stun_end = frame + static_cast<uint32_t>(frames);  // plain assignment (not extended) [H]
     // targeting / turret suspended: drop the current targets so the release starts from a fresh scan [M]
     v->auto_target = kNoObject;
+    v->auto_hp = -1;
     v->target_score = 0.0f;
     if (hooks_) hooks_->unit_effect(id, UnitEffect::Stunned, v->owner, v->pos, frame);  // stealth break, host freeze
     return true;
@@ -3238,6 +3717,18 @@ void CombatSystem::hash_extended(StateHasher& h) const {
             h.u8(0x24);
             h.i32(u.weapon_index);
         }
+        if (u.auto_hp >= 0) {  // refixf t06 round 3: the scan target's fixed hardpoint (format unchanged without one)
+            h.u8(0x29);
+            h.i32(u.auto_hp);
+        }
+        if (u.goal_target != kNoObject || u.aim_target != kNoObject || u.locked) {  // refixf t06 (format unchanged otherwise)
+            h.u8(0x28);
+            h.i32(u.goal_target);
+            h.i32(u.goal_hp);
+            h.i32(u.aim_target);
+            h.i32(u.aim_hp);
+            h.u8(u.locked);
+        }
         if (u.infect_attached) {  // refix t02: INFECTION behaviour state (format unchanged without one)
             h.u8(0x54);
             h.u32(u.infect_suspend);
@@ -3269,6 +3760,31 @@ void CombatSystem::hash_extended(StateHasher& h) const {
             h.f32(p.floor_z);
         }
         if (p.fuse >= 0.0f) h.f32(p.fuse);  // OI abilities: armed bombs only
+        if (p.rocket) {  // refixf t01: spline-rocket state (absent for other projectiles: format unchanged)
+            h.u8(0x52);
+            const Rocket* rk = find_rocket(p.serial);
+            if (!rk) continue;
+            h.u8(rk->planned);
+            h.f32(rk->s);
+            h.f32(rk->budget);
+            for (const Vec3& v : {rk->fire_at, rk->launch, rk->last_vel}) {
+                h.f32(v.x);
+                h.f32(v.y);
+                h.f32(v.z);
+            }
+            h.u32(static_cast<uint32_t>(rk->path.count()));
+            for (const Vec3& v : rk->path.points()) {
+                h.f32(v.x);
+                h.f32(v.y);
+                h.f32(v.z);
+            }
+            h.u32(static_cast<uint32_t>(rk->path.segments().size()));
+            for (const RocketSpline::Segment& sg : rk->path.segments()) {
+                for (const float c : sg.k) h.f32(c);
+                h.f32(sg.length);
+            }
+            h.f32(rk->path.total());
+        }
     }
     // OI abilities: base-power entries, hardpoint repair lists (insertion order).
     h.u32(static_cast<uint32_t>(base_power_.size()));

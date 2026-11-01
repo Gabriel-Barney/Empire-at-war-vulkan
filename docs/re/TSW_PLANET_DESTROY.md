@@ -28,6 +28,7 @@ STRATEGIC_GAPS §1.4 (victory 7), P4_SIM_SYSTEMS §3.3 (hack path). Not repeated
 | 8 | Battle end afterwards; ownership | [H] no TSW-specific step; owner after a won and a lost battle probed 2026-10-31 (lost: R = winner, direct retreat jump) |
 | 9 | Corrections to other docs | [H] |
 | 10 | Port-affecting findings | — |
+| 11 | Presentation: camera shake 0x2cdbb0 and the firing camera 0x2ccf30 (no synced state) | [H] formulas, constants, keys; [M] field names, box source; [L] end-of-shot chaining |
 
 ---
 
@@ -70,7 +71,7 @@ service per frame with step 1 [M], and F = the frame of the successful Fire:
 
 | State | Entered | Work | Leaves after (vanilla Death Star II values) |
 |---|---|---|---|
-| 5 power-up | Fire (0x42a200) | camera firing sequence 0x2ccf30, `TSW_SFXEvent_Activate_Voice`, `TSW_SFXEvent_Weapon_Power_Up`, music `TSW_MusicEvent_Activation_Start` (resolved event at type +0x21a0, music priority 8), **victory hold** | int(30 × `TSW_Power_Up_Countdown_Seconds`) = 270 frames |
+| 5 power-up | Fire (0x42a200) | camera firing sequence 0x2ccf30 (§11.2), `TSW_SFXEvent_Activate_Voice`, `TSW_SFXEvent_Weapon_Power_Up`, music `TSW_MusicEvent_Activation_Start` (resolved event at type +0x21a0, music priority 8), **victory hold** | int(30 × `TSW_Power_Up_Countdown_Seconds`) = 270 frames |
 | 6 | | nothing | 1 service |
 | 7 | | attack animation (anim 5), `SFXEvent_Fire` (type +0x1240); countdown := int(30 × `TSW_Attack_Anim_Duration_Seconds`); camera notify if a target is set | 1 service |
 | 8 | | countdown | 75 frames |
@@ -106,7 +107,7 @@ All in one service of the TSW behaviour, in this order:
 4. Dummy type's `Death_Explosions` list (type +0xce0, count +0xce8): if non-empty, pick one with a synced
    int(0, count − 1) (no draw when count is 1, which is vanilla) and create it at the dummy's position /
    orientation for the **neutral** player (0x294aa0 = first player whose faction has `Is_Neutral` +0x108) in the
-   mode's secondary store (mode +0x20); camera shake 0x2cdbb0 at the dummy.
+   mode's secondary store (mode +0x20); camera shake 0x2cdbb0 at the dummy (§11.1).
 5. Dummy type's `Death_SFXEvent_Start_Die` (+0x12d0) plays.
 6. **The dummy is killed** (0x391310(dummy, 1)).
 7. Galactic part — only when all of these exist, else stop: the parent mode of the current one (0x28aa00 on
@@ -275,3 +276,232 @@ Current port: `special_weapons.cpp` runs the TSW machine and emits `TswPlanetDes
 
 Probes: story routing (§7) and frame offsets (§3) done 2026-10-31; owner / starbase (§8) done for a won battle,
 lost battle open (retreat unavailable after the kill).
+
+---
+
+## 11. Presentation: camera shake and firing camera
+
+Both belong to the **in-game cinematic camera controller** (global object 0x140b27a10, MAIN_MENU_BACKGROUND §1;
+`CinematicClass` base, its `End_Cinematic_Mode` is 0x49b5c0). Controller fields used here: +0x34a active,
++0x37c state (Fire uses state 3), +0x34d shake enable (static init 0x17400 writes the dword at +0x34c = 0x10101,
+so +0x34d = 1; nothing else writes it [H]), +0x14c shot timer {start = mode frame, +0x150 duration in frames},
++0x154 **shot clock** = frames since the shot started, +0x278 list of shake trackers.
+
+**Synced state: none.** Everything in this section writes only camera, HUD, cursor, letterbox and pacing state.
+The one RNG draw is from the generator at 0x140a2ab18 (seeded from `QueryPerformanceCounter` at boot, MAIN_LOOP
+§5.1 step 2; reset to 0xf0f0f0f0 only by 0x69040), **not** the lockstep LCG 0x140a13e24 [H]. The shake call
+sits inside TSW state 9 (sim code), but whether it does anything depends on presentation state (+0x34a), so the
+port must keep it on the presentation side (an event the host plays). The cinematic reads sim positions (TSW,
+target dummy, station marker) and never writes them. Side effect on pacing only: starting the cinematic sets
+FS +0x37 (logic rate locked to 30, MAIN_LOOP §2) until it ends [H].
+
+### 11.1 Camera shake 0x2cdbb0 → 0x2cdc00 [H unless tagged]
+
+0x2cdbb0(controller, object, explosion type, fixed) = 0x2cdc00(controller, &object position (+0x78..+0x80),
+explosion type, fixed) when object and type are non-null. Callers: TSW state 9 (§4 step 4) with fixed = **1**
+and type = the chosen `Death_Explosions` entry; DeathBehavior 0x58cf90 (death explosion, fixed 0) and the hardpoint
+death paths 0x384a30 / 0x386660 (type +0x430 explosion, fixed 0, direct 0x2cdc00 calls).
+
+**Gate** (all must hold, else nothing): +0x34d (always 1); a current mode exists and its type (vf +0xe0) is 1
+(land) or 2 (space); **+0x34a (a cinematic is running)**. So outside a cinematic **no explosion ever shakes the
+camera**; the TSW shake happens only because Fire started the firing cinematic (§11.2) and it is still running at
+state 9.
+
+**Parameters** (J = `Explosion_Jitter_Factor` of the explosion type, type +0x2130, float, **default 1.0** from the
+type constructor 0x367250; FPS = 30):
+
+| CameraShakeEffect parameter | value | TSW planet kill (J = 1, D = 100) |
+|---|---|---|
+| D (distance) | fixed = 1: **100.0**; fixed = 0: \|object position − camera position\| + 0.1 (camera position = translation of the mode camera's (mode +0x90) matrix, 0x2619f0) | 100 |
+| `XAmplitude`, `YAmplitude` | J × 500 / D | 5.0 |
+| `RollAmplitude` (degrees) | J × 30 / D | 0.3 |
+| `Frequency` | FPS × J × 11 | 330 |
+| `NoiseOffset` | int(0..100) from the **unsynced** generator 0x140a2ab18 (0x1ffb40) / 50 | 0.00 .. 2.00 in 0.02 steps |
+| `EaseIn` | 0 | 0 |
+| `EaseOut` | 0.25 | 0.25 |
+| start, duration | start = shot clock +0x154 now; duration = FPS frames (**1 s**) | 30 frames |
+
+The values are stored straight into the parameters (the ranged-parameter limits, amplitudes ≤ 1000, roll ≤ 90,
+are not applied). The effect object is `CameraShakeEffectClass` (factory 0x7d93a0(0)); 0x499c40 wraps it in a
+`CameraEffectTrackerClass` {effect, start, duration} (0x7d92c0) appended to +0x278. Trackers are never removed
+early; they are all freed by `End_Cinematic_Mode` (0x49b5c0). Several shakes add up.
+
+Vanilla J values (PARTICLES.XML): small explosions 1, medium 2, large 3, huge 4, `p_orbital_impact` 3. The TSW's
+`Tactical_Planet_Explode_300x_Particle` (the only `Death_Explosions` entry of every `DUMMY_TACTICAL_SUPER_WEAPON_TARGET`
+prop in SPACEPROPS.XML) has no `Explosion_Jitter_Factor`, so J = 1.0 [H].
+
+**Evaluation, every camera update** (0x7da320, called from the cinematic camera builder 0x49cd00 with frame c =
+shot clock): for each tracker t = (float)(c − start) / (float)duration. Outside [0, 1] it contributes 0. Else
+(0x7d97d0):
+
+```
+s     = Frequency * t
+env   = Ease(t, EaseIn, EaseOut)
+dx    = Fbm(s, NoiseOffset, 0.0)            * XAmplitude    * env
+dy    = Fbm(s, NoiseOffset, 100.0)          * YAmplitude    * env
+droll = Fbm(s, NoiseOffset, 303.1416015625) * RollAmplitude * env      // degrees
+shake_offset += dx * R + dy * U
+shake_roll   += droll
+```
+
+R and U are the normalised first and second **columns** of this frame's unshaken camera matrix (built by
+0x22d600: column 0 = camera right, column 1 = camera up, column 2 = −forward; world is Z-up).
+
+`Ease(t, a, b)` (0x7da450): clamp a and b to [0, 1]; e = 1 − b; lo = min(a, e), hi = max(a, e).
+t < lo: 0 if t ≤ 0, else u = t / lo, return 3u² − 2u³. lo ≤ t ≤ hi: 1. t > hi: 0 if t ≥ 1, else
+u = (t − hi) / (1 − hi), return 1 − (3u² − 2u³). For the TSW (a = 0, b = 0.25): 1 up to t = 0.75, then a
+smooth fall to 0 at t = 1.
+
+`Fbm(x, y, z)` (0x7d8a50, 3 octaves): f = 1, sum = 0; three times: (x, y, z) *= f (cumulative), sum += N(x, y, z) / f,
+f *= 1.9. So sum = N(p) + N(1.9 p) / 1.9 + N(6.859 p) / 3.61.
+
+`N` (0x7d8590) is Ken Perlin's improved gradient noise: lattice X = floor(x) & 255 (same for Y, Z), fractions
+x, y, z; hash A = P[X] + Y, B = P[X+1] + Y, AA = P[A] + Z, AB = P[A+1] + Z, BA = P[B] + Z, BB = P[B+1] + Z;
+grad(h, x, y, z): h &= 15, u = h < 8 ? x : y, v = h < 4 ? y : (h == 12 || h == 14 ? x : z),
+result = (h & 1 ? −u : u) + (h & 2 ? −v : v); trilinear blend of the 8 corner gradients with the **cubic** fade
+w = 3f² − 2f³ (not the quintic of the 2002 paper). P = Perlin's reference permutation (the 256-entry table that
+starts 151, 160, 137, 91, 90, 15, …), stored twice (512 bytes at 0x140a45d20) [H, bytes read from the exe].
+
+**Application** (end of 0x49cd00): with pos = keyframed camera position, look = keyframed look point,
+d = normalise(look − pos), roll = keyframed roll (degrees):
+
+- eye = pos + **0.1** × shake_offset
+- look point = pos + 1000 × d + shake_offset
+- roll = roll + shake_roll (then to radians; 0x22d600 applies it about the view axis)
+
+So the shake is mostly an angular jitter of at most about |offset| / 1000 rad. For the TSW: offset up to about
+5 × 1.8 = 9 units at the look point (≈ 0.5°), 0.9 units of eye movement, roll up to ≈ 0.54°, for 1 s, full
+strength for 0.75 s then fading. Because s advances by Frequency / FPS = 11 lattice cells per frame, consecutive
+frames are effectively uncorrelated: a per-frame jitter, sampled at integer shot-clock frames [H math; M on the
+visual description]. Nothing scales with eye distance, FOV or screen size.
+
+### 11.2 The firing camera: Fire → 0x2ccf30 → 0x4a5ef0 [H unless tagged]
+
+Fire (0x42a200) calls 0x2ccf30(controller, TSW object, target dummy (pack +0x10), 1) **before** setting state 5.
+0x2ccf30:
+
+1. Store the cursor position (GetCursorInfo) in +0x390/+0x394 and copy it to +0x398/+0x39c: the baseline for the
+   mouse-move skip test (below).
+2. If a shot is already running (state > 1): stop it (0x2cbb80, the end path below).
+3. Build the shot: 0x4a5ef0(controller, current mode, TSW, dummy, variant 1). On success state := 3, +0x34a := 1.
+   It fails (no camera move at all) when the mode has no object store (+0x18) or TSW / dummy is null.
+
+**Inputs** read once at Fire: TSW id (object +0x50); **E** = the TSW's bounding-box half-extents (render model
++0x2a0 vf +0x60 output, second vector; without a model, the world AABB 0x3982b0 +0xc..+0x14) [M: half-extents];
+TSW and dummy positions = translation of their render transforms (+0x254, +0x264, +0x274);
+**Mid** = (TSW position + dummy position) / 2.
+
+**Keyframe record** (0x54 bytes, shared by eye and look keys) [H layout; M names]: +0x00 world position
+(used when no object), +0x18 offset, +0x24 frame, +0x28 segment mode, +0x2c attach object id (−1 = world),
++0x30 sub-attach id (−1 here), +0x38 tangent scale (0.5), +0x44 ease-out fraction (acceleration share of the
+segment that starts at this key), +0x48 ease-in fraction (deceleration share of the segment that ends at this key),
++0x4c orbit period (300, mode 3 only), +0x51 offset is world-aligned (else rotated by the object), +0x52 use muzzle
+bone. An attached key's position (0x49d640) = the object's render transform applied to the offset (rotation and
+translation) + (0, 0, `Ranged_Target_Z_Adjust` of the object's type, type +0x4dc, default 6.0); it is re-read every
+frame, so attached keys follow the object. If the object is gone the camera keeps its previous position.
+
+**Eye keys** (offsets in the TSW's local frame):
+
+| key | frame | where | segment mode | +0x44 / +0x48 |
+|---|---|---|---|---|
+| P1 | 0 | TSW + (2 Ex, −2 Ey, 2 Ez) | 0 | 0.5 / 0 |
+| P2 | 300 (10 s) | TSW + (1.5 Ex, −1.5 Ey, 1.5 Ez) | 2 (hold) | 0 / 0.25 |
+| P3 | 315 (10.5 s) | TSW + (15 Ex, −5 Ey, 5 Ez) | 0 | 0.5 / 0 |
+| P4 (only if a station marker exists) | 765 (25.5 s) | world: M + u × (\|M − T\| + 2000), u = normalise(M − T) | 0 | 0.5 / 0 |
+
+M = position (+0x78..+0x80) of the first object returned by the store query 0x2a9ff0(store, 0x11, …) whose type
+name is `Space Station Position` (case-insensitive; MARKERS.XML marker, `Behavior MARKER`) [M: query 0x11 = the
+marker list]; T = the dummy position. P4 therefore looks back at the battle from 2000 units beyond the station
+marker, on the far side from the planet. Frames are FPS × 10, (int)(FPS × 10.5) and (int)(FPS × 25.5).
+
+**Look keys** (camera target):
+
+| key | frame | where | segment mode |
+|---|---|---|---|
+| L1 | 0 | TSW + (0, −Ey, 0.15 Ez) (attached) | 2 (hold) |
+| L2 | 315 | Mid (world, fixed at Fire) | 2 (hold) |
+
+**Interpolation** (0x49c540 eye, 0x49de50 look; frame c = shot clock): find the segment [k, k+1] with
+k.frame ≤ c < (k+1).frame; σ = (c − k.frame) / ((k+1).frame − k.frame); w = Accel(σ, k.+0x44, (k+1).+0x48); then by
+k's mode: 0 = Catmull-Rom Hermite (tangents = 0.5 × (next − previous) world positions, 0x499ef0) **only when both
+keys are world keys**, otherwise linear lerp of the two evaluated positions by w (0x49aa40 → 0x49a4b0); 1 = linear;
+2 = **hold** k (the camera jumps when c reaches k+1: a cut); 3 = orbit. Before the first key: key 0; after the last:
+hold the last key (still re-evaluated if attached).
+
+`Accel(σ, a, b)` (0x49bb40) is a trapezoid speed profile: e = 1 − b, v = 2 / (2 − a − b);
+σ < a: v σ² / (2a); a ≤ σ < e: v a / 2 + (σ − a) v; σ ≥ e: v a / 2 + (e − a) v + v (σ − σ²/2 − e + e²/2) / b.
+
+**Resulting shot** (c = frames since Fire; TSW states from §3, F + 348 = planet kill):
+
+| c | camera |
+|---|---|
+| 0 | cinematic mode on (below); eye at P1 beside the TSW, looking at a point just off the TSW's −y side |
+| 0–300 | eye glides P1 → P2 (linear in world space, accelerating over the first half, decelerating over the last quarter); look stays on L1; both follow the TSW |
+| 300–315 | hold P2 |
+| **315 (10.5 s)** | **cut**: eye to P3 (far out on the TSW's +x side), look to Mid (half way to the planet). About 1.1 s before the planet dies |
+| 315–765 | with a station marker: eye slides P3 → P4 (accelerating over the first half, constant speed to the end); without one: eye holds P3 (attached) |
+| ≈ 348 | state 9: explosion and the §11.1 shake (if the shot is still running) |
+| 765 (25.5 s) | shot timer ends → end path below |
+
+FOV: no FOV keys, so the camera keeps the mode camera's setting (mode vf +0x1e8, +0x48 degrees; 55° if none)
+[M]. Roll: no roll keys, 0. No look smoothing (+0x1bc stays 0), no frame blend (+0x270 = 0), no terrain clamp
+(space). The camera is evaluated at integer shot-clock frames and the clock is the **mode frame** (0x4ad3a0
+records mode +0x10), so it stops while the game is paused and moves in 30 Hz steps [M for the visual consequence].
+
+**Cinematic mode on** (0x49b1a0(controller, 0), called at the end of 0x4a5ef0, then the timer 0x4ad3a0(+0x14c,
+765 / FPS s)):
+1. Save a copy of the mode camera (+0x2c8, once) and set its projection near plane 1.0, far 10000
+   (0x261900 / 0x261ab0); 0x4a5ef0 then sets the **near plane to 100.0** (far unchanged).
+2. HUD hidden (0x140b2a5f9 := 1, 0x140b2a5fb := 2, HUD object 0x140b27f60 notified) [M: hide]; flag 0x140b28d63
+   cleared; counter 0x140b2c198 += 1; two toggles 0x13ecc0(0) / 0x48a3a0(0) [L: roles unknown]; mouse cursor
+   hidden (0x262490(…, 0)) unless the mode says otherwise (vf +0x48) or the attract demo runs; FS +0x37 := 1.
+   Each change is remembered in +0x310..+0x316 and undone at the end.
+3. Letterbox: on the first controller update (0x2cd870, needs GameConstants `In_Game_Cinematics`) the bar overlay
+   0x140a28c10 slides in over **0.5 s** (0x44b2c0); bar height = `Camera_FX_Manager_Letterbox_Height`
+   (GC +0x11b34, vanilla 0.085) [M: the overlay is the letterbox: two quads, same height constant as Lua
+   `Letter_Box_In`].
+
+**Input while the shot runs** (0x2cc3e0, only when no GUI dialog has focus): the controller is offered mouse
+events before the HUD and the world and consumes them. In state 3 a mouse move (code 0xb) smaller than 1/20 of
+the screen width and height from the baseline is swallowed; a larger move, or any other event routed to it
+(codes 2, 4, 5, 7, 8, 10, 12 [M: button / wheel events]), **ends the shot at once** (0x2cbb80). The TSW sim
+sequence is unaffected; a skipped shot means no shake at state 9 (gate +0x34a).
+
+**End** (shot timer expired, 0x4aaf00): because state is 3, the controller first tries to chain another shot
+(held while Tab is down 0x20e2f0 or +0x317 is set; else 0x2cda20: combat shot 0x2cc780, list shot 0x4a4ac0,
+0x49f370, interesting object 0x2cd930 — the attract-demo shot chain) [L: in a normal battle these are expected to
+find nothing; **probe**]. With no follow-up: `End_Cinematic_Mode` 0x49b5c0 (free the shake trackers, undo step 2,
+restore the saved mode camera +0x2c8 including its projection) and 0x2cbb80: letterbox out over 0.5 s scaled by
+how far it is in (0x44b6f0) when mode +0x98 is set, else removed at once (0x44cb60) [L: +0x98 meaning]; +0x34a := 0,
+state := 0. The RTS camera then resumes from wherever it was before Fire.
+
+### 11.3 XML that feeds it
+
+| tag | owner | used for |
+|---|---|---|
+| `Explosion_Jitter_Factor` (+0x2130, float, default 1.0) | the explosion type picked from the dummy's `Death_Explosions` | shake amplitude, roll and frequency (§11.1) |
+| `Death_Explosions` (+0xcd8) | the target dummy (`Alderaan_Backdrop_Large` etc.) | no entry → no explosion and no shake |
+| `In_Game_Cinematics` (GameConstants, True) | global | the controller only advances (and letterboxes) when true; false would leave the shot frozen at frame 0 until input ends it [L] |
+| `Camera_FX_Manager_Letterbox_Height` (GameConstants, 0.085) | global | letterbox bar height [M] |
+| `Space_Model_Name`, `Scale_Factor` (Death_Star: `w_planet_deathstar02.alo`, 2.5) | the TSW | bounding box → E, i.e. every eye / look offset [M] |
+| `Ranged_Target_Z_Adjust` (+0x4dc, default 6.0; Death_Star does not set it) | the TSW | added to the z of every TSW-attached key |
+| marker `Space Station Position` (MARKERS.XML) placed on the map | map | P4 exists only when one is present |
+
+No `TSW_*` tag drives the camera: the frame numbers (300, 315, 765), offsets (×2, ×1.5, ×15/×5, 0.15, +2000) and the
+near plane (100) are constants in 0x4a5ef0 [H].
+
+### 11.4 Port notes (presentation, apps/game)
+
+1. Replace the [port] shake (3 s, 2 % of eye distance, 7 Hz) with §11.1: J × 500 / 100 position amplitude on the
+   **look point** (0.1 × on the eye), J × 30 / 100 degrees of roll, 1 s, ease-out over the last 25 %, 3-octave
+   Perlin fBm at Frequency 330 sampled per sim frame. The NoiseOffset draw must come from a non-sim generator.
+2. Shakes apply **only while the cinematic camera is active**; the normal RTS camera never shakes (this also
+   holds for ordinary death and hardpoint explosions, which use D = distance + 0.1).
+3. Implement the firing shot of §11.2 driven by the tactical frame count since Fire (not wall time): letterbox,
+   HUD and cursor hidden, near plane 100, the P/L keys, the cut at frame 315, input-skip rules, restore of the
+   pre-Fire camera at frame 765.
+4. Nothing here may feed the sim or the CRC; the sim only emits the Fire / state-9 events it already emits.
+
+Open: the end-of-shot chaining (§11.2 End) and the meaning of mode +0x98 [L, probe]; exact roles of the HUD /
+toggle globals in step 2 [L]; whether E is the model box or the AABB for the Death Star (both are boxes; the model
+path is taken when a render model exists) [M].

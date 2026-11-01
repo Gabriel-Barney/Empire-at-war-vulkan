@@ -790,10 +790,12 @@ void App::build_tactical_hud() {
     if (ui_.tactical_hud.stats().reticles > 0) ++reticle_frames_;
 }
 
-// HUD_GAPS §1.1 / §2.2: the hovered unit = the bounding-sphere ray pick (pick_hud_unit, neutral objects skipped), replaced
-// by the owner of the reticle under the cursor (the last build's reticles: what the player sees) so the set does not
-// flicker; nothing over the HUD or a dialog. Then the hovered ship's hard-point reticles (§1.2: live targetable ones;
-// destroyed ones get none) with their tint / texture inputs (§1.4 / §1.5) and flash start (§1.3).
+// HUD_GAPS §1.1 / §2.2: the hovered unit = the world pick 0x36600 (refixf t08: pick_world with world_pick_tests(), the
+// precise model test then the Mouse_Collide_Override_Sphere_Radius sphere, the same [port] rules as the order picks;
+// neutral objects skipped), replaced by the owner of the reticle under the cursor (the last build's reticles: what the
+// player sees) so the set does not flicker; nothing over the HUD or a dialog. Then the hovered ship's hard-point
+// reticles (§1.2: live targetable ones; destroyed ones get none) with their tint / texture inputs (§1.4 / §1.5) and
+// flash start (§1.3).
 void App::tactical_hover(ui::TacticalHudFrame& hf, std::vector<ui::HudUnit>& units) {
     const int32_t mx = input_.mouse_x(), my = input_.mouse_y();
     const bool over_ui = routed_.hover_component >= 0 || ui_.gui.hit(mx, my);
@@ -806,11 +808,23 @@ void App::tactical_hover(ui::TacticalHudFrame& hf, std::vector<ui::HudUnit>& uni
         else {
             // Only objects with an encyclopedia identity (a HUD type with an Icon_Name): props such as the space
             // backdrops (Forest_Backdrop_Large: a huge bounding sphere owned by the neutral player) are never hovered.
-            std::vector<ui::HudUnit> pickable;
+            // [port] The candidates are those HUD units (owned, with an icon) among the world pick's tree candidates.
+            std::vector<uint32_t> pickable;
             pickable.reserve(units.size());
             for (const ui::HudUnit& u : units)
-                if (u.type < ui_.hud_types.size() && !ui_.hud_types[u.type].icon_name.empty()) pickable.push_back(u);
-            if (const auto hit = ui::pick_hud_unit(pickable, hf.world.view, mx, my, true)) hover = pickable[*hit].id;
+                if (u.owner >= 0 && u.type < ui_.hud_types.size() && !ui_.hud_types[u.type].icon_name.empty()) pickable.push_back(u.id);
+            std::sort(pickable.begin(), pickable.end());
+            const sim::TacticalMode* tm = session_ ? session_->host().modes().top_tactical() : nullptr;
+            if (const ui::WorldPickTests* base = tm ? world_pick_tests() : nullptr) {
+                ui::WorldPickTests tests = *base;
+                tests.skip = [&pickable, inner = base->skip](uint32_t id) {
+                    return !std::binary_search(pickable.begin(), pickable.end(), id) || (inner && inner(id));
+                };
+                tactical::QueryContext qc;
+                if (const auto hit = ui::pick_world(tm->trees().all(), hf.world.view, ui::pixel_ray(hf.world.view, mx, my),
+                                                    tactical::kSkipDead, qc, &tests))
+                    hover = hit->id;
+            }
         }
     }
     const HardPointRef hovered_ref = reticle >= 0 ? hud_hp_refs_[static_cast<size_t>(reticle)] : HardPointRef{};

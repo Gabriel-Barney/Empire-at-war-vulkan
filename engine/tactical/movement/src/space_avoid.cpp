@@ -54,9 +54,12 @@ F3 avoid_to_model(const AvoidObstacle& o, F3 w) {
     return {(-fy * d.x + fx * d.y) / s, (-fx * d.x - fy * d.y) / s, d.z / s};
 }
 
-bool avoid_segment_box(F3 o, F3 d, F3 lo, F3 hi, float t_best, bool& inside) {
+namespace {
+// 0x20c850 with the fraction: see avoid_segment_box; `t_out` = the hit fraction (0 for a start inside).
+bool segment_box_t(F3 o, F3 d, F3 lo, F3 hi, float t_best, bool& inside, float& t_out) {
     if (o.x >= lo.x && o.x <= hi.x && o.y >= lo.y && o.y <= hi.y && o.z >= lo.z && o.z <= hi.z) {
         inside = true;
+        t_out = 0.0f;
         return true;
     }
     float t = -1.0f;
@@ -79,10 +82,12 @@ bool avoid_segment_box(F3 o, F3 d, F3 lo, F3 hi, float t_best, bool& inside) {
         const float q = avoid_axis(o, i) + avoid_axis(d, i) * t;
         if (q < avoid_axis(lo, i) || q > avoid_axis(hi, i)) return false;
     }
+    t_out = t;
     return t < t_best;
 }
 
-bool avoid_segment_triangle(F3 o, F3 d, F3 a, F3 b, F3 c, float t_best) {
+// 0x20c410 with the fraction: see avoid_segment_triangle.
+bool segment_triangle_t(F3 o, F3 d, F3 a, F3 b, F3 c, float t_best, float& t_out) {
     const F3 e1 = f3_sub(b, a), e2 = f3_sub(c, a);
     const F3 pv = avoid_cross(d, e2);
     const float det = avoid_dot(e1, pv);
@@ -95,7 +100,20 @@ bool avoid_segment_triangle(F3 o, F3 d, F3 a, F3 b, F3 c, float t_best) {
     const float v = avoid_dot(d, qv) * inv;
     if (v < 0.0f || u + v > 1.0f) return false;
     const float t = avoid_dot(e2, qv) * inv;
-    return t > 0.0f && t < t_best;
+    if (!(t > 0.0f && t < t_best)) return false;
+    t_out = t;
+    return true;
+}
+}  // namespace
+
+bool avoid_segment_box(F3 o, F3 d, F3 lo, F3 hi, float t_best, bool& inside) {
+    float t = 0.0f;
+    return segment_box_t(o, d, lo, hi, t_best, inside, t);
+}
+
+bool avoid_segment_triangle(F3 o, F3 d, F3 a, F3 b, F3 c, float t_best) {
+    float t = 0.0f;
+    return segment_triangle_t(o, d, a, b, c, t_best, t);
 }
 
 bool avoid_precise(const AvoidObstacle& o, F3 a, F3 b, bool& inside) {
@@ -131,6 +149,41 @@ bool space_avoid(std::span<const AvoidObstacle> members, F3 centre, F3 half, F3 
         }
     }
     return false;
+}
+
+bool avoid_precise_segment(const AvoidObstacle& o, F3 a, F3 b, uint32_t mask, uint32_t shield_mask, AvoidSegmentHit& hit) {
+    if (!o.model) return false;
+    const AvoidModel& m = *o.model;
+    const F3 ma = avoid_to_model(o, a), mb = avoid_to_model(o, b);
+    const F3 d = f3_sub(mb, ma);
+    if (m.has_collision_box) {
+        const F3 lo = f3_sub(m.cbox_c, m.cbox_h), hi = f3_add(m.cbox_c, m.cbox_h);
+        bool inside = false;
+        float t = 0.0f;
+        if (!segment_box_t(ma, d, lo, hi, hit.t, inside, t)) return false;
+        hit.t = t;
+        hit.mesh = -1;
+        return true;
+    }
+    if (!o.collide) return false;
+    bool any = false;
+    for (size_t k = 0; k < m.meshes.size(); ++k) {  // ALO order, one shared record: the nearest hit survives
+        const AvoidModel::Mesh& mesh = m.meshes[k];
+        const uint32_t mesh_mask = (mesh.shield && o.skip_shield) ? shield_mask : 1u;
+        if ((mask & mesh_mask) == 0) continue;
+        bool private_inside = false;
+        float tb = 0.0f;
+        if (!segment_box_t(ma, d, mesh.lo, mesh.hi, 1.0f, private_inside, tb)) continue;
+        for (size_t i = 0; i + 2 < mesh.tris.size(); i += 3) {
+            float t = 0.0f;
+            if (segment_triangle_t(ma, d, mesh.tris[i], mesh.tris[i + 1], mesh.tris[i + 2], hit.t, t)) {
+                hit.t = t;
+                hit.mesh = static_cast<int32_t>(k);
+                any = true;
+            }
+        }
+    }
+    return any;
 }
 
 }  // namespace alamo::tactical::movement

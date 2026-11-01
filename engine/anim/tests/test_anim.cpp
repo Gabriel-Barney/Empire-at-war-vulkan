@@ -1465,8 +1465,93 @@ void test_real_data() {
 
 }  // namespace
 
+// refixf t04: plan_death (no AnimWorld) gives the frame the corpse countdown removes the object, for clips of several
+// lengths / rates, no clip, spin-away, Remove_Upon_Death and forever; begin_death draws exactly what plan_death draws, and
+// the planned begin_death draws nothing.
+void test_death_plan() {
+    const auto m = make_model(3, {{kAnimDie, 3, 40, 30.0f, 2},
+                                  {kAnimFireDie, 1, 7, 20.0f, 2},
+                                  {kAnimFlDie, 1, 2, 30.0f, 2},
+                                  {kAnimFwDie, 1, 95, 12.5f, 2},
+                                  {kAnimCrushed, 1, 1, 30.0f, 2}});
+    CHECK(one_shot_frames(40, 30.0f, 1.0f) == 38 && one_shot_frames(2, 30.0f, 1.0f) == 0 && one_shot_frames(1, 30.0f, 1.0f) == 0);
+    CHECK(one_shot_frames(40, 0.0f, 1.0f) == kNeverFrames && one_shot_frames(7, 20.0f, 1.0f) == 8);  // 5 frames at 2/3 per tick
+    struct Case {
+        uint8_t kind;
+        float persist, fade;
+        bool rud;
+        uint32_t index;
+    };
+    const Case cases[] = {{1, 1.0f, 0.25f, false, kRandomVariant}, {1, 0.0f, 0.0f, false, 2},   {7, 2.0f, 0.5f, false, kRandomVariant},
+                          {4, 0.0f, 0.25f, false, 0},              {2, 0.3f, 3.0f, true, 0},      {14, 0.0f, 0.0f, false, 0},
+                          {1, 0.5f, 0.25f, false, 7},              {1, 0.5f, 0.25f, true, 7}};
+    uint32_t checked = 0;
+    for (const Case& cs : cases) {
+        DeathParams dp;
+        dp.persistence_seconds = cs.persist;
+        dp.fade_seconds = cs.fade;
+        dp.remove_upon_death = cs.rud;
+        dp.index = cs.index;
+        SimRng a(77), b2(77);
+        const DeathPlan plan = plan_death(m.get(), dp, cs.kind, a);
+        AnimWorld w;
+        AnimBehaviors b;
+        constexpr uint64_t kDeath = 5;
+        w.create(1, m.get(), {}, nullptr, 0);
+        const DeathResult r = b.begin_death(w, 1, dp, {}, b2, kDeath, cs.kind);
+        CHECK(a.state() == b2.state());  // the same draws
+        if (plan.remove_now) {
+            CHECK(r == DeathResult::RemoveNow && plan.type == kNoAnimType);
+            ++checked;
+            continue;
+        }
+        CHECK(r == DeathResult::Corpse && b.corpse(1)->death_type == plan.type && !plan.forever);
+        if (plan.type != kNoAnimType) CHECK(w.slot(1).variant == plan.variant);
+        // The service order of the sim: service, then advance, every frame from the death frame on.
+        std::vector<ObjectId> removed;
+        uint64_t f = kDeath;
+        for (; f < 2000 && removed.empty(); ++f) {
+            b.service(w, f, removed);
+            if (removed.empty()) w.advance(f);
+        }
+        std::printf("death plan: kind %u type %d variant %u lifetime %llu, countdown removed after %llu\n", static_cast<unsigned>(cs.kind), plan.type, plan.variant,
+                    static_cast<unsigned long long>(plan.lifetime), static_cast<unsigned long long>(f - 1 - kDeath));
+        CHECK(removed.size() == 1 && f - 1 == kDeath + plan.lifetime);
+        // The planned start: no draw, same clip and the same removal frame.
+        AnimWorld w2;
+        AnimBehaviors pb;
+        w2.create(1, m.get(), {}, nullptr, 0);
+        SimRng none(5);
+        const uint32_t st = none.state();
+        CHECK(pb.begin_death(w2, 1, dp, plan, {}, kDeath, cs.kind) == DeathResult::Corpse && none.state() == st);
+        CHECK(plan.type == kNoAnimType || (w2.current_type(1) == plan.type && w2.slot(1).variant == plan.variant));
+        ++checked;
+    }
+    CHECK(checked == sizeof cases / sizeof cases[0]);
+    {  // spin-away: lifetime = Spin_Away_On_Death_Time; persistence < 0: forever; no model: no clip, no variant draw
+        DeathParams sp;
+        sp.spin_away = true;
+        sp.spin_away_seconds = 2.0f;
+        SimRng rng(9);
+        const uint32_t st = rng.state();
+        const DeathPlan p = plan_death(m.get(), sp, 1, rng);
+        CHECK(p.spin && p.type == kNoAnimType && p.lifetime == 60 && rng.state() == st);  // chance unset: always, no draw
+        DeathParams forever;
+        SimRng other(9);
+        CHECK(plan_death(m.get(), forever, 1, other).forever);
+        DeathParams rm;
+        rm.remove_upon_death = true;
+        const DeathPlan none = plan_death(nullptr, rm, 1, rng);
+        CHECK(none.remove_now && rng.state() == st);
+        DeathParams keep;
+        keep.persistence_seconds = 1.0f;
+        CHECK(plan_death(nullptr, keep, 1, rng).lifetime == 30 + 7 && rng.state() == st);
+    }
+}
+
 int main() {
     test_types();
+    test_death_plan();
     test_frame_rules();
     test_play_rules();
     test_crossfade_bits();

@@ -65,8 +65,11 @@ struct PrioritySet {
     std::vector<int32_t> unit_exclusions;    // type indices
     uint64_t category_exclusions = 0;
     uint64_t property_exclusions = 0;
-    std::vector<uint32_t> hardpoint_priorities;  // name_crc of hardpoint names, list order
-    std::vector<uint32_t> hardpoint_exclusions;  // name_crc
+    // refixf t06: Hard_Point_Priorities / Hard_Point_Exclusions are HardPointType values (field type 0x45, the enum-list
+    // parser also used by Victory_Conditions; the shipped sets list "Shield_Generator, Engine, FIGHTER_BAY, ..."), not
+    // hardpoint names: list order, values as HardpointKind (combat_system.hpp).
+    std::vector<int32_t> hardpoint_priorities;
+    std::vector<int32_t> hardpoint_exclusions;
 };
 
 // PrioritySet_Score (0x54dc00). LOWER is better; -1 = excluded. Order:
@@ -78,14 +81,20 @@ struct PrioritySet {
 //   6. Property_Exclusions -> -1.
 float priority_score(const PrioritySet& set, int32_t target_type, uint64_t target_categories, uint64_t target_properties);
 
-// PrioritySet_Hardpoint_Rank (0x54dd80): 1-based position in Hard_Point_Priorities, -1 if listed in
-// Hard_Point_Exclusions, otherwise 1e18.
-float hardpoint_rank(const PrioritySet& set, uint32_t hardpoint_name_crc);
+// PrioritySet_Hardpoint_Rank (0x54dd80): 1-based position of the hardpoint's TYPE in Hard_Point_Priorities, -1 if
+// listed in Hard_Point_Exclusions, otherwise 1e18.
+float hardpoint_rank(const PrioritySet& set, int32_t hardpoint_type);
+
+// HardPointType name -> value (HardpointKind order: Engine 0 ... Dummy_Art 12), -1 if unknown (TACTICAL_COMBAT §2.4,
+// refixf t06 [H]: EnumConversionClass<HardPointType>). Short names only (Engine, Shield_Generator, ..., Dummy_Art; value
+// 11 has no name), trimmed, case-insensitive. A HARD_POINT_* token (the hardpoint XML <Type> spelling) does not resolve.
+int32_t hardpoint_type_value(std::string_view name);
 
 // Loader for a <Targeting_Priority_Sets> document root. Names in Attack_Priorities are resolved as
 // object type first (resolve_type, may be empty), then GameObjectCategoryType, then
 // GameObjectPropertiesType through `enums`; unknown names are reported and skipped. Weights follow
-// their name ("Transport, 1.0,"). Hardpoint names are stored as name_crc (upper-cased CRC32).
+// their name ("Transport, 1.0,"). Hard-point lists are HardPointType names (hardpoint_type_value; unknown ones are
+// reported and skipped).
 using TypeResolver = std::function<int32_t(std::string_view name)>;  // -1 if unknown
 std::vector<PrioritySet> load_priority_sets(const data::XmlNode& root, const objects::EnumRegistry& enums,
                                             const TypeResolver& resolve_type,

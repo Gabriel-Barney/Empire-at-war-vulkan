@@ -43,61 +43,7 @@ int g_find_object_type(Call& c) {
     return 1;
 }
 
-// Filters (PROVISIONAL until the filter parser 0x540b20 is specified): GameObjectTypeWrapper or type
-// name (any of them matches), PlayerWrapper (owner). Result: live objects of the current mode's
-// primary store, NEWEST FIRST (docs/re/OBJECT_RUNTIME.md §1.5 / §6), as a 1-based table.
-int g_find_all_objects_of_type(Call& c) {
-    if (c.nargs < 1) return c.fail("FindAllObjectsOfType -- Expected a filter parameter.");
-    std::vector<objects::TypeIndex> type_filter;
-    bool have_type_filter = false, have_owner = false;
-    int32_t owner = 0;
-    for (int i = 1; i <= c.nargs; ++i) {
-        if (const detail::Ud* t = c.userdata(i, detail::cls_type())) {
-            type_filter.push_back(static_cast<objects::TypeIndex>(t->value));
-            have_type_filter = true;
-        } else if (c.is_string(i)) {
-            have_type_filter = true;
-            if (c.vm->host.types) type_filter.push_back(c.vm->host.types->raw().find(c.string(i)));
-        } else if (const detail::Ud* p = c.userdata(i, detail::cls_player())) {
-            have_owner = true;
-            owner = p->id;
-        } else {
-            return c.fail("FindAllObjectsOfType -- unknown filter parameter %d.", i);
-        }
-    }
-    lua_newtable(c.L);
-    const objects::ObjectStore* st = c.vm->host.store;
-    if (!st) return 1;
-    // refix t04 (L1P4_LUA_GAPS 1.3): in the galactic store a company object also stands for its Company_Units members
-    // (the original's cargo objects): a member type in the filter gives one member view per matching entry, entry order,
-    // right after the company's place in the walk [port order: the original's cargo objects have their own creation
-    // order].
-    const objects::GameObjectTypes* types = c.vm->host.types;
-    const bool members = have_type_filter && types && st->mode() == objects::ModeKind::Galactic;
-    int n = 0;
-    for (const objects::ObjectHandle h : st->objects_newest_first()) {
-        if (!st->active(h)) continue;
-        if (have_owner && st->owner(h) != owner) continue;
-        if (have_type_filter) {
-            bool match = false;
-            for (const objects::TypeIndex t : type_filter) match = match || (t == st->type(h));
-            if (!match) {
-                if (!members) continue;
-                const std::vector<objects::TypeIndex> refs = types->get_type_refs(st->type(h), "Company_Units");
-                for (uint32_t i = 0; i < refs.size(); ++i) {
-                    if (refs[i] == objects::kNone || std::find(type_filter.begin(), type_filter.end(), refs[i]) == type_filter.end())
-                        continue;
-                    detail::push_member_view(c.L, *c.vm, h, i);
-                    lua_rawseti(c.L, -2, ++n);
-                }
-                continue;
-            }
-        }
-        detail::push_object(c.L, *c.vm, h);
-        lua_rawseti(c.L, -2, ++n);
-    }
-    return 1;
-}
+// Find_All_Objects_Of_Type: bind_objects.cpp (refixf t03, with Find_First_Object / Find_Nearest).
 
 objects::ObjectHandle self_object(Call& c) { return detail::object_handle(*c.self); }
 
@@ -493,7 +439,6 @@ constexpr detail::ImplEntry kImpl[] = {
     {G, "", "StringCompare", g_string_compare},  // L1/S4 wave 1
     // globals
     {G, "", "Find_Object_Type", g_find_object_type},
-    {G, "", "Find_All_Objects_Of_Type", g_find_all_objects_of_type},
     {G, "", "GameRandom", g_game_random},
     {G, "", "GetCurrentTime", g_get_current_time},
     {G, "", "GetThreadID", g_get_thread_id},

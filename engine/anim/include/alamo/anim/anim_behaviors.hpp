@@ -105,6 +105,32 @@ int32_t default_idle_type(const AnimModel* m, const LocomotorInput& in, const Id
 // Crush -> CRUSHED, Eat -> EATEN_DIE; kNoAnimType otherwise (used only when the model has that clip).
 int32_t death_type_for_kind(uint8_t damage_kind);
 
+// refixf t04: the data-driven part of Die + DeathBehavior, computed WITHOUT an AnimWorld so the sim can schedule the
+// removal of a death clone store object identically with and without the animation service (ANIM_PARTICLES §A.7: the
+// death clip length is sim-visible; it is read from the model's clip data, not from a running animation).
+struct DeathPlan {
+    bool spin = false;           // spin-away death (no clip; removed after Spin_Away_On_Death_Time)
+    int32_t type = kNoAnimType;  // death clip type that plays (kNoAnimType: none - missing clip, spin or no model)
+    uint32_t variant = 0;        // its variant
+    bool remove_now = false;     // no clip, no spin and Remove_Upon_Death: removed at once
+    bool forever = false;        // Death_Persistence_Duration < 0 (no spin) or a clip that never ends: never removed
+    uint64_t lifetime = 0;       // frames from the death to the removal (valid when !remove_now && !forever)
+};
+// Same draws in the same order as begin_death (spin: one synced float when 0 < chance < 1; then the variant: one int in
+// [0, n - 1] when `p.index` is random and `m` has n > 0 variants of the death type - AnimWorld::play's draw). The death
+// type is p.type, or death_type_for_kind(damage_kind) when the type sets none and `m` has that clip. m = null: no clip,
+// no variant draw. lifetime = what AnimBehaviors::service's countdown gives a corpse that starts at the death frame:
+//   spin   Spin_Away_On_Death_Time;
+//   clip   one_shot_frames(clip, speed 1) + 1 (the corpse service runs before the advance, so it sees the finished clip
+//          one frame later) + Death_Persistence_Duration + Death_Fade_Time;
+//   none   Death_Persistence_Duration + Death_Fade_Time.
+DeathPlan plan_death(const AnimModel* m, const DeathParams& p, uint8_t damage_kind, SimRng& rng);
+inline constexpr uint64_t kNeverFrames = ~uint64_t{0};
+// Sim frames a one-shot clip of `frame_count` frames at `fps` x `speed` takes to finish after the frame it starts on
+// (AnimWorld::advance with dt = 1/30 per frame, stopping at max(count - 2, 0); the start frame's own advance has dt 0, so
+// a clip of <= 2 frames finishes there: 0); kNeverFrames when it makes no progress.
+uint64_t one_shot_frames(uint32_t frame_count, float fps, float speed);
+
 inline constexpr float kDeathBlendSeconds = 0.5f;
 inline constexpr uint32_t kEngagedBaseFrames = 90;   // combat timer = frame + 90 + int [0, 30]
 inline constexpr int32_t kEngagedRandomFrames = 30;
@@ -179,6 +205,10 @@ public:
     // Spin-away (Spin_Away_On_Death): [port] decided here, one synced float [0, 1) < chance when 0 < chance < 1
     // (chance >= 1 or unset: always); a spinning death plays no clip and is removed after Spin_Away_On_Death_Time.
     DeathResult begin_death(AnimWorld& w, ObjectId id, const DeathParams& p, const CorpseInfo& info, SimRng& rng, uint64_t frame,
+                            uint8_t damage_kind = 1);
+    // refixf t04: the same with the spin decision / death type / variant already made by plan_death (no draws): a death
+    // clone whose removal the sim schedules. The clip plays when the row's model has plan.type / plan.variant.
+    DeathResult begin_death(AnimWorld& w, ObjectId id, const DeathParams& p, const DeathPlan& plan, const CorpseInfo& info, uint64_t frame,
                             uint8_t damage_kind = 1);
     bool is_corpse(ObjectId id) const;
     const Corpse* corpse(ObjectId id) const;

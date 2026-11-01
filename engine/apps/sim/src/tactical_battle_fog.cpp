@@ -120,7 +120,7 @@ fw::FogObject TacticalBattle::fog_object_of(const objects::ObjectStore& store, o
     // [port] no model bounding boxes in the sim: the mode's per-type half extent (Custom_Hard_*Extent or a
     // scale-based default), centred on the position.
     if (fog_mode_) {
-        const tactical::Aabb bb = fog_mode_->bounds_of(h);
+        const tactical::Aabb bb = fog_mode_->extent_box(h);
         o.has_model = true;
         o.box_cx = 0.5f * (bb.min.x + bb.max.x) - p.x;
         o.box_cy = 0.5f * (bb.min.y + bb.max.y) - p.y;
@@ -260,7 +260,7 @@ bool TacticalBattle::fog_object_hidden(int32_t player, objects::ObjectId id, boo
     const objects::TypeIndex t = store.type(h);
     q.multisample = t < catalog_->types().size() && catalog_->types().get_bool(t, "Multisample_FOW_Check");
     if (q.multisample) {  // the bounding box's 8 corners (z = 0; only x, y matter) [port: mode half extents]
-        const tactical::Aabb bb = fog_mode_->bounds_of(h);
+        const tactical::Aabb bb = fog_mode_->extent_box(h);
         for (size_t i = 0; i < 8; ++i) {
             q.corners[2 * i] = (i & 1) ? bb.max.x : bb.min.x;
             q.corners[2 * i + 1] = (i & 2) ? bb.max.y : bb.min.y;
