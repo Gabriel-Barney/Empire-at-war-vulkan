@@ -32,6 +32,7 @@ endif()
 if(TARGET alamo_ui)  # pause_event (orders.hpp)
   target_link_libraries(alamo_game_core PUBLIC alamo_ui)
   target_compile_definitions(alamo_game_core PUBLIC ALAMO_GAME_HAVE_UI=1)
+  target_sources(alamo_game_core PRIVATE src/world_pick.cpp)  # refixf t08: tactical world pick tests (world_pick.hpp)
 endif()
 if(TARGET alamo_ui_hud)  # OI host: hotkey table + menus (game_controls.hpp)
   target_link_libraries(alamo_game_core PUBLIC alamo_ui_hud)
@@ -70,6 +71,15 @@ add_executable(alamo_game_audio_host_tests tests/test_game_audio_host.cpp)
 target_link_libraries(alamo_game_audio_host_tests PRIVATE alamo_core alamo_game_core)
 add_test(NAME alamo_game_audio_host_tests COMMAND alamo_game_audio_host_tests)
 set_tests_properties(alamo_game_audio_host_tests PROPERTIES TIMEOUT 120)
+
+# Data-free (refixf t08): the tactical world pick (HUD_GAPS §2.2; world_pick.hpp + engine/ui pick_world) on a SpaceMode
+# with hand-built model collision data: mesh hit, box-but-not-mesh miss, Mouse_Collide_Override_Sphere_Radius, nearest hit.
+if(TARGET alamo_ui)
+  add_executable(alamo_game_world_pick_tests tests/test_world_pick.cpp)
+  target_link_libraries(alamo_game_world_pick_tests PRIVATE alamo_core alamo_game_core)
+  add_test(NAME alamo_game_world_pick_tests COMMAND alamo_game_world_pick_tests)
+  set_tests_properties(alamo_game_world_pick_tests PROPERTIES TIMEOUT 120)
+endif()
 
 # Data-free (refix t06, refixf t05): the tactical super weapon's presentation cues (battle_fx.hpp), the cinematic camera
 # (TSW firing shot, explosion shake, letterbox; TSW_PLANET_DESTROY.md §11) and GameAudioHost::tsw_audio on a synthetic type set / audio tree with the null backend.

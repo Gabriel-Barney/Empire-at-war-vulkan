@@ -431,17 +431,19 @@ void camera_on_local_units(App& a) {
     if (n) a.bview_.camera().jump_to({static_cast<float>(x / n), static_cast<float>(y / n), 0.0f});
 }
 
-// Battle: right-click the ground next to the local units (MoveToPosition). The pixel is (w / 2, h / 3) unless an object's
-// tree box is under it there (refixf: since t07 the tree boxes are the model collision bounds, and a station's box can
-// cover that pixel, which would turn the click into an Attack): then the camera goes back to the local units (the queued
-// clicks follow the enemy click, which aimed the camera at the enemy) and the click takes the first pixel of a fixed
-// spiral around (w / 2, h / 3), inside the middle of the screen, that picks nothing. Fixed for the whole click.
+// Battle: right-click the ground next to the local units (MoveToPosition). The pixel is (w / 2, h / 3) unless the world
+// pick (HUD_GAPS §2.2, refixf t08: precise model test, then the override sphere) finds an object there, which would turn
+// the click into an Attack or a MoveToObject: then the camera goes back to the local units and the click takes the first
+// pixel of a fixed spiral around (w / 2, h / 3), inside the middle of the screen, that picks nothing. Fixed for the whole
+// click. refixf t08 check: with the model pick the plain ground click finds that pixel free in every smoke run, but the
+// queued (shift) click still needs the fallback in the space runs: the enemy click before it aims the camera at the
+// enemy and (w / 2, h / 3) then lies on a real hull (skirmish: an Orbital_Construction_Pod mesh hit).
 bool ground_pixel_free(App& a, int32_t x, int32_t y) {
     const sim::TacticalMode* tm = a.session_ ? a.session_->host().modes().top_tactical() : nullptr;
     if (!tm) return true;
     const ui::View v = ui::make_view(a.bview_.camera_params(a.targets_.width, a.targets_.height), a.targets_.width, a.targets_.height);
     tactical::QueryContext qc;
-    return !ui::pick(tm->trees().all(), ui::pixel_ray(v, x, y), tactical::kSkipDead, qc).has_value();
+    return !ui::pick_world(tm->trees().all(), v, ui::pixel_ray(v, x, y), tactical::kSkipDead, qc, a.world_pick_tests()).has_value();
 }
 std::pair<int32_t, int32_t> free_ground_pixel(App& a) {
     const int32_t w = static_cast<int32_t>(a.targets_.width), h = static_cast<int32_t>(a.targets_.height);
