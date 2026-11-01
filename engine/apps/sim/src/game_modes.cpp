@@ -7,6 +7,7 @@
 #include "alamo/core/profile.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/game_object_types.hpp"
+#include "alamo/tactical/movement/space_avoid.hpp"
 
 namespace alamo::sim {
 
@@ -184,24 +185,79 @@ TacticalMode::TacticalMode(ModeKind kind, const objects::GameObjectTypes& types,
     : GameMode(kind, types, ids), trees_(players) {
     const float base = kind == ModeKind::Space ? 40.0f : 10.0f;
     half_extent_.resize(types.size());
+    scale_.resize(types.size());
+    box_modifier_.resize(types.size());
+    team_.resize(types.size());
+    shielded_.resize(types.size());
     for (objects::TypeIndex t = 0; t < types.size(); ++t) {
+        float sc = types.columns().scale_factor[t];
+        if (!(sc > 0.0f) || !finite(sc)) sc = 1.0f;
+        scale_[t] = sc;
         const float hx = types.get_float(t, "Custom_Hard_XExtent");
         const float hy = types.get_float(t, "Custom_Hard_YExtent");
         float e = hx > hy ? hx : hy;
-        if (!(e > 0.0f) || !finite(e)) {
-            float sc = types.columns().scale_factor[t];
-            if (!(sc > 0.0f) || !finite(sc)) sc = 1.0f;
-            e = base * sc;
-        }
+        if (!(e > 0.0f) || !finite(e)) e = base * sc;
         half_extent_[t] = e;
+        box_modifier_[t] = types.get_float(t, "Collision_Box_Modifier");
+        team_[t] = types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Team) ? 1 : 0;
+        shielded_[t] = types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Shielded) ? 1 : 0;
     }
 }
 
-tactical::Aabb TacticalMode::bounds_of(ObjectHandle h) const {
+tactical::Aabb TacticalMode::extent_box(ObjectHandle h) const {
     const Vec3 p = primary_.position(h);
     const objects::TypeIndex t = primary_.type(h);
     const float e = t < half_extent_.size() ? half_extent_[t] : 1.0f;
     return {{p.x - e, p.y - e, p.z - e}, {p.x + e, p.y + e, p.z + e}};
+}
+
+void TacticalMode::set_model_source(ModelSource src) {
+    model_source_ = std::move(src);
+    models_.assign(types_->size(), ModelRef{});
+    model_done_.assign(types_->size(), 0);
+    models_dirty_ = true;
+}
+
+TacticalMode::ModelRef TacticalMode::model_ref(objects::TypeIndex t, bool resolve) const {
+    if (!model_source_ || t >= model_done_.size()) return {};
+    if (!model_done_[t]) {
+        if (!resolve) return {};
+        models_[t] = model_source_(t);
+        model_done_[t] = 1;
+    }
+    return models_[t];
+}
+
+void TacticalMode::resolve_models() {
+    if (!models_dirty_ || !model_source_) return;
+    models_dirty_ = false;
+    for (const ObjectHandle h : primary_.all_objects())
+        if (primary_.exists(h)) (void)model_ref(primary_.type(h), true);
+}
+
+bool TacticalMode::obstacle_of(ObjectHandle h, tactical::movement::AvoidObstacle& o, bool resolve) const {
+    const objects::TypeIndex t = primary_.type(h);
+    const ModelRef m = model_ref(t, resolve);
+    if (!m.known) return false;
+    const Vec3 p = primary_.position(h), f = primary_.facing(h);
+    o.id = primary_.id(h);
+    o.pos = {p.x, p.y, p.z};
+    o.facing = {f.x, f.y};
+    o.scale = scale_[t];
+    o.model = m.model;
+    o.skip_shield = shielded_[t] != 0;
+    o.collide = true;
+    tactical::movement::avoid_place(o);
+    return true;
+}
+
+tactical::Aabb TacticalMode::bounds_of(ObjectHandle h) const {
+    const objects::TypeIndex t = primary_.type(h);
+    if (!model_source_ || t >= team_.size() || team_[t]) return extent_box(h);
+    tactical::movement::AvoidObstacle o;
+    if (!obstacle_of(h, o, true)) return extent_box(h);
+    return {{o.box_c.x - o.box_h.x, o.box_c.y - o.box_h.y, o.box_c.z - o.box_h.z},
+            {o.box_c.x + o.box_h.x, o.box_c.y + o.box_h.y, o.box_c.z + o.box_h.z}};
 }
 
 bool TacticalMode::movable(ObjectHandle h) const { return primary_.has_behavior(h, objects::beh::Locomotor); }
@@ -248,6 +304,7 @@ bool TacticalMode::destroy(ObjectHandle h) {
 }
 
 void TacticalMode::finish_load(const ParallelFor& pf) {
+    models_dirty_ = true;  // refixf t07: the loaded objects' types resolve at the next resolve_models()
     trees_.rebuild_all_with_threshold(tactical::SpatialTreeConfig{}.large_threshold, pf);
 }
 

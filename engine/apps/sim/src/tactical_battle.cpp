@@ -492,6 +492,23 @@ void TacticalBattle::avoid_snapshot(const objects::ObjectStore& store) {
 
 void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng, uint32_t players, const ParallelFor& pf) {
     map_ = std::move(map);
+#ifdef ALAMO_SIM_HAVE_ASSETS
+    // refixf t07 (SPACE_AVOIDANCE §3.1 / §3.2 / §7.2): the tree boxes and the precise projectile test read the type
+    // model's collision data (Space_Model_Name / Land_Model_Name, as the fighter avoidance does). A model that does not
+    // load gives no data and its type keeps the extent box and box hits [port]. [port] So does a type without a model
+    // name (retail: no model, box [P, P + 0.1], never hit): the synthetic test data has no model names, and among the FoC
+    // projectile-collidable types only Dummy_Barrage_Target and abstract base types have none.
+    if (catalog_->files()) {
+        const BattleCatalog* cat = catalog_;
+        const bool space = map_.is_space();
+        mode.set_model_source([cat, space](objects::TypeIndex t) {
+            TacticalMode::ModelRef r;
+            r.model = cat->avoid_model(t, space);
+            r.known = r.model != nullptr;
+            return r;
+        });
+    }
+#endif
     // --- OI objects: computed behaviour intervals (SHIELDED / POWERED) from GameConstants, before any object exists ---
     {
         const tc::CombatConfig& gc = catalog_->combat_config();
@@ -613,6 +630,45 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     // --- end P4 tactical ---
     hooks_ =std::make_unique<BattleHooks>(*this, *abilities_);
     combat_->set_hooks(hooks_.get());
+    if (mode.has_model_source()) {
+        // refixf t07 (TACTICAL_COMBAT §3.4, HOTSPOTS 0x2abcf0): per Query_Ray entry, the precise model test (SPACE_AVOIDANCE
+        // §5, the object's committed pose: position, planar facing, Scale_Factor), else, with Collision_Box_Modifier > 1,
+        // the start, end and midpoint of the segment against a sphere of radius max_extent x modifier. [port] max_extent =
+        // the largest half extent of the object's §3.1 world box and the sphere is centred on the position (neither is
+        // pinned in docs/re); the hit fraction is the first point inside (start 0, end 1, midpoint 0.5). Read-only: the
+        // sweeps run on job workers (resolve_models() runs serially before them).
+        const TacticalMode* tm = &mode;
+        combat_->set_precise_hit([tm](const tc::PreciseQuery& q, tc::PreciseResult& r) {
+            const objects::ObjectStore& st = tm->primary();
+            const objects::ObjectHandle h = st.find(q.victim);
+            if (!st.exists(h)) return tc::PreciseOutcome::NotModelled;
+            mv::AvoidObstacle o;
+            if (!tm->obstacle_of(h, o, false)) return tc::PreciseOutcome::NotModelled;
+            o.collide = q.collide;
+            const mv::F3 a{q.a.x, q.a.y, q.a.z}, b{q.b.x, q.b.y, q.b.z};
+            mv::AvoidSegmentHit hit;
+            if (mv::avoid_precise_segment(o, a, b, q.mask, q.shield_up ? 2u : 0u, hit)) {
+                r.t = hit.t;
+                r.mesh = hit.mesh >= 0 ? &o.model->meshes[static_cast<size_t>(hit.mesh)].name : nullptr;
+                return tc::PreciseOutcome::Hit;
+            }
+            const float k = tm->collision_box_modifier(st.type(h));
+            if (k > 1.0f) {
+                const float rad = std::max(std::max(o.box_h.x, o.box_h.y), o.box_h.z) * k;
+                const mv::F3 pts[3] = {a, b, {(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f}};
+                const float ts[3] = {0.0f, 1.0f, 0.5f};
+                for (int32_t i = 0; i < 3; ++i) {
+                    const float dx = pts[i].x - o.pos.x, dy = pts[i].y - o.pos.y, dz = pts[i].z - o.pos.z;
+                    if (dmath::sqrt((dx * dx + dy * dy) + dz * dz) <= rad) {
+                        r.t = ts[i];
+                        r.mesh = nullptr;
+                        return tc::PreciseOutcome::Hit;
+                    }
+                }
+            }
+            return tc::PreciseOutcome::Miss;
+        });
+    }
     combat_->bind_rng(&rng);  // Take_Damage listeners called outside the tick (host damage) draw here
     hg_setup(mode);           // hangars: SPAWN_SQUADRON descriptors and the HangarSystem (before any unit exists)
     oi_install(mode, rng);    // OI abilities: AbilityHost hooks, the abilities' RNG, repair credit hooks
@@ -2235,6 +2291,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     hg_engine_service();   // engine loops: SimpleSpace locomotor services (moving first, then idle)
     bt_team_positions(mode);  // battle host: TEAM containers at their members' box centre (A1_READINGS §29.4)
     profile::lap("tac.motion_post");
+    mode.resolve_models();  // refixf t07: after a load, before the boxes and the parallel sweeps read the model cache
     for (const Unit& u : units_)
         if (u.alive && !u.retreated && u.movable && store.alive(u.h))
             mode.trees().update(static_cast<tactical::EntityHandle>(u.id), mode.bounds_of(u.h));

@@ -494,7 +494,8 @@ bool CombatSystem::hp_dead(const Hardpoint& h) const {
 
 int32_t CombatSystem::mesh_hardpoint(const Unit& v, Vec3 impact) const {
     // TACTICAL_COMBAT §2.9 Q1 steps 1 / 4 (port difference 1) [port]: retail names the render sub-object the precise model
-    // test struck and damages the hardpoint whose Collision_Mesh it is. The port has no collision meshes: the closest
+    // test struck and damages the hardpoint whose Collision_Mesh it is (refixf t07: hardpoint_by_mesh, when the host's
+    // precise test supplied the hit). Without a precise test (no model data / synthetic runs): the closest
     // (3D, first in list order on ties) hardpoint that is not (destroyable and dead) stands in, when its bone is within
     // CombatConfig::hardpoint_mesh_radius of the impact point; else no name (hull). A non-destroyable match routes to
     // the hull in take_damage, as retail does for a non-destroyable mesh.
@@ -1485,18 +1486,47 @@ CombatSystem::SweepHit CombatSystem::sweep_segment(const Projectile& p, Vec3 del
     SweepHit best{kNoObject, 0.0f};
     const Ray ray{p.pos, delta, 1.0f};
     const auto np = static_cast<int32_t>(std::min<uint32_t>(player_count(), trees_->player_count()));
-    // Hostile players' trees; the port takes the minimum (t, object id) over all of them (the
-    // original returns the first hit in tree order, section 3.4).
+    // Find_First_Object_Hit_By_Segment_All_Enemies (0x2abcf0, §3.4): hostile players' trees, Query_Ray, then per entry
+    // the precise model test (0x38f900) or the Collision_Box_Modifier sphere (refixf t07: the host's precise_hit_; the
+    // query mask is 7 with Projectile_Does_Shield_Damage, else 5). The original returns the first passing entry in tree
+    // order; the port takes the minimum (segment fraction, object id) over every passing entry of every hostile tree.
+    PreciseQuery pq;
+    pq.a = p.pos;
+    pq.b = p.pos + delta;
+    pq.mask = data_->projectiles[p.desc].does_shield_damage ? 7u : 5u;
     for (int32_t q = 0; q < np; ++q) {
         if (!is_enemy(p.owner, q)) continue;
         for (const RayHit& hit : trees_->player(static_cast<uint32_t>(q)).query_ray(ray, kSkipDead, ctx)) {
             const Unit* v = unit(static_cast<ObjectId>(hit.handle));
             if (!live(v)) continue;
-            if (best.id == kNoObject || hit.t < best.t || (hit.t == best.t && v->id < best.id)) best = SweepHit{v->id, hit.t};
-            break;  // hits are sorted by (t, id): the first live one is this tree's minimum
+            SweepHit c{v->id, hit.t};
+            if (precise_hit_) {
+                pq.victim = v->id;
+                pq.shield_up = v->shield > 0.0f;
+                pq.collide = (v->flags & kUnitGarrisoned) == 0;
+                PreciseResult r;
+                const PreciseOutcome o = precise_hit_(pq, r);
+                if (o == PreciseOutcome::Miss) continue;
+                if (o == PreciseOutcome::Hit) {
+                    c.t = r.t;
+                    c.mesh_hp = r.mesh ? hardpoint_by_mesh(*v, *r.mesh) : -1;
+                }
+            }
+            if (best.id == kNoObject || c.t < best.t || (c.t == best.t && c.id < best.id)) best = c;
+            // Without the precise test the entries are sorted by (t, id): the first live one is this tree's minimum.
+            if (!precise_hit_) break;
         }
     }
     return best;
+}
+
+int32_t CombatSystem::hardpoint_by_mesh(const Unit& v, const std::string& mesh) const {
+    // 0x394d40 (§2.9 Q1 step 4): the first hardpoint in HardPoints order whose Collision_Mesh equals the name (_stricmp;
+    // both sides are upper case); -1 when none.
+    if (mesh.empty()) return -1;
+    for (uint32_t i = 0; i < v.hp_count; ++i)
+        if (data_->hardpoints[hps_[v.hp_begin + i].desc].collision_mesh == mesh) return static_cast<int32_t>(i);
+    return -1;
 }
 
 void CombatSystem::sweep(uint32_t pi, QueryContext& ctx) {
@@ -1541,7 +1571,8 @@ void CombatSystem::apply_or_queue(const DamageRequest& r, float delay_secs, uint
     }
 }
 
-void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, SimRng& rng, const Vec3* segment) {
+void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, SimRng& rng, const Vec3* segment,
+                               int32_t mesh_hp) {
     // Process_Hit (0x4cb280) [H unless tagged].
     const ProjectileDesc& pd = data_->projectiles[p.desc];
     const UnitDesc& vd = desc_of(v);
@@ -1571,7 +1602,8 @@ void CombatSystem::process_hit(Projectile& p, Unit& v, float t, uint32_t frame, 
     } else if (pd.damages_random_hardpoints) {
         hp = random_hp;  // space: the random pick's Collision_Mesh
     } else {
-        hp = mesh_hardpoint(v, impact);  // space: the struck mesh [port]
+        // space: the struck mesh's hardpoint (refixf t07: from the precise test; without one the mesh_hardpoint stand-in)
+        hp = mesh_hp == kMeshUnknown ? mesh_hardpoint(v, impact) : mesh_hp;
     }
     DamageRequest r;
     r.victim = v.id;
@@ -2606,7 +2638,7 @@ void CombatSystem::rocket_step(uint32_t i, uint32_t frame, SimRng& rng) {
         Unit* v = unit(hit.id);
         p.alive = 0;
         Projectile pc = p;
-        process_hit(pc, *v, hit.t, frame, rng, &seg);
+        process_hit(pc, *v, hit.t, frame, rng, &seg, hit.mesh_hp);
         return;
     }
     // LastKnownVelocity (+0x98) = the move's displacement x the frame-time float 0x140b0a344 [M: 1 / FPS].
@@ -2809,7 +2841,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             Unit* v = unit(hit.id);
             projectiles_[i].alive = 0;
             Projectile pc = projectiles_[i];
-            process_hit(pc, *v, hit.t, frame, rng);
+            process_hit(pc, *v, hit.t, frame, rng, nullptr, hit.mesh_hp);
             continue;
         }
         Projectile& p = projectiles_[i];

@@ -1323,6 +1323,90 @@ void test_hardpoint_fire_routing() {
     }
 }
 
+// refixf t07: the host's precise test decides each Query_Ray entry (TACTICAL_COMBAT §3.4); a hit's mesh name routes the
+// damage to the hardpoint whose Collision_Mesh it is (§2.9 Q1 step 4), no name -> the hull.
+void test_precise_hit_hook() {
+    World w;
+    ProjectileDesc pj;
+    pj.max_speed = 50.0f;
+    pj.damage = 5.0f;
+    w.data.projectiles.push_back(pj);  // 0 (Projectile_Does_Shield_Damage: mask 7)
+    pj.does_shield_damage = false;
+    w.data.projectiles.push_back(pj);  // 1 (mask 5)
+    HardpointDesc gun;
+    gun.kind = HardpointKind::WeaponLaser;
+    gun.health = 100.0f;
+    gun.destroyable = gun.targetable = true;
+    gun.projectile = 0;
+    gun.randomize_between_fire_bones = false;
+    gun.min_recharge = gun.max_recharge = 0.2f;
+    gun.fire_range = 2000.0f;
+    w.data.hardpoints.push_back(gun);  // 0
+    HardpointDesc plate;  // destroyable, not targetable: shots carry no target hardpoint
+    plate.kind = HardpointKind::DummyArt;
+    plate.health = 100.0f;
+    plate.destroyable = true;
+    plate.collision_mesh = "PLATE";
+    w.data.hardpoints.push_back(plate);  // 1
+    gun.projectile = 1;
+    w.data.hardpoints.push_back(gun);  // 2
+    UnitDesc sh;
+    sh.tactical_health = 100.0f;
+    sh.max_attack_distance = 2000.0f;
+    sh.hardpoints = {0};
+    push_unit(w.data, sh);  // 0
+    sh.hardpoints = {2};
+    push_unit(w.data, sh);  // 1
+    UnitDesc st;
+    st.tactical_health = 1000.0f;
+    st.radius = 50.0f;
+    st.hardpoints = {1};
+    push_unit(w.data, st);  // 2
+    CombatConfig cfg;
+    cfg.mode = GameMode::Space;
+    cfg.object_max_health_multiplier = 1.0f;
+    cfg.hardpoint_health_multiplier = 1.0f;
+    cfg.inaccuracy_enabled = false;
+    w.make(cfg);
+    w.add(1, 0, 0, Vec3{-600.0f, 0.0f, 0.0f});
+    w.add(2, 2, 1, Vec3{0.0f, 0.0f, 0.0f});
+    w.add(3, 1, 0, Vec3{-600.0f, 100.0f, 0.0f});
+    int calls = 0;
+    uint32_t masks = 0;
+    w.sys->set_precise_hit([&](const PreciseQuery& q, PreciseResult&) {
+        ++calls;
+        masks |= 1u << q.mask;
+        CHECK(q.victim == 2 && q.collide);
+        return PreciseOutcome::Miss;
+    });
+    w.sys->order_attack(1, 2);
+    w.sys->order_attack(3, 2);
+    for (int i = 0; i < 60; ++i) w.tick();
+    CHECK(calls > 0 && masks == ((1u << 7) | (1u << 5)));  // both query masks seen
+    CHECK(w.sys->health(2) == 1000.0f && w.sys->hardpoint_health(2, 0) == 100.0f);  // every entry rejected
+    static const std::string kPlate = "PLATE", kHull = "HULL";
+    w.sys->set_precise_hit([](const PreciseQuery&, PreciseResult& r) {
+        r.t = 0.5f;
+        r.mesh = &kPlate;
+        return PreciseOutcome::Hit;
+    });
+    for (int i = 0; i < 60 && w.sys->hardpoint_health(2, 0) == 100.0f; ++i) w.tick();
+    CHECK(w.sys->hardpoint_health(2, 0) < 100.0f && w.sys->health(2) == 1000.0f);  // the named hardpoint takes it all
+    const float hp = w.sys->hardpoint_health(2, 0);
+    w.sys->set_precise_hit([](const PreciseQuery&, PreciseResult& r) {
+        r.t = 0.5f;
+        r.mesh = &kHull;  // names no hardpoint
+        return PreciseOutcome::Hit;
+    });
+    for (int i = 0; i < 60 && w.sys->health(2) == 1000.0f; ++i) w.tick();
+    CHECK(w.sys->health(2) < 1000.0f && w.sys->hardpoint_health(2, 0) <= hp);
+    // NotModelled: the tree-box hit stands; the mesh_hardpoint stand-in (bone within 40 of the impact) misses -> hull.
+    const float hull = w.sys->health(2);
+    w.sys->set_precise_hit([](const PreciseQuery&, PreciseResult&) { return PreciseOutcome::NotModelled; });
+    for (int i = 0; i < 60 && w.sys->health(2) == hull; ++i) w.tick();
+    CHECK(w.sys->health(2) < hull);
+}
+
 struct DamageWorld {
     World w;
     uint32_t shielded = 0, plain = 0, attacker = 0, hp_unit = 0;
@@ -3130,6 +3214,7 @@ int main(int argc, char** argv) {
     test_fog_filter();
     test_attack_move_object();
     test_hardpoint_fire_routing();
+    test_precise_hit_hook();
     test_take_damage();
     test_shield_regen_system();
     test_hull_hardpoint_coupling();

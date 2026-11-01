@@ -238,6 +238,7 @@ struct WeaponDelayEntry {
 struct HardpointDesc {
     std::string name;
     uint32_t name_crc = 0;  // name_crc(name)
+    std::string collision_mesh;  // refixf t07: Collision_Mesh (type +0xa0), upper case; "" = none (§2.9 Q1 step 4)
     HardpointKind kind = HardpointKind::DummyArt;
     float health = 0.0f;
     bool destroyable = false, targetable = false, turret = false;  // ctor defaults false [M]
@@ -459,6 +460,26 @@ void apply_game_constants(CombatConfig& c, const data::GameConstants& gc);
 // Hooks the ability system (S9, engine/tactical/abilities) installs into the combat tick. Every call
 // is made from a serial phase, in the order given, so implementations may draw from the synced RNG
 // and call back into CombatSystem (no unit is added or removed while a hook runs).
+// refixf t07 (TACTICAL_COMBAT §3.4, HOTSPOTS 0x2abcf0, SPACE_AVOIDANCE §5): the per-entry test of the projectile
+// segment query, supplied by the host that owns the models. Called from the sweep phase (worker threads: read-only).
+struct PreciseQuery {
+    ObjectId victim = kNoObject;
+    Vec3 a, b;               // the swept segment a -> b (world)
+    uint32_t mask = 5;       // collision mask: 7 with Projectile_Does_Shield_Damage, else 5
+    bool shield_up = false;  // shield points > 0: the victim's SHIELD mesh carries mask 2 (else 0) [port: no disable state]
+    bool collide = true;     // model collide switch (§5.5): off while garrisoned
+};
+struct PreciseResult {
+    float t = 1.0f;                     // segment fraction of the hit
+    const std::string* mesh = nullptr;  // the struck sub-object's name (upper case); null: none recorded
+};
+enum class PreciseOutcome : uint8_t {
+    NotModelled,  // no model data for this victim: the tree-box hit stands (the pre-t07 rule) [port]
+    Miss,
+    Hit,
+};
+using PreciseHitFn = std::function<PreciseOutcome(const PreciseQuery&, PreciseResult&)>;
+
 class CombatHooks {
 public:
     virtual ~CombatHooks() = default;
@@ -964,6 +985,9 @@ public:
     void set_obstacle_cell_query(std::function<bool(ObjectId target, Vec3 p, Vec3& centre)> occupied) {
         obstacle_cell_ = std::move(occupied);
     }
+    // refixf t07: the projectile segment query's per-entry test (precise model test, then the Collision_Box_Modifier
+    // sphere). Unset: every tree-box hit is a hit (synthetic data without models).
+    void set_precise_hit(PreciseHitFn fn) { precise_hit_ = std::move(fn); }
     // Credit hooks for the repair (CampaignBattles: the galactic account). Unset: repairs are free [port].
     void set_credit_hooks(std::function<float(int32_t)> get, std::function<void(int32_t, float)> add) {
         credits_get_ = std::move(get);
@@ -1211,9 +1235,13 @@ private:
         int32_t projectile_desc;
         int32_t hardpoint;
     };
+    // mesh_hp (refixf t07): the hardpoint the struck mesh names (§2.9 Q1 step 4), -1 none (hull), kMeshUnknown when
+    // the hit came without a precise test (the mesh_hardpoint stand-in decides).
+    static constexpr int32_t kMeshUnknown = -2;
     struct SweepHit {
         ObjectId id;
         float t;
+        int32_t mesh_hp = kMeshUnknown;
     };
 
     int32_t find(ObjectId id) const;  // unit index or -1
@@ -1295,7 +1323,9 @@ private:
     void sweep(uint32_t pi, QueryContext& ctx);
     SweepHit sweep_segment(const Projectile& p, Vec3 delta, QueryContext& ctx) const;  // ray p.pos -> p.pos + delta
     // `segment` (rockets): the step's P -> N vector; the impact is p.pos + segment x t (else p.pos + dir x (speed x t)).
-    void process_hit(Projectile& p, Unit& victim, float t, uint32_t frame, SimRng& rng, const Vec3* segment = nullptr);
+    void process_hit(Projectile& p, Unit& victim, float t, uint32_t frame, SimRng& rng, const Vec3* segment = nullptr,
+                     int32_t mesh_hp = kMeshUnknown);
+    int32_t hardpoint_by_mesh(const Unit& v, const std::string& mesh) const;  // §2.9 Q1 step 4 (0x394d40)
     void expire_projectile(uint32_t i, uint32_t frame);  // 3.3 expiry: detonation at the projectile's position
     void area_damage(const Projectile& p, Vec3 center, ObjectId direct, uint32_t frame);
     void detonation_effects(const Projectile& p, Vec3 center, ObjectId direct, uint32_t frame);
@@ -1358,6 +1388,7 @@ private:
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order
     std::vector<Repairer> repairs_;
     std::function<bool(ObjectId, Vec3, Vec3&)> obstacle_cell_;  // OI tactical: LAND_OBSTACLE aim walk
+    PreciseHitFn precise_hit_;                                  // refixf t07: projectile segment entry test
     std::function<float(int32_t)> credits_get_;
     std::function<void(int32_t, float)> credits_add_;
     void service_repairs(Unit& u, uint32_t frame);

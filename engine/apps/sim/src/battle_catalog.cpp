@@ -361,6 +361,8 @@ int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
     h.destroyable = flag("IS_DESTROYABLE", false);
     h.targetable = flag("IS_TARGETABLE", false);
     h.turret = flag("IS_TURRET", false);
+    // refixf t07 (TACTICAL_COMBAT §2.9 Q1 step 4): Collision_Mesh (type +0xa0), upper case for the _stricmp lookup.
+    h.collision_mesh = upper_str(trim(tag("COLLISION_MESH")));
     // refixf t06 (TACTICAL_COMBAT §2.9 Q2 step 4): unset Fire_Cone_Width / Height are 0 (hardpoint type ctor 0x53e3b0).
     h.fire_cone_width = num("FIRE_CONE_WIDTH", 0.0f);
     h.fire_cone_height = num("FIRE_CONE_HEIGHT", 0.0f);
@@ -739,7 +741,8 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
                 any = true;
             }
             mv::AvoidModel::Mesh mesh;
-            mesh.shield = upper_str(mi.name) == "SHIELD";
+            mesh.name = upper_str(mi.name);
+            mesh.shield = mesh.name == "SHIELD";
             bool first = true;
             for (uint32_t si = mi.first_submesh; si < mi.first_submesh + mi.submesh_count && si < m.submeshes.size(); ++si) {
                 const assets::Submesh& sm = m.submeshes[si];

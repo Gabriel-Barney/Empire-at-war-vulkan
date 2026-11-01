@@ -11,6 +11,7 @@
 #pragma once
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "alamo/tactical/movement/common.hpp"
@@ -30,6 +31,7 @@ struct AvoidModel {
     struct Mesh {
         F3 lo, hi;
         bool shield = false;  // the `SHIELD` sub-object (skipped for types with the shield behaviour: mask 2 / 0)
+        std::string name;     // ALO mesh name, upper case: the struck sub-object (TACTICAL_COMBAT §2.9 Q1 step 1)
         std::vector<F3> tris;
     };
     std::vector<Mesh> meshes;
@@ -69,5 +71,19 @@ bool avoid_precise(const AvoidObstacle& o, F3 a, F3 b, bool& inside);
 // the given order (the host passes ascending object id [port]); the first whose precise test hits decides: byte 1
 // clear -> true with its position in hit_pos; byte 1 set -> skipped, and every later hit is rejected (false).
 bool space_avoid(std::span<const AvoidObstacle> members, F3 centre, F3 half, F3 a, F3 b, F3& hit_pos);
+
+// refixf t07: the precise test 0x38f900 as the projectile segment query calls it (0x2abcf0, TACTICAL_COMBAT §3.4 /
+// §2.9 Q1). Query mask `mask` (7 with Projectile_Does_Shield_Damage, else 5); mesh masks (§5.6) are 1, except the
+// SHIELD mesh of a type with the shield behaviour (o.skip_shield), whose mask is `shield_mask` (2 while shield points
+// > 0, else 0). One hit record over the whole model (t starts at 1.0, a hit needs 0 < t < record.t), so the surviving
+// hit is the nearest; `mesh` is its index in AvoidModel::meshes (first in ALO order on equal t). No model: false.
+// COLLISIONBOX: the slab test only, mesh -1 (no sub-object); a start inside is a hit at t 0 [port: retail latches
+// byte 1, §5.7; only EM11_HYPERVADER has the box]. Else, when o.collide (§5.5), per mesh whose mask meets the query:
+// broad phase vs the mesh box (private record), then its triangles.
+struct AvoidSegmentHit {
+    float t = 1.0f;
+    int32_t mesh = -1;
+};
+bool avoid_precise_segment(const AvoidObstacle& o, F3 a, F3 b, uint32_t mask, uint32_t shield_mask, AvoidSegmentHit& hit);
 
 }  // namespace alamo::tactical::movement
