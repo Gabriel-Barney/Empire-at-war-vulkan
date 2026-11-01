@@ -1,11 +1,13 @@
 // alamo_render temporal anti-aliasing [port] (the original has none; render/src/taa.cpp, alamo/render/taa.hpp).
 // One full-screen triangle (no vertex buffer), pixel coordinates from SV_Position.
-// RESOLVE: scene colour (jittered) + scene depth + history + previous linear depth -> new history (RGBA16F):
+// RESOLVE: scene colour (jittered) + scene depth + history + previous linear depth (+ velocity) -> new history (RGBA16F):
 //   reprojection of the 3x3 nearest depth through Reproj (current jittered NDC -> previous un-jittered clip; camera
-//   motion only), 5-tap Catmull-Rom history fetch, then three decisions about how far to trust it:
+//   motion), or - where the nearest-depth pixel belongs to an instance that moved (taa_velocity.hlsl) - the velocity
+//   target's previous position of that surface point; 5-tap Catmull-Rom history fetch, then three decisions about
+//   how far to trust it:
 //     * disocclusion: the depth the reprojection expects vs the depth stored at that spot last frame (closest of the
-//       2x2 footprint, so slopes and silhouettes do not trip it). A moving object has no motion vector here, but it
-//       leaves exactly this signature, so its history is dropped instead of smeared;
+//       2x2 footprint, so slopes and silhouettes do not trip it). Things that moved without a vector (no motion id,
+//       animation) leave exactly this signature, so their history is dropped instead of smeared;
 //     * clip: the history is clipped to the current 3x3 neighbourhood (YCoCg variance box intersected with min / max);
 //       the box is wider where the history sat still (more accumulation) and tighter where it moved;
 //     * blend: Params.x of the current frame, raised with how far the history had to be clipped and to 1 on
@@ -16,7 +18,7 @@
 struct TaaPush {
     float4 Reproj[4];   // rows (column-vector convention): float4(ndc.xy, depth, 1) -> previous clip
     float4 Texel;       // 1 / width, 1 / height, width, height
-    float4 Params;      // x current weight, y reset (> 0.5: current only), z sharpen amount, w unused
+    float4 Params;      // x current weight, y reset (> 0.5: current only), z sharpen amount, w 1 = velocity target valid
     float4 DepthCur;    // x proj m[2][2], y proj m[2][3], z 1 = perspective / 0 = orthographic (this frame)
     float4 DepthPrev;   // the same for the previous frame's camera
 };
@@ -41,6 +43,8 @@ float LinearDepth(float4 dp, float ndc) {
 [[vk::combinedImageSampler]][[vk::binding(2, 0)]] SamplerState HistSmp;
 [[vk::combinedImageSampler]][[vk::binding(3, 0)]] Texture2D<float> PrevDepthTex;
 [[vk::combinedImageSampler]][[vk::binding(3, 0)]] SamplerState PrevDepthSmp;
+[[vk::combinedImageSampler]][[vk::binding(4, 0)]] Texture2D<float4> VelTex;  // previous uv, previous NDC depth, 1 = written
+[[vk::combinedImageSampler]][[vk::binding(4, 0)]] SamplerState VelSmp;
 
 // Relative depth error where the history starts to be dropped / is dropped completely.
 static const float kDisoccLo = 0.03;
@@ -110,6 +114,7 @@ float4 PSResolve(float4 pos : SV_Position) : SV_Target0 {
     if (PC.Params.y > 0.5) return cur;
     float3 m1 = 0.0, m2 = 0.0, mn = 1e9, mx = -1e9;
     float nearest = 1.0;
+    int2 nearest_px = p;
     [unroll] for (int dy = -1; dy <= 1; ++dy) {
         [unroll] for (int dx = -1; dx <= 1; ++dx) {
             const int2 q = clamp(p + int2(dx, dy), int2(0, 0), last);
@@ -118,19 +123,33 @@ float4 PSResolve(float4 pos : SV_Position) : SV_Target0 {
             m2 += c * c;
             mn = min(mn, c);
             mx = max(mx, c);
-            nearest = min(nearest, DepthTex.Load(int3(q, 0)));
+            const float d = DepthTex.Load(int3(q, 0));
+            if (d < nearest) {
+                nearest = d;
+                nearest_px = q;
+            }
         }
     }
     // Pixel centre with the nearest depth around it (moving silhouettes reproject with the foreground's motion).
     const float2 uv = (float2(p) + 0.5) * PC.Texel.xy;
     const float4 ndc = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, nearest, 1.0);  // render(): viewport Y flipped
-    const float4 clip = float4(dot(PC.Reproj[0], ndc), dot(PC.Reproj[1], ndc), dot(PC.Reproj[2], ndc), dot(PC.Reproj[3], ndc));
-    if (clip.w <= 1e-6) return cur;
-    const float2 pn = clip.xy / clip.w;
-    const float2 puv = float2(pn.x * 0.5 + 0.5, 0.5 - pn.y * 0.5);
+    // An instance that moved: where its surface point stood last frame (own motion + camera), and its depth there.
+    const float4 vel = PC.Params.w > 0.5 ? VelTex.Load(int3(nearest_px, 0)) : float4(0.0, 0.0, 0.0, 0.0);
+    float2 puv;
+    float expected;  // previous-frame NDC depth of the reprojected point
+    if (vel.w > 0.5) {
+        puv = vel.xy;
+        expected = vel.z;
+    } else {
+        const float4 clip = float4(dot(PC.Reproj[0], ndc), dot(PC.Reproj[1], ndc), dot(PC.Reproj[2], ndc), dot(PC.Reproj[3], ndc));
+        if (clip.w <= 1e-6) return cur;
+        const float2 pn = clip.xy / clip.w;
+        puv = float2(pn.x * 0.5 + 0.5, 0.5 - pn.y * 0.5);
+        expected = clip.z / clip.w;
+    }
     if (any(puv < 0.0) || any(puv > 1.0)) return cur;  // came from off screen: nothing to accumulate
     // Sky / far plane carries no usable depth: nothing to test there.
-    const float disocc = nearest < 0.99999 ? Disocclusion(clip.z / clip.w, puv, last) : 0.0;
+    const float disocc = nearest < 0.99999 ? Disocclusion(expected, puv, last) : 0.0;
     if (disocc >= 1.0) return cur;
     float4 hist = HistoryCatmullRom(puv);
     const float moved = length((puv - uv) * PC.Texel.zw);  // pixels the history shifted by

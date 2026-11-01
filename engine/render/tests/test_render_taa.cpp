@@ -451,13 +451,18 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
                     const uint32_t by0 = static_cast<uint32_t>(std::clamp(y0 - 60.0f, 0.0f, static_cast<float>(H - 1)));
                     const uint32_t by1 = static_cast<uint32_t>(std::clamp(y1 + 60.0f, 1.0f, static_cast<float>(H)));
                     // The frame after `slide` slid steps (k frames run, the last one drawn at step k).
-                    auto run = [&](bool taa, bool slide, std::vector<uint8_t>& out) {
+                    uint32_t mover_draws = 0;  // velocity-pass draws of the keyed run's last frame
+                    uint32_t pending = 0;      // pipelines / translations still compiling in any run frame (a run then shows fallbacks)
+                    auto run = [&](bool taa, bool slide, bool keyed, std::vector<uint8_t>& out) {
                         ro.taa = taa;
                         rr.reset_taa_history();
+                        for (const Pick& p : picks) moving[p.index].motion_id = keyed ? render::motion_key(3, p.index + 1) : 0;
                         for (int k = 0; k <= kSlide; ++k) {
                             if (slide) shifted(k);
                             else shifted(0);
                             CHECK(frame(g, rr, o, v0, moving, ro, st, clear, scene.sky()));
+                            if (keyed && taa && slide) mover_draws = st.taa_movers;
+                            pending += st.pending_pipeline + st.translation_pending + st.post_pending;
                         }
                         out.assign(o.data(), o.data() + bytes);
                     };
@@ -470,21 +475,29 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
                             }
                         return s / (static_cast<double>(bx1 - bx0) * (by1 - by0));
                     };
-                    std::vector<uint8_t> off_move, on_move, off_still, on_still;
-                    run(false, true, off_move);
-                    run(true, true, on_move);
-                    run(false, false, off_still);
-                    run(true, false, on_still);
+                    std::vector<uint8_t> off_move, on_move, key_move, off_still, on_still;
+                    run(false, true, false, off_move);
+                    run(true, true, false, on_move);   // no motion keys: camera motion + depth rejection only
+                    run(true, true, true, key_move);   // keyed: the velocity pass gives the sliding objects real vectors
+                    run(false, false, false, off_still);
+                    run(true, false, false, on_still);
                     const double moved = region_diff(off_move, off_still);  // sanity: the objects really moved
-                    const double d_move = region_diff(on_move, off_move), d_still = region_diff(on_still, off_still);
-                    std::printf("moving objects: %zu instances slid %d frames, region %ux%u: |off moved - off still| %.2f; |on - off| moving %.2f"
-                                " / still %.2f, ghost %.2f\n",
-                                picks.size(), kSlide, bx1 - bx0, by1 - by0, moved, d_move, d_still, d_move - d_still);
+                    const double d_move = region_diff(on_move, off_move), d_key = region_diff(key_move, off_move);
+                    const double d_still = region_diff(on_still, off_still);
+                    std::printf("moving objects: %zu instances slid %d frames, region %ux%u: |off moved - off still| %.2f; |on - off| still %.2f,"
+                                " moving without keys %.2f (ghost %.2f), with keys %.2f (ghost %.2f, %u velocity draws)\n",
+                                picks.size(), kSlide, bx1 - bx0, by1 - by0, moved, d_still, d_move, d_move - d_still, d_key, d_key - d_still,
+                                mover_draws);
+                    std::printf("moving objects: pending pipeline / translation frames-sum %u\n", pending);
                     CHECK(moved > 5.0);                   // the slid objects really changed the picture
-                    CHECK(d_move - d_still < 2.4);        // measured 1.97 with the depth rejection, 2.71 without it (RX 9070 XT)
+                    CHECK(mover_draws > 0);               // the keyed run drew velocity
+                    CHECK(d_move - d_still < 2.0);        // measured 0.85 with the depth rejection (RX 9070 XT); more than 2 = a trail
+                    CHECK(d_key < d_move);                // measured 5.55 vs 5.80: motion vectors beat the depth rejection alone
                     CHECK(save_crop(src_dir + "/logs/render_taa_move_off.png", off_move, W, bx0, by0, std::min(bx1 - bx0, 300u),
                                     std::min(by1 - by0, 200u), 3));
                     CHECK(save_crop(src_dir + "/logs/render_taa_move_on.png", on_move, W, bx0, by0, std::min(bx1 - bx0, 300u),
+                                    std::min(by1 - by0, 200u), 3));
+                    CHECK(save_crop(src_dir + "/logs/render_taa_move_keyed.png", key_move, W, bx0, by0, std::min(bx1 - bx0, 300u),
                                     std::min(by1 - by0, 200u), 3));
                 }
             }
