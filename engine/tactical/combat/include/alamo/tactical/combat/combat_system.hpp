@@ -480,6 +480,16 @@ enum class PreciseOutcome : uint8_t {
 };
 using PreciseHitFn = std::function<PreciseOutcome(const PreciseQuery&, PreciseResult&)>;
 
+// S8 t01 (TACTICAL_GAPS 3.1 slot 43): answer of the host's obstacle-cell query for a LAND_OBSTACLE target.
+enum class ObstacleCell : uint8_t {
+    NoFootprint,  // the target occupies no passability cells (not stamped): the half-extent rule applies [port]
+    Free,         // the cell containing the point is not one of the target's
+    Occupied,     // the target is in that cell's hard-occupant list (0x59efa0)
+};
+// `query(target, p, centre)`: the cell containing p against `target`'s stamp; always writes that cell's centre (XY; z
+// is free). Read-only: the targeting scan calls it from job workers.
+using ObstacleCellFn = std::function<ObstacleCell(ObjectId target, Vec3 p, Vec3& centre)>;
+
 class CombatHooks {
 public:
     virtual ~CombatHooks() = default;
@@ -979,12 +989,11 @@ public:
     // (UnitDesc::repairs_hardpoints). The HUD ORs this over the local player's selection before showing the repair
     // cursor; command 45 itself does no such check (TACTICAL_GAPS §1.12). False for an unknown unit.
     bool can_repair_hardpoints(ObjectId id) const;
-    // OI tactical (TACTICAL_GAPS 3.1 slot 43, LAND_OBSTACLE targets): `occupied(target, p, centre)` = the passability
-    // cell containing p is occupied by `target` (0x59efa0); it always writes that cell's centre. Called from the
-    // targeting scan (may run on worker threads: read-only). Unset: LAND_OBSTACLE targets keep the half-extent rule.
-    void set_obstacle_cell_query(std::function<bool(ObjectId target, Vec3 p, Vec3& centre)> occupied) {
-        obstacle_cell_ = std::move(occupied);
-    }
+    // OI tactical / S8 t01 (TACTICAL_GAPS 3.1 slot 43, LAND_OBSTACLE targets): the per-object passability cell query
+    // (ObstacleCellFn; the battle host answers from PassabilityGrid::occupies). Used by every slot 43 / 46 range test
+    // (targeting scan, inside_min_range, formation goal promotion). Unset, or NoFootprint for the target: the
+    // half-extent rule. Not saved (the host installs it at setup).
+    void set_obstacle_cell_query(ObstacleCellFn query) { obstacle_cell_ = std::move(query); }
     // refixf t07: the projectile segment query's per-entry test (precise model test, then the Collision_Box_Modifier
     // sphere). Unset: every tree-box hit is a hit (synthetic data without models).
     void set_precise_hit(PreciseHitFn fn) { precise_hit_ = std::move(fn); }
@@ -1387,7 +1396,7 @@ private:
     std::vector<SurvivorEvent> survivor_events_;
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order
     std::vector<Repairer> repairs_;
-    std::function<bool(ObjectId, Vec3, Vec3&)> obstacle_cell_;  // OI tactical: LAND_OBSTACLE aim walk
+    ObstacleCellFn obstacle_cell_;                              // OI tactical / S8 t01: LAND_OBSTACLE aim walk
     PreciseHitFn precise_hit_;                                  // refixf t07: projectile segment entry test
     std::function<float(int32_t)> credits_get_;
     std::function<void(int32_t, float)> credits_add_;

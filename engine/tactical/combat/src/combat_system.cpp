@@ -774,7 +774,8 @@ bool CombatSystem::in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const {
 void CombatSystem::range_geometry(const Unit& t, Vec3 from, float& d, float& E) const {
     // TACTICAL_GAPS 3.1 slot 43. With LAND_OBSTACLE (obj +0x346 != 0xFF): the aim point starts at the target, steps back
     // toward the attacker in 20-unit steps while its passability cell is occupied by the target (0x59efa0), snaps to
-    // the cell grid (the cell centre), E = sqrt(200). [port] the walk stops once it has passed the attacker.
+    // the cell grid (the cell centre), E = sqrt(200). [port] the walk stops once it has passed the attacker; a target
+    // the host reports without a footprint (ObstacleCell::NoFootprint: not stamped) keeps the half-extent rule.
     if (desc_of(t).land_obstacle && obstacle_cell_) {
         float dx = from.x - t.pos.x, dy = from.y - t.pos.y;
         const float l2 = dx * dx + dy * dy;
@@ -783,19 +784,22 @@ void CombatSystem::range_geometry(const Unit& t, Vec3 from, float& d, float& E) 
             E = 0.0f;
             return;
         }
-        const float len = dmath::sqrt(l2);
-        dx = dx / len;
-        dy = dy / len;
         Vec3 aim = t.pos;
         Vec3 centre = aim;
-        for (float walked = 0.0f; obstacle_cell_(t.id, aim, centre) && walked <= len; walked = walked + 20.0f) {
-            aim.x = aim.x + dx * 20.0f;
-            aim.y = aim.y + dy * 20.0f;
+        ObstacleCell cell = obstacle_cell_(t.id, aim, centre);
+        if (cell != ObstacleCell::NoFootprint) {
+            const float len = dmath::sqrt(l2);
+            dx = dx / len;
+            dy = dy / len;
+            for (float walked = 0.0f; cell == ObstacleCell::Occupied && walked <= len; walked = walked + 20.0f) {
+                aim.x = aim.x + dx * 20.0f;
+                aim.y = aim.y + dy * 20.0f;
+                cell = obstacle_cell_(t.id, aim, centre);  // writes the cell centre of the new aim point
+            }
+            d = distance_xy(from, centre);
+            E = 14.142136f;  // sqrt(200)
+            return;
         }
-        obstacle_cell_(t.id, aim, centre);  // the final cell's centre
-        d = distance_xy(from, centre);
-        E = 14.142136f;  // sqrt(200)
-        return;
     }
     d = distance_xy(from, t.pos);
     E = target_extent(t, from);

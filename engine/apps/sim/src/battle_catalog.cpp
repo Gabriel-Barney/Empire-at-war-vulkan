@@ -485,9 +485,9 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
                 if (const objects::TypeIndex q = ty.resolve_name(trim(n)); q != objects::kNone)
                     u.weapon_projectiles.push_back(projectile(static_cast<uint32_t>(q), s));
     }
-    // OI host (TACTICAL_GAPS 3.1 slot 43): obj +0x346 != 0xFF read as the type's LAND_OBSTACLE behaviour [inferred]. No
-    // obstacle-cell query is installed (the passability stamps are keyed by placement, not object id), so combat keeps
-    // the half-extent rule for these targets.
+    // OI host (TACTICAL_GAPS 3.1 slot 43): obj +0x346 != 0xFF read as the type's LAND_OBSTACLE behaviour [inferred]. S8 t01:
+    // the battle host's obstacle-cell query walks the target's passability stamp (map placements' stamps move to their
+    // objects); targets without a stamp (objects spawned during the battle) keep the half-extent rule.
     u.land_obstacle = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::LandObstacle);
     if (s.full) s9_unit_fields(t, u, s);
     return u;

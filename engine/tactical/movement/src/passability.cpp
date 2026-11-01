@@ -255,6 +255,28 @@ bool PassabilityGrid::unstamp(ObjectId id) {
     return true;
 }
 
+bool PassabilityGrid::occupies(ObjectId id, int32_t x, int32_t y) const {
+    if (!in_range(x, y)) return false;
+    const auto it = stamps_.find(id);
+    if (it == stamps_.end()) return false;
+    return std::binary_search(it->second.cells.begin(), it->second.cells.end(), static_cast<uint32_t>(idx(x, y)));
+}
+
+std::span<const uint32_t> PassabilityGrid::stamp_cells(ObjectId id) const {
+    const auto it = stamps_.find(id);
+    if (it == stamps_.end()) return {};
+    return it->second.cells;
+}
+
+bool PassabilityGrid::rekey(ObjectId from, ObjectId to) {
+    if (from == to || stamps_.find(to) != stamps_.end()) return false;
+    auto node = stamps_.extract(from);
+    if (node.empty()) return false;
+    node.key() = to;
+    stamps_.insert(std::move(node));
+    return true;
+}
+
 uint32_t PassabilityGrid::stamp_secondary(ObjectId id, const ObstacleFootprint& fp) {
     unstamp_secondary(id);
     if (w_ == 0 || h_ == 0) return 0;

@@ -10,7 +10,7 @@
 //   (2 x |half extent| x Scale_Factor, offset -half extent x scale, vertical height = model z x scale for
 //   the water rule); types with neither are skipped. Fine_Tune_Occupied_Passability types trim their
 //   samples with `hooks.mesh_ray_hit` when supplied (else untrimmed). bits = OverridePassability or
-//   Obstacle. Stamp ids are -(placement index + 1) so they never collide with object ids.
+//   Obstacle. Stamp ids are -(placement index + 1) (map_stamp_id) so they never collide with object ids.
 // space_from_map: playable box (0x103 04/05) and SPACE_OBSTACLE placements as static entries;
 //   radius = first positive Custom_Soft_Footprint_Radius / Space_Obstacle_Radius x Scale_Factor
 //   (PROVISIONAL [M]: the retail getter's "2R/20" conversion is unexplained and not applied).
@@ -43,6 +43,10 @@ struct MapStampHooks {
 };
 uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map, const objects::GameObjectTypes& types,
                              const MapStampHooks* hooks = nullptr);
+// S8 t01: the stamp id stamp_map_obstacles gives map placement `placement` (index into MapData::objects). A host that
+// spawns an object for the placement moves the stamp to the object id (PassabilityGrid::rekey), so the per-object cell
+// query (PassabilityGrid::occupies) answers for that object.
+inline ObjectId map_stamp_id(size_t placement) { return -static_cast<ObjectId>(placement) - 1; }
 uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const objects::GameObjectTypes* types);
 bool space_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t type, float& radius, uint32_t& bits);
 
