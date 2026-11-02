@@ -1,7 +1,6 @@
 # Full_Story_Campaign_Underworld, seed 99, 900 ticks
 # alamo story log v1: T frame index kind fields | F frame set:seq plot event type [params] reward=type[params] via=cause
 # plot set 0: player 5 Story_Plots_Campaign_Underworld.XML (1 plots, 1 scripts)
-T 1 0 GalacticDayPassed value=1 gframe=0
 F 1 0:0 Story_Campaign_Underworld.xml Underworld_Campaign_Begin STORY_ELAPSED [0] reward=- via=clock
 F 1 0:1 Story_Campaign_Underworld.xml Underworld_Mission_04_Flag_Set STORY_TRIGGER [] reward=SET_FLAG[Underworld_Mission_04_Win|0] via=clock
 F 1 0:2 Story_Campaign_Underworld.xml Set_Begining_Empire_Tech STORY_TRIGGER [] reward=SET_TECH_LEVEL[Empire|2] via=clock
@@ -62,5 +61,5 @@ F 1 0:56 Story_Campaign_Underworld.xml Lock_Autoresolve_Saleucami STORY_TRIGGER 
 F 1 0:57 Story_Campaign_Underworld.xml Mission_Lock_Mandalore STORY_TRIGGER [] reward=SET_PLANET_RESTRICTED[Mandalore_Story|1] via=clock
 F 1 0:58 Story_Campaign_Underworld.xml Unlock_Buzz_Droids_From_Black_Market STORY_TRIGGER [] reward=GIVE_BLACK_MARKET[Buzz_Droid_Tech] via=clock
 F 1 0:59 Story_Campaign_Underworld.xml Mission_Lock_Shola_Invasion STORY_TRIGGER [] reward=ENABLE_INVASION[Shola|0] via=clock
-T 1 1 TechLevelChanged player=Empire value=2 gframe=1
-T 1 2 TechLevelChanged player=Rebel value=1 gframe=1
+T 1 0 TechLevelChanged player=Empire value=2 gframe=1
+T 1 1 TechLevelChanged player=Rebel value=1 gframe=1
