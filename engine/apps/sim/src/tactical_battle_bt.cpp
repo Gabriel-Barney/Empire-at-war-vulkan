@@ -900,6 +900,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
     if (!dm.empty()) {
         anchor_[0] = flat(bt_markers_[dm.front()].pos);
         facing_[0] = bt_markers_[dm.front()].facing;
+        drop_facing_[0] = facing_[0];  // a1h t06: mode +0x288 record of the defender (TACTICAL_GAPS §4.2.2 item 1)
     }
     if (!am.empty()) {
         static const objects::BehaviorTypeId kDummy = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
@@ -927,6 +928,9 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
         }
         anchor_[1] = flat(bt_markers_[best].pos);
         facing_[1] = bt_markers_[best].facing;
+        // a1h t06: the attacker's +0x288 record is written only when its start list is non-empty (record +0x28).
+        if (std::any_of(parts_.begin(), parts_.end(), [](const Participant& q) { return q.side == 1 && !q.reserve && !q.third; }))
+            drop_facing_[1] = facing_[1];
         if (space_ && !dm.empty()) {
             const Vec3 to{bt_markers_[dm.back()].pos.x - anchor_[1].x, bt_markers_[dm.back()].pos.y - anchor_[1].y, 0.0f};
             const float len = dmath::sqrt(to.x * to.x + to.y * to.y);

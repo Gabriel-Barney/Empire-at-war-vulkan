@@ -546,6 +546,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         anchor_[1] = {cx - 0.45f * hx, cy, 0.0f};
         facing_[0] = {-1.0f, 0.0f, 0.0f};
         facing_[1] = {1.0f, 0.0f, 0.0f};
+        drop_facing_[0] = drop_facing_[1] = Vec3{};  // a1h t06: mode +0x288 starts zeroed (no marker -> yaw 0)
     }
     // Movement world.
     mv::MovementConfig mc;
@@ -799,9 +800,14 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
         } else if (lead_sw) {
             pos = bt_ds_pos_;  // battle host: the spawned super-weapon at DEATH_STAR_POSITION (TACTICAL_GAPS §4.8) [M]
         } else if (!drop_pos_.empty()) {  // a1g t04 follow-up: order_reinforce's land drop layout (member order)
+            // a1h t06: the slots passed land_drop_valid, so they are used as they are (no clamp, no nearest-cell move).
             const size_t k = mk;
-            const uint32_t mask = movement_->classes().mask(md.movement_class);
-            pos = k < drop_pos_.size() ? snap_passable(drop_pos_[k], mask, false) : slot_position(side, mask);
+            if (k < drop_pos_.size()) {
+                pos = drop_pos_[k];
+                pos.z = map_.terrain.sample_height(pos.x, pos.y);
+            } else {
+                pos = slot_position(side, movement_->classes().mask(md.movement_class));
+            }
         } else {
             pos = slot_position(side, space_ ? 0u : movement_->classes().mask(md.movement_class));
         }
@@ -1308,8 +1314,12 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
 #endif
         }
         if (!space_) {
-            // a1g t04 follow-up (TACTICAL_GAPS §4.2.1): the company drop layout around (x, y), turned by the side's yaw -
-            // the slots BattleAi::land_drop_ok tested.
+            // a1h t06 (TACTICAL_GAPS §4.2.2 item 5): Execute re-runs the drop validity (force 0, landing rule on, movers
+            // ignored only for an AI issuer); a refused drop is refused whole. Then the company layout around (x, y),
+            // turned by the side's yaw - the slots just tested.
+            const bool human = player < galaxy_->players().size() && galaxy_->players()[player].human;
+            if (!land_drop_valid(mode, static_cast<int32_t>(player), galactic_id, x, y, human, catalog_->use_reinforcement_points()))
+                return R::InvalidPosition;
             const LandDropLayout lay = land_drop_layout(land_drop_shape(p.type), x, y, drop_yaw(p.side));
             if (lay.ok && p.other_type < 0) {
                 drop_pos_.clear();
@@ -1513,12 +1523,11 @@ void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalo
         hy = cy * sc;
         return;
     }
-    if (const BattleCatalog::ModelInfo* m = catalog ? catalog->model_info(type, false, true) : nullptr; m && m->has_bounds) {
-        hx = std::fabs(m->max[0]) * sc;
-        hy = std::fabs(m->max[1]) * sc;
-        return;
-    }
-    hx = hy = mv::unit_desc_from_type(types, type).radius;  // [port] no hard extents and no model box
+    // a1h t06 (TACTICAL_GAPS §4.2.2 item 4): per axis, the hard extent when > 0, else the land model box; no model -> 0.
+    const BattleCatalog::ModelInfo* m = catalog ? catalog->model_info(type, false, true) : nullptr;
+    const bool mb = m && m->has_bounds;
+    hx = (cx > 0.0f ? cx : mb ? std::fabs(m->max[0]) : 0.0f) * sc;
+    hy = (cy > 0.0f ? cy : mb ? std::fabs(m->max[1]) : 0.0f) * sc;
 }
 
 LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const BattleCatalog* catalog, const galactic::ConflictRules& rules,
@@ -1532,17 +1541,27 @@ LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const Battl
             for (int32_t i = 0; i < n; ++i) s.members.push_back(mt);
     }
     if (s.members.empty()) return s;
+    if (const uint32_t f = s.members.front(); f < types.size()) s.create_team = types.get_bool(f, "Create_Team");  // original member
+    // a1h t06 (TACTICAL_GAPS §4.2.2 item 2): a member without a land model that names a Unique_Ground_Unit (+0x1b60; FoC:
+    // General_Veers -> Veers_AT_AT_Walker) is laid out, passability-tested and box-tested as that type.
+    auto trimmed = [](std::string_view v) {
+        while (!v.empty() && (v.front() == ' ' || v.front() == '\t' || v.front() == '\r' || v.front() == '\n')) v.remove_prefix(1);
+        while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r' || v.back() == '\n')) v.remove_suffix(1);
+        return v;
+    };
+    for (uint32_t& t : s.members) {
+        if (t >= types.size() || !trimmed(types.get_string(t, "Land_Model_Name")).empty()) continue;
+        const std::string_view name = trimmed(types.get_string(t, "Unique_Ground_Unit"));
+        const objects::TypeIndex u = name.empty() ? objects::kNone : types.resolve_name(name);
+        if (u != objects::kNone && u < types.size()) t = u;
+    }
     for (const uint32_t t : s.members) {
         float hx = 0.0f, hy = 0.0f;
         drop_half_extents(types, catalog, t, hx, hy);
         s.hx.push_back(hx);
         s.hy.push_back(hy);
     }
-    const uint32_t f = s.members.front();
-    if (f < types.size()) {
-        s.create_team = types.get_bool(f, "Create_Team");
-        s.formation_spacing = types.get_float(f, "FormationSpacing");
-    }
+    if (const uint32_t f = s.members.front(); f < types.size()) s.formation_spacing = types.get_float(f, "FormationSpacing");
     if (company_type < types.size()) {
         const int32_t k = types.get_int(company_type, "Max_Squad_Size");  // +0x1e44, default 10 (bt_team)
         s.squad = k > 0 ? static_cast<uint32_t>(k) : 10u;
@@ -1567,7 +1586,91 @@ void TacticalBattle::drop_half_extents(uint32_t type, float& hx, float& hy) cons
 }
 
 float TacticalBattle::drop_yaw(uint8_t side) const {
-    return yaw_of(facing_[side < 2 ? side : 0]);
+    if (side >= 2) return 0.0f;  // third players: no record written
+    const Vec3 f = drop_facing_[side];
+    return f.x == 0.0f && f.y == 0.0f ? 0.0f : yaw_of(f);
+}
+
+// ---- land drop validity (header; TACTICAL_GAPS §4.2.1 tests 1-4, §4.2.2 items 2-4) ----
+bool TacticalBattle::land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
+                                     bool use_reinforcement_points) const {
+    if (space_ || !movement_) return true;  // land only
+    if (!std::isfinite(x) || !std::isfinite(y)) return false;
+    const Participant* part = nullptr;
+    for (const Participant& q : parts_)
+        if (q.galactic_id == key && q.owner == player && q.reserve && !q.deployed) {
+            part = &q;
+            break;
+        }
+    if (!part) return false;
+    const float yaw = drop_yaw(part->side);
+    const LandDropLayout lay = land_drop_layout(land_drop_shape(part->type), x, y, yaw);
+    if (!lay.ok) return false;
+    const objects::GameObjectTypes& types = catalog_->types();
+    const objects::ObjectStore& st = mode.primary();
+    const mv::PassabilityGrid& grid = movement_->grid();
+    float mn[2], mx[2];
+    const bool box = map_.playable_box(mn, mx);
+    // 1-2. passable for the member's movement class (inside the playable box [port]); not fogged for the player.
+    for (const LandDropSlot& s : lay.slots) {
+        if (box && (s.x < mn[0] || s.x > mx[0] || s.y < mn[1] || s.y > mx[1])) return false;
+        if (s.type >= types.size()) return false;
+        const mv::UnitDesc md = mv::unit_desc_from_type(types, s.type);
+        if (!grid.passable_world({s.x, s.y}, movement_->classes().mask(md.movement_class))) return false;
+#ifdef ALAMO_SIM_HAVE_FOG
+        if (fog_point_fogged(player, s.x, s.y, true)) return false;
+#endif
+    }
+    // 3. footprints: the formation box (broad phase), then each slot's own box against each blocking object's box.
+    static const objects::BehaviorTypeId kMine = objects::behavior_type_id("PROXIMITY_MINE");
+    static const objects::BehaviorTypeId kLanding = objects::behavior_type_id("TRANSPORT_LANDING");
+    const DropBox formation{x, y, lay.half_x, lay.half_y, yaw};
+    std::vector<LandDropRadiusObject> radius;
+    for (const objects::ObjectHandle h : st.all_objects()) {  // GOM order
+        if (!st.alive(h)) continue;
+        const objects::TypeIndex t = st.type(h);
+        if (t >= types.size()) continue;
+        const int32_t o = st.owner(h);
+        const Vec3 q = st.position(h);
+        // 4. radius inputs (GOM list +0x2f0): dying / removing (+0x3a0 & 0x42) skipped.
+        if (st.active(h)) {
+            LandDropRadiusObject ro;
+            ro.x = q.x;
+            ro.y = q.y;
+            ro.allied = o >= 0 && (o == player || !combat_->is_enemy(player, o));  // 0x2823c0 / 0x39a230
+            ro.enabling = types.get_float(t, "Reinforcement_Enabling_Radius");
+            ro.prevention = types.get_float(t, "Reinforcement_Prevention_Radius");
+            ro.powered = st.has_behavior(h, objects::beh::Powered);
+            ro.owner_base_power = o >= 0 && combat_->has_base_power(o);
+            if (ro.enabling > 0.0f || ro.prevention > 0.0f) radius.push_back(ro);
+        }
+        // a1h t06 (§4.2.2 item 4): the object tree GOM +0xd8 - Collidable_By_Projectile_Living (a death clone: _Dead),
+        // any owner; never proximity mines; an AI issuer ignores movers; a human issuer ignores landing transports (item 3).
+        if (!types.get_bool(t, st.dying(h) ? "Collidable_By_Projectile_Dead" : "Collidable_By_Projectile_Living")) continue;
+        if (kMine != objects::kNoBehavior && st.has_behavior(h, kMine)) continue;
+        const bool obstacle = st.has_behavior(h, objects::beh::LandObstacle);
+        if (!human && st.has_behavior(h, objects::beh::Locomotor) && !obstacle) continue;
+        if (human && kLanding != objects::kNoBehavior && st.has_behavior(h, kLanding)) continue;
+        // Footprint 0x38de80: centre + R(yaw)(Custom_Hard_X/YExtent_Offset) x Scale_Factor, half extents 0x371be0, along yaw.
+        const Vec3 f = st.facing(h);
+        DropBox xb;
+        xb.yaw_deg = f.x == 0.0f && f.y == 0.0f ? 0.0f : yaw_of(f);
+        float sc = types.get_float(t, "Scale_Factor");
+        if (!(sc > 0.0f)) sc = 1.0f;
+        const float ox = types.get_float(t, "Custom_Hard_XExtent_Offset") * sc, oy = types.get_float(t, "Custom_Hard_YExtent_Offset") * sc;
+        float sn = 0.0f, cs = 1.0f;
+        dmath::sincos(xb.yaw_deg * (dmath::kPiF / 180.0f), sn, cs);
+        xb.cx = q.x + ox * cs - oy * sn;
+        xb.cy = q.y + ox * sn + oy * cs;
+        sim::drop_half_extents(types, catalog_, t, xb.hx, xb.hy);
+        if (!drop_boxes_overlap(formation, xb)) continue;
+        for (const LandDropSlot& s : lay.slots)
+            if (drop_boxes_overlap(DropBox{s.x, s.y, s.hx, s.hy, s.yaw_deg}, xb)) return false;  // footprint taken
+    }
+    // 4. reinforcement radii (check-radius: AI and human drops are not forced).
+    for (const LandDropSlot& s : lay.slots)
+        if (!land_drop_radius_ok(s.x, s.y, radius, use_reinforcement_points)) return false;
+    return true;
 }
 // ---- end a1g t04 follow-up ----
 

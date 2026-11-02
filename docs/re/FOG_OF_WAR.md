@@ -225,6 +225,10 @@ Fields: +0x40/+0x44 x, y at the last reveal; +0x48 squared move threshold; +0x50
 - Quirk: when allied players get different radii (battle scale, player lists), the stored list is the
   last player's; undo on the others decrements the wrong cells (clamped at 0) and can leave counts
   behind. Keep it.
+- Port note (a1h t01, 2026-11-02): the battle host serviced REVEAL only for battle units, so map markers and capture
+  points with REVEAL (FoC `Reinforcement_Point*`: `Land_FOW_Reveal_Range` 275) never revealed for their owner. Since
+  a1g's land drop check tests fog, an AI could never drop at a captured reinforcement point with no unit near it. Every
+  live non-unit REVEAL object is now a source (`tactical_battle_fog.cpp`), and a capture-point owner change runs vf18.
 
 ### 3.3 Other sources [H unless tagged]
 

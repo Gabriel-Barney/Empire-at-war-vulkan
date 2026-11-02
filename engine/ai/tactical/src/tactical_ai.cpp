@@ -53,7 +53,6 @@ constexpr int32_t kFreeStoreScriptBase = 1000000;  // free-store script ids: bas
 constexpr int32_t kSlotBits = 20;                    // AITarget id = (player << 20) | slot [port]
 constexpr int32_t kSlotMask = (1 << kSlotBits) - 1;
 constexpr uint32_t kNoWireObject = 0x3FFFFFu;        // commands::kNoObject
-constexpr int64_t kGuardRefresh = 150;               // [port] guard re-order cadence (frames)
 constexpr size_t kTfGroupOrderMaxUnits = 4096;       // [port] ids in one group order (payload < 16 KiB, header)
 
 int32_t target_id(int32_t player, int32_t slot) { return (player << kSlotBits) | slot; }
@@ -355,6 +354,16 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         for (const auto& [id, t] : tfs)
             if (std::find(t.units.begin(), t.units.end(), u) != t.units.end()) return true;
         return false;
+    }
+    // a1h t02 (A1_READINGS §32.3): a newer task-force order collects every TF unit and raises signal 0xb on it, so each
+    // older movement / attack / guard status of that TF loses all its units and finishes (Result nil); it never acts
+    // again. [port] unit-level Lua orders, abilities and garrison orders on a TF member do not supersede yet.
+    void supersede(int32_t tf) {
+        for (auto& [id, s] : statuses)
+            if (s.tf == tf && !s.finished && (s.kind == StatusKind::Move || s.kind == StatusKind::Guard || s.kind == StatusKind::AttackTarget)) {
+                s.finished = true;
+                s.result = lua::AiStatusResult::Nil;
+            }
     }
     int32_t new_status(int32_t plan, int32_t tf, StatusKind kind) {
         StatusRec s;
@@ -1825,21 +1834,11 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             prune_tf(*t);
             if (t->units.empty()) return finish(false);
             if (s.target >= 0) {
-                // [port] (AI_TACTICAL open item 3; galactic Move_To semantics, AI_GALACTIC §1.9: the status completes on
-                // arrival at the destination): an Attack_Move to an OBJECT follows it (0x73c4f0), so its destination is
-                // reached only when the object is gone -> finished (true) when it dies; the units are re-ordered toward it
-                // at most every kGuardRefresh frames and only when it moved since the last order. Before, the status finished as soon as the units stopped next to the live
-                // object and loops like BurnUnits' `while TestValid(target) do BlockOnCommand(Attack_Move(target), 20)`
-                // re-issued the order every Planning service.
+                // An Attack_Move / Move_To to an OBJECT (0x73c4f0) stays open after arrival while the object lives
+                // (A1_READINGS §32.2, modes 0 / 1) -> finished (true) when it dies. a1h t02: the status is passive; the
+                // battle host's movement follows the object (§32.4), the status no longer re-orders the units.
                 const ObjectHandle h = store.find(s.target);
                 if (!store.alive(h)) return finish(true);
-                const Vec3f tp = pos_of(h);
-                if (now - s.last_order >= kGuardRefresh && (tp.x != s.dest.x || tp.y != s.dest.y)) {  // only a moved target
-                    s.last_order = now;
-                    s.dest = tp;
-                    const std::vector<uint32_t> ids = movable_ids(*t);  // refixf t06: one group order (header)
-                    if (!ids.empty()) order(t->player, lua_order_event(lua::LuaOrder::AttackMove, ids, s.target, tp), "attack-move follow");
-                }
                 return false;
             }
             if (now <= s.started) return false;
@@ -1859,16 +1858,24 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             return false;
         }
         case StatusKind::Guard: {
-            const ObjectHandle h = store.find(s.target);
-            if (!t) return finish(false);
+            // a1h t02 (A1_READINGS §32.2): passive, Result = the BlockingStatus default (nil). An object guard finishes when
+            // the object dies or the TF is empty, and stays open after arrival (the battle host's movement follows the
+            // object, §32.4); a position guard finishes when every unit has arrived. A newer order of the TF finishes it
+            // too (supersede). [port] the object's new-order (0xb) and owner-change (0x1a) signals are not modelled.
+            auto end = [&s] {
+                s.finished = true;
+                s.result = lua::AiStatusResult::Nil;
+                return false;
+            };
+            if (!t) return end();
             prune_tf(*t);
-            if (t->units.empty() || (s.target >= 0 && !store.alive(h))) return finish(false);
-            if (s.target >= 0 && now - s.last_order >= kGuardRefresh) {  // follow the guarded object [port]
-                s.last_order = now;
-                const std::vector<uint32_t> ids = movable_ids(*t);  // refixf t06: one group order (header)
-                if (!ids.empty()) order(t->player, lua_order_event(lua::LuaOrder::Guard, ids, s.target, pos_of(h)), "guard follow");
+            if (t->units.empty() || (s.target >= 0 && !store.alive(store.find(s.target)))) return end();
+            if (s.target >= 0 || now <= s.started) return false;
+            for (const ObjectHandle u : t->units) {
+                const TacticalAiObject* f = fact(id_of(u));
+                if (f && f->moving) return false;
             }
-            return false;
+            return end();
         }
     }
     return false;
@@ -1905,6 +1912,7 @@ int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const 
               cmd::RejectReason::None;
     }
     if (!any) return new_status(t.plan, t.id, StatusKind::Failed);
+    supersede(t.id);
     const int32_t id = new_status(t.plan, t.id, kind == AiTacticalOrder::GuardTarget ? StatusKind::Guard : StatusKind::Move);
     statuses[id].dest = dest;
     statuses[id].target = target_object;
@@ -1994,6 +2002,7 @@ int32_t TacticalAiWorld::Impl::tf_attack_target(int32_t tf, const lua::AiArg& ta
     if (order(t->player, ev, "tf " + t->name + " attack " + std::to_string(id_of(h)) + (ref2 ? " hp " + std::to_string(ref2 - 1) : "")) !=
         cmd::RejectReason::None)
         return new_status(t->plan, tf, StatusKind::Failed);
+    supersede(tf);
     const int32_t id = new_status(t->plan, tf, StatusKind::AttackTarget);
     statuses[id].target = id_of(h);
     return id;

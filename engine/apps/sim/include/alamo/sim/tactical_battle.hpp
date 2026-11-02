@@ -158,12 +158,13 @@ struct AttachedEffect {
 // ---- a1g t04 follow-up: land company drop layout and validity (TACTICAL_GAPS §4.2.1: 0x3b6170, 0x5abc00, 0x40f970) ----
 // One layout serves the AI drop check (BattleAi::land_drop_ok) and the reserve deploy (order_reinforce), so they agree.
 struct LandDropShape {
-    std::vector<uint32_t> members;  // Company_Units member types in list order, one per spawned member
+    std::vector<uint32_t> members;  // Company_Units member types in list order, one per spawned member; a member without a land
+                                    // model that names a Unique_Ground_Unit (+0x1b60) is replaced by it (a1h t06, §4.2.2 item 2)
     std::vector<float> hx, hy;      // each member's half extents (0x371be0)
-    bool create_team = false;       // the FIRST member's Create_Team (+0x67): infantry teams, else one vehicle grid
+    bool create_team = false;       // the FIRST ORIGINAL member's Create_Team (+0x67): infantry teams, else one vehicle grid
     uint32_t squad = 10;            // the company's Max_Squad_Size (+0x1e44)
     bool container_locomotor = false;  // Create_Team_Type has LAND_TEAM_CONTAINER_LOCOMOTOR in its LandBehavior (+0x718)
-    float formation_spacing = 0.0f;    // the first member's FormationSpacing (+0x16d4)
+    float formation_spacing = 0.0f;    // the first (substituted) member's FormationSpacing (+0x16d4)
 };
 struct LandDropSlot {
     uint32_t type = 0;
@@ -198,8 +199,8 @@ struct LandDropRadiusObject {
 };
 bool land_drop_radius_ok(float x, float y, std::span<const LandDropRadiusObject> objects, bool use_reinforcement_points);
 // The drop shape of a company type (its Company_Units in list order, or the type itself) and the half extents 0x371be0
-// of a type: Custom_Hard_X/YExtent x Scale_Factor when both are > 0, else |land model box max x / y| x Scale_Factor;
-// [port] else the movement radius. [port] The +0x1b60 substitute type (a member without a land model) is not modelled.
+// of a type: Custom_Hard_X/YExtent x Scale_Factor when both are > 0, else per axis the hard extent when > 0, else |land
+// model box max x / y|, x Scale_Factor; no model -> 0 on that axis (a1h t06, TACTICAL_GAPS §4.2.2 item 4).
 LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const BattleCatalog* catalog, const galactic::ConflictRules& rules,
                               uint32_t company_type);
 void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy);
@@ -354,17 +355,32 @@ public:
     std::vector<IconLink> icon_links() const;
     // Reinforce (COMMANDS.md id 12) from a human player: the rules of BattleAi's Reinforce (owner, undeployed reserve,
     // the side not retreating, space unit cap -> QueueFull). Space: deployed in rows of 6 around (x, y) clamped to the
-    // mode bounds [port]. Land (a1g t04 follow-up): the company drop layout around (x, y) (land_drop_layout), each slot
-    // clamped to the playable box and moved to the nearest passable cell only when it is blocked [port: the human drop
-    // check is not re-run here]. Command phase, synced RNG. InvalidUnit when `galactic_id` is not one of the player's
-    // reserves.
+    // mode bounds [port]. Land (a1h t06, TACTICAL_GAPS §4.2.2 item 5: ReinforceEventClass Execute 0x403cb0): the drop
+    // validity is re-run (land_drop_valid, movers block only for a human issuer); a refused drop is refused whole
+    // (InvalidPosition: nothing moved or clamped, the unit stays in the pool); else the members spawn at the layout's
+    // slots. [port] The campaign Stay_In_Transport / planet-restriction refusals and the "battle decided" gate are not
+    // modelled. Command phase, synced RNG. InvalidUnit when `galactic_id` is not one of the player's reserves.
     commands::RejectReason order_reinforce(TacticalMode& mode, uint8_t player, objects::ObjectId galactic_id, float x, float y,
                                            SimRng& rng);
-    // a1g t04 follow-up: land_drop_shape / drop_half_extents with this battle's data. The layout yaw of a side = its
-    // deploy facing [port: the per-player entry facing, mode +0x288, is [M]].
+    // a1g t04 follow-up: land_drop_shape / drop_half_extents with this battle's data. a1h t06: the layout yaw of a side =
+    // its entry-facing record (mode +0x288, TACTICAL_GAPS §4.2.2 item 1): the yaw of the defender's first Defending Forces
+    // marker, of the chosen Attacker Entry marker (only with attacker start units), else 0.
     LandDropShape land_drop_shape(uint32_t company_type) const;
     void drop_half_extents(uint32_t type, float& hx, float& hy) const;
     float drop_yaw(uint8_t side) const;
+    // a1g t04 follow-up / a1h t06 - land drop validity (TACTICAL_GAPS §4.2.1, §4.2.2; LandMode vf80 0x3b5f60 -> 0x3b6170,
+    // force 0, check-radius): the reserve entry `key` of `player` (not deployed) laid out by land_drop_layout around (x, y),
+    // turned by the side's drop yaw. True only when EVERY slot passes: inside the playable box [port] and passable for its
+    // (substituted) member's MovementClass; not fogged for `player` (fog builds); its oriented box clear of every blocking
+    // object's footprint box (after the formation-box broad phase); the reinforcement radii (land_drop_radius_ok;
+    // `use_reinforcement_points` = GameConstants Use_Reinforcement_Points). Blocking objects = the object tree GOM +0xd8: live objects of any owner whose type has
+    // Collidable_By_Projectile_Living (death clones: _Dead), minus PROXIMITY_MINE objects; an AI issuer (`human` false)
+    // ignores movers (a locomotor and no LAND_OBSTACLE) and counts landing transports; a human issuer counts movers and
+    // ignores TRANSPORT_LANDING objects [port: no Create_Cinematic_Transport persist flag, so none is exempt]. Footprint =
+    // position + R(yaw)(Custom_Hard_X/YExtent_Offset x Scale_Factor), half extents drop_half_extents [port: the deployed
+    // extents rule 2 of 0x396850 is [M]]. Unknown entry -> false. Space battles -> true.
+    bool land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
+                         bool use_reinforcement_points) const;
     float player_drop_yaw(int32_t player) const { return drop_yaw(side_player(1) == player ? uint8_t{1} : uint8_t{0}); }
     // --- end P host ---
 
@@ -1028,6 +1044,7 @@ private:
 #endif
     // --- end S4 ---
     Vec3 anchor_[2]{}, facing_[2]{};
+    Vec3 drop_facing_[2]{};  // a1h t06: the sides' entry-facing records (mode +0x288; zero = yaw 0), see drop_yaw
     uint32_t placed_[2] = {0, 0};
     uint32_t frame_ = 0;
     uint32_t retreat_allowed_frame_ = 0;
