@@ -29,7 +29,8 @@
 //     h = rotl64(h + w * P2, 31) * P1          (h0 = seed + P5)
 // then the final partial word (zero-padded, may be empty) is absorbed the same way, h ^= length,
 // and the murmur3 fmix64 finaliser is applied. P1/P2/P5 are the xxHash64 primes. It is a
-// checksum, not a cryptographic hash.
+// checksum, not a cryptographic hash. The typed feeds (u8..u64, f32, f64, value) are inline (OPT3 t05): they append to
+// the pending word without a call per field, which is what the per-field hashers of the big systems spend their time on.
 #pragma once
 #include <bit>
 #include <cstdint>
@@ -47,20 +48,25 @@ namespace alamo {
 
 class StateHasher {
 public:
+    // One round of the algorithm above (P1 / P2 are the xxHash64 primes).
+    static uint64_t round(uint64_t h, uint64_t w) noexcept {
+        return std::rotl(h + w * 0xC2B2AE3D27D4EB4Full, 31) * 0x9E3779B185EBCA87ull;
+    }
+
     explicit StateHasher(uint64_t seed = 0) noexcept;
 
     // Raw canonical bytes (caller guarantees: no padding, no pointers, defined content).
     void bytes(const void* data, size_t len) noexcept;
 
-    void u8(uint8_t v) noexcept { bytes(&v, 1); }
+    void u8(uint8_t v) noexcept { put_le(v); }
     void u16(uint16_t v) noexcept { put_le(v); }
     void u32(uint32_t v) noexcept { put_le(v); }
     void u64(uint64_t v) noexcept { put_le(v); }
     void i32(int32_t v) noexcept { put_le(static_cast<uint32_t>(v)); }
     void i64(int64_t v) noexcept { put_le(static_cast<uint64_t>(v)); }
     void boolean(bool v) noexcept { u8(v ? 1 : 0); }
-    void f32(float v) noexcept;   // bit pattern
-    void f64(double v) noexcept;  // bit pattern
+    void f32(float v) noexcept { u32(std::bit_cast<uint32_t>(v)); }   // bit pattern
+    void f64(double v) noexcept { u64(std::bit_cast<uint64_t>(v)); }  // bit pattern
     // Length (u32) then bytes.
     void str(std::string_view s) noexcept;
 
@@ -101,17 +107,29 @@ private:
     static constexpr bool kHashable =
         (std::is_integral_v<T> || std::is_enum_v<T> || std::is_same_v<T, float> || std::is_same_v<T, double>);
 
+    // The value's little-endian bytes appended to the stream: OR-ed into the pending word acc_ at byte tail_len_; a full
+    // word is absorbed and the bytes past it start the next one. Same stream as bytes() of the LE bytes.
     template <class U>
     void put_le(U v) noexcept {
-        unsigned char b[sizeof(U)];
-        for (size_t i = 0; i < sizeof(U); ++i) b[i] = static_cast<unsigned char>((v >> (8 * i)) & 0xFFu);
-        bytes(b, sizeof(U));
+        static_assert(std::is_unsigned_v<U> && sizeof(U) <= 8);
+        constexpr uint32_t n = sizeof(U);
+        const auto x = static_cast<uint64_t>(v);
+        len_ += n;
+        acc_ |= x << (8u * tail_len_);  // tail_len_ <= 7: bytes past the word fall off the top
+        const uint32_t t = tail_len_ + n;
+        if (t < 8) {
+            tail_len_ = t;
+            return;
+        }
+        h_ = round(h_, acc_);
+        tail_len_ = t - 8;
+        acc_ = tail_len_ != 0 ? x >> (8u * (n - tail_len_)) : 0;
     }
 
     uint64_t h_;
     uint64_t len_ = 0;
-    unsigned char tail_[8] = {};
-    uint32_t tail_len_ = 0;
+    uint64_t acc_ = 0;       // pending bytes of the next word, little-endian, zero above tail_len_
+    uint32_t tail_len_ = 0;  // bytes in acc_ (0..7)
 };
 
 // ---- Parity CRC: the original's frame CRC (docs/re/COMMANDS.md §7.1, OBJECT_RUNTIME.md §5/§8) --------
@@ -200,6 +218,7 @@ private:
     struct System {
         std::string name;
         HashFn fn;
+        uint16_t zone = 0xFFFF;  // OPT1 profiler zone "crc.<name>" (profile::ZoneId; wall-clock only)
     };
     std::vector<System> systems_;
     struct Parity {

@@ -545,6 +545,15 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
             r.known = r.model != nullptr;
             return r;
         });
+        // OPT3 t05: the model files of the map's placements and the participants load in parallel here instead of one
+        // type at a time inside the spawns and stamps below (the first battle tick's largest cost); results unchanged.
+        const TypeCrcIndex index(catalog_->types());
+        std::vector<uint32_t> types;
+        types.reserve(map_.objects.size() + parts_.size());
+        for (const terrain::ObjectPlacement& pl : map_.objects)
+            if (const objects::TypeIndex t = index.find(pl.type_crc); t != objects::kNone) types.push_back(static_cast<uint32_t>(t));
+        for (const Participant& p : parts_) types.push_back(p.type);
+        catalog_->preload_models(types, space, pf);
     }
 #endif
     // --- OI objects: computed behaviour intervals (SHIELDED / POWERED) from GameConstants, before any object exists ---
@@ -621,7 +630,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         // Fine_Tune_Occupied_Passability ray (MOVEMENT 1.3; S8 t09: the same hooks as land_obstacle_attach).
         const mv::MapStampHooks stamp_hooks = land_stamp_hooks(catalog_);
         mv::stamp_map_obstacles(grid, map_, types, &stamp_hooks);
-        movement_->set_grid(std::move(grid));
+        movement_->set_grid(std::move(grid), pf);
         movement_->air().set_box({mn[0], mn[1]}, {mx[0], mx[1]});  // REMAINING_GAPS §4.3-4.6: air units plan in the playable box
         const terrain::MapData* m = &map_;
         movement_->set_height_fn([m](float x, float y) { return m->terrain.sample_height(x, y); });

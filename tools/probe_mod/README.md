@@ -199,3 +199,28 @@ the circle shift at the fog box's top edge. Double-click `fow_regrow\run_fow.cmd
 (you Empire, AI Easy Rebel, other slots closed) for 3 minutes giving no orders, then quit; send back
 `fow_regrow\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_fow.cmd` after a crash).
 Full instructions and how to read the result: `fow_regrow\README.md`.
+
+---
+
+# S7/S8 probe (`tools\probe_mod\s7s8_probes\`)
+
+This probe covers the open **probe** items of S7 t23–t27 and S8 t10–t13:
+
+- the SPMAT lob arc and range edge;
+- the Remote_Bomb ground marker;
+- deploy windows and reversals;
+- the muzzle-bone types;
+- `Activate_Ability` blocks (DEPLOY, and a target that dies);
+- the squadron team target;
+- escorts of a dead carrier;
+- the first shot after a spawn;
+- Dark_Trooper_PhaseIII missiles after the jet pack.
+
+Double-click `s7s8_probes\run_s7s8.cmd` and play two skirmish battles:
+
+1. Land, Geonosis, about 6.5 min. You Empire, AI Rebel, other slots closed. Give the probe's Saboteur the three
+   Remote Bomb orders H1–H3.
+2. Space, Kuat, about 4.5 min. No orders.
+
+Send back `s7s8_probes\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_s7s8.cmd` after a crash).
+Full instructions, expected answers and the docs/re sections to update: `s7s8_probes\README.md`.

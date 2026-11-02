@@ -574,8 +574,8 @@ void SpaceOccupancy::write(ByteWriter& w) const {
 
 bool SpaceOccupancy::read(ByteReader& r) {
     if (r.u32() != kOccupancySaveVersion || !r.ok()) return false;
-    std::map<ObjectId, Static> statics;
-    std::map<ObjectId, Track> tracks;
+    IdVec<Static> statics;
+    IdVec<Track> tracks;
     uint32_t n = 0;
     if (!get_count(r, 20, n)) return false;
     for (uint32_t k = 0; k < n; ++k) {
@@ -586,7 +586,7 @@ bool SpaceOccupancy::read(ByteReader& r) {
         s.r = r.f32();
         s.bits = r.u32();
         if (!r.ok() || (!statics.empty() && id <= statics.rbegin()->first)) return false;
-        statics.emplace_hint(statics.end(), id, s);
+        statics.emplace_back(id, s);
     }
     if (!get_count(r, 20, n)) return false;
     In in(r);
@@ -598,7 +598,8 @@ bool SpaceOccupancy::read(ByteReader& r) {
         t.start = r.u32();
         in.wps(t.wps);
         if (!r.ok() || t.wps.empty() || (!tracks.empty() && id <= tracks.rbegin()->first)) return false;
-        tracks.emplace_hint(tracks.end(), id, std::move(t));
+        make_pieces(t);
+        tracks.emplace_back(id, std::move(t));
     }
     V2 mn, mx;
     in.v2(mn);
