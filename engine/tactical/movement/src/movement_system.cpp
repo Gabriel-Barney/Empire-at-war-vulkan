@@ -54,16 +54,16 @@ MovementSystem::MovementSystem(MovementConfig cfg) : cfg_(std::move(cfg)) {
     space_.set_window(cfg_.constants.space_object_tracking_tree_count, cfg_.constants.space_object_tracking_interval);
 }
 
-void MovementSystem::set_grid(PassabilityGrid grid) {
+void MovementSystem::set_grid(PassabilityGrid grid, const ParallelFor& pf) {
     grid_ = std::move(grid);
     regions_built_ = false;
-    rebuild_regions_if_dirty();
+    rebuild_regions_if_dirty(pf);
 }
 
-void MovementSystem::rebuild_regions_if_dirty() {
+void MovementSystem::rebuild_regions_if_dirty(const ParallelFor& pf) {
     if (regions_built_ && regions_.grid_version() == grid_.version()) return;
     const std::vector<uint32_t> masks = cfg_.classes.distinct_masks();
-    regions_.build(grid_, masks);
+    regions_.build(grid_, masks, pf);
     regions_built_ = true;
     for (Unit& u : units_) u.slot = regions_.mask_slot(u.lp.mask);
 }
@@ -966,7 +966,7 @@ bool MovementSystem::resolve_blocker(Unit& a, uint32_t blocker, float contact, u
 }
 
 void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
-    rebuild_regions_if_dirty();
+    rebuild_regions_if_dirty(pf);
     tree_.maintain(static_cast<double>(frame) / 30.0);  // shape only; query results do not depend on it
     plan_land(frame, pf);
     detect_collisions(frame);  // S7: checks create collision objects

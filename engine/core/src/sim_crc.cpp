@@ -3,23 +3,22 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstring>
 #include <stdexcept>
 
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/core/profile.hpp"
 
 namespace alamo {
 namespace {
 
-constexpr uint64_t kP1 = 0x9E3779B185EBCA87ull;
-constexpr uint64_t kP2 = 0xC2B2AE3D27D4EB4Full;
 constexpr uint64_t kP5 = 0x27D4EB2F165667C5ull;
 
-inline uint64_t rotl(uint64_t x, int r) { return (x << r) | (x >> (64 - r)); }
-inline uint64_t round_word(uint64_t h, uint64_t w) { return rotl(h + w * kP2, 31) * kP1; }
-inline uint64_t load_le(const unsigned char* p) {
-    uint64_t w = 0;
-    for (int i = 7; i >= 0; --i) w = (w << 8) | p[i];
+inline uint64_t round_word(uint64_t h, uint64_t w) { return detail::hash_round(h, w); }
+inline uint64_t load_le(const unsigned char* p) {  // little-endian host (static_assert in StateHasher::span)
+    uint64_t w;
+    std::memcpy(&w, p, 8);
     return w;
 }
 inline uint64_t fmix64(uint64_t h) {
@@ -73,14 +72,14 @@ void StateHasher::bytes(const void* data, size_t len) noexcept {
     if (len == 0) return;
     const auto* p = static_cast<const unsigned char*>(data);
     len_ += len;
-    if (tail_len_ != 0) {
-        while (len != 0 && tail_len_ < 8) {
-            tail_[tail_len_++] = *p++;
-            --len;
+    while (tail_len_ != 0 && len != 0) {  // fill the pending word
+        acc_ |= static_cast<uint64_t>(*p++) << (8u * tail_len_);
+        --len;
+        if (++tail_len_ == 8) {
+            h_ = round_word(h_, acc_);
+            acc_ = 0;
+            tail_len_ = 0;
         }
-        if (tail_len_ < 8) return;
-        h_ = round_word(h_, load_le(tail_));
-        tail_len_ = 0;
     }
     while (len >= 8) {
         h_ = round_word(h_, load_le(p));
@@ -88,13 +87,10 @@ void StateHasher::bytes(const void* data, size_t len) noexcept {
         len -= 8;
     }
     while (len != 0) {
-        tail_[tail_len_++] = *p++;
+        acc_ |= static_cast<uint64_t>(*p++) << (8u * tail_len_++);
         --len;
     }
 }
-
-void StateHasher::f32(float v) noexcept { u32(std::bit_cast<uint32_t>(v)); }
-void StateHasher::f64(double v) noexcept { u64(std::bit_cast<uint64_t>(v)); }
 
 void StateHasher::str(std::string_view s) noexcept {
     u32(static_cast<uint32_t>(s.size()));
@@ -102,9 +98,7 @@ void StateHasher::str(std::string_view s) noexcept {
 }
 
 uint64_t StateHasher::digest() const noexcept {
-    unsigned char last[8] = {};
-    for (uint32_t i = 0; i < tail_len_; ++i) last[i] = tail_[i];
-    uint64_t h = round_word(h_, load_le(last));
+    uint64_t h = round_word(h_, acc_);  // the partial word, zero-padded
     h ^= len_;
     return fmix64(h);
 }
@@ -118,7 +112,9 @@ CrcRegistry::SystemId CrcRegistry::add(std::string name, HashFn fn) {
     for (const auto& s : systems_)
         if (s.name == name) throw std::invalid_argument("CrcRegistry::add: duplicate system '" + name + "'");
     if (!fn) throw std::invalid_argument("CrcRegistry::add: empty hasher for '" + name + "'");
-    systems_.push_back(System{std::move(name), std::move(fn)});
+    // OPT3 t05: each system's hasher is a profiler zone (crc.<name>), so --profile splits the T13 CRC capture.
+    const profile::ZoneId zone = profile::register_zone(("crc." + name).c_str());
+    systems_.push_back(System{std::move(name), std::move(fn), zone});
     return static_cast<SystemId>(systems_.size() - 1);
 }
 
@@ -147,8 +143,10 @@ std::vector<std::string> CrcRegistry::names() const {
 }
 
 uint64_t CrcRegistry::hash_system(SystemId id) const {
+    const System& s = systems_.at(id);
+    const profile::Scope zone(s.zone);
     StateHasher h;
-    systems_.at(id).fn(h);
+    s.fn(h);
     return h.digest();
 }
 

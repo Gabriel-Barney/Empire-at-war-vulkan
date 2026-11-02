@@ -35,21 +35,22 @@ void SpaceOccupancy::set_box(V2 min_xy, V2 max_xy) {
 }
 
 void SpaceOccupancy::add_static(ObjectId id, V2 center, float radius, uint32_t bits) {
-    statics_[id] = Static{center, radius, bits};
+    put(statics_, id, Static{center, radius, bits});
 }
-bool SpaceOccupancy::remove_static(ObjectId id) { return statics_.erase(id) != 0; }
+bool SpaceOccupancy::remove_static(ObjectId id) { return erase(statics_, id); }
 
 bool SpaceOccupancy::rekey_static(ObjectId from, ObjectId to) {
-    if (from == to || statics_.find(to) != statics_.end()) return false;
-    auto node = statics_.extract(from);
-    if (node.empty()) return false;
-    node.key() = to;
-    statics_.insert(std::move(node));
+    if (from == to || find(statics_, to) != statics_.end()) return false;
+    const auto it = find(statics_, from);
+    if (it == statics_.end()) return false;
+    const Static s = it->second;
+    statics_.erase(it);
+    put(statics_, to, s);
     return true;
 }
 
 bool SpaceOccupancy::static_entry(ObjectId id, V2& center, float& radius, uint32_t& bits) const {
-    const auto it = statics_.find(id);
+    const auto it = find(statics_, id);
     if (it == statics_.end()) return false;
     center = it->second.c;
     radius = it->second.r;
@@ -59,12 +60,49 @@ bool SpaceOccupancy::static_entry(ObjectId id, V2& center, float& radius, uint32
 
 void SpaceOccupancy::set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps) {
     if (wps.empty()) {
-        tracks_.erase(id);
+        erase(tracks_, id);
         return;
     }
-    tracks_[id] = Track{layer, radius, start_frame, std::move(wps)};
+    Track t{layer, radius, start_frame, std::move(wps), {}, {}, {}};
+    make_pieces(t);
+    put(tracks_, id, std::move(t));
 }
-void SpaceOccupancy::clear_track(ObjectId id) { tracks_.erase(id); }
+void SpaceOccupancy::clear_track(ObjectId id) { erase(tracks_, id); }
+
+void SpaceOccupancy::make_pieces(Track& tr) {
+    // Pieces: before the first waypoint, each segment, after the last (the values query_segment formed per call).
+    const float base = static_cast<float>(tr.start);
+    const size_t n = tr.wps.size();
+    tr.pieces.clear();
+    tr.pieces.reserve(n + 1);
+    tr.lo = tr.hi = n != 0 ? tr.wps[0].pos : V2{};
+    for (const SpaceWaypoint& w : tr.wps) {
+        tr.lo = {std::min(tr.lo.x, w.pos.x), std::min(tr.lo.y, w.pos.y)};
+        tr.hi = {std::max(tr.hi.x, w.pos.x), std::max(tr.hi.y, w.pos.y)};
+    }
+    for (size_t i = 0; i <= n && n != 0; ++i) {
+        Piece p;
+        p.bit = kSpaceStatic;
+        if (i == 0) {
+            p.ps = -3.0e38f;
+            p.pe = base + tr.wps[0].time;
+            p.p0 = tr.wps[0].pos;
+        } else if (i == n) {
+            p.ps = base + tr.wps[n - 1].time;
+            p.pe = 3.0e38f;
+            p.p0 = tr.wps[n - 1].pos;
+        } else {
+            p.seg = true;
+            p.ps = base + tr.wps[i - 1].time;
+            p.pe = base + tr.wps[i].time;
+            p.p0 = tr.wps[i - 1].pos;
+            const float d = p.pe - p.ps;
+            if (d > 0.0f) p.pv = (tr.wps[i].pos - tr.wps[i - 1].pos) * (1.0f / d);
+            if (!(tr.wps[i].pos == tr.wps[i - 1].pos)) p.bit = kSpaceMoving;
+        }
+        tr.pieces.push_back(p);
+    }
+}
 
 uint32_t SpaceOccupancy::query_static(V2 a, V2 b, float radius) const {
     uint32_t bits = 0;
@@ -91,38 +129,23 @@ uint32_t SpaceOccupancy::query_segment(V2 a, V2 b, float t0, float t1, float rad
     const float qdt = t1 - t0;
     const V2 qv = qdt > 0.0f ? (b - a) * (1.0f / qdt) : V2{};
     auto q_at = [&](float u) { return qdt > 0.0f ? a + qv * (u - t0) : a; };
+    // OPT3 t06 cull: the query circle stays on [a, b] and every piece's point inside the track's waypoint box, so a track
+    // whose box is more than rr + kCullMargin away on an axis cannot pass the distance test (the margin covers the float
+    // rounding of the per-piece test by orders of magnitude): skipping it changes no bit.
+    constexpr float kCullMargin = 16.0f;
+    const V2 qlo{std::min(a.x, b.x), std::min(a.y, b.y)}, qhi{std::max(a.x, b.x), std::max(a.y, b.y)};
     for (const auto& [id, tr] : tracks_) {
         if (id == self || (tr.layer & layer) == 0) continue;
         const float rr = radius + tr.r;
+        const float reach = rr + kCullMargin;
+        if (qlo.x - tr.hi.x > reach || tr.lo.x - qhi.x > reach || qlo.y - tr.hi.y > reach || tr.lo.y - qhi.y > reach) continue;
         const float rr2 = rr * rr;
-        const float base = static_cast<float>(tr.start);
-        const size_t n = tr.wps.size();
-        // Pieces: before the first waypoint, each segment, after the last.
-        for (size_t i = 0; i <= n; ++i) {
-            float ps, pe;
-            V2 p0, pv{};
-            uint32_t bit = kSpaceStatic;
-            if (i == 0) {
-                ps = -3.0e38f;
-                pe = base + tr.wps[0].time;
-                p0 = tr.wps[0].pos;
-            } else if (i == n) {
-                ps = base + tr.wps[n - 1].time;
-                pe = 3.0e38f;
-                p0 = tr.wps[n - 1].pos;
-            } else {
-                ps = base + tr.wps[i - 1].time;
-                pe = base + tr.wps[i].time;
-                p0 = tr.wps[i - 1].pos;
-                const float d = pe - ps;
-                if (d > 0.0f) pv = (tr.wps[i].pos - tr.wps[i - 1].pos) * (1.0f / d);
-                if (!(tr.wps[i].pos == tr.wps[i - 1].pos)) bit = kSpaceMoving;
-            }
-            const float u0 = std::max(t0, ps), u1 = std::min(t1, pe);
+        for (const Piece& p : tr.pieces) {
+            const float u0 = std::max(t0, p.ps), u1 = std::min(t1, p.pe);
             if (u0 > u1) continue;
-            const V2 tp0 = (i == 0 || i == n) ? p0 : p0 + pv * (u0 - ps);
+            const V2 tp0 = p.seg ? p.p0 + p.pv * (u0 - p.ps) : p.p0;
             const V2 d0 = q_at(u0) - tp0;
-            if (min_dist_sq(d0, qv - pv, u1 - u0) < rr2) bits |= bit;
+            if (min_dist_sq(d0, qv - p.pv, u1 - u0) < rr2) bits |= p.bit;
         }
     }
     return bits;
