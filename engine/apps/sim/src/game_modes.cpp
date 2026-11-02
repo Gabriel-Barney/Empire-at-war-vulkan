@@ -122,6 +122,8 @@ void GalacticMode::pop_pause() {
     if (sim_) sim_->pop_pause();
 }
 
+bool GalacticMode::paused() const { return paused_ || pause_count_ > 0 || (sim_ && sim_->paused()); }
+
 void GalacticMode::tick(const ModeTickContext& ctx) {
     ++ticks_;
     trace(ctx, "galactic.begin");

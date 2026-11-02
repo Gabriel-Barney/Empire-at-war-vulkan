@@ -178,7 +178,8 @@ public:
     // mirrored into GalacticSim::push_pause / pop_pause.
     void push_pause();
     void pop_pause();
-    bool paused() const override { return paused_ || pause_count_ > 0; }
+    // a1j t05: 0x4b2360 is also true while the story block holds (GalacticSim::paused(), A1_READINGS §31.7).
+    bool paused() const override;
     // Income: every income_interval mode frames (GALACTIC_ECONOMY.md fiscal cycle; S3 owns the
     // amounts). Counted here so the cadence is in the CRC.
     void set_income_interval(uint32_t frames) { income_interval_ = frames ? frames : 1; }
