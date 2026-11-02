@@ -289,8 +289,13 @@ struct FighterSquadDesc {
 //              when solo);
 //   Retarget - §4.3 retarget: container `who` is ordered to attack `target` (a dogfight-cell entry).
 // The movement system applies them to its own targets at once (set_fighter_target semantics).
+//   EnterIdle - S7 t25 (§4.10 D): fighter `who` ran enter_idle (0x5cb750) from one of its four retail call sites
+//              (Directed_Combat NoTarget: the solo fighter / the leader's member loop; Moving path complete: the leader's
+//              member loop / the solo fighter); one event per fighter, `target` unused. The host drops the squadron's
+//              team target (0x5c9ca0 -> 0x406370(team, null), §4.7 step 4). The port's other enter_idle uses (Dead_Stop end,
+//              hyperspace exits) raise none.
 struct FighterEvent {
-    enum Kind : uint8_t { Provoke = 1, Retarget = 2 };
+    enum Kind : uint8_t { Provoke = 1, Retarget = 2, EnterIdle = 3 };
     Kind kind = Provoke;
     ObjectId who = -1;
     ObjectId target = -1;

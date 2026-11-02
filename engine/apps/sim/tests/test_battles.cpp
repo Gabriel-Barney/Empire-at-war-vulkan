@@ -389,7 +389,13 @@ std::string fighter_types(bool fog = false) {
                  "<Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value>"
                  "<Squadron_Formation_Error_Tolerance>25</Squadron_Formation_Error_Tolerance><Guard_Chase_Range>1000.0</Guard_Chase_Range>"
                  "<Idle_Chase_Range>200.0</Idle_Chase_Range><Attack_Move_Response_Range>300.0</Attack_Move_Response_Range></Squadron>\n"
-                 " <Team Name=\"Team\"><Behavior>TEAM</Behavior></Team>\n");
+                 " <Team Name=\"Team\"><Behavior>TEAM</Behavior></Team>\n"
+                 // S7 t24: a moving carrier (a locomotor, so its launches escort it) with one fighter bay; one squadron at a time
+                 " <SpaceUnit Name=\"S10_Carrier\"><Variant_Of_Existing_Type>S10_Frigate</Variant_Of_Existing_Type>"
+                 "<Tactical_Health>20000</Tactical_Health><HardPoints>HP_S10_Laser_A, HP_S10_Bay</HardPoints>"
+                 "<SpaceBehavior>STARSHIP_LOCOMOTOR, SPAWN_SQUADRON</SpaceBehavior>"
+                 "<Starting_Spawned_Units_Tech_0>S10_TIE_Squadron, 1</Starting_Spawned_Units_Tech_0>"
+                 "<Spawned_Squadron_Delay_Seconds>1.0</Spawned_Squadron_Delay_Seconds></SpaceUnit>\n");
     // fog: a 2100 attack range, so an ordered attack stops the squadron at 0.7 x 2100 = 1470, outside the frigates' 1400 (no
     // shots at it, so no attacker flash reveals the target).
     if (fog)
@@ -430,8 +436,12 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
                                    : fog    ? fog_types()
                                             : std::string(kTypes));
     if (bm) write_file(x / "BlackMarketItems.xml", kBmItems);  // P4 tactical
-    write_file(x / "HardPointDataFiles.xml", "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");
+    write_file(x / "HardPointDataFiles.xml", fighters ? "<Hard_Point_Files><File>S10HardPoints.xml</File><File>S10BayHardPoints.xml</File></Hard_Point_Files>\n"
+                                                      : "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");
     write_file(x / "S10HardPoints.xml", kHardpoints);
+    if (fighters)  // S7 t24: the carrier's fighter bay
+        write_file(x / "S10BayHardPoints.xml", "<HardPoints><HardPoint Name=\"HP_S10_Bay\"><Type>HARD_POINT_FIGHTER_BAY</Type><Health>200</Health>"
+                                               "<Fighter_Bay_Flyout_Distance>100</Fighter_Bay_Flyout_Distance></HardPoint></HardPoints>\n");
     write_file(x / "FactionFiles.xml", "<FactionFiles><File>S10Factions.xml</File></FactionFiles>\n");
     std::string factions = kFactions;
     if (s4)  // S10 map owners: a native faction (3), Hostile (4) and a playable faction without a player (5)
@@ -475,7 +485,7 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     CHECK(galactic::load_conflict_rules(*d->files, d->db, d->types, d->rules, d->crules, &diag));
     d->catalog = std::make_unique<BattleCatalog>(d->types, d->files.get(), &d->db.constants(), &diag);
     CHECK(d->crules.contrast.size() == 3);
-    CHECK(d->catalog->hardpoint_records() == 2);
+    CHECK(d->catalog->hardpoint_records() == (fighters ? 3u : 2u));
     {
         std::vector<uint32_t> idx;
         const auto cd = d->catalog->build({static_cast<uint32_t>(d->types.resolve_name("S10_Frigate")), static_cast<uint32_t>(d->types.resolve_name("S10_Trooper"))}, idx);
@@ -4537,42 +4547,64 @@ void test_fighter_move_past_enemy() {
     CHECK(attack_frame != 0 && attacked);
 }
 
-// S7 t22 (FIGHTER_FLYING §4.9 step 2, TACTICAL_COMBAT §2.8 "Targets of opportunity"): the response-range test 0x4160a0.
+// S7 t22 / t25 (FIGHTER_FLYING §4.10 A, TACTICAL_COMBAT §2.8 "Targets of opportunity"): the response-range test 0x4160a0.
 void test_fighter_chase_rule() {
     FighterChaseInputs in;
     in.guard_range = 1000.0f;
     in.idle_range = 200.0f;
     in.attack_move_range = 300.0f;
+    in.extension = 300.0f;
     in.attack_range = 500.0f;
     in.candidate = {650.0f, 0.0f, 0.0f};
+    in.single_position = true;  // arrived at the end of its only (position) block
     CHECK(fighter_chase_test(in) == 0);  // no formation: no chase (its weapons still fire in range)
     in.formation = true;
     CHECK(fighter_chase_test(in) == 1);  // idle: 650 <= Idle_Chase_Range 200 + range 500 from the slot goal
     in.candidate = {750.0f, 0.0f, 0.0f};
     CHECK(fighter_chase_test(in) == 0);  // beyond it
+    in.candidate = {150.0f, 0.0f, 0.0f};
+    in.single_position = false;
+    CHECK(fighter_chase_test(in) == 0);  // a pushed auto block is the last block (or more than one block): no response
     in.moving = true;
-    CHECK(fighter_chase_test(in) == 0);  // a plain move: measured from its destination, no peel-off on the way
+    CHECK(fighter_chase_test(in) == 0);  // a plain position move under way: no response range at all (§4.10 A)
     in.flags = 0x01;
-    CHECK(fighter_chase_test(in) == 2);  // an attack-move under way responds (Attack_Move_Response_Range, rule 4)
     in.candidate = {5000.0f, 0.0f, 0.0f};
-    CHECK(fighter_chase_test(in) == 2);  // [M] the squadron is at its own path point (the scan bounds the distance)
+    CHECK(fighter_chase_test(in) == 2);  // an attack-move under way responds [M: the squadron is at its own path point]
     in.moving = false;
-    CHECK(fighter_chase_test(in) == 0);  // arrived: rule 5 with Attack_Move_Response_Range
+    in.single_position = true;
+    CHECK(fighter_chase_test(in) == 0);  // arrived: rule 7 with Attack_Move_Response_Range
     in.candidate = {790.0f, 0.0f, 0.0f};
     CHECK(fighter_chase_test(in) == 1);  // 790 <= 300 + 500
     in.flags = 0x02;
+    in.single_position = false;
+    in.last_guard = true;
     in.candidate = {1450.0f, 0.0f, 0.0f};
     CHECK(fighter_chase_test(in) == 1);  // guard: Guard_Chase_Range 1000 + 500
     in.moving = true;
-    CHECK(fighter_chase_test(in) == 1);  // a guard move is not an attack-move: rule 5 while moving too
+    in.unit = {900.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);  // a guard move is not an attack-move: rule 7 while moving, u within Rr of the goal
+    in.unit = {1100.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);  // ... but not when u itself is farther than Rr from its slot goal
+    in.moving = false;
     in.candidate = {1550.0f, 0.0f, 0.0f};
     CHECK(fighter_chase_test(in) == 0);
+    in.candidate_attacker = true;  // c attacks the carrier: + Autonomous_Move_Extension_Vs_Attacker, base 1
+    CHECK(fighter_chase_test(in) == 2);
+    in.candidate = {1250.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);  // within Rr 1300
+    in.guarded_moving = true;
+    CHECK(fighter_chase_test(in) == 1);  // a moving carrier: its attackers are answered ...
+    in.candidate_attacker = false;
     in.candidate = {100.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);  // ... nothing else
+    in.guarded_moving = false;
+    CHECK(fighter_chase_test(in) == 1);
     in.candidate_is_goal = true;
     CHECK(fighter_chase_test(in) == 0);  // the first / last block's object: path B, not a chase
     in.candidate_is_goal = false;
     in.flags = 0;
-    in.moving = false;
+    in.last_guard = false;
+    in.single_position = true;
     in.idle_range = -1.0f;  // Rr < 0 -> 0
     in.candidate = {450.0f, 0.0f, 0.0f};
     CHECK(fighter_chase_test(in) == 1);
@@ -4590,7 +4622,7 @@ struct FighterBattle {
 };
 
 // The S7 t12 fighter battle: the TIE squadron (player 0) joins the S10 space fight; no stand-in orders.
-bool start_fighter_battle(FighterBattle& fb, bool fog) {
+bool start_fighter_battle(FighterBattle& fb, bool fog, bool carrier = false) {
     fb.d = make_data(fog, false, false, false, false, false, false, false, true);
     fb.js = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{0});
     SimConfig cfg;
@@ -4599,6 +4631,7 @@ bool start_fighter_battle(FighterBattle& fb, bool fog) {
     fb.host = std::make_unique<SimHost>(fb.d->types, *fb.js, cfg);
     galactic::GalacticSetup gsetup = make_setup(*fb.d, false);
     gsetup.forces.push_back({0, 1, type_of(*fb.d, "S10_TIE_Squadron")});
+    if (carrier) gsetup.forces.push_back({0, 1, type_of(*fb.d, "S10_Carrier")});  // S7 t24
     fb.gs = fb.host->start_galactic(fb.d->rules, gsetup);
     CHECK(fb.gs != nullptr);
     if (!fb.gs) return false;
@@ -4754,6 +4787,86 @@ void test_fighter_auto_push() {
     CHECK(stop_cleared && b_auto && !b_dc);
     CHECK(c_formation && c_dc && c_pushed);
     CHECK(d_idle && d_dropped && d_kept);
+}
+
+// S7 t24 (STATION_HANGARS_SOUND §2.5, A1_READINGS §33.4, FIGHTER_FLYING §4.9): a moving carrier's launch is a guard of the
+// carrier. The launched squadron's formation record is {flags 0x02, goal object = the carrier} with a host follow, so its
+// chase range is Guard_Chase_Range around the carrier; when the carrier moves away, the squadron re-paths to it (at most
+// once per 30 frames, when the carrier is more than half the leader's attack range from the recorded goal) and keeps the
+// guard record (flags, goal object). A new order of the squadron ends the follow (a plain move record).
+void test_hangar_escort_guard() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, false, true)) return;
+    const uint32_t carrier_type = type_of(*fb.d, "S10_Carrier");
+    objects::ObjectId carrier = objects::kNoObjectId, squad = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    bool guard_record = false, followed = false, kept = true, ended = false;
+    uint32_t launch_frame = 0, move_frame = 0, follow_frame = 0;
+    mv::V2 dest{};
+    for (uint64_t t = 0; t < 5000; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (carrier != objects::kNoObjectId) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (carrier == objects::kNoObjectId) {
+            for (const objects::ObjectHandle h : st.owned_by(0))
+                if (st.alive(h) && st.type(h) == carrier_type) carrier = st.id(h);
+            if (carrier == objects::kNoObjectId) continue;
+        }
+        if (!st.alive(st.find(carrier))) break;
+        const Vec3 cp = st.position(st.find(carrier));
+        if (squad == objects::kNoObjectId) {
+            for (const mv::FighterSquad& s : b->movement().fighter_squads()) {
+                const FighterFormationRecord* r = b->fighter_formation(s.id);
+                if (!s.members.empty() && r && r->goal_object == carrier) {
+                    squad = s.id;
+                    members = s.members;
+                    guard_record = r->flags == mv::kMoveFlagGuardMove && r->follow_next > b->frame() && r->pushed.empty();
+                }
+            }
+            if (squad == objects::kNoObjectId) {
+                if (b->frame() > 300) break;
+                continue;
+            }
+            launch_frame = b->frame();
+            // The carrier moves 1500 away (inside the playable box); the escort is not ordered.
+            dest = {cp.x, cp.y + (cp.y > 0.0f ? -1500.0f : 1500.0f)};
+            const objects::ObjectId cid[1] = {carrier};
+            CHECK(b->order_move(*tm, 0, cid, dest.x, dest.y, fb.host->random().synced()) == R::None);
+            move_frame = b->frame();
+            continue;
+        }
+        const FighterFormationRecord* r = b->fighter_formation(squad);
+        if (!r || members.empty() || !b->movement().has_unit(members.front())) break;
+        kept = kept && r->flags == mv::kMoveFlagGuardMove && r->goal_object == carrier;
+        const mv::UnitView v = b->movement().view(members.front());
+        const float gx = r->goal.x - dest.x, gy = r->goal.y - dest.y;
+        const float mx = v.goal.x - r->goal.x, my = v.goal.y - r->goal.y;
+        if (!followed && gx * gx + gy * gy < 600.0f * 600.0f && mx * mx + my * my < 150.0f * 150.0f) {
+            followed = true;  // the record's goal moved with the carrier and the leader's slot goal is next to that point
+            follow_frame = b->frame();
+            // A plain move order of the squadron replaces the guard: no follow any more.
+            const Vec3 lp = st.position(st.find(members.front()));
+            CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
+            const FighterFormationRecord* nr = b->fighter_formation(squad);
+            ended = nr && nr->flags == 0 && nr->goal_object == objects::kNoObjectId && nr->follow_next == 0;
+            break;
+        }
+        if (b->frame() > move_frame + 3000) break;
+    }
+    std::printf("  escort guard: carrier %d squadron %d launched frame %u (guard record %d); carrier moved frame %u to (%.0f, %.0f); "
+                "followed %d (frame %u), guard kept %d, new order ends the follow %d\n",
+                carrier, squad, launch_frame, guard_record ? 1 : 0, move_frame, static_cast<double>(dest.x), static_cast<double>(dest.y),
+                followed ? 1 : 0, follow_frame, kept ? 1 : 0, ended ? 1 : 0);
+    CHECK(carrier != objects::kNoObjectId && squad != objects::kNoObjectId && members.size() == 3);
+    CHECK(guard_record);
+    CHECK(followed && kept && ended);
 }
 
 #ifdef ALAMO_SIM_HAVE_FOG
@@ -4914,6 +5027,8 @@ int main(int argc, char** argv) {
     std::printf("S7 t22: squadron auto targets through the formation push (chase test, Stop, idle chase, enter_idle)\n");
     test_fighter_chase_rule();
     test_fighter_auto_push();
+    std::printf("S7 t24: a carrier's launch guards the carrier (Guard_Chase_Range, follows it)\n");
+    test_hangar_escort_guard();
 #ifdef ALAMO_SIM_HAVE_FOG
     std::printf("S7 t22: a fogged formation goal toggles Idle <-> Directed_Combat\n");
     test_fighter_fog_toggle();

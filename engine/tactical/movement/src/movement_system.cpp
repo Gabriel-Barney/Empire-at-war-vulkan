@@ -1622,6 +1622,7 @@ void MovementSystem::f_moving(Unit& u) {
                 mu->fs.stored = so;
                 mu->arrived = true;
                 f_enter_idle(*mu);  // [port] every member (the retail call sits under "m has a path" [M])
+                fevents_.push_back({FighterEvent::EnterIdle, m, -1});  // S7 t25 (§4.10 D)
             }
             f_commit(u);
             return;
@@ -1633,6 +1634,7 @@ void MovementSystem::f_moving(Unit& u) {
             f.dest = {w.x, w.y, u.d.layer_z};
             u.arrived = true;
             f_enter_idle(u);
+            fevents_.push_back({FighterEvent::EnterIdle, u.d.id, -1});  // S7 t25 (§4.10 D)
             f_commit(u);
             return;
         }
@@ -1689,6 +1691,7 @@ void MovementSystem::f_combat(Unit& u, uint32_t frame) {
             f.dest = f3_add(f.b.p, f.b.v);
             f.stored = f.b.o;
             f_enter_idle(u);
+            fevents_.push_back({FighterEvent::EnterIdle, u.d.id, -1});  // S7 t25 (§4.10 D)
         } else {
             fgrids_.dogfight.leave(c->id, c->dog);
             if (leader) {
@@ -1702,6 +1705,7 @@ void MovementSystem::f_combat(Unit& u, uint32_t frame) {
                     mu->fs.dest = {lp.x + lv.x, lp.y + lv.y, u.d.layer_z};
                     mu->fs.stored = lo;
                     f_enter_idle(*mu);
+                    fevents_.push_back({FighterEvent::EnterIdle, m, -1});  // S7 t25 (§4.10 D)
                 }
             }
         }
