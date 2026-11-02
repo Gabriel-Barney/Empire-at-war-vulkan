@@ -2466,10 +2466,9 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
                 engine_loops_.engines_online(e.id, frame_);  // §3.3: idle loop on
             }
         if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
-        // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29; the Remote_Bomb toss ends at its apply
-        // (EffectOn: the port's toss has no flight phase in the ability).
-        if (e.kind == ta::AbilityEventKind::Ended || (e.kind == ta::AbilityEventKind::EffectOn && e.type == ta::kPlaceRemoteBomb))
-            ability_finished_.push_back(e.id);
+        // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
+        // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
+        if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);
     }
     oi_events(mode);  // OI abilities: ability moves / stops / owner changes, ability spawns, death survivors
     abilities_->clear_events();
