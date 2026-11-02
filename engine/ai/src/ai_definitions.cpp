@@ -1,5 +1,6 @@
 #include "alamo/ai/ai_definitions.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -357,6 +358,10 @@ void AiDefinitions::add_players(std::string_view xml, const std::string& file) {
         p.difficulty[0] = std::string(d.child_text("Easy"));
         p.difficulty[1] = std::string(d.child_text("Normal"));
         p.difficulty[2] = std::string(d.child_text("Hard"));
+    }
+    if (const data::XmlNode g = r.child("GoalSetExtensionSize")) {
+        const auto v = static_cast<uint32_t>(std::atoi(std::string(g.text_trimmed()).c_str()));
+        p.goal_set_extension_size = static_cast<int32_t>(std::min(v, 5u));
     }
     if (p.name.empty()) {
         diagnostics.push_back(file + ": AI player type without <Name>");
