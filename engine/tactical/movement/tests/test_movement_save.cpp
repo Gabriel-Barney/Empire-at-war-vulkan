@@ -878,7 +878,11 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 5);
     CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 6);  // 6: before the turret model (7) and the S7 t37 fighter object goal blocks (8)
+    CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 7);
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 9);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

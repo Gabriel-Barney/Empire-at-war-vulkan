@@ -143,6 +143,9 @@ struct MoveOrder {
     // MOVEMENT §6.1 / §6.2: the MoveToPosition "switch locomotor" bit - multi-locomotor units swap to their secondary
     // locomotor before the move (MovementSystem::use_secondary_locomotor); others ignore it.
     bool switch_locomotor = false;
+    // S7 t37 (A1_READINGS §33.4.1): an object goal (block kind 3) - the fighter formations of the order (squadrons,
+    // fighters without one) keep a FighterGuard on it, followed by the tick; -1 = a position order. Others ignore it.
+    ObjectId goal_object = -1;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
@@ -366,6 +369,11 @@ public:
     // FighterSquad::speed_cap (kFighterNoSpeedCap clears it); false without that squadron.
     bool fighter_copy_path(ObjectId squad, ObjectId from, uint32_t frame);
     bool set_fighter_speed_cap(ObjectId squad, float cap);
+    // S7 t37: the fighter formations' object goal blocks (FighterGuard, ascending key); `covered` is set by the host from
+    // its formation record (a pushed auto attack block is the last block). False / null without that formation's block.
+    std::span<const FighterGuard> fighter_guards() const { return fguards_; }
+    const FighterGuard* fighter_guard(ObjectId key) const;
+    bool set_fighter_guard_covered(ObjectId key, bool covered);
     std::span<const FighterEvent> fighter_events() const { return fevents_; }  // this tick
     // Save / load access (the grids' membership and the per-unit / per-squadron fighter state are sim state).
     void build_fighter_grids();  // (re)build from the playable box; membership is cleared
@@ -557,6 +565,14 @@ private:
     static void f_commit(Unit& u) { u.fs.b.p = f3_add(u.fs.b.p, u.fs.b.v); }
     void fighter_removed(ObjectId id);
     void fighter_order(Unit& u);
+    // S7 t37: object goal blocks (FighterGuard)
+    ObjectId fkey(const Unit& u) const { return u.fs.squad >= 0 ? u.fs.squad : u.d.id; }
+    FighterGuard* fguard_ptr(ObjectId key);
+    void fguard_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame);
+    void fguard_stop(std::span<const ObjectId> ids);
+    void fguard_removed(ObjectId id);
+    void fguard_lost(FighterGuard& g);
+    void fguard_update(uint32_t frame, SimRng& rng);
     void fighter_stop(Unit& u);
     void hash_fighters(StateHasher& h) const;
     // N1 stage 2 (movement_save.cpp)
@@ -619,6 +635,8 @@ private:
     FighterCellGrids fgrids_;
     FighterAvoidFn favoid_;
     std::vector<FighterEvent> fevents_;  // this tick
+    std::vector<FighterGuard> fguards_;  // S7 t37: ascending key
+    bool fguard_internal_ = false;       // S7 t37: a re-path of the formation update (keeps the block)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
     // S8 t11
     DeployClipFn deploy_clip_;

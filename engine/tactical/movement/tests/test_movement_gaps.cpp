@@ -1497,6 +1497,67 @@ static void test_fighter_space() {
     std::printf("fighter: threat path %zu waypoints, idle at frame %u\n", wf.size(), fr);
 }
 
+// S7 t37 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E): a fighter's move with an object goal (guard flag) keeps an object
+// goal block. While the object moves the fighter, within R = min(attack range / 2, Space_Guard_Range) of it, flies a copy of
+// the object's path; out of R it re-paths to the object when the recorded goal is more than R away. The object's removal
+// turns the block into a position block at the last waypoint (flags kept); a plain move drops the block.
+static void test_fighter_guard() {
+    MovementConfig cfg;
+    cfg.mode = MoveMode::Space;
+    MovementSystem sys(cfg);
+    sys.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+    UnitDesc f = unit(1, {-2000.0f, 50.0f}, -1, 4.0f, 10.0f, LocomotorKind::Fighter);
+    f.space_layer = kLayerFighter;
+    f.space_layer_type = 0;
+    CHECK(sys.add_unit(f));
+    UnitDesc c = unit(2, {-2000.0f, 0.0f}, -1, 2.0f, 60.0f, LocomotorKind::Default);
+    c.space_layer_type = 2;
+    CHECK(sys.add_unit(c));
+    SimRng rng(5);
+    MoveOrder g;
+    g.units = {1};
+    g.destination = {-2000.0f, 0.0f};
+    g.flags = kMoveFlagGuardMove;
+    g.goal_object = 2;
+    sys.move(g, rng, 0);
+    const FighterGuard* fg = sys.fighter_guard(1);
+    CHECK(fg && fg->object == 2 && fg->flags == kMoveFlagGuardMove && fg->follow && fg->next == kFighterGuardInterval);
+    MoveOrder mc;
+    mc.units = {2};
+    mc.destination = {1500.0f, 0.0f};
+    sys.move(mc, rng, 0);
+    CHECK(sys.fighter_guard(1) != nullptr);  // another unit's order leaves the fighter's block alone
+    bool copied = false, repathed = false;
+    uint32_t fr = 0;
+    for (; fr < 3000 && !copied; ++fr) {
+        sys.tick(fr, rng);
+        const UnitView v = sys.view(1), cv = sys.view(2);
+        copied = cv.has_goal && !cv.arrived && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y;
+    }
+    // Teleport the fighter away (out of R): the next updates re-path it toward the object.
+    CHECK(sys.teleport(1, {-2000.0f, 3000.0f}, 0.0f, 0.0f, fr));
+    const V2 before = sys.fighter_guard(1)->goal;
+    for (uint32_t k = 0; k < 400 && !repathed; ++k, ++fr) {
+        sys.tick(fr, rng);
+        repathed = distance(sys.fighter_guard(1)->goal, before) > 1.0f &&
+                   distance(sys.fighter_guard(1)->goal, sys.view(2).pos) < 10.0f;
+    }
+    // The object leaves: kind 1 at the last waypoint of the fighter's path, flags kept.
+    const auto wp = sys.space_path(1);
+    const V2 last = wp.empty() ? sys.fighter_guard(1)->goal : wp.back().pos;
+    CHECK(sys.remove_unit(2));
+    fg = sys.fighter_guard(1);
+    const bool lost = fg && fg->object == -1 && fg->flags == kMoveFlagGuardMove && distance(fg->goal, last) < 1e-3f;
+    MoveOrder p;
+    p.units = {1};
+    p.destination = {0.0f, 0.0f};
+    sys.move(p, rng, fr);
+    const bool dropped = sys.fighter_guard(1) == nullptr;
+    std::printf("fighter guard: path copy %d (frame %u), re-path %d, object lost -> position guard %d, plain move drops %d\n",
+                copied ? 1 : 0, fr, repathed ? 1 : 0, lost ? 1 : 0, dropped ? 1 : 0);
+    CHECK(copied && repathed && lost && dropped);
+}
+
 // ---------------------------------------------------------------- determinism
 static CrcLog mixed_run(const ParallelFor& pf) {
     MovementSystem sys{MovementConfig{}};
@@ -1963,6 +2024,7 @@ int main() {
     test_bike();
     test_bomber();
     test_fighter_space();
+    test_fighter_guard();
     test_space_avoid();
     test_speed_override();
     test_determinism();

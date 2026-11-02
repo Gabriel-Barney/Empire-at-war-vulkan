@@ -1234,7 +1234,8 @@ int32_t TacticalBattle::first_hardpoint_of_type(objects::ObjectId target, int32_
 }
 
 void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng,
-                               float facing_deg, bool attack_move, uint8_t flags, bool switch_locomotor) {
+                               float facing_deg, bool attack_move, uint8_t flags, bool switch_locomotor,
+                               objects::ObjectId goal_object) {
     s4_cancel(ids);  // S4: a move replaces a pending garrison enter
     const tactical::Aabb& bb = mode.bounds();
     mv::MoveOrder o;
@@ -1243,6 +1244,7 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
     o.switch_locomotor = switch_locomotor;  // S7 t10: MoveToPosition's 1-bit (MOVEMENT §6.2)
     o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
     if (std::isfinite(facing_deg)) o.facing_deg = facing_deg;
+    o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // S7 t37 (movement: -1 = none)
     movement_->move(o, rng, frame_);
     for (const objects::ObjectId id : o.units) {
         if (!attack_move) combat_->clear_order(id);
@@ -2348,6 +2350,12 @@ void TacticalBattle::fighter_sync() {
         d.members = want[c];
         for (size_t n = 0; n < d.members.size(); ++n) d.slots.push_back(fighter_slot(n));
         d.tolerance = ct.squad_type < types.size() ? mv::squadron_tolerance_from_type(types, ct.squad_type) : 25.0f;
+        // S7 t37 (A1_READINGS §33.4.1 step 3): T = the squadron type; Space_Layer 0 or Disregard_Space_Layer_For_Guard_
+        // Attack_Move -> its guard of a moving object follows it.
+        if (ct.squad_type < types.size()) {
+            const objects::TypeIndex st = static_cast<objects::TypeIndex>(ct.squad_type);
+            d.guard_follow = types.get_mask(st, "Space_Layer") == 0 || types.get_bool(st, "Disregard_Space_Layer_For_Guard_Attack_Move");
+        }
         movement_->set_fighter_squad(d);
     }
     // S7 t22: a formation goes with its squadron (or fighter).
@@ -2356,18 +2364,28 @@ void TacticalBattle::fighter_sync() {
         const Unit* x = unit_by_id(r.key);
         return !x || !x->alive || x->retreated || !movement_->has_unit(x->id);
     });
-    // S7 t25 (§4.10 E, the coordinator's target listener 0x4f77e0 on signals 0x10 / 0x1a / 0x2e): a guarded object that is
-    // gone turns the guard block into a position block (kind 1, object null) at the formation's goal point [port: the
-    // record's goal - the last follow re-path or the order's snapshot - stands for the path's last waypoint]; the flags stay
-    // 0x02, so the squadron keeps a position guard there with Guard_Chase_Range.
+    // S7 t25 / t37 (§4.10 E, the coordinator's target listener 0x4f77e0 on signals 0x10 / 0x1a / 0x2e): a guarded object
+    // that is gone turns the guard block into a position block (kind 1, object null); the flags stay 0x02, so the squadron
+    // keeps a position guard with Guard_Chase_Range. The movement layer's object goal block (mv::FighterGuard) does the
+    // conversion at the object's removal (position = the last waypoint of the formation's path) and records each re-path:
+    // the record mirrors its goal and object loss. A dead object still in the movement layer drops the record's object now.
     for (FighterFormationRecord& r : fformations_) {
-        if ((r.flags & mv::kMoveFlagGuardMove) == 0 || r.goal_object == objects::kNoObjectId) continue;
+        if ((r.flags & mv::kMoveFlagGuardMove) == 0) continue;
+        if (const mv::FighterGuard* fg = movement_->fighter_guard(r.key)) {
+            r.goal = Vec3{fg->goal.x, fg->goal.y, 0.0f};
+            if (fg->object < 0) r.goal_object = objects::kNoObjectId;
+        }
+        if (r.goal_object == objects::kNoObjectId) continue;
         const Unit* g = unit_by_id(r.goal_object);
-        if (g && g->alive && !g->retreated) continue;
-        r.goal_object = objects::kNoObjectId;
-        r.follow_next = 0;
-        movement_->set_fighter_speed_cap(r.key, mv::kFighterNoSpeedCap);  // S7 t28: no moving object to keep pace with
+        if (!g || !g->alive || g->retreated) r.goal_object = objects::kNoObjectId;
     }
+}
+
+// S7 t37: the formation's last block for the movement layer's object goal update - a pushed auto attack block covers the
+// order's block (after feed_attack_targets, which pushes them; before the movement tick).
+void TacticalBattle::fighter_guard_covered() {
+    if (!space_ || !movement_) return;
+    for (const FighterFormationRecord& r : fformations_) movement_->set_fighter_guard_covered(r.key, !r.pushed.empty());
 }
 
 // FIGHTER_FLYING §2 step 6 / §4.3 step 2 / §4.9: the formation attack target Formation_Attack_Target(F, &hp, -1)
@@ -2468,7 +2486,6 @@ void TacticalBattle::fighter_order(std::span<const objects::ObjectId> ids, uint8
         r->goal = goal;
         r->goal_object = goal_object;
         r->pushed.clear();
-        r->follow_next = 0;  // S7 t24: a new order ends the host follow of a hangar escort
     }
 }
 
@@ -3280,6 +3297,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     apply_speed_factors();
     fighter_sync();  // S7 fighters: new squadrons (map start, reinforcements, hangar launches, wingmen) and params
     feed_attack_targets(store);
+    fighter_guard_covered();  // S7 t37
     if (space_) avoid_snapshot(store);  // SPACE_AVOIDANCE: committed member transforms for the fighter avoidance hook
     profile::lap("tac.pre_move");
     movement_->tick(frame_, rng, pf);
@@ -3656,7 +3674,6 @@ void TacticalBattle::hash(StateHasher& h) const {
             h.i32(r.goal_object);
             h.u32(static_cast<uint32_t>(r.pushed.size()));
             for (const objects::ObjectId k : r.pushed) h.i32(k);
-            h.u32(r.follow_next);  // S7 t24
         }
     }
 }
