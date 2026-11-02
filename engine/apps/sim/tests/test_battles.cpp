@@ -235,6 +235,24 @@ std::string team_types() {
     return t;
 }
 
+// a1i t04: the team data plus a landing transport: S10_Squad (Max_Squad_Size 2: two teams) names Company_Transport_Unit
+// S10_Lander, whose Landing_Transport_Variant S10_Lander_Landing (TRANSPORT, Hover_Offset 10 inherited) carries it down.
+std::string landing_types() {
+    std::string t = team_types();
+    const std::string at = "<GroundCompany Name=\"S10_Squad\">";
+    if (const size_t p = t.find(at); p != std::string::npos)
+        t.insert(p + at.size(), "<Company_Transport_Unit>S10_Lander</Company_Transport_Unit><Max_Squad_Size>2</Max_Squad_Size>");
+    const size_t end = t.find("</S10>");
+    if (end != std::string::npos)
+        t.insert(end, " <GroundVehicle Name=\"S10_Lander\"><Behavior>TRANSPORT</Behavior><Hover_Offset>10</Hover_Offset>"
+                      "<Landing_Transport_Variant>S10_Lander_Landing</Landing_Transport_Variant>"
+                      "<Custom_Hard_XExtent>20</Custom_Hard_XExtent><Custom_Hard_YExtent>15</Custom_Hard_YExtent>"
+                      "<Custom_Hard_XExtent_Deployed>30</Custom_Hard_XExtent_Deployed></GroundVehicle>\n"
+                      " <GroundVehicle Name=\"S10_Lander_Landing\"><Variant_Of_Existing_Type>S10_Lander</Variant_Of_Existing_Type>"
+                      "<Landing_Transport_Variant></Landing_Transport_Variant></GroundVehicle>\n");
+    return t;
+}
+
 // --- S4 (owner: S4 agent): garrison / capture / corruption test data: troopers are GARRISON_UNIT (Infantry); a
 // community bunker (GARRISON_STRUCTURE, GarrisonCanFire) and a capture post (CAPTURE_POINT, 1 s transition) are
 // placed on the land map; planet S10_B offers a Kidnapping corruption mission (land, S10_Land_B, mission plots) and a
@@ -387,9 +405,10 @@ std::string fighter_types() {
 
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
                                 bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false,
-                                bool fog_setup = false) {
+                                bool fog_setup = false, bool landing = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (fighters    ? "alamo_sim_battle_tests_fighters"  // S7 t12
+    d->root = fs::temp_directory_path() / (landing     ? "alamo_sim_battle_tests_landing"  // a1i t04
+                                           : fighters    ? "alamo_sim_battle_tests_fighters"  // S7 t12
                                            : fog_setup ? "alamo_sim_battle_tests_fog_setup"  // FOWF t05
                                            : fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
                                            : obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
@@ -404,7 +423,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", fighters ? fighter_types()  // S7 t12
+    write_file(x / "S10Types.xml", landing ? landing_types()  // a1i t04
+                                   : fighters ? fighter_types()  // S7 t12
                                     : fog_setup ? fog_types()
                                    : fog_bm ? fog_bm_types()
                                    : obstacle ? obstacle_types()
@@ -447,6 +467,7 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
                " <Damage_To_Armor_Mod>Damage_Laser, Armor_Ship, 0.8</Damage_To_Armor_Mod>\n"
                " <AutoResolveLoserAttrition>0.80</AutoResolveLoserAttrition>\n"
                " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n" +
+                   std::string(landing ? " <Use_Reinforcement_Points>No</Use_Reinforcement_Points>\n" : "") +  // a1i t04: no points on the map
                    std::string(fog_setup ? " <SetupPhaseEnabled>True</SetupPhaseEnabled>\n"  // FOWF t05: a mod's land setup phase
                                            " <SetupPhaseCountdownSeconds>3</SetupPhaseCountdownSeconds>\n"
                                          : "") +
@@ -2319,6 +2340,40 @@ void test_land_drop_rules() {
     CHECK(land_drop_radius_ok(500.0f, 0.0f, objs, true));   // d = 500 <= 500
     CHECK(!land_drop_radius_ok(500.5f, 0.0f, objs, true));  // outside every enabling radius
     CHECK(land_drop_radius_ok(500.5f, 0.0f, objs, false));  // without Use_Reinforcement_Points
+    {  // a1i t04: the unload offsets use 3.0 x the team bounds (the validity 2.5); team members keep their offsets in-team.
+        const LandDropLayout v = land_drop_layout(rebel, 0.0f, 0.0f, 0.0f), u = land_drop_layout(rebel, 0.0f, 0.0f, 0.0f, 3.0f);
+        CHECK(v.ok && u.ok && v.slots.size() == u.slots.size());
+        bool wider = false;
+        for (size_t i = 0; v.ok && u.ok && i < v.slots.size(); ++i) {
+            const float dv = std::sqrt(v.slots[i].x * v.slots[i].x + v.slots[i].y * v.slots[i].y);
+            const float du = std::sqrt(u.slots[i].x * u.slots[i].x + u.slots[i].y * u.slots[i].y);
+            wider = wider || du > dv + 1.0f;
+        }
+        CHECK(wider && u.half_x >= v.half_x && u.half_y >= v.half_y);
+        LandDropShape veh;  // vehicles: one member grid, no team factor
+        veh.members.assign(4, 3u);
+        veh.hx.assign(4, 10.0f);
+        veh.hy.assign(4, 10.0f);
+        const LandDropLayout a = land_drop_layout(veh, 5.0f, 5.0f, 30.0f), b = land_drop_layout(veh, 5.0f, 5.0f, 30.0f, 3.0f);
+        CHECK(a.ok && b.ok && a.slots.size() == b.slots.size());
+        for (size_t i = 0; a.ok && b.ok && i < a.slots.size(); ++i) CHECK(a.slots[i].x == b.slots[i].x && a.slots[i].y == b.slots[i].y);
+    }
+    {  // a1i t05: Find_Free_Placement rings (box 20 x 10 -> step 24, 22.5-degree angles, 360 inclusive).
+        const FreePlacementBox box{-10.0f, -5.0f, 10.0f, 5.0f};
+        float qx = 0.0f, qy = 0.0f;
+        CHECK(find_free_placement(100.0f, 50.0f, box, {}, 2500.0f, qx, qy) && qx == 100.0f && qy == 50.0f);
+        std::vector<FreePlacementBox> bl = {{90.0f, 45.0f, 110.0f, 55.0f}};  // covers P
+        CHECK(find_free_placement(100.0f, 50.0f, box, bl, 2500.0f, qx, qy));
+        CHECK(std::fabs(qx - 124.0f) < 1e-3f && std::fabs(qy - 50.0f) < 1e-3f);  // ring 1, angle 0
+        bl.push_back({113.0f, 45.0f, 140.0f, 52.0f});                         // angle 0 of ring 1 taken too
+        CHECK(find_free_placement(100.0f, 50.0f, box, bl, 2500.0f, qx, qy));
+        CHECK(std::fabs(qx - (100.0f + 24.0f * std::cos(0.39269908f))) < 1e-2f && std::fabs(qy - (50.0f + 24.0f * std::sin(0.39269908f))) < 1e-2f);
+        const std::vector<FreePlacementBox> touch = {{110.0f, 45.0f, 130.0f, 55.0f}};  // touches the box at P: free
+        CHECK(find_free_placement(100.0f, 50.0f, box, touch, 2500.0f, qx, qy) && qx == 100.0f);
+        const std::vector<FreePlacementBox> all = {{-5000.0f, -5000.0f, 5000.0f, 5000.0f}};
+        CHECK(!find_free_placement(100.0f, 50.0f, box, all, 2500.0f, qx, qy));
+        CHECK(!find_free_placement(0.0f, 0.0f, FreePlacementBox{}, all, 2500.0f, qx, qy));  // zero step: r = 0 only
+    }
     std::printf("  land drop rules: OK\n");
 }
 
@@ -4407,6 +4462,192 @@ void test_fighter_move_past_enemy() {
     CHECK(attack_frame != 0 && attacked);
 }
 
+// a1i t04 / t05: a land Reinforce of a company with a Company_Transport_Unit spawns its landing object (the transport's
+// Landing_Transport_Variant at the drop point, z + Hover_Offset, TRANSPORT_LANDING, carried type = the company).
+// Untimed (default): the members spawn at the 3.0-factor unload offsets at the order, the unloaded record is posted and
+// the landing object leaves after (teams + 1) x 2 s. Timed (BattleConfig::landing_unload_timed): the company stays in the
+// hidden landing; one team per 2 s leaves on a locked exit move; the last step unlocks them, posts the record and removes
+// the landing; the battle state saves and loads mid-unload. Also the deployed extents getter.
+void test_landing_drop(bool timed) {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, true);
+    const objects::TypeIndex lander = d->types.resolve_name("S10_Lander"), landing_t = d->types.resolve_name("S10_Lander_Landing");
+    CHECK(lander != objects::kNone && landing_t != objects::kNone);
+    if (!timed) {
+        float hx = 0.0f, hy = 0.0f;
+        drop_half_extents(d->types, d->catalog.get(), lander, hx, hy);
+        CHECK(hx == 20.0f && hy == 15.0f);
+        drop_deployed_extents(d->types, d->catalog.get(), lander, hx, hy);
+        CHECK(hx == 30.0f && hy == 0.0f);  // 0x371d20: y from Custom_Hard_YExtent_Deployed whenever the deployed x is set
+        drop_deployed_extents(d->types, d->catalog.get(), static_cast<uint32_t>(d->types.resolve_name("S10_Trooper")), hx, hy);
+        CHECK(hx == 6.0f && hy == 6.0f);  // no deployed x: the normal extents
+    }
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 900;
+    opt.battle.landing_unload_timed = timed;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    namespace mv = alamo::tactical::movement;
+    bool invaded = false, dropped = false, seen_alive_late = false, gone = false, saved = false;
+    objects::ObjectId landing_id = objects::kNoObjectId;
+    objects::ObjectId key = objects::kNoObjectId;
+    uint32_t drop_frame = 0, spawned_before = 0, squad = 0;
+    LandDropLayout lay;
+    for (uint64_t t = 0; t < 2500 && !gone; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (dropped) break;  // the battle ended before the take-off
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        if (!dropped) {
+            if (b->frame() != 1) continue;
+            const auto reserves = b->reserves(1);
+            CHECK(reserves.size() == 1);
+            if (reserves.empty()) break;
+            key = reserves[0].galactic_id;
+            squad = reserves[0].type;
+            spawned_before = b->stats().spawned;
+#ifdef ALAMO_SIM_HAVE_FOG
+            if (b->fog()) b->fog()->reveal_all(1);  // the drop test needs unfogged cells
+#endif
+            size_t valid = 0, refused = 0;
+            for (int32_t cy = 6; cy < 58 && !dropped; cy += 2)
+                for (int32_t cx = 6; cx < 58 && !dropped; cx += 2) {
+                    const mv::V2 c = mv::cell_center(cx, cy);
+                    if (!b->land_drop_valid(*tm, 1, key, c.x, c.y, false, false)) continue;
+                    ++valid;
+                    if (const commands::RejectReason rr = b->order_reinforce(*tm, 1, key, c.x, c.y, host.random().synced());
+                        rr != commands::RejectReason::None) {
+                        if (refused++ == 0) std::printf("  landing drop: first refusal %d at (%.0f, %.0f)\n", static_cast<int>(rr), static_cast<double>(c.x), static_cast<double>(c.y));
+                        continue;
+                    }
+                    dropped = true;
+                    drop_frame = b->frame();
+                    lay = land_drop_layout(b->land_drop_shape(squad), c.x, c.y, b->player_drop_yaw(1), 3.0f);
+                    CHECK(lay.ok && lay.slots.size() == 4 && lay.group_x.size() == 2);  // two teams of Max_Squad_Size 2
+                    CHECK(b->reserves(1).empty());
+                    const auto recs = b->landings_unloaded();
+                    // The landing object.
+                    objects::ObjectHandle lh;
+                    if (timed) {
+                        CHECK(recs.empty() && b->stats().spawned == spawned_before);  // the company is still inside
+                        CHECK(b->landings_in_flight(1) == 1);
+                        for (const objects::ObjectHandle h : st.all_objects())
+                            if (st.alive(h) && st.type(h) == landing_t) lh = h;
+                        landing_id = st.alive(lh) ? st.id(lh) : objects::kNoObjectId;
+                        CHECK(b->landing_hidden(landing_id));  // state 4 until the service sees it clear
+                    } else {
+                        CHECK(recs.size() == 1);
+                        if (recs.size() != 1) break;
+                        landing_id = recs[0].landing;
+                        lh = st.find(landing_id);
+                        CHECK(recs[0].galactic_id == key && recs[0].owner == 1 && recs[0].carried_type == squad);
+                        CHECK(recs[0].units.size() == 4 && b->stats().spawned == spawned_before + 4u);
+                        CHECK(b->landings_in_flight(1) == 0 && !b->landing_hidden(landing_id));
+                        // The members at the unload offsets (3.0 x the team bounds, the side's drop yaw).
+                        for (size_t k = 0; lay.ok && k < lay.slots.size() && k < recs[0].units.size(); ++k) {
+                            const Vec3 mp = st.position(st.find(recs[0].units[k]));
+                            CHECK(std::fabs(mp.x - lay.slots[k].x) < 1e-3f && std::fabs(mp.y - lay.slots[k].y) < 1e-3f);
+                        }
+                    }
+                    CHECK(st.alive(lh));
+                    CHECK(st.type(lh) == landing_t);  // the Landing_Transport_Variant
+                    CHECK(st.has_behavior(lh, objects::beh::TransportLanding) && st.carried_type(lh) == squad);
+                    CHECK(st.parent_mode_id(lh) == key && st.owner(lh) == 1 && !st.landing_persist(lh));
+                    const Vec3 lp = st.position(lh);
+                    CHECK(lp.x == c.x && lp.y == c.y && std::fabs(lp.z - 10.0f) < 1e-4f);  // flat map + Hover_Offset 10
+                }
+            if (!dropped) std::printf("  landing drop: no drop (%zu valid spots, %zu refused orders)\n", valid, refused);
+            CHECK(dropped);
+            if (!dropped) break;
+            continue;
+        }
+        const objects::ObjectHandle lh = st.find(landing_id);
+        const uint32_t since = b->frame() - drop_frame;  // 3 steps of 2 s (60 frames)
+        if (!timed) {
+            if (since < 180u) {
+                CHECK(st.alive(lh));
+                if (since == 179u) seen_alive_late = true;
+                if (since == 1u) CHECK(b->landings_unloaded().empty());  // cleared by the next tick
+            } else {
+                CHECK(!st.alive(lh));
+                gone = true;
+            }
+            continue;
+        }
+        // Timed: the service starts the step timer on the first tick (frame drop + 1); team 0 at +61, team 1 at +121, the
+        // finish at +181.
+        const uint32_t spawned = b->stats().spawned - spawned_before;
+        if (since == 1u) CHECK(!b->landing_hidden(landing_id) && spawned == 0);
+        if (since == 60u) CHECK(spawned == 0);
+        if (since == 61u || since == 121u) {
+            const uint32_t want = since == 61u ? 2u : 4u;
+            CHECK(spawned == want);
+            const objects::ObjectId uid = b->story_reinforced().empty() ? objects::kNoObjectId : b->story_reinforced().back();
+            CHECK(uid != objects::kNoObjectId && b->movement_locked(uid));  // the locked exit move
+            const Vec3 mp = st.position(st.find(uid));
+            CHECK(std::fabs(mp.x - st.position(lh).x) < 30.0f && std::fabs(mp.y - st.position(lh).y) < 30.0f);  // spawned at the landing
+            CHECK(b->landings_in_flight(1) == 1 && b->landings_unloaded().empty());
+        }
+        if (since == 90u && !saved) {  // mid-unload save / load of the battle state (in-flight landing included)
+            StateHasher h0;
+            b->hash(h0);
+            ByteWriter w;
+            b->write_part(TacticalBattle::SavePart::State, w);
+            ByteReader r(w.bytes());
+            CHECK(b->read_part(TacticalBattle::SavePart::State, r));
+            StateHasher h1;
+            b->hash(h1);
+            CHECK(h0.digest() == h1.digest() && b->landings_in_flight(1) == 1);
+            saved = true;
+        }
+        if (since < 181u) {
+            CHECK(st.alive(lh));
+            if (since == 180u) seen_alive_late = true;
+        } else {
+            CHECK(!st.alive(lh));
+            const auto recs = b->landings_unloaded();
+            CHECK(recs.size() == 1 && b->landings_in_flight(1) == 0);
+            if (recs.size() == 1) {
+                CHECK(recs[0].landing == landing_id && recs[0].galactic_id == key && recs[0].carried_type == squad);
+                CHECK(recs[0].units.size() == 4);
+                for (const objects::ObjectId u : recs[0].units) CHECK(!b->movement_locked(u));  // unlocked at the finish
+            }
+            gone = true;
+        }
+    }
+    CHECK(dropped && seen_alive_late && gone);
+    if (timed) CHECK(saved);
+    std::printf("  landing drop (%s): landing %d at frame %u\n", timed ? "timed" : "untimed", static_cast<int>(landing_id), drop_frame);
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     for (int i = 1; i < argc; ++i)
@@ -4487,6 +4728,9 @@ int main(int argc, char** argv) {
 #endif
     std::printf("a1g t04 follow-up: land company drop layout, oriented boxes, reinforcement radii\n");
     test_land_drop_rules();
+    std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
+    test_landing_drop(false);
+    test_landing_drop(true);
     std::printf("S8 t02 / S7 t13: obstacle footprints follow their objects (land stamps, space static entries)\n");
     test_runtime_obstacles(false);
     test_runtime_obstacles(true);
