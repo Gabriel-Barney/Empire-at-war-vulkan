@@ -30,16 +30,23 @@ struct TypeAnimParams {
     float idle_flinch_interval_seconds = 1.0f;    // Idle_Flinch_Interval_Seconds (+0x20f4)
     float attack_flinch_interval_seconds = 3.0f;  // Attack_Flinch_Interval_Seconds (+0x20f0)
     bool death_type_explicit = false;             // Specific_Death_Anim_Type given
-    bool spin_away_on_death = false;              // Spin_Away_On_Death (+0x9a)
-    float spin_away_chance = 0.0f;                // Spin_Away_On_Death_Chance (+0x2208)
+    bool spin_away_on_death = false;              // Spin_Away_On_Death (+0x9a) - data only: the spin-away draw is
+    float spin_away_chance = 0.0f;                // Spin_Away_On_Death_Chance (+0x2208) - combat's (§1.9), not anim's
     float spin_away_seconds = 0.0f;               // Spin_Away_On_Death_Time (+0x220c)
     std::string spin_away_explosion;              // Spin_Away_On_Death_Explosion (render / particle side)
     float deployed_walk_anim_speed = 1.0f;        // Deployed_Walk_Anim_Speed
     float deployment_anim_rate = 1.0f;            // Deployment_Anim_Rate (+0x1668)
+    bool deploys = false;                         // Deploys (+0xd1): never flinches (§A.12)
 };
 
 TypeAnimParams type_anim_params(const objects::GameObjectTypes& types, objects::TypeIndex t, objects::ModeKind mode);
 // The DeathBehavior fields of a type (AnimBehaviors::begin_death / plan_death).
 DeathParams death_params(const TypeAnimParams& p);
+// The flinch fields of a victim type (AnimBehaviors::on_hit): Deploys gate, blend, hold, intervals.
+FlinchParams flinch_params(const TypeAnimParams& p);
+// §A.12 flinch inducers: Induced_Flinch_Intensity (projectile type +0x20e4 for direct hits, explosion type for EXPLOSION
+// victims; default 1.0) and Induced_Flinch_Range (explosion type +0x20e0, default 100). An unset field keeps the default.
+float induced_flinch_intensity(const objects::GameObjectTypes& types, objects::TypeIndex t);
+float induced_flinch_range(const objects::GameObjectTypes& types, objects::TypeIndex t);
 
 }  // namespace alamo::anim

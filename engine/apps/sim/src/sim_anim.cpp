@@ -1,6 +1,7 @@
 #include "alamo/sim/sim_anim.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
@@ -18,14 +19,7 @@ std::string upper_key(std::string_view s) {
     return out;
 }
 
-anim::FlinchParams flinch_of(const anim::TypeAnimParams& p) {
-    anim::FlinchParams f;
-    f.blend_seconds = p.max_flinch_blend_seconds;
-    f.hold_seconds = p.max_flinch_hold_seconds;
-    f.idle_interval_seconds = p.idle_flinch_interval_seconds;
-    f.attack_interval_seconds = p.attack_flinch_interval_seconds;
-    return f;
-}
+anim::FlinchParams flinch_of(const anim::TypeAnimParams& p) { return anim::flinch_params(p); }  // incl. the Deploys gate (§A.12)
 
 // Position, yaw facing (the model's nose -Y along it, z up) and Scale_Factor [port: no pitch / roll] - the battle's fire-bone rule.
 anim::Mat34 object_matrix(const float p[3], const float f[3], float s) {
@@ -76,7 +70,8 @@ void SimAnimation::attach(SimHost& host, bool crc) {
 
 // ------------------------------------------------------------------------------------ N1 save / load
 namespace {
-constexpr uint32_t kAnimChunkVersion = 3;  // 2: refix t01 pending clone death kinds; 3: refixf t04 pending clone plans
+constexpr uint32_t kAnimChunkVersion = 4;  // 2: refix t01 pending clone death kinds; 3: refixf t04 pending clone plans;
+                                           // 4: R3 follow-up d copied animation state of pending clones
 constexpr uint32_t kMaxAnimCount = 1u << 24;
 
 void write_id_list(ByteWriter& w, const std::vector<ObjectId>& ids) {
@@ -106,8 +101,10 @@ void SimAnimation::write(const SimHost& host, ByteWriter& w) const {
         write_section(w, [mw](ByteWriter& sub) { mw->world->write(sub); });
         w.i32(mw->max_seen);
         w.u32(static_cast<uint32_t>(mw->pending_clones.size()));
-        for (const ModeWorld::PendingClone& pc : mw->pending_clones)
+        for (const ModeWorld::PendingClone& pc : mw->pending_clones) {
             w.i32(pc.id).u8(pc.kind).boolean(pc.planned).boolean(pc.plan.spin).i32(pc.plan.type).u32(pc.plan.variant);
+            w.boolean(pc.copy).boolean(pc.copy_loop).i32(pc.copy_type).u32(pc.copy_variant).f32(pc.copy_frame).f32(pc.copy_speed);
+        }
         write_id_list(w, mw->event_rows);
         w.u32(static_cast<uint32_t>(mw->muzzles.size()));
         for (const Muzzle& m : mw->muzzles) w.i32(m.id).i32(m.hardpoint).i32(m.bone).u64(m.until);
@@ -116,8 +113,10 @@ void SimAnimation::write(const SimHost& host, ByteWriter& w) const {
 
 bool SimAnimation::read(SimHost& host, ByteReader& r) {
     GameModeManager& modes = host.modes();
+    // Only the current version: older chunks (2, 3) carry behaviour sections in a format AnimBehaviors::read no longer
+    // accepts, so they are refused here explicitly rather than failing inside a section.
     const uint32_t version = r.u32();
-    if (version != kAnimChunkVersion && version != 2) return false;
+    if (version != kAnimChunkVersion) return false;
     const uint32_t depth = r.u32();
     if (!r.ok() || depth != modes.depth()) return false;
     struct ModeIn {
@@ -138,15 +137,9 @@ bool SimAnimation::read(SimHost& host, ByteReader& r) {
         m.world = r.raw(r.u32());
         m.max_seen = r.i32();
         if (!r.ok()) return false;
-        if (version == 2) {  // refix t01: ids, then kinds (unplanned: the death draws at the next sync)
-            std::vector<ObjectId> ids;
-            if (!read_id_list(r, ids) || ids.size() > r.remaining()) return false;
-            m.clones.resize(ids.size());
-            for (size_t i = 0; i < ids.size(); ++i) m.clones[i].id = ids[i];
-            for (ModeWorld::PendingClone& pc : m.clones) pc.kind = r.u8();
-        } else {
+        {
             const uint32_t nc = r.u32();
-            if (!r.ok() || nc > kMaxAnimCount || static_cast<uint64_t>(nc) * 15u > r.remaining()) return false;
+            if (!r.ok() || nc > kMaxAnimCount || static_cast<uint64_t>(nc) * 33u > r.remaining()) return false;
             m.clones.resize(nc);
             for (ModeWorld::PendingClone& pc : m.clones) {
                 pc.id = r.i32();
@@ -155,6 +148,21 @@ bool SimAnimation::read(SimHost& host, ByteReader& r) {
                 pc.plan.spin = r.boolean();
                 pc.plan.type = r.i32();
                 pc.plan.variant = r.u32();
+                pc.copy = r.boolean();
+                pc.copy_loop = r.boolean();
+                pc.copy_type = r.i32();
+                pc.copy_variant = r.u32();
+                pc.copy_frame = r.f32();
+                pc.copy_speed = r.f32();
+                // A copied state must name a real anim type with a finite, non-negative frame and speed (the sync plays
+                // it as is). Unplanned / uncopied records carry defaults and are not checked.
+                if (pc.copy && (pc.copy_type < 0 || static_cast<uint32_t>(pc.copy_type) >= anim::kAnimTypeCount ||
+                                !std::isfinite(pc.copy_frame) || pc.copy_frame < 0.0f || !std::isfinite(pc.copy_speed) ||
+                                pc.copy_speed < 0.0f))
+                    return false;
+                if (pc.planned && pc.plan.type != anim::kNoAnimType &&
+                    (pc.plan.type < 0 || static_cast<uint32_t>(pc.plan.type) >= anim::kAnimTypeCount))
+                    return false;
             }
         }
         if (!r.ok() || !read_id_list(r, m.event_rows)) return false;
@@ -328,17 +336,18 @@ anim::IdleParams SimAnimation::idle_params(const GameMode& mode, ObjectId id, ob
     // with SPACE_IDLE clips idles on Space Idle.
     if (mode.kind() == objects::ModeKind::Space && m && m->variant_count(anim::kAnimIdle) == 0 && m->variant_count(anim::kAnimSpaceIdle) > 0)
         i.idle_type = anim::kAnimSpaceIdle;
-    // Garrison container mapping (0x395920) through the hook (S4 garrison system).
-    if (idle_hook_) {
-        const int32_t g = idle_hook_(mode, id);
-        if (g != anim::kNoAnimType && m && m->variant_count(g) > 0) i.idle_type = g;
+    i.base_idle_type = i.idle_type;  // the stop path's fallback when the presence idle has no clip (0 or Space Idle)
+    // Presence-induced idle (0x395920, §A.11) through the hook (tactical presence system).
+    if (presence_idle_hook_) {
+        const int32_t g = presence_idle_hook_(mode, id);
+        if (g != anim::kNoAnimType) i.idle_type = g;  // also without a clip of it (§A.11: anim decides the fallback)
     }
     return i;
 }
 
 // ---- R3 behaviours -------------------------------------------------------------------------------------
 
-bool SimAnimation::hit(const GameMode& mode, ObjectId victim, Vec3 facing, Vec3 travel, SimRng& rng, uint64_t frame) {
+bool SimAnimation::hit(const GameMode& mode, ObjectId victim, Vec3 facing, Vec3 travel, SimRng& rng, uint64_t frame, float intensity) {
     ModeWorld& mw = mode_world(mode);
     if (!mw.world->contains(victim)) return false;
     const objects::ObjectStore& store = mode.primary();
@@ -347,7 +356,7 @@ bool SimAnimation::hit(const GameMode& mode, ObjectId victim, Vec3 facing, Vec3 
     const objects::TypeIndex t = store.type(h);
     const anim::TypeAnimParams& p = params_for(t, mode.kind());
     const bool played = mw.behaviors->on_hit(*mw.world, victim, flinch_of(p), idle_params(mode, victim, t, mw.world->model(victim)), facing.x,
-                                             facing.y, travel.x, travel.y, rng, frame);
+                                             facing.y, travel.x, travel.y, rng, frame, intensity);
     if (played) ++stats_.flinches;
     return played;
 }
@@ -376,7 +385,7 @@ uint32_t SimAnimation::service_locomotor(const GameMode& mode, ObjectId id, anim
     lp.walk_speed_ratio = walk_ratio;
     lp.min_move_ratio = min_ratio;
     lp.idle = idle_params(mode, id, t, mw.world->model(id));
-    if (idle_hook_ && in.idle_type == anim::kNoAnimType) in.idle_type = idle_hook_(mode, id);
+    if (presence_idle_hook_ && in.idle_type == anim::kNoAnimType) in.idle_type = presence_idle_hook_(mode, id);
     const uint32_t n = mw.behaviors->service_locomotor(*mw.world, id, lp, in, rng, frame);
     if (n > 0 && anim::is_turn(mw.world->current_type(id))) ++stats_.turns;
     return n;
@@ -420,7 +429,7 @@ void SimAnimation::muzzle_flash(const GameMode& mode, ObjectId id, int32_t hardp
 }
 
 anim::DeathResult SimAnimation::start_death(ModeWorld& mw, const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind,
-                                            objects::TypeIndex type_override, const anim::DeathPlan* plan) {
+                                            objects::TypeIndex type_override, const anim::DeathPlan* plan, bool spin_away) {
     const objects::ObjectStore& store = mode.primary();
     const ObjectHandle h = store.find(id);
     const objects::TypeIndex t = type_override != objects::kNone ? type_override : store.type(h);
@@ -435,8 +444,10 @@ anim::DeathResult SimAnimation::start_death(ModeWorld& mw, const GameMode& mode,
     info.facing[1] = f.y;
     info.facing[2] = f.z;
     const anim::TypeAnimParams& tp = params_for(t, mode.kind());
-    const anim::DeathResult r = plan ? mw.behaviors->begin_death(*mw.world, id, anim::death_params(tp), *plan, info, frame, damage_kind)
-                                     : mw.behaviors->begin_death(*mw.world, id, anim::death_params(tp), info, rng, frame, damage_kind);
+    anim::DeathParams dp = anim::death_params(tp);
+    dp.spin = spin_away;  // the caller's decision (combat's one draw, TACTICAL_GAPS §1.9); a plan carries its own
+    const anim::DeathResult r = plan ? mw.behaviors->begin_death(*mw.world, id, dp, *plan, info, frame, damage_kind)
+                                     : mw.behaviors->begin_death(*mw.world, id, dp, info, rng, frame, damage_kind);
     ++stats_.deaths;
     if (r == anim::DeathResult::RemoveNow) {
         ++stats_.removed_at_death;
@@ -448,28 +459,44 @@ anim::DeathResult SimAnimation::start_death(ModeWorld& mw, const GameMode& mode,
     return r;
 }
 
-anim::DeathResult SimAnimation::begin_death(const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind) {
+anim::DeathResult SimAnimation::begin_death(const GameMode& mode, ObjectId id, SimRng& rng, uint64_t frame, uint8_t damage_kind,
+                                            bool spin_away) {
     const objects::ObjectStore& store = mode.primary();
     if (!store.exists(store.find(id))) return anim::DeathResult::NoRow;
-    return start_death(mode_world(mode), mode, id, rng, frame, damage_kind);
+    return start_death(mode_world(mode), mode, id, rng, frame, damage_kind, objects::kNone, nullptr, spin_away);
 }
 
-void SimAnimation::death_clone_spawned(const GameMode& mode, ObjectId clone, uint8_t damage_kind, const anim::DeathPlan* plan) {
+void SimAnimation::death_clone_spawned(const GameMode& mode, ObjectId clone, uint8_t damage_kind, const anim::DeathPlan* plan, ObjectId dying) {
+    ModeWorld& mw = mode_world(mode);
     ModeWorld::PendingClone pc;
     pc.id = clone;
     pc.kind = damage_kind;
     pc.planned = plan != nullptr;
     if (plan) pc.plan = *plan;
-    mode_world(mode).pending_clones.push_back(pc);
+    // R3 follow-up d: the dying object's current animation state (its primary slot now, before the flush drops its row).
+    if (dying != objects::kNoObjectId && mw.world->contains(dying) && !mw.behaviors->is_corpse(dying)) {
+        const anim::SlotView s = mw.world->slot(dying);
+        if (s.clip) {
+            pc.copy = true;
+            pc.copy_type = s.type;
+            pc.copy_variant = s.variant;
+            pc.copy_frame = s.frame;
+            pc.copy_speed = s.speed;
+            pc.copy_loop = s.mode == anim::SlotMode::Loop;
+        }
+    }
+    mw.pending_clones.push_back(pc);
 }
 
-anim::DeathPlan SimAnimation::plan_clone_death(objects::TypeIndex type, objects::ModeKind mode, uint8_t damage_kind, SimRng& rng) {
+anim::DeathPlan SimAnimation::plan_clone_death(objects::TypeIndex type, objects::ModeKind mode, uint8_t damage_kind, SimRng& rng, bool spin_away) {
     const anim::AnimModel* m = model_for(type, mode);
-    return anim::plan_death(m, anim::death_params(params_for(type, mode)), damage_kind, rng);
+    anim::DeathParams dp = anim::death_params(params_for(type, mode));
+    dp.spin = spin_away;
+    return anim::plan_death(m, dp, damage_kind, rng);
 }
 
 anim::DeathResult SimAnimation::corpse_clone(const GameMode& mode, ObjectId dying, objects::TypeIndex clone_type, SimRng& rng,
-                                             uint64_t frame, uint8_t damage_kind) {
+                                             uint64_t frame, uint8_t damage_kind, bool spin_away) {
     const objects::ObjectStore& store = mode.primary();
     if (!store.exists(store.find(dying))) return anim::DeathResult::NoRow;
     ModeWorld& mw = mode_world(mode);
@@ -487,7 +514,7 @@ anim::DeathResult SimAnimation::corpse_clone(const GameMode& mode, ObjectId dyin
             if (it == mw.event_rows.end() || *it != dying) mw.event_rows.insert(it, dying);
         }
     }
-    const anim::DeathResult r = start_death(mw, mode, dying, rng, frame, damage_kind, clone_type);
+    const anim::DeathResult r = start_death(mw, mode, dying, rng, frame, damage_kind, clone_type, nullptr, spin_away);
     ++stats_.clone_deaths;
     return r;
 }
@@ -528,19 +555,16 @@ bool SimAnimation::model_has_events(const anim::AnimModel* m) {
 }
 
 void SimAnimation::collect_events(ModeWorld& mw, const GameMode& mode) {
-    // After the advance: compare each snapshot with the slot now (same clip only; a play since the snapshot
-    // cannot happen inside the advance).
+    // After the advance: each mark (primary, then overlay slot per object) against its slot now (AnimWorld::crossed_since:
+    // nothing when the slot no longer holds the marked clip; a play since the mark cannot happen inside the advance).
     mw.events.clear();
     const objects::ObjectStore& store = mode.primary();
     const auto& scale = types_->columns().scale_factor;
-    for (const EventSnap& s : snaps_) {
-        const anim::SlotView now = mw.world->slot(s.id);
-        if (now.clip != s.clip || now.type != s.type || now.variant != s.variant) continue;
+    for (const anim::AnimWorld::EventMark& s : snaps_) {
         const auto ce = clip_events_.find(s.clip->clip.get());
         if (ce == clip_events_.end() || !ce->second) continue;
         scratch_hits_.clear();
-        const bool wrapped = s.loop && now.frame < s.frame;
-        anim::crossed_events(*ce->second, s.clip->clip->fps, s.clip->clip->frame_count, s.frame, now.frame, wrapped, scratch_hits_);
+        mw.world->crossed_since(s, *ce->second, scratch_hits_);
         if (scratch_hits_.empty()) continue;
         // Object transform: the live store object, else the corpse record.
         float pos[3] = {0.0f, 0.0f, 0.0f}, fac[3] = {1.0f, 0.0f, 0.0f};
@@ -569,6 +593,7 @@ void SimAnimation::collect_events(ModeWorld& mw, const GameMode& mode) {
             FrameEvent e;
             e.id = s.id;
             e.def = &d;
+            e.overlay = s.slot == anim::kOverlay;
             e.corpse = corpse || mw.behaviors->is_corpse(s.id);
             e.position = Vec3{pos[0], pos[1], pos[2]};
             if (!d.bone.empty() && model) {
@@ -626,9 +651,32 @@ void SimAnimation::sync(const GameMode& mode, SimRng& rng, uint64_t frame) {
         const objects::TypeIndex t = store.type(h);
         const anim::AnimModel* m = model_for(t, mode.kind());
         if (!m) continue;
+        // R3 follow-up d: a death clone that captured its dying object's animation state takes it over (S9 §1.6 [H]) on its
+        // own model, [port] without the model-created start-frame draw; a type / variant its model lacks: no clip.
+        const ModeWorld::PendingClone* copy = nullptr;
+        for (const ModeWorld::PendingClone& pc : mw.pending_clones)
+            if (pc.id == id && pc.copy) copy = &pc;
+        if (copy) {
+            w.add(id, m, frame);
+            if (m->variant_count(copy->copy_type) > copy->copy_variant) {
+                anim::PlayRequest r;
+                r.type = copy->copy_type;
+                r.index = copy->copy_variant;
+                r.loop = copy->copy_loop;
+                r.speed = copy->copy_speed;
+                r.start_frame = copy->copy_frame;
+                const anim::ClipRef* c = m->clip(copy->copy_type, copy->copy_variant);
+                const uint32_t count = c && c->clip ? c->clip->frame_count : 0u;
+                if (count > 1 && r.start_frame > static_cast<float>(count - 1)) r.start_frame = static_cast<float>(count - 1);  // another model
+                w.play(id, r, nullptr, frame);
+            }
+            ++stats_.created;
+            if (model_has_events(m)) mw.event_rows.push_back(id);
+            continue;
+        }
         const anim::IdleParams ip = idle_params(mode, id, t, m);
         anim::AnimCreateParams cp;
-        cp.idle_type = ip.idle_type;  // default idle (Space Idle / garrison mapping above; crouch: not at creation)
+        cp.idle_type = ip.idle_type;  // default idle (Space Idle / presence idle above; crouch: not at creation)
         cp.loop_idle = ip.loop_idle;
         cp.idle_rate = ip.idle_rate;
         w.create(id, m, cp, &rng, frame);
@@ -694,7 +742,8 @@ void SimAnimation::service(SimHost& host) {
         return;
     }
     scratch_destroy_.clear();
-    mw.behaviors->service(*mw.world, frame, scratch_destroy_);  // flinch holds, corpse countdown
+    // flinch phases (the replay of the interrupted clip draws its variant on the synced RNG, ascending id), corpse countdown
+    mw.behaviors->service(*mw.world, frame, scratch_destroy_, &host.random().synced());
     stats_.corpses_removed += static_cast<uint32_t>(scratch_destroy_.size());
     // refixf t04: finished corpses lose their rows only. The store objects that outlive their death (death clones) are
     // removed by the battle at the frame of its plan (TacticalBattle death_clones_), the same with and without this
@@ -712,12 +761,17 @@ void SimAnimation::service(SimHost& host) {
             const ObjectId id = mw.event_rows[i];
             if (!mw.world->contains(id)) continue;
             mw.event_rows[keep++] = id;
-            const anim::SlotView s = mw.world->slot(id);
-            if (!s.clip || s.mode == anim::SlotMode::Finished) continue;
-            auto ce = clip_events_.find(s.clip->clip.get());
-            if (ce == clip_events_.end()) ce = clip_events_.emplace(s.clip->clip.get(), event_map().find(s.clip->clip->name)).first;
-            if (!ce->second) continue;
-            snaps_.push_back({id, s.clip, s.type, s.variant, s.frame, s.mode == anim::SlotMode::Loop});
+            // Primary, then overlay slot (each only while it holds an unfinished clip); kept when the clip has events.
+            const size_t first = snaps_.size();
+            mw.world->mark_events(id, snaps_);
+            size_t k = first;
+            for (size_t j = first; j < snaps_.size(); ++j) {
+                const anim::ClipRef* c = snaps_[j].clip;
+                auto ce = clip_events_.find(c->clip.get());
+                if (ce == clip_events_.end()) ce = clip_events_.emplace(c->clip.get(), event_map().find(c->clip->name)).first;
+                if (ce->second) snaps_[k++] = snaps_[j];
+            }
+            snaps_.resize(k);
         }
         mw.event_rows.resize(keep);
     }

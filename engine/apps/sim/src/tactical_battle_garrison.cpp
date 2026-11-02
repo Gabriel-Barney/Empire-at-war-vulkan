@@ -283,7 +283,18 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
             case tg::GarrisonEventKind::Killed: {  // host without a garrison behaviour died
                 Unit* u = unit_by_id(e.unit);
                 if (!u || !u->alive) break;
+                // R3 follow-up f: the occupant's Die (kill_unit: death clone pick, death projectile, spin-away draw on the
+                // bound battle RNG) is consumed like every other death (consume_death: clone object / corpse path, death
+                // animation, Death_Explosions), right here in garrison event order. Without a combat unit: the old removal.
+                const size_t first = combat_->deaths().size();
                 if (combat_->has_unit(e.unit)) combat_->kill_unit(e.unit, tc::kNoObject, tc::kKindNormal, frame_);
+                if (bt_rng_)
+                    for (size_t i = first; i < combat_->deaths().size(); ++i) {
+                        const tc::DeathEvent d = combat_->deaths()[i];  // copy: consume_death may add combat state
+                        consume_death(mode, d, *bt_rng_);
+                    }
+                u = unit_by_id(e.unit);  // (re-found: the clone / particle spawns may have grown the containers)
+                if (!u || !u->alive) break;
                 u->alive = false;
                 --parts_[u->participant].alive;
                 mode.destroy(u->h);
