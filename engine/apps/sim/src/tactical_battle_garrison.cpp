@@ -84,7 +84,8 @@ void TacticalBattle::s4_init() {
     garrison_.set_allied(allied);
     garrison_.set_neutral_player(neutral);
     const float gc_secs = catalog_->capture_countdown(space_);  // REMAINING_GAPS §3.3: GameConstants when present
-    const float secs = gc_secs >= 0.0f ? gc_secs : space_ ? cfg_.space_capture_countdown : cfg_.land_capture_countdown;
+    // skai: L1_S4_REMAINING §4.2 start gate: the countdown is 0 in skirmish (a skirmish map battle: skirmish_map).
+    const float secs = skirmish_map() ? 0.0f : gc_secs >= 0.0f ? gc_secs : space_ ? cfg_.space_capture_countdown : cfg_.land_capture_countdown;
     captures_ = std::make_unique<tg::CapturePointSystem>(neutral, 4u, secs > 0.0f ? static_cast<uint32_t>(30.0f * secs + 0.5f) : 0u);
     captures_->set_allied(allied);
     captures_->set_neutral_owner([this](int32_t o) { return bt_owner_neutral(o); });  // REMAINING_GAPS §3.3

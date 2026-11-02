@@ -46,6 +46,7 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_l1.cpp sim/src/tactical_battle_l1_strikes.cpp)  # L1 systems (owner: tactical-systems agent)
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_pads.cpp)  # Int-final: build pads (L1_S4_REMAINING §3.6)
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_bt.cpp)    # battle host: BT setup / transition rules, pad units
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_skirmish.cpp)  # skai: skirmish map battles (income, victory)
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_oi_abilities.cpp)  # OI abilities: ability host side (owner: abilities agent)
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_save.cpp)  # N1 stage 2 (owner: n2-host): battle save / load
     # Hangars / station upgrade / engine-loop requests (docs/re/STATION_HANGARS_SOUND.md): engine/tactical/hangar.
@@ -164,27 +165,34 @@ if(_alamo_sim)
              COMMAND alamo_headless --skirmish-ai foc --workers 4 --quiet
                      --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_golden.crc)
     set_tests_properties(alamo_headless_skirmish_ai_synthetic alamo_headless_skirmish_ai_foc PROPERTIES TIMEOUT 1200)
-    # battle host: FoC land invasion (Utapau, _Land_Planet_Utapau_01), 2 min of battle; skipped (exit 0) without ALAMO_FOC_DATA.
+    # skai (q2f t04): the skirmish host on _MP_SPACE_GEONOSIS with an idle human Empire (the retail Geonosis trace's setup): stations
+    # from the team markers, both slots' default squadrons, MP_Default_Credits, the per-frame station income; skipped without ALAMO_FOC_DATA.
+    add_test(NAME alamo_headless_skirmish_ai_geonosis
+             COMMAND alamo_headless --skirmish-ai skirmish --map _MP_SPACE_GEONOSIS --human Empire --seed 1103945700 --ticks 900 --workers 4 --quiet)
+    set_tests_properties(alamo_headless_skirmish_ai_geonosis PROPERTIES TIMEOUT 1200)
+    alamo_label_slow(alamo_headless_skirmish_ai_geonosis)
+    # skai: foc-land is the skirmish host (the battle started on the map, the land default forces, income, skirmish victory, land
+    # production) since 2026-11-02; before that a galactic invasion with campaign companies (t50).
+    # t50: FoC land SKIRMISH (_MP_LAND_UTAPAU: the explicit Empire / Rebel pads, Player_N_Spawn_Point_Marker, MP_Default_Credits, the
+    # pre-built Command Center + Barracks, the skirmish pad lists / prices / pop-cap curve, the shipped skirmish equations), 2 min of battle;
+    # skipped (exit 0) without ALAMO_FOC_DATA.
     add_test(NAME alamo_headless_skirmish_ai_foc_land
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 3600 --workers 4 --quiet
                      --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_land_golden.crc)
-    set_tests_properties(alamo_headless_skirmish_ai_foc_land PROPERTIES TIMEOUT 1200)
-    # S10 land outcome: the same invasion run for 20000 ticks (0/1/4/N workers identical); skipped (exit 0) without
-    # ALAMO_FOC_DATA. a1f (2026-10-31): with TEAM containers in the threat grid (A1_READINGS §29) the Utapau battle ended on
-    # seeds 1-6. a1g (2026-11-02): after the free-store reservations (§28) and the land Reinforce drop layout (§30.7,
-    # TACTICAL_GAPS §4.2.1) no seed 1-12 ended before the 14400-frame cap (Rebels retreat), so --expect-battle-end was dropped
-    # (Gabriel, 2026-11-02). a1h t01 (2026-11-02): with the M1 WeaponBehavior fix, passive / superseded guard statuses
-    # (A1_READINGS §33) and non-unit REVEAL sources (FOG_OF_WAR §3.2: a held Reinforcement_Point lifts its owner's fog, so AI
-    # drops there pass the fog test) seeds 5, 7 and 11 end (all destroyed); the others still reach the cap with fog-hidden
-    # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. The test runs seed 5 (ends at
-    # frame 10879) with --expect-battle-end again. a1i t01 (2026-11-02): reserves no longer count (BT §3.1a [H]) and the land
-    # AI loads every plan folder (AI_GALACTIC §1.9.1), so SpaceMode\RetreatPlan serves Land_Retreat: seeds 1-12 all end with
-    # the Rebel attacker retreating (frames 2877-5175, seed 5 at 2877; A1_READINGS §34). One ctest entry per worker count so they run
-    # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
-    # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
+    # The old land invasion (Utapau, _Land_Planet_Utapau_01, a campaign map) under the campaign rules: its golden is the pre-t50 one.
+    add_test(NAME alamo_headless_skirmish_ai_foc_land_campaign
+             COMMAND alamo_headless --skirmish-ai foc-land-campaign --ticks 3600 --workers 4 --quiet
+                     --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_land_campaign_golden.crc)
+    set_tests_properties(alamo_headless_skirmish_ai_foc_land alamo_headless_skirmish_ai_foc_land_campaign PROPERTIES TIMEOUT 1200)
+    # S10 land outcome, t50: the land skirmish played on (0/1/4/N workers identical); skipped (exit 0) without ALAMO_FOC_DATA. What it asserts
+    # is structure, not a seed's luck (--expect-skirmish-base): both sides start with their pre-built base (Command Center + Barracks of both
+    # slots), the shipped skirmish AI issues orders, shots are fired, 0 Lua errors. Whether the skirmish AI takes the enemy base inside the
+    # 15-minute limit is not asserted: it does not (the Destroy_Structure plan reaches the base at ~frame 11000 and fails; open item).
+    # One ctest entry per worker count so they run side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against
+    # it (the --check-workers counts: jobs::determinism_worker_counts, N = hardware threads - 1).
     set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome
-             COMMAND alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --workers 0 --quiet --expect-battle-end
+             COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --workers 0 --quiet --expect-skirmish-base
                      --crc-out ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome PROPERTIES TIMEOUT 1800
                          FIXTURES_SETUP alamo_land_outcome_w0)
@@ -195,21 +203,30 @@ if(_alamo_sim)
     list(REMOVE_ITEM _land_outcome_workers 0)
     foreach(_w IN LISTS _land_outcome_workers)
       add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_w${_w}
-               COMMAND alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --workers ${_w} --quiet --expect-battle-end
+               COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --workers ${_w} --quiet
                        --golden ${_land_outcome_crc})
       set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_w${_w} PROPERTIES TIMEOUT 1800
                            FIXTURES_REQUIRED alamo_land_outcome_w0)
     endforeach()
     # OPT1: the tick profiler is wall-clock and write-only; a run with --profile must give the same CRCs as the 0-worker run.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_profiled
-             COMMAND alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --workers 4 --quiet --profile
+             COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --workers 4 --quiet --profile
                      --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt --golden ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
                          FIXTURES_REQUIRED alamo_land_outcome_w0)
-    # a1i t01: a second seed (ends at frame 4080) so a change that stalls only some seeds is caught.
-    add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_s1
-             COMMAND alamo_headless --skirmish-ai foc-land --seed 1 --ticks 20000 --workers 4 --quiet --expect-battle-end)
-    set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_s1 PROPERTIES TIMEOUT 1800)
+    # The campaign-rules land invasion (foc-land-campaign; before skai this was foc-land) must END with a winner before the frame
+    # limit. a1g (2026-11-02): after the free-store reservations (§28) and the land Reinforce drop layout (§30.7, TACTICAL_GAPS
+    # §4.2.1) no seed 1-12 ended before the 14400-frame cap. a1h t01: with the M1 WeaponBehavior fix, passive / superseded guard
+    # statuses (A1_READINGS §33) and non-unit REVEAL sources (FOG_OF_WAR §3.2) seeds 5, 7 and 11 end. a1i t01 (2026-11-02):
+    # reserves no longer count (BT §3.1a [H]) and the land AI loads every plan folder (AI_GALACTIC §1.9.1), so SpaceMode\RetreatPlan
+    # serves Land_Retreat: seeds 1-12 all end with the Rebel attacker retreating (seed 5 at 2877, seed 1 at 4080; A1_READINGS §34).
+    # One entry per seed, so a change that stalls only some seeds is caught. The worker-count identity of this path is the
+    # foc_land_campaign golden run.
+    foreach(_seed 5 1)
+      add_test(NAME alamo_headless_skirmish_ai_foc_land_campaign_outcome_seed${_seed}
+               COMMAND alamo_headless --skirmish-ai foc-land-campaign --seed ${_seed} --ticks 20000 --workers 0 --quiet --expect-battle-end)
+      set_tests_properties(alamo_headless_skirmish_ai_foc_land_campaign_outcome_seed${_seed} PROPERTIES TIMEOUT 1800)
+    endforeach()
     # t41: FoC space, an AI defender with a Level 2 station against a far larger fleet must not retreat; skipped (exit 0) without ALAMO_FOC_DATA.
     # refixf t06/t07 (2026-10-31): the battle must end; seed 3 now kills the station (~frame 10300) and the remaining defenders
     # then retreat (victory all-retreated), which is the expected end after the station is lost. a1h (2026-11-02): with the

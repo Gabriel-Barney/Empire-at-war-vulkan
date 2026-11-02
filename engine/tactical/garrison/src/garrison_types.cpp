@@ -56,7 +56,12 @@ bool capture_desc_from_type(const objects::GameObjectTypes& types, objects::Type
 }
 
 bool influences_capture(const objects::GameObjectTypes& types, objects::TypeIndex t) {
-    return valid(types, t) && types.get_bool(t, "Influences_Capture_Point");
+    // skai: an unset Influences_Capture_Point counts as true [trace]: in the retail Geonosis skirmish trace (q2f, 2026-10-30) the
+    // Rebel AI takes a neutral Mineral_Extractor_Pad by frame 600 with X-Wings only, and X-Wing sets no Influences_Capture_Point.
+    // The shipped data sets it False on 150 types (pads, structures, vehicles) and True on 38.
+    if (!valid(types, t)) return false;
+    if (types.get_string(t, "Influences_Capture_Point").empty()) return true;
+    return types.get_bool(t, "Influences_Capture_Point");
 }
 
 }  // namespace alamo::tactical::garrison

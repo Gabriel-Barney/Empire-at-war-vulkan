@@ -104,8 +104,11 @@ const char* kTypes = R"(<L1>
  <Marker Name="IN_GAME_BOMBING_RUN_MARKER"><Behavior>MARKER</Behavior></Marker>
  <SpecialStructure Name="L1_Build_Pad"><Victory_Relevant>Yes</Victory_Relevant><Behavior>TACTICAL_BUILD_OBJECTS</Behavior><Capture_Point_Radius>100</Capture_Point_Radius>
   <Tactical_Buildable_Objects_Campaign>Empire, L1_UC_Turret, Underworld, L1_UC_Turret</Tactical_Buildable_Objects_Campaign>
+  <Tactical_Buildable_Objects_Multiplayer>Empire, L1_UC_Turret_MP, Underworld, L1_UC_Turret_MP</Tactical_Buildable_Objects_Multiplayer>
   <Minimum_Time_Before_Pad_Can_Build_Again>1.0</Minimum_Time_Before_Pad_Can_Build_Again></SpecialStructure>
  <SpecialStructure Name="L1_UC_Turret"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>100</Tactical_Health><Tactical_Build_Time_Seconds>2</Tactical_Build_Time_Seconds>
+  <Tactical_Buildable_Constructed>L1_Turret</Tactical_Buildable_Constructed></SpecialStructure>
+ <SpecialStructure Name="L1_UC_Turret_MP"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>100</Tactical_Health><Tactical_Build_Time_Seconds>2</Tactical_Build_Time_Seconds>
   <Tactical_Buildable_Constructed>L1_Turret</Tactical_Buildable_Constructed></SpecialStructure>
  <SpecialStructure Name="L1_Turret"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>500</Tactical_Health></SpecialStructure>
  <GroundInfantry Name="L1_Scout"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type><Land_FOW_Reveal_Range>300</Land_FOW_Reveal_Range>
@@ -828,12 +831,13 @@ void test_jet(const Data& d) {
 struct PadRun {
     bool fought = false, refused_rules = false, refused_full = false, started = false, uc_seen = false, built = false, cleared = false;
     bool cooldown_refused = false, rebuilt = false, locked = false;
+    bool other_list_refused = false;  // t50: the type of the other mode's list (_Multiplayer in a campaign battle, _Campaign in a land skirmish)
     float sight_clear = -1.0f, sight_rain = -1.0f;
     bool fog_on = false;
     CrcLog crc;
 };
 
-PadRun run_pads(const Data& d, int32_t workers) {
+PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
     PadRun out;
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
@@ -850,6 +854,7 @@ PadRun run_pads(const Data& d, int32_t workers) {
     opt.conflict.human_choice = galactic::BattleChoice::Fight;
     opt.battle.max_frames = 900;
     opt.battle.order_interval = 0;
+    opt.battle.skirmish = skirmish;  // t50: a land skirmish lists / prices its pads from the _Multiplayer tags
     load_tactical_systems(*d.files, d.rules, &d.db.constants(), opt);  // the hosts' loader (weather on)
     CHECK(opt.weather != nullptr);
     CampaignBattles battles(host, d.crules, *d.catalog,
@@ -868,7 +873,8 @@ PadRun run_pads(const Data& d, int32_t workers) {
     if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
     bool invaded = false;
     objects::ObjectId pad = objects::kNoObjectId, scout = objects::kNoObjectId;
-    const auto uc_t = static_cast<objects::TypeIndex>(type_of(d, "L1_UC_Turret"));
+    const auto uc_t = static_cast<objects::TypeIndex>(type_of(d, skirmish ? "L1_UC_Turret_MP" : "L1_UC_Turret"));
+    const auto other_t = static_cast<objects::TypeIndex>(type_of(d, skirmish ? "L1_UC_Turret" : "L1_UC_Turret_MP"));
     const auto fr_t = static_cast<objects::TypeIndex>(fr);
     uint32_t built_frame = 0;
     for (uint64_t t = 0; t < 4000; ++t) {
@@ -896,6 +902,7 @@ PadRun run_pads(const Data& d, int32_t workers) {
             sp.position = {-1400.0f, -1500.0f, 0.0f};
             scout = st.id(tm->spawn(sp));
             out.refused_rules = b->pad_build(*tm, pad, fr_t, true) == 0;  // not in the faction row
+            out.other_list_refused = b->pad_build(*tm, pad, other_t, true) == 0;  // t50: only the mode's own list counts
             out.started = b->pad_build(*tm, pad, uc_t, true) == 1;
             out.refused_full = b->pad_build(*tm, pad, uc_t, false) == -1;  // already has something built on it
             b->pad_lock(pad, true);
@@ -939,8 +946,14 @@ void test_pads(const Data& d) {
 #ifdef ALAMO_SIM_HAVE_FOG
     CHECK(a.fog_on && a.sight_clear == 300.0f && a.sight_rain == 150.0f);  // Land_FOW_Reveal_Range x Sight_Range_Modifier 0.5
 #endif
+    CHECK(a.other_list_refused);
     const PadRun w = run_pads(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged);
+    // t50: the same pad in a land skirmish builds from Tactical_Buildable_Objects_Multiplayer and refuses the _Campaign list.
+    const PadRun k = run_pads(d, 0, true);
+    std::printf("  pads (land skirmish): fought %d refused-rules %d other-list-refused %d started %d uc %d built %d cleared %d rebuilt %d\n", k.fought,
+                k.refused_rules, k.other_list_refused, k.started, k.uc_seen, k.built, k.cleared, k.rebuilt);
+    CHECK(k.fought && k.refused_rules && k.other_list_refused && k.started && k.refused_full && k.uc_seen && k.built && k.cleared && k.rebuilt);
 }
 // --- end Int-final ---
 
