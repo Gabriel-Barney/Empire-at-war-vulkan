@@ -347,6 +347,11 @@ std::string obstacle_types() {
         "<Behavior>SELECTABLE</Behavior><LandBehavior>LAND_OBSTACLE</LandBehavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
         "<Obstacle_Width>60</Obstacle_Width><Obstacle_Height>60</Obstacle_Height><Obstacle_X_Offset>-30</Obstacle_X_Offset>"
         "<Obstacle_Y_Offset>-30</Obstacle_Y_Offset></GroundStructure>\n"
+        // S8 t09: a structure whose death clone is not an obstacle (Death_Clone_Is_Obstacle false, as Imperial_Prison_Dathomir)
+        " <GroundStructure Name=\"S10_Obst_Prison\"><Tactical_Health>40</Tactical_Health><CategoryMask>Structure</CategoryMask>"
+        "<Behavior>SELECTABLE</Behavior><LandBehavior>LAND_OBSTACLE</LandBehavior><Death_Clone_Is_Obstacle>No</Death_Clone_Is_Obstacle>"
+        "<Obstacle_Width>60</Obstacle_Width><Obstacle_Height>60</Obstacle_Height><Obstacle_X_Offset>-30</Obstacle_X_Offset>"
+        "<Obstacle_Y_Offset>-30</Obstacle_Y_Offset></GroundStructure>\n"
         " <GroundProp Name=\"S10_Obst_Rock\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>100</Obstacle_Width>"
         "<Obstacle_Height>100</Obstacle_Height><Obstacle_X_Offset>-50</Obstacle_X_Offset><Obstacle_Y_Offset>-50</Obstacle_Y_Offset></GroundProp>\n"
         " <GroundProp Name=\"S10_Obst_Rock_Spawner\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>20</Obstacle_Width>"
@@ -3862,7 +3867,11 @@ void test_oi_objects_scheduling() {
 //     Map_Load_Spawn_Table placeholder's stamp is replaced by the spawned rock's footprint; a rock spawned during the
 //     battle is stamped at the end of that tick under its object id and unstamped the tick it is removed;
 //   * space: a map-placed SPACE_OBSTACLE unit owns its placement entry (object id) and loses it when it dies (Hyperspace_Away
-//     kill); a placeholder's entry is replaced by the spawned asteroid's (radius 400, not the placeholder's 50).
+//     kill); a placeholder's entry is replaced by the spawned asteroid's (radius 400, not the placeholder's 50); S8 t09: the
+//     asteroid (not a battle unit) loses its entry the tick it is removed;
+//   * S8 t09 (S9_DEATH_CLONE_SHIELDS §1.6, MOVEMENT §1.3): a death clone keeps only HIDE_WHEN_FOGGED / IMPOSING_PRESENCE /
+//     LAND_OBSTACLE (the last only with Death_Clone_Is_Obstacle) and gets DEATH; a clone without LAND_OBSTACLE is never
+//     stamped.
 void test_runtime_obstacles(bool space) {
     namespace mv = tactical::movement;
     auto d = make_data(false, false, false, false, false, true);
@@ -3920,7 +3929,9 @@ void test_runtime_obstacles(bool space) {
         return std::vector<uint32_t>(c.begin(), c.end());
     };
     auto same = [](std::span<const uint32_t> a, const std::vector<uint32_t>& b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); };
-    bool invaded = false, checked = false, spawned_checked = false, removed_checked = false, died = false;
+    bool invaded = false, checked = false, spawned_checked = false, removed_checked = false, died = false, asteroid_checked = false;
+    objects::ObjectHandle asteroid_h{};
+    objects::ObjectId asteroid = objects::kNoObjectId, prison_clone = objects::kNoObjectId, bunker_clone = objects::kNoObjectId;
     objects::ObjectId unit = objects::kNoObjectId, spawned = objects::kNoObjectId;
     objects::ObjectHandle spawned_h{};
     uint32_t spawn_frame = 0;
@@ -3958,6 +3969,10 @@ void test_runtime_obstacles(bool space) {
                 CHECK(occ.static_entry(other, c, r, bits) && r == 400.0f && c.x == -2500.0f && c.y == 2500.0f);  // not 50
                 std::printf("  space: map unit %d entry r 120, spawned asteroid %d entry r %.0f\n", unit, other, static_cast<double>(r));
                 CHECK(b->hyperspace_out(unit, 0, true));  // killed 90 frames later
+                // S8 t09: the asteroid is no battle unit; removing it must drop its (re-keyed) entry at the next sync.
+                asteroid = other;
+                asteroid_h = st.find(other);
+                CHECK(tm->destroy(asteroid_h));
             } else {
                 const mv::PassabilityGrid& g = ms.grid();
                 CHECK(!g.stamped(mv::map_stamp_id(0)) && !g.stamped(mv::map_stamp_id(1)));
@@ -3979,6 +3994,21 @@ void test_runtime_obstacles(bool space) {
                 spawned = st.id(spawned_h);
                 spawn_frame = b->frame();
                 CHECK(spawned > 0 && !g.stamped(spawned));
+                // S8 t09: death clones of a bunker (Death_Clone_Is_Obstacle default true) and of a prison (false).
+                sp.type = static_cast<objects::TypeIndex>(type_of(*d, "S10_Obst_Bunker"));
+                sp.position = {1200.0f, 1000.0f, 0.0f};
+                const objects::ObjectHandle bc = tm->spawn_death_clone(sp);
+                sp.type = static_cast<objects::TypeIndex>(type_of(*d, "S10_Obst_Prison"));
+                sp.position = {1200.0f, 600.0f, 0.0f};
+                const objects::ObjectHandle pc = tm->spawn_death_clone(sp);
+                bunker_clone = st.id(bc);
+                prison_clone = st.id(pc);
+                const auto list = [&st](objects::ObjectHandle h) {
+                    return std::vector<objects::BehaviorTypeId>(st.behaviors(h).begin(), st.behaviors(h).end());
+                };
+                CHECK(st.dying(bc) && st.dying(pc));
+                CHECK(list(bc) == (std::vector<objects::BehaviorTypeId>{objects::beh::LandObstacle, 0x44}));  // SELECTABLE gone
+                CHECK(list(pc) == (std::vector<objects::BehaviorTypeId>{0x44}));  // LAND_OBSTACLE gone too
             }
             continue;
         }
@@ -3988,6 +4018,9 @@ void test_runtime_obstacles(bool space) {
                 spawned_checked = true;
                 CHECK(g.stamped(spawned) && same(g.stamp_cells(spawned), cells_of(g, 300.0f, 1000.0f, 100.0f)));
                 CHECK(g.effective(mv::world_to_cell(300.0f), mv::world_to_cell(1000.0f)) == mv::kPassObstacle);
+                // S8 t09: the bunker's clone kept LAND_OBSTACLE and is stamped; the prison's is not.
+                CHECK(g.stamped(bunker_clone) && same(g.stamp_cells(bunker_clone), cells_of(g, 1200.0f, 1000.0f, 60.0f)));
+                CHECK(!g.stamped(prison_clone) && g.effective(mv::world_to_cell(1200.0f), mv::world_to_cell(600.0f)) == mv::kPassClear);
                 CHECK(tm->destroy(spawned_h));
             } else if (spawned_checked && !removed_checked) {
                 removed_checked = true;
@@ -3996,16 +4029,22 @@ void test_runtime_obstacles(bool space) {
             if (!died && !st.alive(st.find(unit))) {
                 died = true;
                 // The original's stamp goes; its death clone (no Death_Clone list: the bunker type itself, S9_DEATH_CLONE_SHIELDS
-                // §1.6) is a LAND_OBSTACLE object at the same transform and stamps the same cells [inferred: wreck stamping].
+                // §1.6) keeps LAND_OBSTACLE (Death_Clone_Is_Obstacle, default true) and stamps the same cells (MOVEMENT §1.3 [H]).
                 objects::ObjectId clone = objects::kNoObjectId;
                 for (const objects::ObjectHandle h : st.all_objects())
-                    if (st.alive(h) && st.dying(h) && static_cast<uint32_t>(st.type(h)) == type_of(*d, "S10_Obst_Bunker")) clone = st.id(h);
+                    if (st.alive(h) && st.dying(h) && static_cast<uint32_t>(st.type(h)) == type_of(*d, "S10_Obst_Bunker") &&
+                        st.id(h) != bunker_clone)
+                        clone = st.id(h);
                 std::printf("  land: bunker %d died at frame %u (death clone %d), rock %d spawned at %u\n", unit, b->frame(), clone, spawned,
                             spawn_frame);
                 CHECK(!g.stamped(unit) && clone > 0 && g.stamped(clone) && same(g.stamp_cells(clone), cells_of(g, 450.0f, 620.0f, 60.0f)));
             }
             if (!died) CHECK(g.stamped(unit));
         } else {
+            if (!asteroid_checked && asteroid > 0) {
+                asteroid_checked = true;
+                CHECK(!st.exists(asteroid_h) && !ms.space().has_static(asteroid));
+            }
             if (!died && !st.alive(st.find(unit))) {
                 died = true;
                 std::printf("  space: map unit %d died at frame %u\n", unit, b->frame());
@@ -4016,6 +4055,7 @@ void test_runtime_obstacles(bool space) {
     }
     CHECK(checked && died);
     if (!space) CHECK(spawned_checked && removed_checked);
+    if (space) CHECK(asteroid_checked);
 }
 
 }  // namespace

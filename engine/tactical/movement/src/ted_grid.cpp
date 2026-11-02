@@ -48,22 +48,46 @@ PassabilityGrid grid_from_map(const terrain::MapData& map) {
     return g;
 }
 
+uint32_t land_obstacle_footprint_type(const objects::GameObjectTypes& types, uint32_t t) {
+    if (t >= types.size()) return t;
+    const objects::TypeIndex proxy = types.get_type_ref(t, "Obstacle_Proxy_Type");
+    return proxy < types.size() ? proxy : t;
+}
+
 bool land_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t t, V2 position, float yaw_deg, float terrain_z,
                              const MapStampHooks* hooks, ObstacleFootprint& out) {
     if (t >= types.size()) return false;
-    const float w = types.get_float(t, "Obstacle_Width"), hgt = types.get_float(t, "Obstacle_Height");
-    const float scale = types.get_float(t, "Scale_Factor") > 0.0f ? types.get_float(t, "Scale_Factor") : 1.0f;
+    // S8 t09 (MOVEMENT §1.3): Obstacle_Proxy_Type replaces the type for the sizes, offsets, model box and Fine_Tune byte.
+    const uint32_t f = land_obstacle_footprint_type(types, t);
+    const bool proxied = f != t;
+    const float w = types.get_float(f, "Obstacle_Width"), hgt = types.get_float(f, "Obstacle_Height");
+    const float scale = types.get_float(f, "Scale_Factor") > 0.0f ? types.get_float(f, "Scale_Factor") : 1.0f;
     // OI tactical: model-bbox footprint when the XML sizes are not set (§1.3).
     float hx = 0.0f, hy = 0.0f, hz = 0.0f;
-    const bool have_model = hooks && hooks->model_half_extents && hooks->model_half_extents(t, hx, hy, hz);
+    const bool have_model = hooks && hooks->model_half_extents && hooks->model_half_extents(f, hx, hy, hz);
     if ((!(w > 0.0f) || !(hgt > 0.0f)) && !(have_model && (w > 0.0f || std::fabs(hx) > 0.0f) && (hgt > 0.0f || std::fabs(hy) > 0.0f)))
         return false;
+    // Fine_Tune_Occupied_Passability: the ray model decides (header). No proxy and no land model: not stamped.
+    std::function<bool(V2)> fine_tune;
+    if (types.get_bool(f, "Fine_Tune_Occupied_Passability")) {
+        const StampRayModel rm = hooks && hooks->ray_model ? hooks->ray_model(f) : StampRayModel::Unknown;
+        if (rm == StampRayModel::None && !proxied) return false;
+        if (rm == StampRayModel::Model && hooks->mesh_ray_hit) {
+            StampPose pose;
+            pose.position = position;
+            pose.z = terrain_z;
+            pose.yaw_deg = yaw_deg;
+            pose.scale = scale;
+            fine_tune = [ray = hooks->mesh_ray_hit, f, pose](V2 xy) { return ray(f, pose, xy); };
+        }
+    }
     const uint32_t bits = static_cast<uint32_t>(types.get_mask(t, "OverridePassability"));
-    out = make_footprint(position, yaw_deg, w, hgt, types.get_float(t, "Obstacle_X_Offset"), types.get_float(t, "Obstacle_Y_Offset"),
+    out = make_footprint(position, yaw_deg, w, hgt, types.get_float(f, "Obstacle_X_Offset"), types.get_float(f, "Obstacle_Y_Offset"),
                          have_model ? hx : 0.0f, have_model ? hy : 0.0f, scale, bits);
     out.terrain_z = terrain_z;
     // Vertical height = model bbox z x scale; unknown model height: treat as tall (always stamps).
     out.obstacle_height = have_model ? std::fabs(hz) * scale : 1.0e6f;
+    out.fine_tune = std::move(fine_tune);
     return true;
 }
 
@@ -79,10 +103,6 @@ uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map,
         if (!types.has_behavior(t, objects::BehaviorSet::Union, kLandObstacle)) continue;
         ObstacleFootprint fp;
         if (!land_obstacle_footprint(types, t, {o.position[0], o.position[1]}, o.rotation_deg[2], o.position[2], hooks, fp)) continue;
-        if (hooks && hooks->mesh_ray_hit && types.get_bool(t, "Fine_Tune_Occupied_Passability")) {
-            const auto* mr = &hooks->mesh_ray_hit;
-            fp.fine_tune = [mr, i](V2 xy) { return (*mr)(i, xy); };
-        }
         if (grid.stamp(map_stamp_id(i), fp) > 0) ++n;
     }
     return n;

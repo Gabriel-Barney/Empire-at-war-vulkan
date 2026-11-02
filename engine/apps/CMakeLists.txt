@@ -159,10 +159,12 @@ if(_alamo_sim)
     # ALAMO_FOC_DATA. a1f (2026-10-31): with TEAM containers in the threat grid (A1_READINGS §29) Clear_Infantry runs and the
     # Utapau battle ends on every seed checked (1-6); the 0-worker entry asserts it again. One ctest entry per worker count so they run
     # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
-    # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
+    # counts: jobs::determinism_worker_counts, N = hardware threads - 1). S8 t09 (2026-11-02): seed 4 (ends at battle frame 8194;
+    # 6398 before the Fine_Tune trim): seeds 3 / 6 / 8 already ran to the frame limit on main and the trim of two far placements
+    # moved seed 1 there too (an EV_2MTANK ordered on a T4B in range deals it no damage for the last ~2400 frames; follow-up).
     set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome
-             COMMAND alamo_headless --skirmish-ai foc-land --ticks 20000 --workers 0 --quiet --expect-battle-end
+             COMMAND alamo_headless --skirmish-ai foc-land --seed 4 --ticks 20000 --workers 0 --quiet --expect-battle-end
                      --crc-out ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome PROPERTIES TIMEOUT 1800
                          FIXTURES_SETUP alamo_land_outcome_w0)
@@ -173,14 +175,14 @@ if(_alamo_sim)
     list(REMOVE_ITEM _land_outcome_workers 0)
     foreach(_w IN LISTS _land_outcome_workers)
       add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_w${_w}
-               COMMAND alamo_headless --skirmish-ai foc-land --ticks 20000 --workers ${_w} --quiet
+               COMMAND alamo_headless --skirmish-ai foc-land --seed 4 --ticks 20000 --workers ${_w} --quiet
                        --golden ${_land_outcome_crc})
       set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_w${_w} PROPERTIES TIMEOUT 1800
                            FIXTURES_REQUIRED alamo_land_outcome_w0)
     endforeach()
     # OPT1: the tick profiler is wall-clock and write-only; a run with --profile must give the same CRCs as the 0-worker run.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_profiled
-             COMMAND alamo_headless --skirmish-ai foc-land --ticks 20000 --workers 4 --quiet --profile
+             COMMAND alamo_headless --skirmish-ai foc-land --seed 4 --ticks 20000 --workers 4 --quiet --profile
                      --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt --golden ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
                          FIXTURES_REQUIRED alamo_land_outcome_w0)

@@ -10,6 +10,7 @@
 #include "alamo/galactic/special_data.hpp"  // P4 tactical: special_name_crc (Black Market gate)
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/map_spawn.hpp"
+#include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
@@ -46,6 +47,42 @@ float yaw_of(Vec3 f) { return dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF); }
 
 tactical::Vec3 tv(Vec3 v) { return tactical::Vec3{v.x, v.y, v.z}; }
 Vec3 sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
+
+// S8 t09 (MOVEMENT §1.3): the LAND_OBSTACLE stamper's model hooks, one source for map placements and run-time objects: the
+// model bounding box (BattleCatalog::model_half_extents) and the Fine_Tune_Occupied_Passability ray against the type's
+// Land_Model_Name collision data (BattleCatalog::avoid_model(type, false), the model source of the precise projectile test).
+// Ray model: a type whose Land_Model_Name collision data loads -> Model; anything else -> Unknown, untrimmed [port]: no model
+// files in this run (pure headless), a model that does not load, one without collision-enabled meshes and COLLISIONBOX (which
+// meshes the retail ray query vf +0x80 tests is [M]; the port uses the precise-test set), and a type without
+// Land_Model_Name. Retail does not stamp the last kind at all (no proxy) or stamps it untrimmed (proxy); the host never
+// reports StampRayModel::None because the synthetic test data has no model names (as refixf t07's model source); in FoC no
+// LAND_OBSTACLE type with Fine_Tune and no proxy lacks a Land_Model_Name (0 of 459, 2026-11-02), so parity is unaffected.
+// The ray is the segment (x, y, -1000) -> (x, y, +1000) through the model placed by space_avoid's transform (position,
+// facing Rz(yaw) (0, -1), scale). Const data.
+mv::MapStampHooks land_stamp_hooks(const BattleCatalog* cat) {
+    mv::MapStampHooks hooks;
+    hooks.model_half_extents = [cat](uint32_t ty, float& hx, float& hy, float& hz) { return cat->model_half_extents(ty, hx, hy, hz); };
+    hooks.ray_model = [cat](uint32_t ty) {
+        if (!cat->files()) return mv::StampRayModel::Unknown;
+        const mv::AvoidModel* m = cat->avoid_model(ty, false);
+        if (!m || (!m->has_collision_box && m->meshes.empty())) return mv::StampRayModel::Unknown;
+        return mv::StampRayModel::Model;
+    };
+    hooks.mesh_ray_hit = [cat](uint32_t ty, const mv::StampPose& pose, mv::V2 xy) {
+        const mv::AvoidModel* m = cat->avoid_model(ty, false);
+        if (!m) return true;
+        mv::AvoidObstacle o;
+        o.pos = {pose.position.x, pose.position.y, pose.z};
+        const mv::V2 d = mv::dir_from_deg(pose.yaw_deg);
+        o.facing = {d.y, -d.x};
+        o.scale = pose.scale;
+        o.model = m;
+        mv::avoid_place(o);
+        mv::AvoidSegmentHit hit;
+        return mv::avoid_precise_segment(o, {xy.x, xy.y, -1000.0f}, {xy.x, xy.y, 1000.0f}, 1u, 0u, hit);
+    };
+    return hooks;
+}
 
 std::string victory_name(uint8_t v) {
     switch (v) {
@@ -579,10 +616,9 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         });
     } else {
         mv::PassabilityGrid grid = mv::grid_from_map(map_);
-        // battle host: model bounds for the LAND_OBSTACLE footprints without Obstacle_Width / _Height (MOVEMENT 1.3).
-        mv::MapStampHooks stamp_hooks;
-        const BattleCatalog* cat = catalog_;
-        stamp_hooks.model_half_extents = [cat](uint32_t t, float& hx, float& hy, float& hz) { return cat->model_half_extents(t, hx, hy, hz); };
+        // battle host: model bounds for the LAND_OBSTACLE footprints without Obstacle_Width / _Height and the
+        // Fine_Tune_Occupied_Passability ray (MOVEMENT 1.3; S8 t09: the same hooks as land_obstacle_attach).
+        const mv::MapStampHooks stamp_hooks = land_stamp_hooks(catalog_);
         mv::stamp_map_obstacles(grid, map_, types, &stamp_hooks);
         movement_->set_grid(std::move(grid));
         movement_->air().set_box({mn[0], mn[1]}, {mx[0], mx[1]});  // REMAINING_GAPS §4.3-4.6: air units plan in the playable box
@@ -933,6 +969,10 @@ void TacticalBattle::space_obstacles_sync(const TacticalMode& mode) {
     if (!space_ || !movement_) return;
     mv::SpaceOccupancy& occ = movement_->space();
     const objects::ObjectStore& st = mode.primary();
+    // S8 t09: an entry re-keyed by bt_map_load to an object that is not a battle unit (an asteroid / prop with
+    // SPACE_OBSTACLE) leaves with that object, as land_obstacles_sync does for stamps (ascending id).
+    for (const mv::ObjectId id : occ.static_ids())
+        if (id > 0 && !st.alive(st.find(id))) occ.remove_static(id);
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !st.alive(u.h)) {
             occ.remove_static(u.id);
@@ -968,10 +1008,11 @@ bool TacticalBattle::space_obstacle_attach(const TacticalMode& mode, objects::Ob
 // sync: end of setup (also after the structures deploy, before the start forces: their spawn ring search sees the
 // structures), end of each tick (the next tick's pathing and targeting see the change). Gone first (ascending id), then new
 // (the store's LAND_OBSTACLE attach order); footprint as stamp_map_obstacles at the object's position, yaw (facing = Rz(yaw)
-// (0, -1), as map placements) and height; Fine_Tune_Occupied_Passability is not trimmed (no mesh ray test for objects).
-// [inferred] a death clone whose type carries LAND_OBSTACLE (Veers_AT_AT_Walker_Death_Clone, ...) is an obstacle like any
-// object with the behaviour (MOVEMENT §1.3: wreck stamping not traced). Placement stamps never stay under a placement id here: bt_map_load hands
-// each to its object or unstamps it (skipped company, no-spawn placeholder).
+// (0, -1), as map placements) and height, with the same hooks (land_stamp_hooks: Obstacle_Proxy_Type and the
+// Fine_Tune_Occupied_Passability ray apply to every stamp, S8 t09). A death clone is in the LAND_OBSTACLE table iff it kept
+// the behaviour through TacticalMode::spawn_death_clone's strip (Death_Clone_Is_Obstacle, MOVEMENT §1.3 [H]). Placement
+// stamps never stay under a placement id here: bt_map_load hands each to its object or unstamps it (skipped company,
+// no-spawn placeholder).
 void TacticalBattle::land_obstacles_sync(const TacticalMode& mode) {
     if (space_ || !movement_) return;
     const objects::ObjectStore& st = mode.primary();
@@ -990,15 +1031,13 @@ bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::Obj
     if (t >= types.size()) return false;
     if (land_obstacle_none_.size() != types.size()) land_obstacle_none_.assign(types.size(), 0);
     if (land_obstacle_none_[t]) return false;
-    mv::MapStampHooks hooks;
-    const BattleCatalog* cat = catalog_;
-    hooks.model_half_extents = [cat](uint32_t ty, float& hx, float& hy, float& hz) { return cat->model_half_extents(ty, hx, hy, hz); };
+    const mv::MapStampHooks hooks = land_stamp_hooks(catalog_);
     const Vec3 p = st.position(h), f = st.facing(h);
     // yaw of the facing Rz(yaw) (0, -1) = (sin yaw, -cos yaw): the map placements' convention (bt_map_load yaw_facing)
     const float yaw = (f.x == 0.0f && f.y == 0.0f) ? 0.0f : dmath::atan2(f.x, -f.y) * (180.0f / dmath::kPiF);
     mv::ObstacleFootprint fp;
     if (!mv::land_obstacle_footprint(types, t, {p.x, p.y}, yaw, p.z, &hooks, fp)) {
-        land_obstacle_none_[t] = 1;  // const type data: never retried
+        land_obstacle_none_[t] = 1;  // const type data (sizes, proxy, ray model): never retried
         return false;
     }
     movement_->grid().stamp(st.id(h), fp);
