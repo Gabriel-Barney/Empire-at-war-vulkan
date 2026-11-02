@@ -285,6 +285,18 @@ private:
     uint32_t next_reinforcement_ = 1;
 };
 
+// OI follow-up t03 (A1_READINGS §28.9): this bridge's shares of the obj +0x3a8 movement lock (0x39ad40) - a script
+// Lock_Current_Orders, or the locomotor's forced-move term while the unit's current move is the one a Divert started
+// (`goal` reports the unit's current move goal in XY, false when it has none). The abilities hold the other share.
+inline bool script_movement_locked(const ObjectBridge& b, objects::ObjectId id,
+                                   const std::function<bool(objects::ObjectId, Vec3&)>& goal) {
+    if (const ScriptObjectState* s = b.find_state(id); s && s->orders_locked) return true;
+    const RemainingObjectState* r = b.find_remaining_state(id);
+    if (!r || !r->diverted || !goal) return false;
+    Vec3 g{};
+    return goal(id, g) && g.x == r->divert_goal.x && g.y == r->divert_goal.y;
+}
+
 // Attaches (nullptr: detaches) the bridge to a VM. The bridge must outlive the attachment.
 void attach_object_bridge(LuaVm& vm, ObjectBridge* bridge);
 ObjectBridge* attached_object_bridge(LuaVm& vm);  // nullptr when none is attached

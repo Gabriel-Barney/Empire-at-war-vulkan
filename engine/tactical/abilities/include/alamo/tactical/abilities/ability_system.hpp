@@ -196,10 +196,21 @@ struct AbilityHost {
     // water anywhere (Destroy_When_Stunned_Over_Water never fires).
     std::function<bool(Vec3 p)> over_water;
     // OI t03 (ABILITIES_HARDPOINTS §4.13 [port]): frame count and fps of animation `anim_type` (a ModelAnimType id; < 0:
-    // the XML name `anim_name`, e.g. an Attack_Animation / Toss_Anim value) of `id`'s sim model, variant 0. Static model
-    // data only, never a playing clock. False when the object has no model or the model lacks the clip. Unset: no clips
-    // (every animation-driven timing uses its fixed fallback).
-    std::function<bool(ObjectId id, int32_t anim_type, std::string_view anim_name, uint32_t& frame_count, float& fps)> anim_clip;
+    // the XML name `anim_name`, e.g. an Attack_Animation / Toss_Anim value) of `id`'s sim model, variant `variant`.
+    // Static model data only, never a playing clock. False when the object has no model or the model lacks the clip.
+    // Unset: no clips (every animation-driven timing uses its fixed fallback).
+    std::function<bool(ObjectId id, int32_t anim_type, std::string_view anim_name, uint32_t variant, uint32_t& frame_count,
+                       float& fps)>
+        anim_clip;
+    // OI follow-up t01 (§4.14): the ModelAnimType id of an XML animation name (-1 unknown). Unset: names never resolve
+    // (the melee / grenade animations leave no record).
+    std::function<int32_t(std::string_view anim_name)> anim_type;
+    // OI follow-up t01 (§4.14): the type sets Attack_Animation_Is_Overlay (weapon shots play Attack in the overlay slot,
+    // which no gate reads). Unset: every weapon shot counts as an overlay (no record).
+    std::function<bool(ObjectId id)> attack_overlay;
+    // OI follow-up t03 (A1_READINGS §28.9): the shares of the obj +0x3a8 movement lock this system does not hold (script
+    // Lock_Current_Orders) or the locomotor's forced-move term (a Divert / unload-exit path). Unset: none.
+    std::function<bool(ObjectId id)> movement_locked;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -275,6 +286,9 @@ public:
     bool interdicting(ObjectId id) const;
     bool interdicted(int32_t player) const;  // some enemy interdict entry targets this player [L]
     int32_t immobilize_count(ObjectId id) const;
+    // OI follow-up t01 (§4.14 [port]): the owner's primary-slot animation type as the sim records it after the advance of
+    // `frame` (-1 = none); what the apply gates read (tests, probes).
+    int32_t anim_type_at(ObjectId id, uint32_t frame) const;
     bool special_applied(ObjectId id, uint32_t ability_name_crc) const;
     ObjectId special_target(ObjectId id, uint32_t ability_name_crc) const;
     // R5 jamming visual (presentation only): the applied Sensor_Jamming_Ability of `id` (null when none / dead) and the radius
@@ -503,6 +517,24 @@ private:
         // ---- REMAINING_GAPS §5 ----
         int32_t troopers_deployed = 0;  // §5.2 DEPLOY_TROOPERS behaviour data +0x40
         std::vector<ObjectId> troopers; // §5.2 trooper list +0x10 (bound ids)
+        // ---- OI follow-up t01 (§4.14 [port]): the clip the ability system last started in the owner's primary slot, on
+        // sim frames (no playing clock is read). anim_type -1 = none (no play yet, or none with clip data).
+        int32_t anim_type = -1;
+        uint32_t anim_start = 0;  // frame of the play (the clip does not move in that frame)
+        float anim_rate = 1.0f;   // clip frames per sim frame: fps / 30 x speed
+        float anim_end = 0.0f;    // max(count - 2, 0): where a one-shot finishes
+        uint8_t anim_loop = 0;
+        uint8_t anim_then = 0;    // after a one-shot finishes: kAnimStay / kAnimIdle / kAnimHoldLoop
+        uint8_t lock_flags = 0;   // OI follow-up t04: which 0x3a8e50 pairs hold a lock (kLock*)
+    };
+    static constexpr uint8_t kAnimStay = 0;      // parks at its end (Super_Laser)
+    static constexpr uint8_t kAnimIdle = 1;      // the owner returns to idle: the record ends
+    static constexpr uint8_t kAnimHoldLoop = 2;  // begin -> hold: animation type + 1 loops (FB / FTK / Force_Revel)
+    static constexpr uint8_t kLockGrenade = 1, kLockDeploy = 2, kLockSelfDestruct = 4, kLockConfuse = 8;
+    // The owner's primary slot as of the advance of `frame` (type -1 = none: every gate passes).
+    struct AnimView {
+        int32_t type = -1;
+        bool finished = false;
     };
     struct RemoteBomb {  // Remote_Bomb_Ability bombs waiting for DETONATE_REMOTE_BOMB (0x280ec0)
         int32_t player;
@@ -646,7 +678,20 @@ private:
         float count = 0.0f;
         float end = 0.0f;
     };
-    ClipTiming clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name) const;
+    ClipTiming clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name, uint32_t variant = 0) const;
+    // OI follow-up t01 (§4.14 [port]): start a clip in the owner's record (type < 0: resolve `anim_name`). Without clip
+    // data nothing changes (as the original play returns 0 for a missing clip). No synced draw: variant 0 unless given.
+    void play_anim(Obj& o, int32_t type, std::string_view anim_name, uint32_t variant, bool loop, float speed, uint8_t then,
+                   uint32_t frame);
+    AnimView anim_view(const Obj& o, uint32_t frame) const;
+    // Apply gates read the previous frame's advance (Object Service advances the model before the SAP update).
+    AnimView anim_before(const Obj& o, uint32_t frame) const { return anim_view(o, frame > 0 ? frame - 1 : 0); }
+    int32_t anim_type_of(std::string_view anim_name) const;
+    bool anim_busy(const Obj& o, uint32_t frame) const;  // 0x39a350
+    bool class_state(const Obj& o, SpecialClass cls) const;  // a special of that class is applied on the owner
+    bool class_has(const Obj& o, SpecialClass cls) const;    // the owner lists a special of that class
+    bool locked(const Obj& o) const;  // 0x39ad40: this system's share or the host's (script lock, forced move)
+    void lock_pair(Obj& o, uint8_t flag, bool lock, uint32_t frame);  // a 0x3a8e50 lock / unlock pair of one caller
     void lightning_targets(Obj& o, const SpecialAbilityDesc& s, ObjectId primary, std::vector<ObjectId>& out);
 
     AbilityHost host_;

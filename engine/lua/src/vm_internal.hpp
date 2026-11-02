@@ -212,6 +212,10 @@ inline constexpr int32_t kBlockStarbaseLevel = 3;    // WaitForStarbase(planet, 
 inline constexpr int32_t kBlockGroundbaseLevel = 4;  // WaitForGroundbase(planet, level)
 bool galactic_block_finished(Call& c);  // c.self = the BlockingStatus
 
+// OI follow-up t03/t04 (A1_READINGS §28.9): the object's movement lock (0x39ad40) as the bindings see it - a script
+// Lock_Current_Orders, an ability's Disable_Movement share, or a running Divert move (bind_objects.cpp).
+bool movement_locked(Call& c, objects::ObjectId id);
+
 // --- P4 lua: FoC galactic special systems (bind_players.cpp; stubs without the players family) ---------------------
 // GameObjectWrapper.Activate_Ability in a galactic script (Activate_Ability_Galactic 0x570670, P4_SIM_SYSTEMS 6.1): true
 // when the VM's store is the galactic sim's (the trigger path ran; the caller returns a finished BlockingStatus), false
