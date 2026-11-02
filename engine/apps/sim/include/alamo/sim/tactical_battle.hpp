@@ -257,7 +257,8 @@ uint8_t fighter_chase_test(const FighterChaseInputs& in);
 // S7 t22: a squadron's (or a fighter's without one) formation as the host keeps it (FIGHTER_FLYING §4.9) [port: the
 // retail coordinator / formation objects are not modelled]. Created by every move / attack order of the squadron (all
 // order paths: human, Lua / AI, hangar launch (S7 t24: a carrier escort is a guard of the carrier: flags 0x02, goal object
-// = the carrier, host-followed; a station launch a move to the flyout point), stand-in orders); replaced by the next
+// = the carrier, S7 t37: followed by the movement layer's object goal block, mv::FighterGuard, whose recorded goal and
+// object loss the record mirrors; a station launch a move to the flyout point), stand-in orders); replaced by the next
 // order; removed by Stop and when the squadron is gone. [M, §11 open item "lifetime of a squadron's formation after its
 // move ends"] It survives the end of the move and enter_idle (the retail formation goal survives enter_idle, §4.7, and Idle_Chase_Range is measured
 // from an arrived formation's slot goal, TACTICAL_COMBAT §2.8 rule 5), so an idle squadron that was ever ordered still
@@ -269,10 +270,6 @@ struct FighterFormationRecord {
     Vec3 goal;                                    // slot goal: the order's destination (an object order: its position then)
     objects::ObjectId goal_object = kNoObjectId;  // object block (Attack / Attack_Move / Guard of an object): the goal follows it
     std::vector<objects::ObjectId> pushed;        // auto attack blocks (0x41cf70), oldest first; one entry per object
-    // S7 t24: the hangar escort's guard of its carrier is followed by the host (A1_READINGS §33.4: the formation's update
-    // re-paths toward the guarded object at most once per 30 frames); next follow frame, 0 = not host-followed (every
-    // other order: Lua / AI guards are followed by BattleAi's object follow, the others do not follow).
-    uint32_t follow_next = 0;
 };
 
 class TacticalBattle {
@@ -1059,7 +1056,8 @@ private:
     uint8_t fighter_scan_range(const objects::ObjectStore& store, objects::ObjectId member, objects::ObjectId candidate, float range,
                                float& rr) const;
     // enter_idle (§4.7 step 4): fighters that entered Idle during the movement tick drop their (team) combat target.
-    void fighter_enter_idle();  // S7 t25: the movement tick's EnterIdle events drop the squadrons' team targets
+    void fighter_enter_idle();
+    void fighter_guard_covered();  // S7 t37  // S7 t25: the movement tick's EnterIdle events drop the squadrons' team targets
     std::vector<FighterFormationRecord> fformations_;
     std::vector<std::array<float, 4>> fchase_cache_;  // per type: Guard / Idle_Chase_Range, Attack_Move_Response_Range,
                                                       // Autonomous_Move_Extension_Vs_Attacker (derived)
@@ -1090,7 +1088,8 @@ private:
     void late_swap_back_signals();  // S7 t27: signal 0x29 for a jetpack swap back after the combat_pre loop
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
     void exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng, float facing_deg,
-                   bool attack_move, uint8_t flags = 0, bool switch_locomotor = false);
+                   bool attack_move, uint8_t flags = 0, bool switch_locomotor = false,
+                   objects::ObjectId goal_object = kNoObjectId);  // S7 t37: an object goal (mv::MoveOrder::goal_object)
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;
@@ -1427,7 +1426,6 @@ private:
     void hg_unit_removed(objects::ObjectId id);  // death / silent kill / retreat / container removal
     void hg_engine_service();                    // tick(): after the movement commit
     void hg_tick(TacticalMode& mode, SimRng& rng);  // tick(): after the combat tick and its events
-    void hg_guard_follow(TacticalMode& mode, SimRng& rng);  // S7 t24: hangar escorts follow their carrier (hg_tick)
     void hg_station_upgrade(TacticalMode& mode, const tactical::abilities::SpawnRequest& q);
     void hg_publish_engine_requests();           // tick() end
     void hg_hash(StateHasher& h) const;

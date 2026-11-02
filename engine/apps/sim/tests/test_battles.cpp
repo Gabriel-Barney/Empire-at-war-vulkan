@@ -5096,7 +5096,9 @@ void test_hangar_escort_guard() {
                 if (!s.members.empty() && r && r->goal_object == carrier) {
                     squad = s.id;
                     members = s.members;
-                    guard_record = r->flags == mv::kMoveFlagGuardMove && r->follow_next > b->frame() && r->pushed.empty();
+                    const mv::FighterGuard* fg = b->movement().fighter_guard(s.id);  // S7 t37: the movement layer's block
+                    guard_record = r->flags == mv::kMoveFlagGuardMove && r->pushed.empty() && fg && fg->object == carrier &&
+                                   fg->flags == mv::kMoveFlagGuardMove && fg->next > b->frame() && fg->follow;
                 }
             }
             if (squad == objects::kNoObjectId) {
@@ -5134,7 +5136,7 @@ void test_hangar_escort_guard() {
             const Vec3 lp = st.position(st.find(members.front()));
             CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
             const FighterFormationRecord* nr = b->fighter_formation(squad);
-            ended = nr && nr->flags == 0 && nr->goal_object == objects::kNoObjectId && nr->follow_next == 0;
+            ended = nr && nr->flags == 0 && nr->goal_object == objects::kNoObjectId && !b->movement().fighter_guard(squad);
             break;
         }
         if (b->frame() > move_frame + 3000) break;

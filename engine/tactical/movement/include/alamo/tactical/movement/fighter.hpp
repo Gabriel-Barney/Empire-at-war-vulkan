@@ -282,12 +282,36 @@ struct FighterSquad {
     // object's speed) [M: exact cap]; the members fly their Moving path at most this fast [M: only Moving 0x1B reads it
     // in the port]. kFighterNoSpeedCap = none; every new move order of a member clears it.
     float speed_cap = kFighterNoSpeedCap;
+    // S7 t37 (A1_READINGS §33.4.1 step 3): the squadron type T has Space_Layer 0 or Disregard_Space_Layer_For_Guard_
+    // Attack_Move, so its guard of a moving object follows the object (path copy, speed cap).
+    bool guard_follow = true;
 };
 struct FighterSquadDesc {
     ObjectId id = -1;
     std::vector<ObjectId> members;  // team index order; fighter units of this system
     std::vector<F3> slots;          // slot offsets, parallel to members (missing = zero)
     float tolerance = 25.0f;
+    bool guard_follow = true;       // FighterSquad::guard_follow (from the squadron type)
+};
+
+// S7 t37 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E): the object goal block (kind 3) of a fighter formation - a
+// squadron container or a fighter without one ("key") - set by a move order with MoveOrder::goal_object and replaced by
+// the formation's next move order or Stop. The formation update 0x4192b0 (MovementSystem tick, at most once per FPS = 30
+// frames, +0x1d8 = next) follows the object: a guard block copies a moving object's path within R and caps the
+// squadron's speed (step 3), else re-paths to the object when the recorded goal (+0x210, set by the order and by each
+// re-path) is more than R from it (step 4). The object's removal (signals 0x10 / 0x1a / 0x2e, listener 0x4f77e0) turns
+// the block into a position block (object -1) at the last waypoint of the formation's path; the flags stay, so a guard
+// keeps guarding that point. [port] One block per formation (the port has no queued formation blocks, so the queued-block
+// pop of step 3 cannot occur); the host's auto attack blocks are reported as `covered` (they are the last block then).
+inline constexpr uint32_t kFighterGuardInterval = 30;
+struct FighterGuard {
+    ObjectId key = -1;     // squadron container id, or the fighter's own id
+    ObjectId object = -1;  // the block's object; -1 = position block (the object is gone)
+    uint8_t flags = 0;     // the order's block flags (kMoveFlag*: 0x02 guard)
+    V2 goal;               // recorded goal point (+0x210)
+    uint32_t next = 0;     // next update frame (+0x1d8)
+    bool follow = true;    // step 3 allowed (FighterSquad::guard_follow; a solo fighter: its Space_Layer is 0)
+    bool covered = false;  // a newer (host auto attack) block is the formation's last block
 };
 
 // Orders the fighter locomotor issues (the host forwards them to combat as attack orders, 0x38d730):
