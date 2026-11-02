@@ -1534,6 +1534,32 @@ static void test_fighter_guard() {
         const UnitView v = sys.view(1), cv = sys.view(2);
         copied = cv.has_goal && !cv.arrived && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y;
     }
+    // Save round trip with a live guard block (movement save v8): same block, identical continuation.
+    {
+        ByteWriter w;
+        sys.write(w);
+        MovementSystem copy(cfg);
+        copy.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+        const FighterGuard* a = sys.fighter_guard(1);
+        const FighterGuard* b = copy.fighter_guard(1);
+        CHECK(a && b && a->key == b->key && a->object == b->object && a->flags == b->flags && a->goal.x == b->goal.x &&
+              a->goal.y == b->goal.y && a->next == b->next && a->follow == b->follow && a->covered == b->covered);
+        SimRng ra = rng, rb = rng;
+        bool same = true;
+        for (uint32_t k = fr; k < fr + 90; ++k) {
+            sys.tick(k, ra);
+            copy.tick(k, rb);
+            StateHasher ha, hb;
+            sys.hash_units(ha);
+            copy.hash_units(hb);
+            same = same && ha.digest() == hb.digest();
+        }
+        CHECK(same && copy.fighter_guard(1) && copy.fighter_guard(1)->next == sys.fighter_guard(1)->next);
+        fr += 90;
+        rng = ra;
+    }
     // Teleport the fighter away (out of R): the next updates re-path it toward the object.
     CHECK(sys.teleport(1, {-2000.0f, 3000.0f}, 0.0f, 0.0f, fr));
     const V2 before = sys.fighter_guard(1)->goal;

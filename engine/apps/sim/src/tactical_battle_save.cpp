@@ -235,6 +235,7 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             l1_weather_.set_data(l1_weather_data_.get());  // the saved scenario resolves in it (weather starts on the first service)
             if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done())) return false;
             attach_rocket_terrain();  // refixf t01: the host terrain is not part of the save
+            share_groups_sync();  // derived, not saved (State and Movement are read before Combat)
             return true;
         case SavePart::Abilities:
             if (!all_saveable(abilities_.get(), &l1_sw_, &l1_fields_)) return false;

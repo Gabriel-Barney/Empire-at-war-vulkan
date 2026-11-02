@@ -999,6 +999,7 @@ private:
     static void state_io(Ar& a, Self& b);  // tactical_battle_save.cpp
     void resume_tick_context();            // tactical_battle.cpp (BattleHooks is defined there)
     void attach_rocket_terrain();          // refixf t01: land heightmap for spline rockets (setup and after a load)
+    void share_groups_sync();              // S8 t17: squadron share groups (tick start and after a load)
     friend class BattleHooks;
     friend class BattleAi;  // A1 tactical AI hookup (battle_ai.hpp): perception snapshot + AI order execution
     struct Participant {

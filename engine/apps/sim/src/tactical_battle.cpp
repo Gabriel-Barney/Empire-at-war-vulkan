@@ -797,6 +797,18 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
 }
 
+// S8 t17 (FIGHTER_FLYING §4.10 B): each combat unit's squadron for the shared team target. Derived state (not saved):
+// refreshed at the tick start and after a load, so a command applied before the first tick after a load sees the same
+// groups as an uninterrupted run.
+void TacticalBattle::share_groups_sync() {
+    if (!space_ || !movement_ || !combat_) return;
+    for (const Unit& u : units_)
+        if (combat_->has_unit(u.id))
+            combat_->set_share_group(u.id, u.container < containers_.size() && movement_->fighter_squad(containers_[u.container].id)
+                                               ? containers_[u.container].id
+                                               : tc::kNoObject);
+}
+
 void TacticalBattle::attach_rocket_terrain() {
     // refixf t01 (S9_DEATH_CLONE_SHIELDS.md §2.4.5 mode 1, §2.4.6): land spline rockets follow the heightmap and stay
     // inside its extent box (0x1320d0: centre (W c / 2, H c / 2), half sizes W c / 2, H c / 2). [M] W c, H c are taken as
@@ -3642,12 +3654,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     landings_unloaded_.clear();  // a1i t04: signal 0x19 records of the last tick
     story_garrisoned_.clear();  // S4: this tick's garrison entries / structure captures
     story_captured_.clear();
-    if (space_ && movement_)  // S8 t17 (FIGHTER_FLYING §4.10 B): squadron of the shared team target, before this tick's orders
-        for (const Unit& u : units_)
-            if (combat_->has_unit(u.id))
-                combat_->set_share_group(u.id, u.container < containers_.size() && movement_->fighter_squad(containers_[u.container].id)
-                                                   ? containers_[u.container].id
-                                                   : tc::kNoObject);
+    share_groups_sync();  // S8 t17 (FIGHTER_FLYING §4.10 B): squadron of the shared team target, before this tick's orders
     objects::ObjectStore& store = mode.primary();
     l1_weather_tick(rng);  // L1 systems: land weather service (before the common tick)
     fog_decay();  // fog of war: common-tick step 4, before the object services (owner: fog agent)
@@ -3951,10 +3958,11 @@ cmd::RejectReason TacticalBattle::handle_ability(TacticalMode& mode, uint8_t pla
             const objects::ObjectId dummy = spawn_dummy_target(mode, static_cast<int32_t>(player), at, rng);  // wave 2b: shared
             // S8 t10 (LOB_SOLVER §3.5 "MARKER removal"): a Remote_Bomb marker has no lifetime - only the toss kills it
             // (MarkerTossed); it stays when the toss never happens. [port] the other abilities' markers keep the expiry.
-            if (ev.u("ability") == static_cast<uint32_t>(ta::kPlaceRemoteBomb) && dummy != objects::kNoObjectId && !dummies_.empty() && dummies_.back().id == dummy)
-                dummies_.back().frame = 0xFFFFFFFFu;
+            // A refused command (no user took the ability) leaves the marker on the normal expiry.
             ++stats_.ability_commands;
             const uint32_t n = abilities_->targeted_ability(users, static_cast<uint8_t>(ev.u("ability")), dummy, -1, frame_);
+            if (n > 0 && ev.u("ability") == static_cast<uint32_t>(ta::kPlaceRemoteBomb) && dummy != objects::kNoObjectId && !dummies_.empty() && dummies_.back().id == dummy)
+                dummies_.back().frame = 0xFFFFFFFFu;
             return n > 0 ? R::None : R::AbilityNotReady;
         }
         case T::SetAbilityAutofire: {  // 58

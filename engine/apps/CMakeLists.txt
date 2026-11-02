@@ -216,7 +216,7 @@ if(_alamo_sim)
     # host-side object follow (A1_READINGS §33.4) and non-unit REVEAL sources (FOG_OF_WAR §3.2) together, seed 3 reaches the
     # cap; seeds 1, 2, 4-7 end. After merging main's S7/S8 work (fighter formation targets, run-time obstacles) on top of
     # a1h, seeds 2-5, 7, 8 of 1-8 end and 1, 6 reach the cap; seed 3 ends again (station lost, defenders all retreat, frame
-    # 11967), so the test is back on seed 3.
+    # 11967), so the test is back on seed 3. a1i t02 (2026-11-02): seeds 1 and 6 are slow sieges, not stalls (the station
     # launches squadrons without limit; with a 40000-frame cap they end at 16344 / 17340, A1_READINGS §34.5).
     # S8 t10-t12 (2026-11-02): the test runs seed 2 (all destroyed).
     add_test(NAME alamo_headless_skirmish_ai_foc_station
