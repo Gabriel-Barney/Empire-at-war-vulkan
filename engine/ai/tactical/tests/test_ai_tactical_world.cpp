@@ -1636,7 +1636,7 @@ void test_save_load(int variant, int32_t save_at, int32_t frames) {
     CHECK(corrupt(lib_at, {static_cast<uint8_t>(image[lib_at] + 1)}));  // plan library size
     CHECK(corrupt(mode_at, {1}));                            // land instead of space
     CHECK(corrupt(next_plan_at, {0, 0, 0, 0}));              // next plan id 0 (plan ids start at 1)
-    CHECK(corrupt(perception_world_at, {2}));                // PerceptionWorld version
+    CHECK(corrupt(perception_world_at, {9}));                // PerceptionWorld version (2 since a1g t03)
     CHECK(corrupt(perception_world_at + 4, {7}));            // PerceptionWorld mode
     CHECK(corrupt(n - 1, {1}));                              // the last count (missing evaluators) past the data
     std::printf("  rejection: %zu truncated / corrupted AI chunks refused, reader unchanged\n", tried);

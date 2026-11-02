@@ -295,7 +295,7 @@ struct Eval {
     const EvalContext& ctx;
     const TokenTable* tokens;
     const std::vector<PerceptionTarget>& targets;
-    const std::vector<std::vector<uint32_t>>& zone_cells;
+    const std::vector<std::vector<uint32_t>>& zone_cells;  // evaluator +0xb0 order (A1_READINGS §30.1)
 
     TacticalMode mode() const { return p.mode(); }
     bool land() const { return mode() == TacticalMode::Land; }
@@ -462,36 +462,43 @@ struct Eval {
             }
         }
         if (land_transports && P >= 0) {
-            // A1_READINGS §19 [H gates, M meaning]: TRANSPORT_LANDING objects (reinforcements still in the air) whose
-            // friendly test equals the flag asked for, that pass the game-state gate, with the representative type in
-            // the category mask; AI_Combat_Power with no attenuator / health factor. Game-state gate = any of: the mode
-            // has a conflict parent (w.campaign); obj +0x54 == none [port: read as "not inside a container", rep_type
-            // unset]; the game-mode-manager type test [port: not modelled].
+            // A1_READINGS §19 / §30.3 [H; M 3 = local skirmish]: TRANSPORT_LANDING objects (reinforcements still in the
+            // air, GOM order) whose friendly test equals the flag asked for. Source = the object itself in skirmish / MP
+            // (game type 1..4) or when it has no parent-mode id (+0x54); otherwise the parent-mode object with that id,
+            // and the object is skipped when that one is not found. T = the source's representative type (0x3973b0); it
+            // must match the category mask; the sum adds T's AI_Combat_Power (the type's power: no attenuator, health or
+            // landing-object factor).
             for (const PerceptionObject& o : w.objects) {
                 if (!o.transport_landing || !o.alive || !w.is_player(o.owner)) continue;
                 if ((w.rel(P, o.owner) == 0) != friendly) continue;
-                if (!(w.campaign || o.rep_type < 0)) continue;
-                const PerceptionType* t = w.rep_type_of(o);
+                const PerceptionType* t = nullptr;
+                if (w.skirmish_or_mp || o.parent_object < 0) {
+                    t = w.rep_type_of(o);
+                } else {
+                    const int32_t pt = w.parent_rep_type ? w.parent_rep_type(o.parent_object) : -1;
+                    if (pt < 0) continue;
+                    if (static_cast<size_t>(pt) < w.types.size()) t = &w.types[static_cast<size_t>(pt)];
+                }
                 if (!t || (t->category & cat) == 0) continue;
-                sum += o.combat_power;
+                sum += t->combat_power;
             }
         }
         return sum;
     }
 
-    // IsValidBombingTarget test 0x494540 (A1_READINGS §21) [H call, M meaning]: Self exists; the point is not fogged for
-    // Self; not inside an active BASE_SHIELD (either side's); no object of the player (read literally: Self) whose type
-    // has Bombing_Run_Prevention_Radius > 0 covers it (2-D distance <= radius [M]).
+    // IsValidBombingTarget test 0x494540 (A1_READINGS §21 / §30.4) [H]: Self exists; the point is not fogged for Self; it
+    // is not inside ANY player's active BASE_SHIELD (the host's in_active_base_shield: 3-D, any owner); no object of Self
+    // whose type has Bombing_Run_Prevention_Radius > 0 covers it (3-D: dx^2 + dy^2 + dz^2 <= radius^2).
     bool valid_bombing_target(const Vec3f& c) const {
         if (!w.is_player(ctx.self)) return false;
         if (w.fow_active && w.point_fogged && w.point_fogged(ctx.self, c.x, c.y)) return false;
-        if (w.inside_shield && (w.inside_shield(c, ctx.self, true) || w.inside_shield(c, ctx.self, false))) return false;
+        if (w.in_active_base_shield && w.in_active_base_shield(c)) return false;
         for (const PerceptionObject& o : w.objects) {
             if (!o.alive || o.owner != ctx.self) continue;
             const PerceptionType* t = w.type_of(o);
             if (!t || !(t->bombing_run_prevention_radius > 0.0f)) continue;
-            const float dx = o.position.x - c.x, dy = o.position.y - c.y;
-            if (dx * dx + dy * dy <= t->bombing_run_prevention_radius * t->bombing_run_prevention_radius) return false;
+            const float dx = o.position.x - c.x, dy = o.position.y - c.y, dz = o.position.z - c.z;
+            if (dx * dx + dy * dy + dz * dz <= t->bombing_run_prevention_radius * t->bombing_run_prevention_radius) return false;
         }
         return true;
     }
@@ -1079,7 +1086,7 @@ bool zone_names_equal(std::string_view a, std::string_view b) {
 
 // ---------------------------------------------------------------------------------- resolver
 bool TacticalTokenResolver::resolve(const EvalContext& ctx, const TokenRef& token, double& out) const {
-    const Eval e{p_, w_, ctx, token.tokens, p_.targets_, p_.zone_cells_};
+    const Eval e{p_, w_, ctx, token.tokens, p_.targets_, p_.zone_eval_cells_};
     return e.resolve(token.root, token.path, token.params, out);
 }
 
@@ -1117,6 +1124,88 @@ bool TacticalTokenResolver::implements(Root root, std::span<const TokenId> path,
     return false;
 }
 
+// ---------------------------------------------------------------------------------- stdext hash-set order (§30.1)
+uint32_t StdextHashOrder::hash(uint32_t key) {
+    const auto x = static_cast<int32_t>((key ^ 0xdeadbeefu) & 0x7fffffffu);
+    const int32_t q = x / 127773, r = x % 127773;
+    int32_t v = 16807 * r - 2836 * q;  // no overflow: 16807 * 127772 < 2^31
+    if (v < 0) v += 0x7fffffff;
+    return static_cast<uint32_t>(v);
+}
+
+void StdextHashOrder::place(uint32_t key) {
+    const auto n = static_cast<int32_t>(key_.size());
+    key_.push_back(key);
+    next_.push_back(-1);
+    prev_.push_back(-1);
+    auto& [first, last] = run_[hash(key) & (buckets_ - 1u)];
+    const auto link_after = [&](int32_t at) {  // at = -1: list front
+        const int32_t nx = at < 0 ? head_ : next_[static_cast<size_t>(at)];
+        prev_[static_cast<size_t>(n)] = at;
+        next_[static_cast<size_t>(n)] = nx;
+        if (at < 0) head_ = n;
+        else next_[static_cast<size_t>(at)] = n;
+        if (nx < 0) tail_ = n;
+        else prev_[static_cast<size_t>(nx)] = n;
+    };
+    if (first < 0) {  // empty bucket: list end
+        link_after(tail_);
+        first = last = n;
+        return;
+    }
+    int32_t after = -1;  // the last run node with a key < `key`
+    for (int32_t i = first;; i = next_[static_cast<size_t>(i)]) {
+        if (key_[static_cast<size_t>(i)] < key) after = i;
+        if (i == last) break;
+    }
+    if (after < 0) {
+        link_after(prev_[static_cast<size_t>(first)]);
+        first = n;
+    } else {
+        link_after(after);
+        if (after == last) last = n;
+    }
+}
+
+void StdextHashOrder::rebuild(uint32_t buckets, const std::vector<uint32_t>& keys) {
+    buckets_ = buckets;
+    key_.clear();
+    next_.clear();
+    prev_.clear();
+    head_ = tail_ = -1;
+    run_.assign(buckets_, {-1, -1});
+    for (const uint32_t k : keys) place(k);
+}
+
+bool StdextHashOrder::insert(uint32_t key) {
+    if (run_.size() != buckets_) run_.assign(buckets_, {-1, -1});
+    const auto [first, last] = run_[hash(key) & (buckets_ - 1u)];
+    if (first >= 0)
+        for (int32_t i = first;; i = next_[static_cast<size_t>(i)]) {
+            if (key_[static_cast<size_t>(i)] == key) return false;
+            if (i == last) break;
+        }
+    // (float)(size + 1) / (float)B > 1.0 (the sizes here stay far below 2^24, so the integer test is the same)
+    if (key_.size() + 1 > buckets_)
+        rebuild(buckets_ < 512u ? buckets_ * 8u : std::bit_ceil(static_cast<uint32_t>(key_.size() + 1)), order());
+    place(key);
+    return true;
+}
+
+void StdextHashOrder::assign_from(const StdextHashOrder& src) {
+    const auto n = static_cast<uint32_t>(std::max<size_t>(8, src.size()));
+    uint32_t b = buckets_;
+    if (b < n) b = (b < 512u && b * 8u >= n) ? b * 8u : std::bit_ceil(n);
+    rebuild(b, src.order());
+}
+
+std::vector<uint32_t> StdextHashOrder::order() const {
+    std::vector<uint32_t> out;
+    out.reserve(key_.size());
+    for (int32_t i = head_; i >= 0; i = next_[static_cast<size_t>(i)]) out.push_back(key_[static_cast<size_t>(i)]);
+    return out;
+}
+
 // ---------------------------------------------------------------------------------- perception
 TacticalPerception::TacticalPerception() { cfg_.category_mask = default_category_mask; }
 
@@ -1129,18 +1218,28 @@ void TacticalPerception::init(TacticalMode mode, const TacticalAiConstants& c, c
     grid_.init(mode, map, players, threat_grid_config(mode, c));
     zones_.assign(zones.begin(), zones.end());
     zone_cells_.assign(zones_.size(), {});
-    // A1_READINGS §12 [H]: each passability cell -> world (x * 20, y * 20) -> threat cell (truncate, clamp), de-duplicated.
-    // [port] order: first insertion (the zone's cells in chunk order); the original keeps the stdext hash_set order.
-    for (size_t i = 0; i < zones_.size(); ++i) {
-        std::vector<uint32_t>& out = zone_cells_[i];
-        for (const uint32_t packed : zones_[i].cells) {
-            const float x = static_cast<float>(packed & 0xFFFFu) * 20.0f, y = static_cast<float>(packed >> 16) * 20.0f;
-            const int32_t cell = grid_.cell_clamped(x, y);
-            if (cell < 0) continue;
-            const auto cu = static_cast<uint32_t>(cell);
-            if (std::find(out.begin(), out.end(), cu) == out.end()) out.push_back(cu);
+    zone_eval_cells_.assign(zones_.size(), {});
+    // A1_READINGS §12 / §30.1 [H]: zone +0x50 = the zone's .ted cells (x | y << 16) inserted in file order into a stdext
+    // hash set; the location evaluator walks it in its list order, maps each cell to world (x * 20, y * 20) -> threat cell
+    // (truncate, clamp) and inserts col | row << 16 into its own set (+0xb0); zone +0x90 := +0xb0 by copy-assign.
+    if (grid_.valid())
+        for (size_t i = 0; i < zones_.size(); ++i) {
+            StdextHashOrder ted_set, eval_set, zone_set;
+            for (const uint32_t packed : zones_[i].cells) ted_set.insert(packed);
+            const auto nx = static_cast<uint32_t>(grid_.nx());
+            for (const uint32_t packed : ted_set.order()) {
+                const float x = static_cast<float>(packed & 0xFFFFu) * 20.0f, y = static_cast<float>(packed >> 16) * 20.0f;
+                const auto cell = static_cast<uint32_t>(grid_.cell_clamped(x, y));
+                eval_set.insert((cell % nx) | ((cell / nx) << 16));
+            }
+            zone_set.assign_from(eval_set);
+            const auto to_cells = [nx](const std::vector<uint32_t>& keys, std::vector<uint32_t>& out) {
+                out.reserve(keys.size());
+                for (const uint32_t k : keys) out.push_back((k >> 16) * nx + (k & 0xFFFFu));
+            };
+            to_cells(eval_set.order(), zone_eval_cells_[i]);
+            to_cells(zone_set.order(), zone_cells_[i]);
         }
-    }
     // TACTICAL_GAPS 6.8: the name id a zone's evaluator is registered under (a repeated name shares the first zone's).
     zone_name_first_.assign(zones_.size(), -1);
     for (size_t i = 0; i < zones_.size(); ++i) {
@@ -1162,6 +1261,11 @@ void TacticalPerception::init(TacticalMode mode, const TacticalAiConstants& c, c
 std::span<const uint32_t> TacticalPerception::zone_threat_cells(int32_t zone) const {
     if (zone < 0 || static_cast<size_t>(zone) >= zone_cells_.size()) return {};
     return zone_cells_[static_cast<size_t>(zone)];
+}
+
+std::span<const uint32_t> TacticalPerception::zone_eval_cells(int32_t zone) const {
+    if (zone < 0 || static_cast<size_t>(zone) >= zone_eval_cells_.size()) return {};
+    return zone_eval_cells_[static_cast<size_t>(zone)];
 }
 
 int32_t TacticalPerception::handle_of_object(int32_t object_id) const {

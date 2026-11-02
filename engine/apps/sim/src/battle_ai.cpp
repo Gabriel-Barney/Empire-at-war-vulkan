@@ -480,6 +480,27 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             return (map->passability_at(cx, cy) & (terrain::kPassSteep | terrain::kPassWater)) != 0u;
         };
     }
+    // A1_READINGS §30.3: game type in {1..4} = skirmish / MP. [port] no MP; the port's skirmish battles are game type 3.
+    // Set every fill (a load restores it too); the callbacks below are installed whenever missing, so a world read
+    // from a save (which keeps only the callbacks its owner copies) gets them back at the next fill.
+    w.skirmish_or_mp = b_->cfg_.skirmish;
+    if (!w.parent_rep_type) {
+        // The parent-mode (galactic) object by id (0x28aa50), not found -> -1; its type [M: 0x3973b0 on the galactic
+        // object; the port's galactic units / companies are their own representative type, no TRANSPORT carried type].
+        const galactic::GalacticSim* gal = b_->galaxy_;
+        w.parent_rep_type = [gal](int32_t id) -> int32_t {
+            if (!gal || id < 0) return -1;
+            const objects::ObjectStore& gs = gal->store();
+            const objects::ObjectHandle gh = gs.find(id);
+            return gs.exists(gh) ? static_cast<int32_t>(gs.type(gh)) : -1;
+        };
+    }
+    // A1_READINGS §30.4: IsValidBombingTarget's shield step = inside any player's active BASE_SHIELD (3-D), the L1
+    // strike validity test. `inside_shield` (IsInside*Shield) stays unset: always 0 in shipped data.
+    if (!b_->space_ && !w.in_active_base_shield) {
+        const TacticalBattle* sb = b_;
+        w.in_active_base_shield = [sb](const at::Vec3f& p) { return sb->l1_base_shield_covers({p.x, p.y, p.z}); };
+    }
 #ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent): the real fog with force = 1 (the AI target-selection form); the AI gate
     // (non-human players unfogged while AIUsesFogOfWar is False) is applied by the perception's own force-0
@@ -589,6 +610,8 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         static const objects::BehaviorTypeId kDummyGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
         o.transport_landing = st.has_behavior(h, objects::beh::TransportLanding);
+        // obj +0x54 (A1_READINGS §30.3): the galactic counterpart's id, -1 none
+        if (const objects::ObjectId pm = st.parent_mode_id(h); pm != objects::kNoObjectId) o.parent_object = pm;
         o.visible_to = ~0ull;
         // land: the first zone (list order) whose cell set holds the position's cell (A1_READINGS §4, ZoneLocator)
         if (!zones_.empty()) o.zone = zone_locator_.zone_at(p.x, p.y);

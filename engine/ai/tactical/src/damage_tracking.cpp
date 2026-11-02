@@ -113,7 +113,7 @@ int32_t find_deadly_enemy(const DamageTrackingStore& store, std::span<const int3
 void record_combat_damage(DamageTrackingStore& store, const ::alamo::tactical::combat::DamageRequest& req,
                           const ::alamo::tactical::combat::DamageResult& res) {
     if (!res.applied || req.source == ::alamo::tactical::combat::kNoObject) return;
-    const float amount = res.absorbed + res.to_hull;  // A1_READINGS §7: actual shield + hull loss
+    const float amount = res.absorbed + res.hull_lost;  // A1_READINGS §7 / §30.2: actual shield + clamped hull loss
     if (amount > 0.0f) store.record(req.victim, req.source, amount);
 }
 #endif

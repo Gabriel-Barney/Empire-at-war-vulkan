@@ -1619,6 +1619,29 @@ void test_take_damage() {
         r.damage_type = kNoTypeId;
         r.source = 1;
         CHECK_F(d.w.sys->take_damage(r, 5).to_hull, 50.0f);
+        {  // A1_READINGS §30.2: hull_lost = hullBefore - max(0, hullAfter); a 50-hull victim hit for 200 loses 50
+            DamageWorld k;
+            k.w.make(k.w.sys->config(), {ai, PlayerInfo{}});
+            k.w.add(1, k.attacker, 0, Vec3{});
+            k.w.add(2, k.plain, 1, Vec3{});
+            k.w.sys->set_health(2, 50.0f);
+            DamageRequest kr = r;
+            kr.amount = 400.0f;  // x 0.5 AI multiplier = 200
+            const DamageResult kres = k.w.sys->take_damage(kr, 5);
+            CHECK_F(kres.to_hull, 200.0f);
+            CHECK_F(kres.hull_lost, 50.0f);
+            CHECK(kres.killed);
+            CHECK(!k.w.sys->damage_events().empty());
+            if (!k.w.sys->damage_events().empty()) CHECK_F(k.w.sys->damage_events().back().hull_lost, 50.0f);
+            k.w.add(3, k.plain, 1, Vec3{});
+            k.w.sys->set_health(3, 50.0f);
+            kr.victim = 3;
+            kr.amount = 40.0f;  // not lethal: the full 20
+            CHECK_F(k.w.sys->take_damage(kr, 5).hull_lost, 20.0f);
+            k.w.sys->set_flag(3, kUnitCannotDie, true);  // cannot die: the restore ran, no hull loss
+            kr.amount = 1000.0f;
+            CHECK_F(k.w.sys->take_damage(kr, 5).hull_lost, 0.0f);
+        }
         d.w.sys->set_flag(2, kUnitInvulnerable, true);
         CHECK(!d.w.sys->take_damage(r, 5).applied);
         r.kind = kKindDebug;

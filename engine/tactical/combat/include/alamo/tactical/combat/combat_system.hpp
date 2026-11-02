@@ -625,6 +625,9 @@ struct DamageResult {
     float absorbed = 0.0f;    // shield points removed (shield-armor space)
     float to_hardpoint = 0.0f;
     float to_hull = 0.0f;     // hull points removed (hull-armor space)
+    // A1_READINGS §30.2 [H]: the actual hull loss hullBefore - hullAfter, hullAfter clamped to >= 0 (the original's health
+    // setter clamps); 0 when the cannot-die restore ran. DAMAGE_TRACKING records absorbed + this.
+    float hull_lost = 0.0f;
     float hull_armor_factor = 1.0f;
     bool killed = false;
     bool cancelled = false;  // a Take_Damage listener (redirect / absorb) cancelled the hit
@@ -682,6 +685,7 @@ struct DamageEvent {
     int32_t hardpoint = -1;       // hardpoint that took the damage (-1 = hull)
     float after_multipliers = 0.0f;
     float absorbed = 0.0f, energy_absorbed = 0.0f, to_hardpoint = 0.0f, to_hull = 0.0f;
+    float hull_lost = 0.0f;  // DamageResult::hull_lost (A1_READINGS §30.2)
     bool killed = false;
     uint32_t frame = 0;
 };
