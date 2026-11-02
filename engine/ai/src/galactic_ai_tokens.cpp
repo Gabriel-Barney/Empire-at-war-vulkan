@@ -1431,7 +1431,15 @@ struct GalacticSimTokenResolver::Impl {
                 param_number(params, "Parameter_Count", count);
                 param_number(params, "Parameter_Only_Consider_Complete", complete);
                 auto n = static_cast<int32_t>(count);
-                player_objects(pl, [&](ObjectHandle u) { n -= type_named(st.type(u), names) ? 1 : 0; });
+                // q2f t01 [H] (STRATEGIC_GAPS §1.7, A1_READINGS §29): the original's walk sees a company's transport (its
+                // 0x3973b0 type = the company type) and each Company_Units member as its own object; the port keeps one
+                // object per company, so its members are counted from the company type.
+                player_objects(pl, [&](ObjectHandle u) {
+                    const uint32_t t = st.type(u);
+                    n -= type_named(t, names) ? 1 : 0;
+                    if (t < rules.types.size())
+                        for (const uint32_t m : rules.types[t].company_units) n -= type_named(m, names) ? 1 : 0;
+                });
                 if (!(complete > 0.0))
                     for (const gal::PlanetState& q : planets)
                         for (const auto& queue : q.queue)
