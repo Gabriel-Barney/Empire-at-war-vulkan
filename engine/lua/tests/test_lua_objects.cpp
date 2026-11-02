@@ -500,10 +500,11 @@ static void test_spawn_and_state(const Db& db) {
     CHECK(contains(run(vm, "t1.Make_Invulnerable(1)"), "Make_Invulnerable -- invalid type for parameter 1. Expected boolean."));
     CHECK(contains(run(vm, "t1.Make_Invulnerable()"), "Make_Invulnerable -- invalid number of parameters. Expected 1, got 0."));
     // Script flags land in the bridge state.
+    // (Lock_Current_Orders before Suspend_Locomotor: a suspended locomotor counts as movement-locked and refuses it.)
     CHECK(run(vm, "t1.Hide(true) t1.Set_Selectable(false) t1.Prevent_AI_Usage(true) t1.Prevent_All_Fire(true) "
-                  "t1.Prevent_Opportunity_Fire(true) t1.Suspend_Locomotor(true) t1.Highlight(true, 25) t1.Highlight_Small(true) "
+                  "t1.Prevent_Opportunity_Fire(true) t1.Lock_Current_Orders() t1.Suspend_Locomotor(true) t1.Highlight(true, 25) t1.Highlight_Small(true) "
                   "t1.Set_In_Limbo(true) t1.Override_Max_Speed(0.5) t1.Set_Importance(3) t1.Set_Targeting_Priorities('Infantry_Attack_Move') "
-                  "t1.Lock_Current_Orders() t1.Disable_Capture(true) t1.Set_Garrison_Spawn(true) t1.Set_Check_Contested_Space(true) "
+                  "t1.Disable_Capture(true) t1.Set_Garrison_Spawn(true) t1.Set_Check_Contested_Space(true) "
                   "b = t1.Play_Animation('Cinematic', false, 2) pf = b.IsFinished() and 1 or 0 "
                   "sel = t1.Is_Selectable() and 1 or 0 mv = t1.Can_Move() and 1 or 0 Hide_Object(t2, 1)") == "");
     const ScriptObjectState& st = s.bridge.state(1);

@@ -973,6 +973,38 @@ void test_missile_shield() {
         CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
         CHECK(w.ab->immobilize_count(2) == 0 && w.sys->emitter_radius(2) == 0.0f);
     }
+    {  // OI abilities t01 (A1_READINGS §28.8): 0x3a8e50 lock_movement shares the Disable_Movement counter. Lock +1
+       // (Immobilised only on 0 -> 1), unlock -1 clamped at 0 (Released only on 1 -> 0).
+        ShieldWorld w(ProjectileCategory::Laser, false, 0.0f);
+        const ObjectId e[] = {2};
+        auto count = [&](AbilityEventKind k) {
+            size_t n = 0;
+            for (const AbilityEvent& ev : w.ab->events()) n += (ev.kind == k && ev.id == 2) ? 1u : 0u;
+            return n;
+        };
+        w.ab->clear_events();
+        CHECK(w.ab->lock_movement(2, true, w.frame) && w.ab->immobilize_count(2) == 2);
+        CHECK(count(AbilityEventKind::Immobilised) == 0);  // already held by the shield
+        CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
+        CHECK(w.ab->immobilize_count(2) == 1 && count(AbilityEventKind::Released) == 0);  // the extra lock still holds
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(count(AbilityEventKind::Released) == 1);
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);  // clamped, no event
+        CHECK(count(AbilityEventKind::Released) == 1);
+        CHECK(w.ab->lock_movement(2, true, w.frame) && w.ab->immobilize_count(2) == 1);
+        CHECK(count(AbilityEventKind::Immobilised) == 1);
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(!w.ab->lock_movement(999, true, w.frame) && w.ab->immobilize_count(999) == 0);  // unknown object
+    }
+    {  // The shared counter lets an unlock release an ability's lock (Unlock_Current_Orders without a script lock):
+       // the shield stays active but the unit is free; switching the shield off later clamps at 0.
+        ShieldWorld w(ProjectileCategory::Laser, false, 0.0f);
+        const ObjectId e[] = {2};
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(w.ab->is_active(2, kMissileShield));
+        CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
+        CHECK(w.ab->immobilize_count(2) == 0);
+    }
     {  // §2.6 step 3: the same laser with a turn rate bends away (30 deg per step: never hits)
         ShieldWorld w(ProjectileCategory::Laser, false, 30.0f);
         w.run(150);
@@ -2815,6 +2847,177 @@ void test_oi_berserker_speed() {
     CHECK(!w.ab->special_applied(1, name_crc("Berserk")) && w.ab->speed_override(1) == -1.0f);
 }
 
+void test_oi_stun_over_water() {
+    // OI t02 (ABILITIES_HARDPOINTS §4.12 [port]): Destroy_When_Stunned_Over_Water - a flagged STUNNABLE unit whose stun
+    // starts over water (host: here x < 0) is destroyed at once; on land, or without the flag, it is only stunned. No
+    // over_water host: never destroyed.
+    for (const bool water_host : {true, false}) {
+        OiWorld w;
+        UnitDesc u = oi_unit("MAL", 100.0f);
+        u.stunnable = true;
+        AbilityObjectDesc flagged;
+        flagged.destroy_when_stunned_over_water = true;
+        const uint32_t fd = push(w.cd, w.ad, u, flagged);
+        const uint32_t pd = push(w.cd, w.ad, u, AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        if (water_host) {
+            AbilityHost h;
+            h.over_water = [](Vec3 p) { return p.x < 0.0f; };
+            w.ab->set_host(std::move(h));
+        }
+        w.add(1, fd, 0, {-50, 0, 0});  // flagged, over water
+        w.add(2, fd, 0, {50, 0, 0});   // flagged, on land
+        w.add(3, pd, 0, {-60, 0, 0});  // not flagged, over water
+        for (ObjectId id : {ObjectId{1}, ObjectId{2}, ObjectId{3}}) CHECK(w.sys->stun_unit(id, 30, w.frame));
+        const bool sunk = (w.sys->flags(1) & kUnitDead) != 0;
+        CHECK(sunk == water_host);
+        CHECK((w.sys->flags(2) & kUnitDead) == 0 && w.sys->stunned(2, w.frame));
+        CHECK((w.sys->flags(3) & kUnitDead) == 0 && w.sys->stunned(3, w.frame));
+        size_t deaths = 0;
+        for (const DeathEvent& d : w.sys->deaths()) deaths += d.id == 1 ? 1u : 0u;
+        CHECK(deaths == (water_host ? 1u : 0u));
+        w.tick();
+        CHECK((w.sys->flags(2) & kUnitDead) == 0 && (w.sys->flags(3) & kUnitDead) == 0);
+    }
+}
+
+// OI t03: ticks from the order to the Generic_Attack hit and to its removal (Damage_Frame_Number 10); count > 0: the
+// host reports a POUND_ATTACK clip of `count` frames at `fps` for the attacker.
+std::array<int, 2> oi_generic_timing(uint32_t count, float fps, float speedup) {
+    OiWorld w;
+    SpecialAbilityDesc g = oi_special("Pound", SpecialClass::GenericAttack, ActivationStyle::UserInput);
+    g.max_range = 100.0f;
+    g.damage_amount = 30.0f;
+    g.damage_frame = 10;
+    g.anim_speedup = speedup;
+    g.attack_anim = "POUND_ATTACK";
+    const uint32_t gs = add_special(w.ad, g);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kTargetedHack, 0.0f, 0.0f, "Pound")};
+    a.specials = {gs};
+    const uint32_t ud = push(w.cd, w.ad, oi_unit("Rancor", 1000.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("Victim", 100.0f), AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    if (count > 0) {
+        AbilityHost h;
+        h.anim_clip = [count, fps](ObjectId id, int32_t type, std::string_view name, uint32_t& n, float& f) {
+            if (id != 1 || type >= 0 || name != "POUND_ATTACK") return false;
+            n = count;
+            f = fps;
+            return true;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, ud, 0, {0, 0, 0});
+    w.add(2, td, 1, {50, 0, 0});
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kTargetedHack, 2, -1, w.frame) == 1);
+    std::array<int, 2> out{-1, -1};
+    for (int i = 1; i <= 100 && out[1] < 0; ++i) {
+        w.tick();
+        if (out[0] < 0 && w.sys->health(2) < 100.0f) out[0] = i;
+        if (!w.ab->special_applied(1, name_crc("Pound"))) out[1] = i;
+    }
+    CHECK(w.sys->health(2) == 70.0f);  // one hit
+    return out;
+}
+
+// OI t03: ticks from the order to the Hack's owner change; count > 0: animation 0x5a has `count` frames at `fps`.
+int oi_hack_timing(uint32_t count, float fps) {
+    OiWorld w;
+    SpecialAbilityDesc hk = oi_special("Hack", SpecialClass::Hack, ActivationStyle::UserInput);
+    hk.max_range = 1000.0f;
+    const uint32_t hs = add_special(w.ad, hk);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kTargetedHack, 0.0f, 10.0f, "Hack")};
+    a.specials = {hs};
+    const uint32_t ad = push(w.cd, w.ad, oi_unit("A", 100.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("T", 100.0f), AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    if (count > 0) {
+        AbilityHost h;
+        h.anim_clip = [count, fps](ObjectId id, int32_t type, std::string_view, uint32_t& n, float& f) {
+            if (id != 1 || type != 0x5a) return false;
+            n = count;
+            f = fps;
+            return true;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, ad, 0, {0, 0, 0});
+    w.add(2, td, 1, {300, 0, 0});
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kTargetedHack, 2, -1, w.frame) == 1);
+    for (int i = 1; i <= 100; ++i) {
+        w.tick();
+        if (w.sys->owner(2) == 0) return i;
+    }
+    return -1;
+}
+
+// OI t03: enemy health lost to a 2 s Berserker (Damage 10 per pass); count > 0: animation 0x68 has `count` frames (30 fps).
+float oi_berserker_damage(uint32_t count) {
+    OiWorld w;
+    SpecialAbilityDesc b = oi_special("Berserk", SpecialClass::Berserker, ActivationStyle::UserInput);
+    b.max_range = 500.0f;
+    b.berserker_speed = 5.0f;
+    b.berserker_damage = 10.0f;
+    b.berserker_damage_range = 1000.0f;
+    b.berserker_duration = 2.0f;  // 60 frames
+    const uint32_t bs = add_special(w.ad, b);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kBerserker, 0.0f, 60.0f, "Berserk")};
+    a.specials = {bs};
+    const uint32_t bd = push(w.cd, w.ad, oi_unit("Berserker", 1000.0f), a);
+    UnitDesc e = oi_unit("Enemy", 1000.0f);
+    e.has_locomotor = true;
+    const uint32_t td = push(w.cd, w.ad, e, AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    if (count > 0) {
+        AbilityHost h;
+        h.anim_clip = [count](ObjectId id, int32_t type, std::string_view, uint32_t& n, float& f) {
+            if (id != 1 || type != 0x68) return false;
+            n = count;
+            f = 30.0f;
+            return true;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, bd, 0, {0, 0, 0});
+    w.add(2, td, 1, {100, 0, 0});
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kBerserker, 2, -1, w.frame) == 1);
+    for (int i = 0; i < 80; ++i) w.tick();
+    CHECK(!w.ab->special_applied(1, name_crc("Berserk")));
+    return 1000.0f - w.sys->health(2);
+}
+
+void test_oi_anim_timings() {
+    // OI t03 (ABILITIES_HARDPOINTS §4.13 [port]): clip position = sim frames since the start x (fps / 30) x speedup;
+    // "at frame N" = first update with position >= N, "at the end" = position >= max(count - 2, 0); no clip: rate 1 and
+    // the fixed fallbacks (removal with the last event, Hack 60 frames, Berserker window open).
+    const std::array<int, 2> base = oi_generic_timing(0, 0.0f, 1.0f);
+    CHECK(base[0] > 0 && base[1] == base[0]);  // no clip: hit and removal in the same update
+    const std::array<int, 2> c30 = oi_generic_timing(20, 30.0f, 1.0f);
+    CHECK(c30[0] == base[0] && c30[1] == base[0] + 8);  // end frame 18: held 8 frames past the hit at 10
+    const std::array<int, 2> c15 = oi_generic_timing(20, 15.0f, 1.0f);
+    CHECK(c15[0] == base[0] + 10 && c15[1] == base[0] + 26);  // half rate: hit at 20 sim frames, end at 36
+    const std::array<int, 2> fast = oi_generic_timing(20, 30.0f, 2.0f);
+    CHECK(fast[0] == base[0] - 5 && fast[1] == base[0] - 1);  // speedup 2: hit at 5 sim frames, end at 9
+    const std::array<int, 2> short_clip = oi_generic_timing(5, 30.0f, 1.0f);
+    CHECK(short_clip[0] == base[0] && short_clip[1] == base[0]);  // clip ends before the hit: removed with it
+    // Hack: animation 0x5a end = ceil(max(count - 2, 0) / rate) sim frames, else kHackFrames (60).
+    const int hack60 = oi_hack_timing(0, 0.0f);
+    CHECK(hack60 > 60);
+    CHECK(oi_hack_timing(32, 30.0f) == hack60 - 30);
+    CHECK(oi_hack_timing(32, 60.0f) == hack60 - 45);
+    CHECK(oi_hack_timing(33, 60.0f) == hack60 - 44);  // 31 / 2 rounds up to 16
+    // Berserker: passes on counters 55, 50, ... 5 (n = 5 .. 55); a 50-frame clip loops at 49, window (10, 40) strict:
+    // n = 15, 20, 25, 30, 35 only.
+    CHECK(oi_berserker_damage(0) == 110.0f);
+    CHECK(oi_berserker_damage(50) == 50.0f);
+}
+
 // ================================================================================================
 // scripted space battle (golden)
 // ================================================================================================
@@ -3589,6 +3792,8 @@ int main(int argc, char** argv) {
     test_gaps_leech();
     test_oi_weapon_swap();
     test_oi_berserker_speed();
+    test_oi_stun_over_water();
+    test_oi_anim_timings();
     test_battle(golden, write_golden);
     test_allocations();
     test_save_load_battle();  // N1 stage 2

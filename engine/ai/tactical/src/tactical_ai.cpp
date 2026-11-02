@@ -996,7 +996,6 @@ void TacticalAiWorld::Impl::admit(PlayerAi& p, size_t index, bool call_lua) {
     info.owned_by_player = true;
     const bool ok = cfg.mode == TacticalMode::Land ? land_free_store_admits(info) : space_free_store_admits(info);
     if (!ok || !p.fs.admit(o.id, static_cast<uint32_t>(std::max(0, o.type)))) return;
-    host.unit_released(p.player, o.id);  // Active_By_Default on free-store entry (0x4d4aa0, TACTICAL_GAPS §1.2)
     if (call_lua && p.fs_vm) {  // On_Unit_Added (context mode = current mode)
         lua::AiEventArg a;
         a.kind = lua::AiEventArg::Object;
@@ -1013,8 +1012,8 @@ void TacticalAiWorld::Impl::release_to_free_store(int32_t player, ObjectHandle u
     const PerceptionObject* o = object(id_of(u));
     if (!o) return;
     admit(*p, static_cast<size_t>(o - w.objects.data()), false);
-    // A task-force release the free store refused still re-applies Active_By_Default (0x5ff610, TACTICAL_GAPS §1.2).
-    if (o->alive && o->owner == player && !p->fs.contains(o->id)) host.unit_released(player, o->id);
+    // Active_By_Default after the free store took the unit back or refused it (0x5ff610, A1_READINGS §28.8).
+    if (o->alive && o->owner == player) host.unit_released(player, o->id, TacticalAiHost::UnitRelease::TaskForce);
 }
 
 void TacticalAiWorld::Impl::refresh() {
@@ -1098,7 +1097,12 @@ void TacticalAiWorld::Impl::refresh() {
         s.attack_target = facts[i].attack_target;
         if (!facts[i].moving && facts[i].attack_target < 0) {
             s.has_orders = false;
-            s.orders_locked = false;
+            // A script lock's order finished (free store signal 10/11, 0x4d4aa0; A1_READINGS §28.8): release the
+            // lock (0x3a8e50(obj, 0) on the script's share), then the host re-applies Active_By_Default.
+            if (s.orders_locked) {
+                s.orders_locked = false;
+                host.unit_released(o.owner, o.id, TacticalAiHost::UnitRelease::OrderLockDone);
+            }
         }
     }
 }

@@ -780,8 +780,12 @@ of from / to are read.
   Kind 2: Flying and LandBomber always. JetPack: kind 2 with no pack or with pack state +0x48 ∈ {0, 0x0f…0x13},
   else kind 1. Walk: kind 1.
 - **FoC land members:**
-  - the airborne jetpack units with `Uses_Multiple_Locomotors` (Dark_Trooper_PhaseII/III, Boba_Fett, Bossk, IG-88,
-    Silri, Tyber_Zann, Urai_Fen) [M];
+  - the jetpack units while on the jetpack and airborne-kind (JetPack pack state 0 or 0xF–0x13: take-off turn, jump,
+    flight; not the landing 0x14 or stopped 0x16): **only Dark_Trooper_PhaseII, Dark_Trooper_PhaseIII and Boba_Fett**,
+    the three FoC types with a `Secondary_Locomotor_Name` (JETPACK_LOCOMOTOR) [H, corrected 2026-11-01, S7 t11;
+    MOVEMENT §3.1.1]. Bossk, IG-88, Silri, Silri_No_Abilities, Tyber_Zann, Tyber_Zann_Prisoner and Urai_Fen set
+    `Uses_Multiple_Locomotors` with no secondary: they always walk, and Walk answers vf +0x240 false, so they are
+    never in layer 4;
   - objects whose `Space_Layer` contains Corvette (the TransportUnit landing craft and shuttles), if they move with
     a locomotor on a land map [L].
 
@@ -989,7 +993,7 @@ container's locomotor.
 | `Scale_Factor` | +0x658 | clearance box top, query half-extents (§6.3.1) | snowspeeder 1.2, Dark_Trooper_PhaseII 1.7 |
 | `Custom_Hard_XExtent` / `Custom_Hard_YExtent` | +0x16bc / +0x16c0 | clearance query half-extents (else model bbox) | unset on the snowspeeder |
 | `Space_Layer` / `Stationary_Space_Layer` | +0x16dc / +0x16e0 | tracking layer (layer 4 = Corvette) | snowspeeder Frigate / Land |
-| `Uses_Multiple_Locomotors` | +0x74 | airborne jetpack → layer 4 | Dark troopers, bounty-hunter heroes |
+| `Uses_Multiple_Locomotors` | +0x74 | airborne jetpack → layer 4 | Dark_Trooper_PhaseII/III, Boba_Fett (Bossk, IG-88, Silri, Tyber_Zann, Urai_Fen set it but have no secondary) |
 | GC `LandObjectTrackingTreeCount` / `LandObjectTrackingInterval` | +0x1470 / +0x146c | tracking ring on land | 25 / 20 |
 | GC `SpaceIdleMovementSpeed` | +0x1554 | solo idle speed | 0.0 |
 | GC `Engines_Disabled_Speed_Modifier` | +0x1530 | minspeed | 0.4 |

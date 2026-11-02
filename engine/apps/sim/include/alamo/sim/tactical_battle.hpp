@@ -389,6 +389,9 @@ public:
     float ground_height(float x, float y) const;
     // Frame count of clip `anim` (index 0) of the object's model in this mode (sim animation); 0 = unknown.
     uint32_t anim_clip_frames(const TacticalMode& mode, objects::ObjectId id, uint8_t anim) const;
+    // Frame count and fps of clip `anim` (a ModelAnimType id, index 0) of the object's model (OI t03 ability timings:
+    // static clip data, never the playing clock). False without a sim animation, model or clip.
+    bool anim_clip_info(const TacticalMode& mode, objects::ObjectId id, int32_t anim, uint32_t& frames, float& fps) const;
     // Plays clip `anim` of the object from `start_fraction` at `speed` (Create_Cinematic_Transport Land / Takeoff;
     // sim animation only). False without a clip.
     bool play_clip(const TacticalMode& mode, objects::ObjectId id, uint8_t anim, float start_fraction, float speed, uint64_t global_frame);

@@ -192,6 +192,14 @@ struct AbilityHost {
     // (a unit or its team container) starts circling the cable target between Activation_Min_Range and
     // Activation_Max_Range of the ability record (the host: MovementSystem::start_circling). Unset: no circling.
     std::function<void(ObjectId user, ObjectId target, float r_min, float r_max)> cable_attack;
+    // OI t02 (ABILITIES_HARDPOINTS §4.12 [port]): the map has a water plane above the terrain under `p` (XY). Unset: no
+    // water anywhere (Destroy_When_Stunned_Over_Water never fires).
+    std::function<bool(Vec3 p)> over_water;
+    // OI t03 (ABILITIES_HARDPOINTS §4.13 [port]): frame count and fps of animation `anim_type` (a ModelAnimType id; < 0:
+    // the XML name `anim_name`, e.g. an Attack_Animation / Toss_Anim value) of `id`'s sim model, variant 0. Static model
+    // data only, never a playing clock. False when the object has no model or the model lacks the clip. Unset: no clips
+    // (every animation-driven timing uses its fixed fallback).
+    std::function<bool(ObjectId id, int32_t anim_type, std::string_view anim_name, uint32_t& frame_count, float& fps)> anim_clip;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -326,9 +334,17 @@ public:
     std::span<const SpawnRequest> spawn_requests() const { return spawns_; }
     bool bind_spawn(uint32_t serial, ObjectId id);
     // Active_By_Default (0x3a82a0, §1.2 [H]): the first two Unit_Abilities_Data entries with Active_By_Default are
-    // switched on. add_unit / add_container call it at creation; the A1/A2 AI layer calls it when a unit is released
-    // to the free store (after un-immobilising it) or leaves a task force without hunting.
+    // switched on. add_unit / add_container call it at creation; the A1/A2 AI layer calls it when a script-locked
+    // unit's order finishes (free store, after the lock is released) or a task force releases a unit whose movement
+    // is not locked (A1_READINGS §28.8).
     void apply_active_by_default(ObjectId id, uint32_t frame);
+    // Movement lock 0x3a8e50(obj, lock) (A1_READINGS §28.8 [H]) on the ability-held share of the obj +0x3a8 counter:
+    // lock adds 1 (0 -> 1 raises Immobilised: the host stops the unit); unlock subtracts 1, clamped at 0 (1 -> 0
+    // raises Released), with no other effect. The Disable_Movement handlers (MISSILE_SHIELD, INTERDICT) use it; so
+    // does a Lua Unlock_Current_Orders on a unit that holds no script lock (the shared counter lets it release an
+    // ability's lock). [port] Lock_Current_Orders' own share is the script state's orders_locked. False for an
+    // unknown object.
+    bool lock_movement(ObjectId id, bool lock, uint32_t frame);
     // Order cancel 0x38f5d0 (§1.1 [H]): every new move / attack / escort order (commands, Lua, AI) switches off
     // BARRAGE, LUCKY_SHOT, ION_CANNON_SHOT (on the team container) and HUNT when active. Not called for the moves
     // abilities issue themselves (MoveOrder events).
@@ -622,6 +638,15 @@ private:
     bool range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;
     void heal_pass(Obj& o, const SpecialAbilityDesc& s, uint32_t frame);
     uint32_t wave_victims(Obj& o, SpecialState& sp, float radius, std::vector<ObjectId>& out);
+    // OI t03: an animation's timing on sim frames (§4.13). rate = clip frames per sim frame at speed 1 (clip fps / 30,
+    // the sim animation's clock); count = clip frames, end = max(count - 2, 0) (where a one-shot finishes); count = 0:
+    // no clip (rate 1, the fixed fallbacks).
+    struct ClipTiming {
+        float rate = 1.0f;
+        float count = 0.0f;
+        float end = 0.0f;
+    };
+    ClipTiming clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name) const;
     void lightning_targets(Obj& o, const SpecialAbilityDesc& s, ObjectId primary, std::vector<ObjectId>& out);
 
     AbilityHost host_;
