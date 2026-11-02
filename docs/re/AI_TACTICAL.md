@@ -421,6 +421,111 @@ exiting. [H, shipped Lua + engine]
 also posts `No_Units_Remaining` from a per-service poll (`service_statuses`) and only when `pending` is empty, while
 retail posts it from the death / removal signal (before the plan runs again).
 
+### 7.3.3 `Activate_Ability` blocks, signals 0x29 / 0xb / 0x10, DEPLOY, `No_Units_Remaining` (S7 t26 and t27, RE, 2026-11-02)
+
+**1. When the Lua call returns a block** (object `GameObjectWrapper.Activate_Ability` 0x570580 → 0x570a50) [H]:
+- 0x570580 makes an `AbilityBlockStatus` (Lua id 0x825, pending count +0x40) **only when 0x570a50 returns true**;
+  otherwise it returns **nil**.
+- 0x570a50 returns false (so nil, no block) for every gate refusal: no object, argument count ≠ 2, name not a
+  string / unknown, the unit lacks the ability (0x3986b0), not ready (0x39bbd0), `Can_Activate` (0x39b480(obj, t, 1))
+  fails, wrong argument type, "not hooked up to special ability logic", dead target object.
+- After the gates it builds and executes the command at once. Its return value then depends on the ability family
+  (case lists from the second switch, decimal ids of ABILITIES_HARDPOINTS §2.1):
+
+| ids | command | returns a block? |
+|---|---|---|
+| 2 DEPLOY | 43 (mode toggle), only when the bool argument ≠ the current deployed state (0x39b950(obj, 2)); equal → nil | **always** once executed, whether or not the deploy starts |
+| 13 15 16 18 20 21 22 27 30 31 34 37 41 45 51 53 55 58 59 64 66 (object target) | 40 (`TacticalSpecialAbility`, 0x429da0 / 0x429960) | only when, after the execute, the unit's pending-ability name CRC (CD pack obj +0xf0, +0x150) equals the ability's `GUI_Activated_Ability_Name` CRC (0x371ba0), i.e. `Issue_Auto_Target` accepted and stored it |
+| 17 JET_PACK (position) | 43 with the position | only when the jump started: the unit has a locomotor and its vf +0x300 is false (= `Is_Unit_Ability_Active(17)`, 0x39b950) |
+| 50 67 71 73 74 (position) | 57-style: spawns `Dummy_Barrage_Target` at the position (0x29f810), then 0x429da0 / 0x429960 | **always** once executed |
+| 1 3 7 9 11 29 32 33 39 40 43 48 52 54 56 60 62 63 65 68 69 70 (none / bool) | 43 | **never** (nil even on success) |
+| 14 23 24 25 35 36 38 44 46 49 57 61 72 | 43 with **no** position (zeroed) | never |
+| 5 26 28 42 (position), 6 10 12 (optional target), 19 (object) | 43 | never |
+
+  Correction for ABILITIES_HARDPOINTS §2.9 (owned by the other RE agent; [M] there): the "target position (command
+  57, `Dummy_Barrage_Target`)" row is ids 50, 67, 71, 73, 74, not 14, 23, … 72; those take command 43 with no
+  position.
+- Before executing, ability ids 2 3 5 6 13 15 16 17 18 20 21 22 27 31 32 34 37 38 39 41 45 46 50 51 52 53 55 58 59
+  64 66 67 69 71 73 74 raise **signal 0xb on the unit and on each member of its TEAM** (0x220ed0). The block subscribes
+  afterwards, so it never sees this 0xb.
+- **TaskForce `Activate_Ability`** (0x5f9890) calls 0x570a50 for each member (TF +0x78 order); a true result adds
+  that unit to the one block (count + 1, subscribe); a false result queues plan event 0x13
+  `Unit_Ability_Finished(unit)` at once. With no true result the block's count is 0 and `IsFinished` (0x57bab0,
+  count == 0) is true on the first poll. So a TF block on an "always nil" family finishes at once and every member
+  gets `Unit_Ability_Finished`.
+
+**2. What finishes a block** [H]. 0x6ae570 subscribes the block's listener (+0x30) to the unit's signals **0x29, 0xb
+and 0x10**. The listener (0x6ae4f0) does not look at the signal number: the first of the three on that unit
+decrements the count and unsubscribes all three. There is **no timeout** in the block (only `BlockOnCommand`'s
+optional `max_duration`).
+- **0x29** = "unit ability finished" (MOVEMENT §3.1.1). It is raised on the unit by any ability end, so an unrelated
+  ability's expiry (countdown 0x42f460, every ability id) or a stealth break (0x592d00 / 0x5931b0) also finishes it.
+  Raisers: 0x3a9910 (jetpack swap), 0x42f460, 0x592d00, 0x5931b0, 0x5b07c0, **0x61e930 (Walk locomotor deploy /
+  undeploy, below)**, **0x61d300**, 0x63fae0, 0x63ffd0, 0x640060, 0x6cc8d0 and the special-ability removes
+  0x6f2c20 … 0x71bcc0.
+- **0xb** = "a new order replaces this unit's order" (A1_READINGS §33.3 lists the raisers: task-force movement
+  collectors, unit `Move_To` / `Attack_Move`, `Activate_Ability` itself, `Turn_To_Face`, MoveToObject, garrison
+  enter / exit, ConcentrateFire, …). Auto targeting does not raise it.
+- **0x10** = destroyed / removed: raised only by `Detach` 0x3a8380 (death and every `Destroy_Object`) and on a fresh
+  death clone (0x29f270). It is not owner change (0x1a) and not the store removal (0x28).
+
+So a block that the ability **refused after the gates** (only possible for DEPLOY and ids 50 67 71 73 74, which return
+a block regardless) **stays pending until the unit gets a new order (0xb), any ability on it ends (0x29) or it
+dies (0x10)**. An object-target block whose pending ability never fires (target died before the unit got in range)
+likewise waits for one of the three [M: the pending-ability clear path on target death was not traced].
+
+**3. DEPLOY and 0x29** [H]. Only the Walk locomotor implements deploy (locomotor vf +0x118 = 0x61d300 in
+`WalkLocomotorBehaviorClass`; every other locomotor class has the empty 0x1fa90). FoC deployers (the three Mobile
+Defense Units, `Deploys` yes, `WALK_LOCOMOTOR`) therefore:
+- `Set_Unit_Ability_Active(2, on)` → 0x3a1ce0: refuses (no deploy request, no signal) when the unit has a
+  garrison / +0x3a7 / transport, a running ability countdown, a member that cannot activate, or its locomotor's
+  vf +0x2b0 is true [M: "moving"]. Otherwise it drops the target (TARGETING vf +0xd8(1)), leaves the coordinator and
+  calls 0x391260 → Walk vf +0x118(1).
+- 0x61d300(1): pack state 0x18/0x19 → nothing; obj +0x3a1 bit 0x40 or pack +0x2b3 set → nothing; otherwise state
+  **0x18** and play animation 25 (`Deployment_Anim_Rate`). From state 0x1a (undeploying) with the turret test
+  failing it goes straight to state 0x19 and **raises 0x29 at once**.
+- Walk vf6 0x61e930, state 0x18: when animation 25 has finished (0x39a180), state **0x19 (deployed), raise 0x29**,
+  then 0x39fec0. State 0x1a: when animation 26 has finished, state 0 and **raise 0x29**.
+- So `BuildMDUItem`'s `BlockOnCommand(MainForce.Activate_Ability("DEPLOY", true))` (no timeout) **returns when the
+  deploy animation ends**. It waits forever only when the deploy was refused (0x3a1ce0 / 0x61d300 gates) and nothing
+  else orders, kills or ends an ability on the MDU. A non-walking unit with DEPLOY would always wait (none in FoC).
+
+**4. `No_Units_Remaining` entry flags** (TF signal handler 0x5fe5d0, signals 0x10 / 0x1a) [H]:
+- First the unit is removed from the task force (vf +0x188 → base 0x5ff610: unsubscribe, drop it from the member
+  vector +0x78; if it was a member, erase the **first entry of TF +0x60 whose type equals the unit's company type**
+  (0x3973b0: the type of its transport / company / team container, else its own type) and the parallel int at +0x90).
+  A removal raises plan event 2.
+- The entry vector TF +0x60 is filled when the task force is made from the plan solve (0x66fb30 → 0x5f9fd0, one
+  entry {type wrapper, int} per planned unit of that team) and by the reinforcement drops (0x6ee010, 0x6ed9f0). It
+  therefore also holds **planned units that have not arrived yet**.
+- Then event 7 `No_Units_Remaining` is queued unless some remaining entry's type (entry +0x28) has all of:
+  `Is_Named_Hero` (type +0x13) false, `Is_Generic_Hero` (+0x14) false, `Is_Special_Weapon_In_Space` (+0x1e) false, and
+  no `LOBBING_SUPERWEAPON` (id 0x37) in the **Land** behaviour bitset (0x370320(type, 0x37, 1) reads type +0x760).
+  An empty vector raises it too. The test runs on every 0x10 / 0x1a of a member, not only when the removed unit was
+  counted.
+- For the implementer: count "real" entries = planned-or-present unit types that are not heroes, not space special
+  weapons and not lobbing superweapons; raise the event from the death / removal handler when that count is 0.
+
+**5. Land `Prepare_Ambush` step and threat (S7 t27)** [H]:
+- 0x3722a0(type, obj) is **not a terrain factor**: it is the land sight range = `Land_FOW_Reveal_Range` (type
+  +0x1d68) × the weather `Sight_Range_Modifier` for the type's `Weather_Category` (0x468510 on the weather system
+  0x140b30b40, FOG_OF_WAR §3.1.1; 1.0 when there is no strong weather or no entry). In 0x6ec8b0 it is called with
+  the **target's** company type (0x3973b0) and the target object (its owner decides the weather exemption). Step ≤ 0
+  → the target type's base max attack range (0x3749d0).
+- Step ≤ 0 after both: one `LandMovementBlockStatus` to the first point (target + minDist × u) with **no threat and
+  no map-box test**, returned even if it is already finished. Otherwise the ray walk: leave when P is outside the
+  mode box (vf +0x1f8; returns nil); threat = 0x654290 on the threat grid with rect (P.x − step/2, P.y − step/2,
+  step, step), all categories, enemies of the task force's player (0x5f7020(TF +0xf0)), **no
+  `AI_SpaceAreaThreatScaleFactor`** [M: the space walk multiplies by it, the land call passes none]; threat ≤
+  tolerance → block; else P += step × u.
+- **The threat tolerance is passed to the group move** in both modes: land 0x73c360 stores it at block +0x50 and
+  0x73bf40 writes it to the move parameter +0x54 when ≠ 1e18 (plus flags +0x48 = block +0x88, 0 here); space 0x73b180
+  writes the ambush block's +0x58 to parameter +0x54. Parameter +0x54 is the order threshold T of the space threat
+  path mode (REMAINING_GAPS §4.2: honoured only for `Space_Layer` 0 units) and the land zone-path threat tolerance
+  (A1_READINGS §3).
+- For the implementer: replace the port's terrain factor 1.0 by Land_FOW_Reveal_Range × weather sight modifier of the
+  target type; pass the tolerance as the move's threat threshold.
+
 ### 7.4 Reinforcement drops (`TF.Reinforce(target [, maxWait])`) [H unless tagged]
 - **Land** (0x6ed5f0): requires the TF to have pending reinforcement types (else "taskforce has no reinforcements", nil). If the player currently cannot reinforce (0x2b03e0 false) it returns an immediately-failing ReinforceBlockStatus (id 0x81a). The target may be an object, an AITargetLocation or a task force (its position). Then:
   - **campaign battle** (galactic parent) 0x6ed9f0: draws the units from the player's galactic reinforcement pool (persistent units in orbit, 0x28aaa0 → +0x40);
@@ -508,7 +613,7 @@ Lua short-circuit order matters: `(GameRandom.Get_Float() > 0.5) and Try_Ability
 > **Status 2026-10-30:** Items 1, 2 and 4 are done: the tactical perceptual evaluators are in `engine/ai/tactical/src/tactical_perception.cpp`, the threat grid in `engine/ai/tactical/src/threat_grid.cpp` (AI_TACTICAL_PERCEPTION.md), and reinforcement landing with the `Use_Reinforcement_Points` rule and the can-reinforce test in `engine/ai/tactical/src/tactical_ai.cpp:1772-1813` and `engine/ai/tactical/include/alamo/ai/tactical/constants.hpp:44-45`. Items 3 and 6 are partly done: `Explore_Area`, `Prepare_Ambush`, `Fire_Special_Weapon`, `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit` and `Is_Good_Against` are bound (`engine/lua/src/bind_ai_tactical.cpp`, `bind_script_remaining.cpp`), but `Should_Switch_Weapons` is a stub that always returns false (`engine/lua/src/bind_ai_tactical.cpp:324-328`). Item 7: HIJACK_UNIT is handled for tactical plans (`engine/ai/tactical/src/tactical_ai.cpp:1187-1199`).
 1. **Tactical perceptual evaluators**: exact definitions of the land/space tokens listed in §3.5 (`EnemyUnitConcentration(NBTD)`, `Location.*Force`, `IsContestable`, `TimeLastSeen`, `AdditionalPopulationCapacity`, `UnitSpaceAvailable`, `IsDefender`, `BaseLevel`, …). This is the largest gap for A1 parity: every tactical goal desire depends on them.
 2. **TacticalPerceptionGridClass** (0x653340 ctor, 0x6537d0, 0x657fc0, 0x6585f0): grid origin/size (likely from FOW cells × `AI_FogCellsPerThreatCell` 4), the entry weights in 0x6545d0 / 0x655e50, threat projection (`AI_*ThreatDistanceFactor`, `TurnRateFactor`, `LookAheadTime`, `AreaThreatScaleFactor`, `ThreatRangeCap`), and how `UnitAIBehavior` updates it.
-3. LandMovementBlockStatus / SpaceMovementBlockStatus completion rules (arrival radius, what counts as finished for attack-move and guard), and `Explore_Area`, `Prepare_Ambush`, `Bombing_Run`, `Fire_Special_Weapon`, `Find_Closest_Enemy` bodies. **`Prepare_Ambush` done (S7 t18, §7.3.1); empty-task-force `Move_To` / position done (S7 t17, §7.3.2).** Still open from §7.3.1/§7.3.2: the mode box vf +0x1f8 vs the playable box vf +0x208; the lost 5th signal id of the ambush member subscription [L: 0x1a]; the meaning of the type flags +0x13 / +0x14 / bit 0x37 in the No_Units_Remaining test; whether a plan can start with a 0-unit optional team.
+3. LandMovementBlockStatus / SpaceMovementBlockStatus completion rules (arrival radius, what counts as finished for attack-move and guard), and `Explore_Area`, `Prepare_Ambush`, `Bombing_Run`, `Fire_Special_Weapon`, `Find_Closest_Enemy` bodies. **`Prepare_Ambush` done (S7 t18, §7.3.1); empty-task-force `Move_To` / position done (S7 t17, §7.3.2).** Still open from §7.3.1/§7.3.2: the mode box vf +0x1f8 vs the playable box vf +0x208; the lost 5th signal id of the ambush member subscription [L: 0x1a]; ~~the meaning of the type flags +0x13 / +0x14 / bit 0x37 in the No_Units_Remaining test~~ (done 2026-11-02, §7.3.3: named hero, generic hero, Land LOBBING_SUPERWEAPON; +0x1e = Is_Special_Weapon_In_Space); whether a plan can start with a 0-unit optional team. Still open from §7.3.3: whether an object-target ability's pending entry is cleared when its target dies (else its block waits for 0xb / 0x10 / any 0x29); the meaning of locomotor vf +0x2b0 in the DEPLOY gate.
 4. Reinforcement landing positions (0x6eaf60) and the land ReinforceBlockStatus finish/fail rules. (Space resolved by refixf t06, §7.4: ring search in SpaceReinforceBlockStatus; 0x2b03e0 is the population-room test.)
 5. Free-store admission bit meanings (type bitfield +0x790 bits 0x20, 0x5b, 0x5f; obj +0x2b0/+0xf8; mode +0x38 set) and the +0x30 lock field writer; `Lua_Is_Object_On_Free_Store` / `Get_Object_Count`. **+0x30 writers/readers and the two Lua methods: done, A1_READINGS §28** (+0x30 = owning PP; `Lock_Current_Orders` is obj +0x3a8).
 6. `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit`, `Should_Switch_Weapons`, `Is_Good_Against`, `Get_Time_Till_Dead` (used by every land plan and PGEvents).
