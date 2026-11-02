@@ -1,15 +1,15 @@
 # galactic-ai campaign Sandbox_Heart_Of_The_Maw_Underworld battles auto seed 1 ticks 18000
-# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 4: 18000 ticks (3708.3 ms), galactic frame 18000, decisions 995, orders 109 (rejected 0), conflicts 38, battles 0, planet owner changes 0, running plans 7, Lua errors 0, planets: 0=4/2936 1=4/3 2=0/0 3=0/0 4=0/0 5=4/34851, final CRC ee3eacec035f0496
-# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 9 conflicts 12 crc 631ccfd1cc4cb1d2
-# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 18 crc 585986c100628b18
-# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 18 crc 80c99568592a60c9
-# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 18 crc c858e7d105e80992
-# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 18 crc 2e87ec674a34f26e
-# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 25 crc 5cb0e4bcccd3aa30
-# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 9 conflicts 37 crc 84a1bce1b77840d4
-# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 38 crc a1a2c4b902e701a1
-# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 38 crc 57d011f8a07ee298
-# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 38 crc ee3eacec035f0496
+# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 4: 18000 ticks (3795.1 ms), galactic frame 18000, decisions 855, orders 82 (rejected 0), conflicts 38, battles 0, planet owner changes 0, running plans 7, Lua errors 0, planets: 0=4/2576 1=4/2 2=0/0 3=0/0 4=0/0 5=4/33676, final CRC 365d5f28e5f8dd95
+# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 9 conflicts 12 crc 907ceb15f480cbe6
+# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 18 crc 3a30faf31a682fdb
+# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 18 crc 5acb1c8615626ce6
+# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 18 crc 8b11f864e46aacbb
+# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 18 crc fa5a58aad8f95339
+# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 25 crc c4080806f6f2b6ac
+# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 9 conflicts 35 crc 7eea392aa51366d7
+# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 38 crc acbe940d81b2fd04
+# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 38 crc ec65714dd2c9804d
+# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 38 crc 365d5f28e5f8dd95
 1 p0 opponent 5
 1 p0 templates Basic_Rebel_Default
 1 p1 opponent 5
@@ -20,28 +20,28 @@
 1 p5 templates Underworld_Galactic_Default
 1 p5 order auto-land 75 at NalHutta
 2 p1 templates Basic_Empire_Default Tech_Upgrade
-52 p5 plan 1 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 15.0
+52 p5 plan 1 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
 52 p5 plan 2 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
 52 p5 order launch 75 at NalHutta
 52 p5 order form 75 alone
 54 p0 plan 3 UPGRADESTARBASEPLAN for Upgrade_Starbase @MonCalimari BaseForce(0+1) net 4800 gross 4800 eta 64.8
 54 p0 plan 4 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 2200 gross 2200 eta 18.0
 54 p0 plan 5 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
-55 p0 build task 1 Rebel_Star_Base_4 for BaseForce at MonCalimari
-55 p0 build task 2 Nebulon_B_Frigate for ReserveForce
+55 p0 build task 0 Rebel_Star_Base_4 for BaseForce at MonCalimari
+55 p0 build task 1 Nebulon_B_Frigate for ReserveForce
 55 p5 order move fleet 107 -> Felucia
-58 p1 plan 6 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+3) net 8100 gross 8100 eta 30.0
+58 p1 plan 6 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+3) net 8100 gross 8100 eta 34.8
 58 p1 plan 7 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
-58 p1 build task 3 Victory_Destroyer for ReserveForce
-58 p1 build task 4 Acclamator_Assault_Ship for ReserveForce
-58 p1 build task 5 Broadside_Class_Cruiser for ReserveForce
+58 p1 build task 2 Broadside_Class_Cruiser for ReserveForce
+58 p1 build task 3 Acclamator_Assault_Ship for ReserveForce
+58 p1 build task 4 Victory_Destroyer for ReserveForce
 62 p0 order build Rebel_Star_Base_4 at MonCalimari
 93 p1 order build Victory_Destroyer at Kuat
 93 p0 order build Nebulon_B_Frigate at Naboo
-93 p1 order build Acclamator_Assault_Ship at Corellia
+93 p1 order build Broadside_Class_Cruiser at Corellia
 128 p5 plan 8 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 15.0
 128 p5 plan 9 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-130 p5 build task 6 Underworld_Saboteur_Team for MainForce
+130 p5 build task 5 Underworld_Saboteur_Team for MainForce
 130 p5 plan 9 FLUSHMAJORITEMBUDGET ended failure
 133 p0 plan 10 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 133 p0 plan 10 FLUSHMAJORITEMBUDGET ended failure
@@ -50,37 +50,37 @@
 154 p5 tf MainForce move to MonCalimari
 154 p5 order move fleet 98 -> Kashyyyk
 186 p5 order build Underworld_Saboteur_Team at Felucia
-203 p5 plan 12 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 15.0
-205 p5 build task 7 Underworld_Saboteur_Team for MainForce
+203 p5 plan 12 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 29.4
+205 p5 build task 6 Underworld_Saboteur_Team for MainForce
 211 p0 plan 13 REBELADVANCETECHPLAN for Advance_Tech_Rebel @global TechForce(0+1) net 0 gross 0 eta 0.0
 211 p0 plan 14 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 200 gross 200 eta 0.0
-211 p0 build task 8 Droids_Team for TechForce
+211 p0 build task 7 Droids_Team for TechForce
+211 p0 build task 8 Gargantuan_Battle_Platform for ReserveForce
 211 p0 build task 9 Rebel_Infiltrator_Team for ReserveForce
-211 p0 build task 10 Gargantuan_Battle_Platform for ReserveForce
-211 p0 build task 11 Gargantuan_Battle_Platform_Death_Clone for ReserveForce
-211 p0 build task 12 Rebel_Infiltrator_Team for ReserveForce
+211 p0 build task 10 Gargantuan_Battle_Platform_Death_Clone for ReserveForce
+211 p0 build task 11 Rebel_Infiltrator_Team for ReserveForce
 226 p5 plan 1 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-227 p1 plan 15 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 360 gross 360 eta 10.8
-229 p1 build task 13 Veers_AT_AT_Walker_Deployed_Death_Clone for ReserveForce
-229 p1 build task 14 Veers_AT_AT_Walker for ReserveForce
-229 p1 build task 15 Imperial_Stormtrooper_Squad for ReserveForce
-229 p1 build task 16 Noghri_Assassin_Squad for ReserveForce
+227 p1 plan 15 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 560 gross 560 eta 10.8
+229 p1 build task 12 Imperial_Armor_Group for ReserveForce
+229 p1 build task 13 Veers_AT_AT_Walker for ReserveForce
+229 p1 build task 14 Imperial_Stormtrooper_Squad for ReserveForce
 279 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
 289 p0 plan 16 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 289 p0 plan 16 FLUSHMAJORITEMBUDGET ended failure
 304 p1 templates Basic_Empire_Default
 311 p1 plan 17 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 313 p1 plan 17 FLUSHMAJORITEMBUDGET ended failure
-353 p5 plan 18 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 29.3
+353 p5 plan 18 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 30.0
 353 p5 plan 19 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-355 p5 build task 17 Underworld_Saboteur_Team for MainForce
+355 p5 build task 15 Underworld_Saboteur_Team for MainForce
 355 p5 plan 19 FLUSHMAJORITEMBUDGET ended failure
 444 p0 plan 20 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 445 p0 plan 20 FLUSHMAJORITEMBUDGET ended failure
 475 p1 plan 21 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 475 p1 plan 21 FLUSHMAJORITEMBUDGET ended failure
-502 p5 plan 22 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 30.0
-502 p5 build task 18 Underworld_Saboteur_Team for MainForce
+496 p1 order build Acclamator_Assault_Ship at Corellia
+502 p5 plan 22 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 34.5
+502 p5 build task 16 Underworld_Saboteur_Team for MainForce
 599 p0 plan 23 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 601 p0 plan 23 FLUSHMAJORITEMBUDGET ended failure
 639 p1 plan 24 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
@@ -91,16 +91,15 @@
 651 p5 plan 25 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 652 p5 plan 25 FLUSHMAJORITEMBUDGET ended failure
 682 p5 order build Underworld_Saboteur_Team at Felucia
-682 p1 order build Broadside_Class_Cruiser at Corellia
 712 p5 order move fleet 112 -> Kuat
 742 p5 order move fleet 112 -> Corellia
-754 p0 plan 26 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 2200 gross 2200 eta 18.0
-754 p0 build task 19 Nebulon_B_Frigate for ReserveForce
+754 p0 plan 26 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1350 gross 1350 eta 14.4
+754 p0 build task 17 Corellian_Gunboat for ReserveForce
 769 p5 order move fleet 112 -> Tatooine
 796 p5 order move fleet 112 -> Naboo
 803 p1 plan 27 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 805 p1 plan 27 FLUSHMAJORITEMBUDGET ended failure
-806 p0 order build Nebulon_B_Frigate at Naboo
+806 p0 order build Corellian_Gunboat at Naboo
 832 p0 plan 28 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 832 p0 plan 28 FLUSHMAJORITEMBUDGET ended failure
 916 p5 tf MainForce ability Underworld_Saboteur_Team 111 at Naboo not applied
@@ -110,8 +109,8 @@
 967 p1 plan 30 FLUSHMAJORITEMBUDGET ended failure
 987 p0 plan 31 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 988 p0 plan 31 FLUSHMAJORITEMBUDGET ended failure
-1042 p1 order move fleet 51 -> Corellia
-1075 p1 plan 6 BUILDSPACEFORCESPLAN ended success
+1036 p1 order move fleet 51 -> Corellia
+1069 p1 plan 6 BUILDSPACEFORCESPLAN ended success
 1131 p1 plan 32 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 1132 p1 plan 32 FLUSHMAJORITEMBUDGET ended failure
 1138 p5 tf MainForce move to Yavin
@@ -120,37 +119,41 @@
 1144 p0 plan 33 FLUSHMAJORITEMBUDGET ended failure
 1178 p5 order build Underworld_Saboteur_Team at Felucia
 1207 p5 order move fleet 117 -> The_Maw
-1213 p1 plan 34 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+4) net 8100 gross 8100 eta 30.0
-1213 p1 build task 20 Victory_Destroyer for ReserveForce
-1213 p1 build task 21 Broadside_Class_Cruiser for ReserveForce
-1213 p1 build task 22 Tartan_Patrol_Cruiser for ReserveForce
-1213 p1 build task 23 Tartan_Patrol_Cruiser for ReserveForce
+1213 p1 plan 34 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+3) net 8100 gross 8100 eta 30.0
+1213 p1 build task 18 Victory_Destroyer for ReserveForce
+1213 p1 build task 19 Acclamator_Assault_Ship for ReserveForce
+1213 p1 build task 20 Broadside_Class_Cruiser for ReserveForce
 1219 p5 plan 8 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 1245 p5 plan 35 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1246 p0 plan 26 BUILDSPACEFORCESPLAN ended success
 1246 p5 plan 35 FLUSHMAJORITEMBUDGET ended failure
 1271 p1 order build Victory_Destroyer at Kuat
-1271 p1 order build Broadside_Class_Cruiser at Corellia
+1271 p1 order build Acclamator_Assault_Ship at Corellia
 1295 p1 plan 36 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 1297 p0 plan 37 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 1297 p0 plan 37 FLUSHMAJORITEMBUDGET ended failure
 1297 p1 plan 36 FLUSHMAJORITEMBUDGET ended failure
-1354 p0 plan 26 BUILDSPACEFORCESPLAN ended success
 1369 p5 order move fleet 83 -> Yavin
-1374 p0 plan 3 UPGRADESTARBASEPLAN ended failure (released)
+1375 p0 plan 3 UPGRADESTARBASEPLAN ended failure (released)
 1377 p1 plan 34 BUILDSPACEFORCESPLAN ended failure (released)
 1394 p5 plan 38 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
 1396 p5 order move fleet 112 -> Felucia
-1453 p0 plan 39 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1453 p0 plan 39 FLUSHMAJORITEMBUDGET ended failure
-1460 p1 plan 40 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1462 p1 plan 40 FLUSHMAJORITEMBUDGET ended failure
+1454 p0 plan 39 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
+1454 p0 plan 40 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1456 p0 build task 21 Rebel_Star_Base_2 for BaseForce at Yavin
+1456 p0 plan 40 FLUSHMAJORITEMBUDGET ended failure
+1457 p0 order build Rebel_Star_Base_2 at Yavin
+1460 p1 plan 41 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1462 p1 plan 41 FLUSHMAJORITEMBUDGET ended failure
+1465 p0 build task 21 Rebel_Star_Base_2 failed (production dropped)
+1468 p0 plan 39 UPGRADESTARBASEPLAN ended failure
 1471 p5 tf MainForce ability Underworld_Saboteur_Team 116 at Yavin not applied
-1543 p5 plan 41 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1543 p5 plan 41 FLUSHMAJORITEMBUDGET ended failure
-1610 p0 plan 42 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1612 p0 plan 42 FLUSHMAJORITEMBUDGET ended failure
-1625 p1 plan 43 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1627 p1 plan 43 FLUSHMAJORITEMBUDGET ended failure
+1543 p5 plan 42 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1543 p5 plan 42 FLUSHMAJORITEMBUDGET ended failure
+1611 p0 plan 43 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1612 p0 plan 43 FLUSHMAJORITEMBUDGET ended failure
+1625 p1 plan 44 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1627 p1 plan 44 FLUSHMAJORITEMBUDGET ended failure
 1636 p5 tf MainForce move to Kashyyyk
 1636 p5 order move fleet 120 -> Kashyyyk
 1663 p5 tf MainForce move to Naboo
@@ -159,860 +162,717 @@
 1711 p5 tf MainForce ability Underworld_Saboteur_Team 119 at Kashyyyk not applied
 1732 p5 order move fleet 120 -> Kuat
 1762 p5 order move fleet 120 -> Corellia
-1767 p0 plan 44 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1768 p0 plan 44 FLUSHMAJORITEMBUDGET ended failure
+1768 p0 plan 45 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1768 p0 plan 45 FLUSHMAJORITEMBUDGET ended failure
 1771 p5 plan 12 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 1789 p5 order move fleet 120 -> Tatooine
-1790 p1 plan 45 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1792 p1 plan 45 FLUSHMAJORITEMBUDGET ended failure
+1790 p1 plan 46 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1792 p1 plan 46 FLUSHMAJORITEMBUDGET ended failure
 1816 p5 order move fleet 120 -> Naboo
-1840 p5 plan 46 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1840 p5 plan 46 FLUSHMAJORITEMBUDGET ended failure
-1924 p0 plan 47 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1924 p0 plan 47 FLUSHMAJORITEMBUDGET ended failure
+1840 p5 plan 47 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1840 p5 plan 47 FLUSHMAJORITEMBUDGET ended failure
+1925 p0 plan 48 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1927 p0 plan 48 FLUSHMAJORITEMBUDGET ended failure
 1936 p5 tf MainForce ability Underworld_Saboteur_Team 111 at Naboo not applied
-1955 p1 plan 48 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-1957 p1 plan 48 FLUSHMAJORITEMBUDGET ended failure
-1989 p5 plan 49 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
+1955 p1 plan 49 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+1957 p1 plan 49 FLUSHMAJORITEMBUDGET ended failure
+1989 p5 plan 50 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
 1990 p5 order move fleet 83 -> Felucia
 2011 p5 plan 18 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-2081 p0 plan 50 UPGRADESTARBASEPLAN for Build_Initial_Starbase_Only @Yavin BaseForce(0+1) net 600 gross 600 eta 20.0
-2081 p0 plan 51 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2083 p0 build task 24 Rebel_Star_Base_1 for BaseForce at Yavin
-2083 p0 plan 51 FLUSHMAJORITEMBUDGET ended failure
+2082 p0 plan 51 UPGRADESTARBASEPLAN for Build_Initial_Starbase_Only @Yavin BaseForce(0+1) net 600 gross 600 eta 20.0
+2082 p0 plan 52 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2083 p0 build task 22 Rebel_Star_Base_1 for BaseForce at Yavin
+2083 p0 plan 52 FLUSHMAJORITEMBUDGET ended failure
 2108 p0 order build Rebel_Star_Base_1 at Yavin
-2120 p1 plan 52 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2122 p1 plan 52 FLUSHMAJORITEMBUDGET ended failure
+2120 p1 plan 53 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2122 p1 plan 53 FLUSHMAJORITEMBUDGET ended failure
 2131 p5 tf MainForce move to MonCalimari
-2131 p5 order move fleet 122 -> Kashyyyk
-2138 p5 plan 53 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2140 p5 plan 53 FLUSHMAJORITEMBUDGET ended failure
-2200 p5 order move fleet 122 -> NalHutta
+2131 p5 order move fleet 123 -> Kashyyyk
+2138 p5 plan 54 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2140 p5 plan 54 FLUSHMAJORITEMBUDGET ended failure
+2200 p5 order move fleet 123 -> NalHutta
 2227 p5 order move fleet 76 -> Shola
 2236 p5 plan 38 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-2237 p0 plan 54 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2239 p0 plan 54 FLUSHMAJORITEMBUDGET ended failure
-2285 p1 plan 55 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2287 p1 plan 55 FLUSHMAJORITEMBUDGET ended failure
-2287 p5 plan 56 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
+2238 p0 plan 55 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2239 p0 plan 55 FLUSHMAJORITEMBUDGET ended failure
+2285 p1 plan 56 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2287 p1 plan 56 FLUSHMAJORITEMBUDGET ended failure
+2287 p5 plan 57 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
 2287 p5 order move fleet 120 -> Felucia
-2290 p5 tf MainForce move to Yavin
-2290 p5 order move fleet 83 -> Kashyyyk
 2335 p5 order move fleet 89 -> MonCalimari
-2362 p5 plan 49 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-2393 p0 plan 57 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2395 p0 plan 57 FLUSHMAJORITEMBUDGET ended failure
+2394 p0 plan 58 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2395 p0 plan 58 FLUSHMAJORITEMBUDGET ended failure
 2419 p5 plan 22 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-2437 p5 plan 58 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2437 p5 plan 58 FLUSHMAJORITEMBUDGET ended failure
-2450 p1 plan 59 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2452 p1 plan 59 FLUSHMAJORITEMBUDGET ended failure
+2437 p5 plan 59 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2437 p5 tf MainForce move to Yavin
+2437 p5 plan 59 FLUSHMAJORITEMBUDGET ended failure
+2437 p5 order move fleet 83 -> Kashyyyk
+2450 p1 plan 60 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2452 p1 plan 60 FLUSHMAJORITEMBUDGET ended failure
+2545 p5 plan 50 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
 2548 p5 order auto-land 111 at Felucia
-2549 p0 plan 60 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2551 p0 plan 60 FLUSHMAJORITEMBUDGET ended failure
+2550 p0 plan 61 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2551 p0 plan 61 FLUSHMAJORITEMBUDGET ended failure
 2554 p5 tf MainForce move to Kashyyyk
 2554 p5 order move fleet 120 -> Kashyyyk
-2615 p1 plan 61 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2617 p1 plan 61 FLUSHMAJORITEMBUDGET ended failure
+2615 p1 plan 62 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2617 p1 plan 62 FLUSHMAJORITEMBUDGET ended failure
 2629 p5 tf MainForce ability Underworld_Saboteur_Team 119 at Kashyyyk not applied
-2664 p5 plan 62 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2665 p5 plan 62 FLUSHMAJORITEMBUDGET ended failure
-2705 p0 plan 50 UPGRADESTARBASEPLAN ended failure (released)
-2705 p0 plan 63 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2706 p0 plan 51 UPGRADESTARBASEPLAN ended failure (released)
+2706 p0 plan 63 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 2707 p0 plan 63 FLUSHMAJORITEMBUDGET ended failure
-2780 p1 plan 64 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2782 p1 plan 64 FLUSHMAJORITEMBUDGET ended failure
-2816 p5 plan 65 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2818 p5 plan 65 FLUSHMAJORITEMBUDGET ended failure
-2862 p0 plan 66 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2739 p5 plan 64 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2740 p5 plan 64 FLUSHMAJORITEMBUDGET ended failure
+2780 p1 plan 65 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2782 p1 plan 65 FLUSHMAJORITEMBUDGET ended failure
+2863 p0 plan 66 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 2863 p0 plan 66 FLUSHMAJORITEMBUDGET ended failure
-2929 p5 plan 56 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-2945 p1 plan 67 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2947 p1 plan 67 FLUSHMAJORITEMBUDGET ended failure
-2968 p5 plan 68 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-2968 p5 plan 68 FLUSHMAJORITEMBUDGET ended failure
-3019 p0 plan 69 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3019 p0 plan 69 FLUSHMAJORITEMBUDGET ended failure
-3110 p1 plan 70 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3112 p1 plan 70 FLUSHMAJORITEMBUDGET ended failure
-3121 p5 plan 71 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3121 p5 plan 71 FLUSHMAJORITEMBUDGET ended failure
-3176 p0 plan 72 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2891 p5 plan 67 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2893 p5 plan 67 FLUSHMAJORITEMBUDGET ended failure
+2929 p5 plan 57 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+2945 p1 plan 68 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+2947 p1 plan 68 FLUSHMAJORITEMBUDGET ended failure
+3020 p0 plan 69 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3022 p0 plan 69 FLUSHMAJORITEMBUDGET ended failure
+3044 p5 plan 70 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3046 p5 plan 70 FLUSHMAJORITEMBUDGET ended failure
+3110 p1 plan 71 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3112 p1 plan 71 FLUSHMAJORITEMBUDGET ended failure
+3177 p0 plan 72 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3178 p0 plan 72 FLUSHMAJORITEMBUDGET ended failure
-3274 p5 plan 73 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3274 p5 plan 73 FLUSHMAJORITEMBUDGET ended failure
+3197 p5 plan 73 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3199 p5 plan 73 FLUSHMAJORITEMBUDGET ended failure
 3275 p1 plan 74 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3277 p1 plan 74 FLUSHMAJORITEMBUDGET ended failure
-3333 p0 plan 75 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3334 p0 plan 75 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3334 p0 plan 75 FLUSHMAJORITEMBUDGET ended failure
-3427 p5 plan 76 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3427 p5 plan 76 FLUSHMAJORITEMBUDGET ended failure
+3350 p5 plan 76 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3352 p5 plan 76 FLUSHMAJORITEMBUDGET ended failure
 3440 p1 plan 77 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3442 p1 plan 77 FLUSHMAJORITEMBUDGET ended failure
-3490 p0 plan 78 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3490 p0 plan 78 FLUSHMAJORITEMBUDGET ended failure
-3580 p5 plan 79 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3580 p5 plan 79 FLUSHMAJORITEMBUDGET ended failure
+3491 p0 plan 78 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3493 p0 plan 78 FLUSHMAJORITEMBUDGET ended failure
+3503 p5 plan 79 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3505 p5 plan 79 FLUSHMAJORITEMBUDGET ended failure
 3605 p1 plan 80 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3607 p1 plan 80 FLUSHMAJORITEMBUDGET ended failure
-3647 p0 plan 81 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3648 p0 plan 81 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3649 p0 plan 81 FLUSHMAJORITEMBUDGET ended failure
-3733 p5 plan 82 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3733 p5 plan 82 FLUSHMAJORITEMBUDGET ended failure
+3656 p5 plan 82 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3658 p5 plan 82 FLUSHMAJORITEMBUDGET ended failure
 3770 p1 plan 83 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3772 p1 plan 83 FLUSHMAJORITEMBUDGET ended failure
-3804 p0 plan 84 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3805 p0 plan 84 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3805 p0 plan 84 FLUSHMAJORITEMBUDGET ended failure
-3886 p5 plan 85 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3886 p5 plan 85 FLUSHMAJORITEMBUDGET ended failure
+3809 p5 plan 85 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3811 p5 plan 85 FLUSHMAJORITEMBUDGET ended failure
 3935 p1 plan 86 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 3937 p1 plan 86 FLUSHMAJORITEMBUDGET ended failure
-3961 p0 plan 87 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-3961 p0 plan 87 FLUSHMAJORITEMBUDGET ended failure
-4039 p5 plan 88 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4039 p5 plan 88 FLUSHMAJORITEMBUDGET ended failure
+3962 p0 plan 87 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3962 p5 plan 88 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+3964 p0 plan 87 FLUSHMAJORITEMBUDGET ended failure
+3964 p5 plan 88 FLUSHMAJORITEMBUDGET ended failure
 4100 p1 plan 89 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 4102 p1 plan 89 FLUSHMAJORITEMBUDGET ended failure
-4118 p0 plan 90 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4120 p0 plan 90 FLUSHMAJORITEMBUDGET ended failure
-4192 p5 plan 91 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4192 p5 plan 91 FLUSHMAJORITEMBUDGET ended failure
+4115 p5 plan 90 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4117 p5 plan 90 FLUSHMAJORITEMBUDGET ended failure
+4119 p0 plan 91 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4120 p0 plan 91 FLUSHMAJORITEMBUDGET ended failure
 4265 p1 plan 92 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 4267 p1 plan 92 FLUSHMAJORITEMBUDGET ended failure
-4275 p0 plan 93 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4276 p0 plan 93 FLUSHMAJORITEMBUDGET ended failure
-4345 p5 plan 94 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4345 p5 plan 94 FLUSHMAJORITEMBUDGET ended failure
-4430 p1 plan 95 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4432 p0 plan 96 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4432 p0 plan 96 FLUSHMAJORITEMBUDGET ended failure
-4432 p1 plan 95 FLUSHMAJORITEMBUDGET ended failure
-4498 p5 plan 97 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4498 p5 plan 97 FLUSHMAJORITEMBUDGET ended failure
-4589 p0 plan 98 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4591 p0 plan 98 FLUSHMAJORITEMBUDGET ended failure
-4595 p1 plan 99 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4597 p1 plan 99 FLUSHMAJORITEMBUDGET ended failure
-4651 p5 plan 100 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4651 p5 plan 100 FLUSHMAJORITEMBUDGET ended failure
-4746 p0 plan 101 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4747 p0 plan 101 FLUSHMAJORITEMBUDGET ended failure
-4760 p1 plan 102 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4762 p1 plan 102 FLUSHMAJORITEMBUDGET ended failure
-4804 p5 plan 103 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4804 p5 plan 103 FLUSHMAJORITEMBUDGET ended failure
-4903 p0 plan 104 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4903 p0 plan 104 FLUSHMAJORITEMBUDGET ended failure
-4925 p1 plan 105 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4927 p1 plan 105 FLUSHMAJORITEMBUDGET ended failure
-4957 p5 plan 106 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-4957 p5 plan 106 FLUSHMAJORITEMBUDGET ended failure
-5060 p0 plan 107 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5062 p0 plan 107 FLUSHMAJORITEMBUDGET ended failure
-5090 p1 plan 108 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5092 p1 plan 108 FLUSHMAJORITEMBUDGET ended failure
-5110 p5 plan 109 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5110 p5 plan 109 FLUSHMAJORITEMBUDGET ended failure
-5217 p0 plan 110 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5218 p0 plan 110 FLUSHMAJORITEMBUDGET ended failure
-5255 p1 plan 111 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5257 p1 plan 111 FLUSHMAJORITEMBUDGET ended failure
-5263 p5 plan 112 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5263 p5 plan 112 FLUSHMAJORITEMBUDGET ended failure
-5374 p0 plan 113 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5374 p0 plan 113 FLUSHMAJORITEMBUDGET ended failure
-5416 p5 plan 114 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5416 p5 plan 114 FLUSHMAJORITEMBUDGET ended failure
+4268 p5 plan 93 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4270 p5 plan 93 FLUSHMAJORITEMBUDGET ended failure
+4276 p0 plan 94 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4276 p0 plan 94 FLUSHMAJORITEMBUDGET ended failure
+4421 p5 plan 95 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4423 p5 plan 95 FLUSHMAJORITEMBUDGET ended failure
+4430 p1 plan 96 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4432 p1 plan 96 FLUSHMAJORITEMBUDGET ended failure
+4433 p0 plan 97 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4435 p0 plan 97 FLUSHMAJORITEMBUDGET ended failure
+4574 p5 plan 98 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4576 p5 plan 98 FLUSHMAJORITEMBUDGET ended failure
+4590 p0 plan 99 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4591 p0 plan 99 FLUSHMAJORITEMBUDGET ended failure
+4595 p1 plan 100 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4597 p1 plan 100 FLUSHMAJORITEMBUDGET ended failure
+4727 p5 plan 101 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4729 p5 plan 101 FLUSHMAJORITEMBUDGET ended failure
+4747 p0 plan 102 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4747 p0 plan 102 FLUSHMAJORITEMBUDGET ended failure
+4760 p1 plan 103 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4762 p1 plan 103 FLUSHMAJORITEMBUDGET ended failure
+4880 p5 plan 104 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4882 p5 plan 104 FLUSHMAJORITEMBUDGET ended failure
+4904 p0 plan 105 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4906 p0 plan 105 FLUSHMAJORITEMBUDGET ended failure
+4925 p1 plan 106 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+4927 p1 plan 106 FLUSHMAJORITEMBUDGET ended failure
+5033 p5 plan 107 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5035 p5 plan 107 FLUSHMAJORITEMBUDGET ended failure
+5061 p0 plan 108 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5062 p0 plan 108 FLUSHMAJORITEMBUDGET ended failure
+5090 p1 plan 109 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5092 p1 plan 109 FLUSHMAJORITEMBUDGET ended failure
+5186 p5 plan 110 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5188 p5 plan 110 FLUSHMAJORITEMBUDGET ended failure
+5218 p0 plan 111 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5218 p0 plan 111 FLUSHMAJORITEMBUDGET ended failure
+5255 p1 plan 112 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5257 p1 plan 112 FLUSHMAJORITEMBUDGET ended failure
+5339 p5 plan 113 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5341 p5 plan 113 FLUSHMAJORITEMBUDGET ended failure
+5375 p0 plan 114 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5377 p0 plan 114 FLUSHMAJORITEMBUDGET ended failure
 5420 p1 plan 115 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 5422 p1 plan 115 FLUSHMAJORITEMBUDGET ended failure
-5531 p0 plan 116 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5533 p0 plan 116 FLUSHMAJORITEMBUDGET ended failure
-5569 p5 plan 117 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5569 p5 plan 117 FLUSHMAJORITEMBUDGET ended failure
+5492 p5 plan 116 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5494 p5 plan 116 FLUSHMAJORITEMBUDGET ended failure
+5532 p0 plan 117 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5533 p0 plan 117 FLUSHMAJORITEMBUDGET ended failure
 5585 p1 plan 118 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 5587 p1 plan 118 FLUSHMAJORITEMBUDGET ended failure
-5688 p0 plan 119 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5689 p0 plan 119 FLUSHMAJORITEMBUDGET ended failure
-5722 p5 plan 120 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5722 p5 plan 120 FLUSHMAJORITEMBUDGET ended failure
+5645 p5 plan 119 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5647 p5 plan 119 FLUSHMAJORITEMBUDGET ended failure
+5689 p0 plan 120 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5689 p0 plan 120 FLUSHMAJORITEMBUDGET ended failure
 5750 p1 plan 121 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 5752 p1 plan 121 FLUSHMAJORITEMBUDGET ended failure
-5845 p0 plan 122 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5845 p0 plan 122 FLUSHMAJORITEMBUDGET ended failure
-5875 p5 plan 123 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-5875 p5 plan 123 FLUSHMAJORITEMBUDGET ended failure
+5798 p5 plan 122 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5800 p5 plan 122 FLUSHMAJORITEMBUDGET ended failure
+5846 p0 plan 123 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5848 p0 plan 123 FLUSHMAJORITEMBUDGET ended failure
 5915 p1 plan 124 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 5917 p1 plan 124 FLUSHMAJORITEMBUDGET ended failure
-6002 p0 plan 125 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6004 p0 plan 125 FLUSHMAJORITEMBUDGET ended failure
-6028 p5 plan 126 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6028 p5 plan 126 FLUSHMAJORITEMBUDGET ended failure
+5951 p5 plan 125 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+5953 p5 plan 125 FLUSHMAJORITEMBUDGET ended failure
+6003 p0 plan 126 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6004 p0 plan 126 FLUSHMAJORITEMBUDGET ended failure
 6080 p1 plan 127 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 6082 p1 plan 127 FLUSHMAJORITEMBUDGET ended failure
-6159 p0 plan 128 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6160 p0 plan 128 FLUSHMAJORITEMBUDGET ended failure
-6181 p5 plan 129 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6181 p5 plan 129 FLUSHMAJORITEMBUDGET ended failure
+6104 p5 plan 128 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6106 p5 plan 128 FLUSHMAJORITEMBUDGET ended failure
+6160 p0 plan 129 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6160 p0 plan 129 FLUSHMAJORITEMBUDGET ended failure
 6245 p1 plan 130 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 6247 p1 plan 130 FLUSHMAJORITEMBUDGET ended failure
-6316 p0 plan 131 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6316 p0 plan 131 FLUSHMAJORITEMBUDGET ended failure
-6334 p5 plan 132 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6334 p5 plan 132 FLUSHMAJORITEMBUDGET ended failure
+6257 p5 plan 131 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6259 p5 plan 131 FLUSHMAJORITEMBUDGET ended failure
+6317 p0 plan 132 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6319 p0 plan 132 FLUSHMAJORITEMBUDGET ended failure
 6410 p1 plan 133 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6410 p5 plan 134 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 6412 p1 plan 133 FLUSHMAJORITEMBUDGET ended failure
-6473 p0 plan 134 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6475 p0 plan 134 FLUSHMAJORITEMBUDGET ended failure
-6487 p5 plan 135 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6487 p5 plan 135 FLUSHMAJORITEMBUDGET ended failure
-6575 p1 plan 136 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6577 p1 plan 136 FLUSHMAJORITEMBUDGET ended failure
-6630 p0 plan 137 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6631 p0 plan 137 FLUSHMAJORITEMBUDGET ended failure
-6640 p5 plan 138 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6640 p5 plan 138 FLUSHMAJORITEMBUDGET ended failure
-6740 p1 plan 139 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6742 p1 plan 139 FLUSHMAJORITEMBUDGET ended failure
-6787 p0 plan 140 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6787 p0 plan 140 FLUSHMAJORITEMBUDGET ended failure
-6793 p5 plan 141 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6793 p5 plan 141 FLUSHMAJORITEMBUDGET ended failure
-6905 p1 plan 142 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6907 p1 plan 142 FLUSHMAJORITEMBUDGET ended failure
-6944 p0 plan 143 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6946 p0 plan 143 FLUSHMAJORITEMBUDGET ended failure
-6946 p5 plan 144 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-6946 p5 plan 144 FLUSHMAJORITEMBUDGET ended failure
-7070 p1 plan 145 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7072 p1 plan 145 FLUSHMAJORITEMBUDGET ended failure
-7099 p5 plan 146 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7099 p5 plan 146 FLUSHMAJORITEMBUDGET ended failure
-7101 p0 plan 147 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6412 p5 plan 134 FLUSHMAJORITEMBUDGET ended failure
+6474 p0 plan 135 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6475 p0 plan 135 FLUSHMAJORITEMBUDGET ended failure
+6563 p5 plan 136 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6565 p5 plan 136 FLUSHMAJORITEMBUDGET ended failure
+6575 p1 plan 137 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6577 p1 plan 137 FLUSHMAJORITEMBUDGET ended failure
+6631 p0 plan 138 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6631 p0 plan 138 FLUSHMAJORITEMBUDGET ended failure
+6716 p5 plan 139 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6718 p5 plan 139 FLUSHMAJORITEMBUDGET ended failure
+6740 p1 plan 140 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6742 p1 plan 140 FLUSHMAJORITEMBUDGET ended failure
+6788 p0 plan 141 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6790 p0 plan 141 FLUSHMAJORITEMBUDGET ended failure
+6869 p5 plan 142 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6871 p5 plan 142 FLUSHMAJORITEMBUDGET ended failure
+6905 p1 plan 143 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6907 p1 plan 143 FLUSHMAJORITEMBUDGET ended failure
+6945 p0 plan 144 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+6946 p0 plan 144 FLUSHMAJORITEMBUDGET ended failure
+7022 p5 plan 145 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7024 p5 plan 145 FLUSHMAJORITEMBUDGET ended failure
+7070 p1 plan 146 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7072 p1 plan 146 FLUSHMAJORITEMBUDGET ended failure
+7102 p0 plan 147 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 7102 p0 plan 147 FLUSHMAJORITEMBUDGET ended failure
-7235 p1 plan 148 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7237 p1 plan 148 FLUSHMAJORITEMBUDGET ended failure
-7252 p5 plan 149 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7252 p5 plan 149 FLUSHMAJORITEMBUDGET ended failure
-7258 p0 plan 150 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7258 p0 plan 150 FLUSHMAJORITEMBUDGET ended failure
-7400 p1 plan 151 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7402 p1 plan 151 FLUSHMAJORITEMBUDGET ended failure
-7405 p5 plan 152 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7405 p5 plan 152 FLUSHMAJORITEMBUDGET ended failure
-7415 p0 plan 153 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7175 p5 plan 148 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7177 p5 plan 148 FLUSHMAJORITEMBUDGET ended failure
+7235 p1 plan 149 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7237 p1 plan 149 FLUSHMAJORITEMBUDGET ended failure
+7259 p0 plan 150 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7261 p0 plan 150 FLUSHMAJORITEMBUDGET ended failure
+7328 p5 plan 151 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7330 p5 plan 151 FLUSHMAJORITEMBUDGET ended failure
+7400 p1 plan 152 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7402 p1 plan 152 FLUSHMAJORITEMBUDGET ended failure
+7416 p0 plan 153 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 7417 p0 plan 153 FLUSHMAJORITEMBUDGET ended failure
-7558 p5 plan 154 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7558 p5 plan 154 FLUSHMAJORITEMBUDGET ended failure
+7481 p5 plan 154 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7483 p5 plan 154 FLUSHMAJORITEMBUDGET ended failure
 7565 p1 plan 155 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 7567 p1 plan 155 FLUSHMAJORITEMBUDGET ended failure
-7572 p0 plan 156 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7573 p0 plan 156 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 7573 p0 plan 156 FLUSHMAJORITEMBUDGET ended failure
-7711 p5 plan 157 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7711 p5 plan 157 FLUSHMAJORITEMBUDGET ended failure
-7729 p0 plan 158 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7729 p0 plan 158 FLUSHMAJORITEMBUDGET ended failure
+7634 p5 plan 157 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7636 p5 plan 157 FLUSHMAJORITEMBUDGET ended failure
+7730 p0 plan 158 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 7730 p1 plan 159 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7732 p0 plan 158 FLUSHMAJORITEMBUDGET ended failure
 7732 p1 plan 159 FLUSHMAJORITEMBUDGET ended failure
-7864 p5 plan 160 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-7864 p5 plan 160 FLUSHMAJORITEMBUDGET ended failure
-7886 p0 plan 161 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7787 p5 plan 160 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7789 p5 plan 160 FLUSHMAJORITEMBUDGET ended failure
+7887 p0 plan 161 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 7888 p0 plan 161 FLUSHMAJORITEMBUDGET ended failure
 7895 p1 plan 162 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 7897 p1 plan 162 FLUSHMAJORITEMBUDGET ended failure
-8017 p5 plan 163 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8017 p5 plan 163 FLUSHMAJORITEMBUDGET ended failure
-8043 p0 plan 164 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7940 p5 plan 163 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+7942 p5 plan 163 FLUSHMAJORITEMBUDGET ended failure
+8044 p0 plan 164 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 8044 p0 plan 164 FLUSHMAJORITEMBUDGET ended failure
 8060 p1 plan 165 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 8062 p1 plan 165 FLUSHMAJORITEMBUDGET ended failure
-8170 p5 plan 166 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8170 p5 plan 166 FLUSHMAJORITEMBUDGET ended failure
-8200 p0 plan 167 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8200 p0 plan 167 FLUSHMAJORITEMBUDGET ended failure
+8093 p5 plan 166 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8095 p5 plan 166 FLUSHMAJORITEMBUDGET ended failure
+8201 p0 plan 167 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8203 p0 plan 167 FLUSHMAJORITEMBUDGET ended failure
 8225 p1 plan 168 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 8227 p1 plan 168 FLUSHMAJORITEMBUDGET ended failure
-8323 p5 plan 169 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8323 p5 plan 169 FLUSHMAJORITEMBUDGET ended failure
-8357 p0 plan 170 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8246 p5 plan 169 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8248 p5 plan 169 FLUSHMAJORITEMBUDGET ended failure
+8358 p0 plan 170 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 8359 p0 plan 170 FLUSHMAJORITEMBUDGET ended failure
 8390 p1 plan 171 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 8392 p1 plan 171 FLUSHMAJORITEMBUDGET ended failure
-8476 p5 plan 172 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8476 p5 plan 172 FLUSHMAJORITEMBUDGET ended failure
-8514 p0 plan 173 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8399 p5 plan 172 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8401 p5 plan 172 FLUSHMAJORITEMBUDGET ended failure
+8515 p0 plan 173 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 8515 p0 plan 173 FLUSHMAJORITEMBUDGET ended failure
-8555 p1 plan 174 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8557 p1 plan 174 FLUSHMAJORITEMBUDGET ended failure
-8629 p5 plan 175 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8629 p5 plan 175 FLUSHMAJORITEMBUDGET ended failure
-8671 p0 plan 176 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8671 p0 plan 176 FLUSHMAJORITEMBUDGET ended failure
-8720 p1 plan 177 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8722 p1 plan 177 FLUSHMAJORITEMBUDGET ended failure
-8782 p5 plan 178 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8782 p5 plan 178 FLUSHMAJORITEMBUDGET ended failure
-8828 p0 plan 179 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8552 p5 plan 174 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8554 p5 plan 174 FLUSHMAJORITEMBUDGET ended failure
+8555 p1 plan 175 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8557 p1 plan 175 FLUSHMAJORITEMBUDGET ended failure
+8672 p0 plan 176 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8674 p0 plan 176 FLUSHMAJORITEMBUDGET ended failure
+8705 p5 plan 177 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8707 p5 plan 177 FLUSHMAJORITEMBUDGET ended failure
+8720 p1 plan 178 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8722 p1 plan 178 FLUSHMAJORITEMBUDGET ended failure
+8829 p0 plan 179 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 8830 p0 plan 179 FLUSHMAJORITEMBUDGET ended failure
-8885 p1 plan 180 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8887 p1 plan 180 FLUSHMAJORITEMBUDGET ended failure
-8935 p5 plan 181 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-8935 p5 plan 181 FLUSHMAJORITEMBUDGET ended failure
-8985 p0 plan 182 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8858 p5 plan 180 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8860 p5 plan 180 FLUSHMAJORITEMBUDGET ended failure
+8885 p1 plan 181 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+8887 p1 plan 181 FLUSHMAJORITEMBUDGET ended failure
+8986 p0 plan 182 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 8986 p0 plan 182 FLUSHMAJORITEMBUDGET ended failure
-9050 p1 plan 183 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9052 p1 plan 183 FLUSHMAJORITEMBUDGET ended failure
-9088 p5 plan 184 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9088 p5 plan 184 FLUSHMAJORITEMBUDGET ended failure
-9142 p0 plan 185 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9142 p0 plan 185 FLUSHMAJORITEMBUDGET ended failure
-9215 p1 plan 186 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9217 p1 plan 186 FLUSHMAJORITEMBUDGET ended failure
-9241 p5 plan 187 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9241 p5 plan 187 FLUSHMAJORITEMBUDGET ended failure
-9299 p0 plan 188 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9011 p5 plan 183 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9013 p5 plan 183 FLUSHMAJORITEMBUDGET ended failure
+9050 p1 plan 184 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9052 p1 plan 184 FLUSHMAJORITEMBUDGET ended failure
+9143 p0 plan 185 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9145 p0 plan 185 FLUSHMAJORITEMBUDGET ended failure
+9164 p5 plan 186 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9166 p5 plan 186 FLUSHMAJORITEMBUDGET ended failure
+9215 p1 plan 187 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9217 p1 plan 187 FLUSHMAJORITEMBUDGET ended failure
+9300 p0 plan 188 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 9301 p0 plan 188 FLUSHMAJORITEMBUDGET ended failure
 9317 p5 plan 189 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
+9317 p5 plan 190 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9319 p5 plan 190 FLUSHMAJORITEMBUDGET ended failure
 9319 p5 order move fleet 120 -> Felucia
-9380 p1 plan 190 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9382 p1 plan 190 FLUSHMAJORITEMBUDGET ended failure
-9393 p5 plan 191 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9380 p1 plan 191 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9382 p1 plan 191 FLUSHMAJORITEMBUDGET ended failure
 9394 p5 tf MainForce move to MonCalimari
-9394 p5 plan 191 FLUSHMAJORITEMBUDGET ended failure
 9394 p5 order move fleet 120 -> Kashyyyk
-9456 p0 plan 192 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9457 p0 plan 192 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 9457 p0 plan 192 FLUSHMAJORITEMBUDGET ended failure
 9463 p5 order move fleet 120 -> NalHutta
+9469 p5 plan 193 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9469 p5 plan 193 FLUSHMAJORITEMBUDGET ended failure
 9490 p5 order move fleet 120 -> Shola
-9545 p1 plan 193 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9545 p5 plan 194 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9547 p1 plan 193 FLUSHMAJORITEMBUDGET ended failure
-9547 p5 plan 194 FLUSHMAJORITEMBUDGET ended failure
+9535 p0 plan 194 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
+9535 p0 build task 23 Rebel_Star_Base_2 for BaseForce at Yavin
+9545 p1 plan 195 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9547 p1 plan 195 FLUSHMAJORITEMBUDGET ended failure
+9548 p0 order build Rebel_Star_Base_2 at Yavin
 9598 p5 order move fleet 120 -> MonCalimari
-9613 p0 plan 195 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9613 p0 plan 195 FLUSHMAJORITEMBUDGET ended failure
+9613 p0 plan 196 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9613 p0 plan 196 FLUSHMAJORITEMBUDGET ended failure
+9621 p5 plan 197 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9622 p5 plan 197 FLUSHMAJORITEMBUDGET ended failure
 9685 p5 tf MainForce ability Underworld_Saboteur_Team 119 at MonCalimari not applied
-9697 p5 plan 196 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9697 p5 plan 196 FLUSHMAJORITEMBUDGET ended failure
-9710 p1 plan 197 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9712 p1 plan 197 FLUSHMAJORITEMBUDGET ended failure
-9770 p0 plan 198 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9772 p0 plan 198 FLUSHMAJORITEMBUDGET ended failure
-9849 p5 plan 199 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9850 p5 plan 199 FLUSHMAJORITEMBUDGET ended failure
-9875 p1 plan 200 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9877 p1 plan 200 FLUSHMAJORITEMBUDGET ended failure
-9927 p0 plan 201 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-9928 p0 plan 201 FLUSHMAJORITEMBUDGET ended failure
+9710 p1 plan 198 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9712 p1 plan 198 FLUSHMAJORITEMBUDGET ended failure
+9769 p0 plan 199 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9769 p0 plan 199 FLUSHMAJORITEMBUDGET ended failure
+9773 p5 plan 200 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9775 p5 plan 200 FLUSHMAJORITEMBUDGET ended failure
+9875 p1 plan 201 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9877 p1 plan 201 FLUSHMAJORITEMBUDGET ended failure
+9925 p0 plan 202 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9925 p0 plan 202 FLUSHMAJORITEMBUDGET ended failure
+9925 p5 plan 203 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+9925 p5 plan 203 FLUSHMAJORITEMBUDGET ended failure
 9985 p5 plan 189 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-10001 p5 plan 202 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10003 p5 plan 202 FLUSHMAJORITEMBUDGET ended failure
-10040 p1 plan 203 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10042 p1 plan 203 FLUSHMAJORITEMBUDGET ended failure
-10084 p0 plan 204 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10084 p0 plan 204 FLUSHMAJORITEMBUDGET ended failure
-10154 p5 plan 205 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10156 p5 plan 205 FLUSHMAJORITEMBUDGET ended failure
-10205 p1 plan 206 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10207 p1 plan 206 FLUSHMAJORITEMBUDGET ended failure
-10241 p0 plan 207 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10243 p0 plan 207 FLUSHMAJORITEMBUDGET ended failure
-10307 p5 plan 208 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
-10307 p5 plan 209 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10309 p5 plan 209 FLUSHMAJORITEMBUDGET ended failure
+10040 p1 plan 204 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10042 p1 plan 204 FLUSHMAJORITEMBUDGET ended failure
+10078 p5 plan 205 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10078 p5 plan 205 FLUSHMAJORITEMBUDGET ended failure
+10081 p0 plan 206 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10081 p0 plan 206 FLUSHMAJORITEMBUDGET ended failure
+10204 p0 plan 194 UPGRADESTARBASEPLAN ended success
+10205 p1 plan 207 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10207 p1 plan 207 FLUSHMAJORITEMBUDGET ended failure
+10231 p5 plan 208 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10231 p5 plan 208 FLUSHMAJORITEMBUDGET ended failure
+10237 p0 plan 209 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10237 p0 plan 209 FLUSHMAJORITEMBUDGET ended failure
+10307 p5 plan 210 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
 10318 p5 tf MainForce move to Naboo
 10318 p5 order launch 111 at Felucia
 10318 p5 order form 111 alone
 10318 p5 order move fleet 126 -> Kashyyyk
-10370 p1 plan 210 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10372 p1 plan 210 FLUSHMAJORITEMBUDGET ended failure
+10370 p1 plan 211 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10372 p1 plan 211 FLUSHMAJORITEMBUDGET ended failure
+10383 p5 plan 212 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10384 p5 plan 212 FLUSHMAJORITEMBUDGET ended failure
 10387 p5 order move fleet 126 -> Kuat
-10398 p0 plan 211 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10399 p0 plan 211 FLUSHMAJORITEMBUDGET ended failure
+10394 p0 plan 213 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10396 p0 plan 213 FLUSHMAJORITEMBUDGET ended failure
 10417 p5 order move fleet 126 -> Corellia
 10444 p5 order move fleet 126 -> Tatooine
-10459 p5 plan 212 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10459 p5 plan 212 FLUSHMAJORITEMBUDGET ended failure
 10471 p5 order move fleet 126 -> Naboo
-10535 p1 plan 213 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10537 p1 plan 213 FLUSHMAJORITEMBUDGET ended failure
-10555 p0 plan 214 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10555 p0 plan 214 FLUSHMAJORITEMBUDGET ended failure
+10535 p1 plan 214 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10535 p5 plan 215 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10537 p1 plan 214 FLUSHMAJORITEMBUDGET ended failure
+10537 p5 plan 215 FLUSHMAJORITEMBUDGET ended failure
+10551 p0 plan 216 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10552 p0 plan 216 FLUSHMAJORITEMBUDGET ended failure
 10591 p5 tf MainForce ability Underworld_Saboteur_Team 111 at Naboo not applied
-10611 p5 plan 215 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10612 p5 plan 215 FLUSHMAJORITEMBUDGET ended failure
-10700 p1 plan 216 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10702 p1 plan 216 FLUSHMAJORITEMBUDGET ended failure
-10712 p0 plan 217 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10714 p0 plan 217 FLUSHMAJORITEMBUDGET ended failure
-10763 p5 plan 218 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10765 p5 plan 218 FLUSHMAJORITEMBUDGET ended failure
-10865 p1 plan 219 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10867 p1 plan 219 FLUSHMAJORITEMBUDGET ended failure
-10869 p0 plan 220 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10870 p0 plan 220 FLUSHMAJORITEMBUDGET ended failure
-10891 p5 plan 208 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-10915 p5 plan 221 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
-10915 p5 plan 222 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-10915 p5 plan 222 FLUSHMAJORITEMBUDGET ended failure
+10687 p5 plan 217 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10687 p5 plan 217 FLUSHMAJORITEMBUDGET ended failure
+10700 p1 plan 218 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10702 p1 plan 218 FLUSHMAJORITEMBUDGET ended failure
+10708 p0 plan 219 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10708 p0 plan 219 FLUSHMAJORITEMBUDGET ended failure
+10839 p5 plan 220 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10840 p5 plan 220 FLUSHMAJORITEMBUDGET ended failure
+10865 p0 plan 221 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10865 p1 plan 222 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10867 p0 plan 221 FLUSHMAJORITEMBUDGET ended failure
+10867 p1 plan 222 FLUSHMAJORITEMBUDGET ended failure
+10891 p5 plan 210 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+10915 p5 plan 223 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
 10915 p5 order move fleet 120 -> Felucia
-11026 p0 plan 223 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11026 p0 plan 223 FLUSHMAJORITEMBUDGET ended failure
-11030 p1 plan 224 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11032 p1 plan 224 FLUSHMAJORITEMBUDGET ended failure
-11067 p5 plan 225 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11068 p5 plan 225 FLUSHMAJORITEMBUDGET ended failure
-11143 p5 plan 226 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
+10991 p5 plan 224 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+10993 p5 plan 224 FLUSHMAJORITEMBUDGET ended failure
+11022 p0 plan 225 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11023 p0 plan 225 FLUSHMAJORITEMBUDGET ended failure
+11030 p1 plan 226 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11032 p1 plan 226 FLUSHMAJORITEMBUDGET ended failure
+11143 p5 plan 227 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
+11143 p5 plan 228 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11143 p5 plan 228 FLUSHMAJORITEMBUDGET ended failure
 11143 p5 order move fleet 126 -> Felucia
-11183 p0 plan 227 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11185 p0 plan 227 FLUSHMAJORITEMBUDGET ended failure
-11195 p1 plan 228 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11197 p1 plan 228 FLUSHMAJORITEMBUDGET ended failure
+11179 p0 plan 229 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11179 p0 plan 229 FLUSHMAJORITEMBUDGET ended failure
+11195 p1 plan 230 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11197 p1 plan 230 FLUSHMAJORITEMBUDGET ended failure
 11200 p5 tf MainForce move to Yavin
 11200 p5 order move fleet 120 -> Kashyyyk
-11219 p5 plan 229 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11221 p5 plan 229 FLUSHMAJORITEMBUDGET ended failure
 11269 p5 order move fleet 120 -> The_Maw
-11340 p0 plan 230 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11341 p0 plan 230 FLUSHMAJORITEMBUDGET ended failure
-11360 p1 plan 231 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11362 p1 plan 231 FLUSHMAJORITEMBUDGET ended failure
+11336 p0 plan 231 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11338 p0 plan 231 FLUSHMAJORITEMBUDGET ended failure
+11360 p1 plan 232 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11362 p1 plan 232 FLUSHMAJORITEMBUDGET ended failure
+11369 p5 plan 233 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11371 p5 plan 233 FLUSHMAJORITEMBUDGET ended failure
 11410 p5 tf MainForce move to Kashyyyk
 11410 p5 order move fleet 126 -> Kashyyyk
 11431 p5 order move fleet 120 -> Yavin
-11445 p5 plan 232 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 15.0
-11445 p5 plan 233 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11446 p5 build task 25 Underworld_Saboteur_Team for MainForce
-11446 p5 plan 233 FLUSHMAJORITEMBUDGET ended failure
+11444 p5 plan 234 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 15.0
+11446 p5 build task 24 Underworld_Saboteur_Team for MainForce
 11485 p5 tf MainForce ability Underworld_Saboteur_Team 111 at Kashyyyk not applied
-11497 p0 plan 234 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11497 p0 plan 234 FLUSHMAJORITEMBUDGET ended failure
+11493 p0 plan 235 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11494 p0 plan 235 FLUSHMAJORITEMBUDGET ended failure
 11500 p5 tf MainForce ability Underworld_Saboteur_Team 119 at Yavin not applied
 11501 p5 order build Underworld_Saboteur_Team at Felucia
-11520 p5 plan 235 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 15.0
-11521 p5 build task 26 Underworld_Saboteur_Team for MainForce
 11525 p1 plan 236 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 11527 p1 plan 236 FLUSHMAJORITEMBUDGET ended failure
-11654 p0 plan 237 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11656 p0 plan 237 FLUSHMAJORITEMBUDGET ended failure
-11669 p5 plan 238 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11671 p5 plan 238 FLUSHMAJORITEMBUDGET ended failure
-11690 p1 plan 239 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11692 p1 plan 239 FLUSHMAJORITEMBUDGET ended failure
-11785 p5 plan 226 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-11800 p5 plan 221 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-11811 p0 plan 240 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11812 p0 plan 240 FLUSHMAJORITEMBUDGET ended failure
-11855 p1 plan 241 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11857 p1 plan 241 FLUSHMAJORITEMBUDGET ended failure
+11594 p5 plan 237 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(0+1) net 1000 gross 1000 eta 26.9
+11594 p5 plan 238 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11596 p5 build task 25 Underworld_Saboteur_Team for MainForce
+11596 p5 plan 238 FLUSHMAJORITEMBUDGET ended failure
+11650 p0 plan 239 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11650 p0 plan 239 FLUSHMAJORITEMBUDGET ended failure
+11690 p1 plan 240 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11692 p1 plan 240 FLUSHMAJORITEMBUDGET ended failure
+11785 p5 plan 227 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+11800 p5 plan 223 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+11807 p0 plan 241 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11809 p0 plan 241 FLUSHMAJORITEMBUDGET ended failure
+11855 p1 plan 242 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11857 p1 plan 242 FLUSHMAJORITEMBUDGET ended failure
+11891 p5 plan 243 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11893 p5 plan 243 FLUSHMAJORITEMBUDGET ended failure
 11959 p5 tf MainForce move to Naboo
-11959 p5 order move fleet 130 -> Kashyyyk
-11968 p0 plan 242 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11968 p0 plan 242 FLUSHMAJORITEMBUDGET ended failure
-11968 p5 plan 243 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
-11968 p5 plan 244 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-11968 p5 plan 244 FLUSHMAJORITEMBUDGET ended failure
-11968 p5 order move fleet 120 -> Felucia
+11959 p5 order move fleet 129 -> Kashyyyk
+11964 p0 plan 244 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+11965 p0 plan 244 FLUSHMAJORITEMBUDGET ended failure
 11997 p5 order build Underworld_Saboteur_Team at Felucia
 12020 p1 plan 245 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 12022 p1 plan 245 FLUSHMAJORITEMBUDGET ended failure
 12028 p5 order move fleet 126 -> Kuat
-12043 p5 plan 246 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
+12041 p5 plan 246 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
+12043 p5 order move fleet 120 -> Felucia
 12058 p5 order move fleet 126 -> Corellia
 12085 p5 order move fleet 126 -> Tatooine
 12112 p5 order move fleet 126 -> Naboo
-12125 p0 plan 247 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12127 p0 plan 247 FLUSHMAJORITEMBUDGET ended failure
+12121 p0 plan 247 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12121 p0 plan 247 FLUSHMAJORITEMBUDGET ended failure
 12185 p1 plan 248 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 12187 p1 plan 248 FLUSHMAJORITEMBUDGET ended failure
-12192 p5 plan 249 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12193 p5 plan 249 FLUSHMAJORITEMBUDGET ended failure
-12226 p5 order move fleet 126 -> Felucia
-12268 p5 tf MainForce move to Yavin
-12268 p5 order move fleet 120 -> Kashyyyk
-12282 p0 plan 250 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12283 p0 plan 250 FLUSHMAJORITEMBUDGET ended failure
-12337 p5 order move fleet 120 -> The_Maw
-12350 p1 plan 251 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12352 p1 plan 251 FLUSHMAJORITEMBUDGET ended failure
-12439 p0 plan 252 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12439 p0 plan 252 FLUSHMAJORITEMBUDGET ended failure
+12191 p5 plan 249 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 30.0
+12191 p5 plan 250 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12193 p5 build task 26 Underworld_Saboteur_Team for MainForce
+12193 p5 plan 250 FLUSHMAJORITEMBUDGET ended failure
+12232 p5 tf MainForce ability Underworld_Saboteur_Team 128 at Naboo not applied
+12278 p0 plan 251 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12280 p0 plan 251 FLUSHMAJORITEMBUDGET ended failure
+12343 p5 tf MainForce move to Yavin
+12343 p5 order move fleet 120 -> Kashyyyk
+12350 p1 plan 252 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12352 p1 plan 252 FLUSHMAJORITEMBUDGET ended failure
+12412 p5 order move fleet 120 -> The_Maw
+12435 p0 plan 253 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12436 p0 plan 253 FLUSHMAJORITEMBUDGET ended failure
 12454 p5 tf MainForce move to MonCalimari
-12454 p5 order move fleet 132 -> Kashyyyk
-12489 p5 plan 253 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12490 p5 plan 253 FLUSHMAJORITEMBUDGET ended failure
-12493 p5 tf MainForce move to Kashyyyk
-12493 p5 order move fleet 126 -> Kashyyyk
-12499 p5 order move fleet 120 -> Yavin
-12515 p1 plan 254 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12517 p1 plan 254 FLUSHMAJORITEMBUDGET ended failure
-12523 p5 order move fleet 132 -> NalHutta
-12532 p5 plan 232 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-12550 p5 order move fleet 132 -> Shola
-12568 p5 tf MainForce ability Underworld_Saboteur_Team 119 at Yavin not applied
-12568 p5 tf MainForce ability Underworld_Saboteur_Team 111 at Kashyyyk not applied
-12596 p0 plan 255 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12598 p0 plan 255 FLUSHMAJORITEMBUDGET ended failure
-12658 p5 order move fleet 132 -> MonCalimari
-12680 p1 plan 256 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12682 p1 plan 256 FLUSHMAJORITEMBUDGET ended failure
-12745 p5 tf MainForce ability Underworld_Saboteur_Team 131 at MonCalimari not applied
-12753 p0 plan 257 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12754 p0 plan 257 FLUSHMAJORITEMBUDGET ended failure
-12787 p5 plan 258 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12787 p5 plan 258 FLUSHMAJORITEMBUDGET ended failure
-12845 p1 plan 259 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12847 p1 plan 259 FLUSHMAJORITEMBUDGET ended failure
-12868 p5 plan 243 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-12868 p5 plan 246 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-12910 p0 plan 260 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-12910 p0 plan 260 FLUSHMAJORITEMBUDGET ended failure
-13010 p1 plan 261 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13012 p1 plan 261 FLUSHMAJORITEMBUDGET ended failure
-13045 p5 plan 235 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-13067 p0 plan 262 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13069 p0 plan 262 FLUSHMAJORITEMBUDGET ended failure
-13088 p5 plan 263 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13090 p5 plan 263 FLUSHMAJORITEMBUDGET ended failure
-13175 p1 plan 264 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13177 p1 plan 264 FLUSHMAJORITEMBUDGET ended failure
-13224 p0 plan 265 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13225 p0 plan 265 FLUSHMAJORITEMBUDGET ended failure
-13241 p5 plan 266 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13243 p5 plan 266 FLUSHMAJORITEMBUDGET ended failure
-13340 p1 plan 267 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13342 p1 plan 267 FLUSHMAJORITEMBUDGET ended failure
-13381 p0 plan 268 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13381 p0 plan 268 FLUSHMAJORITEMBUDGET ended failure
-13394 p5 plan 269 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13396 p5 plan 269 FLUSHMAJORITEMBUDGET ended failure
-13505 p1 plan 270 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13507 p1 plan 270 FLUSHMAJORITEMBUDGET ended failure
-13538 p0 plan 271 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13540 p0 plan 271 FLUSHMAJORITEMBUDGET ended failure
-13547 p5 plan 272 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13549 p5 plan 272 FLUSHMAJORITEMBUDGET ended failure
-13616 p0 plan 273 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-13618 p0 build task 27 Rebel_Star_Base_2 for BaseForce at Yavin
-13640 p0 order build Rebel_Star_Base_2 at Yavin
-13642 p0 build task 27 Rebel_Star_Base_2 failed (production dropped)
-13645 p0 plan 273 UPGRADESTARBASEPLAN ended failure
+12454 p5 order move fleet 133 -> Kashyyyk
+12488 p5 plan 254 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12490 p5 plan 254 FLUSHMAJORITEMBUDGET ended failure
+12493 p5 order build Underworld_Saboteur_Team at Felucia
+12515 p1 plan 255 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12517 p1 plan 255 FLUSHMAJORITEMBUDGET ended failure
+12523 p5 order move fleet 133 -> NalHutta
+12532 p5 plan 234 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+12550 p5 order move fleet 133 -> Shola
+12574 p5 order move fleet 120 -> Yavin
+12592 p0 plan 256 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12592 p0 plan 256 FLUSHMAJORITEMBUDGET ended failure
+12643 p5 tf MainForce ability Underworld_Saboteur_Team 119 at Yavin not applied
+12658 p5 order move fleet 133 -> MonCalimari
+12680 p1 plan 257 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12682 p1 plan 257 FLUSHMAJORITEMBUDGET ended failure
+12745 p5 tf MainForce ability Underworld_Saboteur_Team 132 at MonCalimari not applied
+12749 p0 plan 258 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12751 p0 plan 258 FLUSHMAJORITEMBUDGET ended failure
+12786 p5 plan 259 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12787 p5 plan 259 FLUSHMAJORITEMBUDGET ended failure
+12845 p1 plan 260 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12847 p1 plan 260 FLUSHMAJORITEMBUDGET ended failure
+12906 p0 plan 261 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+12907 p0 plan 261 FLUSHMAJORITEMBUDGET ended failure
+12943 p5 plan 246 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+12949 p5 tf MainForce move to Kashyyyk
+12949 p5 order move fleet 135 -> Kashyyyk
+13010 p1 plan 262 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13012 p1 plan 262 FLUSHMAJORITEMBUDGET ended failure
+13024 p5 tf MainForce ability Underworld_Saboteur_Team 134 at Kashyyyk not applied
+13045 p5 plan 237 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+13063 p0 plan 263 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13063 p0 plan 263 FLUSHMAJORITEMBUDGET ended failure
+13085 p5 plan 264 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13087 p5 plan 264 FLUSHMAJORITEMBUDGET ended failure
+13175 p1 plan 265 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13177 p1 plan 265 FLUSHMAJORITEMBUDGET ended failure
+13220 p0 plan 266 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13222 p0 plan 266 FLUSHMAJORITEMBUDGET ended failure
+13312 p5 plan 267 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13312 p5 plan 267 FLUSHMAJORITEMBUDGET ended failure
+13324 p5 plan 249 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+13340 p1 plan 268 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13342 p1 plan 268 FLUSHMAJORITEMBUDGET ended failure
+13377 p0 plan 269 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13378 p0 plan 269 FLUSHMAJORITEMBUDGET ended failure
+13465 p5 plan 270 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13465 p5 plan 270 FLUSHMAJORITEMBUDGET ended failure
+13505 p1 plan 271 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13507 p1 plan 271 FLUSHMAJORITEMBUDGET ended failure
+13534 p0 plan 272 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13534 p0 plan 272 FLUSHMAJORITEMBUDGET ended failure
+13618 p5 plan 273 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13618 p5 plan 273 FLUSHMAJORITEMBUDGET ended failure
 13670 p1 plan 274 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
 13672 p1 plan 274 FLUSHMAJORITEMBUDGET ended failure
-13694 p0 plan 275 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13696 p0 plan 275 FLUSHMAJORITEMBUDGET ended failure
-13700 p5 plan 276 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13702 p5 plan 276 FLUSHMAJORITEMBUDGET ended failure
-13772 p0 plan 277 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-13774 p0 build task 28 Rebel_Star_Base_2 for BaseForce at Yavin
-13795 p0 order build Rebel_Star_Base_2 at Yavin
-13795 p0 build task 28 Rebel_Star_Base_2 failed (production dropped)
-13798 p0 plan 277 UPGRADESTARBASEPLAN ended failure
-13835 p1 plan 278 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13837 p1 plan 278 FLUSHMAJORITEMBUDGET ended failure
-13850 p0 plan 279 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13852 p0 plan 279 FLUSHMAJORITEMBUDGET ended failure
-13853 p5 plan 280 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-13855 p5 plan 280 FLUSHMAJORITEMBUDGET ended failure
-13928 p0 plan 281 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-13930 p0 build task 29 Rebel_Star_Base_2 for BaseForce at Yavin
-13950 p0 order build Rebel_Star_Base_2 at Yavin
-13951 p0 build task 29 Rebel_Star_Base_2 failed (production dropped)
-13954 p0 plan 281 UPGRADESTARBASEPLAN ended failure
-14000 p1 plan 282 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14002 p1 plan 282 FLUSHMAJORITEMBUDGET ended failure
-14006 p0 plan 283 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14006 p5 plan 284 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14008 p0 plan 283 FLUSHMAJORITEMBUDGET ended failure
-14008 p5 plan 284 FLUSHMAJORITEMBUDGET ended failure
-14084 p0 plan 285 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-14086 p0 build task 30 Rebel_Star_Base_2 for BaseForce at Yavin
-14105 p0 order build Rebel_Star_Base_2 at Yavin
-14107 p0 build task 30 Rebel_Star_Base_2 failed (production dropped)
-14110 p0 plan 285 UPGRADESTARBASEPLAN ended failure
-14159 p5 plan 286 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14161 p5 plan 286 FLUSHMAJORITEMBUDGET ended failure
-14162 p0 plan 287 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14164 p0 plan 287 FLUSHMAJORITEMBUDGET ended failure
-14165 p1 plan 288 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14167 p1 plan 288 FLUSHMAJORITEMBUDGET ended failure
-14240 p0 plan 289 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-14242 p0 build task 31 Rebel_Star_Base_2 for BaseForce at Yavin
-14260 p0 order build Rebel_Star_Base_2 at Yavin
-14260 p0 build task 31 Rebel_Star_Base_2 failed (production dropped)
-14263 p0 plan 289 UPGRADESTARBASEPLAN ended failure
-14312 p5 plan 290 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14314 p5 plan 290 FLUSHMAJORITEMBUDGET ended failure
-14318 p0 plan 291 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14320 p0 plan 291 FLUSHMAJORITEMBUDGET ended failure
-14330 p1 plan 292 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14332 p1 plan 292 FLUSHMAJORITEMBUDGET ended failure
-14396 p0 plan 293 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-14398 p0 build task 32 Rebel_Star_Base_2 for BaseForce at Yavin
-14415 p0 order build Rebel_Star_Base_2 at Yavin
-14416 p0 build task 32 Rebel_Star_Base_2 failed (production dropped)
-14419 p0 plan 293 UPGRADESTARBASEPLAN ended failure
-14465 p5 plan 294 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14467 p5 plan 294 FLUSHMAJORITEMBUDGET ended failure
-14474 p0 plan 295 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14476 p0 plan 295 FLUSHMAJORITEMBUDGET ended failure
-14495 p1 plan 296 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14497 p1 plan 296 FLUSHMAJORITEMBUDGET ended failure
-14552 p0 plan 297 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-14554 p0 build task 33 Rebel_Star_Base_2 for BaseForce at Yavin
-14570 p0 order build Rebel_Star_Base_2 at Yavin
-14572 p0 build task 33 Rebel_Star_Base_2 failed (production dropped)
-14575 p0 plan 297 UPGRADESTARBASEPLAN ended failure
-14618 p5 plan 298 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14620 p5 plan 298 FLUSHMAJORITEMBUDGET ended failure
-14630 p0 plan 299 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14632 p0 plan 299 FLUSHMAJORITEMBUDGET ended failure
-14660 p1 plan 300 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14662 p1 plan 300 FLUSHMAJORITEMBUDGET ended failure
-14708 p0 plan 301 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-14710 p0 build task 34 Rebel_Star_Base_2 for BaseForce at Yavin
-14725 p0 order build Rebel_Star_Base_2 at Yavin
-14725 p0 build task 34 Rebel_Star_Base_2 failed (production dropped)
-14728 p0 plan 301 UPGRADESTARBASEPLAN ended failure
-14771 p5 plan 302 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14773 p5 plan 302 FLUSHMAJORITEMBUDGET ended failure
-14786 p0 plan 303 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14788 p0 plan 303 FLUSHMAJORITEMBUDGET ended failure
-14825 p1 plan 304 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14827 p1 plan 304 FLUSHMAJORITEMBUDGET ended failure
-14864 p0 plan 305 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-14866 p0 build task 35 Rebel_Star_Base_2 for BaseForce at Yavin
-14880 p0 order build Rebel_Star_Base_2 at Yavin
-14881 p0 build task 35 Rebel_Star_Base_2 failed (production dropped)
-14884 p0 plan 305 UPGRADESTARBASEPLAN ended failure
-14924 p5 plan 306 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14926 p5 plan 306 FLUSHMAJORITEMBUDGET ended failure
-14942 p0 plan 307 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-14944 p0 plan 307 FLUSHMAJORITEMBUDGET ended failure
-14990 p1 plan 308 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+2) net 5050 gross 5050 eta 21.6
-14992 p1 build task 36 Victory_Destroyer for ReserveForce
-14992 p1 build task 37 Tartan_Patrol_Cruiser for ReserveForce
-15020 p0 plan 309 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-15022 p0 build task 38 Rebel_Star_Base_2 for BaseForce at Yavin
-15035 p0 order build Rebel_Star_Base_2 at Yavin
-15035 p1 order build Victory_Destroyer at Kuat
-15035 p1 order build Tartan_Patrol_Cruiser at Corellia
-15037 p0 build task 38 Rebel_Star_Base_2 failed (production dropped)
-15040 p0 plan 309 UPGRADESTARBASEPLAN ended failure
-15072 p1 plan 310 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15073 p1 plan 310 FLUSHMAJORITEMBUDGET ended failure
-15077 p5 plan 311 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15079 p5 plan 311 FLUSHMAJORITEMBUDGET ended failure
-15098 p0 plan 312 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15100 p0 plan 312 FLUSHMAJORITEMBUDGET ended failure
-15176 p0 plan 313 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-15178 p0 build task 39 Rebel_Star_Base_2 for BaseForce at Yavin
-15190 p0 order build Rebel_Star_Base_2 at Yavin
-15190 p0 build task 39 Rebel_Star_Base_2 failed (production dropped)
-15193 p0 plan 313 UPGRADESTARBASEPLAN ended failure
-15230 p5 plan 314 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15232 p5 plan 314 FLUSHMAJORITEMBUDGET ended failure
-15236 p1 plan 315 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15238 p1 plan 315 FLUSHMAJORITEMBUDGET ended failure
-15254 p0 plan 316 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15256 p0 plan 316 FLUSHMAJORITEMBUDGET ended failure
-15332 p0 plan 317 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-15334 p0 build task 40 Rebel_Star_Base_2 for BaseForce at Yavin
-15345 p0 order build Rebel_Star_Base_2 at Yavin
-15346 p0 build task 40 Rebel_Star_Base_2 failed (production dropped)
-15349 p0 plan 317 UPGRADESTARBASEPLAN ended failure
-15383 p5 plan 318 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15385 p5 plan 318 FLUSHMAJORITEMBUDGET ended failure
-15400 p1 plan 319 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15400 p1 plan 319 FLUSHMAJORITEMBUDGET ended failure
-15410 p0 plan 320 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15412 p0 plan 320 FLUSHMAJORITEMBUDGET ended failure
-15488 p0 plan 321 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-15490 p0 build task 41 Rebel_Star_Base_2 for BaseForce at Yavin
-15500 p0 order build Rebel_Star_Base_2 at Yavin
-15502 p0 build task 41 Rebel_Star_Base_2 failed (production dropped)
-15505 p0 plan 321 UPGRADESTARBASEPLAN ended failure
-15536 p5 plan 322 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15538 p5 plan 322 FLUSHMAJORITEMBUDGET ended failure
-15564 p1 plan 323 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15565 p1 plan 323 FLUSHMAJORITEMBUDGET ended failure
-15566 p0 plan 324 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15568 p0 plan 324 FLUSHMAJORITEMBUDGET ended failure
-15644 p0 plan 325 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-15646 p0 build task 42 Rebel_Star_Base_2 for BaseForce at Yavin
-15655 p0 order build Rebel_Star_Base_2 at Yavin
-15655 p0 build task 42 Rebel_Star_Base_2 failed (production dropped)
-15658 p0 plan 325 UPGRADESTARBASEPLAN ended failure
-15689 p5 plan 326 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15691 p5 plan 326 FLUSHMAJORITEMBUDGET ended failure
-15722 p0 plan 327 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15724 p0 plan 327 FLUSHMAJORITEMBUDGET ended failure
-15728 p1 plan 328 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15730 p1 plan 328 FLUSHMAJORITEMBUDGET ended failure
-15800 p0 plan 329 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-15802 p0 build task 43 Rebel_Star_Base_2 for BaseForce at Yavin
-15810 p0 order build Rebel_Star_Base_2 at Yavin
-15811 p0 build task 43 Rebel_Star_Base_2 failed (production dropped)
-15814 p0 plan 329 UPGRADESTARBASEPLAN ended failure
-15842 p5 plan 330 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15844 p5 plan 330 FLUSHMAJORITEMBUDGET ended failure
-15878 p0 plan 331 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15880 p0 plan 331 FLUSHMAJORITEMBUDGET ended failure
-15892 p1 plan 332 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15892 p1 plan 332 FLUSHMAJORITEMBUDGET ended failure
-15956 p0 plan 333 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-15958 p0 build task 44 Rebel_Star_Base_2 for BaseForce at Yavin
-15965 p0 order build Rebel_Star_Base_2 at Yavin
-15967 p0 build task 44 Rebel_Star_Base_2 failed (production dropped)
-15970 p0 plan 333 UPGRADESTARBASEPLAN ended failure
-15995 p5 plan 334 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-15997 p5 plan 334 FLUSHMAJORITEMBUDGET ended failure
-16034 p0 plan 335 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16036 p0 plan 335 FLUSHMAJORITEMBUDGET ended failure
-16056 p1 plan 336 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16057 p1 plan 336 FLUSHMAJORITEMBUDGET ended failure
-16112 p0 plan 337 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-16114 p0 build task 45 Rebel_Star_Base_2 for BaseForce at Yavin
-16120 p0 order build Rebel_Star_Base_2 at Yavin
-16120 p0 build task 45 Rebel_Star_Base_2 failed (production dropped)
-16123 p0 plan 337 UPGRADESTARBASEPLAN ended failure
-16148 p5 plan 338 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16150 p5 plan 338 FLUSHMAJORITEMBUDGET ended failure
-16190 p0 plan 339 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16192 p0 plan 339 FLUSHMAJORITEMBUDGET ended failure
-16220 p1 plan 340 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16222 p1 plan 340 FLUSHMAJORITEMBUDGET ended failure
-16268 p0 plan 341 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-16270 p0 build task 46 Rebel_Star_Base_2 for BaseForce at Yavin
-16275 p0 order build Rebel_Star_Base_2 at Yavin
-16276 p0 build task 46 Rebel_Star_Base_2 failed (production dropped)
-16279 p0 plan 341 UPGRADESTARBASEPLAN ended failure
-16301 p5 plan 342 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16302 p1 plan 308 BUILDSPACEFORCESPLAN ended failure (released)
-16303 p5 plan 342 FLUSHMAJORITEMBUDGET ended failure
-16346 p0 plan 343 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16348 p0 plan 343 FLUSHMAJORITEMBUDGET ended failure
-16385 p1 plan 344 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16387 p1 plan 344 FLUSHMAJORITEMBUDGET ended failure
-16424 p0 plan 345 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-16426 p0 build task 47 Rebel_Star_Base_2 for BaseForce at Yavin
-16430 p0 order build Rebel_Star_Base_2 at Yavin
-16432 p0 build task 47 Rebel_Star_Base_2 failed (production dropped)
-16435 p0 plan 345 UPGRADESTARBASEPLAN ended failure
-16454 p5 plan 346 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16456 p5 plan 346 FLUSHMAJORITEMBUDGET ended failure
-16502 p0 plan 347 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16504 p0 plan 347 FLUSHMAJORITEMBUDGET ended failure
-16550 p1 plan 348 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16552 p1 plan 348 FLUSHMAJORITEMBUDGET ended failure
-16580 p0 plan 349 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-16582 p0 build task 48 Rebel_Star_Base_2 for BaseForce at Yavin
-16585 p0 order build Rebel_Star_Base_2 at Yavin
-16585 p0 build task 48 Rebel_Star_Base_2 failed (production dropped)
-16588 p0 plan 349 UPGRADESTARBASEPLAN ended failure
-16607 p5 plan 350 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16609 p5 plan 350 FLUSHMAJORITEMBUDGET ended failure
-16658 p0 plan 351 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16660 p0 plan 351 FLUSHMAJORITEMBUDGET ended failure
-16715 p1 plan 352 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16717 p1 plan 352 FLUSHMAJORITEMBUDGET ended failure
-16736 p0 plan 353 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-16738 p0 build task 49 Rebel_Star_Base_2 for BaseForce at Yavin
-16740 p0 order build Rebel_Star_Base_2 at Yavin
-16741 p0 build task 49 Rebel_Star_Base_2 failed (production dropped)
-16744 p0 plan 353 UPGRADESTARBASEPLAN ended failure
-16760 p5 plan 354 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16762 p5 plan 354 FLUSHMAJORITEMBUDGET ended failure
-16814 p0 plan 355 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16816 p0 plan 355 FLUSHMAJORITEMBUDGET ended failure
-16880 p1 plan 356 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16882 p1 plan 356 FLUSHMAJORITEMBUDGET ended failure
-16892 p0 plan 357 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-16894 p0 build task 50 Rebel_Star_Base_2 for BaseForce at Yavin
-16895 p0 order build Rebel_Star_Base_2 at Yavin
-16897 p0 build task 50 Rebel_Star_Base_2 failed (production dropped)
-16900 p0 plan 357 UPGRADESTARBASEPLAN ended failure
-16913 p5 plan 358 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16915 p5 plan 358 FLUSHMAJORITEMBUDGET ended failure
-16970 p0 plan 359 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-16972 p0 plan 359 FLUSHMAJORITEMBUDGET ended failure
-17045 p1 plan 360 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17047 p1 plan 360 FLUSHMAJORITEMBUDGET ended failure
-17048 p0 plan 361 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-17050 p0 build task 51 Rebel_Star_Base_2 for BaseForce at Yavin
-17066 p5 plan 362 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17068 p5 plan 362 FLUSHMAJORITEMBUDGET ended failure
-17081 p0 order build Rebel_Star_Base_2 at Yavin
-17083 p0 build task 51 Rebel_Star_Base_2 failed (production dropped)
-17086 p0 plan 361 UPGRADESTARBASEPLAN ended failure
-17126 p0 plan 363 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17128 p0 plan 363 FLUSHMAJORITEMBUDGET ended failure
-17204 p0 plan 364 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-17206 p0 build task 52 Rebel_Star_Base_2 for BaseForce at Yavin
-17210 p1 plan 365 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17212 p1 plan 365 FLUSHMAJORITEMBUDGET ended failure
-17219 p5 plan 366 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17221 p5 plan 366 FLUSHMAJORITEMBUDGET ended failure
-17236 p0 order build Rebel_Star_Base_2 at Yavin
-17236 p0 build task 52 Rebel_Star_Base_2 failed (production dropped)
-17239 p0 plan 364 UPGRADESTARBASEPLAN ended failure
-17282 p0 plan 367 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17284 p0 plan 367 FLUSHMAJORITEMBUDGET ended failure
-17360 p0 plan 368 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-17362 p0 build task 53 Rebel_Star_Base_2 for BaseForce at Yavin
-17372 p5 plan 369 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17374 p5 plan 369 FLUSHMAJORITEMBUDGET ended failure
-17375 p1 plan 370 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17377 p1 plan 370 FLUSHMAJORITEMBUDGET ended failure
-17391 p0 order build Rebel_Star_Base_2 at Yavin
-17392 p0 build task 53 Rebel_Star_Base_2 failed (production dropped)
-17395 p0 plan 368 UPGRADESTARBASEPLAN ended failure
-17438 p0 plan 371 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17440 p0 plan 371 FLUSHMAJORITEMBUDGET ended failure
-17516 p0 plan 372 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-17518 p0 build task 54 Rebel_Star_Base_2 for BaseForce at Yavin
-17525 p5 plan 373 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17527 p5 plan 373 FLUSHMAJORITEMBUDGET ended failure
-17540 p1 plan 374 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17542 p1 plan 374 FLUSHMAJORITEMBUDGET ended failure
-17546 p0 order build Rebel_Star_Base_2 at Yavin
-17548 p0 build task 54 Rebel_Star_Base_2 failed (production dropped)
-17551 p0 plan 372 UPGRADESTARBASEPLAN ended failure
-17594 p0 plan 375 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17596 p0 plan 375 FLUSHMAJORITEMBUDGET ended failure
-17672 p0 plan 376 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-17674 p0 build task 55 Rebel_Star_Base_2 for BaseForce at Yavin
-17678 p5 plan 377 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17680 p5 plan 377 FLUSHMAJORITEMBUDGET ended failure
-17701 p0 order build Rebel_Star_Base_2 at Yavin
-17701 p0 build task 55 Rebel_Star_Base_2 failed (production dropped)
-17704 p0 plan 376 UPGRADESTARBASEPLAN ended failure
-17705 p1 plan 378 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17707 p1 plan 378 FLUSHMAJORITEMBUDGET ended failure
-17750 p0 plan 379 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17752 p0 plan 379 FLUSHMAJORITEMBUDGET ended failure
-17828 p0 plan 380 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-17830 p0 build task 56 Rebel_Star_Base_2 for BaseForce at Yavin
-17831 p5 plan 381 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17833 p5 plan 381 FLUSHMAJORITEMBUDGET ended failure
-17856 p0 order build Rebel_Star_Base_2 at Yavin
-17857 p0 build task 56 Rebel_Star_Base_2 failed (production dropped)
-17860 p0 plan 380 UPGRADESTARBASEPLAN ended failure
-17870 p1 plan 382 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17872 p1 plan 382 FLUSHMAJORITEMBUDGET ended failure
-17906 p0 plan 383 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17908 p0 plan 383 FLUSHMAJORITEMBUDGET ended failure
-17984 p0 plan 384 UPGRADESTARBASEPLAN for Upgrade_Starbase @Yavin BaseForce(0+1) net 1200 gross 1200 eta 21.6
-17984 p5 plan 385 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
-17986 p0 build task 57 Rebel_Star_Base_2 for BaseForce at Yavin
-17986 p5 plan 385 FLUSHMAJORITEMBUDGET ended failure
-conflict tick 222 gframe 221 space Kashyyyk Underworld vs Empire: auto-resolved, winner Empire, loser Underworld, retreat -, losses att 4 def 0, draws 5
+13691 p0 plan 275 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13693 p0 plan 275 FLUSHMAJORITEMBUDGET ended failure
+13771 p5 plan 276 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13771 p5 plan 276 FLUSHMAJORITEMBUDGET ended failure
+13835 p1 plan 277 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13837 p1 plan 277 FLUSHMAJORITEMBUDGET ended failure
+13848 p0 plan 278 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13849 p0 plan 278 FLUSHMAJORITEMBUDGET ended failure
+13924 p5 plan 279 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+13924 p5 plan 279 FLUSHMAJORITEMBUDGET ended failure
+14000 p1 plan 280 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14002 p1 plan 280 FLUSHMAJORITEMBUDGET ended failure
+14005 p0 plan 281 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14005 p0 plan 281 FLUSHMAJORITEMBUDGET ended failure
+14077 p5 plan 282 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14077 p5 plan 282 FLUSHMAJORITEMBUDGET ended failure
+14162 p0 plan 283 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14164 p0 plan 283 FLUSHMAJORITEMBUDGET ended failure
+14165 p1 plan 284 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14167 p1 plan 284 FLUSHMAJORITEMBUDGET ended failure
+14230 p5 plan 285 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14230 p5 plan 285 FLUSHMAJORITEMBUDGET ended failure
+14319 p0 plan 286 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14320 p0 plan 286 FLUSHMAJORITEMBUDGET ended failure
+14330 p1 plan 287 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14332 p1 plan 287 FLUSHMAJORITEMBUDGET ended failure
+14383 p5 plan 288 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14383 p5 plan 288 FLUSHMAJORITEMBUDGET ended failure
+14476 p0 plan 289 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14476 p0 plan 289 FLUSHMAJORITEMBUDGET ended failure
+14495 p1 plan 290 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14497 p1 plan 290 FLUSHMAJORITEMBUDGET ended failure
+14536 p5 plan 291 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14536 p5 plan 291 FLUSHMAJORITEMBUDGET ended failure
+14633 p0 plan 292 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14635 p0 plan 292 FLUSHMAJORITEMBUDGET ended failure
+14660 p1 plan 293 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14662 p1 plan 293 FLUSHMAJORITEMBUDGET ended failure
+14689 p5 plan 294 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14689 p5 plan 294 FLUSHMAJORITEMBUDGET ended failure
+14790 p0 plan 295 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14791 p0 plan 295 FLUSHMAJORITEMBUDGET ended failure
+14825 p1 plan 296 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14827 p1 plan 296 FLUSHMAJORITEMBUDGET ended failure
+14842 p5 plan 297 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14842 p5 plan 297 FLUSHMAJORITEMBUDGET ended failure
+14947 p0 plan 298 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14947 p0 plan 298 FLUSHMAJORITEMBUDGET ended failure
+14990 p1 plan 299 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14992 p1 plan 299 FLUSHMAJORITEMBUDGET ended failure
+14995 p5 plan 300 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+14995 p5 plan 300 FLUSHMAJORITEMBUDGET ended failure
+15104 p0 plan 301 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15106 p0 plan 301 FLUSHMAJORITEMBUDGET ended failure
+15148 p5 plan 302 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15148 p5 plan 302 FLUSHMAJORITEMBUDGET ended failure
+15155 p1 plan 303 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15157 p1 plan 303 FLUSHMAJORITEMBUDGET ended failure
+15261 p0 plan 304 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15262 p0 plan 304 FLUSHMAJORITEMBUDGET ended failure
+15301 p5 plan 305 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15301 p5 plan 305 FLUSHMAJORITEMBUDGET ended failure
+15320 p1 plan 306 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15322 p1 plan 306 FLUSHMAJORITEMBUDGET ended failure
+15418 p0 plan 307 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15418 p0 plan 307 FLUSHMAJORITEMBUDGET ended failure
+15454 p5 plan 308 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15454 p5 plan 308 FLUSHMAJORITEMBUDGET ended failure
+15485 p1 plan 309 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15487 p1 plan 309 FLUSHMAJORITEMBUDGET ended failure
+15575 p0 plan 310 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15577 p0 plan 310 FLUSHMAJORITEMBUDGET ended failure
+15607 p5 plan 311 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15607 p5 plan 311 FLUSHMAJORITEMBUDGET ended failure
+15650 p1 plan 312 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15652 p1 plan 312 FLUSHMAJORITEMBUDGET ended failure
+15732 p0 plan 313 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15733 p0 plan 313 FLUSHMAJORITEMBUDGET ended failure
+15760 p5 plan 314 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15760 p5 plan 314 FLUSHMAJORITEMBUDGET ended failure
+15815 p1 plan 315 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15817 p1 plan 315 FLUSHMAJORITEMBUDGET ended failure
+15889 p0 plan 316 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15889 p0 plan 316 FLUSHMAJORITEMBUDGET ended failure
+15913 p5 plan 317 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15913 p5 plan 317 FLUSHMAJORITEMBUDGET ended failure
+15980 p1 plan 318 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+15982 p1 plan 318 FLUSHMAJORITEMBUDGET ended failure
+16046 p0 plan 319 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16048 p0 plan 319 FLUSHMAJORITEMBUDGET ended failure
+16066 p5 plan 320 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16066 p5 plan 320 FLUSHMAJORITEMBUDGET ended failure
+16145 p1 plan 321 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16147 p1 plan 321 FLUSHMAJORITEMBUDGET ended failure
+16203 p0 plan 322 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16204 p0 plan 322 FLUSHMAJORITEMBUDGET ended failure
+16219 p5 plan 323 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16219 p5 plan 323 FLUSHMAJORITEMBUDGET ended failure
+16310 p1 plan 324 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 3800 gross 3800 eta 21.6
+16312 p1 build task 27 Victory_Destroyer for ReserveForce
+16360 p0 plan 325 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16360 p0 plan 325 FLUSHMAJORITEMBUDGET ended failure
+16368 p1 order build Victory_Destroyer at Kuat
+16372 p5 plan 326 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16372 p5 plan 326 FLUSHMAJORITEMBUDGET ended failure
+16392 p1 plan 327 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16393 p1 plan 327 FLUSHMAJORITEMBUDGET ended failure
+16517 p0 plan 328 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16519 p0 plan 328 FLUSHMAJORITEMBUDGET ended failure
+16525 p5 plan 329 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16525 p5 plan 329 FLUSHMAJORITEMBUDGET ended failure
+16556 p1 plan 330 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16558 p1 plan 330 FLUSHMAJORITEMBUDGET ended failure
+16674 p0 plan 331 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16675 p0 plan 331 FLUSHMAJORITEMBUDGET ended failure
+16678 p5 plan 332 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16678 p5 plan 332 FLUSHMAJORITEMBUDGET ended failure
+16720 p1 plan 333 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16720 p1 plan 333 FLUSHMAJORITEMBUDGET ended failure
+16831 p0 plan 334 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16831 p0 plan 334 FLUSHMAJORITEMBUDGET ended failure
+16831 p5 plan 335 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16831 p5 plan 335 FLUSHMAJORITEMBUDGET ended failure
+16884 p1 plan 336 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16885 p1 plan 336 FLUSHMAJORITEMBUDGET ended failure
+16984 p5 plan 337 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16984 p5 plan 337 FLUSHMAJORITEMBUDGET ended failure
+16988 p0 plan 338 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+16990 p0 plan 338 FLUSHMAJORITEMBUDGET ended failure
+17048 p1 plan 339 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17050 p1 plan 339 FLUSHMAJORITEMBUDGET ended failure
+17137 p5 plan 340 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17137 p5 plan 340 FLUSHMAJORITEMBUDGET ended failure
+17145 p0 plan 341 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17146 p0 plan 341 FLUSHMAJORITEMBUDGET ended failure
+17212 p1 plan 342 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17212 p1 plan 342 FLUSHMAJORITEMBUDGET ended failure
+17290 p5 plan 343 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17290 p5 plan 343 FLUSHMAJORITEMBUDGET ended failure
+17302 p0 plan 344 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17302 p0 plan 344 FLUSHMAJORITEMBUDGET ended failure
+17376 p1 plan 345 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17377 p1 plan 345 FLUSHMAJORITEMBUDGET ended failure
+17443 p5 plan 346 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17443 p5 plan 346 FLUSHMAJORITEMBUDGET ended failure
+17459 p0 plan 347 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17461 p0 plan 347 FLUSHMAJORITEMBUDGET ended failure
+17540 p1 plan 348 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17542 p1 plan 348 FLUSHMAJORITEMBUDGET ended failure
+17596 p5 plan 349 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17596 p5 plan 349 FLUSHMAJORITEMBUDGET ended failure
+17616 p0 plan 350 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17617 p0 plan 350 FLUSHMAJORITEMBUDGET ended failure
+17704 p1 plan 351 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17704 p1 plan 351 FLUSHMAJORITEMBUDGET ended failure
+17749 p5 plan 352 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17749 p5 plan 352 FLUSHMAJORITEMBUDGET ended failure
+17773 p0 plan 353 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17773 p0 plan 353 FLUSHMAJORITEMBUDGET ended failure
+17868 p1 plan 354 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17869 p1 plan 354 FLUSHMAJORITEMBUDGET ended failure
+17902 p5 plan 355 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17902 p5 plan 355 FLUSHMAJORITEMBUDGET ended failure
+17930 p0 plan 356 FLUSHMAJORITEMBUDGET for Reclaim_Excess_MajorItem_Budget @global MainForce(0+0) net 0 gross 0 eta 0.0
+17932 p0 plan 356 FLUSHMAJORITEMBUDGET ended failure
+conflict tick 222 gframe 221 space Kashyyyk Underworld vs Empire: auto-resolved, winner Empire, loser Underworld, retreat -, losses att 4 def 0, draws 4
 conflict tick 711 gframe 710 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 740 gframe 739 space Kuat Underworld vs Empire: dropped
 conflict tick 768 gframe 767 space Corellia Underworld vs Empire: dropped
 conflict tick 795 gframe 794 space Tatooine Underworld vs Empire: dropped
 conflict tick 909 gframe 908 space Naboo Underworld vs Rebel: dropped
 conflict tick 1206 gframe 1205 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 1463 gframe 1462 space Yavin Underworld vs Rebel: auto-resolved, winner Underworld, loser Rebel, retreat Rebel, losses att 2 def 2, draws 6
+conflict tick 1463 gframe 1462 space Yavin Underworld vs Rebel: auto-resolved, winner Underworld, loser Rebel, retreat Rebel, losses att 2 def 3, draws 6
 conflict tick 1704 gframe 1703 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 1731 gframe 1730 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 1760 gframe 1759 space Kuat Underworld vs Empire: dropped
@@ -1020,8 +880,8 @@ conflict tick 1788 gframe 1787 space Corellia Underworld vs Empire: dropped
 conflict tick 1815 gframe 1814 space Tatooine Underworld vs Empire: dropped
 conflict tick 1929 gframe 1928 space Naboo Underworld vs Rebel: dropped
 conflict tick 2199 gframe 2198 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 2358 gframe 2357 space Kashyyyk Underworld vs Empire: auto-resolved, winner Empire, loser Underworld, retreat -, losses att 3 def 0, draws 5
-conflict tick 2414 gframe 2413 space MonCalimari Underworld vs Rebel: auto-resolved, winner Rebel, loser Underworld, retreat -, losses att 5 def 2, draws 9
+conflict tick 2414 gframe 2413 space MonCalimari Underworld vs Rebel: auto-resolved, winner Rebel, loser Underworld, retreat -, losses att 5 def 2, draws 7
+conflict tick 2540 gframe 2539 space Kashyyyk Underworld vs Empire: auto-resolved, winner Empire, loser Underworld, retreat -, losses att 3 def 2, draws 3
 conflict tick 2622 gframe 2621 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 9462 gframe 9461 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 9677 gframe 9676 space MonCalimari Underworld vs Rebel: dropped
@@ -1038,8 +898,8 @@ conflict tick 12056 gframe 12055 space Kuat Underworld vs Empire: dropped
 conflict tick 12084 gframe 12083 space Corellia Underworld vs Empire: dropped
 conflict tick 12111 gframe 12110 space Tatooine Underworld vs Empire: dropped
 conflict tick 12225 gframe 12224 space Naboo Underworld vs Rebel: dropped
-conflict tick 12336 gframe 12335 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 12411 gframe 12410 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 12522 gframe 12521 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 12561 gframe 12560 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 12562 gframe 12561 space Yavin Underworld vs Rebel: dropped
+conflict tick 12636 gframe 12635 space Yavin Underworld vs Rebel: dropped
 conflict tick 12737 gframe 12736 space MonCalimari Underworld vs Rebel: dropped
+conflict tick 13017 gframe 13016 space Kashyyyk Underworld vs Empire: dropped
