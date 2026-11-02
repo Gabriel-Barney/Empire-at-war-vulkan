@@ -198,6 +198,98 @@ Only for AI-owned, mobile objects (has locomotor, TEAM handled). It marks the un
   - unit has no active orders: `SPOILER_LOCK` on; kite; heal if hull < 1.0; `SPREAD_OUT` off; garrison management (`Service_Garrison`: eject healthy occupants good against an enemy within 600 when the container cannot fire, eject wounded ones near a healer, move a wounded container to the healer); attack (`Service_Attack`: nearest enemy not good against it → `Attack_Move` to its position if within `FREE_STORE_ATTACK_RANGE` 600, or always when `aggressive_mode` (first trying to garrison within 300); else `Attack_Move(enemy_location)` when aggressive); else guard (`Try_Deploy_Garrison`; `Guard_Target(nearest friendly structure)` or `Attack_Move(friendly_location)`).
 - The `Allowed_As_Defender_Land` equation is 1 in skirmish, and in campaign gates a defending AI with a base until its army is ≥ 3 × the attacker's force + reinforcements — the "defender turtles" rule.
 
+### 5.6 Land skirmish end game: how idle units reach enemies they cannot see (RE, 2026-11-02) [H unless tagged]
+Question from the port: late FoC skirmish survivors (e.g. an M1 and a TIE Crawler) park for thousands of frames about
+600 from enemy troopers that are fogged to them. Retail has **no unit-level hunt** for this; the AI layer moves the
+units, using knowledge that ignores fog. The pieces, in the order they matter:
+
+**1. Units alone never find fogged enemies.**
+- Target acquisition rejects candidates fully fogged for the shooter's player with **force 1** (TACTICAL_COMBAT §2.3
+  step 4, FOG_OF_WAR §5.3): AI players are fogged there too, whatever `AIUsesFogOfWarLand` says.
+- The scan cube is the attack range R; chase ranges are added only inside a formation block (TACTICAL_COMBAT §2.2,
+  0x566f50) and the candidate still passes the fog filter. FoC `M1_Repulsor_Tank` / `TIE_Crawler`: attack 180 / 175,
+  `Land_FOW_Reveal_Range` 200, `Idle_Chase_Range` 0, `Guard_Chase_Range` 200, `Attack_Move_Response_Range` 150.
+- Both list the HUNT behaviour (0x21) in `LandBehavior`, but HuntBehaviorClass (vtable 0x8aef40) starts **disabled**
+  (vf9 0x628800 → vf +0xc0) and is enabled only by the HUNT unit ability toggle 0x3a4070 (TACTICAL_GAPS §2.2). Neither
+  type has the HUNT unit ability (FoC HUNT users on land: `T2B_Tank`, `Pod_Walker`, `Hutt_Pod_Walker`, `Swamp_Speeder`,
+  `Vornskr_Wolf` and some companies), no shipped AI Lua activates HUNT, and AI autofire covers only special `Abilities`
+  (TACTICAL_GAPS §1.3), not `Unit_Abilities_Data`. So in vanilla the HUNT behaviour of AI units never runs [H data and
+  start state; M that nothing else enables slot 0x21: no other access to it was found]. IDLE (0x62e570) only plays
+  idle animations.
+- No map reveal happens on its own: the overrun reveal (0x364920) runs only in the networked game types 1, 2, 4, not
+  in local skirmish (FOG_OF_WAR §3.3); setup-phase reveal is off; the victory monitor reveals nothing.
+
+**2. The AI's area knowledge is live (not fogged).** With shipped `AIUsesFogOfWarLand` = False, the UNIT_AI "fogged
+for p" byte is never set for an AI player (AI_TACTICAL_PERCEPTION §4.7), so the threat layer and the concentration /
+force tokens see every enemy UNIT_AI object: the per-cell concentration 0x656800 counts live entries unless the object
+is marked fogged for Self, and memory entries only while it is. Real fog (force 1) applies only to `Applies` unit
+targets (§3.3), `Find_Nearest` (LUA_API), `DistanceToNearest*` and `TimeLastSeen`.
+
+**3. Free store, every ~2.1 s per free unit (§5.3, §5.5; `BusyTacticalFreeStore.lua`).** For a unit with no active
+orders, `Service_Attack`:
+- `closest_enemy = Find_Nearest(unit, owner, false)`: nearest **visible** enemy (force 1);
+- visible and not `Is_Good_Against(unit)`: `Attack_Move(its position)` when within 600, else (aggressive) after a
+  failed `Try_Garrison` within 300, `Attack_Move(its position)` anyway;
+- otherwise, when aggressive: `Attack_Move(enemy_location)`. `aggressive_mode` = `Allowed_As_Defender_Land` > 0,
+  which is **always 1 in skirmish**. `enemy_location` is refreshed every ~20 s by
+  `Reachable_Target(Self, "Current_Enemy_Location", "Tactical_Location", "Any_Threat", 0.5)`: score =
+  `EnemyUnitConcentration` of each hint zone (live, item 2), no source so no reachability filter, best with
+  probability 0.5, others weighted by score (one synced draw when ≥ 2 zones score > 0; §6.2). Zones with no enemy
+  UNIT_AI object whose centre cell lies in the zone's cell list score 0; no zone > 0 → nil.
+- `enemy_location` nil → `Service_Guard`: `Guard_Target(nearest friendly structure)`, else
+  `Attack_Move(friendly_location)`.
+
+So a retail AI unit with nothing to shoot walks to the zone centre (+0x30, §3.2) of a zone that really holds enemies,
+re-ordered whenever it is idle again, and acquires them once its own reveal circle (or an ally's) uncovers them.
+[M: retail can still stall when the hidden enemies sit in cells that no hint zone lists, or when the zone centre is
+farther than ~200 + R from them; `_MP_LAND_UTAPAU` has zones, TACTICAL_GAPS §6.8.]
+
+**`Has_Active_Orders`** (0x579f10, read in disassembly 0x140579fd9–0x14057a0f8) decides who gets the no-orders branch:
+- true when the unit has a current target (0x397a40);
+- false when the object has no locomotor slot (+0x333 = −1); when the locomotor behaviour or the mode's formation
+  manager (mode vf +0x228) is null the binding returns no value (nil, falsy);
+- with formation F = locomotor pack +0x1f0: **F null, or F +0x240 = 0 (not yet at the end of its only block,
+  FIGHTER_FLYING §4.10) → true**; F's last block with flag 0x10 → false; otherwise true iff the locomotor is not in
+  an idle state (vf +0x150; Walk 0x42c890: states 0, 0x16, 0x1C, 0x1E, 0x1F, 0x25–0x27, and 0x19 Deployed when type
+  +0x23b0 > 0) or is moving (vf +0x1c0).
+- Quirk: a unit that has never had a formation counts as busy, so the free store leaves it alone until something
+  orders it [H code; M how often that happens: factory and reinforcement units normally get a move].
+
+**4. Area-clearing plans (goal system, `BasicLandGoalSet`).** `Clear_Infantry` / `Clear_Vehicles` (Tactical_Location,
+High / Medium_Threat, Time_Limit 30) score zones with `EnemyUnitConcentrationNBTD {Infantry}` / `{Vehicle}` (live).
+Plans `ClearInfantry.lua` / `ClearVehicles.lua` take 1–5 Infantry | Vehicle | Air units (and 0–2 land heroes; not
+already engaged), `Attack_Move` the zone, then repeat `Attack_Move(Find_Nearest(MainForce, "Infantry", Self, false))`
+(visible only) while `Should_Clear_Infantry` > 0. `Land_Scout_Area` (`LandScout.lua`, 1 Infantry | Air | LandHero)
+`Attack_Move`s and `Explore_Area`s zones fogged for a long time (`TimeLastSeenUnnormalized` > 120 / 400 s, real fog;
+× 0.5 in skirmish).
+
+**5. Last resort: `Burn_Units_Land` and the "firesale" reveal** (goal Global, High_Priority; `BurnUnitsLand.lua`).
+- Desire `Should_Burn_Units_Land` > 0 when (skirmish, `Game.Age` > 400 s, not saving for refineries, and
+  `Want_To_Retreat_From_Land`: for a non-defender, the enemy's landed force ≥ 2 × own force + reinforcements; retreat is
+  never allowed in skirmish) or (skirmish, no unit space left, and reinforcements > 25 % of the fielded Infantry |
+  Vehicle | Air force or > the enemy's fielded force).
+- If `Should_Firesale_Land` > 0 (the same retreat wish, `Game.Age` > 300 s, **no command centre / palace**
+  (`Imperial_Command_Center`, `Rebel_Command_Center`, `U_Ground_Palace`), no refinery, credits < 2000):
+  `FogOfWar.Reveal_All(Self)` (0x6a5b00: the AI's grid +0x50 → `FOW_Object_Hidden` = visible for everything), and in a
+  non-multiplayer skirmish also `Reveal_All` for `Find_Player("local")`.
+- Then, until `Should_Firesale_Land` is 0 (so a single pass when it was 0 at the start): `Purge_Goals`, eject
+  non-vehicle garrisons, `Collect_All_Free_Units`, `SPREAD_OUT` off, nearest enemy with property `InBase` else any
+  nearest enemy (`Find_Nearest`, visible — i.e. everything after the reveal), and `Attack_Move` that one enemy in
+  ≤ 20 s blocks until it is dead (the loop does not re-pick a target while it lives).
+- After the reveal, the AI's own unit targeting (force 1) and `Find_Nearest` see every enemy, so its units also
+  auto-acquire anything within R.
+
+*For the implementer (port symptom: idle survivors next to fogged enemies):*
+1. Check the perception grid: for AI players (`AIUsesFogOfWarLand` False) the "fogged" byte must stay 0, so
+   `EnemyUnitConcentration` / `EnemyForce` count fogged enemies; keep `Find_Nearest`, unit targeting, `Applies`,
+   `DistanceToNearest*` and `TimeLastSeen` on real fog (force 1).
+2. Check the free store: `Service_Attack` must fall back to `Attack_Move(enemy_location)` in skirmish
+   (`aggressive_mode` 1), `enemy_location` must come from the hint-zone targets, and `Has_Active_Orders` must follow
+   the rule above (log `enemy_location` and `Has_Active_Orders` for the stuck M1 / TIE Crawler).
+3. Make sure the units are free-store units (not held by a plan that has stalled; a plan's units are not serviced).
+4. Implement the firesale `Reveal_All` (Lua `FogOfWar.Reveal_All`) and the Burn plan's loop as shipped.
+5. Do not add a unit-level hunt or a victory reveal: retail has neither for these units.
+
 ---
 
 ## 6. Lua query functions (exact semantics)
