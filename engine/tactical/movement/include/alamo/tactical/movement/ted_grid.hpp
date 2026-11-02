@@ -11,12 +11,18 @@
 //   the water rule); types with neither are skipped. Fine_Tune_Occupied_Passability types trim their
 //   samples with `hooks.mesh_ray_hit` when supplied (else untrimmed). bits = OverridePassability or
 //   Obstacle. Stamp ids are -(placement index + 1) (map_stamp_id) so they never collide with object ids.
+// land_obstacle_footprint: that footprint for one object of type `type` at `position` / yaw / terrain height (no behaviour
+//   test; false when the type has neither XML size nor model extents). S8 t02: hosts stamp LAND_OBSTACLE objects spawned
+//   at run time with it under their object id (MOVEMENT §1.3: LandObstacleBehaviorClass stamps on attach, unstamps on
+//   detach), and re-stamp a Map_Load_Spawn_Table placement with the type actually spawned.
 // space_from_map: playable box (0x103 04/05) and SPACE_OBSTACLE placements as static entries;
 //   radius = first positive Custom_Soft_Footprint_Radius / Space_Obstacle_Radius, else (S7 t07, MOVEMENT §2.2) the larger
 //   x / y half extent of the type's space-model collision bound from `hooks.model_half_extents`, x Scale_Factor
 //   (PROVISIONAL [M]: the retail getter's "2R/20" conversion is unexplained and not applied). Centre = placement position +
 //   Space_Obstacle_Offset (x along the placement facing Rz(yaw) (0, -1), y to its left [M: rotation sense], as the host's
-//   space_obstacles_sync does for units).
+//   space_obstacles_sync does for units). Entry ids are map_stamp_id(placement) (S7 t13: a host that spawns an object for
+//   the placement moves the entry to the object id, SpaceOccupancy::rekey_static, so it leaves with the object).
+// space_obstacle_center: that centre for an object at `position` facing the unit XY direction `facing`.
 // space_obstacle_footprint: that static entry's radius and SpaceCollisionType bits for one type; false when the type has no
 //   SPACE_OBSTACLE behaviour, or no positive radius and no model extent. refixf t02: hosts use it for SPACE_OBSTACLE objects
 //   spawned at run time (MOVEMENT §2.2: SpaceObstacleBehaviorClass inserts the object as a static entry on attach, removes
@@ -48,6 +54,10 @@ struct MapStampHooks {
 };
 uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map, const objects::GameObjectTypes& types,
                              const MapStampHooks* hooks = nullptr);
+// S8 t02: the LAND_OBSTACLE footprint of one object (stamp_map_obstacles' rules; `hooks->mesh_ray_hit` is per placement and
+// is not used here: `out.fine_tune` stays unset, the caller may set it).
+bool land_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t type, V2 position, float yaw_deg, float terrain_z,
+                             const MapStampHooks* hooks, ObstacleFootprint& out);
 // S8 t01: the stamp id stamp_map_obstacles gives map placement `placement` (index into MapData::objects). A host that
 // spawns an object for the placement moves the stamp to the object id (PassabilityGrid::rekey), so the per-object cell
 // query (PassabilityGrid::occupies) answers for that object.
@@ -62,5 +72,6 @@ uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const 
                         const SpaceObstacleHooks* hooks = nullptr);
 bool space_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t type, float& radius, uint32_t& bits,
                               const SpaceObstacleHooks* hooks = nullptr);
+V2 space_obstacle_center(const objects::GameObjectTypes& types, uint32_t type, V2 position, V2 facing);
 
 }  // namespace alamo::tactical::movement

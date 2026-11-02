@@ -842,6 +842,11 @@ private:
     void add_participant(objects::ObjectHandle g, int32_t owner, uint8_t side, bool reserve, bool starbase, bool structure);
     void deploy(TacticalMode& mode, uint32_t participant, SimRng& rng);
     void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
+    // S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints of single objects under their object id (tactical_battle.cpp).
+    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);   // LAND_OBSTACLE stamp; false: none
+    bool space_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);  // SPACE_OBSTACLE static entry
+    void land_obstacles_sync(const TacticalMode& mode);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
+    std::vector<uint8_t> land_obstacle_none_;  // S8 t02: per type, 1 = no footprint (no XML size, no model); derived, not saved
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);

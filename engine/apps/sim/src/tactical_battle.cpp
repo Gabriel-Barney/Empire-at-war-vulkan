@@ -628,14 +628,19 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     attach_rocket_terrain();  // refixf t01
     if (!space_) {
         // S8 t01 (TACTICAL_GAPS 3.1 slot 43): LAND_OBSTACLE targets' aim walk over the cells their stamp occupies (map
-        // placements' stamps move to the spawned objects in bt_map_load); an unstamped target keeps the half-extent rule.
+        // placements' stamps move to the spawned objects in bt_map_load; S8 t02: objects spawned later are stamped by
+        // land_obstacles_sync). The cell centre is always written (ObstacleCellFn contract). A stamp with no cells (water
+        // rule / Fine_Tune / off the grid) answers Free: retail gates the walk on the LAND_OBSTACLE behaviour (obj +0x346),
+        // not on the cell count, so the walk starts on an unoccupied cell, snaps to it and uses E = sqrt(200). NoFootprint
+        // (half-extent rule) only for an object never stamped [port: a type without Obstacle_Width / _Height and without
+        // model extents].
         const mv::MovementSystem* ms = movement_.get();
         combat_->set_obstacle_cell_query([ms](tc::ObjectId id, tactical::Vec3 p, tactical::Vec3& c) {
             const mv::PassabilityGrid& g = ms->grid();
-            if (!g.stamped(id)) return tc::ObstacleCell::NoFootprint;
             const int32_t cx = mv::world_to_cell(p.x), cy = mv::world_to_cell(p.y);
             const mv::V2 cc = mv::cell_center(cx, cy);
             c = tactical::Vec3{cc.x, cc.y, p.z};
+            if (!g.stamped(id)) return tc::ObstacleCell::NoFootprint;
             return g.occupies(id, cx, cy) ? tc::ObstacleCell::Occupied : tc::ObstacleCell::Free;
         });
     }
@@ -704,6 +709,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     bt_landing_points(mode);     // §3.3: the attacker's map-owned reinforcement points
     mode.finish_load(pf);
     space_obstacles_sync(mode);  // refixf t02: the starbase / structures as space static entries (MOVEMENT §2.2)
+    land_obstacles_sync(mode);   // S8 t02: LAND_OBSTACLE objects spawned during the setup (MOVEMENT §1.3)
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants (land)
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
 }
@@ -903,38 +909,91 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
 }
 
 // refixf t02 (MOVEMENT §2.2 [H]): SpaceObstacleBehaviorClass inserts its object into the space occupancy as a static entry on
-// attach and removes it on detach. Map placements enter through mv::space_from_map (ids -(placement index + 1)); battle units
-// whose type has SPACE_OBSTACLE (the starbase, space structures, upgraded / built stations) enter here under their object id,
-// so the destination search (§2.4) and the planner keep ships off them. Before, the starbase was no obstacle: an Attack_Move /
-// Move_To on it (one order per task-force unit) sent each ship to its exact centre, the ships stacked on one point and
-// Project_By_Unit_Range gave nil (foc-station seeds 1 and 4). [port] attach = the first sync (end of setup, end of each tick)
-// with the unit live, detach = the first sync after it died or retreated; footprint as space_from_map (radius) at the attach
-// position + Space_Obstacle_Offset rotated by the facing [M: rotation sense]; units adopted from the map keep space_from_map's
-// entry (not added twice). S7 t07: a type without an XML radius gets its space model's collision-bound extent (MOVEMENT
-// §2.2); the model's collide switch is not consulted (SPACE_AVOIDANCE §5.5).
+// attach and removes it on detach. Map placements enter through mv::space_from_map (ids mv::map_stamp_id(placement)); S7 t13:
+// bt_map_load moves each entry to the object spawned for it (SpaceOccupancy::rekey_static; a Map_Load_Spawn_Table pick is
+// re-sized by the type spawned, a placeholder that spawns nothing loses its entry), so a map-adopted unit's entry leaves with
+// it. Battle units whose type has SPACE_OBSTACLE (the starbase, space structures, upgraded / built stations) enter here under
+// their object id, so the destination search (§2.4) and the planner keep ships off them. Before, the starbase was no obstacle:
+// an Attack_Move / Move_To on it (one order per task-force unit) sent each ship to its exact centre, the ships stacked on one
+// point and Project_By_Unit_Range gave nil (foc-station seeds 1 and 4). [port] attach = the first sync (end of setup, end of
+// each tick) with the unit live, detach = the first sync after it died or retreated; footprint as space_from_map (radius) at
+// the attach position + Space_Obstacle_Offset rotated by the facing [M: rotation sense]. S7 t07: a type without an XML radius
+// gets its space model's collision-bound extent (MOVEMENT §2.2); the model's collide switch is not consulted (SPACE_AVOIDANCE
+// §5.5).
 void TacticalBattle::space_obstacles_sync(const TacticalMode& mode) {
     if (!space_ || !movement_) return;
     mv::SpaceOccupancy& occ = movement_->space();
     const objects::ObjectStore& st = mode.primary();
-    const objects::GameObjectTypes& types = catalog_->types();
-    mv::SpaceObstacleHooks so_hooks;
-    const BattleCatalog* so_cat = catalog_;
-    so_hooks.model_half_extents = [so_cat](uint32_t t, float& hx, float& hy) { return so_cat->space_model_half_extents(t, hx, hy); };
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !st.alive(u.h)) {
             occ.remove_static(u.id);
             continue;
         }
-        if (parts_[u.participant].map || occ.has_static(u.id)) continue;
-        float r = 0.0f;
-        uint32_t bits = 0;
-        if (!mv::space_obstacle_footprint(types, u.type, r, bits, &so_hooks)) continue;
-        const Vec3 p = st.position(u.h), f = st.facing(u.h);
-        const std::array<float, 4> off = types.get_vec(static_cast<objects::TypeIndex>(u.type), "Space_Obstacle_Offset");
-        const float len = dmath::sqrt(f.x * f.x + f.y * f.y);
-        const float fx = len > 0.0f ? f.x / len : 1.0f, fy = len > 0.0f ? f.y / len : 0.0f;
-        occ.add_static(u.id, {p.x + off[0] * fx - off[1] * fy, p.y + off[0] * fy + off[1] * fx}, r, bits);
+        if (!occ.has_static(u.id)) space_obstacle_attach(mode, u.h);
     }
+}
+
+bool TacticalBattle::space_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h) {
+    const objects::ObjectStore& st = mode.primary();
+    if (!space_ || !movement_ || !st.alive(h)) return false;
+    const objects::GameObjectTypes& types = catalog_->types();
+    mv::SpaceObstacleHooks so_hooks;
+    const BattleCatalog* so_cat = catalog_;
+    so_hooks.model_half_extents = [so_cat](uint32_t t, float& hx, float& hy) { return so_cat->space_model_half_extents(t, hx, hy); };
+    const auto t = static_cast<uint32_t>(st.type(h));
+    float r = 0.0f;
+    uint32_t bits = 0;
+    if (!mv::space_obstacle_footprint(types, t, r, bits, &so_hooks)) return false;
+    const Vec3 p = st.position(h), f = st.facing(h);
+    const float len = dmath::sqrt(f.x * f.x + f.y * f.y);
+    const mv::V2 fu{len > 0.0f ? f.x / len : 1.0f, len > 0.0f ? f.y / len : 0.0f};
+    movement_->space().add_static(st.id(h), mv::space_obstacle_center(types, t, {p.x, p.y}, fu), r, bits);
+    return true;
+}
+
+// S8 t02 (MOVEMENT §1.3 [H]): LandObstacleBehaviorClass stamps its object's footprint into the passability grid on attach and
+// unstamps it on detach. Map placements are stamped at setup (mv::stamp_map_obstacles) and their stamps move to the objects
+// spawned for them in bt_map_load; everything spawned later (the starbase / structures / persisted pad children at setup,
+// built pads, reinforcement structures, script spawns, death clones whose type has LAND_OBSTACLE) is stamped here under its
+// object id, and every stamped object that left the store (died, sold, removed) is unstamped. [port] attach / detach = this
+// sync: end of setup (also after the structures deploy, before the start forces: their spawn ring search sees the
+// structures), end of each tick (the next tick's pathing and targeting see the change). Gone first (ascending id), then new
+// (the store's LAND_OBSTACLE attach order); footprint as stamp_map_obstacles at the object's position, yaw (facing = Rz(yaw)
+// (0, -1), as map placements) and height; Fine_Tune_Occupied_Passability is not trimmed (no mesh ray test for objects).
+// [inferred] a death clone whose type carries LAND_OBSTACLE (Veers_AT_AT_Walker_Death_Clone, ...) is an obstacle like any
+// object with the behaviour (MOVEMENT §1.3: wreck stamping not traced). Placement stamps left under a placement id (a skipped
+// map company) are not touched.
+void TacticalBattle::land_obstacles_sync(const TacticalMode& mode) {
+    if (space_ || !movement_) return;
+    const objects::ObjectStore& st = mode.primary();
+    mv::PassabilityGrid& grid = movement_->grid();
+    for (const mv::ObjectId id : grid.stamped_ids())
+        if (id > 0 && !st.alive(st.find(id))) grid.unstamp(id);
+    for (const objects::ObjectHandle h : st.behavior_table(objects::beh::LandObstacle).insertion)
+        if (st.alive(h) && !grid.stamped(st.id(h))) land_obstacle_attach(mode, h);
+}
+
+bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h) {
+    const objects::ObjectStore& st = mode.primary();
+    if (space_ || !movement_ || !st.alive(h)) return false;
+    const objects::GameObjectTypes& types = catalog_->types();
+    const auto t = static_cast<uint32_t>(st.type(h));
+    if (t >= types.size()) return false;
+    if (land_obstacle_none_.size() != types.size()) land_obstacle_none_.assign(types.size(), 0);
+    if (land_obstacle_none_[t]) return false;
+    mv::MapStampHooks hooks;
+    const BattleCatalog* cat = catalog_;
+    hooks.model_half_extents = [cat](uint32_t ty, float& hx, float& hy, float& hz) { return cat->model_half_extents(ty, hx, hy, hz); };
+    const Vec3 p = st.position(h), f = st.facing(h);
+    // yaw of the facing Rz(yaw) (0, -1) = (sin yaw, -cos yaw): the map placements' convention (bt_map_load yaw_facing)
+    const float yaw = (f.x == 0.0f && f.y == 0.0f) ? 0.0f : dmath::atan2(f.x, -f.y) * (180.0f / dmath::kPiF);
+    mv::ObstacleFootprint fp;
+    if (!mv::land_obstacle_footprint(types, t, {p.x, p.y}, yaw, p.z, &hooks, fp)) {
+        land_obstacle_none_[t] = 1;  // const type data: never retried
+        return false;
+    }
+    movement_->grid().stamp(st.id(h), fp);
+    return true;
 }
 
 // ---- tick ----------------------------------------------------------------------------------------------------------
@@ -2364,6 +2423,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     check_victory();
     if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
     space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units
+    land_obstacles_sync(mode);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
     hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
     profile::lap("tac.victory");
 }
