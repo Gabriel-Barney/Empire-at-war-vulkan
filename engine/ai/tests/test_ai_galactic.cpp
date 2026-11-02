@@ -933,6 +933,80 @@ static void test_sim_hooks() {
     CHECK(fleet_events > 0 && fleet_rejected == 0);
 }
 
+// A2 t03 (Conquer_Opponent): the starbase's own AI_Combat_Power belongs in the untyped force totals only (GALACTIC_ECONOMY
+// 6.2 Node_Weight helper 0x5f2430, mask "all"); a typed row holds the starbase's per-tech spawned members by category
+// (AI_GALACTIC_TOKENS 2: "not the starbase's own power"). Shared by the PotentialPlan Contrast rows and the token leaf.
+static void test_starbase_force_split() {
+    MemoryFiles files;
+    AiDefinitions defs;
+    EquationSet eqs;
+    std::vector<std::string> plan_files;
+    syn_data(files, defs, eqs, plan_files);
+    eqs.add("Space_All", "Variable_Target.EnemyForce.SpaceTotalUnnormalized");
+    eqs.add("Space_Capital", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Capital\"}");
+    eqs.add("Space_Frigate", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Frigate\"}");
+    eqs.add("Space_Corvette", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Corvette\"}");
+    eqs.add("Space_FrigCorv", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Frigate\", Parameter_Category = \"Corvette\"}");
+    eqs.add("Ground_All", "Variable_Target.EnemyForce.GroundTotalUnnormalized");
+    eqs.link();
+    const gal::GalacticRules rules = syn_rules();  // SB1 600, Frigate 1000, Corvette 500
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+    GameRandom rng(4242u, 77u);
+    gal::GalacticSim sim(rules, store, rng.synced());
+    gal::GalacticSetup setup = syn_setup();
+    setup.forces = {{0, 0, tSB1}, {1, 7, tSB1}};  // the Empire's base at P0, the (hostile) Rebel base at P7, nothing else
+    CHECK(sim.start(setup));
+    std::vector<GalacticAiTypeInfo> tinfo(tTypes);
+    tinfo[tFrigate].categories = {"FRIGATE"};
+    tinfo[tCorvette].categories = {"CORVETTE"};
+    tinfo[tSB1].categories = tinfo[tSB2].categories = {"CAPITAL"};
+    tinfo[tSB1].spawn_tech[0] = {{tCorvette, 2}, {tFrigate, 1}};  // 2 x 500 + 1 x 1000
+    tinfo[tSB1].spawn_tech[3] = {{tFrigate, 9}};                  // above the owner's tech level: never read
+    fill_category_masks(tinfo);
+    const std::span<const GalacticAiTypeInfo> ti(tinfo);
+    const uint32_t cap = static_cast<uint32_t>(ai_category_bit("Capital")), frig = static_cast<uint32_t>(ai_category_bit("Frigate")),
+                   corv = static_cast<uint32_t>(ai_category_bit("Corvette"));
+    CHECK(cap != 0 && frig != 0 && corv != 0 && sim.planets()[7].starbase && sim.planets()[7].owner == 1);
+    CHECK(sim.players()[1].tech_level == 1);  // slot 1 empty: the fallback reads slot 0
+    // The shared helper (PotentialPlan enemy_strength + token leaf): untyped = members + own power, typed = members only.
+    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, kAllCategories) == 2600.0);
+    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, cap) == 0.0);  // the starbase is a Capital, its own power is NOT in the row
+    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, frig) == 1000.0);
+    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, corv) == 1000.0);
+    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, frig | corv) == 2000.0);
+    CHECK(galactic_ai_structure_force(sim, ti, tSB2, 1, kAllCategories) == 1200.0);  // no members: the untyped total is its power
+    CHECK(galactic_ai_structure_force(sim, ti, tSB2, 1, cap) == 0.0);
+    // The token leaf on the live sim (Self = Empire, Target = P7).
+    GalacticAiConfig cfg;
+    cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
+    cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
+    GalacticAiWorld world(sim, store, &types, &files, rng, defs, eqs, tinfo,
+                          [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, cfg);
+    CHECK(world.load_plans(plan_files) && world.start());
+    sim.update();
+    world.update_player(0, 1, true, false);
+    EvalContext c;
+    c.self = 0;
+    c.target = 7;
+    auto value = [&](const char* name) {
+        const EvalResult r = evaluate(eqs, eqs.find(name), c, world.resolver());
+        CHECK(r.ok);
+        return r.value;
+    };
+    CHECK(value("Space_All") == 2600.0);
+    CHECK(value("Space_Capital") == 0.0);
+    CHECK(value("Space_Frigate") == 1000.0);
+    CHECK(value("Space_Corvette") == 1000.0);
+    CHECK(value("Space_FrigCorv") == 2000.0);
+    CHECK(value("Ground_All") == 0.0);
+    // The Empire's own base is not enemy force from its point of view.
+    c.target = 0;
+    CHECK(value("Space_All") == 0.0);
+    std::printf("starbase force split: untyped 2600 (members 2000 + own 600), Capital row 0, Frigate row 1000\n");
+}
+
 // A2 galactic, AI_GALACTIC_3 rules: heroes never attach through their AI script (§2.4), the TerrainType veto (§6.3),
 // the galactic population cap when AI_Uses_Galactic_Pop_Cap is set (§3.5), MagicPlan spawns without production or
 // charge (§4), and the perception DLL's division / clamp failures (§7.1).
@@ -2208,7 +2282,19 @@ static void test_foc_data() {
                                     ai_iequal(fac, "Empire") ? "BasicEmpire" : (ai_iequal(fac, "Rebel") ? "BasicRebel" : "AI_Player_Underworld"), 1});
         }
     gcfg.difficulties = load_ai_difficulties(*v);
-    GalacticAiWorld world(sim, store, &types, v.get(), rng, defs, eqs, make_galactic_ai_type_info(types),
+    // A2 t03: the starbases' Starting_Spawned_Units_Tech_0 lists (type, count; repeated tags appended) reach the AI type
+    // info, so the typed force rows hold squadrons instead of the starbase's own AI_Combat_Power.
+    const std::vector<GalacticAiTypeInfo> foc_tinfo = make_galactic_ai_type_info(types);
+    {
+        const uint32_t sb1 = rules.find_type("Rebel_Star_Base_1"), xw = rules.find_type("Rebel_X-Wing_Squadron"), yw = rules.find_type("Y-Wing_Squadron");
+        CHECK(sb1 != gal::kNoIndex && sb1 < foc_tinfo.size() && xw != gal::kNoIndex && yw != gal::kNoIndex);
+        if (sb1 < foc_tinfo.size()) {
+            const auto& l = foc_tinfo[sb1].spawn_tech[0];
+            CHECK(l.size() == 2 && l[0].type == xw && l[0].count == 2 && l[1].type == yw && l[1].count == 2);
+            CHECK(foc_tinfo[sb1].spawn_tech[1].empty() && rules.types[sb1].ai_combat_power == 5000.0f);
+        }
+    }
+    GalacticAiWorld world(sim, store, &types, v.get(), rng, defs, eqs, foc_tinfo,
                           [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, gcfg);
     std::vector<std::string> pd;
     const std::vector<std::string> plan_files = list_plan_files([&v](std::string_view g) { return v->list(g); });
@@ -2413,6 +2499,7 @@ int main(int argc, char** argv) {
     test_synthetic_campaign();
     test_path_finder_world();
     test_sim_hooks();
+    test_starbase_force_split();
     test_parity_rules();
     test_production_disabled_and_delivery();
     test_free_store_path_rules();

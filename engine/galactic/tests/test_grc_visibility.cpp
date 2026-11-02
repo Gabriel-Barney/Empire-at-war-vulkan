@@ -500,6 +500,45 @@ void test_player_view() {
     CHECK(nv.ownership_visible.empty() && nv.local_orbit_visible.empty() && nv.is_passable(rC, PathRequest{}));
 }
 
+// A2 t01: PlayerView::ai_perceived_non_neutral for a mover with an AI system (stand-in: the true owner, no fogged memory).
+void test_player_view_ai_perceived() {
+    std::printf("  player view ai perceived owner\n");
+    World w;  // Empire human; Rebel and Underworld are AI players; A = Emp, C = Reb, D = Und, B and E neutral-owned
+    GalacticSim& s = w.sim;
+    CHECK(s.planets()[rB].owner == pNeu && s.planets()[rE].owner == pNeu);  // start() gives the rest to the neutral faction
+    const PlayerView rv = s.player_view(pReb);  // AI player
+    CHECK(rv.has_ai_system && !rv.is_human && rv.ai_perceived_non_neutral.size() == 5u);
+    CHECK(rv.ai_perceived_non_neutral.test(rA));   // enemy planet (Empire): flag 1
+    CHECK(rv.ai_perceived_non_neutral.test(rC));   // own planet
+    CHECK(rv.ai_perceived_non_neutral.test(rD));   // another enemy
+    CHECK(!rv.ai_perceived_non_neutral.test(rB));  // owned by the neutral faction: flag 0
+    CHECK(!rv.ai_perceived_non_neutral.test(rE));
+    CHECK(rv.ai_eval_failed.empty());              // the sim view never fails the evaluation
+    // The AI branch of Is_Planet_Passable_For_Player now follows the perceived owner (no ally / corruption shortcut here).
+    PathRequest enemy_only;
+    enemy_only.allow_unknown_or_neutral = false;
+    enemy_only.allow_enemy_owned = true;
+    PathRequest neutral_only = enemy_only;
+    neutral_only.allow_unknown_or_neutral = true;
+    neutral_only.allow_enemy_owned = false;
+    CHECK(rv.is_passable(rA, enemy_only) && !rv.is_passable(rA, neutral_only));
+    CHECK(!rv.is_passable(rB, enemy_only) && rv.is_passable(rB, neutral_only));
+    CHECK(!rv.is_passable(rE, enemy_only) && rv.is_passable(rE, neutral_only));
+    // The bit is the inverse of unowned_or_neutral on every planet row.
+    for (PlanetIndex i = 0; i < 5; ++i) CHECK(rv.ai_perceived_non_neutral.test(i) == !rv.unowned_or_neutral.test(i));
+    // A human mover without an AI system gets no AI fields (human branch uses unowned_or_neutral).
+    const PlayerView ev = s.player_view(pEmp);
+    CHECK(!ev.has_ai_system && ev.ai_perceived_non_neutral.empty());
+    // A human with an AI system has the field filled but the human branch still decides.
+    World h(pReb);  // Rebel human
+    const PlayerView hv = h.sim.player_view(pEmp);  // Empire is an AI player now
+    CHECK(hv.has_ai_system && hv.ai_perceived_non_neutral.test(rC) && !hv.ai_perceived_non_neutral.test(rB));
+    // Determinism: repeated calls are identical.
+    const PlayerView rv2 = s.player_view(pReb);
+    CHECK(rv2.ai_perceived_non_neutral.size() == rv.ai_perceived_non_neutral.size());
+    for (PlanetIndex i = 0; i < 5; ++i) CHECK(rv2.ai_perceived_non_neutral.test(i) == rv.ai_perceived_non_neutral.test(i));
+}
+
 void test_determinism() {
     std::printf("  determinism\n");
     auto script = [](World& w) {
@@ -614,6 +653,7 @@ int main() {
     test_api();
     test_planet_info();
     test_player_view();
+    test_player_view_ai_perceived();
     test_determinism();
     test_foc();
     if (g_fail) {

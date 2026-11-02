@@ -35,7 +35,11 @@ constexpr uint8_t kKind2 = 2, kKind3 = 3, kKind4 = 4, kKind5 = 5, kKind16 = 0x16
 constexpr int32_t kHackFrames = 60;  // [port] Hack / Repair animation 0x5a length without a clip (§4.13 fallback)
 constexpr int32_t kAnimHacking = 0x5a;  // Hack / Repair (TACTICAL_GAPS §2.3.10)
 constexpr int32_t kAnimBerserk = 0x68;  // Berserker (TACTICAL_GAPS §2.3.2)
-constexpr int32_t kAnimAttack = 5;      // Super_Laser (TACTICAL_GAPS §2.3.9)
+constexpr int32_t kAnimAttack = 5;      // Super_Laser (TACTICAL_GAPS §2.3.9), weapon shots, the Arc / Eat gates
+// §4.14: begin / hold / release clips (anim_types.cpp)
+constexpr int32_t kAnimFtkAttack = 0x21, kAnimFtkRelease = 0x23;  // Telekinesis
+constexpr int32_t kAnimFbAttack = 0x25, kAnimFbRelease = 0x27;    // Earthquake
+constexpr int32_t kAnimFlAttack = 0x28;                           // Force_Lightning (Force_Sight's: ability_system.cpp)
 
 int32_t frames_of(float secs, uint32_t fps) { return static_cast<int32_t>(static_cast<float>(fps) * secs); }
 
@@ -57,16 +61,102 @@ float bearing_deg(Vec3 f, Vec3 from, Vec3 p) {
 }
 }  // namespace
 
-AbilitySystem::ClipTiming AbilitySystem::clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name) const {
+AbilitySystem::ClipTiming AbilitySystem::clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name,
+                                                     uint32_t variant) const {
     ClipTiming t;
     if (!host_.anim_clip || (anim_type < 0 && anim_name.empty())) return t;
     uint32_t count = 0;
     float fps = 0.0f;
-    if (!host_.anim_clip(id, anim_type, anim_name, count, fps) || count == 0 || !(fps > 0.0f)) return t;
+    if (!host_.anim_clip(id, anim_type, anim_name, variant, count, fps) || count == 0 || !(fps > 0.0f)) return t;
     t.rate = fps / 30.0f;
     t.count = static_cast<float>(count);
     t.end = count >= 2 ? static_cast<float>(count - 2) : 0.0f;
     return t;
+}
+
+// OI follow-up t01 (ABILITIES_HARDPOINTS §4.14 [port]): the owner's primary slot as far as the sim knows it. Only the
+// ability system's own plays (and non-overlay weapon shots of melee owners) are recorded; a play without clip data leaves
+// the record unchanged, so headless runs without models keep "none" and every gate passes.
+int32_t AbilitySystem::anim_type_of(std::string_view anim_name) const {
+    return (host_.anim_type && !anim_name.empty()) ? host_.anim_type(anim_name) : -1;
+}
+
+void AbilitySystem::play_anim(Obj& o, int32_t type, std::string_view anim_name, uint32_t variant, bool loop, float speed,
+                              uint8_t then, uint32_t frame) {
+    if (type < 0) type = anim_type_of(anim_name);
+    if (type < 0) return;
+    const ClipTiming ct = clip_timing(o.id, type, {}, variant);
+    if (ct.count <= 0.0f) return;  // the model lacks the clip: the play returns 0, nothing changes
+    o.anim_type = type;
+    o.anim_start = frame;
+    o.anim_rate = ct.rate * speed;
+    o.anim_end = ct.end;
+    o.anim_loop = loop ? 1 : 0;
+    o.anim_then = then;
+}
+
+AbilitySystem::AnimView AbilitySystem::anim_view(const Obj& o, uint32_t frame) const {
+    AnimView v;
+    if (o.anim_type < 0) return v;
+    v.type = o.anim_type;
+    if (o.anim_loop) return v;  // a loop never finishes
+    // One-shot: finished from the first advance with position >= count - 2 (a clip does not move in its play frame).
+    const float n = frame > o.anim_start ? static_cast<float>(frame - o.anim_start) : 0.0f;
+    if (!(n * o.anim_rate >= o.anim_end)) return v;
+    switch (o.anim_then) {
+        case kAnimIdle: v.type = -1; break;           // the update that saw it finish played the idle
+        case kAnimHoldLoop: v.type = o.anim_type + 1; break;  // begin -> hold loop
+        default: v.finished = true; break;
+    }
+    return v;
+}
+
+bool AbilitySystem::class_state(const Obj& o, SpecialClass cls) const {
+    for (const SpecialState& sp : o.specials)
+        if (sp.applied && data_->specials[sp.desc].cls == cls) return true;
+    return false;
+}
+
+bool AbilitySystem::anim_busy(const Obj& o, uint32_t frame) const {
+    // 0x39a350: OR of the owner's abilities' type-only tests (the mode is ignored). Earthquake / Telekinesis / Lightning /
+    // Generic / Eat count in land only; Arc_Sweep by its applied state in any mode. [port] Eat's Target_Grabbed_Animation
+    // is not parsed (only Attack_Animation counts).
+    if (class_state(o, C::ArcSweep)) return true;
+    if (cfg_.mode != GameMode::Land) return false;
+    const int32_t type = anim_before(o, frame).type;
+    if (type < 0) return false;
+    for (const SpecialState& sp : o.specials) {
+        const SpecialAbilityDesc& s = data_->specials[sp.desc];
+        switch (s.cls) {
+            case C::Earthquake:
+                if (type >= kAnimFbAttack && type <= kAnimFbRelease) return true;
+                break;
+            case C::Telekinesis:
+                if (type >= kAnimFtkAttack && type <= kAnimFtkRelease) return true;
+                break;
+            case C::ForceLightning:
+                if (type == kAnimFlAttack) return true;
+                break;
+            case C::GenericAttack:
+            case C::EatAttack:
+                if (type == anim_type_of(s.attack_anim)) return true;
+                break;
+            default: break;
+        }
+    }
+    return false;
+}
+
+bool AbilitySystem::locked(const Obj& o) const {
+    return o.immobilize > 0 || (host_.movement_locked && host_.movement_locked(o.id));
+}
+
+void AbilitySystem::lock_pair(Obj& o, uint8_t flag, bool lock, uint32_t frame) {
+    // OI follow-up t04 (A1_READINGS §28.9 table): one caller's lock / unlock on the shared counter. [port] the flag keeps
+    // each pair balanced (the original's unconditional releases are hidden by the clamp at 0).
+    if (lock == ((o.lock_flags & flag) != 0)) return;
+    o.lock_flags = static_cast<uint8_t>(lock ? (o.lock_flags | flag) : (o.lock_flags & ~flag));
+    immobilize(o, lock ? +1 : -1, frame);
 }
 
 // ================================================================================================
@@ -212,7 +302,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::Earthquake:
         case C::Telekinesis: {  // 2.3.4
             if (!alive_unit(target)) return false;
-            if (sp.applied) class_remove(o, sp, frame);  // remove the previous effect
+            if (sp.applied) class_remove(o, sp, frame);  // remove the previous effect (plays the release clip)
+            // §4.14: Earthquake refuses while the owner shows FB_Release (any phase; also the one the removal just
+            // started); Telekinesis has no animation gate.
+            if (s.cls == C::Earthquake && anim_before(o, frame).type == kAnimFbRelease) return false;
             if (moving(o) || !range_ok(o, s, target)) return false;
             if (!chance_roll_lt(s.activation_chance)) return false;  // one synced draw < Activation_Chance
             if (s.cls == C::Earthquake) {  // also ends the owner's own Force_Cloak (stealth breaks, 0.3 s)
@@ -224,6 +317,8 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             sp.value = max_health_and_shield(target) * s.damage_percentage + s.damage_amount;  // D
             sp.next = frame + static_cast<uint32_t>(std::max(1, frames_of(s.damage_interval, fps)));
             if (s.cls == C::Telekinesis) start_recharge(o, kForceTelekinesis);
+            // §4.14: FB_Attack / FTK_Attack one-shot, then the hold clip loops
+            play_anim(o, s.cls == C::Earthquake ? kAnimFbAttack : kAnimFtkAttack, {}, 0, false, 1.0f, kAnimHoldLoop, frame);
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
             return true;
         }
@@ -237,6 +332,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, combat_->position(target))) return false;
             if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return false;  // unit ability 22's counter <= 0
             stop_order(o.id, frame);
+            lock_pair(o, kLockGrenade, true, frame);  // face, stop, lock (0x3a8e50 1; A1_READINGS §28.9)
             sp.applied = 1;
             sp.target = target;
             sp.phase = 0;
@@ -247,6 +343,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
 
         case C::ForceLightning: {  // 2.3.6 apply 0x6fd010
             if (!alive_unit(target) || moving(o)) return false;
+            if (anim_before(o, frame).type == kAnimFlAttack) return false;  // §4.14: refused while FL_Attack runs
             ObjectId primary = target;
             if (const Obj* to = obj(target); to && to->container != kNoObject && !alive_unit(primary)) primary = to->container;
             if (!range_ok(o, s, primary)) return false;
@@ -262,6 +359,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
                 combat_->take_damage(r, frame);
             }
             start_recharge(o, kForceLightning);
+            play_anim(o, kAnimFlAttack, {}, 0, false, 1.0f, kAnimIdle, frame);  // §4.14: the cast lasts the clip
             event(AbilityEventKind::EffectOn, kForceLightning, o.id, primary, frame);
             return true;  // update is visuals only
         }
@@ -301,6 +399,15 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::GenericAttack:
         case C::EatAttack: {  // 2.3.8
             if (!alive_unit(target) || moving(o)) return false;
+            {  // §4.14 gates (owner's primary slot as of the last advance)
+                const AnimView v = anim_before(o, frame);
+                if (s.cls == C::GenericAttack) {  // its own Attack_Animation in any phase, then busy
+                    if ((v.type >= 0 && v.type == anim_type_of(s.attack_anim)) || anim_busy(o, frame)) return false;
+                } else {  // Arc / Eat: the per-owner class state, the literal Attack (5) unless finished; Eat also busy
+                    if (class_state(o, s.cls) || (v.type == kAnimAttack && !v.finished)) return false;
+                    if (s.cls == C::EatAttack && anim_busy(o, frame)) return false;
+                }
+            }
             if (!range_ok(o, s, target)) return false;
             if (s.cls != C::EatAttack && o.combat_unit) {
                 const float lim = s.cls == C::ArcSweep ? 15.0f : 5.0f;
@@ -314,6 +421,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             sp.phase = 0;
             sp.radius = s.right_to_left ? 0.5f * s.arc_width : -0.5f * s.arc_width;  // sweep start angle
             sp.victims.clear();
+            // §4.14: Attack_Animation one-shot at Speedup, then the default idle (Arc: the explicit Subindex variant;
+            // [port] Generic / Eat use variant 0, no draw; Eat plays at the apply)
+            play_anim(o, -1, s.attack_anim, s.cls == C::ArcSweep ? static_cast<uint32_t>(std::max(0, s.anim_sub_index)) : 0u,
+                      false, s.anim_speedup, kAnimIdle, frame);
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
             return true;
         }
@@ -770,7 +881,8 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
         case C::ArcSweep:
         case C::GenericAttack:
         case C::EatAttack: {  // Attack_Animation on sim frames x rate x Attack_Animation_Speedup (§4.13)
-            const ClipTiming ct = clip_timing(o.id, -1, s.attack_anim);
+            const ClipTiming ct =
+                clip_timing(o.id, -1, s.attack_anim, s.cls == C::ArcSweep ? static_cast<uint32_t>(std::max(0, s.anim_sub_index)) : 0u);
             const float anim = static_cast<float>(frame - sp.next) * ct.rate * s.anim_speedup;
             // the hold ends at the animation end, or with the last frame-numbered event when there is no clip
             const bool ended = ct.count <= 0.0f || anim >= ct.end;
@@ -862,9 +974,13 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 if (frame < sp.next) return;
                 sp.phase = 1;  // inside the firing cone: the attack animation starts
                 sp.next = frame;
+                // §4.14: type 5, index Attack_Anim_Sub_Index, one-shot (parks at its end)
+                play_anim(o, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index)), false, 1.0f, kAnimStay, frame);
             }
-            if (sp.phase == 1 && static_cast<float>(frame - sp.next) * clip_timing(o.id, kAnimAttack, {}).rate >=
-                                     static_cast<float>(s.fire_frame)) {  // Fire_Frame on the attack clip (§4.13)
+            if (sp.phase == 1 &&
+                static_cast<float>(frame - sp.next) *
+                        clip_timing(o.id, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index))).rate >=
+                    static_cast<float>(s.fire_frame)) {  // Fire_Frame on the sub-index variant's clip (§4.13 / §4.14)
                 sp.phase = 2;
                 start_active(o, kSuperLaser);  // 55's active countdown
             }
@@ -1091,6 +1207,13 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
             break;
         case C::Blast:
             if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitSkipTargeting, false);
+            break;
+        case C::GrenadeAttack:  // vf4 0x700d00: targeting / locomotor re-enabled, unlock (A1_READINGS §28.9)
+            lock_pair(o, kLockGrenade, false, frame);
+            break;
+        case C::Earthquake:  // §4.14 remove: FB_Release / FTK_Release one-shot, then the idle loop
+        case C::Telekinesis:
+            play_anim(o, s.cls == C::Earthquake ? kAnimFbRelease : kAnimFtkRelease, {}, 0, false, 1.0f, kAnimIdle, frame);
             break;
         default: break;
     }

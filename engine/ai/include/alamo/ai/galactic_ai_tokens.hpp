@@ -13,14 +13,16 @@
 //     EnemyForce / FriendlyForce / bare TimeLastSeen*, Target.Hints.<not in Galactic_Hints>, Game.ForceVisibility.
 //   * Force sides [H]: Enemy = owner hostile to Self; Friendly = Self (or an ally: not hostile, not neutral);
 //     unowned / neutral matches neither.
-// PORT STAND-INS (marked [port] next to the code): the per-tech member lists of starbases / structures are
-// the structure's own AI_Combat_Power; orbital / space-capable structures and the planet-type garrison list
+// PORT STAND-INS (marked [port] next to the code): the per-tech member lists of starbases / structures are the
+// types' Starting_Spawned_Units_Tech_N lists (typed rows; the untyped totals add the structure's own AI_Combat_Power
+// on top, see galactic_ai_structure_force); fleet units' own per-tech members are not added; orbital / space-capable structures and the planet-type garrison list
 // +0x20C8 are not modelled; Timeline = 0; black market = GalacticSim's item table (P4 ai); Hints = the Galactic_Hints
 // defaults (no Markup_Filename file is read); island paths are hop-count shortest paths.
 // Determinism: refresh(frame) runs once per frame on the sim thread (event stamps, neighbour lists);
 // resolve() reads the sim and the leaf cache (mutex) and draws no RNG (Script_ references may, through
 // their Lua; they run only from serial sim-thread callers).
 #pragma once
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -43,6 +45,13 @@ class GalacticSim;
 }
 
 namespace alamo::ai {
+
+// One (type, count) entry of a Starting_Spawned_Units_Tech_N list (the type's "per-tech members", AI_GALACTIC_TOKENS §2).
+struct SpawnMember {
+    uint32_t type = 0;
+    int32_t count = 0;
+};
+inline constexpr size_t kSpawnTechSlots = 6;  // Starting_Spawned_Units_Tech_0..5
 
 // Per object type facts the galactic AI needs beyond galactic::TypeInfo (index = TypeIndex).
 struct GalacticAiTypeInfo {
@@ -72,6 +81,9 @@ struct GalacticAiTypeInfo {
     bool stealth_company = false;  // Is_Stealth_Company (+0x2B): AI delivery path class 5 (REMAINING_GAPS §6.2)
     uint32_t company_first = 0xFFFFFFFFu;  // first Company_Units member (survival leader substitution, §1.1)
     bool company_first_create_team = false;  // ... and that member has Create_Team (then no substitution)
+    // Starting_Spawned_Units_Tech_0..5 (list order, repeated tags appended): the "per-tech members" a starbase / ground
+    // structure adds to the planet-force totals (AI_GALACTIC_TOKENS §2; 0x373f40 / 0x373e30 / 0x373d30).
+    std::array<std::vector<SpawnMember>, kSpawnTechSlots> spawn_tech;
     // (terrain, restrictions, population: GalacticSim's A2 galactic queries / TypeInfo)
     bool has_category(std::string_view c) const;
 };
@@ -80,6 +92,18 @@ struct GalacticAiTypeInfo {
 uint64_t ai_category_bit(std::string_view name);
 // Fills category_mask of every entry from its category names.
 void fill_category_masks(std::vector<GalacticAiTypeInfo>& types);
+
+// The planet-force contribution of one starbase / ground-structure TYPE held by `owner` (GALACTIC_ECONOMY §6.2,
+// AI_GALACTIC_TOKENS §2):
+//   * typed rows (`mask` != all bits): only the type's per-tech members (Starting_Spawned_Units_Tech_N of the owner's
+//     tech level) whose category mask meets `mask`, each AI_Combat_Power x count. The type's own AI_Combat_Power is NOT
+//     part of a typed row.
+//   * untyped totals (`mask` == all bits, the Node_Weight helper 0x5f2430): the per-tech members plus the type's own
+//     AI_Combat_Power.
+// The tech slot is the highest N <= the owner's tech level with entries (the hangar rule, STATION_HANGARS_SOUND) [M].
+double galactic_ai_structure_force(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
+                                   uint32_t type, int32_t owner, uint64_t mask);
+inline constexpr uint64_t kAllCategories = ~uint64_t{0};
 
 // The galactic AI's planning-side buildability: GalacticSim::buildable (cost, queue kind, GalacticSim::build_check =
 // 0x2804d0 in the STRATEGIC_GAPS §1.3 order, no credits).

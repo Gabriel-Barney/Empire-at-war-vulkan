@@ -720,7 +720,14 @@ void AbilitySystem::h_behavior(Obj& o, uint32_t t, bool on, uint32_t frame) {
         o.behavior[t] = 1;
         if (r && r->expiration_seconds > 0.0f) start_active(o, t);
         if (t == kHunt) o.hunt_due = frame;  // a re-enabled HUNT is due at once [M: its attach due frame is past]
-        if (t == kSelfDestruct) o.self_destruct = 1;
+        if (t == kSelfDestruct) {
+            o.self_destruct = 1;
+            if (r && r->stop_when_activated) {  // vf23 0x630950: stop + lock only with Stop_When_Activated (§28.9)
+                stop_order(o.id, frame);
+                lock_pair(o, kLockSelfDestruct, true, frame);
+            }
+        }
+        // [port] DEPLOY_TROOPERS' stop + lock (0x58f6a0) and its release (0x58f600) fall in this same call: no net lock.
         if (t == kDeployTroopers && r) {
             // DEPLOY_TROOPERS state machine 0x591a90: [port] the owner's anim 0x5e and the release state 5 (LANDING 0x1e)
             // are not timed here - state 4 (spawn, 0x590730) runs at once, then the behaviour is done and recharges.
@@ -731,7 +738,10 @@ void AbilitySystem::h_behavior(Obj& o, uint32_t t, bool on, uint32_t frame) {
     } else {
         if (!o.behavior[t]) return;
         o.behavior[t] = 0;
-        if (t == kSelfDestruct) o.self_destruct = 0;
+        if (t == kSelfDestruct) {
+            o.self_destruct = 0;
+            lock_pair(o, kLockSelfDestruct, false, frame);  // vf24 0x630840
+        }
         start_recharge(o, t);
     }
 }
@@ -743,7 +753,10 @@ void AbilitySystem::h_behavior(Obj& o, uint32_t t, bool on, uint32_t frame) {
 void AbilitySystem::behaviors_service(Obj& o, uint32_t frame) {
     if (o.dead) return;
     // CONFUSE expiry 0x636960: clear the flag, unlock, suspend.
-    if (o.confused && frame >= o.confuse_end) o.confused = 0;
+    if (o.confused && frame >= o.confuse_end) {
+        o.confused = 0;
+        lock_pair(o, kLockConfuse, false, frame);
+    }
     // SELF_DESTRUCT (0x43, interval 1): once 39's countdown is no longer in a running active phase (0x42f7a0), suspend,
     // run 0x3a3e20(obj, 39) and Die(obj, kind 1, killer = self).
     if (o.self_destruct) {
@@ -863,16 +876,21 @@ void AbilitySystem::confuse(Obj& v, float secs, uint32_t frame) {
     const Vec3 p{x, y, position(v).z};
     v.confused = 1;
     v.confuse_end = frame + static_cast<uint32_t>(static_cast<int32_t>(static_cast<float>(cfg_.fps) * secs));
+    // The move first, then the lock of the unit and its TEAM container (A1_READINGS §28.9): the locked unit keeps this
+    // move; new orders are refused until the expiry releases it.
     if (v.container != kNoObject) {
         if (Obj* c = obj(v.container)) {
             c->confused = 1;
             c->confuse_end = v.confuse_end;
             for (ObjectId m : c->members)
                 if (alive_unit(m)) move_order(m, p, frame);
+            lock_pair(v, kLockConfuse, true, frame);
+            lock_pair(*c, kLockConfuse, true, frame);
             return;
         }
     }
     move_order(v.id, p, frame);
+    lock_pair(v, kLockConfuse, true, frame);
 }
 
 // ================================================================================================

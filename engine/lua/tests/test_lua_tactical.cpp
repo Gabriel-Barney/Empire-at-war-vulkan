@@ -86,6 +86,7 @@ struct Db {
         write_file(root / "Data/XML/T.xml",
                    "<R>\n"
                    "<SpaceUnit Name=\"Ship\"><Tactical_Health>1000</Tactical_Health><Shield_Points>500</Shield_Points>"
+                   "<Behavior>STARSHIP_LOCOMOTOR</Behavior>"
                    "<Unit_Abilities_Data SubObjectList=\"Yes\">"
                    "<Unit_Ability><Type>DEFEND</Type></Unit_Ability><Unit_Ability><Type>SPOILER_LOCK</Type></Unit_Ability>"
                    "</Unit_Abilities_Data></SpaceUnit>\n"
@@ -417,12 +418,14 @@ static void test_abilities(const Db& db) {
     CHECK(run(vm, "TF.Set_Targeting_Priorities('Fighter_Attack', 'Hauler')") == "" && w.combat->priority_override(ship) == 0);
     CHECK(run(vm, "s.Set_Targeting_Priorities('No_Such_Set')") == "" && w.combat->priority_override(ship) == -1);
     attach_ai_host(vm, nullptr, -1);
-    // OI abilities t01 (A1_READINGS §28.8): Lock / Unlock_Current_Orders and the ability share of the obj +0x3a8 counter.
-    auto stack_warnings = [&vm] {
+    // OI abilities t01 (A1_READINGS §28.8, §28.9): Lock / Unlock_Current_Orders and the ability share of the obj +0x3a8
+    // counter.
+    auto said = [&vm](const char* text) {
         size_t n = 0;
-        for (const std::string& m : vm.messages()) n += m.find("Script cannot stack locks") != std::string::npos ? 1u : 0u;
+        for (const std::string& m : vm.messages()) n += m.find(text) != std::string::npos ? 1u : 0u;
         return n;
     };
+    auto stack_warnings = [&] { return said("Script cannot stack locks"); };
     CHECK(run(vm, "s.Lock_Current_Orders()") == "" && bridge.state(ship).orders_locked && a.immobilize_count(ship) == 0);
     CHECK(run(vm, "s.Lock_Current_Orders()") == "" && stack_warnings() == 1 && bridge.state(ship).orders_locked);
     CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && !bridge.state(ship).orders_locked);
@@ -430,6 +433,14 @@ static void test_abilities(const Db& db) {
     CHECK(run(vm, "s.Lock_Current_Orders()") == "" && stack_warnings() == 2 && !bridge.state(ship).orders_locked);
     CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && a.immobilize_count(ship) == 0);  // releases the ability's share
     CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && a.immobilize_count(ship) == 0);  // nothing locked: no change
+    CHECK(said("Unlock_Current_Orders - object Ship is not locked.") == 1);
+    // OI follow-up t04: no locomotor -> the immobile error, nothing locked.
+    CHECK(run(vm, "t.Lock_Current_Orders()") == "" && !bridge.state(target).orders_locked &&
+          said("SCRIPT ERROR: GameObjectWrapper::Lock_Current_Orders - Target_Ship is immobile; locking not supported.") == 1);
+    // OI follow-up t03: a locked unit refuses Move_To / Attack_Target (warning, no order) and cannot move.
+    CHECK(run(vm, "s.Lock_Current_Orders() mv = s.Can_Move() s.Move_To(t) s.Attack_Target(t)") == "" && !gtrue(vm, "mv"));
+    CHECK(said("Attack_Target - object Ship is locked into existing orders. Attack_Target fails.") == 2);
+    CHECK(run(vm, "s.Unlock_Current_Orders() mv = s.Can_Move()") == "" && gtrue(vm, "mv"));
     CHECK(vm.errors().empty());
     std::printf("  abilities: S9 AbilitySystem bindings OK\n");
 }

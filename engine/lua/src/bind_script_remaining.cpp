@@ -830,12 +830,12 @@ int m_divert(Call& c) {
         return push_bool(c, false);
     }
     if (c.nargs != 1 && c.nargs != 2) return script_error(c, "%s -- invalid number of parameters. Expected 1 or 2, got %d.", kName, c.nargs);
-    // Movement locked (0x39ad40) [port: Lock_Current_Orders / Suspend_Locomotor of the script state].
-    if (const ObjectBridge* b = bridge(c))
-        if (const ScriptObjectState* s = b->find_state(c.self->id); s && (s->orders_locked || s->locomotor_suspended)) {
-            script_warning(c, "%s -- %s has had its movement locked", kName, object_name(c, self).c_str());
-            return push_bool(c, false);
-        }
+    // Movement locked (0x39ad40, A1_READINGS §28.9): a script lock, an ability's Disable_Movement share or a running
+    // Divert (a second Divert during a Divert is refused). A suspended locomotor is not part of the lock.
+    if (detail::movement_locked(c, c.self->id)) {
+        script_warning(c, "%s -- unable to divert - object %s has had its movement locked.", kName, object_name(c, self).c_str());
+        return push_bool(c, false);
+    }
     Vec3 p{};
     if (!position_arg(c, 1, p)) return script_error(c, "%s -- invalid type for parameter 1; expected something which defines a position", kName);
     if (c.nargs == 2 && !c.is_number(2)) return script_error(c, "%s -- invalid type for parameter 2; expected number.", kName);

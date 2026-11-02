@@ -423,20 +423,20 @@ uint32_t TacticalBattle::anim_clip_frames(const TacticalMode& mode, objects::Obj
 }
 
 bool TacticalBattle::anim_clip_info(const TacticalMode& mode, objects::ObjectId id, int32_t anim_type, uint32_t& frames,
-                                    float& fps) const {
+                                    float& fps, uint32_t variant) const {
 #ifdef ALAMO_SIM_HAVE_ANIM
     if (!anim_ || anim_type < 0) return false;
     const objects::ObjectStore& st = mode.primary();
     const objects::ObjectHandle h = st.find(id);
     if (!st.exists(h)) return false;
     const anim::AnimModel* m = anim_->model_for(st.type(h), mode.kind());
-    const anim::ClipRef* c = m ? m->clip(anim_type, 0) : nullptr;
+    const anim::ClipRef* c = m ? m->clip(anim_type, variant) : nullptr;
     if (!c || !c->clip || c->clip->frame_count == 0) return false;
     frames = c->clip->frame_count;
     fps = c->clip->fps;
     return true;
 #else
-    (void)mode, (void)id, (void)anim_type, (void)frames, (void)fps;
+    (void)mode, (void)id, (void)anim_type, (void)frames, (void)fps, (void)variant;
     return false;
 #endif
 }

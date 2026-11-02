@@ -1064,6 +1064,7 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
         const float range = std::max(u.range, 100.0f);
         const float dist = dmath::sqrt(best_d2);
         if (dist <= 0.8f * range) continue;  // in range: hold, combat fires
+        if (movement_locked(u.id)) continue;  // OI follow-up t03: a locked unit keeps its order (§28.9)
         const Vec3 ep = store.position(best->h);
         const float k = (dist - 0.7f * range) / dist;
         mv::MoveOrder o;
@@ -1075,6 +1076,28 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
         movement_->move(o, rng, frame_);
         ++stats_.orders;
     }
+}
+
+// ---- OI follow-up t03: the movement lock (A1_READINGS §28.9) -------------------------------------------------------
+
+void TacticalBattle::set_script_movement_lock(const void* key, std::function<bool(objects::ObjectId)> fn) {
+    std::erase_if(script_locks_, [key](const auto& e) { return e.first == key; });
+    if (fn) script_locks_.emplace_back(key, std::move(fn));
+}
+
+bool TacticalBattle::script_movement_locked(objects::ObjectId id) const {
+    for (const auto& [key, f] : script_locks_)
+        if (f(id)) return true;
+    return false;
+}
+
+bool TacticalBattle::movement_locked(objects::ObjectId id) const {
+    if (abilities_ && abilities_->immobilize_count(id) > 0) return true;
+    return script_movement_locked(id);
+}
+
+void TacticalBattle::drop_locked(std::vector<objects::ObjectId>& ids) const {
+    ids.erase(std::remove_if(ids.begin(), ids.end(), [this](objects::ObjectId id) { return movement_locked(id); }), ids.end());
 }
 
 // ---- integration fixes: human order API (rules of BattleAi::execute_order) -----------------------------------------
@@ -1139,7 +1162,7 @@ uint32_t TacticalBattle::exec_attack(TacticalMode& mode, std::span<const objects
         if (!u || u->id == t->id || !combat_->has_unit(u->id)) continue;
         combat_->order_attack(u->id, t->id, hp);
         ++n;
-        if (!u->movable) continue;
+        if (!u->movable || movement_locked(u->id)) continue;  // a locked unit fires from where it stands (§28.9 [M])
         const Vec3 up = st.position(u->h);
         const float dx = tp.x - up.x, dy = tp.y - up.y, d = dmath::sqrt(dx * dx + dy * dy);
         const float range = std::max(u->range, 100.0f);
@@ -1166,6 +1189,8 @@ cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player,
     for (const Unit* u : own) ids.push_back(u->id);
     if (abilities_)  // OI abilities: order cancel 0x38f5d0 (BARRAGE / LUCKY / ION / HUNT off on a new order)
         for (const objects::ObjectId id : ids) abilities_->order_cancel(id, frame_);
+    drop_locked(ids);  // OI follow-up t03: the group move leaves locked units out (after the cancel, §28.9)
+    if (ids.empty()) return R::None;
     if (!queued) {
         clear_queues(ids);
         exec_move(mode, ids, x, y, rng, facing_deg, attack_move, move_flags, switch_locomotor);
@@ -1198,6 +1223,7 @@ cmd::RejectReason TacticalBattle::order_facing(TacticalMode& mode, uint8_t playe
     if (own.empty()) return R::InvalidUnit;
     for (const Unit* u : own) {
         if (abilities_) abilities_->order_cancel(u->id, frame_);
+        if (movement_locked(u->id)) continue;  // OI follow-up t03: the refused move path (§28.9 [M])
         const Vec3 p = st.position(u->h);
         mv::MoveOrder o;
         o.units = {u->id};
@@ -1793,7 +1819,8 @@ void TacticalBattle::apply_speed_factors() {
         float f = combat_->mod_multiplier(u.id, tc::ModKind::Speed);
         if (u.engines_offline || l1_engines_off(u.id)) f = f * engines;  // L1 systems: + timed engine disables
         f = f * (1.0f + combat_->modifier(u.id, tc::ModList::MaxSpeed));
-        if (abilities_->immobilize_count(u.id) > 0) f = 0.0f;
+        // OI follow-up t03 (A1_READINGS §28.9): the movement lock does not slow the unit (no speed-0 freeze); its users
+        // stop it first and new move orders skip it (movement_locked).
         if (combat_->stunned(u.id, frame_)) f = 0.0f;  // OI abilities: land stun suspends the locomotor (0x647290)
         movement_->set_speed_factor(u.id, f);
         movement_->set_speed_override(u.id, abilities_->speed_override(u.id));  // OI host: Berserker_Speed (-1 = none)
