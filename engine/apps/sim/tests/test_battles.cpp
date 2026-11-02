@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "alamo/core/bytes.hpp"  // FOW t01: fog save round trip
@@ -42,6 +43,7 @@
 #include "alamo/sim/battle_ai.hpp"
 #endif
 #include "alamo/sim/map_spawn.hpp"
+#include "alamo/sim/save_session.hpp"  // R3 review 1: battle save / load through CampaignBattles
 #include "alamo/sim/sim_host.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"  // S7 t07: SPACE_OBSTACLE footprints
 #include "alamo/vfs/vfs.hpp"
@@ -210,6 +212,11 @@ std::string anim_types() {
         if (p != std::string::npos) t.insert(p + at.size(), what);
     };
     insert_after("<GroundInfantry Name=\"S10_Trooper\">", "<Death_Persistence_Duration>1.0</Death_Persistence_Duration><Death_Fade_Time>0.5</Death_Fade_Time>");
+    // R3 review 8: flinches need IDLE (§A.12 gate) - the troopers and the frigates (the corvette variant inherits) have it.
+    for (const char* loco : {"WALK_LOCOMOTOR</LandBehavior>", "STARSHIP_LOCOMOTOR</SpaceBehavior>"}) {
+        const size_t p = t.find(loco);
+        if (p != std::string::npos) t.insert(p + std::string_view(loco).find('<'), ", IDLE");
+    }
     // refixf t04: the star base's typed clone (no Remove_Upon_Death, 30 s persistence) is made on the battle's last tick.
     insert_after("<StarBase Name=\"S10_Star_Base_1\">",
                  "<Remove_Upon_Death>Yes</Remove_Upon_Death><Death_Clone>Damage_Normal, S10_Star_Base_Death_Clone</Death_Clone>");
@@ -219,6 +226,58 @@ std::string anim_types() {
         t.insert(end, " <SpaceUnit Name=\"S10_Frigate_Death_Clone\"><Death_Persistence_Duration>2</Death_Persistence_Duration>"
                       "<Death_Fade_Time>1</Death_Fade_Time></SpaceUnit>\n"
                       " <SpaceUnit Name=\"S10_Star_Base_Death_Clone\"><Death_Persistence_Duration>30</Death_Persistence_Duration></SpaceUnit>\n");
+    return t;
+}
+
+// R3 t01 / t04 / follow-ups test data: the anim types plus SPREAD_OUT + DEPLOY abilities and an overlay attack on the
+// troopers; spin-away deaths (chance 1) on the frigates (the corvette variant inherits them) whose death clone spins for
+// 1.5 s and ends with the S10_Spin_FX particle (20 frames). Presence (R3 §A.11 / §A.12): the troopers are
+// IMPOSING_PRESENCE + IDLE (range 200) and stand to Attention near troopers; a dead trooper leaves an IMPOSING_PRESENCE
+// death clone (range 400, 30 s) the troopers and the squads' unarmed S10_Medic (never a target holder, so idle while the
+// troopers fight) Celebrate near; the troopers' death explosion S10_Boom is an EXPLOSION (flinch range 150). R3f t03: the
+// medic stands to Attention near troopers too (the IDLE gates of §A.11 keep troopers with a target or move orders out of
+// the presence maps, so the fighting troopers alone rarely do).
+std::string r3_types() {
+    std::string t = anim_types();
+    auto insert_after = [&t](const std::string& at, const std::string& what) {
+        const size_t p = t.find(at);
+        if (p != std::string::npos) t.insert(p + at.size(), what);
+    };
+    {
+        const std::string loco = "<LandBehavior>WALK_LOCOMOTOR, IDLE</LandBehavior>";
+        const size_t p = t.find(loco);
+        if (p != std::string::npos) t.replace(p, loco.size(), "<LandBehavior>WALK_LOCOMOTOR, IDLE, IMPOSING_PRESENCE</LandBehavior>");
+    }
+    insert_after("<GroundInfantry Name=\"S10_Trooper\">",
+                 "<Presence_Range>200</Presence_Range>"
+                 "<Presence_Induced_Animations>Attention, S10_Trooper, Celebrate, S10_Trooper_Death_Clone</Presence_Induced_Animations>"
+                 "<Death_Explosions>S10_Boom</Death_Explosions><Death_Clone>Damage_Normal, S10_Trooper_Death_Clone</Death_Clone>");
+    insert_after("<GroundInfantry Name=\"S10_Trooper\">",
+                 "<Attack_Animation_Is_Overlay>Yes</Attack_Animation_Is_Overlay><Deployment_Anim_Rate>2.0</Deployment_Anim_Rate>"
+                 "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>SPREAD_OUT</Type></Unit_Ability>"
+                 "<Unit_Ability><Type>DEPLOY</Type></Unit_Ability></Unit_Abilities_Data>");
+    insert_after("<SpaceUnit Name=\"S10_Frigate\">", "<Spin_Away_On_Death>Yes</Spin_Away_On_Death><Spin_Away_On_Death_Chance>1.0</Spin_Away_On_Death_Chance>");
+    insert_after("<SpaceUnit Name=\"S10_Frigate_Death_Clone\">",
+                 "<Spin_Away_On_Death_Time>1.5</Spin_Away_On_Death_Time><Spin_Away_On_Death_Explosion> S10_Spin_FX </Spin_Away_On_Death_Explosion>");
+    {
+        const std::string squad = "<Company_Units>S10_Trooper, S10_Trooper, S10_Trooper, S10_Trooper</Company_Units>";
+        const size_t p = t.find(squad);
+        if (p != std::string::npos) t.replace(p, squad.size(), "<Company_Units>S10_Trooper, S10_Trooper, S10_Trooper, S10_Trooper, S10_Medic</Company_Units>");
+    }
+    const size_t end = t.find("</S10>");
+    if (end != std::string::npos)
+        t.insert(end, " <Particle Name=\"S10_Spin_FX\"><Space_Model_Name>P_S10_Spin.alo</Space_Model_Name>"
+                      "<Particle_Lifetime_Frames>20</Particle_Lifetime_Frames></Particle>\n"
+                      " <GroundInfantry Name=\"S10_Trooper_Death_Clone\"><Behavior>IMPOSING_PRESENCE</Behavior><Presence_Range>400</Presence_Range>"
+                      "<Death_Persistence_Duration>30</Death_Persistence_Duration><Death_Fade_Time>0.5</Death_Fade_Time></GroundInfantry>\n"
+                      " <GroundInfantry Name=\"S10_Medic\"><Tactical_Health>100</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                      "<CategoryMask>Infantry</CategoryMask><MovementClass>Infantry</MovementClass><Behavior>SELECTABLE</Behavior>"
+                      "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR, IDLE</LandBehavior>"
+                      "<Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>"
+                      "<Presence_Induced_Animations>Attention, S10_Trooper, Celebrate, S10_Trooper_Death_Clone</Presence_Induced_Animations>"
+                      "</GroundInfantry>\n"
+                      " <Particle Name=\"S10_Boom\"><Behavior>PARTICLE, EXPLOSION</Behavior><Induced_Flinch_Range>150</Induced_Flinch_Range>"
+                      "<Induced_Flinch_Intensity>1.0</Induced_Flinch_Intensity><Particle_Lifetime_Frames>10</Particle_Lifetime_Frames></Particle>\n");
     return t;
 }
 
@@ -281,6 +340,16 @@ std::string s4_types() {
                 // S10 map owners: a landing reinforcement point (REMAINING_GAPS §3.3 probe 2026-10-29)
                 " <Marker Name=\"S4_RPoint\"><Behavior>CAPTURE_POINT, REINFORCEMENT_POINT</Behavior><Capture_Point_Radius>100</Capture_Point_Radius>"
                 "<Capture_Point_Transition_Time_Seconds>1.0</Capture_Point_Transition_Time_Seconds></Marker>\n"
+                // R3f t04 (hut runs): a Property garrison holder (CanContainGarrison, no GARRISON_* behaviour: its
+                // occupants die with it) and a crew trooper with two Destruction_Survivors and a hardpoint.
+                " <SpecialStructure Name=\"S4_Hut\"><Behavior>SELECTABLE, DUMMY_GROUND_STRUCTURE</Behavior>"
+                "<Property_Flags>CanContainGarrison</Property_Flags><Garrison_Category>Infantry</Garrison_Category><Num_Garrison_Slots>4</Num_Garrison_Slots>"
+                "<Tactical_Health>150</Tactical_Health><CategoryMask>Structure</CategoryMask><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                "<Victory_Relevant>No</Victory_Relevant></SpecialStructure>\n"
+                " <GroundInfantry Name=\"S4_Survivor\"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type></GroundInfantry>\n"
+                " <GroundInfantry Name=\"S4_Crew\"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>"
+                "<Destruction_Survivors>S4_Survivor, 1.0</Destruction_Survivors><Minimum_Destruction_Survivor_Count>2</Minimum_Destruction_Survivor_Count>"
+                "<Maximum_Destruction_Survivor_Count>2</Maximum_Destruction_Survivor_Count><HardPoints>HP_S10_Laser_A</HardPoints></GroundInfantry>\n"
                 "</S10>");
     return t;
 }
@@ -343,9 +412,10 @@ std::string obstacle_types() {
 }
 
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
-                                bool obstacle = false, bool team = false, bool fog_bm = false) {
+                                bool obstacle = false, bool team = false, bool fog_bm = false, bool r3 = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
+    d->root = fs::temp_directory_path() / (r3 ? "alamo_sim_battle_tests_r3"  // R3 t01 / t04
+                                           : fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
                                            : obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
                                            : team     ? "alamo_sim_battle_tests_team"  // refixf t03: TEAM containers
                                            : prod   ? "alamo_sim_battle_tests_prod"  // station production
@@ -358,7 +428,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", fog_bm ? fog_bm_types()
+    write_file(x / "S10Types.xml", r3 ? r3_types()
+                                   : fog_bm ? fog_bm_types()
                                    : obstacle ? obstacle_types()
                                    : team     ? team_types()
                                    : prod   ? prod_types()
@@ -1464,6 +1535,11 @@ struct S4Run {
     bool sensor_combat = false, sensor_point = false, sensor_untouched = false, sensor_killed = false, sensor_point_removed = false;
     int attack_order = -1;
     float sensor_health = -1.0f;  // last health fraction seen
+    // R3f t04 (hut runs): the crew garrisons the Property hut, the troopers kill the hut, the crew dies with it (garrison
+    // Killed, outside the combat tick): its survivors and its hardpoint event must be consumed.
+    bool crew_in_hut = false, hut_killed = false, crew_dead = false;
+    int hut_order = -1;
+    uint32_t survivors_max = 0, hp_destroyed_before = 0, hp_destroyed_after = 0, particles_before = 0, particles_after = 0;
     uint32_t garrisoned_frames = 0;
     int mission = -1, piracy = -1;
     int32_t winner = -2;
@@ -1471,7 +1547,7 @@ struct S4Run {
     float credits_before = -1.0f, credits_after = -1.0f;
 };
 
-terrain::MapData s4_map(bool sensor = false) {
+terrain::MapData s4_map(bool sensor = false, bool hut = false) {
     terrain::MapData m = land_map();
     auto place = [&m](const char* type, float x, float y, uint32_t owner, float yaw = 0.0f) {
         terrain::ObjectPlacement p;
@@ -1490,12 +1566,15 @@ terrain::MapData s4_map(bool sensor = false) {
     place("S4_Post", 900.0f, 660.0f, 2, 90.0f);                    // on the defender anchor
     place("S4_Bunker", 900.0f, 700.0f, 2, 90.0f);                  // among the defenders' first row
     if (sensor) place("S4_Sensor", 940.0f, 660.0f, 2, 90.0f);      // a1f t07: next to the defenders, neutral
+    if (hut) place("S4_Hut", 900.0f, 1000.0f, 2, 90.0f);           // R3f t04: neutral, outside the post's 300 radius
     return m;
 }
 
 // corruption: 0 none, 1 mission, 2 hero alone; attack_sensor (a1f t07): the map gets a neutral S4_Sensor and the Empire
-// troopers only attack it (frame 60), no other scripted orders.
-S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, int corruption, bool attack_sensor = false) {
+// troopers only attack it (frame 60), no other scripted orders. hut (R3f t04): the map gets a neutral S4_Hut, the
+// Empire gets an S4_Crew that garrisons it (frame 5); once inside the troopers attack the hut, no other scripted orders.
+S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, int corruption, bool attack_sensor = false,
+                    bool hut = false) {
     using R = commands::RejectReason;
     using T = commands::EventType;
     S4Run out;
@@ -1507,6 +1586,7 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     SimHost host(d.types, js, cfg);
     galactic::GalacticSetup setup = make_setup(d, true);
     setup.forces.push_back({1, 2, type_of(d, "S4_Hero")});  // an Underworld named hero rides along
+    if (hut) setup.forces.push_back({0, 1, type_of(d, "S4_Crew")});  // R3f t04: the hut's crew defends S10_B
     if (corruption) {  // a corruption mission needs a non-AI corrupting player (§4.5)
         setup.players[1].human = true;
         setup.players[1].ai = false;
@@ -1527,10 +1607,10 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     opt.battle.land_capture_countdown = 0.0f;
     std::vector<std::string>* maps = &out.maps;
     CampaignBattles battles(host, d.crules, *d.catalog,
-                            [maps, attack_sensor](const std::string& name, terrain::MapData& m) {
+                            [maps, attack_sensor, hut](const std::string& name, terrain::MapData& m) {
                                 maps->push_back(name);
                                 if (name != "S10_Land_B" && name != "S4_Land_Alt") return false;
-                                m = s4_map(attack_sensor);
+                                m = s4_map(attack_sensor, hut);
                                 return true;
                             },
                             opt);
@@ -1561,6 +1641,7 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     bool invaded = false;
     std::vector<objects::ObjectId> troopers;
     objects::ObjectId bunker = objects::kNoObjectId, post = objects::kNoObjectId, sensor = objects::kNoObjectId;
+    objects::ObjectId s_hut = objects::kNoObjectId, s_crew = objects::kNoObjectId;  // R3f t04 (hut runs)
     const objects::TypeIndex trooper_t = d.types.resolve_name("S10_Trooper");
     for (uint64_t t = 0; t < 3000; ++t) {
         host.tick_once();
@@ -1610,6 +1691,53 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
                 }
             }
             const uint32_t f = b->frame();
+            if (hut) {  // R3f t04
+                if (troopers.empty()) continue;
+                const objects::TypeIndex hut_t = d.types.resolve_name("S4_Hut"), crew_t = d.types.resolve_name("S4_Crew"),
+                                         surv_t = d.types.resolve_name("S4_Survivor");
+                // (combat units only: a dead object leaves a store death clone of its own type, S9 t04)
+                const tactical::combat::CombatSystem& cs = b->combat();
+                const auto live = [&cs](objects::ObjectId id) { return cs.has_unit(id) && cs.alive(id); };
+                objects::ObjectId hut_id = objects::kNoObjectId, crew = objects::kNoObjectId;
+                uint32_t survivors = 0;
+                for (objects::ObjectHandle h : s.all_objects()) {
+                    if (!s.alive(h) || !live(s.id(h))) continue;
+                    if (s.type(h) == hut_t) hut_id = s.id(h);
+                    if (s.type(h) == crew_t && s.owner(h) == 0) crew = s.id(h);
+                    if (s.type(h) == surv_t && s.owner(h) == 0) ++survivors;
+                }
+                out.survivors_max = std::max(out.survivors_max, survivors);
+                if (s_hut == objects::kNoObjectId) s_hut = hut_id;
+                if (s_crew == objects::kNoObjectId) s_crew = crew;
+                if (std::getenv("S4_DEBUG") && (f % 50) == 1) {
+                    const objects::ObjectHandle ch = s.find(s_crew);
+                    const objects::ObjectHandle hh = s.find(s_hut);
+                    const Vec3 cp = s.position(ch), hp = s.position(hh);
+                    std::printf("   hut f%u: hut %d (owner %d at %.0f,%.0f) crew %d (owner %d at %.0f,%.0f alive %d, holder %d, pending %d, "
+                                "can %d) survivors %u\n",
+                                f, s_hut, s.owner(hh), static_cast<double>(hp.x), static_cast<double>(hp.y), s_crew, s.owner(ch),
+                                static_cast<double>(cp.x), static_cast<double>(cp.y), s.alive(ch) ? 1 : 0, b->garrison_holder_of(s_crew),
+                                b->garrison().pending_holder(s_crew), b->can_garrison(s_crew, s_hut) ? 1 : 0, survivors);
+                }
+                if (f == 5 && s_crew != objects::kNoObjectId && s_hut != objects::kNoObjectId) {
+                    commands::EventData g(T::Garrison);
+                    g.set("unit", static_cast<uint32_t>(s_crew)).set("garrison", static_cast<uint32_t>(s_hut));
+                    host.submit(0, g);
+                }
+                if (!out.crew_in_hut && s_crew != objects::kNoObjectId && b->garrison_holder_of(s_crew) == s_hut) {
+                    out.crew_in_hut = true;
+                    out.hp_destroyed_before = b->stats().hardpoints_destroyed;
+                    out.particles_before = b->stats().particles;
+                    out.hut_order = static_cast<int>(b->order_attack(*tm, 0, troopers, s_hut, host.random().synced()));
+                }
+                if (out.crew_in_hut && !out.hut_killed && hut_id == objects::kNoObjectId) {
+                    out.hut_killed = true;
+                    out.crew_dead = crew == objects::kNoObjectId;  // the same tick: the Killed event is consumed in s4_tick
+                    out.hp_destroyed_after = b->stats().hardpoints_destroyed;
+                    out.particles_after = b->stats().particles;
+                }
+                continue;
+            }
             if (attack_sensor) {  // a1f t07
                 if (troopers.empty() || sensor == objects::kNoObjectId) continue;
                 const tactical::combat::CombatSystem& c = b->combat();
@@ -1817,6 +1945,21 @@ void test_s4_battle(const Data& d) {
         CHECK(s.attack_order == static_cast<int>(commands::RejectReason::None) && s.sensor_killed && s.sensor_point_removed);
         const S4Run s4 = run_s4_battle(d, files, 4, 0, true);
         CHECK(!first_divergence(s.crc, s4.crc).diverged);
+    }
+    // R3f t04: a garrison-kill (a Property holder's occupants die with it, outside the combat tick) consumes the
+    // occupant's Die outputs like an in-tick death: its Destruction_Survivors spawn (TACTICAL_GAPS §1.9 step 7) and its
+    // hardpoint's death event plays (Death_Explosion_Particles; ABILITIES_HARDPOINTS hardpoint death).
+    {
+        const S4Run k = run_s4_battle(d, files, 0, 0, false, true);
+        std::printf("  hut kill: crew inside %d, attack order %d, hut killed %d, crew dead %d, survivors %u, hardpoints destroyed %u -> %u, "
+                    "particles %u -> %u\n",
+                    k.crew_in_hut ? 1 : 0, k.hut_order, k.hut_killed ? 1 : 0, k.crew_dead ? 1 : 0, k.survivors_max,
+                    k.hp_destroyed_before, k.hp_destroyed_after, k.particles_before, k.particles_after);
+        CHECK(k.crew_in_hut && k.hut_order == static_cast<int>(commands::RejectReason::None) && k.hut_killed && k.crew_dead);
+        CHECK(k.survivors_max == 2);                                // both survivors of the garrison-killed crew
+        CHECK(k.hp_destroyed_after > k.hp_destroyed_before);      // the crew's hardpoint event was consumed
+        const S4Run k4 = run_s4_battle(d, files, 4, 0, false, true);
+        CHECK(!first_divergence(k.crc, k4.crc).diverged && k4.survivors_max == k.survivors_max);
     }
     // Corruption mission (human Underworld).
     const S4Run c = run_s4_battle(d, files, 0, 1);
@@ -2452,6 +2595,435 @@ void test_death_clone_removal() {
         // Worker counts: identical.
         const CloneRun w4 = run_clone_campaign(*d, false, wreck, 4, 2500);
         CHECK(!first_divergence(h.crc, w4.crc).diverged && w4.life == h.life);
+    }
+}
+
+// ---- R3 t01 / t04 and follow-ups (r3 data): locomotor state sources, deploy commands, overlay attack events, spin-away
+// explosion objects, the clone taking over the dying unit's animation state ----
+struct R3Run {
+    CrcLog crc;
+    std::vector<std::string> battles;
+    SimAnimStats stats;
+    // land
+    uint32_t spread_on = 0, deploy_on = 0, deploy_off = 0;     // units the commands switched (abilities state after the command)
+    uint32_t crouch_rows = 0, deploy_rows = 0, undeploy_rows = 0;  // row-frames on 71 / 67, 25, 26
+    uint32_t overlay_events = 0, primary_fire_events = 0;      // Unit_Fire events from the overlay slot / the primary slot
+    uint32_t attention_rows = 0, celebrate_rows = 0;           // row-frames on 77 Attention / 78 Celebrate (presence idle)
+    uint32_t clone_presence = 0;                               // trooper death clones registered as presence units
+    uint32_t celebrate_sim = 0;                                // unit-frames whose presence-induced idle is 78 Celebrate
+    // R3f t02 (§A.11 timing) for the presence idles T (77 Attention / 78 Celebrate): plays (a row switching to T); those
+    // from a finished clip (the idle service); the legal ones (finished clip, the locomotor's stop path from the move
+    // family, a crouch-class restart, a flinch return replaying the interrupted T); unit-frames induced to T on a finished
+    // idle-like clip (eligible) and those of them still on another idle type afterwards (missed; 71 = SPREAD_OUT wins)
+    uint32_t presence_starts = 0, presence_starts_at_end = 0, presence_starts_ok = 0, presence_eligible = 0, presence_missed = 0;
+    uint32_t celebrate_starts = 0;
+    uint32_t presence_cleared = 0;  // R3f t03: presence maps cleared by the move / target gates
+    // R3f t03 (§A.11 IDLE service 5a / 5b): unit-frames with a combat countdown running; those counting down (no target)
+    uint32_t combat_frames = 0, combat_countdowns = 0;
+    uint64_t save_tick = 0;                                    // host frame of the save (save runs)
+    uint32_t clones_at_save = 0, save_bf = 0;                  // presence death clones alive at the save; its battle frame
+    size_t presence_units = 0, presence_maps_max = 0;          // battle presence system (R3 §A.11)
+    uint32_t presence_refreshes = 0, explosion_victims = 0;    // map entries written; EXPLOSION flinch victims (§A.12)
+    // space
+    std::map<ObjectId, std::pair<uint64_t, uint64_t>> clone_life;  // spinning clone id -> (first alive, first gone)
+    std::map<ObjectId, Vec3> clone_pos;                            // first seen position
+    std::map<ObjectId, std::pair<Vec3, Vec3>> clone_tail;          // R3f t01: (second-to-last, last) seen positions
+    std::map<ObjectId, std::pair<uint64_t, Vec3>> fx;              // S10_Spin_FX id -> (first alive, position)
+    size_t spin_wrecks_max = 0;                                    // R3f t01: TacticalBattle::spin_wrecks() high-water mark
+    uint64_t end_frame = 0;
+    uint32_t clone_prev_checked = 0, clone_prev_copied = 0;        // clone rows whose crossfade source is the copied state
+};
+
+// R3 review 1: `save_bf` > 0 saves the session (SimHost::save, battle chunks from CampaignBattles) at the end of the tick
+// that reaches that battle frame into *save_out; `load_from` loads such a save into the fresh session instead of starting
+// the campaign moves, then runs on to `ticks`.
+R3Run run_r3_campaign(const Data& d, bool land, bool anim_service, int32_t workers, uint64_t ticks, bool ships = true, uint32_t save_bf = 0,
+                      SaveFile* save_out = nullptr, const SaveFile* load_from = nullptr) {
+    R3Run out;
+    const auto trooper = anim_model({{anim::kAnimIdle, {2, 30}}, {anim::kAnimMove, {1, 24}}, {anim::kAnimAttack, {1, 12}},
+                                     {anim::kAnimAttackIdle, {1, 20}}, {anim::kAnimDie, {1, 45}}, {anim::kAnimIdleCrouch, {1, 30}},
+                                     {anim::kAnimCrouchMove, {1, 24}}, {anim::kAnimDeploy, {2, 20}}, {anim::kAnimUndeploy, {1, 20}},
+                                     {anim::kAnimDeployedWalk, {1, 24}}, {77, {1, 30}}, {78, {1, 30}}, {anim::kAnimFlinchLeft, {1, 10}},
+                                     {anim::kAnimFlinchRight, {1, 10}}, {anim::kAnimFlinchFront, {1, 10}}, {anim::kAnimFlinchBack, {1, 10}}});
+    const auto ship = anim_model({{anim::kAnimIdle, {1, 60}}});
+    // (without ship rows the clone model has no IDLE either: a fresh clone row then draws no start frame)
+    const auto wreck = ships ? anim_model({{anim::kAnimIdle, {1, 60}}, {anim::kAnimDie, {1, 30}}}) : anim_model({{anim::kAnimDie, {1, 30}}});
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    SimAnimation animation(d.types, *d.files);
+    animation.set_model(d.types.resolve_name("S10_Trooper"), objects::ModeKind::Land, trooper.get());
+    // R3f t02: the medic idles on a short (8-frame) one-shot IDLE. §A.11: an induced Celebrate waits for the running idle
+    // clip to finish, and the trooper death clones that induce it appear only in the battle's last ~21 frames (the losing
+    // squad dies, the battle ends). On the trooper's 30-frame idle the medic, induced 3 frames into its idle, never got to
+    // Celebrate (0 row-frames before R3f): the sim was right, the scenario too short. Its Attention (R3f t03: the medic also
+    // stands to Attention near troopers) is short for the same reason.
+    const auto medic_model = anim_model({{anim::kAnimIdle, {1, 8}}, {anim::kAnimMove, {1, 24}}, {anim::kAnimDie, {1, 45}}, {77, {1, 8}},
+                                         {78, {1, 30}}, {anim::kAnimFlinchLeft, {1, 10}}, {anim::kAnimFlinchRight, {1, 10}},
+                                         {anim::kAnimFlinchFront, {1, 10}}, {anim::kAnimFlinchBack, {1, 10}}});
+    if (const objects::TypeIndex medic = d.types.resolve_name("S10_Medic"); medic != objects::kNone)
+        animation.set_model(medic, objects::ModeKind::Land, medic_model.get());
+    if (ships) {  // (ship rows draw their model-created start frames: the rng log then differs from a headless run)
+        animation.set_model(d.types.resolve_name("S10_Frigate"), objects::ModeKind::Space, ship.get());
+        animation.set_model(d.types.resolve_name("S10_Corvette"), objects::ModeKind::Space, ship.get());
+    }
+    animation.set_model(d.types.resolve_name("S10_Frigate_Death_Clone"), objects::ModeKind::Space, wreck.get());
+    {
+        anim::AnimEventMap map;
+        map.parse("SOUND\ts10_synth_attack_00\t0\tUnit_Fire\n");
+        animation.set_event_map(std::move(map));
+    }
+    if (anim_service) animation.attach(host, false);  // no "anim" CRC system: the logs compare with the headless run
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, land));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    if (anim_service) opt.animation = &animation;
+    else opt.clone_models = &animation;
+    opt.object_removed = [&host, &out](int32_t, uint32_t, uint32_t, bool) {
+        if (host.tactical() && out.end_frame == 0) out.end_frame = host.frame();
+    };
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name == "S10_Space_B") m = space_map();
+                                else if (name == "S10_Land_B") m = land_map();
+                                else return false;
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    if (save_out || load_from) {
+        SessionDescriptor sd;
+        sd.kind = "test";
+        sd.campaign = "R3_Save";
+        host.set_session(sd);
+    }
+    bool invaded = false;
+    if (load_from) {
+        std::string err;
+        LoadReport rep;
+        const bool ok = host.load(*load_from, &err, &rep);
+        if (!ok) std::printf("  r3 load: %s %s\n", err.c_str(), rep.text().c_str());
+        CHECK(ok && rep.failed.empty() && rep.missing.empty() && rep.unexpected.empty());
+        invaded = true;  // the campaign moves happened before the save
+    } else {
+        if (land) {
+            std::vector<objects::ObjectHandle> up;
+            for (objects::ObjectHandle h : gs->planets()[2].surface)
+                if (gs->store().owner(h) == 1) up.push_back(h);
+            CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+        }
+        const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+        if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    }
+    const uint32_t trooper_type = type_of(d, "S10_Trooper"), clone_type = type_of(d, "S10_Frigate_Death_Clone"), fx_type = type_of(d, "S10_Spin_FX");
+    const uint32_t frigate_type = type_of(d, "S10_Frigate"), corvette_type = type_of(d, "S10_Corvette");
+    std::vector<float> prev_frigate_frames;  // primary frames of the frigate / corvette rows after the previous tick
+    std::vector<ObjectId> seen_clone_rows;
+    const uint32_t trooper_clone_type = type_of(d, "S10_Trooper_Death_Clone");
+    std::map<ObjectId, int32_t> presence_induced;                     // R3f t02: id -> presence idle (77 / 78) this tick
+    std::map<ObjectId, std::pair<int32_t, anim::SlotMode>> row_prev;  // R3f t02: row type / mode after the previous tick
+    std::map<ObjectId, uint32_t> countdown_prev;                      // R3f t03: combat countdown after the previous tick
+    std::map<ObjectId, bool> flinch_prev;                             // R3f t03: flinch busy after the previous tick
+    for (uint64_t t = host.frame(); t < ticks; ++t) {
+        host.tick_once();
+        presence_induced.clear();
+        const uint64_t f = host.frame();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (b && tm && land) {
+            // Commands (the units' owners): SPREAD_OUT on at battle frame 30, DEPLOY on at 150, DEPLOY off at 300.
+            const uint32_t bf = b->frame();
+            if (bf == 30 || bf == 150 || bf == 300) {
+                for (int32_t p = 0; p < 2; ++p) {
+                    std::vector<uint32_t> ids;
+                    for (objects::ObjectHandle h : tm->primary().owned_by(p))
+                        if (tm->primary().alive(h) && static_cast<uint32_t>(tm->primary().type(h)) == trooper_type)
+                            ids.push_back(static_cast<uint32_t>(tm->primary().id(h)));
+                    if (ids.empty()) continue;
+                    commands::EventData ev(commands::EventType::SetUnitAbilityMode);
+                    ev.set("ability", bf == 30 ? 7u : 2u).set("on", bf == 300 ? 0u : 1u).set_ids("units", ids);
+                    host.execute_direct(static_cast<uint8_t>(p), commands::CommandSource::Player, ev);
+                    for (uint32_t id : ids) {
+                        const auto oid = static_cast<objects::ObjectId>(id);
+                        if (bf == 30) out.spread_on += b->abilities().spread_out(oid) ? 1u : 0u;
+                        if (bf == 150) out.deploy_on += b->abilities().deployed(oid) ? 1u : 0u;
+                        if (bf == 300) out.deploy_off += b->abilities().deployed(oid) ? 0u : 1u;
+                    }
+                }
+            }
+        }
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+        if (b) {
+            out.presence_units = std::max(out.presence_units, b->presence().presence_unit_count());
+            out.presence_maps_max = std::max(out.presence_maps_max, b->presence().map_count());
+            out.presence_refreshes = std::max(out.presence_refreshes, b->presence().stats().refreshes);
+            if (tm && land)
+                for (objects::ObjectHandle h : tm->primary().all_objects())
+                    if (tm->primary().alive(h) && static_cast<uint32_t>(tm->primary().type(h)) == trooper_clone_type &&
+                        b->presence().is_presence_unit(tm->primary().id(h)) && b->presence().next_due(tm->primary().id(h)) == static_cast<uint32_t>(b->frame()) + 30u)
+                        ++out.clone_presence;  // serviced this frame (due moved on by the interval)
+            if (tm && land)
+                for (objects::ObjectHandle h : tm->primary().all_objects()) {
+                    if (!tm->primary().alive(h)) continue;
+                    const int32_t pi = b->presence_idle_of(tm->primary().id(h));
+                    if (pi == 78) ++out.celebrate_sim;
+                    if (pi == 77 || pi == 78) presence_induced[tm->primary().id(h)] = pi;  // R3f t02
+                }
+            out.presence_cleared = std::max(out.presence_cleared, b->presence().stats().cleared);
+        }
+#endif
+        if (save_out && save_bf > 0 && out.save_tick == 0 && b && tm && b->frame() >= save_bf) {
+            // The first tick from battle frame `save_bf` on with a presence death clone alive (without the presence
+            // system: that frame).
+            uint32_t clones = 0;
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+            for (objects::ObjectHandle h : tm->primary().all_objects())
+                if (tm->primary().alive(h) && static_cast<uint32_t>(tm->primary().type(h)) == trooper_clone_type &&
+                    b->presence().is_presence_unit(tm->primary().id(h)))
+                    ++clones;
+            const bool now = clones > 0;
+#else
+            const bool now = true;
+#endif
+            if (now) {
+                std::string err;
+                const bool ok = host.save(*save_out, &err);
+                if (!ok) std::printf("  r3 save: %s\n", err.c_str());
+                CHECK(ok && save_out->find("battle.presence") != nullptr);
+                out.save_tick = host.frame();
+                out.save_bf = b->frame();
+                out.clones_at_save = clones;
+            }
+        }
+        if (b) out.explosion_victims = std::max(out.explosion_victims, b->explosion_flinch_victims());
+        if (tm && anim_service) {
+            if (const anim::AnimWorld* w = animation.find_world(*tm)) {
+                for (ObjectId id : w->ids()) {
+                    const int32_t ty = w->current_type(id);
+                    out.crouch_rows += ty == anim::kAnimIdleCrouch || ty == anim::kAnimCrouchMove ? 1u : 0u;
+                    out.deploy_rows += ty == anim::kAnimDeploy ? 1u : 0u;
+                    out.undeploy_rows += ty == anim::kAnimUndeploy ? 1u : 0u;
+                    out.attention_rows += ty == 77 ? 1u : 0u;
+                    out.celebrate_rows += ty == 78 ? 1u : 0u;
+                    // R3f t02 (§A.11): a presence idle never cuts the running idle (0 -> 77 / 78 waits for its end); it starts
+                    // on the first idle service after that clip finished, or from the locomotor's stop path / a crouch-class
+                    // change / a flinch return. The previous tick's row state is what this tick's services saw.
+                    const anim::SlotView sv = w->slot(id);
+                    const auto pr = row_prev.find(id);
+                    if (pr != row_prev.end()) {
+                        const int32_t pt = pr->second.first;
+                        const bool fin = pr->second.second == anim::SlotMode::Finished;
+                        if ((ty == 77 || ty == 78) && pt != ty) {
+                            ++out.presence_starts;
+                            out.celebrate_starts += ty == 78 ? 1u : 0u;
+                            out.presence_starts_at_end += fin ? 1u : 0u;
+                            out.presence_starts_ok +=
+                                fin || anim::is_move_family(pt) || anim::idle_class_restart(pt, ty) || anim::is_flinch(pt) ? 1u : 0u;
+                        }
+                        // R3f t03: the IDLE service's gates (target, move orders, Deploys busy, flinch busy) block the play.
+                        int8_t gate_target = -1;
+                        bool gate_moving = false, gate_hold = false;
+                        if (b) b->presence_idle_gates(id, gate_target, gate_moving, gate_hold);
+                        const auto fp = flinch_prev.find(id);
+                        const bool gated = gate_target > 0 || gate_moving || gate_hold || (fp != flinch_prev.end() && fp->second);
+                        const auto ind = presence_induced.find(id);
+                        if (ind != presence_induced.end() && fin && !gated && anim::is_idle_like(pt) && pt != ind->second) {
+                            ++out.presence_eligible;  // the idle service ran on a finished idle with T = 77 / 78
+                            if (anim::is_idle_like(ty) && ty != ind->second && ty != anim::kAnimIdleCrouch) ++out.presence_missed;
+                        }
+                    }
+                    row_prev[id] = {ty, sv.mode};
+                    if (const anim::AnimBehaviors* bh = animation.find_behaviors(*tm)) {  // R3f t03
+                        const uint32_t cd = bh->combat_countdown(id);
+                        out.combat_frames += cd > 0 ? 1u : 0u;
+                        const auto cp = countdown_prev.find(id);
+                        if (cp != countdown_prev.end() && cp->second > 0 && cd + 1 == cp->second) ++out.combat_countdowns;
+                        countdown_prev[id] = cd;
+                        flinch_prev[id] = bh->flinch_phase(id) != anim::AnimBehaviors::FlinchPhase::None;
+                    }
+                }
+                // Follow-up d: a clone row seen for the first time crossfades from the copied state: its previous slot is
+                // the IDLE the dying frigate / corvette was playing, at that row's frame of the last tick (no new draw).
+                const objects::ObjectStore& st = tm->primary();
+                for (ObjectId id : w->ids()) {
+                    const objects::ObjectHandle h = st.find(id);
+                    if (!st.exists(h) || static_cast<uint32_t>(st.type(h)) != clone_type) continue;
+                    if (std::find(seen_clone_rows.begin(), seen_clone_rows.end(), id) != seen_clone_rows.end()) continue;
+                    seen_clone_rows.push_back(id);
+                    ++out.clone_prev_checked;
+                    // (a spin-away death plays no clip: the copied state stays in the primary slot)
+                    const auto copied = [&prev_frigate_frames](const anim::SlotView& v) {
+                        return v.clip && v.type == anim::kAnimIdle &&
+                               std::find(prev_frigate_frames.begin(), prev_frigate_frames.end(), v.frame) != prev_frigate_frames.end();
+                    };
+                    if (copied(w->slot(id, anim::kPrevious)) || copied(w->slot(id))) ++out.clone_prev_copied;
+                }
+                prev_frigate_frames.clear();
+                for (ObjectId id : w->ids()) {
+                    const objects::ObjectHandle h = st.find(id);
+                    if (!st.exists(h)) continue;
+                    const auto ty = static_cast<uint32_t>(st.type(h));
+                    if (ty == frigate_type || ty == corvette_type) prev_frigate_frames.push_back(w->slot(id).frame);
+                }
+            }
+            for (const SimAnimation::FrameEvent& e : animation.events(*tm))
+                if (e.def->name == "Unit_Fire") (e.overlay ? out.overlay_events : out.primary_fire_events) += 1;
+        }
+        if (tm && !land) {
+            const objects::ObjectStore& st = tm->primary();
+            std::vector<ObjectId> present;
+            for (objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h)) continue;
+                const ObjectId id = st.id(h);
+                const auto ty = static_cast<uint32_t>(st.type(h));
+                if (ty == fx_type && !out.fx.count(id)) out.fx[id] = {f, st.position(h)};
+                if (ty != clone_type) continue;
+                present.push_back(id);
+                if (out.clone_life.emplace(id, std::make_pair(f, uint64_t{0})).second) {
+                    out.clone_pos[id] = st.position(h);
+                    out.clone_tail[id] = {st.position(h), st.position(h)};
+                } else {
+                    auto& tl = out.clone_tail[id];
+                    tl = {tl.second, st.position(h)};
+                }
+            }
+            if (b) out.spin_wrecks_max = std::max(out.spin_wrecks_max, b->spin_wrecks().size());
+            for (auto& [id, l] : out.clone_life)
+                if (l.second == 0 && std::find(present.begin(), present.end(), id) == present.end()) l.second = f;
+        }
+        if (land && !invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> fl = gs->fleets_at(1, 1);
+            if (!fl.empty() && !gs->fleets()[fl[0]].moving) {
+                CHECK(gs->invade(1, 1, {}) == commands::RejectReason::None);
+                invaded = true;
+            }
+        }
+    }
+    out.crc = host.crc_log();
+    out.battles = battles.log();
+    out.stats = animation.stats();
+    if (anim_service) animation.detach(host);
+    return out;
+}
+
+void test_r3_states_and_spin() {
+    auto d = make_data(false, false, false, false, false, false, false, false, true);
+    {  // land: crouch (SPREAD_OUT), deploy / undeploy clips, overlay attack events
+        const R3Run a = run_r3_campaign(*d, true, true, 0, 1500);
+        for (const std::string& s : a.battles) std::printf("  %s\n", s.c_str());
+        std::printf("  land r3: spread on %u, deploy on %u / off %u; crouch row-frames %u, deploy %u, undeploy %u (deploys %u); "
+                    "Unit_Fire events overlay %u, primary %u\n",
+                    a.spread_on, a.deploy_on, a.deploy_off, a.crouch_rows, a.deploy_rows, a.undeploy_rows, a.stats.deploys, a.overlay_events,
+                    a.primary_fire_events);
+        CHECK(a.spread_on > 0 && a.crouch_rows > 0);                       // t01: crouched = SPREAD_OUT -> CROUCHIDLE / CROUCHMOVE
+        CHECK(a.deploy_on > 0 && a.deploy_off > 0 && a.stats.deploys > 0);  // t01: one deploy clip per transition
+        CHECK(a.deploy_rows > 0 && a.undeploy_rows > 0);
+        CHECK(a.overlay_events > 0 && a.primary_fire_events == 0);         // follow-up 1: overlay attacks fire their events
+        std::printf("  land r3 presence: units %zu, maps max %zu, entries written %u, Attention row-frames %u; EXPLOSION flinch "
+                    "victims %u, flinches %u\n",
+                    a.presence_units, a.presence_maps_max, a.presence_refreshes, a.attention_rows, a.explosion_victims, a.stats.flinches);
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+        CHECK(a.presence_units > 0 && a.presence_maps_max > 0 && a.presence_refreshes > 0);  // presence maps fill
+        CHECK(a.attention_rows > 0);                                                       // -> 77 Attention idles
+        CHECK(a.explosion_victims > 0);                                                    // S10_Boom flinches its neighbours
+#endif
+        std::printf("  land r3 presence clones: services of trooper death clones %u, unit-frames induced 78 Celebrate %u, "
+                    "Celebrate row-frames %u\n",
+                    a.clone_presence, a.celebrate_sim, a.celebrate_rows);
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+        CHECK(a.clone_presence > 0 && a.celebrate_sim > 0);  // review 4: death clones impose presence -> 78 Celebrate
+#endif
+        std::printf("  land r3f t02 presence idles: plays %u (Celebrate %u; %u at a clip end, %u legal), eligible unit-frames %u, "
+                    "missed %u; t03 IDLE gates: maps cleared %u, combat-countdown unit-frames %u (%u counting down)\n",
+                    a.presence_starts, a.celebrate_starts, a.presence_starts_at_end, a.presence_starts_ok, a.presence_eligible,
+                    a.presence_missed, a.presence_cleared, a.combat_frames, a.combat_countdowns);
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+        // R3f t02 (§A.11): the induced idles play (Celebrate too), never cutting a running idle, and at the end of the idle
+        // clip that was running when they were induced (the idle service's next run), never later.
+        CHECK(a.celebrate_rows > 0 && a.celebrate_starts > 0);
+        CHECK(a.presence_starts_ok == a.presence_starts && a.presence_starts_at_end > 0);
+        CHECK(a.presence_eligible > 0 && a.presence_missed == 0);
+        // R3f t03: the IDLE service's combat countdown is drawn while a target persists (5a) and counts down once it is gone
+        // (5b). (Maps cleared by the move / target gates: 0 here, as the same gates keep such units from getting entries.)
+        CHECK(a.combat_frames > 0 && a.combat_countdowns > 0);
+#endif
+        const R3Run b = run_r3_campaign(*d, true, true, 4, 1500);
+        const auto dv = first_divergence(a.crc, b.crc);
+        std::printf("  land r3 workers 4: %s\n", dv.message.c_str());
+        CHECK(!dv.diverged && b.stats.deploys == a.stats.deploys && b.overlay_events == a.overlay_events && b.crouch_rows == a.crouch_rows);
+        CHECK(b.attention_rows == a.attention_rows && b.explosion_victims == a.explosion_victims && b.presence_refreshes == a.presence_refreshes);
+        CHECK(b.celebrate_rows == a.celebrate_rows && b.celebrate_sim == a.celebrate_sim);
+        CHECK(b.presence_starts == a.presence_starts && b.presence_eligible == a.presence_eligible && b.presence_cleared == a.presence_cleared &&
+              b.combat_frames == a.combat_frames && b.combat_countdowns == a.combat_countdowns);
+        // Review 1: a save during the battle (presence units and maps live), loaded into a fresh session through
+        // CampaignBattles' battle chunks (battle.presence included; trooper death clones are presence units by then), continues with the continuous run's CRCs.
+        SaveFile save;
+        const R3Run s = run_r3_campaign(*d, true, true, 0, 1500, true, 200, &save);
+        const R3Run l = run_r3_campaign(*d, true, true, 0, 1500, true, 0, nullptr, &save);
+        CrcLog tail;
+        tail.systems = s.crc.systems;
+        tail.parity_parts = s.crc.parity_parts;
+        for (const CrcRecord& r : s.crc.records)
+            if (r.tick > s.save_tick) tail.records.push_back(r);
+        CrcLog loaded = l.crc;
+        loaded.records.erase(std::remove_if(loaded.records.begin(), loaded.records.end(), [&s](const CrcRecord& r) { return r.tick <= s.save_tick; }),
+                             loaded.records.end());
+        const auto sv = first_divergence(tail, loaded);
+        std::printf("  land r3 save at battle frame %u (tick %" PRIu64 ", %zu chunks, %u presence clones) + load: %s (%zu records)\n",
+                    s.save_bf, s.save_tick, save.chunks().size(), s.clones_at_save, sv.message.c_str(), tail.records.size());
+        CHECK(s.save_tick > 0 && !first_divergence(a.crc, s.crc).diverged);  // saving changes nothing
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+        CHECK(s.clones_at_save > 0);
+#endif
+        CHECK(!tail.records.empty() && !sv.diverged && l.battles == s.battles);
+    }
+    {  // space: spin-away clones (T = 1.5 s). R3f t01 (TACTICAL_GAPS §1.9): the S10_Spin_FX start explosion is spawned on
+       // the death frame at the death position (the clone's first position; Ranged_Target_Z_Adjust 0); the wreck then
+       // flies its spline in the sim and is removed on its 45th service (|V| > 0, float sum +-1) or on its first (V = 0:
+       // a frigate that stood still).
+        const R3Run h = run_r3_campaign(*d, false, false, 0, 2500);
+        uint32_t removed = 0, matched = 0, other_life = 0, moved = 0, still = 0;
+        for (const auto& [id, l] : h.clone_life) {
+            const Vec3 p0 = h.clone_pos.at(id);
+            for (const auto& [fid, fv] : h.fx)
+                if (fid > id && fv.first == l.first && fv.second.x == p0.x && fv.second.y == p0.y && fv.second.z == p0.z) {
+                    ++matched;
+                    break;
+                }
+            if (l.second == 0 || l.second >= h.end_frame) continue;
+            ++removed;
+            const uint64_t life = l.second - l.first;
+            const Vec3 pl = h.clone_tail.at(id).second;
+            const float drift = std::fabs(pl.x - p0.x) + std::fabs(pl.y - p0.y) + std::fabs(pl.z - p0.z);
+            if (life == 1) ++still;
+            else if (life >= 44 && life <= 46 && drift > 1.0f) ++moved;
+            else ++other_life;
+        }
+        for (const std::string& s : h.battles) std::printf("  %s\n", s.c_str());
+        std::printf("  space r3: %zu spinning clones (wrecks max %zu), %u removed in the battle (%u flew 44-46 frames, %u stood still, "
+                    "%u other), %zu spin explosions, %u at their clone's death position and frame\n",
+                    h.clone_life.size(), h.spin_wrecks_max, removed, moved, still, other_life, h.fx.size(), matched);
+        CHECK(removed > 0 && other_life == 0 && moved > 0 && h.spin_wrecks_max > 0);
+        CHECK(matched == h.clone_life.size() && h.fx.size() == h.clone_life.size());
+        // The animation service changes nothing in the sim (clone rows only: no ship models, so no start-frame draws).
+        const R3Run a = run_r3_campaign(*d, false, true, 0, 2500, false);
+        const auto dv = first_divergence(h.crc, a.crc);
+        std::printf("  space r3 + anim service (clone rows only): %s; spin-aways %u\n", dv.message.c_str(), a.stats.spin_aways);
+        CHECK(!dv.diverged && a.battles == h.battles && a.clone_life == h.clone_life && a.fx.size() == h.fx.size() && a.stats.spin_aways > 0);
+        // Follow-up d: with ship rows the clone rows take over the dying unit's IDLE state (its frame of the last tick).
+        const R3Run c = run_r3_campaign(*d, false, true, 0, 2500, true);
+        uint32_t c_removed = 0;
+        for (const auto& [id, l] : c.clone_life) c_removed += l.second != 0 && l.second < c.end_frame ? 1u : 0u;
+        std::printf("  space r3 + anim service (ship rows): clone rows %u (copied state %u), spin explosions %zu for %u removals\n",
+                    c.clone_prev_checked, c.clone_prev_copied, c.fx.size(), c_removed);
+        CHECK(c.clone_prev_checked > 0 && c.clone_prev_copied == c.clone_prev_checked && c.fx.size() == c.clone_life.size() && c_removed > 0);
+        const R3Run w4 = run_r3_campaign(*d, false, false, 4, 2500);
+        CHECK(!first_divergence(h.crc, w4.crc).diverged && w4.clone_life == h.clone_life && w4.fx.size() == h.fx.size());
     }
 }
 #endif
@@ -3625,6 +4197,8 @@ int main(int argc, char** argv) {
     test_anim_battles();
     std::printf("death clone removal, headless and with the anim service (refixf t04)\n");
     test_death_clone_removal();
+    std::printf("R3 t01 / t04: crouch / deploy sources, overlay attack events, spin-away explosion objects, clone anim state\n");
+    test_r3_states_and_spin();
 #endif
     std::printf("black market gate (P4 tactical)\n");
     test_black_market_battle();

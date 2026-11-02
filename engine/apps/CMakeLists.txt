@@ -68,6 +68,13 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
       target_link_libraries(alamo_sim PUBLIC alamo_tactical_garrison)
       target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_GARRISON=1)
     endif()
+    # --- R3 presence-induced idle + explosion flinch (engine/tactical/presence; tactical_battle_presence.cpp, no-op stubs
+    # without the libs or without engine/anim: the presence maps only feed the animation's default idle) ---
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_presence.cpp)
+    if(TARGET alamo_tactical_presence_data AND TARGET alamo_anim)
+      target_link_libraries(alamo_sim PUBLIC alamo_tactical_presence alamo_tactical_presence_data)
+      target_compile_definitions(alamo_sim PUBLIC ALAMO_SIM_HAVE_PRESENCE=1)
+    endif()
     # --- end S4 ---
     # A1 hooks: DAMAGE_TRACKING store per battle, land campaign-battle credit transfer.
     if(TARGET alamo_ai_tactical)

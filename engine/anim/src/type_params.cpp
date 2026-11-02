@@ -46,7 +46,28 @@ TypeAnimParams type_anim_params(const objects::GameObjectTypes& types, objects::
     p.spin_away_explosion = std::string(types.get_string(t, "Spin_Away_On_Death_Explosion"));
     opt_float("Deployed_Walk_Anim_Speed", p.deployed_walk_anim_speed);
     opt_float("Deployment_Anim_Rate", p.deployment_anim_rate);
+    p.deploys = types.deploys(t);
     return p;
+}
+
+FlinchParams flinch_params(const TypeAnimParams& p) {
+    FlinchParams f;
+    f.deploys = p.deploys;
+    f.blend_seconds = p.max_flinch_blend_seconds;
+    f.hold_seconds = p.max_flinch_hold_seconds;
+    f.idle_interval_seconds = p.idle_flinch_interval_seconds;
+    f.attack_interval_seconds = p.attack_flinch_interval_seconds;
+    return f;
+}
+
+// R3f t05: the typed objects accessors; an unset field gives objects' constructor default, which equals
+// kDefaultFlinchIntensity / kDefaultFlinchRange (checked in test_presence's data test). Out of range: the constants.
+float induced_flinch_intensity(const objects::GameObjectTypes& types, objects::TypeIndex t) {
+    return t < types.size() ? types.induced_flinch_intensity(t) : kDefaultFlinchIntensity;
+}
+
+float induced_flinch_range(const objects::GameObjectTypes& types, objects::TypeIndex t) {
+    return t < types.size() ? types.induced_flinch_range(t) : kDefaultFlinchRange;
 }
 
 DeathParams death_params(const TypeAnimParams& p) {
@@ -57,8 +78,7 @@ DeathParams death_params(const TypeAnimParams& p) {
     d.remove_upon_death = p.remove_upon_death;
     d.persistence_seconds = p.death_persistence_seconds;
     d.fade_seconds = p.death_fade_seconds;
-    d.spin_away = p.spin_away_on_death;
-    d.spin_away_chance = p.spin_away_chance;
+    // d.spin stays false: the spin-away decision is the caller's (combat's one draw, TACTICAL_GAPS §1.9).
     d.spin_away_seconds = p.spin_away_seconds;
     return d;
 }

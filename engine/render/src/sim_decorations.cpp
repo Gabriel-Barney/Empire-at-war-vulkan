@@ -48,11 +48,9 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
     auto remember = [&] {
         prev_ids_.clear();
         prev_pos_.clear();
-        prev_spin_.clear();
         for (const SnapshotObject& o : frame.objects) {  // frame objects ascend by id
             prev_ids_.push_back(o.id);
             prev_pos_.push_back(o.position);
-            if (o.flags & kSnapSpinAway) prev_spin_.push_back(o);
         }
     };
     auto add_puff = [&](std::string asset, const Vec3& pos, const Vec3& facing) {
@@ -69,15 +67,8 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
         for (const Puff& p : puffs_) effects_.push_back(p.fx);
         std::stable_sort(effects_.begin(), effects_.end(), [](const SimWorldEffect& a, const SimWorldEffect& b) { return a.key < b.key; });
     };
-    // ---- R3 spin-away corpses that ended this tick: Spin_Away_On_Death_Explosion at their last position (land and space)
-    for (const SnapshotObject& p : prev_spin_) {
-        const auto it = std::lower_bound(frame.objects.begin(), frame.objects.end(), p.id,
-                                         [](const SnapshotObject& o, objects::ObjectId v) { return o.id < v; });
-        if (it != frame.objects.end() && it->id == p.id) continue;
-        if (!table_->valid(p.type) || table_->operator[](p.type).spin_away_explosion.empty()) continue;
-        add_puff(particle_asset(table_->operator[](p.type).spin_away_explosion), p.position, p.facing);
-        ++stats_.spin_explosions;
-    }
+    // R3f t01: no render-side Spin_Away_On_Death_Explosion any more: the battle spawns it as a sim PARTICLE object at
+    // the death (store death clones and detached corpses alike).
     if (!terrain_) {
         gens_.clear();
         finish_effects();

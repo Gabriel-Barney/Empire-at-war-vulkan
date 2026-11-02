@@ -13,7 +13,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 1;
+constexpr uint32_t kBattleStateVersion = 3;  // 2: R3 t04 pending spin-away explosions; 3: R3f t01 spin wrecks (spin_wrecks_)
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -48,6 +48,7 @@ const char* TacticalBattle::save_part_name(SavePart p) {
         case SavePart::Hangar: return "battle.hangar";
         case SavePart::Fog: return "battle.fog";
         case SavePart::Damage: return "battle.damage";
+        case SavePart::Presence: return "battle.presence";
         case SavePart::Count: break;
     }
     return "battle.?";
@@ -70,6 +71,10 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a.seq(b.particles_, timed);
     a.seq(b.dummies_, timed);
     a.seq(b.death_clones_, timed);  // refixf t04
+    a.seq(b.spin_wrecks_, [](auto& x, auto& e) {  // R3f t01: spinning wrecks (sim-side motion)
+        x(e.id, e.h, e.type, e.end_explosion, e.owner, e.z_adjust, e.turn_rate, e.time, e.v, e.built, e.done, e.dist);
+        x(e.p0, e.q, e.e, e.seg[0], e.seg[1], e.seg[2], e.position, e.yaw, e.pitch, e.roll);
+    });
     a.seq(b.effects_, [](auto& x, auto& e) { x(e.id, e.asset, e.percent, e.frame); });
     a(b.anchor_[0], b.anchor_[1], b.facing_[0], b.facing_[1], b.placed_[0], b.placed_[1]);
     a(b.frame_, b.retreat_allowed_frame_, b.retreat_side_, b.retreat_done_frame_, b.retreat_complete_, b.finished_);
@@ -188,6 +193,15 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
             w.boolean(false);
 #endif
             break;
+        case SavePart::Presence:  // R3: IMPOSING_PRESENCE units + presence maps (definitions are rebuilt by setup)
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+            w.boolean(true);
+            w.boolean(presence_used_);
+            put_system(w, &presence_);
+#else
+            w.boolean(false);
+#endif
+            break;
         case SavePart::Count: break;
     }
 }
@@ -258,6 +272,18 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
             if (!has || !all_saveable(&damage_tracking_)) return false;
             return get_system(r, &damage_tracking_) && r.done();
+#else
+            return r.ok() && !has && r.done();
+#endif
+        }
+        case SavePart::Presence: {
+            const bool has = r.boolean();
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+            if (!has || !all_saveable(&presence_)) return false;
+            const bool used = r.boolean();
+            if (!r.ok() || !get_system(r, &presence_) || !r.done()) return false;
+            presence_used_ = used;  // only after the system read succeeded
+            return true;
 #else
             return r.ok() && !has && r.done();
 #endif

@@ -283,7 +283,33 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
             case tg::GarrisonEventKind::Killed: {  // host without a garrison behaviour died
                 Unit* u = unit_by_id(e.unit);
                 if (!u || !u->alive) break;
+                // R3 follow-up f: the occupant's Die (kill_unit: death clone pick, death projectile, spin-away draw on the
+                // bound battle RNG) is consumed like every other death (consume_death: clone object / corpse path, death
+                // animation, Death_Explosions), right here in garrison event order. Without a combat unit: the old removal.
+                const size_t first = combat_->deaths().size();
+                // R3f t04: the out-of-tick Die also emits hardpoint (step 5) and survivor (step 7) events, which the
+                // next combat tick clears unread; consume this kill's slice in the in-tick order (hardpoints, deaths,
+                // survivors: TacticalBattle::tick 5c, 5d, oi_events c). Copies: the consumers spawn objects.
+                const size_t first_hp = combat_->hardpoint_events().size();
+                const size_t first_surv = combat_->survivor_events().size();
                 if (combat_->has_unit(e.unit)) combat_->kill_unit(e.unit, tc::kNoObject, tc::kKindNormal, frame_);
+                {
+                    const std::vector<tc::HardpointEvent> hps(combat_->hardpoint_events().begin() +
+                                                                  static_cast<std::ptrdiff_t>(first_hp),
+                                                              combat_->hardpoint_events().end());
+                    for (const tc::HardpointEvent& hp : hps) consume_hardpoint_event(mode, hp);
+                }
+                const std::vector<tc::SurvivorEvent> survivors(combat_->survivor_events().begin() +
+                                                                   static_cast<std::ptrdiff_t>(first_surv),
+                                                               combat_->survivor_events().end());
+                if (bt_rng_)
+                    for (size_t i = first; i < combat_->deaths().size(); ++i) {
+                        const tc::DeathEvent d = combat_->deaths()[i];  // copy: consume_death may add combat state
+                        consume_death(mode, d, *bt_rng_);
+                    }
+                for (const tc::SurvivorEvent& s : survivors) oi_consume_survivor(mode, s);  // R3f t04
+                u = unit_by_id(e.unit);  // (re-found: the clone / particle spawns may have grown the containers)
+                if (!u || !u->alive) break;
                 u->alive = false;
                 --parts_[u->participant].alive;
                 mode.destroy(u->h);

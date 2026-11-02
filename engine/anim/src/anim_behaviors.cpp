@@ -28,6 +28,20 @@ int32_t flinch_type(float fx, float fy, float dx, float dy, bool attacking) {
     return attacking ? base + (kAnimAttackFlinchLeft - kAnimFlinchLeft) : base;
 }
 
+float explosion_flinch_intensity(float intensity, float dx, float dy, float range) {
+    float v = intensity;
+    if (range > 0.0f) {
+        const float d2 = dx * dx + dy * dy;
+        const float r2 = range * range;
+        v = intensity * (1.0f - 0.5f * d2 / r2);
+    }
+    if (!(v >= kMinExplosionFlinchIntensity)) v = kMinExplosionFlinchIntensity;  // also NaN
+    if (v > 1.0f) v = 1.0f;
+    return v;
+}
+
+bool flinch_allowed_from(int32_t c) { return c != kAnimAttackIdle && (is_idle_like(c) || is_attack_like(c)); }
+
 float Corpse::alpha(uint64_t frame) const {
     if (phase != CorpsePhase::Fading) return 1.0f;
     if (fade_frames == 0 || frame >= phase_end) return 0.0f;
@@ -77,16 +91,20 @@ void AnimBehaviors::remove(ObjectId id) {
 
 // ---- flinch ------------------------------------------------------------------------------------------
 
-bool AnimBehaviors::on_hit(AnimWorld& w, ObjectId id, const FlinchParams& p, const IdleParams& idle, float fx, float fy, float dx, float dy,
-                           SimRng& rng, uint64_t frame) {
-    if (is_corpse(id) || !w.contains(id)) return false;
+bool AnimBehaviors::on_hit(AnimWorld& w, ObjectId id, const FlinchParams& p, const IdleParams& /*idle*/, float fx, float fy, float dx,
+                           float dy, SimRng& rng, uint64_t frame, float intensity) {
+    if (is_corpse(id) || !w.contains(id) || p.deploys) return false;  // §A.12: Deploys types never flinch
     const Entry* old = find(id);
-    if (old && frame < old->flinch_next) return false;  // holding or cooling down
+    // §A.12: timer expired and +0x58 = 0; [port] BlendIn blocks too (I = 0).
+    if (old && (frame < old->flinch_timer || old->flinch_intensity != 0.0f || old->phase == FlinchPhase::BlendIn)) return false;
     const AnimModel* m = w.model(id);
     if (!m) return false;
     const int32_t cur = w.current_type(id);
-    const bool attacking = is_attack_like(cur) || cur == kAnimAttackIdle;
-    if (!(cur == kNoAnimType || is_idle_like(cur) || attacking)) return false;  // [port] moving / turning / other
+    if (!flinch_allowed_from(cur)) return false;  // §A.12: Attack Idle, none, moving, turning, death, ... never
+    const bool attacking = is_attack_like(cur);
+    float level = intensity;  // [port] clamped to [0, 1]
+    if (!(level > 0.0f)) level = 0.0f;
+    if (level > 1.0f) level = 1.0f;
     const int32_t type = flinch_type(fx, fy, dx, dy, attacking);
     if (m->variant_count(type) == 0) return false;  // no clip: nothing (no draw)
     PlayRequest r;
@@ -99,37 +117,53 @@ bool AnimBehaviors::on_hit(AnimWorld& w, ObjectId id, const FlinchParams& p, con
     if (w.play(id, r, &rng, frame) != PlayResult::Played) return false;
     Entry& e = entry(id);
     e.flinch = type;
+    e.phase = FlinchPhase::BlendIn;
+    e.flinch_intensity = level;
+    e.ret_type = cur;
     e.flinch_blend = p.blend_seconds;
-    e.flinch_end = frame + seconds_to_frames(p.hold_seconds);
-    e.flinch_next = e.flinch_end + seconds_to_frames(attacking ? p.attack_interval_seconds : p.idle_interval_seconds);
-    if (attacking && m->variant_count(kAnimAttackIdle) > 0) {
-        e.ret_type = kAnimAttackIdle;
-        e.ret_loop = false;
-        e.ret_speed = 1.0f;
-    } else {
-        e.ret_type = idle.idle_type;
-        e.ret_loop = idle.loop_idle;
-        e.ret_speed = idle.idle_rate;
-    }
+    e.hold_frames = seconds_to_frames(p.hold_seconds * level);
+    e.cooldown_frames = seconds_to_frames((attacking || cur == kAnimAttackIdle) ? p.attack_interval_seconds : p.idle_interval_seconds);
     return true;
 }
 
-bool AnimBehaviors::flinching(ObjectId id) const {
+AnimBehaviors::FlinchPhase AnimBehaviors::flinch_phase(ObjectId id) const {
     const Entry* e = find(id);
-    return e && e->flinch != kNoAnimType;
+    return e ? e->phase : FlinchPhase::None;
+}
+
+bool AnimBehaviors::flinching(ObjectId id) const {
+    const FlinchPhase ph = flinch_phase(id);
+    return ph == FlinchPhase::BlendIn || ph == FlinchPhase::Hold;
 }
 
 uint64_t AnimBehaviors::next_flinch_frame(ObjectId id) const {
     const Entry* e = find(id);
-    return e ? e->flinch_next : 0;
+    return e ? e->flinch_timer : 0;
 }
+
+int32_t AnimBehaviors::flinch_return_type(ObjectId id) const {
+    const Entry* e = find(id);
+    return e ? e->ret_type : kNoAnimType;
+}
+
+namespace {
+template <class E>
+void end_flinch(E& e, uint64_t frame) {  // cooldown from now, +0x5c = -1
+    e.flinch_timer = frame + e.cooldown_frames;
+    e.phase = AnimBehaviors::FlinchPhase::None;
+    e.flinch = kNoAnimType;
+    e.flinch_intensity = 0.0f;
+    e.ret_type = kNoAnimType;
+}
+}  // namespace
 
 // ---- idle --------------------------------------------------------------------------------------------
 
 bool AnimBehaviors::service_idle(AnimWorld& w, ObjectId id, const IdleParams& idle, SimRng& rng, uint64_t frame, bool crouch_changed) {
     if (is_corpse(id) || !w.contains(id)) return false;
     const SlotView cur = w.slot(id);
-    if (crouch_changed) return w.service_idle(id, idle.idle_type, true, rng, frame);
+    // §A.11: T (idle.idle_type) != C and a different crouch class -> the idle restarts at once, even mid-clip.
+    if (crouch_changed || idle_class_restart(cur.type, idle.idle_type)) return w.service_idle(id, idle.idle_type, true, rng, frame);
     if (cur.clip && cur.mode != SlotMode::Finished) return false;
     const AnimModel* m = w.model(id);
     if (m && m->variant_count(kAnimAttackIdle) > 0) {
@@ -167,6 +201,11 @@ uint64_t AnimBehaviors::combat_timer(ObjectId id) const {
     return e ? e->combat_timer : 0;
 }
 
+uint32_t AnimBehaviors::combat_countdown(ObjectId id) const {
+    const Entry* e = find(id);
+    return e ? e->combat_countdown : 0;
+}
+
 // ---- locomotor / deploy ------------------------------------------------------------------------------
 
 bool is_move_family(int32_t t) {
@@ -174,11 +213,9 @@ bool is_move_family(int32_t t) {
 }
 
 int32_t default_idle_type(const AnimModel* m, const LocomotorInput& in, const IdleParams& idle) {
-    // 0x395920: Idle Crouch when crouched, else the container's mapping when garrisoned, else the idle. [port] a
-    // type without clips falls back to the plain idle.
-    int32_t t = in.crouched ? kAnimIdleCrouch : (in.idle_type != kNoAnimType ? in.idle_type : idle.idle_type);
-    if (m && m->variant_count(t) == 0) t = idle.idle_type;
-    return t;
+    // 0x395920 (§A.11): Idle Crouch while SPREAD_OUT, else the presence-induced idle, else the idle. No clip fallback.
+    (void)m;
+    return in.crouched ? kAnimIdleCrouch : (in.idle_type != kNoAnimType ? in.idle_type : idle.idle_type);
 }
 
 int32_t death_type_for_kind(uint8_t k) {
@@ -214,6 +251,31 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
     e.last_crouch = in.crouched;
     const float move_blend = w.tunables().move_blend_seconds, idle_blend = w.tunables().idle_blend_seconds;
     const int32_t cur = w.current_type(id);
+    // R3f t02/t03: the IDLE service's gates (§A.11 "Exact order", LocomotorInput comment), before the locomotor's plays
+    // [port: the two behaviours' relative order inside one object service].
+    const bool idle_gated = in.idle_target >= 0;
+    bool idle_play = true;  // the idle part may play this frame
+    bool engaged = false;   // 5a: TARGETING has a target
+    if (idle_gated) {
+        if (in.idle_moving) {
+            // 1. +0x58 := 0: a flinch still blending in loses that stage (its timer had expired at the hit, so the hold
+            // stage ends at the next flinch step); Hold / Return keep their timers. Nothing else of the IDLE service runs.
+            if (e.phase == FlinchPhase::BlendIn) {
+                e.flinch_intensity = 0.0f;
+                e.phase = FlinchPhase::Hold;
+            }
+            idle_play = false;
+        } else if (in.idle_hold) {
+            idle_play = false;  // 2. Deploys busy
+        } else if (in.idle_target > 0) {
+            // 5a: the combat timer is drawn every frame while the target persists.
+            e.combat_countdown = kEngagedBaseFrames + static_cast<uint32_t>(rng.range_int(0, kEngagedRandomFrames));
+            engaged = true;
+        } else if (e.combat_countdown > 0) {
+            --e.combat_countdown;  // 5b
+        }
+        if (e.phase != FlinchPhase::None) idle_play = false;  // 3. "flinch busy": no idle play
+    }
     const bool moving = in.movable && in.speed > 0.0f;
     if (moving) {
         const float ratio = in.max_speed > 0.0f ? in.speed / in.max_speed : 1.0f;
@@ -262,15 +324,50 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
         }
     }
     if (is_move_family(cur)) {
-        PlayRequest r;  // stopped: back to the idle (then the idle behaviour)
-        r.type = idle_type;
+        PlayRequest r;  // stopped: back to the idle (then the idle behaviour); [port] no clip of T: the plain idle
+        r.type = m->variant_count(idle_type) > 0 ? idle_type : p.idle.base_idle_type;
         r.loop = p.idle.loop_idle;
         r.blend_seconds = idle_blend;
         r.speed = p.idle.idle_rate;
         w.play(id, r, &rng, frame);
         return 1;
     }
-    if (crouch_changed || w.current_mode(id) == SlotMode::Finished || cur == kNoAnimType) {
+    if (idle_gated) {
+        // R3f t02/t03: the idle part of the IDLE service (§A.11 "Exact order" 5a / 5b).
+        if (!idle_play) return 0;
+        const bool finished = w.current_mode(id) == SlotMode::Finished && cur != kNoAnimType;
+        const bool attack_c = cur == kAnimAttack || cur == kAnimAttackIdle || is_attack_like(cur);
+        if (engaged) {
+            if (!(attack_c && finished && m->variant_count(kAnimAttackIdle) > 0)) return 0;
+            PlayRequest r;  // 5a: Attack Idle, index 0, one-shot, blend 0
+            r.type = kAnimAttackIdle;
+            r.index = 0;
+            r.loop = false;
+            r.blend_seconds = 0.0f;
+            r.speed = 1.0f;
+            return w.play(id, r, &rng, frame) == PlayResult::Played ? 1u : 0u;
+        }
+        if (attack_c && !crouch_changed) {
+            if (!finished) return 0;
+            PlayRequest r;  // 5b after an attack: the default idle once the combat timer ran out, else Attack Idle again
+            r.index = 0;
+            r.loop = false;
+            r.speed = 1.0f;
+            // [port] a model without an Attack Idle clip goes to T at once instead of holding the attack pose.
+            if (e.combat_countdown < 1 || m->variant_count(kAnimAttackIdle) == 0) {
+                r.type = idle_type;
+                r.blend_seconds = idle_blend;
+            } else {
+                r.type = kAnimAttackIdle;
+                r.blend_seconds = rng.range_float(0.2f, 0.75f);
+            }
+            return w.play(id, r, &rng, frame) == PlayResult::Played ? 1u : 0u;
+        }
+        if (crouch_changed || idle_class_restart(cur, idle_type) || w.current_mode(id) == SlotMode::Finished || cur == kNoAnimType)
+            return w.service_idle(id, idle_type, crouch_changed, rng, frame) ? 1u : 0u;
+        return 0;
+    }
+    if (crouch_changed || idle_class_restart(cur, idle_type) || w.current_mode(id) == SlotMode::Finished || cur == kNoAnimType) {
         IdleParams ip = p.idle;
         ip.idle_type = idle_type;
         return service_idle(w, id, ip, rng, frame, crouch_changed) ? 1u : 0u;
@@ -311,10 +408,7 @@ uint64_t one_shot_frames(uint32_t frame_count, float fps, float speed) {
 
 DeathPlan plan_death(const AnimModel* m, const DeathParams& p, uint8_t damage_kind, SimRng& rng) {
     DeathPlan d;
-    if (p.spin_away) {
-        if (p.spin_away_chance > 0.0f && p.spin_away_chance < 1.0f) d.spin = rng.range_float(0.0f, 1.0f) < p.spin_away_chance;
-        else d.spin = true;  // [port] chance >= 1 or unset
-    }
+    d.spin = p.spin;  // the caller's decision (TACTICAL_GAPS §1.9): no draw here
     if (d.spin) {
         d.lifetime = seconds_to_frames(p.spin_away_seconds);
         return d;
@@ -398,21 +492,43 @@ DeathResult AnimBehaviors::begin_death(AnimWorld& w, ObjectId id, const DeathPar
     return has_row ? DeathResult::Corpse : DeathResult::NoRow;
 }
 
-void AnimBehaviors::service(AnimWorld& w, uint64_t frame, std::vector<ObjectId>& removed) {
-    // Flinch hold ends.
+void AnimBehaviors::service(AnimWorld& w, uint64_t frame, std::vector<ObjectId>& removed, SimRng* rng) {
+    // Flinch progress (§A.12, one step per service), ascending id.
     for (Entry& e : entries_) {
-        if (e.flinch == kNoAnimType || frame < e.flinch_end) continue;
-        if (w.contains(e.id) && w.current_type(e.id) == e.flinch) {
-            PlayRequest r;
-            r.type = e.ret_type;
-            r.index = 0;
-            r.loop = e.ret_loop;
-            r.blend_seconds = e.flinch_blend;
-            r.blend_mode = 2;
-            r.speed = e.ret_speed;
-            w.play(e.id, r, nullptr, frame);
+        if (e.phase == FlinchPhase::None) continue;
+        const int32_t cur = w.contains(e.id) ? w.current_type(e.id) : kNoAnimType;
+        switch (e.phase) {
+            case FlinchPhase::BlendIn:
+                if (cur != e.flinch) {
+                    end_flinch(e, frame);  // [port] replaced by another play
+                } else if (!w.crossfading(e.id) || w.crossfade_weight(e.id) >= e.flinch_intensity) {
+                    w.set_speed(e.id, kFlinchFrozenSpeed);  // 0x3a8120
+                    e.flinch_timer = frame + e.hold_frames;
+                    e.flinch_intensity = 0.0f;
+                    e.phase = FlinchPhase::Hold;
+                }
+                break;
+            case FlinchPhase::Hold:
+                if (cur != e.flinch) {
+                    end_flinch(e, frame);
+                } else if (frame >= e.flinch_timer) {
+                    PlayRequest r;  // replay C: synced random variant, one-shot, flinch blend, blend mode 3
+                    r.type = e.ret_type;
+                    r.index = kRandomVariant;
+                    r.loop = false;
+                    r.blend_seconds = e.flinch_blend;
+                    r.blend_mode = 3;
+                    r.speed = 1.0f;
+                    if (w.play(e.id, r, rng, frame) == PlayResult::Played) e.phase = FlinchPhase::Return;
+                    else end_flinch(e, frame);
+                }
+                break;
+            case FlinchPhase::Return:
+                if (cur != e.ret_type || !w.crossfading(e.id)) end_flinch(e, frame);  // back on C, fade complete (or replaced)
+                break;
+            case FlinchPhase::None:
+                break;
         }
-        e.flinch = kNoAnimType;
     }
     // Corpse countdown (DeathBehavior::Service), ascending id.
     size_t keep = 0;
@@ -446,13 +562,16 @@ void AnimBehaviors::hash(StateHasher& h) const {
     for (const Entry& e : entries_) {
         h.i32(e.id);
         h.i32(e.flinch);
-        h.u64(e.flinch_end);
-        h.u64(e.flinch_next);
-        h.f32(e.flinch_blend);
+        h.u8(static_cast<uint8_t>(e.phase));
+        h.u64(e.flinch_timer);
+        h.f32(e.flinch_intensity);
         h.i32(e.ret_type);
-        h.boolean(e.ret_loop);
-        h.f32(e.ret_speed);
+        h.f32(e.flinch_blend);
+        h.u64(e.hold_frames);
+        h.u64(e.cooldown_frames);
         h.u64(e.combat_timer);
+        // R3f t03: hashed only when running, so state that never used the IDLE gates (idle_target -1) hashes as before.
+        if (e.combat_countdown != 0) h.u32(e.combat_countdown);
         h.f32(e.last_yaw);
         h.boolean(e.have_yaw);
         h.boolean(e.last_crouch);

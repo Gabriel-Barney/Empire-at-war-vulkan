@@ -594,14 +594,44 @@ void set_snapshot_foot_plants(SimSnapshot& snap, std::span<const SnapshotFootPla
         if (snap.find(f.id)) snap.foot_plants.push_back(f);
 }
 
+// R3f t01: the sim's spin-wreck transform (TacticalBattle::spin_wrecks) onto the snapshot object of the same id.
+void apply_snapshot_spin_wrecks(SimSnapshot& snap, std::span<const SnapshotSpinWreck> wrecks) {
+    for (const SnapshotSpinWreck& w : wrecks) {
+        const auto it = std::lower_bound(snap.objects.begin(), snap.objects.end(), w.id,
+                                         [](const SnapshotObject& s, ObjectId v) { return s.id < v; });
+        if (it == snap.objects.end() || it->id != w.id) continue;
+        SnapshotObject* o = &*it;
+        if (std::isfinite(w.position.x) && std::isfinite(w.position.y) && std::isfinite(w.position.z)) o->position = w.position;
+        if (std::isfinite(w.facing.x) && std::isfinite(w.facing.y) && std::isfinite(w.facing.z)) o->facing = w.facing;
+        o->roll = std::isfinite(w.roll) ? w.roll : 0.0f;
+        o->pitch = std::isfinite(w.pitch) ? w.pitch : 0.0f;
+        o->flags = static_cast<uint8_t>(o->flags | kSnapSpinAway);
+    }
+}
+
 void add_snapshot_corpses(SimSnapshot& snap, const SnapshotTypeTable& table, std::span<const SnapshotCorpse> corpses) {
     const auto before = static_cast<std::ptrdiff_t>(snap.objects.size());
+    std::vector<uint8_t> applied(static_cast<size_t>(before), 0);  // store death clones already given a corpse record
     for (const SnapshotCorpse& c : corpses) {
-        if (!(c.alpha > 0.0f) || !table.valid(c.type) || table[c.type].model.empty()) continue;
         const auto end = snap.objects.begin() + before;
         const auto it = std::lower_bound(snap.objects.begin(), end, c.id, [](const SnapshotObject& o, ObjectId v) { return o.id < v; });
-        if (it != end && it->id == c.id) continue;  // the store object still exists: drawn through it
-        bool dup = false;                           // the same id twice in `corpses`
+        if (it != end && it->id == c.id) {
+            // The store object still exists: drawn through it (never a second instance). A store death clone (refixf
+            // t04: the battle keeps it until its planned lifetime ends) takes the corpse's fade (ANIM_PARTICLES §A.7
+            // Death_Fade_Time) and the spin-away flag (R3f t01: the motion is the sim's, already in its store
+            // transform; roll from apply_snapshot_spin_wrecks); other store objects keep theirs.
+            SnapshotObject& o = *it;
+            const auto k = static_cast<size_t>(it - snap.objects.begin());
+            if ((o.flags & kSnapDeathClone) == 0 || applied[k]) continue;
+            applied[k] = 1;
+            const float a = std::isfinite(c.alpha) ? std::clamp(c.alpha, 0.0f, 1.0f) : 1.0f;
+            if (a < o.fade) o.fade = a;
+            if (c.spin_away) o.flags = static_cast<uint8_t>(o.flags | kSnapSpinAway);
+            continue;
+        }
+        if (!c.detached) continue;  // a live row whose store object is not in the snapshot (filtered or flushed)
+        if (!(c.alpha > 0.0f) || !table.valid(c.type) || table[c.type].model.empty()) continue;
+        bool dup = false;  // the same id twice in `corpses`
         for (auto k = end; k != snap.objects.end() && !dup; ++k) dup = k->id == c.id;
         if (dup) continue;
         const SnapshotTypeInfo& ti = table[c.type];
@@ -619,15 +649,7 @@ void add_snapshot_corpses(SimSnapshot& snap, const SnapshotTypeTable& table, std
         o.alt = damage_alt_index(ti, 0.0f);
         o.roll = std::isfinite(c.roll) ? c.roll : 0.0f;
         o.flags = static_cast<uint8_t>(kSnapDrawable | kSnapCorpse);
-        if (c.spin_away) {  // R3 spin-away motion (render-side [port] rates, sim_snapshot.hpp)
-            const float t = std::isfinite(c.spin_seconds) && c.spin_seconds > 0.0f ? c.spin_seconds : 0.0f;
-            const float yaw = kSpinAwayYawRate * t, cy = std::cos(yaw), sy = std::sin(yaw);
-            o.position = {c.position.x + c.facing.x * kSpinAwayDrift * t, c.position.y + c.facing.y * kSpinAwayDrift * t,
-                          c.position.z + c.facing.z * kSpinAwayDrift * t};
-            o.facing = {c.facing.x * cy - c.facing.y * sy, c.facing.x * sy + c.facing.y * cy, c.facing.z};
-            o.roll += kSpinAwayRollRate * t;
-            o.flags = static_cast<uint8_t>(o.flags | kSnapSpinAway);
-        }
+        if (c.spin_away) o.flags = static_cast<uint8_t>(o.flags | kSnapSpinAway);  // R3f t01: motion from the sim
         if (snap.mode == objects::ModeKind::Space && ti.in_background) o.flags = static_cast<uint8_t>(o.flags | kSnapBackground);
         o.hardpoint_first = static_cast<uint32_t>(snap.hardpoint_destroyed.size());
         o.hardpoint_count = 0;
@@ -640,7 +662,7 @@ void add_snapshot_corpses(SimSnapshot& snap, const SnapshotTypeTable& table, std
 void apply_snapshot_attitude(SimSnapshot& snap, const std::function<bool(ObjectId, float& roll, float& pitch)>& source) {
     if (!source) return;
     for (SnapshotObject& o : snap.objects) {
-        if ((o.flags & kSnapCorpse) != 0) continue;  // corpses keep their own (spin-away) roll
+        if ((o.flags & (kSnapCorpse | kSnapSpinAway)) != 0) continue;  // corpses keep their own (spin-away) roll
         float r = 0.0f, p = 0.0f;
         if (!source(o.id, r, p)) continue;
         o.roll = std::isfinite(r) ? r : 0.0f;
@@ -718,7 +740,18 @@ void apply_battle_state(const sim::TacticalBattle& battle, SimSnapshot& snap, co
     set_snapshot_hardpoint_events(snap, hp);
     // S7 t05: fighter / flyer roll and pitch (bike lean) from the movement system.
     apply_snapshot_attitude(snap, [&battle](ObjectId id, float& r, float& p) { return battle.unit_attitude(id, r, p); });
+    apply_battle_spin_wrecks(battle, snap);  // R3f t01: spinning death clones (store objects) take the sim's roll
     apply_battle_beams(battle, snap, beam_styles);  // R5 ability beams
+}
+
+void apply_battle_spin_wrecks(const sim::TacticalBattle& battle, SimSnapshot& snap) {
+    // (the sim keeps degrees: yaw -> the flat facing, pitch / roll -> radians like the movement attitude)
+    constexpr float kDegToRad = 0.017453292f;
+    std::vector<SnapshotSpinWreck> w;
+    for (const sim::SpinWreck& s : battle.spin_wrecks())
+        w.push_back({s.id, {s.position.x, s.position.y, s.position.z}, {std::cos(s.yaw * kDegToRad), std::sin(s.yaw * kDegToRad), 0.0f},
+                     s.roll * kDegToRad, s.pitch * kDegToRad});
+    apply_snapshot_spin_wrecks(snap, w);
 }
 
 void apply_battle_beams(const sim::TacticalBattle& battle, SimSnapshot& snap, const BeamStyleTable* styles) {

@@ -239,10 +239,10 @@ Lua `GameObjectWrapper.Play_Animation(name, loop[, index])` (0x57e6c0) calls it 
 | situation | where | type / index | loop | blend | speed | notes |
 |---|---|---|---|---|---|---|
 | **model created** | 0x3a4820 (object), 0x3be4b0 (copy) | default idle (below), index 0 | `Loop_Idle_Anim_00` (type +0x30) | 0 | `Idle_Anim_00_Rate_Mod` (type +0x1640, default 1.0) | then **random start frame** in [0, count−1]: synced RNG when the object's store has GOM +0x63E set (primary store), free RNG otherwise; 0x3be4b0 always uses the free RNG. No draw when the type has no clip [H] |
-| default idle type | 0x395920 | 71 Idle Crouch if the object is crouched (behaviour 7 query), else the container's mapping when garrisoned, else 0 | | | | [M] |
+| default idle type | 0x395920 | 71 Idle Crouch while unit ability 7 SPREAD_OUT is active, else the **presence-induced** idle (77 Attention / 78 Celebrate in vanilla) while a listed presence unit is near, else 0. There is no garrison/container mapping: see A.11 | | | | [L] |
 | **idle behaviour** | 0x62e570 | idle type | **0 (one-shot)** | 0 if the type is unchanged, else global 0x140b39930 | 1 | runs when the current clip is finished (mode 2), absent, or the crouch state changed. When the idle timer (frame ≥ +8) expired: variant = synced int in [1, count−1] (0 when only one clip) and the next timer = now + synced int in [210, 450] frames (7–15 s); otherwise variant 0. So `_IDLE_00` is the base loop, re-triggered as a one-shot, and `_01+` are fidgets [H] |
 | idle while engaged | 0x62e570 | 6 Attack Idle, index 0 | 0 | 0, or synced float [0.2, 0.75] when coming back from idle | 1 | entered when the current clip is Attack/Attack Idle/attack-like and finished. Combat timer = synced int [0, 30] + 90 frames [H] |
-| **flinch** | 0x62dde0 | 79–82, or 83–86 while attack-like/Attack Idle; chosen by the angle between the facing and the hit direction: < 45° back, 45–135° left/right by sign, > 135° front | 1 | `Max_Flinch_Blend_Seconds` (+0x20e8, default 0.25) | 1 | random variant (synced). Hold `Max_Flinch_Hold_Seconds` (+0x20ec, 0.5), then a cooldown of `Idle_/Attack_Flinch_Interval_Seconds` (+0x20f4 1.0 / +0x20f0 3.0) [H] for the flow, [M] for the direction naming |
+| **flinch** | 0x62dde0 (direct projectile hit), 0x62e040 (EXPLOSION objects) | 79–82 while idle-like, 83–86 while attack-like; **never in Attack Idle (6)**, which is in neither set; chosen by the angle between the facing and the hit direction: < 45° back, 45–135° left/right by sign, > 135° front | 1 | `Max_Flinch_Blend_Seconds` (+0x20e8, default 0.25) | 1 | random variant (synced). Hold `Max_Flinch_Hold_Seconds` (+0x20ec, 0.5), then a cooldown of `Idle_/Attack_Flinch_Interval_Seconds` (+0x20f4 1.0 / +0x20f0 3.0). Triggers and gates: A.12 [H] for the flow, [M] for the direction naming |
 | **walk / move** | 0x61f840 (WalkLocomotor) | 2 Move; 67 when crouched; 61 FIRE_MOVE when object +0x3a1 & 2 is set (burning [M]); 115 Deployed_Walk (speed `Deployed_Walk_Anim_Speed`); 66 WALKMOVE when the type has it and speed is below a threshold (global 0x140b16d04 × max speed) [M] | 1 | global 0x140b16d18 | `Movement_Animation_Speed` (+0x370) × max(current speed / max speed, minimum) | Move↔Walk switch keeps the phase: new frame = old frame × new count / old count. Otherwise the start frame is synced random [0, count−1]. The clip is restarted only when the type changes. The speed is refreshed every tick (0x3a7b70) [H] |
 | turn | 0x620190 | 3 / 4 by sign | 0 | computed | 1 | infantry turn time = angle / rate / 30 (MOVEMENT.md) [M] |
 | deploy / undeploy | 0x61e930 | 25 / 26, random variant | 0 | 0.0333 | `Deployment_Anim_Rate` (+0x1668) | [H] |
@@ -296,6 +296,263 @@ synced RNG [M].
 - Render side: evaluate the full pose from the sim state (type, index, frame, previous clip and frame, weight,
   overlay) and upload the palette (RENDER.md §4). Visual interpolation between ticks is an enhancement.
 - Drop clips whose bone count does not match (bind pose). Stop variant scanning at the first gap.
+
+### A.11 Default idle type (0x395920): crouch and presence-induced idle, not a garrison table (R3 t02)
+
+**There is no garrison/container mapping.** 0x395920 and its callees read no container, garrison slot or
+container kind. The "container" is the IDLE behaviour's presence map, filled by nearby IMPOSING_PRESENCE units.
+Agrees with TACTICAL_GAPS §6.2, with one correction (the movement/target gate, below). [L]
+
+**Result, in order** [L]:
+1. `Is_Unit_Ability_Active(obj, 7 SPREAD_OUT, 1)` (0x39b950, ABILITIES_HARDPOINTS §2.7) → **71 Idle Crouch**. "Crouched" is this
+   ability, not a behaviour. 0x3a3500 (the SPREAD_OUT toggle) immediately replays the default idle (blend 0.4,
+   loop = `Loop_Idle_Anim_00`).
+2. Else, when the object has IDLE data (obj +0xd8) and its presence map is not empty: pick a winner (below) and return
+   the anim type of the **first** `Presence_Induced_Animations` entry of the object's own type whose type list
+   contains the winner's type (0x373530). If no entry matches, it returns −1. That cannot happen in practice,
+   because entries are only created for listed types [M].
+3. Else **0 Idle**. (In this function 0 is the default for every object. Space types get their idle elsewhere.)
+
+**IDLE data (obj +0xd8), fields used here** [L]: +0x08 next fidget frame; +0x0c combat timer; **+0x10 presence
+map**, a hash map presence-object id → remaining frames (node list head +0x18, size +0x20, buckets +0x28, mask
++0x40; node: next +0, key +0x10, value +0x14; hash = Park–Miller of (id XOR 0xDEADBEEF) & 0x7FFFFFFF, the same as the
+GOM id map); +0x50 flinch timer, +0x58 flinch intensity, +0x5c pre-flinch anim type (A.12).
+
+**Winner selection** (one pass over the map's node list, in list order [M: list order = insertion order, not
+verified]) [L]:
+- Resolve each key with the GOM id lookup (0x2aca60 on obj +0x2b8). Ids that are no longer live are skipped, but
+  their entries stay until they time out.
+- A candidate replaces the best if there is no best yet or its remaining frames are **strictly greater**.
+- Otherwise (remaining ≤ best) it still replaces the best when the candidate's owner is allied with the object's owner
+  (relation == 0, 0x2823e0; self counts as allied) **and** the current best's owner is not. The best's remaining value
+  then drops to the candidate's, so a later non-allied entry with more frames can take over again. The result
+  depends on list order. Owners: the object's own owner id is obj +0x58; a candidate uses +0x58, or the planet
+  owner when it is a planet (+0x335 ≠ −1).
+- No owner filter is applied anywhere else: enemy presence units induce the idle too.
+
+**Writer: IMPOSING_PRESENCE service** (0x624ab0, interval 30, so it runs once a second; first due frame drawn from the synced RNG at attach,
+TACTICAL_GAPS §6.4) [L]:
+1. GOM-wide box query around the presence unit: centre = its position, half-extent = its `Presence_Range`
+   (type +0x1628, default 0) on all three axes. The box is a cube, not a circle. (R3f t06 [H]: the tree is
+   GOM +0xd8 (0x2ab640), which holds only `Collidable_By_Projectile_Living` objects, or `_Dead` ones while dying,
+   TACTICAL_COMBAT §1.5. `Query_AABB` 0x20e780 returns every object whose **tree box overlaps** the cube; there
+   is no centre-in-cube re-test, and the results are walked in the list order of TACTICAL_COMBAT §1.6.)
+2. Each result that is not dying/removed (+0x3a0 & 0x42 clear), whose type lists the presence unit's type in any
+   `Presence_Induced_Animations` entry (0x370630, type-pointer equality), and that has IDLE (+0x339 ≠ −1) goes
+   to 0x62e450.
+3. 0x62e450 tests the **affected unit**, not the presence unit (TACTICAL_GAPS §6.2 says "presence unit": wrong).
+   The unit gets no entry when its TARGETING behaviour (9) has a target (vf +0xe0). A unit without its own TARGETING uses its parent's
+   (obj +0x2b0) when its locomotor's vf +0x228 is true. The unit also gets no entry when it has a locomotor, its type has
+   `Allow_Idle_When_Moving` (+0x85) false and the locomotor reports moving (vf +0x110).
+4. Otherwise insert or refresh: map[presence id] = int(FPS × `Unit_Presence_Relaxation_Time`) (GameConstants
+   +0x117a8, default **5.0** s and not set in vanilla XML, so **150 frames**).
+
+**Maintenance in the IDLE service** (0x62e570, interval 1) [L]:
+- When the unit has a locomotor, `Allow_Idle_When_Moving` is false and it is moving, the map is **cleared**
+  (along with the flinch hold) and the service returns. Moving cancels Attention at once.
+- When its own TARGETING (or its parent's, as above) has a target, the map is cleared and the combat timer is set
+  (synced [0, FPS] + 90). This is the Attack Idle path of A.7.
+- Otherwise every entry is decremented by 1 each frame and removed at < 1. A presence unit therefore keeps its
+  entries between 120 and 150 frames old while it stays in range. They expire **150 frames** after it leaves,
+  dies or starts moving out of range. While several presence units are in range, the most recently refreshed
+  one usually wins.
+- Early return **before** the decrement for `Deploys` types (type +0xd1) while deployed or (un)deploying (0x39a400,
+  0x39b2a0, 0x39a390). Their entries are frozen, not aged. No vanilla list holder deploys [M].
+
+**Exact order of one IDLE service (R3f t06, 0x62e570)** [H]. These steps run every frame for every IDLE unit,
+**whether or not its presence map is empty**. A port whose presence system reports "nothing to do" for an empty
+map must still run steps 1, 4 and 5 on the host side.
+1. **Moving gate (`ClearedMoving`)**: locomotor present, type +0x85 = 0 and locomotor vf +0x110 true (see the
+   `Allow_Idle_When_Moving` gate below the XML table) → clear the map (0x365f10), set the flinch intensity
+   (IDLE +0x58) to 0 and **return**. Nothing else runs that frame: no flinch progress, no combat-timer decrement,
+   no idle replay. The pre-flinch type (+0x5c), the flinch timer (+0x50), the combat timer (+0xc) and the fidget
+   timer (+0x8) are left as they are. The "dropped flinch hold" is therefore only +0x58 := 0: a flinch still
+   blending in loses its hold stage. Once the unit stops, step 3 replays C as soon as the current type is not C
+   (the flinch timer has already expired, because a flinch only starts on an expired timer and the blend-in does
+   not re-arm it), or arms the cooldown when the current type is C (A.12). A flinch already in its hold keeps its
+   hold timer.
+2. `Deploys` (type +0xd1) and deployed / deploying / undeploying (0x39a400 / 0x39b2a0 / 0x39a390, all of which
+   need a locomotor) → return (before steps 3–5, so the map is neither aged nor cleared by a target).
+3. Flinch progress when +0x5c ≠ −1 (A.12). It sets the local "flinch busy" flag that step 5 reads.
+4. TARGETING lookup: own behaviour 9, else (none of its own) the parent's (obj +0x2b0) when the locomotor's
+   vf +0x228 is true (`LandTeamInfantryLocomotorBehaviorClass` returns 1: squad members use the squad's).
+5. a. **Has a target (`ClearedTarget`)** (vf +0xe0 returns exactly 1): combat timer +0xc := **synced
+   `Get_Int(0, FPS)` + 90**, drawn **every frame** while the target persists (range 30: rejection sampling with
+   mask 31, so one or more LCG steps per frame); clear the map; then, only when the current type C is 5, 6 or
+   attack-like **and** the clip is finished (mode 2) **and** the model has a type-6 clip: play 6 Attack Idle,
+   index 0, one-shot, blend 0, speed 1. No map aging, no combat-timer decrement that frame.
+   b. **No target**: age the map (−1, remove at < 1); combat timer −1 when ≠ 0; if "flinch busy" → return;
+   otherwise the idle logic of "Crouch, timer and fidgets" below (for C ∈ {5, 6} or attack-like: no TARGETING →
+   return; combat timer < 1 → play T, index 0, one-shot, blend global 0x140b39930; else play 6, index 0,
+   one-shot, blend synced `Get_Float(0.2, 0.75)`).
+
+**Crouch, timer and fidgets** (0x62e570, see the A.7 idle row) [L]:
+- The new type T = 0x395920 is compared with the current primary type C. If T ≠ C **and** their crouch class
+  (0x27b570: 67, 71, 72, 73) differs, the idle restarts at once, even mid-clip. Otherwise (for example 0 → 77,
+  77 → 0, 71 ↔ 71) it waits until the current clip has finished (mode 2) or is absent. Leaving SPREAD_OUT
+  is therefore immediate, and Attention starts only at the end of the current idle clip.
+- **Start timing of a presence idle (R3f t06)** [H for the rules, M for the tick offset]: nothing plays 77 / 78
+  when the entry is written. The entry only changes what 0x395920 returns. The IDLE service plays T on the first
+  frame on which no move / Deploys / flinch / target return happens and the current clip is finished (mode 2) or
+  absent. A looping clip (mode 1) never finishes, so a unit whose current idle loops never switches through this path.
+  It switches only when another 0x395920 caller replays the idle (locomotor stop / turn end, SPREAD_OUT,
+  ability end; "Other callers" below). All five vanilla affected types (`Stormtrooper`, `Scout_Trooper_No_Bike`,
+  `Imperial_Guard_Non_AI`, `Rebel_Trooper`, `Plex_Soldier`) have `Loop_Idle_Anim_00` = No (type +0x30, ctor
+  default 0), so their idles are one-shots. The switch therefore happens at the end of the current idle clip
+  (`_IDLE_00` or a fidget), or right after the unit stops walking. In 0x3a6b80 the behaviour services run before the
+  model advance, so the IDLE service sees the finished mode one frame after the advance that finished the clip.
+  The play uses blend = global 0x140b39930 (T ≠ C), one-shot, and the fidget-timer rule below. Because 77 / 78
+  are one-shot too, each end of the Attention / Celebrate clip re-evaluates T, and the unit returns to 0 when the
+  entries have expired.
+- The fidget timer applies to T unchanged. When the timer has expired, a synced variant in [1, count − 1] is drawn
+  (0 when T has a single clip, as `ATTENTION`/`CELEBRATE` do in vanilla) and the timer is re-armed with
+  synced [210, 450] frames. Otherwise variant 0 is used. Blend: 0 when T = C, else global 0x140b39930.
+- No clip for T: the play fails (A.4 step 4) and is retried every frame, so the unit **holds the last frame of
+  its finished idle** until the entries expire [M, derived from the play rules, not observed].
+
+**Other callers** (29 call sites) [L]: model creation 0x3a4820 (A.7 row 1), the SPREAD_OUT toggle 0x3a3500,
+the infantry locomotor stop and turn paths (0x61f510, 0x61f840, 0x61fc30, 0x6204f0, 0x62bef0, 0x62c420,
+0x62ca10), 0x42c920, 0x63a8e0, 0x641910 / 0x641df0 / 0x642740, and the ability end paths (0x6eeff0, 0x6f80d0,
+0x6f8260, 0x6fd880, 0x7003d0, 0x701c10, 0x70cb90 repair, 0x71ad50, 0x71ec30). Each one replays the default idle with
+loop = `Loop_Idle_Anim_00`. A port must call the same function from all of them.
+
+**XML fields** [L for the parser and offsets]:
+
+| field | where | parse / default |
+|---|---|---|
+| `Presence_Induced_Animations` | affected type +0x1610 (vector of 0x28-byte entries: anim type id +0, type-ref list +8 with array +0x10 and count +0x18, 16-byte elements with the type pointer at +8) | code 0x35: comma tokens. A token that converts as an anim type name starts a new entry, and any other token is a type name appended to the last entry's list. Several entries per tag and several tags are allowed. A variant re-parse clears the vector once per tag. Default **empty**: the type ctor 0x367250 zeroes begin/end/capacity +0x1610/+0x1618/+0x1620 [H] |
+| `Presence_Range` | presence type +0x1628 | float, default **0.0** [H]: ctor 0x367250 writes an 8-byte 0 over +0x1628..+0x162f; nothing later sets it. The "100" seen elsewhere is vanilla XML (`Emperor_Palpatine`, `Darth_Vader`: 100.0; the AT-AT death clones: 200.0), not a default. With 0 the query box is a point, so only objects whose tree box contains the presence unit's position are hit [M] |
+| `Allow_Idle_When_Moving` | affected type +0x85 | bool, default **false** [H]: ctor 0x367250 → 0x367100 (block at type +0x10) writes the 8 bytes 01 01 00 00 00 00 00 00 at type +0x83, so +0x83 = 1, +0x84 = 1 (`Can_Indigenous_Unit_Stop`), **+0x85 = 0**; no later write. Vanilla sets `Yes` only on ambient `Indigenous_Unit` types (FoC 8: `Bird_Black_Color`, `Bird_Medium_Color`, `Bird_Light_Color`, `Desert_Sketto`, `Dust_Devil`, `Bugs Swamp`, `Kamino_Aiwha`, `Utapau_Dactillion`; EaW 6). Every presence-affected infantry type uses the default. Gate: below the table |
+| `Induced_Flinch_Range` | explosion type +0x20e0 | float, default **100.0** (0x42c80000) [H, ctor 0x367250]; A.12 |
+| `Induced_Flinch_Intensity` | projectile / explosion type +0x20e4 | float, default **1.0** [H, ctor 0x367250]; A.12. The same ctor run also sets +0x20e8 0.25, +0x20ec 0.5, +0x20f0 3.0, +0x20f4 1.0 (the flinch blend / hold / interval fields of A.7) |
+| `Unit_Presence_Relaxation_Time` | GameConstants +0x117a8 | float s, default 5.0 |
+| `IMPOSING_PRESENCE` / `IDLE` | behaviour lists | the presence unit needs IMPOSING_PRESENCE (0x40); the affected unit needs IDLE (7) |
+
+**`Allow_Idle_When_Moving` gate (R3f t06)** [H unless tagged]. Type +0x85 has exactly two readers, both on the
+**affected** unit's own type: the entry insert 0x62e450 and the first test of the IDLE service 0x62e570 (no other
+`type + 0x85` read in the decompilation [M: aliased reads not searched]). Both test the same thing: the unit has a
+locomotor (behaviour 1), +0x85 is 0, and the locomotor's vf +0x110 returns true. Then 0x62e450 writes no entry and
+0x62e570 clears the map and returns (see "Maintenance in the IDLE service" above). With +0x85 = 1 neither test fires: entries are written and aged
+while moving, and the rest of the IDLE service runs as for a standing unit.
+- **"Moving" is "has movement orders", not "speed > 0".** vf +0x110 is 0x5abbf0 = vf +0x1c0(this, 0) on every
+  ground locomotor checked. `WalkLocomotorBehaviorClass` (vftable 0x8ad798) and the team container locomotor
+  (0x8a3630) use 0x42cbd0: false without a movement record (obj +0xa8), otherwise 0x5569f0(kind 0) = the record's
+  move list (+0x138..+0x140, 0x70-byte entries) is not empty [M: the decompiler drops the arguments of that call].
+  `LandTeamInfantryLocomotorBehaviorClass` (0x8af8d0, squad members) uses 0x62c980 instead: the **team container's**
+  (obj +0x2b0) locomotor vf +0x1c0(…, 0), so a squad member counts as moving while its squad has a move order.
+- No locomotor means never moving.
+
+**Vanilla data** (FoC and EaW `GROUNDINFANTRY.XML` identical; data):
+
+| affected type (and its `Variant_Of_Existing_Type` children, which inherit the list) | idle | presence types | clip |
+|---|---|---|---|
+| `Stormtrooper`, `Scout_Trooper_No_Bike` (anim override EI_TROOPER) | 77 Attention | `Emperor_Palpatine`, `Darth_Vader` (`Presence_Range` 100) | `EI_TROOPER_ATTENTION_00` |
+| `Imperial_Guard_Non_AI` (EI_RoyalGaurd) | 77 Attention | same | **none**, so the unit holds a frozen pose (above) [M] |
+| `Rebel_Trooper`, `Plex_Soldier` | 78 Celebrate | `AT_AT_Walker_Cable_Attack_Death_Clone`, `AT_AT_Walker_Death_Clone_00/01/02` (range 200; LandBehavior HIDE_WHEN_FOGGED, IMPOSING_PRESENCE) | `RI_INFANTRY_CELEBRATE_00`, `RI_PLEXSOLDIER_CELEBRATE_00` |
+
+- Matching compares type pointers. These presence units match no list, so they induce nothing:
+  `Darth_Vader_Expansion` (FoC, its own type, not a variant), `Darth_Vader_Bounty_Hunter_Immune` (a variant of
+  `Darth_Vader`) and `UM05_ADEPTGENERIC` with its variants (range 0). [L + data]
+- Because no owner filter exists, Rebel and Plex troopers celebrate next to any dying AT-AT clone, including one
+  from a captured AT-AT (`AT_AT_Walker_Captured` is a variant of `AT_AT_Walker`) [M].
+- **Port:** `SimAnimation::set_idle_type_hook` should implement steps 1–3 above. It should not look up a
+  garrison. "Not garrisoned" has no meaning here. The hook's `kNoAnimType` corresponds only to the
+  unreachable "no entry matched" case. Contained objects (obj +0x3a7) are frozen for animation (A.5).
+- **Garrisoned objects still collect presence entries (R3f t06)** [H]. Garrison entry (0x379d30 → 0x37ade0)
+  sets the parent (+0x2b0), hides the model, suspends TURRET, the locomotor (vf +0x200) and, when the host does not
+  let occupants fire, TARGETING / WEAPON. It removes the unit from a per-owner object **list** (0x2a6430, which uses the
+  list link at obj +0x18), sets +0x3a7 and leaves coordinators. It does **not** touch the tree link at obj +0x28, which
+  `Register_Object` 0x2b5ad0 puts into the per-player trees and the GOM +0xd8 tree. It does not move the unit
+  (it stays at its entry point near the host) and does not suspend IDLE. Neither 0x624ab0 nor 0x62e450 /
+  0x62e570 tests +0x3a7 (the GOM radius query 0x2a8fb0 does, TACTICAL_COMBAT §1.6, but presence does not use
+  it). So an occupant whose tree box overlaps a presence cube gets and refreshes entries. Its IDLE service
+  ages them (the suspended locomotor has no move orders [M], so the moving gate does not fire; a suspended
+  TARGETING has no target [M]). It cannot play the induced idle while inside: its clip is not advanced
+  (+0x3a7, A.5), so the mode never becomes "finished". The map is live again on exit. The same holds for a
+  garrisoned **presence** unit: its IMPOSING_PRESENCE service keeps querying from its stored position [M: not
+  traced beyond the absence of a +0x3a7 test]. Port: the presence box query must include garrisoned objects at
+  their stored position, and must exclude objects that are not in GOM +0xd8 (non-collidable types).
+
+### A.12 Which damage makes a unit flinch (0x62dde0, 0x62e040)
+
+Only two code paths flinch a unit. Each has exactly one caller (no vtable references) [L]:
+
+| source | path | victims | direction (D) | intensity → flinch +0x58 |
+|---|---|---|---|---|
+| **projectile hits an object** (sweep hit) | `Projectile::Step` 0x4d0080 or grenade flight 0x4ceea0 → `Process_Hit` 0x4cb280 → `Apply_Direct_Damage` 0x4c73d0 → 0x62dde0 | the object hit, if it has IDLE (+0x339 ≠ −1) | the projectile's last-move velocity (projectile data +0x98..+0xa0, S9_DEATH_CLONE_SHIELDS) | the projectile type's `Induced_Flinch_Intensity` (+0x20e4, default 1.0) |
+| **EXPLOSION object created** | `ExplosionBehaviorClass` Initialise (vf9 0x622440: push-out 0x621bb0, then 0x62e040) | every object with IDLE in a GOM-wide **cube** of half-extent `Induced_Flinch_Range` (explosion type +0x20e0, default **100**) around the explosion. No owner, dying or self filter | victim position − explosion position (3D) | clamp(I × (1 − 0.5 × d²_xy / R²), **0.25**, 1), with I = the explosion's `Induced_Flinch_Intensity` |
+
+- Vanilla EXPLOSION types (FoC `PARTICLES.XML`, 8): `Medium_/Large_/Huge_Explosion_Land`, `Remote_bomb`,
+  `Ewok_Suicide_Bomb_Explosion`, `Veers_Maximum_Firepower_Explosion_Land`, `p_orbital_impact`,
+  `p_orbital_impact_ion` (EaW: 4). No vanilla XML sets any `Induced_Flinch_*` or `*_Flinch_*` field, so the
+  defaults apply everywhere (data). Initialise does not run on load (TACTICAL_GAPS §6.4).
+- **No flinch** from these [L]:
+  - area/splash damage 0x4c7f70: it calls 0x4c73d0 with "area" = 1 and no hit position, which skips the whole visual and flinch block;
+  - ground or lifetime detonations (`On_Detonate` 0x4cb070, `Move_And_Expire` 0x4c7050, 0x4caea0) and remote-bomb detonation 0x280ec0, which only reach area damage;
+  - burning, crush, ability damage (Force lightning and the like), hardpoint damage, death damage 0x58f210: all of them call `Take_Damage` or area damage directly.
+
+  Hardpoints themselves have no IDLE. A projectile hit on a hardpointed unit flinches the unit, if the unit has IDLE and flinch clips.
+- **Direct-hit gates** in 0x4c73d0 [L]: flinch only when the hit was **not absorbed by shields**. Shield hits take
+  the shield-particle branch instead. With `Projectile_Damage_Delay_Secs` the flinch still happens at impact,
+  before the queued damage lands. Invulnerable or zero-damage hits are not excluded [M].
+- **Flinch gates** (both paths, the same code) [L]: IDLE data present; flinch timer +0x50 expired **and** +0x58 = 0
+  (no flinch in progress); type is not `Deploys` (+0xd1); the current primary type C is attack-like (0x27b4f0) or
+  idle-like (0x27b5e0: 0, 1, 71, 77, 78, 79–82). Moving, turning, Attack Idle (6), death, ability and cinematic
+  clips never flinch. Flinch set: 83–86 when C is attack-like, else 79–82. Δ = wrap(yaw(D) − facing yaw obj
+  +0x8c) into (−180°, 180°]: |Δ| < 45° → 82 / 86, 45°–135° → Δ > 0: 80 / 84, Δ < 0: 79 / 83, > 135° → 81 / 85. The model
+  must have a clip of that type (0x38f9e0). Play: index 0xFFFF (synced random variant), loop 1, blend `Max_Flinch_Blend_Seconds`
+  of the victim. On success: +0x58 = intensity, +0x5c = C.
+- **Flinch progress** in the IDLE service [L flow, M for the weight meaning]: once the blend-in weight (primary
+  slot +0x2c) reaches the intensity, or the crossfade has ended, the clip is frozen (speed 1e-4, 0x3a8120). The
+  flinch timer is set to `Max_Flinch_Hold_Seconds` × intensity and +0x58 is cleared. When that timer expires, C is replayed (random variant,
+  one-shot, blend `Max_Flinch_Blend_Seconds`, blend mode 3). When the model is back on C with the fade complete, the timer gets the cooldown
+  (`Attack_Flinch_Interval_Seconds` when C is attack-like or 6, else `Idle_Flinch_Interval_Seconds`) and +0x5c is cleared to −1.
+  An intensity below 1 is therefore a partial pose blend: explosion victims flinch weaker with distance, but at least 25 %.
+- **Correction to the bullet above (R3f t06)** [H for the reads and writes, M for the visual consequence]:
+  - The "weight" read is primary slot +0x2c (model +0xe4, copied by 0x395590 → 0x2647e0 from +0xb8). Every play
+    (0x265560) sets it to 0, and the advance (0x265280 / 0x2650f0) never writes it, so it is 0 in practice. Both
+    tests therefore reduce to **"the crossfade has ended"** (model +0x108 clear, 0x397040).
+  - 0x3a8120 writes model **+0x104**, the *previous* slot's speed. It does not touch the primary flinch clip. When
+    it runs the fade is already over, so it has no visible effect.
+  - The flinch clip keeps looping at speed 1 for the whole hold. **The intensity scales only the hold time**, not the
+    pose. An explosion victim at the edge flinches fully, but for 0.25 × the hold.
+  - Each stage only checks "current type == C?". Any clip that replaces the flinch (turn, move, ability, Lua)
+    leaves +0x58 / +0x5c in place, and the stages then run against that clip (next bullet).
+- **Timeline with the defaults** (projectile hit, I = 1; timers 0x4ad3a0: start = now, length = int(FPS × s);
+  expired when start + length ≤ now, 0x4ad350) [H for the values, M for the ±1 tick of the fade end]:
+  1. Hit at frame h: flinch plays, loop, blend 0.25 s (+0x108 set, remaining 0.25).
+  2. First IDLE service after the fade ends (about 8 frames): hold timer = int(30 × 0.5 × I) = 15; +0x58 := 0.
+  3. Hold expires: C is replayed, one-shot, blend 0.25, mode 3.
+  4. First IDLE service with the current type C and the fade over: cooldown = int(30 × 1.0) = 30 (idle) or
+     int(30 × 3.0) = 90 (C attack-like or 6); +0x5c := −1.
+  5. The next flinch is possible once that cooldown has expired (and +0x58 = 0, the gate above).
+  Throughout steps 1–4 the IDLE service returns before the idle replay ("flinch busy"). The presence map still ages,
+  and the target branch still runs (A.11, "Exact order").
+- **Turn-in-place cuts a playing flinch (R3f t06)** [H]. No turn path tests the flinch types, +0x58 or +0x5c.
+  Flinch plays are unlocked (lock 0, A.4 step 2), so any later unlocked play replaces the flinch.
+  - `WalkLocomotorBehaviorClass` turn state (0x620190): while the turn is not complete, when the current type is
+    **not** one of 3, 4, 21–24 (or is one of them but at its end: 0x39a180 = frame ≥ count − 2 − slot speed, or
+    finished). With type +0x36 = 0 (`Has_Pre_Turn_Anim` by the field table [M naming]): if the model has a type-3
+    clip, play 4 when Δyaw < 0, else 3, random variant, one-shot, blend min(|Δyaw| / turn rate × 0.03333, global
+    0x140b16d28). With +0x36 set: 0x6204f0 picks by |Δ|: ≥ 45° → 3 / 4, 22.5–45° → 21 / 23 (half), from a
+    threshold (type value 0x374310, or 10 while a non-kind-3 move entry is active) to 22.5° → 22 / 24 (quarter).
+    It plays the pick with blend global 0x140b39900 and speed 0x3736a0(type). Only below the threshold (the pick
+    is the default idle, idle-like) does it play nothing and end the turn.
+  - `LandTeamInfantryLocomotorBehaviorClass` (squad members, vf6 0x62ca10, states 0x10 and 0x29) → 0x62bef0:
+    when the current type is not a turn type (0x27b670: 3, 4, 21–24, 72, 73), play 3 / 4 (72 / 73 under
+    SPREAD_OUT, speed global 0x140a44304), random variant, **looped**, same blend formula, if the model has that
+    clip.
+  - Exact condition: the locomotor is in its turn state with turning left to do, the current primary type is not
+    already a running turn clip, and the model has the turn clip. A playing flinch (79–86) always meets the type
+    condition, so it is cut.
+  - After the cut, IDLE state stays. With a move order (the unit counts as moving) step 1 of A.11's order zeroes
+    +0x58 every frame and nothing else runs until the order ends. A stationary facing turn (no move order) keeps the
+    IDLE service running: once the turn clip's crossfade ends, a blend-in stage still pending arms the hold timer;
+    when it expires, **C is replayed over the turn clip** (unlocked). The turn state then re-plays its turn clip the
+    next frame if the turn is not complete. When the current type equals C again with no fade, the cooldown is
+    armed. The turn itself (rotation) is driven by the locomotor, not by the clip.
+- Vanilla models with flinch clips: EI_TROOPER, EI_DARKTROOPER_ONE, RI_INFANTRY, RI_PLEXSOLDIER, NI_PIRATEPLEX,
+  NI_TWILEK_F, NI_TWILEK_F_NOGUN (13–14 files each; asset catalog).
 
 ---
 
@@ -472,4 +729,6 @@ picks, and the lifetime in frames. [H]
    scalars are set through 0x173220 by planet corruption (`Particle_*_Per_Corruption_Level` lerps), weather,
    SurfaceFX, Lure, TransportLanding and a model API (STRATEGIC_GAPS §6.2). [H]
 4. Where `Space Idle` (1) is selected; the default-idle function never returns it. [L]
-5. The meaning of object +0x3a7 (animation advance skipped). [L]
+5. ~~The meaning of object +0x3a7 (animation advance skipped)~~ answered (R3f t06): garrisoned / contained flag,
+   set by garrison entry 0x37ade0 and cleared by eject 0x37a8d0 (L1_S4_REMAINING §3.5). Presence still applies to such
+   units (A.11). [H]
