@@ -389,9 +389,9 @@ static void test_abilities(const Db& db) {
     CHECK(run(vm, "s.Activate_Ability('TRACTOR_BEAM', t) prdy = s.Is_Ability_Ready('TRACTOR_BEAM')") == "");
     CHECK(a.pending_type(ship) == ab::kTractorBeam && a.pending_target(ship) == target && gtrue(vm, "prdy"));
     CHECK(w.combat->ordered_target(ship) == target);
-    // Position family (command 57): the host spawns the Dummy_Barrage_Target at the point.
-    CHECK(run(vm, "s.Activate_Ability('HARMONIC_BOMB', Create_Position(50, 60, 0))") == "");
-    CHECK(dummy_at.x == 50.0f && dummy_at.y == 60.0f && dummy_owner == 0);
+    // S7 t32 (AI_TACTICAL §7.3.3 part 6): HARMONIC_BOMB (35) is command 43 mode on with the argument ignored - no dummy.
+    CHECK(run(vm, "hb = s.Activate_Ability('HARMONIC_BOMB', Create_Position(50, 60, 0))") == "");
+    CHECK(dummy_owner == -9 && gnil(vm, "hb"));
     // Autofire: slot byte written directly.
     CHECK(run(vm, "s.Set_Single_Ability_Autofire('DEFEND', true) af = s.Is_Ability_Autofire('DEFEND') "
                   "s.Set_All_Abilities_Autofire(false) af2 = s.Is_Ability_Autofire('DEFEND')") == "");
@@ -450,6 +450,8 @@ static void test_abilities(const Db& db) {
     std::printf("  activate ability blocks: n1 %d n2 %d n3 %d d1 %d bz %d\n", gnil(vm, "n1"), gnil(vm, "n2"), gnil(vm, "n3"),
                 gnil(vm, "d1"), gnil(vm, "bz"));
     CHECK(gnil(vm, "n1") && gnil(vm, "n2") && gnil(vm, "n3") && !gnil(vm, "d1") && !gnil(vm, "bz") && a.is_active(ship, ab::kSpoilerLock));
+    // S7 t32: BUZZ_DROIDS (71) - the host spawns the Dummy_Barrage_Target at the point (command-40 path on it).
+    CHECK(dummy_at.x == 10.0f && dummy_at.y == 20.0f && dummy_owner == 0);
     CHECK(run(vm, "s.Activate_Ability('SPOILER_LOCK', false)") == "");
     // S7 t15 A1 / t26 (§7.3.3 item 2): the object block (TRACTOR_BEAM, accepted) is pending until the unit's next signal
     // 0x29 (ObjectBridge::ability_finished) or 0xb (order_replaced) or its death / removal (0x10). A signal before the
@@ -465,6 +467,21 @@ static void test_abilities(const Db& db) {
     CHECK(gtrue(vm, "f3") && !gtrue(vm, "f4") && bridge.ability_signals(ship) == signals0 + 1);
     bridge.order_replaced(ship);  // S7 t26: a new order (0xb) ends it too
     CHECK(run(vm, "f5 = ab2.IsFinished() f6 = ab1.IsFinished()") == "" && gtrue(vm, "f5") && gtrue(vm, "f6"));
+    {  // S7 t31 (§7.3.3 item 1): Activate_Ability of a listed id (BUZZ_DROIDS 71, gates passed) raises 0xb on the unit before
+       // executing, through the host's raiser (the battle): a pending block on the unit ends. TRACTOR_BEAM (30) is not listed.
+        std::vector<objects::ObjectId> raised;
+        bridge.raise_order_replaced = [&](objects::ObjectId id) {
+            raised.push_back(id);
+            bridge.order_replaced(id);
+        };
+        CHECK(run(vm, "ab4 = s.Activate_Ability('TRACTOR_BEAM', t) f9 = ab4 ~= nil and ab4.IsFinished()") == "");
+        CHECK(!gnil(vm, "ab4") && !gtrue(vm, "f9") && raised.empty());
+        CHECK(run(vm, "s.Activate_Ability('BUZZ_DROIDS', Create_Position(10, 20, 0)) f10 = ab4.IsFinished()") == "");
+        std::printf("  activate ability 0xb: raised %zu (ship %d), earlier block finished %d\n", raised.size(),
+                    !raised.empty() && raised[0] == ship ? 1 : 0, gtrue(vm, "f10") ? 1 : 0);
+        CHECK(gtrue(vm, "f10") && raised.size() == 1 && raised[0] == ship);
+        bridge.raise_order_replaced = nullptr;
+    }
     {  // death finishes the block (signal 0x10)
         const objects::ObjectHandle h2 = make(store, db.t("Ship"), 0, {0, -500, 0});
         w.add(store.id(h2), 0, 0, {0, -500, 0});

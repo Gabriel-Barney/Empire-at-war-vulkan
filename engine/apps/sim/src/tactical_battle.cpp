@@ -676,13 +676,15 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         infos[p].active = !bt_owner_neutral(static_cast<int32_t>(p));
     }
     combat_ = std::make_unique<tc::CombatSystem>(tables_->combat, cc, std::move(infos));
-    // [M] an Is_Neutral player attacks nobody (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"): its own row of
-    // the relation matrix is cleared, so its map structures (abandoned turrets) pick no targets until captured. The other
-    // players' rows keep it an enemy, so ordered attacks (Attack, an AI Attack_Move to the object) still reach its objects.
+    // S7 t30 (TACTICAL_COMBAT §2.10) [H]: the relation table (0 friendly, 1 enemy, 2 neutral) from the skirmish / campaign
+    // rules (bt_relation). Every combat path reads "enemy" = 1 (auto-target, formation target, the human attack, projectile
+    // hits, area damage, stun, turret drop), so a relation-2 player (Is_Neutral faction) is attacked by nobody and attacks
+    // nobody.
     for (uint32_t p = 0; p < players; ++p)
-        if (bt_owner_neutral(static_cast<int32_t>(p)))
-            for (uint32_t q = 0; q < players; ++q)
-                if (q != p) combat_->set_enemy(static_cast<int32_t>(p), static_cast<int32_t>(q), false);
+        for (uint32_t q = 0; q < players; ++q)
+            if (q != p)
+                combat_->set_enemy(static_cast<int32_t>(p), static_cast<int32_t>(q),
+                                   bt_relation(static_cast<int32_t>(p), static_cast<int32_t>(q)) == 1);
     combat_->reserve(256, 2048, 32, 256);
     attach_rocket_terrain();  // refixf t01
     combat_->set_trees(&mode.trees());  // S8 t06: between-tick detonations (also right after a load)
@@ -1293,6 +1295,7 @@ cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player,
     if (ids.empty()) return R::None;
     if (!queued) {
         clear_queues(ids);
+        raise_order_replaced(ids);  // S7 t31: signal 0xb
         exec_move(mode, ids, x, y, rng, facing_deg, attack_move, move_flags, switch_locomotor);
         return R::None;
     }
@@ -1309,6 +1312,7 @@ cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player,
     q.attack_move = attack_move;
     q.flags = move_flags;
     const std::vector<objects::ObjectId> now = enqueue(ids, q);
+    raise_order_replaced(now);  // S7 t31: the units that start it now
     if (!now.empty()) exec_move(mode, now, q.x, q.y, rng, q.facing, attack_move, move_flags);
     return R::None;
 }
@@ -1324,6 +1328,7 @@ cmd::RejectReason TacticalBattle::order_facing(TacticalMode& mode, uint8_t playe
     for (const Unit* u : own) {
         if (abilities_) abilities_->order_cancel(u->id, frame_);
         if (movement_locked(u->id)) continue;  // OI follow-up t03: the refused move path (§28.9 [M])
+        raise_order_replaced(u->id);  // S7 t31 [M: as Turn_To_Face 0x581cd0]
         const Vec3 p = st.position(u->h);
         mv::MoveOrder o;
         o.units = {u->id};
@@ -1351,6 +1356,7 @@ cmd::RejectReason TacticalBattle::order_attack(TacticalMode& mode, uint8_t playe
         for (const objects::ObjectId id : ids) abilities_->order_cancel(id, frame_);
     if (!queued) {
         clear_queues(ids);
+        raise_order_replaced(ids);  // S7 t31: signal 0xb
         exec_attack(mode, ids, t->id, hp, rng);
         return R::None;
     }
@@ -1360,6 +1366,7 @@ cmd::RejectReason TacticalBattle::order_attack(TacticalMode& mode, uint8_t playe
     q.target = t->id;
     q.hardpoint = hp;
     const std::vector<objects::ObjectId> now = enqueue(ids, q);
+    raise_order_replaced(now);  // S7 t31
     if (!now.empty()) exec_attack(mode, now, t->id, hp, rng);
     return R::None;
 }
@@ -1389,6 +1396,7 @@ cmd::RejectReason TacticalBattle::order_move_to_object(TacticalMode& mode, uint8
     q.y = p.y;
     q.attack_move = attack_move;
     const std::vector<objects::ObjectId> now = enqueue(ids, q);
+    raise_order_replaced(now);  // S7 t31: the MoveToObject executor raises 0xb
     if (!now.empty()) exec_move(mode, now, p.x, p.y, rng, mv::kNoFacing, attack_move);
     return R::None;
 }
@@ -3250,6 +3258,35 @@ void TacticalBattle::late_swap_back_signals() {
         ability_finished_.push_back(u.id);
         combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, false);
     }
+}
+
+// ---- S7 t31: signal 0xb (AI_TACTICAL §7.3.3 item 2, A1_READINGS §33.3) ----------------------------------------------
+
+uint32_t TacticalBattle::add_order_replaced_listener(OrderReplacedListener fn) {
+    const uint32_t token = next_listener_token_++;
+    order_replaced_listeners_.emplace_back(token, std::move(fn));
+    return token;
+}
+
+void TacticalBattle::remove_order_replaced_listener(uint32_t token) {
+    order_replaced_listeners_.erase(std::remove_if(order_replaced_listeners_.begin(), order_replaced_listeners_.end(),
+                                                   [token](const auto& l) { return l.first == token; }),
+                                    order_replaced_listeners_.end());
+}
+
+void TacticalBattle::raise_order_replaced(std::span<const objects::ObjectId> ids) {
+    if (order_replaced_listeners_.empty()) return;
+    const std::vector<std::pair<uint32_t, OrderReplacedListener>> ls = order_replaced_listeners_;  // a listener may unsubscribe
+    for (const objects::ObjectId id : ids)
+        for (const auto& l : ls)
+            if (l.second) l.second(id);
+}
+
+bool TacticalBattle::ability_raises_order_replaced(uint8_t ability) {
+    // 0x570a50 / 0x220ed0: 2 3 5 6 13 15 16 17 18 20 21 22 27 31 32 34 37 38 39 41 45 46 50 51 52 53 55 58 59 64 66 67 69 71 73 74
+    static constexpr uint8_t kIds[] = {2,  3,  5,  6,  13, 15, 16, 17, 18, 20, 21, 22, 27, 31, 32, 34, 37, 38,
+                                       39, 41, 45, 46, 50, 51, 52, 53, 55, 58, 59, 64, 66, 67, 69, 71, 73, 74};
+    return std::find(std::begin(kIds), std::end(kIds), ability) != std::end(kIds);
 }
 
 // ---- commands / owner ---------------------------------------------------------------------------------------------

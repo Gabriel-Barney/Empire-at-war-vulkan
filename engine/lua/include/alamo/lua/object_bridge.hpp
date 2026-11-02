@@ -260,6 +260,10 @@ public:
         if (const auto it = ability_signals_.find(id); it != ability_signals_.end()) ++it->second;
     }
     void order_replaced(objects::ObjectId id) { ability_finished(id); }
+    // S7 t31 (§7.3.3 item 1): Activate_Ability raises 0xb on the unit (and each TEAM member) before executing the ids of
+    // the list. Set: the host's raiser (the battle's listeners: every script world and the story bridge, each adds the
+    // TEAM container); unset: this bridge's order_replaced for the unit and its container.
+    std::function<void(objects::ObjectId)> raise_order_replaced;
     uint32_t ability_signals(objects::ObjectId id) const {
         const auto it = ability_signals_.find(id);
         return it == ability_signals_.end() ? 0u : it->second;

@@ -1667,8 +1667,8 @@ struct S4Run {
     CrcLog crc;
     bool garrison_flag = false, left = false, readded = false, bunker_taken = false, post_taken = false;
     bool fire_query = false, can_query = false, hero_changed = false, contained = false;
-    // a1f t07 (attack_sensor runs): the neutral sensor is a combat unit and a capture point, untouched by the target scan,
-    // killed by an attack order, then gone from the capture system.
+    // a1f t07 (attack_sensor runs): the neutral sensor is a combat unit and a capture point, untouched by the target scan;
+    // S7 t30: the attack order on it is refused (relation 2), so it stays alive and a capture point.
     bool sensor_combat = false, sensor_point = false, sensor_untouched = false, sensor_killed = false, sensor_point_removed = false;
     int attack_order = -1;
     float sensor_health = -1.0f;  // last health fraction seen
@@ -2013,8 +2013,9 @@ void test_s4_battle(const Data& d) {
     }
     // a1f t07: a map-placed neutral SELECTABLE capture structure (Secondary_Abandoned_Sensor stand-in) is a battle combat
     // unit as well as a capture point; the target scan skips the Is_Neutral player's objects (TACTICAL_COMBAT §2.2), so
-    // the Empire troopers next to it leave it alone until ordered; the attack order is accepted and kills it, and the dead
-    // point leaves the capture system.
+    // the Empire troopers next to it leave it alone. S7 t30 (TACTICAL_COMBAT §2.10): the Neutral player is relation 2, so
+    // the human attack order is refused too (the attack cursor needs relation 1): the sensor is never damaged and stays a
+    // capture point (taken by presence, not by attack).
     {
         const S4Run s = run_s4_battle(d, files, 0, 0, true);
         std::printf("  neutral sensor: combat %d, capture point %d, untouched %d, attack order %d, health %.2f, killed %d, point removed %d\n",
@@ -2022,7 +2023,8 @@ void test_s4_battle(const Data& d) {
                     static_cast<double>(s.sensor_health), s.sensor_killed ? 1 : 0, s.sensor_point_removed ? 1 : 0);
         for (const auto& m : s.battles) std::printf("  %s\n", m.c_str());
         CHECK(s.sensor_combat && s.sensor_point && s.sensor_untouched);
-        CHECK(s.attack_order == static_cast<int>(commands::RejectReason::None) && s.sensor_killed && s.sensor_point_removed);
+        CHECK(s.attack_order == static_cast<int>(commands::RejectReason::InvalidTarget) && !s.sensor_killed && s.sensor_health == 1.0f &&
+              !s.sensor_point_removed);
         const S4Run s4 = run_s4_battle(d, files, 4, 0, true);
         CHECK(!first_divergence(s.crc, s4.crc).diverged);
     }
@@ -3819,11 +3821,11 @@ void test_space_obstacle_orders() {
     CHECK(station_died && hp_hit && hull_hit);
 }
 
-// S7 t28 (TACTICAL_COMBAT §2.8 table, BATTLE_TRANSITIONS 0xb counting rule): AI orders on an object owned by the Is_Neutral
-// player (an unowned capture point) are not ordered attacks. The station goes to the Neutral player: the task force's
-// Attack_Move is refused (every member is armed), the explicit Attack too, and nobody gets it as attack goal; a single
-// unit's own Attack_Move (arg 0) is a plain move. Back with the Empire, the same task-force Attack_Move is accepted with
-// the station as every member's attack goal.
+// S7 t29 / t30 (TACTICAL_COMBAT §2.10): the relation table makes the Is_Neutral player relation 2 (not enemy) both ways.
+// The station goes to the Neutral player: a task-force Attack_Move on it is NOT refused - space keeps the object as the
+// goal, so every member moves there, but nobody gets it as attack goal (path B needs relation 1); the explicit AI Attack
+// and the human attack order are refused; a single unit's own Attack_Move (arg 0) is a plain move. Back with the Empire,
+// the same task-force Attack_Move is accepted with the station as every member's attack goal.
 void test_neutral_attack_move() {
     auto d = make_data(false, false, false, false, false, true);
     jobs::JobSystem js(jobs::JobSystemConfig{0});
@@ -3899,8 +3901,15 @@ void test_neutral_attack_move() {
         std::vector<uint32_t> wire;
         for (const objects::ObjectId a : attackers) wire.push_back(static_cast<uint32_t>(a));
         CHECK(b->change_owner(*tm, st.find(station), 2) && st.owner(st.find(station)) == 2);
+        const bool rel = !b->combat().is_enemy(1, 2) && !b->combat().is_enemy(2, 1) && b->combat().is_enemy(1, 0);
         const R tf_neutral = attack_move(attackers, ai::tactical::kTfAttackMoveIssueAttack);
+        bool tf_moved = true;
+        for (const objects::ObjectId a : attackers) {
+            const auto va = b->movement().view(a);
+            tf_moved = tf_moved && va.has_goal && std::abs(va.goal.x - sp.x) < 1500.0f && std::abs(va.goal.y - sp.y) < 1500.0f;
+        }
         const R atk_neutral = ai.execute(1, commands::ev::attack(static_cast<uint32_t>(station), wire));
+        const R human_neutral = b->order_attack(*tm, 1, attackers, station, host.random().synced());
         const bool goals_neutral = no_goal();
         const std::vector<objects::ObjectId> one = {attackers.front()};
         const R own_neutral = attack_move(one, 0u);
@@ -3911,11 +3920,13 @@ void test_neutral_attack_move() {
         const R tf_enemy = attack_move(attackers, ai::tactical::kTfAttackMoveIssueAttack);
         bool goals_enemy = true;
         for (const objects::ObjectId a : attackers) goals_enemy = goals_enemy && b->combat().attack_goal(a) == station;
-        std::printf("  neutral station: TF Attack_Move %d, Attack %d, goals none %d; own Attack_Move %d (moved %d, goals none %d); "
-                    "enemy again: TF Attack_Move %d, goals %d\n",
-                    static_cast<int>(tf_neutral), static_cast<int>(atk_neutral), goals_neutral ? 1 : 0, static_cast<int>(own_neutral),
-                    moved ? 1 : 0, goals_own ? 1 : 0, static_cast<int>(tf_enemy), goals_enemy ? 1 : 0);
-        CHECK(tf_neutral == R::InvalidTarget && atk_neutral == R::InvalidTarget && goals_neutral);
+        std::printf("  neutral station: relation 2 %d; TF Attack_Move %d (moved %d), Attack %d, human attack %d, goals none %d; own "
+                    "Attack_Move %d (moved %d, goals none %d); enemy again: TF Attack_Move %d, goals %d\n",
+                    rel ? 1 : 0, static_cast<int>(tf_neutral), tf_moved ? 1 : 0, static_cast<int>(atk_neutral),
+                    static_cast<int>(human_neutral), goals_neutral ? 1 : 0, static_cast<int>(own_neutral), moved ? 1 : 0,
+                    goals_own ? 1 : 0, static_cast<int>(tf_enemy), goals_enemy ? 1 : 0);
+        CHECK(rel);
+        CHECK(tf_neutral == R::None && tf_moved && atk_neutral == R::InvalidTarget && human_neutral == R::InvalidTarget && goals_neutral);
         CHECK(own_neutral == R::None && moved && goals_own);
         CHECK(tf_enemy == R::None && goals_enemy);
     }
@@ -5279,7 +5290,7 @@ int main(int argc, char** argv) {
     test_battle_ai_orders(*d);
     std::printf("refixf t02: SPACE_OBSTACLE station as a static entry, per-unit Lua orders as one group move\n");
     test_space_obstacle_orders();
-    test_neutral_attack_move();  // S7 t28
+    test_neutral_attack_move();  // S7 t29 / t30
     test_battle_ai_station_level(false);
     test_battle_ai_station_level(true);
     test_battle_ai_land_mode(false);

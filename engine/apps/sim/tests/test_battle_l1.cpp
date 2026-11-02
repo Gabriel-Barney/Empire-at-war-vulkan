@@ -847,12 +847,14 @@ void test_jet(const Data& d) {
 }
 
 // ---- S7 t26: DEPLOY raises "unit ability finished" (signal 0x29) at the deploy completion ----
-// (AI_TACTICAL §7.3.3 item 3) A deploy squad is ordered DEPLOY on, then off: each state change raises 0x29 once for the
-// trooper in the tick the command was applied (the port's deploy is instant; S8 t11 moves the hook to the end of its
-// window); a second DEPLOY on while deployed changes nothing and raises nothing.
+// (AI_TACTICAL §7.3.3 item 3) A deploy squad is ordered DEPLOY on, then off: each deploy / undeploy clip end raises 0x29
+// once for the trooper (S8 t11: oi_deploy_sync from the movement deploy events; the trooper has no deploy clip, so the
+// clip ends in the next tick) and only then is the ability active / inactive; a second DEPLOY on while deployed changes
+// nothing and raises nothing.
 struct DeployRun {
     bool fought = false, deployed = false, undeployed = false, repeat_refused = false;
     uint32_t on_frame = 0, off_frame = 0, signals = 0, signal_on = 0, signal_off = 0, other_signals = 0;
+    uint32_t deployed_at = 0, undeployed_at = 0;  // the frames Is_Active flipped (the clip ends)
 };
 DeployRun run_deploy(const Data& d) {
     DeployRun out;
@@ -906,14 +908,19 @@ DeployRun run_deploy(const Data& d) {
         out.fought = true;
         objects::ObjectStore& st = tm->primary();
         const uint32_t f = b->frame();
+        if (dep != objects::kNoObjectId && out.on_frame != 0 && b->combat().has_unit(dep)) {  // the clip ends: Is_Active flips
+            const bool act = b->abilities().is_active(dep, ab::kDeploy);
+            if (act && out.deployed_at == 0) out.deployed_at = f;
+            if (out.off_frame != 0 && !act && out.undeployed_at == 0) out.undeployed_at = f;
+        }
         for (const objects::ObjectId e : b->ability_finished_events()) {
             if (e != dep) {
                 ++out.other_signals;
                 continue;
             }
             ++out.signals;
-            if (f == out.on_frame + 1) ++out.signal_on;
-            if (out.off_frame != 0 && f == out.off_frame + 1) ++out.signal_off;
+            if (out.deployed_at != 0 && f == out.deployed_at) ++out.signal_on;
+            if (out.undeployed_at != 0 && f == out.undeployed_at) ++out.signal_off;
         }
         if (f == 1) {
             for (const objects::ObjectHandle h : st.owned_by(1))
@@ -924,12 +931,14 @@ DeployRun run_deploy(const Data& d) {
         if (dep == objects::kNoObjectId) continue;
         const objects::ObjectId ids[] = {dep};
         if (f == 10) {  // applied in the next tick's ability phase: the signal is in frame 11's events
-            out.deployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 1 && b->abilities().is_active(dep, ab::kDeploy);
+            out.deployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 1;
             out.on_frame = f;
         }
+        if (f == 15) out.deployed = out.deployed && b->abilities().is_active(dep, ab::kDeploy);
+        if (f == 35) out.undeployed = out.undeployed && !b->abilities().is_active(dep, ab::kDeploy);
         if (f == 20) out.repeat_refused = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 0;
         if (f == 30) {
-            out.undeployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, false, f) == 1 && !b->abilities().is_active(dep, ab::kDeploy);
+            out.undeployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, false, f) == 1;
             out.off_frame = f;
         }
         if (f >= 60) break;
@@ -939,11 +948,12 @@ DeployRun run_deploy(const Data& d) {
 
 void test_deploy(const Data& d) {
     const DeployRun r = run_deploy(d);
-    std::printf("  deploy: fought %d on %d (frame %u) repeat refused %d off %d (frame %u): %u signals (on %u, off %u), others %u\n",
-                r.fought, r.deployed, r.on_frame, r.repeat_refused, r.undeployed, r.off_frame, r.signals, r.signal_on, r.signal_off,
-                r.other_signals);
+    std::printf("  deploy: fought %d on %d (frame %u, deployed at %u) repeat refused %d off %d (frame %u, undeployed at %u): %u signals "
+                "(at the clip ends: on %u, off %u), others %u\n",
+                r.fought, r.deployed, r.on_frame, r.deployed_at, r.repeat_refused, r.undeployed, r.off_frame, r.undeployed_at, r.signals,
+                r.signal_on, r.signal_off, r.other_signals);
     CHECK(r.fought && r.deployed && r.repeat_refused && r.undeployed);
-    CHECK(r.signals == 2 && r.signal_on == 1 && r.signal_off == 1);
+    CHECK(r.signals == 2 && r.signal_on == 1 && r.signal_off == 1 && r.deployed_at > r.on_frame && r.undeployed_at > r.off_frame);
 }
 
 // ---- Int-final: build pads (L1_S4_REMAINING §3.6) and the weather factor of the fog sight (FOG_OF_WAR §3.1.1) ----

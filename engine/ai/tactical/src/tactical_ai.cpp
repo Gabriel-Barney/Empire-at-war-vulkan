@@ -2025,7 +2025,7 @@ int32_t TacticalAiWorld::Impl::unit_explore_area(int32_t script, ObjectHandle un
 // --- end L1 final ---
 
 int32_t TacticalAiWorld::Impl::tf_tactical_order(int32_t tf, lua::AiTacticalOrder order_kind, const lua::AiArg& dest,
-                                                  const lua::AiPoint& point, double, bool) {
+                                                  const lua::AiPoint& point, double number, bool) {
     TfRec* t = tf_rec(tf);
     if (!t) return -1;
     prune_tf(*t);
@@ -2053,6 +2053,12 @@ int32_t TacticalAiWorld::Impl::tf_tactical_order(int32_t tf, lua::AiTacticalOrde
                                   ? AiTacticalOrder::MoveTo
                                   : order_kind;
     if (k != AiTacticalOrder::GuardTarget && k != AiTacticalOrder::AttackMove) target_object = -1;
+    // S7 t33 (AI_TACTICAL §7.3 table, Move_To(dest [, threatTolerance [, useZonePath]]) 0x6ec410 / §7.3.1): the tolerance goes
+    // with the group move (Coordinator::Move_To threat tolerance, MOVEMENT REMAINING_GAPS §4.2). The binding passes -1 when
+    // the argument is absent [port: a negative tolerance is read as absent]. Land only: the space Move_To (0x6e7940) reads an
+    // optional speed / collision-avoidance argument instead.
+    if (order_kind == AiTacticalOrder::MoveTo && cfg.mode == TacticalMode::Land && number >= 0.0)
+        return issue_move(*t, k, p, target_object, static_cast<float>(number));
     return issue_move(*t, k, p, target_object);
 }
 

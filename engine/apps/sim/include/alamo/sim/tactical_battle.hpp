@@ -317,6 +317,19 @@ public:
     // back to the primary locomotor (MOVEMENT §3.1.1 step 6, seen as the end of the weapons suspension before the combat
     // tick, or at the end of the tick when the swap runs after that point: S7 t27). The tactical AI and the story bridge read it.
     std::span<const objects::ObjectId> ability_finished_events() const { return ability_finished_; }
+    // S7 t31 - object signal 0xb "a new order replaces this unit's order" (AI_TACTICAL §7.3.3 item 2, A1_READINGS §33.3),
+    // raised synchronously on each unit an order takes: the human / story orders (order_move / _facing / _attack /
+    // _move_to_object / _stop, garrison enter / exit), ability commands 40 / 43 / 57 of the 0xb ability ids (before
+    // executing; also on the TEAM members), the tactical AI's executed orders (BattleAi) and Lua Activate_Ability
+    // (ObjectBridge::raise_order_replaced). Listeners (the tactical AI world, the story bridge) get the unit id and add its
+    // TEAM container themselves. Not saved: nothing is pending between calls.
+    using OrderReplacedListener = std::function<void(objects::ObjectId)>;
+    uint32_t add_order_replaced_listener(OrderReplacedListener fn);
+    void remove_order_replaced_listener(uint32_t token);
+    void raise_order_replaced(std::span<const objects::ObjectId> ids);
+    void raise_order_replaced(objects::ObjectId id) { raise_order_replaced(std::span<const objects::ObjectId>(&id, 1)); }
+    // True for the ability ids whose command raises 0xb on the unit before executing (0x570a50 list, §7.3.3 item 1).
+    static bool ability_raises_order_replaced(uint8_t ability);
     // The Dummy_Barrage_Target of a position-targeted ability for `player` (command 57; Lua Activate_Ability with a
     // position through ObjectBridge::spawn_ability_target). Returns its id, kNoObjectId when the type is missing.
     objects::ObjectId spawn_dummy_target(TacticalMode& mode, int32_t player, Vec3 at, SimRng& rng);
@@ -1135,6 +1148,8 @@ private:
     std::vector<AttachedEffect> effects_;
     std::vector<objects::ObjectId> story_reinforced_;  // L1/S4 wave 2b: reserve units deployed this tick
     std::vector<objects::ObjectId> ability_finished_;  // S7 t15 A1: signal 0x29 this tick (not saved: read the same tick)
+    std::vector<std::pair<uint32_t, OrderReplacedListener>> order_replaced_listeners_;  // S7 t31: token order
+    uint32_t next_listener_token_ = 1;
     // --- S4 garrisons / capture (owner: S4 agent; tactical_battle_garrison.cpp; no-ops without the garrison lib) ---
     std::vector<StoryGarrisonEvent> story_garrisoned_;
     std::vector<StoryCaptureEvent> story_captured_;
@@ -1358,6 +1373,9 @@ private:
     void bt_place_forces(TacticalMode& mode, SimRng& rng);  // setup: §3.2 steps 1-7 + the start-force deploys
     bool bt_owner_valid(int32_t owner) const;
     bool bt_owner_neutral(int32_t owner) const;  // owner's faction Is_Neutral
+    // S7 t30 (TACTICAL_COMBAT §2.10): the start value of the relation table entry (row p, column q): 0 friendly, 1 enemy,
+    // 2 neutral. Skirmish (cfg_.skirmish) or campaign rules; the combat matrix's enemy flag = (value == 1).
+    int32_t bt_relation(int32_t p, int32_t q) const;
     int32_t bt_map_owner(uint32_t raw) const;    // .ted owner (faction index) -> player [probe 2026-10-29]; -1 = unknown
     void s4_capture_grant(TacticalMode& mode, objects::ObjectId point, int32_t owner);  // landing point -> attacker
     void bt_kill_silently(TacticalMode& mode, objects::ObjectHandle h);  // 0x391310 flag 1 (no death events)

@@ -230,6 +230,12 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
         fog_hooks_.object_hidden = [bt, bid](objects::ObjectHandle o, int32_t player, bool force) {
             return bt->fog_object_hidden(player, bid(o), force);
         };
+        // S7 t34: the AI VMs' FogOfWar.* (Reveal_All in BurnUnits' fire sale, Reveal, Temporary_Reveal) run on the
+        // battle's fog, as the story VMs' (CampaignBattles::story_begin); before, `fog` stayed null and every call was a
+        // "Command only valid in a tactical game" SCRIPT ERROR. Null when the battle runs without fog (BattleConfig::fog).
+        // [port] the AI VMs' FOWCells handles are not in the save (none of the shipped AI scripts keeps one).
+        fog_hooks_.fog = bt->fog();
+        fog_hooks_.object = [bt, bid](objects::ObjectHandle o, tactical::fog::FogObject& out) { return bt->fog_object(bid(o), out); };
         k.fog = &fog_hooks_;
 #endif
         br.tactical = &tactical_;
@@ -243,9 +249,22 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     at::TacticalAiWorld* aw = world_.get();
     b_->set_fog_refog([aw](int32_t player, uint32_t, float x, float y) { aw->refog(player, x, y); });
 #endif
+    // S7 t31 (AI_TACTICAL §7.3.3 items 1-2): signal 0xb from every host (AI orders, human commands, story orders, Activate_Ability
+    // of any VM) reaches this world's ability / movement blocks; this world's Activate_Ability raises it through the battle.
+    at::TacticalAiWorld* ow = world_.get();
+    order_listener_ = b_->add_order_replaced_listener([ow](objects::ObjectId id) { ow->order_replaced(static_cast<int32_t>(id)); });
+    br.raise_order_replaced = [bt](objects::ObjectId id) { bt->raise_order_replaced(id); };
+    // S7 t32 (AI_TACTICAL §7.3.3 part 6): Activate_Ability of ids 50 67 71 73 74 (and the port's JET_PACK point) on a
+    // Dummy_Barrage_Target, as the story VMs (CampaignBattles::story_begin); before, the AI VMs sent the event instead.
+    {
+        TacticalMode* md = &mode;
+        SimHost* hs = &host;
+        br.spawn_ability_target = [bt, md, hs](Vec3 p, int32_t owner) { return bt->spawn_dummy_target(*md, owner, p, hs->random().synced()); };
+    }
 }
 
 BattleAi::~BattleAi() {
+    b_->remove_order_replaced_listener(order_listener_);
     if (b_->movement_) b_->movement_->set_threat_fn({});  // the battle outlives its AI
     b_->set_script_movement_lock(this, {});
 #ifdef ALAMO_SIM_HAVE_FOG
@@ -819,9 +838,10 @@ void BattleAi::follow_service() {
 // S7 t26 (AI_TACTICAL §7.3.3 item 2, A1_READINGS §33.3): the orders executed here (group / unit moves, MoveToObject, attack,
 // the Lua object orders Move_To / Attack_Move / Guard_Target / Stop) raise signal 0xb on each unit they take (TEAM
 // containers: their members; the world adds the container), which ends the Activate_Ability blocks waiting on it.
-// [port] Orders of other hosts (human commands, story pipelines) do not raise it yet.
+// S7 t31: raised through TacticalBattle::raise_order_replaced, as the human commands and the story orders are.
 bool BattleAi::hostile_owner(uint8_t player, int32_t owner) const {
-    return b_->combat_->is_enemy(static_cast<int32_t>(player), owner) && !b_->bt_owner_neutral(owner);
+    // S7 t30: the relation table (TACTICAL_COMBAT §2.10) already makes an Is_Neutral player relation 2 (not enemy).
+    return b_->combat_->is_enemy(static_cast<int32_t>(player), owner);
 }
 
 void BattleAi::order_signals(uint8_t player, const cmd::EventData& ev) {
@@ -848,10 +868,8 @@ void BattleAi::order_signals(uint8_t player, const cmd::EventData& ev) {
     std::vector<objects::ObjectId> done;
     for (const uint32_t w : wire)
         for (const objects::ObjectId id : team_units(player, w))
-            if (std::find(done.begin(), done.end(), id) == done.end()) {
-                done.push_back(id);
-                world_->order_replaced(id);
-            }
+            if (std::find(done.begin(), done.end(), id) == done.end()) done.push_back(id);
+    b_->raise_order_replaced(done);  // S7 t31: every listener (this world, the story bridge)
 }
 
 cmd::RejectReason BattleAi::execute(uint8_t player, const cmd::EventData& ev) {
@@ -993,6 +1011,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             const TacticalBattle::Unit* u = b_->unit_by_id(group.units.front());
             float x = std::bit_cast<float>(le32(b, 8)), y = std::bit_cast<float>(le32(b, 12));
             const uint32_t tw = le32(b, 4);
+            bool point_goal = false;  // S7 t29 rework: a land Attack_Move on a non-hostile object goes to its position
             if (tw != cmd::kNoObject) {
                 const objects::ObjectHandle th = tw <= 0x7FFFFFFFu ? st.find(static_cast<objects::ObjectId>(tw)) : objects::ObjectHandle{};
                 if (!st.alive(th)) {
@@ -1005,19 +1024,12 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 const TacticalBattle::Unit* tu = b_->unit_by_id(static_cast<objects::ObjectId>(tw));
                 const bool attackable = tu && tu->alive && !tu->retreated && b_->combat_->has_unit(tu->id);
                 if (order == lua::LuaOrder::AttackMove && attackable && !hostile_owner(player, st.owner(tu->h))) {
-                    // S7 t28 (TACTICAL_COMBAT §2.8 table, "TF.Attack_Move(non-hostile object)"): Order_Attack is refused for
-                    // every armed member, so only unarmed members move (none -> the order fails and the units keep their
-                    // auto targets); no path B (Formation_Attack_Target needs a hostile object). An object's own Attack_Move
-                    // (arg 0) issues no Order_Attack: a plain move to the object.
-                    if (le32(b, 20) & at::kTfAttackMoveIssueAttack) {
-                        std::vector<objects::ObjectId> kept;
-                        for (const objects::ObjectId id : group.units)
-                            if (!b_->combat_->has_unit(id) || !b_->combat_->can_attack(id)) kept.push_back(id);
-                        if (kept.empty()) return R::InvalidTarget;
-                        group.units = std::move(kept);
-                        u = b_->unit_by_id(group.units.front());
-                    }
+                    // S7 t29 rework (TACTICAL_COMBAT §2.10 "Task-force Attack_Move on a non-hostile object"): not refused.
+                    // Land (0x6e9440): the goal is the object's position, an attack-move to that point; space (0x6e4fc0): the
+                    // object stays the goal. No Order_Attack, no formation attack target (path B needs relation 1): the units
+                    // go there, auto-engage on the way and never attack the object itself.
                     for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
+                    point_goal = !b_->space_;
                 } else if (order == lua::LuaOrder::AttackMove && attackable) {
                     // refixf t06 (TACTICAL_COMBAT §2.8): an Attack_Move on an object. A: a task-force order (arg bit, header)
                     // issues Order_Attack (ordered 1) to every unit now; a refusing unit is dropped from the move, none left
@@ -1068,11 +1080,12 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             const uint8_t fflags = order == lua::LuaOrder::AttackMove ? mv::kMoveFlagAttackMove
                                    : order == lua::LuaOrder::Guard    ? mv::kMoveFlagGuardMove
                                                                       : uint8_t{0};
-            const objects::ObjectId fobj =
-                tw != cmd::kNoObject && order != lua::LuaOrder::MoveTo ? static_cast<objects::ObjectId>(tw) : objects::kNoObjectId;
+            const objects::ObjectId fobj = tw != cmd::kNoObject && order != lua::LuaOrder::MoveTo && !point_goal
+                                               ? static_cast<objects::ObjectId>(tw)
+                                               : objects::kNoObjectId;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
-            if (tw != cmd::kNoObject) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
+            if (tw != cmd::kNoObject && !point_goal) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
                 const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
                 follow_add(group.units, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt);
             }
