@@ -42,6 +42,8 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti, flo
                                 locomotor_kind_from_token(t.get_string(ti, "Primary_Locomotor_Name")) != LocomotorKind::Jetpack;
     d.alt_max_speed = t.get_float(ti, "Alternate_Max_Speed");  // unconditional: the type defaults are 1.0 / 2.0
     d.alt_turn_rate = t.get_float(ti, "Alternate_Max_Rate_Of_Turn");
+    // S8 t11: Deployment_Anim_Rate, unset -> the type ctor's 1.0 (MOVEMENT §3.2).
+    if (t.value(ti, objects::find_type_field("Deployment_Anim_Rate")) != nullptr) d.deployment_anim_rate = t.get_float(ti, "Deployment_Anim_Rate");
     // OI tactical: stagger, jiggle and crush fields (MOVEMENT.md §1.6, §3.5 step 6, §5.5).
     d.path_frame_delay = t.get_int(ti, "PathFrameDelay");
     d.formation_raggedness = t.get_float(ti, "FormationRaggedness");

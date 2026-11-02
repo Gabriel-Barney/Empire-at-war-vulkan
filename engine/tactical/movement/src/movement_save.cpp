@@ -30,7 +30,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 5;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap
+constexpr uint32_t kMovementSaveVersion = 6;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate
 
 // u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
 template <class F>
@@ -66,6 +66,9 @@ bool valid_loco_state(uint8_t v) {
         case LocoState::WalkMoving:
         case LocoState::WalkEndMove:
         case LocoState::WalkStopped:
+        case LocoState::WalkDeploying:
+        case LocoState::WalkDeployed:
+        case LocoState::WalkUndeploying:
         case LocoState::FighterMoving:
         case LocoState::FighterIdle:
         case LocoState::FighterIdleCombat:
@@ -298,6 +301,7 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.e8(d.secondary_locomotor, valid_locomotor);
     io.f32(d.alt_max_speed);
     io.f32(d.alt_turn_rate);
+    io.f32(d.deployment_anim_rate);  // S8 t11 (version 5)
 }
 
 template <class IO, class T>
@@ -430,6 +434,10 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io_special_params(io, u.sp);
     io.e8(u.primary_locomotor, valid_locomotor);  // S7 t06 (version 2): d.locomotor is the active one
     io.b(u.on_secondary);
+    io.e8(u.deploy, valid_loco_state);  // S8 t11 (version 5)
+    io.i32(u.dclip);
+    io.u32(u.dclip_start);
+    io.f32(u.dclip_pos0);
     io_fighter(io, u.fs);
     io.f32(u.fp.max_thrust);
     io.f32(u.fp.min_follow_distance);

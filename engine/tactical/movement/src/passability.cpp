@@ -199,6 +199,8 @@ void PassabilityGrid::recompute_all() {
 
 void PassabilityGrid::sample_cells(const ObstacleFootprint& fp, std::vector<uint32_t>& out) const {
     out.clear();
+    // S8 t13 (MOVEMENT §1.3): a zero width or height (no XML size, no model) samples nothing.
+    if (!(fp.width > 0.0f) || !(fp.height > 0.0f)) return;
     const V2 dir = dir_from_deg(fp.yaw_deg);
     const V2 left = perp_left(dir);
     // Samples every 10 world units on both axes, both edges included (§1.3).

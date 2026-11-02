@@ -71,6 +71,9 @@ struct UnitDesc {
     // formation speed; the take-off turn (0x10), landing (0x14) and stopped (0x16) use Max_Speed / Max_Rate_Of_Turn.
     float alt_max_speed = 1.0f;
     float alt_turn_rate = 2.0f;
+    // S8 t11 (MOVEMENT §3.2 "Deploy states"): Deployment_Anim_Rate (+0x1668, type ctor default 1.0), the speed of the
+    // Walk locomotor's deploy / undeploy clips (MovementSystem::deploy).
+    float deployment_anim_rate = 1.0f;
 };
 
 // Fills the type-derived members (id / position / yaw are left to the caller). `model_radius`

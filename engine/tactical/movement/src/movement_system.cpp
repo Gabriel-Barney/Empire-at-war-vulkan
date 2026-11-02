@@ -174,6 +174,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.airborne = u.sm.airborne;
     attitude(id, v.roll, v.pitch);
     if (is_fighter(u)) v.fighter_phase = u.fs.phase;
+    v.deploy_state = u.deploy;  // S8 t11
     return v;
 }
 
@@ -1002,7 +1003,8 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             if (is_air(u)) continue;  // §4.3-4.6: serial pass below
             const bool bike = u.d.locomotor == LocomotorKind::Bike;
             const float yaw0 = u.m.yaw;
-            if (!u.has_goal || u.need_path || frame < u.start_frame) {
+            // S8 t11: a Walk in a deploy state does not move (MovementSystem::deploy).
+            if (!u.has_goal || u.need_path || frame < u.start_frame || u.deploy != LocoState::None) {
                 if (bike) bike_frame(u, yaw0, false);
                 continue;
             }
@@ -1016,6 +1018,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
         }
     });
     tick_special(frame, rng);  // §4.3, 4.4, 4.6: serial, ascending id
+    tick_deploy(frame);        // S8 t11: Walk deploy states (serial, ascending id)
     for (size_t i = 0; i < units_.size(); ++i) {
         Unit& u = units_[i];
         if (is_air(u)) {
@@ -1225,6 +1228,7 @@ void MovementSystem::hash_units(StateHasher& h) const {
     if (cfg_.mode == MoveMode::Land) coll_.hash(h);  // S7 collision layer (land only: the space format is unchanged)
     hash_special(h);  // §4.2-4.7: appended only when used (the format is unchanged otherwise)
     hash_fighters(h);  // FIGHTER_FLYING: appended only with space fighters / squadrons
+    hash_deploy(h);    // S8 t11: appended only while a Walk is in a deploy state / has a deploy clip
 }
 
 void MovementSystem::register_crc(CrcRegistry& registry, const std::string& name) const {

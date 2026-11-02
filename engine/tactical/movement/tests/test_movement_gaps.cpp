@@ -1659,6 +1659,46 @@ static void test_space_avoid() {
         CHECK(avoid_precise_segment(po, a, b, 5u, 0u, h) && h.t == 0.0f && h.mesh == -1);
     }
 
+    // S8 t13 (MOVEMENT §1.3 "Ray mesh set"): the Fine_Tune stamping ray (vf +0x80 mode 0, mask 1) - any collision mesh
+    // whose bone is visible; COLLISIONBOX and the collide switch play no part.
+    {
+        AvoidModel floor;
+        AvoidModel::Mesh m;
+        m.lo = {-10.0f, -10.0f, 0.0f};
+        m.hi = {10.0f, 10.0f, 0.0f};
+        m.tris = {{-10.0f, -10.0f, 0.0f}, {10.0f, -10.0f, 0.0f}, {10.0f, 10.0f, 0.0f},
+                  {-10.0f, -10.0f, 0.0f}, {10.0f, 10.0f, 0.0f}, {-10.0f, 10.0f, 0.0f}};
+        m.name = "COLLISION_ALT0";  // hidden in the file (the builder keeps it: collision flag), bone visible
+        floor.meshes.push_back(m);
+        AvoidObstacle fo;
+        fo.pos = {200.0f, 200.0f, 5.0f};
+        fo.model = &floor;
+        avoid_place(fo);
+        auto ray = [&](float x, float y) { return avoid_ray_any(fo, {x, y, -1000.0f}, {x, y, 1000.0f}); };
+        CHECK(ray(200.0f, 200.0f) && ray(209.0f, 191.0f) && !ray(215.0f, 200.0f));
+        fo.collide = false;  // contained / collide switch off: the ray still hits
+        CHECK(ray(200.0f, 200.0f));
+        floor.has_collision_box = true;  // a COLLISIONBOX off the segment changes nothing (the precise test would miss)
+        floor.cbox_c = {500.0f, 500.0f, 0.0f};
+        floor.cbox_h = {1.0f, 1.0f, 1.0f};
+        AvoidSegmentHit h;
+        CHECK(ray(200.0f, 200.0f) && !avoid_precise_segment(fo, {200.0f, 200.0f, -1000.0f}, {200.0f, 200.0f, 1000.0f}, 1u, 0u, h));
+        floor.meshes[0].bone_visible = false;  // a mesh whose bone is hidden at run time is skipped
+        CHECK(!ray(200.0f, 200.0f));
+        AvoidModel::Mesh m2 = m;  // a second, visible mesh (model x + 30 = world y + 30) decides alone
+        for (F3& p : m2.tris) p.x += 30.0f;
+        m2.lo.x += 30.0f;
+        m2.hi.x += 30.0f;
+        floor.meshes.push_back(m2);
+        CHECK(!ray(200.0f, 200.0f) && ray(200.0f, 230.0f));
+        floor.meshes[1].shield = true;  // SHIELD mesh: skipped only for a type with the shield behaviour
+        CHECK(ray(200.0f, 230.0f));
+        fo.skip_shield = true;
+        CHECK(!ray(200.0f, 230.0f));
+        fo.model = nullptr;
+        CHECK(!avoid_ray_any(fo, {200.0f, 200.0f, -1000.0f}, {200.0f, 200.0f, 1000.0f}));
+    }
+
     // The query: overlap (inclusive) with the box around the fighter, then the first hit decides.
     F3 hit;
     const std::vector<AvoidObstacle> one{wo};
@@ -1761,6 +1801,149 @@ static void test_determinism() {
     if (kGoldenMixed != 0) CHECK(g == kGoldenMixed);
 }
 
+// S8 t11 / t12 (MOVEMENT §3.2 "Deploy states", ABILITIES_HARDPOINTS §4.13): the Walk deploy window. Clip 0x19 / 0x1A
+// with 30 frames at 30 fps: step = 1 x Deployment_Anim_Rate, end at position >= 30 - 2 - step.
+static void test_deploy() {
+    using DR = MovementSystem::DeployResult;
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+    UnitDesc fast = trooper(2, cell_center(10, 30));
+    fast.deployment_anim_rate = 2.0f;
+    CHECK(sys.add_unit(fast));
+    CHECK(sys.add_unit(unit(3, cell_center(10, 50), 0, 2.0f, 6.0f, LocomotorKind::Jetpack)));
+    sys.set_deploy_clip_fn([](ObjectId, int32_t anim, uint32_t& n, float& fps) {
+        if (anim != 0x19 && anim != 0x1A) return false;
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    bool turret_rest = true;
+    sys.set_turret_rest_fn([&turret_rest](ObjectId id) { return id != 1 || turret_rest; });
+    SimRng rng(7);
+    auto finished_at = [&](ObjectId id, LocoState to, uint32_t from, uint32_t limit) {
+        for (uint32_t f = from; f < limit; ++f) {
+            sys.tick(f, rng);
+            for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+                if (e.id == id && e.to == to && e.finished) return f;
+        }
+        return 0xFFFFFFFFu;
+    };
+    // Only Walk deploys; unknown units are NoWalk too.
+    CHECK(sys.deploy(3, true, 0) == DR::NoWalk && sys.deploy(99, true, 0) == DR::NoWalk && sys.deploy(1, false, 0) == DR::Ignored);
+    // A moving unit stops; Deploy(true) at frame 10 -> 0x18 now, 0x19 when the clip ends (10 + 27 at rate 1).
+    MoveOrder o;
+    o.units = {1, 2};
+    o.destination = cell_center(60, 10);
+    sys.move(o, rng, 0);
+    for (uint32_t f = 0; f < 10; ++f) sys.tick(f, rng);
+    CHECK(sys.deploy(1, true, 10) == DR::Deploying && sys.deploy(2, true, 10) == DR::Deploying);
+    CHECK(sys.deploy(1, true, 10) == DR::Ignored);  // nothing in 0x18
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 2 && ev[0].id == 1 && ev[0].from == LocoState::None && ev[0].to == LocoState::WalkDeploying &&
+              !ev[0].finished);
+    }
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeploying && sys.view(1).deploy_state == LocoState::WalkDeploying);
+    const V2 held = sys.view(1).pos;
+    uint32_t f2 = 0xFFFFFFFFu, f1 = 0xFFFFFFFFu;
+    for (uint32_t f = 10; f < 80 && f1 == 0xFFFFFFFFu; ++f) {
+        sys.tick(f, rng);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events()) {
+            if (e.finished && e.to == LocoState::WalkDeployed && e.id == 1) f1 = f;
+            if (e.finished && e.to == LocoState::WalkDeployed && e.id == 2) f2 = f;
+        }
+        CHECK(sys.view(1).pos == held);  // a deploying unit does not move
+    }
+    CHECK(f1 == 37);  // pos = f - 10 >= 27
+    CHECK(f2 == 23);  // rate 2: 2 (f - 10) >= 26
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed && sys.deploy(1, true, 40) == DR::Ignored);
+    // An order while deployed waits: the unit stays put.
+    sys.move(o, rng, 40);
+    for (uint32_t f = 40; f < 60; ++f) sys.tick(f, rng);
+    CHECK(sys.view(1).pos == held);
+    // Undeploy: 0x1A, the clip from 0, back to the walk 27 frames later (state None, signal).
+    CHECK(sys.deploy(1, false, 60) == DR::Undeploying && sys.deploy_state(1) == LocoState::WalkUndeploying);
+    const uint32_t undeployed = finished_at(1, LocoState::None, 60, 200);
+    CHECK(undeployed == 87 && sys.deploy_state(1) == LocoState::None);
+
+    // The turret must be at rest before a clip starts (frame 100 deploy, rest from 110 -> ends 137).
+    turret_rest = false;
+    CHECK(sys.deploy(1, true, 100) == DR::Deploying);
+    for (uint32_t f = 100; f < 110; ++f) sys.tick(f, rng);
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeploying);
+    turret_rest = true;
+    CHECK(finished_at(1, LocoState::WalkDeployed, 110, 300) == 137);
+    // Blocked reverse: 0x1A with the turret off rest (no clip yet); Deploy(true) -> 0x19 at once with the signal.
+    turret_rest = false;
+    CHECK(sys.deploy(1, false, 150) == DR::Undeploying);
+    sys.tick(150, rng);
+    (void)sys.take_deploy_events();
+    CHECK(sys.deploy(1, true, 151) == DR::ReverseBlocked && sys.deploy_state(1) == LocoState::WalkDeployed);
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 1 && ev[0].from == LocoState::WalkUndeploying && ev[0].to == LocoState::WalkDeployed && ev[0].finished);
+    }
+    turret_rest = true;
+    CHECK(finished_at(1, LocoState::None, 160, 200) == 0xFFFFFFFFu);  // nothing pending
+    CHECK(sys.deploy(1, false, 200) == DR::Undeploying);
+    CHECK(finished_at(1, LocoState::None, 200, 300) == 227);
+    // Reversal: Undeploy (frame 250) out of a Deploy clip at position 10 starts the Undeploy clip at 30 - 10 - 1 - 1 = 18:
+    // it ends at 27, 9 frames later.
+    CHECK(sys.deploy(1, true, 240) == DR::Deploying);
+    for (uint32_t f = 240; f < 250; ++f) sys.tick(f, rng);
+    CHECK(sys.deploy(1, false, 250) == DR::Undeploying);
+    CHECK(finished_at(1, LocoState::None, 250, 300) == 259);
+
+    // Save round trip mid-clip: identical continuation.
+    CHECK(sys.deploy(1, true, 300) == DR::Deploying);
+    for (uint32_t f = 300; f < 305; ++f) sys.tick(f, rng);
+    ByteWriter w;
+    sys.write(w);
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy, 100);
+    copy.set_deploy_clip_fn([](ObjectId, int32_t, uint32_t& n, float& fps) {
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    {
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+    }
+    StateHasher ha, hb;
+    sys.hash_units(ha);
+    copy.hash_units(hb);
+    CHECK(ha.digest() == hb.digest() && copy.deploy_state(1) == LocoState::WalkDeploying);
+    SimRng r2 = rng;
+    uint32_t end_a = 0, end_b = 0;
+    for (uint32_t f = 305; f < 340; ++f) {
+        sys.tick(f, rng);
+        copy.tick(f, r2);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 1 && e.finished) end_a = f;
+        for (const MovementSystem::DeployEvent& e : copy.take_deploy_events())
+            if (e.id == 1 && e.finished) end_b = f;
+    }
+    CHECK(end_a == 327 && end_b == 327);
+
+    // S8 t12 (e): a locomotor swap undeploys without a signal; JetPack cannot deploy; the Walk rebuilt on landing starts
+    // undeployed.
+    (void)sys.take_deploy_events();
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed && sys.use_secondary_locomotor(1, true));
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 1 && ev[0].from == LocoState::WalkDeployed && ev[0].to == LocoState::None && !ev[0].finished);
+    }
+    CHECK(sys.deploy_state(1) == LocoState::None && sys.deploy(1, true, 400) == DR::NoWalk);
+    CHECK(sys.use_secondary_locomotor(1, false) && sys.deploy_state(1) == LocoState::None);
+    CHECK(sys.deploy(1, true, 401) == DR::Deploying);
+    // snap_yaw: the facing at once, position kept.
+    const V2 p = sys.view(2).pos;
+    CHECK(sys.snap_yaw(2, 90.0f) && near(sys.view(2).yaw, 90.0f, 1e-4f) && sys.view(2).pos == p && !sys.snap_yaw(99, 0.0f));
+    std::printf("deploy: window timing, turret wait, blocked reverse, reversal, save, locomotor swap ok\n");
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -1776,6 +1959,7 @@ int main() {
     test_jetpack_accel_fallback();   // S7 t15
     test_jetpack_turn_bands();       // S7 t15
     test_jetpack_no_repeated_pose(); // S8 t09 (PR #19 review)
+    test_deploy();                   // S8 t11 / t12
     test_bike();
     test_bomber();
     test_fighter_space();

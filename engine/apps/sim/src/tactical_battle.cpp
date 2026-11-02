@@ -33,6 +33,7 @@ namespace {
 
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
 constexpr objects::BehaviorTypeId kDamageTrackingBehavior = 0x3E;  // DAMAGE_TRACKING (serviced, interval 30)
+constexpr objects::BehaviorTypeId kWallBehavior = 0x17;            // WALL (S8 t13: EmpireWall stamp bit)
 constexpr uint32_t kDamageTrackingInterval = 30;
 #endif
 constexpr uint32_t kNoContainer = 0xFFFFFFFFu;
@@ -48,25 +49,26 @@ float yaw_of(Vec3 f) { return dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF); }
 tactical::Vec3 tv(Vec3 v) { return tactical::Vec3{v.x, v.y, v.z}; }
 Vec3 sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
 
-// S8 t09 (MOVEMENT §1.3): the LAND_OBSTACLE stamper's model hooks, one source for map placements and run-time objects: the
-// model bounding box (BattleCatalog::model_half_extents) and the Fine_Tune_Occupied_Passability ray against the type's
-// Land_Model_Name collision data (BattleCatalog::avoid_model(type, false), the model source of the precise projectile test).
-// Ray model: a type whose Land_Model_Name collision data loads -> Model; anything else -> Unknown, untrimmed [port]: no model
-// files in this run (pure headless), a model that does not load, one without collision-enabled meshes and COLLISIONBOX (which
-// meshes the retail ray query vf +0x80 tests is [M]; the port uses the precise-test set), and a type without
-// Land_Model_Name. Retail does not stamp the last kind at all (no proxy) or stamps it untrimmed (proxy); the host never
-// reports StampRayModel::None because the synthetic test data has no model names (as refixf t07's model source); in FoC no
-// LAND_OBSTACLE type with Fine_Tune and no proxy lacks a Land_Model_Name (0 of 459, 2026-11-02), so parity is unaffected.
-// The ray is the segment (x, y, -1000) -> (x, y, +1000) through the model placed by space_avoid's transform (position,
-// facing Rz(yaw) (0, -1), scale). Const data.
+// S8 t09 / t13 (MOVEMENT §1.3): the LAND_OBSTACLE stamper's model hooks, one source for map placements and run-time objects:
+// the model bounding box (BattleCatalog::model_half_extents) and the Fine_Tune_Occupied_Passability ray against the type's
+// Land_Model_Name collision data (BattleCatalog::avoid_model(type, false)). Ray model: no model files in this run (pure
+// headless) -> Unknown, untrimmed [port]; an empty Land_Model_Name -> None (the footprint rules for a type without a land
+// model, S8 t13); a model that loads -> Model, even without collision meshes (then no sample is hit: retail's ray query
+// hits only collision-flagged meshes); a named model that does not load -> Unknown [port]. The ray (S8 t13, vf +0x80 mode
+// 0 mask 1: mv::avoid_ray_any) is the segment (x, y, -1000) -> (x, y, +1000) against the collision-flagged meshes whose bone
+// is visible, through the model placed by space_avoid's transform (position, facing Rz(yaw) (0, -1), scale). Const data.
 mv::MapStampHooks land_stamp_hooks(const BattleCatalog* cat) {
     mv::MapStampHooks hooks;
     hooks.model_half_extents = [cat](uint32_t ty, float& hx, float& hy, float& hz) { return cat->model_half_extents(ty, hx, hy, hz); };
     hooks.ray_model = [cat](uint32_t ty) {
-        if (!cat->files()) return mv::StampRayModel::Unknown;
-        const mv::AvoidModel* m = cat->avoid_model(ty, false);
-        if (!m || (!m->has_collision_box && m->meshes.empty())) return mv::StampRayModel::Unknown;
-        return mv::StampRayModel::Model;
+        if (!cat->files() || ty >= cat->types().size()) return mv::StampRayModel::Unknown;
+        std::string_view name = cat->types().get_string(ty, "Land_Model_Name");
+        while (!name.empty() && (name.front() == ' ' || name.front() == '\t' || name.front() == '\r' || name.front() == '\n'))
+            name.remove_prefix(1);
+        while (!name.empty() && (name.back() == ' ' || name.back() == '\t' || name.back() == '\r' || name.back() == '\n'))
+            name.remove_suffix(1);
+        if (name.empty()) return mv::StampRayModel::None;
+        return cat->avoid_model(ty, false) ? mv::StampRayModel::Model : mv::StampRayModel::Unknown;
     };
     hooks.mesh_ray_hit = [cat](uint32_t ty, const mv::StampPose& pose, mv::V2 xy) {
         const mv::AvoidModel* m = cat->avoid_model(ty, false);
@@ -78,8 +80,7 @@ mv::MapStampHooks land_stamp_hooks(const BattleCatalog* cat) {
         o.scale = pose.scale;
         o.model = m;
         mv::avoid_place(o);
-        mv::AvoidSegmentHit hit;
-        return mv::avoid_precise_segment(o, {xy.x, xy.y, -1000.0f}, {xy.x, xy.y, 1000.0f}, 1u, 0u, hit);
+        return mv::avoid_ray_any(o, {xy.x, xy.y, -1000.0f}, {xy.x, xy.y, 1000.0f});
     };
     return hooks;
 }
@@ -609,6 +610,16 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         if (!c || !c->clip || c->clip->fps <= 0.0f) return 0u;
         return static_cast<uint32_t>(std::ceil(static_cast<double>(c->clip->frame_count) * 30.0 / static_cast<double>(c->clip->fps)));
     });
+    // S8 t11 (MOVEMENT §3.2): the Walk deploy clips (anim 0x19 / 0x1A, variant 0 [port]: retail draws a synced variant).
+    movement_->set_deploy_clip_fn([this](objects::ObjectId id, int32_t type, uint32_t& frames, float& fps) {
+        const anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr;
+        const anim::AnimModel* m = w ? w->model(id) : nullptr;
+        const anim::ClipRef* c = m ? m->clip(type, 0) : nullptr;
+        if (!c || !c->clip || c->clip->fps <= 0.0f) return false;
+        frames = c->clip->frame_count;
+        fps = c->clip->fps;
+        return true;
+    });
 #endif
     if (space_) {
         // S7 t07 (MOVEMENT §2.2): SPACE_OBSTACLE types without an XML radius are sized by their space model's collision
@@ -1071,6 +1082,9 @@ bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::Obj
         land_obstacle_none_[t] = 1;  // const type data (sizes, proxy, ray model): never retried
         return false;
     }
+    // S8 t13 (MOVEMENT §1.3 "proxy bits"): the bits come from the object's own live behaviours (0x397350), never the proxy.
+    fp.bits = mv::land_obstacle_bits(static_cast<uint32_t>(types.get_mask(t, "OverridePassability")), true,
+                                     st.has_behavior(h, kWallBehavior));
     movement_->grid().stamp(st.id(h), fp);
     return true;
 }
@@ -2961,6 +2975,7 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
         if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);
     }
     oi_events(mode);  // OI abilities: ability moves / stops / owner changes, ability spawns, death survivors
+    oi_deploy_sync();  // S8 t11 / t12: this pass's deploy requests and jetpack swaps
     abilities_->clear_events();
 }
 
@@ -3136,6 +3151,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     profile::lap("tac.pre_move");
     movement_->tick(frame_, rng, pf);
     movement_->commit(store);
+    oi_deploy_sync();  // S8 t11: deploy clip ends (Is_Active, deploy flags, signal 0x29) before the combat tick
     profile::lap("tac.movement");
     fighter_enter_idle();  // S7 t22 / t25: enter_idle drops the squadrons' team targets (§4.7 step 4, §4.10 D)
     forward_fighter_events();  // S7 fighters: Provoke / Retarget -> combat attack orders (before the combat tick)
@@ -3330,6 +3346,10 @@ cmd::RejectReason TacticalBattle::handle_ability(TacticalMode& mode, uint8_t pla
             if (dummy_type_ < 0) return R::NotAllowed;
             const Vec3 at{ev.f("x"), ev.f("y"), ev.f("z")};
             const objects::ObjectId dummy = spawn_dummy_target(mode, static_cast<int32_t>(player), at, rng);  // wave 2b: shared
+            // S8 t10 (LOB_SOLVER §3.5 "MARKER removal"): a Remote_Bomb marker has no lifetime - only the toss kills it
+            // (MarkerTossed); it stays when the toss never happens. [port] the other abilities' markers keep the expiry.
+            if (ev.u("ability") == static_cast<uint32_t>(ta::kPlaceRemoteBomb) && dummy != objects::kNoObjectId && !dummies_.empty() && dummies_.back().id == dummy)
+                dummies_.back().frame = 0xFFFFFFFFu;
             ++stats_.ability_commands;
             const uint32_t n = abilities_->targeted_ability(users, static_cast<uint8_t>(ev.u("ability")), dummy, -1, frame_);
             return n > 0 ? R::None : R::AbilityNotReady;

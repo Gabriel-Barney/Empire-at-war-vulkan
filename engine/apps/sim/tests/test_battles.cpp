@@ -343,19 +343,21 @@ std::string obstacle_types() {
     // S8 t02 / S7 t13 (test_runtime_obstacles): a weak LAND_OBSTACLE bunker, a LAND_OBSTACLE rock and a smaller rock
     // placeholder that always spawns the rock (Map_Load_Spawn_Table); a SPACE_OBSTACLE map unit (SIMPLE_SPACE locomotor, so
     // Hyperspace_Away kills it), an asteroid and a smaller asteroid placeholder that always spawns the asteroid.
+    // S8 t13: the land obstacles have no Land_Model_Name, so (MOVEMENT §1.3) they stamp only with Fine_Tune off (the
+    // explicit XML rectangle); with the default (on) and no proxy retail never stamps them.
     const std::string extra =
-        " <GroundStructure Name=\"S10_Obst_Bunker\"><Tactical_Health>40</Tactical_Health><CategoryMask>Structure</CategoryMask>"
+        " <GroundStructure Name=\"S10_Obst_Bunker\"><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability><Tactical_Health>40</Tactical_Health><CategoryMask>Structure</CategoryMask>"
         "<Behavior>SELECTABLE</Behavior><LandBehavior>LAND_OBSTACLE</LandBehavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
         "<Obstacle_Width>60</Obstacle_Width><Obstacle_Height>60</Obstacle_Height><Obstacle_X_Offset>-30</Obstacle_X_Offset>"
         "<Obstacle_Y_Offset>-30</Obstacle_Y_Offset></GroundStructure>\n"
         // S8 t09: a structure whose death clone is not an obstacle (Death_Clone_Is_Obstacle false, as Imperial_Prison_Dathomir)
-        " <GroundStructure Name=\"S10_Obst_Prison\"><Tactical_Health>40</Tactical_Health><CategoryMask>Structure</CategoryMask>"
+        " <GroundStructure Name=\"S10_Obst_Prison\"><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability><Tactical_Health>40</Tactical_Health><CategoryMask>Structure</CategoryMask>"
         "<Behavior>SELECTABLE</Behavior><LandBehavior>LAND_OBSTACLE</LandBehavior><Death_Clone_Is_Obstacle>No</Death_Clone_Is_Obstacle>"
         "<Obstacle_Width>60</Obstacle_Width><Obstacle_Height>60</Obstacle_Height><Obstacle_X_Offset>-30</Obstacle_X_Offset>"
         "<Obstacle_Y_Offset>-30</Obstacle_Y_Offset></GroundStructure>\n"
-        " <GroundProp Name=\"S10_Obst_Rock\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>100</Obstacle_Width>"
+        " <GroundProp Name=\"S10_Obst_Rock\"><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>100</Obstacle_Width>"
         "<Obstacle_Height>100</Obstacle_Height><Obstacle_X_Offset>-50</Obstacle_X_Offset><Obstacle_Y_Offset>-50</Obstacle_Y_Offset></GroundProp>\n"
-        " <GroundProp Name=\"S10_Obst_Rock_Spawner\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>20</Obstacle_Width>"
+        " <GroundProp Name=\"S10_Obst_Rock_Spawner\"><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>20</Obstacle_Width>"
         "<Obstacle_Height>20</Obstacle_Height><Obstacle_X_Offset>-10</Obstacle_X_Offset><Obstacle_Y_Offset>-10</Obstacle_Y_Offset>"
         "<Map_Load_Spawn_Table>S10_Obst_Rock, 1.0</Map_Load_Spawn_Table></GroundProp>\n"
         " <SpaceUnit Name=\"S10_Obst_Mine\"><Variant_Of_Existing_Type>S10_Frigate</Variant_Of_Existing_Type>"
