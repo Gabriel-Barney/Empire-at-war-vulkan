@@ -3539,6 +3539,8 @@ bool TacticalAiWorld::read(ByteReader& r) {
     new_w.point_fogged = std::move(m.w.point_fogged);
     new_w.point_blocked = std::move(m.w.point_blocked);
     new_w.inside_shield = std::move(m.w.inside_shield);
+    new_w.in_active_base_shield = std::move(m.w.in_active_base_shield);
+    new_w.parent_rep_type = std::move(m.w.parent_rep_type);
     new_w.zone_hint = std::move(m.w.zone_hint);
     new_w.nearby_open_pads = std::move(m.w.nearby_open_pads);
     new_w.pad_accepts = std::move(m.w.pad_accepts);
@@ -3603,6 +3605,8 @@ bool TacticalAiWorld::relink() {
     take(m.w.point_fogged, scratch.point_fogged);
     take(m.w.point_blocked, scratch.point_blocked);
     take(m.w.inside_shield, scratch.inside_shield);
+    take(m.w.in_active_base_shield, scratch.in_active_base_shield);
+    take(m.w.parent_rep_type, scratch.parent_rep_type);
     take(m.w.zone_hint, scratch.zone_hint);
     take(m.w.nearby_open_pads, scratch.nearby_open_pads);
     take(m.w.pad_accepts, scratch.pad_accepts);
