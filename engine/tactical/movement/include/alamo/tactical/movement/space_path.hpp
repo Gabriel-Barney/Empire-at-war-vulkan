@@ -112,6 +112,12 @@ public:
     void add_static(ObjectId id, V2 center, float radius, uint32_t bits = kSpaceStatic);
     bool remove_static(ObjectId id);
     bool has_static(ObjectId id) const { return statics_.find(id) != statics_.end(); }
+    // S7 t13: moves static entry `from` to id `to` unchanged (a map placement's entry, ted_grid.hpp map_stamp_id, handed to
+    // the object spawned for it, so it leaves with that object). False (nothing changes) when `from` has no entry, `to`
+    // already has one, or from == to.
+    bool rekey_static(ObjectId from, ObjectId to);
+    // The static entry of `id` (centre, radius, SpaceCollisionType bits); false when there is none.
+    bool static_entry(ObjectId id, V2& center, float& radius, uint32_t& bits) const;
     // Replaces the track of `id`. `start_frame` = absolute frame of waypoint time 0.
     void set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps);
     void clear_track(ObjectId id);

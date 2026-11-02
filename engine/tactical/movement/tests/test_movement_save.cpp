@@ -222,6 +222,16 @@ void test_grid() {
         CHECK(load(l, rb) && bytes_of(l) == rb && hash_of(l) == hash_of(r) && l.stamped(77) && !l.stamped(-3));
         CHECK(l.occupies(77, 36, 26) && !l.occupies(-3, 36, 26));
     }
+    // S8 t02: a run-time stamp that lands on no cell (off the grid) is still a stamp; it round-trips with no cells.
+    {
+        PassabilityGrid z = build(5);
+        CHECK(z.stamp(88, make_footprint({-500.0f, -500.0f}, 0.0f, 20.0f, 20.0f, -10.0f, -10.0f, 0, 0, 1.0f, 0)) == 0);
+        CHECK(z.stamped(88) && z.stamp_cells(88).empty());
+        const Bytes zb = bytes_of(z);
+        PassabilityGrid l = build(5);
+        CHECK(load(l, zb) && bytes_of(l) == zb && hash_of(l) == hash_of(z) && l.stamped(88) && l.stamp_cells(88).empty());
+        CHECK(l.stamped_ids() == z.stamped_ids());
+    }
     // Another map, or the same map with another playable box: rejected, unchanged.
     PassabilityGrid other = build(6);
     CHECK(rejects(other, good));
@@ -267,6 +277,18 @@ void test_space_occupancy() {
     CHECK(load(b, good) && bytes_of(b) == good && hash_of(b) == hash_of(a));
     CHECK(b.query_segment({-50.0f, 10.0f}, {250.0f, 10.0f}, 400.0f, 470.0f, 20.0f, kLayerFrigate, 1, true, 400) ==
           a.query_segment({-50.0f, 10.0f}, {250.0f, 10.0f}, 400.0f, 470.0f, 20.0f, kLayerFrigate, 1, true, 400));
+    // S7 t13: a map placement's entry handed to its object (rekey_static) round-trips under the object id.
+    {
+        SpaceOccupancy k = a;
+        CHECK(k.rekey_static(-3, 21) && !k.has_static(-3) && k.has_static(21));
+        const Bytes kb = bytes_of(k);
+        SpaceOccupancy l = a;
+        V2 c{};
+        float r = 0.0f;
+        uint32_t bits = 0;
+        CHECK(load(l, kb) && bytes_of(l) == kb && hash_of(l) == hash_of(k) && !l.has_static(-3));
+        CHECK(l.static_entry(21, c, r, bits) && c.x == 100.0f && c.y == 200.0f && r == 300.0f && bits == (kSpaceStatic | kSpaceAsteroid));
+    }
     SpaceOccupancy t;
     CHECK(rejects_truncation(t, good, 3));
     Bytes bad = good;

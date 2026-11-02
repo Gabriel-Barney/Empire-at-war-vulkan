@@ -339,6 +339,25 @@ std::string obstacle_types() {
     // a weak one, so the attackers kill it inside the test's frames (its static entry must leave with it)
     const std::string hp = "<Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>";
     if (const size_t q = t.find(hp); q != std::string::npos) t.replace(q, hp.size(), "<Tactical_Health>300</Tactical_Health><Base_Level>1</Base_Level>");
+    // S8 t02 / S7 t13 (test_runtime_obstacles): a weak LAND_OBSTACLE bunker, a LAND_OBSTACLE rock and a smaller rock
+    // placeholder that always spawns the rock (Map_Load_Spawn_Table); a SPACE_OBSTACLE map unit (SIMPLE_SPACE locomotor, so
+    // Hyperspace_Away kills it), an asteroid and a smaller asteroid placeholder that always spawns the asteroid.
+    const std::string extra =
+        " <GroundStructure Name=\"S10_Obst_Bunker\"><Tactical_Health>40</Tactical_Health><CategoryMask>Structure</CategoryMask>"
+        "<Behavior>SELECTABLE</Behavior><LandBehavior>LAND_OBSTACLE</LandBehavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+        "<Obstacle_Width>60</Obstacle_Width><Obstacle_Height>60</Obstacle_Height><Obstacle_X_Offset>-30</Obstacle_X_Offset>"
+        "<Obstacle_Y_Offset>-30</Obstacle_Y_Offset></GroundStructure>\n"
+        " <GroundProp Name=\"S10_Obst_Rock\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>100</Obstacle_Width>"
+        "<Obstacle_Height>100</Obstacle_Height><Obstacle_X_Offset>-50</Obstacle_X_Offset><Obstacle_Y_Offset>-50</Obstacle_Y_Offset></GroundProp>\n"
+        " <GroundProp Name=\"S10_Obst_Rock_Spawner\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>20</Obstacle_Width>"
+        "<Obstacle_Height>20</Obstacle_Height><Obstacle_X_Offset>-10</Obstacle_X_Offset><Obstacle_Y_Offset>-10</Obstacle_Y_Offset>"
+        "<Map_Load_Spawn_Table>S10_Obst_Rock, 1.0</Map_Load_Spawn_Table></GroundProp>\n"
+        " <SpaceUnit Name=\"S10_Obst_Mine\"><Variant_Of_Existing_Type>S10_Frigate</Variant_Of_Existing_Type>"
+        "<SpaceBehavior>SIMPLE_SPACE_LOCOMOTOR, SPACE_OBSTACLE</SpaceBehavior><Custom_Soft_Footprint_Radius>120</Custom_Soft_Footprint_Radius></SpaceUnit>\n"
+        " <SpaceProp Name=\"S10_Obst_Asteroid\"><Behavior>SPACE_OBSTACLE</Behavior><Space_Obstacle_Radius>400</Space_Obstacle_Radius></SpaceProp>\n"
+        " <SpaceProp Name=\"S10_Obst_Asteroid_Spawner\"><Behavior>SPACE_OBSTACLE</Behavior><Space_Obstacle_Radius>50</Space_Obstacle_Radius>"
+        "<Map_Load_Spawn_Table>S10_Obst_Asteroid, 1.0</Map_Load_Spawn_Table></SpaceProp>\n";
+    t.insert(t.rfind("</S10>"), extra);
     return t;
 }
 
@@ -3578,6 +3597,167 @@ void test_oi_objects_scheduling() {
 }
 // --- end OI objects ---
 
+// S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints follow their objects.
+//   * land: a map-placed LAND_OBSTACLE bunker owns its placement stamp (object id) and loses it when it dies; a
+//     Map_Load_Spawn_Table placeholder's stamp is replaced by the spawned rock's footprint; a rock spawned during the
+//     battle is stamped at the end of that tick under its object id and unstamped the tick it is removed;
+//   * space: a map-placed SPACE_OBSTACLE unit owns its placement entry (object id) and loses it when it dies (Hyperspace_Away
+//     kill); a placeholder's entry is replaced by the spawned asteroid's (radius 400, not the placeholder's 50).
+void test_runtime_obstacles(bool space) {
+    namespace mv = tactical::movement;
+    auto d = make_data(false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, !space));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test moves units
+    auto place = [](terrain::MapData& m, const char* type, float x, float y, uint32_t owner) {
+        terrain::ObjectPlacement p;
+        p.type_crc = name_crc(type);
+        p.owner = owner;
+        p.position[0] = x;
+        p.position[1] = y;
+        m.objects.push_back(p);
+    };
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [&place](const std::string& name, terrain::MapData& m) {
+                                if (name == "S10_Space_B") {
+                                    m = space_map();
+                                    place(m, "S10_Obst_Mine", 2500.0f, 2500.0f, 0);               // placement 0
+                                    place(m, "S10_Obst_Asteroid_Spawner", -2500.0f, 2500.0f, 2);  // placement 1
+                                } else if (name == "S10_Land_B") {
+                                    m = land_map();
+                                    place(m, "S10_Obst_Bunker", 450.0f, 620.0f, 0);         // placement 0, near the attackers
+                                    place(m, "S10_Obst_Rock_Spawner", 900.0f, 300.0f, 2);  // placement 1
+                                } else {
+                                    return false;
+                                }
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    if (!space) {
+        std::vector<objects::ObjectHandle> up;
+        for (objects::ObjectHandle h : gs->planets()[2].surface)
+            if (gs->store().owner(h) == 1) up.push_back(h);
+        CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    }
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    // The cells a footprint covers on an empty grid of the battle grid's size (the expected stamp).
+    auto cells_of = [](const mv::PassabilityGrid& like, float x, float y, float size) {
+        mv::PassabilityGrid g;
+        g.init(like.width(), like.height());
+        g.stamp(1, mv::make_footprint({x, y}, 0.0f, size, size, -0.5f * size, -0.5f * size, 0, 0, 1.0f, 0));
+        const std::span<const uint32_t> c = g.stamp_cells(1);
+        return std::vector<uint32_t>(c.begin(), c.end());
+    };
+    auto same = [](std::span<const uint32_t> a, const std::vector<uint32_t>& b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); };
+    bool invaded = false, checked = false, spawned_checked = false, removed_checked = false, died = false;
+    objects::ObjectId unit = objects::kNoObjectId, spawned = objects::kNoObjectId;
+    objects::ObjectHandle spawned_h{};
+    uint32_t spawn_frame = 0;
+    for (uint64_t t = 0; t < 6000 && !(died && (space || removed_checked)); ++t) {
+        host.tick_once();
+        if (!space && !invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) continue;
+        objects::ObjectStore& st = tm->primary();
+        const mv::MovementSystem& ms = b->movement();
+        if (!checked) {  // the first battle frame: the map objects own their placements' footprints
+            checked = true;
+            objects::ObjectId other = objects::kNoObjectId;
+            const uint32_t unit_type = type_of(*d, space ? "S10_Obst_Mine" : "S10_Obst_Bunker");
+            const uint32_t other_type = type_of(*d, space ? "S10_Obst_Asteroid" : "S10_Obst_Rock");
+            for (const objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h)) continue;
+                if (static_cast<uint32_t>(st.type(h)) == unit_type) unit = st.id(h);
+                if (static_cast<uint32_t>(st.type(h)) == other_type) other = st.id(h);
+                CHECK(static_cast<uint32_t>(st.type(h)) != type_of(*d, space ? "S10_Obst_Asteroid_Spawner" : "S10_Obst_Rock_Spawner"));
+            }
+            CHECK(unit > 0 && other > 0);
+            if (unit <= 0 || other <= 0) return;
+            if (space) {
+                const mv::SpaceOccupancy& occ = ms.space();
+                mv::V2 c{};
+                float r = 0.0f;
+                uint32_t bits = 0;
+                CHECK(!occ.has_static(mv::map_stamp_id(0)) && !occ.has_static(mv::map_stamp_id(1)));
+                CHECK(occ.static_entry(unit, c, r, bits) && r == 120.0f && c.x == 2500.0f && c.y == 2500.0f);
+                CHECK(occ.static_entry(other, c, r, bits) && r == 400.0f && c.x == -2500.0f && c.y == 2500.0f);  // not 50
+                std::printf("  space: map unit %d entry r 120, spawned asteroid %d entry r %.0f\n", unit, other, static_cast<double>(r));
+                CHECK(b->hyperspace_out(unit, 0, true));  // killed 90 frames later
+            } else {
+                const mv::PassabilityGrid& g = ms.grid();
+                CHECK(!g.stamped(mv::map_stamp_id(0)) && !g.stamped(mv::map_stamp_id(1)));
+                CHECK(g.stamped(unit) && same(g.stamp_cells(unit), cells_of(g, 450.0f, 620.0f, 60.0f)));
+                CHECK(g.stamped(other) && same(g.stamp_cells(other), cells_of(g, 900.0f, 300.0f, 100.0f)));  // the rock's, not 20 x 20
+                CHECK(g.effective(mv::world_to_cell(450.0f), mv::world_to_cell(620.0f)) == mv::kPassObstacle);
+                std::vector<objects::ObjectId> attackers;
+                for (const objects::ObjectHandle h : st.owned_by(1))
+                    if (st.alive(h) && b->combat().has_unit(st.id(h)) && b->combat().alive(st.id(h))) attackers.push_back(st.id(h));
+                CHECK(!attackers.empty());
+                CHECK(b->order_attack(*tm, 1, attackers, unit, host.random().synced()) == commands::RejectReason::None);
+                // A rock spawned between two ticks (script spawn path) is stamped by the next tick's end.
+                objects::SpawnParams sp;
+                sp.type = static_cast<objects::TypeIndex>(other_type);
+                sp.owner = 2;
+                sp.position = {300.0f, 1000.0f, 0.0f};
+                sp.facing = {0.0f, -1.0f, 0.0f};
+                spawned_h = tm->spawn(sp);
+                spawned = st.id(spawned_h);
+                spawn_frame = b->frame();
+                CHECK(spawned > 0 && !g.stamped(spawned));
+            }
+            continue;
+        }
+        if (!space) {
+            const mv::PassabilityGrid& g = ms.grid();
+            if (!spawned_checked && b->frame() == spawn_frame + 1) {
+                spawned_checked = true;
+                CHECK(g.stamped(spawned) && same(g.stamp_cells(spawned), cells_of(g, 300.0f, 1000.0f, 100.0f)));
+                CHECK(g.effective(mv::world_to_cell(300.0f), mv::world_to_cell(1000.0f)) == mv::kPassObstacle);
+                CHECK(tm->destroy(spawned_h));
+            } else if (spawned_checked && !removed_checked) {
+                removed_checked = true;
+                CHECK(!g.stamped(spawned) && g.effective(mv::world_to_cell(300.0f), mv::world_to_cell(1000.0f)) == mv::kPassClear);
+            }
+            if (!died && !st.alive(st.find(unit))) {
+                died = true;
+                // The original's stamp goes; its death clone (no Death_Clone list: the bunker type itself, S9_DEATH_CLONE_SHIELDS
+                // §1.6) is a LAND_OBSTACLE object at the same transform and stamps the same cells [inferred: wreck stamping].
+                objects::ObjectId clone = objects::kNoObjectId;
+                for (const objects::ObjectHandle h : st.all_objects())
+                    if (st.alive(h) && st.dying(h) && static_cast<uint32_t>(st.type(h)) == type_of(*d, "S10_Obst_Bunker")) clone = st.id(h);
+                std::printf("  land: bunker %d died at frame %u (death clone %d), rock %d spawned at %u\n", unit, b->frame(), clone, spawned,
+                            spawn_frame);
+                CHECK(!g.stamped(unit) && clone > 0 && g.stamped(clone) && same(g.stamp_cells(clone), cells_of(g, 450.0f, 620.0f, 60.0f)));
+            }
+            if (!died) CHECK(g.stamped(unit));
+        } else {
+            if (!died && !st.alive(st.find(unit))) {
+                died = true;
+                std::printf("  space: map unit %d died at frame %u\n", unit, b->frame());
+                CHECK(!ms.space().has_static(unit) && ms.space().query_static({2500.0f, 2500.0f}, {2500.0f, 2500.0f}, 1.0f) == 0);
+            }
+            if (!died) CHECK(ms.space().has_static(unit));
+        }
+    }
+    CHECK(checked && died);
+    if (!space) CHECK(spawned_checked && removed_checked);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -3650,6 +3830,9 @@ int main(int argc, char** argv) {
     std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
     test_battle_ai_find_team();
 #endif
+    std::printf("S8 t02 / S7 t13: obstacle footprints follow their objects (land stamps, space static entries)\n");
+    test_runtime_obstacles(false);
+    test_runtime_obstacles(true);
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);
     std::printf("OI objects: behaviour Initialise draws + scheduling\n");  // OI objects
