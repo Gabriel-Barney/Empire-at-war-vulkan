@@ -178,6 +178,30 @@ Budget (confirmed by Gabriel, 2026-10-30): per tick, p99 below 16.7 ms (50 % of 
 (spread battle setup over several ticks or prepare it ahead; start the synthetic all-pairs recompute in the background, as `--latency` already does).
 Not covered yet: a profile of `alamo_game` (render host), story / Lua zones (they run inside `T7` / `T5` laps today), and bigger fleets.
 
+## Worker-count check (OPT3 t07, 2026-11-02)
+
+Rule 3 says per-tick CRCs are identical for every worker count. Every OPT2 / OPT3 / CP / BM change cites this check: name the
+scenario(s) it ran and the result in the PR. Two forms, both comparing every count's CRC log with the 0-worker log
+(`first_divergence`, which names the first diverging tick and system):
+- **Per-process (long runs), CMake** `alamo_add_worker_count_check(<name> COMMAND <exe> [args] [SETUP_ARGS ...] [CHECK_ARGS ...]
+  [WORKERS ...] [TIMEOUT s] [SLOW] [PROPERTIES ...])` in `engine/CMakeLists.txt`. One ctest entry per count, so the counts run side by
+  side under `ctest -j`: `<name>` runs `--workers 0 --crc-out <bin>/<name>_w0.crc` (`FIXTURES_SETUP <name>_w0`), `<name>_w1`, `_w4`, `_w16`
+  and `_w<hardware threads - 1>` (`_w15` on the 16-thread reference PC) run `--workers N --golden` against it (`FIXTURES_REQUIRED`). 16 is
+  more workers than logical cores here, so preemption inside a tick is covered too. `SETUP_ARGS` go to the 0-worker entry only (a
+  checked-in golden, an `--expect-*` check), `CHECK_ARGS` to the others; `SLOW` labels all entries `slow`. Further entries can compare
+  against the same log with `FIXTURES_REQUIRED <name>_w0` and `--golden ${<name>_CRC}`. The command needs `--workers`, `--crc-out`
+  and `--golden` (every `alamo_headless` mode has them).
+- **In-process (unit tests, short runs), C++** `alamo::jobs::check_worker_counts(run, counts = determinism_worker_counts())` in
+  `engine/jobs/include/alamo/jobs/crc_recorder.hpp`: calls `run(workers)` (returns the run's `CrcLog`) for 0 / 1 / 4 / default and
+  returns a `WorkerCountReport` (`ok()`, `first`, per-count `vs_first`). Used by `alamo_jobs_crc_tests` (incl. an injected divergence)
+  and by `alamo_headless --replay --check-workers`.
+
+Converted: `alamo_headless_replay_workers*` (per-process, the 0-worker entry also against `replay_golden.crc`; `alamo_headless_replay_golden`
+now runs the in-process form) and `alamo_headless_galactic_ai_human*` (36000 ticks, was one `--check-workers` entry running the counts in
+turn; each count's AI log is compared with the golden). Not converted yet: `alamo_headless_skirmish_ai_foc_land_outcome*` already has the
+same shape by hand and is being rewritten on the skai-skirmish branch (convert after it merges); `alamo_headless_skirmish_ai_synthetic`
+and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
+
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
 `build_asan.cmd` runs clang 20 (MSVC ABI) with UBSan by default; `ALAMO_SANITIZE=address` adds ASan.

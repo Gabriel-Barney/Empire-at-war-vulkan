@@ -722,15 +722,15 @@ int replay_mode(const Options& opt) {
     bool ok = true;
     alamo::CrcLog log;
     if (opt.check_workers) {
-        const auto counts = alamo::jobs::determinism_worker_counts();
-        run_one(counts.front(), log);
-        for (size_t i = 1; i < counts.size(); ++i) {
-            alamo::CrcLog other;
-            run_one(counts[i], other);
-            const auto d = alamo::first_divergence(log, other);
-            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], d.message.c_str());
-            if (d.diverged) ok = false;
-        }
+        auto rep = alamo::jobs::check_worker_counts([&](int32_t w) {
+            alamo::CrcLog l;
+            run_one(w, l);
+            return l;
+        });
+        for (size_t i = 1; i < rep.runs.size(); ++i)
+            std::printf("  workers %d vs %d: %s\n", rep.runs.front().workers, rep.runs[i].workers, rep.runs[i].vs_first.message.c_str());
+        ok = rep.ok();
+        log = std::move(rep.first);
     } else {
         run_one(opt.workers, log);
     }

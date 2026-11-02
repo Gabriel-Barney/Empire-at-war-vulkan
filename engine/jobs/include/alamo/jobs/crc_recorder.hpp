@@ -13,6 +13,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/sim_crc.hpp"
@@ -66,6 +67,42 @@ inline std::vector<int32_t> determinism_worker_counts() {
     const auto n = static_cast<int32_t>(JobSystem::default_worker_count());
     if (std::find(w.begin(), w.end(), n) == w.end()) w.push_back(n);
     return w;
+}
+
+// Worker-count check (OPT3 t07), in-process form for unit tests and short runs: runs `run(workers)`
+// (returns the run's CrcLog) for every count in order and compares each log with the first count's.
+// Long runs use the per-process form instead, one ctest entry per count: alamo_add_worker_count_check()
+// in engine/CMakeLists.txt (docs/PHASE4.md "Worker-count check").
+//
+//   const auto rep = jobs::check_worker_counts([&](int32_t w) { return run_my_sim(w); });
+//   for (const auto& r : rep.runs) std::printf("  workers %d: %s\n", r.workers, r.vs_first.message.c_str());
+//   CHECK(rep.ok());
+struct WorkerCountRun {
+    int32_t workers = 0;
+    CrcDivergence vs_first;  // against the first count's log (not diverged for the first count itself)
+};
+struct WorkerCountReport {
+    CrcLog first;  // the first count's log (for --crc-out / golden compares)
+    std::vector<WorkerCountRun> runs;
+    bool ok() const noexcept {
+        return std::none_of(runs.begin(), runs.end(), [](const WorkerCountRun& r) { return r.vs_first.diverged; });
+    }
+};
+template <class Run>
+WorkerCountReport check_worker_counts(Run&& run, const std::vector<int32_t>& counts = determinism_worker_counts()) {
+    WorkerCountReport rep;
+    for (const int32_t w : counts) {
+        WorkerCountRun r;
+        r.workers = w;
+        if (rep.runs.empty()) {
+            rep.first = run(w);
+            r.vs_first.message = "reference";
+        } else {
+            r.vs_first = first_divergence(rep.first, run(w));
+        }
+        rep.runs.push_back(std::move(r));
+    }
+    return rep;
 }
 
 }  // namespace alamo::jobs

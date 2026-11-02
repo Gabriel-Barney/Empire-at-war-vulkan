@@ -146,13 +146,12 @@ int main() {
     const alamo::CrcLog ref = run(0, kTicks, false);
     CHECK(ref.records.size() == kTicks && ref.systems.size() == 4);
     CHECK(ref.records.front().tick == 0 && ref.records.back().tick == kTicks - 1);
-    for (int32_t w : counts) {
-        for (bool pc : {false, true}) {
-            const alamo::CrcLog log = run(w, kTicks, pc);
-            const auto d = alamo::first_divergence(ref, log);
-            std::printf("  workers %2d capture %-8s: %s\n", w, pc ? "parallel" : "serial", d.message.c_str());
-            CHECK(!d.diverged);
-        }
+    for (bool pc : {false, true}) {  // OPT3 t07 helper: every count against the first (0 workers)
+        const WorkerCountReport rep = check_worker_counts([&](int32_t w) { return run(w, kTicks, pc); }, counts);
+        for (const WorkerCountRun& r : rep.runs)
+            std::printf("  workers %2d capture %-8s: %s\n", r.workers, pc ? "parallel" : "serial", r.vs_first.message.c_str());
+        CHECK(rep.ok() && rep.runs.size() == counts.size() && rep.runs.front().workers == 0);
+        CHECK(!alamo::first_divergence(ref, rep.first).diverged);
     }
     // The state actually changes every tick (else the check proves nothing).
     CHECK(ref.records[10].systems[0] != ref.records[11].systems[0]);
@@ -162,6 +161,13 @@ int main() {
     const auto d = alamo::first_divergence(ref, bad);
     std::printf("  injected: %s\n", d.message.c_str());
     CHECK(d.diverged && d.tick == 50 && d.system == "particles");
+    // The helper reports the divergence on the count that has it, and only there.
+    const WorkerCountReport bad_rep =
+        check_worker_counts([&](int32_t w) { return run(w, kTicks, false, w == 4 ? 50 : -1); }, {0, 1, 4});
+    CHECK(!bad_rep.ok() && bad_rep.runs.size() == 3);
+    CHECK(!bad_rep.runs[0].vs_first.diverged && !bad_rep.runs[1].vs_first.diverged);
+    CHECK(bad_rep.runs[2].vs_first.diverged && bad_rep.runs[2].vs_first.tick == 50 &&
+          bad_rep.runs[2].vs_first.system == "particles");
     // Text round trip of a real log.
     alamo::CrcLog back;
     CHECK(alamo::CrcLog::parse(ref.to_text(), back) && !alamo::first_divergence(ref, back).diverged);
