@@ -1,7 +1,15 @@
 // OI abilities - special-ability class bodies of docs/re/TACTICAL_GAPS.md §2.3 (the classes FoC / Thrawn's Revenge
-// use beyond the S9 set): accepts-target templates, apply / update / remove per class. Animation-driven timings
-// ("at animation frame N", "at the animation end") run on sim frames since the apply x Attack_Animation_Speedup [port:
-// no sim animation clock here]. Victim scans walk the combat units in ascending id (port rule for GOM / query order).
+// use beyond the S9 set): accepts-target templates, apply / update / remove per class. Victim scans walk the combat
+// units in ascending id (port rule for GOM / query order).
+//
+// Animation-driven timings (OI t03, ABILITIES_HARDPOINTS.md §4.13 [port]): the sim never reads a playing clock. A clip
+// position is a pure function of the sim frames n since the clip started: n x rate x speed, rate = clip fps / 30 (the
+// sim animation's clock, anim_state.hpp) and speed = Attack_Animation_Speedup (1 for the other clips). "At animation
+// frame N" (Damage_Frame_Number, Begin_Applying_Damage_Frame, Attachment_Frame, Target_Destruction_Frame, Spawn_Frame,
+// Fire_Frame) = the first update whose position >= N. "At the animation end" = position >= max(count - 2, 0), where a
+// one-shot finishes. Frame count and fps come from the model's clip data through AbilityHost::anim_clip (clip_timing);
+// without a clip (no host, no model, no such clip) rate is 1 and each end falls back: melee / grenade end at their last
+// frame-numbered event, Hack / Repair after kHackFrames, the Berserker damage window is always open.
 //
 // Synced draws (exactly these, in apply order): one per apply attempt that passed the range test for the chance
 // classes (Arc_Sweep / Generic / Eat: draw <= chance; Earthquake / Telekinesis / Vehicle_Thief / Whirlwind: draw <
@@ -9,6 +17,7 @@
 // victim (CONFUSE destination).
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
@@ -23,7 +32,10 @@ namespace {
 using C = SpecialClass;
 constexpr float kDegToRad = 0.017453292519943295f;
 constexpr uint8_t kKind2 = 2, kKind3 = 3, kKind4 = 4, kKind5 = 5, kKind16 = 0x16;
-constexpr int32_t kHackFrames = 60;  // [port] Hack / Repair animation 0x5a length (not in the data)
+constexpr int32_t kHackFrames = 60;  // [port] Hack / Repair animation 0x5a length without a clip (§4.13 fallback)
+constexpr int32_t kAnimHacking = 0x5a;  // Hack / Repair (TACTICAL_GAPS §2.3.10)
+constexpr int32_t kAnimBerserk = 0x68;  // Berserker (TACTICAL_GAPS §2.3.2)
+constexpr int32_t kAnimAttack = 5;      // Super_Laser (TACTICAL_GAPS §2.3.9)
 
 int32_t frames_of(float secs, uint32_t fps) { return static_cast<int32_t>(static_cast<float>(fps) * secs); }
 
@@ -44,6 +56,18 @@ float bearing_deg(Vec3 f, Vec3 from, Vec3 p) {
     return d;
 }
 }  // namespace
+
+AbilitySystem::ClipTiming AbilitySystem::clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name) const {
+    ClipTiming t;
+    if (!host_.anim_clip || (anim_type < 0 && anim_name.empty())) return t;
+    uint32_t count = 0;
+    float fps = 0.0f;
+    if (!host_.anim_clip(id, anim_type, anim_name, count, fps) || count == 0 || !(fps > 0.0f)) return t;
+    t.rate = fps / 30.0f;
+    t.count = static_cast<float>(count);
+    t.end = count >= 2 ? static_cast<float>(count - 2) : 0.0f;
+    return t;
+}
 
 // ================================================================================================
 // accepts-target templates (vfunc +0x28)
@@ -369,7 +393,12 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!alive_unit(target) || !range_ok(o, s, target)) return false;
             sp.applied = 1;
             sp.target = target;
-            sp.next = frame + (s.cls == C::TacticalBribe ? 0u : static_cast<uint32_t>(kHackFrames));
+            uint32_t len = 0;  // animation 0x5a: its end on sim frames, else kHackFrames (§4.13)
+            if (s.cls != C::TacticalBribe) {
+                const ClipTiming ct = clip_timing(o.id, kAnimHacking, {});
+                len = ct.count > 0.0f ? static_cast<uint32_t>(std::ceil(ct.end / ct.rate)) : static_cast<uint32_t>(kHackFrames);
+            }
+            sp.next = frame + len;
             start_recharge(o, s.cls == C::Hack ? kTargetedHack : (s.cls == C::Repair ? kTargetedRepair : kTacticalBribe));
             stop_order(o.id, frame);
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
@@ -590,7 +619,15 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 remove_special(o, sp, frame);
                 return;
             }
-            if (sp.counter % 5 == 0) {  // damage pass [M: the 20 %-80 % animation window is not modelled]
+            // Damage pass every 5th update while the looping animation 0x68 is strictly inside 20 %-80 % of the clip
+            // (§4.13 [port]: loops wrap at count - 1; position from the frames since the apply; no clip: always open).
+            bool window = true;
+            if (const ClipTiming ct = clip_timing(o.id, kAnimBerserk, {}); ct.count > 1.0f) {
+                const float n = static_cast<float>(frames_of(s.berserker_duration, fps) - sp.counter);
+                const float pos = std::fmod(n * ct.rate, ct.count - 1.0f);
+                window = pos > 0.2f * ct.count && pos < 0.8f * ct.count;
+            }
+            if (sp.counter % 5 == 0 && window) {
                 for (size_t i = 0; i < combat_->unit_count(); ++i) {
                     const ObjectId u = combat_->unit_id_at(i);
                     if (!alive_unit(u) || !enemy(o.owner, combat_->owner(u))) continue;
@@ -658,7 +695,10 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 sp.phase = 1;
                 sp.next = frame;  // toss animation start (-1 = at once)
             }
-            if (sp.phase == 1 && static_cast<float>(frame - sp.next) >= s.spawn_frame) {
+            const ClipTiming ct = clip_timing(o.id, -1, s.toss_anim);
+            const float anim = static_cast<float>(frame - sp.next) * ct.rate;
+            if (sp.phase == 1 && anim >= s.spawn_frame) {
+                sp.phase = 2;  // thrown
                 if (alive_unit(sp.target) && s.projectile >= 0) {
                     combat::ProjectileLaunch l;
                     l.shooter = o.combat_unit ? o.id : kNoObject;
@@ -671,8 +711,9 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 }
                 o.active[kStickyBomb] = 1;
                 start_recharge(o, kStickyBomb);
-                remove_special(o, sp, frame);  // animation end: targeting / locomotion resume, unlock
             }
+            // animation end (no Toss_Anim clip: at the throw): targeting / locomotion resume, unlock
+            if (sp.phase == 2 && (ct.count <= 0.0f || anim >= ct.end)) remove_special(o, sp, frame);
             return;
         }
 
@@ -707,10 +748,14 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
 
         case C::ArcSweep:
         case C::GenericAttack:
-        case C::EatAttack: {  // animation-driven: sim frames since the start x Attack_Animation_Speedup [port]
-            const float anim = static_cast<float>(frame - sp.next) * s.anim_speedup;
+        case C::EatAttack: {  // Attack_Animation on sim frames x rate x Attack_Animation_Speedup (§4.13)
+            const ClipTiming ct = clip_timing(o.id, -1, s.attack_anim);
+            const float anim = static_cast<float>(frame - sp.next) * ct.rate * s.anim_speedup;
+            // the hold ends at the animation end, or with the last frame-numbered event when there is no clip
+            const bool ended = ct.count <= 0.0f || anim >= ct.end;
             if (s.cls == C::GenericAttack) {
-                if (anim >= static_cast<float>(s.damage_frame)) {
+                if (sp.phase == 0 && anim >= static_cast<float>(s.damage_frame)) {
+                    sp.phase = 1;  // hit
                     if (alive_unit(sp.target)) {
                         DamageRequest r;
                         r.victim = sp.target;
@@ -719,8 +764,8 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                         r.source = o.id;
                         combat_->take_damage(r, frame);
                     }
-                    if (!o.dead) remove_special(o, sp, frame);
                 }
+                if (sp.phase == 1 && ended && !o.dead) remove_special(o, sp, frame);
                 return;
             }
             if (s.cls == C::EatAttack) {
@@ -729,6 +774,7 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                     if (alive_unit(sp.target)) stop_order(sp.target, frame);
                 }
                 if (sp.phase == 1 && anim >= static_cast<float>(s.destruction_frame)) {
+                    sp.phase = 2;  // destroyed
                     if (alive_unit(sp.target)) {
                         DamageRequest r;
                         r.victim = sp.target;
@@ -741,12 +787,16 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                         const float mh = combat_->max_health(o.id);
                         combat_->set_health(o.id, std::min(mh, combat_->health(o.id) + s.health_per_victim));
                     }
-                    if (!o.dead) remove_special(o, sp, frame);
                 }
+                if (sp.phase == 2 && ended && !o.dead) remove_special(o, sp, frame);
                 return;
             }
             // Arc_Sweep: from Begin_Applying_Damage_Frame each update damages the accepted objects in this update's
             // slice of the arc whose (2-D distance - radius) is in [Arc_Min, Arc_Max] (within 1.5 x Arc_Max).
+            if (sp.phase == 1) {  // swept: held until the animation end
+                if (ended) remove_special(o, sp, frame);
+                return;
+            }
             if (anim < static_cast<float>(s.begin_damage_frame)) return;
             const float step = s.sweep_time > 0.0f
                                    ? static_cast<float>(std::max(1, interval_of(s))) * (s.arc_width / s.sweep_time) /
@@ -775,7 +825,10 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 if (o.dead) return;
             }
             sp.radius = a1;
-            if (std::abs(a1) >= 0.5f * s.arc_width || step <= 0.0f) remove_special(o, sp, frame);
+            if (std::abs(a1) >= 0.5f * s.arc_width || step <= 0.0f) {
+                sp.phase = 1;
+                if (ended) remove_special(o, sp, frame);
+            }
             return;
         }
 
@@ -789,7 +842,8 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 sp.phase = 1;  // inside the firing cone: the attack animation starts
                 sp.next = frame;
             }
-            if (sp.phase == 1 && static_cast<int32_t>(frame - sp.next) >= s.fire_frame) {
+            if (sp.phase == 1 && static_cast<float>(frame - sp.next) * clip_timing(o.id, kAnimAttack, {}).rate >=
+                                     static_cast<float>(s.fire_frame)) {  // Fire_Frame on the attack clip (§4.13)
                 sp.phase = 2;
                 start_active(o, kSuperLaser);  // 55's active countdown
             }

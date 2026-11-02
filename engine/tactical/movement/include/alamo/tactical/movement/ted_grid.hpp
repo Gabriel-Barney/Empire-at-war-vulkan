@@ -10,13 +10,18 @@
 //   (2 x |half extent| x Scale_Factor, offset -half extent x scale, vertical height = model z x scale for
 //   the water rule); types with neither are skipped. Fine_Tune_Occupied_Passability types trim their
 //   samples with `hooks.mesh_ray_hit` when supplied (else untrimmed). bits = OverridePassability or
-//   Obstacle. Stamp ids are -(placement index + 1) so they never collide with object ids.
+//   Obstacle. Stamp ids are -(placement index + 1) (map_stamp_id) so they never collide with object ids.
 // space_from_map: playable box (0x103 04/05) and SPACE_OBSTACLE placements as static entries;
-//   radius = first positive Custom_Soft_Footprint_Radius / Space_Obstacle_Radius x Scale_Factor
-//   (PROVISIONAL [M]: the retail getter's "2R/20" conversion is unexplained and not applied).
+//   radius = first positive Custom_Soft_Footprint_Radius / Space_Obstacle_Radius, else (S7 t07, MOVEMENT §2.2) the larger
+//   x / y half extent of the type's space-model collision bound from `hooks.model_half_extents`, x Scale_Factor
+//   (PROVISIONAL [M]: the retail getter's "2R/20" conversion is unexplained and not applied). Centre = placement position +
+//   Space_Obstacle_Offset (x along the placement facing Rz(yaw) (0, -1), y to its left [M: rotation sense], as the host's
+//   space_obstacles_sync does for units).
 // space_obstacle_footprint: that static entry's radius and SpaceCollisionType bits for one type; false when the type has no
-//   SPACE_OBSTACLE behaviour or no positive radius. refixf t02: hosts use it for SPACE_OBSTACLE objects spawned at run time
-//   (MOVEMENT §2.2: SpaceObstacleBehaviorClass inserts the object as a static entry on attach, removes it on detach).
+//   SPACE_OBSTACLE behaviour, or no positive radius and no model extent. refixf t02: hosts use it for SPACE_OBSTACLE objects
+//   spawned at run time (MOVEMENT §2.2: SpaceObstacleBehaviorClass inserts the object as a static entry on attach, removes
+//   it on detach). The model's collide switch is not consulted (SPACE_AVOIDANCE §5.5: capture points and orbital props
+//   stay planner obstacles).
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -43,7 +48,19 @@ struct MapStampHooks {
 };
 uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map, const objects::GameObjectTypes& types,
                              const MapStampHooks* hooks = nullptr);
-uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const objects::GameObjectTypes* types);
-bool space_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t type, float& radius, uint32_t& bits);
+// S8 t01: the stamp id stamp_map_obstacles gives map placement `placement` (index into MapData::objects). A host that
+// spawns an object for the placement moves the stamp to the object id (PassabilityGrid::rekey), so the per-object cell
+// query (PassabilityGrid::occupies) answers for that object.
+inline ObjectId map_stamp_id(size_t placement) { return -static_cast<ObjectId>(placement) - 1; }
+// S7 t07: host-supplied model data for SPACE_OBSTACLE footprints (deterministic, const data).
+struct SpaceObstacleHooks {
+    // Half x / y extents of the collision bound of type `type`'s space model (bind-pose union of the collision-enabled
+    // meshes, 1 / 1 when it has none; before Scale_Factor); false when the model is unknown.
+    std::function<bool(uint32_t type, float& half_x, float& half_y)> model_half_extents;
+};
+uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const objects::GameObjectTypes* types,
+                        const SpaceObstacleHooks* hooks = nullptr);
+bool space_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t type, float& radius, uint32_t& bits,
+                              const SpaceObstacleHooks* hooks = nullptr);
 
 }  // namespace alamo::tactical::movement

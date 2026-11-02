@@ -540,9 +540,10 @@ using the tag.
 | tag | code | offset | default | notes |
 |---|---|---|---|---|
 | Max_Speed | 0x8 | 0x37c | 0.25 | squadron: min of members |
-| Alternate_Max_Speed | 0x8 | 0x380 | 1.0 | |
+| Alternate_Max_Speed | 0x8 | 0x380 | 1.0 | read only by the airborne JetPack (MOVEMENT §3.1.1) |
 | Max_Thrust | 0x8 | 0x384 | 0.015 | |
 | Max_Rate_Of_Turn | 0x8 | 0x38c | 2.3 | squadron: min of members (scaled) |
+| Alternate_Max_Rate_Of_Turn | 0x8 | 0x390 | 2.0 | ctor 0x367250; read only by the airborne JetPack (MOVEMENT §3.1.1) |
 | Max_Rate_Of_Roll / Bank_Turn_Angle | 0x8 | 0x394 / 0x39c | 2.0 / 70.0 | |
 | Mass | 0x8 | 0x398 | 0.995 | |
 | Max_Lift | 0x8 | 0x3a0 | 0.8 | |

@@ -457,7 +457,8 @@ bool TacticalBattle::clearance_info(objects::ObjectId id, mv::ClearanceInfo& out
 // type, so evaluating it over the live objects equals the retail insert-at-spawn / remove-at-destroy set [port: the
 // Uses_Multiple_Locomotors branch of 0x397900 is land-only]. Positions / facings are the committed store values; the
 // model is the type's Space_Model_Name collision data (BattleCatalog::avoid_model). [port] the model-level collide
-// switch (off while contained) is not modelled: space members are never garrisoned.
+// switch (off while contained) is not modelled: space members are never garrisoned. S7 t08 (SPACE_AVOIDANCE §5.5): no
+// other game-object path switches it off (capture points and orbital props keep colliding), so nothing else to filter.
 void TacticalBattle::avoid_snapshot(const objects::ObjectStore& store) {
     avoid_members_.clear();
     const objects::GameObjectTypes& types = catalog_->types();
@@ -563,7 +564,12 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     });
 #endif
     if (space_) {
-        mv::space_from_map(movement_->space(), map_, &types);
+        // S7 t07 (MOVEMENT §2.2): SPACE_OBSTACLE types without an XML radius are sized by their space model's collision
+        // bound (the capture / construction pods), as in space_obstacles_sync.
+        mv::SpaceObstacleHooks so_hooks;
+        const BattleCatalog* so_cat = catalog_;
+        so_hooks.model_half_extents = [so_cat](uint32_t t, float& hx, float& hy) { return so_cat->space_model_half_extents(t, hx, hy); };
+        mv::space_from_map(movement_->space(), map_, &types, &so_hooks);
         // FIGHTER_FLYING §5: the fighter cell grids build from the playable box at the first tick with a fighter; a
         // map without one gets the fallback box above.
         if (!movement_->space().has_box()) movement_->space().set_box({mn[0], mn[1]}, {mx[0], mx[1]});
@@ -620,6 +626,19 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
                 if (q != p) combat_->set_enemy(static_cast<int32_t>(p), static_cast<int32_t>(q), false);
     combat_->reserve(256, 2048, 32, 256);
     attach_rocket_terrain();  // refixf t01
+    if (!space_) {
+        // S8 t01 (TACTICAL_GAPS 3.1 slot 43): LAND_OBSTACLE targets' aim walk over the cells their stamp occupies (map
+        // placements' stamps move to the spawned objects in bt_map_load); an unstamped target keeps the half-extent rule.
+        const mv::MovementSystem* ms = movement_.get();
+        combat_->set_obstacle_cell_query([ms](tc::ObjectId id, tactical::Vec3 p, tactical::Vec3& c) {
+            const mv::PassabilityGrid& g = ms->grid();
+            if (!g.stamped(id)) return tc::ObstacleCell::NoFootprint;
+            const int32_t cx = mv::world_to_cell(p.x), cy = mv::world_to_cell(p.y);
+            const mv::V2 cc = mv::cell_center(cx, cy);
+            c = tactical::Vec3{cc.x, cc.y, p.z};
+            return g.occupies(id, cx, cy) ? tc::ObstacleCell::Occupied : tc::ObstacleCell::Free;
+        });
+    }
     abilities_ = std::make_unique<ta::AbilitySystem>(*combat_, tables_->abilities, catalog_->ability_config(space_, cfg_.skirmish));
     abilities_->reserve(256, 512);
     // --- P4 tactical: campaign Black Market gate, before any unit is added (Active_By_Default / automatic specials) ---
@@ -891,12 +910,16 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
 // Project_By_Unit_Range gave nil (foc-station seeds 1 and 4). [port] attach = the first sync (end of setup, end of each tick)
 // with the unit live, detach = the first sync after it died or retreated; footprint as space_from_map (radius) at the attach
 // position + Space_Obstacle_Offset rotated by the facing [M: rotation sense]; units adopted from the map keep space_from_map's
-// entry (not added twice).
+// entry (not added twice). S7 t07: a type without an XML radius gets its space model's collision-bound extent (MOVEMENT
+// §2.2); the model's collide switch is not consulted (SPACE_AVOIDANCE §5.5).
 void TacticalBattle::space_obstacles_sync(const TacticalMode& mode) {
     if (!space_ || !movement_) return;
     mv::SpaceOccupancy& occ = movement_->space();
     const objects::ObjectStore& st = mode.primary();
     const objects::GameObjectTypes& types = catalog_->types();
+    mv::SpaceObstacleHooks so_hooks;
+    const BattleCatalog* so_cat = catalog_;
+    so_hooks.model_half_extents = [so_cat](uint32_t t, float& hx, float& hy) { return so_cat->space_model_half_extents(t, hx, hy); };
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !st.alive(u.h)) {
             occ.remove_static(u.id);
@@ -905,7 +928,7 @@ void TacticalBattle::space_obstacles_sync(const TacticalMode& mode) {
         if (parts_[u.participant].map || occ.has_static(u.id)) continue;
         float r = 0.0f;
         uint32_t bits = 0;
-        if (!mv::space_obstacle_footprint(types, u.type, r, bits)) continue;
+        if (!mv::space_obstacle_footprint(types, u.type, r, bits, &so_hooks)) continue;
         const Vec3 p = st.position(u.h), f = st.facing(u.h);
         const std::array<float, 4> off = types.get_vec(static_cast<objects::TypeIndex>(u.type), "Space_Obstacle_Offset");
         const float len = dmath::sqrt(f.x * f.x + f.y * f.y);

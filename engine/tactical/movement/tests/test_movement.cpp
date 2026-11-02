@@ -20,6 +20,15 @@
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 
+#ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
+#include <filesystem>
+#include <fstream>
+
+#include "alamo/core/file_provider.hpp"
+#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/object_types.hpp"
+#include "alamo/tactical/movement/ted_grid.hpp"
+#endif
 #if defined(ALAMO_MOVEMENT_HAVE_DATA) && defined(ALAMO_MOVEMENT_HAVE_TERRAIN)
 #include "alamo/core/hash.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -279,6 +288,31 @@ static void test_grid() {
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
     g.stamp(79, fp3);
     CHECK(g.effective(15, 15) == kPassObstacle && g.effective(15, 18) == kPassObstacle && g.effective(18, 15) == kPassClear);
+    // S8 t01: per-object cell query (0x59efa0) and rekey (map placement stamp -> object id).
+    CHECK(g.occupies(79, 15, 15) && g.occupies(79, 15, 18) && !g.occupies(79, 18, 15) && !g.occupies(79, 16, 15));
+    CHECK(g.occupies_world(79, {300.0f, 330.0f}) && !g.occupies_world(79, {340.0f, 300.0f}));
+    CHECK(!g.occupies(80, 15, 15) && !g.occupies(79, -1, 15) && !g.occupies(79, 15, 99));
+    CHECK(g.stamp_cells(79).size() == 4 && g.stamp_cells(80).empty());  // y 300..360: cells 15..18 of column 15
+    {
+        ObstacleFootprint wall = make_footprint({100.0f, 100.0f}, 0.0f, 40.0f, 20.0f, -20.0f, -10.0f, 0, 0, 1.0f, 0);
+        PassabilityGrid a, b;
+        a.init(32, 32);
+        b.init(32, 32);
+        a.stamp(-5, wall);  // map placement 4
+        b.stamp(12, wall);  // stamped under the object id directly
+        b.stamp(-6, wall);
+        a.stamp(-6, wall);
+        const uint64_t va = a.version();
+        CHECK(a.occupies(-5, 5, 5) && !a.occupies(12, 5, 5));
+        CHECK(!a.rekey(-5, -5) && !a.rekey(-9, 13) && !a.rekey(-5, -6));  // same id, unknown id, target taken
+        CHECK(a.rekey(-5, 12));
+        CHECK(a.occupies(12, 5, 5) && !a.occupies(-5, 5, 5) && !a.stamped(-5) && a.stamped(12) && a.version() == va);
+        StateHasher ha, hb;
+        a.hash(ha);
+        b.hash(hb);
+        CHECK(ha.digest() == hb.digest());  // same as stamping under the object id
+        CHECK(a.unstamp(12) && a.effective(5, 5) == kPassObstacle && a.unstamp(-6) && a.effective(5, 5) == kPassClear);
+    }
     // Water rule: a low object over water does not block.
     PassabilityGrid gw;
     gw.init(16, 16);
@@ -1987,6 +2021,18 @@ static void test_real_data() {
     objects::GameObjectTypes types;
     const bool have_types = raw.load(*fs) && types.build(raw, fs.get());
     CHECK(have_types);
+    if (have_types) {  // S7 t06: Uses_Multiple_Locomotors type data (FoC: the jetpack users; Bossk has no secondary)
+        const auto desc = [&types](const char* name) { return unit_desc_from_type(types, types.resolve_name(name)); };
+        const UnitDesc dt2 = desc("Dark_Trooper_PhaseII"), boba = desc("Boba_Fett"), bossk = desc("Bossk");
+        const UnitDesc dt1 = desc("Dark_Trooper_PhaseI");
+        CHECK(dt2.uses_multiple_locomotors && dt2.has_secondary_locomotor && dt2.secondary_locomotor == LocomotorKind::Jetpack &&
+              dt2.max_speed == 1.0f && dt2.alt_max_speed == 2.5f && dt2.alt_turn_rate == 0.0f && dt2.hover_offset == 70.0f);
+        CHECK(boba.uses_multiple_locomotors && boba.secondary_locomotor == LocomotorKind::Jetpack && boba.alt_max_speed == 2.5f &&
+              boba.alt_turn_rate == 6.0f);
+        CHECK(bossk.uses_multiple_locomotors && !bossk.has_secondary_locomotor);
+        CHECK(!dt1.uses_multiple_locomotors && !dt1.has_secondary_locomotor);
+        CHECK(locomotor_kind_from_type(types, types.resolve_name("Dark_Trooper_PhaseII"), MoveMode::Land) == LocomotorKind::Default);
+    }
     const auto maps = fs->list("Data\\Art\\Maps\\*.ted");
     uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0;
     uint32_t space_units = 0, space_arrived = 0, space_hits = 0, space_obstacles = 0, plan_fail = 0, plan_invalid = 0, plans = 0;
@@ -2219,6 +2265,96 @@ static void test_real_data() {
 }
 #endif
 
+#ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
+// S7 t07 / t08 (MOVEMENT §2.2, SPACE_AVOIDANCE §5.5): SPACE_OBSTACLE footprints. XML radius first (Custom_Soft_Footprint_Radius,
+// then Space_Obstacle_Radius), else the larger model half extent from the host hook, x Scale_Factor; no radius and no model
+// data: no entry. A capture-point pod is an obstacle like any other (the collide switch is not consulted). Map placements
+// add Space_Obstacle_Offset along the placement facing Rz(yaw) (0, -1).
+static void test_space_obstacle_footprint() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "alamo_tactical_movement_space_obstacle";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    auto put = [](const std::filesystem::path& p, const std::string& s) {
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << s;
+    };
+    put(root / "Data/XML/GameObjectFiles.xml", "<L><File>SO.xml</File></L>");
+    put(root / "Data/XML/SO.xml",
+        "<R>\n"
+        "<SpaceStructure Name=\"Pod\"><Behavior>SPACE_OBSTACLE</Behavior><Scale_Factor>1.75</Scale_Factor></SpaceStructure>\n"
+        "<SpaceStructure Name=\"Cap_Pod\"><Behavior>SPACE_OBSTACLE, CAPTURE_POINT</Behavior><Space_Layer>StaticObject</Space_Layer>"
+        "</SpaceStructure>\n"
+        "<SpaceProp Name=\"Rock\"><Behavior>SPACE_OBSTACLE</Behavior><Is_Impassable_Asteroid>true</Is_Impassable_Asteroid>"
+        "<Space_Obstacle_Radius>300</Space_Obstacle_Radius><Space_Obstacle_Offset>100 0 0</Space_Obstacle_Offset></SpaceProp>\n"
+        "<SpaceStructure Name=\"Soft\"><Behavior>SPACE_OBSTACLE</Behavior><Custom_Soft_Footprint_Radius>60</Custom_Soft_Footprint_Radius>"
+        "<Space_Obstacle_Radius>300</Space_Obstacle_Radius><Scale_Factor>2</Scale_Factor></SpaceStructure>\n"
+        "<SpaceUnit Name=\"Ship\"><Space_Layer>Frigate</Space_Layer></SpaceUnit>\n"
+        "</R>");
+    DirectoryProvider dp(path_to_utf8(root));
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(dp) && types.build(raw, &dp));
+    const uint32_t pod = types.resolve_name("Pod"), cap = types.resolve_name("Cap_Pod"), rock = types.resolve_name("Rock"),
+                   soft = types.resolve_name("Soft"), ship = types.resolve_name("Ship");
+    CHECK(pod < types.size() && cap < types.size() && rock < types.size() && soft < types.size() && ship < types.size());
+    if (pod >= types.size() || cap >= types.size() || rock >= types.size() || soft >= types.size() || ship >= types.size()) return;
+    uint32_t hook_calls = 0;
+    SpaceObstacleHooks hooks;
+    hooks.model_half_extents = [&hook_calls, pod, cap](uint32_t t, float& hx, float& hy) {
+        ++hook_calls;
+        if (t == pod) {
+            hx = 40.0f, hy = -55.0f;  // the larger |half extent| decides
+            return true;
+        }
+        if (t == cap) {
+            hx = hy = 1.0f;  // a model without a collision mesh: centre 0, half 1
+            return true;
+        }
+        return false;
+    };
+    float r = 0.0f;
+    uint32_t bits = 0;
+    CHECK(!space_obstacle_footprint(types, pod, r, bits));  // no XML radius, no model data: skipped (as before)
+    CHECK(space_obstacle_footprint(types, pod, r, bits, &hooks) && r == 55.0f * 1.75f && bits == kSpaceStatic);
+    CHECK(space_obstacle_footprint(types, cap, r, bits, &hooks) && r == 1.0f && bits == kSpaceStatic);
+    hook_calls = 0;
+    CHECK(space_obstacle_footprint(types, rock, r, bits, &hooks) && r == 300.0f && bits == (kSpaceStatic | kSpaceImpassableAsteroid));
+    CHECK(space_obstacle_footprint(types, soft, r, bits, &hooks) && r == 120.0f);  // Custom_Soft_Footprint_Radius first
+    CHECK(hook_calls == 0);  // an XML radius never asks for the model
+    CHECK(!space_obstacle_footprint(types, ship, r, bits, &hooks));  // no SPACE_OBSTACLE behaviour
+    SpaceObstacleHooks unknown;
+    unknown.model_half_extents = [](uint32_t, float&, float&) { return false; };
+    CHECK(!space_obstacle_footprint(types, pod, r, bits, &unknown));
+    // Map placements.
+    terrain::MapData map;
+    auto place = [&](uint32_t t, float x, float y, float yaw) {
+        terrain::ObjectPlacement o;
+        o.type_crc = types.raw().types().name_crc[t];
+        o.position[0] = x, o.position[1] = y;
+        o.rotation_deg[2] = yaw;
+        map.objects.push_back(o);
+    };
+    place(pod, 0.0f, 0.0f, 0.0f);         // id -1, r 96.25 at (0, 0)
+    place(rock, 1000.0f, 0.0f, 90.0f);    // id -2, facing (1, 0): centre (1100, 0)
+    place(rock, -1000.0f, 0.0f, 0.0f);    // id -3, facing (0, -1): centre (-1000, -100)
+    place(ship, 0.0f, 2000.0f, 0.0f);     // not an obstacle
+    SpaceOccupancy plain;
+    CHECK(space_from_map(plain, map, &types) == 2);  // the pod needs model data
+    CHECK(!plain.has_static(-1) && plain.has_static(-2) && plain.has_static(-3));
+    SpaceOccupancy occ;
+    CHECK(space_from_map(occ, map, &types, &hooks) == 3);
+    CHECK(occ.has_static(-1) && occ.has_static(-2) && occ.has_static(-3) && !occ.has_static(-4));
+    CHECK((occ.query_static({90.0f, 0.0f}, {90.0f, 0.0f}, 1.0f) & kSpaceStatic) != 0);   // inside 96.25
+    CHECK(occ.query_static({100.0f, 0.0f}, {100.0f, 0.0f}, 1.0f) == 0);                  // outside 96.25 + 1
+    CHECK((occ.query_static({1390.0f, 0.0f}, {1390.0f, 0.0f}, 1.0f) & kSpaceImpassableAsteroid) != 0);  // 1100 + 290
+    CHECK(occ.query_static({790.0f, 0.0f}, {790.0f, 0.0f}, 1.0f) == 0);  // 310 from the offset centre
+    CHECK((occ.query_static({-1000.0f, -390.0f}, {-1000.0f, -390.0f}, 1.0f) & kSpaceStatic) != 0);
+    CHECK(occ.query_static({-1000.0f, 210.0f}, {-1000.0f, 210.0f}, 1.0f) == 0);
+    remove_all_long(root, ec);
+    std::printf("space obstacle footprint: XML radius / model extent / offset placements ok\n");
+}
+#endif
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // unbuffered: a crash keeps the log
     test_heap();
@@ -2245,6 +2381,9 @@ int main() {
     test_fighter_attack_run();
     test_fighter_dogfight();
     test_fighter_determinism();
+#ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
+    test_space_obstacle_footprint();  // S7 t07 / t08
+#endif
 #ifdef MOVEMENT_REAL_DATA
     test_real_data();
 #endif

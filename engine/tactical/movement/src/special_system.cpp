@@ -22,6 +22,57 @@ bool MovementSystem::ground_collider(const Unit& u) const {
     }
 }
 
+void MovementSystem::special_idle(Unit& u) {
+    u.sm = SpecialMotion{};
+    const LocomotorKind k = u.d.locomotor;
+    if (k == LocomotorKind::Default) return;
+    u.sm.state = k == LocomotorKind::Bike      ? LocoState::BikeStopped
+                 : k == LocomotorKind::Flying  ? LocoState::FlyNoPath
+                 : k == LocomotorKind::Fighter ? LocoState::FighterIdle
+                                               : LocoState::WalkStopped;
+    u.sm.dest = u.m.pos;
+    u.goal = u.m.pos;
+    u.sm.airborne = k == LocomotorKind::Flying || k == LocomotorKind::LandBomber;
+}
+
+// S7 t06: the Uses_Multiple_Locomotors swap 0x3a9910 (MOVEMENT §3.1). The behaviour factory builds the other locomotor
+// (0x4c3520), so its state starts idle; the order is dropped (to the secondary: the coordinator order is saved and the
+// unit leaves its coordinator [M: the saved order is not re-issued by the port]). [port] land only (every vanilla user
+// is a land unit; the jetpack is land-only). Engine audio loops off (STATION_HANGARS_SOUND §3.3) is the host's.
+bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
+    if (cfg_.mode != MoveMode::Land || !u.d.uses_multiple_locomotors || !u.d.has_secondary_locomotor) return false;
+    if (u.on_secondary == secondary) return true;
+    u.on_secondary = secondary;
+    u.d.locomotor = secondary ? u.d.secondary_locomotor : u.primary_locomotor;
+    u.has_goal = false;
+    u.need_path = false;
+    u.m.path.clear();
+    u.m.next = 0;
+    u.m.escape_until = 0;
+    u.m.speed = 0.0f;
+    u.m.state = LocoState::WalkStopped;
+    u.following = false;
+    u.turning = false;
+    u.wps.clear();
+    u.path_lag = 0.0f;
+    u.in_formation = false;
+    u.jiggle = V2{};
+    u.formation_speed = 3.0e38f;  // alone (the Unit defaults)
+    u.speed_cap = 3.0e38f;
+    u.hold_until = 0;
+    u.nudge_frames = 0;
+    u.blocked_frames = 0;
+    u.waits = 0;
+    special_idle(u);
+    configure(u);  // [M] Alternate_Max_Speed / _Rate_Of_Turn while on the secondary
+    return true;
+}
+
+bool MovementSystem::use_secondary_locomotor(ObjectId id, bool secondary) {
+    const int32_t i = find(id);
+    return i >= 0 && swap_locomotor(units_[static_cast<size_t>(i)], secondary);
+}
+
 ThreatFn MovementSystem::owner_threat(const Unit& u) const {
     if (!threat_) return {};
     const int32_t owner = u.d.owner;
@@ -227,6 +278,9 @@ void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
             if (height_) u.z = terrain(u.m.pos);
             break;
     }
+    // S7 t06: stopped on the ground (after the landing, a stop or a failed plan), a multi-locomotor unit swaps back to
+    // its primary locomotor (0x641910 calls 0x3a9910 [M: the exact state was not traced]).
+    if (u.on_secondary && s.state == LocoState::WalkStopped && !u.need_path) swap_locomotor(u, false);
 }
 
 // ---------------------------------------------------------------- FLYING_LOCOMOTOR (vf6 0x63d7f0; FIGHTER_FLYING §6)
@@ -507,15 +561,19 @@ float MovementSystem::clearance_query(ObjectId flyer, FlyVec3 from, FlyVec3 to, 
 
 void MovementSystem::hash_special(StateHasher& h) const {
     uint32_t count = 0;
+    const auto listed = [](const Unit& u) {
+        return u.d.locomotor != LocomotorKind::Default || u.threat != kThreatOff || u.on_secondary;
+    };
     for (const Unit& u : units_)
-        if (u.d.locomotor != LocomotorKind::Default || u.threat != kThreatOff) ++count;
+        if (listed(u)) ++count;
     if (count == 0 && despawned_.empty()) return;  // unchanged format for scenarios without §4.2-4.7 state
     h.u32(count);
     for (const Unit& u : units_) {
-        if (u.d.locomotor == LocomotorKind::Default && u.threat == kThreatOff) continue;
+        if (!listed(u)) continue;
         const SpecialMotion& s = u.sm;
         h.i32(u.d.id);
         h.u8(static_cast<uint8_t>(u.d.locomotor));
+        if (u.on_secondary) h.u8(0xA5);  // S7 t06: secondary locomotor active (only then: other formats unchanged)
         h.f32(u.threat);
         h.u8(static_cast<uint8_t>(s.state));
         h.i32(s.anim.id);
