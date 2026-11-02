@@ -772,6 +772,202 @@ replaced):
 A1_READINGS §30.7 "Drop validity". The FoC data gives the worked example's shape (15 members, 3 x 3, squad 5, team
 container locomotor, FormationSpacing 0.5) and slots.
 
+#### 4.2.2 Land drop [M] items settled (a1h t06) [H unless tagged]
+
+1. **Per-player entry facing, mode +0x288.**
+   - **Storage.** `GameModeClass` ctor 0x35a5e0 builds a `DynamicVectorClass<Vector3>` at mode +0x280 (data +0x288,
+     count +0x290) with one 12-byte entry per player (count 0x140a16fb0) and **zeroes every entry**. Each mode object
+     starts a battle with all facings (0, 0, 0). Entries are indexed by player +0x48. They are saved and loaded as chunk
+     0x18 of the mode (vf12 0x362f60 / vf13 0x35f970).
+   - **Writers.** Three copies, all `record := marker object's orientation triple (obj +0x84, +0x88, +0x8c)`, verbatim.
+     The fields are (roll, pitch, **yaw at +8**), in degrees (obj +0x8c = yaw, MOVEMENT). No +180, no offset, no
+     camera term. [M: no other writer; found by scanning every mode +0x288 access with a 12-byte stride]
+     - **Campaign defender** (post-load placement 0x2a1eb0, REMAINING_GAPS §3.2 step 6): the **first** `Defending
+       Forces Position` marker, in the GOM marker list order (MARKER objects with an owner), for the record's defender
+       id. It is written whenever such a marker exists, even when the defender has no start units.
+     - **Campaign attacker** (same function, step 7): the **chosen** `Attacker Entry Position` marker. That is the one
+       farthest from the first attacker-filtered behaviour-0x5f object with a non-zero `Reinforcement_Prevention_Radius`,
+       else the one nearest the first `Defending Forces Position`. It is written **only when the attacker's start list
+       is non-empty** (record +0x28 ≠ 0) and at least one entry marker exists.
+     - **Skirmish** (0x2a4fc0 `Creating_Starting_Forces_For_Skirmish`, once per player whose faction +0x20a8 is set):
+       - no teams: the first map marker whose upper-cased type name equals `PLAYER_<k>_SPAWN_POINT_MARKER` (k = the
+         player's index within his faction, 0x294c60) **and** whose owner's faction is the player's faction;
+       - team game [M: flag = lobby +0xb5]: the k-th `TEAM_<tt>_SPAWN_POINT_MARKER` (tt = player +0x54 as `%02d`,
+         k = index within the team, 0x294cc0).
+       - The record is written only when a marker matched. FoC MARKERS.XML has `Player_0..7_Spawn_Point_Marker` and
+         `Team_00..` markers.
+   - **No marker → (0, 0, 0)**, so yaw 0 (+x world). This covers a campaign attacker with no start units, a skirmish
+     player with no matching marker, and every third player (neutral, hostile, pirates).
+   - Not used as the source: reinforcement points (their facing is never read) and the camera. Mode +0xc0 (the local
+     camera focus) is set from the same marker, but only as a side effect.
+   - **When:** after the map load, inside the first post-load step (campaign) or the skirmish start-force step. Nothing
+     re-writes it during the battle.
+   - **Readers:**
+     - land drop vf80 0x3b5f60 and the human preview 0x345c0 (ψ = record +8 → sin / cos of ψ·0.017453292, small-angle
+       shortcut sin = x, cos = 1 when |x| < 2^-68);
+     - land reinforcement spawn 0x2b5fe0: the landing transport is created with the whole triple as its orientation;
+     - space arrival 0x2bf2d0 (the same triple);
+     - the space drop sweep and the AI ring start u = −(cos ψ, sin ψ) (§4.2, AI_TACTICAL).
+   - Port rule: keep one (roll, pitch, yaw) record per player, zero at battle start, copied from the defender's first
+     Defending Forces marker, the chosen attacker entry marker (only with attacker start units) or the skirmish spawn
+     marker; use its yaw unchanged as ψ for land drops and as the landing transport's facing; replace the port's "side
+     deploy facing".
+
+2. **Type +0x1b60 = `Unique_Ground_Unit`.**
+   - It is a name field (code 0x1d) at +0x1b58, with the resolved type pointer at +0x1b60. Its space twin is
+     `Unique_Space_Unit` +0x1b48 / +0x1b50; `Landing_Transport_Variant` +0x1e60 / +0x1e68 follows the same pattern.
+     BATTLE_TRANSITIONS uses the same pair for AI power.
+   - The same substitute is used by start placement 0x2a00b0 (`plVar[0x36c]` = +0x1b60 → spawn 0x2b3be0) and by
+     0x644330.
+   - **FoC:** only `General_Veers` (NAMEDHEROUNITS.XML, a HeroUnit with no model at all) sets it, to
+     `Veers_AT_AT_Walker` (UNIQUEUNITS.XML).
+   - So company `General_Veers_Team` (one member, `General_Veers`) is laid out, passability-tested and box-tested as the
+     AT-AT:
+     - hard extents 28 × 10 × `Scale_Factor` 1.8 → hx = 50.4, hy = 18;
+     - `Create_Team` is read from the **original** first member (General_Veers: no) → vehicle grid 0x40f970 with N = 1;
+     - with N = 1 the single slot is pos itself (x = 0; gap = (side − b)/2 → y = 0).
+   - Detail: in 0x3b6170 the `Create_Team` test (+0x67) uses the unsubstituted first member, while the cell
+     (0x41b170 → 0x371be0, `FormationSpacing` 0x371b10) uses the substitute.
+   - Port rule: when a member type has no land model and has `Unique_Ground_Unit`, use that type for the cell, the
+     passability and the slot box, but take `Create_Team` from the original member.
+
+3. **Landing-transport rule: TransportDataPack +0xc9 = `persist`.**
+   - X +0xc8 is the TransportDataPack (ctor 0x4ed470 clears +0xc8 / +0xc9).
+   - **+0xc9 has one writer:** 0x4ee200, called only from `Create_Cinematic_Transport` 0x2cb7a0 with Lua argument 8
+     `persist` (SCRIPT_GAPS §3.1); 0x4ed840 only saves and loads it.
+   - Readers:
+     - the landing state machine 0x643c30: a persist transport never takes off;
+     - 0x3b6170;
+     - 0x642ef0, the transport's own landing-clearance test: another landing transport blocks unless it is in state
+       3 / 4 or persist.
+   - It is **not** "has landed" or "is unloading". The ordinary reinforcement transport (0x2b5fe0 attaches
+     TRANSPORT_LANDING) keeps +0xc9 = 0.
+   - So with landingRule = 1 (human preview 0x345c0 and the `Reinforce` command), **every** TRANSPORT_LANDING object is
+     ignored except persistent cinematic ones, whichever state it is in; a null pack is also ignored.
+   - With landingRule = 0 (AI vf80 callers) landing transports block like any other object. The shipped
+     `*_Landing` variants have no locomotor (LandBehavior `HIDE_WHEN_FOGGED`), so the AI's mover exemption does not
+     apply to them. They are in the tree via their parent's `Collidable_By_Projectile_Living` = Yes, e.g.
+     `Imperial_Landing_Craft` [M: variant inheritance].
+   - Port rule: human drops ignore landing transports unless created persistent by `Create_Cinematic_Transport`; AI
+     drops are blocked by them.
+
+4. **Broad-phase tree and footprint boxes.**
+   - **Tree:** 0x2ab640(GOM) returns GOM +0xd8, the all-owners TreeCull (TACTICAL_COMBAT §1.5).
+     - Objects are inserted by 0x29f810 (create) and 0x2b5ad0 (register), and removed by 0x2a6a00 / 0x2b68d0.
+     - An object is inserted only when its type has `Collidable_By_Projectile_Living` (+0x41), or `_Dead` (+0x42) when
+       obj +0x3a0 bit 0x40 (death clone) is set.
+     - Both **default to false** (flag-block initialiser 0x367100 leaves type +0x41 / +0x42 = 0).
+     - All owners count (own, allied, enemy, neutral); there is no owner filter in 0x3b6170.
+     - The link's cached box is the object's world AABB (model collision bound, SPACE_AVOIDANCE §3.1). The query box is
+       the formation AABB with z ±1000.
+   - **FoC data** (tag set explicitly; variants inherit [M]):
+     - Yes: 441 types. Units, heroes, vehicles, structures, special structures and star bases; 32 indigenous;
+       41 build pads (34 say No); 12 `Props_Story`, 3 `Props_Generic`, 2 `SpaceProp`; 1 marker; 1 projectile.
+     - Not in the tree: terrain props (`Prop_*`, `Props_Urban`, `Props_Temperate`, `Cin_GroundProp`), companies,
+       team containers (`Container`), particles and most markers.
+     - So infantry members are tested one by one; the TEAM object never is (its 0x404450 team box is unused here).
+     - Trees, rocks and terrain decorations block a drop only through the passability test 1, not through the
+       footprint.
+   - **Filters in 0x3b6170** (§4.2.1 test 3):
+     - proximity mines;
+     - movers, for the AI only;
+     - landing transports (item 3);
+     - the ignore list: checked only when X's type equals the type of the list's first entry; the list is null for
+       every drop caller.
+   - **Footprint 0x38de80(X):** an oriented box with axes along X's yaw (+0x8c).
+     - **Centre:** X pos + R(yaw)·(`Custom_Hard_XExtent_Offset` +0x16c4, `Custom_Hard_YExtent_Offset` +0x16c8) ×
+       `Scale_Factor`.
+     - **Half extents** (0x396850), first rule that applies:
+       1. X has TEAM (0x16) and its locomotor vf+0x230 is true: the team member span box (0x404450). It never applies
+          here, because team containers are not in the tree.
+       2. X's type `Deploys` (+0xd1), X has a locomotor and is in its deployed state [M: the state predicate,
+          locomotor vf+0x130 / vf+0x120 / obj +0xa8 +0x2b3]: `Custom_Hard_XExtent_Deployed` / `YExtent_Deployed`
+          (+0x16cc / +0x16d0) × `Scale_Factor`. If XExtent_Deployed ≤ 0, the normal extents are used for **both**
+          axes; the y test also reads +0x16cc, an original quirk.
+       3. Otherwise 0x371be0:
+          - when `Custom_Hard_XExtent` and `YExtent` are both > 0: each × `Scale_Factor`;
+          - else **per axis**: the hard extent if > 0, else |model box half extent| of the current mode's model, then
+            × `Scale_Factor`;
+          - no model → 0.
+          - §4.2.1's "when both are > 0; else model" holds only when both are ≤ 0.
+   - Port rule: the blocking set is every live object (or flagged death clone) whose type has `Collidable_By_Projectile_*`,
+     of any owner, minus the item-3 / mine / mover filters. Its box is centre + offsets, (deployed) hard extents or
+     model half extents per axis, × scale, along its yaw. Replace the port's "battle units + LAND_OBSTACLE, else
+     movement radius".
+
+5. **Human `Reinforce` command** (`ReinforceEventClass` vf4 0x403cb0, Execute):
+   - **Skipped entirely** when the current mode's +0x28 object has +0x20 set [M: the victory monitor's "battle
+     decided" flag].
+   - **Position:** re-quantised per axis (0x23bc10 with axes 1, 2, 3) before use. Land is mode type 1.
+   - **Unit:**
+     - campaign: the pool object 0x28aa50(+0x48); if it is missing → return. Its type is 0x3973b0.
+     - skirmish (0x28afb0): type 0x407db0(+0x48).
+   - **Population speech:** if the issuer is the local player and has no population room (0x2b03e0), the faction's
+     "insufficient" speech (faction +0x6a0) plays. This is local only and plays before the validity test.
+   - **Validity:** the **same** vf80 0x3b5f60(mode, issuer, quantised pos, type, force 0, f6 1). Its inputs:
+     - the issuer's facing record (item 1);
+     - checkRadius 1, fog tested;
+     - landingRule 1;
+     - movers ignored only when the issuer is not human (+0x62).
+     - For a human, these are exactly the preview's arguments (0x345c0: checkRadius 1, fog, movers 0, landingRule 1).
+   - The drop proceeds only if vf80 is true **and** the issuer has population room.
+   - **Campaign extra refusals**, all silent:
+     - the unit's type has `Stay_In_Transport_During_Ground_Battle` (+0x2d);
+     - the unit is a transport (+0x337) whose contents (0x397bf0) hold such a type;
+     - the battle planet (0x28aaa0 → snapshot +0x80) restricts the type (0x373490: `Planet_Restricted_Unit_Categories`
+       +0x808 ∩ `CategoryMask` +0x1648, or listed in `Planet_Restricted_Unit_Types` +0x810).
+   - **Spawn:** otherwise 0x2b5fe0(GOM, id, pos, issuer, 1) and the story notification 0x32a910. Skirmish: 0x2b5fe0 when
+     the type resolves.
+   - **Failure:** refused. The point is not moved or clamped, and there is no retry; the unit stays in the pool and no
+     state changes.
+   - **Spawn details** (0x2b5fe0):
+     - It creates the landing transport (the pool object's type `Landing_Transport_Variant` +0x1e68, else the type
+       itself) **exactly at the quantised pos**.
+     - z = terrain height + `Hover_Offset` (+0x1b68). For a vehicle-company cargo, the larger of that and the first
+       member's model height × scale [M].
+     - Its orientation is the issuer's facing record. It attaches TRANSPORT_LANDING and loads the unit.
+     - The cargo is unloaded later with the per-team layout (0x643130); the slots are not re-validated then.
+   - COMMANDS.md "[M: entry not re-read]" is settled: Execute re-runs vf80 with the arguments above.
+   - Port rule: the land `order_reinforce` must re-test vf80 (force 0, landing rule on, movers block for humans) on the
+     quantised point plus the population, stay-in-transport and planet-restriction checks, and refuse the whole drop on
+     failure. Drop the port's per-slot clamp and nearest-cell move.
+
+6. **Space AI deploys (`TF.Reinforce` → 0x2bf2d0):**
+   - The drop test is one point per task-force entry (§4.2 space drop, AI_TACTICAL ring search).
+   - Fleet / squadron / company contents are **not** laid out by a formation table. Each member is spawned at
+     GOM `Find_Free_Placement` 0x2a9670(P, member type, max radius 2500, start angle 0):
+     - rings r = 0, then + 1.2 × the larger model span;
+     - 22.5° steps, starting at angle 0;
+     - first spot whose model box (z ±1000 in space) overlaps no blocker in GOM +0xd8. Blockers exclude dead objects,
+       landing transports, LAND_OBSTACLEs, layer 0x20 and model-less objects.
+     - falling back to P.
+   - The members are then grouped by the team helper 0x2a5a60. Single units spawn at P. Facing = the player's record.
+   - [M: the member-list fields +0x978 / +0x980 and +0x960]
+   - Port rule: space AI drops place each member by the free-placement ring search around the validated point; there is
+     no company formation in space.
+
+**Still open:** the deployed-state predicate in 0x396850 (item 4, rule 2) [M]; the vehicle-company landing height term in
+0x2b5fe0 [M]; the `+0x28 / +0x20` "battle decided" gate of the Reinforce Execute [M]; variant inheritance of
+`Collidable_By_Projectile_Living` (assumed from `Variant_Of_Existing_Type`) [M].
+
+> **Status 2026-11-02 (a1h t06):** implemented in the battle host (`TacticalBattle::land_drop_valid`, used by the AI's
+> `land_drop_ok` and re-run by `order_reinforce`):
+> - item 1: per-side entry-facing record `drop_facing_` (zero at start; the defender's first Defending Forces marker; the
+>   chosen Attacker Entry marker only with attacker start units), saved with the battle; the drop yaw reads it. The
+>   skirmish spawn-point markers are not used: the port's skirmish land battles go through the campaign placement.
+> - item 2: `Unique_Ground_Unit` substitute for members without `Land_Model_Name` (cell, passability, slot box), `Create_Team`
+>   from the original member.
+> - item 3: human drops ignore `TRANSPORT_LANDING` objects, AI drops count them. [port] No `Create_Cinematic_Transport`
+>   persist flag exists in the port, so no landing transport is exempt for humans.
+> - item 4: blockers = live objects of any owner with `Collidable_By_Projectile_Living` (death clones: `_Dead`), minus
+>   mines / AI movers; footprint centre offset `Custom_Hard_X/YExtent_Offset` x scale along the yaw; per-axis half extents,
+>   0 without extents or model (the movement-radius fallback is gone). Rule 2 (deployed extents) is not modelled [M].
+> - item 5: `order_reinforce` (land) re-runs the test (movers block only for a human issuer) and refuses the whole drop
+>   (`InvalidPosition`); the per-slot clamp and nearest-cell move are gone. The campaign Stay_In_Transport /
+>   planet-restriction refusals and the "battle decided" gate are not modelled [port].
+> - item 6 (space members by the free-placement ring search 0x2a9670) is **not implemented**: space reserves still spawn in
+>   rows of 6 around the validated point. Out of a1h's land scope; needs its own task.
+
 ### 4.3 Battle load consumes the sync RNG (item 3) [H draws, M path]
 - Object construction draws synced numbers: SAP init 0x37c050 (from `Init_From_Type` 0x3989a0) does one
   `Get_Int(now, now + interval)` per special ability with interval > 0 that is allowed in the mode (first due

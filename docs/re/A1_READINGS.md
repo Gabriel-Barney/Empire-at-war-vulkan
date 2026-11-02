@@ -1528,3 +1528,235 @@ Read 2026-11-02 from the decompiled code, the RTTI of StarWarsG.exe and the call
   company type (`GalacticSim::representative_type`). [open] The battle host spawns no landing transports yet (units
   drop directly, TACTICAL_GAPS §4.2.1, a1h t06); when it does, it sets the carried type as 0x2b5fe0 does and fills
   `PerceptionObject::rep_type` from it.
+
+## 33. Task-force Guard_Target and its block status (a1h t02) [H unless tagged]
+
+**Question.** Shipped `Escort(tf, target)` (PGTaskForce.lua) calls `tf.Guard_Target(target)` without blocking, once per
+second while no member `Has_Attack_Target()`. `SecureBuildPad` blocks on `Guard_Target(AITarget)` for up to 60 s, with
+`Target_Has_Structure` as the break function. Four things to settle:
+- what order the guard gives;
+- when its block status finishes;
+- whether anything re-orders the units to follow the target;
+- what happens to an older status when a newer order arrives.
+
+Port today: every Guard status stays alive until the plan ends and re-issues a guard order every 150 frames.
+
+### 33.1 `LandTaskForceClass::Guard_Target` (0x6ebdc0)
+
+**Arguments:** `(target [, threat [, useZonePath]])`, parsed like `Move_To`. The 3rd-argument type warning even reads
+"LandTaskForceClass::Move_To -- Unexpected type for parameter %d", copied from Move_To.
+
+| Target | Resolved to |
+|---|---|
+| AITargetLocation | its game object (target vf+0x30) when it has one, else its position (vf+0x68). A null AI target returns nil silently |
+| GameObjectWrapper | the object (0x5791e0). A dead wrapper returns nil silently |
+| Position | the point (+0x28..+0x30) |
+| Task force | one member, picked with `Get_Int(0, n−1)` on the synced LCG (0x1ffb40; no draw when n = 1). An empty target TF gives the warning "target taskforce is empty.  Cannot guard." and nil |
+| anything else | warning "Parameter 1 is not a valid destination", nil |
+| no argument | warning "No destination set", nil |
+
+- **threat:** a Lua number, default 1e18 (none). It is stored in the status (+0x50) and becomes the move block's
+  threat tolerance (+0x54).
+- **useZonePath:** a Lua bool, default false (+0x54). It gives the same zone-by-zone routing as `Move_To` (§25.3). No
+  shipped land caller passes it.
+
+**Status.** A new `LandMovementBlockStatus` (0x73baf0, 0x90 bytes, Lua id 0x819), set up with **mode 2**:
+- object target: 0x73c4f0(status, tf, obj, threat, useZonePath, attack = 0, mode 2);
+- position target: 0x73c360(status, tf, pos, threat, useZonePath, mode 2).
+- Move_To uses mode 0 and Attack_Move mode 1, through the same two set-up functions.
+
+**Return value.** Guard_Target returns **nil** when the status is already finished right after set-up (0x73cab0:
++0x40 set, e.g. no task force or a failed zone route). Otherwise it returns the status.
+
+**Object set-up (0x73c4f0):**
+- stores the object (+0x48) and the mode (+0x88);
+- subscribes the status to the **object's** signals 0x1a [M: owner change] and 0x10 (destroyed);
+- leaves the attack flag +0x56 at 0 for a guard, so **no `Order_Attack`** is issued (Attack_Move sets the flag;
+  TACTICAL_COMBAT path A).
+
+**Order given (object target, 0x73c140(status, obj, collect = 1); position targets use 0x73bf40 the same way):**
+1. **Collect the members** (vf21, slot +0xa8, 0x73c6f0 [M: slot number]). For each TF member in TF +0x78 list order
+   that is not movement-locked (0x39ad40):
+   - if it is admitted to coordinators (0x425e30), take the member itself;
+   - if it is not admitted and is a TEAM container, take each team member instead.
+   - Each taken unit first has **signal 0xb raised on it** (0x220ed0).
+   - The status then subscribes to the unit's signals 9, 10, 0xb, 0x10 and one more [M: 0x1a, which the handler
+     accepts], and appends the unit to the all-units list (+0x58).
+2. **Move them to one new coordinator.** Each listed unit that passes 0x425e30:
+   - leaves its old coordinator (0x426d50);
+   - joins **one new coordinator** (0x426010);
+   - is appended to the pending ("still moving") list (+0x60).
+   With no coordinator system the status finishes at once (+0x40).
+3. **Call coordinator `Move_To` (0x4f8200)**, the same entry a player's move uses. The move-parameter block holds:
+   - kind 3 (object) with the object, or kind 1 (position);
+   - **flags = the mode = 0x02 (guard-move)**;
+   - avoidance 0x3f;
+   - threat = argument 2 (1e18 means none);
+   - no hardpoint; the +0x60 word = 0x1000001.
+   An empty coordinator is deleted (0x4260d0).
+
+**Is it the player's guard order?** The player's guard is `EscortEventClass`: event id 0x15, which is COMMANDS order 21
+"Escort" (constructor 0x3b0010, executor 0x3b0040). Its block is the same: kind 3, flags 2, mask 0x3f, threat 1e18, plus
+an optional hardpoint. Differences:
+- The player's executor first clears each unit's behaviour orders 5, 0x22, 0x29 and 6 (0x38f5d0). The AI path does
+  not.
+- The player's executor replaces a guarded team member by its container (obj +0x2b0). The AI path passes the object as
+  given.
+- Formation `Set_Move` (0x423c10) ignores the block when the target is inside a TEAM container in game mode 2 [M: mode
+  2 = land]. So an AI guard of a single squad member does nothing [M].
+
+**`Has_Attack_Target` (0x57a170)** is true when 0x397a40 returns non-null:
+- first `Formation_Attack_Target(F, −1)` (TACTICAL_COMBAT, 0x41a2e0), which **skips guard blocks**;
+- else the targeting pack's current target (obj +0xf0 → +8).
+So for a guarding unit it is true only when the unit's own targeting has a target.
+
+### 33.2 Block status: IsFinished, Result, signals
+
+- **IsFinished** (vf19 0x73cae0):
+  - if the zone-route-leg flag +0x55 is set, it first issues the next zone leg (0x73bc50(status, 0));
+  - it returns true when +0x40 is set **or** the task force has no members (TF +0x80 − +0x78 = 0, 0x5fca10).
+- **Result** (vf20) is the BlockingStatus default 0x17d070 (no value).
+- **Polling is passive.** IsFinished never re-issues an order, with one exception: the zone-route leg above, which only
+  happens with useZonePath. Legs are issued without re-collecting (collect = 0), so they raise no signal 0xb.
+- **Signal handler.** The handler is 0x73ce80, on the SignalListener sub-object at +0x30; the offsets in this section
+  are from the status.
+
+| Signal | From | Effect |
+|---|---|---|
+| 9 | a unit | ignored |
+| 10 (movement finished) | a unit | Remove the unit from the pending list. Fire Lua TF event 0x12 [M: `Unit_Move_Finished`] for the unit; for a team member, once for its container, when no other member of that team is still pending. Then run the pending-empty test below |
+| 0xb, 0x10, 0x1a | the guarded object | Unsubscribe from it. 0x10 (destroyed) or 0xb: **finish** and release the object. 0x1a, any mode: finish when the attack flag is set and the object is no longer hostile (0x39a4e0). 0x1a, **guard** (mode bit 0x02): also finish when the object **is now hostile** to the TF's owner. Otherwise nothing |
+| 0xb, 0x10, 0x1a | a unit | Unsubscribe the unit and remove it from **both** lists. If the pending list is now empty, run the pending-empty test. Then **finish when the all-units list is empty** |
+
+**Pending-empty test** (every unit still listed has arrived):
+- A zone route is in progress (+0x78 and +0x80 set): set +0x55, so the next poll issues the next leg.
+- No object (a position move or guard): **finish**.
+- An object:
+  1. Mode bit 0x02 clear (move / attack-move): finish when the object is no longer hostile (0x39a4e0) or fails 0x5680b0
+     (TACTICAL_COMBAT path B, step 3).
+  2. Every mode: finish when the object's type has neither `Last_State_Visible_Under_FOW` (+0x88) nor
+     `Initial_State_Visible_Under_FOW` (+0x89) **and** the object is fogged for the TF's player. This test
+     (0x35f470(…, force = 1)) applies fog even to an AI player.
+  3. Otherwise the status **stays open after arrival**.
+
+**When an object guard finishes.** Any one of these finishes it:
+- the guarded object dies (0x10);
+- the guarded object receives signal 0xb, meaning it was given a new order (§33.3);
+- the guarded object turns hostile (0x1a);
+- the TF becomes empty;
+- every unit of the status is gone (died, changed owner or taken by a newer order);
+- after all units arrived, the object is fogged for the AI. This is unlikely, because the guards stand next to it [M].
+
+It does **not** finish when the units arrive.
+
+**When a position guard finishes:** when every pending unit has reported movement finished (signal 10), as `Move_To`
+does; or when all its units are gone; or when the TF is empty.
+
+**Modes 0 and 1 (AI_TACTICAL open item 3).**
+- The status has **no arrival radius of its own**. "Arrived" means the formation's signal 10 (§33.4).
+- The rest follows the table above.
+- Object targets of Move_To / Attack_Move stay open after arrival while the object lives and stays a valid, hostile,
+  unfogged target.
+- This matches the space version (TACTICAL_COMBAT, SpaceMovementBlockStatus).
+
+### 33.3 Superseded statuses
+
+**Who raises signal 0xb.** The signal means "a new order replaces this unit's order" [M: name]. It is raised on a unit
+by:
+- every task-force movement collector: land 0x73c6f0; space 0x739200 and 0x73a650;
+- the unit-level Lua `Move_To` / `Attack_Move` (`Move_Internal` 0x57da90);
+- `Activate_Ability` (0x570a50) and `Turn_To_Face` (0x581cd0);
+- the MoveToObject executor (0x39f380 / 0x39f580);
+- garrison enter and exit (0x635ee0..0x636030);
+- 0x6affb0, ConcentrateFire (0x6f5550), 0x3abb80 and 0x4ca930.
+
+Unit auto-targeting does **not** raise it.
+
+**What a newer order does to older statuses.**
+- A newer TF order (Move_To, Attack_Move, Attack_Target, another Guard_Target …) raises 0xb on each unit it collects.
+- Every older status that listens on those units removes them.
+- An older status whose all-units list becomes empty **finishes**. A status that still holds other units stays open
+  for them.
+- A superseded status never acts again: it holds no order of its own to re-apply, and the units' movement now belongs
+  to the newer coordinator.
+- A unit belongs to at most one live movement status at a time [M: through signal 0xb; true for the land and space
+  collectors read here].
+- Plan end destroys all of the plan's statuses (AI_GALACTIC, "Plan end" step 1).
+
+**`Escort`.** Each re-issue (once per second) creates a new status, and its 0xb finishes the previous guard status (all
+its units are taken). Statuses therefore never pile up.
+- The re-issue does restart the group move: units leave the old coordinator for a new one, and `Set_Move` sets the
+  formation state to 0 (re-plan).
+- The script's own comment says that re-issuing a guard "will cause the assisting escort to break off attack".
+- The AI guard path has no explicit target clear: no 0x38f5d0 and no `Order_Attack`, and 0x4f8200 / `Set_Move` do not
+  touch obj +0xf0 [M].
+- So any break-off comes from the restarted movement and from the targeting scan's guard leash (`Guard_Chase_Range`,
+  §33.4), not from a direct reset [M].
+
+**`SecureBuildPad`.** `BlockOnCommand(Guard_Target(pad), 60, Target_Has_Structure)` normally ends by the 60 s timeout or
+the break function, because the guard status stays open while the pad lives.
+
+### 33.4 Unit-level guard behaviour (formation, flag 0x02) [M unless tagged]
+
+**Following a moving object needs no further AI order** [H for the mechanism]. The formation's periodic update 0x4192b0
+runs at most once per FPS = 30 frames (+0x1d8 = now + 30). With a kind-3 goal it does two things:
+- **Guard, with the guarded object moving on a path** (its locomotor has a current path, 0x5569b0, with state ≠ 5):
+  - when the formation is within R of the object, it **copies the object's path** (0x40dbc0);
+  - it caps its speed (+0x21c, +0xa8) at min(own speed, 2 × the object's speed) [M: exact cap];
+  - with more than one block queued and the object not moving, the guard block is popped.
+- **Any kind-3 goal, with the object unfogged for the formation's owner:** the formation **re-paths toward the object**
+  (0x417520) when both hold:
+  - the object's current goal point (0x583150) is more than R from the formation's recorded goal point
+    (+0x210..+0x218, set by `Set_Move`);
+  - 0x4165f0 agrees. It always agrees for a guard block (flags 0x02) [H].
+- **R** = half the lead member's max attack range (0x3749d0 / 2). For a guard block R is capped at a constant: global
+  0x140b276c0 on land, 0x140b276c4 in space [L: the constant's name].
+
+**Arrival.** Once all members' locomotors report done, the formation has one block and its state is 1, 0x423760 raises
+signal 10 on every member and sets state 3 [H]. The guard block stays as the formation's goal, so a later move of the
+object re-paths the formation again.
+
+**Auto-engage.** The unit's own targeting scan reads the first block's flags:
+- flag 0x02 gives the response range `Guard_Chase_Range` (type +0x52c), measured from the slot goal;
+- a candidate that is attacking the guarded object adds type +0x211c to that range (TACTICAL_COMBAT, 0x4160a0 steps
+  2–5);
+- the scan sets the unit's target (ordered 0), so `Has_Attack_Target` turns true;
+- `Formation_Attack_Target` skips guard blocks, so path B never locks onto the guarded object (a friendly guarded
+  object is not hostile anyway).
+
+**Guard on a position.** The units move there in formation and stop (signal 10, state 3), and the status finishes.
+They then auto-engage within `Guard_Chase_Range` of the slot goal. Whether they walk back after a chase was not traced
+[L].
+
+### 33.5 Rule for the port
+
+1. **`TF.Guard_Target(target [, threat [, useZonePath]])`:**
+   - resolve the target as in §33.1 (a TF target gives one `Get_Int(0, n−1)` member);
+   - issue **one** group move to the TF's collectable members: kind object (or position), **guard flag**, threat;
+   - give no attack order and clear no target;
+   - return nil when nothing could be set up, else a status.
+2. **Do not follow the target by re-ordering from the status.** Following belongs to the unit / formation movement:
+   - at most once per 30 frames, re-path to the guarded object when it is more than R from the recorded goal;
+   - copy the object's path when it is moving.
+   If the port's movement layer cannot do this yet, put the stand-in in movement, keyed to the formation's guard goal.
+   It must never be a per-status timer that issues new TF orders.
+3. **The status is passive.** It finishes:
+   - **object guard:** when the object dies, gets a new order (signal 0xb) or turns hostile; when the TF is empty; when
+     all its units are gone; or, after arrival, when the object is fogged for the AI;
+   - **position guard:** when all units have arrived, when all units are gone, or when the TF is empty.
+4. **Every new order removes its units from all older statuses.** This covers every new TF movement, attack or guard
+   order, and also unit-level Lua moves, abilities and garrison.
+   - An older status left with no units finishes.
+   - **Superseded statuses must stop acting entirely**: they never issue orders again.
+5. **Modes 0 and 1 use the same rules.**
+   - Arrival is the formation's "movement finished"; the status has no radius.
+   - Object targets stay open after arrival while the target is a valid, hostile, unfogged object.
+
+> **Status 2026-11-02 (a1h t02):** implemented. `tactical_ai.cpp`: the Guard status is passive (Result nil); an object
+> guard ends when the object dies or the TF empties, a position guard when no unit moves any more; the 150-frame guard
+> refresh and the Move status's "attack-move follow" re-orders are gone; a new TF move / guard / attack order finishes
+> the TF's older Move / Guard / AttackTarget statuses (`supersede`). `battle_ai.cpp`: object-goal group moves (Guard_Target,
+> Attack_Move / Move_To on an object) get a follow record, re-pathed at most every 30 frames when the object is more than
+> R = half the lead's attack range from the recorded goal; any newer order for a unit removes it from its record
+> (AI save v3, hashed). [port] Not yet: the "turns hostile" and "fogged after arrival" ends of an object guard; unit-level
+> Lua orders, abilities and garrison orders do not supersede statuses; the guard cap constant (0x140b276c0) is [L].
