@@ -115,6 +115,10 @@ public:
     // Hard points whose opportunity target changed to a new live target since the previous call (ascending unit id, then
     // hard-point index [port: no in-tick order]); owner = the unit's team container when it has one.
     std::vector<ai::tactical::OpportunityTargetEvent> opportunity_targets() override;
+    // S7 t15 A1: TacticalBattle::ability_finished_events of the tick just run (signal 0x29, in order).
+    std::vector<int32_t> ability_finished() override;
+    // S7 t21: TacticalBattle::movement_locked (0x39ad40) for the ambush member list.
+    bool movement_locked(int32_t object_id) override;
     // HIJACK_UNIT (AI_GALACTIC_3 §4.3): GalacticSim::magic_spawn at the battle planet, a surface unit launched into the
     // orbit fleet (FAILED when that fails, e.g. blockaded), TacticalBattle::add_reserve; returns the new pool entry.
     // Refused before spawning when the type is not in the battle tables. [port] the galactic AI free store is not touched.

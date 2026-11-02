@@ -112,6 +112,7 @@ struct TfAi final : AiScriptHost {
     std::string name;
     bool on = false;
     AiArg target;
+    std::vector<std::pair<objects::ObjectHandle, bool>> activated;  // S7 t15 A1: the last per-unit activation results
     bool tf_valid(int32_t tf) override { return tf == 3; }
     int32_t tf_force_count(int32_t) override { return static_cast<int32_t>(units.size()); }
     void tf_set_flag(int32_t, AiTfFlag, bool) override {}
@@ -125,6 +126,11 @@ struct TfAi final : AiScriptHost {
         on = flag;
         target = t;
         return 7;
+    }
+    int32_t tf_activate_ability_units(int32_t tf, std::string_view ability, bool flag, const AiArg& t,
+                                      const std::vector<std::pair<objects::ObjectHandle, bool>>& units_activated) override {
+        activated = units_activated;
+        return tf_activate_ability(tf, ability, flag, t);
     }
     bool tf_is_raid_capable(int32_t) override { return false; }
     void tf_release_forces(int32_t, double) override {}
@@ -417,7 +423,38 @@ static void test_abilities(const Db& db) {
     CHECK(run(vm, "TF.Set_Targeting_Priorities('Capital_Attack', 'Ship')") == "" && w.combat->priority_override(ship) == 0);
     CHECK(run(vm, "TF.Set_Targeting_Priorities('Fighter_Attack', 'Hauler')") == "" && w.combat->priority_override(ship) == 0);
     CHECK(run(vm, "s.Set_Targeting_Priorities('No_Such_Set')") == "" && w.combat->priority_override(ship) == -1);
+    // S7 t15 A1 (MOVEMENT §3.1.1 step 6): the host learns which units the S9 command accepted (one AbilityBlockStatus count
+    // each); SPOILER_LOCK on while it is on again is refused.
+    a.force_recharge(ship, ab::kSpoilerLock, 0.0f);
+    CHECK(run(vm, "TF.Activate_Ability('SPOILER_LOCK', true)") == "" && ai.activated.size() == 1 &&
+          ai.activated[0].first == store.find(ship) && ai.activated[0].second);
+    CHECK(run(vm, "TF.Activate_Ability('SPOILER_LOCK', true)") == "" && ai.activated.size() == 1 && !ai.activated[0].second);
+    CHECK(run(vm, "TF.Activate_Ability('SPOILER_LOCK', false)") == "" && !a.is_active(ship, ab::kSpoilerLock));
     attach_ai_host(vm, nullptr, -1);
+    // S7 t15 A1: the object Activate_Ability's BlockingStatus (S9 path) is an AbilityBlockStatus: pending until the unit's
+    // next "unit ability finished" signal 0x29 (ObjectBridge::ability_finished, fed by the host) or its death / removal. A
+    // signal before the activation or for another object does not count; an ability the unit lacks finishes at once.
+    bridge.ability_finished(ship);  // before the activation
+    a.force_recharge(ship, ab::kSpoilerLock, 0.0f);
+    CHECK(run(vm, "ab1 = s.Activate_Ability('SPOILER_LOCK', true) f1 = ab1.IsFinished() "
+                  "nb = s.Activate_Ability('TURBO') fn = nb.IsFinished()") == "");
+    CHECK(!gtrue(vm, "f1") && gtrue(vm, "fn"));
+    const uint32_t signals0 = bridge.ability_signals(ship);
+    bridge.ability_finished(target);  // not watched: ignored
+    CHECK(run(vm, "f2 = ab1.IsFinished()") == "" && !gtrue(vm, "f2") && bridge.ability_signals(target) == 0);
+    bridge.ability_finished(ship);
+    CHECK(run(vm, "f3 = ab1.IsFinished() ab2 = s.Activate_Ability('SPOILER_LOCK', false) f4 = ab2.IsFinished()") == "");
+    CHECK(gtrue(vm, "f3") && !gtrue(vm, "f4") && bridge.ability_signals(ship) == signals0 + 1);
+    bridge.ability_finished(ship);
+    CHECK(run(vm, "f5 = ab2.IsFinished() f6 = ab1.IsFinished()") == "" && gtrue(vm, "f5") && gtrue(vm, "f6"));
+    {  // death finishes the block (signals 0xb / 0x10)
+        const objects::ObjectHandle h2 = make(store, db.t("Ship"), 0, {0, -500, 0});
+        w.add(store.id(h2), 0, 0, {0, -500, 0});
+        vm.set_object_global("S2", h2);
+        CHECK(run(vm, "ab3 = S2.Activate_Ability('DEFEND') f7 = ab3.IsFinished()") == "" && !gtrue(vm, "f7"));
+        CHECK(store.destroy(h2));
+        CHECK(run(vm, "f8 = ab3.IsFinished()") == "" && gtrue(vm, "f8"));
+    }
     // OI abilities t01 (A1_READINGS §28.8, §28.9): Lock / Unlock_Current_Orders and the ability share of the obj +0x3a8
     // counter.
     auto said = [&vm](const char* text) {

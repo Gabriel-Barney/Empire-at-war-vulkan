@@ -1,26 +1,26 @@
 # A1 stage 2 synthetic space skirmish (mock battle host): per-frame CRC (every 150th + last), decisions, orders
 frame 150 98858392d1d2e55d
-frame 300 c09134d1b2cb6399
-frame 450 bc6f99949dba8abd
-frame 600 8c297700a636f81e
-frame 750 023c77ef60233960
-frame 900 83014117580594c1
-frame 1050 7e0d1ad1d928401e
-frame 1200 415f111034dc3a1e
-frame 1350 dd4496b3b019dbb1
-frame 1500 5640dfed8e444fb8
-frame 1650 dfd27e64556680ee
-frame 1800 003c24e01ac620f8
-frame 1950 07b8821350c073a9
-frame 2100 4e56fc8f66abd3fa
-frame 2250 5d279eb6fb86f882
-frame 2400 1b092b225b3c2ce8
-frame 2550 7ba637aacf455618
-frame 2700 0110648f2f50614a
-frame 2850 8bd99111bb423d75
-frame 3000 982e6555da3d3dc4
-frame 3150 91321985b5a06053
-frame 3300 40a351447d62bf0e
+frame 300 5f8fef5c87b05312
+frame 450 e17e030fee4f96e2
+frame 600 b3a1f6677157c32e
+frame 750 ce34345044ccb2dd
+frame 900 1f29437a1663f3b6
+frame 1050 0bb516776e669ed0
+frame 1200 c5367e132b49869f
+frame 1350 b50cd7db12b6d628
+frame 1500 ac81006d4b13d3f7
+frame 1650 1646a58a7853fd95
+frame 1800 6277fd35b18441c3
+frame 1950 52a68db15d318dc6
+frame 2100 6fba60dc0ccb8eaf
+frame 2250 3dc2958d2beb5826
+frame 2400 b7d19221d34d239c
+frame 2550 06fa1d9162c2dbf6
+frame 2700 00395c6297ce4352
+frame 2850 3ae214c94f467304
+frame 3000 d6f97e9df0ec0e07
+frame 3150 04979dceaac69207
+frame 3300 64713de7bfcc3d6c
 frame 3450 4824ae62afd36985
 frame 3600 ba636cf7fd337c93
 frames 3600 orders 49 rejected 0 deaths E=8 R=5 units left 3 plans 2
@@ -62,6 +62,7 @@ frames 3600 orders 49 rejected 0 deaths E=8 R=5 units left 3 plans 2
 97 p1 order tf MainForce attack 10 hp 12
 190 p0 order guard follow
 199 p1 order tf SweepForce attack 4
+225 p0 tf SweepForce no units remaining
 229 p0 plan 2 SYNSWEEP ended success
 229 p1 plan 8 SYNDESTROY ended success
 246 p0 plan 9 SYNDESTROY for Syn_Destroy_Unit @OBJECT_6 MainForce
@@ -73,9 +74,11 @@ frames 3600 orders 49 rejected 0 deaths E=8 R=5 units left 3 plans 2
 265 p0 plan 12 SYNSWEEP for Syn_Sweep_Area @CELL_2_1 SweepForce
 265 p0 tf SweepForce produce: 0 units, 1 pending reinforcements, 0 pads
 265 p1 order tf MainForce attack 4 hp 1
+270 p0 tf MainForce no units remaining
+271 p0 plan 7 SYNDESTROY ended failure
 271 p0 order skirmish reinforce Syn_Frigate (tf MainForce)
 271 p0 order tf MainForce attack 6 hp 5
-274 p0 plan 7 SYNDESTROY ended failure
+274 p1 tf SweepForce no units remaining
 274 p1 plan 4 SYNSWEEP ended success
 274 p1 plan 6 SYNSWEEP ended success
 274 p1 plan 11 SYNDESTROY ended success
@@ -89,6 +92,7 @@ frames 3600 orders 49 rejected 0 deaths E=8 R=5 units left 3 plans 2
 289 p0 order tf SweepForce attack-move 1 units -> (3000, -1000)
 299 p1 plan 15 SYNDESTROY for Syn_Destroy_Unit @OBJECT_12 MainForce
 301 p1 tf MainForce produce: 1 units, 1 pending reinforcements, 0 pads
+305 p0 tf SweepForce no units remaining
 307 p0 order skirmish reinforce Syn_Corvette (tf SweepForce)
 313 p0 order tf SweepForce attack 6
 313 p1 order tf Escort guard 1 units -> (1076, -310)
@@ -103,6 +107,7 @@ frames 3600 orders 49 rejected 0 deaths E=8 R=5 units left 3 plans 2
 502 p1 order tf MainForce attack 14 hp 8
 517 p1 plan 17 SYNDESTROY for Syn_Destroy_Unit @OBJECT_13 MainForce
 517 p1 tf MainForce produce: 0 units, 1 pending reinforcements, 0 pads
+549 p0 tf SweepForce no units remaining
 553 p0 plan 12 SYNSWEEP ended success
 553 p1 plan 16 SYNDESTROY ended success
 575 p0 plan 18 SYNDESTROY for Syn_Destroy_Unit @OBJECT_5 MainForce
@@ -134,7 +139,8 @@ frames 3600 orders 49 rejected 0 deaths E=8 R=5 units left 3 plans 2
 913 p1 order guard follow
 937 p0 plan 22 SYNDESTROY ended failure
 949 p0 order tf SweepForce attack 6
-961 p0 plan 9 SYNDESTROY ended failure
+958 p0 tf MainForce no units remaining
+958 p0 plan 9 SYNDESTROY ended failure
 961 p1 plan 21 SYNDESTROY ended success
 976 p0 plan 24 SYNDESTROY for Syn_Destroy_Unit @OBJECT_8 MainForce
 976 p0 tf MainForce produce: 1 units, 1 pending reinforcements, 0 pads
@@ -147,6 +153,7 @@ frames 3600 orders 49 rejected 0 deaths E=8 R=5 units left 3 plans 2
 1019 p1 plan 26 SYNDESTROY for Syn_Destroy_Unit @OBJECT_1 MainForce
 1021 p1 tf MainForce produce: 1 units, 0 pending reinforcements, 0 pads
 1027 p1 order tf MainForce attack 1 hp 7
+1091 p0 tf SweepForce no units remaining
 1096 p0 plan 23 SYNSWEEP ended success
 1123 p1 order tf SweepForce attack 16
 1134 p1 plan 25 SYNSWEEP ended failure (released)
@@ -154,8 +161,9 @@ frames 3600 orders 49 rejected 0 deaths E=8 R=5 units left 3 plans 2
 1168 p0 plan 27 SYNDESTROY for Syn_Destroy_Unit @OBJECT_6 MainForce
 1168 p0 tf MainForce produce: 1 units, 0 pending reinforcements, 0 pads
 1174 p0 order tf MainForce attack 6
+1308 p1 tf MainForce no units remaining
+1309 p1 plan 26 SYNDESTROY ended failure
 1312 p0 plan 27 SYNDESTROY ended success
-1312 p1 plan 26 SYNDESTROY ended failure
 2096 p0 plan 28 SYNDESTROY for Syn_Destroy_Unit @OBJECT_5 MainForce
 2098 p0 tf MainForce produce: 1 units, 0 pending reinforcements, 0 pads
 2104 p0 order tf MainForce attack 5 hp 9

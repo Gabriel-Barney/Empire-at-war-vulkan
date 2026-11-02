@@ -73,6 +73,10 @@ int task_force_fire_special_weapon(Call& c, bool space, const std::vector<object
 // task-force variants delegate to the object bindings). The results are dropped; returns the first result's truth (false
 // on an error, whose message is discarded [port: the original logs per unit]).
 bool call_object_method(Call& c, objects::ObjectHandle unit, const char* name, int first, int nargs);
+// bind_objects.cpp, S7 t15 A1: GameObjectWrapper.Activate_Ability of `unit` with the script arguments at `first` (the
+// task-force Activate_Ability, AI_TACTICAL §7.3); results dropped. True when the activation went through (the S9 command
+// accepted the unit, or the event path issued it); false for a dead unit, an argument error or a refused activation.
+bool object_activate_ability(Call& c, objects::ObjectHandle unit, int first, int nargs);
 // bind_objects.cpp: TaskForceClass.Set_Targeting_Priorities(set [, type or category filter]) applied to `units` through
 // the object binding (script argument 1 = set name, 2 = optional filter).
 void task_force_set_targeting_priorities(Call& c, const std::vector<objects::ObjectHandle>& units);
@@ -210,6 +214,10 @@ void queue_event(lua_State* L, int fn_index, int params_index);
 inline constexpr int32_t kBlockOrder = 0, kBlockReinforcement = 1, kBlockForever = 2;
 inline constexpr int32_t kBlockStarbaseLevel = 3;    // WaitForStarbase(planet, level): id = planet object id, value = level
 inline constexpr int32_t kBlockGroundbaseLevel = 4;  // WaitForGroundbase(planet, level)
+// (5 = kBlockBombingRun, script_remaining.hpp.) S7 t15 A1: AbilityBlockStatus of GameObjectWrapper.Activate_Ability (count
+// 1): id = object, value = ObjectBridge::watch_ability at creation; finished once the bridge counted a later signal 0x29 of
+// the object, or the object is dead / dying / removed (bind_objects.cpp).
+inline constexpr int32_t kBlockAbility = 6;
 bool galactic_block_finished(Call& c);  // c.self = the BlockingStatus
 
 // OI follow-up t03/t04 (A1_READINGS §28.9): the object's movement lock (0x39ad40) as the bindings see it - a script

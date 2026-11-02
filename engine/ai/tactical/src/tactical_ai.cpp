@@ -117,10 +117,11 @@ struct TfRec {
     std::vector<std::pair<int32_t, int32_t>> reservations;   // (pad object id, type) for Build / Build_All
     std::vector<std::pair<int32_t, int32_t>> producing;      // (type, builder object id): tactical builds in progress
     std::string priorities;                                  // Set_Targeting_Priorities
-    bool had_units = false, no_units_sent = false;
 };
 
-enum class StatusKind : uint8_t { Done, Failed, ProduceForce, Move, AttackTarget, Guard, SpaceReinforce };
+// Ambush: S7 t21 SpaceAmbushBlockStatus (AI_TACTICAL §7.3.1); Ability: S7 t15 A1 AbilityBlockStatus of the task-force
+// Activate_Ability (MOVEMENT §3.1.1 step 6).
+enum class StatusKind : uint8_t { Done, Failed, ProduceForce, Move, AttackTarget, Guard, SpaceReinforce, Ambush, Ability };
 
 struct StatusRec {
     int32_t id = -1;
@@ -138,6 +139,15 @@ struct StatusRec {
     int64_t timeout = -1;
     float ring = 0.0f;
     bool prevent = false;
+    // S7 t21 - SpaceAmbushBlockStatus (§7.3.1): direction (+0x50: 0 front, 1 left, 2 right, 3 back), minDist (+0x54),
+    // threat tolerance (+0x58), mode frame of the last plan (+0x40), lists created (first plan); `members` (+0x68) and
+    // `moving` (+0x60) as object ids in list order; `target` = the target object, -1 once it died; last_order = the AI
+    // frame of the last group move. S7 t15 A1 - AbilityBlockStatus: `members` = the activated units still pending.
+    int8_t direction = -1;
+    float min_dist = 0.0f, threat = 1.0e18f;
+    uint32_t plan_frame = 0;
+    bool lists = false;
+    std::vector<int32_t> members, moving;
 };
 
 struct PlanInstance {
@@ -315,7 +325,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         if (cfg.mode != TacticalMode::Land || zones.size() == 0) return -1;
         return zones.nearest_zone(p.x, p.y);
     }
-    // Position of an argument (object / AI target / task force / point). False when none.
+    // Position of an argument (object / AI target / task force / point). False when none (never for a live task force record).
     bool arg_position(const lua::AiArg& a, const lua::AiPoint& p, Vec3f& out);
     Vec3f tf_center(const TfRec& t) const {
         Vec3f c;
@@ -328,10 +338,11 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
                 c.z += q.z;
                 ++n;
             }
-        if (n > 0) {
-            c.x /= static_cast<float>(n);
-            c.y /= static_cast<float>(n);
-            c.z /= static_cast<float>(n);
+        if (n > 0) {  // S7 t20 (AI_TACTICAL §7.3.2): a reciprocal multiply (vf46 0x5fcc60), not a divide; no member -> (0, 0, 0)
+            const float f = 1.0f / static_cast<float>(n);
+            c.x *= f;
+            c.y *= f;
+            c.z *= f;
         }
         return c;
     }
@@ -385,7 +396,18 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     void end_plan(int32_t id, bool by_goal_system);
     void service_plans(int32_t player);
     void drain_world_requests(int32_t player, int32_t plan);
-    void tf_event(const TfRec& tf, std::string_view event, const std::vector<lua::AiEventArg>& args);
+    void tf_event(const TfRec& tf, std::string_view event, const std::vector<lua::AiEventArg>& args, bool always_queue = false);
+    // S7 t20 (AI_TACTICAL §7.3.2): a member left the task force (died / removed / owner changed / released) or a production
+    // entry failed. When nothing is left (no unit, no pending reinforcement, no build in progress [M: the TF +0x60 entry
+    // vector's type-flag test]) plan event 7 No_Units_Remaining is queued to the plan (dispatched by its next PumpEvents).
+    void units_lost(TfRec& t);
+    // S7 t15 A1 / S7 t21: per-frame object signals of the ambush / ability statuses (deaths, target death, movement
+    // finished) and the host's "unit ability finished" signals (0x29).
+    void status_signals();
+    void ability_signals(const std::vector<int32_t>& ids);
+    int32_t tf_member_of(int32_t object_id) const;  // the task force holding the object or its team container, -1 none
+    bool ambush_point(const StatusRec& s, int32_t player, Vec3f& out) const;
+    void ambush_plan(StatusRec& s, bool first);
     void opportunity_events(const std::vector<OpportunityTargetEvent>& events);  // STRATEGIC_GAPS §5.3
     void service_statuses(int32_t player);
     bool step_status(StatusRec& s);
@@ -403,7 +425,6 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
                 if (t.producing[k].first == o.type || t.producing[k].first == ty) {
                     t.producing.erase(t.producing.begin() + static_cast<std::ptrdiff_t>(k));
                     t.units.push_back(h);
-                    t.had_units = true;
                     decide(t.player, "tf " + t.name + " produced " + type_name(o.type) + " " + std::to_string(o.id));
                     return true;
                 }
@@ -452,6 +473,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         const std::vector<ObjectHandle> gone(t->units.begin(), t->units.begin() + static_cast<std::ptrdiff_t>(n));
         t->units.erase(t->units.begin(), t->units.begin() + static_cast<std::ptrdiff_t>(n));
         for (const ObjectHandle u : gone) release_to_free_store(t->player, u);
+        if (n > 0) units_lost(*t);  // S7 t20: Release_Unit path (0x5ff2d0)
     }
     void tf_release_unit(int32_t tf, ObjectHandle unit) override {
         TfRec* t = tf_rec(tf);
@@ -461,6 +483,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         if (it == u.end()) return;
         u.erase(it);
         release_to_free_store(t->player, unit);
+        units_lost(*t);  // S7 t20: Release_Unit (0x5ff2d0)
     }
     std::vector<ObjectHandle> tf_units(int32_t tf) override {
         TfRec* t = tf_rec(tf);
@@ -480,6 +503,10 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         if (it == statuses.end()) return true;
         // refixf t06 (AI_TACTICAL §7.4): the space reinforcement places its units inside IsFinished, once per Lua poll.
         if (it->second.kind == StatusKind::SpaceReinforce && !it->second.finished) space_reinforce_poll(it->second);
+        // S7 t21 (§7.3.1, IsFinished 0x73a8d0): an unfinished ambush re-plans when Lua polls it more than 150 mode frames
+        // after its last plan (new point from the target's current position and facing; every member re-ordered).
+        if (it->second.kind == StatusKind::Ambush && !it->second.finished && mode_frame - it->second.plan_frame > 150)
+            ambush_plan(it->second, false);
         return it->second.finished;
     }
     lua::AiStatusResult status_result(int32_t status) override {
@@ -578,13 +605,22 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     void tf_set_targeting_priorities(int32_t tf, std::string_view set) override {
         if (TfRec* t = tf_rec(tf)) t->priorities = std::string(set);  // [port] recorded; combat priority sets not switched
     }
+    // S7 t21 Prepare_Ambush (AI_TACTICAL §7.3.1), after the binding's argument checks.
+    int32_t tf_prepare_ambush(int32_t tf, const lua::AiArg& target, int direction, double min_dist, double threat, bool zone_path,
+                              std::string* name) override;
+    // S7 t15 A1: the task-force Activate_Ability's AbilityBlockStatus (MOVEMENT §3.1.1 step 6).
+    int32_t tf_activate_ability_units(int32_t tf, std::string_view ability, bool on, const lua::AiArg& target,
+                                      const std::vector<std::pair<ObjectHandle, bool>>& units) override;
+    std::string tf_name(int32_t tf) override {
+        const TfRec* t = tf_rec(tf);
+        return t ? t->name : std::string();
+    }
     // --- L1 final (script_remaining.hpp) ---
     // Add_Force(unit): a live unit of the task force's player held by no task force joins it [port].
     bool tf_add_unit(int32_t tf, ObjectHandle unit) override {
         TfRec* t = tf_rec(tf);
         if (!t || !unit_ok(unit, t->player) || tf_owns(unit)) return false;
         t->units.push_back(unit);
-        t->had_units = true;
         return true;
     }
     // TaskForceClass.Get_AI_Power_Vs_Unit (L1_S4_REMAINING §2.12, tactical only): sum over the TF's units of the
@@ -932,10 +968,10 @@ bool TacticalAiWorld::Impl::arg_position(const lua::AiArg& a, const lua::AiPoint
         return true;
     }
     if (a.task_force >= 0) {
+        // S7 t20 (AI_TACTICAL §7.3.2): the extractor never fails for a task force; no live member -> (0, 0, 0).
         TfRec* t = tf_rec(a.task_force);
         if (!t) return false;
         prune_tf(*t);
-        if (t->units.empty()) return false;
         out = tf_center(*t);
         return true;
     }
@@ -1105,6 +1141,20 @@ void TacticalAiWorld::Impl::refresh() {
             }
         }
     }
+    // S7 t20 (AI_TACTICAL §7.3.2): the task forces' death / removal signals (0x10 / 0x1a) - members gone this frame leave
+    // at once (ascending TF id) and No_Units_Remaining is queued when nothing is left. Before, a per-service poll.
+    for (auto& [id, t] : tfs) {
+        const size_t before = t.units.size();
+        prune_tf(t);
+        if (t.units.size() < before) units_lost(t);
+    }
+}
+
+void TacticalAiWorld::Impl::units_lost(TfRec& t) {
+    if (!t.units.empty() || !t.pending.empty() || !t.producing.empty()) return;
+    decide(t.player, "tf " + t.name + " no units remaining");
+    const TfRec copy = t;
+    tf_event(copy, "No_Units_Remaining", {}, true);
 }
 
 void TacticalAiWorld::Impl::service_free_store(PlayerAi& p) {
@@ -1170,7 +1220,6 @@ bool TacticalAiWorld::Impl::tf_collect_free_units(int32_t tf) {
         p->fs.remove(id);
         t->units.push_back(h);
     }
-    if (!t->units.empty()) t->had_units = true;
     return true;
 }
 
@@ -1274,8 +1323,6 @@ void TacticalAiWorld::Impl::claim_force(TfRec& t) {
         }
         release_pp(pit->second.pp, static_cast<int32_t>(t.def));
     }
-    if (!t.units.empty() || !t.pending.empty()) t.had_units = true;
-    if (!t.producing.empty()) t.had_units = true;
     decide(t.player, "tf " + t.name + " produce: " + std::to_string(t.units.size()) + " units, " + std::to_string(t.pending.size()) +
                          " pending reinforcements, " + std::to_string(t.reservations.size()) + " pads" +
                          (t.producing.empty() ? std::string() : ", " + std::to_string(t.producing.size()) + " in production") +
@@ -1284,6 +1331,7 @@ void TacticalAiWorld::Impl::claim_force(TfRec& t) {
         const TfRec copy = t;
         tf_event(copy, "Production_Failed", {a});
     }
+    if (!failed.empty()) units_lost(t);  // S7 t20: the production-failed path (§7.3.2)
 }
 
 // ---- A2 tactical: the PotentialPlan solve (slot 10) and its reservations ----
@@ -1553,11 +1601,12 @@ void TacticalAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
     plans.erase(it);
 }
 
-void TacticalAiWorld::Impl::tf_event(const TfRec& tf, std::string_view event, const std::vector<lua::AiEventArg>& args) {
+void TacticalAiWorld::Impl::tf_event(const TfRec& tf, std::string_view event, const std::vector<lua::AiEventArg>& args,
+                                    bool always_queue) {
     const auto it = plans.find(tf.plan);
     if (it == plans.end() || !it->second.vm) return;
     std::string err;
-    const bool queued = current_plan == tf.plan;
+    const bool queued = always_queue || current_plan == tf.plan;
     if (!lua::dispatch_task_force_event(*it->second.vm, tf.id, tf.kind, tf.name, event, args, queued, &err) && !err.empty())
         errors.push_back(library.plans[it->second.plan].name + " " + std::string(event) + ": " + err);
 }
@@ -1669,21 +1718,7 @@ void TacticalAiWorld::Impl::service_statuses(int32_t player) {
     }
     for (auto s = statuses.begin(); s != statuses.end();)
         s = (s->second.finished && plans.find(s->second.plan) == plans.end()) ? statuses.erase(s) : std::next(s);
-    // Task forces that lost every unit (No_Units_Remaining).
-    std::vector<int32_t> empty;
-    for (auto& [id, tf] : tfs) {
-        if (tf.player != player) continue;
-        prune_tf(tf);
-        if (tf.had_units && tf.units.empty() && tf.pending.empty() && !tf.no_units_sent) {
-            tf.no_units_sent = true;
-            empty.push_back(id);
-        }
-    }
-    for (const int32_t id : empty)
-        if (const TfRec* t = tf_rec(id)) {
-            const TfRec copy = *t;
-            tf_event(copy, "No_Units_Remaining", {});
-        }
+    // S7 t20: No_Units_Remaining is raised from the removal signals (refresh, release, production failure), not polled here.
 }
 
 bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
@@ -1701,9 +1736,12 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             prune_tf(*t);
             // AI_GALACTIC_3 §1.11: a started tactical build registers the unit with the plan and waits for it. An entry
             // whose builder is gone is dropped [port: the build signals 0x22 / 3 are not modelled].
-            t->producing.erase(std::remove_if(t->producing.begin(), t->producing.end(),
-                                              [this](const std::pair<int32_t, int32_t>& e) { return !store.alive(store.find(e.second)); }),
-                               t->producing.end());
+            if (const size_t before = t->producing.size(); before > 0) {
+                t->producing.erase(std::remove_if(t->producing.begin(), t->producing.end(),
+                                                  [this](const std::pair<int32_t, int32_t>& e) { return !store.alive(store.find(e.second)); }),
+                                   t->producing.end());
+                if (t->producing.size() < before) units_lost(*t);  // S7 t20: a build entry failed
+            }
             if (!t->producing.empty()) return false;
             return finish(!t->units.empty() || !t->pending.empty() || !t->reservations.empty());
         case StatusKind::Move: {
@@ -1742,6 +1780,8 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             return finish(true);
         }
         case StatusKind::SpaceReinforce: return false;  // refixf t06: advanced only by the Lua poll (status_finished)
+        case StatusKind::Ambush:
+        case StatusKind::Ability: return false;  // S7 t21 / S7 t15 A1: advanced by the object signals (status_signals)
         case StatusKind::AttackTarget: {
             const ObjectHandle h = store.find(s.target);
             if (!store.alive(h)) return finish(true);
@@ -1852,6 +1892,299 @@ int32_t TacticalAiWorld::Impl::tf_tactical_order(int32_t tf, lua::AiTacticalOrde
                                   : order_kind;
     if (k != AiTacticalOrder::GuardTarget && k != AiTacticalOrder::AttackMove) target_object = -1;
     return issue_move(*t, k, p, target_object);
+}
+
+// ---- S7 t21: Prepare_Ambush (AI_TACTICAL §7.3.1) ----
+
+// Ambush point (0x73a140): P = target + minDist x u on the chosen side, walked further out along u in steps of the target
+// type's Space_FOW_Reveal_Range (<= 0: AI_SpaceEvaluatorRegionSize) until the enemy force of `player` in the step x step
+// square around P (threat grid, all categories, x AI_SpaceAreaThreatScaleFactor) is <= the tolerance; no point once P
+// leaves the map box on an axis. Land (0x6ec8b0): step = Land_FOW_Reveal_Range (x the terrain factor 0x3722a0, [port]
+// 1.0), else the target's max attack range; both <= 0 -> the first point, no threat test. [port] The yaw's sin / cos are
+// the target's facing vector normalised (XY); a zero facing counts as yaw 0. [port] At most 4096 steps.
+bool TacticalAiWorld::Impl::ambush_point(const StatusRec& s, int32_t player, Vec3f& out) const {
+    const ObjectHandle h = store.find(s.target);
+    if (!store.alive(h) || s.direction < 0 || s.direction > 3) return false;
+    const Vec3 f = store.facing(h);
+    float c = 1.0f, sn = 0.0f;
+    if (const float len = std::sqrt(f.x * f.x + f.y * f.y); len > 0.0f) {
+        c = f.x / len;
+        sn = f.y / len;
+    }
+    Vec3f u;
+    switch (s.direction) {
+        case 0: u = {c, sn, 0.0f}; break;     // front
+        case 1: u = {-sn, c, 0.0f}; break;    // left
+        case 2: u = {sn, -c, 0.0f}; break;    // right
+        default: u = {-c, -sn, -0.0f}; break;  // back
+    }
+    const bool land = cfg.mode == TacticalMode::Land;
+    const objects::TypeIndex ty = store.type(h);
+    float step = 0.0f;
+    if (types && ty != objects::kNone) {
+        const auto& col = land ? types->columns().land_fow_reveal_range : types->columns().space_fow_reveal_range;
+        if (static_cast<size_t>(ty) < col.size()) step = col[static_cast<size_t>(ty)];
+    }
+    if (step <= 0.0f) {
+        if (land) {
+            const PerceptionObject* o = object(s.target);
+            step = o ? o->max_attack_range : 0.0f;
+        } else {
+            step = cfg.constants.space_region_size;
+        }
+    }
+    const Vec3f t = pos_of(h);
+    Vec3f p{t.x + s.min_dist * u.x, t.y + s.min_dist * u.y, t.z + s.min_dist * u.z};
+    if (land && step <= 0.0f) {
+        out = p;
+        return true;
+    }
+    const float scale = land ? cfg.constants.land_area_threat_scale : cfg.constants.space_area_threat_scale;
+    std::vector<uint32_t> cells;
+    for (int k = 0; k < 4096; ++k) {
+        if (p.x < cfg.map.min_x || p.x > cfg.map.max_x || p.y < cfg.map.min_y || p.y > cfg.map.max_y) return false;
+        GridQuery q;
+        q.self = player;
+        q.ally = false;
+        q.memory_counted_when_not_fogged = perc.config().memory_counted_when_not_fogged;
+        const float half = step * 0.5f;
+        perc.grid().rect_cells({p.x - half, p.y - half, p.x + half, p.y + half}, cells);
+        const float threat = perc.grid().cells_force(w, cells, q) * scale;
+        if (threat <= s.threat) {
+            out = p;
+            return true;
+        }
+        p.x += step * u.x;
+        p.y += step * u.y;
+        p.z += step * u.z;
+    }
+    return false;
+}
+
+// plan(first) (0x73b180): the point, then (first) the member list = the task force's units (member order) that exist, are
+// not movement-locked and can move [port: the coordinator admission and type byte +0x1e]; the moving list = the member
+// list's units that can still move; one plain group move to P with them. No point -> finished, result false. Nobody to
+// move -> stays unfinished (the next re-plan tries again).
+void TacticalAiWorld::Impl::ambush_plan(StatusRec& s, bool first) {
+    s.plan_frame = mode_frame;
+    TfRec* t = tf_rec(s.tf);
+    Vec3f p;
+    if (!t || !ambush_point(s, t->player, p)) {
+        s.finished = true;
+        s.result = lua::AiStatusResult::False;
+        decide(t ? t->player : -1, "tf " + (t ? t->name : std::string("?")) + " ambush: no point");
+        return;
+    }
+    s.dest = p;
+    if (first) {
+        s.lists = true;
+        s.members.clear();
+        for (const ObjectHandle u : t->units)
+            if (unit_ok(u, t->player) && !store.dying(u) && movable(u) && !host.movement_locked(id_of(u))) s.members.push_back(id_of(u));
+    }
+    s.moving.clear();
+    std::vector<uint32_t> ids;
+    for (const int32_t id : s.members) {
+        const ObjectHandle u = store.find(id);
+        if (!unit_ok(u, t->player) || !movable(u)) continue;
+        s.moving.push_back(id);
+        ids.push_back(static_cast<uint32_t>(id));
+    }
+    if (ids.empty()) return;
+    char buf[96];
+    std::snprintf(buf, sizeof buf, " %zu units -> (%.0f, %.0f)", ids.size(), static_cast<double>(p.x), static_cast<double>(p.y));
+    cmd::EventData ev(cmd::EventType::MoveToPositionFacing);  // the TF Move_To group move (threat tolerance not modelled)
+    ev.set_f("x", p.x).set_f("y", p.y).set_f("z", p.z).set_ids("units", ids);
+    order(t->player, ev, "tf " + t->name + (first ? " ambush on " : " ambush re-plan on ") + std::to_string(s.target) + buf);
+    s.last_order = now;
+}
+
+int32_t TacticalAiWorld::Impl::tf_prepare_ambush(int32_t tf, const lua::AiArg& target, int direction, double min_dist, double threat,
+                                                 bool, std::string* name) {
+    TfRec* t = tf_rec(tf);
+    if (!t) return -1;
+    prune_tf(*t);
+    ObjectHandle h = target.object;
+    if (!h && target.target >= 0) {
+        const Slot* sl = slot_of(target.target);
+        if (!sl || !sl->alive) return lua::AiTacticalScriptHost::kAmbushTargetDead;
+        if (!sl->t.is_unit()) {
+            if (name) *name = sl->t.name;
+            return lua::AiTacticalScriptHost::kAmbushTargetRegion;
+        }
+        h = store.find(sl->t.object_id);
+    }
+    if (!store.alive(h) || store.dying(h)) return lua::AiTacticalScriptHost::kAmbushTargetDead;
+    StatusRec probe;
+    probe.target = id_of(h);
+    probe.direction = static_cast<int8_t>(direction);
+    probe.min_dist = static_cast<float>(min_dist);
+    probe.threat = static_cast<float>(threat);
+    if (cfg.mode == TacticalMode::Land) {
+        // Land (0x6ec8b0): the walk once, then an ordinary movement block to P; nil without a point or when the block is
+        // already finished (no unit to move).
+        Vec3f p;
+        if (!ambush_point(probe, t->player, p)) return -1;
+        const int32_t id = issue_move(*t, AiTacticalOrder::MoveTo, p, -1);
+        if (statuses[id].finished) {
+            statuses.erase(id);
+            return -1;
+        }
+        return id;
+    }
+    const int32_t id = new_status(t->plan, tf, StatusKind::Ambush);
+    StatusRec& s = statuses[id];
+    s.target = probe.target;
+    s.direction = probe.direction;
+    s.min_dist = probe.min_dist;
+    s.threat = probe.threat;
+    ambush_plan(s, true);
+    return id;
+}
+
+int32_t TacticalAiWorld::Impl::tf_member_of(int32_t object_id) const {
+    const ObjectHandle unit = store.find(object_id);
+    if (!store.exists(unit)) return -1;
+    const ObjectHandle team = store.container(unit);
+    for (const auto& [id, t] : tfs)  // ascending TF id; a unit is held by at most one TF
+        for (const ObjectHandle u : t.units)
+            if (u == unit || (team && u == team)) return id;
+    return -1;
+}
+
+// S7 t15 A1 (MOVEMENT §3.1.1 step 6): the task-force Activate_Ability's AbilityBlockStatus - one count per unit that
+// activated (members, task-force order), finished when each raised signal 0x29 or died / was removed; nobody activated ->
+// finished at once. Units whose activation failed get Unit_Ability_Finished queued at once. Result nil [M].
+int32_t TacticalAiWorld::Impl::tf_activate_ability_units(int32_t tf, std::string_view, bool, const lua::AiArg&,
+                                                         const std::vector<std::pair<ObjectHandle, bool>>& units) {
+    TfRec* t = tf_rec(tf);
+    if (!t) return -1;
+    const int32_t id = new_status(t->plan, tf, StatusKind::Ability);
+    std::vector<lua::AiEventArg> failed;
+    for (const auto& [u, ok] : units) {
+        if (!store.alive(u)) continue;
+        if (ok) {
+            statuses[id].members.push_back(id_of(u));
+        } else {
+            lua::AiEventArg a;
+            a.kind = lua::AiEventArg::Object;
+            a.object = u;
+            failed.push_back(a);
+        }
+    }
+    StatusRec& s = statuses[id];
+    if (s.members.empty()) s.finished = true;
+    decide(t->player, "tf " + t->name + " activate ability: " + std::to_string(s.members.size()) + " activated, " +
+                          std::to_string(failed.size()) + " failed");
+    const TfRec copy = *t;
+    for (const lua::AiEventArg& a : failed) tf_event(copy, "Unit_Ability_Finished", {a}, true);
+    return id;
+}
+
+// S7 t15 A1: the host's signal 0x29 list (its order). Each id feeds the scripts' object bridge (blocking
+// GameObjectWrapper.Activate_Ability, the team container too), decrements the ability statuses that wait on the unit (or
+// its team) once, and - unless the unit is dying (obj +0x3a0 bit 0x02) - raises plan event 19 Unit_Ability_Finished(tf,
+// member) on the task force holding it.
+void TacticalAiWorld::Impl::ability_signals(const std::vector<int32_t>& ids) {
+    for (const int32_t oid : ids) {
+        const ObjectHandle h = store.find(oid);
+        bridge.ability_finished(oid);
+        const ObjectHandle team = store.exists(h) ? store.container(h) : ObjectHandle{};
+        const int32_t team_id = team ? id_of(team) : -1;
+        if (team_id >= 0 && team_id != oid) bridge.ability_finished(team_id);
+        for (auto& [sid, s] : statuses) {
+            if (s.kind != StatusKind::Ability || s.finished) continue;
+            auto it = std::find(s.members.begin(), s.members.end(), oid);
+            if (it == s.members.end() && team_id >= 0) it = std::find(s.members.begin(), s.members.end(), team_id);
+            if (it == s.members.end()) continue;
+            s.members.erase(it);
+            if (s.members.empty()) s.finished = true;
+        }
+        if (!store.alive(h) || store.dying(h)) continue;
+        const int32_t tf = tf_member_of(oid);
+        const TfRec* t = tf >= 0 ? tf_rec(tf) : nullptr;
+        if (!t) continue;
+        lua::AiEventArg a;
+        a.kind = lua::AiEventArg::Object;
+        a.object = std::find(t->units.begin(), t->units.end(), h) != t->units.end() ? h : team;
+        decide(t->player, "event Unit_Ability_Finished (tf " + t->name + ")");
+        const TfRec copy = *t;
+        tf_event(copy, "Unit_Ability_Finished", {a});
+    }
+}
+
+// S7 t21 / S7 t15 A1 - the statuses' object signals, every AI frame after refresh (ascending status id):
+//   * ability: a pending unit that died / was removed (0xb / 0x10) no longer counts;
+//   * ambush (§7.3.1 signals 0x73ab80): the target dying -> result true, finished; a member dying / removed / leaving the
+//     task force -> out of both lists, either list empty -> finished, result = member list not empty; a moving unit whose
+//     movement finished (signal 10 [port: idle after the order frame]) -> out of the moving list, Unit_Move_Finished(unit)
+//     on the task force, the list empty -> result true, finished. A status of an ended plan finishes.
+void TacticalAiWorld::Impl::status_signals() {
+    auto gone = [this](int32_t id, int32_t player) {
+        const ObjectHandle h = store.find(id);
+        return !unit_ok(h, player) || store.dying(h);
+    };
+    std::vector<std::pair<int32_t, ObjectHandle>> move_done;  // (tf, unit)
+    for (auto& [sid, s] : statuses) {
+        if (s.finished || (s.kind != StatusKind::Ambush && s.kind != StatusKind::Ability)) continue;
+        if (plans.find(s.plan) == plans.end()) {
+            s.finished = true;
+            continue;
+        }
+        const TfRec* t = tf_rec(s.tf);
+        const int32_t player = t ? t->player : -1;
+        if (s.kind == StatusKind::Ability) {
+            s.members.erase(std::remove_if(s.members.begin(), s.members.end(), [&](int32_t id) { return gone(id, player); }),
+                            s.members.end());
+            if (s.members.empty()) s.finished = true;
+            continue;
+        }
+        if (!s.lists) continue;
+        if (s.target >= 0 && (!store.alive(store.find(s.target)) || store.dying(store.find(s.target)))) {
+            s.target = -1;
+            s.finished = true;
+            s.result = lua::AiStatusResult::True;
+            continue;
+        }
+        bool lost = false;
+        for (size_t i = 0; i < s.members.size();) {
+            const int32_t id = s.members[i];
+            if (!gone(id, player) && t && std::find(t->units.begin(), t->units.end(), store.find(id)) != t->units.end()) {
+                ++i;
+                continue;
+            }
+            s.members.erase(s.members.begin() + static_cast<std::ptrdiff_t>(i));
+            s.moving.erase(std::remove(s.moving.begin(), s.moving.end(), id), s.moving.end());
+            lost = true;
+        }
+        if (lost && (s.members.empty() || s.moving.empty())) {
+            s.finished = true;
+            s.result = s.members.empty() ? lua::AiStatusResult::False : lua::AiStatusResult::True;
+            continue;
+        }
+        if (now <= s.last_order || s.moving.empty()) continue;
+        for (size_t i = 0; i < s.moving.size();) {
+            const TacticalAiObject* f = fact(s.moving[i]);
+            if (f && f->moving) {
+                ++i;
+                continue;
+            }
+            move_done.emplace_back(s.tf, store.find(s.moving[i]));
+            s.moving.erase(s.moving.begin() + static_cast<std::ptrdiff_t>(i));
+            if (s.moving.empty()) {
+                s.finished = true;
+                s.result = lua::AiStatusResult::True;
+            }
+        }
+    }
+    for (const auto& [tf, u] : move_done)
+        if (const TfRec* t = tf_rec(tf)) {
+            lua::AiEventArg a;
+            a.kind = lua::AiEventArg::Object;
+            a.object = u;
+            const TfRec copy = *t;
+            tf_event(copy, "Unit_Move_Finished", {a});
+        }
 }
 
 int32_t TacticalAiWorld::Impl::tf_attack_target(int32_t tf, const lua::AiArg& target, std::string_view hardpoint) {
@@ -2015,7 +2348,6 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
                 ++spawned;
             }
     }
-    if (spawned > 0) t->had_units = true;
     return new_status(t->plan, tf, spawned > 0 ? StatusKind::Done : StatusKind::Failed);
 }
 
@@ -2076,7 +2408,6 @@ void TacticalAiWorld::Impl::space_reinforce_poll(StatusRec& s) {
                             const auto owned = store.owned_by(t->player);
                             for (size_t i = before; i < owned.size(); ++i)
                                 if (store.active(owned[i]) && store.has_behavior(owned[i], objects::beh::Locomotor)) t->units.push_back(owned[i]);
-                            t->had_units = true;
                             s.ring = s.prevent ? 1000.0f : 0.0f;
                             break;
                         }
@@ -2479,6 +2810,8 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     w.mode_frame = mode_frame;
     w.refresh();
     w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
+    w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
+    w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
     const bool enabled = w.gate.enabled(ai_mode_of(w.cfg.mode));
     for (auto& pa : w.ai)
         if (pa) pa->ctx.service(now, enabled, false);
@@ -2645,16 +2978,17 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 5;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
-                                                 // 5: refixf t06 space reinforcement status fields
+constexpr uint32_t kTacticalAiSaveVersion = 6;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
+                                                 // 5: refixf t06 space reinforcement status fields; 6: S7 t20/t21/t15 A1
+                                                 // (no had_units / no_units_sent; ambush / ability status fields)
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
 constexpr size_t kSlotBytes = io::kTargetBytes + 5;
 constexpr size_t kPlanBytes = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 3 + 4 + 1;
-constexpr size_t kTfBytes = 4 + 4 + 4 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 2;
+constexpr size_t kTfBytes = 4 + 4 + 4 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 4;
 constexpr size_t kReinforcementBytes = 4 + 4 + 4 + 4 + 4 + 1 + 4;
-constexpr size_t kStatusBytes = 4 + 4 + 4 + 1 + 1 + 1 + 8 + 8 + 12 + 4 + 12 + 8 + 4 + 1;
+constexpr size_t kStatusBytes = 4 + 4 + 4 + 1 + 1 + 1 + 8 + 8 + 12 + 4 + 12 + 8 + 4 + 1 + 1 + 4 + 4 + 4 + 1 + 4 + 4;
 
 void put_handle(ByteWriter& w, const objects::ObjectStore& st, ObjectHandle h) {
     w.u64(h.value);
@@ -2991,8 +3325,6 @@ void TacticalAiWorld::write(ByteWriter& w) const {
         put_pairs(w, t.reservations);
         put_pairs(w, t.producing);
         w.str(t.priorities);
-        w.boolean(t.had_units);
-        w.boolean(t.no_units_sent);
     }
     // ---- blocking statuses ----
     io::put_count(w, m.statuses.size());
@@ -3009,6 +3341,11 @@ void TacticalAiWorld::write(ByteWriter& w) const {
         w.i32(s.target);
         io::put_vec3(w, s.dest);
         w.i64(s.timeout).f32(s.ring).boolean(s.prevent);  // refixf t06
+        w.u8(static_cast<uint8_t>(s.direction)).f32(s.min_dist).f32(s.threat).u32(s.plan_frame).boolean(s.lists);  // S7 t21
+        for (const std::vector<int32_t>* v : {&s.members, &s.moving}) {
+            io::put_count(w, v->size());
+            for (const int32_t oid : *v) w.i32(oid);
+        }
     }
     // ---- PotentialPlans + reservations ----
     io::put_count(w, m.pps.size());
@@ -3260,8 +3597,6 @@ bool TacticalAiWorld::read(ByteReader& r) {
             for (TacticalReinforcement& e : t.pending) get_reinforcement(r, e);
             if (!r.ok() || !get_pairs(r, t.reservations) || !get_pairs(r, t.producing)) return false;
             t.priorities = r.str();
-            t.had_units = r.boolean();
-            t.no_units_sent = r.boolean();
             if (!r.ok() || !valid_ai(t.player) || t.id < 0 || t.id >= next[1] || (!new_tfs.empty() && new_tfs.rbegin()->first >= t.id))
                 return io::bad(r);
             if (const auto pit = new_plans.find(t.plan);
@@ -3283,7 +3618,7 @@ bool TacticalAiWorld::read(ByteReader& r) {
             const uint8_t kind = r.u8();
             s.finished = r.boolean();
             const uint8_t result = r.u8();
-            if (kind > static_cast<uint8_t>(StatusKind::SpaceReinforce) || result > static_cast<uint8_t>(lua::AiStatusResult::False)) r.fail();
+            if (kind > static_cast<uint8_t>(StatusKind::Ability) || result > static_cast<uint8_t>(lua::AiStatusResult::False)) r.fail();
             s.kind = static_cast<StatusKind>(kind);
             s.result = static_cast<lua::AiStatusResult>(result);
             s.started = r.i64();
@@ -3294,6 +3629,15 @@ bool TacticalAiWorld::read(ByteReader& r) {
             s.timeout = r.i64();  // refixf t06
             s.ring = r.f32();
             s.prevent = r.boolean();
+            s.direction = static_cast<int8_t>(r.u8());  // S7 t21
+            s.min_dist = r.f32();
+            s.threat = r.f32();
+            s.plan_frame = r.u32();
+            s.lists = r.boolean();
+            for (std::vector<int32_t>* v : {&s.members, &s.moving}) {
+                v->resize(io::count(r, 4));
+                for (int32_t& oid : *v) oid = r.i32();
+            }
             if (!r.ok() || s.id < 0 || s.id >= next[2] || (!new_statuses.empty() && new_statuses.rbegin()->first >= s.id))
                 return io::bad(r);
             const int32_t id = s.id;
