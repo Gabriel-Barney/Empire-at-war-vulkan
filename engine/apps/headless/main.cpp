@@ -44,6 +44,7 @@
 //   alamo_headless --economy --galactic-ai [--battles auto|fight|fight-all] [--ai-log FILE] [--ai-golden FILE] ...
 //       A2: AI-vs-AI galactic campaign, every playable faction a galactic AI player (ai_run.hpp).
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
+//       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py.
 //   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-station [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land invasion.
@@ -156,6 +157,7 @@ struct Options {
     bool galactic_ai = false;
     std::string ai_log, ai_golden;
     std::string ai_human, ai_human_script;  // A2 galactic: --human FACTION [--human-script FILE]
+    std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs)
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
     std::string skirmish_ai;
     bool expect_battle_end = false;  // S10 land outcome: --expect-battle-end
@@ -806,6 +808,7 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--ai-golden") opt.ai_golden = next();
         else if (a == "--human") opt.ai_human = next();                // A2 galactic
         else if (a == "--human-script") opt.ai_human_script = next();  // A2 galactic
+        else if (a == "--trace-out") opt.trace_out = next();            // q2f t05
         else if (a == "--aggressor") opt.aggressor = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--battle-retreat") opt.battle_retreat = static_cast<float>(std::strtod(next().c_str(), nullptr));
         else if (a == "--battle-max-frames") opt.battle_max_frames = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
@@ -899,6 +902,7 @@ static int headless_main(int argc, char** argv) {
             a.ai_golden = opt.ai_golden;
             a.human = opt.ai_human;                // A2 galactic
             a.human_script = opt.ai_human_script;  // A2 galactic
+            a.trace_out = opt.trace_out;           // q2f t05
             a.verbose = !opt.quiet;
             return ai_campaign_run(m, a);
         }

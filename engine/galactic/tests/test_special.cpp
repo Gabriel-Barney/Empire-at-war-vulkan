@@ -970,7 +970,9 @@ void test_income() {
           s.economy_income_for_tag(pEmp, special_name_crc("TEXT_TR_UPKEEP")) == -3000.0f && s.mining_income(pEmp) == 300.0f);
     // planet_income sums the entries: B = base 20 + 400 - 3000 (no force / trade / political terms here) = -2580.
     CHECK(s.planet_income(rB, false) == 20.0f + 400.0f - 3000.0f);
-    // The breakdown groups by tag in first-seen order (A's entries, then B's); standard entries keep tag 0.
+    // The breakdown groups by tag in first-seen order (A's entries, then B's); standard entries keep tag 0. It shows the
+    // entries as last refreshed, and no fiscal cycle has run yet (the first is on frame 1350, q2f t02): refresh A here.
+    CHECK(s.planet_income(rA, false) > 0.0f);
     const std::vector<EconomyRow> rows = s.economy_breakdown_by_tag(pEmp);
     bool saw_mine = false, saw_base = false;
     for (const EconomyRow& r : rows) {

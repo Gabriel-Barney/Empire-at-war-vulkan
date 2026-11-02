@@ -118,7 +118,7 @@ if(_alamo_sim)
   target_link_libraries(alamo_headless PRIVATE alamo_sim)
   target_compile_definitions(alamo_headless PRIVATE ALAMO_HEADLESS_HAVE_SIM=1)
   # --- A2: --economy --galactic-ai (AI-vs-AI galactic campaign, headless/ai_run.cpp) ---
-  target_sources(alamo_headless PRIVATE headless/ai_run.cpp)
+  target_sources(alamo_headless PRIVATE headless/ai_run.cpp headless/port_trace.cpp)
   if(TARGET alamo_ai_galactic)
     target_link_libraries(alamo_headless PRIVATE alamo_ai_galactic)
     target_compile_definitions(alamo_headless PRIVATE ALAMO_HEADLESS_HAVE_GALACTIC_AI=1)
@@ -136,6 +136,19 @@ if(_alamo_sim)
                      --human-script ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/galactic_human_hotm.txt
                      --ai-golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/galactic_ai_hotm_human_golden.txt)
     set_tests_properties(alamo_headless_galactic_ai_human PROPERTIES TIMEOUT 1800)
+    # q2f t05: --trace-out (headless/port_trace.hpp), the Q2TRACE 1 state trace read by tools/probe_mod/q2_traces/q2trace.py.
+    # 300 HotM ticks across worker counts (the trace changes nothing), then q2trace.py validate (headless/check_port_trace.cmake).
+    find_program(ALAMO_PYTHON NAMES python PATHS ${CMAKE_SOURCE_DIR}/toolchain/venv/Scripts NO_DEFAULT_PATH)
+    find_program(ALAMO_PYTHON NAMES python python3)
+    if(NOT ALAMO_PYTHON)
+      set(ALAMO_PYTHON "")
+    endif()
+    add_test(NAME alamo_headless_galactic_trace
+             COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:alamo_headless>
+                     -DTRACE=${CMAKE_CURRENT_BINARY_DIR}/q2f_port_trace/hotm_300.q2t -DPY=${ALAMO_PYTHON}
+                     -DQ2TRACE=${CMAKE_SOURCE_DIR}/tools/probe_mod/q2_traces/q2trace.py
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/headless/check_port_trace.cmake)
+    set_tests_properties(alamo_headless_galactic_trace PROPERTIES TIMEOUT 600)
   endif()
   # --- end A2 ---
   # --- A1 stage 2 (owner: A1 agent): --skirmish-ai synthetic|foc (headless/skirmish_run.cpp). Goldens: regenerate

@@ -674,7 +674,7 @@ def cmp_rng(ref, port):
     return Result("rng_draws", "DIVERGES", first, first_detail + "; " + detail, "engine/galactic + engine/ai (draw order)")
 
 
-PORT_FIRST_CYCLE_FRAME = 0   # engine/galactic campaign.hpp next_cycle_frame_ = 0: first payment on frame 0 [L]
+PORT_FIRST_CYCLE_FRAME = 0   # engine/galactic: the frame-0 cycle is bookkeeping only (GalacticSim::start, q2f t02), first payment 1350
 PORT_CYCLE_PERIOD = 1350     # econ::fiscal_period_frames(45 s)
 
 
@@ -696,7 +696,7 @@ def cmp_cycles(ref, port):
     if ref["fiscal_cycles"] and not port["fiscal_cycles"]:
         c = ref["fiscal_cycles"]
         bad = cycle_rule_check(c)
-        d = ("port run has no cycle output; trace vs the port's rule (first cycle on frame 0, then every %d): %s; trace "
+        d = ("port run has no cycle output; trace vs the port's rule (empty cycle on frame 0, then a paid one every %d): %s; trace "
              "cycle ticks %s" % (PORT_CYCLE_PERIOD, "; ".join(bad) if bad else "all %d cycles agree" % (len(c["cycle_ticks"]) + 1),
                                  c["cycle_ticks"][:12]))
         return Result("fiscal_cycles", "DIVERGES" if bad else "rule-match", None, d,
