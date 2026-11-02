@@ -3752,6 +3752,109 @@ void test_space_obstacle_orders() {
     CHECK(station_died && hp_hit && hull_hit);
 }
 
+// S7 t28 (TACTICAL_COMBAT §2.8 table, BATTLE_TRANSITIONS 0xb counting rule): AI orders on an object owned by the Is_Neutral
+// player (an unowned capture point) are not ordered attacks. The station goes to the Neutral player: the task force's
+// Attack_Move is refused (every member is armed), the explicit Attack too, and nobody gets it as attack goal; a single
+// unit's own Attack_Move (arg 0) is a plain move. Back with the Empire, the same task-force Attack_Move is accepted with
+// the station as every member's attack goal.
+void test_neutral_attack_move() {
+    auto d = make_data(false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*d, false);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, gsetup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup setup;
+    setup.defs = &defs;
+    setup.equations = &eqs;
+    setup.files = d->files.get();
+    setup.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    using R = commands::RejectReason;
+    bool done = false;
+    for (uint64_t t = 0; t < 6000 && !done; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() != 3) continue;
+        done = true;
+        objects::ObjectStore& st = tm->primary();
+        objects::ObjectId station = objects::kNoObjectId;
+        std::vector<objects::ObjectId> attackers;
+        for (const objects::ObjectHandle h : st.all_objects()) {
+            if (!st.alive(h)) continue;
+            if (st.owner(h) == 0 && static_cast<uint32_t>(st.type(h)) == type_of(*d, "S10_Star_Base_1")) station = st.id(h);
+            if (st.owner(h) == 1 && b->movement().has_unit(st.id(h)) && b->combat().can_attack(st.id(h))) attackers.push_back(st.id(h));
+        }
+        CHECK(station != objects::kNoObjectId && attackers.size() >= 2);
+        if (station == objects::kNoObjectId || attackers.size() < 2) break;
+        const Vec3 sp = st.position(st.find(station));
+        BattleAi ai(*b, *tm, host, setup);
+        auto attack_move = [&](const std::vector<objects::ObjectId>& units, uint32_t arg) {
+            std::vector<uint8_t> pay;
+            auto put = [&pay](uint32_t v) {
+                for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+            };
+            put(static_cast<uint32_t>(units.front()));
+            put(static_cast<uint32_t>(station));
+            put(std::bit_cast<uint32_t>(sp.x));
+            put(std::bit_cast<uint32_t>(sp.y));
+            put(std::bit_cast<uint32_t>(sp.z));
+            put(arg);
+            for (size_t i = 1; i < units.size(); ++i) put(static_cast<uint32_t>(units[i]));
+            const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::AttackMove));
+            return ai.execute(1, commands::ev::port_extension(sub, pay));
+        };
+        auto no_goal = [&] {
+            bool none = true;
+            for (const objects::ObjectId a : attackers) none = none && b->combat().attack_goal(a) != station;
+            return none;
+        };
+        std::vector<uint32_t> wire;
+        for (const objects::ObjectId a : attackers) wire.push_back(static_cast<uint32_t>(a));
+        CHECK(b->change_owner(*tm, st.find(station), 2) && st.owner(st.find(station)) == 2);
+        const R tf_neutral = attack_move(attackers, ai::tactical::kTfAttackMoveIssueAttack);
+        const R atk_neutral = ai.execute(1, commands::ev::attack(static_cast<uint32_t>(station), wire));
+        const bool goals_neutral = no_goal();
+        const std::vector<objects::ObjectId> one = {attackers.front()};
+        const R own_neutral = attack_move(one, 0u);
+        const auto v = b->movement().view(attackers.front());
+        const bool moved = v.has_goal && std::abs(v.goal.x - sp.x) < 1500.0f && std::abs(v.goal.y - sp.y) < 1500.0f;
+        const bool goals_own = no_goal();
+        CHECK(b->change_owner(*tm, st.find(station), 0) && st.owner(st.find(station)) == 0);
+        const R tf_enemy = attack_move(attackers, ai::tactical::kTfAttackMoveIssueAttack);
+        bool goals_enemy = true;
+        for (const objects::ObjectId a : attackers) goals_enemy = goals_enemy && b->combat().attack_goal(a) == station;
+        std::printf("  neutral station: TF Attack_Move %d, Attack %d, goals none %d; own Attack_Move %d (moved %d, goals none %d); "
+                    "enemy again: TF Attack_Move %d, goals %d\n",
+                    static_cast<int>(tf_neutral), static_cast<int>(atk_neutral), goals_neutral ? 1 : 0, static_cast<int>(own_neutral),
+                    moved ? 1 : 0, goals_own ? 1 : 0, static_cast<int>(tf_enemy), goals_enemy ? 1 : 0);
+        CHECK(tf_neutral == R::InvalidTarget && atk_neutral == R::InvalidTarget && goals_neutral);
+        CHECK(own_neutral == R::None && moved && goals_own);
+        CHECK(tf_enemy == R::None && goals_enemy);
+    }
+    CHECK(done);
+}
+
 // t41: BattleAi::fill hands the perception the station's DUMMY_STAR_BASE and Base_Level (the inputs of Variable_Self.BaseLevel).
 void test_battle_ai_station_level(bool skirmish) {
     auto d = make_data(false, false, false, false, true);  // the star bases carry DUMMY_STAR_BASE here
@@ -4895,6 +4998,7 @@ int main(int argc, char** argv) {
     test_battle_ai_orders(*d);
     std::printf("refixf t02: SPACE_OBSTACLE station as a static entry, per-unit Lua orders as one group move\n");
     test_space_obstacle_orders();
+    test_neutral_attack_move();  // S7 t28
     test_battle_ai_station_level(false);
     test_battle_ai_station_level(true);
     test_battle_ai_land_mode(false);

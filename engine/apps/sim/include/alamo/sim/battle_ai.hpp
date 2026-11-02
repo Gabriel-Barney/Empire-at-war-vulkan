@@ -189,6 +189,10 @@ private:
     std::vector<objects::ObjectId> team_units(uint8_t player, uint32_t wire) const;  // battle host: unit or TEAM members
     // S7 t26: signal 0xb (a new order replaces the unit's order) on every unit an executed AI / script order took.
     void order_signals(uint8_t player, const commands::EventData& ev);
+    // The ordered-attack hostility test (0x39a450 -> Is_Enemy 0x2824f0, relation == 1): an object owned by an Is_Neutral
+    // player (an unowned capture point, an abandoned structure) is not hostile (BATTLE_TRANSITIONS, 0xb counting rule: "a Neutral player
+    // is simply not an enemy"; TACTICAL_COMBAT §2.8 Formation_Attack_Target) [M: the relation table's initial values].
+    bool hostile_owner(uint8_t player, int32_t owner) const;
     lua::TacticalScriptHooks tactical_;    // battle host: script_gaps.hpp hooks of the tactical AI VMs (L1 final list)
 #ifdef ALAMO_LUA_HAVE_FOG
     // refixf t03: only object_hidden is set (Find_Nearest's FOW_Object_Hidden test); fog stays null, so the AI VMs'

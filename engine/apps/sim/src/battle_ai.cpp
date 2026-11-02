@@ -820,6 +820,10 @@ void BattleAi::follow_service() {
 // the Lua object orders Move_To / Attack_Move / Guard_Target / Stop) raise signal 0xb on each unit they take (TEAM
 // containers: their members; the world adds the container), which ends the Activate_Ability blocks waiting on it.
 // [port] Orders of other hosts (human commands, story pipelines) do not raise it yet.
+bool BattleAi::hostile_owner(uint8_t player, int32_t owner) const {
+    return b_->combat_->is_enemy(static_cast<int32_t>(player), owner) && !b_->bt_owner_neutral(owner);
+}
+
 void BattleAi::order_signals(uint8_t player, const cmd::EventData& ev) {
     using T = cmd::EventType;
     std::vector<uint32_t> wire;
@@ -924,7 +928,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
         case T::Attack: {
             const uint32_t tw = ev.u("target");
             const TacticalBattle::Unit* t = tw <= 0x7FFFFFFFu ? b_->unit_by_id(static_cast<objects::ObjectId>(tw)) : nullptr;
-            if (!t || !t->alive || t->retreated || !b_->combat_->is_enemy(player, st.owner(t->h))) return R::InvalidTarget;
+            if (!t || !t->alive || t->retreated || !hostile_owner(player, st.owner(t->h))) return R::InvalidTarget;
             int32_t hp = -1;
             if (const uint32_t ref2 = ev.u("ref2"); ref2 > 0)
                 for (uint32_t k = 0; k < b_->combat_->hardpoint_count(t->id) && hp < 0; ++k)
@@ -999,7 +1003,22 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 x = tp.x;
                 y = tp.y;
                 const TacticalBattle::Unit* tu = b_->unit_by_id(static_cast<objects::ObjectId>(tw));
-                if (order == lua::LuaOrder::AttackMove && tu && tu->alive && !tu->retreated && b_->combat_->has_unit(tu->id)) {
+                const bool attackable = tu && tu->alive && !tu->retreated && b_->combat_->has_unit(tu->id);
+                if (order == lua::LuaOrder::AttackMove && attackable && !hostile_owner(player, st.owner(tu->h))) {
+                    // S7 t28 (TACTICAL_COMBAT §2.8 table, "TF.Attack_Move(non-hostile object)"): Order_Attack is refused for
+                    // every armed member, so only unarmed members move (none -> the order fails and the units keep their
+                    // auto targets); no path B (Formation_Attack_Target needs a hostile object). An object's own Attack_Move
+                    // (arg 0) issues no Order_Attack: a plain move to the object.
+                    if (le32(b, 20) & at::kTfAttackMoveIssueAttack) {
+                        std::vector<objects::ObjectId> kept;
+                        for (const objects::ObjectId id : group.units)
+                            if (!b_->combat_->has_unit(id) || !b_->combat_->can_attack(id)) kept.push_back(id);
+                        if (kept.empty()) return R::InvalidTarget;
+                        group.units = std::move(kept);
+                        u = b_->unit_by_id(group.units.front());
+                    }
+                    for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
+                } else if (order == lua::LuaOrder::AttackMove && attackable) {
                     // refixf t06 (TACTICAL_COMBAT §2.8): an Attack_Move on an object. A: a task-force order (arg bit, header)
                     // issues Order_Attack (ordered 1) to every unit now; a refusing unit is dropped from the move, none left
                     // -> the order fails. B: the object is each moving unit's formation attack goal (the combat system locks
