@@ -201,20 +201,20 @@ Lua 5.0.2's collector is unchanged (whole-heap mark and sweep, no incremental GC
   save images serially and on 0 / 1 / 4 / 16 workers (8 VMs, ticks with 2 or more VMs collected at once), save / load
   mid-schedule (the loaded run continues exactly like the uninterrupted one) and that a VM is never collected during a call.
 
-Numbers (`alamo_headless --profile`, the four OPT1 scenarios at the default worker count; the synthetic 400-planet run has no Lua
-VMs). Ticks with a collection are a function of the run and exact; the milliseconds were measured while other sessions ran
-about 14 `alamo_headless` processes and two games on this PC (tick p99 25-400 ms instead of the baseline's 0.5-6.4 ms), so
-they are upper bounds and the maxima include preemption.
+Numbers (`alamo_headless --profile`, the OPT1 scenarios at the default worker count; the synthetic 400-planet run has no Lua VMs).
+Ticks with a collection are exact (a function of the run). The "before" milliseconds were measured while other sessions ran about
+14 `alamo_headless` processes and two games on this PC, so they are upper bounds; the "after" ones come from a re-run with 3 other
+headless processes (the first after run, under the full load, had one 31.5 ms space batch: preemption).
 
 | Scenario | Before: ticks with an automatic collection, max ms | After: automatic (inside a script call), max ms | After: scheduled batches, max ms |
 |---|---|---|---|
-| Galactic HotM, every faction an AI (18000 ticks) | 110, 1.9 | 34, 0.56 | 69, 0.71 |
-| FoC land battle | 88, 4.2 (frame 22, battle setup) | 13, 2.6 | 77, 4.3 |
-| FoC space battle with station | 45, 1.4 | 9, 1.4 | 41, 31.5 (one outlier while the run's tick max was 2.1 s; see the re-run below) |
+| Galactic HotM, every faction an AI (18000 ticks) | 110, 1.9 | 34, 0.51 | 69, 0.53 |
+| FoC land battle | 88, 4.2 (frame 22, battle setup) | 13, 2.8 | 77, 1.1 |
+| FoC space battle with station | 45, 1.4 | 9, 1.3 | 41, 0.91 |
 
-What it says: Lua GC was never a spike source here (max one collection of a few ms, 0.1 % of tick time). The schedule moves
-70-80 % of the collections out of script calls to a known point; the remaining automatic ones are mostly plan scripts being
-loaded (a fresh plan VM allocates its whole script at once). Several VMs rarely fall due on one tick (the slots are staggered),
+What it says: Lua GC was never a spike source here (at most a few ms for one collection, under 0.5 % of tick time). The schedule
+moves 70-85 % of the collections out of script calls to a known point. The remaining automatic ones come from VMs that allocate
+more than their headroom within one period (not traced per VM; a fresh plan VM loading its whole script is the likely case). Several VMs rarely fall due on one tick (the slots are staggered),
 so the parallel batch matters only for bursts. Running the AI players' scripts themselves in parallel was investigated and left
 as OPT2 t08 (`docs/OPT_RESEARCH.md` section 5: the AI bindings write shared AI state and draw from the one synced RNG stream).
 
