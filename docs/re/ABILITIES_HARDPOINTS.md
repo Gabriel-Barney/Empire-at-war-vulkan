@@ -737,7 +737,9 @@ In order:
 10. Local-player `SFXEvent_Unit_Lost` (audio only).
 `DeathBehavior` (0x58d430) then runs the corpse: fade after `Death_Persistence_Duration` with
 `Death_Fade_Time`, or the spin-away path (`Spin_Away_On_Death_Time`); it removes the object when done. The
-spin-away decision draw and `Destruction_Survivors` were not found in `Die` [open].
+spin-away decision draw is in DEATH Initialise 0x58cdb0, and `Destruction_Survivors` are in world removal 0x391310
+(TACTICAL_GAPS §1.9). The spin-away flight is sim motion along a spline; its explosions are at the death
+position (start) and the end position (`Death_Explosions`); see TACTICAL_GAPS §1.9 (R3f t06).
 
 ### 4.10 Converted-unit decay (TACTICAL §8 item 7 — resolved) [H]
 In `GameObject::Update` (0x3a6b80), for an object with obj +0x3a2 bit 4 (converted to the enemy), not dying,
