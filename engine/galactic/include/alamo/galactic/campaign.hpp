@@ -603,7 +603,7 @@ public:
     // spawn_unit = step 4, the planet production "create object" (0x400b40) as a finished queue item: no cost, no queue,
     // no story event; space units join the player's stationary orbit fleet (found or made), ground units the surface,
     // structures / starbases the planet. Returns the new object; null = refused (invalid player / planet / type, a
-    // type with no galactic role) = the task's FAILED.
+    // type with no galactic role) = the task's FAILED. Also the Lua Spawn_Unit at a planet in a galactic script (a1g t06).
     ObjectHandle spawn_unit(int32_t player, PlanetIndex planet, uint32_t type);
     // Step 2 (MagicPlanStealing or a named hero): the first live object of exactly `type` owned by `player`, walking
     // the owner's object list newest first (A2GAL_READINGS 3 [H]: ObjectStore::owned_by in reverse, so a captured
@@ -680,10 +680,12 @@ public:
     // Change_Owner (Lua GameObjectWrapper.Change_Owner and story; GE 4.2 "Forced transfers" for planets). False
     // when nothing changed: dead object, invalid player, same owner, or a member of a moving fleet [port].
     bool change_owner(ObjectHandle object, int32_t player);
-    // Assemble_Fleet(units) [inferred]: the units (members of stationary fleets orbiting one planet, owned by
-    // the first valid unit's owner; others skipped) gathered into one fleet. A fleet that holds exactly those
-    // units is returned as is; otherwise a new fleet takes them (list order) and emptied fleets die.
-    // Returns the fleet index, kNoFleet when no unit qualifies.
+    // Assemble_Fleet(units) [inferred]: the units (members of stationary fleets orbiting one planet, or units landed
+    // on that planet's surface, owned by the first valid unit's owner; others skipped) gathered into one fleet. A
+    // fleet that holds exactly those units is returned as is; otherwise a new fleet takes them (list order; a landed
+    // unit is launched as by launch_units: off the surface, launch reveal; a1g t06, so the shipped scripts'
+    // SpawnList + Assemble_Fleet of ground units at a planet flies them, COMMANDS.md FleetManagement "AssembleFleet")
+    // and emptied fleets die. Returns the fleet index, kNoFleet when no unit qualifies.
     uint32_t assemble_fleet(std::span<const ObjectHandle> units);
     // Containment as GalacticSim keeps it (OBJECT_RUNTIME.md 3; the store holds no container for ships):
     // container_of = the fleet of a fleet member, the planet of a surface unit / structure / starbase /
