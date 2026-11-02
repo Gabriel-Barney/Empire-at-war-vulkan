@@ -432,9 +432,14 @@ which list goes with which error message]:
 |---|---|
 | none or bool (mode toggle via command 43) | 1, 3, 7, 9, 11, 29, 32, 33, 39, 40, 43, 48, 52, 54, 56, 60, 62, 63, 65, 68, 69, 70; DEPLOY (2) toggles deploy |
 | target **object** (command 40) | 13, 15, 16, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66 |
-| target **position** (command 57, spawns `Dummy_Barrage_Target`) | 14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72 |
+| target **position** (command 57 style, spawns `Dummy_Barrage_Target`) | 50, 67, 71, 73, 74 |
+| command 43 with the position zeroed (no position) | 14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72 |
 | position via command 43 | 5, 26, 28, 42 |
 | special | 6/10/12 (HUNT, LURE, AVOID_DANGER: optional target), 17 JET_PACK (position), 19 (object) |
+
+Correction (S7 t26 RE, 2026-11-02) [H]: the command-57 position row is ids 50, 67, 71, 73, 74; ids 14, 23, … 72
+were listed there before but take command 43 with no position. Which families return an `AbilityBlockStatus`
+and which signals finish it: AI_TACTICAL §7.3.3.
 
 It errors with "not hooked up to special ability logic" when a targeted type's record has no matching
 `GUI_Activated_Ability_Name` in the type's `Abilities`.

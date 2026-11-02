@@ -241,7 +241,12 @@ type CRC (4), live (5), max (6), remaining (7).
   then the squadron container is built (team helper 0x2a5a60, REMAINING_GAPS); flag +0x3A2 |= 2 (spawned);
   listener for signal 0x28 (removal) registered to the spawner. **Initial order:** if the carrier has the
   behaviour at +0x333 (slot 0x01 = locomotor present, i.e. a moving carrier) → an order of kind 3 with the
-  carrier as target (guard/escort the carrier) [M kind]; otherwise (stations) a formation move to P1.
+  carrier as target (guard/escort the carrier); otherwise (stations) a formation move to P1.
+  Resolved (S7 t24 RE, 2026-11-02) [H]: the moving-carrier order is a new coordinator's `Move_To` (0x4f8200) with a
+  block {kind 3, object = the carrier, flags 0x02 (guard), mask 0x3f, no threat (1e18), word 0x1000001}; the station
+  case is a group move (0x2a7b80) of {kind 1, position P1, flags 0}. When the carrier dies, the coordinator's target
+  listener (0x4f77e0) turns the block into kind 1 at the last waypoint of the formation's path, flags still 0x02, so
+  the squadron guards that point (`Guard_Chase_Range`). Details: FIGHTER_FLYING §4.10 E.
 - **Single ship** (no `Squadron_Units`, e.g. station corvettes/frigates): try positions around P1 on rings
   r = 0, 200, 400, 600, 800 at angle steps of 45° (r = 0 once), the first one the space placement test
   accepts; create there facing along P0 → P1; spawned flag; removal listener; if the new ship has a

@@ -1023,6 +1023,10 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
     are held by the deploy flags. With TARGETING suspended, they also get no new target pushed.
   - The pending flag +0x2b3 lives in the pack, which survives the swap, but vanilla never sets it.
   - [M] Whether the model's deploy pose is reset visually.
+- **Who listens to these 0x29 raises (2026-11-02).** The Lua `Activate_Ability("DEPLOY", bool)` block
+  (`AbilityBlockStatus`, e.g. the AI's `BuildMDUItem`) finishes on them, so it returns when the deploy / undeploy
+  animation ends; a deploy refused before Walk vf +0x118 runs (gate 0x3a1ce0, incl. locomotor vf +0x2b0) raises
+  nothing. See AI_TACTICAL §7.3.3 part 3.
 
 ### 3.3 Tick order [H]
 

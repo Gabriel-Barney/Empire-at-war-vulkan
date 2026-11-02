@@ -442,8 +442,8 @@ retail posts it from the death / removal signal (before the plan runs again).
 | 14 23 24 25 35 36 38 44 46 49 57 61 72 | 43 with **no** position (zeroed) | never |
 | 5 26 28 42 (position), 6 10 12 (optional target), 19 (object) | 43 | never |
 
-  Correction for ABILITIES_HARDPOINTS §2.9 (owned by the other RE agent; [M] there): the "target position (command
-  57, `Dummy_Barrage_Target`)" row is ids 50, 67, 71, 73, 74, not 14, 23, … 72; those take command 43 with no
+  Correction for ABILITIES_HARDPOINTS §2.9 (applied there 2026-11-02): the "target position (command 57,
+  `Dummy_Barrage_Target`)" row is ids 50, 67, 71, 73, 74, not 14, 23, … 72; those take command 43 with no
   position.
 - Before executing, ability ids 2 3 5 6 13 15 16 17 18 20 21 22 27 31 32 34 37 38 39 41 45 46 50 51 52 53 55 58 59
   64 66 67 69 71 73 74 raise **signal 0xb on the unit and on each member of its TEAM** (0x220ed0). The block subscribes

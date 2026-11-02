@@ -193,8 +193,15 @@ land/space pair selected by this id.
 ### 2.1 Behaviours and cadence [H]
 - **Units:** `TargetingBehaviorClass` (vtable 0x8b0d88, 49 slots). Its service (slot 6, 0x633a30) dispatches to
   `Service_Land` (0x634810) in mode 1 or `Service_Space` (0x633ae0) in mode 2 (dispatcher 0x633a30 compares the mode with 1, then 2; labels corrected in refixf t06 round 2).
-- **Squads and teams:** `TeamTargetingBehaviorClass` (0x8afd90; 0x62ee00 → 0x62eeb0) runs in space only and
-  shares the helpers below.
+- **Squads and teams:** `TeamTargetingBehaviorClass` (0x8afd90; 0x62ee00 → 0x62eeb0) shares the helpers below.
+  Correction (S7 t25 RE, 2026-11-02) [H]: it runs only when the container's locomotor kind (vf +0x238) is 1 (Walk,
+  Bike, LandTeamContainer, LandTeamInfantry), i.e. ground team containers only, not "in space only". Space squadron
+  containers (Team locomotor, kind 2) never scan; their target comes from the members' own TARGETING.
+- **Shared squadron target (2026-11-02)** [H]. A member whose own target is empty and whose due scan picks t sets
+  the team target (0x406370, team data = container +0x110: +0x30 = t, +0x38 = hard point) and calls `Set_Target` on
+  **every** member in index order, overwriting their targets; `Order_Attack`'s set path does the same. A member that
+  already has a target and switches on a rescan (§2.5) changes only its own. Signal 0x28 on the team target clears
+  +0x30 / +0x38. Full rules and the clear paths: FIGHTER_FLYING §4.10 B.
 - **The service runs every behaviour service call.** It writes the next service frame to +0x30 as the frame
   plus +0x34 (0x4c2f70) [M].
 - **The acquisition scan is throttled per unit.** `Acquire_Target` (0x568a00) runs only when the current frame
@@ -223,7 +230,12 @@ land/space pair selected by this id.
   - all players, when the attacker sits inside an `Is_Nebula` object and the fog test 0x35f3b0 applies [M].
 - **Query:** for each visited player, `Scan_Player` (0x5662b0) runs `Query_AABB` on that player's tree with a
   cube of half-extent R centred on the attacker (R + the formation's chase / response range while the unit is in a
-  formation move, 0x566f50, §2.8). The scan never does a sphere test itself. Per-candidate range acceptance goes
+  formation move, 0x566f50, §2.8). The scan never does a sphere test itself.
+  Rule of 0x566f50 (S7 t25 RE, 2026-11-02) [H]: R is the member's own `Get_Max_Attack_Range`; deployed → R; in space
+  the formation is the squadron container's. No formation → R. 0x4160a0(F, u, none) ≠ 0 → **R + Rr**, Rr chosen by
+  the first block's flags (0x02 `Guard_Chase_Range`, else 0x01 `Attack_Move_Response_Range`, else `Idle_Chase_Range`).
+  Otherwise R in space; on land R with a TURRET slot, else 0 (no scan). In space only `Space_Layer` 0 units (fighters,
+  squadrons) get R + Rr, and a plain position move gets it only after arrival. Branch details: FIGHTER_FLYING §4.10 A. Per-candidate range acceptance goes
   through vfunc slots 44/45 (TACTICAL_GAPS §3.1) or the formation tests of §2.8.
 
 ### 2.3 Candidate filters, in order [H]

@@ -718,8 +718,7 @@ still accepted only by §2.3 step 9 of TACTICAL_COMBAT (goal object, in weapon r
   when the container's locomotor kind (vf +0x238) is 1. Kind 1 = Walk, Bike, LandTeamContainer, LandTeamInfantry; kind
   2 = Fighter, Team, SimpleSpace, Flying, LandBomber, JetPack; −1 = Starship, generic Locomotor. So team targeting is
   the land infantry / company path; squadrons get targets only from their members' TARGETING (this answers §4.9 [M];
-  TACTICAL_COMBAT §2.1 "runs in space only" should read "ground team containers only" — that file belongs to the
-  other RE agent).
+  TACTICAL_COMBAT §2.1 "runs in space only" now reads "ground team containers only", corrected there 2026-11-02).
 - Also written by the TEAM service (0x405b10, every service): team data +0x8c..+0x94 = centre and +0x98..+0xa0 =
   half extents of the members' boxes, +0x40 = 2 × the largest half extent; in space the container is placed at
   that centre (0x3a8f90) [M: this is likely the S of §4.6].
@@ -745,7 +744,7 @@ No MovementSystem / coordinator event, signal or command calls it. For the port:
 idle" event from those two state handlers (NoTarget, path complete) instead of detecting the state change in the host.
 
 **E. Hangar launch order (space, 0x594dc0 → squadron 0x595a30; single ship 0x595650)** [H unless tagged]
-(corrects the [M] in STATION_HANGARS_SOUND §2.5, owned by the other RE agent):
+(resolves the [M] in STATION_HANGARS_SOUND §2.5; applied there 2026-11-02):
 - Squadron: members at P0 with velocity along P0→P1 × the member's speed (0x370f00), spawned flag; container via
   0x2a5a60, spawned flag, spawner listener on its signal 0x28.
 - **Carrier without a locomotor (stations):** a group move of the container (0x2a7b80, the player's move path) to P1
