@@ -22,7 +22,7 @@ call "%~dp0tools\test_env.cmd"
 set HL=build-msvc\bin\alamo_headless.exe
 %HL% --economy --galactic-ai --ticks 18000 --quiet --profile --profile-out logs\bench_profile_galactic_hotm.txt >nul 2>&1
 %HL% --synthetic 400 --ais 4 --profile --profile-out logs\bench_profile_synthetic400.txt >nul 2>&1
-%HL% --skirmish-ai foc-land --ticks 20000 --quiet --profile --profile-out logs\bench_profile_land.txt >nul 2>&1
+%HL% --skirmish-ai foc-land-campaign --ticks 20000 --quiet --profile --profile-out logs\bench_profile_land.txt >nul 2>&1
 %HL% --skirmish-ai foc-station --seed 3 --ticks 20000 --quiet --profile --profile-out logs\bench_profile_space.txt >nul 2>&1
 >> logs\bench.txt (
   for %%S in (galactic_hotm synthetic400 land space) do (

@@ -287,7 +287,7 @@ Notation: A = active vector, P = proposals, `limit = template[+0xe8] + |A|`.
    - the budget cannot fund it (0x6129c0);
    - effective desire ≤ 0 and it is replaceable;
    - it has a plan that is invalid (0x6c47c0), unless the template flag +0x60→+0xa8 is set;
-   - **galactic only:** AllowedTime < ETA and it is replaceable. ETA = 0x525200 + elapsed (NOW − created)/FPS.
+   - **galactic only:** AllowedTime < ETA and it is replaceable. ETA = 0x525200 (AI_GALACTIC_2 §3.4 "Goal production time", read 2026-11-02 [H]) + elapsed (NOW − created)/FPS.
 
    Survivors get their plan refreshed (0x6c2d60) and are re-added to the budget. "Replaceable" (0x692740) means: no running plan, or the plan has not called `Set_As_Goal_System_Removable(false)`.
 2. **Filter P.** Keep proposals whose target still Applies, then sort P.
@@ -406,6 +406,7 @@ Goals and plans with no template entry stay at −1, i.e. off. In particular, **
 - Every `*.lua` in `Data\Scripts\AI\`, `AI\SpaceMode\`, `AI\LandMode\`, `AI\StoryArc\` and `Data\Scripts\Interventions\` is loaded, in that folder order and in filesystem enumeration order within a folder.
 - The plan name is the file base name.
 - **Port:** sort by name within a folder for reproducibility, and record it as a deviation if enumeration order matters. It matters only for plan candidate order, which affects the RNG pick.
+- The tactical AI loads the same full set (a1i 2026-11-02, A1_READINGS §34.2): the only `Land_Retreat` plan is `AI\SpaceMode\RetreatPlan.lua`.
 
 **Per file** (0x4e7170) [H]
 1. Take a pooled script.

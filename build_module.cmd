@@ -16,6 +16,7 @@ set SLOWFILTER=-LE slow
 if /i "%ALAMO_TESTS%"=="all" set SLOWFILTER=
 set LOG=logs\module_%~1.txt
 call toolchain\msvc\setup_x64.bat >nul
+call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
 set PATH=%~dp0toolchain\venv\Scripts;%PATH%
 > %LOG% (

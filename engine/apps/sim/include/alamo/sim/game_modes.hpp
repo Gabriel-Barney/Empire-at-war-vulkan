@@ -178,7 +178,8 @@ public:
     // mirrored into GalacticSim::push_pause / pop_pause.
     void push_pause();
     void pop_pause();
-    bool paused() const override { return paused_ || pause_count_ > 0; }
+    // a1j t05: 0x4b2360 is also true while the story block holds (GalacticSim::paused(), A1_READINGS §31.7).
+    bool paused() const override;
     // Income: every income_interval mode frames (GALACTIC_ECONOMY.md fiscal cycle; S3 owns the
     // amounts). Counted here so the cadence is in the CRC.
     void set_income_interval(uint32_t frames) { income_interval_ = frames ? frames : 1; }
@@ -210,7 +211,9 @@ public:
     ObjectHandle spawn(const objects::SpawnParams& p, float health_fraction = 1.0f);
     // refix t01: a death clone (0x29f270, S9_DEATH_CLONE_SHIELDS.md §1.6 [H]): spawned like spawn() but created with
     // object flags kFlagDeathClone (+0x3a0 |= 0xc0), so its player-tree membership reads Collidable_By_Projectile_Dead
-    // (type +0x42, TACTICAL_COMBAT §1.3: objects in the dead / death-clone state) instead of _Living.
+    // (type +0x42, TACTICAL_COMBAT §1.3: objects in the dead / death-clone state) instead of _Living. S8 t09: then the
+    // behaviour strip (only HIDE_WHEN_FOGGED, IMPOSING_PRESENCE and, with Death_Clone_Is_Obstacle, LAND_OBSTACLE stay)
+    // and the DEATH behaviour.
     ObjectHandle spawn_death_clone(const objects::SpawnParams& p);
     // Destroy_Object + tree dead flag; unlinked from the trees after the store's flush.
     bool destroy(ObjectHandle h);

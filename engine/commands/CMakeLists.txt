@@ -19,4 +19,6 @@ target_link_libraries(alamo_commands_tests PRIVATE alamo_commands Threads::Threa
 # Read-only: the existing .acmd streams (headless / sim goldens) must keep loading and re-encoding identically.
 target_compile_definitions(alamo_commands_tests PRIVATE "ALAMO_COMMANDS_APPS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../apps\"")
 add_test(NAME alamo_commands_tests COMMAND alamo_commands_tests)
-set_tests_properties(alamo_commands_tests PROPERTIES TIMEOUT 60)
+# test_drain_order spawns ~3200 yielding threads: 4-10 s alone, past 60 s under a loaded ctest -j 8 (2026-11-01 gate).
+set_tests_properties(alamo_commands_tests PROPERTIES TIMEOUT 300)
+alamo_label_slow(alamo_commands_tests)

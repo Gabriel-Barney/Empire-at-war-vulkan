@@ -144,10 +144,13 @@ On a galactic frame f where next_cycle_frame ≤ f (f = mode frame +0x10):
 Independently, when the update argument is a multiple of 30 (once per simulated second; the argument is the
 frame, [M]), an AI notification of kind 8 is sent for every player. [H]
 
-**First cycle.** No initialiser for +0x36c was found in the galactic mode constructor. A zeroed field means the
-first payment comes on the first galactic frame. [L] Q2: log credits on frames 0–2 of a new campaign.
-
-> **Status 2026-10-30:** The port initialises `next_cycle_frame_` to 0 and pays on frame 0 (`engine/galactic/include/alamo/galactic/campaign.hpp:1009`, tagged [L]). `docs/PHASE4.md` Q2 contradicts itself: the vanilla compare says the cycles agree with first payment on frame 0, the later Lua-probe compare says the original does not pay on frame 0. Unresolved; the paragraph above is unchanged.
+**First cycle.** No initialiser for +0x36c was found in the galactic mode constructor, so the field is 0 and the cycle
+runs on mode frame 0. That frame-0 cycle runs **before the galaxy is built**, so it pays nobody, feeds no AI income
+history and rerolls no black-market value (no planets yet); only steps 2-4 change anything. [H] from the Q2 traces
+(2026-10-30 HotM runs, reader 2): at mode frame 0 there are no objects and the F fields read last 0 / next 1350 /
+counter 1; credits stay at their start values (Empire 13,000) until the cycle on frame 1350 (seen at mode frame 1351,
++667.5); every black-market multiplier is 1.0 at mode frame 1. Port: `GalacticSim::start` ends in that state (last 0,
+next = one period, counter 1), so the first payment is on frame 1350 (q2f t02, 2026-11-02).
 
 **Saved state.** +0x368/+0x36c/+0x370 must be saved with the mode. Unverified [L].
 
@@ -387,12 +390,15 @@ The two queues are serviced in order: ground (0), then space (1). Only the **hea
    - **Up-front payer:** the countdown advances. Remaining seconds are cached in +0x1c. UI speech fires at 60 s
      and 10 s boundaries (0x401e50). [H]
    - **Pay as you go:** the installment is a = (prev_remaining − remaining) / T × C (0x498ec0).
-     - An AI player asks its budget for a (0x53b900).
-     - A PAYG human needs credits ≥ a and then pays a.
+     - A player with an AI system (player +0x360, 0x2814d0) whose byte +0x62 is 0 pays through its AI budget,
+       0x53b900(the planet's AIPlanetBuildQueue for that queue, a). The rule is in AI_GALACTIC_2 §3.4 "Installment"
+       (q2f t01, 2026-11-02): while that queue has a current AI build task, the installment is paid from the task's
+       goal budget and can be refused; otherwise it is always paid.
+     - Any other PAYG player (a human with Pay_As_You_Go) needs credits ≥ a and then pays a.
      - On success the timer advances. On failure the timer is re-armed from now with the cached remaining time
        (0x499090), which **pauses** the build.
-     
-     [H] for the arithmetic, [M] that the AI budget call deducts the credits.
+
+     [H] (0x402840 service branch, 0x53b900, 0x64adb0, 0x615700 read 2-11-2026).
 
 The production service is reached through the galactic store's "planet production service" step (OBJECT_RUNTIME
 §5.3 step 3, 0x3fc750). [M]

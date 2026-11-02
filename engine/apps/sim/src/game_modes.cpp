@@ -122,6 +122,8 @@ void GalacticMode::pop_pause() {
     if (sim_) sim_->pop_pause();
 }
 
+bool GalacticMode::paused() const { return paused_ || pause_count_ > 0 || (sim_ && sim_->paused()); }
+
 void GalacticMode::tick(const ModeTickContext& ctx) {
     ++ticks_;
     trace(ctx, "galactic.begin");
@@ -282,6 +284,10 @@ ObjectHandle TacticalMode::spawn(const objects::SpawnParams& p, float health_fra
     return h;
 }
 
+namespace {
+constexpr objects::BehaviorTypeId kCloneKeepHideWhenFogged = 0x19, kCloneKeepImposingPresence = 0x40, kCloneDeathBehavior = 0x44;
+}  // namespace
+
 ObjectHandle TacticalMode::spawn_death_clone(const objects::SpawnParams& p) {
     const ObjectHandle h = primary_.create(p);
     primary_.set_flag(h, objects::kFlagDeathClone);
@@ -292,6 +298,21 @@ ObjectHandle TacticalMode::spawn_death_clone(const objects::SpawnParams& p) {
     m.projectile_collidable = t < types_->size() && types_->get_bool(t, "Collidable_By_Projectile_Dead");
     const tactical::Aabb box = bounds_of(h);
     if (tactical::valid(box)) trees_.add(static_cast<tactical::EntityHandle>(primary_.id(h)), box, category_of(h), m);
+    // S8 t09 (S9_DEATH_CLONE_SHIELDS §1.6 [H], MOVEMENT §1.3): right after the create, 0x29f270 detaches and removes every
+    // behaviour of the clone, last to first, except HIDE_WHEN_FOGGED (0x19), IMPOSING_PRESENCE (0x40) and LAND_OBSTACLE
+    // (0x14; only when the clone type's Death_Clone_Is_Obstacle, default true, is set), then attaches DEATH (0x44). So a
+    // clone never targets, moves, spawns, shields or holds a space obstacle entry, and it is a land obstacle (stamped by
+    // the host's land_obstacles_sync) iff it kept LAND_OBSTACLE. The attach draws of the full list were made by the create,
+    // as in Create_Object. [port] the tree category above is taken from the full list (the registration order inside
+    // Create_Object was not traced); the detach side effects (vf15) are nothing here: a clone has no system state yet.
+    const bool keep_obstacle = t < types_->size() && types_->get_bool(t, "Death_Clone_Is_Obstacle");
+    for (size_t k = primary_.behaviors(h).size(); k-- > 0;) {
+        const objects::BehaviorTypeId b = primary_.behaviors(h)[k];
+        if (b == kCloneKeepHideWhenFogged || b == kCloneKeepImposingPresence || (b == objects::beh::LandObstacle && keep_obstacle))
+            continue;
+        primary_.remove_behavior(h, static_cast<uint32_t>(k));
+    }
+    primary_.add_behavior(h, kCloneDeathBehavior);
     return h;
 }
 

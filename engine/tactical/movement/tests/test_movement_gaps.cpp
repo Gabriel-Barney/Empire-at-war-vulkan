@@ -6,16 +6,22 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <string>
 #include <thread>
 #include <vector>
 
+#include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/corridor.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
+#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/object_types.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical::movement;
@@ -65,6 +71,8 @@ static UnitDesc unit(ObjectId id, V2 pos, int32_t cls, float speed, float radius
     d.pos = pos;
     d.max_speed = speed;
     d.turn_rate = 6.0f;
+    d.alt_max_speed = speed;  // S7 t14: a jetpack flies with the alternates; the same values keep these scenarios
+    d.alt_turn_rate = 6.0f;
     d.movement_class = cls;
     d.collision_class = kUccInfantry;
     d.radius = radius;
@@ -791,6 +799,585 @@ static void test_flying_clearance() {
     CHECK(z0 < 60.0f && m1 == w1 && m1 > 95.0f && z1 > 90.0f && z1 <= m1 + 1.0f);
 }
 
+// S7 t06: Uses_Multiple_Locomotors WALK <-> JETPACK swap (MOVEMENT §3.1 / §6.2, 0x3a9910) and the clearance query
+// acting on the jetpacking unit (FIGHTER_FLYING §6.3.1: the airborne multi-locomotor unit is in the Corvette layer).
+static UnitDesc trooper(ObjectId id, V2 pos) {  // Dark_Trooper_PhaseII-like: WALK primary, JETPACK secondary
+    UnitDesc d = unit(id, pos, 0, 1.0f, 6.0f, LocomotorKind::Default);
+    d.uses_multiple_locomotors = true;
+    d.has_secondary_locomotor = true;
+    d.secondary_locomotor = LocomotorKind::Jetpack;
+    d.alt_max_speed = 2.5f;
+    d.alt_turn_rate = 12.0f;
+    d.hover_offset = 30.0f;
+    d.space_layer_type = 0x10;  // Land
+    return d;
+}
+
+static void test_multi_locomotor() {
+    // Type data per object for the clearance query: the trooper has Uses_Multiple_Locomotors, a 40-high box x 2.
+    auto info_fn = [](ObjectId id, ClearanceInfo& ci) {
+        if (id != 1 && id != 10) return false;
+        ci.uses_multiple_locomotors = id == 1;
+        ci.half = {10.0f, 10.0f};
+        ci.has_box = true;
+        ci.box_lo_z = 0.0f;
+        ci.box_hi_z = 40.0f;
+        ci.scale_factor = 2.0f;
+        return true;
+    };
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+    UnitDesc plain = trooper(2, cell_center(10, 20));  // no Uses_Multiple_Locomotors
+    plain.uses_multiple_locomotors = false;
+    UnitDesc unnamed = trooper(3, cell_center(10, 30));  // Bossk / IG-88: the flag without a Secondary_Locomotor_Name
+    unnamed.has_secondary_locomotor = false;
+    CHECK(sys.add_unit(plain) && sys.add_unit(unnamed));
+    const float walk_speed = sys.view(1).max_speed;
+    const float mult = walk_speed / 1.0f;
+    CHECK(!sys.use_secondary_locomotor(2, true) && !sys.use_secondary_locomotor(3, true) && !sys.use_secondary_locomotor(99, true));
+    CHECK(sys.use_secondary_locomotor(1, false) && !sys.view(1).secondary_locomotor);  // already on the primary
+    auto self_clear = [&](ObjectId id) {  // the unit's own footprint (the query does not exclude the flyer)
+        const UnitView v = sys.view(id);
+        return sys.clearance_query(id, {v.pos.x - 30.0f, v.pos.y, 0.0f}, {v.pos.x + 30.0f, v.pos.y, 0.0f}, 0.0f, info_fn);
+    };
+
+    // A plain move walks: WALK stays active, never airborne, not in layer 4.
+    SimRng rng(12);
+    MoveOrder o;
+    o.units = {1};
+    o.destination = cell_center(30, 10);
+    sys.move(o, rng, 0);
+    uint32_t f = 0;
+    bool walked = true;
+    for (; f < 2000; ++f) {
+        sys.tick(f, rng);
+        const UnitView v = sys.view(1);
+        walked = walked && v.locomotor == LocomotorKind::Default && !v.secondary_locomotor && !v.airborne && v.z == 0.0f &&
+                 self_clear(1) == 0.0f;
+        if (v.arrived) break;
+    }
+    CHECK(walked && sys.view(1).arrived);
+
+    // The switch bit: swap first (Alternate speeds), then turn / jump / fly / land, then back to WALK on the ground.
+    // Units without the swap ignore the bit and walk.
+    MoveOrder j;
+    j.units = {1};
+    j.destination = cell_center(70, 40);
+    j.switch_locomotor = true;
+    sys.move(j, rng, f);
+    MoveOrder j2;
+    j2.units = {2, 3};
+    j2.destination = cell_center(20, 60);
+    j2.switch_locomotor = true;
+    sys.move(j2, rng, f);
+    UnitView v = sys.view(1);
+    CHECK(v.locomotor == LocomotorKind::Jetpack && v.secondary_locomotor && v.has_goal && v.loco_state == LocoState::None &&
+          v.max_speed == 2.5f * mult);
+    CHECK(sys.view(2).locomotor == LocomotorKind::Default && !sys.view(2).secondary_locomotor &&
+          sys.view(3).locomotor == LocomotorKind::Default && !sys.view(3).secondary_locomotor);
+    const uint64_t draws0 = rng.draws();
+    std::vector<uint8_t> states;
+    float max_z = 0.0f, max_speed = 0.0f;
+    bool layer_ok = true, others_walk = true;
+    uint32_t back = 0;
+    for (++f; f < 5000; ++f) {
+        sys.tick(f, rng);
+        v = sys.view(1);
+        if (v.locomotor == LocomotorKind::Jetpack &&
+            (states.empty() || states.back() != static_cast<uint8_t>(v.loco_state)))
+            states.push_back(static_cast<uint8_t>(v.loco_state));
+        max_z = std::max(max_z, v.z);
+        max_speed = std::max(max_speed, v.speed);
+        // Layer 4 exactly while the jetpack is active in states 0 / 0x0F..0x13 (kind 2): the query hits the unit's box.
+        const bool kind2 = v.locomotor == LocomotorKind::Jetpack && locomotor_airborne_kind(v.locomotor, v.loco_state);
+        const float c = self_clear(1);
+        layer_ok = layer_ok && (kind2 ? c == 80.0f + v.z : c == 0.0f);
+        for (ObjectId w : {2, 3}) others_walk = others_walk && sys.view(w).locomotor == LocomotorKind::Default && !sys.view(w).airborne;
+        if (v.locomotor == LocomotorKind::Default) {
+            back = f;
+            break;
+        }
+    }
+    // 0x16 is not seen with the jetpack active: the landing's last frame swaps back (0 may be skipped when the plan is
+    // ready at once).
+    const std::vector<uint8_t> want = {0x00, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14};
+    CHECK(back > 0 && (states == want || std::equal(states.begin(), states.end(), want.begin() + 1, want.end())));
+    CHECK(layer_ok && others_walk && rng.draws() == draws0);  // no synced draws
+    CHECK(max_z >= 70.0f - 1e-3f && max_speed > 1.5f * walk_speed);  // Hover_Offset over the plateau; Alternate_Max_Speed
+    v = sys.view(1);
+    CHECK(!v.secondary_locomotor && v.max_speed == walk_speed && v.arrived && !v.airborne && v.z == 40.0f &&
+          distance(v.pos, j.destination) < 1.0f && self_clear(1) == 0.0f);
+    std::printf("multi-locomotor: jetpack %zu states, back on WALK at frame %u, max z %.2f, max speed %.2f (walk %.2f)\n",
+                states.size(), back, static_cast<double>(max_z), static_cast<double>(max_speed), static_cast<double>(walk_speed));
+    // Walking again after the landing.
+    o.destination = cell_center(80, 40);
+    sys.move(o, rng, f);
+    bool walked2 = true;
+    for (++f; f < back + 400; ++f) {
+        sys.tick(f, rng);
+        walked2 = walked2 && sys.view(1).locomotor == LocomotorKind::Default && !sys.view(1).airborne;
+    }
+    CHECK(walked2 && sys.view(1).pos.x > v.pos.x + 50.0f);
+
+    // A stop in flight lands the unit (0x14) and the swap back follows on the ground.
+    j.destination = cell_center(20, 80);
+    sys.move(j, rng, f);
+    for (++f; sys.view(1).loco_state != LocoState::WalkMoving && f < back + 1000; ++f) sys.tick(f, rng);
+    CHECK(sys.view(1).airborne && sys.view(1).secondary_locomotor);
+    const ObjectId stop_ids[] = {1};
+    sys.stop(stop_ids);
+    CHECK(sys.view(1).loco_state == LocoState::WalkEndMove);
+    const uint32_t stop_at = f;
+    for (; sys.view(1).secondary_locomotor && f < stop_at + 1000; ++f) sys.tick(f, rng);
+    v = sys.view(1);
+    CHECK(!v.secondary_locomotor && v.locomotor == LocomotorKind::Default && !v.airborne && !v.has_goal &&
+          v.z == (v.pos.x > 1000.0f ? 40.0f : 0.0f));
+
+    // Space: no swap.
+    MovementConfig sc;
+    sc.mode = MoveMode::Space;
+    MovementSystem space{sc};
+    CHECK(space.add_unit(trooper(1, {0.0f, 0.0f})) && !space.use_secondary_locomotor(1, true));
+
+    // The clearance hook acts on the jetpacking trooper: a flyer overtaking it climbs over its box only while it flies
+    // (FIGHTER_FLYING §6.3.1). With a plain (walking) move the flyer cruises at Hover_Offset.
+    auto run = [&](bool jet, float& out_z) {
+        MovementSystem s{MovementConfig{}};
+        land_system(s, 120);
+        UnitDesc fl = unit(10, {100.0f, 600.0f}, 6, 3.0f, 10.0f, LocomotorKind::Flying);
+        fl.hover_offset = 50.0f;
+        fl.z = 50.0f;
+        fl.space_layer_type = kLayerFrigate;
+        UnitDesc tr = trooper(1, {500.0f, 600.0f});
+        tr.yaw_deg = 0.0f;  // facing the destination
+        tr.max_speed = 0.2f;
+        tr.alt_max_speed = 0.2f;  // slow: the flyer overtakes it
+        tr.hover_offset = 25.0f;
+        CHECK(s.add_unit(fl) && s.add_unit(tr));
+        FlyingHooks hk;
+        hk.clearance = [&s, &info_fn](ObjectId id, FlyVec3 a, FlyVec3 b, float m) { return s.clearance_query(id, a, b, m, info_fn); };
+        s.set_flying_hooks(hk);
+        SimRng r(9);
+        MoveOrder ot;
+        ot.units = {1};
+        ot.destination = {900.0f, 600.0f};
+        ot.switch_locomotor = jet;
+        s.move(ot, r, 0);
+        MoveOrder of;
+        of.units = {10};
+        of.destination = {900.0f, 600.0f};
+        s.move(of, r, 0);
+        out_z = 0.0f;
+        for (uint32_t k = 0; k < 200; ++k) {
+            s.tick(k, r);
+            if (s.view(10).pos.x <= 620.0f) out_z = std::max(out_z, s.view(10).z);
+        }
+        CHECK(s.view(10).pos.x > 620.0f && s.view(1).airborne == jet && s.view(1).secondary_locomotor == jet);
+    };
+    float walk_z = 0.0f, jet_z = 0.0f;
+    run(false, walk_z);
+    run(true, jet_z);
+    std::printf("multi-locomotor clearance: flyer max z %.2f over the walking trooper, %.2f over the jetpacking one\n",
+                static_cast<double>(walk_z), static_cast<double>(jet_z));
+    CHECK(walk_z < 60.0f && jet_z > 90.0f);
+}
+
+// S7 t14 (MOVEMENT §3.1.1): Alternate_Max_Speed / _Rate_Of_Turn apply only to the jetpack in its airborne kind (pack state 0
+// / 0xF..0x13): the formation speed and the planned flight; the take-off turn (0x10) turns at Max_Rate_Of_Turn and the
+// landing (0x14) reports Max_Speed.
+static void test_jetpack_alternates() {
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc d = trooper(1, cell_center(10, 10));
+    d.turn_rate = 3.0f;  // the alternate is 12
+    CHECK(sys.add_unit(d));
+    CHECK(sys.add_unit(unit(2, cell_center(10, 12), 0, 1.5f, 6.0f, LocomotorKind::Default)));  // between 1.0 and 2.5
+    const float mult = sys.view(1).max_speed;  // Max_Speed 1.0 x the land multiplier
+    CHECK(sys.use_secondary_locomotor(1, true));
+    UnitView v = sys.view(1);
+    CHECK(v.locomotor == LocomotorKind::Jetpack && v.loco_state == LocoState::None && v.max_speed == 2.5f * mult);
+    SimRng rng(4);
+    MoveOrder o;
+    o.units = {1, 2};
+    o.destination = cell_center(60, 11);
+    sys.move(o, rng, 0);
+    // One formation: the slowest member is the walker (1.5), not the trooper's Max_Speed (1.0).
+    CHECK(sys.view(2).formation_speed == 1.5f * mult && sys.view(1).formation_speed == 1.5f * mult);
+
+    // Alone, facing away from the destination: the take-off turn (0x10) is limited by Max_Rate_Of_Turn, the flight by
+    // Alternate_Max_Speed.
+    MovementSystem one{MovementConfig{}};
+    land_system(one, 100);
+    d.yaw_deg = 180.0f;
+    CHECK(one.add_unit(d));
+    MoveOrder j;
+    j.units = {1};
+    j.destination = cell_center(60, 10);
+    j.switch_locomotor = true;
+    one.move(j, rng, 0);
+    v = one.view(1);
+    bool speeds_ok = true, turn_ok = true, seen_landing = false, seen_kind2 = false;
+    uint32_t turn_frames = 0;
+    float max_step = 0.0f, max_speed = 0.0f, prev_yaw = v.yaw;
+    LocoState prev = v.loco_state;
+    uint32_t f = 0;
+    for (; f < 3000; ++f) {
+        one.tick(f, rng);
+        v = one.view(1);
+        if (v.locomotor != LocomotorKind::Jetpack) break;
+        const bool kind2 = locomotor_airborne_kind(v.locomotor, v.loco_state);
+        speeds_ok = speeds_ok && v.max_speed == (kind2 ? 2.5f : 1.0f) * mult;
+        seen_kind2 = seen_kind2 || kind2;
+        seen_landing = seen_landing || v.loco_state == LocoState::WalkEndMove;
+        if (prev == LocoState::WalkTurning || v.loco_state == LocoState::WalkTurning) {
+            const float step = std::fabs(wrap_deg(v.yaw - prev_yaw));
+            turn_ok = turn_ok && step <= 3.0f * mult + 1e-3f;
+            max_step = std::max(max_step, step);
+            ++turn_frames;
+        }
+        max_speed = std::max(max_speed, v.speed);
+        prev = v.loco_state;
+        prev_yaw = v.yaw;
+    }
+    std::printf("jetpack alternates: take-off turn %u frames (max step %.2f, Max_Rate_Of_Turn %.2f), max flight speed %.2f "
+                "(alternate %.2f), back on WALK at %u\n",
+                turn_frames, static_cast<double>(max_step), static_cast<double>(3.0f * mult), static_cast<double>(max_speed),
+                static_cast<double>(2.5f * mult), f);
+    // The turn reached the normal rate and never the alternate one (12 x the multiplier).
+    CHECK(speeds_ok && seen_kind2 && seen_landing && turn_ok && turn_frames > 0 && max_step > 2.0f * mult);
+    CHECK(max_speed > 2.0f * mult && max_speed <= 2.5f * mult + 1e-3f);  // flown at the alternate, not at Max_Speed 1.0
+    v = one.view(1);
+    CHECK(v.locomotor == LocomotorKind::Default && v.max_speed == mult && v.arrived);
+}
+
+// S7 t15 (MOVEMENT §3.1.1 "Acceleration / deceleration"): the planner request of a jetpack in its airborne kind takes
+// Alternate_Max_Speed / _Rate_Of_Turn, but its acceleration / deceleration are the common getters: OverrideAcceleration x
+// (effective max speed / Max_Speed), else the NORMAL effective max speed, never the alternate.
+static void test_jetpack_accel_fallback() {
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc d = trooper(1, cell_center(10, 10));  // Max_Speed 1.0, Alternate_Max_Speed 2.5, no override
+    CHECK(sys.add_unit(d));
+    UnitDesc o = trooper(2, cell_center(10, 20));
+    o.accel = 0.1f;
+    o.decel = 0.05f;
+    CHECK(sys.add_unit(o));
+    const float mult = sys.view(1).max_speed;  // the normal effective max speed (1.0 x the land multiplier)
+    SpaceRequest q;
+    CHECK(!sys.air_request(1, 0, q));  // walking: not a land air unit
+    CHECK(sys.use_secondary_locomotor(1, true) && sys.use_secondary_locomotor(2, true));
+    CHECK(sys.air_request(1, 7, q) && q.now == 7u);
+    CHECK(q.speed == 2.5f * mult && q.turn_rate == 12.0f * (mult / 1.0f));  // airborne kind: the alternates
+    CHECK(q.accel == mult && q.decel == mult);                              // the normal max speed, not 2.5 x mult
+    CHECK(sys.air_request(2, 7, q) && q.speed == 2.5f * mult && q.accel == 0.1f * mult && q.decel == 0.05f * mult);
+    CHECK(!sys.air_request(99, 7, q));
+    std::printf("jetpack accel fallback: accel %.3f (normal max %.3f, alternate %.3f)\n", static_cast<double>(mult),
+                static_cast<double>(mult), static_cast<double>(2.5f * mult));
+}
+
+// PR #19 review (S8 t09): a jetpack in flight must never repeat a pose (MOVEMENT §3.1.1: a 0x13 frame whose follower step
+// leaves position and orientation unchanged drops to 0x16 and swaps back in the air). The planner made zero-length wait
+// steps (ops 7 / 18 clamped to the goal distance) at the goal in facing mode; it no longer does. Checks the planner output
+// directly (facing-mode requests: no two consecutive waypoints with the same pose and later time) and whole flights with a
+// final facing (no repeated pose in 0x13, never 0x16 while airborne).
+static void test_jetpack_no_repeated_pose() {
+    const MovementConstants k{};
+    SpaceOccupancy occ;
+    occ.set_box({0.0f, 0.0f}, {4000.0f, 4000.0f});
+    SpaceScratch sc;
+    uint32_t paths = 0, repeats = 0;
+    for (int32_t i = 0; i < 96; ++i) {
+        SpaceRequest q;
+        q.self = 1;
+        q.start = {1000.0f + 37.0f * static_cast<float>(i % 24), 1200.0f};
+        q.goal = {1400.0f + 11.0f * static_cast<float>(i % 5), 1500.0f + 23.0f * static_cast<float>(i % 7)};
+        q.start_heading = 30.0f * static_cast<float>(i);
+        q.speed = 3.9f;
+        q.turn_rate = 9.36f;
+        q.radius = 6.0f;
+        q.accel = 1.56f;
+        q.decel = 1.56f;
+        q.goal_facing = 45.0f * static_cast<float>(i % 8);
+        // A ship of the same layer crossing the goal around the arrival time (from i >= 24): waiting can pay.
+        if (i >= 24) {
+            const float sp = 1.0f + 0.25f * static_cast<float>(i % 9);
+            std::vector<SpaceWaypoint> tw(2);
+            tw[0].pos = q.goal + V2{-800.0f, static_cast<float>(i % 3) * 10.0f - 10.0f};
+            tw[0].heading = 0.0f;
+            tw[0].speed = sp;
+            tw[1].pos = q.goal + V2{800.0f, static_cast<float>(i % 3) * 10.0f - 10.0f};
+            tw[1].heading = 0.0f;
+            tw[1].speed = sp;
+            tw[1].time = 1600.0f / sp;
+            occ.set_track(2, kLayerFrigate, 30.0f + static_cast<float>(i % 4) * 20.0f, 0, tw);
+        }
+        SpacePath out;
+        plan_space_path(occ, k, q, sc, out);
+        ++paths;
+        for (size_t w = 1; w < out.wps.size(); ++w) {
+            const SpaceWaypoint& a = out.wps[w - 1];
+            const SpaceWaypoint& b = out.wps[w];
+            if (b.time > a.time && a.pos == b.pos && a.heading == b.heading) ++repeats;
+        }
+    }
+    CHECK(repeats == 0);
+
+    uint32_t flights = 0, bad_frames = 0, air_drops = 0;
+    for (int32_t i = 0; i < 12; ++i) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(trooper(1, cell_center(10, 10 + i))));
+        CHECK(sys.add_unit(trooper(2, cell_center(40 + 3 * i, 10))));  // a second jetpack crossing the first one's route
+        SimRng rng(static_cast<uint32_t>(30 + i));
+        MoveOrder j;
+        j.units = {1};
+        j.destination = cell_center(40 + 3 * (i % 6), 30 + 2 * i);
+        j.facing_deg = 60.0f * static_cast<float>(i);
+        j.switch_locomotor = true;
+        sys.move(j, rng, 0);
+        MoveOrder j2;
+        j2.units = {2};
+        j2.destination = cell_center(40 + 3 * (i % 6) - 2, 40 + 2 * i);
+        j2.facing_deg = 30.0f * static_cast<float>(i);
+        j2.switch_locomotor = true;
+        sys.move(j2, rng, 0);
+        UnitView prev = sys.view(1);
+        for (uint32_t f = 0; f < 3000; ++f) {
+            sys.tick(f, rng);
+            const UnitView v = sys.view(1);
+            if (prev.loco_state == LocoState::WalkMoving && v.loco_state == LocoState::WalkMoving && v.pos == prev.pos &&
+                v.yaw == prev.yaw)
+                ++bad_frames;
+            if (prev.loco_state == LocoState::WalkMoving && prev.airborne && v.loco_state == LocoState::WalkStopped) ++air_drops;
+            prev = v;
+            if (v.locomotor == LocomotorKind::Default && f > 0) break;
+        }
+        CHECK(prev.locomotor == LocomotorKind::Default && prev.arrived);
+        bad_frames += sys.stats().jetpack_still_frames;
+        ++flights;
+    }
+    CHECK(bad_frames == 0 && air_drops == 0);
+    std::printf("jetpack poses: %u facing plans (%u repeated poses), %u flights (%u repeated 0x13 poses, %u mid-air drops)\n", paths,
+                repeats, flights, bad_frames, air_drops);
+}
+
+// S7 t15 (MOVEMENT §3.1.1 "Take-off turn: pack +0xe8"): with Has_Pre_Turn_Anim the take-off turn (0x10) turns at the band
+// rate picked after each clip (|e| >= 45: R; 22.5..45: R x 0.5; below: R x 0.25 x |e| / 11.25) and stays in 0x10 until the
+// turn clip reaches its last 2 frames; the first frame turns at R.
+static uint32_t band_anim_len(ObjectId id, int32_t a) {
+    switch (a) {
+        case kAnimTurnLeft:
+        case kAnimTurnRight: return 4;
+        case kAnimTurnLeftHalf:
+        case kAnimTurnRightHalf: return 6;
+        case kAnimTurnLeftQuarter:
+        case kAnimTurnRightQuarter: return 30;
+        default: return anim_len(id, a);
+    }
+}
+
+static void test_jetpack_turn_bands() {
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    sys.set_anim_length_fn(band_anim_len);
+    UnitDesc d = unit(1, cell_center(10, 10), 0, 2.0f, 6.0f, LocomotorKind::Jetpack);
+    d.turn_rate = 2.0f;
+    d.yaw_deg = 180.0f;
+    d.hover_offset = 30.0f;
+    d.has_pre_turn_anim = true;
+    CHECK(sys.add_unit(d));
+    // A static obstacle overlapping the start, ahead of the unit: the plan opens with a turn in place to an escape heading
+    // far from 180, so the take-off turn is long (the aim is the first waypoint away from the start).
+    sys.air().add_static(900, cell_center(10, 10) + V2{-30.0f, 0.0f}, 40.0f);
+    const float mult = sys.view(1).max_speed / 2.0f;
+    const float R = 2.0f * mult;
+    SimRng rng(5);
+    MoveOrder o;
+    o.units = {1};
+    o.destination = cell_center(70, 10);
+    sys.move(o, rng, 0);
+    UnitView prev = sys.view(1);
+    auto band = [](int32_t a) {  // 0 none, 1 full, 2 half, 3 quarter
+        if (a == kAnimTurnLeft || a == kAnimTurnRight) return 1;
+        if (a == kAnimTurnLeftHalf || a == kAnimTurnRightHalf) return 2;
+        if (a == kAnimTurnLeftQuarter || a == kAnimTurnRightQuarter) return 3;
+        return 0;
+    };
+    uint32_t turn_frames = 0, half_at_rate = 0, aligned_wait = 0;
+    bool first_ok = false, steps_ok = true, seen[4] = {false, false, false, false};
+    for (uint32_t f = 0; f < 600; ++f) {
+        sys.tick(f, rng);
+        const UnitView v = sys.view(1);
+        if (prev.loco_state == LocoState::WalkTurning) {  // a 0x10 service ran this frame
+            const float step = std::fabs(wrap_deg(v.yaw - prev.yaw));
+            if (turn_frames++ == 0) first_ok = near(step, R, 1e-3f);  // +0xe8 cleared by 0xF: the first frame turns at R
+            const int32_t b = band(prev.anim);
+            if (b == 1) steps_ok = steps_ok && step <= R + 1e-3f;
+            if (b == 2) {
+                steps_ok = steps_ok && step <= 0.5f * R + 1e-3f;
+                if (near(step, 0.5f * R, 1e-3f)) ++half_at_rate;
+            }
+            if (b == 3) steps_ok = steps_ok && step <= 0.5f * R + 1e-3f;  // R x 0.25 x |e| / 11.25 with |e| < 22.5
+            if (b != 0 && step == 0.0f && v.loco_state == LocoState::WalkTurning) ++aligned_wait;
+        }
+        if (v.loco_state == LocoState::WalkTurning) seen[band(v.anim)] = true;
+        prev = v;
+        if (v.loco_state == LocoState::WalkMoving) break;
+    }
+    CHECK(prev.loco_state == LocoState::WalkMoving && first_ok && steps_ok && seen[1] && seen[2] && seen[3] && half_at_rate > 0 &&
+          aligned_wait > 0);
+    std::printf("jetpack turn bands: %u turn frames, full / half / quarter %d / %d / %d, %u at R/2, %u aligned frames waiting "
+                "for the clip end\n",
+                turn_frames, seen[1] ? 1 : 0, seen[2] ? 1 : 0, seen[3] ? 1 : 0, half_at_rate, aligned_wait);
+}
+
+// S7 t14 (MOVEMENT §3.1.1 steps 4 and 7): the swap to the jetpack re-issues the unit's current order to it alone (or holds
+// it in place: the jetpack reverts one service after the next); the swap back keeps the order and the walk finishes it.
+static void test_jetpack_orders() {
+    {  // hold: no order -> pack state 0 -> 0x16 at the next service -> WALK at the one after
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+        SimRng rng(1);
+        CHECK(sys.use_secondary_locomotor(1, true));
+        CHECK(sys.view(1).loco_state == LocoState::None && !sys.view(1).has_goal);
+        sys.tick(0, rng);
+        CHECK(sys.view(1).secondary_locomotor && sys.view(1).loco_state == LocoState::WalkStopped);
+        sys.tick(1, rng);
+        CHECK(!sys.view(1).secondary_locomotor && sys.view(1).locomotor == LocomotorKind::Default &&
+              sys.view(1).pos == cell_center(10, 10) && rng.draws() == 0);
+    }
+    {  // re-issue: a walking formation member keeps its goal alone and flies there
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(trooper(1, cell_center(10, 10))) &&
+              sys.add_unit(unit(2, cell_center(10, 12), 0, 1.0f, 6.0f, LocomotorKind::Default)));
+        SimRng rng(2);
+        MoveOrder o;
+        o.units = {1, 2};
+        o.destination = cell_center(40, 11);
+        sys.move(o, rng, 0);
+        uint32_t f = 0;
+        for (; f < 40; ++f) sys.tick(f, rng);
+        const UnitView w = sys.view(1);
+        CHECK(w.has_goal && w.formation_speed < 1.0e30f);
+        const uint64_t draws = rng.draws();
+        CHECK(sys.use_secondary_locomotor(1, true));
+        UnitView v = sys.view(1);
+        CHECK(v.locomotor == LocomotorKind::Jetpack && v.has_goal && v.goal == w.goal && v.formation_speed > 1.0e30f &&
+              v.loco_state == LocoState::None && rng.draws() == draws);  // no stagger draw
+        bool flew = false;
+        for (; f < 3000 && sys.view(1).secondary_locomotor; ++f) {
+            sys.tick(f, rng);
+            flew = flew || sys.view(1).airborne;
+        }
+        v = sys.view(1);
+        CHECK(flew && v.locomotor == LocomotorKind::Default && v.arrived && distance(v.pos, w.goal) < 1.0f);
+    }
+    {  // swap back in flight: the order is kept and walked
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+        SimRng rng(3);
+        MoveOrder j;
+        j.units = {1};
+        j.destination = cell_center(40, 10);
+        j.switch_locomotor = true;
+        sys.move(j, rng, 0);
+        uint32_t f = 0;
+        for (; f < 2000 && sys.view(1).loco_state != LocoState::WalkMoving; ++f) sys.tick(f, rng);
+        for (const uint32_t end = f + 10; f < end; ++f) sys.tick(f, rng);
+        UnitView v = sys.view(1);
+        CHECK(v.airborne && v.secondary_locomotor && v.has_goal);
+        const V2 goal = v.goal;
+        CHECK(sys.use_secondary_locomotor(1, false));
+        v = sys.view(1);
+        CHECK(v.locomotor == LocomotorKind::Default && !v.secondary_locomotor && !v.airborne && v.has_goal && v.goal == goal &&
+              v.z == (v.pos.x > 1000.0f ? 40.0f : 0.0f));  // Walk Initialise conforms to the terrain
+        bool walked = true;
+        for (const uint32_t end = f + 3000; f < end && !sys.view(1).arrived; ++f) {
+            sys.tick(f, rng);
+            walked = walked && sys.view(1).locomotor == LocomotorKind::Default && !sys.view(1).airborne;
+        }
+        v = sys.view(1);
+        CHECK(walked && v.arrived && distance(v.pos, goal) < 1.0f);
+    }
+}
+
+// S7 t14 / PR #14 review: the swap needs a JETPACK_LOCOMOTOR Secondary_Locomotor_Name and a non-JETPACK primary (retail
+// would rebuild a non-JetPack secondary on every call and never swap back, MOVEMENT §3.1.1 step 2); unit_desc_from_type
+// reads Alternate_Max_Speed / _Rate_Of_Turn unconditionally (type defaults 1.0 / 2.0).
+static void test_multi_locomotor_types() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "alamo_tactical_movement_gaps_multi_types";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    auto put = [](const std::filesystem::path& p, const std::string& s) {
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << s;
+    };
+    const std::string multi = "<Uses_Multiple_Locomotors>Yes</Uses_Multiple_Locomotors><LandBehavior>WALK_LOCOMOTOR</LandBehavior>";
+    put(root / "Data/XML/GameObjectFiles.xml", "<L><File>ML.xml</File></L>");
+    put(root / "Data/XML/ML.xml",
+        "<R>\n"
+        "<GroundInfantry Name=\"Jet\">" + multi + "<Primary_Locomotor_Name>WALK_LOCOMOTOR</Primary_Locomotor_Name>"
+        "<Secondary_Locomotor_Name>JETPACK_LOCOMOTOR</Secondary_Locomotor_Name></GroundInfantry>\n"
+        "<GroundInfantry Name=\"Jet_Alt\">" + multi + "<Secondary_Locomotor_Name>jetpack_locomotor</Secondary_Locomotor_Name>"
+        "<Alternate_Max_Speed>2.5</Alternate_Max_Speed><Alternate_Max_Rate_Of_Turn>6</Alternate_Max_Rate_Of_Turn></GroundInfantry>\n"
+        "<GroundInfantry Name=\"Bike_Secondary\">" + multi + "<Primary_Locomotor_Name>WALK_LOCOMOTOR</Primary_Locomotor_Name>"
+        "<Secondary_Locomotor_Name>BIKE_LOCOMOTOR</Secondary_Locomotor_Name></GroundInfantry>\n"
+        "<GroundInfantry Name=\"Walk_Secondary\">" + multi + "<Secondary_Locomotor_Name>WALK_LOCOMOTOR</Secondary_Locomotor_Name>"
+        "</GroundInfantry>\n"
+        "<GroundInfantry Name=\"Jet_Primary\">" + multi + "<Primary_Locomotor_Name>JETPACK_LOCOMOTOR</Primary_Locomotor_Name>"
+        "<Secondary_Locomotor_Name>JETPACK_LOCOMOTOR</Secondary_Locomotor_Name></GroundInfantry>\n"
+        "<GroundInfantry Name=\"Unknown_Secondary\">" + multi + "<Secondary_Locomotor_Name>NOT_A_LOCOMOTOR</Secondary_Locomotor_Name>"
+        "</GroundInfantry>\n"
+        "<GroundInfantry Name=\"No_Secondary\">" + multi + "</GroundInfantry>\n"
+        "</R>");
+    DirectoryProvider dp(path_to_utf8(root));
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(dp) && types.build(raw, &dp));
+    const auto desc = [&types](const char* name) {
+        const uint32_t t = types.resolve_name(name);
+        CHECK(t < types.size());
+        return t < types.size() ? unit_desc_from_type(types, t) : UnitDesc{};
+    };
+    const UnitDesc jet = desc("Jet"), alt = desc("Jet_Alt"), bike = desc("Bike_Secondary"), walk = desc("Walk_Secondary");
+    const UnitDesc jprim = desc("Jet_Primary"), unknown = desc("Unknown_Secondary"), none = desc("No_Secondary");
+    CHECK(jet.uses_multiple_locomotors && jet.has_secondary_locomotor && jet.secondary_locomotor == LocomotorKind::Jetpack &&
+          jet.alt_max_speed == 1.0f && jet.alt_turn_rate == 2.0f);  // the type defaults
+    CHECK(alt.has_secondary_locomotor && alt.alt_max_speed == 2.5f && alt.alt_turn_rate == 6.0f);
+    CHECK(bike.uses_multiple_locomotors && !bike.has_secondary_locomotor && bike.secondary_locomotor == LocomotorKind::Bike);
+    CHECK(!walk.has_secondary_locomotor && !jprim.has_secondary_locomotor && !unknown.has_secondary_locomotor &&
+          !none.has_secondary_locomotor);
+    // A refused secondary never swaps: the switch bit walks, the order is not re-issued, nothing to swap back from.
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc b = bike;
+    b.id = 1;
+    b.pos = cell_center(10, 10);
+    UnitDesc j = jet;
+    j.id = 2;
+    j.pos = cell_center(10, 30);
+    CHECK(sys.add_unit(b) && sys.add_unit(j));
+    CHECK(!sys.use_secondary_locomotor(1, true) && !sys.use_secondary_locomotor(1, false));
+    CHECK(sys.use_secondary_locomotor(2, true) && sys.view(2).locomotor == LocomotorKind::Jetpack);
+    SimRng rng(6);
+    MoveOrder o;
+    o.units = {1};
+    o.destination = cell_center(30, 10);
+    o.switch_locomotor = true;
+    sys.move(o, rng, 0);
+    bool walked = true;
+    for (uint32_t f = 0; f < 2000 && !sys.view(1).arrived; ++f) {
+        sys.tick(f, rng);
+        walked = walked && sys.view(1).locomotor == LocomotorKind::Default && !sys.view(1).secondary_locomotor;
+    }
+    CHECK(walked && sys.view(1).arrived && !sys.view(2).secondary_locomotor);  // the idle jetpacker reverted meanwhile
+    remove_all_long(root, ec);
+}
+
 static void test_bike() {
     MovementSystem sys{MovementConfig{}};
     land_system(sys, 100);
@@ -900,11 +1487,101 @@ static void test_fighter_space() {
     CHECK(sys.teleport(1, {2030.0f, 0.0f}, 0.0f, 0.0f, fr));
     for (uint32_t g = 1; g <= 20; ++g) sys.tick(fr + g, rng);
     CHECK(distance(sys.view(1).pos, {2030.0f, 0.0f}) < 1e-3f);
-    // Attack target: the next move starts in Directed_Combat (0x1E).
+    // Attack target: the next move is Moving (0x1B) at order time [port, S7 t12: the target fed then may be the old order's]
+    // and turns into Directed_Combat (0x1E) on its first fighter frame (§2 step 6).
     CHECK(sys.set_attack_target(1, true, {0.0f, 0.0f}, 0.0f));
     sys.move(o, rng, fr + 30);
+    CHECK(sys.view(1).loco_state == LocoState::FighterMoving);
+    sys.tick(fr + 30, rng);
     CHECK(sys.view(1).loco_state == LocoState::FighterDirectedCombat);
     std::printf("fighter: threat path %zu waypoints, idle at frame %u\n", wf.size(), fr);
+}
+
+// S7 t37 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E): a fighter's move with an object goal (guard flag) keeps an object
+// goal block. While the object moves the fighter, within R = min(attack range / 2, Space_Guard_Range) of it, flies a copy of
+// the object's path; out of R it re-paths to the object when the recorded goal is more than R away. The object's removal
+// turns the block into a position block at the last waypoint (flags kept); a plain move drops the block.
+static void test_fighter_guard() {
+    MovementConfig cfg;
+    cfg.mode = MoveMode::Space;
+    MovementSystem sys(cfg);
+    sys.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+    UnitDesc f = unit(1, {-2000.0f, 50.0f}, -1, 4.0f, 10.0f, LocomotorKind::Fighter);
+    f.space_layer = kLayerFighter;
+    f.space_layer_type = 0;
+    CHECK(sys.add_unit(f));
+    UnitDesc c = unit(2, {-2000.0f, 0.0f}, -1, 2.0f, 60.0f, LocomotorKind::Default);
+    c.space_layer_type = 2;
+    CHECK(sys.add_unit(c));
+    SimRng rng(5);
+    MoveOrder g;
+    g.units = {1};
+    g.destination = {-2000.0f, 0.0f};
+    g.flags = kMoveFlagGuardMove;
+    g.goal_object = 2;
+    sys.move(g, rng, 0);
+    const FighterGuard* fg = sys.fighter_guard(1);
+    CHECK(fg && fg->object == 2 && fg->flags == kMoveFlagGuardMove && fg->follow && fg->next == kFighterGuardInterval);
+    MoveOrder mc;
+    mc.units = {2};
+    mc.destination = {1500.0f, 0.0f};
+    sys.move(mc, rng, 0);
+    CHECK(sys.fighter_guard(1) != nullptr);  // another unit's order leaves the fighter's block alone
+    bool copied = false, repathed = false;
+    uint32_t fr = 0;
+    for (; fr < 3000 && !copied; ++fr) {
+        sys.tick(fr, rng);
+        const UnitView v = sys.view(1), cv = sys.view(2);
+        copied = cv.has_goal && !cv.arrived && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y;
+    }
+    // Save round trip with a live guard block (movement save v8): same block, identical continuation.
+    {
+        ByteWriter w;
+        sys.write(w);
+        MovementSystem copy(cfg);
+        copy.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+        const FighterGuard* a = sys.fighter_guard(1);
+        const FighterGuard* b = copy.fighter_guard(1);
+        CHECK(a && b && a->key == b->key && a->object == b->object && a->flags == b->flags && a->goal.x == b->goal.x &&
+              a->goal.y == b->goal.y && a->next == b->next && a->follow == b->follow && a->covered == b->covered);
+        SimRng ra = rng, rb = rng;
+        bool same = true;
+        for (uint32_t k = fr; k < fr + 90; ++k) {
+            sys.tick(k, ra);
+            copy.tick(k, rb);
+            StateHasher ha, hb;
+            sys.hash_units(ha);
+            copy.hash_units(hb);
+            same = same && ha.digest() == hb.digest();
+        }
+        CHECK(same && copy.fighter_guard(1) && copy.fighter_guard(1)->next == sys.fighter_guard(1)->next);
+        fr += 90;
+        rng = ra;
+    }
+    // Teleport the fighter away (out of R): the next updates re-path it toward the object.
+    CHECK(sys.teleport(1, {-2000.0f, 3000.0f}, 0.0f, 0.0f, fr));
+    const V2 before = sys.fighter_guard(1)->goal;
+    for (uint32_t k = 0; k < 400 && !repathed; ++k, ++fr) {
+        sys.tick(fr, rng);
+        repathed = distance(sys.fighter_guard(1)->goal, before) > 1.0f &&
+                   distance(sys.fighter_guard(1)->goal, sys.view(2).pos) < 10.0f;
+    }
+    // The object leaves: kind 1 at the last waypoint of the fighter's path, flags kept.
+    const auto wp = sys.space_path(1);
+    const V2 last = wp.empty() ? sys.fighter_guard(1)->goal : wp.back().pos;
+    CHECK(sys.remove_unit(2));
+    fg = sys.fighter_guard(1);
+    const bool lost = fg && fg->object == -1 && fg->flags == kMoveFlagGuardMove && distance(fg->goal, last) < 1e-3f;
+    MoveOrder p;
+    p.units = {1};
+    p.destination = {0.0f, 0.0f};
+    sys.move(p, rng, fr);
+    const bool dropped = sys.fighter_guard(1) == nullptr;
+    std::printf("fighter guard: path copy %d (frame %u), re-path %d, object lost -> position guard %d, plain move drops %d\n",
+                copied ? 1 : 0, fr, repathed ? 1 : 0, lost ? 1 : 0, dropped ? 1 : 0);
+    CHECK(copied && repathed && lost && dropped);
 }
 
 // ---------------------------------------------------------------- determinism
@@ -946,7 +1623,8 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // Golden digest of the final record (MSVC and clang must both produce it). S7 collision layer (2026-10-29): moved (the
 // land hash appends the collision objects; priority-ordered resolution). FIGHTER_FLYING §6 flying (2026-10-29): moved
 // (Hermite follower, attitude / altitude steps, D + dir x L loiter; flying units hash pitch, V, path index, target).
-static constexpr uint64_t kGoldenMixed = 0x81d85cc90e42fdfbull;
+// S7 t15 (2026-11-02): moved (the Has_Pre_Turn_Anim jetpack's take-off turn: band rates, one-shot clips, clip-end exit).
+static constexpr uint64_t kGoldenMixed = 0x1645f6a50ff73064ull;
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).
@@ -1068,6 +1746,46 @@ static void test_space_avoid() {
         CHECK(avoid_precise_segment(po, a, b, 5u, 0u, h) && h.t == 0.0f && h.mesh == -1);
     }
 
+    // S8 t13 (MOVEMENT §1.3 "Ray mesh set"): the Fine_Tune stamping ray (vf +0x80 mode 0, mask 1) - any collision mesh
+    // whose bone is visible; COLLISIONBOX and the collide switch play no part.
+    {
+        AvoidModel floor;
+        AvoidModel::Mesh m;
+        m.lo = {-10.0f, -10.0f, 0.0f};
+        m.hi = {10.0f, 10.0f, 0.0f};
+        m.tris = {{-10.0f, -10.0f, 0.0f}, {10.0f, -10.0f, 0.0f}, {10.0f, 10.0f, 0.0f},
+                  {-10.0f, -10.0f, 0.0f}, {10.0f, 10.0f, 0.0f}, {-10.0f, 10.0f, 0.0f}};
+        m.name = "COLLISION_ALT0";  // hidden in the file (the builder keeps it: collision flag), bone visible
+        floor.meshes.push_back(m);
+        AvoidObstacle fo;
+        fo.pos = {200.0f, 200.0f, 5.0f};
+        fo.model = &floor;
+        avoid_place(fo);
+        auto ray = [&](float x, float y) { return avoid_ray_any(fo, {x, y, -1000.0f}, {x, y, 1000.0f}); };
+        CHECK(ray(200.0f, 200.0f) && ray(209.0f, 191.0f) && !ray(215.0f, 200.0f));
+        fo.collide = false;  // contained / collide switch off: the ray still hits
+        CHECK(ray(200.0f, 200.0f));
+        floor.has_collision_box = true;  // a COLLISIONBOX off the segment changes nothing (the precise test would miss)
+        floor.cbox_c = {500.0f, 500.0f, 0.0f};
+        floor.cbox_h = {1.0f, 1.0f, 1.0f};
+        AvoidSegmentHit h;
+        CHECK(ray(200.0f, 200.0f) && !avoid_precise_segment(fo, {200.0f, 200.0f, -1000.0f}, {200.0f, 200.0f, 1000.0f}, 1u, 0u, h));
+        floor.meshes[0].bone_visible = false;  // a mesh whose bone is hidden at run time is skipped
+        CHECK(!ray(200.0f, 200.0f));
+        AvoidModel::Mesh m2 = m;  // a second, visible mesh (model x + 30 = world y + 30) decides alone
+        for (F3& p : m2.tris) p.x += 30.0f;
+        m2.lo.x += 30.0f;
+        m2.hi.x += 30.0f;
+        floor.meshes.push_back(m2);
+        CHECK(!ray(200.0f, 200.0f) && ray(200.0f, 230.0f));
+        floor.meshes[1].shield = true;  // SHIELD mesh: skipped only for a type with the shield behaviour
+        CHECK(ray(200.0f, 230.0f));
+        fo.skip_shield = true;
+        CHECK(!ray(200.0f, 230.0f));
+        fo.model = nullptr;
+        CHECK(!avoid_ray_any(fo, {200.0f, 200.0f, -1000.0f}, {200.0f, 200.0f, 1000.0f}));
+    }
+
     // The query: overlap (inclusive) with the box around the fighter, then the first hit decides.
     F3 hit;
     const std::vector<AvoidObstacle> one{wo};
@@ -1170,6 +1888,264 @@ static void test_determinism() {
     if (kGoldenMixed != 0) CHECK(g == kGoldenMixed);
 }
 
+// S8 t11 / t12 (MOVEMENT §3.2 "Deploy states", ABILITIES_HARDPOINTS §4.13): the Walk deploy window. Clip 0x19 / 0x1A
+// with 30 frames at 30 fps: step = 1 x Deployment_Anim_Rate, end at position >= 30 - 2 - step.
+static void test_deploy() {
+    using DR = MovementSystem::DeployResult;
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+    UnitDesc fast = trooper(2, cell_center(10, 30));
+    fast.deployment_anim_rate = 2.0f;
+    CHECK(sys.add_unit(fast));
+    CHECK(sys.add_unit(unit(3, cell_center(10, 50), 0, 2.0f, 6.0f, LocomotorKind::Jetpack)));
+    sys.set_deploy_clip_fn([](ObjectId, int32_t anim, uint32_t& n, float& fps) {
+        if (anim != 0x19 && anim != 0x1A) return false;
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    bool turret_rest = true;
+    sys.set_turret_rest_fn([&turret_rest](ObjectId id) { return id != 1 || turret_rest; });
+    SimRng rng(7);
+    auto finished_at = [&](ObjectId id, LocoState to, uint32_t from, uint32_t limit) {
+        for (uint32_t f = from; f < limit; ++f) {
+            sys.tick(f, rng);
+            for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+                if (e.id == id && e.to == to && e.finished) return f;
+        }
+        return 0xFFFFFFFFu;
+    };
+    // Only Walk deploys; unknown units are NoWalk too.
+    CHECK(sys.deploy(3, true, 0) == DR::NoWalk && sys.deploy(99, true, 0) == DR::NoWalk && sys.deploy(1, false, 0) == DR::Ignored);
+    // A moving unit stops; Deploy(true) at frame 10 -> 0x18 now, 0x19 when the clip ends (10 + 27 at rate 1).
+    MoveOrder o;
+    o.units = {1, 2};
+    o.destination = cell_center(60, 10);
+    sys.move(o, rng, 0);
+    for (uint32_t f = 0; f < 10; ++f) sys.tick(f, rng);
+    CHECK(sys.deploy(1, true, 10) == DR::Deploying && sys.deploy(2, true, 10) == DR::Deploying);
+    CHECK(sys.deploy(1, true, 10) == DR::Ignored);  // nothing in 0x18
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 2 && ev[0].id == 1 && ev[0].from == LocoState::None && ev[0].to == LocoState::WalkDeploying &&
+              !ev[0].finished);
+    }
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeploying && sys.view(1).deploy_state == LocoState::WalkDeploying);
+    const V2 held = sys.view(1).pos;
+    uint32_t f2 = 0xFFFFFFFFu, f1 = 0xFFFFFFFFu;
+    for (uint32_t f = 10; f < 80 && f1 == 0xFFFFFFFFu; ++f) {
+        sys.tick(f, rng);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events()) {
+            if (e.finished && e.to == LocoState::WalkDeployed && e.id == 1) f1 = f;
+            if (e.finished && e.to == LocoState::WalkDeployed && e.id == 2) f2 = f;
+        }
+        CHECK(sys.view(1).pos == held);  // a deploying unit does not move
+    }
+    CHECK(f1 == 37);  // pos = f - 10 >= 27
+    CHECK(f2 == 23);  // rate 2: 2 (f - 10) >= 26
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed && sys.deploy(1, true, 40) == DR::Ignored);
+    // An order while deployed waits: the unit stays put.
+    sys.move(o, rng, 40);
+    for (uint32_t f = 40; f < 60; ++f) sys.tick(f, rng);
+    CHECK(sys.view(1).pos == held);
+    // Undeploy: 0x1A, the clip from 0, back to the walk 27 frames later (state None, signal).
+    CHECK(sys.deploy(1, false, 60) == DR::Undeploying && sys.deploy_state(1) == LocoState::WalkUndeploying);
+    const uint32_t undeployed = finished_at(1, LocoState::None, 60, 200);
+    CHECK(undeployed == 87 && sys.deploy_state(1) == LocoState::None);
+
+    // S8 t24 (MOVEMENT §3.2 "Where it gates"): Deploy(true) from the walk starts its clip at once, the turret off rest or
+    // not (frame 100 -> ends 127).
+    turret_rest = false;
+    CHECK(sys.deploy(1, true, 100) == DR::Deploying);
+    CHECK(finished_at(1, LocoState::WalkDeployed, 100, 300) == 127);
+    // Blocked reverse: 0x1A with the turret off rest (no clip yet); Deploy(true) -> 0x19 at once with the signal.
+    turret_rest = false;
+    CHECK(sys.deploy(1, false, 150) == DR::Undeploying);
+    sys.tick(150, rng);
+    (void)sys.take_deploy_events();
+    CHECK(sys.deploy(1, true, 151) == DR::ReverseBlocked && sys.deploy_state(1) == LocoState::WalkDeployed);
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 1 && ev[0].from == LocoState::WalkUndeploying && ev[0].to == LocoState::WalkDeployed && ev[0].finished);
+    }
+    turret_rest = true;
+    CHECK(finished_at(1, LocoState::None, 160, 200) == 0xFFFFFFFFu);  // nothing pending
+    CHECK(sys.deploy(1, false, 200) == DR::Undeploying);
+    CHECK(finished_at(1, LocoState::None, 200, 300) == 227);
+    // Reversal: Undeploy (frame 250) out of a Deploy clip at position 10 starts the Undeploy clip at 30 - 10 - 1 - 1 = 18:
+    // it ends at 27, 9 frames later.
+    CHECK(sys.deploy(1, true, 240) == DR::Deploying);
+    for (uint32_t f = 240; f < 250; ++f) sys.tick(f, rng);
+    CHECK(sys.deploy(1, false, 250) == DR::Undeploying);
+    CHECK(finished_at(1, LocoState::None, 250, 300) == 259);
+
+    // Save round trip mid-clip: identical continuation.
+    CHECK(sys.deploy(1, true, 300) == DR::Deploying);
+    for (uint32_t f = 300; f < 305; ++f) sys.tick(f, rng);
+    ByteWriter w;
+    sys.write(w);
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy, 100);
+    copy.set_deploy_clip_fn([](ObjectId, int32_t, uint32_t& n, float& fps) {
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    {
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+    }
+    StateHasher ha, hb;
+    sys.hash_units(ha);
+    copy.hash_units(hb);
+    CHECK(ha.digest() == hb.digest() && copy.deploy_state(1) == LocoState::WalkDeploying);
+    SimRng r2 = rng;
+    uint32_t end_a = 0, end_b = 0;
+    for (uint32_t f = 305; f < 340; ++f) {
+        sys.tick(f, rng);
+        copy.tick(f, r2);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 1 && e.finished) end_a = f;
+        for (const MovementSystem::DeployEvent& e : copy.take_deploy_events())
+            if (e.id == 1 && e.finished) end_b = f;
+    }
+    CHECK(end_a == 327 && end_b == 327);
+
+    // S8 t12 (e): a locomotor swap undeploys without a signal; JetPack cannot deploy; the Walk rebuilt on landing starts
+    // undeployed.
+    (void)sys.take_deploy_events();
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed && sys.use_secondary_locomotor(1, true));
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 1 && ev[0].from == LocoState::WalkDeployed && ev[0].to == LocoState::None && !ev[0].finished);
+    }
+    CHECK(sys.deploy_state(1) == LocoState::None && sys.deploy(1, true, 400) == DR::NoWalk);
+    CHECK(sys.use_secondary_locomotor(1, false) && sys.deploy_state(1) == LocoState::None);
+    CHECK(sys.deploy(1, true, 401) == DR::Deploying);
+    // snap_yaw: the facing at once, position kept.
+    const V2 p = sys.view(2).pos;
+    CHECK(sys.snap_yaw(2, 90.0f) && near(sys.view(2).yaw, 90.0f, 1e-4f) && sys.view(2).pos == p && !sys.snap_yaw(99, 0.0f));
+    std::printf("deploy: window timing, turret wait, blocked reverse, reversal, save, locomotor swap ok\n");
+}
+
+// S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the TURRET model of Deploys units. Unit 1 AT-AT-like (3 deg
+// per frame, +-55), unit 2 SPMAT-like (3 deg per frame, 360, deployed rest elevation -45). Clips 30 frames at 30 fps.
+static void test_turret() {
+    using DR = MovementSystem::DeployResult;
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc a = trooper(1, cell_center(10, 10));
+    a.turret = true;
+    a.turret_speed = 3.0f;
+    a.turret_extent = a.turret_deployed_extent = 55.0f;
+    UnitDesc s = trooper(2, cell_center(10, 40));
+    s.turret = true;
+    s.turret_speed = 3.0f;
+    s.turret_extent = s.turret_deployed_extent = 360.0f;
+    s.turret_deployed_rest[1] = -45.0f;
+    CHECK(sys.add_unit(a) && sys.add_unit(s));
+    sys.set_deploy_clip_fn([](ObjectId, int32_t, uint32_t& n, float& fps) {
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    bool aim = false;
+    const V2 p1 = sys.view(1).pos;
+    sys.set_turret_aim_fn([&](ObjectId id, float& x, float& y, float& z) {
+        if (id != 1 || !aim) return false;
+        x = p1.x;
+        y = p1.y + 100.0f;  // 90 degrees left of the body (yaw 0)
+        z = 0.0f;
+        return true;
+    });
+    SimRng rng(3);
+    uint32_t f = 0;
+    auto run_to = [&](uint32_t end) {
+        for (; f < end; ++f) sys.tick(f, rng);
+    };
+    // Aiming: 3 degrees per frame, clamped to the 55-degree extent.
+    aim = true;
+    run_to(10);
+    CHECK(near(sys.view(1).turret_yaw, 30.0f, 1e-4f));
+    run_to(20);
+    CHECK(sys.view(1).turret_yaw == 55.0f && sys.view(2).turret_yaw == 0.0f);
+    // Idle: held for Turret_Rotate_To_Rest_Delay_Sec (2 s = 60 frames), then back to rest at 3 per frame.
+    aim = false;
+    run_to(79);
+    CHECK(sys.view(1).turret_yaw == 55.0f);
+    run_to(90);
+    CHECK(sys.view(1).turret_yaw < 55.0f && sys.view(1).turret_yaw > 0.0f);
+    run_to(110);
+    CHECK(sys.view(1).turret_yaw == 0.0f);
+    // Undeploy waits for the rest angle: aim while deployed (yaw 55), then Deploy(false) - the forced recentre skips the
+    // delay (one held frame, then 19 frames back), the Undeploy clip starts only at rest and ends 27 frames later.
+    CHECK(sys.deploy(1, true, f) == DR::Deploying);
+    run_to(f + 40);
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed);
+    aim = true;
+    run_to(f + 20);
+    CHECK(sys.view(1).turret_yaw == 55.0f);
+    aim = false;
+    (void)sys.take_deploy_events();
+    const uint32_t u0 = f;
+    CHECK(sys.deploy(1, false, u0) == DR::Undeploying);
+    uint32_t clip_at = 0, done_at = 0;
+    for (; f < u0 + 120 && done_at == 0; ++f) {
+        sys.tick(f, rng);
+        if (clip_at == 0 && sys.view(1).deploy_clip == 0x1A) {
+            clip_at = f;
+            CHECK(sys.view(1).turret_yaw == 0.0f);  // at rest when the clip starts
+        }
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 1 && e.to == LocoState::None && e.finished) done_at = f;
+    }
+    CHECK(clip_at >= u0 + 19 && clip_at <= u0 + 21 && done_at == clip_at + 27);
+    // Reversing out of 0x1A while off rest: straight to 0x19 with the signal.
+    aim = true;
+    run_to(f + 20);  // walk state: yaw 55 again
+    CHECK(sys.deploy(1, true, f) == DR::Deploying);
+    run_to(f + 40);
+    CHECK(sys.deploy(1, false, f) == DR::Undeploying);
+    aim = false;
+    sys.tick(f, rng);
+    ++f;
+    CHECK(!near(sys.view(1).turret_yaw, 0.0f, 1e-4f) && sys.deploy(1, true, f) == DR::ReverseBlocked);
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed);
+    // SPMAT: deployed, the idle return goes to the deployed rest (elevation -45); the undeploy recentres to the
+    // undeployed rest (0) before its clip.
+    CHECK(sys.deploy(2, true, f) == DR::Deploying);
+    run_to(f + 120);
+    CHECK(sys.deploy_state(2) == LocoState::WalkDeployed && sys.view(2).turret_elevation == -45.0f);
+    CHECK(sys.deploy(2, false, f) == DR::Undeploying);
+    (void)sys.take_deploy_events();
+    const uint32_t s0 = f;
+    uint32_t s_done = 0;
+    for (; f < s0 + 120 && s_done == 0; ++f) {
+        sys.tick(f, rng);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 2 && e.to == LocoState::None && e.finished) s_done = f;
+    }
+    CHECK(s_done >= s0 + 15 + 27 && s_done <= s0 + 17 + 27 && sys.view(2).turret_elevation == 0.0f);
+    // Save round trip with the turret mid-turn: identical continuation.
+    aim = true;
+    run_to(f + 5);
+    ByteWriter w;
+    sys.write(w);
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy, 100);
+    {
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+    }
+    StateHasher ha, hb;
+    sys.hash_units(ha);
+    copy.hash_units(hb);
+    CHECK(ha.digest() == hb.digest() && copy.view(1).turret_yaw == sys.view(1).turret_yaw);
+    std::printf("turret: aim + extent, idle hold + return, undeploy wait %u frames, blocked reverse, SPMAT deployed rest, save ok\n",
+                clip_at - u0);
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -1178,9 +2154,19 @@ int main() {
     test_jetpack();
     test_flying();
     test_flying_clearance();
+    test_multi_locomotor();
+    test_jetpack_alternates();     // S7 t14
+    test_jetpack_orders();         // S7 t14
+    test_multi_locomotor_types();  // S7 t14
+    test_jetpack_accel_fallback();   // S7 t15
+    test_jetpack_turn_bands();       // S7 t15
+    test_jetpack_no_repeated_pose(); // S8 t09 (PR #19 review)
+    test_deploy();                   // S8 t11 / t12
+    test_turret();                   // S8 t24
     test_bike();
     test_bomber();
     test_fighter_space();
+    test_fighter_guard();
     test_space_avoid();
     test_speed_override();
     test_determinism();

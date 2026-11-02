@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "alamo/assets/asset_cache.hpp"
+#include "alamo/game/battle_fx.hpp"  // S8 t31: lobbing charge-up cues
 #include "alamo/game/game_data.hpp"
 #include "alamo/game/game_session.hpp"
 #include "alamo/jobs/job_system.hpp"
@@ -222,7 +223,13 @@ public:
     render::RecordOptions ropt;
 
 private:
+    // S8 t31 (TACTICAL_COMBAT.md "Charge-up"): the charging lobbing units' Lobbing_Superweapon_Chargeup_Particle on
+    // Lobbing_Superweapon_Chargeup_Particle_Bone_Name as attached effects (percent kEffectLobChargeup).
+    void append_lob_chargeups(const sim::TacticalBattle& battle, render::SimSnapshot& snap);
+
     GpuCore* gpu_ = nullptr;
+    const objects::GameObjectTypes* types_ = nullptr;  // S8 t31: the lobbing XML tags
+    std::vector<TswCue> lob_chargeups_;               // S8 t31: track_lob_chargeups (battle_fx.hpp)
     bool space_ = true;
     bool blocking_models_ = false;
     int32_t local_ = 0;

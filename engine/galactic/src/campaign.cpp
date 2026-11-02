@@ -160,6 +160,12 @@ PlayerView GalacticSim::player_view(int32_t player) const {
     v.unowned_or_neutral.resize(n);
     v.held_by_ally.resize(n);
     v.hidden.resize(n);
+    // AI branch of Is_Planet_Passable_For_Player (0x3f2510): for a mover with an AI system, flag 1 vs flag 0 follows the
+    // PERCEIVED owner (Variable_Target.TargetPlayerID resolved to a player whose faction is not Is_Neutral, GALACTIC_ECONOMY
+    // 6.4). The sim keeps no fogged memory, so the stand-in is the TRUE owner [port]: a player, not neutral (the same bit
+    // as unowned_or_neutral, inverted) [M]. The AI's own view (engine/ai GalacticPerception::fill_view) overlays the
+    // remembered owner and ai_eval_failed. Evaluation never fails here (ai_eval_failed stays empty = none) [port].
+    if (v.has_ai_system) v.ai_perceived_non_neutral.resize(n);
     // GRC 1.1: the LOCAL player's raw revealed bytes (hop gate) and the mode's auto-reveal (Is_Planet_Revealed).
     v.fog_disabled = auto_reveal_;
     v.revealed.resize(n);
@@ -172,6 +178,7 @@ PlayerView GalacticSim::player_view(int32_t player) const {
         }
         v.corrupted.set(i, p.corruption != kCorruptionNone);
         v.unowned_or_neutral.set(i, !valid_player(p.owner) || faction_of(p.owner).is_neutral);
+        if (v.has_ai_system) v.ai_perceived_non_neutral.set(i, valid_player(p.owner) && !faction_of(p.owner).is_neutral);
         v.held_by_ally.set(i, allied(player, p.owner) && p.control > 0.0f);  // 0x4ad9f0: relation 0 (self / ally)
         v.hidden.set(i, p.hidden);
     }
@@ -304,6 +311,12 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
         const PlanetIndex home = setup.players[static_cast<size_t>(local_player_)].home;
         if (valid_planet(home) && planets_[home].is_planet) planets_[home].revealed = true;
     }
+    // q2f t02 [H]: the mode's frame-0 fiscal cycle runs before the galaxy is built (Q2 traces: no objects at mode frame
+    // 0, F fields last 0 / next 1350 / cycle 1 there, credits unchanged until mode frame 1351), so it pays nobody, feeds
+    // no AI income tick and rerolls no black-market planet. Only its bookkeeping (GE 1.2 steps 2-4) is left.
+    last_cycle_frame_ = 0;
+    next_cycle_frame_ = econ::fiscal_period_frames(rules_->constants.fiscal_cycle_seconds);
+    cycle_counter_ = 1;
     return true;
 }
 
@@ -791,11 +804,17 @@ void GalacticSim::service_production(PlanetIndex planet) {
             e.remaining = rem;  // countdown advances (speech at 60 s / 10 s is UI)
             continue;
         }
-        // Pay as you go: installment for the time that passed [H]. The AI budget call 0x53b900 is modelled as
-        // "credits >= a, then pay" [M].
+        // Pay as you go: installment for the time that passed [H]. An AI player pays through its AI budget (0x53b900,
+        // q2f t01 [H]: the hook decides how much, the credits floor at 0); anyone else needs credits >= a.
         const float a = econ::payg_installment(e.remaining, rem, e.build_time, e.cost);
-        if (players_[static_cast<size_t>(e.player)].account.credits >= a) {
-            add_credits(e.player, -a, false);
+        const PlayerState& owner = players_[static_cast<size_t>(e.player)];
+        float pay = -1.0f;
+        if (installment_hook_ && owner.ai && !owner.human)
+            pay = installment_hook_(planet, q, e, a);
+        else if (owner.account.credits >= a)
+            pay = a;
+        if (pay >= 0.0f) {
+            add_credits(e.player, -pay, false);
             e.remaining = rem;
         } else {
             e.start = now;  // re-armed from now with the cached remaining time: paused (0x499090)
@@ -1338,8 +1357,12 @@ void GalacticSim::arrive(uint32_t fleet) {
 void GalacticSim::update() {
     sync_starbases();  // refix t05: no planet keeps a starbase level without its starbase object
     reveal_prestep();  // GRC 1.3: first in the galactic frame, also while paused (step 2 tests the pause)
-    if (pause_ > 0) {  // galactic pause: mode frame frozen, behaviours not serviced [H]
-        if (conflicts_) conflicts_->on_service_tail();  // S10: the conflict state machine keeps running
+    if (paused()) {  // 0x4b2360: the pause counter or the story block; mode frame frozen, behaviours not serviced [H]
+        // A1_READINGS §31.7 (a1j t05): 0x2be640 gates the hero spawn lists (0x3fc750) on the counter alone, so they run
+        // under the story block only.
+        if (pause_ == 0) service_respawns();
+        // S10: the conflict tail still runs; the story block's skip of the state machines is the hook's (0x2be640 step 2).
+        if (conflicts_) conflicts_->on_service_tail();
         return;
     }
     // 1. Object services, newest registered first; only objects registered before the loop [M].
@@ -1481,11 +1504,19 @@ RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& 
     case EventType::Invade: {
         const PlanetIndex p = planet_by_id(ev.u("planet"));
         if (p == kInvalidPlanet) return RejectReason::InvalidTarget;
+        // InvadeEventClass Execute 0x48ff50 (A1_READINGS §31.2). Prologue gates: the galactic pause / battle-pending
+        // counter is raised, or a story-linked battle is pending and the local player is in a queued conflict (0x2b0350).
+        // The AI's task-force invasions do not come here: GalacticTaskForce.Invade 0x6ce600 calls Land_Invade (invade())
+        // directly. Then only the issuer's own units land. A list whose units are all dropped lands nothing (an empty
+        // list given to invade() would mean "all of the player's units").
+        if (paused()) return RejectReason::NotAllowed;
+        const std::vector<uint32_t>& ids = ev.ids("units");
         std::vector<ObjectHandle> units;
-        for (uint32_t id : ev.ids("units")) {
+        for (uint32_t id : ids) {
             const ObjectHandle h = store_->find(static_cast<objects::ObjectId>(id));
-            if (store_->alive(h)) units.push_back(h);
+            if (store_->alive(h) && store_->owner(h) == player) units.push_back(h);
         }
+        if (!ids.empty() && units.empty()) return RejectReason::NotOwner;
         return invade(player, p, units);
     }
     case EventType::FleetManagement:

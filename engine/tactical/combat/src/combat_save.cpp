@@ -43,9 +43,12 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 5;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 9;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                             // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
-                                            // target hardpoint (auto_hp)
+                                            // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
+                                            // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
+                                            // (same layout, new meaning), S7 t15 A2 last weapon service frame, S8 t06 B4
+                                            // fire-bone cycle index; 9: S8 t26 fire-at-position order
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -135,6 +138,9 @@ void CombatSystem::write(ByteWriter& w) const {
         w.i32(u.priority_override).u32(u.stun_end).u32(u.invuln_end).u32(u.emitter_entries).i32(u.weapon_index);
         w.u8(u.acquired);
         w.i32(u.goal_target).i32(u.goal_hp).i32(u.aim_target).i32(u.aim_hp).u8(u.locked).i32(u.auto_hp);  // refixf t06
+        w.u32(u.weapon_last).u32(u.weapon_bone);  // S7 t15 A2 / S8 t06 B4
+        put_vec3(w, u.lob_point);  // S8 t26 fire-at-position order
+        w.u8(u.lob_pending).u8(u.lob_charged).u32(u.lob_stamp);
         // refix t02: INFECTION behaviour
         w.u8(u.infect_attached).u32(u.infect_suspend).i32(u.infect_desc).i32(u.infect_player).i32(u.infect_source);
         w.u32(u.infect_end).u32(u.infect_next_damage).u32(static_cast<uint32_t>(u.infect_exposure.size()));
@@ -160,7 +166,11 @@ void CombatSystem::write(ByteWriter& w) const {
         put_vec3(w, p.pos);
         put_vec3(w, p.dir);
         w.f32(p.speed).f32(p.travelled).f32(p.max_travel).u32(p.spawn_frame).f32(p.damage).u16(p.damage_type).u8(p.kind);
-        w.u8(p.alive).u32(p.jammed_frame).u8(p.ever_jammed).f32(p.gravity).f32(p.floor_z).f32(p.fuse).u8(p.rocket);
+        w.u8(p.alive).u32(p.jammed_frame).u8(p.ever_jammed).f32(p.fuse).u8(p.rocket);
+        w.u8(p.lob).u8(p.stuck).f32(p.gravity).i32(p.stuck_to);  // S8 t04: grenade flight
+        put_vec3(w, p.launch);
+        put_vec3(w, p.lob_dir);
+        put_vec3(w, p.stuck_offset);
     }
     w.u32(static_cast<uint32_t>(rockets_.size()));
     for (const Rocket& rk : rockets_) {
@@ -206,7 +216,7 @@ void CombatSystem::write(ByteWriter& w) const {
     for (const DamageEvent& e : damage_events_) {
         w.i32(e.victim).i32(e.source).i32(e.source_owner).boolean(e.source_is_projectile).i32(e.projectile_desc);
         w.u8(e.kind).i32(e.hardpoint).f32(e.after_multipliers).f32(e.absorbed).f32(e.energy_absorbed);
-        w.f32(e.to_hardpoint).f32(e.to_hull).boolean(e.killed).u32(e.frame);
+        w.f32(e.to_hardpoint).f32(e.to_hull).f32(e.hull_lost).boolean(e.killed).u32(e.frame);
     }
     w.u32(static_cast<uint32_t>(hit_events_.size()));
     for (const HitEvent& e : hit_events_) {
@@ -312,6 +322,12 @@ bool CombatSystem::read(ByteReader& r) {
         u.aim_hp = r.i32();
         u.locked = r.u8();
         u.auto_hp = r.i32();
+        u.weapon_last = r.u32();  // S7 t15 A2
+        u.weapon_bone = r.u32();  // S8 t06 B4
+        u.lob_point = get_vec3(r);  // S8 t26
+        u.lob_pending = r.u8();
+        u.lob_charged = r.u8();
+        u.lob_stamp = r.u32();
         u.infect_attached = r.u8();
         u.infect_suspend = r.u32();
         u.infect_desc = r.i32();
@@ -395,11 +411,16 @@ bool CombatSystem::read(ByteReader& r) {
         p.alive = r.u8();
         p.jammed_frame = r.u32();
         p.ever_jammed = r.u8();
-        p.gravity = r.f32();
-        p.floor_z = r.f32();
         p.fuse = r.f32();
         p.rocket = r.u8();
-        if (!r.ok() || p.desc >= proj_descs || p.rocket > 1) return false;
+        p.lob = r.u8();
+        p.stuck = r.u8();
+        p.gravity = r.f32();
+        p.stuck_to = r.i32();
+        p.launch = get_vec3(r);
+        p.lob_dir = get_vec3(r);
+        p.stuck_offset = get_vec3(r);
+        if (!r.ok() || p.desc >= proj_descs || p.rocket > 1 || p.lob > 1 || p.stuck > 1) return false;
     }
     // refixf t01: rocket states, exactly one per rocket-flagged projectile, in the same (serial) order.
     if (!get_count(r, n, 61)) return false;
@@ -506,7 +527,7 @@ bool CombatSystem::read(ByteReader& r) {
         e.id = r.i32();
         e.percent = r.u8();
     }
-    if (!get_count(r, n, 47)) return false;
+    if (!get_count(r, n, 51)) return false;
     std::vector<DamageEvent> damage_events(n);
     for (DamageEvent& e : damage_events) {
         e.victim = r.i32();
@@ -521,6 +542,7 @@ bool CombatSystem::read(ByteReader& r) {
         e.energy_absorbed = r.f32();
         e.to_hardpoint = r.f32();
         e.to_hull = r.f32();
+        e.hull_lost = r.f32();
         e.killed = r.boolean();
         e.frame = r.u32();
         if (!r.ok() || !proj_ok(e.projectile_desc)) return false;

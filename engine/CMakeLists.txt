@@ -81,6 +81,49 @@ function(alamo_label_slow)
   endforeach()
 endfunction()
 
+# Worker-count check (OPT3 t07; docs/PHASE4.md "Worker-count check"): one scenario at 0 / 1 / 4 / 16 workers and the
+# machine default (hardware threads - 1), per-tick CRCs compared. One ctest entry per count so a long run's counts go side
+# by side under ctest -j: <name> runs `--workers 0 --crc-out <bin>/<name>_w0.crc` (FIXTURES_SETUP <name>_w0) and
+# <name>_w<N> runs `--workers N --golden <that file>` (FIXTURES_REQUIRED <name>_w0). The command must accept
+# --workers N, --crc-out FILE and --golden FILE (alamo_headless does) and fail when the golden differs.
+#   alamo_add_worker_count_check(<name> COMMAND <exe> [arg...]
+#       [SETUP_ARGS arg...]   extra args for the 0-worker entry only (e.g. --golden <checked-in file>, an --expect check)
+#       [CHECK_ARGS arg...]   extra args for the other entries only
+#       [WORKERS n...]        counts besides 0 (default 1 4 16 and the machine default; duplicates and 0 dropped)
+#       [TIMEOUT s] [SLOW]    TIMEOUT for every entry; SLOW labels them all "slow" (do it for runs over ~5 s)
+#       [PROPERTIES p v...])  more test properties for every entry (e.g. SKIP_RETURN_CODE 77)
+# More entries can compare against the same log: FIXTURES_REQUIRED <name>_w0 and --golden <bin>/<name>_w0.crc
+# (the path is also in <name>_CRC in the caller's scope). For short scenarios the in-process form is
+# alamo::jobs::check_worker_counts() (engine/jobs crc_recorder.hpp).
+function(alamo_add_worker_count_check name)
+  cmake_parse_arguments(PARSE_ARGV 1 _wc "SLOW" "TIMEOUT" "COMMAND;SETUP_ARGS;CHECK_ARGS;WORKERS;PROPERTIES")
+  if(NOT _wc_COMMAND)
+    message(FATAL_ERROR "alamo_add_worker_count_check(${name}): COMMAND is required")
+  endif()
+  if(NOT _wc_WORKERS)
+    cmake_host_system_information(RESULT _cores QUERY NUMBER_OF_LOGICAL_CORES)
+    math(EXPR _default "${_cores} - 1")
+    set(_wc_WORKERS 1 4 16 ${_default})
+  endif()
+  list(REMOVE_DUPLICATES _wc_WORKERS)
+  list(REMOVE_ITEM _wc_WORKERS 0)
+  set(_crc ${CMAKE_CURRENT_BINARY_DIR}/${name}_w0.crc)
+  set(_props ${_wc_PROPERTIES})
+  if(_wc_TIMEOUT)
+    list(APPEND _props TIMEOUT ${_wc_TIMEOUT})
+  endif()
+  if(_wc_SLOW)
+    list(APPEND _props LABELS slow)
+  endif()
+  add_test(NAME ${name} COMMAND ${_wc_COMMAND} --workers 0 --crc-out ${_crc} ${_wc_SETUP_ARGS})
+  set_tests_properties(${name} PROPERTIES FIXTURES_SETUP ${name}_w0 ${_props})
+  foreach(_w IN LISTS _wc_WORKERS)
+    add_test(NAME ${name}_w${_w} COMMAND ${_wc_COMMAND} --workers ${_w} --golden ${_crc} ${_wc_CHECK_ARGS})
+    set_tests_properties(${name}_w${_w} PROPERTIES FIXTURES_REQUIRED ${name}_w0 ${_props})
+  endforeach()
+  set(${name}_CRC ${_crc} PARENT_SCOPE)
+endfunction()
+
 foreach(m core vfs data jobs galactic objects anim commands tactical lua ai assets rhi shaderxlat materials terrain render ui audio video apps)
   if(m IN_LIST ALAMO_ENGINE_MODULES AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${m}/CMakeLists.txt)
     add_subdirectory(${m})

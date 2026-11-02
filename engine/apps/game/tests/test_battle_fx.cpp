@@ -73,6 +73,11 @@ const char* kTypes = R"(<?xml version="1.0"?>
  <SpaceProp Name="Fx_Planet_Bare"><Behavior>DUMMY_TACTICAL_SUPER_WEAPON_TARGET</Behavior></SpaceProp>
  <SpaceProp Name="Fx_Boom_Default"></SpaceProp>
  <SpaceProp Name="Fx_Boom_Big"><Explosion_Jitter_Factor>3.0</Explosion_Jitter_Factor></SpaceProp>
+ <SpaceUnit Name="Fx_Magnepulse"><Behavior>LOBBING_SUPERWEAPON</Behavior>
+  <Lobbing_Superweapon_Chargeup_Particle>Fx_Charge_Particles</Lobbing_Superweapon_Chargeup_Particle>
+  <Lobbing_Superweapon_Chargeup_Particle_Bone_Name>attack_cool_bone</Lobbing_Superweapon_Chargeup_Particle_Bone_Name>
+  <Lobbing_Superweapon_SFXEvent_Chargeup>Fx_Mag_Charge</Lobbing_Superweapon_SFXEvent_Chargeup>
+  <Lobbing_Superweapon_SFXEvent_Fire>Fx_Mag_Fire</Lobbing_Superweapon_SFXEvent_Fire></SpaceUnit>
 </Fx>
 )";
 const char* kSfx = R"(<?xml version="1.0"?>
@@ -81,6 +86,8 @@ const char* kSfx = R"(<?xml version="1.0"?>
   <SFXEvent Name="Fx_Power_Up"><Is_2D>Yes</Is_2D><Is_3D>No</Is_3D><Is_GUI>Yes</Is_GUI><Samples>POWER.WAV</Samples></SFXEvent>
   <SFXEvent Name="Fx_Superlaser"><Is_2D>Yes</Is_2D><Is_3D>No</Is_3D><Samples>LASER.WAV</Samples></SFXEvent>
   <SFXEvent Name="Fx_Planet_Death"><Is_2D>Yes</Is_2D><Is_3D>No</Is_3D><Samples>BOOM.WAV</Samples></SFXEvent>
+  <SFXEvent Name="Fx_Mag_Charge"><Is_2D>Yes</Is_2D><Is_3D>No</Is_3D><Samples>CHARGE.WAV</Samples></SFXEvent>
+  <SFXEvent Name="Fx_Mag_Fire"><Is_2D>Yes</Is_2D><Is_3D>No</Is_3D><Samples>MAGFIRE.WAV</Samples></SFXEvent>
 </SFXEvents>
 )";
 const char* kMusic = R"(<?xml version="1.0"?>
@@ -174,6 +181,51 @@ void test_tsw_cues() {
     c = tsw_cues(evs, st);
     CHECK(c.size() == 2);
     CHECK(tsw_cues({}, st).empty());
+}
+
+// S8 t31: a LOBBING_SUPERWEAPON unit (Fx_Magnepulse) in `w`'s store.
+objects::ObjectId add_lobber(World& w) {
+    objects::SpawnParams p;
+    p.type = w.types.resolve_name("Fx_Magnepulse");
+    CHECK(p.type != objects::kNone);
+    p.owner = 1;
+    p.position = {10.0f, 20.0f, 30.0f};
+    return w.store->id(w.store->create(p));
+}
+
+void test_lob_cues() {
+    auto w = make_world();
+    objects::ObjectStore& st = *w->store;
+    const objects::ObjectId lob = add_lobber(*w);
+    const objects::TypeIndex mag = w->types.resolve_name("Fx_Magnepulse");
+    ta::SpecialWeaponEvent up = ev(ta::SwEventKind::LobChargeup, lob);
+    up.frame = 40;
+    up.point = {500.0f, 0.0f, 0.0f};
+    std::vector<ta::SpecialWeaponEvent> evs{up, ev(ta::SwEventKind::LobChargeup, 0x12345)};  // unknown object: no cue
+    std::vector<TswCue> c = tsw_cues(evs, st);
+    CHECK(c.size() == 1);
+    if (c.size() == 1) {
+        CHECK(c[0].kind == TswCue::Kind::LobChargeup && c[0].object == lob && c[0].type == mag && c[0].frame == 40);
+        CHECK(c[0].position.x == 10.0f && c[0].position.y == 20.0f && c[0].position.z == 30.0f);
+        CHECK(c[0].target == objects::kNoObjectId);
+    }
+    std::vector<TswCue> active;
+    track_lob_chargeups(active, c);
+    CHECK(active.size() == 1 && active[0].object == lob && active[0].frame == 40);
+    up.frame = 50;  // a new charge-up of the same unit restarts its entry
+    evs = {up};
+    track_lob_chargeups(active, tsw_cues(evs, st));
+    CHECK(active.size() == 1 && active[0].frame == 50);
+    evs = {ev(ta::SwEventKind::TswFiring, st.id(w->tsw), st.id(w->dummy))};  // other cues leave the list alone
+    track_lob_chargeups(active, tsw_cues(evs, st));
+    CHECK(active.size() == 1);
+    ta::SpecialWeaponEvent done = ev(ta::SwEventKind::LobCharged, lob);
+    done.frame = 140;
+    evs = {done};
+    c = tsw_cues(evs, st);
+    CHECK(c.size() == 1 && c[0].kind == TswCue::Kind::LobCharged && c[0].object == lob && c[0].frame == 140);
+    track_lob_chargeups(active, c);
+    CHECK(active.empty());
 }
 
 float len(tactical::Vec3 v) { return std::sqrt(tactical::dot(v, v)); }
@@ -498,6 +550,16 @@ void test_tsw_audio() {
     const std::vector<TswCue> bads{bad};
     h.tsw_audio(bads, w->types);
     CHECK(h.stats().tsw_planet_deaths == 1);
+
+    // S8 t31: the lobbing charge-up / charged sounds.
+    const objects::ObjectId lob = add_lobber(*w);
+    evs = {ev(ta::SwEventKind::LobChargeup, lob)};
+    h.tsw_audio(tsw_cues(evs, st), w->types);
+    CHECK(h.stats().lob_chargeups == 1 && logged(*h.system(), "Fx_Mag_Charge"));
+    CHECK(h.stats().lob_charged == 0 && !logged(*h.system(), "Fx_Mag_Fire"));
+    evs = {ev(ta::SwEventKind::LobCharged, lob)};
+    h.tsw_audio(tsw_cues(evs, st), w->types);
+    CHECK(h.stats().lob_charged == 1 && logged(*h.system(), "Fx_Mag_Fire"));
 }
 #endif
 
@@ -515,6 +577,7 @@ void test_inactive() {
 
 int main() {
     test_tsw_cues();
+    test_lob_cues();
     test_noise();
     test_profiles();
     test_explosion_shake();

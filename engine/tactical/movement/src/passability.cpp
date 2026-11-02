@@ -1,6 +1,7 @@
 #include "alamo/tactical/movement/passability.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "alamo/core/hash.hpp"
@@ -198,6 +199,8 @@ void PassabilityGrid::recompute_all() {
 
 void PassabilityGrid::sample_cells(const ObstacleFootprint& fp, std::vector<uint32_t>& out) const {
     out.clear();
+    // S8 t13 (MOVEMENT §1.3): a zero width or height (no XML size, no model) samples nothing.
+    if (!(fp.width > 0.0f) || !(fp.height > 0.0f)) return;
     const V2 dir = dir_from_deg(fp.yaw_deg);
     const V2 left = perp_left(dir);
     // Samples every 10 world units on both axes, both edges included (§1.3).
@@ -236,12 +239,13 @@ void PassabilityGrid::apply(const Stamp& s, int delta) {
 
 uint32_t PassabilityGrid::stamp(ObjectId id, const ObstacleFootprint& fp) {
     unstamp(id);
-    if (w_ == 0 || h_ == 0) return 0;
-    if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
     Stamp s;
     s.bits = fp.bits & 0x1FFu;
-    sample_cells(fp, s.cells);
-    apply(s, 1);
+    if (w_ != 0 && h_ != 0) {  // S8 t09: an empty grid still records the (cell-less) stamp, as the header promises
+        if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
+        sample_cells(fp, s.cells);
+        apply(s, 1);
+    }
     const uint32_t n = static_cast<uint32_t>(s.cells.size());
     stamps_.emplace(id, std::move(s));
     return n;
@@ -255,14 +259,44 @@ bool PassabilityGrid::unstamp(ObjectId id) {
     return true;
 }
 
+std::vector<ObjectId> PassabilityGrid::stamped_ids() const {
+    std::vector<ObjectId> out;
+    out.reserve(stamps_.size());
+    for (const auto& kv : stamps_) out.push_back(kv.first);
+    return out;
+}
+
+bool PassabilityGrid::occupies(ObjectId id, int32_t x, int32_t y) const {
+    if (!in_range(x, y)) return false;
+    const auto it = stamps_.find(id);
+    if (it == stamps_.end()) return false;
+    return std::binary_search(it->second.cells.begin(), it->second.cells.end(), static_cast<uint32_t>(idx(x, y)));
+}
+
+std::span<const uint32_t> PassabilityGrid::stamp_cells(ObjectId id) const {
+    const auto it = stamps_.find(id);
+    if (it == stamps_.end()) return {};
+    return it->second.cells;
+}
+
+bool PassabilityGrid::rekey(ObjectId from, ObjectId to) {
+    if (from == to || stamps_.find(to) != stamps_.end()) return false;
+    auto node = stamps_.extract(from);
+    if (node.empty()) return false;
+    node.key() = to;
+    stamps_.insert(std::move(node));
+    return true;
+}
+
 uint32_t PassabilityGrid::stamp_secondary(ObjectId id, const ObstacleFootprint& fp) {
     unstamp_secondary(id);
-    if (w_ == 0 || h_ == 0) return 0;
-    if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
     Stamp s;
     s.bits = fp.bits & 0x1FFu;  // SecondaryOccupationPassability (no Obstacle default for secondary occupants)
-    sample_cells(fp, s.cells);
-    apply(s, 1);
+    if (w_ != 0 && h_ != 0) {   // S8 t09: recorded without cells on an empty grid, as stamp()
+        if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
+        sample_cells(fp, s.cells);
+        apply(s, 1);
+    }
     const uint32_t n = static_cast<uint32_t>(s.cells.size());
     secondary_.emplace(id, std::move(s));
     return n;

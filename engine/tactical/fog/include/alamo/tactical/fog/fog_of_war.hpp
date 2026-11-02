@@ -59,6 +59,7 @@ struct FogConstants {
     float tactical_overrun_multiple = 3.0f; // Tactical_Overrun_Multiple
     float min_overrun_seconds = 30.0f;      // Minimum_Tactical_Overrun_Time_In_Secs
     bool setup_phase_enabled = false;       // SetupPhaseEnabled (GameConstants +0x2ef; False in FoC and TR)
+    float setup_countdown_seconds = 5.0f;   // SetupPhaseCountdownSeconds (GameConstants +0x11c8)
 };
 
 struct FogPlayer {
@@ -129,8 +130,12 @@ struct FogSetupObject {
     bool reveal_for_defender = false;  // Reveal_For_Defender (+0x5b)
     bool has_locomotor = false, has_reveal = false;
     float reinforcement_prevention_radius = 0.0f;
-    bool powered_or_unpowered = true;  // powered, or the type has no POWERED behaviour
+    bool has_powered = false;  // POWERED behaviour (obj +0x341 != -1): the prevention circle then needs base power
 };
+
+// Base power of a player (0x527520 on the player's tactical data, TACTICAL_GAPS §7.3): true while an allied
+// Base_Power_Ability source lives; an empty list is false.
+using BasePowerFn = std::function<bool(int32_t player)>;
 
 // §3.1.1 weather factor: intensity > 0.5 and the owner is weather-affected -> the Sight_Range_Modifier
 // (missing -> 1, <= 0.0001 -> 1); otherwise 1.
@@ -177,7 +182,7 @@ public:
     // add_player_reveal_multiplier stores FOW_Reveal_Range_Multiplier - 1 (skipped at exactly 1.0); the entries of
     // a source are removed when its ability ends. Reduction (0x33fb70 with MostExtreme, TACTICAL_COMBAT §4.2):
     // categories ascending, within one the largest |value| (first kept on ties), summed in category order. Read at
-    // reveal time (sources pick it up when they next re-reveal; nothing is marked dirty [M]).
+    // reveal time (sources pick it up when they next re-reveal; nothing is marked dirty, FOG_OF_WAR §3.2 [H]).
     void add_player_reveal_modifier(int32_t player, int32_t category, uint64_t source, float value);
     void add_player_reveal_multiplier(int32_t player, int32_t category, uint64_t source, float multiplier);
     void remove_player_reveal_modifier(int32_t player, uint64_t source);
@@ -225,6 +230,19 @@ public:
     // ---- land setup phase (§3.4) ---------------------------------------------------------------------------
     void set_setup_phase(bool active) { setup_ = active; }
     bool setup_phase() const { return setup_; }
+    // The setup reveal's "powered" test (unset: no player has base power). Host hook, not saved (like the refog hook).
+    void set_base_power(BasePowerFn fn) { base_power_ = std::move(fn); }
+    // Setup manager (mode +0x1f0, §3.4 "Manager details"). Command 32 SetupPhaseTriggerEnd (0x5aef60): the player's ready
+    // byte (player +0x184) := 1; the first call arms the SetupPhaseCountdownSeconds countdown at the current frame
+    // ((int)(fps x seconds) frames); all-ready := the AND of the ready bytes of every human player. No phase test (the
+    // original runs it whenever the mode has a manager); the armed flag is never cleared.
+    void setup_player_ready(int32_t player);
+    bool setup_ready(int32_t player) const;
+    bool setup_all_ready() const { return setup_all_ready_; }
+    bool setup_countdown_armed() const { return setup_armed_; }
+    // Common tick step 11 (0x3bfba0): the setup phase is active and (every human is ready, or the countdown is armed
+    // and F0 + frames <= frame). The host then calls end_setup.
+    bool setup_end_due(uint32_t frame) const;
     // Setup start (land, SetupPhaseEnabled): the setup phase becomes active (decay and REVEAL services stop) and
     // the setup reveal runs (with the binarise). The host services its REVEAL sources once before (behaviour
     // Initialise services at once, then setup start disables them).
@@ -276,13 +294,14 @@ public:
     void hash(StateHasher& h) const;  // opt-in (fog is not in the frame CRC)
 
     // ---- N1 stage 2 save / load (contract: alamo/core/save_file.hpp; src/fog_save.cpp) ------------------------
-    // Saves ALL state except the refog hook: started flag, mode, constants, players (id, grid, human), every grid
-    // (FogGrid::write, by player id, invalid ones included), the relation table, the player FOW reveal-range lists and
-    // their reduced sums, the dense mask (PackBits), battle scale, the REVEAL sources (ascending id: owner, stored
-    // position, dirty / revealed, cell list), move threshold, frame, regrow step, FOW-active / render option / setup /
-    // overrun flags. Layout: u32 version, then those fields in that order (grids as u32 length + FogGrid bytes).
-    // read() replaces everything, re-links the grids' dense-mask pointers to the loaded mask and keeps the refog hook
-    // (the host attaches set_refog as at battle start; before or after read). After a load the host must NOT call
+    // Saves ALL state except the refog and base-power hooks: started flag, mode, constants, players (id, grid, human),
+    // every grid (FogGrid::write, by player id, invalid ones included), the relation table, the player FOW reveal-range
+    // lists and their reduced sums, the dense mask (PackBits), battle scale, the REVEAL sources (ascending id: owner,
+    // stored position, dirty / revealed, cell list), move threshold, frame, regrow step, FOW-active / render option /
+    // setup / overrun flags, the setup manager (ready bytes, countdown, armed / all-ready). Layout: u32 version (2), then
+    // those fields in that order (grids as u32 length + FogGrid bytes).
+    // read() replaces everything, re-links the grids' dense-mask pointers to the loaded mask and keeps the hooks
+    // (the host attaches set_refog / set_base_power as at battle start; before or after read). After a load the host must NOT call
     // start(), recount() (the Lua FogCells' counts are in the saved grids), source_service re-reveals or re-apply the
     // saved Reveal_All players: the loaded state already holds them. False (unchanged) on an invalid mode, a mask
     // that does not match the grids, inconsistent list sizes, unordered sources or truncated data.
@@ -323,12 +342,18 @@ private:
     int32_t scale_player_ = -1;
     float scale_ = 1.0f;
     RefogFn refog_;
+    BasePowerFn base_power_;
     std::vector<Source> sources_;  // ascending id
     float threshold_ = 100.0f;
     uint32_t frame_ = 0;
     int32_t step_ = 21;
     bool fow_active_ = true, render_option_ = true, setup_ = false;
     bool overrun4_ = false, overrun8_ = false;
+    // Setup manager: ready bytes by player id, countdown (start frame, length), armed (+0x35), all ready (+0x36).
+    std::vector<uint8_t> setup_ready_;
+    uint32_t setup_count_start_ = 0;
+    int32_t setup_count_frames_ = 0;
+    bool setup_armed_ = false, setup_all_ready_ = false;
 };
 
 }  // namespace alamo::tactical::fog

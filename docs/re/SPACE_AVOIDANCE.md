@@ -134,6 +134,8 @@ insert iff  tree != null
 - **Death:** the death handler 0x39bdb0 sets obj +0x3a0 bit 0x40 and does not touch the trees. A dying object stays a
   candidate until destroyed, and its model keeps colliding. Death-clone types (`*_DEATH_CLONE`) have no
   `Space_Layer`, so a clone is never a member.
+  - Exception (2026-11-02, MOVEMENT §2.2) [M]: a type without a `Death_Clone` list dies into a clone of its **own**
+    type (S9_DEATH_CLONE_SHIELDS §1.3), which keeps the type's `Space_Layer` and so passes the §2.1 test at create.
 - **Garrison / containment:** 0x37ade0 (enter container) leaves the object in the tree. It switches the model-level
   collide flag off (§5.5), so the precise test fails. The flag is switched back on by 0x37a060 / 0x37a8d0.
 - **Ownership, fog, stealth, selection, hyperspace states:** no test anywhere on this path. Friendly and enemy
@@ -317,10 +319,55 @@ half-extents:
 - **Default on:** the alHModel ctors 0x12b080 and 0x12b330 set it, and clones copy it (0x13f660).
 - **Switched by** ModelClass 0x264670 (and save/load 0x264cd0):
   - **off** when the object enters a container or garrison (0x37ade0, which also hides the model and sets obj
-    +0x3a7), and in a few object-specific paths (projectile 0x4ceea0; others at 0x2faae0, 0x3d3200, 0x3ed800 and
-    0x4eb020 not traced);
+    +0x3a7), and in a few object-specific paths (projectile 0x4ceea0; the others are not game objects, see below);
   - **on** again when it leaves (0x37a060, 0x37a8d0).
 - The switch gates only the mesh path (§5.4), not the COLLISIONBOX path.
+
+**All writers (2026-11-01, S7 t08)** [H]. 0x264670 has 22 callers. Only these touch a game object's own model (obj
++0x2a0):
+
+| caller | effect |
+|---|---|
+| 0x37ade0 (enter container / garrison; callers 0x379d30, 0x379df0) | off |
+| 0x37a060, 0x37a8d0 (leave) | on |
+| 0x4ceea0 (ProjectileBehaviorClass grenade / lob flight mode, on the projectile itself, when obj +0x387 ≠ −1) | off |
+| 0x264cd0 (save / load of ModelClass, caller 0x39c3a0) | restores the saved bit |
+
+The other callers switch collision off (or on, for display) on ModelClass instances that are **not** game objects
+and never enter the avoidance tree:
+- in-game UI members at +0x2278 / +0x2288 of the UI manager (`i_game_arrow.alo`, `i_tutorial_arrow.alo`): 0x2de700,
+  0x2faae0, 0x2fab80, 0x2ff190, 0x3027d0, 0x3035c0, 0x315c40;
+- `ShellComponentClass` models (ctor 0x349570, vf15 0x34cdb0, vf25 0x353730), switched with the shell component's
+  visibility;
+- galaxy-map presentation (0x3d3200 loads `w_planet_select_neutral.alo` and the star-base preview models; 0x3c9ab0,
+  0x3c9fc0, 0x3dd680, 0x3dd790, 0x3e8a80; 0x3ed800 loads `i_galactic_radar.alo`);
+- the fogged-model manager 0x4eb020: it **clones** the type model as a fog ghost and switches collision off on the
+  clone, not on the object's model.
+
+Direct writes of bit 7 that bypass 0x264670 are mesh-level only: ALO mesh load 0x14c970 (`is_collision_enabled`) and
+the base-shield `SHIELD` mesh (0x56b470, 0x56b540; §5.6).
+
+**Capture points and orbital props** [H for direct calls, M for virtual calls]: `CapturePointBehaviorClass` (vf3,
+vf6 0x501980, vf7, vf8, vf9, vf11 and its 13 other methods) reaches none of 0x264670, the hide switch 0x264c80,
+container enter 0x37ade0, the space-occupancy insert 0x53acf0 or remove 0x539470 within three call levels of the
+static call graph. Capture changes the owner, which only moves player-tree membership (§2.3). So capture-point props
+(`N_Orbital_Construction_Pod`, `Skirmish_Merchant_Dock`, mining and sensor pods, `Skirmish_Hutt_Asteroid_Base`, …) and
+orbital props (`Orbital_Construction_Pod`, `Orbital_Resource_Container`, the story drydocks) **keep collision on**:
+- members of this tree (non-zero `Space_Layer`, §2.1; for example `N_Orbital_Construction_Pod` with StaticObject)
+  are avoided by fighters like any hull;
+- a type without `Space_Layer` (for example `Orbital_Construction_Pod`, `Drydock_*`, `Orbital_Resource_Container`)
+  is not a member, so fighters never avoid it, whatever its collide switch says.
+
+**The ship planner's obstacles do not read the switch.** The space-occupancy static entry of a SPACE_OBSTACLE object
+(MOVEMENT §2.2; SpaceObstacleBehaviorClass vf9 0x632670 / vf13 0x632610 insert, vf15 0x6326b0 remove) is a separate
+structure. The insert/update 0x53acf0 skips (or removes) the object only when:
+- obj +0x3a7 is set (the "contained" flag 0x37ade0 sets; 0x37ade0 also calls the remove 0x539470 itself), or
+- in space, the type's `Use_Special_Submit_Rules` (+0xd5) is set → remove [H; FoC sets it only on transport units,
+  none of which is a SPACE_OBSTACLE], or
+- the object's owning store (obj +0x2b8) has its +0x63e byte clear [M: a store-level "track occupancy" flag].
+
+So a capture pod is a static obstacle for ship planning whether or not its model collides; collision state never
+removes a SPACE_OBSTACLE object from ship planning [port: do not filter static entries by any collide flag].
 
 ### 5.6 Collision mask bits (mesh +0xc0) [H; M for bit 4]
 - **Default:** every renderable starts with mask 1 (ctor 0x13f590; clones copy it). Avoidance queries with mask 1,
@@ -423,5 +470,7 @@ Inputs available headless: types (XML), positions and orientations, `Scale_Facto
 4. The exact meaning of mask bit 4 (base shield, "both flags" case of 0x56b540) [M].
 5. When exactly 0x2660f0 runs relative to the first tree insert (COLLISIONBOX setup) [M]. Only EM11_HYPERVADER is
    affected.
-6. Nothing here blocks implementing the hook. The only data dependency is that the port's asset layer exposes, per
+6. The owning-store byte +0x63e that gates the space-occupancy insert 0x53acf0 (§5.5) [M]; capture-point
+   virtual calls were not followed past the static call graph (§5.5) [M].
+7. Nothing here blocks implementing the hook. The only data dependency is that the port's asset layer exposes, per
    model, the collision-enabled meshes (bbox, bone, triangles) and the `SHIELD` sub-object.

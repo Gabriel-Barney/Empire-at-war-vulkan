@@ -25,6 +25,7 @@ add_library(alamo_tactical_movement STATIC
   src/corridor.cpp            # REMAINING_GAPS 4.1
   src/special_locomotors.cpp  # REMAINING_GAPS 4.3-4.7 (pure rules)
   src/special_system.cpp      # REMAINING_GAPS 4.3-4.7 (MovementSystem integration)
+  src/deploy_system.cpp       # S8 t11: Walk locomotor deploy states (MOVEMENT 3.2)
   src/fighter.cpp             # FIGHTER_FLYING 1-5 (fighter primitives and cell grids)
   src/space_avoid.cpp         # SPACE_AVOIDANCE: avoidance tree members + precise model test (FighterAvoidFn rules)
   src/movement_save.cpp       # N1 stage 2: save / load of the battle movement state

@@ -47,6 +47,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -80,6 +81,10 @@ struct ConflictFactionInfo {
     float space_retreat_countdown = 10.0f;    // Space_Retreat_Countdown_Seconds (+0x20b0)
     float land_retreat_countdown = 10.0f;     // Land_Retreat_Countdown_Seconds (+0x2190)
     int32_t map_faction = 0;                  // random-map faction index: Rebel 0, Empire 1, Pirates 2, Underworld 4, Hutts 5
+    // Land_Skirmish_Unit_Cap_By_Player_Count (+0x2cd8): (player count, unit cap) keys in file order (shipped 0,10, 1,10, 8,5).
+    // t50 / skai: unit_cap_for_players() evaluates it (SKIRMISH_SETUP §6: linear, 0 outside the keys, integer part).
+    std::vector<std::pair<float, float>> land_skirmish_unit_cap;
+    float unit_cap_for_players(float players) const;  // < 0: the faction has no curve
 };
 struct ConflictRules {
     AutoResolveConstants auto_resolve;
@@ -204,6 +209,7 @@ public:
     void on_space_conflict(PlanetIndex planet, int32_t attacker) override;
     bool on_invade(int32_t attacker, PlanetIndex planet, std::span<const ObjectHandle> units) override;
     void on_service_tail() override;
+    bool in_queued_conflict(int32_t player) const override;
 
     // ---- direct entry points (Lua / story / tests) ----
     bool initiate_space_conflict(PlanetIndex planet, int32_t attacker, int32_t defender = kNoPlayer,
@@ -227,6 +233,12 @@ public:
         std::vector<ObjectHandle> units;  // land: the record's units (the original's last-invade vector)
     };
     bool start_linked(LinkedBattle b);
+    // a1j t05 (A1_READINGS §31.7): the active conflict gives way to a waiting story-linked record (the 0x2be640 state-3 path
+    // with the record present: state -1, then 0x28f590 starts the record at the queue front). The head stays queued and is
+    // decided again from Idle after the record's battle; its pause level is released. False, nothing changed, while Idle or
+    // InBattle. vote_open(): the pending vote is up and unanswered, where the record waits (0x28f590 step 1).
+    bool yield_to_linked();
+    bool vote_open() const { return state_ == ConflictState::Vote && !has_choice_; }
     // Answer to a Pending choice (Vote state). Ignored otherwise.
     void choose(BattleChoice c);
     // The host's tactical battle ended (state InBattle): write-back, next conflict.

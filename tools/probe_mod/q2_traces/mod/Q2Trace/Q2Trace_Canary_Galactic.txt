@@ -1,0 +1,3 @@
+Q2 Lua probe canary (tools/probe_mod/q2_traces). The probe script calls _CustomScriptMessage on this file once;
+retail FoC 1.121 then deletes it (DeleteFileA on the first use of a name). Still here after a run = the galactic plot probe
+script (Q2_Trace_Galactic.lua) never ran, or the game ran with another working folder. Removed by cleanup either way.

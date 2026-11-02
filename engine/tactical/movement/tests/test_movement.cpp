@@ -20,6 +20,15 @@
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 
+#ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
+#include <filesystem>
+#include <fstream>
+
+#include "alamo/core/file_provider.hpp"
+#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/object_types.hpp"
+#include "alamo/tactical/movement/ted_grid.hpp"
+#endif
 #if defined(ALAMO_MOVEMENT_HAVE_DATA) && defined(ALAMO_MOVEMENT_HAVE_TERRAIN)
 #include "alamo/core/hash.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -275,10 +284,93 @@ static void test_grid() {
     CHECK(g.effective(11, 10) == kPassRebelWall && g.effective(9, 10) == kPassClear);
     CHECK(g.unstamp(78) && !g.unstamp(78));
     CHECK(g.effective(11, 10) == kPassClear);
+    // S8 t13 (MOVEMENT §1.3 "Unstamp", corrected): every unstamp recomputes the cell from base | the remaining occupants'
+    // bits, in any order, also when the removed occupant shared a bit with a remaining one. Checked against a grid
+    // stamped with only the remaining occupants.
+    {
+        const ObstacleFootprint a = make_footprint({200.0f, 200.0f}, 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f,
+                                                   kPassObstacle | kPassRebelWall);
+        const ObstacleFootprint b = make_footprint({210.0f, 200.0f}, 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f, kPassShield);
+        const ObstacleFootprint c = make_footprint({190.0f, 210.0f}, 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f, kPassObstacle);
+        const ObstacleFootprint* fps[3] = {&a, &b, &c};
+        const uint32_t orders[6][3] = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+        bool same = true;
+        for (const auto& ord : orders) {
+            PassabilityGrid live;
+            live.init(32, 32);
+            live.set_base(10, 10, kPassSteep);
+            for (uint32_t k = 0; k < 3; ++k) live.stamp(static_cast<ObjectId>(k + 1), *fps[k]);
+            for (uint32_t removed = 0; removed < 3; ++removed) {
+                live.unstamp(static_cast<ObjectId>(ord[removed] + 1));
+                PassabilityGrid ref;  // only the occupants still stamped
+                ref.init(32, 32);
+                ref.set_base(10, 10, kPassSteep);
+                for (uint32_t k = removed + 1; k < 3; ++k) ref.stamp(static_cast<ObjectId>(ord[k] + 1), *fps[ord[k]]);
+                for (int32_t y = 0; y < 32; ++y)
+                    for (int32_t x = 0; x < 32; ++x) same = same && live.effective(x, y) == ref.effective(x, y);
+            }
+        }
+        CHECK(same);
+        PassabilityGrid two;  // a shared bit stays while one holder remains; the other's own bit leaves
+        two.init(32, 32);
+        two.stamp(1, a);
+        two.stamp(3, c);
+        CHECK(two.effective(10, 10) == (kPassObstacle | kPassRebelWall) && two.unstamp(1) && two.effective(10, 10) == kPassObstacle);
+    }
     // Rotated footprint: 60 x 10 at yaw 90 covers a vertical strip.
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
     g.stamp(79, fp3);
     CHECK(g.effective(15, 15) == kPassObstacle && g.effective(15, 18) == kPassObstacle && g.effective(18, 15) == kPassClear);
+    // S8 t01: per-object cell query (0x59efa0) and rekey (map placement stamp -> object id).
+    CHECK(g.occupies(79, 15, 15) && g.occupies(79, 15, 18) && !g.occupies(79, 18, 15) && !g.occupies(79, 16, 15));
+    CHECK(g.occupies_world(79, {300.0f, 330.0f}) && !g.occupies_world(79, {340.0f, 300.0f}));
+    CHECK(!g.occupies(80, 15, 15) && !g.occupies(79, -1, 15) && !g.occupies(79, 15, 99));
+    CHECK(g.stamp_cells(79).size() == 4 && g.stamp_cells(80).empty());  // y 300..360: cells 15..18 of column 15
+    {
+        ObstacleFootprint wall = make_footprint({100.0f, 100.0f}, 0.0f, 40.0f, 20.0f, -20.0f, -10.0f, 0, 0, 1.0f, 0);
+        PassabilityGrid a, b;
+        a.init(32, 32);
+        b.init(32, 32);
+        a.stamp(-5, wall);  // map placement 4
+        b.stamp(12, wall);  // stamped under the object id directly
+        b.stamp(-6, wall);
+        a.stamp(-6, wall);
+        const uint64_t va = a.version();
+        CHECK(a.occupies(-5, 5, 5) && !a.occupies(12, 5, 5));
+        CHECK(!a.rekey(-5, -5) && !a.rekey(-9, 13) && !a.rekey(-5, -6));  // same id, unknown id, target taken
+        CHECK(a.rekey(-5, 12));
+        CHECK(a.occupies(12, 5, 5) && !a.occupies(-5, 5, 5) && !a.stamped(-5) && a.stamped(12) && a.version() == va);
+        StateHasher ha, hb;
+        a.hash(ha);
+        b.hash(hb);
+        CHECK(ha.digest() == hb.digest());  // same as stamping under the object id
+        CHECK(a.unstamp(12) && a.effective(5, 5) == kPassObstacle && a.unstamp(-6) && a.effective(5, 5) == kPassClear);
+    }
+    {  // S8 t02: stamped ids ascending (placement ids first); a footprint on no cell is still a stamp (stamped, no cells)
+        PassabilityGrid z;
+        z.init(16, 16);
+        const ObstacleFootprint off = make_footprint({-400.0f, 100.0f}, 0.0f, 20.0f, 20.0f, -10.0f, -10.0f, 0, 0, 1.0f, 0);
+        const ObstacleFootprint on = make_footprint({100.0f, 100.0f}, 0.0f, 20.0f, 20.0f, -10.0f, -10.0f, 0, 0, 1.0f, 0);
+        const uint64_t zv = z.version();
+        CHECK(z.stamp(30, off) == 0 && z.stamped(30) && z.stamp_cells(30).empty() && !z.occupies(30, 0, 5) && z.version() == zv);
+        CHECK(z.stamp(4, on) > 0 && z.stamp(-2, on) > 0);
+        CHECK((z.stamped_ids() == std::vector<ObjectId>{-2, 4, 30}));
+        CHECK(z.unstamp(30) && z.unstamp(4) && z.effective(5, 5) == kPassObstacle && (z.stamped_ids() == std::vector<ObjectId>{-2}));
+    }
+    {  // S7 t13: space static entries handed from a placement id to the object id
+        SpaceOccupancy occ;
+        occ.add_static(-4, {10.0f, 20.0f}, 50.0f, kSpaceStatic);
+        occ.add_static(9, {500.0f, 0.0f}, 5.0f, kSpaceStatic);
+        CHECK(!occ.rekey_static(-4, -4) && !occ.rekey_static(-7, 12) && !occ.rekey_static(-4, 9));  // same, unknown, taken
+        CHECK(occ.rekey_static(-4, 12) && !occ.has_static(-4) && occ.has_static(12));
+        V2 c{};
+        float r = 0.0f;
+        uint32_t bits = 0;
+        CHECK(occ.static_entry(12, c, r, bits) && c.x == 10.0f && c.y == 20.0f && r == 50.0f && bits == kSpaceStatic);
+        CHECK(!occ.static_entry(-4, c, r, bits));
+        CHECK((occ.query_static({40.0f, 20.0f}, {40.0f, 20.0f}, 1.0f) & kSpaceStatic) != 0);
+        CHECK(occ.remove_static(12) && occ.query_static({40.0f, 20.0f}, {40.0f, 20.0f}, 1.0f) == 0);
+    }
     // Water rule: a low object over water does not block.
     PassabilityGrid gw;
     gw.init(16, 16);
@@ -1083,6 +1175,26 @@ static void test_land_group() {
     bool g4ok = true;
     run_land(s4, 0, 2000, rng, serial_for, g4ok);
     CHECK(s4.view(1).arrived && distance(s4.view(1).pos, cell_center(30, 30)) < 36.0f + 60.0f + 1.0f && s4.stats().early_arrivals == 1);
+
+    // a1j t02 (A1_READINGS §36.4): a Giant Vehicle pushes a stopped unit it does not crush aside (0x684f90 -> 0x6859a0)
+    // and keeps its path: no path-around, it arrives at its destination, the parked infantry stands off the line.
+    MovementSystem s5{MovementConfig{}};
+    PassabilityGrid g5;
+    g5.init(60, 40);
+    s5.set_grid(std::move(g5));
+    s5.add_unit(land_unit(1, cell_center(5, 20), 11, 1.0f, 30.0f, kUccGiantVehicle));
+    s5.add_unit(land_unit(2, cell_center(30, 20), 0, 1.5f, 5.0f, kUccInfantry));  // parked on the line
+    MoveOrder e;
+    e.units = {1};
+    e.destination = cell_center(55, 20);
+    s5.move(e, rng, 0);
+    bool g5ok = true;
+    run_land(s5, 0, 3000, rng, serial_for, g5ok);
+    const V2 pushed = s5.view(2).pos;
+    std::printf("giant push: arrived %d, dynamic re-paths %u, infantry moved to (%.1f, %.1f)\n", s5.view(1).arrived ? 1 : 0,
+                s5.stats().dynamic_repaths, static_cast<double>(pushed.x), static_cast<double>(pushed.y));
+    CHECK(g5ok && s5.view(1).arrived && distance(s5.view(1).pos, cell_center(55, 20)) < 1.0f && s5.stats().dynamic_repaths == 0);
+    CHECK(std::fabs(pushed.y - cell_center(30, 20).y) > 5.0f);
 }
 
 // ---------------------------------------------------------------- space
@@ -1359,11 +1471,15 @@ static void test_oi_land() {
         }
         CHECK(all.size() == 1 && all[0].crusher == 1 && all[0].victim == 10);
         CHECK(sys.has_unit(11) && sys.has_unit(12) && sys.has_unit(13));
+        // a1j t02 (A1_READINGS §36.4): the friendly trooper on the line was pushed aside, not crushed.
+        const V2 p11 = sys.view(11).pos;
+        CHECK(std::fabs(p11.y - cell_center(30, 20).y) > 5.0f);
         // Hostility comes from the host (combat relations).
         sys.set_hostility([](int32_t, int32_t) { return true; });
         sys.set_owner(1, 5);
         MoveOrder back = o;
-        back.destination = cell_center(5, 20);
+        const V2 from = sys.view(1).pos;
+        back.destination = from + (p11 - from) * 1.5f;  // straight back over the pushed trooper
         sys.move(back, rng, 3000);
         all.clear();
         for (uint32_t f = 3000; f < 6000 && sys.view(1).has_goal; ++f) {
@@ -1987,6 +2103,20 @@ static void test_real_data() {
     objects::GameObjectTypes types;
     const bool have_types = raw.load(*fs) && types.build(raw, fs.get());
     CHECK(have_types);
+    if (have_types) {  // S7 t06: Uses_Multiple_Locomotors type data (FoC: the jetpack users; Bossk has no secondary)
+        const auto desc = [&types](const char* name) { return unit_desc_from_type(types, types.resolve_name(name)); };
+        const UnitDesc dt2 = desc("Dark_Trooper_PhaseII"), boba = desc("Boba_Fett"), bossk = desc("Bossk");
+        const UnitDesc dt1 = desc("Dark_Trooper_PhaseI");
+        CHECK(dt2.uses_multiple_locomotors && dt2.has_secondary_locomotor && dt2.secondary_locomotor == LocomotorKind::Jetpack &&
+              dt2.max_speed == 1.0f && dt2.alt_max_speed == 2.5f && dt2.alt_turn_rate == 2.0f && dt2.hover_offset == 70.0f);  // t14: unset turn = 2.0
+        CHECK(boba.uses_multiple_locomotors && boba.secondary_locomotor == LocomotorKind::Jetpack && boba.alt_max_speed == 2.5f &&
+              boba.alt_turn_rate == 6.0f);
+        CHECK(bossk.uses_multiple_locomotors && !bossk.has_secondary_locomotor);
+        const UnitDesc dt3 = desc("Dark_Trooper_PhaseIII");  // S7 t14: Alternate 1.8, turn unset -> 2.0 (MOVEMENT §3.1.1)
+        CHECK(dt3.has_secondary_locomotor && dt3.alt_max_speed == 1.8f && dt3.alt_turn_rate == 2.0f);
+        CHECK(!dt1.uses_multiple_locomotors && !dt1.has_secondary_locomotor);
+        CHECK(locomotor_kind_from_type(types, types.resolve_name("Dark_Trooper_PhaseII"), MoveMode::Land) == LocomotorKind::Default);
+    }
     const auto maps = fs->list("Data\\Art\\Maps\\*.ted");
     uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0;
     uint32_t space_units = 0, space_arrived = 0, space_hits = 0, space_obstacles = 0, plan_fail = 0, plan_invalid = 0, plans = 0;
@@ -2219,6 +2349,311 @@ static void test_real_data() {
 }
 #endif
 
+#ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
+// S7 t07 / t08 (MOVEMENT §2.2, SPACE_AVOIDANCE §5.5): SPACE_OBSTACLE footprints. XML radius first (Custom_Soft_Footprint_Radius,
+// then Space_Obstacle_Radius), else the larger model half extent from the host hook, x Scale_Factor; no radius and no model
+// data: no entry. A capture-point pod is an obstacle like any other (the collide switch is not consulted). Map placements
+// add Space_Obstacle_Offset along the placement facing Rz(yaw) (0, -1).
+static void test_space_obstacle_footprint() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "alamo_tactical_movement_space_obstacle";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    auto put = [](const std::filesystem::path& p, const std::string& s) {
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << s;
+    };
+    put(root / "Data/XML/GameObjectFiles.xml", "<L><File>SO.xml</File></L>");
+    put(root / "Data/XML/SO.xml",
+        "<R>\n"
+        "<SpaceStructure Name=\"Pod\"><Behavior>SPACE_OBSTACLE</Behavior><Scale_Factor>1.75</Scale_Factor></SpaceStructure>\n"
+        "<SpaceStructure Name=\"Cap_Pod\"><Behavior>SPACE_OBSTACLE, CAPTURE_POINT</Behavior><Space_Layer>StaticObject</Space_Layer>"
+        "</SpaceStructure>\n"
+        "<SpaceProp Name=\"Rock\"><Behavior>SPACE_OBSTACLE</Behavior><Is_Impassable_Asteroid>true</Is_Impassable_Asteroid>"
+        "<Space_Obstacle_Radius>300</Space_Obstacle_Radius><Space_Obstacle_Offset>100 0 0</Space_Obstacle_Offset></SpaceProp>\n"
+        "<SpaceStructure Name=\"Soft\"><Behavior>SPACE_OBSTACLE</Behavior><Custom_Soft_Footprint_Radius>60</Custom_Soft_Footprint_Radius>"
+        "<Space_Obstacle_Radius>300</Space_Obstacle_Radius><Scale_Factor>2</Scale_Factor></SpaceStructure>\n"
+        "<SpaceUnit Name=\"Ship\"><Space_Layer>Frigate</Space_Layer></SpaceUnit>\n"
+        "</R>");
+    DirectoryProvider dp(path_to_utf8(root));
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(dp) && types.build(raw, &dp));
+    const uint32_t pod = types.resolve_name("Pod"), cap = types.resolve_name("Cap_Pod"), rock = types.resolve_name("Rock"),
+                   soft = types.resolve_name("Soft"), ship = types.resolve_name("Ship");
+    CHECK(pod < types.size() && cap < types.size() && rock < types.size() && soft < types.size() && ship < types.size());
+    if (pod >= types.size() || cap >= types.size() || rock >= types.size() || soft >= types.size() || ship >= types.size()) return;
+    uint32_t hook_calls = 0;
+    SpaceObstacleHooks hooks;
+    hooks.model_half_extents = [&hook_calls, pod, cap](uint32_t t, float& hx, float& hy) {
+        ++hook_calls;
+        if (t == pod) {
+            hx = 40.0f, hy = -55.0f;  // the larger |half extent| decides
+            return true;
+        }
+        if (t == cap) {
+            hx = hy = 1.0f;  // a model without a collision mesh: centre 0, half 1
+            return true;
+        }
+        return false;
+    };
+    float r = 0.0f;
+    uint32_t bits = 0;
+    CHECK(!space_obstacle_footprint(types, pod, r, bits));  // no XML radius, no model data: skipped (as before)
+    CHECK(space_obstacle_footprint(types, pod, r, bits, &hooks) && r == 55.0f * 1.75f && bits == kSpaceStatic);
+    CHECK(space_obstacle_footprint(types, cap, r, bits, &hooks) && r == 1.0f && bits == kSpaceStatic);
+    hook_calls = 0;
+    CHECK(space_obstacle_footprint(types, rock, r, bits, &hooks) && r == 300.0f && bits == (kSpaceStatic | kSpaceImpassableAsteroid));
+    CHECK(space_obstacle_footprint(types, soft, r, bits, &hooks) && r == 120.0f);  // Custom_Soft_Footprint_Radius first
+    CHECK(hook_calls == 0);  // an XML radius never asks for the model
+    CHECK(!space_obstacle_footprint(types, ship, r, bits, &hooks));  // no SPACE_OBSTACLE behaviour
+    SpaceObstacleHooks unknown;
+    unknown.model_half_extents = [](uint32_t, float&, float&) { return false; };
+    CHECK(!space_obstacle_footprint(types, pod, r, bits, &unknown));
+    // Map placements.
+    terrain::MapData map;
+    auto place = [&](uint32_t t, float x, float y, float yaw) {
+        terrain::ObjectPlacement o;
+        o.type_crc = types.raw().types().name_crc[t];
+        o.position[0] = x, o.position[1] = y;
+        o.rotation_deg[2] = yaw;
+        map.objects.push_back(o);
+    };
+    place(pod, 0.0f, 0.0f, 0.0f);         // id -1, r 96.25 at (0, 0)
+    place(rock, 1000.0f, 0.0f, 90.0f);    // id -2, facing (1, 0): centre (1100, 0)
+    place(rock, -1000.0f, 0.0f, 0.0f);    // id -3, facing (0, -1): centre (-1000, -100)
+    place(ship, 0.0f, 2000.0f, 0.0f);     // not an obstacle
+    SpaceOccupancy plain;
+    CHECK(space_from_map(plain, map, &types) == 2);  // the pod needs model data
+    CHECK(!plain.has_static(-1) && plain.has_static(-2) && plain.has_static(-3));
+    SpaceOccupancy occ;
+    CHECK(space_from_map(occ, map, &types, &hooks) == 3);
+    CHECK(occ.has_static(-1) && occ.has_static(-2) && occ.has_static(-3) && !occ.has_static(-4));
+    CHECK((occ.query_static({90.0f, 0.0f}, {90.0f, 0.0f}, 1.0f) & kSpaceStatic) != 0);   // inside 96.25
+    CHECK(occ.query_static({100.0f, 0.0f}, {100.0f, 0.0f}, 1.0f) == 0);                  // outside 96.25 + 1
+    CHECK((occ.query_static({1390.0f, 0.0f}, {1390.0f, 0.0f}, 1.0f) & kSpaceImpassableAsteroid) != 0);  // 1100 + 290
+    CHECK(occ.query_static({790.0f, 0.0f}, {790.0f, 0.0f}, 1.0f) == 0);  // 310 from the offset centre
+    CHECK((occ.query_static({-1000.0f, -390.0f}, {-1000.0f, -390.0f}, 1.0f) & kSpaceStatic) != 0);
+    CHECK(occ.query_static({-1000.0f, 210.0f}, {-1000.0f, 210.0f}, 1.0f) == 0);
+    remove_all_long(root, ec);
+    std::printf("space obstacle footprint: XML radius / model extent / offset placements ok\n");
+}
+#endif
+
+#ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
+// S8 t02 (MOVEMENT §1.3): one object's LAND_OBSTACLE footprint (land_obstacle_footprint) is the footprint stamp_map_obstacles
+// gives a placement of the type at the same spot (XML size, else model extents; none without either); the stamp ids of
+// both map adapters are map_stamp_id(placement).
+static void test_land_obstacle_footprint() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "alamo_tactical_movement_land_obstacle";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    auto put = [](const std::filesystem::path& p, const std::string& s) {
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << s;
+    };
+    put(root / "Data/XML/GameObjectFiles.xml", "<L><File>LO.xml</File></L>");
+    put(root / "Data/XML/LO.xml",
+        "<R>\n"
+        "<GroundStructure Name=\"Bunker\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>60</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height><Obstacle_X_Offset>-30</Obstacle_X_Offset><Obstacle_Y_Offset>-20</Obstacle_Y_Offset>"
+        "<OverridePassability>RebelWall</OverridePassability></GroundStructure>\n"
+        "<GroundStructure Name=\"Modelled\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Scale_Factor>2</Scale_Factor></GroundStructure>\n"
+        "<GroundStructure Name=\"Bare\"><LandBehavior>LAND_OBSTACLE</LandBehavior></GroundStructure>\n"
+        // S8 t09: a build pad (proxy target), a barracks stamped through it, a type without a land model, fine-tune off
+        "<GroundStructure Name=\"Pad\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height><Obstacle_X_Offset>-20</Obstacle_X_Offset><Obstacle_Y_Offset>-20</Obstacle_Y_Offset>"
+        "<Scale_Factor>3</Scale_Factor></GroundStructure>\n"
+        "<GroundStructure Name=\"Barracks\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>200</Obstacle_Width>"
+        "<Obstacle_Height>200</Obstacle_Height><Obstacle_X_Offset>-100</Obstacle_X_Offset><Obstacle_Y_Offset>-100</Obstacle_Y_Offset>"
+        "<Obstacle_Proxy_Type>Pad</Obstacle_Proxy_Type><OverridePassability>RebelWall</OverridePassability>"
+        "<Scale_Factor>1.5</Scale_Factor></GroundStructure>\n"
+        "<GroundStructure Name=\"NoModel\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height></GroundStructure>\n"
+        "<GroundStructure Name=\"FineOff\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability></GroundStructure>\n"
+        // S8 t13: no Land_Model_Name with fine-tune off (both sizes / one size), one XML size + model box, a wall, a proxy
+        // with its own OverridePassability
+        "<GroundStructure Name=\"OffBoth\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>20</Obstacle_Height><Obstacle_X_Offset>-20</Obstacle_X_Offset><Obstacle_Y_Offset>-10</Obstacle_Y_Offset>"
+        "<Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability></GroundStructure>\n"
+        "<GroundStructure Name=\"OffOne\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability></GroundStructure>\n"
+        "<GroundStructure Name=\"WidthOnly\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>80</Obstacle_Width>"
+        "</GroundStructure>\n"
+        "<GroundStructure Name=\"WallSeg\"><LandBehavior>LAND_OBSTACLE, WALL</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height></GroundStructure>\n"
+        "<GroundStructure Name=\"ShieldPad\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height><OverridePassability>Shield</OverridePassability></GroundStructure>\n"
+        "<GroundStructure Name=\"PadUser\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Proxy_Type>ShieldPad</Obstacle_Proxy_Type>"
+        "</GroundStructure>\n"
+        "</R>");
+    DirectoryProvider dp(path_to_utf8(root));
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(dp) && types.build(raw, &dp));
+    const uint32_t bunker = types.resolve_name("Bunker"), modelled = types.resolve_name("Modelled"), bare = types.resolve_name("Bare");
+    CHECK(bunker < types.size() && modelled < types.size() && bare < types.size());
+    if (bunker >= types.size() || modelled >= types.size() || bare >= types.size()) return;
+    MapStampHooks hooks;
+    hooks.model_half_extents = [modelled](uint32_t t, float& hx, float& hy, float& hz) {
+        if (t != modelled) return false;
+        hx = 15.0f, hy = -10.0f, hz = 8.0f;
+        return true;
+    };
+    ObstacleFootprint fp;
+    CHECK(land_obstacle_footprint(types, bunker, {200.0f, 200.0f}, 90.0f, 3.0f, nullptr, fp));
+    CHECK(fp.width == 60.0f && fp.height == 40.0f && fp.x_offset == -30.0f && fp.y_offset == -20.0f && fp.bits == kPassRebelWall &&
+          fp.yaw_deg == 90.0f && fp.terrain_z == 3.0f && fp.obstacle_height == 1.0e6f && !fp.fine_tune);
+    CHECK(!land_obstacle_footprint(types, modelled, {0.0f, 0.0f}, 0.0f, 0.0f, nullptr, fp));  // no XML size, no model data
+    CHECK(land_obstacle_footprint(types, modelled, {300.0f, 100.0f}, 0.0f, 0.0f, &hooks, fp));
+    CHECK(fp.width == 60.0f && fp.height == 40.0f && fp.x_offset == -30.0f && fp.y_offset == -20.0f && fp.bits == kPassObstacle &&
+          fp.obstacle_height == 16.0f);
+    CHECK(!land_obstacle_footprint(types, bare, {0.0f, 0.0f}, 0.0f, 0.0f, &hooks, fp));
+    CHECK(!land_obstacle_footprint(types, static_cast<uint32_t>(types.size()), {0.0f, 0.0f}, 0.0f, 0.0f, &hooks, fp));
+    // The same cells as the map adapter's stamp of a placement there.
+    terrain::MapData map;
+    auto place = [&](uint32_t t, float x, float y, float yaw) {
+        terrain::ObjectPlacement o;
+        o.type_crc = types.raw().types().name_crc[t];
+        o.position[0] = x, o.position[1] = y;
+        o.rotation_deg[2] = yaw;
+        map.objects.push_back(o);
+    };
+    place(bare, 100.0f, 100.0f, 0.0f);    // no footprint: not stamped
+    place(bunker, 200.0f, 200.0f, 30.0f);  // stamp id map_stamp_id(1) = -2
+    place(modelled, 300.0f, 100.0f, 0.0f);
+    PassabilityGrid g;
+    g.init(32, 32);
+    CHECK(stamp_map_obstacles(g, map, types, &hooks) == 2);
+    CHECK(map_stamp_id(0) == -1 && map_stamp_id(1) == -2 && !g.stamped(map_stamp_id(0)) && g.stamped(map_stamp_id(1)) &&
+          g.stamped(map_stamp_id(2)));
+    PassabilityGrid h;
+    h.init(32, 32);
+    CHECK(land_obstacle_footprint(types, bunker, {200.0f, 200.0f}, 30.0f, 0.0f, &hooks, fp) && h.stamp(41, fp) > 0);
+    const std::span<const uint32_t> a = g.stamp_cells(map_stamp_id(1)), b = h.stamp_cells(41);
+    CHECK(!a.empty() && std::equal(a.begin(), a.end(), b.begin(), b.end()));
+    CHECK(g.rekey(map_stamp_id(1), 41) && g.unstamp(map_stamp_id(2)));
+    StateHasher hg, hh;
+    g.hash(hg);
+    h.hash(hh);
+    CHECK(hg.digest() == hh.digest());  // the placement's stamp handed to its object = the object stamped at its spot
+
+    // S8 t09 (MOVEMENT §1.3): Fine_Tune_Occupied_Passability on every stamp (one stamper for placements and run-time
+    // objects), Obstacle_Proxy_Type, and the "fine-tune, no proxy, no model: not stamped" rule.
+    const uint32_t pad = types.resolve_name("Pad"), barracks = types.resolve_name("Barracks"), nomodel = types.resolve_name("NoModel"),
+                   fineoff = types.resolve_name("FineOff");
+    CHECK(pad < types.size() && barracks < types.size() && nomodel < types.size() && fineoff < types.size());
+    if (pad >= types.size() || barracks >= types.size() || nomodel >= types.size() || fineoff >= types.size()) return;
+    CHECK(land_obstacle_footprint_type(types, barracks) == pad && land_obstacle_footprint_type(types, pad) == pad &&
+          land_obstacle_footprint_type(types, modelled) == modelled);
+    bool pad_has_model = true;
+    uint32_t ray_type = 0xFFFFFFFFu;
+    float ray_scale = 0.0f;
+    uint32_t rays = 0;
+    MapStampHooks ft = hooks;
+    ft.ray_model = [&](uint32_t t) {
+        if (t == modelled || t == fineoff) return StampRayModel::Model;
+        if (t == pad) return pad_has_model ? StampRayModel::Model : StampRayModel::None;
+        if (t == nomodel) return StampRayModel::None;
+        return StampRayModel::Unknown;
+    };
+    // Fake collision mesh: the half of the model on the -x side of its origin (world x < object x at yaw 0).
+    ft.mesh_ray_hit = [&](uint32_t t, const StampPose& pose, V2 xy) {
+        ray_type = t;
+        ray_scale = pose.scale;
+        ++rays;
+        return xy.x < pose.position.x;
+    };
+    // A run-time stamp of the modelled type is trimmed by the ray.
+    ObstacleFootprint full, trimmed;
+    CHECK(land_obstacle_footprint(types, modelled, {300.0f, 300.0f}, 0.0f, 0.0f, &hooks, full) && !full.fine_tune);
+    CHECK(land_obstacle_footprint(types, modelled, {300.0f, 300.0f}, 0.0f, 0.0f, &ft, trimmed) && trimmed.fine_tune);
+    PassabilityGrid rt;
+    rt.init(32, 32);
+    const uint32_t n_full = rt.stamp(50, full), n_trim = rt.stamp(51, trimmed);
+    CHECK(rays > 0 && ray_type == modelled && ray_scale == 2.0f);
+    CHECK(n_trim > 0 && n_trim < n_full);
+    for (uint32_t c : rt.stamp_cells(51)) CHECK(static_cast<int32_t>(c % 32u) <= world_to_cell(300.0f));
+    // The same trimmed cells for a map placement there (stamp_map_obstacles uses the same stamper and hooks).
+    {
+        terrain::MapData m2;
+        terrain::ObjectPlacement o;
+        o.type_crc = types.raw().types().name_crc[modelled];
+        o.position[0] = 300.0f, o.position[1] = 300.0f;
+        m2.objects.push_back(o);
+        o.type_crc = types.raw().types().name_crc[nomodel];  // fine-tune, no proxy, no model: not stamped
+        o.position[0] = 100.0f, o.position[1] = 500.0f;
+        m2.objects.push_back(o);
+        PassabilityGrid pg;
+        pg.init(32, 32);
+        CHECK(stamp_map_obstacles(pg, m2, types, &ft) == 1 && !pg.stamped(map_stamp_id(1)));
+        const std::span<const uint32_t> pc = pg.stamp_cells(map_stamp_id(0)), rc = rt.stamp_cells(51);
+        CHECK(std::equal(pc.begin(), pc.end(), rc.begin(), rc.end()));
+    }
+    CHECK(!land_obstacle_footprint(types, nomodel, {100.0f, 500.0f}, 0.0f, 0.0f, &ft, fp));
+    CHECK(land_obstacle_footprint(types, nomodel, {100.0f, 500.0f}, 0.0f, 0.0f, &hooks, fp) && !fp.fine_tune);  // no ray hook: Unknown
+    CHECK(land_obstacle_footprint(types, fineoff, {300.0f, 300.0f}, 0.0f, 0.0f, &ft, fp) && !fp.fine_tune);
+    // Proxy: the pad's sizes / offsets / scale and fine-tune flag, the barracks' own bits, the ray against the pad's model.
+    rays = 0;
+    CHECK(land_obstacle_footprint(types, barracks, {400.0f, 400.0f}, 0.0f, 0.0f, &ft, fp));
+    CHECK(fp.width == 40.0f && fp.height == 40.0f && fp.x_offset == -20.0f && fp.y_offset == -20.0f && fp.bits == kPassRebelWall &&
+          fp.fine_tune);
+    PassabilityGrid pr;
+    pr.init(32, 32);
+    const uint32_t n_proxy = pr.stamp(60, fp);
+    CHECK(n_proxy > 0 && rays > 0 && ray_type == pad && ray_scale == 3.0f);
+    pad_has_model = false;  // the proxy's model has no render object: no ray, every sample stamps
+    rays = 0;
+    CHECK(land_obstacle_footprint(types, barracks, {400.0f, 400.0f}, 0.0f, 0.0f, &ft, fp) && !fp.fine_tune);
+    CHECK(pr.stamp(60, fp) > n_proxy && rays == 0);
+    // A grid with no cells still records the stamp (header promise; it was dropped before).
+    PassabilityGrid empty;
+    CHECK(empty.stamp(7, fp) == 0 && empty.stamped(7) && empty.stamp_cells(7).empty() && empty.stamp_secondary(7, fp) == 0 &&
+          empty.secondary_stamped(7) && empty.unstamp(7) && !empty.stamped(7));
+
+    // S8 t13 (MOVEMENT §1.3 "A type without Land_Model_Name", "proxy bits").
+    const uint32_t off_both = types.resolve_name("OffBoth"), off_one = types.resolve_name("OffOne"),
+                   width_only = types.resolve_name("WidthOnly"), wall_seg = types.resolve_name("WallSeg"),
+                   shield_pad = types.resolve_name("ShieldPad"), pad_user = types.resolve_name("PadUser");
+    CHECK(off_both < types.size() && off_one < types.size() && width_only < types.size() && wall_seg < types.size() &&
+          shield_pad < types.size() && pad_user < types.size());
+    if (off_both >= types.size() || off_one >= types.size() || width_only >= types.size() || wall_seg >= types.size() ||
+        shield_pad >= types.size() || pad_user >= types.size())
+        return;
+    MapStampHooks nm;  // every type known to have no land model except WidthOnly (model box 15 x 10, no collision ray)
+    nm.ray_model = [&](uint32_t t) { return t == width_only ? StampRayModel::Model : StampRayModel::None; };
+    nm.model_half_extents = [&](uint32_t t, float& hx, float& hy, float& hz) {
+        if (t != width_only) return false;
+        hx = 15.0f, hy = 10.0f, hz = 4.0f;
+        return true;
+    };
+    PassabilityGrid ng;
+    ng.init(32, 32);
+    // Fine-tune on, no proxy, no model: never stamped (NoModel above). Fine-tune off: the explicit rectangle, no ray.
+    CHECK(land_obstacle_footprint(types, off_both, {300.0f, 300.0f}, 0.0f, 0.0f, &nm, fp) && !fp.fine_tune && fp.width == 40.0f &&
+          fp.height == 20.0f && fp.x_offset == -20.0f && fp.y_offset == -10.0f && fp.bits == kPassObstacle);
+    CHECK(ng.stamp(70, fp) == 6);  // x 280..320 (cells 14..16) x y 290..310 (cells 15..16)
+    // ... and with only one explicit size: zero samples, but stamped (retail sets "stamped" and never retries).
+    CHECK(land_obstacle_footprint(types, off_one, {300.0f, 300.0f}, 0.0f, 0.0f, &nm, fp) && fp.width == 40.0f && fp.height == 0.0f);
+    CHECK(ng.stamp(71, fp) == 0 && ng.stamped(71) && ng.stamp_cells(71).empty());
+    // Without model data in the run (Unknown) one size is still no footprint [port].
+    CHECK(!land_obstacle_footprint(types, off_one, {300.0f, 300.0f}, 0.0f, 0.0f, nullptr, fp));
+    // Each size getter separately: XML width 80, model height 2 x 10, offsets from the model box (-15, -10).
+    CHECK(land_obstacle_footprint(types, width_only, {300.0f, 300.0f}, 0.0f, 0.0f, &nm, fp) && fp.width == 80.0f &&
+          fp.height == 20.0f && fp.x_offset == -15.0f && fp.y_offset == -10.0f && fp.obstacle_height == 4.0f && !fp.fine_tune);
+    // Bits: the object's own behaviours (WALL adds EmpireWall), never the proxy's OverridePassability.
+    CHECK(land_obstacle_footprint(types, wall_seg, {300.0f, 300.0f}, 0.0f, 0.0f, nullptr, fp) &&
+          fp.bits == (kPassObstacle | kPassEmpireWall));
+    CHECK(land_obstacle_footprint(types, shield_pad, {300.0f, 300.0f}, 0.0f, 0.0f, nullptr, fp) && fp.bits == kPassShield);
+    CHECK(land_obstacle_footprint(types, pad_user, {300.0f, 300.0f}, 0.0f, 0.0f, &nm, fp) && fp.width == 40.0f &&
+          fp.bits == kPassObstacle && !fp.fine_tune);  // a proxy without a model: no ray, every sample stamps
+    CHECK(land_obstacle_bits(0, true, false) == kPassObstacle && land_obstacle_bits(0, true, true) == (kPassObstacle | kPassEmpireWall) &&
+          land_obstacle_bits(kPassRebelWall, true, true) == kPassRebelWall && land_obstacle_bits(0, false, false) == 0);
+    remove_all_long(root, ec);
+    std::printf("land obstacle footprint: object footprint = placement stamp, fine-tune / proxy ok\n");
+}
+#endif
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // unbuffered: a crash keeps the log
     test_heap();
@@ -2245,6 +2680,10 @@ int main() {
     test_fighter_attack_run();
     test_fighter_dogfight();
     test_fighter_determinism();
+#ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
+    test_space_obstacle_footprint();  // S7 t07 / t08
+    test_land_obstacle_footprint();   // S8 t02
+#endif
 #ifdef MOVEMENT_REAL_DATA
     test_real_data();
 #endif

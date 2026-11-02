@@ -831,7 +831,8 @@ int g_find_nearest(Call& c) {
     return 1;
 }
 
-// Spawn_Unit(type, location, player): a table with the spawned unit (a company: its container).
+// Spawn_Unit(type, location, player): a table with the spawned unit (a company: its container). At a planet in a
+// galactic script: GalacticSim::spawn_unit (detail::galactic_spawn_unit), so Assemble_Fleet / Move_To / saves see it.
 int g_spawn_unit(Call& c) {
     if (c.nargs != 3) return c.fail("LuaSpawnUnitCommandClass -- Invalid number of parameters.");
     const Ud* t = c.userdata(1, detail::cls_type());
@@ -844,7 +845,10 @@ int g_spawn_unit(Call& c) {
         return c.fail("LuaSpawnUnitCommandClass -- Invalid parameter for location.");  // [inferred]
     lua_newtable(c.L);
     if (!store(c)) return 1;
-    const ObjectHandle h = spawn(c, static_cast<TypeIndex>(t->value), p->id, pos, loc, true);
+    // a1g t06: at a planet of the galactic sim the unit is placed by the sim (fleet / surface / planet, one company
+    // object); anywhere else it is created directly with its company members.
+    ObjectHandle h = loc ? detail::galactic_spawn_unit(c, static_cast<uint32_t>(t->value), p->id, loc) : ObjectHandle{};
+    if (!h) h = spawn(c, static_cast<TypeIndex>(t->value), p->id, pos, loc, true);
     detail::push_object(c.L, *c.vm, h);
     lua_rawseti(c.L, -2, 1);
     return 1;
@@ -910,6 +914,12 @@ int m_block_is_finished(Call& c) {
     if (c.self->reserved == kBlockBombingRun) {  // L1 final: BombingBlockStatus (script_remaining.hpp)
         const RemainingScriptHooks* hk = b ? b->remaining : nullptr;
         return push_bool(c, !(hk && hk->bombing_run_finished) || hk->bombing_run_finished(c.self->id));
+    }
+    if (c.self->reserved == detail::kBlockAbility) {  // S7 t15 A1: AbilityBlockStatus (count 1) of one unit
+        const objects::ObjectStore* st = store(c);
+        const ObjectHandle h = st ? st->find(c.self->id) : ObjectHandle{};
+        if (!h || !st->alive(h) || st->dying(h)) return push_bool(c, true);  // signals 0xb / 0x10: death / removal [M]
+        return push_bool(c, !b || b->ability_signals(c.self->id) > static_cast<uint32_t>(c.self->value));
     }
     if (c.self->reserved > kBlockForever) return push_bool(c, detail::galactic_block_finished(c));
     if (c.self->reserved == kBlockReinforcement) {
@@ -1064,9 +1074,19 @@ int m_is_selectable(Call& c) {
 
 int m_is_transport(Call& c) { return push_bool(c, store(c)->has_behavior(self_object(c), objects::beh::Transport)); }
 
-int m_can_move(Call& c) {  // [inferred] has a locomotor and it is not suspended
+// Can_Move (0x5744a0): the coordinator accepts the unit and it is not movement-locked (A1_READINGS §28.9) [port: "accepts"
+// = has a locomotor that is not suspended, inferred].
+int m_can_move(Call& c) {
     return push_bool(c, store(c)->has_behavior(self_object(c), objects::beh::Locomotor) &&
-                            !state_of(c, c.self->id).locomotor_suspended);
+                            !state_of(c, c.self->id).locomotor_suspended && !detail::movement_locked(c, c.self->id));
+}
+// Move_To / Attack_Target on a movement-locked unit (0x57da90 / 0x5730f0): this warning (Move_To reuses Attack_Target's
+// text) and nothing else.
+int locked_orders_warning(Call& c) {
+    const std::string name(object_type_name(c, self_object(c)));
+    c.vm->message("SCRIPT WARNING: GameObjectWrapper::Attack_Target - object " + name +
+                  " is locked into existing orders. Attack_Target fails.");
+    return 0;
 }
 
 int m_get_contained_object_count(Call& c) {
@@ -1084,7 +1104,17 @@ int m_contains_object_type(Call& c) {
     return push_bool(c, false);
 }
 
-int m_has_active_orders(Call& c) { return push_bool(c, state_of(c, c.self->id).has_orders); }
+// Has_Active_Orders (0x579f10, AI_TACTICAL §5.6): true while the unit has a current target (0x397a40), whatever its
+// orders; S7 t36 adds that term (before, a fighting unit whose Lua order had finished counted as idle and the free store
+// re-ordered it). [port] Otherwise the issued-order flag, cleared by the host when the unit neither moves nor targets; the
+// retail formation rules (arrived block flag 0x10, locomotor idle states, "never had a formation = busy") are not modelled.
+int m_has_active_orders(Call& c) {
+    const ScriptObjectState& s = state_of(c, c.self->id);
+    if (s.has_orders) return push_bool(c, true);
+    const objects::ObjectStore* st = store(c);
+    const ObjectHandle t = st->find(s.attack_target);
+    return push_bool(c, t && st->alive(t));
+}
 
 int m_get_attack_target(Call& c) {
     const objects::ObjectStore* st = store(c);
@@ -1193,37 +1223,83 @@ int m_set_single_ability_autofire(Call& c) {
     return 0;
 }
 
-// Activate_Ability argument families (ABILITIES_HARDPOINTS.md §2.9 table) [H for the lists].
-// Only the S9 path of Activate_Ability uses it: built with ALAMO_LUA_HAVE_ABILITIES only (no unused function
-// in builds without engine/tactical).
+// Activate_Ability argument families (S7 t32: AI_TACTICAL §7.3.3 part 6, ABILITIES_HARDPOINTS §2.9 "Argument handling per
+// family", the corrected lists) [H]. Only the S9 path of Activate_Ability uses it: built with ALAMO_LUA_HAVE_ABILITIES only
+// (no unused function in builds without engine/tactical).
 #if ALAMO_LUA_HAVE_ABILITIES
-enum class AbilityArg : uint8_t { Toggle, Object, Position, ModePosition, OptionalTarget };
+enum class AbilityArg : uint8_t { Toggle, Object, DummyPosition, ModeOn, ModePosition, JetPack, TargetedInvulnerability, OptionalTarget };
 AbilityArg ability_arg_family(uint8_t t) {
-    static constexpr uint8_t kObject[] = {13, 15, 16, 18, 19, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
-    static constexpr uint8_t kPosition[] = {14, 17, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72};
+    static constexpr uint8_t kObject[] = {13, 15, 16, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
+    static constexpr uint8_t kDummy[] = {50, 67, 71, 73, 74};
+    static constexpr uint8_t kModeOn[] = {14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72};
     static constexpr uint8_t kModePosition[] = {5, 26, 28, 42};
     static constexpr uint8_t kOptional[] = {6, 10, 12};
+    if (t == 17) return AbilityArg::JetPack;
+    if (t == 19) return AbilityArg::TargetedInvulnerability;
     for (const uint8_t x : kObject)
         if (x == t) return AbilityArg::Object;
-    for (const uint8_t x : kPosition)
-        if (x == t) return AbilityArg::Position;
+    for (const uint8_t x : kDummy)
+        if (x == t) return AbilityArg::DummyPosition;
+    for (const uint8_t x : kModeOn)
+        if (x == t) return AbilityArg::ModeOn;
     for (const uint8_t x : kModePosition)
         if (x == t) return AbilityArg::ModePosition;
     for (const uint8_t x : kOptional)
         if (x == t) return AbilityArg::OptionalTarget;
     return AbilityArg::Toggle;  // the none / bool list, DEPLOY, and types the table does not list [inferred]
 }
+// S7 t31 (§7.3.3 item 1): the ids whose Activate_Ability raises signal 0xb on the unit and each TEAM member before executing.
+bool ability_raises_order_replaced(uint8_t t) {
+    static constexpr uint8_t kIds[] = {2,  3,  5,  6,  13, 15, 16, 17, 18, 20, 21, 22, 27, 31, 32, 34, 37, 38,
+                                       39, 41, 45, 46, 50, 51, 52, 53, 55, 58, 59, 64, 66, 67, 69, 71, 73, 74};
+    for (const uint8_t x : kIds)
+        if (x == t) return true;
+    return false;
+}
+// S7 t26 (AI_TACTICAL §7.3.3 item 1, second switch of 0x570a50 [H]): when Activate_Ability returns a block.
+enum class AbilityBlockRule : uint8_t { Never, Accepted, Always, JumpStarted };
+AbilityBlockRule ability_block_rule(uint8_t t) {
+    static constexpr uint8_t kAccepted[] = {13, 15, 16, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
+    static constexpr uint8_t kAlways[] = {2, 50, 67, 71, 73, 74};
+    if (t == 17) return AbilityBlockRule::JumpStarted;
+    for (const uint8_t x : kAccepted)
+        if (x == t) return AbilityBlockRule::Accepted;
+    for (const uint8_t x : kAlways)
+        if (x == t) return AbilityBlockRule::Always;
+    return AbilityBlockRule::Never;
+}
 #endif
 
 // Activate_Ability([name], [on | target object | target position]) -> BlockingStatus.
-// With the S9 ability system (executed at once, §2.9; the BlockingStatus is finished): toggle family ->
+// With the S9 ability system (executed at once, §2.9; S7 t32 dispatch, AI_TACTICAL §7.3.3 part 6): toggle family ->
 // SetUnitAbilityMode(t, on); object family -> command 40 (targeted_ability; no live target object: nothing);
-// position family -> command 57 on the host's Dummy_Barrage_Target (spawn_ability_target; an object argument
-// gives its position) [inferred: without the hook, the event below]; position-by-43 and optional-target
-// families -> SetUnitAbilityMode(t, on, target object if any).
+// 50 67 71 73 74 -> a Dummy_Barrage_Target at the position (spawn_ability_target; an object argument gives its position
+// [M]), then the command-40 path on it [without the hook: the event below]; 14 23 ... 72 -> 43 mode on, the argument
+// ignored; 5 26 28 42 and the optional-target ids -> 43 mode on (target object if any); 17 JET_PACK -> 43 with the
+// position [port: the AbilitySystem takes the point as a Dummy_Barrage_Target object, h_jet_pack reads its position];
+// 19 TARGETED_INVULNERABILITY -> 43 mode on with the target object (not command 40).
 // Otherwise: SetUnitAbilityMode on the direct path (COMMANDS.md §2.2 / §5). No name: the type's first unit
 // ability [inferred]. An ability the unit does not have is a no-op [inferred].
-int m_activate_ability(Call& c) {
+// S7 t15 A1 (MOVEMENT §3.1.1 step 6, ABILITIES_HARDPOINTS §2.6): on the S9 path the BlockingStatus is an AbilityBlockStatus
+// (pending count 1, push_ability_block) that finishes on the unit's next signal 0x29 ("unit ability finished"), 0xb (a new
+// order replaces its order, ObjectBridge::order_replaced) or its death / removal (0x10); no timeout. S7 t26 (AI_TACTICAL
+// §7.3.3 items 1-2): the block exists only when 0x570a50 answers true (ability_block_rule); a gate refusal (unknown name,
+// not the unit's, dead target argument, DEPLOY already in the requested state) and the "never" families answer nil.
+// *activated (task-force Activate_Ability, bind_ai.cpp): that true result (the task force counts the unit; the others get
+// Unit_Ability_Finished queued at once).
+int push_ability_block(Call& c, ObjectId object) {
+    ObjectBridge* b = bridge(c);
+    if (!b) return push_block(c, object, 0);  // no bridge: nothing reports the signal -> finished
+    Ud u;
+    u.cls = cls_blocking();
+    u.id = object;
+    u.value = b->watch_ability(object);
+    u.reserved = detail::kBlockAbility;
+    detail::push_engine_userdata(c.L, u);
+    return 1;
+}
+int activate_ability(Call& c, bool* activated) {
+    if (activated) *activated = false;
     // P4 lua: in a galactic script the Ground_Activated hero trigger (Activate_Ability_Galactic 0x570670,
     // P4_SIM_SYSTEMS 6.1) through the players family; returns nothing (L1P4_LUA_GAPS 1.2 item 4).
     if (detail::galactic_activate_ability(c)) return 0;
@@ -1246,37 +1322,96 @@ int m_activate_ability(Call& c) {
             on = to_bool(c, 2);
         } else {
             ObjectHandle th{};
-            if (position_arg(c, 2, p, &th) != PosArg::Ok) return push_block(c, c.self->id, 0);  // dead target: no-op
-            if (th) target = store(c)->id(th);
-            has_point = true;
+            const PosArg pa = position_arg(c, 2, p, &th);
+#if ALAMO_LUA_HAVE_ABILITIES
+            // S7 t32: 14 23 ... 72 do not read the argument (any value, even a dead object).
+            if (pa != PosArg::Ok && !(id != 0 && ability_arg_family(id) == AbilityArg::ModeOn)) return push_nil(c);
+#else
+            if (pa != PosArg::Ok) return push_nil(c);  // dead target: no-op, nil (S7 t26: 0x570a50 false)
+#endif
+            if (pa == PosArg::Ok) {
+                if (th) target = store(c)->id(th);
+                has_point = true;
+            }
         }
     }
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) {
-        if (id == 0 || !a->has_ability(c.self->id, id)) return push_block(c, c.self->id, 0);
+        if (id == 0 || !a->has_ability(c.self->id, id)) return push_nil(c);  // S7 t26: a gate refusal answers nil
+        // S7 t26 (§7.3.3 item 1): DEPLOY executes only when the requested state differs from the current one; equal -> nil.
+        if (id == ab::kDeploy && a->is_active(c.self->id, id) == on) return push_nil(c);
+        const AbilityArg family = ability_arg_family(id);
+        // S7 t32: the argument each family needs (ABILITIES_HARDPOINTS §2.9 "Argument handling per family"): the object
+        // ids and 19 an object, the position ids (5 26 28 42, 17, 50 67 71 73 74) a position; else 0x570a50 is false (nil).
+        if ((family == AbilityArg::Object || family == AbilityArg::TargetedInvulnerability) && target == objects::kNoObjectId)
+            return push_nil(c);
+        if ((family == AbilityArg::DummyPosition || family == AbilityArg::JetPack || family == AbilityArg::ModePosition) && !has_point)
+            return push_nil(c);
         const uint32_t frame = ability_frame(c);
         const ObjectId users[] = {c.self->id};
-        switch (ability_arg_family(id)) {
+        const bool gates = a->is_ready(c.self->id, id, frame) && a->can_activate(c.self->id, id, true, true, frame);
+        // S7 t31 (§7.3.3 item 1): after the gates, before executing, the listed ids raise signal 0xb on the unit and on each
+        // member of its TEAM (0x220ed0); the block subscribes afterwards, so it never sees this one.
+        if (ability_raises_order_replaced(id) && (id == ab::kDeploy || gates)) {
+            ObjectBridge* b = bridge(c);
+            std::vector<ObjectId> raised{c.self->id};
+            for (const ObjectHandle m : contents_of(c, self))
+                if (store(c)->exists(m)) raised.push_back(store(c)->id(m));
+            for (const ObjectId r : raised) {
+                if (b && b->raise_order_replaced) {
+                    b->raise_order_replaced(r);
+                } else if (b) {
+                    b->order_replaced(r);
+                    const ObjectHandle team = container_of(c, store(c)->find(r));
+                    if (team && store(c)->id(team) != r) b->order_replaced(store(c)->id(team));
+                }
+            }
+        }
+        const bool jump_ready = family == AbilityArg::JetPack && a->is_ready(c.self->id, id, frame);
+        uint32_t accepted = 0;
+        switch (family) {
             case AbilityArg::Object:
-                if (target != objects::kNoObjectId) a->targeted_ability(users, id, target, -1, frame);
+                accepted = a->targeted_ability(users, id, target, -1, frame);
                 break;
-            case AbilityArg::Position: {
-                if (!has_point) break;
+            case AbilityArg::DummyPosition:
+            case AbilityArg::JetPack: {
                 const ObjectBridge* b = bridge(c);
                 if (b && b->spawn_ability_target) {
                     const ObjectId dummy = b->spawn_ability_target(p, store(c)->owner(self));
-                    if (dummy != objects::kNoObjectId) a->targeted_ability(users, id, dummy, -1, frame);
+                    if (dummy == objects::kNoObjectId) break;
+                    accepted = family == AbilityArg::JetPack ? a->set_unit_ability_mode(users, id, true, frame, dummy)
+                                                             : a->targeted_ability(users, id, dummy, -1, frame);
                     break;
                 }
+                if (activated) *activated = true;  // [port] the event path: accepted by the pipeline
                 return issue_and_block(c, ev_ability_mode(c.self->id, id, true, target, p));
             }
-            case AbilityArg::Toggle:
+            case AbilityArg::ModeOn:  // the argument ignored: mode on, no position, no target
+                accepted = a->set_unit_ability_mode(users, id, true, frame);
+                break;
             case AbilityArg::ModePosition:
+            case AbilityArg::TargetedInvulnerability:  // 43 mode on with the object (its position + id)
+                accepted = a->set_unit_ability_mode(users, id, true, frame, target);
+                break;
+            case AbilityArg::Toggle:
             case AbilityArg::OptionalTarget:
-                a->set_unit_ability_mode(users, id, on, frame, target);
+                accepted = a->set_unit_ability_mode(users, id, on, frame, target);
                 break;
         }
-        return push_block(c, c.self->id, 0);
+        // S7 t26 (§7.3.3 item 1): whether 0x570a50 answers true (a block; the task force counts the unit) depends on the
+        // family: DEPLOY always once executed; the object-target ids when the pending ability was stored (accepted);
+        // JET_PACK when the jump started [port: the ability went from ready to its countdown in this call - h_jet_pack
+        // starts it only once the jump's move orders are out]; the Dummy_Barrage_Target ids 50 67 71 73 74 always once the
+        // gates passed; every other ability nil, even on success.
+        bool block = false;
+        switch (ability_block_rule(id)) {
+            case AbilityBlockRule::Always: block = id == ab::kDeploy || gates; break;
+            case AbilityBlockRule::Accepted: block = accepted > 0; break;
+            case AbilityBlockRule::JumpStarted: block = jump_ready && accepted > 0 && !a->is_ready(c.self->id, id, frame); break;
+            case AbilityBlockRule::Never: break;
+        }
+        if (activated) *activated = block;
+        return block ? push_ability_block(c, c.self->id) : push_nil(c);
     }
 #else
     (void)has_point;
@@ -1284,8 +1419,10 @@ int m_activate_ability(Call& c) {
     if (id == 0 || !has_ability(c, self, id)) return push_block(c, c.self->id, 0);
     if (!black_market_ok(c, self, id)) return push_block(c, c.self->id, 0);  // P4 lua: BM gate (0x570a50)
     if (ScriptObjectState* s = edit_self(c)) s->abilities[id].active = on;
+    if (activated) *activated = true;
     return issue_and_block(c, ev_ability_mode(c.self->id, id, on, target, p));
 }
+int m_activate_ability(Call& c) { return activate_ability(c, nullptr); }
 
 // Force_Ability_Recharge(name [, seconds]): without seconds the recharge starts (§2.6); with seconds
 // counter = maximum = int(FPS x s), phase unchanged (§5). No ability system: nothing to recharge.
@@ -1380,6 +1517,7 @@ int m_move_to(Call& c) {
     ObjectHandle target{};
     if (position_arg(c, 1, p, &target) != PosArg::Ok)
         return c.fail("GameObjectWrapper::Move_To -- could not extract a position from parameter 1.");  // [inferred]
+    if (detail::movement_locked(c, c.self->id)) return locked_orders_warning(c);
     // REMAINING_GAPS §4.2: Move_Internal's optional numeric threat threshold T (argument 2 [M]), carried as the order's
     // arg (float bits; 0 = off). [port] with T an object target becomes a move to its current position.
     if (c.is_number(2)) {
@@ -1408,6 +1546,7 @@ int m_attack_target(Call& c) {
         const std::string name(object_type_name(c, self_object(c)));
         return c.fail("GameObjectWrapper::Attack_Target -- Parameter 1 is not a valid destination for unit %s", name.c_str());
     }
+    if (detail::movement_locked(c, c.self->id)) return locked_orders_warning(c);
     if (ScriptObjectState* s = edit_self(c)) s->attack_target = t->id;
     return issue_and_block(c, ev_attack(c.self->id, t->id));
 }
@@ -1701,12 +1840,108 @@ int m_set_targeting_priorities(Call& c) {
     return 0;
 }
 
+// Lock_Current_Orders (0x57cd40) / Unlock_Current_Orders (0x581fd0), A1_READINGS §28.9 item 4: one obj +0x3a8 movement
+// lock counter. [port] The script's share is orders_locked; the ability system holds the Disable_Movement share; a
+// Divert's forced move counts as locked while it runs (detail::movement_locked).
+int32_t ability_movement_locks(Call& c, ObjectId id) {
+#if ALAMO_LUA_HAVE_ABILITIES
+    if (ab::AbilitySystem* a = ability_system(c, id)) return a->immobilize_count(id);
+#endif
+    (void)c;
+    (void)id;
+    return 0;
+}
+// The type lists `token` in one of its behaviour lists (the locomotor kinds all share behaviour slot 0x01).
+bool has_behavior_token(Call& c, ObjectHandle h, std::string_view token) {
+    const objects::GameObjectTypes* ty = types(c);
+    const TypeIndex t = store(c)->type(h);
+    if (!ty || t == objects::kNone) return false;
+    for (const std::string_view tag : {"Behavior", "LandBehavior", "SpaceBehavior", "GalacticBehavior", "TacticalBehavior", "DeployedBehavior"})
+        for (const std::string_view tok : ty->get_list(t, tag))
+            if (iequal(tok, token)) return true;
+    return false;
+}
+// The owner check both bindings start with: false = return now (no owner: silently; not an AI player: the error).
+bool lock_owner_ok(Call& c, const char* fn, const char* what) {
+    const int32_t owner = store(c)->owner(self_object(c));
+    if (owner < 0) return false;
+#if ALAMO_LUA_PLAYERS
+    // 0x2814d0 [port: "not human" - a player world without the setting treats every player as AI]
+    if (const LuaPlayerWorld* w = c.vm->owner ? player_world(*c.vm->owner) : nullptr; w && w->is_human(owner)) {
+        const std::string name(object_type_name(c, self_object(c)));
+        script_error(c, "GameObjectWrapper::%s - object %s does not belong to an AI player; cannot %s.", fn, name.c_str(), what);
+        return false;
+    }
+#else
+    (void)fn;
+    (void)what;
+#endif
+    return true;
+}
+// 0x3a8e50(h, 1) for the script: a script share unless locked (then the "already locked" warning).
+void script_lock(Call& c, ObjectHandle h) {
+    const ObjectId id = store(c)->id(h);
+    if (detail::movement_locked(c, id)) {
+        const std::string name(object_type_name(c, h));
+        c.vm->message("SCRIPT WARNING: GameObjectWrapper::Lock_Current_Orders - " + name +
+                      " is already locked.  Script cannot stack locks.");
+        return;
+    }
+    if (ScriptObjectState* s = edit_state(c, id)) s->orders_locked = true;
+}
+// 0x3a8e50(h, 0) for the script when locked, else the "is not locked" warning. [port] With no script share the
+// ability's share is released (one counter in the original); a Divert's forced move has no count to release.
+void script_unlock(Call& c, ObjectHandle h) {
+    const ObjectId id = store(c)->id(h);
+    const ObjectBridge* b = bridge(c);
+    if (const ScriptObjectState* f = b ? b->find_state(id) : nullptr; f && f->orders_locked) {
+        edit_state(c, id)->orders_locked = false;
+        return;
+    }
+#if ALAMO_LUA_HAVE_ABILITIES
+    if (ab::AbilitySystem* a = ability_system(c, id); a && a->immobilize_count(id) > 0) {
+        a->lock_movement(id, false, ability_frame(c));
+        return;
+    }
+#endif
+    if (detail::movement_locked(c, id)) return;
+    const std::string name(object_type_name(c, h));
+    c.vm->message("SCRIPT WARNING: GameObjectWrapper::Unlock_Current_Orders - object " + name + " is not locked.");
+}
 int m_lock_current_orders(Call& c) {
-    if (ScriptObjectState* s = edit_self(c)) s->orders_locked = true;
+    if (!lock_owner_ok(c, "Lock_Current_Orders", "lock")) return 0;
+    objects::ObjectStore* st = store(c);
+    const ObjectHandle self = self_object(c);
+    if (!st->has_behavior(self, objects::beh::Locomotor)) {
+        const std::string name(object_type_name(c, self));
+        return script_error(c, "GameObjectWrapper::Lock_Current_Orders - %s is immobile; locking not supported.", name.c_str());
+    }
+    // A team that is not a land squad container (locomotor vf+0x230), outside space: lock each member.
+    if (st->has_behavior(self, objects::beh::Team) && st->mode() != objects::ModeKind::Space &&
+        !has_behavior_token(c, self, "LAND_TEAM_CONTAINER_LOCOMOTOR")) {
+        for (const ObjectHandle m : contents_of(c, self)) script_lock(c, m);
+        return 0;
+    }
+    // A squad member (LandTeamInfantry, vf+0x228) locks its container; no container: nothing.
+    if (has_behavior_token(c, self, "LAND_TEAM_INFANTRY_LOCOMOTOR")) {
+        if (const ObjectHandle box = container_of(c, self); box && st->alive(box)) script_lock(c, box);
+        return 0;
+    }
+    script_lock(c, self);
     return 0;
 }
 int m_unlock_current_orders(Call& c) {
-    if (ScriptObjectState* s = edit_self(c)) s->orders_locked = false;
+    if (!lock_owner_ok(c, "Unlock_Current_Orders", "unlock")) return 0;
+    // [port] The hero-clash refusal (obj +0x3b4, "...is locked by a hero clash.  Cannot unlock.") has no state here:
+    // no hero clash is modelled.
+    objects::ObjectStore* st = store(c);
+    const ObjectHandle self = self_object(c);
+    // Land mode with TEAM: unlock each member (the container itself stays as it is - the original's asymmetry).
+    if (st->mode() == objects::ModeKind::Land && st->has_behavior(self, objects::beh::Team)) {
+        for (const ObjectHandle m : contents_of(c, self)) script_unlock(c, m);
+        return 0;
+    }
+    script_unlock(c, self);
     return 0;
 }
 
@@ -2428,6 +2663,23 @@ constexpr detail::ImplEntry kImpl[] = {
 
 }  // namespace
 
+namespace detail {
+bool movement_locked(Call& c, ObjectId id) {
+    if (ability_movement_locks(c, id) > 0) return true;
+    const ObjectBridge* b = bridge(c);
+    if (!b) return false;
+    const RemainingScriptHooks* hk = b->remaining;
+    const objects::ObjectStore* st = store(c);
+    std::function<bool(ObjectId, Vec3&)> goal;
+    if (hk && hk->move_goal)
+        goal = [hk, st](ObjectId i, Vec3& g) {
+            const ObjectHandle h = st->find(i);
+            return h && hk->move_goal(h, g);
+        };
+    return script_movement_locked(*b, id, goal);
+}
+}  // namespace detail
+
 std::span<const detail::ImplEntry> detail::impl_objects() { return kImpl; }
 
 // OI lua: TaskForceClass.Set_Targeting_Priorities(set [, filter]) on the task force's units (unit-list order): each unit
@@ -2523,12 +2775,20 @@ void ObjectBridge::hash(StateHasher& h) const {
             }
         }
     }
+    // S7 t15 A1: watched units' ability-signal counts (only when a blocking Activate_Ability watched one: CRCs unchanged).
+    if (!ability_signals_.empty()) {
+        h.u32(static_cast<uint32_t>(ability_signals_.size()));
+        for (const auto& [id, n] : ability_signals_) {
+            h.i32(id);
+            h.u32(n);
+        }
+    }
 }
 
 // ---- N1 save / load ----
 
 namespace {
-constexpr uint32_t kBridgeSaveVersion = 1;
+constexpr uint32_t kBridgeSaveVersion = 2;  // 2: S7 t15 A1 ability-signal counts
 // ScriptObjectState's flags in save order (shared by write and read).
 template <class S>
 auto bridge_flags(S& s) {
@@ -2562,6 +2822,8 @@ void ObjectBridge::write(ByteWriter& w) const {
         w.u32(id).boolean(rs.finished).u32(static_cast<uint32_t>(rs.units.size()));
         for (const ObjectId u : rs.units) w.i32(u);
     }
+    w.u32(static_cast<uint32_t>(ability_signals_.size()));
+    for (const auto& [id, n] : ability_signals_) w.i32(id).u32(n);
 }
 
 bool ObjectBridge::read(ByteReader& r) {
@@ -2637,13 +2899,38 @@ bool ObjectBridge::read(ByteReader& r) {
         for (ObjectId& u : rs.units) u = r.i32();
         reinforcements.emplace(id, std::move(rs));
     }
+    n = r.u32();
+    if (!r.ok() || n > r.remaining() / 8) return false;
+    std::map<ObjectId, uint32_t> ability_signals;
+    for (uint32_t i = 0; i < n; ++i) {
+        const ObjectId id = r.i32();
+        const uint32_t k = r.u32();
+        if (!r.ok() || (!ability_signals.empty() && id <= ability_signals.rbegin()->first)) return false;
+        ability_signals.emplace(id, k);
+    }
     if (!r.ok()) return false;
     orders_issued = orders;
+    ability_signals_ = std::move(ability_signals);
     states_ = std::move(states);
     remaining_states_ = std::move(remaining_states);
     reinforcements_ = std::move(reinforcements);
     next_reinforcement_ = next;
     return true;
+}
+
+bool detail::object_activate_ability(Call& c, ObjectHandle unit, int first, int nargs) {
+    const int top = lua_gettop(c.L);
+    detail::push_object(c.L, *c.vm, unit);
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, -1));
+    bool activated = false;
+    if (ud && detail::object_alive(*c.vm, *ud)) {
+        char err[256];
+        err[0] = 0;
+        Call sub{c.L, c.vm, ud, first, nargs, err, sizeof err};
+        activate_ability(sub, &activated);
+    }
+    lua_settop(c.L, top);
+    return activated;
 }
 
 void attach_object_bridge(LuaVm& vm, ObjectBridge* bridge) {

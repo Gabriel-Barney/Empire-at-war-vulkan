@@ -362,6 +362,8 @@ static void test_types_synthetic() {
     CHECK(ty.resolved(T("Later2")) && ty.resolve_pass(T("Later2")) == 1 && ty.get_float(T("Later2"), "Max_Speed") == 7.0f);
     CHECK(!ty.resolved(T("Cyc1")) && !ty.resolved(T("Cyc2")) && !ty.resolved(T("Self")) && !ty.resolved(T("Orphan")));
     CHECK(ty.get_float(T("Orphan"), "Max_Speed") == 4.0f && ty.get_float(T("Orphan"), "Mass") == 0.995f);
+    // S7 t14 (MOVEMENT §3.1.1, type ctor 0x367250): the jetpack's alternate speed / turn rate defaults.
+    CHECK(ty.get_float(T("Orphan"), "Alternate_Max_Speed") == 1.0f && ty.get_float(T("Orphan"), "Alternate_Max_Rate_Of_Turn") == 2.0f);
     CHECK(ty.stats().variants == 8 && ty.stats().unresolved == 4 && ty.stats().resolved_pass0 == 2 &&
           ty.stats().resolved_later == 2 && ty.stats().passes == 10);
     // Squadron derivation.
@@ -906,6 +908,30 @@ static void test_store() {
     CHECK(land.behavior_index(a, beh::Locomotor) == 2 && land.serviced_behavior_count(a) == 4);
     CHECK(land.has_behavior(a, beh::Team) && !land.has_behavior(a, 0x10));
     CHECK(land.add_behavior(a, 0x45) && !land.add_behavior(a, 0x45) && land.behaviors(a).back() == 0x45);
+    // S8 t09: Remove_Behavior (the death-clone strip): one instance leaves, later ones move down with their state; the
+    // object leaves the per-type table and category list with the last instance. Saved and reloaded unchanged.
+    {
+        ObjectStore st(ModeKind::Space, StoreKind::Primary, types);
+        const ObjectHandle o = st.create(sp);  // Selectable, Locomotor, Locomotor, StarshipCombatant, SHIELDED
+        const ObjectHandle o2 = st.create(sp);
+        CHECK(!st.remove_behavior(o, 5) && !st.remove_behavior(ObjectHandle{}, 0));
+        CHECK(st.remove_behavior(o, 1) && st.behaviors(o).size() == 4 && st.behavior_index(o, beh::Locomotor) == 1 &&
+              st.behavior_table(beh::Locomotor).members.size() == 2);
+        CHECK(st.remove_behavior(o, 1) && !st.has_behavior(o, beh::Locomotor) && st.behavior_index(o, 0x10) == 2 &&
+              !st.behavior_serviced(o, 1) && st.behavior_serviced(o, 2));
+        CHECK(st.behavior_table(beh::Locomotor).members.size() == 1 && st.behavior_table(beh::Locomotor).insertion.size() == 1 &&
+              st.behavior_table(beh::Locomotor).insertion[0] == o2 && st.has_behavior(o2, beh::Locomotor));
+        ByteWriter w;
+        st.write(w);
+        ObjectStore back(ModeKind::Space, StoreKind::Primary, types);
+        const std::vector<uint8_t> saved = w.bytes();
+        ByteReader rd(saved);
+        CHECK(back.read(rd));
+        StateHasher h1, h2;
+        st.hash_state(h1);
+        back.hash_state(h2);
+        CHECK(h1.digest() == h2.digest() && !back.has_behavior(back.find(st.id(o)), beh::Locomotor));
+    }
     // Rock has only a dummy behaviour: not serviced.
     sp.type = rock;
     const ObjectHandle r = land.create(sp);
@@ -1320,7 +1346,7 @@ static void test_store_save() {
         };
         // Header: version, mode, kind, type count, types digest. Slot 0 (offset 42): generation 0, used byte 2,
         // used flipped (free list no longer matches), type out of range, first behaviour id 0 / 0x6A.
-        CHECK(refused(0, 2) && refused(4, 1) && refused(5, 1) && refused(6, 9) && refused(14, static_cast<uint8_t>(saved[14] ^ 1)));
+        CHECK(refused(0, 4) && refused(0, 0) && refused(4, 1) && refused(5, 1) && refused(6, 9) && refused(14, static_cast<uint8_t>(saved[14] ^ 1)));
         CHECK(refused(42, 0) && saved[43] == 0 && saved[44] == 0 && saved[45] == 0);
         CHECK(refused(46, 2) && refused(46, static_cast<uint8_t>(saved[46] ^ 1)) && refused(58, 0x7F));
         CHECK(saved[109] > 0 && refused(113, 0) && refused(113, 0x6A));
@@ -1352,6 +1378,97 @@ static void test_store_save() {
         ByteReader r(bytes);
         CHECK(s2.read(r) && r.done() && store_digest(s2) == store_digest(s1) && s2.id_counter().next() == s1.id_counter().next());
     }
+    // a1h t08 / a1i t05: version 1 (no carried-type section) and version 2 (no landing-persist section) saves still
+    // load; this store has no transports, so the v3 save ends with two empty sections (u32 0 each).
+    for (const uint8_t ver : {uint8_t{1}, uint8_t{2}}) {
+        std::vector<uint8_t> old = saved;
+        CHECK(old.size() > 8 && old[old.size() - 8] == 0 && old[old.size() - 1] == 0);
+        old[0] = ver;
+        old.resize(old.size() - (ver == 1 ? 8u : 4u));
+        IdCounter iv;
+        ObjectStore v(ModeKind::Space, StoreKind::Primary, types, &iv);
+        ByteReader r(old);
+        CHECK(v.read(r) && r.done() && store_bytes(v) == saved);  // a moved on after the save point; it saves as v3
+    }
+    remove_all_long(root, ec);
+}
+
+// a1h t08: the transport carried type (TransportDataPack +0x48, A1_READINGS §32.2): only TRANSPORT / TRANSPORT_LANDING
+// objects have one; it is saved, hashed only when set, and gone with the object.
+static void test_carried_type() {
+    const fs::path root = fs::temp_directory_path() / "alamo_objects_carried_test";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<L><File>C.xml</File></L>");
+    write_file(root / "Data/XML/C.xml",
+               "<R><TransportUnit Name=\"Dropship\"><Behavior>TRANSPORT</Behavior></TransportUnit>\n"
+               "<GroundCompany Name=\"Company\"><Behavior>SELECTABLE</Behavior></GroundCompany>\n"
+               "<SpaceUnit Name=\"Ship\"><Behavior>SELECTABLE</Behavior></SpaceUnit></R>");
+    DirectoryProvider dp(root.string());
+    ObjectTypeDatabase raw;
+    CHECK(raw.load(dp));
+    GameObjectTypes types;
+    CHECK(types.build(raw, &dp));
+    const TypeIndex drop = raw.find("Dropship"), company = raw.find("Company"), ship = raw.find("Ship");
+    CHECK(drop != kNone && company != kNone && ship != kNone);
+    IdCounter ids;
+    ObjectStore s(ModeKind::Land, StoreKind::Primary, types, &ids);
+    SpawnParams sp;
+    sp.type = drop;
+    const ObjectHandle d = s.create(sp);
+    sp.type = ship;
+    const ObjectHandle o = s.create(sp);
+    const ObjectHandle plain = s.create(sp);
+    CHECK(s.add_behavior(o, beh::TransportLanding));  // a landing object: the pack exists through TRANSPORT_LANDING too
+    const uint64_t none = store_digest(s);
+    CHECK(s.carried_type(d) == kNone && s.carried_type(o) == kNone);
+    CHECK(!s.set_carried_type(plain, company) && s.carried_type(plain) == kNone);  // no transport pack
+    CHECK(!s.set_carried_type(d, static_cast<TypeIndex>(types.size())) && s.carried_type(d) == kNone);
+    CHECK(s.set_carried_type(d, company) && s.carried_type(d) == company && store_digest(s) != none);
+    CHECK(s.set_carried_type(o, company) && s.carried_type(o) == company);
+    {  // round trip
+        const std::vector<uint8_t> b = store_bytes(s);
+        IdCounter i2;
+        ObjectStore t(ModeKind::Land, StoreKind::Primary, types, &i2);
+        ByteReader r(b);
+        CHECK(t.read(r) && r.done() && t.carried_type(d) == company && t.carried_type(o) == company &&
+              t.carried_type(plain) == kNone && store_digest(t) == store_digest(s) && store_bytes(t) == b);
+        // (a1i t05: the last 4 bytes are the empty landing-persist list)
+        std::vector<uint8_t> bad = b;  // the last entry's type out of range: refused, store unchanged
+        bad[bad.size() - 5] = 0x7F;
+        ByteReader rb(bad);
+        CHECK(!t.read(rb) && store_bytes(t) == b);
+        bad = b;  // the last entry names the plain object's slot (no transport pack): refused
+        bad[bad.size() - 12] = static_cast<uint8_t>(plain.slot());
+        ByteReader rc(bad);
+        CHECK(!t.read(rc) && store_bytes(t) == b);
+    }
+    CHECK(s.set_carried_type(o, kNone) && s.set_carried_type(d, kNone) && store_digest(s) == none);  // cleared
+    // Gone with the object: still readable while dead-pending, none after the flush and for the slot's next object.
+    CHECK(s.set_carried_type(d, company) && s.destroy(d));
+    CHECK(!s.set_carried_type(d, drop) && s.carried_type(d) == company);
+    s.flush();
+    CHECK(s.carried_type(d) == kNone);
+    sp.type = drop;
+    const ObjectHandle n = s.create(sp);
+    CHECK(n.slot() == d.slot() && n != d && s.carried_type(n) == kNone);
+    // a1i t05: the landing persist flag (TransportDataPack +0xc9): the same objects, saved (version 3), hashed when set.
+    const uint64_t before_persist = store_digest(s);
+    CHECK(!s.landing_persist(o) && !s.set_landing_persist(plain, true) && !s.landing_persist(plain));
+    CHECK(s.set_landing_persist(o, true) && s.landing_persist(o) && store_digest(s) != before_persist);
+    {
+        const std::vector<uint8_t> b = store_bytes(s);
+        IdCounter i3;
+        ObjectStore t(ModeKind::Land, StoreKind::Primary, types, &i3);
+        ByteReader r(b);
+        CHECK(t.read(r) && r.done() && t.landing_persist(o) && !t.landing_persist(n) && store_digest(t) == store_digest(s));
+        std::vector<uint8_t> bad = b;  // the persist entry names the plain object's slot (no transport pack): refused
+        bad[bad.size() - 4] = static_cast<uint8_t>(plain.slot());
+        ByteReader rb(bad);
+        CHECK(!t.read(rb) && store_bytes(t) == b);
+    }
+    CHECK(s.set_landing_persist(o, false) && store_digest(s) == before_persist);
+    std::printf("  carried type: TRANSPORT / TRANSPORT_LANDING only, saved, hashed when set, cleared with the object\n");
     remove_all_long(root, ec);
 }
 // ------------------------------------------------------------------------------------------
@@ -1604,6 +1721,7 @@ int main() {
     test_store();
     test_behavior_scheduling();
     test_store_save();
+    test_carried_type();
     integration(env_or("ALAMO_FOC_DATA", "/home/claude/data/foc"), "FoC", true);
     integration(env_or("ALAMO_EAW_DATA", "/home/claude/data/eaw"), "EaW", false);
     std::printf(g_fail ? "alamo_objects_tests: %d failure(s)\n" : "alamo_objects_tests: OK\n", g_fail);

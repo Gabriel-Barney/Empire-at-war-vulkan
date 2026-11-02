@@ -208,7 +208,7 @@ registered on planets.)
 - `MaxedStarbases`: uses the planet's own max (D+0x238) and normalised equality; no default 5.
 - `HasStarbaseOfLevel`/`NumStarbaseOfLevel`: n − round(Count) + 1, clamped ≥ 0; Has = (that > 0).
 - `HasStructure`/`StructureCount` (player): via owned planets' structure lists + queues, not all objects.
-- `HasUnit`: owned GOM objects + queued (unless complete-only), count against `Parameter_Count`.
+- `HasUnit`: owned GOM objects + queued (unless complete-only), count against `Parameter_Count`. A company counts as its transport (0x3973b0 = the company type) plus each `Company_Units` member as its own object (STRATEGIC_GAPS §1.7; the port, which keeps one object per company, counts the members from the company type: q2f t01).
 - `HasTechToProduce`: **any** listed type, faction-affiliated, tech ≤ player tech.
 - `CanAdvanceTech`: next-tech upgrade type buildable/queued, not `tech < 5`.
 - `AnyCurrentThreats`: human fleet at a human planet adjacent to ours (not hostile fleet over our planet).

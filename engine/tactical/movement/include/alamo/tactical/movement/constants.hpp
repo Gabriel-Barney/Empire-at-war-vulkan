@@ -61,6 +61,9 @@ struct MovementConstants {
     // Mode speed multipliers (§3.4)
     float land_speed_multiplier = 1.56f;
     float space_speed_multiplier = 1.2f;
+    // S7 t37 (A1_READINGS §33.4.1 step 2): the cap of a guard block's follow radius R (GameConstants +0x11EC0 / +0x11EC4).
+    float space_guard_range = 750.0f;
+    float land_guard_range = 150.0f;
 
     static MovementConstants from_game_constants(const data::GameConstants& gc);
 };

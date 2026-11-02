@@ -31,6 +31,9 @@ enum class LocoState : uint8_t {
     WalkMoving = 0x13,
     WalkEndMove = 0x14,
     WalkStopped = 0x16,
+    WalkDeploying = 0x18,    // S8 t11 (§3.2 "Deploy states"): Walk only
+    WalkDeployed = 0x19,
+    WalkUndeploying = 0x1A,
     FighterMoving = 0x1B,  // §4.7
     FighterIdle = 0x1C,
     FighterIdleCombat = 0x1D,

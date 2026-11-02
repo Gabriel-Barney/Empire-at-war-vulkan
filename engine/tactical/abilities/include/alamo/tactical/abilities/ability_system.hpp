@@ -104,6 +104,11 @@ enum class AbilityEventKind : uint8_t {
     // STATION_HANGARS_SOUND.md §1.1: remove `id` silently (Kill 0x391310 flag 1: no death clone / explosion /
     // survivors). Starbase_Upgrade_Ability: the upgrade object after its one service, whether or not the upgrade ran.
     RemoveSilently,
+    // S8 t10 (LOB_SOLVER §3.5 "MARKER removal"): the Remote_Bomb toss 0x71a200 ran against `target` (after the spawn
+    // attempt, whether or not a bomb spawned). When `target` is a ground-point MARKER (a Dummy_Barrage_Target) the host
+    // kills it (0x391310(marker, 1): ordinary Destroy_Object). Not raised when the toss never happens (interrupted, null
+    // target lookup, refused apply): the marker then stays.
+    MarkerTossed,
 };
 
 struct AbilityEvent {
@@ -192,6 +197,39 @@ struct AbilityHost {
     // (a unit or its team container) starts circling the cable target between Activation_Min_Range and
     // Activation_Max_Range of the ability record (the host: MovementSystem::start_circling). Unset: no circling.
     std::function<void(ObjectId user, ObjectId target, float r_min, float r_max)> cable_attack;
+    // OI t02 (ABILITIES_HARDPOINTS §4.12 [port]): the map has a water plane above the terrain under `p` (XY). Unset: no
+    // water anywhere (Destroy_When_Stunned_Over_Water never fires).
+    std::function<bool(Vec3 p)> over_water;
+    // OI t03 (ABILITIES_HARDPOINTS §4.13 [port]): frame count and fps of animation `anim_type` (a ModelAnimType id; < 0:
+    // the XML name `anim_name`, e.g. an Attack_Animation / Toss_Anim value) of `id`'s sim model, variant `variant`.
+    // Static model data only, never a playing clock. False when the object has no model or the model lacks the clip.
+    // Unset: no clips (every animation-driven timing uses its fixed fallback).
+    std::function<bool(ObjectId id, int32_t anim_type, std::string_view anim_name, uint32_t variant, uint32_t& frame_count,
+                       float& fps)>
+        anim_clip;
+    // OI follow-up t01 (§4.14): the ModelAnimType id of an XML animation name (-1 unknown). Unset: names never resolve
+    // (the melee / grenade animations leave no record).
+    std::function<int32_t(std::string_view anim_name)> anim_type;
+    // OI follow-up t01 (§4.14): the type sets Attack_Animation_Is_Overlay (weapon shots play Attack in the overlay slot,
+    // which no gate reads). Unset: every weapon shot counts as an overlay (no record).
+    std::function<bool(ObjectId id)> attack_overlay;
+    // OI follow-up t03 (A1_READINGS §28.9): the shares of the obj +0x3a8 movement lock this system does not hold (script
+    // Lock_Current_Orders) or the locomotor's forced-move term (a Divert / unload-exit path). Unset: none.
+    std::function<bool(ObjectId id)> movement_locked;
+    // S8 t06 (LOB_SOLVER §3.5, L1_S4_REMAINING §3.5 garrison fire): the garrison host (obj +0x2b0) of a garrisoned unit,
+    // kNoObject when not inside. Unset: [port] a garrisoned unit (combat kUnitGarrisoned) is its own container.
+    std::function<ObjectId(ObjectId unit)> garrison_holder;
+    // The garrison host's position and the world positions of its gun bones (Num_Garrison_Guns FP_0<i>_ALT<a> of the
+    // current ALT state), in bone order; false / empty = none. Unset: none (the thrower's own Spawn_Bone is used).
+    std::function<bool(ObjectId holder, Vec3& holder_pos, std::vector<Vec3>& bones)> garrison_fire_bones;
+    // S8 t11 (MOVEMENT §3.2 "Deploy states", AI_TACTICAL §7.3.3 item 3): DEPLOY's 0x3a1ce0 -> 0x391260 -> the Walk
+    // locomotor's Deploy(on) (vf +0x118). True when the request changed the locomotor's deploy state. Set: the host owns the
+    // deploy state and reports every change with set_deploy_state() (DEPLOY Is_Active = Walk state 0x19); unset: [port] the
+    // deploy is instant (Is_Active follows the request).
+    std::function<bool(ObjectId id, bool on, uint32_t frame)> deploy;
+    // S8 t10 (LOB_SOLVER §3.5 "Facing at apply"): 0x3a8710 - snap `id`'s yaw to `yaw_deg` at once (no turn rate; roll and
+    // pitch 0). Unset: [port] the facing is not changed.
+    std::function<void(ObjectId id, float yaw_deg)> snap_yaw;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -267,6 +305,9 @@ public:
     bool interdicting(ObjectId id) const;
     bool interdicted(int32_t player) const;  // some enemy interdict entry targets this player [L]
     int32_t immobilize_count(ObjectId id) const;
+    // OI follow-up t01 (§4.14 [port]): the owner's primary-slot animation type as the sim records it after the advance of
+    // `frame` (-1 = none); what the apply gates read (tests, probes).
+    int32_t anim_type_at(ObjectId id, uint32_t frame) const;
     bool special_applied(ObjectId id, uint32_t ability_name_crc) const;
     ObjectId special_target(ObjectId id, uint32_t ability_name_crc) const;
     // R5 jamming visual (presentation only): the applied Sensor_Jamming_Ability of `id` (null when none / dead) and the radius
@@ -326,9 +367,17 @@ public:
     std::span<const SpawnRequest> spawn_requests() const { return spawns_; }
     bool bind_spawn(uint32_t serial, ObjectId id);
     // Active_By_Default (0x3a82a0, §1.2 [H]): the first two Unit_Abilities_Data entries with Active_By_Default are
-    // switched on. add_unit / add_container call it at creation; the A1/A2 AI layer calls it when a unit is released
-    // to the free store (after un-immobilising it) or leaves a task force without hunting.
+    // switched on. add_unit / add_container call it at creation; the A1/A2 AI layer calls it when a script-locked
+    // unit's order finishes (free store, after the lock is released) or a task force releases a unit whose movement
+    // is not locked (A1_READINGS §28.8).
     void apply_active_by_default(ObjectId id, uint32_t frame);
+    // Movement lock 0x3a8e50(obj, lock) (A1_READINGS §28.8 [H]) on the ability-held share of the obj +0x3a8 counter:
+    // lock adds 1 (0 -> 1 raises Immobilised: the host stops the unit); unlock subtracts 1, clamped at 0 (1 -> 0
+    // raises Released), with no other effect. The Disable_Movement handlers (MISSILE_SHIELD, INTERDICT) use it; so
+    // does a Lua Unlock_Current_Orders on a unit that holds no script lock (the shared counter lets it release an
+    // ability's lock). [port] Lock_Current_Orders' own share is the script state's orders_locked. False for an
+    // unknown object.
+    bool lock_movement(ObjectId id, bool lock, uint32_t frame);
     // Order cancel 0x38f5d0 (§1.1 [H]): every new move / attack / escort order (commands, Lua, AI) switches off
     // BARRAGE, LUCKY_SHOT, ION_CANNON_SHOT (on the team container) and HUNT when active. Not called for the moves
     // abilities issue themselves (MoveOrder events).
@@ -353,6 +402,11 @@ public:
     bool weather_affected(int32_t player) const;
     bool hunting(ObjectId id) const;     // HUNT behaviour enabled
     bool deployed(ObjectId id) const;    // DEPLOY state (DEPLOY 2 Is_Active)
+    // S8 t11: the host's Walk deploy state of `id` (MovementSystem::deploy_state: 0 none, 0x18 Deploying, 0x19 Deployed,
+    // 0x1A Undeploying). DEPLOY Is_Active (0x39a390) := state == 0x19; combat kUnitDeploying := state == 0x19 (0x39a390,
+    // the death-clone remap and the Fire_When_(Un)Deployed gates); kUnitDeployTransition := 0x18 or 0x1A (0x39a400 /
+    // 0x39b2a0: neither weapon source fires).
+    void set_deploy_state(ObjectId id, uint8_t walk_state);
     bool spread_out(ObjectId id) const;  // SPREAD_OUT member flag obj +0x448 (default idle: Idle Crouch)
     size_t mine_count() const { return mines_.size(); }
     // REMAINING_GAPS §5.2: DEPLOY_TROOPERS behaviour data +0x40 (troopers deployed so far) and the trooper list +0x10
@@ -487,6 +541,25 @@ private:
         // ---- REMAINING_GAPS §5 ----
         int32_t troopers_deployed = 0;  // §5.2 DEPLOY_TROOPERS behaviour data +0x40
         std::vector<ObjectId> troopers; // §5.2 trooper list +0x10 (bound ids)
+        // ---- OI follow-up t01 (§4.14 [port]): the clip the ability system last started in the owner's primary slot, on
+        // sim frames (no playing clock is read). anim_type -1 = none (no play yet, or none with clip data).
+        int32_t anim_type = -1;
+        uint32_t anim_start = 0;  // frame of the play (the clip does not move in that frame)
+        float anim_rate = 1.0f;   // clip frames per sim frame: fps / 30 x speed
+        float anim_end = 0.0f;    // max(count - 2, 0): where a one-shot finishes
+        uint8_t anim_loop = 0;
+        uint8_t anim_then = 0;    // after a one-shot finishes: kAnimStay / kAnimIdle / kAnimHoldLoop
+        uint8_t lock_flags = 0;   // OI follow-up t04: which 0x3a8e50 pairs hold a lock (kLock*)
+    };
+    static constexpr uint8_t kAnimStay = 0;      // parks at its end (Super_Laser)
+    static constexpr uint8_t kAnimIdle = 1;      // the owner returns to idle: the record ends
+    static constexpr uint8_t kAnimHoldLoop = 2;  // begin -> hold: animation type + 1 loops (FB / FTK / Force_Revel)
+    static constexpr uint8_t kLockGrenade = 1, kLockDeploy = 2, kLockSelfDestruct = 4, kLockConfuse = 8;
+    static constexpr uint8_t kLockRemoteBomb = 16;  // S8 t06: the Remote_Bomb toss (LOB_SOLVER §3.5)
+    // The owner's primary slot as of the advance of `frame` (type -1 = none: every gate passes).
+    struct AnimView {
+        int32_t type = -1;
+        bool finished = false;
     };
     struct RemoteBomb {  // Remote_Bomb_Ability bombs waiting for DETONATE_REMOTE_BOMB (0x280ec0)
         int32_t player;
@@ -619,9 +692,37 @@ private:
     bool class_apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp, uint32_t frame);
     void class_update(Obj& o, SpecialState& sp, uint32_t frame);
     void class_remove(Obj& o, SpecialState& sp, uint32_t frame);
+    // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range object (the target's garrison host when garrisoned), the toss 0x71a200
+    // (true = a bomb spawned) and its launch point (garrison gun bones within 60°, Spawn_Bone, else position + z adjust).
+    ObjectId remote_bomb_range_target(ObjectId target) const;
+    bool remote_bomb_toss(Obj& o, const SpecialAbilityDesc& s, ObjectId target, uint32_t frame);
+    Vec3 remote_bomb_launch(Obj& o, const SpecialAbilityDesc& s, ObjectId target);
     bool range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;
     void heal_pass(Obj& o, const SpecialAbilityDesc& s, uint32_t frame);
     uint32_t wave_victims(Obj& o, SpecialState& sp, float radius, std::vector<ObjectId>& out);
+    // OI t03: an animation's timing on sim frames (§4.13). rate = clip frames per sim frame at speed 1 (clip fps / 30,
+    // the sim animation's clock); count = clip frames, end = max(count - 2, 0) (where a one-shot finishes); count = 0:
+    // no clip (rate 1, the fixed fallbacks).
+    struct ClipTiming {
+        float rate = 1.0f;
+        float count = 0.0f;
+        float end = 0.0f;
+    };
+    ClipTiming clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name, uint32_t variant = 0) const;
+    // OI follow-up t01 (§4.14 [port]): start a clip in the owner's record (type < 0: resolve `anim_name`). Without clip
+    // data nothing changes (as the original play returns 0 for a missing clip). No synced draw: variant 0 unless given.
+    void play_anim(Obj& o, int32_t type, std::string_view anim_name, uint32_t variant, bool loop, float speed, uint8_t then,
+                   uint32_t frame);
+    AnimView anim_view(const Obj& o, uint32_t frame) const;
+    // Apply gates read the previous frame's advance (Object Service advances the model before the SAP update).
+    AnimView anim_before(const Obj& o, uint32_t frame) const { return anim_view(o, frame > 0 ? frame - 1 : 0); }
+    int32_t anim_type_of(std::string_view anim_name) const;
+    bool anim_busy(const Obj& o, uint32_t frame) const;  // 0x39a350
+    bool class_state(const Obj& o, SpecialClass cls) const;  // a special of that class is applied on the owner
+    bool class_has(const Obj& o, SpecialClass cls) const;    // the owner lists a special of that class
+    bool locked(const Obj& o) const;  // 0x39ad40: this system's share or the host's (script lock, forced move)
+    void snap_face(Obj& o, ObjectId target);  // S8 t10: 0x20acd0 + 0x3a8710 at a thrown ability's apply (LOB_SOLVER §3.5)
+    void lock_pair(Obj& o, uint8_t flag, bool lock, uint32_t frame);  // a 0x3a8e50 lock / unlock pair of one caller
     void lightning_targets(Obj& o, const SpecialAbilityDesc& s, ObjectId primary, std::vector<ObjectId>& out);
 
     AbilityHost host_;

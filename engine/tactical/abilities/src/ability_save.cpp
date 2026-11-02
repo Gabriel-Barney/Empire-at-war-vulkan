@@ -9,7 +9,8 @@
 //   u32 + objects (ascending id): ids / desc / owner / container / flags, members, the 77 slot records (i16) and
 //         active / autofire / behaviour bytes, the countdown (77 x counter, maximum, phase + last update), pending
 //         ability, host-fed stamps, state bytes, the ion / lucky shot slots, special-ability states (with their victim
-//         lists), OI behaviour state, the autofire map and the trooper list
+//         lists), OI behaviour state, the autofire map and the trooper list;
+//         version 2 adds the animation record (i32 type, u32 start, f32 rate, f32 end, u8 loop / then) and the u8 lock pairs
 //   u32 + spawn requests, mines, Battlefield_Modifier player entries, interdict / retreat / weatherproof entries,
 //   remote bombs, events, player overrides, type overrides; u32 + stealth bonus per player; u32 + per-player
 //   black-market lists (not hashed, but read by the gates)
@@ -33,7 +34,7 @@ namespace alamo::tactical::abilities {
 
 namespace {
 
-constexpr uint32_t kAbilitySaveVersion = 1;
+constexpr uint32_t kAbilitySaveVersion = 2;  // 2: OI follow-up animation record + lock pairs (1 still reads)
 constexpr uint32_t kSpecialWeaponSaveVersion = 1;
 constexpr uint32_t kSpaceFieldSaveVersion = 1;
 
@@ -110,6 +111,7 @@ void AbilitySystem::write(ByteWriter& w) const {
         w.u8(o.deployed).u8(o.spread).u8(o.self_destruct).u8(o.confused).u8(o.barrage).u8(o.stunned);
         w.u32(o.confuse_end).i32(o.barrage_dummy).u8(o.pending_direct).i32(o.troopers_deployed);
         put_ids(w, o.troopers);
+        w.i32(o.anim_type).u32(o.anim_start).f32(o.anim_rate).f32(o.anim_end).u8(o.anim_loop).u8(o.anim_then).u8(o.lock_flags);
     }
 
     w.u32(static_cast<uint32_t>(spawns_.size()));
@@ -151,7 +153,8 @@ void AbilitySystem::write(ByteWriter& w) const {
 }
 
 bool AbilitySystem::read(ByteReader& r) {
-    if (r.u32() != kAbilitySaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (!r.ok() || version < 1 || version > kAbilitySaveVersion) return false;
     const uint32_t c_objects = r.u32(), c_specials = r.u32(), c_players = r.u32();
     if (!r.ok() || c_objects != data_->objects.size() || c_specials != data_->specials.size() ||
         c_players != combat_->player_count())
@@ -259,6 +262,15 @@ bool AbilitySystem::read(ByteReader& r) {
         o.pending_direct = r.u8();
         o.troopers_deployed = r.i32();
         if (!r.ok() || !get_ids(r, o.troopers)) return false;
+        if (version >= 2) {
+            o.anim_type = r.i32();
+            o.anim_start = r.u32();
+            o.anim_rate = r.f32();
+            o.anim_end = r.f32();
+            o.anim_loop = r.u8();
+            o.anim_then = r.u8();
+            o.lock_flags = r.u8();
+        }
     }
 
     if (!get_count(r, n, 51)) return false;
@@ -325,7 +337,7 @@ bool AbilitySystem::read(ByteReader& r) {
         e.frame = r.u32();
         e.point = get_vec3(r);
         e.value = r.i32();
-        if (!r.ok() || kind > static_cast<uint8_t>(AbilityEventKind::RemoveSilently)) return false;
+        if (!r.ok() || kind > static_cast<uint8_t>(AbilityEventKind::MarkerTossed)) return false;
         e.kind = static_cast<AbilityEventKind>(kind);
     }
     if (!get_count(r, n, 9)) return false;

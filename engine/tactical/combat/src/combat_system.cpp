@@ -17,6 +17,11 @@ namespace {
 constexpr uint32_t kUnitRemoved = 1u << 31;  // internal: host removal (no death event)
 constexpr float kRadToDeg = 57.295779513082320876f;
 constexpr int32_t kBurningInterval = 30;  // OI abilities: BurningBehavior vtable +0x28 (TACTICAL_GAPS §1.8)
+constexpr int32_t kAbilityRocketAttack = 11;    // S8 t08: UnitAbilityType ROCKET_ATTACK (0x39b950(obj, 11))
+// S8 t08: Mod_Flag WEAPONS_ENABLED_FLAG (0x397f60(obj, 1); S8 t11: enum table 0x140a434a0 index 1 [H]).
+constexpr uint8_t kFlagWeaponsEnabled = 1;
+constexpr uint32_t kNoService = 0xFFFFFFFFu;    // S7 t15 A2: Unit::weapon_last of an older save, never serviced (= 0)
+constexpr float kGarrisonGunHalfAngle = 60.0f;  // S8 t10: Spawn_Projectile garrison pick, |bone yaw - target yaw|
 const PlayerInfo kDefaultPlayer{};
 
 Vec3 normalize(Vec3 v) {
@@ -221,11 +226,11 @@ bool CombatSystem::add_unit(const UnitSpawn& s, uint32_t frame, SimRng& rng) {
         nu.emitter_entries = (ms ? 1u : 0u) + (ud.passive_missile_shield_radius > 0.0f ? 1u : 0u);
     }
     if (ud.weapon_projectile >= 0) {
-        // WeaponBehavior reset at creation [L]: one synced Get_Int(0, 10).
-        const Recharge r = weapon_reset(ud.weapon_recharge, ud.weapon_pulse_count, weapon_delay(nu, nullptr),
-                                        fire_rate(nu), cfg_.fps, rng);
-        nu.weapon_cooldown = r.frames;
-        nu.weapon_pulses = r.pulses;
+        // S8 t12 (TACTICAL_COMBAT §3.1.1 "First service after spawn" / "Cooldowns"): the attach vf9 0x54c210 sets the initial
+        // delay TD +0x24 = Get_Int(0, int(FPS x Projectile_Fire_Recharge_Seconds)), one synced draw (was a weapon_reset
+        // stand-in [L]). [M] The pulse count before the first shot: Projectile_Fire_Pulse_Count (the step-7 reset value).
+        nu.weapon_cooldown = hp_first_cooldown(ud.weapon_recharge, cfg_.fps, rng);
+        nu.weapon_pulses = ud.weapon_pulse_count;
     }
     return true;
 }
@@ -288,14 +293,46 @@ bool CombatSystem::ability_active(ObjectId id, int slot) const {
 void CombatSystem::order_attack(ObjectId attacker, ObjectId target, int32_t hardpoint) {
     Unit* u = unit(attacker);
     if (!u) return;
-    u->ordered_target = target;
-    u->ordered_hp = hardpoint;
-    u->locked = 0;
-    u->aim_target = kNoObject;  // refixf t06: the order re-aims the hardpoints
-    u->aim_hp = -1;
-    u->auto_target = kNoObject;  // an order drops the auto target (0x565e50)
-    u->auto_hp = -1;
-    u->target_score = 0.0f;
+    auto order = [&](Unit& w) {
+        w.ordered_target = target;
+        w.ordered_hp = hardpoint;
+        w.locked = 0;
+        w.aim_target = kNoObject;  // refixf t06: the order re-aims the hardpoints
+        w.aim_hp = -1;
+        w.auto_target = kNoObject;  // an order drops the auto target (0x565e50)
+        w.auto_hp = -1;
+        w.target_score = 0.0f;
+    };
+    order(*u);
+    // S8 t17 (FIGHTER_FLYING §4.10 B writer 2, TACTICAL_COMBAT §2.8 C step 3): the set path writes the squadron's team
+    // target, so every member is ordered (index order = id order; the host's per-member orders make this idempotent).
+    if (u->share_group != kNoObject)
+        for (Unit& w : units_)
+            if (&w != u && w.share_group == u->share_group && !(w.flags & kUnitDead)) order(w);
+}
+void CombatSystem::set_share_group(ObjectId id, ObjectId group) {
+    if (Unit* u = unit(id)) u->share_group = group;
+}
+ObjectId CombatSystem::share_group(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? u->share_group : kNoObject;
+}
+void CombatSystem::share_target(const Unit& u, ObjectId t, float score) {
+    // 0x406370(team, t, hp): every member (team list, index order [port: id order]) Set_Target(t, hp, order 0, lock 0)
+    // [M: the scan's order flag 0x4061d0 read as 0]. [port] A member holding a live ordered target keeps it (the port keeps
+    // the ordered slot apart from the scan's); its auto slot is not touched.
+    const Unit* tu = unit(t);
+    if (!live(tu)) return;
+    for (Unit& w : units_) {
+        if (&w == &u || w.share_group != u.share_group || (w.flags & kUnitDead)) continue;
+        if (w.ordered_target != kNoObject && live(unit(w.ordered_target))) continue;
+        if (w.auto_target != t) w.auto_hp = choose_target_hardpoint(w, *tu);
+        w.auto_target = t;
+        w.target_score = score;
+        w.aim_target = kNoObject;
+        w.aim_hp = -1;
+        w.acquired = 1;
+    }
 }
 void CombatSystem::clear_order(ObjectId attacker) {
     if (Unit* u = unit(attacker)) {
@@ -324,6 +361,9 @@ bool CombatSystem::order_locked(ObjectId id) const {
     return u && u->ordered_target != kNoObject && u->locked != 0;
 }
 bool CombatSystem::ability_type_active(const Unit& u, int32_t type) const {
+    // S8 t11 (TACTICAL_COMBAT §3.1.1 "ROCKET_ATTACK detection"): 0x39b950 reads the per-type slot filled from every
+    // Unit_Abilities_Data entry; the host mirrors entries past slot 1 as kUnitRocketAttack.
+    if (type == kAbilityRocketAttack && (u.flags & kUnitRocketAttack)) return true;
     for (int s = 0; s < 2; ++s)
         if (const UnitAbilityDesc* a = ability(u, s); a && u.ability_active[static_cast<size_t>(s)] && a->ability_type == type) return true;
     return false;
@@ -519,12 +559,20 @@ bool CombatSystem::pick_aim_point(const Unit& u, const Hardpoint& h, const Unit&
                                   Vec3& out) const {
     // TACTICAL_COMBAT §2.9 Q2 step 3, 0x383f70 [H unless tagged]: candidates accepted when their 3D distance from the
     // fire-bone reference <= Get_Fire_Range (+ the target radius when the shooter type has a weapon list +0xc48) and the
-    // point passes the cone. [L] The type bone list (+0xe68, tag unknown) is not modelled. Then the hardpoints from a
-    // synced random start (one Get_Int(0, n - 1); [M] no draw without hardpoints), wrapping, skipping destroyable dead
-    // ones; then the object's position.
+    // point passes the cone. S8 t27 (§3.1.1 "Hardpoint aim for comparison"): first the target type's Target_Bones in
+    // list order (no draw); then the hardpoints from a synced random start (one Get_Int(0, n - 1); no draw without
+    // hardpoints), wrapping, skipping destroyable dead ones; last the position + Ranged_Target_Z_Adjust (0x398440).
+    // [port] Every unit has a "model instance" (retail: none -> position + z adjust, no draw).
     const UnitDesc& sd = desc_of(u);
     const float lim = range + ((sd.weapon_projectile >= 0 || !sd.weapon_projectiles.empty()) ? desc_of(t).radius : 0.0f);
     auto ok = [&](Vec3 p) { return distance3(ref, p) <= lim && in_cone(u, h, p); };
+    for (const Vec3& b : desc_of(t).target_bones) {
+        const Vec3 p = local_to_world(t, b);
+        if (ok(p)) {
+            out = p;
+            return true;
+        }
+    }
     if (t.hp_count > 0) {
         const auto start = static_cast<uint32_t>(rng.range_int(0, static_cast<int32_t>(t.hp_count) - 1));
         for (uint32_t k = 0; k < t.hp_count; ++k) {
@@ -537,11 +585,32 @@ bool CombatSystem::pick_aim_point(const Unit& u, const Hardpoint& h, const Unit&
             }
         }
     }
-    if (ok(t.pos)) {
-        out = t.pos;
+    if (const Vec3 p = lob_target_point(t); ok(p)) {
+        out = p;
         return true;
     }
     return false;
+}
+
+Vec3 CombatSystem::own_aim_point(const Unit& t, int32_t hp, SimRng& rng) const {
+    // S8 t27 (TACTICAL_COMBAT §3.1.1 "Own-weapon aim point", 0x54a270) [H]:
+    // 2. the shooter's target hardpoint (index != -1): its bone's world translation (0x396ce0); an index out of range or a
+    //    hardpoint whose type flag +0x4c is clear [M: read as Is_Targetable] -> the bare position (no z adjust);
+    // 3. else Target_Bones: one synced Get_Int(0, n - 1) (no draw for n = 1), that bone's world translation [port: rest
+    //    pose turned by the facing; every unit has a model instance, so the position + z adjust fallback never runs];
+    // 4. else the position + Ranged_Target_Z_Adjust (0x398440).
+    if (hp >= 0) {
+        if (static_cast<uint32_t>(hp) >= t.hp_count) return t.pos;
+        const HardpointDesc& hd = data_->hardpoints[hps_[t.hp_begin + static_cast<uint32_t>(hp)].desc];
+        return hd.targetable ? hp_world(t, hd) : t.pos;
+    }
+    const std::vector<Vec3>& bones = desc_of(t).target_bones;
+    if (!bones.empty()) {
+        const auto n = static_cast<int32_t>(bones.size());
+        const int32_t i = n > 1 ? rng.range_int(0, n - 1) : 0;
+        return local_to_world(t, bones[static_cast<size_t>(i)]);
+    }
+    return lob_target_point(t);
 }
 
 void CombatSystem::set_system_online(Unit& v, uint32_t index, bool online, bool destroyed, uint32_t frame) {
@@ -595,10 +664,9 @@ float CombatSystem::base_attack_range(const Unit& u) const {
         if (a && u.ability_active[static_cast<size_t>(s)] && a->range_override > 0.0f) return a->range_override;
     }
     const UnitDesc& ud = desc_of(u);
-    if (ud.weapon_projectile >= 0) {
-        const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(fired_weapon_projectile(u))];
-        if (pd.lobbed) return lob_range(pd.max_speed, pd.grenade_gravity > 0.0f ? pd.grenade_gravity : cfg_.grenade_gravity, pd.lob_mod);
-    }
+    // 0x3749d0 step 2 (LOB_SOLVER §4): a grenade weapon's range is Max_Speed^2 / (lob mod x gravity) [port: 0 for G <= 0];
+    // Targeting_Max_Attack_Distance is not read. Scan box / approach only - acceptance is the solver (slot 44).
+    if (const ProjectileDesc* gw = grenade_weapon(u)) return lob_range(gw->max_speed, gw->grenade_gravity, gw->lob_mod);
     // Deployed / garrisoned multipliers and the transport contribution are not modelled [M].
     return ud.max_attack_distance;
 }
@@ -633,19 +701,64 @@ Vec3 CombatSystem::lead_point(const Unit& t, Vec3 muzzle, Vec3 aim0, float proje
     return circular_lead(muzzle, t.prev_pos, t.last_pos, t.pos, aim0 - t.pos, projectile_speed, cfg_.fps);
 }
 
-float CombatSystem::lob_gravity(const ProjectileDesc& pd) const {
-    if (!pd.lobbed && pd.category != ProjectileCategory::Grenade) return 0.0f;
-    const float g = (pd.grenade_gravity > 0.0f ? pd.grenade_gravity : cfg_.grenade_gravity) * pd.lob_mod;
-    return g > 0.0f ? g : 0.0f;
+const ProjectileDesc* CombatSystem::grenade_weapon(const Unit& u) const {
+    if (desc_of(u).weapon_projectile < 0) return nullptr;
+    const int32_t p = fired_weapon_projectile(u);
+    if (p < 0 || static_cast<size_t>(p) >= data_->projectiles.size()) return nullptr;
+    const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(p)];
+    return grenade(pd) ? &pd : nullptr;
+}
+
+bool CombatSystem::lob_in_range(const Unit& a, const ProjectileDesc& pd, const Unit& t) const {
+    // Slot 44 0x567b40 (LOB_SOLVER §3.1): Lob_Solve(attacker position, candidate position + Ranged_Target_Z_Adjust). The
+    // yes / no answer does not depend on Can_Lob_Slower (§2.3), so one pass at Max_Speed decides it.
+    LobSolution s;
+    return lob_solve(a.pos, lob_target_point(t), pd.max_speed, lob_g(pd), false, s);
+}
+
+Vec3 CombatSystem::lob_target_point(const Unit& t) const {
+    return Vec3{t.pos.x, t.pos.y, t.pos.z + desc_of(t).ranged_target_z_adjust};  // 0x398440
+}
+
+const CombatSystem::Unit& CombatSystem::lob_member(const Unit& t, Vec3 from) const {
+    const Unit* best = nullptr;
+    float best_d2 = 0.0f;
+    for (const Unit& m : units_) {  // ascending id: the first of equally near members wins
+        if (&m == &t || !live(&m) || m.team == 0 || m.team != static_cast<uint32_t>(t.id)) continue;
+        const float d2 = distance2_xy(from, m.pos);
+        if (!best || d2 < best_d2) {
+            best = &m;
+            best_d2 = d2;
+        }
+    }
+    return best ? *best : t;
+}
+
+Vec3 CombatSystem::target_point(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? lob_target_point(*u) : Vec3{};
+}
+
+bool CombatSystem::lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolution* out) const {
+    if (projectile >= data_->projectiles.size()) return false;
+    const ProjectileDesc& pd = data_->projectiles[projectile];
+    if (!grenade(pd)) return false;  // 0x54a6f0 returns false at once for any other category
+    LobSolution s;
+    const bool ok = lob_solve(from, to, pd.max_speed, lob_g(pd), pd.can_lob_slower, s);
+    if (ok && out) *out = s;
+    return ok;
 }
 
 float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
     // TACTICAL_GAPS 3.1 slot 43 E (no LAND_OBSTACLE): |dot(target facing, line of sight)| > 0.7071 -> the X extent, else
-    // the Y extent (Custom_Hard_X/YExtent x Scale_Factor). [port] Without a hard extent: the target radius (the sim has
-    // no model bounding boxes). The +10 for a moving team and the melee redirect apply to team-container targets, which
-    // the port never has (candidates are units / members); the LAND_OBSTACLE walk is range_geometry.
+    // the Y extent. A1j t04 (0x371e70 / 0x372040): per axis Custom_Hard_X/YExtent x Scale_Factor, else |model bbox
+    // max.x / max.y| x Scale_Factor (model_x / y_extent); [port] the radius only when the host gave no model data. The
+    // +10 for a moving team and the melee redirect apply to team-container targets, which the port never has
+    // (candidates are units / members); the LAND_OBSTACLE walk is range_geometry.
     const UnitDesc& td = desc_of(t);
-    if (!(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f)) return td.radius;
+    const float ex = td.hard_x_extent > 0.0f ? td.hard_x_extent : td.model_x_extent >= 0.0f ? td.model_x_extent : td.radius;
+    const float ey = td.hard_y_extent > 0.0f ? td.hard_y_extent : td.model_y_extent >= 0.0f ? td.model_y_extent : td.radius;
+    if (!(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f) && td.model_x_extent < 0.0f) return td.radius;
     float dx = t.pos.x - from.x, dy = t.pos.y - from.y;
     const float l2 = dx * dx + dy * dy;
     if (!(l2 > 0.0f)) return 0.0f;  // zero offset counts as in range
@@ -662,9 +775,7 @@ float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
         fx = 1.0f;
         fy = 0.0f;
     }
-    const float x = td.hard_x_extent > 0.0f ? td.hard_x_extent : td.radius;
-    const float y = td.hard_y_extent > 0.0f ? td.hard_y_extent : td.radius;
-    return abs_f(fx * dx + fy * dy) > 0.7071f ? x : y;
+    return abs_f(fx * dx + fy * dy) > 0.7071f ? ex : ey;
 }
 
 const CombatSystem::Unit* CombatSystem::team_head(const Unit& u) const {
@@ -774,7 +885,8 @@ bool CombatSystem::in_cone(const Unit& a, const Hardpoint& h, Vec3 aim) const {
 void CombatSystem::range_geometry(const Unit& t, Vec3 from, float& d, float& E) const {
     // TACTICAL_GAPS 3.1 slot 43. With LAND_OBSTACLE (obj +0x346 != 0xFF): the aim point starts at the target, steps back
     // toward the attacker in 20-unit steps while its passability cell is occupied by the target (0x59efa0), snaps to
-    // the cell grid (the cell centre), E = sqrt(200). [port] the walk stops once it has passed the attacker.
+    // the cell grid (the cell centre), E = sqrt(200). [port] the walk stops once it has passed the attacker; a target
+    // the host reports without a footprint (ObstacleCell::NoFootprint: not stamped) keeps the half-extent rule.
     if (desc_of(t).land_obstacle && obstacle_cell_) {
         float dx = from.x - t.pos.x, dy = from.y - t.pos.y;
         const float l2 = dx * dx + dy * dy;
@@ -783,19 +895,22 @@ void CombatSystem::range_geometry(const Unit& t, Vec3 from, float& d, float& E) 
             E = 0.0f;
             return;
         }
-        const float len = dmath::sqrt(l2);
-        dx = dx / len;
-        dy = dy / len;
         Vec3 aim = t.pos;
         Vec3 centre = aim;
-        for (float walked = 0.0f; obstacle_cell_(t.id, aim, centre) && walked <= len; walked = walked + 20.0f) {
-            aim.x = aim.x + dx * 20.0f;
-            aim.y = aim.y + dy * 20.0f;
+        ObstacleCell cell = obstacle_cell_(t.id, aim, centre);
+        if (cell != ObstacleCell::NoFootprint) {
+            const float len = dmath::sqrt(l2);
+            dx = dx / len;
+            dy = dy / len;
+            for (float walked = 0.0f; cell == ObstacleCell::Occupied && walked <= len; walked = walked + 20.0f) {
+                aim.x = aim.x + dx * 20.0f;
+                aim.y = aim.y + dy * 20.0f;
+                cell = obstacle_cell_(t.id, aim, centre);  // writes the cell centre of the new aim point
+            }
+            d = distance_xy(from, centre);
+            E = 14.142136f;  // sqrt(200)
+            return;
         }
-        obstacle_cell_(t.id, aim, centre);  // the final cell's centre
-        d = distance_xy(from, centre);
-        E = 14.142136f;  // sqrt(200)
-        return;
     }
     d = distance_xy(from, t.pos);
     E = target_extent(t, from);
@@ -832,26 +947,32 @@ bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const
         return false;  // 5
     if (ad.attack_category_restrictions & td.category_mask) return false;  // 6
     // 7: the attacker OR ITS SQUAD LEADER (OI tactical team targeting) has a non-hardpoint weapon or a weapon
-    // hardpoint allowed to fire at the target.
+    // hardpoint allowed to fire at the target (S8 t08: Does_Weapon_State_Allow_Firing_At 0x384850 in full).
     const Unit* head = team_head(a);
     auto has_weapon = [&](const Unit& s) {
         if (desc_of(s).weapon_projectile >= 0) return true;
-        for (uint32_t i = 0; i < s.hp_count; ++i) {
-            const Hardpoint& h = hps_[s.hp_begin + i];
-            const HardpointDesc& hd = data_->hardpoints[h.desc];
-            if (!hp_out(h) && is_weapon(hd.kind) && !(hd.fire_category_restrictions & td.category_mask)) return true;
-        }
+        for (uint32_t i = 0; i < s.hp_count; ++i)
+            if (hp_state_allows(s, hps_[s.hp_begin + i], &t)) return true;
         return false;
     };
     if (!has_weapon(a) && !(head && has_weapon(*head))) return false;
     // 9: range acceptance (OI tactical, TACTICAL_GAPS 3.1): slot 44 "in max range" = XY distance <= R + E and NOT slot
     // 45 "inside min range" (d <= Targeting_Min_Attack_Distance + E, types with a min distance only); E = the target's
     // footprint half-extent along the line of sight. OR the target is the container's (squad head's) current target
-    // (team targeting, filter 9 [H]).
+    // (team targeting, filter 9 [H]). S8 t04 (LOB_SOLVER §3.1): a grenade weapon's slot 44 is the lob solver alone (no R,
+    // E, FireRange modifier or LAND_OBSTACLE walk); slot 45 is unchanged.
+    const ProjectileDesc* gw = grenade_weapon(a);
     float d = 0.0f, E = 0.0f;
-    range_geometry(t, a.pos, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
+    if (!gw || ad.min_attack_distance > 0.0f) range_geometry(t, a.pos, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
     const bool head_target = head && current_target(head->id) == t.id;
-    if (!(d <= range + E) && !head_target) return false;
+    const bool in_max = gw ? lob_in_range(a, *gw, t) : d <= range + E;
+    // S8 t17 (FIGHTER_FLYING §4.10 A, last paragraph): beyond R, a formation unit also accepts c when 0x4160a0(F, u, c)
+    // != 0 (the formation's response range).
+    const auto responds = [&] {
+        float rr = 0.0f;
+        return (a.flags & kUnitScanQuery) && scan_range_ && scan_range_(a.id, t.id, range, rr) != 0;
+    };
+    if (!in_max && !head_target && !responds()) return false;
     if (ad.min_attack_distance > 0.0f && d <= ad.min_attack_distance + E && !head_target) return false;
     // 10: stealth
     if ((t.flags & kUnitStealthed) && !ad.target_stealth_units && a.owner != t.owner) return false;
@@ -896,7 +1017,14 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
         if (valid && (u.target_score == 1.0f || sticky(u, *cur, frame_))) return;
     }
     u.needs_scan = 1;
-    const Aabb box{{u.pos.x - range, u.pos.y - range, u.pos.z - range}, {u.pos.x + range, u.pos.y + range, u.pos.z + range}};
+    // S8 t17: Get_Scan_Range 0x566f50 (FIGHTER_FLYING §4.10 A) - R + Rr while the unit's formation answers 0x4160a0(F, u,
+    // none) != 0, else R ([port] the land "R with a TURRET slot, else 0" branch needs a land formation: none in the port).
+    float half = range;
+    if ((u.flags & kUnitScanQuery) && scan_range_) {
+        float rr = 0.0f;
+        if (scan_range_(u.id, kNoObject, range, rr) != 0 && rr > 0.0f) half = range + rr;
+    }
+    const Aabb box{{u.pos.x - half, u.pos.y - half, u.pos.z - half}, {u.pos.x + half, u.pos.y + half, u.pos.z + half}};
     const auto np = static_cast<int32_t>(std::min<uint32_t>(player_count(), trees_->player_count()));
     for (int32_t p = 0; p < np; ++p) {
         if (!is_enemy(u.owner, p) || !players_[static_cast<size_t>(p)].active) continue;
@@ -942,8 +1070,12 @@ bool CombatSystem::promote_goal(Unit& u) {
     if (!desc_of(*t).is_valid_target) return false;
     float d = 0.0f, E = 0.0f;
     range_geometry(*t, u.pos, d, E);
-    const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
-    if (!(d <= range + E)) return false;  // slot 44
+    if (const ProjectileDesc* gw = grenade_weapon(u)) {
+        if (!lob_in_range(u, *gw, *t)) return false;  // slot 44, grenade weapon (S8 t04: LOB_SOLVER §3.1)
+    } else {
+        const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
+        if (!(d <= range + E)) return false;  // slot 44
+    }
     const float mn = desc_of(u).min_attack_distance;
     if (mn > 0.0f && d <= mn + E) return false;  // slot 45
     int32_t hp = -1;
@@ -1037,6 +1169,10 @@ void CombatSystem::decide_target(Unit& u, std::vector<Candidate>& cands, uint32_
     }
 done:
     if (best) {
+        // S8 t17 (FIGHTER_FLYING §4.10 B, writer 1): a squadron member whose own target is empty when its due scan picks
+        // sets the team target 0x406370 - every member's Set_Target. A member that had a target (keep / switch) sets only
+        // its own.
+        const bool team_pick = u.share_group != kNoObject && u.auto_target == kNoObject;
         // §2.9 Q3: Set_Target fixes the target hardpoint (Choose_Target_Hardpoint); the same target is not re-set.
         if (best->id != u.auto_target) {
             const Unit* bt = unit(best->id);
@@ -1047,6 +1183,7 @@ done:
         u.aim_target = kNoObject;  // refixf t06: Order_Attack(unit, pick, ordered 0) re-aims the hardpoints (§2.8 C)
         u.aim_hp = -1;
         u.acquired = 1;  // OI abilities: Issue_Auto_Target for the acquired target (the autofire driver, abilities)
+        if (team_pick) share_target(u, best->id, best->score);
     } else {
         u.auto_target = kNoObject;
         u.auto_hp = -1;
@@ -1136,7 +1273,7 @@ ObjectId CombatSystem::current_target(ObjectId id) const {
     return u->auto_target;
 }
 
-void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
+void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng, bool suspended) {
     ObjectId tgt = current_target(u.id);
     // refixf t06 (TACTICAL_COMBAT §2.8 C step 2): a path-A aim holds the weapon hardpoints until the next scan pick, a lock
     // or another order replaces it [port: kept while the aimed object is a live enemy].
@@ -1160,21 +1297,182 @@ void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
             sub = fixed;
     }
     const bool idle = !live(t);
+    // S8 t08 (TACTICAL_COMBAT §3.1.1 "Cooldowns"): the WEAPON behaviour (own weapon) runs in the behaviour pass, before the
+    // hardpoint updates; the two sources keep separate cooldowns. Its gate 0x54c910 (global switch included) is tested
+    // inside, after the cooldown has elapsed.
+    // S8 t12 (MOVEMENT §3.2): a locomotor swap suspends TARGETING / WEAPON / SPECIAL_WEAPON only - the own weapon is not
+    // serviced and no target is pushed; the hardpoints keep counting down and firing at their last target.
+    if (desc_of(u).weapon_projectile >= 0 && !suspended) fire_unit_weapon(u, frame, rng);
+    // S8 t26: LOBBING_SUPERWEAPON's service follows WEAPON's (vanilla LandBehavior list order): a charge completed here
+    // fires on the next WEAPON service.
+    if (desc_of(u).lobbing_superweapon) lobbing_service(u, frame);
+    const bool transition = deploy_transition(u);
     for (uint32_t i = 0; i < u.hp_count; ++i) {
         Hardpoint& h = hps_[u.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
         if (!is_weapon(hd.kind)) continue;
-        h.target = tgt;  // HP_Set_Target: owner's target + chosen sub-hardpoint
-        h.target_hp = sub;
-        // Update_Weapon (0x387400): gates, then the cooldown countdown, then Fire_At.
-        if (!cfg_.weapons_enabled || hp_out(h)) continue;
+        if (!suspended) {
+            h.target = tgt;  // HP_Set_Target: owner's target + chosen sub-hardpoint
+            h.target_hp = sub;
+        }
+        // Update_Weapon (0x387400): gates (S8 t08: none in a deploy transition), then the cooldown countdown, then the
+        // weapon-state gate 0x384850 against the primary target (a refusal skips Fire_At and opportunity fire), Fire_At.
+        if (!cfg_.weapons_enabled || hp_out(h) || transition) continue;
         h.cooldown -= 1;
         if (h.cooldown > 0) continue;
+        const Unit* ht = unit(h.target);  // the primary target (+0x40)
+        if (!hp_state_allows(u, h, live(ht) ? ht : nullptr)) continue;
         if (fire_hardpoint(u, h, frame, rng)) continue;
         // Opportunity fire (TACTICAL_COMBAT 2.6, S9): no shot at the owner's target.
         if (cfg_.opportunity_fire && opportunity_allowed(u, hd, idle)) opportunity_fire(u, h, frame, rng);
     }
-    if (desc_of(u).weapon_projectile >= 0 && cfg_.weapons_enabled) fire_unit_weapon(u, frame, rng);
+}
+
+bool CombatSystem::deployed_or_deploying(const Unit& u) const {
+    // 0x39a390 (S9_DEATH_CLONE_SHIELDS §1.2): Deploys, a locomotor, and deploy pending / Deployed (kUnitDeploying). S8 t11
+    // (TACTICAL_COMBAT §3.1.1 "Step 3 correction"): the walk locomotor's vf +0x120 is state == 0x19 only, so Deploying
+    // (0x18) and Undeploying (0x1A) - kUnitDeployTransition - do not count (vanilla never sets the pending flag).
+    const UnitDesc& ud = desc_of(u);
+    return ud.deploys && ud.has_locomotor && (u.flags & kUnitDeploying) != 0 && (u.flags & kUnitDeployTransition) == 0;
+}
+
+bool CombatSystem::deploy_transition(const Unit& u) const {
+    const UnitDesc& ud = desc_of(u);
+    return ud.deploys && ud.has_locomotor && (u.flags & kUnitDeployTransition) != 0;
+}
+
+bool CombatSystem::unit_weapon_allowed(const Unit& u) const {
+    // Own-weapon gate 0x54c910 (TACTICAL_COMBAT §3.1.1 with "Gate details"), steps 1-6 in order (step 7, the targeting
+    // state, is in fire_unit_weapon: its refusal also restarts the burst): 1 the global weapons switch (the behaviour is
+    // enabled: a suspended one is not serviced at all); 2 no deploy transition; 3 deployed (pending / state 0x19) ->
+    // Fire_Weapon_When_Deployed, else _Undeployed; 4 ROCKET_ATTACK (11) active in any Unit_Abilities_Data entry ->
+    // Fire_Weapon_When_In_Rocket_Attack_Mode, else _In_Normal_Attack_Mode; 5 0x397f60(obj, 1): WEAPONS_ENABLED_FLAG ANDed
+    // over the active modes of entries 0 / 1 (default 1: vanilla never refuses); 6 locomotor state 0x1C (fighter Idle)
+    // without Can_Fighter_Fire_When_Idle, or state 0x16 on a locomotor whose vf +0x240 is true (host flags).
+    if (!cfg_.weapons_enabled || deploy_transition(u)) return false;
+    const UnitDesc& ud = desc_of(u);
+    if (!(deployed_or_deploying(u) ? ud.fire_weapon_when_deployed : ud.fire_weapon_when_undeployed)) return false;
+    if (!(ability_type_active(u, kAbilityRocketAttack) ? ud.fire_weapon_when_rocket_attack : ud.fire_weapon_when_normal_attack))
+        return false;
+    const UnitAbilityDesc* ab[2] = {ability(u, 0), ability(u, 1)};
+    const bool act[2] = {u.ability_active[0] != 0, u.ability_active[1] != 0};
+    if (!ability_flag(ab, act, kFlagWeaponsEnabled)) return false;
+    if ((u.flags & kUnitFighterIdle) && !ud.can_fighter_fire_when_idle) return false;
+    return (u.flags & kUnitHoverRest) == 0;
+}
+
+bool CombatSystem::target_state_attacking(const Unit& u, const Unit& t) const {
+    // TD +0x18 == 4 (TACTICAL_COMBAT §3.1.1 "Gate details" step 7, LOB_SOLVER §8 item 22): Service_Land / _Space test the
+    // current target every targeting service with slot 44 (In_Max_Range: XY distance <= R + E with the LAND_OBSTACLE aim
+    // walk; for a grenade weapon the lob solver alone, LOB_SOLVER §3.1) and !slot 45 (d <= Targeting_Min_Attack_Distance
+    // + E). The targeting interval is 1, so the port evaluates it at the weapon service. [port] State 3 (slot 48: turret /
+    // facing not yet on the target) is not modelled; a team member uses its own position (the TeamTargeting copy of the
+    // container's state is not modelled).
+    const UnitDesc& ud = desc_of(u);
+    const ProjectileDesc* gw = grenade_weapon(u);
+    float d = 0.0f, E = 0.0f;
+    if (!gw || ud.min_attack_distance > 0.0f) range_geometry(t, u.pos, d, E);
+    if (gw) {
+        if (!lob_in_range(u, *gw, t)) return false;
+    } else {
+        const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
+        if (!(d <= range + E)) return false;
+    }
+    return !(ud.min_attack_distance > 0.0f && d <= ud.min_attack_distance + E);
+}
+
+bool CombatSystem::attacking(ObjectId id) const {
+    const Unit* u = unit(id);
+    if (!live(u)) return false;
+    const Unit* t = unit(current_target(id));
+    return live(t) && target_state_attacking(*u, *t);
+}
+
+int32_t CombatSystem::model_alt_of(const Unit& u) const {
+    // TACTICAL_GAPS §6.3 (0x3ac290): every Land_Damage_Thresholds pair whose threshold >= the hull fraction sets the ALT
+    // (the last match wins), default 0.
+    const float mh = unit_max_hull(u);
+    const float f = mh > 0.0f ? u.health / mh : 0.0f;
+    int32_t alt = 0;
+    for (const auto& [threshold, a] : desc_of(u).damage_alternates)
+        if (f <= threshold) alt = a;
+    return alt;
+}
+
+int32_t CombatSystem::model_alt(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? model_alt_of(*u) : 0;
+}
+
+bool CombatSystem::garrison_fire_bones(ObjectId host, Vec3& host_pos, std::vector<Vec3>& bones) const {
+    bones.clear();
+    const Unit* h = unit(host);
+    if (!live(h)) return false;
+    const UnitDesc& hd = desc_of(*h);
+    const int32_t alt = model_alt_of(*h);
+    if (hd.num_garrison_guns == 0 || alt < 0 || static_cast<size_t>(alt) >= hd.garrison_bones.size()) return false;
+    host_pos = h->pos;
+    for (const GarrisonBone& b : hd.garrison_bones[static_cast<size_t>(alt)])
+        if (b.valid) bones.push_back(local_to_world(*h, b.pos));
+    return !bones.empty();
+}
+
+bool CombatSystem::garrison_muzzle(const Unit& u, Vec3 target, SimRng& rng, Vec3& out) const {
+    // Spawn_Projectile 0x54ade0 garrison branch (LOB_SOLVER §5.1 "Garrison fire bones in detail") [H]: the shooter is
+    // garrisoned (obj +0x3a7); host = its parent (the grandparent for a team member: the host query's answer); the host
+    // type's Num_Garrison_Guns != 0, the host model's ALT in 0..M-1 (jge) and a non-empty entry. Candidates: the bones with a
+    // transform whose x-axis yaw lies within 60 degrees of the yaw from the host's position to the target (difference
+    // wrapped to +-180). n >= 2 -> one synced Get_Int(0, n - 1); n = 1 -> no draw; n = 0 or a failed gate -> false (the
+    // shooter's own muzzle bone). [port] Bind-pose bones turned by the host's facing; "within" = |difference| <= 60.
+    if (!(u.flags & kUnitGarrisoned) || !garrison_host_) return false;
+    const Unit* h = unit(garrison_host_(u.id));
+    if (!live(h)) return false;
+    const UnitDesc& hd = desc_of(*h);
+    const int32_t alt = model_alt_of(*h);
+    if (hd.num_garrison_guns == 0 || alt < 0 || static_cast<size_t>(alt) >= hd.garrison_bones.size()) return false;
+    const std::vector<GarrisonBone>& entry = hd.garrison_bones[static_cast<size_t>(alt)];
+    const float to_target = dmath::atan2(target.y - h->pos.y, target.x - h->pos.x) * kRadToDeg;
+    const float host_yaw = dmath::atan2(h->facing.y, h->facing.x) * kRadToDeg;
+    auto within = [&](const GarrisonBone& b) {
+        return b.valid && abs_f(wrap_deg(b.yaw_deg + host_yaw - to_target)) <= kGarrisonGunHalfAngle;
+    };
+    int32_t n = 0;
+    for (const GarrisonBone& b : entry) n += within(b) ? 1 : 0;
+    if (n == 0) return false;
+    int32_t k = n >= 2 ? rng.range_int(0, n - 1) : 0;  // one synced draw for two or more candidates
+    for (const GarrisonBone& b : entry) {
+        if (!within(b) || k-- != 0) continue;
+        out = local_to_world(*h, b.pos);
+        return true;
+    }
+    return false;
+}
+
+bool CombatSystem::hp_state_allows(const Unit& u, const Hardpoint& h, const Unit* t) const {
+    // HardPointClass::Does_Weapon_State_Allow_Firing_At (0x384850, TACTICAL_COMBAT §3.1.1), in order: 1 a dead target is
+    // refused [port: no delete-pending / death-clone state]; 2 weapon types only, not destroyed / disabled; 3
+    // Fire_Category_Restrictions against the target; 4 each active unit-ability slot's mode m needs its Fire_When_In_<Mode>
+    // byte, and the WEAPONS_ENABLED flag must hold; 5 Fire_When_Deployed / _Undeployed; 6 Fire_When_In_Normal / Rocket_
+    // Attack_Mode. Read-only (also called by the parallel targeting filter 7).
+    const HardpointDesc& hd = data_->hardpoints[h.desc];
+    if (t && !live(t)) return false;
+    if (!is_weapon(hd.kind) || hp_out(h)) return false;
+    if (t && (hd.fire_category_restrictions & desc_of(*t).category_mask)) return false;
+    bool any_mode = false;
+    for (int s = 0; s < 2; ++s) {
+        const UnitAbilityDesc* a = ability(u, s);
+        if (!a || !u.ability_active[static_cast<size_t>(s)] || a->ability_type < 1 || a->ability_type > 0x4c) continue;
+        any_mode = true;
+        for (const uint8_t m : hd.no_fire_modes)
+            if (m == a->ability_type) return false;
+    }
+    if (any_mode) {
+        const UnitAbilityDesc* ab[2] = {ability(u, 0), ability(u, 1)};
+        const bool act[2] = {u.ability_active[0] != 0, u.ability_active[1] != 0};
+        if (!ability_flag(ab, act, kFlagWeaponsEnabled)) return false;
+    }
+    if (!(deployed_or_deploying(u) ? hd.fire_when_deployed : hd.fire_when_undeployed)) return false;
+    return ability_type_active(u, kAbilityRocketAttack) ? hd.fire_when_rocket_attack : hd.fire_when_normal_attack;
 }
 
 bool CombatSystem::opportunity_allowed(const Unit& /*u*/, const HardpointDesc& hd, bool idle) const {
@@ -1350,15 +1648,17 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
                     dd = e.distance;
                     break;
                 }
-            float spread = inaccuracy_spread(scale_inaccuracy(dd, f), dist, range);
-            if (ws != 1.0f) spread = spread * ws;
-            aim = aim + inaccuracy_offset(spread, rng);
+            // A1j t03 (0x381dc0, TACTICAL_COMBAT §3.1 step 10): the three draws are made only when the scaled distance,
+            // the XY distance and Get_Fire_Range are all > 0.
+            float ds = scale_inaccuracy(dd, f);
+            if (ws != 1.0f) ds = ds * ws;
+            if (ds > 0.0f && dist > 0.0f && range > 0.0f) aim = aim + inaccuracy_offset(inaccuracy_spread(ds, dist, range), rng);
         }
     }
     // 11. spawn (an override projectile keeps the hardpoint's damage / type overrides [M])
     const float damage = (hd.projectile_damage > 0.0f ? hd.projectile_damage : pd.damage) * dscale;
     const uint16_t dtype = hd.damage_type != kNoTypeId ? hd.damage_type : pd.damage_type;
-    spawn(u, pd, static_cast<uint32_t>(proj), damage, dtype, muzzle, aim, t, thp, range, frame);
+    spawn(u, pd, static_cast<uint32_t>(proj), damage, dtype, muzzle, aim, &t, thp, range, frame);
     if (pd.energy_per_shot > 0.0f && has_energy_pool(u)) {
         u.energy = u.energy - pd.energy_per_shot;
         if (u.energy < 0.0f) u.energy = 0.0f;
@@ -1380,34 +1680,108 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
 
 void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
     // WeaponBehavior (non-hardpoint weapons) [M for the shot itself; the recharge is H].
-    u.weapon_cooldown -= 1;
-    if (u.weapon_cooldown > 0) return;
+    // S7 t15 A2 (MOVEMENT §3.1.1, 0x54d090): the recharge counts the frames since the last service (pack +0x2c), so it
+    // keeps elapsing while the behaviour is not serviced (jetpack suspension, stun, no base power): the first service back
+    // subtracts the whole gap. [port] Every service subtracts (retail only while the cooldown is non-zero and clamps at
+    // 0); ready = <= 0 either way, so the shots are the same and the steady-state counter keeps its S8 CRC format.
+    // S8 t12 (TACTICAL_COMBAT §3.1.1 "First service after spawn"): the last-service frame starts at 0, so the first service
+    // subtracts the whole current frame number and a unit spawned after its drawn initial delay can fire at once.
+    const uint32_t last = u.weapon_last == kNoService ? 0u : u.weapon_last;
+    const uint32_t elapsed = frame - last;
+    u.weapon_last = frame;
+    const int64_t cd = static_cast<int64_t>(u.weapon_cooldown) - static_cast<int64_t>(elapsed);
+    u.weapon_cooldown = cd < INT32_MIN ? INT32_MIN : static_cast<int32_t>(cd);
+    // S8 t26 (§3.1.1 "Fire-at-position order"): while the order is charged (TD +0x3d) the recharge wait is skipped.
+    if (u.weapon_cooldown > 0 && !u.lob_charged) return;
+    if (!unit_weapon_allowed(u)) return;  // S8 t08: own-weapon gate 0x54c910 steps 1-6 (TACTICAL_COMBAT §3.1.1)
     const UnitDesc& ud = desc_of(u);
-    const Unit* tp = unit(current_target(u.id));
-    if (!live(tp)) return;
-    const Unit& t = *tp;
-    if ((t.flags & kUnitStealthed) && !ud.target_stealth_units && t.owner != u.owner) return;
-    if (!is_enemy(u.owner, t.owner)) return;
+    // Step 7 (S8 t10 / t11, "Gate details"; S8 t26 "Fire-at-position order"): a LOBBING_SUPERWEAPON object fires only while
+    // its fire-at-position order is charged (TD +0x3d), and then needs neither targeting state 4 nor a target: the request
+    // is the ordered ground point with no target object. Otherwise TD +0x18 must be 4 (attacking: slot 44 && !slot 45,
+    // re-tested every service) with a non-null target; else the burst restarts (TD +0x28 := Projectile_Fire_Pulse_Count)
+    // and nothing fires. This replaces the port's XY range gate (LOB_SOLVER §8 item 22).
+    const bool ground = ud.lobbing_superweapon;
+    if (ground && !u.lob_charged) return;
+    const Unit* tp = nullptr;
+    if (!ground) {
+        tp = unit(current_target(u.id));
+        if (!live(tp) || !target_state_attacking(u, *tp)) {
+            u.weapon_pulses = ud.weapon_pulse_count;
+            return;
+        }
+        if ((tp->flags & kUnitStealthed) && !ud.target_stealth_units && tp->owner != u.owner) return;
+        if (!is_enemy(u.owner, tp->owner)) return;
+    }
+    const ObjectId tid = tp ? tp->id : kNoObject;
     // S9: the ordered hardpoint (command 40 index) of the ordered target, while it is alive.
     int32_t thp = -1;
-    if (t.id == u.ordered_target && u.ordered_hp >= 0 && static_cast<uint32_t>(u.ordered_hp) < t.hp_count &&
-        !hps_[t.hp_begin + static_cast<uint32_t>(u.ordered_hp)].destroyed)
+    if (tp && tp->id == u.ordered_target && u.ordered_hp >= 0 && static_cast<uint32_t>(u.ordered_hp) < tp->hp_count &&
+        !hps_[tp->hp_begin + static_cast<uint32_t>(u.ordered_hp)].destroyed)
         thp = u.ordered_hp;
     int32_t proj = fired_weapon_projectile(u);  // OI abilities: weapon index obj +0x324
     float dscale = 1.0f;  // OI abilities: Blast state gate (REMAINING_GAPS §5.5; a weapon never fires while it runs)
     if (hooks_ && !hooks_->fire_gate(u.id, nullptr, proj, dscale)) return;
-    if (hooks_ && !hooks_->shot_allowed(u.id, t.id, thp, proj)) return;
+    if (hooks_ && !hooks_->shot_allowed(u.id, tid, thp, proj)) return;
     if (proj < 0 || static_cast<size_t>(proj) >= data_->projectiles.size()) return;
     const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(proj)];
     const float range = fire_range(ud.max_attack_distance, mod_r(u, ModList::FireRange));  // 0x54d090: list 8
-    const float dist = distance_xy(u.pos, t.pos);
-    if (!in_fire_range(dist, 0.0f, range, desc_of(t).radius)) return;
+    // No range test at fire time (LOB_SOLVER §8 item 22 [H]): the targeting state above is the gate; for a grenade the
+    // launch solve below can still find no arc from the muzzle (no shot).
+    const bool lob = grenade(pd);
     if (pd.energy_per_shot > 0.0f && has_energy_pool(u) && u.energy < pd.energy_per_shot) return;
-    const Vec3 muzzle = u.pos;
-    Vec3 aim = lead_point(t, muzzle, t.pos, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
-    if (cfg_.inaccuracy_enabled) {  // [L] fixed-radius branch only (no per-hardpoint table)
-        float r = scale_inaccuracy(ud.fire_inaccuracy_fixed_radius, inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy));
-        if (cfg_.mode == GameMode::Land && weather_scale(pd) != 1.0f) r = r * weather_scale(pd);  // L1 systems: weather
+    // S8 t06 B4 (LOB_SOLVER §5.1): the launch point is the next fire bone <Muzzle_Bone_Name>_NN (round robin per shot; with
+    // more than one Projectile_Types entry and more than one bone, the bone of the weapon index), rest pose turned by the
+    // unit's facing [port: retail reads the animated pose]. No bone on a known model: the weapon never fires. Bone index
+    // outside the list: no fire bone - the position + the shooter's own Ranged_Target_Z_Adjust (0x398440). [port] No
+    // model data: straight shots leave from the position, grenades from the position + the z adjust (the pre-t06 rule).
+    Vec3 muzzle = u.pos;
+    bool on_bone = false;
+    if (ud.muzzle_model) {
+        const auto n = static_cast<uint32_t>(ud.muzzle_bones.size());
+        if (n == 0) return;
+        const uint32_t i = u.weapon_bone < n ? u.weapon_bone : 0u;
+        u.weapon_bone = i + 1u < n ? i + 1u : 0u;  // advanced before the spawn: a null spawn keeps the new index (§5.2)
+        const int64_t bi = ud.weapon_projectiles.size() > 1 && n > 1 ? static_cast<int64_t>(u.weapon_index) : static_cast<int64_t>(i);
+        if (bi >= 0 && bi < static_cast<int64_t>(n)) {
+            muzzle = local_to_world(u, ud.muzzle_bones[static_cast<size_t>(bi)]);
+            on_bone = true;
+        }
+    }
+    if (!on_bone && (lob || ud.muzzle_model)) muzzle.z = muzzle.z + ud.ranged_target_z_adjust;
+    // S8 t10 (LOB_SOLVER §5.1): a garrisoned shooter whose host lists gun bones launches from a synced pick among the host's
+    // bones within 60 degrees of the target, replacing the request's bone (the own bone count above is still required).
+    if (Vec3 gm; garrison_muzzle(u, tp ? tp->pos : u.lob_point, rng, gm)) muzzle = gm;
+    // S8 t04 (LOB_SOLVER §5.1 / §5.2): Spawn_Projectile replaces a team-container target by its member nearest the launch
+    // point (the hardpoint index is reset). A grenade solves from the launch point toward the un-led target point Q (the
+    // member + its Ranged_Target_Z_Adjust, or the ground point as given); no arc = no shot, before any draw, no cooldown /
+    // pulse change (retried next service; a fire-at-position order stays charged).
+    // [port] The projectile keeps the container as its target object.
+    const Unit* am = tp ? &lob_member(*tp, muzzle) : nullptr;
+    LobSolution sol;
+    Vec3 q;
+    if (lob) {
+        q = am ? lob_target_point(*am) : u.lob_point;
+        if (!lob_solve(muzzle, q, pd.max_speed, lob_g(pd), pd.can_lob_slower, sol)) return;
+    }
+    // S8 t27 (§3.1.1 "Own-weapon aim point", 0x54a270): no target object -> the point as given, no lead; else the
+    // shooter's target hardpoint bone, a synced Target_Bones pick or the position + Ranged_Target_Z_Adjust
+    // (own_aim_point), then the circular lead. The hardpoint index is the current target's (TD +0x10: the order's or the
+    // scan's), reset for a team member.
+    Vec3 aim = u.lob_point;
+    if (am) {
+        int32_t ahp = -1;
+        if (am == tp) ahp = tp->id == u.ordered_target ? u.ordered_hp : tp->id == u.auto_target ? u.auto_hp : -1;
+        aim = lead_point(*am, muzzle, own_aim_point(*am, ahp, rng), pd.max_speed * static_cast<float>(cfg_.fps));  // circular lead
+    }
+    if (cfg_.inaccuracy_enabled) {
+        // A1j t03: own-weapon inaccuracy 0x549f80 (TACTICAL_COMBAT §3.1.2) [H unless tagged]. Fixed radius r > 0: X and Y
+        // draws in (-r, r); the Z draw is made in space only. Otherwise, with a target object: d = the first
+        // Targeting_Fire_Inaccuracy entry hitting the target's CategoryMask (scaled like r), and when d > 0 and the 3D
+        // muzzle -> led aim distance L != 0: s = d x L / Targeting_Max_Attack_Distance, X, Y, Z draws in (-s, s).
+        const float f = inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy);
+        const float ws = cfg_.mode == GameMode::Land ? weather_scale(pd) : 1.0f;  // L1 systems: weather
+        float r = scale_inaccuracy(ud.fire_inaccuracy_fixed_radius, f);
+        if (ws != 1.0f) r = r * ws;
         for (int s = 0; s < 2; ++s) {
             const UnitAbilityDesc* ab = ability(u, s);
             if (ab && u.ability_active[static_cast<size_t>(s)] && ab->inaccuracy_override > 0.0f) {
@@ -1415,9 +1789,34 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
                 break;
             }
         }
-        if (r > 0.0f) aim = aim + inaccuracy_offset(r, rng);
+        if (r > 0.0f) {
+            Vec3 o;
+            o.x = rng.range_float(-r, r);
+            o.y = rng.range_float(-r, r);
+            if (cfg_.mode == GameMode::Space) o.z = rng.range_float(-r, r);
+            aim = aim + o;
+        } else if (am) {
+            float d = 0.0f;
+            for (const InaccuracyEntry& e : ud.fire_inaccuracy)
+                if (e.category_mask & desc_of(*am).category_mask) {
+                    d = e.distance;
+                    break;
+                }
+            d = scale_inaccuracy(d, f);
+            if (ws != 1.0f) d = d * ws;
+            const float L = distance3(muzzle, aim);
+            // [port] Targeting_Max_Attack_Distance <= 0 would divide by zero in retail: the draws are kept, spread 0.
+            if (d > 0.0f && L != 0.0f)
+                aim = aim + inaccuracy_offset(ud.max_attack_distance > 0.0f ? d * L / ud.max_attack_distance : 0.0f, rng);
+        }
     }
-    spawn(u, pd, static_cast<uint32_t>(proj), pd.damage * dscale, pd.damage_type, muzzle, aim, t, thp, range, frame);
+    spawn(u, pd, static_cast<uint32_t>(proj), pd.damage * dscale, pd.damage_type, muzzle, aim, tp, thp, range, frame,
+          lob ? &sol : nullptr, q);
+    if (ground) {  // S8 t26: a successful spawn clears the order (TD +0x3c / +0x3d / +0x30..+0x38 := 0)
+        u.lob_pending = 0;
+        u.lob_charged = 0;
+        u.lob_point = Vec3{};
+    }
     if (pd.energy_per_shot > 0.0f && has_energy_pool(u)) {
         u.energy = u.energy - pd.energy_per_shot;
         if (u.energy < 0.0f) u.energy = 0.0f;
@@ -1433,19 +1832,83 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
         u.weapon_pulses = r.pulses;
     }
     ++stats_.shots;
-    shot_events_.push_back({u.id, t.id, t.owner});  // OI fog: REVEAL vf26 flash
+    // OI fog: REVEAL vf26 flash on the target owner's grid [port: a ground-point shot has no target owner, no flash].
+    if (tp) shot_events_.push_back({u.id, tp->id, tp->owner});
     if (hooks_) hooks_->fire_done(u.id, nullptr, frame);
-    if (hooks_) hooks_->shot_fired(u.id, t.id, thp, proj, frame);
+    if (hooks_) hooks_->shot_fired(u.id, tid, thp, proj, frame);
+}
+
+bool CombatSystem::own_launch_point(const Unit& u, Vec3& out) const {
+    // [port] The turret's fire bone (LOB_SOLVER §3.6) is not modelled: the unit's first fire bone (rest pose), else the
+    // position + its own Ranged_Target_Z_Adjust - the own weapon's launch point without the round robin.
+    const UnitDesc& ud = desc_of(u);
+    if (ud.muzzle_model) {
+        if (ud.muzzle_bones.empty()) return false;
+        out = local_to_world(u, ud.muzzle_bones[0]);
+        return true;
+    }
+    out = Vec3{u.pos.x, u.pos.y, u.pos.z + ud.ranged_target_z_adjust};
+    return true;
+}
+
+void CombatSystem::lobbing_service(Unit& u, uint32_t frame) {
+    // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", LobbingSuperweaponBehavior vf6 0x4ea6f0) [H unless tagged]:
+    // while the order is pending and the charge-up stamp is 0, aim the TURRET at the point (0x631fe0, LOB_SOLVER §3.6: a
+    // lob solution from the launch point and the turret angles reached); no TURRET / no solution / not aimed -> wait (no
+    // timeout). [port] The turret angles are not modelled: aimed as soon as the solution exists. Once aimed the stamp :=
+    // now; when now >= stamp + Lobbing_Superweapon_Chargeup_Frames: charged (TD +0x3d) := 1, stamp := 0. The chargeup /
+    // fire SFX and particle are presentation (not modelled here).
+    if (!u.lob_pending) return;
+    const UnitDesc& ud = desc_of(u);
+    if (u.lob_stamp == 0) {
+        if (!ud.turret) return;
+        const int32_t proj = fired_weapon_projectile(u);
+        if (proj < 0 || static_cast<size_t>(proj) >= data_->projectiles.size()) return;
+        const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(proj)];
+        if (grenade(pd)) {  // can-aim 0x631a00: only a category-3 projectile solves
+            Vec3 from;
+            LobSolution s;
+            if (!own_launch_point(u, from) || !lob_solve(from, u.lob_point, pd.max_speed, lob_g(pd), pd.can_lob_slower, s)) return;
+        }
+        u.lob_stamp = frame;
+        lob_events_.push_back({u.id, false, frame, u.lob_point});  // S8 t30: chargeup SFX + particle
+    }
+    if (u.lob_stamp != 0 && frame >= u.lob_stamp + ud.lobbing_chargeup_frames) {
+        u.lob_charged = 1;
+        u.lob_stamp = 0;
+        lob_events_.push_back({u.id, true, frame, u.lob_point});  // S8 t30: Lobbing_Superweapon_SFXEvent_Fire
+    }
+}
+
+bool CombatSystem::fires_at_position(ObjectId id) const {
+    const Unit* u = unit(id);
+    return live(u) && desc_of(*u).lobbing_superweapon && desc_of(*u).weapon_projectile >= 0;
+}
+
+bool CombatSystem::order_fire_at_position(ObjectId id, Vec3 point) {
+    if (!fires_at_position(id)) return false;
+    Unit* u = unit(id);
+    u->lob_point = point;  // 0x4ea3f0: TD +0x30..+0x38 := point, +0x3c := 1 (charged / stamp unchanged)
+    u->lob_pending = 1;
+    return true;
+}
+
+uint8_t CombatSystem::fire_at_position_state(ObjectId id, Vec3* point) const {
+    const Unit* u = unit(id);
+    if (!u || !(u->lob_pending || u->lob_charged)) return 0;
+    if (point) *point = u->lob_point;
+    return u->lob_charged ? 2 : 1;
 }
 
 void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t pdesc, float damage, uint16_t damage_type,
-                         Vec3 muzzle, Vec3 aim, const Unit& target, int32_t target_hp, float range, uint32_t frame) {
+                         Vec3 muzzle, Vec3 aim, const Unit* target, int32_t target_hp, float range, uint32_t frame,
+                         const LobSolution* lob, Vec3 q_point) {
     Projectile p;
     p.serial = next_serial_++;
     p.desc = pdesc;
     p.shooter = shooter.id;
     p.owner = shooter.owner;
-    p.target = target.id;
+    p.target = target ? target->id : kNoObject;
     p.target_hp = target_hp;
     p.pos = muzzle;
     p.dir = normalize(aim - muzzle);
@@ -1459,13 +1922,23 @@ void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t
     // refixf t01 (S9 §2.4.10 step 1, MaxTravelDistance +0x6c): the same rule for rockets [H]; [M] the target radius term
     // is the retail radius helper 0x397780 (+ its container's when garrisoned), here UnitDesc::radius.
     const float base = range > 0.0f ? range : pd.max_flight_distance;
-    p.max_travel = base > 0.0f ? base + desc_of(target).radius + abs_f(aim.z - muzzle.z) : 0.0f;
-    // OI tactical: lobbed shots (category 3) leave on the ballistic arc to the aim point (formulas.hpp lob_direction).
-    const float g = lob_gravity(pd);
-    if (g > 0.0f) {
-        p.gravity = g;
-        p.floor_z = aim.z;
-        p.dir = lob_direction(muzzle, aim, pd.max_speed, g);
+    // S8 t04 (LOB_SOLVER §5.3): a solved grenade's height term is |Q.z - L.z| (the un-led target point).
+    const float dz = lob ? abs_f(q_point.z - muzzle.z) : abs_f(aim.z - muzzle.z);
+    p.max_travel = base > 0.0f ? base + (target ? desc_of(*target).radius : 0.0f) + dz : 0.0f;  // S8 t26: no target, no radius
+    // S8 t04 (LOB_SOLVER §5.3 / §5.4): category 3 flies the closed-form parabola from the launch point. WeaponBehavior
+    // shots take the solver's pitch theta and speed s with the yaw of the led, inaccurate aim; hardpoint shots (Fire_At
+    // 0x3825b0, no solver) leave straight at the aim point at Max_Speed and gravity pulls them below that line.
+    if (grenade(pd)) {
+        p.lob = 1;
+        p.gravity = lob_g(pd);
+        p.launch = muzzle;
+        if (lob) {
+            p.lob_dir = lob_forward(aim - muzzle, lob->angle);
+            p.speed = lob->speed;  // pack +0x90 := the solver's speed
+        } else {
+            p.lob_dir = p.dir;
+        }
+        p.dir = p.lob_dir;
     }
     // refixf t01 (S9 §2.4.10 step 1): a spline rocket keeps FireAtPosition = `aim` and the launch point. [M] `aim` is the
     // shared fire path's aim point (target / hardpoint position, circular lead, then the fire-time inaccuracy) standing in
@@ -1493,9 +1966,9 @@ CombatSystem::SweepHit CombatSystem::sweep_segment(const Projectile& p, Vec3 del
     PreciseQuery pq;
     pq.a = p.pos;
     pq.b = p.pos + delta;
-    pq.mask = data_->projectiles[p.desc].does_shield_damage ? 7u : 5u;
-    for (int32_t q = 0; q < np; ++q) {
-        if (!is_enemy(p.owner, q)) continue;
+    const ProjectileDesc& pd = data_->projectiles[p.desc];
+    pq.mask = pd.does_shield_damage ? 7u : 5u;
+    auto scan = [&](int32_t q, SweepHit& out) {
         for (const RayHit& hit : trees_->player(static_cast<uint32_t>(q)).query_ray(ray, kSkipDead, ctx)) {
             const Unit* v = unit(static_cast<ObjectId>(hit.handle));
             if (!live(v)) continue;
@@ -1512,9 +1985,24 @@ CombatSystem::SweepHit CombatSystem::sweep_segment(const Projectile& p, Vec3 del
                     c.mesh_hp = r.mesh ? hardpoint_by_mesh(*v, *r.mesh) : -1;
                 }
             }
-            if (best.id == kNoObject || c.t < best.t || (c.t == best.t && c.id < best.id)) best = c;
+            if (out.id == kNoObject || c.t < out.t || (c.t == out.t && c.id < out.id)) out = c;
             // Without the precise test the entries are sorted by (t, id): the first live one is this tree's minimum.
             if (!precise_hit_) break;
+        }
+    };
+    for (int32_t q = 0; q < np; ++q)
+        if (is_enemy(p.owner, q)) scan(q, best);
+    // §3.4 step 3 (S8 t06): nothing hit and Friendly_Damage_Amount > 0 or Causes_Infection -> the own-player variant
+    // 0x2acb90. S8 t10 ("Own-player variant 0x2acb90" [H]): the query over the projectile owner's tree skips only the
+    // projectile itself (never in a port tree), NOT the shooter, and yields its first passing candidate (the port's order:
+    // the minimum (t, id), as the hostile scan); Sweep then keeps it only when it is the projectile's own target and has no
+    // TRANSPORT_LANDING - otherwise there is no own hit (the query does not go on to the next candidate).
+    if (best.id == kNoObject && (pd.friendly_damage_amount > 0.0f || pd.causes_infection) && p.owner >= 0 && p.owner < np) {
+        SweepHit own{kNoObject, 0.0f};
+        scan(p.owner, own);
+        if (own.id != kNoObject && own.id == p.target) {
+            const Unit* v = unit(own.id);
+            if (v && !desc_of(*v).transport_landing) best = own;
         }
     }
     return best;
@@ -1532,8 +2020,12 @@ int32_t CombatSystem::hardpoint_by_mesh(const Unit& v, const std::string& mesh) 
 void CombatSystem::sweep(uint32_t pi, QueryContext& ctx) {
     const Projectile& p = projectiles_[pi];
     SweepHit best{kNoObject, 0.0f};
-    if (p.alive && p.spawn_frame < frame_ && p.fuse < 0.0f) {  // OI abilities: armed bombs only detonate on the fuse
-        if (p.rocket) {
+    // OI abilities: placed bombs only detonate on the fuse; S8 t04: a stuck sticky grenade no longer sweeps.
+    const bool placed = p.fuse >= 0.0f && !p.lob;
+    if (p.alive && p.spawn_frame < frame_ && !placed && !p.stuck) {
+        if (p.lob) {
+            best = sweep_segment(p, lob_next(p, frame_) - p.pos, ctx);  // S8 t04: P -> N(t) (LOB_SOLVER §6.2 step 3)
+        } else if (p.rocket) {
             // refixf t01: a planned spline rocket sweeps P -> N, N = the path sampled at s + speed (§2.4.2 steps 2 / 5;
             // read-only here, the commit phase advances s). An unplanned one (first flight step) is planned and swept in
             // the serial commit phase (its plan draws).
@@ -1547,7 +2039,10 @@ void CombatSystem::sweep(uint32_t pi, QueryContext& ctx) {
                 best = sweep_segment(p, n - p.pos, ctx);
             }
         } else {
-            best = sweep_segment(p, p.dir * p.speed, ctx);
+            const Vec3 delta = p.dir * p.speed;
+            best = sweep_segment(p, delta, ctx);
+            // A1j t03: Sweep 0x4c97a0 step 1, the land ground test 0x4d0630 of the same segment (TACTICAL_COMBAT §3.4).
+            if (straight_ground_test(p, delta)) best.ground = ground_hit(p.pos, p.pos + delta, best.gh);
         }
     }
     sweep_[pi] = best;
@@ -1689,7 +2184,7 @@ void CombatSystem::detonation_effects(const Projectile& p, Vec3 center, ObjectId
         effect_victims(p.owner, true, center, pd.stun_radius, vs);
         for (Unit* v : vs)
             if (desc_of(*v).stunnable && effect_match(*v, pd.stun_mask, &pd.stun_types)) stun_unit(v->id, pd.stun_frames, frame);
-        // [port] Destroy_When_Stunned_Over_Water (scene water height) is not modelled.
+        // Destroy_When_Stunned_Over_Water: the abilities' Stunned hook (ABILITIES_HARDPOINTS §4.12 [port]).
     }
     // Distract: enemies in radius matching the mask get an order toward the detonation (0x2a7b80) [M] - the host's.
     if (pd.distract && pd.distract_radius > 0.0f && hooks_) {
@@ -1928,7 +2423,7 @@ void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, 
     const UnitDesc& vd = desc_of(v);
     if (cfg_.death_clones && kind != kKindNoDeathClone) {
         int32_t key = kind;
-        if (vd.deploys && vd.has_locomotor && (v.flags & kUnitDeploying))
+        if (deployed_or_deploying(v))  // S8 t11: 0x39a390 (pending or state 0x19; not in a deploy transition)
             key = kind == 8 ? kKindDeployed : kKindDeployedOther;
         else if (v.flags & kUnitInfected)
             key = kKindInfection;
@@ -2045,9 +2540,11 @@ void CombatSystem::hull_damage(Unit& v, float x, ObjectId source, DamageResult& 
             }
         }
     }
+    out.hull_lost = old - (v.health > 0.0f ? v.health : 0.0f);  // A1_READINGS §30.2: the clamped hull loss
     if (v.health <= 0.0f) {
         if (v.flags & kUnitCannotDie) {
             v.health = old > 1.0f ? old : 1.0f;  // max(1, old)
+            out.hull_lost = 0.0f;
         } else {
             kill(v, source, kind, frame, sub_key);
             out.killed = true;
@@ -2277,6 +2774,7 @@ void CombatSystem::record_damage(const DamageRequest& r, const Unit& v, const Un
     e.energy_absorbed = out.energy_absorbed;
     e.to_hardpoint = out.to_hardpoint;
     e.to_hull = out.to_hull;
+    e.hull_lost = out.hull_lost;
     e.killed = out.killed || (v.flags & kUnitDead) != 0;
     e.frame = frame;
     damage_events_.push_back(e);
@@ -2655,6 +3153,137 @@ void CombatSystem::rocket_step(uint32_t i, uint32_t frame, SimRng& rng) {
     if (expire) expire_projectile(i, frame);
 }
 
+// ---- S8 t04: grenade flight (docs/re/LOB_SOLVER.md §6, ProjectileBehavior category 3 0x4ceea0) ----
+
+Vec3 CombatSystem::lob_next(const Projectile& p, uint32_t frame) const {
+    // §6.1: evaluated from scratch each step; t = frames since the creation frame (the first step, the frame after the
+    // spawn, has t = 1).
+    return lob_position(p.launch, p.lob_dir, p.speed, p.gravity, static_cast<float>(frame - p.spawn_frame));
+}
+
+bool CombatSystem::ground_hit(Vec3 a, Vec3 b, GroundHit& out) const {
+    // Ground test 0x4d0630 (§6.2 step 3) -> 0x135840 (§6.6, S8 t06): the segment a -> b against the heightmap cells'
+    // triangles and the water plane, two-sided, nearest t in (0, 1) (rocket.hpp ground_segment). [port] No grid from
+    // the host: a plane at z 0.
+    return ground_segment(rocket_terrain_.grid, a, b, out);
+}
+
+bool CombatSystem::straight_ground_test(const Projectile& p, Vec3 delta) const {
+    // A1j t03 (TACTICAL_COMBAT §3.4 step 1, 0x4d0630) [H]: land mode only. For Projectile_Category DEFAULT (and an unknown
+    // category, -1; the port parses those as DEFAULT) the test is skipped while the target point is still ahead: the sign
+    // of (target point - position) equals the sign of the step on all three axes (sign(0) = +). Target point = the
+    // targeted hardpoint's position (0x396ce0) with a hardpoint index, else position + Ranged_Target_Z_Adjust (0x398440).
+    // No target: tested. Every other category (LASER 7 included) is tested on every step.
+    if (cfg_.mode != GameMode::Land) return false;
+    if (data_->projectiles[p.desc].category != ProjectileCategory::Default) return true;
+    const Unit* t = unit(p.target);
+    if (!live(t)) return true;  // [port] a dead target stands for the cleared pack reference
+    Vec3 tp;
+    if (p.target_hp >= 0 && static_cast<uint32_t>(p.target_hp) < t->hp_count)
+        tp = hp_world(*t, data_->hardpoints[hps_[t->hp_begin + static_cast<uint32_t>(p.target_hp)].desc]);
+    else
+        tp = lob_target_point(*t);
+    auto sgn = [](float v) { return v >= 0.0f; };
+    return !(sgn(tp.x - p.pos.x) == sgn(delta.x) && sgn(tp.y - p.pos.y) == sgn(delta.y) && sgn(tp.z - p.pos.z) == sgn(delta.z));
+}
+
+Vec3 CombatSystem::stuck_local(const Unit& v, Vec3 world) const {
+    // S8 t06 (§6.4, LOB_SOLVER §8 item 18): the stuck point in the parent's frame (yaw of its facing, as local_to_world),
+    // so it turns with the parent. [port] Retail carries it on the hit bone (bone animation and pitch / roll ignored).
+    float fx = v.facing.x, fy = v.facing.y;
+    const float len2 = fx * fx + fy * fy;
+    if (len2 > 0.0f) {
+        const float inv = 1.0f / dmath::sqrt(len2);
+        fx = fx * inv;
+        fy = fy * inv;
+    } else {
+        fx = 1.0f;
+        fy = 0.0f;
+    }
+    const Vec3 d = world - v.pos;
+    return Vec3{d.x * fx + d.y * fy, d.y * fx - d.x * fy, d.z};
+}
+
+uint32_t CombatSystem::bomb_frame(float seconds, uint32_t armed_frame) const {
+    // BOMB arm 0x58f030 (§6.4): detonation frame = int((float)FPS x seconds + (float)frame + 0.5); it fires on the first
+    // service with frame >= it. [port] Negative / huge results clamp to 0 / UINT32_MAX.
+    const float f = static_cast<float>(cfg_.fps) * seconds + static_cast<float>(armed_frame) + 0.5f;
+    if (!(f > 0.0f)) return 0;
+    if (!(f < 4294967040.0f)) return 0xFFFFFFFFu;
+    return static_cast<uint32_t>(static_cast<int64_t>(f));
+}
+
+void CombatSystem::lob_step(uint32_t i, uint32_t frame, SimRng& rng) {
+    // §6.2 in the serial commit phase (projectile serial order). No reference into projectiles_ is used after a call that
+    // can spawn (hit processing, detonation).
+    Projectile& p = projectiles_[i];
+    const ProjectileDesc& pd = data_->projectiles[p.desc];
+    const float age = static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps);
+    // BOMB timer (Grenade_Explode_Timer, armed at the throw = the spawn frame; S8 t06, §6.4): fires on the first frame >=
+    // int(FPS x secs + spawn frame + 0.5), wherever the grenade is (in flight, stuck or resting). Remote bombs carry none.
+    const bool fuse_out = p.fuse >= 0.0f && frame >= bomb_frame(p.fuse, p.spawn_frame);
+    if (p.stuck) {
+        // §6.4: flight stopped (vfunc +0xc0): no lifetime any more, only the BOMB timer or the remote detonation. An
+        // attached grenade rides on its object: S8 t06 the BOMB service puts it at the stuck point carried by the
+        // parent, here the offset kept in the parent's frame turned with its facing ([port] no bone animation).
+        if (p.stuck_to != kNoObject)
+            if (const Unit* v = unit(p.stuck_to); live(v)) p.pos = local_to_world(*v, p.stuck_offset);
+        if (fuse_out) expire_projectile(i, frame);
+        return;
+    }
+    // 1. N = N(t); 2. facing := the chord P -> N.
+    const Vec3 P = p.pos;
+    const Vec3 N = lob_next(p, frame);
+    const Vec3 seg = N - P;
+    const float l2 = dot(seg, seg);
+    if (l2 > 0.0f) p.dir = seg * (1.0f / dmath::sqrt(l2));
+    // 3. sweep: the object hit of phase E (re-swept when its victim died earlier in this phase) and the land-only ground
+    //    test; the object hit wins when its fraction <= the ground fraction.
+    SweepHit hit = sweep_[i];
+    if (hit.id != kNoObject && !live(unit(hit.id))) {
+        ++stats_.resweeps;
+        hit = sweep_segment(p, seg, serial_ctx_);
+    }
+    GroundHit gh;
+    const bool ground = cfg_.mode == GameMode::Land && ground_hit(P, N, gh);
+    const float tg = gh.t;
+    const bool object = hit.id != kNoObject && (!ground || hit.t <= tg);
+    if (pd.sticks_on_collision && (object || ground)) {
+        // 5. §6.4: no damage; attach to the struck object or rest on the ground, then wait (BOMB timer / remote).
+        p.stuck = 1;
+        p.speed = 0.0f;
+        if (object) {
+            p.pos = P + seg * hit.t;
+            p.stuck_to = hit.id;
+            p.stuck_offset = stuck_local(*unit(hit.id), p.pos);  // S8 t06: in the parent's frame
+        } else {
+            p.pos = gh.point;
+            p.stuck_to = kNoObject;
+        }
+        if (fuse_out) expire_projectile(i, frame);
+        return;
+    }
+    if (object) {  // 4. Process_Hit (direct + area damage, effects)
+        Unit* v = unit(hit.id);
+        p.alive = 0;
+        Projectile pc = p;
+        process_hit(pc, *v, hit.t, frame, rng, &seg, hit.mesh_hp);
+        return;
+    }
+    if (ground) {  // 4. On_Detonate 0x4cb070 at the ground hit point: no direct damage, area damage + effects there
+        p.pos = gh.point;
+        expire_projectile(i, frame);
+        return;
+    }
+    // Move_And_Expire 0x4c7050 (§6.5): DistanceTravelled += s; the lifetime rule replaces the travel budget when the
+    // budget is 0 or the type has a Max_Lifetime > 0 (every grenade is category 3).
+    p.pos = N;
+    p.travelled = p.travelled + p.speed;
+    const bool lifetime_rule = !(p.max_travel > 0.0f) || pd.max_lifetime > 0.0f;
+    const bool expire = fuse_out || (lifetime_rule ? age > pd.max_lifetime : p.travelled >= p.max_travel);
+    if (expire) expire_projectile(i, frame);
+}
+
 // ================================================================================================
 // tick
 // ================================================================================================
@@ -2680,6 +3309,7 @@ void CombatSystem::release_ctx(QueryContext* c) {
 void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const ParallelFor& pf) {
     frame_ = frame;
     trees_ = &trees;
+    last_trees_ = &trees;
     tick_rng_ = &rng;
     deaths_.clear();
     hp_events_.clear();
@@ -2687,6 +3317,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     damage_events_.clear();
     hit_events_.clear();  // S10-int
     shot_events_.clear();  // OI fog
+    lob_events_.clear();   // S8 t30
     survivor_events_.clear();  // OI abilities
     const auto n = static_cast<uint32_t>(units_.size());
 
@@ -2798,14 +3429,19 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             if (hooks_) hooks_->unit_effect(u.id, UnitEffect::StunEnded, u.owner, u.pos, frame);
         }
         const bool idle = u.stun_end > frame || (desc_of(u).requires_base_power && !has_base_power(u.owner));
+        // S7 t14: on the jetpack (MOVEMENT §3.1.1) TARGETING and WEAPON are suspended; S8 t12 (MOVEMENT §3.2): the
+        // hardpoints are not (update_weapons' `suspended`).
+        const bool suspended = (u.flags & kUnitWeaponsSuspended) != 0;
+        // S7 t15 A2: an idle unit's weapons are not serviced; the WeaponBehavior recharge still elapses (fire_unit_weapon
+        // subtracts the frames since its last service when it runs again).
         u.acquired = 0;
-        if (!idle) decide(u, cands_[k], frame, rng);
+        if (!idle && !suspended && !(u.flags & kUnitTargetingSuspended)) decide(u, cands_[k], frame, rng);  // S8 t25
         if (hooks_) {
             hooks_->unit_after_targeting(u.id, frame, rng);
             if (u.flags & kUnitDead) continue;
         }
         service_repairs(u, frame);  // OI abilities: hardpoint update 0x387010 -> repair 0x387170, before the weapons
-        if (!idle) update_weapons(u, frame, rng);
+        if (!idle) update_weapons(u, frame, rng, suspended);
         converted_decay(u, frame, rng);
     }
     // E. projectile sweeps (parallel)
@@ -2831,17 +3467,28 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             rocket_step(i, frame, rng);
             continue;
         }
+        if (projectiles_[i].lob) {  // S8 t04: grenade (0x4ceea0)
+            lob_step(i, frame, rng);
+            continue;
+        }
         SweepHit hit = sweep_[i];
         if (hit.id != kNoObject && !live(unit(hit.id))) {  // victim died earlier in this phase
             ++stats_.resweeps;
             sweep(i, serial_ctx_);
             hit = sweep_[i];
         }
-        if (hit.id != kNoObject) {
+        // A1j t03: the object hit wins when its segment fraction <= the ground fraction; a ground hit detonates there
+        // (On_Detonate 0x4cb070: no direct damage, area damage and effects at the ground point), as lob_step.
+        if (hit.id != kNoObject && (!hit.ground || hit.t <= hit.gh.t)) {
             Unit* v = unit(hit.id);
             projectiles_[i].alive = 0;
             Projectile pc = projectiles_[i];
             process_hit(pc, *v, hit.t, frame, rng, nullptr, hit.mesh_hp);
+            continue;
+        }
+        if (hit.ground) {
+            projectiles_[i].pos = hit.gh.point;
+            expire_projectile(i, frame);
             continue;
         }
         Projectile& p = projectiles_[i];
@@ -2875,22 +3522,8 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         p.pos = p.pos + p.dir * p.speed;
         p.travelled = p.travelled + p.speed;
         bool expire;
-        if (p.gravity > 0.0f) {
-            // OI tactical: lobbed flight (0x4ceea0) [M/port] - gravity bends the velocity after the step; the shot
-            // detonates when it comes down to its aim height (the ground test 0x4d0630 stand-in), or by its lifetime
-            // when it has one (3.3 expiry: category 3 with a lifetime). The travel limit does not apply to the arc.
-            const Vec3 v{p.dir.x * p.speed, p.dir.y * p.speed, p.dir.z * p.speed - p.gravity};
-            const float sp = dmath::sqrt(dot(v, v));
-            if (sp > 0.0f) {
-                p.dir = v * (1.0f / sp);
-                p.speed = sp;
-            }
-            const bool landed = p.dir.z < 0.0f && p.pos.z <= p.floor_z;
-            if (landed) p.pos.z = p.floor_z;
-            expire = landed || (pd.max_lifetime > 0.0f &&
-                                static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps) > pd.max_lifetime);
-        } else if (p.fuse >= 0.0f) {  // OI abilities: armed bomb timer
-            expire = static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps) >= p.fuse;
+        if (p.fuse >= 0.0f) {  // OI abilities: armed bomb timer (S8 t06: the BOMB arm's frame rounding, §6.4)
+            expire = frame >= bomb_frame(p.fuse, p.spawn_frame);
         } else {
             expire = p.max_travel > 0.0f
                          ? p.travelled >= p.max_travel
@@ -2979,6 +3612,9 @@ ProjectileView CombatSystem::projectile(size_t i) const {
     v.alive = p.alive != 0;
     v.speed = p.speed;
     v.spawn_frame = p.spawn_frame;
+    v.lob = p.lob != 0;
+    v.stuck = p.stuck != 0;
+    v.stuck_to = p.stuck_to;
     return v;
 }
 
@@ -3102,7 +3738,11 @@ bool CombatSystem::special_weapon_fire(ObjectId station, ObjectId target) {
 bool CombatSystem::launch_projectile(const ProjectileLaunch& l, uint32_t frame) {
     if (l.projectile >= data_->projectiles.size()) return false;
     const ProjectileDesc& pd = data_->projectiles[l.projectile];
-    Vec3 aim = l.point;
+    // S8 t04 (LOB_SOLVER §5): the shared spawner's grenade branch - every category-3 launch except a placed bomb (a fuse
+    // without `toss`). Q = the un-led target point (team container -> nearest member, + Ranged_Target_Z_Adjust) or the
+    // ground point; no arc -> nothing is spawned.
+    const bool lob = grenade(pd) && (l.fuse_seconds < 0.0f || l.toss);
+    Vec3 aim = l.point, q = l.point;
     float radius = 0.0f;
     if (l.target != kNoObject) {
         const Unit* t = unit(l.target);
@@ -3112,7 +3752,10 @@ bool CombatSystem::launch_projectile(const ProjectileLaunch& l, uint32_t frame) 
             aim = hp_world(*t, data_->hardpoints[hps_[t->hp_begin + static_cast<uint32_t>(l.target_hp)].desc]);
         aim = lead_point(*t, l.from, aim, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
         radius = desc_of(*t).radius;
+        if (lob) q = lob_target_point(lob_member(*t, l.from));
     }
+    LobSolution sol;
+    if (lob && !lob_solve(l.from, q, pd.max_speed, lob_g(pd), pd.can_lob_slower, sol)) return false;
     Projectile p;
     p.serial = next_serial_++;
     p.desc = l.projectile;
@@ -3132,7 +3775,18 @@ bool CombatSystem::launch_projectile(const ProjectileLaunch& l, uint32_t frame) 
     // [port] travel to the aim point (+ the target's radius): a point shot expires (detonates) there. A shot with
     // no distance at all (aim == from) falls back to the lifetime rule.
     p.max_travel = dist > 0.0f ? dist + radius : 0.0f;
-    if (l.fuse_seconds >= 0.0f) {  // OI abilities: an armed bomb sits where it was placed until the fuse runs out
+    if (lob) {
+        // §5.3: pitch theta and speed s from the solve, yaw from the led aim; MaxTravelDistance = Projectile_Max_Flight_
+        // Distance (no request override) + the target radius + |Q.z - L.z| [M: 0 without a flight distance -> lifetime].
+        p.lob = 1;
+        p.gravity = lob_g(pd);
+        p.launch = l.from;
+        p.lob_dir = lob_forward(aim - l.from, sol.angle);
+        p.dir = p.lob_dir;
+        p.speed = sol.speed;
+        p.max_travel = pd.max_flight_distance > 0.0f ? pd.max_flight_distance + radius + abs_f(q.z - l.from.z) : 0.0f;
+        p.fuse = l.fuse_seconds;  // a tossed bomb's timer runs during the flight
+    } else if (l.fuse_seconds >= 0.0f) {  // OI abilities: an armed bomb sits where it was placed until the fuse runs out
         p.speed = 0.0f;
         p.max_travel = 0.0f;
         p.fuse = l.fuse_seconds;
@@ -3302,8 +3956,12 @@ bool CombatSystem::detonate_projectile(size_t index, uint32_t frame) {
     projectiles_[index].alive = 0;
     const Projectile pc = projectiles_[index];  // copy: detonation may spawn (death projectiles)
     const ProjectileDesc& pd = data_->projectiles[pc.desc];
+    // S8 t06: a host call between ticks (DETONATE_REMOTE_BOMB) queries the last tick's trees for the area damage.
+    const TreeSet* const saved = trees_;
+    if (!trees_) trees_ = last_trees_;
     if (pd.blast_area_damage > 0.0f && pd.blast_area_range > 0.0f) area_damage(pc, pc.pos, kNoObject, frame);
     detonation_effects(pc, pc.pos, kNoObject, frame);
+    trees_ = saved;
     return true;
 }
 void CombatSystem::kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key) {
@@ -3608,7 +4266,7 @@ void CombatSystem::hash_units(StateHasher& h) const {
         h.i32(u.id);
         h.u32(u.desc);
         h.i32(u.owner);
-        h.u32(u.flags);
+        h.u32(u.flags & ~kUnitHostMirrorFlags);  // S8 t10 / t11: the host mirrors are derived state
         h.f32(u.health);
         h.f32(u.shield);
         h.u8(u.shield_depleted);
@@ -3717,6 +4375,19 @@ void CombatSystem::hash_extended(StateHasher& h) const {
             h.u8(0x24);
             h.i32(u.weapon_index);
         }
+        if (u.weapon_bone != 0) {  // S8 t06 B4: the fire-bone cycle index (format unchanged at 0)
+            h.u8(0x0A);
+            h.u32(u.weapon_bone);
+        }
+        if (u.lob_pending || u.lob_charged || u.lob_stamp != 0) {  // S8 t26: fire-at-position order (format unchanged without)
+            h.u8(0x37);
+            h.f32(u.lob_point.x);
+            h.f32(u.lob_point.y);
+            h.f32(u.lob_point.z);
+            h.u8(u.lob_pending);
+            h.u8(u.lob_charged);
+            h.u32(u.lob_stamp);
+        }
         if (u.auto_hp >= 0) {  // refixf t06 round 3: the scan target's fixed hardpoint (format unchanged without one)
             h.u8(0x29);
             h.i32(u.auto_hp);
@@ -3755,9 +4426,21 @@ void CombatSystem::hash_extended(StateHasher& h) const {
         h.u32(p.serial);
         h.u32(p.jammed_frame);
         h.u8(p.ever_jammed);
-        if (p.gravity > 0.0f) {  // OI tactical: lobbed flight state (absent for straight shots: format unchanged)
+        if (p.lob) {  // S8 t04: grenade flight state (absent for other shots: format unchanged)
+            h.u8(0x33);
             h.f32(p.gravity);
-            h.f32(p.floor_z);
+            for (const Vec3& v : {p.launch, p.lob_dir}) {
+                h.f32(v.x);
+                h.f32(v.y);
+                h.f32(v.z);
+            }
+            h.u8(p.stuck);
+            if (p.stuck) {
+                h.i32(p.stuck_to);
+                h.f32(p.stuck_offset.x);
+                h.f32(p.stuck_offset.y);
+                h.f32(p.stuck_offset.z);
+            }
         }
         if (p.fuse >= 0.0f) h.f32(p.fuse);  // OI abilities: armed bombs only
         if (p.rocket) {  // refixf t01: spline-rocket state (absent for other projectiles: format unchanged)

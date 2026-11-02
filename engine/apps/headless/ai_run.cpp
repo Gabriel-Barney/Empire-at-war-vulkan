@@ -27,7 +27,11 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "alamo/sim/campaign_battles.hpp"
+#ifdef ALAMO_SIM_HAVE_STORY
+#include "alamo/sim/story_session.hpp"
+#endif
 #include "alamo/vfs/vfs.hpp"
+#include "port_trace.hpp"
 
 namespace {
 
@@ -222,9 +226,42 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         std::unique_ptr<ai::GalacticAiWorld> world_holder;
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
+        cfg.story_crc = aopt.story;
         sim::SimHost host(types, js, cfg);
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
+        if (aopt.story) {
+            if (!cdef) return false;
+#ifdef ALAMO_SIM_HAVE_STORY
+            // q2f t03: the campaign's story plot sets (as map_run.cpp story_run). The retail sandbox runs them, and their
+            // start-of-game hero spawns are part of its tick-1 RNG draws (docs/re/GALACTIC_RNG_DRAWS.md).
+            sim::StoryStart st;
+            st.files = files.get();
+            st.plot_sets = sim::campaign_plot_sets(*cdef, *gs);
+            std::vector<std::string> sd;
+            if (!host.start_story(st, &sd) || !host.story()) {
+                for (const auto& d : sd) std::fprintf(stderr, "galactic-ai: story: %s\n", d.c_str());
+                return false;
+            }
+#else
+            std::fprintf(stderr, "galactic-ai: --story: this build has no story session\n");
+            return false;
+#endif
+        }
+        // q2f t05: the state trace reads the sim after each tick (never writes it); the first run only.
+        PortStateTrace trace;
+        if (print && !aopt.trace_out.empty()) {
+            std::string terr;
+            const std::vector<std::pair<std::string, std::string>> meta = {
+                {"reader", "alamo_headless"}, {"scenario", "galactic"}, {"game", "foc"}, {"campaign", name},
+                {"label", "alamo_headless --economy --galactic-ai" + std::string(aopt.story ? " --story" : "") +
+                              (aopt.human.empty() ? std::string() : " --human " + aopt.human)},
+                {"game_type", "0"}, {"mode_type", "0"}, {"target_ticks", std::to_string(opt.ticks)}};
+            if (!trace.open(aopt.trace_out, meta, cfg.seed, terr)) {
+                std::fprintf(stderr, "galactic-ai: %s\n", terr.c_str());
+                return false;
+            }
+        }
         sim::CampaignBattleOptions bo;
         bo.conflict.human_choice = aopt.battles == "auto" ? galactic::BattleChoice::AutoResolve : galactic::BattleChoice::Fight;
         bo.conflict.fight_ai_battles = aopt.battles == "fight-all";
@@ -253,10 +290,12 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         battles.conflicts().on_survival_roll = [&world_ptr](int32_t owner, uint32_t type, bool survived) {
             if (world_ptr) world_ptr->record_auto_resolve_survival(owner, type, survived);
         };
+        ai::GalacticAiConfig wcfg = gcfg;
+        wcfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
         world_holder = std::make_unique<ai::GalacticAiWorld>(
             *gs, host.galactic_mode()->primary(), &types, files.get(), host.random(), defs, eqs, tinfo,
             [&host](uint8_t p, const commands::EventData& ev) { return host.execute_direct(p, commands::CommandSource::AI, ev); },
-            gcfg);
+            wcfg);
         ai::GalacticAiWorld& world = *world_holder;
         world_ptr = &world;
         std::vector<std::string> wd;
@@ -336,8 +375,18 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         for (const galactic::PlanetState& ps : gs->planets()) owner_prev.push_back(ps.owner);
         std::string owner_log;
         uint32_t owner_changes = 0;
+        if (trace.is_open()) trace.start(*gs, cfg.seed);
         while (n < opt.ticks && host.tick_once()) {
             ++n;
+            if (trace.is_open()) {
+                const sim::GameMode* top = host.modes().top();
+                PortStateTrace::Sample ts;
+                ts.global_frame = host.frame();
+                ts.mode_type = top ? static_cast<uint32_t>(top->kind()) : 0u;
+                ts.rng_state = host.random().synced().state();
+                ts.stack_depth = static_cast<uint32_t>(host.modes().depth());
+                trace.sample(*gs, ts);
+            }
             for (size_t i = 0; i < owner_prev.size() && i < gs->planets().size(); ++i) {  // planets changing hands
                 const int32_t o = gs->planets()[i].owner;
                 if (o == owner_prev[i]) continue;
@@ -357,6 +406,14 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
             }
         }
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (trace.is_open()) {
+            std::string terr;
+            if (!trace.finish("ticks_reached", terr)) {
+                std::fprintf(stderr, "galactic-ai: %s\n", terr.c_str());
+                return false;
+            }
+            std::printf("wrote %s\n", aopt.trace_out.c_str());
+        }
         out.crc = host.crc_log();
         for (const ai::AiDecision& d : world.decision_log())
             t += std::to_string(d.frame) + " p" + std::to_string(d.player) + " " + d.text + "\n";

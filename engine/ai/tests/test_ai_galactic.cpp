@@ -41,6 +41,8 @@
 #include "alamo/lua/players.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
+#include "../src/galactic_goal_time.hpp"
+#include "../src/galactic_slots.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
@@ -103,6 +105,7 @@ static void test_cadence() {
         bool plan_invalid(const Goal&) override { return true; }
         bool replaceable(const Goal&) override { return true; }
         void refresh_plan(Goal&) override {}
+        void suspend_reservations(Goal&) override {}
         bool uses_budget() override { return false; }
         bool can_fund(const Goal&) override { return true; }
         float category_credits(int32_t) override { return 1.0f; }
@@ -170,6 +173,142 @@ static void test_desire_and_hysteresis() {
     const double v = 12.5, w1 = -5.0, w2 = -8.0;
     const double desire = v + static_cast<double>(2.0f * static_cast<float>(w1) + 1.0f * static_cast<float>(w2));
     CHECK(desire == -5.5);
+}
+
+// a1g t01 - free-store reservations through the goal system (A1_READINGS §28.6): a mock mode whose PotentialPlans
+// want unit 1 (else a fallback unit). The proposal's solve ignores reservations and reserves nothing; the accept
+// re-solves honouring them and reserves; every Commit suspends the active goals' entries before any
+// Resolve_Category and kept goals re-assert them; a goal whose unit another PP reserved is released.
+static void test_goal_reservations() {
+    struct Pp {
+        int32_t fallback = -1;
+        std::vector<int32_t> units;
+        int32_t solves = 0;
+    };
+    struct ResHooks final : GoalModeHooks {
+        std::map<int32_t, int32_t> owner{{1, -1}, {2, -1}, {3, -1}};  // free-store entry +0x30 (-1 = 0)
+        std::map<int32_t, Pp> pps;
+        std::vector<std::string> trace;
+        int32_t next_pp = 0, next_run = 0;
+        void solve(int32_t h, bool first) {
+            Pp& p = pps[h];
+            ++p.solves;
+            p.units.clear();
+            for (const int32_t u : {1, p.fallback})
+                if (first || owner[u] < 0) {  // Setup A: PP+0x104 == 0 or +0x30 == 0
+                    p.units.push_back(u);
+                    return;
+                }
+        }
+        uint32_t target_count() override { return 0; }
+        bool applies(int32_t, uint32_t) override { return false; }
+        bool blocked(uint32_t, int32_t) override { return false; }
+        bool evaluate(const std::string& f, int32_t, double& out) override {
+            out = f == "A" ? 10.0 : 5.0;
+            return true;
+        }
+        bool accept(Goal& g) override {
+            g.pp_handle = next_pp++;
+            pps[g.pp_handle].fallback = g.type == 0 ? 2 : 3;
+            solve(g.pp_handle, true);
+            g.plan = 0;
+            g.pp_valid = true;
+            trace.push_back("propose " + std::to_string(g.pp_handle));
+            return true;
+        }
+        bool plan_activatable(const Goal& g) override {
+            solve(g.pp_handle, false);
+            trace.push_back("resolve " + std::to_string(g.pp_handle));
+            return !pps[g.pp_handle].units.empty();
+        }
+        bool plan_invalid(const Goal& g) override {
+            if (g.running < 0) return true;
+            for (const int32_t u : pps[g.pp_handle].units)
+                if (owner[u] >= 0 && owner[u] != g.pp_handle) return true;
+            return false;
+        }
+        bool replaceable(const Goal&) override { return true; }
+        void refresh_plan(Goal& g) override {
+            for (const int32_t u : pps[g.pp_handle].units) owner[u] = g.pp_handle;
+            trace.push_back("reserve " + std::to_string(g.pp_handle));
+        }
+        void suspend_reservations(Goal& g) override {
+            for (auto& [u, o] : owner)
+                if (o == g.pp_handle) o = -1;
+            trace.push_back("suspend " + std::to_string(g.pp_handle));
+        }
+        bool uses_budget() override { return false; }
+        bool can_fund(const Goal&) override { return true; }
+        float category_credits(int32_t) override { return 1.0f; }
+        void budget_add(Goal&) override {}
+        void budget_release(Goal&) override {}
+        void budget_weights() override {}
+        std::vector<int32_t> category_order() override { return {}; }
+        void queue_production(Goal&) override {}
+        void instantiate(Goal& g) override { g.running = next_run++; }
+        void end_plan(Goal&, bool) override {}
+        void drop_potential_plan(Goal& g) override {
+            for (auto& [u, o] : owner)  // the destructor: 0x6c2320 clears only its own entries
+                if (o == g.pp_handle) o = -1;
+            if (g.pp_handle >= 0) trace.push_back("drop " + std::to_string(g.pp_handle));
+            g.pp_handle = -1;
+        }
+        float elapsed_eta(const Goal&) override { return 0.0f; }
+        int32_t quota_players() override { return 1; }
+    } hooks;
+    AiDefinitions defs;
+    for (const char* n : {"Goal_A", "Goal_B"}) {
+        GoalTypeDef d;
+        d.name = n;
+        d.application = app::Global;
+        d.category = 0;
+        defs.goals.push_back(d);
+    }
+    LearningSystem learning;
+    SimRng rng(7);
+    GoalSystem gs;
+    GoalSystemConfig cfg;
+    cfg.extra_goals_per_category = 2;
+    gs.init(defs, {{0, "A"}, {1, "B"}}, &hooks, &learning, nullptr, &rng, cfg);
+    auto active = [&gs]() { return gs.active()[0].size(); };
+    auto at = [&hooks](const std::string& s) {
+        return static_cast<size_t>(std::find(hooks.trace.begin(), hooks.trace.end(), s) - hooks.trace.begin());
+    };
+
+    // Pass 1: both proposals solve unit 1 (first solve ignores reservations) and reserve nothing; A (10) is accepted
+    // first and reserves unit 1; B's accept re-solves past it to unit 3.
+    gs.service(1);
+    CHECK(gs.commits() == 1 && active() == 2);
+    CHECK(hooks.pps[0].solves == 2 && hooks.pps[1].solves == 2);
+    CHECK(at("propose 0") < at("propose 1") && at("propose 1") < at("resolve 0"));
+    CHECK(at("resolve 0") < at("reserve 0") && at("reserve 0") < at("resolve 1") && at("resolve 1") < at("reserve 1"));
+    CHECK(hooks.pps[0].units == std::vector<int32_t>{1} && hooks.pps[1].units == std::vector<int32_t>{3});
+    CHECK(hooks.owner[1] == 0 && hooks.owner[2] == -1 && hooks.owner[3] == 1);
+
+    // Pass 2: no proposals (both active). Commit step 4 suspends both before maintenance re-asserts them.
+    hooks.trace.clear();
+    gs.service(2);
+    CHECK(gs.commits() == 2 && active() == 2);
+    CHECK(at("suspend 0") < at("reserve 0") && at("suspend 1") < at("reserve 0") && at("reserve 1") < hooks.trace.size());
+    CHECK(hooks.owner[1] == 0 && hooks.owner[3] == 1);
+
+    // Another PP (99) takes unit 3: at the next Commit B's plan is invalid (its unit was stolen) and B is released;
+    // its destructor leaves PP 99's entry alone. A keeps unit 1.
+    hooks.owner[3] = 99;
+    hooks.trace.clear();
+    gs.service(3);
+    CHECK(gs.commits() == 3 && active() == 1 && gs.active()[0][0].type == 0);
+    CHECK(at("drop 1") < hooks.trace.size() && hooks.owner[3] == 99 && hooks.owner[1] == 0);
+
+    // Pass 4: B is proposed again (its first solve takes unit 1 regardless of A); A is kept and re-asserts unit 1, then
+    // B's re-solve finds unit 1 and unit 3 reserved: it cannot be activated and is dropped.
+    hooks.trace.clear();
+    gs.service(4);
+    CHECK(gs.commits() == 4 && active() == 1);
+    CHECK(hooks.pps[2].units.empty() && hooks.pps[2].solves >= 2);
+    CHECK(at("propose 2") < at("suspend 0") && at("suspend 0") < at("reserve 0") && at("reserve 0") < at("resolve 2"));
+    CHECK(at("reserve 2") == hooks.trace.size() && hooks.owner[1] == 0 && hooks.owner[2] == -1 && hooks.owner[3] == 99);
+    std::printf("goal reservations: %zu hook calls in the last pass\n", hooks.trace.size());
 }
 
 static void test_plan_pick_and_solver() {
@@ -933,6 +1072,186 @@ static void test_sim_hooks() {
     CHECK(fleet_events > 0 && fleet_rejected == 0);
 }
 
+// A2 t03 (Conquer_Opponent): the force leaf Target.EnemyForce.SpaceTotalUnnormalized holds the starbase's per-tech
+// spawned members only (AI_GALACTIC_TOKENS 2: "not the starbase's own power"), typed or not; the starbase's own
+// AI_Combat_Power is the helper 0x5f2430's add (GALACTIC_ECONOMY 6.2) and lands in the PotentialPlan's untyped totals only.
+static void test_starbase_force_split() {
+    MemoryFiles files;
+    AiDefinitions defs;
+    EquationSet eqs;
+    std::vector<std::string> plan_files;
+    syn_data(files, defs, eqs, plan_files);
+    eqs.add("Space_All", "Variable_Target.EnemyForce.SpaceTotalUnnormalized");
+    eqs.add("Space_Capital", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Capital\"}");
+    eqs.add("Space_Frigate", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Frigate\"}");
+    eqs.add("Space_Corvette", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Corvette\"}");
+    eqs.add("Space_FrigCorv", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Frigate\", Parameter_Category = \"Corvette\"}");
+    eqs.add("Ground_All", "Variable_Target.EnemyForce.GroundTotalUnnormalized");
+    eqs.link();
+    const gal::GalacticRules rules = syn_rules();  // SB1 600, Frigate 1000, Corvette 500
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+    GameRandom rng(4242u, 77u);
+    gal::GalacticSim sim(rules, store, rng.synced());
+    gal::GalacticSetup setup = syn_setup();
+    setup.forces = {{0, 0, tSB1}, {1, 7, tSB1}};  // the Empire's base at P0, the (hostile) Rebel base at P7, nothing else
+    CHECK(sim.start(setup));
+    std::vector<GalacticAiTypeInfo> tinfo(tTypes);
+    tinfo[tFrigate].categories = {"FRIGATE"};
+    tinfo[tCorvette].categories = {"CORVETTE"};
+    tinfo[tSB1].categories = tinfo[tSB2].categories = {"CAPITAL"};
+    tinfo[tSB1].spawn_tech[0] = {{tCorvette, 2}, {tFrigate, 1}};  // 2 x 500 + 1 x 1000
+    tinfo[tSB1].spawn_tech[3] = {{tFrigate, 9}};                  // above the owner's tech level: never read
+    fill_category_masks(tinfo);
+    const std::span<const GalacticAiTypeInfo> ti(tinfo);
+    const uint32_t cap = static_cast<uint32_t>(ai_category_bit("Capital")), frig = static_cast<uint32_t>(ai_category_bit("Frigate")),
+                   corv = static_cast<uint32_t>(ai_category_bit("Corvette"));
+    CHECK(cap != 0 && frig != 0 && corv != 0 && sim.planets()[7].starbase && sim.planets()[7].owner == 1);
+    CHECK(sim.players()[1].tech_level == 1);  // slot 1 empty: the fallback reads slot 0
+    // The per-tech members of a type: never its own power, typed or untyped.
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, kAllCategories) == 2000.0);
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, cap) == 0.0);  // the starbase is a Capital, its own power is NOT in the row
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, frig) == 1000.0);
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, corv) == 1000.0);
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, frig | corv) == 2000.0);
+    CHECK(galactic_ai_member_force(sim, ti, tSB2, 1, kAllCategories) == 0.0);  // no members
+    // The leaf (members only) and the 0x5f2430 helper (+ the starbase's own power in the untyped total only).
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 2000.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 2600.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap) == 0.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, frig) == 1000.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, frig | corv) == 2000.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 0, 0, true, kAllCategories) == 0.0);  // its own base is not enemy strength
+    CHECK(galactic_ai_planet_force(sim, ti, 0, 0, false, true, kAllCategories) == 2000.0);  // Friendly side: its members
+    // The token leaf on the live sim (Self = Empire, Target = P7).
+    GalacticAiConfig cfg;
+    cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
+    cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
+    GalacticAiWorld world(sim, store, &types, &files, rng, defs, eqs, tinfo,
+                          [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, cfg);
+    CHECK(world.load_plans(plan_files) && world.start());
+    sim.update();
+    world.update_player(0, 1, true, false);
+    EvalContext c;
+    c.self = 0;
+    c.target = 7;
+    auto value = [&](const char* name) {
+        const EvalResult r = evaluate(eqs, eqs.find(name), c, world.resolver());
+        CHECK(r.ok);
+        return r.value;
+    };
+    CHECK(value("Space_All") == 2000.0);  // members only: the own 600 is not in the leaf
+    CHECK(value("Space_Capital") == 0.0);
+    CHECK(value("Space_Frigate") == 1000.0);
+    CHECK(value("Space_Corvette") == 1000.0);
+    CHECK(value("Space_FrigCorv") == 2000.0);
+    CHECK(value("Ground_All") == 0.0);
+    // The Empire's own base is not enemy force from its point of view.
+    c.target = 0;
+    CHECK(value("Space_All") == 0.0);
+    std::printf("starbase force split: leaf 2000 (members), helper 0x5f2430 untyped 2600 (+ own 600), Capital row 0, Frigate row 1000\n");
+}
+
+// A2 t03: per-tech members of the other objects the force totals walk (AI_GALACTIC_TOKENS 2 / 3): every unit of an orbiting
+// fleet adds its type's members to the space leaf ("each unit's type power (category) + its per-tech members"); every
+// ground structure adds its members (never its own power) to the ground leaf; surface units add only their power; a
+// ground structure with Is_Special_Weapon_In_Space adds its own power to the space leaf by the structure mask (Capital
+// default); the player-root totals add the members of every walked object.
+static void test_force_members() {
+    MemoryFiles files;
+    AiDefinitions defs;
+    EquationSet eqs;
+    std::vector<std::string> plan_files;
+    syn_data(files, defs, eqs, plan_files);
+    eqs.add("Space_All", "Variable_Target.EnemyForce.SpaceTotalUnnormalized");
+    eqs.add("Space_Capital", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Capital\"}");
+    eqs.add("Space_Frigate", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Frigate\"}");
+    eqs.add("Space_Corvette", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Corvette\"}");
+    eqs.add("Ground_All", "Variable_Target.EnemyForce.GroundTotalUnnormalized");
+    eqs.add("Ground_Infantry", "Variable_Target.EnemyForce.GroundTotalUnnormalized {Parameter_Category = \"Infantry\"}");
+    eqs.add("Game_Space", "Game.EnemyForce.SpaceTotalUnnormalized");
+    eqs.add("Self_Space", "Variable_Self.SpaceTotalUnnormalized");
+    eqs.add("Self_Ground", "Variable_Self.GroundTotalUnnormalized");
+    eqs.link();
+    gal::GalacticRules rules = syn_rules();  // SB1 600, Frigate 1000, Corvette 500, Infantry 200
+    rules.types[tBarracks].ai_combat_power = 300.0f;
+    rules.types[tSB2].kind = gal::UnitKind::GroundStructure;  // SB2 stands in for an ion cannon (ground, +0x1E), power 1200
+    rules.types[tSB2].base_level = 0;
+    rules.types[tSB2].required_star_base = 0;
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+    GameRandom rng(4242u, 77u);
+    gal::GalacticSim sim(rules, store, rng.synced());
+    gal::GalacticSetup setup = syn_setup();
+    // The Rebel holds P7: a level-1 base, a barracks, an "ion cannon", a frigate fleet and an infantry company.
+    setup.forces = {{0, 0, tSB1}, {1, 7, tSB1}, {1, 7, tBarracks}, {1, 7, tSB2}, {1, 7, tFrigate}, {1, 7, tInfantry}};
+    CHECK(sim.start(setup));
+    std::vector<GalacticAiTypeInfo> tinfo(tTypes);
+    tinfo[tFrigate].categories = {"FRIGATE"};
+    tinfo[tCorvette].categories = {"CORVETTE"};
+    tinfo[tInfantry].categories = {"INFANTRY"};
+    tinfo[tBarracks].categories = tinfo[tSB2].categories = {"STRUCTURE"};
+    tinfo[tSB1].categories = {"CAPITAL"};
+    tinfo[tSB1].spawn_tech[0] = {{tCorvette, 2}};   // starbase hangar: 1000
+    tinfo[tFrigate].spawn_tech[0] = {{tCorvette, 1}};  // carrier hangar: 500
+    tinfo[tBarracks].spawn_tech[0] = {{tInfantry, 3}};  // land garrison: 600
+    tinfo[tInfantry].spawn_tech[0] = {{tInfantry, 5}};  // a surface unit's list is never read by the planet leaf
+    tinfo[tSB2].special_weapon_space = true;
+    fill_category_masks(tinfo);
+    const std::span<const GalacticAiTypeInfo> ti(tinfo);
+    const uint64_t cap = ai_category_bit("Capital"), frig = ai_category_bit("Frigate"), corv = ai_category_bit("Corvette"),
+                   inf = ai_category_bit("Infantry");
+    const gal::PlanetState& p7 = sim.planets()[7];
+    CHECK(p7.owner == 1 && p7.starbase && p7.structures.size() == 2 && p7.surface.size() == 1 && !p7.orbit.empty());
+    // Space leaf: frigate 1000 + its corvette 500 + the base's corvettes 1000 + the special-weapon structure's own 1200
+    // (Capital rows only: the +0x1658 default); the starbase's own 600 never.
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 3700.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, frig) == 1000.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, corv) == 1500.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, cap) == 1200.0);
+    // Ground leaf: infantry 200 (not its own list) + barracks members 600; the structures' own power (300, 1200) never.
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, false, kAllCategories) == 800.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, false, inf) == 800.0);
+    // 0x5f2430: + the starbase's own 600 (space) / the ground structures' own 300 + 1200 (ground), untyped only.
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 4300.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, corv) == 1500.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, kAllCategories) == 2300.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, inf) == 800.0);
+    // The token leaves on the live sim (Self = Empire).
+    GalacticAiConfig cfg;
+    cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
+    cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
+    GalacticAiWorld world(sim, store, &types, &files, rng, defs, eqs, tinfo,
+                          [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, cfg);
+    CHECK(world.load_plans(plan_files) && world.start());
+    sim.update();
+    world.update_player(0, 1, true, false);
+    EvalContext c;
+    c.self = 0;
+    c.target = 7;
+    auto value = [&](const char* name) {
+        const EvalResult r = evaluate(eqs, eqs.find(name), c, world.resolver());
+        CHECK(r.ok);
+        return r.value;
+    };
+    CHECK(value("Space_All") == 3700.0);
+    CHECK(value("Space_Capital") == 1200.0);
+    CHECK(value("Space_Frigate") == 1000.0);
+    CHECK(value("Space_Corvette") == 1500.0);
+    CHECK(value("Ground_All") == 800.0);
+    CHECK(value("Ground_Infantry") == 800.0);
+    CHECK(value("Game_Space") == 3700.0);  // Σ planets: only P7 holds Rebel force
+    // Player root (Self = Rebel): space = base 600 (Capital default) + frigate 1000, ground = infantry 200; members of
+    // every walked object in both: base 1000 + frigate 500 + barracks 600 + infantry 1000 = 3100 [M literal reading].
+    c.self = 1;
+    CHECK(value("Self_Space") == 4700.0);
+    CHECK(value("Self_Ground") == 3300.0);
+    std::printf("force members: space leaf 3700 (fleet + carrier members + base members + special weapon), ground leaf 800, "
+                "0x5f2430 untyped 4300 / 2300\n");
+}
+
 // A2 galactic, AI_GALACTIC_3 rules: heroes never attach through their AI script (§2.4), the TerrainType veto (§6.3),
 // the galactic population cap when AI_Uses_Galactic_Pop_Cap is set (§3.5), MagicPlan spawns without production or
 // charge (§4), and the perception DLL's division / clamp failures (§7.1).
@@ -969,6 +1288,33 @@ function MagicForce_Thread()
   ScriptExit()
 end
 )";
+// A2 f t01: a ground-structure plan on a friendly target (Upgrade_Starbase = the synthetic Infrastructure goal).
+static const char* kPlanBuildBarracks = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Upgrade_Starbase"
+  TaskForce = { { "BaseForce", "Barracks = 1" } }
+end
+function BaseForce_Thread()
+  BaseForce.Set_As_Goal_System_Removable(false)
+  BlockOnCommand(BaseForce.Produce_Force())
+  BaseForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+function BaseForce_Production_Failed(tf, t)
+  ScriptExit()
+end
+)";
+
+// A2f t02: a category-mask team (CORVETTE is a GameObjectCategoryType name, AI_GALACTIC_2 §1.3).
+static const char* kPlanMaskCorvette = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "Corvette = 1" } }
+end
+function MainForce_Thread() ScriptExit() end
+)";
 
 struct ParityWorld {
     MemoryFiles files;
@@ -985,13 +1331,21 @@ struct ParityWorld {
     uint32_t hero = 0, planet_r = 0;
     std::vector<std::string> orders;
 
-    // only: the plan files to load (by base name), empty = all.
+    // only: the plan files to load (by base name), empty = all. rules_tweak: applied to the rules before the sim starts;
+    // eq_first: equations added before the synthetic ones (a name added here wins: the first definition is kept);
+    // tinfo_tweak: applied to the AI type info before the world is built.
     ParityWorld(bool pop_cap, const std::vector<std::string>& only,
-                const std::function<void(gal::GalacticSetup&)>& tweak = {}) {
+                const std::function<void(gal::GalacticSetup&)>& tweak = {},
+                const std::function<void(gal::GalacticRules&)>& rules_tweak = {},
+                const std::function<void(EquationSet&)>& eq_first = {},
+                const std::function<void(std::vector<GalacticAiTypeInfo>&)>& tinfo_tweak = {}) {
+        if (eq_first) eq_first(eqs);
         syn_data(files, defs, eqs, plan_files);
         files.add("Data\\Scripts\\AI\\HeroAttach.lua", kPlanHeroAttach);
         files.add("Data\\Scripts\\AI\\HeroDeny.lua", kPlanHeroDeny);
         files.add("Data\\Scripts\\AI\\MagicSpace.lua", kPlanMagic);
+        files.add("Data\\Scripts\\AI\\BuildBarracks.lua", kPlanBuildBarracks);
+        files.add("Data\\Scripts\\AI\\MaskCorvette.lua", kPlanMaskCorvette);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -1022,6 +1376,7 @@ struct ParityWorld {
             rules.constants.ai_uses_galactic_pop_cap = true;
             rules.types[tCorvette].population = 50;  // more than any capacity of this map
         }
+        if (rules_tweak) rules_tweak(rules);
         store = std::make_unique<objects::ObjectStore>(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
         rng = std::make_unique<GameRandom>(4242u, 77u);
         sim = std::make_unique<gal::GalacticSim>(rules, *store, rng->synced());
@@ -1038,6 +1393,7 @@ struct ParityWorld {
         tinfo[hero].lua_script = "HeroShipScript";  // a hero AI script: a hero record (§2.1)
         tinfo[tCorvette].unit_ai = true;            // STRATEGIC_GAPS §1.1 removal feed filter
         tinfo[tInfantry].company_first = tCorvette; // (synthetic) company-leader substitution for the survival key
+        if (tinfo_tweak) tinfo_tweak(tinfo);
         GalacticAiConfig cfg;
         cfg.players = {{0, "SynEmpire", 1}};
         cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
@@ -1058,6 +1414,22 @@ struct ParityWorld {
     }
     bool has(const std::vector<uint32_t>& sel, uint32_t t) const { return std::find(sel.begin(), sel.end(), t) != sel.end(); }
 };
+
+// a1h t07: a build task of an AllowFreeStoreUnits plan takes its unit through 0x4d2bd0, which does not read the free-store
+// entry's +0x30 owner (A1_READINGS §28.5): a unit another PotentialPlan reserved is still supplied.
+static void test_free_store_supply() {
+    ParityWorld pw(false, {"HeroAttach"});
+    pw.run(2);
+    const objects::ObjectHandle f = pw.world->free_store_supply(0, tFrigate);  // the Empire's starting frigate at P0
+    CHECK(static_cast<bool>(f) && pw.world->free_store_owner(f) == -1);
+    CHECK(!pw.world->free_store_supply(0, tCorvette));  // none on the store
+    CHECK(!pw.world->free_store_supply(1, tFrigate));   // not an AI player of this world
+    pw.world->set_free_store_owner(f, 12345);           // reserved by another plan's accept (0x6c2b20)
+    CHECK(pw.world->free_store_owner(f) == 12345 && pw.world->free_store_supply(0, tFrigate) == f);
+    pw.world->set_free_store_owner(f, -1);
+    CHECK(pw.world->free_store_owner(f) == -1);
+    std::printf("free-store supply: a reserved unit is supplied (0x4d2bd0 ignores +0x30)\n");
+}
 
 static void test_parity_rules() {
     {
@@ -1200,6 +1572,321 @@ static void test_production_disabled_and_delivery() {
         const std::vector<uint8_t> r5 = galactic_ai_delivery_flood(*pw.sim, 1, 0, galactic_ai_delivery_mode(true, false));
         CHECK(r5.size() == 8 && r5[1] && r5[2] && r5[3]);
     }
+}
+
+// A2 f t01 (1): ProductionM's ground-structure slot check is used slots 0x3f8af0 (ground structures, 0 without a
+// ground base) + queued < the planet type's Special_Structures_Land (0x372740, D+0x230), not the map's legacy
+// <Max_Ground_Base>; plus the per-planet cap Build_Max_Instances_Per_Planet (0x3f94f0). The same slot max feeds the
+// MaxStructureSlots / OpenStructureSlots tokens. P0 (the Empire's) holds SB1 + one Barracks.
+static void test_ground_structure_slots() {
+    const std::vector<std::string> only = {"BuildBarracks"};
+    const auto map_ground = [](int32_t v) {
+        return [v](gal::GalacticSetup& s) {
+            for (auto& m : s.map.planets.max_ground_base) m = v;
+        };
+    };
+    const auto slots = [](int32_t v) { return [v](gal::GalacticRules& r) { r.types[tPlanet].ground_structure_slots = v; }; };
+    auto solve = [](ParityWorld& pw, bool& ok) {
+        pw.run(2);  // first service: templates, budget
+        ok = false;
+        return pw.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 0, &ok);
+    };
+    auto token = [](ParityWorld& pw, const char* text) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        c.target = 0;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        CHECK(r.ok);
+        return r.value;
+    };
+    bool ok = false;
+    {
+        // No Special_Structures_Land (-1): unlimited; the tokens fall back to 5.
+        ParityWorld pw(false, only);
+        const std::vector<uint32_t> s = solve(pw, ok);
+        CHECK(ok && pw.has(s, tBarracks));
+        CHECK(galactic_ai_ground_slot_max(*pw.sim, 0) == -1 && galactic_ai_ground_slots_used(*pw.sim, 0) == 1);
+        CHECK(galactic_ai_ground_slots_used(*pw.sim, 2) == 0 && galactic_ai_ground_slot_max(*pw.sim, 99) == 0);
+        CHECK(token(pw, "Variable_Target.MaxStructureSlotsUnnormalized") == 5.0);
+        CHECK(token(pw, "Variable_Target.OpenStructureSlotsUnnormalized") == 4.0);
+    }
+    {
+        // 3 slots, the map's <Max_Ground_Base> 0 (as on every shipped planet): 1 used < 3 -> solved.
+        ParityWorld pw(false, only, map_ground(0), slots(3));
+        const std::vector<uint32_t> s = solve(pw, ok);
+        std::printf("ground slots: Special_Structures_Land 3, Max_Ground_Base 0 -> %s\n", ok ? "solved" : "vetoed");
+        CHECK(ok && pw.has(s, tBarracks));
+        CHECK(galactic_ai_ground_slot_max(*pw.sim, 0) == 3);
+        CHECK(token(pw, "Variable_Target.MaxStructureSlotsUnnormalized") == 3.0);
+        CHECK(token(pw, "Variable_Target.OpenStructureSlotsUnnormalized") == 2.0);
+        CHECK(token(pw, "Variable_Target.MaxGroundbaseLevelUnnormalized") == 3.0);
+    }
+    {
+        // 1 slot, already used by the Barracks: vetoed although <Max_Ground_Base> is 5.
+        ParityWorld pw(false, only, map_ground(5), slots(1));
+        const std::vector<uint32_t> s = solve(pw, ok);
+        std::printf("ground slots: Special_Structures_Land 1 (used 1), Max_Ground_Base 5 -> %s\n", ok ? "solved" : "vetoed");
+        CHECK(!ok && !pw.has(s, tBarracks));
+        CHECK(token(pw, "Variable_Target.OpenStructureSlotsUnnormalized") == 0.0);
+    }
+    {
+        // Build_Max_Instances_Per_Planet 1 with one Barracks present: vetoed with unlimited slots.
+        ParityWorld pw(false, only, {}, [](gal::GalacticRules& r) { r.types[tBarracks].max_instances_per_planet = 1; });
+        const std::vector<uint32_t> s = solve(pw, ok);
+        CHECK(!ok && !pw.has(s, tBarracks));
+    }
+}
+
+// A2 f t01 (2): BudgetFractionToBuild 0x667120 fails only without a goal system / for an unknown type. Before the
+// budget's Init it reads the constructed zeros (an empty category = income rate + credits; a category = 0 / 0 -> D = 0
+// -> never), so a template budget equation that reads it does not fail at Init (AI_GALACTIC_2 §3.2): the category keeps
+// its weight and gets its share of the starting credits.
+static void test_budget_fraction_before_init() {
+    const char* frac = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Barracks\"}";
+    const char* frac_infra = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Barracks\", Parameter_Category = \"Infrastructure\"}";
+    auto token = [](ParityWorld& pw, const char* text, bool& ok) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    bool ok = false;
+    {
+        ParityWorld pw(false, {"BuildBarracks"});  // no update yet: the budget is not initialised
+        const double all = token(pw, frac, ok);
+        CHECK(ok && all > 0.0 && all <= 500.0 / 6000.0);  // R / (time * income rate + credits)
+        const double infra = token(pw, frac_infra, ok);
+        CHECK(ok && infra == 1.0e18);
+        CHECK(pw.world->tactical_budget_rows(0).empty() || pw.world->tactical_budget_rows(0)[0].available == 0.0f);
+    }
+    {
+        ParityWorld pw(false, {"BuildBarracks"}, {}, {}, [frac_infra](EquationSet& e) {
+            e.add("Infra_Budget", std::string("3 + 0 * ") + frac_infra);  // wins over the synthetic "3"
+        });
+        pw.run(1);  // first service: templates, budget Init
+        int funded = 0;
+        float total = 0.0f;
+        for (const GalacticAiWorld::TacticalBudgetRow& r : pw.world->tactical_budget_rows(0)) {
+            funded += r.available > 0.0f ? 1 : 0;
+            total += r.available;
+        }
+        const double infra = token(pw, frac_infra, ok);
+        std::printf("budget init with BudgetFractionToBuild in Infra_Budget: %d funded categories, total %.0f, Barracks fraction %.4f\n",
+                    funded, static_cast<double>(total), infra);
+        CHECK(funded == 2);                      // Offensive and Infrastructure (Defensive = Zero)
+        CHECK(ok && infra > 0.0 && infra < 1.0);  // Infrastructure holds more than one Barracks
+    }
+}
+
+// A2f t02 R1: ProductionM vetoes a produced candidate whose Setup C time is 1e18 (no source planet passes 0x2804d0, or a
+// structure 0x2804d0 refuses at the target) [port: AI_GALACTIC_2 §1.4 has no such veto]. Cases from the HotM diagnosis
+// (docs/re/A2F_PRODUCTION_STALL_DIAG.md): a zero-cost hero type (Veers_AT_AT_Walker), Build_Initially_Locked never
+// unlocked (TIE_Fighter_Squadron), a structure whose Required_Special_Structures is missing at the target (Heavy /
+// Advanced Vehicle Factory). Free-store units of such types still join (FreeStore score, Production 0.5). Category-mask
+// teams no longer drop zero-cost types (no cost rule in §1.3).
+static void test_production_unbuildable() {
+    bool ok = false;
+    float eta = -1.0f;
+    const auto no_hero = [](gal::GalacticSetup& s) {
+        s.forces.erase(std::remove_if(s.forces.begin(), s.forces.end(), [](const auto& f) { return f.type == tTypes; }), s.forces.end());
+    };
+    {
+        // HeroShip (cost 0, the HotM Veers case) not on the free store: listed first in the team and tied with the
+        // Corvette, it used to win and wait on the market forever; now vetoed, the Corvette is produced.
+        ParityWorld pw(false, {"HeroDeny"}, no_hero);
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok, &eta);
+        std::printf("unbuildable: zero-cost hero type off the free store -> %s, hero %s, corvette %s, eta %.1f\n", ok ? "solved" : "failed",
+                    pw.has(s, pw.hero) ? "yes" : "no", pw.has(s, tCorvette) ? "yes" : "no", static_cast<double>(eta));
+        CHECK(ok && !pw.has(s, pw.hero) && pw.has(s, tCorvette));
+        CHECK(eta > 0.0f);  // every produced selection has a source planet: the ETA counts it
+        // On the free store the same hero type joins (free units are not vetoed).
+        ParityWorld fs(false, {"HeroDeny"});
+        fs.run(2);
+        const std::vector<uint32_t> f = fs.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok, &eta);
+        CHECK(ok && fs.has(f, fs.hero));
+    }
+    {
+        // Build_Initially_Locked (TIE_Fighter_Squadron in HotM): vetoed until unlocked; with the hero gone too the solve fails.
+        ParityWorld pw(false, {"HeroDeny"}, no_hero, [](gal::GalacticRules& r) { r.types[tCorvette].build_initially_locked = true; });
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        std::printf("unbuildable: locked Corvette -> %s (%zu selected)\n", ok ? "solved" : "failed", s.size());
+        CHECK(!ok && s.empty());
+        pw.sim->unlock_type(0, tCorvette);
+        const std::vector<uint32_t> u = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        CHECK(ok && pw.has(u, tCorvette) && !pw.has(u, pw.hero));
+    }
+    {
+        // A structure needing a structure the target lacks (the Heavy / Advanced Vehicle Factory case): the Barracks
+        // needs a Barracks; P0 holds one, P1 (the Empire's too) none.
+        const auto needs = [](gal::GalacticRules& r) { r.types[tBarracks].required_special_structures = {tBarracks}; };
+        ParityWorld pw(false, {"BuildBarracks"}, {}, needs);
+        pw.run(2);
+        const std::vector<uint32_t> at0 = pw.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 0, &ok);
+        CHECK(ok && pw.has(at0, tBarracks));
+        const std::vector<uint32_t> at1 = pw.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 1, &ok);
+        std::printf("unbuildable: Barracks needing a Barracks at P1 -> %s\n", ok ? "solved" : "vetoed");
+        CHECK(!ok && at1.empty());
+        ParityWorld free_rule(false, {"BuildBarracks"});  // control: no requirement -> P1 solves
+        free_rule.run(2);
+        const std::vector<uint32_t> c1 = free_rule.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 1, &ok);
+        CHECK(ok && free_rule.has(c1, tBarracks));
+    }
+    {
+        // Category-mask team "Corvette": a zero-cost non-hero CORVETTE type is listed (no cost rule in §1.3). Produced it
+        // is vetoed (the Corvette is built); on the free store it joins.
+        uint32_t zc = 0;
+        const auto add = [&zc](gal::GalacticRules& r) {
+            zc = static_cast<uint32_t>(r.types.size());
+            gal::TypeInfo z = r.types[tCorvette];
+            z.name = "ZeroCorvette";
+            z.build_cost = 0;
+            r.types.push_back(z);
+        };
+        const auto cat = [&zc](std::vector<GalacticAiTypeInfo>& t) { t[zc].categories = {"CORVETTE"}; };
+        ParityWorld pw(false, {"MaskCorvette"}, {}, add, {}, cat);
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "MaskCorvette", "Conquer_Planet", 3, &ok);
+        CHECK(ok && pw.has(s, tCorvette) && !pw.has(s, zc));
+        ParityWorld fs(false, {"MaskCorvette"}, [&zc](gal::GalacticSetup& st) { st.forces.push_back({0, 0, zc}); }, add, {}, cat);
+        fs.run(2);
+        const std::vector<uint32_t> f = fs.world->solve_potential_plan(0, "MaskCorvette", "Conquer_Planet", 3, &ok);
+        std::printf("unbuildable: zero-cost CORVETTE type on the free store -> %s, joins %s\n", ok ? "solved" : "failed",
+                    fs.has(f, zc) ? "yes" : "no");
+        CHECK(ok && fs.has(f, zc) && !fs.has(f, tCorvette));
+    }
+}
+
+// A2f t02 R2: maintenance drops a replaceable goal when AllowedTime < ETA, ETA = 0x525200 + (NOW - created) / FPS
+// (AI_GALACTIC §1.6) [H; 0x525200 = the time the goal's build tasks still need, M]. Was "ETA only": never late.
+static const char* kLateGoals = R"(<Goals>
+  <Late_Goal><AIGoalApplicationFlags>Friendly</AIGoalApplicationFlags><GameMode>Galactic</GameMode>
+    <Category>Offensive</Category><Reachability>Any</Reachability><Time_Limit>240</Time_Limit>
+    <Build_Time_Delay_Tolerance>1.3</Build_Time_Delay_Tolerance></Late_Goal>
+</Goals>)";
+
+enum class LateMode { Stalled, OnSchedule };
+
+struct LateHooks final : GoalModeHooks {
+    int64_t now = 0, ended = -1, created = -1;
+    bool removable = true;
+    float eta = 10.0f;
+    LateMode mode = LateMode::Stalled;
+    uint32_t target_count() override { return 1; }
+    bool applies(int32_t, uint32_t) override { return true; }
+    bool blocked(uint32_t, int32_t) override { return false; }
+    bool evaluate(const std::string&, int32_t, double& out) override {
+        out = 10.0;
+        return true;
+    }
+    bool accept(Goal& g) override {
+        g.plan = 0;
+        g.pp_valid = true;
+        g.eta = eta;
+        return true;
+    }
+    bool plan_activatable(const Goal&) override { return true; }
+    bool plan_invalid(const Goal& g) override { return g.running < 0; }
+    bool replaceable(const Goal&) override { return removable; }
+    void refresh_plan(Goal&) override {}
+    bool uses_budget() override { return true; }
+    bool can_fund(const Goal&) override { return true; }
+    float category_credits(int32_t) override { return 1.0f; }
+    void budget_add(Goal&) override {}
+    void budget_release(Goal&) override {}
+    void budget_weights() override {}
+    std::vector<int32_t> category_order() override { return {}; }
+    void queue_production(Goal&) override {}
+    void instantiate(Goal& g) override {
+        g.running = 1;
+        created = g.created;
+    }
+    void end_plan(Goal&, bool) override {
+        if (ended < 0) ended = now;
+    }
+    void drop_potential_plan(Goal&) override {}
+    void suspend_reservations(Goal&) override {}
+    float elapsed_eta(const Goal& g) override {
+        // Stalled: the build still needs its whole time; on schedule: the remaining time falls with the clock.
+        const float elapsed = static_cast<float>(now - g.created) / static_cast<float>(kAiFps);
+        const float production = mode == LateMode::Stalled ? g.eta : std::max(g.eta - elapsed, 0.0f);
+        return galactic_maintenance_eta(production, g.created, now);
+    }
+    int32_t quota_players() override { return 1; }
+};
+
+static int64_t late_goal_released_after(bool removable, float eta, LateMode mode) {
+    AiDefinitions defs;
+    defs.add_goals(kLateGoals, "g.xml");
+    defs.link();
+    LateHooks hooks;
+    hooks.removable = removable;
+    hooks.eta = eta;
+    hooks.mode = mode;
+    LearningSystem learning;
+    SimRng rng(1);
+    GoalSystem gs;
+    gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, {});
+    for (int64_t f = 1; f <= 1200 && hooks.ended < 0; ++f) {
+        hooks.now = f;
+        gs.service(f);
+    }
+    return hooks.created > 0 && hooks.ended > 0 ? hooks.ended - hooks.created : -1;
+}
+
+static void test_goal_time_drop() {
+    CHECK(galactic_maintenance_eta(10.0f, 300, 300) == 10.0f);
+    CHECK(galactic_maintenance_eta(0.0f, 300, 690) == 13.0f);
+    CHECK(galactic_maintenance_eta(4.0f, 300, 391) > 7.0f);
+    // ETA 10, tolerance 1.3 (AllowedTime 13). Stalled: 10 + elapsed > 13 after 3 s (90 frames).
+    const int64_t stalled = late_goal_released_after(true, 10.0f, LateMode::Stalled);
+    // On schedule: max(10 - elapsed, 0) + elapsed > 13 only once elapsed > 13 s (390 frames).
+    const int64_t on_time = late_goal_released_after(true, 10.0f, LateMode::OnSchedule);
+    std::printf("goal time drop: ETA 10, tolerance 1.3 -> stalled released after %lld frames, on schedule after %lld\n",
+                static_cast<long long>(stalled), static_cast<long long>(on_time));
+    CHECK(stalled > 90 && stalled <= 92);
+    CHECK(on_time > 390 && on_time <= 392);
+    CHECK(late_goal_released_after(false, 10.0f, LateMode::Stalled) < 0);  // Set_As_Goal_System_Removable(false): kept
+    CHECK(late_goal_released_after(true, 0.0f, LateMode::Stalled) < 0);    // ETA 0 -> AllowedTime 0 = no limit
+
+    // 0x525200 in a world (AI_GALACTIC_2 §3.4, q2f t01): a Barracks plan at P0 (Upgrade_Starbase goal). While its build
+    // task waits on the market it is > 0; from production start (the bid record is released) it is 0.
+    ParityWorld pw(false, {"BuildBarracks"});
+    float first = -1.0f, last = -1.0f, peak = 0.0f;
+    int64_t seen = 0, zero_after = 0;
+    int32_t plan = -1;
+    for (int32_t f = 1; f <= 30 * 120; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        const AiContext* c = pw.world->context(0);
+        if (plan < 0 && c)
+            for (const auto& cat : c->goals.active())
+                for (const Goal& g : cat)
+                    if (g.running >= 0 && plan < 0) plan = g.running;
+        if (plan < 0) continue;
+        const float t = pw.world->plan_production_time(plan);
+        if (t > 0.0f) {
+            if (first < 0.0f) first = t;
+            last = t;
+            peak = std::max(peak, t);
+            ++seen;
+        } else if (seen > 0) {
+            ++zero_after;
+        }
+    }
+    std::printf("goal time drop: Barracks plan %d production time first %.1f, peak %.1f, last %.1f (%lld frames > 0, %lld at 0 after)\n",
+                plan, static_cast<double>(first), static_cast<double>(peak), static_cast<double>(last), static_cast<long long>(seen),
+                static_cast<long long>(zero_after));
+    CHECK(plan >= 0 && seen > 0 && first > 0.0f && zero_after > 0);
+    CHECK(pw.world->plan_production_time(-1) == 0.0f && pw.world->plan_production_time(123456) == 0.0f);
 }
 
 // ================================================================ FIXPASS_GALACTIC §1: free-store moves on Friendly_Only
@@ -2208,7 +2895,19 @@ static void test_foc_data() {
                                     ai_iequal(fac, "Empire") ? "BasicEmpire" : (ai_iequal(fac, "Rebel") ? "BasicRebel" : "AI_Player_Underworld"), 1});
         }
     gcfg.difficulties = load_ai_difficulties(*v);
-    GalacticAiWorld world(sim, store, &types, v.get(), rng, defs, eqs, make_galactic_ai_type_info(types),
+    // A2 t03: the starbases' Starting_Spawned_Units_Tech_0 lists (type, count; repeated tags appended) reach the AI type
+    // info, so the typed force rows hold squadrons instead of the starbase's own AI_Combat_Power.
+    const std::vector<GalacticAiTypeInfo> foc_tinfo = make_galactic_ai_type_info(types);
+    {
+        const uint32_t sb1 = rules.find_type("Rebel_Star_Base_1"), xw = rules.find_type("Rebel_X-Wing_Squadron"), yw = rules.find_type("Y-Wing_Squadron");
+        CHECK(sb1 != gal::kNoIndex && sb1 < foc_tinfo.size() && xw != gal::kNoIndex && yw != gal::kNoIndex);
+        if (sb1 < foc_tinfo.size()) {
+            const auto& l = foc_tinfo[sb1].spawn_tech[0];
+            CHECK(l.size() == 2 && l[0].type == xw && l[0].count == 2 && l[1].type == yw && l[1].count == 2);
+            CHECK(foc_tinfo[sb1].spawn_tech[1].empty() && rules.types[sb1].ai_combat_power == 5000.0f);
+        }
+    }
+    GalacticAiWorld world(sim, store, &types, v.get(), rng, defs, eqs, foc_tinfo,
                           [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, gcfg);
     std::vector<std::string> pd;
     const std::vector<std::string> plan_files = list_plan_files([&v](std::string_view g) { return v->list(g); });
@@ -2408,13 +3107,21 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--write-golden") == 0) g_write_golden = true;
     test_cadence();
     test_desire_and_hysteresis();
+    test_goal_reservations();
     test_plan_pick_and_solver();
     test_definitions_and_templates();
     test_synthetic_campaign();
     test_path_finder_world();
     test_sim_hooks();
+    test_starbase_force_split();
+    test_force_members();
     test_parity_rules();
+    test_free_store_supply();
     test_production_disabled_and_delivery();
+    test_ground_structure_slots();
+    test_budget_fraction_before_init();
+    test_production_unbuildable();
+    test_goal_time_drop();
     test_free_store_path_rules();
     test_free_store_world();
     test_underworld_special();

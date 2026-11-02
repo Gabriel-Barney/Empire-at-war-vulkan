@@ -8,8 +8,10 @@
 //   * A unit may enter a cell iff every bit set in the cell is in its MovementClass mask:
 //     (effective & mask) == effective. Out-of-range cells read 0xFFFFFFFF (never passable).
 //   * LandObstacleBehavior footprints (§1.3) are sampled every 10 world units, rotated by the
-//     object's yaw; the water rule skips submerged samples. Stamps are reference counted per bit
-//     so unstamping restores exactly the previous effective values.
+//     object's yaw; the water rule skips submerged samples; a zero width or height samples nothing.
+//     S8 t13 (MOVEMENT §1.3 "Unstamp", corrected): retail recomputes a cell on every unstamp from
+//     base | the bits of the occupants that remain. The per-bit reference counts here give exactly
+//     that value (a bit stays set iff some remaining occupant stamps it), in any stamp/unstamp order.
 //   * OI tactical: secondary occupants (§1.1 step 3) - stamp_secondary() ORs an object's
 //     SecondaryOccupationPassability into the cells it occupies as a secondary occupant (own list, so
 //     one object can be a hard and a secondary occupant at once); Fine_Tune_Occupied_Passability (§1.3)
@@ -79,8 +81,8 @@ struct ObstacleFootprint {
     uint32_t bits = kPassObstacle;  // OverridePassability, or the behaviour default (Obstacle)
     float terrain_z = 0.0f;         // terrain height under the object (water rule)
     float obstacle_height = 0.0f;   // model bbox z * scale (water rule)
-    // OI tactical: Fine_Tune_Occupied_Passability (§1.3): when set, a sample is stamped only if the vertical ray
-    // (z +1000 -> -1000) at its world XY hits the object's collision mesh. Must be deterministic (const data).
+    // OI tactical: Fine_Tune_Occupied_Passability (§1.3): when set, a sample is stamped only if the vertical segment
+    // (z -1000 -> +1000) at its world XY hits the object's collision mesh. Must be deterministic (const data).
     std::function<bool(V2 world_xy)> fine_tune;
 };
 // From the type fields: Obstacle_Width/Height/X/Y_Offset when set, else 2*|half extent|*scale and
@@ -114,10 +116,25 @@ public:
     std::span<const uint32_t> effective_values() const { return eff_; }
 
     // Dynamic stamping (§1.3). stamp() replaces a previous stamp of the same id. Returns the
-    // number of distinct cells stamped.
+    // number of distinct cells stamped. A footprint that lands on no cell (water rule, Fine_Tune, off the grid, an empty
+    // grid) is still recorded: stamped(id) is true with no cells (S8 t02: the object is a LAND_OBSTACLE occupant of nothing; its
+    // slot-43 aim walk finds no occupied cell, TACTICAL_GAPS 3.1).
     uint32_t stamp(ObjectId id, const ObstacleFootprint& fp);
     bool unstamp(ObjectId id);
     bool stamped(ObjectId id) const { return stamps_.find(id) != stamps_.end(); }
+    // S8 t02: the stamped ids, ascending (map placements' negative ids first). Hosts unstamp the objects that left.
+    std::vector<ObjectId> stamped_ids() const;
+    // S8 t01 (TACTICAL_GAPS 3.1 slot 43, MOVEMENT §1.3 0x59efa0): is cell (x, y) one of the cells stamp `id` occupies
+    // (the object is in that cell's hard-occupant list)? False for an unknown id or an out-of-range cell. Read-only
+    // (combat's targeting scan asks it from job workers).
+    bool occupies(ObjectId id, int32_t x, int32_t y) const;
+    bool occupies_world(ObjectId id, V2 p) const { return occupies(id, world_to_cell(p.x), world_to_cell(p.y)); }
+    // The distinct cells (row-major indices, ascending) stamp `id` occupies; empty for an unknown id.
+    std::span<const uint32_t> stamp_cells(ObjectId id) const;
+    // S8 t01: moves stamp `from` to id `to` unchanged (cells, bits, effective values and version() stay): a map
+    // placement's stamp (ted_grid.hpp map_stamp_id) handed to the object spawned for it, so occupies() answers for that
+    // object. False (nothing changes) when `from` is not stamped, `to` already is, or from == to.
+    bool rekey(ObjectId from, ObjectId to);
     // OI tactical: secondary occupants (§1.1 step 3). `fp.bits` = the type's SecondaryOccupationPassability. Same
     // sampling (and Fine_Tune / water rules) as stamp(); replaces a previous secondary stamp of the same id.
     uint32_t stamp_secondary(ObjectId id, const ObstacleFootprint& fp);

@@ -210,6 +210,28 @@ void test_grid() {
     a.unstamp_secondary(600);
     b.unstamp_secondary(600);
     CHECK(hash_of(a) == hash_of(b) && bytes_of(a) == bytes_of(b));
+    // S8 t01: a map stamp handed to its object (rekey) round-trips under the object id; the loader's own stamp under the
+    // placement id is replaced.
+    {
+        PassabilityGrid r = build(5);
+        r.stamp(-3, make_footprint(cell_center(36, 26), 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f, 0));
+        CHECK(r.rekey(-3, 77) && r.stamped(77) && !r.stamped(-3));
+        const Bytes rb = bytes_of(r);
+        PassabilityGrid l = build(5);
+        l.stamp(-3, make_footprint(cell_center(36, 26), 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f, 0));
+        CHECK(load(l, rb) && bytes_of(l) == rb && hash_of(l) == hash_of(r) && l.stamped(77) && !l.stamped(-3));
+        CHECK(l.occupies(77, 36, 26) && !l.occupies(-3, 36, 26));
+    }
+    // S8 t02: a run-time stamp that lands on no cell (off the grid) is still a stamp; it round-trips with no cells.
+    {
+        PassabilityGrid z = build(5);
+        CHECK(z.stamp(88, make_footprint({-500.0f, -500.0f}, 0.0f, 20.0f, 20.0f, -10.0f, -10.0f, 0, 0, 1.0f, 0)) == 0);
+        CHECK(z.stamped(88) && z.stamp_cells(88).empty());
+        const Bytes zb = bytes_of(z);
+        PassabilityGrid l = build(5);
+        CHECK(load(l, zb) && bytes_of(l) == zb && hash_of(l) == hash_of(z) && l.stamped(88) && l.stamp_cells(88).empty());
+        CHECK(l.stamped_ids() == z.stamped_ids());
+    }
     // Another map, or the same map with another playable box: rejected, unchanged.
     PassabilityGrid other = build(6);
     CHECK(rejects(other, good));
@@ -255,6 +277,18 @@ void test_space_occupancy() {
     CHECK(load(b, good) && bytes_of(b) == good && hash_of(b) == hash_of(a));
     CHECK(b.query_segment({-50.0f, 10.0f}, {250.0f, 10.0f}, 400.0f, 470.0f, 20.0f, kLayerFrigate, 1, true, 400) ==
           a.query_segment({-50.0f, 10.0f}, {250.0f, 10.0f}, 400.0f, 470.0f, 20.0f, kLayerFrigate, 1, true, 400));
+    // S7 t13: a map placement's entry handed to its object (rekey_static) round-trips under the object id.
+    {
+        SpaceOccupancy k = a;
+        CHECK(k.rekey_static(-3, 21) && !k.has_static(-3) && k.has_static(21));
+        const Bytes kb = bytes_of(k);
+        SpaceOccupancy l = a;
+        V2 c{};
+        float r = 0.0f;
+        uint32_t bits = 0;
+        CHECK(load(l, kb) && bytes_of(l) == kb && hash_of(l) == hash_of(k) && !l.has_static(-3));
+        CHECK(l.static_entry(21, c, r, bits) && c.x == 100.0f && c.y == 200.0f && r == 300.0f && bits == (kSpaceStatic | kSpaceAsteroid));
+    }
     SpaceOccupancy t;
     CHECK(rejects_truncation(t, good, 3));
     Bytes bad = good;
@@ -530,6 +564,15 @@ void build_land(World& w, uint32_t seed) {
     bm.locomotor = LocomotorKind::LandBomber;
     bm.prepare_strafe_height = 100.0f;
     CHECK(w.sys.add_unit(bm));
+    // S7 t06: a Uses_Multiple_Locomotors trooper (WALK primary, JETPACK secondary, Alternate speeds).
+    UnitDesc dt = land_unit(304, cell_center(26, 16), 0, 1.0f, 6.0f, kUccInfantry);
+    dt.uses_multiple_locomotors = true;
+    dt.has_secondary_locomotor = true;
+    dt.secondary_locomotor = LocomotorKind::Jetpack;
+    dt.alt_max_speed = 2.5f;
+    dt.alt_turn_rate = 6.0f;
+    dt.hover_offset = 40.0f;
+    CHECK(w.sys.add_unit(dt));
 }
 
 std::vector<ObjectId> land_walkers(const World& w) {
@@ -566,6 +609,10 @@ void land_before(World& w, uint32_t f) {
             o.units = {303};
             o.destination = cell_center(60, 45);
             s.move(o, w.rng, f);
+            o.units = {304};  // S7 t06: jetpack jump (switch bit), back on WALK after the landing
+            o.destination = cell_center(12, 8);
+            o.switch_locomotor = true;
+            s.move(o, w.rng, f);
             break;
         case 30: s.grid().stamp_secondary_circle(950, cell_center(45, 75), 45.0f, kPassShield); break;
         case 50:
@@ -591,6 +638,16 @@ void land_before(World& w, uint32_t f) {
             o.units = existing(w, {1, 4, 7, 22, 25, 300});
             o.destination = cell_center(10, 10);
             o.flags = kMoveFlagQueue;
+            s.move(o, w.rng, f);
+            o = MoveOrder{};
+            o.units = {304};  // S7 t06: a second jump
+            o.destination = cell_center(20, 14);
+            o.switch_locomotor = true;
+            s.move(o, w.rng, f);
+            break;
+        case 450:
+            o.units = {304};  // S7 t06: a plain move (walks when landed)
+            o.destination = cell_center(28, 20);
             s.move(o, w.rng, f);
             break;
         case 420:
@@ -811,7 +868,21 @@ void test_rejections() {
     land.build(u);
     CHECK(rejects_truncation(u.sys, good, 41));
     Bytes bad = good;
-    put_u32(bad, 0, 2);  // version
+    put_u32(bad, 0, 1);  // version (1: before the S7 t06 multi-locomotor fields)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 2);  // 2: before S7 t14 read the alternate speed / turn raw
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 3);  // 3: before the S7 t15 turn band rate / S8 t09 jetpack_still_frames
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 4);  // 4: before the S7 t28 fighter speed cap (5) and the S8 t11 Walk deploy state (6)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 5);
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 6);  // 6: before the S8 t24 turret model (7) and the S7 t37 fighter object goal blocks (8)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 7);
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 9);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
@@ -859,6 +930,22 @@ int main() {
     const Coverage lc = check_resume(land, 1, 0);
     CHECK(lc.crushes > 0 && lc.max_collisions > 0);
     for (uint32_t at : {45u, 160u, 333u, 480u}) check_resume(land, at, 0);
+    {  // S7 t06: the saves above cover the secondary locomotor (45, 333) and the WALK primary after it (480)
+        World w(land.cfg);
+        land.build(w);
+        bool sec45 = false, sec333 = false, walk480 = false, swapped_back = false;
+        for (uint32_t f = 0; f < 480; ++f) {
+            step(land, w, f, serial_for);
+            const UnitView v = w.sys.view(304);
+            if (f > 0 && !v.secondary_locomotor && f < 300) swapped_back = true;
+            if (f + 1 == 45) sec45 = v.secondary_locomotor && v.locomotor == LocomotorKind::Jetpack;
+            if (f + 1 == 333) sec333 = v.secondary_locomotor;
+        }
+        walk480 = !w.sys.view(304).secondary_locomotor && w.sys.view(304).locomotor == LocomotorKind::Default;
+        CHECK(sec45 && swapped_back && sec333 && walk480);
+        std::printf("multi-locomotor coverage: secondary at 45 %d, back on WALK before 300 %d, on the jetpack at 333 %d, walking at "
+                    "480 %d\n", sec45, swapped_back, sec333, walk480);
+    }
     check_resume(land, 250, 37);  // the loader already ran: read() replaces everything
     const Scenario space = space_scenario();
     const Coverage sc = check_resume(space, 1, 0);

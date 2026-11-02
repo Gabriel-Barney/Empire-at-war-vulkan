@@ -1,5 +1,7 @@
 #include "alamo/tactical/movement/unit_params.hpp"
 
+#include <array>
+
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
 
@@ -34,6 +36,31 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti, flo
     d.strafe_distance = t.get_float(ti, "Strafe_Distance");
     d.prepare_strafe_height = t.get_float(ti, "Prepare_Strafe_Height");
     d.has_pre_turn_anim = t.get_bool(ti, "Has_Pre_Turn_Anim");
+    // S7 t06 / t14: Uses_Multiple_Locomotors (MOVEMENT §3.1.1). The primary is the behaviour-list locomotor the host
+    // routes (the swap back builds Primary_Locomotor_Name; every FoC user names the WALK_LOCOMOTOR of its list).
+    d.uses_multiple_locomotors = t.get_bool(ti, "Uses_Multiple_Locomotors");
+    d.secondary_locomotor = locomotor_kind_from_token(t.get_string(ti, "Secondary_Locomotor_Name"));
+    d.has_secondary_locomotor = d.secondary_locomotor == LocomotorKind::Jetpack &&  // [port] JETPACK secondaries only
+                                locomotor_kind_from_token(t.get_string(ti, "Primary_Locomotor_Name")) != LocomotorKind::Jetpack;
+    d.alt_max_speed = t.get_float(ti, "Alternate_Max_Speed");  // unconditional: the type defaults are 1.0 / 2.0
+    d.alt_turn_rate = t.get_float(ti, "Alternate_Max_Rate_Of_Turn");
+    // S8 t11: Deployment_Anim_Rate, unset -> the type ctor's 1.0 (MOVEMENT §3.2).
+    if (t.value(ti, objects::find_type_field("Deployment_Anim_Rate")) != nullptr) d.deployment_anim_rate = t.get_float(ti, "Deployment_Anim_Rate");
+    // S8 t24: the TURRET of a Deploys type (MOVEMENT §3.2 "Turret recentre around deploy").
+    const auto is_set = [&](const char* tag) { return t.value(ti, objects::find_type_field(tag)) != nullptr; };
+    if (t.get_bool(ti, "Deploys") && t.has_behavior(ti, objects::BehaviorSet::Union, 0x0B) && t.get_float(ti, "Turret_Rotate_Speed") > 0.0f) {
+        d.turret = true;
+        d.turret_speed = t.get_float(ti, "Turret_Rotate_Speed");
+        if (is_set("Turret_Rotate_Extent_Degrees")) d.turret_extent = t.get_float(ti, "Turret_Rotate_Extent_Degrees");
+        d.turret_deployed_extent = is_set("Deployed_Turret_Rotate_Extent_Degrees") ? t.get_float(ti, "Deployed_Turret_Rotate_Extent_Degrees")
+                                                                                   : d.turret_extent;
+        const std::array<float, 4> r = t.get_vec(ti, "Turret_Rest_Angle"), dr = t.get_vec(ti, "Turret_Deployed_Rest_Angle");
+        for (size_t k = 0; k < 3; ++k) {
+            d.turret_rest[k] = r[k];
+            d.turret_deployed_rest[k] = dr[k];
+        }
+        if (is_set("Turret_Rotate_To_Rest_Delay_Sec")) d.turret_rest_delay = t.get_float(ti, "Turret_Rotate_To_Rest_Delay_Sec");
+    }
     // OI tactical: stagger, jiggle and crush fields (MOVEMENT.md §1.6, §3.5 step 6, §5.5).
     d.path_frame_delay = t.get_int(ti, "PathFrameDelay");
     d.formation_raggedness = t.get_float(ti, "FormationRaggedness");

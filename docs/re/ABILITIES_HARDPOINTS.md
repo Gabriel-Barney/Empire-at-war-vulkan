@@ -50,6 +50,9 @@ autofire byte).
 
 ## 1. Hardpoints (delta to TACTICAL_COMBAT §5.1)
 
+Weapon hardpoints do not replace the unit's own `Projectile_Types` weapon: both fire independently, each behind its
+own deploy / ROCKET_ATTACK / mode gate (TACTICAL_COMBAT §3.1.1, 2026-11-02).
+
 ### 1.1 Creation at spawn [H]
 Hardpoints are built by the object (re)initialiser **0x3989a0** (called on spawn, type change and load):
 1. The function first fills the 75 unit-ability slots from the type's `Unit_Abilities_Data` (type +0x1ab0), in
@@ -294,7 +297,7 @@ All gates, in order; any failure returns false:
 | 31, 34, 55 (ENERGY_WEAPON, LUCKY_SHOT, SUPER_LASER) | weapons not disabled (obj +0x3a0 bit 0x10 clear) |
 | 38 DEPLOY_TROOPERS | DEPLOY_TROOPERS behaviour present and idle |
 | 47 FIRE_LOBBING_SUPERWEAPON | player's super-weapon state allows (needs base power when the type requires it) |
-| 52 SABER_THROW | no other special ability of the object is busy (0x37c520) |
+| 52 FORCE_SIGHT | no ability of the object is busy (0x37c520, §4.14; this row read "SABER_THROW" before 2026-11-01) |
 | 58 LEECH_SHIELDS, 70 BLAST | ≥ 1 live WEAPON_SPECIAL (10) hardpoint |
 | 64 PLACE_REMOTE_BOMB | player's remote-bomb count < `Max_Remote_Bombs_Per_Player` (20) |
 | 72 SHIELD_FLARE | current shield fraction > 0 |
@@ -335,7 +338,7 @@ The response sound afterwards is local-player audio only.
 | 18 CAPTURE_VEHICLE | | turning off restarts recharge and ejects (EJECT 46 logic) |
 | 19, 23–26, 28, 35, 36, 42 | 0x3a3e20 | targeted/area "instant" effects at position or target |
 | 22, 30, 31, 34, 37, 41, 45, 55 | none | only the active byte; the work is done by the forwarded special ability (§3) |
-| 32 MISSILE_SHIELD | inline | **on**: (correction, TACTICAL_GAPS.md §1.7: the unit is already an emitter from spawn; activation only makes it "active"); with `Disable_Movement`, increments the immobilise counter obj +0x3a8 (first increment stops the unit, 0x39bcb0) and pauses deploy; starts the active phase. **off**: decrements the counter, restarts recharge. Both toggle animation state 7 |
+| 32 MISSILE_SHIELD | inline | **on**: (correction, TACTICAL_GAPS.md §1.7: the unit is already an emitter from spawn; activation only makes it "active"); with `Disable_Movement`, increments the immobilise counter obj +0x3a8 (0x3a8e50; the first increment splits the unit into a formation of its own, A1_READINGS §28.8) and pauses deploy; starts the active phase. **off**: decrements the counter, restarts recharge. Both toggle animation state 7 |
 | 33 INVULNERABILITY | inline | turns the countdown on/off only; effect = `TAKE_DAMAGE_MULTIPLIER 0` |
 | 40 SPRINT, 68 STIM_PACK | inline | needs a squad/locomotor path; STIM_PACK **on** first applies self-damage `Take_Damage(kind 1, Damage_Percent_When_Activated × max hull)`; then countdown on/off; animation state 4 |
 | 44 REPLENISH_WINGMEN | 0x3a2970 | |
@@ -429,12 +432,64 @@ which list goes with which error message]:
 |---|---|
 | none or bool (mode toggle via command 43) | 1, 3, 7, 9, 11, 29, 32, 33, 39, 40, 43, 48, 52, 54, 56, 60, 62, 63, 65, 68, 69, 70; DEPLOY (2) toggles deploy |
 | target **object** (command 40) | 13, 15, 16, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66 |
-| target **position** (command 57, spawns `Dummy_Barrage_Target`) | 14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72 |
+| target **position** (command 57 style, spawns `Dummy_Barrage_Target`) | 50, 67, 71, 73, 74 |
+| command 43 with the position zeroed (no position) | 14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72 |
 | position via command 43 | 5, 26, 28, 42 |
 | special | 6/10/12 (HUNT, LURE, AVOID_DANGER: optional target), 17 JET_PACK (position), 19 (object) |
 
+Correction (S7 t26 RE, 2026-11-02) [H]: the command-57 position row is ids 50, 67, 71, 73, 74; ids 14, 23, … 72
+were listed there before but take command 43 with no position. Which families return an `AbilityBlockStatus`
+and which signals finish it: AI_TACTICAL §7.3.3.
+
+Argument handling per family (0x570a50, second switch; 2026-11-02) [H]. The Lua call always needs exactly 2
+arguments (name + one argument).
+- **Toggle row:** the argument must be a bool, and it gives the mode (on / off) of command 43.
+- **Command 43 with no position** (14 FORCE_WHIRLWIND, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72): the argument
+  is **not read** (any value). Command 43 has mode **on**, position (0,0,0) and target 0x3FFFFF.
+- **Position via 43** (5, 26, 28, 42): the argument must convert to a position (0x4990b0, else "expects a target
+  position"). Command 43 has mode on, that position and target 0x3FFFFF.
+- **17 JET_PACK:** same as position via 43, after 0x397d90(unit, 17) [M: gate]. No dummy.
+- **19 TARGETED_INVULNERABILITY:** the argument must be an object or an AI target with a live object ("expects a
+  target object" / "target object is already dead"). It is **command 43**, not 40: mode on, position = the target's
+  position (obj +0x78), target id = the object's id (obj +0x50).
+- **Command-57 row** (50 RADIOACTIVE_CONTAMINATE, 67 PROXIMITY_MINES, 71 BUZZ_DROIDS, 73 SUMMON, 74 CORRUPT_SYSTEMS):
+  1. the argument must convert to a position;
+  2. a `Dummy_Barrage_Target` is created there for the unit's owner (0x29f810);
+  3. the type's `GUI_Activated_Ability_Name` CRC is checked (else "not hooked up");
+  4. a `TacticalSpecialAbility` command (0x4292e0 / 0x429da0) is built with the dummy as target object and executed
+     (0x429960), the same path as command 40 (pending ability stored, fired when in range).
+
+  Who removes the dummy for these five ids was not traced [L] (Remote_Bomb's toss kills its own, see "Ground
+  marker" below).
+
 It errors with "not hooked up to special ability logic" when a targeted type's record has no matching
 `GUI_Activated_Ability_Name` in the type's `Abilities`.
+
+**Thrown abilities: facing, lock, release and the ground marker (S8 t10, 2026-11-02)** [H unless tagged]. Full
+text: LOB_SOLVER §3.5, "MARKER removal" and "Facing at apply".
+- **Facing.** `Grenade_Attack` (0x700860) and `Remote_Bomb` (0x719c90) apply both snap the unit's yaw to the
+  target's raw position (no z adjust; roll and pitch 0) with `0x3a8710`, instantly, with no turn rate. The snap
+  is skipped while obj +0x3a0 & 0x10 (stunned / weapons disabled).
+- **Then:** stop (`0x3a9880`), movement lock `0x3a8e50(obj, 1)` (counter obj +0x3a8), disable TARGETING.
+- **The throw** waits for the locomotor to stop, not for the facing, and does not turn again.
+- **Release** (end of the animation or interruption): enable TARGETING and the locomotor, unlock (decrement the
+  counter), signal 0x29. The facing is not restored.
+- **Ground marker.** A `Dummy_Barrage_Target` (command 57) target is killed by the toss 0x71a200 after the spawn
+  attempt, even when nothing spawned. It has no lifetime of its own, so it **stays** when the toss never happens.
+  [M] Whether the GUI issues command 57 for Remote_Bomb (type 64 is in the Lua object-target list above).
+- **DEPLOY (2) "active" (§2.7 item 4).** It is `0x39a390`: the locomotor pack's pending flag +0x2b3, or Walk
+  state 0x19 (Deployed) only, not 0x18 Deploying (TACTICAL_COMBAT §3.1.1 "Gate details").
+- **Locomotor swaps and hardpoints (S8 t12).** The JET_PACK / locomotor swap (`0x3a9910`, MOVEMENT §3.1.1)
+  suspends only TARGETING, WEAPON and SPECIAL_WEAPON. **Weapon hardpoints are not suspended**:
+  - `Update_Weapon` keeps running;
+  - the hardpoints keep the target pushed before the flight, and no new target is pushed while TARGETING is
+    suspended;
+  - they are held only by their own gates.
+
+  Because a swap undeploys the unit (MOVEMENT §3.2, "A locomotor swap undeploys"), `Dark_Trooper_PhaseIII`'s
+  deployed-only missile hardpoints stop firing when it jets and stay off until it deploys again. A hardpoint with
+  `Fire_When_Undeployed` = Yes would keep firing in the air [H from the code paths; M: no vanilla unit has one,
+  not observed in game].
 
 ### 2.10 Autofire [H for state, open for the driver]
 
@@ -593,7 +648,8 @@ missile shield).
 
 ### 3.9 Interdict (INTERDICT 3, gravity well; Interdictor, gravity well station) [M]
 Handler 0x3a2240: needs the gravity well intact (obj +0x3ca = 0). On: start countdown; with
-`Disable_Movement` immobilise (0x3a8e50); raise story event `Interdict_Activated`; in space, insert a
+`Disable_Movement` immobilise (0x3a8e50(obj, 1); off: 0x3a8e50(obj, 0) while ability 3 is active; counter shared with
+script locks, A1_READINGS §28.8); raise story event `Interdict_Activated`; in space, insert a
 **permanent entry keyed by (owner, "INTERDICT")** into a per-player list (player tactical data +0x180) of every
 player returned by 0x294910 for the owner [L: the enemy players]; off: remove those entries. The Interdictor
 has `Active_By_Default` = Yes. The consumer of the per-player list is the retreat/hyperspace logic [L, not
@@ -745,11 +801,199 @@ and `Converted_To_Enemy_Die_Time_Seconds` (+0x234c) > 0: d = max hull / that tim
 d + draw > 0, `Apply_Hull_Damage(kind 0x11, d + draw)`.
 
 ### 4.11 Lobbed and circular lead [M]
+The lob solver itself (0x54a6f0) is closed form and does not use this root finder: LOB_SOLVER.md.
 Already in TACTICAL §3.1 step 9. Implementation detail: the circular solver (0x399450) calls a generic 1-D root
 finder (0x7d68e0) on 0x3aba90 with bracket [0.1, 1000], tolerance 0.001, 15 iterations, passing its context
 through **globals** 0x140b2c380–0x140b2c394. The port must pass that context explicitly (thread safety). The
 root-finder method is not identified; any deterministic method with the same bracket and stop rule is
 acceptable for our own clients.
+
+### 4.12 `Destroy_When_Stunned_Over_Water` (type +0xe6) — port guess, no RE pass [port]
+Not traced (Gabriel 2026-10-30, `docs/PHASE4.md` "Roadmap trim": a documented guess instead of an RE pass). The
+only vanilla user is `MAL_Rocket_Vehicle` (`UNITS_LAND_UNDERWORLD_MAL.XML`): a `Hover` movement-class vehicle with
+`STUNNABLE` in its land behaviours, so it is the one STUNNABLE unit that can stand on water cells (`Hover`
+passability includes `Water`). The port's reading of the name: a stunned hover vehicle loses its lift and sinks.
+**Rule (engine/tactical/abilities, `AbilitySystem::unit_effect`, Stunned):** when a STUNNABLE stun is applied
+(`CombatSystem::stun_unit`: the land stun of `Projectile_Stun_*` detonations or a `Stun_Ability` wave, §4.4 and
+TACTICAL_GAPS §2.3.7) to a unit whose type sets the tag, and the unit is over water, the unit dies at once:
+`Die` (§4.9) with kind 1 and no killer, so its normal death clone / death projectile apply. "Over water" = the
+map has a water plane (`water_type` ≠ None) and the terrain height under the unit's XY is below the water height
+(battle host `AbilityHost::over_water`). The test is made only when the stun starts: a stunned unit cannot move,
+so its position does not change during the stun. Not included: the ion stun (§4.4, a separate behaviour), Confuse,
+Earthquake and other immobilisations. Space battles and maps without water never trigger it.
+Why this guess: the tag is a per-type bool that only a hover vehicle sets, and the only state a STUNNABLE unit
+changes is "stunned"; destroying at the stun start keeps the sim simple (no per-frame water scan, no save state).
+**Probe** (if the guess ever matters): stun a MAL rocket vehicle on water and on land with a stun grenade in a
+FoC skirmish; check whether it dies at once, at the stun end, or only on deep water.
+
+### 4.13 Animation-driven ability timings on sim frames [port]
+Several special-ability classes time their effects from the owner's animation (TACTICAL_GAPS §2.3: "at animation
+frame N", "at the animation end", Berserker's 20 %–80 % window). The port never reads a playing animation clock in
+sim code (determinism rule 3); instead a clip position is a pure function of fixed data and the sim frame count:
+- **Position** after n sim frames since the clip started = n × rate × speed. rate = clip fps / 30, the sim
+  animation's clock (`engine/anim` advances at t = frame / 30); speed = `Attack_Animation_Speedup` for the melee
+  classes, 1 for the others. With no clip data rate = 1 (one clip frame per sim frame, as for a clip at the format's default 30 fps).
+- **"At animation frame N"** = the first update whose position ≥ N: Generic `Damage_Frame_Number`, Arc
+  `Begin_Applying_Damage_Frame`, Eat `Attachment_Frame` / `Target_Destruction_Frame` (all on `Attack_Animation`),
+  Grenade `Spawn_Frame` (on `Toss_Anim`), Super_Laser `Fire_Frame` (on the attack clip, type 5).
+- **"At the animation end"** = position ≥ max(count − 2, 0), the frame where a one-shot clip finishes
+  (anim_state.hpp `advance_one_shot`). Generic / Eat / Arc_Sweep hold the unit (the special stays applied) until
+  then, after their last frame-numbered event; Grenade until the end of `Toss_Anim` after the throw; Hack / Repair
+  change the owner / repair at the end of animation 0x5a: ceil(max(count − 2, 0) / rate) sim frames after the apply.
+- **Berserker window**: animation 0x68 is taken as looping [port]: position = (n × rate) mod (count − 1), n = the
+  frames since the apply (int(FPS × duration) − counter); a damage pass needs counter % 5 = 0 and 0.2 × count <
+  position < 0.8 × count.
+- **Clip data**: frame count and fps of variant 0 of the clip, from the type's sim model (`AbilityHost::anim_clip`,
+  battle host `TacticalBattle::anim_clip_info`; XML names such as `Attack_Animation` / `Toss_Anim` values resolve to
+  ModelAnimType ids with `anim::find_anim_type`). This is static model data loaded from the ALA files, the same for
+  every run, worker count and compiler.
+- **Fallbacks** (no host query, no sim animation, the type has no model or the model lacks the clip): rate 1; the
+  melee and grenade classes end with their last frame-numbered event (the pre-t03 behaviour); Hack / Repair end after
+  60 frames (`kHackFrames`); the Berserker window is always open. Headless runs without models therefore keep the
+  old timings and CRCs.
+- The "not in animation X unless ending" apply gates and Super_Laser's `Attack_Anim_Sub_Index`: §4.14 (implemented
+  2026-11-01, OI follow-up t01).
+**Probe** to settle the [port] choices (prepared only when needed): compare in-game kill timings of a Rancor
+(`Rancor_Pound_Vehicles`, `Rancor_Eat_Infantry`), an Infiltrator grenade toss and Yoda's Berserker with the port's frame counts.
+
+### 4.14 Ability animation gates and sequences (RE pass 2026-11-01) [H unless tagged]
+Settles the gates §4.13 lists as "not modelled". Corrections to TACTICAL_GAPS §2.3: Telekinesis apply has **no**
+animation gate; Generic's gate uses its own `Attack_Animation`, not 5; Earthquake refuses on 0x27 only; §2.4's
+row "52 SABER_THROW" is case 0x34 = **52 FORCE_SIGHT**.
+
+**What is read.** Every gate reads the **primary slot** of the owner's own model (obj +0x2a0, ANIM_PARTICLES
+§A.3): type 0x3956a0 (slot +0x0c), mode 0x395660 (slot +0x10), frame 0x395550 (slot +0x18). No model or no
+clip → type = mode = −1, so every gate passes. The owner is the object whose type lists the ability; there is no
+redirection to a container or team member. The overlay slot and the near-end bit (obj +0x74 bit 3) are never
+read. **"Unless ending" = mode 2 (finished).** The one-shot advance (0x2650f0) sets it on the first advance with
+frame ≥ count − 2 (inclusive; frame clamped to max(count − 2, 0)), and also when Δ = 0, so a clip of ≤ 2 frames
+finishes at its first advance. Loops never finish. Object Service (0x3a6b80) advances the model (step 6) **before**
+the SAP update (0x37da80); behaviours run before both. So an apply from the command phase or a behaviour sees the
+previous tick's advance, and ability updates see this tick's. A play sets model +0x148 = now, so a clip does not
+move in the tick it starts.
+
+**Apply gates (owner's primary slot)**
+| apply | gate | notes |
+|---|---|---|
+| Earthquake 0x6f7240 | runs the remove-all first (vf15 0x48f1e0 → remove 0x6f7660, which plays 0x27 when an effect was live). Then type ∈ {0x25, 0x26} and the SAP still lists this target (0x48df60) → return 1 without effect [M: unreachable after the remove-all]; **type == 0x27 → refused, in any mode** | no busy check. A re-cast during a quake ends it (FB_Release) and fails |
+| Telekinesis 0x6fe1b0 | **none** (the remove-all first plays 0x23 when an effect was live) | no busy check; the target must not already be lifted (0x63efa0) |
+| Force_Lightning 0x6fd010 | refused iff type == 0x28 **and** mode ≠ 2 | the SAP target lists are cleared **before** the gate. A refused re-apply during FL_Attack therefore drops the beam and the end-of-clip clean-up [M; recharge 15 normally prevents it] |
+| Force_Sight 0x713a90 | busy → refused; type ∈ {0x69, 0x6a} → return 1 (already running); **type == 0x6b → refused, in any mode**; else start | |
+| Generic 0x700100 | type ≠ `Attack_Animation` (+0x190) or mode == 2, **then busy**. Busy includes Generic's own predicate, so in land the apply is refused whenever type == Attack_Animation, finished or not | not moving |
+| Arc_Sweep 0x6eec40 | SAP +0x212 clear; type ≠ **5** (literal, not the XML field) or mode == 2 | no busy check, so it can cut a Generic/Eat clip [M consequences] |
+| Eat 0x6f7c70 | SAP +0x229 clear; busy clear; type ≠ **5** (literal) or mode == 2 | |
+| Super_Laser 0x714fa0 | none | |
+
+**Busy** (`0x39a350` = 0x37c520: OR of vfunc +0x30 over the owner type's `Abilities`). The predicates check the
+**type only; the mode is ignored**. Earthquake: type ∈ [0x25, 0x27]. Telekinesis: [0x21, 0x23]. Force_Lightning:
+== 0x28. Generic: == `Attack_Animation`. Eat: == `Attack_Animation` or == `Target_Grabbed_Animation` (+0x1d0)
+[M intent]. These five count only in land mode (mode type 1). Arc_Sweep: SAP +0x212 set, in any mode.
+Force_Sight, Super_Laser and the rest: never. Readers: the Generic, Eat and Force_Sight applies, `Can_Activate`
+(52), the activation of unit ability 52 (0x38a350) and the formation wait 0x40edd0 [M]. The SAP state is per
+owner and per class (Lightning +0x1a8…, Generic +0x208…, Arc +0x212…, Eat +0x21c…, Force_Sight +0x2d0,
+Super_Laser +0x300…). Rancor Swat Left and Right therefore share one Arc state.
+
+**Sequences.** Plays go through Play_Animation 0x3a92f0 with start frame 0, blend mode 0 and **lock 0**: while
+another caller's lock bit is set they are ignored. Index 0xFFFF = **one synced draw** in [0, count − 1] when the
+model has the clip (§A.4). Hold = 0x63f060 / 0x6331e0(obj, 1, 1): it stops the locomotor and suspends
+behaviours 9 TARGETING, 10 WEAPON, 11 TURRET, 7 IDLE and 0x20 [M: suspend semantics]. (obj, 0, 1) releases. The
+updates act only in land mode. Earthquake and Telekinesis update every FPS / 10 = 3 frames (0x6f74e0); the
+others update every frame.
+- **Earthquake:** apply → hold, **0x25 FB_Attack** one-shot, 0xFFFF, blend 0.2, speed 1. Update 0x6f77b0: 0x25
+  finished → **0x26 FB_Hold loop**, 0xFFFF, blend 0.1. Remove 0x6f7660 → **0x27 FB_Release** one-shot, 0xFFFF,
+  blend 0.2. Update: 0x27 finished → release, **type 0 Idle loop**, 0xFFFF, blend 0.2.
+- **Telekinesis:** same shape with **0x21 / 0x22 / 0x23** (apply 0x6fe1b0, update 0x6fe6c0, remove 0x6fe570),
+  same blends and the same end (Idle loop, 0xFFFF).
+- **Force_Lightning:** apply → hold, **0x28 FL_Attack one-shot**, 0xFFFF, blend 0.1, speed 1. Damage is dealt at
+  once and recharge 15 starts (§2.3.6). Update 0x6fd880: while 0x28 is not finished, beam visuals only. When it
+  finishes (target list not empty): release, default idle (0x395920) index 0, loop = `Loop_Idle_Anim_00`, blend
+  0, speed 1; lists cleared; signal 0x29. **The cast lasts exactly the FL_Attack clip.** If something replaced
+  0x28, the update does nothing (the hold stays) [M consequence].
+- **Force_Sight** (no hold; apply stops the locomotor, 0x3a9880): **0x69 one-shot**, 0xFFFF, blend 0. Update
+  0x713ba0: 0x69 finished → Reveal_All on, recharge 52, **0x6a loop**, 0xFFFF, blend 0.1, counter =
+  int(FPS × +0x178 `Force_Sight_Duration_In_Secs` [M name]). Each update counts down by 1 unless 0x380b10 or the
+  locomotor query 0x39ade0 [M: moving]; either of those ends it at once. At 0 the remove-all calls 0x713d20:
+  **0x6b one-shot**, 0xFFFF, blend 0.5, reveal off, signal 0x29. Nothing follows 0x6b; the IDLE behaviour
+  replaces it once it has finished.
+- **Generic:** apply → hold, **`Attack_Animation` one-shot, 0xFFFF, blend 0.2, speed
+  `Attack_Animation_Speedup`**; SAP +0x211 set. Update 0x7003d0: type ≠ Attack_Animation, or finished → default
+  idle (index 0, `Loop_Idle_Anim_00`, blend 0) and release. An interrupted attack deals no damage. Otherwise one
+  hit at frame ≥ `Damage_Frame_Number`.
+- **Arc_Sweep:** apply → hold, **`Attack_Animation` with index `Attack_Animation_Subindex`** (+0x198; explicit, so
+  no draw; vanilla 0 = right-to-left, 1 = left-to-right), one-shot, blend 0.2, speed Speedup. Update 0x6eeff0:
+  type ≠ Attack_Animation → release only (no idle play). Finished → default idle and release. Otherwise sweep
+  from frame ≥ `Begin_Applying_Damage_Frame`.
+- **Eat:** apply → hold and arm the state (phase 1). After the optional turret turn, phase 2 plays
+  **`Attack_Animation` one-shot, 0xFFFF, blend 0.2, speed Speedup**. Phase 3 runs the frame events (§2.3.8). Type
+  changed, clip finished or 0x39a180 → phase 4: default idle, release, remove. The victim plays
+  `Target_Grabbed_Animation` loop, 0xFFFF, blend 0 (fallback: Idle index 0, loop).
+- **What else ends them:** removal (the remove-all at the next apply; the named removal 0x37ddc0, e.g. Earthquake
+  ↔ Force_Cloak; the cancel 0x48cdd0; vfunc +0xb0 0x48e3c0 when ability +0x42 is set [M: triggers]). Writers
+  the hold does not suspend can also replace the clip: Lua / cinematic Play_Animation, death, the Berserker
+  redirect (§A.4) and Super_Laser's direct play. Generic, Arc and Eat abort when that happens; Lightning,
+  Earthquake and Telekinesis ignore it.
+
+**Super_Laser `Attack_Anim_Sub_Index`** (+0x188, default 0). Two paths call **ModelClass play 0x265560
+directly**: the apply when there is no `Face_Target` or no TACTICAL_SUPER_WEAPON behaviour, and the Face_Target
+branch of update 0x715450 (after `Fire_Delay`, once inside `Firing_Cone`). The call is type 5, index =
+sub-index, one-shot, blend 0, speed 1, and it bypasses the lock bit, the Berserker redirect and the random draw.
+**If the model lacks that variant (index ≥ count, including no Attack clip at all), the play returns 0 and nothing
+changes**: the old primary clip keeps playing. Fire gate (every update after the delay): wait while **type == 5
+and frame < `Fire_Frame`** (+0x184, float compare); otherwise start 55's countdown. There is no variant check.
+The frame is that of whatever type-5 clip is in the primary slot, normally the sub-index clip just started. With
+a missing variant the primary is normally not type 5, so the laser fires at the first update after the delay. A
+one-shot clip parks at count − 2, so a `Fire_Frame` beyond that waits until something else replaces the clip [M].
+In vanilla both users have their variant: Death Star (`w_planet_deathstar02`, index 1, `Fire_Frame` 60,
+`_ATTACK_01`) and Eclipse (`UV_Eclipse_UC`, index 0, `Fire_Frame` 106, `_ATTACK_00`).
+
+**Writers of animation 5 (Attack)**
+- WeaponBehavior 0x54d090 after each shot: primary slot, 0xFFFF, blend 0.4 / 0.1. **With
+  `Attack_Animation_Is_Overlay` the clip goes to the overlay slot** (0x3a8ed0 → 0x265be0, timed 3 s), which no
+  gate reads.
+- Spawn_Ability apply 0x71db50: 0xFFFF, blend 0.1.
+- TacticalSuperWeaponBehavior 0x42a7b0, state 7: index 0, blend 0.
+- Super_Laser (above).
+- The melee classes whose XML `Attack_Animation` is ATTACK: the six vanilla Rancor swats and `Sarlacc_Eat_Infantry`.
+- The hero-clash `Attack_Action` 0x71ed40, as its fallback.
+- Lua and cinematic calls.
+
+An Arc swat never leaves a finished type-5 clip behind: its update replaces the clip with idle in the same SAP pass.
+The type-5 test of Arc and Eat therefore matters mainly for a non-overlay weapon shot or a swat that is still
+playing. It was not checked whether vanilla Rancors fire such a weapon [M].
+
+**Implementer summary** (port keeps, per object, the animation the ability system started: type, start frame,
+clip length from frame count / fps; `n` = sim frames since the start, position = n × rate × speed as in §4.13)
+- Read only the owner's own record. No record or no clip data → type "none", not finished: every gate passes and
+  nothing is busy. Weapon overlay clips never count.
+- **Finished** (one-shot) = position ≥ count − 2, true from the first frame where that holds (count ≤ 2: finished
+  at once). A loop never finishes. A new play by the ability system replaces the record.
+- Use the state as of the owner's last advance: for an apply that runs before the owner's update in frame N, use
+  N − 1; for ability updates, use N.
+- Gates: Earthquake refuses iff type == FB_Release (any phase), after running its remove-all, which itself starts
+  FB_Release. Telekinesis has no gate. Lightning refuses iff type == FL_Attack and not finished. Force_Sight
+  refuses iff busy or type == Force_Revel_End, and succeeds without effect in Begin / Loop. Generic refuses iff
+  type == its Attack_Animation (any phase) or busy. Arc refuses iff its per-owner state is active, or type == 5
+  (Attack) and not finished. Eat refuses iff its state is active, busy, or type == 5 and not finished.
+- Busy = OR over the unit's abilities of type-only tests (FB 0x25–0x27, FTK 0x21–0x23, FL 0x28, Generic /
+  Eat clip types; land only), plus Arc's state flag.
+- Sequences: Earthquake / Telekinesis Attack one-shot → Hold loop at the first 3-frame update after it finishes
+  → Release one-shot on removal → release the hold and play an Idle loop at the first update after it finishes.
+  Lightning: FL_Attack one-shot, then default idle when finished (the whole cast). Force_Sight: Begin one-shot →
+  Loop for the duration → End one-shot, then the unit's idle. Melee: Attack_Animation one-shot at Speedup, then
+  default idle when finished.
+- Synced draws: each 0xFFFF play draws once when the model has the clip. That covers every begin / hold / release
+  play, the Idle at the end of Earthquake / Telekinesis, FL_Attack, 0x69–0x6b, the Generic / Eat attack and the
+  Eat victim. Arc, Super_Laser and the default-idle returns do not draw. Without clip data, make no draw (same
+  fallback as §4.13).
+- Super_Laser: when the variant `Attack_Anim_Sub_Index` is missing, fire at `Fire_Delay`. Otherwise fire when
+  position ≥ `Fire_Frame` on that variant's clip, at that variant's rate (not variant 0's).
+
+**Port (OI follow-up t01, 2026-11-01)** — `AbilitySystem` keeps the record above per object (`anim_type`, start
+frame, rate, end, loop, what follows; saved from ability save v2, hashed only when set) and the host gives clip data
+(`anim_clip` with the variant, `anim_type` for names, `attack_overlay`). [port] choices: no synced draws (variant 0
+unless an explicit sub-index); Eat's `Target_Grabbed_Animation` is not parsed; a Super_Laser whose variant is missing
+keeps the §4.13 rate-1 fallback (the host cannot tell "no model" from "no variant"); writers outside the ability
+system (Lua / cinematic Play_Animation, death, the Berserker redirect) are not seen by the record.
 
 ---
 

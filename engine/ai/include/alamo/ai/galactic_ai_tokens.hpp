@@ -13,14 +13,18 @@
 //     EnemyForce / FriendlyForce / bare TimeLastSeen*, Target.Hints.<not in Galactic_Hints>, Game.ForceVisibility.
 //   * Force sides [H]: Enemy = owner hostile to Self; Friendly = Self (or an ally: not hostile, not neutral);
 //     unowned / neutral matches neither.
-// PORT STAND-INS (marked [port] next to the code): the per-tech member lists of starbases / structures are
-// the structure's own AI_Combat_Power; orbital / space-capable structures and the planet-type garrison list
-// +0x20C8 are not modelled; Timeline = 0; black market = GalacticSim's item table (P4 ai); Hints = the Galactic_Hints
-// defaults (no Markup_Filename file is read); island paths are hop-count shortest paths.
+// PORT STAND-INS (marked [port] next to the code): the per-tech member lists (0x373e30) of fleet units, starbases and
+// structures are the types' Starting_Spawned_Units_Tech_N lists (galactic_ai_member_force); the force leaves hold
+// members only (galactic_ai_planet_force), the helper 0x5f2430 adds the structures' own AI_Combat_Power to the
+// untyped totals (galactic_ai_enemy_strength); the structure mask +0x1658 is the Capital default (no galactic structure
+// sets it); orbital structures D+0x170 and the planet-type garrison list +0x20C8 are not modelled; Timeline = 0; black
+// market = GalacticSim's item table (P4 ai); Hints = the Galactic_Hints defaults (no Markup_Filename file is read);
+// island paths are hop-count shortest paths.
 // Determinism: refresh(frame) runs once per frame on the sim thread (event stamps, neighbour lists);
 // resolve() reads the sim and the leaf cache (mutex) and draws no RNG (Script_ references may, through
 // their Lua; they run only from serial sim-thread callers).
 #pragma once
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -43,6 +47,13 @@ class GalacticSim;
 }
 
 namespace alamo::ai {
+
+// One (type, count) entry of a Starting_Spawned_Units_Tech_N list (the type's "per-tech members", AI_GALACTIC_TOKENS §2).
+struct SpawnMember {
+    uint32_t type = 0;
+    int32_t count = 0;
+};
+inline constexpr size_t kSpawnTechSlots = 6;  // Starting_Spawned_Units_Tech_0..5
 
 // Per object type facts the galactic AI needs beyond galactic::TypeInfo (index = TypeIndex).
 struct GalacticAiTypeInfo {
@@ -72,6 +83,9 @@ struct GalacticAiTypeInfo {
     bool stealth_company = false;  // Is_Stealth_Company (+0x2B): AI delivery path class 5 (REMAINING_GAPS §6.2)
     uint32_t company_first = 0xFFFFFFFFu;  // first Company_Units member (survival leader substitution, §1.1)
     bool company_first_create_team = false;  // ... and that member has Create_Team (then no substitution)
+    // Starting_Spawned_Units_Tech_0..5 (list order, repeated tags appended): the "per-tech members" a fleet unit, starbase or
+    // ground structure adds to the force totals (AI_GALACTIC_TOKENS §2; 0x373f40 / 0x373e30 / 0x373d30).
+    std::array<std::vector<SpawnMember>, kSpawnTechSlots> spawn_tech;
     // (terrain, restrictions, population: GalacticSim's A2 galactic queries / TypeInfo)
     bool has_category(std::string_view c) const;
 };
@@ -80,6 +94,37 @@ struct GalacticAiTypeInfo {
 uint64_t ai_category_bit(std::string_view name);
 // Fills category_mask of every entry from its category names.
 void fill_category_masks(std::vector<GalacticAiTypeInfo>& types);
+
+inline constexpr uint64_t kAllCategories = ~uint64_t{0};
+
+// The per-tech members of one TYPE held by `owner` (AI_GALACTIC_TOKENS §2 "per-tech members": 0x373f40 count /
+// 0x373e30 type / 0x373d30 count, tech = the owner's tech level +0x84): Σ AI_Combat_Power x count over the members
+// whose category mask meets `mask`. Never the type's own power.
+//   [port] the list is the type's Starting_Spawned_Units_Tech_N (the hangar lists of starbases, carriers and land
+//   spawn structures, STATION_HANGARS_SOUND §2.1); [M] the member's own mask +0x1648 is tested; [M] the slot is the
+//   highest N <= the tech level with entries (the hangar rule).
+double galactic_ai_member_force(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
+                                uint32_t type, int32_t owner, uint64_t mask);
+
+// Target.<side>.{Space,Ground}TotalUnnormalized of `planet` for Self = `self` (PlanetForce 0x6dbd50 / 0x6d95d0,
+// AI_GALACTIC_TOKENS §2; side = Enemy (hostile to Self) or Friendly (Self or a non-neutral ally)), category `mask`
+// (kAllCategories = no Parameter_Category):
+//   * space: per orbiting, non-moving fleet of that side, per unit: its type's power if its mask meets `mask`, plus
+//     its per-tech members; if the planet's owner is on that side: the starbase's per-tech members (NOT its own
+//     power), plus the own power of ground structures with Is_Special_Weapon_In_Space (+0x1E) when `mask` meets the
+//     structure mask +0x1658 (Capital default) [port: orbital structures D+0x170 not modelled];
+//   * ground: per surface unit of that side, its type's power if its mask meets `mask`; if the planet's owner is on
+//     that side: the per-tech members of every ground structure (NOT their own power) [port: the Enemy planet-type
+//     list +0x20C8 not modelled].
+double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
+                                PlanetIndex planet, int32_t self, bool enemy, bool space, uint64_t mask);
+// The enemy strength at `planet` for AI player `self` (the perception helper 0x5f2430, GALACTIC_ECONOMY §6.2 [H]): the
+// Enemy leaf above (members only) plus, for the untyped total (`mask` == kAllCategories: the Contrast entries 0 / 1),
+// the own AI_Combat_Power of the planet's starbase (space) or of its ground structures (ground) when the planet's owner
+// is hostile to `self` [port: the 0x4ad9f0 "not held by the AI or an ally" test read as hostile; no garrison types
+// 0x4b8000]. A typed row (any other mask: the PotentialPlan Contrast rows [M]) never holds a structure's own power.
+double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
+                                  PlanetIndex planet, int32_t self, bool space, uint64_t mask);
 
 // The galactic AI's planning-side buildability: GalacticSim::buildable (cost, queue kind, GalacticSim::build_check =
 // 0x2804d0 in the STRATEGIC_GAPS §1.3 order, no credits).

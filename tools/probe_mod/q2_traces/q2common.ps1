@@ -12,7 +12,10 @@ $Q2FocExeSha256 = '07daeeaec9d1e751383b1db3f5847b6c66f68785440a6c52c87b85f723d01
 $Q2DefaultGameRoot = 'F:\SteamLibrary\steamapps\common\Star Wars Empire at War'       # earlier probes
 $Q2TrWorkshopId = '1125571106'   # Thrawn's Revenge: Imperial Civil War (Steam Workshop, app 32470)
 $Q2ModName = 'Q2Trace'
-$Q2LuaOutputName = 'Q2Trace_Lua.txt'
+$Q2LuaOutputName = 'Q2Trace_Lua.txt'   # old probe file name: retail never writes it (docs/re/LUA_SCRIPT_OUTPUT.md); still swept
+# Canary files shipped in mod\Q2Trace\: each probe script calls _CustomScriptMessage on its canary once, and retail
+# deletes that file (DeleteFileA on the first use of a name, relative to the game's working folder corruption\).
+$Q2Canaries = [ordered]@{ galactic = 'Q2Trace_Canary_Galactic.txt'; scoring = 'Q2Trace_Canary_Scoring.txt' }
 
 function Write-Q2 { param([string]$Msg) Write-Host "[q2] $Msg" }
 
@@ -140,6 +143,17 @@ function Get-Q2ProbeLeftovers {
     return $left
 }
 
+# State of the canary files after the game ran (before cleanup): deleted = that probe script ran.
+function Get-Q2CanaryState {
+    param([string]$GameRoot)
+    $state = [ordered]@{}
+    foreach ($k in $Q2Canaries.Keys) {
+        $p = Join-Path $GameRoot "corruption\Mods\$Q2ModName\$($Q2Canaries[$k])"
+        $state[$k] = $(if (Test-Path -LiteralPath $p) { 'present (script did not run)' } else { 'deleted (script ran)' })
+    }
+    return [pscustomobject]$state
+}
+
 function New-Q2Manifest {
     param([string]$RunId, [string]$GameRoot, [string]$RunDir)
     return [pscustomobject]@{
@@ -147,7 +161,7 @@ function New-Q2Manifest {
         started_utc = (Get-Date).ToUniversalTime().ToString('o')
         dirs_created = @(); files_created = @()
         lua_output_name = $Q2LuaOutputName
-        reader_pid = 0; game_pid = 0; game_start_utc = ''
+        reader_pid = 0; lua_reader_pid = 0; lua_reader_start_utc = ''; game_pid = 0; game_start_utc = ''
         cleaned = $false; cleanup_runs = 0
     }
 }

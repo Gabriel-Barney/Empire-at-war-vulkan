@@ -92,16 +92,9 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
             t.bid_planet = t.dest;
         } else if (def.allow_free_store_units) {
             // The free store can supply the unit (0x4d2bd0) -> no charge [M: the unit joins the task force now].
-            ObjectHandle take;
-            for (const ObjectHandle u : free_units(tf.player)) {
-                if (store.type(u) != type) continue;
-                const auto r = unit_reserved.find(store.id(u));
-                if (r != unit_reserved.end() && r->second != pi->pp) continue;
-                if (planet_of_unit(u) == kInvalidPlanet) continue;
-                take = u;
-                break;
-            }
+            const ObjectHandle take = free_store_supply(tf.player, type);
             if (take) {
+                off_free_store(take);
                 tf.units.push_back(take);
                 tf.had_units = true;
                 finish_build(t);
@@ -118,6 +111,15 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
     }
     tf.wanted.clear();
     tf.wanted_source.clear();
+}
+
+// 0x4d2bd0 (a1h t07): the first free-store unit of `type` at a planet. It does not read the entry's +0x30 owner
+// (A1_READINGS §28.5), so a unit another PotentialPlan reserved can be taken; that plan's validity test (0x6c45e0)
+// then fails at the next Commit.
+ObjectHandle GalacticAiWorld::Impl::free_store_supply(int32_t player, uint32_t type) const {
+    for (const ObjectHandle u : free_units(player))
+        if (store.type(u) == type && planet_of_unit(u) != kInvalidPlanet) return u;
+    return {};
 }
 
 void GalacticAiWorld::Impl::finish_build(BuildTask& b) {
@@ -411,6 +413,19 @@ void GalacticAiWorld::Impl::market_planet(PlanetIndex p) {
     }
 }
 
+// An AI player's pay-as-you-go installment a for the head of queue q at planet p (0x53b900, AI_GALACTIC_2 §3.4; q2f
+// t01) [H]: while the planet's AIPlanetBuildQueue has a current task (+0x18), the installment is paid from that task's
+// goal budget (may pause); otherwise from the refund accumulator (always paid). [port] A current task that left the map
+// or whose goal struct is gone counts as none. A player without a PlayerAi pays as a human (credits >= a).
+float GalacticAiWorld::Impl::installment(PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a) {
+    PlayerAi* pa = player_ai(head.player);
+    if (!pa) return sim.players()[static_cast<size_t>(head.player)].account.credits >= a ? a : -1.0f;
+    const int32_t current = p < planet_queues.size() && q <= 1 ? planet_queues[p][q].current : -1;
+    const auto it = current >= 0 ? builds.find(current) : builds.end();
+    if (it == builds.end()) return pa->ctx.budget.installment(-1, 0, a);
+    return pa->ctx.budget.installment(it->second.category, it->second.goal_key, a);
+}
+
 // PRODUCTION_QUEUED polls (every 3 frames, galactic) and the producing tasks' queue items.
 void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
     std::vector<int32_t> ids;
@@ -439,11 +454,11 @@ void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
             if (b.bound && valid_planet(b.dest)) {  // the target's structure slots are full
                 const gal::TypeInfo* ti = type_info(b.type);
                 const gal::PlanetState& ps = sim.planets()[b.dest];
-                const auto& mg = sim.map().planets.max_ground_base;
                 const auto& msb = sim.map().planets.max_space_base;
                 if (ti && ti->kind == gal::UnitKind::GroundStructure) {
-                    const int32_t slots = b.dest < mg.size() && mg[b.dest] >= 0 ? mg[b.dest] : 5;
-                    if (static_cast<int32_t>(ps.structures.size()) >= slots) fail_build(b, "structure slots full");
+                    // 0x3f8af0 vs 0x372740 (Special_Structures_Land, not <Max_Ground_Base>; galactic_slots.hpp) [H].
+                    const int32_t slots = ground_slot_max(b.dest);
+                    if (slots >= 0 && ground_slots_used(b.dest) >= slots) fail_build(b, "structure slots full");
                 } else if (ti && ti->kind == gal::UnitKind::StarBase) {
                     const int32_t slots = b.dest < msb.size() && msb[b.dest] >= 0 ? msb[b.dest] : 5;
                     if (ps.starbase_level >= slots) fail_build(b, "starbase maxed");
@@ -479,6 +494,61 @@ void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
             ++it;
         }
     }
+}
+
+// 0x525200 (AI_GALACTIC_2 §3.4 "Goal production time"; q2f t01) [H]: over the player's build tasks (id order = the
+// execution system's list order) that hold a bid record (PRODUCTION_QUEUED, not yet producing: the port's Queued) and
+// belong to the running plan's goal (or to no task force): max over those without a bid planet of the build time with
+// no planet, plus max over those with one of the queue wait (0x53bb20) + the build time there. Producing tasks add
+// nothing. 0 when no task matches; the goal is always activated here (the maintenance test only runs for goals with a
+// running plan).
+float GalacticAiWorld::Impl::goal_production_time(int32_t running) const {
+    const auto pit = plans.find(running);
+    if (running < 0 || pit == plans.end()) return 0.0f;
+    const int32_t player = pit->second.player;
+    const PlayerAi* pa = player_ai(player);
+    if (!pa) return 0.0f;
+    const auto goal_of = [pa](int32_t plan) -> const Goal* {
+        for (const auto& cat : pa->ctx.goals.active())
+            for (const Goal& g : cat)
+                if (g.running == plan) return &g;
+        return nullptr;
+    };
+    // slack(T) at P = goal ETA - (NOW - goal created) / FPS - btime(T, P); no goal: 1e18.
+    const auto slack = [&](const BuildTask& t, PlanetIndex p) -> float {
+        const Goal* g = t.tf >= 0 ? goal_of(t.plan) : nullptr;
+        if (!g) return 1e18f;
+        return (g->eta - static_cast<float>(now - g->created) / static_cast<float>(kAiFps)) - btime_at(t.player, t.type, p);
+    };
+    const bool payg = sim.pays_as_you_go(player);
+    float none = 0.0f, t = 0.0f;
+    for (const auto& entry : builds) {
+        const BuildTask& x = entry.second;
+        if (x.player != player || x.state != BuildState::Queued) continue;
+        if (x.tf >= 0 && x.plan != running) continue;
+        const PlanetIndex p = x.bid_planet;
+        if (!valid_planet(p) || x.queue > 1 || static_cast<size_t>(p) >= planet_queues.size()) {
+            none = std::max(none, btime_none(x.type));
+            continue;
+        }
+        // 0x53bb20(Q, 0, X): the current item's remaining time, then Q's listed tasks with no more slack than X.
+        const auto sim_queue = sim.queue_of(p, x.queue);
+        float wait = sim_queue.empty() ? 0.0f : sim_queue[0].remaining;
+        const PlanetBuildQueue& Q = planet_queues[p][x.queue];
+        if (Q.current != x.id && x.tf >= 0) {  // [port] a task without a task force is never ranked (no goal to read)
+            const float sx = slack(x, p);
+            for (const int32_t id : Q.tasks) {
+                const auto yt = builds.find(id);
+                if (yt == builds.end()) continue;
+                const BuildTask& y = yt->second;
+                if (slack(y, p) > sx) continue;
+                const float bt = btime_at(y.player, y.type, p), ft = funds_time(y);
+                wait += payg ? std::max(bt, ft) : bt + ft;
+            }
+        }
+        t = std::max(t, wait + btime_at(x.player, x.type, p));
+    }
+    return none + t;
 }
 
 }  // namespace alamo::ai

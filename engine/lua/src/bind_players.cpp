@@ -713,6 +713,22 @@ int m_get_clan_id(Call& c) {
 int m_release_credits_for_tactical(Call& c) {
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, "Release_Credits_For_Tactical");
+    if (const TacticalGalacticContext* tg = w->tactical_galactic()) {  // a1j t07: 0x603c70 [H] (A1_READINGS §38)
+        if (!tg->land)
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - this script function is only valid in land tactical");
+        if (c.nargs > 1)
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid number of parameters.  Expected 0 or 1, got %d.",
+                          c.nargs);
+        if (c.nargs == 1 && !c.is_number(1))
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid type for parameter 1.  Expected number.");
+        const int32_t p = c.self->id;
+        if (!w->has_ai(p))
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - this action is not possible: player is not AI controlled.");
+        if (!tg->has_galactic_ai || !tg->has_galactic_ai(p))
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - player has no associated galactic AI.");
+        if (tg->release_credits) tg->release_credits(p, c.nargs == 1 ? c.number(1) : -1.0);
+        return 0;
+    }
     if (c.nargs > 1)
         return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid number of parameters. Expected 0 or 1, got %d.",
                       c.nargs);
@@ -903,8 +919,38 @@ int g_evaluate_perception(Call& c) {
     return evaluate_perception(c, w, w->perception(), c.string(1), p, c.nargs == 3 ? perception_target(c, w, 3) : -1);
 }
 
-// Galactic perceptions from any mode (EvaluateInGalacticContext.lua): no target [inferred].
+// a1j t07: 0x69e1b0 in a tactical mode with a parent galaxy (players.hpp TacticalGalacticContext, A1_READINGS §38).
+int evaluate_in_parent_galaxy(Call& c, const LuaPlayerWorld* w, const TacticalGalacticContext& tg) {
+    if (c.nargs != 2)
+        return c.fail("Evaluate_In_Galactic_Context: Invalid number of parameters.  Expected 2, got %d.", c.nargs);
+    if (!c.is_string(1))
+        return c.fail("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 1. Expected string.");
+    const std::string name(c.string(1));
+    const uint32_t eq = tg.source.equations ? tg.source.equations->find(name) : ai::kUnresolved;
+    if (eq == ai::kUnresolved) return c.fail("Evaluate_In_Galactic_Context: Unrecognised perception function %s.", name.c_str());
+    const int32_t p = player_arg(c, 2, w);
+    if (p < 0)
+        return c.fail("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 2.  Expected player object.");
+    if (!tg.has_galactic_ai || !tg.has_galactic_ai(p))
+        return c.fail("Evaluate_In_Galactic_Context: AI player %s has no galactic AI.", w->faction_name(p).c_str());
+    if (tg.target < 0 || !tg.source.resolver) return 0;  // no conflict record: nothing is returned [L]
+    ai::EvalContext ctx;
+    ctx.self = p;
+    ctx.target = tg.target;
+    ctx.location = tg.target;
+    ctx.enemy = w->enemy_of(p);
+    ctx.human = w->local_player();
+    ctx.rng = c.vm->host.rng ? &c.vm->host.rng->synced() : nullptr;  // Script_ evaluators only (as evaluate_perception)
+    ctx.game_seed = tg.source.game_seed;
+    const ai::EvalResult r = ai::evaluate(*tg.source.equations, eq, ctx, *tg.source.resolver);
+    if (!r.ok) return c.fail("Evaluate_Perception: Error evaluating perception function %s.", name.c_str());
+    return push_num(c, r.value);
+}
+
+// Galactic perceptions from any mode (EvaluateInGalacticContext.lua): no target [inferred]. With a parent galaxy set by the
+// battle host: evaluate_in_parent_galaxy.
 int g_evaluate_in_galactic_context(Call& c) {
+    if (const LuaPlayerWorld* tw = world_of(c.L); tw && tw->tactical_galactic()) return evaluate_in_parent_galaxy(c, tw, *tw->tactical_galactic());
     if (c.nargs != 2)
         return c.fail("Evaluate_In_Galactic_Context: Invalid number of parameters. Expected 2, got %d.", c.nargs);
     if (!c.is_string(1))
@@ -1255,29 +1301,62 @@ int g_assemble_fleet(Call& c) {
     return 1;
 }
 
-// GameObjectWrapper.Invade() on a fleet (Story_Campaign_Underworld.lua): an Invade event for the fleet's
-// planet with the fleet's ground units, issued on the direct path through the attached ObjectBridge's
-// pipeline (COMMANDS.md 5) [inferred: the unit list = the fleet's ground units, content order]. Returns
-// nothing; not a fleet in orbit / no pipeline: nothing happens.
+// GameObjectWrapper.Invade() (0x57ada0, A1_READINGS §31; Story_Campaign_Underworld.lua): an Invade event issued by the
+// LOCAL player (LuaPlayerWorld::local_player(), the event ctor's player), not the fleet's owner, executed on the direct
+// path through the attached ObjectBridge's pipeline (COMMANDS.md 5). Refusals in 0x57ada0's order, as script warnings
+// with nothing issued: not a fleet ([port] a warning; the original raises an error), not at a planet (moving), the
+// planet owner not an enemy of the FLEET owner, no ground units in the fleet. Units = the fleet's ground units owned by
+// the issuer (the executor 0x48ff50 keeps only those), content order, at most 127; none left (an AI fleet seen from a
+// human local player): nothing is issued, silently. Never an empty list (GalacticSim::invade reads it as "all units").
+// Returns nothing.
 int m_invade(Call& c) {
-    const galactic::GalacticSim* sim = galactic_of(c, world_of(c.L));
+    if (c.nargs != 0) return c.fail("GameObjectWrapper::Invade -- invalid number of parameters. Expected 0, got %d.", c.nargs);
+    LuaPlayerWorld* w = world_of(c.L);
+    const galactic::GalacticSim* sim = galactic_of(c, w);
+    if (!sim) return 0;
+    auto warn = [&c](const std::string& what) { c.vm->message("SCRIPT WARNING: GameObjectWrapper::Invade -- " + what); };
     const objects::ObjectHandle self = detail::object_handle(*c.self);
-    const uint32_t f = sim ? sim->fleet_of(self) : galactic::kNoFleet;
-    if (f == galactic::kNoFleet || sim->fleets()[f].moving || sim->fleets()[f].planet == kInvalidPlanet) return 0;
+    const uint32_t f = sim->fleet_of(self);
+    if (f == galactic::kNoFleet) {
+        warn("this function is only valid on fleets.");
+        return 0;
+    }
+    const galactic::FleetState& fl = sim->fleets()[f];
+    if (fl.moving || fl.planet == kInvalidPlanet) {
+        warn("this fleet is not at a planet. Cannot initiate invasion.");
+        return 0;
+    }
+    const galactic::PlanetState& planet = sim->planets()[fl.planet];
+    if (!sim->is_hostile(planet.owner, fl.owner)) {
+        const objects::GameObjectTypes* ty = c.vm->host.types;
+        const objects::TypeIndex pt = sim->store().type(planet.object);
+        const std::string pname = (ty && pt < ty->raw().type_count()) ? std::string(ty->raw().types().name[pt]) : std::string();
+        warn("fleet owner " + w->faction_name(fl.owner) + " is not an enemy of planet " + pname + " owner " +
+             w->faction_name(planet.owner) + ". Cannot initiate invasion.");
+        return 0;
+    }
+    const int32_t issuer = w->local_player();
+    constexpr size_t kMaxInvadeUnits = 127;  // 0x4903c0 copies at most 127 unit ids
+    bool any_ground = false;
+    std::vector<uint32_t> ids;
+    for (const objects::ObjectHandle m : fl.contents) {
+        if (!sim->store().alive(m) || sim->rules().types[sim->store().type(m)].kind != galactic::UnitKind::GroundUnit) continue;
+        any_ground = true;
+        if (sim->store().owner(m) == issuer && ids.size() < kMaxInvadeUnits) ids.push_back(static_cast<uint32_t>(sim->store().id(m)));
+    }
+    if (!any_ground) {
+        warn("fleet contains no land units. Cannot initiate invasion.");
+        return 0;
+    }
+    if (ids.empty() || issuer < 0 || issuer >= commands::kMaxPlayerSlots) return 0;  // 0x48ff50 keeps none: silently
 #if ALAMO_LUA_HAVE_COMMANDS
     ObjectBridge* b = attached_object_bridge(*c.vm->owner);
     if (!b) return 0;
     ++b->orders_issued;
     if (!b->pipeline) return 0;
-    const galactic::FleetState& fl = sim->fleets()[f];
-    std::vector<uint32_t> ids;
-    for (const objects::ObjectHandle m : fl.contents)
-        if (sim->store().alive(m) && sim->rules().types[sim->store().type(m)].kind == galactic::UnitKind::GroundUnit)
-            ids.push_back(static_cast<uint32_t>(sim->store().id(m)));
     commands::EventData e(commands::EventType::Invade);
-    e.set("planet", static_cast<uint32_t>(sim->store().id(sim->planets()[fl.planet].object))).set_ids("units", std::move(ids));
-    const uint8_t player = (fl.owner >= 0 && fl.owner < commands::kMaxPlayerSlots) ? static_cast<uint8_t>(fl.owner) : 0;
-    b->pipeline->execute_direct(c.vm->frame, player, commands::CommandSource::Script, e);
+    e.set("planet", static_cast<uint32_t>(sim->store().id(planet.object))).set_ids("units", std::move(ids));
+    b->pipeline->execute_direct(c.vm->frame, static_cast<uint8_t>(issuer), commands::CommandSource::Script, e);
 #endif
     return 0;
 }
@@ -1524,6 +1603,13 @@ bool detail::black_market_allows(Call& c, int32_t player, std::string_view abili
 }
 // --- end P4 lua ---
 
+objects::ObjectHandle detail::galactic_spawn_unit(Call& c, uint32_t type, int32_t player, objects::ObjectHandle location) {
+    galactic::GalacticSim* sim = galactic_mut(c);
+    const PlanetIndex row = planet_row(sim, location);
+    if (row == kInvalidPlanet) return {};
+    return sim->spawn_unit(player, row, type);
+}
+
 }  // namespace alamo::lua
 
 #else  // !ALAMO_LUA_PLAYERS
@@ -1535,6 +1621,7 @@ bool detail::galactic_block_finished(Call&) { return true; }
 bool detail::galactic_activate_ability(Call&) { return false; }
 void detail::galactic_trigger(Call&, const std::vector<std::pair<objects::ObjectHandle, uint32_t>>&) {}
 bool detail::black_market_allows(Call&, int32_t, std::string_view, bool) { return true; }
+objects::ObjectHandle detail::galactic_spawn_unit(Call&, uint32_t, int32_t, objects::ObjectHandle) { return {}; }
 }  // namespace alamo::lua
 
 #endif

@@ -173,7 +173,9 @@ bool SpecialWeaponSystem::fire_lobbing_at(ObjectId id, Vec3 point, uint32_t fram
     p->start = frame;
     p->ready = frame + recharge_frames(d);
     p->ready_signalled = 0;
-    queue_volley(*p, d, kNoObject, point, true, frame);
+    // S8 t30: the WeaponBehavior charges and fires the order (TACTICAL_COMBAT §3.1.1); [port] the point volley only for an
+    // object without one.
+    if (!(w.fire_at_position && w.fire_at_position(id, point))) queue_volley(*p, d, kNoObject, point, true, frame);
     event(SwEventKind::Fired, *p, frame, d.target_action_index, kNoObject, point);
     return true;
 }

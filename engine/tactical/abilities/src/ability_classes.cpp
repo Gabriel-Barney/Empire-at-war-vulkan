@@ -1,7 +1,15 @@
 // OI abilities - special-ability class bodies of docs/re/TACTICAL_GAPS.md §2.3 (the classes FoC / Thrawn's Revenge
-// use beyond the S9 set): accepts-target templates, apply / update / remove per class. Animation-driven timings
-// ("at animation frame N", "at the animation end") run on sim frames since the apply x Attack_Animation_Speedup [port:
-// no sim animation clock here]. Victim scans walk the combat units in ascending id (port rule for GOM / query order).
+// use beyond the S9 set): accepts-target templates, apply / update / remove per class. Victim scans walk the combat
+// units in ascending id (port rule for GOM / query order).
+//
+// Animation-driven timings (OI t03, ABILITIES_HARDPOINTS.md §4.13 [port]): the sim never reads a playing clock. A clip
+// position is a pure function of the sim frames n since the clip started: n x rate x speed, rate = clip fps / 30 (the
+// sim animation's clock, anim_state.hpp) and speed = Attack_Animation_Speedup (1 for the other clips). "At animation
+// frame N" (Damage_Frame_Number, Begin_Applying_Damage_Frame, Attachment_Frame, Target_Destruction_Frame, Spawn_Frame,
+// Fire_Frame) = the first update whose position >= N. "At the animation end" = position >= max(count - 2, 0), where a
+// one-shot finishes. Frame count and fps come from the model's clip data through AbilityHost::anim_clip (clip_timing);
+// without a clip (no host, no model, no such clip) rate is 1 and each end falls back: melee / grenade end at their last
+// frame-numbered event, Hack / Repair after kHackFrames, the Berserker damage window is always open.
 //
 // Synced draws (exactly these, in apply order): one per apply attempt that passed the range test for the chance
 // classes (Arc_Sweep / Generic / Eat: draw <= chance; Earthquake / Telekinesis / Vehicle_Thief / Whirlwind: draw <
@@ -9,6 +17,7 @@
 // victim (CONFUSE destination).
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
@@ -23,7 +32,14 @@ namespace {
 using C = SpecialClass;
 constexpr float kDegToRad = 0.017453292519943295f;
 constexpr uint8_t kKind2 = 2, kKind3 = 3, kKind4 = 4, kKind5 = 5, kKind16 = 0x16;
-constexpr int32_t kHackFrames = 60;  // [port] Hack / Repair animation 0x5a length (not in the data)
+constexpr int32_t kHackFrames = 60;  // [port] Hack / Repair animation 0x5a length without a clip (§4.13 fallback)
+constexpr int32_t kAnimHacking = 0x5a;  // Hack / Repair (TACTICAL_GAPS §2.3.10)
+constexpr int32_t kAnimBerserk = 0x68;  // Berserker (TACTICAL_GAPS §2.3.2)
+constexpr int32_t kAnimAttack = 5;      // Super_Laser (TACTICAL_GAPS §2.3.9), weapon shots, the Arc / Eat gates
+// §4.14: begin / hold / release clips (anim_types.cpp)
+constexpr int32_t kAnimFtkAttack = 0x21, kAnimFtkRelease = 0x23;  // Telekinesis
+constexpr int32_t kAnimFbAttack = 0x25, kAnimFbRelease = 0x27;    // Earthquake
+constexpr int32_t kAnimFlAttack = 0x28;                           // Force_Lightning (Force_Sight's: ability_system.cpp)
 
 int32_t frames_of(float secs, uint32_t fps) { return static_cast<int32_t>(static_cast<float>(fps) * secs); }
 
@@ -44,6 +60,121 @@ float bearing_deg(Vec3 f, Vec3 from, Vec3 p) {
     return d;
 }
 }  // namespace
+
+AbilitySystem::ClipTiming AbilitySystem::clip_timing(ObjectId id, int32_t anim_type, std::string_view anim_name,
+                                                     uint32_t variant) const {
+    ClipTiming t;
+    if (!host_.anim_clip || (anim_type < 0 && anim_name.empty())) return t;
+    uint32_t count = 0;
+    float fps = 0.0f;
+    if (!host_.anim_clip(id, anim_type, anim_name, variant, count, fps) || count == 0 || !(fps > 0.0f)) return t;
+    t.rate = fps / 30.0f;
+    t.count = static_cast<float>(count);
+    t.end = count >= 2 ? static_cast<float>(count - 2) : 0.0f;
+    return t;
+}
+
+// OI follow-up t01 (ABILITIES_HARDPOINTS §4.14 [port]): the owner's primary slot as far as the sim knows it. Only the
+// ability system's own plays (and non-overlay weapon shots of melee owners) are recorded; a play without clip data leaves
+// the record unchanged, so headless runs without models keep "none" and every gate passes.
+int32_t AbilitySystem::anim_type_of(std::string_view anim_name) const {
+    return (host_.anim_type && !anim_name.empty()) ? host_.anim_type(anim_name) : -1;
+}
+
+void AbilitySystem::play_anim(Obj& o, int32_t type, std::string_view anim_name, uint32_t variant, bool loop, float speed,
+                              uint8_t then, uint32_t frame) {
+    if (type < 0) type = anim_type_of(anim_name);
+    if (type < 0) return;
+    const ClipTiming ct = clip_timing(o.id, type, {}, variant);
+    if (ct.count <= 0.0f) return;  // the model lacks the clip: the play returns 0, nothing changes
+    o.anim_type = type;
+    o.anim_start = frame;
+    o.anim_rate = ct.rate * speed;
+    o.anim_end = ct.end;
+    o.anim_loop = loop ? 1 : 0;
+    o.anim_then = then;
+}
+
+AbilitySystem::AnimView AbilitySystem::anim_view(const Obj& o, uint32_t frame) const {
+    AnimView v;
+    if (o.anim_type < 0) return v;
+    v.type = o.anim_type;
+    if (o.anim_loop) return v;  // a loop never finishes
+    // One-shot: finished from the first advance with position >= count - 2 (a clip does not move in its play frame).
+    const float n = frame > o.anim_start ? static_cast<float>(frame - o.anim_start) : 0.0f;
+    if (!(n * o.anim_rate >= o.anim_end)) return v;
+    switch (o.anim_then) {
+        case kAnimIdle: v.type = -1; break;           // the update that saw it finish played the idle
+        case kAnimHoldLoop: v.type = o.anim_type + 1; break;  // begin -> hold loop
+        default: v.finished = true; break;
+    }
+    return v;
+}
+
+bool AbilitySystem::class_state(const Obj& o, SpecialClass cls) const {
+    for (const SpecialState& sp : o.specials)
+        if (sp.applied && data_->specials[sp.desc].cls == cls) return true;
+    return false;
+}
+
+bool AbilitySystem::anim_busy(const Obj& o, uint32_t frame) const {
+    // 0x39a350: OR of the owner's abilities' type-only tests (the mode is ignored). Earthquake / Telekinesis / Lightning /
+    // Generic / Eat count in land only; Arc_Sweep by its applied state in any mode. [port] Eat's Target_Grabbed_Animation
+    // is not parsed (only Attack_Animation counts).
+    if (class_state(o, C::ArcSweep)) return true;
+    if (cfg_.mode != GameMode::Land) return false;
+    const int32_t type = anim_before(o, frame).type;
+    if (type < 0) return false;
+    for (const SpecialState& sp : o.specials) {
+        const SpecialAbilityDesc& s = data_->specials[sp.desc];
+        switch (s.cls) {
+            case C::Earthquake:
+                if (type >= kAnimFbAttack && type <= kAnimFbRelease) return true;
+                break;
+            case C::Telekinesis:
+                if (type >= kAnimFtkAttack && type <= kAnimFtkRelease) return true;
+                break;
+            case C::ForceLightning:
+                if (type == kAnimFlAttack) return true;
+                break;
+            case C::GenericAttack:
+            case C::EatAttack:
+                if (type == anim_type_of(s.attack_anim)) return true;
+                break;
+            default: break;
+        }
+    }
+    return false;
+}
+
+bool AbilitySystem::locked(const Obj& o) const {
+    return o.immobilize > 0 || (host_.movement_locked && host_.movement_locked(o.id));
+}
+
+void AbilitySystem::snap_face(Obj& o, ObjectId target) {
+    // S8 t10 (LOB_SOLVER §3.5 "Facing at apply", Grenade_Attack 0x700860 / Remote_Bomb 0x719c90): angles 0x20acd0 from the
+    // unit to the target's RAW position (no Ranged_Target_Z_Adjust; roll and pitch 0), snapped at once by 0x3a8710 (no turn
+    // rate). Skipped while obj +0x3a0 & 0x10 (weapons disabled / stunned). Not re-faced at the throw, not restored after.
+    if (o.weapons_disabled || !host_.snap_yaw || target == kNoObject || !combat_->has_unit(target)) return;
+    const Vec3 a = position(o), b = combat_->position(target);
+    const float dx = b.x - a.x, dy = b.y - a.y;
+    if (dx == 0.0f && dy == 0.0f) return;  // [port] no direction: the facing is kept
+    const float yaw = dmath::atan2(dy, dx) * (180.0f / dmath::kPiF);
+    host_.snap_yaw(o.id, yaw);
+    if (o.combat_unit && combat_->has_unit(o.id)) {  // the combat facing at once (the host re-pushes it every tick)
+        float s = 0.0f, c = 1.0f;
+        dmath::sincos(yaw * (dmath::kPiF / 180.0f), s, c);
+        combat_->set_facing(o.id, Vec3{c, s, 0.0f});
+    }
+}
+
+void AbilitySystem::lock_pair(Obj& o, uint8_t flag, bool lock, uint32_t frame) {
+    // OI follow-up t04 (A1_READINGS §28.9 table): one caller's lock / unlock on the shared counter. [port] the flag keeps
+    // each pair balanced (the original's unconditional releases are hidden by the clamp at 0).
+    if (lock == ((o.lock_flags & flag) != 0)) return;
+    o.lock_flags = static_cast<uint8_t>(lock ? (o.lock_flags | flag) : (o.lock_flags & ~flag));
+    immobilize(o, lock ? +1 : -1, frame);
+}
 
 // ================================================================================================
 // accepts-target templates (vfunc +0x28)
@@ -188,7 +319,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::Earthquake:
         case C::Telekinesis: {  // 2.3.4
             if (!alive_unit(target)) return false;
-            if (sp.applied) class_remove(o, sp, frame);  // remove the previous effect
+            if (sp.applied) class_remove(o, sp, frame);  // remove the previous effect (plays the release clip)
+            // §4.14: Earthquake refuses while the owner shows FB_Release (any phase; also the one the removal just
+            // started); Telekinesis has no animation gate.
+            if (s.cls == C::Earthquake && anim_before(o, frame).type == kAnimFbRelease) return false;
             if (moving(o) || !range_ok(o, s, target)) return false;
             if (!chance_roll_lt(s.activation_chance)) return false;  // one synced draw < Activation_Chance
             if (s.cls == C::Earthquake) {  // also ends the owner's own Force_Cloak (stealth breaks, 0.3 s)
@@ -200,6 +334,8 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             sp.value = max_health_and_shield(target) * s.damage_percentage + s.damage_amount;  // D
             sp.next = frame + static_cast<uint32_t>(std::max(1, frames_of(s.damage_interval, fps)));
             if (s.cls == C::Telekinesis) start_recharge(o, kForceTelekinesis);
+            // §4.14: FB_Attack / FTK_Attack one-shot, then the hold clip loops
+            play_anim(o, s.cls == C::Earthquake ? kAnimFbAttack : kAnimFtkAttack, {}, 0, false, 1.0f, kAnimHoldLoop, frame);
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
             return true;
         }
@@ -208,18 +344,28 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!alive_unit(target)) return false;
             if (s.requires_direct_command && !direct_ctx_ && combat_->ai_player(o.owner)) return false;
             if (!range_ok(o, s, target) || s.projectile < 0) return false;
-            if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return false;  // unit ability 22's counter <= 0
+            // S8 t04 (LOB_SOLVER §3.4): Grenade_Type is a category-3 projectile with a lob solution from the unit's
+            // position to the target's position (no z adjust); otherwise refused (the ability is not consumed).
+            if (!combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, combat_->position(target))) return false;
+            // S8 t10 follow-up (LOB_SOLVER §3.5 "Facing at apply", last item): with ABILITY_COUNTDOWN and unit ability 22's
+            // counter > 0 the apply returns 1 WITHOUT the face / stop / lock / pending block: the request is consumed (a
+            // pending order is not retried) and nothing is thrown [M on the meaning; the port applies the flow as read].
+            if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return true;
+            snap_face(o, target);  // S8 t10: yaw snapped to the target's raw position
             stop_order(o.id, frame);
+            lock_pair(o, kLockGrenade, true, frame);  // stop, lock (0x3a8e50 1; A1_READINGS §28.9)
             sp.applied = 1;
             sp.target = target;
             sp.phase = 0;
             sp.next = frame;  // toss starts once not moving / turning
-            if (o.combat_unit) combat_->clear_targets(o.id);  // targeting suspended
+            // S8 t25: Disable TARGETING (slot 9) only - the targets are kept (was clear_targets).
+            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, true);
             return true;
         }
 
         case C::ForceLightning: {  // 2.3.6 apply 0x6fd010
             if (!alive_unit(target) || moving(o)) return false;
+            if (anim_before(o, frame).type == kAnimFlAttack) return false;  // §4.14: refused while FL_Attack runs
             ObjectId primary = target;
             if (const Obj* to = obj(target); to && to->container != kNoObject && !alive_unit(primary)) primary = to->container;
             if (!range_ok(o, s, primary)) return false;
@@ -235,6 +381,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
                 combat_->take_damage(r, frame);
             }
             start_recharge(o, kForceLightning);
+            play_anim(o, kAnimFlAttack, {}, 0, false, 1.0f, kAnimIdle, frame);  // §4.14: the cast lasts the clip
             event(AbilityEventKind::EffectOn, kForceLightning, o.id, primary, frame);
             return true;  // update is visuals only
         }
@@ -274,6 +421,15 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::GenericAttack:
         case C::EatAttack: {  // 2.3.8
             if (!alive_unit(target) || moving(o)) return false;
+            {  // §4.14 gates (owner's primary slot as of the last advance)
+                const AnimView v = anim_before(o, frame);
+                if (s.cls == C::GenericAttack) {  // its own Attack_Animation in any phase, then busy
+                    if ((v.type >= 0 && v.type == anim_type_of(s.attack_anim)) || anim_busy(o, frame)) return false;
+                } else {  // Arc / Eat: the per-owner class state, the literal Attack (5) unless finished; Eat also busy
+                    if (class_state(o, s.cls) || (v.type == kAnimAttack && !v.finished)) return false;
+                    if (s.cls == C::EatAttack && anim_busy(o, frame)) return false;
+                }
+            }
             if (!range_ok(o, s, target)) return false;
             if (s.cls != C::EatAttack && o.combat_unit) {
                 const float lim = s.cls == C::ArcSweep ? 15.0f : 5.0f;
@@ -287,6 +443,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             sp.phase = 0;
             sp.radius = s.right_to_left ? 0.5f * s.arc_width : -0.5f * s.arc_width;  // sweep start angle
             sp.victims.clear();
+            // §4.14: Attack_Animation one-shot at Speedup, then the default idle (Arc: the explicit Subindex variant;
+            // [port] Generic / Eat use variant 0, no draw; Eat plays at the apply)
+            play_anim(o, -1, s.attack_anim, s.cls == C::ArcSweep ? static_cast<uint32_t>(std::max(0, s.anim_sub_index)) : 0u,
+                      false, s.anim_speedup, kAnimIdle, frame);
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
             return true;
         }
@@ -369,7 +529,12 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!alive_unit(target) || !range_ok(o, s, target)) return false;
             sp.applied = 1;
             sp.target = target;
-            sp.next = frame + (s.cls == C::TacticalBribe ? 0u : static_cast<uint32_t>(kHackFrames));
+            uint32_t len = 0;  // animation 0x5a: its end on sim frames, else kHackFrames (§4.13)
+            if (s.cls != C::TacticalBribe) {
+                const ClipTiming ct = clip_timing(o.id, kAnimHacking, {});
+                len = ct.count > 0.0f ? static_cast<uint32_t>(std::ceil(ct.end / ct.rate)) : static_cast<uint32_t>(kHackFrames);
+            }
+            sp.next = frame + len;
             start_recharge(o, s.cls == C::Hack ? kTargetedHack : (s.cls == C::Repair ? kTargetedRepair : kTacticalBribe));
             stop_order(o.id, frame);
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
@@ -458,21 +623,30 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             return true;
         }
 
-        case C::RemoteBomb: {  // tossed like a grenade; DETONATE_REMOTE_BOMB (65) sets it off (0x280ec0)
+        case C::RemoteBomb: {  // apply 0x719c90 (LOB_SOLVER §3.5); DETONATE_REMOTE_BOMB (65) sets the bombs off (0x280ec0)
             if (s.projectile < 0) return false;
-            if (target != kNoObject && combat_->has_unit(target) && !range_ok(o, s, target)) return false;
-            const Vec3 at = (target != kNoObject && combat_->has_unit(target)) ? combat_->position(target) : me;
-            combat::ProjectileLaunch l;
-            l.shooter = o.combat_unit ? o.id : kNoObject;
-            l.owner = o.owner;
-            l.projectile = static_cast<uint32_t>(s.projectile);
-            l.from = at;
-            l.point = at;
-            l.fuse_seconds = 1.0e9f;  // armed until detonated
-            if (combat_->launch_projectile(l, frame) && combat_->projectile_count() > 0)
-                remote_bombs_.push_back(RemoteBomb{o.owner, combat_->projectile(combat_->projectile_count() - 1).serial});
-            start_recharge(o, kPlaceRemoteBomb);
-            event(AbilityEventKind::EffectOn, kPlaceRemoteBomb, o.id, target, frame);
+            if (sp.applied) return false;  // [port] a toss is running (retail would overwrite the pending pack)
+            const bool has_target = target != kNoObject && combat_->has_unit(target);
+            // Range tests 0x48d820 / 0x48e100 against the target's garrison host when it is garrisoned (0x39b1a0); the solve
+            // uses the target itself: Bomb_Type needs a lob solution from the unit's position to the target's position +
+            // Ranged_Target_Z_Adjust (0x398440).
+            if (has_target && !range_ok(o, s, remote_bomb_range_target(target))) return false;
+            if (has_target && !combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, combat_->target_point(target)))
+                return false;
+            // S8 t06 / t10: face (the yaw snapped to the target's raw position, LOB_SOLVER §3.5 "Facing at apply"), stop,
+            // movement lock, TARGETING disabled [port: its targets cleared, as Grenade_Attack]; pending "waiting to stop" with
+            // the target. No toss and no recharge yet (class_update). [port] Without a target object the bomb is placed at the
+            // unit at the toss.
+            if (has_target) snap_face(o, target);
+            stop_order(o.id, frame);
+            lock_pair(o, kLockRemoteBomb, true, frame);
+            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, true);  // S8 t25: TARGETING disabled
+            sp.applied = 1;
+            sp.target = has_target ? target : kNoObject;
+            sp.phase = 0;
+            sp.next = frame;
+            sp.counter = 0;
+            event(AbilityEventKind::EffectOn, kPlaceRemoteBomb, o.id, target, frame);  // the presentation (0x48e4d0)
             return true;
         }
 
@@ -590,7 +764,15 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 remove_special(o, sp, frame);
                 return;
             }
-            if (sp.counter % 5 == 0) {  // damage pass [M: the 20 %-80 % animation window is not modelled]
+            // Damage pass every 5th update while the looping animation 0x68 is strictly inside 20 %-80 % of the clip
+            // (§4.13 [port]: loops wrap at count - 1; position from the frames since the apply; no clip: always open).
+            bool window = true;
+            if (const ClipTiming ct = clip_timing(o.id, kAnimBerserk, {}); ct.count > 1.0f) {
+                const float n = static_cast<float>(frames_of(s.berserker_duration, fps) - sp.counter);
+                const float pos = std::fmod(n * ct.rate, ct.count - 1.0f);
+                window = pos > 0.2f * ct.count && pos < 0.8f * ct.count;
+            }
+            if (sp.counter % 5 == 0 && window) {
                 for (size_t i = 0; i < combat_->unit_count(); ++i) {
                     const ObjectId u = combat_->unit_id_at(i);
                     if (!alive_unit(u) || !enemy(o.owner, combat_->owner(u))) continue;
@@ -658,21 +840,69 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 sp.phase = 1;
                 sp.next = frame;  // toss animation start (-1 = at once)
             }
-            if (sp.phase == 1 && static_cast<float>(frame - sp.next) >= s.spawn_frame) {
+            const ClipTiming ct = clip_timing(o.id, -1, s.toss_anim);
+            const float anim = static_cast<float>(frame - sp.next) * ct.rate;
+            if (sp.phase == 1 && anim >= s.spawn_frame) {
+                sp.phase = 2;  // thrown
+                bool spawned = false;
                 if (alive_unit(sp.target) && s.projectile >= 0) {
                     combat::ProjectileLaunch l;
                     l.shooter = o.combat_unit ? o.id : kNoObject;
                     l.owner = o.owner;
                     l.projectile = static_cast<uint32_t>(s.projectile);
-                    l.from = combat_->position(sp.target);  // [port] lands at the target, its BOMB armed with the timer
-                    l.point = l.from;
-                    l.fuse_seconds = s.fuse_time;
-                    combat_->launch_projectile(l, frame);
+                    // S8 t04 (TACTICAL_GAPS §2.3.5, LOB_SOLVER §5): thrown from the unit through the spawner (the
+                    // grenade branch: solve, arc, nothing without an arc) with its BOMB armed with the timer. [port] No
+                    // Spawn_Bone: the launch point is the unit's position + its Ranged_Target_Z_Adjust.
+                    l.from = o.combat_unit ? combat_->target_point(o.id) : position(o);
+                    l.target = sp.target;
+                    l.point = combat_->position(sp.target);
+                    l.fuse_seconds = s.fuse_time > 0.0f ? s.fuse_time : -1.0f;  // [port] no timer: impact only
+                    l.toss = true;
+                    spawned = combat_->launch_projectile(l, frame);
                 }
-                o.active[kStickyBomb] = 1;
-                start_recharge(o, kStickyBomb);
-                remove_special(o, sp, frame);  // animation end: targeting / locomotion resume, unlock
+                // S8 t06 (LOB_SOLVER §5.2): the throw 0x700a70 returns 0 on a null spawn - the ability is not set active
+                // and no recharge starts; the animation still ends the ability as usual.
+                if (spawned) {
+                    o.active[kStickyBomb] = 1;
+                    start_recharge(o, kStickyBomb);
+                }
             }
+            // animation end (no Toss_Anim clip: at the throw): targeting / locomotion resume, unlock
+            if (sp.phase == 2 && (ct.count <= 0.0f || anim >= ct.end)) remove_special(o, sp, frame);
+            return;
+        }
+
+        case C::RemoteBomb: {  // update 0x719ee0 (LOB_SOLVER §3.5); phase 0 waiting to stop, 1 Toss_Anim, 2 tossed
+            if (sp.phase == 0) {  // 1. wait while the locomotor still moves, then start the toss
+                if (moving(o)) return;
+                sp.phase = 1;
+                sp.next = frame;
+                if (s.toss_anim.empty()) {  // Toss_Anim -1: toss at once; no animation runs, so the same service ends it
+                    remote_bomb_toss(o, s, sp.target, frame);
+                    sp.phase = 2;
+                    remove_special(o, sp, frame);
+                    return;
+                }
+                // Toss_Anim one-shot (0x3a92f0, speed 1). sp.counter = the play was recorded (clip data): later plays that
+                // replace it are seen as an interruption.
+                play_anim(o, -1, s.toss_anim, 0, false, 1.0f, kAnimIdle, frame);
+                const int32_t tt = anim_type_of(s.toss_anim);
+                sp.counter = (tt >= 0 && o.anim_type == tt && o.anim_start == frame) ? 1 : 0;
+            }
+            // 3. the animation was replaced: the same cleanup, no toss.
+            if (sp.counter != 0 && (o.anim_type != anim_type_of(s.toss_anim) || o.anim_start != sp.next)) {
+                remove_special(o, sp, frame);
+                return;
+            }
+            // 2. animation frame >= Spawn_Frame (n x rate, §4.13; [port] no clip: rate 1): toss once (0x71a200, the
+            // recharge only when a bomb spawned); at its end (no clip: at the toss) unlock and end the ability.
+            const ClipTiming ct = clip_timing(o.id, -1, s.toss_anim);
+            const float anim = static_cast<float>(frame - sp.next) * ct.rate;
+            if (sp.phase == 1 && anim >= s.spawn_frame) {
+                sp.phase = 2;
+                remote_bomb_toss(o, s, sp.target, frame);
+            }
+            if (ct.count > 0.0f ? anim >= ct.end : sp.phase == 2) remove_special(o, sp, frame);
             return;
         }
 
@@ -707,10 +937,15 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
 
         case C::ArcSweep:
         case C::GenericAttack:
-        case C::EatAttack: {  // animation-driven: sim frames since the start x Attack_Animation_Speedup [port]
-            const float anim = static_cast<float>(frame - sp.next) * s.anim_speedup;
+        case C::EatAttack: {  // Attack_Animation on sim frames x rate x Attack_Animation_Speedup (§4.13)
+            const ClipTiming ct =
+                clip_timing(o.id, -1, s.attack_anim, s.cls == C::ArcSweep ? static_cast<uint32_t>(std::max(0, s.anim_sub_index)) : 0u);
+            const float anim = static_cast<float>(frame - sp.next) * ct.rate * s.anim_speedup;
+            // the hold ends at the animation end, or with the last frame-numbered event when there is no clip
+            const bool ended = ct.count <= 0.0f || anim >= ct.end;
             if (s.cls == C::GenericAttack) {
-                if (anim >= static_cast<float>(s.damage_frame)) {
+                if (sp.phase == 0 && anim >= static_cast<float>(s.damage_frame)) {
+                    sp.phase = 1;  // hit
                     if (alive_unit(sp.target)) {
                         DamageRequest r;
                         r.victim = sp.target;
@@ -719,8 +954,8 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                         r.source = o.id;
                         combat_->take_damage(r, frame);
                     }
-                    if (!o.dead) remove_special(o, sp, frame);
                 }
+                if (sp.phase == 1 && ended && !o.dead) remove_special(o, sp, frame);
                 return;
             }
             if (s.cls == C::EatAttack) {
@@ -729,6 +964,7 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                     if (alive_unit(sp.target)) stop_order(sp.target, frame);
                 }
                 if (sp.phase == 1 && anim >= static_cast<float>(s.destruction_frame)) {
+                    sp.phase = 2;  // destroyed
                     if (alive_unit(sp.target)) {
                         DamageRequest r;
                         r.victim = sp.target;
@@ -741,12 +977,16 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                         const float mh = combat_->max_health(o.id);
                         combat_->set_health(o.id, std::min(mh, combat_->health(o.id) + s.health_per_victim));
                     }
-                    if (!o.dead) remove_special(o, sp, frame);
                 }
+                if (sp.phase == 2 && ended && !o.dead) remove_special(o, sp, frame);
                 return;
             }
             // Arc_Sweep: from Begin_Applying_Damage_Frame each update damages the accepted objects in this update's
             // slice of the arc whose (2-D distance - radius) is in [Arc_Min, Arc_Max] (within 1.5 x Arc_Max).
+            if (sp.phase == 1) {  // swept: held until the animation end
+                if (ended) remove_special(o, sp, frame);
+                return;
+            }
             if (anim < static_cast<float>(s.begin_damage_frame)) return;
             const float step = s.sweep_time > 0.0f
                                    ? static_cast<float>(std::max(1, interval_of(s))) * (s.arc_width / s.sweep_time) /
@@ -775,7 +1015,10 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 if (o.dead) return;
             }
             sp.radius = a1;
-            if (std::abs(a1) >= 0.5f * s.arc_width || step <= 0.0f) remove_special(o, sp, frame);
+            if (std::abs(a1) >= 0.5f * s.arc_width || step <= 0.0f) {
+                sp.phase = 1;
+                if (ended) remove_special(o, sp, frame);
+            }
             return;
         }
 
@@ -788,8 +1031,13 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 if (frame < sp.next) return;
                 sp.phase = 1;  // inside the firing cone: the attack animation starts
                 sp.next = frame;
+                // §4.14: type 5, index Attack_Anim_Sub_Index, one-shot (parks at its end)
+                play_anim(o, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index)), false, 1.0f, kAnimStay, frame);
             }
-            if (sp.phase == 1 && static_cast<int32_t>(frame - sp.next) >= s.fire_frame) {
+            if (sp.phase == 1 &&
+                static_cast<float>(frame - sp.next) *
+                        clip_timing(o.id, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index))).rate >=
+                    static_cast<float>(s.fire_frame)) {  // Fire_Frame on the sub-index variant's clip (§4.13 / §4.14)
                 sp.phase = 2;
                 start_active(o, kSuperLaser);  // 55's active countdown
             }
@@ -1017,12 +1265,99 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
         case C::Blast:
             if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitSkipTargeting, false);
             break;
+        case C::GrenadeAttack:  // vf4 0x700d00: targeting / locomotor re-enabled, unlock (A1_READINGS §28.9)
+            lock_pair(o, kLockGrenade, false, frame);
+            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, false);  // S8 t25
+            break;
+        case C::RemoteBomb:  // S8 t06 (0x719ee0 end / interruption): TARGETING and the locomotor enabled, unlock
+            lock_pair(o, kLockRemoteBomb, false, frame);
+            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, false);  // S8 t25
+            break;
+        case C::Earthquake:  // §4.14 remove: FB_Release / FTK_Release one-shot, then the idle loop
+        case C::Telekinesis:
+            play_anim(o, s.cls == C::Earthquake ? kAnimFbRelease : kAnimFtkRelease, {}, 0, false, 1.0f, kAnimIdle, frame);
+            break;
         default: break;
     }
     sp.applied = 0;
     sp.phase = 0;
     sp.counter = 0;
     sp.victims.clear();
+}
+
+// ================================================================================================
+// Remote_Bomb toss (S8 t06, docs/re/LOB_SOLVER.md §3.5, §5.1, §5.2)
+// ================================================================================================
+
+ObjectId AbilitySystem::remote_bomb_range_target(ObjectId target) const {
+    // 0x39b1a0 / obj +0x2b0: a garrisoned target is range-tested through its host.
+    if (target == kNoObject || !combat_->has_unit(target) || !(combat_->flags(target) & combat::kUnitGarrisoned)) return target;
+    if (!host_.garrison_holder) return target;  // [port] no host query: the target itself
+    const ObjectId h = host_.garrison_holder(target);
+    return h != kNoObject ? h : target;
+}
+
+Vec3 AbilitySystem::remote_bomb_launch(Obj& o, const SpecialAbilityDesc& s, ObjectId target) {
+    // Spawn_Projectile launch point L (§5.1). A garrisoned thrower whose host lists gun bones: a synced pick
+    // (Get_Int(0, n - 1), one draw) among the bones within 60 degrees (horizontal) of the host -> target direction [M: the
+    // angle measured from the host position]; none within -> the normal muzzle [M].
+    if (o.combat_unit && combat_->has_unit(o.id) && (combat_->flags(o.id) & combat::kUnitGarrisoned) && host_.garrison_holder &&
+        host_.garrison_fire_bones && combat_->has_unit(target)) {
+        const ObjectId holder = host_.garrison_holder(o.id);
+        Vec3 hp;
+        std::vector<Vec3> bones;
+        if (holder != kNoObject && host_.garrison_fire_bones(holder, hp, bones) && !bones.empty()) {
+            const Vec3 tp = combat_->position(target);
+            const float tx = tp.x - hp.x, ty = tp.y - hp.y;
+            const float tl = dmath::sqrt(tx * tx + ty * ty);
+            std::vector<Vec3> within;
+            for (const Vec3& b : bones) {
+                const float bx = b.x - hp.x, by = b.y - hp.y;
+                const float bl = dmath::sqrt(bx * bx + by * by);
+                // cos(angle) >= cos 60 = 0.5; a bone (or target) on the host's axis counts as within [port]
+                if (!(bl > 0.0f) || !(tl > 0.0f) || (bx * tx + by * ty) >= 0.5f * (bl * tl)) within.push_back(b);
+            }
+            if (!within.empty()) return within[static_cast<size_t>(draw_int(0, static_cast<int32_t>(within.size()) - 1))];
+        }
+    }
+    // The request's bone: Spawn_Bone on the unit's model (0x12d2a0); no such bone -> the shooter's position + its own
+    // Ranged_Target_Z_Adjust (0x398440).
+    if (!s.spawn_bone.empty() && host_.bone_position) {
+        Vec3 p;
+        if (host_.bone_position(o.id, s.spawn_bone, p) > 0) return p;
+    }
+    return o.combat_unit ? combat_->target_point(o.id) : position(o);
+}
+
+bool AbilitySystem::remote_bomb_toss(Obj& o, const SpecialAbilityDesc& s, ObjectId target, uint32_t frame) {
+    // 0x71a200: Bomb_Type through the spawner (shooter = the unit, target = the target object, Spawn_Bone). Only when a
+    // bomb spawned does the PLACE_REMOTE_BOMB recharge start (§5.2: a null spawn starts none and is not retried). The bomb
+    // gets no BOMB timer (§6.4): only DETONATE_REMOTE_BOMB sets it off. [M] A target that died before the toss: no spawn.
+    if (s.projectile < 0) return false;
+    combat::ProjectileLaunch l;
+    l.shooter = o.combat_unit ? o.id : kNoObject;
+    l.owner = o.owner;
+    l.projectile = static_cast<uint32_t>(s.projectile);
+    if (target != kNoObject) {
+        if (!alive_unit(target)) return false;
+        l.from = remote_bomb_launch(o, s, target);
+        l.target = target;
+        l.point = combat_->position(target);
+        l.toss = true;  // fuse_seconds stays < 0: never armed
+    } else {  // [port] no target object (no command-57 point here): placed at the unit, armed until detonated
+        l.from = position(o);
+        l.point = l.from;
+        l.fuse_seconds = 1.0e9f;
+    }
+    const bool spawned = combat_->launch_projectile(l, frame) && combat_->projectile_count() > 0;
+    if (spawned) {
+        remote_bombs_.push_back(RemoteBomb{o.owner, combat_->projectile(combat_->projectile_count() - 1).serial});
+        start_recharge(o, kPlaceRemoteBomb);
+    }
+    // S8 t10 (LOB_SOLVER §3.5 "MARKER removal"): after the spawn attempt, whether or not a bomb spawned, a MARKER target
+    // is killed (0x391310(marker, 1)); the host knows which objects are markers (its Dummy_Barrage_Targets).
+    if (target != kNoObject) event(AbilityEventKind::MarkerTossed, kPlaceRemoteBomb, o.id, target, frame);
+    return spawned;
 }
 
 // ================================================================================================

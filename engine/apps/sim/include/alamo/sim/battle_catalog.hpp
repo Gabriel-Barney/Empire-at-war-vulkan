@@ -20,12 +20,14 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/parallel.hpp"
 #include "alamo/tactical/abilities/ability_data.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "alamo/tactical/combat/combat_system.hpp"
@@ -85,6 +87,7 @@ public:
     // (REMAINING_GAPS §3.3); < 0 = not read (the battle keeps its config value).
     float capture_countdown(bool space) const { return space ? space_capture_countdown_ : land_capture_countdown_; }
     float garrisoned_range_multiplier() const { return garrisoned_range_mult_; }
+    bool use_reinforcement_points() const { return use_reinforcement_points_; }  // Use_Reinforcement_Points (GC +0x118a0; land drops)
     float threat_decay_step() const { return threat_decay_step_; }  // AI_SpaceThreatDecayStep (DAMAGE_TRACKING)
     // S10-int constants.
     float engines_disabled_speed_modifier() const { return engines_disabled_speed_; }  // Engines_Disabled_Speed_Modifier
@@ -115,6 +118,7 @@ public:
         std::vector<std::string> bones;       // upper-cased bone names
         std::vector<std::array<float, 3>> bone_pos;  // bind-world translation per bone
         std::vector<std::array<float, 9>> bone_rot;  // refixf t06: bind-world 3x3 part per bone (row-major)
+        int32_t max_alt = -1;  // S8 t10: highest _ALT<n> index of the mesh names (0x12dca0), -1 none
         int32_t find(std::string_view bone) const;  // -1 when absent
     };
     // `space`: Space_Model_Name else Land_Model_Name; `fallback`: then the other mode's field, then Galactic_Model_Name.
@@ -126,6 +130,29 @@ public:
     // fallback) for the fighter avoidance test: collision bound, COLLISIONBOX, collision-enabled mesh triangles in model
     // space (bind pose). Null without model data. Cached per (type, mode) behind the model mutex.
     const tactical::movement::AvoidModel* avoid_model(uint32_t type, bool space) const;
+    // S7 t07 (MOVEMENT §2.2 model-extent fallback, SpaceObstacleHooks): half x / y of avoid_model(type, space = true)'s
+    // collision bound (1 / 1 when the model has no collision mesh); false without model data.
+    bool space_model_half_extents(uint32_t type, float& half_x, float& half_y) const;
+    // OPT3 t05: loads the model data of `types` that is not cached yet (avoid_model(type, space); on land also
+    // model_info(type, false, true), the stamp extents) on `pf`, one job per type, so a battle's first tick does not read
+    // the files one type after another. Same entries as the lazy loads (same files -> same answer): only the time moves.
+    void preload_models(std::span<const uint32_t> types, bool space, const ParallelFor& pf) const;
+    // S8 t06 B4 (LOB_SOLVER §5.1, WeaponBehavior data pack init 0x54cb00): the fire bones <Muzzle_Bone_Name>_00, _01, ...
+    // (default MUZZLEA) of the type's model for the mode (Space_ / Land_Model_Name, no fallback) until a name is missing,
+    // as bind-pose offsets in the combat unit-local frame (x forward, y left, z up) x Scale_Factor. False without model
+    // data (`out` cleared); true with an empty list = the model has no such bone (the weapon never fires). build_battle
+    // (with a mode) stores them in UnitDesc::muzzle_bones.
+    bool muzzle_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const;
+    // S8 t27 (TACTICAL_COMBAT §3.1.1 "Bone list", type model load 0x375380): the type's Target_Bones (comma list) looked up
+    // on its model for the mode, list order, names missing on the model dropped, as bind-pose offsets in the combat
+    // unit-local frame x Scale_Factor. True with an empty list when the type has no Target_Bones; false without model
+    // data (`out` cleared). build_battle (with a mode) stores them in UnitDesc::target_bones.
+    bool target_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const;
+    // S8 t10 (LOB_SOLVER §5.1 "Garrison fire bones in detail", type model load 0x375380): the gun-bone table of a type with
+    // `guns` = Num_Garrison_Guns != 0 - M = the model's highest _ALT mesh index entries (ALT a = 0..M-1), `guns` bones
+    // each: FP_0<i>_ALT<a> (i <= 9) or FP_<i>_ALT<a> (i >= 10), bind pose in the unit-local frame x Scale_Factor, with the
+    // yaw of the bone's x axis; a missing bone is invalid (-1). False without model data (`out` cleared).
+    bool garrison_bones(uint32_t type, bool space, int32_t guns, std::vector<std::vector<tactical::combat::GarrisonBone>>& out) const;
     // --- end battle host ---
 #ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war GameConstants (Desired{Land,Space}FOWCellSize, {Land,Space}FOWRegrowTime, AIUsesFogOfWar{Land,Space},
@@ -175,6 +202,7 @@ private:
     float space_health_mult_ = 1.5f, land_health_mult_ = 1.0f;
     float space_idle_speed_ = 0.0f;
     float land_capture_countdown_ = -1.0f, space_capture_countdown_ = -1.0f, garrisoned_range_mult_ = -1.0f;
+    bool use_reinforcement_points_ = true;
     float threat_decay_step_ = 0.05f;
     float engines_disabled_speed_ = 0.4f;
     float nebula_ability_disable_ = 5.0f, force_ability_disable_ = 0.0f, ion_storm_shield_disable_ = 5.0f;

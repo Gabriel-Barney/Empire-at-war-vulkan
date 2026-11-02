@@ -132,6 +132,8 @@ struct SpecialAbilityDesc {
     // Grenade / Remote_Bomb / Cluster_Bomb / Infection (§2.3.5, §2.3.12)
     int32_t projectile = -1;              // Grenade_Type / Bomb_Type / Projectile_Type / Explosion_Type (ProjectileDesc)
     float spawn_frame = 0.0f;             // Grenade_Spawn_Frame / Spawn_Frame
+    std::string toss_anim;                // Toss_Anim (animation type name; t03 clip timing, empty = none)
+    std::string spawn_bone;               // Spawn_Bone (Remote_Bomb +0x198, LOB_SOLVER §3.5; empty = none)
     float fuse_time = 0.0f;               // Grenade_Explode_Timer_In_Secs / Detonation_Time_In_Secs
     bool requires_direct_command = false; // Requires_Direct_Player_Command
     // Force_Lightning / Hack / Repair (§2.3.6)
@@ -140,6 +142,10 @@ struct SpecialAbilityDesc {
     // melee (§2.3.8)
     float arc_width = 0.0f, arc_min = 0.0f, arc_max = 0.0f, sweep_time = 0.0f, anim_speedup = 1.0f;
     bool right_to_left = false;
+    std::string attack_anim;              // Attack_Animation (animation type name; t03 clip timing, empty = none)
+    // Arc_Sweep Attack_Animation_Subindex (+0x198) / Super_Laser Attack_Anim_Sub_Index (+0x188): the explicit variant
+    // of the attack clip (OI follow-up t01, §4.14); 0 elsewhere.
+    int32_t anim_sub_index = 0;
     int32_t damage_frame = 0, begin_damage_frame = 0, attachment_frame = 0, destruction_frame = 0;
     float health_per_victim = 0.0f;
     // Super_Laser (§2.3.9)
@@ -185,6 +191,9 @@ struct AbilityObjectDesc {
     float stealth_detection_range = 0.0f;        // 0x3979d0: Target_Stealth_Units ? FOW reveal range : 0
     float passive_missile_shield_radius = 0.0f;  // Passive_Missile_Shield_Radius
     bool garrison_style = false;                 // obj +0x3a7 [M meaning]
+    // Destroy_When_Stunned_Over_Water (type +0xe6; only MAL_Rocket_Vehicle sets it): [port] a STUNNABLE stun that starts
+    // while the host reports the unit over water destroys it (ABILITIES_HARDPOINTS.md §4.12, no RE pass).
+    bool destroy_when_stunned_over_water = false;
 };
 
 struct AbilityData {

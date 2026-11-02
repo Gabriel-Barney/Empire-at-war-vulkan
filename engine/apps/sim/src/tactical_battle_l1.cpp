@@ -204,7 +204,7 @@ uint32_t TacticalBattle::l1_desc_of(int32_t type) {
     d.pulse_delay_seconds = types.get_float(ti, "Projectile_Fire_Pulse_Delay_Seconds");
     for (size_t i = 0; i < types_used_.size(); ++i)  // the weapon projectile from the battle tables
         if (static_cast<int32_t>(types_used_[i]) == type && descs_[i] < tables_->combat.units.size())
-            d.projectile = tables_->combat.units[descs_[i]].weapon_projectile;
+            d.projectile = tables_->combat.units[descs_[i]].listed_projectile;  // S8 t08: with or without WEAPON
     d.valid_targets = types.get_mask(ti, "Special_Weapon_Valid_Targets");
     d.requires_base_power = types.get_bool(ti, "Requires_Base_Power");
     d.target_action_index = types.get_int(ti, "Special_Weapon_Target_Action_Index");
@@ -247,6 +247,9 @@ void TacticalBattle::adopt_object(TacticalMode& mode, objects::ObjectHandle h) {
 ta::SpecialWeaponWorld TacticalBattle::l1_world(const TacticalMode& mode) {
     const objects::ObjectStore* st = &mode.primary();
     ta::SpecialWeaponWorld w;
+    // S8 t26 / t30 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"): the order (point + pending) goes to the weapon's own
+    // WeaponBehavior, which charges and fires it.
+    w.fire_at_position = [this](tc::ObjectId id, tactical::Vec3 p) { return combat_ != nullptr && combat_->order_fire_at_position(id, p); };
     w.owner_of = [st](tc::ObjectId t) {
         const objects::ObjectHandle h = st->find(t);
         return st->alive(h) ? st->owner(h) : -1;
@@ -417,17 +420,27 @@ float TacticalBattle::ground_height(float x, float y) const {
 }
 
 uint32_t TacticalBattle::anim_clip_frames(const TacticalMode& mode, objects::ObjectId id, uint8_t anim_type) const {
+    uint32_t frames = 0;
+    float fps = 0.0f;
+    return anim_clip_info(mode, id, anim_type, frames, fps) ? frames : 0u;
+}
+
+bool TacticalBattle::anim_clip_info(const TacticalMode& mode, objects::ObjectId id, int32_t anim_type, uint32_t& frames,
+                                    float& fps, uint32_t variant) const {
 #ifdef ALAMO_SIM_HAVE_ANIM
-    if (!anim_) return 0;
+    if (!anim_ || anim_type < 0) return false;
     const objects::ObjectStore& st = mode.primary();
     const objects::ObjectHandle h = st.find(id);
-    if (!st.exists(h)) return 0;
+    if (!st.exists(h)) return false;
     const anim::AnimModel* m = anim_->model_for(st.type(h), mode.kind());
-    const anim::ClipRef* c = m ? m->clip(anim_type, 0) : nullptr;
-    return c && c->clip ? c->clip->frame_count : 0u;
+    const anim::ClipRef* c = m ? m->clip(anim_type, variant) : nullptr;
+    if (!c || !c->clip || c->clip->frame_count == 0) return false;
+    frames = c->clip->frame_count;
+    fps = c->clip->fps;
+    return true;
 #else
-    (void)mode, (void)id, (void)anim_type;
-    return 0;
+    (void)mode, (void)id, (void)anim_type, (void)frames, (void)fps, (void)variant;
+    return false;
 #endif
 }
 
@@ -505,6 +518,16 @@ void TacticalBattle::l1_weapons(TacticalMode& mode, SimRng& rng) {
     l1_sw_events_.clear();    l1_damage_stats();
     l1_tsw_kill_owner_ = -1;  // this tick's TSW planet kill (read by the battle host after the tick)
     l1_strikes(mode, rng);
+    // S8 t30: the lobbing charge-up events of this tick's combat step (presentation, ascending id per combat order).
+    if (combat_)
+        for (const tc::LobEvent& e : combat_->lob_events()) {
+            ta::SpecialWeaponEvent ev;
+            ev.kind = e.charged ? ta::SwEventKind::LobCharged : ta::SwEventKind::LobChargeup;
+            ev.id = e.id;
+            ev.frame = e.frame;
+            ev.point = e.point;
+            l1_sw_events_.push_back(ev);
+        }
 
     if (l1_sw_.empty()) return;
     objects::ObjectStore& st = mode.primary();
@@ -743,18 +766,24 @@ objects::TypeIndex TacticalBattle::current_projectile(objects::ObjectId id) cons
     const objects::ObjectStore& st = l1_mode_->primary();
     objects::ObjectHandle h = st.find(id);
     for (size_t c = 0; c < containers_.size(); ++c)
-        if (containers_[c].id == id)
+        if (containers_[c].id == id) {
+            bool member = false;  // S8 t12: a team container answers for its first member; an empty team: nothing
             for (const Unit& u : units_)
                 if (u.container == c && u.alive && !u.retreated) {
                     h = u.h;
+                    member = true;
                     break;
                 }
+            if (!member) return objects::kNone;
+        }
     if (!st.alive(h)) return objects::kNone;
     const auto refs = catalog_->types().get_type_refs(st.type(h), "Projectile_Types");
     if (refs.empty()) return objects::kNone;
-    // OI host: the weapon index (SWAP_WEAPONS / Permanent_Weapon_Swap) picks the list entry; outside the list: entry 0.
+    // S8 t12 (TACTICAL_COMBAT §3.1.1 "Lua Get_Current_Projectile_Type", 0x578470): Projectile_Types[obj +0x324] (the weapon
+    // index: 0 at creation, SWAP_WEAPONS / Permanent_Weapon_Swap), with no WEAPON behaviour test; an index outside the list
+    // returns nothing.
     const int32_t wi = combat_ && combat_->has_unit(st.id(h)) ? combat_->weapon_index(st.id(h)) : 0;
-    return wi >= 0 && static_cast<size_t>(wi) < refs.size() ? refs[static_cast<size_t>(wi)] : refs.front();
+    return wi >= 0 && static_cast<size_t>(wi) < refs.size() ? refs[static_cast<size_t>(wi)] : objects::kNone;
 }
 
 bool TacticalBattle::opposite_sides_of_shield(Vec3 a, Vec3 b, int32_t player, bool friendly, bool shield_damage) const {

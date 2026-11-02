@@ -68,6 +68,10 @@ void FogOfWar::start(const FogSetup& s) {
     sources_.clear();
     frame_ = 0;
     setup_ = false;
+    setup_ready_.assign(static_cast<size_t>(rel_n_), 0);
+    setup_count_start_ = 0;
+    setup_count_frames_ = 0;
+    setup_armed_ = setup_all_ready_ = false;
     overrun4_ = overrun8_ = false;
     scale_player_ = -1;
     scale_ = 1.0f;
@@ -274,9 +278,11 @@ void FogOfWar::source_service(int32_t id, const FogObject& o, bool contained, bo
     if (setup_) return;  // REVEAL disabled during the setup phase (TACTICAL_GAPS §5.4)
     if (setup_only) return;  // Reveal_During_Setup_Phase_Only outside the setup phase
     if (contained) {
+        // vf6 step 2: undo, clear the list; dirty and the last reveal position are kept. The exit (0x37a8d0) only
+        // clears the contained flag, so the source re-reveals once it is one cell from where it last revealed
+        // (FOG_OF_WAR §3.2 [H]).
         undo_for_allies(*s, s->owner);
         s->cells.clear();
-        s->dirty = true;  // [port] re-reveal when it leaves the container (the original's exit path is untraced)
         return;
     }
     if (!s->dirty) {
@@ -356,24 +362,26 @@ int32_t FogOfWar::service_overrun(uint32_t frame, int32_t game_type, bool enable
 
 void FogOfWar::setup_reveal(std::span<const FogSetupObject> objects, int32_t p4, int32_t p8) {
     CellList kept;  // static list, never undone
-    CellList tmp;
     for (const FogSetupObject& so : objects) {
         int32_t target = so.obj.owner;
         bool force = false;
-        if (so.reveal_for_attacker) {
+        if (so.reveal_for_attacker && p4 != -1) {
             target = p4;
             force = true;
-        } else if (so.reveal_for_defender) {
+        } else if (so.reveal_for_defender && p8 != -1) {
             target = p8;
             force = true;
         }
-        if (so.reveal_during_setup || (so.has_locomotor && (force || so.has_reveal))) reveal_object(target, so.obj, kept, force);
-        if (p8 >= 0 && so.obj.owner == p8 && so.reinforcement_prevention_radius != 0.0f && so.powered_or_unpowered) {
-            if (FogGrid* g4 = grid(p4)) {
-                tmp.clear();
-                g4->reveal(so.obj.x, so.obj.y, so.reinforcement_prevention_radius, &tmp, RevealFlags{}, frame_);
-                g4->reset_counts(tmp);
-            }
+        // §3.4 [H, 2026-11-01]: Reveal_During_Setup_Phase(_Only), or forced, or REVEAL and a locomotor.
+        if (!so.reveal_during_setup && !force && !(so.has_reveal && so.has_locomotor)) continue;
+        reveal_object(target, so.obj, kept, force);
+        // Prevention circle: only objects that revealed, for the +8 target player, with no POWERED behaviour or base power
+        // for that player; position reveal (0x35d080: battle scale, rDense 0) for +4, whose counts are then zeroed.
+        if (so.reinforcement_prevention_radius == 0.0f || target != p8 || p4 == -1) continue;
+        if (so.has_powered && !(base_power_ && base_power_(target))) continue;
+        if (FogGrid* g4 = grid(p4)) {
+            FogCells c = lua_reveal_position(p4, so.obj.x, so.obj.y, so.reinforcement_prevention_radius, 0.0f);
+            g4->reset_counts(c.cells);
         }
     }
     if (!setup_) return;
@@ -401,6 +409,30 @@ void FogOfWar::end_setup(std::span<const FogSetupObject> objects, int32_t p4, in
     setup_reveal(objects, p4, p8);
     for (const FogPlayer& p : players_)
         if (FogGrid* g = grid(p.id)) g->reset(true);
+}
+
+void FogOfWar::setup_player_ready(int32_t player) {
+    if (!started_) return;
+    if (player >= 0 && static_cast<size_t>(player) < setup_ready_.size()) setup_ready_[static_cast<size_t>(player)] = 1;
+    if (!setup_armed_) {  // 0x4ad3a0: start frame, (int)(FPS x seconds)
+        setup_count_start_ = frame_;
+        setup_count_frames_ = static_cast<int32_t>(k_.fps * k_.setup_countdown_seconds);
+        setup_armed_ = true;
+    }
+    bool all = true;
+    for (const FogPlayer& p : players_)
+        if (p.human) all = all && setup_ready(p.id);
+    setup_all_ready_ = all;
+}
+
+bool FogOfWar::setup_ready(int32_t player) const {
+    return player >= 0 && static_cast<size_t>(player) < setup_ready_.size() && setup_ready_[static_cast<size_t>(player)] != 0;
+}
+
+bool FogOfWar::setup_end_due(uint32_t frame) const {
+    if (!started_ || !setup_) return false;
+    if (setup_all_ready_) return true;
+    return setup_armed_ && static_cast<int64_t>(setup_count_start_) + setup_count_frames_ <= static_cast<int64_t>(frame);
 }
 
 // ---- space reinforcement sampler -----------------------------------------------------------------------------
@@ -551,6 +583,11 @@ void FogOfWar::hash(StateHasher& h) const {
     h.boolean(setup_);
     h.boolean(overrun4_);
     h.boolean(overrun8_);
+    for (const uint8_t r : setup_ready_) h.u8(r);
+    h.u32(setup_count_start_);
+    h.i32(setup_count_frames_);
+    h.boolean(setup_armed_);
+    h.boolean(setup_all_ready_);
     h.u32(static_cast<uint32_t>(grids_.size()));
     for (const FogGrid& g : grids_) {
         h.boolean(g.valid());

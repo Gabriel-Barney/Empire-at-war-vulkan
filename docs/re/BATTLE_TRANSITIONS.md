@@ -97,7 +97,9 @@ unit id list, attacker, defender = −1, map, at_front) is called by the invade 
 event factory id 9; via 0x48ff50), Lua `GalacticTaskForce.Invade` 0x6ce600 /
 `GameObject.Invade` 0x57ada0, the story reward `INVADE_PLANET` (0x45f5c0) and the queued-battle replay
 (0x28f590). Lua `Invade` refuses when the fleet is not at a planet, the planet owner is not an enemy,
-or the fleet has no land units/transports.
+or the fleet has no land units/transports. The object-level Lua `Invade` (0x57ada0) and the story reward go through
+InvadeEvent 0x48ff50, which invades **as the local player with only the local player's units**: on a fleet the local
+player does not own it does nothing (A1_READINGS §31). `GalacticTaskForce.Invade` attacks as the fleet's owner.
 
 Defender when not given: the ground-base owner (+0x124) if the ground-base level (+0x130) > 0;
 otherwise the planet owner from 0x3956c0 if it is set and is not the neutral player (+0x4c of
@@ -590,7 +592,9 @@ declared; +0x24 countdown; +0x28 declared record (copy); +0x58 last frame seen; 
   UNIT_AI), no prop / structure / unit category, no Hide, invulnerability, Prevent_All_Fire, cinematic or
   letterbox state, no Is_Neutral test of the object's owner (a Neutral player is simply not an enemy). Garrisoned
   or transported objects are GOM objects with their own type and count like any other [M]. Units still in the
-  reinforcement pool / reserve are not GOM objects and never count [M]. `Variant_Of_Existing_Type` children
+  reinforcement pool / reserve are not tactical GOM objects and never count [H] (a1i 2026-11-02, A1_READINGS §34.1:
+  they are galactic objects until 0x2b5fe0 creates the landing object at drop time; 0x2c0340 reads no reserve
+  state; the port no longer counts them). `Variant_Of_Existing_Type` children
   copy the parent's flags (OBJECT_TYPES §3.2), so a story variant of a hero counts if the hero does.
 - **Super weapons** are excluded by data only, through this same 0x372230 test: FoC `Death_Star` has
   `Victory_Relevant No` and no `Space_Victory_Relevant`; `Death_Star_II` sets neither (defaults false). There is

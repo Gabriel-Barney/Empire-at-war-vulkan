@@ -171,11 +171,115 @@ Before load, every cell is base = effective = Clear (1).
 
 **Water rule:** a sample over a cell whose base has Water is stamped only if (water height + 5) ≤ (terrain height + obstacle height). Low objects that are submerged do not block.
 
-**`Fine_Tune_Occupied_Passability`** (type +0x94): each sample additionally needs a vertical ray (z +1000 → −1000) to hit the object's collision mesh. This trims footprints to the real mesh.
+**`Fine_Tune_Occupied_Passability`** (type +0x94, **default true**, OBJECT_TYPES §4.6): each sample additionally needs a vertical ray to hit the object's collision mesh. This trims footprints to the real mesh.
+- The ray is a segment from (x, y, **−1000**) up to (x, y, **+1000**) in absolute world z (not relative to the terrain), tested with the model's ray query (vf +0x80). Corrected 2026-11-02 (S8 t07): the earlier text had the direction reversed; only hit / no hit matters. [H]
+- It applies to **every** stamp, at map load and at run time alike: the one stamper `0x4f88b0` serves both (see "Lifecycle" below). [H]
+
+**`Obstacle_Proxy_Type`** (lazy type ref, name at type +0xdb0, resolved pointer at +0xdb8; 77 tags in FoC, e.g. `E_Ground_Barracks` → `E_Ground_Barracks_Build_Pad`) [H] (2026-11-02, S8 t07):
+- When set, the **proxy type** replaces the object's type for the footprint: its `Obstacle_Width` / `_Height` / offsets / model box and its `Fine_Tune_Occupied_Passability` byte. The object's own position and yaw are kept.
+- The fine-tune ray then tests the **proxy's** model: the stamper loads the proxy's `Land_Model_Name` (+0x1e0), takes its ALO render object, gives it the object's transform with the 3×3 part scaled by proxy `Scale_Factor` / object `Scale_Factor` (+0x658), and releases it after the stamp. If that model has no ALO render object, no ray test is made (every sample stamps).
+- Without a proxy, the ray tests the object's own render model (obj +0x2a0). **An object with fine-tune on, no proxy and no render model is not stamped at all** (the stamper returns before the loop and the "stamped" flag stays clear, so it retries at the next service).
+- Object flag obj +0x3a1 & 8 replaces the type sizes by the live model's box (both in the stamp and the unstamp). Meaning of the flag not traced [open].
+
+**Ray mesh set, proxy bits, missing model (S8 t13, 2026-11-02)** [H unless tagged]:
+- **Which meshes the fine-tune ray tests** (vf +0x80). The request is mode 0, mask 1, with the segment z −1000 →
+  +1000.
+  - alHModel (vtable 0x818d90, vf +0x80 = `0x12c9c0`) needs model +0x30 bit 7, which is always set (`0x12b2e6` /
+    `0x12b722`). It then ORs vf +0x80 over every child renderable. Non-mesh children use the base `0x13b7d0`, which
+    returns 0.
+  - alRenderableMesh (vtable 0x819778, `0x14c520`) skips a mesh when any of these holds:
+    - its runtime hidden bit 1 is set, i.e. its attached bone is not visible (bit 1 = !(bone visibility bit 2),
+      `0x12c7c0` / `0x13fc10`);
+    - mesh +0x30 bit 7 is clear in mode 0. That bit is the ALO mesh-info (chunk 0x402) `is_collision_enabled` at
+      offset 36 (loader `0x14c970`);
+    - mask & mesh +0xc0 is 0 (+0xc0 defaults to 1, ctor `0x13f63a`).
+  - Otherwise it runs a world AABB pretest, then tests every sub-mesh's triangles (`0x13e900`): the collision tree
+    (+0x98) when present, else brute force over the CPU positions (+0xc0) and indices (+0xf0) that `0x188e50` builds
+    for every sub-mesh.
+  - So **only ALO meshes with the collision flag are hit**. The file's `is_hidden` flag (offset 32 → +0x30 bit 0)
+    does **not** exclude a mesh. Example: `NB_Bunker`'s `Collision_ALTn` meshes are hidden **and** collision, and
+    they are what the ray hits.
+  - A mesh hidden at run time because its bone is hidden (damage states, ALT swaps through bone visibility) is
+    skipped.
+  - Without a proxy, the model is the live, posed model obj +0x2a0 → +0x48.
+  - With a proxy, the model is loaded by name through `0x142d70` (asset manager `0x140a62700`, ".ALO" appended)
+    and must be an alHModel. vf +0x58 sets its transform, and vf +0x10(1) releases it after the stamp.
+- **Proxy footprint bits.** The bits written into the cells come from `0x397350(object)`, which loops over the
+  **object's own** behaviours (+0x278, count +0x288) calling `0x4c36b0`.
+  - Each behaviour yields the owner's **own type** `OverridePassability` (+0x1690) when it is non-zero, else its
+    own vf +0xc8 default: LAND_OBSTACLE 4 (`0x1fc30`), WALL 0x10 (`0x7c040`), base 0 (`0x17d070`).
+  - The proxy never supplies bits. It supplies only the footprint: sizes, offsets, `Fine_Tune` (+0x94) and the ray
+    model.
+- **A type without `Land_Model_Name`.**
+  - The size getters `0x372d80` / `0x372ce0` / `0x372e20` / `0x372ec0` / `0x372f60` use `Obstacle_Width` /
+    `_Height` / the offsets when they are non-zero. Otherwise they read the mode model (`0x3729f0`; land = type
+    +0x2a0, loaded lazily from `Land_Model_Name` by `0x375380`). With no model, the size is 0.
+  - obj +0x2a0 is never created (`0x3a4820` returns when the mode model is null).
+  - Fine-tune on (the default) and no proxy: the stamper returns early. "Stamped" stays clear, so the object
+    retries **every service forever** and never stamps a cell (interval 1 while not stamped).
+  - Fine-tune off: the rectangle comes only from an explicit `Obstacle_Width` **and** `Obstacle_Height` (both
+    non-zero). Otherwise there are zero samples and "stamped" := 1.
+  - With a proxy: the proxy's sizes and model are used. A proxy without a model means no ray, so every sample
+    stamps.
+  - The obj +0x3a1 & 8 branch also needs obj +0x2a0.
+
+*For the implementer:*
+- The unstamp always recomputes the cell from the remaining occupants.
+- The fine-tune ray hits collision-flagged meshes whose bone is visible, hidden-in-file ones included.
+- The stamped bits come from the object's own type or behaviours, never from the proxy.
+- No model, fine-tune on and no proxy means "never stamped", retried every service.
+
+**Lifecycle of a stamp** (`LandObstacleBehaviorClass`, vftable `0x87b358`; behaviour id 0x14; data pack obj +0x208 = `LandObstacleDataPackClass`, byte +8 "stamped") [H] (2026-11-02, S8 t07):
+
+| slot | RVA | role |
+|---|---|---|
+| vf5 (+0x28) | `0x4f8840` | service interval: 1 while not stamped, 0 once stamped (TACTICAL_GAPS §6.4) |
+| vf6 (+0x30) | `0x4f90c0` | service: stamps (`0x4f88b0`) when the pack exists and "stamped" is clear |
+| vf7 (+0x38) | `0x4f87a0` | attach: creates the data pack (`0x390a20`) |
+| vf9 (+0x48) | `0x4f8880` | initialise: interval < 2, so the first service is due at once |
+| vf13 (+0x68) | `0x4f8800` | "placed" broadcast: stamps (`0x4f88b0`) without testing the flag (per-cell dedup only) |
+| vf15 (+0x78) | `0x4f90f0` | detach: unstamps |
+
+- **Map load:** `0x2a8730` walks every object of the GOM and calls `0x394510`, which sends vf13 to every behaviour of the object. So map placements are stamped by the same stamper as everything else. vf13 is also broadcast by `0x42d8b0` / `0x42dbd0` / `0x42e890` (campaign restore and two related paths).
+- **Run time:** `GOM::Create_Object` (`0x29f810`) attaches the behaviour (vf7, vf9); the object is stamped at its **first behaviour service** (vf6). The stamper works only in land mode (mode vf +0xe0 == 1, terrain present).
+- **Unstamp** (vf15 `0x4f90f0`): re-samples the same rectangle at the object's current position and yaw (no water rule, no ray), removes the object from each sampled cell's hard-occupant list (`0x59efa0` / `0x59f020`) and clears "stamped".
+  **Corrected 2026-11-02 (S8 t13)** [H]. The earlier text said that "the cell is recomputed only when no live
+  occupant is left in it" and that "the recompute also needs global `0x140b15490` set", so that two overlapping
+  obstacles would keep the removed one's bits. That was **wrong**:
+  - For every sampled cell that holds the object, the unstamp calls `0x59f020` unconditionally. `0x59f020` removes
+    the object (`0x59ef20`), frees the list when it becomes empty and **always recomputes the cell**.
+  - The recompute: effective (cell +0x14) = base (+0x10), ORed with the `0x397350` bits of every remaining hard
+    occupant (dead occupants included), ORed with the `+0x1694` bits of every soft occupant's type. Bit 0 is dropped
+    when any other bit is set. A change sets the dirty flag `0x140a2bed8` = 1. The add path `0x59f1e0` →
+    `0x59f260` uses the same recompute.
+  - So overlapping obstacles keep only the **remaining** occupants' bits.
+  - The global and the "no live occupant" test gate only `0x3bb6d0`. That function repaints a passability
+    **debug-overlay** texture (land mode +0x338; colour from `0x3b8090`; the stamper always paints magenta).
+  - `0x140b15490` is GameModeManager (`0x140b153e0`) +0xb0. Its only writes in StarWarsG.exe are zero
+    initialisations (`0x17062`, ctor `0x289779`): never set [H for the static scan; M that it is a tool / editor
+    flag].
+  - Cell layout: stride 0x1c; +0 hard list, +8 soft list, +0x10 base, +0x14 effective, +0x18 / +0x1a x / y.
+- **When detach runs:** only when the behaviour is removed. Death does not detach (`Die` `0x39bdb0` and `Kill` `0x391310` leave behaviours alone); the GameObject destructor (`0x38a310` → `0x3893e0`) calls `0x3a52f0`, which runs vf15 on every behaviour in reverse attach order. The destructor runs when the last reference drops, normally at the store's pending-delete flush at the end of the frame of death (OBJECT_RUNTIME §2.2) [H for the path, M for "normally": a Lua wrapper or another holder keeps the object, and its stamp, alive longer].
 
 **Bridges:** no dedicated bridge code was found. Bridges are ordinary objects whose `OverridePassability` / secondary passability re-opens cells. [L]
 
-**Death clones:** `IsDeathCloneObstacle` (+0xcf) and `Death_Clone_Is_Obstacle` (+0x92) make wrecks obstacles. They are handled by the collision decision (§5.4). Grid stamping of wrecks was not traced. [M]
+**Death clones and wrecks** [H] (2026-11-02, S8 t07; replaces the earlier "not traced" note):
+- A death clone is an ordinary object of the clone type, made by `0x29f270` through `Create_Object` (S9_DEATH_CLONE_SHIELDS §1.6). When no `Death_Clone` entry applies, the clone is of the **dying object's own type** (S9 §1.3), so every structure without a `Death_Clone` list leaves an own-type clone.
+- Right after the create, `0x29f270` walks the clone's behaviours (last to first) and **detaches (vf15) and removes (`0x3a54c0`) every behaviour except**:
+  - HIDE_WHEN_FOGGED (0x19);
+  - IMPOSING_PRESENCE (0x40);
+  - LAND_OBSTACLE (0x14), **only when the clone type's `Death_Clone_Is_Obstacle` (+0x92, default true) is set**.
+
+  Then the DEATH behaviour (0x44) is attached. The test uses the interface query vf3 (+0x18) with the behaviour id.
+- So **a death clone is stamped iff its type lists LAND_OBSTACLE (in `Behavior` or `LandBehavior`, after `Variant_Of_Existing_Type`) and `Death_Clone_Is_Obstacle` is true.** It is stamped at its first service, with its own type's footprint rules above (proxy and fine-tune included), and unstamped when the clone is destroyed (end of its DEATH behaviour).
+- The dying object keeps its own stamp until it is destroyed (previous item), so the cell stays blocked across the hand-over; the original's unstamp removes only the original from the cell lists.
+- `IsDeathCloneObstacle` (+0xcf) is **not** a passability flag. It gates the land **collision** registration of death clones (`0x504880`: an object with obj +0x3a0 & 0x80, i.e. a death clone, is registered only when the type sets +0xcf; `0x29f270` calls it when the clone type's `Space_Layer` is Land) and the MovingVsStopped decision (§5.4). The AT-AT / AT-ST / SPMAT / MPTL / Rancor clones are collision obstacles this way, but not stamped (their types have no LAND_OBSTACLE).
+- FoC data (variant-resolved; default true applied):
+  - Explicit clone types that are stamped: `Veers_AT_AT_Walker_Death_Clone`, `Veers_AT_AT_Walker_Deployed_Death_Clone`, `Gargantuan_Battle_Platform_Death_Clone`.
+  - Own-type clones: 455 LAND_OBSTACLE types have no `Death_Clone` list. 451 keep the stamp (all ordinary structures, build pads, props); the 4 with `Death_Clone_Is_Obstacle` = false lose it: `Imperial_Prison_Dathomir` and its `_Singing_Mountain` / `_Frenzied_River` / `_Misty_Falls` variants.
+  - `Empire_Gate_Large` (LAND_OBSTACLE, `Death_Clone_Is_Obstacle` false) dies into `Empire_Gate_Large_Death_Clone`, which has no LAND_OBSTACLE: the gate's cells open when the gate is destroyed.
+
+**Port notes (2026-11-02, S8 t07):** `TacticalBattle::land_obstacles_sync` stamps every object in the LAND_OBSTACLE behaviour table, so it stamps the 4 Dathomir prison wrecks that retail does not; its "[inferred]" note for the Veers / Gargantuan clones is **confirmed**. Since S8 t09 / t13 the battle host supplies `MapStampHooks::ray_model` / `mesh_ray_hit` (`land_stamp_hooks`: the ray is `avoid_ray_any`, the collision-flagged meshes whose bone is visible; an empty `Land_Model_Name` is `StampRayModel::None`), and `land_obstacle_footprint` applies `Obstacle_Proxy_Type`, the per-getter sizes, the no-model rules above and the object's own bits (`land_obstacle_bits`). The unstamp always recomputes the cell, which **matches** retail (corrected 2026-11-02, above; the earlier note here said retail did not).
 
 ### 1.4 Region decomposition and region A\* (the main land search)
 
@@ -452,13 +556,22 @@ Ops 6, 7, 15–18 and 20–22 run at the wait speed (max × 0.2 in space).
 **Space footprint** is a circle centred at position + `Space_Obstacle_Offset` (+0x16e4) rotated by yaw.
 - Radius getter `0x373b50` = Scale_Factor × 2R/20, where R is the first positive value of `Custom_Soft_Footprint_Radius` (+0x16b8), `Space_Obstacle_Radius` (+0x16f0), or the larger model x/y extent.
 - The /20 conversion is unexplained. [M]
-- `SpaceObstacleBehaviorClass` (vftable `0x8b0988`; vf3/vf13 `0x632610`, vf15 `0x6326b0`) inserts the object as a static entry on attach and removes it on detach.
+- **Model-extent fallback** (2026-11-01, S7 t08) [H]: the getter takes the type's model for the current mode (`0x3729f0`; in space, mode 2, type +0x2a8), asks it for its local box (ModelClass vf +0x58 = `0x264920`, the **collision bound**: the bind-pose union of the collision-enabled ALO meshes, SPACE_AVOIDANCE §3.2), and takes max(|half x|, |half y|). The two XML radii replace it when positive. A model without a collision mesh, or whose render object is not an ALO model, gives half 1; a type with no model for the mode gives radius 0.
+  - So `Orbital_Construction_Pod` (`EB_construction_pod.alo`) and its capture-point variants `N_Orbital_Construction_Pod` / `Skirmish_Merchant_Dock` (no radius tag in FoC) are sized by their model.
+- `SpaceObstacleBehaviorClass` (vftable `0x8b0988`; vf3/vf13 `0x632610`, vf9 `0x632670`, vf15 `0x6326b0`) inserts the object as a static entry on attach and removes it on detach.
+  - The insert (`0x53acf0`) skips a contained object (obj +0x3a7) and, in space, removes a type with `Use_Special_Submit_Rules` (FoC: transports only). It does **not** read the model's collide switch, so capture points and orbital props stay planner obstacles (SPACE_AVOIDANCE §5.5).
+  - Slots (vftable read from the exe, 2026-11-02): vf3 `0x632660` answers id 0x4C; vf6 = `0x17d070` (no service); vf9 `0x632670` (initialise: base `0x4c2f90`, then insert); vf13 `0x632610` (the "placed" broadcast of §1.3: insert again); vf15 `0x6326b0` (detach: remove, `0x539470`). [H]
+- **Death clones and dying objects** (2026-11-02, S7 t16) [H unless tagged]:
+  - **A death clone never holds a static entry.** `0x29f270` detaches and removes every behaviour of a new clone except HIDE_WHEN_FOGGED, IMPOSING_PRESENCE and (land only in effect) LAND_OBSTACLE (§1.3 "Death clones and wrecks"). SPACE_OBSTACLE (0x4C) is always among the removed ones: its vf9 insert at the create is undone by its vf15 remove in the same call. In FoC no clone type lists SPACE_OBSTACLE anyway (the starbase, station and ship `*_Death_Clone` types have no behaviour lists), but an **own-type** clone (a SPACE_OBSTACLE type without a `Death_Clone` list) would have it, and it is stripped the same way.
+  - **The dying object keeps its static entry until it is destroyed.** `Die` / `Kill` do not detach behaviours; the entry is removed by SPACE_OBSTACLE's vf15 when the GameObject destructor (`0x3893e0` → `0x3a52f0`) runs, normally at the pending-delete flush at the end of the frame of death [M for "normally", as in §1.3]. Other removals of the entry: entering a container (`0x37ade0`) and the moving re-insert (`0x53a900`, `0x5d4730`).
+  - Not part of SpaceOccupancy, for completeness: an own-type clone keeps its type's `Space_Layer`, so it can enter the fighter-avoidance tree at create (SPACE_AVOIDANCE §2.1 tests no death-clone flag; the clone flags are set after the create) [M].
+  - **Port (S7 t16):** `space_obstacles_sync` walks battle units, not the behaviour table, so it never inserts a death clone: this matches retail. It removes a unit's entry at the first sync after the unit died or retreated, which matches the destructor at the end of the frame of death. No code change is needed. If the sync is ever switched to the SPACE_OBSTACLE behaviour table, it must skip death clones (store flag `kFlagDeathClone`).
 
 **Layers** (`0x397900`):
 - The unit's layer is `Space_Layer` (+0x16dc), or `Stationary_Space_Layer` (+0x16e0) while not moving.
 - SpaceLayerType (`0x5e0c00`): Capital 1, Frigate 2, Corvette 4, StaticObject 8, Land 0x10, SuperCapital 0x20 (corrected per FIGHTER_FLYING §6.3.1).
 - **A ship plans only around entries in its own layer, plus the static map (layer 8).** Ships in different layers pass through each other in planning.
-- A multi-locomotor unit whose secondary locomotor is active uses layer 4. [M]
+- A `Uses_Multiple_Locomotors` unit whose current locomotor answers vf +0x240 (JetPack yes, Walk no) with kind 2 (JetPack pack state 0 or 0xF–0x13) uses layer 4 (`0x397900`; FIGHTER_FLYING §6.3.1, §3.1.1). [H]
 
 **Obstacle test** (`0x59a630` → `0x59a860` → `0x5d7c00`):
 1. Each motion is swept in space-time against the unit's layer map, plus the static map when the mask has any of the bits 0x3e. The static test is offset by SpaceStaticObstacleAvoidanceBonusDistance (0 in vanilla).
@@ -617,7 +730,7 @@ All locomotors derive from `LocomotorCommonClass` (ctor `0x42b9f0`, 97-slot vfta
 | LAND_TEAM_CONTAINER_LOCOMOTOR | LandTeamContainer (`0x8a3630`) | infantry squad/team containers |
 | LAND_TEAM_INFANTRY_LOCOMOTOR | LandTeamInfantry (`0x8af8d0`) | some squad members |
 | FLYING_LOCOMOTOR | Flying (`0x8b2738`) | snowspeeder, gunships |
-| JETPACK_LOCOMOTOR | JetPack (`0x8b2e80`) | Boba Fett, Bossk, IG-88 (secondary) |
+| JETPACK_LOCOMOTOR | JetPack (`0x8b2e80`) | Boba_Fett, Dark_Trooper_PhaseII / III, only as `Secondary_Locomotor_Name` (§3.1.1) |
 | LANDBOMBER_LOCOMOTOR | LandBomber (`0x8b3568`) | bombing runs |
 | FIGHTER_LOCOMOTOR | Fighter (`0x8a6198`) | space fighters/bombers; birds on land |
 | SIMPLE_SPACE_LOCOMOTOR | SimpleSpace (`0x8aeaf8`) | corvettes … capitals |
@@ -625,10 +738,209 @@ All locomotors derive from `LocomotorCommonClass` (ctor `0x42b9f0`, 97-slot vfta
 | FLEET_LOCOMOTOR | Fleet (`0x899c58`) | galactic fleets |
 | STARSHIP_LOCOMOTOR / SIMPLE_LOCOMOTOR | Starship (`0x8ae250`) / LocomotorBehaviorClass (`0x8adda0`) | none in vanilla FoC [M] |
 
-**Two locomotors** (`0x3a9910`) apply only when `Uses_Multiple_Locomotors` (+0x74) is set:
-- The unit swaps between `Primary_Locomotor_Name` (+0x2058) and `Secondary_Locomotor_Name` (+0x2078).
-- Going to the secondary saves the unit's coordinator order and leaves the coordinator.
-- It is triggered by the 1-bit flag of MoveToPosition (§6.1).
+**Two locomotors** (`0x3a9910`) apply only when `Uses_Multiple_Locomotors` (+0x74) is set: the unit swaps between
+`Primary_Locomotor_Name` (+0x2058) and `Secondary_Locomotor_Name` (+0x2078). Details, callers and the alternate
+speed / turn rate: §3.1.1.
+
+#### 3.1.1 Locomotor swap `0x3a9910(obj, coordinatorSystem, toPrimary)` [H unless tagged]
+(S7 t11, 2026-11-01.) `coordinatorSystem` is the mode's `MovementCoordinatorSystemClass` (mode vf +0x228); every caller
+passes it and skips the call when the mode has none.
+
+**It is a set, not a toggle.** Steps:
+1. Type +0x74 (`Uses_Multiple_Locomotors`) clear → return.
+2. **"Already there" test:** L = the current locomotor (behaviour slot 1). If L vf96 (+0x300) == `toPrimary`, return.
+   vf96 is a class trait, not a record of which name was built: it answers **0 only for JetPack** (`0x13b7d0`) and 1
+   for every other locomotor class (`0x17dc70`, LocomotorCommon and all twelve others). So "on the secondary" means
+   "the current locomotor is a JETPACK_LOCOMOTOR".
+   - Consequence for mods [H]: with a non-JetPack secondary, a to-secondary call rebuilds the secondary every time
+     (vf96 = 1 ≠ 0) and a to-primary call never swaps back (1 = 1). With a JetPack primary, the jetpack's own swap-back
+     (below) rebuilds the primary every stopped frame. Vanilla never does either.
+3. Name = `Primary_Locomotor_Name` when `toPrimary`, else `Secondary_Locomotor_Name`. The null test on the name is
+   dead (the std::string buffer is never null), so an empty name continues.
+4. **To the secondary only** (`toPrimary` = 0), the order hand-over, done **before** the locomotor changes:
+   - B = a default move-parameter block (§6.1 layout): destination = the unit's own position (obj +0x78…+0x80),
+     facings 1e18, type 1 (position), mask 0x3f at +0x4c, +0x54 = 1e18, +0x60 = 0x1000001, everything else 0;
+   - C = the coordinator holding the unit (`0x426140`); if there is one, B := C's current order block (coordinator
+     +0x40…+0xa4, all fields);
+   - the unit leaves every coordinator (`0x426d50`, coordinator vf4 +0x20);
+   - a new coordinator is made (`0x426010`, land or space kind by the system's mode), the unit is added (vf3 +0x18,
+     `0x438b40` → `0x4f6b60`) and **`Coordinator::Move_To(B)` (`0x4f8200`) re-issues the order**.
+
+   So the saved order **is re-issued**: the unit continues its current move (or holds its position when it had no
+   coordinator) alone in a coordinator of its own. Any RNG drawn by that `Move_To` (formation stagger, §1.6) is drawn
+   here [M: whether a one-unit `Move_To` draws was not traced]. This happens even when the name is empty.
+5. Build the new locomotor with the behaviour factory (`0x4c3520`). It refuses names of length 0 or ≥ 256 and names
+   that match no table row, and returns null. **Null → return**: no other change. An empty
+   `Secondary_Locomotor_Name` therefore never swaps, but step 4 has already split the unit off with its order.
+6. With the new locomotor N:
+   - remove L (`0x3a54c0`: out of the behaviour array, slot table fixed up, reference released);
+   - `Add_Behavior(N, loading = 0)` (`0x38c570`, OBJECT_RUNTIME §4.2): attach, then Initialise:
+     - JetPack Initialise (`0x640ef0`): conform/commit at the current position (vf95), **pack state := 0 (None)**,
+       pack +0x28d := 1;
+     - Walk Initialise (`0x61dea0`): conform/commit at the current position (vf95, skipped when obj +0x3a0 bit 7 is
+       set), **pack state := 0x16 (Walk Stopped)**, pack +0x268…+0x270 := the object's orientation (obj +0x84…+0x8c).
+
+     The locomotor data pack (obj +0xa8: path stack, speed, formation pointer +0x1f0) belongs to the object and
+     **survives the swap**; only the state is reset by the new locomotor.
+   - engine sounds off: moving loop `0x3a7e30(obj, 0)`, idle loop `0x3a7cf0(obj, 0)` (STATION_HANGARS_SOUND §3.3).
+     **Audio only** [H] (2026-11-02): the two functions only start / stop the SFX and set the flags obj +0x3B6 /
+     +0x3B5, which are read only by audio code, save / load (`0x33a580` / `0x33c160`), the state copy `0x472560`
+     and the TSW audio `0x42a7b0`. No sim result depends on them;
+   - **weapons:** behaviours TARGETING (9), WEAPON (10) and SPECIAL_WEAPON (0x2F), each if present:
+     - to the secondary: Disable (vf24 +0xc0: suspend count +0x3c + 1). TARGETING (vftable `0x8b0d88`) and
+       SPECIAL_WEAPON (`0x8756e0`) use the base `0x4c30b0`. The WEAPON override `0x54ac30` [H] calls the base, then
+       clears the unit's **own muzzle flash** (not hardpoints): when the weapon data pack (obj +0xf0) belongs to this
+       behaviour (pack +0x80 == it), for each fire bone i < pack +0xd0 whose flash countdown (int array pack +0xc8)
+       is > 0: countdown := 0, hide the `<bone>_FLASH` mesh (pack +0xa8[i]) and, when i < pack +0xe8, the
+       `<bone>_LIGHT` mesh (pack +0xd8[i]). These are the meshes a shot shows for 4 frames. **Visual only**: the
+       target (pack +8), the cooldown (pack +0x24), the pulse / burst counters and the fire-bone cycle index are
+       not touched;
+     - to the primary: Enable (vf23 +0xb8, `0x4c30a0`: count − 1, floor 0), then object signal **0x29** (`0x220ed0`
+       on obj +0x38) = **"unit ability finished"** (below).
+
+     A suspended behaviour is not serviced (§3.3), so **a unit on its jetpack neither targets nor fires**.
+
+     **The weapon cooldown keeps elapsing while suspended** [H]. The WeaponBehavior service `0x54d090` does not count
+     its cooldown down by one per service: it keeps the last serviced frame at pack +0x2c (rewritten every service) and,
+     when the cooldown (pack +0x24, int frames) is non-zero and pack byte +0x3d is 0, takes delta = frame − pack +0x2c;
+     delta > cooldown (unsigned compare) → cooldown := 0, else cooldown −= delta, and a non-zero result ends the
+     service (no shot). A suspended behaviour is not serviced, so pack +0x2c stays at the last pre-flight frame and the
+     first service after the swap back subtracts the whole flight time. A shot whose recharge ran out in the air is
+     ready on the first frame back on the ground.
+
+     **Signal 0x29 listeners** [H] (raised by every ability end, ABILITIES_HARDPOINTS §2.6, and here). Two kinds:
+     - **Task forces** (TaskForceClass Receive_Signal `0x5fe5d0`, case 0x29). Add_Force `0x5f9a90` registers the task
+       force on each member; it unregisters in vf1. Skipped when the unit has obj +0x3a0 bit 0x02 set (dying /
+       being removed). Otherwise the unit is wrapped as a Lua value (`0x5751d0` / `0x256d40`) and the plan event
+       **0x13 = `<TaskForce>_Unit_Ability_Finished(tf, unit)`** is dispatched (`0x6006b0`; AI_GALACTIC_2 §5.2 event
+       19). PGEVENTS' `Default_Unit_Ability_Finished` is empty, so only plans that define the handler react.
+     - **Lua blocking status of `Activate_Ability`** (AbilityBlockStatus, vftable `0x89a558`; its listener sub-object
+       at +0x30 has vf1 `0x6ae4f0`). Made by `GameObjectWrapper.Activate_Ability` `0x570580` (pending count +0x40 = 1)
+       and by TaskForce `Activate_Ability` `0x5f9890` (one per unit that activated). Each registers on its unit for
+       signals **0x29, 0xb and 0x10** (`0x6ae570`); the first of them decrements the count and unregisters all three.
+       `IsFinished` `0x57bab0` = (count == 0). TaskForce `Activate_Ability` also queues `Unit_Ability_Finished` at
+       once for each unit whose activation failed. So `BlockOnCommand(unit.Activate_Ability("JET_PACK", target),
+       timeout)` returns when the jetpack swaps back (or on 0xb / 0x10, meanings not traced here). FoC user:
+       AI/LANDMODE/BOBAFETTFLAMEINFANTRY.LUA (lines 153 and 168).
+
+     This is **sim-relevant** (AI Lua flow), not presentation.
+7. The current **order is left alone on the to-primary path**: no coordinator change, the unit stays in the
+   coordinator it was in; the walk locomotor starts stopped (0x16).
+
+**Callers** (five functions, six call sites) [H]:
+
+| caller | direction | when |
+|---|---|---|
+| JET_PACK ability `0x3a38d0` (REMAINING_GAPS §5.3) | to secondary | after the gates pass, when the unit has a locomotor (obj +0x333 ≠ −1) and type +0x74 = 1; then the ability's own group move (`0x2a7b80`, flags 0x04) moves the unit out of the step-4 coordinator into a new one |
+| MoveToPosition execute `0x3ad100` (§6.1, §6.2) | to secondary | event +0x58 (the 1-bit field) = 1: every unit of the player's selection, in list order, with a locomotor and type +0x74; then the group move (`0x2a7b80`) or, with flag 0x08, the waypoint queue (`0x2a8240`), which appends to the step-4 coordinator so the re-issued order runs first. **No FoC sender sets the bit:** the event is made only by `0x3b090` and `0x3b360` (the UI move, via `0x3ad330(event, point, flags, 0)`), and the ctor `0x3acee0` clears it. The path is dead in vanilla |
+| hero clash `MoveActionClass` vf5 `0x5e9ce0` (Begin) | to secondary | `Move_Use_Jetpack` (action +0xe4) = Yes, before the action's own move (type 1 `0x5e9ed0`; type 2 `0x5e9f30` + `0x5ea910`). Begin also saves "locomotor suspended" (vf66 +0x210, pack +0x260) at +0xe8 and resumes it (vf65) when the move starts |
+| `MoveActionClass` vf5, failure path | to primary | the move could not start: swap back, and re-suspend the locomotor (vf64 +0x200) if it was suspended |
+| `MoveActionClass` vf9 `0x5ea820` (End) | to primary | always when `Move_Use_Jetpack`, after releasing the movement lock (`0x3a8e50(obj, 0)`), **whether or not the unit has landed**; then re-suspend if it was suspended |
+| JetPack vf6 `0x641910`, state 0x16 | to primary | below |
+
+`MoveActionClass` (vftable `0x8a8460`) is an action of `ActionDrivenHeroClashClass` (`0x8bd978`; starts actions in
+`0x6aae80`, ends them in vf2 `0x6ab6f0` / vf5 `0x6ab4d0`). The only FoC `Move_Use_Jetpack` user is the
+`ObiWan_BobaFett` clash in HEROCLASH.XML (three `Move_Past_Target` actions). Hero clashes have no port code (TACTICAL_COMBAT
+item 24).
+
+**Swap back in the JetPack locomotor** (vf6 `0x641910`) [H]:
+- vf6 runs only in land mode (mode vf +0xe0 = 1) and while the locomotor is not suspended (vf66 +0x210 false); the
+  state must be in {0, 0xF…0x14, 0x16} (mask 0x5f8001), else it returns an error.
+- **State 0x16 (every service):** pack +0x28d := 0, speed (+0xec) := 0, play the idle animation (`0x395920`), then,
+  because JetPack vf96 = 0, call `0x3a9910(obj, system, 1)`. So the jetpack swaps back on the **first service in
+  state 0x16**, with no other condition (no pending-order test).
+- The handlers return "continue" (0) when they change state, and the switch re-dispatches in the same service. So the
+  swap happens **in the same frame** the state becomes 0x16 from:
+  - Moving 0x13 (`0x6420e0`) with no current path;
+  - End Move 0x14 (`0x641df0`) when FlyLandDrop (0x34) has finished (after it snaps to the terrain).
+- It happens **one service later** from:
+  - None 0 (vf6 case 0) with no current path or path +0x6d clear: state := 0x16 and return;
+  - Moving 0x13 when the frame's follower step left position and orientation unchanged: state := 0x16, and the path
+    is not done (done → 0x14 overrides). This can swap a unit back while it is still in the air [H for the flow; M
+    whether it occurs in play].
+- The timed-path follower vf +0x1d8 (`0x641010`, Hermite playback of the 0x34-byte waypoints) never swaps.
+- Pack state 0 after the to-secondary Initialise means **the jetpack needs a current path at its first service**,
+  or it reverts on the next one. In the JET_PACK ability the group move runs right after the swap; whether
+  `Formation::Set_Move` (`0x423c10`) has given the pack a path by the jetpack's first service was not traced [M].
+
+**Alternate_Max_Speed (+0x380) / Alternate_Max_Rate_Of_Turn (+0x390)** [H]: read **only by the JetPack locomotor**,
+and only while it is airborne-kind:
+- JetPack vf74 (+0x250, `0x640c00`, max speed) and vf75 (+0x258, `0x640bb0`, turn rate) ask the kind (vf71 +0x238,
+  `0x640f90`): kind 2 when there is no pack or the pack state is 0, 0xF, 0x10, 0x11, 0x12 or 0x13; kind 1 otherwise
+  (0x14 End Move / landing, 0x16 Stopped).
+  - kind 1: the normal values: max speed `0x370f00` (`Max_Speed`, capped by the team minimum, then the §3.4 chain
+    `0x376990`); turn rate `0x372560` (`Max_Rate_Of_Turn`);
+  - kind 2: `0x371060` = the same chain `0x376990` applied to `Alternate_Max_Speed` (no team-minimum cap); turn rate
+    `0x370fd0` = `Alternate_Max_Rate_Of_Turn` × the mode multiplier × the global factor (the `0x372560` pattern).
+- Walk and LocomotorCommon vf74 / vf75 are the normal getters (`0x42c5e0` / `0x42c5c0`), so a walking unit never
+  uses the alternate values.
+- The only callers of `0x371060` and `0x370fd0` are those two JetPack getters. **Where the getters are read:**
+  - the planner request record (`0x59d120`, §2.1 "Request record" +0xf0 max speed / +0xf4 turn rate), filled when
+    the path is requested. After the swap the pack state is 0 and the re-land move (0x640880) is issued in 0x13,
+    both kind 2, so **the timed flight path is planned with the alternate speed and turn rate**, and the flight (0x13
+    plays that path back) moves at the alternate speed [M: the exact frame of the request was not traced; a request
+    made after the landing starts would get the normal values];
+  - the formation speed (`0x41b2a0`, the slowest member's vf74; P1_DOUBLE_CLICK_MOVE): the alternate speed while the
+    member is airborne-kind.
+- **Not** read through them: the jetpack's take-off turn (0x10, `0x642740`) uses pack +0xe8 or, when that is ≤ 0,
+  `Max_Rate_Of_Turn` (`0x372560`) directly (below); the landing (0x14) and the stopped state set no speed from them.
+- **Acceleration / deceleration** [H] (2026-11-02): JetPack vf91 / vf92 are the common `0x42c400` / `0x42c4c0`.
+  Acceleration = `OverrideAcceleration` (type +0x3c0) × (effective max speed / `Max_Speed`), where the effective
+  max speed is `Max_Speed` capped by the team minimum and passed through the `0x376990` chain (via `0x372fe0`), i.e.
+  the override scaled by the same modifier ratio as the **normal** speed. When that is ≤ 0 the result is `0x370f00`
+  = the normal effective max speed. Deceleration is the same with +0x3c4. The alternate speed is **never** used
+  for either, airborne or not. The planner request reads them in `0x59d4a0` (request +0x1ec := vf91,
+  +0x1f0 := vf92; defaults: the max speed +0xf0); with `Walk_Transition` (type +0x35) the animation-based branch
+  applies instead. Vanilla jetpack users all set an override (0.1 / 0.05), so the ≤ 0 fallback is mod-only.
+
+**Take-off turn: pack +0xe8** [H] (2026-11-02). Pack +0xe8 is the locomotor data pack's float "turn rate of the
+current turn-animation band". Readers: `0x640af0` (current turn rate: +0xe8 when > 0, else `0x372560`(type) =
+`Max_Rate_Of_Turn` × mode multiplier × global factor = R), the JetPack turn `0x642740` and Walk. Writers: Walk
+`0x6204f0`, JetPack `0x642740`; zeroed together with +0xec by the pack ctor `0x553f00` and LandTeamInfantry vf6
+`0x62ca10`; and **JetPack state 0xF sets it to 0 right before entering 0x10** (vf6 `0x641910` case 0xF). So the first
+take-off turn frame always turns at R, the normal rate (never the alternate one). `0x642740`, per service:
+1. r = +0xe8 when > 0, else R.
+2. e = the wrapped yaw error toward the path aim (`0x640cc0`); turn by min(|e|, r) toward it; r_left = r − |e| when
+   |e| ≤ r, else 0. Set the orientation (roll 0, pitch 0) and commit (vf95).
+3. path = the current path (`0x5569b0`); c = the animation is in its last 2 frames (`0x39a180`); anim = the current
+   animation (`0x3956a0`).
+4. If not (r_left ≤ 0 or c or path) → state 0x11 (End Turn).
+5. Else if anim ∈ {3, 4, 0x15, 0x16, 0x17, 0x18} and not c → return (keep turning, the band rate stays).
+6. Else if (no path or path +0x6d) and r_left ≤ 0, pick a turn animation, then return:
+   - with `Has_Pre_Turn_Anim` (type +0x36): play idle, re-measure e after this frame's turn and band on |e| (the sign
+     of e picks left / right):
+     - |e| ≥ 45 → anim 3 / 4, +0xe8 := R;
+     - 22.5 ≤ |e| < 45 → anim 0x15 / 0x17, +0xe8 := R × 0.5;
+     - R ≤ |e| < 22.5 → anim 0x16 / 0x18, +0xe8 := R × 0.25 × |e| / 11.25;
+     - |e| < R → no animation, +0xe8 := R, End Turn.
+
+     The animation plays at the runtime constant speed `DAT_140b39958` with the blend time `0x3736a0`(type);
+   - without +0x36: only when anim 3 exists (`0x38f9e0(obj, 3)`) and no turn animation is playing (`0x61df80`):
+     anim 3 / 4 by the sign of the frame-start error at speed min(|e0| / current rate × 0.03333, GC `0x140b16d28`).
+     +0xe8 is not written (stays 0, so R).
+7. Else → End Turn.
+
+So the band value is the **yaw rate of the following frames**, not an animation rate, and the state stays in 0x10
+until the turn animation reaches its last 2 frames even once the unit is aligned. The vanilla jetpack users
+(Boba_Fett, Dark_Trooper_PhaseII / III) do not set `Has_Pre_Turn_Anim`, so they turn at R throughout (vanilla
+`Max_Rate_Of_Turn` 20; Boba's `Alternate_Max_Rate_Of_Turn` 6 is not used here). The "last 2 frames" test reads the
+animation clock; a port uses the n × rate × speed rule of ABILITIES_HARDPOINTS §4.13 instead.
+- Defaults (type ctor `0x367250`): `Alternate_Max_Speed` **1.0**, `Alternate_Max_Rate_Of_Turn` **2.0**. FoC data:
+  Boba_Fett 2.5 / 6.0; Dark_Trooper_PhaseII 2.5 / unset (2.0); Dark_Trooper_PhaseIII 1.8 / unset (2.0). Bossk, IG-88,
+  Silri, Tyber_Zann and Urai_Fen also set them (2.5–2.7 / 6.0) but never fly; Dark_Trooper_PhaseI sets only the turn.
+
+**Spawn locomotor** [H]: only `0x3a9910` reads +0x2058 / +0x2078 (besides the type copy `0x36c000`). At spawn the unit
+gets the locomotor of its behaviour list (§3.1 factory); `Primary_Locomotor_Name` is used only by the swap back. Every
+FoC user lists WALK_LOCOMOTOR in its LandBehavior and names WALK_LOCOMOTOR as primary, so the two agree in vanilla.
+
+**FoC users** (extracted XML, 2026-11-01): `Uses_Multiple_Locomotors` = Yes on Boba_Fett, Dark_Trooper_PhaseII,
+Dark_Trooper_PhaseIII (Primary WALK, Secondary JETPACK; each has the JET_PACK ability) and on Bossk, IG-88, Silri,
+Silri_No_Abilities, Tyber_Zann, Tyber_Zann_Prisoner, Urai_Fen (no `Secondary_Locomotor_Name`; Bossk and IG-88 name a
+WALK primary). No FoC type lists JETPACK_LOCOMOTOR in a behaviour list.
+
+**Open** [M]: whether a one-unit `Move_To` in step 4 draws synced RNG; whether the JET_PACK move's path exists at the
+jetpack's first service; the meanings of signals 0xb / 0x10 that also release an `Activate_Ability` block.
+(Answered 2026-11-02: signal 0x29, the WEAPON Disable side effects, pack +0xe8, the acceleration, the engine loops.)
 
 ### 3.2 Locomotor state (`LocomotorStateType`, enum `0x5e2e30`, data pack +0x48) [H]
 
@@ -669,6 +981,109 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
 | +0x1f0 | owning formation |
 | +0x274 / +0x275 | collision-check / path-approximation countdowns (§5.2) |
 | +0x2a8 | formation-member flag (§5.3) |
+
+**Deploy states (S8 t11, 2026-11-02)** [H unless tagged]. These are used by the weapon gates (TACTICAL_COMBAT §3.1.1
+"Gate details").
+- Only Walk implements the deploy vfuncs:
+  - vf +0x118 = `Deploy(bool)` (`0x61d300`);
+  - vf +0x120 = state == 0x19 (`0x61df40`);
+  - vf +0x128 = state == 0x1A (`0x61dfd0`);
+  - vf +0x130 = state == 0x18 (`0x61df60`).
+
+  Every other locomotor answers false (`0x13b7d0`). The JetPack's +0x118 is `0x1fa90`.
+- **Deploy(true).** It acts when the state is not 0x18 / 0x19, the pending flag (pack +0x2b3) is clear and
+  obj +0x3a1 & 0x40 is clear:
+  - stop (vf +0x140(0)), state := 0x18;
+  - play animation 0x19 (Deploy) with blend 1/30 at `Deployment_Anim_Rate` (type +0x1668, default 1.0, ctor
+    `0x3684a8`);
+  - start frame = clipLen − curFrame − 1 (min 0) when reversing out of 0x1A, else 0;
+  - reversing out of 0x1A while the TURRET is not at rest (`0x386170`) instead goes straight to 0x19, resets the
+    turret and raises signal 0x29.
+- **Deploy(false).** Unless it is blocked by the behaviour in slot +0x35b (id 0x29; `0x42e3b0` / `0x42e3d0`), a state
+  of 0x18 / 0x19 or a set pending flag → state 0x1A.
+- **Per frame** (vf6 `0x61e930`):
+  - 0x18: when the current animation is 0x19 and has ended (`0x39a180`: frame ≥ len − 2 − step, or animation state
+    2) → state 0x19, signal 0x29, `0x39fec0`. Otherwise the deploy animation is (re)started only once the TURRET
+    (slot +0x33d) is at rest; until then `0x6319d0(turret, 0)` recentres it.
+  - 0x1A: clear pending +0x2b3; if the animation is not 0x1A, play it at `Deployment_Anim_Rate` (start =
+    len − cur − 1 − rate when reversing out of 0x19), plus `0x3a0580`, with the same turret wait. When it has
+    ended → state 0 and signal 0x29.
+  - 0x16 with pending set → 0x19 directly, with the animation on its last frame. This is the walk-while-deployed
+    case (`Max_Dist_Walk_While_Deployed` > 0); no vanilla FoC unit sets that field.
+- **Window length** ≈ the turret recentre wait + ceil(max(count − 2, 0) / (clip rate × `Deployment_Anim_Rate`)) sim
+  frames, following the ABILITIES_HARDPOINTS §4.13 convention [M on the exact end test].
+- **FoC `Deploys = Yes`** (all WALK_LOCOMOTOR): AT_AT, Veers AT_AT, AT_AA (rate 2.0), SPMAT (2.0), MPTL (1.5),
+  Abstract_Mobile_Defense_Unit (2.0), Dark_Trooper_PhaseIII (2.0; walk + jetpack), HAV_Juggernaut,
+  Gallofree_HTT_Transport, Destroyer_Droid (3.0).
+- **A locomotor swap undeploys** [H]. The swap (§3.1.1) replaces Walk with a new locomotor. JetPack answers
+  "not deployed", and the new Walk built at the swap back starts in 0x16. So a deployed `Dark_Trooper_PhaseIII` that
+  uses JET_PACK counts as undeployed in the air and after landing. Its `HP_DarkTrooper_P3_*` missiles
+  (`Fire_When_Deployed` Yes, `_Undeployed` No) stay refused until it deploys again.
+  - Hardpoints are **not** suspended by the swap: only TARGETING, WEAPON and SPECIAL_WEAPON are. The hardpoints
+    are held by the deploy flags. With TARGETING suspended, they also get no new target pushed.
+  - The pending flag +0x2b3 lives in the pack, which survives the swap, but vanilla never sets it.
+  - [M] Whether the model's deploy pose is reset visually.
+- **Who listens to these 0x29 raises (2026-11-02).** The Lua `Activate_Ability("DEPLOY", bool)` block
+  (`AbilityBlockStatus`, e.g. the AI's `BuildMDUItem`) finishes on them, so it returns when the deploy / undeploy
+  animation ends; a deploy refused before Walk vf +0x118 runs (gate 0x3a1ce0, incl. locomotor vf +0x2b0) raises
+  nothing. See AI_TACTICAL §7.3.3 part 3.
+
+**Turret recentre around deploy (RE, 2026-11-02)** [H unless tagged]. The turret state is in the targeting data pack
+TD = obj +0xf0:
+- current angles +0x48 / +0x4c / +0x50 and target angles +0x54 / +0x58 / +0x5c (the three components of
+  `Turret_Rest_Angle`: x, elevation, yaw);
+- +0x6c is the time the turret went idle, in seconds (frame / FPS);
+- +0x70 is the "idle hold started" byte;
+- +0xf6 is the "aiming at a target" byte.
+
+Rest angle R of the type: `Turret_Rest_Angle` (+0x5b4), or `Turret_Deployed_Rest_Angle` (+0x5c0) when the type
+`Deploys` (+0xd1) and the unit is deployed / deploy-pending (0x39a390) or **Deploying** (0x39a400: Walk state 0x18).
+- **Motion** (0x631210, run by the TURRET service 0x632270, behaviour interval 1 = every frame):
+  - Per frame, the elevation (+0x4c) moves linearly toward +0x58 by at most `Turret_Rotate_Speed` (+0x5a8,
+    **degrees per frame**, no frame-time scaling).
+  - The yaw (+0x50) moves by the shortest wrapped difference to +0x5c, by at most the same step. It is then wrapped
+    and clamped to ±`Turret_Rotate_Extent_Degrees` (+0x5a0; deployed: `Deployed_Turret_Rotate_Extent_Degrees`
+    +0x5d0).
+  - Component +0x48 never moves.
+  - The bone gets yaw (and elevation unless `Turret_XY_Only`).
+- **Idle return:** while not aiming (+0xf6 = 0) and current ≠ R:
+  - on the first such frame (+0x70 = 0) the turret holds: target := current, +0x6c := now;
+  - when now − +0x6c > `Turret_Rotate_To_Rest_Delay_Sec` (+0x5cc, constructor default **2.0 s**, no FoC unit sets
+    it), the service sets target := R and +0x6c := 0, and the turret turns to R.
+  - At R, +0x70 is cleared.
+- **0x6319d0(turret, 0) = forced recentre:** +0xf6 := 0, target := R (by the rule above), +0x6c := 0. It skips the
+  2-s delay. If +0x70 was 0, the next turret service still freezes the target for that one frame; the Walk code
+  calls 0x6319d0 again every frame [M: one lost frame, depends on behaviour order].
+- **"At rest" (0x386170)** = every component of current (+0x48..+0x50) equals **`Turret_Rest_Angle`** within 0.0001,
+  with negative values first wrapped by +360. The Walk tests always compare against the **undeployed** rest angle,
+  even in state 0x18.
+- **Where it gates:**
+  - `Deploy(true)` from state 0/0x16 starts the deploy animation **at once**, with no turret wait.
+  - The turret test applies:
+    - when reversing out of 0x1A: not at rest → straight to 0x19 + signal 0x29;
+    - in state 0x18 only when the current animation is not the deploy clip (it was overridden): wait at rest, else
+      0x6319d0;
+    - in state 0x1A before the undeploy clip starts: every undeploy waits until the turret is back at
+      `Turret_Rest_Angle`, then plays the clip.
+  - Wait ≈ ceil(max(|Δyaw| shortest, |Δelev|) / `Turret_Rotate_Speed`) frames, e.g. AT-AT (3°/frame, ±55°) ≤ 19
+    frames; AT-AA 14°/frame.
+- **Units (FoC, `Deploys` + TURRET, all WALK_LOCOMOTOR):**
+
+  | unit | `Turret_Rotate_Speed` (°/frame) | `Turret_Rotate_Extent_Degrees` |
+  |---|---|---|
+  | AT_AT_Walker | 3 | 55 |
+  | Veers_AT_AT_Walker | 2 | 55 |
+  | AT_AA_Walker | 14 | 360 |
+  | SPMAT_Walker | 3 | 360 |
+  | MPTL | 4 | 360 |
+  | HAV_Juggernaut | 5 | 200 |
+  | Gallofree_HTT_Transport | 5 | 360 |
+  | MAL_Rocket_Vehicle | 8 | 30 (deployed 360) |
+
+  MAL_Rocket_Vehicle also `Deploys`, at `Deployment_Anim_Rate` 0.5; it is missing from the list above. Only SPMAT
+  sets rest angles: rest (0,0,0), deployed rest (0,−45,0).
+  - [M] An SPMAT whose deploy clip is interrupted while in 0x18 would recentre toward the deployed rest (elevation
+    −45) but be tested against (0,0,0), so it would wait until undeployed. Not observed.
 
 ### 3.3 Tick order [H]
 
@@ -712,7 +1127,10 @@ The collision system is serviced by the land mode (§5.2). Its order relative to
 - **If the override is ≤ 0, the value is the full effective max speed**, i.e. full speed in one frame.
 - Units with `Walk_Transition` (+0x35) derive acceleration from the frame counts of their start/end-move animations instead. [M]
 
-**Turn rate** (`0x372560`) = `Max_Rate_Of_Turn` (+0x38c) × the mode multiplier × the global factor. The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
+**Turn rate** (`0x372560`) = `Max_Rate_Of_Turn` (+0x38c) × the mode multiplier × the global factor. While
+airborne-kind, the JetPack's speed / turn-rate getters (vf74 / vf75, read by the planner request and the formation
+speed) answer `Alternate_Max_Speed` / `Alternate_Max_Rate_Of_Turn` instead (§3.1.1); no other locomotor reads them.
+The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
 
 **Defaults:** from OBJECT_TYPES.md, Max_Speed 0.25, Max_Rate_Of_Turn 2.3, Mass 0.995.
 
@@ -1044,7 +1462,7 @@ Three separate spatial structures exist. The port can unify them only if every q
 
 | event | read / execute | payload |
 |---|---|---|
-| MoveToPosition | `0x3acf70` / `0x3ad100` | position, u8 flags, 1 bit "switch locomotor" |
+| MoveToPosition | `0x3acf70` / `0x3ad100` | position, u8 flags, 1 bit "switch locomotor" (+0x58; no FoC sender sets it, §3.1.1) |
 | MoveToPositionFacing | `0x3ade20` | position, facing, flags, u32 count + IDs |
 | MoveToRay | `0x3ae4e0` / `0x3ae6c0` | two points, flags (formation laid along a dragged line) |
 | MoveToRayFacing | `0x3ae990` / `0x3aebb0` | two points, facing, flags |
@@ -1080,7 +1498,7 @@ Three separate spatial structures exist. The port can unify them only if every q
 - With flag 0x08 clear, they call the **group move** (`0x2a7b80`).
 - With it set, they call the **waypoint-queue move** (`0x2a8240`).
 - Either way they then record the order for waypoint display (`0x32ea20`).
-- With the 1-bit flag set, multi-locomotor units swap locomotor first (§3.1).
+- With the 1-bit flag set (MoveToPosition only), every selected unit with a locomotor and `Uses_Multiple_Locomotors` first swaps to its secondary (`0x3a9910(unit, system, 0)`, §3.1.1). Vanilla never sets the bit.
 
 **Group move** (`0x2a7b80`):
 1. Create a coordinator.
@@ -1141,7 +1559,7 @@ Three separate spatial structures exist. The port can unify them only if every q
 
 | area | entry points |
 |---|---|
-| Passability | grid `0x5116c0`, test `0x38e390`, recompute `0x59f4b0` / `0x59f110`, stamping `0x4f88b0`, movement classes `0x477900` / `0x477c10` / `0x477b70` |
+| Passability | grid `0x5116c0`, test `0x38e390`, recompute `0x59f4b0` / `0x59f110`, stamping `0x4f88b0` (service `0x4f90c0`, unstamp `0x4f90f0`, load broadcast `0x2a8730` → `0x394510`), death-clone behaviour strip `0x29f270`, movement classes `0x477900` / `0x477c10` / `0x477b70` |
 | Land search | `0x5a2830`, `0x5a2e00`, `0x5a3020`, `0x5a2200`, `0x5a0550`, `0x59fef0`, `0x5a4130`, `0x5a50d0`, region build `0x50fcd0` |
 | Dynamic pathfinder | `0x673b10`, `0x675240`, `0x67a0d0`, `0x67a3d0`, `0x679740`, `0x67cef0` |
 | Space planner | `0x59a900`, `0x59d4a0`, `0x596d40`, `0x599170`, `0x599380`, `0x597dc0`, `0x59caa0`, `0x59e5b0`, retries `0x417520` |

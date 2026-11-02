@@ -3,9 +3,13 @@
 // [port] / [L] marks behaviour the RE docs do not fix.
 #include "alamo/ai/galactic_ai.hpp"
 
+#include <charconv>
+#include <span>
+
 #include "alamo/ai/ai_free_store_path.hpp"
 
 #include "alamo/data/xml.hpp"
+#include "alamo/lua/gc_schedule.hpp"  // OPT2 t04
 #include "galactic_ai_impl.hpp"
 
 namespace alamo::ai {
@@ -50,9 +54,14 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
         out = pa->ctx.budget.pools_total();
         return true;
     };
+    // BudgetFractionToBuild 0x667120 fails only without a goal system (AI_GALACTIC_TOKENS) [H]. The AIBudgetClass is
+    // embedded in the goal system (+0x190), so it exists before its Init 0x6137b0; Init evaluates the category
+    // weights first (AI_GALACTIC_2 §3.2), when every rate / available still holds its constructed 0 [M: ctor zeros]
+    // (A2 f t01: failing here made the Empire's Infrastructure / MajorItem equations fail at Init, so Offensive got the
+    // whole starting bank).
     h.budget = [this](int32_t p, std::string_view category, double& rate, double& available) {
         const PlayerAi* pa = player_ai(p);
-        if (!pa || !pa->ctx.budget.initialised()) return false;
+        if (!pa) return false;
         if (category.empty()) {  // every category: budget +0x68 and the player's credits [H]
             rate = pa->ctx.budget.income_per_second();
             available = sim.credits(p);
@@ -181,7 +190,11 @@ PlanetIndex GalacticAiWorld::Impl::planet_arg(const lua::AiArg& a) const {
 }
 
 cmd::RejectReason GalacticAiWorld::Impl::order(int32_t player, const cmd::EventData& ev, const std::string& what) {
-    const cmd::RejectReason r = sink ? sink(static_cast<uint8_t>(player), ev) : cmd::RejectReason::Unhandled;
+    return note_order(player, sink ? sink(static_cast<uint8_t>(player), ev) : cmd::RejectReason::Unhandled, what);
+}
+
+// The bookkeeping of order() for an AI command the AI executes as a direct call instead of an event.
+cmd::RejectReason GalacticAiWorld::Impl::note_order(int32_t player, cmd::RejectReason r, const std::string& what) {
     ++orders;
     if (r != cmd::RejectReason::None) ++rejected;
     decide(player, "order " + what + (r == cmd::RejectReason::None ? "" : " rejected " + std::string(cmd::reject_reason_name(r))));
@@ -346,14 +359,17 @@ void GalacticAiWorld::Impl::tf_release_forces(int32_t tf, double fraction) {
     const auto it = tfs.find(tf);
     if (it == tfs.end()) return;
     TaskForceRec& t = it->second;
-    const auto n = static_cast<size_t>(std::floor(fraction * static_cast<double>(t.units.size()) + 1e-9));
-    t.units.erase(t.units.begin(), t.units.begin() + static_cast<std::ptrdiff_t>(std::min(n, t.units.size())));
+    const auto n = std::min(static_cast<size_t>(std::floor(fraction * static_cast<double>(t.units.size()) + 1e-9)), t.units.size());
+    for (size_t i = 0; i < n; ++i) pp_unit_left(t.plan, t.units[i]);  // 0x5ff610 -> 0x6c27d0
+    t.units.erase(t.units.begin(), t.units.begin() + static_cast<std::ptrdiff_t>(n));
 }
 
 void GalacticAiWorld::Impl::tf_release_unit(int32_t tf, ObjectHandle unit) {
     const auto it = tfs.find(tf);
     if (it == tfs.end()) return;
     auto& u = it->second.units;
+    if (std::find(u.begin(), u.end(), unit) == u.end()) return;
+    pp_unit_left(it->second.plan, unit);  // 0x5ff610 -> 0x6c27d0
     u.erase(std::remove(u.begin(), u.end(), unit), u.end());
 }
 
@@ -373,7 +389,10 @@ std::string GalacticAiWorld::Impl::tf_goal_type_name(int32_t tf) {
 bool GalacticAiWorld::Impl::tf_collect_free_units(int32_t tf) {
     const auto it = tfs.find(tf);
     if (it == tfs.end()) return false;
-    for (const ObjectHandle u : free_units(it->second.player)) it->second.units.push_back(u);
+    for (const ObjectHandle u : free_units(it->second.player)) {
+        off_free_store(u);
+        it->second.units.push_back(u);
+    }
     if (!it->second.units.empty()) it->second.had_units = true;
     return true;
 }
@@ -522,8 +541,9 @@ bool PlayerAi::accept(Goal& g) {
     const uint32_t k = pick_weighted(ratio, w->rng.synced());
     const uint32_t plan = cand[k];
     // PotentialPlan solve at proposal time (draws Plan Setup C / IgnoreTarget contrast / MagicPlan floats).
+    // Init's first solve ignores the free-store reservations and reserves nothing (A1_READINGS §28.6 step 1).
     PotentialPlanRec pp;
-    if (!w->solve_potential_plan(*this, plan, g.type, g.target, pp)) {
+    if (!w->solve_potential_plan(*this, plan, g.type, g.target, pp, true)) {
         ++w->stats[gname + " no potential plan (" + w->library.plans[plan].name + ")"];
         return false;
     }
@@ -535,14 +555,13 @@ bool PlayerAi::accept(Goal& g) {
     g.eta = pp.eta;
     g.pp_handle = h;
     w->pps.emplace(h, std::move(pp));
-    w->reserve_pp_units(h);
     return true;
 }
 
 bool PlayerAi::plan_invalid(const Goal& g) {
     if (g.running < 0) return true;
     const auto it = w->plans.find(g.running);
-    return it == w->plans.end() || it->second.ended;
+    return it == w->plans.end() || it->second.ended || w->pp_stolen(g.pp_handle);
 }
 
 bool PlayerAi::replaceable(const Goal& g) {
@@ -742,7 +761,10 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
         for (const PpSelection& s : pp.sel) {
             if (s.tf != static_cast<int32_t>(i)) continue;
             if (s.unit) {
-                if (store.alive(s.unit) && store.owner(s.unit) == p.player && !tf_owns(s.unit)) tf.units.push_back(s.unit);
+                if (store.alive(s.unit) && store.owner(s.unit) == p.player && !tf_owns(s.unit)) {
+                    off_free_store(s.unit);
+                    tf.units.push_back(s.unit);
+                }
             } else {
                 tf.wanted.push_back(s.type);
                 tf.wanted_source.push_back(s.source);
@@ -780,7 +802,12 @@ void GalacticAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
         if (e && sim.pays_as_you_go(pi.player) && e->c + e->a > 0.0f) reclaim[pi.goal_key] = payg_reclaim(id, e->c + e->a);
     }
     end_plan_builds(id);
-    for (const int32_t t : pi.tfs) tfs.erase(t);
+    for (const int32_t t : pi.tfs) {
+        const auto tit = tfs.find(t);
+        if (tit == tfs.end()) continue;
+        for (const ObjectHandle u : tit->second.units) pp_unit_left(id, u);  // plan end 0x5f6a50 step 3 -> 0x6c27d0
+        tfs.erase(tit);
+    }
     PlayerAi* pa = player_ai(pi.player);
     if (pa) {
         // [L, AI_GALACTIC_2 open item 6] a plan's exit removes its Block_Goal_Proposal entries.
@@ -793,7 +820,7 @@ void GalacticAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
     decide(pi.player, "plan " + std::to_string(id) + " " + library.plans[pi.plan].name + " ended " +
                           (pi.result ? "success" : "failure") + (by_goal_system ? " (released)" : ""));
     if (pi.vm) {
-        for (const std::string& e : pi.vm->errors()) errors.push_back(library.plans[pi.plan].name + ": " + e);
+        append_script_errors(*pi.vm, library.plans[pi.plan].name + ": ", errors);  // S7 t27: with SCRIPT ERROR lines
         lua::attach_markup_host(*pi.vm, nullptr);
         runtime->release(pi.plan, std::move(pi.vm));
     }
@@ -1284,12 +1311,11 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             }
             const auto& [p, units] = *pick;
             if (!valid_planet(p)) return -1;
-            cmd::EventData ev(cmd::EventType::Invade);
-            ev.set("planet", static_cast<uint32_t>(store.id(sim.planets()[p].object)));
-            std::vector<uint32_t> ids;
-            for (const ObjectHandle u : units) ids.push_back(static_cast<uint32_t>(store.id(u)));
-            ev.set_ids("units", std::move(ids));
-            if (order(t.player, ev, "invade " + planet_name(p) + " with " + std::to_string(units.size())) != cmd::RejectReason::None)
+            // 0x6ce600 calls GameObjectManager::Land_Invade (GalacticSim::invade) directly with the fleet owner as the
+            // attacker, not the Invade event: the event executor's gates (0x48ff50: galactic pause counter, pending
+            // story-linked battle, issuer = local player) do not apply (A1_READINGS §31.2, a1h t03).
+            if (note_order(t.player, sim.invade(t.player, p, units), "invade " + planet_name(p) + " with " + std::to_string(units.size())) !=
+                cmd::RejectReason::None)
                 return -1;
             const int32_t id = new_status(plan, tf, StatusKind::Invade);
             statuses[id].dest = p;
@@ -1570,6 +1596,7 @@ bool GalacticAiWorld::Impl::tf_add_unit(int32_t tf, ObjectHandle unit) {
     const auto it = tfs.find(tf);
     if (it == tfs.end() || !it->second.alive || !store.alive(unit) || store.owner(unit) != it->second.player || tf_owns(unit))
         return false;
+    off_free_store(unit);
     it->second.units.push_back(unit);
     it->second.had_units = true;
     return true;
@@ -1718,6 +1745,7 @@ void GalacticAiWorld::Impl::service_free_store(int32_t player) {
         const double last = lua::global_number(vm, "LastUnitService", 0.0);
         if (t - last > rate) {
             for (const ObjectHandle u : free_units(player)) {
+                if (unit_reserved.count(store.id(u)) != 0) continue;  // entry +0x30 set (0x4d5a70, A1_READINGS §28.5)
                 lua::AiEventArg a;
                 a.kind = lua::AiEventArg::Object;
                 a.object = u;
@@ -1729,7 +1757,7 @@ void GalacticAiWorld::Impl::service_free_store(int32_t player) {
         }
     }
     drain_world_requests(world, player, -1);
-    for (const std::string& e : vm.errors()) errors.push_back("free store " + std::to_string(player) + ": " + e);
+    append_script_errors(vm, "free store " + std::to_string(player) + ": ", errors);  // S7 t27: with SCRIPT ERROR lines
     lua::clear_script_logs(vm);
 }
 
@@ -1869,6 +1897,11 @@ bool GalacticAiWorld::start(std::vector<std::string>* diagnostics) {
         w.sim.set_production_service_hook([token, self](PlanetIndex p) {
             if (!token.expired()) self->market_planet(p);
         });
+        // q2f t01: an AI player's pay-as-you-go installments go through its budget (0x53b900).
+        w.sim.set_installment_hook([token, self, gs = &w.sim](PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a) {
+            if (!token.expired()) return self->installment(p, q, head, a);
+            return gs->players()[static_cast<size_t>(head.player)].account.credits >= a ? a : -1.0f;  // no AI any more
+        });
     }
     return any;
 }
@@ -1878,6 +1911,16 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
     w.now = now;
     if (w.perception_frame != now) {
         w.perception_frame = now;
+        {  // OPT2 t04: staggered scheduled Lua collections, once per frame before any script of this world runs
+            std::vector<lua::LuaVm*> vms;  // free stores by player, plans by id, evaluators by name (saved orders)
+            for (const auto& a : w.ai)
+                if (a && a->fs_vm) vms.push_back(a->fs_vm.get());
+            for (const auto& [id, pi] : w.plans)
+                if (pi.vm) vms.push_back(pi.vm.get());
+            for (const auto& [key, e] : w.scripts.loaded_vms())
+                if (e.vm) vms.push_back(e.vm.get());
+            lua::collect_scheduled(vms, static_cast<uint64_t>(now), w.cfg.lua_gc_pf);
+        }
         w.snap = snapshot_from_sim(w.sim, w.cfg.ai_uses_fog_galactic);
         w.perc.update(w.snap, static_cast<uint32_t>(w.sim.frame()));
         w.mem.clear();
@@ -1959,8 +2002,7 @@ const std::vector<AiDecision>& GalacticAiWorld::decision_log() const { return im
 std::vector<std::string> GalacticAiWorld::lua_errors() const {
     std::vector<std::string> e = impl_->errors;
     for (const auto& [id, p] : impl_->plans)
-        if (p.vm)
-            for (const std::string& x : p.vm->errors()) e.push_back(impl_->library.plans[p.plan].name + ": " + x);
+        if (p.vm) append_script_errors(*p.vm, impl_->library.plans[p.plan].name + ": ", e);  // S7 t27: with SCRIPT ERROR lines
     return e;
 }
 uint64_t GalacticAiWorld::orders_issued() const { return impl_->orders; }
@@ -1986,6 +2028,20 @@ size_t GalacticAiWorld::pending_free_store_moves() const {
     return n;
 }
 
+objects::ObjectHandle GalacticAiWorld::free_store_supply(int32_t player, uint32_t type) const {
+    return impl_->player_ai(player) ? impl_->free_store_supply(player, type) : objects::ObjectHandle{};
+}
+
+int32_t GalacticAiWorld::free_store_owner(objects::ObjectHandle unit) const {
+    const auto it = impl_->unit_reserved.find(impl_->store.id(unit));
+    return it == impl_->unit_reserved.end() ? -1 : it->second;
+}
+
+void GalacticAiWorld::set_free_store_owner(objects::ObjectHandle unit, int32_t pp) {
+    if (pp < 0) impl_->unit_reserved.erase(impl_->store.id(unit));
+    else impl_->unit_reserved[impl_->store.id(unit)] = pp;
+}
+
 int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perception, std::string_view application,
                                           std::string_view reachability, double probability) {
     if (!impl_->player_ai(player)) return -1;
@@ -2005,8 +2061,10 @@ std::vector<PlanetIndex> GalacticAiWorld::reach_planets(int32_t player, int leve
     return pa->source_planets(level);
 }
 
+float GalacticAiWorld::plan_production_time(int32_t running) const { return impl_->goal_production_time(running); }
+
 std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal,
-                                                           int32_t target, bool* ok) {
+                                                           int32_t target, bool* ok, float* eta) {
     Impl& w = *impl_;
     std::vector<uint32_t> out;
     if (ok) *ok = false;
@@ -2018,6 +2076,7 @@ std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std:
     if (!w.solve_potential_plan(*pa, p, g, target, rec)) return out;
     for (const PpSelection& s : rec.sel) out.push_back(s.type);
     if (ok) *ok = true;
+    if (eta) *eta = rec.eta;
     return out;
 }
 
@@ -2185,6 +2244,15 @@ std::vector<GalacticAiDifficulty> load_ai_difficulties(const FileProvider& files
     return out;
 }
 
+namespace {
+bool parse_count(std::string_view s, int32_t& out) {  // a whole decimal integer (surrounding blanks allowed)
+    s = ai_trim(s);
+    if (s.empty()) return false;
+    const auto r = std::from_chars(s.data(), s.data() + s.size(), out);
+    return r.ec == std::errc() && r.ptr == s.data() + s.size();
+}
+}  // namespace
+
 std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameObjectTypes& types) {
     std::vector<GalacticAiTypeInfo> out(types.raw().type_count());
     for (size_t t = 0; t < out.size(); ++t) {
@@ -2228,6 +2296,30 @@ std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameOb
             if (m != objects::kNone && static_cast<size_t>(m) < out.size()) out[static_cast<size_t>(m)].company_member = true;
         for (const objects::TypeIndex m : types.get_type_refs(ti, "Squadron_Units"))
             if (m != objects::kNone && static_cast<size_t>(m) < out.size()) out[static_cast<size_t>(m)].squadron_member = true;
+    }
+    // Starting_Spawned_Units_Tech_0..5: (type, count) lists, repeated tags appended (the hangar / tactical reading).
+    for (size_t t = 0; t < out.size(); ++t) {
+        const auto ti = static_cast<objects::TypeIndex>(t);
+        for (size_t n = 0; n < kSpawnTechSlots; ++n) {
+            const std::span<const std::string_view> toks = types.get_list(ti, "Starting_Spawned_Units_Tech_" + std::to_string(n));
+            for (size_t i = 0; i < toks.size(); ++i) {
+                std::string_view name = ai_trim(toks[i]);
+                int32_t count = 0;
+                const size_t cut = name.find(',') != std::string_view::npos ? name.find(',') : name.find_last_of(" \t");
+                bool ok = false;
+                if (cut != std::string_view::npos) {  // "Type, N" in one token
+                    ok = parse_count(name.substr(cut + 1), count);
+                    name = ai_trim(name.substr(0, cut));
+                } else if (i + 1 < toks.size()) {  // "Type" "N" as two tokens
+                    ok = parse_count(toks[i + 1], count);
+                    if (ok) ++i;
+                }
+                if (!ok || name.empty()) continue;
+                const objects::TypeIndex m = types.resolve_name(name);
+                if (m != objects::kNone && static_cast<size_t>(m) < out.size())
+                    out[t].spawn_tech[n].push_back({static_cast<uint32_t>(m), count});
+            }
+        }
     }
     fill_category_masks(out);
     return out;

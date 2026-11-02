@@ -229,6 +229,23 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
             r.leader_name = std::string(trim_view(n.child_text("Faction_Leader")));
             r.leader_company_name = std::string(trim_view(n.child_text("Faction_Leader_Company")));
             r.primary_enemy_name = std::string(trim_view(n.child_text("Primary_Enemy")));
+            // S7 t30 (TACTICAL_COMBAT §2.10): the relation lists.
+            const auto names = [](std::string_view s) {
+                std::vector<std::string> v;
+                std::string cur;
+                for (const char ch : s) {
+                    if (ch == ',' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+                        if (!cur.empty()) v.push_back(std::move(cur));
+                        cur.clear();
+                    } else {
+                        cur.push_back(ch);
+                    }
+                }
+                if (!cur.empty()) v.push_back(std::move(cur));
+                return v;
+            };
+            r.allies = names(n.child_text("Allies"));
+            r.enemies = names(n.child_text("Enemies"));
             out.push_back(std::move(r));
         }
     }

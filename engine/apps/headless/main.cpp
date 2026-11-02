@@ -44,9 +44,16 @@
 //   alamo_headless --economy --galactic-ai [--battles auto|fight|fight-all] [--ai-log FILE] [--ai-golden FILE] ...
 //       A2: AI-vs-AI galactic campaign, every playable faction a galactic AI player (ai_run.hpp).
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
-//   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-station [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
+//       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py.
+//       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
+//   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-land-campaign|foc-station|skirmish [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
-//       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land invasion.
+//       [--expect-skirmish-base]: foc-land only (t50): fail unless both sides start with a pre-built base, the AI acts and shots are fired.
+//       skai (q2f t04): foc-land and skirmish are the skirmish host: Empire (slot 0) vs Rebel (slot 1) on an _MP_ map
+//       (skirmish: --map, default _MP_SPACE_GEONOSIS), MP_Default_Credits, the factions' skirmish default forces, the battle
+//       started on the map; [--human FACTION]: that slot is an idle human (no AI, no orders).
+//       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land skirmish (t50), foc-land-campaign: the campaign-rules land invasion.
+//       [--fail-on-lua-errors]: fail on any tactical AI Lua error (foc-station always does; a1j t07).
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
 //       reward, cause) with the game-side trigger stream, and per-tick CRCs incl. "story". Campaign
 //       default Full_Story_Campaign_Underworld.
@@ -156,9 +163,12 @@ struct Options {
     bool galactic_ai = false;
     std::string ai_log, ai_golden;
     std::string ai_human, ai_human_script;  // A2 galactic: --human FACTION [--human-script FILE]
+    std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs)
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
     std::string skirmish_ai;
     bool expect_battle_end = false;  // S10 land outcome: --expect-battle-end
+    bool expect_skirmish_base = false;  // t50: --expect-skirmish-base
+    bool fail_on_lua_errors = false;  // a1j t07: --fail-on-lua-errors
     // N1 save / load (save_run.hpp)
     std::string save_session, save_file, load_file;
     std::string save_when = "any";  // N1 stage 2: --save-when any|battle|galactic|pending
@@ -722,15 +732,15 @@ int replay_mode(const Options& opt) {
     bool ok = true;
     alamo::CrcLog log;
     if (opt.check_workers) {
-        const auto counts = alamo::jobs::determinism_worker_counts();
-        run_one(counts.front(), log);
-        for (size_t i = 1; i < counts.size(); ++i) {
-            alamo::CrcLog other;
-            run_one(counts[i], other);
-            const auto d = alamo::first_divergence(log, other);
-            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], d.message.c_str());
-            if (d.diverged) ok = false;
-        }
+        auto rep = alamo::jobs::check_worker_counts([&](int32_t w) {
+            alamo::CrcLog l;
+            run_one(w, l);
+            return l;
+        });
+        for (size_t i = 1; i < rep.runs.size(); ++i)
+            std::printf("  workers %d vs %d: %s\n", rep.runs.front().workers, rep.runs[i].workers, rep.runs[i].vs_first.message.c_str());
+        ok = rep.ok();
+        log = std::move(rep.first);
     } else {
         run_one(opt.workers, log);
     }
@@ -802,10 +812,13 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--galactic-ai") opt.galactic_ai = true;  // A2
         else if (a == "--skirmish-ai") opt.skirmish_ai = next();  // A1 stage 2
         else if (a == "--expect-battle-end") opt.expect_battle_end = true;  // S10 land outcome
+        else if (a == "--expect-skirmish-base") opt.expect_skirmish_base = true;  // t50
+        else if (a == "--fail-on-lua-errors") opt.fail_on_lua_errors = true;  // a1j t07
         else if (a == "--ai-log") opt.ai_log = next();
         else if (a == "--ai-golden") opt.ai_golden = next();
         else if (a == "--human") opt.ai_human = next();                // A2 galactic
         else if (a == "--human-script") opt.ai_human_script = next();  // A2 galactic
+        else if (a == "--trace-out") opt.trace_out = next();            // q2f t05
         else if (a == "--aggressor") opt.aggressor = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--battle-retreat") opt.battle_retreat = static_cast<float>(std::strtod(next().c_str(), nullptr));
         else if (a == "--battle-max-frames") opt.battle_max_frames = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
@@ -885,9 +898,12 @@ static int headless_main(int argc, char** argv) {
         if (!opt.skirmish_ai.empty()) {  // A1 stage 2: --skirmish-ai synthetic|foc [--map NAME]
             m.map = opt.map;
             m.expect_battle_end = opt.expect_battle_end;
+            m.expect_skirmish_base = opt.expect_skirmish_base;
+            m.human = opt.ai_human;  // skai: --skirmish-ai skirmish --human FACTION
+            m.fail_on_lua_errors = opt.fail_on_lua_errors;
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
         }
-        if (opt.story) {
+        if (opt.story && !(opt.economy && opt.galactic_ai)) {
             if (!opt.ticks_set && opt.frames_set) m.ticks = opt.frames;
             return story_run(m, opt.data_dir, opt.story_out, opt.story_golden);
         }
@@ -899,6 +915,8 @@ static int headless_main(int argc, char** argv) {
             a.ai_golden = opt.ai_golden;
             a.human = opt.ai_human;                // A2 galactic
             a.human_script = opt.ai_human_script;  // A2 galactic
+            a.trace_out = opt.trace_out;           // q2f t05
+            a.story = opt.story;                   // q2f t03
             a.verbose = !opt.quiet;
             return ai_campaign_run(m, a);
         }

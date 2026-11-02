@@ -47,9 +47,13 @@
 // ids = (player << 20) | slot.
 //
 // A2 tactical: slot 10 = Find_Plan_For_Goal (one synced draw) + the tactical PotentialPlan solve (tactical_pp.hpp:
-// the land / space marshaller lists on run_pp_solver; a failed solve rejects the candidate); the selection's free-store
-// units / pool entries / pads are reserved (+0x30) until the task force's Produce_Force gathers them (free units join,
-// pool entries become pending reinforcements, pads become Build reservations; nothing is bought: AI_GALACTIC_3 §1.11).
+// the land / space marshaller lists on run_pp_solver; a failed solve rejects the candidate). Reservations follow
+// A1_READINGS §28.6 (a1g t01): the proposal's solve ignores free-store reservations and reserves nothing; at accept in
+// Resolve_Category the PP is re-solved honouring them, then its free-store units (entry +0x30), pool entries and pads
+// are reserved; every Commit suspends the +0x30 entries and kept goals re-assert them; a plan whose unit another PP
+// reserved meanwhile is invalid; a unit a task force releases leaves its PP. The task force's Produce_Force gathers the
+// selection (free units join, pool entries become pending reinforcements, pads become Build reservations; nothing is
+// bought: AI_GALACTIC_3 §1.11).
 // FIRST-CUT PARTS (docs/PHASE4.md A1 open items): blocking-status
 // completion rules (open item 3) are this port's: move = every live unit without a movement goal (A2 tactical: an
 // Attack_Move to an object completes when the object dies, units re-ordered only when it moved), attack =
@@ -71,8 +75,10 @@
 #include "alamo/ai/tactical/damage_tracking.hpp"
 #include "alamo/ai/tactical/free_store.hpp"
 #include "alamo/ai/tactical/perception_world.hpp"
+#include "alamo/ai/tactical/tactical_pp.hpp"  // a1g t04: TacticalPpPick (reinforce_join_pp)
 #include "alamo/commands/command.hpp"
 #include "alamo/commands/events.hpp"
+#include "alamo/core/parallel.hpp"  // OPT2 t04: lua_gc_pf
 #include "alamo/lua/players.hpp"
 #include "alamo/objects/object_store.hpp"
 
@@ -153,6 +159,15 @@ struct OpportunityTargetEvent {
     int32_t hardpoint_type = -1;  // HardPointType of the hard point (5..10 for weapons)
 };
 
+// a1j t01 - signal 0x19 "reinforcements unloaded" (ReinforcementsUnloadedDataClass, A1_READINGS §32.1 / §36): a land
+// landing object finished its unload (0x6438a0) or was removed while unloading (detach vf15 0x6442d0). `key` = the
+// Reinforce event's unit field (the pool entry); `units` = the unloaded object ids in spawn order.
+struct ReinforcementsUnloaded {
+    int32_t player = -1;
+    int32_t key = -1;
+    std::vector<int32_t> units;
+};
+
 // --- A2 tactical: a build pad the player can build on (the TacticalBuild marshaller's pool, AI_TACTICAL §5.1
 // side table 0x4d29a0): visible, empty, friendly or neutral [M], and the UC_ types its pad type lists for the
 // player's faction (Tactical_Buildable_Objects_Multiplayer in skirmish, _Campaign otherwise). ---
@@ -203,12 +218,19 @@ public:
     // entry (key = the Reinforce event's unit field), or an entry with key < 0 = FAILED (Production_Failed). No RNG.
     // Default: always fails (no parent galactic mode / host without the hook).
     virtual TacticalReinforcement hijack_unit(int32_t /*player*/, int32_t /*type*/, bool /*steal*/) { return {}; }
-    // Active_By_Default re-apply (TACTICAL_GAPS §1.2 [H]): called with the PerceptionObject id when a unit of `player`
-    // enters the AI free store (AIFreeStoreClass vf1 0x4d4aa0: every admission, start-up and new units included), and
-    // when a task force releases a unit the free store then refuses (TaskForceClass vf49 0x5ff610). The host calls
-    // AbilitySystem::apply_active_by_default(id, frame) - skipping a unit whose HUNT is active (0x39ad40) on the
-    // task-force path - and un-immobilises it first (0x3a8e50(obj, 0)). Called during the AI update. Default: nothing.
-    virtual void unit_released(int32_t /*player*/, int32_t /*object_id*/) {}
+    // Active_By_Default re-apply (TACTICAL_GAPS §1.2, corrected by A1_READINGS §28.8 [H]): called with the
+    // PerceptionObject id of a unit of `player`
+    //   * OrderLockDone - the free store's signal 10/11 handler (AIFreeStoreClass vf1 0x4d4aa0) for a unit a script
+    //     locked with Lock_Current_Orders: its order finished [port: the unit went idle]. The AI has already released
+    //     the lock (0x3a8e50(obj, 0) on the script's share: orders_locked cleared); the host applies
+    //     AbilitySystem::apply_active_by_default(id, frame) unconditionally. Free-store admission itself does not call.
+    //   * TaskForce - a task force releases the unit (TaskForceClass vf49 0x5ff610), after it went back to the free store
+    //     or was refused. The host applies Active_By_Default unless the unit's movement is locked (0x39ad40: the
+    //     ability share of obj +0x3a8, a script lock, a suspended locomotor [port: HUNT active stands in for the
+    //     locomotor term]). No lock is released on this path.
+    // Called during the AI update. Default: nothing.
+    enum class UnitRelease : uint8_t { OrderLockDone, TaskForce };
+    virtual void unit_released(int32_t /*player*/, int32_t /*object_id*/, UnitRelease /*path*/) {}
     // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4). space_drop_frame: the player's entry facing and the
     // playable box (false: facing 0, no box). space_prevention_hit (0x4d8d10): `p` lies inside the
     // Reinforcement_Prevention_Radius (2-D, strict) of a live object whose owner is not allied with `player`.
@@ -221,6 +243,31 @@ public:
     virtual bool space_drop_ok(int32_t /*player*/, int32_t /*key*/, const Vec3f& /*p*/, float /*facing_deg*/, float /*sweep*/) {
         return true;
     }
+    // S7 t15 A1 - "unit ability finished" (object signal 0x29: every ability end, ABILITIES_HARDPOINTS §2.6, and the
+    // jetpack's swap back to the primary locomotor, MOVEMENT §3.1.1 step 6): the object ids that raised it since the last
+    // AI frame, in the order they happened (an id may repeat). The AI feeds its scripts' object bridge (blocking
+    // GameObjectWrapper.Activate_Ability), finishes the task-force AbilityBlockStatus counts and raises plan event 19
+    // <TF>_Unit_Ability_Finished(tf, unit) for task-force members that are not dying. Default: none.
+    virtual std::vector<int32_t> ability_finished() { return {}; }
+    // S7 t21 - the unit's movement lock (0x39ad40: ability share, script lock, suspended locomotor; A1_READINGS §28.9):
+    // a locked member does not join a SpaceAmbushBlockStatus (AI_TACTICAL §7.3.1). Default: never locked.
+    virtual bool movement_locked(int32_t /*object_id*/) { return false; }
+    // S7 t27 - the land sight factor 0x3722a0 of land Prepare_Ambush (AI_TACTICAL §7.3.3 item 5): the weather
+    // Sight_Range_Modifier for the Weather_Category of `type` (the target's company type), for the object `object_id`
+    // (its owner decides the weather exemption); 1.0 without strong weather / no entry. Default: 1.0 (no weather).
+    virtual float sight_weather_factor(int32_t /*type*/, int32_t /*object_id*/) { return 1.0f; }
+    // a1g t04 follow-up - land TF.Reinforce drop validity (LandMode vf80 0x3b5f60 -> 0x3b6170, TACTICAL_GAPS
+    // §4.2.1, A1_READINGS §30.7): can pool entry `key` of `player` land at spot `p` (the company layout's centre)? The host
+    // refuses unless every formation slot is passable for its member, not fogged for `player`, clear of blocking footprints
+    // and inside the reinforcement radii (enabling / prevention). A refused spot sends the unit to the next ring spot. Default:
+    // every spot valid (hosts without the hook).
+    virtual bool land_drop_ok(int32_t /*player*/, int32_t /*key*/, const Vec3f& /*p*/) { return true; }
+    // a1j t01 - land TF.Reinforce with a timed landing (ReinforceBlockStatus, A1_READINGS §36). reinforce_in_flight: the
+    // Reinforce of pool entry `key` just executed for `player` put the company in a landing object that has not finished
+    // its unload (the units come later, by reinforcements_unloaded). reinforcements_unloaded: the signal 0x19 records of
+    // the tick just run, in the order they were sent. Defaults: never in flight, none (the units exist at the order).
+    virtual bool reinforce_in_flight(int32_t /*player*/, int32_t /*key*/) { return false; }
+    virtual std::vector<ReinforcementsUnloaded> reinforcements_unloaded() { return {}; }
 };
 
 struct TacticalAiPlayerConfig {
@@ -251,6 +298,9 @@ struct TacticalAiConfig {
     std::vector<std::string> plan_files;            // load order (the mode's plan folder)
     bool log_decisions = true;
     uint32_t game_seed = 0;                         // A2 tactical: session seed (perception '#' reseed, AI_GALACTIC_3 §7.3)
+    // OPT2 t04: fan-out for the per-update scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); any
+    // value gives identical results.
+    ParallelFor lua_gc_pf = serial_for;
 };
 
 struct TacticalAiDecision {
@@ -285,6 +335,12 @@ public:
     // Battle end (slot 7 / context teardown): every running plan ends (released by the goal system).
     void end_battle();
     void set_suspended(bool suspended);
+    // S7 t26 (AI_TACTICAL §7.3.3 item 2) - object signal 0xb "a new order replaces this unit's order", raised by the host
+    // when it executes an order on `object_id` (A1_READINGS §33.3: task-force movement collectors, unit Move_To /
+    // Attack_Move, MoveToObject, attack orders, ...): the Activate_Ability blocks waiting on the unit (or its team
+    // container) end - the object bridge's GameObjectWrapper blocks and the task-force AbilityBlockStatus counts. No plan
+    // event. Call at the moment the order executes (a block created after it must not see it).
+    void order_replaced(int32_t object_id);
     // FOW hook (docs/re/FOG_OF_WAR.md: a FOW cell of `player` reached state 0): threat-grid refog at the cell
     // centre (AI_TACTICAL_PERCEPTION §4). Fog itself is the FOW system's; perception reads it through the
     // PerceptionWorld object_fogged / point_fogged callbacks the host fills (absent = never fogged).
@@ -347,26 +403,62 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Ranks one reinforcement point for reinforce_landing_point: false drops it, otherwise `key` (lower first).
-using ReinforcePointRank = std::function<bool(const Vec3f& point, double& key)>;
+// a1g t04 - land TF.Reinforce placement (0x6eaf60, A1_READINGS §30.7 [H]).
+// Ranks one reinforcement point for reinforce_points: false drops it, otherwise `key` (lower first; float, as the
+// original's multimap key).
+using ReinforcePointRank = std::function<bool(const Vec3f& point, float& key)>;
 
-// S10 AI land reinforcement - the landing position of a land TF.Reinforce near `at` (0x6eaf60; drop validity
-// TACTICAL_GAPS §4.2 [H radius rule]). With Use_Reinforcement_Points a drop slot is valid only within 2-D <=
-// Reinforcement_Enabling_Radius of an allied live object. The candidates are the own / allied live objects with an
-// enabling radius > 0; `rank` drops and orders them (A1_READINGS §25.3: points whose zone is not in the destination's
-// flood set at the TF goal's level are dropped, the rest sorted by the slot-7 path cost from the point's zone; without a
-// region on either side by the 2-D distance). Without `rank` the key is the 2-D distance² to `at`. The lowest key wins
-// (strict <: the first in snapshot (GOM) order wins a tie), and `at` := that object's position moved toward `at` by
-// min(distance, radius / 2) [port: the host lays its formation slots around the point; half the radius keeps them
-// inside]. False = no candidate left (nothing can land; Reinforce fails). Without Use_Reinforcement_Points `at` is
-// kept. The host keeps its own drop checks (passability, fog, footprint, prevention radius) [port: not repeated
-// here]. `facts` has the same order as `w.objects`. No RNG.
-bool reinforce_landing_point(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
-                             bool use_reinforcement_points, Vec3f& at, const ReinforcePointRank& rank = {});
+// One allied reinforcement point in landing order.
+struct ReinforcePoint {
+    Vec3f position;
+    float radius = 0.0f;  // the type's Reinforcement_Enabling_Radius (+0x1e20)
+    float key = 0.0f;     // sort key (lower first)
+};
+
+// The candidate points of a land TF.Reinforce towards `dest` (§30.7 steps 1-3): the own / allied live objects with an
+// enabling radius > 0, in snapshot (GOM = land store list) order; `rank` drops and keys them (A1_READINGS §25.3 / §30.7:
+// a point whose zone is outside the destination's flood set is dropped, otherwise key = the slot-7 path cost from its zone
+// (a failed path = 1e18, kept and sorted last); without a region on either side the 2-D distance). Without `rank` the
+// key is the 2-D distance sqrtf(dx² + dy²) to `dest`. Sorted ascending by key, stable (equal keys keep snapshot order).
+// `facts` has the same order as `w.objects`. No RNG.
+std::vector<ReinforcePoint> reinforce_points(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
+                                             const Vec3f& dest, const ReinforcePointRank& rank = {});
+
+// The landing spots around one point, in try order (§30.7 step 4): θ = 0, then θ += 0.7853982f (float) while
+// θ < 6.2831855f; spot = (px + (r/2)·cos θ, py + (r/2)·sin θ, pz) in float (cos / sin: dmath, identical on every
+// compiler). The float accumulation reaches 6.283185 < 6.2831855 after eight steps, so the loop yields NINE spots, the
+// ninth at θ ≈ 2π (≈ the first spot) [H loop bounds; the ninth spot follows from them].
+std::vector<Vec3f> reinforce_ring(const ReinforcePoint& point);
+
+// Lands the pending units on the ring spots of `points` (§30.7 steps 4-5). For each point in order, for each of its
+// spots: stop when no unit is left or the remaining population `remaining` (the cap read once; +inf = no cap) is < 1;
+// else `land` the LAST pending unit at the spot. On success the unit is removed from `pending` and its population taken
+// off `remaining`; then trailing units that are null (`is_null`) or do not fit (population > remaining) are popped
+// (null ones removed from `pending`, non-fitting ones kept there for a later Reinforce; either clears "all placed").
+// A failed spot goes on to the next spot with the same unit. [port: the trailing pop also runs once before the first
+// spot, so a non-fitting last unit, which the host would refuse at every spot, does not block the others.]
+// Returns true only when every unit was placed and none was popped unplaced.
+using ReinforceLand = std::function<bool(const TacticalReinforcement& unit, const Vec3f& spot)>;
+using ReinforceIsNull = std::function<bool(const TacticalReinforcement& unit)>;
+bool reinforce_place(const std::vector<ReinforcePoint>& points, std::vector<TacticalReinforcement>& pending, float remaining,
+                     const ReinforceIsNull& is_null, const ReinforceLand& land);
+
+// a1g t04 + t01 - 0x6bf3d0 (PP, unit) (A1_READINGS §28.4): a unit delivered by a land TF.Reinforce joins the plan's
+// PotentialPlan unit list PP+0x108 (the FreeStore picks): it fills the first "null" slot of its type (a pick of another
+// source, i.e. not a free-store unit, with the same type: it becomes a FreeStore pick of `unit`, keeping its task force /
+// team) or is appended as a FreeStore pick of task force `tf`. Returns true when a null slot was filled; `filled` (if
+// given) receives that slot's previous pick, whose pool / pad reservation the caller releases. The entry +0x30 = PP
+// part is the caller's (the free store's reserve).
+bool reinforce_join_pp(std::vector<TacticalPpPick>& picks, int32_t unit, int32_t type, int32_t tf, TacticalPpPick* filled = nullptr);
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);
-// The plan files of one tactical mode's folder (Data\Scripts\AI\LandMode\ or SpaceMode\), sorted [port].
+
+// S7 t27 (AI_TACTICAL §7.3.3 item 5): the walk step of land Prepare_Ambush (0x6ec8b0): the land sight range 0x3722a0 =
+// Land_FOW_Reveal_Range x the weather Sight_Range_Modifier of the target's company type; <= 0 -> the target type's max
+// attack range (0x3749d0). A result <= 0 means no walk (the first point, no threat / box test).
+float land_ambush_step(float land_fow_reveal_range, float weather_sight_factor, float max_attack_range);
+// The plan files of a tactical mode: every plan folder in load order, as for the galactic AI (AI_GALACTIC §1.9.1 [H]).
 std::vector<std::string> tactical_plan_files(TacticalMode mode, const std::function<std::vector<std::string>(std::string_view)>& list);
 
 }  // namespace alamo::ai::tactical

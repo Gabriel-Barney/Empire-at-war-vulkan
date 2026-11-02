@@ -140,18 +140,31 @@ bool GalacticSim::change_owner(ObjectHandle object, int32_t player) {
 
 uint32_t GalacticSim::assemble_fleet(std::span<const ObjectHandle> units) {
     std::vector<ObjectHandle> picked;
-    std::vector<uint32_t> source;
+    std::vector<uint32_t> source;  // the unit's fleet; kNoFleet = landed on `at`'s surface (launched below)
     int32_t owner = kNoPlayer;
     PlanetIndex at = kInvalidPlanet;
     for (ObjectHandle u : units) {
         if (!store_->alive(u) || fleet_of(u) != kNoFleet || planet_of(u) != kInvalidPlanet) continue;
         if (std::find(picked.begin(), picked.end(), u) != picked.end()) continue;
         const uint32_t fl = fleet_containing(u);
-        if (fl == kNoFleet || fleets_[fl].moving || !valid_planet(fleets_[fl].planet)) continue;
+        int32_t u_owner = kNoPlayer;
+        PlanetIndex u_at = kInvalidPlanet;
+        if (fl != kNoFleet) {
+            if (fleets_[fl].moving || !valid_planet(fleets_[fl].planet)) continue;
+            u_owner = fleets_[fl].owner;
+            u_at = fleets_[fl].planet;
+        } else {  // a landed unit (surface list; structures and starbases never fly)
+            for (PlanetIndex i = 0; i < planets_.size() && u_at == kInvalidPlanet; ++i)
+                if (planets_[i].is_planet && std::find(planets_[i].surface.begin(), planets_[i].surface.end(), u) != planets_[i].surface.end())
+                    u_at = i;
+            if (u_at == kInvalidPlanet) continue;
+            u_owner = store_->owner(u);
+            if (!valid_player(u_owner)) continue;
+        }
         if (picked.empty()) {
-            owner = fleets_[fl].owner;
-            at = fleets_[fl].planet;
-        } else if (fleets_[fl].owner != owner || fleets_[fl].planet != at) {
+            owner = u_owner;
+            at = u_at;
+        } else if (u_owner != owner || u_at != at) {
             continue;
         }
         picked.push_back(u);
@@ -160,13 +173,21 @@ uint32_t GalacticSim::assemble_fleet(std::span<const ObjectHandle> units) {
     if (picked.empty()) return kNoFleet;
     // One fleet holding exactly these units: it is the assembled fleet.
     const uint32_t first = source[0];
-    if (std::all_of(source.begin(), source.end(), [first](uint32_t s) { return s == first; })) {
+    if (first != kNoFleet && std::all_of(source.begin(), source.end(), [first](uint32_t s) { return s == first; })) {
         size_t live = 0;
         for (ObjectHandle m : fleets_[first].contents) live += store_->alive(m) ? 1u : 0u;
         if (live == picked.size()) return first;
     }
     const uint32_t out = create_fleet(owner, at);
     for (size_t i = 0; i < picked.size(); ++i) {
+        if (source[i] == kNoFleet) {  // launch (FleetManagement op 4, SG 1.7): off the surface, reveal pass, into the fleet
+            std::vector<ObjectHandle>& surface = planets_[at].surface;
+            surface.erase(std::find(surface.begin(), surface.end(), picked[i]));
+            fleets_[out].contents.push_back(picked[i]);
+            fleets_[out].carried.push_back(0);
+            launch_reveal(at, picked[i]);
+            continue;
+        }
         FleetState& src = fleets_[source[i]];
         for (size_t k = 0; k < src.contents.size(); ++k)
             if (src.contents[k] == picked[i]) {
@@ -178,7 +199,7 @@ uint32_t GalacticSim::assemble_fleet(std::span<const ObjectHandle> units) {
         fleets_[out].carried.push_back(0);
     }
     for (uint32_t s : source)
-        if (fleets_[s].alive && fleets_[s].contents.empty()) kill_fleet(s);
+        if (s != kNoFleet && fleets_[s].alive && fleets_[s].contents.empty()) kill_fleet(s);
     return out;
 }
 

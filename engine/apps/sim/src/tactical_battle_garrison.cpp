@@ -84,7 +84,8 @@ void TacticalBattle::s4_init() {
     garrison_.set_allied(allied);
     garrison_.set_neutral_player(neutral);
     const float gc_secs = catalog_->capture_countdown(space_);  // REMAINING_GAPS §3.3: GameConstants when present
-    const float secs = gc_secs >= 0.0f ? gc_secs : space_ ? cfg_.space_capture_countdown : cfg_.land_capture_countdown;
+    // skai: L1_S4_REMAINING §4.2 start gate: the countdown is 0 in skirmish (a skirmish map battle: skirmish_map).
+    const float secs = skirmish_map() ? 0.0f : gc_secs >= 0.0f ? gc_secs : space_ ? cfg_.space_capture_countdown : cfg_.land_capture_countdown;
     captures_ = std::make_unique<tg::CapturePointSystem>(neutral, 4u, secs > 0.0f ? static_cast<uint32_t>(30.0f * secs + 0.5f) : 0u);
     captures_->set_allied(allied);
     captures_->set_neutral_owner([this](int32_t o) { return bt_owner_neutral(o); });  // REMAINING_GAPS §3.3
@@ -141,10 +142,11 @@ void TacticalBattle::s4_capture_reset(TacticalMode& mode, objects::ObjectId pad)
     objects::ObjectStore& store = mode.primary();
     const objects::ObjectHandle h = store.find(pad);
     if (!store.alive(h)) return;
-    if (store.owner(h) != neutral && !change_owner(mode, h, neutral)) {
+    if (const int32_t old = store.owner(h); old != neutral && !change_owner(mode, h, neutral)) {
         store.set_owner(h, neutral);
         mode.trees().set_owner(static_cast<tactical::EntityHandle>(pad), neutral);
         garrison_.set_owner(pad, neutral, store.position(h), store.facing(h), frame_);
+        fog_owner_changed(mode, h, old);  // a1h t01: REVEAL vf18 of a non-unit point
     }
     captures_->reset(pad, neutral);
 }
@@ -213,10 +215,11 @@ void TacticalBattle::s4_set_owner(TacticalMode& mode, objects::ObjectId id, int3
     objects::ObjectStore& store = mode.primary();
     const objects::ObjectHandle h = store.find(id);
     if (!store.alive(h) || owner < 0) return;
-    if (!change_owner(mode, h, owner)) {  // not a battle unit: store + trees (+ garrison state)
+    if (const int32_t old = store.owner(h); !change_owner(mode, h, owner)) {  // not a battle unit: store + trees (+ garrison state)
         store.set_owner(h, owner);
         mode.trees().set_owner(static_cast<tactical::EntityHandle>(id), owner);
         garrison_.set_owner(id, owner, store.position(h), store.facing(h), frame_);
+        fog_owner_changed(mode, h, old);  // a1h t01: REVEAL vf18 of a non-unit point (FOG_OF_WAR §3.2)
     }
     if (captures_ && captures_->is_point(id) && captures_->owner(id) != owner) captures_->set_owner(id, owner);
 }
@@ -404,6 +407,7 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
     }
     if (ids.empty()) return R::InvalidUnit;
     clear_queues(ids);
+    raise_order_replaced(ids);  // S7 t31: garrison enter (A1_READINGS §33.3 [M: raised at the order])
     const Vec3 a = garrison_.approach_point(holder, store.position(hh), store.facing(hh));
     exec_move(mode, ids, a.x, a.y, rng, mv::kNoFacing, false);  // group move to the approach point (cancels older ones)
     uint32_t n = 0;
@@ -425,7 +429,10 @@ cmd::RejectReason TacticalBattle::order_leave_garrison(TacticalMode& mode, uint8
         const objects::ObjectHandle hh = store.find(holder);
         const Vec3 p = store.exists(hh) ? store.position(hh) : store.position(u->h);
         const Vec3 f = store.exists(hh) ? store.facing(hh) : Vec3{1.0f, 0.0f, 0.0f};
-        if (garrison_.order_exit(id, p, f, frame_)) ++n;
+        if (garrison_.order_exit(id, p, f, frame_)) {
+            ++n;
+            raise_order_replaced(id);  // S7 t31: garrison exit (A1_READINGS §33.3)
+        }
     }
     s4_apply(mode);
     return n > 0 ? R::None : R::InvalidUnit;

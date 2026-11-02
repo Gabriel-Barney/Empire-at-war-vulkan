@@ -65,10 +65,12 @@
 // direction x speed x segment duration; speed = |derivative|, yaw = derivative direction, Z
 // unchanged; zero-length segments interpolate yaw linearly.
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <span>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
@@ -111,11 +113,19 @@ public:
 
     void add_static(ObjectId id, V2 center, float radius, uint32_t bits = kSpaceStatic);
     bool remove_static(ObjectId id);
-    bool has_static(ObjectId id) const { return statics_.find(id) != statics_.end(); }
+    bool has_static(ObjectId id) const;
+    // S7 t13: moves static entry `from` to id `to` unchanged (a map placement's entry, ted_grid.hpp map_stamp_id, handed to
+    // the object spawned for it; space_obstacles_sync removes it when that object is a battle unit that left). False (nothing changes) when `from` has no entry, `to`
+    // already has one, or from == to.
+    bool rekey_static(ObjectId from, ObjectId to);
+    // S8 t09: the static entry ids, ascending (map placements' negative ids first). Hosts remove the objects that left.
+    std::vector<ObjectId> static_ids() const;
+    // The static entry of `id` (centre, radius, SpaceCollisionType bits); false when there is none.
+    bool static_entry(ObjectId id, V2& center, float& radius, uint32_t& bits) const;
     // Replaces the track of `id`. `start_frame` = absolute frame of waypoint time 0.
     void set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps);
     void clear_track(ObjectId id);
-    bool has_track(ObjectId id) const { return tracks_.find(id) != tracks_.end(); }
+    bool has_track(ObjectId id) const;
 
     // OR of the bits of every entry the circle (radius) swept a -> b over absolute frames [t0, t1]
     // touches. `layer`: tracks of that layer are tested; statics are tested when `with_static`.
@@ -139,14 +149,51 @@ private:
         float r;
         uint32_t bits;
     };
+    // OPT3 t06: query_segment's per-piece values (start / end frame, start point, velocity, bit) formed once in set_track
+    // with the same float expressions the query used to form per call, plus the waypoints' bounding box for a cull.
+    struct Piece {
+        float ps = 0.0f, pe = 0.0f;
+        V2 p0, pv;
+        uint32_t bit = 0;
+        bool seg = false;  // a segment between two waypoints (the point moves); else before the first / after the last
+    };
     struct Track {
         uint32_t layer;
         float r;
         uint32_t start;
         std::vector<SpaceWaypoint> wps;
+        std::vector<Piece> pieces;  // derived from the fields above (make_pieces), never saved or hashed
+        V2 lo, hi;                  // waypoint bounding box
     };
-    std::map<ObjectId, Static> statics_;
-    std::map<ObjectId, Track> tracks_;
+    static void make_pieces(Track& t);
+    // OPT3 t06: id-sorted contiguous arrays (ascending id, the order the std::maps had) instead of tree nodes: the
+    // planner's inner loop walks every entry per query.
+    template <class T>
+    using IdVec = std::vector<std::pair<ObjectId, T>>;
+    template <class V>
+    static auto lower(V& v, ObjectId id) {
+        return std::lower_bound(v.begin(), v.end(), id, [](const auto& e, ObjectId k) { return e.first < k; });
+    }
+    template <class V>
+    static auto find(V& v, ObjectId id) {
+        const auto it = lower(v, id);
+        return it != v.end() && it->first == id ? it : v.end();
+    }
+    template <class T>
+    static void put(IdVec<T>& v, ObjectId id, T value) {  // insert or replace, keeping the order
+        const auto it = lower(v, id);
+        if (it != v.end() && it->first == id) it->second = std::move(value);
+        else v.emplace(it, id, std::move(value));
+    }
+    template <class T>
+    static bool erase(IdVec<T>& v, ObjectId id) {
+        const auto it = find(v, id);
+        if (it == v.end()) return false;
+        v.erase(it);
+        return true;
+    }
+    IdVec<Static> statics_;
+    IdVec<Track> tracks_;
     V2 box_min_, box_max_;
     bool has_box_ = false;
     uint32_t window_ = 45u * 90u;

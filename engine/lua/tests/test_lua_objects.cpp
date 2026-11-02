@@ -114,7 +114,10 @@ struct Db {
                    "<CategoryMask>Vehicle</CategoryMask><Property_Flags>HealsInfantry</Property_Flags>"
                    "<Behavior>SELECTABLE, UNIT_AI</Behavior></GroundVehicle>\n"
                    "<GroundCompany Name=\"Trooper_Team\"><Company_Units>Trooper, Trooper</Company_Units>"
-                   "<Behavior>TEAM</Behavior></GroundCompany>\n"
+                   "<Behavior>TEAM, TEAM_LOCOMOTOR</Behavior></GroundCompany>\n"
+                   "<GroundCompany Name=\"Squad\"><Company_Units>Squaddie, Squaddie</Company_Units>"
+                   "<Behavior>TEAM, LAND_TEAM_CONTAINER_LOCOMOTOR</Behavior></GroundCompany>\n"
+                   "<GroundInfantry Name=\"Squaddie\"><Behavior>LAND_TEAM_INFANTRY_LOCOMOTOR, UNIT_AI</Behavior></GroundInfantry>\n"
                    "<Marker Name=\"Marker_Generic\"><Behavior>MARKER</Behavior></Marker>\n"
                    "<SpaceUnit Name=\"Hero_Ship\"><Is_Named_Hero>Yes</Is_Named_Hero><Tactical_Health>1000</Tactical_Health>"
                    "<AI_Combat_Power>700</AI_Combat_Power><Build_Cost_Credits>1500</Build_Cost_Credits>"
@@ -470,6 +473,26 @@ static void test_spawn_and_state(const Db& db) {
                   "members = Find_All_Objects_Of_Type('Trooper') par = members[1].Get_Parent_Object().Get_Object_ID() "
                   "tid = team.Get_Object_ID()") == "");
     CHECK(gnum(vm, "sn") == 1.0 && gstr(vm, "tn") == "Trooper_Team" && gnum(vm, "cnt") == 2.0 && gnum(vm, "has") == 1.0);
+    // OI follow-up t04 (A1_READINGS §28.9 item 4): in land a team that is not a squad container locks / unlocks each
+    // member (a second lock or unlock warns per member); a squad container locks itself, a squad member locks its
+    // container, and Unlock on the container walks the members and leaves the container locked.
+    auto said = [&vm](const char* text) {
+        size_t n = 0;
+        for (const std::string& m : vm.messages()) n += m.find(text) != std::string::npos ? 1u : 0u;
+        return n;
+    };
+    CHECK(run(vm, "team.Lock_Current_Orders() team.Lock_Current_Orders() c1 = members[1].Can_Move() and 1 or 0 "
+                  "c2 = members[2].Can_Move() and 1 or 0 tc = team.Can_Move() and 1 or 0") == "");
+    CHECK(gnum(vm, "c1") == 0.0 && gnum(vm, "c2") == 0.0 && gnum(vm, "tc") == 1.0);
+    CHECK(said("Lock_Current_Orders - Trooper is already locked.  Script cannot stack locks.") == 2);
+    CHECK(run(vm, "team.Unlock_Current_Orders() team.Unlock_Current_Orders() c1 = members[1].Can_Move() and 1 or 0") == "");
+    CHECK(gnum(vm, "c1") == 1.0 && said("Unlock_Current_Orders - object Trooper is not locked.") == 2);
+    CHECK(run(vm, "sq = Spawn_Unit(Find_Object_Type('Squad'), mk, p1)[1] sm = Find_All_Objects_Of_Type('Squaddie') "
+                  "sq.Lock_Current_Orders() q1 = sq.Can_Move() and 1 or 0 m1 = sm[1].Can_Move() and 1 or 0 "
+                  "sm[2].Lock_Current_Orders() sq.Unlock_Current_Orders() q2 = sq.Can_Move() and 1 or 0") == "");
+    CHECK(gnum(vm, "q1") == 0.0 && gnum(vm, "m1") == 1.0 && gnum(vm, "q2") == 0.0);
+    CHECK(said("Lock_Current_Orders - Squad is already locked.") == 1 && said("object Squaddie is not locked.") == 2);
+    CHECK(run(vm, "sq.Despawn()") == "");
     CHECK(gnum(vm, "own") == 1.0 && gnum(vm, "tx") == 200.0 && gnum(vm, "par") == gnum(vm, "tid"));
     CHECK(contains(run(vm, "Spawn_Unit(Find_Object_Type('Tank'), mk)"), "LuaSpawnUnitCommandClass -- Invalid number of parameters."));
     CHECK(contains(run(vm, "Spawn_Unit('Tank', mk, p1)"), "LuaSpawnUnitCommandClass -- Invalid parameter for type."));
@@ -500,10 +523,11 @@ static void test_spawn_and_state(const Db& db) {
     CHECK(contains(run(vm, "t1.Make_Invulnerable(1)"), "Make_Invulnerable -- invalid type for parameter 1. Expected boolean."));
     CHECK(contains(run(vm, "t1.Make_Invulnerable()"), "Make_Invulnerable -- invalid number of parameters. Expected 1, got 0."));
     // Script flags land in the bridge state.
+    // (A suspended locomotor is not part of the movement lock, A1_READINGS §28.9; Can_Move is false for either.)
     CHECK(run(vm, "t1.Hide(true) t1.Set_Selectable(false) t1.Prevent_AI_Usage(true) t1.Prevent_All_Fire(true) "
-                  "t1.Prevent_Opportunity_Fire(true) t1.Suspend_Locomotor(true) t1.Highlight(true, 25) t1.Highlight_Small(true) "
+                  "t1.Prevent_Opportunity_Fire(true) t1.Lock_Current_Orders() t1.Suspend_Locomotor(true) t1.Highlight(true, 25) t1.Highlight_Small(true) "
                   "t1.Set_In_Limbo(true) t1.Override_Max_Speed(0.5) t1.Set_Importance(3) t1.Set_Targeting_Priorities('Infantry_Attack_Move') "
-                  "t1.Lock_Current_Orders() t1.Disable_Capture(true) t1.Set_Garrison_Spawn(true) t1.Set_Check_Contested_Space(true) "
+                  "t1.Disable_Capture(true) t1.Set_Garrison_Spawn(true) t1.Set_Check_Contested_Space(true) "
                   "b = t1.Play_Animation('Cinematic', false, 2) pf = b.IsFinished() and 1 or 0 "
                   "sel = t1.Is_Selectable() and 1 or 0 mv = t1.Can_Move() and 1 or 0 Hide_Object(t2, 1)") == "");
     const ScriptObjectState& st = s.bridge.state(1);
@@ -636,6 +660,9 @@ static void test_orders(const Db& db) {
     CHECK(rec.cmds.back().payload.type() == EventType::Attack && rec.cmds.back().payload.u("target") == 3 &&
           rec.cmds.back().payload.ids("attackers") == std::vector<uint32_t>{1});
     CHECK(gnum(vm, "hat") == 1.0 && gnum(vm, "gat") == 3.0);
+    // S7 t36 (AI_TACTICAL §5.6): a current target keeps Has_Active_Orders true after the order flag has been cleared.
+    s.bridge.state(1).has_orders = false;
+    CHECK(run(vm, "ao3 = t1.Has_Active_Orders() and 1 or 0") == "" && gnum(vm, "ao3") == 1.0);
     CHECK(run(vm, "t1.Attack_Move(t2) t1.Guard_Target(Create_Position(1, 1, 0)) t1.Hyperspace_Away(true)") == "");
     CHECK(rec.cmds.size() == 6);
     CHECK(rec.cmds[3].payload.u("subtype") == kLuaOrderSubtype + static_cast<uint32_t>(LuaOrder::AttackMove) &&

@@ -27,6 +27,8 @@
 #include "alamo/lua/players.hpp"
 #include "alamo/lua/script_gaps.hpp"
 #include "alamo/lua/script_remaining.hpp"  // L1 final
+#include "galactic_goal_time.hpp"
+#include "galactic_slots.hpp"
 #include "alamo/objects/game_object_types.hpp"
 
 namespace alamo::ai {
@@ -142,7 +144,9 @@ struct PotentialPlanRec {
     bool contrast_ok = true;              // PP+0x4D (Test_Target_Contrast)
     bool queues_reserved = false;         // PP+0x4E (0x6c0be0 ran)
     double pop = 0.0;                     // PP+0x1A8: population of the units to produce (AI_GALACTIC_3 §3.5)
-    std::vector<objects::ObjectId> reserved_units;  // free-store entries +0x30 held by this PP
+    // PP+0x108: the selection's free-store units (filled by the solve). 0x6c2d60 reserves those still on the free
+    // store (+0x30 = this PP, unit_reserved); 0x6c27d0 removes a unit that left the plan (A1_READINGS §28.4).
+    std::vector<objects::ObjectId> reserved_units;
 };
 
 struct PlanInstance {
@@ -236,7 +240,9 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // Market delivery floods (0x6955a0 / 0x695c90 path planet -> destination), per frame, key (owner, source, AI mode).
     int64_t delivery_frame = -1;
     std::map<std::tuple<int32_t, PlanetIndex, int>, std::vector<uint8_t>> delivery_reach;
-    std::map<objects::ObjectId, int32_t> unit_reserved;  // free-store entry +0x30: unit -> PotentialPlan handle
+    // Free-store entry +0x30: unit -> PotentialPlan handle (A1_READINGS §28). The galactic free store is derived (the
+    // player's units no task force holds), so a task force taking a unit erases its entry here (off_free_store).
+    std::map<objects::ObjectId, int32_t> unit_reserved;
     std::vector<FreeStoreMove> fs_moves;  // pending free-store moves (issue order)
     int32_t next_plan = 1, next_tf = 0, next_status = 0, next_pp = 0, next_build = 0, next_queue_id = 0;
     int32_t current_plan = -1;
@@ -335,8 +341,10 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool on_surface(ObjectHandle u) const { return fleet_of_unit(u) == gal::kNoFleet && planet_of_unit(u) != kInvalidPlanet; }
     bool tf_owns(ObjectHandle u) const;
     std::vector<ObjectHandle> free_units(int32_t p) const;
+    ObjectHandle free_store_supply(int32_t player, uint32_t type) const;  // 0x4d2bd0 (galactic_build.cpp)
     PlanetIndex planet_arg(const lua::AiArg& a) const;
     cmd::RejectReason order(int32_t player, const cmd::EventData& ev, const std::string& what);
+    cmd::RejectReason note_order(int32_t player, cmd::RejectReason r, const std::string& what);
     bool move_fleet(int32_t player, uint32_t fleet, PlanetIndex to);
     cmd::RejectReason fleet_op(int32_t player, gal::FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit, const std::string& what);
     bool launch_and_form(int32_t player, PlanetIndex p, ObjectHandle unit, uint32_t fleet);
@@ -350,6 +358,13 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     gal::Bitset ai_dangerous(int32_t player) const;
     PlanetIndex nearest_owned(int32_t player, int32_t target) const;
     bool can_build_at(int32_t player, uint32_t type, PlanetIndex p) const { return galactic_ai_can_build(sim, player, type, p); }
+    // Ground structure slots (A2 f t01): the slot max 0x372740 = planet data +0x230, seeded from the planet type's
+    // Special_Structures_Land (+0x92C) (AI_GALACTIC_TOKENS MaxStructureSlots, STRATEGIC_GAPS §1 step 18) [H];
+    // -1 = tag absent = no cap [port, as GalacticSim::build_check]. Used 0x3f8af0 = the ground structures on the
+    // surface, 0 when the planet has no ground base (D+0x130 > 0 ? D+0x160 : 0, OpenStructureSlotsUnnormalized) [H].
+    // Not the legacy <Max_Ground_Base> tag (set only on Galaxy_Core_Art_Model, so 0 on every real planet).
+    int32_t ground_slot_max(PlanetIndex p) const { return galactic_ai_ground_slot_max(sim, p); }
+    int32_t ground_slots_used(PlanetIndex p) const { return galactic_ai_ground_slots_used(sim, p); }
     uint32_t next_starbase_type(int32_t player, PlanetIndex p) const;
     bool applies(int32_t self, int32_t target, uint32_t flags) const;
     int32_t script_player(int32_t script) const;
@@ -360,8 +375,16 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
 
     // ---- PotentialPlan (galactic_pp.cpp) ----
     const std::vector<uint32_t>& team_type_list(uint32_t plan, uint32_t tf, uint32_t team);
-    bool solve_potential_plan(PlayerAi& pa, uint32_t plan, uint32_t goal_type, int32_t target, PotentialPlanRec& out);
-    void reserve_pp_units(int32_t handle);
+    // first_solve: Init at proposal (PP+0x104 == 0, FreeStore Setup A ignores +0x30); false = the re-solve at accept.
+    bool solve_potential_plan(PlayerAi& pa, uint32_t plan, uint32_t goal_type, int32_t target, PotentialPlanRec& out,
+                              bool first_solve = true);
+    bool resolve_pp(PlayerAi& pa, const Goal& g);  // 0x6c4a50: re-solve at accept (A1_READINGS §28.6 step 3)
+    void reserve_pp_units(int32_t handle);         // 0x6c2d60's +0x30 part (0x6c2b20)
+    void suspend_pp_units(int32_t handle);         // 0x6c0be0's +0x30 part (Commit step 4)
+    bool pp_stolen(int32_t handle) const;          // 0x6c45e0
+    void pp_unit_left(int32_t plan_id, ObjectHandle u);  // 0x6c27d0 with the plan's PP: a task force released u
+    void off_free_store(ObjectHandle u) { unit_reserved.erase(store.id(u)); }  // a task force took u (node erased)
+    bool on_free_store(int32_t player, objects::ObjectId id) const;
     void release_pp(int32_t handle);         // drop: free-store entries and queue reservations (0x6c2320)
     void reserve_pp_queues(int32_t handle);  // commit step 4 (0x6c0be0)
     float planet_queue_time(PlanetIndex p, uint32_t q) const;
@@ -369,7 +392,10 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // ---- build tasks + market (galactic_build.cpp) ----
     void create_build_tasks(TaskForceRec& tf);
     void market_planet(PlanetIndex p);       // one planet's queues (> 30 frames since their last run), sim hook
+    // 0x525200 stand-in [M] (galactic_goal_time.hpp): the time the running plan's unfinished build tasks still need.
+    float goal_production_time(int32_t running) const;
     void service_build_tasks(int32_t player);  // PRODUCTION_QUEUED polls, claims, failures
+    float installment(PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a);  // PAYG installment (q2f t01)
     void fail_build(BuildTask& b, const char* why);
     void finish_build(BuildTask& b);
     void end_plan_builds(int32_t plan);
@@ -540,11 +566,12 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     }
     bool accept(Goal& g) override;
     bool plan_activatable(const Goal& g) override {
-        return g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0;
+        return g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g);
     }
     bool plan_invalid(const Goal& g) override;
     bool replaceable(const Goal& g) override;
-    void refresh_plan(Goal&) override {}
+    void refresh_plan(Goal& g) override { w->reserve_pp_units(g.pp_handle); }
+    void suspend_reservations(Goal& g) override { w->suspend_pp_units(g.pp_handle); }
     bool uses_budget() override { return true; }
     int32_t category_of(const Goal& g) const { return w->defs.goals[g.type].category; }
     float time_limit(const Goal& g) const { return w->defs.goals[g.type].time_limit; }
@@ -560,7 +587,9 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         if (g.running >= 0) w->end_plan(g.running, by_goal_system);
     }
     void drop_potential_plan(Goal& g) override;
-    float elapsed_eta(const Goal& g) override { return g.eta; }  // [port] on schedule: never late
+    float elapsed_eta(const Goal& g) override {  // §1.6: 0x525200 [M] + elapsed [H] (galactic_goal_time.hpp)
+        return galactic_maintenance_eta(w->goal_production_time(g.running), g.created, w->now);
+    }
     int32_t quota_players() override;
 
     // ---- ContextModeServices ----

@@ -37,8 +37,9 @@ enum class LocomotorKind : uint8_t {
 // XML token -> kind (case-insensitive); Default for every other token.
 LocomotorKind locomotor_kind_from_token(std::string_view token);
 // The type's locomotor for a mode: the first locomotor token of LandBehavior / SpaceBehavior (by mode), then of the
-// generic Behavior list (MOVEMENT §3.1: the locomotor occupies behaviour slot 1). Uses_Multiple_Locomotors swaps are
-// the host's business (Primary_Locomotor_Name / Secondary_Locomotor_Name, §3.1).
+// generic Behavior list (MOVEMENT §3.1: the locomotor occupies behaviour slot 1). This is the primary locomotor of a
+// Uses_Multiple_Locomotors type; the swap to Secondary_Locomotor_Name and back is MovementSystem's
+// (use_secondary_locomotor, MoveOrder::switch_locomotor; UnitDesc::secondary_locomotor).
 LocomotorKind locomotor_kind_from_type(const objects::GameObjectTypes& types, uint32_t type_index, MoveMode mode);
 
 // ModelAnimType ids requested by these locomotors (docs/re/ANIM_PARTICLES.md §A.1).
@@ -68,6 +69,7 @@ struct SpecialMotion {
     AnimPlay anim;
     bool airborne = false;      // 0x3a7e30 (jetpack)
     bool turn_left = true;      // jetpack: side of the last turn (end anim 0xD / 0xF)
+    float turn_band_rate = 0.0f;  // jetpack pack +0xe8: yaw rate of the current turn-animation band (0: Max_Rate_Of_Turn)
     float lean = 0.0f;          // bike +0x1f8 (degrees; added to the roll); flying: the roll O +0x84
     uint32_t idle_frames = 0;   // flying: formation idle counter (+0x1dc)
     bool turn_back = false;     // flying +0x240

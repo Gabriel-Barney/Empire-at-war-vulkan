@@ -14,7 +14,8 @@
 //      market hook, then the planet's ground and space queues);
 //   2. the planets' delayed-spawn (hero respawn) lists 0x3fc750 (P4 6.2), planet row order;
 //   3. the store's delayed creations and deferred-delete flush (ObjectStore::update);
-//   4. the fiscal cycle when next_cycle_frame <= f (income, black-market reroll);
+//   4. the fiscal cycle when next_cycle_frame <= f (income, black-market reroll); the first one is on frame 1350 (the
+//      mode's frame-0 cycle runs before the galaxy exists: start() applies its empty bookkeeping);
 //   5. the mode frame advances (T12), unless the galactic pause counter is raised (then nothing runs).
 // Commands are applied by the host before update() (CommandPipeline::begin_tick -> handle_command);
 // AI and Lua call execute() directly (COMMANDS.md section 5).
@@ -309,7 +310,7 @@ using IncomeHook = std::function<void(const IncomeTick&)>;
 //   kFleetLand   {target = the issuer's planet, fleet = orbiting fleet, unit = one ground unit or kNoObject = all}.
 // Only the issuer's idle fleets in orbit of one planet take part; nothing moves between planets. Ignored (NotAllowed)
 // while the galactic pause counter is raised (COMMANDS.md §6.2 "battle pending": counter 0x140b1540c = the galactic
-// pause, STORY.md §4.1); MoveThroughObjects likewise.
+// pause, STORY.md §4.1) or the story block holds (GalacticSim::paused()); MoveThroughObjects likewise.
 // enqueue() refusal for the galactic population cap (AI_GALACTIC_3 §3.5; RejectReason::FirstCustom).
 inline constexpr RejectReason kRejectPopulationCap = RejectReason::FirstCustom;
 
@@ -347,6 +348,8 @@ public:
     virtual bool on_invade(int32_t attacker, PlanetIndex planet, std::span<const ObjectHandle> units) = 0;
     // End of the galactic GOM service (§1.4), every galactic tick, also while the galactic pause is raised.
     virtual void on_service_tail() = 0;
+    // 0x2b0350 (REMAINING_GAPS 6.4, BT §1.4 step 2): `player` is attacker or defender of a conflict in either queue.
+    virtual bool in_queued_conflict(int32_t /*player*/) const { return false; }
 };
 
 class GalacticSim {
@@ -368,15 +371,23 @@ public:
     int32_t next_cycle_frame() const { return next_cycle_frame_; }
     int32_t last_cycle_frame() const { return last_cycle_frame_; }
     // Galactic pause counter (GMM +0x2c, MAIN_LOOP 1.5): while > 0 the mode frame is frozen and nothing
-    // is serviced.
+    // is serviced. The story block below freezes the frame the same way (paused(), a1j t05), except that the hero spawn
+    // lists still run.
     void push_pause() { ++pause_; }
     void pop_pause() { if (pause_ > 0) --pause_; }
-    // The galactic "paused" query 0x4b2360: the pause counter, or a queued story-linked battle (REMAINING_GAPS 6.4).
-    bool paused() const { return pause_ > 0 || linked_battle_pending_; }
+    // The galactic "paused" query 0x4b2360: the pause counter, or the story block below. The command executors
+    // (SpecialAbility 0x4b4d70, FleetManagement 0x5af260, MoveThroughObjects 0x3c4460, Invade 0x48ff50) and Lua
+    // Move_Object 0x68f5b0 test the same two conditions (A1_READINGS §31.7).
+    bool paused() const { return pause_ > 0 || story_block(); }
+    // REMAINING_GAPS 6.4 story block: a story-linked battle is pending and the LOCAL player is attacker or defender of a
+    // queued conflict (0x2b0350). Only the local player counts, whoever issued the command: an AI player's orders run
+    // while the local player is in no queued conflict, and are dropped like the human's while it is.
+    bool story_block() const {
+        return linked_battle_pending_ && conflicts_ && conflicts_->in_queued_conflict(local_player_);
+    }
     // REMAINING_GAPS 6.4 (GMM +0xf0): set when story LINK_TACTICAL or a corruption mission queues its battle (0x28bd70;
-    // refused - returns false - while one is already queued), cleared when that battle starts (0x28c640). While set,
-    // SpecialAbility, FleetManagement and move commands are refused [port: for every player; the original gates on the
-    // local player being in a queued conflict].
+    // refused - returns false - while one is already queued), cleared when that battle starts (0x28c640). Its effect on
+    // commands and the paused query is story_block().
     bool queue_linked_battle() {
         if (linked_battle_pending_) return false;
         linked_battle_pending_ = true;
@@ -603,7 +614,7 @@ public:
     // spawn_unit = step 4, the planet production "create object" (0x400b40) as a finished queue item: no cost, no queue,
     // no story event; space units join the player's stationary orbit fleet (found or made), ground units the surface,
     // structures / starbases the planet. Returns the new object; null = refused (invalid player / planet / type, a
-    // type with no galactic role) = the task's FAILED.
+    // type with no galactic role) = the task's FAILED. Also the Lua Spawn_Unit at a planet in a galactic script (a1g t06).
     ObjectHandle spawn_unit(int32_t player, PlanetIndex planet, uint32_t type);
     // Step 2 (MagicPlanStealing or a named hero): the first live object of exactly `type` owned by `player`, walking
     // the owner's object list newest first (A2GAL_READINGS 3 [H]: ObjectStore::owned_by in reverse, so a captured
@@ -629,6 +640,12 @@ public:
     void set_production_service_hook(std::function<void(PlanetIndex)> hook) { production_hook_ = std::move(hook); }
     uint32_t add_production_service_hook(std::function<void(PlanetIndex)> hook);  // id for remove_ (never 0)
     void remove_production_service_hook(uint32_t id);
+    // q2f t01: an AI player's pay-as-you-go installment goes through its AI budget (0x53b900, AI_GALACTIC_2 §3.4). The
+    // hook gets the planet, the queue index, the queue head and the installment a, and returns the credits to pay (>= 0;
+    // the credits floor at 0 and the build advances) or a negative value (the build pauses). Without a hook every
+    // player pays as a human: credits >= a, then a. Not hashed.
+    using InstallmentHook = std::function<float(PlanetIndex planet, uint32_t queue, const BuildEntry& head, float a)>;
+    void set_installment_hook(InstallmentHook hook) { installment_hook_ = std::move(hook); }
 
     // ---- story / script event stream (S4, galactic_events.hpp) --------------------------------------------
     // Off by default. Events are appended in emission order; the stream is not part of hash_state.
@@ -680,10 +697,12 @@ public:
     // Change_Owner (Lua GameObjectWrapper.Change_Owner and story; GE 4.2 "Forced transfers" for planets). False
     // when nothing changed: dead object, invalid player, same owner, or a member of a moving fleet [port].
     bool change_owner(ObjectHandle object, int32_t player);
-    // Assemble_Fleet(units) [inferred]: the units (members of stationary fleets orbiting one planet, owned by
-    // the first valid unit's owner; others skipped) gathered into one fleet. A fleet that holds exactly those
-    // units is returned as is; otherwise a new fleet takes them (list order) and emptied fleets die.
-    // Returns the fleet index, kNoFleet when no unit qualifies.
+    // Assemble_Fleet(units) [inferred]: the units (members of stationary fleets orbiting one planet, or units landed
+    // on that planet's surface, owned by the first valid unit's owner; others skipped) gathered into one fleet. A
+    // fleet that holds exactly those units is returned as is; otherwise a new fleet takes them (list order; a landed
+    // unit is launched as by launch_units: off the surface, launch reveal; a1g t06, so the shipped scripts'
+    // SpawnList + Assemble_Fleet of ground units at a planet flies them, COMMANDS.md FleetManagement "AssembleFleet")
+    // and emptied fleets die. Returns the fleet index, kNoFleet when no unit qualifies.
     uint32_t assemble_fleet(std::span<const ObjectHandle> units);
     // Containment as GalacticSim keeps it (OBJECT_RUNTIME.md 3; the store holds no container for ships):
     // container_of = the fleet of a fleet member, the planet of a surface unit / structure / starbase /
@@ -1063,9 +1082,12 @@ private:
     int32_t frame_ = 0;
     int32_t pause_ = 0;
     bool linked_battle_pending_ = false;  // REMAINING_GAPS 6.4; hashed in the OI tail
+    // Fiscal-cycle fields. The mode's frame-0 cycle runs before the galaxy is built, so it pays nobody and draws no
+    // black-market value; the first payment is on frame 1350 (Q2 traces: retail F fields 0 / 1350 / 1 at mode frame 0,
+    // first credit change at mode frame 1351) [H]. start() leaves them as that empty cycle does (q2f t02).
     int32_t last_cycle_frame_ = 0;   // +0x368
-    int32_t next_cycle_frame_ = 0;   // +0x36c: no initialiser found -> 0: first payment on frame 0 [L]
-    int32_t cycle_counter_ = 0;      // +0x370
+    int32_t next_cycle_frame_ = 0;   // +0x36c: one fiscal period after start()
+    int32_t cycle_counter_ = 0;      // +0x370: 1 after start()
     PathScratch scratch_;
     std::vector<Derived> derived_;   // per planet row (parallel derivation output)
     bool emit_events_ = false;
@@ -1077,6 +1099,7 @@ private:
     uint32_t next_hook_id_ = 1;
     std::vector<float> last_income_;  // per player
     std::function<void(PlanetIndex)> production_hook_;
+    InstallmentHook installment_hook_;
     std::vector<std::pair<uint32_t, std::function<void(PlanetIndex)>>> production_hooks_;
     // OI galactic (hashed in the "OIG1" tail once non-default)
     std::vector<int32_t> stealthed_;      // ObjectIds with the galactic stealth byte set, ascending

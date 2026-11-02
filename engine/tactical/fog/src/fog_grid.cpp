@@ -219,10 +219,13 @@ void FogGrid::reset(bool keep_state) {
 
 void FogGrid::binarise(FogGrid* other) {
     if (other && other->n_ != n_) other = nullptr;
+    // 0x4c1830 [H]: every fade byte of both grids := 0; uncounted cells of the +4 grid elsewhere are fogged too.
     for (uint32_t i = 0; i < n_; ++i) {
         const bool seen = count_[i] > 0;
         state_[i] = seen ? kStateRevealed : kStateFogged;
+        fade_[i] = 0;
         if (!other) continue;
+        other->fade_[i] = 0;
         if (seen) {
             other->state_[i] = kStateFogged;
             other->count_[i] = 0;
@@ -230,7 +233,7 @@ void FogGrid::binarise(FogGrid* other) {
             other->state_[i] = kStateRevealed;
             other->count_[i] = 1;
         } else {
-            other->state_[i] = kStateFogged;  // [M] uncounted cells of the +4 grid elsewhere: fogged
+            other->state_[i] = kStateFogged;
         }
     }
 }

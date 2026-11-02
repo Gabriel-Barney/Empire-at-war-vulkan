@@ -69,6 +69,11 @@ public:
     void spend(int32_t c, uint32_t goal, float n);
     // Committed spend s += n (production paid, 0x5f9f90) [M].
     void paid(int32_t c, uint32_t goal, float n);
+    // Pay-as-you-go installment n (0x53b900, AI_GALACTIC_2 §3.4; q2f t01) [H]. With the goal's struct (an item its build
+    // task ordered, 0x64adb0): have = min(alloc, c + a); (int)(have - n) < 0 -> s += n - alloc when alloc < n, returns
+    // -1 (the build pauses); else p = min(n, have) is charged (0x615700: P -= p, s and alloc -= p floored at 0, a -= p
+    // with a shortfall taken from c) and returned. Without a struct: +0x80 -= n (floor 0), returns n (always paid).
+    float installment(int32_t c, uint32_t goal, float n);
     void set_request(int32_t c, uint32_t goal, float req);
     void set_alloc(int32_t c, uint32_t goal, float alloc);
     // Release 0x614880: A += c + a; struct deleted. `reclaimed` = the PAYG reclaim r (A -= r, P -= r, +0x80 += r).

@@ -5,9 +5,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <memory>
 #include <set>
 #include <vector>
 
+#include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/tactical/fog/fog_of_war.hpp"
 
@@ -190,6 +192,17 @@ void test_counts() {
     // Saturation.
     for (int i = 0; i < 70000; ++i) g.count_cell(5u, 400);
     CHECK(g.count_at(5u) == 0xFFFF);
+    // Binarise (0x4c1830, FOG_OF_WAR §3.4 [H]): every fade byte of both grids := 0; the other grid's uncounted cells
+    // elsewhere fogged, its counted ones 0xFF / count 1.
+    FogGrid bo = land_grid();
+    bo.count_cell(7u, 300);  // fade 15 on the other grid's counted cell
+    bo.count_cell(8u, 300);  // ... and on a cell this grid sees
+    const uint32_t eight[] = {8u};
+    bo.undo(eight);          // uncounted, state 0xEF, fade 15
+    g.binarise(&bo);
+    CHECK(g.fade_at(c) == 0 && g.state_at(c) == 0xFF && g.fade_at(d) == 0);
+    CHECK(bo.state_at(7u) == 0xFF && bo.count_at(7u) == 1 && bo.fade_at(7u) == 0);
+    CHECK(bo.state_at(8u) == 0 && bo.fade_at(8u) == 0);
     // Flash: state 255, counts untouched.
     FogGrid f = land_grid();
     f.flash(cx_of(10), cy_of(10), 15.0f);
@@ -326,7 +339,10 @@ void test_sources() {
     // Garrisoned: undone.
     fog.source_service(5, b, true);
     CHECK(count_sum(*fog.grid(1)) == 0u);
-    fog.source_service(5, b);  // [port] re-reveals on exit
+    fog.source_service(5, b);  // exit (FOG_OF_WAR §3.2 [H]): not dirty, within one cell of the last reveal -> nothing
+    CHECK(count_sum(*fog.grid(1)) == 0u);
+    b.x += 16.0f;  // one cell from the last reveal: re-reveals
+    fog.source_service(5, b);
     CHECK(count_sum(*fog.grid(1)) == 21u);
     // Removal.
     fog.source_remove(5);
@@ -553,6 +569,79 @@ void test_setup_overrun() {
     CHECK(ls.scaled == 8 && ls.summed == 4 && ss.scaled == 4 && ss.summed == 8);
 }
 
+// ---- FOWF t03 / t05: setup reveal conditions, base power, setup manager (FOG_OF_WAR §3.4) ----------------------
+
+void test_setup_manager() {
+    const int32_t p4 = 0, p8 = 1;
+    // Setup reveal outside the setup phase (no binarise): which objects reveal, and the prevention circle for +4.
+    auto reveal_once = [&](const std::vector<FogSetupObject>& objs, bool hook, bool power) {
+        auto f = std::make_unique<FogOfWar>();
+        f->start(land_setup());
+        if (hook) f->set_base_power([power](int32_t p) { return power && p == 1; });  // base power for p8 only
+        f->setup_reveal(objs, p4, p8);
+        return f;
+    };
+    // A forced object (Reveal_For_Defender) without locomotor or REVEAL reveals ([H] force || (REVEAL && locomotor)).
+    std::vector<FogSetupObject> forced(1);
+    forced[0].obj = unit(p4, cx_of(5), cy_of(5), 30.0f);
+    forced[0].reveal_for_defender = true;
+    CHECK(reveal_once(forced, false, false)->grid(p8)->count_at(5u * 20u + 5u) == 1);
+    // REVEAL without a locomotor (and no force): nothing.
+    std::vector<FogSetupObject> still(1);
+    still[0].obj = unit(p8, cx_of(5), cy_of(5), 30.0f);
+    still[0].has_reveal = true;
+    CHECK(reveal_once(still, false, false)->grid(p8)->count_at(5u * 20u + 5u) == 0);
+    // Prevention circle of a POWERED defender structure: drawn for +4 (counts zeroed, state 0xEF) only with base power.
+    std::vector<FogSetupObject> shield(1);
+    shield[0].obj = unit(p8, cx_of(10), cy_of(10), 10.0f);
+    shield[0].reveal_during_setup = true;
+    shield[0].has_powered = true;
+    shield[0].reinforcement_prevention_radius = 60.0f;
+    const uint32_t far_cell = 10u * 20u + 13u;  // 3 cells east: inside the 60-unit circle, outside the sight radius 10
+    {
+        const auto off = reveal_once(shield, false, false);
+        CHECK(off->grid(p8)->count_at(10u * 20u + 10u) == 1 && off->grid(p4)->state_at(far_cell) == 0);
+        const auto unpowered = reveal_once(shield, true, false);
+        CHECK(unpowered->grid(p4)->state_at(far_cell) == 0);
+        const auto powered = reveal_once(shield, true, true);
+        CHECK(powered->grid(p4)->state_at(far_cell) == kStateFirstReveal && powered->grid(p4)->count_at(far_cell) == 0);
+    }
+    shield[0].has_powered = false;  // no POWERED behaviour: no base power needed
+    CHECK(reveal_once(shield, false, false)->grid(p4)->state_at(far_cell) == kStateFirstReveal);
+    shield[0].reveal_for_attacker = true;  // target = +4, not +8: no prevention circle (own reveal only)
+    {
+        const auto f = reveal_once(shield, false, false);
+        CHECK(f->grid(p4)->state_at(far_cell) == 0 && f->grid(p4)->count_at(10u * 20u + 10u) == 1);
+    }
+
+    // Manager: players 0 and 2 are human (land_setup). Countdown 5 s = 150 frames from the first ready.
+    FogOfWar fog;
+    FogSetup s = land_setup();
+    s.constants.setup_phase_enabled = true;
+    fog.start(s);
+    CHECK(!fog.setup_end_due(1000));  // not in the setup phase
+    fog.begin_setup({}, p4, p8);
+    CHECK(fog.setup_phase() && !fog.setup_end_due(1000) && !fog.setup_countdown_armed());
+    fog.set_frame(100);
+    fog.setup_player_ready(1);  // the AI player: arms the countdown, humans not ready
+    CHECK(fog.setup_ready(1) && fog.setup_countdown_armed() && !fog.setup_all_ready());
+    fog.set_frame(120);
+    fog.setup_player_ready(0);  // one human: countdown not re-armed
+    CHECK(!fog.setup_all_ready() && !fog.setup_end_due(249) && fog.setup_end_due(250));
+    fog.setup_player_ready(2);  // every human ready: due at once
+    CHECK(fog.setup_all_ready() && fog.setup_end_due(121));
+    {  // the manager survives a save / load
+        alamo::ByteWriter w;
+        fog.write(w);
+        FogOfWar l;
+        alamo::ByteReader r(w.bytes());
+        CHECK(l.read(r) && l.setup_phase() && l.setup_all_ready() && l.setup_ready(2) && l.setup_end_due(121) &&
+              l.constants().setup_countdown_seconds == 5.0f);
+    }
+    fog.end_setup({}, p4, p8);
+    CHECK(!fog.setup_phase() && !fog.setup_end_due(1000));
+}
+
 // ---- space reinforcement sampler (TACTICAL_GAPS §5.5) ----------------------------------------------------------
 
 void test_reinforce_sampler() {
@@ -652,6 +741,7 @@ int main() {
     test_queries();
     test_lua();
     test_setup_overrun();
+    test_setup_manager();
     test_reinforce_sampler();
     test_order_independence();
     std::printf("alamo_tactical_fog_tests: %d checks, %d failed\n", g_checks, g_fail);

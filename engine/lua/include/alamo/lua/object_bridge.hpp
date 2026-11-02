@@ -246,6 +246,29 @@ public:
         return it == reinforcements_.end() ? nullptr : &it->second;
     }
 
+    // ---- S7 t15 A1: "unit ability finished" (object signal 0x29, ABILITIES_HARDPOINTS §2.6 / MOVEMENT §3.1.1 step 6) ----
+    // A blocking GameObjectWrapper.Activate_Ability (AbilityBlockStatus, count 1) waits for the unit's next signal 0x29 (or
+    // its death / removal). The bridge counts the signals of the units such a block watches: watch_ability(id) (at block
+    // creation) returns the unit's count, which the block keeps; the host calls ability_finished(id) for every signal, in
+    // its order (ids no block watches are ignored, so a battle without blocking Activate_Ability keeps its CRCs). The
+    // block is finished once ability_signals(id) moved past its value.
+    // S7 t26 (AI_TACTICAL §7.3.3 item 2): the block listens to signals 0x29, 0xb and 0x10 alike (the first ends it), so the
+    // count is of all three: ability_finished (0x29) and order_replaced (0xb: a new order replaces the unit's order);
+    // 0x10 (death / removal) the block reads from the store.
+    uint32_t watch_ability(objects::ObjectId id) { return ability_signals_[id]; }
+    void ability_finished(objects::ObjectId id) {
+        if (const auto it = ability_signals_.find(id); it != ability_signals_.end()) ++it->second;
+    }
+    void order_replaced(objects::ObjectId id) { ability_finished(id); }
+    // S7 t31 (§7.3.3 item 1): Activate_Ability raises 0xb on the unit (and each TEAM member) before executing the ids of
+    // the list. Set: the host's raiser (the battle's listeners: every script world and the story bridge, each adds the
+    // TEAM container); unset: this bridge's order_replaced for the unit and its container.
+    std::function<void(objects::ObjectId)> raise_order_replaced;
+    uint32_t ability_signals(objects::ObjectId id) const {
+        const auto it = ability_signals_.find(id);
+        return it == ability_signals_.end() ? 0u : it->second;
+    }
+
     // ---- per-object script state ----
     ScriptObjectState& state(objects::ObjectId id) { return states_[id]; }
     const ScriptObjectState* find_state(objects::ObjectId id) const {
@@ -259,6 +282,8 @@ public:
             it = store.find(it->first) ? std::next(it) : states_.erase(it);
         for (auto it = remaining_states_.begin(); it != remaining_states_.end();)
             it = store.find(it->first) ? std::next(it) : remaining_states_.erase(it);
+        for (auto it = ability_signals_.begin(); it != ability_signals_.end();)
+            it = store.find(it->first) ? std::next(it) : ability_signals_.erase(it);
     }
     size_t state_count() const { return states_.size(); }
 
@@ -271,7 +296,7 @@ public:
 
     // N1 save / load (contract: alamo/core/save_file.hpp; S4 session chunk "story.bridge"): u32 version, orders_issued,
     // the per-object script states and the remaining family's per-object states (ascending id), the next
-    // reinforcement id and the requests (ascending id). Not saved: the host hooks and pointers above (the reader's own)
+    // reinforcement id and the requests (ascending id), then (version 2) the watched units' ability-signal counts. Not saved: the host hooks and pointers above (the reader's own)
     // and the tactical hooks' CinematicTransports (saved by their owner, CinematicTransports::write). read() replaces
     // the saved fields (hash() then equals the writer's when the host restored the transports too); false and
     // unchanged on bad data. Reads its own fields only (the owner checks done() of its chunk).
@@ -283,7 +308,20 @@ private:
     std::map<objects::ObjectId, RemainingObjectState> remaining_states_;  // L1 final
     std::map<uint32_t, ReinforceState> reinforcements_;
     uint32_t next_reinforcement_ = 1;
+    std::map<objects::ObjectId, uint32_t> ability_signals_;  // S7 t15 A1: watched units' signal 0x29 counts
 };
+
+// OI follow-up t03 (A1_READINGS §28.9): this bridge's shares of the obj +0x3a8 movement lock (0x39ad40) - a script
+// Lock_Current_Orders, or the locomotor's forced-move term while the unit's current move is the one a Divert started
+// (`goal` reports the unit's current move goal in XY, false when it has none). The abilities hold the other share.
+inline bool script_movement_locked(const ObjectBridge& b, objects::ObjectId id,
+                                   const std::function<bool(objects::ObjectId, Vec3&)>& goal) {
+    if (const ScriptObjectState* s = b.find_state(id); s && s->orders_locked) return true;
+    const RemainingObjectState* r = b.find_remaining_state(id);
+    if (!r || !r->diverted || !goal) return false;
+    Vec3 g{};
+    return goal(id, g) && g.x == r->divert_goal.x && g.y == r->divert_goal.y;
+}
 
 // Attaches (nullptr: detaches) the bridge to a VM. The bridge must outlive the attachment.
 void attach_object_bridge(LuaVm& vm, ObjectBridge* bridge);

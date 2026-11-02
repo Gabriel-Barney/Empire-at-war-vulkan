@@ -65,6 +65,7 @@ struct GalPp {
     int32_t category;
     float time_limit;
     int reach_level;
+    bool first_solve = true;  // PP+0x104 == 0 (Init at proposal): FreeStore Setup A ignores +0x30
 
     std::vector<PpRec> recs;
     std::map<uint32_t, uint32_t> rec_of_type;  // dedup set (keyed by type index)
@@ -219,7 +220,9 @@ struct GalPp {
                     best_c = c;
                 }
             }
-            if (best < 0) continue;  // no source: the build task waits on the market (§2.3)
+            // No source: the build task waits on the market (§2.3) and the ETA ignores it [H]. Since the Production veto
+            // (A2f t02 R1, same list and test as Setup C) this happens only in a MagicPlan (spawned, no queue).
+            if (best < 0) continue;
             const PlanetIndex p = list[static_cast<size_t>(best)];
             const float bt = w.btime_at(player, t, p);
             pool[static_cast<size_t>(best)].used = true;
@@ -237,29 +240,9 @@ struct GalPp {
 
     // ---- contrast helpers (0x6c5de0 / 0x72ac70 / 0x6c4b20) ----
     double enemy_strength(bool space, uint64_t mask) const {
-        // 0x5f2430 [M: the PlanetForce Enemy totals of AI_GALACTIC_TOKENS §2; stand-ins as there]
-        const gal::PlanetState& ps = w.sim.planets()[static_cast<size_t>(target)];
-        const objects::ObjectStore& st = w.store;
-        double s = 0.0;
-        auto hostile = [&](int32_t o) { return o >= 0 && w.sim.is_hostile(player, o); };
-        if (space) {
-            for (const uint32_t f : ps.orbit) {
-                if (f >= w.sim.fleets().size()) continue;
-                const gal::FleetState& fl = w.sim.fleets()[f];
-                if (!fl.alive || fl.moving || !hostile(fl.owner)) continue;
-                for (const ObjectHandle u : fl.contents)
-                    if (st.alive(u) && (w.mask_of(st.type(u)) & mask) != 0) s += w.power_of(st.type(u));
-            }
-            if (hostile(ps.owner) && ps.starbase && st.alive(ps.starbase) && (mask & ai_category_bit("Capital")) != 0)
-                s += w.power_of(st.type(ps.starbase));  // [port] starbase members = its own power
-        } else {
-            for (const ObjectHandle u : ps.surface)
-                if (st.alive(u) && hostile(st.owner(u)) && (w.mask_of(st.type(u)) & mask) != 0) s += w.power_of(st.type(u));
-            if (hostile(ps.owner))
-                for (const ObjectHandle u : ps.structures)
-                    if (st.alive(u) && (mask & ai_category_bit("Capital")) != 0) s += w.power_of(st.type(u));
-        }
-        return s;
+        // 0x5f2430 (galactic_ai_enemy_strength): the members-only leaf Target.EnemyForce.<layer>TotalUnnormalized, plus the
+        // structures' own AI_Combat_Power in the untyped totals only; a typed row is the leaf with the row's mask [M].
+        return galactic_ai_enemy_strength(w.sim, w.tinfo, static_cast<PlanetIndex>(target), player, space, mask);
     }
     float weight(uint32_t t, int32_t row) const {  // 0x5f1f90 x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3)
         if (!w.cfg.contrast || row < 0) return 0.0f;
@@ -318,8 +301,8 @@ public:
         const std::vector<int32_t> hops = p_.has_target() ? p_.w.hops_to(p_.tplanet()) : std::vector<int32_t>{};
         for (const ObjectHandle u : p_.w.free_units(p_.player)) {
             const objects::ObjectId id = p_.w.store.id(u);
-            const auto res = p_.w.unit_reserved.find(id);
-            if (res != p_.w.unit_reserved.end()) continue;  // reserved by another PP (+0x30)
+            // A candidate needs PP+0x104 == 0 (the first solve) or +0x30 == 0 (A1_READINGS §28.5).
+            if (!p_.first_solve && p_.w.unit_reserved.count(id) != 0) continue;
             const PlanetIndex at = p_.w.planet_of_unit(u);
             if (at == kInvalidPlanet) continue;  // moving / in transit
             const gal::TypeInfo* x = p_.ti(p_.w.store.type(u));
@@ -607,16 +590,21 @@ public:
         if (r.free_unit >= 0) return 0.5f;
         if (p_.is_ground_structure(r.type)) {
             if (!p_.has_target()) return kVeto;
-            const gal::PlanetState& ps = p_.w.sim.planets()[static_cast<size_t>(p_.target)];
-            const auto& rules = p_.w.sim.rules();
-            if (!p_.w.sim.surface_accessible(static_cast<PlanetIndex>(p_.target))) return kVeto;  // 0x375220
-            int32_t used = static_cast<int32_t>(ps.structures.size());  // 0x3f8af0 [M: + queued structures]
-            for (const gal::BuildEntry& e : p_.w.sim.queue_of(p_.tplanet(), gal::kGroundQueue))
-                if (e.type < rules.types.size() && rules.types[e.type].kind == gal::UnitKind::GroundStructure) ++used;
-            const auto& mg = p_.w.sim.map().planets.max_ground_base;
-            const int32_t slots = static_cast<size_t>(p_.target) < mg.size() && mg[static_cast<size_t>(p_.target)] >= 0
-                                      ? mg[static_cast<size_t>(p_.target)] : 5;  // 0x372740 [M]
-            if (used + p_.ground_queued >= slots) return kVeto;
+            const PlanetIndex tp = p_.tplanet();
+            const gal::PlanetState& ps = p_.w.sim.planets()[tp];
+            if (!p_.w.sim.surface_accessible(tp)) return kVeto;  // 0x375220
+            // Per-planet cap (type +0x87C Build_Max_Instances_Per_Planet, when >= 0): the instances on the planet
+            // (0x3f94f0) [H].
+            if (const gal::TypeInfo* x = p_.ti(r.type); x && x->max_instances_per_planet >= 0) {
+                int32_t here = 0;
+                for (const ObjectHandle s : ps.structures)
+                    here += p_.w.store.alive(s) && p_.w.store.type(s) == r.type ? 1 : 0;
+                if (here >= x->max_instances_per_planet) return kVeto;
+            }
+            // Used ground slots 0x3f8af0 + this PP's queued ground structures (0x140b3a534) < the slot max 0x372740
+            // (Special_Structures_Land; galactic_slots.hpp) [H].
+            const int32_t slots = p_.w.ground_slot_max(tp);
+            if (slots >= 0 && p_.w.ground_slots_used(tp) + p_.ground_queued >= slots) return kVeto;
         } else if (p_.is_orbital_structure(r.type)) {
             if (!p_.has_target()) return kVeto;
             const gal::PlanetState& ps = p_.w.sim.planets()[static_cast<size_t>(p_.target)];
@@ -630,6 +618,11 @@ public:
         // every plan, so the AI never queues a type the story switched off (OI2 ai).
         if (p_.w.sim.production_disabled(p_.player, r.type)) return kVeto;
         if (!p_.def.magic_plan) {
+            // [port] A2f t02 R1: a produced candidate no source planet can build (Setup C t = 1e18: no planet of the
+            // level's list passes 0x2804d0, or a structure 0x2804d0 refuses at the target) is vetoed (permanent). AI_GALACTIC_2
+            // §1.4 lists no such veto (it would score 0 / -0.5); the port vetoes it so a plan never waits on the market for
+            // a type nobody can build (zero cost, Build_Initially_Locked never unlocked, Required_Special_Structures missing).
+            if (r.prod_t >= kInf) return kVeto;
             // AI_GALACTIC_3 §3.4-3.5 [H]: with AI_Uses_Galactic_Pop_Cap (off in shipped data) a unit whose pop exceeds
             // the remaining population is vetoed (permanent: Production erases it).
             if (p_.pop_cap && p_.pop_of(r.type) > p_.remaining_pop) r.prod_score = kVeto;
@@ -900,8 +893,8 @@ private:
 // ================================================================ Impl: team expansion, solve, reservations
 
 // Team spec lhs (0x66fcc0, §1.3) [H]: a category mask when every name is a GameObjectCategoryType name (types in
-// type order: not dummies [M: no build cost and not a hero], not generic [M: not StarBase], mask overlap, the TF
-// unit filter); else a '|' list of type names. Excluded types (-Name) are removed.
+// type order: flags +0x67 / +0x29 / +0x21 clear, no behaviour 0x5C / 0x5B, mask overlap, the TF unit filter); else a
+// '|' list of type names. Excluded types (-Name) are removed.
 const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan, uint32_t tf, uint32_t team) {
     const auto key = std::make_tuple(plan, tf, team);
     const auto it = team_types.find(key);
@@ -924,17 +917,18 @@ const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan
             const gal::TypeInfo& x = rules.types[ty];
             const bool unit_like = x.kind == gal::UnitKind::SpaceUnit || x.kind == gal::UnitKind::Squadron ||
                                    x.kind == gal::UnitKind::GroundUnit || x.kind == gal::UnitKind::GroundStructure;
-            const bool hero = ty < tinfo.size() && tinfo[ty].hero;
             const bool clone = ty < tinfo.size() && tinfo[ty].death_clone;
             // AI_GALACTIC_2 §1.3 + STRATEGIC_GAPS §1.2 [H]: flags +0x67 Create_Team, +0x29 squadron member, +0x21
             // Cinematic_Object_Only clear, and no behaviour 0x5C / 0x5B (DUMMY_STAR_BASE / DUMMY_GROUND_BASE).
             const bool flagged = ty < tinfo.size() && (tinfo[ty].create_team || tinfo[ty].squadron_member ||
                                                        tinfo[ty].cinematic_only || tinfo[ty].dummy_base);
             // [port] kept on top: the galactic unit kinds the port's sim produces, no IsDeathClone, no TRANSPORT
-            // behaviour, cost > 0 unless a hero - the port's Production marshaller does not veto types no planet can
-            // build (buildability §1.3 refuses transports and zero-cost types), so these stay out of team lists.
+            // behaviour (a free-store transport is a company's carrier in the port, not a plan unit). The former
+            // "cost > 0 unless a hero" rule (no such rule in §1.3) is gone since A2f t02: zero-cost types are listed as
+            // in the original; the Production veto on Setup C t = 1e18 (R1) keeps a produced one out of the plan, a
+            // free-store one may still join.
             const bool port_out = ty < tinfo.size() && tinfo[ty].transport_behavior;
-            if (!unit_like || clone || flagged || port_out || (x.build_cost <= 0 && !hero)) continue;
+            if (!unit_like || clone || flagged || port_out) continue;
             const uint64_t m = mask_of(static_cast<uint32_t>(ty));
             if ((mask & m) == 0) continue;
             if (filter != 0 && (filter & m) != filter) continue;
@@ -958,8 +952,9 @@ const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan
 }
 
 bool GalacticAiWorld::Impl::solve_potential_plan(PlayerAi& pa, uint32_t plan, uint32_t goal_type, int32_t target,
-                                                 PotentialPlanRec& out) {
+                                                 PotentialPlanRec& out, bool first_solve) {
     GalPp pp(*this, pa, plan, goal_type, target);
+    pp.first_solve = first_solve;
     // Reset 0x6c3080: PP+0x30 = category available, +0x34 = its rate, +0x38 = +0x30.
     pp.avail = pa.ctx.budget.available(pp.category);
     pp.rate = pa.ctx.budget.rate(pp.category);
@@ -1032,20 +1027,81 @@ bool GalacticAiWorld::Impl::solve_potential_plan(PlayerAi& pa, uint32_t plan, ui
         s.source = pp.sel_source[i];
         s.queue = pp.sel_queue[i];
         s.btime = pp.sel_btime[i];
+        if (s.unit) out.reserved_units.push_back(store.id(s.unit));  // PP+0x108
         out.sel.push_back(s);
     }
     return true;
 }
 
+// The galactic free store is derived: the player's live units no task force holds (free_units).
+bool GalacticAiWorld::Impl::on_free_store(int32_t player, objects::ObjectId id) const {
+    const ObjectHandle u = store.find(id);
+    if (!store.alive(u) || store.owner(u) != player || tf_owns(u)) return false;
+    for (const ObjectHandle f : player_units(player))
+        if (f == u) return true;
+    return false;
+}
+
+// 0x6c4a50 (A1_READINGS §28.6 step 3): the new proposal's PP is solved again (PP+0x104 >= 1: units another PP reserved
+// are skipped, PP+0x108 rebuilt); a failed solve = the plan cannot be activated. [M] 0x6c4a50 runs the same solver
+// 0x6c3da0, so the re-solve draws its own synced numbers in Resolve_Category order. The goal keeps Init's cost / ETA
+// (+0x78 / +0x7c) [M: 0x6c4a50 is not read to copy them]. A proposal's PP has no queue or unit reservation yet (both
+// start at its accept), so the record is replaced.
+bool GalacticAiWorld::Impl::resolve_pp(PlayerAi& pa, const Goal& g) {
+    const auto it = pps.find(g.pp_handle);
+    if (it == pps.end()) return false;
+    PotentialPlanRec rec;
+    if (!solve_potential_plan(pa, it->second.plan, g.type, g.target, rec, false)) {
+        ++stats[defs.goals[g.type].name + " re-solve failed (" + library.plans[it->second.plan].name + ")"];
+        return false;
+    }
+    rec.contrast_ok = it->second.contrast_ok;
+    it->second = std::move(rec);
+    return true;
+}
+
+// 0x6c2d60 -> 0x6c2b20 (A1_READINGS §28.4): +0x30 = this PP for every PP+0x108 unit still on the free store,
+// overwriting any other PP's value (no check).
 void GalacticAiWorld::Impl::reserve_pp_units(int32_t handle) {
     const auto it = pps.find(handle);
     if (it == pps.end()) return;
-    for (const PpSelection& s : it->second.sel)
-        if (s.unit) {
-            const objects::ObjectId id = store.id(s.unit);
-            unit_reserved[id] = handle;  // free-store entry +0x30
-            it->second.reserved_units.push_back(id);
-        }
+    for (const objects::ObjectId id : it->second.reserved_units)
+        if (on_free_store(it->second.player, id)) unit_reserved[id] = handle;
+}
+
+// 0x6c0be0 at Commit start (§28.6 step 2): the PP's +0x30 entries are cleared until 0x6c2d60 re-asserts them.
+void GalacticAiWorld::Impl::suspend_pp_units(int32_t handle) {
+    const auto it = pps.find(handle);
+    if (it == pps.end()) return;
+    for (const objects::ObjectId id : it->second.reserved_units) {
+        const auto r = unit_reserved.find(id);
+        if (r != unit_reserved.end() && r->second == handle) unit_reserved.erase(r);
+    }
+}
+
+// 0x6c45e0 (from 0x6c47c0): invalid when a PP+0x108 unit still on the free store is reserved by another PP.
+bool GalacticAiWorld::Impl::pp_stolen(int32_t handle) const {
+    const auto it = pps.find(handle);
+    if (it == pps.end()) return false;
+    for (const objects::ObjectId id : it->second.reserved_units) {
+        const auto r = unit_reserved.find(id);
+        if (r != unit_reserved.end() && r->second != handle && on_free_store(it->second.player, id)) return true;
+    }
+    return false;
+}
+
+// 0x6c27d0 (PP, unit) for a unit leaving a task force of plan `plan_id`: +0x30 = 0 if it is the plan's PP, and the unit
+// leaves PP+0x108 (later re-asserts skip it). The galactic free store takes it back by itself (derived).
+void GalacticAiWorld::Impl::pp_unit_left(int32_t plan_id, ObjectHandle u) {
+    const auto pit = plans.find(plan_id);
+    if (pit == plans.end() || pit->second.pp < 0) return;
+    const auto it = pps.find(pit->second.pp);
+    if (it == pps.end()) return;
+    const objects::ObjectId id = store.id(u);
+    const auto r = unit_reserved.find(id);
+    if (r != unit_reserved.end() && r->second == pit->second.pp) unit_reserved.erase(r);
+    auto& v = it->second.reserved_units;
+    v.erase(std::remove(v.begin(), v.end(), id), v.end());
 }
 
 void GalacticAiWorld::Impl::release_pp(int32_t handle) {

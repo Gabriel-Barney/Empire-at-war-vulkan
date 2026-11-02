@@ -14,7 +14,7 @@
 //                                  (order_attack_issue, path A) and drops refusing units; land: min-range staging [M].
 //                                  Every other move / stop clears the attack goal
 //   Reinforce                   -> A2 tactical: TacticalBattle::order_reinforce (the human path: undeployed reserve,
-//                                  side not retreating, space unit cap, rows of 6 around the clamped point [port])
+//                                  side not retreating, space unit cap; land: the company drop layout, space: rows of 6 [port])
 //   Retreat                     -> TacticalBattle::request_retreat
 //   40 / 43 / 57 / 58           -> TacticalBattle::handle_command (abilities)
 //   TacticalBuild               -> A2 tactical: the player build event 0x42edf0 refusals (UC / built present, pad
@@ -115,14 +115,23 @@ public:
     // Hard points whose opportunity target changed to a new live target since the previous call (ascending unit id, then
     // hard-point index [port: no in-tick order]); owner = the unit's team container when it has one.
     std::vector<ai::tactical::OpportunityTargetEvent> opportunity_targets() override;
+    // S7 t15 A1: TacticalBattle::ability_finished_events of the tick just run (signal 0x29, in order).
+    std::vector<int32_t> ability_finished() override;
+    // S7 t21: TacticalBattle::movement_locked (0x39ad40) for the ambush member list.
+    bool movement_locked(int32_t object_id) override;
+    // S7 t27: the L1 weather system's Sight_Range_Modifier for the type's Weather_Category (every owner weather-affected
+    // [port], as the fog's land sight range).
+    float sight_weather_factor(int32_t type, int32_t object_id) override;
     // HIJACK_UNIT (AI_GALACTIC_3 §4.3): GalacticSim::magic_spawn at the battle planet, a surface unit launched into the
     // orbit fleet (FAILED when that fails, e.g. blockaded), TacticalBattle::add_reserve; returns the new pool entry.
     // Refused before spawning when the type is not in the battle tables. [port] the galactic AI free store is not touched.
     ai::tactical::TacticalReinforcement hijack_unit(int32_t player, int32_t type, bool steal) override;
-    // Active_By_Default re-apply (TACTICAL_GAPS §1.2): AbilitySystem::apply_active_by_default for the player's live
-    // battle object. [port] the hook does not tell the free-store path from the task-force path: a unit with HUNT
-    // active is skipped on both; the un-immobilise step (0x3a8e50(obj, 0)) has no AbilitySystem entry point (not done).
-    void unit_released(int32_t player, int32_t object_id) override;
+    // Active_By_Default re-apply (TACTICAL_GAPS §1.2, A1_READINGS §28.8): AbilitySystem::apply_active_by_default for the
+    // player's live battle object. OrderLockDone: always (the AI released the script lock, 0x3a8e50(obj, 0), first; the
+    // ability share of the counter is not touched). TaskForce: skipped while movement is locked (0x39ad40: ability
+    // share AbilitySystem::immobilize_count > 0, script orders_locked / locomotor_suspended; [port] HUNT active stands
+    // in for the locomotor term).
+    void unit_released(int32_t player, int32_t object_id, ai::tactical::TacticalAiHost::UnitRelease path) override;
     // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4, TACTICAL_GAPS §4.2). Entry facing = the player's side
     // deploy facing (TacticalBattle facing_ [port: stands in for the mode +0x288 record]); playable box = the mode bounds.
     // Prevention = live objects with Reinforcement_Prevention_Radius whose owner is not allied (not the player, and an
@@ -133,12 +142,39 @@ public:
     bool space_drop_frame(int32_t player, ai::tactical::SpaceDropFrame& out) override;
     bool space_prevention_hit(int32_t player, const ai::tactical::Vec3f& p) override;
     bool space_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p, float facing_deg, float sweep) override;
+    // a1g t04 follow-up - land TF.Reinforce drop validity: TacticalBattle::land_drop_valid (a1h t06: moved to the host so the
+    // Reinforce command re-runs it) with this battle's mode. AI drops pass human = false (movers ignored, landing
+    // transports block).
+    bool land_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p) override { return land_drop_valid(player, key, p, false); }
+    bool land_drop_valid(int32_t player, int32_t key, const ai::tactical::Vec3f& p, bool human);
+    // a1j t01 - land TF.Reinforce with BattleConfig::landing_unload_timed (A1_READINGS §36): reinforce_in_flight = the
+    // player's timed landing object of pool entry `key` (participant galactic id) has not finished its unload;
+    // reinforcements_unloaded = TacticalBattle::landings_unloaded() of the tick just run (owner, galactic id, units).
+    bool reinforce_in_flight(int32_t player, int32_t key) override;
+    std::vector<ai::tactical::ReinforcementsUnloaded> reinforcements_unloaded() override;
     // --- end battle host ---
 
 private:
     float type_population(int32_t type) const;  // A2 tactical: pop(T, mode) 0x373500
     float allow_reinforcement_fraction_ = 0.0f;  // A2 tactical: Allow_Reinforcement_Percentage_Normalized
+    bool use_reinforcement_points_ = true;       // a1g t04 follow-up: Use_Reinforcement_Points (GC +0x118a0)
     void standin_orders();
+    // a1h t02 (A1_READINGS §33.4 / §33.5 rule 2): a group move with an object goal (Guard_Target, Attack_Move or Move_To on
+    // an object) follows the object in the movement layer, not by AI re-orders: at most once per 30 frames the group is
+    // re-pathed when the object is more than R (half the lead member's attack range) from the recorded goal. Any newer
+    // order for a unit takes it out of its follow record (signal 0xb, §33.3); an empty record or a dead object ends it.
+    struct ObjectFollow {
+        std::vector<objects::ObjectId> units;
+        objects::ObjectId target = objects::kNoObjectId;
+        float gx = 0.0f, gy = 0.0f;  // the recorded goal point (formation +0x210..+0x218)
+        float r = 0.0f;              // R
+        float threat = 0.0f;         // the move's threat tolerance (kThreatOff = none)
+        uint32_t next = 0;           // the next battle frame the formation update may re-path (+0x1d8)
+    };
+    std::vector<ObjectFollow> follows_;  // issue order
+    void follow_drop(const std::vector<objects::ObjectId>& units);
+    void follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat);
+    void follow_service();
     commands::RejectReason execute_order(uint8_t player, const commands::EventData& ev);
     bool move_unit(objects::ObjectId id, float x, float y, float threat_threshold = ::alamo::tactical::movement::kThreatOff);
 
@@ -148,6 +184,7 @@ private:
     std::vector<ai::tactical::HintZone> zones_;
     ai::tactical::ZoneLocator zone_locator_;  // position -> zone (A1_READINGS §4)
     std::unique_ptr<ai::tactical::TacticalAiWorld> world_;
+    uint32_t order_listener_ = 0;   // S7 t31: TacticalBattle::add_order_replaced_listener token (world_->order_replaced)
     std::vector<uint8_t> ai_side_;  // per player: has a tactical AI
     uint32_t stale_ = 0;  // object orders whose target died before execution (no-ops)
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed_;  // event name -> (applied, rejected) [diagnostic]
@@ -156,10 +193,14 @@ private:
     // (draw_unit_ai_stamps, two synced draws) when fill() first lists it; ascending id.
     std::map<objects::ObjectId, int32_t> unit_ai_stamps_;
     std::vector<objects::ObjectId> team_units(uint8_t player, uint32_t wire) const;  // battle host: unit or TEAM members
+    // S7 t26: signal 0xb (a new order replaces the unit's order) on every unit an executed AI / script order took.
+    void order_signals(uint8_t player, const commands::EventData& ev);
+    // The ordered-attack hostility test (0x39a450 -> Is_Enemy 0x2824f0, relation == 1): the battle's relation table
+    // (TACTICAL_COMBAT §2.10, S7 t30), where an Is_Neutral player is relation 2.
+    bool hostile_owner(uint8_t player, int32_t owner) const;
     lua::TacticalScriptHooks tactical_;    // battle host: script_gaps.hpp hooks of the tactical AI VMs (L1 final list)
 #ifdef ALAMO_LUA_HAVE_FOG
-    // refixf t03: only object_hidden is set (Find_Nearest's FOW_Object_Hidden test); fog stays null, so the AI VMs'
-    // FogOfWar.* bindings keep answering "Command only valid in a tactical game" as before.
+    // refixf t03: object_hidden (Find_Nearest's FOW_Object_Hidden test); S7 t34: fog = the battle's fog (FogOfWar.*).
     lua::FogScriptHooks fog_hooks_;
 #endif
     lua::RemainingScriptHooks remaining_;  // L1 bindings: script_remaining.hpp hooks of the tactical AI VMs (Divert; Int-final: strikes, damage stats, fields, weather, shields)

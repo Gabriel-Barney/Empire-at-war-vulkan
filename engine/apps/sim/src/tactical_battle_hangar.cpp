@@ -8,8 +8,10 @@
 //  * Each tick after the combat tick and its events: HangarSystem::update, then the launch requests in order
 //    (squadron: members at the bay origin with its facing, then the team container, spawned flag +0x3a2 |= 2; single
 //    ship: rings r = 0 / 200 / 400 / 600 / 800 at 45 degree steps around the flyout point), bind_launch, the initial
-//    order (escort: [port] a move to the carrier, MovementSystem has no guard state; else a move to the flyout point),
-//    then clear_requests().
+//    order (S7 t24, escort: a guard of the carrier - a move to the carrier's position with the guard flag 0x02 and the
+//    squadron's formation record {flags 0x02, goal object = the carrier}, so its auto targets are chased within
+//    Guard_Chase_Range of the carrier, followed by the movement layer (S7 t37: object goal block); else a move to the flyout point), then
+//    clear_requests().
 //  * Removal: squadron container / single ship gone -> squadron_removed; carrier gone -> remove_carrier.
 //  * Station upgrade (SpawnPurpose::StationUpgrade): spawn Next_Level_Base for S's owner at S, complete_station_upgrade,
 //    tech +1 for the owner then each ally (battle-local [port]), S removed silently, the upgrade recorded for the host
@@ -108,8 +110,8 @@ void TacticalBattle::hg_add_types() {
         const std::vector<uint32_t> now = types_used_;
         for (const uint32_t t : now) {
             const auto ti = static_cast<objects::TypeIndex>(t);
-            // Skirmish space: the tactical production lists (every faction row) join the tables.
-            if (cfg_.skirmish && space_)
+            // Skirmish (space; skai t03: land too): the tactical production lists (every faction row) join the tables.
+            if (cfg_.skirmish)
                 for (const std::string_view tok : types.get_list(ti, kBuildList)) {
                     const objects::TypeIndex x = types.resolve_name(hg_trim(tok));
                     if (x != objects::kNone) use_spawnable(static_cast<int32_t>(x));
@@ -347,13 +349,23 @@ void TacticalBattle::hg_tick(TacticalMode& mode, SimRng& rng) {
         if (bound == objects::kNoObjectId) continue;
         hangars_->bind_launch(r.serial, bound);
         ++hg_launches_;
-        // Initial order: escort -> guard the carrier (order kind 3) [port: a move to the carrier's position]; else a
-        // formation move to the flyout point.
-        if (!ordered.empty()) {
-            Vec3 to = hg_sv(r.flyout);
-            if (r.escort)
-                if (const Unit* c = unit_by_id(r.carrier); c && c->alive && store.alive(c->h)) to = store.position(c->h);
-            exec_move(mode, ordered, to.x, to.y, rng, mv::kNoFacing, false);
+        // Initial order (STATION_HANGARS_SOUND §2.5): escort -> guard the carrier (order kind 3 with the carrier as target;
+        // S7 t24: block flags 0x02, slot goal = the carrier, Guard_Chase_Range, followed by the movement layer); else (a
+        // station, or the carrier already gone) a formation move to the flyout point. S7 t25 (FIGHTER_FLYING §4.10 E): a
+        // single launched ship (no Squadron_Units) gets no move order.
+        std::vector<int32_t> squad_members;
+        if (!ordered.empty() && oi_company_members(r.type, squad_members) && !squad_members.empty()) {
+            const Unit* c = r.escort ? unit_by_id(r.carrier) : nullptr;
+            if (c && c->alive && !c->retreated && store.alive(c->h)) {
+                const Vec3 to = store.position(c->h);
+                // S7 t37: the move carries the carrier as its object goal (Coordinator::Move_To kind 3): the movement
+                // layer follows it (A1_READINGS §33.4.1).
+                exec_move(mode, ordered, to.x, to.y, rng, mv::kNoFacing, false, mv::kMoveFlagGuardMove, false, c->id);
+                fighter_order(ordered, mv::kMoveFlagGuardMove, Vec3{to.x, to.y, 0.0f}, c->id);
+            } else {
+                const Vec3 to = hg_sv(r.flyout);
+                exec_move(mode, ordered, to.x, to.y, rng, mv::kNoFacing, false);
+            }
         }
     }
     hangars_->clear_requests();
@@ -586,9 +598,22 @@ void TacticalBattle::hg_production(TacticalMode& mode, SimRng& rng) {
             abilities_->add_container(id, desc_of(static_cast<uint32_t>(t)), o.player, none, frame_, &rng);
             hg_upgrade_objs_.push_back(HgUpgradeObject{id, h});
         } else {
-            // Other types: the normal tactical spawn at the builder [port: no initial order].
+            // Other types: the normal tactical spawn at the builder [port: no initial order]. skai t03, land: retail puts the
+            // finished unit in the reinforcement pool for a Reinforce drop (SKIRMISH_SETUP §3); [port] the pool holds only
+            // galactic objects, so the company appears kLandProducedOffset in front of its builder instead.
+            Vec3 at = pos;
+            if (!space_) {
+                const float len = std::sqrt(facing.x * facing.x + facing.y * facing.y);
+                constexpr float kLandProducedOffset = 120.0f;
+                if (len > 0.0f) {
+                    at.x += facing.x / len * kLandProducedOffset;
+                    at.y += facing.y / len * kLandProducedOffset;
+                } else {
+                    at.y -= kLandProducedOffset;
+                }
+            }
             std::vector<objects::ObjectId> ordered;
-            (void)hg_spawn(mode, o.type, o.player, pos, facing, pos, false, rng, ordered);
+            (void)hg_spawn(mode, o.type, o.player, at, facing, at, false, rng, ordered);
         }
     }
 }

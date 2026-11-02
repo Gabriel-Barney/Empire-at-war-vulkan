@@ -109,8 +109,10 @@ endif()
 
 # ---------------------------------------------------------------- [port] TAA (shaders/taa.hlsl, src/taa.cpp)
 set(_render_taa_headers)
-# name : entry : profile : define
-foreach(spec "taa_vs:VSMain:vs_6_0:" "taa_ps_resolve:PSResolve:ps_6_0:RESOLVE" "taa_ps_sharpen:PSSharpen:ps_6_0:SHARPEN")
+# name : entry : profile : define : source (default taa.hlsl); taa_velocity.hlsl is the object-motion pass
+foreach(spec "taa_vs:VSMain:vs_6_0:" "taa_ps_resolve:PSResolve:ps_6_0:RESOLVE" "taa_ps_sharpen:PSSharpen:ps_6_0:SHARPEN" "taa_ps_depth:PSDepth:ps_6_0:DEPTH"
+             "taa_vel_vs:VSMain:vs_6_0::taa_velocity.hlsl" "taa_vel_vs_skin:VSMain:vs_6_0:SKINNED:taa_velocity.hlsl"
+             "taa_vel_ps:PSMain:ps_6_0::taa_velocity.hlsl")
   string(REPLACE ":" ";" parts "${spec}")
   list(GET parts 0 _name)
   list(GET parts 1 _entry)
@@ -123,13 +125,17 @@ foreach(spec "taa_vs:VSMain:vs_6_0:" "taa_ps_resolve:PSResolve:ps_6_0:RESOLVE" "
       set(_defs -D ${_d})
     endif()
   endif()
+  set(_src taa.hlsl)
+  if(_np GREATER 4)
+    list(GET parts 4 _src)
+  endif()
   set(_hdr ${_render_gen_dir}/${_name}.h)
   add_custom_command(
     OUTPUT ${_hdr}
     COMMAND "${_render_dxc}" -nologo -spirv -fvk-use-dx-layout -fspv-target-env=vulkan1.3 -WX -O3
-            -T ${_profile} -E ${_entry} ${_defs} -Fh ${_hdr} -Vn g_${_name} "${_render_shader_dir}/taa.hlsl"
-    DEPENDS ${_render_shader_dir}/taa.hlsl
-    COMMENT "DXC ${_name} (taa.hlsl ${_entry} ${_profile})"
+            -T ${_profile} -E ${_entry} ${_defs} -Fh ${_hdr} -Vn g_${_name} "${_render_shader_dir}/${_src}"
+    DEPENDS ${_render_shader_dir}/${_src}
+    COMMENT "DXC ${_name} (${_src} ${_entry} ${_profile})"
     VERBATIM)
   list(APPEND _render_taa_headers ${_hdr})
 endforeach()

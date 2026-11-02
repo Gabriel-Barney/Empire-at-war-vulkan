@@ -439,7 +439,8 @@ Runs once per land formation after its shape (MOVEMENT §4.3) and path are known
 - No RNG.
 
 ### 4.3 JETPACK_LOCOMOTOR (vf6 0x641910, land only) [H unless tagged]
-Users: FoC Boba Fett and the Dark Troopers (3 types); TR 6.
+Users: FoC Boba_Fett, Dark_Trooper_PhaseII and Dark_Trooper_PhaseIII, all as `Secondary_Locomotor_Name` (they spawn on
+WALK and swap, MOVEMENT §3.1.1); TR 6.
 
 | state | behaviour |
 |---|---|
@@ -450,16 +451,18 @@ Users: FoC Boba Fett and the Dark Troopers (3 types); TR 6.
 | 0x12 Start Move (0x642530) | take-off; details below |
 | 0x13 Moving (0x6420e0) | flight and landing test; details below |
 | 0x14 End Move (0x641df0) | landing sequence; details below |
-| 0x16 Stopped | speed 0, idle |
+| 0x16 Stopped | speed 0, idle; then swap back to the primary locomotor (0x3a9910(obj, system, 1); MOVEMENT §3.1.1) |
 
-- **Turning** (0x10). With type +0x36 set, for heading error e and type turn rate r:
+- **Turning** (0x10). With type +0x36 set, for heading error e and type turn rate r, the band sets the **yaw rate
+  of the following frames** (pack +0xe8), not an animation rate (the animation plays at a constant speed):
   - |e| < r: no animation;
-  - |e| < 22.5°: anim 0x16 / 0x18 at rate r × 0.25 × |e| / 11.25;
-  - |e| < 45°: anim 0x15 / 0x17 at rate r × 0.5;
-  - otherwise anim 3 / 4 at the full rate.
+  - |e| < 22.5°: anim 0x16 / 0x18, yaw rate r × 0.25 × |e| / 11.25;
+  - |e| < 45°: anim 0x15 / 0x17, yaw rate r × 0.5;
+  - otherwise anim 3 / 4, yaw rate r.
 
-  Without +0x36: anim 3 / 4 at speed (angle / rate) × 0.03333, capped by GC 0x140b16d28.
-- **Start Move** (0x12): anim 0x30 (Jump). When it finishes, shift every waypoint time by (now − first waypoint time), loop 0x31 (FlyIdle), set airborne (0x3a7e30) → 0x13.
+  Without +0x36: anim 3 / 4 at animation speed (angle / rate) × 0.03333, capped by GC 0x140b16d28; yaw rate r.
+  Full flow: MOVEMENT §3.1.1 "Take-off turn" (2026-11-02).
+- **Start Move** (0x12): anim 0x30 (Jump). When it finishes, shift every waypoint time by (now − first waypoint time), loop 0x31 (FlyIdle), engine moving loop on (0x3a7e30; audio only, MOVEMENT §3.1.1) → 0x13.
 - **Moving** (0x13): follow the timed path (vf +0x1d8 [M]) and set the altitude (below). No movement → 0x16. Path done → 0x14.
   - **Landing test,** while FlyLand is not yet playing and (last waypoint time − now) ≤ 7 frames (0x140a44334): the last waypoint must pass the movement-class test (0x50e280) and be unoccupied (0x538200). Then play 0x32 (FlyLand) and clear airborne. Otherwise re-issue a move to the same point (0x640880, radius 50).
 - **End Move** (0x14):
@@ -574,11 +577,20 @@ circling, follower vf +0x1d8 = SimpleSpace Hermite with strict bracketing); its 
 - **Gates** (TACTICAL_GAPS §2.1, confirmed):
   - Force / garrison / mode / team `Can_Activate`;
   - 2-D distance ≤ record `Effective_Radius` (+0x20) unless it is negative;
-  - optional garrison release (type +0x74, 0x3a9910).
-- **Order.** Builds an ordinary move order for the unit or its team and executes it through 0x2a7b80. The record has non-default fields 4, 0x3f, 0x1000001 and −999 [L meaning]. The JETPACK locomotor (§4.3) does the flight.
+  - (corrected 2026-11-01, S7 t11) there is no garrison release here. The type +0x74 test belongs to the
+    **locomotor swap**: after the gates pass, when the unit has a locomotor (obj +0x333 ≠ −1), type +0x74
+    (`Uses_Multiple_Locomotors`) = 1 and the mode has a movement-coordinator system (mode vf +0x228), it calls
+    0x3a9910(unit, system, 0): swap to `Secondary_Locomotor_Name` (JETPACK_LOCOMOTOR in FoC). That re-issues the
+    unit's current order in a coordinator of its own, rebuilds the locomotor (pack state 0) and disables TARGETING,
+    WEAPON and SPECIAL_WEAPON for the flight (MOVEMENT §3.1.1). It is not a gate: the ability goes on either way.
+- **Order.** Builds an ordinary move order for the unit or its team and executes it through 0x2a7b80, which takes the
+  unit out of the swap's coordinator into a new one. Move record: destination = the target point, flags +0x48 = 0x04,
+  mask +0x4c = 0x3f, +0x60 = 0x1000001, type 1 [H offsets; meanings MOVEMENT §6.1]. The −999 is a field of the
+  temporary unit list (the ReferenceListClass local passed as the selection), not of the move record [M]. The JETPACK locomotor (§4.3) does the
+  flight and swaps back to the primary in state 0x16 (after the landing).
 - **Countdown.** The acting record (the member's record in a team) with `Expiration_Seconds` (+0x28) = 0 starts recharge at once (0x42fb70); otherwise the active phase starts (0x42fde0).
   - Every shipped user has no Expiration, so 17 is never "active". The locomotor cannot use `Is_Active(17)` as a flight flag [M].
-- No RNG.
+- No RNG in the ability itself (the swap's re-issued `Move_To` may draw formation stagger, MOVEMENT §3.1.1 [M]).
 - **Data:**
   - FoC: 6 users, recharge 28 / 45 / 60 s, `Effective_Radius` −1 on two;
   - TR: 7 users, recharge 40 / 45 / 90 s, −1 on all five that set it.
@@ -710,12 +722,23 @@ No sim effect. Data: FoC 1 planet with starbase stealth and 7 with ground-base s
   conflict not yet queued, so the state-machine block does not apply); with Param13 = 0 (all Underworld links)
   0x28f590 clears it in the same call that wrote it, so the block is never seen.
 - **The list at 0x140b2b360** has no writer anywhere in the binary (reads plus the destructor 0x7ef5b0 only), so it is always empty.
-- **Effect.** While set, in SP and when the local player is in a queued conflict (0x2b0350):
+- **Effect.** While set, in SP and when the local player is in a queued conflict (0x2b0350: the local player is
+  attacker or defender of any record, not only the head, in the space or the land queue; the SP test is in the
+  callers; A1_READINGS §31.6):
   - conflict state machines do not run (0x2be640);
   - SpecialAbility commands are dropped (0x4b4d70 prologue);
   - FleetManagement 0x5af260, Lua free-store `Move_To` 0x68f5b0 and the GUI moves 0x3c4460 / 0x48ff50 refuse moves;
   - the galactic "paused" query 0x4b2360 returns true.
+
+  These are all seven callers of 0x2b0350. None of them tests the event's issuer, so AI players' commands are blocked
+  only while the local player is in a queued conflict (table: A1_READINGS §31.7, a1i t03).
 - **Port:** `linked_battle_pending`, set by LINK_TACTICAL and the corruption mission, cleared when that battle starts.
+  `GalacticSim::story_block()` = the flag and `in_queued_conflict(local player)`; `paused()` = pause counter or
+  `story_block()`, used by every command gate (a1i t03, 2026-11-02; it replaces "[port: for every player]"). a1j t05
+  (2026-11-02): `GalacticSim::update` freezes the mode frame on `paused()` (hero spawn lists still run under the block,
+  as 0x2be640), and `CampaignBattles`' conflict gate skips the state machines while the block holds; a waiting
+  LINK_TACTICAL record takes over the frozen active conflict (A1_READINGS §31.7). [port] corruption-mission conflicts
+  neither feed nor obey the block.
 
 ### 6.5 Build pads (extends L1_S4_REMAINING §3.6) [H unless tagged]
 - **UC attachment bone** (0x42e280):

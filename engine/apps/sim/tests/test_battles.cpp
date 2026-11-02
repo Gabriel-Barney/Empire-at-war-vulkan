@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/bytes.hpp"  // FOW t01: fog save round trip
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"  // S4: name_crc for map placements
 #include "alamo/data/game_database.hpp"
@@ -42,6 +43,7 @@
 #endif
 #include "alamo/sim/map_spawn.hpp"
 #include "alamo/sim/sim_host.hpp"
+#include "alamo/tactical/movement/ted_grid.hpp"  // S7 t07: SPACE_OBSTACLE footprints
 #include "alamo/vfs/vfs.hpp"
 #ifdef ALAMO_SIM_HAVE_GARRISON
 #include "alamo/tactical/garrison/garrison_types.hpp"  // S4
@@ -105,7 +107,8 @@ const char* kTypes = R"(<S10>
   <AI_Combat_Power>50</AI_Combat_Power><CategoryMask>Infantry</CategoryMask><Targeting_Max_Attack_Distance>250</Targeting_Max_Attack_Distance>
   <Projectile_Types>S10_Blaster_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>1.0</Projectile_Fire_Recharge_Seconds>
   <Projectile_Fire_Pulse_Count>1</Projectile_Fire_Pulse_Count><MovementClass>Infantry</MovementClass>
-  <Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>
+  <Behavior>SELECTABLE, WEAPON</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>
+  <Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>
  </GroundInfantry>
  <GroundCompany Name="S10_Squad"><Company_Units>S10_Trooper, S10_Trooper, S10_Trooper, S10_Trooper</Company_Units>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
@@ -187,6 +190,19 @@ std::string fog_types() {
     return t;
 }
 
+// FOW t01: the fog data plus a Space_Automatic Battlefield_Modifier with FOW_Reveal_Range_Multiplier 1.5 on the corvettes
+// (Empire has one, the Underworld four), as the shipped Hutt_Field_Commander_FOW_Increase (Ground_Automatic) is built.
+std::string fog_bm_types() {
+    std::string t = fog_types();
+    const std::string at = "<CategoryMask>Corvette</CategoryMask>";
+    const size_t p = t.find(at);
+    if (p != std::string::npos)
+        t.insert(p + at.size(), "<Abilities SubObjectList=\"Yes\"><Battlefield_Modifier_Ability Name=\"S10_FOW_Boost\">"
+                                "<Activation_Style>Space_Automatic</Activation_Style><FOW_Reveal_Range_Multiplier>1.5</FOW_Reveal_Range_Multiplier>"
+                                "<Stacking_Category>0</Stacking_Category></Battlefield_Modifier_Ability></Abilities>");
+    return t;
+}
+
 // R3 anim test data: the same types plus corpse / removal fields and a frigate death clone.
 std::string anim_types() {
     std::string t = kTypes;
@@ -216,6 +232,24 @@ std::string team_types() {
     if (p != std::string::npos) t.insert(p + at.size(), "<Create_Team>Yes</Create_Team>");
     const size_t end = t.find("</S10>");
     if (end != std::string::npos) t.insert(end, " <Team Name=\"Team\"><Behavior>TEAM</Behavior></Team>\n");
+    return t;
+}
+
+// a1i t04: the team data plus a landing transport: S10_Squad (Max_Squad_Size 2: two teams) names Company_Transport_Unit
+// S10_Lander, whose Landing_Transport_Variant S10_Lander_Landing (TRANSPORT, Hover_Offset 10 inherited) carries it down.
+std::string landing_types() {
+    std::string t = team_types();
+    const std::string at = "<GroundCompany Name=\"S10_Squad\">";
+    if (const size_t p = t.find(at); p != std::string::npos)
+        t.insert(p + at.size(), "<Company_Transport_Unit>S10_Lander</Company_Transport_Unit><Max_Squad_Size>2</Max_Squad_Size>");
+    const size_t end = t.find("</S10>");
+    if (end != std::string::npos)
+        t.insert(end, " <GroundVehicle Name=\"S10_Lander\"><Behavior>TRANSPORT</Behavior><Hover_Offset>10</Hover_Offset>"
+                      "<Landing_Transport_Variant>S10_Lander_Landing</Landing_Transport_Variant>"
+                      "<Custom_Hard_XExtent>20</Custom_Hard_XExtent><Custom_Hard_YExtent>15</Custom_Hard_YExtent>"
+                      "<Custom_Hard_XExtent_Deployed>30</Custom_Hard_XExtent_Deployed></GroundVehicle>\n"
+                      " <GroundVehicle Name=\"S10_Lander_Landing\"><Variant_Of_Existing_Type>S10_Lander</Variant_Of_Existing_Type>"
+                      "<Landing_Transport_Variant></Landing_Transport_Variant></GroundVehicle>\n");
     return t;
 }
 
@@ -324,13 +358,110 @@ std::string obstacle_types() {
     // a weak one, so the attackers kill it inside the test's frames (its static entry must leave with it)
     const std::string hp = "<Tactical_Health>2500</Tactical_Health><Base_Level>1</Base_Level>";
     if (const size_t q = t.find(hp); q != std::string::npos) t.replace(q, hp.size(), "<Tactical_Health>300</Tactical_Health><Base_Level>1</Base_Level>");
+    // S8 t02 / S7 t13 (test_runtime_obstacles): a weak LAND_OBSTACLE bunker, a LAND_OBSTACLE rock and a smaller rock
+    // placeholder that always spawns the rock (Map_Load_Spawn_Table); a SPACE_OBSTACLE map unit (SIMPLE_SPACE locomotor, so
+    // Hyperspace_Away kills it), an asteroid and a smaller asteroid placeholder that always spawns the asteroid.
+    // S8 t13: the land obstacles have no Land_Model_Name, so (MOVEMENT §1.3) they stamp only with Fine_Tune off (the
+    // explicit XML rectangle); with the default (on) and no proxy retail never stamps them.
+    const std::string extra =
+        " <GroundStructure Name=\"S10_Obst_Bunker\"><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability><Tactical_Health>40</Tactical_Health><CategoryMask>Structure</CategoryMask>"
+        "<Behavior>SELECTABLE</Behavior><LandBehavior>LAND_OBSTACLE</LandBehavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+        "<Obstacle_Width>60</Obstacle_Width><Obstacle_Height>60</Obstacle_Height><Obstacle_X_Offset>-30</Obstacle_X_Offset>"
+        "<Obstacle_Y_Offset>-30</Obstacle_Y_Offset></GroundStructure>\n"
+        // S8 t09: a structure whose death clone is not an obstacle (Death_Clone_Is_Obstacle false, as Imperial_Prison_Dathomir)
+        " <GroundStructure Name=\"S10_Obst_Prison\"><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability><Tactical_Health>40</Tactical_Health><CategoryMask>Structure</CategoryMask>"
+        "<Behavior>SELECTABLE</Behavior><LandBehavior>LAND_OBSTACLE</LandBehavior><Death_Clone_Is_Obstacle>No</Death_Clone_Is_Obstacle>"
+        "<Obstacle_Width>60</Obstacle_Width><Obstacle_Height>60</Obstacle_Height><Obstacle_X_Offset>-30</Obstacle_X_Offset>"
+        "<Obstacle_Y_Offset>-30</Obstacle_Y_Offset></GroundStructure>\n"
+        " <GroundProp Name=\"S10_Obst_Rock\"><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>100</Obstacle_Width>"
+        "<Obstacle_Height>100</Obstacle_Height><Obstacle_X_Offset>-50</Obstacle_X_Offset><Obstacle_Y_Offset>-50</Obstacle_Y_Offset></GroundProp>\n"
+        " <GroundProp Name=\"S10_Obst_Rock_Spawner\"><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>20</Obstacle_Width>"
+        "<Obstacle_Height>20</Obstacle_Height><Obstacle_X_Offset>-10</Obstacle_X_Offset><Obstacle_Y_Offset>-10</Obstacle_Y_Offset>"
+        "<Map_Load_Spawn_Table>S10_Obst_Rock, 1.0</Map_Load_Spawn_Table></GroundProp>\n"
+        " <SpaceUnit Name=\"S10_Obst_Mine\"><Variant_Of_Existing_Type>S10_Frigate</Variant_Of_Existing_Type>"
+        "<SpaceBehavior>SIMPLE_SPACE_LOCOMOTOR, SPACE_OBSTACLE</SpaceBehavior><Custom_Soft_Footprint_Radius>120</Custom_Soft_Footprint_Radius></SpaceUnit>\n"
+        " <SpaceProp Name=\"S10_Obst_Asteroid\"><Behavior>SPACE_OBSTACLE</Behavior><Space_Obstacle_Radius>400</Space_Obstacle_Radius></SpaceProp>\n"
+        " <SpaceProp Name=\"S10_Obst_Asteroid_Spawner\"><Behavior>SPACE_OBSTACLE</Behavior><Space_Obstacle_Radius>50</Space_Obstacle_Radius>"
+        "<Map_Load_Spawn_Table>S10_Obst_Asteroid, 1.0</Map_Load_Spawn_Table></SpaceProp>\n";
+    t.insert(t.rfind("</S10>"), extra);
+    return t;
+}
+
+// S7 t12: a TIE-like fighter squadron (FIGHTER_LOCOMOTOR members, Squadron_Units -> one TEAM container in space). Health
+// is high so the frigates' lasers do not end the test; the attack range is wide so a frigate next to the route becomes the
+// fighters' combat auto target long before they pass it. S7 t22: the squadron's chase ranges are the FoC X-wing squadron's
+// (Guard 1000 / Idle 200 / Attack_Move_Response 300); `fog` starts from the fog test types (frigates REVEAL 900 and
+// HIDE_WHEN_FOGGED; the fighters reveal nothing).
+std::string fighter_types(bool fog = false) {
+    std::string t = fog ? fog_types() : std::string(kTypes);
+    const size_t end = t.find("</S10>");
+    if (end != std::string::npos)
+        t.insert(end,
+                 " <SpaceUnit Name=\"S10_TIE\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>20000</Tactical_Health>"
+                 "<Max_Speed>4.5</Max_Speed><Min_Speed>2.5</Min_Speed><Max_Rate_Of_Turn>3.0</Max_Rate_Of_Turn><Max_Rate_Of_Roll>5.0</Max_Rate_Of_Roll>"
+                 "<Max_Lift>4.0</Max_Lift><Max_Thrust>1.0</Max_Thrust><Bank_Turn_Angle>40</Bank_Turn_Angle><Strafe_Distance>500</Strafe_Distance>"
+                 "<CategoryMask>Fighter</CategoryMask><Targeting_Max_Attack_Distance>900</Targeting_Max_Attack_Distance>"
+                 "<Projectile_Types>S10_Blaster_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>1.0</Projectile_Fire_Recharge_Seconds>"
+                 "<Projectile_Fire_Pulse_Count>1</Projectile_Fire_Pulse_Count><Behavior>SELECTABLE, WEAPON</Behavior>"
+                 "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><SpaceBehavior>FIGHTER_LOCOMOTOR</SpaceBehavior>"
+                 "<Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius></SpaceUnit>\n"
+                 " <Squadron Name=\"S10_TIE_Squadron\"><Squadron_Units>S10_TIE, S10_TIE, S10_TIE</Squadron_Units>"
+                 "<Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value>"
+                 "<Squadron_Formation_Error_Tolerance>25</Squadron_Formation_Error_Tolerance><Guard_Chase_Range>1000.0</Guard_Chase_Range>"
+                 "<Idle_Chase_Range>200.0</Idle_Chase_Range><Attack_Move_Response_Range>300.0</Attack_Move_Response_Range></Squadron>\n"
+                 " <Team Name=\"Team\"><Behavior>TEAM</Behavior></Team>\n"
+                 // S7 t24: a moving carrier (a locomotor, so its launches escort it) with one fighter bay; one squadron at a time
+                 " <SpaceUnit Name=\"S10_Carrier\"><Variant_Of_Existing_Type>S10_Frigate</Variant_Of_Existing_Type>"
+                 "<Tactical_Health>20000</Tactical_Health><HardPoints>HP_S10_Laser_A, HP_S10_Bay</HardPoints>"
+                 "<SpaceBehavior>STARSHIP_LOCOMOTOR, SPAWN_SQUADRON</SpaceBehavior>"
+                 "<Starting_Spawned_Units_Tech_0>S10_TIE_Squadron, 1</Starting_Spawned_Units_Tech_0>"
+                 "<Spawned_Squadron_Delay_Seconds>1.0</Spawned_Squadron_Delay_Seconds></SpaceUnit>\n");
+    // fog: a 2100 attack range, so an ordered attack stops the squadron at 0.7 x 2100 = 1470, outside the frigates' 1400 (no
+    // shots at it, so no attacker flash reveals the target).
+    if (fog)
+        if (const size_t p = t.find("<CategoryMask>Fighter</CategoryMask><Targeting_Max_Attack_Distance>900"); p != std::string::npos)
+            t.replace(p, 70, "<CategoryMask>Fighter</CategoryMask><Targeting_Max_Attack_Distance>2100");
+    return t;
+}
+
+// S8 t10 follow-up (LOB_SOLVER §3.5 "MARKER removal"): the troopers carry Remote_Bomb (PLACE_REMOTE_BOMB 64, Bomb_Type a
+// sticky GRENADE, Toss_Anim without clip data: the toss 12 frames after the stop) and the map knows Dummy_Barrage_Target.
+std::string bomb_types() {
+    std::string t = kTypes;
+    const std::string at = "<Custom_Hard_YExtent>6</Custom_Hard_YExtent>\n";
+    const size_t p = t.find(at);
+    if (p != std::string::npos)
+        t.insert(p + at.size(),
+                 "  <Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>PLACE_REMOTE_BOMB</Type><Recharge_Seconds>18</Recharge_Seconds>"
+                 "<GUI_Activated_Ability_Name>S10_Remote_Bomb</GUI_Activated_Ability_Name></Unit_Ability>"
+                 "<Unit_Ability><Type>DETONATE_REMOTE_BOMB</Type></Unit_Ability></Unit_Abilities_Data>\n"
+                 "  <Abilities SubObjectList=\"Yes\"><Remote_Bomb_Ability Name=\"S10_Remote_Bomb\"><Activation_Style>User_Input</Activation_Style>"
+                 "<Activation_Min_Range>5.0</Activation_Min_Range><Activation_Max_Range>130.0</Activation_Max_Range>"
+                 "<Bomb_Type>S10_Remote_Bomb_Proj</Bomb_Type><Toss_Anim>BOMBTOSS</Toss_Anim><Spawn_Frame>12.0</Spawn_Frame>"
+                 "</Remote_Bomb_Ability></Abilities>\n");
+    t.insert(t.rfind("</S10>"),
+             " <Projectile Name=\"S10_Remote_Bomb_Proj\"><Max_Speed>20.0</Max_Speed><Projectile_Grenade_Gravity>1.0</Projectile_Grenade_Gravity>"
+             "<Projectile_Grenade_Gravity_Lob_Mod>1.0</Projectile_Grenade_Gravity_Lob_Mod><Projectile_Grenade_Can_Lob_Slower>yes</Projectile_Grenade_Can_Lob_Slower>"
+             "<Behavior>PROJECTILE, BOMB</Behavior><Projectile_Category>GRENADE</Projectile_Category>"
+             "<Projectile_Grenade_Sticks_On_Collision>yes</Projectile_Grenade_Sticks_On_Collision><Projectile_Max_Lifetime>900.0</Projectile_Max_Lifetime>"
+             "<Projectile_Damage>0.0</Projectile_Damage><Projectile_Blast_Area_Damage>50</Projectile_Blast_Area_Damage>"
+             "<Projectile_Blast_Area_Range>30</Projectile_Blast_Area_Range><Friendly_Damage_Amount>200</Friendly_Damage_Amount></Projectile>\n"
+             " <MiscObject Name=\"Dummy_Barrage_Target\"><LandBehavior>MARKER</LandBehavior><SpaceBehavior>MARKER</SpaceBehavior>"
+             "<Is_Decoration>No</Is_Decoration><CategoryMask>Corvette</CategoryMask><Immune_To_Damage>True</Immune_To_Damage></MiscObject>\n");
     return t;
 }
 
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
-                                bool obstacle = false, bool team = false) {
+                                bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false,
+                                bool fog_setup = false, bool bomb = false, bool landing = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
+    d->root = fs::temp_directory_path() / (landing     ? "alamo_sim_battle_tests_landing"  // a1i t04
+                                           : bomb ? "alamo_sim_battle_tests_bomb"  // S8 t10 follow-up
+                                           : fighters && fog ? "alamo_sim_battle_tests_fighters_fog"  // S7 t22
+                                           : fighters    ? "alamo_sim_battle_tests_fighters"  // S7 t12
+                                           : fog_setup ? "alamo_sim_battle_tests_fog_setup"  // FOWF t05
+                                           : fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
+                                           : obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
                                            : team     ? "alamo_sim_battle_tests_team"  // refixf t03: TEAM containers
                                            : prod   ? "alamo_sim_battle_tests_prod"  // station production
                                            : s4   ? "alamo_sim_battle_tests_s4"  // S4
@@ -342,7 +473,12 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", obstacle ? obstacle_types()
+    write_file(x / "S10Types.xml", landing ? landing_types()  // a1i t04
+                                   : bomb ? bomb_types()  // S8 t10 follow-up
+                                   : fighters ? fighter_types(fog)  // S7 t12 / t22
+                                    : fog_setup ? fog_types()
+                                   : fog_bm ? fog_bm_types()
+                                   : obstacle ? obstacle_types()
                                    : team     ? team_types()
                                    : prod   ? prod_types()
                                    : s4     ? s4_types()
@@ -351,8 +487,12 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
                                    : fog    ? fog_types()
                                             : std::string(kTypes));
     if (bm) write_file(x / "BlackMarketItems.xml", kBmItems);  // P4 tactical
-    write_file(x / "HardPointDataFiles.xml", "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");
+    write_file(x / "HardPointDataFiles.xml", fighters ? "<Hard_Point_Files><File>S10HardPoints.xml</File><File>S10BayHardPoints.xml</File></Hard_Point_Files>\n"
+                                                      : "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");
     write_file(x / "S10HardPoints.xml", kHardpoints);
+    if (fighters)  // S7 t24: the carrier's fighter bay
+        write_file(x / "S10BayHardPoints.xml", "<HardPoints><HardPoint Name=\"HP_S10_Bay\"><Type>HARD_POINT_FIGHTER_BAY</Type><Health>200</Health>"
+                                               "<Fighter_Bay_Flyout_Distance>100</Fighter_Bay_Flyout_Distance></HardPoint></HardPoints>\n");
     write_file(x / "FactionFiles.xml", "<FactionFiles><File>S10Factions.xml</File></FactionFiles>\n");
     std::string factions = kFactions;
     if (s4)  // S10 map owners: a native faction (3), Hostile (4) and a playable faction without a player (5)
@@ -381,7 +521,12 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
                " <Armor_Types>Armor_Default, Armor_Ship</Armor_Types>\n"
                " <Damage_To_Armor_Mod>Damage_Laser, Armor_Ship, 0.8</Damage_To_Armor_Mod>\n"
                " <AutoResolveLoserAttrition>0.80</AutoResolveLoserAttrition>\n"
-               " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n</GameConstants>\n");
+               " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n" +
+                   std::string(landing ? " <Use_Reinforcement_Points>No</Use_Reinforcement_Points>\n" : "") +  // a1i t04: no points on the map
+                   std::string(fog_setup ? " <SetupPhaseEnabled>True</SetupPhaseEnabled>\n"  // FOWF t05: a mod's land setup phase
+                                           " <SetupPhaseCountdownSeconds>3</SetupPhaseCountdownSeconds>\n"
+                                         : "") +
+                   "</GameConstants>\n");
     write_file(d->root / "Data/Scripts/Library/PGAICommands.lua", kLua);
     d->files = std::make_unique<DirectoryProvider>(path_to_utf8(d->root));
     std::vector<std::string> diag;
@@ -392,7 +537,7 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     CHECK(galactic::load_conflict_rules(*d->files, d->db, d->types, d->rules, d->crules, &diag));
     d->catalog = std::make_unique<BattleCatalog>(d->types, d->files.get(), &d->db.constants(), &diag);
     CHECK(d->crules.contrast.size() == 3);
-    CHECK(d->catalog->hardpoint_records() == 2);
+    CHECK(d->catalog->hardpoint_records() == (fighters ? 3u : 2u));
     {
         std::vector<uint32_t> idx;
         const auto cd = d->catalog->build({static_cast<uint32_t>(d->types.resolve_name("S10_Frigate")), static_cast<uint32_t>(d->types.resolve_name("S10_Trooper"))}, idx);
@@ -496,6 +641,10 @@ struct Run {
     // OI fog: shots (REVEAL vf26 flashes) seen, host API round trips (FOW-active flag, reinforcement overlay)
     uint64_t fog_shots = 0, fog_flashed = 0;
     bool fog_api_ok = true, fog_api_checked = false;
+    // FOW t01: Battlefield_Modifier FOW_Reveal_Range_Multiplier (fog_bm data: S10_FOW_Boost on the corvettes), per player
+    uint32_t bm_on_frames[2] = {0, 0}, bm_off_after_on[2] = {0, 0}, bm_bad_frames = 0;
+    float bm_r_on = 0.0f, bm_r_off = 0.0f;  // a REVEAL unit's sight radius with / without the bonus
+    bool bm_saved = false, bm_save_ok = false, bm_grid_ok = false;
 };
 
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
@@ -579,6 +728,60 @@ void fog_probe(TacticalBattle& b, TacticalMode& tm, Run& out, StateHasher& acc, 
     StateHasher h;
     f->hash(h);
     acc.u64(h.digest());
+}
+
+// FOW t01: the Battlefield_Modifier reveal list end to end. While a player has a live S10_FOW_Boost corvette its +0x1f8
+// bonus is 0.5 (MostExtreme in one category: several corvettes count once) and its REVEAL units reveal with sight x 1.5;
+// when the last one dies the bonus is 0 again. Once, with the bonus on: the grid reveal of a REVEAL unit covers the cells
+// of a 1.5 x sight circle (on a copy read back from FogOfWar::write, so the copy also checks the list survives a save),
+// and the battle's Fog save part reads back into the running battle unchanged. Read-only otherwise.
+void fog_bm_probe(TacticalBattle& b, TacticalMode& tm, Run& out) {
+    tactical::fog::FogOfWar* f = b.fog();
+    if (!f) return;
+    const objects::ObjectStore& st = tm.primary();
+    const objects::TypeIndex corvette = tm.types().resolve_name("S10_Corvette");
+    for (int32_t p = 0; p < 2; ++p) {
+        bool live = false;
+        for (objects::ObjectHandle h : st.owned_by(p)) live = live || (st.alive(h) && st.active(h) && st.type(h) == corvette);  // not a death clone
+        const float bonus = f->player_reveal_bonus(p);
+        if (bonus != (live ? 0.5f : 0.0f)) ++out.bm_bad_frames;
+        if (bonus == 0.5f) ++out.bm_on_frames[p];
+        else if (out.bm_on_frames[p] > 0) ++out.bm_off_after_on[p];
+        for (objects::ObjectHandle h : st.owned_by(p)) {
+            tactical::fog::FogObject o;
+            if (!st.alive(h) || !f->has_source(st.id(h)) || !b.fog_object(st.id(h), o) || o.object_modifier != 0.0f) continue;
+            float cx = 0.0f, cy = 0.0f, r = 0.0f, rd = 0.0f;
+            f->sight_radii(p, o, false, cx, cy, r, rd);
+            if (r != o.sight_range * (1.0f + bonus)) ++out.bm_bad_frames;
+            (bonus == 0.5f ? out.bm_r_on : out.bm_r_off) = r;
+            if (out.bm_saved || bonus != 0.5f || p != 0 || b.frame() < 30) continue;
+            out.bm_saved = true;
+            StateHasher before;
+            f->hash(before);
+            ByteWriter w;
+            f->write(w);
+            tactical::fog::FogOfWar copy;
+            ByteReader r1(w.bytes());
+            StateHasher copied;
+            const bool read = copy.read(r1) && r1.done();
+            copy.hash(copied);
+            tactical::fog::CellList cells;
+            copy.reveal_object(0, o, cells, false);
+            const tactical::fog::FogCells wide = copy.lua_reveal_position(0, o.x, o.y, 1.5f * o.sight_range, 1.5f * o.sight_range * o.dense_multiplier);
+            const tactical::fog::FogCells base = copy.lua_reveal_position(0, o.x, o.y, o.sight_range, o.sight_range * o.dense_multiplier);
+            out.bm_grid_ok = read && cells.size() == wide.cells.size() && cells.size() > base.cells.size();
+            ByteWriter part;
+            b.write_part(TacticalBattle::SavePart::Fog, part);
+            ByteReader r2(part.bytes());
+            StateHasher after;
+            const bool loaded = b.read_part(TacticalBattle::SavePart::Fog, r2);
+            f = b.fog();
+            if (f) f->hash(after);
+            out.bm_save_ok = read && copy.player_reveal_bonus(0) == 0.5f && copied.digest() == before.digest() && loaded && f &&
+                             f->player_reveal_bonus(0) == 0.5f && after.digest() == before.digest();
+            if (!f) return;
+        }
+    }
 }
 
 // fog follow-up (S9 fog hooks): at battle frame 30 the human's first unit with FOW_REVEAL_PING (space frigates) /
@@ -688,7 +891,10 @@ Run run_campaign(const Data& d, bool land, bool fight, int32_t workers, uint64_t
             out.activations = battles.battle()->stats().activations;
             out.particles = battles.battle()->stats().particles;
 #ifdef ALAMO_SIM_HAVE_FOG
-            if (TacticalMode* tm = host.tactical()) fog_probe(*battles.battle(), *tm, out, fog_acc, fog_refog_set);
+            if (TacticalMode* tm = host.tactical()) {
+                fog_probe(*battles.battle(), *tm, out, fog_acc, fog_refog_set);
+                fog_bm_probe(*battles.battle(), *tm, out);  // FOW t01
+            }
 #endif
         }
         if (std::getenv("S10_DEBUG") && battles.battle() && (t % 300) == 0) {
@@ -1081,9 +1287,9 @@ StoryRun run_story_battle(const Data& d, const FileProvider& files, int32_t work
 
 // BT §2.9 / REMAINING_GAPS §6.4: a galactic plot's LINK_TACTICAL (STORY_ELAPSED 1 s) starts its battle at the battle
 // hook right after the reward (ConflictManager::start_linked: queued at the front, no validation / decide). The story flag
-// (GalacticSim::linked_battle_pending, paused() refuses FleetManagement) is set by the record and cleared at the start, so
-// no tick ends with it set. Cases: space at S10_B (an Underworld frigate already orbits it); land at S10_B with no
-// Underworld unit anywhere near (the record has no units: the validation used to drop it); land sandbox (Param8 1: the
+// (GalacticSim::linked_battle_pending; paused() refuses FleetManagement while the local player is in a queued conflict)
+// is set by the record and cleared at the start, so no tick ends with it set. Cases: space at S10_B (an Underworld
+// frigate already orbits it); land at S10_B with no Underworld unit anywhere near (the record has no units: the validation used to drop it); land sandbox (Param8 1: the
 // human defender's surface units start, the AI attacker gets nothing).
 struct LinkedRun {
     bool started = false, land = false, flag_after_tick = false;
@@ -1163,16 +1369,18 @@ LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
 // assembles the Underworld squads in orbit of S10_C into a fleet, BlockOnCommand(fleet.Move_To(S10_B)) (the Empire's
 // planet, an Empire squad on the surface), Sleep(1), fleet.Invade(). The block must last until the fleet is in orbit
 // of S10_B (StorySession's order_finished); before a1f t08 it finished at once, Invade() ran in hyperspace and was
-// dropped, so the fleet sat in orbit with either human. The probe's SpawnList is replaced by squads lifted into orbit
-// here: Spawn_Unit at a galactic planet is not registered with the GalacticSim (no fleet, no surface entry), so
-// Assemble_Fleet of freshly spawned units returns nil in the port (open item). Two runs: Underworld human (the probe's
-// fallback: the original invaded at once) and Empire human with Underworld AI (the probe's preferred variant: the
-// original's fleet stayed in orbit and never invaded; the port invades - open question, see the a1f t08 report).
+// dropped, so the fleet sat in orbit with either human. The squads are spawned at S10_C with Spawn_Unit (the probe's
+// SpawnList; a1g t06: registered with the GalacticSim, so Assemble_Fleet flies them). Two runs: Underworld human (the
+// probe's fallback: the original invaded at once) and Empire human with an Underworld without galactic AI (the probe's
+// preferred variant, AI_Player_Control None: the original's fleet stayed in orbit and never invaded). a1g t05
+// (A1_READINGS §31): fleet.Invade() is issued by the LOCAL player with its own ground units only, so with a human
+// Empire nothing lands, silently.
 struct ProbeInvadeRun {
     std::string conflicts, story;
     std::vector<std::string> lua;
     size_t land_queued = 0;  // most land conflicts queued at once
     uint32_t fought = 0;
+    bool fleet_at_target = false;  // an Underworld fleet with ground units in orbit of S10_B at the end
 };
 ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool human_empire) {
     ProbeInvadeRun out;
@@ -1185,14 +1393,10 @@ ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool h
     setup.players[0].human = human_empire;
     setup.players[0].ai = !human_empire;
     setup.players[1].human = !human_empire;
-    setup.players[1].ai = human_empire;
+    setup.players[1].ai = false;  // human, or the probe's AI_Player_Control None (no galactic AI)
     galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
     CHECK(gs != nullptr);
     if (!gs) return out;
-    std::vector<objects::ObjectHandle> up;  // Underworld's squads at S10_C into an orbit fleet (stand-in for SpawnList)
-    for (objects::ObjectHandle h : gs->planets()[2].surface)
-        if (gs->store().owner(h) == 1) up.push_back(h);
-    CHECK(up.size() == 2 && gs->launch_units(1, 2, up) == commands::RejectReason::None);
     StoryStart st;
     st.files = &files;
     st.plot_sets = {{human_empire ? 0 : 1, "Story_Plots_Probe.xml"}};
@@ -1215,6 +1419,10 @@ ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool h
         out.land_queued = std::max(out.land_queued, battles.conflicts().land_queue().size());
     }
     out.fought = battles.battles_fought();
+    for (const uint32_t f : gs->fleets_at(1, 1))
+        for (const objects::ObjectHandle m : gs->fleets()[f].contents)
+            if (gs->store().alive(m) && gs->rules().types[gs->store().type(m)].kind == galactic::UnitKind::GroundUnit)
+                out.fleet_at_target = true;
     if (host.story()) {
         out.lua = host.story()->lua_messages();
         out.story = host.story()->log_text("probe");
@@ -1238,9 +1446,9 @@ void test_probe_invade(const Data& d) {
                "function Base_Definitions() ServiceRate = 0.1 stage = 0 end\n"
                "function main() while true do\n"
                "  if stage == 0 and GetCurrentTime() >= 1 then\n"
-               "    uw = Find_Player('Underworld') tgt = FindPlanet('S10_B') units = {}\n"
-               "    for _, u in pairs(Find_All_Objects_Of_Type(Find_Object_Type('S10_Squad'))) do\n"
-               "      if u.Get_Owner().Get_ID() == uw.Get_ID() then table.insert(units, u) end end\n"
+               "    uw = Find_Player('Underworld') tgt = FindPlanet('S10_B') src = FindPlanet('S10_C') units = {}\n"
+               "    for _, t in ipairs({'S10_Squad', 'S10_Squad'}) do\n"
+               "      for _, u in pairs(Spawn_Unit(Find_Object_Type(t), src, uw)) do table.insert(units, u) end end\n"
                "    fleet = Assemble_Fleet(units)\n"
                "    if fleet then Story_Event('FLEET') block = fleet.Move_To(tgt) stage = 1 else stage = 9 end\n"
                "  elseif stage == 1 and block.IsFinished() then\n"
@@ -1255,16 +1463,115 @@ void test_probe_invade(const Data& d) {
         const ProbeInvadeRun r = run_probe_invade(d, files, human_empire);
         auto fired = [&r](const char* ev) { return r.story.find(std::string(" P_") + ev + " ") != std::string::npos; };
         std::printf("  human %s: fleet %d, block ended in orbit %d (elsewhere %d), invade issued %d, land conflicts queued %zu, "
-                    "fought %u\n    %s\n",
-                    human_empire ? "Empire (Underworld AI)" : "Underworld", fired("FLEET") ? 1 : 0, fired("ARRIVED") ? 1 : 0,
-                    fired("NOT_THERE") ? 1 : 0, fired("INVADED") ? 1 : 0, r.land_queued, r.fought, r.conflicts.c_str());
+                    "fought %u, fleet in orbit of S10_B at the end %d\n    %s\n",
+                    human_empire ? "Empire (Underworld AI None)" : "Underworld", fired("FLEET") ? 1 : 0, fired("ARRIVED") ? 1 : 0,
+                    fired("NOT_THERE") ? 1 : 0, fired("INVADED") ? 1 : 0, r.land_queued, r.fought, r.fleet_at_target ? 1 : 0,
+                    r.conflicts.c_str());
         for (const std::string& m : r.lua) std::printf("    lua: %s\n", m.c_str());
         CHECK(r.lua.empty());
         CHECK(fired("FLEET") && fired("ARRIVED") && !fired("NOT_THERE") && fired("INVADED"));
-        // Both humans: the land conflict is queued and fought. Human Underworld = the original. Human Empire: the
-        // original's AI fleet never invaded (probe 2026-10-31, not explained by the specs: open question).
-        CHECK(r.land_queued == 1 && r.fought == 1);
-        CHECK(r.conflicts.find(" land S10_B Underworld vs Empire") != std::string::npos);
+        if (human_empire) {
+            // The original (probe 2026-10-31, A1_READINGS §31): Invade() issued by the local Empire keeps no Underworld
+            // unit, nothing lands, the fleet stays in orbit.
+            CHECK(r.land_queued == 0 && r.fought == 0 && r.fleet_at_target);
+        } else {
+            CHECK(r.land_queued == 1 && r.fought == 1);
+            CHECK(r.conflicts.find(" land S10_B Underworld vs Empire") != std::string::npos);
+        }
+    }
+}
+
+// a1h t04 (A1_READINGS §31.6): story reward INVADE_PLANET. A galactic story script brings two Underworld squads into orbit
+// of S10_B (Empire) and raises GO; the plot's GO event has the reward INVADE_PLANET S10_B [company]. The reward picks the
+// first ground unit of a fleet in orbit friendly to the plot's player (Underworld) that matches the company filter and
+// issues ONE Invade event with that unit as the LOCAL player: with a human Underworld one squad lands (a land conflict
+// with one unit); with a human Empire (an AI plot) the executor keeps no unit and nothing happens, silently; a filter
+// that matches nothing logs the mismatch and issues nothing.
+struct InvadeRewardRun {
+    size_t land_queued = 0, landing_units = 0;  // most land conflicts queued at once; units of the first one seen
+    std::vector<std::string> lua;
+    std::string story;
+};
+InvadeRewardRun run_invade_reward(const Data& d, const FileProvider& files, bool human_empire) {
+    InvadeRewardRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup setup = make_setup(d, true);
+    setup.players[0].human = human_empire;
+    setup.players[0].ai = false;
+    setup.players[1].human = !human_empire;
+    setup.players[1].ai = false;
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{1, "Story_Plots_Reward.xml"}};  // the Underworld's plot
+    std::vector<std::string> diag;
+    CHECK(host.start_story(st, &diag));
+    for (const auto& m : diag) std::printf("  story diag: %s\n", m.c_str());
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 300;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    for (uint64_t t = 0; t < 900; ++t) {
+        host.tick_once();
+        const auto& q = battles.conflicts().land_queue();
+        out.land_queued = std::max(out.land_queued, q.size());
+        if (!q.empty() && out.landing_units == 0) out.landing_units = q[0].units.size();
+    }
+    if (host.story()) {
+        out.lua = host.story()->lua_messages();
+        out.story = host.story()->log_text("reward");
+    }
+    return out;
+}
+
+void test_invade_planet_reward(const Data& d) {
+    const fs::path x = d.root / "Data/XML";
+    write_file(x / "Story_Plots_Reward.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Reward</Lua_Script><Active_Plot>Story_Reward.xml</Active_Plot></Story_Mode_Plots>\n");
+    write_file(d.root / "Data/Scripts/Story/Story_Reward.lua",
+               "function Base_Definitions() ServiceRate = 0.1 stage = 0 end\n"
+               "function main() while true do\n"
+               "  if stage == 0 and GetCurrentTime() >= 1 then\n"
+               "    uw = Find_Player('Underworld') units = {}\n"
+               "    for _, t in ipairs({'S10_Squad', 'S10_Squad'}) do\n"
+               "      for _, u in pairs(Spawn_Unit(Find_Object_Type(t), FindPlanet('S10_C'), uw)) do table.insert(units, u) end end\n"
+               "    fleet = Assemble_Fleet(units) block = fleet.Move_To(FindPlanet('S10_B')) stage = 1\n"
+               "  elseif stage == 1 and block.IsFinished() then Story_Event('GO') stage = 2 end\n"
+               "  coroutine.yield(true) end end\n");
+    struct Case {
+        bool human_empire;
+        const char* company;
+        size_t land_queued, landing_units;
+        bool mismatch_logged;
+    };
+    for (const Case& c : {Case{false, "S10_SQUAD", 1, 1, false}, Case{false, "", 1, 1, false}, Case{true, "S10_SQUAD", 0, 0, false},
+                          Case{false, "S10_Squad", 0, 0, true}}) {
+        write_file(x / "Story_Reward.xml",
+                   std::string("<Story>\n <Event Name=\"P_GO\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>GO</Event_Param2>"
+                               "<Reward_Type>INVADE_PLANET</Reward_Type><Reward_Param1>S10_B</Reward_Param1>") +
+                       (*c.company ? std::string("<Reward_Param2>") + c.company + "</Reward_Param2>" : std::string()) + "</Event>\n</Story>\n");
+        DirectoryProvider files(path_to_utf8(d.root));  // after the plot file is written
+        const InvadeRewardRun r = run_invade_reward(d, files, c.human_empire);
+        bool mismatch = false;
+        for (const std::string& m : r.lua) mismatch = mismatch || m.find("INVADE PLANET - S10_SQUAD does not match S10_Squad") != std::string::npos;
+        std::printf("  INVADE_PLANET human %s, company '%s': land conflicts %zu with %zu unit(s), mismatch logged %d\n",
+                    c.human_empire ? "Empire" : "Underworld", c.company, r.land_queued, r.landing_units, mismatch ? 1 : 0);
+        CHECK(r.story.find(" P_GO ") != std::string::npos);
+        CHECK(r.land_queued == c.land_queued && r.landing_units == c.landing_units && mismatch == c.mismatch_logged);
+        CHECK(r.lua.size() == (c.mismatch_logged ? 2u : 0u));  // both squads mismatch
     }
 }
 
@@ -1286,6 +1593,59 @@ void test_linked_battle(const Data& d) {
         CHECK(r.fought == 1 && r.log.find("LINK_TACTICAL S10_B") != std::string::npos && r.log.find(" started") != std::string::npos);
         CHECK(r.conflicts.find(space ? " space S10_B " : " land S10_B ") != std::string::npos);
     }
+}
+
+// a1j t05 (A1_READINGS §31.7, BT §1.4 step 2): 0x2be640 skips the space/land state machines while the story block holds
+// (a linked battle record waits and the local player is in a queued conflict); the paused query 0x4b2360 freezes the
+// galactic frame. The record is raised by hand here (no story), the Underworld fleet flies C -> B against the human
+// Empire: its conflict stays queued, nothing is voted, fought or auto-resolved and the frame stands still until the flag
+// is cleared; then the conflict runs as usual.
+void test_story_block_host(const Data& d) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 300;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (uf.empty()) return;
+    CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    uint64_t t = 0;
+    // [port] the host releases a flag that has no conflict to wait for at its battle hook, so it is raised again before
+    // every tick until the fleet's conflict holds it.
+    for (; t < 2000 && !gs->story_block(); ++t) {
+        if (!gs->linked_battle_pending()) gs->queue_linked_battle();
+        host.tick_once();
+    }
+    CHECK(gs->story_block() && battles.conflicts().space_queue().size() == 1);
+    const int32_t frozen = gs->frame();
+    for (int i = 0; i < 200; ++i) host.tick_once();
+    CHECK(gs->frame() == frozen && gs->paused());
+    CHECK(battles.conflicts().state() == galactic::ConflictState::Idle && battles.conflicts().space_queue().size() == 1);
+    CHECK(!battles.battle() && battles.battles_fought() == 0 && battles.conflicts().log().empty());
+    gs->clear_linked_battle();
+    bool started = false;
+    for (int i = 0; i < 600 && !started; ++i) {
+        host.tick_once();
+        started = battles.battle() != nullptr;
+    }
+    CHECK(started && gs->frame() > frozen);
+    std::printf("  story block: queued at tick %" PRIu64 ", frame %d frozen for 200 ticks, battle started after the flag cleared\n",
+                t, frozen);
 }
 
 void test_story_battle(const Data& d) {
@@ -1381,8 +1741,8 @@ struct S4Run {
     CrcLog crc;
     bool garrison_flag = false, left = false, readded = false, bunker_taken = false, post_taken = false;
     bool fire_query = false, can_query = false, hero_changed = false, contained = false;
-    // a1f t07 (attack_sensor runs): the neutral sensor is a combat unit and a capture point, untouched by the target scan,
-    // killed by an attack order, then gone from the capture system.
+    // a1f t07 (attack_sensor runs): the neutral sensor is a combat unit and a capture point, untouched by the target scan;
+    // S7 t30: the attack order on it is refused (relation 2), so it stays alive and a capture point.
     bool sensor_combat = false, sensor_point = false, sensor_untouched = false, sensor_killed = false, sensor_point_removed = false;
     int attack_order = -1;
     float sensor_health = -1.0f;  // last health fraction seen
@@ -1727,8 +2087,9 @@ void test_s4_battle(const Data& d) {
     }
     // a1f t07: a map-placed neutral SELECTABLE capture structure (Secondary_Abandoned_Sensor stand-in) is a battle combat
     // unit as well as a capture point; the target scan skips the Is_Neutral player's objects (TACTICAL_COMBAT §2.2), so
-    // the Empire troopers next to it leave it alone until ordered; the attack order is accepted and kills it, and the dead
-    // point leaves the capture system.
+    // the Empire troopers next to it leave it alone. S7 t30 (TACTICAL_COMBAT §2.10): the Neutral player is relation 2, so
+    // the human attack order is refused too (the attack cursor needs relation 1): the sensor is never damaged and stays a
+    // capture point (taken by presence, not by attack).
     {
         const S4Run s = run_s4_battle(d, files, 0, 0, true);
         std::printf("  neutral sensor: combat %d, capture point %d, untouched %d, attack order %d, health %.2f, killed %d, point removed %d\n",
@@ -1736,7 +2097,8 @@ void test_s4_battle(const Data& d) {
                     static_cast<double>(s.sensor_health), s.sensor_killed ? 1 : 0, s.sensor_point_removed ? 1 : 0);
         for (const auto& m : s.battles) std::printf("  %s\n", m.c_str());
         CHECK(s.sensor_combat && s.sensor_point && s.sensor_untouched);
-        CHECK(s.attack_order == static_cast<int>(commands::RejectReason::None) && s.sensor_killed && s.sensor_point_removed);
+        CHECK(s.attack_order == static_cast<int>(commands::RejectReason::InvalidTarget) && !s.sensor_killed && s.sensor_health == 1.0f &&
+              !s.sensor_point_removed);
         const S4Run s4 = run_s4_battle(d, files, 4, 0, true);
         CHECK(!first_divergence(s.crc, s4.crc).diverged);
     }
@@ -1858,7 +2220,409 @@ void test_fog_battle(const Data& d) {
 }
 #endif
 
+#ifdef ALAMO_SIM_HAVE_FOG
+// FOWF t05: a land battle with a mod-style setup phase (SetupPhaseEnabled, SetupPhaseCountdownSeconds 3). During setup
+// the human moves an own unit with SetupPhaseMove (31; an enemy unit is refused); SetupPhaseTriggerEnd (32) from the AI arms the 90-frame
+// countdown, from the (only) human ends the phase at the next tick; afterwards 31 is refused.
+struct SetupRun {
+    bool setup_at_start = false, moved = false, enemy_refused = false, refused_after = false;
+    int ready_cmd = -1;
+    uint32_t ready_frame = 0, end_frame = 0;
+};
+
+SetupRun run_setup_battle(const Data& d, uint8_t ready_player, int32_t workers) {
+    SetupRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.fog = true;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    std::vector<std::string> diag;
+    CHECK(battles.attach(&diag));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    using R = commands::RejectReason;
+    auto move_cmd = [](objects::ObjectId id, float x, float y, float angle) {
+        commands::EventData ev(commands::EventType::SetupPhaseMove);
+        ev.set("object", static_cast<uint32_t>(id)).set_f("x", x).set_f("y", y).set_f("z", 0.0f).set_f("angle", angle);
+        return ev;
+    };
+    bool invaded = false, seen = false;
+    for (uint64_t t = 0; t < 4000 && !out.refused_after; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) {
+                CHECK(gs->invade(1, 1, {}) == R::None);
+                invaded = true;
+            }
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || !b->fog()) continue;
+        const objects::ObjectStore& st = tm->primary();
+        if (!seen) {
+            seen = true;
+            out.setup_at_start = b->fog_setup_phase();
+        }
+        if (b->frame() == 10 && b->fog_setup_phase()) {
+            for (objects::ObjectHandle h : st.owned_by(1))
+                if (st.active(h)) {
+                    out.enemy_refused = host.execute_direct(0, commands::CommandSource::Player, move_cmd(st.id(h), 600.0f, 600.0f, 0.0f)) == R::InvalidUnit;
+                    break;
+                }
+            for (objects::ObjectHandle h : st.owned_by(0)) {
+                if (!st.active(h) || !b->combat().has_unit(st.id(h))) continue;
+                const Vec3 p = st.position(h);
+                const commands::EventData ev = move_cmd(st.id(h), p.x + 40.0f, p.y + 30.0f, 90.0f);
+                const R r = host.execute_direct(0, commands::CommandSource::Player, ev);
+                const Vec3 q = st.position(h), f = st.facing(h);
+                out.moved = r == R::None && q.x == ev.f("x") && q.y == ev.f("y") && std::fabs(q.x - p.x - 40.0f) < 1.0f &&
+                            std::fabs(f.x) < 1.0e-3f && std::fabs(f.y - 1.0f) < 1.0e-3f;
+                break;
+            }
+            out.ready_frame = b->frame();
+            out.ready_cmd = static_cast<int>(host.execute_direct(ready_player, commands::CommandSource::Player,
+                                                                 commands::EventData(commands::EventType::SetupPhaseTriggerEnd)));
+        }
+        if (out.ready_frame && !out.end_frame && !b->fog_setup_phase()) {
+            out.end_frame = b->frame();
+            for (objects::ObjectHandle h : st.owned_by(0))
+                if (st.active(h)) {
+                    out.refused_after = host.execute_direct(0, commands::CommandSource::Player, move_cmd(st.id(h), 600.0f, 600.0f, 0.0f)) == R::NotAllowed;
+                    break;
+                }
+            if (!out.refused_after) break;
+        }
+    }
+    return out;
+}
+
+void test_fog_setup_battle(const Data& d) {
+    const SetupRun ai = run_setup_battle(d, 1, 0), human = run_setup_battle(d, 0, 0), ai4 = run_setup_battle(d, 1, 4);
+    for (const SetupRun* r : {&ai, &human})
+        std::printf("  ready from %s: setup at start %d, own move %d, enemy refused %d, ready cmd %d at frame %u, "
+                    "phase ended at frame %u, move refused after %d\n",
+                    r == &ai ? "AI" : "human", r->setup_at_start ? 1 : 0, r->moved ? 1 : 0,
+                    r->enemy_refused ? 1 : 0, r->ready_cmd, r->ready_frame, r->end_frame, r->refused_after ? 1 : 0);
+    for (const SetupRun* r : {&ai, &human}) {
+        CHECK(r->setup_at_start && r->moved && r->enemy_refused && r->refused_after);
+        CHECK(r->ready_cmd == static_cast<int>(commands::RejectReason::None) && r->ready_frame == 10);
+    }
+    CHECK(ai.end_frame == ai.ready_frame + 90);       // 3 s x 30 fps after the first ready
+    CHECK(human.end_frame == human.ready_frame + 1);  // every human ready: the next tick's end test
+    CHECK(ai4.end_frame == ai.end_frame && ai4.moved && ai4.refused_after);
+}
+
+// FOW t01: Battlefield_Modifier feeds the fog reveal list (space battle, fog_bm data; see fog_bm_probe).
+void test_fog_bm_battle(const Data& d) {
+    const Run a = run_campaign(d, false, true, 0, 2500, 0.0f, true);
+    std::printf("  bonus frames: Empire %u (then off %u), Underworld %u (then off %u); sight radius on %.1f / off %.1f; bad frames %u; "
+                "grid %s, save %s\n",
+                a.bm_on_frames[0], a.bm_off_after_on[0], a.bm_on_frames[1], a.bm_off_after_on[1], static_cast<double>(a.bm_r_on),
+                static_cast<double>(a.bm_r_off), a.bm_bad_frames, a.bm_grid_ok ? "ok" : "FAILED", a.bm_save_ok ? "ok" : "FAILED");
+    CHECK(a.fought == 1 && a.fog_frames > 100);
+    CHECK(a.bm_on_frames[0] > 0 && a.bm_on_frames[1] > 0 && a.bm_bad_frames == 0);
+    CHECK(a.bm_off_after_on[0] > 0 || a.bm_off_after_on[1] > 0);  // a side lost its last corvette: the bonus left with it
+    CHECK(a.bm_r_on == 1350.0f && a.bm_r_off == 900.0f);
+    CHECK(a.bm_saved && a.bm_grid_ok && a.bm_save_ok);
+}
+#endif
+
+// S8 t08 (TACTICAL_COMBAT §3.1.1): the units with both weapon sources get their own weapon (WEAPON behaviour +
+// Projectile_Types) next to their weapon hardpoints, with the Fire_Weapon_When_* / Fire_When_* flags of the table; a type
+// with Projectile_Types but no WEAPON behaviour gets none. S8 t06 B4 (LOB_SOLVER §5.1): with model data the own weapon's
+// fire bones MUZZLEA_NN come from the land model.
+void test_foc_weapon_sources(const objects::GameObjectTypes& types, const BattleCatalog& catalog) {
+    namespace tc = tactical::combat;
+    struct Row {
+        const char* unit;
+        const char* own;  // own weapon projectile
+        bool own_dep, own_undep, own_rocket, own_normal;
+        const char* hp;  // weapon hardpoint projectile
+        bool hp_dep, hp_undep, hp_rocket, hp_normal;
+    };
+    const Row rows[] = {
+        {"SPMAT_Walker", "Proj_Ground_SPMAT_Grenade", true, false, true, true, "Proj_Blaster_Cannon_Green", false, true, true, true},
+        {"T4B_Tank", "Proj_Ground_Laser_Cannon_Red_T4B", true, true, false, true, "Proj_T4B_Missile", true, true, true, false},
+        {"Dark_Trooper_PhaseIII", "Proj_Ground_Laser_Cannon_Red_DT3", false, true, true, true, "Proj_Dark_Trooper_Missile", true, false, true,
+         true},
+        {"Destroyer_Droid", "Proj_Destroyer_Droid_Blaster_Cannon", true, false, false, true, "Proj_Destroyer_Droid_Ion_Cannon", true, false,
+         true, false},
+    };
+    for (const Row& r : rows) {
+        const objects::TypeIndex t = types.resolve_name(r.unit);
+        CHECK(t != objects::kNone);
+        if (t == objects::kNone) continue;
+        std::vector<uint32_t> idx;
+        const BattleTables bt = catalog.build_battle({static_cast<uint32_t>(t)}, idx, false);
+        const tc::CombatData& cd = bt.combat;
+        CHECK(cd.units.size() == 1);
+        if (cd.units.size() != 1) continue;
+        const tc::UnitDesc& u = cd.units[0];
+        const bool own_ok = u.weapon_projectile >= 0 && cd.projectiles[static_cast<size_t>(u.weapon_projectile)].name == r.own &&
+                            u.fire_weapon_when_deployed == r.own_dep && u.fire_weapon_when_undeployed == r.own_undep &&
+                            u.fire_weapon_when_rocket_attack == r.own_rocket && u.fire_weapon_when_normal_attack == r.own_normal;
+        uint32_t weapon_hps = 0, hp_ok = 0;
+        for (const uint32_t h : u.hardpoints) {
+            const tc::HardpointDesc& hd = cd.hardpoints[h];
+            if (!tc::is_weapon(hd.kind)) continue;
+            ++weapon_hps;
+            if (hd.projectile >= 0 && cd.projectiles[static_cast<size_t>(hd.projectile)].name == r.hp && hd.fire_when_deployed == r.hp_dep &&
+                hd.fire_when_undeployed == r.hp_undep && hd.fire_when_rocket_attack == r.hp_rocket &&
+                hd.fire_when_normal_attack == r.hp_normal)
+                ++hp_ok;
+        }
+        std::printf("foc weapon sources: %s own %s (%d), %u weapon hardpoints (%u as the table), muzzle model %d bones %zu\n", r.unit,
+                    u.weapon_projectile >= 0 ? cd.projectiles[static_cast<size_t>(u.weapon_projectile)].name.c_str() : "-",
+                    own_ok ? 1 : 0, weapon_hps, hp_ok, u.muzzle_model ? 1 : 0, u.muzzle_bones.size());
+        CHECK(own_ok && weapon_hps > 0 && hp_ok == weapon_hps);
+        if (u.muzzle_model) CHECK(!u.muzzle_bones.empty());  // the vanilla models carry MUZZLEA_00
+    }
+    {  // Projectile_Types without the WEAPON behaviour (and without weapon hardpoints): no weapon.
+        uint32_t listed = 0, armed = 0;
+        std::string example;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            if (types.get_list(t, "Projectile_Types").empty() ||
+                types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon) || !types.hardpoints(t).empty())
+                continue;
+            ++listed;
+            std::vector<uint32_t> idx;
+            const tc::CombatData cd = catalog.build({t}, idx);
+            if (!cd.units.empty() && cd.units[0].weapon_projectile >= 0) ++armed;
+            if (example.empty()) example = std::string(types.raw().types().name[t]);
+        }
+        std::printf("foc weapon sources: %u types list Projectile_Types without WEAPON or hardpoints (e.g. %s), %u armed\n", listed,
+                    example.c_str(), armed);
+        CHECK(listed > 0 && armed == 0);
+    }
+    {  // Fire bones over every land unit with an own weapon: how many models lack MUZZLEA_00 (those never fire). S8 t12 (a)
+       // (LOB_SOLVER §5.1 "Muzzle bones on FoC land models"): WEAPON in Behavior or LandBehavior (the land set the battle host
+       // reads) - every vanilla model has the bone. The 8 types the Union set used to list (Moldy_Crow, ..._Landing,
+       // UM07_*) carry WEAPON in SpaceBehavior only: no land own weapon.
+        uint32_t with_model = 0, no_bone = 0;
+        std::string missing;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            if (types.get_list(t, "Projectile_Types").empty() ||
+                !(types.has_behavior(t, objects::BehaviorSet::Generic, objects::beh::Weapon) ||
+                  types.has_behavior(t, objects::BehaviorSet::Land, objects::beh::Weapon)))
+                continue;
+            std::vector<tactical::Vec3> bones;
+            if (!catalog.muzzle_bones(t, false, bones)) continue;
+            ++with_model;
+            if (bones.empty()) {
+                ++no_bone;
+                if (missing.size() < 400) missing += std::string(missing.empty() ? "" : ", ") + std::string(types.raw().types().name[t]);
+            }
+        }
+        std::printf("foc fire bones: %u land models of weapon users, %u without MUZZLEA_00: %s\n", with_model, no_bone, missing.c_str());
+        CHECK(with_model > 0 && no_bone == 0);
+    }
+    {  // S8 t10 (LOB_SOLVER §5.1): the garrison gun bone table FP_0<i>_ALT<a> of every Num_Garrison_Guns type with a model.
+        uint32_t hosts = 0, with_bones = 0;
+        std::string line;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            const int32_t guns = types.get_int(t, "Num_Garrison_Guns");
+            if (guns <= 0) continue;
+            std::vector<std::vector<tc::GarrisonBone>> table;
+            if (!catalog.garrison_bones(t, false, guns, table)) continue;
+            ++hosts;
+            size_t valid = 0;
+            for (const auto& e : table)
+                for (const tc::GarrisonBone& b : e) valid += b.valid ? 1u : 0u;
+            with_bones += valid > 0 ? 1u : 0u;
+            if (line.size() < 300)
+                line += std::string(line.empty() ? "" : ", ") + std::string(types.raw().types().name[t]) + " " + std::to_string(guns) +
+                        " guns x " + std::to_string(table.size()) + " ALT (" + std::to_string(valid) + " bones)";
+        }
+        std::printf("foc garrison guns: %u host models, %u with gun bones: %s\n", hosts, with_bones, line.c_str());
+        CHECK(hosts == 0 || with_bones > 0);
+    }
+    {  // S8 t27 (TACTICAL_COMBAT §3.1.1 "Bone list"): Target_Bones found on the type's model (missing names dropped).
+        uint32_t listed = 0, with_model = 0;
+        std::string line;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            const auto names = types.get_list(t, "Target_Bones");
+            if (names.empty()) continue;
+            ++listed;
+            const bool space = types.get_string(t, "Land_Model_Name").empty();  // land model when the type has one
+            std::vector<tactical::Vec3> bones;
+            if (!catalog.target_bones(t, space, bones)) continue;
+            ++with_model;
+            CHECK(bones.size() <= names.size());
+            if (line.size() < 400)
+                line += std::string(line.empty() ? "" : ", ") + std::string(types.raw().types().name[t]) + " " +
+                        std::to_string(bones.size()) + "/" + std::to_string(names.size());
+        }
+        std::printf("foc target bones: %u types list Target_Bones, %u with a model: %s\n", listed, with_model, line.c_str());
+        CHECK(listed >= 5);
+        const objects::TypeIndex atat = types.resolve_name("AT_AT_Walker");
+        std::vector<tactical::Vec3> b;
+        if (atat != objects::kNone && catalog.target_bones(static_cast<uint32_t>(atat), false, b)) {
+            CHECK(b.size() == 3);  // MISSILE_TARGET00-02 on the land model
+            for (const tactical::Vec3& v : b) CHECK(v.z > 0.0f);
+        }
+    }
+}
+
 // FoC: a battle request built by hand (two FoC frigate groups at Kuat-like orbit) on a real space map.
+// a1g t04 follow-up (TACTICAL_GAPS §4.2.1): the land company drop layout, the oriented-box test and the radius rules.
+// The worked example: FoC Rebel_Infantry_Squad (15 x Squad_Rebel_Trooper, Max_Squad_Size 5, team container locomotor,
+// trooper half extents 3 x 3, FormationSpacing 0.5).
+LandDropShape rebel_squad_shape() {
+    LandDropShape s;
+    s.members.assign(15, 7u);
+    s.hx.assign(15, 3.0f);
+    s.hy.assign(15, 3.0f);
+    s.create_team = true;
+    s.squad = 5;
+    s.container_locomotor = true;
+    s.formation_spacing = 0.5f;
+    return s;
+}
+
+bool rebel_squad_slots_ok(const LandDropLayout& lay, float px, float py, float yaw_deg) {
+    static const float kSlots[15][2] = {{35.5f, -16.0f}, {35.5f, 0.0f},   {35.5f, 16.0f},  {19.5f, -8.0f}, {19.5f, 8.0f},
+                                        {8.0f, -16.0f},  {8.0f, 0.0f},    {8.0f, 16.0f},   {-8.0f, -8.0f}, {-8.0f, 8.0f},
+                                        {-35.5f, 16.0f}, {-35.5f, 0.0f},  {-35.5f, -16.0f}, {-19.5f, 8.0f}, {-19.5f, -8.0f}};
+    if (!lay.ok || lay.slots.size() != 15) return false;
+    if (std::fabs(lay.half_x - 41.25f) > 1e-3f || std::fabs(lay.half_y - 42.0f) > 1e-2f) return false;
+    const bool quarter = yaw_deg == 90.0f;
+    for (size_t i = 0; i < 15; ++i) {
+        const float ox = quarter ? -kSlots[i][1] : kSlots[i][0], oy = quarter ? kSlots[i][0] : kSlots[i][1];  // (x, y) -> (-y, x)
+        if (std::fabs(lay.slots[i].x - (px + ox)) > 1e-3f || std::fabs(lay.slots[i].y - (py + oy)) > 1e-3f) {
+            std::printf("  slot %zu: (%.4f, %.4f) expected (%.4f, %.4f)\n", i, static_cast<double>(lay.slots[i].x),
+                        static_cast<double>(lay.slots[i].y), static_cast<double>(px + ox), static_cast<double>(py + oy));
+            return false;
+        }
+    }
+    return true;
+}
+
+void test_land_drop_rules() {
+    // Layout: yaw 0 and the 90-degree rotation, at a drop point away from the origin.
+    const LandDropShape rebel = rebel_squad_shape();
+    CHECK(rebel_squad_slots_ok(land_drop_layout(rebel, 1000.0f, 500.0f, 0.0f), 1000.0f, 500.0f, 0.0f));
+    CHECK(rebel_squad_slots_ok(land_drop_layout(rebel, 1000.0f, 500.0f, 90.0f), 1000.0f, 500.0f, 90.0f));
+    {
+        const LandDropLayout lay = land_drop_layout(rebel, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots[0].type == 7u && lay.slots[0].hx == 3.0f);
+        CHECK(std::fabs(lay.slots[6].yaw_deg) < 1e-3f);  // (8, 0): the slot box's axis is the yaw of drop point -> slot
+        CHECK(std::fabs(lay.slots[11].yaw_deg - 180.0f) < 1e-3f);
+    }
+    {  // without the team container locomotor the team uses 0x40f970; a partial last team keeps its first slots
+        LandDropShape s = rebel;
+        s.container_locomotor = false;
+        s.members.resize(12);
+        s.hx.resize(12);
+        s.hy.resize(12);
+        const LandDropLayout lay = land_drop_layout(s, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots.size() == 12);
+    }
+    {  // vehicles: one 0x40f970 grid. Cell (2 * 10 / 20 + 0, same) = (1, 1), 4 members: side = sqrt(7.2), 2 per row.
+        LandDropShape v;
+        v.members.assign(4, 3u);
+        v.hx.assign(4, 10.0f);
+        v.hy.assign(4, 10.0f);
+        const LandDropLayout lay = land_drop_layout(v, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots.size() == 4);
+        if (lay.ok && lay.slots.size() == 4) {
+            const float side = std::sqrt(7.2f), gap = (side - 2.0f) / 3.0f;
+            CHECK(std::fabs(lay.slots[0].x - 10.0f) < 1e-3f && std::fabs(lay.slots[2].x + 10.0f) < 1e-3f);
+            CHECK(std::fabs(lay.slots[0].y - (gap - side / 2.0f + 0.5f) * 20.0f) < 1e-3f);
+            CHECK(std::fabs(lay.slots[1].y + lay.slots[0].y) < 1e-3f);  // centred row
+            CHECK(std::fabs(lay.half_x - 20.0f) < 1e-3f && std::fabs(lay.half_y - side * 10.0f) < 1e-3f);
+        }
+        v.hy.assign(4, 0.0f);  // b = 2 hy / 20 + FS = 0 -> no layout
+        CHECK(!land_drop_layout(v, 0.0f, 0.0f, 0.0f).ok);
+        CHECK(!land_drop_layout(LandDropShape{}, 0.0f, 0.0f, 0.0f).ok);
+    }
+    // Oriented boxes.
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {5.0f, 0.0f, 3.0f, 3.0f, 0.0f})));
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {6.0f, 0.0f, 3.0f, 3.0f, 0.0f})));  // touching
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {7.5f, 0.0f, 3.0f, 3.0f, 0.0f})));
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 45.0f}, {9.0f, 0.0f, 3.0f, 3.0f, 45.0f})));
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {6.5f, 0.0f, 3.0f, 3.0f, 45.0f})));  // the corner reaches 2.26
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 20.0f, 1.0f, 90.0f}, {0.0f, 15.0f, 1.0f, 1.0f, 0.0f})));   // long axis along y
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 20.0f, 1.0f, 0.0f}, {0.0f, 15.0f, 1.0f, 1.0f, 0.0f})));
+    // Radii: a POWERED enemy object with prevention radius 100, 60 from a slot, blocks only while its owner has base
+    // power; without POWERED it always blocks. Enabling (<=) needs an allied object; prevention is strict (<).
+    LandDropRadiusObject turret;
+    turret.x = 60.0f;
+    turret.prevention = 100.0f;
+    turret.powered = true;
+    turret.owner_base_power = true;
+    LandDropRadiusObject point;
+    point.allied = true;
+    point.enabling = 500.0f;
+    std::vector<LandDropRadiusObject> objs = {point, turret};
+    CHECK(!land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    objs[1].owner_base_power = false;  // the owner's base-power list is empty
+    CHECK(land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    objs[1].powered = false;
+    CHECK(!land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    CHECK(land_drop_radius_ok(-40.0f, 0.0f, objs, true));  // d = 100: not < 100
+    objs[1].allied = true;                                  // an allied object never prevents
+    CHECK(land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    CHECK(land_drop_radius_ok(500.0f, 0.0f, objs, true));   // d = 500 <= 500
+    CHECK(!land_drop_radius_ok(500.5f, 0.0f, objs, true));  // outside every enabling radius
+    CHECK(land_drop_radius_ok(500.5f, 0.0f, objs, false));  // without Use_Reinforcement_Points
+    {  // a1i t04: the unload offsets use 3.0 x the team bounds (the validity 2.5); team members keep their offsets in-team.
+        const LandDropLayout v = land_drop_layout(rebel, 0.0f, 0.0f, 0.0f), u = land_drop_layout(rebel, 0.0f, 0.0f, 0.0f, 3.0f);
+        CHECK(v.ok && u.ok && v.slots.size() == u.slots.size());
+        bool wider = false;
+        for (size_t i = 0; v.ok && u.ok && i < v.slots.size(); ++i) {
+            const float dv = std::sqrt(v.slots[i].x * v.slots[i].x + v.slots[i].y * v.slots[i].y);
+            const float du = std::sqrt(u.slots[i].x * u.slots[i].x + u.slots[i].y * u.slots[i].y);
+            wider = wider || du > dv + 1.0f;
+        }
+        CHECK(wider && u.half_x >= v.half_x && u.half_y >= v.half_y);
+        LandDropShape veh;  // vehicles: one member grid, no team factor
+        veh.members.assign(4, 3u);
+        veh.hx.assign(4, 10.0f);
+        veh.hy.assign(4, 10.0f);
+        const LandDropLayout a = land_drop_layout(veh, 5.0f, 5.0f, 30.0f), b = land_drop_layout(veh, 5.0f, 5.0f, 30.0f, 3.0f);
+        CHECK(a.ok && b.ok && a.slots.size() == b.slots.size());
+        for (size_t i = 0; a.ok && b.ok && i < a.slots.size(); ++i) CHECK(a.slots[i].x == b.slots[i].x && a.slots[i].y == b.slots[i].y);
+    }
+    {  // a1i t05: Find_Free_Placement rings (box 20 x 10 -> step 24, 22.5-degree angles, 360 inclusive).
+        const FreePlacementBox box{-10.0f, -5.0f, 10.0f, 5.0f};
+        float qx = 0.0f, qy = 0.0f;
+        CHECK(find_free_placement(100.0f, 50.0f, box, {}, 2500.0f, qx, qy) && qx == 100.0f && qy == 50.0f);
+        std::vector<FreePlacementBox> bl = {{90.0f, 45.0f, 110.0f, 55.0f}};  // covers P
+        CHECK(find_free_placement(100.0f, 50.0f, box, bl, 2500.0f, qx, qy));
+        CHECK(std::fabs(qx - 124.0f) < 1e-3f && std::fabs(qy - 50.0f) < 1e-3f);  // ring 1, angle 0
+        bl.push_back({113.0f, 45.0f, 140.0f, 52.0f});                         // angle 0 of ring 1 taken too
+        CHECK(find_free_placement(100.0f, 50.0f, box, bl, 2500.0f, qx, qy));
+        CHECK(std::fabs(qx - (100.0f + 24.0f * std::cos(0.39269908f))) < 1e-2f && std::fabs(qy - (50.0f + 24.0f * std::sin(0.39269908f))) < 1e-2f);
+        const std::vector<FreePlacementBox> touch = {{110.0f, 45.0f, 130.0f, 55.0f}};  // touches the box at P: free
+        CHECK(find_free_placement(100.0f, 50.0f, box, touch, 2500.0f, qx, qy) && qx == 100.0f);
+        const std::vector<FreePlacementBox> all = {{-5000.0f, -5000.0f, 5000.0f, 5000.0f}};
+        CHECK(!find_free_placement(100.0f, 50.0f, box, all, 2500.0f, qx, qy));
+        CHECK(!find_free_placement(0.0f, 0.0f, FreePlacementBox{}, all, 2500.0f, qx, qy));  // zero step: r = 0 only
+    }
+    std::printf("  land drop rules: OK\n");
+}
+
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
@@ -1884,6 +2648,20 @@ void test_foc() {
     std::printf("foc battle: contrast rows %zu, hardpoint records %zu, priority sets %zu, damage types %u\n", crules.contrast.size(),
                 catalog.hardpoint_records(), catalog.priority_sets().size(), catalog.damage().damage_count());
     CHECK(crules.contrast.size() == 11 && catalog.hardpoint_records() > 100 && !catalog.priority_sets().empty());
+    {  // a1g t04 follow-up (TACTICAL_GAPS §4.2.1 worked example): the Rebel_Infantry_Squad drop shape and layout
+        const objects::TypeIndex rq = types.resolve_name("Rebel_Infantry_Squad");
+        CHECK(rq != objects::kNone && rq < types.size());
+        if (rq != objects::kNone && rq < types.size()) {
+            const LandDropShape s = land_drop_shape(types, &catalog, crules, static_cast<uint32_t>(rq));
+            std::printf("foc drop shape Rebel_Infantry_Squad: %zu members, hx %.3f hy %.3f, team %d squad %u container %d fs %.2f\n",
+                        s.members.size(), s.hx.empty() ? 0.0 : static_cast<double>(s.hx[0]), s.hy.empty() ? 0.0 : static_cast<double>(s.hy[0]),
+                        s.create_team ? 1 : 0, s.squad, s.container_locomotor ? 1 : 0, static_cast<double>(s.formation_spacing));
+            CHECK(s.members.size() == 15 && s.create_team && s.squad == 5 && s.container_locomotor && s.formation_spacing == 0.5f);
+            CHECK(!s.hx.empty() && std::fabs(s.hx[0] - 3.0f) < 1e-4f && std::fabs(s.hy[0] - 3.0f) < 1e-4f);
+            CHECK(rebel_squad_slots_ok(land_drop_layout(s, 250.0f, -125.0f, 0.0f), 250.0f, -125.0f, 0.0f));
+            CHECK(rebel_squad_slots_ok(land_drop_layout(s, 250.0f, -125.0f, 90.0f), 250.0f, -125.0f, 90.0f));
+        }
+    }
     {  // refixf t01: rocket curve fields reach the battle tables (MPTL fires Proj_Ground_Proton_Torpedo: MPTL_Rocket,
        // straight 100, curve 50, offset 7, Target_Point_On_Terrain, Explode_When_Reached_Target_Radius)
         std::vector<uint32_t> idx;
@@ -1903,6 +2681,28 @@ void test_foc() {
                   torp->explode_when_reached_target_radius && torp->max_flight_distance == 720.0f);
         }
     }
+    {  // S8 t04 (LOB_SOLVER §1.2): Underworld_Merc fires Proj_Merc_Concussion_Grenade through Projectile_Types - GRENADE,
+       // v 10, gravity 0.7 x lob mod 0.8 (G 0.56, R = v^2 / G = 178.6), Can_Lob_Slower, not sticky, lifetime 900.
+        std::vector<uint32_t> idx;
+        const BattleTables bt = catalog.build_battle({static_cast<uint32_t>(types.resolve_name("Underworld_Merc"))}, idx);
+        const tactical::combat::ProjectileDesc* g = nullptr;
+        for (const tactical::combat::ProjectileDesc& pd : bt.combat.projectiles)
+            if (pd.name == "Proj_Merc_Concussion_Grenade") g = &pd;
+        CHECK(g != nullptr && bt.combat.units.size() == 1 && bt.combat.units[0].weapon_projectile >= 0 &&
+              &bt.combat.projectiles[static_cast<size_t>(bt.combat.units[0].weapon_projectile)] == g);
+        if (g) {
+            std::printf("foc grenade: %s cat %d v %.1f gravity %.9g lob mod %.3g slower %d sticky %d lifetime %.0f\n", g->name.c_str(),
+                        static_cast<int>(g->category), static_cast<double>(g->max_speed), static_cast<double>(g->grenade_gravity),
+                        static_cast<double>(g->lob_mod), g->can_lob_slower ? 1 : 0, g->sticks_on_collision ? 1 : 0,
+                        static_cast<double>(g->max_lifetime));
+            CHECK(g->lobbed && g->category == tactical::combat::ProjectileCategory::Grenade && g->max_speed == 10.0f &&
+                  g->grenade_gravity == 0.7f && g->lob_mod == 0.8f && g->can_lob_slower && !g->sticks_on_collision &&
+                  g->max_lifetime == 900.0f);
+            const float r = tactical::combat::lob_range(g->max_speed, g->grenade_gravity, g->lob_mod);
+            CHECK(r > 178.5f && r < 178.6f);
+        }
+    }
+    test_foc_weapon_sources(types, catalog);  // S8 t08 / S8 t06 B4
     {  // --- S4 (owner: S4 agent): shipped corruption options (PLANETS.XML) and garrison / capture descriptors ---
         const std::vector<galactic::CorruptionOption> ae = galactic::corruption_options(types, types.resolve_name("AetenII"));
         size_t missions = 0, options = 0;
@@ -1936,6 +2736,30 @@ void test_foc() {
               cd.transition_seconds == 10.0f && cd.sticky);
 #endif
     }  // --- end S4 ---
+    {  // S7 t07 (MOVEMENT §2.2): the FoC construction / capture pods have no radius tag; with model data their footprint is
+       // the space model's collision-bound half extent x Scale_Factor (N_Orbital_Construction_Pod: x 1.75)
+        namespace mv = tactical::movement;
+        mv::SpaceObstacleHooks hooks;
+        hooks.model_half_extents = [&catalog](uint32_t t, float& hx, float& hy) { return catalog.space_model_half_extents(t, hx, hy); };
+        for (const char* name : {"Orbital_Construction_Pod", "N_Orbital_Construction_Pod", "Skirmish_Merchant_Dock"}) {
+            const uint32_t t = static_cast<uint32_t>(types.resolve_name(name));
+            CHECK(t < types.size());
+            if (t >= types.size()) continue;
+            float r = 0.0f;
+            uint32_t bits = 0;
+            CHECK(!mv::space_obstacle_footprint(types, t, r, bits));  // no radius tag: needs the model
+            float hx = 0.0f, hy = 0.0f;
+            if (!catalog.space_model_half_extents(t, hx, hy)) {
+                std::printf("foc space obstacle: %s: no model data (sim built without assets), skipped\n", name);
+                continue;
+            }
+            const float scale = types.get_float(t, "Scale_Factor") > 0.0f ? types.get_float(t, "Scale_Factor") : 1.0f;
+            CHECK(mv::space_obstacle_footprint(types, t, r, bits, &hooks) && bits == mv::kSpaceStatic);
+            CHECK(r == std::max(std::fabs(hx), std::fabs(hy)) * scale && r > 10.0f);
+            std::printf("foc space obstacle: %s half %.1f x %.1f, scale %.2f -> radius %.1f\n", name, static_cast<double>(hx),
+                        static_cast<double>(hy), static_cast<double>(scale), static_cast<double>(r));
+        }
+    }
 #ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war on real data (owner: fog agent): shipped GameConstants; grids, dense mask and REVEAL placements of
     // two real maps.
@@ -3130,6 +3954,118 @@ void test_space_obstacle_orders() {
     CHECK(station_died && hp_hit && hull_hit);
 }
 
+// S7 t29 / t30 (TACTICAL_COMBAT §2.10): the relation table makes the Is_Neutral player relation 2 (not enemy) both ways.
+// The station goes to the Neutral player: a task-force Attack_Move on it is NOT refused - space keeps the object as the
+// goal, so every member moves there, but nobody gets it as attack goal (path B needs relation 1); the explicit AI Attack
+// and the human attack order are refused; a single unit's own Attack_Move (arg 0) is a plain move. Back with the Empire,
+// the same task-force Attack_Move is accepted with the station as every member's attack goal.
+void test_neutral_attack_move() {
+    auto d = make_data(false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*d, false);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, gsetup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup setup;
+    setup.defs = &defs;
+    setup.equations = &eqs;
+    setup.files = d->files.get();
+    setup.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    using R = commands::RejectReason;
+    bool done = false;
+    for (uint64_t t = 0; t < 6000 && !done; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() != 3) continue;
+        done = true;
+        objects::ObjectStore& st = tm->primary();
+        objects::ObjectId station = objects::kNoObjectId;
+        std::vector<objects::ObjectId> attackers;
+        for (const objects::ObjectHandle h : st.all_objects()) {
+            if (!st.alive(h)) continue;
+            if (st.owner(h) == 0 && static_cast<uint32_t>(st.type(h)) == type_of(*d, "S10_Star_Base_1")) station = st.id(h);
+            if (st.owner(h) == 1 && b->movement().has_unit(st.id(h)) && b->combat().can_attack(st.id(h))) attackers.push_back(st.id(h));
+        }
+        CHECK(station != objects::kNoObjectId && attackers.size() >= 2);
+        if (station == objects::kNoObjectId || attackers.size() < 2) break;
+        const Vec3 sp = st.position(st.find(station));
+        BattleAi ai(*b, *tm, host, setup);
+        auto attack_move = [&](const std::vector<objects::ObjectId>& units, uint32_t arg) {
+            std::vector<uint8_t> pay;
+            auto put = [&pay](uint32_t v) {
+                for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+            };
+            put(static_cast<uint32_t>(units.front()));
+            put(static_cast<uint32_t>(station));
+            put(std::bit_cast<uint32_t>(sp.x));
+            put(std::bit_cast<uint32_t>(sp.y));
+            put(std::bit_cast<uint32_t>(sp.z));
+            put(arg);
+            for (size_t i = 1; i < units.size(); ++i) put(static_cast<uint32_t>(units[i]));
+            const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::AttackMove));
+            return ai.execute(1, commands::ev::port_extension(sub, pay));
+        };
+        auto no_goal = [&] {
+            bool none = true;
+            for (const objects::ObjectId a : attackers) none = none && b->combat().attack_goal(a) != station;
+            return none;
+        };
+        std::vector<uint32_t> wire;
+        for (const objects::ObjectId a : attackers) wire.push_back(static_cast<uint32_t>(a));
+        CHECK(b->change_owner(*tm, st.find(station), 2) && st.owner(st.find(station)) == 2);
+        const bool rel = !b->combat().is_enemy(1, 2) && !b->combat().is_enemy(2, 1) && b->combat().is_enemy(1, 0);
+        const R tf_neutral = attack_move(attackers, ai::tactical::kTfAttackMoveIssueAttack);
+        bool tf_moved = true;
+        for (const objects::ObjectId a : attackers) {
+            const auto va = b->movement().view(a);
+            tf_moved = tf_moved && va.has_goal && std::abs(va.goal.x - sp.x) < 1500.0f && std::abs(va.goal.y - sp.y) < 1500.0f;
+        }
+        const R atk_neutral = ai.execute(1, commands::ev::attack(static_cast<uint32_t>(station), wire));
+        const R human_neutral = b->order_attack(*tm, 1, attackers, station, host.random().synced());
+        const bool goals_neutral = no_goal();
+        const std::vector<objects::ObjectId> one = {attackers.front()};
+        const R own_neutral = attack_move(one, 0u);
+        const auto v = b->movement().view(attackers.front());
+        const bool moved = v.has_goal && std::abs(v.goal.x - sp.x) < 1500.0f && std::abs(v.goal.y - sp.y) < 1500.0f;
+        const bool goals_own = no_goal();
+        CHECK(b->change_owner(*tm, st.find(station), 0) && st.owner(st.find(station)) == 0);
+        const R tf_enemy = attack_move(attackers, ai::tactical::kTfAttackMoveIssueAttack);
+        bool goals_enemy = true;
+        for (const objects::ObjectId a : attackers) goals_enemy = goals_enemy && b->combat().attack_goal(a) == station;
+        std::printf("  neutral station: relation 2 %d; TF Attack_Move %d (moved %d), Attack %d, human attack %d, goals none %d; own "
+                    "Attack_Move %d (moved %d, goals none %d); enemy again: TF Attack_Move %d, goals %d\n",
+                    rel ? 1 : 0, static_cast<int>(tf_neutral), tf_moved ? 1 : 0, static_cast<int>(atk_neutral),
+                    static_cast<int>(human_neutral), goals_neutral ? 1 : 0, static_cast<int>(own_neutral), moved ? 1 : 0,
+                    goals_own ? 1 : 0, static_cast<int>(tf_enemy), goals_enemy ? 1 : 0);
+        CHECK(rel);
+        CHECK(tf_neutral == R::None && tf_moved && atk_neutral == R::InvalidTarget && human_neutral == R::InvalidTarget && goals_neutral);
+        CHECK(own_neutral == R::None && moved && goals_own);
+        CHECK(tf_enemy == R::None && goals_enemy);
+    }
+    CHECK(done);
+}
+
 // t41: BattleAi::fill hands the perception the station's DUMMY_STAR_BASE and Base_Level (the inputs of Variable_Self.BaseLevel).
 void test_battle_ai_station_level(bool skirmish) {
     auto d = make_data(false, false, false, false, true);  // the star bases carry DUMMY_STAR_BASE here
@@ -3246,13 +4182,18 @@ void test_battle_ai_land_mode(bool skirmish) {
         ai::tactical::PerceptionWorld w;
         std::vector<ai::tactical::TacticalAiObject> facts;
         ai.fill(w, facts);
-        CHECK(w.campaign);  // [port] land skirmish stays on the campaign rules: it has no skirmish base
+        CHECK(w.campaign == !skirmish);  // t50: a land skirmish runs the skirmish rules too (it has its skirmish base now)
         CHECK(w.conflict_ground_structures == 1);  // set in both modes; the token picks by mode
         int own = 0, other = 0;
         for (const ai::tactical::PerceptionObject& o : w.objects)
             if (o.dummy_ground_structure) ++(o.owner == 0 ? own : other);
         CHECK(own == 1 && other == 0);
-        for (const ai::tactical::StartMarker& m : w.markers) CHECK(m.kind != ai::tactical::StartMarker::Kind::PlayerPosition);
+        if (skirmish) {  // the battle anchors stand for Player_%d_Position_Marker
+            CHECK(w.markers.size() == 2);
+            for (const ai::tactical::StartMarker& m : w.markers) CHECK(m.kind == ai::tactical::StartMarker::Kind::PlayerPosition);
+        } else {
+            for (const ai::tactical::StartMarker& m : w.markers) CHECK(m.kind != ai::tactical::StartMarker::Kind::PlayerPosition);
+        }
         checked = true;
     }
     CHECK(checked);
@@ -3346,6 +4287,138 @@ void test_battle_ai_find_team() {
         br.representative_type = hook;
         lua::attach_object_bridge(vm, nullptr);
         checked = true;
+    }
+    CHECK(checked);
+}
+
+// a1g t04 follow-up: BattleAi::land_drop_ok (TACTICAL_GAPS §4.2): the land Reinforce drop validity of a reserve entry. A spot
+// is refused when a slot is impassable (an Obstacle strip on the map), fogged for the player (force 1), or its footprint is
+// taken (a live unit stands there); an unknown entry is refused; otherwise accepted.
+// a1h t06: the test is run by the host (TacticalBattle::land_drop_valid); blockers are the Collidable_By_Projectile_Living
+// objects and S10_Trooper carries hard extents 6 x 6 (a type with neither extents nor a model has a zero drop cell: refused).
+void test_battle_ai_land_drop(const Data& d) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    constexpr int32_t kStrip = 5;  // cells x < 5: Obstacle
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                m.legacy_passability.assign(63u * 63u, 0);
+                                for (uint32_t x = 0; x < 5u; ++x)  // kStrip
+                                    for (uint32_t y = 0; y < 63u; ++y) m.legacy_passability[x * 63u + y] = 2;
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d.files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    ts.constants.use_reinforcement_points = false;  // the synthetic map has no reinforcement points (enabling tested below)
+    namespace mv = alamo::tactical::movement;
+    bool invaded = false, checked = false;
+    for (uint64_t t = 0; t < 1500 && !checked; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() != 1) continue;
+        checked = true;
+        const auto reserves = b->reserves(1);
+        CHECK(reserves.size() == 1);
+        if (reserves.empty()) break;
+        const auto key = static_cast<int32_t>(reserves[0].galactic_id);
+        BattleAi ai(*b, *tm, host, ts);
+        // Candidate spots over the map (every 4th cell centre right of the strip).
+        auto scan = [&](std::vector<ai::tactical::Vec3f>& ok) {
+            ok.clear();
+            for (int32_t cy = 4; cy < 60; cy += 4)
+                for (int32_t cx = kStrip + 6; cx < 58; cx += 4) {
+                    const mv::V2 c = mv::cell_center(cx, cy);
+                    if (ai.land_drop_ok(1, key, {c.x, c.y, 0.0f})) ok.push_back({c.x, c.y, 0.0f});
+                }
+        };
+        std::vector<ai::tactical::Vec3f> fog_ok, clear_ok;
+        scan(fog_ok);
+        size_t newly = 0;
+#ifdef ALAMO_SIM_HAVE_FOG
+        const bool fog = b->fog() != nullptr;
+        if (fog) {
+            b->fog()->reveal_all(1);  // nothing fogged for player 1 any more
+            scan(clear_ok);
+            for (const auto& q : clear_ok)
+                newly += std::none_of(fog_ok.begin(), fog_ok.end(), [&q](const ai::tactical::Vec3f& e) { return e.x == q.x && e.y == q.y; });
+            CHECK(newly > 0);           // spots refused only because they were fogged
+            CHECK(clear_ok.size() > fog_ok.size());
+        } else {
+            clear_ok = fog_ok;
+        }
+#else
+        const bool fog = false;
+        clear_ok = fog_ok;
+#endif
+        CHECK(!clear_ok.empty());
+        for (const auto& q : fog_ok) CHECK(ai.land_drop_ok(1, key, q));  // fog cleared: still valid (and same answer twice)
+        const mv::V2 strip = mv::cell_center(2, 31);
+        CHECK(!ai.land_drop_ok(1, key, {strip.x, strip.y, 0.0f}));  // impassable slots
+        // a1h t06 (§4.2.2 item 5): the Reinforce command re-runs the test and refuses the whole drop (no clamp, no move).
+        CHECK(b->order_reinforce(*tm, 1, reserves[0].galactic_id, strip.x, strip.y, host.random().synced()) ==
+              commands::RejectReason::InvalidPosition);
+        CHECK(b->reserves(1).size() == 1);
+        // TACTICAL_GAPS §4.2.1: an AI drop with a member slot on an enemy unit passes (the AI ignores movers); the same
+        // drop for a human fails (its movers block). Slot 0's offset comes from the shared layout.
+        const LandDropLayout at0 = land_drop_layout(b->land_drop_shape(reserves[0].type), 0.0f, 0.0f, b->player_drop_yaw(1));
+        CHECK(at0.ok);
+        size_t next_to_enemy = 0;
+        for (const objects::ObjectHandle h : tm->primary().owned_by(0)) {
+            if (!at0.ok || !tm->primary().active(h) || !tm->movable(h) || next_to_enemy >= 3) continue;
+            const Vec3 q = tm->primary().position(h);
+            const ai::tactical::Vec3f c{q.x - at0.slots[0].x, q.y - at0.slots[0].y, 0.0f};
+            if (!ai.land_drop_ok(1, key, c)) continue;  // refused for another reason (passability, radius, a structure)
+            CHECK(!ai.land_drop_valid(1, key, c, true));
+            ++next_to_enemy;
+        }
+        CHECK(next_to_enemy > 0);
+        {  // Use_Reinforcement_Points: a spot is valid only when every slot is within an allied enabling radius.
+            TacticalAiSetup te = ts;
+            te.constants.use_reinforcement_points = true;
+            BattleAi ae(*b, *tm, host, te);
+            size_t enabled = 0;
+            for (const auto& q : clear_ok) {
+                const bool ok = ae.land_drop_ok(1, key, q);
+                enabled += ok ? 1u : 0u;
+                if (ok) CHECK(ai.land_drop_ok(1, key, q));  // the radii only remove spots
+            }
+            std::printf("  land drop: %zu of %zu spots inside the enabling radii\n", enabled, clear_ok.size());
+        }
+        if (!clear_ok.empty()) {
+            CHECK(!ai.land_drop_ok(1, key + 1000, clear_ok[0]));  // unknown entry
+            CHECK(!ai.land_drop_ok(0, key, clear_ok[0]));         // another player's entry
+        }
+        std::printf("  land drop: %zu / %zu spots fogged-valid / valid, %zu refused only by fog (fog %s), %zu next to enemy units\n",
+                    fog_ok.size(), clear_ok.size(), newly, fog ? "on" : "off", next_to_enemy);
     }
     CHECK(checked);
 }
@@ -3460,7 +4533,1054 @@ void test_oi_objects_scheduling() {
 }
 // --- end OI objects ---
 
+// S8 t10 follow-up (LOB_SOLVER §3.5 "MARKER removal", ABILITIES_HARDPOINTS §2.9): command 57 (special ability with a
+// Dummy_Barrage_Target at a ground point) with PLACE_REMOTE_BOMB. The marker has no lifetime: it stays after the apply
+// consumed the pending ability, while the thrower waits for its toss (the [port] cleanup of other markers would drop it
+// there), and the toss kills it; the bomb (never armed) rests on the ground at the point until DETONATE_REMOTE_BOMB.
+void test_remote_bomb_marker() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test moves units
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const uint32_t dummy_type = type_of(*d, "Dummy_Barrage_Target");
+    bool invaded = false, issued = false, waited = false, tossed = false;
+    objects::ObjectId thrower = objects::kNoObjectId, marker = objects::kNoObjectId;
+    float px = 0.0f, py = 0.0f;
+    uint32_t issue_frame = 0;
+    for (uint64_t t = 0; t < 6000 && !tossed; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) continue;
+        objects::ObjectStore& st = tm->primary();
+        auto marker_alive = [&] { return marker != objects::kNoObjectId && st.alive(st.find(marker)); };
+        if (!issued) {
+            for (const objects::ObjectHandle h : st.owned_by(1))
+                if (st.alive(h) && b->combat().has_unit(st.id(h)) && b->combat().alive(st.id(h))) {
+                    thrower = st.id(h);
+                    break;
+                }
+            CHECK(thrower > 0);
+            if (thrower <= 0) return;
+            const Vec3 p = st.position(st.find(thrower));
+            px = p.x + 80.0f;
+            py = p.y;
+            commands::EventData ev(commands::EventType::TacticalSpecialAbilityWithDummyTarget);
+            ev.set_ids("users", std::vector<uint32_t>{static_cast<uint32_t>(thrower)});
+            ev.set("ability", static_cast<uint32_t>(tactical::abilities::kPlaceRemoteBomb)).set_f("x", px).set_f("y", py).set_f("z", 0.0f);
+            CHECK(b->handle_command(*tm, 1, ev, host.random().synced()) == commands::RejectReason::None);
+            for (const objects::ObjectHandle h : st.all_objects())
+                if (st.alive(h) && static_cast<uint32_t>(st.type(h)) == dummy_type) marker = st.id(h);
+            CHECK(marker_alive());
+            issued = true;
+            issue_frame = b->frame();
+            continue;
+        }
+        // Applied (the pending order is consumed), not yet tossed: the marker stays.
+        if (!waited && b->abilities().pending_type(thrower) < 0 && b->combat().projectile_count() == 0) {
+            CHECK(marker_alive());
+            waited = true;
+        }
+        for (size_t i = 0; i < b->combat().projectile_count(); ++i) {
+            const tactical::combat::ProjectileView v = b->combat().projectile(i);
+            if (!v.alive || !v.stuck) continue;
+            CHECK(!marker_alive());  // killed by the toss
+            CHECK(v.stuck_to == tactical::combat::kNoObject && std::fabs(v.pos.x - px) < 10.0f && std::fabs(v.pos.y - py) < 10.0f);
+            std::printf("  remote bomb marker: issued at %u, bomb resting at (%.1f, %.1f) at %u, marker gone\n", issue_frame,
+                        static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), b->frame());
+            tossed = true;
+        }
+    }
+    CHECK(issued && waited && tossed);
+}
+
+// S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints follow their objects.
+//   * land: a map-placed LAND_OBSTACLE bunker owns its placement stamp (object id) and loses it when it dies; a
+//     Map_Load_Spawn_Table placeholder's stamp is replaced by the spawned rock's footprint; a rock spawned during the
+//     battle is stamped at the end of that tick under its object id and unstamped the tick it is removed;
+//   * space: a map-placed SPACE_OBSTACLE unit owns its placement entry (object id) and loses it when it dies (Hyperspace_Away
+//     kill); a placeholder's entry is replaced by the spawned asteroid's (radius 400, not the placeholder's 50); S8 t09: the
+//     asteroid (not a battle unit) loses its entry the tick it is removed;
+//   * S8 t09 (S9_DEATH_CLONE_SHIELDS §1.6, MOVEMENT §1.3): a death clone keeps only HIDE_WHEN_FOGGED / IMPOSING_PRESENCE /
+//     LAND_OBSTACLE (the last only with Death_Clone_Is_Obstacle) and gets DEATH; a clone without LAND_OBSTACLE is never
+//     stamped.
+void test_runtime_obstacles(bool space) {
+    namespace mv = tactical::movement;
+    auto d = make_data(false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, !space));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test moves units
+    auto place = [](terrain::MapData& m, const char* type, float x, float y, uint32_t owner) {
+        terrain::ObjectPlacement p;
+        p.type_crc = name_crc(type);
+        p.owner = owner;
+        p.position[0] = x;
+        p.position[1] = y;
+        m.objects.push_back(p);
+    };
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [&place](const std::string& name, terrain::MapData& m) {
+                                if (name == "S10_Space_B") {
+                                    m = space_map();
+                                    place(m, "S10_Obst_Mine", 2500.0f, 2500.0f, 0);               // placement 0
+                                    place(m, "S10_Obst_Asteroid_Spawner", -2500.0f, 2500.0f, 2);  // placement 1
+                                } else if (name == "S10_Land_B") {
+                                    m = land_map();
+                                    place(m, "S10_Obst_Bunker", 450.0f, 620.0f, 0);         // placement 0, near the attackers
+                                    place(m, "S10_Obst_Rock_Spawner", 900.0f, 300.0f, 2);  // placement 1
+                                } else {
+                                    return false;
+                                }
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    if (!space) {
+        std::vector<objects::ObjectHandle> up;
+        for (objects::ObjectHandle h : gs->planets()[2].surface)
+            if (gs->store().owner(h) == 1) up.push_back(h);
+        CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    }
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    // The cells a footprint covers on an empty grid of the battle grid's size (the expected stamp).
+    auto cells_of = [](const mv::PassabilityGrid& like, float x, float y, float size) {
+        mv::PassabilityGrid g;
+        g.init(like.width(), like.height());
+        g.stamp(1, mv::make_footprint({x, y}, 0.0f, size, size, -0.5f * size, -0.5f * size, 0, 0, 1.0f, 0));
+        const std::span<const uint32_t> c = g.stamp_cells(1);
+        return std::vector<uint32_t>(c.begin(), c.end());
+    };
+    auto same = [](std::span<const uint32_t> a, const std::vector<uint32_t>& b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); };
+    bool invaded = false, checked = false, spawned_checked = false, removed_checked = false, died = false, asteroid_checked = false;
+    objects::ObjectHandle asteroid_h{};
+    objects::ObjectId asteroid = objects::kNoObjectId, prison_clone = objects::kNoObjectId, bunker_clone = objects::kNoObjectId;
+    objects::ObjectId unit = objects::kNoObjectId, spawned = objects::kNoObjectId;
+    objects::ObjectHandle spawned_h{};
+    uint32_t spawn_frame = 0;
+    for (uint64_t t = 0; t < 6000 && !(died && (space || removed_checked)); ++t) {
+        host.tick_once();
+        if (!space && !invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) continue;
+        objects::ObjectStore& st = tm->primary();
+        const mv::MovementSystem& ms = b->movement();
+        if (!checked) {  // the first battle frame: the map objects own their placements' footprints
+            checked = true;
+            objects::ObjectId other = objects::kNoObjectId;
+            const uint32_t unit_type = type_of(*d, space ? "S10_Obst_Mine" : "S10_Obst_Bunker");
+            const uint32_t other_type = type_of(*d, space ? "S10_Obst_Asteroid" : "S10_Obst_Rock");
+            for (const objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h)) continue;
+                if (static_cast<uint32_t>(st.type(h)) == unit_type) unit = st.id(h);
+                if (static_cast<uint32_t>(st.type(h)) == other_type) other = st.id(h);
+                CHECK(static_cast<uint32_t>(st.type(h)) != type_of(*d, space ? "S10_Obst_Asteroid_Spawner" : "S10_Obst_Rock_Spawner"));
+            }
+            CHECK(unit > 0 && other > 0);
+            if (unit <= 0 || other <= 0) return;
+            if (space) {
+                const mv::SpaceOccupancy& occ = ms.space();
+                mv::V2 c{};
+                float r = 0.0f;
+                uint32_t bits = 0;
+                CHECK(!occ.has_static(mv::map_stamp_id(0)) && !occ.has_static(mv::map_stamp_id(1)));
+                CHECK(occ.static_entry(unit, c, r, bits) && r == 120.0f && c.x == 2500.0f && c.y == 2500.0f);
+                CHECK(occ.static_entry(other, c, r, bits) && r == 400.0f && c.x == -2500.0f && c.y == 2500.0f);  // not 50
+                std::printf("  space: map unit %d entry r 120, spawned asteroid %d entry r %.0f\n", unit, other, static_cast<double>(r));
+                CHECK(b->hyperspace_out(unit, 0, true));  // killed 90 frames later
+                // S8 t09: the asteroid is no battle unit; removing it must drop its (re-keyed) entry at the next sync.
+                asteroid = other;
+                asteroid_h = st.find(other);
+                CHECK(tm->destroy(asteroid_h));
+            } else {
+                const mv::PassabilityGrid& g = ms.grid();
+                CHECK(!g.stamped(mv::map_stamp_id(0)) && !g.stamped(mv::map_stamp_id(1)));
+                CHECK(g.stamped(unit) && same(g.stamp_cells(unit), cells_of(g, 450.0f, 620.0f, 60.0f)));
+                CHECK(g.stamped(other) && same(g.stamp_cells(other), cells_of(g, 900.0f, 300.0f, 100.0f)));  // the rock's, not 20 x 20
+                CHECK(g.effective(mv::world_to_cell(450.0f), mv::world_to_cell(620.0f)) == mv::kPassObstacle);
+                std::vector<objects::ObjectId> attackers;
+                for (const objects::ObjectHandle h : st.owned_by(1))
+                    if (st.alive(h) && b->combat().has_unit(st.id(h)) && b->combat().alive(st.id(h))) attackers.push_back(st.id(h));
+                CHECK(!attackers.empty());
+                CHECK(b->order_attack(*tm, 1, attackers, unit, host.random().synced()) == commands::RejectReason::None);
+                // A rock spawned between two ticks (script spawn path) is stamped by the next tick's end.
+                objects::SpawnParams sp;
+                sp.type = static_cast<objects::TypeIndex>(other_type);
+                sp.owner = 2;
+                sp.position = {300.0f, 1000.0f, 0.0f};
+                sp.facing = {0.0f, -1.0f, 0.0f};
+                spawned_h = tm->spawn(sp);
+                spawned = st.id(spawned_h);
+                spawn_frame = b->frame();
+                CHECK(spawned > 0 && !g.stamped(spawned));
+                // S8 t09: death clones of a bunker (Death_Clone_Is_Obstacle default true) and of a prison (false).
+                sp.type = static_cast<objects::TypeIndex>(type_of(*d, "S10_Obst_Bunker"));
+                sp.position = {1200.0f, 1000.0f, 0.0f};
+                const objects::ObjectHandle bc = tm->spawn_death_clone(sp);
+                sp.type = static_cast<objects::TypeIndex>(type_of(*d, "S10_Obst_Prison"));
+                sp.position = {1200.0f, 600.0f, 0.0f};
+                const objects::ObjectHandle pc = tm->spawn_death_clone(sp);
+                bunker_clone = st.id(bc);
+                prison_clone = st.id(pc);
+                const auto list = [&st](objects::ObjectHandle h) {
+                    return std::vector<objects::BehaviorTypeId>(st.behaviors(h).begin(), st.behaviors(h).end());
+                };
+                CHECK(st.dying(bc) && st.dying(pc));
+                CHECK(list(bc) == (std::vector<objects::BehaviorTypeId>{objects::beh::LandObstacle, 0x44}));  // SELECTABLE gone
+                CHECK(list(pc) == (std::vector<objects::BehaviorTypeId>{0x44}));  // LAND_OBSTACLE gone too
+            }
+            continue;
+        }
+        if (!space) {
+            const mv::PassabilityGrid& g = ms.grid();
+            if (!spawned_checked && b->frame() == spawn_frame + 1) {
+                spawned_checked = true;
+                CHECK(g.stamped(spawned) && same(g.stamp_cells(spawned), cells_of(g, 300.0f, 1000.0f, 100.0f)));
+                CHECK(g.effective(mv::world_to_cell(300.0f), mv::world_to_cell(1000.0f)) == mv::kPassObstacle);
+                // S8 t09: the bunker's clone kept LAND_OBSTACLE and is stamped; the prison's is not.
+                CHECK(g.stamped(bunker_clone) && same(g.stamp_cells(bunker_clone), cells_of(g, 1200.0f, 1000.0f, 60.0f)));
+                CHECK(!g.stamped(prison_clone) && g.effective(mv::world_to_cell(1200.0f), mv::world_to_cell(600.0f)) == mv::kPassClear);
+                CHECK(tm->destroy(spawned_h));
+            } else if (spawned_checked && !removed_checked) {
+                removed_checked = true;
+                CHECK(!g.stamped(spawned) && g.effective(mv::world_to_cell(300.0f), mv::world_to_cell(1000.0f)) == mv::kPassClear);
+            }
+            if (!died && !st.alive(st.find(unit))) {
+                died = true;
+                // The original's stamp goes; its death clone (no Death_Clone list: the bunker type itself, S9_DEATH_CLONE_SHIELDS
+                // §1.6) keeps LAND_OBSTACLE (Death_Clone_Is_Obstacle, default true) and stamps the same cells (MOVEMENT §1.3 [H]).
+                objects::ObjectId clone = objects::kNoObjectId;
+                for (const objects::ObjectHandle h : st.all_objects())
+                    if (st.alive(h) && st.dying(h) && static_cast<uint32_t>(st.type(h)) == type_of(*d, "S10_Obst_Bunker") &&
+                        st.id(h) != bunker_clone)
+                        clone = st.id(h);
+                std::printf("  land: bunker %d died at frame %u (death clone %d), rock %d spawned at %u\n", unit, b->frame(), clone, spawned,
+                            spawn_frame);
+                CHECK(!g.stamped(unit) && clone > 0 && g.stamped(clone) && same(g.stamp_cells(clone), cells_of(g, 450.0f, 620.0f, 60.0f)));
+            }
+            if (!died) CHECK(g.stamped(unit));
+        } else {
+            if (!asteroid_checked && asteroid > 0) {
+                asteroid_checked = true;
+                CHECK(!st.exists(asteroid_h) && !ms.space().has_static(asteroid));
+            }
+            if (!died && !st.alive(st.find(unit))) {
+                died = true;
+                std::printf("  space: map unit %d died at frame %u\n", unit, b->frame());
+                CHECK(!ms.space().has_static(unit) && ms.space().query_static({2500.0f, 2500.0f}, {2500.0f, 2500.0f}, 1.0f) == 0);
+            }
+            if (!died) CHECK(ms.space().has_static(unit));
+        }
+    }
+    CHECK(checked && died);
+    if (!space) CHECK(spawned_checked && removed_checked);
+    if (space) CHECK(asteroid_checked);
+}
+
 }  // namespace
+
+// S7 t12 (FIGHTER_FLYING §2 step 6 / §4.3, TACTICAL_COMBAT §2.8 Formation_Attack_Target): a fighter squadron moved past
+// an enemy frigate keeps its move order. Before, the frigate (the squadron's combat auto target) became the locomotor's
+// target, the attack run reset the squadron's path (§4.3 step 4) and the squadron never reached its destination (skirmish
+// foc seed 5: a TIE squadron on Prepare_Ambush parked ~1900 short when its target went into the fog). Then an ordered
+// attack on the frigate starts Directed_Combat at once (an ordered target is the formation attack target).
+void test_fighter_move_past_enemy() {
+    namespace mv = tactical::movement;
+    {  // the pure rule (S7 t22: no auto-target input - an auto target reaches the squadron only as a pushed block)
+        FighterTargetInputs in;
+        CHECK(fighter_formation_target(in) == kNoObjectId);  // a position block / no formation: no object, keep Moving
+        in.goal = 9;
+        CHECK(fighter_formation_target(in) == kNoObjectId);  // a goal that is not hostile never qualifies
+        in.goal_hostile = true;
+        CHECK(fighter_formation_target(in) == 9);  // Attack_Move(object)
+        in.pushed = 7;
+        CHECK(fighter_formation_target(in) == 7);  // a pushed auto block is newer than the order's block
+        in.ordered = 11;
+        CHECK(fighter_formation_target(in) == 11);  // Attack / Attack_Target (locked team target)
+    }
+    auto d = make_data(false, false, false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*d, false);
+    gsetup.forces.push_back({0, 1, type_of(*d, "S10_TIE_Squadron")});
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, gsetup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test moves units
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    using R = commands::RejectReason;
+    std::vector<objects::ObjectId> members;
+    objects::ObjectId enemy = objects::kNoObjectId;
+    mv::V2 dest{};
+    bool issued = false, auto_seen = false, arrived = false, attacked = false;
+    uint32_t combat_while_moving = 0, arrive_frame = 0, attack_frame = 0, end_frame = 0;
+    float closest_pass = 1.0e9f;
+    for (uint64_t t = 0; t < 7000; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (issued) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (b->frame() == 3 && !issued) {
+            issued = true;
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (!s.members.empty() && st.owner(st.find(s.members.front())) == 0) members = s.members;
+            CHECK(members.size() == 3);
+            if (members.empty()) break;
+            const Vec3 sp = st.position(st.find(members.front()));
+            float best = 0.0f;
+            for (const objects::ObjectHandle h : st.owned_by(1)) {
+                if (!st.alive(h) || !b->movement().has_unit(st.id(h))) continue;
+                const Vec3 p = st.position(h);
+                const float d2 = (p.x - sp.x) * (p.x - sp.x) + (p.y - sp.y) * (p.y - sp.y);
+                if (enemy == objects::kNoObjectId || d2 < best) {
+                    enemy = st.id(h);
+                    best = d2;
+                }
+            }
+            CHECK(enemy != objects::kNoObjectId);
+            if (enemy == objects::kNoObjectId) break;
+            // Straight through the enemy and 1500 beyond it (inside the playable box).
+            const Vec3 ep = st.position(st.find(enemy));
+            const float dx = ep.x - sp.x, dy = ep.y - sp.y, len = std::sqrt(dx * dx + dy * dy);
+            dest = {std::clamp(ep.x + dx / len * 1500.0f, -3700.0f, 3700.0f), std::clamp(ep.y + dy / len * 1500.0f, -3700.0f, 3700.0f)};
+            CHECK(b->order_move(*tm, 0, members, dest.x, dest.y, host.random().synced()) == R::None);
+            std::printf("  squadron %d..%d at (%.0f, %.0f), enemy %d at (%.0f, %.0f), move to (%.0f, %.0f)\n", members.front(),
+                        members.back(), static_cast<double>(sp.x), static_cast<double>(sp.y), enemy, static_cast<double>(ep.x),
+                        static_cast<double>(ep.y), static_cast<double>(dest.x), static_cast<double>(dest.y));
+            continue;
+        }
+        if (!issued) continue;
+        const objects::ObjectId lead = members.front();
+        if (!st.alive(st.find(lead)) || !b->movement().has_unit(lead)) break;
+        end_frame = b->frame();
+        const mv::UnitView v = b->movement().view(lead);
+        const bool enemy_alive = st.alive(st.find(enemy));
+        if (enemy_alive) {
+            const Vec3 lp = st.position(st.find(lead)), ep = st.position(st.find(enemy));
+            closest_pass = std::min(closest_pass, std::sqrt((lp.x - ep.x) * (lp.x - ep.x) + (lp.y - ep.y) * (lp.y - ep.y)));
+            if (!arrived && b->combat().current_target(lead) == enemy) auto_seen = true;
+        }
+        if (!arrived) {
+            if (v.loco_state == mv::LocoState::FighterDirectedCombat) ++combat_while_moving;
+            const float gx = v.pos.x - dest.x, gy = v.pos.y - dest.y;
+            if (v.arrived || gx * gx + gy * gy < 300.0f * 300.0f) {
+                arrived = true;
+                arrive_frame = b->frame();
+                if (enemy_alive) {  // then an ordered attack on the frigate: Directed_Combat from the next frame
+                    CHECK(b->order_attack(*tm, 0, members, enemy, host.random().synced()) == R::None);
+                    attack_frame = b->frame();
+                }
+            }
+        } else if (attack_frame != 0 && !attacked && b->frame() <= attack_frame + 3) {
+            attacked = v.loco_state == mv::LocoState::FighterDirectedCombat;
+        }
+        if ((arrived && (attack_frame == 0 || b->frame() > attack_frame + 3)) || b->frame() >= 3000) break;
+    }
+    std::printf("  frames to %u: enemy auto target seen %d, closest pass %.0f, Directed_Combat frames while moving %u, arrived %d (frame %u), "
+                "ordered attack -> Directed_Combat %d\n",
+                end_frame, auto_seen ? 1 : 0, static_cast<double>(closest_pass), combat_while_moving, arrived ? 1 : 0, arrive_frame,
+                attacked ? 1 : 0);
+    CHECK(issued && auto_seen && closest_pass < 560.0f);  // the frigate was the auto target and inside the strafe circle
+    CHECK(combat_while_moving == 0 && arrived);
+    CHECK(attack_frame != 0 && attacked);
+}
+
+// a1i t04 / t05: a land Reinforce of a company with a Company_Transport_Unit spawns its landing object (the transport's
+// Landing_Transport_Variant at the drop point, z + Hover_Offset, TRANSPORT_LANDING, carried type = the company).
+// Untimed ([port] option): the members spawn at the 3.0-factor unload offsets at the order, the unloaded record is posted
+// and the landing object leaves after (teams + 1) x 2 s. Timed (BattleConfig::landing_unload_timed, the default since a1j
+// t01): the company stays in the hidden landing; one team per 2 s leaves on a locked exit move; the last step unlocks
+// them, posts the record and removes the landing; the battle state saves and loads mid-unload. Also the deployed extents
+// getter. a1j t01 (A1_READINGS §36), timed with `destroy_at` > 0: the landing object is destroyed `destroy_at` frames after
+// the order; the next service posts the signal 0x19 record of the detach (vf15 0x6442d0) with the units out so far
+// (destroy_at 90: team 0; destroy_at 30: none [port: the original sends nothing then]), unlocked, and the rest never spawns.
+void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, true);
+    const objects::TypeIndex lander = d->types.resolve_name("S10_Lander"), landing_t = d->types.resolve_name("S10_Lander_Landing");
+    CHECK(lander != objects::kNone && landing_t != objects::kNone);
+    if (!timed) {
+        float hx = 0.0f, hy = 0.0f;
+        drop_half_extents(d->types, d->catalog.get(), lander, hx, hy);
+        CHECK(hx == 20.0f && hy == 15.0f);
+        drop_deployed_extents(d->types, d->catalog.get(), lander, hx, hy);
+        CHECK(hx == 30.0f && hy == 0.0f);  // 0x371d20: y from Custom_Hard_YExtent_Deployed whenever the deployed x is set
+        drop_deployed_extents(d->types, d->catalog.get(), static_cast<uint32_t>(d->types.resolve_name("S10_Trooper")), hx, hy);
+        CHECK(hx == 6.0f && hy == 6.0f);  // no deployed x: the normal extents
+    }
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 900;
+    opt.battle.landing_unload_timed = timed;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    namespace mv = alamo::tactical::movement;
+    bool invaded = false, dropped = false, seen_alive_late = false, gone = false, saved = false;
+    objects::ObjectId landing_id = objects::kNoObjectId;
+    objects::ObjectId key = objects::kNoObjectId;
+    uint32_t drop_frame = 0, spawned_before = 0, squad = 0;
+    LandDropLayout lay;
+    for (uint64_t t = 0; t < 2500 && !gone; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (dropped) break;  // the battle ended before the take-off
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        if (!dropped) {
+            if (b->frame() != 1) continue;
+            const auto reserves = b->reserves(1);
+            CHECK(reserves.size() == 1);
+            if (reserves.empty()) break;
+            key = reserves[0].galactic_id;
+            squad = reserves[0].type;
+            spawned_before = b->stats().spawned;
+#ifdef ALAMO_SIM_HAVE_FOG
+            if (b->fog()) b->fog()->reveal_all(1);  // the drop test needs unfogged cells
+#endif
+            size_t valid = 0, refused = 0;
+            for (int32_t cy = 6; cy < 58 && !dropped; cy += 2)
+                for (int32_t cx = 6; cx < 58 && !dropped; cx += 2) {
+                    const mv::V2 c = mv::cell_center(cx, cy);
+                    if (!b->land_drop_valid(*tm, 1, key, c.x, c.y, false, false)) continue;
+                    ++valid;
+                    if (const commands::RejectReason rr = b->order_reinforce(*tm, 1, key, c.x, c.y, host.random().synced());
+                        rr != commands::RejectReason::None) {
+                        if (refused++ == 0) std::printf("  landing drop: first refusal %d at (%.0f, %.0f)\n", static_cast<int>(rr), static_cast<double>(c.x), static_cast<double>(c.y));
+                        continue;
+                    }
+                    dropped = true;
+                    drop_frame = b->frame();
+                    lay = land_drop_layout(b->land_drop_shape(squad), c.x, c.y, b->player_drop_yaw(1), 3.0f);
+                    CHECK(lay.ok && lay.slots.size() == 4 && lay.group_x.size() == 2);  // two teams of Max_Squad_Size 2
+                    CHECK(b->reserves(1).empty());
+                    const auto recs = b->landings_unloaded();
+                    // The landing object.
+                    objects::ObjectHandle lh;
+                    if (timed) {
+                        CHECK(recs.empty() && b->stats().spawned == spawned_before);  // the company is still inside
+                        CHECK(b->landings_in_flight(1) == 1);
+                        for (const objects::ObjectHandle h : st.all_objects())
+                            if (st.alive(h) && st.type(h) == landing_t) lh = h;
+                        landing_id = st.alive(lh) ? st.id(lh) : objects::kNoObjectId;
+                        CHECK(b->landing_hidden(landing_id));  // state 4 until the service sees it clear
+                    } else {
+                        CHECK(recs.size() == 1);
+                        if (recs.size() != 1) break;
+                        landing_id = recs[0].landing;
+                        lh = st.find(landing_id);
+                        CHECK(recs[0].galactic_id == key && recs[0].owner == 1 && recs[0].carried_type == squad);
+                        CHECK(recs[0].units.size() == 4 && b->stats().spawned == spawned_before + 4u);
+                        CHECK(b->landings_in_flight(1) == 0 && !b->landing_hidden(landing_id));
+                        // The members at the unload offsets (3.0 x the team bounds, the side's drop yaw).
+                        for (size_t k = 0; lay.ok && k < lay.slots.size() && k < recs[0].units.size(); ++k) {
+                            const Vec3 mp = st.position(st.find(recs[0].units[k]));
+                            CHECK(std::fabs(mp.x - lay.slots[k].x) < 1e-3f && std::fabs(mp.y - lay.slots[k].y) < 1e-3f);
+                        }
+                    }
+                    CHECK(st.alive(lh));
+                    CHECK(st.type(lh) == landing_t);  // the Landing_Transport_Variant
+                    CHECK(st.has_behavior(lh, objects::beh::TransportLanding) && st.carried_type(lh) == squad);
+                    CHECK(st.parent_mode_id(lh) == key && st.owner(lh) == 1 && !st.landing_persist(lh));
+                    const Vec3 lp = st.position(lh);
+                    CHECK(lp.x == c.x && lp.y == c.y && std::fabs(lp.z - 10.0f) < 1e-4f);  // flat map + Hover_Offset 10
+                }
+            if (!dropped) std::printf("  landing drop: no drop (%zu valid spots, %zu refused orders)\n", valid, refused);
+            CHECK(dropped);
+            if (!dropped) break;
+            continue;
+        }
+        const objects::ObjectHandle lh = st.find(landing_id);
+        const uint32_t since = b->frame() - drop_frame;  // 3 steps of 2 s (60 frames)
+        if (!timed) {
+            if (since < 180u) {
+                CHECK(st.alive(lh));
+                if (since == 179u) seen_alive_late = true;
+                if (since == 1u) CHECK(b->landings_unloaded().empty());  // cleared by the next tick
+            } else {
+                CHECK(!st.alive(lh));
+                gone = true;
+            }
+            continue;
+        }
+        // Timed: the service starts the step timer on the first tick (frame drop + 1); team 0 at +61, team 1 at +121, the
+        // finish at +181.
+        const uint32_t spawned = b->stats().spawned - spawned_before;
+        if (since == 1u) CHECK(!b->landing_hidden(landing_id) && spawned == 0);
+        if (since == 60u) CHECK(spawned == 0);
+        if ((since == 61u || since == 121u) && (destroy_at == 0 || since < destroy_at)) {
+            const uint32_t want = since == 61u ? 2u : 4u;
+            CHECK(spawned == want);
+            const objects::ObjectId uid = b->story_reinforced().empty() ? objects::kNoObjectId : b->story_reinforced().back();
+            CHECK(uid != objects::kNoObjectId && b->movement_locked(uid));  // the locked exit move
+            const Vec3 mp = st.position(st.find(uid));
+            CHECK(std::fabs(mp.x - st.position(lh).x) < 30.0f && std::fabs(mp.y - st.position(lh).y) < 30.0f);  // spawned at the landing
+            CHECK(b->landings_in_flight(1) == 1 && b->landings_unloaded().empty());
+        }
+        if (destroy_at > 0) {  // a1j t01: the landing destroyed mid-unload
+            if (since == destroy_at) {
+                CHECK(st.alive(lh) && tm->destroy(lh));
+                continue;
+            }
+            if (since == destroy_at + 1u) {
+                const uint32_t out = destroy_at > 61u ? 2u : 0u;
+                const auto recs = b->landings_unloaded();
+                CHECK(recs.size() == 1 && b->landings_in_flight(1) == 0 && spawned == out);
+                if (recs.size() == 1) {
+                    CHECK(recs[0].landing == landing_id && recs[0].galactic_id == key && recs[0].owner == 1 && recs[0].units.size() == out);
+                    for (const objects::ObjectId u : recs[0].units) CHECK(!b->movement_locked(u));
+                }
+                seen_alive_late = true;
+                continue;
+            }
+            if (since > destroy_at + 1u) {
+                CHECK(spawned == (destroy_at > 61u ? 2u : 0u) && b->landings_unloaded().empty());  // the rest never comes
+                if (since >= 200u) gone = true;
+            }
+            continue;
+        }
+        if (since == 90u && !saved) {  // mid-unload save / load of the battle state (in-flight landing included)
+            StateHasher h0;
+            b->hash(h0);
+            ByteWriter w;
+            b->write_part(TacticalBattle::SavePart::State, w);
+            ByteReader r(w.bytes());
+            CHECK(b->read_part(TacticalBattle::SavePart::State, r));
+            StateHasher h1;
+            b->hash(h1);
+            CHECK(h0.digest() == h1.digest() && b->landings_in_flight(1) == 1);
+            saved = true;
+        }
+        if (since < 181u) {
+            CHECK(st.alive(lh));
+            if (since == 180u) seen_alive_late = true;
+        } else {
+            CHECK(!st.alive(lh));
+            const auto recs = b->landings_unloaded();
+            CHECK(recs.size() == 1 && b->landings_in_flight(1) == 0);
+            if (recs.size() == 1) {
+                CHECK(recs[0].landing == landing_id && recs[0].galactic_id == key && recs[0].carried_type == squad);
+                CHECK(recs[0].units.size() == 4);
+                for (const objects::ObjectId u : recs[0].units) CHECK(!b->movement_locked(u));  // unlocked at the finish
+            }
+            gone = true;
+        }
+    }
+    CHECK(dropped && seen_alive_late && gone);
+    if (timed && destroy_at == 0) CHECK(saved);
+    std::printf("  landing drop (%s%s): landing %d at frame %u\n", timed ? "timed" : "untimed", destroy_at > 0 ? ", destroyed" : "",
+                static_cast<int>(landing_id), drop_frame);
+}
+
+// S7 t22 / t25 (FIGHTER_FLYING §4.10 A, TACTICAL_COMBAT §2.8 "Targets of opportunity"): the response-range test 0x4160a0.
+void test_fighter_chase_rule() {
+    FighterChaseInputs in;
+    in.guard_range = 1000.0f;
+    in.idle_range = 200.0f;
+    in.attack_move_range = 300.0f;
+    in.extension = 300.0f;
+    in.attack_range = 500.0f;
+    in.candidate = {650.0f, 0.0f, 0.0f};
+    in.single_position = true;  // arrived at the end of its only (position) block
+    CHECK(fighter_chase_test(in) == 0);  // no formation: no chase (its weapons still fire in range)
+    in.formation = true;
+    CHECK(fighter_chase_test(in) == 1);  // idle: 650 <= Idle_Chase_Range 200 + range 500 from the slot goal
+    in.candidate = {750.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);  // beyond it
+    in.candidate = {150.0f, 0.0f, 0.0f};
+    in.single_position = false;
+    CHECK(fighter_chase_test(in) == 0);  // a pushed auto block is the last block (or more than one block): no response
+    in.moving = true;
+    CHECK(fighter_chase_test(in) == 0);  // a plain position move under way: no response range at all (§4.10 A)
+    in.flags = 0x01;
+    in.candidate = {5000.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 2);  // an attack-move under way responds [M: the squadron is at its own path point]
+    in.moving = false;
+    in.single_position = true;
+    CHECK(fighter_chase_test(in) == 0);  // arrived: rule 7 with Attack_Move_Response_Range
+    in.candidate = {790.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);  // 790 <= 300 + 500
+    in.flags = 0x02;
+    in.single_position = false;
+    in.last_guard = true;
+    in.candidate = {1450.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);  // guard: Guard_Chase_Range 1000 + 500
+    in.moving = true;
+    in.unit = {900.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);  // a guard move is not an attack-move: rule 7 while moving, u within Rr of the goal
+    in.unit = {1100.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);  // ... but not when u itself is farther than Rr from its slot goal
+    in.moving = false;
+    in.candidate = {1550.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);
+    in.candidate_attacker = true;  // c attacks the carrier: + Autonomous_Move_Extension_Vs_Attacker, base 1
+    CHECK(fighter_chase_test(in) == 2);
+    in.candidate = {1250.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);  // within Rr 1300
+    in.guarded_moving = true;
+    CHECK(fighter_chase_test(in) == 1);  // a moving carrier: its attackers are answered ...
+    in.candidate_attacker = false;
+    in.candidate = {100.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);  // ... nothing else
+    in.guarded_moving = false;
+    CHECK(fighter_chase_test(in) == 1);
+    in.candidate_is_goal = true;
+    CHECK(fighter_chase_test(in) == 0);  // the first / last block's object: path B, not a chase
+    in.candidate_is_goal = false;
+    in.flags = 0;
+    in.last_guard = false;
+    in.single_position = true;
+    in.idle_range = -1.0f;  // Rr < 0 -> 0
+    in.candidate = {450.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);
+    in.candidate = {550.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);
+}
+
+namespace {
+struct FighterBattle {
+    std::unique_ptr<Data> d;
+    std::unique_ptr<jobs::JobSystem> js;
+    std::unique_ptr<SimHost> host;
+    std::unique_ptr<CampaignBattles> battles;
+    galactic::GalacticSim* gs = nullptr;
+};
+
+// The S7 t12 fighter battle: the TIE squadron (player 0) joins the S10 space fight; no stand-in orders.
+bool start_fighter_battle(FighterBattle& fb, bool fog, bool carrier = false) {
+    fb.d = make_data(fog, false, false, false, false, false, false, false, true);
+    fb.js = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    fb.host = std::make_unique<SimHost>(fb.d->types, *fb.js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*fb.d, false);
+    gsetup.forces.push_back({0, 1, type_of(*fb.d, "S10_TIE_Squadron")});
+    if (carrier) gsetup.forces.push_back({0, 1, type_of(*fb.d, "S10_Carrier")});  // S7 t24
+    fb.gs = fb.host->start_galactic(fb.d->rules, gsetup);
+    CHECK(fb.gs != nullptr);
+    if (!fb.gs) return false;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = fog;
+    fb.battles = std::make_unique<CampaignBattles>(*fb.host, fb.d->crules, *fb.d->catalog,
+                                                   [](const std::string& name, terrain::MapData& m) {
+                                                       if (name != "S10_Space_B") return false;
+                                                       m = space_map();
+                                                       return true;
+                                                   },
+                                                   opt);
+    CHECK(fb.battles->attach(nullptr));
+    const std::vector<uint32_t> uf = fb.gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(fb.gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    return true;
+}
+}  // namespace
+
+// S7 t22 (FIGHTER_FLYING §4.9): an auto target moves a squadron only after it is pushed into the squadron's formation. One
+// battle, in phases:
+//  A. no order yet: no formation. Then an Attack_Move(position) through the nearest enemy: the enemy (the auto target) is
+//     pushed while the move is under way (Attack_Move_Response_Range) and the squadron starts its attack run (the PR #19
+//     review: such squadrons never did);
+//  B. Stop leaves the formation: the squadron idles next to its auto target for 300 frames and never attacks it;
+//  C. a plain move to where it is gives it a formation again: the auto target lies within Idle_Chase_Range + range of the
+//     slot goal, is pushed and attacked;
+//  D. the pushed target turns friendly (Change_Owner): Directed_Combat finds no goal and runs enter_idle, which drops the
+//     members' combat targets (the team target, §4.7 step 4) and keeps the formation.
+void test_fighter_auto_push() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, false)) return;
+    enum class Ph { Wait, AttackMove, Stopped, Idle, Converted, Done } ph = Ph::Wait;
+    std::vector<objects::ObjectId> members;
+    objects::ObjectId squad = objects::kNoObjectId, enemy = objects::kNoObjectId, pushed = objects::kNoObjectId;
+    uint32_t since = 0;
+    bool no_formation_at_start = false, am_dc = false, am_moving = false, am_pushed = false;
+    bool stop_cleared = false, b_auto = false, b_dc = false, c_formation = false, c_dc = false, c_pushed = false;
+    bool d_idle = false, d_dropped = false, d_kept = false;
+    std::vector<objects::ObjectId> converted;
+    mv::LocoState prev = mv::LocoState::None;
+    for (uint64_t t = 0; t < 9000 && ph != Ph::Done; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (ph != Ph::Wait) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (ph == Ph::Wait) {
+            if (b->frame() != 3) continue;
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (!s.members.empty() && st.owner(st.find(s.members.front())) == 0) {
+                    members = s.members;
+                    squad = s.id;
+                }
+            CHECK(members.size() == 3);
+            if (members.empty()) break;
+            no_formation_at_start = b->fighter_formation(squad) == nullptr;
+            const Vec3 sp = st.position(st.find(members.front()));
+            float best = 0.0f;
+            for (const objects::ObjectHandle h : st.owned_by(1)) {
+                if (!st.alive(h) || !b->movement().has_unit(st.id(h))) continue;
+                const Vec3 p = st.position(h);
+                const float d2 = (p.x - sp.x) * (p.x - sp.x) + (p.y - sp.y) * (p.y - sp.y);
+                if (enemy == objects::kNoObjectId || d2 < best) {
+                    enemy = st.id(h);
+                    best = d2;
+                }
+            }
+            CHECK(enemy != objects::kNoObjectId);
+            if (enemy == objects::kNoObjectId) break;
+            const Vec3 ep = st.position(st.find(enemy));
+            const float dx = ep.x - sp.x, dy = ep.y - sp.y, len = std::sqrt(dx * dx + dy * dy);
+            const float gx = std::clamp(ep.x + dx / len * 1500.0f, -3700.0f, 3700.0f), gy = std::clamp(ep.y + dy / len * 1500.0f, -3700.0f, 3700.0f);
+            CHECK(b->order_move(*tm, 0, members, gx, gy, fb.host->random().synced(), mv::kNoFacing, true) == R::None);
+            const FighterFormationRecord* r = b->fighter_formation(squad);
+            CHECK(r && r->flags == mv::kMoveFlagAttackMove && r->pushed.empty());
+            ph = Ph::AttackMove;
+            since = b->frame();
+            continue;
+        }
+        const objects::ObjectId lead = members.front();
+        if (!st.alive(st.find(lead)) || !b->movement().has_unit(lead)) break;
+        const mv::UnitView v = b->movement().view(lead);
+        const FighterFormationRecord* r = b->fighter_formation(squad);
+        switch (ph) {
+            case Ph::AttackMove:
+                if (v.loco_state == mv::LocoState::FighterDirectedCombat) {
+                    am_dc = true;
+                    am_moving = !v.arrived;
+                    am_pushed = r && !r->pushed.empty();
+                    CHECK(b->order_stop(*tm, 0, members) == R::None);
+                    stop_cleared = b->fighter_formation(squad) == nullptr;
+                    ph = Ph::Stopped;
+                    since = b->frame();
+                } else if (b->frame() > since + 2500) {
+                    ph = Ph::Done;
+                }
+                break;
+            case Ph::Stopped:
+                for (const objects::ObjectId m : members) b_auto = b_auto || b->combat().auto_target(m) != objects::kNoObjectId;
+                b_dc = b_dc || v.loco_state == mv::LocoState::FighterDirectedCombat;
+                if (b->frame() >= since + 300) {
+                    Vec3 lp = st.position(st.find(lead));
+                    // S8 t17: the attack-move's scan cube R + Rr (FIGHTER_FLYING §4.10 A) engages earlier, so the stop can
+                    // leave the squadron beyond R + Idle_Chase_Range of the enemy: the idle move ends 700 from it.
+                    if (const objects::ObjectHandle eh = st.find(enemy); st.alive(eh)) {
+                        const Vec3 ep = st.position(eh);
+                        const float dx = lp.x - ep.x, dy = lp.y - ep.y, d = std::sqrt(dx * dx + dy * dy);
+                        if (d > 700.0f) lp = Vec3{ep.x + dx / d * 700.0f, ep.y + dy / d * 700.0f, lp.z};
+                    }
+                    CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
+                    const FighterFormationRecord* nr = b->fighter_formation(squad);
+                    c_formation = nr && nr->flags == 0 && nr->pushed.empty();
+                    ph = Ph::Idle;
+                    since = b->frame();
+                }
+                break;
+            case Ph::Idle:
+                if (v.loco_state == mv::LocoState::FighterDirectedCombat && r && !r->pushed.empty()) {
+                    c_dc = true;
+                    pushed = r->pushed.back();
+                    c_pushed = b->combat().has_unit(pushed);  // a ship (not a squadron)
+                    if (c_pushed) CHECK(b->change_owner(*tm, st.find(pushed), 0));
+                    if (c_pushed) converted.push_back(pushed);
+                    ph = c_pushed ? Ph::Converted : Ph::Done;
+                    since = b->frame();
+                } else if (b->frame() > since + 600) {
+                    ph = Ph::Done;
+                }
+                break;
+            case Ph::Converted:
+                if (prev != mv::LocoState::FighterIdle && v.loco_state == mv::LocoState::FighterIdle) {
+                    d_idle = true;
+                    d_dropped = true;
+                    for (const objects::ObjectId m : members)
+                        d_dropped = d_dropped && std::find(converted.begin(), converted.end(), b->combat().current_target(m)) == converted.end();
+                    d_kept = r != nullptr;
+                    ph = Ph::Done;
+                } else if (b->frame() > since + 120) {
+                    ph = Ph::Done;
+                }
+                // A ship pushed after the conversion (a second enemy in reach) turns friendly too, so Directed_Combat runs out
+                // of goals (S8 t10-t12 shot timing brought one more frigate into reach).
+                if (ph == Ph::Converted && r)
+                    for (const objects::ObjectId k : r->pushed)
+                        if (std::find(converted.begin(), converted.end(), k) == converted.end() && b->combat().has_unit(k) &&
+                            b->combat().owner(k) != 0) {
+                            CHECK(b->change_owner(*tm, st.find(k), 0));
+                            converted.push_back(k);
+                        }
+                break;
+            default: break;
+        }
+        prev = v.loco_state;
+    }
+    std::printf("  auto push: squadron %d, enemy %d; attack-move: Directed_Combat %d (moving %d, pushed %d); stop: formation gone %d, "
+                "auto target %d, Directed_Combat %d; idle move: formation %d, Directed_Combat %d (pushed %d); converted: idle %d, "
+                "targets dropped %d, formation kept %d\n",
+                squad, enemy, am_dc ? 1 : 0, am_moving ? 1 : 0, am_pushed ? 1 : 0, stop_cleared ? 1 : 0, b_auto ? 1 : 0, b_dc ? 1 : 0,
+                c_formation ? 1 : 0, c_dc ? 1 : 0, pushed, d_idle ? 1 : 0, d_dropped ? 1 : 0, d_kept ? 1 : 0);
+    CHECK(no_formation_at_start);
+    CHECK(am_dc && am_moving && am_pushed);
+    CHECK(stop_cleared && b_auto && !b_dc);
+    CHECK(c_formation && c_dc && c_pushed);
+    CHECK(d_idle && d_dropped && d_kept);
+}
+
+// S7 t24 (STATION_HANGARS_SOUND §2.5, A1_READINGS §33.4, FIGHTER_FLYING §4.9): a moving carrier's launch is a guard of the
+// carrier. The launched squadron's formation record is {flags 0x02, goal object = the carrier} with a host follow, so its
+// chase range is Guard_Chase_Range around the carrier; when the carrier moves away, the squadron re-paths to it (at most
+// once per 30 frames, when the carrier is more than half the leader's attack range from the recorded goal) and keeps the
+// guard record (flags, goal object). S7 t28 / t35 (A1_READINGS §33.4.1): while the carrier moves the squadron, within
+// R = min(range / 2, Space_Guard_Range 750) of it, flies a copy of its path at most twice its speed; once the carrier has
+// stopped, the squadron re-paths to it (the recorded goal ends next to the carrier's destination). A new order of the
+// squadron ends the follow (a plain move record).
+void test_hangar_escort_guard() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, false, true)) return;
+    const uint32_t carrier_type = type_of(*fb.d, "S10_Carrier");
+    objects::ObjectId carrier = objects::kNoObjectId, squad = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    bool guard_record = false, followed = false, kept = true, ended = false, capped = false, copied = false;
+    uint32_t launch_frame = 0, move_frame = 0, follow_frame = 0, copy_frame = 0;
+    mv::V2 dest{};
+    for (uint64_t t = 0; t < 5000; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (carrier != objects::kNoObjectId) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (carrier == objects::kNoObjectId) {
+            for (const objects::ObjectHandle h : st.owned_by(0))
+                if (st.alive(h) && st.type(h) == carrier_type) carrier = st.id(h);
+            if (carrier == objects::kNoObjectId) continue;
+        }
+        if (!st.alive(st.find(carrier))) break;
+        const Vec3 cp = st.position(st.find(carrier));
+        if (squad == objects::kNoObjectId) {
+            for (const mv::FighterSquad& s : b->movement().fighter_squads()) {
+                const FighterFormationRecord* r = b->fighter_formation(s.id);
+                if (!s.members.empty() && r && r->goal_object == carrier) {
+                    squad = s.id;
+                    members = s.members;
+                    const mv::FighterGuard* fg = b->movement().fighter_guard(s.id);  // S7 t37: the movement layer's block
+                    guard_record = r->flags == mv::kMoveFlagGuardMove && r->pushed.empty() && fg && fg->object == carrier &&
+                                   fg->flags == mv::kMoveFlagGuardMove && fg->next > b->frame() && fg->follow;
+                }
+            }
+            if (squad == objects::kNoObjectId) {
+                if (b->frame() > 300) break;
+                continue;
+            }
+            launch_frame = b->frame();
+            // The carrier moves 1500 away (inside the playable box); the escort is not ordered.
+            dest = {cp.x, cp.y + (cp.y > 0.0f ? -1500.0f : 1500.0f)};
+            const objects::ObjectId cid[1] = {carrier};
+            CHECK(b->order_move(*tm, 0, cid, dest.x, dest.y, fb.host->random().synced()) == R::None);
+            move_frame = b->frame();
+            continue;
+        }
+        const FighterFormationRecord* r = b->fighter_formation(squad);
+        if (!r || members.empty() || !b->movement().has_unit(members.front())) break;
+        kept = kept && r->flags == mv::kMoveFlagGuardMove && r->goal_object == carrier;
+        const mv::UnitView v = b->movement().view(members.front());
+        // S7 t28: while the carrier moves, the squadron's speed cap is 2 x the carrier's speed and, its leader within R of
+        // the carrier, it flies a copy of the carrier's path (its goal = the carrier's goal point).
+        const mv::UnitView cv = b->movement().view(carrier);
+        const bool c_moving = cv.has_goal && !cv.arrived;
+        for (const mv::FighterSquad& s : b->movement().fighter_squads())
+            if (s.id == squad && c_moving && s.speed_cap == 2.0f * cv.max_speed) capped = true;
+        if (!copied && c_moving && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y) {
+            copied = true;
+            copy_frame = b->frame();
+        }
+        const float gx = r->goal.x - dest.x, gy = r->goal.y - dest.y;
+        const float mx = v.goal.x - r->goal.x, my = v.goal.y - r->goal.y;
+        if (!followed && gx * gx + gy * gy < 600.0f * 600.0f && mx * mx + my * my < 150.0f * 150.0f) {
+            followed = true;  // the record's goal moved with the carrier and the leader's slot goal is next to that point
+            follow_frame = b->frame();
+            // A plain move order of the squadron replaces the guard: no follow any more.
+            const Vec3 lp = st.position(st.find(members.front()));
+            CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
+            const FighterFormationRecord* nr = b->fighter_formation(squad);
+            ended = nr && nr->flags == 0 && nr->goal_object == objects::kNoObjectId && !b->movement().fighter_guard(squad);
+            break;
+        }
+        if (b->frame() > move_frame + 3000) break;
+    }
+    std::printf("  escort guard: carrier %d squadron %d launched frame %u (guard record %d); carrier moved frame %u to (%.0f, %.0f); "
+                "followed %d (frame %u), speed cap %d, path copy %d (frame %u), guard kept %d, new order ends the follow %d\n",
+                carrier, squad, launch_frame, guard_record ? 1 : 0, move_frame, static_cast<double>(dest.x), static_cast<double>(dest.y),
+                followed ? 1 : 0, follow_frame, capped ? 1 : 0, copied ? 1 : 0, copy_frame, kept ? 1 : 0, ended ? 1 : 0);
+    CHECK(carrier != objects::kNoObjectId && squad != objects::kNoObjectId && members.size() == 3);
+    CHECK(guard_record);
+    CHECK(followed && kept && ended);
+    CHECK(capped && copied);
+}
+
+#ifdef ALAMO_SIM_HAVE_FOG
+// S7 t22 (FIGHTER_FLYING §4.9 step 3): a goal hidden by fog for the squadron's player is still its formation goal, so the
+// squadron toggles Idle <-> Directed_Combat every frame (Directed_Combat: fogged -> NoTarget -> enter_idle; Idle: a goal
+// that is not dying -> Directed_Combat), as in retail. Here the goal is an ordered Attack on an enemy frigate that no
+// player-0 REVEAL source sees (the fighters reveal nothing); enter_idle keeps the order's object block.
+void test_fighter_fog_toggle() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, true)) return;
+    std::vector<objects::ObjectId> members;
+    objects::ObjectId squad = objects::kNoObjectId, enemy = objects::kNoObjectId;
+    bool issued = false, stayed_hidden = true, order_kept = true;
+    uint32_t settle = 0, window = 0, toggles = 0;
+    mv::LocoState prev = mv::LocoState::None;
+    for (uint64_t t = 0; t < 6000; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (issued) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (!issued) {
+            if (b->frame() != 3) continue;
+            issued = true;
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (!s.members.empty() && st.owner(st.find(s.members.front())) == 0) {
+                    members = s.members;
+                    squad = s.id;
+                }
+            const Vec3 sp = members.empty() ? Vec3{} : st.position(st.find(members.front()));
+            float best = 0.0f;
+            for (const objects::ObjectHandle h : st.owned_by(1)) {
+                if (!st.alive(h) || !b->movement().has_unit(st.id(h)) || !b->fog_object_hidden(0, st.id(h), true)) continue;
+                const Vec3 p = st.position(h);
+                const float d2 = (p.x - sp.x) * (p.x - sp.x) + (p.y - sp.y) * (p.y - sp.y);
+                if (enemy == objects::kNoObjectId || d2 < best) {
+                    enemy = st.id(h);
+                    best = d2;
+                }
+            }
+            CHECK(members.size() == 3 && enemy != objects::kNoObjectId);
+            if (members.empty() || enemy == objects::kNoObjectId) break;
+            CHECK(b->order_attack(*tm, 0, members, enemy, fb.host->random().synced()) == R::None);
+            continue;
+        }
+        const objects::ObjectId lead = members.front();
+        if (!st.alive(st.find(lead)) || !st.alive(st.find(enemy))) break;
+        const mv::UnitView v = b->movement().view(lead);
+        if (settle == 0 && !v.has_goal && v.loco_state != mv::LocoState::FighterMoving) settle = b->frame();
+        if (settle != 0 && b->frame() > settle + 5) {
+            ++window;
+            if (v.loco_state != prev) ++toggles;
+            stayed_hidden = stayed_hidden && b->fog_object_hidden(0, enemy, true);
+            order_kept = order_kept && b->combat().ordered_target(lead) == enemy;
+            if (window >= 60) break;
+        }
+        prev = v.loco_state;
+    }
+    const FighterFormationRecord* r = nullptr;
+    if (TacticalBattle* b = fb.battles->battle()) r = b->fighter_formation(squad);
+    std::printf("  fog toggle: squadron %d attacks hidden enemy %d; settled at %u, %u state changes in %u frames, hidden %d, order kept %d\n",
+                squad, enemy, settle, toggles, window, stayed_hidden ? 1 : 0, order_kept ? 1 : 0);
+    CHECK(window >= 60 && stayed_hidden && order_kept && toggles >= 58);
+    CHECK(r && r->goal_object == enemy);
+}
+#endif
 
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -3475,6 +5595,8 @@ int main(int argc, char** argv) {
     test_retreat(*d);
     std::printf("auto-resolve only\n");
     test_auto_only(*d);
+    std::printf("story block freezes the conflict state machines and the galactic frame (a1j t05)\n");
+    test_story_block_host(*d);
     std::printf("human orders + order queue (integration fixes, [port: Gabriel])\n");
     test_orders_and_queue(*d);
 #ifdef ALAMO_SIM_HAVE_STORY
@@ -3484,6 +5606,7 @@ int main(int argc, char** argv) {
     test_linked_battle(*d);
     std::printf("story Invade() of a scripted fleet (a1f t08, S10 PROBE A)\n");
     test_probe_invade(*d);
+    test_invade_planet_reward(*d);
     std::printf("S4 story battles: orders, garrisons, capture, map load, corruption missions\n");
     {
         auto ds4 = make_data(false, false, true);  // S4
@@ -3495,6 +5618,16 @@ int main(int argc, char** argv) {
     {
         auto dfog = make_data(true);
         test_fog_battle(*dfog);
+    }
+    std::printf("fog of war: Battlefield_Modifier reveal multiplier (FOW t01)\n");
+    {
+        auto dbm = make_data(true, false, false, false, false, false, false, true);
+        test_fog_bm_battle(*dbm);
+    }
+    std::printf("fog of war: land setup phase manager (FOWF t05)\n");
+    {
+        auto dsetup = make_data(false, false, false, false, false, false, false, false, false, true);
+        test_fog_setup_battle(*dsetup);
     }
 #endif
 #ifdef ALAMO_SIM_HAVE_ANIM
@@ -3520,12 +5653,37 @@ int main(int argc, char** argv) {
     test_battle_ai_orders(*d);
     std::printf("refixf t02: SPACE_OBSTACLE station as a static entry, per-unit Lua orders as one group move\n");
     test_space_obstacle_orders();
+    test_neutral_attack_move();  // S7 t29 / t30
     test_battle_ai_station_level(false);
     test_battle_ai_station_level(true);
     test_battle_ai_land_mode(false);
     test_battle_ai_land_mode(true);
     std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
     test_battle_ai_find_team();
+    std::printf("a1g t04 follow-up: BattleAi::land_drop_ok (impassable / fogged / movers / enabling radius)\n");
+    test_battle_ai_land_drop(*d);
+#endif
+    std::printf("a1g t04 follow-up: land company drop layout, oriented boxes, reinforcement radii\n");
+    test_land_drop_rules();
+    std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
+    test_landing_drop(false);
+    test_landing_drop(true);
+    test_landing_drop(true, 90);  // a1j t01: destroyed with team 0 out
+    test_landing_drop(true, 30);  // a1j t01: destroyed before any unit is out
+    std::printf("S8 t02 / S7 t13: obstacle footprints follow their objects (land stamps, space static entries)\n");
+    test_runtime_obstacles(false);
+    test_remote_bomb_marker();  // S8 t10 follow-up
+    test_runtime_obstacles(true);
+    std::printf("S7 t12: a fighter squadron moved past an enemy keeps its move order (formation attack target)\n");
+    test_fighter_move_past_enemy();
+    std::printf("S7 t22: squadron auto targets through the formation push (chase test, Stop, idle chase, enter_idle)\n");
+    test_fighter_chase_rule();
+    test_fighter_auto_push();
+    std::printf("S7 t24: a carrier's launch guards the carrier (Guard_Chase_Range, follows it)\n");
+    test_hangar_escort_guard();
+#ifdef ALAMO_SIM_HAVE_FOG
+    std::printf("S7 t22: a fogged formation goal toggles Idle <-> Directed_Combat\n");
+    test_fighter_fog_toggle();
 #endif
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);

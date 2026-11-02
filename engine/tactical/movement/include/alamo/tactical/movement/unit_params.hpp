@@ -57,6 +57,34 @@ struct UnitDesc {
     float strafe_distance = 0.0f;       // Strafe_Distance (+0x2118)
     float prepare_strafe_height = 0.0f; // Prepare_Strafe_Height (+0x1e24)
     bool has_pre_turn_anim = false;     // Has_Pre_Turn_Anim (+0x36)
+    // ---- S7 t06 / t14: Uses_Multiple_Locomotors swap (MOVEMENT.md §3.1.1, 0x3a9910; MovementSystem::use_secondary_locomotor) ----
+    bool uses_multiple_locomotors = false;  // Uses_Multiple_Locomotors (+0x74)
+    // The swap can run: Secondary_Locomotor_Name (+0x2078) is JETPACK_LOCOMOTOR and Primary_Locomotor_Name (+0x2058) is
+    // not. [port] retail tells "on the secondary" by the locomotor class (JetPack vf96 = 0, every other class 1), so a
+    // non-JetPack secondary would be rebuilt on every to-secondary call and never swapped back (weapons disabled for
+    // good), and a JetPack primary would be rebuilt every stopped frame; the port refuses both (vanilla has neither).
+    // An empty or unknown name never swaps (the factory returns null).
+    bool has_secondary_locomotor = false;
+    LocomotorKind secondary_locomotor = LocomotorKind::Default;  // its kind (locomotor_kind_from_token)
+    // Alternate_Max_Speed (+0x380) / Alternate_Max_Rate_Of_Turn (+0x390), raw (type ctor defaults 1.0 / 2.0). Read only
+    // by the JETPACK locomotor in its airborne kind (pack state 0 / 0xF..0x13, §3.1.1): the planned flight and the
+    // formation speed; the take-off turn (0x10), landing (0x14) and stopped (0x16) use Max_Speed / Max_Rate_Of_Turn.
+    float alt_max_speed = 1.0f;
+    float alt_turn_rate = 2.0f;
+    // S8 t11 (MOVEMENT §3.2 "Deploy states"): Deployment_Anim_Rate (+0x1668, type ctor default 1.0), the speed of the
+    // Walk locomotor's deploy / undeploy clips (MovementSystem::deploy).
+    float deployment_anim_rate = 1.0f;
+    // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the unit TURRET of a `Deploys` type (TurretBehavior, TD
+    // +0x48..+0x5c). [port] Modelled only for Deploys types with the TURRET behaviour and Turret_Rotate_Speed > 0 (the
+    // deploy gate is its only sim reader); `turret` false = always at rest. Angles: x (never moves), elevation, yaw
+    // (degrees, relative to the body).
+    bool turret = false;
+    float turret_speed = 0.0f;                // Turret_Rotate_Speed (+0x5a8), degrees per frame
+    float turret_extent = 180.0f;             // Turret_Rotate_Extent_Degrees (+0x5a0) [port: unset 180 = no clamp]
+    float turret_deployed_extent = 180.0f;    // Deployed_Turret_Rotate_Extent_Degrees (+0x5d0) [port: unset = undeployed]
+    float turret_rest[3] = {0.0f, 0.0f, 0.0f};           // Turret_Rest_Angle (+0x5b4)
+    float turret_deployed_rest[3] = {0.0f, 0.0f, 0.0f};  // Turret_Deployed_Rest_Angle (+0x5c0)
+    float turret_rest_delay = 2.0f;           // Turret_Rotate_To_Rest_Delay_Sec (+0x5cc, ctor default 2.0 s)
 };
 
 // Fills the type-derived members (id / position / yaw are left to the caller). `model_radius`
@@ -64,7 +92,8 @@ struct UnitDesc {
 // UnitCollisionClass applies (infantry 6, bike 10, vehicle 20, large 40, giant 80, other 15) [L].
 // REMAINING_GAPS §4.2-4.7 fields are filled too, except UnitDesc::locomotor, which stays Default: the host opts in
 // with locomotor_kind_from_type(types, type_index, mode) (special_locomotors.hpp), so existing hosts keep their
-// behaviour (and synced draws) until they route the kind.
+// behaviour (and synced draws) until they route the kind. The Uses_Multiple_Locomotors fields are filled too; they act
+// only when the host asks for the swap (use_secondary_locomotor / MoveOrder::switch_locomotor).
 UnitDesc unit_desc_from_type(const objects::GameObjectTypes& types, uint32_t type_index, float model_radius = 0.0f);
 
 }  // namespace alamo::tactical::movement

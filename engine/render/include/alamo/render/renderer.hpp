@@ -217,7 +217,17 @@ struct Instance {
     bool no_shadow = false;
     // FF inputs hook (FfDrawHook); null = the renderer's per-draw records. Must outlive the frame's build.
     const FfDrawHook* ff_hook = nullptr;
+    // [port] TAA object motion (taa.hpp): the key this object keeps from frame to frame (motion_key), so the renderer can
+    // look up where it stood last frame and give its pixels a motion vector. 0 = no key: drawn as static (camera motion
+    // only). Two live instances never share a key.
+    uint64_t motion_id = 0;
 };
+
+// Key of a moving thing for Instance::motion_id: `kind` (1 = sim object, 2 = projectile, 3 = test / other) keeps id spaces
+// apart, `slot` tells an object's attachments apart (0 = the object itself). Never 0.
+constexpr uint64_t motion_key(uint32_t kind, uint64_t id, uint32_t slot = 0) {
+    return (static_cast<uint64_t>(kind & 0xFFu) << 56) | ((id & 0xFFFFFFFFFFull) << 8) | (slot & 0xFFu);
+}
 
 // Multithreaded recording (C5). threads <= 1: one inline pass in the primary. Otherwise every phase
 // bucket of the sorted draw list is split into contiguous chunks of at least min_draws_per_chunk
@@ -354,6 +364,7 @@ struct DrawStats {
     uint32_t beam_ribbons = 0, beam_dots = 0, beam_bolts = 0, beam_pending = 0;
     // [port] TAA (RecordOptions::taa): the resolve ran; this frame restarted the history (current frame only).
     bool taa = false, taa_reset = false;
+    uint32_t taa_movers = 0;  // draws of the TAA velocity pass (keyed instances that moved since the last frame)
 };
 
 // ---- R4 scene hook (engine/render/particles): render-owned effects drawn inside the frame graph's buckets.

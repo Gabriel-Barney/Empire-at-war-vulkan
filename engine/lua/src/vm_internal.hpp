@@ -73,6 +73,10 @@ int task_force_fire_special_weapon(Call& c, bool space, const std::vector<object
 // task-force variants delegate to the object bindings). The results are dropped; returns the first result's truth (false
 // on an error, whose message is discarded [port: the original logs per unit]).
 bool call_object_method(Call& c, objects::ObjectHandle unit, const char* name, int first, int nargs);
+// bind_objects.cpp, S7 t15 A1: GameObjectWrapper.Activate_Ability of `unit` with the script arguments at `first` (the
+// task-force Activate_Ability, AI_TACTICAL §7.3); results dropped. True when the activation went through (the S9 command
+// accepted the unit, or the event path issued it); false for a dead unit, an argument error or a refused activation.
+bool object_activate_ability(Call& c, objects::ObjectHandle unit, int first, int nargs);
 // bind_objects.cpp: TaskForceClass.Set_Targeting_Priorities(set [, type or category filter]) applied to `units` through
 // the object binding (script argument 1 = set name, 2 = optional filter).
 void task_force_set_targeting_priorities(Call& c, const std::vector<objects::ObjectHandle>& units);
@@ -210,7 +214,15 @@ void queue_event(lua_State* L, int fn_index, int params_index);
 inline constexpr int32_t kBlockOrder = 0, kBlockReinforcement = 1, kBlockForever = 2;
 inline constexpr int32_t kBlockStarbaseLevel = 3;    // WaitForStarbase(planet, level): id = planet object id, value = level
 inline constexpr int32_t kBlockGroundbaseLevel = 4;  // WaitForGroundbase(planet, level)
+// (5 = kBlockBombingRun, script_remaining.hpp.) S7 t15 A1: AbilityBlockStatus of GameObjectWrapper.Activate_Ability (count
+// 1): id = object, value = ObjectBridge::watch_ability at creation; finished once the bridge counted a later signal 0x29 of
+// the object, or the object is dead / dying / removed (bind_objects.cpp).
+inline constexpr int32_t kBlockAbility = 6;
 bool galactic_block_finished(Call& c);  // c.self = the BlockingStatus
+
+// OI follow-up t03/t04 (A1_READINGS §28.9): the object's movement lock (0x39ad40) as the bindings see it - a script
+// Lock_Current_Orders, an ability's Disable_Movement share, or a running Divert move (bind_objects.cpp).
+bool movement_locked(Call& c, objects::ObjectId id);
 
 // --- P4 lua: FoC galactic special systems (bind_players.cpp; stubs without the players family) ---------------------
 // GameObjectWrapper.Activate_Ability in a galactic script (Activate_Ability_Galactic 0x570670, P4_SIM_SYSTEMS 6.1): true
@@ -229,6 +241,13 @@ void galactic_trigger(Call& c, const std::vector<std::pair<objects::ObjectHandle
 // GalacticSim::bm_allows_unit_ability with special_name_crc(ability_name)); true without a galactic sim.
 bool black_market_allows(Call& c, int32_t player, std::string_view ability_name, bool must_be_bought);
 // --- end P4 lua ---
+
+// a1g t06: Spawn_Unit at a planet in a galactic script (the VM's store is the galactic sim's, `location` is one of its
+// planets): GalacticSim::spawn_unit, so the unit lives in the sim like a produced one (space units in the owner's orbit
+// fleet, companies landed or in a new fleet, ground units on the surface, structures on the planet; one object per
+// company: the members are the company's views, no member objects). Null when not handled (no galactic sim, not a
+// planet, a type without a galactic role): the caller then creates the object directly.
+objects::ObjectHandle galactic_spawn_unit(Call& c, uint32_t type, int32_t player, objects::ObjectHandle location);
 
 // Store tag of a GameObjectWrapper's object (Ud::reserved, LuaVm::Impl::store_tag): 0 the VM's store, 1 the parent
 // mode's store (L1/S4 wave 2b, Get_Parent_Mode_Object).

@@ -11,10 +11,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <new>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
@@ -28,6 +30,9 @@
 #include "alamo/tactical/combat/combat_system.hpp"
 #include "alamo/tactical/combat/weather.hpp"
 #include "thread_parallel_for.hpp"
+#ifdef ALAMO_COMBAT_TESTS_HAVE_MOVEMENT
+#include "alamo/tactical/movement/passability.hpp"
+#endif
 #ifdef ALAMO_COMBAT_TESTS_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -445,7 +450,8 @@ constexpr uint64_t kCatFighter = 0x1, kCatCapital = 0x8;
 
 // Shooter with one weapon hardpoint at its centre (no bone B, no muzzle draw) and a stationary target;
 // returns the first projectile's direction and fills `expected` from a copy of the RNG.
-void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float override_radius, bool use_table, float expect_r) {
+void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float override_radius, bool use_table, float expect_r,
+                     uint64_t target_category = kCatCapital) {
     World w;
     w.data.projectiles.push_back(ProjectileDesc{});
     w.data.projectiles[0].max_speed = 10.0f;
@@ -472,7 +478,7 @@ void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float ov
     UnitDesc target;
     target.tactical_health = 1e6f;
     target.radius = 10.0f;
-    target.category_mask = kCatCapital;
+    target.category_mask = target_category;
     const uint32_t ds = push_unit(w.data, shooter), dt = push_unit(w.data, target);
     CombatConfig cfg;
     cfg.mode = mode;
@@ -488,13 +494,64 @@ void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float ov
         w.tick();
         if (w.sys->projectile_count() == 1) {
             const uint64_t tick_draws = w.rng.draws() - copy.draws();
+            if (expect_r > 0.0f) {
+                Vec3 off;
+                off.x = copy.range_float(-expect_r, expect_r);
+                off.y = copy.range_float(-expect_r, expect_r);
+                off.z = copy.range_float(-expect_r, expect_r);
+                const Vec3 expect = norm(Vec3{500, 0, 0} + off);
+                CHECK(same(w.sys->projectile(0).dir, expect));
+                CHECK(tick_draws == 3);  // 3 inaccuracy; the full recharge Get_Int(100, 100) has no draw
+            } else {
+                // A1j t03 (0x381dc0): a table distance of 0 (no entry for the target's category) makes no draws.
+                CHECK(same(w.sys->projectile(0).dir, Vec3{1, 0, 0}));
+                CHECK(tick_draws == 0);
+            }
+        }
+    }
+    CHECK(w.sys->projectile_count() == 1);
+}
+
+// A1j t03: own-weapon inaccuracy 0x549f80 (TACTICAL_COMBAT §3.1.2). A shooter with its own weapon (no hardpoints, no
+// muzzle bones) at the origin and a stationary capital 500 away; the first shot's direction must be the target plus
+// the first `xyz_draws` draws of the firing tick in (-expect_r, expect_r) (2: X and Y only, 0: no offset). [The tick's
+// draw count is not checked: the recharge's range_int(0, 10) takes a state-dependent number of draws.]
+void own_inaccuracy_case(GameMode mode, float fixed_radius, bool use_table, float expect_r, int xyz_draws) {
+    World w;
+    w.data.projectiles.push_back(ProjectileDesc{});
+    w.data.projectiles[0].max_speed = 10.0f;
+    w.data.projectiles[0].damage = 1.0f;
+    UnitDesc shooter;
+    shooter.tactical_health = 100.0f;
+    shooter.max_attack_distance = 1000.0f;
+    shooter.weapon_projectile = 0;
+    shooter.weapon_recharge = 1.0f;
+    shooter.fire_inaccuracy_fixed_radius = fixed_radius;
+    if (use_table) shooter.fire_inaccuracy = {{kCatFighter, 70.0f}, {kCatCapital, 7.0f}, {kCatCapital, 99.0f}};  // first hit
+    UnitDesc target;
+    target.tactical_health = 1e6f;
+    target.radius = 10.0f;
+    target.category_mask = kCatCapital;
+    const uint32_t ds = push_unit(w.data, shooter), dt = push_unit(w.data, target);
+    CombatConfig cfg;
+    cfg.mode = mode;
+    PlayerInfo p0;
+    p0.ai_accuracy = 1.0f;
+    w.make(cfg, {p0, PlayerInfo{}});
+    w.add(1, ds, 0, Vec3{0, 0, 0});
+    w.add(2, dt, 1, Vec3{500, 0, 0});
+    w.sys->order_attack(1, 2);
+    for (int i = 0; i < 40 && w.sys->projectile_count() == 0; ++i) {
+        SimRng copy = w.rng;
+        w.tick();
+        if (w.sys->projectile_count() == 1) {
             Vec3 off;
-            off.x = copy.range_float(-expect_r, expect_r);
-            off.y = copy.range_float(-expect_r, expect_r);
-            off.z = copy.range_float(-expect_r, expect_r);
-            const Vec3 expect = norm(Vec3{500, 0, 0} + off);
-            CHECK(same(w.sys->projectile(0).dir, expect));
-            CHECK(tick_draws == 3);  // 3 inaccuracy; the full recharge Get_Int(100, 100) has no draw
+            if (xyz_draws >= 2) {
+                off.x = copy.range_float(-expect_r, expect_r);
+                off.y = copy.range_float(-expect_r, expect_r);
+            }
+            if (xyz_draws == 3) off.z = copy.range_float(-expect_r, expect_r);
+            CHECK(same(w.sys->projectile(0).dir, norm(Vec3{500, 0, 0} + off)));
         }
     }
     CHECK(w.sys->projectile_count() == 1);
@@ -505,6 +562,13 @@ void test_inaccuracy_system() {
     inaccuracy_case(GameMode::Space, 1.0f, 0.0f, 0.0f, true, 7.0f);    // table: 7 x 2 x 500 / 1000
     inaccuracy_case(GameMode::Space, 1.0f, 5.0f, 5.0f, false, 5.0f);   // ability override: unscaled
     inaccuracy_case(GameMode::Land, 0.6f, 5.0f, 0.0f, false, 5.0f * (1.0f - 0.6f) + 5.0f);  // (2 - acc) x
+    inaccuracy_case(GameMode::Space, 1.0f, 0.0f, 0.0f, true, 0.0f, kCatFighter);           // table distance 0: no draws
+    // A1j t03 own weapon: the fixed radius draws X and Y, Z in space only; the type table s = d x L / max distance.
+    own_inaccuracy_case(GameMode::Land, 5.0f, false, 5.0f, 2);
+    own_inaccuracy_case(GameMode::Space, 5.0f, false, 10.0f, 3);
+    own_inaccuracy_case(GameMode::Land, 0.0f, true, 7.0f * 500.0f / 1000.0f, 3);
+    own_inaccuracy_case(GameMode::Space, 0.0f, true, 14.0f * 500.0f / 1000.0f, 3);
+    own_inaccuracy_case(GameMode::Space, 0.0f, false, 0.0f, 0);  // no table entry: no offset
 }
 
 struct TargetWorld {
@@ -635,7 +699,7 @@ void test_targeting_rules() {
     }
 }
 
-// ---- OI tactical: circular lead, lobbed flight, team targeting ------------------------------------------------
+// ---- OI tactical: circular lead, team targeting ------------------------------------------------
 
 void test_circular_lead() {
     const Vec3 m{0, 0, 0};
@@ -707,59 +771,586 @@ void test_turn_toward() {
     CHECK_NEAR(dot(e, e), 1.0, 1e-6);
 }
 
-void test_lob() {
-    // High arc: v = 10, g = 1, horizontal 50, dz 0: tan = (100 + sqrt(10000 - 2500)) / 50 = 3.732 (75 degrees).
-    const Vec3 d = lob_direction(Vec3{0, 0, 0}, Vec3{50, 0, 0}, 10.0f, 1.0f);
-    CHECK_NEAR(d.z / d.x, 3.7320508, 1e-4);
-    CHECK_NEAR(dot(d, d), 1.0, 1e-6);
-    // Out of reach (> v^2 / g = 100): 45 degrees.
-    const Vec3 e = lob_direction(Vec3{0, 0, 0}, Vec3{0, 150, 0}, 10.0f, 1.0f);
-    CHECK_NEAR(e.z, e.y, 1e-6);
-    // System: a category-3 shot from the WeaponBehavior arcs and comes down at the target's height.
-    World w;
+// ---- S8 t04: lob solver and grenade flight (docs/re/LOB_SOLVER.md) ------------------------------------------------
+
+constexpr float kDeg = 57.29577951308232f;
+float lob_dist(Vec3 a, Vec3 b) { return dmath::sqrt(dot(a - b, a - b)); }
+
+// SPMAT_Walker's Proj_Ground_SPMAT_Grenade (§1.2): v = 30, G = 1.636363636 (R = v^2 / G = 550), Can_Lob_Slower.
+ProjectileDesc spmat_grenade() {
     ProjectileDesc g;
-    g.name = "Grenade";
-    g.max_speed = 6.0f;
+    g.name = "Proj_Ground_SPMAT_Grenade";
+    g.max_speed = 30.0f;
     g.damage = 10.0f;
     g.lobbed = true;
     g.category = ProjectileCategory::Grenade;
-    g.grenade_gravity = 0.5f;
-    g.lob_mod = 0.5f;  // g = 0.25 -> range 36 / 0.25 = 144
-    w.data.projectiles.push_back(g);
-    UnitDesc thrower;
-    thrower.tactical_health = 100.0f;
-    thrower.weapon_projectile = 0;
-    thrower.weapon_recharge = 5.0f;  // one shot inside the loop (first shot after 150 + 0..10 frames)
-    thrower.max_attack_distance = 500.0f;
-    const uint32_t td = push_unit(w.data, thrower);
-    UnitDesc target;
-    target.tactical_health = 1000.0f;
-    target.radius = 2.0f;
-    const uint32_t tg = push_unit(w.data, target);
+    g.grenade_gravity = 1.0f;
+    g.lob_mod = 900.0f / 550.0f;
+    g.can_lob_slower = true;
+    g.max_lifetime = 900.0f;
+    return g;
+}
+
+void test_lob_solver() {
+    const float v = 30.0f, G = 900.0f / 550.0f;
+    LobSolution s;
+    // §2.3 table, SPMAT at 275 on flat ground: 75.0 deg / 35.4 frames at Max_Speed; with the flag 0.8 v, 64.3 deg /
+    // 26.4 frames (what retail does).
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{275, 0, 0}, v, G, false, s));
+    CHECK(s.speed == 30.0f);
+    CHECK_NEAR(s.angle * kDeg, 75.0, 0.01);
+    CHECK_NEAR(275.0f / (s.speed * dmath::cos(s.angle)), 35.42, 0.02);
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{275, 0, 0}, v, G, true, s));
+    CHECK(s.speed == 30.0f * 0.8f);
+    CHECK_NEAR(s.angle * kDeg, 64.31, 0.01);
+    CHECK_NEAR(275.0f / (s.speed * dmath::cos(s.angle)), 26.43, 0.02);
+    // d / R = 0.25: 82.8 deg without the flag; 0.512 v, 53.8 deg with it. d / R = 0.9: v, 57.9 deg either way.
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{0, 137.5f, 0}, v, G, false, s));
+    CHECK_NEAR(s.angle * kDeg, 82.76, 0.01);
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{0, 137.5f, 0}, v, G, true, s));
+    CHECK(s.speed == 30.0f * 0.8f * 0.8f * 0.8f);
+    CHECK_NEAR(s.angle * kDeg, 53.75, 0.01);
+    CHECK(lob_solve(Vec3{10, 10, 0}, Vec3{10 - 495.0f, 10, 0}, v, G, true, s));
+    CHECK(s.speed == 30.0f);
+    CHECK_NEAR(s.angle * kDeg, 57.92, 0.01);
+    // §4: maximum range v^2 / G = 550 at equal heights; + Ranged_Target_Z_Adjust 6 on the target: (v / G) sqrt(v^2 - 12 G)
+    // = 543.97 - between the two the unit is "in scan range" but there is no shot.
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{549.0f, 0, 0}, v, G, false, s));
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{551.0f, 0, 0}, v, G, false, s));
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{543.5f, 0, 6.0f}, v, G, true, s));
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{544.5f, 0, 6.0f}, v, G, true, s));
+    CHECK(s.angle == 0.0f);  // no solution: angle 0, speed untouched
+    CHECK_F(lob_range(30.0f, 1.0f, 900.0f / 550.0f), 550.0f);
+    // Too high: v^2 < G h is out of range even right next to it.
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{10, 0, 600}, v, G, false, s));
+    // d = 0 -> 0.0001: straight up (~90 deg); with the flag the speed steps down to about sqrt(G x 0.0001).
+    CHECK(lob_solve(Vec3{5, 5, 0}, Vec3{5, 5, 0}, v, G, false, s));
+    CHECK(s.angle * kDeg > 89.99f && s.speed == 30.0f);
+    CHECK(lob_solve(Vec3{5, 5, 0}, Vec3{5, 5, 0}, v, G, true, s));
+    CHECK(s.speed < 0.02f && s.speed > 0.01f);
+    // §8 item 13 [port]: G <= 0 is "no solution" (retail never ends the 0.8 loop at G = 0).
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{100, 0, 0}, v, 0.0f, true, s));
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{100, 0, 0}, v, -1.0f, false, s));
+    // §1.1 defaults: gravity 1.05, lob mod 5.02 (G = 5.271).
+    const ProjectileDesc def;
+    CHECK(def.grenade_gravity == 1.05f && def.lob_mod == 5.02f && !def.can_lob_slower && !def.sticks_on_collision);
+    // §6.1: the closed form passes through Q at t = d / (s cos theta).
+    CHECK(lob_solve(Vec3{0, 0, 6}, Vec3{200, 100, 6}, v, G, true, s));
+    const Vec3 f = lob_forward(Vec3{2, 1, -7}, s.angle);  // yaw from the heading's XY part only
+    CHECK_NEAR(dot(f, f), 1.0, 1e-6);
+    CHECK_NEAR(dmath::asin(f.z) * kDeg, s.angle * kDeg, 1e-3);
+    const float tq = dmath::sqrt(200.0f * 200.0f + 100.0f * 100.0f) / (s.speed * dmath::cos(s.angle));
+    CHECK(lob_dist(lob_position(Vec3{0, 0, 6}, f, s.speed, G, tq), Vec3{200, 100, 6}) < 0.01f);
+    CHECK(same(lob_position(Vec3{1, 2, 3}, f, s.speed, G, 0.0f), Vec3{1, 2, 3}));
+}
+
+// A land (or space) sandbox with an SPMAT-like grenade thrower (id 1, player 0) and a target (id 2, player 1).
+struct LobWorld {
+    World w;
+    uint32_t thrower = 0, target = 0;
+    explicit LobWorld(GameMode mode = GameMode::Land, ProjectileDesc g = spmat_grenade()) {
+        w.data.projectiles.push_back(g);
+        UnitDesc t;
+        t.tactical_health = 100.0f;
+        t.weapon_projectile = 0;
+        t.weapon_recharge = 5.0f;          // the first shot after 150 + 0..10 frames, then one per 150 + 0..10
+        t.max_attack_distance = 100.0f;    // not a grenade weapon's range (§4)
+        t.ranged_target_z_adjust = 0.0f;   // launch point at the unit's position
+        thrower = push_unit(w.data, t);
+        UnitDesc v;
+        v.tactical_health = 1000.0f;
+        v.radius = 2.0f;
+        v.ranged_target_z_adjust = 0.0f;
+        target = push_unit(w.data, v);
+        CombatConfig cfg;
+        cfg.mode = mode;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+    }
+    void move(ObjectId id, Vec3 p) {
+        w.sys->set_position(id, p);
+        w.trees.update(static_cast<EntityHandle>(id), box_of(p, w.data.units[w.sys->desc_index(id)].radius));
+    }
+};
+
+void test_lob_targeting() {
+    // Slot 44 (§3.1): the solve from the attacker to the target + Ranged_Target_Z_Adjust; the scan box / attack range is
+    // v^2 / G x (1 + list 8) = 550 - Targeting_Max_Attack_Distance (100) is not used. Slot 45 is unchanged.
+    for (const float x : {300.0f, 543.5f, 544.5f, 549.0f}) {
+        LobWorld lw;
+        lw.w.data.units[lw.target].ranged_target_z_adjust = 6.0f;
+        lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+        lw.w.add(2, lw.target, 1, Vec3{x, 0, 0});
+        CHECK_F(lw.w.sys->attack_range(1), 550.0f);
+        CHECK_F(lw.w.sys->base_attack_range_of(1), 550.0f);
+        lw.w.tick();
+        CHECK(lw.w.sys->auto_target(1) == (x < 544.0f ? 2 : kNoObject));
+    }
+    {  // Targeting_Min_Attack_Distance 220 still refuses closer targets (slot 45).
+        LobWorld lw;
+        lw.w.data.units[lw.thrower].min_attack_distance = 220.0f;
+        lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+        lw.w.add(2, lw.target, 1, Vec3{200, 0, 0});
+        lw.w.tick();
+        CHECK(lw.w.sys->auto_target(1) == kNoObject);
+    }
+    {  // No arc = no shot (§5.2): an ordered target out of reach is never fired at (and no draw is spent on it).
+        LobWorld lw;
+        lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+        lw.w.add(2, lw.target, 1, Vec3{600, 0, 0});
+        lw.w.sys->order_attack(1, 2);
+        for (int i = 0; i < 400; ++i) lw.w.tick();
+        CHECK(lw.w.sys->stats().shots == 0u && lw.w.sys->projectile_count() == 0u);
+    }
+}
+
+void test_lob_weapon_flight() {
+    // SPMAT at 275 (land, flat ground at z 0): the WeaponBehavior shot launches at 0.8 v = 24 with a 64.3 deg pitch, flies
+    // N(t) = L + s t f - G t^2 / 2 z exactly and hits the target (radius 2 box) on the way down between t = 26 and 27.
+    LobWorld lw;
+    lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+    lw.w.add(2, lw.target, 1, Vec3{275, 0, 0});
+    const float G = 900.0f / 550.0f;
+    uint32_t spawn = 0, hit_frame = 0;
+    Vec3 launch, f;
+    bool exact = true;
+    for (int i = 0; i < 400 && hit_frame == 0; ++i) {
+        lw.w.tick();
+        if (lw.w.sys->stats().hits > 0) hit_frame = lw.w.frame - 1;
+        if (lw.w.sys->projectile_count() == 0) continue;
+        const ProjectileView pv = lw.w.sys->projectile(0);
+        if (spawn == 0) {
+            spawn = pv.spawn_frame;
+            launch = pv.pos;
+            f = pv.dir;
+            CHECK(pv.lob && pv.speed == 24.0f);
+            CHECK_NEAR(dmath::asin(f.z) * kDeg, 64.31, 0.01);
+            CHECK(f.y == 0.0f && f.x > 0.0f);  // yaw toward the target
+            continue;
+        }
+        const float t = static_cast<float>(lw.w.frame - 1 - spawn);
+        if (!same(pv.pos, lob_position(launch, f, 24.0f, G, t))) exact = false;
+    }
+    CHECK(spawn != 0 && exact);
+    CHECK(hit_frame == spawn + 27);
+    CHECK(lw.w.sys->health(2) == lw.w.sys->max_health(2) - 10.0f);  // direct damage (Process_Hit)
+}
+
+// One grenade launched by launch_projectile from (0, 0, 0) at `point` (no target) in a bare system.
+struct LobLaunch {
+    CombatData d;
+    std::unique_ptr<CombatSystem> sys;
+    TreeSet trees{2};
+    SimRng rng{7u};
+    uint32_t frame = 1;
+    LobLaunch(GameMode mode, ProjectileDesc g, Vec3 point, const GroundGrid* grid = nullptr) {
+        d.projectiles = {g};
+        CombatConfig cfg;
+        cfg.mode = mode;
+        sys = std::make_unique<CombatSystem>(d, cfg, std::vector<PlayerInfo>{PlayerInfo{}, PlayerInfo{}});
+        if (grid) {
+            RocketTerrain rt;
+            rt.grid = *grid;
+            sys->set_rocket_terrain(std::move(rt));
+        }
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.from = Vec3{0, 0, 0};
+        l.point = point;
+        CHECK(sys->launch_projectile(l, frame));
+    }
+    void tick() { sys->tick(frame++, trees, rng); }
+};
+
+// S8 t06: a heightmap grid (20-unit cells, height scale 1/16) of w x h vertices at `level` raw units everywhere.
+GroundGrid flat_grid(uint32_t w, uint32_t h, int16_t level) {
+    GroundGrid g;
+    g.cell = 20.0f;
+    g.width = w;
+    g.height = h;
+    g.height_scale = 0.0625f;
+    g.heights.assign(static_cast<size_t>(w) * h, level);
+    return g;
+}
+
+// A1j t03 (TACTICAL_COMBAT §3.4, 0x4d0630): the land ground test of straight shots. A plateau at z 5 (vertices x >= 160)
+// lies between the launch at (0, 0, 1) and the point / target at x 300.
+void test_straight_ground_test() {
+    GroundGrid g = flat_grid(20, 4, 0);
+    for (uint32_t y = 0; y < g.height; ++y)
+        for (uint32_t x = 8; x < g.width; ++x) g.heights[y * g.width + x] = 80;
+    ProjectileDesc shot;
+    shot.max_speed = 10.0f;
+    shot.damage = 10.0f;
+    // No target: tested on every step in land (detonation on the ramp x 140..160 below z 1), never in space.
+    for (const GameMode mode : {GameMode::Land, GameMode::Space}) {
+        LobLaunch ll(mode, shot, Vec3{300, 0, 1}, &g);
+        Vec3 at;
+        bool done = false;
+        for (int i = 0; i < 100 && !done; ++i) {
+            ll.tick();
+            for (const HitEvent& e : ll.sys->hit_events()) {
+                done = true;
+                at = e.position;
+            }
+        }
+        CHECK(done);
+        if (mode == GameMode::Land)
+            CHECK(at.x > 140.0f && at.x < 144.0f && std::fabs(at.z - (at.x - 140.0f) * 0.25f) < 0.01f);
+        else
+            CHECK(at.x > 290.0f);
+    }
+    // A target ahead on all three axes: a DEFAULT shot skips the test and hits; a LASER is tested and detonates.
+    for (const ProjectileCategory cat : {ProjectileCategory::Default, ProjectileCategory::Laser}) {
+        World w;
+        shot.category = cat;
+        w.data.projectiles = {shot};
+        UnitDesc t;
+        t.tactical_health = 1e6f;
+        t.radius = 10.0f;
+        const uint32_t td = push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        w.make(cfg);
+        RocketTerrain rt;
+        rt.grid = g;
+        w.sys->set_rocket_terrain(std::move(rt));
+        w.add(2, td, 1, Vec3{300, 0, 0});
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.from = Vec3{0, 0, 1};
+        l.target = 2;
+        CHECK(w.sys->launch_projectile(l, w.frame));
+        for (int i = 0; i < 60 && w.sys->projectile_count() != 0; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u);
+        CHECK(w.sys->stats().hits == (cat == ProjectileCategory::Default ? 1u : 0u));
+        CHECK(w.sys->stats().expired == (cat == ProjectileCategory::Default ? 0u : 1u));
+    }
+}
+
+void test_lob_ground_and_expiry() {
+    {  // Land: the terrain stops the arc (ground test) - On_Detonate at the ground hit, not at the aim height. A plateau
+       // at z 5 (vertices x >= 160; 80 raw x 1/16) is struck before the arc comes down to the aim point (z 0) at x 200.
+        GroundGrid g = flat_grid(16, 4, 0);
+        for (uint32_t y = 0; y < g.height; ++y)
+            for (uint32_t x = 8; x < g.width; ++x) g.heights[y * g.width + x] = 80;
+        LobLaunch ll(GameMode::Land, spmat_grenade(), Vec3{200, 0, 0}, &g);
+        bool done = false;
+        Vec3 at;
+        for (int i = 0; i < 100 && !done; ++i) {
+            ll.tick();
+            for (const HitEvent& e : ll.sys->hit_events()) {
+                done = true;
+                at = e.position;
+                CHECK(e.victim == kNoObject);
+            }
+        }
+        CHECK(done && std::fabs(at.z - 5.0f) < 0.001f && at.x < 200.0f && at.x > 180.0f);
+        CHECK(ll.sys->stats().expired == 1u && ll.sys->stats().hits == 0u && ll.sys->projectile_count() == 0u);
+    }
+    {  // §6.6 water: a water plane at z -3 over ground at z -5 - the grenade detonates on the surface.
+        GroundGrid g = flat_grid(16, 4, -80);
+        g.water_type = 1;
+        g.water_height = -3.0f;
+        LobLaunch lw(GameMode::Land, spmat_grenade(), Vec3{200, 0, 10}, &g);
+        Vec3 at;
+        bool done = false;
+        for (int i = 0; i < 100 && !done; ++i) {
+            lw.tick();
+            for (const HitEvent& e : lw.sys->hit_events()) {
+                done = true;
+                at = e.position;
+            }
+        }
+        CHECK(done && std::fabs(at.z + 3.0f) < 0.001f && at.x > 200.0f);
+    }
+    {  // Space: no ground test - the grenade falls on past Q until its lifetime (> 2 s: the 61st frame) runs out.
+        ProjectileDesc g = spmat_grenade();
+        g.max_lifetime = 2.0f;
+        LobLaunch ll(GameMode::Space, g, Vec3{200, 0, 0});
+        int steps = 0;
+        while (ll.sys->projectile_count() > 0 && steps < 200) {
+            ll.tick();
+            ++steps;
+        }
+        CHECK(steps == 62);  // launched at frame 1, first stepped at 2, expires at frame 62 (61 frames > 2 s)
+        CHECK(ll.sys->stats().expired == 1u);
+    }
+    {  // §6.5: the lifetime replaces the travel budget only with Max_Lifetime > 0. Max_Flight_Distance 50, no lifetime:
+       // DistanceTravelled += s (24 per step) reaches 50 on the third step.
+        ProjectileDesc g = spmat_grenade();
+        g.max_lifetime = 0.0f;
+        g.max_flight_distance = 50.0f;
+        LobLaunch ll(GameMode::Space, g, Vec3{275, 0, 0});
+        CHECK(ll.sys->projectile(0).max_travel == 50.0f && ll.sys->projectile(0).speed == 24.0f);
+        for (int i = 0; i < 3; ++i) ll.tick();  // frame 1 (spawn), 2, 3: two steps
+        CHECK(ll.sys->projectile_count() == 1u);
+        ll.tick();
+        CHECK(ll.sys->projectile_count() == 0u);
+        g.max_lifetime = 900.0f;  // with a lifetime the budget never applies
+        LobLaunch lt(GameMode::Space, g, Vec3{275, 0, 0});
+        for (int i = 0; i < 10; ++i) lt.tick();
+        CHECK(lt.sys->projectile_count() == 1u && lt.sys->projectile(0).travelled == 24.0f * 9.0f);
+    }
+    {  // No solution: nothing is spawned.
+        CombatData d;
+        d.projectiles = {spmat_grenade()};
+        CombatSystem sys(d, CombatConfig{}, {PlayerInfo{}, PlayerInfo{}});
+        ProjectileLaunch l;
+        l.from = Vec3{0, 0, 0};
+        l.point = Vec3{600, 0, 0};
+        CHECK(!sys.launch_projectile(l, 1) && sys.projectile_count() == 0u);
+        CHECK(!sys.lob_solution(0, l.from, l.point) && sys.lob_solution(0, l.from, Vec3{500, 0, 0}));
+        d.projectiles[0].grenade_gravity = 0.0f;  // an XML 0 is kept: G = 0 -> no arc [port]
+        CHECK(!sys.lob_solution(0, l.from, Vec3{50, 0, 0}));
+    }
+}
+
+void test_lob_sticky() {
+    // §6.4: a sticky grenade that hits an object attaches to it (no contact damage), rides along, and waits for its
+    // BOMB timer; one that hits the ground rests there.
+    ProjectileDesc g = spmat_grenade();
+    g.name = "Proj_Sticky_Bomb";
+    g.max_speed = 15.0f;
+    g.lob_mod = 1.0f;  // G = 1, R = 225
+    g.sticks_on_collision = true;
+    g.blast_area_damage = 40.0f;
+    g.blast_area_range = 30.0f;
+    LobWorld lw(GameMode::Land, g);
+    lw.w.data.units[lw.thrower].weapon_projectile = -1;  // no weapon: the toss comes from the host (ability)
+    lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+    lw.w.add(2, lw.target, 1, Vec3{100, 0, 0});
+    ProjectileLaunch l;
+    l.shooter = 1;
+    l.owner = 0;
+    l.from = Vec3{0, 0, 0};
+    l.target = 2;
+    l.fuse_seconds = 3.0f;
+    l.toss = true;
+    const uint32_t f0 = lw.w.frame;
+    CHECK(lw.w.sys->launch_projectile(l, f0));
+    CHECK(lw.w.sys->projectile(0).lob && !lw.w.sys->projectile(0).stuck);
+    int guard = 0;
+    while (!lw.w.sys->projectile(0).stuck && guard++ < 200) lw.w.tick();
+    ProjectileView pv = lw.w.sys->projectile(0);
+    CHECK(pv.stuck && pv.stuck_to == 2 && pv.speed == 0.0f);
+    CHECK(lw.w.sys->health(2) == lw.w.sys->max_health(2) && lw.w.sys->stats().hits == 0u);  // no contact damage
+    const Vec3 offset = pv.pos - Vec3{100, 0, 0};
+    CHECK(offset.x < 0.0f);  // struck on the near side
+    lw.move(2, Vec3{100, 40, 0});
+    lw.w.tick();
+    CHECK(same(lw.w.sys->projectile(0).pos, Vec3{100, 40, 0} + offset));
+    // S8 t06 (§6.4, §8 item 18): the stuck point is kept in the parent's frame - the parent turns 90 degrees left and the
+    // bomb turns with it: (ox, oy) -> (-oy, ox).
+    lw.w.sys->set_facing(2, Vec3{0, 1, 0});
+    lw.w.tick();
+    const Vec3 q = lw.w.sys->projectile(0).pos;
+    CHECK(std::fabs(q.x - (100.0f - offset.y)) < 1e-4f && std::fabs(q.y - (40.0f + offset.x)) < 1e-4f &&
+          std::fabs(q.z - offset.z) < 1e-4f);
+    while (lw.w.sys->projectile_count() > 0 && guard++ < 400) lw.w.tick();
+    CHECK(lw.w.frame - 1 == f0 + 90);  // the 3 s timer: detonation frame int(30 x 3 + f0 + 0.5)
+    CHECK(lw.w.sys->health(2) < lw.w.sys->max_health(2));  // area damage at the bomb
+    {  // ground: rests where it came down (flat ground at z 0: no grid -> the [port] plane), not at the aim height; no
+       // lifetime once stopped (Max_Lifetime 2 s here, still resting after 10 s)
+        ProjectileDesc gl = g;
+        gl.max_lifetime = 2.0f;
+        LobLaunch ll(GameMode::Land, gl, Vec3{100, 0, 20});
+        for (int i = 0; i < 200 && !ll.sys->projectile(0).stuck; ++i) ll.tick();
+        const ProjectileView gv = ll.sys->projectile(0);
+        CHECK(gv.stuck && gv.stuck_to == kNoObject && std::fabs(gv.pos.z) < 0.001f && gv.pos.x > 100.0f);
+        for (int i = 0; i < 300; ++i) ll.tick();
+        CHECK(ll.sys->projectile_count() == 1u && ll.sys->projectile(0).alive && ll.sys->stats().expired == 0u);
+    }
+}
+
+void test_ground_segment() {
+    // S8 t06 (§6.6, 0x135840): 16-unit cells so the Moeller-Trumbore arithmetic is exact in float.
+    GroundGrid g = flat_grid(2, 2, 0);
+    g.cell = 16.0f;
+    g.height_scale = 1.0f;
+    g.heights[1 * 2 + 0] = 8;  // v01 (x 0, y 1) at z 8
+    GroundHit h;
+    // Diagonal (x, y)-(x+1, y+1): below it T1 = (v00, v10, v11) is flat z 0 ...
+    CHECK(ground_segment(g, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && h.t == 0.5f && h.point.z == 0.0f && !h.water);
+    // ... above it T2 = (v00, v11, v01): z = 8 (y - x) / 16 = 4 at (4, 12) (the other diagonal would give 6)
+    CHECK(ground_segment(g, Vec3{4, 12, 8}, Vec3{4, 12, -8}, h) && h.t == 0.25f && h.point.z == 4.0f);
+    CHECK(ground_segment(g, Vec3{4, 12, 0}, Vec3{4, 12, 16}, h) && h.t == 0.25f && h.point.z == 4.0f);  // from below
+    float best = 1.0f;
+    CHECK(ray_triangle(Vec3{4, 12, 8}, Vec3{0, 0, -16}, Vec3{0, 0, 0}, Vec3{16, 16, 0}, Vec3{0, 16, 8}, best) && best == 0.25f);
+    CHECK(!ray_triangle(Vec3{12, 4, 8}, Vec3{0, 0, -16}, Vec3{0, 0, 0}, Vec3{16, 16, 0}, Vec3{0, 16, 8}, best));  // u + v > 1
+    // t = 0 and t = 1 are not hits; outside the grid nothing is hit (no plane fallback with a grid)
+    CHECK(!ground_segment(g, Vec3{12, 4, 0}, Vec3{12, 4, -16}, h));
+    CHECK(!ground_segment(g, Vec3{12, 4, 16}, Vec3{12, 4, 0}, h));
+    CHECK(!ground_segment(g, Vec3{40, 4, 8}, Vec3{40, 4, -8}, h));
+    {  // water plane: nearest of triangles and plane; water type 0 = none; a plane below the ground loses
+        GroundGrid w = flat_grid(2, 2, 0);
+        w.cell = 16.0f;
+        w.water_type = 1;
+        w.water_height = 4.0f;
+        CHECK(ground_segment(w, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && h.water && h.t == 0.25f && h.point.z == 4.0f);
+        CHECK(ground_segment(w, Vec3{12, 4, 0}, Vec3{12, 4, 16}, h) && h.water && h.t == 0.25f);  // both directions
+        w.water_height = -4.0f;
+        CHECK(ground_segment(w, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && !h.water && h.t == 0.5f);
+        w.water_height = 4.0f;
+        w.water_type = 0;
+        CHECK(ground_segment(w, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && !h.water && h.t == 0.5f);
+        w.water_type = 3;  // ice: a plane too
+        CHECK(ground_segment(w, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && h.water);
+    }
+    {  // a slope a few cells along a level segment: the nearest triangle hit over every cell the segment's box touches
+        GroundGrid s = flat_grid(6, 2, 0);
+        s.cell = 16.0f;
+        s.height_scale = 1.0f;
+        for (uint32_t y = 0; y < 2; ++y)
+            for (uint32_t x = 3; x < 6; ++x) s.heights[y * 6 + x] = 16;  // cell 2 (32..48) rises 0 -> 16
+        CHECK(ground_segment(s, Vec3{4, 4, 4}, Vec3{76, 4, 4}, h) && std::fabs(h.point.x - 36.0f) < 1e-4f &&
+              std::fabs(h.t - 32.0f / 72.0f) < 1e-6f);
+    }
+    {  // no grid: [port] the plane z 0
+        CHECK(ground_segment(GroundGrid{}, Vec3{5, 5, 8}, Vec3{5, 5, -8}, h) && h.t == 0.5f && !h.water);
+    }
+}
+
+void test_lob_object_ground_tie() {
+    // §6.2 step 3: an object hit wins when its fraction <= the ground fraction. The precise hook reports the ground test's
+    // own t for the step (a tie: Process_Hit on the unit), then the next float above it (On_Detonate on the ground).
+    for (const bool tie : {true, false}) {
+        LobWorld lw(GameMode::Land);
+        lw.w.data.units[lw.target].radius = 30.0f;
+        RocketTerrain rt;
+        rt.grid = flat_grid(32, 4, 0);
+        const GroundGrid grid = rt.grid;
+        lw.w.sys->set_rocket_terrain(rt);
+        lw.w.add(2, lw.target, 1, Vec3{210, 10, 0});
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.from = Vec3{10, 10, 1};
+        l.point = Vec3{210, 10, 0};
+        CHECK(lw.w.sys->launch_projectile(l, lw.w.frame));
+        const ProjectileView pv = lw.w.sys->projectile(0);
+        const float G = spmat_grenade().grenade_gravity * spmat_grenade().lob_mod;
+        uint32_t now = 0;
+        int ties = 0;
+        lw.w.sys->set_precise_hit([&](const PreciseQuery& q, PreciseResult& r) {
+            const Vec3 N = lob_position(pv.pos, pv.dir, pv.speed, G, static_cast<float>(now - pv.spawn_frame));
+            GroundHit gh;
+            if (!ground_segment(grid, q.a, N, gh)) return PreciseOutcome::Miss;
+            ++ties;
+            r.t = tie ? gh.t : std::nextafter(gh.t, 2.0f);
+            return PreciseOutcome::Hit;
+        });
+        ObjectId victim = 1;
+        for (int i = 0; i < 100 && lw.w.sys->projectile_count() > 0; ++i) {
+            now = lw.w.frame;
+            lw.w.tick();
+            for (const HitEvent& e : lw.w.sys->hit_events()) victim = e.victim;
+        }
+        CHECK(ties == 1);
+        CHECK(victim == (tie ? 2 : kNoObject));
+        CHECK(lw.w.sys->stats().hits == (tie ? 1u : 0u));
+        CHECK((lw.w.sys->health(2) < lw.w.sys->max_health(2)) == tie);  // direct damage only on the object hit
+    }
+}
+
+void test_lob_fuse_rounding() {
+    // S8 t06 (§6.4): BOMB arm 0x58f030 - detonation frame int(30 x secs + spawn frame + 0.5), fired at frame >= it, the
+    // countdown running in flight. 0.11 s: 3.3 + 0.5 -> 3 frames (age >= 0.11 s would need 4); 0.12 s: 4.1 -> 4.
+    for (const auto& [secs, frames] : {std::pair<float, uint32_t>{0.11f, 3u}, {0.12f, 4u}, {0.1f, 3u}}) {
+        for (const bool toss : {true, false}) {  // a tossed grenade (flying) and a placed bomb
+            CombatData d;
+            ProjectileDesc pd = toss ? spmat_grenade() : ProjectileDesc{};
+            pd.blast_area_damage = 1.0f;
+            d.projectiles = {pd};
+            CombatConfig cfg;
+            cfg.mode = GameMode::Space;
+            CombatSystem sys(d, cfg, {PlayerInfo{}, PlayerInfo{}});
+            TreeSet trees{2};
+            SimRng rng{3u};
+            ProjectileLaunch l;
+            l.owner = 0;
+            l.from = Vec3{0, 0, 0};
+            l.point = Vec3{275, 0, 0};
+            l.fuse_seconds = secs;
+            l.toss = toss;
+            const uint32_t f0 = 10;
+            CHECK(sys.launch_projectile(l, f0));
+            uint32_t f = f0;
+            while (sys.projectile_count() > 0 && f < f0 + 20) sys.tick(++f, trees, rng);
+            CHECK(sys.stats().expired == 1u);
+            CHECK(f == f0 + frames);
+        }
+    }
+}
+
+void test_lob_hardpoint() {
+    // §5.4: hardpoint shots do not use the solver - straight at the aim point at Max_Speed - and the parabola's gravity
+    // pulls them below that line.
+    World w;
+    w.data.projectiles.push_back(spmat_grenade());
+    HardpointDesc hd;
+    hd.kind = HardpointKind::WeaponMissile;
+    hd.projectile = 0;
+    hd.fire_range = 500.0f;
+    hd.max_recharge = 1.0f;
+    hd.bone_a = Vec3{0, 0, 10};
+    w.data.hardpoints.push_back(hd);
+    UnitDesc a;
+    a.tactical_health = 100.0f;
+    a.max_attack_distance = 500.0f;
+    a.hardpoints = {0};
+    const uint32_t ad = push_unit(w.data, a);
+    UnitDesc t;
+    t.tactical_health = 1000.0f;
+    t.radius = 2.0f;
+    const uint32_t td = push_unit(w.data, t);
     CombatConfig cfg;
     cfg.mode = GameMode::Land;
     cfg.inaccuracy_enabled = false;
     w.make(cfg);
-    w.add(1, td, 0, Vec3{0, 0, 0});
-    w.add(2, tg, 1, Vec3{100, 0, 0});
-    CHECK_F(w.sys->attack_range(1), 144.0f);  // per-type gravity x lob mod
-    bool spawned = false, peaked = false;
-    float max_z = 0.0f;
-    for (int i = 0; i < 400 && w.sys->stats().hits + w.sys->stats().expired == 0; ++i) {
-        w.tick();
-        if (w.sys->projectile_count() > 0) {
-            spawned = true;
-            const ProjectileView pv = w.sys->projectile(0);
-            CHECK(pv.speed > 0.0f);  // presentation view: velocity = dir x speed
-            CHECK(pv.spawn_frame <= w.frame);
-            max_z = std::max(max_z, pv.pos.z);
-            if (pv.dir.z < 0.0f) peaked = true;
-        }
+    w.add(1, ad, 0, Vec3{0, 0, 0});
+    w.add(2, td, 1, Vec3{100, 0, 0});
+    for (int i = 0; i < 60 && w.sys->projectile_count() == 0; ++i) w.tick();
+    CHECK(w.sys->projectile_count() == 1u);
+    const ProjectileView pv = w.sys->projectile(0);
+    CHECK(pv.lob && pv.speed == 30.0f);
+    CHECK(same(pv.dir, norm(Vec3{100, 0, -10})));  // straight at the aim point (the target's position)
+    w.tick();
+    const Vec3 n = w.sys->projectile(0).pos;
+    CHECK(same(n, lob_position(Vec3{0, 0, 10}, pv.dir, 30.0f, 900.0f / 550.0f, 1.0f)));
+    CHECK(n.z < 10.0f + pv.dir.z * 30.0f);  // below the straight line
+}
+
+void test_lob_save() {
+    // N1: a grenade in flight and a stuck one survive write -> read -> write byte for byte and fly on identically.
+    ProjectileDesc g = spmat_grenade();
+    g.sticks_on_collision = true;
+    LobLaunch a(GameMode::Land, g, Vec3{150, 0, 0});
+    ProjectileLaunch l2;
+    l2.from = Vec3{0, 0, 0};
+    l2.point = Vec3{80, 20, 0};
+    CHECK(a.sys->launch_projectile(l2, a.frame));
+    for (int i = 0; i < 20; ++i) a.tick();
+    CHECK(a.sys->projectile_count() == 2u && a.sys->projectile(1).stuck != a.sys->projectile(0).stuck);
+    ByteWriter wa;
+    a.sys->write(wa);
+    LobLaunch b(GameMode::Land, g, Vec3{150, 0, 0});
+    ByteReader r(wa.bytes());
+    CHECK(b.sys->read(r));
+    b.frame = a.frame;
+    b.rng = a.rng;
+    ByteWriter wb;
+    b.sys->write(wb);
+    CHECK(wa.bytes() == wb.bytes());
+    for (int i = 0; i < 40; ++i) {
+        a.tick();
+        b.tick();
     }
-    CHECK(spawned);
-    CHECK(peaked);
-    CHECK(max_z > 50.0f);  // a high arc, not a straight shot along z = 0
-    CHECK(w.sys->stats().hits + w.sys->stats().expired == 1);
+    StateHasher ha, hb;
+    a.sys->hash_projectiles(ha);
+    a.sys->hash_extended(ha);
+    b.sys->hash_projectiles(hb);
+    b.sys->hash_extended(hb);
+    CHECK(ha.digest() == hb.digest());
 }
 
 // Adds a squad unit (team id / team_leader) to a TargetWorld.
@@ -916,6 +1507,20 @@ void test_gaps_constants() {
     v2.w.add(2, wd3, 1, Vec3{1150, 0, 0}, {1, 0, 0});  // end-on: E = 200 -> in range
     v2.w.tick();
     CHECK(v2.w.sys->auto_target(1) == 2);
+    // A1j t04 (0x371e70 / 0x372040): without Custom_Hard extents E falls back to |model bbox max.x / max.y| x Scale_Factor.
+    for (const bool end_on : {true, false}) {
+        TargetWorld m;
+        UnitDesc boxed = m.w.data.units[m.capital];
+        boxed.model_x_extent = 200.0f;
+        boxed.model_y_extent = 20.0f;
+        boxed.radius = 200.0f;
+        const uint32_t bd = push_unit(m.w.data, boxed);
+        m.w.make();
+        m.w.add(1, m.attacker, 0, Vec3{0, 0, 0});
+        m.w.add(2, bd, 1, Vec3{1150, 0, 0}, end_on ? Vec3{1, 0, 0} : Vec3{0, 1, 0});
+        m.w.tick();
+        CHECK(m.w.sys->auto_target(1) == (end_on ? ObjectId{2} : kNoObject));
+    }
 }
 
 // OI tactical: TACTICAL_GAPS 3.1 slot 43 with a LAND_OBSTACLE target (aim walk toward the attacker over the cells the
@@ -930,8 +1535,23 @@ void test_land_obstacle_and_weapon_index() {
     // cells of 20: the building occupies |x - 1250| < 200 on the x axis
     auto query = [](ObjectId, Vec3 p, Vec3& c) {
         c = Vec3{std::floor(p.x / 20.0f) * 20.0f + 10.0f, std::floor(p.y / 20.0f) * 20.0f + 10.0f, p.z};
-        return std::fabs(p.x - 1250.0f) < 200.0f && std::fabs(p.y) < 200.0f;
+        return std::fabs(p.x - 1250.0f) < 200.0f && std::fabs(p.y) < 200.0f ? ObstacleCell::Occupied : ObstacleCell::Free;
     };
+    {  // S8 t01: the host reports no footprint (not stamped): the half-extent rule, E = radius 300 -> taken
+        TargetWorld t;
+        const uint32_t bd = building(t);
+        t.w.make();
+        std::atomic<int> calls{0};  // the scan may run on worker threads
+        t.w.sys->set_obstacle_cell_query([&calls](ObjectId, Vec3 p, Vec3& c) {
+            calls.fetch_add(1);
+            c = p;
+            return ObstacleCell::NoFootprint;
+        });
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, bd, 1, Vec3{1250, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 2 && calls.load() > 0);
+    }
     {  // no query: E = radius 300 -> 1250 <= 1000 + 300, taken
         TargetWorld t;
         const uint32_t bd = building(t);
@@ -961,6 +1581,65 @@ void test_land_obstacle_and_weapon_index() {
         t.w.tick();
         CHECK(t.w.sys->auto_target(1) == 2);
     }
+#ifdef ALAMO_COMBAT_TESTS_HAVE_MOVEMENT
+    {  // S8 t01: the walk over a real PassabilityGrid stamp (the battle host's query: PassabilityGrid::occupies)
+        namespace mv = alamo::tactical::movement;
+        mv::PassabilityGrid g;
+        g.init(96, 24);
+        // 400 x 200 footprint centred on (1250, 100): cells x 53..73 (centres 1060..1460), y 0..10.
+        CHECK(g.stamp(-1, mv::make_footprint({1250.0f, 100.0f}, 0.0f, 400.0f, 200.0f, -200.0f, -100.0f, 0, 0, 1.0f, 0)) > 0);
+        CHECK(g.occupies(-1, 53, 5) && g.occupies(-1, 73, 5) && !g.occupies(-1, 52, 5) && !g.occupies(-1, 74, 5));
+        auto host_query = [&g](ObjectId id, Vec3 p, Vec3& c) {
+            if (!g.stamped(id)) return ObstacleCell::NoFootprint;
+            const int32_t cx = mv::world_to_cell(p.x), cy = mv::world_to_cell(p.y);
+            const mv::V2 cc = mv::cell_center(cx, cy);
+            c = Vec3{cc.x, cc.y, p.z};
+            return g.occupies(id, cx, cy) ? ObstacleCell::Occupied : ObstacleCell::Free;
+        };
+        auto run = [&](float ax, float min_dist, bool& taken, bool& inside_min) {
+            TargetWorld t;
+            const uint32_t bd = building(t);
+            UnitDesc a = t.w.data.units[t.attacker];
+            a.min_attack_distance = min_dist;
+            const uint32_t ad = push_unit(t.w.data, a);
+            t.w.make();
+            t.w.sys->set_obstacle_cell_query(host_query);
+            t.w.add(1, ad, 0, Vec3{ax, 100, 0});
+            t.w.add(2, bd, 1, Vec3{1250, 100, 0});
+            t.w.tick();
+            taken = t.w.sys->auto_target(1) == 2;
+            inside_min = t.w.sys->inside_min_range(1, 2);
+        };
+        bool taken = false, inside = false;
+        // Map stamp id -1 (not the object's id): NoFootprint -> E = radius 300: 1250 <= 1300 taken, 1250 <= 1000 + 300
+        // inside the min range.
+        run(0.0f, 1000.0f, taken, inside);
+        CHECK(!taken && inside);  // min range 1000 rejects it in the scan too
+        run(0.0f, 0.0f, taken, inside);
+        CHECK(taken && !inside);
+        // The stamp handed to object 2 (rekey): walk 1250 -> 1050 (cell 53, occupied) -> 1030 (cell 52, free, centre 1040).
+        CHECK(g.rekey(-1, 2));
+        run(0.0f, 0.0f, taken, inside);
+        CHECK(!taken);  // 1040 > 1000 + sqrt(200)
+        run(30.0f, 0.0f, taken, inside);
+        CHECK(taken);  // 1010 <= 1014.14
+        run(20.0f, 0.0f, taken, inside);
+        CHECK(!taken);  // 1020 > 1014.14
+        run(40.0f, 1000.0f, taken, inside);
+        CHECK(!taken && inside);  // max: 1000 in range; min: 1000 <= 1000 + 14.14 inside -> rejected
+        run(60.0f, 950.0f, taken, inside);
+        CHECK(taken && !inside);  // d = 980: in max range, outside 950 + 14.14
+        // Attacker on the far side (x = 1500): the walk goes +x to cell 74 (centre 1480), d = 20.
+        run(1500.0f, 10.0f, taken, inside);
+        CHECK(!taken && inside);  // 20 <= 10 + 14.14: inside a min range of 10
+        // [port] attacker inside the footprint (x = 1300, len 50): steps 1250 / 1270 / 1290 / 1310, then walked 60 > 50
+        // stops on an occupied cell (66, centre 1320): d = 20.
+        run(1300.0f, 10.0f, taken, inside);
+        CHECK(!taken && inside);
+        run(1300.0f, 0.0f, taken, inside);
+        CHECK(taken && !inside);
+    }
+#endif
     {  // weapon index: Projectile_Types[obj +0x324]; a lobbed second entry changes Get_Max_Attack_Range
         TargetWorld t;
         ProjectileDesc lob;
@@ -1542,6 +2221,29 @@ void test_take_damage() {
         r.damage_type = kNoTypeId;
         r.source = 1;
         CHECK_F(d.w.sys->take_damage(r, 5).to_hull, 50.0f);
+        {  // A1_READINGS §30.2: hull_lost = hullBefore - max(0, hullAfter); a 50-hull victim hit for 200 loses 50
+            DamageWorld k;
+            k.w.make(k.w.sys->config(), {ai, PlayerInfo{}});
+            k.w.add(1, k.attacker, 0, Vec3{});
+            k.w.add(2, k.plain, 1, Vec3{});
+            k.w.sys->set_health(2, 50.0f);
+            DamageRequest kr = r;
+            kr.amount = 400.0f;  // x 0.5 AI multiplier = 200
+            const DamageResult kres = k.w.sys->take_damage(kr, 5);
+            CHECK_F(kres.to_hull, 200.0f);
+            CHECK_F(kres.hull_lost, 50.0f);
+            CHECK(kres.killed);
+            CHECK(!k.w.sys->damage_events().empty());
+            if (!k.w.sys->damage_events().empty()) CHECK_F(k.w.sys->damage_events().back().hull_lost, 50.0f);
+            k.w.add(3, k.plain, 1, Vec3{});
+            k.w.sys->set_health(3, 50.0f);
+            kr.victim = 3;
+            kr.amount = 40.0f;  // not lethal: the full 20
+            CHECK_F(k.w.sys->take_damage(kr, 5).hull_lost, 20.0f);
+            k.w.sys->set_flag(3, kUnitCannotDie, true);  // cannot die: the restore ran, no hull loss
+            kr.amount = 1000.0f;
+            CHECK_F(k.w.sys->take_damage(kr, 5).hull_lost, 0.0f);
+        }
         d.w.sys->set_flag(2, kUnitInvulnerable, true);
         CHECK(!d.w.sys->take_damage(r, 5).applied);
         r.kind = kKindDebug;
@@ -3032,6 +3734,1154 @@ void test_rocket_flight_system() {
     }
 }
 
+// ================================================================================================
+// S8 t08 / S7 t15 A2 / S8 t06 B4: units with both weapon sources, the recharge while suspended, fire bones
+// ================================================================================================
+
+// A land shooter (id 1, player 0) with its own weapon (projectile 0) and two weapon hardpoints (projectile 1) facing a
+// tough target (id 2, player 1) 100 away. Slot 0 of the shooter is ROCKET_ATTACK (11).
+struct SourceFlags {
+    bool dep = true, undep = true, rocket = true, normal = true;
+};
+struct SourceWorld {
+    World w;
+    uint32_t last_serial = 0;
+    SourceWorld(SourceFlags own, SourceFlags hp, bool grenade_own) {
+        ProjectileDesc op;
+        op.name = "own";
+        op.max_speed = 20.0f;
+        w.data.projectiles.push_back(grenade_own ? spmat_grenade() : op);
+        ProjectileDesc hpp;
+        hpp.name = "hp";
+        hpp.max_speed = 20.0f;
+        w.data.projectiles.push_back(hpp);
+        HardpointDesc hd;
+        hd.kind = HardpointKind::WeaponLaser;
+        hd.projectile = 1;
+        hd.min_recharge = hd.max_recharge = 0.2f;
+        hd.fire_range = 150.0f;
+        hd.fire_when_deployed = hp.dep;
+        hd.fire_when_undeployed = hp.undep;
+        hd.fire_when_rocket_attack = hp.rocket;
+        hd.fire_when_normal_attack = hp.normal;
+        w.data.hardpoints.push_back(hd);
+        UnitAbilityDesc rocket;
+        rocket.ability_type = 11;
+        w.data.abilities.push_back(rocket);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        s.deploys = true;
+        s.hardpoints = {0, 0};
+        s.abilities = {0, -1};
+        s.fire_weapon_when_deployed = own.dep;
+        s.fire_weapon_when_undeployed = own.undep;
+        s.fire_weapon_when_rocket_attack = own.rocket;
+        s.fire_weapon_when_normal_attack = own.normal;
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, Vec3{100, 0, 0});
+    }
+    // New projectiles per descriptor over `ticks` ticks.
+    std::array<uint32_t, 2> run(int ticks) {
+        std::array<uint32_t, 2> n{0, 0};
+        for (int i = 0; i < ticks; ++i) {
+            w.tick();
+            for (size_t k = 0; k < w.sys->projectile_count(); ++k) {
+                const ProjectileView pv = w.sys->projectile(k);
+                if (pv.serial <= last_serial) continue;
+                last_serial = pv.serial;
+                if (pv.desc < 2) ++n[pv.desc];
+            }
+        }
+        return n;
+    }
+};
+
+void test_weapon_sources() {
+    // TACTICAL_COMBAT §3.1.1 table: the flags make the own weapon and the weapon hardpoints alternate.
+    struct Case {
+        const char* name;
+        SourceFlags own, hp;
+        bool grenade;
+        bool deployed, rocket;
+        bool own_fires, hp_fires;
+    };
+    const SourceFlags any{};
+    const SourceFlags spmat_own{true, false, true, true}, spmat_hp{false, true, true, true};
+    const SourceFlags t4b_own{true, true, false, true}, t4b_hp{true, true, true, false};
+    const SourceFlags dt3_own{false, true, true, true}, dt3_hp{true, false, true, true};
+    const SourceFlags dd_own{true, false, false, true}, dd_hp{true, false, true, false};
+    const Case cases[] = {
+        {"SPMAT undeployed", spmat_own, spmat_hp, true, false, false, false, true},
+        {"SPMAT deployed", spmat_own, spmat_hp, true, true, false, true, false},
+        {"T4B normal", t4b_own, t4b_hp, false, false, false, true, false},
+        {"T4B rocket", t4b_own, t4b_hp, false, false, true, false, true},
+        {"DT3 undeployed", dt3_own, dt3_hp, false, false, false, true, false},
+        {"DT3 deployed", dt3_own, dt3_hp, false, true, false, false, true},
+        {"Destroyer undeployed", dd_own, dd_hp, false, false, false, false, false},
+        {"Destroyer deployed", dd_own, dd_hp, false, true, false, true, false},
+        {"Destroyer deployed rocket", dd_own, dd_hp, false, true, true, false, true},
+        {"defaults", any, any, false, false, false, true, true},  // both sources fire side by side (separate cooldowns)
+    };
+    for (const Case& c : cases) {
+        SourceWorld sw(c.own, c.hp, c.grenade);
+        if (c.deployed) sw.w.sys->set_flag(1, kUnitDeploying, true);
+        if (c.rocket) sw.w.sys->set_ability_active(1, 0, true);
+        const std::array<uint32_t, 2> n = sw.run(120);
+        if ((n[0] > 0) != c.own_fires || (n[1] > 0) != c.hp_fires)
+            std::printf("FAIL weapon sources %s: own %u hardpoint %u\n", c.name, n[0], n[1]);
+        CHECK((n[0] > 0) == c.own_fires && (n[1] > 0) == c.hp_fires);
+    }
+    {  // A deploy transition (0x39a400 / 0x39b2a0): neither source fires; the hardpoints do not count down.
+        SourceWorld sw(spmat_own, spmat_hp, true);
+        sw.w.sys->set_flag(1, kUnitDeploying | kUnitDeployTransition, true);
+        const int32_t c0 = sw.w.sys->hardpoint_cooldown(1, 0);
+        const std::array<uint32_t, 2> n = sw.run(60);
+        CHECK(n[0] == 0 && n[1] == 0 && sw.w.sys->hardpoint_cooldown(1, 0) == c0);
+        sw.w.sys->set_flag(1, kUnitDeployTransition, false);  // deployed: the grenade only
+        const std::array<uint32_t, 2> m = sw.run(120);
+        CHECK(m[0] > 0 && m[1] == 0);
+    }
+    {  // Not a Deploys type: the deploy flags never apply (0x39a390 needs Deploys and a locomotor).
+        SourceWorld sw(spmat_own, spmat_hp, true);
+        sw.w.data.units[0].deploys = false;
+        sw.w.sys->set_flag(1, kUnitDeploying | kUnitDeployTransition, true);
+        const std::array<uint32_t, 2> n = sw.run(120);
+        CHECK(n[0] == 0 && n[1] > 0);  // read as undeployed
+    }
+}
+
+// A hardpoint-only shooter (id 1) whose weapon may not fire in DEFEND (slot 0) or at Air; an Air target (id 2) and a
+// ground target (id 3), both in range. Opportunity fire on.
+struct GateWorld {
+    World w;
+    explicit GateWorld(bool defend_active) {
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        HardpointDesc hd;
+        hd.kind = HardpointKind::WeaponLaser;
+        hd.projectile = 0;
+        hd.min_recharge = hd.max_recharge = 0.2f;
+        hd.fire_range = 300.0f;
+        hd.fire_category_restrictions = kCatFighter;  // "not vs Air"
+        hd.no_fire_modes = {1};                        // Fire_When_In_Defend_Mode No
+        w.data.hardpoints.push_back(hd);
+        UnitAbilityDesc defend;
+        defend.ability_type = 1;
+        w.data.abilities.push_back(defend);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.hardpoints = {0};
+        s.abilities = {0, -1};
+        push_unit(w.data, s);
+        UnitDesc air;
+        air.tactical_health = 1.0e7f;
+        air.radius = 5.0f;
+        air.category_mask = kCatFighter;
+        push_unit(w.data, air);
+        UnitDesc ground = air;
+        ground.category_mask = kCatCapital;
+        push_unit(w.data, ground);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.sys = std::make_unique<CombatSystem>(w.data, cfg, std::vector<PlayerInfo>{PlayerInfo{}, PlayerInfo{}});  // opportunity on
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, Vec3{100, 0, 0});
+        w.add(3, 2, 1, Vec3{0, 120, 0});
+        if (defend_active) w.sys->set_ability_active(1, 0, true);
+    }
+    uint64_t run(int ticks) {
+        for (int i = 0; i < ticks; ++i) w.tick();
+        return w.sys->stats().shots;
+    }
+};
+
+void test_hardpoint_state_gate() {
+    {  // Filter 7 uses the gate: an Air target is never acquired, the ground one is (and shot).
+        GateWorld g(false);
+        CHECK(g.run(60) > 0);
+        CHECK(g.w.sys->auto_target(1) == 3);
+    }
+    {  // A primary target the gate refuses (ordered Air target): no Fire_At and NO opportunity fire at the ground unit.
+        GateWorld g(false);
+        g.w.sys->order_attack(1, 2);
+        CHECK(g.run(90) == 0);
+        CHECK(g.w.sys->hardpoint_opportunity_target(1, 0) == kNoObject);
+    }
+    {  // DEFEND active and Fire_When_In_Defend_Mode No: no target is acquired, nothing fires (opportunity fire included).
+        GateWorld g(true);
+        CHECK(g.run(90) == 0);
+        CHECK(g.w.sys->auto_target(1) == kNoObject);
+        g.w.sys->set_ability_active(1, 0, false);
+        CHECK(g.run(90) > 0);
+    }
+}
+
+// S7 t15 A2 (MOVEMENT §3.1.1): a WeaponBehavior recharge keeps elapsing while the weapon is suspended (jetpack).
+struct SuspendWorld {
+    World w;
+    SuspendWorld() {
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 5.0f;  // 150 + Get_Int(0, 10) frames
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, Vec3{100, 0, 0});
+    }
+    // Ticks until the next shot (at most `limit`); returns the frame of the shot, 0 when none.
+    uint32_t until_shot(int limit) {
+        for (int i = 0; i < limit; ++i) {
+            const uint64_t s0 = w.sys->stats().shots;
+            const uint32_t f = w.frame;
+            w.tick();
+            if (w.sys->stats().shots != s0) return f;
+        }
+        return 0;
+    }
+};
+
+
+void test_weapon_suspend_elapse() {
+    SuspendWorld a;
+    const uint32_t f1 = a.until_shot(400);
+    CHECK(f1 != 0);
+    const uint32_t f2 = a.until_shot(400);  // the normal recharge: 150..160 frames
+    CHECK(f2 >= f1 + 150 && f2 <= f1 + 161);
+    // Suspended for 200 frames right after a shot: nothing fires; the first frame back fires (the recharge ran out in
+    // the air).
+    a.w.sys->set_flag(1, kUnitWeaponsSuspended, true);
+    CHECK(a.until_shot(100) == 0);
+    // Save / load in the middle of the suspension keeps the last-service frame.
+    ByteWriter sw;
+    a.w.sys->write(sw);
+    ByteWriter rw;
+    a.w.rng.write(rw);
+    SuspendWorld b;
+    {
+        ByteReader r(sw.bytes());
+        CHECK(b.w.sys->read(r));
+        ByteReader rr(rw.bytes());
+        CHECK(b.w.rng.read(rr));
+        b.w.frame = a.w.frame;
+    }
+    for (SuspendWorld* x : {&a, &b}) {
+        CHECK(x->until_shot(100) == 0);
+        x->w.sys->set_flag(1, kUnitWeaponsSuspended, false);
+        const uint32_t back = x->w.frame;
+        CHECK(x->until_shot(5) == back);
+    }
+    CHECK(combat_bytes(*a.w.sys) == combat_bytes(*b.w.sys));
+    {  // A short suspension subtracts its frames too: the shot comes at the normal time, not later.
+        SuspendWorld c, d;
+        const uint32_t c1 = c.until_shot(400), d1 = d.until_shot(400);
+        CHECK(c1 == d1 && c1 != 0);
+        c.w.sys->set_flag(1, kUnitWeaponsSuspended, true);
+        for (int i = 0; i < 50; ++i) c.w.tick();
+        for (int i = 0; i < 50; ++i) d.w.tick();
+        c.w.sys->set_flag(1, kUnitWeaponsSuspended, false);
+        CHECK(c.until_shot(400) == d.until_shot(400));
+    }
+}
+
+// S8 t06 B4 (LOB_SOLVER §5.1): WeaponBehavior shots leave from the fire bones in turn.
+struct MuzzleWorld {
+    World w;
+    explicit MuzzleWorld(std::vector<Vec3> bones, bool model = true, bool grenade_weapon = false, size_t weapon_set = 0) {
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(grenade_weapon ? spmat_grenade() : p);
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        s.ranged_target_z_adjust = 7.0f;
+        s.muzzle_model = model;
+        s.muzzle_bones = std::move(bones);
+        for (size_t i = 0; i < weapon_set; ++i) s.weapon_projectiles.push_back(static_cast<int32_t>(i % 2));
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(1, 0, 0, Vec3{10, 20, 0}, Vec3{0, 1, 0});  // facing +y: local (x, y, z) -> world (-y, x, z)
+        w.add(2, 1, 1, Vec3{10, 120, 0});
+    }
+    // Launch points of the shots fired over `ticks` ticks (spawn position: not yet stepped).
+    std::vector<Vec3> launches(int ticks) {
+        std::vector<Vec3> out;
+        for (int i = 0; i < ticks; ++i) {
+            w.tick();
+            for (size_t k = 0; k < w.sys->projectile_count(); ++k) {
+                const ProjectileView pv = w.sys->projectile(k);
+                if (pv.serial <= last) continue;
+                last = pv.serial;
+                out.push_back(pv.pos);
+            }
+        }
+        return out;
+    }
+    uint32_t last = 0;
+};
+
+void test_muzzle_bones() {
+    const Vec3 A{2, 0, 5}, B{2, 1, 5}, C{0, -1, 3};
+    const Vec3 wa{10, 22, 5}, wb{9, 22, 5}, wc{11, 20, 3};  // turned by the facing +y, + the position
+    {  // Round robin per shot.
+        MuzzleWorld m({A, B, C});
+        const std::vector<Vec3> l = m.launches(90);
+        CHECK(l.size() >= 6);
+        const Vec3 expect[3] = {wa, wb, wc};
+        bool ok = true;
+        for (size_t i = 0; i < l.size(); ++i) ok = ok && same(l[i], expect[i % 3]);
+        CHECK(ok);
+    }
+    {  // More than one Projectile_Types entry and more than one bone: the bone of the weapon index.
+        MuzzleWorld m({A, B, C}, true, false, 2);
+        CHECK(m.w.sys->set_weapon_index(1, 1));
+        const std::vector<Vec3> l = m.launches(60);
+        CHECK(!l.empty());
+        bool ok = true;
+        for (const Vec3& p : l) ok = ok && same(p, wb);
+        CHECK(ok);
+        // Outside the bone list: no fire bone - the position + the shooter's own z adjust ([port] index 5 fires
+        // weapon_projectile, LOB_SOLVER §5.1 request bone -1).
+        CHECK(m.w.sys->set_weapon_index(1, 5));
+        const std::vector<Vec3> l2 = m.launches(30);
+        CHECK(!l2.empty() && same(l2.back(), Vec3{10, 20, 7}));
+    }
+    {  // Model known, no MUZZLEA_00: the weapon never fires.
+        MuzzleWorld m({});
+        CHECK(m.launches(90).empty() && m.w.sys->stats().shots == 0u);
+    }
+    {  // [port] No model data: the position (straight shots), as before.
+        MuzzleWorld m({}, false);
+        const std::vector<Vec3> l = m.launches(30);
+        CHECK(!l.empty() && same(l.front(), Vec3{10, 20, 0}));
+    }
+    {  // Grenades leave from the bones too; a null spawn (no arc) changes no cooldown: the shot follows on the frame the
+       // target comes into reach.
+        MuzzleWorld m({A, B}, true, true);
+        m.w.sys->order_attack(1, 2);
+        m.w.sys->set_position(2, Vec3{10, 900, 0});
+        m.w.trees.update(2, box_of(Vec3{10, 900, 0}, 5.0f));
+        CHECK(m.launches(60).empty());
+        m.w.sys->set_position(2, Vec3{10, 120, 0});
+        m.w.trees.update(2, box_of(Vec3{10, 120, 0}, 5.0f));
+        const std::vector<Vec3> l = m.launches(1);
+        CHECK(l.size() == 1 && (same(l[0], wa) || same(l[0], wb)));
+        CHECK(m.w.sys->projectile_count() == 1 && m.w.sys->projectile(0).lob);
+    }
+}
+
+// ================================================================================================
+// S8 t10 - t12: own-weapon gate steps 5-7, first service, own-player sweep, garrison fire bones
+// ================================================================================================
+
+// An own-weapon shooter (id 1, player 0, type 0) at the origin and a tough target (id 2, player 1) at `at`; the shooter
+// is ordered onto the target. `opt` edits the shooter type before the system is made; `start` is the spawn frame.
+struct OwnOpt {
+    float recharge = 0.2f;
+    int32_t pulses = 1;
+    float pulse_delay = 0.0f;
+    float min_range = 0.0f;
+    bool idle_fire = false, lobbing = false;
+    int8_t weapons_enabled_flag = -1;  // ability slot 0's WEAPONS_ENABLED flag (-1: no ability)
+    float target_z_adjust = 0.0f;      // the target type's Ranged_Target_Z_Adjust
+    std::function<void(CombatData&)> edit;  // S8 t26 / t27: last edits before the system is made (units 0 / 1)
+};
+struct OwnWorld {
+    World w;
+    OwnWorld(OwnOpt o, Vec3 at, uint32_t start = 1) {
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        if (o.weapons_enabled_flag >= 0) {
+            UnitAbilityDesc a;
+            a.ability_type = 1;
+            a.flag[1] = o.weapons_enabled_flag;  // Mod_Flag index 1 = WEAPONS_ENABLED
+            w.data.abilities.push_back(a);
+        }
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.min_attack_distance = o.min_range;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = o.recharge;
+        s.weapon_pulse_count = o.pulses;
+        s.weapon_pulse_delay = o.pulse_delay;
+        s.can_fighter_fire_when_idle = o.idle_fire;
+        s.lobbing_superweapon = o.lobbing;
+        if (o.weapons_enabled_flag >= 0) s.abilities = {0, -1};
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        t.ranged_target_z_adjust = o.target_z_adjust;
+        push_unit(w.data, t);
+        if (o.edit) o.edit(w.data);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.frame = start;
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, at);
+        w.sys->order_attack(1, 2);
+    }
+    void move(ObjectId id, Vec3 p) {
+        w.sys->set_position(id, p);
+        w.trees.update(static_cast<EntityHandle>(id), box_of(p, w.data.units[w.sys->desc_index(id)].radius));
+    }
+    uint64_t run(int ticks) {
+        const uint64_t s0 = w.sys->stats().shots;
+        for (int i = 0; i < ticks; ++i) w.tick();
+        return w.sys->stats().shots - s0;
+    }
+    // Frames of the shots fired over `ticks` ticks.
+    std::vector<uint32_t> shot_frames(int ticks) {
+        std::vector<uint32_t> out;
+        for (int i = 0; i < ticks; ++i) {
+            const uint64_t s0 = w.sys->stats().shots;
+            const uint32_t f = w.frame;
+            w.tick();
+            if (w.sys->stats().shots != s0) out.push_back(f);
+        }
+        return out;
+    }
+};
+
+void test_own_weapon_targeting_state() {
+    // S8 t10 (e) / t11 step 7 (TACTICAL_COMBAT §3.1.1 "Gate details", LOB_SOLVER §8 item 22): the own weapon fires only in
+    // targeting state 4 (slot 44 && !slot 45, re-tested every service); otherwise the burst restarts.
+    {  // in range: fires; attacking() holds
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        CHECK(o.run(60) > 0);
+        CHECK(o.w.sys->attacking(1));
+    }
+    {  // ordered onto a target out of range: never fires; brought into range: fires at once (the recharge ran out)
+        OwnWorld o(OwnOpt{}, Vec3{600, 0, 0});
+        CHECK(o.run(60) == 0);
+        CHECK(!o.w.sys->attacking(1) && o.w.sys->current_target(1) == 2);
+        o.move(2, Vec3{100, 0, 0});
+        const std::vector<uint32_t> f = o.shot_frames(1);
+        CHECK(f.size() == 1);
+        CHECK(o.w.sys->attacking(1));
+    }
+    {  // inside Targeting_Min_Attack_Distance (slot 45): no fire; outside it: fire
+        OwnOpt opt;
+        opt.min_range = 50.0f;
+        OwnWorld o(opt, Vec3{30, 0, 0});
+        CHECK(o.run(60) == 0 && !o.w.sys->attacking(1));
+        o.move(2, Vec3{150, 0, 0});
+        CHECK(o.run(30) > 0 && o.w.sys->attacking(1));
+    }
+    {  // a 3-pulse burst (pulse delay 3 frames, recharge 5 s): a service out of range restarts it (3 more pulses)
+        OwnOpt opt;
+        opt.recharge = 5.0f;
+        opt.pulses = 3;
+        opt.pulse_delay = 0.1f;
+        OwnWorld b(opt, Vec3{100, 0, 0});
+        // control: the first burst gives 3 pulses 3 frames apart
+        const std::vector<uint32_t> fb = b.shot_frames(200);
+        CHECK(fb.size() >= 3 && fb[1] == fb[0] + 3 && fb[2] == fb[1] + 3);
+        // stopped right after the first pulse
+        OwnWorld d(opt, Vec3{100, 0, 0});
+        uint32_t first = 0;
+        for (int i = 0; i < 400 && first == 0; ++i) {
+            const std::vector<uint32_t> s = d.shot_frames(1);
+            if (!s.empty()) first = s[0];
+        }
+        CHECK(first != 0);
+        d.move(2, Vec3{900, 0, 0});  // out of range for 10 services (the pulse delay runs out: pulses := 3)
+        CHECK(d.run(10) == 0);
+        d.move(2, Vec3{100, 0, 0});
+        const std::vector<uint32_t> after = d.shot_frames(10);  // 3 pulses, not the 2 left of the first burst
+        CHECK(after.size() == 3);
+        CHECK(after.size() == 3 && after[1] == after[0] + 3 && after[2] == after[1] + 3);
+    }
+    {  // no live target: nothing fires, attacking() false
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        o.w.sys->kill_unit(2, 1, kKindNormal, o.w.frame);
+        o.w.trees.remove(2);
+        CHECK(o.run(30) == 0 && !o.w.sys->attacking(1));
+    }
+}
+
+void test_own_weapon_gate_steps() {
+    // S8 t11 (TACTICAL_COMBAT §3.1.1 "Gate details"): steps 5 - 7 and the step-3 correction.
+    {  // step 5: an active mode whose WEAPONS_ENABLED flag is 0 refuses; inactive or flag 1: fires
+        OwnOpt opt;
+        opt.weapons_enabled_flag = 0;
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_ability_active(1, 0, true);
+        CHECK(o.run(60) == 0);
+        o.w.sys->set_ability_active(1, 0, false);
+        CHECK(o.run(30) > 0);
+        opt.weapons_enabled_flag = 1;
+        OwnWorld e(opt, Vec3{100, 0, 0});
+        e.w.sys->set_ability_active(1, 0, true);
+        CHECK(e.run(60) > 0);
+    }
+    {  // step 6: fighter Idle (0x1C) refuses without Can_Fighter_Fire_When_Idle
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        o.w.sys->set_flag(1, kUnitFighterIdle, true);
+        CHECK(o.run(60) == 0);
+        o.w.sys->set_flag(1, kUnitFighterIdle, false);
+        CHECK(o.run(30) > 0);
+        OwnOpt opt;
+        opt.idle_fire = true;
+        OwnWorld f(opt, Vec3{100, 0, 0});
+        f.w.sys->set_flag(1, kUnitFighterIdle, true);
+        CHECK(f.run(60) > 0);
+    }
+    {  // step 6: state 0x16 on an air locomotor (vf +0x240) refuses, Can_Fighter_Fire_When_Idle or not
+        OwnOpt opt;
+        opt.idle_fire = true;
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_flag(1, kUnitHoverRest, true);
+        CHECK(o.run(60) == 0);
+        o.w.sys->set_flag(1, kUnitHoverRest, false);
+        CHECK(o.run(30) > 0);
+    }
+    {  // step 7: LOBBING_SUPERWEAPON never fires its own weapon at a target (fire-at-position orders only)
+        OwnOpt opt;
+        opt.lobbing = true;
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        CHECK(o.run(90) == 0);
+    }
+    {  // the host-mirror flags are not hashed (the CRC follows the behaviour, not the mirror)
+        OwnWorld a(OwnOpt{}, Vec3{100, 0, 0}), b(OwnOpt{}, Vec3{100, 0, 0});
+        b.w.sys->set_flag(1, kUnitRocketAttack, true);
+        StateHasher ha, hb;
+        a.w.sys->hash_units(ha);
+        b.w.sys->hash_units(hb);
+        CHECK(ha.digest() == hb.digest());
+    }
+    {  // step 4: ROCKET_ATTACK active in any Unit_Abilities_Data entry (the host mirror kUnitRocketAttack): T4B's own
+       // weapon (Fire_Weapon_When_In_Rocket_Attack_Mode No) stops, its hardpoints fire
+        const SourceFlags t4b_own{true, true, false, true}, t4b_hp{true, true, true, false};
+        SourceWorld sw(t4b_own, t4b_hp, false);
+        sw.w.sys->set_flag(1, kUnitRocketAttack, true);
+        const std::array<uint32_t, 2> n = sw.run(120);
+        CHECK(n[0] == 0 && n[1] > 0);
+    }
+    {  // step 3 correction: deploying / undeploying (the transition) is not "deployed" for the death-clone remap either
+        World w;
+        UnitDesc walker;
+        walker.tactical_health = 100.0f;
+        walker.radius = 5.0f;
+        walker.deploys = true;
+        walker.has_locomotor = true;
+        walker.death_clones = {{1, 50}, {12, 53}};
+        push_unit(w.data, walker);
+        w.make();
+        w.add(1, 0, 1, Vec3{0, 0, 0});
+        w.add(2, 0, 1, Vec3{100, 0, 0});
+        w.sys->set_flag(1, kUnitDeploying, true);
+        w.sys->set_flag(2, kUnitDeploying | kUnitDeployTransition, true);
+        w.sys->kill_unit(1, kNoObject, kKindNormal, w.frame);
+        CHECK(!w.sys->deaths().empty() && w.sys->deaths().back().death_clone == 53);
+        w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);
+        CHECK(!w.sys->deaths().empty() && w.sys->deaths().back().death_clone == 50);
+    }
+}
+
+void test_hardpoints_fire_while_suspended() {
+    // S8 t12 (e) (MOVEMENT §3.2): a locomotor swap suspends TARGETING / WEAPON only; the hardpoints keep firing.
+    const SourceFlags any{};
+    SourceWorld sw(any, any, false);
+    const std::array<uint32_t, 2> n = sw.run(60);
+    CHECK(n[0] > 0 && n[1] > 0);
+    sw.w.sys->set_flag(1, kUnitWeaponsSuspended, true);
+    const std::array<uint32_t, 2> m = sw.run(60);
+    CHECK(m[0] == 0 && m[1] > 0);
+}
+
+void test_first_service() {
+    // S8 t12 (c) (TACTICAL_COMBAT §3.1.1 "First service after spawn"): the initial delay is Get_Int(0, FPS x recharge)
+    // and the first service subtracts the whole frame number (last service 0).
+    OwnOpt opt;
+    opt.recharge = 5.0f;
+    {  // spawned at frame 1: the first shot comes on frame max(delay, 1)
+        SimRng r(12345u);
+        const int32_t delay = r.range_int(0, 150);
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        const std::vector<uint32_t> f = o.shot_frames(200);
+        CHECK(!f.empty() && f[0] == static_cast<uint32_t>(std::max(delay, 1)));
+    }
+    {  // spawned at frame 1000 (past any drawn delay): fires on its first service
+        OwnWorld o(opt, Vec3{100, 0, 0}, 1000);
+        const std::vector<uint32_t> f = o.shot_frames(5);
+        CHECK(!f.empty() && f[0] == 1000u);
+    }
+}
+
+void test_own_player_sweep() {
+    // S8 t10 (d) (TACTICAL_COMBAT §3.4 "Own-player variant 0x2acb90"): with Friendly_Damage_Amount > 0 and no hostile hit,
+    // the owner's tree yields its first candidate (the projectile alone is skipped); the hit stands only when it is the
+    // projectile's own target without TRANSPORT_LANDING.
+    struct Sweep {
+        World w;
+        explicit Sweep(bool landing) {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            p.damage = 10.0f;
+            p.friendly_damage_amount = 10.0f;
+            p.max_flight_distance = 3000.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc u;
+            u.tactical_health = 1000.0f;
+            u.radius = 5.0f;
+            push_unit(w.data, u);
+            UnitDesc l = u;
+            l.transport_landing = landing;
+            push_unit(w.data, l);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            w.add(1, 0, 0, Vec3{-500, 0, 0});  // the shooter, away from the path
+            w.add(3, 0, 0, Vec3{100, 0, 0});   // a friendly in the path
+            w.add(4, 1, 0, Vec3{200, 0, 0});   // friendly target behind it
+            w.add(5, 0, 1, Vec3{200, 300, 0}); // an enemy (off the path)
+        }
+        void fire(ObjectId target) {
+            ProjectileLaunch l;
+            l.shooter = 1;
+            l.owner = 0;
+            l.projectile = 0;
+            l.from = Vec3{0, 0, 0};
+            l.target = target;
+            CHECK(w.sys->launch_projectile(l, w.frame));
+            for (int i = 0; i < 40; ++i) w.tick();
+        }
+    };
+    {  // aimed at the friendly target 4: the friendly 3 in front is the first candidate but not the target - no hit
+       // there, the flight goes on and the target is hit
+        Sweep s(false);
+        s.fire(4);
+        CHECK(s.w.sys->health(3) == s.w.sys->max_health(3));
+        CHECK(s.w.sys->health(4) < s.w.sys->max_health(4) && s.w.sys->stats().hits == 1u);
+    }
+    {  // the same target with TRANSPORT_LANDING: never an own-player hit
+        Sweep s(true);
+        s.fire(4);
+        CHECK(s.w.sys->health(3) == s.w.sys->max_health(3) && s.w.sys->health(4) == s.w.sys->max_health(4) && s.w.sys->stats().hits == 0u);
+    }
+}
+
+void test_garrison_fire_bones() {
+    // S8 t10 (a) (LOB_SOLVER §5.1 "Garrison fire bones in detail"): a garrisoned shooter launches from its host's gun bones.
+    struct Garrison {
+        World w;
+        uint32_t last = 0;
+        Garrison(std::vector<std::vector<GarrisonBone>> bones, std::vector<std::pair<float, int32_t>> alts, bool garrisoned) {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 0.2f;
+            push_unit(w.data, s);
+            UnitDesc h;
+            h.tactical_health = 1000.0f;
+            h.radius = 5.0f;
+            h.num_garrison_guns = 2;
+            h.garrison_bones = std::move(bones);
+            h.damage_alternates = std::move(alts);
+            push_unit(w.data, h);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            push_unit(w.data, t);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            w.add(1, 0, 0, Vec3{0, 0, 0});
+            w.add(2, 2, 1, Vec3{0, 100, 0});                // north of the host
+            w.add(3, 1, 0, Vec3{0, 0, 0}, Vec3{0, 1, 0});  // host facing +y: local (x, y, z) -> world (-y, x, z)
+            if (garrisoned) w.sys->set_flag(1, kUnitGarrisoned, true);
+            w.sys->set_garrison_host_query([](ObjectId id) { return id == 1 ? ObjectId{3} : kNoObject; });
+            w.sys->order_attack(1, 2);
+            d0 = w.rng.draws();
+        }
+        uint64_t d0 = 0;
+        uint64_t draws() const { return w.rng.draws() - d0; }  // synced draws while ticking
+        std::vector<Vec3> launches(int ticks) {
+            std::vector<Vec3> out;
+            for (int i = 0; i < ticks; ++i) {
+                w.tick();
+                for (size_t k = 0; k < w.sys->projectile_count(); ++k) {
+                    const ProjectileView pv = w.sys->projectile(k);
+                    if (pv.serial <= last) continue;
+                    last = pv.serial;
+                    out.push_back(pv.pos);
+                }
+            }
+            return out;
+        }
+    };
+    // ALT 0: bone 0 at local (5, 0, 3) pointing local +x (world +y: the target), bone 1 at (-5, 0, 3) pointing local -x.
+    GarrisonBone fwd{true, Vec3{5, 0, 3}, 0.0f}, back{true, Vec3{-5, 0, 3}, 180.0f}, fwd2{true, Vec3{6, 1, 4}, 30.0f};
+    const Vec3 wf{0, 5, 3}, wf2{-1, 6, 4};
+    {  // one candidate: that bone, no draw (the synced stream matches the ungarrisoned run)
+        Garrison g({{fwd, back}}, {}, true), n({{fwd, back}}, {}, false);
+        const std::vector<Vec3> l = g.launches(60), ln = n.launches(60);
+        CHECK(!l.empty() && l.size() == ln.size());
+        bool ok = true;
+        for (const Vec3& p : l) ok = ok && same(p, wf);
+        CHECK(ok);
+        CHECK(!ln.empty() && same(ln.front(), Vec3{0, 0, 0}));  // not garrisoned: the shooter's own launch point
+        CHECK(n.draws() == g.draws());
+    }
+    {  // two candidates: one synced Get_Int(0, 1) per shot, both bones in use. Up to the first shot both runs draw the
+       // same; the shot's tick draws one more in the garrisoned run.
+        Garrison g({{fwd, back, fwd2}}, {}, true), n({{fwd, back, fwd2}}, {}, false);
+        bool shot = false;
+        for (int i = 0; i < 200 && !shot; ++i) {
+            const uint64_t g0 = g.draws(), n0 = n.draws();
+            const size_t gl = g.launches(1).size(), nl = n.launches(1).size();
+            CHECK(gl == nl);
+            shot = gl > 0;
+            CHECK(g.draws() - g0 == n.draws() - n0 + (shot ? 1u : 0u));
+        }
+        CHECK(shot);
+        const std::vector<Vec3> l = g.launches(120);
+        CHECK(l.size() >= 4);
+        bool ok = true, any_f = false, any_f2 = false;
+        for (const Vec3& p : l) {
+            ok = ok && (same(p, wf) || same(p, wf2));
+            any_f = any_f || same(p, wf);
+            any_f2 = any_f2 || same(p, wf2);
+        }
+        CHECK(ok && any_f && any_f2);
+    }
+    {  // no bone within 60 degrees: the shooter's own launch point
+        Garrison g({{back}}, {}, true);
+        const std::vector<Vec3> l = g.launches(30);
+        CHECK(!l.empty() && same(l.front(), Vec3{0, 0, 0}));
+    }
+    {  // the host's ALT (Land_Damage_Thresholds / _Alternates) picks the entry; ALT >= M: the own launch point
+        Garrison g({{back}, {fwd}}, {{1.0f, 0}, {0.66f, 1}, {0.33f, 2}}, true);
+        CHECK(g.w.sys->model_alt(3) == 0);
+        g.w.sys->set_health(3, 500.0f);  // 0.5: ALT 1
+        CHECK(g.w.sys->model_alt(3) == 1);
+        std::vector<Vec3> l = g.launches(30);
+        CHECK(!l.empty() && same(l.back(), wf));
+        Vec3 hp;
+        std::vector<Vec3> bones;
+        CHECK(g.w.sys->garrison_fire_bones(3, hp, bones) && bones.size() == 1 && same(bones[0], wf) && same(hp, Vec3{0, 0, 0}));
+        g.w.sys->set_health(3, 200.0f);  // 0.2: ALT 2 = M -> no garrison bones
+        CHECK(g.w.sys->model_alt(3) == 2);
+        CHECK(!g.w.sys->garrison_fire_bones(3, hp, bones));
+        l = g.launches(30);
+        CHECK(!l.empty() && same(l.back(), Vec3{0, 0, 0}));
+    }
+}
+
+void test_hardpoint_mode_default() {
+    // S8 t12 (b): Fire_When_In_<Mode>_Mode defaults to 1 - without the No the hardpoint fires in DEFEND.
+    GateWorld g(true);
+    g.w.data.hardpoints[0].no_fire_modes.clear();
+    CHECK(g.run(90) > 0);
+}
+
+void test_own_weapon_aim_point() {
+    // S8 t17 / t27 [H] (0x54a270 step 4): the own weapon aims at the target position + its Ranged_Target_Z_Adjust
+    // (0x398440), so a level shot at a hover hull (collision box above its origin) climbs to the hull's centre.
+    OwnOpt opt;
+    opt.target_z_adjust = 12.0f;
+    OwnWorld o(opt, Vec3{100, 0, 0});
+    const std::vector<uint32_t> f = o.shot_frames(60);
+    CHECK(!f.empty());
+    bool seen = false;
+    for (size_t i = 0; i < o.w.sys->projectile_count(); ++i) {
+        const ProjectileView v = o.w.sys->projectile(i);
+        if (v.shooter != 1) continue;
+        seen = true;
+        const float want = 12.0f / std::sqrt(100.0f * 100.0f + 12.0f * 12.0f);
+        CHECK(std::fabs(v.dir.z - want) < 1.0e-4f);
+    }
+    CHECK(seen);
+}
+
+// The directions of shooter 1's projectiles spawned this tick (not stepped yet), serial order.
+std::vector<Vec3> own_shot_dirs(const OwnWorld& o) {
+    std::vector<Vec3> out;
+    for (size_t i = 0; i < o.w.sys->projectile_count(); ++i) {
+        const ProjectileView v = o.w.sys->projectile(i);
+        if (v.shooter == 1) out.push_back(v.dir);
+    }
+    return out;
+}
+
+bool same_dir(Vec3 d, Vec3 to) {
+    const float len = std::sqrt(to.x * to.x + to.y * to.y + to.z * to.z);
+    return std::fabs(d.x - to.x / len) < 1.0e-4f && std::fabs(d.y - to.y / len) < 1.0e-4f && std::fabs(d.z - to.z / len) < 1.0e-4f;
+}
+
+void test_own_weapon_target_bones() {
+    // S8 t27 (TACTICAL_COMBAT §3.1.1 "Own-weapon aim point, Target_Bones", 0x54a270) [H]: per shot, a target type with
+    // Target_Bones gets one synced Get_Int(0, n - 1) (none for n = 1) and the shot aims at that bone's world translation;
+    // the shooter's target hardpoint wins over the bones (its bone; not targetable -> the bare position, no z adjust).
+    // Target at (100, 0, 0) facing +y: local (x, y, z) -> world (100 - y, x, z). Shooter at the origin, no fire bones.
+    const std::vector<Vec3> bones = {Vec3{0, 10, 20}, Vec3{0, -10, 20}, Vec3{5, 0, 30}};
+    auto world_of = [](Vec3 l) { return Vec3{100.0f - l.y, l.x, l.z}; };
+    {  // three bones: every shot at one of them, more than one seen, one draw per shot more than without bones
+        OwnOpt opt;
+        opt.target_z_adjust = 12.0f;
+        opt.recharge = 0.1f;
+        opt.edit = [&](CombatData& d) { d.units[1].target_bones = bones; };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_facing(2, Vec3{0, 1, 0});
+        OwnOpt plain;
+        plain.target_z_adjust = 12.0f;
+        plain.recharge = 0.1f;
+        OwnWorld p(plain, Vec3{100, 0, 0});
+        p.w.sys->set_facing(2, Vec3{0, 1, 0});
+        std::array<int, 3> hits{0, 0, 0};
+        uint64_t shots = 0;
+        for (int i = 0; i < 300; ++i) {
+            const uint64_t d0 = o.w.rng.draws(), q0 = p.w.rng.draws();
+            const uint64_t s0 = o.w.sys->stats().shots, t0 = p.w.sys->stats().shots;
+            o.w.tick();
+            p.w.tick();
+            const uint64_t fired = o.w.sys->stats().shots - s0;
+            if (shots == 0) {  // identical up to the first shot (later recharge draws differ): + the pick's Get_Int
+                CHECK(fired == p.w.sys->stats().shots - t0);
+                CHECK(o.w.rng.draws() - d0 > p.w.rng.draws() - q0 || fired == 0);
+                if (fired == 0) CHECK(o.w.rng.draws() - d0 == p.w.rng.draws() - q0);
+            }
+            if (fired == 0) continue;
+            shots += fired;
+            const std::vector<Vec3> dirs = own_shot_dirs(o);
+            CHECK(!dirs.empty());
+            if (dirs.empty()) continue;
+            int match = -1;
+            for (size_t b = 0; b < bones.size(); ++b)
+                if (same_dir(dirs.back(), world_of(bones[b]))) match = static_cast<int>(b);
+            CHECK(match >= 0);
+            if (match >= 0) ++hits[static_cast<size_t>(match)];
+        }
+        CHECK(shots >= 5);
+        CHECK((hits[0] > 0 ? 1 : 0) + (hits[1] > 0 ? 1 : 0) + (hits[2] > 0 ? 1 : 0) >= 2);
+    }
+    {  // one bone: no draw (the same draws as a bone-less target), aimed at the bone
+        OwnOpt opt;
+        opt.target_z_adjust = 12.0f;
+        opt.edit = [&](CombatData& d) { d.units[1].target_bones = {bones[2]}; };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_facing(2, Vec3{0, 1, 0});
+        OwnOpt plain;
+        plain.target_z_adjust = 12.0f;
+        OwnWorld p(plain, Vec3{100, 0, 0});
+        p.w.sys->set_facing(2, Vec3{0, 1, 0});
+        bool checked = false;
+        for (int i = 0; i < 60; ++i) {
+            const uint64_t s0 = o.w.sys->stats().shots;
+            o.w.tick();
+            p.w.tick();
+            if (o.w.sys->stats().shots == s0 || checked) continue;
+            const std::vector<Vec3> dirs = own_shot_dirs(o);
+            CHECK(!dirs.empty() && same_dir(dirs.back(), world_of(bones[2])));
+            checked = true;
+        }
+        CHECK(checked);
+        CHECK(o.w.rng.draws() == p.w.rng.draws());
+    }
+    for (const bool targetable : {true, false}) {  // the ordered hardpoint: its bone (no draw), else the bare position
+        OwnOpt opt;
+        opt.target_z_adjust = 12.0f;
+        opt.edit = [&](CombatData& d) {
+            HardpointDesc h;
+            h.kind = HardpointKind::DummyArt;
+            h.health = 100.0f;
+            h.targetable = targetable;
+            h.attach_offset = Vec3{0, 0, 40};
+            d.hardpoints.push_back(h);
+            d.units[1].hardpoints = {0};
+            d.units[1].target_bones = bones;
+        };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->order_attack(1, 2, 0);
+        CHECK(o.w.sys->ordered_hardpoint(1) == 0);
+        bool checked = false;
+        for (int i = 0; i < 60 && !checked; ++i) {
+            const uint64_t s0 = o.w.sys->stats().shots;
+            o.w.tick();
+            if (o.w.sys->stats().shots == s0) continue;
+            const std::vector<Vec3> dirs = own_shot_dirs(o);
+            CHECK(!dirs.empty() && same_dir(dirs.back(), targetable ? Vec3{100, 0, 40} : Vec3{100, 0, 0}));
+            checked = true;
+        }
+        CHECK(checked);
+    }
+}
+
+void test_hardpoint_aim_target_bones() {
+    // S8 t27 (TACTICAL_COMBAT §3.1.1 "Hardpoint aim for comparison", 0x383f70): the object aim tries the target's
+    // Target_Bones in list order first (no draw; the first within range and arc); its last fallback is the position +
+    // Ranged_Target_Z_Adjust (was the bare position).
+    for (const int mode : {0, 1, 2}) {  // 0 no bones; 1 bones (first in range); 2 the first bone out of range
+        World w;
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        HardpointDesc hd;
+        hd.kind = HardpointKind::WeaponLaser;
+        hd.projectile = 0;
+        hd.fire_range = 500.0f;
+        hd.max_recharge = 1.0f;
+        hd.bone_a = Vec3{0, 0, 10};
+        w.data.hardpoints.push_back(hd);
+        UnitDesc a;
+        a.tactical_health = 100.0f;
+        a.max_attack_distance = 500.0f;
+        a.hardpoints = {0};
+        const uint32_t ad = push_unit(w.data, a);
+        UnitDesc t;
+        t.tactical_health = 1000.0f;
+        t.radius = 2.0f;
+        t.ranged_target_z_adjust = 9.0f;
+        if (mode == 1) t.target_bones = {Vec3{0, 0, 50}, Vec3{0, 0, 60}};
+        if (mode == 2) t.target_bones = {Vec3{0, 0, 900}, Vec3{0, 0, 60}};
+        const uint32_t td = push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(1, ad, 0, Vec3{0, 0, 0});
+        w.add(2, td, 1, Vec3{100, 0, 0});
+        for (int i = 0; i < 60 && w.sys->projectile_count() == 0; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() == 0) continue;
+        const Vec3 want = mode == 0 ? Vec3{100, 0, 9} : mode == 1 ? Vec3{100, 0, 50} : Vec3{100, 0, 60};
+        CHECK(same_dir(w.sys->projectile(0).dir, want - Vec3{0, 0, 10}));
+    }
+}
+
+void test_fire_at_position() {
+    // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"): a LOBBING_SUPERWEAPON's own weapon fires only for an order.
+    // The lobbing service (after WEAPON) aims the turret, stamps the frame, and Lobbing_Superweapon_Chargeup_Frames later
+    // sets "charged"; the next WEAPON service skips its recharge wait, fires once at the point with no target object (no
+    // lead, no z adjust) and clears the order.
+    auto make = [](bool turret, uint32_t chargeup, float recharge) {
+        OwnOpt opt;
+        opt.lobbing = true;
+        opt.recharge = recharge;
+        opt.edit = [turret, chargeup](CombatData& d) {
+            d.units[0].turret = turret;
+            d.units[0].lobbing_chargeup_frames = chargeup;
+        };
+        return std::make_unique<OwnWorld>(opt, Vec3{100, 0, 0});
+    };
+    {  // the charge-up and the single shot
+        auto o = make(true, 90, 60.0f);
+        CHECK(o->run(30) == 0);  // no order: never fires (step 7)
+        CHECK(o->w.sys->fire_at_position_state(1) == 0);
+        CHECK(!o->w.sys->order_fire_at_position(2, Vec3{1, 1, 0}));  // not a lobbing superweapon
+        const Vec3 at{150, 40, 3};
+        CHECK(o->w.sys->order_fire_at_position(1, Vec3{10, 10, 0}));
+        CHECK(o->w.sys->order_fire_at_position(1, at));  // a second order overwrites the point
+        Vec3 got;
+        CHECK(o->w.sys->fire_at_position_state(1, &got) == 1 && got.x == at.x && got.y == at.y && got.z == at.z);
+        const uint32_t f0 = o->w.frame;
+        bool seen = false;
+        std::vector<uint32_t> shots;
+        for (int i = 0; i < 200; ++i) {
+            const uint64_t s0 = o->w.sys->stats().shots;
+            const uint32_t f = o->w.frame;
+            o->w.tick();
+            if (o->w.sys->stats().shots == s0) continue;
+            shots.push_back(f);
+            for (size_t k = 0; k < o->w.sys->projectile_count(); ++k) {
+                const ProjectileView v = o->w.sys->projectile(k);
+                if (v.shooter != 1) continue;
+                seen = true;
+                CHECK(v.target == kNoObject);
+                CHECK(same_dir(v.dir, at));  // the point as given: no lead, no z adjust
+            }
+        }
+        CHECK(seen);
+        CHECK(shots.size() == 1);
+        if (!shots.empty()) CHECK(shots[0] == f0 + 91);  // stamped at f0, charged at f0 + 90, fired at f0 + 91
+        CHECK(o->w.sys->fire_at_position_state(1) == 0);
+        // the 60 s recharge was skipped for the shot; the next order fires again after its own charge-up
+        CHECK(o->w.sys->order_fire_at_position(1, at));
+        const uint32_t f1 = o->w.frame;
+        const std::vector<uint32_t> again = o->shot_frames(200);
+        CHECK(again.size() == 1 && !again.empty() && again[0] == f1 + 91);
+    }
+    {  // S8 t30: the presentation events - chargeup when the turret is aimed (stamp), charged at the end of the charge-up
+        auto o = make(true, 90, 0.2f);
+        const Vec3 at{150, 40, 0};
+        CHECK(o->w.sys->order_fire_at_position(1, at));
+        const uint32_t f0 = o->w.frame;
+        std::vector<std::pair<uint32_t, bool>> seen;
+        for (int i = 0; i < 120; ++i) {
+            o->w.tick();
+            for (const LobEvent& e : o->w.sys->lob_events()) {
+                CHECK(e.id == 1 && e.point.x == at.x && e.point.y == at.y);
+                seen.emplace_back(e.frame, e.charged);
+            }
+        }
+        CHECK(seen == (std::vector<std::pair<uint32_t, bool>>{{f0, false}, {f0 + 90, true}}));
+    }
+    {  // no TURRET: the turret aim never succeeds, the order waits (no timeout)
+        auto o = make(false, 90, 0.2f);
+        CHECK(o->w.sys->order_fire_at_position(1, Vec3{150, 0, 0}));
+        CHECK(o->run(400) == 0);
+        CHECK(o->w.sys->fire_at_position_state(1) == 1);
+    }
+    {  // a grenade without a lob solution to the point: not aimed, no shot; a reachable point then charges and fires
+        OwnOpt opt;
+        opt.lobbing = true;
+        opt.edit = [](CombatData& d) {
+            d.projectiles[0] = spmat_grenade();  // R = 550
+            d.units[0].turret = true;
+            d.units[0].lobbing_chargeup_frames = 10;
+        };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        CHECK(o.w.sys->order_fire_at_position(1, Vec3{2000, 0, 0}));
+        CHECK(o.run(100) == 0);
+        CHECK(o.w.sys->fire_at_position_state(1) == 1);
+        CHECK(o.w.sys->order_fire_at_position(1, Vec3{300, 0, 0}));
+        const uint32_t f0 = o.w.frame;
+        const std::vector<uint32_t> s = o.shot_frames(60);
+        CHECK(s.size() == 1 && !s.empty() && s[0] == f0 + 11);
+        CHECK(o.w.sys->fire_at_position_state(1) == 0);
+    }
+    {  // N1: a charging order survives write -> read and fires on the same frame; the hash carries it
+        auto a = make(true, 90, 0.2f);
+        CHECK(a->w.sys->order_fire_at_position(1, Vec3{150, 40, 0}));
+        a->run(40);
+        ByteWriter wa;
+        a->w.sys->write(wa);
+        auto b = make(true, 90, 0.2f);
+        ByteReader r(wa.bytes());
+        CHECK(b->w.sys->read(r));
+        b->w.frame = a->w.frame;
+        b->w.rng = a->w.rng;
+        CHECK(b->w.sys->fire_at_position_state(1) == 1);
+        StateHasher ha, hb, hc;
+        a->w.sys->hash_extended(ha);
+        b->w.sys->hash_extended(hb);
+        CHECK(ha.digest() == hb.digest());
+        auto c = make(true, 90, 0.2f);
+        c->w.sys->hash_extended(hc);
+        CHECK(hc.digest() != ha.digest());
+        const std::vector<uint32_t> sa = a->shot_frames(100), sb = b->shot_frames(100);
+        CHECK(sa == sb && sa.size() == 1);
+    }
+}
+
+void test_scan_range_query() {
+    // S8 t17 (FIGHTER_FLYING §4.10 A, Get_Scan_Range 0x566f50): a kUnitScanQuery unit whose formation answers
+    // 0x4160a0(F, u, none) != 0 scans the cube R + Rr; a candidate beyond R is accepted only when 0x4160a0(F, u, c) != 0.
+    // Without the flag the query is never asked and the cube is R.
+    for (const int mode : {0, 1, 2}) {  // 0 no flag; 1 flag, c accepted; 2 flag, c refused
+        TargetWorld t;  // attacker R 1000
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{1500, 0, 0});  // beyond R, inside R + Rr (1800)
+        t.w.add(3, t.capital, 1, Vec3{0, 2500, 0});  // outside the cube
+        std::vector<ObjectId> asked;
+        t.w.sys->set_scan_range_query([&](ObjectId u, ObjectId c, float range, float& rr) -> uint8_t {
+            CHECK(u == 1 && range == 1000.0f);
+            asked.push_back(c);
+            rr = 800.0f;
+            return (c == kNoObject || mode == 1) ? 1 : 0;
+        });
+        if (mode != 0) t.w.sys->set_flag(1, kUnitScanQuery, true);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == (mode == 1 ? 2 : kNoObject));
+        CHECK(std::find(asked.begin(), asked.end(), 3) == asked.end());
+        if (mode == 0) CHECK(asked.empty());
+        if (mode != 0) CHECK(!asked.empty() && asked.front() == kNoObject && std::find(asked.begin(), asked.end(), 2) != asked.end());
+    }
+    {  // the formation does not answer (c = none -> 0): cube R, the far candidate is not even queried
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{1500, 0, 0});
+        std::vector<ObjectId> asked;
+        t.w.sys->set_scan_range_query([&](ObjectId, ObjectId c, float, float& rr) -> uint8_t {
+            asked.push_back(c);
+            rr = 800.0f;
+            return 0;
+        });
+        t.w.sys->set_flag(1, kUnitScanQuery, true);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == kNoObject);
+        CHECK(asked.size() == 1 && asked[0] == kNoObject);
+    }
+}
+
+void test_shared_team_target() {
+    // S8 t17 (FIGHTER_FLYING §4.10 B, 0x406370): members 11 / 12 / 30 of squadron 50. 11 and 12 scanned before any enemy
+    // was there (their next scans are not due); 30 then scans with an empty target and picks 20: every member without a
+    // live ordered target gets 20 (12 keeps its order on 21). A unit outside the squadron (13) is not touched.
+    TargetWorld t;
+    t.w.add(11, t.attacker, 0, Vec3{0, 0, 0});
+    t.w.add(12, t.attacker, 0, Vec3{0, 0, 0});
+    t.w.add(13, t.attacker, 0, Vec3{0, 0, 0});
+    for (const ObjectId m : {11, 12}) t.w.sys->set_share_group(m, 50);
+    t.w.tick();
+    CHECK(t.w.sys->auto_target(11) == kNoObject && t.w.sys->next_scan(11) > t.w.frame + 1);
+    t.w.add(20, t.capital, 1, Vec3{500, 0, 0});
+    t.w.add(21, t.capital, 1, Vec3{-500, 0, 0});
+    t.w.add(30, t.attacker, 0, Vec3{0, 0, 0});
+    t.w.sys->set_share_group(30, 50);
+    t.w.sys->order_attack(12, 21);  // also orders 11 (same squadron); 30 joined later in this test: re-cleared below
+    CHECK(t.w.sys->ordered_target(11) == 21 && t.w.sys->ordered_target(12) == 21 && t.w.sys->ordered_target(13) == kNoObject);
+    t.w.sys->clear_order(11);
+    t.w.sys->clear_order(30);
+    t.w.tick();
+    CHECK(t.w.sys->auto_target(30) != kNoObject);
+    const ObjectId pick = t.w.sys->auto_target(30);
+    CHECK(t.w.sys->auto_target(11) == pick);           // shared
+    CHECK(t.w.sys->ordered_target(12) == 21);          // ordered member kept
+    CHECK(t.w.sys->auto_target(12) == kNoObject);
+    CHECK(t.w.sys->auto_target(13) == kNoObject);  // 13 is not a member (its scan is not due)
+    // Order_Attack on one member orders the squadron.
+    t.w.sys->order_attack(30, 20);
+    for (const ObjectId m : {11, 12, 30}) CHECK(t.w.sys->ordered_target(m) == 20);
+}
+
 void test_foc_data() {
     const char* root = std::getenv("ALAMO_FOC_DATA");
     if (!root || !*root) {
@@ -3204,9 +5054,19 @@ int main(int argc, char** argv) {
     test_choose_target_hardpoint_by_type();
     test_damage_table();
     test_inaccuracy_system();
+    test_straight_ground_test();
     test_targeting_rules();
     test_circular_lead();  // OI tactical
-    test_lob();
+    test_lob_solver();
+    test_lob_targeting();
+    test_lob_weapon_flight();
+    test_lob_ground_and_expiry();
+    test_lob_sticky();
+    test_ground_segment();
+    test_lob_object_ground_tie();
+    test_lob_fuse_rounding();
+    test_lob_hardpoint();
+    test_lob_save();
     test_turn_toward();  // S9 t05
     test_team_targeting();
     test_gaps_constants();
@@ -3231,6 +5091,23 @@ int main(int argc, char** argv) {
     test_rocket_plans();
     test_rocket_replan();
     test_rocket_flight_system();
+    test_weapon_sources();  // S8 t08
+    test_hardpoint_state_gate();
+    test_weapon_suspend_elapse();  // S7 t15 A2
+    test_muzzle_bones();  // S8 t06 B4
+    test_own_weapon_targeting_state();  // S8 t10 - t12
+    test_own_weapon_gate_steps();
+    test_hardpoints_fire_while_suspended();
+    test_first_service();
+    test_own_player_sweep();
+    test_garrison_fire_bones();
+    test_hardpoint_mode_default();
+    test_own_weapon_aim_point();
+    test_own_weapon_target_bones();  // S8 t27
+    test_fire_at_position();         // S8 t26
+    test_hardpoint_aim_target_bones();  // S8 t27
+    test_scan_range_query();
+    test_shared_team_target();
     test_foc_data();
     if (bench) bench_modifiers();
     if (g_fail) {

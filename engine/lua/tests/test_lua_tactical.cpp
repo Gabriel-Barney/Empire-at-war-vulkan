@@ -59,6 +59,14 @@ static bool gtrue(LuaVm& vm, const char* name) {
     lua_pop(L, 1);
     return b;
 }
+static bool gnil(LuaVm& vm, const char* name) {  // S7 t26
+    lua_State* L = vm.state();
+    lua_pushstring(L, name);
+    lua_rawget(L, LUA_GLOBALSINDEX);
+    const bool b = lua_isnil(L, -1);
+    lua_pop(L, 1);
+    return b;
+}
 static double gnum(LuaVm& vm, const char* name) {
     lua_State* L = vm.state();
     lua_pushstring(L, name);
@@ -86,6 +94,7 @@ struct Db {
         write_file(root / "Data/XML/T.xml",
                    "<R>\n"
                    "<SpaceUnit Name=\"Ship\"><Tactical_Health>1000</Tactical_Health><Shield_Points>500</Shield_Points>"
+                   "<Behavior>STARSHIP_LOCOMOTOR</Behavior>"
                    "<Unit_Abilities_Data SubObjectList=\"Yes\">"
                    "<Unit_Ability><Type>DEFEND</Type></Unit_Ability><Unit_Ability><Type>SPOILER_LOCK</Type></Unit_Ability>"
                    "</Unit_Abilities_Data></SpaceUnit>\n"
@@ -111,6 +120,7 @@ struct TfAi final : AiScriptHost {
     std::string name;
     bool on = false;
     AiArg target;
+    std::vector<std::pair<objects::ObjectHandle, bool>> activated;  // S7 t15 A1: the last per-unit activation results
     bool tf_valid(int32_t tf) override { return tf == 3; }
     int32_t tf_force_count(int32_t) override { return static_cast<int32_t>(units.size()); }
     void tf_set_flag(int32_t, AiTfFlag, bool) override {}
@@ -124,6 +134,11 @@ struct TfAi final : AiScriptHost {
         on = flag;
         target = t;
         return 7;
+    }
+    int32_t tf_activate_ability_units(int32_t tf, std::string_view ability, bool flag, const AiArg& t,
+                                      const std::vector<std::pair<objects::ObjectHandle, bool>>& units_activated) override {
+        activated = units_activated;
+        return tf_activate_ability(tf, ability, flag, t);
     }
     bool tf_is_raid_capable(int32_t) override { return false; }
     void tf_release_forces(int32_t, double) override {}
@@ -280,7 +295,7 @@ struct AbilityWorld {
         sa.name = ship.name;
         sa.name_crc = name_crc(ship.name);
         sa.unit_abilities = {rec(ab::kDefend, 15.0f, 20.0f), rec(ab::kSpoilerLock, 0.0f, 0.0f), rec(ab::kTractorBeam, 0.0f, 5.0f, "Tractor"),
-                             rec(ab::kHarmonicBomb, 0.0f, 10.0f)};
+                             rec(ab::kHarmonicBomb, 0.0f, 10.0f), rec(ab::kBuzzDroids, 0.0f, 10.0f), rec(ab::kDeploy, 0.0f, 0.0f)};
         sa.specials = {0};
         push(ship, sa);
         cb::UnitDesc target;
@@ -374,9 +389,9 @@ static void test_abilities(const Db& db) {
     CHECK(run(vm, "s.Activate_Ability('TRACTOR_BEAM', t) prdy = s.Is_Ability_Ready('TRACTOR_BEAM')") == "");
     CHECK(a.pending_type(ship) == ab::kTractorBeam && a.pending_target(ship) == target && gtrue(vm, "prdy"));
     CHECK(w.combat->ordered_target(ship) == target);
-    // Position family (command 57): the host spawns the Dummy_Barrage_Target at the point.
-    CHECK(run(vm, "s.Activate_Ability('HARMONIC_BOMB', Create_Position(50, 60, 0))") == "");
-    CHECK(dummy_at.x == 50.0f && dummy_at.y == 60.0f && dummy_owner == 0);
+    // S7 t32 (AI_TACTICAL §7.3.3 part 6): HARMONIC_BOMB (35) is command 43 mode on with the argument ignored - no dummy.
+    CHECK(run(vm, "hb = s.Activate_Ability('HARMONIC_BOMB', Create_Position(50, 60, 0))") == "");
+    CHECK(dummy_owner == -9 && gnil(vm, "hb"));
     // Autofire: slot byte written directly.
     CHECK(run(vm, "s.Set_Single_Ability_Autofire('DEFEND', true) af = s.Is_Ability_Autofire('DEFEND') "
                   "s.Set_All_Abilities_Autofire(false) af2 = s.Is_Ability_Autofire('DEFEND')") == "");
@@ -416,7 +431,88 @@ static void test_abilities(const Db& db) {
     CHECK(run(vm, "TF.Set_Targeting_Priorities('Capital_Attack', 'Ship')") == "" && w.combat->priority_override(ship) == 0);
     CHECK(run(vm, "TF.Set_Targeting_Priorities('Fighter_Attack', 'Hauler')") == "" && w.combat->priority_override(ship) == 0);
     CHECK(run(vm, "s.Set_Targeting_Priorities('No_Such_Set')") == "" && w.combat->priority_override(ship) == -1);
+    // S7 t15 A1 / S7 t26 (AI_TACTICAL §7.3.3 item 1): the host learns which units answered true (a block: one
+    // AbilityBlockStatus count each). SPOILER_LOCK is a "never" family: false even when it turned on; TRACTOR_BEAM (object
+    // target) is true when the pending ability was stored.
+    a.force_recharge(ship, ab::kSpoilerLock, 0.0f);
+    CHECK(run(vm, "TF.Activate_Ability('SPOILER_LOCK', true)") == "" && ai.activated.size() == 1 &&
+          ai.activated[0].first == store.find(ship) && !ai.activated[0].second && a.is_active(ship, ab::kSpoilerLock));
+    CHECK(run(vm, "TF.Activate_Ability('SPOILER_LOCK', false)") == "" && !a.is_active(ship, ab::kSpoilerLock));
+    CHECK(run(vm, "TF.Activate_Ability('TRACTOR_BEAM', t)") == "" && ai.activated.size() == 1 && ai.activated[0].second);
     attach_ai_host(vm, nullptr, -1);
+    // S7 t26: which object Activate_Ability calls return a block - "never" families (DEFEND, SPOILER_LOCK) nil even on
+    // success; an ability the unit lacks nil; DEPLOY nil when already in the requested state, else a block; the
+    // Dummy_Barrage_Target ids (BUZZ_DROIDS) a block once the gates pass.
+    a.force_recharge(ship, ab::kSpoilerLock, 0.0f);
+    CHECK(run(vm, "n1 = s.Activate_Ability('SPOILER_LOCK', true) n2 = s.Activate_Ability('TURBO') "
+                  "n3 = s.Activate_Ability('DEPLOY', false) d1 = s.Activate_Ability('DEPLOY', true) "
+                  "bz = s.Activate_Ability('BUZZ_DROIDS', Create_Position(10, 20, 0))") == "");
+    std::printf("  activate ability blocks: n1 %d n2 %d n3 %d d1 %d bz %d\n", gnil(vm, "n1"), gnil(vm, "n2"), gnil(vm, "n3"),
+                gnil(vm, "d1"), gnil(vm, "bz"));
+    CHECK(gnil(vm, "n1") && gnil(vm, "n2") && gnil(vm, "n3") && !gnil(vm, "d1") && !gnil(vm, "bz") && a.is_active(ship, ab::kSpoilerLock));
+    // S7 t32: BUZZ_DROIDS (71) - the host spawns the Dummy_Barrage_Target at the point (command-40 path on it).
+    CHECK(dummy_at.x == 10.0f && dummy_at.y == 20.0f && dummy_owner == 0);
+    CHECK(run(vm, "s.Activate_Ability('SPOILER_LOCK', false)") == "");
+    // S7 t15 A1 / t26 (§7.3.3 item 2): the object block (TRACTOR_BEAM, accepted) is pending until the unit's next signal
+    // 0x29 (ObjectBridge::ability_finished) or 0xb (order_replaced) or its death / removal (0x10). A signal before the
+    // activation or for another object does not count.
+    bridge.ability_finished(ship);  // before the activation
+    CHECK(run(vm, "ab1 = s.Activate_Ability('TRACTOR_BEAM', t) f1 = ab1 ~= nil and ab1.IsFinished()") == "" && !gnil(vm, "ab1"));
+    CHECK(!gtrue(vm, "f1"));
+    const uint32_t signals0 = bridge.ability_signals(ship);
+    bridge.ability_finished(target);  // not watched: ignored
+    CHECK(run(vm, "f2 = ab1.IsFinished()") == "" && !gtrue(vm, "f2") && bridge.ability_signals(target) == 0);
+    bridge.ability_finished(ship);
+    CHECK(run(vm, "f3 = ab1.IsFinished() ab2 = s.Activate_Ability('TRACTOR_BEAM', t) f4 = ab2.IsFinished()") == "");
+    CHECK(gtrue(vm, "f3") && !gtrue(vm, "f4") && bridge.ability_signals(ship) == signals0 + 1);
+    bridge.order_replaced(ship);  // S7 t26: a new order (0xb) ends it too
+    CHECK(run(vm, "f5 = ab2.IsFinished() f6 = ab1.IsFinished()") == "" && gtrue(vm, "f5") && gtrue(vm, "f6"));
+    {  // S7 t31 (§7.3.3 item 1): Activate_Ability of a listed id (BUZZ_DROIDS 71, gates passed) raises 0xb on the unit before
+       // executing, through the host's raiser (the battle): a pending block on the unit ends. TRACTOR_BEAM (30) is not listed.
+        std::vector<objects::ObjectId> raised;
+        bridge.raise_order_replaced = [&](objects::ObjectId id) {
+            raised.push_back(id);
+            bridge.order_replaced(id);
+        };
+        CHECK(run(vm, "ab4 = s.Activate_Ability('TRACTOR_BEAM', t) f9 = ab4 ~= nil and ab4.IsFinished()") == "");
+        CHECK(!gnil(vm, "ab4") && !gtrue(vm, "f9") && raised.empty());
+        CHECK(run(vm, "s.Activate_Ability('BUZZ_DROIDS', Create_Position(10, 20, 0)) f10 = ab4.IsFinished()") == "");
+        std::printf("  activate ability 0xb: raised %zu (ship %d), earlier block finished %d\n", raised.size(),
+                    !raised.empty() && raised[0] == ship ? 1 : 0, gtrue(vm, "f10") ? 1 : 0);
+        CHECK(gtrue(vm, "f10") && raised.size() == 1 && raised[0] == ship);
+        bridge.raise_order_replaced = nullptr;
+    }
+    {  // death finishes the block (signal 0x10)
+        const objects::ObjectHandle h2 = make(store, db.t("Ship"), 0, {0, -500, 0});
+        w.add(store.id(h2), 0, 0, {0, -500, 0});
+        vm.set_object_global("S2", h2);
+        CHECK(run(vm, "ab3 = S2.Activate_Ability('TRACTOR_BEAM', t) f7 = ab3.IsFinished()") == "" && !gtrue(vm, "f7"));
+        CHECK(store.destroy(h2));
+        CHECK(run(vm, "f8 = ab3.IsFinished()") == "" && gtrue(vm, "f8"));
+    }
+    // OI abilities t01 (A1_READINGS §28.8, §28.9): Lock / Unlock_Current_Orders and the ability share of the obj +0x3a8
+    // counter.
+    auto said = [&vm](const char* text) {
+        size_t n = 0;
+        for (const std::string& m : vm.messages()) n += m.find(text) != std::string::npos ? 1u : 0u;
+        return n;
+    };
+    auto stack_warnings = [&] { return said("Script cannot stack locks"); };
+    CHECK(run(vm, "s.Lock_Current_Orders()") == "" && bridge.state(ship).orders_locked && a.immobilize_count(ship) == 0);
+    CHECK(run(vm, "s.Lock_Current_Orders()") == "" && stack_warnings() == 1 && bridge.state(ship).orders_locked);
+    CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && !bridge.state(ship).orders_locked);
+    CHECK(a.lock_movement(ship, true, w.frame));  // a Disable_Movement ability holds the counter
+    CHECK(run(vm, "s.Lock_Current_Orders()") == "" && stack_warnings() == 2 && !bridge.state(ship).orders_locked);
+    CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && a.immobilize_count(ship) == 0);  // releases the ability's share
+    CHECK(run(vm, "s.Unlock_Current_Orders()") == "" && a.immobilize_count(ship) == 0);  // nothing locked: no change
+    CHECK(said("Unlock_Current_Orders - object Ship is not locked.") == 1);
+    // OI follow-up t04: no locomotor -> the immobile error, nothing locked.
+    CHECK(run(vm, "t.Lock_Current_Orders()") == "" && !bridge.state(target).orders_locked &&
+          said("SCRIPT ERROR: GameObjectWrapper::Lock_Current_Orders - Target_Ship is immobile; locking not supported.") == 1);
+    // OI follow-up t03: a locked unit refuses Move_To / Attack_Target (warning, no order) and cannot move.
+    CHECK(run(vm, "s.Lock_Current_Orders() mv = s.Can_Move() s.Move_To(t) s.Attack_Target(t)") == "" && !gtrue(vm, "mv"));
+    CHECK(said("Attack_Target - object Ship is locked into existing orders. Attack_Target fails.") == 2);
+    CHECK(run(vm, "s.Unlock_Current_Orders() mv = s.Can_Move()") == "" && gtrue(vm, "mv"));
     CHECK(vm.errors().empty());
     std::printf("  abilities: S9 AbilitySystem bindings OK\n");
 }

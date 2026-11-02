@@ -193,8 +193,15 @@ land/space pair selected by this id.
 ### 2.1 Behaviours and cadence [H]
 - **Units:** `TargetingBehaviorClass` (vtable 0x8b0d88, 49 slots). Its service (slot 6, 0x633a30) dispatches to
   `Service_Land` (0x634810) in mode 1 or `Service_Space` (0x633ae0) in mode 2 (dispatcher 0x633a30 compares the mode with 1, then 2; labels corrected in refixf t06 round 2).
-- **Squads and teams:** `TeamTargetingBehaviorClass` (0x8afd90; 0x62ee00 → 0x62eeb0) runs in space only and
-  shares the helpers below.
+- **Squads and teams:** `TeamTargetingBehaviorClass` (0x8afd90; 0x62ee00 → 0x62eeb0) shares the helpers below.
+  Correction (S7 t25 RE, 2026-11-02) [H]: it runs only when the container's locomotor kind (vf +0x238) is 1 (Walk,
+  Bike, LandTeamContainer, LandTeamInfantry), i.e. ground team containers only, not "in space only". Space squadron
+  containers (Team locomotor, kind 2) never scan; their target comes from the members' own TARGETING.
+- **Shared squadron target (2026-11-02)** [H]. A member whose own target is empty and whose due scan picks t sets
+  the team target (0x406370, team data = container +0x110: +0x30 = t, +0x38 = hard point) and calls `Set_Target` on
+  **every** member in index order, overwriting their targets; `Order_Attack`'s set path does the same. A member that
+  already has a target and switches on a rescan (§2.5) changes only its own. Signal 0x28 on the team target clears
+  +0x30 / +0x38. Full rules and the clear paths: FIGHTER_FLYING §4.10 B.
 - **The service runs every behaviour service call.** It writes the next service frame to +0x30 as the frame
   plus +0x34 (0x4c2f70) [M].
 - **The acquisition scan is throttled per unit.** `Acquire_Target` (0x568a00) runs only when the current frame
@@ -218,12 +225,17 @@ land/space pair selected by this id.
 - **Players visited:** start at `Get_Int(0, nPlayers − 1)` (**one synced draw**) and walk the global player
   list cyclically, skipping:
   - the attacker's own player;
-  - players marked inactive (player +0x68 → +0x108);
+  - players marked inactive (player +0x68 → +0x108) — this is the faction's `Is_Neutral` flag (2026-11-02, §2.10);
   - players whose relation in attacker player +0x370[id] is not "enemy" (1);
   - all players, when the attacker sits inside an `Is_Nebula` object and the fog test 0x35f3b0 applies [M].
 - **Query:** for each visited player, `Scan_Player` (0x5662b0) runs `Query_AABB` on that player's tree with a
   cube of half-extent R centred on the attacker (R + the formation's chase / response range while the unit is in a
-  formation move, 0x566f50, §2.8). The scan never does a sphere test itself. Per-candidate range acceptance goes
+  formation move, 0x566f50, §2.8). The scan never does a sphere test itself.
+  Rule of 0x566f50 (S7 t25 RE, 2026-11-02) [H]: R is the member's own `Get_Max_Attack_Range`; deployed → R; in space
+  the formation is the squadron container's. No formation → R. 0x4160a0(F, u, none) ≠ 0 → **R + Rr**, Rr chosen by
+  the first block's flags (0x02 `Guard_Chase_Range`, else 0x01 `Attack_Move_Response_Range`, else `Idle_Chase_Range`).
+  Otherwise R in space; on land R with a TURRET slot, else 0 (no scan). In space only `Space_Layer` 0 units (fighters,
+  squadrons) get R + Rr, and a plain position move gets it only after arrival. Branch details: FIGHTER_FLYING §4.10 A. Per-candidate range acceptance goes
   through vfunc slots 44/45 (TACTICAL_GAPS §3.1) or the formation tests of §2.8.
 
 ### 2.3 Candidate filters, in order [H]
@@ -702,6 +714,60 @@ the movement / avoidance code keeps hulls apart (SPACE_AVOIDANCE) [M: not re-tra
    station, many target bones fall outside the 130° / 90° vertical cones (Q2), so few shots fire; and every hit
    that resolves to a dummy hardpoint (item 4) lands on the hull.
 
+### 2.10 Player relation table: initial values and readers (RE, 2026-11-02) [H unless tagged]
+**Table.** Player +0x370 is an int per player id; values **0 friendly (self, allies), 1 enemy, 2 neutral**. The player
+constructor fills every entry with **2**. The only writer is 0x288800(player, id, value). Readers: "friendly" =
+value 0 (0x2823c0 / 0x2823e0), "enemy" = value 1 (0x2824d0 / 0x2824f0, Lua `PlayerWrapper.Is_Enemy` 0x603760 →
+0x2824f0). Objects use their owner (capture points and planets their controller): hostile 0x39a450 / 0x39a4e0
+(value 1), allied 0x39a230 (value 0). So a relation-2 player is **neither enemy nor ally**.
+
+**Who sets the values:**
+- **Campaign / galactic** (`Create_Default_Players` 0x293390 → 0x294360; re-run on galactic resume 0x4b2c70). For
+  each ordered pair (row P, column Q), with F = P's faction and G = Q's faction:
+  1. self → 0;
+  2. F or G `Is_Neutral` (faction +0x108) → **2**;
+  3. F = G → 0;
+  4. G's name in F's `Allies` list (+0x3e0) → 0; then G's name in F's `Enemies` list (+0x3f8) → 1 (Enemies wins
+     over Allies; names compared case-insensitively);
+  5. in neither list → no write, the constructor's **2** stays ("undefined feelings" in the log).
+
+  The table can be **asymmetric**. FoC data: everything ↔ Neutral = 2; Rebel / Empire / Pirates / Sarlacc /
+  Underworld / Hutts → Hostile = 1; Hostile → those = 1, except **Hostile → Hutts = 2** (not in Hostile's
+  `Enemies`), while Hutts → Hostile = 1. Hostile's `Allies` = Neutral has no effect (rule 2 comes first).
+- **Skirmish** (0x294fa0 → 0x297300; all three callers pass 0): runs `Create_Default_Players` first, then overwrites
+  every pair: P's faction `Is_Neutral` → 2 towards everyone (**its own entry too**); else self → 0; Q's faction
+  `Is_Neutral` → 2; same faction → 0; otherwise 1. The XML lists are ignored, so Hostile is an enemy of every
+  non-neutral faction both ways.
+- **Skirmish with the map / game record byte +0xb5 set** (0x295cf0 → 0x297470) [M: a team-game setting]: same, but
+  allies are self or the same team id (player +0x54 ≠ −1); faction is not used.
+- **At run time:** Lua `PlayerWrapper.Make_Ally` (0x6046a0) writes 0, `Make_Enemy` (0x604780) writes 1 (one
+  direction: the caller's row only); command 35 `Ally` (0x689be0) toggles 0 ↔ 1 (any other value: no change), shows
+  the allegiance text and re-issues 0x38d730 with no target to the issuer's units [M: clears their attack targets].
+  Nothing writes 2 after start.
+
+**So `Is_Enemy(p, Neutral)` is false** in campaign and skirmish. Unless a script calls `Make_Enemy`, nothing treats
+the Neutral player as an enemy.
+
+**Every combat path reads this one table:**
+- auto-targeting scan (§2.2): only players whose entry is 1, and not `Is_Neutral` factions;
+- `Formation_Attack_Target` / goal-object promotion (§2.8): object owner hostile (1);
+- **human right-click attack:** the order resolver 0x2ad280 returns the attack cursor (5) only when the local
+  player's entry for the object's owner is 1; any other value gives a move / other cursor;
+- projectile segment hits, area damage and stun (§3.4, §3.5, TACTICAL_GAPS): the "enemy players" lists 0x294910 /
+  0x2824f0 (value 1);
+- the turret service drops a target whose owner is not hostile (0x632270 → TARGETING vf +0xd8).
+
+**Task-force `Attack_Move` on a non-hostile object** is **not refused**:
+- `LandTaskForceClass.Attack_Move` (0x6e9440): for a game object or an AI target whose object is hostile to the TF
+  player (0x39a4e0) the goal is the object; otherwise the goal is the object's (or the AI target's) **position**,
+  an attack-move to that point.
+- `SpaceTaskForceClass.Attack_Move` (0x6e4fc0) has no relation test: the object is the goal.
+- In both cases the units move there and auto-engage on the way. They never attack the relation-2 object itself,
+  because §2.8 path B needs relation 1. A neutral capture point is taken by presence, not by attack.
+
+Port: the combat matrix must treat value 2 like 0 for targeting, hits and area damage (neither side attacks). It
+must not refuse an AI `Attack_Move` whose goal is neutral-owned; the move goes to the point.
+
 ---
 
 ## 3. Weapons, projectiles, damage (S8)
@@ -714,7 +780,7 @@ the movement / avoidance code keeps hulls apart (SPACE_AVOIDANCE) [M: not re-tra
 
 **`Update_Weapon`** (0x387400), weapon types 5–10 only, once per frame per hardpoint:
 1. Return early when weapons are globally disabled, the hardpoint is disabled (+0x6e) or destroyed, or an owner
-   state gate applies.
+   state gate applies (deploy transition; after the cooldown, `Does_Weapon_State_Allow_Firing_At` `0x384850`: §3.1.1).
 2. Subtract the elapsed frames from the cooldown. Return while it is still above 0.
 3. A manual-target hardpoint drops its manual target (+0xc0) 300 frames after the weapon state stops allowing
    fire [M].
@@ -749,6 +815,8 @@ the movement / avoidance code keeps hulls apart (SPACE_AVOIDANCE) [M: not re-tra
       override (ability data +0x1b4). If r > 0: **3 synced `Get_Float(−r, r)`**, X then Y then Z.
     - Otherwise d = the hardpoint's `Fire_Inaccuracy_Distance` entry whose category mask matches the target.
       Then s = d × distance / `Get_Fire_Range`, and 3 synced `Get_Float(−s, s)` (X, Y, Z).
+      **A1j t03 [H]:** the three draws are made only when the scaled d > 0, the XY distance > 0 and
+      `Get_Fire_Range` > 0; otherwise no draw and no offset (no table entry for the target's category means d = 0).
     - **Doubling verified in disassembly [H]** (getters 0x374890 for r and 0x53ff30 for d). Each loads 1.0
       from 0x1407ffaf8. In land mode only, it subtracts the AI-difficulty accuracy (0x468750, which returns 1.0
       when it doesn't apply), giving f. It returns v × f + v (`mulss` then `addss`).
@@ -802,6 +870,282 @@ list 8):
 3. pulses = `Projectile_Fire_Pulse_Count`.
 4. frames = trunc(frames / F) and pulses = trunc(F × pulses), with **no** +0.5 rounding [H].
 
+#### 3.1.1 Units with both weapon hardpoints and `Projectile_Types` (S8 t05, 2026-11-02) [H unless tagged]
+**Rule: the two weapon sources are independent, and the XML flags decide which one may fire in which state.**
+Nothing in `WeaponBehaviorClass` reads the hardpoints: not the service (vf6 `0x54d090`), the attach (vf7 `0x54ab00`),
+the initialise (vf9 `0x54c210`), the recharge reset (`0x54cef0`) or the fire gate (`0x54c910`). The hardpoints fire
+through the object update (`0x3a76b0` → `Update_Weapon` `0x387400`), which does not read `Projectile_Types`.
+
+**When the unit's own weapon exists:** the object has the WEAPON behaviour (id 0x0A, from `Behavior` or the mode list
+`LandBehavior` / `SpaceBehavior`) **and** `Projectile_Types` is not empty (vf6 returns at once when the count at type
++0xc48 is < 1). Weapon hardpoints play no part. A type with `Projectile_Types` but no WEAPON behaviour never fires
+that list (it can still be read by abilities and Lua, e.g. `Get_Current_Projectile_Type`).
+
+**Own-weapon gate** (`0x54c910`, checked every service before the shot), in order:
+1. the behaviour is enabled (`0x4c3700`), the global weapons switch `0x140a43a88` is on, obj +0x3a0 & 0x10 is clear;
+2. **no deploy transition**: for a `Deploys` type with a locomotor, the locomotor's vf +0x130 (Walk `0x61df60`: state
+   0x18 Deploying) and vf +0x128 (Walk `0x61dfd0`: state 0x1A Undeploying) are false (`0x39a400`, `0x39b2a0`);
+3. `Is_Deployed_Or_Deploying` (`0x39a390`, S9_DEATH_CLONE_SHIELDS §1.2) → `Fire_Weapon_When_Deployed` (type +0xae),
+   otherwise `Fire_Weapon_When_Undeployed` (+0xaf), must be set;
+4. unit ability ROCKET_ATTACK (11) active (`0x39b950(obj, 11)`) → `Fire_Weapon_When_In_Rocket_Attack_Mode` (+0xb0),
+   otherwise `Fire_Weapon_When_In_Normal_Attack_Mode` (+0xb1), must be set;
+5. `0x397f60(obj, 1)`: each active unit-ability mode in slots 0 / 1 must allow it (`0x565970`): `WEAPONS_ENABLED_FLAG`, see "Gate details" below (2026-11-02);
+6. unless type byte +0x8a is set, no fire in locomotor state 0x1C; a unit whose current locomotor answers vf +0x240
+   does not fire in state 0x16 (Walk Stopped) ("Gate details" below, 2026-11-02);
+7. unless a fire-at-position order is pending (TD +0x3c / +0x3d), the targeting state TD +0x18 must be 4 (the
+   "attacking" state of slot 31; confirmed in "Gate details" below, 2026-11-02; who sets the order: "Fire-at-position
+   order" below, 2026-11-02).
+All four `Fire_Weapon_When_*` flags default to true (OBJECT_TYPES §4.6).
+
+**Hardpoint gate** (`HardPointClass::Does_Weapon_State_Allow_Firing_At`, `0x384850`; the name is in its error
+string), called by `Update_Weapon` after the cooldown with the primary target (+0x40):
+1. a target that is dead, delete-pending or a death clone (obj +0x3a0 & 0x42, or bit 0x80) is refused;
+2. weapon types 5–10 only; a destroyable hardpoint with health ≤ 0, or a disabled one (+0x6e), is refused;
+3. a target matching `Fire_Category_Restrictions` (`0x540140`) is refused [M on the arguments];
+4. for each of the owner's unit-ability slots 0 / 1 whose mode m (1…0x4c) is active: the hardpoint type byte
+   **+0x384 + m** must be set (FoC tags: `Fire_When_In_Defend_Mode` +0x385, `Fire_When_In_Turbo_Mode` +0x38d,
+   `Fire_When_In_Power_To_Weapons_Mode` +0x3a1), and `0x397f60(owner, 1)` must pass;
+5. `Fire_When_Deployed` (+0x3d1) clear and the owner deployed or deploying → refused; `Fire_When_Undeployed`
+   (+0x3d2) clear and the owner not → refused;
+6. `Fire_When_In_Normal_Attack_Mode` (+0x3d4) clear and ROCKET_ATTACK not active → refused;
+   `Fire_When_In_Rocket_Attack_Mode` (+0x3d3) clear and ROCKET_ATTACK active → refused.
+
+The bytes +0x3d1…+0x3d4 default to true (§5.1). `Update_Weapon` itself also returns early in the deploy transitions
+(`0x39a400` / `0x39b2a0`, as step 2 above). **When the gate refuses, `Update_Weapon` returns: no `Fire_At` and no
+opportunity fire that frame.** With no primary target the gate runs with a null target (steps 4–6 only).
+
+**Gate details (S8 t11 / t12, 2026-11-02)** [H unless tagged]. These resolve the [M] tags in the own-weapon steps
+above.
+- **Step 3 correction.** 0x39a390 is true when the locomotor pack's pending flag +0x2b3 is set, or when the
+  locomotor's vf +0x120 is true. Walk's vf +0x120 is 0x61df40, state == **0x19 Deployed** only. So the name
+  "Is_Deployed_Or_Deploying" is loose: Deploying (0x18) does not count. Step 2 has already refused 0x18 / 0x1A, so
+  the gate result is unchanged. Every other locomotor (JetPack included) has vf +0x120 = 0x13b7d0, which returns
+  false, so it counts as undeployed.
+- **Deploy transition window (step 2).** It is the Walk locomotor state (pack +0x48):
+  - 0x18 Deploying and 0x1A Undeploying;
+  - only Walk implements vf +0x130 (0x61df60: == 0x18) and vf +0x128 (0x61dfd0: == 0x1A);
+  - 0x39a400 / 0x39b2a0 also need the type's `Deploys` (+0xd1) and a locomotor slot.
+
+  The state machine and its duration are in MOVEMENT §3.2 (2026-11-02 "Deploy states" note). The hardpoint
+  `Update_Weapon` returns early on the same two tests.
+- **Step 5** = 0x397f60(obj, 1):
+  - it reads `Mod_Flag` index 1 = `WEAPONS_ENABLED_FLAG` (enum table 0x140a434a0: 1 WEAPONS_ENABLED_FLAG,
+    2 CAN_BE_SQUASHED, 3 ALLOW_TARGET_DIMINISHING_FIREPOWER);
+  - it ANDs that flag over the active modes of `Unit_Abilities_Data` entries 0 and 1 (0x374b50(type, i)), read
+    through 0x565970: record +0xe0 + m when m < 13, else 1;
+  - the record ctor sets the flag bytes +0xe0…+0xe3 to 1 (0x5655ad), so the default is "allowed";
+  - vanilla FoC never sets `WEAPONS_ENABLED_FLAG`: the XML sets only ALLOW_TARGET_DIMINISHING_FIREPOWER, twice. So
+    step 5 never refuses in vanilla.
+- **Step 6.** With a locomotor data pack (obj +0xa8):
+  - when `Can_Fighter_Fire_When_Idle` (type +0x8a) is clear: no fire in state **0x1C (fighter Idle)**;
+  - in all cases: no fire in state **0x16** when the slot-1 locomotor's vf +0x240 is true. That vfunc is 0x17dc70
+    (returns 1) for Flying, JetPack, LandBomber and Starship, and 0x13b7d0 (false) for the others (Walk included).
+
+  So a walker standing still (0x16) does fire, and a jetpack unit at rest in state 0x16 does not. JetPack swaps
+  back to Walk in its first 0x16 service (MOVEMENT §3.1.1), and WEAPON is suspended during the flight anyway.
+- **Step 7.** TD = obj +0xf0.
+  - If the unit has LOBBING_SUPERWEAPON (slot byte +0x369 ≠ −1) and TD +0x3d is clear → no fire.
+  - Else, when neither TD +0x3d nor +0x3c is set, TD +0x18 must be **4** and the current target (0x54c190) must
+    be non-null. Otherwise TD +0x28 := the current weapon's `Projectile_Fire_Pulse_Count` (+0x4f0) and no fire
+    (the burst restarts).
+  - TD +0x18 is the targeting state, written by slot 31 (0x568c80; the TeamTargeting override 0x62f550 copies it to
+    the members). Entering 4 raises signal 0x1E. **4 = attacking**: the target is in range (slot 44) and not inside
+    the min range (slot 45), set by `Service_Land` 0x634810 / `_Space` / 0x62eeb0. State 3 = in range but the turret
+    or facing is not ready yet (slot 48 0x568230 is true while the facing is off the target direction by more than
+half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor; 0x20af60 compare [M on its units]). State 2 = out of
+    range. This is the fire-time range gate (LOB_SOLVER §8 item 22).
+  - After a shot from a LOBBING_SUPERWEAPON object, TD +0x3c / +0x3d and +0x30…+0x38 are cleared.
+- **ROCKET_ATTACK detection (step 4, hardpoint step 6).** 0x39b950(obj, 11, 1) reads the per-type slot
+  obj +0x3d0 + 16·t. These slots are filled from **every** `Unit_Abilities_Data` entry (a later duplicate replaces an
+  earlier one), so ROCKET_ATTACK is detected in any list position. Team containers use the all-members rule. Only
+  the per-mode allow (own step 5, hardpoint step 4) is limited to entries 0 / 1.
+- **Per-mode `Fire_When_In_<Mode>_Mode` defaults (hardpoint step 4).** The HardPoint type ctor 0x53e3b0 writes
+  0x01010101 dwords over +0x384…+0x3d0, so **every mode byte defaults to 1** (allowed). It also writes 1 to +0x3d1…+0x3d4
+  (`Fire_When_Deployed` / `_Undeployed` / `_In_Rocket_Attack_Mode` / `_In_Normal_Attack_Mode`) and to +0x3d5…+0x3d7
+  (`Allow_Opportunity_Fire_When_Idle` / `_When_Targeting`, `Engine_Death_Hide_Engine_Particles`). A hardpoint
+  refuses in a mode only when the XML sets that mode's tag to No.
+- **First service after spawn (cooldown).** The pack ctor 0x380540 zeroes TD +0x24…+0x2f, so the last-service
+  frame TD +0x2c starts at **0**. Only the WEAPON service writes it (0x54d090: elapsed = frame − TD +0x2c, then
+  TD +0x2c := frame).
+  - The attach vf9 0x54c210 sets the initial delay TD +0x24 = `Get_Int(0, int(FPS × recharge))` (one synced draw).
+  - The first service then subtracts the **whole current frame number**, not 1 frame. When frame > delay
+    (unsigned compare), the delay is zeroed.
+  - So the random first-shot delay survives only for objects whose first service comes at a frame ≤ their drawn
+    delay, i.e. units present at battle start. Units spawned later (reinforcements, builds) can fire on their
+    first service.
+  - [M] Whether `frame` is the mode's frame counter starting at 0 for the battle.
+- **Lua `Get_Current_Projectile_Type`** (0x578470).
+  - It reads obj +0x324 (the current weapon index; GameObject ctor 0x348a50 sets it to 0; unit ability 0x3c toggles
+    it 0 ↔ 1 when the list has more than one entry) and indexes the type's `Projectile_Types` list (0x373670).
+  - It does **not** check for a WEAPON behaviour. A type with `Projectile_Types` but no WEAPON still returns its
+    first entry. An empty list or an out-of-range index returns nothing.
+  - A team container (slot byte +0x348 ≠ −1) is first replaced by its first member (0x4ec820 on team +0x110: list
+    +0x10, count +0x18). An empty team returns nothing.
+
+*For the implementer:*
+- Gate the own weapon on targeting state 4 (in range and outside min range), not on an XY distance.
+- Treat the Walk states 0x18 / 0x1A as "no fire", and count only 0x19 (or the pending flag) as deployed.
+- Default every per-mode hardpoint flag to true.
+- Start TD's last-service frame at 0, so a late spawn's first service clears its initial delay.
+- Make `Get_Current_Projectile_Type` independent of WEAPON.
+
+**Fire-at-position order (lobbing superweapons; RE, 2026-11-02)** [H unless tagged]. TD = obj +0xf0. TD +0x30…+0x38 =
+the ordered ground point, +0x3c = "order pending", +0x3d = "charged, fire now". Every reader and writer found:
+- **Set** only by `Fire_Lobbing_At_Position` 0x4ea3f0, a method of `LobbingSuperweaponBehaviorClass` (vtable 0x879e98;
+  it is reached only through the object's LOBBING_SUPERWEAPON 0x37 behaviour). It needs the owner's tactical player
+  data and, for `Requires_Base_Power` (+0x8b), base power (0x527520). It does **not** check readiness, range, alliance
+  or fog. It writes the point to TD +0x30…+0x38, TD +0x3c := 1, and restarts the special-weapon pack (obj +0x158):
+  +0x28 := 0, start +8 := now, ready +0xc := now + int(0x373630(type, 0) × FPS); then it starts the ABILITY_COUNTDOWN
+  display (behaviour 0x46) for ability 0x2f. A second order before the shot just overwrites the point.
+  Callers (all check readiness first):
+  - network command 25 `SpecialWeaponFire` execute 0x40a3b0 (COMMANDS.md): readiness (0x4914e0) ≥ **0.99**; point =
+    the command's position when its "at position" bit is set or there is no target object, else the target object's
+    bare position (obj +0x78, no `Ranged_Target_Z_Adjust`). `SpecialWeaponsAllowed` is not checked for a
+    lobbing-only object. Afterwards the destroy-after sweep (behaviour 0x67) for the weapon's owner. The human UI path
+    that queues command 25 (ability button `FIRE_LOBBING_SUPERWEAPON` 47 → targeting cursor) was not traced [M];
+  - Lua `GameObject.Fire_Special_Weapon(target, player)` 0x576220: readiness ≥ 1.0 (SCRIPT_GAPS §1.1);
+  - Lua `LandTaskForce.Fire_Special_Weapon(type_name, target)` 0x6eb7f0: the first task-force unit whose
+    representative type (0x3973b0) **is** the named type and is ready (≥ 1.0); point = the target object's bare
+    position, or the AI target's position (SCRIPT_GAPS §1.4). The only shipped AI user is the skirmish/campaign land
+    plan `FireMagnepulse.lua` (goal `Fire_Magnepulse`, BasicLandGoalSet), which names `Ground_Magnepulse_Cannon`.
+    The skirmish build `Skirmish_Ground_Magnepulse_Cannon_E` is a `Variant_Of_Existing_Type` of it, i.e. a separate
+    type object, so the type test should fail and the AI should never fire the skirmish cannon through this plan [M:
+    variant identity under the task-force match and 0x3973b0 not checked at run time; in-game probe below].
+- **Charge-up** in the behaviour service 0x4ea6f0 (vf6), every service while +0x3c is set and the charge-up stamp
+  (pack +0x24) is 0: aim the TURRET behaviour (0xb) at the point with 0x631fe0 (LOB_SOLVER §3.6: lob solution and
+  turret angles reached). No TURRET, no solution, or not yet aimed → wait (retried next service; no timeout). Once
+  aimed: play `Lobbing_Superweapon_SFXEvent_Chargeup` (type +0x2328), start `Lobbing_Superweapon_Chargeup_Particle`
+  on its bone (+0x2300 / +0x2308), stamp pack +0x24 := now. When now ≥ stamp + `Lobbing_Superweapon_Chargeup_Frames`
+  (+0x2348; vanilla 90): play `Lobbing_Superweapon_SFXEvent_Fire` (+0x2338), **TD +0x3d := 1**, stamp := 0. The same
+  service also plays `SFXEvent_Special_Weapon_Ready` (+0x1310) on the frame the pack becomes ready, for the local
+  player's own weapon only (presentation).
+- **Fire** in the WEAPON service 0x54d090:
+  - while TD +0x3d is set the recharge countdown TD +0x24 is **skipped** (no wait);
+  - gate step 7: an object with LOBBING_SUPERWEAPON fires **only** while TD +0x3d is set, and then needs neither
+    targeting state 4 nor a target; an object without it would pass step 7 on +0x3c or +0x3d alone, but nothing sets
+    them on such an object, so in practice the bypass is lobbing-only;
+  - the "no target" early return is skipped while +0x3c is set; the request is the ground point TD +0x30…+0x38 with
+    **no target object** (so no lead, no bone pick: "Own-weapon aim point" below, ground-point branch);
+  - after a successful spawn, for a LOBBING_SUPERWEAPON object: TD +0x3c and +0x3d := 0 (one 16-bit store) and
+    TD +0x30…+0x38 := 0. A failed spawn (no lob solution, LOB_SOLVER §5.2) skips this, so the order stays charged and is
+    retried next service.
+- **Cleared** only there and by the TD ctor 0x380540. A target's death, a new move order or the end of the readiness
+  do not clear it [H for the writer search: every store to TD +0x3c / +0x3d in the decompile; M that the save code
+  keeps it].
+- Consequence: a lobbing superweapon never fires its `Projectile_Types` at what its own TARGETING picks; it fires
+  once per order, after the turret is aimed and the charge-up has run.
+
+*For the implementer:* keep a per-object order (point, pending, charged). `Fire_Special_Weapon` (Lua, task force,
+command 25) sets point + pending and restarts the readiness timer; the lobbing service aims the turret, then counts
+`Lobbing_Superweapon_Chargeup_Frames` and sets charged; the WEAPON service, for lobbing objects, fires only when charged,
+ignores its recharge then, aims at the point with no target, and clears the order after a successful spawn.
+
+**Own-weapon aim point, `Target_Bones` (RE, 2026-11-02)** [H unless tagged]. The WeaponBehavior shot spawns through
+`Spawn_Projectile` 0x54ade0, which (for every projectile category except 2 and 9) calls the aim 0x54a270(shooter,
+projectile type, muzzle transform, target, …). The aim point P is chosen **per shot**:
+1. **No target object** (ground point, e.g. the fire-at-position order): P = the request's point, unchanged. Inaccuracy
+   is applied only when request byte +0x4c is clear (it marks a dry-run spawn whose result goes to +0x4d [M]) and the
+   fixed radius getter 0x374890 is non-zero; no lead.
+2. **The shooter's current target is this object and has a target hardpoint**: 0x397a40(shooter) returns the formation
+   attack target (0x41a2e0, when the shooter's locomotor pack +0x1f0 holds a formation) or TD +8 with the hardpoint
+   index from TD +0x10 → +0x18. When that object is the request's target and the index is not −1: P = the hardpoint's
+   bone world translation (0x396ce0; an index out of range, a hardpoint whose type flag +0x4c is clear, or a failed bone
+   lookup falls back to the **bare** position, no z adjust). The index is passed in r8 (disassembly 0x14054a43e) [H].
+3. **Otherwise, target type with `Target_Bones`**: one **synced** `Get_Int(0, n − 1)` on 0x140a13e24 (no draw when
+   n = 1) picks entry i of the type's resolved bone list (+0xe68, count +0xe70). P = that bone's world translation on
+   the target's current model (0x12d2c0). If the target has no model instance (obj +0x2a0 / 0x2648b0 null) or the bone
+   transform fails, P = position + `Ranged_Target_Z_Adjust` (the draw is still consumed).
+4. **Otherwise**: P = 0x398440(target) = position (obj +0x78…+0x80) + (0, 0, target type `Ranged_Target_Z_Adjust`
+   +0x4dc). **So the port's "position + Ranged_Target_Z_Adjust" for a bone-less target is the retail rule** (the
+   [M/port] tag can become [H]). `M1_Repulsor_Tank` sets 12.0; types without the tag get the default 6.0.
+
+Then lead 0x399450 (speed 0x370f00(type, 0)) and inaccuracy 0x549f80 run on P (§3.1 steps 9–10);
+categories 0, 3, 4, 6, 7 (mask 0xd9) aim at the inaccurate point, categories 1, 2, 5 keep the led point and carry the
+miss as an offset. With a team-container target, `Spawn_Projectile` first replaces it by its member nearest the
+launch point and resets the hardpoint index (LOB_SOLVER §5.1), so step 2 no longer matches and the member's own type
+decides steps 3–4.
+
+**Bone list.** XML `Target_Bones` (comma list, type +0xe48 strings, count +0xe58) is resolved at type model load
+0x375380 into bone indices on the type's model (+0xe68 / +0xe70, built by 0x12d2a0 name lookup); names missing on
+the model are **dropped** (so n counts only found bones, and the draw range shrinks). [M: which model (land / space)
+when a type has both.] Vanilla FoC users: `AT_AT_Walker` and `Veers_AT_AT_Walker` (`MISSILE_TARGET00`–`02`),
+`Nebulon_B_Frigate`, `Eclipse_Super_Star_Destroyer`, `CIN_Corvette_fast`; no other land unit.
+
+**Hardpoint aim for comparison** (`Fire_At` step 5 object aim 0x383f70) [H]: the target's `Target_Bones` are tried
+**in list order** (no draw): the first bone within `Get_Fire_Range` (+ target radius when the owner has
+`Projectile_Types`) of the fire-bone reference point and inside the fire arc (0x383ba0) wins. Then, when the target
+has hardpoints, one synced `Get_Int(0, n − 1)` picks a start index and the hardpoints are tried cyclically with the same
+tests (destroyed destroyable ones skipped; bone = +0x2c, else +0x38). Last, position + `Ranged_Target_Z_Adjust` if in
+range and arc. With no model instance on the target: position + `Ranged_Target_Z_Adjust`, no draw.
+
+*For the implementer:* per own-weapon shot at an object: ordered hardpoint → its bone; else `Target_Bones` → one
+synced pick per shot among the found bones (bone translation, fallback position + z adjust); else position +
+`Ranged_Target_Z_Adjust`. Then lead and inaccuracy. A ground-point shot uses the point as given.
+
+**Targets.** Both sources use the owner's current target, targeting data pack TD (obj +0xf0) +8, chosen by the
+unit's TARGETING behaviour with the unit's own range (§2.2: `Targeting_Max_Attack_Distance`, or the lob reach for a
+grenade weapon, LOB_SOLVER §4). The owner pushes it to every hardpoint (`HP_Set_Target`, §2.6). The own weapon fires
+only at that target (or at a fire-at-position point); a hardpoint that cannot shoot it may opportunity-fire at its own
+scanned target (§2.6), subject to the gate above.
+
+**Cooldowns.** Nothing is shared. The own weapon keeps its recharge in TD +0x24 and its pulses in TD +0x28 (first
+delay at attach: one synced `Get_Int(0, int(FPS × Projectile_Fire_Recharge_Seconds))` in vf9 `0x54c210`; reset as in
+"Non-hardpoint weapons" above). Each hardpoint keeps its own +0x58 / +0x5c (§3.1). A shot from one source does not
+delay the other. In a frame the WEAPON behaviour runs in the behaviour pass, before the hardpoint updates
+(ABILITIES_HARDPOINTS §6.2).
+
+**FoC / EaW units with both sources** (variant-resolved scan of the vanilla XML; EaW has the T4B and SPMAT rows):
+
+| Unit | Own weapon (`Projectile_Types`) fires when | Weapon hardpoints fire when |
+|---|---|---|
+| `SPMAT_Walker`, `SPMAT_Walker_Captured` | deployed (`Proj_Ground_SPMAT_Grenade`: FWW_Deployed Yes, _Undeployed No) | undeployed (`HP_SPMAT_00`–`03`, `Proj_Blaster_Cannon_Green`, range 150, not vs Air / Structure) |
+| `T4B_Tank`, `T4B_Tank_Captured`, `E3_T4B_Tank` | normal mode (`Proj_Ground_Laser_Cannon_Red_T4B`: Rocket No, Normal Yes) | ROCKET_ATTACK mode (`HP_T4B_Tank_03`–`05`, `Proj_T4B_Missile`: Rocket Yes, Normal No) |
+| `Dark_Trooper_PhaseIII` | undeployed (`Proj_Ground_Laser_Cannon_Red_DT3`: Deployed No, Undeployed Yes) | deployed (`HP_DarkTrooper_P3_00`–`05`, `Proj_Dark_Trooper_Missile`) |
+| `Destroyer_Droid`, `Destroyer_Droid_Attack` | deployed and normal mode (`Proj_Destroyer_Droid_Blaster_Cannon`) | deployed and ROCKET_ATTACK mode (`HP_Destroyer_Droid_Ion_00`–`02`, `Proj_Destroyer_Droid_Ion_Cannon`, not vs Air) |
+| cinematic variants `FIN_SPMAT`, `FIN_T4B_Tank`, `CIN_T-4B_Vehicles` | as their parents | as their parents |
+
+So in every vanilla case the flags make the two sources **alternate** (deploy state or ROCKET_ATTACK mode picks one);
+they never fire together. Not in the table: `SPMAT_Walker_Death_Clone`, `CIN_Corvette_fast` and `Cin_Y-Wing_Intro` list
+both but have no WEAPON behaviour (hardpoints only); `SPMAT_Walker_Telekinesis_Death_Clone` lists WEAPON but, as a
+death clone, loses it (S9_DEATH_CLONE_SHIELDS §1.6). 22 more FoC types list `Projectile_Types` with neither WEAPON nor
+weapon hardpoints (the AT-AT / AT-ST / MPTL / Rancor death clones, `Boba_Fett_NoStealth`, …): they have no weapon.
+
+**Port (S8 t05):** `BattleCatalog::unit` (engine/apps/sim/src/battle_catalog.cpp) drops `Projectile_Types` when the unit
+has a weapon hardpoint. That rule is **wrong**: it should key on the WEAPON behaviour, not on hardpoints. The
+combat system already runs both sources side by side (`CombatSystem::update_weapons`), but implements neither gate
+above, so with the catalog fixed it would also need the deploy / rocket-mode gates to keep the sources alternating.
+
+The behaviour is attached by the type's `WEAPON` behaviour (0x0A) and is serviced like any behaviour, besides the
+hard points [M: no code path that turns it off when weapon hard points exist was found]. So a type that lists both
+fires its `Projectile_Types` too. FoC: `M1_Repulsor_Tank` is the only such type; its `HP_2M_Tank_00` hard point excludes
+Air / Vehicle / Structure, so only the WeaponBehavior shot hurts vehicles (a1h t01; port: `battle_catalog.cpp`).
+
+#### 3.1.2 Own-weapon (`Projectile_Types`) inaccuracy 0x549f80 (A1j t03, 2026-11-02) [H unless tagged]
+Called from the own-weapon fire path after the aim point (0x54a270, §3.1.1 "Own-weapon aim point") and the lead.
+Disabled by the same debug flag as step 10.
+1. **Fixed radius:** r = `Targeting_Fire_Inaccuracy_Fixed_Radius` (type +0x1ff8, getter 0x374890: scaled ×(2 − m)
+   on land, ×2 in space, as step 10). [M] An ability override replaces r unscaled (the object's behaviour slot
+   obj +0x38a / data obj +0x230 +0x14; the port keeps the step 10 ability override). If r > 0:
+   - `Get_Float(−r, r)` for X, then for Y;
+   - **the Z draw only in space** (mode ≠ land). Land shots draw **2**, space shots 3.
+2. **Otherwise, with a target object:** d = the shooter type's **`Targeting_Fire_Inaccuracy`** table (type +0x508,
+   getter 0x3747c0; XML `<category>, <distance>` pairs, kept in XML order): the **first** entry whose category mask
+   hits the target's `CategoryMask`, scaled like r (×(2 − m) on land, ×2 in space; the port also applies its land
+   weather factor, as for r and step 10).
+   [M] When the type has more than one weapon entry the larger of this and the current weapon's own table
+   (0x378e50 / 0x373670) is used; not modelled (FoC own-weapon types have one entry).
+   - L = the 3D distance from the muzzle to the **led** aim point; if d > 0 and L ≠ 0:
+     s = d × L / `Targeting_Max_Attack_Distance` (type +0x500) and 3 draws `Get_Float(−s, s)` (X, Y, Z).
+     [port] A zero `Targeting_Max_Attack_Distance` keeps the draws with s = 0 (retail would divide by zero).
+   - No entry for the target's category, or no target object: no draw.
+3. Categories DEFAULT / GRENADE / ROCKET / MPTL_ROCKET / LASER (mask 0xd9) aim at the offset point. MISSILE / BOMB /
+   STATIC_BOMB keep the led point and carry the offset in the projectile pack instead [M; port: the offset is applied
+   to the aim point for every category].
+
+FoC data: 437 `Targeting_Fire_Inaccuracy` entries (infantry, vehicles, fighters), against 5 types with a fixed radius.
+Before A1j the port ignored the table, so most land units fired with no spread. Example: AT-AT `Infantry, 30.0` with
+`Targeting_Max_Attack_Distance` 300: at 150 units s = 15 (30 at AI accuracy 0), so infantry are often missed.
+
 ### 3.2 Damage and armor tables [H]
 - **Where they are:** GAMECONSTANTS.XML holds `<Damage_Types>`, `<Armor_Types>` and
   `<Damage_To_Armor_Mod> damage, armor, factor </Damage_To_Armor_Mod>`. The GameConstants instance is at
@@ -821,7 +1165,7 @@ list 8):
   |---|---|---|
   | 1 | homing | 0x4cf870 |
   | 2, 5, 9 | ballistic, `Bomb_Fall_Accel` (+0x1e88) | — |
-  | 3 | grenade/lob gravity (+0x1e80/+0x1e84) | 0x4ceea0 |
+  | 3 | grenade/lob gravity (+0x1e80/+0x1e84); closed-form parabola, LOB_SOLVER.md §6 | 0x4ceea0 |
   | 4, 6 | spline | 0x4cfc40 |
   | 8 | spline with an area pulse | 0x4cf460 |
   | anything else | straight | 0x4cec80 |
@@ -845,7 +1189,15 @@ list 8):
 
 ### 3.4 Hit detection [M]
 `Sweep` (0x4c97a0):
-1. Run a ground test (0x4d0630).
+1. Run a ground test (0x4d0630) on the step's segment. **A1j t03 [H]:**
+   - land only (no test in space);
+   - `Projectile_Category` DEFAULT (0) and unknown (−1): the test is **skipped while the target point is still
+     ahead**, i.e. the sign of (target point − position) equals the sign of the step on all three axes (sign(0)
+     counts as +). Target point = the targeted hardpoint's world position (0x396ce0) when the pack has a hardpoint
+     index, else the target's position + `Ranged_Target_Z_Adjust` (0x398440). No target object: tested;
+   - every other category (LASER 7 included) is tested on every step;
+   - a ground (or water) hit with no earlier object hit detonates the projectile at the ground point
+     (On_Detonate 0x4cb070: no direct damage, area damage and effects there).
 2. Run `GOM::Find_First_Object_Hit_By_Segment_All_Enemies` (0x2abcf0; HOTSPOTS §3 has the loop). Collision
    mask: 7 if `Projectile_Does_Shield_Damage`, else 5.
 3. If nothing was hit and the projectile has either `Friendly_Damage_Amount` (+0x23ec) > 0 or
@@ -855,6 +1207,23 @@ list 8):
 The segment query visits **hostile players in player-list order** and returns the **first** object whose
 precise test (0x38f900) or `Collision_Box_Modifier` sphere test passes. "First" means in `Query_Ray` result
 order, not nearest along the segment. The port should sort by segment fraction, then by object id.
+
+**Own-player variant 0x2acb90 (S8 t10, 2026-11-02)** [H]. This corrects the port's "skip the shooter" rule.
+- The query:
+  - it runs over the **projectile owner's** tree (GOM +0xd0, stride 0x38);
+  - it skips only the projectile itself (its last argument), **not the shooter**;
+  - a candidate needs type +0x41 == 1 (or +0x42 when obj +0x3a0 & 0x40);
+  - it returns the **first** candidate that passes the precise test 0x38f900, or the `Collision_Box_Modifier`
+    (+0x4e4 > 1) sphere test at the segment start, end or midpoint.
+- `Sweep` then filters the hit:
+  - same player as the projectile, a projectile data pack (obj +0xe8) present, and hit ≠ pack +8 (the projectile's
+    target) → **rejected**;
+  - otherwise a hit with TRANSPORT_LANDING (slot byte +0x368 ≠ −1) → rejected.
+- **An own-player hit counts only when it is the projectile's own target.** When the first own-player candidate in
+  query order is not the target, there is no own hit at all: the query does not go on to the next candidate.
+- *Port:* `combat_system.cpp` (own-player sweep) calls `scan(p.owner, p.shooter)`, skipping the shooter, with a [port]
+  comment. It should instead take the first own-player candidate (in the same order as the hostile scan) and accept
+  it only when it is `p.target`, then apply the TRANSPORT_LANDING rejection.
 
 ### 3.5 Hit processing, area damage [H unless tagged]
 **`Process_Hit`** (0x4cb280; direct damage 0x4c73d0):

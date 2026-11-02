@@ -10,6 +10,7 @@
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/objects/enums.hpp"
+#include "galactic_slots.hpp"
 
 namespace alamo::ai {
 
@@ -36,12 +37,114 @@ void fill_category_masks(std::vector<GalacticAiTypeInfo>& types) {
     }
 }
 
+double galactic_ai_member_force(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, uint32_t type,
+                                int32_t owner, uint64_t mask) {
+    const auto& gt = sim.rules().types;
+    double sum = 0.0;
+    if (type >= types.size()) return sum;
+    // Per-tech members (0x373f40 count / 0x373e30 type / 0x373d30 count, tech = the owner's tech level +0x84).
+    // [M] a level without entries falls back to the highest lower level with entries (the hangar rule).
+    const auto players = sim.players();
+    const int32_t tech = owner >= 0 && static_cast<size_t>(owner) < players.size() ? players[static_cast<size_t>(owner)].tech_level : 0;
+    for (int32_t n = std::min(tech, static_cast<int32_t>(kSpawnTechSlots) - 1); n >= 0; --n) {
+        const std::vector<SpawnMember>& list = types[type].spawn_tech[static_cast<size_t>(n)];
+        if (list.empty()) continue;
+        for (const SpawnMember& m : list)
+            if (m.type < types.size() && m.type < gt.size() && m.count > 0 && (types[m.type].category_mask & mask) != 0)
+                sum += static_cast<double>(gt[m.type].ai_combat_power) * static_cast<double>(m.count);
+        break;
+    }
+    return sum;
+}
+
+double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, PlanetIndex planet,
+                                int32_t self, bool enemy, bool space, uint64_t mask) {
+    const auto planets = sim.planets();
+    const auto players = sim.players();
+    const gal::GalacticRules& rules = sim.rules();
+    const objects::ObjectStore& st = sim.store();
+    if (static_cast<size_t>(planet) >= planets.size()) return 0.0;
+    auto valid = [&](int32_t p) { return p >= 0 && static_cast<size_t>(p) < players.size(); };
+    auto neutral = [&](int32_t p) {
+        const uint32_t f = valid(p) ? players[static_cast<size_t>(p)].faction : gal::kNoIndex;
+        return f < rules.factions.size() && rules.factions[f].is_neutral;
+    };
+    // Side filter [H]: Enemy 0x39a4e0 (hostile to Self), Friendly 0x39a2c0 (Self or an ally); unowned matches neither.
+    auto side = [&](int32_t owner) {
+        if (!valid(owner) || !valid(self)) return false;
+        if (enemy) return sim.is_hostile(self, owner);
+        return owner == self || (!sim.is_hostile(self, owner) && !neutral(owner) && !neutral(self));
+    };
+    auto power = [&](uint32_t t) { return t < rules.types.size() ? static_cast<double>(rules.types[t].ai_combat_power) : 0.0; };
+    auto type_mask = [&](uint32_t t) { return t < types.size() ? types[t].category_mask : uint64_t{0}; };
+    const gal::PlanetState& ps = planets[static_cast<size_t>(planet)];
+    double sum = 0.0;
+    if (space) {  // 0x6dbd50
+        for (const uint32_t f : ps.orbit) {
+            if (f >= sim.fleets().size()) continue;
+            const gal::FleetState& fl = sim.fleets()[f];
+            if (!fl.alive || fl.moving || !side(fl.owner)) continue;
+            for (const ObjectHandle u : fl.contents) {
+                if (!st.alive(u)) continue;
+                const uint32_t t = static_cast<uint32_t>(st.type(u));
+                if ((type_mask(t) & mask) != 0) sum += power(t);
+                sum += galactic_ai_member_force(sim, types, t, fl.owner, mask);  // "+ its per-tech members" [H; port list]
+            }
+        }
+        if (side(ps.owner)) {
+            // The starbase type's per-tech members, not the starbase's own power [H].
+            if (ps.starbase && st.alive(ps.starbase))
+                sum += galactic_ai_member_force(sim, types, static_cast<uint32_t>(st.type(ps.starbase)), ps.owner, mask);
+            // Ground structures whose type byte +0x1E (Is_Special_Weapon_In_Space) is set, by the structure mask +0x1658
+            // [port: the Capital default; no galactic structure sets Garrison_Category]. Orbital structures D+0x170 [port: none].
+            static const uint64_t capital = ai_category_bit("Capital");
+            if ((mask & capital) != 0)
+                for (const ObjectHandle s : ps.structures)
+                    if (st.alive(s)) {
+                        const uint32_t t = static_cast<uint32_t>(st.type(s));
+                        if (t < types.size() && types[t].special_weapon_space) sum += power(t);
+                    }
+        }
+    } else {  // 0x6d95d0
+        for (const ObjectHandle u : ps.surface)
+            if (st.alive(u) && side(st.owner(u)) && (type_mask(static_cast<uint32_t>(st.type(u))) & mask) != 0)
+                sum += power(static_cast<uint32_t>(st.type(u)));
+        // The per-tech members of every ground structure, not their own power [H]. The Enemy planet-type list +0x20C8
+        // [port: not modelled].
+        if (side(ps.owner))
+            for (const ObjectHandle s : ps.structures)
+                if (st.alive(s)) sum += galactic_ai_member_force(sim, types, static_cast<uint32_t>(st.type(s)), ps.owner, mask);
+    }
+    return sum;
+}
+
+double galactic_ai_enemy_strength(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, PlanetIndex planet,
+                                  int32_t self, bool space, uint64_t mask) {
+    double s = galactic_ai_planet_force(sim, types, planet, self, true, space, mask);
+    if (mask != kAllCategories || static_cast<size_t>(planet) >= sim.planets().size()) return s;
+    const gal::PlanetState& ps = sim.planets()[static_cast<size_t>(planet)];
+    const objects::ObjectStore& st = sim.store();
+    const auto& gt = sim.rules().types;
+    auto power = [&](ObjectHandle h) {
+        const uint32_t t = static_cast<uint32_t>(st.type(h));
+        return t < gt.size() ? static_cast<double>(gt[t].ai_combat_power) : 0.0;
+    };
+    // [port] "not held by the AI or an ally" (0x4ad9f0) is read as the leaf's Enemy owner filter (hostile to Self).
+    if (ps.owner < 0 || !sim.is_hostile(self, ps.owner)) return s;
+    if (space) {
+        if (ps.starbase && st.alive(ps.starbase)) s += power(ps.starbase);  // the starbase type's AI_Combat_Power [H]
+    } else {
+        for (const ObjectHandle u : ps.structures)  // Σ AI_Combat_Power of the ground structures [H]; garrison types 0x4b8000 [port: none]
+            if (st.alive(u)) s += power(u);
+    }
+    return s;
+}
+
 namespace {
 
 constexpr double kNever = 1.0e18;              // TimeSince* of an event that never happened [H]
 constexpr double kMaxFleetDistance = 100.0;    // GC+0x108 MaximumFleetMovementDistance
 constexpr double kMaxLevel = 5.0;              // GC+0xF4 / +0xF8 / +0xFC, MaximumPoliticalControl GC+0xF0
-constexpr uint64_t kAllCategories = ~uint64_t{0};
 constexpr int32_t kLifeForever = -1;
 
 // Galactic_Hints hint-set defaults [H].
@@ -194,9 +297,9 @@ std::vector<uint8_t> galactic_ai_delivery_flood(const gal::GalacticSim& sim, int
         static_cast<size_t>(owner) >= sim.players().size())
         return r;
     // The flood 0x3f12e0 under the corrected AI request flags (FIXPASS_GALACTIC §1.4, ai_reach_flood). Request flags 0
-    // and 1 are equal at every level, so the AI's perceived owner (neutral or not) no longer matters here [port: the
-    // sim's view, perceived owners unset]. Danger (flags 2 / 3) reads `dangerous` (the AI's Is_Planet_Dangerous, none
-    // when null).
+    // and 1 are equal at every AI level, so the perceived-owner bit (ai_perceived_non_neutral, which the sim's view now
+    // fills with the true owner, the AI's own view overlays the remembered one) is behaviourally inert for this flood
+    // for now. Danger (flags 2 / 3) reads `dangerous` (the AI's Is_Planet_Dangerous, none when null).
     gal::PlayerView view = sim.player_view(owner);
     if (dangerous) view.dangerous = *dangerous;
     const PlanetIndex start[1] = {from};
@@ -484,9 +587,12 @@ struct GalacticSimTokenResolver::Impl {
             if (ai_iequal(rules.types[t].name, n)) return true;
         return false;
     }
+    // D+0x230 = the planet type's Special_Structures_Land (+0x92C) (MaxStructureSlots; MaxGroundbaseLevel takes
+    // min(5, it) [M: the D path 0x4b7eb0 is unread, the no-D path is type+0x92C]); not the legacy <Max_Ground_Base>
+    // (0 on every shipped planet). Tag absent (-1) -> 5 [port] (galactic_slots.hpp, A2 f t01).
     int32_t max_ground_base(size_t p) const {
-        const auto& m = sim.map().planets.max_ground_base;
-        return p < m.size() && m[p] >= 0 ? m[p] : 5;
+        const int32_t m = galactic_ai_ground_slot_max(sim, static_cast<PlanetIndex>(p));
+        return m >= 0 ? m : 5;
     }
     int32_t max_space_base(size_t p) const {
         const auto& m = sim.map().planets.max_space_base;
@@ -542,28 +648,7 @@ struct GalacticSimTokenResolver::Impl {
     // ---------------- planet force (PlanetForce 0x6dcb70) ----------------
     // GroundTotalUnnormalized 0x6d95d0 / SpaceTotalUnnormalized 0x6dbd50 (live; the cache is the caller's).
     double force_raw(size_t p, bool enemy, bool space, uint64_t cat) const {
-        const gal::PlanetState& ps = planets[p];
-        double sum = 0.0;
-        if (space) {
-            for (const uint32_t f : ps.orbit) {
-                if (f >= sim.fleets().size()) continue;
-                const gal::FleetState& fl = sim.fleets()[f];
-                if (!fl.alive || fl.moving || !side(enemy, fl.owner)) continue;
-                for (const ObjectHandle u : fl.contents)
-                    if (st.alive(u) && (type_mask(st.type(u)) & cat) != 0) sum += power(st.type(u));
-            }
-            // [port] the starbase's member list = the starbase's own power (owner on that side, Capital mask).
-            if (side(enemy, ps.owner) && ps.starbase && st.alive(ps.starbase) && (cat & ai_category_bit("Capital")) != 0)
-                sum += power(st.type(ps.starbase));
-        } else {
-            for (const ObjectHandle u : ps.surface)
-                if (st.alive(u) && side(enemy, st.owner(u)) && (type_mask(st.type(u)) & cat) != 0) sum += power(st.type(u));
-            // [port] structure garrisons (per-tech members) = the structure's own power, owner on that side.
-            if (side(enemy, ps.owner))
-                for (const ObjectHandle s : ps.structures)
-                    if (st.alive(s) && (cat & ai_category_bit("Capital")) != 0) sum += power(st.type(s));
-        }
-        return sum;
+        return galactic_ai_planet_force(sim, r.types_, static_cast<PlanetIndex>(p), ctx.self, enemy, space, cat);
     }
     bool force_unn(size_t p, bool enemy, bool space, std::span<const Param> params, double& out) const {
         const char* key = space ? (enemy ? "PF:E.SPACE" : "PF:F.SPACE") : (enemy ? "PF:E.GROUND" : "PF:F.GROUND");
@@ -913,8 +998,9 @@ struct GalacticSimTokenResolver::Impl {
         if (k == "MAXSTARBASELEVELUNNORMALIZED") return out = max_space_base(p), true;
         if (k == "MAXGROUNDBASELEVEL") return out = std::min(5, max_ground_base(p)) / kMaxLevel, true;
         if (k == "MAXGROUNDBASELEVELUNNORMALIZED") return out = std::min(5, max_ground_base(p)), true;
-        // Structure slots [port: D+0x230 ground slots = Max_Ground_Base, no orbital (D+0x234) slots].
-        const int32_t used_ground = sim.ground_base_level(static_cast<PlanetIndex>(p)) > 0 ? static_cast<int32_t>(ps.structures.size()) : 0;
+        // Structure slots: D+0x230 ground slots (Special_Structures_Land), used 0x3f8af0 (galactic_slots.hpp, A2 f t01)
+        // [port: no orbital (D+0x234) slots].
+        const int32_t used_ground = galactic_ai_ground_slots_used(sim, static_cast<PlanetIndex>(p));
         if (k == "MAXSTRUCTURESLOTS") return out = max_ground_base(p) / kMaxLevel, true;
         if (k == "MAXSTRUCTURESLOTSUNNORMALIZED") return out = max_ground_base(p), true;
         if (k == "OPENSTRUCTURESLOTS")
@@ -1103,6 +1189,9 @@ struct GalacticSimTokenResolver::Impl {
             } else if (ground_kind(kind) && (type_mask(t) & cat) != 0) {
                 s += power(t);  // DUMMY_GROUND_COMPANY only
             }
+            // "+ per-tech members (0x373fd0 / 0x373ee0) matching +0x1648" for every walked object, in both variants
+            // (AI_GALACTIC_TOKENS §3) [M: literal reading of the walk; port list = Starting_Spawned_Units_Tech_N].
+            s += galactic_ai_member_force(sim, r.types_, t, pl, cat);
         });
         return s;
     }
@@ -1342,7 +1431,15 @@ struct GalacticSimTokenResolver::Impl {
                 param_number(params, "Parameter_Count", count);
                 param_number(params, "Parameter_Only_Consider_Complete", complete);
                 auto n = static_cast<int32_t>(count);
-                player_objects(pl, [&](ObjectHandle u) { n -= type_named(st.type(u), names) ? 1 : 0; });
+                // q2f t01 [H] (STRATEGIC_GAPS §1.7, A1_READINGS §29): the original's walk sees a company's transport (its
+                // 0x3973b0 type = the company type) and each Company_Units member as its own object; the port keeps one
+                // object per company, so its members are counted from the company type.
+                player_objects(pl, [&](ObjectHandle u) {
+                    const uint32_t t = st.type(u);
+                    n -= type_named(t, names) ? 1 : 0;
+                    if (t < rules.types.size())
+                        for (const uint32_t m : rules.types[t].company_units) n -= type_named(m, names) ? 1 : 0;
+                });
                 if (!(complete > 0.0))
                     for (const gal::PlanetState& q : planets)
                         for (const auto& queue : q.queue)

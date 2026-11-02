@@ -88,6 +88,9 @@ struct GalacticAiConfig {
     const galactic::ContrastTable* contrast = nullptr;
     // Fan-out for the per-AI all-pairs recompute (AiPathFinder); any value gives identical matrices.
     ParallelFor path_pf = serial_for;
+    // OPT2 t04: fan-out for the per-frame scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); any
+    // value gives identical results.
+    ParallelFor lua_gc_pf = serial_for;
     // GameConstants AIUsesFogOfWarGalactic (GC +0x2EC, shipped False). On: the S2 perception's remembered values follow
     // each AI's GRC 2 presence visibility (snapshot_from_sim). The A2 token resolver stays live either way [port].
     bool ai_uses_fog_galactic = false;
@@ -170,9 +173,13 @@ public:
 
     // A2 galactic, tests / diagnostics: solves the PotentialPlan of `plan` for (goal type, target) for an AI player as a
     // proposal would (it draws the synced RNG the same way) and returns the selected types in selection order; empty
-    // with *ok = false when the solve fails. No AI state changes besides the RNG.
+    // with *ok = false when the solve fails; *eta = the PotentialPlan's ETA (s) when solved. No AI state changes besides
+    // the RNG.
     std::vector<uint32_t> solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal, int32_t target,
-                                               bool* ok = nullptr);
+                                               bool* ok = nullptr, float* eta = nullptr);
+    // A2f t02, tests / diagnostics: the goal maintenance's production-time term (0x525200 stand-in [M]) of a running plan:
+    // the largest time its unfinished build tasks still need (0 when none or no such plan).
+    float plan_production_time(int32_t running) const;
 
     // Free store (docs/re/FIXPASS_GALACTIC.md §1), tests / diagnostics. These act like the player's free-store script:
     //   free_store_move   = FreeStore.Move_Object(unit, planet): false when refused (§1.2); a true return with no
@@ -182,6 +189,13 @@ public:
     //   reach_planets     = the level's source-planet list (0x665160 -> reachability flood, cached 10 x FPS frames).
     bool free_store_move(int32_t player, objects::ObjectHandle unit, PlanetIndex dest);
     size_t pending_free_store_moves() const;
+    // a1h t07, tests / diagnostics: free_store_supply = the free-store test 0x4d2bd0 a build task of an AllowFreeStoreUnits
+    // plan takes its unit from (null = none; the entry's +0x30 owner is not read, A1_READINGS §28.5); free_store_owner =
+    // a unit's entry +0x30 (the PotentialPlan handle, -1 = none); set_free_store_owner stands in for an accept's
+    // reservation (0x6c2b20; -1 clears).
+    objects::ObjectHandle free_store_supply(int32_t player, uint32_t type) const;
+    int32_t free_store_owner(objects::ObjectHandle unit) const;
+    void set_free_store_owner(objects::ObjectHandle unit, int32_t pp);
     int32_t reachable_target(int32_t player, std::string_view perception, std::string_view application,
                              std::string_view reachability, double probability);
     std::vector<PlanetIndex> reach_planets(int32_t player, int level);

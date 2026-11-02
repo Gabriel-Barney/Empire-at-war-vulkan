@@ -973,6 +973,38 @@ void test_missile_shield() {
         CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
         CHECK(w.ab->immobilize_count(2) == 0 && w.sys->emitter_radius(2) == 0.0f);
     }
+    {  // OI abilities t01 (A1_READINGS §28.8): 0x3a8e50 lock_movement shares the Disable_Movement counter. Lock +1
+       // (Immobilised only on 0 -> 1), unlock -1 clamped at 0 (Released only on 1 -> 0).
+        ShieldWorld w(ProjectileCategory::Laser, false, 0.0f);
+        const ObjectId e[] = {2};
+        auto count = [&](AbilityEventKind k) {
+            size_t n = 0;
+            for (const AbilityEvent& ev : w.ab->events()) n += (ev.kind == k && ev.id == 2) ? 1u : 0u;
+            return n;
+        };
+        w.ab->clear_events();
+        CHECK(w.ab->lock_movement(2, true, w.frame) && w.ab->immobilize_count(2) == 2);
+        CHECK(count(AbilityEventKind::Immobilised) == 0);  // already held by the shield
+        CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
+        CHECK(w.ab->immobilize_count(2) == 1 && count(AbilityEventKind::Released) == 0);  // the extra lock still holds
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(count(AbilityEventKind::Released) == 1);
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);  // clamped, no event
+        CHECK(count(AbilityEventKind::Released) == 1);
+        CHECK(w.ab->lock_movement(2, true, w.frame) && w.ab->immobilize_count(2) == 1);
+        CHECK(count(AbilityEventKind::Immobilised) == 1);
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(!w.ab->lock_movement(999, true, w.frame) && w.ab->immobilize_count(999) == 0);  // unknown object
+    }
+    {  // The shared counter lets an unlock release an ability's lock (Unlock_Current_Orders without a script lock):
+       // the shield stays active but the unit is free; switching the shield off later clamps at 0.
+        ShieldWorld w(ProjectileCategory::Laser, false, 0.0f);
+        const ObjectId e[] = {2};
+        CHECK(w.ab->lock_movement(2, false, w.frame) && w.ab->immobilize_count(2) == 0);
+        CHECK(w.ab->is_active(2, kMissileShield));
+        CHECK(w.ab->set_unit_ability_mode(e, kMissileShield, false, w.frame) == 1);
+        CHECK(w.ab->immobilize_count(2) == 0);
+    }
     {  // §2.6 step 3: the same laser with a turn rate bends away (30 deg per step: never hits)
         ShieldWorld w(ProjectileCategory::Laser, false, 30.0f);
         w.run(150);
@@ -2815,6 +2847,177 @@ void test_oi_berserker_speed() {
     CHECK(!w.ab->special_applied(1, name_crc("Berserk")) && w.ab->speed_override(1) == -1.0f);
 }
 
+void test_oi_stun_over_water() {
+    // OI t02 (ABILITIES_HARDPOINTS §4.12 [port]): Destroy_When_Stunned_Over_Water - a flagged STUNNABLE unit whose stun
+    // starts over water (host: here x < 0) is destroyed at once; on land, or without the flag, it is only stunned. No
+    // over_water host: never destroyed.
+    for (const bool water_host : {true, false}) {
+        OiWorld w;
+        UnitDesc u = oi_unit("MAL", 100.0f);
+        u.stunnable = true;
+        AbilityObjectDesc flagged;
+        flagged.destroy_when_stunned_over_water = true;
+        const uint32_t fd = push(w.cd, w.ad, u, flagged);
+        const uint32_t pd = push(w.cd, w.ad, u, AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        if (water_host) {
+            AbilityHost h;
+            h.over_water = [](Vec3 p) { return p.x < 0.0f; };
+            w.ab->set_host(std::move(h));
+        }
+        w.add(1, fd, 0, {-50, 0, 0});  // flagged, over water
+        w.add(2, fd, 0, {50, 0, 0});   // flagged, on land
+        w.add(3, pd, 0, {-60, 0, 0});  // not flagged, over water
+        for (ObjectId id : {ObjectId{1}, ObjectId{2}, ObjectId{3}}) CHECK(w.sys->stun_unit(id, 30, w.frame));
+        const bool sunk = (w.sys->flags(1) & kUnitDead) != 0;
+        CHECK(sunk == water_host);
+        CHECK((w.sys->flags(2) & kUnitDead) == 0 && w.sys->stunned(2, w.frame));
+        CHECK((w.sys->flags(3) & kUnitDead) == 0 && w.sys->stunned(3, w.frame));
+        size_t deaths = 0;
+        for (const DeathEvent& d : w.sys->deaths()) deaths += d.id == 1 ? 1u : 0u;
+        CHECK(deaths == (water_host ? 1u : 0u));
+        w.tick();
+        CHECK((w.sys->flags(2) & kUnitDead) == 0 && (w.sys->flags(3) & kUnitDead) == 0);
+    }
+}
+
+// OI t03: ticks from the order to the Generic_Attack hit and to its removal (Damage_Frame_Number 10); count > 0: the
+// host reports a POUND_ATTACK clip of `count` frames at `fps` for the attacker.
+std::array<int, 2> oi_generic_timing(uint32_t count, float fps, float speedup) {
+    OiWorld w;
+    SpecialAbilityDesc g = oi_special("Pound", SpecialClass::GenericAttack, ActivationStyle::UserInput);
+    g.max_range = 100.0f;
+    g.damage_amount = 30.0f;
+    g.damage_frame = 10;
+    g.anim_speedup = speedup;
+    g.attack_anim = "POUND_ATTACK";
+    const uint32_t gs = add_special(w.ad, g);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kTargetedHack, 0.0f, 0.0f, "Pound")};
+    a.specials = {gs};
+    const uint32_t ud = push(w.cd, w.ad, oi_unit("Rancor", 1000.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("Victim", 100.0f), AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    if (count > 0) {
+        AbilityHost h;
+        h.anim_clip = [count, fps](ObjectId id, int32_t type, std::string_view name, uint32_t, uint32_t& n, float& f) {
+            if (id != 1 || type >= 0 || name != "POUND_ATTACK") return false;
+            n = count;
+            f = fps;
+            return true;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, ud, 0, {0, 0, 0});
+    w.add(2, td, 1, {50, 0, 0});
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kTargetedHack, 2, -1, w.frame) == 1);
+    std::array<int, 2> out{-1, -1};
+    for (int i = 1; i <= 100 && out[1] < 0; ++i) {
+        w.tick();
+        if (out[0] < 0 && w.sys->health(2) < 100.0f) out[0] = i;
+        if (!w.ab->special_applied(1, name_crc("Pound"))) out[1] = i;
+    }
+    CHECK(w.sys->health(2) == 70.0f);  // one hit
+    return out;
+}
+
+// OI t03: ticks from the order to the Hack's owner change; count > 0: animation 0x5a has `count` frames at `fps`.
+int oi_hack_timing(uint32_t count, float fps) {
+    OiWorld w;
+    SpecialAbilityDesc hk = oi_special("Hack", SpecialClass::Hack, ActivationStyle::UserInput);
+    hk.max_range = 1000.0f;
+    const uint32_t hs = add_special(w.ad, hk);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kTargetedHack, 0.0f, 10.0f, "Hack")};
+    a.specials = {hs};
+    const uint32_t ad = push(w.cd, w.ad, oi_unit("A", 100.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("T", 100.0f), AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    if (count > 0) {
+        AbilityHost h;
+        h.anim_clip = [count, fps](ObjectId id, int32_t type, std::string_view, uint32_t, uint32_t& n, float& f) {
+            if (id != 1 || type != 0x5a) return false;
+            n = count;
+            f = fps;
+            return true;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, ad, 0, {0, 0, 0});
+    w.add(2, td, 1, {300, 0, 0});
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kTargetedHack, 2, -1, w.frame) == 1);
+    for (int i = 1; i <= 100; ++i) {
+        w.tick();
+        if (w.sys->owner(2) == 0) return i;
+    }
+    return -1;
+}
+
+// OI t03: enemy health lost to a 2 s Berserker (Damage 10 per pass); count > 0: animation 0x68 has `count` frames (30 fps).
+float oi_berserker_damage(uint32_t count) {
+    OiWorld w;
+    SpecialAbilityDesc b = oi_special("Berserk", SpecialClass::Berserker, ActivationStyle::UserInput);
+    b.max_range = 500.0f;
+    b.berserker_speed = 5.0f;
+    b.berserker_damage = 10.0f;
+    b.berserker_damage_range = 1000.0f;
+    b.berserker_duration = 2.0f;  // 60 frames
+    const uint32_t bs = add_special(w.ad, b);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kBerserker, 0.0f, 60.0f, "Berserk")};
+    a.specials = {bs};
+    const uint32_t bd = push(w.cd, w.ad, oi_unit("Berserker", 1000.0f), a);
+    UnitDesc e = oi_unit("Enemy", 1000.0f);
+    e.has_locomotor = true;
+    const uint32_t td = push(w.cd, w.ad, e, AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    if (count > 0) {
+        AbilityHost h;
+        h.anim_clip = [count](ObjectId id, int32_t type, std::string_view, uint32_t, uint32_t& n, float& f) {
+            if (id != 1 || type != 0x68) return false;
+            n = count;
+            f = 30.0f;
+            return true;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, bd, 0, {0, 0, 0});
+    w.add(2, td, 1, {100, 0, 0});
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kBerserker, 2, -1, w.frame) == 1);
+    for (int i = 0; i < 80; ++i) w.tick();
+    CHECK(!w.ab->special_applied(1, name_crc("Berserk")));
+    return 1000.0f - w.sys->health(2);
+}
+
+void test_oi_anim_timings() {
+    // OI t03 (ABILITIES_HARDPOINTS §4.13 [port]): clip position = sim frames since the start x (fps / 30) x speedup;
+    // "at frame N" = first update with position >= N, "at the end" = position >= max(count - 2, 0); no clip: rate 1 and
+    // the fixed fallbacks (removal with the last event, Hack 60 frames, Berserker window open).
+    const std::array<int, 2> base = oi_generic_timing(0, 0.0f, 1.0f);
+    CHECK(base[0] > 0 && base[1] == base[0]);  // no clip: hit and removal in the same update
+    const std::array<int, 2> c30 = oi_generic_timing(20, 30.0f, 1.0f);
+    CHECK(c30[0] == base[0] && c30[1] == base[0] + 8);  // end frame 18: held 8 frames past the hit at 10
+    const std::array<int, 2> c15 = oi_generic_timing(20, 15.0f, 1.0f);
+    CHECK(c15[0] == base[0] + 10 && c15[1] == base[0] + 26);  // half rate: hit at 20 sim frames, end at 36
+    const std::array<int, 2> fast = oi_generic_timing(20, 30.0f, 2.0f);
+    CHECK(fast[0] == base[0] - 5 && fast[1] == base[0] - 1);  // speedup 2: hit at 5 sim frames, end at 9
+    const std::array<int, 2> short_clip = oi_generic_timing(5, 30.0f, 1.0f);
+    CHECK(short_clip[0] == base[0] && short_clip[1] == base[0]);  // clip ends before the hit: removed with it
+    // Hack: animation 0x5a end = ceil(max(count - 2, 0) / rate) sim frames, else kHackFrames (60).
+    const int hack60 = oi_hack_timing(0, 0.0f);
+    CHECK(hack60 > 60);
+    CHECK(oi_hack_timing(32, 30.0f) == hack60 - 30);
+    CHECK(oi_hack_timing(32, 60.0f) == hack60 - 45);
+    CHECK(oi_hack_timing(33, 60.0f) == hack60 - 44);  // 31 / 2 rounds up to 16
+    // Berserker: passes on counters 55, 50, ... 5 (n = 5 .. 55); a 50-frame clip loops at 49, window (10, 40) strict:
+    // n = 15, 20, 25, 30, 35 only.
+    CHECK(oi_berserker_damage(0) == 110.0f);
+    CHECK(oi_berserker_damage(50) == 50.0f);
+}
+
 // ================================================================================================
 // scripted space battle (golden)
 // ================================================================================================
@@ -3093,6 +3296,111 @@ void test_save_load_battle() {
     std::printf("abilities save: %zu + %zu bytes at frame %u (%u counting slots, %u active), %u ticks continued identically "
                 "(%u events)\n",
                 saved.abilities.size(), saved.combat.size(), kBefore, counting, active, kAfter, events);
+}
+
+// OI follow-up t01 / t03 (ABILITIES_HARDPOINTS §4.14, A1_READINGS §28.9): a Sith with Force_Lightning (FL_Attack 0x28: a
+// 32-frame 30 fps clip when `clips`), FORCE_SIGHT and HUNT; troopers 2, 3 in range. `script_lock` is the host's share.
+void oi_gate_world(OiWorld& w, bool clips, const bool* script_lock) {
+    SpecialAbilityDesc l = oi_special("Lightning", SpecialClass::ForceLightning, ActivationStyle::UserInput);
+    l.max_range = 300.0f;
+    l.max_targets = 1;
+    l.targets_radius = 10.0f;
+    const uint32_t ls = add_special(w.ad, l);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kForceLightning, 0.0f, 30.0f, "Lightning"), rec(kForceSight, 0.0f, 0.0f), rec(kHunt, 0.0f, 0.0f)};
+    a.specials = {ls};
+    const uint32_t ud = push(w.cd, w.ad, oi_unit("Sith", 100.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    AbilityHost h;
+    if (clips)
+        h.anim_clip = [](ObjectId, int32_t type, std::string_view, uint32_t, uint32_t& n, float& f) {
+            if (type != 0x28) return false;
+            n = 32;
+            f = 30.0f;
+            return true;
+        };
+    h.movement_locked = [script_lock](ObjectId id) { return id == 1 && script_lock && *script_lock; };
+    h.map_rect = [](Vec3& lo, Vec3& hi) {
+        lo = Vec3{-1000.0f, -1000.0f, 0.0f};
+        hi = Vec3{1000.0f, 1000.0f, 0.0f};
+        return true;
+    };
+    w.ab->set_host(std::move(h));
+    w.add(1, ud, 0, {0, 0, 0});
+    w.add(2, td, 1, {150, 0, 0});
+    w.add(3, td, 1, {150, 100, 0});
+}
+
+void test_oi_anim_gates_and_locks() {
+    const ObjectId one[] = {1};
+    // §4.14: the cast records FL_Attack for the clip's length (end = 32 - 2 = 30 frames, then idle). While it runs a
+    // second Lightning is refused and FORCE_SIGHT is busy (Can_Activate 0x34); afterwards both pass.
+    {
+        OiWorld w;
+        oi_gate_world(w, true, nullptr);
+        CHECK(w.ab->anim_type_at(1, w.frame) == -1 && w.ab->can_activate(1, kForceSight, false, false, w.frame));
+        CHECK(w.ab->targeted_ability(one, kForceLightning, 2, -1, w.frame) == 1);
+        w.tick();
+        CHECK(!w.sys->alive(2) && w.ab->anim_type_at(1, w.frame) == 0x28);
+        CHECK(!w.ab->can_activate(1, kForceSight, false, false, w.frame));
+        CHECK(w.ab->force_recharge(1, kForceLightning, 0.0f));
+        w.ab->targeted_ability(one, kForceLightning, 3, -1, w.frame);
+        w.tick();
+        CHECK(w.sys->alive(3));  // refused: FL_Attack still runs
+        int idle = 0;
+        for (int i = 1; i <= 40 && idle == 0; ++i) {
+            w.tick();
+            if (w.ab->anim_type_at(1, w.frame) == -1) idle = i;
+        }
+        CHECK(idle == 28);  // played at frame F; idle from F + 30 (two ticks already passed)
+        CHECK(!w.ab->can_activate(1, kForceSight, false, false, w.frame));  // the gates read the previous frame's advance
+        w.tick();
+        CHECK(w.ab->can_activate(1, kForceSight, false, false, w.frame));
+        CHECK(w.ab->force_recharge(1, kForceLightning, 0.0f));
+        CHECK(w.ab->targeted_ability(one, kForceLightning, 3, -1, w.frame) == 1);
+        w.tick();
+        w.tick();
+        CHECK(!w.sys->alive(3));
+    }
+    // No clip data: no record, every gate passes (the headless runs).
+    {
+        OiWorld w;
+        oi_gate_world(w, false, nullptr);
+        CHECK(w.ab->targeted_ability(one, kForceLightning, 2, -1, w.frame) == 1);
+        w.tick();
+        CHECK(!w.sys->alive(2) && w.ab->anim_type_at(1, w.frame) == -1 && w.ab->can_activate(1, kForceSight, false, false, w.frame));
+    }
+    // §28.9: HUNT cannot be switched on while movement is locked - by this system's share or by the host's (script lock).
+    {
+        bool script_lock = false;
+        OiWorld w;
+        oi_gate_world(w, false, &script_lock);
+        CHECK(w.ab->lock_movement(1, true, w.frame) && w.ab->immobilize_count(1) == 1);
+        w.ab->set_unit_ability_mode(one, kHunt, true, w.frame);
+        CHECK(!w.ab->is_active(1, kHunt));
+        CHECK(w.ab->lock_movement(1, false, w.frame) && w.ab->immobilize_count(1) == 0);
+        script_lock = true;
+        w.ab->set_unit_ability_mode(one, kHunt, true, w.frame);
+        CHECK(!w.ab->is_active(1, kHunt));
+        script_lock = false;
+        CHECK(w.ab->set_unit_ability_mode(one, kHunt, true, w.frame) == 1 && w.ab->is_active(1, kHunt));
+    }
+    // Save v2: the animation record round-trips (write -> read -> write, same hash, same view).
+    {
+        OiWorld a, b;
+        oi_gate_world(a, true, nullptr);
+        oi_gate_world(b, true, nullptr);
+        CHECK(a.ab->targeted_ability(one, kForceLightning, 2, -1, a.frame) == 1);
+        for (int i = 0; i < 5; ++i) a.tick();
+        const SavedBattle saved = save_battle(*a.sys, *a.ab, a.rng);
+        CHECK(load_battle(*b.sys, *b.ab, b.rng, saved));
+        b.frame = a.frame;
+        const SavedBattle again = save_battle(*b.sys, *b.ab, b.rng);
+        CHECK(again.abilities == saved.abilities);
+        CHECK(battle_digest(*a.sys, *a.ab, a.rng) == battle_digest(*b.sys, *b.ab, b.rng));
+        CHECK(b.ab->anim_type_at(1, b.frame) == 0x28 && b.ab->anim_type_at(1, b.frame + 30) == -1);
+    }
 }
 
 // Land mines (spawn requests, mines, pending events) saved between the apply tick and the host's spawn step.
@@ -3387,6 +3695,293 @@ void test_hardpoint_online_effects() {
 // hit attaches it with the shooter's parameters, spread after Seconds_To_Infect x FPS consecutive frames in range (enemy
 // of the infecting player, Infection_CategoryMask, Distance_To_Infect), Damage_Per_Second once a second, expiry after
 // Duration_Of_Infection (suspend), resume by a spread / the API, the death-clone key 20 only while active, save round trip.
+// S8 t04 (docs/re/LOB_SOLVER.md §3.4 / §3.5, TACTICAL_GAPS §2.3.5): Grenade_Attack and Remote_Bomb need a lob solution
+// to apply, and both toss their (sticky) projectile from the unit through the spawner's grenade branch.
+ProjectileDesc lob_sticky_bomb() {
+    ProjectileDesc g;
+    g.name = "Proj_Sticky_Bomb";
+    g.max_speed = 15.0f;
+    g.lobbed = true;
+    g.category = ProjectileCategory::Grenade;
+    g.grenade_gravity = 1.0f;
+    g.lob_mod = 1.0f;  // G = 1, reach 225 on flat ground
+    g.can_lob_slower = true;
+    g.sticks_on_collision = true;
+    g.max_lifetime = 900.0f;
+    g.blast_area_damage = 30.0f;
+    g.blast_area_range = 20.0f;
+    return g;
+}
+
+void test_lob_abilities() {
+    for (const bool reachable : {true, false}) {  // Grenade_Attack
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+        g.max_range = 200.0f;
+        g.projectile = 0;
+        g.fuse_time = 2.0f;
+        const uint32_t gs = add_special(w.ad, g);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+        a.specials = {gs};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        // In range either way (80 / 100 XY); the second sits 300 up: v^2 < G h, no arc -> the apply refuses.
+        w.add(2, td, 1, reachable ? Vec3{80, 0, 0} : Vec3{100, 0, 300});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 5 && w.sys->projectile_count() == 0; ++i) w.tick();  // apply, then the throw (Spawn_Frame 0)
+        if (!reachable) {
+            for (int i = 0; i < 30; ++i) w.tick();
+            CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kStickyBomb) == 0);
+            continue;
+        }
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() != 1u) continue;
+        const ProjectileView pv = w.sys->projectile(0);
+        CHECK(pv.lob && pv.target == 2 && pv.pos.x == 0.0f && pv.pos.z == 0.0f);  // tossed from the unit
+        int guard = 0;
+        while (w.sys->projectile_count() > 0 && !w.sys->projectile(0).stuck && guard++ < 100) w.tick();
+        CHECK(w.sys->projectile_count() == 1u && w.sys->projectile(0).stuck_to == 2);
+        CHECK(w.sys->health(2) == w.sys->max_health(2));  // sticking does no damage
+        while (w.sys->projectile_count() > 0 && guard++ < 200) w.tick();
+        CHECK(w.sys->health(2) < w.sys->max_health(2));  // the 2 s timer set it off
+    }
+    {  // S8 t06 (LOB_SOLVER §5.2): a null spawn (the arc is gone at the throw) - not set active, no recharge
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+        g.max_range = 200.0f;
+        g.projectile = 0;
+        g.fuse_time = 2.0f;
+        g.spawn_frame = 5.0f;
+        const uint32_t gs = add_special(w.ad, g);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+        a.specials = {gs};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        w.add(2, td, 1, {80, 0, 0});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame) == 1);
+        w.tick();  // the apply (the pending ability); the throw comes 5 frames later
+        CHECK(w.ab->special_applied(1, name_crc("Grenade")));
+        w.move(2, Vec3{80, 0, 300});  // out of reach before the throw
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kStickyBomb) == 0);
+        CHECK(!w.ab->is_active(1, kStickyBomb));
+        CHECK(w.count(AbilityEventKind::Ended, 1) == 1);
+    }
+    {  // S8 t10 follow-up (LOB_SOLVER §3.5 "Facing at apply", last item): a pending request whose countdown started before
+       // the apply is consumed (apply returns 1) without the face / stop / lock block - nothing thrown, not retried
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+        g.max_range = 200.0f;
+        g.projectile = 0;
+        g.fuse_time = 2.0f;
+        const uint32_t gs = add_special(w.ad, g);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+        a.specials = {gs};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        w.add(2, td, 1, {80, 0, 0});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame) == 1 && w.ab->pending_type(1) >= 0);
+        CHECK(w.ab->force_recharge(1, kStickyBomb) && w.ab->countdown_counter(1, kStickyBomb) > 0);
+        w.tick();
+        CHECK(w.ab->pending_type(1) < 0 && !w.ab->special_applied(1, name_crc("Grenade")));  // consumed, not applied
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && !w.ab->is_active(1, kStickyBomb) && w.ab->pending_type(1) < 0);
+    }
+}
+
+// S8 t06 (docs/re/LOB_SOLVER.md §3.5): Remote_Bomb world - bomber 1 (player 0; Remote_Bomb with Toss_Anim BOMBTOSS,
+// Spawn_Frame 12, Spawn_Bone MuzzleB_00; Force_Lightning), the bomb target 2 (player 1, health 1000) at `at`, trooper 3
+// (player 1) for the lightning. `clips`: BOMBTOSS (id 77) 30 frames and FL_Attack (0x28) 32 frames at 30 fps, and the
+// bone MuzzleB_00 at the bomber + (1, 2, 8). Two warm-up ticks align the services (the update runs every frame).
+void rb_world(OiWorld& w, Vec3 at, bool clips) {
+    ProjectileDesc b = lob_sticky_bomb();
+    b.name = "Proj_Remote_Bomb";
+    b.friendly_damage_amount = 200.0f;
+    w.cd.projectiles = {b};
+    SpecialAbilityDesc r = oi_special("Remote", SpecialClass::RemoteBomb, ActivationStyle::UserInput);
+    r.max_range = 200.0f;
+    r.projectile = 0;
+    r.toss_anim = "BOMBTOSS";
+    r.spawn_frame = 12.0f;
+    r.spawn_bone = "MuzzleB_00";
+    SpecialAbilityDesc l = oi_special("Lightning", SpecialClass::ForceLightning, ActivationStyle::UserInput);
+    l.max_range = 300.0f;
+    l.max_targets = 1;
+    l.targets_radius = 10.0f;
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kPlaceRemoteBomb, 0.0f, 30.0f, "Remote"), rec(kDetonateRemoteBomb, 0.0f, 0.0f),
+                        oi_gui(kForceLightning, 0.0f, 30.0f, "Lightning")};
+    a.specials = {add_special(w.ad, r), add_special(w.ad, l)};
+    UnitDesc bd = oi_unit("Bomber", 100.0f);
+    bd.ranged_target_z_adjust = 4.0f;
+    const uint32_t ud = push(w.cd, w.ad, bd, a);
+    UnitDesc tdesc = oi_unit("Tank", 1000.0f);
+    tdesc.ranged_target_z_adjust = 6.0f;
+    const uint32_t td = push(w.cd, w.ad, tdesc, AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    if (clips) {
+        AbilityHost h;
+        h.anim_type = [](std::string_view n) { return n == "BOMBTOSS" ? 77 : -1; };
+        h.anim_clip = [](ObjectId, int32_t type, std::string_view name, uint32_t, uint32_t& n, float& f) {
+            if (type == 0x28) n = 32;
+            else if (type == 77 || name == "BOMBTOSS") n = 30;
+            else return false;
+            f = 30.0f;
+            return true;
+        };
+        CombatSystem* sys = w.sys.get();
+        h.bone_position = [sys](ObjectId id, std::string_view bone, Vec3& p) {
+            if (bone != "MuzzleB_00") return 0;
+            p = sys->position(id) + Vec3{1, 2, 8};
+            return 1;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, ud, 0, {0, 0, 0});
+    w.add(2, td, 1, at);
+    w.add(3, td, 1, {150, 100, 0});
+    w.tick();
+    w.tick();
+}
+
+void test_remote_bomb_sequence() {
+    const ObjectId one[] = {1};
+    {  // unreachable (v^2 < G h): the apply refuses
+        OiWorld w;
+        rb_world(w, Vec3{100, 0, 300}, false);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);  // queued as the pending ability
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->immobilize_count(1) == 0);
+    }
+    {  // no clips (headless): apply = stop + lock, nothing spawned, no recharge; the toss 12 frames after the unit
+       // stopped (rate 1), from the unit + its Ranged_Target_Z_Adjust (no bone host); recharge at the toss; the ability
+       // ends at the toss (no clip): unlocked, Ended
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, false);
+        const uint32_t f0 = w.frame;
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);  // pending: applied in the next tick
+        w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->immobilize_count(1) == 1);
+        CHECK(w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0);
+        uint32_t toss = 0;
+        for (int i = 0; i < 40 && toss == 0; ++i) {
+            w.tick();
+            if (w.sys->projectile_count() == 1u) toss = w.frame - 1;
+            if (toss == 0) CHECK(w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0 && w.ab->immobilize_count(1) == 1);
+        }
+        CHECK(toss == f0 + 12);
+        CHECK(w.ab->countdown_counter(1, kPlaceRemoteBomb) > 0 && w.ab->immobilize_count(1) == 0);
+        CHECK(w.count(AbilityEventKind::Ended, 1) == 1);
+        if (w.sys->projectile_count() != 1u) return;
+        const ProjectileView pv = w.sys->projectile(0);
+        CHECK(pv.lob && pv.pos.x == 0.0f && pv.pos.y == 0.0f && pv.pos.z == 4.0f);
+        int guard = 0;
+        while (!w.sys->projectile(0).stuck && guard++ < 100) w.tick();
+        CHECK(w.sys->projectile(0).stuck && w.sys->projectile(0).stuck_to == 2);
+        for (int i = 0; i < 60; ++i) w.tick();
+        // never armed: still waiting for the trigger
+        CHECK(w.sys->projectile_count() == 1u && w.sys->health(2) == w.sys->max_health(2));
+        CHECK(w.ab->set_unit_ability_active(1, kDetonateRemoteBomb, true, w.frame));
+        CHECK(w.sys->projectile_count() == 1u && !w.sys->projectile(0).alive);  // detonated (flushed next tick)
+        CHECK(w.sys->health(2) < w.sys->max_health(2));                         // area damage on the enemy
+    }
+    {  // clips: Toss_Anim from the frame the unit stopped; the toss at its frame 12 from Spawn_Bone; the lock is held to
+       // the animation's end (frame 28 = 30 - 2), then released
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, true);
+        const uint32_t f0 = w.frame;
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        uint32_t toss = 0, unlock = 0;
+        for (int i = 0; i < 60 && unlock == 0; ++i) {
+            w.tick();
+            if (toss == 0 && w.sys->projectile_count() == 1u) toss = w.frame - 1;
+            if (w.ab->immobilize_count(1) == 0) unlock = w.frame - 1;
+        }
+        CHECK(toss == f0 + 12 && unlock == f0 + 28);
+        CHECK(w.ab->countdown_counter(1, kPlaceRemoteBomb) > 0 && w.count(AbilityEventKind::Ended, 1) == 1);
+        if (w.sys->projectile_count() >= 1u) CHECK(w.sys->projectile(0).spawn_frame == toss);
+    }
+    {  // clips + the launch point: the bomb leaves from the bone (bomber + (1, 2, 8))
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, true);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 20 && w.sys->projectile_count() == 0u; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() == 1u) {
+            const ProjectileView pv = w.sys->projectile(0);
+            CHECK(pv.pos.x == 1.0f && pv.pos.y == 2.0f && pv.pos.z == 8.0f);
+        }
+    }
+    {  // interrupted: Force_Lightning replaces Toss_Anim before frame 12 - the same cleanup, no toss, no recharge
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, true);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 5; ++i) w.tick();
+        CHECK(w.ab->anim_type_at(1, w.frame) == 77);
+        CHECK(w.ab->targeted_ability(one, kForceLightning, 3, -1, w.frame) == 1);
+        for (int i = 0; i < 40; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0);
+        CHECK(w.ab->immobilize_count(1) == 0 && w.count(AbilityEventKind::Ended, 1) == 1);
+    }
+    {  // null spawn (§5.2): the target rose out of reach before the toss - no bomb, no recharge, no retry; the ability
+       // still ends
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, false);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 3; ++i) w.tick();
+        w.move(2, Vec3{120, 0, 400});
+        for (int i = 0; i < 40; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0);
+        CHECK(w.ab->immobilize_count(1) == 0 && w.count(AbilityEventKind::Ended, 1) == 1);
+    }
+}
+
+void test_remote_bomb_detonate() {
+    // S8 t06 (LOB_SOLVER §3.5, TACTICAL_COMBAT §3.4 step 3): Friendly_Damage_Amount 200 lets the sweep see own units, so
+    // the bomb sticks to own unit 4 (team 10 = {4, 5}). DETONATE_REMOTE_BOMB skips it while 4 is garrisoned; then 4 takes
+    // kind 1 x 200 and its team-mate 5 kind 0x15 x 200 before the detonation; 6 (own, no team) is untouched.
+    OiWorld w;
+    rb_world(w, Vec3{-500, -500, 0}, false);
+    AbilityObjectDesc sq;
+    sq.name = "Squad";
+    const uint32_t sqd = push_container(w.cd, w.ad, sq);
+    const uint32_t md = push(w.cd, w.ad, oi_unit("Member", 1000.0f), AbilityObjectDesc{});
+    w.add(4, md, 0, {120, 0, 0}, {1, 0, 0}, 10);
+    w.add(5, md, 0, {-300, 0, 0}, {1, 0, 0}, 10);
+    w.add(6, md, 0, {-300, 100, 0});
+    const ObjectId mem[] = {4, 5};
+    CHECK(w.ab->add_container(10, sqd, 0, mem, w.frame, &w.rng));
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 4, -1, w.frame) == 1);
+    int guard = 0;
+    while ((w.sys->projectile_count() == 0u || !w.sys->projectile(0).stuck) && guard++ < 200) w.tick();
+    CHECK(w.sys->projectile_count() == 1u && w.sys->projectile(0).stuck && w.sys->projectile(0).stuck_to == 4);
+    CHECK(w.sys->health(4) == 1000.0f);  // sticking does no damage
+    w.sys->set_flag(4, kUnitGarrisoned, true);
+    CHECK(w.ab->set_unit_ability_active(1, kDetonateRemoteBomb, true, w.frame));
+    CHECK(w.sys->projectile(0).alive && w.sys->health(4) == 1000.0f);  // skipped: stays armed
+    w.sys->set_flag(4, kUnitGarrisoned, false);
+    CHECK(w.ab->force_recharge(1, kDetonateRemoteBomb, 0.0f));
+    CHECK(w.ab->set_unit_ability_active(1, kDetonateRemoteBomb, true, w.frame));
+    CHECK(!w.sys->projectile(0).alive);
+    CHECK(w.sys->health(4) == 800.0f && w.sys->health(5) == 800.0f && w.sys->health(6) == 1000.0f);
+}
+
 void test_infection() {
     {  // XML -> SpecialAbilityDesc -> UnitDesc::infection
         const data::XmlDocument doc = data::XmlDocument::parse(
@@ -3530,6 +4125,129 @@ void test_infection() {
     CHECK(w.sys->infection_attached(14) && !infected(14) && w.sys->infection_suspend_count(14) == 1);
 }
 
+// S8 t10 (b)(c) (LOB_SOLVER §3.5 "Facing at apply", "MARKER removal") and S8 t11 (DEPLOY through the Walk locomotor host).
+struct SnapLog {
+    std::vector<std::pair<ObjectId, float>> calls;
+};
+void snap_host(OiWorld& w, SnapLog& log) {
+    AbilityHost h;
+    h.map_rect = [](Vec3& lo, Vec3& hi) {
+        lo = Vec3{-1000.0f, -1000.0f, 0.0f};
+        hi = Vec3{1000.0f, 1000.0f, 0.0f};
+        return true;
+    };
+    h.snap_yaw = [&log](ObjectId id, float yaw) { log.calls.emplace_back(id, yaw); };
+    w.ab->set_host(std::move(h));
+}
+
+void test_s8_apply_facing_marker_deploy() {
+    const ObjectId one[] = {1};
+    {  // Remote_Bomb: yaw snapped at the apply toward the raw target position (90 degrees), stop + lock, the toss, release
+       // without restoring the facing, then MarkerTossed for the target (the host kills it when it is a marker)
+        OiWorld w;
+        rb_world(w, Vec3{0, 120, 0}, false);
+        SnapLog log;
+        snap_host(w, log);
+        const uint32_t f0 = w.frame;
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        w.tick();
+        CHECK(log.calls.size() == 1 && log.calls[0].first == 1 && std::fabs(log.calls[0].second - 90.0f) < 1e-3f);
+        const Vec3 fc = w.sys->facing(1);
+        CHECK(std::fabs(fc.x) < 1e-5f && std::fabs(fc.y - 1.0f) < 1e-5f && w.ab->immobilize_count(1) == 1);
+        CHECK(w.count(AbilityEventKind::MarkerTossed) == 0);
+        for (int i = 0; i < 40 && w.ab->immobilize_count(1) != 0; ++i) w.tick();
+        CHECK(w.frame - 1 == f0 + 12 && w.ab->immobilize_count(1) == 0 && w.count(AbilityEventKind::Ended, 1) == 1);
+        const AbilityEvent* m = w.last(AbilityEventKind::MarkerTossed, 1);
+        CHECK(w.count(AbilityEventKind::MarkerTossed) == 1 && m && m->target == 2 && m->type == kPlaceRemoteBomb && m->frame == f0 + 12);
+        CHECK(log.calls.size() == 1 && w.sys->facing(1).y == fc.y);  // not re-faced at the throw, not restored at release
+    }
+    {  // a null spawn (out of reach at the toss): no recharge, but the marker is still removed
+        OiWorld w;
+        rb_world(w, Vec3{0, 120, 0}, false);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        w.tick();
+        w.move(2, Vec3{0, 120, 300});
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0);
+        CHECK(w.count(AbilityEventKind::MarkerTossed, 1) == 1);
+    }
+    {  // the toss never happens (the bomber dies first): no MarkerTossed, the marker persists
+        OiWorld w;
+        rb_world(w, Vec3{0, 120, 0}, false);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        w.tick();
+        DamageRequest r;
+        r.victim = 1;
+        r.amount = 1.0e6f;
+        w.sys->take_damage(r, w.frame);
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(!w.sys->alive(1) && w.count(AbilityEventKind::MarkerTossed) == 0);
+    }
+    {  // Grenade_Attack: the same snap; none while weapons are disabled (stunned)
+        for (const bool disabled : {false, true}) {
+            OiWorld w;
+            w.cd.projectiles = {lob_sticky_bomb()};
+            SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+            g.max_range = 200.0f;
+            g.projectile = 0;
+            g.fuse_time = 2.0f;
+            const uint32_t gs = add_special(w.ad, g);
+            AbilityObjectDesc a;
+            a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+            a.specials = {gs};
+            const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+            const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+            w.make(GameMode::Land);
+            SnapLog log;
+            snap_host(w, log);
+            w.add(1, ud, 0, {0, 0, 0});
+            w.add(2, td, 1, {-60, -60, 0});
+            if (disabled) w.ab->set_weapons_disabled(1, true);
+            w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame);
+            w.tick();
+            if (disabled) {
+                CHECK(log.calls.empty());
+            } else {
+                CHECK(log.calls.size() == 1 && std::fabs(log.calls[0].second + 135.0f) < 1e-3f);
+                CHECK(w.ab->special_applied(1, name_crc("Grenade")) && w.ab->immobilize_count(1) == 1);
+            }
+        }
+    }
+    {  // DEPLOY through the locomotor host: the request goes to the host, the state comes back through set_deploy_state
+        OiWorld w;
+        AbilityObjectDesc a;
+        a.unit_abilities = {rec(kDeploy, 0.0f, 0.0f)};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Walker", 100.0f), a);
+        w.make(GameMode::Land);
+        std::vector<std::pair<ObjectId, bool>> calls;
+        bool accept = true;
+        AbilityHost h;
+        h.deploy = [&](ObjectId id, bool on, uint32_t) {
+            calls.emplace_back(id, on);
+            return accept;
+        };
+        w.ab->set_host(std::move(h));
+        w.add(1, ud, 0, {0, 0, 0});
+        CHECK(w.ab->set_unit_ability_mode(one, kDeploy, true, w.frame) == 1);
+        CHECK(calls.size() == 1 && calls[0].first == 1 && calls[0].second && !w.ab->deployed(1));  // not instant
+        w.collect();
+        CHECK(w.count(AbilityEventKind::Deployed, 1) == 1 && w.count(AbilityEventKind::StopOrder, 1) == 1);
+        const uint32_t both = kUnitDeploying | kUnitDeployTransition;
+        w.ab->set_deploy_state(1, 0x18);  // Deploying: both weapon sources hold fire (the transition gate)
+        CHECK((w.sys->flags(1) & both) == kUnitDeployTransition && !w.ab->deployed(1) && !w.ab->is_active(1, kDeploy));
+        w.ab->set_deploy_state(1, 0x19);  // Deployed
+        CHECK((w.sys->flags(1) & both) == kUnitDeploying && w.ab->deployed(1) && w.ab->is_active(1, kDeploy));
+        w.ab->set_deploy_state(1, 0x1A);  // Undeploying: transition again, no longer deployed
+        CHECK((w.sys->flags(1) & both) == kUnitDeployTransition && !w.ab->deployed(1));
+        w.ab->set_deploy_state(1, 0);
+        CHECK((w.sys->flags(1) & both) == 0u);
+        accept = false;  // the locomotor refused (no Walk, or nothing to do): no Deployed event
+        CHECK(w.ab->set_unit_ability_mode(one, kDeploy, true, w.frame) <= 1);
+        w.collect();
+        CHECK(calls.size() == 2 && w.count(AbilityEventKind::Deployed, 1) == 1);
+    }
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -3553,6 +4271,10 @@ int main(int argc, char** argv) {
     test_last_hardpoint_kills();
     test_death_clone_remap();
     test_infection();
+    test_lob_abilities();
+    test_remote_bomb_sequence();
+    test_remote_bomb_detonate();
+    test_s8_apply_facing_marker_deploy();  // S8 t10 / t11
     test_fire_and_decay();
     test_energy();
     test_ion_stun();
@@ -3589,6 +4311,9 @@ int main(int argc, char** argv) {
     test_gaps_leech();
     test_oi_weapon_swap();
     test_oi_berserker_speed();
+    test_oi_stun_over_water();
+    test_oi_anim_timings();
+    test_oi_anim_gates_and_locks();
     test_battle(golden, write_golden);
     test_allocations();
     test_save_load_battle();  // N1 stage 2
