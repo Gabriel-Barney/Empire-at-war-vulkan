@@ -365,7 +365,7 @@ Consequences:
 |---|---|---|
 | Human input, HUD, command bar, galactic UI, setup phase, menus | build event → OutgoingEventQueue::Add → flush → scheduled queue | about 119 Add call sites, all in UI/input/GUI code (0x33xxx–0x3exxx, 0x2f9xxx–0x30exxx, CommandBarClass) |
 | AI (AIBuildTask, GalacticTaskForce, ProduceObject, production behaviour, FleetLocomotor, ConcentrateFire, target finder) | build the event on the stack, set fields and the player, **call Execute directly**, release | no queue, no network, runs in the AI's own tick slot (PlayerList update T7) |
-| Lua (story, AI plans, object scripts): `Reinforce`, `Spawn_Unit`-family, `Move_Object`, `Land_Units`/`Launch_Units`, `Invade`, `Garrison`, `Activate_Ability`/`Cancel_Ability` | same direct construct-and-Execute pattern | scripts run identically on every machine. Lua randomness uses the synced RNG (MAIN_LOOP §4.1) |
+| Lua (story, AI plans, object scripts): `Reinforce`, `Spawn_Unit`-family, `Move_Object`, `Land_Units`/`Launch_Units`, `Invade`, `Garrison`, `Activate_Ability`/`Cancel_Ability` | same direct construct-and-Execute pattern | scripts run identically on every machine. Lua randomness uses the synced RNG (MAIN_LOOP §4.1). The event keeps the issuer its constructor stamps (the local player) unless the caller sets one: `GameObjectWrapper.Invade` does not, and Invade's Execute keeps only units of the issuer (A1_READINGS §31) |
 | Story events (StoryEvent*, triggered by game state) | call game systems directly | not commands. Events notify the story system the other way (§6.3) |
 | Network/session code | FrameInfo, PerformanceMetrics, FrameSync (FrameSynchronizer), ResumeGame (GMM vote), QuitGame/Withdrawl/Chat/Taunt/SaveGame (menus) | through the same outgoing queue |
 

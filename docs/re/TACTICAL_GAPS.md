@@ -625,7 +625,8 @@ All are fields of the GameConstants object (.bss, base 0x140b15800), loaded from
   `Use_Reinforcement_Points` (GC +0x118a0; True in FoC and TR) a slot is valid only within 2-D ≤
   `Reinforcement_Enabling_Radius` (+0x1e20) of an allied live object from GOM list +0x2f0; any slot within <
   `Reinforcement_Prevention_Radius` (+0x1df8) of a non-allied object without POWERED, or with POWERED and
-  powered (0x527520), is invalid.
+  powered (0x527520), is invalid. Full layout and tests (corrected 2026-11-01): §4.2.1. "Powered" there is the
+  object owner's **base power**, not the object's own energy.
 - **Space drop validity** (SpaceMode vf80 0x4d6fd0): unless forced, rejected when fogged (force 1, so AI is
   tested too), inside a non-allied prevention radius (0x4d8d10), or outside the playable box; then the
   occupancy tracker (+0x388) must have no reservation on the type's `Space_Layer` (+0x16dc, default 4) over the
@@ -635,6 +636,141 @@ All are fields of the GameConstants object (.bss, base 0x140b15800), loaded from
 - Lua space `Reinforce` (0x6e8620) refuses AI players with no allied DUMMY_STAR_BASE left in campaign battles.
 - Garrison spawn (`Garrison_Upgrade_Ability` 0x6fffa0, `Garrison_Reinforcement_Delay_Seconds` type +0x2ee4)
   is not part of the split [L].
+
+#### 4.2.1 Land drop layout and validity: 0x3b6170, 0x5abc00, 0x40f970 (a1g follow-up, 2026-11-01) [H unless tagged]
+
+**Entry points.**
+- `LandModeClass` vf80 0x3b5f60(mode, player id, pos, type T, force, f6) calls 0x3b6170 with:
+  - facing = mode +0x288[player +0x48], an angle triple (roll, pitch, **yaw at +8, degrees**) [M: the per-player
+    entry facing];
+  - check-radius = !force;
+  - fog test skipped = force;
+  - movers-ignored = force or the player is not human (+0x62 = 0);
+  - landing-transport rule = f6.
+- 0x3b6170(mode, pos, facing, T, player, checkRadius, out positions, out per-slot bits, n = 0 (= T's member
+  count), skipFog, ignore list, moversIgnored, landingRule) returns true only when **every slot** passes every test.
+  The per-slot bits are output for the UI.
+- T is a **company** type. Slots are its `Company_Units` (+0x958 entries {name, type} 0x10 B, count +0x960). Count 0
+  → false.
+- "Member type M" = the entry's type. If M has no land model (0x3729f0(M, 1, 0) = 0) and its +0x1b60 is set, M's
+  +0x1b60 type is used instead (layout, passability and footprint).
+
+**Slot layout** (offsets in world units, relative to pos; then rotated by the facing yaw ψ and added to pos; z adds
+too). It branches on the **first** member type F's `Create_Team` (+0x67):
+
+1. **F without `Create_Team`** (vehicle companies): one grid over all n members, from 0x40f970(cell, n). Here
+   cell = (a, b) = (2·hx/20 + FS, 2·hy/20 + FS) (0x41b170), where:
+   - hx, hy = F's half extents (0x371be0: `Custom_Hard_XExtent` / `YExtent` × `Scale_Factor` when both are > 0;
+     else |model box max x / y| × `Scale_Factor`);
+   - FS = F's `FormationSpacing` (+0x16d4).
+2. **F with `Create_Team`** (infantry): S = min(T's `Max_Squad_Size` (+0x1e44), n); teams = ceil(n / S); members
+   are chunked in list order (team t = members [t·S, min((t+1)·S, n))).
+   - **Inside a team:** if T's `Create_Team_Type` (+0x1e58) has `LAND_TEAM_CONTAINER_LOCOMOTOR` in its
+     `LandBehavior` list (+0x718): **0x5abc00**((hx, hy) of F, g = 20 × FS of F, S). Otherwise 0x40f970(cell of F,
+     S).
+   - **Teams:** placed by 0x40f970((2.5·Bx, 2.5·By), teams), where Bx / By are the team layout's half extents /
+     20 (the bounds output below).
+   - Member i of team t lands at pos + R(ψ)·(O_t + R(φ_t)·m_j), where:
+     - j = i − t·S;
+     - m_j = the team layout's slot j;
+     - O_t = team offset t;
+     - φ_t = yaw of the vector 0 → O_t (0x20acd0: atan2f(y, x) × 57.295776, +360 if negative; 0 when O_t = 0).
+   - So a team behind the drop point (O_t.x < 0, y = 0) is turned by 180°.
+
+**0x5abc00(ext = (ex, ey), g, S) [H]** (rows across x, columns along y):
+- Columns c = ceil(√S): (uint)sqrtf((float)S), plus 1 unless that squared equals S.
+- Rows take k = min(c, remaining) members in order.
+- In a row, slot y_j = −(k−1)(2ey + g)/2 + j·(2ey + g); y = 0 when k = 1.
+- Row r is at x_r = ((R−1)/2 − r)·(2ex + g), R = number of rows. Row 0 is the most +x row (front); rows are
+  centred in x.
+- z = 0.
+- Bounds output: {0, 0, 0, Bx, By, 0} with Bx = (max(x+ex, 0) − min(x−ex, 0))/2 × 0.05 and By likewise with ey.
+- All float in this order: the row width is summed per slot (2ey + h at the row ends, g between; h = g/2).
+
+**0x40f970(cell = (a, b), N) [H]** (constant 1.8 at 0x140869960):
+- side = sqrtf(max(1.0, N·b·a·1.8)). b = 0 → fail.
+- perRow = max(1, trunc(side / b)); rows = ceil(N / perRow).
+- x starts at (rows·a − a)/2 and steps −a per row.
+- In a row of k = min(perRow, remaining): gap = (side − k·b)/(k+1). y starts at gap − side/2; per slot y += b/2,
+  emit, then y += b/2 + gap.
+- Output (x·20, y·20, 0). Bounds {0, 0, 0, rows·a/2, side/2, 0} (cell units).
+
+**Tests per slot** (all must pass; the result is the AND over slots):
+1. **Passable** for M at the slot: 0x50e120(grid, M, slot).
+2. **Not fogged** for the player: 0x35f3b0(mode, player, slot). Skipped when forced.
+3. **Footprint** (an oriented-box test, not a single AABB):
+   - Broad phase: the whole formation's box = centre pos, half extents (B'x·20, B'y·20) from the **last** 0x40f970
+     bounds (the team grid, or the member grid for vehicles), rotated by ψ. Its AABB (0x20dd40), with z ±1000, is
+     queried in the mode's object tree (0x2ab640 → 0x20e780).
+   - Each found object X counts unless:
+     - X is a PROXIMITY_MINE (slot +0x387 ≠ −1); or
+     - moversIgnored and X has a locomotor (+0x333 ≠ −1) and no LAND_OBSTACLE (+0x346 = −1); or
+     - landingRule and X has TRANSPORT_LANDING (+0x368 ≠ −1) and its data (X +0xc8) byte +0xc9 = 0 [M: "not yet
+       landed"]; or
+     - X is in the ignore list.
+   - If X's footprint box (0x38de80) intersects the formation box (0x20d690), every slot is tested. Slot box = centre
+     slot (x, y), half extents (hx, hy) of M (0x371be0), axes along the yaw of pos → slot (0x20acd0). A slot whose box
+     intersects X's box fails.
+4. **Reinforcement radii**, only when checkRadius. Over GOM list +0x2f0, skipping objects with +0x3a0 & 0x42:
+   - **Enabling:** with `Use_Reinforcement_Points` (0x140b270a0) a slot needs **some** allied object (0x2823c0) with
+     `Reinforcement_Enabling_Radius` R > 0 and 2-D d² ≤ R². Without the constant every slot passes.
+   - **Prevention:** a non-allied object with `Reinforcement_Prevention_Radius` P > 0 (read as float) and 2-D d² < P²
+     fails the slot if X has **no POWERED** behaviour (+0x341 = −1), or has POWERED and **X's owner has base power**.
+     That is the per-player list mode vf+0x220(owner) +0x198 through 0x527520, AND of entries, empty = false
+     (§7.3).
+   - So a POWERED structure (e.g. a turret) blocks reinforcements only while its owner has a working power
+     generator. TACTICAL_GAPS' earlier wording "with POWERED and powered" meant this owner-level test.
+
+**Who uses it.**
+- AI `TF.Reinforce` (0x6eaf60, A1_READINGS §30.7) and the Lua / AI position finder 0x69fc40 call vf80 with force 0
+  and f6 0. The AI is not human, so movers are ignored and landing transports count.
+- The human drop preview 0x345c0 calls 0x3b6170 directly with the local player, checkRadius 1, fog tested,
+  moversIgnored 0 and landingRule 1. So the human's movers block, and landing transports are ignored until their flag
+  is set.
+- The `Reinforce` command checks validity again inside Execute (COMMANDS.md) [M: entry not re-read here].
+- **One layout serves the human and the AI.** Only the mover / transport filters and the fog bypass differ.
+- The transport unload (0x643130) places the cargo with the same per-team layout (0x5abc00 for team containers with
+  `LAND_TEAM_CONTAINER_LOCOMOTOR`, else 0x40f970; same `FormationSpacing` × 20 and half extents) [M: the team grid
+  around it was not re-read].
+
+**Worked example, FoC `Rebel_Infantry_Squad`** (15 × `Squad_Rebel_Trooper`, `Max_Squad_Size` 5,
+`Rebel_Trooper_Team` has `LAND_TEAM_CONTAINER_LOCOMOTOR`; the trooper inherits from `Rebel_Trooper`: hard extents
+2.0 × 2.0, `Scale_Factor` 1.5 → hx = hy = 3; `FormationSpacing` 0.5 → g = 10):
+- Team layout (S = 5, c = 3): (8, −16), (8, 0), (8, 16), (−8, −8), (−8, 8); Bx = 0.55, By = 0.95.
+- Team grid 0x40f970((1.375, 2.375), 3): side = √17.634 = 4.1993, perRow 1, three rows. Team offsets (27.5, 0),
+  (0, 0), (−27.5, 0); the third team is turned by 180°. Broad-phase half extents 41.25 × 42.0.
+- Slots before R(ψ):
+  - team 0: (35.5, −16), (35.5, 0), (35.5, 16), (19.5, −8), (19.5, 8);
+  - team 1: (8, −16), (8, 0), (8, 16), (−8, −8), (−8, 8);
+  - team 2: (−35.5, 16), (−35.5, 0), (−35.5, −16), (−19.5, 8), (−19.5, −8)
+  - (± float rounding: sin of the 180° yaw is about −8.7e-8).
+- The whole company covers about 77 × 38 world units. The port's rows of 6 at 40 spacing cover about 200.
+
+**Port rule** (apps/sim battle host, `land_drop_ok` and the slot generator; the [M] "rows of 6 at 40" layout is
+replaced):
+- Build the slots as above: company members, the `Create_Team` branch on the first member, 0x5abc00 or 0x40f970 per
+  team, the team grid, the per-team yaw, then the player's facing yaw. All in float, in this order.
+- Test every slot:
+  - passable for its member type;
+  - fog (unless forced);
+  - each slot's own oriented box against every blocking object's footprint box, with the mover / landing-transport /
+    mine filters above;
+  - enabling radius per slot (≤), prevention per slot (<), with the owner-base-power exemption for POWERED objects.
+- AI drops: movers ignored. Human drops: movers block.
+
+**Test:** `Rebel_Infantry_Squad`, facing yaw 0, pos P on open ground:
+- the 15 slots equal P + the list above (±1e-3);
+- with ψ = 90° each offset (x, y) becomes (−y, x);
+- a synthetic enemy object with POWERED and `Reinforcement_Prevention_Radius` 100, 60 from team 0's front row: the
+  drop fails while its owner has a `Base_Power_Ability` source, and passes once that source is gone (the owner's
+  base-power list is empty); the same object without POWERED always blocks;
+- an AI drop next to an enemy infantry squad succeeds; the same drop for a human fails when a member's box overlaps
+  it.
+
+**Implemented** (a1g t04 follow-up, 2026-11-01): `land_drop_layout` / `land_drop_shape` / `land_drop_radius_ok` in
+`engine/apps/sim` (tactical_battle), used by `BattleAi::land_drop_ok` and the land `order_reinforce`; port choices in
+A1_READINGS §30.7 "Drop validity". The FoC data gives the worked example's shape (15 members, 3 x 3, squad 5, team
+container locomotor, FormationSpacing 0.5) and slots.
 
 ### 4.3 Battle load consumes the sync RNG (item 3) [H draws, M path]
 - Object construction draws synced numbers: SAP init 0x37c050 (from `Init_From_Type` 0x3989a0) does one

@@ -70,6 +70,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.log_decisions = setup.log_decisions;
     cfg.game_seed = host.session_seed();  // A2 tactical: perception '#' reseed (AI_GALACTIC_3 §7.3)
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
+    use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();
     cfg.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
 #ifdef ALAMO_AI_TACTICAL_HAVE_TERRAIN
@@ -480,6 +481,27 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             return (map->passability_at(cx, cy) & (terrain::kPassSteep | terrain::kPassWater)) != 0u;
         };
     }
+    // A1_READINGS §30.3: game type in {1..4} = skirmish / MP. [port] no MP; the port's skirmish battles are game type 3.
+    // Set every fill (a load restores it too); the callbacks below are installed whenever missing, so a world read
+    // from a save (which keeps only the callbacks its owner copies) gets them back at the next fill.
+    w.skirmish_or_mp = b_->cfg_.skirmish;
+    if (!w.parent_rep_type) {
+        // The parent-mode (galactic) object by id (0x28aa50), not found -> -1; its type [M: 0x3973b0 on the galactic
+        // object; the port's galactic units / companies are their own representative type, no TRANSPORT carried type].
+        const galactic::GalacticSim* gal = b_->galaxy_;
+        w.parent_rep_type = [gal](int32_t id) -> int32_t {
+            if (!gal || id < 0) return -1;
+            const objects::ObjectStore& gs = gal->store();
+            const objects::ObjectHandle gh = gs.find(id);
+            return gs.exists(gh) ? static_cast<int32_t>(gs.type(gh)) : -1;
+        };
+    }
+    // A1_READINGS §30.4: IsValidBombingTarget's shield step = inside any player's active BASE_SHIELD (3-D), the L1
+    // strike validity test. `inside_shield` (IsInside*Shield) stays unset: always 0 in shipped data.
+    if (!b_->space_ && !w.in_active_base_shield) {
+        const TacticalBattle* sb = b_;
+        w.in_active_base_shield = [sb](const at::Vec3f& p) { return sb->l1_base_shield_covers({p.x, p.y, p.z}); };
+    }
 #ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent): the real fog with force = 1 (the AI target-selection form); the AI gate
     // (non-human players unfogged while AIUsesFogOfWar is False) is applied by the perception's own force-0
@@ -589,6 +611,8 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         static const objects::BehaviorTypeId kDummyGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
         o.transport_landing = st.has_behavior(h, objects::beh::TransportLanding);
+        // obj +0x54 (A1_READINGS §30.3): the galactic counterpart's id, -1 none
+        if (const objects::ObjectId pm = st.parent_mode_id(h); pm != objects::kNoObjectId) o.parent_object = pm;
         o.visible_to = ~0ull;
         // land: the first zone (list order) whose cell set holds the position's cell (A1_READINGS §4, ZoneLocator)
         if (!zones_.empty()) o.zone = zone_locator_.zone_at(p.x, p.y);
@@ -1181,6 +1205,76 @@ bool BattleAi::space_drop_ok(int32_t player, int32_t key, const at::Vec3f& p, fl
     const mv::V2 from{p.x - sweep * static_cast<float>(cs), p.y - sweep * static_cast<float>(sn)};
     const float now = static_cast<float>(b_->frame_);
     return b_->movement_->space().query_segment(from, to, now, now + 115.0f, ud.radius, layer | 8u, tc::kNoObject, true, b_->frame_) == 0;
+}
+
+// ---- a1g t04 follow-up: land TF.Reinforce drop validity (header; TACTICAL_GAPS §4.2.1) ----
+bool BattleAi::land_drop_valid(int32_t player, int32_t key, const at::Vec3f& p, bool human) {
+    if (b_->space_ || !b_->movement_) return true;  // land only
+    if (!std::isfinite(p.x) || !std::isfinite(p.y)) return false;
+    const TacticalBattle::Participant* part = nullptr;
+    for (const TacticalBattle::Participant& q : b_->parts_)
+        if (q.galactic_id == static_cast<objects::ObjectId>(key) && q.owner == player && q.reserve && !q.deployed) {
+            part = &q;
+            break;
+        }
+    if (!part) return false;
+    const LandDropLayout lay = land_drop_layout(b_->land_drop_shape(part->type), p.x, p.y, b_->drop_yaw(part->side));
+    if (!lay.ok) return false;
+    const objects::GameObjectTypes& types = mode_->types();
+    const objects::ObjectStore& st = mode_->primary();
+    const mv::PassabilityGrid& grid = b_->movement_->grid();
+    float mn[2], mx[2];
+    const bool box = b_->map_.playable_box(mn, mx);
+    // 1-2. passable for the member's movement class (inside the playable box [port]); not fogged for the player.
+    for (const LandDropSlot& s : lay.slots) {
+        if (box && (s.x < mn[0] || s.x > mx[0] || s.y < mn[1] || s.y > mx[1])) return false;
+        if (s.type >= types.size()) return false;
+        const mv::UnitDesc md = mv::unit_desc_from_type(types, s.type);
+        if (!grid.passable_world({s.x, s.y}, b_->movement_->classes().mask(md.movement_class))) return false;
+#ifdef ALAMO_SIM_HAVE_FOG
+        if (b_->fog_point_fogged(player, s.x, s.y, true)) return false;
+#endif
+    }
+    // 3. footprints: the formation box (broad phase), then each slot's own box against each blocking object's box.
+    static const objects::BehaviorTypeId kMine = objects::behavior_type_id("PROXIMITY_MINE");
+    const DropBox formation{p.x, p.y, lay.half_x, lay.half_y, b_->drop_yaw(part->side)};
+    std::vector<LandDropRadiusObject> radius;
+    for (const objects::ObjectHandle h : st.all_objects()) {  // GOM order
+        if (!st.active(h)) continue;  // dying / removing (+0x3a0 & 0x42) skipped
+        const objects::TypeIndex t = st.type(h);
+        if (t >= types.size()) continue;
+        const int32_t o = st.owner(h);
+        const bool allied = o >= 0 && (o == player || !b_->combat_->is_enemy(player, o));  // 0x2823c0 / 0x39a230
+        // 4. radius inputs (GOM list +0x2f0).
+        LandDropRadiusObject ro;
+        const Vec3 q = st.position(h);
+        ro.x = q.x;
+        ro.y = q.y;
+        ro.allied = allied;
+        ro.enabling = types.get_float(t, "Reinforcement_Enabling_Radius");
+        ro.prevention = types.get_float(t, "Reinforcement_Prevention_Radius");
+        ro.powered = st.has_behavior(h, objects::beh::Powered);
+        ro.owner_base_power = o >= 0 && b_->combat_->has_base_power(o);
+        if (ro.enabling > 0.0f || ro.prevention > 0.0f) radius.push_back(ro);
+        // footprint blockers [port]: battle units and LAND_OBSTACLE objects; never proximity mines; AI: movers ignored.
+        const bool obstacle = st.has_behavior(h, objects::beh::LandObstacle);
+        if (!obstacle && !b_->unit_by_id(st.id(h))) continue;
+        if (kMine != objects::kNoBehavior && st.has_behavior(h, kMine)) continue;
+        if (!human && st.has_behavior(h, objects::beh::Locomotor) && !obstacle) continue;
+        DropBox xb;
+        xb.cx = q.x;
+        xb.cy = q.y;
+        b_->drop_half_extents(t, xb.hx, xb.hy);
+        const Vec3 f = st.facing(h);
+        xb.yaw_deg = f.x == 0.0f && f.y == 0.0f ? 0.0f : dmath::atan2(f.y, f.x) * 57.295776f;
+        if (!(xb.hx > 0.0f) || !(xb.hy > 0.0f) || !drop_boxes_overlap(formation, xb)) continue;
+        for (const LandDropSlot& s : lay.slots)
+            if (drop_boxes_overlap(DropBox{s.x, s.y, s.hx, s.hy, s.yaw_deg}, xb)) return false;  // footprint taken
+    }
+    // 4. reinforcement radii (check-radius: AI and human drops are not forced).
+    for (const LandDropSlot& s : lay.slots)
+        if (!land_drop_radius_ok(s.x, s.y, radius, use_reinforcement_points_)) return false;
+    return true;
 }
 
 std::vector<objects::ObjectId> BattleAi::team_units(uint8_t player, uint32_t wire) const {

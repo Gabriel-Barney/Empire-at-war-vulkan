@@ -25,6 +25,7 @@
 #include "alamo/ai/ai_path_finder.hpp"
 #include "alamo/ai/galactic_perception.hpp"
 #include "alamo/ai/perception_equations.hpp"
+#include "alamo/commands/pipeline.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
@@ -716,6 +717,68 @@ void test_setup_players() {
     CHECK(w.credits(1) == 50.0f);
 }
 
+bool last_message_has(LuaVm& vm, const char* what) {
+    return !vm.messages().empty() && vm.messages().back().find(what) != std::string::npos;
+}
+
+// a1g t05 (A1_READINGS §31): fleet.Invade() is issued by the local player (Empire, the human) with the fleet's ground
+// units the local player owns. An Underworld (AI) fleet with ground units at the Empire's planet A: no order, no message
+// (0x48ff50 keeps no unit). An Empire fleet with a ground unit at Underworld's planet C: one order, player = local, the
+// Empire unit only (at most 127). A fleet without ground units, or at a non-enemy planet: a warning, no order.
+void test_invade_local_player() {
+    Galaxy g;
+    galactic::GalacticSim& sim = *g.sim;
+    const uint32_t frigate = g.raw.find("Frigate_T"), trooper = g.raw.find("Trooper_T");
+    CHECK(sim.planets()[0].owner == 0 && sim.planets()[2].owner == 1);
+    // Underworld fleet at A carrying an Underworld trooper.
+    CHECK(static_cast<bool>(sim.spawn_unit(1, 0, frigate)));
+    const objects::ObjectHandle ut = sim.spawn_unit(1, 0, trooper);
+    const objects::ObjectHandle ut_list[] = {ut};
+    CHECK(sim.launch_units(1, 0, ut_list) == commands::RejectReason::None);
+    // Empire fleet at C carrying an Empire trooper.
+    CHECK(static_cast<bool>(sim.spawn_unit(0, 2, frigate)));
+    const objects::ObjectHandle et = sim.spawn_unit(0, 2, trooper);
+    const objects::ObjectHandle et_list[] = {et};
+    CHECK(sim.launch_units(0, 2, et_list) == commands::RejectReason::None);
+    const uint32_t uf = sim.fleet_containing(ut), ef = sim.fleet_containing(et);
+    CHECK(uf != galactic::kNoFleet && ef != galactic::kNoFleet);
+    if (uf == galactic::kNoFleet || ef == galactic::kNoFleet) return;
+    ObjectBridge bridge;
+    std::vector<commands::Command> cmds;
+    commands::CommandPipeline pipe;
+    pipe.set_handler([&cmds](uint64_t, const commands::Command& c) {
+        cmds.push_back(c);
+        return commands::RejectReason::None;
+    });
+    bridge.pipeline = &pipe;
+    LuaVm vm(g.host());
+    attach_player_world(vm, &g.world);
+    attach_object_bridge(vm, &bridge);
+    vm.set_object_global("UF", sim.fleets()[uf].object);
+    vm.set_object_global("EF", sim.fleets()[ef].object);
+    CHECK(run(vm, "loc = Find_Player('local').Get_ID()") == "" && gnum(vm, "loc") == 0.0);
+    const size_t msgs = vm.messages().size();
+    CHECK(run(vm, "UF.Invade()") == "" && bridge.orders_issued == 0 && cmds.empty() && vm.messages().size() == msgs);
+    CHECK(run(vm, "EF.Invade()") == "" && bridge.orders_issued == 1 && cmds.size() == 1);
+    if (cmds.size() == 1) {
+        const commands::EventData& e = cmds[0].payload;
+        CHECK(cmds[0].header.player == 0 && e.type() == commands::EventType::Invade);
+        CHECK(e.u("planet") == static_cast<uint32_t>(g.store->id(g.planet(2))));
+        CHECK(e.ids("units").size() == 1 && e.ids("units")[0] == static_cast<uint32_t>(g.store->id(et)));
+    }
+    // The Empire's own fleet at its planet A: not an enemy planet. A frigate-only Empire fleet at C: no land units.
+    const std::vector<uint32_t> home = sim.fleets_at(0, 0);
+    CHECK(home.size() == 1);
+    if (home.size() != 1) return;
+    vm.set_object_global("HF", sim.fleets()[home[0]].object);
+    CHECK(run(vm, "HF.Invade()") == "" && cmds.size() == 1 &&
+          last_message_has(vm, "GameObjectWrapper::Invade -- fleet owner Empire is not an enemy of planet Planet_A owner Empire. Cannot initiate invasion."));
+    vm.set_object_global("Lone", sim.spawn_unit(0, 2, frigate));  // joins EF; assembled into a fleet of its own
+    CHECK(run(vm, "LF = Assemble_Fleet({Lone}) LF.Invade()") == "" && cmds.size() == 1 && bridge.orders_issued == 1 &&
+          last_message_has(vm, "GameObjectWrapper::Invade -- fleet contains no land units. Cannot initiate invasion."));
+    CHECK(vm.errors().empty());
+}
+
 // L1/S4 wave 1: galactic containment, Assemble_Fleet, Change_Owner (GalacticSim::change_owner), Invade,
 // base waits / next base types, planet usability, heroes, Destroy_Contained_Objects, StringCompare.
 void test_galactic_ops() {
@@ -767,7 +830,7 @@ void test_galactic_ops() {
 
     // Assemble_Fleet.
     CHECK(run(vm, "af = Assemble_Fleet({Hero}) a1 = (af ~= Fleet) a2 = af.Get_Contained_Object_Count() "
-                  "af2 = Assemble_Fleet({F1, F2}) a3 = (af2 == Fleet) none = Assemble_Fleet({Tr})") == "");
+                  "af2 = Assemble_Fleet({F1, F2}) a3 = (af2 == Fleet) none = Assemble_Fleet({PA, Fleet})") == "");
     CHECK(gtrue(vm, "a1") && gnum(vm, "a2") == 1.0 && gtrue(vm, "a3") && gnil(vm, "none") && sim.fleets_at(0, 0).size() == 2);
     const uint32_t hero_fleet = sim.fleet_containing(c[2]);
     CHECK(run(vm, "af3 = Assemble_Fleet({F1, Hero, UFr}) a4 = af3.Get_Contained_Object_Count() "
@@ -796,9 +859,13 @@ void test_galactic_ops() {
     CHECK(run(vm, "af3.Change_Owner(und) ufa = F2.Get_Parent_Object() uc = ufa.Get_Contained_Object_Count()") == "");
     CHECK(gnum(vm, "uc") == 3.0 && sim.fleets_at(0, 1).size() == 1 && sim.fleets_at(0, 0).size() == 0 && g.store->owner(c[2]) == 1);
     CHECK(run(vm, "PC.Change_Owner(emp)") == "" && sim.planets()[2].owner == 0);  // same owner: nothing
-    // Invade on a fleet: one direct-path order (no pipeline attached here).
+    // Invade (a1g t05, A1_READINGS §31): issued by the local player (Empire) with its own ground units only. ufa is
+    // Underworld's fleet without ground units, PA no fleet: warnings, no order.
     const uint32_t issued = bridge.orders_issued;
-    CHECK(run(vm, "ufa.Invade() PA.Invade()") == "" && bridge.orders_issued == issued + 1);
+    CHECK(run(vm, "ufa.Invade() PA.Invade()") == "" && bridge.orders_issued == issued);
+    CHECK(last_message_has(vm, "GameObjectWrapper::Invade -- this function is only valid on fleets."));
+    CHECK(run(vm, "ufa.Invade(1)").find("GameObjectWrapper::Invade -- invalid number of parameters. Expected 0, got 1.") != std::string::npos);
+    test_invade_local_player();
 
     // Base waits, next base types, planet usability, landing.
     CHECK(run(vm, "w1 = WaitForStarbase(PA, 1).IsFinished() w0 = WaitForGroundbase(PA, 0).IsFinished() "
@@ -1137,10 +1204,101 @@ void test_company_member_views() {
         }
 }
 
+// a1g t06: Spawn_Unit at a galactic planet goes through GalacticSim::spawn_unit, so the units live in the sim like
+// produced ones (space units in the owner's orbit fleet, ground units and companies on the surface, one object per
+// company), the shipped SpawnList + Assemble_Fleet pattern (Story_Campaign_Underworld.lua, S10 PROBE A) gives a fleet
+// (landed units are launched into it) and the fleet's Move_To flies it. The sim state matches a direct
+// GalacticSim::spawn_unit of the same units (save / CRC see them the same way).
+void test_spawn_assemble() {
+    Galaxy g;
+    galactic::GalacticSim& sim = *g.sim;
+    ObjectBridge bridge;  // as StorySession wires it
+    bridge.container_of = [&sim](objects::ObjectHandle h) { return sim.container_of(h); };
+    bridge.contents_of = [&sim](objects::ObjectHandle h) { return sim.contents_of(h); };
+    commands::CommandPipeline pipe;
+    std::vector<commands::RejectReason> results;
+    pipe.set_handler([&sim, &results](uint64_t t, const commands::Command& c) {
+        results.push_back(sim.handle_command(t, c));
+        return results.back();
+    });
+    bridge.pipeline = &pipe;
+    LuaVm vm(g.host());
+    attach_player_world(vm, &g.world);
+    attach_object_bridge(vm, &bridge);
+    vm.set_object_global("PA", g.planet(0));
+    vm.set_object_global("PB", g.planet(1));
+    const uint32_t frigate = g.raw.find("Frigate_T"), trooper = g.raw.find("Trooper_T"), team = g.raw.find("Smuggler_Team_T");
+    auto live_objects = [&g] {
+        size_t n = 0;
+        for (const objects::ObjectHandle h : g.store->all_objects()) n += g.store->alive(h) ? 1u : 0u;
+        return n;
+    };
+    const size_t before = live_objects();
+    const std::vector<uint32_t> fa = sim.fleets_at(0, 0);
+    CHECK(fa.size() == 1 && sim.planets()[0].surface.size() == 1);
+    if (fa.size() != 1) return;
+    const uint32_t home = fa[0];
+    CHECK(run(vm, "emp = Find_Player('Empire') "
+                  "space = Spawn_Unit(Find_Object_Type('Frigate_T'), PA, emp) "
+                  "ground = Spawn_Unit(Find_Object_Type('Trooper_T'), PA, emp) "
+                  "comp = Spawn_Unit(Find_Object_Type('Smuggler_Team_T'), PA, emp) "
+                  "n = table.getn(space) + table.getn(ground) + table.getn(comp) "
+                  "loc = space[1].Get_Planet_Location() == PA and ground[1].Get_Planet_Location() == PA and "
+                  "comp[1].Get_Planet_Location() == PA "
+                  "gp = ground[1].Get_Parent_Object() == PA") == "");
+    CHECK(gnum(vm, "n") == 3.0 && gtrue(vm, "loc") && gtrue(vm, "gp"));
+    // Registered with the sim: the frigate joined the Empire's orbit fleet at A, the trooper and the company (one object,
+    // no member objects) landed on A's surface.
+    CHECK(live_objects() == before + 3);
+    CHECK(sim.fleets()[home].contents.size() == 2 && g.store->type(sim.fleets()[home].contents[1]) == frigate);
+    const std::vector<objects::ObjectHandle> surface = sim.planets()[0].surface;
+    CHECK(surface.size() == 3 && g.store->type(surface[1]) == trooper && g.store->type(surface[2]) == team);
+    if (surface.size() != 3) return;
+
+    // SpawnList + Assemble_Fleet of the ground units: a new fleet at A carrying both, launched off the surface.
+    CHECK(run(vm, "units = {} for _, u in ipairs(ground) do table.insert(units, u) end "
+                  "for _, u in ipairs(comp) do table.insert(units, u) end "
+                  "lf = Assemble_Fleet(units) lok = lf ~= nil ln = lok and lf.Get_Contained_Object_Count() "
+                  "lp = lok and lf.Get_Planet_Location() == PA lg = lok and ground[1].Get_Parent_Object() == lf "
+                  "sf = Assemble_Fleet(space) sok = sf ~= nil and sf ~= lf sn = sok and sf.Get_Contained_Object_Count()") == "");
+    CHECK(gtrue(vm, "lok") && gnum(vm, "ln") == 2.0 && gtrue(vm, "lp") && gtrue(vm, "lg"));
+    CHECK(gtrue(vm, "sok") && gnum(vm, "sn") == 1.0);
+    const uint32_t lf = sim.fleet_containing(surface[1]);
+    CHECK(lf != galactic::kNoFleet && lf == sim.fleet_containing(surface[2]) && sim.planets()[0].surface.size() == 1);
+    CHECK(sim.fleets()[home].alive && sim.fleets()[home].contents.size() == 1 && sim.fleets_at(0, 0).size() == 3);
+    if (lf == galactic::kNoFleet) return;
+
+    // The fleet flies: Move_To(B) is a MoveObjectToObject order the sim executes; it arrives in orbit of B.
+    // (B is unrevealed for the human Empire in this galaxy: the human hop gate would refuse the path.)
+    sim.reveal_all_planets();
+    CHECK(run(vm, "blk = lf.Move_To(PB)") == "");
+    CHECK(results.size() == 1 && results[0] == commands::RejectReason::None && sim.fleets()[lf].moving);
+    for (int t = 0; t < 3000 && sim.fleets()[lf].moving; ++t) sim.update();
+    CHECK(!sim.fleets()[lf].moving && sim.fleets()[lf].planet == 1);
+    CHECK(run(vm, "arrived = lf.Get_Planet_Location() == PB") == "" && gtrue(vm, "arrived"));
+    CHECK(vm.errors().empty());
+
+    // The same spawns made directly by the sim give the same sim state (fleets, surface lists, store).
+    Galaxy lua_side, direct;
+    {
+        LuaVm v2(lua_side.host());
+        attach_player_world(v2, &lua_side.world);
+        v2.set_object_global("PA", lua_side.planet(0));
+        CHECK(run(v2, "emp = Find_Player('Empire') Spawn_Unit(Find_Object_Type('Frigate_T'), PA, emp) "
+                      "Spawn_Unit(Find_Object_Type('Trooper_T'), PA, emp) Spawn_Unit(Find_Object_Type('Smuggler_Team_T'), PA, emp)") == "");
+    }
+    for (const uint32_t t : {frigate, trooper, team}) CHECK(static_cast<bool>(direct.sim->spawn_unit(0, 0, t)));
+    StateHasher hl, hd;
+    lua_side.sim->hash_state(hl);
+    direct.sim->hash_state(hd);
+    CHECK(hl.digest() == hd.digest());
+}
+
 }  // namespace
 
 int main() {
     test_players();
+    test_spawn_assemble();  // a1g t06
     test_special_systems();
     test_company_member_views();  // refix t04
     test_perception();

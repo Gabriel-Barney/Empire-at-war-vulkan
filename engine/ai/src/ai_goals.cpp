@@ -330,13 +330,16 @@ void GoalSystem::commit(int64_t now) {
         order.clear();
         for (size_t c = 0; c < ncat; ++c) order.push_back(static_cast<int32_t>(c));
     }
-    // 4. Production for active goals with a PotentialPlan (once per PP).
+    // 4. 0x6c0be0 for active goals with a PotentialPlan: production once per PP; the free-store reservations of every
+    //    such goal are suspended (A1_READINGS §28.6 step 2) before any Resolve_Category.
     for (const int32_t c : order)
-        for (Goal& g : active_[static_cast<size_t>(c)])
+        for (Goal& g : active_[static_cast<size_t>(c)]) {
             if (g.pp_valid && !g.production_queued) {
                 hooks_->queue_production(g);
                 g.production_queued = true;
             }
+            if (g.pp_valid) hooks_->suspend_reservations(g);
+        }
     // 5. Sort and truncate proposals.
     for (size_t c = 0; c < ncat; ++c) {
         std::vector<Goal>& p = proposed_[c];
@@ -385,6 +388,7 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
                 release(g, true);
             } else {
                 if (hooks_->uses_budget()) hooks_->budget_add(g);  // re-add after the reweight (§3.2)
+                hooks_->refresh_plan(g);  // 0x6c2d60: re-assert its reservations (A1_READINGS §28.6 step 3)
                 keep.push_back(std::move(g));
             }
         } else {

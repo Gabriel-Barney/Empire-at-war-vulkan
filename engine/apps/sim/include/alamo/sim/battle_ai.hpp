@@ -14,7 +14,7 @@
 //                                  (order_attack_issue, path A) and drops refusing units; land: min-range staging [M].
 //                                  Every other move / stop clears the attack goal
 //   Reinforce                   -> A2 tactical: TacticalBattle::order_reinforce (the human path: undeployed reserve,
-//                                  side not retreating, space unit cap, rows of 6 around the clamped point [port])
+//                                  side not retreating, space unit cap; land: the company drop layout, space: rows of 6 [port])
 //   Retreat                     -> TacticalBattle::request_retreat
 //   40 / 43 / 57 / 58           -> TacticalBattle::handle_command (abilities)
 //   TacticalBuild               -> A2 tactical: the player build event 0x42edf0 refusals (UC / built present, pad
@@ -135,11 +135,24 @@ public:
     bool space_drop_frame(int32_t player, ai::tactical::SpaceDropFrame& out) override;
     bool space_prevention_hit(int32_t player, const ai::tactical::Vec3f& p) override;
     bool space_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p, float facing_deg, float sweep) override;
+    // a1g t04 follow-up - land TF.Reinforce drop validity (TACTICAL_GAPS §4.2.1, LandMode vf80 0x3b5f60 -> 0x3b6170): the
+    // reserve entry `key` of `player` (not deployed) laid out by land_drop_layout around p (the layout centre), turned by
+    // the side's drop yaw - the slots order_reinforce deploys. True only when EVERY slot passes: inside the playable box
+    // and passable for its member's MovementClass; not fogged for `player` (fog builds); its oriented box (member half
+    // extents, axis pos -> slot) clear of every blocking object's footprint box (after the formation-box broad phase);
+    // the reinforcement radii (land_drop_radius_ok: enabling <= with Use_Reinforcement_Points, prevention <, POWERED
+    // objects block only while their owner has base power). Blocking objects: live battle units and LAND_OBSTACLE
+    // objects [port: stands in for the object tree], never PROXIMITY_MINE ones; AI drops ignore movers (a locomotor and
+    // no LAND_OBSTACLE); `human` drops (the preview 0x345c0) count them. Both test fog and the radii (not forced).
+    // [port] the landing-transport rule (f6) is not modelled. Unknown entry -> false. Space battles -> true.
+    bool land_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p) override { return land_drop_valid(player, key, p, false); }
+    bool land_drop_valid(int32_t player, int32_t key, const ai::tactical::Vec3f& p, bool human);
     // --- end battle host ---
 
 private:
     float type_population(int32_t type) const;  // A2 tactical: pop(T, mode) 0x373500
     float allow_reinforcement_fraction_ = 0.0f;  // A2 tactical: Allow_Reinforcement_Percentage_Normalized
+    bool use_reinforcement_points_ = true;       // a1g t04 follow-up: Use_Reinforcement_Points (GC +0x118a0)
     void standin_orders();
     commands::RejectReason execute_order(uint8_t player, const commands::EventData& ev);
     bool move_unit(objects::ObjectId id, float x, float y, float threat_threshold = ::alamo::tactical::movement::kThreatOff);

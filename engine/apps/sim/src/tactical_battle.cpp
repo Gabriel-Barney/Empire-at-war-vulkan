@@ -736,8 +736,12 @@ Vec3 TacticalBattle::slot_position(uint8_t side, uint32_t mask) {
     const float row = static_cast<float>(k / 6u), col = static_cast<float>(k % 6u) - 2.5f;
     const Vec3 f = facing_[side];
     const Vec3 right{-f.y, f.x, 0.0f};
-    Vec3 p{anchor_[side].x - f.x * row * spacing + right.x * col * spacing,
-           anchor_[side].y - f.y * row * spacing + right.y * col * spacing, 0.0f};
+    const Vec3 p{anchor_[side].x - f.x * row * spacing + right.x * col * spacing,
+                 anchor_[side].y - f.y * row * spacing + right.y * col * spacing, 0.0f};
+    return snap_passable(p, mask, true);
+}
+
+Vec3 TacticalBattle::snap_passable(Vec3 p, uint32_t mask, bool always) const {
     float mn[2], mx[2];
     if (map_.playable_box(mn, mx)) {
         p.x = std::clamp(p.x, mn[0], mx[0]);
@@ -745,6 +749,10 @@ Vec3 TacticalBattle::slot_position(uint8_t side, uint32_t mask) {
     }
     if (!space_ && movement_) {
         const mv::PassabilityGrid& g = movement_->grid();
+        if (!always && g.passable_world({p.x, p.y}, mask)) {
+            p.z = map_.terrain.sample_height(p.x, p.y);
+            return p;
+        }
         const int32_t cx = mv::world_to_cell(p.x), cy = mv::world_to_cell(p.y);
         bool found = false;
         for (int32_t r = 0; r <= 60 && !found; ++r)
@@ -775,7 +783,8 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
     std::vector<uint32_t> members_types = spawn_types(P);
     if (P.other_type >= 0) members_types.assign(P.spots.size(), static_cast<uint32_t>(P.other_type));  // §3.2 step 3
     size_t spot = 0;
-    for (uint32_t t : members_types) {
+    for (size_t mk = 0; mk < members_types.size(); ++mk) {
+        const uint32_t t = members_types[mk];
         mv::UnitDesc md = mv::unit_desc_from_type(types, t);
         md.locomotor = mv::locomotor_kind_from_type(types, t, space_ ? mv::MoveMode::Space : mv::MoveMode::Land);  // REMAINING_GAPS §4.3-4.7
         Vec3 pos;
@@ -789,6 +798,10 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
             pos = {anchor_[side].x - facing_[side].x * 600.0f, anchor_[side].y - facing_[side].y * 600.0f, 0.0f};
         } else if (lead_sw) {
             pos = bt_ds_pos_;  // battle host: the spawned super-weapon at DEATH_STAR_POSITION (TACTICAL_GAPS §4.8) [M]
+        } else if (!drop_pos_.empty()) {  // a1g t04 follow-up: order_reinforce's land drop layout (member order)
+            const size_t k = mk;
+            const uint32_t mask = movement_->classes().mask(md.movement_class);
+            pos = k < drop_pos_.size() ? snap_passable(drop_pos_[k], mask, false) : slot_position(side, mask);
         } else {
             pos = slot_position(side, space_ ? 0u : movement_->classes().mask(md.movement_class));
         }
@@ -1294,6 +1307,19 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
             if (!fog_reinforce_point_ok(static_cast<int32_t>(player), x, y)) return R::InvalidPosition;
 #endif
         }
+        if (!space_) {
+            // a1g t04 follow-up (TACTICAL_GAPS §4.2.1): the company drop layout around (x, y), turned by the side's yaw -
+            // the slots BattleAi::land_drop_ok tested.
+            const LandDropLayout lay = land_drop_layout(land_drop_shape(p.type), x, y, drop_yaw(p.side));
+            if (lay.ok && p.other_type < 0) {
+                drop_pos_.clear();
+                for (const LandDropSlot& s : lay.slots) drop_pos_.push_back(Vec3{s.x, s.y, 0.0f});
+                deploy(mode, i, rng);
+                drop_pos_.clear();
+                ++stats_.reinforcements;
+                return R::None;
+            }
+        }
         // [port] landing position: the battle's row-of-6 slots around the requested point (clamped to the mode bounds).
         const tactical::Aabb& b = mode.bounds();
         const Vec3 save_anchor = anchor_[p.side];
@@ -1309,6 +1335,242 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
     return R::InvalidUnit;
 }
 // ---- end P host ----
+
+// ---- a1g t04 follow-up: land company drop layout (TACTICAL_GAPS §4.2.1) ----
+namespace {
+using Off2 = std::array<float, 2>;
+
+// 0x20acd0: yaw of the vector 0 -> (x, y) in degrees, [0, 360); 0 for the zero vector.
+float drop_yaw_of(float x, float y) {
+    if (x == 0.0f && y == 0.0f) return 0.0f;
+    float d = dmath::atan2(y, x) * 57.295776f;
+    if (d < 0.0f) d += 360.0f;
+    return d;
+}
+
+Off2 drop_rotate(float deg, float x, float y) {
+    float sn = 0.0f, cs = 1.0f;
+    dmath::sincos(deg * (dmath::kPiF / 180.0f), sn, cs);
+    return {x * cs - y * sn, x * sn + y * cs};
+}
+
+// 0x40f970(cell = (a, b), n): rows of perRow slots, centred; output in world units (x 20), bounds in cell units.
+bool drop_grid(float a, float b, uint32_t n, std::vector<Off2>& out, float& bx, float& by) {
+    out.clear();
+    if (b == 0.0f || n == 0) return false;
+    const float side = std::sqrt(std::max(1.0f, static_cast<float>(n) * b * a * 1.8f));
+    const float fr = side / b;
+    const uint32_t per_row = fr >= 1.0f ? static_cast<uint32_t>(fr) : 1u;
+    const uint32_t rows = (n + per_row - 1u) / per_row;
+    float x = (static_cast<float>(rows) * a - a) / 2.0f;
+    uint32_t left = n;
+    for (uint32_t r = 0; r < rows; ++r) {
+        const uint32_t k = std::min(per_row, left);
+        const float gap = (side - static_cast<float>(k) * b) / static_cast<float>(k + 1u);
+        float y = gap - side / 2.0f;
+        for (uint32_t j = 0; j < k; ++j) {
+            y += b / 2.0f;
+            out.push_back({x * 20.0f, y * 20.0f});
+            y += b / 2.0f + gap;
+        }
+        left -= k;
+        x -= a;
+    }
+    bx = static_cast<float>(rows) * a / 2.0f;
+    by = side / 2.0f;
+    return true;
+}
+
+// 0x5abc00((ex, ey), g, s): ceil(sqrt(s)) columns along y per row, rows across x (row 0 = front, most +x), centred.
+// Bounds (cell units): the slots' joint box half extents x 0.05.
+void drop_team(float ex, float ey, float g, uint32_t s, std::vector<Off2>& out, float& bx, float& by) {
+    out.clear();
+    uint32_t c = static_cast<uint32_t>(std::sqrt(static_cast<float>(s)));
+    if (c * c != s) ++c;
+    if (c == 0) c = 1;
+    const uint32_t rows = (s + c - 1u) / c;
+    const float px = 2.0f * ex + g, py = 2.0f * ey + g;
+    float lo_x = 0.0f, hi_x = 0.0f, lo_y = 0.0f, hi_y = 0.0f;
+    uint32_t left = s;
+    for (uint32_t r = 0; r < rows; ++r) {
+        const uint32_t k = std::min(c, left);
+        const float x = (static_cast<float>(rows - 1u) / 2.0f - static_cast<float>(r)) * px;
+        for (uint32_t j = 0; j < k; ++j) {
+            const float y = k == 1u ? 0.0f : -static_cast<float>(k - 1u) * py / 2.0f + static_cast<float>(j) * py;
+            out.push_back({x, y});
+            hi_x = std::max(hi_x, x + ex);
+            lo_x = std::min(lo_x, x - ex);
+            hi_y = std::max(hi_y, y + ey);
+            lo_y = std::min(lo_y, y - ey);
+        }
+        left -= k;
+    }
+    bx = (hi_x - lo_x) / 2.0f * 0.05f;
+    by = (hi_y - lo_y) / 2.0f * 0.05f;
+}
+
+bool drop_token_is(std::string_view list, std::string_view token) {  // case-insensitive token in a , / space list
+    size_t i = 0;
+    auto sep = [](char ch) { return ch == ',' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
+    while (i < list.size()) {
+        while (i < list.size() && sep(list[i])) ++i;
+        size_t j = i;
+        while (j < list.size() && !sep(list[j])) ++j;
+        if (j - i == token.size()) {
+            bool eq = true;
+            for (size_t k = 0; k < token.size() && eq; ++k) {
+                const char a = list[i + k], b = token[k];
+                const char la = (a >= 'a' && a <= 'z') ? static_cast<char>(a - 32) : a;
+                const char lb = (b >= 'a' && b <= 'z') ? static_cast<char>(b - 32) : b;
+                eq = la == lb;
+            }
+            if (eq) return true;
+        }
+        i = j;
+    }
+    return false;
+}
+}  // namespace
+
+LandDropLayout land_drop_layout(const LandDropShape& shape, float px, float py, float yaw_deg) {
+    LandDropLayout out;
+    const size_t n = shape.members.size();
+    if (n == 0 || shape.hx.size() != n || shape.hy.size() != n) return out;
+    const float fx = shape.hx[0], fy = shape.hy[0], fs = shape.formation_spacing;
+    std::vector<Off2> local;
+    float bx = 0.0f, by = 0.0f;
+    if (!shape.create_team) {  // vehicles: one grid over all members, cell = (2 hx / 20 + FS, 2 hy / 20 + FS) of F
+        if (!drop_grid(2.0f * fx / 20.0f + fs, 2.0f * fy / 20.0f + fs, static_cast<uint32_t>(n), local, bx, by)) return out;
+    } else {
+        const uint32_t sq = std::min<uint32_t>(std::max<uint32_t>(shape.squad, 1u), static_cast<uint32_t>(n));
+        const uint32_t teams = (static_cast<uint32_t>(n) + sq - 1u) / sq;
+        std::vector<Off2> team, offs;
+        float tbx = 0.0f, tby = 0.0f;
+        if (shape.container_locomotor)
+            drop_team(fx, fy, 20.0f * fs, sq, team, tbx, tby);
+        else if (!drop_grid(2.0f * fx / 20.0f + fs, 2.0f * fy / 20.0f + fs, sq, team, tbx, tby))
+            return out;
+        if (!drop_grid(2.5f * tbx, 2.5f * tby, teams, offs, bx, by)) return out;
+        local.resize(n);
+        for (size_t i = 0; i < n; ++i) {
+            const size_t t = i / sq, j = i - t * sq;
+            const Off2 o = offs[t];
+            const Off2 m = drop_rotate(drop_yaw_of(o[0], o[1]), team[j][0], team[j][1]);  // each team faces its offset
+            local[i] = {o[0] + m[0], o[1] + m[1]};
+        }
+    }
+    out.half_x = bx * 20.0f;
+    out.half_y = by * 20.0f;
+    out.slots.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        const Off2 r = drop_rotate(yaw_deg, local[i][0], local[i][1]);
+        LandDropSlot& sl = out.slots[i];
+        sl.type = shape.members[i];
+        sl.x = px + r[0];
+        sl.y = py + r[1];
+        sl.hx = shape.hx[i];
+        sl.hy = shape.hy[i];
+        sl.yaw_deg = drop_yaw_of(r[0], r[1]);
+    }
+    out.ok = true;
+    return out;
+}
+
+bool drop_boxes_overlap(const DropBox& a, const DropBox& b) {
+    const Off2 ax = drop_rotate(a.yaw_deg, 1.0f, 0.0f), ay = drop_rotate(a.yaw_deg, 0.0f, 1.0f);
+    const Off2 bu = drop_rotate(b.yaw_deg, 1.0f, 0.0f), bv = drop_rotate(b.yaw_deg, 0.0f, 1.0f);
+    const float dx = b.cx - a.cx, dy = b.cy - a.cy;
+    const Off2 axes[4] = {ax, ay, bu, bv};
+    for (const Off2& u : axes) {
+        const float ra = a.hx * std::fabs(ax[0] * u[0] + ax[1] * u[1]) + a.hy * std::fabs(ay[0] * u[0] + ay[1] * u[1]);
+        const float rb = b.hx * std::fabs(bu[0] * u[0] + bu[1] * u[1]) + b.hy * std::fabs(bv[0] * u[0] + bv[1] * u[1]);
+        if (std::fabs(dx * u[0] + dy * u[1]) >= ra + rb) return false;  // separating axis
+    }
+    return true;
+}
+
+bool land_drop_radius_ok(float x, float y, std::span<const LandDropRadiusObject> objects, bool use_reinforcement_points) {
+    bool enabled = !use_reinforcement_points;
+    for (const LandDropRadiusObject& o : objects) {
+        const float dx = x - o.x, dy = y - o.y, d2 = dx * dx + dy * dy;
+        if (o.allied) {
+            if (o.enabling > 0.0f && d2 <= o.enabling * o.enabling) enabled = true;
+        } else if (o.prevention > 0.0f && d2 < o.prevention * o.prevention && (!o.powered || o.owner_base_power)) {
+            return false;  // prevention: a POWERED object blocks only while its owner has base power
+        }
+    }
+    return enabled;
+}
+
+void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy) {
+    hx = hy = 0.0f;
+    if (type >= types.size()) return;
+    float sc = types.get_float(type, "Scale_Factor");
+    if (!(sc > 0.0f)) sc = 1.0f;
+    const float cx = types.get_float(type, "Custom_Hard_XExtent"), cy = types.get_float(type, "Custom_Hard_YExtent");
+    if (cx > 0.0f && cy > 0.0f) {
+        hx = cx * sc;
+        hy = cy * sc;
+        return;
+    }
+    if (const BattleCatalog::ModelInfo* m = catalog ? catalog->model_info(type, false, true) : nullptr; m && m->has_bounds) {
+        hx = std::fabs(m->max[0]) * sc;
+        hy = std::fabs(m->max[1]) * sc;
+        return;
+    }
+    hx = hy = mv::unit_desc_from_type(types, type).radius;  // [port] no hard extents and no model box
+}
+
+LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const BattleCatalog* catalog, const galactic::ConflictRules& rules,
+                              uint32_t company_type) {
+    LandDropShape s;
+    const galactic::ConflictTypeInfo& ti = rules.type(company_type);
+    if (ti.members.empty()) {
+        s.members.push_back(company_type);
+    } else {
+        for (const auto& [mt, n] : ti.members)
+            for (int32_t i = 0; i < n; ++i) s.members.push_back(mt);
+    }
+    if (s.members.empty()) return s;
+    for (const uint32_t t : s.members) {
+        float hx = 0.0f, hy = 0.0f;
+        drop_half_extents(types, catalog, t, hx, hy);
+        s.hx.push_back(hx);
+        s.hy.push_back(hy);
+    }
+    const uint32_t f = s.members.front();
+    if (f < types.size()) {
+        s.create_team = types.get_bool(f, "Create_Team");
+        s.formation_spacing = types.get_float(f, "FormationSpacing");
+    }
+    if (company_type < types.size()) {
+        const int32_t k = types.get_int(company_type, "Max_Squad_Size");  // +0x1e44, default 10 (bt_team)
+        s.squad = k > 0 ? static_cast<uint32_t>(k) : 10u;
+        std::string_view name = types.get_string(company_type, "Create_Team_Type");
+        while (!name.empty() && (name.front() == ' ' || name.front() == '\t' || name.front() == '\r' || name.front() == '\n')) name.remove_prefix(1);
+        while (!name.empty() && (name.back() == ' ' || name.back() == '\t' || name.back() == '\r' || name.back() == '\n')) name.remove_suffix(1);
+        const objects::TypeIndex tt = name.empty() ? objects::kNone : types.resolve_name(name);
+        // LandBehavior (+0x718) lists LAND_TEAM_CONTAINER_LOCOMOTOR (its behaviour id is shared with the other
+        // locomotors, so the list text is read).
+        if (tt != objects::kNone && tt < types.size())
+            s.container_locomotor = drop_token_is(types.get_string(tt, "LandBehavior"), "LAND_TEAM_CONTAINER_LOCOMOTOR");
+    }
+    return s;
+}
+
+LandDropShape TacticalBattle::land_drop_shape(uint32_t company_type) const {
+    return sim::land_drop_shape(catalog_->types(), catalog_, *rules_, company_type);
+}
+
+void TacticalBattle::drop_half_extents(uint32_t type, float& hx, float& hy) const {
+    sim::drop_half_extents(catalog_->types(), catalog_, type, hx, hy);
+}
+
+float TacticalBattle::drop_yaw(uint8_t side) const {
+    return yaw_of(facing_[side < 2 ? side : 0]);
+}
+// ---- end a1g t04 follow-up ----
+
 
 // ---- [port: Gabriel] queueable unit actions: order queue ----------------------------------------------------------
 
@@ -1986,13 +2248,14 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
     // A1_READINGS §7 [H; M flag names]: amount = the actual hull + shield loss (shield absorbed + hull damage; a hit
     // routed to a hard point changes neither), recorded only when > 0 and only for DAMAGE_TRACKING victims. A per-attacker
     // entry needs the source type's Is_Valid_Target (+0x6b) and Collidable_By_Projectile_Living (+0x41); its key is the
-    // source's TEAM parent when it has one. [port] The killing hit's overkill is not clamped (the victim leaves the store
-    // this tick); the running total / last-damage frame (+0x8 / +0x50) are not kept (nothing reads them yet).
+    // source's TEAM parent when it has one. §30.2 [H]: the hull part is the clamped loss (hullBefore - max(0, hullAfter),
+    // 0 when the cannot-die restore ran), so the killing hit records at most the remaining hull. [port] The running total /
+    // last-damage frame (+0x8 / +0x50) are not kept (nothing reads them yet).
     {
         const objects::GameObjectTypes& dtypes = catalog_->types();
         for (const tc::DamageEvent& e : combat_->damage_events()) {
             if (e.source == tc::kNoObject || !damage_tracking_.tracks(static_cast<int32_t>(e.victim))) continue;
-            const float amount = e.absorbed + (e.hardpoint < 0 ? e.to_hull : 0.0f);
+            const float amount = e.absorbed + (e.hardpoint < 0 ? e.hull_lost : 0.0f);
             if (!(amount > 0.0f)) continue;
             const objects::ObjectHandle sh = store.find(static_cast<objects::ObjectId>(e.source));
             if (!store.alive(sh)) continue;
