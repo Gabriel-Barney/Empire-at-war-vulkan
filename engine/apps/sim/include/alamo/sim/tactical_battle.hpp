@@ -1067,6 +1067,10 @@ private:
     objects::ObjectId fighter_push(const Unit& leader, objects::ObjectId key, const objects::ObjectStore& store);
     objects::ObjectId fighter_goal_key(objects::ObjectId id);  // a squadron member -> its container, else id
     bool fighter_goal_live(objects::ObjectId key, const objects::ObjectStore& store);
+    // S8 t17 (FIGHTER_FLYING §4.10 A): 0x4160a0(F, u, c, &Rr) for combat's scan (CombatSystem::set_scan_range_query);
+    // read-only (combat's parallel gather phase). c = kNoObjectId: the scan cube test.
+    uint8_t fighter_scan_range(const objects::ObjectStore& store, objects::ObjectId member, objects::ObjectId candidate, float range,
+                               float& rr) const;
     // enter_idle (§4.7 step 4): fighters that entered Idle during the movement tick drop their (team) combat target.
     void fighter_enter_idle();  // S7 t25: the movement tick's EnterIdle events drop the squadrons' team targets
     std::vector<FighterFormationRecord> fformations_;

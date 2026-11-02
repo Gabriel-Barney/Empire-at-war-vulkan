@@ -431,7 +431,7 @@ sound, nothing spawned** [H]. The callers' bookkeeping on a null spawn [H] (2026
 
 ### 5.3 Heading and the rest of the aim
 The normal aim 0x54a270 still runs after the solve: random target bone (synced draw, when the target type has a
-target-bone list +0xe70), lead 0x399450 with projectile speed `Max_Speed` (× FPS inside lead, TACTICAL_COMBAT §3.1
+target-bone list +0xe70; full rule in TACTICAL_COMBAT §3.1.1 "Own-weapon aim point", 2026-11-02), lead 0x399450 with projectile speed `Max_Speed` (× FPS inside lead, TACTICAL_COMBAT §3.1
 step 9; the reduced lob speed is not used), then the fire-time inaccuracy 0x549f80 (its synced draws). It yields the
 facing F = angles(muzzle → FireAt point) and FireAtPosition (pack +0x3c). If the aim fails (zero point, or the check
 0x54c2f0 refuses), no projectile is spawned. With `Fires_Forward` (shooter type +0x44) F = the shooter's own

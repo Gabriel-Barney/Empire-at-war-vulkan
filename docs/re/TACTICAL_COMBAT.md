@@ -891,7 +891,8 @@ that list (it can still be read by abilities and Lua, e.g. `Get_Current_Projecti
 6. unless type byte +0x8a is set, no fire in locomotor state 0x1C; a unit whose current locomotor answers vf +0x240
    does not fire in state 0x16 (Walk Stopped) ("Gate details" below, 2026-11-02);
 7. unless a fire-at-position order is pending (TD +0x3c / +0x3d), the targeting state TD +0x18 must be 4 (the
-   "attacking" state of slot 31; confirmed in "Gate details" below, 2026-11-02).
+   "attacking" state of slot 31; confirmed in "Gate details" below, 2026-11-02; who sets the order: "Fire-at-position
+   order" below, 2026-11-02).
 All four `Fire_Weapon_When_*` flags default to true (OBJECT_TYPES §4.6).
 
 **Hardpoint gate** (`HardPointClass::Does_Weapon_State_Allow_Firing_At`, `0x384850`; the name is in its error
@@ -985,6 +986,99 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
 - Default every per-mode hardpoint flag to true.
 - Start TD's last-service frame at 0, so a late spawn's first service clears its initial delay.
 - Make `Get_Current_Projectile_Type` independent of WEAPON.
+
+**Fire-at-position order (lobbing superweapons; RE, 2026-11-02)** [H unless tagged]. TD = obj +0xf0. TD +0x30…+0x38 =
+the ordered ground point, +0x3c = "order pending", +0x3d = "charged, fire now". Every reader and writer found:
+- **Set** only by `Fire_Lobbing_At_Position` 0x4ea3f0, a method of `LobbingSuperweaponBehaviorClass` (vtable 0x879e98;
+  it is reached only through the object's LOBBING_SUPERWEAPON 0x37 behaviour). It needs the owner's tactical player
+  data and, for `Requires_Base_Power` (+0x8b), base power (0x527520). It does **not** check readiness, range, alliance
+  or fog. It writes the point to TD +0x30…+0x38, TD +0x3c := 1, and restarts the special-weapon pack (obj +0x158):
+  +0x28 := 0, start +8 := now, ready +0xc := now + int(0x373630(type, 0) × FPS); then it starts the ABILITY_COUNTDOWN
+  display (behaviour 0x46) for ability 0x2f. A second order before the shot just overwrites the point.
+  Callers (all check readiness first):
+  - network command 25 `SpecialWeaponFire` execute 0x40a3b0 (COMMANDS.md): readiness (0x4914e0) ≥ **0.99**; point =
+    the command's position when its "at position" bit is set or there is no target object, else the target object's
+    bare position (obj +0x78, no `Ranged_Target_Z_Adjust`). `SpecialWeaponsAllowed` is not checked for a
+    lobbing-only object. Afterwards the destroy-after sweep (behaviour 0x67) for the weapon's owner. The human UI path
+    that queues command 25 (ability button `FIRE_LOBBING_SUPERWEAPON` 47 → targeting cursor) was not traced [M];
+  - Lua `GameObject.Fire_Special_Weapon(target, player)` 0x576220: readiness ≥ 1.0 (SCRIPT_GAPS §1.1);
+  - Lua `LandTaskForce.Fire_Special_Weapon(type_name, target)` 0x6eb7f0: the first task-force unit whose
+    representative type (0x3973b0) **is** the named type and is ready (≥ 1.0); point = the target object's bare
+    position, or the AI target's position (SCRIPT_GAPS §1.4). The only shipped AI user is the skirmish/campaign land
+    plan `FireMagnepulse.lua` (goal `Fire_Magnepulse`, BasicLandGoalSet), which names `Ground_Magnepulse_Cannon`.
+    The skirmish build `Skirmish_Ground_Magnepulse_Cannon_E` is a `Variant_Of_Existing_Type` of it, i.e. a separate
+    type object, so the type test should fail and the AI should never fire the skirmish cannon through this plan [M:
+    variant identity under the task-force match and 0x3973b0 not checked at run time; in-game probe below].
+- **Charge-up** in the behaviour service 0x4ea6f0 (vf6), every service while +0x3c is set and the charge-up stamp
+  (pack +0x24) is 0: aim the TURRET behaviour (0xb) at the point with 0x631fe0 (LOB_SOLVER §3.6: lob solution and
+  turret angles reached). No TURRET, no solution, or not yet aimed → wait (retried next service; no timeout). Once
+  aimed: play `Lobbing_Superweapon_SFXEvent_Chargeup` (type +0x2328), start `Lobbing_Superweapon_Chargeup_Particle`
+  on its bone (+0x2300 / +0x2308), stamp pack +0x24 := now. When now ≥ stamp + `Lobbing_Superweapon_Chargeup_Frames`
+  (+0x2348; vanilla 90): play `Lobbing_Superweapon_SFXEvent_Fire` (+0x2338), **TD +0x3d := 1**, stamp := 0. The same
+  service also plays `SFXEvent_Special_Weapon_Ready` (+0x1310) on the frame the pack becomes ready, for the local
+  player's own weapon only (presentation).
+- **Fire** in the WEAPON service 0x54d090:
+  - while TD +0x3d is set the recharge countdown TD +0x24 is **skipped** (no wait);
+  - gate step 7: an object with LOBBING_SUPERWEAPON fires **only** while TD +0x3d is set, and then needs neither
+    targeting state 4 nor a target; an object without it would pass step 7 on +0x3c or +0x3d alone, but nothing sets
+    them on such an object, so in practice the bypass is lobbing-only;
+  - the "no target" early return is skipped while +0x3c is set; the request is the ground point TD +0x30…+0x38 with
+    **no target object** (so no lead, no bone pick: "Own-weapon aim point" below, ground-point branch);
+  - after a successful spawn, for a LOBBING_SUPERWEAPON object: TD +0x3c and +0x3d := 0 (one 16-bit store) and
+    TD +0x30…+0x38 := 0. A failed spawn (no lob solution, LOB_SOLVER §5.2) skips this, so the order stays charged and is
+    retried next service.
+- **Cleared** only there and by the TD ctor 0x380540. A target's death, a new move order or the end of the readiness
+  do not clear it [H for the writer search: every store to TD +0x3c / +0x3d in the decompile; M that the save code
+  keeps it].
+- Consequence: a lobbing superweapon never fires its `Projectile_Types` at what its own TARGETING picks; it fires
+  once per order, after the turret is aimed and the charge-up has run.
+
+*For the implementer:* keep a per-object order (point, pending, charged). `Fire_Special_Weapon` (Lua, task force,
+command 25) sets point + pending and restarts the readiness timer; the lobbing service aims the turret, then counts
+`Lobbing_Superweapon_Chargeup_Frames` and sets charged; the WEAPON service, for lobbing objects, fires only when charged,
+ignores its recharge then, aims at the point with no target, and clears the order after a successful spawn.
+
+**Own-weapon aim point, `Target_Bones` (RE, 2026-11-02)** [H unless tagged]. The WeaponBehavior shot spawns through
+`Spawn_Projectile` 0x54ade0, which (for every projectile category except 2 and 9) calls the aim 0x54a270(shooter,
+projectile type, muzzle transform, target, …). The aim point P is chosen **per shot**:
+1. **No target object** (ground point, e.g. the fire-at-position order): P = the request's point, unchanged. Inaccuracy
+   is applied only when request byte +0x4c is clear (it marks a dry-run spawn whose result goes to +0x4d [M]) and the
+   fixed radius getter 0x374890 is non-zero; no lead.
+2. **The shooter's current target is this object and has a target hardpoint**: 0x397a40(shooter) returns the formation
+   attack target (0x41a2e0, when the shooter's locomotor pack +0x1f0 holds a formation) or TD +8 with the hardpoint
+   index from TD +0x10 → +0x18. When that object is the request's target and the index is not −1: P = the hardpoint's
+   bone world translation (0x396ce0; an index out of range, a hardpoint whose type flag +0x4c is clear, or a failed bone
+   lookup falls back to the **bare** position, no z adjust). The index is passed in r8 (disassembly 0x14054a43e) [H].
+3. **Otherwise, target type with `Target_Bones`**: one **synced** `Get_Int(0, n − 1)` on 0x140a13e24 (no draw when
+   n = 1) picks entry i of the type's resolved bone list (+0xe68, count +0xe70). P = that bone's world translation on
+   the target's current model (0x12d2c0). If the target has no model instance (obj +0x2a0 / 0x2648b0 null) or the bone
+   transform fails, P = position + `Ranged_Target_Z_Adjust` (the draw is still consumed).
+4. **Otherwise**: P = 0x398440(target) = position (obj +0x78…+0x80) + (0, 0, target type `Ranged_Target_Z_Adjust`
+   +0x4dc). **So the port's "position + Ranged_Target_Z_Adjust" for a bone-less target is the retail rule** (the
+   [M/port] tag can become [H]). `M1_Repulsor_Tank` sets 12.0; types without the tag get the default 6.0.
+
+Then lead 0x399450 (speed 0x370f00(type, 0)) and inaccuracy 0x549f80 run on P (§3.1 steps 9–10);
+categories 0, 3, 4, 6, 7 (mask 0xd9) aim at the inaccurate point, categories 1, 2, 5 keep the led point and carry the
+miss as an offset. With a team-container target, `Spawn_Projectile` first replaces it by its member nearest the
+launch point and resets the hardpoint index (LOB_SOLVER §5.1), so step 2 no longer matches and the member's own type
+decides steps 3–4.
+
+**Bone list.** XML `Target_Bones` (comma list, type +0xe48 strings, count +0xe58) is resolved at type model load
+0x375380 into bone indices on the type's model (+0xe68 / +0xe70, built by 0x12d2a0 name lookup); names missing on
+the model are **dropped** (so n counts only found bones, and the draw range shrinks). [M: which model (land / space)
+when a type has both.] Vanilla FoC users: `AT_AT_Walker` and `Veers_AT_AT_Walker` (`MISSILE_TARGET00`–`02`),
+`Nebulon_B_Frigate`, `Eclipse_Super_Star_Destroyer`, `CIN_Corvette_fast`; no other land unit.
+
+**Hardpoint aim for comparison** (`Fire_At` step 5 object aim 0x383f70) [H]: the target's `Target_Bones` are tried
+**in list order** (no draw): the first bone within `Get_Fire_Range` (+ target radius when the owner has
+`Projectile_Types`) of the fire-bone reference point and inside the fire arc (0x383ba0) wins. Then, when the target
+has hardpoints, one synced `Get_Int(0, n − 1)` picks a start index and the hardpoints are tried cyclically with the same
+tests (destroyed destroyable ones skipped; bone = +0x2c, else +0x38). Last, position + `Ranged_Target_Z_Adjust` if in
+range and arc. With no model instance on the target: position + `Ranged_Target_Z_Adjust`, no draw.
+
+*For the implementer:* per own-weapon shot at an object: ordered hardpoint → its bone; else `Target_Bones` → one
+synced pick per shot among the found bones (bone translation, fallback position + z adjust); else position +
+`Ranged_Target_Z_Adjust`. Then lead and inaccuracy. A ground-point shot uses the point as given.
 
 **Targets.** Both sources use the owner's current target, targeting data pack TD (obj +0xf0) +8, chosen by the
 unit's TARGETING behaviour with the unit's own range (§2.2: `Targeting_Max_Attack_Distance`, or the lob reach for a
