@@ -3457,6 +3457,27 @@ cmd::RejectReason TacticalBattle::handle_command(TacticalMode& mode, uint8_t pla
                    : R::InvalidTarget;
     }
     // --- end OI abilities ---
+    // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", command 25 execute 0x40a3b0): readiness >= 0.99, point = the
+    // command position when "at position" is set or there is no target object, else the target's bare position; then
+    // Fire_Lobbing_At_Position (sw_fire_lobbing_at). [port] Lobbing superweapons of the issuing player only; the
+    // destroy-after sweep (behaviour 0x67) for the weapon's owner is not run here.
+    if (t == T::SpecialWeaponFire) {
+        const uint32_t ww = ev.u("weapon");
+        if (ww == cmd::kNoObject || ww > 0x7FFFFFFFu) return R::InvalidUnit;
+        const objects::ObjectStore& store = mode.primary();
+        const objects::ObjectHandle wh = store.find(static_cast<objects::ObjectId>(ww));
+        if (!store.alive(wh) || store.owner(wh) != static_cast<int32_t>(player)) return R::InvalidUnit;
+        const objects::ObjectId wid = store.id(wh);
+        if (!combat_ || !combat_->fires_at_position(wid)) return R::Unhandled;
+        if (l1_sw_.readiness(wid, frame_) < 0.99f) return R::AbilityNotReady;
+        Vec3 at{ev.f("x"), ev.f("y"), ev.f("z")};
+        if (ev.u("at_position") == 0) {
+            const uint32_t tw = ev.u("target");
+            const objects::ObjectHandle th = tw == cmd::kNoObject || tw > 0x7FFFFFFFu ? objects::ObjectHandle{} : store.find(static_cast<objects::ObjectId>(tw));
+            if (store.alive(th)) at = store.position(th);
+        }
+        return sw_fire_lobbing_at(mode, wid, at) ? R::None : R::NotAllowed;
+    }
     if (t != T::SetUnitAbilityMode && t != T::TacticalSpecialAbility && t != T::TacticalSpecialAbilityWithDummyTarget &&
         t != T::SetAbilityAutofire)
         return R::Unhandled;

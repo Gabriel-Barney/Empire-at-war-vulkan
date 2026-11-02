@@ -143,6 +143,11 @@ public:
     // data (`out` cleared); true with an empty list = the model has no such bone (the weapon never fires). build_battle
     // (with a mode) stores them in UnitDesc::muzzle_bones.
     bool muzzle_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const;
+    // S8 t27 (TACTICAL_COMBAT §3.1.1 "Bone list", type model load 0x375380): the type's Target_Bones (comma list) looked up
+    // on its model for the mode, list order, names missing on the model dropped, as bind-pose offsets in the combat
+    // unit-local frame x Scale_Factor. True with an empty list when the type has no Target_Bones; false without model
+    // data (`out` cleared). build_battle (with a mode) stores them in UnitDesc::target_bones.
+    bool target_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const;
     // S8 t10 (LOB_SOLVER §5.1 "Garrison fire bones in detail", type model load 0x375380): the gun-bone table of a type with
     // `guns` = Num_Garrison_Guns != 0 - M = the model's highest _ALT mesh index entries (ALT a = 0..M-1), `guns` bones
     // each: FP_0<i>_ALT<a> (i <= 9) or FP_<i>_ALT<a> (i >= 10), bind pose in the unit-local frame x Scale_Factor, with the

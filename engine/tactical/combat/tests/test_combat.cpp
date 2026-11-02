@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <new>
 #include <string>
@@ -3991,6 +3992,7 @@ struct OwnOpt {
     bool idle_fire = false, lobbing = false;
     int8_t weapons_enabled_flag = -1;  // ability slot 0's WEAPONS_ENABLED flag (-1: no ability)
     float target_z_adjust = 0.0f;      // the target type's Ranged_Target_Z_Adjust
+    std::function<void(CombatData&)> edit;  // S8 t26 / t27: last edits before the system is made (units 0 / 1)
 };
 struct OwnWorld {
     World w;
@@ -4021,6 +4023,7 @@ struct OwnWorld {
         t.radius = 5.0f;
         t.ranged_target_z_adjust = o.target_z_adjust;
         push_unit(w.data, t);
+        if (o.edit) o.edit(w.data);
         CombatConfig cfg;
         cfg.mode = GameMode::Land;
         cfg.inaccuracy_enabled = false;
@@ -4392,8 +4395,8 @@ void test_hardpoint_mode_default() {
 }
 
 void test_own_weapon_aim_point() {
-    // S8 t17 [M/port] (0x54a270): the own weapon aims at the target position + its Ranged_Target_Z_Adjust (0x398440), so a
-    // level shot at a hover hull (collision box above its origin) climbs to the hull's centre.
+    // S8 t17 / t27 [H] (0x54a270 step 4): the own weapon aims at the target position + its Ranged_Target_Z_Adjust
+    // (0x398440), so a level shot at a hover hull (collision box above its origin) climbs to the hull's centre.
     OwnOpt opt;
     opt.target_z_adjust = 12.0f;
     OwnWorld o(opt, Vec3{100, 0, 0});
@@ -4408,6 +4411,261 @@ void test_own_weapon_aim_point() {
         CHECK(std::fabs(v.dir.z - want) < 1.0e-4f);
     }
     CHECK(seen);
+}
+
+// The directions of shooter 1's projectiles spawned this tick (not stepped yet), serial order.
+std::vector<Vec3> own_shot_dirs(const OwnWorld& o) {
+    std::vector<Vec3> out;
+    for (size_t i = 0; i < o.w.sys->projectile_count(); ++i) {
+        const ProjectileView v = o.w.sys->projectile(i);
+        if (v.shooter == 1) out.push_back(v.dir);
+    }
+    return out;
+}
+
+bool same_dir(Vec3 d, Vec3 to) {
+    const float len = std::sqrt(to.x * to.x + to.y * to.y + to.z * to.z);
+    return std::fabs(d.x - to.x / len) < 1.0e-4f && std::fabs(d.y - to.y / len) < 1.0e-4f && std::fabs(d.z - to.z / len) < 1.0e-4f;
+}
+
+void test_own_weapon_target_bones() {
+    // S8 t27 (TACTICAL_COMBAT §3.1.1 "Own-weapon aim point, Target_Bones", 0x54a270) [H]: per shot, a target type with
+    // Target_Bones gets one synced Get_Int(0, n - 1) (none for n = 1) and the shot aims at that bone's world translation;
+    // the shooter's target hardpoint wins over the bones (its bone; not targetable -> the bare position, no z adjust).
+    // Target at (100, 0, 0) facing +y: local (x, y, z) -> world (100 - y, x, z). Shooter at the origin, no fire bones.
+    const std::vector<Vec3> bones = {Vec3{0, 10, 20}, Vec3{0, -10, 20}, Vec3{5, 0, 30}};
+    auto world_of = [](Vec3 l) { return Vec3{100.0f - l.y, l.x, l.z}; };
+    {  // three bones: every shot at one of them, more than one seen, one draw per shot more than without bones
+        OwnOpt opt;
+        opt.target_z_adjust = 12.0f;
+        opt.recharge = 0.1f;
+        opt.edit = [&](CombatData& d) { d.units[1].target_bones = bones; };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_facing(2, Vec3{0, 1, 0});
+        OwnOpt plain;
+        plain.target_z_adjust = 12.0f;
+        plain.recharge = 0.1f;
+        OwnWorld p(plain, Vec3{100, 0, 0});
+        p.w.sys->set_facing(2, Vec3{0, 1, 0});
+        std::array<int, 3> hits{0, 0, 0};
+        uint64_t shots = 0;
+        for (int i = 0; i < 300; ++i) {
+            const uint64_t d0 = o.w.rng.draws(), q0 = p.w.rng.draws();
+            const uint64_t s0 = o.w.sys->stats().shots, t0 = p.w.sys->stats().shots;
+            o.w.tick();
+            p.w.tick();
+            const uint64_t fired = o.w.sys->stats().shots - s0;
+            if (shots == 0) {  // identical up to the first shot (later recharge draws differ): + the pick's Get_Int
+                CHECK(fired == p.w.sys->stats().shots - t0);
+                CHECK(o.w.rng.draws() - d0 > p.w.rng.draws() - q0 || fired == 0);
+                if (fired == 0) CHECK(o.w.rng.draws() - d0 == p.w.rng.draws() - q0);
+            }
+            if (fired == 0) continue;
+            shots += fired;
+            const std::vector<Vec3> dirs = own_shot_dirs(o);
+            CHECK(!dirs.empty());
+            if (dirs.empty()) continue;
+            int match = -1;
+            for (size_t b = 0; b < bones.size(); ++b)
+                if (same_dir(dirs.back(), world_of(bones[b]))) match = static_cast<int>(b);
+            CHECK(match >= 0);
+            if (match >= 0) ++hits[static_cast<size_t>(match)];
+        }
+        CHECK(shots >= 5);
+        CHECK((hits[0] > 0 ? 1 : 0) + (hits[1] > 0 ? 1 : 0) + (hits[2] > 0 ? 1 : 0) >= 2);
+    }
+    {  // one bone: no draw (the same draws as a bone-less target), aimed at the bone
+        OwnOpt opt;
+        opt.target_z_adjust = 12.0f;
+        opt.edit = [&](CombatData& d) { d.units[1].target_bones = {bones[2]}; };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_facing(2, Vec3{0, 1, 0});
+        OwnOpt plain;
+        plain.target_z_adjust = 12.0f;
+        OwnWorld p(plain, Vec3{100, 0, 0});
+        p.w.sys->set_facing(2, Vec3{0, 1, 0});
+        bool checked = false;
+        for (int i = 0; i < 60; ++i) {
+            const uint64_t s0 = o.w.sys->stats().shots;
+            o.w.tick();
+            p.w.tick();
+            if (o.w.sys->stats().shots == s0 || checked) continue;
+            const std::vector<Vec3> dirs = own_shot_dirs(o);
+            CHECK(!dirs.empty() && same_dir(dirs.back(), world_of(bones[2])));
+            checked = true;
+        }
+        CHECK(checked);
+        CHECK(o.w.rng.draws() == p.w.rng.draws());
+    }
+    for (const bool targetable : {true, false}) {  // the ordered hardpoint: its bone (no draw), else the bare position
+        OwnOpt opt;
+        opt.target_z_adjust = 12.0f;
+        opt.edit = [&](CombatData& d) {
+            HardpointDesc h;
+            h.kind = HardpointKind::DummyArt;
+            h.health = 100.0f;
+            h.targetable = targetable;
+            h.attach_offset = Vec3{0, 0, 40};
+            d.hardpoints.push_back(h);
+            d.units[1].hardpoints = {0};
+            d.units[1].target_bones = bones;
+        };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->order_attack(1, 2, 0);
+        CHECK(o.w.sys->ordered_hardpoint(1) == 0);
+        bool checked = false;
+        for (int i = 0; i < 60 && !checked; ++i) {
+            const uint64_t s0 = o.w.sys->stats().shots;
+            o.w.tick();
+            if (o.w.sys->stats().shots == s0) continue;
+            const std::vector<Vec3> dirs = own_shot_dirs(o);
+            CHECK(!dirs.empty() && same_dir(dirs.back(), targetable ? Vec3{100, 0, 40} : Vec3{100, 0, 0}));
+            checked = true;
+        }
+        CHECK(checked);
+    }
+}
+
+void test_hardpoint_aim_target_bones() {
+    // S8 t27 (TACTICAL_COMBAT §3.1.1 "Hardpoint aim for comparison", 0x383f70): the object aim tries the target's
+    // Target_Bones in list order first (no draw; the first within range and arc); its last fallback is the position +
+    // Ranged_Target_Z_Adjust (was the bare position).
+    for (const int mode : {0, 1, 2}) {  // 0 no bones; 1 bones (first in range); 2 the first bone out of range
+        World w;
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        HardpointDesc hd;
+        hd.kind = HardpointKind::WeaponLaser;
+        hd.projectile = 0;
+        hd.fire_range = 500.0f;
+        hd.max_recharge = 1.0f;
+        hd.bone_a = Vec3{0, 0, 10};
+        w.data.hardpoints.push_back(hd);
+        UnitDesc a;
+        a.tactical_health = 100.0f;
+        a.max_attack_distance = 500.0f;
+        a.hardpoints = {0};
+        const uint32_t ad = push_unit(w.data, a);
+        UnitDesc t;
+        t.tactical_health = 1000.0f;
+        t.radius = 2.0f;
+        t.ranged_target_z_adjust = 9.0f;
+        if (mode == 1) t.target_bones = {Vec3{0, 0, 50}, Vec3{0, 0, 60}};
+        if (mode == 2) t.target_bones = {Vec3{0, 0, 900}, Vec3{0, 0, 60}};
+        const uint32_t td = push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(1, ad, 0, Vec3{0, 0, 0});
+        w.add(2, td, 1, Vec3{100, 0, 0});
+        for (int i = 0; i < 60 && w.sys->projectile_count() == 0; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() == 0) continue;
+        const Vec3 want = mode == 0 ? Vec3{100, 0, 9} : mode == 1 ? Vec3{100, 0, 50} : Vec3{100, 0, 60};
+        CHECK(same_dir(w.sys->projectile(0).dir, want - Vec3{0, 0, 10}));
+    }
+}
+
+void test_fire_at_position() {
+    // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"): a LOBBING_SUPERWEAPON's own weapon fires only for an order.
+    // The lobbing service (after WEAPON) aims the turret, stamps the frame, and Lobbing_Superweapon_Chargeup_Frames later
+    // sets "charged"; the next WEAPON service skips its recharge wait, fires once at the point with no target object (no
+    // lead, no z adjust) and clears the order.
+    auto make = [](bool turret, uint32_t chargeup, float recharge) {
+        OwnOpt opt;
+        opt.lobbing = true;
+        opt.recharge = recharge;
+        opt.edit = [turret, chargeup](CombatData& d) {
+            d.units[0].turret = turret;
+            d.units[0].lobbing_chargeup_frames = chargeup;
+        };
+        return std::make_unique<OwnWorld>(opt, Vec3{100, 0, 0});
+    };
+    {  // the charge-up and the single shot
+        auto o = make(true, 90, 60.0f);
+        CHECK(o->run(30) == 0);  // no order: never fires (step 7)
+        CHECK(o->w.sys->fire_at_position_state(1) == 0);
+        CHECK(!o->w.sys->order_fire_at_position(2, Vec3{1, 1, 0}));  // not a lobbing superweapon
+        const Vec3 at{150, 40, 3};
+        CHECK(o->w.sys->order_fire_at_position(1, Vec3{10, 10, 0}));
+        CHECK(o->w.sys->order_fire_at_position(1, at));  // a second order overwrites the point
+        Vec3 got;
+        CHECK(o->w.sys->fire_at_position_state(1, &got) == 1 && got.x == at.x && got.y == at.y && got.z == at.z);
+        const uint32_t f0 = o->w.frame;
+        bool seen = false;
+        std::vector<uint32_t> shots;
+        for (int i = 0; i < 200; ++i) {
+            const uint64_t s0 = o->w.sys->stats().shots;
+            const uint32_t f = o->w.frame;
+            o->w.tick();
+            if (o->w.sys->stats().shots == s0) continue;
+            shots.push_back(f);
+            for (size_t k = 0; k < o->w.sys->projectile_count(); ++k) {
+                const ProjectileView v = o->w.sys->projectile(k);
+                if (v.shooter != 1) continue;
+                seen = true;
+                CHECK(v.target == kNoObject);
+                CHECK(same_dir(v.dir, at));  // the point as given: no lead, no z adjust
+            }
+        }
+        CHECK(seen);
+        CHECK(shots.size() == 1);
+        if (!shots.empty()) CHECK(shots[0] == f0 + 91);  // stamped at f0, charged at f0 + 90, fired at f0 + 91
+        CHECK(o->w.sys->fire_at_position_state(1) == 0);
+        // the 60 s recharge was skipped for the shot; the next order fires again after its own charge-up
+        CHECK(o->w.sys->order_fire_at_position(1, at));
+        const uint32_t f1 = o->w.frame;
+        const std::vector<uint32_t> again = o->shot_frames(200);
+        CHECK(again.size() == 1 && !again.empty() && again[0] == f1 + 91);
+    }
+    {  // no TURRET: the turret aim never succeeds, the order waits (no timeout)
+        auto o = make(false, 90, 0.2f);
+        CHECK(o->w.sys->order_fire_at_position(1, Vec3{150, 0, 0}));
+        CHECK(o->run(400) == 0);
+        CHECK(o->w.sys->fire_at_position_state(1) == 1);
+    }
+    {  // a grenade without a lob solution to the point: not aimed, no shot; a reachable point then charges and fires
+        OwnOpt opt;
+        opt.lobbing = true;
+        opt.edit = [](CombatData& d) {
+            d.projectiles[0] = spmat_grenade();  // R = 550
+            d.units[0].turret = true;
+            d.units[0].lobbing_chargeup_frames = 10;
+        };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        CHECK(o.w.sys->order_fire_at_position(1, Vec3{2000, 0, 0}));
+        CHECK(o.run(100) == 0);
+        CHECK(o.w.sys->fire_at_position_state(1) == 1);
+        CHECK(o.w.sys->order_fire_at_position(1, Vec3{300, 0, 0}));
+        const uint32_t f0 = o.w.frame;
+        const std::vector<uint32_t> s = o.shot_frames(60);
+        CHECK(s.size() == 1 && !s.empty() && s[0] == f0 + 11);
+        CHECK(o.w.sys->fire_at_position_state(1) == 0);
+    }
+    {  // N1: a charging order survives write -> read and fires on the same frame; the hash carries it
+        auto a = make(true, 90, 0.2f);
+        CHECK(a->w.sys->order_fire_at_position(1, Vec3{150, 40, 0}));
+        a->run(40);
+        ByteWriter wa;
+        a->w.sys->write(wa);
+        auto b = make(true, 90, 0.2f);
+        ByteReader r(wa.bytes());
+        CHECK(b->w.sys->read(r));
+        b->w.frame = a->w.frame;
+        b->w.rng = a->w.rng;
+        CHECK(b->w.sys->fire_at_position_state(1) == 1);
+        StateHasher ha, hb, hc;
+        a->w.sys->hash_extended(ha);
+        b->w.sys->hash_extended(hb);
+        CHECK(ha.digest() == hb.digest());
+        auto c = make(true, 90, 0.2f);
+        c->w.sys->hash_extended(hc);
+        CHECK(hc.digest() != ha.digest());
+        const std::vector<uint32_t> sa = a->shot_frames(100), sb = b->shot_frames(100);
+        CHECK(sa == sb && sa.size() == 1);
+    }
 }
 
 void test_scan_range_query() {
@@ -4701,6 +4959,9 @@ int main(int argc, char** argv) {
     test_garrison_fire_bones();
     test_hardpoint_mode_default();
     test_own_weapon_aim_point();
+    test_own_weapon_target_bones();  // S8 t27
+    test_fire_at_position();         // S8 t26
+    test_hardpoint_aim_target_bones();  // S8 t27
     test_scan_range_query();
     test_shared_team_target();
     test_foc_data();

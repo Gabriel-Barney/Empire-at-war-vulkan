@@ -420,6 +420,13 @@ struct UnitDesc {
     bool can_fighter_fire_when_idle = false;  // Can_Fighter_Fire_When_Idle (type +0x8a): own-weapon gate step 6
     bool lobbing_superweapon = false;         // LOBBING_SUPERWEAPON (slot byte +0x369): step 7, own weapon only by order
     bool transport_landing = false;           // TRANSPORT_LANDING (slot byte +0x368): never an own-player sweep hit
+    // ---- S8 t26 / t27 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", "Own-weapon aim point, Target_Bones") ----
+    // Target_Bones (type +0xe48) resolved on the type's model at load (+0xe68 / +0xe70): the found bones as rest-pose
+    // offsets in unit-local space (as muzzle_bones), list order, names missing on the model dropped. Empty without model
+    // data or without the tag (no draw, no bone aim).
+    std::vector<Vec3> target_bones;
+    bool turret = false;                       // TURRET behaviour (0xb): the lobbing charge-up aims it [port: no yaw]
+    uint32_t lobbing_chargeup_frames = 90;     // Lobbing_Superweapon_Chargeup_Frames (type +0x2348; vanilla 90)
     // Num_Garrison_Guns (type +0x23a8) and the gun-bone table of the type's model (type +0x23a0): one entry per ALT
     // a = 0..M-1 (M = the model's highest _ALT mesh index), Num_Garrison_Guns bones each. Empty without model data.
     int32_t num_garrison_guns = 0;
@@ -968,6 +975,19 @@ public:
     // Target assignment (0x3822e0 [port]): an attack order on `target` (CombatSystem::order_attack). False when
     // special_weapon_can_fire fails.
     bool special_weapon_fire(ObjectId station, ObjectId target);
+    // ---- S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order") ----
+    // Fire_Lobbing_At_Position's combat half (0x4ea3f0: TD +0x30..+0x38 := point, +0x3c := 1; a second order before the
+    // shot overwrites the point). The caller checks readiness / base power and restarts the special-weapon pack (the
+    // battle host: SpecialWeaponSystem::fire_lobbing_at). False unless `id` is a live LOBBING_SUPERWEAPON unit with an own
+    // weapon. The lobbing service (after the WEAPON service, every tick) waits for the turret aim (TURRET + a lob
+    // solution from the launch point [port: turret angles not modelled, aimed at once]), stamps the frame, and
+    // Lobbing_Superweapon_Chargeup_Frames later sets "charged" (+0x3d). The WEAPON service then skips its recharge wait,
+    // fires at the point with no target object and clears the order after a successful spawn (a failed one retries).
+    bool order_fire_at_position(ObjectId id, Vec3 point);
+    // The order state: 0 none, 1 pending (charging), 2 charged; `point` = the ordered point while one is pending.
+    uint8_t fire_at_position_state(ObjectId id, Vec3* point = nullptr) const;
+    // True for a live LOBBING_SUPERWEAPON unit with an own weapon (the units order_fire_at_position accepts).
+    bool fires_at_position(ObjectId id) const;
     // ---- L1 systems ----
     // A host-launched projectile (ProjectileLaunch). Max travel = the 3-D distance to the aim point (+ the target's
     // radius for a unit target), so a point shot detonates at the point (expiry: area damage / ion stun). It is
@@ -1281,6 +1301,12 @@ private:
         // S8 t06 B4 (LOB_SOLVER §5.1, pack +0xf0): the fire-bone cycle index (round robin per shot). Hashed in
         // hash_extended when non-zero.
         uint32_t weapon_bone = 0;
+        // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"): TD +0x30..+0x38 the ordered ground point, +0x3c
+        // pending, +0x3d charged; lob_stamp = the charge-up start (special-weapon pack +0x24, 0 = not aimed yet). Saved;
+        // hashed in hash_extended while pending / charged / stamped.
+        Vec3 lob_point;
+        uint8_t lob_pending = 0, lob_charged = 0;
+        uint32_t lob_stamp = 0;
         std::array<uint8_t, 2> ability_active{0, 0};
         uint32_t hp_begin = 0, hp_count = 0;
         uint8_t ever_hit = 0;
@@ -1520,9 +1546,15 @@ private:
     // `lob` (S8 t04): the solver's result for a WeaponBehavior grenade (launch from `muzzle`, speed / pitch from it, yaw
     // from `aim`; `q_point` = the un-led Q for the travel budget); nullptr: straight at `aim` (hardpoints - a
     // category-3 hardpoint shot still flies the parabola at Max_Speed).
+    // `target` nullptr (S8 t26): a ground-point shot (no target object, no radius term in the travel budget).
     void spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t pdesc, float damage, uint16_t damage_type,
-               Vec3 muzzle, Vec3 aim, const Unit& target, int32_t target_hp, float range, uint32_t frame,
+               Vec3 muzzle, Vec3 aim, const Unit* target, int32_t target_hp, float range, uint32_t frame,
                const LobSolution* lob = nullptr, Vec3 q_point = {});
+    // S8 t27 (TACTICAL_COMBAT §3.1.1 "Own-weapon aim point", 0x54a270 steps 2-4): the un-led aim point of an own-weapon
+    // shot at `t` (the member already chosen for a team container; `hp` = the shooter's target hardpoint index, -1 none).
+    Vec3 own_aim_point(const Unit& t, int32_t hp, SimRng& rng) const;
+    void lobbing_service(Unit& u, uint32_t frame);  // S8 t26: LobbingSuperweaponBehavior 0x4ea6f0 charge-up
+    bool own_launch_point(const Unit& u, Vec3& out) const;  // S8 t26: the turret aim's launch point [port]
 
     // projectiles / damage
     void sweep(uint32_t pi, QueryContext& ctx);
