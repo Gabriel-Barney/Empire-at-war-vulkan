@@ -118,6 +118,17 @@ public:
     uint32_t stamp(ObjectId id, const ObstacleFootprint& fp);
     bool unstamp(ObjectId id);
     bool stamped(ObjectId id) const { return stamps_.find(id) != stamps_.end(); }
+    // S8 t01 (TACTICAL_GAPS 3.1 slot 43, MOVEMENT §1.3 0x59efa0): is cell (x, y) one of the cells stamp `id` occupies
+    // (the object is in that cell's hard-occupant list)? False for an unknown id or an out-of-range cell. Read-only
+    // (combat's targeting scan asks it from job workers).
+    bool occupies(ObjectId id, int32_t x, int32_t y) const;
+    bool occupies_world(ObjectId id, V2 p) const { return occupies(id, world_to_cell(p.x), world_to_cell(p.y)); }
+    // The distinct cells (row-major indices, ascending) stamp `id` occupies; empty for an unknown id.
+    std::span<const uint32_t> stamp_cells(ObjectId id) const;
+    // S8 t01: moves stamp `from` to id `to` unchanged (cells, bits, effective values and version() stay): a map
+    // placement's stamp (ted_grid.hpp map_stamp_id) handed to the object spawned for it, so occupies() answers for that
+    // object. False (nothing changes) when `from` is not stamped, `to` already is, or from == to.
+    bool rekey(ObjectId from, ObjectId to);
     // OI tactical: secondary occupants (§1.1 step 3). `fp.bits` = the type's SecondaryOccupationPassability. Same
     // sampling (and Fine_Tune / water rules) as stamp(); replaces a previous secondary stamp of the same id.
     uint32_t stamp_secondary(ObjectId id, const ObstacleFootprint& fp);

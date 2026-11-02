@@ -177,7 +177,7 @@ public:
     // add_player_reveal_multiplier stores FOW_Reveal_Range_Multiplier - 1 (skipped at exactly 1.0); the entries of
     // a source are removed when its ability ends. Reduction (0x33fb70 with MostExtreme, TACTICAL_COMBAT §4.2):
     // categories ascending, within one the largest |value| (first kept on ties), summed in category order. Read at
-    // reveal time (sources pick it up when they next re-reveal; nothing is marked dirty [M]).
+    // reveal time (sources pick it up when they next re-reveal; nothing is marked dirty, FOG_OF_WAR §3.2 [H]).
     void add_player_reveal_modifier(int32_t player, int32_t category, uint64_t source, float value);
     void add_player_reveal_multiplier(int32_t player, int32_t category, uint64_t source, float multiplier);
     void remove_player_reveal_modifier(int32_t player, uint64_t source);

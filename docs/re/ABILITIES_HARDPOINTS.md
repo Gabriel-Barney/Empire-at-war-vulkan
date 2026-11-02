@@ -335,7 +335,7 @@ The response sound afterwards is local-player audio only.
 | 18 CAPTURE_VEHICLE | | turning off restarts recharge and ejects (EJECT 46 logic) |
 | 19, 23–26, 28, 35, 36, 42 | 0x3a3e20 | targeted/area "instant" effects at position or target |
 | 22, 30, 31, 34, 37, 41, 45, 55 | none | only the active byte; the work is done by the forwarded special ability (§3) |
-| 32 MISSILE_SHIELD | inline | **on**: (correction, TACTICAL_GAPS.md §1.7: the unit is already an emitter from spawn; activation only makes it "active"); with `Disable_Movement`, increments the immobilise counter obj +0x3a8 (first increment stops the unit, 0x39bcb0) and pauses deploy; starts the active phase. **off**: decrements the counter, restarts recharge. Both toggle animation state 7 |
+| 32 MISSILE_SHIELD | inline | **on**: (correction, TACTICAL_GAPS.md §1.7: the unit is already an emitter from spawn; activation only makes it "active"); with `Disable_Movement`, increments the immobilise counter obj +0x3a8 (0x3a8e50; the first increment splits the unit into a formation of its own, A1_READINGS §28.8) and pauses deploy; starts the active phase. **off**: decrements the counter, restarts recharge. Both toggle animation state 7 |
 | 33 INVULNERABILITY | inline | turns the countdown on/off only; effect = `TAKE_DAMAGE_MULTIPLIER 0` |
 | 40 SPRINT, 68 STIM_PACK | inline | needs a squad/locomotor path; STIM_PACK **on** first applies self-damage `Take_Damage(kind 1, Damage_Percent_When_Activated × max hull)`; then countdown on/off; animation state 4 |
 | 44 REPLENISH_WINGMEN | 0x3a2970 | |
@@ -593,7 +593,8 @@ missile shield).
 
 ### 3.9 Interdict (INTERDICT 3, gravity well; Interdictor, gravity well station) [M]
 Handler 0x3a2240: needs the gravity well intact (obj +0x3ca = 0). On: start countdown; with
-`Disable_Movement` immobilise (0x3a8e50); raise story event `Interdict_Activated`; in space, insert a
+`Disable_Movement` immobilise (0x3a8e50(obj, 1); off: 0x3a8e50(obj, 0) while ability 3 is active; counter shared with
+script locks, A1_READINGS §28.8); raise story event `Interdict_Activated`; in space, insert a
 **permanent entry keyed by (owner, "INTERDICT")** into a per-player list (player tactical data +0x180) of every
 player returned by 0x294910 for the owner [L: the enemy players]; off: remove those entries. The Interdictor
 has `Active_By_Default` = Yes. The consumer of the per-player list is the retreat/hyperspace logic [L, not
@@ -745,11 +746,61 @@ and `Converted_To_Enemy_Die_Time_Seconds` (+0x234c) > 0: d = max hull / that tim
 d + draw > 0, `Apply_Hull_Damage(kind 0x11, d + draw)`.
 
 ### 4.11 Lobbed and circular lead [M]
+The lob solver itself (0x54a6f0) is closed form and does not use this root finder: LOB_SOLVER.md.
 Already in TACTICAL §3.1 step 9. Implementation detail: the circular solver (0x399450) calls a generic 1-D root
 finder (0x7d68e0) on 0x3aba90 with bracket [0.1, 1000], tolerance 0.001, 15 iterations, passing its context
 through **globals** 0x140b2c380–0x140b2c394. The port must pass that context explicitly (thread safety). The
 root-finder method is not identified; any deterministic method with the same bracket and stop rule is
 acceptable for our own clients.
+
+### 4.12 `Destroy_When_Stunned_Over_Water` (type +0xe6) — port guess, no RE pass [port]
+Not traced (Gabriel 2026-10-30, `docs/PHASE4.md` "Roadmap trim": a documented guess instead of an RE pass). The
+only vanilla user is `MAL_Rocket_Vehicle` (`UNITS_LAND_UNDERWORLD_MAL.XML`): a `Hover` movement-class vehicle with
+`STUNNABLE` in its land behaviours, so it is the one STUNNABLE unit that can stand on water cells (`Hover`
+passability includes `Water`). The port's reading of the name: a stunned hover vehicle loses its lift and sinks.
+**Rule (engine/tactical/abilities, `AbilitySystem::unit_effect`, Stunned):** when a STUNNABLE stun is applied
+(`CombatSystem::stun_unit`: the land stun of `Projectile_Stun_*` detonations or a `Stun_Ability` wave, §4.4 and
+TACTICAL_GAPS §2.3.7) to a unit whose type sets the tag, and the unit is over water, the unit dies at once:
+`Die` (§4.9) with kind 1 and no killer, so its normal death clone / death projectile apply. "Over water" = the
+map has a water plane (`water_type` ≠ None) and the terrain height under the unit's XY is below the water height
+(battle host `AbilityHost::over_water`). The test is made only when the stun starts: a stunned unit cannot move,
+so its position does not change during the stun. Not included: the ion stun (§4.4, a separate behaviour), Confuse,
+Earthquake and other immobilisations. Space battles and maps without water never trigger it.
+Why this guess: the tag is a per-type bool that only a hover vehicle sets, and the only state a STUNNABLE unit
+changes is "stunned"; destroying at the stun start keeps the sim simple (no per-frame water scan, no save state).
+**Probe** (if the guess ever matters): stun a MAL rocket vehicle on water and on land with a stun grenade in a
+FoC skirmish; check whether it dies at once, at the stun end, or only on deep water.
+
+### 4.13 Animation-driven ability timings on sim frames [port]
+Several special-ability classes time their effects from the owner's animation (TACTICAL_GAPS §2.3: "at animation
+frame N", "at the animation end", Berserker's 20 %–80 % window). The port never reads a playing animation clock in
+sim code (determinism rule 3); instead a clip position is a pure function of fixed data and the sim frame count:
+- **Position** after n sim frames since the clip started = n × rate × speed. rate = clip fps / 30, the sim
+  animation's clock (`engine/anim` advances at t = frame / 30); speed = `Attack_Animation_Speedup` for the melee
+  classes, 1 for the others. With no clip data rate = 1 (one clip frame per sim frame, as for a clip at the format's default 30 fps).
+- **"At animation frame N"** = the first update whose position ≥ N: Generic `Damage_Frame_Number`, Arc
+  `Begin_Applying_Damage_Frame`, Eat `Attachment_Frame` / `Target_Destruction_Frame` (all on `Attack_Animation`),
+  Grenade `Spawn_Frame` (on `Toss_Anim`), Super_Laser `Fire_Frame` (on the attack clip, type 5).
+- **"At the animation end"** = position ≥ max(count − 2, 0), the frame where a one-shot clip finishes
+  (anim_state.hpp `advance_one_shot`). Generic / Eat / Arc_Sweep hold the unit (the special stays applied) until
+  then, after their last frame-numbered event; Grenade until the end of `Toss_Anim` after the throw; Hack / Repair
+  change the owner / repair at the end of animation 0x5a: ceil(max(count − 2, 0) / rate) sim frames after the apply.
+- **Berserker window**: animation 0x68 is taken as looping [port]: position = (n × rate) mod (count − 1), n = the
+  frames since the apply (int(FPS × duration) − counter); a damage pass needs counter % 5 = 0 and 0.2 × count <
+  position < 0.8 × count.
+- **Clip data**: frame count and fps of variant 0 of the clip, from the type's sim model (`AbilityHost::anim_clip`,
+  battle host `TacticalBattle::anim_clip_info`; XML names such as `Attack_Animation` / `Toss_Anim` values resolve to
+  ModelAnimType ids with `anim::find_anim_type`). This is static model data loaded from the ALA files, the same for
+  every run, worker count and compiler.
+- **Fallbacks** (no host query, no sim animation, the type has no model or the model lacks the clip): rate 1; the
+  melee and grenade classes end with their last frame-numbered event (the pre-t03 behaviour); Hack / Repair end after
+  60 frames (`kHackFrames`); the Berserker window is always open. Headless runs without models therefore keep the
+  old timings and CRCs.
+- Not modelled: the "not in animation X unless ending" apply gates (Earthquake 0x25–0x27, Telekinesis 0x21–0x23,
+  Force_Lightning 0x28, Force_Sight 0x69–0x6b, melee "animation not 5"): they read the playing state, which the
+  abilities do not track; Super_Laser's `Attack_Anim_Sub_Index` (variant 0 is used).
+**Probe** to settle the [port] choices (prepared only when needed): compare in-game kill timings of a Rancor
+(`Rancor_Pound_Vehicles`, `Rancor_Eat_Infantry`), an Infiltrator grenade toss and Yoda's Berserker with the port's frame counts.
 
 ---
 

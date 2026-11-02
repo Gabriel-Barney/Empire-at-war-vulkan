@@ -203,12 +203,19 @@ public:
     // entry (key = the Reinforce event's unit field), or an entry with key < 0 = FAILED (Production_Failed). No RNG.
     // Default: always fails (no parent galactic mode / host without the hook).
     virtual TacticalReinforcement hijack_unit(int32_t /*player*/, int32_t /*type*/, bool /*steal*/) { return {}; }
-    // Active_By_Default re-apply (TACTICAL_GAPS §1.2 [H]): called with the PerceptionObject id when a unit of `player`
-    // enters the AI free store (AIFreeStoreClass vf1 0x4d4aa0: every admission, start-up and new units included), and
-    // when a task force releases a unit the free store then refuses (TaskForceClass vf49 0x5ff610). The host calls
-    // AbilitySystem::apply_active_by_default(id, frame) - skipping a unit whose HUNT is active (0x39ad40) on the
-    // task-force path - and un-immobilises it first (0x3a8e50(obj, 0)). Called during the AI update. Default: nothing.
-    virtual void unit_released(int32_t /*player*/, int32_t /*object_id*/) {}
+    // Active_By_Default re-apply (TACTICAL_GAPS §1.2, corrected by A1_READINGS §28.8 [H]): called with the
+    // PerceptionObject id of a unit of `player`
+    //   * OrderLockDone - the free store's signal 10/11 handler (AIFreeStoreClass vf1 0x4d4aa0) for a unit a script
+    //     locked with Lock_Current_Orders: its order finished [port: the unit went idle]. The AI has already released
+    //     the lock (0x3a8e50(obj, 0) on the script's share: orders_locked cleared); the host applies
+    //     AbilitySystem::apply_active_by_default(id, frame) unconditionally. Free-store admission itself does not call.
+    //   * TaskForce - a task force releases the unit (TaskForceClass vf49 0x5ff610), after it went back to the free store
+    //     or was refused. The host applies Active_By_Default unless the unit's movement is locked (0x39ad40: the
+    //     ability share of obj +0x3a8, a script lock, a suspended locomotor [port: HUNT active stands in for the
+    //     locomotor term]). No lock is released on this path.
+    // Called during the AI update. Default: nothing.
+    enum class UnitRelease : uint8_t { OrderLockDone, TaskForce };
+    virtual void unit_released(int32_t /*player*/, int32_t /*object_id*/, UnitRelease /*path*/) {}
     // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4). space_drop_frame: the player's entry facing and the
     // playable box (false: facing 0, no box). space_prevention_hit (0x4d8d10): `p` lies inside the
     // Reinforcement_Prevention_Radius (2-D, strict) of a live object whose owner is not allied with `player`.

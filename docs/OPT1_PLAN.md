@@ -1,6 +1,6 @@
 # OPT1 plan — tick profiler and budgets
 
-Written 2026-10-30. Status 2026-10-30: steps 1-4 and 6 are built (profiler in `engine/core/profile.hpp`, baselines and budget in `docs/PHASE4.md`); only the `alamo_game` overlay is open. Deviations from the design below: the ring stores full per-tick records and the report computes exact percentiles from them (no histograms); zone values are inclusive thread time summed across threads; worker utilisation is busy time per job slot as a share of tick time. Roadmap group `opt1`
+Written 2026-10-30. Status 2026-10-30: steps 1-4 and 6 are built (profiler in `engine/core/include/alamo/core/profile.hpp`, baselines and budget in `docs/PHASE4.md`); only the `alamo_game` overlay is open. Deviations from the design below: the ring stores full per-tick records and the report computes exact percentiles from them (no histograms); zone values are inclusive thread time summed across threads; worker utilisation is busy time per job slot as a share of tick time. Roadmap group `opt1`
 (box OPT, preset `high`, estimate ~1–2 days, no hard prerequisites). Goal from the roadmap: use the cores better and stop
 big game / AI updates from landing on a single tick. Nothing in the sim times itself today, so this group measures first.
 Background: `docs/OPT_RESEARCH.md` (techniques ranked by fit). Every later performance group (OPT2/3, CP1–6, LP1/4/5,

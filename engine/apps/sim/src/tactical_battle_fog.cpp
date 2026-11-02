@@ -138,7 +138,9 @@ void TacticalBattle::fog_decay() {
 
 // OI fog: overrun reveal (FOG_OF_WAR §3.3, 0x364920). A = sum of AI_Combat_Power over the record attacker's (+4) live
 // battle objects, B = the defender's (+8), unit order [port: the 0x40 / 0x80 / 0x02 flags and the "counting types"
-// filter are not modelled; garrisoned units count as contained]. The library gates game type / cadence / time.
+// filter are not modelled; garrisoned units count as contained]. The library gates game type / cadence / time. Game types
+// 1 / 2 / 4 are the networked ones (FOG_OF_WAR §3.3 [H]): campaign (0) and local skirmish (3) never run it, and
+// multiplayer is out of scope, so the default fog_game_type 0 is the port's only case.
 void TacticalBattle::fog_overrun() {
     const int32_t gt = cfg_.fog_game_type;
     if (!cfg_.fog_overrun || !(gt == 1 || gt == 2 || gt == 4) || frame_ % 15u != 0 || !fog_mode_) return;

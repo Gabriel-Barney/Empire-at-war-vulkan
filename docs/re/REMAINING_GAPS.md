@@ -439,7 +439,8 @@ Runs once per land formation after its shape (MOVEMENT §4.3) and path are known
 - No RNG.
 
 ### 4.3 JETPACK_LOCOMOTOR (vf6 0x641910, land only) [H unless tagged]
-Users: FoC Boba Fett and the Dark Troopers (3 types); TR 6.
+Users: FoC Boba_Fett, Dark_Trooper_PhaseII and Dark_Trooper_PhaseIII, all as `Secondary_Locomotor_Name` (they spawn on
+WALK and swap, MOVEMENT §3.1.1); TR 6.
 
 | state | behaviour |
 |---|---|
@@ -450,7 +451,7 @@ Users: FoC Boba Fett and the Dark Troopers (3 types); TR 6.
 | 0x12 Start Move (0x642530) | take-off; details below |
 | 0x13 Moving (0x6420e0) | flight and landing test; details below |
 | 0x14 End Move (0x641df0) | landing sequence; details below |
-| 0x16 Stopped | speed 0, idle |
+| 0x16 Stopped | speed 0, idle; then swap back to the primary locomotor (0x3a9910(obj, system, 1); MOVEMENT §3.1.1) |
 
 - **Turning** (0x10). With type +0x36 set, for heading error e and type turn rate r:
   - |e| < r: no animation;
@@ -574,11 +575,20 @@ circling, follower vf +0x1d8 = SimpleSpace Hermite with strict bracketing); its 
 - **Gates** (TACTICAL_GAPS §2.1, confirmed):
   - Force / garrison / mode / team `Can_Activate`;
   - 2-D distance ≤ record `Effective_Radius` (+0x20) unless it is negative;
-  - optional garrison release (type +0x74, 0x3a9910).
-- **Order.** Builds an ordinary move order for the unit or its team and executes it through 0x2a7b80. The record has non-default fields 4, 0x3f, 0x1000001 and −999 [L meaning]. The JETPACK locomotor (§4.3) does the flight.
+  - (corrected 2026-11-01, S7 t11) there is no garrison release here. The type +0x74 test belongs to the
+    **locomotor swap**: after the gates pass, when the unit has a locomotor (obj +0x333 ≠ −1), type +0x74
+    (`Uses_Multiple_Locomotors`) = 1 and the mode has a movement-coordinator system (mode vf +0x228), it calls
+    0x3a9910(unit, system, 0): swap to `Secondary_Locomotor_Name` (JETPACK_LOCOMOTOR in FoC). That re-issues the
+    unit's current order in a coordinator of its own, rebuilds the locomotor (pack state 0) and disables TARGETING,
+    WEAPON and SPECIAL_WEAPON for the flight (MOVEMENT §3.1.1). It is not a gate: the ability goes on either way.
+- **Order.** Builds an ordinary move order for the unit or its team and executes it through 0x2a7b80, which takes the
+  unit out of the swap's coordinator into a new one. Move record: destination = the target point, flags +0x48 = 0x04,
+  mask +0x4c = 0x3f, +0x60 = 0x1000001, type 1 [H offsets; meanings MOVEMENT §6.1]. The −999 is a field of the
+  temporary unit list (the ReferenceListClass local passed as the selection), not of the move record [M]. The JETPACK locomotor (§4.3) does the
+  flight and swaps back to the primary in state 0x16 (after the landing).
 - **Countdown.** The acting record (the member's record in a team) with `Expiration_Seconds` (+0x28) = 0 starts recharge at once (0x42fb70); otherwise the active phase starts (0x42fde0).
   - Every shipped user has no Expiration, so 17 is never "active". The locomotor cannot use `Is_Active(17)` as a flight flag [M].
-- No RNG.
+- No RNG in the ability itself (the swap's re-issued `Move_To` may draw formation stagger, MOVEMENT §3.1.1 [M]).
 - **Data:**
   - FoC: 6 users, recharge 28 / 45 / 60 s, `Effective_Radius` −1 on two;
   - TR: 7 users, recharge 40 / 45 / 90 s, −1 on all five that set it.

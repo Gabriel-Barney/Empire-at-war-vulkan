@@ -202,12 +202,20 @@ Fields: +0x40/+0x44 x, y at the last reveal; +0x48 squared move threshold; +0x50
   1. If the type has `Reveal_During_Setup_Phase_Only` (+0x58) and the land setup phase is not active
      (setup manager mode +0x1f0 → +0x30, 0x35f790) → return.
   2. If the object is garrisoned / contained (obj +0x3a7): undo the list on every player allied to the
-     object (0x39a2c0, relation entry = 0, the owner included), clear the list, return.
+     object (0x39a2c0, relation entry = 0, the owner included), clear the list, return. Dirty, x₀, y₀ and
+     +0x69 are left as they were (an empty list returns at once) [H, 2026-11-01].
   3. Unless dirty, return when (x − x₀)² + (y − y₀)² < threshold (2D).
   4. For every player in player-list order allied to the object: undo the stored list on that player's
      grid, then RevealObject(p, obj, tmp, force = 0) (sight mode) into a temporary list cleared before
-     each player. Store the **last** player's list, x₀, y₀; clear dirty; set +0x69.
+     each player. Store the **last** player's list, x₀, y₀; clear dirty; set +0x69 (also set when step 3
+     returns).
   So **allies share vision**, and reveals refresh only after moving about one cell.
+- **Garrison / transport exit** [H, 2026-11-01]: the eject (`0x37a8d0`, L1_S4_REMAINING §4) only clears +0x3a7
+  (and resumes weapons / locomotor); nothing calls into REVEAL. The source re-reveals on the first service where
+  it is one cell (the threshold) from x₀, y₀ — the position of its last reveal before it entered. An exit point
+  closer than that leaves the unit unrevealing until it moves. The only writer of the dirty flag (0x537190) is
+  grid creation 0x35eb40 (call graph), so nothing else forces a re-reveal either (Battlefield_Modifier list
+  changes, §3.1, are picked up at each source's next re-reveal).
 - **Owner change** (vf18 0x5371c0, after the first service): undo on players allied to the old owner,
   reveal for players allied to the new owner (same per-player loop), store list and position.
 - **Removal** (vf15 0x537660): undo the list on every player allied to the object.
@@ -223,7 +231,7 @@ Fields: +0x40/+0x44 x, y at the last reveal; +0x48 squared move threshold; +0x50
 | Source | Rule |
 |---|---|
 | **Force Sight** (`ForceSightAbilityClass` 0x713ba0 / 0x713d20, land) | while channelling: Reveal_All for the owner, flag +0x2d4; on end: Undo Reveal_All |
-| **Overrun reveal** (0x364920, common tick step 3) | every 15 frames in a tactical battle with mode +0x2cf set, game type (mode +0xc) in {1, 2, 4} (the multiplayer types, the same set GMM 0x28af60 tests on GMM +0x18), `Tactical_Overrun_Multiple` (+0x15ac, 3.0) > 0, frame ≥ 30 × `Minimum_Tactical_Overrun_Time_In_Secs` (+0x15a8, 30): A = Σ `AI_Combat_Power` of record player +8's objects, B = same for +4 (0x2ab6c0: living, not flagged 0x40/0x80/0x02, counting types only, space excludes contained objects); if min(A, B) × multiple < max(A, B), the stronger player gets **Reveal_All once** (flags +0x2cd for +4, +0x2ce for +8; saved) and a speech event if it is the local player |
+| **Overrun reveal** (0x364920, common tick step 3) | every 15 frames in a tactical battle with mode +0x2cf set, game type (mode +0xc) in {1, 2, 4} (the multiplayer types, the same set GMM 0x28af60 tests on GMM +0x18), `Tactical_Overrun_Multiple` (+0x15ac, 3.0) > 0, frame ≥ 30 × `Minimum_Tactical_Overrun_Time_In_Secs` (+0x15a8, 30): A = Σ `AI_Combat_Power` of record player +8's objects, B = same for +4 (0x2ab6c0: living, not flagged 0x40/0x80/0x02, counting types only, space excludes contained objects); if min(A, B) × multiple < max(A, B), the stronger player gets **Reveal_All once** (flags +0x2cd for +4, +0x2ce for +8; saved) and a speech event if it is the local player. Game types 1, 2, 4 are the networked ones; local skirmish is 3 and campaign 0 (A1_READINGS §30.3, COMMANDS.md), so **overrun never runs outside multiplayer** [H, 2026-11-01] |
 | **FOW_REVEAL_PING** unit ability | spawns `Spawned_Object_Type` (shipped `Proj_Special_Land_FOW_Reveal_Ping_Blast`); the spawned object reveals through its own REVEAL behaviour [M] |
 | **Stealth detection** | does not touch the grid (ABILITIES_HARDPOINTS §3.7 uses `*_FOW_Reveal_Range` as detection range only) |
 | **Setup phase** | §3.4 |
@@ -240,11 +248,21 @@ decay (§4) does not run and the renderer uses palette 2 (`SetupPhaseFOWColor`).
   (+0x58 / +0x59), or when it has a locomotor and (force or a REVEAL behaviour). Objects of the +8 player
   with `Reinforcement_Prevention_Radius` (+0x1df8) ≠ 0 (and powered, or not POWERED) also reveal a circle
   of that radius **for the +4 player**, whose counts are then zeroed (0x4c0d90).
-  Then, while setup continues: Binarise(grid[+8], grid[+4]) — +8's counted cells → state 0xFF, others
-  → 0; on +4's grid every cell +8 sees is forced to state 0 / count 0, and +4's counted cells elsewhere
-  become state 0xFF / count 1. Without a record every grid is binarised alone.
+  Then, while setup continues: Binarise(grid[+8], grid[+4]) (0x4c1830) — +8's counted cells → state 0xFF,
+  others → 0 (counts kept); on +4's grid every cell +8 sees is forced to state 0 / count 0, +4's counted cells
+  elsewhere become state 0xFF / count 1, and its uncounted cells elsewhere state 0. **Every fade byte of both
+  grids := 0** [H, 2026-11-01]. Without a record every grid is binarised alone.
 - **Setup end** (0x3bfba0): behaviours are reset; every grid Reset(keepState = 0); setup reveal again;
   every grid Reset(keepState = 1) (counts 0, states kept); "end_setup" event.
+- **Start / end triggers** [H, 2026-11-01 unless tagged]: setup start 0x3c05d0 runs only while the manager is
+  idle (+0x30 = 0) and the global 0x140b15aef is set [M: `SetupPhaseEnabled`]; it disables the behaviours once
+  (+0x31), runs the setup reveal and sets +0x30. The common tick 0x3639d0 calls 0x3bfba0 **every frame** when
+  the mode has a setup manager (mode +0x1f0); it ends the phase when +0x30 is set and either +0x36 (every human
+  player ready) or +0x35 (countdown armed) with the countdown timer (+0x20, 0x4ad350) expired. The ready
+  handler 0x3bed70 (network command 32 `SetupPhaseTriggerEnd` via 0x5aef60, COMMANDS.md) arms the countdown on
+  its first call with 0x140b169c8 [M: `SetupPhaseCountdownSeconds`, shipped 5] and sets +0x36 := the AND of
+  player +0x184 (ready) over the human players (+0x62). So the first ready player starts a 5 s countdown and
+  the phase ends at its expiry or as soon as every human is ready. `SetupPhaseEnabled` is False in FoC and TR.
 - Open item 4: after setup end the counts of all sources are 0 but REVEAL behaviours only re-reveal
   after moving one cell, so stationary units' cells would regrow after 6 s. Something not traced
   (behaviour vtable +0xb8 called by 0x3bfba0) probably marks them dirty.
@@ -440,6 +458,9 @@ does nothing. Garbage collection of the cells object does **not** undo (dtor 0x6
 8. Probe (Gabriel launches; kit under tools/probe_mod/): a land skirmish script that every 15 frames logs
    `FogOfWar`-independent visibility of an enemy unit walking out of sight (via a STORY_FOG_OBJECT_REVEAL
    on a human plot player), to confirm the ~6.9 s regrow window and the top-edge circle shift.
+9. ~~Garrison exit path, binarise of the +4 grid, setup-phase end trigger, overrun game types~~ — resolved
+   2026-11-01 [H]: §3.2 (exit does not mark dirty), §3.4 (fade bytes zeroed; start / end triggers), §3.3
+   (multiplayer only).
 
 ---
 
@@ -457,6 +478,8 @@ does nothing. Garbage collection of the cells object does **not** undo (dtor 0x6
    battle scale; enemy targets of a Reveal get their footprint only.
 5. REVEAL behaviour: allies share vision; refresh on owner change, death, garrison, and when moved
    ≥ one average cell (squared 2D test); undo old list, reveal new, per allied player in list order.
+   Leaving a garrison / transport does not force a refresh: the next one comes when it is one cell from its
+   last reveal position.
 6. Decay for player p when p.id ≡ F (mod 16), at common-tick step 4, before object services:
    count > 0 → state = 255 − fade, fade = 0; else state = T[state] with step (int)(238/(30·6/16)) = 21;
    a nonzero → 0 transition calls the threat grid refog for that cell.

@@ -663,6 +663,64 @@ Consequences:
   +0xf0 / +0xf8) and build-pad reservations (0x4d2b00 / 0x4d34b0 / 0x4d6440, pad table +0xe8..+0x110). Those are
   separate tables, not +0x30.
 
+### 28.8 The movement lock counter obj +0x3a8 (0x3a8e50) and the AI release paths (OI abilities t01, 2026-11-01)
+
+One signed int per game object, obj +0x3a8. Every movement lock in the game shares it: script order locks, ability
+`Disable_Movement`, hyperspace arrival and the other callers (39 functions call 0x3a8e50).
+
+**0x3a8e50(obj, lock)** [H]:
+- `lock` = 0 (release): counter := max(counter − 1, 0). Nothing else: no move is resumed, no signal, no abilities.
+- `lock` ≠ 0: only when the counter is 0 (first lock):
+  1. the movement coordinator (mode vf+0x228) and the unit's formation (0x4261d0: locomotor pack obj +0xa8, field
+     +0x1f0; none without a locomotor);
+  2. with a formation, 0x424850 detaches the unit through the formation's coordinator (+0x220, 0x4f84e0) into a
+     formation of its own (only when the unit really is in that formation);
+  3. 0x39bcb0: unless a mode flag (vf+0xf8) is set, the unit is inside a container (obj +0x2b0 with +0x348 set), or a
+     locomotor-type check fails [M: vf+0x238 against mode vf+0xe0]: when the coordinator accepts the unit (0x425e30)
+     and no formation of the coordinator holds it (0x426140), it gets a new formation (0x426010: land or space
+     kind by coordinator +0x20 = 1 / 2) and is added to it (vf+0x40).
+  Then counter + 1. Later locks only add 1.
+- So the first lock splits the unit from its group into a formation of its own. It does not by itself zero the speed
+  [M: whatever freezes a Disable_Movement user reads 0x39ad40 elsewhere; not traced].
+
+**0x39ad40 "movement locked"** [H]: true when obj +0x3a8 > 0; or the unit's locomotor (behaviour slot 1, obj +0x333 set)
+answers vf+0x1d0 true; or its team container (obj +0x2b0, +0x348 set) has a locomotor that answers vf+0x230 and
+vf+0x1d0 true.
+
+**Script locks** [H]:
+- `Lock_Current_Orders` (0x57cd40), AI-owned units only (error otherwise), mobile only ("is immobile; locking not
+  supported"): when 0x39ad40 is false, 0x3a8e50(obj, 1) and the player's mode free store (player +0x360 → 0x4b06d0 →
+  +0x50 → +0x38) subscribes to the object's signals 10 and 11. When 0x39ad40 is true: warning "%s is already locked.
+  Script cannot stack locks." and nothing changes. A team (obj +0x348 set) whose container locomotor answers vf+0x230
+  false (and not mode type 2) locks each member the same way [M: branch conditions]; a member of a team container locks the container
+  (obj +0x2b0).
+- `Unlock_Current_Orders` (0x581fd0), AI-owned only: when 0x39ad40 is true, 0x3a8e50(obj, 0) and unsubscribe 10 / 11;
+  otherwise warning "is not locked". **No** Active_By_Default. Because the counter is shared, an unlock on a unit
+  frozen only by an ability releases the ability's lock (the ability's later release then clamps at 0).
+
+**Free store signal handler 0x4d4aa0** (AIFreeStoreClass vf1), signal 10 or 11 (the locked unit's order finished):
+unsubscribe 10 and 11, **0x3a8e50(obj, 0)**, then **0x3a82a0** (Active_By_Default) unconditionally. Only units a script
+locked are subscribed, so this decrement pairs with that script lock. This is the **only** 0x3a82a0 call in vf1
+(the other branches handle signal 0x10 destroy and 0x1a owner change); free-store admission does **not** re-apply
+Active_By_Default. **Corrects TACTICAL_GAPS §1.2** ("released to the free store").
+
+**Task force release 0x5ff610** (vf49): after 0x6c27d0 (free-store re-admission), `if (!0x39ad40(unit)) 0x3a82a0(unit)`.
+It releases no lock. The test is "movement locked", not "HUNT active" (TACTICAL_GAPS §1.2 wrote "not hunting").
+
+**Interplay with ability `Disable_Movement`** [H]:
+- INTERDICT (0x3a2240) and MISSILE_SHIELD with `Disable_Movement` (+0x10c) call 0x3a8e50(obj, 1) on activation and
+  0x3a8e50(obj, 0) on deactivation (INTERDICT only while ability 3 is active, 0x39b950).
+- A script cannot lock a unit an ability holds (0x39ad40 true). A unit locked by a script can still be locked by an
+  ability (counter 2); either release order leaves the counter at 0 after both.
+
+**Port mapping** [port]: the AbilitySystem counter (`AbilitySystem::lock_movement`, the `Disable_Movement` handlers)
+is the ability share of obj +0x3a8; the script share is `ScriptObjectState::orders_locked` (so script locks do not
+trigger the ability system's speed-0 freeze). `Lock_Current_Orders` refuses when either share or a suspended
+locomotor is set; `Unlock_Current_Orders` clears the script share, else releases one ability lock. The free-store
+path clears the script share when the AI sees the unit idle (stand-in for signals 10 / 11), then the host applies
+Active_By_Default; the task-force path applies it unless movement is locked (HUNT active stands in for the locomotor
+vf+0x1d0 term [M]).
+
 ## 29. TEAM containers in the threat grid (a1f t04) [H unless tagged]
 
 Example throughout: a land skirmish, company `Imperial_Stormtrooper_Squad` (18 `Company_Units` =
