@@ -133,7 +133,7 @@ void test_cpu() {
         CHECK(std::fabs(d - along) <= 2e-3f * along);
         CHECK(close_to(render::taa_linear_depth(render::taa_camera(j), project(j, p).z), d, 1e-3f * d));
     }
-    CHECK(!render::taa_linear_depth(render::TaaCamera{}, 0.5f));  // no camera: 0
+    CHECK(render::taa_linear_depth(render::TaaCamera{}, 0.5f) == 0.0f);  // no camera: 0
     {
         render::TaaCamera o;  // orthographic, near 1 / far 101: NDC 0 -> 1, NDC 1 -> 101
         o.valid = true;

@@ -241,7 +241,7 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
         in.model = m;
         const float scale = tinfo ? tinfo->scale : 1.0f;
         in.transform = object_transform(o, scale);  // S7 t05: + movement roll / pitch
-        in.motion_id = motion_key(1, o.id);
+        in.motion_id = motion_key(1, static_cast<uint64_t>(o.id));
         in.light_scale = {1, 1, 1, (o.fade < 1.0f ? o.fade : 1.0f) * s.fog_alpha};
         if (s.stealth.tinted() && tinfo) {  // R5: LIGHT_SCALE *= lerp(white, Stealth_Color, v) (0x3a0c20)
             const bool cloak = s.stealth.cloak();
@@ -372,7 +372,7 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
             Instance at = in;
             at.model = am;
             at.mesh_hidden = {};
-            at.motion_id = motion_key(1, o.id, h + 1);
+            at.motion_id = motion_key(1, static_cast<uint64_t>(o.id), h + 1);
             at.bone_world = {};
             at.alt = 0;
             at.transform = attachment_transform(*m->asset, in.transform, in.bone_world, lay->attach_bone[h]);  // R3: posed bone
