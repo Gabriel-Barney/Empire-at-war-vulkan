@@ -8,7 +8,7 @@ Roadmap: Step ids below; finished results, finished notes and the build / fix lo
 |---|---|
 | ✅ **Done** | G0 (S1, Q1, G0-3, S5/G0, S6), S2–S10, L1 (stages 1–3, families, waves 1 / 2a / 2b, fog, S4 fin, final, systems), A1, A2 (first cut + stage 2 + stage 3) + A2 gal, R1–R5 + R-int, P1–P4 + P3 video + P4 sim (black market, sabotage, hack, income abilities; 2026-10-28) + L1 P4, P host, FOW, Int-B, Int-H, Q3, OI galactic, all RE-* spec rows; Int-final integration pass; Int-verify final verification (rows below); N1 save / load + replay (galactic and mid-battle saves, alamo_game save / load menus, 150 KB saves; 2026-10-29) |
 | ⏭ **Next** | The rest of REMAINING_GAPS (the galactic goldens were regenerated 2026-10-28; every golden passed 2026-10-29). N1 save/load + replay is done (2026-10-29; the last of Milestone 4 and the gate for the first playable test build): Q5 mod diagnostics (the in-game check of the save / load menus is automated since 2026-10-31, N1 row). the Q4 comparison harness (group q4h) and Q6 mod loading can start now, only the Q4 run waits on OPT2 (re-sequenced 2026-10-31) |
-| 🔄 **In progress** | OPT1 t07 (in-game frame-time overlay) is the only open task of the profiler group; the rest of OPT1 is done (2026-10-30) |
+| 🔄 **In progress** | OPT2 (spread and parallelise sim / AI work). OPT1 is done (2026-11-02: t07 in-game frame-time overlay, see "alamo_game frame profile"); OPT2 t05 (sim tick / render overlap) closed 2026-11-02 without shipping an overlap (same section) |
 | 👤 **Needs Gabriel** | G1 in-game capture is now unattended (2026-10-29: kit drives the menus itself, runs `dxvk_20261029_231246`, `apitrace_20261029_231628`, `apitrace_20261029_232301` all restore-verified; answers in RENDER.md §7.3; leftovers in roadmap `g1f`, no Gabriel step needed) · Q2 reference traces are now unattended too (2026-10-30, q2-runs: `-NonInteractive` drives the menus with q2_ui.py; runs `20261030-061228-galactic-vanilla-lua` and `20261030-062751-skirmish-vanilla-lua` complete, cleanup CLEAN and profile restore verified; no Gabriel step needed; game folder used as it is now, prior patch chain / DXVK absent and not restored). Other in-game probes of the open items approved 2026-10-27; kits under tools/probe_mod/. Saved so far: 3 Q2 traces (`tools/probe_mod/q2_traces/out/`), 1 unanalysed apitrace of a Kuat skirmish (`tools/probe_mod/g1_capture/out/runs/`, 3 GB); RenderDoc runs failed (the game hides its window under RenderDoc). Game folder restored and hash-verified after every run |
 | Build | Latest full runs (build records on the roadmap, 2026-10-31 after the renderer / test / game_main splits): MSVC and clang **129/129, 0 warnings**; last three-compiler gate `logs\gate_summary.txt` (2026-10-30 19:04): MSVC 128/128, clang 128/128, ASan 11/11, 1 data skip (`alamo_lua_players_tests`). Older results: `docs/PHASE4_HISTORY.md`. |
 
@@ -176,7 +176,53 @@ Budget (confirmed by Gabriel, 2026-10-30): per tick, p99 below 16.7 ms (50 % of 
 `--profile --profile-budget 33.33` on the four scenarios above at the default worker count. Current status: p99 passes in all four
 (max 6.4 ms); the no-tick-above-33.3 ms limit fails on exactly the one-off setup ticks listed above, so those are the first inputs for OPT2
 (spread battle setup over several ticks or prepare it ahead; start the synthetic all-pairs recompute in the background, as `--latency` already does).
-Not covered yet: a profile of `alamo_game` (render host), story / Lua zones (they run inside `T7` / `T5` laps today), and bigger fleets.
+Not covered yet: story / Lua zones (they run inside `T7` / `T5` laps today), and bigger fleets.
+
+## alamo_game frame profile (OPT1 t07, OPT2 t05, 2026-11-02)
+
+**Overlay (OPT1 t07).** `alamo_game --frame-overlay` (F11 toggles it in live play; the key is not passed on) draws a panel at the
+top right, on the top layer of the GUI dialog list: the last 120 sim ticks as bars against the 16.7 ms (p99 budget) and 33.3 ms (one
+tick) lines, their last / p50 / p99 / max, the worst tick with its biggest zone, and the last 120 host frames as stacked bars (sim
+step, render, its GPU / swapchain wait, rest of the frame). It reads the profiler ring through `profile::snapshot(max_ticks)` (new
+optional cap, newest N ticks, so a 65536-tick ring is not copied each frame) only between ticks, and starts the profiler with a
+1024-tick ring when nothing else did (stopped again on F11 unless `--profile`). `alamo_game --profile [--profile-out FILE]
+[--profile-budget MS]` prints the per-phase frame table (frame, sim, prepare, render, wait: mean / p50 / p99 / max) and the
+usual tick report at exit; the profiler stops before the smoke CRC check's replays. Files: `engine/apps/game/app/frame_overlay.*`,
+`app_frame.cpp`, `game_main.cpp`. Checks: the land smoke with `--frame-overlay --profile-out` matches its CRC / command golden (4605
+lines) and its presentation on/off replay; overlay off, the smoke goldens and `tools\visual\visual_check.cmd` are unchanged.
+Screenshot (land smoke, battle shot, cropped): `docs/images/opt1_frame_overlay.png`; smoke frames run 4 ticks each with blocking
+model loads, so their frame bars sit at the 40 ms top of the graph.
+
+**Measured loop (attract-demo land battle, `--attract --no-intro --audio null --frames 6000 --immediate --profile`, 1280 x 720,
+same PC as above, three runs).** The loop is serial on the main thread: input / routing / UI, `step_sim` (paced tick + post-tick
+snapshot captures), presentation steps, `render_frame` (world prepare + record, HUD build + record, submit, present).
+
+| Phase (ms) | mean | p50 | p99 | max |
+|---|---|---|---|---|
+| frame | 4.5-5.3 | 4.0-4.8 | 9.2-19.0 | 350-430 |
+| sim (`step_sim`, all frames; a tick every ~7 frames) | 0.31-0.38 | 0.001 | 3.1-3.6 | 258-279 |
+| prepare (battle view: interpolation, instances, particles) | 0.19-0.22 | 0.16-0.18 | 0.67-0.76 | 21-31 |
+| render (incl. wait) | 4.1-4.8 | 3.8-4.6 | 6.4-17.4 | 56-116 |
+| wait (fence + acquire + present) | 0.8-1.2 | 0.8-0.9 | 1.2-13.1 | 15-104 |
+| sim tick (profiler) | 2.1-2.3 | 1.70-1.76 | 6.3-7.0 | 198-217 |
+
+The one tick over 33.3 ms is the battle's first (T5.battles about 150 ms + T5.anim about 49 ms), the same setup spike as the
+headless runs; the frame max is that tick plus the battle load.
+
+**Sim / render overlap (OPT2 t05): not shipped.** The loop did run tick and render back to back. Only the battle view's prepare can
+overlap the tick without a redesign: the HUD build, the GUI providers and the post-tick captures read the live sim, and the GPU
+recording cannot start before `post_tick` because a tick can end the battle and free the scene it draws. Tried and measured:
+1. Tick on a second thread, prepare on the main thread: aborts at once, the sim's Lua VMs are bound to the thread that made them
+   (`lua_vm.hpp` `check_owner`); moving the tick needs a hand-off of every story / AI VM (engine/apps/sim, engine/ai).
+2. Tick on the main thread, prepare on a helper thread, only when a tick is due (the CRC of the run equals its own presentation-off
+   replay): frame mean 5.96 / 5.03 ms vs 5.02 / 5.09 / 4.51 ms serial, so no gain beyond run-to-run noise (the most it can save is
+   the 0.2 ms prepare on tick frames). One of the two runs had 19 ticks over 33.3 ms, all in `T13.end_tick` (37-118 ms): job slot
+   0 is shared by every non-worker thread, so the sim's parallel waits ran the helper's render jobs. The scripted land smoke with the
+   overlap also left its golden at tick 304 (4836 vs 4605 CRC lines): input reads the prepared frame (`bview_.frame()`: world picks,
+   camera focus, audio positions), so preparing one tick earlier changes the commands the script issues.
+An overlap would need a snapshot-fed HUD and input, a Lua VM hand-off or a render thread, and a job priority for presentation work
+in slot 0. Worth it only once a frame profile shows tick + render over 16.7 ms on target hardware; today the tick frames take
+about 2 ms + 5 ms. The experiment's patch is kept outside the repo (session notes of agent-task-group-assignment, 2026-11-02).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
