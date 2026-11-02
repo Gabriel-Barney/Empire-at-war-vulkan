@@ -976,6 +976,16 @@ the verdict is **change**.
   accepted spot, cascading to the next point. The landing does not move toward the target. Test: two allied
   reinforcement points and three pending units → spots (p1 + r/2·(1, 0)), (p1 + r/2·(0.7071, 0.7071)), … in that
   order.
+- **Implemented (a1g t04, 2026-11-01):** `reinforce_points` / `reinforce_ring` / `reinforce_place` (tactical_ai.cpp),
+  test `test_reinforce_landing` (alamo_ai_tactical_world_tests). cos / sin via `dmath::sincos(float)`. Note: the float
+  loop θ += 0.7853982f while θ < 6.2831855f reaches 6.283185 (< 6.2831855) after eight steps, so it tries **nine**
+  spots, the ninth at θ ≈ 2π (≈ the first spot); the port follows the loop. [port] choices: a null pending entry (no
+  type, or gone from the host's pool) is dropped from the TF, a non-fitting one stays pending for a later Reinforce;
+  the trailing pop also runs once before the first spot; without Use_Reinforcement_Points every spot is the target.
+  Open: the land host accepts any spot (it snaps each formation slot to the nearest passable cell), so the drop
+  validity of TACTICAL_GAPS §4.2 (passability, fog, footprint free) never refuses a spot and every Reinforce lands on
+  the first spot of the best point. The Utapau land skirmish (foc-land) then runs to the 14400-frame battle cap on
+  seeds 1, 2, 4, 6 (ends on 3, 5); before the change only seed 3 reached the cap.
 
 ### 30.8 TF link mask −1 → **keep** (equal to shipped data); parsing optional (small)
 

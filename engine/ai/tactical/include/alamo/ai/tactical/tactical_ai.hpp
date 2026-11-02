@@ -354,22 +354,45 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Ranks one reinforcement point for reinforce_landing_point: false drops it, otherwise `key` (lower first).
-using ReinforcePointRank = std::function<bool(const Vec3f& point, double& key)>;
+// a1g t04 - land TF.Reinforce placement (0x6eaf60, A1_READINGS §30.7 [H]).
+// Ranks one reinforcement point for reinforce_points: false drops it, otherwise `key` (lower first; float, as the
+// original's multimap key).
+using ReinforcePointRank = std::function<bool(const Vec3f& point, float& key)>;
 
-// S10 AI land reinforcement - the landing position of a land TF.Reinforce near `at` (0x6eaf60; drop validity
-// TACTICAL_GAPS §4.2 [H radius rule]). With Use_Reinforcement_Points a drop slot is valid only within 2-D <=
-// Reinforcement_Enabling_Radius of an allied live object. The candidates are the own / allied live objects with an
-// enabling radius > 0; `rank` drops and orders them (A1_READINGS §25.3: points whose zone is not in the destination's
-// flood set at the TF goal's level are dropped, the rest sorted by the slot-7 path cost from the point's zone; without a
-// region on either side by the 2-D distance). Without `rank` the key is the 2-D distance² to `at`. The lowest key wins
-// (strict <: the first in snapshot (GOM) order wins a tie), and `at` := that object's position moved toward `at` by
-// min(distance, radius / 2) [port: the host lays its formation slots around the point; half the radius keeps them
-// inside]. False = no candidate left (nothing can land; Reinforce fails). Without Use_Reinforcement_Points `at` is
-// kept. The host keeps its own drop checks (passability, fog, footprint, prevention radius) [port: not repeated
-// here]. `facts` has the same order as `w.objects`. No RNG.
-bool reinforce_landing_point(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
-                             bool use_reinforcement_points, Vec3f& at, const ReinforcePointRank& rank = {});
+// One allied reinforcement point in landing order.
+struct ReinforcePoint {
+    Vec3f position;
+    float radius = 0.0f;  // the type's Reinforcement_Enabling_Radius (+0x1e20)
+    float key = 0.0f;     // sort key (lower first)
+};
+
+// The candidate points of a land TF.Reinforce towards `dest` (§30.7 steps 1-3): the own / allied live objects with an
+// enabling radius > 0, in snapshot (GOM = land store list) order; `rank` drops and keys them (A1_READINGS §25.3 / §30.7:
+// a point whose zone is outside the destination's flood set is dropped, otherwise key = the slot-7 path cost from its zone
+// (a failed path = 1e18, kept and sorted last); without a region on either side the 2-D distance). Without `rank` the
+// key is the 2-D distance sqrtf(dx² + dy²) to `dest`. Sorted ascending by key, stable (equal keys keep snapshot order).
+// `facts` has the same order as `w.objects`. No RNG.
+std::vector<ReinforcePoint> reinforce_points(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
+                                             const Vec3f& dest, const ReinforcePointRank& rank = {});
+
+// The landing spots around one point, in try order (§30.7 step 4): θ = 0, then θ += 0.7853982f (float) while
+// θ < 6.2831855f; spot = (px + (r/2)·cos θ, py + (r/2)·sin θ, pz) in float (cos / sin: dmath, identical on every
+// compiler). The float accumulation reaches 6.283185 < 6.2831855 after eight steps, so the loop yields NINE spots, the
+// ninth at θ ≈ 2π (≈ the first spot) [H loop bounds; the ninth spot follows from them].
+std::vector<Vec3f> reinforce_ring(const ReinforcePoint& point);
+
+// Lands the pending units on the ring spots of `points` (§30.7 steps 4-5). For each point in order, for each of its
+// spots: stop when no unit is left or the remaining population `remaining` (the cap read once; +inf = no cap) is < 1;
+// else `land` the LAST pending unit at the spot. On success the unit is removed from `pending` and its population taken
+// off `remaining`; then trailing units that are null (`is_null`) or do not fit (population > remaining) are popped
+// (null ones removed from `pending`, non-fitting ones kept there for a later Reinforce; either clears "all placed").
+// A failed spot goes on to the next spot with the same unit. [port: the trailing pop also runs once before the first
+// spot, so a non-fitting last unit, which the host would refuse at every spot, does not block the others.]
+// Returns true only when every unit was placed and none was popped unplaced.
+using ReinforceLand = std::function<bool(const TacticalReinforcement& unit, const Vec3f& spot)>;
+using ReinforceIsNull = std::function<bool(const TacticalReinforcement& unit)>;
+bool reinforce_place(const std::vector<ReinforcePoint>& points, std::vector<TacticalReinforcement>& pending, float remaining,
+                     const ReinforceIsNull& is_null, const ReinforceLand& land);
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);
