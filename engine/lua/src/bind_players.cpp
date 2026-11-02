@@ -1524,6 +1524,13 @@ bool detail::black_market_allows(Call& c, int32_t player, std::string_view abili
 }
 // --- end P4 lua ---
 
+objects::ObjectHandle detail::galactic_spawn_unit(Call& c, uint32_t type, int32_t player, objects::ObjectHandle location) {
+    galactic::GalacticSim* sim = galactic_mut(c);
+    const PlanetIndex row = planet_row(sim, location);
+    if (row == kInvalidPlanet) return {};
+    return sim->spawn_unit(player, row, type);
+}
+
 }  // namespace alamo::lua
 
 #else  // !ALAMO_LUA_PLAYERS
@@ -1535,6 +1542,7 @@ bool detail::galactic_block_finished(Call&) { return true; }
 bool detail::galactic_activate_ability(Call&) { return false; }
 void detail::galactic_trigger(Call&, const std::vector<std::pair<objects::ObjectHandle, uint32_t>>&) {}
 bool detail::black_market_allows(Call&, int32_t, std::string_view, bool) { return true; }
+objects::ObjectHandle detail::galactic_spawn_unit(Call&, uint32_t, int32_t, objects::ObjectHandle) { return {}; }
 }  // namespace alamo::lua
 
 #endif
