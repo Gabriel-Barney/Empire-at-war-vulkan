@@ -8,8 +8,10 @@
 //  * Each tick after the combat tick and its events: HangarSystem::update, then the launch requests in order
 //    (squadron: members at the bay origin with its facing, then the team container, spawned flag +0x3a2 |= 2; single
 //    ship: rings r = 0 / 200 / 400 / 600 / 800 at 45 degree steps around the flyout point), bind_launch, the initial
-//    order (escort: [port] a move to the carrier, MovementSystem has no guard state; else a move to the flyout point),
-//    then clear_requests().
+//    order (S7 t24, escort: a guard of the carrier - a move to the carrier's position with the guard flag 0x02 and the
+//    squadron's formation record {flags 0x02, goal object = the carrier}, so its auto targets are chased within
+//    Guard_Chase_Range of the carrier, followed by hg_guard_follow; else a move to the flyout point), then
+//    clear_requests().
 //  * Removal: squadron container / single ship gone -> squadron_removed; carrier gone -> remove_carrier.
 //  * Station upgrade (SpawnPurpose::StationUpgrade): spawn Next_Level_Base for S's owner at S, complete_station_upgrade,
 //    tech +1 for the owner then each ally (battle-local [port]), S removed silently, the upgrade recorded for the host
@@ -335,9 +337,60 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
     return bound;
 }
 
+// S7 t24 (A1_READINGS §33.4 [M], STATION_HANGARS_SOUND §2.5): the escort's guard of its carrier follows the carrier
+// without further orders. At most once per 30 frames (FighterFormationRecord::follow_next) the squadron re-paths to the
+// carrier's position when it lies more than R from the recorded goal point (record goal, set at the launch and by each
+// re-path); R = half the lead member's max attack range [port: the guard cap constant 0x140b276c4 is not known; BattleAi's
+// object follow uses the same R]. The re-path keeps the formation record (flags, goal object, pushed auto blocks), so an
+// attacking squadron keeps its attack (its formation target is unchanged). The carrier gone (signal 0x10) ends the follow;
+// the guard block becomes a position block at the last goal point, flags 0x02 kept (FIGHTER_FLYING §4.10 E; fighter_sync
+// does the same for every guard record).
+// [port] not modelled: copying a moving carrier's path when within R and the 2x speed cap; locked members keep their
+// order (drop_locked).
+void TacticalBattle::hg_guard_follow(TacticalMode& mode, SimRng& rng) {
+    if (!space_ || !movement_) return;
+    const objects::ObjectStore& store = mode.primary();
+    const tactical::Aabb& bb = mode.bounds();
+    for (FighterFormationRecord& r : fformations_) {  // key order
+        if (r.follow_next == 0 || frame_ < r.follow_next) continue;
+        r.follow_next = frame_ + 30;
+        const Unit* g = r.goal_object != objects::kNoObjectId ? unit_by_id(r.goal_object) : nullptr;
+        if (!g || !g->alive || g->retreated || !store.alive(g->h)) {  // §4.10 E: a position guard at the last goal point
+            r.goal_object = objects::kNoObjectId;
+            r.follow_next = 0;
+            continue;
+        }
+        std::vector<objects::ObjectId> ids;
+        if (const mv::FighterSquad* sq = movement_->fighter_squad(r.key)) {
+            ids.assign(sq->members.begin(), sq->members.end());
+        } else {
+            ids.push_back(r.key);
+        }
+        std::erase_if(ids, [this](objects::ObjectId id) {
+            const Unit* u = unit_by_id(id);
+            return !u || !u->alive || u->retreated || !u->movable || !movement_->has_unit(id);
+        });
+        if (ids.empty()) continue;
+        const Unit* lead = unit_by_id(ids.front());
+        const float rr = 0.5f * lead->range;
+        const Vec3 gp = store.position(g->h);
+        const float dx = gp.x - r.goal.x, dy = gp.y - r.goal.y;
+        if (dx * dx + dy * dy <= rr * rr) continue;
+        drop_locked(ids);
+        if (ids.empty()) continue;
+        mv::MoveOrder o;
+        o.units = std::move(ids);
+        o.flags = mv::kMoveFlagGuardMove;
+        o.destination = {std::clamp(gp.x, bb.min.x, bb.max.x), std::clamp(gp.y, bb.min.y, bb.max.y)};
+        movement_->move(o, rng, frame_);
+        r.goal = Vec3{o.destination.x, o.destination.y, 0.0f};
+    }
+}
+
 void TacticalBattle::hg_tick(TacticalMode& mode, SimRng& rng) {
     if (!hangars_) return;
     hangars_->update(frame_, rng);
+    hg_guard_follow(mode, rng);  // S7 t24: the escorts launched earlier follow their carriers
     objects::ObjectStore& store = mode.primary();
     const std::vector<th::LaunchRequest> launches(hangars_->launches().begin(), hangars_->launches().end());
     for (const th::LaunchRequest& r : launches) {
@@ -347,13 +400,24 @@ void TacticalBattle::hg_tick(TacticalMode& mode, SimRng& rng) {
         if (bound == objects::kNoObjectId) continue;
         hangars_->bind_launch(r.serial, bound);
         ++hg_launches_;
-        // Initial order: escort -> guard the carrier (order kind 3) [port: a move to the carrier's position]; else a
-        // formation move to the flyout point.
-        if (!ordered.empty()) {
-            Vec3 to = hg_sv(r.flyout);
-            if (r.escort)
-                if (const Unit* c = unit_by_id(r.carrier); c && c->alive && store.alive(c->h)) to = store.position(c->h);
-            exec_move(mode, ordered, to.x, to.y, rng, mv::kNoFacing, false);
+        // Initial order (STATION_HANGARS_SOUND §2.5): escort -> guard the carrier (order kind 3 with the carrier as target;
+        // S7 t24: block flags 0x02, slot goal = the carrier, Guard_Chase_Range, followed by hg_guard_follow); else (a
+        // station, or the carrier already gone) a formation move to the flyout point. S7 t25 (FIGHTER_FLYING §4.10 E): a
+        // single launched ship (no Squadron_Units) gets no move order.
+        std::vector<int32_t> squad_members;
+        if (!ordered.empty() && oi_company_members(r.type, squad_members) && !squad_members.empty()) {
+            const Unit* c = r.escort ? unit_by_id(r.carrier) : nullptr;
+            if (c && c->alive && !c->retreated && store.alive(c->h)) {
+                const Vec3 to = store.position(c->h);
+                exec_move(mode, ordered, to.x, to.y, rng, mv::kNoFacing, false, mv::kMoveFlagGuardMove);
+                fighter_order(ordered, mv::kMoveFlagGuardMove, Vec3{to.x, to.y, 0.0f}, c->id);
+                for (const objects::ObjectId id : ordered)
+                    if (const Unit* u = unit_by_id(id))
+                        if (FighterFormationRecord* fr = fighter_formation_mut(fighter_key(*u))) fr->follow_next = frame_ + 30;
+            } else {
+                const Vec3 to = hg_sv(r.flyout);
+                exec_move(mode, ordered, to.x, to.y, rng, mv::kNoFacing, false);
+            }
         }
     }
     hangars_->clear_requests();

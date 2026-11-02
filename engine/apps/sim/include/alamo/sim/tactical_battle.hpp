@@ -218,37 +218,48 @@ struct FighterTargetInputs {
 };
 objects::ObjectId fighter_formation_target(const FighterTargetInputs& in);
 
-// S7 t22: the formation response-range test 0x4160a0 (TACTICAL_COMBAT §2.8 "Targets of opportunity", FIGHTER_FLYING §4.9
-// step 2) for an auto target t of a squadron (or a fighter without one). Pure. Returns 0 (no chase), 1 (chase from the
-// idle / guard rule) or 2 (chase from the attack-move rule).
-//   1. 0 without a formation, or when t is the object of the formation's first or last block (the goal: path B);
+// S7 t22 / t25: the formation response-range test 0x4160a0(F, u, c) (FIGHTER_FLYING §4.10 A, TACTICAL_COMBAT §2.8
+// "Targets of opportunity") for an auto target c of a squadron u (or a fighter without one). Pure. Returns 0 (no chase),
+// else 1 / 2 (chase).
+//   1. 0 without a formation, or when c is the object of the formation's first or last block (the goal: path B);
 //   2. Rr from the first block's flags: 0x02 Guard_Chase_Range, else 0x01 Attack_Move_Response_Range, else
 //      Idle_Chase_Range (the squadron type's; FoC X-wing squadron 1000 / 300 / 200); Rr < 0 -> 0;
-//   4. the formation still moving (+0x1d0 != 3) on an attack-move block: 2 when the unit is within Rr of the formation's
-//      current path point [M: the squadron flies its own path point, so this always holds], else 0;
-//   5. otherwise (arrived, guard, plain move): 1 when t lies within Rr + the attack range (XY) of the slot goal [M: the
-//      "reachable within Rr along the line" test 0x5672b0 read as: moving Rr from the goal brings t into weapon range],
-//      else 0. A plain Move_To therefore does not peel off at enemies along the way (Idle_Chase_Range from its
-//      destination), an Attack_Move does (Attack_Move_Response_Range).
-// [port] not modelled: the guard-of-an-object bonus (type +0x211c), the deployed / order-locked / space-layer refusals
-// (fighters and squadrons have no Space_Layer in FoC), the last-block flag 0x40 and +0x5e.
+//   3. c attacks the guarded object or the squadron [port: its combat target is one of them; retail: c is in their
+//      damage-tracking attacker lists]: Rr += Autonomous_Move_Extension_Vs_Attacker, base 1. While a guarded object is
+//      moving, any other c -> 0 (a moving escort answers only the carrier's attackers);
+//   4. the formation still moving on an attack-move block: 2 [M: within Rr of its own path point, always true here];
+//   5. otherwise the last block must be a guard, or the formation arrived at the end of its only block, a position
+//      (F +0x240): else 0 - a squadron on a plain position move, or one already chasing a pushed auto block, gets no
+//      response (§4.10 A corrects §4.9's "Idle_Chase_Range from the destination while moving");
+//   6. not arrived: u (the leader) must lie within Rr (XY) of the slot goal, else 0;
+//   7. c within Rr of the slot goal -> 1; within Rr + the attack range -> base + 1 [M: 0x5672b0 "attackable from the point
+//      Rr toward c"]; else 0.
+// [port] not modelled: the deployed / order-locked / space-layer refusals (fighters and squadrons have no Space_Layer in
+// FoC), the last-block flag 0x40 / byte +0x5e, the guarded block's flag 0x10.
 struct FighterChaseInputs {
     bool formation = false;          // F (locomotor pack +0x1f0) exists
     uint8_t flags = 0;               // first block flags: 0x01 attack-move, 0x02 guard
-    bool moving = false;             // the formation's move is under way
-    bool candidate_is_goal = false;  // t is the object of the first or last block
+    bool last_guard = false;         // the last block is a guard (no live pushed auto block after a guard order)
+    bool single_position = false;    // arrived at the end of its only block, a position (F +0x240 = 1)
+    bool moving = false;             // the formation's move is under way (not arrived)
+    bool candidate_is_goal = false;  // c is the object of the first or last block
+    bool candidate_attacker = false; // c attacks the guarded object or the squadron
+    bool guarded_moving = false;     // the guard block's object is moving
     float guard_range = 0.0f, idle_range = 0.0f, attack_move_range = 0.0f;
+    float extension = 0.0f;          // Autonomous_Move_Extension_Vs_Attacker of the squadron type
     float attack_range = 0.0f;       // Get_Max_Attack_Range of the squadron leader (or the fighter)
     Vec3 goal;                       // the formation's slot goal
-    Vec3 candidate;                  // t's position
+    Vec3 unit;                       // u's position (the squadron leader)
+    Vec3 candidate;                  // c's position
 };
 uint8_t fighter_chase_test(const FighterChaseInputs& in);
 
 // S7 t22: a squadron's (or a fighter's without one) formation as the host keeps it (FIGHTER_FLYING §4.9) [port: the
 // retail coordinator / formation objects are not modelled]. Created by every move / attack order of the squadron (all
-// order paths: human, Lua / AI, hangar launch flyout, stand-in orders); replaced by the next order; removed by Stop and
-// when the squadron is gone. [M, §11 open item "lifetime of a squadron's formation after its move ends"] It survives the
-// end of the move and enter_idle (the retail formation goal survives enter_idle, §4.7, and Idle_Chase_Range is measured
+// order paths: human, Lua / AI, hangar launch (S7 t24: a carrier escort is a guard of the carrier: flags 0x02, goal object
+// = the carrier, host-followed; a station launch a move to the flyout point), stand-in orders); replaced by the next
+// order; removed by Stop and when the squadron is gone. [M, §11 open item "lifetime of a squadron's formation after its
+// move ends"] It survives the end of the move and enter_idle (the retail formation goal survives enter_idle, §4.7, and Idle_Chase_Range is measured
 // from an arrived formation's slot goal, TACTICAL_COMBAT §2.8 rule 5), so an idle squadron that was ever ordered still
 // chases auto targets in its idle chase range; a squadron that never had an order (map start, reinforcement) has none and
 // does not chase (its weapons fire at targets in range).
@@ -258,6 +269,10 @@ struct FighterFormationRecord {
     Vec3 goal;                                    // slot goal: the order's destination (an object order: its position then)
     objects::ObjectId goal_object = kNoObjectId;  // object block (Attack / Attack_Move / Guard of an object): the goal follows it
     std::vector<objects::ObjectId> pushed;        // auto attack blocks (0x41cf70), oldest first; one entry per object
+    // S7 t24: the hangar escort's guard of its carrier is followed by the host (A1_READINGS §33.4: the formation's update
+    // re-paths toward the guarded object at most once per 30 frames); next follow frame, 0 = not host-followed (every
+    // other order: Lua / AI guards are followed by BattleAi's object follow, the others do not follow).
+    uint32_t follow_next = 0;
 };
 
 class TacticalBattle {
@@ -1040,11 +1055,10 @@ private:
     objects::ObjectId fighter_goal_key(objects::ObjectId id);  // a squadron member -> its container, else id
     bool fighter_goal_live(objects::ObjectId key, const objects::ObjectStore& store);
     // enter_idle (§4.7 step 4): fighters that entered Idle during the movement tick drop their (team) combat target.
-    void fighter_pre_move();
-    void fighter_post_move();
-    std::vector<std::pair<objects::ObjectId, uint8_t>> fighter_pre_state_;  // per tick (not saved): fighter, loco state
+    void fighter_enter_idle();  // S7 t25: the movement tick's EnterIdle events drop the squadrons' team targets
     std::vector<FighterFormationRecord> fformations_;
-    std::vector<std::array<float, 3>> fchase_cache_;  // per type: Guard / Idle_Chase_Range, Attack_Move_Response_Range (derived)
+    std::vector<std::array<float, 4>> fchase_cache_;  // per type: Guard / Idle_Chase_Range, Attack_Move_Response_Range,
+                                                      // Autonomous_Move_Extension_Vs_Attacker (derived)
     std::vector<uint8_t> fchase_have_;
     void drive_animation(SimRng& rng, uint64_t global_frame);
     void consume_events(TacticalMode& mode, SimRng& rng);
@@ -1403,6 +1417,7 @@ private:
     void hg_unit_removed(objects::ObjectId id);  // death / silent kill / retreat / container removal
     void hg_engine_service();                    // tick(): after the movement commit
     void hg_tick(TacticalMode& mode, SimRng& rng);  // tick(): after the combat tick and its events
+    void hg_guard_follow(TacticalMode& mode, SimRng& rng);  // S7 t24: hangar escorts follow their carrier (hg_tick)
     void hg_station_upgrade(TacticalMode& mode, const tactical::abilities::SpawnRequest& q);
     void hg_publish_engine_requests();           // tick() end
     void hg_hash(StateHasher& h) const;

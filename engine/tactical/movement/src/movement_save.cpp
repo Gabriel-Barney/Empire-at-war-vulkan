@@ -123,7 +123,8 @@ bool valid_collision_state(uint8_t v) {
 bool valid_fighter_event(uint8_t v) {
     switch (static_cast<FighterEvent::Kind>(v)) {
         case FighterEvent::Provoke:
-        case FighterEvent::Retarget: return true;
+        case FighterEvent::Retarget:
+        case FighterEvent::EnterIdle: return true;
     }
     return false;
 }

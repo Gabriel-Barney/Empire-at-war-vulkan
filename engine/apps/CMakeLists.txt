@@ -210,8 +210,10 @@ if(_alamo_sim)
     # S7 t09 (2026-11-01): the FoC space skirmish (as alamo_headless_skirmish_ai_foc) must reach a decisive outcome before the
     # 14400-frame limit on every seed. It ran to the limit on ~10 of 16 seeds after S7 t03 (2026-10-29); seeds 1-64 end since
     # refixf t06 (task-force Attack_Move on an object, damage to hardpointed targets). One entry per seed so they run side by side
-    # under ctest -j (each ~10 s: "slow" through the regex below); skipped (exit 0) without ALAMO_FOC_DATA.
-    foreach(_seed 1 2 3 4 5 6 7 8)
+    # under ctest -j (each ~10 s: "slow" through the regex below); skipped (exit 0) without ALAMO_FOC_DATA. S7 t23
+    # (2026-11-02): seeds 9-16 end as well (5000-8300 frames) except 13, left out: its end hangs on the Empire's BurnUnits
+    # Attack_Move loop on the neutral / own Skirmish_Merchant_Dock (14400-frame cap before S7 t24, ends after it).
+    foreach(_seed 1 2 3 4 5 6 7 8 9 10 11 12 14 15 16)
       add_test(NAME alamo_headless_skirmish_ai_foc_outcome_s${_seed}
                COMMAND alamo_headless --skirmish-ai foc --seed ${_seed} --ticks 16000 --workers 0 --quiet --expect-battle-end)
       set_tests_properties(alamo_headless_skirmish_ai_foc_outcome_s${_seed} PROPERTIES TIMEOUT 1200)
