@@ -72,6 +72,7 @@ void TacticalBattle::bt_force_split() {
         return;
     }
     // §4.2 land split 0x2bc6a0: the defender's surface units all start (no cap); the attacker = lead unit or raid force.
+    if (skirmish_map()) return;  // skai: a skirmish has no invasion: both slots' starting units start
     std::vector<uint32_t> att;  // attacker participants, request order (start list first, then reserve)
     for (uint32_t pass = 0; pass < 2; ++pass)
         for (uint32_t i = 0; i < parts_.size(); ++i) {
@@ -674,7 +675,7 @@ void TacticalBattle::bt_map_prepass() {
     };
     for (terrain::ObjectPlacement& pl : map_.objects) {
         if (placement_base_level(pl) > base) continue;
-        if (skirmish_land()) {  // t50: the team marker is replaced by its pad (the marker is not kept: it would block the pad)
+        if (skirmish_land() || skirmish_map()) {  // t50: the team marker is replaced by its pad (the marker is not kept: it would block the pad)
             const objects::TypeIndex mt = index.find(pl.type_crc);
             terrain::ObjectPlacement pad;
             if (mt != objects::kNone && mt < types.size() && team_pad(pl, mt, pad)) {
@@ -972,7 +973,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
     //    [M: the 0x2a9ff0 filter], else the nearest to the first Defending Forces marker. Space: the attacker looks at the
     //    last Defending Forces marker. [port] Formation placement 0x2a00b0 = rows of 6 behind the anchor along the facing;
     //    Space_Escort_Unit_Types and the planet-specific upgrades (step 5) are not spawned.
-    if (skirmish_land()) bt_skirmish_anchors();  // t50
+    if (skirmish_land() || skirmish_map()) bt_skirmish_anchors();  // t50; skai: space skirmish map battles too
     const std::vector<size_t> dm = of_kind(kMkDefend), am = of_kind(kMkAttack);
     if (!dm.empty()) {
         anchor_[0] = flat(bt_markers_[dm.front()].pos);
@@ -1221,7 +1222,7 @@ void TacticalBattle::bt_skirmish_anchors() {
     // t50 [M]: a land skirmish side starts at its slot's map marker: "Player_<slot>_Spawn_Point_Marker" owned by the slot's player
     // (the explicit-faction MP maps carry one per faction and slot), else "Team_0<slot>_Spawn_Point_Marker" /
     // "Team_0<slot>_Base_Position_Marker" (the team maps; the first in map order). No marker: the fallback anchor stays.
-    if (!skirmish_land()) return;
+    if (!skirmish_land() && !skirmish_map()) return;
     const objects::GameObjectTypes& types = catalog_->types();
     for (uint8_t side = 0; side < 2; ++side) {
         const int32_t player = side_player(side);

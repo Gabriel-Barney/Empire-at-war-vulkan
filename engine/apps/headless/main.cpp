@@ -44,9 +44,12 @@
 //   alamo_headless --economy --galactic-ai [--battles auto|fight|fight-all] [--ai-log FILE] [--ai-golden FILE] ...
 //       A2: AI-vs-AI galactic campaign, every playable faction a galactic AI player (ai_run.hpp).
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
-//   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-land-campaign|foc-station [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
+//   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-land-campaign|foc-station|skirmish [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
 //       [--expect-skirmish-base]: foc-land only (t50): fail unless both sides start with a pre-built base, the AI acts and shots are fired.
+//       skai (q2f t04): foc-land and skirmish are the skirmish host: Empire (slot 0) vs Rebel (slot 1) on an _MP_ map
+//       (skirmish: --map, default _MP_SPACE_GEONOSIS), MP_Default_Credits, the factions' skirmish default forces, the battle
+//       started on the map; [--human FACTION]: that slot is an idle human (no AI, no orders).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land skirmish (t50), foc-land-campaign: the campaign-rules land invasion.
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
 //       reward, cause) with the game-side trigger stream, and per-tick CRCs incl. "story". Campaign
@@ -889,6 +892,7 @@ static int headless_main(int argc, char** argv) {
             m.map = opt.map;
             m.expect_battle_end = opt.expect_battle_end;
             m.expect_skirmish_base = opt.expect_skirmish_base;
+            m.human = opt.ai_human;  // skai: --skirmish-ai skirmish --human FACTION
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
         }
         if (opt.story) {

@@ -2843,6 +2843,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     expire_objects(mode);
     s4_tick(mode, rng);  // S4: garrison enters / exits / ejects, structure capture
     pads_tick(mode);     // Int-final: build pads (construction completion, children gone)
+    sk_income(mode);     // skai: skirmish map battles: the Income_Stream credit trickle
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants follow the live shields (land)
     service_damage_tracking();
     profile::lap("tac.cleanup");
@@ -2853,6 +2854,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     stats_.shots = combat_->stats().shots;
     stats_.hits = combat_->stats().hits;
     // 6. victory.
+    if (!finished_ && end_hold_until_ == 0) sk_check_victory(mode);  // skai: skirmish map battles
     check_victory();
     if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
     space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units

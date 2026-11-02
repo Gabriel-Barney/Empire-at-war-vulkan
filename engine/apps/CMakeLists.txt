@@ -46,6 +46,7 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_l1.cpp sim/src/tactical_battle_l1_strikes.cpp)  # L1 systems (owner: tactical-systems agent)
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_pads.cpp)  # Int-final: build pads (L1_S4_REMAINING §3.6)
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_bt.cpp)    # battle host: BT setup / transition rules, pad units
+    target_sources(alamo_sim PRIVATE sim/src/tactical_battle_skirmish.cpp)  # skai: skirmish map battles (income, victory)
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_oi_abilities.cpp)  # OI abilities: ability host side (owner: abilities agent)
     target_sources(alamo_sim PRIVATE sim/src/tactical_battle_save.cpp)  # N1 stage 2 (owner: n2-host): battle save / load
     # Hangars / station upgrade / engine-loop requests (docs/re/STATION_HANGARS_SOUND.md): engine/tactical/hangar.

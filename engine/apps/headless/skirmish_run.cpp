@@ -1,12 +1,15 @@
 // alamo_headless --skirmish-ai (A1 stage 2): see skirmish_run.hpp.
 #include "skirmish_run.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
@@ -14,6 +17,7 @@
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/data/game_database.hpp"
+#include "alamo/data/xml.hpp"  // skai: the factions' skirmish default forces
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
@@ -22,6 +26,8 @@
 #include "alamo/objects/object_types.hpp"
 #include "alamo/sim/battle_ai.hpp"
 #include "alamo/sim/campaign_battles.hpp"
+#include "alamo/sim/map_spawn.hpp"     // skai: TypeCrcIndex (--ai-log map objects)
+#include "alamo/sim/tactical_battle.hpp"
 #include "alamo/sim/save_session.hpp"  // N1 stage 2: skirmish_save_*
 #include "alamo/sim/sim_anim.hpp"
 #include "alamo/sim/sim_host.hpp"
@@ -287,6 +293,10 @@ struct Session {
     // map with its pre-built base and MP_Default_Credits. foc-land-campaign keeps the old invasion of a campaign map (the campaign
     // rules); foc-station guards the campaign-only defender retreat rule (t41).
     bool skirmish = true;
+    // skai (q2f t04): the skirmish host (foc-land, skirmish): slot 0 Empire, slot 1 Rebel, the battle started on the map
+    // (CampaignBattles::start_map_battle) with each slot's default forces; human = the idle human slot's player (-1: none).
+    bool map_host = false;
+    int32_t human = -1;
 };
 
 bool load_game(Session& s, std::vector<std::string>& diag) {
@@ -447,15 +457,148 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
     return true;
 }
 
+bool iequal(std::string_view a, std::string_view b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+               return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+           });
+}
+
+// skai: Faction <Space_ / Land_>Skirmish_AI_Default_Forces (FactionFiles.xml order; the last definition wins), as type
+// names. Both slots get them (MP_Default_Free_Starting_Units yes): the retail Geonosis trace starts the idle human Empire
+// with 2 TIE Interceptor squadrons too.
+std::vector<std::string> skirmish_default_forces(const FileProvider& files, const std::string& faction, bool land) {
+    std::vector<std::string> out;
+    std::vector<uint8_t> bytes;
+    if (!files.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
+    const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
+    for (data::XmlNode file : list.root().children("File")) {
+        const std::string path = "Data\\XML\\" + std::string(file.text_trimmed());
+        std::vector<uint8_t> fb;
+        if (!files.read(path, fb)) continue;
+        const data::XmlDocument doc = data::XmlDocument::parse(fb, path);
+        for (data::XmlNode n : doc.root().children("Faction")) {
+            if (!iequal(n.attribute("Name"), faction)) continue;
+            const std::string_view v = n.child_text(land ? "Land_Skirmish_AI_Default_Forces" : "Space_Skirmish_AI_Default_Forces");
+            if (v.empty()) continue;
+            out.clear();
+            size_t at = 0;
+            const auto sep = [](char ch) { return ch == ',' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
+            while (at < v.size()) {
+                while (at < v.size() && sep(v[at])) ++at;
+                size_t end = at;
+                while (end < v.size() && !sep(v[end])) ++end;
+                if (end > at) out.emplace_back(v.substr(at, end - at));
+                at = end;
+            }
+        }
+    }
+    return out;
+}
+
+// skai (q2f t04): the skirmish host. foc-land: _MP_LAND_UTAPAU, both slots AI; skirmish: --map (default _MP_SPACE_GEONOSIS),
+// --human FACTION makes that slot an idle human. Slot 0 = Empire (player 0), slot 1 = Rebel (player 1), the retail trace's
+// owners. MP_Default_Credits each; the default forces wait at planets 0 / 2 of the scaffold galaxy (no conflict) and become
+// the battle's starting units; the base, pads and stations come from the map's team markers.
+bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, const std::string& kind) {
+    MapRunOptions o = opt;
+    if (o.map.empty()) o.map = kind == "foc-land" ? "_MP_LAND_UTAPAU" : "_MP_SPACE_GEONOSIS";
+    if (!foc_session(s, o, diag, skipped, true, false, true)) return false;
+    terrain::MapData probe;
+    if (!terrain::load_map(*s.files, s.map, probe)) {
+        diag.push_back("skirmish host: map " + s.map + " not loaded");
+        return false;
+    }
+    s.land = !probe.is_space();
+    s.skirmish = true;
+    s.map_host = true;
+    const float credits = static_cast<float>(std::max(0, s.db.constants().get_int("MP_Default_Credits", 0)));
+    s.setup = make_galaxy(s, s.setup.planet_type.empty() ? galactic::kNoIndex : s.setup.planet_type[0], {}, {}, credits);
+    for (int32_t p = 0; p < 2; ++p) {
+        galactic::PlayerSetup& ps = s.setup.players[static_cast<size_t>(p)];
+        const std::string& faction = s.rules.factions[ps.faction].name;
+        if (!o.human.empty() && iequal(faction, o.human)) {
+            ps.human = true;
+            ps.ai = false;
+            s.human = p;
+        }
+        const std::vector<std::string> forces = skirmish_default_forces(*s.files, faction, s.land);
+        if (forces.empty()) diag.push_back("skirmish host: " + faction + " has no skirmish default forces");
+        for (const std::string& n : forces) {
+            const uint32_t ty = s.rules.find_type(n);
+            if (ty == galactic::kNoIndex) {
+                diag.push_back("skirmish host: default force type " + n + " not found");
+                return false;
+            }
+            s.setup.forces.push_back({p, static_cast<PlanetIndex>(p == 0 ? 0 : 2), ty});
+        }
+    }
+    if (!o.human.empty() && s.human < 0) {
+        diag.push_back("skirmish host: --human " + o.human + " is neither slot's faction (Empire, Rebel)");
+        return false;
+    }
+    return true;
+}
+
+// skai: --ai-log diagnostics (never hashed, no sim reads). The map's placements by type and owner.
+std::string map_objects_text(const objects::GameObjectTypes& types, const terrain::MapData& map) {
+    const sim::TypeCrcIndex index(types);
+    std::map<std::pair<uint32_t, std::string>, uint32_t> n;
+    for (const terrain::ObjectPlacement& pl : map.objects) {
+        const objects::TypeIndex t = index.find(pl.type_crc);
+        n[{pl.owner, t == objects::kNone ? std::string("?") : std::string(types.raw().types().name[t])}]++;
+    }
+    std::string out = "map objects (owner type count):\n";
+    for (const auto& [k, c] : n) out += "  " + std::to_string(k.first) + " " + k.second + " " + std::to_string(c) + "\n";
+    return out;
+}
+
+// skai: one state line of a running battle: credits, live objects and build pads per player (pad: type owner contents).
+std::string battle_state_text(uint64_t tick, sim::SimHost& host, const galactic::GalacticSim& gs, const sim::TacticalBattle& tb) {
+    sim::TacticalMode* tm = host.tactical();
+    if (!tm) return {};
+    const objects::ObjectStore& st = tm->primary();
+    const objects::GameObjectTypes& types = tm->types();
+    static const objects::BehaviorTypeId kPad = objects::behavior_type_id("TACTICAL_BUILD_OBJECTS");
+    std::string out = "state t=" + std::to_string(tick) + " battle frame " + std::to_string(tb.stats().frames) + ":";
+    char buf[96];
+    for (int32_t p = 0; p < static_cast<int32_t>(gs.players().size()); ++p) {
+        uint32_t live = 0;
+        for (const objects::ObjectHandle h : st.owned_by(p))
+            if (st.active(h)) ++live;
+        std::snprintf(buf, sizeof buf, " p%d credits %.1f objects %u;", p, static_cast<double>(gs.credits(p)), live);
+        out += buf;
+    }
+    out += "\n  pads:";
+    for (const objects::ObjectHandle h : st.all_objects()) {
+        if (!st.alive(h) || !st.has_behavior(h, kPad) || st.type(h) >= types.size()) continue;
+        const objects::ObjectId c = tb.pad_contents(st.id(h));
+        const objects::ObjectHandle ch = c != objects::kNoObjectId ? st.find(c) : objects::ObjectHandle{};
+        out += " " + std::to_string(st.id(h)) + ":" + std::string(types.raw().types().name[st.type(h)]) + "/p" + std::to_string(st.owner(h));
+        if (st.alive(ch) && st.type(ch) < types.size()) out += "=" + std::string(types.raw().types().name[st.type(ch)]);
+    }
+    out += "\n  units:";
+    for (int32_t p = 0; p < 2; ++p) {
+        std::map<std::string, uint32_t> n;
+        for (const objects::ObjectHandle h : st.owned_by(p))
+            if (st.active(h) && st.type(h) < types.size() && !st.has_behavior(h, kPad)) n[std::string(types.raw().types().name[st.type(h)])]++;
+        out += " p" + std::to_string(p) + "{";
+        for (const auto& [k, c] : n) out += k + "x" + std::to_string(c) + " ";
+        out += "}";
+    }
+    return out + "\n";
+}
+
 }  // namespace
 
 int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log) {
     Session s;
     std::vector<std::string> diag;
     bool skipped = false;
-    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign" || kind == "foc-station";
-    const bool ok = foc ? foc_session(s, opt, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign", kind == "foc-station", kind == "foc-land")
-                        : synthetic_session(s, diag);
+    const bool host = kind == "foc-land" || kind == "skirmish";  // skai: the skirmish host
+    const bool foc = host || kind == "foc" || kind == "foc-land-campaign" || kind == "foc-station";
+    const bool ok = host  ? skirmish_host_session(s, opt, diag, skipped, kind)
+                    : foc ? foc_session(s, opt, diag, skipped, kind == "foc-land-campaign", kind == "foc-station", false)
+                          : synthetic_session(s, diag);
     if (skipped) {
         std::printf("skirmish-ai %s: ALAMO_FOC_DATA / --game not set: skipped\n", kind.c_str());
         return 0;
@@ -515,6 +658,8 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         bo.conflict.fight_ai_battles = true;
         bo.battle.max_frames = kBattleFrames;
         bo.battle.skirmish = s.skirmish;
+        bo.battle.skirmish_map = s.map_host;        // skai: team markers, income, skirmish victory
+        bo.battle.skip_human_units = s.human >= 0;  // skai: the idle human gets no stand-in orders
         bo.tactical_ai = s.ai;
         sim::load_tactical_systems(*s.files, s.rules, &s.db.constants(), bo);  // Int-final: weather, retreat, strikes data
         const terrain::MapData* mp = &map;
@@ -526,21 +671,51 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                                      bo);
         std::vector<std::string> d;
         if (!battles.attach(&d)) return false;
-        if (s.land) {  // battle host: the invaders lift off from C (Launch_Units into an orbit fleet), then fly to B and invade
-            const std::vector<objects::ObjectHandle> up = gs->planets()[2].surface;
-            if (gs->launch_units(1, 2, up) != commands::RejectReason::None) return false;
-        }
-        const std::vector<uint32_t> fleets = gs->fleets_at(2, 1);
-        if (fleets.empty() || gs->move_fleet(1, fleets[0], 1) != commands::RejectReason::None) return false;
         bool invaded = !s.land;
+        if (s.map_host) {  // skai: the skirmish starts on its map; each slot's default forces are its starting units
+            galactic::BattleRequest r;
+            r.info.kind = s.land ? galactic::ConflictKind::Land : galactic::ConflictKind::Space;
+            r.info.planet = 1;
+            r.info.defender = 0;
+            r.info.attacker = 1;
+            r.info.map = r.map = s.map;
+            for (int32_t p = 0; p < 2; ++p) {
+                galactic::BattleForces f;
+                f.player = p;
+                const PlanetIndex at = static_cast<PlanetIndex>(p == 0 ? 0 : 2);
+                if (s.land) {
+                    for (const objects::ObjectHandle h : gs->planets()[at].surface)
+                        if (gs->store().alive(h) && gs->store().owner(h) == p) f.start.push_back(h);
+                } else {
+                    for (const uint32_t fi : gs->fleets_at(at, p))
+                        for (const objects::ObjectHandle h : gs->fleets()[fi].contents) f.start.push_back(h);
+                }
+                r.forces.push_back(std::move(f));
+            }
+            if (!battles.start_map_battle(std::move(r))) return false;
+            invaded = true;
+        } else {
+            if (s.land) {  // battle host: the invaders lift off from C (Launch_Units into an orbit fleet), then fly to B and invade
+                const std::vector<objects::ObjectHandle> up = gs->planets()[2].surface;
+                if (gs->launch_units(1, 2, up) != commands::RejectReason::None) return false;
+            }
+            const std::vector<uint32_t> fleets = gs->fleets_at(2, 1);
+            if (fleets.empty() || gs->move_fleet(1, fleets[0], 1) != commands::RejectReason::None) return false;
+        }
         const auto t0 = std::chrono::steady_clock::now();
         uint64_t t = 0;
         uint64_t orders = 0, rejected = 0;
         size_t decisions = 0, lua_errors = 0;
         unsigned long prebuilt = 0, pads = 0, structures = 0, shots = 0;
         std::vector<std::string> error_list;
+        std::string state_text;  // skai: --ai-log state lines
+        bool credits_set = !s.map_host;
         for (; t < max_ticks; ++t) {
             host.tick_once();
+            if (!credits_set && battles.battle()) {  // skai: the skirmish starts at MP_Default_Credits (the scaffold galaxy's
+                credits_set = true;                  // first tick paid it income before the battle was pushed)
+                for (int32_t p = 0; p < 2; ++p) gs->add_credits(p, s.setup.players[static_cast<size_t>(p)].credits - gs->credits(p), false);
+            }
             if (!invaded && !gs->fleets_at(1, 1).empty())  // battle host: arrived at B - invade (a land conflict)
                 invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
             if (const sim::BattleAi* a = battles.tactical_ai()) {
@@ -556,6 +731,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                 pads = bs.skirmish_pads;
                 structures = bs.pad_builds;
                 shots = static_cast<unsigned long>(bs.shots);
+                if (!ai_log.empty() && (bs.frames == 1 || bs.frames % 600 == 0)) state_text += battle_state_text(t + 1, host, *gs, *tb);
             }
             if (battles.battles_fought() > 0 && !battles.battle() && host.modes().depth() == 1) {
                 ++t;
@@ -589,8 +765,17 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                 out.victory = l.substr(v + 10, l.find(',', v + 10) - (v + 10));
             }
         }
-        if (log_text.empty())
+        const bool first_run = log_text.empty();
+        if (first_run)
             for (const std::string& l : battles.ai_log()) log_text += l + "\n";
+        // skai: a battle still running at the tick limit has no ai_log yet; --ai-log then takes the live AI's decisions and stats.
+        if (const sim::BattleAi* a = battles.tactical_ai(); a && !ai_log.empty() && log_text.empty()) {
+            log_text = "(battle running at tick " + std::to_string(t) + ") " + a->summary() + "\n";
+            for (const ai::tactical::TacticalAiDecision& dec : a->world().decision_log())
+                log_text += "  " + std::to_string(dec.frame) + " p" + std::to_string(dec.player) + " " + dec.text + "\n";
+            for (const auto& [k, n] : a->world().stats()) log_text += "  stat " + k + " " + std::to_string(n) + "\n";
+        }
+        if (first_run && !ai_log.empty()) log_text += (foc ? map_objects_text(s.types, map) : std::string()) + state_text;
         size_t shown = 0;
         for (const std::string& l : battles.ai_log())
             if (shown++ < 12) out.text += "  " + l + "\n";

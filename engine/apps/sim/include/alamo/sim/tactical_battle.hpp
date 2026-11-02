@@ -129,6 +129,10 @@ struct BattleConfig {
     // GALAXY_MAP_PRESENTATION §6: a map battle (CampaignBattles::start_map_battle, the attract demo's Load_Map): no
     // conflict behind it, so the branched-map discard (single player with a defender, bt_map_prepass) does not apply.
     bool map_battle = false;
+    // skai (q2f t04): a skirmish map battle with the skirmish setup (the headless skirmish host; with skirmish and map_battle):
+    // both slots' team markers become their faction's objects, Income_Stream_Ability pays, the skirmish victory rules apply
+    // (tactical_battle_skirmish.cpp). The attract demo's map battle leaves it off.
+    bool skirmish_map = false;
     // --- S4 garrisons / structure capture (owner: S4 agent; tactical_battle_garrison.cpp) ---
     // GameConstants Garrisoned_Max_Attack_Distance_Multiplier / Land_ / Space_Capture_Allowed_Countdown_Seconds (vanilla
     // values; used only when the catalog's GameConstants lack them: BattleCatalog::capture_countdown).
@@ -638,6 +642,8 @@ public:
     // Tactical_Build_Cost_Multiplayer and lists their buildable types from Tactical_Buildable_Objects_Multiplayer
     // (L1_S4_REMAINING §3.6: "skirmish ... Multiplayer", else Campaign), and gets the skirmish base (bt_skirmish_base).
     bool skirmish_land() const { return cfg_.skirmish && !space_; }
+    // skai: a skirmish map battle with the skirmish setup (BattleConfig::skirmish_map), land or space.
+    bool skirmish_map() const { return cfg_.skirmish && cfg_.map_battle && cfg_.skirmish_map; }
     const char* pad_list_tag() const { return skirmish_land() ? "Tactical_Buildable_Objects_Multiplayer" : "Tactical_Buildable_Objects_Campaign"; }
     // t50: the skirmish slot -> player map [M: slot N = the N-th battle participant by ascending player id]; -1 = none.
     int32_t skirmish_slot_player(int32_t slot) const;
@@ -751,7 +757,8 @@ public:
     // charge. Hashed in "battle.abilities" once anything was queued.
     const tactical::hangar::ContentsSystem* contents() const { return contents_.get(); }
     const tactical::hangar::TacticalProduction* production() const { return production_.get(); }
-    bool production_enabled() const { return production_ != nullptr && cfg_.skirmish && space_; }
+    // skai t03: land skirmish too (docs/re/SKIRMISH_SETUP.md §3: one build manager per player in every skirmish).
+    bool production_enabled() const { return production_ != nullptr && cfg_.skirmish; }
     // Lua Set_Garrison_Spawn (obj +0x3CB) for a SPAWN_SQUADRON object: HangarSystem::set_spawn_enabled. Unknown ids are
     // ignored. Not called yet: the Lua object bridge has no hook for the setter (it only stores
     // ScriptObjectState::garrison_spawn).
@@ -1295,6 +1302,15 @@ private:
     void bt_pad_restore(TacticalMode& mode);          // setup: persistent pad children back on their pads
     void bt_skirmish_base(TacticalMode& mode);        // t50 setup: the land skirmish's pre-built base (command center, barracks)
     void bt_skirmish_anchors();                       // t50 setup: land skirmish start positions from the slot's map markers
+    // skai: skirmish map battles (tactical_battle_skirmish.cpp). Per-type Income_Stream data (parsed on first use, by type).
+    struct SkIncome {
+        bool parsed = false;
+        float value = 0.0f, interval = 0.0f, multiplier = 1.0f, additive = 0.0f;
+    };
+    std::vector<SkIncome> sk_income_;
+    const SkIncome& sk_income_of(uint32_t type);
+    void sk_income(const TacticalMode& mode);           // tick: the Income_Stream credit trickle
+    bool sk_check_victory(const TacticalMode& mode);    // tick: the skirmish victory rules (true: concluded)
     void bt_team_positions(TacticalMode& mode);                            // tick, after the movement commit
     std::vector<RemovalRecord> bt_removals_;
     std::vector<objects::ObjectId> bt_landing_;
