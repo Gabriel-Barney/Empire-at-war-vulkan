@@ -967,7 +967,46 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     }
     if (opts.taa && taa_) {  // [port] TAA resolve + sharpen at the end of the post chain (taa.cpp)
         const uint32_t taa_scope = gt ? gt->begin_scope(primary, "taa") : 0u;
-        st.taa = taa_->resolve(frame, primary, scene, opts.taa_sharpen, opts.taa_weight >= 0.0f ? opts.taa_weight : kTaaCurrentWeight);
+        // Object motion: the opaque draws of keyed instances (Instance::motion_id) that moved since the last TAA frame.
+        // Alpha-tested / fading passes are left out (their cut-outs would write vectors over what shows through).
+        std::vector<TaaMover>& movers = taa_->movers();
+        movers.clear();
+        if (!taa_->history_reset()) {
+            const uint32_t always = static_cast<uint32_t>(materials::CompareOp::Always);
+            for (size_t i = 0; i < s0; ++i) {
+                const Built::Item& it = b.items[i];
+                if (it.bucket != PhaseBucket::Opaque && it.bucket != PhaseBucket::Occluded && it.bucket != PhaseBucket::OpaqueNonOccluding)
+                    continue;
+                const Built::Group& gr = b.groups[it.group];
+                if (it.pass < 0 || it.fading || !gr.inst->motion_id) continue;
+                const GpuSubmesh& g = *gr.g;
+                if (g.passes[static_cast<size_t>(it.pass)].pass->push.alpha_func != always || (it.tp && it.tp->can_discard)) continue;
+                Mat3x4 delta;
+                if (!taa_->motion_delta(gr.inst->motion_id, gr.inst->transform, delta)) continue;
+                TaaMover m;
+                m.vertices = g.vertices.handle;
+                m.indices = g.indices.handle;
+                m.index_type = g.index_type;
+                m.index_count = g.index_count;
+                m.skinned = g.skinned;
+                m.translated = it.tp != nullptr;
+                m.draw_index = static_cast<uint32_t>(i);
+                // previous view-projection x (delta as a 4x4)
+                Mat4 d4;
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 4; ++c) d4.m[r][c] = delta.m[r][c];
+                d4.m[3][0] = d4.m[3][1] = d4.m[3][2] = 0.0f;
+                d4.m[3][3] = 1.0f;
+                const Mat4 pm = taa_->previous_view_proj() * d4;
+                for (int r = 0; r < 4; ++r)
+                    for (int c = 0; c < 4; ++c) m.prev_clip[r][c] = pm.m[r][c];
+                movers.push_back(m);
+            }
+        }
+        taa_->commit_motion(instances);
+        st.taa = taa_->resolve(frame, primary, scene, opts.taa_sharpen, opts.taa_weight >= 0.0f ? opts.taa_weight : kTaaCurrentWeight,
+                               b.set0);
+        st.taa_movers = taa_->last_movers();
         st.taa_reset = st.taa && taa_->history_reset();
         if (gt) gt->end_scope(primary, taa_scope);
     }
