@@ -171,11 +171,51 @@ Before load, every cell is base = effective = Clear (1).
 
 **Water rule:** a sample over a cell whose base has Water is stamped only if (water height + 5) ≤ (terrain height + obstacle height). Low objects that are submerged do not block.
 
-**`Fine_Tune_Occupied_Passability`** (type +0x94): each sample additionally needs a vertical ray (z +1000 → −1000) to hit the object's collision mesh. This trims footprints to the real mesh.
+**`Fine_Tune_Occupied_Passability`** (type +0x94, **default true**, OBJECT_TYPES §4.6): each sample additionally needs a vertical ray to hit the object's collision mesh. This trims footprints to the real mesh.
+- The ray is a segment from (x, y, **−1000**) up to (x, y, **+1000**) in absolute world z (not relative to the terrain), tested with the model's ray query (vf +0x80). Corrected 2026-11-02 (S8 t07): the earlier text had the direction reversed; only hit / no hit matters. [H]
+- It applies to **every** stamp, at map load and at run time alike: the one stamper `0x4f88b0` serves both (see "Lifecycle" below). [H]
+
+**`Obstacle_Proxy_Type`** (lazy type ref, name at type +0xdb0, resolved pointer at +0xdb8; 77 tags in FoC, e.g. `E_Ground_Barracks` → `E_Ground_Barracks_Build_Pad`) [H] (2026-11-02, S8 t07):
+- When set, the **proxy type** replaces the object's type for the footprint: its `Obstacle_Width` / `_Height` / offsets / model box and its `Fine_Tune_Occupied_Passability` byte. The object's own position and yaw are kept.
+- The fine-tune ray then tests the **proxy's** model: the stamper loads the proxy's `Land_Model_Name` (+0x1e0), takes its ALO render object, gives it the object's transform with the 3×3 part scaled by proxy `Scale_Factor` / object `Scale_Factor` (+0x658), and releases it after the stamp. If that model has no ALO render object, no ray test is made (every sample stamps).
+- Without a proxy, the ray tests the object's own render model (obj +0x2a0). **An object with fine-tune on, no proxy and no render model is not stamped at all** (the stamper returns before the loop and the "stamped" flag stays clear, so it retries at the next service).
+- Object flag obj +0x3a1 & 8 replaces the type sizes by the live model's box (both in the stamp and the unstamp). Meaning of the flag not traced [open].
+
+**Lifecycle of a stamp** (`LandObstacleBehaviorClass`, vftable `0x87b358`; behaviour id 0x14; data pack obj +0x208 = `LandObstacleDataPackClass`, byte +8 "stamped") [H] (2026-11-02, S8 t07):
+
+| slot | RVA | role |
+|---|---|---|
+| vf5 (+0x28) | `0x4f8840` | service interval: 1 while not stamped, 0 once stamped (TACTICAL_GAPS §6.4) |
+| vf6 (+0x30) | `0x4f90c0` | service: stamps (`0x4f88b0`) when the pack exists and "stamped" is clear |
+| vf7 (+0x38) | `0x4f87a0` | attach: creates the data pack (`0x390a20`) |
+| vf9 (+0x48) | `0x4f8880` | initialise: interval < 2, so the first service is due at once |
+| vf13 (+0x68) | `0x4f8800` | "placed" broadcast: stamps (`0x4f88b0`) without testing the flag (per-cell dedup only) |
+| vf15 (+0x78) | `0x4f90f0` | detach: unstamps |
+
+- **Map load:** `0x2a8730` walks every object of the GOM and calls `0x394510`, which sends vf13 to every behaviour of the object. So map placements are stamped by the same stamper as everything else. vf13 is also broadcast by `0x42d8b0` / `0x42dbd0` / `0x42e890` (campaign restore and two related paths).
+- **Run time:** `GOM::Create_Object` (`0x29f810`) attaches the behaviour (vf7, vf9); the object is stamped at its **first behaviour service** (vf6). The stamper works only in land mode (mode vf +0xe0 == 1, terrain present).
+- **Unstamp** (vf15 `0x4f90f0`): re-samples the same rectangle at the object's current position and yaw (no water rule, no ray), removes the object from each sampled cell's hard-occupant list (`0x59efa0` / `0x59f020`) and clears "stamped". **The cell is recomputed only when no live occupant is left in it** (a remaining occupant without the dead bit obj +0x3a0 & 2 skips the recompute; the recompute also needs global `0x140b15490` set) [H]. So two overlapping obstacles with different `OverridePassability` bits keep the removed one's bits until the other leaves.
+- **When detach runs:** only when the behaviour is removed. Death does not detach (`Die` `0x39bdb0` and `Kill` `0x391310` leave behaviours alone); the GameObject destructor (`0x38a310` → `0x3893e0`) calls `0x3a52f0`, which runs vf15 on every behaviour in reverse attach order. The destructor runs when the last reference drops, normally at the store's pending-delete flush at the end of the frame of death (OBJECT_RUNTIME §2.2) [H for the path, M for "normally": a Lua wrapper or another holder keeps the object, and its stamp, alive longer].
 
 **Bridges:** no dedicated bridge code was found. Bridges are ordinary objects whose `OverridePassability` / secondary passability re-opens cells. [L]
 
-**Death clones:** `IsDeathCloneObstacle` (+0xcf) and `Death_Clone_Is_Obstacle` (+0x92) make wrecks obstacles. They are handled by the collision decision (§5.4). Grid stamping of wrecks was not traced. [M]
+**Death clones and wrecks** [H] (2026-11-02, S8 t07; replaces the earlier "not traced" note):
+- A death clone is an ordinary object of the clone type, made by `0x29f270` through `Create_Object` (S9_DEATH_CLONE_SHIELDS §1.6). When no `Death_Clone` entry applies, the clone is of the **dying object's own type** (S9 §1.3), so every structure without a `Death_Clone` list leaves an own-type clone.
+- Right after the create, `0x29f270` walks the clone's behaviours (last to first) and **detaches (vf15) and removes (`0x3a54c0`) every behaviour except**:
+  - HIDE_WHEN_FOGGED (0x19);
+  - IMPOSING_PRESENCE (0x40);
+  - LAND_OBSTACLE (0x14), **only when the clone type's `Death_Clone_Is_Obstacle` (+0x92, default true) is set**.
+
+  Then the DEATH behaviour (0x44) is attached. The test uses the interface query vf3 (+0x18) with the behaviour id.
+- So **a death clone is stamped iff its type lists LAND_OBSTACLE (in `Behavior` or `LandBehavior`, after `Variant_Of_Existing_Type`) and `Death_Clone_Is_Obstacle` is true.** It is stamped at its first service, with its own type's footprint rules above (proxy and fine-tune included), and unstamped when the clone is destroyed (end of its DEATH behaviour).
+- The dying object keeps its own stamp until it is destroyed (previous item), so the cell stays blocked across the hand-over; the original's unstamp removes only the original from the cell lists.
+- `IsDeathCloneObstacle` (+0xcf) is **not** a passability flag. It gates the land **collision** registration of death clones (`0x504880`: an object with obj +0x3a0 & 0x80, i.e. a death clone, is registered only when the type sets +0xcf; `0x29f270` calls it when the clone type's `Space_Layer` is Land) and the MovingVsStopped decision (§5.4). The AT-AT / AT-ST / SPMAT / MPTL / Rancor clones are collision obstacles this way, but not stamped (their types have no LAND_OBSTACLE).
+- FoC data (variant-resolved; default true applied):
+  - Explicit clone types that are stamped: `Veers_AT_AT_Walker_Death_Clone`, `Veers_AT_AT_Walker_Deployed_Death_Clone`, `Gargantuan_Battle_Platform_Death_Clone`.
+  - Own-type clones: 455 LAND_OBSTACLE types have no `Death_Clone` list. 451 keep the stamp (all ordinary structures, build pads, props); the 4 with `Death_Clone_Is_Obstacle` = false lose it: `Imperial_Prison_Dathomir` and its `_Singing_Mountain` / `_Frenzied_River` / `_Misty_Falls` variants.
+  - `Empire_Gate_Large` (LAND_OBSTACLE, `Death_Clone_Is_Obstacle` false) dies into `Empire_Gate_Large_Death_Clone`, which has no LAND_OBSTACLE: the gate's cells open when the gate is destroyed.
+
+**Port notes (2026-11-02, S8 t07):** `TacticalBattle::land_obstacles_sync` stamps every object in the LAND_OBSTACLE behaviour table, so it stamps the 4 Dathomir prison wrecks that retail does not; its "[inferred]" note for the Veers / Gargantuan clones is **confirmed**. The battle host never supplies `MapStampHooks::mesh_ray_hit`, so **no** stamp is fine-tuned today (map placements included), and `land_obstacle_footprint` ignores `Obstacle_Proxy_Type`. The unstamp always recomputes the cell; retail does not when a live occupant remains (above).
 
 ### 1.4 Region decomposition and region A\* (the main land search)
 
@@ -456,6 +496,12 @@ Ops 6, 7, 15–18 and 20–22 run at the wait speed (max × 0.2 in space).
   - So `Orbital_Construction_Pod` (`EB_construction_pod.alo`) and its capture-point variants `N_Orbital_Construction_Pod` / `Skirmish_Merchant_Dock` (no radius tag in FoC) are sized by their model.
 - `SpaceObstacleBehaviorClass` (vftable `0x8b0988`; vf3/vf13 `0x632610`, vf9 `0x632670`, vf15 `0x6326b0`) inserts the object as a static entry on attach and removes it on detach.
   - The insert (`0x53acf0`) skips a contained object (obj +0x3a7) and, in space, removes a type with `Use_Special_Submit_Rules` (FoC: transports only). It does **not** read the model's collide switch, so capture points and orbital props stay planner obstacles (SPACE_AVOIDANCE §5.5).
+  - Slots (vftable read from the exe, 2026-11-02): vf3 `0x632660` answers id 0x4C; vf6 = `0x17d070` (no service); vf9 `0x632670` (initialise: base `0x4c2f90`, then insert); vf13 `0x632610` (the "placed" broadcast of §1.3: insert again); vf15 `0x6326b0` (detach: remove, `0x539470`). [H]
+- **Death clones and dying objects** (2026-11-02, S7 t16) [H unless tagged]:
+  - **A death clone never holds a static entry.** `0x29f270` detaches and removes every behaviour of a new clone except HIDE_WHEN_FOGGED, IMPOSING_PRESENCE and (land only in effect) LAND_OBSTACLE (§1.3 "Death clones and wrecks"). SPACE_OBSTACLE (0x4C) is always among the removed ones: its vf9 insert at the create is undone by its vf15 remove in the same call. In FoC no clone type lists SPACE_OBSTACLE anyway (the starbase, station and ship `*_Death_Clone` types have no behaviour lists), but an **own-type** clone (a SPACE_OBSTACLE type without a `Death_Clone` list) would have it, and it is stripped the same way.
+  - **The dying object keeps its static entry until it is destroyed.** `Die` / `Kill` do not detach behaviours; the entry is removed by SPACE_OBSTACLE's vf15 when the GameObject destructor (`0x3893e0` → `0x3a52f0`) runs, normally at the pending-delete flush at the end of the frame of death [M for "normally", as in §1.3]. Other removals of the entry: entering a container (`0x37ade0`) and the moving re-insert (`0x53a900`, `0x5d4730`).
+  - Not part of SpaceOccupancy, for completeness: an own-type clone keeps its type's `Space_Layer`, so it can enter the fighter-avoidance tree at create (SPACE_AVOIDANCE §2.1 tests no death-clone flag; the clone flags are set after the create) [M].
+  - **Port (S7 t16):** `space_obstacles_sync` walks battle units, not the behaviour table, so it never inserts a death clone: this matches retail. It removes a unit's entry at the first sync after the unit died or retreated, which matches the destructor at the end of the frame of death. No code change is needed. If the sync is ever switched to the SPACE_OBSTACLE behaviour table, it must skip death clones (store flag `kFlagDeathClone`).
 
 **Layers** (`0x397900`):
 - The unit's layer is `Space_Layer` (+0x16dc), or `Stationary_Space_Layer` (+0x16e0) while not moving.
@@ -1270,7 +1316,7 @@ Three separate spatial structures exist. The port can unify them only if every q
 
 | area | entry points |
 |---|---|
-| Passability | grid `0x5116c0`, test `0x38e390`, recompute `0x59f4b0` / `0x59f110`, stamping `0x4f88b0`, movement classes `0x477900` / `0x477c10` / `0x477b70` |
+| Passability | grid `0x5116c0`, test `0x38e390`, recompute `0x59f4b0` / `0x59f110`, stamping `0x4f88b0` (service `0x4f90c0`, unstamp `0x4f90f0`, load broadcast `0x2a8730` → `0x394510`), death-clone behaviour strip `0x29f270`, movement classes `0x477900` / `0x477c10` / `0x477b70` |
 | Land search | `0x5a2830`, `0x5a2e00`, `0x5a3020`, `0x5a2200`, `0x5a0550`, `0x59fef0`, `0x5a4130`, `0x5a50d0`, region build `0x50fcd0` |
 | Dynamic pathfinder | `0x673b10`, `0x675240`, `0x67a0d0`, `0x67a3d0`, `0x679740`, `0x67cef0` |
 | Space planner | `0x59a900`, `0x59d4a0`, `0x596d40`, `0x599170`, `0x599380`, `0x597dc0`, `0x59caa0`, `0x59e5b0`, retries `0x417520` |

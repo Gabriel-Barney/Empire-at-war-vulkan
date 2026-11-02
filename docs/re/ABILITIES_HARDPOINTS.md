@@ -50,6 +50,9 @@ autofire byte).
 
 ## 1. Hardpoints (delta to TACTICAL_COMBAT §5.1)
 
+Weapon hardpoints do not replace the unit's own `Projectile_Types` weapon: both fire independently, each behind its
+own deploy / ROCKET_ATTACK / mode gate (TACTICAL_COMBAT §3.1.1, 2026-11-02).
+
 ### 1.1 Creation at spawn [H]
 Hardpoints are built by the object (re)initialiser **0x3989a0** (called on spawn, type change and load):
 1. The function first fills the 75 unit-ability slots from the type's `Unit_Abilities_Data` (type +0x1ab0), in
