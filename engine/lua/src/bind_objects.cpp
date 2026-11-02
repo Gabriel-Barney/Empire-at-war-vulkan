@@ -1104,7 +1104,17 @@ int m_contains_object_type(Call& c) {
     return push_bool(c, false);
 }
 
-int m_has_active_orders(Call& c) { return push_bool(c, state_of(c, c.self->id).has_orders); }
+// Has_Active_Orders (0x579f10, AI_TACTICAL §5.6): true while the unit has a current target (0x397a40), whatever its
+// orders; S7 t36 adds that term (before, a fighting unit whose Lua order had finished counted as idle and the free store
+// re-ordered it). [port] Otherwise the issued-order flag, cleared by the host when the unit neither moves nor targets; the
+// retail formation rules (arrived block flag 0x10, locomotor idle states, "never had a formation = busy") are not modelled.
+int m_has_active_orders(Call& c) {
+    const ScriptObjectState& s = state_of(c, c.self->id);
+    if (s.has_orders) return push_bool(c, true);
+    const objects::ObjectStore* st = store(c);
+    const ObjectHandle t = st->find(s.attack_target);
+    return push_bool(c, t && st->alive(t));
+}
 
 int m_get_attack_target(Call& c) {
     const objects::ObjectStore* st = store(c);
@@ -1213,31 +1223,45 @@ int m_set_single_ability_autofire(Call& c) {
     return 0;
 }
 
-// Activate_Ability argument families (ABILITIES_HARDPOINTS.md §2.9 table) [H for the lists].
-// Only the S9 path of Activate_Ability uses it: built with ALAMO_LUA_HAVE_ABILITIES only (no unused function
-// in builds without engine/tactical).
+// Activate_Ability argument families (S7 t32: AI_TACTICAL §7.3.3 part 6, ABILITIES_HARDPOINTS §2.9 "Argument handling per
+// family", the corrected lists) [H]. Only the S9 path of Activate_Ability uses it: built with ALAMO_LUA_HAVE_ABILITIES only
+// (no unused function in builds without engine/tactical).
 #if ALAMO_LUA_HAVE_ABILITIES
-enum class AbilityArg : uint8_t { Toggle, Object, Position, ModePosition, OptionalTarget };
+enum class AbilityArg : uint8_t { Toggle, Object, DummyPosition, ModeOn, ModePosition, JetPack, TargetedInvulnerability, OptionalTarget };
 AbilityArg ability_arg_family(uint8_t t) {
-    static constexpr uint8_t kObject[] = {13, 15, 16, 18, 19, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
-    static constexpr uint8_t kPosition[] = {14, 17, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72};
+    static constexpr uint8_t kObject[] = {13, 15, 16, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
+    static constexpr uint8_t kDummy[] = {50, 67, 71, 73, 74};
+    static constexpr uint8_t kModeOn[] = {14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72};
     static constexpr uint8_t kModePosition[] = {5, 26, 28, 42};
     static constexpr uint8_t kOptional[] = {6, 10, 12};
+    if (t == 17) return AbilityArg::JetPack;
+    if (t == 19) return AbilityArg::TargetedInvulnerability;
     for (const uint8_t x : kObject)
         if (x == t) return AbilityArg::Object;
-    for (const uint8_t x : kPosition)
-        if (x == t) return AbilityArg::Position;
+    for (const uint8_t x : kDummy)
+        if (x == t) return AbilityArg::DummyPosition;
+    for (const uint8_t x : kModeOn)
+        if (x == t) return AbilityArg::ModeOn;
     for (const uint8_t x : kModePosition)
         if (x == t) return AbilityArg::ModePosition;
     for (const uint8_t x : kOptional)
         if (x == t) return AbilityArg::OptionalTarget;
     return AbilityArg::Toggle;  // the none / bool list, DEPLOY, and types the table does not list [inferred]
 }
+// S7 t31 (§7.3.3 item 1): the ids whose Activate_Ability raises signal 0xb on the unit and each TEAM member before executing.
+bool ability_raises_order_replaced(uint8_t t) {
+    static constexpr uint8_t kIds[] = {2,  3,  5,  6,  13, 15, 16, 17, 18, 20, 21, 22, 27, 31, 32, 34, 37, 38,
+                                       39, 41, 45, 46, 50, 51, 52, 53, 55, 58, 59, 64, 66, 67, 69, 71, 73, 74};
+    for (const uint8_t x : kIds)
+        if (x == t) return true;
+    return false;
+}
 // S7 t26 (AI_TACTICAL §7.3.3 item 1, second switch of 0x570a50 [H]): when Activate_Ability returns a block.
-enum class AbilityBlockRule : uint8_t { Never, Accepted, Always };
+enum class AbilityBlockRule : uint8_t { Never, Accepted, Always, JumpStarted };
 AbilityBlockRule ability_block_rule(uint8_t t) {
-    static constexpr uint8_t kAccepted[] = {13, 15, 16, 17, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
+    static constexpr uint8_t kAccepted[] = {13, 15, 16, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
     static constexpr uint8_t kAlways[] = {2, 50, 67, 71, 73, 74};
+    if (t == 17) return AbilityBlockRule::JumpStarted;
     for (const uint8_t x : kAccepted)
         if (x == t) return AbilityBlockRule::Accepted;
     for (const uint8_t x : kAlways)
@@ -1247,11 +1271,13 @@ AbilityBlockRule ability_block_rule(uint8_t t) {
 #endif
 
 // Activate_Ability([name], [on | target object | target position]) -> BlockingStatus.
-// With the S9 ability system (executed at once, §2.9; the BlockingStatus is finished): toggle family ->
+// With the S9 ability system (executed at once, §2.9; S7 t32 dispatch, AI_TACTICAL §7.3.3 part 6): toggle family ->
 // SetUnitAbilityMode(t, on); object family -> command 40 (targeted_ability; no live target object: nothing);
-// position family -> command 57 on the host's Dummy_Barrage_Target (spawn_ability_target; an object argument
-// gives its position) [inferred: without the hook, the event below]; position-by-43 and optional-target
-// families -> SetUnitAbilityMode(t, on, target object if any).
+// 50 67 71 73 74 -> a Dummy_Barrage_Target at the position (spawn_ability_target; an object argument gives its position
+// [M]), then the command-40 path on it [without the hook: the event below]; 14 23 ... 72 -> 43 mode on, the argument
+// ignored; 5 26 28 42 and the optional-target ids -> 43 mode on (target object if any); 17 JET_PACK -> 43 with the
+// position [port: the AbilitySystem takes the point as a Dummy_Barrage_Target object, h_jet_pack reads its position];
+// 19 TARGETED_INVULNERABILITY -> 43 mode on with the target object (not command 40).
 // Otherwise: SetUnitAbilityMode on the direct path (COMMANDS.md §2.2 / §5). No name: the type's first unit
 // ability [inferred]. An ability the unit does not have is a no-op [inferred].
 // S7 t15 A1 (MOVEMENT §3.1.1 step 6, ABILITIES_HARDPOINTS §2.6): on the S9 path the BlockingStatus is an AbilityBlockStatus
@@ -1296,9 +1322,17 @@ int activate_ability(Call& c, bool* activated) {
             on = to_bool(c, 2);
         } else {
             ObjectHandle th{};
-            if (position_arg(c, 2, p, &th) != PosArg::Ok) return push_nil(c);  // dead target: no-op, nil (S7 t26: 0x570a50 false)
-            if (th) target = store(c)->id(th);
-            has_point = true;
+            const PosArg pa = position_arg(c, 2, p, &th);
+#if ALAMO_LUA_HAVE_ABILITIES
+            // S7 t32: 14 23 ... 72 do not read the argument (any value, even a dead object).
+            if (pa != PosArg::Ok && !(id != 0 && ability_arg_family(id) == AbilityArg::ModeOn)) return push_nil(c);
+#else
+            if (pa != PosArg::Ok) return push_nil(c);  // dead target: no-op, nil (S7 t26: 0x570a50 false)
+#endif
+            if (pa == PosArg::Ok) {
+                if (th) target = store(c)->id(th);
+                has_point = true;
+            }
         }
     }
 #if ALAMO_LUA_HAVE_ABILITIES
@@ -1306,39 +1340,74 @@ int activate_ability(Call& c, bool* activated) {
         if (id == 0 || !a->has_ability(c.self->id, id)) return push_nil(c);  // S7 t26: a gate refusal answers nil
         // S7 t26 (§7.3.3 item 1): DEPLOY executes only when the requested state differs from the current one; equal -> nil.
         if (id == ab::kDeploy && a->is_active(c.self->id, id) == on) return push_nil(c);
+        const AbilityArg family = ability_arg_family(id);
+        // S7 t32: the argument each family needs (ABILITIES_HARDPOINTS §2.9 "Argument handling per family"): the object
+        // ids and 19 an object, the position ids (5 26 28 42, 17, 50 67 71 73 74) a position; else 0x570a50 is false (nil).
+        if ((family == AbilityArg::Object || family == AbilityArg::TargetedInvulnerability) && target == objects::kNoObjectId)
+            return push_nil(c);
+        if ((family == AbilityArg::DummyPosition || family == AbilityArg::JetPack || family == AbilityArg::ModePosition) && !has_point)
+            return push_nil(c);
         const uint32_t frame = ability_frame(c);
         const ObjectId users[] = {c.self->id};
         const bool gates = a->is_ready(c.self->id, id, frame) && a->can_activate(c.self->id, id, true, true, frame);
+        // S7 t31 (§7.3.3 item 1): after the gates, before executing, the listed ids raise signal 0xb on the unit and on each
+        // member of its TEAM (0x220ed0); the block subscribes afterwards, so it never sees this one.
+        if (ability_raises_order_replaced(id) && (id == ab::kDeploy || gates)) {
+            ObjectBridge* b = bridge(c);
+            std::vector<ObjectId> raised{c.self->id};
+            for (const ObjectHandle m : contents_of(c, self))
+                if (store(c)->exists(m)) raised.push_back(store(c)->id(m));
+            for (const ObjectId r : raised) {
+                if (b && b->raise_order_replaced) {
+                    b->raise_order_replaced(r);
+                } else if (b) {
+                    b->order_replaced(r);
+                    const ObjectHandle team = container_of(c, store(c)->find(r));
+                    if (team && store(c)->id(team) != r) b->order_replaced(store(c)->id(team));
+                }
+            }
+        }
+        const bool jump_ready = family == AbilityArg::JetPack && a->is_ready(c.self->id, id, frame);
         uint32_t accepted = 0;
-        switch (ability_arg_family(id)) {
+        switch (family) {
             case AbilityArg::Object:
-                if (target != objects::kNoObjectId) accepted = a->targeted_ability(users, id, target, -1, frame);
+                accepted = a->targeted_ability(users, id, target, -1, frame);
                 break;
-            case AbilityArg::Position: {
-                if (!has_point) break;
+            case AbilityArg::DummyPosition:
+            case AbilityArg::JetPack: {
                 const ObjectBridge* b = bridge(c);
                 if (b && b->spawn_ability_target) {
                     const ObjectId dummy = b->spawn_ability_target(p, store(c)->owner(self));
-                    if (dummy != objects::kNoObjectId) accepted = a->targeted_ability(users, id, dummy, -1, frame);
+                    if (dummy == objects::kNoObjectId) break;
+                    accepted = family == AbilityArg::JetPack ? a->set_unit_ability_mode(users, id, true, frame, dummy)
+                                                             : a->targeted_ability(users, id, dummy, -1, frame);
                     break;
                 }
                 if (activated) *activated = true;  // [port] the event path: accepted by the pipeline
                 return issue_and_block(c, ev_ability_mode(c.self->id, id, true, target, p));
             }
-            case AbilityArg::Toggle:
+            case AbilityArg::ModeOn:  // the argument ignored: mode on, no position, no target
+                accepted = a->set_unit_ability_mode(users, id, true, frame);
+                break;
             case AbilityArg::ModePosition:
+            case AbilityArg::TargetedInvulnerability:  // 43 mode on with the object (its position + id)
+                accepted = a->set_unit_ability_mode(users, id, true, frame, target);
+                break;
+            case AbilityArg::Toggle:
             case AbilityArg::OptionalTarget:
                 accepted = a->set_unit_ability_mode(users, id, on, frame, target);
                 break;
         }
         // S7 t26 (§7.3.3 item 1): whether 0x570a50 answers true (a block; the task force counts the unit) depends on the
         // family: DEPLOY always once executed; the object-target ids when the pending ability was stored (accepted);
-        // JET_PACK when the jump started [port: accepted - the port's jump goes through the pending-ability path]; the
-        // Dummy_Barrage_Target ids 50 67 71 73 74 always once the gates passed; every other ability nil, even on success.
+        // JET_PACK when the jump started [port: the ability went from ready to its countdown in this call - h_jet_pack
+        // starts it only once the jump's move orders are out]; the Dummy_Barrage_Target ids 50 67 71 73 74 always once the
+        // gates passed; every other ability nil, even on success.
         bool block = false;
         switch (ability_block_rule(id)) {
             case AbilityBlockRule::Always: block = id == ab::kDeploy || gates; break;
             case AbilityBlockRule::Accepted: block = accepted > 0; break;
+            case AbilityBlockRule::JumpStarted: block = jump_ready && accepted > 0 && !a->is_ready(c.self->id, id, frame); break;
             case AbilityBlockRule::Never: break;
         }
         if (activated) *activated = block;
