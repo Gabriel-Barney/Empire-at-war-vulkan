@@ -2065,7 +2065,7 @@ the order.
   no clearance wait (state 4) and no skirmish `Reinforcement_Time_Multiplier` wait (its constant F is unknown).
 - **Two modes (`BattleConfig::landing_unload_timed`).** The port's tactical AI (`tf_reinforce`) takes the units it
   finds right after the Reinforce order and finishes the status at once; it has no in-flight count and no 0x19 handler.
-  - **Untimed (default) [port]:** every unload step runs at the order (members placed at their unload slots), the 0x19
+  - **Untimed [port] (the default until a1j, §36.3):** every unload step runs at the order (members placed at their unload slots), the 0x19
     record is posted at once (`TacticalBattle::landings_unloaded()`, cleared when the next tick starts); the landing
     object stays for the steps' timers ((steps + 1) x 2 s x (1 + s)) and then takes off (removed at once).
   - **Timed:** the reserve leaves the pool at the order (deployed) and the company stays inside. `landing_service`
@@ -2118,3 +2118,115 @@ the order.
      (`model_info(type, true)`); blockers = live, not dying store objects passing the filters above with a
      `Space_Model_Name`, box = `TacticalMode::bounds_of` in x / y; touching boxes do not block [M]. [port] When a member's
      model is named but not loaded (no model data, e.g. headless runs without art), the whole drop keeps the rows of 6.
+
+## 36. The land Reinforce block waits for the landings; parked infantry in a giant vehicle's way (a1j t01 / t02) [H unless tagged]
+
+### 36.1 `ReinforceBlockStatus` (Lua class id 0x81a, ctor 0x69fbb0) [H]
+
+The land `Reinforce` (`LandTaskForceClass` vf, skirmish path 0x6ee010) returns this status; `QuickReinforce` loops
+`while block and not BlockOnCommand(block) do block = Reinforce(target) end` (land: no `max_duration`; the space
+version waits 3 s).
+
+| Offset | Field |
+|---|---|
+| +0x40 | in-flight count (ctor 0) |
+| +0x44 | saved goal-system-removable flag (ctor 1) |
+| +0x45 | result byte (TF owner) |
+| +0x48 | result list (non-TF owner) |
+| +0x50 | player |
+| +0x58 | reserved drop point (ctor sentinel 0x5d5e0b6b) |
+
+- **Init 0x6a1120(status, owner, inFlight, result, player, pos):** stores the four values. When the owner is a task force,
+  +0x44 := the plan's removable flag (plan +0x98, the flag `Set_As_Goal_System_Removable` writes, 0x5f7650) and then
+  plan +0x98 := 0: **the plan cannot be removed by the goal system while its reinforcements are in the air.**
+- **Skirmish land reinforce 0x6ee010:**
+  - in-flight := the number of drop positions 0x6eaf60 returned (12-byte entries); result := 0x6eaf60's return (every
+    pending unit placed and none trimmed);
+  - the spawn loop runs from the last pending unit; the cap is read once (0x2acb10) and not decremented; a unit whose
+    cost is over the cap reuses the position index;
+  - each spawned landing (0x2b5fe0, §35.1) gets a listener for signal 0x19 on landing +0x38, then 0x6c1dc0(plan, C) and
+    0x5f9fd0(tf, type, −1), which add type entries to the TF's +0x60 / +0x90 lists (C itself, each member type, or
+    ceil(count / team size) copies of C) so the plan's force counts include the units in the air;
+  - a refused landing still counts as in flight (the original status would never finish then) [H, by the code path];
+  - 0x6eaf60's third parameter (max wait) is unused.
+- **IsFinished 0x6a11d0:** finished iff +0x40 == 0. **There is no timeout.** On finishing, 0x6a1930 removes the reserved
+  drop point from the global list DAT_140b3a2d0 and restores plan +0x98 := +0x44.
+- **Result 0x6a1a50:** the +0x48 list (non-TF owner) or the byte +0x45.
+- **Signal handler 0x6a1440 (signal 0x19, `ReinforcementsUnloadedDataClass`):** stop listening to that landing; in-flight
+  −= 1; for a TF owner, each unloaded unit (a team member stands for its container; one already handled is skipped) is
+  added to the TF (vf+0xa0, land 0x6e9240 `Add_Force`) and to the plan (0x6bf3d0(plan, obj)).
+
+### 36.2 A landing destroyed while it unloads [H]
+
+`TransportLandingBehaviorClass` (vftable 0x8b31f8) slot 15 = 0x6442d0, the detach that runs when the object is deleted
+(MOVEMENT §3.1.1). When the pack's units-out count (+0xb0) is not 0 it calls the unload finish 0x6438a0 (unlock, signal
+0x19 with the units already out) and removes the dust effect. With **0 units out it sends nothing**, so the original
+status above waits for ever; the units not yet out are lost with the landing (§35.3 [M] is now [H] for the signal; the
+members inside die with it).
+
+### 36.3 Rule for the port (a1j t01)
+
+- `BattleConfig::landing_unload_timed` is on by default (§35.3's timed mode); the untimed mode stays a [port] option for
+  tests.
+- `tf_reinforce` (land) keeps a `Reinforce` status per order while any landing it issued is in flight
+  (`TacticalAiHost::reinforce_in_flight`); each `ReinforcementsUnloaded` record (the battle's 0x19 records) removes its
+  landing, adds the unloaded units to the TF (free store → TF, `reinforce_joined`), and the status finishes when none is
+  left. While it is open the plan is not removable (saved / restored as +0x44); the in-flight types count as TF entries
+  for `units_lost`. Result = all placed. Saved (tactical AI save v8).
+- [port] The in-flight count is the landings actually issued, not the drop positions: a refused landing does not hang
+  the status.
+- [port] A landing destroyed with **0 units out** posts an empty 0x19 record, so the status finishes instead of waiting
+  for ever (no timeout is added; the original has none).
+- [port] Unloaded units another task force already holds are skipped (the original's Setup A excludes locked units,
+  §28.2; the port's delivery runs after the units unlock).
+
+### 36.4 `Clear_Infantry` holds its infantry until every member arrives; a giant vehicle pushes parked friends aside (a1j t02)
+
+**How the original releases the units [H].** `ClearInfantry.lua` calls `Set_As_Goal_System_Removable(false)` after
+`QuickReinforce` and then blocks on `Attack_Move(AITarget, Get_Self_Threat_Max())`; its while loop re-evaluates
+`Should_Clear_Infantry` only after that block returns. A non-removable plan is never taken apart by the goal system and
+the free store gets its units back only when the plan's thread ends (`ScriptExit`). Members that arrive early get
+`MainForce_Unit_Move_Finished` → a unit-level `Attack_Move(kill_target or tf)`; they stay in the task force. So the
+infantry is held until the slowest member reports movement finished (signal 10, §33.2) — the port does the same. There
+is no timeout or release path in the original for a member that never arrives.
+
+**Why a member never arrived (port, foc-land seed 7 without the retreat plan).** p0's first `Clear_Infantry` task force
+(AT-AT, M1s, Stormtrooper squads) blocked from frame 215 to the 14400 cap. The AT-AT (`Max_Speed` 0.5 × land 1.56 =
+0.78 / frame, about 4500 frames for its 3300-unit path) stopped 170 units short of its slot: two parked friendly
+`Squad_Stormtrooper` members stood 102-108 units from its goal, on its path. The port's MovingVsStopped resolution (the
+early arrival needs the blocker within the radii + `LandDestinationProximity` of the goal **and** the mover on its final
+approach) fell through to the dynamic path-around every collision check, the new path met the next parked trooper, and
+the AT-AT circled for ever (about 100 dynamic re-paths in 1500 frames).
+
+**What the original does there: the MovingVsStopped decision 0x684f90 [H for the branch, M for the distances].**
+Mover m (MovingVsStopped participant 0), blocker b (participant 1, stopped); classes from type +0x169c.
+- Before the class rules: m moving (locomotor vf+0x1b0), `cvar8` = 0x5c8900(m, b) (m is hostile to b, has the SQUASH
+  behaviour 0x26 and b is squashable: the crush test of MOVEMENT §5.5) and the push-ability test 0x5c8890(b).
+- **Giant rule:** m is a Giant Vehicle (9) **and** (b is Infantry / Bike (5 / 6) **or** m is moving) **and** m cannot
+  crush b → call the push 0x6859a0; success → state 5 (Resolved), **m keeps its path**. Failure → the remaining rules
+  (re-route / path around / try again later); a later step skips the second push attempt (`bVar5`).
+- Push 0x6859a0(collision):
+  1. b has no locomotor (object +0x333 == −1, the locomotor behaviour slot [M: name]): a death-clone obstacle (type
+     +0xcf) is destroyed (0x391310) and the push succeeds; anything else fails.
+  2. b's type float +0x23b0 ≤ 0 [M: name] and b is deploying or deployed (0x39a400 / 0x39a390, the locomotor deploy
+     states of §35.4 item 1) → fails.
+  3. Direction: m's heading (locomotor vf+0x1f8 → x / y, normalised) turned by **45°** toward b's side: −45° when
+     (b − m) · (−h.y, h.x) ≤ 0, else +45° (0x2bab90).
+  4. A free-position search (0x440be0 / 0x440f90) for b from b's position along that direction, cone π/4, factor 0.33
+     [M: the search distance]; none → fails.
+  5. A path request for b to the spot (0x67b730; Infantry / Giant classes set request flag 1; `MovementBoxExpansionFactor`
+     when > 0); no path → fails. Otherwise b's locomotor takes the path as a **pushed** move (mode 4, or 7 when m could
+     crush b; locomotor data +0x6d := 1; deploy-ish states 0x16 / 0x25 are reset by 0x559250). It is a locomotor move,
+     not a unit order (no new order signal). Success.
+- What a pushed unit does after the pusher has passed (`MinimumPushReturnDistance`, `RepushDistance`) is not traced
+  (MOVEMENT §5.4) [L].
+
+**Port (a1j t02).** `MovementSystem::resolve_blocker`: after the early-arrival test and before the path-around, a Giant
+Vehicle mover pushes the stopped blocker (any class it does not crush; the port has only moving or stopped land
+participants, so "m is moving" always holds) and keeps its path; the collision is Resolved. [port] The push: direction
+as item 3 (heading = m's path direction to its next point); b walks aside over `ceil(d / speed)` frames at its own max
+speed through the existing nudge (passability-checked each frame), d = the radii + 2 (the distance the port's fallback push
+already used); no free-position search, no return move; a deploying / deployed b is not pushed (item 2 with +0x23b0
+taken as ≤ 0); a b still stepping aside counts as pushed (the original pushes a blocker that moves again, decision step 2).
+A b that cannot step at all (impassable first step) fails the push
+and the old path-around runs.

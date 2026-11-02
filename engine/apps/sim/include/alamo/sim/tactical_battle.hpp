@@ -130,11 +130,11 @@ struct BattleConfig {
     // GALAXY_MAP_PRESENTATION §6: a map battle (CampaignBattles::start_map_battle, the attract demo's Load_Map): no
     // conflict behind it, so the branched-map discard (single player with a defender, bt_map_prepass) does not apply.
     bool map_battle = false;
-    // a1i t04 (A1_READINGS §35.2 / §35.3): false (default) = a landing object's company appears at the Reinforce order
-    // (every unload step at once); true = the TransportLanding state machine: hidden until its footprint is clear of the
-    // other landings, then one team / vehicle per 2 s x (1 + s) step on a locked exit move, unlocked with the signal 0x19
-    // record after the last. Off until the tactical AI waits for landings_unloaded() (TF.Reinforce in-flight count).
-    bool landing_unload_timed = false;
+    // a1i t04 (A1_READINGS §35.2 / §35.3): true (default since a1j t01) = the TransportLanding state machine: hidden until
+    // its footprint is clear of the other landings, then one team / vehicle per 2 s x (1 + s) step on a locked exit move,
+    // unlocked with the signal 0x19 record after the last (the tactical AI's TF.Reinforce waits for it, A1_READINGS §36);
+    // false = [port] a landing object's company appears at the Reinforce order (every unload step at once).
+    bool landing_unload_timed = true;
     // --- S4 garrisons / structure capture (owner: S4 agent; tactical_battle_garrison.cpp) ---
     // GameConstants Garrisoned_Max_Attack_Distance_Multiplier / Land_ / Space_Capture_Allowed_Countdown_Seconds (vanilla
     // values; used only when the catalog's GameConstants lack them: BattleCatalog::capture_countdown).

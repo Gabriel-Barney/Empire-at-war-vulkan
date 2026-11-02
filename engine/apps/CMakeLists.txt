@@ -179,7 +179,9 @@ if(_alamo_sim)
     # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. a1i t01 (2026-11-02): reserves no
     # longer count (BT §3.1a [H]) and the land AI loads every plan folder (AI_GALACTIC §1.9.1), so SpaceMode\RetreatPlan serves
     # Land_Retreat and the outnumbered Rebel invaders retreat (A1_READINGS §34; S7 t36 found the same). S7/S8 wave 5 (2026-11-02):
-    # the test runs seed 6 (ends by the Rebel retreat). One ctest entry per worker count so they run
+    # the test runs seed 6 (ends by the Rebel retreat). a1j t01 / t02 (2026-11-02): with the timed landing unload, the
+    # Reinforce in-flight wait and the giant-vehicle push (A1_READINGS §36) seeds 1-12 still end (Rebel retreats, frames
+    # 2241-2991; seed 6 at 2991). One ctest entry per worker count so they run
     # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
     # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
     set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
@@ -206,7 +208,7 @@ if(_alamo_sim)
                      --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt --golden ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
                          FIXTURES_REQUIRED alamo_land_outcome_w0)
-    # a1i t01: a second seed (ends at frame 4080) so a change that stalls only some seeds is caught.
+    # a1i t01: a second seed (ends at frame 2244 since a1j) so a change that stalls only some seeds is caught.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_s1
              COMMAND alamo_headless --skirmish-ai foc-land --seed 1 --ticks 20000 --workers 4 --quiet --expect-battle-end)
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_s1 PROPERTIES TIMEOUT 1800)
