@@ -45,6 +45,7 @@
 //       A2: AI-vs-AI galactic campaign, every playable faction a galactic AI player (ai_run.hpp).
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
 //       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py.
+//       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
 //   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-station [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land invasion.
@@ -890,7 +891,7 @@ static int headless_main(int argc, char** argv) {
             m.expect_battle_end = opt.expect_battle_end;
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
         }
-        if (opt.story) {
+        if (opt.story && !(opt.economy && opt.galactic_ai)) {
             if (!opt.ticks_set && opt.frames_set) m.ticks = opt.frames;
             return story_run(m, opt.data_dir, opt.story_out, opt.story_golden);
         }
@@ -903,6 +904,7 @@ static int headless_main(int argc, char** argv) {
             a.human = opt.ai_human;                // A2 galactic
             a.human_script = opt.ai_human_script;  // A2 galactic
             a.trace_out = opt.trace_out;           // q2f t05
+            a.story = opt.story;                   // q2f t03
             a.verbose = !opt.quiet;
             return ai_campaign_run(m, a);
         }

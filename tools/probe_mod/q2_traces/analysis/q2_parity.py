@@ -709,12 +709,16 @@ def cmp_cycles(ref, port):
             d += "; trace: first next_cycle_frame %s, cycle ticks %s" % (c.get("first_next_cycle_frame"), c["cycle_ticks"][:12])
         return Result("fiscal_cycles", "n/a", detail=d, module="engine/apps (headless: no cycle output)" if side == "port" else None)
     r, p = ref["fiscal_cycles"]["cycle_ticks"], port["fiscal_cycles"]["cycle_ticks"]
+    # A trace change is seen on the first sample after the cycle: with missed samples it is a window (previous sample + 1
+    # .. sample), and the port tick only has to fall inside it.
+    win = ref["fiscal_cycles"].get("cycle_windows") or [(t, t) for t in r]
     n = min(len(r), len(p))
     for i in range(n):
-        if r[i] != p[i]:
-            return Result("fiscal_cycles", "DIVERGES", min(r[i], p[i]), "cycle %d: trace tick %d, port %d" % (i + 1, r[i], p[i]),
-                          "engine/galactic (economy)")
-    return Result("fiscal_cycles", "match", detail="%d cycle ticks equal %s" % (n, r[:6]))
+        lo, hi = win[i] if i < len(win) else (r[i], r[i])
+        if not lo <= p[i] <= hi:
+            return Result("fiscal_cycles", "DIVERGES", min(r[i], p[i]), "cycle %d: trace tick %s, port %d" % (
+                i + 1, r[i] if lo == hi else "%d..%d" % (lo, hi), p[i]), "engine/galactic (economy)")
+    return Result("fiscal_cycles", "match", detail="%d cycle ticks agree (inside the trace's sample windows) %s" % (n, r[:6]))
 
 
 def cmp_owners(ref, port):

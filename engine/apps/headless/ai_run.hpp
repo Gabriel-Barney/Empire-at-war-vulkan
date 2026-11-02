@@ -19,6 +19,7 @@ struct AiRunOptions {
     std::string human;             // faction played by the scripted human (empty = AI vs AI)
     std::string human_script;      // the human's recorded command stream (empty = the human gives no orders)
     std::string trace_out;         // q2f t05: per-tick Q2TRACE 1 state trace of the run (port_trace.hpp); first run only
+    bool story = false;            // q2f t03: also run the campaign's story plot sets (--story), as the retail sandbox does
     bool verbose = true;
 };
 

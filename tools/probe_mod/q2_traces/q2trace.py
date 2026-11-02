@@ -16,7 +16,7 @@
       RNG draws per tick, fiscal cycles, planet owners, fleet moves, production, object counts, credits, Lua perception.
       Each divergence gets its first tick and the engine module it points at. --port-exe runs the port itself
       (galactic: alamo_headless --economy --galactic-ai --campaign <trace campaign> --human <its faction> --seed <trace
-      seed> --ticks <trace ticks> --trace-out <port-out>/port.q2t; needs ALAMO_FOC_DATA / ALAMO_EAW_DATA); the port's
+      seed> --ticks <trace ticks> --story --trace-out <port-out>/port.q2t; needs ALAMO_FOC_DATA / ALAMO_EAW_DATA); the port's
       state trace then feeds owners, object counts, credits and cycles per tick. Logic: analysis/q2_parity.py. Exit 1 if
       anything diverges.
   q2trace.py selftest [--reader q2reader.exe]
@@ -553,6 +553,8 @@ def run_port(a, trace_path, parity):
     q2t = os.path.join(a.port_out, "port.q2t")
     cmd = [a.port_exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human, "--seed", str(seed),
            "--ticks", str(ticks), "--workers", str(a.port_workers), "--quiet", "--crc-out", crc, "--ai-log", ai]
+    if a.port_story:
+        cmd += ["--story"]  # q2f t03: the retail sandbox runs the campaign's story plots (start-of-game hero spawns)
     if a.port_state_trace:
         cmd += ["--trace-out", q2t]  # q2f t05: per-tick port state trace (owners, objects, credits, cycles)
     print("port run: " + " ".join(cmd))
@@ -583,7 +585,7 @@ def run_port(a, trace_path, parity):
             samples = sorted({max(first_c, 1)} | set(range(parity.SAMPLE_EVERY, ticks + 1, parity.SAMPLE_EVERY)))
             for t in samples:
                 cmd_t = [a.port_exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human, "--seed", str(seed),
-                         "--ticks", str(t), "--workers", str(a.port_workers), "--quiet"]
+                         "--ticks", str(t), "--workers", str(a.port_workers), "--quiet"] + (["--story"] if a.port_story else [])
                 rt = subprocess.run(cmd_t, capture_output=True, text=True, check=False)
                 got = parity.summary_credits(rt.stdout)
                 if got is not None:
@@ -647,6 +649,8 @@ def main():
                    help="skip the short port runs that sample credits over time (galactic, --port-exe)")
     c.add_argument("--no-port-state-trace", dest="port_state_trace", action="store_false",
                    help="do not ask the port run for its Q2TRACE state trace (--trace-out, q2f t05; older alamo_headless)")
+    c.add_argument("--no-port-story", dest="port_story", action="store_false",
+                   help="run the port without the campaign's story plots (no --story, q2f t03; older alamo_headless)")
     import importlib
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "analysis"))
     parity = importlib.import_module("q2_parity")

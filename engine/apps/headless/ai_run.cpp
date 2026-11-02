@@ -27,6 +27,9 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "alamo/sim/campaign_battles.hpp"
+#ifdef ALAMO_SIM_HAVE_STORY
+#include "alamo/sim/story_session.hpp"
+#endif
 #include "alamo/vfs/vfs.hpp"
 #include "port_trace.hpp"
 
@@ -223,16 +226,36 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         std::unique_ptr<ai::GalacticAiWorld> world_holder;
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
+        cfg.story_crc = aopt.story;
         sim::SimHost host(types, js, cfg);
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
+        if (aopt.story) {
+            if (!cdef) return false;
+#ifdef ALAMO_SIM_HAVE_STORY
+            // q2f t03: the campaign's story plot sets (as map_run.cpp story_run). The retail sandbox runs them, and their
+            // start-of-game hero spawns are part of its tick-1 RNG draws (docs/re/GALACTIC_RNG_DRAWS.md).
+            sim::StoryStart st;
+            st.files = files.get();
+            st.plot_sets = sim::campaign_plot_sets(*cdef, *gs);
+            std::vector<std::string> sd;
+            if (!host.start_story(st, &sd) || !host.story()) {
+                for (const auto& d : sd) std::fprintf(stderr, "galactic-ai: story: %s\n", d.c_str());
+                return false;
+            }
+#else
+            std::fprintf(stderr, "galactic-ai: --story: this build has no story session\n");
+            return false;
+#endif
+        }
         // q2f t05: the state trace reads the sim after each tick (never writes it); the first run only.
         PortStateTrace trace;
         if (print && !aopt.trace_out.empty()) {
             std::string terr;
             const std::vector<std::pair<std::string, std::string>> meta = {
                 {"reader", "alamo_headless"}, {"scenario", "galactic"}, {"game", "foc"}, {"campaign", name},
-                {"label", "alamo_headless --economy --galactic-ai" + (aopt.human.empty() ? std::string() : " --human " + aopt.human)},
+                {"label", "alamo_headless --economy --galactic-ai" + std::string(aopt.story ? " --story" : "") +
+                              (aopt.human.empty() ? std::string() : " --human " + aopt.human)},
                 {"game_type", "0"}, {"mode_type", "0"}, {"target_ticks", std::to_string(opt.ticks)}};
             if (!trace.open(aopt.trace_out, meta, cfg.seed, terr)) {
                 std::fprintf(stderr, "galactic-ai: %s\n", terr.c_str());
