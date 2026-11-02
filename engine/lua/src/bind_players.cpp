@@ -1255,29 +1255,62 @@ int g_assemble_fleet(Call& c) {
     return 1;
 }
 
-// GameObjectWrapper.Invade() on a fleet (Story_Campaign_Underworld.lua): an Invade event for the fleet's
-// planet with the fleet's ground units, issued on the direct path through the attached ObjectBridge's
-// pipeline (COMMANDS.md 5) [inferred: the unit list = the fleet's ground units, content order]. Returns
-// nothing; not a fleet in orbit / no pipeline: nothing happens.
+// GameObjectWrapper.Invade() (0x57ada0, A1_READINGS §31; Story_Campaign_Underworld.lua): an Invade event issued by the
+// LOCAL player (LuaPlayerWorld::local_player(), the event ctor's player), not the fleet's owner, executed on the direct
+// path through the attached ObjectBridge's pipeline (COMMANDS.md 5). Refusals in 0x57ada0's order, as script warnings
+// with nothing issued: not a fleet ([port] a warning; the original raises an error), not at a planet (moving), the
+// planet owner not an enemy of the FLEET owner, no ground units in the fleet. Units = the fleet's ground units owned by
+// the issuer (the executor 0x48ff50 keeps only those), content order, at most 127; none left (an AI fleet seen from a
+// human local player): nothing is issued, silently. Never an empty list (GalacticSim::invade reads it as "all units").
+// Returns nothing.
 int m_invade(Call& c) {
-    const galactic::GalacticSim* sim = galactic_of(c, world_of(c.L));
+    if (c.nargs != 0) return c.fail("GameObjectWrapper::Invade -- invalid number of parameters. Expected 0, got %d.", c.nargs);
+    LuaPlayerWorld* w = world_of(c.L);
+    const galactic::GalacticSim* sim = galactic_of(c, w);
+    if (!sim) return 0;
+    auto warn = [&c](const std::string& what) { c.vm->message("SCRIPT WARNING: GameObjectWrapper::Invade -- " + what); };
     const objects::ObjectHandle self = detail::object_handle(*c.self);
-    const uint32_t f = sim ? sim->fleet_of(self) : galactic::kNoFleet;
-    if (f == galactic::kNoFleet || sim->fleets()[f].moving || sim->fleets()[f].planet == kInvalidPlanet) return 0;
+    const uint32_t f = sim->fleet_of(self);
+    if (f == galactic::kNoFleet) {
+        warn("this function is only valid on fleets.");
+        return 0;
+    }
+    const galactic::FleetState& fl = sim->fleets()[f];
+    if (fl.moving || fl.planet == kInvalidPlanet) {
+        warn("this fleet is not at a planet. Cannot initiate invasion.");
+        return 0;
+    }
+    const galactic::PlanetState& planet = sim->planets()[fl.planet];
+    if (!sim->is_hostile(planet.owner, fl.owner)) {
+        const objects::GameObjectTypes* ty = c.vm->host.types;
+        const objects::TypeIndex pt = sim->store().type(planet.object);
+        const std::string pname = (ty && pt < ty->raw().type_count()) ? std::string(ty->raw().types().name[pt]) : std::string();
+        warn("fleet owner " + w->faction_name(fl.owner) + " is not an enemy of planet " + pname + " owner " +
+             w->faction_name(planet.owner) + ". Cannot initiate invasion.");
+        return 0;
+    }
+    const int32_t issuer = w->local_player();
+    constexpr size_t kMaxInvadeUnits = 127;  // 0x4903c0 copies at most 127 unit ids
+    bool any_ground = false;
+    std::vector<uint32_t> ids;
+    for (const objects::ObjectHandle m : fl.contents) {
+        if (!sim->store().alive(m) || sim->rules().types[sim->store().type(m)].kind != galactic::UnitKind::GroundUnit) continue;
+        any_ground = true;
+        if (sim->store().owner(m) == issuer && ids.size() < kMaxInvadeUnits) ids.push_back(static_cast<uint32_t>(sim->store().id(m)));
+    }
+    if (!any_ground) {
+        warn("fleet contains no land units. Cannot initiate invasion.");
+        return 0;
+    }
+    if (ids.empty() || issuer < 0 || issuer >= commands::kMaxPlayerSlots) return 0;  // 0x48ff50 keeps none: silently
 #if ALAMO_LUA_HAVE_COMMANDS
     ObjectBridge* b = attached_object_bridge(*c.vm->owner);
     if (!b) return 0;
     ++b->orders_issued;
     if (!b->pipeline) return 0;
-    const galactic::FleetState& fl = sim->fleets()[f];
-    std::vector<uint32_t> ids;
-    for (const objects::ObjectHandle m : fl.contents)
-        if (sim->store().alive(m) && sim->rules().types[sim->store().type(m)].kind == galactic::UnitKind::GroundUnit)
-            ids.push_back(static_cast<uint32_t>(sim->store().id(m)));
     commands::EventData e(commands::EventType::Invade);
-    e.set("planet", static_cast<uint32_t>(sim->store().id(sim->planets()[fl.planet].object))).set_ids("units", std::move(ids));
-    const uint8_t player = (fl.owner >= 0 && fl.owner < commands::kMaxPlayerSlots) ? static_cast<uint8_t>(fl.owner) : 0;
-    b->pipeline->execute_direct(c.vm->frame, player, commands::CommandSource::Script, e);
+    e.set("planet", static_cast<uint32_t>(sim->store().id(planet.object))).set_ids("units", std::move(ids));
+    b->pipeline->execute_direct(c.vm->frame, static_cast<uint8_t>(issuer), commands::CommandSource::Script, e);
 #endif
     return 0;
 }

@@ -1241,16 +1241,18 @@ LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
 // assembles the Underworld squads in orbit of S10_C into a fleet, BlockOnCommand(fleet.Move_To(S10_B)) (the Empire's
 // planet, an Empire squad on the surface), Sleep(1), fleet.Invade(). The block must last until the fleet is in orbit
 // of S10_B (StorySession's order_finished); before a1f t08 it finished at once, Invade() ran in hyperspace and was
-// dropped, so the fleet sat in orbit with either human. The probe's SpawnList is replaced by squads lifted into orbit
-// here: Spawn_Unit at a galactic planet is not registered with the GalacticSim (no fleet, no surface entry), so
-// Assemble_Fleet of freshly spawned units returns nil in the port (open item). Two runs: Underworld human (the probe's
-// fallback: the original invaded at once) and Empire human with Underworld AI (the probe's preferred variant: the
-// original's fleet stayed in orbit and never invaded; the port invades - open question, see the a1f t08 report).
+// dropped, so the fleet sat in orbit with either human. The squads are spawned at S10_C with Spawn_Unit (the probe's
+// SpawnList; a1g t06: registered with the GalacticSim, so Assemble_Fleet flies them). Two runs: Underworld human (the
+// probe's fallback: the original invaded at once) and Empire human with an Underworld without galactic AI (the probe's
+// preferred variant, AI_Player_Control None: the original's fleet stayed in orbit and never invaded). a1g t05
+// (A1_READINGS §31): fleet.Invade() is issued by the LOCAL player with its own ground units only, so with a human
+// Empire nothing lands, silently.
 struct ProbeInvadeRun {
     std::string conflicts, story;
     std::vector<std::string> lua;
     size_t land_queued = 0;  // most land conflicts queued at once
     uint32_t fought = 0;
+    bool fleet_at_target = false;  // an Underworld fleet with ground units in orbit of S10_B at the end
 };
 ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool human_empire) {
     ProbeInvadeRun out;
@@ -1263,14 +1265,10 @@ ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool h
     setup.players[0].human = human_empire;
     setup.players[0].ai = !human_empire;
     setup.players[1].human = !human_empire;
-    setup.players[1].ai = human_empire;
+    setup.players[1].ai = false;  // human, or the probe's AI_Player_Control None (no galactic AI)
     galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
     CHECK(gs != nullptr);
     if (!gs) return out;
-    std::vector<objects::ObjectHandle> up;  // Underworld's squads at S10_C into an orbit fleet (stand-in for SpawnList)
-    for (objects::ObjectHandle h : gs->planets()[2].surface)
-        if (gs->store().owner(h) == 1) up.push_back(h);
-    CHECK(up.size() == 2 && gs->launch_units(1, 2, up) == commands::RejectReason::None);
     StoryStart st;
     st.files = &files;
     st.plot_sets = {{human_empire ? 0 : 1, "Story_Plots_Probe.xml"}};
@@ -1293,6 +1291,10 @@ ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool h
         out.land_queued = std::max(out.land_queued, battles.conflicts().land_queue().size());
     }
     out.fought = battles.battles_fought();
+    for (const uint32_t f : gs->fleets_at(1, 1))
+        for (const objects::ObjectHandle m : gs->fleets()[f].contents)
+            if (gs->store().alive(m) && gs->rules().types[gs->store().type(m)].kind == galactic::UnitKind::GroundUnit)
+                out.fleet_at_target = true;
     if (host.story()) {
         out.lua = host.story()->lua_messages();
         out.story = host.story()->log_text("probe");
@@ -1316,9 +1318,9 @@ void test_probe_invade(const Data& d) {
                "function Base_Definitions() ServiceRate = 0.1 stage = 0 end\n"
                "function main() while true do\n"
                "  if stage == 0 and GetCurrentTime() >= 1 then\n"
-               "    uw = Find_Player('Underworld') tgt = FindPlanet('S10_B') units = {}\n"
-               "    for _, u in pairs(Find_All_Objects_Of_Type(Find_Object_Type('S10_Squad'))) do\n"
-               "      if u.Get_Owner().Get_ID() == uw.Get_ID() then table.insert(units, u) end end\n"
+               "    uw = Find_Player('Underworld') tgt = FindPlanet('S10_B') src = FindPlanet('S10_C') units = {}\n"
+               "    for _, t in ipairs({'S10_Squad', 'S10_Squad'}) do\n"
+               "      for _, u in pairs(Spawn_Unit(Find_Object_Type(t), src, uw)) do table.insert(units, u) end end\n"
                "    fleet = Assemble_Fleet(units)\n"
                "    if fleet then Story_Event('FLEET') block = fleet.Move_To(tgt) stage = 1 else stage = 9 end\n"
                "  elseif stage == 1 and block.IsFinished() then\n"
@@ -1333,16 +1335,21 @@ void test_probe_invade(const Data& d) {
         const ProbeInvadeRun r = run_probe_invade(d, files, human_empire);
         auto fired = [&r](const char* ev) { return r.story.find(std::string(" P_") + ev + " ") != std::string::npos; };
         std::printf("  human %s: fleet %d, block ended in orbit %d (elsewhere %d), invade issued %d, land conflicts queued %zu, "
-                    "fought %u\n    %s\n",
-                    human_empire ? "Empire (Underworld AI)" : "Underworld", fired("FLEET") ? 1 : 0, fired("ARRIVED") ? 1 : 0,
-                    fired("NOT_THERE") ? 1 : 0, fired("INVADED") ? 1 : 0, r.land_queued, r.fought, r.conflicts.c_str());
+                    "fought %u, fleet in orbit of S10_B at the end %d\n    %s\n",
+                    human_empire ? "Empire (Underworld AI None)" : "Underworld", fired("FLEET") ? 1 : 0, fired("ARRIVED") ? 1 : 0,
+                    fired("NOT_THERE") ? 1 : 0, fired("INVADED") ? 1 : 0, r.land_queued, r.fought, r.fleet_at_target ? 1 : 0,
+                    r.conflicts.c_str());
         for (const std::string& m : r.lua) std::printf("    lua: %s\n", m.c_str());
         CHECK(r.lua.empty());
         CHECK(fired("FLEET") && fired("ARRIVED") && !fired("NOT_THERE") && fired("INVADED"));
-        // Both humans: the land conflict is queued and fought. Human Underworld = the original. Human Empire: the
-        // original's AI fleet never invaded (probe 2026-10-31, not explained by the specs: open question).
-        CHECK(r.land_queued == 1 && r.fought == 1);
-        CHECK(r.conflicts.find(" land S10_B Underworld vs Empire") != std::string::npos);
+        if (human_empire) {
+            // The original (probe 2026-10-31, A1_READINGS §31): Invade() issued by the local Empire keeps no Underworld
+            // unit, nothing lands, the fleet stays in orbit.
+            CHECK(r.land_queued == 0 && r.fought == 0 && r.fleet_at_target);
+        } else {
+            CHECK(r.land_queued == 1 && r.fought == 1);
+            CHECK(r.conflicts.find(" land S10_B Underworld vs Empire") != std::string::npos);
+        }
     }
 }
 

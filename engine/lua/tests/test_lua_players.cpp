@@ -717,6 +717,68 @@ void test_setup_players() {
     CHECK(w.credits(1) == 50.0f);
 }
 
+bool last_message_has(LuaVm& vm, const char* what) {
+    return !vm.messages().empty() && vm.messages().back().find(what) != std::string::npos;
+}
+
+// a1g t05 (A1_READINGS §31): fleet.Invade() is issued by the local player (Empire, the human) with the fleet's ground
+// units the local player owns. An Underworld (AI) fleet with ground units at the Empire's planet A: no order, no message
+// (0x48ff50 keeps no unit). An Empire fleet with a ground unit at Underworld's planet C: one order, player = local, the
+// Empire unit only (at most 127). A fleet without ground units, or at a non-enemy planet: a warning, no order.
+void test_invade_local_player() {
+    Galaxy g;
+    galactic::GalacticSim& sim = *g.sim;
+    const uint32_t frigate = g.raw.find("Frigate_T"), trooper = g.raw.find("Trooper_T");
+    CHECK(sim.planets()[0].owner == 0 && sim.planets()[2].owner == 1);
+    // Underworld fleet at A carrying an Underworld trooper.
+    CHECK(static_cast<bool>(sim.spawn_unit(1, 0, frigate)));
+    const objects::ObjectHandle ut = sim.spawn_unit(1, 0, trooper);
+    const objects::ObjectHandle ut_list[] = {ut};
+    CHECK(sim.launch_units(1, 0, ut_list) == commands::RejectReason::None);
+    // Empire fleet at C carrying an Empire trooper.
+    CHECK(static_cast<bool>(sim.spawn_unit(0, 2, frigate)));
+    const objects::ObjectHandle et = sim.spawn_unit(0, 2, trooper);
+    const objects::ObjectHandle et_list[] = {et};
+    CHECK(sim.launch_units(0, 2, et_list) == commands::RejectReason::None);
+    const uint32_t uf = sim.fleet_containing(ut), ef = sim.fleet_containing(et);
+    CHECK(uf != galactic::kNoFleet && ef != galactic::kNoFleet);
+    if (uf == galactic::kNoFleet || ef == galactic::kNoFleet) return;
+    ObjectBridge bridge;
+    std::vector<commands::Command> cmds;
+    commands::CommandPipeline pipe;
+    pipe.set_handler([&cmds](uint64_t, const commands::Command& c) {
+        cmds.push_back(c);
+        return commands::RejectReason::None;
+    });
+    bridge.pipeline = &pipe;
+    LuaVm vm(g.host());
+    attach_player_world(vm, &g.world);
+    attach_object_bridge(vm, &bridge);
+    vm.set_object_global("UF", sim.fleets()[uf].object);
+    vm.set_object_global("EF", sim.fleets()[ef].object);
+    CHECK(run(vm, "loc = Find_Player('local').Get_ID()") == "" && gnum(vm, "loc") == 0.0);
+    const size_t msgs = vm.messages().size();
+    CHECK(run(vm, "UF.Invade()") == "" && bridge.orders_issued == 0 && cmds.empty() && vm.messages().size() == msgs);
+    CHECK(run(vm, "EF.Invade()") == "" && bridge.orders_issued == 1 && cmds.size() == 1);
+    if (cmds.size() == 1) {
+        const commands::EventData& e = cmds[0].payload;
+        CHECK(cmds[0].header.player == 0 && e.type() == commands::EventType::Invade);
+        CHECK(e.u("planet") == static_cast<uint32_t>(g.store->id(g.planet(2))));
+        CHECK(e.ids("units").size() == 1 && e.ids("units")[0] == static_cast<uint32_t>(g.store->id(et)));
+    }
+    // The Empire's own fleet at its planet A: not an enemy planet. A frigate-only Empire fleet at C: no land units.
+    const std::vector<uint32_t> home = sim.fleets_at(0, 0);
+    CHECK(home.size() == 1);
+    if (home.size() != 1) return;
+    vm.set_object_global("HF", sim.fleets()[home[0]].object);
+    CHECK(run(vm, "HF.Invade()") == "" && cmds.size() == 1 &&
+          last_message_has(vm, "GameObjectWrapper::Invade -- fleet owner Empire is not an enemy of planet Planet_A owner Empire. Cannot initiate invasion."));
+    vm.set_object_global("Lone", sim.spawn_unit(0, 2, frigate));  // joins EF; assembled into a fleet of its own
+    CHECK(run(vm, "LF = Assemble_Fleet({Lone}) LF.Invade()") == "" && cmds.size() == 1 && bridge.orders_issued == 1 &&
+          last_message_has(vm, "GameObjectWrapper::Invade -- fleet contains no land units. Cannot initiate invasion."));
+    CHECK(vm.errors().empty());
+}
+
 // L1/S4 wave 1: galactic containment, Assemble_Fleet, Change_Owner (GalacticSim::change_owner), Invade,
 // base waits / next base types, planet usability, heroes, Destroy_Contained_Objects, StringCompare.
 void test_galactic_ops() {
@@ -797,9 +859,13 @@ void test_galactic_ops() {
     CHECK(run(vm, "af3.Change_Owner(und) ufa = F2.Get_Parent_Object() uc = ufa.Get_Contained_Object_Count()") == "");
     CHECK(gnum(vm, "uc") == 3.0 && sim.fleets_at(0, 1).size() == 1 && sim.fleets_at(0, 0).size() == 0 && g.store->owner(c[2]) == 1);
     CHECK(run(vm, "PC.Change_Owner(emp)") == "" && sim.planets()[2].owner == 0);  // same owner: nothing
-    // Invade on a fleet: one direct-path order (no pipeline attached here).
+    // Invade (a1g t05, A1_READINGS §31): issued by the local player (Empire) with its own ground units only. ufa is
+    // Underworld's fleet without ground units, PA no fleet: warnings, no order.
     const uint32_t issued = bridge.orders_issued;
-    CHECK(run(vm, "ufa.Invade() PA.Invade()") == "" && bridge.orders_issued == issued + 1);
+    CHECK(run(vm, "ufa.Invade() PA.Invade()") == "" && bridge.orders_issued == issued);
+    CHECK(last_message_has(vm, "GameObjectWrapper::Invade -- this function is only valid on fleets."));
+    CHECK(run(vm, "ufa.Invade(1)").find("GameObjectWrapper::Invade -- invalid number of parameters. Expected 0, got 1.") != std::string::npos);
+    test_invade_local_player();
 
     // Base waits, next base types, planet usability, landing.
     CHECK(run(vm, "w1 = WaitForStarbase(PA, 1).IsFinished() w0 = WaitForGroundbase(PA, 0).IsFinished() "

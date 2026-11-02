@@ -1481,11 +1481,17 @@ RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& 
     case EventType::Invade: {
         const PlanetIndex p = planet_by_id(ev.u("planet"));
         if (p == kInvalidPlanet) return RejectReason::InvalidTarget;
+        // InvadeEventClass Execute 0x48ff50 (A1_READINGS §31.2): only the issuer's own units land. A list whose units
+        // are all dropped lands nothing (an empty list given to invade() would mean "all of the player's units").
+        // [port] the executor's pause / linked-battle gates are not applied here (the AI's task-force invasions use
+        // this event too, the original's call Land_Invade directly).
+        const std::vector<uint32_t>& ids = ev.ids("units");
         std::vector<ObjectHandle> units;
-        for (uint32_t id : ev.ids("units")) {
+        for (uint32_t id : ids) {
             const ObjectHandle h = store_->find(static_cast<objects::ObjectId>(id));
-            if (store_->alive(h)) units.push_back(h);
+            if (store_->alive(h) && store_->owner(h) == player) units.push_back(h);
         }
+        if (!ids.empty() && units.empty()) return RejectReason::NotOwner;
         return invade(player, p, units);
     }
     case EventType::FleetManagement:
