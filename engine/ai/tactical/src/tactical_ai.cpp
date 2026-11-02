@@ -2,6 +2,7 @@
 // bridge, task forces, blocking statuses (see tactical_ai.hpp). [port] / [L] / [M] mark behaviour the RE docs
 // do not fix.
 #include "alamo/ai/tactical/tactical_ai.hpp"
+#include "alamo/core/profile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2999,7 +3000,7 @@ lua::LuaPlayerWorld& TacticalAiWorld::player_world() { return impl_->world; }
 bool TacticalAiWorld::load_plans(std::vector<std::string>* diagnostics) {
     Impl& w = *impl_;
     if (!w.files) return false;
-    return w.runtime->load(*w.files, w.cfg.plan_files, w.defs, w.library, diagnostics) > 0;
+    return w.runtime->load(*w.files, w.cfg.plan_files, w.defs, w.library, diagnostics, w.cfg.lua_gc_pf) > 0;
 }
 
 bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
@@ -3099,13 +3100,24 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
             if (e.vm) vms.push_back(e.vm.get());
         lua::collect_scheduled(vms, static_cast<uint64_t>(now), w.cfg.lua_gc_pf);
     }
-    w.refresh();
-    w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
-    w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
-    w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
+    {
+        ALAMO_PROFILE_SCOPE("tac.ai.perception");  // OPT2 t08: snapshot, threat grid, signals
+        w.refresh();
+        w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
+        w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
+        w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
+    }
     const bool enabled = w.gate.enabled(ai_mode_of(w.cfg.mode));
+    // OPT2 t08: one zone per AI player's service (goals, plans, free store; their Lua is also in lua.exec).
+    static const profile::ZoneId kPlayerZone[] = {
+        profile::register_zone("tac.ai.p0"), profile::register_zone("tac.ai.p1"), profile::register_zone("tac.ai.p2"),
+        profile::register_zone("tac.ai.p3"), profile::register_zone("tac.ai.p4"), profile::register_zone("tac.ai.p5"),
+        profile::register_zone("tac.ai.p6"), profile::register_zone("tac.ai.p7"), profile::register_zone("tac.ai.p8+")};
     for (auto& pa : w.ai)
-        if (pa) pa->ctx.service(now, enabled, false);
+        if (pa) {
+            const profile::Scope zone(kPlayerZone[std::clamp<int32_t>(pa->player, 0, 8)]);
+            pa->ctx.service(now, enabled, false);
+        }
     // The pipeline posts a diagnostic CommandResult per direct order and nothing subscribes on this bus: drop them here
     // or the queue grows for the whole battle. Sim code never reads it (events.hpp), so no CRC or saved state depends on it.
     w.pipeline.events().deliver();

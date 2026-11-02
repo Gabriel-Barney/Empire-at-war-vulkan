@@ -349,7 +349,8 @@ private:
 // ---- construction ---------------------------------------------------------------------------------------------
 
 TacticalBattle::TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy,
-                               const galactic::ConflictRules& rules, galactic::BattleRequest request, BattleConfig cfg)
+                               const galactic::ConflictRules& rules, galactic::BattleRequest request, BattleConfig cfg,
+                               const ParallelFor& pf)
     : catalog_(&catalog), galaxy_(&galaxy), rules_(&rules), req_(std::move(request)), cfg_(cfg) {
     space_ = req_.info.kind == galactic::ConflictKind::Space;
     for (const galactic::BattleForces& f : req_.forces) {
@@ -395,10 +396,23 @@ TacticalBattle::TacticalBattle(const BattleCatalog& catalog, const galactic::Gal
         use(static_cast<uint32_t>(dummy));
     }
     l1_add_types(types_used_);  // L1 systems: the mode's special-weapon types (projectiles in the tables)
-    tables_ = std::make_unique<BattleTables>(catalog.build_battle(types_used_, descs_, space_));  // battle host: model bones
+    tables_ = std::make_unique<BattleTables>();  // battle host: model bones
+    tables_build_ = catalog.begin_battle(*tables_, space_);
+    tables_build_->pf = pf;
+    tables_extend();
 }
 
 TacticalBattle::~TacticalBattle() = default;
+
+void TacticalBattle::tables_extend() {
+    // OPT3 t09: setup appends types several times; each step builds only the new ones (BattleCatalog::extend_battle) instead
+    // of rebuilding every type from the start. Same tables and descriptor indices either way.
+    if (tables_build_) {
+        catalog_->extend_battle(*tables_build_, types_used_, descs_);
+        return;
+    }
+    tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+}
 
 // N1 stage 2 (tactical_battle_save.cpp): after a load, the combat hooks get the tick context of the saving run's last
 // battle tick (command-phase hooks before the next battle tick use it).
@@ -547,15 +561,6 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
             r.known = r.model != nullptr;
             return r;
         });
-        // OPT3 t05: the model files of the map's placements and the participants load in parallel here instead of one
-        // type at a time inside the spawns and stamps below (the first battle tick's largest cost); results unchanged.
-        const TypeCrcIndex index(catalog_->types());
-        std::vector<uint32_t> types;
-        types.reserve(map_.objects.size() + parts_.size());
-        for (const terrain::ObjectPlacement& pl : map_.objects)
-            if (const objects::TypeIndex t = index.find(pl.type_crc); t != objects::kNone) types.push_back(static_cast<uint32_t>(t));
-        for (const Participant& p : parts_) types.push_back(p.type);
-        catalog_->preload_models(types, space, pf);
     }
 #endif
     // --- OI objects: computed behaviour intervals (SHIELDED / POWERED) from GameConstants, before any object exists ---
@@ -568,12 +573,27 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         mode.primary().set_interval_config(ic);
     }
     // --- end OI objects ---
+    if (tables_build_) tables_build_->pf = pf;  // OPT3 t09
     bt_rng_ = &rng;            // battle host: pad objects join the battle with their add_unit draws
     bt_players_ = players;
     bt_map_prepass();          // REMAINING_GAPS §3.1: base-level filter + branched-map discard; map types -> tables
     bt_add_pad_types(map_);    // battle host: the map's pad UC / constructed types join the tables (before combat exists)
     oi_add_ability_types();    // OI abilities: ability-spawned / survivor types join the tables (before combat exists)
     hg_add_types();            // hangars: launched squadrons / ships and the station chain join the tables
+#ifdef ALAMO_SIM_HAVE_ASSETS
+    // OPT3 t05 / t09: the model files of the map's placements (after the prepass: a land skirmish's team markers are its pads
+    // now) and the participants load in parallel here instead of one type at a time inside the spawns and stamps below
+    // (the first battle tick's largest cost); results unchanged.
+    if (catalog_->files()) {
+        const TypeCrcIndex index(catalog_->types());
+        std::vector<uint32_t> types;
+        types.reserve(map_.objects.size() + parts_.size());
+        for (const terrain::ObjectPlacement& pl : map_.objects)
+            if (const objects::TypeIndex t = index.find(pl.type_crc); t != objects::kNone) types.push_back(static_cast<uint32_t>(t));
+        for (const Participant& p : parts_) types.push_back(p.type);
+        catalog_->preload_models(types, map_.is_space(), pf);
+    }
+#endif
     const objects::GameObjectTypes& types = catalog_->types();
     float mn[2] = {-5000.0f, -5000.0f}, mx[2] = {5000.0f, 5000.0f};
     if (!map_.playable_box(mn, mx)) {
@@ -796,6 +816,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     land_obstacles_sync(mode);   // S8 t02: LAND_OBSTACLE objects spawned during the setup (MOVEMENT §1.3)
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants (land)
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
+    tables_build_.reset();  // OPT3 t09: the tables are complete
 }
 
 // S8 t17 (FIGHTER_FLYING §4.10 B): each combat unit's squadron for the shared team target. Derived state (not saved):

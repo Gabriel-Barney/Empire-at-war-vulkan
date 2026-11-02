@@ -244,9 +244,9 @@ scenario(s) it ran and the result in the PR. Two forms, both comparing every cou
 
 Converted: `alamo_headless_replay_workers*` (per-process, the 0-worker entry also against `replay_golden.crc`; `alamo_headless_replay_golden`
 now runs the in-process form) and `alamo_headless_galactic_ai_human*` (36000 ticks, was one `--check-workers` entry running the counts in
-turn; each count's AI log is compared with the golden). Not converted yet: `alamo_headless_skirmish_ai_foc_land_outcome*` already has the
-same shape by hand and is being rewritten on the skai-skirmish branch (convert after it merges); `alamo_headless_skirmish_ai_synthetic`
-and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
+turn; each count's AI log is compared with the golden) and `alamo_headless_skirmish_ai_foc_land_outcome*` (OPT3 t08: 7000-tick land
+skirmish, the 0-worker entry also checks `--expect-skirmish-base`; `_profiled` compares a `--profile` run with the same 0-worker log).
+Not converted: `alamo_headless_skirmish_ai_synthetic` and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
 
 ## OPT3 t05 / t06: spike-list fixes before threading (2026-11-02)
 
@@ -318,8 +318,8 @@ Lua 5.0.2's collector is unchanged (whole-heap mark and sweep, no incremental GC
   via `BattleAi`, story via `SimHost::start_story`, galactic AI via `GalacticAiConfig::lua_gc_pf` in `alamo_headless`). Per-VM
   work only: Lua 5.0.2 keeps every collector structure in the state's own `global_State`, and the build patches already make
   collections address-independent. `__gc` finalizers are split off (`alamo_luaC_collect`, a build patch of `lgc.c`) and run
-  afterwards on the sim thread in list order. `alamo_game`'s galactic AI (`apps/game/game_session.cpp`) still passes no
-  `lua_gc_pf`, so it collects serially (still staggered).
+  afterwards on the sim thread in list order. `alamo_game`'s galactic AI (`apps/game/game_session.cpp`) passes the host's
+  `ParallelFor` too since OPT2 t09 (2026-11-02; the smoke CRC goldens are unchanged).
 - **Profiler zones**: `lua.gc` (every collection's mark / sweep, on any thread), `lua.gc.auto` (the automatic ones inside a
   script call: the spikes this is about), `lua.gc.batch` (wall time of a host's scheduled batch).
 - **Determinism**: no shipped FoC / EaW script (584 Lua files) uses weak tables, `__gc`, `newproxy` or `gcinfo`, so collection

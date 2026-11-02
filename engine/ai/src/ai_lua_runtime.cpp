@@ -105,10 +105,15 @@ bool read_plan_definition(lua::LuaVm& vm, const AiDefinitions& defs, PlanDefinit
 
 std::unique_ptr<lua::LuaVm> PlanScriptRuntime::make_vm(const std::string& name, const std::string& chunk,
                                                         const std::string& chunk_name, std::string* err) {
+    ++created_;
+    return build_vm(name, chunk, chunk_name, err);
+}
+
+std::unique_ptr<lua::LuaVm> PlanScriptRuntime::build_vm(const std::string& name, const std::string& chunk,
+                                                         const std::string& chunk_name, std::string* err) const {
     lua::LuaVmOptions opt;
     opt.script_name = name;
     auto vm = std::make_unique<lua::LuaVm>(setup_.host ? setup_.host() : lua::LuaHost{}, opt);
-    ++created_;
     if (setup_.prepare) setup_.prepare(*vm);
     std::string e;
     if (!vm->run(chunk, chunk_name, &e)) {
@@ -119,53 +124,79 @@ std::unique_ptr<lua::LuaVm> PlanScriptRuntime::make_vm(const std::string& name, 
 }
 
 size_t PlanScriptRuntime::load(const FileProvider& files, const std::vector<std::string>& paths, const AiDefinitions& defs,
-                               PlanLibrary& library, std::vector<std::string>* diag) {
+                               PlanLibrary& library, std::vector<std::string>* diag, const ParallelFor& pf) {
+    // OPT3 t09: each path's load VM (read, chunk, Base_Definitions, definition globals) is built on its own job: per-path
+    // outputs, nothing outside the new VM is written (the bindings attach the host by pointer; the shipped plans'
+    // chunks and Definitions() only set their own globals). The results are committed below in path order on this
+    // thread, which takes the VMs over, so the library, the pools, vms_created() and the diagnostics are the serial ones.
+    struct Built {
+        bool read = false;
+        std::string name, source;
+        std::unique_ptr<lua::LuaVm> vm;  // null when the chunk or Base_Definitions failed
+        PlanDefinition def;
+        bool def_ok = false;
+        std::vector<std::string> diag;  // this path's messages after the duplicate test
+    };
+    std::vector<Built> built(paths.size());
+    pf(static_cast<uint32_t>(paths.size()), 1, [&](uint32_t begin, uint32_t end) {
+        std::vector<uint8_t> bytes;
+        for (uint32_t i = begin; i < end; ++i) {
+            const std::string& path = paths[i];
+            Built& b = built[i];
+            if (!files.read(path, bytes)) continue;
+            b.read = true;
+            b.name = file_base_name(path);
+            b.source.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            std::string err;
+            b.vm = build_vm(b.name, b.source, path, &err);
+            if (!b.vm) {
+                b.diag.push_back(err);
+                continue;
+            }
+            lua::set_bool_global(*b.vm, "PlanDefinitionLoad", true);
+            if (!b.vm->call("Base_Definitions", &err)) {
+                b.diag.push_back(path + ": Base_Definitions: " + err);
+                b.vm.reset();
+                continue;
+            }
+            b.def.name = b.name;
+            b.def.file = path;
+            for (uint32_t f = 0; f < std::size(kPlanFolders); ++f) {
+                const std::string folder = kPlanFolders[f];
+                if (path.size() > folder.size() && ai_iequal(std::string_view(path).substr(0, folder.size()), folder) &&
+                    path.find('\\', folder.size()) == std::string::npos)
+                    b.def.folder = f;
+            }
+            b.def_ok = read_plan_definition(*b.vm, defs, b.def, &b.diag);
+            if (b.def_ok) lua::clear_script_logs(*b.vm);
+        }
+    });
     size_t loaded = 0;
-    std::vector<uint8_t> bytes;
     for (size_t i = 0; i < paths.size(); ++i) {
         const std::string& path = paths[i];
-        if (!files.read(path, bytes)) {
+        Built& b = built[i];
+        if (b.vm) b.vm->claim_ownership();  // a job worker made it; that job has finished
+        if (!b.read) {
             if (diag) diag->push_back(path + ": cannot read");
             continue;
         }
-        const std::string name = file_base_name(path);
-        if (library.find(name) != kAiNone) {
-            if (diag) diag->push_back(path + ": duplicate plan name " + name + " (first kept)");
+        if (library.find(b.name) != kAiNone) {  // the VM built for a duplicate is dropped (the serial load made none)
+            if (diag) diag->push_back(path + ": duplicate plan name " + b.name + " (first kept)");
             continue;
         }
-        std::string source(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        std::string err;
-        std::unique_ptr<lua::LuaVm> vm = make_vm(name, source, path, &err);
-        if (!vm) {
-            if (diag) diag->push_back(err);
-            continue;
-        }
-        lua::set_bool_global(*vm, "PlanDefinitionLoad", true);
-        if (!vm->call("Base_Definitions", &err)) {
-            if (diag) diag->push_back(path + ": Base_Definitions: " + err);
-            continue;
-        }
-        PlanDefinition def;
-        def.name = name;
-        def.file = path;
-        for (uint32_t f = 0; f < std::size(kPlanFolders); ++f) {
-            const std::string folder = kPlanFolders[f];
-            if (path.size() > folder.size() && ai_iequal(std::string_view(path).substr(0, folder.size()), folder) &&
-                path.find('\\', folder.size()) == std::string::npos)
-                def.folder = f;
-        }
-        if (!read_plan_definition(*vm, defs, def, diag)) continue;
+        ++created_;
+        if (diag) diag->insert(diag->end(), b.diag.begin(), b.diag.end());
+        if (!b.vm || !b.def_ok) continue;
         Entry e;
-        e.name = name;
+        e.name = b.name;
         e.file = path;
-        e.source = std::move(source);
-        e.pool_count = def.pool_count;
-        lua::clear_script_logs(*vm);
+        e.source = std::move(b.source);
+        e.pool_count = b.def.pool_count;
         if (e.pool_count != 0) {
-            e.pristine = vm.get();
-            e.free.push_back(std::move(vm));
+            e.pristine = b.vm.get();
+            e.free.push_back(std::move(b.vm));
         }
-        library.plans.push_back(std::move(def));
+        library.plans.push_back(std::move(b.def));
         entries_.push_back(std::move(e));
         ++loaded;
     }

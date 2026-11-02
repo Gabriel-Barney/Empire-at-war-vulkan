@@ -283,8 +283,8 @@ struct TacticalAiConfig {
     std::vector<std::string> plan_files;            // load order (the mode's plan folder)
     bool log_decisions = true;
     uint32_t game_seed = 0;                         // A2 tactical: session seed (perception '#' reseed, AI_GALACTIC_3 §7.3)
-    // OPT2 t04: fan-out for the per-update scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); any
-    // value gives identical results.
+    // OPT2 t04: fan-out for the per-update scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); OPT3
+    // t09: also for load_plans (one job per plan file). Any value gives identical results.
     ParallelFor lua_gc_pf = serial_for;
 };
 
