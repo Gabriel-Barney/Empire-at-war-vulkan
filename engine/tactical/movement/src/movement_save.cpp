@@ -30,7 +30,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 4;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames
+constexpr uint32_t kMovementSaveVersion = 5;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap
 
 // u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
 template <class F>
@@ -448,6 +448,7 @@ void io_squad(IO& io, S& s) {  // FighterSquad
     io.cell(s.park);
     io.f3(s.dest);
     io_target(io, s.target);
+    io.f32(s.speed_cap);  // S7 t28 (version 5)
 }
 
 template <class IO, class S>

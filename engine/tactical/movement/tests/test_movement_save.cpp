@@ -874,7 +874,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 3);  // 3: before the S7 t15 turn band rate / S8 t09 jetpack_still_frames
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 5);
+    put_u32(bad, 0, 4);  // 4: before the S7 t28 squadron speed cap
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 6);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

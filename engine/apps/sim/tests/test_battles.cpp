@@ -4793,7 +4793,8 @@ void test_fighter_auto_push() {
 // carrier. The launched squadron's formation record is {flags 0x02, goal object = the carrier} with a host follow, so its
 // chase range is Guard_Chase_Range around the carrier; when the carrier moves away, the squadron re-paths to it (at most
 // once per 30 frames, when the carrier is more than half the leader's attack range from the recorded goal) and keeps the
-// guard record (flags, goal object). A new order of the squadron ends the follow (a plain move record).
+// guard record (flags, goal object). S7 t28: while the carrier moves the squadron flies a copy of its path at most twice
+// its speed. A new order of the squadron ends the follow (a plain move record).
 void test_hangar_escort_guard() {
     namespace mv = tactical::movement;
     using R = commands::RejectReason;
@@ -4802,8 +4803,8 @@ void test_hangar_escort_guard() {
     const uint32_t carrier_type = type_of(*fb.d, "S10_Carrier");
     objects::ObjectId carrier = objects::kNoObjectId, squad = objects::kNoObjectId;
     std::vector<objects::ObjectId> members;
-    bool guard_record = false, followed = false, kept = true, ended = false;
-    uint32_t launch_frame = 0, move_frame = 0, follow_frame = 0;
+    bool guard_record = false, followed = false, kept = true, ended = false, capped = false, copied = false;
+    uint32_t launch_frame = 0, move_frame = 0, follow_frame = 0, copy_frame = 0;
     mv::V2 dest{};
     for (uint64_t t = 0; t < 5000; ++t) {
         fb.host->tick_once();
@@ -4846,6 +4847,16 @@ void test_hangar_escort_guard() {
         if (!r || members.empty() || !b->movement().has_unit(members.front())) break;
         kept = kept && r->flags == mv::kMoveFlagGuardMove && r->goal_object == carrier;
         const mv::UnitView v = b->movement().view(members.front());
+        // S7 t28: while the carrier moves, the squadron's speed cap is 2 x the carrier's speed and, its leader within R of
+        // the carrier, it flies a copy of the carrier's path (its goal = the carrier's goal point).
+        const mv::UnitView cv = b->movement().view(carrier);
+        const bool c_moving = cv.has_goal && !cv.arrived;
+        for (const mv::FighterSquad& s : b->movement().fighter_squads())
+            if (s.id == squad && c_moving && s.speed_cap == 2.0f * cv.max_speed) capped = true;
+        if (!copied && c_moving && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y) {
+            copied = true;
+            copy_frame = b->frame();
+        }
         const float gx = r->goal.x - dest.x, gy = r->goal.y - dest.y;
         const float mx = v.goal.x - r->goal.x, my = v.goal.y - r->goal.y;
         if (!followed && gx * gx + gy * gy < 600.0f * 600.0f && mx * mx + my * my < 150.0f * 150.0f) {
@@ -4861,12 +4872,13 @@ void test_hangar_escort_guard() {
         if (b->frame() > move_frame + 3000) break;
     }
     std::printf("  escort guard: carrier %d squadron %d launched frame %u (guard record %d); carrier moved frame %u to (%.0f, %.0f); "
-                "followed %d (frame %u), guard kept %d, new order ends the follow %d\n",
+                "followed %d (frame %u), speed cap %d, path copy %d (frame %u), guard kept %d, new order ends the follow %d\n",
                 carrier, squad, launch_frame, guard_record ? 1 : 0, move_frame, static_cast<double>(dest.x), static_cast<double>(dest.y),
-                followed ? 1 : 0, follow_frame, kept ? 1 : 0, ended ? 1 : 0);
+                followed ? 1 : 0, follow_frame, capped ? 1 : 0, copied ? 1 : 0, copy_frame, kept ? 1 : 0, ended ? 1 : 0);
     CHECK(carrier != objects::kNoObjectId && squad != objects::kNoObjectId && members.size() == 3);
     CHECK(guard_record);
     CHECK(followed && kept && ended);
+    CHECK(capped && copied);
 }
 
 #ifdef ALAMO_SIM_HAVE_FOG

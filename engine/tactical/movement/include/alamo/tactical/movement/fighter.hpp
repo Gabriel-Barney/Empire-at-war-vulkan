@@ -57,6 +57,8 @@ inline constexpr float kFighterTwoPi = 6.2831855f;
 inline constexpr float kSpaceIdleMovementSpeed = 0.0f;
 // lock(x) duration: int(float(FPS) x 10.0) = 300 frames (§4.5).
 inline constexpr uint32_t kFighterLockFrames = static_cast<uint32_t>(30.0f * 10.0f);
+// No formation speed cap (FighterSquad::speed_cap).
+inline constexpr float kFighterNoSpeedCap = 3.0e38f;
 // Avoidance hold after an evasion (pack +0x2b4 = 15, §3.5).
 inline constexpr int32_t kFighterAvoidHold = 15;
 
@@ -276,6 +278,10 @@ struct FighterSquad {
     FighterCell dog, park;
     F3 dest;                    // the container's D
     FighterTarget target;
+    // S7 t28 (A1_READINGS §33.4): the formation speed (+0x21c) of a guard of a moving object, min(own speed, 2 x the
+    // object's speed) [M: exact cap]; the members fly their Moving path at most this fast [M: only Moving 0x1B reads it
+    // in the port]. kFighterNoSpeedCap = none; every new move order of a member clears it.
+    float speed_cap = kFighterNoSpeedCap;
 };
 struct FighterSquadDesc {
     ObjectId id = -1;
