@@ -201,6 +201,11 @@ uint64_t AnimBehaviors::combat_timer(ObjectId id) const {
     return e ? e->combat_timer : 0;
 }
 
+uint32_t AnimBehaviors::combat_countdown(ObjectId id) const {
+    const Entry* e = find(id);
+    return e ? e->combat_countdown : 0;
+}
+
 // ---- locomotor / deploy ------------------------------------------------------------------------------
 
 bool is_move_family(int32_t t) {
@@ -246,6 +251,31 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
     e.last_crouch = in.crouched;
     const float move_blend = w.tunables().move_blend_seconds, idle_blend = w.tunables().idle_blend_seconds;
     const int32_t cur = w.current_type(id);
+    // R3f t02/t03: the IDLE service's gates (§A.11 "Exact order", LocomotorInput comment), before the locomotor's plays
+    // [port: the two behaviours' relative order inside one object service].
+    const bool idle_gated = in.idle_target >= 0;
+    bool idle_play = true;  // the idle part may play this frame
+    bool engaged = false;   // 5a: TARGETING has a target
+    if (idle_gated) {
+        if (in.idle_moving) {
+            // 1. +0x58 := 0: a flinch still blending in loses that stage (its timer had expired at the hit, so the hold
+            // stage ends at the next flinch step); Hold / Return keep their timers. Nothing else of the IDLE service runs.
+            if (e.phase == FlinchPhase::BlendIn) {
+                e.flinch_intensity = 0.0f;
+                e.phase = FlinchPhase::Hold;
+            }
+            idle_play = false;
+        } else if (in.idle_hold) {
+            idle_play = false;  // 2. Deploys busy
+        } else if (in.idle_target > 0) {
+            // 5a: the combat timer is drawn every frame while the target persists.
+            e.combat_countdown = kEngagedBaseFrames + static_cast<uint32_t>(rng.range_int(0, kEngagedRandomFrames));
+            engaged = true;
+        } else if (e.combat_countdown > 0) {
+            --e.combat_countdown;  // 5b
+        }
+        if (e.phase != FlinchPhase::None) idle_play = false;  // 3. "flinch busy": no idle play
+    }
     const bool moving = in.movable && in.speed > 0.0f;
     if (moving) {
         const float ratio = in.max_speed > 0.0f ? in.speed / in.max_speed : 1.0f;
@@ -301,6 +331,41 @@ uint32_t AnimBehaviors::service_locomotor(AnimWorld& w, ObjectId id, const Locom
         r.speed = p.idle.idle_rate;
         w.play(id, r, &rng, frame);
         return 1;
+    }
+    if (idle_gated) {
+        // R3f t02/t03: the idle part of the IDLE service (§A.11 "Exact order" 5a / 5b).
+        if (!idle_play) return 0;
+        const bool finished = w.current_mode(id) == SlotMode::Finished && cur != kNoAnimType;
+        const bool attack_c = cur == kAnimAttack || cur == kAnimAttackIdle || is_attack_like(cur);
+        if (engaged) {
+            if (!(attack_c && finished && m->variant_count(kAnimAttackIdle) > 0)) return 0;
+            PlayRequest r;  // 5a: Attack Idle, index 0, one-shot, blend 0
+            r.type = kAnimAttackIdle;
+            r.index = 0;
+            r.loop = false;
+            r.blend_seconds = 0.0f;
+            r.speed = 1.0f;
+            return w.play(id, r, &rng, frame) == PlayResult::Played ? 1u : 0u;
+        }
+        if (attack_c && !crouch_changed) {
+            if (!finished) return 0;
+            PlayRequest r;  // 5b after an attack: the default idle once the combat timer ran out, else Attack Idle again
+            r.index = 0;
+            r.loop = false;
+            r.speed = 1.0f;
+            // [port] a model without an Attack Idle clip goes to T at once instead of holding the attack pose.
+            if (e.combat_countdown < 1 || m->variant_count(kAnimAttackIdle) == 0) {
+                r.type = idle_type;
+                r.blend_seconds = idle_blend;
+            } else {
+                r.type = kAnimAttackIdle;
+                r.blend_seconds = rng.range_float(0.2f, 0.75f);
+            }
+            return w.play(id, r, &rng, frame) == PlayResult::Played ? 1u : 0u;
+        }
+        if (crouch_changed || idle_class_restart(cur, idle_type) || w.current_mode(id) == SlotMode::Finished || cur == kNoAnimType)
+            return w.service_idle(id, idle_type, crouch_changed, rng, frame) ? 1u : 0u;
+        return 0;
     }
     if (crouch_changed || idle_class_restart(cur, idle_type) || w.current_mode(id) == SlotMode::Finished || cur == kNoAnimType) {
         IdleParams ip = p.idle;
@@ -505,6 +570,8 @@ void AnimBehaviors::hash(StateHasher& h) const {
         h.u64(e.hold_frames);
         h.u64(e.cooldown_frames);
         h.u64(e.combat_timer);
+        // R3f t03: hashed only when running, so state that never used the IDLE gates (idle_target -1) hashes as before.
+        if (e.combat_countdown != 0) h.u32(e.combat_countdown);
         h.f32(e.last_yaw);
         h.boolean(e.have_yaw);
         h.boolean(e.last_crouch);

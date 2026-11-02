@@ -34,6 +34,10 @@ void TacticalBattle::presence_tick(TacticalMode&) {}
 void TacticalBattle::presence_explosion(TacticalMode&, int32_t, Vec3) {}
 void TacticalBattle::presence_hash(StateHasher&) const {}
 void TacticalBattle::presence_detach() {}
+void TacticalBattle::presence_idle_gates(objects::ObjectId, int8_t& target, bool& moving, bool& hold) const {
+    target = -1;
+    moving = hold = false;
+}
 
 #else
 
@@ -100,8 +104,9 @@ void TacticalBattle::presence_tick(TacticalMode& mode) {
     for (const Unit& u : units_)
         if (!u.alive || u.retreated) presence_.remove_object(u.id);
     // Object-service phase: per object (descending id) the IDLE map upkeep, then the IMPOSING_PRESENCE service.
-    // [port] The IDLE upkeep's side effects (ClearedTarget -> the IDLE service's combat timer, ClearedMoving -> drop
-    // the flinch hold) are not forwarded: update() does not return them and anim has no setter for either.
+    // R3f t02/t03: the IDLE service's other effects of the same gates (combat timer drawn every frame with a target,
+    // flinch intensity dropped while moving) run every frame, map or not, in the animation's idle service
+    // (drive_animation -> presence_idle_gates -> LocomotorInput::idle_*), not off these map clears.
     presence_.update(frame_, presence_view_);
 }
 
@@ -132,6 +137,20 @@ void TacticalBattle::presence_hash(StateHasher& h) const {
 void TacticalBattle::presence_detach() {
     if (presence_link_) *presence_link_ = nullptr;
 }
+
+// R3f t02/t03: the IDLE service's own gates (§A.11 "Exact order") from the same reads as the presence maps' gates
+// (PresenceView::unit), so the map clears and the animation agree. Only units whose type has IDLE.
+void TacticalBattle::presence_idle_gates(objects::ObjectId id, int8_t& target, bool& moving, bool& hold) const {
+    target = -1;
+    moving = hold = false;
+    ps::UnitView v;
+    if (!presence_view_.mode || !presence_view_.unit(id, v) || !v.has_idle) return;
+    const ps::PresenceTypeInfo* t = presence_.types().find(v.type);
+    target = v.has_target ? 1 : 0;
+    moving = v.has_locomotor && !(t && t->allow_idle_when_moving) && v.moving;  // Allow_Idle_When_Moving default false [H]
+    hold = t && t->deploys && v.deploy_busy;
+}
+// end R3f t02/t03
 
 // ---- PresenceWorld view ---------------------------------------------------------------------------------------------
 
@@ -174,7 +193,10 @@ bool TacticalBattle::PresenceView::unit(ps::ObjectId id, ps::UnitView& out) cons
     // TARGETING (0x62e450) is not modelled: every battle unit has its own combat record.
     out.has_target = b->combat_ && b->combat_->has_unit(id) && b->combat_->current_target(id) != tactical::combat::kNoObject;
     out.has_locomotor = it->movable;
-    out.moving = it->movable && b->movement_ && b->movement_->has_unit(id) && b->movement_->view(id).speed > 0.0f;
+    // R3f t02/t03 (§A.11 "Allow_Idle_When_Moving gate" [H]): "moving" is the locomotor having move orders (vf +0x110: the
+    // move list is not empty), not speed > 0. [port] MovementSystem's has_goal ("moving or waiting to move"); a squad
+    // member's own goal stands for its team container's order.
+    out.moving = it->movable && b->movement_ && b->movement_->has_unit(id) && b->movement_->view(id).has_goal;
     // [port] Deployed only: the abilities keep no deploying / undeploying state (the transition is the clip).
     out.deploy_busy = b->abilities_ && b->abilities_->deployed(id);
     return true;

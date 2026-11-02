@@ -1147,7 +1147,7 @@ void test_events_and_locomotor() {
 
 // Record sizes of the documented layouts (anim_state.hpp / anim_behaviors.hpp).
 constexpr size_t kAnimSaveRowBytes = 109;
-constexpr size_t kAnimSaveEntryBytes = 59;  // version 3: §A.12 flinch phases
+constexpr size_t kAnimSaveEntryBytes = 63;  // version 4: §A.12 flinch phases, R3f t03 combat countdown
 constexpr size_t kAnimSaveCorpseBytes = 77;
 
 struct SaveScenario {
@@ -1354,7 +1354,7 @@ void test_save() {
         bad[corpse_count_at + 4 + 4] = 4;  // corpse 0 phase: no CorpsePhase 4
         CHECK(corpses == 0 || behaviours_reject(bad));
         bad = bb;
-        bad[8 + 57] = 5;  // entry 0 have-yaw flag: not a bool
+        bad[8 + 61] = 5;  // entry 0 have-yaw flag: not a bool
         CHECK(entries == 0 || behaviours_reject(bad));
         bad = bb;
         bad[8 + 8] = 4;  // entry 0 flinch phase: no FlinchPhase 4
@@ -2005,6 +2005,137 @@ void test_flinch_and_idle_rules() {
     std::printf("flinch / idle rules: angle sweep %d, explosion intensity, gates, partial freeze, crouch class, presence idle OK\n", checked);
 }
 
+// ---- R3f t02/t03: the IDLE service's gates (§A.11 "Exact order of one IDLE service") through LocomotorInput -------
+void test_presence_gates() {
+    const auto m = behaviour_model();  // Idle 2 x 30, Attack 12, Attack Idle 20, flinches
+    const FlinchParams fp;
+    IdleParams ip;
+    ip.loop_idle = true;
+    LocomotorParams lp;
+    {
+        // 5a: with a target the combat countdown is redrawn EVERY frame (90 + synced int [0, 30]); an idle clip is left
+        // alone; moving keeps the countdown without a draw; without a target it counts down.
+        AnimWorld w;
+        AnimBehaviors b;
+        SimRng rng(91);
+        w.add(1, m.get(), 0);
+        PlayRequest idle;
+        idle.type = kAnimIdle;
+        w.play(1, idle, nullptr, 0);
+        LocomotorInput in;
+        in.idle_target = 1;
+        for (uint64_t f = 1; f <= 4; ++f) {
+            SimRng replay = rng;
+            CHECK(b.service_locomotor(w, 1, lp, in, rng, f) == 0 && w.current_type(1) == kAnimIdle);
+            const uint32_t want = kEngagedBaseFrames + static_cast<uint32_t>(replay.range_int(0, kEngagedRandomFrames));
+            CHECK(b.combat_countdown(1) == want && rng.state() == replay.state() && want >= 90 && want <= 120);
+            w.advance(f);
+        }
+        const uint32_t drawn = b.combat_countdown(1);
+        in.idle_moving = true;
+        uint32_t st = rng.state();
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, 5) == 0 && b.combat_countdown(1) == drawn && rng.state() == st);
+        in.idle_moving = false;
+        in.idle_hold = true;  // Deploys busy: nothing
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, 6) == 0 && b.combat_countdown(1) == drawn && rng.state() == st);
+        in.idle_hold = false;
+        in.idle_target = 0;
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, 7) == 0 && b.combat_countdown(1) == drawn - 1 && rng.state() == st);
+        CHECK(b.combat_timer(1) == 0);  // the pre-R3f timer is not used on this path
+        // The legacy path (idle_target -1) leaves the countdown alone.
+        LocomotorInput legacy;
+        CHECK(b.service_locomotor(w, 1, lp, legacy, rng, 8) == 0 && b.combat_countdown(1) == drawn - 1);
+    }
+    {
+        // A finished attack: Attack Idle (blend 0) only while engaged; without a target Attack Idle again (blend draw) until
+        // the countdown runs out, then the default idle T at the clip end.
+        AnimWorld w;
+        AnimBehaviors b;
+        SimRng rng(5);
+        w.add(1, m.get(), 0);
+        PlayRequest atk;
+        atk.type = kAnimAttack;
+        atk.index = 0;
+        CHECK(w.play(1, atk, &rng, 0) == PlayResult::Played);
+        LocomotorInput in;
+        in.idle_target = 1;
+        uint64_t f = 1;
+        for (; w.current_mode(1) != SlotMode::Finished && f < 100; ++f) {
+            CHECK(b.service_locomotor(w, 1, lp, in, rng, f) == 0 && w.current_type(1) == kAnimAttack);  // mid-clip: no play
+            w.advance(f);
+        }
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, f) == 1 && w.current_type(1) == kAnimAttackIdle);
+        ++f;
+        // Engaged with an unfinished Attack Idle, or an idle clip: nothing.
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, f) == 0 && w.current_type(1) == kAnimAttackIdle);
+        in.idle_target = 0;
+        int attack_idles = 0;
+        bool back_to_idle = false;
+        for (++f; f < 600 && !back_to_idle; ++f) {
+            w.advance(f);
+            const bool fin = w.current_mode(1) == SlotMode::Finished;
+            const uint32_t before = b.combat_countdown(1);
+            const uint32_t played = b.service_locomotor(w, 1, lp, in, rng, f);
+            CHECK(b.combat_countdown(1) == (before > 0 ? before - 1 : 0));
+            CHECK(played == (fin ? 1u : 0u));
+            if (played && w.current_type(1) == kAnimAttackIdle) ++attack_idles;
+            if (played && w.current_type(1) == kAnimIdle) {
+                back_to_idle = true;
+                CHECK(b.combat_countdown(1) == 0);
+            }
+        }
+        CHECK(back_to_idle && attack_idles >= 4);
+    }
+    {
+        // 1. Moving: a flinch still blending in drops to Hold (intensity 0); Hold / Return untouched; no idle play while
+        // a flinch is busy, even from a finished clip; the flinch then ends through its own steps.
+        AnimWorld w;
+        AnimBehaviors b;
+        SimRng rng(17);
+        AnimCreateParams cp;
+        cp.loop_idle = true;
+        w.create(1, m.get(), cp, nullptr, 0);
+        CHECK(b.on_hit(w, 1, fp, ip, 1, 0, 1, 0, rng, 2) && b.flinch_phase(1) == AnimBehaviors::FlinchPhase::BlendIn);
+        LocomotorInput in;
+        in.idle_target = 0;
+        in.idle_moving = true;
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, 3) == 0 && b.flinch_phase(1) == AnimBehaviors::FlinchPhase::Hold);
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, 4) == 0 && b.flinch_phase(1) == AnimBehaviors::FlinchPhase::Hold);
+        in.idle_moving = false;
+        std::vector<ObjectId> removed;
+        uint64_t f = 5;
+        for (; b.flinch_phase(1) != AnimBehaviors::FlinchPhase::None && f < 200; ++f) {
+            const int32_t before = w.current_type(1);
+            CHECK(b.service_locomotor(w, 1, lp, in, rng, f) == 0 && w.current_type(1) == before);
+            b.service(w, f, removed, &rng);
+            w.advance(f);
+        }
+        CHECK(f < 200 && b.flinch_phase(1) == AnimBehaviors::FlinchPhase::None);
+        // The moving drop is state: hash / save round trip with the countdown.
+        in.idle_target = 1;
+        b.service_locomotor(w, 1, lp, in, rng, f);
+        CHECK(b.combat_countdown(1) >= 90);
+        alamo::StateHasher h1, h2;
+        b.hash(h1);
+        alamo::ByteWriter bw;
+        b.write(bw);
+        AnimBehaviors back;
+        alamo::ByteReader br(bw.bytes());
+        CHECK(back.read(br) && br.done());
+        back.hash(h2);
+        CHECK(h1.digest() == h2.digest() && back.combat_countdown(1) == b.combat_countdown(1));
+        AnimBehaviors other;  // the countdown is hashed
+        alamo::ByteReader br2(bw.bytes());
+        CHECK(other.read(br2));
+        in.idle_target = 0;
+        other.service_locomotor(w, 1, lp, in, rng, f + 1);
+        alamo::StateHasher h3;
+        other.hash(h3);
+        CHECK(h3.digest() != h1.digest());
+    }
+    std::printf("presence gates (R3f t02/t03): countdown draw per engaged frame, Attack Idle / T after attacks, moving drop OK\n");
+}
+
 int main() {
     test_types();
     test_death_plan();
@@ -2018,6 +2149,7 @@ int main() {
     test_events_and_locomotor();
     test_overlay_events();
     test_flinch_and_idle_rules();
+    test_presence_gates();  // R3f t03
     test_save();
 #ifdef ALAMO_ANIM_HAVE_VFS
     test_real_data();

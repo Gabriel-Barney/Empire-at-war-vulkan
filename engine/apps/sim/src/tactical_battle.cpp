@@ -1925,6 +1925,7 @@ void TacticalBattle::drive_animation(SimRng& rng, uint64_t gframe) {
         in.crouched = abilities_->spread_out(u.id);
         in.burning = combat_->burning(u.id);
         in.deployed = abilities_->deployed(u.id);
+        presence_idle_gates(u.id, in.idle_target, in.idle_moving, in.idle_hold);  // R3f t02/t03: IDLE service gates (§A.11)
         if (u.movable) {
             const mv::UnitView v = movement_->view(u.id);
             if (v.locomotor != mv::LocomotorKind::Default) {  // REMAINING_GAPS §4.3-4.7: the locomotor picks the clip

@@ -234,7 +234,9 @@ std::string anim_types() {
 // 1.5 s and ends with the S10_Spin_FX particle (20 frames). Presence (R3 §A.11 / §A.12): the troopers are
 // IMPOSING_PRESENCE + IDLE (range 200) and stand to Attention near troopers; a dead trooper leaves an IMPOSING_PRESENCE
 // death clone (range 400, 30 s) the troopers and the squads' unarmed S10_Medic (never a target holder, so idle while the
-// troopers fight) Celebrate near; the troopers' death explosion S10_Boom is an EXPLOSION (flinch range 150).
+// troopers fight) Celebrate near; the troopers' death explosion S10_Boom is an EXPLOSION (flinch range 150). R3f t03: the
+// medic stands to Attention near troopers too (the IDLE gates of §A.11 keep troopers with a target or move orders out of
+// the presence maps, so the fighting troopers alone rarely do).
 std::string r3_types() {
     std::string t = anim_types();
     auto insert_after = [&t](const std::string& at, const std::string& what) {
@@ -272,7 +274,8 @@ std::string r3_types() {
                       "<CategoryMask>Infantry</CategoryMask><MovementClass>Infantry</MovementClass><Behavior>SELECTABLE</Behavior>"
                       "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR, IDLE</LandBehavior>"
                       "<Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>"
-                      "<Presence_Induced_Animations>Celebrate, S10_Trooper_Death_Clone</Presence_Induced_Animations></GroundInfantry>\n"
+                      "<Presence_Induced_Animations>Attention, S10_Trooper, Celebrate, S10_Trooper_Death_Clone</Presence_Induced_Animations>"
+                      "</GroundInfantry>\n"
                       " <Particle Name=\"S10_Boom\"><Behavior>PARTICLE, EXPLOSION</Behavior><Induced_Flinch_Range>150</Induced_Flinch_Range>"
                       "<Induced_Flinch_Intensity>1.0</Induced_Flinch_Intensity><Particle_Lifetime_Frames>10</Particle_Lifetime_Frames></Particle>\n");
     return t;
@@ -2526,6 +2529,15 @@ struct R3Run {
     uint32_t attention_rows = 0, celebrate_rows = 0;           // row-frames on 77 Attention / 78 Celebrate (presence idle)
     uint32_t clone_presence = 0;                               // trooper death clones registered as presence units
     uint32_t celebrate_sim = 0;                                // unit-frames whose presence-induced idle is 78 Celebrate
+    // R3f t02 (§A.11 timing) for the presence idles T (77 Attention / 78 Celebrate): plays (a row switching to T); those
+    // from a finished clip (the idle service); the legal ones (finished clip, the locomotor's stop path from the move
+    // family, a crouch-class restart, a flinch return replaying the interrupted T); unit-frames induced to T on a finished
+    // idle-like clip (eligible) and those of them still on another idle type afterwards (missed; 71 = SPREAD_OUT wins)
+    uint32_t presence_starts = 0, presence_starts_at_end = 0, presence_starts_ok = 0, presence_eligible = 0, presence_missed = 0;
+    uint32_t celebrate_starts = 0;
+    uint32_t presence_cleared = 0;  // R3f t03: presence maps cleared by the move / target gates
+    // R3f t03 (§A.11 IDLE service 5a / 5b): unit-frames with a combat countdown running; those counting down (no target)
+    uint32_t combat_frames = 0, combat_countdowns = 0;
     uint64_t save_tick = 0;                                    // host frame of the save (save runs)
     uint32_t clones_at_save = 0, save_bf = 0;                  // presence death clones alive at the save; its battle frame
     size_t presence_units = 0, presence_maps_max = 0;          // battle presence system (R3 §A.11)
@@ -2559,8 +2571,16 @@ R3Run run_r3_campaign(const Data& d, bool land, bool anim_service, int32_t worke
     SimHost host(d.types, js, cfg);
     SimAnimation animation(d.types, *d.files);
     animation.set_model(d.types.resolve_name("S10_Trooper"), objects::ModeKind::Land, trooper.get());
+    // R3f t02: the medic idles on a short (8-frame) one-shot IDLE. §A.11: an induced Celebrate waits for the running idle
+    // clip to finish, and the trooper death clones that induce it appear only in the battle's last ~21 frames (the losing
+    // squad dies, the battle ends). On the trooper's 30-frame idle the medic, induced 3 frames into its idle, never got to
+    // Celebrate (0 row-frames before R3f): the sim was right, the scenario too short. Its Attention (R3f t03: the medic also
+    // stands to Attention near troopers) is short for the same reason.
+    const auto medic_model = anim_model({{anim::kAnimIdle, {1, 8}}, {anim::kAnimMove, {1, 24}}, {anim::kAnimDie, {1, 45}}, {77, {1, 8}},
+                                         {78, {1, 30}}, {anim::kAnimFlinchLeft, {1, 10}}, {anim::kAnimFlinchRight, {1, 10}},
+                                         {anim::kAnimFlinchFront, {1, 10}}, {anim::kAnimFlinchBack, {1, 10}}});
     if (const objects::TypeIndex medic = d.types.resolve_name("S10_Medic"); medic != objects::kNone)
-        animation.set_model(medic, objects::ModeKind::Land, trooper.get());
+        animation.set_model(medic, objects::ModeKind::Land, medic_model.get());
     if (ships) {  // (ship rows draw their model-created start frames: the rng log then differs from a headless run)
         animation.set_model(d.types.resolve_name("S10_Frigate"), objects::ModeKind::Space, ship.get());
         animation.set_model(d.types.resolve_name("S10_Corvette"), objects::ModeKind::Space, ship.get());
@@ -2621,8 +2641,13 @@ R3Run run_r3_campaign(const Data& d, bool land, bool anim_service, int32_t worke
     std::vector<float> prev_frigate_frames;  // primary frames of the frigate / corvette rows after the previous tick
     std::vector<ObjectId> seen_clone_rows;
     const uint32_t trooper_clone_type = type_of(d, "S10_Trooper_Death_Clone");
+    std::map<ObjectId, int32_t> presence_induced;                     // R3f t02: id -> presence idle (77 / 78) this tick
+    std::map<ObjectId, std::pair<int32_t, anim::SlotMode>> row_prev;  // R3f t02: row type / mode after the previous tick
+    std::map<ObjectId, uint32_t> countdown_prev;                      // R3f t03: combat countdown after the previous tick
+    std::map<ObjectId, bool> flinch_prev;                             // R3f t03: flinch busy after the previous tick
     for (uint64_t t = host.frame(); t < ticks; ++t) {
         host.tick_once();
+        presence_induced.clear();
         const uint64_t f = host.frame();
         TacticalBattle* b = battles.battle();
         TacticalMode* tm = host.tactical();
@@ -2659,9 +2684,13 @@ R3Run run_r3_campaign(const Data& d, bool land, bool anim_service, int32_t worke
                         b->presence().is_presence_unit(tm->primary().id(h)) && b->presence().next_due(tm->primary().id(h)) == static_cast<uint32_t>(b->frame()) + 30u)
                         ++out.clone_presence;  // serviced this frame (due moved on by the interval)
             if (tm && land)
-                for (objects::ObjectHandle h : tm->primary().all_objects())
-                    if (tm->primary().alive(h) && b->presence_idle_of(tm->primary().id(h)) == 78)
-                        ++out.celebrate_sim;
+                for (objects::ObjectHandle h : tm->primary().all_objects()) {
+                    if (!tm->primary().alive(h)) continue;
+                    const int32_t pi = b->presence_idle_of(tm->primary().id(h));
+                    if (pi == 78) ++out.celebrate_sim;
+                    if (pi == 77 || pi == 78) presence_induced[tm->primary().id(h)] = pi;  // R3f t02
+                }
+            out.presence_cleared = std::max(out.presence_cleared, b->presence().stats().cleared);
         }
 #endif
         if (save_out && save_bf > 0 && out.save_tick == 0 && b && tm && b->frame() >= save_bf) {
@@ -2697,6 +2726,42 @@ R3Run run_r3_campaign(const Data& d, bool land, bool anim_service, int32_t worke
                     out.undeploy_rows += ty == anim::kAnimUndeploy ? 1u : 0u;
                     out.attention_rows += ty == 77 ? 1u : 0u;
                     out.celebrate_rows += ty == 78 ? 1u : 0u;
+                    // R3f t02 (§A.11): a presence idle never cuts the running idle (0 -> 77 / 78 waits for its end); it starts
+                    // on the first idle service after that clip finished, or from the locomotor's stop path / a crouch-class
+                    // change / a flinch return. The previous tick's row state is what this tick's services saw.
+                    const anim::SlotView sv = w->slot(id);
+                    const auto pr = row_prev.find(id);
+                    if (pr != row_prev.end()) {
+                        const int32_t pt = pr->second.first;
+                        const bool fin = pr->second.second == anim::SlotMode::Finished;
+                        if ((ty == 77 || ty == 78) && pt != ty) {
+                            ++out.presence_starts;
+                            out.celebrate_starts += ty == 78 ? 1u : 0u;
+                            out.presence_starts_at_end += fin ? 1u : 0u;
+                            out.presence_starts_ok +=
+                                fin || anim::is_move_family(pt) || anim::idle_class_restart(pt, ty) || anim::is_flinch(pt) ? 1u : 0u;
+                        }
+                        // R3f t03: the IDLE service's gates (target, move orders, Deploys busy, flinch busy) block the play.
+                        int8_t gate_target = -1;
+                        bool gate_moving = false, gate_hold = false;
+                        if (b) b->presence_idle_gates(id, gate_target, gate_moving, gate_hold);
+                        const auto fp = flinch_prev.find(id);
+                        const bool gated = gate_target > 0 || gate_moving || gate_hold || (fp != flinch_prev.end() && fp->second);
+                        const auto ind = presence_induced.find(id);
+                        if (ind != presence_induced.end() && fin && !gated && anim::is_idle_like(pt) && pt != ind->second) {
+                            ++out.presence_eligible;  // the idle service ran on a finished idle with T = 77 / 78
+                            if (anim::is_idle_like(ty) && ty != ind->second && ty != anim::kAnimIdleCrouch) ++out.presence_missed;
+                        }
+                    }
+                    row_prev[id] = {ty, sv.mode};
+                    if (const anim::AnimBehaviors* bh = animation.find_behaviors(*tm)) {  // R3f t03
+                        const uint32_t cd = bh->combat_countdown(id);
+                        out.combat_frames += cd > 0 ? 1u : 0u;
+                        const auto cp = countdown_prev.find(id);
+                        if (cp != countdown_prev.end() && cp->second > 0 && cd + 1 == cp->second) ++out.combat_countdowns;
+                        countdown_prev[id] = cd;
+                        flinch_prev[id] = bh->flinch_phase(id) != anim::AnimBehaviors::FlinchPhase::None;
+                    }
                 }
                 // Follow-up d: a clone row seen for the first time crossfades from the copied state: its previous slot is
                 // the IDLE the dying frigate / corvette was playing, at that row's frame of the last tick (no new draw).
@@ -2782,12 +2847,28 @@ void test_r3_states_and_spin() {
 #ifdef ALAMO_SIM_HAVE_PRESENCE
         CHECK(a.clone_presence > 0 && a.celebrate_sim > 0);  // review 4: death clones impose presence -> 78 Celebrate
 #endif
+        std::printf("  land r3f t02 presence idles: plays %u (Celebrate %u; %u at a clip end, %u legal), eligible unit-frames %u, "
+                    "missed %u; t03 IDLE gates: maps cleared %u, combat-countdown unit-frames %u (%u counting down)\n",
+                    a.presence_starts, a.celebrate_starts, a.presence_starts_at_end, a.presence_starts_ok, a.presence_eligible,
+                    a.presence_missed, a.presence_cleared, a.combat_frames, a.combat_countdowns);
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+        // R3f t02 (§A.11): the induced idles play (Celebrate too), never cutting a running idle, and at the end of the idle
+        // clip that was running when they were induced (the idle service's next run), never later.
+        CHECK(a.celebrate_rows > 0 && a.celebrate_starts > 0);
+        CHECK(a.presence_starts_ok == a.presence_starts && a.presence_starts_at_end > 0);
+        CHECK(a.presence_eligible > 0 && a.presence_missed == 0);
+        // R3f t03: the IDLE service's combat countdown is drawn while a target persists (5a) and counts down once it is gone
+        // (5b). (Maps cleared by the move / target gates: 0 here, as the same gates keep such units from getting entries.)
+        CHECK(a.combat_frames > 0 && a.combat_countdowns > 0);
+#endif
         const R3Run b = run_r3_campaign(*d, true, true, 4, 1500);
         const auto dv = first_divergence(a.crc, b.crc);
         std::printf("  land r3 workers 4: %s\n", dv.message.c_str());
         CHECK(!dv.diverged && b.stats.deploys == a.stats.deploys && b.overlay_events == a.overlay_events && b.crouch_rows == a.crouch_rows);
         CHECK(b.attention_rows == a.attention_rows && b.explosion_victims == a.explosion_victims && b.presence_refreshes == a.presence_refreshes);
         CHECK(b.celebrate_rows == a.celebrate_rows && b.celebrate_sim == a.celebrate_sim);
+        CHECK(b.presence_starts == a.presence_starts && b.presence_eligible == a.presence_eligible && b.presence_cleared == a.presence_cleared &&
+              b.combat_frames == a.combat_frames && b.combat_countdowns == a.combat_countdowns);
         // Review 1: a save during the battle (presence units and maps live), loaded into a fresh session through
         // CampaignBattles' battle chunks (battle.presence included; trooper death clones are presence units by then), continues with the continuous run's CRCs.
         SaveFile save;

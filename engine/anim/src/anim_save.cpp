@@ -14,12 +14,12 @@ namespace alamo::anim {
 namespace {
 
 constexpr uint32_t kAnimWorldVersion = 1;
-constexpr uint32_t kAnimBehaviorsVersion = 3;  // 2: flinch intensity; 3: §A.12 flinch phases (R3)
+constexpr uint32_t kAnimBehaviorsVersion = 4;  // 2: flinch intensity; 3: §A.12 flinch phases (R3); 4: R3f t03 combat countdown
 
 // Lower bounds of one saved record (corrupted-count guard: a count larger than the bytes left can hold fails before
 // anything is allocated).
 constexpr size_t kRowBytes = 4 + 1 + 4 + 8 + 5 + 8 + 3 * (4 + 4 + 1 + 4 + 4 + 1 + 4) + 1 + 4 + 4 + 4;
-constexpr size_t kEntryBytes = 4 + 4 + 1 + 8 + 4 + 4 + 4 + 8 + 8 + 8 + 4 + 1 + 1;
+constexpr size_t kEntryBytes = 4 + 4 + 1 + 8 + 4 + 4 + 4 + 8 + 8 + 8 + 4 + 4 + 1 + 1;
 constexpr size_t kCorpseBytes = 4 + 1 + 4 + 1 + 1 + 1 + 1 + 8 + 8 + 8 + 8 + 4 + 4 + 12 + 12;
 
 bool read_count(ByteReader& r, size_t record_bytes, uint32_t& n) {
@@ -187,6 +187,7 @@ void AnimBehaviors::write(ByteWriter& w) const {
         w.u64(e.hold_frames);
         w.u64(e.cooldown_frames);
         w.u64(e.combat_timer);
+        w.u32(e.combat_countdown);  // R3f t03
         w.f32(e.last_yaw);
         w.boolean(e.have_yaw);
         w.boolean(e.last_crouch);
@@ -235,6 +236,7 @@ bool AnimBehaviors::read(ByteReader& r) {
         e.hold_frames = r.u64();
         e.cooldown_frames = r.u64();
         e.combat_timer = r.u64();
+        e.combat_countdown = r.u32();  // R3f t03
         e.last_yaw = r.f32();
         e.have_yaw = r.boolean();
         e.last_crouch = r.boolean();

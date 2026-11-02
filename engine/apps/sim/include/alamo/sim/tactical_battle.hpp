@@ -181,6 +181,10 @@ public:
     uint32_t explosion_flinch_victims() const { return explosion_victims_; }
     // R3: the presence-induced idle of an object now (0x395920 step 2: 77 / 78 in vanilla); -1 when none (or no presence).
     int32_t presence_idle_of(objects::ObjectId id) const;  // R3 §A.12: EXPLOSION flinch victims so far
+    // R3f t02/t03: the IDLE service's gates of a battle unit with the IDLE behaviour (§A.11 "Exact order"; the same TARGETING
+    // and move-order reads as the presence maps): target = -1 (no IDLE behaviour / no presence data: the pre-R3f rules),
+    // 0 / 1; moving = move orders without Allow_Idle_When_Moving; hold = Deploys type deployed.
+    void presence_idle_gates(objects::ObjectId id, int8_t& target, bool& moving, bool& hold) const;
     // Spawns the battle into `mode` (pushed, nothing in it yet). `players` = the host's player count.
     void setup(TacticalMode& mode, terrain::MapData map, SimRng& rng, uint32_t players, const ParallelFor& pf);
     // One battle tick (after the tactical mode tick). Sets finished() when a victory condition holds.

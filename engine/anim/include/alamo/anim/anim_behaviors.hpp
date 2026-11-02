@@ -114,6 +114,24 @@ struct LocomotorInput {
     bool burning = false;                  // object +0x3a1 & 2 [M]
     bool deployed = false;                 // deployed walker
     int32_t idle_type = kNoAnimType;       // presence-induced idle (77 / 78, §A.11; the caller's); kNoAnimType = none
+    // R3f t02/t03: the IDLE service's own gates (§A.11 "Exact order of one IDLE service", 0x62e570), for a host that tracks
+    // them for units with the IDLE behaviour. idle_target < 0: not supplied (the pre-R3f engaged rules: combat timer from
+    // a finished attack clip, rules in the header comment). Otherwise, every frame:
+    //   1. idle_moving (locomotor with move orders, type without Allow_Idle_When_Moving): flinch intensity +0x58 := 0 (a
+    //      flinch still in BlendIn loses that stage: phase Hold with its expired timer; Hold / Return keep theirs) and no
+    //      idle play this frame (the locomotor's own Move / stop plays still run); the combat countdown is kept;
+    //   2. idle_hold (Deploys type deployed / (un)deploying): nothing more;
+    //   3. a flinch in progress ("flinch busy"): the countdown still runs (5), no idle play;
+    //   5a. idle_target == 1 (TARGETING, own or the parent's, has a target): combat countdown := 90 + synced int [0, 30]
+    //      (one draw EVERY such frame); C in {5, 6} or attack-like, finished, the model has Attack Idle -> play 6 (index 0,
+    //      one-shot, blend 0, speed 1); no other idle play;
+    //   5b. idle_target == 0: countdown - 1 when > 0; C in {5, 6} or attack-like and finished: countdown < 1 -> play the
+    //      default idle T (index 0, one-shot, idle blend, speed 1), else play 6 (index 0, one-shot, blend synced float
+    //      [0.2, 0.75]; [port] T instead when the model has no Attack Idle); otherwise the plain idle behaviour (crouch-class
+    //      restart / finished clip, fidget rules).
+    int8_t idle_target = -1;
+    bool idle_moving = false;
+    bool idle_hold = false;
 };
 
 // Locomotor / default-idle rules, exposed for tests.
@@ -230,6 +248,9 @@ public:
     // the next call. True if it played.
     bool service_idle(AnimWorld& w, ObjectId id, const IdleParams& idle, SimRng& rng, uint64_t frame, bool crouch_changed = false);
     uint64_t combat_timer(ObjectId id) const;  // 0 when none recorded
+    // R3f t03: the IDLE service's combat timer (+0xc) of the host-driven path (LocomotorInput::idle_target >= 0): a
+    // countdown in frames, set to 90 + synced int [0, 30] on every frame with a target, decremented on frames without.
+    uint32_t combat_countdown(ObjectId id) const;  // 0 when none recorded
 
     // ---- locomotor (one call per unit per tick, the battle's locomotor step) ----
     // moving: Move family by state (Deployed_Walk 115 > CROUCHMOVE 67 > FIRE_MOVE 61 > WALKMOVE 66 when slow >
@@ -275,9 +296,9 @@ public:
     size_t state_count() const { return entries_.size(); }
 
     // ---- N1 save / load (contract: alamo/core/save_file.hpp; src/anim_save.cpp) ----
-    // Layout: u32 version (3: R3 §A.12 flinch phases); u32 count + every behaviour entry in ascending id (i32 id, i32
+    // Layout: u32 version (4: R3f t03 combat countdown; 3: R3 §A.12 flinch phases); u32 count + every behaviour entry in ascending id (i32 id, i32
     // flinch type, u8 flinch phase, u64 flinch timer, f32 flinch intensity, i32 return type C, f32 flinch blend, u64
-    // hold frames, u64 cooldown frames, u64 combat timer, f32 last yaw, bool have yaw, bool last crouch); u32 count + every corpse in ascending id (i32 id, u8 phase, i32
+    // hold frames, u64 cooldown frames, u64 combat timer, u32 combat countdown, f32 last yaw, bool have yaw, bool last crouch); u32 count + every corpse in ascending id (i32 id, u8 phase, i32
     // death type, bool forever, bool spin-away, u8 damage kind, bool detached, u64 death frame, u64 phase end, u64
     // persist frames, u64 fade frames, CorpseInfo: u32 object type, i32 owner, f32 position[3], f32 facing[3]).
     // Independent of the AnimWorld (the host reads it before the AnimWorld). False and unchanged on bad data; reads
@@ -297,6 +318,7 @@ private:
         uint64_t hold_frames = 0;       // int(30 x Max_Flinch_Hold_Seconds x I)
         uint64_t cooldown_frames = 0;   // int(30 x Attack_ / Idle_Flinch_Interval_Seconds) by C
         uint64_t combat_timer = 0;
+        uint32_t combat_countdown = 0;  // R3f t03: +0xc of the host-driven path (LocomotorInput::idle_target >= 0)
         float last_yaw = 0.0f;  // locomotor
         bool have_yaw = false, last_crouch = false;
     };
