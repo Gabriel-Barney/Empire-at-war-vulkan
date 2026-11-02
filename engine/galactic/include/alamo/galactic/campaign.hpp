@@ -371,7 +371,8 @@ public:
     int32_t next_cycle_frame() const { return next_cycle_frame_; }
     int32_t last_cycle_frame() const { return last_cycle_frame_; }
     // Galactic pause counter (GMM +0x2c, MAIN_LOOP 1.5): while > 0 the mode frame is frozen and nothing
-    // is serviced.
+    // is serviced. The story block below freezes the frame the same way (paused(), a1j t05), except that the hero spawn
+    // lists still run.
     void push_pause() { ++pause_; }
     void pop_pause() { if (pause_ > 0) --pause_; }
     // The galactic "paused" query 0x4b2360: the pause counter, or the story block below. The command executors

@@ -228,6 +228,12 @@ public:
         std::vector<ObjectHandle> units;  // land: the record's units (the original's last-invade vector)
     };
     bool start_linked(LinkedBattle b);
+    // a1j t05 (A1_READINGS §31.7): the active conflict gives way to a waiting story-linked record (the 0x2be640 state-3 path
+    // with the record present: state -1, then 0x28f590 starts the record at the queue front). The head stays queued and is
+    // decided again from Idle after the record's battle; its pause level is released. False, nothing changed, while Idle or
+    // InBattle. vote_open(): the pending vote is up and unanswered, where the record waits (0x28f590 step 1).
+    bool yield_to_linked();
+    bool vote_open() const { return state_ == ConflictState::Vote && !has_choice_; }
     // Answer to a Pending choice (Vote state). Ignored otherwise.
     void choose(BattleChoice c);
     // The host's tactical battle ended (state InBattle): write-back, next conflict.

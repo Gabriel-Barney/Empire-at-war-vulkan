@@ -48,6 +48,7 @@
 //       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
 //   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-station [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
+//       [--fail-on-lua-errors]: fail on any tactical AI Lua error (foc-station always does; a1j t07).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land invasion.
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
 //       reward, cause) with the game-side trigger stream, and per-tick CRCs incl. "story". Campaign
@@ -162,6 +163,7 @@ struct Options {
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
     std::string skirmish_ai;
     bool expect_battle_end = false;  // S10 land outcome: --expect-battle-end
+    bool fail_on_lua_errors = false;  // a1j t07: --fail-on-lua-errors
     // N1 save / load (save_run.hpp)
     std::string save_session, save_file, load_file;
     std::string save_when = "any";  // N1 stage 2: --save-when any|battle|galactic|pending
@@ -805,6 +807,7 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--galactic-ai") opt.galactic_ai = true;  // A2
         else if (a == "--skirmish-ai") opt.skirmish_ai = next();  // A1 stage 2
         else if (a == "--expect-battle-end") opt.expect_battle_end = true;  // S10 land outcome
+        else if (a == "--fail-on-lua-errors") opt.fail_on_lua_errors = true;  // a1j t07
         else if (a == "--ai-log") opt.ai_log = next();
         else if (a == "--ai-golden") opt.ai_golden = next();
         else if (a == "--human") opt.ai_human = next();                // A2 galactic
@@ -889,6 +892,7 @@ static int headless_main(int argc, char** argv) {
         if (!opt.skirmish_ai.empty()) {  // A1 stage 2: --skirmish-ai synthetic|foc [--map NAME]
             m.map = opt.map;
             m.expect_battle_end = opt.expect_battle_end;
+            m.fail_on_lua_errors = opt.fail_on_lua_errors;
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
         }
         if (opt.story && !(opt.economy && opt.galactic_ai)) {

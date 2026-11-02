@@ -1498,15 +1498,59 @@ player's command is blocked exactly when the human's is.
 - The other readers of `paused()` follow 0x4b2360 too: the galactic AI service and its task-force MoveTo status, the
   free-store hop, the reveal delay and the story Lua clock.
 - The whole-fleet MoveObjectToObject stays ungated, as 0x3af410.
-- 0x2be640 is unchanged: `CampaignBattles` leaves its `story_sequence_active` seam unset (BT §2.9.3: the port starts a
-  linked battle at once; see campaign_battles.hpp).
-- Still [port]: `GalacticSim::update` freezes the mode frame only for `pause_ > 0`. 0x4b2360 also freezes it while the
-  story block holds.
+- ~~0x2be640 is unchanged: `CampaignBattles` leaves its `story_sequence_active` seam unset~~ wired in a1j t05 (below).
+- ~~Still [port]: `GalacticSim::update` freezes the mode frame only for `pause_ > 0`~~ done in a1j t05 (below).
 - Tests: `alamo_galactic_conflict_tests` `test_linked_battle_gates` (AI Underworld commands with the local Empire in no
   queued conflict → FleetManagement launch runs, SpecialAbility reaches its target check; after the AI's direct
   invasion of the Empire's planet → launch, MoveThroughObjects and SpecialAbility NotAllowed, MoveObjectToObject runs;
   flag cleared → not paused with the conflict still queued); `alamo_galactic_special_tests` (the flag alone, with no
   queued conflict, does not pause).
+
+**a1j t05 (2026-11-02): the 0x2be640 block and the frame freeze [H unless tagged].** Read from 0x4b2360 and 0x2be640.
+- 0x4b2360 (the galactic mode's vf9, MAIN_LOOP §1.5 slot +0x48) returns true for the pause counter 0x140b1540c > 0, and
+  otherwise for the story block (flag 0x140b154d0 or the never-written list 0x140b2b360, not multiplayer, 0x2b0350 on
+  the mode's own GOM). The main loop freezes the galactic mode frame on this query (MAIN_LOOP T12), so the frame stands
+  still under the story block exactly as under the counter.
+- 0x2be640, in order:
+  1. Object services: "paused" = (galactic mode and counter > 0) or the story block. Paused → the objects are serviced
+     with the paused flag only when 0x140b2766c is set, otherwise skipped; not paused → serviced normally.
+  2. Hero spawn lists 0x3fc750 (each planet's behaviour 3): only when the mode is galactic and the counter is < 1.
+     **The story block does not gate them.**
+  3. The +0x140 list (0x3ac530) and the frame-keyed delayed creation list at +0x5f8 run every tick, blocked or not.
+  4. The state 1 / 2 path of a chosen battle (zoom / pre-battle cinematic, BT §1.4 step 1) runs before the block test:
+     at its end state → 3, one pause level released (0x28c720), the dialog closed (0x28c6c0), and **when the record
+     flag is set, state → −1 and 0x28f590 starts the queued record** in place of the chosen conflict.
+  5. The story block (same test as 0x4b2360, with 0x2b0350 inlined on both queues): the space head (0x2ad100 /
+     0x2b92e0) and the land head (0x2b76a0) are skipped. 0x2a62d0 runs after in every case.
+- So under the block: frame frozen, objects not serviced, conflicts frozen, hero respawns still due-checked (against a
+  frozen frame, so only entries already due fire).
+
+**Port (a1j t05).**
+- `GalacticSim::update` takes its paused branch on `paused()` (counter or story block): frame and behaviours frozen;
+  `service_respawns()` still runs there when the counter is 0 (step 2); the conflict tail still runs.
+- `CampaignBattles` installs its conflict gate always (the `story_sequence_active` seam is gone): the tail returns
+  without servicing the `ConflictManager` while `GalacticSim::story_block()` holds (step 5).
+- [port] A corruption mission's own conflict does not count for `in_queued_conflict`, and the gate does not block while
+  one is queued: the original keeps that record outside the queues until 0x28f590 starts it (and clears the flag
+  first), the port runs it through the queue, so blocking would hold it forever.
+- `CampaignBattles::story_linked`: a LINK_TACTICAL record that finds another conflict active sets the flag and waits
+  (as before); when the story block then holds, the active conflict gives way (`ConflictManager::yield_to_linked`:
+  pause released, state Idle, the conflict stays queued) and the record starts at once - the original's step 4 path
+  (state −1 → 0x28f590). [port] Not while the human's vote is still open (`vote_open()`): the record waits for the
+  answer; the original's state 1 / 2 only exist after the choice. Not under the block (local player in no queued
+  conflict) the record keeps waiting for Idle [port: the original takes over at step 4 there too].
+- [port] the host still releases a flag that has nothing to wait for (queues empty, `ConflictManager` Idle) at its
+  battle hook (REMAINING_GAPS §6.4).
+- Out of ownership, for the integrator: `GalacticMode::paused` (engine/apps/sim game_modes.hpp, the host mode frame
+  T12) tests only its own counter; the 0x4b2360 form is `paused_ || pause_count_ > 0 || (sim_ && sim_->story_block())`.
+  `GalacticSim::frame()` (what the galactic code reads) is frozen by `update` either way.
+- Tests: `alamo_galactic_conflict_tests` `test_story_block_freezes_frame` (story block: frame frozen, a due hero respawn
+  serviced; counter: frozen, the respawn waits) and `test_story_block_not_frozen` (queued conflict without the record:
+  not paused; record queued: frozen); `alamo_sim_battle_tests` `test_story_block_host` (the record raised by hand while
+  an Underworld fleet flies into the human Empire's system: the space conflict stays queued, no vote / battle /
+  auto-resolve, galactic frame frozen for 200 ticks; flag cleared → the battle starts).
+- Golden CRCs: none expected to move (headless and smoke runs never end a tick with the flag set: the port starts a
+  linked battle in the hook that sees it, and the gate hashes nothing).
 
 ## 32. Reinforce delivery handlers and the transport carried type (a1h t05 / t08) [H unless tagged]
 
@@ -2118,3 +2162,73 @@ the order.
      (`model_info(type, true)`); blockers = live, not dying store objects passing the filters above with a
      `Space_Model_Name`, box = `TacticalMode::bounds_of` in x / y; touching boxes do not block [M]. [port] When a member's
      model is named but not loaded (no model data, e.g. headless runs without art), the whole drop keeps the rows of 6.
+
+## 38. Galactic-context evaluation and the tactical credit release in a campaign land battle (a1j t07) [H unless tagged]
+
+Read 2026-11-02 from 0x69e1b0, 0x603c70 and 0x6147d0 (AI_TACTICAL §1.3 has the battle-start transfer 0x612b00 and the
+battle-end return 0x614a70). The symptom: every campaign land battle of the headless `foc-land` run logged Lua errors at
+`FUNDTACTICALSTRUCTURES.LUA:79` (10 in seed 5), because `Evaluate_In_Galactic_Context("Land_Tactical_Budget_Clamped",
+PlayerObject)` returned nothing and `PlayerObject.Release_Credits_For_Tactical(nil)` then failed its type check.
+
+### 38.1 `Evaluate_In_Galactic_Context` (0x69e1b0, tactical Lua global)
+1. No galactic mode under the current mode (0x28aa00 on the GMM) → script error "This function may only be used in
+   tactical games spawned from campaign mode.", no result.
+2. Exactly 2 arguments ("Invalid number of parameters.  Expected 2, got %d."); 1 = a string naming a perception
+   function ("Expected string." / "Unrecognised perception function %s."); 2 = a player object ("Expected player
+   object.").
+3. The player's AI (+0x360) → its **galactic** AI player (0x4b06d0(ai, 0)); none → "AI player %s has no galactic AI.",
+   no result.
+4. A perception context over the galactic AI's evaluator (+0x38): Self = the player (name id +0x478), Enemy = the galactic
+   AI's enemy player (0x5f55c0 of +0x28) when there is one, Human = the local player (0x294a00) when there is one,
+   Target = the **galactic planet of the current battle**: 0x28a7a0(GMM) gives the battle record, 0x28aa50 resolves it in
+   the galactic mode, the target is that object's +0xb8 → +0x354. No battle record → nothing is evaluated and the call
+   returns no result (no error).
+5. `PerceptionFunctionClass::Evaluate` on that context: success → one number pushed; failure → "Evaluate_Perception:
+   Error evaluating perception function %s.", no result.
+So the evaluation runs entirely in the galactic AI's world (galactic tokens, `Variable_Self.CreditsUnnormalized` =
+the galactic credits, `Variable_Target` = the battle's planet), not in the tactical one.
+
+### 38.2 `PlayerWrapper.Release_Credits_For_Tactical` (0x603c70)
+1. No player → nothing. The current mode must be land (vf +0xe0 == 1), else "this script function is only valid in
+   land tactical".
+2. 0 or 1 arguments ("invalid number of parameters.  Expected 0 or 1, got %d."); 1 = a number, else "invalid type for
+   parameter 1.  Expected number." (and nothing happens). No argument = −1.
+3. The player's AI (+0x360) null → "this action is not possible: player is not AI controlled."; no galactic AI
+   (0x4b06d0) → "player has no associated galactic AI." (warning call 0x248620). The galactic AI's budget (+0x40) null →
+   nothing. Else 0x6147d0(budget + 400, amount).
+
+### 38.3 The release (0x6147d0)
+`remaining = saved(+0x88) − released(+0x8c)`; an amount < 0 or ≥ remaining becomes `remaining`; `Add_Credits(player,
+amount, aiGain = false)` (0x27f370; no Credit_Multiplier: the third argument is 0); `released = min(amount + released,
+saved)`. `saved` is the galactic credits the battle-start transfer kept back (AI_TACTICAL §1.3: credits − Σtake), so
+the script moves part of the galactic purse into the tactical player's credits once per battle; at battle end
+0x614a70 sets credits = saved and adds back leftover − released (AI_TACTICAL §1.3).
+
+Shipped data: `Land_Tactical_Budget_Clamped` = clamp(Land_Tactical_Budget, 0, CreditsUnnormalized / (PlanetsControlled
++ 1)), with `Land_Tactical_Budget` = (GenericPlanetValue + 2 × Target.FriendlyForce.GroundTotal + 3 ×
+Target.GroundbaseLevel) / 5 × 2500 + 200 (BudgetingEquations.xml). FundTacticalStructures (not for Pirates) calls it
+once per battle.
+
+### 38.4 Port
+- `lua::TacticalGalacticContext` (engine/lua players.hpp), set on the battle's `LuaPlayerWorld`
+  (`set_tactical_galactic`): the galactic `PerceptionSource` (types, resolver, synced RNG, seed), the battle's planet
+  index as target (−1 = none), the land flag, `has_galactic_ai(player)` and `release_credits(player, amount)`.
+- `Evaluate_In_Galactic_Context` with the context set follows 38.1 (messages as above; target −1 or no resolver → no
+  result, step 4); without it the old tactical-world path stays (skirmish: step 1's error belongs to that path).
+  [port] Enemy = the port's `enemy_of`, Human = the local player.
+- `Release_Credits_For_Tactical` with the context set follows 38.2 / 38.3; without it the old queue path.
+- `CampaignBattles::galactic_context_begin` (engine/apps/sim, called by `push_battle` after the battle AI starts) builds
+  the context from `CampaignBattleOptions::galactic_resolver` (the galactic AI world's resolver; unset → no context) and
+  `has_galactic_ai` (default: the galactic player's `ai` flag); the release adds to the player's credit account (which
+  holds the tactical credits during the battle, AI_TACTICAL §1.3) with `galactic::econ::add_credits(..., ai = false,
+  multiplier 1)` against the battle's saved / released pair (`CreditTransfer`). [port] A player without a transfer
+  record (no land transfer ran for it) releases nothing.
+- Headless (`engine/apps/headless/skirmish_run.cpp`): the campaign battle has no `GalacticAiWorld`, so
+  `add_galactic_context` gives it a `GalacticSimTokenResolver` over the run's `GalacticSim` (refreshed to the galactic
+  frame on each use). `--fail-on-lua-errors` makes any tactical Lua error fail the run (foc-station always did).
+- Out of ownership, for the integrator: `engine/apps/game/src/game_session.cpp` should pass
+  `bo.galactic_resolver = [w] { return &w->resolver(); };` (the session's `GalacticAiWorld`) and, when the game knows
+  which players have a galactic AI, `bo.has_galactic_ai`.
+- Result: `alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --expect-battle-end --fail-on-lua-errors`:
+  Lua errors 10 → 0; the battle still ends (Empire, all-retreated, 2799 of 14400 frames); final CRC b0d57b4a7a9d00b0 →
+  9a32632080b3609d (the Rebel plan FUNDTACTICALSTRUCTURES now funds its player instead of dying).

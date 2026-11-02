@@ -441,6 +441,20 @@ void ConflictManager::pop_head(ConflictKind kind) {
     ar_cargo_.clear();
 }
 
+bool ConflictManager::yield_to_linked() {
+    if (state_ == ConflictState::Idle || state_ == ConflictState::InBattle) return false;
+    release_pause();
+    state_ = ConflictState::Idle;
+    force_ = false;
+    retreating_ = kNoPlayer;
+    has_choice_ = false;
+    choice_ = BattleChoice::Pending;
+    ar_in_ = AutoResolveInput{};
+    ar_objects_.clear();
+    ar_cargo_.clear();
+    return true;
+}
+
 void ConflictManager::drop_head(ConflictKind kind, bool log_it) {
     const std::vector<ConflictInfo>& q = queue(kind);
     if (q.empty()) return;

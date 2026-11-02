@@ -75,15 +75,8 @@ struct CampaignBattleOptions {
     std::vector<TacticalBattle::L1Faction> l1_factions;  // Bombardment_* faction data (load_l1_factions)
     // --- end L1 systems ---
     // --- battle host (BT pass): S10 seams the session fills (all optional; unset = unchanged behaviour) ---
-    // BT §1.4 step 2 story block: true while a story / tutorial sequence is active (retail 0x140b154d0 or the list at
-    // 0x140b2b360). While true, a galactic service tail with a human attacker or defender in any queued conflict runs no
-    // conflict processing (single player). Source (REMAINING_GAPS §6.4): 0x140b154d0 is the queued-battle record flag
-    // (GalacticSim::linked_battle_pending, set by LINK_TACTICAL / the corruption mission), the list is never written.
-    // Retail holds the record outside the conflict queues until 0x28f590 promotes it (and clears the flag); the port
-    // starts a linked battle at once (BT §2.9.3) and holds the record (flag set) only while another conflict is active,
-    // so the block is left unset by default: wiring it to linked_battle_pending would stop that active conflict (a human
-    // Vote never answered). The flag's other effects are in GalacticSim::paused(). Tests / hosts only.
-    std::function<bool()> story_sequence_active;
+    // (a1j t05: the BT §1.4 step 2 story block is no longer a seam: attach() always installs the gate, which reads
+    // GalacticSim::story_block(), A1_READINGS §31.7.)
     // BT §1.6 story lock 0x4472a0 (story rewards DISABLE / ENABLE / RESTRICT_AUTORESOLVE, global flag +0x41 or the planet
     // list +0x308): "this planet's battle must be fought". A human-involved locked conflict is fought (the pending choice
     // answers Fight); without the hook the ConflictConfig answer applies.
@@ -117,6 +110,13 @@ struct CampaignBattleOptions {
     // its AI participants (the S10 stand-in orders / reinforcement cadence are switched off; sides without a
     // tactical AI keep the stand-in), CRC system "battle.ai" registered. Null (default): unchanged S10 behaviour.
     std::shared_ptr<const TacticalAiSetup> tactical_ai;
+    // a1j t07 (A1_READINGS §38): the parent galaxy of the battle's AI scripts (lua::TacticalGalacticContext:
+    // Evaluate_In_Galactic_Context 0x69e1b0, Release_Credits_For_Tactical 0x603c70). galactic_resolver is called at each
+    // battle start and returns the galaxy's perception resolver: a GalacticAiWorld's resolver(), or a GalacticSimTokenResolver
+    // over the galaxy that the host refreshes. Unset or null: no context (both bindings keep their sim-less behaviour).
+    // has_galactic_ai: the player has a galactic AI context (0x4b06d0); unset = the galactic player's `ai` flag [port].
+    std::function<const ai::TokenResolver*()> galactic_resolver;
+    std::function<bool(int32_t player)> has_galactic_ai;
 #endif
 };
 
@@ -218,6 +218,10 @@ private:
     // --- battle host (BT pass) ---
     class ConflictGate;                       // story-block forwarder in front of the ConflictManager (BT §1.4 step 2)
     std::unique_ptr<ConflictGate> gate_;
+    // a1j t05: a queued conflict that is a corruption mission's battle record (planet, attacker and kind of a mission in
+    // corruption_queued_); mission_queued(): any queued conflict is one.
+    bool mission_record(const galactic::ConflictInfo& c) const;
+    bool mission_queued() const;
     commands::RejectReason resume_game(uint8_t player, const commands::EventData& ev);  // ResumeGame 51 (TACTICAL_GAPS §4.11)
     // --- end battle host ---
 
@@ -324,6 +328,7 @@ private:
     void ai_update();
     void ai_end();
     // --- end A1 ---
+    void galactic_context_begin(ModeKind kind);  // a1j t07: CampaignBattleOptions::galactic_resolver -> the AI's world
 #endif
 };
 

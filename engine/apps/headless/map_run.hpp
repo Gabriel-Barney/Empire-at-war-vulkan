@@ -20,6 +20,7 @@ struct MapRunOptions {
     bool ai = true;             // AI stand-in controllers (synced RNG, execute_direct)
     bool quiet = false;
     bool expect_battle_end = false;  // --skirmish-ai: fail unless the battle ends with a winner before the frame limit
+    bool fail_on_lua_errors = false;  // --skirmish-ai: fail on any tactical AI Lua error (foc-station always does), a1j t07
 };
 
 int map_run(const MapRunOptions& opt);

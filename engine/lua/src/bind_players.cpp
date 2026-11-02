@@ -713,6 +713,22 @@ int m_get_clan_id(Call& c) {
 int m_release_credits_for_tactical(Call& c) {
     LuaPlayerWorld* w = self_world(c);
     if (!w) return bad_player(c, "Release_Credits_For_Tactical");
+    if (const TacticalGalacticContext* tg = w->tactical_galactic()) {  // a1j t07: 0x603c70 [H] (A1_READINGS §38)
+        if (!tg->land)
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - this script function is only valid in land tactical");
+        if (c.nargs > 1)
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid number of parameters.  Expected 0 or 1, got %d.",
+                          c.nargs);
+        if (c.nargs == 1 && !c.is_number(1))
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid type for parameter 1.  Expected number.");
+        const int32_t p = c.self->id;
+        if (!w->has_ai(p))
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - this action is not possible: player is not AI controlled.");
+        if (!tg->has_galactic_ai || !tg->has_galactic_ai(p))
+            return c.fail("PlayerWrapper::Release_Credits_For_Tactical - player has no associated galactic AI.");
+        if (tg->release_credits) tg->release_credits(p, c.nargs == 1 ? c.number(1) : -1.0);
+        return 0;
+    }
     if (c.nargs > 1)
         return c.fail("PlayerWrapper::Release_Credits_For_Tactical - invalid number of parameters. Expected 0 or 1, got %d.",
                       c.nargs);
@@ -903,8 +919,38 @@ int g_evaluate_perception(Call& c) {
     return evaluate_perception(c, w, w->perception(), c.string(1), p, c.nargs == 3 ? perception_target(c, w, 3) : -1);
 }
 
-// Galactic perceptions from any mode (EvaluateInGalacticContext.lua): no target [inferred].
+// a1j t07: 0x69e1b0 in a tactical mode with a parent galaxy (players.hpp TacticalGalacticContext, A1_READINGS §38).
+int evaluate_in_parent_galaxy(Call& c, const LuaPlayerWorld* w, const TacticalGalacticContext& tg) {
+    if (c.nargs != 2)
+        return c.fail("Evaluate_In_Galactic_Context: Invalid number of parameters.  Expected 2, got %d.", c.nargs);
+    if (!c.is_string(1))
+        return c.fail("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 1. Expected string.");
+    const std::string name(c.string(1));
+    const uint32_t eq = tg.source.equations ? tg.source.equations->find(name) : ai::kUnresolved;
+    if (eq == ai::kUnresolved) return c.fail("Evaluate_In_Galactic_Context: Unrecognised perception function %s.", name.c_str());
+    const int32_t p = player_arg(c, 2, w);
+    if (p < 0)
+        return c.fail("Evaluate_In_Galactic_Context: Invalid parameter type for parameter 2.  Expected player object.");
+    if (!tg.has_galactic_ai || !tg.has_galactic_ai(p))
+        return c.fail("Evaluate_In_Galactic_Context: AI player %s has no galactic AI.", w->faction_name(p).c_str());
+    if (tg.target < 0 || !tg.source.resolver) return 0;  // no conflict record: nothing is returned [L]
+    ai::EvalContext ctx;
+    ctx.self = p;
+    ctx.target = tg.target;
+    ctx.location = tg.target;
+    ctx.enemy = w->enemy_of(p);
+    ctx.human = w->local_player();
+    ctx.rng = c.vm->host.rng ? &c.vm->host.rng->synced() : nullptr;  // Script_ evaluators only (as evaluate_perception)
+    ctx.game_seed = tg.source.game_seed;
+    const ai::EvalResult r = ai::evaluate(*tg.source.equations, eq, ctx, *tg.source.resolver);
+    if (!r.ok) return c.fail("Evaluate_Perception: Error evaluating perception function %s.", name.c_str());
+    return push_num(c, r.value);
+}
+
+// Galactic perceptions from any mode (EvaluateInGalacticContext.lua): no target [inferred]. With a parent galaxy set by the
+// battle host: evaluate_in_parent_galaxy.
 int g_evaluate_in_galactic_context(Call& c) {
+    if (const LuaPlayerWorld* tw = world_of(c.L); tw && tw->tactical_galactic()) return evaluate_in_parent_galaxy(c, tw, *tw->tactical_galactic());
     if (c.nargs != 2)
         return c.fail("Evaluate_In_Galactic_Context: Invalid number of parameters. Expected 2, got %d.", c.nargs);
     if (!c.is_string(1))
