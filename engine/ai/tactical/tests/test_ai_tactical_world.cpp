@@ -1518,6 +1518,35 @@ void test_reinforce_landing() {
     CHECK(reinforce_points(w, facts, 1, target).size() == 1);  // player 1 owns point 1
     w.objects[0].alive = false;
     CHECK(reinforce_points(w, facts, 1, target).empty());  // no live point of its own or an ally's
+    {
+        // 0x6bf3d0 (A1_READINGS §28.4): a delivered unit fills the first null slot (a pick of another source) of its type,
+        // keeping that slot's task force / team, else it is appended as a FreeStore pick of the given task force.
+        auto pick = [](int32_t type, PpSource src, int32_t ref, int32_t tf, int32_t team) {
+            TacticalPpPick k;
+            k.type = type;
+            k.source = src;
+            k.ref = ref;
+            k.tf = tf;
+            k.team = team;
+            return k;
+        };
+        std::vector<TacticalPpPick> picks = {pick(3, PpSource::FreeStore, 10, 0, 0), pick(3, PpSource::Reinforcement, 77, 1, 2),
+                                             pick(3, PpSource::Build, 5, 1, 3), pick(4, PpSource::Produce, -1, 0, 1)};
+        TacticalPpPick old;
+        CHECK(reinforce_join_pp(picks, 900, 3, 1, &old));  // the FreeStore unit 10 is not a null slot; the pool slot is
+        CHECK(old.source == PpSource::Reinforcement && old.ref == 77 && old.tf == 1 && old.team == 2);
+        CHECK(picks.size() == 4 && picks[1].source == PpSource::FreeStore && picks[1].ref == 900 && picks[1].tf == 1 &&
+              picks[1].team == 2 && picks[1].type == 3);
+        CHECK(reinforce_join_pp(picks, 901, 3, 0, &old));  // next null slot of type 3: the build pad pick
+        CHECK(old.source == PpSource::Build && old.ref == 5 && picks[2].ref == 901 && picks[2].source == PpSource::FreeStore);
+        CHECK(!reinforce_join_pp(picks, 902, 3, 0));  // no null slot of type 3 left: appended
+        CHECK(picks.size() == 5 && picks[4].type == 3 && picks[4].source == PpSource::FreeStore && picks[4].ref == 902 &&
+              picks[4].tf == 0 && picks[4].team == -1);
+        CHECK(reinforce_join_pp(picks, 903, 4, 0));  // the type-4 "to be produced" slot
+        CHECK(picks[3].ref == 903 && picks[3].source == PpSource::FreeStore && picks[3].team == 1);
+        CHECK(!reinforce_join_pp(picks, 904, 9, 2));  // another type: appended
+        CHECK(picks.size() == 6 && picks[5].type == 9 && picks[5].tf == 2);
+    }
     std::printf("reinforce landing: OK\n");
 }
 }  // namespace

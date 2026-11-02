@@ -730,8 +730,14 @@ On_Unit_Service skips only reserved entries; the order-lock skip is gone. Port d
 - [M] The accept re-solve (0x6c4a50) draws its own synced numbers (Plan Setup C start team, IgnoreTarget contrast),
   since it runs the same solver. Replaying the first solve's draws was tried: it changed the land outcomes little.
 - [port] The goal keeps Init's cost / ETA after the re-solve.
-- Not modelled: the queue-slot flag 0 / 1 of 0x53bee0, the tactical credits reservation, 0x6bf3d0 (a Reinforce
-  delivery joins PP+0x108 reserved), and the Setup A lock test (0x39ad40).
+- Not modelled: the queue-slot flag 0 / 1 of 0x53bee0, the tactical credits reservation, and the Setup A lock test
+  (0x39ad40).
+- 0x6bf3d0 (a1g t04 follow-up): each unit a land TF.Reinforce delivers joins its plan's PP+0x108 (`reinforce_join_pp`:
+  the first null slot of its type, i.e. a pick of another source, keeps that slot's task force / team; else appended).
+  [port] Task-force units stay off the free store, so the unit is not admitted and +0x30 = PP is set only if it is on the
+  store; the delivered entry's type stands for the new object (not perceived yet); a filled slot's pool / pad
+  reservation of this PP is released. The space poll (SpaceReinforceBlockStatus) does not call it [open: the caller
+  0x6a1440 is [M]].
 - `galactic_build.cpp` still reads `unit_reserved` when a build task takes a store unit (0x4d2bd0 does not read +0x30
   per 28.5) [open].
 - Effect: a proposal's first solve no longer skips units an earlier proposal of the same Commit picked, so more goals

@@ -75,6 +75,7 @@
 #include "alamo/ai/tactical/damage_tracking.hpp"
 #include "alamo/ai/tactical/free_store.hpp"
 #include "alamo/ai/tactical/perception_world.hpp"
+#include "alamo/ai/tactical/tactical_pp.hpp"  // a1g t04: TacticalPpPick (reinforce_join_pp)
 #include "alamo/commands/command.hpp"
 #include "alamo/commands/events.hpp"
 #include "alamo/lua/players.hpp"
@@ -403,6 +404,14 @@ using ReinforceLand = std::function<bool(const TacticalReinforcement& unit, cons
 using ReinforceIsNull = std::function<bool(const TacticalReinforcement& unit)>;
 bool reinforce_place(const std::vector<ReinforcePoint>& points, std::vector<TacticalReinforcement>& pending, float remaining,
                      const ReinforceIsNull& is_null, const ReinforceLand& land);
+
+// a1g t04 + t01 - 0x6bf3d0 (PP, unit) (A1_READINGS §28.4): a unit delivered by a land TF.Reinforce joins the plan's
+// PotentialPlan unit list PP+0x108 (the FreeStore picks): it fills the first "null" slot of its type (a pick of another
+// source, i.e. not a free-store unit, with the same type: it becomes a FreeStore pick of `unit`, keeping its task force /
+// team) or is appended as a FreeStore pick of task force `tf`. Returns true when a null slot was filled; `filled` (if
+// given) receives that slot's previous pick, whose pool / pad reservation the caller releases. The entry +0x30 = PP
+// part is the caller's (the free store's reserve).
+bool reinforce_join_pp(std::vector<TacticalPpPick>& picks, int32_t unit, int32_t type, int32_t tf, TacticalPpPick* filled = nullptr);
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);

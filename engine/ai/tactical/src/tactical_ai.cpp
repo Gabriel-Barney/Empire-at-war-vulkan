@@ -242,6 +242,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     void pp_unit_left(int32_t handle, int32_t unit);      // 0x6c27d0 (the unit's re-admission is the caller's)
     void release_pp(int32_t handle, int32_t tf_def = -1);
     TacticalFreeStore* pp_store(int32_t handle);
+    void reinforce_joined(const TfRec& t, int32_t unit, int32_t type);  // 0x6bf3d0 for a land TF.Reinforce delivery
     double enemy_strength_at(int32_t player, const Vec3f& at, int32_t zone, uint64_t mask) const;
     // --- end A2 tactical ---
 
@@ -1541,6 +1542,33 @@ void TacticalAiWorld::Impl::release_pp(int32_t handle, int32_t tf_def) {
     }
 }
 
+// a1g t04 + t01 - 0x6bf3d0 (PP, unit) from ReinforceBlockStatus (A1_READINGS §28.4): a unit a land TF.Reinforce
+// delivered joins its plan's PP+0x108 (reinforce_join_pp) and is reserved by that PP (+0x30 = PP). [port] The port keeps
+// task-force units off the free store (0x4d5000 erases the node when a task force takes a unit), so the delivered unit is
+// not admitted: +0x30 = PP is set only if it is on the store. The new object is not perceived until the next refresh, so
+// the delivered entry's type stands for it. When it fills a null slot that held a pool / pad reservation of this PP, the
+// reservation is released here (the port ties those tables to the slot's pick).
+void TacticalAiWorld::Impl::reinforce_joined(const TfRec& t, int32_t unit, int32_t type) {
+    const auto pi = plans.find(t.plan);
+    if (pi == plans.end() || pi->second.pp < 0) return;
+    const int32_t handle = pi->second.pp;
+    const auto it = pps.find(handle);
+    if (it == pps.end()) return;
+    if (TacticalFreeStore* fs = pp_store(handle); fs && fs->contains(unit)) fs->reserve(unit, handle);
+    TacticalPpPick filled;
+    const bool slot = reinforce_join_pp(it->second.picks, unit, type, static_cast<int32_t>(t.def), &filled);
+    if (slot) {
+        std::map<int32_t, int32_t>* m = filled.source == PpSource::Reinforcement ? &pool_reserved
+                                        : filled.source == PpSource::Build ? &pad_reserved : nullptr;
+        if (m) {
+            const auto r = m->find(filled.ref);
+            if (r != m->end() && r->second == handle) m->erase(r);
+        }
+    }
+    decide(t.player, "pp " + std::to_string(handle) + ": reinforce unit " + std::to_string(unit) + " " + type_name(type) +
+                         (slot ? " fills a null slot" : " appended"));
+}
+
 // ================================================================ plans
 
 int32_t TacticalAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
@@ -2137,12 +2165,30 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
             if (store.active(owned[k]) && store.has_behavior(owned[k], objects::beh::Locomotor)) {
                 t->units.push_back(owned[k]);
                 ++spawned;
+                reinforce_joined(*t, id_of(owned[k]), r.type);
             }
         return true;
     };
     const bool placed_all = reinforce_place(points, t->pending, cap >= 0.0f ? remaining : HUGE_VALF, is_null, land);
     if (spawned > 0) t->had_units = true;
     return new_status(t->plan, tf, placed_all ? StatusKind::Done : StatusKind::Failed);
+}
+
+bool reinforce_join_pp(std::vector<TacticalPpPick>& picks, int32_t unit, int32_t type, int32_t tf, TacticalPpPick* filled) {
+    for (TacticalPpPick& k : picks)
+        if (k.source != PpSource::FreeStore && k.type == type) {
+            if (filled) *filled = k;
+            k.source = PpSource::FreeStore;
+            k.ref = unit;
+            return true;
+        }
+    TacticalPpPick k;
+    k.type = type;
+    k.source = PpSource::FreeStore;
+    k.ref = unit;
+    k.tf = tf;
+    picks.push_back(k);
+    return false;
 }
 
 // refixf t06 - SpaceReinforceBlockStatus IsFinished (vf19 0x7236f0 -> placement 0x722e80, AI_TACTICAL §7.4 [H]): one placement
