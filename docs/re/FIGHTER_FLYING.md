@@ -645,6 +645,13 @@ behaviour). The first part is a stand-in: retail engages an auto target only thr
 already filtered fogged candidates, so "unless hidden" only matters for a target that became fogged after
 acquisition, which the targeting service drops anyway.
 
+> **Status 2026-11-02 (S7 t22):** Done. Rule 4 is gone; the host keeps one formation record per squadron
+> (`FighterFormationRecord`, `TacticalBattle::fighter_order` from every move / attack order path, cleared by Stop) and
+> pushes the squadron's unlocked auto target as the newest auto block when the 0x4160a0 test passes
+> (`sim::fighter_chase_test`; `TacticalBattle::fighter_push`). enter_idle drops the members' combat targets
+> (`fighter_post_move`) and keeps the record. Formation lifetime chosen for the §11 open item [M]: it survives the end of
+> the move and enter_idle until the next order, Stop or the squadron's end; a squadron that never had an order has none.
+
 ---
 
 ## 5. Fighter cell grids (singleton 0x404950) [H; M for the ring order]
