@@ -37,11 +37,11 @@ PresenceTypeTable build_presence_types(const objects::GameObjectTypes& types, in
     for (size_t i = 0; i < types.size(); ++i) {
         const auto t = static_cast<objects::TypeIndex>(i);
         PresenceTypeInfo& info = table.at(static_cast<TypeId>(i));
-        const std::span<const std::string_view> list = types.get_list(t, "Presence_Induced_Animations");
+        const std::span<const std::string_view> list = types.presence_induced_animations(t);
         if (!list.empty()) info.induced = parse_presence_induced_animations(list, anim, resolve);
-        info.presence_range = types.get_float(t, "Presence_Range");
-        info.allow_idle_when_moving = types.get_bool(t, "Allow_Idle_When_Moving");
-        info.deploys = types.get_bool(t, "Deploys");
+        info.presence_range = types.presence_range(t);
+        info.allow_idle_when_moving = types.allow_idle_when_moving(t);
+        info.deploys = types.deploys(t);
     }
     return table;
 }
@@ -54,17 +54,15 @@ PresenceConfig presence_config(const data::GameConstants* constants, uint32_t fp
 }
 
 ExplosionFlinchParams explosion_flinch_params(const objects::GameObjectTypes& types, TypeId t) {
+    // Unset fields give objects' constructor defaults (= kDefaultInducedFlinchRange / kDefaultInducedFlinchIntensity,
+    // checked in test_presence); out-of-range types the constants.
     ExplosionFlinchParams p;
     p.range = kDefaultInducedFlinchRange;
     p.intensity = kDefaultInducedFlinchIntensity;
     if (t >= types.size()) return p;
     const auto ti = static_cast<objects::TypeIndex>(t);
-    const uint32_t fr = objects::find_type_field("Induced_Flinch_Range");
-    const uint32_t fi = objects::find_type_field("Induced_Flinch_Intensity");
-    if (fr != 0xFFFFFFFFu)
-        if (const objects::FieldValue* v = types.value(ti, fr)) p.range = v->f;
-    if (fi != 0xFFFFFFFFu)
-        if (const objects::FieldValue* v = types.value(ti, fi)) p.intensity = v->f;
+    p.range = types.induced_flinch_range(ti);
+    p.intensity = types.induced_flinch_intensity(ti);
     return p;
 }
 

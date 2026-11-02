@@ -385,6 +385,70 @@ static void test_types_synthetic() {
     remove_all_long(root, ec);
 }
 
+// R3f t05: typed accessors of the animation / presence fields (ANIM_PARTICLES.md §A.11, §A.12).
+static void test_anim_presence_fields() {
+    const fs::path root = fs::temp_directory_path() / "alamo_objects_anim_presence_test";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<L><File>A.xml</File></L>");
+    write_file(root / "Data/XML/A.xml",
+               "<R>\n"
+               " <GroundInfantry Name=\"Lord\"><Presence_Range> 200 </Presence_Range></GroundInfantry>\n"
+               " <GroundInfantry Name=\"Trooper\">\n"
+               "  <Presence_Induced_Animations>Attention, Lord, Celebrate</Presence_Induced_Animations>\n"
+               "  <Presence_Induced_Animations>Lord</Presence_Induced_Animations>\n"
+               "  <Allow_Idle_When_Moving>Yes</Allow_Idle_When_Moving><Deploys>True</Deploys></GroundInfantry>\n"
+               " <GroundInfantry Name=\"TrooperV\"><Variant_Of_Existing_Type>Trooper</Variant_Of_Existing_Type>\n"
+               "  <Presence_Induced_Animations>Celebrate, Lord</Presence_Induced_Animations><Deploys>No</Deploys></GroundInfantry>\n"
+               " <Particle Name=\"Boom\"><Induced_Flinch_Range>150</Induced_Flinch_Range>\n"
+               "  <Induced_Flinch_Intensity>0.5</Induced_Flinch_Intensity></Particle>\n"
+               " <Particle Name=\"BoomV\"><Variant_Of_Existing_Type>Boom</Variant_Of_Existing_Type>\n"
+               "  <Induced_Flinch_Intensity>TBD</Induced_Flinch_Intensity><Induced_Flinch_Range></Induced_Flinch_Range></Particle>\n"
+               " <Particle Name=\"Plain\"><Induced_Flinch_Intensity> TBD </Induced_Flinch_Intensity></Particle>\n"
+               "</R>\n");
+    DirectoryProvider dp(root.string());
+    ObjectTypeDatabase raw;
+    CHECK(raw.load(dp));
+    GameObjectTypes ty;
+    CHECK(ty.build(raw));
+    auto T = [&](const char* n) { return raw.find(n); };
+    auto list = [&](TypeIndex t) {
+        const auto s = ty.presence_induced_animations(t);
+        return std::vector<std::string_view>(s.begin(), s.end());
+    };
+    const TypeIndex lord = T("Lord"), tr = T("Trooper"), trv = T("TrooperV"), boom = T("Boom"), boomv = T("BoomV"),
+                    plain = T("Plain");
+    // Constructor defaults (one place: kDefaults): 0 / false / empty, flinch inducers 100 / 1.0.
+    CHECK(ty.default_value(find_type_field("Induced_Flinch_Range")).f == 100.0f &&
+          ty.default_value(find_type_field("Induced_Flinch_Intensity")).f == 1.0f);
+    CHECK(ty.presence_range(tr) == 0.0f && !ty.allow_idle_when_moving(lord) && !ty.deploys(lord) && list(lord).empty());
+    CHECK(ty.induced_flinch_range(lord) == 100.0f && ty.induced_flinch_intensity(lord) == 1.0f);
+    // TBD is skipped: the default stays.
+    CHECK(ty.induced_flinch_intensity(plain) == 1.0f && ty.induced_flinch_range(plain) == 100.0f);
+    // Own values.
+    CHECK(ty.presence_range(lord) == 200.0f && ty.allow_idle_when_moving(tr) && ty.deploys(tr));
+    CHECK(list(tr) == (std::vector<std::string_view>{"Attention", "Lord", "Celebrate", "Lord"}));  // tags append
+    CHECK(ty.induced_flinch_range(boom) == 150.0f && ty.induced_flinch_intensity(boom) == 0.5f);
+    // Variants: the list is replaced, scalars inherited unless overridden (TBD / empty keep the parent's value).
+    CHECK(list(trv) == (std::vector<std::string_view>{"Celebrate", "Lord"}) && ty.allow_idle_when_moving(trv) &&
+          !ty.deploys(trv));
+    CHECK(ty.induced_flinch_range(boomv) == 150.0f && ty.induced_flinch_intensity(boomv) == 0.5f);
+    // The accessors are the by-tag readers' values.
+    for (TypeIndex t = 0; t < ty.size(); ++t) {
+        CHECK(ty.presence_range(t) == ty.get_float(t, "Presence_Range") &&
+              ty.allow_idle_when_moving(t) == ty.get_bool(t, "Allow_Idle_When_Moving") &&
+              ty.deploys(t) == ty.get_bool(t, "Deploys") &&
+              ty.induced_flinch_range(t) == ty.get_float(t, "Induced_Flinch_Range") &&
+              ty.induced_flinch_intensity(t) == ty.get_float(t, "Induced_Flinch_Intensity") &&
+              list(t).size() == ty.get_list(t, "Presence_Induced_Animations").size());
+    }
+    // Out of range: the defaults.
+    const auto bad = static_cast<TypeIndex>(ty.size());
+    CHECK(ty.presence_range(bad) == 0.0f && !ty.deploys(bad) && list(bad).empty() &&
+          ty.induced_flinch_range(bad) == 100.0f && ty.induced_flinch_intensity(bad) == 1.0f);
+    remove_all_long(root, ec);
+}
+
 static bool same_types(const GameObjectTypes& a, const GameObjectTypes& b) {
     if (a.size() != b.size()) return false;
     for (TypeIndex t = 0; t < a.size(); ++t) {
@@ -1598,6 +1662,7 @@ int main() {
     test_loader_synthetic();
     test_converters();
     test_types_synthetic();
+    test_anim_presence_fields();
     test_enum_converters();
     test_s1_rules();
     test_s1_registries();

@@ -1,11 +1,13 @@
 // Builds the presence definitions from the typed GameObjectType view and GameConstants (library
 // alamo_tactical_presence_data; configured when the objects and data modules are).
 //
-// engine/objects has no typed accessor for these fields, so they are read by tag:
-//   Presence_Induced_Animations (code 0x35, +0x1610): get_list() tokens, see parse_presence_induced_animations();
-//   Presence_Range (+0x1628, float, default 0), Allow_Idle_When_Moving (+0x85), Deploys (+0xd1): get_float / get_bool;
-//   Induced_Flinch_Range / _Intensity (+0x20e0 / +0x20e4): value(); the constructor defaults 100 / 1.0 are not in
-//     objects' type_field_defaults(), so an unset field gets them here;
+// The type fields come from engine/objects' typed accessors (R3f t05):
+//   Presence_Induced_Animations (code 0x35, +0x1610): presence_induced_animations() tokens, see
+//     parse_presence_induced_animations();
+//   Presence_Range (+0x1628, float, default 0), Allow_Idle_When_Moving (+0x85), Deploys (+0xd1): presence_range /
+//     allow_idle_when_moving / deploys;
+//   Induced_Flinch_Range / _Intensity (+0x20e0 / +0x20e4): induced_flinch_range / _intensity, constructor defaults
+//     100 / 1.0 (objects' type_field_defaults());
 //   GameConstants Unit_Presence_Relaxation_Time (+0x117a8): get_float(tag, 5.0).
 #pragma once
 #include <cstdint>

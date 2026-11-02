@@ -669,6 +669,10 @@ void test_foc_data() {
     if (boom != kNoType) {
         const ExplosionFlinchParams p = explosion_flinch_params(types, boom);
         CHECK(near(p.range, 100.0f) && near(p.intensity, 1.0f));
+        // R3f t05: objects' constructor defaults are exactly the presence / anim constants.
+        CHECK(p.range == kDefaultInducedFlinchRange && p.intensity == kDefaultInducedFlinchIntensity);
+        CHECK(types.induced_flinch_range(boom) == kDefaultInducedFlinchRange &&
+              types.induced_flinch_intensity(boom) == kDefaultInducedFlinchIntensity);
     }
 }
 #endif

@@ -46,7 +46,7 @@ TypeAnimParams type_anim_params(const objects::GameObjectTypes& types, objects::
     p.spin_away_explosion = std::string(types.get_string(t, "Spin_Away_On_Death_Explosion"));
     opt_float("Deployed_Walk_Anim_Speed", p.deployed_walk_anim_speed);
     opt_float("Deployment_Anim_Rate", p.deployment_anim_rate);
-    p.deploys = types.get_bool(t, "Deploys");
+    p.deploys = types.deploys(t);
     return p;
 }
 
@@ -60,19 +60,14 @@ FlinchParams flinch_params(const TypeAnimParams& p) {
     return f;
 }
 
-namespace {
-float float_or(const objects::GameObjectTypes& types, objects::TypeIndex t, const char* field, float fallback) {
-    if (t >= types.size() || types.get_string(t, field).empty()) return fallback;
-    return types.get_float(t, field);
-}
-}  // namespace
-
+// R3f t05: the typed objects accessors; an unset field gives objects' constructor default, which equals
+// kDefaultFlinchIntensity / kDefaultFlinchRange (checked in test_presence's data test). Out of range: the constants.
 float induced_flinch_intensity(const objects::GameObjectTypes& types, objects::TypeIndex t) {
-    return float_or(types, t, "Induced_Flinch_Intensity", kDefaultFlinchIntensity);
+    return t < types.size() ? types.induced_flinch_intensity(t) : kDefaultFlinchIntensity;
 }
 
 float induced_flinch_range(const objects::GameObjectTypes& types, objects::TypeIndex t) {
-    return float_or(types, t, "Induced_Flinch_Range", kDefaultFlinchRange);
+    return t < types.size() ? types.induced_flinch_range(t) : kDefaultFlinchRange;
 }
 
 DeathParams death_params(const TypeAnimParams& p) {
