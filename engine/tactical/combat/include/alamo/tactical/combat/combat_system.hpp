@@ -348,10 +348,16 @@ struct UnitDesc {
     // (slot 43 footprint E; 0 = the radius).
     float min_attack_distance = 0.0f;
     float hard_x_extent = 0.0f, hard_y_extent = 0.0f;
+    // A1j t04 (TACTICAL_GAPS 3.1 slot 43, 0x371e70 / 0x372040): without a Custom_Hard extent, |model bbox max.x| (X) and
+    // |model bbox max.y| (Y) x Scale_Factor of the mode's model; < 0: no model data (the radius stands in).
+    float model_x_extent = -1.0f, model_y_extent = -1.0f;
     // OI tactical (TACTICAL_GAPS 3.1 slot 43): the object is a LAND_OBSTACLE (obj +0x346 != 0xFF). Range tests then use
     // the obstacle-cell aim walk (set_obstacle_cell_query) instead of the footprint half-extent.
     bool land_obstacle = false;
     float fire_inaccuracy_fixed_radius = 0.0f;  // Targeting_Fire_Inaccuracy_Fixed_Radius
+    // A1j t03 (TACTICAL_COMBAT §3.1.2): Targeting_Fire_Inaccuracy (type +0x508) `<category>, <distance>` pairs in XML order;
+    // the own weapon's distance branch takes the first entry whose mask hits the target's CategoryMask.
+    std::vector<InaccuracyEntry> fire_inaccuracy;
     int32_t priority_set = -1;                  // Targeting_Priority_Set (index into CombatData)
     float stickiness_threshold = 0.0f;          // Targeting_Stickiness_Time_Threshold (seconds)
     uint64_t category_mask = 0, property_flags = 0, attack_category_restrictions = 0;
@@ -1450,6 +1456,8 @@ private:
         ObjectId id;
         float t;
         int32_t mesh_hp = kMeshUnknown;
+        bool ground = false;  // A1j t03: a straight shot's land ground test (0x4d0630) hit the terrain / water at gh
+        GroundHit gh = {};
     };
 
     int32_t find(ObjectId id) const;  // unit index or -1
@@ -1502,6 +1510,7 @@ private:
     // §6 grenade flight: the step's end point N (from the closed form) and the land ground test of P -> N.
     Vec3 lob_next(const Projectile& p, uint32_t frame) const;
     bool ground_hit(Vec3 a, Vec3 b, GroundHit& out) const;  // S8 t06: 0x135840 (rocket.hpp ground_segment)
+    bool straight_ground_test(const Projectile& p, Vec3 delta) const;  // A1j t03: 0x4d0630's mode / category / target gate
     Vec3 stuck_local(const Unit& v, Vec3 world) const;     // S8 t06: world point -> v's frame (inverse local_to_world)
     uint32_t bomb_frame(float seconds, uint32_t armed_frame) const;  // S8 t06: BOMB arm 0x58f030 detonation frame
     void lob_step(uint32_t i, uint32_t frame, SimRng& rng);

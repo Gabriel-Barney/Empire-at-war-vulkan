@@ -568,6 +568,12 @@ container contribution through 0x4160a0 can also accept).
   the nearest member of a squad-member target's container.
 - **Port:** replace "XY ≤ R + target radius" by R + orientation-dependent footprint half-extent, and add the
   min-range rejection (only types with `Targeting_Min_Attack_Distance` > 0).
+  **A1j t04 (2026-11-02):** the extent getters are 0x371e70 (X: `Custom_Hard_XExtent` +0x16bc) and 0x372040 (Y:
+  +0x16c0), each × `Scale_Factor` when > 0, else |model bbox max.x| (resp. max.y, bbox +0x10 / +0x14) × `Scale_Factor`
+  of the current mode's model (0x3729f0), 0 with no model; deployed X 0x371f30 reads +0x16cc first. The port used the
+  unit radius (for a starbase the collision-class constant) whenever no Custom_Hard extent was set; it now takes the
+  model box from the battle catalog (`UnitDesc::model_x_extent` / `model_y_extent`) and keeps the radius only when the
+  host gives no model data. Effect: Rebel capitals 2000-2500 from a station's centre now accept and promote it.
 
 ### 3.2 The constants [H]
 All are fields of the GameConstants object (.bss, base 0x140b15800), loaded from XML — read them from data.
