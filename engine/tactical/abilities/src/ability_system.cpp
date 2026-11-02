@@ -551,19 +551,60 @@ void AbilitySystem::handler(Obj& o, uint32_t t, bool on, uint32_t frame, ObjectI
         case kReplenishWingmen:  // 0x3a2970
             if (on) h_replenish(o, frame);
             return;
-        case kDetonateRemoteBomb:  // 0x280ec0: the player's remote bombs detonate (serial order)
+        case kDetonateRemoteBomb:  // 0x280ec0: the player's remote bombs detonate (serial order [port] for list order)
             if (on) {
-                for (const RemoteBomb& b : remote_bombs_) {
-                    if (b.player != o.owner) continue;
+                // LOB_SOLVER §3.5 (S8 t06): every live bomb of the player whose type has Friendly_Damage_Amount F > 0. One
+                // stuck to a garrisoned parent is skipped (stays armed); one stuck to an own unit first damages it (kind 1)
+                // and the other members of its team container (kind 0x15) by F; then the detonation at the bomb.
+                const auto find_bomb = [&](uint32_t serial) -> size_t {
                     for (size_t i = 0; i < combat_->projectile_count(); ++i)
-                        if (combat_->projectile(i).serial == b.serial) {
-                            combat_->detonate_projectile(i, frame);
-                            break;
+                        if (combat_->projectile(i).serial == serial && combat_->projectile(i).alive) return i;
+                    return combat_->projectile_count();
+                };
+                std::vector<RemoteBomb> keep;
+                for (const RemoteBomb& b : remote_bombs_) {
+                    if (b.player != o.owner) {
+                        keep.push_back(b);
+                        continue;
+                    }
+                    size_t i = find_bomb(b.serial);
+                    if (i >= combat_->projectile_count()) continue;  // gone: dropped from the list
+                    const combat::ProjectileView pv = combat_->projectile(i);
+                    const float F = combat_->data().projectiles[pv.desc].friendly_damage_amount;
+                    if (!(F > 0.0f)) {  // not a remote bomb type: never set off by this ability
+                        keep.push_back(b);
+                        continue;
+                    }
+                    const ObjectId parent = pv.stuck ? pv.stuck_to : kNoObject;
+                    if (parent != kNoObject && combat_->has_unit(parent)) {
+                        if (combat_->flags(parent) & combat::kUnitGarrisoned) {
+                            keep.push_back(b);
+                            continue;
                         }
+                        if (alive_unit(parent) && combat_->owner(parent) == o.owner) {
+                            auto hurt = [&](ObjectId v, uint8_t kind) {
+                                combat::DamageRequest r;
+                                r.victim = v;
+                                r.amount = F;
+                                r.kind = kind;
+                                r.source = pv.shooter;
+                                r.source_is_projectile = true;
+                                r.projectile_desc = static_cast<int32_t>(pv.desc);
+                                combat_->take_damage(r, frame);
+                            };
+                            hurt(parent, 1);
+                            const Obj* po = obj(parent);
+                            if (const Obj* team = po ? obj(po->container) : nullptr) {
+                                const std::vector<ObjectId> members = team->members;  // copy: damage can change the list
+                                for (const ObjectId m : members)
+                                    if (m != parent && alive_unit(m)) hurt(m, 0x15);
+                            }
+                        }
+                    }
+                    i = find_bomb(b.serial);  // the damage may have spawned projectiles (death projectiles)
+                    if (i < combat_->projectile_count()) combat_->detonate_projectile(i, frame);
                 }
-                remote_bombs_.erase(std::remove_if(remote_bombs_.begin(), remote_bombs_.end(),
-                                                   [&](const RemoteBomb& b) { return b.player == o.owner; }),
-                                    remote_bombs_.end());
+                remote_bombs_ = std::move(keep);
                 start_recharge(o, t);
             }
             return;

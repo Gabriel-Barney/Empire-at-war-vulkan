@@ -237,12 +237,13 @@ void PassabilityGrid::apply(const Stamp& s, int delta) {
 
 uint32_t PassabilityGrid::stamp(ObjectId id, const ObstacleFootprint& fp) {
     unstamp(id);
-    if (w_ == 0 || h_ == 0) return 0;
-    if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
     Stamp s;
     s.bits = fp.bits & 0x1FFu;
-    sample_cells(fp, s.cells);
-    apply(s, 1);
+    if (w_ != 0 && h_ != 0) {  // S8 t09: an empty grid still records the (cell-less) stamp, as the header promises
+        if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
+        sample_cells(fp, s.cells);
+        apply(s, 1);
+    }
     const uint32_t n = static_cast<uint32_t>(s.cells.size());
     stamps_.emplace(id, std::move(s));
     return n;
@@ -287,12 +288,13 @@ bool PassabilityGrid::rekey(ObjectId from, ObjectId to) {
 
 uint32_t PassabilityGrid::stamp_secondary(ObjectId id, const ObstacleFootprint& fp) {
     unstamp_secondary(id);
-    if (w_ == 0 || h_ == 0) return 0;
-    if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
     Stamp s;
     s.bits = fp.bits & 0x1FFu;  // SecondaryOccupationPassability (no Obstacle default for secondary occupants)
-    sample_cells(fp, s.cells);
-    apply(s, 1);
+    if (w_ != 0 && h_ != 0) {   // S8 t09: recorded without cells on an empty grid, as stamp()
+        if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
+        sample_cells(fp, s.cells);
+        apply(s, 1);
+    }
     const uint32_t n = static_cast<uint32_t>(s.cells.size());
     secondary_.emplace(id, std::move(s));
     return n;

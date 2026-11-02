@@ -17,10 +17,12 @@ bool App::render_frame() {
         return true;
     }
     if (bview_.active()) bview_.pre_frame();  // fog uploads before this frame's acquire barriers
+    const auto wait0 = Clock::now();
     rhi::Frame* f = gpu_.ring.begin_frame();
     if (!f) return false;
     uint32_t image = 0;
     const rhi::SwapchainStatus as = sc_.acquire(f->acquire_semaphore(), image);
+    ft_.wait += static_cast<float>(ms_since(wait0));
     if (as == rhi::SwapchainStatus::OutOfDate || as == rhi::SwapchainStatus::Minimized || as == rhi::SwapchainStatus::Error) {
         gpu_.ring.end_frame(*f);
         gpu_.ring.wait_idle();
@@ -64,7 +66,9 @@ bool App::render_frame() {
     }
     if (galactic) {
         const ui::CameraParams cp = gview_.camera_params(w, h);
+        const auto prep0 = Clock::now();
         gview_.prepare(render_alpha(), now_s_, selected_planet_, &cp);
+        ft_.prepare += static_cast<float>(ms_since(prep0));
         gview_.use_scene(gpu_);
         ok = gpu_.renderer.render(*f, cmd, pt, ui::to_view_matrices(cp, w, h), gview_.main, render::DrawMode::Lit, gro, &draw_stats_,
                                   nullptr, gview_.background);
@@ -72,7 +76,9 @@ bool App::render_frame() {
         if (screen_ == Screen::Battle && !cinematic_hides_hud())
             bview_.set_selection_blobs(ui_.tactical_hud.selection_blobs());  // last HUD build's circles (one frame behind)
         else bview_.set_selection_blobs({});  // load screen / attract demo: no selection
+        const auto prep0 = Clock::now();
         bview_.prepare(gpu_, render_alpha());
+        ft_.prepare += static_cast<float>(ms_since(prep0));
         bview_.use_scene(gpu_);
         ui::CameraParams cp = bview_.camera_params(w, h);
         cinematic_camera(cp);  // refixf t05: the TSW firing shot + its shake replace the drawn view (the controller is untouched)
@@ -203,6 +209,10 @@ bool App::render_frame() {
         dialogs.add(ui::kHudLayers - 1, ui::HudList::Alpha, q);
     }
     info_.build_overlay(dialogs);  // data-chart lines over IDC_DATA_CHART_IMAGE
+    if (overlay_.shown()) {  // OPT1 t07: the frame-time overlay, top layer of the dialogs list (under the cursor)
+        overlay_.read_ticks();
+        overlay_.build(dialogs, *canvas, *ui_.fonts);
+    }
     ui::HudDrawList cursor_list;
     update_cursor(cursor_list);
     if (drawer) drawer->make_resident(gpu_.renderer);
@@ -294,7 +304,9 @@ bool App::render_frame() {
     fs.waits = {waits, nw};
     fs.signals = {&signal, 1};
     if (!gpu_.ring.end_frame(*f, fs)) return false;
+    const auto wait1 = Clock::now();
     const rhi::SwapchainStatus ps = sc_.present(image);
+    ft_.wait += static_cast<float>(ms_since(wait1));
     if (ps == rhi::SwapchainStatus::OutOfDate || ps == rhi::SwapchainStatus::Suboptimal || as == rhi::SwapchainStatus::Suboptimal) {
         gpu_.ring.wait_idle();
         sc_.recreate(win_.width(), win_.height());
@@ -302,7 +314,9 @@ bool App::render_frame() {
         return false;
     }
     if (readback) {
+        const auto wait2 = Clock::now();
         gpu_.ring.wait_idle();
+        ft_.wait += static_cast<float>(ms_since(wait2));
         gpu_.alloc.invalidate(targets_.readback.alloc);
         const auto* px = static_cast<const uint8_t*>(targets_.readback.mapped());
         std::vector<uint8_t> rgba(px, px + static_cast<size_t>(w) * h * 4);
@@ -319,6 +333,15 @@ bool App::render_frame() {
 
 // ------------------------------------------------------------------------------------------------ frame
 void App::frame() {
+    {  // OPT1 t07: the previous frame's phase times, closed at this frame's start (frame cap and window pump included)
+        const Clock::time_point start = Clock::now();
+        if (frame_t0_ != Clock::time_point{}) {
+            ft_.frame = static_cast<float>(std::chrono::duration<double, std::milli>(start - frame_t0_).count());
+            overlay_.add_frame(ft_);
+        }
+        ft_ = {};
+        frame_t0_ = start;
+    }
     // Scripted runs are frame-driven (30 frames per presentation second): camera smoothing, double-tap windows and
     // pop-up delays then advance identically on every machine, so the recorded command stream is machine independent.
     const double now = script_.empty() ? ms_since(t0_) / 1000.0 : static_cast<double>(frames_) / 30.0;
@@ -364,6 +387,11 @@ void App::frame() {
         (void)ui::capture_input(win_, now_s_, dt_);  // consume the window's edges
     } else {
         raw = ui::capture_input(win_, now_s_, dt_);
+    }
+    if (raw.keys_pressed.test(kVkF11)) {  // OPT1 t07: the frame-time overlay; the key is not passed on
+        overlay_.set_shown(!overlay_.shown(), opt_.profile);
+        raw.keys_pressed.set(kVkF11, false);
+        raw.keys_down.set(kVkF11, false);
     }
     cinematic_input(raw);  // refixf t05: the cinematic controller takes the mouse first (TSW_PLANET_DESTROY.md §11.2)
     std::u32string typed = printable(win_.take_text());
@@ -442,7 +470,11 @@ void App::frame() {
     if (bview_.active()) bview_.set_space_reinforcement_overlay(screen_ == Screen::Battle && bview_.space() && reinforce_unit_ != 0);
     // 3. Sim, then the story's presentation ops (movies, audio) of the ticks just run; Lua movies advance.
     if (battle_view_pending_ && load_intro_frames_ == 0) start_battle_view();  // QA t11: the load screen is already up
-    step_sim();
+    {
+        const auto sim0 = Clock::now();
+        step_sim();
+        ft_.sim = static_cast<float>(ms_since(sim0));
+    }
     cinematic_step();  // refixf t05: shot clock from the tactical frame, timer end, letterbox slide
     if (screen_ == Screen::Menu && demo_session()) {  // OI host: the attract demo's camera; a finished demo battle restarts
         if (session_->skirmish_over() && !start_attract_map()) stop_attract();
@@ -465,7 +497,10 @@ void App::frame() {
     story_ui_step();  // L1/S4 wave 1: this frame's UI notifications for the story
     // 4. Render, 5. audio (listener from the camera).
     if (screen_ == Screen::Quit) return;
-    if (!render_frame()) {
+    const auto render0 = Clock::now();
+    const bool rendered = render_frame();
+    ft_.render = static_cast<float>(ms_since(render0));
+    if (!rendered) {
         std::fprintf(stderr, "render failed\n");
         smoke_ok_ = false;
         screen_ = Screen::Quit;

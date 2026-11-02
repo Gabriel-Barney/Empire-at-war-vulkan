@@ -116,7 +116,7 @@ const char* kTypes = R"(<L1>
  <GroundInfantry Name="L1_Jet_Trooper"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>
   <Uses_Multiple_Locomotors>Yes</Uses_Multiple_Locomotors><Primary_Locomotor_Name>WALK_LOCOMOTOR</Primary_Locomotor_Name>
   <Secondary_Locomotor_Name>JETPACK_LOCOMOTOR</Secondary_Locomotor_Name><Alternate_Max_Speed>2.5</Alternate_Max_Speed>
-  <Hover_Offset>30</Hover_Offset><Projectile_Types>L1_Laser_Proj</Projectile_Types>
+  <Hover_Offset>30</Hover_Offset><Behavior>SELECTABLE, WEAPON</Behavior><Projectile_Types>L1_Laser_Proj</Projectile_Types>
   <Projectile_Fire_Recharge_Seconds>0.5</Projectile_Fire_Recharge_Seconds></GroundInfantry>
  <GroundCompany Name="L1_Jet_Squad"><Company_Units>L1_Jet_Trooper, L1_Jet_Trooper</Company_Units>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
@@ -709,9 +709,11 @@ void test_land(const Data& d) {
 // (MOVEMENT §3.1.1 step 6 / §6.2) A Uses_Multiple_Locomotors trooper (WALK primary, JETPACK secondary, a blaster) is ordered
 // with the switch bit next to an enemy trooper: it swaps, flies and lands, then swaps back to WALK. While on the jetpack
 // the combat flag kUnitWeaponsSuspended mirrors the active locomotor and it fires nothing; back on WALK it fires again.
+// S7 t15 A1: the swap back raises "unit ability finished" (signal 0x29) for the jet trooper in the tick its flag clears.
 struct JetRun {
     bool fought = false, ordered = false, mirror = true, flew = false, landed = false, other_walks = true;
     uint32_t shots_flying = 0, shots_after = 0, suspended_frames = 0;
+    uint32_t ability_finished = 0, finished_at_clear = 0;  // the jet's signals; those in the tick its flag cleared
     CrcLog crc;
 };
 
@@ -752,6 +754,7 @@ JetRun run_jet(const Data& d, int32_t workers) {
     const auto jet_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Jet_Trooper"));
     objects::ObjectId jet = objects::kNoObjectId, other = objects::kNoObjectId;
     std::vector<uint32_t> seen;  // projectile serials of the jet trooper
+    bool was_suspended = false;
     for (uint64_t t = 0; t < 6000; ++t) {
         host.tick_once();
         if (!invaded && host.modes().depth() == 1) {
@@ -790,6 +793,12 @@ JetRun run_jet(const Data& d, int32_t workers) {
         const bool suspended = (b->combat().flags(jet) & tactical::combat::kUnitWeaponsSuspended) != 0;
         out.mirror = out.mirror && suspended == v.secondary_locomotor;
         if (suspended) ++out.suspended_frames;
+        for (const objects::ObjectId e : b->ability_finished_events())
+            if (e == jet) {
+                ++out.ability_finished;
+                out.finished_at_clear += was_suspended && !suspended ? 1u : 0u;
+            }
+        was_suspended = suspended;
         out.flew = out.flew || v.airborne;
         if (out.flew && !v.secondary_locomotor && !out.landed) out.landed = v.locomotor == tactical::movement::LocomotorKind::Default;
         out.other_walks = out.other_walks && !b->movement().view(other).secondary_locomotor &&
@@ -813,8 +822,9 @@ void test_jet(const Data& d) {
                 a.fought, a.ordered, a.flew, a.landed, a.mirror, a.suspended_frames, a.shots_flying, a.shots_after);
     CHECK(a.fought && a.ordered && a.flew && a.landed && a.mirror && a.other_walks);
     CHECK(a.suspended_frames > 30 && a.shots_flying == 0 && a.shots_after > 0);
+    CHECK(a.ability_finished == 1 && a.finished_at_clear == 1);
     const JetRun w = run_jet(d, 4);
-    CHECK(!first_divergence(a.crc, w.crc).diverged && w.suspended_frames == a.suspended_frames);
+    CHECK(!first_divergence(a.crc, w.crc).diverged && w.suspended_frames == a.suspended_frames && w.ability_finished == 1);
 }
 
 // ---- Int-final: build pads (L1_S4_REMAINING §3.6) and the weather factor of the fog sight (FOG_OF_WAR §3.1.1) ----

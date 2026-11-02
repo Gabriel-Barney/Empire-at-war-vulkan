@@ -88,6 +88,9 @@ struct GalacticAiConfig {
     const galactic::ContrastTable* contrast = nullptr;
     // Fan-out for the per-AI all-pairs recompute (AiPathFinder); any value gives identical matrices.
     ParallelFor path_pf = serial_for;
+    // OPT2 t04: fan-out for the per-frame scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); any
+    // value gives identical results.
+    ParallelFor lua_gc_pf = serial_for;
     // GameConstants AIUsesFogOfWarGalactic (GC +0x2EC, shipped False). On: the S2 perception's remembered values follow
     // each AI's GRC 2 presence visibility (snapshot_from_sim). The A2 token resolver stays live either way [port].
     bool ai_uses_fog_galactic = false;

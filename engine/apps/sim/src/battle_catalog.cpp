@@ -16,6 +16,7 @@
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
+#include "alamo/tactical/abilities/ability_types.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
 
@@ -257,6 +258,7 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
         p.lob_mod = ty.get_float(t, "Projectile_Grenade_Gravity_Lob_Mod");
     p.can_lob_slower = ty.get_bool(t, "Projectile_Grenade_Can_Lob_Slower");
     p.sticks_on_collision = ty.get_bool(t, "Projectile_Grenade_Sticks_On_Collision");
+    p.friendly_damage_amount = ty.get_float(t, "Friendly_Damage_Amount");  // S8 t06 (+0x23ec): own-player sweep, remote bombs
     // --- end S8 t04 ---
     if (!ty.get_string(t, "Projectile_Does_Shield_Damage").empty()) p.does_shield_damage = ty.get_bool(t, "Projectile_Does_Shield_Damage");
     if (!ty.get_string(t, "Projectile_Does_Hitpoint_Damage").empty())
@@ -412,6 +414,24 @@ int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
     // ENABLE_SPECIAL_ABILITY hardpoints: Special_Ability_Name (type +0x450) as name_crc (0 = empty).
     if (const std::string_view an = trim(tag("SPECIAL_ABILITY_NAME")); !an.empty())
         h.special_ability_name_crc = name_crc(an);
+    // S8 t08 (TACTICAL_COMBAT §3.1.1, 0x384850 steps 4-6): the deploy / attack-mode bytes (+0x3d1..+0x3d4, default true)
+    // and the per-mode bytes Fire_When_In_<Mode>_Mode (+0x384 + m; listed when No).
+    h.fire_when_deployed = flag("FIRE_WHEN_DEPLOYED", true);
+    h.fire_when_undeployed = flag("FIRE_WHEN_UNDEPLOYED", true);
+    h.fire_when_rocket_attack = flag("FIRE_WHEN_IN_ROCKET_ATTACK_MODE", true);
+    h.fire_when_normal_attack = flag("FIRE_WHEN_IN_NORMAL_ATTACK_MODE", true);
+    for (const auto& [n, v] : tags) {
+        constexpr std::string_view kPre = "FIRE_WHEN_IN_", kSuf = "_MODE";
+        const std::string_view nv = n;
+        if (nv.size() <= kPre.size() + kSuf.size() || nv.substr(0, kPre.size()) != kPre || nv.substr(nv.size() - kSuf.size()) != kSuf)
+            continue;
+        const std::string_view mode = nv.substr(kPre.size(), nv.size() - kPre.size() - kSuf.size());
+        if (mode == "ROCKET_ATTACK" || mode == "NORMAL_ATTACK") continue;  // the dedicated bytes above
+        const uint8_t m = ta::ability_type_from_name(mode);
+        if (m >= 1 && m <= 0x4c && !objects::parse_type_bool(v) &&
+            std::find(h.no_fire_modes.begin(), h.no_fire_modes.end(), m) == h.no_fire_modes.end())
+            h.no_fire_modes.push_back(m);
+    }
     if (s.full) {
         // S10-int: S9 hardpoint fields. Fire bones: B present only when named (Percent(50) pick without
         // randomisation, TACTICAL_COMBAT 2.5 step 8); positions come from the animated pose (host hook).
@@ -465,20 +485,30 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
     u.property_flags = ty.get_mask(t, "Property_Flags");
     u.attack_category_restrictions = ty.get_mask(t, "Attack_Category_Restrictions");
     u.space_layer = static_cast<uint32_t>(ty.get_mask(t, "Space_Layer"));
-    bool weapon_hp = false;
     for (uint32_t hid : ty.hardpoints(t)) {
         if (hid >= ty.hardpoint_names().size()) continue;
         int32_t h = hardpoint(ty.hardpoint_names()[hid], s);
         if (h < 0) continue;
         if (s.model_mode >= 0) h = hardpoint_on_model(h, t, s);  // battle host: bones of this unit's model
         u.hardpoints.push_back(static_cast<uint32_t>(h));
-        weapon_hp = weapon_hp || tc::is_weapon(s.d->hardpoints[static_cast<size_t>(h)].kind);
     }
-    // Non-hardpoint weapon (WeaponBehavior): Projectile_Types, when no weapon hardpoint fires [M], or when the type lists the
-    // WEAPON behaviour (0x0A, WeaponBehaviorClass, serviced besides the hard points; a1h t01: M1_Repulsor_Tank, the only FoC
-    // type with both, fires its Proj_M1_Laser_Cannon at vehicles - its HP_2M_Tank_00 excludes Air / Vehicle / Structure).
+    // Non-hardpoint weapon (WeaponBehavior). S8 t08 (TACTICAL_COMBAT §3.1.1): it exists when the object has the WEAPON
+    // behaviour (0x0A: Behavior plus the battle mode's LandBehavior / SpaceBehavior list; every list without a mode) and a
+    // non-empty Projectile_Types, independent of weapon hardpoints (the two sources fire side by side, gated by the
+    // Fire_Weapon_When_* / Fire_When_* flags). Projectile_Types without WEAPON is never fired (abilities / Lua read it).
+    // a1h t01: M1_Repulsor_Tank (WEAPON + HP_2M_Tank_00, which excludes Air / Vehicle / Structure) fires its
+    // Proj_M1_Laser_Cannon at vehicles through this weapon.
     const auto projs = ty.get_list(t, "Projectile_Types");
-    if ((!weapon_hp || ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon)) && !projs.empty()) {
+    const bool weapon_behavior =
+        s.model_mode < 0 ? ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon)
+                         : ty.has_behavior(t, objects::BehaviorSet::Generic, objects::beh::Weapon) ||
+                               ty.has_behavior(t, s.model_mode == 1 ? objects::BehaviorSet::Space : objects::BehaviorSet::Land,
+                                               objects::beh::Weapon);
+    if (!projs.empty()) {  // the list's first entry for the host's special weapons (UnitDesc::listed_projectile)
+        const objects::TypeIndex pt = ty.resolve_name(trim(projs.front()));
+        if (pt != objects::kNone) u.listed_projectile = projectile(static_cast<uint32_t>(pt), s);
+    }
+    if (weapon_behavior && !projs.empty()) {
         const objects::TypeIndex pt = ty.resolve_name(trim(projs.front()));
         if (pt != objects::kNone) {
             u.weapon_projectile = projectile(static_cast<uint32_t>(pt), s);
@@ -492,6 +522,14 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
             for (const std::string_view n : projs)
                 if (const objects::TypeIndex q = ty.resolve_name(trim(n)); q != objects::kNone)
                     u.weapon_projectiles.push_back(projectile(static_cast<uint32_t>(q), s));
+        // S8 t08: the own-weapon gate flags (type +0xae..+0xb1, default true).
+        auto yes = [&](const char* tag) { return ty.get_string(t, tag).empty() || ty.get_bool(t, tag); };
+        u.fire_weapon_when_deployed = yes("Fire_Weapon_When_Deployed");
+        u.fire_weapon_when_undeployed = yes("Fire_Weapon_When_Undeployed");
+        u.fire_weapon_when_rocket_attack = yes("Fire_Weapon_When_In_Rocket_Attack_Mode");
+        u.fire_weapon_when_normal_attack = yes("Fire_Weapon_When_In_Normal_Attack_Mode");
+        // S8 t06 B4 (LOB_SOLVER §5.1): the fire bones of the unit's model (battle host with model data only).
+        if (u.weapon_projectile >= 0 && s.model_mode >= 0) u.muzzle_model = muzzle_bones(t, s.model_mode == 1, u.muzzle_bones);
     }
     // OI host (TACTICAL_GAPS 3.1 slot 43): obj +0x346 != 0xFF read as the type's LAND_OBSTACLE behaviour [inferred]. S8 t01:
     // the battle host's obstacle-cell query walks the target's passability stamp (map placements' stamps move to their
@@ -725,10 +763,14 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
 #ifdef ALAMO_SIM_HAVE_ASSETS
     namespace mv = tactical::movement;
     if (!files_ || type >= types_->size()) return nullptr;
-    std::lock_guard<std::mutex> lock(model_cache_->mutex);
     const std::pair<uint32_t, uint32_t> key{type, space ? 1u : 0u};
-    auto it = model_cache_->avoid.find(key);
-    if (it != model_cache_->avoid.end()) return it->second.get();
+    {
+        std::lock_guard<std::mutex> lock(model_cache_->mutex);
+        auto it = model_cache_->avoid.find(key);
+        if (it != model_cache_->avoid.end()) return it->second.get();
+    }
+    // Built outside the lock (OPT3 t05: preload_models loads types in parallel); two threads building the same key make
+    // the same entry and the first one stored is kept.
     std::unique_ptr<mv::AvoidModel> out;
     const std::string_view name = trim(types_->get_string(type, space ? "Space_Model_Name" : "Land_Model_Name"));
     assets::ModelAsset m;
@@ -795,9 +837,8 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
             out->bound_h = {(bound.max.x - bound.min.x) * 0.5f, (bound.max.y - bound.min.y) * 0.5f, (bound.max.z - bound.min.z) * 0.5f};
         }
     }
-    const mv::AvoidModel* r = out.get();
-    model_cache_->avoid.emplace(key, std::move(out));
-    return r;
+    std::lock_guard<std::mutex> lock(model_cache_->mutex);
+    return model_cache_->avoid.emplace(key, std::move(out)).first->second.get();
 #else
     (void)type, (void)space;
     return nullptr;
@@ -823,9 +864,11 @@ const BattleCatalog::ModelInfo* BattleCatalog::model_info(uint32_t type, bool sp
 #ifdef ALAMO_SIM_HAVE_ASSETS
     if (!files_ || type >= types_->size()) return nullptr;
     const uint32_t code = (space ? 1u : 0u) | (fallback ? 2u : 0u);
-    std::lock_guard<std::mutex> lock(model_cache_->mutex);
-    auto it = model_cache_->entries.find({type, code});
-    if (it != model_cache_->entries.end()) return it->second.get();
+    {
+        std::lock_guard<std::mutex> lock(model_cache_->mutex);
+        auto it = model_cache_->entries.find({type, code});
+        if (it != model_cache_->entries.end()) return it->second.get();
+    }  // built outside the lock, as avoid_model
     std::vector<const char*> order = {space ? "Space_Model_Name" : "Land_Model_Name"};
     if (fallback) {
         order.push_back(space ? "Land_Model_Name" : "Space_Model_Name");
@@ -852,9 +895,8 @@ const BattleCatalog::ModelInfo* BattleCatalog::model_info(uint32_t type, bool sp
         }
         break;  // the first named model field decides (a missing file: no model data)
     }
-    const ModelInfo* out = info.get();
-    model_cache_->entries.emplace(std::make_pair(type, code), std::move(info));
-    return out;
+    std::lock_guard<std::mutex> lock(model_cache_->mutex);
+    return model_cache_->entries.emplace(std::make_pair(type, code), std::move(info)).first->second.get();
 #else
     (void)type, (void)space, (void)fallback;
     return nullptr;
@@ -867,6 +909,55 @@ bool BattleCatalog::model_half_extents(uint32_t type, float& half_x, float& half
     half_x = 0.5f * (m->max[0] - m->min[0]);  // [M] half of the box size (the stamp centres it on the object)
     half_y = 0.5f * (m->max[1] - m->min[1]);
     height_z = m->max[2] - m->min[2];
+    return true;
+}
+
+void BattleCatalog::preload_models(std::span<const uint32_t> types, bool space, const ParallelFor& pf) const {
+#ifdef ALAMO_SIM_HAVE_ASSETS
+    if (!files_) return;
+    std::vector<uint32_t> todo;  // distinct types not cached yet, ascending
+    {
+        std::lock_guard<std::mutex> lock(model_cache_->mutex);
+        for (const uint32_t t : types) {
+            if (t >= types_->size()) continue;
+            const bool avoid = model_cache_->avoid.count({t, space ? 1u : 0u}) == 0;
+            const bool info = !space && model_cache_->entries.count({t, 2u}) == 0;
+            if (avoid || info) todo.push_back(t);
+        }
+    }
+    std::sort(todo.begin(), todo.end());
+    todo.erase(std::unique(todo.begin(), todo.end()), todo.end());
+    if (todo.empty()) return;
+    const RangeFn body = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            (void)avoid_model(todo[i], space);
+            if (!space) (void)model_info(todo[i], false, true);
+        }
+    };
+    if (pf) pf(static_cast<uint32_t>(todo.size()), 1, body);
+    else serial_for(static_cast<uint32_t>(todo.size()), 1, body);
+#else
+    (void)types, (void)space, (void)pf;
+#endif
+}
+
+bool BattleCatalog::muzzle_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const {
+    out.clear();
+    const ModelInfo* m = model_info(type, space, false);
+    if (!m) return false;
+    std::string base = upper_str(trim(types_->get_string(type, "Muzzle_Bone_Name")));
+    if (base.empty()) base = "MUZZLEA";  // type +0x580 default
+    float scale = types_->columns().scale_factor[type];
+    if (!(scale > 0.0f)) scale = 1.0f;
+    for (uint32_t i = 0; i < 100; ++i) {
+        const char nn[3] = {static_cast<char>('0' + i / 10), static_cast<char>('0' + i % 10), 0};
+        const int32_t b = m->find(base + "_" + nn);
+        if (b < 0) break;  // the list ends at the first missing name
+        // ALO model space (nose -Y, left +X, up +Z) -> the combat unit-local frame (x forward, y left, z up), as the
+        // hard-point bones (hardpoint_on_model).
+        const auto& p = m->bone_pos[static_cast<size_t>(b)];
+        out.push_back(tactical::Vec3{-p[1] * scale, p[0] * scale, p[2] * scale});
+    }
     return true;
 }
 

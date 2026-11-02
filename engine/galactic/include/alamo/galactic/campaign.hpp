@@ -14,7 +14,8 @@
 //      market hook, then the planet's ground and space queues);
 //   2. the planets' delayed-spawn (hero respawn) lists 0x3fc750 (P4 6.2), planet row order;
 //   3. the store's delayed creations and deferred-delete flush (ObjectStore::update);
-//   4. the fiscal cycle when next_cycle_frame <= f (income, black-market reroll);
+//   4. the fiscal cycle when next_cycle_frame <= f (income, black-market reroll); the first one is on frame 1350 (the
+//      mode's frame-0 cycle runs before the galaxy exists: start() applies its empty bookkeeping);
 //   5. the mode frame advances (T12), unless the galactic pause counter is raised (then nothing runs).
 // Commands are applied by the host before update() (CommandPipeline::begin_tick -> handle_command);
 // AI and Lua call execute() directly (COMMANDS.md section 5).
@@ -1067,9 +1068,12 @@ private:
     int32_t frame_ = 0;
     int32_t pause_ = 0;
     bool linked_battle_pending_ = false;  // REMAINING_GAPS 6.4; hashed in the OI tail
+    // Fiscal-cycle fields. The mode's frame-0 cycle runs before the galaxy is built, so it pays nobody and draws no
+    // black-market value; the first payment is on frame 1350 (Q2 traces: retail F fields 0 / 1350 / 1 at mode frame 0,
+    // first credit change at mode frame 1351) [H]. start() leaves them as that empty cycle does (q2f t02).
     int32_t last_cycle_frame_ = 0;   // +0x368
-    int32_t next_cycle_frame_ = 0;   // +0x36c: no initialiser found -> 0: first payment on frame 0 [L]
-    int32_t cycle_counter_ = 0;      // +0x370
+    int32_t next_cycle_frame_ = 0;   // +0x36c: one fiscal period after start()
+    int32_t cycle_counter_ = 0;      // +0x370: 1 after start()
     PathScratch scratch_;
     std::vector<Derived> derived_;   // per planet row (parallel derivation output)
     bool emit_events_ = false;

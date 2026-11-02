@@ -69,6 +69,7 @@ struct SpecialMotion {
     AnimPlay anim;
     bool airborne = false;      // 0x3a7e30 (jetpack)
     bool turn_left = true;      // jetpack: side of the last turn (end anim 0xD / 0xF)
+    float turn_band_rate = 0.0f;  // jetpack pack +0xe8: yaw rate of the current turn-animation band (0: Max_Rate_Of_Turn)
     float lean = 0.0f;          // bike +0x1f8 (degrees; added to the roll); flying: the roll O +0x84
     uint32_t idle_frames = 0;   // flying: formation idle counter (+0x1dc)
     bool turn_back = false;     // flying +0x240

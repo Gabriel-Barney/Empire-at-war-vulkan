@@ -80,6 +80,9 @@ void test_ring_wrap() {
     const auto snap = snapshot();
     CHECK(snap.size() == 4);
     CHECK(snap.front().frame == 6 && snap.back().frame == 9);
+    const auto newest = snapshot(2);  // the newest two, oldest first
+    CHECK(newest.size() == 2 && newest.front().frame == 8 && newest.back().frame == 9);
+    CHECK(snapshot(0).empty());
     stop();
 }
 

@@ -198,6 +198,9 @@ struct MovementStats {
     uint32_t collision_checks = 0, dynamic_repaths = 0, quota_deferrals = 0, early_arrivals = 0;
     uint32_t blocked_steps = 0, space_fallbacks = 0;
     uint32_t collisions_created = 0, collisions_cancelled = 0, collisions_resolved = 0;  // S7 collision layer
+    // S8 t09 (PR #19 review): jetpack 0x13 frames whose follower step left position and orientation unchanged (the
+    // §3.1.1 drop to 0x16, possibly in the air). Expected 0 for planned flights (the planner makes no zero-length steps).
+    uint32_t jetpack_still_frames = 0;
 };
 
 class MovementSystem {
@@ -209,11 +212,11 @@ public:
     const MovementClassTable& classes() const { return cfg_.classes; }
 
     // ---- land world
-    void set_grid(PassabilityGrid grid);
+    void set_grid(PassabilityGrid grid, const ParallelFor& pf = serial_for);  // pf: the region build (OPT3 t05)
     PassabilityGrid& grid() { return grid_; }  // stamping / unstamping; regions rebuild next tick
     const PassabilityGrid& grid() const { return grid_; }
     const RegionMap& regions() const { return regions_; }
-    void rebuild_regions_if_dirty();
+    void rebuild_regions_if_dirty(const ParallelFor& pf = serial_for);
     using HeightFn = std::function<float(float x, float y)>;  // const and thread-safe
     void set_height_fn(HeightFn fn) { height_ = std::move(fn); }
 
@@ -265,6 +268,9 @@ public:
     void set_anim_length_fn(AnimLengthFn fn) { anim_len_ = std::move(fn); }
     // Land air units: the planning box (set_box = the playable box) and the map floor (0x136650; default none).
     SpaceOccupancy& air() { return air_; }
+    // S7 t15: the planner request (MOVEMENT §2.1 request record) plan_land would build for land air unit `id` at `frame`
+    // (threat hook left null). False when the unit is unknown or not a land air unit.
+    bool air_request(ObjectId id, uint32_t frame, SpaceRequest& out) const;
     void set_map_floor(float z) { map_floor_ = z; }
     // Attack target of a flying unit (strafe re-issue) or fighter (0x1E). False when the unit is unknown.
     bool set_attack_target(ObjectId id, bool has, V2 pos = {}, float z = 0.0f);
@@ -409,6 +415,7 @@ private:
         FighterParams fp;
     };
     bool is_air(const Unit& u) const;           // land Jetpack / Flying / LandBomber
+    void fill_air_request(const Unit& u, uint32_t frame, SpaceRequest& q) const;  // plan_land's request (no threat)
     static void special_idle(Unit& u);          // §4.3-4.7: the idle state of the active special locomotor
     bool swap_locomotor(Unit& u, bool secondary);  // S7 t06 / t14 (0x3a9910)
     // S7 t14 (§3.1.1): JetPack vf74 / vf75 - Alternate_Max_Speed / _Rate_Of_Turn (mode multiplier, speed factor /

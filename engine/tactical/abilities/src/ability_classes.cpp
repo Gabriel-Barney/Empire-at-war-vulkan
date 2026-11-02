@@ -601,34 +601,28 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             return true;
         }
 
-        case C::RemoteBomb: {  // tossed like a grenade; DETONATE_REMOTE_BOMB (65) sets it off (0x280ec0)
+        case C::RemoteBomb: {  // apply 0x719c90 (LOB_SOLVER §3.5); DETONATE_REMOTE_BOMB (65) sets the bombs off (0x280ec0)
             if (s.projectile < 0) return false;
+            if (sp.applied) return false;  // [port] a toss is running (retail would overwrite the pending pack)
             const bool has_target = target != kNoObject && combat_->has_unit(target);
-            if (has_target && !range_ok(o, s, target)) return false;
-            // S8 t04 (LOB_SOLVER §3.5): Bomb_Type needs a lob solution from the unit's position to the target's position +
-            // Ranged_Target_Z_Adjust (0x398440); the toss (0x71a200) then goes through the spawner from the unit
-            // (launch_projectile's grenade branch: its own solve from the launch point, nothing spawned without one).
-            // [port] The garrison container redirect of the range test is not modelled; without a target object the bomb
-            // is still placed at the unit (no command-57 point here).
-            combat::ProjectileLaunch l;
-            if (has_target) {
-                const Vec3 q = combat_->target_point(target);
-                if (!combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, q)) return false;
-                l.from = o.combat_unit ? combat_->target_point(o.id) : me;  // §5.1: no fire bone -> + own z adjust
-                l.target = target;
-                l.toss = true;
-            } else {
-                l.from = me;
-            }
-            l.shooter = o.combat_unit ? o.id : kNoObject;
-            l.owner = o.owner;
-            l.projectile = static_cast<uint32_t>(s.projectile);
-            l.point = me;
-            l.fuse_seconds = 1.0e9f;  // armed until detonated
-            if (combat_->launch_projectile(l, frame) && combat_->projectile_count() > 0)
-                remote_bombs_.push_back(RemoteBomb{o.owner, combat_->projectile(combat_->projectile_count() - 1).serial});
-            start_recharge(o, kPlaceRemoteBomb);
-            event(AbilityEventKind::EffectOn, kPlaceRemoteBomb, o.id, target, frame);
+            // Range tests 0x48d820 / 0x48e100 against the target's garrison host when it is garrisoned (0x39b1a0); the solve
+            // uses the target itself: Bomb_Type needs a lob solution from the unit's position to the target's position +
+            // Ranged_Target_Z_Adjust (0x398440).
+            if (has_target && !range_ok(o, s, remote_bomb_range_target(target))) return false;
+            if (has_target && !combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, combat_->target_point(target)))
+                return false;
+            // S8 t06: face (yaw) [port: the facing is the movement host's, not turned here], stop, movement lock, TARGETING
+            // disabled [port: its targets cleared, as Grenade_Attack]; pending "waiting to stop" with the target. No toss and
+            // no recharge yet (class_update). [port] Without a target object the bomb is placed at the unit at the toss.
+            stop_order(o.id, frame);
+            lock_pair(o, kLockRemoteBomb, true, frame);
+            if (o.combat_unit) combat_->clear_targets(o.id);
+            sp.applied = 1;
+            sp.target = has_target ? target : kNoObject;
+            sp.phase = 0;
+            sp.next = frame;
+            sp.counter = 0;
+            event(AbilityEventKind::EffectOn, kPlaceRemoteBomb, o.id, target, frame);  // the presentation (0x48e4d0)
             return true;
         }
 
@@ -826,6 +820,7 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
             const float anim = static_cast<float>(frame - sp.next) * ct.rate;
             if (sp.phase == 1 && anim >= s.spawn_frame) {
                 sp.phase = 2;  // thrown
+                bool spawned = false;
                 if (alive_unit(sp.target) && s.projectile >= 0) {
                     combat::ProjectileLaunch l;
                     l.shooter = o.combat_unit ? o.id : kNoObject;
@@ -839,13 +834,51 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                     l.point = combat_->position(sp.target);
                     l.fuse_seconds = s.fuse_time > 0.0f ? s.fuse_time : -1.0f;  // [port] no timer: impact only
                     l.toss = true;
-                    combat_->launch_projectile(l, frame);
+                    spawned = combat_->launch_projectile(l, frame);
                 }
-                o.active[kStickyBomb] = 1;
-                start_recharge(o, kStickyBomb);
+                // S8 t06 (LOB_SOLVER §5.2): the throw 0x700a70 returns 0 on a null spawn - the ability is not set active
+                // and no recharge starts; the animation still ends the ability as usual.
+                if (spawned) {
+                    o.active[kStickyBomb] = 1;
+                    start_recharge(o, kStickyBomb);
+                }
             }
             // animation end (no Toss_Anim clip: at the throw): targeting / locomotion resume, unlock
             if (sp.phase == 2 && (ct.count <= 0.0f || anim >= ct.end)) remove_special(o, sp, frame);
+            return;
+        }
+
+        case C::RemoteBomb: {  // update 0x719ee0 (LOB_SOLVER §3.5); phase 0 waiting to stop, 1 Toss_Anim, 2 tossed
+            if (sp.phase == 0) {  // 1. wait while the locomotor still moves, then start the toss
+                if (moving(o)) return;
+                sp.phase = 1;
+                sp.next = frame;
+                if (s.toss_anim.empty()) {  // Toss_Anim -1: toss at once; no animation runs, so the same service ends it
+                    remote_bomb_toss(o, s, sp.target, frame);
+                    sp.phase = 2;
+                    remove_special(o, sp, frame);
+                    return;
+                }
+                // Toss_Anim one-shot (0x3a92f0, speed 1). sp.counter = the play was recorded (clip data): later plays that
+                // replace it are seen as an interruption.
+                play_anim(o, -1, s.toss_anim, 0, false, 1.0f, kAnimIdle, frame);
+                const int32_t tt = anim_type_of(s.toss_anim);
+                sp.counter = (tt >= 0 && o.anim_type == tt && o.anim_start == frame) ? 1 : 0;
+            }
+            // 3. the animation was replaced: the same cleanup, no toss.
+            if (sp.counter != 0 && (o.anim_type != anim_type_of(s.toss_anim) || o.anim_start != sp.next)) {
+                remove_special(o, sp, frame);
+                return;
+            }
+            // 2. animation frame >= Spawn_Frame (n x rate, §4.13; [port] no clip: rate 1): toss once (0x71a200, the
+            // recharge only when a bomb spawned); at its end (no clip: at the toss) unlock and end the ability.
+            const ClipTiming ct = clip_timing(o.id, -1, s.toss_anim);
+            const float anim = static_cast<float>(frame - sp.next) * ct.rate;
+            if (sp.phase == 1 && anim >= s.spawn_frame) {
+                sp.phase = 2;
+                remote_bomb_toss(o, s, sp.target, frame);
+            }
+            if (ct.count > 0.0f ? anim >= ct.end : sp.phase == 2) remove_special(o, sp, frame);
             return;
         }
 
@@ -1211,6 +1244,9 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
         case C::GrenadeAttack:  // vf4 0x700d00: targeting / locomotor re-enabled, unlock (A1_READINGS §28.9)
             lock_pair(o, kLockGrenade, false, frame);
             break;
+        case C::RemoteBomb:  // S8 t06 (0x719ee0 end / interruption): TARGETING and the locomotor enabled, unlock
+            lock_pair(o, kLockRemoteBomb, false, frame);
+            break;
         case C::Earthquake:  // §4.14 remove: FB_Release / FTK_Release one-shot, then the idle loop
         case C::Telekinesis:
             play_anim(o, s.cls == C::Earthquake ? kAnimFbRelease : kAnimFtkRelease, {}, 0, false, 1.0f, kAnimIdle, frame);
@@ -1221,6 +1257,76 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
     sp.phase = 0;
     sp.counter = 0;
     sp.victims.clear();
+}
+
+// ================================================================================================
+// Remote_Bomb toss (S8 t06, docs/re/LOB_SOLVER.md §3.5, §5.1, §5.2)
+// ================================================================================================
+
+ObjectId AbilitySystem::remote_bomb_range_target(ObjectId target) const {
+    // 0x39b1a0 / obj +0x2b0: a garrisoned target is range-tested through its host.
+    if (target == kNoObject || !combat_->has_unit(target) || !(combat_->flags(target) & combat::kUnitGarrisoned)) return target;
+    if (!host_.garrison_holder) return target;  // [port] no host query: the target itself
+    const ObjectId h = host_.garrison_holder(target);
+    return h != kNoObject ? h : target;
+}
+
+Vec3 AbilitySystem::remote_bomb_launch(Obj& o, const SpecialAbilityDesc& s, ObjectId target) {
+    // Spawn_Projectile launch point L (§5.1). A garrisoned thrower whose host lists gun bones: a synced pick
+    // (Get_Int(0, n - 1), one draw) among the bones within 60 degrees (horizontal) of the host -> target direction [M: the
+    // angle measured from the host position]; none within -> the normal muzzle [M].
+    if (o.combat_unit && combat_->has_unit(o.id) && (combat_->flags(o.id) & combat::kUnitGarrisoned) && host_.garrison_holder &&
+        host_.garrison_fire_bones && combat_->has_unit(target)) {
+        const ObjectId holder = host_.garrison_holder(o.id);
+        Vec3 hp;
+        std::vector<Vec3> bones;
+        if (holder != kNoObject && host_.garrison_fire_bones(holder, hp, bones) && !bones.empty()) {
+            const Vec3 tp = combat_->position(target);
+            const float tx = tp.x - hp.x, ty = tp.y - hp.y;
+            const float tl = dmath::sqrt(tx * tx + ty * ty);
+            std::vector<Vec3> within;
+            for (const Vec3& b : bones) {
+                const float bx = b.x - hp.x, by = b.y - hp.y;
+                const float bl = dmath::sqrt(bx * bx + by * by);
+                // cos(angle) >= cos 60 = 0.5; a bone (or target) on the host's axis counts as within [port]
+                if (!(bl > 0.0f) || !(tl > 0.0f) || (bx * tx + by * ty) >= 0.5f * (bl * tl)) within.push_back(b);
+            }
+            if (!within.empty()) return within[static_cast<size_t>(draw_int(0, static_cast<int32_t>(within.size()) - 1))];
+        }
+    }
+    // The request's bone: Spawn_Bone on the unit's model (0x12d2a0); no such bone -> the shooter's position + its own
+    // Ranged_Target_Z_Adjust (0x398440).
+    if (!s.spawn_bone.empty() && host_.bone_position) {
+        Vec3 p;
+        if (host_.bone_position(o.id, s.spawn_bone, p) > 0) return p;
+    }
+    return o.combat_unit ? combat_->target_point(o.id) : position(o);
+}
+
+bool AbilitySystem::remote_bomb_toss(Obj& o, const SpecialAbilityDesc& s, ObjectId target, uint32_t frame) {
+    // 0x71a200: Bomb_Type through the spawner (shooter = the unit, target = the target object, Spawn_Bone). Only when a
+    // bomb spawned does the PLACE_REMOTE_BOMB recharge start (§5.2: a null spawn starts none and is not retried). The bomb
+    // gets no BOMB timer (§6.4): only DETONATE_REMOTE_BOMB sets it off. [M] A target that died before the toss: no spawn.
+    if (s.projectile < 0) return false;
+    combat::ProjectileLaunch l;
+    l.shooter = o.combat_unit ? o.id : kNoObject;
+    l.owner = o.owner;
+    l.projectile = static_cast<uint32_t>(s.projectile);
+    if (target != kNoObject) {
+        if (!alive_unit(target)) return false;
+        l.from = remote_bomb_launch(o, s, target);
+        l.target = target;
+        l.point = combat_->position(target);
+        l.toss = true;  // fuse_seconds stays < 0: never armed
+    } else {  // [port] no target object (no command-57 point here): placed at the unit, armed until detonated
+        l.from = position(o);
+        l.point = l.from;
+        l.fuse_seconds = 1.0e9f;
+    }
+    if (!combat_->launch_projectile(l, frame) || combat_->projectile_count() == 0) return false;
+    remote_bombs_.push_back(RemoteBomb{o.owner, combat_->projectile(combat_->projectile_count() - 1).serial});
+    start_recharge(o, kPlaceRemoteBomb);
+    return true;
 }
 
 // ================================================================================================

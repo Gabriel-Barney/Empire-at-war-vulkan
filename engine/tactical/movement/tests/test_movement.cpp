@@ -2402,6 +2402,18 @@ static void test_land_obstacle_footprint() {
         "<OverridePassability>RebelWall</OverridePassability></GroundStructure>\n"
         "<GroundStructure Name=\"Modelled\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Scale_Factor>2</Scale_Factor></GroundStructure>\n"
         "<GroundStructure Name=\"Bare\"><LandBehavior>LAND_OBSTACLE</LandBehavior></GroundStructure>\n"
+        // S8 t09: a build pad (proxy target), a barracks stamped through it, a type without a land model, fine-tune off
+        "<GroundStructure Name=\"Pad\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height><Obstacle_X_Offset>-20</Obstacle_X_Offset><Obstacle_Y_Offset>-20</Obstacle_Y_Offset>"
+        "<Scale_Factor>3</Scale_Factor></GroundStructure>\n"
+        "<GroundStructure Name=\"Barracks\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>200</Obstacle_Width>"
+        "<Obstacle_Height>200</Obstacle_Height><Obstacle_X_Offset>-100</Obstacle_X_Offset><Obstacle_Y_Offset>-100</Obstacle_Y_Offset>"
+        "<Obstacle_Proxy_Type>Pad</Obstacle_Proxy_Type><OverridePassability>RebelWall</OverridePassability>"
+        "<Scale_Factor>1.5</Scale_Factor></GroundStructure>\n"
+        "<GroundStructure Name=\"NoModel\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height></GroundStructure>\n"
+        "<GroundStructure Name=\"FineOff\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability></GroundStructure>\n"
         "</R>");
     DirectoryProvider dp(path_to_utf8(root));
     objects::ObjectTypeDatabase raw;
@@ -2453,8 +2465,81 @@ static void test_land_obstacle_footprint() {
     g.hash(hg);
     h.hash(hh);
     CHECK(hg.digest() == hh.digest());  // the placement's stamp handed to its object = the object stamped at its spot
+
+    // S8 t09 (MOVEMENT §1.3): Fine_Tune_Occupied_Passability on every stamp (one stamper for placements and run-time
+    // objects), Obstacle_Proxy_Type, and the "fine-tune, no proxy, no model: not stamped" rule.
+    const uint32_t pad = types.resolve_name("Pad"), barracks = types.resolve_name("Barracks"), nomodel = types.resolve_name("NoModel"),
+                   fineoff = types.resolve_name("FineOff");
+    CHECK(pad < types.size() && barracks < types.size() && nomodel < types.size() && fineoff < types.size());
+    if (pad >= types.size() || barracks >= types.size() || nomodel >= types.size() || fineoff >= types.size()) return;
+    CHECK(land_obstacle_footprint_type(types, barracks) == pad && land_obstacle_footprint_type(types, pad) == pad &&
+          land_obstacle_footprint_type(types, modelled) == modelled);
+    bool pad_has_model = true;
+    uint32_t ray_type = 0xFFFFFFFFu;
+    float ray_scale = 0.0f;
+    uint32_t rays = 0;
+    MapStampHooks ft = hooks;
+    ft.ray_model = [&](uint32_t t) {
+        if (t == modelled || t == fineoff) return StampRayModel::Model;
+        if (t == pad) return pad_has_model ? StampRayModel::Model : StampRayModel::None;
+        if (t == nomodel) return StampRayModel::None;
+        return StampRayModel::Unknown;
+    };
+    // Fake collision mesh: the half of the model on the -x side of its origin (world x < object x at yaw 0).
+    ft.mesh_ray_hit = [&](uint32_t t, const StampPose& pose, V2 xy) {
+        ray_type = t;
+        ray_scale = pose.scale;
+        ++rays;
+        return xy.x < pose.position.x;
+    };
+    // A run-time stamp of the modelled type is trimmed by the ray.
+    ObstacleFootprint full, trimmed;
+    CHECK(land_obstacle_footprint(types, modelled, {300.0f, 300.0f}, 0.0f, 0.0f, &hooks, full) && !full.fine_tune);
+    CHECK(land_obstacle_footprint(types, modelled, {300.0f, 300.0f}, 0.0f, 0.0f, &ft, trimmed) && trimmed.fine_tune);
+    PassabilityGrid rt;
+    rt.init(32, 32);
+    const uint32_t n_full = rt.stamp(50, full), n_trim = rt.stamp(51, trimmed);
+    CHECK(rays > 0 && ray_type == modelled && ray_scale == 2.0f);
+    CHECK(n_trim > 0 && n_trim < n_full);
+    for (uint32_t c : rt.stamp_cells(51)) CHECK(static_cast<int32_t>(c % 32u) <= world_to_cell(300.0f));
+    // The same trimmed cells for a map placement there (stamp_map_obstacles uses the same stamper and hooks).
+    {
+        terrain::MapData m2;
+        terrain::ObjectPlacement o;
+        o.type_crc = types.raw().types().name_crc[modelled];
+        o.position[0] = 300.0f, o.position[1] = 300.0f;
+        m2.objects.push_back(o);
+        o.type_crc = types.raw().types().name_crc[nomodel];  // fine-tune, no proxy, no model: not stamped
+        o.position[0] = 100.0f, o.position[1] = 500.0f;
+        m2.objects.push_back(o);
+        PassabilityGrid pg;
+        pg.init(32, 32);
+        CHECK(stamp_map_obstacles(pg, m2, types, &ft) == 1 && !pg.stamped(map_stamp_id(1)));
+        const std::span<const uint32_t> pc = pg.stamp_cells(map_stamp_id(0)), rc = rt.stamp_cells(51);
+        CHECK(std::equal(pc.begin(), pc.end(), rc.begin(), rc.end()));
+    }
+    CHECK(!land_obstacle_footprint(types, nomodel, {100.0f, 500.0f}, 0.0f, 0.0f, &ft, fp));
+    CHECK(land_obstacle_footprint(types, nomodel, {100.0f, 500.0f}, 0.0f, 0.0f, &hooks, fp) && !fp.fine_tune);  // no ray hook: Unknown
+    CHECK(land_obstacle_footprint(types, fineoff, {300.0f, 300.0f}, 0.0f, 0.0f, &ft, fp) && !fp.fine_tune);
+    // Proxy: the pad's sizes / offsets / scale and fine-tune flag, the barracks' own bits, the ray against the pad's model.
+    rays = 0;
+    CHECK(land_obstacle_footprint(types, barracks, {400.0f, 400.0f}, 0.0f, 0.0f, &ft, fp));
+    CHECK(fp.width == 40.0f && fp.height == 40.0f && fp.x_offset == -20.0f && fp.y_offset == -20.0f && fp.bits == kPassRebelWall &&
+          fp.fine_tune);
+    PassabilityGrid pr;
+    pr.init(32, 32);
+    const uint32_t n_proxy = pr.stamp(60, fp);
+    CHECK(n_proxy > 0 && rays > 0 && ray_type == pad && ray_scale == 3.0f);
+    pad_has_model = false;  // the proxy's model has no render object: no ray, every sample stamps
+    rays = 0;
+    CHECK(land_obstacle_footprint(types, barracks, {400.0f, 400.0f}, 0.0f, 0.0f, &ft, fp) && !fp.fine_tune);
+    CHECK(pr.stamp(60, fp) > n_proxy && rays == 0);
+    // A grid with no cells still records the stamp (header promise; it was dropped before).
+    PassabilityGrid empty;
+    CHECK(empty.stamp(7, fp) == 0 && empty.stamped(7) && empty.stamp_cells(7).empty() && empty.stamp_secondary(7, fp) == 0 &&
+          empty.secondary_stamped(7) && empty.unstamp(7) && !empty.stamped(7));
     remove_all_long(root, ec);
-    std::printf("land obstacle footprint: object footprint = placement stamp ok\n");
+    std::printf("land obstacle footprint: object footprint = placement stamp, fine-tune / proxy ok\n");
 }
 #endif
 

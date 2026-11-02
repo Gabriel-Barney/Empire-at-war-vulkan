@@ -714,7 +714,7 @@ the movement / avoidance code keeps hulls apart (SPACE_AVOIDANCE) [M: not re-tra
 
 **`Update_Weapon`** (0x387400), weapon types 5–10 only, once per frame per hardpoint:
 1. Return early when weapons are globally disabled, the hardpoint is disabled (+0x6e) or destroyed, or an owner
-   state gate applies.
+   state gate applies (deploy transition; after the cooldown, `Does_Weapon_State_Allow_Firing_At` `0x384850`: §3.1.1).
 2. Subtract the elapsed frames from the cooldown. Return while it is still above 0.
 3. A manual-target hardpoint drops its manual target (+0xc0) 300 frames after the weapon state stops allowing
    fire [M].
@@ -801,6 +801,82 @@ list 8):
 2. Apply W only when W < 1.
 3. pulses = `Projectile_Fire_Pulse_Count`.
 4. frames = trunc(frames / F) and pulses = trunc(F × pulses), with **no** +0.5 rounding [H].
+
+#### 3.1.1 Units with both weapon hardpoints and `Projectile_Types` (S8 t05, 2026-11-02) [H unless tagged]
+**Rule: the two weapon sources are independent, and the XML flags decide which one may fire in which state.**
+Nothing in `WeaponBehaviorClass` reads the hardpoints: not the service (vf6 `0x54d090`), the attach (vf7 `0x54ab00`),
+the initialise (vf9 `0x54c210`), the recharge reset (`0x54cef0`) or the fire gate (`0x54c910`). The hardpoints fire
+through the object update (`0x3a76b0` → `Update_Weapon` `0x387400`), which does not read `Projectile_Types`.
+
+**When the unit's own weapon exists:** the object has the WEAPON behaviour (id 0x0A, from `Behavior` or the mode list
+`LandBehavior` / `SpaceBehavior`) **and** `Projectile_Types` is not empty (vf6 returns at once when the count at type
++0xc48 is < 1). Weapon hardpoints play no part. A type with `Projectile_Types` but no WEAPON behaviour never fires
+that list (it can still be read by abilities and Lua, e.g. `Get_Current_Projectile_Type`).
+
+**Own-weapon gate** (`0x54c910`, checked every service before the shot), in order:
+1. the behaviour is enabled (`0x4c3700`), the global weapons switch `0x140a43a88` is on, obj +0x3a0 & 0x10 is clear;
+2. **no deploy transition**: for a `Deploys` type with a locomotor, the locomotor's vf +0x130 (Walk `0x61df60`: state
+   0x18 Deploying) and vf +0x128 (Walk `0x61dfd0`: state 0x1A Undeploying) are false (`0x39a400`, `0x39b2a0`);
+3. `Is_Deployed_Or_Deploying` (`0x39a390`, S9_DEATH_CLONE_SHIELDS §1.2) → `Fire_Weapon_When_Deployed` (type +0xae),
+   otherwise `Fire_Weapon_When_Undeployed` (+0xaf), must be set;
+4. unit ability ROCKET_ATTACK (11) active (`0x39b950(obj, 11)`) → `Fire_Weapon_When_In_Rocket_Attack_Mode` (+0xb0),
+   otherwise `Fire_Weapon_When_In_Normal_Attack_Mode` (+0xb1), must be set;
+5. `0x397f60(obj, 1)`: each active unit-ability mode in slots 0 / 1 must allow it (`0x565970`) [M on the meaning];
+6. unless type byte +0x8a is set, no fire in locomotor state 0x1C; a unit whose current locomotor answers vf +0x240
+   does not fire in state 0x16 (Walk Stopped) [M on the purpose];
+7. unless a fire-at-position order is pending (TD +0x3c / +0x3d), the targeting state TD +0x18 must be 4 [M: the
+   "attacking" state of slot 31].
+All four `Fire_Weapon_When_*` flags default to true (OBJECT_TYPES §4.6).
+
+**Hardpoint gate** (`HardPointClass::Does_Weapon_State_Allow_Firing_At`, `0x384850`; the name is in its error
+string), called by `Update_Weapon` after the cooldown with the primary target (+0x40):
+1. a target that is dead, delete-pending or a death clone (obj +0x3a0 & 0x42, or bit 0x80) is refused;
+2. weapon types 5–10 only; a destroyable hardpoint with health ≤ 0, or a disabled one (+0x6e), is refused;
+3. a target matching `Fire_Category_Restrictions` (`0x540140`) is refused [M on the arguments];
+4. for each of the owner's unit-ability slots 0 / 1 whose mode m (1…0x4c) is active: the hardpoint type byte
+   **+0x384 + m** must be set (FoC tags: `Fire_When_In_Defend_Mode` +0x385, `Fire_When_In_Turbo_Mode` +0x38d,
+   `Fire_When_In_Power_To_Weapons_Mode` +0x3a1), and `0x397f60(owner, 1)` must pass;
+5. `Fire_When_Deployed` (+0x3d1) clear and the owner deployed or deploying → refused; `Fire_When_Undeployed`
+   (+0x3d2) clear and the owner not → refused;
+6. `Fire_When_In_Normal_Attack_Mode` (+0x3d4) clear and ROCKET_ATTACK not active → refused;
+   `Fire_When_In_Rocket_Attack_Mode` (+0x3d3) clear and ROCKET_ATTACK active → refused.
+
+The bytes +0x3d1…+0x3d4 default to true (§5.1). `Update_Weapon` itself also returns early in the deploy transitions
+(`0x39a400` / `0x39b2a0`, as step 2 above). **When the gate refuses, `Update_Weapon` returns: no `Fire_At` and no
+opportunity fire that frame.** With no primary target the gate runs with a null target (steps 4–6 only).
+
+**Targets.** Both sources use the owner's current target, targeting data pack TD (obj +0xf0) +8, chosen by the
+unit's TARGETING behaviour with the unit's own range (§2.2: `Targeting_Max_Attack_Distance`, or the lob reach for a
+grenade weapon, LOB_SOLVER §4). The owner pushes it to every hardpoint (`HP_Set_Target`, §2.6). The own weapon fires
+only at that target (or at a fire-at-position point); a hardpoint that cannot shoot it may opportunity-fire at its own
+scanned target (§2.6), subject to the gate above.
+
+**Cooldowns.** Nothing is shared. The own weapon keeps its recharge in TD +0x24 and its pulses in TD +0x28 (first
+delay at attach: one synced `Get_Int(0, int(FPS × Projectile_Fire_Recharge_Seconds))` in vf9 `0x54c210`; reset as in
+"Non-hardpoint weapons" above). Each hardpoint keeps its own +0x58 / +0x5c (§3.1). A shot from one source does not
+delay the other. In a frame the WEAPON behaviour runs in the behaviour pass, before the hardpoint updates
+(ABILITIES_HARDPOINTS §6.2).
+
+**FoC / EaW units with both sources** (variant-resolved scan of the vanilla XML; EaW has the T4B and SPMAT rows):
+
+| Unit | Own weapon (`Projectile_Types`) fires when | Weapon hardpoints fire when |
+|---|---|---|
+| `SPMAT_Walker`, `SPMAT_Walker_Captured` | deployed (`Proj_Ground_SPMAT_Grenade`: FWW_Deployed Yes, _Undeployed No) | undeployed (`HP_SPMAT_00`–`03`, `Proj_Blaster_Cannon_Green`, range 150, not vs Air / Structure) |
+| `T4B_Tank`, `T4B_Tank_Captured`, `E3_T4B_Tank` | normal mode (`Proj_Ground_Laser_Cannon_Red_T4B`: Rocket No, Normal Yes) | ROCKET_ATTACK mode (`HP_T4B_Tank_03`–`05`, `Proj_T4B_Missile`: Rocket Yes, Normal No) |
+| `Dark_Trooper_PhaseIII` | undeployed (`Proj_Ground_Laser_Cannon_Red_DT3`: Deployed No, Undeployed Yes) | deployed (`HP_DarkTrooper_P3_00`–`05`, `Proj_Dark_Trooper_Missile`) |
+| `Destroyer_Droid`, `Destroyer_Droid_Attack` | deployed and normal mode (`Proj_Destroyer_Droid_Blaster_Cannon`) | deployed and ROCKET_ATTACK mode (`HP_Destroyer_Droid_Ion_00`–`02`, `Proj_Destroyer_Droid_Ion_Cannon`, not vs Air) |
+| cinematic variants `FIN_SPMAT`, `FIN_T4B_Tank`, `CIN_T-4B_Vehicles` | as their parents | as their parents |
+
+So in every vanilla case the flags make the two sources **alternate** (deploy state or ROCKET_ATTACK mode picks one);
+they never fire together. Not in the table: `SPMAT_Walker_Death_Clone`, `CIN_Corvette_fast` and `Cin_Y-Wing_Intro` list
+both but have no WEAPON behaviour (hardpoints only); `SPMAT_Walker_Telekinesis_Death_Clone` lists WEAPON but, as a
+death clone, loses it (S9_DEATH_CLONE_SHIELDS §1.6). 22 more FoC types list `Projectile_Types` with neither WEAPON nor
+weapon hardpoints (the AT-AT / AT-ST / MPTL / Rancor death clones, `Boba_Fett_NoStealth`, …): they have no weapon.
+
+**Port (S8 t05):** `BattleCatalog::unit` (engine/apps/sim/src/battle_catalog.cpp) drops `Projectile_Types` when the unit
+has a weapon hardpoint. That rule is **wrong**: it should key on the WEAPON behaviour, not on hardpoints. The
+combat system already runs both sources side by side (`CombatSystem::update_weapons`), but implements neither gate
+above, so with the catalog fixed it would also need the deploy / rocket-mode gates to keep the sources alternating.
 
 The behaviour is attached by the type's `WEAPON` behaviour (0x0A) and is serviced like any behaviour, besides the
 hard points [M: no code path that turns it off when weapon hard points exist was found]. So a type that lists both

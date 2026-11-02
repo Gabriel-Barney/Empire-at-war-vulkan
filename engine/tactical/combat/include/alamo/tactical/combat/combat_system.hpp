@@ -165,6 +165,9 @@ struct ProjectileDesc {
     float grenade_gravity = 1.05f;
     bool can_lob_slower = false;           // Projectile_Grenade_Can_Lob_Slower (+0x4a): the 0.8 speed steps
     bool sticks_on_collision = false;      // Projectile_Grenade_Sticks_On_Collision (+0x4b): attach / rest, no damage
+    // S8 t06: Friendly_Damage_Amount (+0x23ec). > 0: the sweep also tests the own player (TACTICAL_COMBAT §3.4 step 3),
+    // and DETONATE_REMOTE_BOMB detonates such bombs, damaging an own parent by it (LOB_SOLVER §3.5).
+    float friendly_damage_amount = 0.0f;
     float max_flight_distance = 0.0f;      // Projectile_Max_Flight_Distance
     float max_lifetime = 0.0f;             // Projectile_Max_Lifetime (seconds)
     float blast_area_damage = 0.0f;        // Projectile_Blast_Area_Damage
@@ -293,6 +296,13 @@ struct HardpointDesc {
     uint32_t special_ability_name_crc = 0;
     // FIGHTER_BAY (3) hardpoints: Fighter_Bay_Flyout_Distance (the hangar module's initial move order). Not read by combat.
     float fighter_bay_flyout_distance = 0.0f;
+    // S8 t08 (TACTICAL_COMBAT §3.1.1, Does_Weapon_State_Allow_Firing_At 0x384850 steps 4-6): Fire_When_Deployed /
+    // _Undeployed / _In_Rocket_Attack_Mode / _In_Normal_Attack_Mode (type bytes +0x3d1..+0x3d4, ctor default true), and
+    // the per-mode bytes +0x384 + m (Fire_When_In_<Mode>_Mode, m = UnitAbilityType 1..0x4c) as the list of the modes whose
+    // byte is No [M: ctor default true].
+    bool fire_when_deployed = true, fire_when_undeployed = true;
+    bool fire_when_rocket_attack = true, fire_when_normal_attack = true;
+    std::vector<uint8_t> no_fire_modes;
 };
 
 // Death_Clone entry (S9_DEATH_CLONE_SHIELDS.md §1.4): key -> clone object type (host TypeIndex). The key is the
@@ -349,9 +359,24 @@ struct UnitDesc {
     // list order; type +0xc48). The object's weapon index obj +0x324 picks the entry the weapon fires (L1_S4_REMAINING
     // §2.1 Get_Current_Projectile_Type, TACTICAL_GAPS §3.1 slot 44). Empty: `weapon_projectile` only (index ignored).
     std::vector<int32_t> weapon_projectiles;
+    // S8 t08: Projectile_Types[0] (ProjectileDesc index, -1 none) whether or not the type has the WEAPON behaviour - not
+    // fired by combat; read by the host's special weapons (SPECIAL_WEAPON / lobbing superweapons / TSW take their shot
+    // from the list without a WEAPON behaviour).
+    int32_t listed_projectile = -1;
     float weapon_recharge = 0.0f;
     int32_t weapon_pulse_count = 1;
     float weapon_pulse_delay = 0.0f;
+    // S8 t08 (TACTICAL_COMBAT §3.1.1, own-weapon gate 0x54c910): Fire_Weapon_When_Deployed / _Undeployed /
+    // _In_Rocket_Attack_Mode / _In_Normal_Attack_Mode (type +0xae..+0xb1, default true).
+    bool fire_weapon_when_deployed = true, fire_weapon_when_undeployed = true;
+    bool fire_weapon_when_rocket_attack = true, fire_weapon_when_normal_attack = true;
+    // S8 t06 B4 (LOB_SOLVER §5.1): the WeaponBehavior fire bones <Muzzle_Bone_Name>_00, _01, ... (default MUZZLEA_NN) as
+    // rest-pose offsets in unit-local space (x forward, y left, z up; turned by the unit's facing), list order. The host
+    // fills them from the unit's model (battle host: BattleCatalog::muzzle_bones). `muzzle_model` false = no model data:
+    // [port] the shot leaves from the unit's position (grenades: + its own Ranged_Target_Z_Adjust) as before. Model known
+    // and no bone: the weapon never fires.
+    bool muzzle_model = false;
+    std::vector<Vec3> muzzle_bones;
     std::array<int32_t, 2> abilities{-1, -1};  // first two Unit_Abilities_Data slots
     uint8_t hit_particle_count = 0, shield_hit_particle_count = 0;  // list sizes (synced pick draws)
     // ---- S9 (ABILITIES_HARDPOINTS.md 1.3, 4.3, 4.7-4.10) ----
@@ -597,9 +622,14 @@ enum UnitFlag : uint32_t {
     kUnitInfected = 1u << 12,
     // S7 t14 (MOVEMENT §3.1.1 step 6): TARGETING / WEAPON / SPECIAL_WEAPON suspended (Disable, suspend count +1) while
     // the unit is on its jetpack (the host mirrors MovementSystem's UnitView::secondary_locomotor). The unit neither
-    // acquires targets nor fires (its weapons do not count down); orders and targets are kept. [port] a flag stands for
-    // the counter: the swap disables once (never twice) and the swap back enables (count - 1, floor 0).
+    // acquires targets nor fires; orders and targets are kept. S7 t15 A2: the WeaponBehavior recharge keeps elapsing
+    // (the first service after the suspension subtracts every frame since the last one). [port] a flag stands for the
+    // counter: the swap disables once (never twice) and the swap back enables (count - 1, floor 0).
     kUnitWeaponsSuspended = 1u << 13,
+    // S8 t08 (TACTICAL_COMBAT §3.1.1): the walk locomotor is in a deploy transition (state 0x18 Deploying or 0x1A
+    // Undeploying, 0x39a400 / 0x39b2a0) - a Deploys unit with a locomotor neither fires its own weapon nor counts its
+    // weapon hardpoints down. Set by the host [port: the port's DEPLOY is instant, so nothing sets it yet].
+    kUnitDeployTransition = 1u << 14,
 };
 
 struct UnitSpawn {
@@ -904,6 +934,9 @@ public:
     // §2.4.6 ground points). Read in the serial commit phase only; S8 t04: also the land grenade ground test (LOB_SOLVER
     // §6.2). Unset [port]: flat ground at z 0, no box.
     void set_rocket_terrain(RocketTerrain t) { rocket_terrain_ = std::move(t); }
+    // S8 t06: the host's tree set for detonations it triggers between ticks (DETONATE_REMOTE_BOMB). Set at setup so a
+    // detonation before the first tick after a load queries the same trees as an uninterrupted run; tick() also sets it.
+    void set_trees(const TreeSet* trees) { last_trees_ = trees; }
     const RocketTerrain& rocket_terrain() const { return rocket_terrain_; }
     // Spline-rocket state of projectile i (serial order); false when it is not a spline rocket.
     bool rocket(size_t i, RocketView& out) const;
@@ -1160,6 +1193,12 @@ private:
         ObjectId auto_target = kNoObject, ordered_target = kNoObject;
         float target_score = 0.0f;
         int32_t weapon_cooldown = 0, weapon_pulses = 0;
+        // S7 t15 A2 (MOVEMENT §3.1.1, pack +0x2c): the frame of the last WeaponBehavior service (0xFFFFFFFF: none yet - the
+        // first service subtracts one frame [port]). Saved; not hashed (its effect shows in weapon_cooldown).
+        uint32_t weapon_last = 0xFFFFFFFFu;
+        // S8 t06 B4 (LOB_SOLVER §5.1, pack +0xf0): the fire-bone cycle index (round robin per shot). Hashed in
+        // hash_extended when non-zero.
+        uint32_t weapon_bone = 0;
         std::array<uint8_t, 2> ability_active{0, 0};
         uint32_t hp_begin = 0, hp_count = 0;
         uint8_t ever_hit = 0;
@@ -1241,8 +1280,8 @@ private:
         uint8_t ever_jammed = 0;
         // S8 t04 (LOB_SOLVER §5.3 / §6): grenade flight (category 3). `lob` set: N(t) = launch + speed t lob_dir -
         // 1/2 gravity t^2 z with t = frame - spawn_frame (the pack's launch point, InitialFacing forward and G). A sticky
-        // grenade that hit something stops: `stuck`, attached to `stuck_to` at `stuck_offset` (world, from its position)
-        // or resting (kNoObject). Hashed in hash_extended for grenades only.
+        // grenade that hit something stops: `stuck`, attached to `stuck_to` at `stuck_offset` (S8 t06: in the parent's
+        // frame, turned with its facing) or resting (kNoObject). Hashed in hash_extended for grenades only.
         uint8_t lob = 0;
         uint8_t stuck = 0;
         float gravity = 0.0f;
@@ -1342,7 +1381,9 @@ private:
     Vec3 lob_target_point(const Unit& t) const;
     // §6 grenade flight: the step's end point N (from the closed form) and the land ground test of P -> N.
     Vec3 lob_next(const Projectile& p, uint32_t frame) const;
-    bool ground_hit(Vec3 a, Vec3 b, float& t) const;
+    bool ground_hit(Vec3 a, Vec3 b, GroundHit& out) const;  // S8 t06: 0x135840 (rocket.hpp ground_segment)
+    Vec3 stuck_local(const Unit& v, Vec3 world) const;     // S8 t06: world point -> v's frame (inverse local_to_world)
+    uint32_t bomb_frame(float seconds, uint32_t armed_frame) const;  // S8 t06: BOMB arm 0x58f030 detonation frame
     void lob_step(uint32_t i, uint32_t frame, SimRng& rng);
     // OI tactical (team targeting, TACTICAL_COMBAT 2.3 / 2.4): the unit's squad "container" - the unit whose id is
     // its team id when that is a combat unit, else the team's team_leader member; nullptr when none / itself.
@@ -1374,6 +1415,13 @@ private:
     void update_weapons(Unit& u, uint32_t frame, SimRng& rng);
     bool fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng& rng);
     void fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng);
+    // S8 t08 (TACTICAL_COMBAT §3.1.1): Is_Deployed_Or_Deploying (0x39a390) and the deploy transition (0x39a400 / 0x39b2a0),
+    // both for a Deploys type with a locomotor only; the own-weapon gate 0x54c910 and the hardpoint gate 0x384850 (`t`:
+    // the primary target, nullptr = none - steps 4-6 only).
+    bool deployed_or_deploying(const Unit& u) const;
+    bool deploy_transition(const Unit& u) const;
+    bool unit_weapon_allowed(const Unit& u) const;
+    bool hp_state_allows(const Unit& u, const Hardpoint& h, const Unit* t) const;
     bool opportunity_allowed(const Unit& u, const HardpointDesc& hd, bool idle) const;
     bool opportunity_fire(Unit& u, Hardpoint& h, uint32_t frame, SimRng& rng);
     bool opportunity_valid(const Unit& u, const Hardpoint& h, const Unit& t) const;
@@ -1483,6 +1531,8 @@ private:
     CombatStats stats_;
     // per-tick parameters for the parallel phases (lambdas capture `this` only)
     const TreeSet* trees_ = nullptr;
+    // S8 t06: the host's tree set (set_trees, and each tick), for detonations the host triggers between ticks
+    const TreeSet* last_trees_ = nullptr;
     std::mutex ctx_mutex_;
     std::vector<std::unique_ptr<QueryContext>> ctx_all_;
     std::vector<QueryContext*> ctx_free_;

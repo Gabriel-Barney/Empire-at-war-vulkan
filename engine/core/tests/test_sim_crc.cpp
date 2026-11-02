@@ -51,6 +51,40 @@ static void test_hasher() {
     const uint8_t raw[] = {1, 2, 3, 4, 0x00, 0x00, 0x80, 0x3F, 0xEF, 0xBE};
     t2.bytes(raw, sizeof raw);
     CHECK(t1.digest() == t2.digest());
+    // OPT3 t05: the inline typed feeds (pending-word fast path) equal the byte stream fed one byte at a time, for every
+    // alignment of every width, mixed with bulk bytes() calls.
+    {
+        alamo::StateHasher typed, bytewise;
+        std::vector<uint8_t> blob(40);
+        for (size_t i = 0; i < blob.size(); ++i) blob[i] = static_cast<uint8_t>(0xA5u ^ (i * 29u));
+        uint64_t x = 0x9E3779B97F4A7C15ull;
+        auto feed_bytewise = [&](uint64_t v, uint32_t n) {
+            for (uint32_t i = 0; i < n; ++i) {
+                const auto b = static_cast<uint8_t>((v >> (8 * i)) & 0xFFu);
+                bytewise.bytes(&b, 1);
+            }
+        };
+        bool same = true;
+        for (uint32_t op = 0; op < 4000; ++op) {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            switch (x % 6) {
+            case 0: typed.u8(static_cast<uint8_t>(x >> 8)); feed_bytewise(static_cast<uint8_t>(x >> 8), 1); break;
+            case 1: typed.u16(static_cast<uint16_t>(x >> 8)); feed_bytewise(static_cast<uint16_t>(x >> 8), 2); break;
+            case 2: typed.u32(static_cast<uint32_t>(x >> 8)); feed_bytewise(static_cast<uint32_t>(x >> 8), 4); break;
+            case 3: typed.u64(x * 3u); feed_bytewise(x * 3u, 8); break;
+            case 4: typed.f32(static_cast<float>(x % 1000u) * 0.5f); feed_bytewise(std::bit_cast<uint32_t>(static_cast<float>(x % 1000u) * 0.5f), 4); break;
+            default: {
+                const size_t n = static_cast<size_t>((x >> 20) % blob.size());
+                typed.bytes(blob.data(), n);
+                for (size_t i = 0; i < n; ++i) bytewise.bytes(&blob[i], 1);
+            }
+            }
+            if (typed.digest() != bytewise.digest() || typed.length() != bytewise.length()) same = false;
+        }
+        CHECK(same);
+    }
     // Spans of arrays equal element-wise feeds.
     const std::vector<float> fv = {1.5f, -0.0f, 3.25f};
     alamo::StateHasher s1, s2;
