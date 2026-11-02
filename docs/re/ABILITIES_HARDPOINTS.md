@@ -477,6 +477,20 @@ text: LOB_SOLVER §3.5, "MARKER removal" and "Facing at apply".
 - **Ground marker.** A `Dummy_Barrage_Target` (command 57) target is killed by the toss 0x71a200 after the spawn
   attempt, even when nothing spawned. It has no lifetime of its own, so it **stays** when the toss never happens.
   [M] Whether the GUI issues command 57 for Remote_Bomb (type 64 is in the Lua object-target list above).
+- **Garrisoned thrower (s78f t03, 2026-11-03)** [H]. The Remote_Bomb toss goes through `Spawn_Projectile`, so a
+  thrower inside a host with garrison guns launches from the host bone chosen by the same rule as a garrisoned
+  WeaponBehavior shot (LOB_SOLVER §5.1 "Garrison pick inputs"):
+  - candidate = the bone's **x-axis yaw** (column 0 of its world matrix, animated pose) within 60° of the yaw from
+    the host position to the target's raw position;
+  - one synced `Get_Int(0, n − 1)` when n ≥ 2, none when n = 1;
+  - the host's current damage ALT selects the bone row;
+  - the pick happens before the lob solve, so a toss with no arc has already spent the draw (LOB_SOLVER §5.2 "Order
+    and draws"); the toss returns false and is not retried (§3.5).
+
+  The port's abilities hook `garrison_fire_bones` returns bone positions only, and `remote_bomb_launch` tests the
+  angle of the bone's **position** around the host. It should get each bone's world position **and** x-axis yaw
+  (or matrix) and test the yaw, as combat's `garrison_muzzle` does. Vanilla bunkers have no animation, so rest pose
+  × host transform is exact.
 - **DEPLOY (2) "active" (§2.7 item 4).** It is `0x39a390`: the locomotor pack's pending flag +0x2b3, or Walk
   state 0x19 (Deployed) only, not 0x18 Deploying (TACTICAL_COMBAT §3.1.1 "Gate details").
 - **Locomotor swaps and hardpoints (S8 t12).** The JET_PACK / locomotor swap (`0x3a9910`, MOVEMENT §3.1.1)
