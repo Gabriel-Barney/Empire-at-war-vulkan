@@ -7,6 +7,7 @@
 //   * idle-fidget RNG stream (variant [1, n-1], timer 210..450) against an independent replay of the draws;
 //   * poses: bind fallback for unbound clips, single-bone reads == full pose, billboard copy-parent;
 //   * determinism: 4000 objects, 300 frames, state hash + poses identical for serial and 1/4/15 workers;
+//   * animation events: primary and overlay slots, primary first, overlay loop wrap, cleared / timed overlays;
 //   * real data (ALAMO_FOC_DATA): discovery + binding over every shipped model, planet frame 239 == frame 0.
 #include <algorithm>
 #include <atomic>
@@ -31,6 +32,9 @@
 #include "alamo/anim/anim_state.hpp"
 #include "alamo/anim/anim_types.hpp"
 #include "alamo/anim/clip.hpp"
+#ifdef ALAMO_ANIM_HAVE_OBJECTS
+#include "alamo/anim/type_params.hpp"
+#endif
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/hash.hpp"
@@ -667,8 +671,10 @@ std::unique_ptr<AnimModel> behaviour_model(bool flinch_clips = true) {
 }
 
 // MSVC 19.51; clang 20 / gcc 14 must match. Was 4357bd5e704ab19c before the locomotor state (last yaw / crouch)
-// and the corpse spin-away / damage-kind fields joined AnimBehaviors::hash.
-constexpr uint64_t kBehaviourGolden = 0xd0671711f6a07913ull;
+// and the corpse spin-away / damage-kind fields joined AnimBehaviors::hash; d0671711f6a07913 before the §A.11 / §A.12
+// rules (flinch intensity hashed, no flinch from Attack Idle / no clip, crouch-class idle restart); 1706b32132799e3d
+// before the full §A.12 flinch phases (freeze, hold from the freeze, synced replay of C, cooldown once back on C).
+constexpr uint64_t kBehaviourGolden = 0x572727ad9cdf47fcull;
 
 uint64_t behaviours_hash(const AnimWorld& w, const AnimBehaviors& b) {
     alamo::StateHasher h;
@@ -695,8 +701,11 @@ void test_behaviors() {
     const FlinchParams fp;  // 0.25 blend, 0.5 hold (15 frames), 1.0 idle interval (30), 3.0 attack interval (90)
     IdleParams ip;
     ip.loop_idle = true;
+    using Phase = AnimBehaviors::FlinchPhase;
     {
-        // Flinch from idle: synced variant draw, loop, crossfade 0.25; held 15 frames; cooldown 30 more.
+        // Full flinch from idle (I = 1, §A.12): synced variant draw, loop, crossfade 0.25; frozen once the fade has
+        // ended; held 15 frames from the freeze; then C (Idle) replayed with a synced random variant, one-shot, blend
+        // mode 3; the 30-frame cooldown starts once the model is back on C with the fade complete.
         AnimWorld w;
         AnimBehaviors b;
         AnimCreateParams cp;
@@ -709,23 +718,52 @@ void test_behaviors() {
         const SlotView s = w.slot(1);
         CHECK(s.type == kAnimFlinchLeft && s.variant == want_variant && s.mode == SlotMode::Loop);
         CHECK(w.crossfading(1) && w.slot(1, kPrevious).type == kAnimIdle);
-        CHECK(b.flinching(1) && b.next_flinch_frame(1) == 10 + 15 + 30);
-        CHECK(!b.on_hit(w, 1, fp, ip, 1, 0, 0, -1, rng, 11) && rng.state() == replay.state());  // holding: no draw
+        CHECK(b.flinching(1) && b.flinch_phase(1) == Phase::BlendIn && b.flinch_return_type(1) == kAnimIdle);
+        CHECK(!b.on_hit(w, 1, fp, ip, 1, 0, 0, -1, rng, 11) && rng.state() == replay.state());  // in progress: no draw
         std::vector<ObjectId> removed;
-        for (uint64_t f = 11; f < 25; ++f) {
-            b.service(w, f, removed);
+        uint64_t f = 11, frozen_at = 0;
+        for (; f < 60; ++f) {
+            b.service(w, f, removed, &rng);
+            if (b.flinch_phase(1) == Phase::Hold) {
+                frozen_at = f;
+                break;
+            }
+            CHECK(w.crossfading(1));  // I = 1: frozen only once the fade has ended
             w.advance(f);
         }
-        CHECK(w.current_type(1) == kAnimFlinchLeft && b.flinching(1));
-        b.service(w, 25, removed);
-        CHECK(w.current_type(1) == kAnimIdle && w.current_mode(1) == SlotMode::Loop && !b.flinching(1) && removed.empty());
-        CHECK(!b.on_hit(w, 1, fp, ip, 1, 0, 1, 0, rng, 54));  // cooldown until 55
-        CHECK(b.on_hit(w, 1, fp, ip, 1, 0, 1, 0, rng, 55) && w.current_type(1) == kAnimFlinchBack);
+        CHECK(frozen_at > 11 && !w.crossfading(1) && w.slot(1).speed == kFlinchFrozenSpeed && b.next_flinch_frame(1) == frozen_at + 15);
+        CHECK(rng.state() == replay.state() && b.flinching(1));
+        w.advance(f);
+        for (++f; f < frozen_at + 15; ++f) {
+            b.service(w, f, removed, &rng);
+            CHECK(b.flinch_phase(1) == Phase::Hold && w.current_type(1) == kAnimFlinchLeft);
+            w.advance(f);
+        }
+        CHECK(!b.on_hit(w, 1, fp, ip, 1, 0, 1, 0, rng, f - 1) && rng.state() == replay.state());  // holding
+        b.service(w, f, removed, &rng);  // hold end: C replayed
+        const uint32_t back_variant = static_cast<uint32_t>(replay.range_int(0, 1));
+        CHECK(rng.state() == replay.state());
+        CHECK(b.flinch_phase(1) == Phase::Return && !b.flinching(1) && w.current_type(1) == kAnimIdle && w.slot(1).variant == back_variant);
+        CHECK(w.current_mode(1) == SlotMode::OneShot && w.crossfading(1) && w.slot(1).speed == 1.0f && removed.empty());
+        w.advance(f);
+        uint64_t back_at = 0;
+        for (++f; f < frozen_at + 60; ++f) {
+            b.service(w, f, removed, &rng);
+            if (b.flinch_phase(1) == Phase::None) {
+                back_at = f;
+                break;
+            }
+            w.advance(f);
+        }
+        CHECK(back_at > frozen_at + 15 && b.next_flinch_frame(1) == back_at + 30 && b.flinch_return_type(1) == kNoAnimType);
+        CHECK(!b.on_hit(w, 1, fp, ip, 1, 0, 1, 0, rng, back_at + 29));  // cooldown
+        CHECK(b.on_hit(w, 1, fp, ip, 1, 0, 1, 0, rng, back_at + 30) && w.current_type(1) == kAnimFlinchBack);
         // The weapon gate reads the flinch through the type group.
         CHECK(is_flinch(w.current_type(1)));
     }
     {
-        // Attack flinch while attacking returns to Attack Idle, cooldown 90; no flinch while moving.
+        // Attack flinch while attacking replays the Attack clip (C) at the hold end, cooldown 90 once back on it; no
+        // flinch while moving.
         AnimWorld w;
         AnimBehaviors b;
         w.create(2, m.get(), {}, nullptr, 0);
@@ -735,10 +773,19 @@ void test_behaviors() {
         atk.type = kAnimAttack;
         w.play(2, atk, &rng, 0);
         CHECK(b.on_hit(w, 2, fp, ip, 1, 0, -1, 0, rng, 1) && w.current_type(2) == kAnimAttackFlinchFront);
-        CHECK(b.next_flinch_frame(2) == 1 + 15 + 90);
+        CHECK(b.flinch_return_type(2) == kAnimAttack);
         std::vector<ObjectId> removed;
-        b.service(w, 16, removed);
-        CHECK(w.current_type(2) == kAnimAttackIdle);
+        bool replayed = false;
+        uint64_t f = 2;
+        for (; f < 300 && b.flinch_phase(2) != Phase::None; ++f) {
+            b.service(w, f, removed, &rng);
+            if (!replayed && b.flinch_phase(2) == Phase::Return) {
+                replayed = true;
+                CHECK(w.current_type(2) == kAnimAttack && w.current_mode(2) == SlotMode::OneShot);
+            }
+            w.advance(f);
+        }
+        CHECK(replayed && b.flinch_phase(2) == Phase::None && b.next_flinch_frame(2) == f - 1 + 90);
         PlayRequest mv;
         mv.type = kAnimMove;
         mv.loop = true;
@@ -882,7 +929,7 @@ void test_behaviors() {
                         w.play(id, a, &rng, f);
                     } else b.service_idle(w, id, ip, rng, f);
                 }
-                b.service(w, f, removed);
+                b.service(w, f, removed, &rng);
                 w.advance(f, pf, 64);
                 acc.u64(behaviours_hash(w, b));
             }
@@ -1023,12 +1070,14 @@ void test_events_and_locomotor() {
         in.crouched = true;
         CHECK(b.service_locomotor(w, 1, lp, in, rng, 7) == 1 && w.current_type(1) == kAnimIdleCrouch);
         CHECK(default_idle_type(m.get(), in, lp.idle) == kAnimIdleCrouch);
-        // Garrison mapping override (falls back to the idle without clips).
+        // Presence idle (§A.11): kept even without a clip (the idle service's play fails then).
         LocomotorInput g;
         g.idle_type = kAnimIdleCrouch;
         CHECK(default_idle_type(m.get(), g, lp.idle) == kAnimIdleCrouch);
         g.idle_type = 78;  // Celebrate: no clip in this model
-        CHECK(default_idle_type(m.get(), g, lp.idle) == kAnimIdle);
+        CHECK(default_idle_type(m.get(), g, lp.idle) == 78);
+        g.crouched = true;  // SPREAD_OUT wins over presence
+        CHECK(default_idle_type(m.get(), g, lp.idle) == kAnimIdleCrouch);
         // Turning in place: + yaw -> TURNL, - yaw -> TURNR, none without a yaw change.
         LocomotorInput t;
         t.yaw_deg = 10.0f;
@@ -1049,7 +1098,8 @@ void test_events_and_locomotor() {
     }
     {
         // Death type by damage kind (Damage_Fire -> FIRE_DIE when the model has it and the type sets none);
-        // explicit types win; spin-away: chance draw, no clip, removed after Spin_Away_On_Death_Time.
+        // explicit types win; spin-away: the caller's decision (TACTICAL_GAPS §1.9, combat's one draw), no draw here,
+        // no clip, removed after Spin_Away_On_Death_Time.
         AnimWorld w;
         AnimBehaviors b;
         SimRng rng(12);
@@ -1061,18 +1111,27 @@ void test_events_and_locomotor() {
         DeathParams ex;
         ex.type_explicit = true;
         CHECK(b.begin_death(w, 3, ex, {}, rng, 0, 7) == DeathResult::Corpse && w.current_type(3) == kAnimDie);
+        // A Spin_Away_On_Death type whose caller decided "no spin": the death clip plays; the only draw is the random
+        // variant (AnimWorld::play's), none for spin-away.
         DeathParams sp;
-        sp.spin_away = true;
-        sp.spin_away_chance = 0.4f;
         sp.spin_away_seconds = 2.0f;
         sp.remove_upon_death = true;
+#ifdef ALAMO_ANIM_HAVE_OBJECTS
+        {
+            TypeAnimParams tp;
+            tp.spin_away_on_death = true;
+            tp.spin_away_chance = 1.0f;
+            tp.spin_away_seconds = 2.0f;
+            const DeathParams fromtype = death_params(tp);
+            CHECK(!fromtype.spin && fromtype.spin_away_seconds == 2.0f);  // death_params never decides a spin
+        }
+#endif
         SimRng replay = rng;
-        const bool spins = replay.range_float(0.0f, 1.0f) < 0.4f;
+        replay.range_int(0, static_cast<int32_t>(m->variant_count(kAnimDie)) - 1);
         const DeathResult r4 = b.begin_death(w, 4, sp, {}, rng, 10);
         CHECK(rng.state() == replay.state());
-        if (spins) CHECK(r4 == DeathResult::Corpse && b.corpse(4)->spin_away && b.corpse(4)->phase == CorpsePhase::SpinAway);
-        else CHECK(r4 == DeathResult::Corpse && !b.corpse(4)->spin_away);
-        sp.spin_away_chance = 1.0f;
+        CHECK(r4 == DeathResult::Corpse && !b.corpse(4)->spin_away && b.corpse(4)->death_type == kAnimDie);
+        sp.spin = true;  // the caller's draw said spin
         const uint32_t st = rng.state();
         CHECK(b.begin_death(w, 5, sp, {}, rng, 10) == DeathResult::Corpse && rng.state() == st && b.corpse(5)->spin_away &&
               b.corpse(5)->death_type == kNoAnimType && b.corpse(5)->phase_end == 70);
@@ -1088,7 +1147,7 @@ void test_events_and_locomotor() {
 
 // Record sizes of the documented layouts (anim_state.hpp / anim_behaviors.hpp).
 constexpr size_t kAnimSaveRowBytes = 109;
-constexpr size_t kAnimSaveEntryBytes = 51;
+constexpr size_t kAnimSaveEntryBytes = 59;  // version 3: §A.12 flinch phases
 constexpr size_t kAnimSaveCorpseBytes = 77;
 
 struct SaveScenario {
@@ -1101,7 +1160,7 @@ struct SaveScenario {
 // behaviour calls (flinch, death, locomotor, overlay, freeze, berserker, locked timed play, idle) drawn from the
 // synced RNG.
 void save_step(AnimWorld& w, AnimBehaviors& b, SimRng& rng, uint64_t f, const SaveScenario& sc, std::vector<ObjectId>& removed) {
-    b.service(w, f, removed);
+    b.service(w, f, removed, &rng);
     w.advance(f);
     FlinchParams fp;
     IdleParams ip;
@@ -1130,8 +1189,7 @@ void save_step(AnimWorld& w, AnimBehaviors& b, SimRng& rng, uint64_t f, const Sa
             ci.object_type = static_cast<uint32_t>(id);
             ci.owner = id % 2;
             ci.position[0] = static_cast<float>(id);
-            dp.spin_away = id % 4 == 0;
-            dp.spin_away_chance = 0.5f;
+            dp.spin = id % 4 == 0;
             dp.spin_away_seconds = 1.0f;
             b.begin_death(w, id, dp, ci, rng, f, static_cast<uint8_t>(id % 2 == 0 ? 7 : 1));
         } else if (roll < 10) {
@@ -1296,7 +1354,14 @@ void test_save() {
         bad[corpse_count_at + 4 + 4] = 4;  // corpse 0 phase: no CorpsePhase 4
         CHECK(corpses == 0 || behaviours_reject(bad));
         bad = bb;
-        bad[8 + 32] = 5;  // entry 0 return-loop flag: not a bool
+        bad[8 + 57] = 5;  // entry 0 have-yaw flag: not a bool
+        CHECK(entries == 0 || behaviours_reject(bad));
+        bad = bb;
+        bad[8 + 8] = 4;  // entry 0 flinch phase: no FlinchPhase 4
+        CHECK(entries == 0 || behaviours_reject(bad));
+        bad = bb;
+        const float two = 2.0f;
+        std::memcpy(bad.data() + 8 + 17, &two, 4);  // entry 0 flinch intensity outside [0, 1]
         CHECK(entries == 0 || behaviours_reject(bad));
         bad = bb;
         if (entries > 1) std::memcpy(bad.data() + 8 + kAnimSaveEntryBytes, bad.data() + 8, 4);  // duplicate entry id
@@ -1530,12 +1595,12 @@ void test_death_plan() {
     CHECK(checked == sizeof cases / sizeof cases[0]);
     {  // spin-away: lifetime = Spin_Away_On_Death_Time; persistence < 0: forever; no model: no clip, no variant draw
         DeathParams sp;
-        sp.spin_away = true;
+        sp.spin = true;
         sp.spin_away_seconds = 2.0f;
         SimRng rng(9);
         const uint32_t st = rng.state();
         const DeathPlan p = plan_death(m.get(), sp, 1, rng);
-        CHECK(p.spin && p.type == kNoAnimType && p.lifetime == 60 && rng.state() == st);  // chance unset: always, no draw
+        CHECK(p.spin && p.type == kNoAnimType && p.lifetime == 60 && rng.state() == st);  // the caller's spin: no draw
         DeathParams forever;
         SimRng other(9);
         CHECK(plan_death(m.get(), forever, 1, other).forever);
@@ -1549,6 +1614,397 @@ void test_death_plan() {
     }
 }
 
+// ---- R3 t03: overlay-slot animation events ----------------------------------------------------------------
+
+void test_overlay_events() {
+    const auto m = make_model(3, {{kAnimIdle, 1, 30, 30.0f, 2}, {kAnimMove, 1, 24, 30.0f, 2}, {kAnimAttack, 2, 12, 30.0f, 2}});
+    const std::string move = clip_stem(m->clip(kAnimMove, 0)->clip->name);
+    const std::string atk = clip_stem(m->clip(kAnimAttack, 0)->clip->name);
+    const std::string atk1 = clip_stem(m->clip(kAnimAttack, 1)->clip->name);
+    AnimEventMap map;
+    // Rows out of time order on purpose: the map keeps each clip's events in time order.
+    const std::string text = "SOUND\t" + move + "\t20\tStep20\n" + "SURFACE\t" + move + "\t0\tStep0\tB1\n" +  //
+                             "SOUND\t" + atk + "\t360\tTail\n" + "SOUND\t" + atk + "\t0\tFire_Start\n" +       //
+                             "SOUND\t" + atk + "\t50\tMid\n" + "SURFACE\t" + atk + "\t110\tFX_A\tB1\n" +        //
+                             "SOUND\t" + atk1 + "\t0\tOther_Start\n";
+    CHECK(map.parse(text) == 7);
+
+    std::vector<AnimWorld::EventMark> marks;
+    std::vector<AnimWorld::FiredEvent> fired;
+    // One tick of the protocol: mark (ascending id), advance, collect.
+    const auto tick = [&](AnimWorld& w, uint64_t f) {
+        marks.clear();
+        fired.clear();
+        for (ObjectId id : w.ids()) w.mark_events(id, marks);
+        w.advance(f);
+        w.fired_events(marks, map, fired);
+    };
+    const auto names = [&]() {
+        std::string out;
+        for (const AnimWorld::FiredEvent& e : fired)
+            out += std::to_string(e.id) + (e.slot == kOverlay ? "o:" : "p:") + (e.def ? e.def->name : "?") + " ";
+        return out;
+    };
+
+    {  // 1. An overlay clip alone crosses its events: [before, after) per advance, one-shot stops at count - 2.
+        AnimWorld w;
+        w.add(1, m.get(), 0);
+        CHECK(w.play_overlay(1, kAnimAttack, 0, 1.0f, 0.0f, nullptr, 0) == PlayResult::Played);
+        std::string all;
+        for (uint64_t f = 1; f <= 20; ++f) {
+            tick(w, f);
+            for (const AnimWorld::FiredEvent& e : fired) {
+                CHECK(e.slot == kOverlay && e.id == 1 && e.clip == m->clip(kAnimAttack, 0) && e.def);
+                all += std::to_string(f) + ":" + e.def->name + " ";
+            }
+        }
+        CHECK(all == "1:Fire_Start 2:Mid 4:FX_A ");  // Tail (360 ms) lies past the one-shot stop (frame 10 = 333 ms)
+        CHECK(w.slot(1, kOverlay).mode == SlotMode::Finished);
+        marks.clear();
+        CHECK(w.mark_events(1, marks) == 0);  // finished overlay: no mark
+    }
+    {  // 2. Primary + overlay on two objects: per object the primary's events (time order), then the overlay's.
+        AnimWorld w;
+        for (ObjectId id : {7, 3}) {
+            w.add(id, m.get(), 0);
+            PlayRequest req;
+            req.type = kAnimMove;
+            req.loop = true;
+            CHECK(w.play(id, req, nullptr, 0) == PlayResult::Played);
+            CHECK(w.play_overlay(id, kAnimAttack, 0, 1.0f, 3.0f, nullptr, 0) == PlayResult::Played);
+        }
+        marks.clear();
+        CHECK(w.mark_events(3, marks) == 2 && marks[0].slot == kPrimary && marks[1].slot == kOverlay);
+        tick(w, 1);
+        CHECK(names() == "3p:Step0 3p:Step20 3o:Fire_Start 7p:Step0 7p:Step20 7o:Fire_Start ");
+        CHECK(fired.size() == 6 && fired[0].index == 0 && fired[1].index == 1 && fired[2].index == 0);
+        CHECK(fired.size() == 6 && fired[0].def->kind == AnimEventDef::Kind::Surface && fired[0].def->bone == "B1");
+        tick(w, 2);
+        CHECK(names() == "3o:Mid 7o:Mid ");
+        // Events are output only: firing them leaves the state hash alone (same as a world that never collected).
+        AnimWorld quiet;
+        for (ObjectId id : {7, 3}) {
+            quiet.add(id, m.get(), 0);
+            PlayRequest req;
+            req.type = kAnimMove;
+            req.loop = true;
+            quiet.play(id, req, nullptr, 0);
+            quiet.play_overlay(id, kAnimAttack, 0, 1.0f, 3.0f, nullptr, 0);
+        }
+        quiet.advance(1);
+        quiet.advance(2);
+        CHECK(world_hash(quiet) == world_hash(w));
+    }
+    {  // 3. Loop wrap in the overlay ([port] play_overlay loop): tail [before, end) first, then [0, after).
+        AnimWorld w;
+        w.add(1, m.get(), 0);
+        CHECK(w.play_overlay(1, kAnimAttack, 0, 1.4f, 0.0f, nullptr, 0, true) == PlayResult::Played);
+        CHECK(w.slot(1, kOverlay).mode == SlotMode::Loop);
+        std::string all;
+        for (uint64_t f = 1; f <= 8; ++f) {
+            tick(w, f);
+            for (const AnimWorld::FiredEvent& e : fired) all += std::to_string(f) + ":" + e.def->name + " ";
+        }
+        // Frames 1.4, 2.8, ..., 9.8, then 11.2 -> wraps at 11 to 0.2: [326.7, 366.7) holds Tail, [0, 6.7) Fire_Start.
+        CHECK(all == "1:Fire_Start 2:Mid 3:FX_A 8:Tail 8:Fire_Start ");
+        CHECK(w.slot(1, kOverlay).frame < 1.0f);
+    }
+    {  // 4. Overlay cleared / replaced between mark and query, and a timed overlay expiring inside the window.
+        AnimWorld w;
+        w.add(1, m.get(), 0);
+        PlayRequest req;
+        req.type = kAnimMove;
+        req.loop = true;
+        w.play(1, req, nullptr, 0);
+        w.play_overlay(1, kAnimAttack, 0, 1.0f, 0.0f, nullptr, 0);
+        marks.clear();
+        fired.clear();
+        CHECK(w.mark_events(1, marks) == 2);
+        w.clear_overlay(1);  // cleared mid-window: the overlay's events of this advance are dropped
+        w.advance(1);
+        w.fired_events(marks, map, fired);
+        CHECK(names() == "1p:Step0 1p:Step20 ");
+
+        w.play_overlay(1, kAnimAttack, 0, 1.0f, 0.0f, nullptr, 1);
+        marks.clear();
+        fired.clear();
+        w.mark_events(1, marks);
+        w.play_overlay(1, kAnimAttack, 1, 1.0f, 0.0f, nullptr, 1);  // replaced by another variant: nothing either
+        w.advance(2);
+        w.fired_events(marks, map, fired);
+        CHECK(names().find("o:") == std::string::npos);
+
+        AnimWorld t;  // timed 0.05 s: expires on the second advance, which still fires [33.3, 66.7) (Mid)
+        t.add(1, m.get(), 0);
+        t.play_overlay(1, kAnimAttack, 0, 1.0f, 0.05f, nullptr, 0);
+        std::string all;
+        for (uint64_t f = 1; f <= 4; ++f) {
+            tick(t, f);
+            for (const AnimWorld::FiredEvent& e : fired) all += std::to_string(f) + ":" + e.def->name + " ";
+        }
+        CHECK(all == "1:Fire_Start 2:Mid ");
+        CHECK(t.slot(1, kOverlay).mode == SlotMode::Finished);
+    }
+    {  // 5. The previous (fading-out) slot is never marked.
+        AnimWorld w;
+        w.add(1, m.get(), 0);
+        PlayRequest req;
+        req.type = kAnimMove;
+        req.loop = true;
+        w.play(1, req, nullptr, 0);
+        req.type = kAnimIdle;
+        req.blend_seconds = 0.5f;
+        w.play(1, req, nullptr, 0);
+        CHECK(w.crossfading(1));
+        marks.clear();
+        CHECK(w.mark_events(1, marks) == 1 && marks[0].slot == kPrimary && marks[0].type == kAnimIdle);
+    }
+    std::printf("overlay events: overlay alone, primary-then-overlay order, overlay loop wrap, cleared / replaced / timed OK\n");
+}
+
+// ---- R3: §A.12 flinch triggers / gates / intensity, §A.11 default idle (crouch class, presence idles) ----------
+
+void test_flinch_and_idle_rules() {
+    // Angle rule against an independent atan2 reading: D = wrap(yaw(dir) - yaw(facing)) into (-180, 180];
+    // |D| < 45 back, 45..135 by sign (D > 0 Right, D < 0 Left), > 135 front. Directions avoid the exact boundaries.
+    int checked = 0;
+    for (int fdeg = 0; fdeg < 360; fdeg += 37)
+        for (int ddeg = 1; ddeg < 360; ddeg += 7) {
+            const double fr = fdeg * 3.14159265358979323846 / 180.0, dr = ddeg * 3.14159265358979323846 / 180.0;
+            const float fx = static_cast<float>(std::cos(fr)), fy = static_cast<float>(std::sin(fr));
+            const float dx = static_cast<float>(3.0 * std::cos(dr)), dy = static_cast<float>(3.0 * std::sin(dr));
+            double d = std::atan2(static_cast<double>(dy), static_cast<double>(dx)) * 180.0 / 3.14159265358979323846 -
+                       std::atan2(static_cast<double>(fy), static_cast<double>(fx)) * 180.0 / 3.14159265358979323846;
+            while (d > 180.0) d -= 360.0;
+            while (d <= -180.0) d += 360.0;
+            const double a = std::fabs(d);
+            if (std::fabs(a - 45.0) < 0.5 || std::fabs(a - 135.0) < 0.5) continue;
+            const int32_t want = a < 45.0 ? kAnimFlinchBack : a > 135.0 ? kAnimFlinchFront : d > 0.0 ? kAnimFlinchRight : kAnimFlinchLeft;
+            CHECK(flinch_type(fx, fy, dx, dy, false) == want);
+            CHECK(flinch_type(fx, fy, dx, dy, true) == want + (kAnimAttackFlinchLeft - kAnimFlinchLeft));
+            ++checked;
+        }
+    CHECK(checked > 400);
+
+    // Explosion intensity: clamp(I (1 - 0.5 d2 / R2), 0.25, 1), d horizontal.
+    CHECK(explosion_flinch_intensity(1.0f, 0.0f, 0.0f, 100.0f) == 1.0f);
+    CHECK(explosion_flinch_intensity(1.0f, 60.0f, 80.0f, 100.0f) == 0.5f);  // d = R
+    CHECK(std::fabs(explosion_flinch_intensity(1.0f, 0.0f, 100.0f * std::sqrt(1.2f), 100.0f) - 0.4f) < 1e-5f);
+    CHECK(explosion_flinch_intensity(1.0f, 141.0f, 141.0f, 100.0f) == kMinExplosionFlinchIntensity);  // corner of the cube
+    CHECK(explosion_flinch_intensity(0.1f, 0.0f, 0.0f, 100.0f) == 0.25f && explosion_flinch_intensity(3.0f, 0.0f, 0.0f, 100.0f) == 1.0f);
+    CHECK(explosion_flinch_intensity(0.6f, 5.0f, 5.0f, 0.0f) == 0.6f);  // [port] R <= 0: the intensity alone
+    CHECK(kDefaultFlinchIntensity == 1.0f && kDefaultFlinchRange == 100.0f);
+
+    // Gates on the current type: idle-like / attack-like only; never Attack Idle (6), none, move, turn, death.
+    CHECK(flinch_allowed_from(kAnimIdle) && flinch_allowed_from(kAnimIdleCrouch) && flinch_allowed_from(77) && flinch_allowed_from(78));
+    CHECK(flinch_allowed_from(kAnimAttack) && flinch_allowed_from(kAnimFlinchBack));
+    CHECK(!flinch_allowed_from(kAnimAttackIdle) && !flinch_allowed_from(kNoAnimType) && !flinch_allowed_from(kAnimMove));
+    CHECK(!flinch_allowed_from(kAnimTurnLeft) && !flinch_allowed_from(kAnimDie) && !flinch_allowed_from(kAnimAttackFlinchBack));
+
+    const auto m = behaviour_model();
+    const FlinchParams fp;  // 0.25 blend (7.5 frames), 0.5 hold, 1.0 / 3.0 intervals
+    IdleParams ip;
+    ip.loop_idle = true;
+    {
+        AnimWorld w;
+        AnimBehaviors b;
+        SimRng rng(41);
+        for (ObjectId id = 1; id <= 4; ++id) w.add(id, m.get(), 0);
+        // No clip (type -1): no flinch, no draw.
+        uint32_t st = rng.state();
+        CHECK(!b.on_hit(w, 1, fp, ip, 1, 0, 1, 0, rng, 1) && rng.state() == st);
+        // Attack Idle never flinches (§A.12: the old A.7 row said it did).
+        PlayRequest ai;
+        ai.type = kAnimAttackIdle;
+        w.play(2, ai, &rng, 0);
+        st = rng.state();
+        CHECK(!b.on_hit(w, 2, fp, ip, 1, 0, 1, 0, rng, 1) && rng.state() == st && w.current_type(2) == kAnimAttackIdle);
+        // Deploys types never flinch.
+        PlayRequest idle;
+        idle.type = kAnimIdle;
+        idle.loop = true;
+        w.play(3, idle, &rng, 0);
+        FlinchParams dep = fp;
+        dep.deploys = true;
+        st = rng.state();
+        CHECK(!b.on_hit(w, 3, dep, ip, 1, 0, 1, 0, rng, 1) && rng.state() == st && w.current_type(3) == kAnimIdle);
+        // A flinch in progress blocks another even with zero hold / interval (timer expired, +0x58 / flinch set).
+        FlinchParams zero = fp;
+        zero.hold_seconds = 0.0f;
+        zero.idle_interval_seconds = 0.0f;
+        CHECK(b.on_hit(w, 3, zero, ip, 1, 0, 1, 0, rng, 2) && b.flinch_phase(3) == AnimBehaviors::FlinchPhase::BlendIn);
+        st = rng.state();
+        CHECK(!b.on_hit(w, 3, zero, ip, 1, 0, -1, 0, rng, 2) && rng.state() == st && w.current_type(3) == kAnimFlinchBack);
+    }
+    {
+        // Intensity: the clip freezes (speed 1e-4) once the blend-in weight reaches I (I = 1: when the fade ends), the
+        // hold is Max_Flinch_Hold_Seconds x I counted from the freeze, then C is replayed at speed 1.
+        for (const float level : {1.0f, 0.5f}) {
+            AnimWorld w;
+            AnimBehaviors b;
+            AnimCreateParams cp;
+            cp.loop_idle = true;
+            w.create(1, m.get(), cp, nullptr, 0);
+            SimRng rng(5);
+            CHECK(b.on_hit(w, 1, fp, ip, 1, 0, 0, -1, rng, 10, level));
+            const uint64_t hold = seconds_to_frames(fp.hold_seconds * level);
+            std::vector<ObjectId> removed;
+            uint64_t f = 11, frozen_at = 0;
+            float weight = 0.0f, frame_at_freeze = 0.0f;
+            for (; f < 60 && frozen_at == 0; ++f) {
+                b.service(w, f, removed, &rng);
+                if (b.flinch_phase(1) == AnimBehaviors::FlinchPhase::Hold) {
+                    frozen_at = f;
+                    weight = w.crossfade_weight(1);
+                    frame_at_freeze = w.slot(1).frame;
+                }
+                w.advance(f);
+            }
+            CHECK(frozen_at > 0 && w.slot(1).speed == kFlinchFrozenSpeed && b.next_flinch_frame(1) == frozen_at + hold);
+            if (level < 1.0f) CHECK(weight >= 0.5f && w.crossfading(1));  // frozen mid-blend: a partial pose
+            else CHECK(weight == 1.0f);
+            for (; f < frozen_at + hold; ++f) {
+                b.service(w, f, removed, &rng);
+                w.advance(f);
+            }
+            CHECK(w.current_type(1) == kAnimFlinchLeft && b.flinching(1) && w.slot(1).frame - frame_at_freeze < 0.01f);
+            b.service(w, f, removed, &rng);  // hold end: C replayed, speed 1
+            CHECK(w.current_type(1) == kAnimIdle && b.flinch_phase(1) == AnimBehaviors::FlinchPhase::Return && w.slot(1).speed == 1.0f);
+        }
+    }
+    {
+        // §A.11 idle: crouch-class change restarts mid-clip; other changes wait for the clip end; presence idles take the
+        // fidget timer and the synced draws unchanged; no clip of T: the play fails and the finished clip holds.
+        const auto pm = make_model(3, {{kAnimIdle, 2, 30, 30.0f, 2}, {kAnimIdleCrouch, 1, 30, 30.0f, 2}, {77, 1, 40, 30.0f, 2}});
+        const auto guard = make_model(3, {{kAnimIdle, 2, 30, 30.0f, 2}});  // Imperial Guard: no ATTENTION clip
+        AnimWorld w;
+        AnimBehaviors b;
+        SimRng rng(77);
+        w.add(1, pm.get(), 0);
+        PlayRequest idle;
+        idle.type = kAnimIdle;
+        w.play(1, idle, nullptr, 0);
+        for (uint64_t f = 1; f <= 5; ++f) w.advance(f);
+        IdleParams att = ip;
+        att.idle_type = 77;
+        uint32_t st = rng.state();
+        CHECK(!b.service_idle(w, 1, att, rng, 6) && w.current_type(1) == kAnimIdle && rng.state() == st);  // 0 -> 77 waits
+        IdleParams crouch = ip;
+        crouch.idle_type = kAnimIdleCrouch;
+        CHECK(b.service_idle(w, 1, crouch, rng, 6) && w.current_type(1) == kAnimIdleCrouch);  // 0 -> 71: at once
+        SimRng replay = rng;
+        CHECK(b.service_idle(w, 1, att, rng, 7) && w.current_type(1) == 77);  // 71 -> 77: crouch class changes again
+        // Timer expired at the 71 restart (timer 0 <= 6), re-armed then; here the timer has not expired: no draw.
+        CHECK(rng.state() == replay.state() && w.slot(1).variant == 0);
+        // 77 runs to its end (one-shot), then the idle behaviour replays T = 77 with the fidget timer rules: a single
+        // ATTENTION clip -> variant 0, no variant draw; the timer draw only when it expired.
+        uint64_t f = 8;
+        for (; w.current_mode(1) != SlotMode::Finished; ++f) w.advance(f);
+        CHECK(b.service_idle(w, 1, ip, rng, f) && w.current_type(1) == kAnimIdle);  // T = 0 after 77: at the clip end
+        const uint64_t timer = w.idle_timer(1);
+        CHECK(timer > 6);
+        for (; w.current_mode(1) != SlotMode::Finished; ++f) w.advance(f);
+        const uint64_t at = std::max(f, timer);
+        replay = rng;
+        CHECK(b.service_idle(w, 1, att, rng, at) && w.current_type(1) == 77 && w.slot(1).variant == 0);
+        replay.range_int(210, 450);  // expired timer: only the timer draw (count 1 -> no variant draw)
+        CHECK(rng.state() == replay.state() && w.idle_timer(1) > at);
+
+        // Guard: idle finishes, T = 77 has no clip: the timer draw happens once, the play fails, the pose holds.
+        AnimWorld gw;
+        AnimBehaviors gb;
+        gw.add(2, guard.get(), 0);
+        gw.play(2, idle, nullptr, 0);
+        uint64_t g = 1;
+        for (; gw.current_mode(2) != SlotMode::Finished; ++g) gw.advance(g);
+        const float held = gw.slot(2).frame;
+        const uint32_t before = rng.state();
+        CHECK(!gb.service_idle(gw, 2, att, rng, g));
+        CHECK(rng.state() != before && gw.current_type(2) == kAnimIdle && gw.current_mode(2) == SlotMode::Finished);
+        const uint32_t after = rng.state();
+        for (uint64_t k = 1; k <= 3; ++k) {
+            gw.advance(g + k);
+            CHECK(!gb.service_idle(gw, 2, att, rng, g + k) && rng.state() == after && gw.slot(2).frame == held);
+        }
+    }
+    {
+        // The crouch-class restart cuts only idle / crouch clips: a crouched unit's flinch (from 71) and attack survive
+        // the next locomotor services; leaving the crouch still restarts the crouch idle at once.
+        CHECK(idle_class_restart(kAnimIdle, kAnimIdleCrouch) && idle_class_restart(kAnimIdleCrouch, kAnimIdle));
+        CHECK(idle_class_restart(kAnimTurnRightCrouch, kAnimIdle) && idle_class_restart(77, kAnimIdleCrouch));
+        CHECK(!idle_class_restart(kAnimFlinchBack, kAnimIdleCrouch) && !idle_class_restart(kAnimAttack, kAnimIdleCrouch));
+        CHECK(!idle_class_restart(kAnimAttackIdle, kAnimIdleCrouch) && !idle_class_restart(kAnimDie, kAnimIdleCrouch));
+        CHECK(!idle_class_restart(kAnimIdle, 77) && !idle_class_restart(kNoAnimType, kAnimIdleCrouch));
+        const auto cm = make_model(3, {{kAnimIdle, 2, 30, 30.0f, 2},
+                                       {kAnimIdleCrouch, 1, 30, 30.0f, 2},
+                                       {kAnimAttack, 1, 40, 30.0f, 2},
+                                       {kAnimFlinchBack, 1, 10, 30.0f, 2},
+                                       {kAnimFlinchLeft, 1, 10, 30.0f, 2}});
+        AnimWorld w;
+        AnimBehaviors b;
+        SimRng rng(3);
+        LocomotorParams lp;
+        LocomotorInput in;
+        in.crouched = true;
+        w.add(1, cm.get(), 0);
+        w.add(2, cm.get(), 0);
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, 1) == 1 && w.current_type(1) == kAnimIdleCrouch);
+        CHECK(b.service_locomotor(w, 2, lp, in, rng, 1) == 1 && w.current_type(2) == kAnimIdleCrouch);
+        CHECK(b.on_hit(w, 1, fp, ip, 1, 0, 1, 0, rng, 2) && w.current_type(1) == kAnimFlinchBack);
+        PlayRequest atk;
+        atk.type = kAnimAttack;
+        CHECK(w.play(2, atk, &rng, 2) == PlayResult::Played);
+        std::vector<ObjectId> removed;
+        for (uint64_t f = 3; f <= 8; ++f) {
+            CHECK(b.service_locomotor(w, 1, lp, in, rng, f) == 0 && b.service_locomotor(w, 2, lp, in, rng, f) == 0);
+            b.service(w, f, removed, &rng);
+            w.advance(f);
+            CHECK(w.current_type(1) == kAnimFlinchBack && b.flinch_phase(1) != AnimBehaviors::FlinchPhase::None);
+            CHECK(w.current_type(2) == kAnimAttack);
+        }
+        AnimWorld u;  // leaving the crouch mid-clip: 71 -> 0 at once
+        u.add(3, cm.get(), 0);
+        b.service_locomotor(u, 3, lp, in, rng, 1);
+        u.advance(2);
+        in.crouched = false;
+        CHECK(u.current_type(3) == kAnimIdleCrouch && u.current_mode(3) != SlotMode::Finished);
+        CHECK(b.service_locomotor(u, 3, lp, in, rng, 3) == 1 && u.current_type(3) == kAnimIdle);
+    }
+    {
+        // Stop-path fallback through the fields the sim sets (sim_anim idle_params / service_locomotor): presence idle
+        // 77 in IdleParams::idle_type and LocomotorInput::idle_type, no ATTENTION clip (Imperial Guard). Stopping plays
+        // IdleParams::base_idle_type (Idle), not the Move loop in place; then the idle service holds the finished idle.
+        const auto gm = make_model(3, {{kAnimIdle, 2, 30, 30.0f, 2}, {kAnimMove, 1, 24, 30.0f, 2}});
+        AnimWorld w;
+        AnimBehaviors b;
+        SimRng rng(8);
+        LocomotorParams lp;
+        lp.idle.idle_type = 77;
+        lp.idle.base_idle_type = kAnimIdle;
+        LocomotorInput in;
+        in.idle_type = 77;
+        in.speed = 1.0f;
+        in.max_speed = 1.0f;
+        w.add(1, gm.get(), 0);
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, 1) == 1 && w.current_type(1) == kAnimMove);
+        w.advance(1);
+        in.speed = 0.0f;
+        CHECK(b.service_locomotor(w, 1, lp, in, rng, 2) == 1 && w.current_type(1) == kAnimIdle && w.current_mode(1) == SlotMode::OneShot);
+        uint64_t f = 2;
+        for (; w.current_mode(1) != SlotMode::Finished && f < 100; ++f) {
+            w.advance(f);
+            b.service_locomotor(w, 1, lp, in, rng, f + 1);
+        }
+        const float held = w.slot(1).frame;
+        for (uint64_t k = 0; k < 3; ++k, ++f) {
+            CHECK(b.service_locomotor(w, 1, lp, in, rng, f) == 0);  // T = 77 has no clip: the play fails
+            w.advance(f);
+            CHECK(w.current_type(1) == kAnimIdle && w.current_mode(1) == SlotMode::Finished && w.slot(1).frame == held);
+        }
+    }
+    std::printf("flinch / idle rules: angle sweep %d, explosion intensity, gates, partial freeze, crouch class, presence idle OK\n", checked);
+}
+
 int main() {
     test_types();
     test_death_plan();
@@ -1560,6 +2016,8 @@ int main() {
     test_determinism();
     test_behaviors();
     test_events_and_locomotor();
+    test_overlay_events();
+    test_flinch_and_idle_rules();
     test_save();
 #ifdef ALAMO_ANIM_HAVE_VFS
     test_real_data();

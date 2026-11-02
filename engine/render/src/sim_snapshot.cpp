@@ -594,14 +594,41 @@ void set_snapshot_foot_plants(SimSnapshot& snap, std::span<const SnapshotFootPla
         if (snap.find(f.id)) snap.foot_plants.push_back(f);
 }
 
+namespace {
+// R3 spin-away motion (render-side [port] rates, sim_snapshot.hpp) from the death transform `pos` / `facing` / `roll`
+// after `seconds` of spinning (by value: a store death clone passes its own fields).
+void apply_spin_away(SnapshotObject& o, const Vec3 pos, const Vec3 facing, const float roll, const float seconds) {
+    const float t = std::isfinite(seconds) && seconds > 0.0f ? seconds : 0.0f;
+    const float yaw = kSpinAwayYawRate * t, cy = std::cos(yaw), sy = std::sin(yaw);
+    o.position = {pos.x + facing.x * kSpinAwayDrift * t, pos.y + facing.y * kSpinAwayDrift * t, pos.z + facing.z * kSpinAwayDrift * t};
+    o.facing = {facing.x * cy - facing.y * sy, facing.x * sy + facing.y * cy, facing.z};
+    o.roll = (std::isfinite(roll) ? roll : 0.0f) + kSpinAwayRollRate * t;
+    o.flags = static_cast<uint8_t>(o.flags | kSnapSpinAway);
+}
+}  // namespace
+
 void add_snapshot_corpses(SimSnapshot& snap, const SnapshotTypeTable& table, std::span<const SnapshotCorpse> corpses) {
     const auto before = static_cast<std::ptrdiff_t>(snap.objects.size());
+    std::vector<uint8_t> applied(static_cast<size_t>(before), 0);  // store death clones already given a corpse record
     for (const SnapshotCorpse& c : corpses) {
-        if (!(c.alpha > 0.0f) || !table.valid(c.type) || table[c.type].model.empty()) continue;
         const auto end = snap.objects.begin() + before;
         const auto it = std::lower_bound(snap.objects.begin(), end, c.id, [](const SnapshotObject& o, ObjectId v) { return o.id < v; });
-        if (it != end && it->id == c.id) continue;  // the store object still exists: drawn through it
-        bool dup = false;                           // the same id twice in `corpses`
+        if (it != end && it->id == c.id) {
+            // The store object still exists: drawn through it (never a second instance). A store death clone (refixf
+            // t04: the battle keeps it until its planned lifetime ends) takes the corpse's fade (ANIM_PARTICLES §A.7
+            // Death_Fade_Time) and spin-away motion from its own transform; other store objects keep theirs.
+            SnapshotObject& o = *it;
+            const auto k = static_cast<size_t>(it - snap.objects.begin());
+            if ((o.flags & kSnapDeathClone) == 0 || applied[k]) continue;
+            applied[k] = 1;
+            const float a = std::isfinite(c.alpha) ? std::clamp(c.alpha, 0.0f, 1.0f) : 1.0f;
+            if (a < o.fade) o.fade = a;
+            if (c.spin_away) apply_spin_away(o, o.position, o.facing, o.roll, c.spin_seconds);
+            continue;
+        }
+        if (!c.detached) continue;  // a live row whose store object is not in the snapshot (filtered or flushed)
+        if (!(c.alpha > 0.0f) || !table.valid(c.type) || table[c.type].model.empty()) continue;
+        bool dup = false;  // the same id twice in `corpses`
         for (auto k = end; k != snap.objects.end() && !dup; ++k) dup = k->id == c.id;
         if (dup) continue;
         const SnapshotTypeInfo& ti = table[c.type];
@@ -619,15 +646,7 @@ void add_snapshot_corpses(SimSnapshot& snap, const SnapshotTypeTable& table, std
         o.alt = damage_alt_index(ti, 0.0f);
         o.roll = std::isfinite(c.roll) ? c.roll : 0.0f;
         o.flags = static_cast<uint8_t>(kSnapDrawable | kSnapCorpse);
-        if (c.spin_away) {  // R3 spin-away motion (render-side [port] rates, sim_snapshot.hpp)
-            const float t = std::isfinite(c.spin_seconds) && c.spin_seconds > 0.0f ? c.spin_seconds : 0.0f;
-            const float yaw = kSpinAwayYawRate * t, cy = std::cos(yaw), sy = std::sin(yaw);
-            o.position = {c.position.x + c.facing.x * kSpinAwayDrift * t, c.position.y + c.facing.y * kSpinAwayDrift * t,
-                          c.position.z + c.facing.z * kSpinAwayDrift * t};
-            o.facing = {c.facing.x * cy - c.facing.y * sy, c.facing.x * sy + c.facing.y * cy, c.facing.z};
-            o.roll += kSpinAwayRollRate * t;
-            o.flags = static_cast<uint8_t>(o.flags | kSnapSpinAway);
-        }
+        if (c.spin_away) apply_spin_away(o, c.position, c.facing, o.roll, c.spin_seconds);
         if (snap.mode == objects::ModeKind::Space && ti.in_background) o.flags = static_cast<uint8_t>(o.flags | kSnapBackground);
         o.hardpoint_first = static_cast<uint32_t>(snap.hardpoint_destroyed.size());
         o.hardpoint_count = 0;
@@ -640,7 +659,7 @@ void add_snapshot_corpses(SimSnapshot& snap, const SnapshotTypeTable& table, std
 void apply_snapshot_attitude(SimSnapshot& snap, const std::function<bool(ObjectId, float& roll, float& pitch)>& source) {
     if (!source) return;
     for (SnapshotObject& o : snap.objects) {
-        if ((o.flags & kSnapCorpse) != 0) continue;  // corpses keep their own (spin-away) roll
+        if ((o.flags & (kSnapCorpse | kSnapSpinAway)) != 0) continue;  // corpses keep their own (spin-away) roll
         float r = 0.0f, p = 0.0f;
         if (!source(o.id, r, p)) continue;
         o.roll = std::isfinite(r) ? r : 0.0f;

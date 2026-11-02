@@ -91,6 +91,7 @@ BattleCatalog::BattleCatalog(const objects::GameObjectTypes& types, const FilePr
         damage_ = tc::DamageArmorTable::from_constants(*constants, diag);
         space_health_mult_ = constants->get_float("Object_Max_Health_Multiplier_Space", space_health_mult_);
         space_idle_speed_ = constants->get_float("SpaceIdleMovementSpeed", space_idle_speed_);
+        presence_relaxation_ = constants->get_float("Unit_Presence_Relaxation_Time", presence_relaxation_);
         land_health_mult_ = constants->get_float("Object_Max_Health_Multiplier_Land", land_health_mult_);
         land_capture_countdown_ = constants->get_float("Land_Capture_Allowed_Countdown_Seconds", land_capture_countdown_);
         space_capture_countdown_ = constants->get_float("Space_Capture_Allowed_Countdown_Seconds", space_capture_countdown_);

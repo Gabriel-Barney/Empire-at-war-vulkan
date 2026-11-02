@@ -190,8 +190,9 @@ enum SnapshotFlag : uint8_t {
     kSnapCorpse = 0x10,
     // R3: inside a garrison / transport (not drawn, no particles; the sim keeps the object). Set by apply_contained.
     kSnapContained = 0x20,
-    // R3: a spin-away corpse (Spin_Away_On_Death): add_snapshot_corpses applies the render-side spin motion; when it
-    // leaves the frame SimDecorations plays the type's Spin_Away_On_Death_Explosion at its last position.
+    // R3: a spin-away corpse (Spin_Away_On_Death), detached or a store death clone: add_snapshot_corpses applies the
+    // render-side spin motion; when it leaves the frame SimDecorations plays the type's Spin_Away_On_Death_Explosion at
+    // its last position.
     kSnapSpinAway = 0x40,
     // refix t01: a store death clone (objects::kFlagDeathClone, dying / removing): drawn while it plays its death, but
     // not a HUD unit and never hovered or picked.
@@ -431,8 +432,8 @@ void apply_hardpoint_source(SimSnapshot& snap, const std::function<uint32_t(obje
                             const std::function<bool(objects::ObjectId, uint32_t)>& destroyed);
 // S7 t05: the movement attitude of live objects (FIGHTER_FLYING §1.1: fighter roll / pitch, flyer bank / pitch, bike
 // lean) from a source that knows it per object id (TacticalBattle::unit_attitude: radians, SnapshotObject::roll / pitch
-// conventions). Every object that is not a corpse (kSnapCorpse) and for which `source` returns true gets roll / pitch
-// (non-finite values -> 0); the others keep theirs. Null source: no-op.
+// conventions). Every object that is not a corpse (kSnapCorpse / kSnapSpinAway) and for which `source` returns true
+// gets roll / pitch (non-finite values -> 0); the others keep theirs. Null source: no-op.
 void apply_snapshot_attitude(SimSnapshot& snap, const std::function<bool(objects::ObjectId, float& roll, float& pitch)>& source);
 // R5: this tick's hardpoint destructions (event order); entries whose object is not in `snap.objects` or whose index is
 // out of its type's hardpoint range are dropped. Also ORs them into snap.hardpoint_destroyed.
@@ -548,7 +549,8 @@ void apply_battle_fog(const sim::TacticalBattle& battle, int32_t local_player, S
 // it after apply_battle_fog, only while the overlay is shown (host: placing a space reinforcement).
 void apply_battle_fog_reinforce(const sim::TacticalBattle& battle, int32_t local_player, SimSnapshot& snap);
 #endif
-// R3 detached corpses (sim::SimAnimation::corpses(mode), anim::Corpse with detached = true): plain render records.
+// R3 corpses (sim::SimAnimation::corpses(mode), anim::Corpse): plain render records. Detached ones are drawn from the
+// record; the others belong to a store object of the same id (a death clone takes their fade and spin-away motion).
 struct SnapshotCorpse {
     objects::ObjectId id = objects::kNoObjectId;
     objects::TypeIndex type = objects::kNone;
@@ -559,25 +561,34 @@ struct SnapshotCorpse {
     float roll = 0.0f;   // radians about the facing axis (0 when the record has none)
     bool spin_away = false;      // Corpse::spin_away
     float spin_seconds = 0.0f;   // seconds since death (spin-away motion)
+    bool detached = true;        // Corpse::detached: the store object is gone
 };
 // R3 spin-away motion [port: the original's spin is untraced (ABILITIES_HARDPOINTS §4.9 open item)]: the corpse rolls
 // about its facing at kSpinAwayRollRate, yaws at kSpinAwayYawRate and drifts along its death facing at kSpinAwayDrift
 // units / s from the death position. Visual only.
 inline constexpr float kSpinAwayRollRate = 3.0f, kSpinAwayYawRate = 0.6f, kSpinAwayDrift = 40.0f;
-// Appends each corpse as a SnapshotObject (kSnapCorpse, fade = alpha, health 0, alt = the type's damage alternate at
-// health 0, team colour of the owner, no hardpoints) and re-sorts by id. Skipped: alpha <= 0, an unknown / model-less
-// type (with SnapshotOptions::drawable_only semantics), or an id already in the snapshot (a corpse whose store object
-// still exists is drawn through it). The instance builder then draws it with the pose source's pose of the same id
-// (the AnimWorld row the sim keeps for the corpse: AnimPoseCache covers it) and the fade as LIGHT_SCALE.w.
+// Appends each detached corpse as a SnapshotObject (kSnapCorpse, fade = alpha, health 0, alt = the type's damage
+// alternate at health 0, team colour of the owner, no hardpoints) and re-sorts by id. Skipped: alpha <= 0, an unknown /
+// model-less type (with SnapshotOptions::drawable_only semantics), a record that is not detached, or an id already in
+// the snapshot (a corpse whose store object still exists is drawn through it, never twice). The instance builder then
+// draws it with the pose source's pose of the same id (the AnimWorld row the sim keeps for the corpse: AnimPoseCache
+// covers it) and the fade as LIGHT_SCALE.w.
+// A record whose id is a store object already in the snapshot (ids at entry ascend) that is a death clone
+// (kSnapDeathClone; the battle keeps it in the store until its planned lifetime ends, ANIM_PARTICLES §A.7 corpse
+// removal) instead updates that object: fade = min(fade, alpha) (Death_Fade_Time), and when spin_away the spin motion
+// from the object's own position / facing / roll plus kSnapSpinAway (first record of an id only). Other store objects
+// keep their record.
 void add_snapshot_corpses(SimSnapshot& snap, const SnapshotTypeTable& table, std::span<const SnapshotCorpse> corpses);
 // Converts anim::Corpse-like records (fields id, detached, info.object_type / owner / position[3] / facing[3],
-// alpha(frame)) into SnapshotCorpses: detached ones only. Header template so render does not link engine/anim here.
+// alpha(frame)) into SnapshotCorpses, every record (SnapshotCorpse::detached tells them apart; add_snapshot_corpses
+// draws the detached ones and applies the others to their store death clone). Header template so render does not
+// link engine/anim here.
 template <class CorpseRange>
 std::vector<SnapshotCorpse> snapshot_corpses(const CorpseRange& corpses, uint64_t frame) {
     std::vector<SnapshotCorpse> out;
     for (const auto& c : corpses) {
-        if (!c.detached) continue;
         SnapshotCorpse s;
+        s.detached = c.detached;
         s.id = static_cast<objects::ObjectId>(c.id);
         s.type = static_cast<objects::TypeIndex>(c.info.object_type);
         s.owner = c.info.owner;
