@@ -182,6 +182,13 @@ public:
     //   reach_planets     = the level's source-planet list (0x665160 -> reachability flood, cached 10 x FPS frames).
     bool free_store_move(int32_t player, objects::ObjectHandle unit, PlanetIndex dest);
     size_t pending_free_store_moves() const;
+    // a1h t07, tests / diagnostics: free_store_supply = the free-store test 0x4d2bd0 a build task of an AllowFreeStoreUnits
+    // plan takes its unit from (null = none; the entry's +0x30 owner is not read, A1_READINGS §28.5); free_store_owner =
+    // a unit's entry +0x30 (the PotentialPlan handle, -1 = none); set_free_store_owner stands in for an accept's
+    // reservation (0x6c2b20; -1 clears).
+    objects::ObjectHandle free_store_supply(int32_t player, uint32_t type) const;
+    int32_t free_store_owner(objects::ObjectHandle unit) const;
+    void set_free_store_owner(objects::ObjectHandle unit, int32_t pp);
     int32_t reachable_target(int32_t player, std::string_view perception, std::string_view application,
                              std::string_view reachability, double probability);
     std::vector<PlanetIndex> reach_planets(int32_t player, int level);

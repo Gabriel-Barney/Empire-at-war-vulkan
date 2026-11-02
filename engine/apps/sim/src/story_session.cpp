@@ -1,11 +1,13 @@
 #include "alamo/sim/story_session.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
 #include <map>
 
+#include "alamo/commands/pipeline.hpp"  // a1h t04: INVADE_PLANET
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/core/dmath.hpp"
@@ -770,6 +772,43 @@ void StorySession::poll(size_t si) {
     }
 }
 
+// Story reward INVADE_PLANET 0x45f5c0 (A1_READINGS §31.6). Nothing when the planet is friendly to the plot's player.
+// Otherwise the first ground unit (a galactic land transport) among the direct contents of the fleets in orbit that are
+// friendly to the plot's player (orbit order, content order) whose type name, upper-cased, equals `company` exactly
+// (no filter when empty; a mismatch is logged) goes alone into one Invade event issued as the LOCAL player, not the plot's
+// player. The galactic executor (0x48ff50) then applies its pause / linked-battle gates and lands the unit only when the
+// local player owns it, so an AI plot's reward does nothing. [port] The event runs on the direct path at this frame (the
+// original queues it for the next command step, before the next tick); the combatant test (vf+0x138) is the unit kind.
+void StorySession::invade_planet_reward(int32_t plot_player, PlanetIndex planet, const std::string& company) {
+    const auto friendly = [this, plot_player](int32_t owner) { return owner >= 0 && sim_->allied(owner, plot_player); };
+    const galactic::PlanetState& ps = sim_->planets()[planet];
+    if (friendly(ps.owner)) return;
+    const objects::ObjectStore& store = sim_->store();
+    for (const uint32_t f : ps.orbit) {
+        const galactic::FleetState& fl = sim_->fleets()[f];
+        if (!fl.alive || !friendly(fl.owner)) continue;
+        for (const objects::ObjectHandle u : fl.contents) {
+            if (!store.alive(u) || sim_->rules().types[store.type(u)].kind != galactic::UnitKind::GroundUnit) continue;
+            std::string name = sim_->rules().types[store.type(u)].name;
+            std::transform(name.begin(), name.end(), name.begin(), [](char ch) { return static_cast<char>(std::toupper(static_cast<unsigned char>(ch))); });
+            if (!company.empty() && name != company) {
+                lua_messages_.push_back(std::to_string(frame_) + " story: INVADE PLANET - " + name + " does not match " + company);
+                continue;
+            }
+            const int32_t issuer = sim_->local_player();
+            if (issuer < 0 || issuer >= commands::kMaxPlayerSlots) return;
+            commands::EventData ev(commands::EventType::Invade);
+            ev.set("planet", static_cast<uint32_t>(store.id(ps.object)));
+            ev.set_ids("units", {static_cast<uint32_t>(store.id(u))});
+            if (lua_->bridge.pipeline)
+                lua_->bridge.pipeline->execute_direct(frame_, static_cast<uint8_t>(issuer), commands::CommandSource::Script, ev);
+            else
+                sim_->execute(static_cast<uint8_t>(issuer), ev);
+            return;
+        }
+    }
+}
+
 void StorySession::apply_reward(Set& s, const std::string& type, const std::vector<std::string>& params) {
     auto at = [&params](size_t i) { return i < params.size() ? params[i] : std::string(); };
     if (type == "SET_TECH_LEVEL") {
@@ -826,6 +865,17 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         }
     }
     // --- end P4 lua ---
+    // --- a1h t04 (A1_READINGS §31.6) ---
+    else if (type == "INVADE_PLANET") {
+        const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
+        PlanetIndex row = kInvalidPlanet;
+        for (PlanetIndex i = 0; !p1.empty() && i < sim_->planets().size() && row == kInvalidPlanet; ++i)
+            if (iequal(planet_type_name(i), p1)) row = i;
+        if (!p1.empty() && row == kInvalidPlanet)  // [port] the original logs and then crashes on the null planet
+            lua_messages_.push_back(std::to_string(frame_) + " story: INVADE_PLANET unable to find planet " + p1);
+        else if (row != kInvalidPlanet)
+            invade_planet_reward(s.player, row, p2);
+    }
     // --- OI lua (P4_SIM_SYSTEMS 3.3 / 6.4) ---
     else if (type == "LOCK_UNIT") {
         // 0x4D: Param1 = unit type name (shipped data), locked for the plot's player in the same list as the super-weapon

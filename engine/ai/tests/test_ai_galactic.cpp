@@ -1270,6 +1270,22 @@ struct ParityWorld {
     bool has(const std::vector<uint32_t>& sel, uint32_t t) const { return std::find(sel.begin(), sel.end(), t) != sel.end(); }
 };
 
+// a1h t07: a build task of an AllowFreeStoreUnits plan takes its unit through 0x4d2bd0, which does not read the free-store
+// entry's +0x30 owner (A1_READINGS §28.5): a unit another PotentialPlan reserved is still supplied.
+static void test_free_store_supply() {
+    ParityWorld pw(false, {"HeroAttach"});
+    pw.run(2);
+    const objects::ObjectHandle f = pw.world->free_store_supply(0, tFrigate);  // the Empire's starting frigate at P0
+    CHECK(static_cast<bool>(f) && pw.world->free_store_owner(f) == -1);
+    CHECK(!pw.world->free_store_supply(0, tCorvette));  // none on the store
+    CHECK(!pw.world->free_store_supply(1, tFrigate));   // not an AI player of this world
+    pw.world->set_free_store_owner(f, 12345);           // reserved by another plan's accept (0x6c2b20)
+    CHECK(pw.world->free_store_owner(f) == 12345 && pw.world->free_store_supply(0, tFrigate) == f);
+    pw.world->set_free_store_owner(f, -1);
+    CHECK(pw.world->free_store_owner(f) == -1);
+    std::printf("free-store supply: a reserved unit is supplied (0x4d2bd0 ignores +0x30)\n");
+}
+
 static void test_parity_rules() {
     {
         ParityWorld pw(false, {"HeroAttach", "HeroDeny"});
@@ -2639,6 +2655,7 @@ int main(int argc, char** argv) {
     test_sim_hooks();
     test_starbase_force_split();
     test_parity_rules();
+    test_free_store_supply();
     test_production_disabled_and_delivery();
     test_free_store_path_rules();
     test_free_store_world();

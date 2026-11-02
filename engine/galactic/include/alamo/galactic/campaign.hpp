@@ -347,6 +347,8 @@ public:
     virtual bool on_invade(int32_t attacker, PlanetIndex planet, std::span<const ObjectHandle> units) = 0;
     // End of the galactic GOM service (§1.4), every galactic tick, also while the galactic pause is raised.
     virtual void on_service_tail() = 0;
+    // 0x2b0350 (REMAINING_GAPS 6.4, BT §1.4 step 2): `player` is attacker or defender of a conflict in either queue.
+    virtual bool in_queued_conflict(int32_t /*player*/) const { return false; }
 };
 
 class GalacticSim {

@@ -1488,10 +1488,13 @@ RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& 
     case EventType::Invade: {
         const PlanetIndex p = planet_by_id(ev.u("planet"));
         if (p == kInvalidPlanet) return RejectReason::InvalidTarget;
-        // InvadeEventClass Execute 0x48ff50 (A1_READINGS §31.2): only the issuer's own units land. A list whose units
-        // are all dropped lands nothing (an empty list given to invade() would mean "all of the player's units").
-        // [port] the executor's pause / linked-battle gates are not applied here (the AI's task-force invasions use
-        // this event too, the original's call Land_Invade directly).
+        // InvadeEventClass Execute 0x48ff50 (A1_READINGS §31.2). Prologue gates: the galactic pause / battle-pending
+        // counter is raised, or a story-linked battle is pending and the local player is in a queued conflict (0x2b0350).
+        // The AI's task-force invasions do not come here: GalacticTaskForce.Invade 0x6ce600 calls Land_Invade (invade())
+        // directly. Then only the issuer's own units land. A list whose units are all dropped lands nothing (an empty
+        // list given to invade() would mean "all of the player's units").
+        if (pause_ > 0) return RejectReason::NotAllowed;
+        if (linked_battle_pending_ && conflicts_ && conflicts_->in_queued_conflict(local_player_)) return RejectReason::NotAllowed;
         const std::vector<uint32_t>& ids = ev.ids("units");
         std::vector<ObjectHandle> units;
         for (uint32_t id : ids) {

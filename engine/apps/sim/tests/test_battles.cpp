@@ -1353,6 +1353,100 @@ void test_probe_invade(const Data& d) {
     }
 }
 
+// a1h t04 (A1_READINGS §31.6): story reward INVADE_PLANET. A galactic story script brings two Underworld squads into orbit
+// of S10_B (Empire) and raises GO; the plot's GO event has the reward INVADE_PLANET S10_B [company]. The reward picks the
+// first ground unit of a fleet in orbit friendly to the plot's player (Underworld) that matches the company filter and
+// issues ONE Invade event with that unit as the LOCAL player: with a human Underworld one squad lands (a land conflict
+// with one unit); with a human Empire (an AI plot) the executor keeps no unit and nothing happens, silently; a filter
+// that matches nothing logs the mismatch and issues nothing.
+struct InvadeRewardRun {
+    size_t land_queued = 0, landing_units = 0;  // most land conflicts queued at once; units of the first one seen
+    std::vector<std::string> lua;
+    std::string story;
+};
+InvadeRewardRun run_invade_reward(const Data& d, const FileProvider& files, bool human_empire) {
+    InvadeRewardRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup setup = make_setup(d, true);
+    setup.players[0].human = human_empire;
+    setup.players[0].ai = false;
+    setup.players[1].human = !human_empire;
+    setup.players[1].ai = false;
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{1, "Story_Plots_Reward.xml"}};  // the Underworld's plot
+    std::vector<std::string> diag;
+    CHECK(host.start_story(st, &diag));
+    for (const auto& m : diag) std::printf("  story diag: %s\n", m.c_str());
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 300;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    for (uint64_t t = 0; t < 900; ++t) {
+        host.tick_once();
+        const auto& q = battles.conflicts().land_queue();
+        out.land_queued = std::max(out.land_queued, q.size());
+        if (!q.empty() && out.landing_units == 0) out.landing_units = q[0].units.size();
+    }
+    if (host.story()) {
+        out.lua = host.story()->lua_messages();
+        out.story = host.story()->log_text("reward");
+    }
+    return out;
+}
+
+void test_invade_planet_reward(const Data& d) {
+    const fs::path x = d.root / "Data/XML";
+    write_file(x / "Story_Plots_Reward.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Reward</Lua_Script><Active_Plot>Story_Reward.xml</Active_Plot></Story_Mode_Plots>\n");
+    write_file(d.root / "Data/Scripts/Story/Story_Reward.lua",
+               "function Base_Definitions() ServiceRate = 0.1 stage = 0 end\n"
+               "function main() while true do\n"
+               "  if stage == 0 and GetCurrentTime() >= 1 then\n"
+               "    uw = Find_Player('Underworld') units = {}\n"
+               "    for _, t in ipairs({'S10_Squad', 'S10_Squad'}) do\n"
+               "      for _, u in pairs(Spawn_Unit(Find_Object_Type(t), FindPlanet('S10_C'), uw)) do table.insert(units, u) end end\n"
+               "    fleet = Assemble_Fleet(units) block = fleet.Move_To(FindPlanet('S10_B')) stage = 1\n"
+               "  elseif stage == 1 and block.IsFinished() then Story_Event('GO') stage = 2 end\n"
+               "  coroutine.yield(true) end end\n");
+    struct Case {
+        bool human_empire;
+        const char* company;
+        size_t land_queued, landing_units;
+        bool mismatch_logged;
+    };
+    for (const Case& c : {Case{false, "S10_SQUAD", 1, 1, false}, Case{false, "", 1, 1, false}, Case{true, "S10_SQUAD", 0, 0, false},
+                          Case{false, "S10_Squad", 0, 0, true}}) {
+        write_file(x / "Story_Reward.xml",
+                   std::string("<Story>\n <Event Name=\"P_GO\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>GO</Event_Param2>"
+                               "<Reward_Type>INVADE_PLANET</Reward_Type><Reward_Param1>S10_B</Reward_Param1>") +
+                       (*c.company ? std::string("<Reward_Param2>") + c.company + "</Reward_Param2>" : std::string()) + "</Event>\n</Story>\n");
+        DirectoryProvider files(path_to_utf8(d.root));  // after the plot file is written
+        const InvadeRewardRun r = run_invade_reward(d, files, c.human_empire);
+        bool mismatch = false;
+        for (const std::string& m : r.lua) mismatch = mismatch || m.find("INVADE PLANET - S10_SQUAD does not match S10_Squad") != std::string::npos;
+        std::printf("  INVADE_PLANET human %s, company '%s': land conflicts %zu with %zu unit(s), mismatch logged %d\n",
+                    c.human_empire ? "Empire" : "Underworld", c.company, r.land_queued, r.landing_units, mismatch ? 1 : 0);
+        CHECK(r.story.find(" P_GO ") != std::string::npos);
+        CHECK(r.land_queued == c.land_queued && r.landing_units == c.landing_units && mismatch == c.mismatch_logged);
+        CHECK(r.lua.size() == (c.mismatch_logged ? 2u : 0u));  // both squads mismatch
+    }
+}
+
 void test_linked_battle(const Data& d) {
     for (int c = 0; c < 3; ++c) {
         const bool space = c == 0, sandbox = c == 2;
@@ -3853,6 +3947,7 @@ int main(int argc, char** argv) {
     test_linked_battle(*d);
     std::printf("story Invade() of a scripted fleet (a1f t08, S10 PROBE A)\n");
     test_probe_invade(*d);
+    test_invade_planet_reward(*d);
     std::printf("S4 story battles: orders, garrisons, capture, map load, corruption missions\n");
     {
         auto ds4 = make_data(false, false, true);  // S4

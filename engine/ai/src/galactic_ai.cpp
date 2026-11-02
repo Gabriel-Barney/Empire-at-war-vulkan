@@ -184,7 +184,11 @@ PlanetIndex GalacticAiWorld::Impl::planet_arg(const lua::AiArg& a) const {
 }
 
 cmd::RejectReason GalacticAiWorld::Impl::order(int32_t player, const cmd::EventData& ev, const std::string& what) {
-    const cmd::RejectReason r = sink ? sink(static_cast<uint8_t>(player), ev) : cmd::RejectReason::Unhandled;
+    return note_order(player, sink ? sink(static_cast<uint8_t>(player), ev) : cmd::RejectReason::Unhandled, what);
+}
+
+// The bookkeeping of order() for an AI command the AI executes as a direct call instead of an event.
+cmd::RejectReason GalacticAiWorld::Impl::note_order(int32_t player, cmd::RejectReason r, const std::string& what) {
     ++orders;
     if (r != cmd::RejectReason::None) ++rejected;
     decide(player, "order " + what + (r == cmd::RejectReason::None ? "" : " rejected " + std::string(cmd::reject_reason_name(r))));
@@ -1301,12 +1305,11 @@ int32_t GalacticAiWorld::Impl::tf_order(int32_t tf, lua::AiTfOrder kind, const l
             }
             const auto& [p, units] = *pick;
             if (!valid_planet(p)) return -1;
-            cmd::EventData ev(cmd::EventType::Invade);
-            ev.set("planet", static_cast<uint32_t>(store.id(sim.planets()[p].object)));
-            std::vector<uint32_t> ids;
-            for (const ObjectHandle u : units) ids.push_back(static_cast<uint32_t>(store.id(u)));
-            ev.set_ids("units", std::move(ids));
-            if (order(t.player, ev, "invade " + planet_name(p) + " with " + std::to_string(units.size())) != cmd::RejectReason::None)
+            // 0x6ce600 calls GameObjectManager::Land_Invade (GalacticSim::invade) directly with the fleet owner as the
+            // attacker, not the Invade event: the event executor's gates (0x48ff50: galactic pause counter, pending
+            // story-linked battle, issuer = local player) do not apply (A1_READINGS §31.2, a1h t03).
+            if (note_order(t.player, sim.invade(t.player, p, units), "invade " + planet_name(p) + " with " + std::to_string(units.size())) !=
+                cmd::RejectReason::None)
                 return -1;
             const int32_t id = new_status(plan, tf, StatusKind::Invade);
             statuses[id].dest = p;
@@ -2003,6 +2006,20 @@ size_t GalacticAiWorld::pending_free_store_moves() const {
     size_t n = 0;
     for (const FreeStoreMove& m : impl_->fs_moves) n += m.done ? 0u : 1u;
     return n;
+}
+
+objects::ObjectHandle GalacticAiWorld::free_store_supply(int32_t player, uint32_t type) const {
+    return impl_->player_ai(player) ? impl_->free_store_supply(player, type) : objects::ObjectHandle{};
+}
+
+int32_t GalacticAiWorld::free_store_owner(objects::ObjectHandle unit) const {
+    const auto it = impl_->unit_reserved.find(impl_->store.id(unit));
+    return it == impl_->unit_reserved.end() ? -1 : it->second;
+}
+
+void GalacticAiWorld::set_free_store_owner(objects::ObjectHandle unit, int32_t pp) {
+    if (pp < 0) impl_->unit_reserved.erase(impl_->store.id(unit));
+    else impl_->unit_reserved[impl_->store.id(unit)] = pp;
 }
 
 int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perception, std::string_view application,

@@ -339,8 +339,10 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool on_surface(ObjectHandle u) const { return fleet_of_unit(u) == gal::kNoFleet && planet_of_unit(u) != kInvalidPlanet; }
     bool tf_owns(ObjectHandle u) const;
     std::vector<ObjectHandle> free_units(int32_t p) const;
+    ObjectHandle free_store_supply(int32_t player, uint32_t type) const;  // 0x4d2bd0 (galactic_build.cpp)
     PlanetIndex planet_arg(const lua::AiArg& a) const;
     cmd::RejectReason order(int32_t player, const cmd::EventData& ev, const std::string& what);
+    cmd::RejectReason note_order(int32_t player, cmd::RejectReason r, const std::string& what);
     bool move_fleet(int32_t player, uint32_t fleet, PlanetIndex to);
     cmd::RejectReason fleet_op(int32_t player, gal::FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit, const std::string& what);
     bool launch_and_form(int32_t player, PlanetIndex p, ObjectHandle unit, uint32_t fleet);

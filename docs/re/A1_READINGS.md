@@ -738,8 +738,9 @@ On_Unit_Service skips only reserved entries; the order-lock skip is gone. Port d
   store; the delivered entry's type stands for the new object (not perceived yet); a filled slot's pool / pad
   reservation of this PP is released. The space poll (SpaceReinforceBlockStatus) does not call it [open: the caller
   0x6a1440 is [M]].
-- `galactic_build.cpp` still reads `unit_reserved` when a build task takes a store unit (0x4d2bd0 does not read +0x30
-  per 28.5) [open].
+- ✅ a1h t07 (2026-11-02): a galactic build task of an AllowFreeStoreUnits plan takes its unit through
+  `free_store_supply` (0x4d2bd0: the first free-store unit of the type at a planet), which no longer reads
+  `unit_reserved`; a plan whose reserved unit is taken fails its validity test (0x6c45e0) at the next Commit.
 - Effect: a proposal's first solve no longer skips units an earlier proposal of the same Commit picked, so more goals
   are accepted with smaller forces. The FoC land skirmish (`--skirmish-ai foc-land`) now ends inside 14400 frames on
   seeds 7, 10 and 12 of 1-12 (before: 1, 2, 4, 5 and 6 of 1-6), so the outcome test on the default seed 1 fails [open].
@@ -1118,7 +1119,7 @@ the land conflict is queued at once. Both probe outcomes follow from this one ru
 | caller | player argument to 0x4903c0 | issuer |
 |---|---|---|
 | 0x57ada0 Lua `GameObjectWrapper.Invade` | −1 | local player |
-| 0x45f5c0 story reward `INVADE_PLANET` | −1. It goes through the outgoing queue (0x3b01f0 on 0x140b2ed18), one event per land unit of the orbit objects that are friendly (0x39a2c0) to the plot's player (+0x228 → +0x638) [M: plot-player reading] | local player (stamped again at flush) |
+| 0x45f5c0 story reward `INVADE_PLANET` | −1. It goes through the outgoing queue (0x3b01f0 on 0x140b2ed18). **One event with one unit**: the first transport, in a fleet in orbit that is friendly (0x39a2c0) to the plot's player (+0x228 → +0x638), that passes the Param2 filter (§31.6) | local player (set by the event ctor; the single-player flush does not restamp it, §31.6) |
 | 0x3d5640 / 0x3d6c50 galactic UI | −1 | local player (the human's own order) |
 | 0x3d2900 | an object's owner (+0x58) [M: which object] | that owner |
 | 0x433eb0 fleet-locomotor auto-land (STRATEGIC_GAPS §1.3) | a fleet member's owner (+0x58) | the fleet's owner [M] |
@@ -1191,3 +1192,126 @@ code.]
   - `engine/lua/tests/test_lua_players.cpp` `test_galactic_ops`: `Invade()` on a fleet the local player does not own
     issues no order (`orders_issued` unchanged); on a fleet it owns, one order with player = local.
 - No probe is needed: the binary settles it, and it matches the 2026-10-31 run.
+
+### 31.6 Story reward INVADE_PLANET (a1h t04) [H unless tagged]
+
+Reward type 0x22 (reward switch case 0x22 → 0x45f5c0). It reads only Reward_Param1 (+0x50) and Reward_Param2 (+0x70).
+It returns nothing. Every message is a debug-log line (0x467540); nothing reaches the player or Lua.
+
+**0x45f5c0, in order:**
+1. Param1 empty: nothing, no log.
+2. Log "STORY REWARD - Invade planet %s".
+3. **Planet.** Param1 is a game object **type** name (0x407e00, case-insensitive). The planet is the first object of
+   that type in the current mode's object manager (0x140b15418 +0x18, list 0x2a87d0), as for SABOTAGE_STRUCTURE
+   (L1P4_LUA_GAPS §3). There is no owner filter and no check that the type is a planet.
+   - Not found (unknown type, or no object of that type): log "STORY REWARD FLASH OBJECT- Unable to find planet %s"
+     (sic, copied from FLASH_OBJECT). The function then **carries on with a null planet**, and the orbit-list read
+     0x395900 dereferences it, so the original crashes. With an unknown type name the log line already formats a
+     name read through the null type. [H for the code; not observed]
+4. **Planet friendly to the plot's player: nothing**, no log.
+   - The plot's player is reward event +0x228 (owning plot) → plot +0x638 (owning player, STORY.md). [H; replaces the
+     [M] in §31.2]
+   - Friendly = 0x39a2c0(obj, P, 0): the owner (planet: planet data +0x6c; other objects: +0x58) is P or an ally
+     (P +0x370 relation table [owner] == 0). An owner with no player, or a null P, is not friendly.
+5. **Walk the planet's orbit list** (0x395900: planet data +0xc0 vector) in list order. For each orbit object O that
+   is friendly to P (same test), take O's **direct** contents (0x3965f0 with expand = 0: the fleet's members, not
+   the cargo of transports). For each member U, in content order:
+   - skip U unless it is a TRANSPORT (+0x337 ≠ −1), i.e. a galactic land unit;
+   - **Param2 filter**, only when Param2 is non-empty: the transport's company type (TRANSPORT behaviour, 0x4f3bb0 =
+     transport data +0x48) has its upper-cased name (type +0xf8) compared with Param2 **byte for byte, case-sensitive**
+     (length, then memcmp). On a mismatch: log "INVADE PLANET - %s does not match %s" (type name, Param2) and go to
+     the next unit. The shipped Param2 values are upper case, so they match;
+   - U's combatant (object vf+0x10 with id 0x13; ref-counted: vf+0 add, vf+8 release) must exist and answer true to
+     its vf+0x138 (can fight in a land battle, BATTLE_TRANSITIONS §4.2) [M for the meaning of vf+0x138]. Otherwise go
+     to the next unit, with no log;
+   - **the first U that passes**: build **one InvadeEvent holding only U** (0x48fce0; 0x4903c0(event, [U], planet,
+     player −1, flag 1)), add it to the outgoing queue (0x3b01f0 on 0x140b2ed18) and **return**. The rest of the
+     orbit list is not looked at.
+6. No unit passes: nothing (only the mismatch log lines).
+
+So the reward sends **at most one unit in at most one event**. Param2 is a filter on which transport is sent (the
+company it carries), not a requirement checked anywhere else. Without Param2 the first land transport of the first
+friendly fleet is sent. The 127-unit cap of 0x4903c0 never matters here.
+
+**Issuer and timing.**
+- Issuer = event +0x24 = the local player, set by the EventClass ctor (§31.2 step 1). Player −1 leaves it unchanged.
+- Correction to §31.2: the single-player flush 0x3b08c0 does **not** restamp the player. It only sets the execute
+  frame (+0x28) to the current global frame and moves the event to the scheduled queue (0x140b15690).
+- The reward fires inside tick N (story service) [M: story service runs in the tick]. The outgoing queue is flushed at
+  step 8 of the **next** main-loop iteration and executed at step 10 (0x2c0c70) (MAIN_LOOP §1.1). So 0x48ff50 runs
+  after tick N and before tick N+1, like a human order (COMMANDS §4.1).
+
+**Then 0x48ff50 (§31.2):**
+- The whole event is dropped, with no message, if at execution time:
+  - the galactic pause / battle-pending counter (GMM+0x2c) is > 0; or
+  - in single-player, the linked-battle flag is set and the local player is in a queued conflict (0x2b0350, below).
+
+  The reward is not retried, because it has already fired.
+- U is kept only if its owner == the local player. If kept, `Land_Invade`(planet, [U], attacker = local player,
+  defender −1), unless a story check claims it (0x326a30 → 0x3286f0) [M].
+
+**Consequences.**
+- **Plot player = local player:** U is the local player's own transport and lands as the local player.
+- **Plot player ≠ local player** (an AI faction's plot): U belongs to the plot player or one of its allies. It is
+  dropped unless the local player owns it. Then nothing happens, there is no message, and the reward is spent.
+- **Ally's transport first:** even with plot player = local player, if an ally's friendly fleet comes first in the
+  orbit list with a transport that passes the filter, that transport is picked and then dropped. There is no
+  fallback to a later unit.
+- **Shipped data:** all four INVADE_PLANET events are in Underworld campaign plots:
+  - `STORY_CAMPAIGN_UNDERWORLD.XML` M07: `Bespin_Story` / `TYBER_ZANN_TEAM_NO_PEACEBRINGER`;
+  - `_TUTORIAL` and `_DEMO`: `Felucia` / `TYBER_ZANN_TEAM_PROLOGUE`;
+  - `_TEST_CAMPAIGN`: `Bespin` with no Param2.
+
+  The human is Underworld in those campaigns (`Underworld, SandboxHuman` / `ScriptableHuman`). So Tyber's transport
+  lands as Underworld, and the follow-up STORY_DEPLOY event (Param1 = the same team type, Param2 = the planet) starts
+  the LINK_TACTICAL mission. It works in the original.
+
+**0x2b0350 "local player in a queued conflict"** (argument: the galactic GOM).
+- It returns true when the local player id (0x294a70) is the attacker (+0x04) or the defender (+0x08) of **any**
+  record in the **space** queue (GOM+0x470, count +0x478) or the **land** queue (GOM+0x488, count +0x490). Every
+  record counts, not only the head.
+- There is no separate test of a running battle: a battle counts only while its record is still in a queue.
+- It has no single-player test of its own: callers (0x48ff50, 0x2be640 and others) check single-player
+  (0x28af60 == 0) and the flag themselves.
+
+**0x6ce600 `GalacticTaskForce.Invade`: confirmed direct.** It calls `Land_Invade` 0x2b0520 itself, with no
+InvadeEvent. So none of 0x48ff50's gates or hooks apply: no pause counter GMM+0x2c, no linked-battle test or 0x2b0350,
+no owner filter, no story checks 0x326a30 / 0x328720. It runs inside the script's own tick, with no queue.
+`Land_Invade` has no pause gate either. Its gates, in order (warning = 0x248620, error = 0x248190; each returns
+nothing):
+1. No fleet wrapper (+0x120), the wrapper has no object, the fleet object is flagged removed (+0x3a0 bit 1), or the
+   task force's unit list is empty: warning "No units in TaskForce %s, or no FleetObject".
+2. The fleet (behaviour 4) has no orbit planet (0x432c40 = fleet data +0x40; null in hyperspace): error "taskforce is
+   not in orbit at a planet".
+3. The surface is not accessible (0x375220(planet type, planet)): warning "surface of %s is not accessible".
+4. Take the fleet's direct members (0x432730 / 0x432710) that are TRANSPORTs (+0x337 ≠ −1), as ids (+0x50). There is
+   no cap, no owner filter, no combatant test and no enemy test. None: warning "No transports in Taskforce %s.".
+5. `Land_Invade`(planet's GOM (+0x2b8), planet id, ids, attacker = the fleet owner's player id, defender −1, map 0,
+   at_front 0). It queues only when attacker ≠ the computed defender (BATTLE_TRANSITIONS §1.3). Then it returns a
+   blocking object (0x511820, kind 0x80a, bound to the task force and planet by 0x511950, pushed by 0x256d40)
+   [M: what the block waits for].
+
+**Port.**
+- Today: there is no INVADE_PLANET handler in the reward switch of `engine/apps/sim/src/story_session.cpp`.
+- Rule:
+  1. Run steps 1–6 above: Param1 = planet type name (first object of the type); Param2 = an exact company-type name
+     filter; units = the direct transports of fleets in orbit friendly to the plot's player; combatant check.
+  2. Issue one Invade order on the queued path with player = the local player and only the first passing unit.
+  3. Let the galactic executor apply its gates and owner filter.
+  4. A planet that is not found: log and stop (the original crashes).
+
+### 31.7 Implemented (a1h t03 / t04, 2026-11-02)
+
+- t03, Invade event executor (`GalacticSim::execute`, `EventType::Invade`): dropped (NotAllowed) while the galactic
+  pause counter is raised, or while a story-linked battle is pending and the local player is attacker or defender of a
+  conflict in either queue (`ConflictHooks::in_queued_conflict`, 0x2b0350; `ConflictManager` answers, the battle host's
+  gate forwards). Then the owner filter as before. The galactic AI's `GalacticTaskForce.Invade` no longer issues the
+  event: it calls `GalacticSim::invade` (Land_Invade) directly with the task force's player (0x6ce600), counted and
+  logged like an order, so neither gate applies to it.
+- t04, story reward INVADE_PLANET (`StorySession::invade_planet_reward`): §31.6 steps 1–6, one unit, issued as the local
+  player through the pipeline's direct path at the reward's frame [port: the original queues it for the next command
+  step]; a planet type that is not found is logged ("story: INVADE_PLANET unable to find planet") and dropped [port: the
+  original crashes]; the combatant test vf+0x138 is the unit's GroundUnit kind [port]; the planet is the first planet
+  row of the type (as SABOTAGE_STRUCTURE); the Param2 mismatch line goes to the session's Lua messages.
+- Not changed: `paused()` still applies the linked-battle flag to every player for the other commands (REMAINING_GAPS
+  §6.4 "[port: for every player]"); with `in_queued_conflict` available they could follow the original too.
