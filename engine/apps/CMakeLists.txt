@@ -163,7 +163,9 @@ if(_alamo_sim)
     # (A1_READINGS §33) and non-unit REVEAL sources (FOG_OF_WAR §3.2: a held Reinforcement_Point lifts its owner's fog, so AI
     # drops there pass the fog test) seeds 5, 7 and 11 end (all destroyed); the others still reach the cap with fog-hidden
     # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. The test runs seed 5 (ends at
-    # frame 10879) with --expect-battle-end again. One ctest entry per worker count so they run
+    # frame 10879) with --expect-battle-end again. a1i t01 (2026-11-02): reserves no longer count (BT §3.1a [H]) and the land
+    # AI loads every plan folder (AI_GALACTIC §1.9.1), so SpaceMode\RetreatPlan serves Land_Retreat: seeds 1-12 all end with
+    # the Rebel attacker retreating (frames 2877-5175, seed 5 at 2877; A1_READINGS §34). One ctest entry per worker count so they run
     # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
     # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
     set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
@@ -190,13 +192,18 @@ if(_alamo_sim)
                      --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt --golden ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
                          FIXTURES_REQUIRED alamo_land_outcome_w0)
+    # a1i t01: a second seed (ends at frame 4080) so a change that stalls only some seeds is caught.
+    add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_s1
+             COMMAND alamo_headless --skirmish-ai foc-land --seed 1 --ticks 20000 --workers 4 --quiet --expect-battle-end)
+    set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_s1 PROPERTIES TIMEOUT 1800)
     # t41: FoC space, an AI defender with a Level 2 station against a far larger fleet must not retreat; skipped (exit 0) without ALAMO_FOC_DATA.
     # refixf t06/t07 (2026-10-31): the battle must end; seed 3 now kills the station (~frame 10300) and the remaining defenders
     # then retreat (victory all-retreated), which is the expected end after the station is lost. a1h (2026-11-02): with the
     # host-side object follow (A1_READINGS §33.4) and non-unit REVEAL sources (FOG_OF_WAR §3.2) together, seed 3 reaches the
     # cap; seeds 1, 2, 4-7 end. After merging main's S7/S8 work (fighter formation targets, run-time obstacles) on top of
     # a1h, seeds 2-5, 7, 8 of 1-8 end and 1, 6 reach the cap; seed 3 ends again (station lost, defenders all retreat, frame
-    # 11967), so the test is back on seed 3.
+    # 11967), so the test is back on seed 3. a1i t02 (2026-11-02): seeds 1 and 6 are slow sieges, not stalls (the station
+    # launches squadrons without limit; with a 40000-frame cap they end at 16344 / 17340, A1_READINGS §34.5).
     add_test(NAME alamo_headless_skirmish_ai_foc_station
              COMMAND alamo_headless --skirmish-ai foc-station --seed 3 --ticks 20000 --workers 4 --quiet --expect-battle-end)
     # t48: the default seed reaches QuickReinforce's anti-idle; 0 Lua errors (it may run to the frame limit: half the seeds do, the

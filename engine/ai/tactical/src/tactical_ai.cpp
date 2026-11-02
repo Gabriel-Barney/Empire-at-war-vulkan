@@ -3697,15 +3697,12 @@ std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvid
     return out;
 }
 
-std::vector<std::string> tactical_plan_files(TacticalMode mode, const std::function<std::vector<std::string>(std::string_view)>& list) {
-    const std::string folder = ai_upper_copy(mode == TacticalMode::Land ? kPlanFolders[2] : kPlanFolders[1]);
-    std::vector<std::string> out;
-    for (const std::string& f : list_plan_files(list)) {
-        const std::string u = ai_upper_copy(f);
-        if (u.size() > folder.size() && u.compare(0, folder.size(), folder) == 0 && u.find('\\', folder.size()) == std::string::npos)
-            out.push_back(f);
-    }
-    return out;
+// AI_GALACTIC §1.9.1 [H] (A1_READINGS §34.2): the loader 0x4e7e30 puts every plan folder into one plan manager, so a
+// tactical AI also sees plans outside its mode folder (SpaceMode\RetreatPlan.lua serves Land_Retreat; the AI root's
+// GenerateMagicCashDrop serves both skirmish modes). A plan is only picked for the goals its Category names, so the other
+// mode's plans are loaded but never run.
+std::vector<std::string> tactical_plan_files(TacticalMode, const std::function<std::vector<std::string>(std::string_view)>& list) {
+    return list_plan_files(list);
 }
 
 }  // namespace alamo::ai::tactical

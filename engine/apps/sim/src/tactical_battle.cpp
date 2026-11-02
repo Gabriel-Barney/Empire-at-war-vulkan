@@ -2132,9 +2132,8 @@ void TacticalBattle::check_victory() {
     // the attacker once every defender ground structure died. [port] 0xd (rogue-faction base components) not modelled.
     uint32_t base_parts = 0, base_alive = 0;
     for (const Participant& p : parts_) {
-        // [port] a never-deployed participant (reserve / pool) still counts when one of its spawn types is victory-relevant;
-        // BT §3.1a says pool units are not GOM objects and never count [M], not adopted until probed.
-        if (!p.deployed && victory_relevant(p)) has[p.side] = true;
+        // BT §3.1a item 1 [H] (A1_READINGS §34.1): a never-deployed participant (reserve / pool) never counts; it is a
+        // galactic object until its landing object is created at drop time (0x2b5fe0).
         if (p.starbase && p.deployed && p.alive == 0) station_lost = true;
         if (p.structure && p.side == 0) {
             ++base_parts;
@@ -2165,15 +2164,6 @@ bool TacticalBattle::victory_relevant(uint32_t type) {
         c = r ? 2 : 1;
     }
     return c == 2;
-}
-
-bool TacticalBattle::victory_relevant(const Participant& p) {
-    if (p.other_type >= 0) return victory_relevant(static_cast<uint32_t>(p.other_type));  // §3.2 step 3
-    const galactic::ConflictTypeInfo& ti = rules_->type(p.type);
-    if (ti.members.empty()) return victory_relevant(p.type);
-    for (const auto& [mt, n] : ti.members)
-        if (n > 0 && victory_relevant(mt)) return true;
-    return false;
 }
 
 void TacticalBattle::apply_speed_factors() {
