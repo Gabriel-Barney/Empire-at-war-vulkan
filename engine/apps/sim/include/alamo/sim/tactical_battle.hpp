@@ -279,6 +279,14 @@ public:
     int32_t first_hardpoint_of_type(objects::ObjectId target, int32_t type) const;
     // True when `player`'s units are left to commands (BattleConfig::skip_human_units and a human galactic player).
     bool commanded_by_player(int32_t player) const;
+    // OI follow-up t03 (A1_READINGS §28.9): movement locked (0x39ad40) = the abilities' share of the obj +0x3a8 counter,
+    // or a share a Lua bridge reports (Lock_Current_Orders, a running Divert). The lock never changes speed: a group move
+    // (player commands, AI orders, the stand-in) leaves locked units out and they keep their current order; ability
+    // moves (CONFUSE, HUNT, JET_PACK) are not filtered.
+    bool movement_locked(objects::ObjectId id) const;
+    // Registered per bridge owner `key` (an empty fn removes it; the battle outlives its AI / story bridges).
+    void set_script_movement_lock(const void* key, std::function<bool(objects::ObjectId)> fn);
+    bool script_movement_locked(objects::ObjectId id) const;  // the bridges' shares only
     // --- end human order API ---
 
     // --- P host (owner: game host agent): human reinforcements ---
@@ -389,9 +397,10 @@ public:
     float ground_height(float x, float y) const;
     // Frame count of clip `anim` (index 0) of the object's model in this mode (sim animation); 0 = unknown.
     uint32_t anim_clip_frames(const TacticalMode& mode, objects::ObjectId id, uint8_t anim) const;
-    // Frame count and fps of clip `anim` (a ModelAnimType id, index 0) of the object's model (OI t03 ability timings:
+    // Frame count and fps of clip `anim` (a ModelAnimType id, index `variant`) of the object's model (OI t03 ability timings:
     // static clip data, never the playing clock). False without a sim animation, model or clip.
-    bool anim_clip_info(const TacticalMode& mode, objects::ObjectId id, int32_t anim, uint32_t& frames, float& fps) const;
+    bool anim_clip_info(const TacticalMode& mode, objects::ObjectId id, int32_t anim, uint32_t& frames, float& fps,
+                        uint32_t variant = 0) const;
     // Plays clip `anim` of the object from `start_fraction` at `speed` (Create_Cinematic_Transport Land / Takeoff;
     // sim animation only). False without a clip.
     bool play_clip(const TacticalMode& mode, objects::ObjectId id, uint8_t anim, float start_fraction, float speed, uint64_t global_frame);
@@ -862,6 +871,9 @@ private:
     void unit_gone(TacticalMode& mode, Unit& u);  // container bookkeeping after a death / retreat
     // S10-int steps
     void apply_speed_factors();
+    void drop_locked(std::vector<objects::ObjectId>& ids) const;  // OI follow-up t03: group moves skip locked units
+    // OI follow-up t03: per bridge owner, registration order (not saved: the bridges' own state)
+    std::vector<std::pair<const void*, std::function<bool(objects::ObjectId)>>> script_locks_;
     void feed_attack_targets(const objects::ObjectStore& store);
     // S7 fighters (FIGHTER_FLYING.md; tactical_battle.cpp "fighter host"): squadrons / params into the MovementSystem,
     // the combat target as the formation attack target, the locomotor's Provoke / Retarget orders back into combat.

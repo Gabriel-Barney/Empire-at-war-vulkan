@@ -16,6 +16,7 @@ using combat::ProjectileCategory;
 namespace {
 
 constexpr float kDegToRad = 0.017453292519943295f;
+constexpr int32_t kAnimRevealBegin = 0x69, kAnimRevealLoop = 0x6a, kAnimRevealEnd = 0x6b;  // Force_Sight (§4.14)
 
 bool forwards_to_special(uint32_t t) {
     // 2.5: re-check the gates, then forward to the special ability named by the record.
@@ -292,7 +293,7 @@ bool AbilitySystem::can(const Obj& o, uint32_t t, bool check_recharge, bool chec
             if (o.gravity_well_destroyed) return false;
             break;
         case kHunt:
-            if (o.immobilize != 0) return false;  // [M]
+            if (locked(o)) return false;  // movement locked (0x39ad40, A1_READINGS §28.9)
             break;
         case kCaptureVehicle:
         case kTargetedInvulnerability:
@@ -313,9 +314,8 @@ bool AbilitySystem::can(const Obj& o, uint32_t t, bool check_recharge, bool chec
             break;
         case kFireLobbingSuperweapon:
             return false;  // player super-weapon state not modelled [port]
-        case kSaberThrow:
-            for (const SpecialState& sp : o.specials)
-                if (sp.applied) return false;
+        case kForceSight:  // case 0x34 (§4.14; the §2.4 row read "SABER_THROW"): no ability of the owner busy (0x39a350)
+            if (anim_busy(o, frame)) return false;
             break;
         case kLeechShields:
         case kBlast:
@@ -458,10 +458,12 @@ void AbilitySystem::handler(Obj& o, uint32_t t, bool on, uint32_t frame, ObjectI
         case kAvoidDanger:
         case kDeployTroopers:
         case kSelfDestruct:  // 0x3a4070: the implementing behaviour on / off (OI abilities: HUNT, SELF_DESTRUCT, ...)
+            if (on && locked(o)) return;  // switching on is refused while movement is locked (A1_READINGS §28.9)
             h_behavior(o, t, on, frame);
             return;
         case kMissileShield:
             if (on) {
+                stop_order(o.id, frame);  // 0x4261f0 always, then the lock with Disable_Movement (A1_READINGS §28.9)
                 if (rec && rec->disable_movement) immobilize(o, +1, frame);
                 start_active(o, t);
             } else {
@@ -622,7 +624,10 @@ void AbilitySystem::interdict(Obj& o, bool on, uint32_t frame) {
     if (on) {
         if (o.gravity_well_destroyed) return;
         start_active(o, kInterdict);
-        if (rec && rec->disable_movement) immobilize(o, +1, frame);
+        if (rec && rec->disable_movement) {  // stop (0x4261f0), then lock: the lock alone freezes nothing (§28.9)
+            stop_order(o.id, frame);
+            immobilize(o, +1, frame);
+        }
         event(AbilityEventKind::InterdictOn, kInterdict, o.id, kNoObject, frame);
         if (cfg_.mode == GameMode::Space && !o.interdicting) {
             // OI abilities (TACTICAL_GAPS §1.5 [H]; relation test 0x2824d0 [M: enemies]): a permanent entry keyed by
@@ -942,8 +947,14 @@ bool AbilitySystem::apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp,
         case SpecialClass::ForceSight: {  // fog follow-up: ForceSightAbilityClass 0x713ba0 (FOG_OF_WAR.md §3.3)
             // While channelling (Force_Sight_Duration_In_Secs [M]): Reveal_All for the owner; the recharge starts at
             // activation [port].
+            {  // §4.14 gates: busy -> refused; Force_Revel_Begin / Loop -> already running; Force_Revel_End -> refused
+                const AnimView v = anim_before(o, frame);
+                if (anim_busy(o, frame) || v.type == kAnimRevealEnd) return false;
+                if (v.type == kAnimRevealBegin || v.type == kAnimRevealLoop) return true;
+            }
             if (sp.applied) return false;
             stop_order(o.id, frame);  // OI abilities: the apply stops the unit (animation 0x69, §2.3.10)
+            play_anim(o, kAnimRevealBegin, {}, 0, false, 1.0f, kAnimHoldLoop, frame);  // §4.14: Begin, then the Loop
             sp.frames = static_cast<int32_t>(static_cast<float>(cfg_.fps) * s.force_sight_duration);
             sp.applied = 1;
             sp.target = o.id;
@@ -1027,6 +1038,7 @@ void AbilitySystem::remove_special(Obj& o, SpecialState& sp, uint32_t frame) {
             if (fog_reveal_all_ && sp.player >= 0) fog_reveal_all_(sp.player, false);
             sp.player = -1;
             sp.frames = 0;
+            play_anim(o, kAnimRevealEnd, {}, 0, false, 1.0f, kAnimIdle, frame);  // §4.14: End one-shot, then the idle
             break;
         default: class_remove(o, sp, frame); break;  // OI abilities
     }
@@ -1368,6 +1380,10 @@ int32_t AbilitySystem::immobilize_count(ObjectId id) const {
     const Obj* o = obj(id);
     return o ? o->immobilize : 0;
 }
+int32_t AbilitySystem::anim_type_at(ObjectId id, uint32_t frame) const {
+    const Obj* o = obj(id);
+    return o ? anim_view(*o, frame).type : -1;
+}
 bool AbilitySystem::lock_movement(ObjectId id, bool lock, uint32_t frame) {
     Obj* o = obj(id);
     if (!o) return false;
@@ -1640,6 +1656,19 @@ void AbilitySystem::shot_fired(ObjectId shooter, ObjectId target, int32_t /*targ
         event(AbilityEventKind::Deactivated, kIonCannonShot, u->id, target, frame);
     }
     if (u->stealthed) break_stealth(*u, frame);  // firing breaks stealth (fade 0.3 s, render)
+    // OI follow-up t01 (§4.14): WeaponBehavior 0x54d090 plays Attack (5) in the primary slot unless the type sets
+    // Attack_Animation_Is_Overlay. Recorded only for owners whose melee gates read it (Arc / Generic / Eat) and only over
+    // no running ability clip (the hold suspends the weapon) [port: variant 0, no draw; the idle replaces it at its end].
+    if (host_.attack_overlay && !host_.attack_overlay(shooter) && anim_view(*u, frame).type < 0 &&
+        (class_has(*u, SpecialClass::ArcSweep) || class_has(*u, SpecialClass::GenericAttack) ||
+         class_has(*u, SpecialClass::EatAttack)))
+        play_anim(*u, 5, {}, 0, false, 1.0f, kAnimIdle, frame);
+}
+
+bool AbilitySystem::class_has(const Obj& o, SpecialClass cls) const {
+    for (const SpecialState& sp : o.specials)
+        if (data_->specials[sp.desc].cls == cls) return true;
+    return false;
 }
 
 AbilitySystem::SpecialState* AbilitySystem::blast_state(Obj& o) {
@@ -1932,6 +1961,17 @@ void AbilitySystem::hash(StateHasher& h) const {
             h.i32(o.troopers_deployed);
             h.u32(static_cast<uint32_t>(o.troopers.size()));
             for (ObjectId t : o.troopers) h.i32(t);
+        }
+        // OI follow-up t01 / t04: the animation record and the lock pairs, only once set (keeps record-less digests)
+        if (o.anim_type >= 0 || o.lock_flags != 0) {
+            h.u32(0x4D494E41u);  // "ANIM"
+            h.i32(o.anim_type);
+            h.u32(o.anim_start);
+            h.f32(o.anim_rate);
+            h.f32(o.anim_end);
+            h.u8(o.anim_loop);
+            h.u8(o.anim_then);
+            h.u8(o.lock_flags);
         }
     }
     // OI abilities: mines, player / source lists, remote bombs, the spawn serial
