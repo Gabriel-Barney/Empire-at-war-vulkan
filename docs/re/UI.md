@@ -426,6 +426,85 @@ command bar per component `Mouse_Over_SFX` (mostly `GUI_Highlight_Mouse_Over`) a
 Underworld}_SFX`, toggles `GUI_Toggle_*_On/Off`. Menu music: `Main_Menu_Music_Event`; load screen
 music GameConstants `Music_Event_Battle_Load_Screen`. UI sounds use the free (non-sync) RNG. [H]
 
+### 3.7 Colour combos and tech-tree arrows (2026-11-02, p4ui t03)
+
+Sources: the staging colour fill 0xfa1c0, the slot refresh 0xfe7c0, the LAN lobby fill 0xb1240, the colour-change
+handlers 0x288c0 / 0xb6410 / 0x2ba70, `GUIGadgetComboboxClass` (0x1e7920 vtable; set-current-item 0x1e7a60, field layout 0x1e8520),
+the custom-image texture setter 0x1eb000, the tech-tree page fill 0x11ebc0, the battle-end fill 0x88fe0 and the
+fleet summary row fill 0x116070; data: `GUIDialogs.rc`, `GUIDialogs.xml`, FoC `MT_CommandBar.mtd`.
+
+#### 3.7.1 Player-colour combo
+
+- **Controls**: `IDC_PLAYER_COLOR_0..8` on `IDD_SKIRMISH_STAGING_DIALOG`, `IDD_LAN_STAGING_DIALOG`,
+  `IDD_INTERNET_STAGING_DIALOG` (75 × 216 units, `CBS_DROPDOWN`; `_0` also has `CBS_SORT`, which the gadget does
+  not act on [M]), and `IDC_LAN_COLOR_SELECT` on `IDD_LAN_LOBBY_DIALOG` (73 × 169). They are ordinary combo
+  gadgets with the default combo skin (`Combo_Box_Left_Cap` `i_dialogue_combo_left.tga` 2 × 25,
+  `Combo_Box_Text_Box` `i_dialogue_combo_middle.tga` 2 × 25 stretched, `Combo_Box_Popdown_Button` /
+  `_Mouse_Over` / `_Pressed` `i_dialogue_scroll_small_down*.tga` 22 × 25): **no colour-specific textures or
+  frame**. [H]
+- **Items are text, not swatches.** Every colour combo is filled with one item per palette entry, index
+  i = 0..8 (9 entries), item data = i. The item text is a single character and the item carries a top and a
+  bottom text colour, both set to palette colour i (so no gradient). The palette is the 9 GameConstants
+  `MP_Color_Blue, _Red, _Green, _Orange, _Cyan, _Purple, _Yellow, _Gray, _Eight` (SPACE_AND_OPEN.md §B.3; the
+  same table the player colours use). [H]
+  - Staging combos: the character is byte 0xFE converted with the OEM code page = **U+25A0 BLACK SQUARE ■**.
+  - LAN lobby `IDC_LAN_COLOR_SELECT`: byte 0xDB through the OEM code page = **U+2588 FULL BLOCK █**.
+  - [port] use these two code points directly (0xFE / 0xDB map to them in the US and Western-European OEM pages
+    437 / 850; the port does not depend on the system code page).
+- **Font**: per-control `GUIDialogs.xml` fonts: `IDC_PLAYER_COLOR_n` = Arial Unicode MS, `Size` 35,
+  `Stretch_Factor` 0.25; `IDC_LAN_COLOR_SELECT` = Arial Unicode MS 30, `Stretch_Factor` 0.20; both
+  `Top_Color` = `Bottom_Color` = 33,37,47,255, no emboss / outline (that colour is only the font default; the
+  item colours replace it). With the stretch rule (§3.4, GALACTIC_DIALOGS.md §6: height × s, width kept at the
+  unstretched average character width) the glyph comes out as a **flat wide bar**: about a quarter of the
+  35-pt glyph's height at its full width. That bar is the whole "swatch". [H for data, M for the look]
+- **Field (closed combo)**: the current item's text is drawn with the item's two colours in the control font.
+  Placement for **every** combo gadget (not only colour combos): horizontally **centred** in the field part
+  left of the pop-down button (x = field left + (field width − button width) / 2 − text width / 2), vertically
+  centred on the control. Only a combo flagged left-justified starts at the field's left edge plus a small inset
+  (0.005 of the screen width); the only caller of that flag is `IDC_INTERNET_HOST_CLAN_COMBO`. If the text is
+  wider than (field width − 2 × padding − button width) the gadget drops **trailing characters** until it fits
+  (no ellipsis). [H for the formulas, M for the padding field]
+- **Drop-down list**: the rows are the combo's list items, each drawn in its own item colours with the control
+  font; hover / selected highlight and scrolling are the generic combo list's (no colour-specific art). [M]
+- **States**: no per-state colour art: hover only swaps the pop-down button texture
+  (`Combo_Box_Popdown_Button_Mouse_Over`), open = `_Pressed`; a disabled combo (not your slot / not the host)
+  keeps its item colours. [M]
+- **Selection**: the chosen item's data (0..8) is the player's colour index; a slot's combo is set from that
+  index (clamped to the palette). [H]
+
+#### 3.7.2 Tech-tree arrows
+
+- **Controls**: plain `PETROGLYPH_DIALOG_IMAGE` controls placed in `GUIDialogs.rc` between the unit icons:
+  `IDC_RIGHT_ARROWn`, `IDC_DRIGHT_ARROWn`, `IDC_RRIGHT_ARROWn`, `IDC_DOWN_ARROWn` (n ≤ 30 in the shipped data;
+  `IDC_DRIGHT_ARROW` has no instance). Counts: `IDD_TECH_TREE_EMPIRE` 24, `_REBEL` 22, `_BLACKMARKET` 21,
+  `_EMPIRE_SPACE` 7, `_REBEL_SPACE` and `_BLACKMARKET_SPACE` 1 each (the long `IDC_RIGHT_ARROW21`, 845 × 14
+  units: the tech-level axis under the `IDC_STATIC_TECHn` captions). **Placement is entirely the .rc rectangle**;
+  no code positions arrows relative to tech levels or units. `GUIDialogs.xml` has no entries for them. [H]
+- **Fill** (each time a tech-tree page is filled): for n = 0..99 and each of the four prefixes, if the dialog
+  has that control and it is visible, set its texture and tint, then clear the image's overlay layers to
+  transparent: [H]
+
+  | prefix | texture | MTD rect (FoC `MT_CommandBar`) |
+  |---|---|---|
+  | `IDC_RIGHT_ARROWn` | `i_tree_arrow_right.tga` | 30 × 14 |
+  | `IDC_DRIGHT_ARROWn` | `i_tree_arrow_2right.tga` | 30 × 14 |
+  | `IDC_RRIGHT_ARROWn` | `i_tree_arrow_3right.tga` | 30 × 14 |
+  | `IDC_DOWN_ARROWn` | `i_tree_arrow_down.tga` | 14 × 30 |
+
+  Tint 255,255,255,255, alpha-blended draw mode (2D selector 2, PrimAlpha, §6). The texture fills the control
+  rectangle (so the 845-unit axis is the 30 × 14 arrow stretched). [H for texture / tint, M for stretch]
+- **No locked / researched states on arrows**: every arrow is white whatever the player has researched. [H]
+- **Unit icons** (`IDC_TECHTREE_<type>`, same fill, after the arrows): for every object type that belongs to the
+  viewing player's faction, the name with `-` replaced by `_` gives the control; if it exists its texture =
+  the type's icon, tint **white** 255,255,255,255, **or grey 90,90,90,255** when the player's tech level is below
+  the type's `Tech_Level`, or the type is build-locked for that player (flag + the player's unlocked test). No
+  "researched" colour. Icons use draw mode 0; the tooltip is the type's text. [H for colours, M for the lock test]
+- **Same arrow art elsewhere**: `IDD_BATTLE_END_DIALOG` `IDC_RIGHT_ARROW1` / `_2` (255 × 14, between the two
+  sides' unit columns) get `i_tree_arrow_right.tga`, alpha mode, white [M for the tint argument], every time the
+  dialog is filled. `IDD_SUMMARY_SCREEN_FLEETS` `IDC_HEROES_DIVIDERSk` (824 × 14 row separators): when row r is
+  filled, `IDC_HEROES_DIVIDERS(r − 1)` gets `i_tree_arrow_right.tga`, white, alpha mode, and is shown; when row r
+  is empty that divider and the row's icon are hidden. [H]
+
 ---
 
 ## 4. Input routing (P1 input layer)
