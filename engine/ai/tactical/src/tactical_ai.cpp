@@ -355,7 +355,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
             if (std::find(t.units.begin(), t.units.end(), u) != t.units.end()) return true;
         return false;
     }
-    // a1h t02 (A1_READINGS §32.3): a newer task-force order collects every TF unit and raises signal 0xb on it, so each
+    // a1h t02 (A1_READINGS §33.3): a newer task-force order collects every TF unit and raises signal 0xb on it, so each
     // older movement / attack / guard status of that TF loses all its units and finishes (Result nil); it never acts
     // again. [port] unit-level Lua orders, abilities and garrison orders on a TF member do not supersede yet.
     void supersede(int32_t tf) {
@@ -1835,8 +1835,8 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             if (t->units.empty()) return finish(false);
             if (s.target >= 0) {
                 // An Attack_Move / Move_To to an OBJECT (0x73c4f0) stays open after arrival while the object lives
-                // (A1_READINGS §32.2, modes 0 / 1) -> finished (true) when it dies. a1h t02: the status is passive; the
-                // battle host's movement follows the object (§32.4), the status no longer re-orders the units.
+                // (A1_READINGS §33.2, modes 0 / 1) -> finished (true) when it dies. a1h t02: the status is passive; the
+                // battle host's movement follows the object (§33.4), the status no longer re-orders the units.
                 const ObjectHandle h = store.find(s.target);
                 if (!store.alive(h)) return finish(true);
                 return false;
@@ -1858,9 +1858,9 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             return false;
         }
         case StatusKind::Guard: {
-            // a1h t02 (A1_READINGS §32.2): passive, Result = the BlockingStatus default (nil). An object guard finishes when
+            // a1h t02 (A1_READINGS §33.2): passive, Result = the BlockingStatus default (nil). An object guard finishes when
             // the object dies or the TF is empty, and stays open after arrival (the battle host's movement follows the
-            // object, §32.4); a position guard finishes when every unit has arrived. A newer order of the TF finishes it
+            // object, §33.4); a position guard finishes when every unit has arrived. A newer order of the TF finishes it
             // too (supersede). [port] the object's new-order (0xb) and owner-change (0x1a) signals are not modelled.
             auto end = [&s] {
                 s.finished = true;

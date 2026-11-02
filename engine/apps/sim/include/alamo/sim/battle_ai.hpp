@@ -147,10 +147,10 @@ private:
     float allow_reinforcement_fraction_ = 0.0f;  // A2 tactical: Allow_Reinforcement_Percentage_Normalized
     bool use_reinforcement_points_ = true;       // a1g t04 follow-up: Use_Reinforcement_Points (GC +0x118a0)
     void standin_orders();
-    // a1h t02 (A1_READINGS §32.4 / §32.5 rule 2): a group move with an object goal (Guard_Target, Attack_Move or Move_To on
+    // a1h t02 (A1_READINGS §33.4 / §33.5 rule 2): a group move with an object goal (Guard_Target, Attack_Move or Move_To on
     // an object) follows the object in the movement layer, not by AI re-orders: at most once per 30 frames the group is
     // re-pathed when the object is more than R (half the lead member's attack range) from the recorded goal. Any newer
-    // order for a unit takes it out of its follow record (signal 0xb, §32.3); an empty record or a dead object ends it.
+    // order for a unit takes it out of its follow record (signal 0xb, §33.3); an empty record or a dead object ends it.
     struct ObjectFollow {
         std::vector<objects::ObjectId> units;
         objects::ObjectId target = objects::kNoObjectId;

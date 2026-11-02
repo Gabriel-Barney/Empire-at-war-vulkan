@@ -1192,7 +1192,7 @@ code.]
     issues no order (`orders_issued` unchanged); on a fleet it owns, one order with player = local.
 - No probe is needed: the binary settles it, and it matches the 2026-10-31 run.
 
-## 32. Task-force Guard_Target and its block status (a1h t02) [H unless tagged]
+## 33. Task-force Guard_Target and its block status (a1h t02) [H unless tagged]
 
 **Question.** Shipped `Escort(tf, target)` (PGTaskForce.lua) calls `tf.Guard_Target(target)` without blocking, once per
 second while no member `Has_Attack_Target()`. `SecureBuildPad` blocks on `Guard_Target(AITarget)` for up to 60 s, with
@@ -1204,7 +1204,7 @@ second while no member `Has_Attack_Target()`. `SecureBuildPad` blocks on `Guard_
 
 Port today: every Guard status stays alive until the plan ends and re-issues a guard order every 150 frames.
 
-### 32.1 `LandTaskForceClass::Guard_Target` (0x6ebdc0)
+### 33.1 `LandTaskForceClass::Guard_Target` (0x6ebdc0)
 
 **Arguments:** `(target [, threat [, useZonePath]])`, parsed like `Move_To`. The 3rd-argument type warning even reads
 "LandTaskForceClass::Move_To -- Unexpected type for parameter %d", copied from Move_To.
@@ -1273,7 +1273,7 @@ an optional hardpoint. Differences:
 - else the targeting pack's current target (obj +0xf0 → +8).
 So for a guarding unit it is true only when the unit's own targeting has a target.
 
-### 32.2 Block status: IsFinished, Result, signals
+### 33.2 Block status: IsFinished, Result, signals
 
 - **IsFinished** (vf19 0x73cae0):
   - if the zone-route-leg flag +0x55 is set, it first issues the next zone leg (0x73bc50(status, 0));
@@ -1304,7 +1304,7 @@ So for a guarding unit it is true only when the unit's own targeting has a targe
 
 **When an object guard finishes.** Any one of these finishes it:
 - the guarded object dies (0x10);
-- the guarded object receives signal 0xb, meaning it was given a new order (§32.3);
+- the guarded object receives signal 0xb, meaning it was given a new order (§33.3);
 - the guarded object turns hostile (0x1a);
 - the TF becomes empty;
 - every unit of the status is gone (died, changed owner or taken by a newer order);
@@ -1316,13 +1316,13 @@ It does **not** finish when the units arrive.
 does; or when all its units are gone; or when the TF is empty.
 
 **Modes 0 and 1 (AI_TACTICAL open item 3).**
-- The status has **no arrival radius of its own**. "Arrived" means the formation's signal 10 (§32.4).
+- The status has **no arrival radius of its own**. "Arrived" means the formation's signal 10 (§33.4).
 - The rest follows the table above.
 - Object targets of Move_To / Attack_Move stay open after arrival while the object lives and stays a valid, hostile,
   unfogged target.
 - This matches the space version (TACTICAL_COMBAT, SpaceMovementBlockStatus).
 
-### 32.3 Superseded statuses
+### 33.3 Superseded statuses
 
 **Who raises signal 0xb.** The signal means "a new order replaces this unit's order" [M: name]. It is raised on a unit
 by:
@@ -1354,12 +1354,12 @@ its units are taken). Statuses therefore never pile up.
 - The AI guard path has no explicit target clear: no 0x38f5d0 and no `Order_Attack`, and 0x4f8200 / `Set_Move` do not
   touch obj +0xf0 [M].
 - So any break-off comes from the restarted movement and from the targeting scan's guard leash (`Guard_Chase_Range`,
-  §32.4), not from a direct reset [M].
+  §33.4), not from a direct reset [M].
 
 **`SecureBuildPad`.** `BlockOnCommand(Guard_Target(pad), 60, Target_Has_Structure)` normally ends by the 60 s timeout or
 the break function, because the guard status stays open while the pad lives.
 
-### 32.4 Unit-level guard behaviour (formation, flag 0x02) [M unless tagged]
+### 33.4 Unit-level guard behaviour (formation, flag 0x02) [M unless tagged]
 
 **Following a moving object needs no further AI order** [H for the mechanism]. The formation's periodic update 0x4192b0
 runs at most once per FPS = 30 frames (+0x1d8 = now + 30). With a kind-3 goal it does two things:
@@ -1391,10 +1391,10 @@ object re-paths the formation again.
 They then auto-engage within `Guard_Chase_Range` of the slot goal. Whether they walk back after a chase was not traced
 [L].
 
-### 32.5 Rule for the port
+### 33.5 Rule for the port
 
 1. **`TF.Guard_Target(target [, threat [, useZonePath]])`:**
-   - resolve the target as in §32.1 (a TF target gives one `Get_Int(0, n−1)` member);
+   - resolve the target as in §33.1 (a TF target gives one `Get_Int(0, n−1)` member);
    - issue **one** group move to the TF's collectable members: kind object (or position), **guard flag**, threat;
    - give no attack order and clear no target;
    - return nil when nothing could be set up, else a status.

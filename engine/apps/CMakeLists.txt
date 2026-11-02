@@ -160,7 +160,7 @@ if(_alamo_sim)
     # seeds 1-6. a1g (2026-11-02): after the free-store reservations (§28) and the land Reinforce drop layout (§30.7,
     # TACTICAL_GAPS §4.2.1) no seed 1-12 ended before the 14400-frame cap (Rebels retreat), so --expect-battle-end was dropped
     # (Gabriel, 2026-11-02). a1h t01 (2026-11-02): with the M1 WeaponBehavior fix, passive / superseded guard statuses
-    # (A1_READINGS §32) and non-unit REVEAL sources (FOG_OF_WAR §3.2: a held Reinforcement_Point lifts its owner's fog, so AI
+    # (A1_READINGS §33) and non-unit REVEAL sources (FOG_OF_WAR §3.2: a held Reinforcement_Point lifts its owner's fog, so AI
     # drops there pass the fog test) seeds 5, 7 and 11 end (all destroyed); the others still reach the cap with fog-hidden
     # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. The test runs seed 5 (ends at
     # frame 10879) with --expect-battle-end again. One ctest entry per worker count so they run
@@ -193,7 +193,7 @@ if(_alamo_sim)
     # t41: FoC space, an AI defender with a Level 2 station against a far larger fleet must not retreat; skipped (exit 0) without ALAMO_FOC_DATA.
     # refixf t06/t07 (2026-10-31): the battle must end; seed 3 now kills the station (~frame 10300) and the remaining defenders
     # then retreat (victory all-retreated), which is the expected end after the station is lost. a1h (2026-11-02): with the
-    # host-side object follow (A1_READINGS §32.4) and non-unit REVEAL sources (FOG_OF_WAR §3.2) together, seed 3 reaches the
+    # host-side object follow (A1_READINGS §33.4) and non-unit REVEAL sources (FOG_OF_WAR §3.2) together, seed 3 reaches the
     # cap; seeds 1, 2, 4-7 end. The test runs seed 1 (the attacker destroys the station and every defender, frame 9221).
     add_test(NAME alamo_headless_skirmish_ai_foc_station
              COMMAND alamo_headless --skirmish-ai foc-station --seed 1 --ticks 20000 --workers 4 --quiet --expect-battle-end)

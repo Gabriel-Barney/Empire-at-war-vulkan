@@ -738,7 +738,7 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
     return true;
 }
 
-// ---- a1h t02: object-goal follow (A1_READINGS §32.4, rule §32.5.2) ----------------------------------------------------
+// ---- a1h t02: object-goal follow (A1_READINGS §33.4, rule §33.5.2) ----------------------------------------------------
 
 void BattleAi::follow_drop(const std::vector<objects::ObjectId>& units) {
     for (ObjectFollow& f : follows_)
@@ -834,7 +834,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
         }
         case T::MoveToObject: {
             // Lua Move_To(object) without a threat threshold (ev_move_to_object): a move to the target's current position,
-            // like the LuaOrder MoveTo path; a1h t02: the group then follows the object (follow_service, A1_READINGS §32.4).
+            // like the LuaOrder MoveTo path; a1h t02: the group then follows the object (follow_service, A1_READINGS §33.4).
             const uint32_t tw = ev.u("target");
             const objects::ObjectHandle th = tw <= 0x7FFFFFFFu ? st.find(static_cast<objects::ObjectId>(tw)) : objects::ObjectHandle{};
             if (!st.alive(th)) {
@@ -877,7 +877,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             for (const uint32_t id : ev.ids("attackers"))
                 for (const objects::ObjectId mid : team_units(player, id))
                     if (std::find(attackers.begin(), attackers.end(), mid) == attackers.end()) attackers.push_back(mid);
-            follow_drop(attackers);  // a1h t02: a newer order (signal 0xb, A1_READINGS §32.3)
+            follow_drop(attackers);  // a1h t02: a newer order (signal 0xb, A1_READINGS §33.3)
             for (const objects::ObjectId aid : attackers) {
                 const TacticalBattle::Unit* u = b_->unit_by_id(aid);
                 if (!u) continue;
@@ -923,7 +923,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             for (const objects::ObjectId id : ids)
                 if (b_->unit_by_id(id)->movable) group.units.push_back(id);
             if (group.units.empty()) return R::InvalidUnit;
-            follow_drop(ids);  // a1h t02: the collector raises signal 0xb on each unit it takes (A1_READINGS §32.3)
+            follow_drop(ids);  // a1h t02: the collector raises signal 0xb on each unit it takes (A1_READINGS §33.3)
             const TacticalBattle::Unit* u = b_->unit_by_id(group.units.front());
             float x = std::bit_cast<float>(le32(b, 8)), y = std::bit_cast<float>(le32(b, 12));
             const uint32_t tw = le32(b, 4);
@@ -984,7 +984,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (!std::isfinite(x) || !std::isfinite(y)) return R::InvalidPosition;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
-            if (tw != cmd::kNoObject) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§32.4)
+            if (tw != cmd::kNoObject) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
                 const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
                 follow_add(group.units, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt);
             }
