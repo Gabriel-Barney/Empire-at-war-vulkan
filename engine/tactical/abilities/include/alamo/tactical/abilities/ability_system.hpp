@@ -211,6 +211,12 @@ struct AbilityHost {
     // OI follow-up t03 (A1_READINGS §28.9): the shares of the obj +0x3a8 movement lock this system does not hold (script
     // Lock_Current_Orders) or the locomotor's forced-move term (a Divert / unload-exit path). Unset: none.
     std::function<bool(ObjectId id)> movement_locked;
+    // S8 t06 (LOB_SOLVER §3.5, L1_S4_REMAINING §3.5 garrison fire): the garrison host (obj +0x2b0) of a garrisoned unit,
+    // kNoObject when not inside. Unset: [port] a garrisoned unit (combat kUnitGarrisoned) is its own container.
+    std::function<ObjectId(ObjectId unit)> garrison_holder;
+    // The garrison host's position and the world positions of its gun bones (Num_Garrison_Guns FP_0<i>_ALT<a> of the
+    // current ALT state), in bone order; false / empty = none. Unset: none (the thrower's own Spawn_Bone is used).
+    std::function<bool(ObjectId holder, Vec3& holder_pos, std::vector<Vec3>& bones)> garrison_fire_bones;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -531,6 +537,7 @@ private:
     static constexpr uint8_t kAnimIdle = 1;      // the owner returns to idle: the record ends
     static constexpr uint8_t kAnimHoldLoop = 2;  // begin -> hold: animation type + 1 loops (FB / FTK / Force_Revel)
     static constexpr uint8_t kLockGrenade = 1, kLockDeploy = 2, kLockSelfDestruct = 4, kLockConfuse = 8;
+    static constexpr uint8_t kLockRemoteBomb = 16;  // S8 t06: the Remote_Bomb toss (LOB_SOLVER §3.5)
     // The owner's primary slot as of the advance of `frame` (type -1 = none: every gate passes).
     struct AnimView {
         int32_t type = -1;
@@ -667,6 +674,11 @@ private:
     bool class_apply(Obj& o, SpecialState& sp, ObjectId target, int32_t hp, uint32_t frame);
     void class_update(Obj& o, SpecialState& sp, uint32_t frame);
     void class_remove(Obj& o, SpecialState& sp, uint32_t frame);
+    // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range object (the target's garrison host when garrisoned), the toss 0x71a200
+    // (true = a bomb spawned) and its launch point (garrison gun bones within 60°, Spawn_Bone, else position + z adjust).
+    ObjectId remote_bomb_range_target(ObjectId target) const;
+    bool remote_bomb_toss(Obj& o, const SpecialAbilityDesc& s, ObjectId target, uint32_t frame);
+    Vec3 remote_bomb_launch(Obj& o, const SpecialAbilityDesc& s, ObjectId target);
     bool range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const;
     void heal_pass(Obj& o, const SpecialAbilityDesc& s, uint32_t frame);
     uint32_t wave_victims(Obj& o, SpecialState& sp, float radius, std::vector<ObjectId>& out);

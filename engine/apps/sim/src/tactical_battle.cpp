@@ -732,6 +732,15 @@ void TacticalBattle::attach_rocket_terrain() {
         rt.cy = 0.5f * h;
         rt.hx = 0.5f * w;
         rt.hy = 0.5f * h;
+        // S8 t06 (LOB_SOLVER.md §6.6): the grid for the projectile ground test (cell triangles + water plane), in the
+        // same frame (origin 0, kVertexSpacing cells, int16 heights x kHeightScale).
+        rt.grid.cell = terrain::kVertexSpacing;
+        rt.grid.width = tr.width;
+        rt.grid.height = tr.height;
+        rt.grid.heights = tr.heights;
+        rt.grid.height_scale = terrain::kHeightScale;
+        rt.grid.water_height = tr.header.water_height;
+        rt.grid.water_type = static_cast<uint32_t>(tr.header.water_type);
     }
     combat_->set_rocket_terrain(std::move(rt));
 }

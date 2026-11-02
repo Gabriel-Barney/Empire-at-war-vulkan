@@ -256,6 +256,7 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
         p.lob_mod = ty.get_float(t, "Projectile_Grenade_Gravity_Lob_Mod");
     p.can_lob_slower = ty.get_bool(t, "Projectile_Grenade_Can_Lob_Slower");
     p.sticks_on_collision = ty.get_bool(t, "Projectile_Grenade_Sticks_On_Collision");
+    p.friendly_damage_amount = ty.get_float(t, "Friendly_Damage_Amount");  // S8 t06 (+0x23ec): own-player sweep, remote bombs
     // --- end S8 t04 ---
     if (!ty.get_string(t, "Projectile_Does_Shield_Damage").empty()) p.does_shield_damage = ty.get_bool(t, "Projectile_Does_Shield_Damage");
     if (!ty.get_string(t, "Projectile_Does_Hitpoint_Damage").empty())

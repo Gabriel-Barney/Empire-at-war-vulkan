@@ -43,9 +43,10 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 6;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 7;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                             // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
-                                            // target hardpoint (auto_hp); 6: S8 t04 grenade flight / sticky state
+                                            // target hardpoint (auto_hp); 6: S8 t04 grenade flight / sticky state; 7: S8
+                                            // t06 stuck_offset in the parent's frame (same layout, new meaning)
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 

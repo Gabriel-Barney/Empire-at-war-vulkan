@@ -3750,46 +3750,211 @@ void test_lob_abilities() {
         while (w.sys->projectile_count() > 0 && guard++ < 200) w.tick();
         CHECK(w.sys->health(2) < w.sys->max_health(2));  // the 2 s timer set it off
     }
-    for (const bool reachable : {true, false}) {  // Remote_Bomb
+    {  // S8 t06 (LOB_SOLVER §5.2): a null spawn (the arc is gone at the throw) - not set active, no recharge
         OiWorld w;
         w.cd.projectiles = {lob_sticky_bomb()};
-        SpecialAbilityDesc r = oi_special("Remote", SpecialClass::RemoteBomb, ActivationStyle::UserInput);
-        r.max_range = 200.0f;
-        r.projectile = 0;
-        const uint32_t rs = add_special(w.ad, r);
+        SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+        g.max_range = 200.0f;
+        g.projectile = 0;
+        g.fuse_time = 2.0f;
+        g.spawn_frame = 5.0f;
+        const uint32_t gs = add_special(w.ad, g);
         AbilityObjectDesc a;
-        a.unit_abilities = {oi_gui(kPlaceRemoteBomb, 0.0f, 30.0f, "Remote"), rec(kDetonateRemoteBomb, 0.0f, 0.0f)};
-        a.specials = {rs};
-        UnitDesc bd = oi_unit("Bomber", 100.0f);
-        bd.ranged_target_z_adjust = 4.0f;
-        const uint32_t ud = push(w.cd, w.ad, bd, a);
-        UnitDesc tdesc = oi_unit("Tank", 100.0f);
-        tdesc.ranged_target_z_adjust = 6.0f;
-        const uint32_t td = push(w.cd, w.ad, tdesc, AbilityObjectDesc{});
+        a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+        a.specials = {gs};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
         w.make(GameMode::Land);
         w.add(1, ud, 0, {0, 0, 0});
-        w.add(2, td, 1, reachable ? Vec3{120, 0, 0} : Vec3{100, 0, 300});
+        w.add(2, td, 1, {80, 0, 0});
         const ObjectId one[] = {1};
-        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        CHECK(w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame) == 1);
+        w.tick();  // the apply (the pending ability); the throw comes 5 frames later
+        CHECK(w.ab->special_applied(1, name_crc("Grenade")));
+        w.move(2, Vec3{80, 0, 300});  // out of reach before the throw
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kStickyBomb) == 0);
+        CHECK(!w.ab->is_active(1, kStickyBomb));
+        CHECK(w.count(AbilityEventKind::Ended, 1) == 1);
+    }
+}
+
+// S8 t06 (docs/re/LOB_SOLVER.md §3.5): Remote_Bomb world - bomber 1 (player 0; Remote_Bomb with Toss_Anim BOMBTOSS,
+// Spawn_Frame 12, Spawn_Bone MuzzleB_00; Force_Lightning), the bomb target 2 (player 1, health 1000) at `at`, trooper 3
+// (player 1) for the lightning. `clips`: BOMBTOSS (id 77) 30 frames and FL_Attack (0x28) 32 frames at 30 fps, and the
+// bone MuzzleB_00 at the bomber + (1, 2, 8). Two warm-up ticks align the services (the update runs every frame).
+void rb_world(OiWorld& w, Vec3 at, bool clips) {
+    ProjectileDesc b = lob_sticky_bomb();
+    b.name = "Proj_Remote_Bomb";
+    b.friendly_damage_amount = 200.0f;
+    w.cd.projectiles = {b};
+    SpecialAbilityDesc r = oi_special("Remote", SpecialClass::RemoteBomb, ActivationStyle::UserInput);
+    r.max_range = 200.0f;
+    r.projectile = 0;
+    r.toss_anim = "BOMBTOSS";
+    r.spawn_frame = 12.0f;
+    r.spawn_bone = "MuzzleB_00";
+    SpecialAbilityDesc l = oi_special("Lightning", SpecialClass::ForceLightning, ActivationStyle::UserInput);
+    l.max_range = 300.0f;
+    l.max_targets = 1;
+    l.targets_radius = 10.0f;
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kPlaceRemoteBomb, 0.0f, 30.0f, "Remote"), rec(kDetonateRemoteBomb, 0.0f, 0.0f),
+                        oi_gui(kForceLightning, 0.0f, 30.0f, "Lightning")};
+    a.specials = {add_special(w.ad, r), add_special(w.ad, l)};
+    UnitDesc bd = oi_unit("Bomber", 100.0f);
+    bd.ranged_target_z_adjust = 4.0f;
+    const uint32_t ud = push(w.cd, w.ad, bd, a);
+    UnitDesc tdesc = oi_unit("Tank", 1000.0f);
+    tdesc.ranged_target_z_adjust = 6.0f;
+    const uint32_t td = push(w.cd, w.ad, tdesc, AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    if (clips) {
+        AbilityHost h;
+        h.anim_type = [](std::string_view n) { return n == "BOMBTOSS" ? 77 : -1; };
+        h.anim_clip = [](ObjectId, int32_t type, std::string_view name, uint32_t, uint32_t& n, float& f) {
+            if (type == 0x28) n = 32;
+            else if (type == 77 || name == "BOMBTOSS") n = 30;
+            else return false;
+            f = 30.0f;
+            return true;
+        };
+        CombatSystem* sys = w.sys.get();
+        h.bone_position = [sys](ObjectId id, std::string_view bone, Vec3& p) {
+            if (bone != "MuzzleB_00") return 0;
+            p = sys->position(id) + Vec3{1, 2, 8};
+            return 1;
+        };
+        w.ab->set_host(std::move(h));
+    }
+    w.add(1, ud, 0, {0, 0, 0});
+    w.add(2, td, 1, at);
+    w.add(3, td, 1, {150, 100, 0});
+    w.tick();
+    w.tick();
+}
+
+void test_remote_bomb_sequence() {
+    const ObjectId one[] = {1};
+    {  // unreachable (v^2 < G h): the apply refuses
+        OiWorld w;
+        rb_world(w, Vec3{100, 0, 300}, false);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);  // queued as the pending ability
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->immobilize_count(1) == 0);
+    }
+    {  // no clips (headless): apply = stop + lock, nothing spawned, no recharge; the toss 12 frames after the unit
+       // stopped (rate 1), from the unit + its Ranged_Target_Z_Adjust (no bone host); recharge at the toss; the ability
+       // ends at the toss (no clip): unlocked, Ended
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, false);
+        const uint32_t f0 = w.frame;
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);  // pending: applied in the next tick
         w.tick();
-        if (!reachable) {
-            for (int i = 0; i < 30; ++i) w.tick();
-            CHECK(w.sys->projectile_count() == 0u);
-            continue;
+        CHECK(w.sys->projectile_count() == 0u && w.ab->immobilize_count(1) == 1);
+        CHECK(w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0);
+        uint32_t toss = 0;
+        for (int i = 0; i < 40 && toss == 0; ++i) {
+            w.tick();
+            if (w.sys->projectile_count() == 1u) toss = w.frame - 1;
+            if (toss == 0) CHECK(w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0 && w.ab->immobilize_count(1) == 1);
         }
-        CHECK(w.sys->projectile_count() == 1u);
-        if (w.sys->projectile_count() != 1u) continue;
+        CHECK(toss == f0 + 12);
+        CHECK(w.ab->countdown_counter(1, kPlaceRemoteBomb) > 0 && w.ab->immobilize_count(1) == 0);
+        CHECK(w.count(AbilityEventKind::Ended, 1) == 1);
+        if (w.sys->projectile_count() != 1u) return;
         const ProjectileView pv = w.sys->projectile(0);
-        // From the unit (+ its own Ranged_Target_Z_Adjust), not from the target point.
         CHECK(pv.lob && pv.pos.x == 0.0f && pv.pos.y == 0.0f && pv.pos.z == 4.0f);
         int guard = 0;
         while (!w.sys->projectile(0).stuck && guard++ < 100) w.tick();
         CHECK(w.sys->projectile(0).stuck && w.sys->projectile(0).stuck_to == 2);
         for (int i = 0; i < 60; ++i) w.tick();
-        CHECK(w.sys->projectile_count() == 1u && w.sys->health(2) == w.sys->max_health(2));  // waits for the trigger
+        // never armed: still waiting for the trigger
+        CHECK(w.sys->projectile_count() == 1u && w.sys->health(2) == w.sys->max_health(2));
         CHECK(w.ab->set_unit_ability_active(1, kDetonateRemoteBomb, true, w.frame));
         CHECK(w.sys->projectile_count() == 1u && !w.sys->projectile(0).alive);  // detonated (flushed next tick)
+        CHECK(w.sys->health(2) < w.sys->max_health(2));                         // area damage on the enemy
     }
+    {  // clips: Toss_Anim from the frame the unit stopped; the toss at its frame 12 from Spawn_Bone; the lock is held to
+       // the animation's end (frame 28 = 30 - 2), then released
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, true);
+        const uint32_t f0 = w.frame;
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        uint32_t toss = 0, unlock = 0;
+        for (int i = 0; i < 60 && unlock == 0; ++i) {
+            w.tick();
+            if (toss == 0 && w.sys->projectile_count() == 1u) toss = w.frame - 1;
+            if (w.ab->immobilize_count(1) == 0) unlock = w.frame - 1;
+        }
+        CHECK(toss == f0 + 12 && unlock == f0 + 28);
+        CHECK(w.ab->countdown_counter(1, kPlaceRemoteBomb) > 0 && w.count(AbilityEventKind::Ended, 1) == 1);
+        if (w.sys->projectile_count() >= 1u) CHECK(w.sys->projectile(0).spawn_frame == toss);
+    }
+    {  // clips + the launch point: the bomb leaves from the bone (bomber + (1, 2, 8))
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, true);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 20 && w.sys->projectile_count() == 0u; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() == 1u) {
+            const ProjectileView pv = w.sys->projectile(0);
+            CHECK(pv.pos.x == 1.0f && pv.pos.y == 2.0f && pv.pos.z == 8.0f);
+        }
+    }
+    {  // interrupted: Force_Lightning replaces Toss_Anim before frame 12 - the same cleanup, no toss, no recharge
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, true);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 5; ++i) w.tick();
+        CHECK(w.ab->anim_type_at(1, w.frame) == 77);
+        CHECK(w.ab->targeted_ability(one, kForceLightning, 3, -1, w.frame) == 1);
+        for (int i = 0; i < 40; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0);
+        CHECK(w.ab->immobilize_count(1) == 0 && w.count(AbilityEventKind::Ended, 1) == 1);
+    }
+    {  // null spawn (§5.2): the target rose out of reach before the toss - no bomb, no recharge, no retry; the ability
+       // still ends
+        OiWorld w;
+        rb_world(w, Vec3{120, 0, 0}, false);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 3; ++i) w.tick();
+        w.move(2, Vec3{120, 0, 400});
+        for (int i = 0; i < 40; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0);
+        CHECK(w.ab->immobilize_count(1) == 0 && w.count(AbilityEventKind::Ended, 1) == 1);
+    }
+}
+
+void test_remote_bomb_detonate() {
+    // S8 t06 (LOB_SOLVER §3.5, TACTICAL_COMBAT §3.4 step 3): Friendly_Damage_Amount 200 lets the sweep see own units, so
+    // the bomb sticks to own unit 4 (team 10 = {4, 5}). DETONATE_REMOTE_BOMB skips it while 4 is garrisoned; then 4 takes
+    // kind 1 x 200 and its team-mate 5 kind 0x15 x 200 before the detonation; 6 (own, no team) is untouched.
+    OiWorld w;
+    rb_world(w, Vec3{-500, -500, 0}, false);
+    AbilityObjectDesc sq;
+    sq.name = "Squad";
+    const uint32_t sqd = push_container(w.cd, w.ad, sq);
+    const uint32_t md = push(w.cd, w.ad, oi_unit("Member", 1000.0f), AbilityObjectDesc{});
+    w.add(4, md, 0, {120, 0, 0}, {1, 0, 0}, 10);
+    w.add(5, md, 0, {-300, 0, 0}, {1, 0, 0}, 10);
+    w.add(6, md, 0, {-300, 100, 0});
+    const ObjectId mem[] = {4, 5};
+    CHECK(w.ab->add_container(10, sqd, 0, mem, w.frame, &w.rng));
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 4, -1, w.frame) == 1);
+    int guard = 0;
+    while ((w.sys->projectile_count() == 0u || !w.sys->projectile(0).stuck) && guard++ < 200) w.tick();
+    CHECK(w.sys->projectile_count() == 1u && w.sys->projectile(0).stuck && w.sys->projectile(0).stuck_to == 4);
+    CHECK(w.sys->health(4) == 1000.0f);  // sticking does no damage
+    w.sys->set_flag(4, kUnitGarrisoned, true);
+    CHECK(w.ab->set_unit_ability_active(1, kDetonateRemoteBomb, true, w.frame));
+    CHECK(w.sys->projectile(0).alive && w.sys->health(4) == 1000.0f);  // skipped: stays armed
+    w.sys->set_flag(4, kUnitGarrisoned, false);
+    CHECK(w.ab->force_recharge(1, kDetonateRemoteBomb, 0.0f));
+    CHECK(w.ab->set_unit_ability_active(1, kDetonateRemoteBomb, true, w.frame));
+    CHECK(!w.sys->projectile(0).alive);
+    CHECK(w.sys->health(4) == 800.0f && w.sys->health(5) == 800.0f && w.sys->health(6) == 1000.0f);
 }
 
 void test_infection() {
@@ -3959,6 +4124,8 @@ int main(int argc, char** argv) {
     test_death_clone_remap();
     test_infection();
     test_lob_abilities();
+    test_remote_bomb_sequence();
+    test_remote_bomb_detonate();
     test_fire_and_decay();
     test_energy();
     test_ion_stun();

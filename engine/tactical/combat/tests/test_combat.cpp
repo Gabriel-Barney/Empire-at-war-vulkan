@@ -15,6 +15,7 @@
 #include <new>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
@@ -882,14 +883,14 @@ struct LobLaunch {
     TreeSet trees{2};
     SimRng rng{7u};
     uint32_t frame = 1;
-    LobLaunch(GameMode mode, ProjectileDesc g, Vec3 point, float ground = 0.0f) {
+    LobLaunch(GameMode mode, ProjectileDesc g, Vec3 point, const GroundGrid* grid = nullptr) {
         d.projectiles = {g};
         CombatConfig cfg;
         cfg.mode = mode;
         sys = std::make_unique<CombatSystem>(d, cfg, std::vector<PlayerInfo>{PlayerInfo{}, PlayerInfo{}});
-        if (ground != 0.0f) {
+        if (grid) {
             RocketTerrain rt;
-            rt.height = [ground](float, float) { return ground; };
+            rt.grid = *grid;
             sys->set_rocket_terrain(std::move(rt));
         }
         ProjectileLaunch l;
@@ -901,10 +902,24 @@ struct LobLaunch {
     void tick() { sys->tick(frame++, trees, rng); }
 };
 
+// S8 t06: a heightmap grid (20-unit cells, height scale 1/16) of w x h vertices at `level` raw units everywhere.
+GroundGrid flat_grid(uint32_t w, uint32_t h, int16_t level) {
+    GroundGrid g;
+    g.cell = 20.0f;
+    g.width = w;
+    g.height = h;
+    g.height_scale = 0.0625f;
+    g.heights.assign(static_cast<size_t>(w) * h, level);
+    return g;
+}
+
 void test_lob_ground_and_expiry() {
     {  // Land: the terrain stops the arc (ground test) - On_Detonate at the ground hit, not at the aim height. A plateau
-       // at z 5 is struck before the arc comes down to the aim point (z 0) at x 200.
-        LobLaunch ll(GameMode::Land, spmat_grenade(), Vec3{200, 0, 0}, 5.0f);
+       // at z 5 (vertices x >= 160; 80 raw x 1/16) is struck before the arc comes down to the aim point (z 0) at x 200.
+        GroundGrid g = flat_grid(16, 4, 0);
+        for (uint32_t y = 0; y < g.height; ++y)
+            for (uint32_t x = 8; x < g.width; ++x) g.heights[y * g.width + x] = 80;
+        LobLaunch ll(GameMode::Land, spmat_grenade(), Vec3{200, 0, 0}, &g);
         bool done = false;
         Vec3 at;
         for (int i = 0; i < 100 && !done; ++i) {
@@ -915,8 +930,24 @@ void test_lob_ground_and_expiry() {
                 CHECK(e.victim == kNoObject);
             }
         }
-        CHECK(done && at.z <= 5.0f && at.z > 4.99f && at.x < 200.0f && at.x > 190.0f);
+        CHECK(done && std::fabs(at.z - 5.0f) < 0.001f && at.x < 200.0f && at.x > 180.0f);
         CHECK(ll.sys->stats().expired == 1u && ll.sys->stats().hits == 0u && ll.sys->projectile_count() == 0u);
+    }
+    {  // §6.6 water: a water plane at z -3 over ground at z -5 - the grenade detonates on the surface.
+        GroundGrid g = flat_grid(16, 4, -80);
+        g.water_type = 1;
+        g.water_height = -3.0f;
+        LobLaunch lw(GameMode::Land, spmat_grenade(), Vec3{200, 0, 10}, &g);
+        Vec3 at;
+        bool done = false;
+        for (int i = 0; i < 100 && !done; ++i) {
+            lw.tick();
+            for (const HitEvent& e : lw.sys->hit_events()) {
+                done = true;
+                at = e.position;
+            }
+        }
+        CHECK(done && std::fabs(at.z + 3.0f) < 0.001f && at.x > 200.0f);
     }
     {  // Space: no ground test - the grenade falls on past Q until its lifetime (> 2 s: the 61st frame) runs out.
         ProjectileDesc g = spmat_grenade();
@@ -990,17 +1021,149 @@ void test_lob_sticky() {
     CHECK(pv.stuck && pv.stuck_to == 2 && pv.speed == 0.0f);
     CHECK(lw.w.sys->health(2) == lw.w.sys->max_health(2) && lw.w.sys->stats().hits == 0u);  // no contact damage
     const Vec3 offset = pv.pos - Vec3{100, 0, 0};
+    CHECK(offset.x < 0.0f);  // struck on the near side
     lw.move(2, Vec3{100, 40, 0});
     lw.w.tick();
     CHECK(same(lw.w.sys->projectile(0).pos, Vec3{100, 40, 0} + offset));
+    // S8 t06 (§6.4, §8 item 18): the stuck point is kept in the parent's frame - the parent turns 90 degrees left and the
+    // bomb turns with it: (ox, oy) -> (-oy, ox).
+    lw.w.sys->set_facing(2, Vec3{0, 1, 0});
+    lw.w.tick();
+    const Vec3 q = lw.w.sys->projectile(0).pos;
+    CHECK(std::fabs(q.x - (100.0f - offset.y)) < 1e-4f && std::fabs(q.y - (40.0f + offset.x)) < 1e-4f &&
+          std::fabs(q.z - offset.z) < 1e-4f);
     while (lw.w.sys->projectile_count() > 0 && guard++ < 400) lw.w.tick();
-    CHECK(lw.w.frame - 1 == f0 + 90);  // the 3 s timer: detonation at age >= 3 s
+    CHECK(lw.w.frame - 1 == f0 + 90);  // the 3 s timer: detonation frame int(30 x 3 + f0 + 0.5)
     CHECK(lw.w.sys->health(2) < lw.w.sys->max_health(2));  // area damage at the bomb
-    {  // ground: rests where it came down (flat ground at z 0), not at the aim height
-        LobLaunch ll(GameMode::Land, g, Vec3{100, 0, 20});
+    {  // ground: rests where it came down (flat ground at z 0: no grid -> the [port] plane), not at the aim height; no
+       // lifetime once stopped (Max_Lifetime 2 s here, still resting after 10 s)
+        ProjectileDesc gl = g;
+        gl.max_lifetime = 2.0f;
+        LobLaunch ll(GameMode::Land, gl, Vec3{100, 0, 20});
         for (int i = 0; i < 200 && !ll.sys->projectile(0).stuck; ++i) ll.tick();
         const ProjectileView gv = ll.sys->projectile(0);
-        CHECK(gv.stuck && gv.stuck_to == kNoObject && gv.pos.z <= 0.0f && gv.pos.z > -0.01f && gv.pos.x > 100.0f);
+        CHECK(gv.stuck && gv.stuck_to == kNoObject && std::fabs(gv.pos.z) < 0.001f && gv.pos.x > 100.0f);
+        for (int i = 0; i < 300; ++i) ll.tick();
+        CHECK(ll.sys->projectile_count() == 1u && ll.sys->projectile(0).alive && ll.sys->stats().expired == 0u);
+    }
+}
+
+void test_ground_segment() {
+    // S8 t06 (§6.6, 0x135840): 16-unit cells so the Moeller-Trumbore arithmetic is exact in float.
+    GroundGrid g = flat_grid(2, 2, 0);
+    g.cell = 16.0f;
+    g.height_scale = 1.0f;
+    g.heights[1 * 2 + 0] = 8;  // v01 (x 0, y 1) at z 8
+    GroundHit h;
+    // Diagonal (x, y)-(x+1, y+1): below it T1 = (v00, v10, v11) is flat z 0 ...
+    CHECK(ground_segment(g, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && h.t == 0.5f && h.point.z == 0.0f && !h.water);
+    // ... above it T2 = (v00, v11, v01): z = 8 (y - x) / 16 = 4 at (4, 12) (the other diagonal would give 6)
+    CHECK(ground_segment(g, Vec3{4, 12, 8}, Vec3{4, 12, -8}, h) && h.t == 0.25f && h.point.z == 4.0f);
+    CHECK(ground_segment(g, Vec3{4, 12, 0}, Vec3{4, 12, 16}, h) && h.t == 0.25f && h.point.z == 4.0f);  // from below
+    float best = 1.0f;
+    CHECK(ray_triangle(Vec3{4, 12, 8}, Vec3{0, 0, -16}, Vec3{0, 0, 0}, Vec3{16, 16, 0}, Vec3{0, 16, 8}, best) && best == 0.25f);
+    CHECK(!ray_triangle(Vec3{12, 4, 8}, Vec3{0, 0, -16}, Vec3{0, 0, 0}, Vec3{16, 16, 0}, Vec3{0, 16, 8}, best));  // u + v > 1
+    // t = 0 and t = 1 are not hits; outside the grid nothing is hit (no plane fallback with a grid)
+    CHECK(!ground_segment(g, Vec3{12, 4, 0}, Vec3{12, 4, -16}, h));
+    CHECK(!ground_segment(g, Vec3{12, 4, 16}, Vec3{12, 4, 0}, h));
+    CHECK(!ground_segment(g, Vec3{40, 4, 8}, Vec3{40, 4, -8}, h));
+    {  // water plane: nearest of triangles and plane; water type 0 = none; a plane below the ground loses
+        GroundGrid w = flat_grid(2, 2, 0);
+        w.cell = 16.0f;
+        w.water_type = 1;
+        w.water_height = 4.0f;
+        CHECK(ground_segment(w, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && h.water && h.t == 0.25f && h.point.z == 4.0f);
+        CHECK(ground_segment(w, Vec3{12, 4, 0}, Vec3{12, 4, 16}, h) && h.water && h.t == 0.25f);  // both directions
+        w.water_height = -4.0f;
+        CHECK(ground_segment(w, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && !h.water && h.t == 0.5f);
+        w.water_height = 4.0f;
+        w.water_type = 0;
+        CHECK(ground_segment(w, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && !h.water && h.t == 0.5f);
+        w.water_type = 3;  // ice: a plane too
+        CHECK(ground_segment(w, Vec3{12, 4, 8}, Vec3{12, 4, -8}, h) && h.water);
+    }
+    {  // a slope a few cells along a level segment: the nearest triangle hit over every cell the segment's box touches
+        GroundGrid s = flat_grid(6, 2, 0);
+        s.cell = 16.0f;
+        s.height_scale = 1.0f;
+        for (uint32_t y = 0; y < 2; ++y)
+            for (uint32_t x = 3; x < 6; ++x) s.heights[y * 6 + x] = 16;  // cell 2 (32..48) rises 0 -> 16
+        CHECK(ground_segment(s, Vec3{4, 4, 4}, Vec3{76, 4, 4}, h) && std::fabs(h.point.x - 36.0f) < 1e-4f &&
+              std::fabs(h.t - 32.0f / 72.0f) < 1e-6f);
+    }
+    {  // no grid: [port] the plane z 0
+        CHECK(ground_segment(GroundGrid{}, Vec3{5, 5, 8}, Vec3{5, 5, -8}, h) && h.t == 0.5f && !h.water);
+    }
+}
+
+void test_lob_object_ground_tie() {
+    // §6.2 step 3: an object hit wins when its fraction <= the ground fraction. The precise hook reports the ground test's
+    // own t for the step (a tie: Process_Hit on the unit), then the next float above it (On_Detonate on the ground).
+    for (const bool tie : {true, false}) {
+        LobWorld lw(GameMode::Land);
+        lw.w.data.units[lw.target].radius = 30.0f;
+        RocketTerrain rt;
+        rt.grid = flat_grid(32, 4, 0);
+        const GroundGrid grid = rt.grid;
+        lw.w.sys->set_rocket_terrain(rt);
+        lw.w.add(2, lw.target, 1, Vec3{210, 10, 0});
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.from = Vec3{10, 10, 1};
+        l.point = Vec3{210, 10, 0};
+        CHECK(lw.w.sys->launch_projectile(l, lw.w.frame));
+        const ProjectileView pv = lw.w.sys->projectile(0);
+        const float G = spmat_grenade().grenade_gravity * spmat_grenade().lob_mod;
+        uint32_t now = 0;
+        int ties = 0;
+        lw.w.sys->set_precise_hit([&](const PreciseQuery& q, PreciseResult& r) {
+            const Vec3 N = lob_position(pv.pos, pv.dir, pv.speed, G, static_cast<float>(now - pv.spawn_frame));
+            GroundHit gh;
+            if (!ground_segment(grid, q.a, N, gh)) return PreciseOutcome::Miss;
+            ++ties;
+            r.t = tie ? gh.t : std::nextafter(gh.t, 2.0f);
+            return PreciseOutcome::Hit;
+        });
+        ObjectId victim = 1;
+        for (int i = 0; i < 100 && lw.w.sys->projectile_count() > 0; ++i) {
+            now = lw.w.frame;
+            lw.w.tick();
+            for (const HitEvent& e : lw.w.sys->hit_events()) victim = e.victim;
+        }
+        CHECK(ties == 1);
+        CHECK(victim == (tie ? 2 : kNoObject));
+        CHECK(lw.w.sys->stats().hits == (tie ? 1u : 0u));
+        CHECK((lw.w.sys->health(2) < lw.w.sys->max_health(2)) == tie);  // direct damage only on the object hit
+    }
+}
+
+void test_lob_fuse_rounding() {
+    // S8 t06 (§6.4): BOMB arm 0x58f030 - detonation frame int(30 x secs + spawn frame + 0.5), fired at frame >= it, the
+    // countdown running in flight. 0.11 s: 3.3 + 0.5 -> 3 frames (age >= 0.11 s would need 4); 0.12 s: 4.1 -> 4.
+    for (const auto& [secs, frames] : {std::pair<float, uint32_t>{0.11f, 3u}, {0.12f, 4u}, {0.1f, 3u}}) {
+        for (const bool toss : {true, false}) {  // a tossed grenade (flying) and a placed bomb
+            CombatData d;
+            ProjectileDesc pd = toss ? spmat_grenade() : ProjectileDesc{};
+            pd.blast_area_damage = 1.0f;
+            d.projectiles = {pd};
+            CombatConfig cfg;
+            cfg.mode = GameMode::Space;
+            CombatSystem sys(d, cfg, {PlayerInfo{}, PlayerInfo{}});
+            TreeSet trees{2};
+            SimRng rng{3u};
+            ProjectileLaunch l;
+            l.owner = 0;
+            l.from = Vec3{0, 0, 0};
+            l.point = Vec3{275, 0, 0};
+            l.fuse_seconds = secs;
+            l.toss = toss;
+            const uint32_t f0 = 10;
+            CHECK(sys.launch_projectile(l, f0));
+            uint32_t f = f0;
+            while (sys.projectile_count() > 0 && f < f0 + 20) sys.tick(++f, trees, rng);
+            CHECK(sys.stats().expired == 1u);
+            CHECK(f == f0 + frames);
+        }
     }
 }
 
@@ -3598,6 +3761,9 @@ int main(int argc, char** argv) {
     test_lob_weapon_flight();
     test_lob_ground_and_expiry();
     test_lob_sticky();
+    test_ground_segment();
+    test_lob_object_ground_tie();
+    test_lob_fuse_rounding();
     test_lob_hardpoint();
     test_lob_save();
     test_turn_toward();  // S9 t05

@@ -165,6 +165,9 @@ struct ProjectileDesc {
     float grenade_gravity = 1.05f;
     bool can_lob_slower = false;           // Projectile_Grenade_Can_Lob_Slower (+0x4a): the 0.8 speed steps
     bool sticks_on_collision = false;      // Projectile_Grenade_Sticks_On_Collision (+0x4b): attach / rest, no damage
+    // S8 t06: Friendly_Damage_Amount (+0x23ec). > 0: the sweep also tests the own player (TACTICAL_COMBAT §3.4 step 3),
+    // and DETONATE_REMOTE_BOMB detonates such bombs, damaging an own parent by it (LOB_SOLVER §3.5).
+    float friendly_damage_amount = 0.0f;
     float max_flight_distance = 0.0f;      // Projectile_Max_Flight_Distance
     float max_lifetime = 0.0f;             // Projectile_Max_Lifetime (seconds)
     float blast_area_damage = 0.0f;        // Projectile_Blast_Area_Damage
@@ -1237,8 +1240,8 @@ private:
         uint8_t ever_jammed = 0;
         // S8 t04 (LOB_SOLVER §5.3 / §6): grenade flight (category 3). `lob` set: N(t) = launch + speed t lob_dir -
         // 1/2 gravity t^2 z with t = frame - spawn_frame (the pack's launch point, InitialFacing forward and G). A sticky
-        // grenade that hit something stops: `stuck`, attached to `stuck_to` at `stuck_offset` (world, from its position)
-        // or resting (kNoObject). Hashed in hash_extended for grenades only.
+        // grenade that hit something stops: `stuck`, attached to `stuck_to` at `stuck_offset` (S8 t06: in the parent's
+        // frame, turned with its facing) or resting (kNoObject). Hashed in hash_extended for grenades only.
         uint8_t lob = 0;
         uint8_t stuck = 0;
         float gravity = 0.0f;
@@ -1338,7 +1341,9 @@ private:
     Vec3 lob_target_point(const Unit& t) const;
     // §6 grenade flight: the step's end point N (from the closed form) and the land ground test of P -> N.
     Vec3 lob_next(const Projectile& p, uint32_t frame) const;
-    bool ground_hit(Vec3 a, Vec3 b, float& t) const;
+    bool ground_hit(Vec3 a, Vec3 b, GroundHit& out) const;  // S8 t06: 0x135840 (rocket.hpp ground_segment)
+    Vec3 stuck_local(const Unit& v, Vec3 world) const;     // S8 t06: world point -> v's frame (inverse local_to_world)
+    uint32_t bomb_frame(float seconds, uint32_t armed_frame) const;  // S8 t06: BOMB arm 0x58f030 detonation frame
     void lob_step(uint32_t i, uint32_t frame, SimRng& rng);
     // OI tactical (team targeting, TACTICAL_COMBAT 2.3 / 2.4): the unit's squad "container" - the unit whose id is
     // its team id when that is a combat unit, else the team's team_leader member; nullptr when none / itself.
@@ -1479,6 +1484,8 @@ private:
     CombatStats stats_;
     // per-tick parameters for the parallel phases (lambdas capture `this` only)
     const TreeSet* trees_ = nullptr;
+    // S8 t06: the last tick's tree set (host-owned), for detonations the host triggers between ticks (DETONATE_REMOTE_BOMB)
+    const TreeSet* last_trees_ = nullptr;
     std::mutex ctx_mutex_;
     std::vector<std::unique_ptr<QueryContext>> ctx_all_;
     std::vector<QueryContext*> ctx_free_;
