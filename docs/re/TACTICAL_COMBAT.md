@@ -821,11 +821,11 @@ that list (it can still be read by abilities and Lua, e.g. `Get_Current_Projecti
    otherwise `Fire_Weapon_When_Undeployed` (+0xaf), must be set;
 4. unit ability ROCKET_ATTACK (11) active (`0x39b950(obj, 11)`) → `Fire_Weapon_When_In_Rocket_Attack_Mode` (+0xb0),
    otherwise `Fire_Weapon_When_In_Normal_Attack_Mode` (+0xb1), must be set;
-5. `0x397f60(obj, 1)`: each active unit-ability mode in slots 0 / 1 must allow it (`0x565970`) [M on the meaning];
+5. `0x397f60(obj, 1)`: each active unit-ability mode in slots 0 / 1 must allow it (`0x565970`): `WEAPONS_ENABLED_FLAG`, see "Gate details" below (2026-11-02);
 6. unless type byte +0x8a is set, no fire in locomotor state 0x1C; a unit whose current locomotor answers vf +0x240
-   does not fire in state 0x16 (Walk Stopped) [M on the purpose];
-7. unless a fire-at-position order is pending (TD +0x3c / +0x3d), the targeting state TD +0x18 must be 4 [M: the
-   "attacking" state of slot 31].
+   does not fire in state 0x16 (Walk Stopped) ("Gate details" below, 2026-11-02);
+7. unless a fire-at-position order is pending (TD +0x3c / +0x3d), the targeting state TD +0x18 must be 4 (the
+   "attacking" state of slot 31; confirmed in "Gate details" below, 2026-11-02).
 All four `Fire_Weapon_When_*` flags default to true (OBJECT_TYPES §4.6).
 
 **Hardpoint gate** (`HardPointClass::Does_Weapon_State_Allow_Firing_At`, `0x384850`; the name is in its error
@@ -844,6 +844,81 @@ string), called by `Update_Weapon` after the cooldown with the primary target (+
 The bytes +0x3d1…+0x3d4 default to true (§5.1). `Update_Weapon` itself also returns early in the deploy transitions
 (`0x39a400` / `0x39b2a0`, as step 2 above). **When the gate refuses, `Update_Weapon` returns: no `Fire_At` and no
 opportunity fire that frame.** With no primary target the gate runs with a null target (steps 4–6 only).
+
+**Gate details (S8 t11 / t12, 2026-11-02)** [H unless tagged]. These resolve the [M] tags in the own-weapon steps
+above.
+- **Step 3 correction.** 0x39a390 is true when the locomotor pack's pending flag +0x2b3 is set, or when the
+  locomotor's vf +0x120 is true. Walk's vf +0x120 is 0x61df40, state == **0x19 Deployed** only. So the name
+  "Is_Deployed_Or_Deploying" is loose: Deploying (0x18) does not count. Step 2 has already refused 0x18 / 0x1A, so
+  the gate result is unchanged. Every other locomotor (JetPack included) has vf +0x120 = 0x13b7d0, which returns
+  false, so it counts as undeployed.
+- **Deploy transition window (step 2).** It is the Walk locomotor state (pack +0x48):
+  - 0x18 Deploying and 0x1A Undeploying;
+  - only Walk implements vf +0x130 (0x61df60: == 0x18) and vf +0x128 (0x61dfd0: == 0x1A);
+  - 0x39a400 / 0x39b2a0 also need the type's `Deploys` (+0xd1) and a locomotor slot.
+
+  The state machine and its duration are in MOVEMENT §3.2 (2026-11-02 "Deploy states" note). The hardpoint
+  `Update_Weapon` returns early on the same two tests.
+- **Step 5** = 0x397f60(obj, 1):
+  - it reads `Mod_Flag` index 1 = `WEAPONS_ENABLED_FLAG` (enum table 0x140a434a0: 1 WEAPONS_ENABLED_FLAG,
+    2 CAN_BE_SQUASHED, 3 ALLOW_TARGET_DIMINISHING_FIREPOWER);
+  - it ANDs that flag over the active modes of `Unit_Abilities_Data` entries 0 and 1 (0x374b50(type, i)), read
+    through 0x565970: record +0xe0 + m when m < 13, else 1;
+  - the record ctor sets the flag bytes +0xe0…+0xe3 to 1 (0x5655ad), so the default is "allowed";
+  - vanilla FoC never sets `WEAPONS_ENABLED_FLAG`: the XML sets only ALLOW_TARGET_DIMINISHING_FIREPOWER, twice. So
+    step 5 never refuses in vanilla.
+- **Step 6.** With a locomotor data pack (obj +0xa8):
+  - when `Can_Fighter_Fire_When_Idle` (type +0x8a) is clear: no fire in state **0x1C (fighter Idle)**;
+  - in all cases: no fire in state **0x16** when the slot-1 locomotor's vf +0x240 is true. That vfunc is 0x17dc70
+    (returns 1) for Flying, JetPack, LandBomber and Starship, and 0x13b7d0 (false) for the others (Walk included).
+
+  So a walker standing still (0x16) does fire, and a jetpack unit at rest in state 0x16 does not. JetPack swaps
+  back to Walk in its first 0x16 service (MOVEMENT §3.1.1), and WEAPON is suspended during the flight anyway.
+- **Step 7.** TD = obj +0xf0.
+  - If the unit has LOBBING_SUPERWEAPON (slot byte +0x369 ≠ −1) and TD +0x3d is clear → no fire.
+  - Else, when neither TD +0x3d nor +0x3c is set, TD +0x18 must be **4** and the current target (0x54c190) must
+    be non-null. Otherwise TD +0x28 := the current weapon's `Projectile_Fire_Pulse_Count` (+0x4f0) and no fire
+    (the burst restarts).
+  - TD +0x18 is the targeting state, written by slot 31 (0x568c80; the TeamTargeting override 0x62f550 copies it to
+    the members). Entering 4 raises signal 0x1E. **4 = attacking**: the target is in range (slot 44) and not inside
+    the min range (slot 45), set by `Service_Land` 0x634810 / `_Space` / 0x62eeb0. State 3 = in range but the turret
+    or facing is not ready yet (slot 48 0x568230 is true while the facing is off the target direction by more than
+half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor; 0x20af60 compare [M on its units]). State 2 = out of
+    range. This is the fire-time range gate (LOB_SOLVER §8 item 22).
+  - After a shot from a LOBBING_SUPERWEAPON object, TD +0x3c / +0x3d and +0x30…+0x38 are cleared.
+- **ROCKET_ATTACK detection (step 4, hardpoint step 6).** 0x39b950(obj, 11, 1) reads the per-type slot
+  obj +0x3d0 + 16·t. These slots are filled from **every** `Unit_Abilities_Data` entry (a later duplicate replaces an
+  earlier one), so ROCKET_ATTACK is detected in any list position. Team containers use the all-members rule. Only
+  the per-mode allow (own step 5, hardpoint step 4) is limited to entries 0 / 1.
+- **Per-mode `Fire_When_In_<Mode>_Mode` defaults (hardpoint step 4).** The HardPoint type ctor 0x53e3b0 writes
+  0x01010101 dwords over +0x384…+0x3d0, so **every mode byte defaults to 1** (allowed). It also writes 1 to +0x3d1…+0x3d4
+  (`Fire_When_Deployed` / `_Undeployed` / `_In_Rocket_Attack_Mode` / `_In_Normal_Attack_Mode`) and to +0x3d5…+0x3d7
+  (`Allow_Opportunity_Fire_When_Idle` / `_When_Targeting`, `Engine_Death_Hide_Engine_Particles`). A hardpoint
+  refuses in a mode only when the XML sets that mode's tag to No.
+- **First service after spawn (cooldown).** The pack ctor 0x380540 zeroes TD +0x24…+0x2f, so the last-service
+  frame TD +0x2c starts at **0**. Only the WEAPON service writes it (0x54d090: elapsed = frame − TD +0x2c, then
+  TD +0x2c := frame).
+  - The attach vf9 0x54c210 sets the initial delay TD +0x24 = `Get_Int(0, int(FPS × recharge))` (one synced draw).
+  - The first service then subtracts the **whole current frame number**, not 1 frame. When frame > delay
+    (unsigned compare), the delay is zeroed.
+  - So the random first-shot delay survives only for objects whose first service comes at a frame ≤ their drawn
+    delay, i.e. units present at battle start. Units spawned later (reinforcements, builds) can fire on their
+    first service.
+  - [M] Whether `frame` is the mode's frame counter starting at 0 for the battle.
+- **Lua `Get_Current_Projectile_Type`** (0x578470).
+  - It reads obj +0x324 (the current weapon index; GameObject ctor 0x348a50 sets it to 0; unit ability 0x3c toggles
+    it 0 ↔ 1 when the list has more than one entry) and indexes the type's `Projectile_Types` list (0x373670).
+  - It does **not** check for a WEAPON behaviour. A type with `Projectile_Types` but no WEAPON still returns its
+    first entry. An empty list or an out-of-range index returns nothing.
+  - A team container (slot byte +0x348 ≠ −1) is first replaced by its first member (0x4ec820 on team +0x110: list
+    +0x10, count +0x18). An empty team returns nothing.
+
+*For the implementer:*
+- Gate the own weapon on targeting state 4 (in range and outside min range), not on an XY distance.
+- Treat the Walk states 0x18 / 0x1A as "no fire", and count only 0x19 (or the pending flag) as deployed.
+- Default every per-mode hardpoint flag to true.
+- Start TD's last-service frame at 0, so a late spawn's first service clears its initial delay.
+- Make `Get_Current_Projectile_Type` independent of WEAPON.
 
 **Targets.** Both sources use the owner's current target, targeting data pack TD (obj +0xf0) +8, chosen by the
 unit's TARGETING behaviour with the unit's own range (§2.2: `Targeting_Max_Attack_Distance`, or the lob reach for a
@@ -936,6 +1011,23 @@ Air / Vehicle / Structure, so only the WeaponBehavior shot hurts vehicles (a1h t
 The segment query visits **hostile players in player-list order** and returns the **first** object whose
 precise test (0x38f900) or `Collision_Box_Modifier` sphere test passes. "First" means in `Query_Ray` result
 order, not nearest along the segment. The port should sort by segment fraction, then by object id.
+
+**Own-player variant 0x2acb90 (S8 t10, 2026-11-02)** [H]. This corrects the port's "skip the shooter" rule.
+- The query:
+  - it runs over the **projectile owner's** tree (GOM +0xd0, stride 0x38);
+  - it skips only the projectile itself (its last argument), **not the shooter**;
+  - a candidate needs type +0x41 == 1 (or +0x42 when obj +0x3a0 & 0x40);
+  - it returns the **first** candidate that passes the precise test 0x38f900, or the `Collision_Box_Modifier`
+    (+0x4e4 > 1) sphere test at the segment start, end or midpoint.
+- `Sweep` then filters the hit:
+  - same player as the projectile, a projectile data pack (obj +0xe8) present, and hit ≠ pack +8 (the projectile's
+    target) → **rejected**;
+  - otherwise a hit with TRANSPORT_LANDING (slot byte +0x368 ≠ −1) → rejected.
+- **An own-player hit counts only when it is the projectile's own target.** When the first own-player candidate in
+  query order is not the target, there is no own hit at all: the query does not go on to the next candidate.
+- *Port:* `combat_system.cpp` (own-player sweep) calls `scan(p.owner, p.shooter)`, skipping the shooter, with a [port]
+  comment. It should instead take the first own-player candidate (in the same order as the hostile scan) and accept
+  it only when it is `p.target`, then apply the TRANSPORT_LANDING rejection.
 
 ### 3.5 Hit processing, area damage [H unless tagged]
 **`Process_Hit`** (0x4cb280; direct damage 0x4c73d0):

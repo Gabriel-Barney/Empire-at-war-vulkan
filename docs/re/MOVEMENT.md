@@ -181,6 +181,54 @@ Before load, every cell is base = effective = Clear (1).
 - Without a proxy, the ray tests the object's own render model (obj +0x2a0). **An object with fine-tune on, no proxy and no render model is not stamped at all** (the stamper returns before the loop and the "stamped" flag stays clear, so it retries at the next service).
 - Object flag obj +0x3a1 & 8 replaces the type sizes by the live model's box (both in the stamp and the unstamp). Meaning of the flag not traced [open].
 
+**Ray mesh set, proxy bits, missing model (S8 t13, 2026-11-02)** [H unless tagged]:
+- **Which meshes the fine-tune ray tests** (vf +0x80). The request is mode 0, mask 1, with the segment z −1000 →
+  +1000.
+  - alHModel (vtable 0x818d90, vf +0x80 = `0x12c9c0`) needs model +0x30 bit 7, which is always set (`0x12b2e6` /
+    `0x12b722`). It then ORs vf +0x80 over every child renderable. Non-mesh children use the base `0x13b7d0`, which
+    returns 0.
+  - alRenderableMesh (vtable 0x819778, `0x14c520`) skips a mesh when any of these holds:
+    - its runtime hidden bit 1 is set, i.e. its attached bone is not visible (bit 1 = !(bone visibility bit 2),
+      `0x12c7c0` / `0x13fc10`);
+    - mesh +0x30 bit 7 is clear in mode 0. That bit is the ALO mesh-info (chunk 0x402) `is_collision_enabled` at
+      offset 36 (loader `0x14c970`);
+    - mask & mesh +0xc0 is 0 (+0xc0 defaults to 1, ctor `0x13f63a`).
+  - Otherwise it runs a world AABB pretest, then tests every sub-mesh's triangles (`0x13e900`): the collision tree
+    (+0x98) when present, else brute force over the CPU positions (+0xc0) and indices (+0xf0) that `0x188e50` builds
+    for every sub-mesh.
+  - So **only ALO meshes with the collision flag are hit**. The file's `is_hidden` flag (offset 32 → +0x30 bit 0)
+    does **not** exclude a mesh. Example: `NB_Bunker`'s `Collision_ALTn` meshes are hidden **and** collision, and
+    they are what the ray hits.
+  - A mesh hidden at run time because its bone is hidden (damage states, ALT swaps through bone visibility) is
+    skipped.
+  - Without a proxy, the model is the live, posed model obj +0x2a0 → +0x48.
+  - With a proxy, the model is loaded by name through `0x142d70` (asset manager `0x140a62700`, ".ALO" appended)
+    and must be an alHModel. vf +0x58 sets its transform, and vf +0x10(1) releases it after the stamp.
+- **Proxy footprint bits.** The bits written into the cells come from `0x397350(object)`, which loops over the
+  **object's own** behaviours (+0x278, count +0x288) calling `0x4c36b0`.
+  - Each behaviour yields the owner's **own type** `OverridePassability` (+0x1690) when it is non-zero, else its
+    own vf +0xc8 default: LAND_OBSTACLE 4 (`0x1fc30`), WALL 0x10 (`0x7c040`), base 0 (`0x17d070`).
+  - The proxy never supplies bits. It supplies only the footprint: sizes, offsets, `Fine_Tune` (+0x94) and the ray
+    model.
+- **A type without `Land_Model_Name`.**
+  - The size getters `0x372d80` / `0x372ce0` / `0x372e20` / `0x372ec0` / `0x372f60` use `Obstacle_Width` /
+    `_Height` / the offsets when they are non-zero. Otherwise they read the mode model (`0x3729f0`; land = type
+    +0x2a0, loaded lazily from `Land_Model_Name` by `0x375380`). With no model, the size is 0.
+  - obj +0x2a0 is never created (`0x3a4820` returns when the mode model is null).
+  - Fine-tune on (the default) and no proxy: the stamper returns early. "Stamped" stays clear, so the object
+    retries **every service forever** and never stamps a cell (interval 1 while not stamped).
+  - Fine-tune off: the rectangle comes only from an explicit `Obstacle_Width` **and** `Obstacle_Height` (both
+    non-zero). Otherwise there are zero samples and "stamped" := 1.
+  - With a proxy: the proxy's sizes and model are used. A proxy without a model means no ray, so every sample
+    stamps.
+  - The obj +0x3a1 & 8 branch also needs obj +0x2a0.
+
+*For the implementer:*
+- The unstamp always recomputes the cell from the remaining occupants.
+- The fine-tune ray hits collision-flagged meshes whose bone is visible, hidden-in-file ones included.
+- The stamped bits come from the object's own type or behaviours, never from the proxy.
+- No model, fine-tune on and no proxy means "never stamped", retried every service.
+
 **Lifecycle of a stamp** (`LandObstacleBehaviorClass`, vftable `0x87b358`; behaviour id 0x14; data pack obj +0x208 = `LandObstacleDataPackClass`, byte +8 "stamped") [H] (2026-11-02, S8 t07):
 
 | slot | RVA | role |
@@ -194,7 +242,23 @@ Before load, every cell is base = effective = Clear (1).
 
 - **Map load:** `0x2a8730` walks every object of the GOM and calls `0x394510`, which sends vf13 to every behaviour of the object. So map placements are stamped by the same stamper as everything else. vf13 is also broadcast by `0x42d8b0` / `0x42dbd0` / `0x42e890` (campaign restore and two related paths).
 - **Run time:** `GOM::Create_Object` (`0x29f810`) attaches the behaviour (vf7, vf9); the object is stamped at its **first behaviour service** (vf6). The stamper works only in land mode (mode vf +0xe0 == 1, terrain present).
-- **Unstamp** (vf15 `0x4f90f0`): re-samples the same rectangle at the object's current position and yaw (no water rule, no ray), removes the object from each sampled cell's hard-occupant list (`0x59efa0` / `0x59f020`) and clears "stamped". **The cell is recomputed only when no live occupant is left in it** (a remaining occupant without the dead bit obj +0x3a0 & 2 skips the recompute; the recompute also needs global `0x140b15490` set) [H]. So two overlapping obstacles with different `OverridePassability` bits keep the removed one's bits until the other leaves.
+- **Unstamp** (vf15 `0x4f90f0`): re-samples the same rectangle at the object's current position and yaw (no water rule, no ray), removes the object from each sampled cell's hard-occupant list (`0x59efa0` / `0x59f020`) and clears "stamped".
+  **Corrected 2026-11-02 (S8 t13)** [H]. The earlier text said that "the cell is recomputed only when no live
+  occupant is left in it" and that "the recompute also needs global `0x140b15490` set", so that two overlapping
+  obstacles would keep the removed one's bits. That was **wrong**:
+  - For every sampled cell that holds the object, the unstamp calls `0x59f020` unconditionally. `0x59f020` removes
+    the object (`0x59ef20`), frees the list when it becomes empty and **always recomputes the cell**.
+  - The recompute: effective (cell +0x14) = base (+0x10), ORed with the `0x397350` bits of every remaining hard
+    occupant (dead occupants included), ORed with the `+0x1694` bits of every soft occupant's type. Bit 0 is dropped
+    when any other bit is set. A change sets the dirty flag `0x140a2bed8` = 1. The add path `0x59f1e0` →
+    `0x59f260` uses the same recompute.
+  - So overlapping obstacles keep only the **remaining** occupants' bits.
+  - The global and the "no live occupant" test gate only `0x3bb6d0`. That function repaints a passability
+    **debug-overlay** texture (land mode +0x338; colour from `0x3b8090`; the stamper always paints magenta).
+  - `0x140b15490` is GameModeManager (`0x140b153e0`) +0xb0. Its only writes in StarWarsG.exe are zero
+    initialisations (`0x17062`, ctor `0x289779`): never set [H for the static scan; M that it is a tool / editor
+    flag].
+  - Cell layout: stride 0x1c; +0 hard list, +8 soft list, +0x10 base, +0x14 effective, +0x18 / +0x1a x / y.
 - **When detach runs:** only when the behaviour is removed. Death does not detach (`Die` `0x39bdb0` and `Kill` `0x391310` leave behaviours alone); the GameObject destructor (`0x38a310` → `0x3893e0`) calls `0x3a52f0`, which runs vf15 on every behaviour in reverse attach order. The destructor runs when the last reference drops, normally at the store's pending-delete flush at the end of the frame of death (OBJECT_RUNTIME §2.2) [H for the path, M for "normally": a Lua wrapper or another holder keeps the object, and its stamp, alive longer].
 
 **Bridges:** no dedicated bridge code was found. Bridges are ordinary objects whose `OverridePassability` / secondary passability re-opens cells. [L]
@@ -215,7 +279,7 @@ Before load, every cell is base = effective = Clear (1).
   - Own-type clones: 455 LAND_OBSTACLE types have no `Death_Clone` list. 451 keep the stamp (all ordinary structures, build pads, props); the 4 with `Death_Clone_Is_Obstacle` = false lose it: `Imperial_Prison_Dathomir` and its `_Singing_Mountain` / `_Frenzied_River` / `_Misty_Falls` variants.
   - `Empire_Gate_Large` (LAND_OBSTACLE, `Death_Clone_Is_Obstacle` false) dies into `Empire_Gate_Large_Death_Clone`, which has no LAND_OBSTACLE: the gate's cells open when the gate is destroyed.
 
-**Port notes (2026-11-02, S8 t07):** `TacticalBattle::land_obstacles_sync` stamps every object in the LAND_OBSTACLE behaviour table, so it stamps the 4 Dathomir prison wrecks that retail does not; its "[inferred]" note for the Veers / Gargantuan clones is **confirmed**. The battle host never supplies `MapStampHooks::mesh_ray_hit`, so **no** stamp is fine-tuned today (map placements included), and `land_obstacle_footprint` ignores `Obstacle_Proxy_Type`. The unstamp always recomputes the cell; retail does not when a live occupant remains (above).
+**Port notes (2026-11-02, S8 t07):** `TacticalBattle::land_obstacles_sync` stamps every object in the LAND_OBSTACLE behaviour table, so it stamps the 4 Dathomir prison wrecks that retail does not; its "[inferred]" note for the Veers / Gargantuan clones is **confirmed**. The battle host never supplies `MapStampHooks::mesh_ray_hit`, so **no** stamp is fine-tuned today (map placements included), and `land_obstacle_footprint` ignores `Obstacle_Proxy_Type`. The unstamp always recomputes the cell, which **matches** retail (corrected 2026-11-02, above; the earlier note here said retail did not).
 
 ### 1.4 Region decomposition and region A\* (the main land search)
 
@@ -917,6 +981,48 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
 | +0x1f0 | owning formation |
 | +0x274 / +0x275 | collision-check / path-approximation countdowns (§5.2) |
 | +0x2a8 | formation-member flag (§5.3) |
+
+**Deploy states (S8 t11, 2026-11-02)** [H unless tagged]. These are used by the weapon gates (TACTICAL_COMBAT §3.1.1
+"Gate details").
+- Only Walk implements the deploy vfuncs:
+  - vf +0x118 = `Deploy(bool)` (`0x61d300`);
+  - vf +0x120 = state == 0x19 (`0x61df40`);
+  - vf +0x128 = state == 0x1A (`0x61dfd0`);
+  - vf +0x130 = state == 0x18 (`0x61df60`).
+
+  Every other locomotor answers false (`0x13b7d0`). The JetPack's +0x118 is `0x1fa90`.
+- **Deploy(true).** It acts when the state is not 0x18 / 0x19, the pending flag (pack +0x2b3) is clear and
+  obj +0x3a1 & 0x40 is clear:
+  - stop (vf +0x140(0)), state := 0x18;
+  - play animation 0x19 (Deploy) with blend 1/30 at `Deployment_Anim_Rate` (type +0x1668, default 1.0, ctor
+    `0x3684a8`);
+  - start frame = clipLen − curFrame − 1 (min 0) when reversing out of 0x1A, else 0;
+  - reversing out of 0x1A while the TURRET is not at rest (`0x386170`) instead goes straight to 0x19, resets the
+    turret and raises signal 0x29.
+- **Deploy(false).** Unless it is blocked by the behaviour in slot +0x35b (id 0x29; `0x42e3b0` / `0x42e3d0`), a state
+  of 0x18 / 0x19 or a set pending flag → state 0x1A.
+- **Per frame** (vf6 `0x61e930`):
+  - 0x18: when the current animation is 0x19 and has ended (`0x39a180`: frame ≥ len − 2 − step, or animation state
+    2) → state 0x19, signal 0x29, `0x39fec0`. Otherwise the deploy animation is (re)started only once the TURRET
+    (slot +0x33d) is at rest; until then `0x6319d0(turret, 0)` recentres it.
+  - 0x1A: clear pending +0x2b3; if the animation is not 0x1A, play it at `Deployment_Anim_Rate` (start =
+    len − cur − 1 − rate when reversing out of 0x19), plus `0x3a0580`, with the same turret wait. When it has
+    ended → state 0 and signal 0x29.
+  - 0x16 with pending set → 0x19 directly, with the animation on its last frame. This is the walk-while-deployed
+    case (`Max_Dist_Walk_While_Deployed` > 0); no vanilla FoC unit sets that field.
+- **Window length** ≈ the turret recentre wait + ceil(max(count − 2, 0) / (clip rate × `Deployment_Anim_Rate`)) sim
+  frames, following the ABILITIES_HARDPOINTS §4.13 convention [M on the exact end test].
+- **FoC `Deploys = Yes`** (all WALK_LOCOMOTOR): AT_AT, Veers AT_AT, AT_AA (rate 2.0), SPMAT (2.0), MPTL (1.5),
+  Abstract_Mobile_Defense_Unit (2.0), Dark_Trooper_PhaseIII (2.0; walk + jetpack), HAV_Juggernaut,
+  Gallofree_HTT_Transport, Destroyer_Droid (3.0).
+- **A locomotor swap undeploys** [H]. The swap (§3.1.1) replaces Walk with a new locomotor. JetPack answers
+  "not deployed", and the new Walk built at the swap back starts in 0x16. So a deployed `Dark_Trooper_PhaseIII` that
+  uses JET_PACK counts as undeployed in the air and after landing. Its `HP_DarkTrooper_P3_*` missiles
+  (`Fire_When_Deployed` Yes, `_Undeployed` No) stay refused until it deploys again.
+  - Hardpoints are **not** suspended by the swap: only TARGETING, WEAPON and SPECIAL_WEAPON are. The hardpoints
+    are held by the deploy flags. With TARGETING suspended, they also get no new target pushed.
+  - The pending flag +0x2b3 lives in the pack, which survives the swap, but vanilla never sets it.
+  - [M] Whether the model's deploy pose is reset visually.
 
 ### 3.3 Tick order [H]
 
