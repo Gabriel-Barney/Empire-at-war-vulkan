@@ -9,6 +9,7 @@
 #include "alamo/ai/ai_free_store_path.hpp"
 
 #include "alamo/data/xml.hpp"
+#include "alamo/lua/gc_schedule.hpp"  // OPT2 t04
 #include "galactic_ai_impl.hpp"
 
 namespace alamo::ai {
@@ -1900,6 +1901,16 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
     w.now = now;
     if (w.perception_frame != now) {
         w.perception_frame = now;
+        {  // OPT2 t04: staggered scheduled Lua collections, once per frame before any script of this world runs
+            std::vector<lua::LuaVm*> vms;  // free stores by player, plans by id, evaluators by name (saved orders)
+            for (const auto& a : w.ai)
+                if (a && a->fs_vm) vms.push_back(a->fs_vm.get());
+            for (const auto& [id, pi] : w.plans)
+                if (pi.vm) vms.push_back(pi.vm.get());
+            for (const auto& [key, e] : w.scripts.loaded_vms())
+                if (e.vm) vms.push_back(e.vm.get());
+            lua::collect_scheduled(vms, static_cast<uint64_t>(now), w.cfg.lua_gc_pf);
+        }
         w.snap = snapshot_from_sim(w.sim, w.cfg.ai_uses_fog_galactic);
         w.perc.update(w.snap, static_cast<uint32_t>(w.sim.frame()));
         w.mem.clear();

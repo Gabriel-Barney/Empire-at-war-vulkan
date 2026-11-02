@@ -129,6 +129,18 @@ alamo_lua_patch(lgc.c
 alamo_lua_patch(lgc.c
   "void luaC_collectgarbage (lua_State *L) {\n  size_t deadmem = mark(L);\n  luaC_sweep(L, 0);\n"
   "static void alamo_retire_dead_keys (lua_State *L) {  /* alamo: see engine/lua/CMakeLists.txt */\n  GCObject *o;\n  for (o = G(L)->rootgc; o != NULL; o = o->gch.next) {\n    if (o->gch.tt == LUA_TTABLE && ismarked(o)) {\n      Table *h = gcotoh(o);\n      int i = sizenode(h);\n      while (i--) {\n        Node *n = gnode(h, i);\n        if (ttisnil(gval(n)) && iscollectable(gkey(n)) && !ismarked(gcvalue(gkey(n))))\n          setttype(gkey(n), LUA_TNONE);\n      }\n    }\n  }\n}\n\nvoid luaC_collectgarbage (lua_State *L) {\n  size_t deadmem = mark(L);\n  alamo_retire_dead_keys(L);\n  luaC_sweep(L, 0);\n")
+# OPT2 t04 (Lua GC without spikes): the collection is split in two - alamo_luaC_collect(L, 0) marks, sweeps and sets the
+# new threshold, touching nothing but L's own global_State; the finalizers (__gc, which run Lua code and so may call
+# engine bindings) stay in luaC_callGCTM. luaC_collectgarbage = alamo_luaC_collect(L, 1), the stock order, so automatic
+# collections are unchanged. That split is what lets collect_scheduled (src/gc_schedule.cpp) collect independent VMs on
+# job workers and run any finalizers afterwards on the sim thread. alamo_lua_gc_hook (null = off) brackets the mark /
+# sweep part of every collection (never the finalizers, so it cannot nest); lua_vm.cpp points it at the "lua.gc"
+# profiler zone. It is written once, before the first VM exists, and only read afterwards.
+alamo_lua_patch(lgc.c
+  "void luaC_collectgarbage (lua_State *L) {\n  size_t deadmem = mark(L);\n  alamo_retire_dead_keys(L);\n  luaC_sweep(L, 0);\n  checkSizes(L, deadmem);\n  luaC_callGCTM(L);\n}\n"
+  "void (*alamo_lua_gc_hook) (lua_State *L, int end) = NULL;  /* alamo: OPT2 t04, see engine/lua/CMakeLists.txt */\n\nvoid alamo_luaC_collect (lua_State *L, int finalize) {  /* alamo: OPT2 t04 */\n  size_t deadmem;\n  if (alamo_lua_gc_hook) alamo_lua_gc_hook(L, 0);\n  deadmem = mark(L);\n  alamo_retire_dead_keys(L);\n  luaC_sweep(L, 0);\n  checkSizes(L, deadmem);\n  if (alamo_lua_gc_hook) alamo_lua_gc_hook(L, 1);\n  if (finalize) luaC_callGCTM(L);\n}\n\nvoid luaC_collectgarbage (lua_State *L) {\n  alamo_luaC_collect(L, 1);\n}\n")
+alamo_lua_patch(lgc.h "void luaC_collectgarbage (lua_State *L);\n"
+  "void luaC_collectgarbage (lua_State *L);\nvoid alamo_luaC_collect (lua_State *L, int finalize);  /* alamo: OPT2 t04 */\nextern void (*alamo_lua_gc_hook) (lua_State *L, int end);  /* alamo: OPT2 t04 */\n")
 
 file(GLOB _lua_all_src RELATIVE "${ALAMO_LUA_DIR}/src" "${ALAMO_LUA_DIR}/src/*.c" "${ALAMO_LUA_DIR}/src/*.h")
 file(GLOB _lua_all_lib RELATIVE "${ALAMO_LUA_DIR}/src/lib" "${ALAMO_LUA_DIR}/src/lib/*.c")
@@ -186,6 +198,7 @@ endif()
 
 add_library(alamo_lua STATIC
   src/lua_vm.cpp
+  src/gc_schedule.cpp
   src/bindings.cpp
   src/bind_engine.cpp
   src/bind_registry.cpp
@@ -281,7 +294,7 @@ set_tests_properties(alamo_lua_tests PROPERTIES TIMEOUT 120)
 
 # One test exe per binding family (L1 stage 2), so families are developed in parallel without
 # touching each other's files. A family's test file is created by the agent that owns that family.
-foreach(_fam objects players story presentation tactical script_gaps fog script_remaining save)
+foreach(_fam objects players story presentation tactical script_gaps fog script_remaining save gc)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lua_${_fam}.cpp)
     add_executable(alamo_lua_${_fam}_tests tests/test_lua_${_fam}.cpp)
     target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads)
@@ -294,3 +307,8 @@ foreach(_fam objects players story presentation tactical script_gaps fog script_
     set_tests_properties(alamo_lua_${_fam}_tests PROPERTIES TIMEOUT 120)
   endif()
 endforeach()
+# OPT2 t04: the GC schedule test checks 0 / 1 / 4 / 16 workers on engine/jobs (configured before lua) when it is built.
+if(TARGET alamo_lua_gc_tests AND TARGET alamo_jobs)
+  target_link_libraries(alamo_lua_gc_tests PRIVATE alamo_jobs)
+  target_compile_definitions(alamo_lua_gc_tests PRIVATE ALAMO_LUA_HAVE_JOBS=1)
+endif()

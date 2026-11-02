@@ -114,6 +114,7 @@
 #include <utility>
 #include <vector>
 
+#include "alamo/core/parallel.hpp"
 #include "alamo/galactic/galactic_events.hpp"
 
 namespace alamo {
@@ -339,6 +340,9 @@ public:
     // Where script orders go (CommandPipeline::execute_direct at the VM frame); nullptr = not issued.
     // The host sets it before every service (its pipeline is rebuilt by replay_from / new sessions).
     void set_command_pipeline(commands::CommandPipeline* pipeline);
+    // OPT2 t04: fan-out for the scheduled Lua collections of the plot VMs at the start of every service
+    // (lua/gc_schedule.hpp); any value gives identical results. Default serial.
+    void set_lua_gc_parallel_for(ParallelFor pf) { lua_gc_pf_ = std::move(pf); }
 
     // ---- L1/S4 wave 2a: battles and the tactical story (header comment) ----
     // At the tactical push (after the battle's store and bridge exist, before its first tick): battle snapshot,
@@ -479,6 +483,7 @@ private:
     GameRandom* rng_;
     const FileProvider* files_ = nullptr;
     lua::GlobalValueStore* global_values_ = nullptr;  // Int-final: StoryStart::global_values
+    ParallelFor lua_gc_pf_ = serial_for;               // OPT2 t04
     // Lua families shared by every VM of the session (declared before sets_: the VMs go first).
     struct Families;
     std::unique_ptr<Families> lua_;

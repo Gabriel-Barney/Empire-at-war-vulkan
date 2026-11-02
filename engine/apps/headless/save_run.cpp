@@ -623,9 +623,11 @@ public:
             if (sp->world) sp->world->record_auto_resolve_survival(owner, type, survived);
         };
         sim::SimHost* hp = &host;
+        ai::GalacticAiConfig wcfg = gcfg_;
+        wcfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
         s->world = std::make_unique<ai::GalacticAiWorld>(
             *s->gs, host.galactic_mode()->primary(), &types_, files_.get(), host.random(), defs_, eqs_, tinfo_,
-            [hp](uint8_t p, const commands::EventData& ev) { return hp->execute_direct(p, commands::CommandSource::AI, ev); }, gcfg_);
+            [hp](uint8_t p, const commands::EventData& ev) { return hp->execute_direct(p, commands::CommandSource::AI, ev); }, wcfg);
         ai::GalacticAiWorld& world = *s->world;
         std::vector<std::string> wd;
         if (!world.load_plans(plan_files_, &wd) || !world.start(&wd)) {

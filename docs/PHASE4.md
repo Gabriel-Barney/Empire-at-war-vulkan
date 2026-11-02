@@ -178,6 +178,46 @@ Budget (confirmed by Gabriel, 2026-10-30): per tick, p99 below 16.7 ms (50 % of 
 (spread battle setup over several ticks or prepare it ahead; start the synthetic all-pairs recompute in the background, as `--latency` already does).
 Not covered yet: a profile of `alamo_game` (render host), story / Lua zones (they run inside `T7` / `T5` laps today), and bigger fleets.
 
+## Lua GC schedule (OPT2 t04, 2026-11-02)
+
+Lua 5.0.2's collector is unchanged (whole-heap mark and sweep, no incremental GC). What changed is when it runs:
+- **Staggered scheduled collections** (`engine/lua` `gc_schedule.hpp`): each host collects its VMs at one fixed point of its
+  tick, before any of its scripts run: the galactic AI once per frame (free stores by player, plans by id, `Script_` evaluators
+  by name), the tactical AI at the start of `update`, the story session at the start of `service`. VM v is due on tick t when
+  `(t + slot(v)) % 32 == 0` and its byte count is at least 67 % of its automatic threshold. `slot(v)` is a hash of the VM's
+  threshold, so it is fixed between two collections, differs from VM to VM and is saved with the VM (no new save data). After a
+  scheduled collection the threshold is 150 % of Lua's own (3 x live instead of 2 x), so a VM is collected about as often as
+  before but at the scheduled point, with 1 x live of headroom per period before the automatic backstop fires inside a script.
+- **Parallel collection**: the due VMs of one host are collected through its `ParallelFor` (the SimHost job system: tactical AI
+  via `BattleAi`, story via `SimHost::start_story`, galactic AI via `GalacticAiConfig::lua_gc_pf` in `alamo_headless`). Per-VM
+  work only: Lua 5.0.2 keeps every collector structure in the state's own `global_State`, and the build patches already make
+  collections address-independent. `__gc` finalizers are split off (`alamo_luaC_collect`, a build patch of `lgc.c`) and run
+  afterwards on the sim thread in list order. `alamo_game`'s galactic AI (`apps/game/game_session.cpp`) still passes no
+  `lua_gc_pf`, so it collects serially (still staggered).
+- **Profiler zones**: `lua.gc` (every collection's mark / sweep, on any thread), `lua.gc.auto` (the automatic ones inside a
+  script call: the spikes this is about), `lua.gc.batch` (wall time of a host's scheduled batch).
+- **Determinism**: no shipped FoC / EaW script (584 Lua files) uses weak tables, `__gc`, `newproxy` or `gcinfo`, so collection
+  timing is invisible to scripts and no CRC golden moved. `alamo_lua_gc_tests` checks identical traces, heap accounting and
+  save images serially and on 0 / 1 / 4 / 16 workers (8 VMs, ticks with 2 or more VMs collected at once), save / load
+  mid-schedule (the loaded run continues exactly like the uninterrupted one) and that a VM is never collected during a call.
+
+Numbers (`alamo_headless --profile`, the four OPT1 scenarios at the default worker count; the synthetic 400-planet run has no Lua
+VMs). Ticks with a collection are a function of the run and exact; the milliseconds were measured while other sessions ran
+about 14 `alamo_headless` processes and two games on this PC (tick p99 25-400 ms instead of the baseline's 0.5-6.4 ms), so
+they are upper bounds and the maxima include preemption.
+
+| Scenario | Before: ticks with an automatic collection, max ms | After: automatic (inside a script call), max ms | After: scheduled batches, max ms |
+|---|---|---|---|
+| Galactic HotM, every faction an AI (18000 ticks) | 110, 1.9 | 34, 0.56 | 69, 0.71 |
+| FoC land battle | 88, 4.2 (frame 22, battle setup) | 13, 2.6 | 77, 4.3 |
+| FoC space battle with station | 45, 1.4 | 9, 1.4 | 41, 31.5 (one outlier while the run's tick max was 2.1 s; see the re-run below) |
+
+What it says: Lua GC was never a spike source here (max one collection of a few ms, 0.1 % of tick time). The schedule moves
+70-80 % of the collections out of script calls to a known point; the remaining automatic ones are mostly plan scripts being
+loaded (a fresh plan VM allocates its whole script at once). Several VMs rarely fall due on one tick (the slots are staggered),
+so the parallel batch matters only for bursts. Running the AI players' scripts themselves in parallel was investigated and left
+as OPT2 t08 (`docs/OPT_RESEARCH.md` section 5: the AI bindings write shared AI state and draw from the one synced RNG stream).
+
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
 `build_asan.cmd` runs clang 20 (MSVC ABI) with UBSan by default; `ALAMO_SANITIZE=address` adds ASan.

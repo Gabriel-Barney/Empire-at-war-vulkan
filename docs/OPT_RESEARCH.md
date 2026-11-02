@@ -77,6 +77,39 @@ forum threads and talk abstracts, not benchmarks, so OPT1's own profile decides 
 - Running separate AI players' VMs in parallel is possible for the same reason, but only if every C API call
   they make reads the sim's frozen state and queues commands (technique 4); any call that writes the sim
   directly has to move behind the command bus first.
+- **Done (OPT2 t04, 2026-11-02):** (a) and (b) as above, with the details and numbers in `docs/PHASE4.md`
+  ("Lua GC schedule"). One change to (a): a VM's slot comes from a hash of its own GC threshold, not from a host
+  index, so it is saved with the VM and needs no new save data.
+
+#### Investigation: AI players' Lua VMs in parallel (OPT2 t04, 2026-11-02)
+Not implemented; left as OPT2 t08. The VMs themselves would allow it (each plan, free store and story script is
+its own `lua_State`, see above), but what the scripts call does not:
+- **Writes through the AI host, not only reads.** The AI binding families (`bind_ai.cpp`, `bind_ai_tactical.cpp`,
+  `lua/ai_bridge.hpp` `AiScriptHost`) mix queries (`tf_valid`, `target_distance`, `free_store_count`) with calls
+  that change the AI world in place: `tf_produce_force` (build tasks, budget spend), `tf_order` / `free_store_move`
+  (status records plus orders), `tf_release_*`, `budget_op`, `set_global_value`, `find_target` (creates target
+  records). Those maps (`plans`, `tfs`, `statuses`, `pps`, `builds`) and their id counters (`next_plan`, `next_tf`,
+  ...) are shared by every player of a world, so ids and container order depend on which player ran first.
+- **Orders execute at once.** Object and task-force orders go through `CommandPipeline::execute_direct`, so the
+  next player's scripts already see this player's orders in the same tick. A queue applied after all players
+  changes that ordering (a small AI timing shift, which is allowed), but every binding that reads back its own
+  order (`Is_Moving`, status polling, `BlockOnCommand`) needs a defined answer for "queued, not applied".
+- **One synced RNG stream.** `GameRandom` and the plan solver draw from the session's synchronized stream in
+  player order; parallel players need per-player streams (a behaviour change, and the draw order of the original
+  is one stream).
+- **Shared VMs and caches.** `Script_<File>` evaluators are ONE VM per file shared by all players of a world
+  (`ScriptEvaluators`), perception caches fill lazily on read, the plan VM pools (`PlanScriptRuntime::acquire`)
+  and the decision / error logs are shared.
+- **Little to win today.** Per-player AI time in the OPT1 galactic run (Heart of the Maw, every faction an AI):
+  `T7.p0` p50 0.10 ms, p99 0.81 ms; `T7.p1` 0.07 / 0.76 ms; the other players far less. In battles the tactical
+  AI runs at the end of `T5.battles` and is not split out by the profiler yet (the part of `T5.battles` outside
+  the `tac.*` steps, 1.2 ms p50 on land in the OPT1 baseline, is an upper bound). So the galactic best case is
+  well under 1 ms per tick; a battle zone for the AI is needed before judging the tactical side.
+- **What it would take:** a frozen per-tick sim view for the read bindings, per-player id spaces (or ids assigned
+  at commit in player order), a per-player command / AI-mutation queue committed in player order after the
+  parallel phase, per-player RNG streams or pre-drawn numbers, per-player evaluator VMs, and a read-only
+  perception cache filled before the phase. That is several days of work across `engine/ai`, `engine/lua` and the
+  hosts, and it changes AI behaviour; worth it only if bigger scenes make `T7` a real cost.
 
 ### 6. Data layout for hot loops (OPT2 t03, where the profile points)
 - Data-oriented design: hot per-unit data in contiguous arrays (structure of arrays), no linked lists or
