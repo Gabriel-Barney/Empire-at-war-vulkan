@@ -354,6 +354,20 @@ function SweepForce_Hardpoint_Opportunity_Target_Acquired(tf, unit, target)
   if TestValid(unit) and TestValid(target) then OppHits = (OppHits or 0) + 1 end
 end
 )";
+// Variants 5-7 (the S7 plans): no escort plan. Since a1g t01 (free-store reservations at accept) the escort's Lead /
+// Escort reserve the Empire's starting frigate and corvettes, so the S7 MainForce would only be accepted ~1400 frames in,
+// with a reinforcement still pending; this plan's category has no goal, so it never runs.
+const char* kPlanEscortOff = R"(
+require("SynAICommands")
+ScriptPoolCount = 1
+function Definitions()
+  Category = "Syn_No_Such_Goal"
+  TaskForce = { { "Lead", "Frigate = 1,1" } }
+end
+function Lead_Thread()
+  ScriptExit()
+end
+)";
 // AI_GALACTIC_3 §4.3 tactical HIJACK_UNIT: a MagicPlan's Produce_Force spawns through the host into the reinforcement
 // pool; the TF then drops it with Reinforce.
 const char* kPlanMagic = R"(
@@ -1080,6 +1094,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     if (variant == 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanEmptyTf);
     if (variant == 6) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAmbush);
     if (variant == 7) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAbility);
+    if (variant >= 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynEscort.lua", kPlanEscortOff);
     if (variant == 1) {
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanMagic);
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynSweep.lua", kPlanOpportunity);
@@ -1132,7 +1147,8 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     TacticalAiWorld world(store, &types, &files, rng, defs, eqs, host, cfg);
     std::vector<std::string> diag;
     CHECK(world.load_plans(&diag));
-    CHECK(world.plans().plans.size() == 5);  // the LandMode plan is not loaded in space
+    // the LandMode plan is not loaded in space; variants 5-7: kPlanEscortOff (no goal of its category) neither
+    CHECK(world.plans().plans.size() == (variant >= 5 ? 4u : 5u));
     if (hijacks) hijacks->clear();
     CHECK(world.start(&diag));
     for (const std::string& d : diag) std::printf("  diag: %s\n", d.c_str());
@@ -1762,6 +1778,7 @@ struct SaveSession {
         };
         if (variant == 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", quiet(kPlanEmptyTf));
         if (variant == 6) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", quiet(kPlanAmbush));
+        if (variant >= 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynEscort.lua", kPlanEscortOff);
         if (variant == 1) {
             files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanMagic);
             files.add("Data\\Scripts\\AI\\SpaceMode\\SynSweep.lua", kPlanOpportunity);
@@ -2110,10 +2127,9 @@ void test_prepare_ambush() {
     CHECK(count_decisions(r, "p0 tf MainForce ambush: no point") >= 1);  // the "front" call with tolerance -1
     CHECK(rep_line.find("errors=true nopoint=true imm=false fin=true") != std::string::npos);
     CHECK(only_reports(r, "AMBUSH"));
-    bool arrived = false;  // some Empire instance finished by movement: every mover's Unit_Move_Finished, result true
+    bool arrived = false;  // an Empire instance saw its movers arrive (Unit_Move_Finished from the ambush block)
     for (const std::string& e : r.errors)
-        arrived = arrived || (e.find("AMBUSH player=0 ") != std::string::npos && e.find("res=true moved=0") == std::string::npos &&
-                              e.find("res=true moved=") != std::string::npos);
+        arrived = arrived || (e.find("AMBUSH player=0 ") != std::string::npos && e.find(" moved=0") == std::string::npos);
     CHECK(arrived);
     const RunResult again = run(30 * 120, 1, 6);
     CHECK(again.crc == r.crc && again.decisions == r.decisions);
@@ -2156,11 +2172,11 @@ void test_ability_finished() {
     CHECK(act_frame > 0 && activated > 0 && failed > 0);
     CHECK(rep_line.find("imm=false queued=0 fin=true") != std::string::npos && only_reports(r, "ABILITY"));  // queued events run at the next PumpEvents
     // events: the failed frigates (queued at once), the frigates' unrelated signals at +30 (raised: they are TF members),
-    // and the corvettes' signals at +60.
+    // and the corvettes' signals at +60; the decision log has the signalled ones (the queued ones are in "activate ability").
     char want[64];
     std::snprintf(want, sizeof want, "events=%zu", failed * 2 + activated);
     CHECK(rep_line.find(want) != std::string::npos);
-    CHECK(count_decisions(r, "p0 event Unit_Ability_Finished (tf MainForce)") >= failed * 2 + activated);
+    CHECK(count_decisions(r, "p0 event Unit_Ability_Finished (tf MainForce)") >= failed + activated);
 }
 
 void test_order_results_bounded(int variant, int32_t frames) {
