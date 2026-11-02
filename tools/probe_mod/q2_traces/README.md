@@ -100,6 +100,10 @@ galaxy is running.
    pick the map by hand as the script header says (Land, Utapau, you = Empire, slot 2 Rebel Medium AI, Advanced Default),
    then leave the game alone. It settles the land items of `docs/re/SKIRMISH_SETUP.md` §10 (pre-built pads, AI credit
    charges, start units, pad capture).
+   **Long land run (skai t02), about 22 min:** `run_skirmish_land_attack.cmd`, the same clicks, 36000 ticks (20 min of game
+   time) with the Lua probe. It shows whether and when the Rebel AI attacks the idle Empire base: its army size over time
+   (is 9 the real 2-player cap), the first tick its units reach the base and which base objects die. Read it with
+   `analysis\land_attack.py out\<run>`.
 7. **Send back:** zip `out\` and send it. Leave out `out\selftest`. Each run has its own folder:
    - `trace.q2t`;
    - `summary.json`;
