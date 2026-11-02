@@ -3,6 +3,8 @@
 Behaviour recovered from the retail exe: the Ghidra 12.2 export in `re_reference/`, plus llvm-objdump on
 `corruption\StarWarsG.exe` where the decompiler lost an argument (turret elevation, §3.6). Prose and tables only.
 Roadmap S8 t03 (reinstated by Gabriel 2026-11-01); TACTICAL_GAPS §2.3.5 and §3.1 point here. S8 t04 implements it.
+2026-11-02 (input for S8 t06): §3.5 toss timing, §3.6 turret callers, §5.1 fire bones, §5.2 null spawns, §6.4 sticky
+attach and the BOMB timer, §6.6 the terrain segment test, §8 items 14–21.
 
 Conventions:
 - Addresses are RVAs (image base 0x140000000).
@@ -22,10 +24,10 @@ Data checked: vanilla FoC `Data\XML` (`extracted/foc_data_text.zip`) and Thrawn'
 |---|---|---|
 | 1 | XML fields, defaults, vanilla / TR values | [H] |
 | 2 | The solver 0x54a6f0: inputs, outputs, closed-form high arc, `Can_Lob_Slower` 0.8 steps, failure | [H] |
-| 3 | Callers: slot 44, slot 43, Grenade_Attack, Remote_Bomb, turret aim, the launch | [H]; turret return meaning [M] |
+| 3 | Callers: slot 44, slot 43, Grenade_Attack, Remote_Bomb (toss timing, garrison), turret aim, the launch | [H]; who reads the turret "aimed" result [M] |
 | 4 | Max attack range of a grenade weapon = `Max_Speed`² / (gravity × lob mod) | [H] |
-| 5 | Launch (Spawn_Projectile 0x54ade0): points, facing, speed, no shot without a solution | [H] |
-| 6 | Flight 0x4ceea0 (closed-form parabola), hits, ground test, sticking, expiry | [H]; sticky attach details [M] |
+| 5 | Launch (Spawn_Projectile 0x54ade0): points (fire bones), facing, speed, no shot without a solution, null-spawn bookkeeping | [H] |
+| 6 | Flight 0x4ceea0 (closed-form parabola), hits, the exact terrain / water segment test (§6.6), sticking, the BOMB timer, expiry | [H] |
 | 7 | Interactions: min / max range, lead, the root finder, terrain and obstacles | [H] |
 | 8 | Differences from the port's stand-in (input for S8 t04) | — |
 | 9 | Open items | — |
@@ -205,6 +207,51 @@ Same shape: the range tests run against the target's container when the target i
 `Bomb_Type` category 3; `Lob_Solve(unit pos, 0x398440(target))` must succeed; then face / stop / lock / pending, as
 Grenade_Attack. The toss itself goes through 0x71a200 → Spawn_Projectile (§5).
 
+**Apply in full** [H] (2026-11-02): the ability must be enabled (vf5 0x719e50, which does **not** require an enemy
+target); the unit's pending-ability pack is obj +0x100. Range tests 0x48d820 (`Target_In_Range`) / 0x48e100
+(`Must_Close_Range`) use the target's container (obj +0x2b0) when the target is garrisoned (0x39b1a0); the solve uses
+the target itself (+ its z adjust). Then: face the target (yaw only, roll 0), stop (0x3a9880), movement lock
+(0x3a8e50(obj, 1)); pending +0x17c := 1 ("waiting to stop"), +0x178 := target id (obj +0x50); Disable TARGETING
+(slot 9); copy the ability name to pending +0x158; start the presentation (0x48e4d0). The recharge is **not** started
+here.
+
+**Update** (vf4 0x719ee0), each service while the pending name is this ability's:
+1. While +0x17c is set: wait as long as the locomotor reports it is still moving (locomotor vfuncs +0x1a8 / +0x1b0 /
+   +0x1b8, or +0x1c0(0), true). Then +0x17c := 0, Disable the locomotor (slot 1), and:
+   - `Toss_Anim` (+0x190) = −1 → toss at once (target looked up with 0x2aca60, then 0x71a200);
+   - else play `Toss_Anim` (0x3a92f0(anim, 0xffff, 0, blend 0.1, speed 1.0)).
+2. If the current animation is `Toss_Anim`:
+   - when the animation frame (model +0xd0 via 0x395550) ≥ `Spawn_Frame` (+0x194, a float frame number) and the
+     stored target ≠ 0x3fffff: **toss once**, then target := 0x3fffff;
+   - when the animation has ended (0x39a180, last 2 frames): Enable TARGETING and the locomotor, unlock
+     (0x3a8e50(obj, 0)), signal 0x29 (MOVEMENT §3.1.1 "Signal 0x29 listeners"), clear the pending name.
+3. Otherwise (the animation was replaced or never started): clear pending, target := 0x3fffff, Enable TARGETING and
+   the locomotor, unlock, signal 0x29 — **no toss**.
+
+Vanilla: `Remote_Bomb_Toss_Anim` = BOMBTOSS, `Spawn_Frame` 12.0, `Spawn_Bone` = `MuzzleB_00`. The animation frame is
+animation state; a port uses n × rate × speed (ABILITIES_HARDPOINTS §4.13), i.e. the toss happens 12 frames after the
+toss animation starts at speed 1.0.
+
+**Toss** 0x71a200: projectile type `Bomb_Type` (+0x188); bone = `Spawn_Bone` (+0x198) looked up on the unit's model
+(0x12d2a0); spawn request = (shooter = the unit, target = the target object, bone) → Spawn_Projectile 0x54ade0 (§5).
+**Only when a bomb was spawned** the PLACE_REMOTE_BOMB recharge (ability 0x40 = 64; 0x3a9840 → countdown 0x42fb70)
+starts. When the target is a ground-point MARKER (obj +0x343 ≠ −1), the marker is removed (0x391310(target, 1))
+[M: which removal path]. The bomb gets **no** BOMB timer: only DETONATE_REMOTE_BOMB sets it off (below).
+
+**Garrisoned thrower** [H]: Spawn_Projectile's garrison branch (§5.1) applies first: a shooter inside a container
+(obj +0x3a7) whose container type lists garrison fire bones (type +0x23a8) launches from a synced pick among those
+bones that lie within 60° of the target, not from `Spawn_Bone`.
+
+**DETONATE_REMOTE_BOMB** (0x280ec0) [H]: walks the object list in list order; for every live object of the player
+whose type has `Friendly_Damage_Amount` (+0x23ec) > 0 (the stuck remote bombs):
+- if it is attached (obj +0x2e0 = parent) and the parent is garrisoned (+0x3a7) → skip it (not detonated);
+- if the parent belongs to the same player: the parent takes Take_Damage kind 1 of that amount, and the other members
+  of the parent's team container take kind 0x15 of the same amount;
+- then add the DEATH behaviour, run the projectile detonation 0x4c7f70 at the bomb's position, remove the bomb
+  (0x391310).
+
+`Proj_Remote_Bomb` has `Friendly_Damage_Amount` 200, so its sweep also sees own units (§6.2) and it can stick to them.
+
 ### 3.6 Turret elevation (TurretBehaviorClass; also used by LobbingSuperweaponBehavior 0x631fe0)
 - Can-aim 0x631a00: if the turret's current weapon projectile is category 3, solve from the fire bone to the aim
   point; **no solution → cannot aim (0)**; else the elevation to test is −θ × 57.295776 (degrees, up = negative), in
@@ -215,8 +262,20 @@ Grenade_Attack. The toss itself goes through 0x71a200 → Spawn_Projectile (§5)
   data +0x58) = wrap(−θ × (360 / (π × 2))) (constants 360, π, 2 at 0x1408007f4 / 0x1408007dc / 0x1408007d4, read in
   the disassembly at 0x14063148f), and the barrel then turns toward it at `Turret_Rotate_Speed` as usual.
 - Vanilla grenade turrets allow 85–90° of elevation and the arc with `Can_Lob_Slower` stays below ~71°, so in
-  vanilla only the "no solution" part matters [M: what the callers 0x631cc0 / 0x631fe0 / 0x632050 / 0x632270 do with
-  a 0 — presumably "not aimed, hold fire"].
+  vanilla only the "no solution" part matters.
+- **Callers** [H] (2026-11-02):
+  - 0x631cc0(turret, object): null → 0; else `can-aim(0x398440(object))`, its result unchanged (no solution → the
+    turret cannot aim at that object).
+  - 0x632050(turret, object) and 0x631fe0(turret, point; the lobbing superweapon's entry): need the turret data
+    (obj +0xf0, +0x40 ≠ −1), else 0. 0x632050 first redirects the object through TARGETING 0x566aa0 when the target
+    has obj +0x348 ≠ −1 and the shooter obj +0x33b ≠ −1, and aims at the result's position + z adjust. Both store
+    the aim point at turret data +0x60..+0x68, set the "aim requested" byte +0xf6 := 1 and run the aim update
+    0x631210. **0 (no solution) → +0xf6 := 0, return 0.** Otherwise return 1 only when the current angles have
+    reached the target angles (0x386170(+0x54, +0x48)), else 0.
+  - 0x632270 (turret service): runs 0x631210 again (result ignored) only when +0xf6 is 0, and after the idle time
+    (type +0x5cc) resets the target angles to the rest angles (type +0x5b4.., deployed +0x5c0..).
+  So no solution = "not aimed" this frame, retried every frame; the shot is held [M: the readers of the 0x632050 /
+  0x631fe0 result were not re-read; they treat 0 as "not yet aimed"].
 
 ---
 
@@ -247,10 +306,24 @@ The shared spawner used by WeaponBehavior (vf6 0x54d090), the abilities (Grenade
 0x491cd0 / 0x492010), AttackAction 0x71ed40 and 0x52a110 / 0x54a970.
 
 ### 5.1 Points
+- **Fire bones of a WeaponBehavior shot** [H] (2026-11-02). The weapon data pack init 0x54cb00 builds the bone list
+  `<Muzzle_Bone_Name>_00`, `_01`, … (type +0x580, default `MUZZLEA`) until a name is missing on the model: list
+  pack +0x90, count +0xa0; the matching `<bone>_FLASH` meshes (pack +0xa8, hidden at init, flash countdowns +0xc8)
+  and `<bone>_LIGHT` meshes (+0xd8, count +0xe8); the cycle index +0xf0 = 0 when bones exist, else −1. The
+  service 0x54d090:
+  - bone count < 1 → **no shot at all** (the weapon never fires);
+  - i = the cycle index, which then advances and wraps (**round robin per shot**); with more than one
+    `Projectile_Types` entry and more than one bone, i = the current weapon index (obj +0x324) instead;
+  - request bone = list[i] when 0 ≤ i < count, else −1.
+
+  So a WeaponBehavior shot (straight or grenade) **always launches from a muzzle bone's world translation**; the
+  "no fire bone" rule below is reached only by other callers. The same holds for slot 43 / 44 straight shots and for
+  grenades: neither the unit position nor position + `Ranged_Target_Z_Adjust` is used.
 - **Launch point L** (shared rules, unchanged for grenades): no shooter → the request's point; no fire bone →
   the shooter's position + its own `Ranged_Target_Z_Adjust` (0x398440); one bone → the bone's world translation;
-  two bones → a synced random point between them (3 draws); garrisoned shooter with garrison fire bones → a synced
-  pick among the bones within 60° of the target [M on that last branch].
+  two bones → a synced random point between them (3 draws); garrisoned shooter (obj +0x3a7) whose container type
+  lists garrison fire bones (+0x23a8) → a synced pick among the bones within 60° of the target, which **replaces**
+  the request's bone [H, 2026-11-02].
 - **Target point Q**: with a target object → a team container is first replaced by its member nearest the launch point
   (0x404fc0; nearest the shooter's own container when the shooter sits in one with obj +0x33b ≠ −1; the hardpoint
   index is reset to −1, and no member → no shot); then Q = target position +
@@ -259,8 +332,15 @@ The shared spawner used by WeaponBehavior (vf6 0x54d090), the abilities (Grenade
 
 ### 5.2 Solve
 `(θ, s) = Lob_Solve(type, L, Q)` (inlined copy, §2.4). **No solution → the spawner returns null: no projectile, no
-sound, nothing spawned** [H]; the caller's own bookkeeping (recharge, pulse count) is outside this function [M: not
-re-read per caller].
+sound, nothing spawned** [H]. The callers' bookkeeping on a null spawn [H] (2026-11-02):
+- WeaponBehavior 0x54d090: jumps to its end. No pulse / recharge update (0x54d8f0), no muzzle flash, no fire
+  animation / SFX, the pack's +0x3c reset is skipped. The cooldown stays 0, so it tries again next service. The
+  fire-bone cycle index has already advanced.
+- Grenade_Attack throw 0x700a70: returns 0; the ability is not set active and no recharge starts. (Also when the
+  projectile has no BOMB behaviour: the spawned grenade is removed and the throw fails.)
+- Remote_Bomb toss 0x71a200: returns false; no recharge starts, the toss is not retried (the stored target is
+  cleared), and the end of the toss animation ends the ability as usual (§3.5).
+- The other spawner users (Cluster_Bomb, the lobbing superweapons, AttackAction, …) were not re-read [M].
 
 ### 5.3 Heading and the rest of the aim
 The normal aim 0x54a270 still runs after the solve: random target bone (synced draw, when the target type has a
@@ -312,7 +392,8 @@ distance and height) at t = d / vx.
 2. Facing := angles(current position → N) (0x20acd0, 0x3a8710): the model points along the chord.
 3. `Sweep` 0x4c97a0 from the current position to N (TACTICAL_COMBAT §3.4):
    - Ground test 0x4d0630: **land mode only**; for category 3 it always runs (the "not yet past the target" skip is
-     for categories −1 / 0 only): segment against the terrain heightmap (0x135840).
+     for categories −1 / 0 only): segment from the current position (obj +0x78) to N against the terrain triangles
+     and the water plane (0x135840, §6.6).
    - Object test: hostile players' segment query (collision mask 7 with `Projectile_Does_Shield_Damage`, else 5),
      then the own-player variant when `Friendly_Damage_Amount` > 0 or `Causes_Infection`.
    - An object hit wins when its segment fraction ≤ the ground fraction.
@@ -333,16 +414,41 @@ it hits an object or expires.
 No missile-shield test, no `Turn_Toward`, no homing; the target and FireAtPosition in the pack are not read by the
 flight. `Max_Rate_Of_Turn` is irrelevant (vanilla 0, MDU grenade 0.01).
 
-### 6.4 `Projectile_Grenade_Sticks_On_Collision` (sticky and remote bombs) [H flow, M attach details]
-When the sweep found a hit and the flag is set, no damage is done:
-- object hit: the projectile is attached to the hit object at the bone named in the hit record (0x12d520 /
-  0x12d730 resolve it; bone 0 when not found), with a local orientation built from the hit-record normal plus 90° of
-  pitch (0x20acd0, 0x22d410), via 0x38d320 (zero offset). Then, when the projectile type has obj +0x387 ≠ −1, two
-  model flags are set (0x264c80(1), 0x264670(0)) [L: presentation];
+### 6.4 `Projectile_Grenade_Sticks_On_Collision` (sticky and remote bombs) [H]
+When the sweep found a hit and the flag (+0x4b) is set, no damage is done:
+- object hit (2026-11-02 detail):
+  - A = the angles of the hit normal (record +0xc, 0x20acd0), then pitch += 90;
+  - bone = the bone of the hit mesh (record +0x28) on the hit object's model (0x12d520 → 0x12d730), bone 0 when
+    not found;
+  - the bomb model's local transform := inverse(bone world transform, 0x22d410) × [rotation R(A) | hit point
+    (record +0x18)] (0x13f910). At the moment of attach its world transform is therefore exactly R(A) at the hit
+    point; afterwards it follows the bone;
+  - attach 0x38d320(bomb, parent, bone, zero offset), which sets obj +0x2e0 = parent;
+  - when the bomb has a PROXIMITY_MINE behaviour (slot obj +0x387 ≠ −1): model flags 0x264c80(1) / 0x264670(0) —
+    presentation only;
 - ground hit: position := the ground hit point (0x3a8f90);
-- either way the behaviour's vfunc +0xc0 is called (flight stops) [M: "deactivate"]. The projectile then waits for
-  its BOMB behaviour (Grenade_Attack's `Grenade_Explode_Timer_In_Secs`, Remote_Bomb's DETONATE_REMOTE_BOMB).
-Nothing sticks to allies: the object test only sees enemies (and own objects for friendly-damage / infection types).
+- either way the behaviour's vfunc +0xc0 is called (flight stops). The projectile then waits for its BOMB behaviour.
+Nothing sticks to allies unless the type has `Friendly_Damage_Amount` > 0 or `Causes_Infection` (the object test only
+sees enemies otherwise); `Proj_Remote_Bomb` has 200, so remote bombs can stick to own units (§3.5).
+
+**BOMB behaviour** (service 0x58f210; BombDataPack at obj +0x190, ctor 0x551c90) [H]:
+- pack: +8 target id (0x3fffff = none), +0xc damage amount (float), +0x10 damage kind (init 1), +0x14 detonation
+  frame (0 = not armed);
+- each service: when attached (obj +0x2e0) and the model exists, position := the bomb model's world translation
+  (the stuck point carried by the bone, so it moves and turns with the parent);
+- when detonation frame ≠ 0 and ≤ the current frame: add the DEATH behaviour (or remove via 0x391310); then with no
+  PROJECTILE behaviour (slot +0x33a = −1) and a target: Take_Damage(target, kind +0x10, amount +0xc, source = the
+  bomb); otherwise the projectile detonation 0x4c7f70(projectile behaviour, bomb, bomb position, 0, 0) followed by
+  0x391310(bomb, 1); then reset the pack (0x551d40).
+- **Arm** 0x58f030(behaviour, bomb, target, seconds, kind, amount): detonation frame := int((float)FPS × seconds +
+  (float)mode frame (mode +0x10) + 0.5), plus a countdown-animation start frame (presentation).
+- **There is no XML type-level timer.** The fuse comes from the arming caller:
+  - Grenade_Attack throw 0x700a70 arms **right at spawn** with `Grenade_Explode_Timer_In_Secs` (ability +0x1e8;
+    vanilla 8.0 / 6.0), target none, kind 1, amount 0. So the countdown runs from the throw frame, in flight too;
+    a non-sticky grenade normally detonates on its ground / object hit first (§6.2) and the timer then never fires.
+    On success the ability 0x16 (22) is set active and its recharge starts;
+  - other armers: 0x3a3e20, Demolition 0x6401b0, Cluster_Bomb 0x718ad0 (not re-read);
+  - Remote_Bomb never arms (DETONATE_REMOTE_BOMB, §3.5).
 
 ### 6.5 Expiry (Move_And_Expire 0x4c7050)
 - DistanceTravelled (+0x5c) += s (the solver speed, not the arc length) every step.
@@ -353,6 +459,43 @@ Nothing sticks to allies: the object test only sees enemies (and own objects for
 - `Explode_When_Reached_Target_Radius` (+0x7e) has no effect on category 3.
 - Expiry without a hit: lifetime detonation particle, detonate SFX, area damage centred on the projectile, the
   on-detonation effects, destroy.
+
+### 6.6 Terrain / water segment test 0x135840 [H for the maths]
+Called by the ground test 0x4d0630 as 0x135840(terrain (0x267a50(0x397680(projectile))), from = the projectile
+position (obj +0x78), to = N, record). The record is the Sweep result's ground part (+0x3c): "want point" byte = 1,
+best t +0x40 := 1.0, material +0x44, normal +0x48.. (initially (0, 0, 1)), point +0x54...
+
+1. Ray: O = from, D = to − from (component-wise, **not normalised**; a unit direction, |D|² and |D| are computed too
+   but the triangle and plane tests use D). It calls the terrain renderer object (terrain +0xd8, vftable 0x81b610)
+   vf3 0x18f490.
+2. Patch selection (0x18f490): patches of 31 × 31 cells; inv = 1 / (cell size (terrain +0x9c) × 31). Over the
+   segment's XY bounding box, patch x from floor(min x × inv) to ceil(max x × inv), same for y, clamped to the patch
+   counts (renderer +0x10 / +0x14). Each patch's AABB (centre +0xa8, half extents +0xb4) is ray-tested, then its
+   BVH (0x1b7160): node ray / AABB test 0x20c6d0; an inner node visits the child on the near side first (by the sign
+   of D · split normal) and the far child only when the near one found no hit; a leaf (0x1b92a0) is one cell, grid
+   (gx, gy) = leaf cell + the patch's cell offset (+0x30 / +0x34).
+3. Cell vertices (0x135a70): (gx × cell, gy × cell, (float)(int)h × height scale (terrain +0xa4)), h = the int16 at
+   terrain +0x20 + 4 × (y × width + x) (4-byte samples; width +0x10, height +0x14); x / y are clamped to the grid for
+   the **height lookup only**.
+4. Two triangles per cell, diagonal (x, y)–(x+1, y+1): T1 = (v00, v10, v11), T2 = (v00, v11, v01).
+5. Ray / triangle 0x20c410 (Möller–Trumbore, no back-face culling), in this float order, e1 = v1 − v0, e2 = v2 − v0:
+   - P = D × e2 = (Dy·e2z − Dz·e2y, Dz·e2x − Dx·e2z, Dx·e2y − Dy·e2x);
+   - det = P.y·e1.y + P.x·e1.x + P.z·e1.z; |det| < 0.0001 → miss; inv = 1 / det;
+   - T = O − v0; u = (T.y·P.y + T.x·P.x + T.z·P.z) × inv; miss unless 0 ≤ u ≤ 1;
+   - Q = T × e1 = (Ty·e1z − Tz·e1y, Tz·e1x − Tx·e1z, Tx·e1y − Ty·e1x);
+   - v = (Q.y·D.y + Q.x·D.x + Q.z·D.z) × inv; miss unless v ≥ 0 and v + u ≤ 1;
+   - t = (Q.y·e2.y + Q.x·e2.x + Q.z·e2.z) × inv; miss unless 0 < t < best;
+   - hit: best := t; normal := normalize(e1 × e2); point := t·D + O (per component).
+6. Water: when terrain +0x204 (water type: 0 none, 1 water, 2 lava, 3 ice; TERRAIN_WATER_POST) ≠ 0 and the toggle
+   byte 0x140a123a1 (initialised 1, never written) is set: plane z = terrain +0x200 (0x20c180): denom = D.z,
+   |denom| ≥ 0.0001, t = −(O.z − h) / denom, hit when 0 < t < best (both directions). The material comes from a
+   table by water type (presentation). [M: the stored normal for a water hit is (0, 0, 1).]
+7. The hit material comes from the 0x133b10 lookup (presentation: surface FX).
+
+Result: the nearest t in (0, 1) over the grid triangles and the water plane [M: the BVH's near-first early-out equals
+the global minimum, since cells are disjoint in XY and the ray is monotone along the split axis; ties aside]. A hit at
+exactly t = 0 or t = 1 is not a hit. Hits from below count (no culling). Sweep 0x4c97a0 then prefers the object hit
+when its fraction ≤ the ground t. Grenades therefore **detonate on the water surface**, and lava / ice planes too.
 
 ---
 
@@ -417,13 +560,50 @@ commit phase, `base_attack_range`, `candidate_ok` / `promote_goal`, apps/sim `ba
 13. **Guard needed [port]:** G ≤ 0 with `Can_Lob_Slower` never terminates in retail (§2.5); the port must cap or
     special-case it (e.g. treat G ≤ 0 as "no solution" in the solver, and keep hardpoint G = 0 shots straight).
 
+Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e):
+
+14. **Ground hit.** The port's `CombatSystem::ground_hit` samples h(x, y) in 10-unit steps (64 max) and bisects 12
+    times. Retail intersects the segment (current position → N) with the two triangles of every heightmap cell it
+    crosses and with the water plane (§6.6): exact Möller–Trumbore, nearest t in (0, 1), two-sided. The host must
+    give combat the terrain grid (cell size, width, height, int16 heights, height scale, water height and type), not
+    only a height function; the point and t come out of the triangle test, not from bisection.
+15. **Water.** A non-zero water type makes the plane z = water height a hit surface for every land projectile's ground
+    test (grenades detonate on water / lava / ice). The port has none.
+16. **Launch point.** WeaponBehavior shots launch from the world translation of the next fire bone
+    `<Muzzle_Bone_Name>_NN` (default `MUZZLEA_00`…), round robin per shot (§5.1); with no such bone the weapon never
+    fires. The port launches straight shots from `u.pos` and lobs from `u.pos` + own z adjust. A port without
+    animated bones should use each bone's rest-pose offset in unit-local space (rotated by the unit's orientation)
+    [port approximation: retail uses the animated pose]; garrisoned shooters use the container's garrison fire bones
+    within 60° of the target.
+17. **Remote_Bomb** (tactical/abilities `RemoteBomb`): retail spawns the bomb from `Spawn_Bone` at `Spawn_Frame` of
+    `Toss_Anim` (12 frames after the toss starts, vanilla), after the unit has stopped; it locks movement, suspends
+    TARGETING and the locomotor for the toss, raises signal 0x29 at the end, and starts the PLACE_REMOTE_BOMB recharge
+    **only if the bomb spawned**. The port spawns at apply and starts the recharge unconditionally. Range tests use
+    the target's container when the target is garrisoned (§3.5).
+18. **Sticky attach frame.** Retail carries the stuck point on the parent's hit bone (it moves and turns with the
+    parent). The port stores a world offset (`stuck_offset = p.pos − parent pos`) that does not rotate. Store it in
+    the parent's local frame and rotate it with the parent's orientation [port approximation: bone animation is
+    ignored].
+19. **BOMB timer.** Detonation frame = int(30 × seconds + spawn frame + 0.5), fired when frame ≥ it; the countdown
+    starts at the throw (spawn) frame, not at the stick. Check the port's `age >= fuse` against this rounding.
+20. **DETONATE_REMOTE_BOMB own-parent rule:** a bomb stuck on an own unit damages that unit (kind 1) and its team
+    container's other members (kind 0x15) by `Friendly_Damage_Amount`; bombs on garrisoned parents are skipped (§3.5).
+21. **Null spawns** (§5.2): a WeaponBehavior shot that spawns nothing changes no cooldown or pulse count and retries
+    next service; Grenade_Attack / Remote_Bomb start no recharge.
+22. [M, follow-up] WeaponBehavior has **no range gate at fire time**: the request's travel override (+0x48) is the
+    max attack range (0x3749d0 × (1 + list 8)); the range test is only the targeting slots'. The port keeps an XY
+    range gate in `fire_unit_weapon`; confirm before removing it.
+
 ---
 
 ## 9. Open items
-- What each turret caller (0x631cc0, 0x631fe0, 0x632050, 0x632270) does when the aim returns 0 [M: hold fire].
-- What WeaponBehavior / the abilities do with a null spawn (recharge, pulse count, ability consumption) — not
-  re-read per caller.
-- Sticky attach: the exact local orientation and the obj +0x387 model flags (§6.4) [M / L]; presentation only.
+- Answered 2026-11-02: the turret callers (§3.6), null-spawn bookkeeping for WeaponBehavior / Grenade_Attack /
+  Remote_Bomb (§5.2), the sticky attach (§6.4), the BOMB timer (§6.4), the terrain test (§6.6), the launch point
+  (§5.1), the Remote_Bomb toss (§3.5).
+- The readers of the turret "aimed" result (0x632050 / 0x631fe0 callers) [M: hold fire while 0].
+- Null-spawn bookkeeping of the other spawner users (Cluster_Bomb, lobbing superweapons, AttackAction) [M].
+- Which removal path the Remote_Bomb toss uses for a ground MARKER target (0x391310(target, 1)) [M].
+- The fire-time range gate (§8 item 22) [M].
 - Whether the in-flight position can drift from Q in float (the closed form is evaluated in single precision; the
   hit is decided by the sweep, so a miss by a fraction of a unit only matters at the target's collision edge).
 - **probe** (optional): SPMAT firing at a target ~275 away on flat ground should show a ~64° arc landing in about
@@ -450,4 +630,14 @@ commit phase, `base_attack_range`, `candidate_ok` / `promote_goal`, apps/sim `ba
 | 0x700860 / 0x719c90 | Grenade_Attack / Remote_Bomb apply (vf30) |
 | 0x631210 / 0x631a00 | TurretBehavior aim update / can-aim |
 | 0x20b350 / 0x20acd0 | angles → matrix / direction → angles |
+| 0x631cc0 / 0x632050 / 0x631fe0 / 0x632270 | turret can-aim at object / aim at object / aim at point / service (§3.6) |
+| 0x54cb00 / 0x54d090 | weapon data pack init (fire bones) / WeaponBehavior service (§5.1, §5.2) |
+| 0x135840 | terrain segment test (§6.6) |
+| 0x18f490 / 0x1b7160 / 0x1b92a0 | renderer ray query: patches / patch BVH / cell leaf |
+| 0x135a70 | cell vertex (grid x, y → position) |
+| 0x20c410 / 0x20c180 / 0x20c6d0 | ray / triangle, ray / z-plane, ray / AABB |
+| 0x58f210 / 0x58f030 / 0x551c90 | BOMB service / arm / pack ctor (§6.4) |
+| 0x700a70 | Grenade_Attack throw (arms the BOMB timer) |
+| 0x719ee0 / 0x71a200 | Remote_Bomb update / toss (§3.5) |
+| 0x280ec0 | DETONATE_REMOTE_BOMB |
 | 0x776d48 / 0x7823c8 | `sqrtf` / `acosf` |
