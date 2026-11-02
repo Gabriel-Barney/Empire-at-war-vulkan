@@ -1246,9 +1246,9 @@ StoryRun run_story_battle(const Data& d, const FileProvider& files, int32_t work
 
 // BT §2.9 / REMAINING_GAPS §6.4: a galactic plot's LINK_TACTICAL (STORY_ELAPSED 1 s) starts its battle at the battle
 // hook right after the reward (ConflictManager::start_linked: queued at the front, no validation / decide). The story flag
-// (GalacticSim::linked_battle_pending, paused() refuses FleetManagement) is set by the record and cleared at the start, so
-// no tick ends with it set. Cases: space at S10_B (an Underworld frigate already orbits it); land at S10_B with no
-// Underworld unit anywhere near (the record has no units: the validation used to drop it); land sandbox (Param8 1: the
+// (GalacticSim::linked_battle_pending; paused() refuses FleetManagement while the local player is in a queued conflict)
+// is set by the record and cleared at the start, so no tick ends with it set. Cases: space at S10_B (an Underworld
+// frigate already orbits it); land at S10_B with no Underworld unit anywhere near (the record has no units: the validation used to drop it); land sandbox (Param8 1: the
 // human defender's surface units start, the AI attacker gets nothing).
 struct LinkedRun {
     bool started = false, land = false, flag_after_tick = false;
