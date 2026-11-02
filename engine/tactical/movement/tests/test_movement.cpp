@@ -1969,8 +1969,10 @@ static CrcLog fighter_crc_run(const ParallelFor& pf) {
     return log;
 }
 
-// Golden digest of the fighter scenario (FIGHTER_FLYING 2026-10-29); MSVC and clang must both produce it.
-static constexpr uint64_t kGoldenFighter = 0x5a7df50c208f33b1ull;
+// Golden digest of the fighter scenario (FIGHTER_FLYING 2026-10-29); MSVC and clang must both produce it. s78f t02: the
+// fighter 31's move now builds a fighter formation, hashed with the fighters ("FFOR"); without that section the digest is
+// still the 2026-10-29 value 0x5a7df50c208f33b1 (the motion is unchanged).
+static constexpr uint64_t kGoldenFighter = 0x083eba7df930d85bull;
 
 static void test_fighter_determinism() {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());

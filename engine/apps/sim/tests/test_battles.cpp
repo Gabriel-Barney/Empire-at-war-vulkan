@@ -5052,6 +5052,13 @@ void test_landing_drop(bool timed) {
             b->write_part(TacticalBattle::SavePart::State, w);
             ByteReader r(w.bytes());
             CHECK(b->read_part(TacticalBattle::SavePart::State, r));
+            // s78f t02: battle state version 6 (FighterFormationRecord::pushed dropped): 5 and 7 are refused.
+            std::vector<uint8_t> stale(w.bytes().begin(), w.bytes().end());
+            for (const uint32_t v : {5u, 7u}) {
+                for (size_t k = 0; k < 4; ++k) stale[k] = static_cast<uint8_t>(v >> (8 * k));
+                ByteReader rs(stale);
+                CHECK(!b->read_part(TacticalBattle::SavePart::State, rs));
+            }
             StateHasher h1;
             b->hash(h1);
             CHECK(h0.digest() == h1.digest() && b->landings_in_flight(1) == 1);
@@ -5245,7 +5252,7 @@ void test_fighter_auto_push() {
             const float gx = std::clamp(ep.x + dx / len * 1500.0f, -3700.0f, 3700.0f), gy = std::clamp(ep.y + dy / len * 1500.0f, -3700.0f, 3700.0f);
             CHECK(b->order_move(*tm, 0, members, gx, gy, fb.host->random().synced(), mv::kNoFacing, true) == R::None);
             const FighterFormationRecord* r = b->fighter_formation(squad);
-            CHECK(r && r->flags == mv::kMoveFlagAttackMove && r->pushed.empty());
+            CHECK(r && r->flags == mv::kMoveFlagAttackMove && b->fighter_pushed(squad).empty());
             ph = Ph::AttackMove;
             since = b->frame();
             continue;
@@ -5259,7 +5266,7 @@ void test_fighter_auto_push() {
                 if (v.loco_state == mv::LocoState::FighterDirectedCombat) {
                     am_dc = true;
                     am_moving = !v.arrived;
-                    am_pushed = r && !r->pushed.empty();
+                    am_pushed = r && !b->fighter_pushed(squad).empty();
                     CHECK(b->order_stop(*tm, 0, members) == R::None);
                     stop_cleared = b->fighter_formation(squad) == nullptr;
                     ph = Ph::Stopped;
@@ -5282,15 +5289,15 @@ void test_fighter_auto_push() {
                     }
                     CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
                     const FighterFormationRecord* nr = b->fighter_formation(squad);
-                    c_formation = nr && nr->flags == 0 && nr->pushed.empty();
+                    c_formation = nr && nr->flags == 0 && b->fighter_pushed(squad).empty();
                     ph = Ph::Idle;
                     since = b->frame();
                 }
                 break;
             case Ph::Idle:
-                if (v.loco_state == mv::LocoState::FighterDirectedCombat && r && !r->pushed.empty()) {
+                if (v.loco_state == mv::LocoState::FighterDirectedCombat && r && !b->fighter_pushed(squad).empty()) {
                     c_dc = true;
-                    pushed = r->pushed.back();
+                    pushed = b->fighter_pushed(squad).back();
                     c_pushed = b->combat().has_unit(pushed);  // a ship (not a squadron)
                     if (c_pushed) CHECK(b->change_owner(*tm, st.find(pushed), 0));
                     if (c_pushed) converted.push_back(pushed);
@@ -5314,7 +5321,7 @@ void test_fighter_auto_push() {
                 // A ship pushed after the conversion (a second enemy in reach) turns friendly too, so Directed_Combat runs out
                 // of goals (S8 t10-t12 shot timing brought one more frigate into reach).
                 if (ph == Ph::Converted && r)
-                    for (const objects::ObjectId k : r->pushed)
+                    for (const objects::ObjectId k : b->fighter_pushed(squad))
                         if (std::find(converted.begin(), converted.end(), k) == converted.end() && b->combat().has_unit(k) &&
                             b->combat().owner(k) != 0) {
                             CHECK(b->change_owner(*tm, st.find(k), 0));
@@ -5342,9 +5349,9 @@ void test_fighter_auto_push() {
 // chase range is Guard_Chase_Range around the carrier; when the carrier moves away, the squadron re-paths to it (at most
 // once per 30 frames, when the carrier is more than half the leader's attack range from the recorded goal) and keeps the
 // guard record (flags, goal object). S7 t28 / t35 (A1_READINGS §33.4.1): while the carrier moves the squadron, within
-// R = min(range / 2, Space_Guard_Range 750) of it, flies a copy of its path at most twice its speed; once the carrier has
-// stopped, the squadron re-paths to it (the recorded goal ends next to the carrier's destination). A new order of the
-// squadron ends the follow (a plain move record).
+// R = min(range / 2, Space_Guard_Range 750) of it, flies a copy of its path at most twice its speed (s78f t02: only while
+// the squadron's formation moves, FIGHTER_FLYING §4.11 A; the leader's goal reaches the carrier's destination). A new
+// order of the squadron ends the follow (a plain move record, a position block).
 void test_hangar_escort_guard() {
     namespace mv = tactical::movement;
     using R = commands::RejectReason;
@@ -5378,9 +5385,11 @@ void test_hangar_escort_guard() {
                 if (!s.members.empty() && r && r->goal_object == carrier) {
                     squad = s.id;
                     members = s.members;
-                    const mv::FighterGuard* fg = b->movement().fighter_guard(s.id);  // S7 t37: the movement layer's block
-                    guard_record = r->flags == mv::kMoveFlagGuardMove && r->pushed.empty() && fg && fg->object == carrier &&
-                                   fg->flags == mv::kMoveFlagGuardMove && fg->next > b->frame() && fg->follow;
+                    // S7 t37 / s78f t02: the movement layer's formation holds the guard block as its only block.
+                    const mv::FighterFormation* fg = b->movement().fighter_formation(s.id);
+                    guard_record = r->flags == mv::kMoveFlagGuardMove && b->fighter_pushed(s.id).empty() && fg && fg->blocks.size() == 1 &&
+                                   fg->blocks[0].kind == mv::kFighterBlockObject && fg->blocks[0].object == carrier &&
+                                   fg->blocks[0].flags == mv::kMoveFlagGuardMove && fg->next > b->frame() && fg->follow;
                 }
             }
             if (squad == objects::kNoObjectId) {
@@ -5399,26 +5408,33 @@ void test_hangar_escort_guard() {
         if (!r || members.empty() || !b->movement().has_unit(members.front())) break;
         kept = kept && r->flags == mv::kMoveFlagGuardMove && r->goal_object == carrier;
         const mv::UnitView v = b->movement().view(members.front());
-        // S7 t28: while the carrier moves, the squadron's speed cap is 2 x the carrier's speed and, its leader within R of
-        // the carrier, it flies a copy of the carrier's path (its goal = the carrier's goal point).
+        // S7 t28 / s78f t02: while the carrier moves, the squadron formation's speed (F +0x21c) is capped at min(its own speed,
+        // 2 x the carrier's speed) and, its centre within R of the carrier, it flies a copy of the carrier's path (its goal =
+        // the carrier's goal point).
         const mv::UnitView cv = b->movement().view(carrier);
         const bool c_moving = cv.has_goal && !cv.arrived;
-        for (const mv::FighterSquad& s : b->movement().fighter_squads())
-            if (s.id == squad && c_moving && s.speed_cap == 2.0f * cv.max_speed) capped = true;
+        if (const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+            ff && c_moving && ff->speed >= 0.0f && ff->speed <= 2.0f * cv.max_speed)
+            capped = true;
         if (!copied && c_moving && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y) {
             copied = true;
             copy_frame = b->frame();
         }
-        const float gx = r->goal.x - dest.x, gy = r->goal.y - dest.y;
-        const float mx = v.goal.x - r->goal.x, my = v.goal.y - r->goal.y;
-        if (!followed && gx * gx + gy * gy < 600.0f * 600.0f && mx * mx + my * my < 150.0f * 150.0f) {
-            followed = true;  // the record's goal moved with the carrier and the leader's slot goal is next to that point
+        // s78f t02: the follow is the path copy / re-path of the formation (FIGHTER_FLYING §4.11 A): the leader's goal moved
+        // with the carrier to its destination while the guard block stays the formation's only block.
+        const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+        const bool guard_kept = ff && ff->blocks.size() == 1 && ff->blocks[0].object == carrier;
+        const float gx = v.goal.x - dest.x, gy = v.goal.y - dest.y;
+        if (!followed && guard_kept && v.has_goal && gx * gx + gy * gy < 600.0f * 600.0f) {
+            followed = true;
             follow_frame = b->frame();
             // A plain move order of the squadron replaces the guard: no follow any more.
             const Vec3 lp = st.position(st.find(members.front()));
             CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
             const FighterFormationRecord* nr = b->fighter_formation(squad);
-            ended = nr && nr->flags == 0 && nr->goal_object == objects::kNoObjectId && !b->movement().fighter_guard(squad);
+            const mv::FighterFormation* nf = b->movement().fighter_formation(squad);
+            ended = nr && nr->flags == 0 && nr->goal_object == objects::kNoObjectId && nf && nf->blocks.size() == 1 &&
+                    nf->blocks[0].kind == mv::kFighterBlockPosition && (nf->blocks[0].flags & mv::kMoveFlagGuardMove) == 0;
             break;
         }
         if (b->frame() > move_frame + 3000) break;

@@ -1497,16 +1497,19 @@ static void test_fighter_space() {
     std::printf("fighter: threat path %zu waypoints, idle at frame %u\n", wf.size(), fr);
 }
 
-// S7 t37 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E): a fighter's move with an object goal (guard flag) keeps an object
-// goal block. While the object moves the fighter, within R = min(attack range / 2, Space_Guard_Range) of it, flies a copy of
-// the object's path; out of R it re-paths to the object when the recorded goal is more than R away. The object's removal
-// turns the block into a position block at the last waypoint (flags kept); a plain move drops the block.
+// S7 t37 / s78f t02 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E / §4.11): a fighter's move with an object goal (guard
+// flag) builds a formation whose only block is the object block. While the formation moves (state 1) and the object
+// moves, the fighter, its centre within R = min(attack range / 2, Space_Guard_Range) of it, flies a copy of the object's
+// path at min(own speed, 2 x the object's max speed) (a solo fighter is capped through its own formation, §4.11 F); the
+// re-path when the recorded goal is more than R away; after arrival the 30-frame re-check 0x410a60 re-plans when the
+// fighter is out of its attack range of the object. The object's removal turns the block into a position block at the last
+// waypoint (flags kept); a plain move replaces the formation with a position block.
 static void test_fighter_guard() {
     MovementConfig cfg;
     cfg.mode = MoveMode::Space;
     MovementSystem sys(cfg);
     sys.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
-    UnitDesc f = unit(1, {-2000.0f, 50.0f}, -1, 4.0f, 10.0f, LocomotorKind::Fighter);
+    UnitDesc f = unit(1, {-2000.0f, 1500.0f}, -1, 10.0f, 10.0f, LocomotorKind::Fighter);
     f.space_layer = kLayerFighter;
     f.space_layer_type = 0;
     CHECK(sys.add_unit(f));
@@ -1520,13 +1523,15 @@ static void test_fighter_guard() {
     g.flags = kMoveFlagGuardMove;
     g.goal_object = 2;
     sys.move(g, rng, 0);
-    const FighterGuard* fg = sys.fighter_guard(1);
-    CHECK(fg && fg->object == 2 && fg->flags == kMoveFlagGuardMove && fg->follow && fg->next == kFighterGuardInterval);
+    const FighterFormation* fg = sys.fighter_formation(1);
+    CHECK(fg && fg->blocks.size() == 1 && fg->blocks[0].kind == kFighterBlockObject && fg->blocks[0].object == 2 &&
+          fg->blocks[0].flags == kMoveFlagGuardMove && fg->follow && fg->next == kFighterGuardInterval &&
+          fg->state == kFormationMoving && fg->speed == -1.0f);
     MoveOrder mc;
     mc.units = {2};
     mc.destination = {1500.0f, 0.0f};
     sys.move(mc, rng, 0);
-    CHECK(sys.fighter_guard(1) != nullptr);  // another unit's order leaves the fighter's block alone
+    CHECK(sys.fighter_formation(1) != nullptr);  // another unit's order leaves the fighter's formation alone
     bool copied = false, repathed = false;
     uint32_t fr = 0;
     for (; fr < 3000 && !copied; ++fr) {
@@ -1534,7 +1539,22 @@ static void test_fighter_guard() {
         const UnitView v = sys.view(1), cv = sys.view(2);
         copied = cv.has_goal && !cv.arrived && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y;
     }
-    // Save round trip with a live guard block (movement save v8): same block, identical continuation.
+    // The cap (F +0x21c) = min(the fighter's speed, 2 x the carrier's max speed); the solo fighter flies at most that fast.
+    const float cap = 2.0f * sys.view(2).max_speed;
+    fg = sys.fighter_formation(1);
+    const bool capped = fg && fg->speed == std::min(sys.view(1).max_speed, cap) && fg->speed < sys.view(1).max_speed;
+    // The cap holds only while the formation speed is capped: when |L - G| reaches R the update resets it to the uncapped
+    // speed and re-paths (§4.11 D). Sample the fighter's speed after it has flown 15 frames under the cap.
+    float fastest = 0.0f;
+    uint32_t under = 0;
+    for (uint32_t k = 0; k < 150; ++k, ++fr) {
+        sys.tick(fr, rng);
+        const FighterFormation* fk = sys.fighter_formation(1);
+        under = (fk && fk->speed == cap && sys.view(2).has_goal) ? under + 1 : 0;
+        if (under >= 15 && sys.view(1).loco_state == LocoState::FighterMoving) fastest = std::max(fastest, sys.view(1).speed);
+    }
+    const bool slow = fastest > 0.0f && fastest <= cap + 1e-3f;
+    // Save round trip with a live formation (movement save v9): same formation, identical continuation.
     {
         ByteWriter w;
         sys.write(w);
@@ -1542,10 +1562,11 @@ static void test_fighter_guard() {
         copy.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
         ByteReader r(w.bytes());
         CHECK(copy.read(r) && r.done());
-        const FighterGuard* a = sys.fighter_guard(1);
-        const FighterGuard* b = copy.fighter_guard(1);
-        CHECK(a && b && a->key == b->key && a->object == b->object && a->flags == b->flags && a->goal.x == b->goal.x &&
-              a->goal.y == b->goal.y && a->next == b->next && a->follow == b->follow && a->covered == b->covered);
+        const FighterFormation* a = sys.fighter_formation(1);
+        const FighterFormation* b = copy.fighter_formation(1);
+        CHECK(a && b && a->key == b->key && a->blocks.size() == b->blocks.size() && a->blocks[0].object == b->blocks[0].object &&
+              a->blocks[0].flags == b->blocks[0].flags && a->goal.x == b->goal.x && a->goal.y == b->goal.y && a->next == b->next &&
+              a->follow == b->follow && a->state == b->state && a->speed == b->speed && a->single_arrived == b->single_arrived);
         SimRng ra = rng, rb = rng;
         bool same = true;
         for (uint32_t k = fr; k < fr + 90; ++k) {
@@ -1556,32 +1577,246 @@ static void test_fighter_guard() {
             copy.hash_units(hb);
             same = same && ha.digest() == hb.digest();
         }
-        CHECK(same && copy.fighter_guard(1) && copy.fighter_guard(1)->next == sys.fighter_guard(1)->next);
+        CHECK(same && copy.fighter_formation(1) && copy.fighter_formation(1)->next == sys.fighter_formation(1)->next);
         fr += 90;
         rng = ra;
     }
-    // Teleport the fighter away (out of R): the next updates re-path it toward the object.
+    // Teleport the fighter away (out of its attack range): the formation is done (state 3), and 0x410a60 re-plans it
+    // toward the object (the recorded goal moves to the object).
     CHECK(sys.teleport(1, {-2000.0f, 3000.0f}, 0.0f, 0.0f, fr));
-    const V2 before = sys.fighter_guard(1)->goal;
+    const V2 before = sys.fighter_formation(1)->goal;
     for (uint32_t k = 0; k < 400 && !repathed; ++k, ++fr) {
         sys.tick(fr, rng);
-        repathed = distance(sys.fighter_guard(1)->goal, before) > 1.0f &&
-                   distance(sys.fighter_guard(1)->goal, sys.view(2).pos) < 10.0f;
+        repathed = distance(sys.fighter_formation(1)->goal, before) > 1.0f &&
+                   distance(sys.fighter_formation(1)->goal, sys.view(2).pos) < 10.0f;
     }
     // The object leaves: kind 1 at the last waypoint of the fighter's path, flags kept.
     const auto wp = sys.space_path(1);
-    const V2 last = wp.empty() ? sys.fighter_guard(1)->goal : wp.back().pos;
+    const V2 last = wp.empty() ? sys.fighter_formation(1)->goal : wp.back().pos;
     CHECK(sys.remove_unit(2));
-    fg = sys.fighter_guard(1);
-    const bool lost = fg && fg->object == -1 && fg->flags == kMoveFlagGuardMove && distance(fg->goal, last) < 1e-3f;
+    fg = sys.fighter_formation(1);
+    const bool lost = fg && fg->blocks.size() == 1 && fg->blocks[0].kind == kFighterBlockPosition && fg->blocks[0].object == -1 &&
+                      fg->blocks[0].flags == kMoveFlagGuardMove && distance(fg->blocks[0].point, last) < 1e-3f;
     MoveOrder p;
     p.units = {1};
     p.destination = {0.0f, 0.0f};
     sys.move(p, rng, fr);
-    const bool dropped = sys.fighter_guard(1) == nullptr;
-    std::printf("fighter guard: path copy %d (frame %u), re-path %d, object lost -> position guard %d, plain move drops %d\n",
-                copied ? 1 : 0, fr, repathed ? 1 : 0, lost ? 1 : 0, dropped ? 1 : 0);
-    CHECK(copied && repathed && lost && dropped);
+    fg = sys.fighter_formation(1);
+    const bool replaced = fg && fg->blocks.size() == 1 && fg->blocks[0].kind == kFighterBlockPosition && fg->blocks[0].flags == 0;
+    std::printf("fighter guard: path copy %d (frame %u), cap %d (fastest %.3f <= %.3f: %d), re-path %d, object lost -> position "
+                "guard %d, plain move replaces %d\n",
+                copied ? 1 : 0, fr, capped ? 1 : 0, static_cast<double>(fastest), static_cast<double>(cap), slow ? 1 : 0,
+                repathed ? 1 : 0, lost ? 1 : 0, replaced ? 1 : 0);
+    CHECK(copied && capped && slow && repathed && lost && replaced);
+}
+
+// s78f t02 (FIGHTER_FLYING §4.11 B, C, E; checklist I 10): the block stack of a fighter formation.
+//  1. a shift-queued waypoint after a guard of a stationary object goes to the bottom (flag 0x04) and the guard is
+//     popped within one 30-frame check; the formation then flies to the waypoint; save round trip of a two-block stack;
+//  2. the waypoint append's patrol loop (a click within 80 of an earlier waypoint) and the MaxWaypointsPerPath limit;
+//  3. an auto block pushed over a guard: the pre-pop replaces an earlier auto block but never the guard; the auto block
+//     is popped when the fighter leaves Guard_Chase_Range of the guarded object (0x410a60 / 0x4165f0);
+//  4. a hidden auto target over a guard is dropped (fog: step 5 / 0x410a60);
+//  5. an arrived single object block whose object is hidden becomes a position guard at L (C 3).
+static void test_fighter_formation_stack() {
+    MovementConfig cfg;
+    cfg.mode = MoveMode::Space;
+    const auto build = [&](MovementSystem& sys) {
+        sys.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+        UnitDesc f = unit(1, {-2000.0f, 1500.0f}, -1, 10.0f, 10.0f, LocomotorKind::Fighter);
+        f.space_layer = kLayerFighter;
+        CHECK(sys.add_unit(f));
+        CHECK(sys.add_unit(unit(2, {0.0f, 0.0f}, -1, 2.0f, 60.0f, LocomotorKind::Default)));    // guarded (stationary)
+        CHECK(sys.add_unit(unit(3, {600.0f, 0.0f}, -1, 2.0f, 30.0f, LocomotorKind::Default)));  // enemy ship
+        CHECK(sys.add_unit(unit(4, {0.0f, 700.0f}, -1, 2.0f, 30.0f, LocomotorKind::Default)));  // enemy ship
+        FighterParams fp;
+        fp.chase.guard = 1000.0f;
+        fp.chase.idle = 200.0f;
+        fp.chase.attack_move = 300.0f;
+        CHECK(sys.set_fighter_params(1, fp));
+    };
+    const auto guard = [](MovementSystem& sys, SimRng& rng, uint32_t frame) {
+        MoveOrder g;
+        g.units = {1};
+        g.destination = {0.0f, 0.0f};
+        g.flags = kMoveFlagGuardMove;
+        g.goal_object = 2;
+        sys.move(g, rng, frame);
+    };
+    const auto waypoint = [](MovementSystem& sys, SimRng& rng, uint32_t frame, V2 at) {
+        MoveOrder w;
+        w.units = {1};
+        w.destination = at;
+        w.flags = static_cast<uint8_t>(kMoveFlagQueue | kMoveFlagPlayerOrder);
+        w.waypoint = true;
+        sys.move(w, rng, frame);
+    };
+    // 1. Shift waypoint after a guard of a stationary object.
+    bool queued = false, not_moved = false, popped = false, flew = false, saved = false;
+    uint32_t pop_frame = 0;
+    {
+        MovementSystem sys(cfg);
+        build(sys);
+        SimRng rng(9);
+        guard(sys, rng, 0);
+        for (uint32_t fr = 0; fr < 5; ++fr) sys.tick(fr, rng);
+        const V2 goal0 = sys.view(1).goal;
+        waypoint(sys, rng, 5, {1000.0f, 1000.0f});
+        const FighterFormation* f = sys.fighter_formation(1);
+        queued = f && f->blocks.size() == 2 && f->blocks[0].kind == kFighterBlockPosition &&
+                 f->blocks[0].flags == (kMoveFlagQueue | kMoveFlagPlayerOrder) && f->blocks[1].object == 2 && f->state == kFormationPlan;
+        not_moved = sys.view(1).goal.x == goal0.x && sys.view(1).goal.y == goal0.y;
+        {  // save round trip of the two-block stack
+            ByteWriter w;
+            sys.write(w);
+            MovementSystem copy(cfg);
+            copy.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+            ByteReader r(w.bytes());
+            const bool read = copy.read(r) && r.done();
+            const FighterFormation* a = sys.fighter_formation(1);
+            const FighterFormation* b = copy.fighter_formation(1);
+            saved = read && a && b && a->blocks.size() == b->blocks.size() && a->state == b->state;
+            for (size_t i = 0; saved && i < a->blocks.size(); ++i) {
+                const FighterBlock& x = a->blocks[i];
+                const FighterBlock& y = b->blocks[i];
+                saved = x.kind == y.kind && x.object == y.object && x.point.x == y.point.x && x.point.y == y.point.y &&
+                        x.flags == y.flags && x.pushed == y.pushed && x.loop == y.loop && x.own_speed == y.own_speed;
+            }
+            SimRng ra = rng, rb = rng;
+            for (uint32_t k = 5; k < 65; ++k) {
+                sys.tick(k, ra);
+                copy.tick(k, rb);
+                StateHasher ha, hb;
+                sys.hash_units(ha);
+                copy.hash_units(hb);
+                saved = saved && ha.digest() == hb.digest();
+            }
+        }
+        MovementSystem sys2(cfg);  // the same scenario again, run on
+        build(sys2);
+        SimRng rng2(9);
+        guard(sys2, rng2, 0);
+        for (uint32_t fr = 0; fr < 5; ++fr) sys2.tick(fr, rng2);
+        waypoint(sys2, rng2, 5, {1000.0f, 1000.0f});
+        for (uint32_t fr = 5; fr < 400; ++fr) {
+            sys2.tick(fr, rng2);
+            const FighterFormation* h = sys2.fighter_formation(1);
+            if (!popped && h && h->blocks.size() == 1 && h->blocks[0].kind == kFighterBlockPosition) {
+                popped = true;
+                pop_frame = fr;
+            }
+            if (popped && distance(sys2.view(1).goal, {1000.0f, 1000.0f}) < 100.0f && sys2.view(1).has_goal) flew = true;
+        }
+    }
+    // 2. Patrol loop and the waypoint limit.
+    bool loop = false, limit = false;
+    {
+        MovementSystem sys(cfg);
+        build(sys);
+        SimRng rng(9);
+        guard(sys, rng, 0);
+        waypoint(sys, rng, 1, {1000.0f, 1000.0f});
+        waypoint(sys, rng, 1, {1000.0f, -1000.0f});
+        waypoint(sys, rng, 1, {1050.0f, 1000.0f});  // within 80 of the first waypoint: closes the loop
+        const FighterFormation* f = sys.fighter_formation(1);
+        loop = f && f->blocks.size() == 3 && f->blocks[0].loop && f->blocks[1].loop && !f->blocks[2].loop;
+        for (int32_t k = 0; k < 8; ++k) waypoint(sys, rng, 1, {-1000.0f - 200.0f * static_cast<float>(k), 2000.0f});
+        f = sys.fighter_formation(1);
+        uint32_t q = 0;
+        for (const FighterBlock& b : f->blocks) q += (b.flags & kMoveFlagQueue) != 0 ? 1u : 0u;
+        limit = q == cfg.constants.max_waypoints_per_path;
+    }
+    // 3. Auto block over a guard: pre-pop and the leash pop.
+    bool prepop = false, kept_near = true, leash_pop = false;
+    {
+        MovementSystem sys(cfg);
+        build(sys);
+        SimRng rng(9);
+        guard(sys, rng, 0);
+        uint32_t fr = 0;
+        for (; fr < 400; ++fr) sys.tick(fr, rng);  // arrived next to the guarded object
+        CHECK(sys.fighter_push(1, 3));
+        CHECK(sys.fighter_push(1, 4));  // replaces the auto block on 3, keeps the guard
+        const FighterFormation* f = sys.fighter_formation(1);
+        prepop = f && f->blocks.size() == 2 && f->blocks[0].object == 2 && f->blocks[1].object == 4 && f->blocks[1].pushed &&
+                 f->blocks[1].own_speed && f->state == kFormationPlan;
+        for (uint32_t k = 0; k < 90; ++k, ++fr) {
+            sys.tick(fr, rng);
+            const FighterFormation* h = sys.fighter_formation(1);
+            kept_near = kept_near && h && h->blocks.size() == 2;
+        }
+        CHECK(sys.teleport(1, {0.0f, 2500.0f}, 0.0f, 0.0f, fr));  // beyond Guard_Chase_Range (1000) of the guarded object
+        for (uint32_t k = 0; k < 40 && !leash_pop; ++k, ++fr) {
+            sys.tick(fr, rng);
+            const FighterFormation* h = sys.fighter_formation(1);
+            leash_pop = h && h->blocks.size() == 1 && h->blocks[0].object == 2;
+        }
+        CHECK(!sys.fighter_pop(1));  // one block: nothing to pop
+    }
+    // 4. A hidden auto target over a guard is dropped.
+    bool hidden_pop = false;
+    {
+        MovementSystem sys(cfg);
+        build(sys);
+        bool hide = false;
+        FighterFormationHooks hk;
+        hk.hidden = [&hide](int32_t, ObjectId o) { return hide && o == 3; };
+        sys.set_fighter_formation_hooks(hk);
+        SimRng rng(9);
+        guard(sys, rng, 0);
+        uint32_t fr = 0;
+        for (; fr < 200; ++fr) sys.tick(fr, rng);
+        CHECK(sys.fighter_push(1, 3));
+        for (uint32_t k = 0; k < 20; ++k, ++fr) sys.tick(fr, rng);
+        hide = true;
+        for (uint32_t k = 0; k < 40 && !hidden_pop; ++k, ++fr) {
+            sys.tick(fr, rng);
+            const FighterFormation* h = sys.fighter_formation(1);
+            hidden_pop = h && h->blocks.size() == 1 && h->blocks[0].object == 2;
+        }
+    }
+    // 5. C 3: an arrived single guard block on a hidden object (here a non-mover, positioned by the hook) becomes a
+    // position guard at L.
+    bool c3 = false;
+    {
+        MovementSystem sys(cfg);
+        build(sys);
+        FighterFormationHooks hk;
+        bool hide = false;
+        hk.hidden = [&hide](int32_t, ObjectId o) { return hide && o == 50; };
+        hk.position = [](ObjectId o, F3& p) {
+            if (o != 50) return false;
+            p = {-1000.0f, 1500.0f, 0.0f};
+            return true;
+        };
+        sys.set_fighter_formation_hooks(hk);
+        SimRng rng(9);
+        MoveOrder g;
+        g.units = {1};
+        g.destination = {-1000.0f, 1500.0f};
+        g.flags = kMoveFlagGuardMove;
+        g.goal_object = 50;
+        sys.move(g, rng, 0);
+        uint32_t fr = 0;
+        for (; fr < 400; ++fr) sys.tick(fr, rng);
+        CHECK(sys.teleport(1, {-1000.0f, 1500.0f}, 0.0f, 0.0f, fr));  // at the object: d < 40
+        hide = true;
+        for (uint32_t k = 0; k < 400 && !c3; ++k, ++fr) {
+            sys.tick(fr, rng);
+            const FighterFormation* h = sys.fighter_formation(1);
+            c3 = h && h->blocks.size() == 1 && h->blocks[0].kind == kFighterBlockPosition && h->blocks[0].flags == kMoveFlagGuardMove;
+        }
+    }
+    std::printf("fighter formation stack: waypoint queued %d (not moved %d, saved %d), guard popped %d (frame %u), flew to "
+                "it %d; patrol loop %d, waypoint limit %d; auto pre-pop %d, kept near %d, leash pop %d; hidden pop %d; hidden "
+                "goal -> position guard %d\n",
+                queued ? 1 : 0, not_moved ? 1 : 0, saved ? 1 : 0, popped ? 1 : 0, pop_frame, flew ? 1 : 0, loop ? 1 : 0,
+                limit ? 1 : 0, prepop ? 1 : 0, kept_near ? 1 : 0, leash_pop ? 1 : 0, hidden_pop ? 1 : 0, c3 ? 1 : 0);
+    CHECK(queued && not_moved && saved && popped && pop_frame <= 5u + kFighterGuardInterval + 1u && flew);
+    CHECK(loop && limit);
+    CHECK(prepop && kept_near && leash_pop);
+    CHECK(hidden_pop);
+    CHECK(c3);
 }
 
 // ---------------------------------------------------------------- determinism
@@ -2167,6 +2402,7 @@ int main() {
     test_bomber();
     test_fighter_space();
     test_fighter_guard();
+    test_fighter_formation_stack();  // s78f t02
     test_space_avoid();
     test_speed_override();
     test_determinism();
