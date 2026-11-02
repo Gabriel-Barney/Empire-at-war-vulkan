@@ -16,6 +16,7 @@
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
+#include "alamo/tactical/abilities/ability_types.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
 
@@ -412,6 +413,24 @@ int32_t BattleCatalog::hardpoint(std::string_view name, BuildState& s) const {
     // ENABLE_SPECIAL_ABILITY hardpoints: Special_Ability_Name (type +0x450) as name_crc (0 = empty).
     if (const std::string_view an = trim(tag("SPECIAL_ABILITY_NAME")); !an.empty())
         h.special_ability_name_crc = name_crc(an);
+    // S8 t08 (TACTICAL_COMBAT §3.1.1, 0x384850 steps 4-6): the deploy / attack-mode bytes (+0x3d1..+0x3d4, default true)
+    // and the per-mode bytes Fire_When_In_<Mode>_Mode (+0x384 + m; listed when No).
+    h.fire_when_deployed = flag("FIRE_WHEN_DEPLOYED", true);
+    h.fire_when_undeployed = flag("FIRE_WHEN_UNDEPLOYED", true);
+    h.fire_when_rocket_attack = flag("FIRE_WHEN_IN_ROCKET_ATTACK_MODE", true);
+    h.fire_when_normal_attack = flag("FIRE_WHEN_IN_NORMAL_ATTACK_MODE", true);
+    for (const auto& [n, v] : tags) {
+        constexpr std::string_view kPre = "FIRE_WHEN_IN_", kSuf = "_MODE";
+        const std::string_view nv = n;
+        if (nv.size() <= kPre.size() + kSuf.size() || nv.substr(0, kPre.size()) != kPre || nv.substr(nv.size() - kSuf.size()) != kSuf)
+            continue;
+        const std::string_view mode = nv.substr(kPre.size(), nv.size() - kPre.size() - kSuf.size());
+        if (mode == "ROCKET_ATTACK" || mode == "NORMAL_ATTACK") continue;  // the dedicated bytes above
+        const uint8_t m = ta::ability_type_from_name(mode);
+        if (m >= 1 && m <= 0x4c && !objects::parse_type_bool(v) &&
+            std::find(h.no_fire_modes.begin(), h.no_fire_modes.end(), m) == h.no_fire_modes.end())
+            h.no_fire_modes.push_back(m);
+    }
     if (s.full) {
         // S10-int: S9 hardpoint fields. Fire bones: B present only when named (Percent(50) pick without
         // randomisation, TACTICAL_COMBAT 2.5 step 8); positions come from the animated pose (host hook).
@@ -465,18 +484,28 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
     u.property_flags = ty.get_mask(t, "Property_Flags");
     u.attack_category_restrictions = ty.get_mask(t, "Attack_Category_Restrictions");
     u.space_layer = static_cast<uint32_t>(ty.get_mask(t, "Space_Layer"));
-    bool weapon_hp = false;
     for (uint32_t hid : ty.hardpoints(t)) {
         if (hid >= ty.hardpoint_names().size()) continue;
         int32_t h = hardpoint(ty.hardpoint_names()[hid], s);
         if (h < 0) continue;
         if (s.model_mode >= 0) h = hardpoint_on_model(h, t, s);  // battle host: bones of this unit's model
         u.hardpoints.push_back(static_cast<uint32_t>(h));
-        weapon_hp = weapon_hp || tc::is_weapon(s.d->hardpoints[static_cast<size_t>(h)].kind);
     }
-    // Non-hardpoint weapon (WeaponBehavior): Projectile_Types, when no weapon hardpoint fires [M].
+    // Non-hardpoint weapon (WeaponBehavior). S8 t08 (TACTICAL_COMBAT §3.1.1): it exists when the object has the WEAPON
+    // behaviour (0x0A: Behavior plus the battle mode's LandBehavior / SpaceBehavior list; every list without a mode) and a
+    // non-empty Projectile_Types, independent of weapon hardpoints (the two sources fire side by side, gated by the
+    // Fire_Weapon_When_* / Fire_When_* flags). Projectile_Types without WEAPON is never fired (abilities / Lua read it).
     const auto projs = ty.get_list(t, "Projectile_Types");
-    if (!weapon_hp && !projs.empty()) {
+    const bool weapon_behavior =
+        s.model_mode < 0 ? ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon)
+                         : ty.has_behavior(t, objects::BehaviorSet::Generic, objects::beh::Weapon) ||
+                               ty.has_behavior(t, s.model_mode == 1 ? objects::BehaviorSet::Space : objects::BehaviorSet::Land,
+                                               objects::beh::Weapon);
+    if (!projs.empty()) {  // the list's first entry for the host's special weapons (UnitDesc::listed_projectile)
+        const objects::TypeIndex pt = ty.resolve_name(trim(projs.front()));
+        if (pt != objects::kNone) u.listed_projectile = projectile(static_cast<uint32_t>(pt), s);
+    }
+    if (weapon_behavior && !projs.empty()) {
         const objects::TypeIndex pt = ty.resolve_name(trim(projs.front()));
         if (pt != objects::kNone) {
             u.weapon_projectile = projectile(static_cast<uint32_t>(pt), s);
@@ -490,6 +519,14 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
             for (const std::string_view n : projs)
                 if (const objects::TypeIndex q = ty.resolve_name(trim(n)); q != objects::kNone)
                     u.weapon_projectiles.push_back(projectile(static_cast<uint32_t>(q), s));
+        // S8 t08: the own-weapon gate flags (type +0xae..+0xb1, default true).
+        auto yes = [&](const char* tag) { return ty.get_string(t, tag).empty() || ty.get_bool(t, tag); };
+        u.fire_weapon_when_deployed = yes("Fire_Weapon_When_Deployed");
+        u.fire_weapon_when_undeployed = yes("Fire_Weapon_When_Undeployed");
+        u.fire_weapon_when_rocket_attack = yes("Fire_Weapon_When_In_Rocket_Attack_Mode");
+        u.fire_weapon_when_normal_attack = yes("Fire_Weapon_When_In_Normal_Attack_Mode");
+        // S8 t06 B4 (LOB_SOLVER §5.1): the fire bones of the unit's model (battle host with model data only).
+        if (u.weapon_projectile >= 0 && s.model_mode >= 0) u.muzzle_model = muzzle_bones(t, s.model_mode == 1, u.muzzle_bones);
     }
     // OI host (TACTICAL_GAPS 3.1 slot 43): obj +0x346 != 0xFF read as the type's LAND_OBSTACLE behaviour [inferred]. S8 t01:
     // the battle host's obstacle-cell query walks the target's passability stamp (map placements' stamps move to their
@@ -865,6 +902,26 @@ bool BattleCatalog::model_half_extents(uint32_t type, float& half_x, float& half
     half_x = 0.5f * (m->max[0] - m->min[0]);  // [M] half of the box size (the stamp centres it on the object)
     half_y = 0.5f * (m->max[1] - m->min[1]);
     height_z = m->max[2] - m->min[2];
+    return true;
+}
+
+bool BattleCatalog::muzzle_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const {
+    out.clear();
+    const ModelInfo* m = model_info(type, space, false);
+    if (!m) return false;
+    std::string base = upper_str(trim(types_->get_string(type, "Muzzle_Bone_Name")));
+    if (base.empty()) base = "MUZZLEA";  // type +0x580 default
+    float scale = types_->columns().scale_factor[type];
+    if (!(scale > 0.0f)) scale = 1.0f;
+    for (uint32_t i = 0; i < 100; ++i) {
+        const char nn[3] = {static_cast<char>('0' + i / 10), static_cast<char>('0' + i % 10), 0};
+        const int32_t b = m->find(base + "_" + nn);
+        if (b < 0) break;  // the list ends at the first missing name
+        // ALO model space (nose -Y, left +X, up +Z) -> the combat unit-local frame (x forward, y left, z up), as the
+        // hard-point bones (hardpoint_on_model).
+        const auto& p = m->bone_pos[static_cast<size_t>(b)];
+        out.push_back(tactical::Vec3{-p[1] * scale, p[0] * scale, p[2] * scale});
+    }
     return true;
 }
 

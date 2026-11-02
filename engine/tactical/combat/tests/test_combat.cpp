@@ -3582,6 +3582,378 @@ void test_rocket_flight_system() {
     }
 }
 
+// ================================================================================================
+// S8 t08 / S7 t15 A2 / S8 t06 B4: units with both weapon sources, the recharge while suspended, fire bones
+// ================================================================================================
+
+// A land shooter (id 1, player 0) with its own weapon (projectile 0) and two weapon hardpoints (projectile 1) facing a
+// tough target (id 2, player 1) 100 away. Slot 0 of the shooter is ROCKET_ATTACK (11).
+struct SourceFlags {
+    bool dep = true, undep = true, rocket = true, normal = true;
+};
+struct SourceWorld {
+    World w;
+    uint32_t last_serial = 0;
+    SourceWorld(SourceFlags own, SourceFlags hp, bool grenade_own) {
+        ProjectileDesc op;
+        op.name = "own";
+        op.max_speed = 20.0f;
+        w.data.projectiles.push_back(grenade_own ? spmat_grenade() : op);
+        ProjectileDesc hpp;
+        hpp.name = "hp";
+        hpp.max_speed = 20.0f;
+        w.data.projectiles.push_back(hpp);
+        HardpointDesc hd;
+        hd.kind = HardpointKind::WeaponLaser;
+        hd.projectile = 1;
+        hd.min_recharge = hd.max_recharge = 0.2f;
+        hd.fire_range = 150.0f;
+        hd.fire_when_deployed = hp.dep;
+        hd.fire_when_undeployed = hp.undep;
+        hd.fire_when_rocket_attack = hp.rocket;
+        hd.fire_when_normal_attack = hp.normal;
+        w.data.hardpoints.push_back(hd);
+        UnitAbilityDesc rocket;
+        rocket.ability_type = 11;
+        w.data.abilities.push_back(rocket);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        s.deploys = true;
+        s.hardpoints = {0, 0};
+        s.abilities = {0, -1};
+        s.fire_weapon_when_deployed = own.dep;
+        s.fire_weapon_when_undeployed = own.undep;
+        s.fire_weapon_when_rocket_attack = own.rocket;
+        s.fire_weapon_when_normal_attack = own.normal;
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, Vec3{100, 0, 0});
+    }
+    // New projectiles per descriptor over `ticks` ticks.
+    std::array<uint32_t, 2> run(int ticks) {
+        std::array<uint32_t, 2> n{0, 0};
+        for (int i = 0; i < ticks; ++i) {
+            w.tick();
+            for (size_t k = 0; k < w.sys->projectile_count(); ++k) {
+                const ProjectileView pv = w.sys->projectile(k);
+                if (pv.serial <= last_serial) continue;
+                last_serial = pv.serial;
+                if (pv.desc < 2) ++n[pv.desc];
+            }
+        }
+        return n;
+    }
+};
+
+void test_weapon_sources() {
+    // TACTICAL_COMBAT §3.1.1 table: the flags make the own weapon and the weapon hardpoints alternate.
+    struct Case {
+        const char* name;
+        SourceFlags own, hp;
+        bool grenade;
+        bool deployed, rocket;
+        bool own_fires, hp_fires;
+    };
+    const SourceFlags any{};
+    const SourceFlags spmat_own{true, false, true, true}, spmat_hp{false, true, true, true};
+    const SourceFlags t4b_own{true, true, false, true}, t4b_hp{true, true, true, false};
+    const SourceFlags dt3_own{false, true, true, true}, dt3_hp{true, false, true, true};
+    const SourceFlags dd_own{true, false, false, true}, dd_hp{true, false, true, false};
+    const Case cases[] = {
+        {"SPMAT undeployed", spmat_own, spmat_hp, true, false, false, false, true},
+        {"SPMAT deployed", spmat_own, spmat_hp, true, true, false, true, false},
+        {"T4B normal", t4b_own, t4b_hp, false, false, false, true, false},
+        {"T4B rocket", t4b_own, t4b_hp, false, false, true, false, true},
+        {"DT3 undeployed", dt3_own, dt3_hp, false, false, false, true, false},
+        {"DT3 deployed", dt3_own, dt3_hp, false, true, false, false, true},
+        {"Destroyer undeployed", dd_own, dd_hp, false, false, false, false, false},
+        {"Destroyer deployed", dd_own, dd_hp, false, true, false, true, false},
+        {"Destroyer deployed rocket", dd_own, dd_hp, false, true, true, false, true},
+        {"defaults", any, any, false, false, false, true, true},  // both sources fire side by side (separate cooldowns)
+    };
+    for (const Case& c : cases) {
+        SourceWorld sw(c.own, c.hp, c.grenade);
+        if (c.deployed) sw.w.sys->set_flag(1, kUnitDeploying, true);
+        if (c.rocket) sw.w.sys->set_ability_active(1, 0, true);
+        const std::array<uint32_t, 2> n = sw.run(120);
+        if ((n[0] > 0) != c.own_fires || (n[1] > 0) != c.hp_fires)
+            std::printf("FAIL weapon sources %s: own %u hardpoint %u\n", c.name, n[0], n[1]);
+        CHECK((n[0] > 0) == c.own_fires && (n[1] > 0) == c.hp_fires);
+    }
+    {  // A deploy transition (0x39a400 / 0x39b2a0): neither source fires; the hardpoints do not count down.
+        SourceWorld sw(spmat_own, spmat_hp, true);
+        sw.w.sys->set_flag(1, kUnitDeploying | kUnitDeployTransition, true);
+        const int32_t c0 = sw.w.sys->hardpoint_cooldown(1, 0);
+        const std::array<uint32_t, 2> n = sw.run(60);
+        CHECK(n[0] == 0 && n[1] == 0 && sw.w.sys->hardpoint_cooldown(1, 0) == c0);
+        sw.w.sys->set_flag(1, kUnitDeployTransition, false);  // deployed: the grenade only
+        const std::array<uint32_t, 2> m = sw.run(120);
+        CHECK(m[0] > 0 && m[1] == 0);
+    }
+    {  // Not a Deploys type: the deploy flags never apply (0x39a390 needs Deploys and a locomotor).
+        SourceWorld sw(spmat_own, spmat_hp, true);
+        sw.w.data.units[0].deploys = false;
+        sw.w.sys->set_flag(1, kUnitDeploying | kUnitDeployTransition, true);
+        const std::array<uint32_t, 2> n = sw.run(120);
+        CHECK(n[0] == 0 && n[1] > 0);  // read as undeployed
+    }
+}
+
+// A hardpoint-only shooter (id 1) whose weapon may not fire in DEFEND (slot 0) or at Air; an Air target (id 2) and a
+// ground target (id 3), both in range. Opportunity fire on.
+struct GateWorld {
+    World w;
+    explicit GateWorld(bool defend_active) {
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        HardpointDesc hd;
+        hd.kind = HardpointKind::WeaponLaser;
+        hd.projectile = 0;
+        hd.min_recharge = hd.max_recharge = 0.2f;
+        hd.fire_range = 300.0f;
+        hd.fire_category_restrictions = kCatFighter;  // "not vs Air"
+        hd.no_fire_modes = {1};                        // Fire_When_In_Defend_Mode No
+        w.data.hardpoints.push_back(hd);
+        UnitAbilityDesc defend;
+        defend.ability_type = 1;
+        w.data.abilities.push_back(defend);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.hardpoints = {0};
+        s.abilities = {0, -1};
+        push_unit(w.data, s);
+        UnitDesc air;
+        air.tactical_health = 1.0e7f;
+        air.radius = 5.0f;
+        air.category_mask = kCatFighter;
+        push_unit(w.data, air);
+        UnitDesc ground = air;
+        ground.category_mask = kCatCapital;
+        push_unit(w.data, ground);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.sys = std::make_unique<CombatSystem>(w.data, cfg, std::vector<PlayerInfo>{PlayerInfo{}, PlayerInfo{}});  // opportunity on
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, Vec3{100, 0, 0});
+        w.add(3, 2, 1, Vec3{0, 120, 0});
+        if (defend_active) w.sys->set_ability_active(1, 0, true);
+    }
+    uint64_t run(int ticks) {
+        for (int i = 0; i < ticks; ++i) w.tick();
+        return w.sys->stats().shots;
+    }
+};
+
+void test_hardpoint_state_gate() {
+    {  // Filter 7 uses the gate: an Air target is never acquired, the ground one is (and shot).
+        GateWorld g(false);
+        CHECK(g.run(60) > 0);
+        CHECK(g.w.sys->auto_target(1) == 3);
+    }
+    {  // A primary target the gate refuses (ordered Air target): no Fire_At and NO opportunity fire at the ground unit.
+        GateWorld g(false);
+        g.w.sys->order_attack(1, 2);
+        CHECK(g.run(90) == 0);
+        CHECK(g.w.sys->hardpoint_opportunity_target(1, 0) == kNoObject);
+    }
+    {  // DEFEND active and Fire_When_In_Defend_Mode No: no target is acquired, nothing fires (opportunity fire included).
+        GateWorld g(true);
+        CHECK(g.run(90) == 0);
+        CHECK(g.w.sys->auto_target(1) == kNoObject);
+        g.w.sys->set_ability_active(1, 0, false);
+        CHECK(g.run(90) > 0);
+    }
+}
+
+// S7 t15 A2 (MOVEMENT §3.1.1): a WeaponBehavior recharge keeps elapsing while the weapon is suspended (jetpack).
+struct SuspendWorld {
+    World w;
+    SuspendWorld() {
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 5.0f;  // 150 + Get_Int(0, 10) frames
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, Vec3{100, 0, 0});
+    }
+    // Ticks until the next shot (at most `limit`); returns the frame of the shot, 0 when none.
+    uint32_t until_shot(int limit) {
+        for (int i = 0; i < limit; ++i) {
+            const uint64_t s0 = w.sys->stats().shots;
+            const uint32_t f = w.frame;
+            w.tick();
+            if (w.sys->stats().shots != s0) return f;
+        }
+        return 0;
+    }
+};
+
+
+void test_weapon_suspend_elapse() {
+    SuspendWorld a;
+    const uint32_t f1 = a.until_shot(400);
+    CHECK(f1 != 0);
+    const uint32_t f2 = a.until_shot(400);  // the normal recharge: 150..160 frames
+    CHECK(f2 >= f1 + 150 && f2 <= f1 + 161);
+    // Suspended for 200 frames right after a shot: nothing fires; the first frame back fires (the recharge ran out in
+    // the air).
+    a.w.sys->set_flag(1, kUnitWeaponsSuspended, true);
+    CHECK(a.until_shot(100) == 0);
+    // Save / load in the middle of the suspension keeps the last-service frame.
+    ByteWriter sw;
+    a.w.sys->write(sw);
+    ByteWriter rw;
+    a.w.rng.write(rw);
+    SuspendWorld b;
+    {
+        ByteReader r(sw.bytes());
+        CHECK(b.w.sys->read(r));
+        ByteReader rr(rw.bytes());
+        CHECK(b.w.rng.read(rr));
+        b.w.frame = a.w.frame;
+    }
+    for (SuspendWorld* x : {&a, &b}) {
+        CHECK(x->until_shot(100) == 0);
+        x->w.sys->set_flag(1, kUnitWeaponsSuspended, false);
+        const uint32_t back = x->w.frame;
+        CHECK(x->until_shot(5) == back);
+    }
+    CHECK(combat_bytes(*a.w.sys) == combat_bytes(*b.w.sys));
+    {  // A short suspension subtracts its frames too: the shot comes at the normal time, not later.
+        SuspendWorld c, d;
+        const uint32_t c1 = c.until_shot(400), d1 = d.until_shot(400);
+        CHECK(c1 == d1 && c1 != 0);
+        c.w.sys->set_flag(1, kUnitWeaponsSuspended, true);
+        for (int i = 0; i < 50; ++i) c.w.tick();
+        for (int i = 0; i < 50; ++i) d.w.tick();
+        c.w.sys->set_flag(1, kUnitWeaponsSuspended, false);
+        CHECK(c.until_shot(400) == d.until_shot(400));
+    }
+}
+
+// S8 t06 B4 (LOB_SOLVER §5.1): WeaponBehavior shots leave from the fire bones in turn.
+struct MuzzleWorld {
+    World w;
+    explicit MuzzleWorld(std::vector<Vec3> bones, bool model = true, bool grenade_weapon = false, size_t weapon_set = 0) {
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(grenade_weapon ? spmat_grenade() : p);
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        s.ranged_target_z_adjust = 7.0f;
+        s.muzzle_model = model;
+        s.muzzle_bones = std::move(bones);
+        for (size_t i = 0; i < weapon_set; ++i) s.weapon_projectiles.push_back(static_cast<int32_t>(i % 2));
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(1, 0, 0, Vec3{10, 20, 0}, Vec3{0, 1, 0});  // facing +y: local (x, y, z) -> world (-y, x, z)
+        w.add(2, 1, 1, Vec3{10, 120, 0});
+    }
+    // Launch points of the shots fired over `ticks` ticks (spawn position: not yet stepped).
+    std::vector<Vec3> launches(int ticks) {
+        std::vector<Vec3> out;
+        for (int i = 0; i < ticks; ++i) {
+            w.tick();
+            for (size_t k = 0; k < w.sys->projectile_count(); ++k) {
+                const ProjectileView pv = w.sys->projectile(k);
+                if (pv.serial <= last) continue;
+                last = pv.serial;
+                out.push_back(pv.pos);
+            }
+        }
+        return out;
+    }
+    uint32_t last = 0;
+};
+
+void test_muzzle_bones() {
+    const Vec3 A{2, 0, 5}, B{2, 1, 5}, C{0, -1, 3};
+    const Vec3 wa{10, 22, 5}, wb{9, 22, 5}, wc{11, 20, 3};  // turned by the facing +y, + the position
+    {  // Round robin per shot.
+        MuzzleWorld m({A, B, C});
+        const std::vector<Vec3> l = m.launches(90);
+        CHECK(l.size() >= 6);
+        const Vec3 expect[3] = {wa, wb, wc};
+        bool ok = true;
+        for (size_t i = 0; i < l.size(); ++i) ok = ok && same(l[i], expect[i % 3]);
+        CHECK(ok);
+    }
+    {  // More than one Projectile_Types entry and more than one bone: the bone of the weapon index.
+        MuzzleWorld m({A, B, C}, true, false, 2);
+        CHECK(m.w.sys->set_weapon_index(1, 1));
+        const std::vector<Vec3> l = m.launches(60);
+        CHECK(!l.empty());
+        bool ok = true;
+        for (const Vec3& p : l) ok = ok && same(p, wb);
+        CHECK(ok);
+        // Outside the bone list: no fire bone - the position + the shooter's own z adjust ([port] index 5 fires
+        // weapon_projectile, LOB_SOLVER §5.1 request bone -1).
+        CHECK(m.w.sys->set_weapon_index(1, 5));
+        const std::vector<Vec3> l2 = m.launches(30);
+        CHECK(!l2.empty() && same(l2.back(), Vec3{10, 20, 7}));
+    }
+    {  // Model known, no MUZZLEA_00: the weapon never fires.
+        MuzzleWorld m({});
+        CHECK(m.launches(90).empty() && m.w.sys->stats().shots == 0u);
+    }
+    {  // [port] No model data: the position (straight shots), as before.
+        MuzzleWorld m({}, false);
+        const std::vector<Vec3> l = m.launches(30);
+        CHECK(!l.empty() && same(l.front(), Vec3{10, 20, 0}));
+    }
+    {  // Grenades leave from the bones too; a null spawn (no arc) changes no cooldown: the shot follows on the frame the
+       // target comes into reach.
+        MuzzleWorld m({A, B}, true, true);
+        m.w.sys->order_attack(1, 2);
+        m.w.sys->set_position(2, Vec3{10, 900, 0});
+        m.w.trees.update(2, box_of(Vec3{10, 900, 0}, 5.0f));
+        CHECK(m.launches(60).empty());
+        m.w.sys->set_position(2, Vec3{10, 120, 0});
+        m.w.trees.update(2, box_of(Vec3{10, 120, 0}, 5.0f));
+        const std::vector<Vec3> l = m.launches(1);
+        CHECK(l.size() == 1 && (same(l[0], wa) || same(l[0], wb)));
+        CHECK(m.w.sys->projectile_count() == 1 && m.w.sys->projectile(0).lob);
+    }
+}
+
 void test_foc_data() {
     const char* root = std::getenv("ALAMO_FOC_DATA");
     if (!root || !*root) {
@@ -3790,6 +4162,10 @@ int main(int argc, char** argv) {
     test_rocket_plans();
     test_rocket_replan();
     test_rocket_flight_system();
+    test_weapon_sources();  // S8 t08
+    test_hardpoint_state_gate();
+    test_weapon_suspend_elapse();  // S7 t15 A2
+    test_muzzle_bones();  // S8 t06 B4
     test_foc_data();
     if (bench) bench_modifiers();
     if (g_fail) {
