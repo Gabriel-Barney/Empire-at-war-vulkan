@@ -77,6 +77,11 @@ G = gravity × lob mod; reach on flat ground R = v² / G (§4). All vanilla gren
 | `Proj_Sticky_Bomb`, `_Mara_Jade_`, `_Kyle_Katarn_` (sticky) | 15 | 1.0 | 225 | `Grenade_Type` of STICKY_BOMB abilities | — |
 | `Proj_Remote_Bomb` (sticky) | 20 | 1.0 | 400 | `Bomb_Type` of Remote_Bomb abilities | — |
 
+`SPMAT_Walker` also has four blaster hardpoints (`HP_SPMAT_00`–`03`). It still fires the grenade through its WEAPON
+behaviour: the own weapon does not depend on hardpoints, and the flags make the two alternate (grenade only while
+deployed, blasters only while undeployed). Rule, gates and the other vanilla units with both sources: TACTICAL_COMBAT
+§3.1.1 (S8 t05, 2026-11-02).
+
 TR (loose XML over vanilla; `Config.MEG` not searched) has 40 GRENADE projectiles, mostly (v, G) = (10, 0.345)
 thrown / light infantry grenades, (55, 1.636) artillery and (10, 0.01) proton / concussion launchers, all with
 `Can_Lob_Slower` yes and `Max_Lifetime` 900. They are fired **both** through `Projectile_Types` (thrown infantry

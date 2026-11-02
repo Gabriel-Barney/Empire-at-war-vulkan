@@ -134,6 +134,8 @@ insert iff  tree != null
 - **Death:** the death handler 0x39bdb0 sets obj +0x3a0 bit 0x40 and does not touch the trees. A dying object stays a
   candidate until destroyed, and its model keeps colliding. Death-clone types (`*_DEATH_CLONE`) have no
   `Space_Layer`, so a clone is never a member.
+  - Exception (2026-11-02, MOVEMENT §2.2) [M]: a type without a `Death_Clone` list dies into a clone of its **own**
+    type (S9_DEATH_CLONE_SHIELDS §1.3), which keeps the type's `Space_Layer` and so passes the §2.1 test at create.
 - **Garrison / containment:** 0x37ade0 (enter container) leaves the object in the tree. It switches the model-level
   collide flag off (§5.5), so the precise test fails. The flag is switched back on by 0x37a060 / 0x37a8d0.
 - **Ownership, fog, stealth, selection, hyperspace states:** no test anywhere on this path. Friendly and enemy
