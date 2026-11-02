@@ -840,9 +840,12 @@ public:
         r.contrast_entry = -1;
         const double P = p_.power_eff(i);
         const bool free = r.free_unit >= 0;
+        // 0x72b6a0: no pair counts when P <= 0; a pair counts only with w > 0 and R > 0, and a free unit then skips
+        // the tolerance / pop-cap test.
         for (const auto& [e, wgt] : r.pairs) {
             const auto ei = static_cast<size_t>(e);
             const double R = p_.remaining[ei];
+            if (!(P > 0.0 && wgt > 0.0f && R > 0.0)) continue;
             if (!(free || (p_.entries[ei].target * static_cast<double>(p_.tolerance) < R && p_.pop_allows(r.type)))) continue;
             const double wp = static_cast<double>(wgt) * P;
             const double d = std::max(R - wp, 0.0), m = std::max(R, wp);
