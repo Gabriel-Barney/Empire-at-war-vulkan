@@ -247,6 +247,9 @@ void TacticalBattle::adopt_object(TacticalMode& mode, objects::ObjectHandle h) {
 ta::SpecialWeaponWorld TacticalBattle::l1_world(const TacticalMode& mode) {
     const objects::ObjectStore* st = &mode.primary();
     ta::SpecialWeaponWorld w;
+    // S8 t26 / t30 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"): the order (point + pending) goes to the weapon's own
+    // WeaponBehavior, which charges and fires it.
+    w.fire_at_position = [this](tc::ObjectId id, tactical::Vec3 p) { return combat_ != nullptr && combat_->order_fire_at_position(id, p); };
     w.owner_of = [st](tc::ObjectId t) {
         const objects::ObjectHandle h = st->find(t);
         return st->alive(h) ? st->owner(h) : -1;
@@ -302,11 +305,7 @@ bool TacticalBattle::sw_fire_at_object(const TacticalMode& mode, objects::Object
 
 bool TacticalBattle::sw_fire_lobbing_at(const TacticalMode& mode, objects::ObjectId weapon, Vec3 point) {
     if (finished_) return false;
-    if (!l1_sw_.fire_lobbing_at(weapon, to_t(point), frame_, l1_world(mode))) return false;
-    // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"): the pack restart above is 0x4ea3f0's readiness half; the
-    // order itself (point + pending) goes to the weapon's own WeaponBehavior, which charges and fires it.
-    if (combat_) combat_->order_fire_at_position(weapon, to_t(point));
-    return true;
+    return l1_sw_.fire_lobbing_at(weapon, to_t(point), frame_, l1_world(mode));
 }
 
 bool TacticalBattle::special_weapons_allowed(int32_t player) const {
@@ -519,6 +518,16 @@ void TacticalBattle::l1_weapons(TacticalMode& mode, SimRng& rng) {
     l1_sw_events_.clear();    l1_damage_stats();
     l1_tsw_kill_owner_ = -1;  // this tick's TSW planet kill (read by the battle host after the tick)
     l1_strikes(mode, rng);
+    // S8 t30: the lobbing charge-up events of this tick's combat step (presentation, ascending id per combat order).
+    if (combat_)
+        for (const tc::LobEvent& e : combat_->lob_events()) {
+            ta::SpecialWeaponEvent ev;
+            ev.kind = e.charged ? ta::SwEventKind::LobCharged : ta::SwEventKind::LobChargeup;
+            ev.id = e.id;
+            ev.frame = e.frame;
+            ev.point = e.point;
+            l1_sw_events_.push_back(ev);
+        }
 
     if (l1_sw_.empty()) return;
     objects::ObjectStore& st = mode.primary();
@@ -527,10 +536,6 @@ void TacticalBattle::l1_weapons(TacticalMode& mode, SimRng& rng) {
     for (const ta::SpecialWeaponShot& s : l1_sw_.shots()) {
         const objects::ObjectHandle wh = st.find(s.weapon);
         if (!st.alive(wh) || s.projectile < 0) continue;
-        // S8 t26: a lobbing superweapon with an own weapon fires its order through CombatSystem (charge-up, one shot at the
-        // point); the special-weapon system's point volley is not launched [port: SpecialWeaponSystem::fire_lobbing_at
-        // still queues it - abilities follow-up].
-        if (s.at_point && combat_ && combat_->fires_at_position(s.weapon)) continue;
         tc::ProjectileLaunch l;
         l.shooter = s.weapon;
         l.owner = s.owner;

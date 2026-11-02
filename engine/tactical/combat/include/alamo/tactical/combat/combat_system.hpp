@@ -799,6 +799,16 @@ struct HitEvent {
 // OI fog: one shot that reached the post-shot hook (On_Shot_Fired 0x3a06a0, from HP_Fire_At and WeaponBehavior
 // vf6), in fire order inside the serial unit phase; cleared each tick. The fog flashes the shooter's footprint on
 // the target owner's grid (REVEAL vf26, TACTICAL_GAPS 5.1). Not part of any hash.
+// S8 t30 (TACTICAL_COMBAT §3.1.1, LobbingSuperweaponBehavior 0x4ea6f0): presentation of the lobbing charge-up - the turret
+// aimed and the charge-up started (charged false: Lobbing_Superweapon_SFXEvent_Chargeup + Chargeup_Particle), or the
+// charge-up ended (charged true: Lobbing_Superweapon_SFXEvent_Fire). Not hashed.
+struct LobEvent {
+    ObjectId id = kNoObject;
+    bool charged = false;
+    uint32_t frame = 0;
+    Vec3 point;  // the ordered point
+};
+
 struct ShotEvent {
     ObjectId shooter = kNoObject;
     ObjectId target = kNoObject;
@@ -983,6 +993,7 @@ public:
     uint8_t fire_at_position_state(ObjectId id, Vec3* point = nullptr) const;
     // True for a live LOBBING_SUPERWEAPON unit with an own weapon (the units order_fire_at_position accepts).
     bool fires_at_position(ObjectId id) const;
+    std::span<const LobEvent> lob_events() const { return lob_events_; }  // S8 t30: this tick's (cleared at tick start)
     // ---- L1 systems ----
     // A host-launched projectile (ProjectileLaunch). Max travel = the 3-D distance to the aim point (+ the target's
     // radius for a unit target), so a point shot detonates at the point (expiry: area damage / ion stun). It is
@@ -1615,6 +1626,7 @@ private:
     std::vector<DamageEvent> damage_events_;
     std::vector<HitEvent> hit_events_;  // S10-int
     std::vector<ShotEvent> shot_events_;  // OI fog
+    std::vector<LobEvent> lob_events_;    // S8 t30
     // ---- OI abilities ----
     std::vector<SurvivorEvent> survivor_events_;
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order

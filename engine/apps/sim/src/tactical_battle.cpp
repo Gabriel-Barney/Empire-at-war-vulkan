@@ -3429,8 +3429,10 @@ cmd::RejectReason TacticalBattle::handle_command(TacticalMode& mode, uint8_t pla
     // --- end OI abilities ---
     // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", command 25 execute 0x40a3b0): readiness >= 0.99, point = the
     // command position when "at position" is set or there is no target object, else the target's bare position; then
-    // Fire_Lobbing_At_Position (sw_fire_lobbing_at). [port] Lobbing superweapons of the issuing player only; the
-    // destroy-after sweep (behaviour 0x67) for the weapon's owner is not run here.
+    // Fire_Lobbing_At_Position (sw_fire_lobbing_at), then the destroy-after sweep (S8 t30: every live object of the
+    // weapon's owner with DUMMY_DESTROY_AFTER_SPECIAL_WEAPON_FIRED 0x67, a copy of the owner's list in its order, killed
+    // silently) [M: after an accepted order only, as the Lua binding]. [port] Lobbing superweapons of the issuing player
+    // only.
     if (t == T::SpecialWeaponFire) {
         const uint32_t ww = ev.u("weapon");
         if (ww == cmd::kNoObject || ww > 0x7FFFFFFFu) return R::InvalidUnit;
@@ -3446,7 +3448,15 @@ cmd::RejectReason TacticalBattle::handle_command(TacticalMode& mode, uint8_t pla
             const objects::ObjectHandle th = tw == cmd::kNoObject || tw > 0x7FFFFFFFu ? objects::ObjectHandle{} : store.find(static_cast<objects::ObjectId>(tw));
             if (store.alive(th)) at = store.position(th);
         }
-        return sw_fire_lobbing_at(mode, wid, at) ? R::None : R::NotAllowed;
+        if (!sw_fire_lobbing_at(mode, wid, at)) return R::NotAllowed;
+        static const objects::BehaviorTypeId kDestroyAfter = objects::behavior_type_id("DUMMY_DESTROY_AFTER_SPECIAL_WEAPON_FIRED");
+        if (kDestroyAfter != objects::kNoBehavior) {
+            const auto owned = store.owned_by(store.owner(wh));
+            const std::vector<objects::ObjectHandle> list(owned.begin(), owned.end());
+            for (const objects::ObjectHandle h : list)
+                if (store.alive(h) && store.has_behavior(h, kDestroyAfter)) bt_kill_silently(mode, h);
+        }
+        return R::None;
     }
     if (t != T::SetUnitAbilityMode && t != T::TacticalSpecialAbility && t != T::TacticalSpecialAbilityWithDummyTarget &&
         t != T::SetAbilityAutofire)
