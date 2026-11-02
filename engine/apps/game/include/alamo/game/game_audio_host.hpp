@@ -63,6 +63,7 @@ struct GameAudioStats {
     uint64_t engine_loop_requests = 0, removed = 0, station_upgrades = 0;  // STATION_HANGARS_SOUND §1.2 / §3
     uint64_t movie_music = 0, movie_halts = 0, movie_cues = 0, movie_restores = 0;  // movie music modes 14 / 17 (STRATEGIC_GAPS §7.4)
     uint64_t tsw_activations = 0, tsw_fires = 0, tsw_planet_deaths = 0;  // refix t06: tsw_audio cues played
+    uint64_t lob_chargeups = 0, lob_charged = 0;                         // S8 t31: lobbing charge-up / charged cues
 };
 
 class GameAudioHost {
@@ -117,7 +118,9 @@ public:
     // Firing: the TSW type's TSW_SFXEvent_Activate_Voice and TSW_SFXEvent_Weapon_Power_Up attached to the TSW (2D or 3D
     // by the event's data) and TSW_MusicEvent_Activation_Start as music mode 8; AttackAnim: its SFXEvent_Fire (weapon
     // fire rules); PlanetDestroyed: the target dummy's Death_SFXEvent_Start_Die at the dummy (unit_death: the dummy's own
-    // sounds stop). Every owner's TSW is heard [M: the spec lists no owner test]. battle_tick calls it.
+    // sounds stop). Every owner's TSW is heard [M: the spec lists no owner test]. S8 t31 (TACTICAL_COMBAT.md "Charge-up"):
+    // LobChargeup plays the unit type's Lobbing_Superweapon_SFXEvent_Chargeup, LobCharged its
+    // Lobbing_Superweapon_SFXEvent_Fire, both attached to the unit (every owner's). battle_tick calls it.
     void tsw_audio(std::span<const TswCue> cues, const objects::GameObjectTypes& types);
     void sim_tick();  // once per sim tick
 

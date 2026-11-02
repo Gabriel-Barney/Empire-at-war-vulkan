@@ -652,6 +652,137 @@ acquisition, which the targeting service drops anyway.
 > (`fighter_post_move`) and keeps the record. Formation lifetime chosen for the §11 open item [M]: it survives the end of
 > the move and enter_idle until the next order, Stop or the squadron's end; a squadron that never had an order has none.
 
+### 4.10 Squadron targeting leftovers, hangar launch order, long space battles (S7 t23–t25, 2026-11-02)
+
+**A. Scan cube half-extent `Get_Scan_Range` (0x566f50)** [H unless tagged]. Called only by the acquisition scan
+(0x568a00, when the unit's next-scan frame is due: every 30 + `Get_Int(0, 15)` frames) and by its per-player query
+(`Scan_Player` 0x5662b0, which builds the AABB from it). Let o = the TARGETING behaviour's owner (each member
+fighter has its own TARGETING, slot 9).
+1. R = the behaviour's vf +0x140 = `Get_Max_Attack_Range` of **o** (the member fighter, not the squadron).
+2. o deployed (0x39a390) → R.
+3. u = o; in space, when o's container (o +0x2b0) has a TEAM slot (+0x348 ≠ −1), u = the container (the squadron).
+   No locomotor pack on u, or no formation (pack +0x1f0) → **R**.
+4. rr = 0x4160a0(F, u, candidate = none, &Rr). rr ≠ 0 → **R + Rr**.
+5. Otherwise: space → R; land → R only when o has a TURRET slot (+0x33d), else **0**; other modes 0. The scan does
+   nothing when the result is ≤ 0.
+
+**0x4160a0(F, u, c, &Rr)** with every branch [H; M for the formation state names]:
+- Rr := 0. Return 0 when: u is null, has no pack, its pack's formation is not F; F has no members (+0x10..+0x18) or no
+  blocks (+0xf8..+0x100, 0x68 bytes each; first = blocks[0], last = blocks[n−1]); c ≠ null and c is the object of
+  the first or the last block; u deployed with type +0x23b0 = 0; u order-locked (0x39ad40); in space, u's
+  `Space_Layer` (0x397900(u, 1)) ≠ 0 and its type lacks `Disregard_Space_Layer_For_Guard_Attack_Move` (+0xe9,
+  never set in FoC); the last block has flag 0x40.
+  → **In space only `Space_Layer` 0 units answer: fighters and the 33 FoC squadron types (none sets `Space_Layer`).**
+- Rr = the first block's flags: 0x02 → `Guard_Chase_Range` (+0x52c), else 0x01 → `Attack_Move_Response_Range`
+  (+0x538), else `Idle_Chase_Range` (+0x530), read from u's type (u +0x337 = −1: its company type 0x3973b0). Rr < 0
+  → 0. FoC squadrons 1000 / 300 / 200 (Z95 guard 700, Red / Rogue 500 / 200 / 150, Pirate idle 400).
+- c ≠ null: Rr += `Autonomous_Move_Extension_Vs_Attacker` (type +0x211c) and base result 1 when c is in the
+  damage-tracking attacker list (0x39b1c0, behaviour 0x3E) of the guarded unit (last block is a guard whose object
+  has slots +0x370 and +0x333) or of u. While the guarded unit is **moving** (0x39ade0) and its own current block
+  lacks flag 0x10 (0x3970c0), a c that is not attacking it → **0** (a moving escort only answers the carrier's
+  attackers).
+- **Attack-move branch:** F state (+0x1d0) ≠ 3 and (first block flag 0x01 or last block byte +0x5e): u within Rr (XY)
+  of F's current path point (0x5c4ee0 on F +0x230, else the last path node; no path → pass) → **2**, else 0.
+- **Otherwise** it needs the last block to be a guard (flag 0x02) **or** F +0x240 = 1 with a position first block
+  (object null); else **0**. F +0x240 is set to 1 by the formation states 3 and 4 (0x423070 / 0x4234d0, run by the
+  formation step 0x422b70) when exactly one block is left [M: "arrived at the end of its only order"]. So **a squadron
+  flying a plain position move gets no response range at all** (pushes and the larger cube start only after
+  arrival), correcting §4.9 step 2's last bullet.
+- Then u must be within Rr (XY) of its slot goal (block position 0x583150 + u's slot offset 0x5566a0); state 3
+  skips this distance test. c = null → **1**. c ≠ null: c within Rr of the slot goal → 1; farther → the test
+  0x5672b0 at the point Rr from the slot goal toward c (with u, or u's container when u has no TARGETING slot) must
+  pass [M: "c attackable from that point"] → base + 1, else 0.
+
+For the implementer: scan cube = R_member + Rr only while the squadron's formation answers 0x4160a0 ≠ 0 (guard,
+attack-move near its path point, or arrived on a single position/idle block); else R. Candidates in the cube are
+still accepted only by §2.3 step 9 of TACTICAL_COMBAT (goal object, in weapon range, or 0x4160a0(F, u, c) ≠ 0).
+
+**B. Shared team target (0x406370(team, t, hp), team data = container +0x110)** [H]:
+- t is replaced by its own container when it is a team member; t ≠ null → +0x48 := 10 [L: reader not traced]. The
+  TEAM behaviour's listener moves from the old target's signal 0x28 to the new one's. +0x30 := t, +0x38 := hp.
+  **Every member** (team list +0x10, count +0x18, index order) gets TARGETING vf +0xd0 `Set_Target(t, hpObj,
+  order = +0x45, lock = +0x45)` and every weapon hard point (types 5..10) `HP_Set_Target`.
+- **Writers:** (1) a member's acquisition in `Service_Space` 0x633ae0 when its own target (TD +8) is null and its
+  due scan picks something: team +0x45 := the scan's flag (0x4061d0), then 0x406370(team, pick, hp) — **the member
+  that scans with an empty target retargets the whole squadron**, overwriting the others' current targets;
+  (2) `Order_Attack` set path (TACTICAL_COMBAT §2.8 C step 3); (3) clears to null: ordered move (0x39f800, also
+  stores the move destination), formation join with the clear flag (0x40e0f0), ability toggles of HUNT / LURE /
+  AVOID_DANGER / DEPLOY_TROOPERS / SELF_DESTRUCT (0x3a4070), drop-target 0x5c9ca0 (enter_idle, §4.7).
+- **Not team-wide:** a member that already has a target and whose rescan finds a better one (keep / switch step,
+  0x567c50 / 0x567110) calls only its **own** `Set_Target`; a member whose target is dropped (slot 27) clears only its
+  own. The squadron therefore shares one target after each empty-target pick and may diverge until the next one.
+- **Cleared on removal:** signal 0x28 (the target left the object store, OBJECT_RUNTIME §5, after death) reaches the
+  TEAM behaviour's vf +0x80 (0x404750): when it is the team target, +0x30 := null, +0x38 := −1. Members' own targets
+  are not touched (they drop the dead target themselves).
+- **The squadron container does not scan in space.** `TeamTargetingBehaviorClass` (0x62ee00 → 0x62eeb0) runs only
+  when the container's locomotor kind (vf +0x238) is 1. Kind 1 = Walk, Bike, LandTeamContainer, LandTeamInfantry; kind
+  2 = Fighter, Team, SimpleSpace, Flying, LandBomber, JetPack; −1 = Starship, generic Locomotor. So team targeting is
+  the land infantry / company path; squadrons get targets only from their members' TARGETING (this answers §4.9 [M];
+  TACTICAL_COMBAT §2.1 "runs in space only" now reads "ground team containers only", corrected there 2026-11-02).
+- Also written by the TEAM service (0x405b10, every service): team data +0x8c..+0x94 = centre and +0x98..+0xa0 =
+  half extents of the members' boxes, +0x40 = 2 × the largest half extent; in space the container is placed at
+  that centre (0x3a8f90) [M: this is likely the S of §4.6].
+
+**C. Fighter `Auto_Engage` vf +0x260 (0x5cb580) lock pairing** [H]:
+- A fighter that is not a team member (0x39b1a0 false) uses LocomotorCommon 0x42d0f0 (block push, §4.9).
+- A squadron member (reached through TeamLocomotor 0x630140 after the container's own push, for each member whose
+  locomotor answers vf +0x220): only when t ≠ null, t has a TEAM slot (t is a squadron), the fighter's container has a
+  TEAM slot, and the fighter's lock timer (pack +0x1d8) has **expired**: walk t's members in index order and take the
+  first whose own timer has expired: subscribe this locomotor's listener to that victim's signal 0x28; if the victim
+  had a lock of its own (+0x1e0), unsubscribe the victim's locomotor from it; self +0x1e0 := victim, self timer := 10 s;
+  victim +0x1e0 := null, victim timer := 10 s. Nothing else, no block. Returns false.
+- **Release:** no explicit release. The lock ends when the 10-s timer expires (§4.5 scans again) or when the locked
+  object is removed: fighter locomotor vf +0x80 (0x5c9c80) on signal 0x28 sets +0x1e0 := null if it was that object.
+
+**D. Who calls enter_idle (0x5cb750)** [H, from the whole-text disassembly]: exactly four call sites, all inside the
+fighter locomotor's own per-frame state code (vf6):
+- Directed_Combat 0x5cc220 NoTarget (§4.3 step 5): the solo-fighter call (0x5cc8a1) and the squadron-leader loop over
+  members (0x5cc915);
+- Moving 0x5ce010 path complete (§4.1 steps 5–6): the leader loop over members (0x5ce2f6) and the solo fighter
+  (0x5ce3f3).
+No MovementSystem / coordinator event, signal or command calls it. For the port: raise an explicit "fighter entered
+idle" event from those two state handlers (NoTarget, path complete) instead of detecting the state change in the host.
+
+**E. Hangar launch order (space, 0x594dc0 → squadron 0x595a30; single ship 0x595650)** [H unless tagged]
+(resolves the [M] in STATION_HANGARS_SOUND §2.5; applied there 2026-11-02):
+- Squadron: members at P0 with velocity along P0→P1 × the member's speed (0x370f00), spawned flag; container via
+  0x2a5a60, spawned flag, spawner listener on its signal 0x28.
+- **Carrier without a locomotor (stations):** a group move of the container (0x2a7b80, the player's move path) to P1
+  with {kind 1 position P1, flags 0, mask 0x3f, threat none, word 0x1000001}.
+- **Carrier with a locomotor (obj +0x333 ≠ −1):** a new coordinator (mode vf +0x228, 0x426010); if it admits the
+  container (0x425e30): leave every coordinator (0x426d50), join (vf +0x18), then `Coordinator::Move_To` (0x4f8200)
+  with {kind **3**, object = **the carrier**, hard point none, **flags 0x02 (guard)**, mask 0x3f, threat none (1e18),
+  word 0x1000001}. So the escort is a **guard of the carrier**: Rr = `Guard_Chase_Range` (first block 0x02), slot goal
+  = the carrier's slot; `Autonomous_Move_Extension_Vs_Attacker` added for the carrier's attackers, and while the
+  carrier moves only its attackers are answered (A above).
+  Following (2026-11-02, A1_READINGS §33.4.1):
+  - once per 30 frames, when the squadron is within R = min(half its base attack range, `Space_Guard_Range` 750) of
+    the moving carrier, it copies the carrier's path at the carrier's waypoint index;
+  - speed cap = min(squadron formation speed, 2 × the carrier's effective max speed, or 2 × the carrier formation's
+    speed while the carrier moves in a formation);
+  - out of R it re-paths to the carrier when its recorded goal is more than R from the carrier's.
+- Single ships (no `Squadron_Units`): ring placement around P1, spawned flag, listener, locomotor vf +0x290(1)
+  [L]; **no move order**.
+- **Carrier dies:** the coordinator's target listener (0x4f77e0, signals 0x10 / 0x1a / 0x2e) converts each formation's
+  current block (0x41a580) to kind 1, object and hard point null, position = the last waypoint of that formation's
+  path (or the formation's own goal point when it has no path); the **flags stay 0x02**. The squadron finishes the
+  flight there, enters idle (§4.7, parking cell), and keeps a **position guard** with `Guard_Chase_Range` around that
+  point. The spawner dies with the carrier; the squadrons live on uncounted (STATION_HANGARS_SOUND §2.9).
+
+**F. Long space skirmishes (S7 t23)** [M: derived from A–E, not measured]. Nothing in the engine forces an end:
+- a squadron with **no formation** (pack +0x1f0 null) never moves to engage (no push, cube R): it parks / orbits
+  (§4.2) and only fires at what enters weapon range;
+- a squadron on a **plain position move** has no response range until its formation reaches state 3/4 with one
+  block; after that `Idle_Chase_Range` (200) around its slot goal;
+- carrier escorts guard the carrier with `Guard_Chase_Range` (1000) and, after the carrier's death, a fixed point;
+  station launches move to the fly-out point P1 and then sit there with `Idle_Chase_Range`;
+- the targeting service drops fogged targets and the fighter toggles Idle ↔ Directed_Combat on a fogged goal
+  (§4.9 step 3);
+- nothing returns an idle squadron to its carrier (no caller found; the hangar only respawns on container removal).
+So a battle whose last enemies are squadrons parked outside every chase range of the other side lasts until an AI
+plan (free store `BusyTacticalFreeStore`, attack plans) orders them. Long tails in the port should be compared with
+these ranges before adding any rule.
+
 ---
 
 ## 5. Fighter cell grids (singleton 0x404950) [H; M for the ring order]

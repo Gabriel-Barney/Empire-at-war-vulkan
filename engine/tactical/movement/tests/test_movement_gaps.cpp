@@ -1497,6 +1497,93 @@ static void test_fighter_space() {
     std::printf("fighter: threat path %zu waypoints, idle at frame %u\n", wf.size(), fr);
 }
 
+// S7 t37 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E): a fighter's move with an object goal (guard flag) keeps an object
+// goal block. While the object moves the fighter, within R = min(attack range / 2, Space_Guard_Range) of it, flies a copy of
+// the object's path; out of R it re-paths to the object when the recorded goal is more than R away. The object's removal
+// turns the block into a position block at the last waypoint (flags kept); a plain move drops the block.
+static void test_fighter_guard() {
+    MovementConfig cfg;
+    cfg.mode = MoveMode::Space;
+    MovementSystem sys(cfg);
+    sys.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+    UnitDesc f = unit(1, {-2000.0f, 50.0f}, -1, 4.0f, 10.0f, LocomotorKind::Fighter);
+    f.space_layer = kLayerFighter;
+    f.space_layer_type = 0;
+    CHECK(sys.add_unit(f));
+    UnitDesc c = unit(2, {-2000.0f, 0.0f}, -1, 2.0f, 60.0f, LocomotorKind::Default);
+    c.space_layer_type = 2;
+    CHECK(sys.add_unit(c));
+    SimRng rng(5);
+    MoveOrder g;
+    g.units = {1};
+    g.destination = {-2000.0f, 0.0f};
+    g.flags = kMoveFlagGuardMove;
+    g.goal_object = 2;
+    sys.move(g, rng, 0);
+    const FighterGuard* fg = sys.fighter_guard(1);
+    CHECK(fg && fg->object == 2 && fg->flags == kMoveFlagGuardMove && fg->follow && fg->next == kFighterGuardInterval);
+    MoveOrder mc;
+    mc.units = {2};
+    mc.destination = {1500.0f, 0.0f};
+    sys.move(mc, rng, 0);
+    CHECK(sys.fighter_guard(1) != nullptr);  // another unit's order leaves the fighter's block alone
+    bool copied = false, repathed = false;
+    uint32_t fr = 0;
+    for (; fr < 3000 && !copied; ++fr) {
+        sys.tick(fr, rng);
+        const UnitView v = sys.view(1), cv = sys.view(2);
+        copied = cv.has_goal && !cv.arrived && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y;
+    }
+    // Save round trip with a live guard block (movement save v8): same block, identical continuation.
+    {
+        ByteWriter w;
+        sys.write(w);
+        MovementSystem copy(cfg);
+        copy.space().set_box({-4000.0f, -4000.0f}, {4000.0f, 4000.0f});
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+        const FighterGuard* a = sys.fighter_guard(1);
+        const FighterGuard* b = copy.fighter_guard(1);
+        CHECK(a && b && a->key == b->key && a->object == b->object && a->flags == b->flags && a->goal.x == b->goal.x &&
+              a->goal.y == b->goal.y && a->next == b->next && a->follow == b->follow && a->covered == b->covered);
+        SimRng ra = rng, rb = rng;
+        bool same = true;
+        for (uint32_t k = fr; k < fr + 90; ++k) {
+            sys.tick(k, ra);
+            copy.tick(k, rb);
+            StateHasher ha, hb;
+            sys.hash_units(ha);
+            copy.hash_units(hb);
+            same = same && ha.digest() == hb.digest();
+        }
+        CHECK(same && copy.fighter_guard(1) && copy.fighter_guard(1)->next == sys.fighter_guard(1)->next);
+        fr += 90;
+        rng = ra;
+    }
+    // Teleport the fighter away (out of R): the next updates re-path it toward the object.
+    CHECK(sys.teleport(1, {-2000.0f, 3000.0f}, 0.0f, 0.0f, fr));
+    const V2 before = sys.fighter_guard(1)->goal;
+    for (uint32_t k = 0; k < 400 && !repathed; ++k, ++fr) {
+        sys.tick(fr, rng);
+        repathed = distance(sys.fighter_guard(1)->goal, before) > 1.0f &&
+                   distance(sys.fighter_guard(1)->goal, sys.view(2).pos) < 10.0f;
+    }
+    // The object leaves: kind 1 at the last waypoint of the fighter's path, flags kept.
+    const auto wp = sys.space_path(1);
+    const V2 last = wp.empty() ? sys.fighter_guard(1)->goal : wp.back().pos;
+    CHECK(sys.remove_unit(2));
+    fg = sys.fighter_guard(1);
+    const bool lost = fg && fg->object == -1 && fg->flags == kMoveFlagGuardMove && distance(fg->goal, last) < 1e-3f;
+    MoveOrder p;
+    p.units = {1};
+    p.destination = {0.0f, 0.0f};
+    sys.move(p, rng, fr);
+    const bool dropped = sys.fighter_guard(1) == nullptr;
+    std::printf("fighter guard: path copy %d (frame %u), re-path %d, object lost -> position guard %d, plain move drops %d\n",
+                copied ? 1 : 0, fr, repathed ? 1 : 0, lost ? 1 : 0, dropped ? 1 : 0);
+    CHECK(copied && repathed && lost && dropped);
+}
+
 // ---------------------------------------------------------------- determinism
 static CrcLog mixed_run(const ParallelFor& pf) {
     MovementSystem sys{MovementConfig{}};
@@ -1659,6 +1746,46 @@ static void test_space_avoid() {
         CHECK(avoid_precise_segment(po, a, b, 5u, 0u, h) && h.t == 0.0f && h.mesh == -1);
     }
 
+    // S8 t13 (MOVEMENT §1.3 "Ray mesh set"): the Fine_Tune stamping ray (vf +0x80 mode 0, mask 1) - any collision mesh
+    // whose bone is visible; COLLISIONBOX and the collide switch play no part.
+    {
+        AvoidModel floor;
+        AvoidModel::Mesh m;
+        m.lo = {-10.0f, -10.0f, 0.0f};
+        m.hi = {10.0f, 10.0f, 0.0f};
+        m.tris = {{-10.0f, -10.0f, 0.0f}, {10.0f, -10.0f, 0.0f}, {10.0f, 10.0f, 0.0f},
+                  {-10.0f, -10.0f, 0.0f}, {10.0f, 10.0f, 0.0f}, {-10.0f, 10.0f, 0.0f}};
+        m.name = "COLLISION_ALT0";  // hidden in the file (the builder keeps it: collision flag), bone visible
+        floor.meshes.push_back(m);
+        AvoidObstacle fo;
+        fo.pos = {200.0f, 200.0f, 5.0f};
+        fo.model = &floor;
+        avoid_place(fo);
+        auto ray = [&](float x, float y) { return avoid_ray_any(fo, {x, y, -1000.0f}, {x, y, 1000.0f}); };
+        CHECK(ray(200.0f, 200.0f) && ray(209.0f, 191.0f) && !ray(215.0f, 200.0f));
+        fo.collide = false;  // contained / collide switch off: the ray still hits
+        CHECK(ray(200.0f, 200.0f));
+        floor.has_collision_box = true;  // a COLLISIONBOX off the segment changes nothing (the precise test would miss)
+        floor.cbox_c = {500.0f, 500.0f, 0.0f};
+        floor.cbox_h = {1.0f, 1.0f, 1.0f};
+        AvoidSegmentHit h;
+        CHECK(ray(200.0f, 200.0f) && !avoid_precise_segment(fo, {200.0f, 200.0f, -1000.0f}, {200.0f, 200.0f, 1000.0f}, 1u, 0u, h));
+        floor.meshes[0].bone_visible = false;  // a mesh whose bone is hidden at run time is skipped
+        CHECK(!ray(200.0f, 200.0f));
+        AvoidModel::Mesh m2 = m;  // a second, visible mesh (model x + 30 = world y + 30) decides alone
+        for (F3& p : m2.tris) p.x += 30.0f;
+        m2.lo.x += 30.0f;
+        m2.hi.x += 30.0f;
+        floor.meshes.push_back(m2);
+        CHECK(!ray(200.0f, 200.0f) && ray(200.0f, 230.0f));
+        floor.meshes[1].shield = true;  // SHIELD mesh: skipped only for a type with the shield behaviour
+        CHECK(ray(200.0f, 230.0f));
+        fo.skip_shield = true;
+        CHECK(!ray(200.0f, 230.0f));
+        fo.model = nullptr;
+        CHECK(!avoid_ray_any(fo, {200.0f, 200.0f, -1000.0f}, {200.0f, 200.0f, 1000.0f}));
+    }
+
     // The query: overlap (inclusive) with the box around the fighter, then the first hit decides.
     F3 hit;
     const std::vector<AvoidObstacle> one{wo};
@@ -1761,6 +1888,264 @@ static void test_determinism() {
     if (kGoldenMixed != 0) CHECK(g == kGoldenMixed);
 }
 
+// S8 t11 / t12 (MOVEMENT §3.2 "Deploy states", ABILITIES_HARDPOINTS §4.13): the Walk deploy window. Clip 0x19 / 0x1A
+// with 30 frames at 30 fps: step = 1 x Deployment_Anim_Rate, end at position >= 30 - 2 - step.
+static void test_deploy() {
+    using DR = MovementSystem::DeployResult;
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+    UnitDesc fast = trooper(2, cell_center(10, 30));
+    fast.deployment_anim_rate = 2.0f;
+    CHECK(sys.add_unit(fast));
+    CHECK(sys.add_unit(unit(3, cell_center(10, 50), 0, 2.0f, 6.0f, LocomotorKind::Jetpack)));
+    sys.set_deploy_clip_fn([](ObjectId, int32_t anim, uint32_t& n, float& fps) {
+        if (anim != 0x19 && anim != 0x1A) return false;
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    bool turret_rest = true;
+    sys.set_turret_rest_fn([&turret_rest](ObjectId id) { return id != 1 || turret_rest; });
+    SimRng rng(7);
+    auto finished_at = [&](ObjectId id, LocoState to, uint32_t from, uint32_t limit) {
+        for (uint32_t f = from; f < limit; ++f) {
+            sys.tick(f, rng);
+            for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+                if (e.id == id && e.to == to && e.finished) return f;
+        }
+        return 0xFFFFFFFFu;
+    };
+    // Only Walk deploys; unknown units are NoWalk too.
+    CHECK(sys.deploy(3, true, 0) == DR::NoWalk && sys.deploy(99, true, 0) == DR::NoWalk && sys.deploy(1, false, 0) == DR::Ignored);
+    // A moving unit stops; Deploy(true) at frame 10 -> 0x18 now, 0x19 when the clip ends (10 + 27 at rate 1).
+    MoveOrder o;
+    o.units = {1, 2};
+    o.destination = cell_center(60, 10);
+    sys.move(o, rng, 0);
+    for (uint32_t f = 0; f < 10; ++f) sys.tick(f, rng);
+    CHECK(sys.deploy(1, true, 10) == DR::Deploying && sys.deploy(2, true, 10) == DR::Deploying);
+    CHECK(sys.deploy(1, true, 10) == DR::Ignored);  // nothing in 0x18
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 2 && ev[0].id == 1 && ev[0].from == LocoState::None && ev[0].to == LocoState::WalkDeploying &&
+              !ev[0].finished);
+    }
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeploying && sys.view(1).deploy_state == LocoState::WalkDeploying);
+    const V2 held = sys.view(1).pos;
+    uint32_t f2 = 0xFFFFFFFFu, f1 = 0xFFFFFFFFu;
+    for (uint32_t f = 10; f < 80 && f1 == 0xFFFFFFFFu; ++f) {
+        sys.tick(f, rng);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events()) {
+            if (e.finished && e.to == LocoState::WalkDeployed && e.id == 1) f1 = f;
+            if (e.finished && e.to == LocoState::WalkDeployed && e.id == 2) f2 = f;
+        }
+        CHECK(sys.view(1).pos == held);  // a deploying unit does not move
+    }
+    CHECK(f1 == 37);  // pos = f - 10 >= 27
+    CHECK(f2 == 23);  // rate 2: 2 (f - 10) >= 26
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed && sys.deploy(1, true, 40) == DR::Ignored);
+    // An order while deployed waits: the unit stays put.
+    sys.move(o, rng, 40);
+    for (uint32_t f = 40; f < 60; ++f) sys.tick(f, rng);
+    CHECK(sys.view(1).pos == held);
+    // Undeploy: 0x1A, the clip from 0, back to the walk 27 frames later (state None, signal).
+    CHECK(sys.deploy(1, false, 60) == DR::Undeploying && sys.deploy_state(1) == LocoState::WalkUndeploying);
+    const uint32_t undeployed = finished_at(1, LocoState::None, 60, 200);
+    CHECK(undeployed == 87 && sys.deploy_state(1) == LocoState::None);
+
+    // S8 t24 (MOVEMENT §3.2 "Where it gates"): Deploy(true) from the walk starts its clip at once, the turret off rest or
+    // not (frame 100 -> ends 127).
+    turret_rest = false;
+    CHECK(sys.deploy(1, true, 100) == DR::Deploying);
+    CHECK(finished_at(1, LocoState::WalkDeployed, 100, 300) == 127);
+    // Blocked reverse: 0x1A with the turret off rest (no clip yet); Deploy(true) -> 0x19 at once with the signal.
+    turret_rest = false;
+    CHECK(sys.deploy(1, false, 150) == DR::Undeploying);
+    sys.tick(150, rng);
+    (void)sys.take_deploy_events();
+    CHECK(sys.deploy(1, true, 151) == DR::ReverseBlocked && sys.deploy_state(1) == LocoState::WalkDeployed);
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 1 && ev[0].from == LocoState::WalkUndeploying && ev[0].to == LocoState::WalkDeployed && ev[0].finished);
+    }
+    turret_rest = true;
+    CHECK(finished_at(1, LocoState::None, 160, 200) == 0xFFFFFFFFu);  // nothing pending
+    CHECK(sys.deploy(1, false, 200) == DR::Undeploying);
+    CHECK(finished_at(1, LocoState::None, 200, 300) == 227);
+    // Reversal: Undeploy (frame 250) out of a Deploy clip at position 10 starts the Undeploy clip at 30 - 10 - 1 - 1 = 18:
+    // it ends at 27, 9 frames later.
+    CHECK(sys.deploy(1, true, 240) == DR::Deploying);
+    for (uint32_t f = 240; f < 250; ++f) sys.tick(f, rng);
+    CHECK(sys.deploy(1, false, 250) == DR::Undeploying);
+    CHECK(finished_at(1, LocoState::None, 250, 300) == 259);
+
+    // Save round trip mid-clip: identical continuation.
+    CHECK(sys.deploy(1, true, 300) == DR::Deploying);
+    for (uint32_t f = 300; f < 305; ++f) sys.tick(f, rng);
+    ByteWriter w;
+    sys.write(w);
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy, 100);
+    copy.set_deploy_clip_fn([](ObjectId, int32_t, uint32_t& n, float& fps) {
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    {
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+    }
+    StateHasher ha, hb;
+    sys.hash_units(ha);
+    copy.hash_units(hb);
+    CHECK(ha.digest() == hb.digest() && copy.deploy_state(1) == LocoState::WalkDeploying);
+    SimRng r2 = rng;
+    uint32_t end_a = 0, end_b = 0;
+    for (uint32_t f = 305; f < 340; ++f) {
+        sys.tick(f, rng);
+        copy.tick(f, r2);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 1 && e.finished) end_a = f;
+        for (const MovementSystem::DeployEvent& e : copy.take_deploy_events())
+            if (e.id == 1 && e.finished) end_b = f;
+    }
+    CHECK(end_a == 327 && end_b == 327);
+
+    // S8 t12 (e): a locomotor swap undeploys without a signal; JetPack cannot deploy; the Walk rebuilt on landing starts
+    // undeployed.
+    (void)sys.take_deploy_events();
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed && sys.use_secondary_locomotor(1, true));
+    {
+        const std::vector<MovementSystem::DeployEvent> ev = sys.take_deploy_events();
+        CHECK(ev.size() == 1 && ev[0].from == LocoState::WalkDeployed && ev[0].to == LocoState::None && !ev[0].finished);
+    }
+    CHECK(sys.deploy_state(1) == LocoState::None && sys.deploy(1, true, 400) == DR::NoWalk);
+    CHECK(sys.use_secondary_locomotor(1, false) && sys.deploy_state(1) == LocoState::None);
+    CHECK(sys.deploy(1, true, 401) == DR::Deploying);
+    // snap_yaw: the facing at once, position kept.
+    const V2 p = sys.view(2).pos;
+    CHECK(sys.snap_yaw(2, 90.0f) && near(sys.view(2).yaw, 90.0f, 1e-4f) && sys.view(2).pos == p && !sys.snap_yaw(99, 0.0f));
+    std::printf("deploy: window timing, turret wait, blocked reverse, reversal, save, locomotor swap ok\n");
+}
+
+// S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the TURRET model of Deploys units. Unit 1 AT-AT-like (3 deg
+// per frame, +-55), unit 2 SPMAT-like (3 deg per frame, 360, deployed rest elevation -45). Clips 30 frames at 30 fps.
+static void test_turret() {
+    using DR = MovementSystem::DeployResult;
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc a = trooper(1, cell_center(10, 10));
+    a.turret = true;
+    a.turret_speed = 3.0f;
+    a.turret_extent = a.turret_deployed_extent = 55.0f;
+    UnitDesc s = trooper(2, cell_center(10, 40));
+    s.turret = true;
+    s.turret_speed = 3.0f;
+    s.turret_extent = s.turret_deployed_extent = 360.0f;
+    s.turret_deployed_rest[1] = -45.0f;
+    CHECK(sys.add_unit(a) && sys.add_unit(s));
+    sys.set_deploy_clip_fn([](ObjectId, int32_t, uint32_t& n, float& fps) {
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    bool aim = false;
+    const V2 p1 = sys.view(1).pos;
+    sys.set_turret_aim_fn([&](ObjectId id, float& x, float& y, float& z) {
+        if (id != 1 || !aim) return false;
+        x = p1.x;
+        y = p1.y + 100.0f;  // 90 degrees left of the body (yaw 0)
+        z = 0.0f;
+        return true;
+    });
+    SimRng rng(3);
+    uint32_t f = 0;
+    auto run_to = [&](uint32_t end) {
+        for (; f < end; ++f) sys.tick(f, rng);
+    };
+    // Aiming: 3 degrees per frame, clamped to the 55-degree extent.
+    aim = true;
+    run_to(10);
+    CHECK(near(sys.view(1).turret_yaw, 30.0f, 1e-4f));
+    run_to(20);
+    CHECK(sys.view(1).turret_yaw == 55.0f && sys.view(2).turret_yaw == 0.0f);
+    // Idle: held for Turret_Rotate_To_Rest_Delay_Sec (2 s = 60 frames), then back to rest at 3 per frame.
+    aim = false;
+    run_to(79);
+    CHECK(sys.view(1).turret_yaw == 55.0f);
+    run_to(90);
+    CHECK(sys.view(1).turret_yaw < 55.0f && sys.view(1).turret_yaw > 0.0f);
+    run_to(110);
+    CHECK(sys.view(1).turret_yaw == 0.0f);
+    // Undeploy waits for the rest angle: aim while deployed (yaw 55), then Deploy(false) - the forced recentre skips the
+    // delay (one held frame, then 19 frames back), the Undeploy clip starts only at rest and ends 27 frames later.
+    CHECK(sys.deploy(1, true, f) == DR::Deploying);
+    run_to(f + 40);
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed);
+    aim = true;
+    run_to(f + 20);
+    CHECK(sys.view(1).turret_yaw == 55.0f);
+    aim = false;
+    (void)sys.take_deploy_events();
+    const uint32_t u0 = f;
+    CHECK(sys.deploy(1, false, u0) == DR::Undeploying);
+    uint32_t clip_at = 0, done_at = 0;
+    for (; f < u0 + 120 && done_at == 0; ++f) {
+        sys.tick(f, rng);
+        if (clip_at == 0 && sys.view(1).deploy_clip == 0x1A) {
+            clip_at = f;
+            CHECK(sys.view(1).turret_yaw == 0.0f);  // at rest when the clip starts
+        }
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 1 && e.to == LocoState::None && e.finished) done_at = f;
+    }
+    CHECK(clip_at >= u0 + 19 && clip_at <= u0 + 21 && done_at == clip_at + 27);
+    // Reversing out of 0x1A while off rest: straight to 0x19 with the signal.
+    aim = true;
+    run_to(f + 20);  // walk state: yaw 55 again
+    CHECK(sys.deploy(1, true, f) == DR::Deploying);
+    run_to(f + 40);
+    CHECK(sys.deploy(1, false, f) == DR::Undeploying);
+    aim = false;
+    sys.tick(f, rng);
+    ++f;
+    CHECK(!near(sys.view(1).turret_yaw, 0.0f, 1e-4f) && sys.deploy(1, true, f) == DR::ReverseBlocked);
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed);
+    // SPMAT: deployed, the idle return goes to the deployed rest (elevation -45); the undeploy recentres to the
+    // undeployed rest (0) before its clip.
+    CHECK(sys.deploy(2, true, f) == DR::Deploying);
+    run_to(f + 120);
+    CHECK(sys.deploy_state(2) == LocoState::WalkDeployed && sys.view(2).turret_elevation == -45.0f);
+    CHECK(sys.deploy(2, false, f) == DR::Undeploying);
+    (void)sys.take_deploy_events();
+    const uint32_t s0 = f;
+    uint32_t s_done = 0;
+    for (; f < s0 + 120 && s_done == 0; ++f) {
+        sys.tick(f, rng);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 2 && e.to == LocoState::None && e.finished) s_done = f;
+    }
+    CHECK(s_done >= s0 + 15 + 27 && s_done <= s0 + 17 + 27 && sys.view(2).turret_elevation == 0.0f);
+    // Save round trip with the turret mid-turn: identical continuation.
+    aim = true;
+    run_to(f + 5);
+    ByteWriter w;
+    sys.write(w);
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy, 100);
+    {
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+    }
+    StateHasher ha, hb;
+    sys.hash_units(ha);
+    copy.hash_units(hb);
+    CHECK(ha.digest() == hb.digest() && copy.view(1).turret_yaw == sys.view(1).turret_yaw);
+    std::printf("turret: aim + extent, idle hold + return, undeploy wait %u frames, blocked reverse, SPMAT deployed rest, save ok\n",
+                clip_at - u0);
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -1776,9 +2161,12 @@ int main() {
     test_jetpack_accel_fallback();   // S7 t15
     test_jetpack_turn_bands();       // S7 t15
     test_jetpack_no_repeated_pose(); // S8 t09 (PR #19 review)
+    test_deploy();                   // S8 t11 / t12
+    test_turret();                   // S8 t24
     test_bike();
     test_bomber();
     test_fighter_space();
+    test_fighter_guard();
     test_space_avoid();
     test_speed_override();
     test_determinism();

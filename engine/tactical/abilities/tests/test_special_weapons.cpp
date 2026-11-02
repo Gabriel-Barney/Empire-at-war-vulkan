@@ -183,6 +183,31 @@ void test_lobbing() {
         CHECK_EQ(s.shots()[0].projectile, 2);
     }
     CHECK(!s.fire_at_object(9, 1, 400, w));  // not a SPECIAL_WEAPON
+    // S8 t30 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"): a weapon whose own WeaponBehavior takes the order gets no
+    // point volley; the pack still restarts and Fired is raised.
+    s.clear_outputs();
+    Vec3 handed{};
+    int calls = 0;
+    w.fire_at_position = [&](ObjectId id, Vec3 p) {
+        ++calls;
+        handed = p;
+        return id == 9;
+    };
+    CHECK(s.restart(9, 400, 0.0f));
+    CHECK(s.fire_lobbing_at(9, {50, 60, 0}, 400, w));
+    CHECK(calls == 1 && handed.x == 50.0f && handed.y == 60.0f);
+    CHECK_EQ(s.ready_frame(9), 700);
+    bool fired = false;
+    for (const SpecialWeaponEvent& e : s.events()) fired = fired || e.kind == SwEventKind::Fired;
+    CHECK(fired);
+    for (uint32_t f = 400; f < 500; ++f) s.tick(f, rng, w);
+    CHECK_EQ(s.shots().size(), 0);
+    // ... and a refusing hook keeps the volley ([port] no combat own weapon)
+    w.fire_at_position = [](ObjectId, Vec3) { return false; };
+    CHECK(s.restart(9, 500, 0.0f));
+    CHECK(s.fire_lobbing_at(9, {70, 80, 0}, 500, w));
+    s.tick(500, rng, w);
+    CHECK_EQ(s.shots().size(), 1);
 }
 
 SpecialWeaponDesc death_star() {  // SpaceUnitsSupers.xml Death_Star

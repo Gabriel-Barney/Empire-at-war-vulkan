@@ -8,8 +8,10 @@
 //   * A unit may enter a cell iff every bit set in the cell is in its MovementClass mask:
 //     (effective & mask) == effective. Out-of-range cells read 0xFFFFFFFF (never passable).
 //   * LandObstacleBehavior footprints (§1.3) are sampled every 10 world units, rotated by the
-//     object's yaw; the water rule skips submerged samples. Stamps are reference counted per bit
-//     so unstamping restores exactly the previous effective values.
+//     object's yaw; the water rule skips submerged samples; a zero width or height samples nothing.
+//     S8 t13 (MOVEMENT §1.3 "Unstamp", corrected): retail recomputes a cell on every unstamp from
+//     base | the bits of the occupants that remain. The per-bit reference counts here give exactly
+//     that value (a bit stays set iff some remaining occupant stamps it), in any stamp/unstamp order.
 //   * OI tactical: secondary occupants (§1.1 step 3) - stamp_secondary() ORs an object's
 //     SecondaryOccupationPassability into the cells it occupies as a secondary occupant (own list, so
 //     one object can be a hard and a secondary occupant at once); Fine_Tune_Occupied_Passability (§1.3)

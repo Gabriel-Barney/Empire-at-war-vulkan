@@ -119,6 +119,9 @@ public:
     std::vector<int32_t> ability_finished() override;
     // S7 t21: TacticalBattle::movement_locked (0x39ad40) for the ambush member list.
     bool movement_locked(int32_t object_id) override;
+    // S7 t27: the L1 weather system's Sight_Range_Modifier for the type's Weather_Category (every owner weather-affected
+    // [port], as the fog's land sight range).
+    float sight_weather_factor(int32_t type, int32_t object_id) override;
     // HIJACK_UNIT (AI_GALACTIC_3 §4.3): GalacticSim::magic_spawn at the battle planet, a surface unit launched into the
     // orbit fleet (FAILED when that fails, e.g. blockaded), TacticalBattle::add_reserve; returns the new pool entry.
     // Refused before spawning when the type is not in the battle tables. [port] the galactic AI free store is not touched.
@@ -176,6 +179,7 @@ private:
     std::vector<ai::tactical::HintZone> zones_;
     ai::tactical::ZoneLocator zone_locator_;  // position -> zone (A1_READINGS §4)
     std::unique_ptr<ai::tactical::TacticalAiWorld> world_;
+    uint32_t order_listener_ = 0;   // S7 t31: TacticalBattle::add_order_replaced_listener token (world_->order_replaced)
     std::vector<uint8_t> ai_side_;  // per player: has a tactical AI
     uint32_t stale_ = 0;  // object orders whose target died before execution (no-ops)
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed_;  // event name -> (applied, rejected) [diagnostic]
@@ -184,10 +188,14 @@ private:
     // (draw_unit_ai_stamps, two synced draws) when fill() first lists it; ascending id.
     std::map<objects::ObjectId, int32_t> unit_ai_stamps_;
     std::vector<objects::ObjectId> team_units(uint8_t player, uint32_t wire) const;  // battle host: unit or TEAM members
+    // S7 t26: signal 0xb (a new order replaces the unit's order) on every unit an executed AI / script order took.
+    void order_signals(uint8_t player, const commands::EventData& ev);
+    // The ordered-attack hostility test (0x39a450 -> Is_Enemy 0x2824f0, relation == 1): the battle's relation table
+    // (TACTICAL_COMBAT §2.10, S7 t30), where an Is_Neutral player is relation 2.
+    bool hostile_owner(uint8_t player, int32_t owner) const;
     lua::TacticalScriptHooks tactical_;    // battle host: script_gaps.hpp hooks of the tactical AI VMs (L1 final list)
 #ifdef ALAMO_LUA_HAVE_FOG
-    // refixf t03: only object_hidden is set (Find_Nearest's FOW_Object_Hidden test); fog stays null, so the AI VMs'
-    // FogOfWar.* bindings keep answering "Command only valid in a tactical game" as before.
+    // refixf t03: object_hidden (Find_Nearest's FOW_Object_Hidden test); S7 t34: fog = the battle's fog (FogOfWar.*).
     lua::FogScriptHooks fog_hooks_;
 #endif
     lua::RemainingScriptHooks remaining_;  // L1 bindings: script_remaining.hpp hooks of the tactical AI VMs (Divert; Int-final: strikes, damage stats, fields, weather, shields)

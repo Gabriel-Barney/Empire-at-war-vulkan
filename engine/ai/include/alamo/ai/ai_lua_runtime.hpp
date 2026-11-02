@@ -136,4 +136,9 @@ private:
 // sorted with sort_plan_files.
 std::vector<std::string> list_plan_files(const std::function<std::vector<std::string>(std::string_view)>& list);
 
+// S7 t27: the script errors of a plan / free-store VM for lua_errors() and the AI log: its thread errors (errors()) and
+// the "SCRIPT ERROR: ..." lines the bindings log without unwinding (LuaVm::messages(), e.g. Move_To(nil)), each as
+// `prefix` + line, appended to `out` (thread errors first, then the messages in order). Diagnostics only.
+void append_script_errors(const lua::LuaVm& vm, const std::string& prefix, std::vector<std::string>& out);
+
 }  // namespace alamo::ai

@@ -151,6 +151,23 @@ bool AbilitySystem::locked(const Obj& o) const {
     return o.immobilize > 0 || (host_.movement_locked && host_.movement_locked(o.id));
 }
 
+void AbilitySystem::snap_face(Obj& o, ObjectId target) {
+    // S8 t10 (LOB_SOLVER §3.5 "Facing at apply", Grenade_Attack 0x700860 / Remote_Bomb 0x719c90): angles 0x20acd0 from the
+    // unit to the target's RAW position (no Ranged_Target_Z_Adjust; roll and pitch 0), snapped at once by 0x3a8710 (no turn
+    // rate). Skipped while obj +0x3a0 & 0x10 (weapons disabled / stunned). Not re-faced at the throw, not restored after.
+    if (o.weapons_disabled || !host_.snap_yaw || target == kNoObject || !combat_->has_unit(target)) return;
+    const Vec3 a = position(o), b = combat_->position(target);
+    const float dx = b.x - a.x, dy = b.y - a.y;
+    if (dx == 0.0f && dy == 0.0f) return;  // [port] no direction: the facing is kept
+    const float yaw = dmath::atan2(dy, dx) * (180.0f / dmath::kPiF);
+    host_.snap_yaw(o.id, yaw);
+    if (o.combat_unit && combat_->has_unit(o.id)) {  // the combat facing at once (the host re-pushes it every tick)
+        float s = 0.0f, c = 1.0f;
+        dmath::sincos(yaw * (dmath::kPiF / 180.0f), s, c);
+        combat_->set_facing(o.id, Vec3{c, s, 0.0f});
+    }
+}
+
 void AbilitySystem::lock_pair(Obj& o, uint8_t flag, bool lock, uint32_t frame) {
     // OI follow-up t04 (A1_READINGS §28.9 table): one caller's lock / unlock on the shared counter. [port] the flag keeps
     // each pair balanced (the original's unconditional releases are hidden by the clamp at 0).
@@ -330,14 +347,19 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             // S8 t04 (LOB_SOLVER §3.4): Grenade_Type is a category-3 projectile with a lob solution from the unit's
             // position to the target's position (no z adjust); otherwise refused (the ability is not consumed).
             if (!combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, combat_->position(target))) return false;
-            if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return false;  // unit ability 22's counter <= 0
+            // S8 t10 follow-up (LOB_SOLVER §3.5 "Facing at apply", last item): with ABILITY_COUNTDOWN and unit ability 22's
+            // counter > 0 the apply returns 1 WITHOUT the face / stop / lock / pending block: the request is consumed (a
+            // pending order is not retried) and nothing is thrown [M on the meaning; the port applies the flow as read].
+            if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return true;
+            snap_face(o, target);  // S8 t10: yaw snapped to the target's raw position
             stop_order(o.id, frame);
-            lock_pair(o, kLockGrenade, true, frame);  // face, stop, lock (0x3a8e50 1; A1_READINGS §28.9)
+            lock_pair(o, kLockGrenade, true, frame);  // stop, lock (0x3a8e50 1; A1_READINGS §28.9)
             sp.applied = 1;
             sp.target = target;
             sp.phase = 0;
             sp.next = frame;  // toss starts once not moving / turning
-            if (o.combat_unit) combat_->clear_targets(o.id);  // targeting suspended
+            // S8 t25: Disable TARGETING (slot 9) only - the targets are kept (was clear_targets).
+            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, true);
             return true;
         }
 
@@ -611,12 +633,14 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (has_target && !range_ok(o, s, remote_bomb_range_target(target))) return false;
             if (has_target && !combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, combat_->target_point(target)))
                 return false;
-            // S8 t06: face (yaw) [port: the facing is the movement host's, not turned here], stop, movement lock, TARGETING
-            // disabled [port: its targets cleared, as Grenade_Attack]; pending "waiting to stop" with the target. No toss and
-            // no recharge yet (class_update). [port] Without a target object the bomb is placed at the unit at the toss.
+            // S8 t06 / t10: face (the yaw snapped to the target's raw position, LOB_SOLVER §3.5 "Facing at apply"), stop,
+            // movement lock, TARGETING disabled [port: its targets cleared, as Grenade_Attack]; pending "waiting to stop" with
+            // the target. No toss and no recharge yet (class_update). [port] Without a target object the bomb is placed at the
+            // unit at the toss.
+            if (has_target) snap_face(o, target);
             stop_order(o.id, frame);
             lock_pair(o, kLockRemoteBomb, true, frame);
-            if (o.combat_unit) combat_->clear_targets(o.id);
+            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, true);  // S8 t25: TARGETING disabled
             sp.applied = 1;
             sp.target = has_target ? target : kNoObject;
             sp.phase = 0;
@@ -1243,9 +1267,11 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
             break;
         case C::GrenadeAttack:  // vf4 0x700d00: targeting / locomotor re-enabled, unlock (A1_READINGS §28.9)
             lock_pair(o, kLockGrenade, false, frame);
+            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, false);  // S8 t25
             break;
         case C::RemoteBomb:  // S8 t06 (0x719ee0 end / interruption): TARGETING and the locomotor enabled, unlock
             lock_pair(o, kLockRemoteBomb, false, frame);
+            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, false);  // S8 t25
             break;
         case C::Earthquake:  // §4.14 remove: FB_Release / FTK_Release one-shot, then the idle loop
         case C::Telekinesis:
@@ -1323,10 +1349,15 @@ bool AbilitySystem::remote_bomb_toss(Obj& o, const SpecialAbilityDesc& s, Object
         l.point = l.from;
         l.fuse_seconds = 1.0e9f;
     }
-    if (!combat_->launch_projectile(l, frame) || combat_->projectile_count() == 0) return false;
-    remote_bombs_.push_back(RemoteBomb{o.owner, combat_->projectile(combat_->projectile_count() - 1).serial});
-    start_recharge(o, kPlaceRemoteBomb);
-    return true;
+    const bool spawned = combat_->launch_projectile(l, frame) && combat_->projectile_count() > 0;
+    if (spawned) {
+        remote_bombs_.push_back(RemoteBomb{o.owner, combat_->projectile(combat_->projectile_count() - 1).serial});
+        start_recharge(o, kPlaceRemoteBomb);
+    }
+    // S8 t10 (LOB_SOLVER §3.5 "MARKER removal"): after the spawn attempt, whether or not a bomb spawned, a MARKER target
+    // is killed (0x391310(marker, 1)); the host knows which objects are markers (its Dummy_Barrage_Targets).
+    if (target != kNoObject) event(AbilityEventKind::MarkerTossed, kPlaceRemoteBomb, o.id, target, frame);
+    return spawned;
 }
 
 // ================================================================================================

@@ -535,6 +535,31 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
     // the battle host's obstacle-cell query walks the target's passability stamp (map placements' stamps move to their
     // objects); targets without a stamp (objects spawned during the battle) keep the half-extent rule.
     u.land_obstacle = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::LandObstacle);
+    // S8 t10 / t11 (TACTICAL_COMBAT §3.1.1 "Gate details" steps 6-7, §3.4): Can_Fighter_Fire_When_Idle (type +0x8a, default
+    // false), LOBBING_SUPERWEAPON (own weapon only by a fire-at-position order), TRANSPORT_LANDING (no own-player sweep hit).
+    u.can_fighter_fire_when_idle = ty.get_bool(t, "Can_Fighter_Fire_When_Idle");
+    static const objects::BehaviorTypeId kLobbing = objects::behavior_type_id("LOBBING_SUPERWEAPON");
+    u.lobbing_superweapon = kLobbing != objects::kNoBehavior && ty.has_behavior(t, objects::BehaviorSet::Union, kLobbing);
+    // S8 t26 / t27 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", "Bone list"): TURRET (the lobbing charge-up aims it),
+    // Lobbing_Superweapon_Chargeup_Frames (vanilla 90 [M: the default without the tag]) and the Target_Bones found on the
+    // type's model for the battle mode (battle host with model data only).
+    static const objects::BehaviorTypeId kTurret = objects::behavior_type_id("TURRET");
+    u.turret = kTurret != objects::kNoBehavior && ty.has_behavior(t, objects::BehaviorSet::Union, kTurret);
+    if (u.lobbing_superweapon && !ty.get_string(t, "Lobbing_Superweapon_Chargeup_Frames").empty())
+        u.lobbing_chargeup_frames = static_cast<uint32_t>(std::max(0, ty.get_int(t, "Lobbing_Superweapon_Chargeup_Frames")));
+    if (s.model_mode >= 0) (void)target_bones(t, s.model_mode == 1, u.target_bones);
+    u.transport_landing = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::TransportLanding);
+    // S8 t10 (LOB_SOLVER §5.1): Num_Garrison_Guns and the gun-bone table (battle host with model data only); the model ALT
+    // comes from Land_Damage_Thresholds / _Alternates (TACTICAL_GAPS §6.3).
+    u.num_garrison_guns = ty.get_int(t, "Num_Garrison_Guns");
+    if (u.num_garrison_guns != 0 && s.model_mode >= 0) (void)garrison_bones(t, s.model_mode == 1, u.num_garrison_guns, u.garrison_bones);
+    {
+        const auto th = ty.get_list(t, "Land_Damage_Thresholds");
+        const auto al = ty.get_list(t, "Land_Damage_Alternates");
+        for (size_t k = 0; k < th.size() && k < al.size(); ++k)
+            u.damage_alternates.emplace_back(static_cast<float>(objects::c_atof(trim(th[k]))),
+                                             static_cast<int32_t>(objects::c_atof(trim(al[k]))));
+    }
     if (s.full) s9_unit_fields(t, u, s);
     return u;
 }
@@ -796,6 +821,7 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
             mv::AvoidModel::Mesh mesh;
             mesh.name = upper_str(mi.name);
             mesh.shield = mesh.name == "SHIELD";
+            mesh.bone_visible = mi.attach_bone >= m.skeleton.visible.size() || m.skeleton.visible[mi.attach_bone] != 0;  // S8 t13 ray set
             bool first = true;
             for (uint32_t si = mi.first_submesh; si < mi.first_submesh + mi.submesh_count && si < m.submeshes.size(); ++si) {
                 const assets::Submesh& sm = m.submeshes[si];
@@ -892,6 +918,15 @@ const BattleCatalog::ModelInfo* BattleCatalog::model_info(uint32_t type, bool sp
                 info->bone_pos.push_back({w.m[0][3], w.m[1][3], w.m[2][3]});
                 info->bone_rot.push_back({w.m[0][0], w.m[0][1], w.m[0][2], w.m[1][0], w.m[1][1], w.m[1][2], w.m[2][0], w.m[2][1], w.m[2][2]});
             }
+            // S8 t10 (0x12dca0 / 0x13f8c0): the highest digit after "_ALT" in the mesh names.
+            for (const assets::MeshInfo& mi : m.meshes) {
+                const std::string n = upper_str(mi.name);
+                for (size_t i = 0; i + 5 <= n.size(); ++i)
+                    if (n.compare(i, 4, "_ALT") == 0 && n[i + 4] >= '0' && n[i + 4] <= '9') {
+                        info->max_alt = std::max<int32_t>(info->max_alt, n[i + 4] - '0');
+                        break;
+                    }
+            }
         }
         break;  // the first named model field decides (a missing file: no model data)
     }
@@ -957,6 +992,58 @@ bool BattleCatalog::muzzle_bones(uint32_t type, bool space, std::vector<tactical
         // hard-point bones (hardpoint_on_model).
         const auto& p = m->bone_pos[static_cast<size_t>(b)];
         out.push_back(tactical::Vec3{-p[1] * scale, p[0] * scale, p[2] * scale});
+    }
+    return true;
+}
+
+bool BattleCatalog::target_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const {
+    out.clear();
+    const auto names = types_->get_list(type, "Target_Bones");
+    if (names.empty()) return true;
+    const ModelInfo* m = model_info(type, space, false);
+    if (!m) return false;
+    float scale = types_->columns().scale_factor[type];
+    if (!(scale > 0.0f)) scale = 1.0f;
+    for (const std::string_view n : names) {
+        const std::string name = upper_str(trim(n));
+        if (name.empty()) continue;
+        const int32_t b = m->find(name);
+        if (b < 0) continue;  // missing on the model: dropped
+        // ALO model space (nose -Y, left +X, up +Z) -> the combat unit-local frame, as muzzle_bones.
+        const auto& p = m->bone_pos[static_cast<size_t>(b)];
+        out.push_back(tactical::Vec3{-p[1] * scale, p[0] * scale, p[2] * scale});
+    }
+    return true;
+}
+
+bool BattleCatalog::garrison_bones(uint32_t type, bool space, int32_t guns,
+                                   std::vector<std::vector<tactical::combat::GarrisonBone>>& out) const {
+    out.clear();
+    const ModelInfo* m = model_info(type, space, false);
+    if (!m) return false;
+    if (guns <= 0) return true;
+    float scale = types_->columns().scale_factor[type];
+    if (!(scale > 0.0f)) scale = 1.0f;
+    constexpr float kRadToDeg = 57.295779513082320876f;
+    for (int32_t a = 0; a < m->max_alt; ++a) {  // M = the highest _ALT index: ALT M itself has no entry
+        std::vector<tactical::combat::GarrisonBone> entry(static_cast<size_t>(guns));
+        for (int32_t i = 0; i < guns; ++i) {
+            const std::string name = (i <= 9 ? "FP_0" : "FP_") + std::to_string(i) + "_ALT" + std::to_string(a);
+            const int32_t b = m->find(name);
+            if (b < 0) continue;  // missing: -1
+            tactical::combat::GarrisonBone& g = entry[static_cast<size_t>(i)];
+            g.valid = true;
+            // ALO model space (nose -Y, left +X, up +Z) -> the combat unit-local frame, as muzzle_bones; the x axis (matrix
+            // column 0, row-major bone_rot[0] / [3] / [6]) turned the same way.
+            const auto& p = m->bone_pos[static_cast<size_t>(b)];
+            g.pos = tactical::Vec3{-p[1] * scale, p[0] * scale, p[2] * scale};
+            if (static_cast<size_t>(b) < m->bone_rot.size()) {
+                const auto& r = m->bone_rot[static_cast<size_t>(b)];
+                const float ax = -r[3], ay = r[0];
+                if (ax != 0.0f || ay != 0.0f) g.yaw_deg = dmath::atan2(ay, ax) * kRadToDeg;
+            }
+        }
+        out.push_back(std::move(entry));
     }
     return true;
 }

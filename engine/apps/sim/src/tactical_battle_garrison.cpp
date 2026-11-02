@@ -406,6 +406,7 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
     }
     if (ids.empty()) return R::InvalidUnit;
     clear_queues(ids);
+    raise_order_replaced(ids);  // S7 t31: garrison enter (A1_READINGS §33.3 [M: raised at the order])
     const Vec3 a = garrison_.approach_point(holder, store.position(hh), store.facing(hh));
     exec_move(mode, ids, a.x, a.y, rng, mv::kNoFacing, false);  // group move to the approach point (cancels older ones)
     uint32_t n = 0;
@@ -427,7 +428,10 @@ cmd::RejectReason TacticalBattle::order_leave_garrison(TacticalMode& mode, uint8
         const objects::ObjectHandle hh = store.find(holder);
         const Vec3 p = store.exists(hh) ? store.position(hh) : store.position(u->h);
         const Vec3 f = store.exists(hh) ? store.facing(hh) : Vec3{1.0f, 0.0f, 0.0f};
-        if (garrison_.order_exit(id, p, f, frame_)) ++n;
+        if (garrison_.order_exit(id, p, f, frame_)) {
+            ++n;
+            raise_order_replaced(id);  // S7 t31: garrison exit (A1_READINGS §33.3)
+        }
     }
     s4_apply(mode);
     return n > 0 ? R::None : R::InvalidUnit;

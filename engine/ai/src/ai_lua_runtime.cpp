@@ -264,6 +264,12 @@ void PlanScriptRuntime::release(uint32_t plan, std::unique_ptr<lua::LuaVm> vm) {
 
 size_t PlanScriptRuntime::pooled(uint32_t plan) const { return plan < entries_.size() ? entries_[plan].free.size() : 0; }
 
+void append_script_errors(const lua::LuaVm& vm, const std::string& prefix, std::vector<std::string>& out) {
+    for (const std::string& e : vm.errors()) out.push_back(prefix + e);
+    for (const std::string& m : vm.messages())
+        if (m.starts_with("SCRIPT ERROR")) out.push_back(prefix + m);
+}
+
 std::vector<std::string> list_plan_files(const std::function<std::vector<std::string>(std::string_view)>& list) {
     std::vector<std::string> out;
     for (const char* folder : kPlanFolders) {

@@ -186,4 +186,21 @@ bool avoid_precise_segment(const AvoidObstacle& o, F3 a, F3 b, uint32_t mask, ui
     return any;
 }
 
+bool avoid_ray_any(const AvoidObstacle& o, F3 a, F3 b) {
+    if (!o.model) return false;
+    const F3 ma = avoid_to_model(o, a), mb = avoid_to_model(o, b);
+    const F3 d = f3_sub(mb, ma);
+    for (const AvoidModel::Mesh& mesh : o.model->meshes) {  // ORed: any hit decides
+        if (!mesh.bone_visible || (mesh.shield && o.skip_shield)) continue;
+        bool inside = false;
+        float tb = 0.0f;
+        if (!segment_box_t(ma, d, mesh.lo, mesh.hi, 1.0f, inside, tb)) continue;  // AABB pretest
+        for (size_t i = 0; i + 2 < mesh.tris.size(); i += 3) {
+            float t = 0.0f;
+            if (segment_triangle_t(ma, d, mesh.tris[i], mesh.tris[i + 1], mesh.tris[i + 2], 1.0f, t)) return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace alamo::tactical::movement
