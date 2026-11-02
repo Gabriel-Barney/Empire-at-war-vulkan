@@ -30,7 +30,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 1;
+constexpr uint32_t kMovementSaveVersion = 2;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit)
 
 // u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
 template <class F>
@@ -292,6 +292,11 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.f32(d.strafe_distance);
     io.f32(d.prepare_strafe_height);
     io.b(d.has_pre_turn_anim);
+    io.b(d.uses_multiple_locomotors);  // S7 t06 (version 2)
+    io.b(d.has_secondary_locomotor);
+    io.e8(d.secondary_locomotor, valid_locomotor);
+    io.f32(d.alt_max_speed);
+    io.f32(d.alt_turn_rate);
 }
 
 template <class IO, class T>
@@ -421,6 +426,8 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.f32(u.threat);
     io_special(io, u.sm);
     io_special_params(io, u.sp);
+    io.e8(u.primary_locomotor, valid_locomotor);  // S7 t06 (version 2): d.locomotor is the active one
+    io.b(u.on_secondary);
     io_fighter(io, u.fs);
     io.f32(u.fp.max_thrust);
     io.f32(u.fp.min_follow_distance);

@@ -126,6 +126,9 @@ public:
     // fallback) for the fighter avoidance test: collision bound, COLLISIONBOX, collision-enabled mesh triangles in model
     // space (bind pose). Null without model data. Cached per (type, mode) behind the model mutex.
     const tactical::movement::AvoidModel* avoid_model(uint32_t type, bool space) const;
+    // S7 t07 (MOVEMENT §2.2 model-extent fallback, SpaceObstacleHooks): half x / y of avoid_model(type, space = true)'s
+    // collision bound (1 / 1 when the model has no collision mesh); false without model data.
+    bool space_model_half_extents(uint32_t type, float& half_x, float& half_y) const;
     // --- end battle host ---
 #ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war GameConstants (Desired{Land,Space}FOWCellSize, {Land,Space}FOWRegrowTime, AIUsesFogOfWar{Land,Space},

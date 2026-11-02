@@ -1,5 +1,7 @@
 #include "alamo/tactical/movement/unit_params.hpp"
 
+#include <string_view>
+
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
 
@@ -34,6 +36,15 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti, flo
     d.strafe_distance = t.get_float(ti, "Strafe_Distance");
     d.prepare_strafe_height = t.get_float(ti, "Prepare_Strafe_Height");
     d.has_pre_turn_anim = t.get_bool(ti, "Has_Pre_Turn_Anim");
+    // S7 t06: Uses_Multiple_Locomotors (MOVEMENT §3.1). The primary is the behaviour-list locomotor the host routes
+    // ([M]: the swap back builds Primary_Locomotor_Name; every FoC user names the WALK_LOCOMOTOR of its list).
+    d.uses_multiple_locomotors = t.get_bool(ti, "Uses_Multiple_Locomotors");
+    const std::string_view secondary = t.get_string(ti, "Secondary_Locomotor_Name");
+    d.has_secondary_locomotor = !secondary.empty();
+    d.secondary_locomotor = locomotor_kind_from_token(secondary);
+    if (t.value(ti, objects::find_type_field("Alternate_Max_Speed")) != nullptr) d.alt_max_speed = t.get_float(ti, "Alternate_Max_Speed");
+    if (t.value(ti, objects::find_type_field("Alternate_Max_Rate_Of_Turn")) != nullptr)
+        d.alt_turn_rate = t.get_float(ti, "Alternate_Max_Rate_Of_Turn");
     // OI tactical: stagger, jiggle and crush fields (MOVEMENT.md §1.6, §3.5 step 6, §5.5).
     d.path_frame_delay = t.get_int(ti, "PathFrameDelay");
     d.formation_raggedness = t.get_float(ti, "FormationRaggedness");

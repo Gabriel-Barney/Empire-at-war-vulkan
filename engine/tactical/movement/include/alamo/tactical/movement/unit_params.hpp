@@ -57,6 +57,15 @@ struct UnitDesc {
     float strafe_distance = 0.0f;       // Strafe_Distance (+0x2118)
     float prepare_strafe_height = 0.0f; // Prepare_Strafe_Height (+0x1e24)
     bool has_pre_turn_anim = false;     // Has_Pre_Turn_Anim (+0x36)
+    // ---- S7 t06: Uses_Multiple_Locomotors swap (MOVEMENT.md §3.1, 0x3a9910; MovementSystem::use_secondary_locomotor) ----
+    bool uses_multiple_locomotors = false;  // Uses_Multiple_Locomotors (+0x74)
+    bool has_secondary_locomotor = false;   // Secondary_Locomotor_Name (+0x2078) is set ([M]: an empty name never swaps)
+    LocomotorKind secondary_locomotor = LocomotorKind::Default;  // its kind (locomotor_kind_from_token)
+    // [M] the readers of Alternate_Max_Speed (+0x380) / Alternate_Max_Rate_Of_Turn (+0x390) are untraced: the port
+    // uses them while the secondary locomotor is active (FoC: the jetpack users set both, e.g. Dark_Trooper_PhaseII
+    // walks at 1.0 and flies at 2.5). 0 = unset (the Max_Speed / Max_Rate_Of_Turn values stay).
+    float alt_max_speed = 0.0f;
+    float alt_turn_rate = 0.0f;
 };
 
 // Fills the type-derived members (id / position / yaw are left to the caller). `model_radius`
@@ -64,7 +73,8 @@ struct UnitDesc {
 // UnitCollisionClass applies (infantry 6, bike 10, vehicle 20, large 40, giant 80, other 15) [L].
 // REMAINING_GAPS §4.2-4.7 fields are filled too, except UnitDesc::locomotor, which stays Default: the host opts in
 // with locomotor_kind_from_type(types, type_index, mode) (special_locomotors.hpp), so existing hosts keep their
-// behaviour (and synced draws) until they route the kind.
+// behaviour (and synced draws) until they route the kind. The Uses_Multiple_Locomotors fields are filled too; they act
+// only when the host asks for the swap (use_secondary_locomotor / MoveOrder::switch_locomotor).
 UnitDesc unit_desc_from_type(const objects::GameObjectTypes& types, uint32_t type_index, float model_radius = 0.0f);
 
 }  // namespace alamo::tactical::movement
