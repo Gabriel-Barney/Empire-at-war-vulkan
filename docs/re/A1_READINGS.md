@@ -2118,3 +2118,89 @@ the order.
      (`model_info(type, true)`); blockers = live, not dying store objects passing the filters above with a
      `Space_Model_Name`, box = `TacticalMode::bounds_of` in x / y; touching boxes do not block [M]. [port] When a member's
      model is named but not loaded (no model data, e.g. headless runs without art), the whole drop keeps the rows of 6.
+
+## 37. Land hit / miss rules and capital-ship targeting at a station (a1j t03 / t04) [H unless tagged]
+
+**Questions.** t03: parked land units miss at point-blank range (foc-land seed 4: 252 shots, 4 hits in 600 frames).
+t04: in foc-station seeds 1 and 6 the Rebel capital ships shoot the station's fighters instead of the station or its
+fighter bays until about frame 12600.
+
+### 37.1 The point-blank misses were the muzzle / aim height, already fixed on main
+
+- Reproduced on d1c8ccf (before S8 t17 / t27): the shots left at ground level and aimed at the target's ground
+  position, so they passed under hovering or raised models (M1_Repulsor_Tank 1-5 % hits, Crawler at a T2B 0 %).
+- On a4b9223 (main, with muzzle bones, `Ranged_Target_Z_Adjust` and `Target_Bones` from S8 t17 / t27) the same pairs
+  hit 80-93 %. No further change was needed for this symptom.
+
+### 37.2 Own-weapon inaccuracy 0x549f80 (TACTICAL_COMBAT §3.1.2) [H]
+
+- Fixed radius (`Targeting_Fire_Inaccuracy_Fixed_Radius`): X and Y draws, **the Z draw in space only**. The port drew
+  3 on land.
+- Otherwise the type's **`Targeting_Fire_Inaccuracy`** table (type +0x508, 437 FoC entries, first category match,
+  scaled like the radius): s = d × |muzzle − led aim| / `Targeting_Max_Attack_Distance`, 3 draws. The port ignored the
+  table, so nearly every land unit fired with no spread (only 5 types have a fixed radius).
+- [M] the max with the weapon entry's own table (types with several weapons), the behaviour-slot override radius, and
+  MISSILE / BOMB / STATIC_BOMB carrying the offset in the pack instead of aiming at it: not modelled.
+
+### 37.3 Hardpoint inaccuracy draw gate 0x381dc0 (TACTICAL_COMBAT §3.1 step 10) [H]
+
+The distance branch draws only when the scaled distance, the XY distance and `Get_Fire_Range` are all > 0. The port
+drew 3 (with spread 0) for a target category with no table entry. Space CRCs move by this.
+
+### 37.4 Ground test of straight shots 0x4d0630 (TACTICAL_COMBAT §3.4 step 1) [H]
+
+Land only. DEFAULT / unknown categories skip the test while the target point is ahead on all three axes (sign test);
+every other category (LASER included) and a shot with no target are tested each step. A ground hit before any object
+hit detonates the shot at the ground point. The port had no ground test for straight shots, so shots fired into a
+ridge flew through it.
+
+### 37.5 Capital-ship target choice at a station (t04)
+
+- Selection (§2.4 scoring / replacement) and the path-B formation-goal promotion (§2.8 B) match the spec; no change.
+- **Divergence: slot 43's extent E.** Retail: `Custom_Hard_X/YExtent` × `Scale_Factor`, else |model bbox max.x / max.y| ×
+  `Scale_Factor` (0x371e70 / 0x372040, TACTICAL_GAPS §3.1). The port fell back to the unit radius; for
+  `Empire_Star_Base_2` (no Custom_Hard extents, no model radius passed) that is the collision-class constant, far
+  smaller than the station's box. Ships 2000-2500 from the station's centre were out of range, so the Attack_Move goal
+  on the station was never promoted. Fixed: `UnitDesc::model_x_extent / model_y_extent` from the catalog's model box.
+  Seed 1: the Calamari Cruisers now lock the station by frame 6000 (before: about 9000).
+- **What is left is AI-side (not combat).** The space AI's `SetClassPriorities(MainForce, "Attack_Move")` sets the
+  `Capital_Attack_Move` override (it has no Capital entry, so a station scores 1e18 and every fighter or bomber outranks
+  it in auto-acquire; it is reached only through the goal, path B). The override stays on the ships after the plan's
+  AITarget dies. In seed 8 the Calamaris kill their AITarget (a Tartan) at frame 3300, then get no new goal until
+  frame 12900 and spend 9000 frames auto-targeting fighters at 1360 from the station. In the original the same data
+  gives the same auto choice, so the question is how soon the AI re-plans an attack on the station
+  (engine/ai/tactical, battle_ai.cpp; not changed here).
+
+### 37.6 Battle ends, `--skirmish-ai <map> --seed N --ticks 20000 --workers 4 --expect-battle-end`
+
+| seed | foc-land before (a4b9223) | foc-land after | foc-station before | foc-station after |
+|---|---|---|---|---|
+| 1 | Empire, all-retreated, 2433 | Empire, all-retreated, 2241 | cap | cap |
+| 2 | Empire, all-retreated, 2799 | Empire, all-retreated, 2988 | Rebel, all-destroyed, 8616 | Rebel, all-retreated, 8010 |
+| 3 | Empire, all-retreated, 2802 | Empire, all-retreated, 2802 | Rebel, all-retreated, 14118 | cap |
+| 4 | Empire, all-retreated, 2244 | Empire, all-retreated, 2619 | Rebel, all-destroyed, 13054 | Rebel, all-retreated, 13467 |
+| 5 | Empire, all-retreated, 2799 | Empire, all-retreated, 2988 | Rebel, all-destroyed, 12770 | Rebel, all-destroyed, 10934 |
+| 6 | Empire, all-retreated, 2988 | Empire, all-retreated, 2994 | Rebel, all-retreated, 10326 | Rebel, all-destroyed, 9082 |
+| 7 | Empire, all-retreated, 2991 | Empire, all-retreated, 2799 | cap | Rebel, all-destroyed, 10030 |
+| 8 | Empire, all-retreated, 2802 | Empire, all-retreated, 2994 | Rebel, all-retreated, 13791 | cap |
+| 9 | Empire, all-retreated, 2802 | Empire, all-retreated, 2988 |  |  |
+| 10 | Empire, all-retreated, 2988 | Empire, all-retreated, 2802 |  |  |
+| 11 | Empire, all-retreated, 2799 | Empire, all-retreated, 2799 |  |  |
+| 12 | Empire, all-retreated, 3183 | Empire, all-retreated, 2802 |  |  |
+
+Cells: winner, victory kind (all-retreated = the loser's units all retreated), end frame; cap = not ended at
+14400. Land: all 12 still end (2241-2994, before 2244-3183). Station: 5 of 8 end (before 6 of 8): 6 ends earlier by
+destruction, 7 now ends; 3 and 8 now reach the cap, 1 still does. Seed 8 is the AI gap of §37.5 (no goal 3300-12900).
+
+### 37.7 Golden and test effects (not regenerated)
+
+MSVC and clang: 152 of 161 pass, 0 warnings, the same CRCs on both. Failing, all from the new draws / extents:
+- CRC goldens: `alamo_sim_battle_tests` (synthetic tick 477, queue tick 399, bm tick 405: `rng` first),
+  `alamo_sim_l1_tests` (tick 127, `rng`), `alamo_headless_skirmish_ai_synthetic` (tick 341, `rng`),
+  `_foc` (tick 654, `battle.combat`), `_foc_land` (tick 837, `rng`), game smoke skirmish / land CRC logs.
+- `alamo_headless_skirmish_ai_foc_outcome_s6` / `_s9` (Kuat, `--expect-battle-end`) reach the cap; the other 14 seeds
+  end at 5724-9163 (before 5814-8506). Ablation: reverting all three space changes (extent fallback, own-weapon table,
+  hardpoint draw gate) restores the old runs exactly (7116 / 7503); reverting any one of them alone makes both seeds
+  end again, so this is path sensitivity, not one rule. In the new seed 6 run the Empire's Tartan and bombers have no
+  goal and no target from frame 8700 to about 12900 while a lone Nebulon B duels the Star Destroyer: the same AI
+  re-plan gap as §37.5. The combat unit test's space golden (`combat_space_crc.txt`) is unchanged.
