@@ -16,7 +16,8 @@
       RNG draws per tick, fiscal cycles, planet owners, fleet moves, production, object counts, credits, Lua perception.
       Each divergence gets its first tick and the engine module it points at. --port-exe runs the port itself
       (galactic: alamo_headless --economy --galactic-ai --campaign <trace campaign> --human <its faction> --seed <trace
-      seed> --ticks <trace ticks>; needs ALAMO_FOC_DATA / ALAMO_EAW_DATA). Logic: analysis/q2_parity.py. Exit 1 if
+      seed> --ticks <trace ticks> --story --trace-out <port-out>/port.q2t; needs ALAMO_FOC_DATA / ALAMO_EAW_DATA); the port's
+      state trace then feeds owners, object counts, credits and cycles per tick. Logic: analysis/q2_parity.py. Exit 1 if
       anything diverges.
   q2trace.py selftest [--reader q2reader.exe]
       Checks this file's hash/CRC code against fixed vectors (and against the reader's --selftest).
@@ -549,8 +550,13 @@ def run_port(a, trace_path, parity):
     os.makedirs(a.port_out, exist_ok=True)
     crc = os.path.join(a.port_out, "port.crc")
     ai = os.path.join(a.port_out, "port_ai.txt")
+    q2t = os.path.join(a.port_out, "port.q2t")
     cmd = [a.port_exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human, "--seed", str(seed),
            "--ticks", str(ticks), "--workers", str(a.port_workers), "--quiet", "--crc-out", crc, "--ai-log", ai]
+    if a.port_story:
+        cmd += ["--story"]  # q2f t03: the retail sandbox runs the campaign's story plots (start-of-game hero spawns)
+    if a.port_state_trace:
+        cmd += ["--trace-out", q2t]  # q2f t05: per-tick port state trace (owners, objects, credits, cycles)
     print("port run: " + " ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True, check=False)
     with open(os.path.join(a.port_out, "port_run.txt"), "w", encoding="utf-8", newline="\n") as fh:
@@ -558,10 +564,15 @@ def run_port(a, trace_path, parity):
     if r.returncode != 0 or not os.path.exists(crc):
         print("port run failed (exit %d), see %s" % (r.returncode, os.path.join(a.port_out, "port_run.txt")))
         return None
-    # Credits over time: the port prints credits only at the end of a run, so the same (deterministic) run is repeated
-    # with shorter --ticks at the trace's credit sample ticks (its first C line, then every 1800 ticks).
+    if a.port_state_trace and not os.path.exists(q2t):
+        print("port run wrote no state trace (an alamo_headless without --trace-out?); retry with --no-port-state-trace")
+        return None
+    trace_out = q2t if a.port_state_trace else None
+    # Credits over time: without the state trace the port prints credits only at the end of a run, so the same
+    # (deterministic) run is repeated with shorter --ticks at the trace's credit sample ticks (its first C line, then
+    # every 1800 ticks).
     series = {}
-    if a.port_credit_samples:
+    if a.port_credit_samples and not trace_out:
         first_c, mf = None, 0
         with open(trace_path, "r", encoding="ascii") as fh:
             for line in fh:
@@ -574,13 +585,13 @@ def run_port(a, trace_path, parity):
             samples = sorted({max(first_c, 1)} | set(range(parity.SAMPLE_EVERY, ticks + 1, parity.SAMPLE_EVERY)))
             for t in samples:
                 cmd_t = [a.port_exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human, "--seed", str(seed),
-                         "--ticks", str(t), "--workers", str(a.port_workers), "--quiet"]
+                         "--ticks", str(t), "--workers", str(a.port_workers), "--quiet"] + (["--story"] if a.port_story else [])
                 rt = subprocess.run(cmd_t, capture_output=True, text=True, check=False)
                 got = parity.summary_credits(rt.stdout)
                 if got is not None:
                     series[t] = got
             print("port credit samples: %d runs (%s)" % (len(series), ", ".join(str(t) for t in sorted(series))))
-    return crc, ai, series
+    return crc, ai, series, trace_out
 
 
 def compare_parity(a, parity):
@@ -592,7 +603,9 @@ def compare_parity(a, parity):
         got = run_port(a, trace_path, parity)
         if not got:
             return 2
-        a.port_crc, a.port_ai_log, port_credits = got
+        a.port_crc, a.port_ai_log, port_credits, port_trace = got
+        if port_trace:
+            a.port_trace = port_trace
     else:
         port_credits = None
     if not a.port_crc and not a.port_ai_log and not a.port_trace:
@@ -634,6 +647,10 @@ def main():
     c.add_argument("--port-ticks", type=int, help="port ticks (default: the trace's last mode frame)")
     c.add_argument("--no-port-credit-samples", dest="port_credit_samples", action="store_false",
                    help="skip the short port runs that sample credits over time (galactic, --port-exe)")
+    c.add_argument("--no-port-state-trace", dest="port_state_trace", action="store_false",
+                   help="do not ask the port run for its Q2TRACE state trace (--trace-out, q2f t05; older alamo_headless)")
+    c.add_argument("--no-port-story", dest="port_story", action="store_false",
+                   help="run the port without the campaign's story plots (no --story, q2f t03; older alamo_headless)")
     import importlib
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "analysis"))
     parity = importlib.import_module("q2_parity")

@@ -232,6 +232,7 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             return get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done();
         case SavePart::Combat:
             if (!all_saveable(combat_.get(), &l1_weather_)) return false;
+            l1_weather_.set_data(l1_weather_data_.get());  // the saved scenario resolves in it (weather starts on the first service)
             if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done())) return false;
             attach_rocket_terrain();  // refixf t01: the host terrain is not part of the save
             return true;
