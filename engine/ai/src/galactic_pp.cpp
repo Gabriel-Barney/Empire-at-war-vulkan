@@ -610,16 +610,21 @@ public:
         if (r.free_unit >= 0) return 0.5f;
         if (p_.is_ground_structure(r.type)) {
             if (!p_.has_target()) return kVeto;
-            const gal::PlanetState& ps = p_.w.sim.planets()[static_cast<size_t>(p_.target)];
-            const auto& rules = p_.w.sim.rules();
-            if (!p_.w.sim.surface_accessible(static_cast<PlanetIndex>(p_.target))) return kVeto;  // 0x375220
-            int32_t used = static_cast<int32_t>(ps.structures.size());  // 0x3f8af0 [M: + queued structures]
-            for (const gal::BuildEntry& e : p_.w.sim.queue_of(p_.tplanet(), gal::kGroundQueue))
-                if (e.type < rules.types.size() && rules.types[e.type].kind == gal::UnitKind::GroundStructure) ++used;
-            const auto& mg = p_.w.sim.map().planets.max_ground_base;
-            const int32_t slots = static_cast<size_t>(p_.target) < mg.size() && mg[static_cast<size_t>(p_.target)] >= 0
-                                      ? mg[static_cast<size_t>(p_.target)] : 5;  // 0x372740 [M]
-            if (used + p_.ground_queued >= slots) return kVeto;
+            const PlanetIndex tp = p_.tplanet();
+            const gal::PlanetState& ps = p_.w.sim.planets()[tp];
+            if (!p_.w.sim.surface_accessible(tp)) return kVeto;  // 0x375220
+            // Per-planet cap (type +0x87C Build_Max_Instances_Per_Planet, when >= 0): the instances on the planet
+            // (0x3f94f0) [H].
+            if (const gal::TypeInfo* x = p_.ti(r.type); x && x->max_instances_per_planet >= 0) {
+                int32_t here = 0;
+                for (const ObjectHandle s : ps.structures)
+                    here += p_.w.store.alive(s) && p_.w.store.type(s) == r.type ? 1 : 0;
+                if (here >= x->max_instances_per_planet) return kVeto;
+            }
+            // Used ground slots 0x3f8af0 + this PP's queued ground structures (0x140b3a534) < the slot max 0x372740
+            // (Special_Structures_Land; galactic_slots.hpp) [H].
+            const int32_t slots = p_.w.ground_slot_max(tp);
+            if (slots >= 0 && p_.w.ground_slots_used(tp) + p_.ground_queued >= slots) return kVeto;
         } else if (p_.is_orbital_structure(r.type)) {
             if (!p_.has_target()) return kVeto;
             const gal::PlanetState& ps = p_.w.sim.planets()[static_cast<size_t>(p_.target)];

@@ -53,9 +53,14 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
         out = pa->ctx.budget.pools_total();
         return true;
     };
+    // BudgetFractionToBuild 0x667120 fails only without a goal system (AI_GALACTIC_TOKENS) [H]. The AIBudgetClass is
+    // embedded in the goal system (+0x190), so it exists before its Init 0x6137b0; Init evaluates the category
+    // weights first (AI_GALACTIC_2 §3.2), when every rate / available still holds its constructed 0 [M: ctor zeros]
+    // (A2 f t01: failing here made the Empire's Infrastructure / MajorItem equations fail at Init, so Offensive got the
+    // whole starting bank).
     h.budget = [this](int32_t p, std::string_view category, double& rate, double& available) {
         const PlayerAi* pa = player_ai(p);
-        if (!pa || !pa->ctx.budget.initialised()) return false;
+        if (!pa) return false;
         if (category.empty()) {  // every category: budget +0x68 and the player's credits [H]
             rate = pa->ctx.budget.income_per_second();
             available = sim.credits(p);
