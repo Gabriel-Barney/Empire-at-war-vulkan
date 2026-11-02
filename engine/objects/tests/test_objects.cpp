@@ -1346,7 +1346,7 @@ static void test_store_save() {
         };
         // Header: version, mode, kind, type count, types digest. Slot 0 (offset 42): generation 0, used byte 2,
         // used flipped (free list no longer matches), type out of range, first behaviour id 0 / 0x6A.
-        CHECK(refused(0, 3) && refused(0, 0) && refused(4, 1) && refused(5, 1) && refused(6, 9) && refused(14, static_cast<uint8_t>(saved[14] ^ 1)));
+        CHECK(refused(0, 4) && refused(0, 0) && refused(4, 1) && refused(5, 1) && refused(6, 9) && refused(14, static_cast<uint8_t>(saved[14] ^ 1)));
         CHECK(refused(42, 0) && saved[43] == 0 && saved[44] == 0 && saved[45] == 0);
         CHECK(refused(46, 2) && refused(46, static_cast<uint8_t>(saved[46] ^ 1)) && refused(58, 0x7F));
         CHECK(saved[109] > 0 && refused(113, 0) && refused(113, 0x6A));
@@ -1378,17 +1378,17 @@ static void test_store_save() {
         ByteReader r(bytes);
         CHECK(s2.read(r) && r.done() && store_digest(s2) == store_digest(s1) && s2.id_counter().next() == s1.id_counter().next());
     }
-    // a1h t08: a version 1 save (no carried-type section) still loads; this store has no transports, so the v2 save
-    // ends with an empty section (u32 0).
-    {
-        std::vector<uint8_t> v1 = saved;
-        CHECK(v1.size() > 4 && v1[v1.size() - 4] == 0 && v1[v1.size() - 1] == 0);
-        v1[0] = 1;
-        v1.resize(v1.size() - 4);
+    // a1h t08 / a1i t05: version 1 (no carried-type section) and version 2 (no landing-persist section) saves still
+    // load; this store has no transports, so the v3 save ends with two empty sections (u32 0 each).
+    for (const uint8_t ver : {uint8_t{1}, uint8_t{2}}) {
+        std::vector<uint8_t> old = saved;
+        CHECK(old.size() > 8 && old[old.size() - 8] == 0 && old[old.size() - 1] == 0);
+        old[0] = ver;
+        old.resize(old.size() - (ver == 1 ? 8u : 4u));
         IdCounter iv;
         ObjectStore v(ModeKind::Space, StoreKind::Primary, types, &iv);
-        ByteReader r(v1);
-        CHECK(v.read(r) && r.done() && store_bytes(v) == saved);  // a moved on after the save point; it saves as v2
+        ByteReader r(old);
+        CHECK(v.read(r) && r.done() && store_bytes(v) == saved);  // a moved on after the save point; it saves as v3
     }
     remove_all_long(root, ec);
 }
@@ -1433,12 +1433,13 @@ static void test_carried_type() {
         ByteReader r(b);
         CHECK(t.read(r) && r.done() && t.carried_type(d) == company && t.carried_type(o) == company &&
               t.carried_type(plain) == kNone && store_digest(t) == store_digest(s) && store_bytes(t) == b);
+        // (a1i t05: the last 4 bytes are the empty landing-persist list)
         std::vector<uint8_t> bad = b;  // the last entry's type out of range: refused, store unchanged
-        bad[bad.size() - 1] = 0x7F;
+        bad[bad.size() - 5] = 0x7F;
         ByteReader rb(bad);
         CHECK(!t.read(rb) && store_bytes(t) == b);
         bad = b;  // the last entry names the plain object's slot (no transport pack): refused
-        bad[bad.size() - 8] = static_cast<uint8_t>(plain.slot());
+        bad[bad.size() - 12] = static_cast<uint8_t>(plain.slot());
         ByteReader rc(bad);
         CHECK(!t.read(rc) && store_bytes(t) == b);
     }
@@ -1451,6 +1452,22 @@ static void test_carried_type() {
     sp.type = drop;
     const ObjectHandle n = s.create(sp);
     CHECK(n.slot() == d.slot() && n != d && s.carried_type(n) == kNone);
+    // a1i t05: the landing persist flag (TransportDataPack +0xc9): the same objects, saved (version 3), hashed when set.
+    const uint64_t before_persist = store_digest(s);
+    CHECK(!s.landing_persist(o) && !s.set_landing_persist(plain, true) && !s.landing_persist(plain));
+    CHECK(s.set_landing_persist(o, true) && s.landing_persist(o) && store_digest(s) != before_persist);
+    {
+        const std::vector<uint8_t> b = store_bytes(s);
+        IdCounter i3;
+        ObjectStore t(ModeKind::Land, StoreKind::Primary, types, &i3);
+        ByteReader r(b);
+        CHECK(t.read(r) && r.done() && t.landing_persist(o) && !t.landing_persist(n) && store_digest(t) == store_digest(s));
+        std::vector<uint8_t> bad = b;  // the persist entry names the plain object's slot (no transport pack): refused
+        bad[bad.size() - 4] = static_cast<uint8_t>(plain.slot());
+        ByteReader rb(bad);
+        CHECK(!t.read(rb) && store_bytes(t) == b);
+    }
+    CHECK(s.set_landing_persist(o, false) && store_digest(s) == before_persist);
     std::printf("  carried type: TRANSPORT / TRANSPORT_LANDING only, saved, hashed when set, cleared with the object\n");
     remove_all_long(root, ec);
 }

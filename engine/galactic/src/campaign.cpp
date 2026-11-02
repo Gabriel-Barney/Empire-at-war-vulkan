@@ -1499,8 +1499,7 @@ RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& 
         // The AI's task-force invasions do not come here: GalacticTaskForce.Invade 0x6ce600 calls Land_Invade (invade())
         // directly. Then only the issuer's own units land. A list whose units are all dropped lands nothing (an empty
         // list given to invade() would mean "all of the player's units").
-        if (pause_ > 0) return RejectReason::NotAllowed;
-        if (linked_battle_pending_ && conflicts_ && conflicts_->in_queued_conflict(local_player_)) return RejectReason::NotAllowed;
+        if (paused()) return RejectReason::NotAllowed;
         const std::vector<uint32_t>& ids = ev.ids("units");
         std::vector<ObjectHandle> units;
         for (uint32_t id : ids) {

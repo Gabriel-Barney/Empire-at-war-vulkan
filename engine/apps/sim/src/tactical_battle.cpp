@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 
 #include "alamo/core/dmath.hpp"
@@ -832,9 +833,10 @@ Vec3 TacticalBattle::snap_passable(Vec3 p, uint32_t mask, bool always) const {
     return p;
 }
 
-void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
+void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32_t member_first, uint32_t member_count) {
     Participant& P = parts_[pi];
-    if (P.deployed) return;
+    const bool range = member_first != 0 || member_count != 0xFFFFFFFFu;  // a1i t04: one landing unload step
+    if (P.deployed && !range) return;
     P.deployed = true;
     const objects::GameObjectTypes& types = catalog_->types();
     const uint8_t side = P.side;
@@ -845,7 +847,8 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
     std::vector<uint32_t> members_types = spawn_types(P);
     if (P.other_type >= 0) members_types.assign(P.spots.size(), static_cast<uint32_t>(P.other_type));  // §3.2 step 3
     size_t spot = 0;
-    for (size_t mk = 0; mk < members_types.size(); ++mk) {
+    const size_t mk_end = std::min(members_types.size(), static_cast<size_t>(member_first) + member_count);
+    for (size_t mk = member_first; mk < mk_end; ++mk) {
         const uint32_t t = members_types[mk];
         mv::UnitDesc md = mv::unit_desc_from_type(types, t);
         md.locomotor = mv::locomotor_kind_from_type(types, t, space_ ? mv::MoveMode::Space : mv::MoveMode::Land);  // REMAINING_GAPS §4.3-4.7
@@ -865,7 +868,7 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng) {
             const size_t k = mk;
             if (k < drop_pos_.size()) {
                 pos = drop_pos_[k];
-                pos.z = map_.terrain.sample_height(pos.x, pos.y);
+                if (!space_) pos.z = map_.terrain.sample_height(pos.x, pos.y);
             } else {
                 pos = slot_position(side, movement_->classes().mask(md.movement_class));
             }
@@ -1171,6 +1174,7 @@ bool TacticalBattle::script_movement_locked(objects::ObjectId id) const {
 
 bool TacticalBattle::movement_locked(objects::ObjectId id) const {
     if (abilities_ && abilities_->immobilize_count(id) > 0) return true;
+    if (!landings_.empty() && landing_locked(id)) return true;  // a1i t04: the unload exit move (§35.2)
     return script_movement_locked(id);
 }
 
@@ -1474,10 +1478,78 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
             const bool human = player < galaxy_->players().size() && galaxy_->players()[player].human;
             if (!land_drop_valid(mode, static_cast<int32_t>(player), galactic_id, x, y, human, catalog_->use_reinforcement_points()))
                 return R::InvalidPosition;
-            const LandDropLayout lay = land_drop_layout(land_drop_shape(p.type), x, y, drop_yaw(p.side));
+            // a1i t05 (A1_READINGS §35.4 item 3): campaign refusals after the validity (silent): a type that stays in its
+            // transport during ground battles, or one the battle planet restricts (0x373490). [port] A transport whose
+            // contents hold such a type cannot be in the port's pool (it holds companies); the "battle decided" gate is [M].
+            if (!cfg_.skirmish) {
+                const objects::GameObjectTypes& types = catalog_->types();
+                if (p.type < types.size() && types.get_bool(p.type, "Stay_In_Transport_During_Ground_Battle")) return R::NotAllowed;
+                if (galaxy_->planet_restricts(req_.info.planet, p.type)) return R::NotAllowed;
+            }
+            const float yaw = drop_yaw(p.side);
+            const LandDropShape shape = land_drop_shape(p.type);
+            LandDropLayout lay = land_drop_layout(shape, x, y, yaw);
             if (lay.ok && p.other_type < 0) {
+                // a1i t04 (A1_READINGS §35.3): a company with a Company_Transport_Unit comes down in its landing object at
+                // (x, y); the members leave it for the unload offsets (0x643130: the team grid from 3.0 x the team
+                // bounds, turned by the landing's yaw) [port: placed there at once, snapped to a passable cell of their
+                // movement class; no exit move]. Without one the members drop at the validity layout's slots [port].
+                Landing landing = spawn_landing(mode, p, x, y);
+                landing.participant = i;
                 drop_pos_.clear();
-                for (const LandDropSlot& s : lay.slots) drop_pos_.push_back(Vec3{s.x, s.y, 0.0f});
+                if (landing.id != objects::kNoObjectId) {
+                    lay = land_drop_layout(shape, x, y, yaw, 3.0f);
+                    const objects::GameObjectTypes& types = catalog_->types();
+                    for (const LandDropSlot& s : lay.slots) {
+                        const mv::UnitDesc md = mv::unit_desc_from_type(types, s.type);
+                        drop_pos_.push_back(snap_passable(Vec3{s.x, s.y, 0.0f}, movement_->classes().mask(md.movement_class), false));
+                    }
+                    // Exit targets: the step's team offset / vehicle slot, on a cell passable for its first member.
+                    for (size_t g = 0, m = 0; g < lay.group_x.size(); ++g) {
+                        const uint32_t t = m < lay.slots.size() ? lay.slots[m].type : 0u;
+                        const mv::UnitDesc md = mv::unit_desc_from_type(types, t);
+                        landing.targets.push_back(
+                            snap_passable(Vec3{lay.group_x[g], lay.group_y[g], 0.0f}, movement_->classes().mask(md.movement_class), false));
+                        m += shape.create_team ? std::min<size_t>(std::max<uint32_t>(shape.squad, 1u), lay.slots.size()) : 1u;
+                    }
+                    if (cfg_.landing_unload_timed) {
+                        // §35.2: the company stays inside; landing_service runs the state machine. The reserve leaves the
+                        // pool now (deployed), its members spawn step by step.
+                        landing.timed = true;
+                        drop_pos_.clear();
+                        p.deployed = true;
+                        landings_.push_back(std::move(landing));
+                        ++stats_.reinforcements;
+                        return R::None;
+                    }
+                } else {
+                    for (const LandDropSlot& s : lay.slots) drop_pos_.push_back(Vec3{s.x, s.y, 0.0f});
+                }
+                const size_t first = units_.size();
+                deploy(mode, i, rng);
+                drop_pos_.clear();
+                if (landing.id != objects::kNoObjectId) {
+                    // [port] Every unload step runs at the order (the tactical AI takes the units at once, §35.3): the
+                    // signal 0x19 record is posted now; the landing object stays for the steps' timers, then leaves.
+                    LandingUnload rec;
+                    rec.landing = landing.id;
+                    rec.galactic_id = p.galactic_id;
+                    rec.owner = p.owner;
+                    rec.carried_type = p.type;
+                    for (size_t k = first; k < units_.size(); ++k) rec.units.push_back(units_[k].id);
+                    landings_unloaded_.push_back(std::move(rec));
+                    landing.state = 3;
+                    landing.remove_frame = frame_ + (static_cast<uint32_t>(landing.targets.size()) + 1u) * landing_step_frames(p.owner);
+                    landings_.push_back(std::move(landing));
+                }
+                ++stats_.reinforcements;
+                return R::None;
+            }
+        }
+        if (space_ && p.other_type < 0) {  // a1i t05: Find_Free_Placement per member (A1_READINGS §35.4 item 4)
+            std::vector<Vec3> spots;
+            if (space_member_spots(mode, p, x, y, spots)) {
+                drop_pos_ = std::move(spots);
                 deploy(mode, i, rng);
                 drop_pos_.clear();
                 ++stats_.reinforcements;
@@ -1596,7 +1668,7 @@ bool drop_token_is(std::string_view list, std::string_view token) {  // case-ins
 }
 }  // namespace
 
-LandDropLayout land_drop_layout(const LandDropShape& shape, float px, float py, float yaw_deg) {
+LandDropLayout land_drop_layout(const LandDropShape& shape, float px, float py, float yaw_deg, float team_factor) {
     LandDropLayout out;
     const size_t n = shape.members.size();
     if (n == 0 || shape.hx.size() != n || shape.hy.size() != n) return out;
@@ -1614,13 +1686,18 @@ LandDropLayout land_drop_layout(const LandDropShape& shape, float px, float py, 
             drop_team(fx, fy, 20.0f * fs, sq, team, tbx, tby);
         else if (!drop_grid(2.0f * fx / 20.0f + fs, 2.0f * fy / 20.0f + fs, sq, team, tbx, tby))
             return out;
-        if (!drop_grid(2.5f * tbx, 2.5f * tby, teams, offs, bx, by)) return out;
+        if (!drop_grid(team_factor * tbx, team_factor * tby, teams, offs, bx, by)) return out;
         local.resize(n);
         for (size_t i = 0; i < n; ++i) {
             const size_t t = i / sq, j = i - t * sq;
             const Off2 o = offs[t];
             const Off2 m = drop_rotate(drop_yaw_of(o[0], o[1]), team[j][0], team[j][1]);  // each team faces its offset
             local[i] = {o[0] + m[0], o[1] + m[1]};
+        }
+        for (uint32_t t = 0; t < teams; ++t) {  // a1i t04: one exit target per team (0x643130)
+            const Off2 r = drop_rotate(yaw_deg, offs[t][0], offs[t][1]);
+            out.group_x.push_back(px + r[0]);
+            out.group_y.push_back(py + r[1]);
         }
     }
     out.half_x = bx * 20.0f;
@@ -1635,6 +1712,10 @@ LandDropLayout land_drop_layout(const LandDropShape& shape, float px, float py, 
         sl.hx = shape.hx[i];
         sl.hy = shape.hy[i];
         sl.yaw_deg = drop_yaw_of(r[0], r[1]);
+        if (!shape.create_team) {  // vehicles: one exit target per member
+            out.group_x.push_back(sl.x);
+            out.group_y.push_back(sl.y);
+        }
     }
     out.ok = true;
     return out;
@@ -1682,6 +1763,17 @@ void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalo
     const bool mb = m && m->has_bounds;
     hx = (cx > 0.0f ? cx : mb ? std::fabs(m->max[0]) : 0.0f) * sc;
     hy = (cy > 0.0f ? cy : mb ? std::fabs(m->max[1]) : 0.0f) * sc;
+}
+
+void drop_deployed_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy) {
+    drop_half_extents(types, catalog, type, hx, hy);
+    if (type >= types.size()) return;
+    const float dx = types.get_float(type, "Custom_Hard_XExtent_Deployed");
+    if (!(dx > 0.0f)) return;  // 0x371d20: the deployed pair applies only when the deployed x extent is set
+    float sc = types.get_float(type, "Scale_Factor");
+    if (!(sc > 0.0f)) sc = 1.0f;
+    hx = dx * sc;
+    hy = types.get_float(type, "Custom_Hard_YExtent_Deployed") * sc;  // also when <= 0
 }
 
 LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const BattleCatalog* catalog, const galactic::ConflictRules& rules,
@@ -1745,6 +1837,251 @@ float TacticalBattle::drop_yaw(uint8_t side) const {
     return f.x == 0.0f && f.y == 0.0f ? 0.0f : yaw_of(f);
 }
 
+// a1i t04 (A1_READINGS §35.1 / §35.3): the landing object of a land reserve drop. L = the company's
+// Company_Transport_Unit[0], then its Landing_Transport_Variant when set; none -> no landing object (kNoObjectId). Created
+// at (x, y), z = terrain + L's Hover_Offset [the +0xd8 vehicle-height term is [M]], facing = the side's entry-facing
+// record, parent id = the reserve's galactic id; TRANSPORT_LANDING attached, carried type = the company type. Removal
+// frame: the unload steps (one per team of min(Max_Squad_Size, n) Create_Team members or per other member) plus the finish
+// step, each 2 s x (1 + s), s = the owner's Reinforcement_Deploy_Time_Multiplier list (0x4ad3a0: (int)(30 x seconds));
+// [port] the Land / Takeoff clips take no time and there is no clearance wait (§35.2 state 4).
+TacticalBattle::Landing TacticalBattle::spawn_landing(TacticalMode& mode, const Participant& p, float x, float y) {
+    Landing out;
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (p.type >= types.size()) return out;
+    const std::vector<objects::TypeIndex> tr = types.get_type_refs(p.type, "Company_Transport_Unit");
+    objects::TypeIndex l = tr.empty() ? objects::kNone : tr.front();  // the first entry (0x400f30)
+    if (l == objects::kNone || l >= types.size()) return out;
+    std::string_view vname = types.get_string(l, "Landing_Transport_Variant");  // one name (+0x1e68)
+    while (!vname.empty() && std::isspace(static_cast<unsigned char>(vname.front())) != 0) vname.remove_prefix(1);
+    while (!vname.empty() && std::isspace(static_cast<unsigned char>(vname.back())) != 0) vname.remove_suffix(1);
+    if (const objects::TypeIndex v = vname.empty() ? objects::kNone : types.resolve_name(vname); v != objects::kNone && v < types.size())
+        l = v;
+    objects::SpawnParams sp;
+    sp.type = l;
+    sp.owner = p.owner;
+    sp.position = {x, y, map_.terrain.sample_height(x, y) + types.get_float(l, "Hover_Offset")};
+    const Vec3 f = p.side < 2 ? drop_facing_[p.side] : Vec3{};
+    sp.facing = f.x == 0.0f && f.y == 0.0f ? facing_of_yaw(0.0f) : f;
+    sp.parent_mode_id = p.galactic_id;
+    const objects::ObjectHandle h = mode.spawn(sp, 1.0f);
+    objects::ObjectStore& st = mode.primary();
+    st.add_behavior(h, objects::beh::TransportLanding);
+    st.set_carried_type(h, p.type);
+    out.id = st.id(h);
+    out.h = h;
+    return out;
+}
+
+uint32_t TacticalBattle::landing_step_frames(int32_t player) const {
+    const float s = abilities_ ? abilities_->player_list(player, tactical::abilities::PlayerList::ReinforcementDeploy) : 0.0f;
+    const float secs = 2.0f * (1.0f + s);
+    return secs > 0.0f ? static_cast<uint32_t>(30.0f * secs) : 0u;  // 0x4ad3a0: (int)(FPS x seconds)
+}
+
+bool TacticalBattle::landing_hidden(objects::ObjectId landing) const {
+    for (const Landing& l : landings_)
+        if (l.id == landing) return l.state == 4;
+    return false;
+}
+
+uint32_t TacticalBattle::landings_in_flight(int32_t player) const {
+    uint32_t n = 0;
+    for (const Landing& l : landings_)
+        if (l.timed && l.state != 3 && parts_[l.participant].owner == player) ++n;
+    return n;
+}
+
+bool TacticalBattle::landing_locked(objects::ObjectId id) const {
+    for (const Landing& l : landings_)
+        if (l.timed && l.state == 2 && std::find(l.units.begin(), l.units.end(), id) != l.units.end()) return true;
+    return false;
+}
+
+// a1i t04 (A1_READINGS §35.2, timed mode): state 4 waits (hidden) until no other landing in state 1 / 2 overlaps its
+// footprint (drop_half_extents box along the yaw [port: the footprint AABB with z +-100 of 0x38de80 as an oriented box; only
+// this battle's landings are seen]); state 1 [port: the Land clip takes no time] turns into state 2 with the step timer;
+// each expiry spawns one team chunk (min(k, members left)) or one vehicle at the landing position (deploy member range)
+// and sends it on a group move to its exit target [port: no forced-move flag in the movement system], locked
+// (landing_locked); after the last member the next expiry finishes: unlock, the signal 0x19 record (landings_unloaded),
+// state 3 and the take-off [port: no Takeoff clip: removed at once]. Untimed landings are only removed at their frame.
+void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
+    objects::ObjectStore& store = mode.primary();
+    const objects::GameObjectTypes& types = catalog_->types();
+    auto footprint = [&](const Landing& l) {
+        DropBox b;
+        const Vec3 q = store.position(l.h), f = store.facing(l.h);
+        b.cx = q.x;
+        b.cy = q.y;
+        b.yaw_deg = f.x == 0.0f && f.y == 0.0f ? 0.0f : yaw_of(f);
+        sim::drop_half_extents(types, catalog_, store.type(l.h), b.hx, b.hy);
+        return b;
+    };
+    for (size_t li = 0; li < landings_.size(); ++li) {
+        Landing& l = landings_[li];
+        if (!store.alive(l.h)) {
+            l.state = 3;
+            l.remove_frame = 0;
+            continue;
+        }
+        if (!l.timed) continue;
+        const Participant& P = parts_[l.participant];
+        if (l.state == 4) {
+            bool blocked = false;
+            const DropBox mine = footprint(l);
+            for (size_t o = 0; o < landings_.size() && !blocked; ++o)
+                if (o != li && (landings_[o].state == 1 || landings_[o].state == 2) && store.alive(landings_[o].h))
+                    blocked = drop_boxes_overlap(mine, footprint(landings_[o]));
+            if (blocked) continue;
+            l.state = 1;  // 0x642c70: shown, landing dust [port: no particle]
+        }
+        if (l.state == 1) {  // [port] the Land clip passes 98 % at once
+            l.state = 2;
+            l.timer_start = frame_;
+            l.timer_len = landing_step_frames(P.owner);
+        }
+        if (l.state != 2 || frame_ < l.timer_start + l.timer_len) continue;
+        const std::vector<uint32_t> members = spawn_types(P);
+        const auto n = static_cast<uint32_t>(members.size());
+        if (l.unloaded >= n) {  // 0x6438a0: finish
+            LandingUnload rec;
+            rec.landing = l.id;
+            rec.galactic_id = P.galactic_id;
+            rec.owner = P.owner;
+            rec.carried_type = P.type;
+            rec.units = l.units;
+            landings_unloaded_.push_back(std::move(rec));
+            l.units.clear();  // unlocked
+            l.state = 3;
+            l.remove_frame = frame_;
+            continue;
+        }
+        // 0x644330: one team chunk or one vehicle at the landing position.
+        const int32_t mss = types.get_int(P.type, "Max_Squad_Size");
+        const uint32_t k = std::min(mss > 0 ? static_cast<uint32_t>(mss) : 10u, std::max(n, 1u));
+        const uint32_t i = l.unloaded;
+        const uint32_t cnt = members[i] < types.size() && types.get_bool(members[i], "Create_Team") ? std::min(k, n - i) : 1u;
+        const Vec3 at = store.position(l.h);
+        drop_pos_.assign(n, Vec3{at.x, at.y, 0.0f});
+        const size_t first = units_.size();
+        const uint32_t pi = l.participant;  // deploy may grow parts_-held state; keep the index
+        deploy(mode, pi, rng, i, cnt);
+        drop_pos_.clear();
+        Landing& lr = landings_[li];
+        mv::MoveOrder o;
+        for (size_t u = first; u < units_.size(); ++u) {
+            lr.units.push_back(units_[u].id);
+            if (units_[u].movable) o.units.push_back(units_[u].id);
+        }
+        if (!o.units.empty() && lr.next_offset < lr.targets.size()) {
+            o.destination = {lr.targets[lr.next_offset].x, lr.targets[lr.next_offset].y};
+            movement_->move(o, rng, frame_);
+            ++stats_.orders;
+        }
+        lr.unloaded += cnt;
+        ++lr.next_offset;
+        lr.timer_start = frame_;
+        lr.timer_len = landing_step_frames(P.owner);
+    }
+    // Take-off: removed at the frame (untimed: after the steps' timers; timed: at the finish).
+    size_t w = 0;
+    for (size_t i = 0; i < landings_.size(); ++i) {
+        if (landings_[i].state == 3 && frame_ >= landings_[i].remove_frame) {
+            if (store.alive(landings_[i].h)) mode.destroy(landings_[i].h);
+            continue;
+        }
+        if (w != i) landings_[w] = std::move(landings_[i]);
+        ++w;
+    }
+    landings_.resize(w);
+}
+
+bool find_free_placement(float px, float py, const FreePlacementBox& local, std::span<const FreePlacementBox> blockers, float radius,
+                         float& out_x, float& out_y) {
+    const float step = 1.2f * std::max(std::fabs(local.max_x - local.min_x), std::fabs(local.max_y - local.min_y));
+    for (float r = 0.0f; r < radius; r += step) {
+        for (int32_t k = 0; k <= 16; ++k) {
+            float sn = 0.0f, cs = 1.0f;
+            dmath::sincos(static_cast<float>(k) * 22.5f * (dmath::kPiF / 180.0f), sn, cs);
+            const float qx = px + r * cs, qy = py + r * sn;
+            const FreePlacementBox q{qx + local.min_x, qy + local.min_y, qx + local.max_x, qy + local.max_y};
+            bool blocked = false;
+            for (const FreePlacementBox& o : blockers)
+                if (q.min_x < o.max_x && o.min_x < q.max_x && q.min_y < o.max_y && o.min_y < q.max_y) {
+                    blocked = true;
+                    break;
+                }
+            if (!blocked) {
+                out_x = qx;
+                out_y = qy;
+                return true;
+            }
+            if (r == 0.0f) break;  // the centre is one test
+        }
+        if (!(step > 0.0f)) break;
+    }
+    return false;
+}
+
+bool TacticalBattle::space_member_spots(TacticalMode& mode, const Participant& p, float x, float y, std::vector<Vec3>& out) const {
+    out.clear();
+    const objects::GameObjectTypes& types = catalog_->types();
+    const std::vector<uint32_t> members = spawn_types(p);
+    const Vec3 at{x, y, 0.0f};
+    if (members.size() <= 1) {  // a single unit: at P
+        out.assign(members.size(), at);
+        return true;
+    }
+    auto has_model = [&](uint32_t t) {
+        std::string_view v = types.get_string(t, "Space_Model_Name");
+        while (!v.empty() && (v.front() == ' ' || v.front() == '\t' || v.front() == '\r' || v.front() == '\n')) v.remove_prefix(1);
+        return !v.empty();
+    };
+    constexpr uint64_t kLayer20 = 0x20;  // Space_Layer 0x20: placed at P, never a blocker
+    // Member boxes first: a member whose model is named but not loaded sends the whole drop to the rows of 6 [port].
+    std::vector<FreePlacementBox> local(members.size());
+    std::vector<uint8_t> at_p(members.size(), 0);
+    for (size_t i = 0; i < members.size(); ++i) {
+        const uint32_t t = members[i];
+        if (t >= types.size() || !has_model(t) || types.get_mask(t, "Space_Layer") == kLayer20) {
+            at_p[i] = 1;
+            continue;
+        }
+        const BattleCatalog::ModelInfo* m = catalog_->model_info(t, true);
+        if (!m || !m->has_bounds) return false;
+        local[i] = {m->min[0], m->min[1], m->max[0], m->max[1]};
+    }
+    // Blockers: the object tree (all owners): live, not dying, not Is_Decoration, no TRANSPORT_LANDING / LAND_OBSTACLE /
+    // PROJECTILE, Space_Layer != 0x20, with a model; their tree box in x / y [M: the type byte +0x3e test is not applied].
+    const objects::ObjectStore& st = mode.primary();
+    std::vector<FreePlacementBox> blockers;
+    for (const objects::ObjectHandle h : st.all_objects()) {
+        if (!st.alive(h) || st.dying(h)) continue;
+        const objects::TypeIndex t = st.type(h);
+        if (t >= types.size() || types.get_bool(t, "Is_Decoration") || !has_model(t)) continue;
+        if (st.has_behavior(h, objects::beh::TransportLanding) || st.has_behavior(h, objects::beh::LandObstacle) ||
+            st.has_behavior(h, objects::beh::Projectile))
+            continue;
+        if (types.get_mask(t, "Space_Layer") == kLayer20) continue;
+        const tactical::Aabb b = mode.bounds_of(h);
+        blockers.push_back({b.min.x, b.min.y, b.max.x, b.max.y});
+    }
+    // Members one at a time: each placed member blocks the later ones.
+    for (size_t i = 0; i < members.size(); ++i) {
+        if (at_p[i]) {
+            out.push_back(at);
+            continue;
+        }
+        float qx = 0.0f, qy = 0.0f;
+        if (!find_free_placement(x, y, local[i], blockers, 2500.0f, qx, qy)) {
+            qx = x;  // none: (0, 0, 0), replaced by P (z 0)
+            qy = y;
+        }
+        out.push_back(Vec3{qx, qy, 0.0f});
+        blockers.push_back({qx + local[i].min_x, qy + local[i].min_y, qx + local[i].max_x, qy + local[i].max_y});
+    }
+    return true;
+}
+
 // ---- land drop validity (header; TACTICAL_GAPS §4.2.1 tests 1-4, §4.2.2 items 2-4) ----
 bool TacticalBattle::land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
                                      bool use_reinforcement_points) const {
@@ -1804,7 +2141,8 @@ bool TacticalBattle::land_drop_valid(TacticalMode& mode, int32_t player, objects
         if (kMine != objects::kNoBehavior && st.has_behavior(h, kMine)) continue;
         const bool obstacle = st.has_behavior(h, objects::beh::LandObstacle);
         if (!human && st.has_behavior(h, objects::beh::Locomotor) && !obstacle) continue;
-        if (human && kLanding != objects::kNoBehavior && st.has_behavior(h, kLanding)) continue;
+        // a1i t05 (A1_READINGS §35.4 item 2): a persistent cinematic landing (pack +0xc9) still blocks a human drop.
+        if (human && kLanding != objects::kNoBehavior && st.has_behavior(h, kLanding) && !st.landing_persist(h)) continue;
         // Footprint 0x38de80: centre + R(yaw)(Custom_Hard_X/YExtent_Offset) x Scale_Factor, half extents 0x371be0, along yaw.
         const Vec3 f = st.facing(h);
         DropBox xb;
@@ -1816,7 +2154,12 @@ bool TacticalBattle::land_drop_valid(TacticalMode& mode, int32_t player, objects
         dmath::sincos(xb.yaw_deg * (dmath::kPiF / 180.0f), sn, cs);
         xb.cx = q.x + ox * cs - oy * sn;
         xb.cy = q.y + ox * sn + oy * cs;
-        sim::drop_half_extents(types, catalog_, t, xb.hx, xb.hy);
+        // a1i t05 (§35.4 item 1, 0x396850 rule 2): a Deploys type with a locomotor while it deploys / is deployed (port:
+        // DEPLOY active [M: the locomotor pack +0x2b3 byte]) uses its deployed extents.
+        if (types.get_bool(t, "Deploys") && st.has_behavior(h, objects::beh::Locomotor) && abilities_ && abilities_->deployed(st.id(h)))
+            sim::drop_deployed_extents(types, catalog_, t, xb.hx, xb.hy);
+        else
+            sim::drop_half_extents(types, catalog_, t, xb.hx, xb.hy);
         if (!drop_boxes_overlap(formation, xb)) continue;
         for (const LandDropSlot& s : lay.slots)
             if (drop_boxes_overlap(DropBox{s.x, s.y, s.hx, s.hy, s.yaw_deg}, xb)) return false;  // footprint taken
@@ -2197,14 +2540,19 @@ void TacticalBattle::check_victory() {
     // the attacker once every defender ground structure died. [port] 0xd (rogue-faction base components) not modelled.
     uint32_t base_parts = 0, base_alive = 0;
     for (const Participant& p : parts_) {
-        // [port] a never-deployed participant (reserve / pool) still counts when one of its spawn types is victory-relevant;
-        // BT §3.1a says pool units are not GOM objects and never count [M], not adopted until probed.
-        if (!p.deployed && victory_relevant(p)) has[p.side] = true;
+        // BT §3.1a item 1 [H] (A1_READINGS §34.1): a never-deployed participant (reserve / pool) never counts; it is a
+        // galactic object until its landing object is created at drop time (0x2b5fe0).
         if (p.starbase && p.deployed && p.alive == 0) station_lost = true;
         if (p.structure && p.side == 0) {
             ++base_parts;
             if (!p.deployed || p.alive > 0) ++base_alive;
         }
+    }
+    // a1i t04 [port]: a company inside its landing (timed unload) keeps its side alive; the original counts only the
+    // landing object itself, by its own type's victory relevance (§34.1) [M: not checked for the FoC landing types].
+    for (const Landing& l : landings_) {
+        const Participant& lp = parts_[l.participant];
+        if (l.timed && l.state != 3 && victory_relevant(lp)) has[lp.side] = true;
     }
     if (space_ && station_lost && req_.space_station_destruction_forces_retreat) {
         conclude(req_.info.attacker, galactic::kVictoryStarbaseDestroyed, kNoPlayer);
@@ -3038,6 +3386,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     stats_.frames = frame_;
     story_reinforced_.clear();  // L1/S4 wave 2b story hook: this tick's reserve deployments
     ability_finished_.clear();  // S7 t15 A1: this tick's signal 0x29
+    landings_unloaded_.clear();  // a1i t04: signal 0x19 records of the last tick
     story_garrisoned_.clear();  // S4: this tick's garrison entries / structure captures
     story_captured_.clear();
     objects::ObjectStore& store = mode.primary();
@@ -3047,6 +3396,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     profile::lap("tac.setup");
     // 1. reinforcements, 2. stand-in orders, 3. retreat coordinator.
     reinforce(mode, rng, true);
+    landing_service(mode, rng);  // a1i t04: landing objects (timed unload steps, take-off)
     if (cfg_.order_interval > 0 && (frame_ - 1) % cfg_.order_interval == 0) issue_orders(mode, rng);
     retreat_policy();
     if (retreat_side_ >= 0 && !retreat_complete_ && frame_ >= retreat_done_frame_) {
@@ -3400,6 +3750,16 @@ void TacticalBattle::hash(StateHasher& h) const {
             h.i32(r.goal_object);
             h.u32(static_cast<uint32_t>(r.pushed.size()));
             for (const objects::ObjectId k : r.pushed) h.i32(k);
+        }
+    }
+    if (!landings_.empty()) {         // a1i t04: landing objects waiting for take-off (absent while none)
+        h.u32(static_cast<uint32_t>(landings_.size()));
+        for (const Landing& l : landings_) {
+            h.i32(l.id);
+            h.u8(l.state);
+            h.u32(l.unloaded);
+            h.u32(l.timer_start + l.timer_len);
+            h.u32(l.remove_frame);
         }
     }
 }

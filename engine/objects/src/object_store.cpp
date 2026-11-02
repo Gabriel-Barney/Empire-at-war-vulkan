@@ -39,6 +39,7 @@ uint32_t ObjectStore::alloc_slot() {
     container_.push_back({});
     attach_parent_.push_back({});
     carried_type_.push_back(kNone);
+    landing_persist_.push_back(0);
     behaviors_.emplace_back();
     beh_state_.emplace_back();
     std::array<uint8_t, kBehaviorTypeCount> none;
@@ -108,6 +109,7 @@ ObjectHandle ObjectStore::create(const SpawnParams& p) {
     container_[s] = p.container;
     attach_parent_[s] = p.attach_parent;
     carried_type_[s] = kNone;
+    landing_persist_[s] = 0;
     behaviors_[s].clear();
     beh_state_[s].clear();
     behavior_index_[s].fill(0xFF);
@@ -251,6 +253,12 @@ bool ObjectStore::set_carried_type(ObjectHandle h, TypeIndex carried) {
     return true;
 }
 
+bool ObjectStore::set_landing_persist(ObjectHandle h, bool persist) {
+    if (!alive(h) || (!has_behavior(h, beh::Transport) && !has_behavior(h, beh::TransportLanding))) return false;
+    landing_persist_[h.slot()] = persist ? 1 : 0;
+    return true;
+}
+
 void ObjectStore::set_position(ObjectHandle h, Vec3 p) {
     if (exists(h)) position_[h.slot()] = p;
 }
@@ -322,6 +330,7 @@ void ObjectStore::remove_object(uint32_t slot) {
     }
     used_[slot] = 0;
     carried_type_[slot] = kNone;
+    landing_persist_[slot] = 0;
     gen_[slot] = gen_[slot] + 1 == 0 ? 1 : gen_[slot] + 1;  // stale handles fail from now on
     free_.push_back(slot);
 }
@@ -433,6 +442,14 @@ void ObjectStore::hash_state(StateHasher& hs) const {
                 hs.u32(carried_type_[s]);
             }
     }
+    // a1i t05: the persist flags (id order), only when an object has one.
+    uint32_t persist = 0;
+    for (uint32_t s : slots) persist += landing_persist_[s] != 0 ? 1u : 0u;
+    if (persist != 0) {
+        hs.u32(persist);
+        for (uint32_t s : slots)
+            if (landing_persist_[s] != 0) hs.i32(id_[s]);
+    }
 }
 
 // ---- N1 save / load ----------------------------------------------------------------------------------
@@ -454,6 +471,7 @@ void ObjectStore::hash_state(StateHasher& hs) const {
 //                     | u64 container | u64 attach parent                     delayed creations (queue order)
 //   u32 n + u64 handles        dead objects pending the flush (destroy order)
 //   u32 n, per entry: u32 slot | u32 type       carried types (a1h t08), slot ascending, objects that have one
+//   u32 n + u32 slots          landing persist flags (a1i t05, version 3), slot ascending, objects that have it
 namespace {
 
 constexpr size_t kSlotMinBytes = 4 + 1 + 4 + 4 + 4 + 4 + 7 * 4 + 1 + 1 + 8 + 8 + 4;
@@ -548,11 +566,16 @@ void ObjectStore::write(ByteWriter& w) const {
     w.u32(carried);
     for (uint32_t s = 0; s < cap; ++s)
         if (carried_type_[s] != kNone) w.u32(s).u32(carried_type_[s]);
+    uint32_t persist = 0;
+    for (uint32_t s = 0; s < cap; ++s) persist += landing_persist_[s] != 0 ? 1u : 0u;
+    w.u32(persist);
+    for (uint32_t s = 0; s < cap; ++s)
+        if (landing_persist_[s] != 0) w.u32(s);
 }
 
 bool ObjectStore::read(ByteReader& r) {
     const uint32_t version = r.u32();
-    if ((version != 1 && version != kSaveVersion) || !r.ok()) return false;
+    if (version < 1 || version > kSaveVersion || !r.ok()) return false;
     const uint8_t saved_mode = r.u8(), saved_kind = r.u8();
     const uint64_t type_count = r.u64(), digest = r.u64();
     if (!r.ok() || saved_mode != static_cast<uint8_t>(mode_) || saved_kind != static_cast<uint8_t>(kind_) ||
@@ -579,6 +602,7 @@ bool ObjectStore::read(ByteReader& r) {
     t.container_.resize(cap);
     t.attach_parent_.resize(cap);
     t.carried_type_.assign(cap, kNone);
+    t.landing_persist_.assign(cap, 0);
     t.behaviors_.resize(cap);
     t.beh_state_.resize(cap);
     std::array<uint8_t, kBehaviorTypeCount> none;
@@ -716,6 +740,17 @@ bool ObjectStore::read(ByteReader& r) {
             prev_slot = s;
         }
     }
+    if (version >= 3) {  // landing persist flags: registered transports only, slot ascending
+        uint32_t npersist = 0;
+        if (!get_count(r, 4, npersist)) return false;
+        for (uint32_t i = 0, prev_slot = 0; i < npersist; ++i) {
+            const uint32_t s = r.u32();
+            if (!r.ok() || (i > 0 && s <= prev_slot) || s >= cap || !t.used_[s]) return false;
+            if (t.behavior_index_[s][beh::Transport] == 0xFF && t.behavior_index_[s][beh::TransportLanding] == 0xFF) return false;
+            t.landing_persist_[s] = 1;
+            prev_slot = s;
+        }
+    }
     if (!r.ok()) return false;
 
     gen_ = std::move(t.gen_);
@@ -732,6 +767,7 @@ bool ObjectStore::read(ByteReader& r) {
     container_ = std::move(t.container_);
     attach_parent_ = std::move(t.attach_parent_);
     carried_type_ = std::move(t.carried_type_);
+    landing_persist_ = std::move(t.landing_persist_);
     behaviors_ = std::move(t.behaviors_);
     beh_state_ = std::move(t.beh_state_);
     behavior_index_ = std::move(t.behavior_index_);

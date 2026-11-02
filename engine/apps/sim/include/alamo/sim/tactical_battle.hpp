@@ -130,6 +130,11 @@ struct BattleConfig {
     // GALAXY_MAP_PRESENTATION §6: a map battle (CampaignBattles::start_map_battle, the attract demo's Load_Map): no
     // conflict behind it, so the branched-map discard (single player with a defender, bt_map_prepass) does not apply.
     bool map_battle = false;
+    // a1i t04 (A1_READINGS §35.2 / §35.3): false (default) = a landing object's company appears at the Reinforce order
+    // (every unload step at once); true = the TransportLanding state machine: hidden until its footprint is clear of the
+    // other landings, then one team / vehicle per 2 s x (1 + s) step on a locked exit move, unlocked with the signal 0x19
+    // record after the last. Off until the tactical AI waits for landings_unloaded() (TF.Reinforce in-flight count).
+    bool landing_unload_timed = false;
     // --- S4 garrisons / structure capture (owner: S4 agent; tactical_battle_garrison.cpp) ---
     // GameConstants Garrisoned_Max_Attack_Distance_Multiplier / Land_ / Space_Capture_Allowed_Countdown_Seconds (vanilla
     // values; used only when the catalog's GameConstants lack them: BattleCatalog::capture_countdown).
@@ -175,13 +180,17 @@ struct LandDropSlot {
 };
 struct LandDropLayout {
     std::vector<LandDropSlot> slots;
+    // a1i t04: the unload exit targets (0x643130, world): per team its grid offset (Create_Team companies), else per member
+    // its slot. One entry per unload step.
+    std::vector<float> group_x, group_y;
     float half_x = 0.0f, half_y = 0.0f;  // broad-phase formation box half extents (world, along the drop yaw)
     bool ok = false;                     // false: no member, or a degenerate grid (b = 0)
 };
 // The slots of `shape` dropped at (px, py) with the layout turned by `yaw_deg` (the player's entry facing): the member
 // grid (0x40f970) for vehicles; for Create_Team companies teams of min(Max_Squad_Size, n) laid out by 0x5abc00 (or
-// 0x40f970), the teams on a 0x40f970 grid from 2.5 x the team bounds, each team turned to face its offset. All float.
-LandDropLayout land_drop_layout(const LandDropShape& shape, float px, float py, float yaw_deg);
+// 0x40f970), the teams on a 0x40f970 grid from `team_factor` x the team bounds, each team turned to face its offset. All
+// float. The drop validity (0x3b6170) uses 2.5; the landing object's unload offsets (0x643130, A1_READINGS §35.2) 3.0.
+LandDropLayout land_drop_layout(const LandDropShape& shape, float px, float py, float yaw_deg, float team_factor = 2.5f);
 // 2-D oriented boxes (centre, half extents, yaw in degrees); true when they overlap (separating-axis test, touching
 // boxes do not overlap).
 struct DropBox {
@@ -205,6 +214,19 @@ bool land_drop_radius_ok(float x, float y, std::span<const LandDropRadiusObject>
 LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const BattleCatalog* catalog, const galactic::ConflictRules& rules,
                               uint32_t company_type);
 void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy);
+// a1i t05 (A1_READINGS §35.4 item 1): the deployed half extents 0x371d20: with Custom_Hard_XExtent_Deployed > 0, x = it x
+// Scale_Factor and y = Custom_Hard_YExtent_Deployed x Scale_Factor (even when <= 0); else drop_half_extents.
+void drop_deployed_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy);
+// a1i t05 (A1_READINGS §35.4 item 4): Find_Free_Placement 0x2a9670 in the plane. `local` = the placed type's model box
+// (model space, no Scale_Factor [M]); step = 1.2 x its larger x / y span. Rings r = 0, step, 2 step, ... while r <
+// `radius`, per ring the angles 0, 22.5, ..., 360 degrees inclusive (r = 0 tested once): the first Q = P + r (cos a, sin a)
+// whose box Q + local overlaps no blocker in x and y (touching boxes do not overlap [M]) -> (out_x, out_y), true. None ->
+// false (the caller 0x2bf2d0 then uses P). A zero step tests r = 0 only.
+struct FreePlacementBox {
+    float min_x = 0.0f, min_y = 0.0f, max_x = 0.0f, max_y = 0.0f;
+};
+bool find_free_placement(float px, float py, const FreePlacementBox& local, std::span<const FreePlacementBox> blockers, float radius,
+                         float& out_x, float& out_y);
 // ---- end a1g t04 follow-up ----
 // S7 t12 / t22: the space fighter locomotor's formation attack target (FIGHTER_FLYING §2 step 6 / §4.3 / §4.9,
 // Formation_Attack_Target(F, &hp, -1) 0x41a2e0, TACTICAL_COMBAT §2.8) for a squadron leader or a fighter without a
@@ -302,6 +324,22 @@ public:
     // back to the primary locomotor (MOVEMENT §3.1.1 step 6, seen before the combat tick as the end of the weapons
     // suspension: [port] one tick late when the swap runs after it). The tactical AI and the story bridge read it.
     std::span<const objects::ObjectId> ability_finished_events() const { return ability_finished_; }
+    // a1i t04 (A1_READINGS §35.3): signal 0x19 (ReinforcementsUnloadedDataClass) of the land landing objects that finished
+    // their unload during the last tick() or the commands before it (cleared when tick() starts): the landing object, the
+    // reserve's galactic id, the owner, the carried company type and the unloaded units in spawn order. No listener yet.
+    struct LandingUnload {
+        objects::ObjectId landing = objects::kNoObjectId;
+        objects::ObjectId galactic_id = objects::kNoObjectId;
+        int32_t owner = -1;
+        uint32_t carried_type = 0;
+        std::vector<objects::ObjectId> units;
+    };
+    std::span<const LandingUnload> landings_unloaded() const { return landings_unloaded_; }
+    // a1i t04: a landing object still waiting for its footprint to clear (state 4: model hidden) [port: no renderer reads
+    // it yet]; the landing objects of `player` that have not finished their unload (timed mode; untimed ones finish at the
+    // order).
+    bool landing_hidden(objects::ObjectId landing) const;
+    uint32_t landings_in_flight(int32_t player) const;
     // The Dummy_Barrage_Target of a position-targeted ability for `player` (command 57; Lua Activate_Ability with a
     // position through ObjectBridge::spawn_ability_target). Returns its id, kNoObjectId when the type is missing.
     objects::ObjectId spawn_dummy_target(TacticalMode& mode, int32_t player, Vec3 at, SimRng& rng);
@@ -424,12 +462,17 @@ public:
     };
     std::vector<IconLink> icon_links() const;
     // Reinforce (COMMANDS.md id 12) from a human player: the rules of BattleAi's Reinforce (owner, undeployed reserve,
-    // the side not retreating, space unit cap -> QueueFull). Space: deployed in rows of 6 around (x, y) clamped to the
-    // mode bounds [port]. Land (a1h t06, TACTICAL_GAPS §4.2.2 item 5: ReinforceEventClass Execute 0x403cb0): the drop
+    // the side not retreating, space unit cap -> QueueFull). Space: the members by the free-placement ring search
+    // (space_member_spots, a1i t05), else in rows of 6 around (x, y) clamped to the mode bounds [port]. Land (a1h t06, TACTICAL_GAPS §4.2.2 item 5: ReinforceEventClass Execute 0x403cb0): the drop
     // validity is re-run (land_drop_valid, movers block only for a human issuer); a refused drop is refused whole
     // (InvalidPosition: nothing moved or clamped, the unit stays in the pool); else the members spawn at the layout's
-    // slots. [port] The campaign Stay_In_Transport / planet-restriction refusals and the "battle decided" gate are not
-    // modelled. Command phase, synced RNG. InvalidUnit when `galactic_id` is not one of the player's reserves.
+    // slots. a1i t04 (A1_READINGS §35): a company with a Company_Transport_Unit lands in a landing object (its
+    // Landing_Transport_Variant, TRANSPORT_LANDING, carried type = the company) at (x, y); the members spawn at the unload
+    // offsets (team grid 3.0 x the team bounds) and the landing object leaves after the unload steps' timers
+    // (BattleConfig::landing_unload_timed: the company stays inside and landing_service unloads it step by step). a1i t05
+    // (§35.4 item 3): a campaign battle refuses (NotAllowed) a type with Stay_In_Transport_During_Ground_Battle or one the
+    // battle planet restricts; the "battle decided" gate stays [M]. Command phase, synced RNG. InvalidUnit when
+    // `galactic_id` is not one of the player's reserves.
     commands::RejectReason order_reinforce(TacticalMode& mode, uint8_t player, objects::ObjectId galactic_id, float x, float y,
                                            SimRng& rng);
     // a1g t04 follow-up: land_drop_shape / drop_half_extents with this battle's data. a1h t06: the layout yaw of a side =
@@ -446,9 +489,10 @@ public:
     // `use_reinforcement_points` = GameConstants Use_Reinforcement_Points). Blocking objects = the object tree GOM +0xd8: live objects of any owner whose type has
     // Collidable_By_Projectile_Living (death clones: _Dead), minus PROXIMITY_MINE objects; an AI issuer (`human` false)
     // ignores movers (a locomotor and no LAND_OBSTACLE) and counts landing transports; a human issuer counts movers and
-    // ignores TRANSPORT_LANDING objects [port: no Create_Cinematic_Transport persist flag, so none is exempt]. Footprint =
-    // position + R(yaw)(Custom_Hard_X/YExtent_Offset x Scale_Factor), half extents drop_half_extents [port: the deployed
-    // extents rule 2 of 0x396850 is [M]]. Unknown entry -> false. Space battles -> true.
+    // ignores TRANSPORT_LANDING objects except persistent ones (Create_Cinematic_Transport persist, a1i t05). Footprint =
+    // position + R(yaw)(Custom_Hard_X/YExtent_Offset x Scale_Factor), half extents drop_half_extents, or the deployed
+    // extents (drop_deployed_extents) while a Deploys type with a locomotor has DEPLOY active (a1i t05, 0x396850 rule 2).
+    // Unknown entry -> false. Space battles -> true.
     bool land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
                          bool use_reinforcement_points) const;
     float player_drop_yaw(int32_t player) const { return drop_yaw(side_player(1) == player ? uint8_t{1} : uint8_t{0}); }
@@ -985,7 +1029,10 @@ private:
     };
     void service_damage_tracking();
     void add_participant(objects::ObjectHandle g, int32_t owner, uint8_t side, bool reserve, bool starbase, bool structure);
-    void deploy(TacticalMode& mode, uint32_t participant, SimRng& rng);
+    // a1i t04: `member_first` / `member_count` spawn a member range of an already deployed participant (one landing
+    // unload step: one team chunk or one vehicle); the default spawns everything once.
+    void deploy(TacticalMode& mode, uint32_t participant, SimRng& rng, uint32_t member_first = 0,
+                uint32_t member_count = 0xFFFFFFFFu);
     void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
     // S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints of single objects under their object id (tactical_battle.cpp).
     bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);   // LAND_OBSTACLE stamp; false: none
@@ -995,15 +1042,40 @@ private:
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
     std::vector<Vec3> drop_pos_;  // a1g t04 follow-up: order_reinforce's land layout slots for deploy (transient)
+    // a1i t04 (A1_READINGS §35.2): one landing object (TransportDataPack fields in brackets).
+    struct Landing {
+        objects::ObjectId id = objects::kNoObjectId;
+        objects::ObjectHandle h;
+        uint32_t participant = 0;
+        uint8_t state = 4;               // [+0x50] 4 waiting (hidden), 1 landing, 2 unloading, 3 taking off
+        bool timed = false;              // BattleConfig::landing_unload_timed at the order
+        uint32_t timer_start = 0, timer_len = 0;  // [+0x60 / +0x64] frames
+        uint32_t unloaded = 0;           // [+0x68] members spawned
+        uint32_t next_offset = 0;        // [+0x90]
+        uint32_t remove_frame = 0;       // untimed: the take-off frame
+        std::vector<Vec3> targets;       // [+0x78] exit targets (world), one per step
+        std::vector<objects::ObjectId> units;  // [+0xa8] unloaded units (locked while unloading)
+    };
+    // The land landing object of a Company_Transport_Unit company (id kNoObjectId: none).
+    Landing spawn_landing(TacticalMode& mode, const Participant& p, float x, float y);
+    uint32_t landing_step_frames(int32_t player) const;  // 2 s x (1 + Reinforcement_Deploy_Time_Multiplier list)
+    void landing_service(TacticalMode& mode, SimRng& rng);  // timed state machine + take-off removal (each tick)
+    bool landing_locked(objects::ObjectId id) const;       // an unloaded unit of an unloading landing (exit path lock)
+    std::vector<Landing> landings_;                        // live landing objects
+    // a1i t05 (A1_READINGS §35.4 item 4): the space Reinforce members' positions around (x, y), in spawn order (one member:
+    // the point). False when a member's model box is not loaded (no model data) [port: the rows of 6 then].
+    bool space_member_spots(TacticalMode& mode, const Participant& p, float x, float y, std::vector<Vec3>& out) const;
+    std::vector<LandingUnload> landings_unloaded_;    // transient (not saved): see landings_unloaded()
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);
     void retreat_policy();
     void complete_retreat(TacticalMode& mode, uint8_t side);
     void conclude(int32_t winner, uint8_t victory, int32_t retreated);  // finish(), after end_hold_frames
     void check_victory();
-    // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type (participant: any spawn
-    // type). Cached per type in vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
+    // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type. Cached per type in
+    // vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
     bool victory_relevant(uint32_t type);
+    // a1i t04 [port]: a company still inside a timed landing: its members' types (or the other type, §3.2 step 3).
     bool victory_relevant(const Participant& p);
     void finish(int32_t winner, uint8_t victory, int32_t retreated);
     float side_power(uint8_t side) const;

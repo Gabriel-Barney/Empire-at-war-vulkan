@@ -310,7 +310,7 @@ using IncomeHook = std::function<void(const IncomeTick&)>;
 //   kFleetLand   {target = the issuer's planet, fleet = orbiting fleet, unit = one ground unit or kNoObject = all}.
 // Only the issuer's idle fleets in orbit of one planet take part; nothing moves between planets. Ignored (NotAllowed)
 // while the galactic pause counter is raised (COMMANDS.md §6.2 "battle pending": counter 0x140b1540c = the galactic
-// pause, STORY.md §4.1); MoveThroughObjects likewise.
+// pause, STORY.md §4.1) or the story block holds (GalacticSim::paused()); MoveThroughObjects likewise.
 // enqueue() refusal for the galactic population cap (AI_GALACTIC_3 §3.5; RejectReason::FirstCustom).
 inline constexpr RejectReason kRejectPopulationCap = RejectReason::FirstCustom;
 
@@ -374,12 +374,19 @@ public:
     // is serviced.
     void push_pause() { ++pause_; }
     void pop_pause() { if (pause_ > 0) --pause_; }
-    // The galactic "paused" query 0x4b2360: the pause counter, or a queued story-linked battle (REMAINING_GAPS 6.4).
-    bool paused() const { return pause_ > 0 || linked_battle_pending_; }
+    // The galactic "paused" query 0x4b2360: the pause counter, or the story block below. The command executors
+    // (SpecialAbility 0x4b4d70, FleetManagement 0x5af260, MoveThroughObjects 0x3c4460, Invade 0x48ff50) and Lua
+    // Move_Object 0x68f5b0 test the same two conditions (A1_READINGS §31.7).
+    bool paused() const { return pause_ > 0 || story_block(); }
+    // REMAINING_GAPS 6.4 story block: a story-linked battle is pending and the LOCAL player is attacker or defender of a
+    // queued conflict (0x2b0350). Only the local player counts, whoever issued the command: an AI player's orders run
+    // while the local player is in no queued conflict, and are dropped like the human's while it is.
+    bool story_block() const {
+        return linked_battle_pending_ && conflicts_ && conflicts_->in_queued_conflict(local_player_);
+    }
     // REMAINING_GAPS 6.4 (GMM +0xf0): set when story LINK_TACTICAL or a corruption mission queues its battle (0x28bd70;
-    // refused - returns false - while one is already queued), cleared when that battle starts (0x28c640). While set,
-    // SpecialAbility, FleetManagement and move commands are refused [port: for every player; the original gates on the
-    // local player being in a queued conflict].
+    // refused - returns false - while one is already queued), cleared when that battle starts (0x28c640). Its effect on
+    // commands and the paused query is story_block().
     bool queue_linked_battle() {
         if (linked_battle_pending_) return false;
         linked_battle_pending_ = true;

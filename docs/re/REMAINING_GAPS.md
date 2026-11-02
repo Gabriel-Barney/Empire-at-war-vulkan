@@ -729,7 +729,14 @@ No sim effect. Data: FoC 1 planet with starbase stealth and 7 with ground-base s
   - SpecialAbility commands are dropped (0x4b4d70 prologue);
   - FleetManagement 0x5af260, Lua free-store `Move_To` 0x68f5b0 and the GUI moves 0x3c4460 / 0x48ff50 refuse moves;
   - the galactic "paused" query 0x4b2360 returns true.
+
+  These are all seven callers of 0x2b0350. None of them tests the event's issuer, so AI players' commands are blocked
+  only while the local player is in a queued conflict (table: A1_READINGS §31.7, a1i t03).
 - **Port:** `linked_battle_pending`, set by LINK_TACTICAL and the corruption mission, cleared when that battle starts.
+  `GalacticSim::story_block()` = the flag and `in_queued_conflict(local player)`; `paused()` = pause counter or
+  `story_block()`, used by every command gate (a1i t03, 2026-11-02; it replaces "[port: for every player]"). Still
+  [port]: the mode-frame freeze in `GalacticSim::update` ignores the story block; 0x2be640's block is not wired
+  (`CampaignBattles::story_sequence_active`).
 
 ### 6.5 Build pads (extends L1_S4_REMAINING §3.6) [H unless tagged]
 - **UC attachment bone** (0x42e280):

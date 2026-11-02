@@ -406,6 +406,7 @@ Goals and plans with no template entry stay at −1, i.e. off. In particular, **
 - Every `*.lua` in `Data\Scripts\AI\`, `AI\SpaceMode\`, `AI\LandMode\`, `AI\StoryArc\` and `Data\Scripts\Interventions\` is loaded, in that folder order and in filesystem enumeration order within a folder.
 - The plan name is the file base name.
 - **Port:** sort by name within a folder for reproducibility, and record it as a deviation if enumeration order matters. It matters only for plan candidate order, which affects the RNG pick.
+- The tactical AI loads the same full set (a1i 2026-11-02, A1_READINGS §34.2): the only `Land_Retreat` plan is `AI\SpaceMode\RetreatPlan.lua`.
 
 **Per file** (0x4e7170) [H]
 1. Take a pooled script.

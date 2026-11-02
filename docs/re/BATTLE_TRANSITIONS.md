@@ -592,7 +592,9 @@ declared; +0x24 countdown; +0x28 declared record (copy); +0x58 last frame seen; 
   UNIT_AI), no prop / structure / unit category, no Hide, invulnerability, Prevent_All_Fire, cinematic or
   letterbox state, no Is_Neutral test of the object's owner (a Neutral player is simply not an enemy). Garrisoned
   or transported objects are GOM objects with their own type and count like any other [M]. Units still in the
-  reinforcement pool / reserve are not GOM objects and never count [M]. `Variant_Of_Existing_Type` children
+  reinforcement pool / reserve are not tactical GOM objects and never count [H] (a1i 2026-11-02, A1_READINGS §34.1:
+  they are galactic objects until 0x2b5fe0 creates the landing object at drop time; 0x2c0340 reads no reserve
+  state; the port no longer counts them). `Variant_Of_Existing_Type` children
   copy the parent's flags (OBJECT_TYPES §3.2), so a story variant of a hero counts if the hero does.
 - **Super weapons** are excluded by data only, through this same 0x372230 test: FoC `Death_Star` has
   `Victory_Relevant No` and no `Space_Victory_Relevant`; `Death_Star_II` sets neither (defaults false). There is
