@@ -30,7 +30,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 3;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset)
+constexpr uint32_t kMovementSaveVersion = 4;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames
 
 // u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
 template <class F>
@@ -320,6 +320,7 @@ void io_special(IO& io, S& s) {  // SpecialMotion
     io.f32(s.anim.rate);
     io.b(s.airborne);
     io.b(s.turn_left);
+    io.f32(s.turn_band_rate);  // S7 t15 (version 4)
     io.f32(s.lean);
     io.u32(s.idle_frames);
     io.b(s.turn_back);
@@ -462,6 +463,7 @@ void io_stats(IO& io, S& s) {  // MovementStats
     io.u32(s.collisions_created);
     io.u32(s.collisions_cancelled);
     io.u32(s.collisions_resolved);
+    io.u32(s.jetpack_still_frames);  // S8 t09 (version 4)
 }
 
 uint64_t collision_pair_key(ObjectId a, ObjectId b) {  // as collision.cpp pair_key

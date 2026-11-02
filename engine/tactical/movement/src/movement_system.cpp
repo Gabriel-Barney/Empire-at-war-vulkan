@@ -582,6 +582,38 @@ void MovementSystem::crush_pass(const std::vector<WalkResult>& res) {
     }
 }
 
+void MovementSystem::fill_air_request(const Unit& u, uint32_t frame, SpaceRequest& q) const {
+    q.self = u.d.id;
+    q.start = u.m.pos;
+    q.goal = u.goal;
+    q.start_heading = u.m.yaw;
+    // FIGHTER_FLYING §6: the formation speed caps the plan ([port] a formation speed <= 0, e.g. the loiter's
+    // Min_Speed of a type without one, keeps max speed). S7 t14 (MOVEMENT §3.1.1): the request record takes
+    // vf74 / vf75, so a jetpack in its airborne kind (0 / 0xF..0x13) plans with Alternate_Max_Speed /
+    // _Rate_Of_Turn. S7 t15 (§3.1.1 [H]): acceleration / deceleration are vf91 / vf92 = the common getters:
+    // the override x (effective max speed / Max_Speed), else the NORMAL effective max speed (configure's
+    // lp.accel / lp.decel), never the alternate one, airborne or not.
+    const float vmax = loco_max_speed(u);
+    q.speed = u.formation_speed > 0.0f ? std::min(vmax, u.formation_speed) : vmax;
+    q.turn_rate = loco_turn_rate(u);
+    q.radius = u.d.radius;
+    q.layer = u.d.space_layer;
+    q.now = frame;
+    q.accel = u.lp.accel;
+    q.decel = u.lp.decel;
+    q.goal_facing = u.facing;
+    q.threat_threshold = u.threat;
+    q.space_layer_type = u.d.space_layer_type;
+}
+
+bool MovementSystem::air_request(ObjectId id, uint32_t frame, SpaceRequest& out) const {
+    const int32_t i = find(id);
+    if (i < 0 || !is_air(units_[static_cast<size_t>(i)])) return false;
+    out = SpaceRequest{};
+    fill_air_request(units_[static_cast<size_t>(i)], frame, out);
+    return true;
+}
+
 void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
     std::vector<uint32_t> req;
     for (uint32_t i = 0; i < units_.size(); ++i)
@@ -601,25 +633,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             const ThreatFn tf = owner_threat(u);
             if (is_air(u)) {
                 SpaceRequest q;
-                q.self = u.d.id;
-                q.start = u.m.pos;
-                q.goal = u.goal;
-                q.start_heading = u.m.yaw;
-                // FIGHTER_FLYING §6: the formation speed caps the plan ([port] a formation speed <= 0, e.g. the loiter's
-                // Min_Speed of a type without one, keeps max speed). S7 t14 (MOVEMENT §3.1.1): the request record takes
-                // vf74 / vf75, so a jetpack in its airborne kind (0 / 0xF..0x13) plans with Alternate_Max_Speed /
-                // _Rate_Of_Turn; [M] an unset OverrideAcceleration / _Deceleration (full speed in one frame) follows it.
-                const float vmax = loco_max_speed(u);
-                q.speed = u.formation_speed > 0.0f ? std::min(vmax, u.formation_speed) : vmax;
-                q.turn_rate = loco_turn_rate(u);
-                q.radius = u.d.radius;
-                q.layer = u.d.space_layer;
-                q.now = frame;
-                q.accel = u.d.accel > 0.0f ? u.lp.accel : vmax;
-                q.decel = u.d.decel > 0.0f ? u.lp.decel : vmax;
-                q.goal_facing = u.facing;
-                q.threat_threshold = u.threat;
-                q.space_layer_type = u.d.space_layer_type;
+                fill_air_request(u, frame, q);
                 q.threat = tf ? &tf : nullptr;
                 plan_space_path(air_, air_k, q, ssc, air_out[r]);
                 continue;

@@ -220,7 +220,9 @@ struct GalPp {
                     best_c = c;
                 }
             }
-            if (best < 0) continue;  // no source: the build task waits on the market (§2.3)
+            // No source: the build task waits on the market (§2.3) and the ETA ignores it [H]. Since the Production veto
+            // (A2f t02 R1, same list and test as Setup C) this happens only in a MagicPlan (spawned, no queue).
+            if (best < 0) continue;
             const PlanetIndex p = list[static_cast<size_t>(best)];
             const float bt = w.btime_at(player, t, p);
             pool[static_cast<size_t>(best)].used = true;
@@ -238,32 +240,9 @@ struct GalPp {
 
     // ---- contrast helpers (0x6c5de0 / 0x72ac70 / 0x6c4b20) ----
     double enemy_strength(bool space, uint64_t mask) const {
-        // 0x5f2430 [M: the PlanetForce Enemy totals of AI_GALACTIC_TOKENS §2; stand-ins as there]
-        const gal::PlanetState& ps = w.sim.planets()[static_cast<size_t>(target)];
-        const objects::ObjectStore& st = w.store;
-        double s = 0.0;
-        auto hostile = [&](int32_t o) { return o >= 0 && w.sim.is_hostile(player, o); };
-        if (space) {
-            for (const uint32_t f : ps.orbit) {
-                if (f >= w.sim.fleets().size()) continue;
-                const gal::FleetState& fl = w.sim.fleets()[f];
-                if (!fl.alive || fl.moving || !hostile(fl.owner)) continue;
-                for (const ObjectHandle u : fl.contents)
-                    if (st.alive(u) && (w.mask_of(st.type(u)) & mask) != 0) s += w.power_of(st.type(u));
-            }
-            // The starbase's per-tech members (Starting_Spawned_Units_Tech_N of the owner's tech level) by category; the
-            // untyped total (mask = all, the Node_Weight helper 0x5f2430) also holds its own AI_Combat_Power, a typed
-            // row never does (GALACTIC_ECONOMY §6.2, AI_GALACTIC_TOKENS §2) [port: member lists from the type data].
-            if (hostile(ps.owner) && ps.starbase && st.alive(ps.starbase))
-                s += galactic_ai_structure_force(w.sim, w.tinfo, static_cast<uint32_t>(st.type(ps.starbase)), ps.owner, mask);
-        } else {
-            for (const ObjectHandle u : ps.surface)
-                if (st.alive(u) && hostile(st.owner(u)) && (w.mask_of(st.type(u)) & mask) != 0) s += w.power_of(st.type(u));
-            if (hostile(ps.owner))  // ground structures: per-tech members; the untyped total adds their own power [port]
-                for (const ObjectHandle u : ps.structures)
-                    if (st.alive(u)) s += galactic_ai_structure_force(w.sim, w.tinfo, static_cast<uint32_t>(st.type(u)), ps.owner, mask);
-        }
-        return s;
+        // 0x5f2430 (galactic_ai_enemy_strength): the members-only leaf Target.EnemyForce.<layer>TotalUnnormalized, plus the
+        // structures' own AI_Combat_Power in the untyped totals only; a typed row is the leaf with the row's mask [M].
+        return galactic_ai_enemy_strength(w.sim, w.tinfo, static_cast<PlanetIndex>(target), player, space, mask);
     }
     float weight(uint32_t t, int32_t row) const {  // 0x5f1f90 x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3)
         if (!w.cfg.contrast || row < 0) return 0.0f;
@@ -611,16 +590,21 @@ public:
         if (r.free_unit >= 0) return 0.5f;
         if (p_.is_ground_structure(r.type)) {
             if (!p_.has_target()) return kVeto;
-            const gal::PlanetState& ps = p_.w.sim.planets()[static_cast<size_t>(p_.target)];
-            const auto& rules = p_.w.sim.rules();
-            if (!p_.w.sim.surface_accessible(static_cast<PlanetIndex>(p_.target))) return kVeto;  // 0x375220
-            int32_t used = static_cast<int32_t>(ps.structures.size());  // 0x3f8af0 [M: + queued structures]
-            for (const gal::BuildEntry& e : p_.w.sim.queue_of(p_.tplanet(), gal::kGroundQueue))
-                if (e.type < rules.types.size() && rules.types[e.type].kind == gal::UnitKind::GroundStructure) ++used;
-            const auto& mg = p_.w.sim.map().planets.max_ground_base;
-            const int32_t slots = static_cast<size_t>(p_.target) < mg.size() && mg[static_cast<size_t>(p_.target)] >= 0
-                                      ? mg[static_cast<size_t>(p_.target)] : 5;  // 0x372740 [M]
-            if (used + p_.ground_queued >= slots) return kVeto;
+            const PlanetIndex tp = p_.tplanet();
+            const gal::PlanetState& ps = p_.w.sim.planets()[tp];
+            if (!p_.w.sim.surface_accessible(tp)) return kVeto;  // 0x375220
+            // Per-planet cap (type +0x87C Build_Max_Instances_Per_Planet, when >= 0): the instances on the planet
+            // (0x3f94f0) [H].
+            if (const gal::TypeInfo* x = p_.ti(r.type); x && x->max_instances_per_planet >= 0) {
+                int32_t here = 0;
+                for (const ObjectHandle s : ps.structures)
+                    here += p_.w.store.alive(s) && p_.w.store.type(s) == r.type ? 1 : 0;
+                if (here >= x->max_instances_per_planet) return kVeto;
+            }
+            // Used ground slots 0x3f8af0 + this PP's queued ground structures (0x140b3a534) < the slot max 0x372740
+            // (Special_Structures_Land; galactic_slots.hpp) [H].
+            const int32_t slots = p_.w.ground_slot_max(tp);
+            if (slots >= 0 && p_.w.ground_slots_used(tp) + p_.ground_queued >= slots) return kVeto;
         } else if (p_.is_orbital_structure(r.type)) {
             if (!p_.has_target()) return kVeto;
             const gal::PlanetState& ps = p_.w.sim.planets()[static_cast<size_t>(p_.target)];
@@ -634,6 +618,11 @@ public:
         // every plan, so the AI never queues a type the story switched off (OI2 ai).
         if (p_.w.sim.production_disabled(p_.player, r.type)) return kVeto;
         if (!p_.def.magic_plan) {
+            // [port] A2f t02 R1: a produced candidate no source planet can build (Setup C t = 1e18: no planet of the
+            // level's list passes 0x2804d0, or a structure 0x2804d0 refuses at the target) is vetoed (permanent). AI_GALACTIC_2
+            // §1.4 lists no such veto (it would score 0 / -0.5); the port vetoes it so a plan never waits on the market for
+            // a type nobody can build (zero cost, Build_Initially_Locked never unlocked, Required_Special_Structures missing).
+            if (r.prod_t >= kInf) return kVeto;
             // AI_GALACTIC_3 §3.4-3.5 [H]: with AI_Uses_Galactic_Pop_Cap (off in shipped data) a unit whose pop exceeds
             // the remaining population is vetoed (permanent: Production erases it).
             if (p_.pop_cap && p_.pop_of(r.type) > p_.remaining_pop) r.prod_score = kVeto;
@@ -904,8 +893,8 @@ private:
 // ================================================================ Impl: team expansion, solve, reservations
 
 // Team spec lhs (0x66fcc0, §1.3) [H]: a category mask when every name is a GameObjectCategoryType name (types in
-// type order: not dummies [M: no build cost and not a hero], not generic [M: not StarBase], mask overlap, the TF
-// unit filter); else a '|' list of type names. Excluded types (-Name) are removed.
+// type order: flags +0x67 / +0x29 / +0x21 clear, no behaviour 0x5C / 0x5B, mask overlap, the TF unit filter); else a
+// '|' list of type names. Excluded types (-Name) are removed.
 const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan, uint32_t tf, uint32_t team) {
     const auto key = std::make_tuple(plan, tf, team);
     const auto it = team_types.find(key);
@@ -928,17 +917,18 @@ const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan
             const gal::TypeInfo& x = rules.types[ty];
             const bool unit_like = x.kind == gal::UnitKind::SpaceUnit || x.kind == gal::UnitKind::Squadron ||
                                    x.kind == gal::UnitKind::GroundUnit || x.kind == gal::UnitKind::GroundStructure;
-            const bool hero = ty < tinfo.size() && tinfo[ty].hero;
             const bool clone = ty < tinfo.size() && tinfo[ty].death_clone;
             // AI_GALACTIC_2 §1.3 + STRATEGIC_GAPS §1.2 [H]: flags +0x67 Create_Team, +0x29 squadron member, +0x21
             // Cinematic_Object_Only clear, and no behaviour 0x5C / 0x5B (DUMMY_STAR_BASE / DUMMY_GROUND_BASE).
             const bool flagged = ty < tinfo.size() && (tinfo[ty].create_team || tinfo[ty].squadron_member ||
                                                        tinfo[ty].cinematic_only || tinfo[ty].dummy_base);
             // [port] kept on top: the galactic unit kinds the port's sim produces, no IsDeathClone, no TRANSPORT
-            // behaviour, cost > 0 unless a hero - the port's Production marshaller does not veto types no planet can
-            // build (buildability §1.3 refuses transports and zero-cost types), so these stay out of team lists.
+            // behaviour (a free-store transport is a company's carrier in the port, not a plan unit). The former
+            // "cost > 0 unless a hero" rule (no such rule in §1.3) is gone since A2f t02: zero-cost types are listed as
+            // in the original; the Production veto on Setup C t = 1e18 (R1) keeps a produced one out of the plan, a
+            // free-store one may still join.
             const bool port_out = ty < tinfo.size() && tinfo[ty].transport_behavior;
-            if (!unit_like || clone || flagged || port_out || (x.build_cost <= 0 && !hero)) continue;
+            if (!unit_like || clone || flagged || port_out) continue;
             const uint64_t m = mask_of(static_cast<uint32_t>(ty));
             if ((mask & m) == 0) continue;
             if (filter != 0 && (filter & m) != filter) continue;

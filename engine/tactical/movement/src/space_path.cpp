@@ -51,6 +51,13 @@ bool SpaceOccupancy::rekey_static(ObjectId from, ObjectId to) {
     return true;
 }
 
+std::vector<ObjectId> SpaceOccupancy::static_ids() const {
+    std::vector<ObjectId> out;
+    out.reserve(statics_.size());
+    for (const auto& kv : statics_) out.push_back(kv.first);
+    return out;
+}
+
 bool SpaceOccupancy::static_entry(ObjectId id, V2& center, float& radius, uint32_t& bits) const {
     const auto it = find(statics_, id);
     if (it == statics_.end()) return false;
@@ -439,7 +446,10 @@ struct Search {
         const bool after_tangent = n.op == 11 || n.op == 12 || n.op == 15 || n.op == 16;
         const int tangent_side = (n.op == 11 || n.op == 15) ? 0 : 1;
         if (after_tangent) final_arc(n, ni, tangent_side, 17);  // op 17
-        if (req.wait_operators && wait_speed > 0.0f) {          // op 18: wait
+        // op 18: wait. S8 t09: [port] the step is clamped to the goal distance, so at the goal (dg 0) it would be a pure
+        // delay with the pose unchanged (retail always travels WaitOperatorBaseFrameTime at the wait speed); such a step is
+        // not generated (a jetpack's playback would see two identical poses and drop to 0x16 in the air, §3.1.1).
+        if (req.wait_operators && wait_speed > 0.0f && dg > 0.0f) {
             const float dt = k.wait_operator_base_frame_time;
             const float L = std::min(wait_speed * dt, dg);
             const V2 np = n.pos + fwd * L;
@@ -611,8 +621,8 @@ struct Search {
             // OI tactical: ops 5 / 6 - speed up to max (after a wait / slow-down), slow down to the wait speed.
             if (n.speed < speed) speed_change(n, ni, speed, 5);
             if (n.speed > wait_speed && wait_speed > 0.0f) speed_change(n, ni, wait_speed, 6);
-            // op 7: wait (slow straight for WaitOperatorBaseFrameTime frames)
-            if (req.wait_operators && wait_speed > 0.0f) {
+            // op 7: wait (slow straight for WaitOperatorBaseFrameTime frames); S8 t09: not at the goal (see op 18)
+            if (req.wait_operators && wait_speed > 0.0f && dg > 0.0f) {
                 const float dt = k.wait_operator_base_frame_time;
                 const float L = std::min(wait_speed * dt, dg);
                 const V2 np = n.pos + fwd * L;

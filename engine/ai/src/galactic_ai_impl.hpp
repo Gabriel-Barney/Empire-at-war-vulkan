@@ -27,6 +27,8 @@
 #include "alamo/lua/players.hpp"
 #include "alamo/lua/script_gaps.hpp"
 #include "alamo/lua/script_remaining.hpp"  // L1 final
+#include "galactic_goal_time.hpp"
+#include "galactic_slots.hpp"
 #include "alamo/objects/game_object_types.hpp"
 
 namespace alamo::ai {
@@ -356,6 +358,13 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     gal::Bitset ai_dangerous(int32_t player) const;
     PlanetIndex nearest_owned(int32_t player, int32_t target) const;
     bool can_build_at(int32_t player, uint32_t type, PlanetIndex p) const { return galactic_ai_can_build(sim, player, type, p); }
+    // Ground structure slots (A2 f t01): the slot max 0x372740 = planet data +0x230, seeded from the planet type's
+    // Special_Structures_Land (+0x92C) (AI_GALACTIC_TOKENS MaxStructureSlots, STRATEGIC_GAPS §1 step 18) [H];
+    // -1 = tag absent = no cap [port, as GalacticSim::build_check]. Used 0x3f8af0 = the ground structures on the
+    // surface, 0 when the planet has no ground base (D+0x130 > 0 ? D+0x160 : 0, OpenStructureSlotsUnnormalized) [H].
+    // Not the legacy <Max_Ground_Base> tag (set only on Galaxy_Core_Art_Model, so 0 on every real planet).
+    int32_t ground_slot_max(PlanetIndex p) const { return galactic_ai_ground_slot_max(sim, p); }
+    int32_t ground_slots_used(PlanetIndex p) const { return galactic_ai_ground_slots_used(sim, p); }
     uint32_t next_starbase_type(int32_t player, PlanetIndex p) const;
     bool applies(int32_t self, int32_t target, uint32_t flags) const;
     int32_t script_player(int32_t script) const;
@@ -383,6 +392,8 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // ---- build tasks + market (galactic_build.cpp) ----
     void create_build_tasks(TaskForceRec& tf);
     void market_planet(PlanetIndex p);       // one planet's queues (> 30 frames since their last run), sim hook
+    // 0x525200 stand-in [M] (galactic_goal_time.hpp): the time the running plan's unfinished build tasks still need.
+    float goal_production_time(int32_t running) const;
     void service_build_tasks(int32_t player);  // PRODUCTION_QUEUED polls, claims, failures
     void fail_build(BuildTask& b, const char* why);
     void finish_build(BuildTask& b);
@@ -575,7 +586,9 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         if (g.running >= 0) w->end_plan(g.running, by_goal_system);
     }
     void drop_potential_plan(Goal& g) override;
-    float elapsed_eta(const Goal& g) override { return g.eta; }  // [port] on schedule: never late
+    float elapsed_eta(const Goal& g) override {  // §1.6: 0x525200 [M] + elapsed [H] (galactic_goal_time.hpp)
+        return galactic_maintenance_eta(w->goal_production_time(g.running), g.created, w->now);
+    }
     int32_t quota_players() override;
 
     // ---- ContextModeServices ----

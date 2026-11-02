@@ -639,11 +639,16 @@ static void test_bridges() {
         const uint32_t r1 = a.new_reinforcement();
         a.new_reinforcement();
         a.finish_reinforcement(r1, {4, 5});
+        a.watch_ability(9);  // S7 t15 A1: watched units' "unit ability finished" counts (bridge save version 2)
+        a.watch_ability(4);
+        a.ability_finished(9);
+        a.ability_finished(9);
         ByteWriter w;
         a.write(w);
         ObjectBridge b;
         ByteReader r(w.bytes());
         CHECK(b.read(r) && r.done());
+        CHECK(b.ability_signals(9) == 2 && b.ability_signals(4) == 0 && b.watch_ability(4) == 0);
         StateHasher ha, hb;
         a.hash(ha);
         b.hash(hb);

@@ -135,6 +135,12 @@ public:
     // (The XML attach loop itself has no duplicate check: a name listed twice, or two names with
     // one id, attach two instances; the type -> index table points at the later one.)
     bool add_behavior(ObjectHandle h, BehaviorTypeId id);
+    // Remove_Behavior (0x3a54c0, S9_DEATH_CLONE_SHIELDS 1.6): instance `index` of behaviors(h) leaves the attach-ordered
+    // list (later instances move down one index; their state goes with them), the type -> index table is rebuilt (last
+    // instance wins), and when no instance of that id is left the object leaves the id's component table and category
+    // list (order of the others kept). The serviced registration stays [port: not traced]. No draws. False for a stale
+    // handle or a bad index. The detach side effects (vf15) are the caller's.
+    bool remove_behavior(ObjectHandle h, uint32_t index);
     void set_position(ObjectHandle h, Vec3 p);
     void set_facing(ObjectHandle h, Vec3 f);
     void set_health(ObjectHandle h, float health);
