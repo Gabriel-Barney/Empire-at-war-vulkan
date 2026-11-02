@@ -2013,8 +2013,10 @@ std::vector<PlanetIndex> GalacticAiWorld::reach_planets(int32_t player, int leve
     return pa->source_planets(level);
 }
 
+float GalacticAiWorld::plan_production_time(int32_t running) const { return impl_->goal_production_time(running); }
+
 std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal,
-                                                           int32_t target, bool* ok) {
+                                                           int32_t target, bool* ok, float* eta) {
     Impl& w = *impl_;
     std::vector<uint32_t> out;
     if (ok) *ok = false;
@@ -2026,6 +2028,7 @@ std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std:
     if (!w.solve_potential_plan(*pa, p, g, target, rec)) return out;
     for (const PpSelection& s : rec.sel) out.push_back(s.type);
     if (ok) *ok = true;
+    if (eta) *eta = rec.eta;
     return out;
 }
 

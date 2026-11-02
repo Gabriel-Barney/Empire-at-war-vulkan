@@ -170,9 +170,13 @@ public:
 
     // A2 galactic, tests / diagnostics: solves the PotentialPlan of `plan` for (goal type, target) for an AI player as a
     // proposal would (it draws the synced RNG the same way) and returns the selected types in selection order; empty
-    // with *ok = false when the solve fails. No AI state changes besides the RNG.
+    // with *ok = false when the solve fails; *eta = the PotentialPlan's ETA (s) when solved. No AI state changes besides
+    // the RNG.
     std::vector<uint32_t> solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal, int32_t target,
-                                               bool* ok = nullptr);
+                                               bool* ok = nullptr, float* eta = nullptr);
+    // A2f t02, tests / diagnostics: the goal maintenance's production-time term (0x525200 stand-in [M]) of a running plan:
+    // the largest time its unfinished build tasks still need (0 when none or no such plan).
+    float plan_production_time(int32_t running) const;
 
     // Free store (docs/re/FIXPASS_GALACTIC.md §1), tests / diagnostics. These act like the player's free-store script:
     //   free_store_move   = FreeStore.Move_Object(unit, planet): false when refused (§1.2); a true return with no

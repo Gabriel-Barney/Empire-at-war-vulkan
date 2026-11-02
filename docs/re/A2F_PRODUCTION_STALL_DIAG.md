@@ -184,3 +184,9 @@ Environment switches in the copy only:
 - `A2F_ELAPSED`:
   - =1 returns (now - created) / 30;
   - =2 returns eta + (now - created) / 30.
+
+## Outcome (2026-11-02)
+
+- R1 implemented as a [port] veto in `ProductionM::score`: a produced candidate whose Setup C time is 1e18 is vetoed (covers Veers cost 0, Build_Initially_Locked TIE / Vader TIE, missing factories, and Build_Base_Component structures whose prerequisites fail at the target). The port-only "cost > 0 unless hero" team-list filter was removed.
+- R2 not implemented as "PP ETA + elapsed": measured, it dropped every on-schedule build (Build_Base_Component successes 5 -> 0). Implemented instead: goal ETA = remaining time of the plan's unfinished build tasks (stand-in for 0x525200 [M], inferred from its callees) + (NOW - created)/FPS [H]. Needs an RE read of 0x525200.
+- HotM-human, 72000 ticks: Conquer_Opponent accepted 11 -> 60, rejected orders 85 -> 0, failed build tasks 144 -> 2; still no capture of the human's planets (Budget vetoes most potential plans).

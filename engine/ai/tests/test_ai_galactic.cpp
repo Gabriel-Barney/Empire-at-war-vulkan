@@ -41,6 +41,7 @@
 #include "alamo/lua/players.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
+#include "../src/galactic_goal_time.hpp"
 #include "../src/galactic_slots.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
 #include "alamo/data/game_database.hpp"
@@ -1168,6 +1169,16 @@ function BaseForce_Production_Failed(tf, t)
 end
 )";
 
+// A2f t02: a category-mask team (CORVETTE is a GameObjectCategoryType name, AI_GALACTIC_2 §1.3).
+static const char* kPlanMaskCorvette = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "Corvette = 1" } }
+end
+function MainForce_Thread() ScriptExit() end
+)";
+
 struct ParityWorld {
     MemoryFiles files;
     AiDefinitions defs;
@@ -1184,17 +1195,20 @@ struct ParityWorld {
     std::vector<std::string> orders;
 
     // only: the plan files to load (by base name), empty = all. rules_tweak: applied to the rules before the sim starts;
-    // eq_first: equations added before the synthetic ones (a name added here wins: the first definition is kept).
+    // eq_first: equations added before the synthetic ones (a name added here wins: the first definition is kept);
+    // tinfo_tweak: applied to the AI type info before the world is built.
     ParityWorld(bool pop_cap, const std::vector<std::string>& only,
                 const std::function<void(gal::GalacticSetup&)>& tweak = {},
                 const std::function<void(gal::GalacticRules&)>& rules_tweak = {},
-                const std::function<void(EquationSet&)>& eq_first = {}) {
+                const std::function<void(EquationSet&)>& eq_first = {},
+                const std::function<void(std::vector<GalacticAiTypeInfo>&)>& tinfo_tweak = {}) {
         if (eq_first) eq_first(eqs);
         syn_data(files, defs, eqs, plan_files);
         files.add("Data\\Scripts\\AI\\HeroAttach.lua", kPlanHeroAttach);
         files.add("Data\\Scripts\\AI\\HeroDeny.lua", kPlanHeroDeny);
         files.add("Data\\Scripts\\AI\\MagicSpace.lua", kPlanMagic);
         files.add("Data\\Scripts\\AI\\BuildBarracks.lua", kPlanBuildBarracks);
+        files.add("Data\\Scripts\\AI\\MaskCorvette.lua", kPlanMaskCorvette);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -1242,6 +1256,7 @@ struct ParityWorld {
         tinfo[hero].lua_script = "HeroShipScript";  // a hero AI script: a hero record (§2.1)
         tinfo[tCorvette].unit_ai = true;            // STRATEGIC_GAPS §1.1 removal feed filter
         tinfo[tInfantry].company_first = tCorvette; // (synthetic) company-leader substitution for the survival key
+        if (tinfo_tweak) tinfo_tweak(tinfo);
         GalacticAiConfig cfg;
         cfg.players = {{0, "SynEmpire", 1}};
         cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
@@ -1515,6 +1530,209 @@ static void test_budget_fraction_before_init() {
         CHECK(funded == 2);                      // Offensive and Infrastructure (Defensive = Zero)
         CHECK(ok && infra > 0.0 && infra < 1.0);  // Infrastructure holds more than one Barracks
     }
+}
+
+// A2f t02 R1: ProductionM vetoes a produced candidate whose Setup C time is 1e18 (no source planet passes 0x2804d0, or a
+// structure 0x2804d0 refuses at the target) [port: AI_GALACTIC_2 §1.4 has no such veto]. Cases from the HotM diagnosis
+// (docs/re/A2F_PRODUCTION_STALL_DIAG.md): a zero-cost hero type (Veers_AT_AT_Walker), Build_Initially_Locked never
+// unlocked (TIE_Fighter_Squadron), a structure whose Required_Special_Structures is missing at the target (Heavy /
+// Advanced Vehicle Factory). Free-store units of such types still join (FreeStore score, Production 0.5). Category-mask
+// teams no longer drop zero-cost types (no cost rule in §1.3).
+static void test_production_unbuildable() {
+    bool ok = false;
+    float eta = -1.0f;
+    const auto no_hero = [](gal::GalacticSetup& s) {
+        s.forces.erase(std::remove_if(s.forces.begin(), s.forces.end(), [](const auto& f) { return f.type == tTypes; }), s.forces.end());
+    };
+    {
+        // HeroShip (cost 0, the HotM Veers case) not on the free store: listed first in the team and tied with the
+        // Corvette, it used to win and wait on the market forever; now vetoed, the Corvette is produced.
+        ParityWorld pw(false, {"HeroDeny"}, no_hero);
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok, &eta);
+        std::printf("unbuildable: zero-cost hero type off the free store -> %s, hero %s, corvette %s, eta %.1f\n", ok ? "solved" : "failed",
+                    pw.has(s, pw.hero) ? "yes" : "no", pw.has(s, tCorvette) ? "yes" : "no", static_cast<double>(eta));
+        CHECK(ok && !pw.has(s, pw.hero) && pw.has(s, tCorvette));
+        CHECK(eta > 0.0f);  // every produced selection has a source planet: the ETA counts it
+        // On the free store the same hero type joins (free units are not vetoed).
+        ParityWorld fs(false, {"HeroDeny"});
+        fs.run(2);
+        const std::vector<uint32_t> f = fs.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok, &eta);
+        CHECK(ok && fs.has(f, fs.hero));
+    }
+    {
+        // Build_Initially_Locked (TIE_Fighter_Squadron in HotM): vetoed until unlocked; with the hero gone too the solve fails.
+        ParityWorld pw(false, {"HeroDeny"}, no_hero, [](gal::GalacticRules& r) { r.types[tCorvette].build_initially_locked = true; });
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        std::printf("unbuildable: locked Corvette -> %s (%zu selected)\n", ok ? "solved" : "failed", s.size());
+        CHECK(!ok && s.empty());
+        pw.sim->unlock_type(0, tCorvette);
+        const std::vector<uint32_t> u = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok);
+        CHECK(ok && pw.has(u, tCorvette) && !pw.has(u, pw.hero));
+    }
+    {
+        // A structure needing a structure the target lacks (the Heavy / Advanced Vehicle Factory case): the Barracks
+        // needs a Barracks; P0 holds one, P1 (the Empire's too) none.
+        const auto needs = [](gal::GalacticRules& r) { r.types[tBarracks].required_special_structures = {tBarracks}; };
+        ParityWorld pw(false, {"BuildBarracks"}, {}, needs);
+        pw.run(2);
+        const std::vector<uint32_t> at0 = pw.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 0, &ok);
+        CHECK(ok && pw.has(at0, tBarracks));
+        const std::vector<uint32_t> at1 = pw.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 1, &ok);
+        std::printf("unbuildable: Barracks needing a Barracks at P1 -> %s\n", ok ? "solved" : "vetoed");
+        CHECK(!ok && at1.empty());
+        ParityWorld free_rule(false, {"BuildBarracks"});  // control: no requirement -> P1 solves
+        free_rule.run(2);
+        const std::vector<uint32_t> c1 = free_rule.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 1, &ok);
+        CHECK(ok && free_rule.has(c1, tBarracks));
+    }
+    {
+        // Category-mask team "Corvette": a zero-cost non-hero CORVETTE type is listed (no cost rule in §1.3). Produced it
+        // is vetoed (the Corvette is built); on the free store it joins.
+        uint32_t zc = 0;
+        const auto add = [&zc](gal::GalacticRules& r) {
+            zc = static_cast<uint32_t>(r.types.size());
+            gal::TypeInfo z = r.types[tCorvette];
+            z.name = "ZeroCorvette";
+            z.build_cost = 0;
+            r.types.push_back(z);
+        };
+        const auto cat = [&zc](std::vector<GalacticAiTypeInfo>& t) { t[zc].categories = {"CORVETTE"}; };
+        ParityWorld pw(false, {"MaskCorvette"}, {}, add, {}, cat);
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "MaskCorvette", "Conquer_Planet", 3, &ok);
+        CHECK(ok && pw.has(s, tCorvette) && !pw.has(s, zc));
+        ParityWorld fs(false, {"MaskCorvette"}, [&zc](gal::GalacticSetup& st) { st.forces.push_back({0, 0, zc}); }, add, {}, cat);
+        fs.run(2);
+        const std::vector<uint32_t> f = fs.world->solve_potential_plan(0, "MaskCorvette", "Conquer_Planet", 3, &ok);
+        std::printf("unbuildable: zero-cost CORVETTE type on the free store -> %s, joins %s\n", ok ? "solved" : "failed",
+                    fs.has(f, zc) ? "yes" : "no");
+        CHECK(ok && fs.has(f, zc) && !fs.has(f, tCorvette));
+    }
+}
+
+// A2f t02 R2: maintenance drops a replaceable goal when AllowedTime < ETA, ETA = 0x525200 + (NOW - created) / FPS
+// (AI_GALACTIC §1.6) [H; 0x525200 = the time the goal's build tasks still need, M]. Was "ETA only": never late.
+static const char* kLateGoals = R"(<Goals>
+  <Late_Goal><AIGoalApplicationFlags>Friendly</AIGoalApplicationFlags><GameMode>Galactic</GameMode>
+    <Category>Offensive</Category><Reachability>Any</Reachability><Time_Limit>240</Time_Limit>
+    <Build_Time_Delay_Tolerance>1.3</Build_Time_Delay_Tolerance></Late_Goal>
+</Goals>)";
+
+enum class LateMode { Stalled, OnSchedule };
+
+struct LateHooks final : GoalModeHooks {
+    int64_t now = 0, ended = -1, created = -1;
+    bool removable = true;
+    float eta = 10.0f;
+    LateMode mode = LateMode::Stalled;
+    uint32_t target_count() override { return 1; }
+    bool applies(int32_t, uint32_t) override { return true; }
+    bool blocked(uint32_t, int32_t) override { return false; }
+    bool evaluate(const std::string&, int32_t, double& out) override {
+        out = 10.0;
+        return true;
+    }
+    bool accept(Goal& g) override {
+        g.plan = 0;
+        g.pp_valid = true;
+        g.eta = eta;
+        return true;
+    }
+    bool plan_activatable(const Goal&) override { return true; }
+    bool plan_invalid(const Goal& g) override { return g.running < 0; }
+    bool replaceable(const Goal&) override { return removable; }
+    void refresh_plan(Goal&) override {}
+    bool uses_budget() override { return true; }
+    bool can_fund(const Goal&) override { return true; }
+    float category_credits(int32_t) override { return 1.0f; }
+    void budget_add(Goal&) override {}
+    void budget_release(Goal&) override {}
+    void budget_weights() override {}
+    std::vector<int32_t> category_order() override { return {}; }
+    void queue_production(Goal&) override {}
+    void instantiate(Goal& g) override {
+        g.running = 1;
+        created = g.created;
+    }
+    void end_plan(Goal&, bool) override {
+        if (ended < 0) ended = now;
+    }
+    void drop_potential_plan(Goal&) override {}
+    float elapsed_eta(const Goal& g) override {
+        // Stalled: the build still needs its whole time; on schedule: the remaining time falls with the clock.
+        const float elapsed = static_cast<float>(now - g.created) / static_cast<float>(kAiFps);
+        const float production = mode == LateMode::Stalled ? g.eta : std::max(g.eta - elapsed, 0.0f);
+        return galactic_maintenance_eta(production, g.created, now);
+    }
+    int32_t quota_players() override { return 1; }
+};
+
+static int64_t late_goal_released_after(bool removable, float eta, LateMode mode) {
+    AiDefinitions defs;
+    defs.add_goals(kLateGoals, "g.xml");
+    defs.link();
+    LateHooks hooks;
+    hooks.removable = removable;
+    hooks.eta = eta;
+    hooks.mode = mode;
+    LearningSystem learning;
+    SimRng rng(1);
+    GoalSystem gs;
+    gs.init(defs, {{0u, "F"}}, &hooks, &learning, nullptr, &rng, {});
+    for (int64_t f = 1; f <= 1200 && hooks.ended < 0; ++f) {
+        hooks.now = f;
+        gs.service(f);
+    }
+    return hooks.created > 0 && hooks.ended > 0 ? hooks.ended - hooks.created : -1;
+}
+
+static void test_goal_time_drop() {
+    CHECK(galactic_maintenance_eta(10.0f, 300, 300) == 10.0f);
+    CHECK(galactic_maintenance_eta(0.0f, 300, 690) == 13.0f);
+    CHECK(galactic_maintenance_eta(4.0f, 300, 391) > 7.0f);
+    // ETA 10, tolerance 1.3 (AllowedTime 13). Stalled: 10 + elapsed > 13 after 3 s (90 frames).
+    const int64_t stalled = late_goal_released_after(true, 10.0f, LateMode::Stalled);
+    // On schedule: max(10 - elapsed, 0) + elapsed > 13 only once elapsed > 13 s (390 frames).
+    const int64_t on_time = late_goal_released_after(true, 10.0f, LateMode::OnSchedule);
+    std::printf("goal time drop: ETA 10, tolerance 1.3 -> stalled released after %lld frames, on schedule after %lld\n",
+                static_cast<long long>(stalled), static_cast<long long>(on_time));
+    CHECK(stalled > 90 && stalled <= 92);
+    CHECK(on_time > 390 && on_time <= 392);
+    CHECK(late_goal_released_after(false, 10.0f, LateMode::Stalled) < 0);  // Set_As_Goal_System_Removable(false): kept
+    CHECK(late_goal_released_after(true, 0.0f, LateMode::Stalled) < 0);    // ETA 0 -> AllowedTime 0 = no limit
+
+    // The 0x525200 stand-in in a world: a Barracks plan at P0 (Upgrade_Starbase goal). While its build task waits or
+    // produces, the plan's production time is > 0 and falls; it is 0 once the task finished.
+    ParityWorld pw(false, {"BuildBarracks"});
+    float first = -1.0f, last = -1.0f, peak = 0.0f;
+    int64_t seen = 0, zero_after = 0;
+    int32_t plan = -1;
+    for (int32_t f = 1; f <= 30 * 120; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        const AiContext* c = pw.world->context(0);
+        if (plan < 0 && c)
+            for (const auto& cat : c->goals.active())
+                for (const Goal& g : cat)
+                    if (g.running >= 0 && plan < 0) plan = g.running;
+        if (plan < 0) continue;
+        const float t = pw.world->plan_production_time(plan);
+        if (t > 0.0f) {
+            if (first < 0.0f) first = t;
+            last = t;
+            peak = std::max(peak, t);
+            ++seen;
+        } else if (seen > 0) {
+            ++zero_after;
+        }
+    }
+    std::printf("goal time drop: Barracks plan %d production time first %.1f, peak %.1f, last %.1f (%lld frames > 0, %lld at 0 after)\n",
+                plan, static_cast<double>(first), static_cast<double>(peak), static_cast<double>(last), static_cast<long long>(seen),
+                static_cast<long long>(zero_after));
+    CHECK(plan >= 0 && seen > 0 && first > 0.0f && last < first && zero_after > 0);
+    CHECK(pw.world->plan_production_time(-1) == 0.0f && pw.world->plan_production_time(123456) == 0.0f);
 }
 
 // ================================================================ FIXPASS_GALACTIC §1: free-store moves on Friendly_Only
@@ -2746,6 +2964,8 @@ int main(int argc, char** argv) {
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();
+    test_production_unbuildable();
+    test_goal_time_drop();
     test_free_store_path_rules();
     test_free_store_world();
     test_underworld_special();

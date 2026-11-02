@@ -481,4 +481,51 @@ void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
     }
 }
 
+// 0x525200 stand-in [M] (galactic_goal_time.hpp): over the running plan's unfinished build tasks (task id order), the
+// largest time until the task's item is built, from the current queues (no reservations: they are plan-time estimates):
+//   producing at P   -> the sim queue's time up to and including its item (the head's remaining, then build times);
+//   claimed at P     -> the sim queue's time + the build times of P's claimed tasks up to and including it;
+//   bidding for P    -> the sim queue's time + all of P's claimed tasks + its own build time there (0x371230);
+//   no planet yet    -> its build time without a planet (nobody bids: the time only grows through elapsed).
+// 0 when no task is unfinished (the production is over or the plan has none).
+float GalacticAiWorld::Impl::goal_production_time(int32_t running) const {
+    float t = 0.0f;
+    if (running < 0) return t;
+    const auto sim_time = [this](PlanetIndex p, uint32_t q, const BuildTask* upto) {
+        float s = 0.0f;
+        int32_t same = 0;
+        const auto queue = sim.queue_of(p, q);
+        for (size_t i = 0; i < queue.size(); ++i) {
+            s += i == 0 ? queue[i].remaining : queue[i].build_time;
+            if (upto && queue[i].type == upto->type && queue[i].player == upto->player && ++same > upto->queue_entries_before) break;
+        }
+        return s;
+    };
+    const auto claimed_time = [this](PlanetIndex p, uint32_t q, int32_t upto) {
+        float s = 0.0f;
+        for (const int32_t id : planet_queues[p][q].tasks) {
+            const auto it = builds.find(id);
+            if (it == builds.end() || it->second.state != BuildState::Queued) continue;
+            s += btime_at(it->second.player, it->second.type, p);
+            if (id == upto) break;
+        }
+        return s;
+    };
+    for (const auto& entry : builds) {
+        const BuildTask& b = entry.second;
+        if (b.plan != running || (b.state != BuildState::Queued && b.state != BuildState::Producing)) continue;
+        float need = 0.0f;
+        if (b.state == BuildState::Producing && valid_planet(b.producing_at)) {
+            need = sim_time(b.producing_at, b.queue, &b);
+        } else if (valid_planet(b.bid_planet) && b.queue <= 1) {
+            need = sim_time(b.bid_planet, b.queue, nullptr) + claimed_time(b.bid_planet, b.queue, b.listed ? -1 : b.id);
+            if (b.listed) need += btime_at(b.player, b.type, b.bid_planet);  // on the market: not in the planet's list yet
+        } else {
+            need = btime_none(b.type);
+        }
+        t = std::max(t, need);
+    }
+    return t;
+}
+
 }  // namespace alamo::ai

@@ -219,7 +219,9 @@ struct GalPp {
                     best_c = c;
                 }
             }
-            if (best < 0) continue;  // no source: the build task waits on the market (§2.3)
+            // No source: the build task waits on the market (§2.3) and the ETA ignores it [H]. Since the Production veto
+            // (A2f t02 R1, same list and test as Setup C) this happens only in a MagicPlan (spawned, no queue).
+            if (best < 0) continue;
             const PlanetIndex p = list[static_cast<size_t>(best)];
             const float bt = w.btime_at(player, t, p);
             pool[static_cast<size_t>(best)].used = true;
@@ -615,6 +617,11 @@ public:
         // every plan, so the AI never queues a type the story switched off (OI2 ai).
         if (p_.w.sim.production_disabled(p_.player, r.type)) return kVeto;
         if (!p_.def.magic_plan) {
+            // [port] A2f t02 R1: a produced candidate no source planet can build (Setup C t = 1e18: no planet of the
+            // level's list passes 0x2804d0, or a structure 0x2804d0 refuses at the target) is vetoed (permanent). AI_GALACTIC_2
+            // §1.4 lists no such veto (it would score 0 / -0.5); the port vetoes it so a plan never waits on the market for
+            // a type nobody can build (zero cost, Build_Initially_Locked never unlocked, Required_Special_Structures missing).
+            if (r.prod_t >= kInf) return kVeto;
             // AI_GALACTIC_3 §3.4-3.5 [H]: with AI_Uses_Galactic_Pop_Cap (off in shipped data) a unit whose pop exceeds
             // the remaining population is vetoed (permanent: Production erases it).
             if (p_.pop_cap && p_.pop_of(r.type) > p_.remaining_pop) r.prod_score = kVeto;
@@ -885,8 +892,8 @@ private:
 // ================================================================ Impl: team expansion, solve, reservations
 
 // Team spec lhs (0x66fcc0, §1.3) [H]: a category mask when every name is a GameObjectCategoryType name (types in
-// type order: not dummies [M: no build cost and not a hero], not generic [M: not StarBase], mask overlap, the TF
-// unit filter); else a '|' list of type names. Excluded types (-Name) are removed.
+// type order: flags +0x67 / +0x29 / +0x21 clear, no behaviour 0x5C / 0x5B, mask overlap, the TF unit filter); else a
+// '|' list of type names. Excluded types (-Name) are removed.
 const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan, uint32_t tf, uint32_t team) {
     const auto key = std::make_tuple(plan, tf, team);
     const auto it = team_types.find(key);
@@ -909,17 +916,18 @@ const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan
             const gal::TypeInfo& x = rules.types[ty];
             const bool unit_like = x.kind == gal::UnitKind::SpaceUnit || x.kind == gal::UnitKind::Squadron ||
                                    x.kind == gal::UnitKind::GroundUnit || x.kind == gal::UnitKind::GroundStructure;
-            const bool hero = ty < tinfo.size() && tinfo[ty].hero;
             const bool clone = ty < tinfo.size() && tinfo[ty].death_clone;
             // AI_GALACTIC_2 §1.3 + STRATEGIC_GAPS §1.2 [H]: flags +0x67 Create_Team, +0x29 squadron member, +0x21
             // Cinematic_Object_Only clear, and no behaviour 0x5C / 0x5B (DUMMY_STAR_BASE / DUMMY_GROUND_BASE).
             const bool flagged = ty < tinfo.size() && (tinfo[ty].create_team || tinfo[ty].squadron_member ||
                                                        tinfo[ty].cinematic_only || tinfo[ty].dummy_base);
             // [port] kept on top: the galactic unit kinds the port's sim produces, no IsDeathClone, no TRANSPORT
-            // behaviour, cost > 0 unless a hero - the port's Production marshaller does not veto types no planet can
-            // build (buildability §1.3 refuses transports and zero-cost types), so these stay out of team lists.
+            // behaviour (a free-store transport is a company's carrier in the port, not a plan unit). The former
+            // "cost > 0 unless a hero" rule (no such rule in §1.3) is gone since A2f t02: zero-cost types are listed as
+            // in the original; the Production veto on Setup C t = 1e18 (R1) keeps a produced one out of the plan, a
+            // free-store one may still join.
             const bool port_out = ty < tinfo.size() && tinfo[ty].transport_behavior;
-            if (!unit_like || clone || flagged || port_out || (x.build_cost <= 0 && !hero)) continue;
+            if (!unit_like || clone || flagged || port_out) continue;
             const uint64_t m = mask_of(static_cast<uint32_t>(ty));
             if ((mask & m) == 0) continue;
             if (filter != 0 && (filter & m) != filter) continue;
