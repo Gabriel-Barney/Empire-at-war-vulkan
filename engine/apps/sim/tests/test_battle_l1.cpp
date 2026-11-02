@@ -113,7 +113,7 @@ const char* kTypes = R"(<L1>
  <GroundInfantry Name="L1_Jet_Trooper"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>
   <Uses_Multiple_Locomotors>Yes</Uses_Multiple_Locomotors><Primary_Locomotor_Name>WALK_LOCOMOTOR</Primary_Locomotor_Name>
   <Secondary_Locomotor_Name>JETPACK_LOCOMOTOR</Secondary_Locomotor_Name><Alternate_Max_Speed>2.5</Alternate_Max_Speed>
-  <Hover_Offset>30</Hover_Offset><Projectile_Types>L1_Laser_Proj</Projectile_Types>
+  <Hover_Offset>30</Hover_Offset><Behavior>SELECTABLE, WEAPON</Behavior><Projectile_Types>L1_Laser_Proj</Projectile_Types>
   <Projectile_Fire_Recharge_Seconds>0.5</Projectile_Fire_Recharge_Seconds></GroundInfantry>
  <GroundCompany Name="L1_Jet_Squad"><Company_Units>L1_Jet_Trooper, L1_Jet_Trooper</Company_Units>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>

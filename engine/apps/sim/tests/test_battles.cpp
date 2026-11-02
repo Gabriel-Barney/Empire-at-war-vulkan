@@ -107,7 +107,7 @@ const char* kTypes = R"(<S10>
   <AI_Combat_Power>50</AI_Combat_Power><CategoryMask>Infantry</CategoryMask><Targeting_Max_Attack_Distance>250</Targeting_Max_Attack_Distance>
   <Projectile_Types>S10_Blaster_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>1.0</Projectile_Fire_Recharge_Seconds>
   <Projectile_Fire_Pulse_Count>1</Projectile_Fire_Pulse_Count><MovementClass>Infantry</MovementClass>
-  <Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>
+  <Behavior>SELECTABLE, WEAPON</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>
  </GroundInfantry>
  <GroundCompany Name="S10_Squad"><Company_Units>S10_Trooper, S10_Trooper, S10_Trooper, S10_Trooper</Company_Units>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
@@ -374,7 +374,7 @@ std::string fighter_types() {
                  "<Max_Lift>4.0</Max_Lift><Max_Thrust>1.0</Max_Thrust><Bank_Turn_Angle>40</Bank_Turn_Angle><Strafe_Distance>500</Strafe_Distance>"
                  "<CategoryMask>Fighter</CategoryMask><Targeting_Max_Attack_Distance>900</Targeting_Max_Attack_Distance>"
                  "<Projectile_Types>S10_Blaster_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>1.0</Projectile_Fire_Recharge_Seconds>"
-                 "<Projectile_Fire_Pulse_Count>1</Projectile_Fire_Pulse_Count><Behavior>SELECTABLE</Behavior>"
+                 "<Projectile_Fire_Pulse_Count>1</Projectile_Fire_Pulse_Count><Behavior>SELECTABLE, WEAPON</Behavior>"
                  "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><SpaceBehavior>FIGHTER_LOCOMOTOR</SpaceBehavior>"
                  "<Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius></SpaceUnit>\n"
                  " <Squadron Name=\"S10_TIE_Squadron\"><Squadron_Units>S10_TIE, S10_TIE, S10_TIE</Squadron_Units>"
@@ -2115,6 +2115,91 @@ void test_fog_bm_battle(const Data& d) {
 }
 #endif
 
+// S8 t08 (TACTICAL_COMBAT §3.1.1): the units with both weapon sources get their own weapon (WEAPON behaviour +
+// Projectile_Types) next to their weapon hardpoints, with the Fire_Weapon_When_* / Fire_When_* flags of the table; a type
+// with Projectile_Types but no WEAPON behaviour gets none. S8 t06 B4 (LOB_SOLVER §5.1): with model data the own weapon's
+// fire bones MUZZLEA_NN come from the land model.
+void test_foc_weapon_sources(const objects::GameObjectTypes& types, const BattleCatalog& catalog) {
+    namespace tc = tactical::combat;
+    struct Row {
+        const char* unit;
+        const char* own;  // own weapon projectile
+        bool own_dep, own_undep, own_rocket, own_normal;
+        const char* hp;  // weapon hardpoint projectile
+        bool hp_dep, hp_undep, hp_rocket, hp_normal;
+    };
+    const Row rows[] = {
+        {"SPMAT_Walker", "Proj_Ground_SPMAT_Grenade", true, false, true, true, "Proj_Blaster_Cannon_Green", false, true, true, true},
+        {"T4B_Tank", "Proj_Ground_Laser_Cannon_Red_T4B", true, true, false, true, "Proj_T4B_Missile", true, true, true, false},
+        {"Dark_Trooper_PhaseIII", "Proj_Ground_Laser_Cannon_Red_DT3", false, true, true, true, "Proj_Dark_Trooper_Missile", true, false, true,
+         true},
+        {"Destroyer_Droid", "Proj_Destroyer_Droid_Blaster_Cannon", true, false, false, true, "Proj_Destroyer_Droid_Ion_Cannon", true, false,
+         true, false},
+    };
+    for (const Row& r : rows) {
+        const objects::TypeIndex t = types.resolve_name(r.unit);
+        CHECK(t != objects::kNone);
+        if (t == objects::kNone) continue;
+        std::vector<uint32_t> idx;
+        const BattleTables bt = catalog.build_battle({static_cast<uint32_t>(t)}, idx, false);
+        const tc::CombatData& cd = bt.combat;
+        CHECK(cd.units.size() == 1);
+        if (cd.units.size() != 1) continue;
+        const tc::UnitDesc& u = cd.units[0];
+        const bool own_ok = u.weapon_projectile >= 0 && cd.projectiles[static_cast<size_t>(u.weapon_projectile)].name == r.own &&
+                            u.fire_weapon_when_deployed == r.own_dep && u.fire_weapon_when_undeployed == r.own_undep &&
+                            u.fire_weapon_when_rocket_attack == r.own_rocket && u.fire_weapon_when_normal_attack == r.own_normal;
+        uint32_t weapon_hps = 0, hp_ok = 0;
+        for (const uint32_t h : u.hardpoints) {
+            const tc::HardpointDesc& hd = cd.hardpoints[h];
+            if (!tc::is_weapon(hd.kind)) continue;
+            ++weapon_hps;
+            if (hd.projectile >= 0 && cd.projectiles[static_cast<size_t>(hd.projectile)].name == r.hp && hd.fire_when_deployed == r.hp_dep &&
+                hd.fire_when_undeployed == r.hp_undep && hd.fire_when_rocket_attack == r.hp_rocket &&
+                hd.fire_when_normal_attack == r.hp_normal)
+                ++hp_ok;
+        }
+        std::printf("foc weapon sources: %s own %s (%d), %u weapon hardpoints (%u as the table), muzzle model %d bones %zu\n", r.unit,
+                    u.weapon_projectile >= 0 ? cd.projectiles[static_cast<size_t>(u.weapon_projectile)].name.c_str() : "-",
+                    own_ok ? 1 : 0, weapon_hps, hp_ok, u.muzzle_model ? 1 : 0, u.muzzle_bones.size());
+        CHECK(own_ok && weapon_hps > 0 && hp_ok == weapon_hps);
+        if (u.muzzle_model) CHECK(!u.muzzle_bones.empty());  // the vanilla models carry MUZZLEA_00
+    }
+    {  // Projectile_Types without the WEAPON behaviour (and without weapon hardpoints): no weapon.
+        uint32_t listed = 0, armed = 0;
+        std::string example;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            if (types.get_list(t, "Projectile_Types").empty() ||
+                types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon) || !types.hardpoints(t).empty())
+                continue;
+            ++listed;
+            std::vector<uint32_t> idx;
+            const tc::CombatData cd = catalog.build({t}, idx);
+            if (!cd.units.empty() && cd.units[0].weapon_projectile >= 0) ++armed;
+            if (example.empty()) example = std::string(types.raw().types().name[t]);
+        }
+        std::printf("foc weapon sources: %u types list Projectile_Types without WEAPON or hardpoints (e.g. %s), %u armed\n", listed,
+                    example.c_str(), armed);
+        CHECK(listed > 0 && armed == 0);
+    }
+    {  // Fire bones over every land unit with an own weapon: how many models lack MUZZLEA_00 (those never fire).
+        uint32_t with_model = 0, no_bone = 0;
+        std::string missing;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            if (types.get_list(t, "Projectile_Types").empty() || !types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon))
+                continue;
+            std::vector<tactical::Vec3> bones;
+            if (!catalog.muzzle_bones(t, false, bones)) continue;
+            ++with_model;
+            if (bones.empty()) {
+                ++no_bone;
+                if (missing.size() < 400) missing += std::string(missing.empty() ? "" : ", ") + std::string(types.raw().types().name[t]);
+            }
+        }
+        std::printf("foc fire bones: %u land models of weapon users, %u without MUZZLEA_00: %s\n", with_model, no_bone, missing.c_str());
+    }
+}
+
 // FoC: a battle request built by hand (two FoC frigate groups at Kuat-like orbit) on a real space map.
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
@@ -2181,6 +2266,7 @@ void test_foc() {
             CHECK(r > 178.5f && r < 178.6f);
         }
     }
+    test_foc_weapon_sources(types, catalog);  // S8 t08 / S8 t06 B4
     {  // --- S4 (owner: S4 agent): shipped corruption options (PLANETS.XML) and garrison / capture descriptors ---
         const std::vector<galactic::CorruptionOption> ae = galactic::corruption_options(types, types.resolve_name("AetenII"));
         size_t missions = 0, options = 0;

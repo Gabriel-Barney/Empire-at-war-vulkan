@@ -129,6 +129,12 @@ public:
     // S7 t07 (MOVEMENT §2.2 model-extent fallback, SpaceObstacleHooks): half x / y of avoid_model(type, space = true)'s
     // collision bound (1 / 1 when the model has no collision mesh); false without model data.
     bool space_model_half_extents(uint32_t type, float& half_x, float& half_y) const;
+    // S8 t06 B4 (LOB_SOLVER §5.1, WeaponBehavior data pack init 0x54cb00): the fire bones <Muzzle_Bone_Name>_00, _01, ...
+    // (default MUZZLEA) of the type's model for the mode (Space_ / Land_Model_Name, no fallback) until a name is missing,
+    // as bind-pose offsets in the combat unit-local frame (x forward, y left, z up) x Scale_Factor. False without model
+    // data (`out` cleared); true with an empty list = the model has no such bone (the weapon never fires). build_battle
+    // (with a mode) stores them in UnitDesc::muzzle_bones.
+    bool muzzle_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const;
     // --- end battle host ---
 #ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war GameConstants (Desired{Land,Space}FOWCellSize, {Land,Space}FOWRegrowTime, AIUsesFogOfWar{Land,Space},
