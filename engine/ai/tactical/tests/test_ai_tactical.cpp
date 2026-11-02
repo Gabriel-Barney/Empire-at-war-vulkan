@@ -28,6 +28,7 @@
 #include "alamo/ai/tactical/hint_zones.hpp"
 #include "alamo/ai/tactical/land_connectivity.hpp"
 #include "alamo/ai/tactical/tactical_credits.hpp"
+#include "alamo/ai/tactical/tactical_perception.hpp"
 #include "alamo/ai/tactical/target_list.hpp"
 #include "alamo/ai/tactical/zone_reachability.hpp"
 #include "alamo/core/bytes.hpp"
@@ -481,20 +482,34 @@ static void test_damage_tracking() {
     rs.after_multipliers = 9.0f;  // A1_READINGS §7: not the tracked amount
     rs.absorbed = 1.5f;
     rs.to_hull = 2.5f;
+    rs.hull_lost = 2.5f;
     record_combat_damage(s, rq, rs);
     CHECK(s.entries(11)->at(5) == 4.0f);
     rs.absorbed = 0.0f;
     rs.to_hull = 0.0f;
+    rs.hull_lost = 0.0f;
     record_combat_damage(s, rq, rs);  // nothing lost: no record
     CHECK(s.entries(11)->at(5) == 4.0f);
+    // A1_READINGS §30.2: a tracked 50-hull victim hit for 200 records 50 (the clamped hull loss, not the hit)
+    rq.source = 6;
+    rs.to_hull = 200.0f;
+    rs.hull_lost = 50.0f;
+    record_combat_damage(s, rq, rs);
+    CHECK(s.entries(11)->at(6) == 50.0f);
+    rs.hull_lost = 0.0f;  // a cannot-die victim (restore ran): no hull loss, no record
+    rq.source = 8;
+    record_combat_damage(s, rq, rs);
+    CHECK(s.entries(11)->count(8) == 0);
+    rq.source = 5;
     rs.absorbed = 1.5f;
     rs.to_hull = 2.5f;
+    rs.hull_lost = 2.5f;
     rs.applied = false;
     record_combat_damage(s, rq, rs);
     rq.source = cb::kNoObject;
     rs.applied = true;
     record_combat_damage(s, rq, rs);
-    CHECK(s.entries(11)->size() == 2 && s.entries(11)->at(5) == 4.0f);
+    CHECK(s.entries(11)->size() == 3 && s.entries(11)->at(5) == 4.0f);
 #endif
 }
 
@@ -965,6 +980,47 @@ static void test_component_saves() {
                 lw.bytes().size(), fw.bytes().size());
 }
 
+// A1_READINGS §30.1: the stdext hash_set order of zone threat cells (minstd hash, B = 8 growing x 8, ascending runs).
+static void test_zone_cell_order() {
+    const auto key = [](uint32_t c, uint32_t r) { return c | (r << 16); };
+    std::vector<uint32_t> keys;
+    for (uint32_t r = 0; r < 4; ++r)
+        for (uint32_t c = 0; c < 4; ++c) keys.push_back(key(c, r));
+    StdextHashOrder s;
+    for (size_t i = 0; i < 5; ++i) CHECK(s.insert(keys[i]));
+    CHECK(s.bucket_count() == 8);
+    CHECK((s.order() == std::vector<uint32_t>{key(0, 0), key(0, 1), key(1, 0), key(2, 0), key(3, 0)}));
+    for (size_t i = 5; i < keys.size(); ++i) CHECK(s.insert(keys[i]));
+    CHECK(!s.insert(key(2, 2)) && s.size() == 16);  // duplicate
+    CHECK(s.bucket_count() == 64);
+    CHECK((s.order() == std::vector<uint32_t>{key(0, 0), key(0, 1), key(1, 0), key(1, 1), key(2, 0), key(2, 1), key(3, 0), key(3, 1),
+                                              key(0, 2), key(0, 3), key(1, 2), key(1, 3), key(2, 2), key(2, 3), key(3, 2), key(3, 3)}));
+    // copy-assign into a fresh set (B = 8): n' = 16 -> B 64, the same grouping as the source
+    StdextHashOrder d;
+    d.assign_from(s);
+    CHECK(d.bucket_count() == 64 && d.order() == s.order());
+    // 65 keys: the source grows to 512, the copy takes 128 (8 x 8 < 65 -> 65 rounded up)
+    StdextHashOrder mid;
+    for (uint32_t i = 0; i < 65; ++i) mid.insert(key(i % 9, i / 9));
+    StdextHashOrder mid_copy;
+    mid_copy.assign_from(mid);
+    CHECK(mid.bucket_count() == 512 && mid_copy.bucket_count() == 128 && mid_copy.size() == 65);
+    // 256 keys: source B 512, copy B 256; the copy regroups into another order
+    StdextHashOrder big;
+    for (uint32_t i = 0; i < 256; ++i) big.insert(key(i % 12, i / 12));
+    StdextHashOrder big_copy;
+    big_copy.assign_from(big);
+    CHECK(big.bucket_count() == 512 && big_copy.bucket_count() == 256 && big_copy.size() == 256);
+    std::vector<uint32_t> a = big.order(), b = big_copy.order();
+    CHECK(a != b);
+    std::sort(a.begin(), a.end());
+    std::sort(b.begin(), b.end());
+    CHECK(a == b);
+    // the hash: minstd of (k ^ 0xdeadbeef) & 0x7fffffff
+    CHECK(StdextHashOrder::hash(0) == static_cast<uint32_t>((16807ull * (0xdeadbeefu & 0x7fffffffu)) % 0x7fffffffu));
+    std::printf("zone cell order: OK\n");
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -982,6 +1038,7 @@ int main(int argc, char** argv) {
     test_free_store();
     test_credits();
     test_component_saves();  // N1 stage 2
+    test_zone_cell_order();  // A1_READINGS §30.1
 #if defined(ALAMO_AI_TACTICAL_HAVE_MOVEMENT)
     test_land_connectivity();
 #endif

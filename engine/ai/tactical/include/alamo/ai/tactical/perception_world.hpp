@@ -113,6 +113,7 @@ struct PerceptionObject {
     bool transport_landing = false;        // TRANSPORT_LANDING 0x36: reinforcement still in the air (land)
     uint64_t visible_to = 0;               // bit p: UnitAI reports visible to player p (ForceVisibility) [M]
     int32_t zone = -1;                     // land: current hint zone (land mode slot +0x180), -1 none
+    int32_t parent_object = -1;            // obj +0x54: the parent-mode (galactic) object id, -1 none (A1_READINGS §30.3)
 };
 
 struct PerceptionPlayerInfo {
@@ -147,6 +148,9 @@ struct PerceptionWorld {
     bool land_control = false;       // IsLandControlGame [L]
     bool setup_phase = false;        // 0x35f790 [M]
     bool story_campaign = false;
+    // A1_READINGS §30.3 [H; M 3 = local skirmish]: GMM mode set, GMM +0x20 != 1 and game type (+0x18) in {1, 2, 3, 4}
+    // (networked 1 / 2 / 4, skirmish 3). Gates the TRANSPORT_LANDING sums' parent-object resolution.
+    bool skirmish_or_mp = false;
     bool fow_active = false;         // global FOW-active flag (0x140a284c4)
     Rect2 map;                       // map extents (mode slot +0x1f8)
     int32_t conflict_ground_structures = 0;  // land campaign BaseLevel: planet ground structures w/o flag 4
@@ -164,8 +168,16 @@ struct PerceptionWorld {
     // Land: the passability cell at a point ((int)((x + 10) / 20), (int)((y + 10) / 20)) is off the grid or its base
     // word (.ted 0x10A) has Steep | Water (0x22); TimeLastSeen skips those cells (A1_READINGS §26). Absent => none.
     std::function<bool(float x, float y)> point_blocked;
-    // Base shield test (land mode 0x3b8790): point inside an enemy (true) / allied (false) shield of `self`.
+    // Base shield test (land mode 0x3b8790): point inside an enemy (true) / allied (false) shield of `self`. Left unset by
+    // the host: the original reads the active state through SHIELDED, which no shipped BASE_SHIELD type has, so the
+    // IsInside*Shield leaves are always 0 (A1_READINGS §30.4).
     std::function<bool(const Vec3f& p, int32_t self, bool enemy)> inside_shield;
+    // IsValidBombingTarget's shield step (0x494540, A1_READINGS §30.4 [H]): the point is inside ANY player's active
+    // BASE_SHIELD (Base_Shield_Radius > 0, 3-D distance < radius). Absent => never.
+    std::function<bool(const Vec3f& p)> in_active_base_shield;
+    // TRANSPORT_LANDING sums (A1_READINGS §30.3): the representative type (0x3973b0, index into `types`) of the
+    // parent-mode object with id `parent_object`, -1 when that object is not found. Absent => never found.
+    std::function<int32_t(int32_t parent_object)> parent_rep_type;
     // Hint evaluator override (Hints.<name>) of zone z. Absent => the zone's own hint map (HintZone::hints; a missing
     // name or a zone without hints fails, A1_READINGS §22).
     std::function<double(int32_t zone, std::string_view hint)> zone_hint;

@@ -1986,13 +1986,14 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
     // A1_READINGS §7 [H; M flag names]: amount = the actual hull + shield loss (shield absorbed + hull damage; a hit
     // routed to a hard point changes neither), recorded only when > 0 and only for DAMAGE_TRACKING victims. A per-attacker
     // entry needs the source type's Is_Valid_Target (+0x6b) and Collidable_By_Projectile_Living (+0x41); its key is the
-    // source's TEAM parent when it has one. [port] The killing hit's overkill is not clamped (the victim leaves the store
-    // this tick); the running total / last-damage frame (+0x8 / +0x50) are not kept (nothing reads them yet).
+    // source's TEAM parent when it has one. §30.2 [H]: the hull part is the clamped loss (hullBefore - max(0, hullAfter),
+    // 0 when the cannot-die restore ran), so the killing hit records at most the remaining hull. [port] The running total /
+    // last-damage frame (+0x8 / +0x50) are not kept (nothing reads them yet).
     {
         const objects::GameObjectTypes& dtypes = catalog_->types();
         for (const tc::DamageEvent& e : combat_->damage_events()) {
             if (e.source == tc::kNoObject || !damage_tracking_.tracks(static_cast<int32_t>(e.victim))) continue;
-            const float amount = e.absorbed + (e.hardpoint < 0 ? e.to_hull : 0.0f);
+            const float amount = e.absorbed + (e.hardpoint < 0 ? e.hull_lost : 0.0f);
             if (!(amount > 0.0f)) continue;
             const objects::ObjectHandle sh = store.find(static_cast<objects::ObjectId>(e.source));
             if (!store.alive(sh)) continue;

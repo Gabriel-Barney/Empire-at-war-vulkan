@@ -2049,9 +2049,11 @@ void CombatSystem::hull_damage(Unit& v, float x, ObjectId source, DamageResult& 
             }
         }
     }
+    out.hull_lost = old - (v.health > 0.0f ? v.health : 0.0f);  // A1_READINGS §30.2: the clamped hull loss
     if (v.health <= 0.0f) {
         if (v.flags & kUnitCannotDie) {
             v.health = old > 1.0f ? old : 1.0f;  // max(1, old)
+            out.hull_lost = 0.0f;
         } else {
             kill(v, source, kind, frame, sub_key);
             out.killed = true;
@@ -2281,6 +2283,7 @@ void CombatSystem::record_damage(const DamageRequest& r, const Unit& v, const Un
     e.energy_absorbed = out.energy_absorbed;
     e.to_hardpoint = out.to_hardpoint;
     e.to_hull = out.to_hull;
+    e.hull_lost = out.hull_lost;
     e.killed = out.killed || (v.flags & kUnitDead) != 0;
     e.frame = frame;
     damage_events_.push_back(e);

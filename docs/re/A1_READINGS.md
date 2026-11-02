@@ -883,6 +883,9 @@ the verdict is **change**.
   (0x6d5690, 0x6d5760, 0x6d5860, 0x6d5950, 0x6d5a10, 0x6d5ac0) adds the new zone's cells to its old set and copies
   that **union** into the new zone's +0x90. That zone's flood and Most_Defended then see foreign cells until another
   evaluator re-links into it. [H code; M how often it fires]
+- Implemented (a1g t02): `StdextHashOrder` (tactical_perception.hpp), run per zone in `TacticalPerception::init`;
+  `zone_threat_cells` = +0x90 order, `zone_eval_cells` (evaluator leaves) = +0xb0 order. Test vector in
+  alamo_ai_tactical_tests. The re-link union above stays [port] (not reproduced).
 
 ### 30.2 §7 overkill not clamped → **change** (small, low priority)
 
@@ -897,6 +900,8 @@ the verdict is **change**.
 - Rule: hull part = hullBefore − hullAfter, with hullAfter clamped to ≥ 0 and replaced by max(1, old) for cannot-die
   objects (e.g. `min(to_hull, hullBefore)`, and 0 when the cannot-die restore ran). Test: a tracked 50-hull victim
   hit for 200 records 50.
+- Implemented (a1g t03): `DamageResult` / `DamageEvent::hull_lost` (combat), recorded by the host and
+  `record_combat_damage`; `to_hull` keeps the raw hit. Tests: alamo_tactical_combat_tests, alamo_ai_tactical_tests.
 
 ### 30.3 §19 game-mode gate → **change** (small)
 
@@ -916,6 +921,9 @@ the verdict is **change**.
   +0x48 [M: the carried type]), not the landing object's own power. Test: one landing object in (a) skirmish,
   (b) campaign with a resolvable parent (the parent's type's power), (c) campaign with an unresolvable parent
   (skipped).
+- Implemented (a1g t03): `PerceptionWorld::skirmish_or_mp` (host: the battle is a skirmish; no MP), `parent_object`
+  (store parent-mode id) and the `parent_rep_type` callback (host: the galactic object's type, -1 when not found [port:
+  no TRANSPORT carried type in the port's galaxy]). Tests (a)-(c) in alamo_ai_tactical_perception_tests.
 
 ### 30.4 §21 `inside_shield` not filled → leaves **keep** 0; IsValidBombingTarget **change** (small)
 
@@ -934,6 +942,8 @@ the verdict is **change**.
   `TacticalBattle::l1_base_shield_covers`), and make the prevention distance 3-D. Leave `inside_shield` unset, or
   require SHIELDED on the shield object if it is ever wired. Test: a location inside an enemy or own active shield →
   IsValidBombingTarget 0; IsInsideEnemyShield stays 0.
+- Implemented (a1g t03): `PerceptionWorld::in_active_base_shield` (host: `TacticalBattle::l1_base_shield_covers`, land
+  only) and the 3-D prevention distance; `inside_shield` stays unset. Tests: alamo_ai_tactical_perception_tests.
 
 ### 30.5 §15 full memory removal on destroy → **keep** [port]
 
