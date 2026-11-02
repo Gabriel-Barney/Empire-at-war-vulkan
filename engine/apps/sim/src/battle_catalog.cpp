@@ -531,7 +531,7 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
         if (key < 0) continue;
         u.death_clones.push_back({key, ct});
     }
-    u.deploys = ty.get_bool(t, "Deploys");
+    u.deploys = ty.deploys(t);
     for (std::string_view n : ty.get_list(t, "Death_Projectiles")) {
         const int32_t pt = type_or_none(n);
         if (pt >= 0) u.death_projectiles.push_back(projectile(static_cast<uint32_t>(pt), s));

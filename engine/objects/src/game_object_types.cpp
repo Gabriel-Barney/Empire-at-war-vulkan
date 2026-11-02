@@ -46,6 +46,12 @@ const Def kDefaults[] = {
     {"Max_Rate_Of_Roll", "2.0"}, {"Bank_Turn_Angle", "70.0"}, {"Max_Lift", "0.8"}, {"Stopping_Distance", "2.0"},
     {"Movement_Animation_Speed", "0.25"}, {"Walk_Animation_Speed", "0.25"}, {"Crouch_Animation_Speed", "0.25"},
     {"Dense_FOW_Reveal_Range_Multiplier", "0.5"},
+    // R3f t05: flinch inducers (ANIM_PARTICLES.md §A.12: explosion type +0x20e0 default 100, +0x20e4 default 1.0;
+    // no vanilla XML sets either). Read through induced_flinch_range() / induced_flinch_intensity().
+    // Presence_Range (+0x1628) and Allow_Idle_When_Moving (+0x85) default to 0 / false and have no row here;
+    // Allow_Idle_When_Moving = false is [inferred] (§A.11 rates it [M]; RE R3f t06): if the constructor turns out to
+    // set it, add {"Allow_Idle_When_Moving", "1"} here.
+    {"Induced_Flinch_Range", "100.0"}, {"Induced_Flinch_Intensity", "1.0"},
     // Enums whose constructor value is -1 ("none"); kept as FieldValue::i = -1 with no name.
     {"MovementClass", "-1"}, {"Ship_Class", "-1"}, {"OccupationStyle", "-1"}, {"UnitCollisionClass", "-1"},
     {"Weather_Category", "-1"}, {"Tactical_Production_Queue", "-1"}, {"Projectile_Category", "-1"},
@@ -60,7 +66,8 @@ struct Ids {
         hyperspace_speed, max_speed, turn_rate, min_speed, min_speed_fraction, hyperspace, hardpoints, affiliation,
         min_attack, max_attack, health, shield, energy, mass, scale, build_time, tech, score, population, land_fow,
         space_fow, is_decoration, damage, galactic_behavior, land_behavior, space_behavior, create_team,
-        max_squad_size, space_pop, land_pop, place_marker, priority_set;
+        max_squad_size, space_pop, land_pop, place_marker, priority_set, presence_anims, presence_range,
+        allow_idle_moving, deploys, flinch_range, flinch_intensity;
     Ids() {
         auto id = [](std::string_view t) { return find_type_field(t); };
         variant = id("Variant_Of_Existing_Type");
@@ -110,6 +117,12 @@ struct Ids {
         land_pop = id("Land_Override_Population_Value");
         place_marker = id("Place_Other_Type_At_Every_Specific_Marker_Position");
         priority_set = id("Targeting_Priority_Set");
+        presence_anims = id("Presence_Induced_Animations");
+        presence_range = id("Presence_Range");
+        allow_idle_moving = id("Allow_Idle_When_Moving");
+        deploys = id("Deploys");
+        flinch_range = id("Induced_Flinch_Range");
+        flinch_intensity = id("Induced_Flinch_Intensity");
     }
 };
 
@@ -861,6 +874,14 @@ double GameObjectTypes::get_double(TypeIndex t, std::string_view tag) const { re
 int32_t GameObjectTypes::targeting_priority_set(TypeIndex t) const {
     return have_priority_sets_ && ids().priority_set != kNoField ? effective(t, ids().priority_set).i : -1;
 }
+std::span<const std::string_view> GameObjectTypes::presence_induced_animations(TypeIndex t) const {
+    return effective(t, ids().presence_anims).items;
+}
+float GameObjectTypes::presence_range(TypeIndex t) const { return effective(t, ids().presence_range).f; }
+bool GameObjectTypes::allow_idle_when_moving(TypeIndex t) const { return effective(t, ids().allow_idle_moving).b; }
+bool GameObjectTypes::deploys(TypeIndex t) const { return effective(t, ids().deploys).b; }
+float GameObjectTypes::induced_flinch_range(TypeIndex t) const { return effective(t, ids().flinch_range).f; }
+float GameObjectTypes::induced_flinch_intensity(TypeIndex t) const { return effective(t, ids().flinch_intensity).f; }
 uint64_t GameObjectTypes::get_mask(TypeIndex t, std::string_view tag) const {
     return effective(t, find_type_field(tag)).mask;
 }

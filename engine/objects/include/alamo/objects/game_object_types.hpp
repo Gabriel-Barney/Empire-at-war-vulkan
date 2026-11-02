@@ -183,6 +183,20 @@ public:
     bool have_priority_sets() const { return have_priority_sets_; }
     // The type's set as an index into targeting_priority_set_names(); -1 = none or not resolved.
     int32_t targeting_priority_set(TypeIndex t) const;
+    // Animation / presence fields (docs/re/ANIM_PARTICLES.md §A.11, §A.12; R3f t05): effective values (own, inherited
+    // or the constructor default, which lives in one place: kDefaults in game_object_types.cpp).
+    //   Presence_Induced_Animations (code 0x35, affected type +0x1610): the tokens as written (anim type names, each
+    //     followed by the type names it applies to). The caller converts them: objects does not link anim. Default empty.
+    //   Presence_Range (presence type +0x1628): presence cube half-extent, default 0.
+    //   Allow_Idle_When_Moving (+0x85): default false [inferred].
+    //   Deploys (+0xd1): default false.
+    //   Induced_Flinch_Range (explosion type +0x20e0): default 100. Induced_Flinch_Intensity (+0x20e4): default 1.0.
+    std::span<const std::string_view> presence_induced_animations(TypeIndex t) const;
+    float presence_range(TypeIndex t) const;
+    bool allow_idle_when_moving(TypeIndex t) const;
+    bool deploys(TypeIndex t) const;
+    float induced_flinch_range(TypeIndex t) const;
+    float induced_flinch_intensity(TypeIndex t) const;
     // ModelAnimType id of Specific_Death_Anim_Type / Shield_On_Anim / Shield_Off_Anim (= get_enum);
     // only meaningful when build() had an AnimTypeLookup (anim_types_converted()).
     bool anim_types_converted() const { return anim_lookup_ != nullptr; }
