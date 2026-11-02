@@ -27,6 +27,12 @@
 // that is only lockstep-safe because every peer runs this code). Category order: stable descending by
 // normalised budget weight [M]. The per-category extra-goal count (template int +0xe8, open item 6) is
 // GoalSystemConfig::extra_goals_per_category.
+//
+// FREE-STORE RESERVATIONS (entry +0x30, A1_READINGS §28.6) [H]: slot 10's solve (accept) reserves nothing and ignores
+// reservations; Commit step 4 suspends every active goal's reservations (suspend_reservations, 0x6c0be0) before any
+// Resolve_Category; in Resolve_Category a kept goal is checked (plan_invalid: another PP took one of its units) and
+// re-reserves (refresh_plan, 0x6c2d60), a new proposal re-solves honouring reservations (plan_activatable, 0x6c4a50)
+// and reserves at accept (refresh_plan); maintenance re-reserves every surviving goal.
 #pragma once
 #include <cstdint>
 #include <map>
@@ -84,10 +90,14 @@ public:
     // Slot 10 (galactic 0x6b8660): Find_Plan_For_Goal + PotentialPlan + time/budget gross test. Fills
     // g.plan / g.pp_* / g.cost / g.eta. False rejects the candidate.
     virtual bool accept(Goal& g) = 0;
-    virtual bool plan_activatable(const Goal& g) = 0;  // 0x6c4a50
-    virtual bool plan_invalid(const Goal& g) = 0;      // 0x6c47c0
+    // 0x6c4a50: a new proposal at accept; re-solves its PotentialPlan honouring the reservations (§28.6 step 3).
+    virtual bool plan_activatable(const Goal& g) = 0;
+    virtual bool plan_invalid(const Goal& g) = 0;      // 0x6c47c0 (-> 0x6c45e0: a unit taken by another PP)
     virtual bool replaceable(const Goal& g) = 0;       // 0x692740
-    virtual void refresh_plan(Goal& g) = 0;            // 0x6c2d60
+    virtual void refresh_plan(Goal& g) = 0;            // 0x6c2d60: reserve / re-assert (+0x30 = PP)
+    // 0x6c0be0's reservation part, Commit step 4, every active goal with a PotentialPlan, every Commit: its free-store
+    // reservations are cleared until refresh_plan re-asserts them (§28.6 step 2).
+    virtual void suspend_reservations(Goal& g) = 0;
     virtual bool uses_budget() = 0;                    // galactic context
     virtual bool can_fund(const Goal& g) = 0;          // 0x6129c0 (true when no budget)
     virtual float category_credits(int32_t category) = 0;  // cat+0x44 (positive when no budget)

@@ -346,14 +346,17 @@ void GalacticAiWorld::Impl::tf_release_forces(int32_t tf, double fraction) {
     const auto it = tfs.find(tf);
     if (it == tfs.end()) return;
     TaskForceRec& t = it->second;
-    const auto n = static_cast<size_t>(std::floor(fraction * static_cast<double>(t.units.size()) + 1e-9));
-    t.units.erase(t.units.begin(), t.units.begin() + static_cast<std::ptrdiff_t>(std::min(n, t.units.size())));
+    const auto n = std::min(static_cast<size_t>(std::floor(fraction * static_cast<double>(t.units.size()) + 1e-9)), t.units.size());
+    for (size_t i = 0; i < n; ++i) pp_unit_left(t.plan, t.units[i]);  // 0x5ff610 -> 0x6c27d0
+    t.units.erase(t.units.begin(), t.units.begin() + static_cast<std::ptrdiff_t>(n));
 }
 
 void GalacticAiWorld::Impl::tf_release_unit(int32_t tf, ObjectHandle unit) {
     const auto it = tfs.find(tf);
     if (it == tfs.end()) return;
     auto& u = it->second.units;
+    if (std::find(u.begin(), u.end(), unit) == u.end()) return;
+    pp_unit_left(it->second.plan, unit);  // 0x5ff610 -> 0x6c27d0
     u.erase(std::remove(u.begin(), u.end(), unit), u.end());
 }
 
@@ -373,7 +376,10 @@ std::string GalacticAiWorld::Impl::tf_goal_type_name(int32_t tf) {
 bool GalacticAiWorld::Impl::tf_collect_free_units(int32_t tf) {
     const auto it = tfs.find(tf);
     if (it == tfs.end()) return false;
-    for (const ObjectHandle u : free_units(it->second.player)) it->second.units.push_back(u);
+    for (const ObjectHandle u : free_units(it->second.player)) {
+        off_free_store(u);
+        it->second.units.push_back(u);
+    }
     if (!it->second.units.empty()) it->second.had_units = true;
     return true;
 }
@@ -522,8 +528,9 @@ bool PlayerAi::accept(Goal& g) {
     const uint32_t k = pick_weighted(ratio, w->rng.synced());
     const uint32_t plan = cand[k];
     // PotentialPlan solve at proposal time (draws Plan Setup C / IgnoreTarget contrast / MagicPlan floats).
+    // Init's first solve ignores the free-store reservations and reserves nothing (A1_READINGS §28.6 step 1).
     PotentialPlanRec pp;
-    if (!w->solve_potential_plan(*this, plan, g.type, g.target, pp)) {
+    if (!w->solve_potential_plan(*this, plan, g.type, g.target, pp, true)) {
         ++w->stats[gname + " no potential plan (" + w->library.plans[plan].name + ")"];
         return false;
     }
@@ -535,14 +542,13 @@ bool PlayerAi::accept(Goal& g) {
     g.eta = pp.eta;
     g.pp_handle = h;
     w->pps.emplace(h, std::move(pp));
-    w->reserve_pp_units(h);
     return true;
 }
 
 bool PlayerAi::plan_invalid(const Goal& g) {
     if (g.running < 0) return true;
     const auto it = w->plans.find(g.running);
-    return it == w->plans.end() || it->second.ended;
+    return it == w->plans.end() || it->second.ended || w->pp_stolen(g.pp_handle);
 }
 
 bool PlayerAi::replaceable(const Goal& g) {
@@ -742,7 +748,10 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
         for (const PpSelection& s : pp.sel) {
             if (s.tf != static_cast<int32_t>(i)) continue;
             if (s.unit) {
-                if (store.alive(s.unit) && store.owner(s.unit) == p.player && !tf_owns(s.unit)) tf.units.push_back(s.unit);
+                if (store.alive(s.unit) && store.owner(s.unit) == p.player && !tf_owns(s.unit)) {
+                    off_free_store(s.unit);
+                    tf.units.push_back(s.unit);
+                }
             } else {
                 tf.wanted.push_back(s.type);
                 tf.wanted_source.push_back(s.source);
@@ -780,7 +789,12 @@ void GalacticAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
         if (e && sim.pays_as_you_go(pi.player) && e->c + e->a > 0.0f) reclaim[pi.goal_key] = payg_reclaim(id, e->c + e->a);
     }
     end_plan_builds(id);
-    for (const int32_t t : pi.tfs) tfs.erase(t);
+    for (const int32_t t : pi.tfs) {
+        const auto tit = tfs.find(t);
+        if (tit == tfs.end()) continue;
+        for (const ObjectHandle u : tit->second.units) pp_unit_left(id, u);  // plan end 0x5f6a50 step 3 -> 0x6c27d0
+        tfs.erase(tit);
+    }
     PlayerAi* pa = player_ai(pi.player);
     if (pa) {
         // [L, AI_GALACTIC_2 open item 6] a plan's exit removes its Block_Goal_Proposal entries.
@@ -1570,6 +1584,7 @@ bool GalacticAiWorld::Impl::tf_add_unit(int32_t tf, ObjectHandle unit) {
     const auto it = tfs.find(tf);
     if (it == tfs.end() || !it->second.alive || !store.alive(unit) || store.owner(unit) != it->second.player || tf_owns(unit))
         return false;
+    off_free_store(unit);
     it->second.units.push_back(unit);
     it->second.had_units = true;
     return true;
@@ -1718,6 +1733,7 @@ void GalacticAiWorld::Impl::service_free_store(int32_t player) {
         const double last = lua::global_number(vm, "LastUnitService", 0.0);
         if (t - last > rate) {
             for (const ObjectHandle u : free_units(player)) {
+                if (unit_reserved.count(store.id(u)) != 0) continue;  // entry +0x30 set (0x4d5a70, A1_READINGS §28.5)
                 lua::AiEventArg a;
                 a.kind = lua::AiEventArg::Object;
                 a.object = u;

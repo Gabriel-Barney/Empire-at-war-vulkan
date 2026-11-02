@@ -721,6 +721,22 @@ path clears the script share when the AI sees the unit idle (stand-in for signal
 Active_By_Default; the task-force path applies it unless movement is locked (HUNT active stands in for the locomotor
 vf+0x1d0 term [M]).
 
+### 28.9 Implemented (a1g t01, 2026-11-01)
+
+Tactical (`TacticalFreeStore` entry `owner_pp`) and galactic (`unit_reserved`, the derived free store) follow 28.4-28.6
+through the shared `GoalSystem` (new hook `suspend_reservations` at Commit step 4; kept goals call `refresh_plan`).
+On_Unit_Service skips only reserved entries; the order-lock skip is gone. Port decisions:
+- [M] The accept re-solve (0x6c4a50) draws its own synced numbers (Plan Setup C start team, IgnoreTarget contrast),
+  since it runs the same solver. Replaying the first solve's draws was tried: it changed the land outcomes little.
+- [port] The goal keeps Init's cost / ETA after the re-solve.
+- Not modelled: the queue-slot flag 0 / 1 of 0x53bee0, the tactical credits reservation, 0x6bf3d0 (a Reinforce
+  delivery joins PP+0x108 reserved), and the Setup A lock test (0x39ad40).
+- `galactic_build.cpp` still reads `unit_reserved` when a build task takes a store unit (0x4d2bd0 does not read +0x30
+  per 28.5) [open].
+- Effect: a proposal's first solve no longer skips units an earlier proposal of the same Commit picked, so more goals
+  are accepted with smaller forces. The FoC land skirmish (`--skirmish-ai foc-land`) now ends inside 14400 frames on
+  seeds 7, 10 and 12 of 1-12 (before: 1, 2, 4, 5 and 6 of 1-6), so the outcome test on the default seed 1 fails [open].
+
 ## 29. TEAM containers in the threat grid (a1f t04) [H unless tagged]
 
 Example throughout: a land skirmish, company `Imperial_Stormtrooper_Squad` (18 `Company_Units` =

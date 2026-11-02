@@ -32,7 +32,7 @@ constexpr uint32_t kGridVersion = 1;
 constexpr uint32_t kCacheVersion = 1;
 constexpr uint32_t kPerceptionVersion = 1;
 constexpr uint32_t kTargetListVersion = 1;
-constexpr uint32_t kFreeStoreVersion = 1;
+constexpr uint32_t kFreeStoreVersion = 2;  // 2: entry +0x30 (owning PP) replaces the order lock
 constexpr uint32_t kScheduleVersion = 1;
 constexpr uint32_t kDamageTrackingVersion = 1;
 constexpr uint32_t kZoneGraphVersion = 1;
@@ -686,7 +686,7 @@ void TacticalFreeStore::write(ByteWriter& w) const {
     for (const auto& [id, e] : entries_) {
         w.i32(id);
         w.u32(e.type_id);
-        w.boolean(e.locked);
+        w.i32(e.owner_pp);
     }
 }
 
@@ -699,8 +699,8 @@ bool TacticalFreeStore::read(ByteReader& r) {
         const int32_t id = r.i32();
         Entry e;
         e.type_id = r.u32();
-        e.locked = r.boolean();
-        if (!r.ok() || (!es.empty() && es.rbegin()->first >= id)) return io::bad(r);
+        e.owner_pp = r.i32();
+        if (!r.ok() || e.owner_pp < -1 || (!es.empty() && es.rbegin()->first >= id)) return io::bad(r);
         es.emplace_hint(es.end(), id, e);
         ++per[e.type_id];  // the type counters are the entries' (admit / remove keep them so)
     }

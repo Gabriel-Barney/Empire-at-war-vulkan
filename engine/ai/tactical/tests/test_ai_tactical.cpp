@@ -544,9 +544,15 @@ static void test_free_store() {
     std::vector<int32_t> u;
     fs.units(u, true);
     CHECK(u == (std::vector<int32_t>{10, 20, 30}));  // ascending id [port]
-    CHECK(fs.set_order_lock(20, true) && fs.order_locked(20) && !fs.set_order_lock(99, true));
+    // Entry +0x30 (A1_READINGS 28): reserve overwrites, unreserve clears only the owner's; unreserved-only skips it.
+    CHECK(fs.reservation(20) == -1 && fs.reserve(20, 4) && fs.reservation(20) == 4 && !fs.reserve(99, 4) && fs.reservation(99) == -1);
+    CHECK(fs.reserve(20, 7) && fs.reservation(20) == 7 && !fs.unreserve(20, 4) && fs.reservation(20) == 7);
+    CHECK(fs.unreserve(20, 7) && fs.reservation(20) == -1 && fs.reserve(20, 7));
     fs.units(u, true);
     CHECK(u == (std::vector<int32_t>{10, 30}));
+    fs.units(u, false);
+    CHECK(u == (std::vector<int32_t>{10, 20, 30}));
+    CHECK(fs.remove(20) && fs.admit(20, 5) && fs.reservation(20) == -1 && fs.reserve(20, 7));  // re-admission: fresh entry
     CHECK(fs.remove(10) && !fs.remove(10) && fs.type_count(2) == 1);
 
     // cadence: BusyTacticalFreeStore, Execution services every 3 frames from frame 0
@@ -652,7 +658,7 @@ static uint64_t scenario_crc(const ParallelFor& pf) {
         }
         for (int k = 0; k < 4; ++k) dmg.record(rng.range_int(0, next_id - 1), rng.range_int(0, 50), rng.range_float(1, 60));
         dmg.service_all(c.space_threat_decay_step);
-        if (rng.range_int(0, 9) == 0) fs.set_order_lock(rng.range_int(0, next_id - 1), rng.range_int(0, 1) != 0);
+        if (rng.range_int(0, 9) == 0) fs.reserve(rng.range_int(0, next_id - 1), rng.range_int(0, 1) != 0 ? 3 : -1);
         free_store_service(sched, fs, frame, step);
         // FindTarget-like pick over the land list with a pseudo score, and a Reachable_Target-like
         // pick over regions with the zone reachability filter
@@ -933,7 +939,7 @@ static void test_component_saves() {
 
     TacticalFreeStore fs;
     for (int32_t id : {9, 2, 14, 5}) fs.admit(id, static_cast<uint32_t>(id % 3));
-    fs.set_order_lock(14, true);
+    fs.reserve(14, 6);
     fs.remove(2);
     ByteWriter fw;
     fs.write(fw);
@@ -943,7 +949,7 @@ static void test_component_saves() {
         ByteReader r(fw.bytes());
         CHECK(fs2.read(r) && r.done());
     }
-    CHECK(digest_of(fs2) == digest_of(fs) && fs2.type_count(2) == fs.type_count(2) && fs2.order_locked(14) && !fs2.contains(77));
+    CHECK(digest_of(fs2) == digest_of(fs) && fs2.type_count(2) == fs.type_count(2) && fs2.reservation(14) == 6 && !fs2.contains(77));
     {
         std::vector<uint8_t> bad = fw.bytes();
         bad[8] = 20;  // first id 5 -> 20 (> 9): not ascending
