@@ -271,7 +271,8 @@ PlayResult AnimWorld::play(ObjectId id, const PlayRequest& req, SimRng* rng, uin
     return r == kNoRow ? PlayResult::NoObject : play_row(r, req, rng, frame);
 }
 
-PlayResult AnimWorld::play_overlay(ObjectId id, int32_t type, uint32_t index, float speed, float timed_seconds, SimRng* rng, uint64_t frame) {
+PlayResult AnimWorld::play_overlay(ObjectId id, int32_t type, uint32_t index, float speed, float timed_seconds, SimRng* rng, uint64_t frame,
+                                   bool loop) {
     const uint32_t r = row(id);
     if (r == kNoRow) return PlayResult::NoObject;
     const AnimModel* m = model_[r];
@@ -287,7 +288,7 @@ PlayResult AnimWorld::play_overlay(ObjectId id, int32_t type, uint32_t index, fl
     if (!c || !c->clip) return PlayResult::NoClip;
     type_[kOverlay][r] = type;
     variant_[kOverlay][r] = index;
-    mode_[kOverlay][r] = static_cast<uint8_t>(SlotMode::OneShot);
+    mode_[kOverlay][r] = static_cast<uint8_t>(loop ? SlotMode::Loop : SlotMode::OneShot);
     frame_[kOverlay][r] = 0.0f;
     speed_[kOverlay][r] = speed;
     timed_[kOverlay][r] = timed_seconds > 0.0f ? 1 : 0;
@@ -512,7 +513,8 @@ bool AnimWorld::service_idle(ObjectId id, int32_t idle_type, bool crouch_changed
     if (r == kNoRow) return false;
     const ClipRef* cur = slot_clip(r, kPrimary);
     const bool finished = cur && static_cast<SlotMode>(mode_[kPrimary][r]) == SlotMode::Finished;
-    if (cur && !finished && !crouch_changed) return false;
+    // §A.11: T != C with a different crouch class (67, 71, 72, 73) restarts the idle at once, even mid-clip.
+    if (cur && !finished && !crouch_changed && !idle_class_restart(type_[kPrimary][r], idle_type)) return false;
     const uint32_t count = model_[r] ? model_[r]->variant_count(idle_type) : 0u;
     uint32_t variant = 0;
     if (frame >= idle_timer_[r]) {
@@ -526,6 +528,60 @@ bool AnimWorld::service_idle(ObjectId id, int32_t idle_type, bool crouch_changed
     req.blend_seconds = (cur && type_[kPrimary][r] == idle_type) ? 0.0f : tunables_.idle_blend_seconds;
     req.speed = 1.0f;
     return play_row(r, req, nullptr, frame) == PlayResult::Played;
+}
+
+// ---- animation events ----------------------------------------------------------------------------------
+
+size_t AnimWorld::mark_events(ObjectId id, std::vector<EventMark>& out) const {
+    const uint32_t r = row(id);
+    if (r == kNoRow) return 0;
+    size_t added = 0;
+    for (const Slot s : {kPrimary, kOverlay}) {  // fixed order: primary's events before the overlay's
+        const ClipRef* c = slot_clip(r, s);
+        const SlotMode mode = static_cast<SlotMode>(mode_[s][r]);
+        if (!c || mode == SlotMode::Finished) continue;
+        EventMark m;
+        m.id = id;
+        m.slot = s;
+        m.clip = c;
+        m.type = type_[s][r];
+        m.variant = variant_[s][r];
+        m.frame = frame_[s][r];
+        m.loop = mode == SlotMode::Loop;
+        out.push_back(m);
+        ++added;
+    }
+    return added;
+}
+
+void AnimWorld::crossed_since(const EventMark& mark, const std::vector<AnimEventDef>& events, std::vector<uint32_t>& out) const {
+    if (!mark.clip || events.empty()) return;
+    const uint32_t r = row(mark.id);
+    if (r == kNoRow) return;
+    if (type_[mark.slot][r] != mark.type || variant_[mark.slot][r] != mark.variant || slot_clip(r, mark.slot) != mark.clip) return;
+    const float now = frame_[mark.slot][r];
+    const bool wrapped = mark.loop && now < mark.frame;
+    crossed_events(events, mark.clip->clip->fps, mark.clip->clip->frame_count, mark.frame, now, wrapped, out);
+}
+
+void AnimWorld::fired_events(std::span<const EventMark> marks, const AnimEventMap& map, std::vector<FiredEvent>& out) const {
+    std::vector<uint32_t> hits;
+    for (const EventMark& m : marks) {
+        if (!m.clip || !m.clip->clip) continue;
+        const std::vector<AnimEventDef>* events = map.find(m.clip->clip->name);
+        if (!events) continue;
+        hits.clear();
+        crossed_since(m, *events, hits);
+        for (const uint32_t i : hits) {
+            FiredEvent e;
+            e.id = m.id;
+            e.slot = m.slot;
+            e.clip = m.clip;
+            e.def = &(*events)[i];
+            e.index = i;
+            out.push_back(e);
+        }
+    }
 }
 
 // ---- pose --------------------------------------------------------------------------------------------

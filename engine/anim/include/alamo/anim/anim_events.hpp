@@ -3,11 +3,18 @@
 // separated; `;`, `#`, `//` comment lines). <clip> is the ALA file stem (e.g. ei_trooper_move_00). SURFACE rows are
 // the foot plants (INFANTRY_FOOT_PLANT on B_Foot_L / B_Foot_R), body impacts of death clips, etc.
 //
-// Firing rule [port] (AUDIO.md tags the timing [M]): an event fires when the primary slot's clip time
+// Firing rule [port] (AUDIO.md tags the timing [M]): an event fires when a slot's clip time
 // (frame / fps x 1000 ms) passes its time during one sim advance, half-open [before, after); a loop wrap fires
 // [before, end) then [0, after) with end = (count - 1) / fps; a clip started this tick starts at its start frame
 // (frame 0 fires its 0 ms events on the first advance). Events never feed back into the sim (visual / audio
 // output only), so they are not part of any CRC.
+// Slots [port] (the RE docs say nothing about overlay events; ANIM_PARTICLES.md §A says the original has no event
+// track at all, AUDIO.md §5 only gives the file): the primary slot AND the overlay slot (Attack_Animation_Is_Overlay
+// clips, AnimWorld::play_overlay) fire, with the same window rule; the previous (fading-out) slot fires nothing.
+// Order per object: the primary slot's events first, then the overlay's, each in time order (a wrap: tail, then the
+// new cycle). A slot cleared or given another clip between the mark and the query fires nothing for that advance; a
+// timed or one-shot slot that finishes during the advance fires up to the frame where it stopped. The per-slot
+// bookkeeping is AnimWorld::mark_events / crossed_since / fired_events (anim_state.hpp).
 #pragma once
 #include <cstdint>
 #include <map>

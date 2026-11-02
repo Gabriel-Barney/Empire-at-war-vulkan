@@ -25,7 +25,10 @@
 //   * sim time is kept in double (frame / 30.0); dt = float(t - last) feeds the float frame advance;
 //   * crossfade blend modes 2/3 rescale `remaining` when a fade is running, then duration = blend;
 //   * an unbound clip (bone mismatch) poses as the bind pose; as the previous slot it is ignored;
-//   * the idle behaviour's first fidget timer is 0 (a fidget may play on the first idle service).
+//   * the idle behaviour's first fidget timer is 0 (a fidget may play on the first idle service);
+//   * AnimationSFXMaps.txt events fire for the primary AND the overlay slot (primary first, anim_events.hpp);
+//   * play_overlay(loop = true) loops the overlay clip (the RE only shows one-shot overlays; for "and similar"
+//     callers and tests). The mode byte is already part of the slot state, so save / hash are unchanged.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -33,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/anim/anim_events.hpp"
 #include "alamo/anim/anim_math.hpp"
 #include "alamo/anim/anim_types.hpp"
 #include "alamo/anim/clip.hpp"
@@ -123,8 +127,10 @@ public:
 
     // ---- commands (sim thread, service order) ----
     PlayResult play(ObjectId id, const PlayRequest& req, SimRng* rng, uint64_t frame);
-    // Overlay slot (Attack_Animation_Is_Overlay, 0x3a8ed0): no crossfade; timed when timed_seconds > 0.
-    PlayResult play_overlay(ObjectId id, int32_t type, uint32_t index, float speed, float timed_seconds, SimRng* rng, uint64_t frame);
+    // Overlay slot (Attack_Animation_Is_Overlay, 0x3a8ed0): no crossfade; timed when timed_seconds > 0; one-shot
+    // unless `loop` ([port], see above).
+    PlayResult play_overlay(ObjectId id, int32_t type, uint32_t index, float speed, float timed_seconds, SimRng* rng, uint64_t frame,
+                            bool loop = false);
     void clear_overlay(ObjectId id);
     // WalkLocomotor speed refresh (0x3a7b70): primary speed.
     void set_speed(ObjectId id, float speed);
@@ -156,13 +162,45 @@ public:
     // Frame count / fps of the current clip (0 when none).
     uint32_t current_frame_count(ObjectId id) const;
 
-    // ---- idle behaviour (0x62e570, the idle part only) ----
-    // Runs when the current clip is finished / absent / crouch state changed. When frame >= the idle timer:
+    // ---- idle behaviour (0x62e570, the idle part only; §A.7 idle row, §A.11) ----
+    // Runs when the current clip is finished / absent, when idle_class_restart(current type, T = idle_type) (an idle or
+    // crouch clip of the other crouch class: restart mid-clip, anim_types.hpp), or when crouch_changed forces it. Presence idles (77 / 78) take the same path.
+    // No clip of T: the timer draws below still happen, the play fails (false) and the finished clip holds its last
+    // frame; the next call retries. When frame >= the idle timer:
     // variant = rng int [1, count - 1] (0 with one clip; no draw then) and timer = frame + rng int [210, 450];
     // otherwise variant 0. Plays the idle type one-shot at speed 1, blend 0 when the type is unchanged, else
     // tunables().idle_blend_seconds. Returns true if it played.
     bool service_idle(ObjectId id, int32_t idle_type, bool crouch_changed, SimRng& rng, uint64_t frame);
     uint64_t idle_timer(ObjectId id) const;
+
+    // ---- animation events (AnimationSFXMaps.txt, firing rule in anim_events.hpp) ----
+    // Protocol around advance(): mark_events() for the rows of interest (ascending id), advance(), then
+    // crossed_since() / fired_events() per mark in mark order. No play / clear between the mark and advance().
+    // Marks are output bookkeeping only: never saved, never hashed.
+    struct EventMark {
+        ObjectId id = 0;
+        Slot slot = kPrimary;            // kPrimary or kOverlay
+        const ClipRef* clip = nullptr;
+        int32_t type = kNoAnimType;
+        uint32_t variant = 0;
+        float frame = 0.0f;              // frame before the advance
+        bool loop = false;
+    };
+    struct FiredEvent {
+        ObjectId id = 0;
+        Slot slot = kPrimary;            // kOverlay: fired by the overlay slot's clip
+        const ClipRef* clip = nullptr;   // the clip that fired
+        const AnimEventDef* def = nullptr;  // into the AnimEventMap passed to fired_events (kind, name, bone, time)
+        uint32_t index = 0;              // index of def in the clip's event list
+    };
+    // Appends the marks of `id`'s event-capable slots: primary, then overlay, each only when it holds a clip that is
+    // not Finished. Returns the number appended (0..2).
+    size_t mark_events(ObjectId id, std::vector<EventMark>& out) const;
+    // After the advance: appends the indices into `events` (the marked clip's list, AnimEventMap::find) crossed since
+    // the mark, in firing order. Nothing when the slot no longer holds the marked clip (cleared / replaced).
+    void crossed_since(const EventMark& mark, const std::vector<AnimEventDef>& events, std::vector<uint32_t>& out) const;
+    // Every mark in order (primary before overlay per object): crossed_since against map.find(clip name).
+    void fired_events(std::span<const EventMark> marks, const AnimEventMap& map, std::vector<FiredEvent>& out) const;
 
     // ---- pose (model space, §A.6) ----
     // Local transforms of every bone of the object's skeleton (bind pose for bones without a track,

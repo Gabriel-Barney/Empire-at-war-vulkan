@@ -90,6 +90,9 @@
 #include "alamo/tactical/garrison/capture.hpp"   // S4 garrisons + structure capture (owner: S4 agent)
 #include "alamo/tactical/garrison/garrison.hpp"
 #endif
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+#include "alamo/tactical/presence/presence_system.hpp"  // R3 presence-induced idle + explosion flinch
+#endif
 
 namespace alamo::sim {
 
@@ -171,6 +174,13 @@ public:
     void set_clone_models(SimAnimation* models) { clone_models_ = models; }
     // refixf t04: death clone objects still in the store (removal pending; forever ones until the battle ends).
     size_t death_clones_pending() const { return death_clones_.size(); }
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+    // R3 presence-induced idle (ANIM_PARTICLES §A.11): the battle's IMPOSING_PRESENCE / IDLE presence-map state.
+    const tactical::presence::PresenceSystem& presence() const { return presence_; }
+#endif
+    uint32_t explosion_flinch_victims() const { return explosion_victims_; }
+    // R3: the presence-induced idle of an object now (0x395920 step 2: 77 / 78 in vanilla); -1 when none (or no presence).
+    int32_t presence_idle_of(objects::ObjectId id) const;  // R3 §A.12: EXPLOSION flinch victims so far
     // Spawns the battle into `mode` (pushed, nothing in it yet). `players` = the host's player count.
     void setup(TacticalMode& mode, terrain::MapData map, SimRng& rng, uint32_t players, const ParallelFor& pf);
     // One battle tick (after the tactical mode tick). Sets finished() when a victory condition holds.
@@ -768,7 +778,7 @@ public:
     //   Damage     DamageTrackingStore (nothing without engine/ai)
     // Every module system part is written through write_if_saveable: a system without write / read writes nothing and
     // its part fails to read ("pending"). read_part() returns false (State: unchanged) on bad data.
-    enum class SavePart : uint8_t { State, Movement, Combat, Abilities, Garrison, Hangar, Fog, Damage, Count };
+    enum class SavePart : uint8_t { State, Movement, Combat, Abilities, Garrison, Hangar, Fog, Damage, Presence, Count };
     static const char* save_part_name(SavePart p);  // "battle.state", "battle.movement", ...
     void write_part(SavePart p, ByteWriter& w) const;
     bool read_part(SavePart p, ByteReader& r);
@@ -871,6 +881,7 @@ private:
     objects::ObjectId fighter_combat_unit(objects::ObjectId id) const;  // a squadron container -> its leader
     void drive_animation(SimRng& rng, uint64_t global_frame);
     void consume_events(TacticalMode& mode, SimRng& rng);
+    void consume_death(TacticalMode& mode, const tactical::combat::DeathEvent& d, SimRng& rng);  // one DeathEvent (step d)
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
     // refix t01 / t03: Die step 8's clone object (flags 0xc0), and the infantry corpse-path test (S9 §1.6).
@@ -933,12 +944,22 @@ private:
     // refixf t04: death clone objects (kFlagDeathClone) in spawn order; frame = battle frame of the removal from the
     // death plan (kForeverFrame: kept until the battle ends). The battle owns their removal (headless and with anim).
     std::vector<TimedObject> death_clones_;
+    // R3 t04: spin-away death clones (plan_death spin) whose type names a Spin_Away_On_Death_Explosion: the PARTICLE type
+    // spawned when the battle removes the spinning clone at its planned frame (spawn order = ascending id).
+    struct SpinExplosion {
+        objects::ObjectId id = objects::kNoObjectId;
+        int32_t type = -1;
+    };
+    std::vector<SpinExplosion> spin_explosions_;
+    int32_t spin_explosion_type(int32_t clone_type) const;  // the clone type's Spin_Away_On_Death_Explosion, -1 none
     static constexpr uint32_t kForeverFrame = 0xFFFFFFFFu;
     SimAnimation* clone_models_ = nullptr;
 #ifdef ALAMO_SIM_HAVE_ANIM
     std::unique_ptr<SimAnimation> own_clone_models_;  // made on first use when neither anim_ nor clone_models_ is set
 #endif
-    void schedule_death_clone(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type, uint8_t kind, SimRng& rng);
+    // spin_away: the victim's DeathEvent::spin_away; dying: the unit whose animation state the clone takes over.
+    void schedule_death_clone(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type, uint8_t kind, SimRng& rng,
+                              bool spin_away, objects::ObjectId dying);
     void remove_death_clones(TacticalMode& mode, bool all);  // due ones (expire_objects), or all (battle end)
     std::vector<AttachedEffect> effects_;
     std::vector<objects::ObjectId> story_reinforced_;  // L1/S4 wave 2b: reserve units deployed this tick
@@ -959,6 +980,34 @@ private:
     void s4_apply(TacticalMode& mode);  // garrison / capture events -> movement, combat, store, owners, story feeds
     commands::RejectReason s4_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void s4_hash(StateHasher& h) const;
+    // --- R3 presence-induced idle + EXPLOSION flinch (tactical_battle_presence.cpp; no-op stubs without
+    // engine/tactical/presence or engine/anim). Hash / save absent until a presence unit was registered. ---
+    void presence_setup(TacticalMode& mode);                       // definitions, config, the SimAnimation idle hook
+    void presence_adopt(const Unit& u, SimRng& rng);               // attach: IMPOSING_PRESENCE first-due draw
+    void presence_adopt_object(objects::ObjectId id, uint32_t type, SimRng& rng);  // same for a death clone object
+    void presence_removed(objects::ObjectId id);                   // a death clone object left the battle
+    void presence_tick(TacticalMode& mode);                        // object-service phase: IDLE upkeep + presence service
+    void presence_explosion(TacticalMode& mode, int32_t type, Vec3 pos);  // EXPLOSION object created: flinch victims
+    void presence_hash(StateHasher& h) const;
+    void presence_detach();                                        // destructor: drops the SimAnimation idle hook
+    bool presence_used_ = false;
+    uint32_t explosion_victims_ = 0;  // diagnostics (not state)
+#ifdef ALAMO_SIM_HAVE_PRESENCE
+    class PresenceView final : public tactical::presence::PresenceWorld {  // read-only view of the battle (§A.11 contract)
+    public:
+        const TacticalBattle* b = nullptr;
+        const TacticalMode* mode = nullptr;
+        bool unit(tactical::presence::ObjectId id, tactical::presence::UnitView& out) const override;
+        void box_query(float cx, float cy, float cz, float h, std::vector<tactical::presence::ObjectId>& out) const override;
+        bool allied(int32_t a, int32_t c) const override;
+    };
+    tactical::presence::PresenceSystem presence_;
+    PresenceView presence_view_;
+    // The SimAnimation idle hook reads the battle through this cell; the destructor nulls it (no dangling `this`, and
+    // no call into a SimAnimation that may already be gone).
+    std::shared_ptr<const TacticalBattle*> presence_link_;
+    std::vector<int8_t> presence_kind_;     // per type: bit 0 IMPOSING_PRESENCE, bit 1 EXPLOSION, bit 2 IDLE (definitions)
+#endif
 #ifdef ALAMO_SIM_HAVE_GARRISON
     tactical::garrison::GarrisonSystem garrison_;
     std::unique_ptr<tactical::garrison::CapturePointSystem> captures_;

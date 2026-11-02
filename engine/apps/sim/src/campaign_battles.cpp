@@ -390,7 +390,7 @@ void CampaignBattles::register_battle_chunks() {
     remove_battle_chunks();
     if (!battle_) return;
     using Part = TacticalBattle::SavePart;
-    for (const Part p : {Part::Movement, Part::Combat, Part::Abilities, Part::Garrison, Part::Hangar, Part::Fog, Part::Damage}) {
+    for (const Part p : {Part::Movement, Part::Combat, Part::Abilities, Part::Garrison, Part::Hangar, Part::Fog, Part::Damage, Part::Presence}) {
         SaveParticipant sp;
         sp.name = TacticalBattle::save_part_name(p);
         sp.write = [this, p](ByteWriter& w) {

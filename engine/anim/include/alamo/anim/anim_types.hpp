@@ -57,5 +57,9 @@ bool is_turn(int32_t id);            // 3, 4, 21-24, 72, 73
 bool is_crouch(int32_t id);          // 67, 71, 72, 73
 bool is_flinch(int32_t id);          // 79-86
 bool is_one_shot_pose(int32_t id);   // 7, 9, 10, 11, 32, 36, 41, 58, 62
+// §A.11 mid-clip idle restart: the default idle type T differs from the current type C in crouch class (67, 71, 72, 73)
+// and C is an idle or crouch clip - idle-like without the flinches (0, 1, 71, 77, 78) or crouch-class (67, 72, 73).
+// [port] §A.11 speaks of "the idle" restarting; flinch, attack, Attack Idle, death and other clips are never cut by it.
+bool idle_class_restart(int32_t current, int32_t idle_type);
 
 }  // namespace alamo::anim

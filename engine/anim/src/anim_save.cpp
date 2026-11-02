@@ -14,12 +14,12 @@ namespace alamo::anim {
 namespace {
 
 constexpr uint32_t kAnimWorldVersion = 1;
-constexpr uint32_t kAnimBehaviorsVersion = 1;
+constexpr uint32_t kAnimBehaviorsVersion = 3;  // 2: flinch intensity; 3: §A.12 flinch phases (R3)
 
 // Lower bounds of one saved record (corrupted-count guard: a count larger than the bytes left can hold fails before
 // anything is allocated).
 constexpr size_t kRowBytes = 4 + 1 + 4 + 8 + 5 + 8 + 3 * (4 + 4 + 1 + 4 + 4 + 1 + 4) + 1 + 4 + 4 + 4;
-constexpr size_t kEntryBytes = 4 + 4 + 8 + 8 + 4 + 4 + 1 + 4 + 8 + 4 + 1 + 1;
+constexpr size_t kEntryBytes = 4 + 4 + 1 + 8 + 4 + 4 + 4 + 8 + 8 + 8 + 4 + 1 + 1;
 constexpr size_t kCorpseBytes = 4 + 1 + 4 + 1 + 1 + 1 + 1 + 8 + 8 + 8 + 8 + 4 + 4 + 12 + 12;
 
 bool read_count(ByteReader& r, size_t record_bytes, uint32_t& n) {
@@ -179,12 +179,13 @@ void AnimBehaviors::write(ByteWriter& w) const {
     for (const Entry& e : entries_) {
         w.i32(e.id);
         w.i32(e.flinch);
-        w.u64(e.flinch_end);
-        w.u64(e.flinch_next);
-        w.f32(e.flinch_blend);
+        w.u8(static_cast<uint8_t>(e.phase));
+        w.u64(e.flinch_timer);
+        w.f32(e.flinch_intensity);
         w.i32(e.ret_type);
-        w.boolean(e.ret_loop);
-        w.f32(e.ret_speed);
+        w.f32(e.flinch_blend);
+        w.u64(e.hold_frames);
+        w.u64(e.cooldown_frames);
         w.u64(e.combat_timer);
         w.f32(e.last_yaw);
         w.boolean(e.have_yaw);
@@ -223,12 +224,16 @@ bool AnimBehaviors::read(ByteReader& r) {
         e.id = r.i32();
         if (i > 0 && e.id <= entries[i - 1].id) r.fail();
         e.flinch = r.i32();
-        e.flinch_end = r.u64();
-        e.flinch_next = r.u64();
-        e.flinch_blend = r.f32();
+        const uint8_t phase = r.u8();
+        if (phase > static_cast<uint8_t>(FlinchPhase::Return)) r.fail();
+        e.phase = static_cast<FlinchPhase>(phase);
+        e.flinch_timer = r.u64();
+        e.flinch_intensity = r.f32();
+        if (!(e.flinch_intensity >= 0.0f && e.flinch_intensity <= 1.0f)) r.fail();
         e.ret_type = r.i32();
-        e.ret_loop = r.boolean();
-        e.ret_speed = r.f32();
+        e.flinch_blend = r.f32();
+        e.hold_frames = r.u64();
+        e.cooldown_frames = r.u64();
         e.combat_timer = r.u64();
         e.last_yaw = r.f32();
         e.have_yaw = r.boolean();

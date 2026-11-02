@@ -69,8 +69,10 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
         for (const Puff& p : puffs_) effects_.push_back(p.fx);
         std::stable_sort(effects_.begin(), effects_.end(), [](const SimWorldEffect& a, const SimWorldEffect& b) { return a.key < b.key; });
     };
-    // ---- R3 spin-away corpses that ended this tick: Spin_Away_On_Death_Explosion at their last position (land and space)
+    // ---- R3 spin-away corpses that ended this tick: Spin_Away_On_Death_Explosion at their last position (land and space).
+    // Store death clones are skipped: the battle spawns their explosion as a sim PARTICLE object (R3 t04).
     for (const SnapshotObject& p : prev_spin_) {
+        if (p.flags & kSnapDeathClone) continue;
         const auto it = std::lower_bound(frame.objects.begin(), frame.objects.end(), p.id,
                                          [](const SnapshotObject& o, objects::ObjectId v) { return o.id < v; });
         if (it != frame.objects.end() && it->id == p.id) continue;
