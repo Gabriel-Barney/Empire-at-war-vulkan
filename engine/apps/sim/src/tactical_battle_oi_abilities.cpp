@@ -170,7 +170,8 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     };
 #endif
     // OI follow-up t03 (A1_READINGS §28.9): the script's shares of the movement lock (Lock_Current_Orders, a Divert).
-    h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id); };
+    // a1i t04: + the unload exit path of a landing object's unloaded units (§35.2, the locomotor's forced-move term).
+    h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id) || landing_locked(id); };
     // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range tests against a garrisoned target's host. S8 t10 (§5.1): the host's gun
     // bones of its current ALT entry (Num_Garrison_Guns FP_0<i>_ALT<a>, CombatSystem::garrison_fire_bones).
     h.garrison_holder = [this](tc::ObjectId id) -> tc::ObjectId { return garrison_holder_of(id); };

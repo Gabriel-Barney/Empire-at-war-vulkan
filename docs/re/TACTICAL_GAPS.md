@@ -967,6 +967,25 @@ container locomotor, FormationSpacing 0.5) and slots.
 >   planet-restriction refusals and the "battle decided" gate are not modelled [port].
 > - item 6 (space members by the free-placement ring search 0x2a9670) is **not implemented**: space reserves still spawn in
 >   rows of 6 around the validated point. Out of a1h's land scope; needs its own task.
+>
+> **Status 2026-11-02 (a1i t04 / t05, A1_READINGS §35):**
+> - Landing object (§35.1-35.3): a land Reinforce of a company with a `Company_Transport_Unit` spawns its
+>   `Landing_Transport_Variant` at the drop point (z + `Hover_Offset`, entry-facing record, parent id, `TRANSPORT_LANDING`,
+>   carried type); the members appear at the 0x643130 unload offsets (team grid 3.0 x the team bounds) at the order [port],
+>   the signal 0x19 record is posted (`landings_unloaded()`), and the landing object leaves after (steps + 1) x 2 s x
+>   (1 + Reinforcement_Deploy_Time_Multiplier list). Battle AI perception reads the landing's carried type as its
+>   representative type. `BattleConfig::landing_unload_timed` (off by default) runs the state machine instead: hidden
+>   until clear of the other landings, one team / vehicle per step on a locked exit move, unlock + record after the last,
+>   saved mid-unload (battle state v3). Open: switching it on (the AI's in-flight wait), the Land / Takeoff clip times,
+>   the skirmish `Reinforcement_Time_Multiplier` wait, the +0xd8 hover term.
+> - item 3: `Create_Cinematic_Transport`'s persist flag is stored (`ObjectStore::landing_persist`, save v3); a persistent
+>   landing object blocks human drops.
+> - item 4 rule 2: deployed extents (0x371d20) while a `Deploys` type with a locomotor has DEPLOY active
+>   (`drop_deployed_extents`; FoC sets no `Custom_Hard_XExtent_Deployed`, so no FoC footprint changes).
+> - item 5: campaign drops refuse (`NotAllowed`, after the validity) `Stay_In_Transport_During_Ground_Battle` types and
+>   types the battle planet restricts. The "battle decided" gate stays [M].
+> - item 6: space members by `find_free_placement` (§35.4 item 4) when every member's model box is loaded; rows of 6
+>   otherwise [port].
 
 ### 4.3 Battle load consumes the sync RNG (item 3) [H draws, M path]
 - Object construction draws synced numbers: SAP init 0x37c050 (from `Init_From_Type` 0x3989a0) does one

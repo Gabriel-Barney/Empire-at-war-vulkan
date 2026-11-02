@@ -13,7 +13,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 4;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next; 4: S7 t37 follow_next dropped (the follow is in the movement layer)
+constexpr uint32_t kBattleStateVersion = 5;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects)
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -73,6 +73,10 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a.seq(b.effects_, [](auto& x, auto& e) { x(e.id, e.asset, e.percent, e.frame); });
     a(b.anchor_[0], b.anchor_[1], b.facing_[0], b.facing_[1], b.placed_[0], b.placed_[1]);
     a(b.drop_facing_[0], b.drop_facing_[1]);  // a1h t06
+    a.seq(b.landings_, [](auto& x, auto& l) {  // a1i t04: landing objects (state version 3)
+        x(l.id, l.h, l.participant, l.state, l.timed, l.timer_start, l.timer_len, l.unloaded, l.next_offset, l.remove_frame);
+        x(l.targets, l.units);
+    });
     a(b.frame_, b.retreat_allowed_frame_, b.retreat_side_, b.retreat_done_frame_, b.retreat_complete_, b.finished_);
     a(b.end_hold_until_, b.end_winner_, b.end_victory_, b.end_retreated_);
     a(b.result_.winner, b.result_.victory, b.result_.retreated, b.result_.destroyed, b.result_.starbase_destroyed);
@@ -228,6 +232,7 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             return get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done();
         case SavePart::Combat:
             if (!all_saveable(combat_.get(), &l1_weather_)) return false;
+            l1_weather_.set_data(l1_weather_data_.get());  // the saved scenario resolves in it (weather starts on the first service)
             if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done())) return false;
             attach_rocket_terrain();  // refixf t01: the host terrain is not part of the save
             return true;

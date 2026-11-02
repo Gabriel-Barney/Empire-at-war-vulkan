@@ -160,6 +160,10 @@ public:
     // Only live objects with TRANSPORT or TRANSPORT_LANDING (the pack at obj +0xc8) have it; kNone clears it. False and
     // nothing changed otherwise or for a type index out of range. A new object starts with none.
     bool set_carried_type(ObjectHandle h, TypeIndex carried);
+    // a1i t05 - landing persist (TransportDataPack +0xc9, TACTICAL_GAPS §4.2.2 item 3 [H]): set only by
+    // Create_Cinematic_Transport's `persist` argument; a persistent landing transport never takes off and does not block a
+    // human drop's ignore of landing transports. Same objects as set_carried_type; false and nothing changed otherwise.
+    bool set_landing_persist(ObjectHandle h, bool persist);
 
     // Store update (Â§5.3): pre-service hook (spatial-tree refit), serviced objects newest-first
     // (those alive when the loop started), delayed creations (last-to-first, due <= frame), flush.
@@ -239,6 +243,7 @@ public:
     ObjectHandle container(ObjectHandle h) const { return container_[h.slot()]; }
     ObjectHandle attach_parent(ObjectHandle h) const { return attach_parent_[h.slot()]; }
     TypeIndex carried_type(ObjectHandle h) const { return exists(h) ? carried_type_[h.slot()] : kNone; }  // a1h t08
+    bool landing_persist(ObjectHandle h) const { return exists(h) && landing_persist_[h.slot()] != 0; }     // a1i t05
     bool has_behavior(ObjectHandle h, BehaviorTypeId id) const;
     std::span<const BehaviorTypeId> behaviors(ObjectHandle h) const { return behaviors_[h.slot()]; }  // attach order
     // Per instance (index into behaviors(h)): serviced flag, interval, next-service frame.
@@ -281,8 +286,9 @@ public:
     // False and nothing changed (store and counter) on a version / mode / kind / types mismatch, an
     // inconsistent list or truncated data. Like SimRng / StoryModel it does not require r.done(): the
     // caller checks that at the end of its chunk. Version 2 (a1h t08) adds the carried types at the end; a version 1
-    // save still loads (no carried types).
-    static constexpr uint32_t kSaveVersion = 2;
+    // save still loads (no carried types). Version 3 (a1i t05) adds the landing persist flags after them (v1 / v2 load
+    // with none).
+    static constexpr uint32_t kSaveVersion = 3;
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);
     // Registers "<name>" (ordered digest) and "<name>.parity" (parity sum) with a CrcRegistry.
@@ -328,6 +334,7 @@ private:
     std::vector<uint8_t> flags_, registered_serviced_;
     std::vector<ObjectHandle> container_, attach_parent_;
     std::vector<TypeIndex> carried_type_;  // kNone: none (always kNone on a free slot)
+    std::vector<uint8_t> landing_persist_;  // a1i t05: 1 = persist (always 0 on a free slot)
     std::vector<std::vector<BehaviorTypeId>> behaviors_;
     std::vector<std::vector<BehaviorState>> beh_state_;  // parallel to behaviors_
     std::vector<std::array<uint8_t, kBehaviorTypeCount>> behavior_index_;  // 0xFF = absent

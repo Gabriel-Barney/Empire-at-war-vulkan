@@ -443,8 +443,7 @@ std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvid
 // Land_FOW_Reveal_Range x the weather Sight_Range_Modifier of the target's company type; <= 0 -> the target type's max
 // attack range (0x3749d0). A result <= 0 means no walk (the first point, no threat / box test).
 float land_ambush_step(float land_fow_reveal_range, float weather_sight_factor, float max_attack_range);
-// The plan files of one tactical mode, sorted within a folder [port]: space = Data\Scripts\AI\SpaceMode\; land = SpaceMode\
-// then LandMode\ (S7 t36: retail's one plan manager gives land SpaceMode's RetreatPlan, category "Space_Retreat | Land_Retreat").
+// The plan files of a tactical mode: every plan folder in load order, as for the galactic AI (AI_GALACTIC §1.9.1 [H]).
 std::vector<std::string> tactical_plan_files(TacticalMode mode, const std::function<std::vector<std::string>(std::string_view)>& list);
 
 }  // namespace alamo::ai::tactical

@@ -311,6 +311,12 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
         const PlanetIndex home = setup.players[static_cast<size_t>(local_player_)].home;
         if (valid_planet(home) && planets_[home].is_planet) planets_[home].revealed = true;
     }
+    // q2f t02 [H]: the mode's frame-0 fiscal cycle runs before the galaxy is built (Q2 traces: no objects at mode frame
+    // 0, F fields last 0 / next 1350 / cycle 1 there, credits unchanged until mode frame 1351), so it pays nobody, feeds
+    // no AI income tick and rerolls no black-market planet. Only its bookkeeping (GE 1.2 steps 2-4) is left.
+    last_cycle_frame_ = 0;
+    next_cycle_frame_ = econ::fiscal_period_frames(rules_->constants.fiscal_cycle_seconds);
+    cycle_counter_ = 1;
     return true;
 }
 
@@ -1493,8 +1499,7 @@ RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& 
         // The AI's task-force invasions do not come here: GalacticTaskForce.Invade 0x6ce600 calls Land_Invade (invade())
         // directly. Then only the issuer's own units land. A list whose units are all dropped lands nothing (an empty
         // list given to invade() would mean "all of the player's units").
-        if (pause_ > 0) return RejectReason::NotAllowed;
-        if (linked_battle_pending_ && conflicts_ && conflicts_->in_queued_conflict(local_player_)) return RejectReason::NotAllowed;
+        if (paused()) return RejectReason::NotAllowed;
         const std::vector<uint32_t>& ids = ev.ids("units");
         std::vector<ObjectHandle> units;
         for (uint32_t id : ids) {

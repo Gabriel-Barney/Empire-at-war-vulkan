@@ -9,8 +9,10 @@ Q2 reference traces: put the game folder back exactly as it was. Safe to run any
 
 For each manifest (out\<run>\manifest.json) it:
   1. stops the q2reader.exe it started, and the StarWarsG.exe it launched (only that exact process:
-     same pid AND same start time), first with a window close, then forcibly after 15 s;
-  2. moves the Lua probe output (Q2Trace_Lua.txt, if the game wrote one under corruption\) into the run dir;
+     same pid AND same start time), first with a window close, then forcibly after 15 s; then waits up to 30 s
+     for the Lua record reader (q2lua_reader.py, same pid + start-time check) and stops it if still running;
+  2. moves an old-style Lua output (Q2Trace_Lua.txt) into the run dir, if one exists (retail writes none: the
+     probe's records come from memory, docs/re/LUA_SCRIPT_OUTPUT.md);
   3. deletes every file it created, after checking the SHA-256 recorded at install time;
   4. removes the folders it created, deepest first, only if empty;
   5. verifies nothing it created is left and marks the manifest cleaned.
@@ -60,6 +62,16 @@ function Invoke-Q2CleanupOne {
     # 1. processes
     Stop-Q2Process -ProcId ([int]$m.reader_pid) -Name 'q2reader' -StartUtc '' -Log $log -DryRun:$DryRun
     Stop-Q2Process -ProcId ([int]$m.game_pid) -Name 'StarWarsG' -StartUtc $m.game_start_utc -Log $log -DryRun:$DryRun
+    # the Lua record reader (python, no window) ends by itself once the game is gone: give it 30 s to write its files
+    $lp = $(if ([int]$m.lua_reader_pid -gt 0) { Get-Process -Id ([int]$m.lua_reader_pid) -ErrorAction SilentlyContinue })
+    if ($lp -and $lp.ProcessName -eq 'python' -and $m.lua_reader_start_utc -and
+        [Math]::Abs(($lp.StartTime.ToUniversalTime() - [DateTime]::Parse($m.lua_reader_start_utc).ToUniversalTime()).TotalSeconds) -le 5) {
+        $log.Add("wait for the lua reader pid $($lp.Id)")
+        if (-not $DryRun -and -not $lp.WaitForExit(30000)) {
+            $log.Add("stop lua reader pid $($lp.Id)")
+            Stop-Process -Id $lp.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
     # 2. Lua output written by the game (_CustomScriptMessage): look under corruption\ (2 levels).
     $corr = Join-Path $m.game_root 'corruption'
     if (Test-Path -LiteralPath $corr) {

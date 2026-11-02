@@ -105,9 +105,11 @@ public:
     void clear_events() { events_.clear(); }
     void hash(StateHasher& h) const;
     // N1 stage 2 (save_file.hpp contract, combat_save.cpp). The scenario is written as its index in the WeatherData the
-    // system was started with + its name; the loader rebuilds the battle (start() with the same data) first, and read()
-    // resolves the scenario in that data (or keeps the current scenario when only the name matches). data_ is not
-    // saved (the host's). False (unchanged) when the scenario cannot be resolved or a phase index is out of range.
+    // system was started with + its name; the loader hands the same data to the rebuilt battle's system (set_data; a
+    // battle starts its weather on its first service, after the load) and read() resolves the scenario in that data (or
+    // keeps the current scenario when only the name matches). data_ is not saved (the host's). False (unchanged) when
+    // the scenario cannot be resolved or a phase index is out of range.
+    void set_data(const WeatherData* data) { data_ = data; }
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);
 

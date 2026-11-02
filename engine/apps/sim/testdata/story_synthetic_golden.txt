@@ -1,30 +1,29 @@
 # S4 synthetic story campaign, seed 7, 600 ticks
 # alamo story log v1: T frame index kind fields | F frame set:seq plot event type [params] reward=type[params] via=cause
 # plot set 0: player 0 Story_Plots_Host_Test.xml (1 plots, 1 scripts)
-T 1 0 GalacticDayPassed value=1 gframe=0
 F 1 0:0 Story_Host_Test.xml Begin STORY_ELAPSED [0] reward=- via=clock
 F 1 0:1 Story_Host_Test.xml Raise_Tech STORY_TRIGGER [] reward=SET_TECH_LEVEL[Empire|3] via=clock
-T 1 1 TechLevelChanged player=Empire value=3 gframe=1
-T 2 2 FleetDeparted player=Underworld planet=D to=B object=7 fleet=0 value=0 units=Corvette,Infantry gframe=1
+T 1 0 TechLevelChanged player=Empire value=3 gframe=1
+T 2 1 FleetDeparted player=Underworld planet=D to=B object=7 fleet=0 value=0 units=Corvette,Infantry gframe=1
+T 2 2 ProductionBegin player=Empire planet=A type=Fighters value=1 gframe=1
 T 2 3 ProductionBegin player=Empire planet=A type=Fighters value=1 gframe=1
-T 2 4 ProductionBegin player=Empire planet=A type=Fighters value=1 gframe=1
 F 2 0:2 Story_Host_Test.xml Tech_Seen STORY_TECH_LEVEL [3] reward=- via=poll
 F 2 0:3 Story_Host_Test.xml Script_Ack STORY_AI_NOTIFICATION [|SCRIPT_SAW_TECH] reward=SET_FLAG[Acked|1] via=poll
 F 2 0:4 Story_Host_Test.xml Ack_Flag STORY_FLAG [Acked|1] reward=- via=clock
-T 56 5 ProductionCompleted player=Empire planet=A type=Fighters object=11 value=1 gframe=55
+T 56 4 ProductionCompleted player=Empire planet=A type=Fighters object=11 value=1 gframe=55
 F 61 0:5 Story_Host_Test.xml Two_Seconds STORY_ELAPSED [2] reward=- via=clock
-T 71 6 FleetArrived player=Underworld planet=B to=D object=7 fleet=0 value=0 units=Corvette,Infantry gframe=70
-T 71 7 FleetDeparted player=Underworld planet=B to=C object=7 fleet=0 value=0 units=Corvette,Infantry gframe=70
-T 110 8 ProductionCompleted player=Empire planet=A type=Fighters object=12 value=1 gframe=109
-F 110 0:6 Story_Host_Test.xml Two_Fighters STORY_CONSTRUCT [Fighters|2|FILTER_FRIENDLY_ONLY] reward=- via=trigger:ProductionCompleted#8
-F 110 0:7 Story_Host_Test.xml Bonus STORY_TRIGGER [] reward=CREDITS[1000] via=trigger:ProductionCompleted#8
-T 123 9 FleetArrived player=Underworld planet=C to=B object=7 fleet=0 value=1 units=Corvette,Infantry gframe=122
-F 123 0:8 Story_Host_Test.xml Corvette_At_C STORY_ENTER [PlanetC||Corvette] reward=- via=trigger:FleetArrived#9
-T 124 10 UnitsLanded player=Underworld planet=C value=1 gframe=123
-F 124 0:9 Story_Host_Test.xml Landed_C STORY_LAND_ON [PlanetC] reward=- via=trigger:UnitsLanded#10
-T 124 11 PlanetOwnerChanged player=Underworld other=Neutral planet=C value=0 gframe=123
-F 124 0:10 Story_Host_Test.xml Enemy_Takes_C STORY_CONQUER [PlanetC||FILTER_ENEMY_ONLY] reward=- via=trigger:PlanetOwnerChanged#11
-T 201 12 TacticalStarted
-T 231 13 TacticalEnded
-T 454 14 CorruptionChanged player=Underworld planet=C type=RACKETEERING value=3 gframe=423
-F 454 0:11 Story_Host_Test.xml C_Corrupted STORY_CORRUPTION_CHANGED [PlanetC|RACKETEERING] reward=- via=trigger:CorruptionChanged#14
+T 71 5 FleetArrived player=Underworld planet=B to=D object=7 fleet=0 value=0 units=Corvette,Infantry gframe=70
+T 71 6 FleetDeparted player=Underworld planet=B to=C object=7 fleet=0 value=0 units=Corvette,Infantry gframe=70
+T 110 7 ProductionCompleted player=Empire planet=A type=Fighters object=12 value=1 gframe=109
+F 110 0:6 Story_Host_Test.xml Two_Fighters STORY_CONSTRUCT [Fighters|2|FILTER_FRIENDLY_ONLY] reward=- via=trigger:ProductionCompleted#7
+F 110 0:7 Story_Host_Test.xml Bonus STORY_TRIGGER [] reward=CREDITS[1000] via=trigger:ProductionCompleted#7
+T 123 8 FleetArrived player=Underworld planet=C to=B object=7 fleet=0 value=1 units=Corvette,Infantry gframe=122
+F 123 0:8 Story_Host_Test.xml Corvette_At_C STORY_ENTER [PlanetC||Corvette] reward=- via=trigger:FleetArrived#8
+T 124 9 UnitsLanded player=Underworld planet=C value=1 gframe=123
+F 124 0:9 Story_Host_Test.xml Landed_C STORY_LAND_ON [PlanetC] reward=- via=trigger:UnitsLanded#9
+T 124 10 PlanetOwnerChanged player=Underworld other=Neutral planet=C value=0 gframe=123
+F 124 0:10 Story_Host_Test.xml Enemy_Takes_C STORY_CONQUER [PlanetC||FILTER_ENEMY_ONLY] reward=- via=trigger:PlanetOwnerChanged#10
+T 201 11 TacticalStarted
+T 231 12 TacticalEnded
+T 454 13 CorruptionChanged player=Underworld planet=C type=RACKETEERING value=3 gframe=423
+F 454 0:11 Story_Host_Test.xml C_Corrupted STORY_CORRUPTION_CHANGED [PlanetC|RACKETEERING] reward=- via=trigger:CorruptionChanged#13

@@ -604,6 +604,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         o.owner = st.owner(h);
         o.type = type;
         if (u && u->container != 0xFFFFFFFFu) o.rep_type = static_cast<int32_t>(st.type(b_->containers_[u->container].h));
+        if (const objects::TypeIndex ct = st.carried_type(h); ct != objects::kNone) o.rep_type = static_cast<int32_t>(ct);  // a1i t04: §35.3
         o.has_unit_ai = st.has_behavior(h, kUnitAi) && c.has_unit(id);
         o.team_or_hide_when_fogged = st.has_behavior(h, kTeam) || st.has_behavior(h, kHideWhenFogged);
         o.mobile = u && u->movable;

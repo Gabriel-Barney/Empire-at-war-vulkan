@@ -76,16 +76,6 @@ public:
             if (k.size() > f.size() && k.compare(0, f.size(), f) == 0 && k.find('\\', f.size()) == std::string::npos) out.push_back(k);
         return out;
     }
-    // S7 t33: the folder `to` becomes a copy of the folder `from` (g_land: the SpaceMode plans as LandMode plans).
-    void mirror(const std::string& from, const std::string& to) {
-        const std::string f = normalize_path(from), t = normalize_path(to);
-        for (auto it = files_.begin(); it != files_.end();)
-            it = it->first.compare(0, t.size(), t) == 0 ? files_.erase(it) : std::next(it);
-        std::vector<std::pair<std::string, std::string>> copies;
-        for (const auto& [k, v] : files_)
-            if (k.compare(0, f.size(), f) == 0) copies.emplace_back(t + k.substr(f.size()), v);
-        for (auto& [k, v] : copies) files_[k] = std::move(v);
-    }
 
 private:
     std::map<std::string, std::string> files_;
@@ -211,6 +201,17 @@ function MainForce_Thread()
   ScriptExit()
 end
 function MainForce_No_Units_Remaining()
+  ScriptExit()
+end
+)";
+// A LandMode plan for a land-only goal: loaded in space too (one library, AI_GALACTIC §1.9.1), never picked there.
+const char* kPlanLandOnly = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Syn_Land_Only"
+  TaskForce = { { "MainForce", "Frigate | Corvette = 1,3" } }
+end
+function MainForce_Thread()
   ScriptExit()
 end
 )";
@@ -1034,7 +1035,7 @@ void syn_data(MemoryFiles& files, AiDefinitions& defs, EquationSet& eqs, bool sc
     files.add("Data\\Scripts\\AI\\SpaceMode\\SynEscort.lua", kPlanEscort);
     files.add("Data\\Scripts\\AI\\SpaceMode\\SynBuild.lua", kPlanBuild);
     files.add("Data\\Scripts\\AI\\SpaceMode\\SynRetreat.lua", kPlanRetreat);
-    files.add("Data\\Scripts\\AI\\LandMode\\SynLandOnly.lua", kPlanDestroy);  // not loaded in space
+    files.add("Data\\Scripts\\AI\\LandMode\\SynLandOnly.lua", kPlanLandOnly);
     files.add("Data\\Scripts\\FreeStore\\SynTacticalFreeStore.lua", kFreeStore);
     // S7 t33 (g_land): the same goals / templates / player types for land mode.
     const auto mode_text = [](std::string t) {
@@ -1183,16 +1184,23 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     cfg.attacker = 1;
     cfg.defender = 0;
     cfg.map = {-4000.0f, -4000.0f, 4000.0f, 4000.0f};
-    if (g_land) files.mirror("Data\\Scripts\\AI\\SpaceMode\\", "Data\\Scripts\\AI\\LandMode\\");  // S7 t33
-    cfg.plan_files = tactical_plan_files(cfg.mode, [&files](std::string_view glob) {
+    const auto lister = [&files](std::string_view glob) {
         const std::string g(glob);
         return files.list(g.substr(0, g.find('*')));
-    });
+    };
+    cfg.plan_files = tactical_plan_files(TacticalMode::Space, lister);
+    // AI_GALACTIC §1.9.1 [H]: one plan library for every mode, so a land AI also loads SpaceMode plans (the shipped
+    // RetreatPlan serves Land_Retreat, A1_READINGS §34.2), and the LandMode plan is loaded in space after the SpaceMode ones.
+    const std::vector<std::string> land_files = tactical_plan_files(TacticalMode::Land, lister);
+    CHECK(land_files == cfg.plan_files);
+    CHECK(std::find(land_files.begin(), land_files.end(), normalize_path("Data\\Scripts\\AI\\SpaceMode\\SynRetreat.lua")) != land_files.end());
     TacticalAiWorld world(store, &types, &files, rng, defs, eqs, host, cfg);
     std::vector<std::string> diag;
     CHECK(world.load_plans(&diag));
-    // the LandMode plan is not loaded in space; variants 5-7: kPlanEscortOff (no goal of its category) neither
-    CHECK(world.plans().plans.size() == (variant >= 5 ? 4u : 5u));
+    // variants 5-7: kPlanEscortOff (no goal of its category) is not loaded; the LandMode plan comes last
+    const size_t plan_count = variant >= 5 ? 5u : 6u;
+    CHECK(world.plans().plans.size() == plan_count);
+    CHECK(world.plans().find("SynLandOnly") == static_cast<uint32_t>(plan_count - 1));
     if (hijacks) hijacks->clear();
     CHECK(world.start(&diag));
     for (const std::string& d : diag) std::printf("  diag: %s\n", d.c_str());

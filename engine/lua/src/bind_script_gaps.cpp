@@ -370,6 +370,7 @@ int g_create_cinematic_transport(Call& c) {
     const ObjectHandle h = spawn(c, sp);
     if (!h || !st->alive(h)) return push_nil(c);
     if (!st->has_behavior(h, objects::beh::TransportLanding)) st->add_behavior(h, objects::beh::TransportLanding);
+    st->set_landing_persist(h, persist);  // a1i t05: pack +0xc9, read by the land drop test (TACTICAL_GAPS §4.2.2 item 3)
     if (hk && hk->transports) hk->transports->add(st->id(h), landing_mode, anim_delta, idle, persist);
     if (!hint.empty()) {
         if (!st->has_behavior(h, objects::beh::Hint)) st->add_behavior(h, objects::beh::Hint);

@@ -1458,8 +1458,55 @@ nothing):
   step]; a planet type that is not found is logged ("story: INVADE_PLANET unable to find planet") and dropped [port: the
   original crashes]; the combatant test vf+0x138 is the unit's GroundUnit kind [port]; the planet is the first planet
   row of the type (as SABOTAGE_STRUCTURE); the Param2 mismatch line goes to the session's Lua messages.
-- Not changed: `paused()` still applies the linked-battle flag to every player for the other commands (REMAINING_GAPS
-  §6.4 "[port: for every player]"); with `in_queued_conflict` available they could follow the original too.
+- ~~Not changed: `paused()` still applies the linked-battle flag to every player for the other commands (REMAINING_GAPS
+  §6.4 "[port: for every player]")~~ done in a1i t03 (below).
+
+**a1i t03 (2026-11-02): every caller of 0x2b0350 [H].** The call graph lists seven callers, and all seven use the same
+test. With S = "the flag 0x140b154d0 is set, or the list 0x140b2b360 is non-empty (never written, REMAINING_GAPS §6.4)"
+and "not multiplayer" (0x28af60(GMM) == 0), the **story block** is `S && !MP && 0x2b0350(GOM)`. 0x2b0350 compares
+records with the **local player** id (0x294a70) only. None of the callers looks at the event's issuer, so an AI
+player's command is blocked exactly when the human's is.
+
+| caller | what it is | GOM passed to 0x2b0350 | effect of the story block | pause counter GMM+0x2c |
+|---|---|---|---|---|
+| 0x4b2360 | `GalacticModeClass` vf9, the galactic "paused" query (MAIN_LOOP §1.5 slot +0x48) | the mode's own (+0x18) | returns true | > 0 → true, tested first |
+| 0x2be640 | GOM service tail (BATTLE_TRANSITIONS §1.4 step 2) | its own | the object service takes the paused branch (as for the counter) and the conflict processing does not run this tick | (galactic mode) > 0 → the paused branch |
+| 0x3c4460 | `MoveThroughObjectsEventClass` vf4 | current mode's (0x140b15418 +0x18) | event dropped | galactic mode and > 0 → dropped |
+| 0x48ff50 | `InvadeEventClass` Execute (§31.2) | current mode's | event dropped | same |
+| 0x4b4d70 | `SpecialAbilityEventClass` vf4 (every kind) | current mode's | event dropped | same |
+| 0x5af260 | `FleetManagementEventClass` vf4 (every op, 8 included) | current mode's | event dropped | same |
+| 0x68f5b0 | Lua `GalacticFreeStoreClass.Move_Object` | current mode's | warning "Galactic mode is currently paused. Move not possible, try again later.", returns false | > 0 (any mode) → same refusal |
+
+- The event executors return with no message. The block is tested before the pause counter, but both only drop.
+- Not gated: `MoveObjectToObjectEventClass` vf4 0x3af410 (it resolves the object and calls 0x39f580, no prologue),
+  `ProductionEventClass` vf4 0x524130, and `GalacticTaskForce.Invade` 0x6ce600 (§31.6).
+- So the paused query and the five command gates all compute "pause counter > 0, or the story block". The only
+  difference is the GOM: 0x4b2360 asks its own mode, while the executors ask the current mode. In galactic mode, where
+  these events run, the two are the same [M for a galactic event executed while a tactical mode is current].
+
+**Port (a1i t03).**
+- `GalacticSim::story_block()` = `linked_battle_pending && in_queued_conflict(local player)` (the port is
+  single-player only).
+- `GalacticSim::paused()` = `pause_ > 0 || story_block()` (0x4b2360). Every port gate keeps calling `paused()`, so all
+  of them now follow the original:
+  - `fleet_management` (0x5af260);
+  - MoveThroughObjects (0x3c4460);
+  - `special_command` (0x4b4d70);
+  - the Invade case (0x48ff50, now `paused()` too);
+  - the galactic AI's free-store `Move_Object` (0x68f5b0);
+  - the [port] unit-split path of MoveObjectToObject (the HUD's drag; it stands in for a FleetManagement split).
+- The other readers of `paused()` follow 0x4b2360 too: the galactic AI service and its task-force MoveTo status, the
+  free-store hop, the reveal delay and the story Lua clock.
+- The whole-fleet MoveObjectToObject stays ungated, as 0x3af410.
+- 0x2be640 is unchanged: `CampaignBattles` leaves its `story_sequence_active` seam unset (BT §2.9.3: the port starts a
+  linked battle at once; see campaign_battles.hpp).
+- Still [port]: `GalacticSim::update` freezes the mode frame only for `pause_ > 0`. 0x4b2360 also freezes it while the
+  story block holds.
+- Tests: `alamo_galactic_conflict_tests` `test_linked_battle_gates` (AI Underworld commands with the local Empire in no
+  queued conflict → FleetManagement launch runs, SpecialAbility reaches its target check; after the AI's direct
+  invasion of the Empire's planet → launch, MoveThroughObjects and SpecialAbility NotAllowed, MoveObjectToObject runs;
+  flag cleared → not paused with the conflict still queued); `alamo_galactic_special_tests` (the flag alone, with no
+  queued conflict, does not pause).
 
 ## 32. Reinforce delivery handlers and the transport carried type (a1h t05 / t08) [H unless tagged]
 
@@ -1822,3 +1869,252 @@ For FIGHTER_FLYING §4.10 E (squadron escorting its carrier):
 > R = half the lead's attack range from the recorded goal; any newer order for a unit removes it from its record
 > (AI save v3, hashed). [port] Not yet: the "turns hostile" and "fogged after arrival" ends of an object guard; unit-level
 > Lua orders, abilities and garrison orders do not supersede statuses; the guard cap constant (0x140b276c0) is [L].
+
+## 34. Battles that never end: reserve units, one plan library, slow station sieges (a1i t01 / t02) [H unless tagged]
+
+**Question.** `alamo_headless --skirmish-ai foc-land --seed N --ticks 20000 --expect-battle-end` reached the 14400-frame
+cap on 11 of seeds 1-12 (only seed 5 ended), and foc-station on seeds 1 and 6 of 1-8. A1h named two land causes:
+fog-hidden Rebel infantry the Empire never reaches, and an undeployed Rebel reserve that kept the side alive under the
+port's "reserve counts" rule (BT §3.1a said pool units never count [M]).
+
+### 34.1 Reserve units never keep a side alive (0xb) [H]
+
+- 0x344710 case 0xb walks only the **tactical** GOM's object list (0x2a9ff0 on the tactical mode's GOM, gom +0x38).
+- A reserve unit is a galactic persistent object in the parent mode's lists (TACTICAL_GAPS §4.2). Its tactical object
+  (the landing object, §32.2) is created only when it drops (0x2b5fe0). Until then nothing of it is in the list 0xb walks.
+- 0x2c0340, the only 0xb trigger, reads no reserve or pool state.
+- So a side whose last victory-relevant tactical object leaves loses by 0xb with reserves left. BT §3.1a item 1 is now [H].
+
+**Port (a1i t01).** `TacticalBattle::check_victory` no longer counts a never-deployed participant (the rule came from
+l1sys t06, `[port]` "not adopted until probed"). No probe is needed. Left [port]: the check is still polled each tick,
+not event-driven. The "empty side gets its next pool unit" step in `reinforce` runs at the start of the next tick, after
+the victory check of the tick in which the side emptied, so it no longer saves a side.
+
+### 34.2 One plan library for every mode [H]
+
+- AI_GALACTIC §1.9.1: the loader 0x4e7e30 loads `AI\`, `AI\SpaceMode\`, `AI\LandMode\`, `AI\StoryArc\` and
+  `Interventions\` into **one** plan manager. A plan's folder does not restrict its mode; only its `Category` does.
+- Shipped FoC data has two plans that serve a mode outside their folder:
+  - `AI\SpaceMode\RetreatPlan.lua`: `Category = "Space_Retreat | Land_Retreat"`. It is the **only** plan for `Land_Retreat`.
+  - `AI\AI_Plan_ExpansionGeneric_GenerateMagicCashDrop.lua` (AI root): the skirmish magic cash drop goals for land and space.
+- The port's `tactical_plan_files` loaded only the mode's own folder, so the land AI had no `Land_Retreat` plan. In
+  foc-land seed 1 the Rebel attacker (one company on the map against four) proposed `Should_Retreat_From_Land` 64 times,
+  and each proposal ended with "no potential plan".
+
+**Port (a1i t01).** `tactical_plan_files` returns every plan folder in load order for both modes. Plans whose
+`Category` names no goal of the mode are never picked. foc-station CRCs are unchanged on seeds 1-8. Every foc-land seed
+now ends when the Rebel retreats (§34.4).
+
+### 34.3 Why the Empire never reached the hidden infantry (seed 1, before §34.2) [findings, not changed]
+
+These stalls still happen in any land battle where neither side retreats:
+- **Scouting never runs.** `Land_Scout_Area` was proposed about 6578 times and failed 6496 times ("failed Plan"). The
+  LANDSCOUT task force needs `Infantry | Air | LandHero`. The Empire's only infantry (two Imperial_Stormtrooper_Squad
+  companies) was held by `Clear_Infantry` task forces. Those are `Set_As_Goal_System_Removable(false)`, so the free store
+  never released them.
+- **`Clear_Infantry` never gets past its first Attack_Move.** It blocks on `BlockOnCommand(Attack_Move(AITarget))`. The
+  TF Move status finishes only when every unit reports movement finished (§33.2). The AT-AT (speed 0.8) never reaches
+  its formation slot: it circles 150-190 units short among stopped friendly infantry and keeps its movement goal. One
+  plan blocked from frame 196 to 5819, the next from 5917 to the cap. This is arrival in a crowded slot, owned by the
+  movement layer. Follow-up for movement.
+- **Seed 4: point-blank misses.** Both sides attack-moved into one area and parked in interleaved slots 34-89 units
+  apart, with targets in range. The last 600 frames had 252 shots and 4 hits (TACTICAL_COMBAT §2.9 port differences).
+  Follow-up for combat.
+
+### 34.4 Seed table (headless, `--workers 2`, battle cap 14400 frames)
+
+| Run | Before (main d1c8ccf) | After (§34.1 + §34.2) |
+|---|---|---|
+| foc-land 1-4, 6-12 | cap | end: Rebel retreats (0xc), frames 3045-5175 |
+| foc-land 5 | end: Empire all-destroyed, 11636 | end: Rebel retreats (0xc), 2877 |
+| foc-station 2, 4, 5, 7, 8 | end: Rebel all-destroyed | unchanged (same CRCs) |
+| foc-station 3 | end: Empire retreats, 11967 | unchanged |
+| foc-station 1, 6 | cap | cap; with a 40000-frame cap they end at 16344 and 17340 (Empire retreats, starbase lost) |
+
+### 34.5 Station seeds 1 and 6: a slow siege, not a stall (a1i t02) [findings, no change]
+
+- `Empire_Star_Base_2` launches TIE fighter / bomber squadrons and a Tartan without limit (`Reserve_Spawned_Units_Tech_0
+  ..., -1`, with a data comment saying it keeps spawning until the fighter bay hard point is destroyed). This matches
+  STATION_HANGARS_SOUND §2.4 item 6: spawning stops only when every FIGHTER_BAY hard point is destroyed.
+- In seed 1 the Rebel keeps 5-7 ships on the map (population cap) and holds about 93 000 power against about 12 000.
+  Until about frame 12600 its capital ships target the fresh squadrons, not the station. Station hit points fall from
+  3300 to 1245 at the cap and to 788 by frame 15600; the station is lost at 16344. Seed 6 behaves the same way.
+- Nothing shows a port divergence in the victory or AI code. Two things were not checked against the original: whether
+  Rebel capital ships should prefer the station or its fighter bays over fighters (targeting priority sets), and whether
+  the fighter bay hard points are ever targeted. Follow-up for combat. The foc-station test stays on seed 3.
+
+## 35. The land reinforcement landing object, its unload, and the A1i drop leftovers (a1i t04 / t05) [H unless tagged]
+
+Read 2026-11-02 from the decompiled code (0x2b5fe0, TransportLandingBehaviorClass 0x642c70..0x644330, 0x2a9670, 0x396850,
+0x371d20) and the vtables of StarWarsG.exe. Pack field names are [M]; behaviour is [H] unless tagged.
+
+### 35.1 Spawn: 0x2b5fe0(GOM, unit id, pos, player, fromCommand)
+
+- **Mode.** Skirmish (0x28afb0 true): the id names a type T of the player's reinforcement list (0x407db0); it must be in
+  the player's skirmish pool (player +0x2c8 / count +0x2d0), else nothing. Campaign: the id is looked up in the battle
+  record's reinforcement list (record +0x18 → list +0x20 / count +0x28, by player); not listed → nothing. The galactic
+  object G = 0x28aa50(id); the record entry is overwritten with 0x3fffff (taken) whether or not G exists.
+- **Landing type L.** Campaign: G's type (G +0x298), the galactic transport that carries the company. Skirmish: T's
+  `Company_Transport_Unit[0]` (+0x938 → +8); T without one → no landing object. In both, L := L's
+  `Landing_Transport_Variant` (+0x1e68) when set (FoC: `Imperial_Landing_Craft` → `Imperial_Landing_Craft_Landing`,
+  `Imperial_ATAT_Barge` → `Imperial_ATAT_Barge_Landing`, `Gallofree_Transport` → `Gallofree_Transport_Landing`, ...).
+- **Carried type C.** Campaign: 0x3973b0(G) (the transport's company type, §32.2). Skirmish: T.
+- **Position.** (pos.x, pos.y); z = terrain height at (x, y) (land mode, 0x135140) + h, with h = L's `Hover_Offset`
+  (+0x1b68). When L's byte +0xd8 is set [M: field name] and C's first `Company_Units` member M (C +0x958 → +8) has no
+  `Create_Team` and a land model, h = max(Hover_Offset, (box[2] + box[5]) × M's `Scale_Factor`), box = M's model vf+0x58
+  [M: which box fields those are].
+- **Orientation.** The issuer's entry-facing record (mode +0x288[player +0x48], TACTICAL_GAPS §4.2.2 item 1), whole triple.
+  Created with 0x29f810(GOM, L, player, pos, orientation, 1, 0).
+- Campaign: landing +0x54 (parent id) := G's id (G +0x50). Skirmish: none.
+- **TRANSPORT_LANDING** is attached by name (0x38c570). When the landing has a TransportDataPack (+0xc8): **+0x48 := C**
+  (0x4ee230), then 0x29bcd0(GOM, landing, C) [M: not read].
+- Campaign afterwards: G leaves its orbit fleet (fleet-merge signal, 0x4f3bd0 lands it on the planet): galactic bookkeeping.
+- Skirmish with fromCommand: 0x2862b0(player, T) [M: pool count − 1]; when 0x280c10(player, T) [M], pack +0xbc := 1 (the
+  unloaded units are registered with the player, 0x2b5f70) and 0x2861a0 [M].
+
+### 35.2 TransportLanding behaviour (non-cinematic path; pack = TransportDataPack, obj +0xc8)
+
+| Field | Meaning |
+|---|---|
+| +0x48 | carried company type C (§32.2) |
+| +0x50 | state: 4 waiting (hidden), 1 landing, 2 landed / unloading, 3 taking off |
+| +0x58 | landing dust particle object |
+| +0x60 / +0x64 | timer: start frame, length in frames (0x4ad3a0: (int)(FPS × seconds); expired (0x4ad350) when start + length ≤ now) |
+| +0x68 | members unloaded so far |
+| +0x78 | unload offsets (Vec3 list, 0x643130) |
+| +0x90 | next offset index (one per team / vehicle) |
+| +0x98 / +0xa0 | ReinforcementsUnloadedDataClass (signal 0x19 data) / signal 0x1d data |
+| +0xa8 / +0xb0 | the unloaded objects (list / count) |
+| +0xb8 | frame the behaviour was attached |
+| +0xbc | register the unloaded units with the player (skirmish) |
+| +0xbd / +0xc9 | cinematic / persist (SCRIPT_GAPS §3.1; never set by 0x2b5fe0) |
+
+- **Attach** (vf9 0x643b00): state := 4, +0xb8 := GOM frame; play `Land` (anim 0x2b) at speed 1.15. If no clip plays:
+  0x643130 and one unload step 0x644330 at once. Otherwise hide the model (0x264c80(model, 1), obj +0x3a2 |= 1, 0x265b70,
+  obj +0x3a7 := 1); obj +0x3a0 |= 0x20.
+- **Service** (vf6 0x643c30, every frame). p = current clip frame / clip frame count; no clip → nothing happens.
+  - **State 4:** clearance 0x642ef0. Skirmish, non-cinematic, first: d = the player's tactical list +0x230
+    (Battlefield_Modifier `Reinforcement_Time_Multiplier`: integer frame deltas round(F × m) − F, TACTICAL_GAPS §2.3.11)
+    summed, optional clamps +0x240 / +0x244 (flags +0x248 / +0x249); wait while now − (+0xb8) < d (empty: no wait). Then
+    the landing's footprint box (0x38de80, AABB 0x20dd40, z half-extent 100 at the landing position) is queried in GOM
+    +0xd8: another TRANSPORT_LANDING object in a state other than 3 / 4, not persist, whose footprint intersects, blocks.
+    Blocked: 0x3a7b30(obj, 0, 0) [M: rewind]. Clear: **0x642c70**: show the model, create the terrain's
+    `Transport_Landing_Dust_<Temperate|Arctic|Desert|Forest|Swamp|Volcanic|Urban>` at the landing (+0x58), state := 1.
+  - **State 1:** p > 0.98 → state := 2; non-cinematic: timer := 2 s × (1 + s), s = the player's list +0x2a8
+    (`Reinforcement_Deploy_Time_Multiplier` − 1 entries; `Plus` / `GreaterThan` reduce), then **0x643130** (offsets).
+  - **State 2:** timer expired → **0x644330** (one unload step); with mode flag 0x35e4c0 +0x30 [M: an instant-unload mode]
+    steps repeat while the state stays 2.
+  - **State 3:** p > 0.5 → the dust particle is removed; p > 0.98 → parent id := 0x3fffff, the landing is removed
+    (0x391310(obj, 1)).
+
+**0x643130 (offsets).** C's members (`Company_Units`, count +0x960); M = the first member; S = M's `Unique_Ground_Unit`
+(+0x1b60) when M has no land model, else M.
+- M without `Create_Team`: 0x40f970(cell of S (0x41b170), count): one offset per member (the vehicle grid of TACTICAL_GAPS
+  §4.2.1).
+- M with `Create_Team`: k = min(`Max_Squad_Size`, count). Team layout 0x5abc00((hx, hy) of S, 20 × M's `FormationSpacing`,
+  k) when C's `Create_Team_Type` lists `LAND_TEAM_CONTAINER_LOCOMOTOR`, else 0x40f970(cell of S, k); only its bounds
+  (Bx, By) are kept. Team grid **0x40f970((3·Bx, 3·By), ceil(count / k))**: one offset per team. The factor is **3.0**;
+  the drop validity 0x3b6170 uses **2.5** (TACTICAL_GAPS §4.2.1).
+- Every offset is rotated by the landing's yaw (obj +0x8c, degrees; small-angle shortcut as 0x3b6170):
+  (x, y) → (cos·x − sin·y, sin·x + cos·y), z unchanged.
+
+**0x644330 (one unload step).** C = +0x48 (campaign with a parent id: 0x3973b0 of the galactic parent); i = +0x68.
+- i ≥ count: **finish 0x6438a0**, state := 3, play `Takeoff` (0x2c) at 1.15; no timer.
+- Member i has `Create_Team`: n = min(k, count − i) members (types i..i+n−1) are created at the **landing's position**
+  (obj +0x78), orientation = the yaw of offset[+0x90] (0x20acd0; index 0: the landing's own orientation), owner = the
+  landing's. Per member: 0x3ac530(m, 1); its TEAM block (+0x40 / +0x48) cleared; shown (0x3a8550) unless the local player
+  cannot see the landing [M]; locomotor pack +0x38 := 0; appended to +0xa8; the behaviour listens to its signal 0x28;
+  parent id := G's id (campaign); with +0xbc: 0x2b5f70 (register with the player). The team helper 0x2a5790 groups them
+  (failure: members deleted, return). Unless the instant flag: one group move (0x2a7b80) of the team to landing pos +
+  offset[+0x90] with move-block byte +0x5c = 1 (the forced-move flag, §28.9 item 3), then every member and its container is
+  **locked** (0x3a8e50(·, 1)). +0x68 += n.
+- Otherwise (vehicle): one object of member i at the landing position (with `Unique_Ground_Unit`: the substitute is created,
+  then the member, which rides it, 0x379d30); same registration. Not instant: with a locomotor whose mode matches and type
+  byte +0xd4 set [M] → coordinator move (0x4f8200) to landing pos + offset[+0x90] (snapped by 0x5a4c10 for the movement
+  class +0x1688), facing = the landing's yaw, forced-move flag, lock the unit (and its container); otherwise placed at the
+  offset at once (0x3abb80) and turned to the landing's orientation. +0x68 += 1.
+- Then +0x90 += 1 and **timer := 2 s × (1 + s)** again.
+
+**0x6438a0 (finish).** 0x2b6a20(GOM, landing) [M]. For every unloaded object: unlock its container (when garrisoned,
+0x39b1a0) and itself (0x3a8e50(·, 0)), clear the forced-move path flag (0x3ac210), pack +0x38 := 1 on it and its
+container, 0x29bcd0(GOM, unit, C). Then **signal 0x19** with the ReinforcementsUnloadedDataClass (+0x98; its list = the
+unloaded units), sent on the galactic parent (campaign, parent id set) or on the landing, and signal 0x1d on the GOM;
++0xb0 := 0. 0x6a1440 (§32.1) handles 0x19: in-flight − 1, Add_Force, 0x6bf3d0.
+
+**Timeline of one drop** (no modifiers): attach → state 4 (hidden) until clear → `Land` at 1.15 to 98 % → offsets; after
+2 s team 0 (or vehicle 0) leaves on a locked exit move; every further 2 s one more; 2 s after the last: unlock all,
+signal 0x19, `Takeoff` at 1.15; removed at 98 %. A 15-trooper company (3 teams) reaches its task force Land + 8 s after
+the order.
+
+### 35.3 Rule for the port's battle host (a1i t04)
+
+- The land Reinforce (`order_reinforce`: human command and the AI's TF.Reinforce) creates the landing object as 35.1:
+  L = the company's `Company_Transport_Unit[0]` → `Landing_Transport_Variant` [port: the port's galactic pool object is the
+  company itself, so the campaign route L = G's transport type is the same type]; z = terrain + `Hover_Offset` (the +0xd8
+  vehicle term is not applied: byte name unresolved [M]); facing = the side's entry-facing record; parent id = the galactic
+  id; TRANSPORT_LANDING added; carried type = the company type.
+- Offsets as 0x643130 (team grid factor 3.0, rotated by the record's yaw). Team t's members end at landing pos + R(ψ)·(O_t +
+  R(φ_t)·m_j) (`land_drop_layout(shape, x, y, yaw, 3.0f)`: the drop layout's team slots around the 3.0 team offsets);
+  vehicle i at landing pos + R(ψ)·offset_i [port: the exit move and the formation slots it gives are not simulated;
+  units are placed there, moved to the nearest passable cell of their movement class when the slot is not passable].
+- No `Company_Transport_Unit` on the company → no landing object; the members drop at the validity layout's slots as
+  before [port: the original spawns nothing visible for such a skirmish type and still unloads nothing; kept so
+  synthetic data without transports works].
+- Timing: the unload steps use the RE timer, 2 s × (1 + s) per step, s = `AbilitySystem::player_list(ReinforcementDeploy)`.
+  The `Land` / `Takeoff` clip lengths are unknown to the headless host [M], so landing and take-off take no time [port];
+  no clearance wait (state 4) and no skirmish `Reinforcement_Time_Multiplier` wait (its constant F is unknown).
+- **Two modes (`BattleConfig::landing_unload_timed`).** The port's tactical AI (`tf_reinforce`) takes the units it
+  finds right after the Reinforce order and finishes the status at once; it has no in-flight count and no 0x19 handler.
+  - **Untimed (default) [port]:** every unload step runs at the order (members placed at their unload slots), the 0x19
+    record is posted at once (`TacticalBattle::landings_unloaded()`, cleared when the next tick starts); the landing
+    object stays for the steps' timers ((steps + 1) x 2 s x (1 + s)) and then takes off (removed at once).
+  - **Timed:** the reserve leaves the pool at the order (deployed) and the company stays inside. `landing_service`
+    (each tick, after the reinforcements): state 4 (`landing_hidden`) until no other landing of this battle in state 1 /
+    2 overlaps its footprint [port: the drop footprint box, not the 0x38de80 AABB; cinematic landings are not seen];
+    state 1 → 2 at once (no clip time) with the step timer; each expiry spawns one team chunk / vehicle at the landing
+    position (`deploy` member range) and sends it on one group move to its exit target (the 3.0 team offset or the
+    vehicle slot, snapped passable) [port: no forced-move flag], locked (`landing_locked` joins `movement_locked` and
+    the abilities' lock hook); the expiry after the last member unlocks them, posts the 0x19 record and removes the
+    landing. A company still inside its landing keeps its side alive [port: §34.1 counts only the landing object by its own type]. Saved (battle state v3).
+    A landing destroyed while unloading drops the members not yet out [M]. Members spawn facing the side's entry
+    facing, not the offset's yaw [port].
+- Perception: 0x3973b0 of the landing object is C, so `PerceptionObject::rep_type` := `ObjectStore::carried_type`; the
+  §30.3 TRANSPORT_LANDING sums count the company's power while it lands.
+
+### 35.4 Drop leftovers (a1i t05)
+
+1. **Deployed footprint (0x396850 rule 2).** Deployed extents apply when the type `Deploys` (+0xd1), the object has a
+   locomotor, and the locomotor says **deploying** (vf+0x130) **or deployed** (vf+0x120), or locomotor pack +0x2b3 is set
+   [M: name]. Only `WalkLocomotorBehaviorClass` answers: vf+0x130 0x61df60 = state 0x18 (Deploying), vf+0x120 0x61df40 =
+   state 0x19 (Deployed); every other locomotor returns 0 (0x13b7d0). Extents 0x371d20: x = `Custom_Hard_XExtent_Deployed`
+   × `Scale_Factor` when > 0, else the normal x (0x371be0); **y = `Custom_Hard_YExtent_Deployed` × `Scale_Factor`
+   whenever XExtent_Deployed > 0** (also when YExtent_Deployed ≤ 0), else the normal y. FoC sets no
+   `Custom_Hard_XExtent_Deployed` (one type sets only `Custom_Hard_YExtent_Deployed`), so no FoC footprint changes.
+   Port: deploying / deployed = the DEPLOY ability active (`AbilitySystem::deployed`) [M: the +0x2b3 byte];
+   `drop_deployed_extents`.
+2. **Persist flag.** `Create_Cinematic_Transport`'s `persist` is TransportDataPack +0xc9 (TACTICAL_GAPS §4.2.2 item 3).
+   Port: `ObjectStore::landing_persist`, set by the Lua call; a human drop ignores every landing object except persistent
+   ones.
+3. **Campaign Reinforce refusals** (TACTICAL_GAPS §4.2.2 item 5): campaign only, silent, after the validity and population
+   tests: the type has `Stay_In_Transport_During_Ground_Battle`; the unit is a transport whose contents hold such a type
+   [port: the port's pool holds companies, not loaded transports: not reachable]; the battle planet restricts the type
+   (`GalacticSim::planet_restricts`, 0x373490). The "battle decided" gate (mode +0x28 → +0x20) stays [M].
+4. **Space members (0x2bf2d0 → `Find_Free_Placement` 0x2a9670(GOM, P, out, type, 2500, start 0°, exclude none)).**
+   - Campaign fleet / squadron: each content object (0x3965f0) of the pool object in order; skirmish company: each
+     `Company_Units` member (+0x978 / +0x980 [M]); the team helper then groups them. A single unit: at P directly.
+   - Per member: the type's model for the mode (0x3729f0); none, or `Space_Layer` (+0x16dc) = 0x20 in space → P.
+   - Box b = the model's local box (vf+0x58: centre c, half extents e; the type's prototype model, so no `Scale_Factor`
+     [M]); in space z is widened by ±1000. Step = 1.2 × |the larger of the x / y spans| (2·e).
+   - Rings r = 0, step, 2·step, … while r < 2500; per ring the angles 0°, 22.5°, …, **360° inclusive** (17 tests; r = 0 is
+     tested once): Q = P + r·(cos a, sin a) (small-angle shortcut), query box = Q + b in GOM +0xd8 (all owners).
+   - A tree object blocks when: not dead (+0x3a0 & 2), not `Is_Decoration` (+0x3b), type byte +0x3e clear [M: name], not
+     the excluded object, no TRANSPORT_LANDING, no LAND_OBSTACLE, no PROJECTILE (slot +0x33a = behaviour 8),
+     `Space_Layer` ≠ 0x20, has a render model, and its model's world box (0x264ab0) overlaps the query box in **x and y**
+     (the z test compares the query z with itself: always true).
+   - First Q without a blocker → the result (land: z = terrain height). None → (0, 0, 0), which the caller replaces by P
+     (z := 0).
+   - Members are created one at a time, so each later member sees the earlier ones as blockers.
+   - Port (`find_free_placement`, `TacticalBattle::space_member_spots`): the member box = the catalog's space model bounds
+     (`model_info(type, true)`); blockers = live, not dying store objects passing the filters above with a
+     `Space_Model_Name`, box = `TacticalMode::bounds_of` in x / y; touching boxes do not block [M]. [port] When a member's
+     model is named but not loaded (no model data, e.g. headless runs without art), the whole drop keeps the rows of 6.

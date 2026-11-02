@@ -144,10 +144,13 @@ On a galactic frame f where next_cycle_frame ≤ f (f = mode frame +0x10):
 Independently, when the update argument is a multiple of 30 (once per simulated second; the argument is the
 frame, [M]), an AI notification of kind 8 is sent for every player. [H]
 
-**First cycle.** No initialiser for +0x36c was found in the galactic mode constructor. A zeroed field means the
-first payment comes on the first galactic frame. [L] Q2: log credits on frames 0–2 of a new campaign.
-
-> **Status 2026-10-30:** The port initialises `next_cycle_frame_` to 0 and pays on frame 0 (`engine/galactic/include/alamo/galactic/campaign.hpp:1009`, tagged [L]). `docs/PHASE4.md` Q2 contradicts itself: the vanilla compare says the cycles agree with first payment on frame 0, the later Lua-probe compare says the original does not pay on frame 0. Unresolved; the paragraph above is unchanged.
+**First cycle.** No initialiser for +0x36c was found in the galactic mode constructor, so the field is 0 and the cycle
+runs on mode frame 0. That frame-0 cycle runs **before the galaxy is built**, so it pays nobody, feeds no AI income
+history and rerolls no black-market value (no planets yet); only steps 2-4 change anything. [H] from the Q2 traces
+(2026-10-30 HotM runs, reader 2): at mode frame 0 there are no objects and the F fields read last 0 / next 1350 /
+counter 1; credits stay at their start values (Empire 13,000) until the cycle on frame 1350 (seen at mode frame 1351,
++667.5); every black-market multiplier is 1.0 at mode frame 1. Port: `GalacticSim::start` ends in that state (last 0,
+next = one period, counter 1), so the first payment is on frame 1350 (q2f t02, 2026-11-02).
 
 **Saved state.** +0x368/+0x36c/+0x370 must be saved with the mode. Unverified [L].
 

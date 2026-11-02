@@ -118,7 +118,7 @@ if(_alamo_sim)
   target_link_libraries(alamo_headless PRIVATE alamo_sim)
   target_compile_definitions(alamo_headless PRIVATE ALAMO_HEADLESS_HAVE_SIM=1)
   # --- A2: --economy --galactic-ai (AI-vs-AI galactic campaign, headless/ai_run.cpp) ---
-  target_sources(alamo_headless PRIVATE headless/ai_run.cpp)
+  target_sources(alamo_headless PRIVATE headless/ai_run.cpp headless/port_trace.cpp)
   if(TARGET alamo_ai_galactic)
     target_link_libraries(alamo_headless PRIVATE alamo_ai_galactic)
     target_compile_definitions(alamo_headless PRIVATE ALAMO_HEADLESS_HAVE_GALACTIC_AI=1)
@@ -137,6 +137,19 @@ if(_alamo_sim)
                 --human-script ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/galactic_human_hotm.txt
                 --ai-golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/galactic_ai_hotm_human_golden.txt
         TIMEOUT 1800 SLOW)
+    # q2f t05: --trace-out (headless/port_trace.hpp), the Q2TRACE 1 state trace read by tools/probe_mod/q2_traces/q2trace.py.
+    # 300 HotM ticks across worker counts (the trace changes nothing), then q2trace.py validate (headless/check_port_trace.cmake).
+    find_program(ALAMO_PYTHON NAMES python PATHS ${CMAKE_SOURCE_DIR}/toolchain/venv/Scripts NO_DEFAULT_PATH)
+    find_program(ALAMO_PYTHON NAMES python python3)
+    if(NOT ALAMO_PYTHON)
+      set(ALAMO_PYTHON "")
+    endif()
+    add_test(NAME alamo_headless_galactic_trace
+             COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:alamo_headless>
+                     -DTRACE=${CMAKE_CURRENT_BINARY_DIR}/q2f_port_trace/hotm_300.q2t -DPY=${ALAMO_PYTHON}
+                     -DQ2TRACE=${CMAKE_SOURCE_DIR}/tools/probe_mod/q2_traces/q2trace.py
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/headless/check_port_trace.cmake)
+    set_tests_properties(alamo_headless_galactic_trace PROPERTIES TIMEOUT 600)
   endif()
   # --- end A2 ---
   # --- A1 stage 2 (owner: A1 agent): --skirmish-ai synthetic|foc (headless/skirmish_run.cpp). Goldens: regenerate
@@ -163,12 +176,10 @@ if(_alamo_sim)
     # (Gabriel, 2026-11-02). a1h t01 (2026-11-02): with the M1 WeaponBehavior fix, passive / superseded guard statuses
     # (A1_READINGS §33) and non-unit REVEAL sources (FOG_OF_WAR §3.2: a held Reinforcement_Point lifts its owner's fog, so AI
     # drops there pass the fog test) seeds 5, 7 and 11 end (all destroyed); the others still reach the cap with fog-hidden
-    # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. S8 t10-t12 (2026-11-02, own-weapon state-4 gate, first-service delay): seeds 3 and 4 of 1-8 end, the test runs seed 3 (ends at
-    # frame 10131) with --expect-battle-end again. After the S7/S8 wave-5 merge (dd752f0) seed 3 reaches the cap and seeds 1, 2, 6, 7
-    # of 1-8 end (all destroyed); the test runs seed 6 (ends at frame 10032). S7 t36 (2026-11-02): land now also loads
-    # SpaceMode\RetreatPlan.lua (category "Space_Retreat | Land_Retreat", one plan manager in retail), so the outnumbered Rebel
-    # invaders retreat (campaign battle: Allowed_To_Retreat_From_Land) and seeds 1-8 all end, "all-retreated", at 2241-2802
-    # battle frames; the test stays on seed 6 (2641 ticks). One ctest entry per worker count so they run
+    # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. a1i t01 (2026-11-02): reserves no
+    # longer count (BT §3.1a [H]) and the land AI loads every plan folder (AI_GALACTIC §1.9.1), so SpaceMode\RetreatPlan serves
+    # Land_Retreat and the outnumbered Rebel invaders retreat (A1_READINGS §34; S7 t36 found the same). S7/S8 wave 5 (2026-11-02):
+    # the test runs seed 6 (ends by the Rebel retreat). One ctest entry per worker count so they run
     # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
     # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
     set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
@@ -195,13 +206,19 @@ if(_alamo_sim)
                      --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt --golden ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
                          FIXTURES_REQUIRED alamo_land_outcome_w0)
+    # a1i t01: a second seed (ends at frame 4080) so a change that stalls only some seeds is caught.
+    add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_s1
+             COMMAND alamo_headless --skirmish-ai foc-land --seed 1 --ticks 20000 --workers 4 --quiet --expect-battle-end)
+    set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_s1 PROPERTIES TIMEOUT 1800)
     # t41: FoC space, an AI defender with a Level 2 station against a far larger fleet must not retreat; skipped (exit 0) without ALAMO_FOC_DATA.
     # refixf t06/t07 (2026-10-31): the battle must end; seed 3 now kills the station (~frame 10300) and the remaining defenders
     # then retreat (victory all-retreated), which is the expected end after the station is lost. a1h (2026-11-02): with the
     # host-side object follow (A1_READINGS §33.4) and non-unit REVEAL sources (FOG_OF_WAR §3.2) together, seed 3 reaches the
     # cap; seeds 1, 2, 4-7 end. After merging main's S7/S8 work (fighter formation targets, run-time obstacles) on top of
     # a1h, seeds 2-5, 7, 8 of 1-8 end and 1, 6 reach the cap; seed 3 ends again (station lost, defenders all retreat, frame
-    # 11967), so the test is back on seed 3. S8 t10-t12 (2026-11-02): seeds 1, 2, 4-8 end, 3 reaches the cap; the test runs seed 2 (all destroyed, frame 9292).
+    # 11967), so the test is back on seed 3.
+    # launches squadrons without limit; with a 40000-frame cap they end at 16344 / 17340, A1_READINGS §34.5).
+    # S8 t10-t12 (2026-11-02): the test runs seed 2 (all destroyed).
     add_test(NAME alamo_headless_skirmish_ai_foc_station
              COMMAND alamo_headless --skirmish-ai foc-station --seed 2 --ticks 20000 --workers 4 --quiet --expect-battle-end)
     # t48: the default seed reaches QuickReinforce's anti-idle; 0 Lua errors (it may run to the frame limit: half the seeds do, the
