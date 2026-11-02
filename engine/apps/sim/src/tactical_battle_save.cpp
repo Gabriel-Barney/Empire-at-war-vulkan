@@ -72,6 +72,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a.seq(b.death_clones_, timed);  // refixf t04
     a.seq(b.effects_, [](auto& x, auto& e) { x(e.id, e.asset, e.percent, e.frame); });
     a(b.anchor_[0], b.anchor_[1], b.facing_[0], b.facing_[1], b.placed_[0], b.placed_[1]);
+    a(b.drop_facing_[0], b.drop_facing_[1]);  // a1h t06
     a(b.frame_, b.retreat_allowed_frame_, b.retreat_side_, b.retreat_done_frame_, b.retreat_complete_, b.finished_);
     a(b.end_hold_until_, b.end_winner_, b.end_victory_, b.end_retreated_);
     a(b.result_.winner, b.result_.victory, b.result_.retreated, b.result_.destroyed, b.result_.starbase_destroyed);

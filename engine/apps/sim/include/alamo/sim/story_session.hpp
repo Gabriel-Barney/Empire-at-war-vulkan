@@ -467,6 +467,7 @@ private:
     void poll(size_t set);
     void collect(size_t set, std::string_view via);  // log new fired entries, drain script errors
     void apply_reward(Set& s, const std::string& type, const std::vector<std::string>& params);
+    void invade_planet_reward(int32_t plot_player, PlanetIndex planet, const std::string& company);  // a1h t04
     void service_script(size_t set, Script& sc, uint64_t frame, double seconds);
     StoryTrigger translate(const galactic::GalacticEvent& e) const;
     std::string faction_name(int32_t player) const;

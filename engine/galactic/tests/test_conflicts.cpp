@@ -8,6 +8,7 @@
 //      choose()), land invasion, determinism (two runs give the same conflict + galactic digests).
 #include <cstdio>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -690,6 +691,50 @@ void test_land_invasion() {
     std::printf("land invasion: %s\n", w.cm->log().empty() ? "-" : w.cm->log()[0].text(w.sim).c_str());
 }
 
+// a1h t03 (A1_READINGS §31.2): the Invade event executor 0x48ff50 drops the event while the galactic pause counter is
+// raised, or while a story-linked battle is pending and the local player is attacker or defender of a queued conflict
+// (0x2b0350). GalacticTaskForce.Invade 0x6ce600 calls Land_Invade (GalacticSim::invade) directly: no gate.
+void test_invade_event_gates() {
+    World w({{pEmpire, rA, tInfantry}, {pEmpire, rB, tInfantry}, {pUnder, rA, tFrigate}, {pUnder, rA, tInfantry},
+             {pUnder, rB, tFrigate}, {pUnder, rB, tInfantry}, {pUnder, rB, tInfantry}},
+            true);  // the Empire is the human (local) player
+    CHECK(w.sim.local_player() == pEmpire);
+    auto launch = [&w](PlanetIndex p) {
+        std::vector<objects::ObjectHandle> mine;
+        for (objects::ObjectHandle h : w.sim.planets()[p].surface)
+            if (w.store.owner(h) == pUnder) mine.push_back(h);
+        CHECK(w.sim.launch_units(pUnder, p, mine) == commands::RejectReason::None);
+        return mine;
+    };
+    const std::vector<objects::ObjectHandle> at_a = launch(rA), at_b = launch(rB);
+    CHECK(at_a.size() == 1 && at_b.size() == 2);
+    auto event = [&w](PlanetIndex p, std::span<const objects::ObjectHandle> units) {
+        commands::EventData ev(commands::EventType::Invade);
+        ev.set("planet", static_cast<uint32_t>(w.store.id(w.sim.planets()[p].object)));
+        std::vector<uint32_t> ids;
+        for (objects::ObjectHandle h : units) ids.push_back(static_cast<uint32_t>(w.store.id(h)));
+        ev.set_ids("units", std::move(ids));
+        return ev;
+    };
+    const std::span<const objects::ObjectHandle> b0(at_b.data(), 1), b1(at_b.data() + 1, 1);
+    // The pause counter is raised: dropped.
+    w.sim.push_pause();
+    CHECK(w.sim.execute(pUnder, event(rB, b0)) == commands::RejectReason::NotAllowed && w.cm->land_queue().empty());
+    w.sim.pop_pause();
+    // A linked battle is pending but the local player is in no queued conflict: the event runs.
+    CHECK(w.sim.queue_linked_battle() && !w.cm->in_queued_conflict(pEmpire));
+    CHECK(w.sim.execute(pUnder, event(rB, b0)) == commands::RejectReason::None && w.cm->land_queue().size() == 1);
+    CHECK(w.cm->in_queued_conflict(pEmpire) && w.cm->in_queued_conflict(pUnder) && !w.cm->in_queued_conflict(pNeutral));
+    // Now the local player (defender at B) is in a queued conflict: dropped.
+    CHECK(w.sim.execute(pUnder, event(rB, b1)) == commands::RejectReason::NotAllowed && w.cm->land_queue().size() == 1);
+    // The AI task-force path (Land_Invade directly) is not gated.
+    CHECK(w.sim.invade(pUnder, rA, at_a) == commands::RejectReason::None && w.cm->land_queue().size() == 2);
+    w.sim.clear_linked_battle();
+    // Only the issuer's own units land: the Empire cannot invade with Underworld units.
+    CHECK(w.sim.execute(pEmpire, event(rB, b1)) == commands::RejectReason::NotOwner);
+    std::printf("invade event gates: pause and linked-battle gates on the event, none on the AI's direct call\n");
+}
+
 // OI galactic: TACTICAL_GAPS 4.5 retreat finders, 4.2 land split, 4.8 corruption missions / super-weapon retreat,
 // STRATEGIC_GAPS 1.1 survival-roll listener.
 void test_oi_transitions() {
@@ -900,6 +945,7 @@ int main() {
     test_change_owner_drops_queued();
     std::printf("land invasion\n");
     test_land_invasion();
+    test_invade_event_gates();
     test_p4_set_retreating();  // P4 sim
     test_cargo_losses();       // BT §4.4 loss records for carried units
     test_p4_resolve_battle();  // P4 sim

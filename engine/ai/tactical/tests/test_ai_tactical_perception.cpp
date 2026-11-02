@@ -1228,6 +1228,95 @@ static void test_real_data() {
 }
 #endif
 
+// A1 g t02 / t03 (A1_READINGS §30.1, §30.3, §30.4).
+static void test_a1g_readings() {
+    {  // §30.1: both zone orders hold the zone's threat cells once each; +0x90 = copy-assign of +0xb0
+        Fixture f;
+        for (uint32_t z = 0; z < 5; ++z) {
+            const std::span<const uint32_t> ev = f.p.zone_eval_cells(static_cast<int32_t>(z));
+            const std::span<const uint32_t> zo = f.p.zone_threat_cells(static_cast<int32_t>(z));
+            std::vector<uint32_t> want;
+            for (uint32_t r = 8; r <= 11; ++r)
+                for (uint32_t c = 4 * z; c < 4 * z + 4; ++c) want.push_back(r * 20 + c);
+            std::vector<uint32_t> a(ev.begin(), ev.end()), b(zo.begin(), zo.end());
+            StdextHashOrder src, dst;
+            for (const uint32_t cell : a) src.insert((cell % 20) | ((cell / 20) << 16));
+            dst.assign_from(src);
+            std::vector<uint32_t> regrouped;
+            for (const uint32_t k : dst.order()) regrouped.push_back((k >> 16) * 20 + (k & 0xFFFFu));
+            CHECK(b == regrouped);
+            std::sort(a.begin(), a.end());
+            std::sort(b.begin(), b.end());
+            CHECK(a == want && b == want);
+        }
+        CHECK(f.p.zone_eval_cells(-1).empty() && f.p.zone_threat_cells(5).empty());
+    }
+    {  // §30.3: a TRANSPORT_LANDING object adds its source's representative type's power, not its own
+        Fixture f;
+        PerceptionObject land = make_obj(20, 0, kTank, kLandOff + 300.0f, kLandOff + 300.0f, 7.0f, 0.0f);
+        land.has_unit_ai = false;
+        land.transport_landing = true;
+        land.parent_object = 500;
+        f.w.objects.push_back(land);
+        f.w.index();
+        f.w.parent_rep_type = [](int32_t id) { return id == 500 ? int32_t{kStarDestroyer} : -1; };
+        const auto friendly = [&f] {
+            f.p.cache().clear();
+            return f.val("Variable_Self.FriendlyForceUnnormalized");
+        };
+        f.w.skirmish_or_mp = true;  // (a) skirmish: the landing object itself, its type's power (Empire_Tank 100)
+        CHECK(friendly() == 650.0);
+        f.w.skirmish_or_mp = false;  // (b) campaign, parent found: the parent's type (Star_Destroyer 2000)
+        CHECK(friendly() == 2550.0);
+        f.w.objects.back().parent_object = 501;  // (c) campaign, parent not found: skipped
+        CHECK(friendly() == 550.0);
+        f.w.objects.back().parent_object = -1;  // no parent id: the object itself
+        CHECK(friendly() == 650.0);
+        f.w.objects.back().parent_object = 500;
+        f.w.parent_rep_type = nullptr;  // no resolver: never found
+        CHECK(friendly() == 550.0);
+        f.p.cache().clear();
+        CHECK(f.val("Variable_Self.FriendlyForceUnnormalized {Parameter_Category = GameObjectCategoryType[Infantry]}") == 0.0);
+        // (d) a1h t08 (§32.2): a reinforcement's landing object carries its company type (transport +0x48, the host's
+        // rep_type): in skirmish and without a parent id T is that carried type, not the dropship's own type.
+        f.w.parent_rep_type = [](int32_t id) { return id == 500 ? int32_t{kStarDestroyer} : -1; };
+        f.w.objects.back().rep_type = kStarDestroyer;
+        f.w.objects.back().parent_object = -1;
+        CHECK(friendly() == 2550.0);  // campaign, no parent id: the carried type (Star_Destroyer 2000)
+        f.w.skirmish_or_mp = true;
+        f.w.objects.back().parent_object = 500;
+        CHECK(friendly() == 2550.0);  // skirmish: the landing object's own carried type, the parent is not read
+        f.w.objects.back().rep_type = -1;  // a cinematic transport (none carried): its own type
+        CHECK(friendly() == 650.0);
+    }
+    {  // §30.4: IsValidBombingTarget fails inside any active base shield (host callback, 3-D); IsInside*Shield stay 0
+        Fixture f;
+        const Vec3f shield{kLandOff, kLandOff, 0.0f};
+        f.w.in_active_base_shield = [shield](const Vec3f& p) {
+            const float dx = p.x - shield.x, dy = p.y - shield.y, dz = p.z - shield.z;
+            return dx * dx + dy * dy + dz * dz < 150.0f * 150.0f;
+        };
+        CHECK(f.val("Variable_Target.IsValidBombingTarget", 0, f.h_tank) == 0.0);    // own tank inside the shield
+        CHECK(f.val("Variable_Target.IsValidBombingTarget", 1, f.h_tank) == 0.0);    // for the enemy too (any owner)
+        CHECK(f.val("Variable_Target.IsValidBombingTarget", 0, f.h_hero) == 1.0);    // the hero is outside it
+        CHECK(f.val("Variable_Target.IsValidBombingTarget", 0, f.h_zone2) == 0.0);   // zone 2's centre is inside
+        CHECK(f.val("Variable_Target.IsInsideEnemyShield", 0, f.h_tank) == 0.0);
+        CHECK(f.val("Variable_Target.IsInsideFriendlyShield", 0, f.h_tank) == 0.0);
+        Fixture g;  // 3-D prevention distance: Self's barracks (id 17) with Bombing_Run_Prevention_Radius 50
+        g.w.types[kBarracks].bombing_run_prevention_radius = 50.0f;
+        PerceptionObject& barracks = g.w.objects[7];
+        CHECK(barracks.id == 17);
+        barracks.position = {kLandOff, kLandOff, 60.0f};  // straight above the tank: 2-D 0, 3-D 60
+        CHECK(g.val("Variable_Target.IsValidBombingTarget", 0, g.h_tank) == 1.0);
+        g.p.cache().clear();
+        barracks.position = {kLandOff, kLandOff, 40.0f};
+        CHECK(g.val("Variable_Target.IsValidBombingTarget", 0, g.h_tank) == 0.0);
+        g.p.cache().clear();
+        CHECK(g.val("Variable_Target.IsValidBombingTarget", 1, g.h_tank) == 1.0);  // only Self's objects prevent
+    }
+    std::printf("a1g readings: OK\n");
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -1243,6 +1332,7 @@ int main(int argc, char** argv) {
     test_script_hook();
     test_zone_threat();
     test_lua_functions();
+    test_a1g_readings();
     test_scenario(golden, write_golden);
     test_scenario_save();
 #if defined(ALAMO_AI_TACTICAL_HAVE_VFS)

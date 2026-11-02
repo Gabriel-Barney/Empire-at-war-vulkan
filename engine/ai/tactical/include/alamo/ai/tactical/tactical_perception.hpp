@@ -86,6 +86,31 @@ struct TacticalPerceptionConfig {
     bool memory_counted_when_not_fogged = true;
 };
 
+// A1_READINGS §30.1 [H]: the list (iteration) order of the original's MSVC stdext::hash_set<uint32> of zone cells, as a
+// pure function of the insertion sequence (integer code only). h(k) = minstd((k ^ 0xdeadbeef) & 0x7fffffff), bucket =
+// h & (B - 1), B starts at 8, max load factor 1. Insert: a duplicate is ignored; when (float)(size + 1) / B > 1 the
+// table grows first (B x 8 while B < 512, else the next power of two >= size + 1) and rehashes; then the key is placed:
+// an empty bucket appends it at the list end, otherwise it goes into the bucket's run keeping the run ascending.
+// Rehash = re-place every node in old list order. assign_from = copy-assign (dest list = src list, then regroup).
+class StdextHashOrder {
+public:
+    static uint32_t hash(uint32_t key);
+    bool insert(uint32_t key);                     // false for a duplicate
+    void assign_from(const StdextHashOrder& src);  // dest := src (keeps this B when large enough, A1_READINGS §30.1)
+    std::vector<uint32_t> order() const;           // keys in list order
+    uint32_t bucket_count() const { return buckets_; }
+    size_t size() const { return key_.size(); }
+
+private:
+    void place(uint32_t key);
+    void rebuild(uint32_t buckets, const std::vector<uint32_t>& keys);  // re-place `keys` in order into `buckets`
+    uint32_t buckets_ = 8;
+    std::vector<uint32_t> key_;
+    std::vector<int32_t> next_, prev_;
+    int32_t head_ = -1, tail_ = -1;
+    std::vector<std::pair<int32_t, int32_t>> run_;  // bucket -> (first, last) node, -1 empty
+};
+
 class TacticalPerception;
 
 class TacticalTokenResolver final : public TokenResolver {
@@ -124,7 +149,12 @@ public:
     const TacticalAiConstants& constants() const { return c_; }
     const TacticalPerceptionConfig& config() const { return cfg_; }
     LeafCache& cache() const { return cache_; }
+    // A zone's threat cells (cell index row * nx + col) in the original's two hash-set orders (A1_READINGS §30.1):
+    // zone_threat_cells = zone +0x90 (copy-assigned from the evaluator set, regrouped from B = 8): the flood, path node
+    // costs (zone_threat_fn), the TF zone route and land Get_Most_Defended_Position; zone_eval_cells = the location
+    // evaluator's +0xb0 set: the evaluator leaves (ForceUnnormalized and the other zone force sums, TimeLastSeen).
     std::span<const uint32_t> zone_threat_cells(int32_t zone) const;
+    std::span<const uint32_t> zone_eval_cells(int32_t zone) const;
     uint32_t zone_count() const { return static_cast<uint32_t>(zones_.size()); }
     const HintZone& zone(uint32_t i) const { return zones_[i]; }
 
@@ -175,7 +205,8 @@ private:
     TacticalPerceptionConfig cfg_;
     TacticalPerceptionGrid grid_;
     std::vector<HintZone> zones_;
-    std::vector<std::vector<uint32_t>> zone_cells_;
+    std::vector<std::vector<uint32_t>> zone_cells_;       // zone +0x90 order
+    std::vector<std::vector<uint32_t>> zone_eval_cells_;  // evaluator +0xb0 order
     std::vector<PerceptionTarget> targets_;
     std::vector<std::pair<int32_t, int32_t>> unit_handles_;  // sorted (object id, handle); lookup only
     std::vector<std::pair<int32_t, int32_t>> zone_handles_;  // (zone, handle)

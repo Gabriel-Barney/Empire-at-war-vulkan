@@ -141,10 +141,11 @@ void TacticalBattle::s4_capture_reset(TacticalMode& mode, objects::ObjectId pad)
     objects::ObjectStore& store = mode.primary();
     const objects::ObjectHandle h = store.find(pad);
     if (!store.alive(h)) return;
-    if (store.owner(h) != neutral && !change_owner(mode, h, neutral)) {
+    if (const int32_t old = store.owner(h); old != neutral && !change_owner(mode, h, neutral)) {
         store.set_owner(h, neutral);
         mode.trees().set_owner(static_cast<tactical::EntityHandle>(pad), neutral);
         garrison_.set_owner(pad, neutral, store.position(h), store.facing(h), frame_);
+        fog_owner_changed(mode, h, old);  // a1h t01: REVEAL vf18 of a non-unit point
     }
     captures_->reset(pad, neutral);
 }
@@ -213,10 +214,11 @@ void TacticalBattle::s4_set_owner(TacticalMode& mode, objects::ObjectId id, int3
     objects::ObjectStore& store = mode.primary();
     const objects::ObjectHandle h = store.find(id);
     if (!store.alive(h) || owner < 0) return;
-    if (!change_owner(mode, h, owner)) {  // not a battle unit: store + trees (+ garrison state)
+    if (const int32_t old = store.owner(h); !change_owner(mode, h, owner)) {  // not a battle unit: store + trees (+ garrison state)
         store.set_owner(h, owner);
         mode.trees().set_owner(static_cast<tactical::EntityHandle>(id), owner);
         garrison_.set_owner(id, owner, store.position(h), store.facing(h), frame_);
+        fog_owner_changed(mode, h, old);  // a1h t01: REVEAL vf18 of a non-unit point (FOG_OF_WAR §3.2)
     }
     if (captures_ && captures_->is_point(id) && captures_->owner(id) != owner) captures_->set_owner(id, owner);
 }

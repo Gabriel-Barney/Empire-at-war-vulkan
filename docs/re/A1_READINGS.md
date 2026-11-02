@@ -50,6 +50,7 @@ Conventions:
 | 28 | Free-store entry +0x30 = the `Lock_Current_Orders` order lock [M] (a1f t03) | **corrected**: +0x30 is the owning PotentialPlan pointer. Set when a goal is accepted or kept in Resolve_Category (0x6c2d60), not at proposal; cleared at every Commit start (0x6c0be0) and by the PP destructor. `Lock_Current_Orders` is an object counter (+0x3a8) that On_Unit_Service does not test | [H] |
 | 29 | TEAM containers in the threat grid (a1f t04) | teams with UNIT_AI get one whole-object entry, no TEAM exclusion; members (no UNIT_AI) get nothing. 0x396380(team) = the company type (team data +0x58), 0x3973b0 = `Create_Team_Type`. Power = the company's load-derived sum × clamp(`Max_Squad_Size` / `Company_Units` count, 0, 1), a static share, not live fill (stormtrooper team: 126 × 0.5 = 63); radius from the first member type (140) | [H] |
 | 30 | A1 [M] / [port] choices reviewed (a1f t06) | **change**: §12 cell order (exact stdext hash_set emulation; zone +0x90 order differs from evaluator +0xb0 order), §7 clamp the recorded hull loss, §19 gate (game type 1..4 or no parent id, else the parent object's type), §21 bombing test gets the real BASE_SHIELD test and a 3-D prevention distance, Reinforce placement (8-spot ring per ranked point). **Keep**: §15 full removal, §14 stamp draw point, Reinforce mixed keys (the original's), TF link mask −1 (+0x94 is a CellPassabilityType mask, unset in every shipped plan); IsInside*Shield leaves are always 0 in shipped data | [H] / [M] where tagged |
+| 31 | Why the original's AI-owned story fleet never invaded (S10 PROBE A, human Empire; a1g t05) | **explained**: Lua `fleet.Invade()` (GameObjectWrapper 0x57ada0) executes an InvadeEvent stamped with the **local** player, and the executor 0x48ff50 keeps only units owned by that player. A fleet the local player does not own lands nothing, silently. Not the Move_To block, not the AI taking the fleet | [H] |
 
 ---
 
@@ -607,7 +608,7 @@ For each threat cell (zone: the evaluator's threat-cell set in list order; rect:
 | **0x6c2b20**, from **0x6c2d60** (reserve / refresh) | +0x30 = PP for every PP+0x108 unit still on the store. It overwrites any other PP's value (no check) | Resolve_Category 0x6c8970: the greedy accept and the weighted random accept, just before Activate; step 3, each active goal that is kept with a valid plan. Maintenance 0x722a30: each surviving goal | **accept** of a new proposal; **re-assert** for kept goals in every Commit |
 | **0x6c2320** (unreserve) | +0x30 = 0 where +0x30 == PP (only if PP+0x100) | **0x6c0be0**, Commit_Proposed_Goals 0x6c8710 step 4, once for every active goal with a PP, before any Resolve_Category; the PP destructor 0x6bec20 | start of every Commit: all reservations are suspended. Destructor: the goal is released or its PP replaced |
 | 0x6c27d0 (PP, unit) | +0x30 = 0 if == PP. A unit not on the store is re-admitted (vf+0x98, fresh entry) | TaskForce vf49 0x5ff610 (a unit leaves a task force: `Release_Unit`, `Release_Forces`, plan end 0x5f6a50 step 3); AIBuildTask FSM 0x64aec0, state WAIT_FOR_FREESTORE_ALLOC, when the claimed unit is ready | the unit leaves the plan. It is also removed from PP+0x108, so later re-asserts skip it |
-| 0x6bf3d0 (PP, unit) | admits the unit if needed; +0x30 = PP; adds the unit to PP+0x108 (into a null slot of the same type, else appended) | ReinforceBlockStatus code 0x6a1440 (a unit delivered for a plan's `Reinforce`) [M caller name] | a running plan receives a new unit |
+| 0x6bf3d0 (PP, unit) | admits the unit if needed; +0x30 = PP; adds the unit to PP+0x108 (into a null slot of the same type, else appended) | ReinforceBlockStatus 0x6a1440 = its signal-0x19 handler ("reinforcements unloaded" from the landing transport), for each unloaded unit (its TEAM container instead, once) of a task force's Reinforce; land only, the space status does not call it (§32.1) | a running plan receives a new unit |
 | 0x4d5000 removal | erases the node | vf+0xa0: the free store's signal handler on destroy (0x10) or owner change (0x1a); a task force taking the unit | death, capture, or the TF takes the unit |
 
 - Nothing else writes node +0x30. All users of the map lookup helpers (0x4d2930, 0x4d2940, 0x6be900) were read.
@@ -865,6 +866,29 @@ modelled: the hero-clash +0x3b4 refusal and lock (no hero clash), hyperspace-arr
 unload-exit, Infection, Remote_Bomb and cable locks (their phases are not modelled), the free-store signal 10 / 11
 release of a script lock (the AI's idle stand-in stays); DEPLOY_TROOPERS locks and unlocks in one call (no net lock).
 
+### 28.10 Implemented (a1g t01, 2026-11-01)
+
+Tactical (`TacticalFreeStore` entry `owner_pp`) and galactic (`unit_reserved`, the derived free store) follow 28.4-28.6
+through the shared `GoalSystem` (new hook `suspend_reservations` at Commit step 4; kept goals call `refresh_plan`).
+On_Unit_Service skips only reserved entries; the order-lock skip is gone. Port decisions:
+- [M] The accept re-solve (0x6c4a50) draws its own synced numbers (Plan Setup C start team, IgnoreTarget contrast),
+  since it runs the same solver. Replaying the first solve's draws was tried: it changed the land outcomes little.
+- [port] The goal keeps Init's cost / ETA after the re-solve.
+- Not modelled: the queue-slot flag 0 / 1 of 0x53bee0, the tactical credits reservation, and the Setup A lock test
+  (0x39ad40).
+- 0x6bf3d0 (a1g t04 follow-up): each unit a land TF.Reinforce delivers joins its plan's PP+0x108 (`reinforce_join_pp`:
+  the first null slot of its type, i.e. a pick of another source, keeps that slot's task force / team; else appended).
+  [port] Task-force units stay off the free store, so the unit is not admitted and +0x30 = PP is set only if it is on the
+  store; the delivered entry's type stands for the new object (not perceived yet); a filled slot's pool / pad
+  reservation of this PP is released. The space poll (SpaceReinforceBlockStatus) does not call it: confirmed, its own
+  handler 0x723ac0 only adds the unit to the task force and removes it from the free store (§32.1, a1h t05).
+- ✅ a1h t07 (2026-11-02): a galactic build task of an AllowFreeStoreUnits plan takes its unit through
+  `free_store_supply` (0x4d2bd0: the first free-store unit of the type at a planet), which no longer reads
+  `unit_reserved`; a plan whose reserved unit is taken fails its validity test (0x6c45e0) at the next Commit.
+- Effect: a proposal's first solve no longer skips units an earlier proposal of the same Commit picked, so more goals
+  are accepted with smaller forces. The FoC land skirmish (`--skirmish-ai foc-land`) now ends inside 14400 frames on
+  seeds 7, 10 and 12 of 1-12 (before: 1, 2, 4, 5 and 6 of 1-6), so the outcome test on the default seed 1 fails [open].
+
 ## 29. TEAM containers in the threat grid (a1f t04) [H unless tagged]
 
 Example throughout: a land skirmish, company `Imperial_Stormtrooper_Squad` (18 `Company_Units` =
@@ -895,8 +919,8 @@ Team data pack = obj +0x110 (TeamDataPackClass, ctor 0x4ec680 zeroes +0x50 / +0x
 
 - **0x396380(team)** = +0x58 (via 0x404be0) when non-null, else 0x3973b0. Checked in the disassembly.
   For the example: `Imperial_Stormtrooper_Squad`.
-- **0x3973b0(team)** = FLEET (4) → fleet +0x70; else TRANSPORT (5) → transport +0x48; else TEAM → +0x50 (0x404c20);
-  else, or when that is null, the object's own type (+0x298). For the example: `Stormtrooper_Team`.
+- **0x3973b0(team)** = FLEET (4) → fleet +0x70; else TRANSPORT (5) → transport +0x48 (the carried company type,
+  §32.2); else TEAM → +0x50 (0x404c20); else, or when the chosen field is null, the object's own type (+0x298). For the example: `Stormtrooper_Team`.
 - A container spawned without the helper (both fields 0) gives its own type for both [M: no such path traced].
 
 ### 29.3 AI_Combat_Power of that type
@@ -1026,6 +1050,9 @@ the verdict is **change**.
   (0x6d5690, 0x6d5760, 0x6d5860, 0x6d5950, 0x6d5a10, 0x6d5ac0) adds the new zone's cells to its old set and copies
   that **union** into the new zone's +0x90. That zone's flood and Most_Defended then see foreign cells until another
   evaluator re-links into it. [H code; M how often it fires]
+- Implemented (a1g t02): `StdextHashOrder` (tactical_perception.hpp), run per zone in `TacticalPerception::init`;
+  `zone_threat_cells` = +0x90 order, `zone_eval_cells` (evaluator leaves) = +0xb0 order. Test vector in
+  alamo_ai_tactical_tests. The re-link union above stays [port] (not reproduced).
 
 ### 30.2 §7 overkill not clamped → **change** (small, low priority)
 
@@ -1040,6 +1067,8 @@ the verdict is **change**.
 - Rule: hull part = hullBefore − hullAfter, with hullAfter clamped to ≥ 0 and replaced by max(1, old) for cannot-die
   objects (e.g. `min(to_hull, hullBefore)`, and 0 when the cannot-die restore ran). Test: a tracked 50-hull victim
   hit for 200 records 50.
+- Implemented (a1g t03): `DamageResult` / `DamageEvent::hull_lost` (combat), recorded by the host and
+  `record_combat_damage`; `to_hull` keeps the raw hit. Tests: alamo_tactical_combat_tests, alamo_ai_tactical_tests.
 
 ### 30.3 §19 game-mode gate → **change** (small)
 
@@ -1056,9 +1085,13 @@ the verdict is **change**.
     power (no health or attenuator factor).
 - Rule: add `skirmish_or_mp` to PerceptionWorld (game type ∈ {1..4}) and `parent_object` per object (+0x54; −1 =
   none). Include as above. Power = the AI_Combat_Power rule of `rep_type` (for a TRANSPORT, 0x3973b0 gives transport
-  +0x48 [M: the carried type]), not the landing object's own power. Test: one landing object in (a) skirmish,
+  +0x48: the carried company type, §32.2), not the landing object's own power. Test: one landing object in (a) skirmish,
   (b) campaign with a resolvable parent (the parent's type's power), (c) campaign with an unresolvable parent
   (skipped).
+- Implemented (a1g t03): `PerceptionWorld::skirmish_or_mp` (host: the battle is a skirmish; no MP), `parent_object`
+  (store parent-mode id) and the `parent_rep_type` callback (host: the galactic object's type, -1 when not found; the
+  port's galactic company object has the company type as its own type, which is the original transport's +0x48).
+  Tests (a)-(c) in alamo_ai_tactical_perception_tests. The landing object's own carried type: §32.2 (a1h t08).
 
 ### 30.4 §21 `inside_shield` not filled → leaves **keep** 0; IsValidBombingTarget **change** (small)
 
@@ -1077,6 +1110,8 @@ the verdict is **change**.
   `TacticalBattle::l1_base_shield_covers`), and make the prevention distance 3-D. Leave `inside_shield` unset, or
   require SHIELDED on the shield object if it is ever wired. Test: a location inside an enemy or own active shield →
   IsValidBombingTarget 0; IsInsideEnemyShield stays 0.
+- Implemented (a1g t03): `PerceptionWorld::in_active_base_shield` (host: `TacticalBattle::l1_base_shield_covers`, land
+  only) and the 3-D prevention distance; `inside_shield` stays unset. Tests: alamo_ai_tactical_perception_tests.
 
 ### 30.5 §15 full memory removal on destroy → **keep** [port]
 
@@ -1120,6 +1155,39 @@ the verdict is **change**.
   accepted spot, cascading to the next point. The landing does not move toward the target. Test: two allied
   reinforcement points and three pending units → spots (p1 + r/2·(1, 0)), (p1 + r/2·(0.7071, 0.7071)), … in that
   order.
+- **Implemented (a1g t04, 2026-11-01):** `reinforce_points` / `reinforce_ring` / `reinforce_place` (tactical_ai.cpp),
+  test `test_reinforce_landing` (alamo_ai_tactical_world_tests). cos / sin via `dmath::sincos(float)`. Note: the float
+  loop θ += 0.7853982f while θ < 6.2831855f reaches 6.283185 (< 6.2831855) after eight steps, so it tries **nine**
+  spots, the ninth at θ ≈ 2π (≈ the first spot); the port follows the loop. [port] choices: a null pending entry (no
+  type, or gone from the host's pool) is dropped from the TF, a non-fitting one stays pending for a later Reinforce;
+  the trailing pop also runs once before the first spot; without Use_Reinforcement_Points every spot is the target.
+- **Drop validity (a1g t04 follow-up, 2026-11-01; layout per TACTICAL_GAPS §4.2.1):** `TacticalAiHost::land_drop_ok(player,
+  key, p)`, asked before each spot's Reinforce order. The battle host (`BattleAi::land_drop_ok`) lays out the company with
+  `land_drop_layout` (0x5abc00 teams / 0x40f970 grids, centred on p, turned by the side's yaw), the same slots
+  `TacticalBattle::order_reinforce` deploys, and refuses the spot unless every slot is inside the playable box and passable
+  for its member's MovementClass, not fogged for the player, clear of every blocking footprint (oriented slot box vs the
+  object's box after the formation-box broad phase; movers ignored for the AI, proximity mines never block) and passes the
+  radii (enabling <= with Use_Reinforcement_Points, prevention <, a POWERED object blocks only while its owner has base
+  power). [port]: the layout yaw is the side's deploy facing (the per-player entry facing is [M]); blocking objects are the
+  battle units and LAND_OBSTACLE objects; footprint boxes are Custom_Hard extents x Scale_Factor, else the land model
+  box, else the movement radius; the +0x1b60 substitute member type and the landing-transport rule are not modelled; the
+  human deploy clamps each slot to the playable box and moves only blocked slots to the nearest passable cell.
+- **Ring spot count from the disassembly (a1g follow-up, 2026-11-01): nine spots per point [H].**
+  - θ lives in xmm6. It is reset to 0 (xmm9, `xorps` at 0x6eb115) for each point at 0x6eb361.
+  - Each try ends with `addss xmm6, [0x140b3adb8]` at 0x6eb56a, then `comiss xmm11, xmm6` and `ja 0x6eb380`, so the
+    loop continues while limit > θ (strict `<`). This also runs after a failed landing. The test is at the loop's end,
+    so the θ = 0 try always runs; the only exits before it are the cap and pending-list checks at 0x6eb380.
+  - θ is accumulated, not recomputed as i·step. All the math is SSE single precision (`addss` / `comiss` /
+    `mulss`); there is no x87 code in 0x6eaf60.
+  - Step 0x140b3adb8 is a function static, set once at 0x6eb6f8: `movss` float π (0x1408007dc = 0x40490fdb) then
+    `divss` 4.0 (0x1408007e0), giving 0x3f490fdb = 0.78539819.
+  - Limit xmm11 = [0x140819b3c] = 0x40c90fdb = float(2π) = 6.28318548 (loaded at 0x6eb323).
+  - Float accumulation gives θ = 0, 0x3f490fdb, …, 0x40afeddf (7π/4), then **0x40c90fda = 6.28318501**, one ulp below
+    the limit, so a ninth try runs. The next value, 7.0685830, ends the loop.
+  - The ninth spot uses cos ≈ 1 and sin ≈ −1.7e-7 of θ (calls 0x776150 / 0x776650). The direct-value shortcut, taken
+    when the float exponent field is ≤ 0x1d000000, applies only to θ = 0. So the ninth spot is about the first spot
+    again but not bit-identical.
+  - The port's nine-spot loop matches. Its constants must be these exact bit patterns, with θ accumulated in float.
 
 ### 30.8 TF link mask −1 → **keep** (equal to shipped data); parsing optional (small)
 
@@ -1133,3 +1201,562 @@ the verdict is **change**.
   The port's −1 is exact.
 - Optional rule (for mods): parse a TF token that names a CellPassabilityType ([M] `|`-separated, case-insensitive)
   into the mask, and pass it to `flood_pick`.
+
+## 31. Story `Invade()` on a fleet the local player does not own (a1g t05) [H unless tagged]
+
+**Question.** In the S10 probe campaign "S10 PROBE A: TATOOINE" (`tools/probe_mod/s10_map_owners`, story script
+`s10_story.lua`: `SpawnList` at Byss, `Assemble_Fleet`, `BlockOnCommand(fleet.Move_To(Tatooine))`, `Sleep(1)`,
+`fleet.Invade()`, the pattern of the shipped `Story_Campaign_Underworld.lua`), the original behaved differently by human
+side (2026-10-31 run, a1f t08):
+- human **Underworld** (the fleet's owner is the local player): the invasion started at once;
+- human **Empire** (Underworld = `AI_Player_Control Underworld, None`): the Underworld fleet reached Tatooine orbit and
+  **never invaded**.
+
+The port invades in both cases (`alamo_sim_battle_tests`, `test_probe_invade`).
+
+### 31.1 Answer
+
+Lua `Invade()` on a fleet object (`GameObjectWrapper.Invade`, 0x57ada0) does not invade as the fleet's owner. It builds
+an `InvadeEventClass` on the stack and executes it directly. The event's issuing player is the **local player**, and the
+executor lands only units that the issuing player owns.
+
+So with a human Empire, the AI Underworld fleet's units (owner Underworld) are all filtered out. Nothing is queued, no
+message is logged and Lua gets no error. The fleet stays in orbit. With a human Underworld, issuer and owner agree and
+the land conflict is queued at once. Both probe outcomes follow from this one rule.
+
+### 31.2 The chain
+
+1. **0x57ada0 `GameObjectWrapper::Invade`** (Lua; returns no values, so there is nothing to block on):
+   - more than 0 arguments: error "invalid number of parameters. Expected 0";
+   - not a fleet (behaviour slot +0x336 = −1): error "this function is only valid on fleets";
+   - walks the parent chain (+0x2b0) to an object with the planet slot (+0x335 ≠ −1). No such parent (in hyperspace):
+     warning "this fleet is not at a planet. Cannot initiate invasion", nothing else happens;
+   - enemy test 0x2824f0 (planet owner's player, **fleet owner's** player; owner index at obj +0x58, player via 0x294bc0).
+     Not enemies: warning "fleet owner %s is not an enemy of planet %s owner %s. Cannot initiate invasion";
+   - collects the fleet's contents (0x3965f0) and keeps the land units (+0x337 ≠ −1: transports / companies). None:
+     warning "fleet contains no land units. Cannot initiate invasion";
+   - otherwise: event ctor 0x48fce0 → 0x512c50 → **EventClass ctor 0x5126c0, which sets event +0x24 = local player id**
+     (0x294a70 = PlayerList +0x30 index → player +0x4c). Then 0x4903c0(event, units, planet, **player = −1**, flag 1):
+     it copies up to 127 unit ids (+0x48, count +0x244), sets the planet id (+0x248) and flag +0x24c, and changes +0x24
+     **only when player ≠ −1**. So the issuer stays the local player. Then Execute 0x48ff50 is called directly.
+2. **0x48ff50 `InvadeEventClass` Execute:**
+   - **Prologue gates** (galactic mode object present):
+     - mode type (vf+0xe0) = 0 (galactic) and the galactic pause / battle-pending counter 0x140b1540c (GMM+0x2c) > 0 →
+       return;
+     - single-player, the linked-battle flag 0x140b154d0 set (REMAINING_GAPS §6.4) and the local player in a queued
+       conflict (0x2b0350) → return.
+   - For each unit id: resolve it (0x2aca60). The unit is **kept only if its owner (obj +0x58) == event +0x24**.
+   - For every resolved unit, kept or not: story check 0x326a30(story manager, unit, planet, 1), which asks each active
+     plot through 0x52eb10. Any hit sets "suppress" [M: a story LAND_ON-style hook claims the landing]. Then
+     0x328720(story manager, planet, unit).
+   - After the loop: one more 0x326a30(story manager, 0, planet, 1).
+   - Not suppressed and that last check false: if the kept list is non-empty, **`Land_Invade` 0x2b0520**(planet, kept
+     ids, **attacker = event +0x24**, defender −1, map 0, at_front 0). An empty kept list → nothing, and there is no
+     message on any path. Last check true: 0x3286f0 instead.
+
+| probe variant | local player | fleet owner | kept units | result |
+|---|---|---|---|---|
+| human Empire (preferred) | Empire | Underworld (AI None) | none | no `Land_Invade`; the fleet stays in orbit (observed) |
+| human Underworld (fallback) | Underworld | Underworld | all land units | `Land_Invade`(Tatooine, attacker Underworld) → land conflict vs Empire (observed) |
+
+3. **Who else builds an InvadeEvent, and with which issuer:**
+
+| caller | player argument to 0x4903c0 | issuer |
+|---|---|---|
+| 0x57ada0 Lua `GameObjectWrapper.Invade` | −1 | local player |
+| 0x45f5c0 story reward `INVADE_PLANET` | −1. It goes through the outgoing queue (0x3b01f0 on 0x140b2ed18). **One event with one unit**: the first transport, in a fleet in orbit that is friendly (0x39a2c0) to the plot's player (+0x228 → +0x638), that passes the Param2 filter (§31.6) | local player (set by the event ctor; the single-player flush does not restamp it, §31.6) |
+| 0x3d5640 / 0x3d6c50 galactic UI | −1 | local player (the human's own order) |
+| 0x3d2900 | an object's owner (+0x58) [M: which object] | that owner |
+| 0x433eb0 fleet-locomotor auto-land (STRATEGIC_GAPS §1.3) | a fleet member's owner (+0x58) | the fleet's owner [M] |
+| 0x884c0 / 0xa7de0 | −1 | local player [L: callers not identified] |
+
+The AI plan path does **not** use the event: `GalacticTaskForce.Invade` 0x6ce600 calls `Land_Invade` directly with
+attacker = the fleet owner's player id (0x294bc0(owner)+0x4c). AI-plan invasions therefore work for any owner. Only the
+object-level Lua `Invade()` and the story reward are tied to the local player.
+
+4. **The local player is fixed during scripts.** The local index (PlayerList +0x30) is set by setup 0x2924d0 (by
+   faction; it also sets `Is_Human` +0x62), reset to 0 by 0x2918d0 / 0x297630, and saved and restored around a player
+   list rebuild (the caller near 0x297630). No story or AI code switches it while a script runs. [H for the writers
+   found / M that none is missed]
+
+### 31.3 The three candidates
+
+1. **Move_To / BlockOnCommand on a non-human fleet: not the cause.** The fleet reached orbit in the original. If the
+   block had ended early, `Invade()` would have hit the parent walk in 0x57ada0 and logged "not at a planet". The human
+   Underworld run invaded, so the block ends with the fleet at the planet. The port's a1f t08 change (an order on a
+   fleet finishes when the fleet stops) stays.
+2. **Invade / Land_Invade with an AI attacker: the cause** (§31.1, §31.2). `Land_Invade` itself accepts any attacker
+   ≠ defender (BATTLE_TRANSITIONS §1.3, §2.9.7). The AI attacker never reaches it, because the event lands only the
+   local player's units and attacks as the local player.
+3. **The AI taking the fleet: not the cause.**
+   - The probe's Underworld runs AIPlayerType `None` (`PLAYER_NONE.XML`). It has no `GalacticFreeStoreScript`, only
+     space/land goal sets (`BasicOffensiveSpaceSet`, `BasicLandGoalSet`, `AI_GoalSet_ExpansionGeneric_Land`) and the
+     galactic template `None_Template`. So nothing galactic proposes a plan for the fleet or moves it [M: no galactic
+     free-store script = no galactic free-store moves]. That matches the fleet staying in orbit.
+   - Ownership does not change either way, so the 0x48ff50 filter result would be the same.
+
+### 31.4 Consequence for the shipped campaign
+
+`Story_Campaign_Underworld.lua` (FoC) spawns Empire (`Empire_Attack`, `empire_land_fleet.Invade()`) and Rebel
+(retaliation, `rebel_land_fleet.Invade()`) land fleets and sends them against Underworld planets. In
+`CAMPAIGNS_UNDERWORLD_STORY.XML` the human is Underworld (`AI_Player_Control Underworld, ScriptableHuman`; Empire,
+Rebel, Hutts and Pirates are `None`). By §31.2 these `Invade()` calls land nothing in the original: the land fleet
+arrives in orbit and stays there. The space fleet sent before it does fight, through the normal arrival conflict.
+[H for the code path; not observed in the shipped campaign. An optional probe could confirm it; the port follows the
+code.]
+
+### 31.5 Port vs original, rule, test
+
+- **Port today:**
+  - `engine/lua/src/bind_players.cpp` `m_invade` issues the Invade event with **player = the fleet's owner**
+    (`fl.owner`). The unit list holds all of the fleet's ground units. It has no enemy test and no warnings.
+  - `GalacticSim::invade` (`engine/galactic/src/campaign.cpp`, Invade event case) then queues the land conflict for
+    that owner.
+  - An **empty** unit list there means "every ground unit of the player at the planet", which 0x48ff50 never does.
+- **Rule** (module `lua`, `m_invade`; no galactic change needed):
+  1. Refusals as 0x57ada0, in order, as Lua warnings, with nothing issued:
+     - not a fleet;
+     - not at a planet (moving / in hyperspace);
+     - planet owner not an enemy of the **fleet owner**;
+     - the fleet has no ground units.
+  2. Issuer = the **local player** (`LuaPlayerWorld::local_player()`, the same as `Find_Player("local")`), not the fleet
+     owner.
+  3. Units = the fleet's ground units whose owner == issuer, in content order, at most 127. If none: return, with no
+     event and no message (the original drops it silently).
+  4. Otherwise one Invade event on the direct path with player = issuer (as now). Return nothing.
+  - Never send an empty unit list from this path, because the galactic executor reads an empty list as "all units".
+- **Also from 0x48ff50, for the galactic Invade executor (module `galactic`; check whether it already holds):**
+  - drop unit ids not owned by the issuer;
+  - drop the whole event while the galactic pause / battle-pending counter is raised, or while a linked battle is
+    pending and the local player is in a queued conflict.
+- **Test** (`engine/apps/sim/tests/test_battles.cpp` `test_probe_invade`):
+  - human-Empire run: give Underworld no galactic AI (`setup.players[1].ai = false`, the probe's `None`; otherwise the
+    port's galactic AI may invade by its own plan). After the 900 ticks: `land_queued == 0`, `fought == 0`, the fleet
+    still in orbit of S10_B, the story events FLEET / ARRIVED / INVADED fired, and no Lua message;
+  - human-Underworld run unchanged: one land conflict "land S10_B Underworld vs Empire", fought once.
+  - `engine/lua/tests/test_lua_players.cpp` `test_galactic_ops`: `Invade()` on a fleet the local player does not own
+    issues no order (`orders_issued` unchanged); on a fleet it owns, one order with player = local.
+- No probe is needed: the binary settles it, and it matches the 2026-10-31 run.
+
+### 31.6 Story reward INVADE_PLANET (a1h t04) [H unless tagged]
+
+Reward type 0x22 (reward switch case 0x22 → 0x45f5c0). It reads only Reward_Param1 (+0x50) and Reward_Param2 (+0x70).
+It returns nothing. Every message is a debug-log line (0x467540); nothing reaches the player or Lua.
+
+**0x45f5c0, in order:**
+1. Param1 empty: nothing, no log.
+2. Log "STORY REWARD - Invade planet %s".
+3. **Planet.** Param1 is a game object **type** name (0x407e00, case-insensitive). The planet is the first object of
+   that type in the current mode's object manager (0x140b15418 +0x18, list 0x2a87d0), as for SABOTAGE_STRUCTURE
+   (L1P4_LUA_GAPS §3). There is no owner filter and no check that the type is a planet.
+   - Not found (unknown type, or no object of that type): log "STORY REWARD FLASH OBJECT- Unable to find planet %s"
+     (sic, copied from FLASH_OBJECT). The function then **carries on with a null planet**, and the orbit-list read
+     0x395900 dereferences it, so the original crashes. With an unknown type name the log line already formats a
+     name read through the null type. [H for the code; not observed]
+4. **Planet friendly to the plot's player: nothing**, no log.
+   - The plot's player is reward event +0x228 (owning plot) → plot +0x638 (owning player, STORY.md). [H; replaces the
+     [M] in §31.2]
+   - Friendly = 0x39a2c0(obj, P, 0): the owner (planet: planet data +0x6c; other objects: +0x58) is P or an ally
+     (P +0x370 relation table [owner] == 0). An owner with no player, or a null P, is not friendly.
+5. **Walk the planet's orbit list** (0x395900: planet data +0xc0 vector) in list order. For each orbit object O that
+   is friendly to P (same test), take O's **direct** contents (0x3965f0 with expand = 0: the fleet's members, not
+   the cargo of transports). For each member U, in content order:
+   - skip U unless it is a TRANSPORT (+0x337 ≠ −1), i.e. a galactic land unit;
+   - **Param2 filter**, only when Param2 is non-empty: the transport's company type (TRANSPORT behaviour, 0x4f3bb0 =
+     transport data +0x48) has its upper-cased name (type +0xf8) compared with Param2 **byte for byte, case-sensitive**
+     (length, then memcmp). On a mismatch: log "INVADE PLANET - %s does not match %s" (type name, Param2) and go to
+     the next unit. The shipped Param2 values are upper case, so they match;
+   - U's combatant (object vf+0x10 with id 0x13; ref-counted: vf+0 add, vf+8 release) must exist and answer true to
+     its vf+0x138 (can fight in a land battle, BATTLE_TRANSITIONS §4.2) [M for the meaning of vf+0x138]. Otherwise go
+     to the next unit, with no log;
+   - **the first U that passes**: build **one InvadeEvent holding only U** (0x48fce0; 0x4903c0(event, [U], planet,
+     player −1, flag 1)), add it to the outgoing queue (0x3b01f0 on 0x140b2ed18) and **return**. The rest of the
+     orbit list is not looked at.
+6. No unit passes: nothing (only the mismatch log lines).
+
+So the reward sends **at most one unit in at most one event**. Param2 is a filter on which transport is sent (the
+company it carries), not a requirement checked anywhere else. Without Param2 the first land transport of the first
+friendly fleet is sent. The 127-unit cap of 0x4903c0 never matters here.
+
+**Issuer and timing.**
+- Issuer = event +0x24 = the local player, set by the EventClass ctor (§31.2 step 1). Player −1 leaves it unchanged.
+- Correction to §31.2: the single-player flush 0x3b08c0 does **not** restamp the player. It only sets the execute
+  frame (+0x28) to the current global frame and moves the event to the scheduled queue (0x140b15690).
+- The reward fires inside tick N (story service) [M: story service runs in the tick]. The outgoing queue is flushed at
+  step 8 of the **next** main-loop iteration and executed at step 10 (0x2c0c70) (MAIN_LOOP §1.1). So 0x48ff50 runs
+  after tick N and before tick N+1, like a human order (COMMANDS §4.1).
+
+**Then 0x48ff50 (§31.2):**
+- The whole event is dropped, with no message, if at execution time:
+  - the galactic pause / battle-pending counter (GMM+0x2c) is > 0; or
+  - in single-player, the linked-battle flag is set and the local player is in a queued conflict (0x2b0350, below).
+
+  The reward is not retried, because it has already fired.
+- U is kept only if its owner == the local player. If kept, `Land_Invade`(planet, [U], attacker = local player,
+  defender −1), unless a story check claims it (0x326a30 → 0x3286f0) [M].
+
+**Consequences.**
+- **Plot player = local player:** U is the local player's own transport and lands as the local player.
+- **Plot player ≠ local player** (an AI faction's plot): U belongs to the plot player or one of its allies. It is
+  dropped unless the local player owns it. Then nothing happens, there is no message, and the reward is spent.
+- **Ally's transport first:** even with plot player = local player, if an ally's friendly fleet comes first in the
+  orbit list with a transport that passes the filter, that transport is picked and then dropped. There is no
+  fallback to a later unit.
+- **Shipped data:** all four INVADE_PLANET events are in Underworld campaign plots:
+  - `STORY_CAMPAIGN_UNDERWORLD.XML` M07: `Bespin_Story` / `TYBER_ZANN_TEAM_NO_PEACEBRINGER`;
+  - `_TUTORIAL` and `_DEMO`: `Felucia` / `TYBER_ZANN_TEAM_PROLOGUE`;
+  - `_TEST_CAMPAIGN`: `Bespin` with no Param2.
+
+  The human is Underworld in those campaigns (`Underworld, SandboxHuman` / `ScriptableHuman`). So Tyber's transport
+  lands as Underworld, and the follow-up STORY_DEPLOY event (Param1 = the same team type, Param2 = the planet) starts
+  the LINK_TACTICAL mission. It works in the original.
+
+**0x2b0350 "local player in a queued conflict"** (argument: the galactic GOM).
+- It returns true when the local player id (0x294a70) is the attacker (+0x04) or the defender (+0x08) of **any**
+  record in the **space** queue (GOM+0x470, count +0x478) or the **land** queue (GOM+0x488, count +0x490). Every
+  record counts, not only the head.
+- There is no separate test of a running battle: a battle counts only while its record is still in a queue.
+- It has no single-player test of its own: callers (0x48ff50, 0x2be640 and others) check single-player
+  (0x28af60 == 0) and the flag themselves.
+
+**0x6ce600 `GalacticTaskForce.Invade`: confirmed direct.** It calls `Land_Invade` 0x2b0520 itself, with no
+InvadeEvent. So none of 0x48ff50's gates or hooks apply: no pause counter GMM+0x2c, no linked-battle test or 0x2b0350,
+no owner filter, no story checks 0x326a30 / 0x328720. It runs inside the script's own tick, with no queue.
+`Land_Invade` has no pause gate either. Its gates, in order (warning = 0x248620, error = 0x248190; each returns
+nothing):
+1. No fleet wrapper (+0x120), the wrapper has no object, the fleet object is flagged removed (+0x3a0 bit 1), or the
+   task force's unit list is empty: warning "No units in TaskForce %s, or no FleetObject".
+2. The fleet (behaviour 4) has no orbit planet (0x432c40 = fleet data +0x40; null in hyperspace): error "taskforce is
+   not in orbit at a planet".
+3. The surface is not accessible (0x375220(planet type, planet)): warning "surface of %s is not accessible".
+4. Take the fleet's direct members (0x432730 / 0x432710) that are TRANSPORTs (+0x337 ≠ −1), as ids (+0x50). There is
+   no cap, no owner filter, no combatant test and no enemy test. None: warning "No transports in Taskforce %s.".
+5. `Land_Invade`(planet's GOM (+0x2b8), planet id, ids, attacker = the fleet owner's player id, defender −1, map 0,
+   at_front 0). It queues only when attacker ≠ the computed defender (BATTLE_TRANSITIONS §1.3). Then it returns a
+   blocking object (0x511820, kind 0x80a, bound to the task force and planet by 0x511950, pushed by 0x256d40)
+   [M: what the block waits for].
+
+**Port.**
+- Today: there is no INVADE_PLANET handler in the reward switch of `engine/apps/sim/src/story_session.cpp`.
+- Rule:
+  1. Run steps 1–6 above: Param1 = planet type name (first object of the type); Param2 = an exact company-type name
+     filter; units = the direct transports of fleets in orbit friendly to the plot's player; combatant check.
+  2. Issue one Invade order on the queued path with player = the local player and only the first passing unit.
+  3. Let the galactic executor apply its gates and owner filter.
+  4. A planet that is not found: log and stop (the original crashes).
+
+### 31.7 Implemented (a1h t03 / t04, 2026-11-02)
+
+- t03, Invade event executor (`GalacticSim::execute`, `EventType::Invade`): dropped (NotAllowed) while the galactic
+  pause counter is raised, or while a story-linked battle is pending and the local player is attacker or defender of a
+  conflict in either queue (`ConflictHooks::in_queued_conflict`, 0x2b0350; `ConflictManager` answers, the battle host's
+  gate forwards). Then the owner filter as before. The galactic AI's `GalacticTaskForce.Invade` no longer issues the
+  event: it calls `GalacticSim::invade` (Land_Invade) directly with the task force's player (0x6ce600), counted and
+  logged like an order, so neither gate applies to it.
+- t04, story reward INVADE_PLANET (`StorySession::invade_planet_reward`): §31.6 steps 1–6, one unit, issued as the local
+  player through the pipeline's direct path at the reward's frame [port: the original queues it for the next command
+  step]; a planet type that is not found is logged ("story: INVADE_PLANET unable to find planet") and dropped [port: the
+  original crashes]; the combatant test vf+0x138 is the unit's GroundUnit kind [port]; the planet is the first planet
+  row of the type (as SABOTAGE_STRUCTURE); the Param2 mismatch line goes to the session's Lua messages.
+- Not changed: `paused()` still applies the linked-battle flag to every player for the other commands (REMAINING_GAPS
+  §6.4 "[port: for every player]"); with `in_queued_conflict` available they could follow the original too.
+
+## 32. Reinforce delivery handlers and the transport carried type (a1h t05 / t08) [H unless tagged]
+
+Read 2026-11-02 from the decompiled code, the RTTI of StarWarsG.exe and the call graph.
+
+### 32.1 Who calls 0x6bf3d0: the land ReinforceBlockStatus unload handler; the space status does not
+
+- **Vtables (RTTI).** ReinforceBlockStatus: primary 0x8b9990, signal-listener base at status +0x30 0x8b9a40 (COL
+  offset 0x30), slot 1 = **0x6a1440**. SpaceReinforceBlockStatus: 0x8ce108 / 0x8ce1b8 (offset 0x30), slot 1 =
+  **0x723ac0**. So both are the statuses' signal handlers (this = status + 0x30). 0x6bf3d0 has one caller, 0x6a1440.
+- **0x6a1440** (land; signal 0x19 with ReinforcementsUnloadedDataClass data, sent by the TransportLanding unload finish
+  0x6438a0 with the transport pack's ReinforcementsUnloadedDataClass at +0x98):
+  1. Stops listening to 0x19 on the sender (0x220eb0).
+  2. The data must be a ReinforcementsUnloadedDataClass (class chain); otherwise nothing more.
+  3. In-flight count (status +0x40) − 1.
+  4. Owner = status +0x28 (0x6021a0). When its class chain contains TaskForceClass (descriptor 0x140a441e0, returned
+     by TaskForceClass vf4 0x5fcd90): a static "handled" list is cleared, then for each non-null unit of the data list
+     (+0x10, count +0x18), in list order:
+     - the unit's container (+0x2b0) stands for it when it has one; an object already handled in this call is skipped;
+     - it is wrapped (GameObjectWrapper 0x5751d0, the task force's player) in a one-entry list and the task force's
+       `Add_Force` (vf+0xa0; land override 0x6e9240) gets it;
+     - **0x6bf3d0(PP, object)** with PP = task force +0xf0 (plan) → +0x88 → +0x68 [M field names]: admit to the free
+       store if missing (0x4d2c90), +0x30 = PP, the PP listens to 0x1a / 0x10 on it, PP+0x108 gets it (§28.4).
+  5. Otherwise (owner not a task force) [M: which caller makes such a status]: each unit (its container when 0x39b1a0
+     says it is garrisoned) not yet in the status's own result list (+0x48, compared by wrapped object) is appended as
+     a wrapper for player status +0x50 and removed from its owner's free store (owner's player +0x360, the AI of the
+     current mode (0x4b03b0) → +0x50 → +0x38, vf+0xa0 = 0x4d5000).
+- **0x723ac0** (space): the sender is the arriving object (listener at obj +0x38). In-flight count (status +0x78) − 1.
+  Owner a TaskForceClass: `Add_Force` (space override 0x6e4e30) with that one object, then the object is **removed
+  from the free store** (0x5f6fb0(plan) → +0x28 → +0x50 → +0x38, vf+0xa0 = 0x4d5000) [M: the chain ends at the same
+  AI-player free store as 0x6bf3d0's]. **No 0x6bf3d0: no +0x30, no PP+0x108.** Owner not a task force: as land step
+  5 for the one object, without the container step.
+- **Port (a1h t05): matches, no code change.** `space_reinforce_poll` adds the spawned units to the task force and
+  calls no `reinforce_join_pp`; `admit` skips task-force units, so the unit is not on the free store (the 0x4d5000
+  removal). Land keeps `reinforce_joined` (a1g, §28.10). Test: alamo_ai_tactical_world_tests `test_group_orders`
+  (space run): drops happen and no "reinforce unit" PP decision is logged.
+
+### 32.2 Transport data +0x48 = the carried company type
+
+- The pack at obj +0xc8 is **TransportDataPackClass** (ctor 0x4ed470), shared by TRANSPORT and TRANSPORT_LANDING (the
+  cinematic landing fields of SCRIPT_GAPS, +0x50 / +0xbd / +0xc0 / +0xc4 / +0xc8 / +0xc9, are in it; the ctor's
+  +0xc0 = 1.0 and +0xc4 = 2.0 are the Create_Cinematic_Transport defaults). The ctor sets +0x48 = null.
+- Reader: 0x4f3bb0 (TransportBehaviorClass), used by 0x3973b0. Writers (call graph; a linear scan of .text for stores
+  to +0x48 through a +0xc8 load finds only 0x4f45c7):
+  - **0x4f45c0(transport, type)**, from 0x400f30 (galactic company production, STRATEGIC_GAPS §1.7): the company type.
+  - **0x4ee230(pack, type)**, from 0x2b5fe0: +0x48 = type; when type ≠ null and pack +0x70 ≠ null, pack +0x70 → +0x30 =
+    type +0x11c [M meaning].
+- **0x2b5fe0 = the landing object of one land reinforcement** [H code, M names]:
+  - campaign (the unit id is found in the parent mode, 0x28aa50): landing type = the galactic object's type, or its
+    +0x1e68 [M: landing variant] when set; created at the drop point (z raised by Hover_Offset +0x1b68); obj +0x54 =
+    the galactic object's id; TRANSPORT_LANDING attached by name; **+0x48 = 0x3973b0(galactic object)**, i.e. the
+    galactic transport's company type;
+  - skirmish (the id names a type of the player's reinforcement list): landing type = that type's
+    Company_Transport_Unit[0] (+0x938 → +8), or its +0x1e68; **+0x48 = that type** (the reinforced company);
+  - both then call 0x29bcd0(mode, landing object, carried type) [M: not read].
+- Cinematic transports (Create_Cinematic_Transport 0x2cb7a0) never set it: +0x48 stays null.
+- So **0x3973b0(landing object) = the carried company type** for a reinforcement drop in both modes, and the object's
+  own type for a cinematic transport (the TRANSPORT branch is null, the TEAM branch is not tried).
+- Effect on the §30.3 sums: a reinforcement drop counts its company type's power (0x370e60), not the dropship's (the
+  shipped `_Landing` variants inherit AI_Combat_Power 10 from their base transports); a cinematic transport counts 10.
+  The campaign parent route gives the same company type.
+- **Port (a1h t08):** `ObjectStore::carried_type` / `set_carried_type` (TransportDataPack +0x48; only objects with
+  TRANSPORT or TRANSPORT_LANDING; saved; hashed only when an object has one). The perception landing sum takes T from
+  `rep_type` (the host's 0x3973b0) in skirmish / without a parent and from `parent_rep_type` in campaign; test (d) in
+  alamo_ai_tactical_perception_tests. The port's galaxy needs no carried type: its company object's own type is the
+  company type (`GalacticSim::representative_type`). [open] The battle host spawns no landing transports yet (units
+  drop directly, TACTICAL_GAPS §4.2.1, a1h t06); when it does, it sets the carried type as 0x2b5fe0 does and fills
+  `PerceptionObject::rep_type` from it.
+
+## 33. Task-force Guard_Target and its block status (a1h t02) [H unless tagged]
+
+**Question.** Shipped `Escort(tf, target)` (PGTaskForce.lua) calls `tf.Guard_Target(target)` without blocking, once per
+second while no member `Has_Attack_Target()`. `SecureBuildPad` blocks on `Guard_Target(AITarget)` for up to 60 s, with
+`Target_Has_Structure` as the break function. Four things to settle:
+- what order the guard gives;
+- when its block status finishes;
+- whether anything re-orders the units to follow the target;
+- what happens to an older status when a newer order arrives.
+
+Port today: every Guard status stays alive until the plan ends and re-issues a guard order every 150 frames.
+
+### 33.1 `LandTaskForceClass::Guard_Target` (0x6ebdc0)
+
+**Arguments:** `(target [, threat [, useZonePath]])`, parsed like `Move_To`. The 3rd-argument type warning even reads
+"LandTaskForceClass::Move_To -- Unexpected type for parameter %d", copied from Move_To.
+
+| Target | Resolved to |
+|---|---|
+| AITargetLocation | its game object (target vf+0x30) when it has one, else its position (vf+0x68). A null AI target returns nil silently |
+| GameObjectWrapper | the object (0x5791e0). A dead wrapper returns nil silently |
+| Position | the point (+0x28..+0x30) |
+| Task force | one member, picked with `Get_Int(0, n−1)` on the synced LCG (0x1ffb40; no draw when n = 1). An empty target TF gives the warning "target taskforce is empty.  Cannot guard." and nil |
+| anything else | warning "Parameter 1 is not a valid destination", nil |
+| no argument | warning "No destination set", nil |
+
+- **threat:** a Lua number, default 1e18 (none). It is stored in the status (+0x50) and becomes the move block's
+  threat tolerance (+0x54).
+- **useZonePath:** a Lua bool, default false (+0x54). It gives the same zone-by-zone routing as `Move_To` (§25.3). No
+  shipped land caller passes it.
+
+**Status.** A new `LandMovementBlockStatus` (0x73baf0, 0x90 bytes, Lua id 0x819), set up with **mode 2**:
+- object target: 0x73c4f0(status, tf, obj, threat, useZonePath, attack = 0, mode 2);
+- position target: 0x73c360(status, tf, pos, threat, useZonePath, mode 2).
+- Move_To uses mode 0 and Attack_Move mode 1, through the same two set-up functions.
+
+**Return value.** Guard_Target returns **nil** when the status is already finished right after set-up (0x73cab0:
++0x40 set, e.g. no task force or a failed zone route). Otherwise it returns the status.
+
+**Object set-up (0x73c4f0):**
+- stores the object (+0x48) and the mode (+0x88);
+- subscribes the status to the **object's** signals 0x1a [M: owner change] and 0x10 (destroyed);
+- leaves the attack flag +0x56 at 0 for a guard, so **no `Order_Attack`** is issued (Attack_Move sets the flag;
+  TACTICAL_COMBAT path A).
+
+**Order given (object target, 0x73c140(status, obj, collect = 1); position targets use 0x73bf40 the same way):**
+1. **Collect the members** (vf21, slot +0xa8, 0x73c6f0 [M: slot number]). For each TF member in TF +0x78 list order
+   that is not movement-locked (0x39ad40):
+   - if it is admitted to coordinators (0x425e30), take the member itself;
+   - if it is not admitted and is a TEAM container, take each team member instead.
+   - Each taken unit first has **signal 0xb raised on it** (0x220ed0).
+   - The status then subscribes to the unit's signals 9, 10, 0xb, 0x10 and one more [M: 0x1a, which the handler
+     accepts], and appends the unit to the all-units list (+0x58).
+2. **Move them to one new coordinator.** Each listed unit that passes 0x425e30:
+   - leaves its old coordinator (0x426d50);
+   - joins **one new coordinator** (0x426010);
+   - is appended to the pending ("still moving") list (+0x60).
+   With no coordinator system the status finishes at once (+0x40).
+3. **Call coordinator `Move_To` (0x4f8200)**, the same entry a player's move uses. The move-parameter block holds:
+   - kind 3 (object) with the object, or kind 1 (position);
+   - **flags = the mode = 0x02 (guard-move)**;
+   - avoidance 0x3f;
+   - threat = argument 2 (1e18 means none);
+   - no hardpoint; the +0x60 word = 0x1000001.
+   An empty coordinator is deleted (0x4260d0).
+
+**Is it the player's guard order?** The player's guard is `EscortEventClass`: event id 0x15, which is COMMANDS order 21
+"Escort" (constructor 0x3b0010, executor 0x3b0040). Its block is the same: kind 3, flags 2, mask 0x3f, threat 1e18, plus
+an optional hardpoint. Differences:
+- The player's executor first clears each unit's behaviour orders 5, 0x22, 0x29 and 6 (0x38f5d0). The AI path does
+  not.
+- The player's executor replaces a guarded team member by its container (obj +0x2b0). The AI path passes the object as
+  given.
+- Formation `Set_Move` (0x423c10) ignores the block when the target is inside a TEAM container in game mode 2 [M: mode
+  2 = land]. So an AI guard of a single squad member does nothing [M].
+
+**`Has_Attack_Target` (0x57a170)** is true when 0x397a40 returns non-null:
+- first `Formation_Attack_Target(F, −1)` (TACTICAL_COMBAT, 0x41a2e0), which **skips guard blocks**;
+- else the targeting pack's current target (obj +0xf0 → +8).
+So for a guarding unit it is true only when the unit's own targeting has a target.
+
+### 33.2 Block status: IsFinished, Result, signals
+
+- **IsFinished** (vf19 0x73cae0):
+  - if the zone-route-leg flag +0x55 is set, it first issues the next zone leg (0x73bc50(status, 0));
+  - it returns true when +0x40 is set **or** the task force has no members (TF +0x80 − +0x78 = 0, 0x5fca10).
+- **Result** (vf20) is the BlockingStatus default 0x17d070 (no value).
+- **Polling is passive.** IsFinished never re-issues an order, with one exception: the zone-route leg above, which only
+  happens with useZonePath. Legs are issued without re-collecting (collect = 0), so they raise no signal 0xb.
+- **Signal handler.** The handler is 0x73ce80, on the SignalListener sub-object at +0x30; the offsets in this section
+  are from the status.
+
+| Signal | From | Effect |
+|---|---|---|
+| 9 | a unit | ignored |
+| 10 (movement finished) | a unit | Remove the unit from the pending list. Fire Lua TF event 0x12 [M: `Unit_Move_Finished`] for the unit; for a team member, once for its container, when no other member of that team is still pending. Then run the pending-empty test below |
+| 0xb, 0x10, 0x1a | the guarded object | Unsubscribe from it. 0x10 (destroyed) or 0xb: **finish** and release the object. 0x1a, any mode: finish when the attack flag is set and the object is no longer hostile (0x39a4e0). 0x1a, **guard** (mode bit 0x02): also finish when the object **is now hostile** to the TF's owner. Otherwise nothing |
+| 0xb, 0x10, 0x1a | a unit | Unsubscribe the unit and remove it from **both** lists. If the pending list is now empty, run the pending-empty test. Then **finish when the all-units list is empty** |
+
+**Pending-empty test** (every unit still listed has arrived):
+- A zone route is in progress (+0x78 and +0x80 set): set +0x55, so the next poll issues the next leg.
+- No object (a position move or guard): **finish**.
+- An object:
+  1. Mode bit 0x02 clear (move / attack-move): finish when the object is no longer hostile (0x39a4e0) or fails 0x5680b0
+     (TACTICAL_COMBAT path B, step 3).
+  2. Every mode: finish when the object's type has neither `Last_State_Visible_Under_FOW` (+0x88) nor
+     `Initial_State_Visible_Under_FOW` (+0x89) **and** the object is fogged for the TF's player. This test
+     (0x35f470(…, force = 1)) applies fog even to an AI player.
+  3. Otherwise the status **stays open after arrival**.
+
+**When an object guard finishes.** Any one of these finishes it:
+- the guarded object dies (0x10);
+- the guarded object receives signal 0xb, meaning it was given a new order (§33.3);
+- the guarded object turns hostile (0x1a);
+- the TF becomes empty;
+- every unit of the status is gone (died, changed owner or taken by a newer order);
+- after all units arrived, the object is fogged for the AI. This is unlikely, because the guards stand next to it [M].
+
+It does **not** finish when the units arrive.
+
+**When a position guard finishes:** when every pending unit has reported movement finished (signal 10), as `Move_To`
+does; or when all its units are gone; or when the TF is empty.
+
+**Modes 0 and 1 (AI_TACTICAL open item 3).**
+- The status has **no arrival radius of its own**. "Arrived" means the formation's signal 10 (§33.4).
+- The rest follows the table above.
+- Object targets of Move_To / Attack_Move stay open after arrival while the object lives and stays a valid, hostile,
+  unfogged target.
+- This matches the space version (TACTICAL_COMBAT, SpaceMovementBlockStatus).
+
+### 33.3 Superseded statuses
+
+**Who raises signal 0xb.** The signal means "a new order replaces this unit's order" [M: name]. It is raised on a unit
+by:
+- every task-force movement collector: land 0x73c6f0; space 0x739200 and 0x73a650;
+- the unit-level Lua `Move_To` / `Attack_Move` (`Move_Internal` 0x57da90);
+- `Activate_Ability` (0x570a50) and `Turn_To_Face` (0x581cd0);
+- the MoveToObject executor (0x39f380 / 0x39f580);
+- garrison enter and exit (0x635ee0..0x636030);
+- 0x6affb0, ConcentrateFire (0x6f5550), 0x3abb80 and 0x4ca930.
+
+Unit auto-targeting does **not** raise it.
+
+**What a newer order does to older statuses.**
+- A newer TF order (Move_To, Attack_Move, Attack_Target, another Guard_Target …) raises 0xb on each unit it collects.
+- Every older status that listens on those units removes them.
+- An older status whose all-units list becomes empty **finishes**. A status that still holds other units stays open
+  for them.
+- A superseded status never acts again: it holds no order of its own to re-apply, and the units' movement now belongs
+  to the newer coordinator.
+- A unit belongs to at most one live movement status at a time [M: through signal 0xb; true for the land and space
+  collectors read here].
+- Plan end destroys all of the plan's statuses (AI_GALACTIC, "Plan end" step 1).
+
+**`Escort`.** Each re-issue (once per second) creates a new status, and its 0xb finishes the previous guard status (all
+its units are taken). Statuses therefore never pile up.
+- The re-issue does restart the group move: units leave the old coordinator for a new one, and `Set_Move` sets the
+  formation state to 0 (re-plan).
+- The script's own comment says that re-issuing a guard "will cause the assisting escort to break off attack".
+- The AI guard path has no explicit target clear: no 0x38f5d0 and no `Order_Attack`, and 0x4f8200 / `Set_Move` do not
+  touch obj +0xf0 [M].
+- So any break-off comes from the restarted movement and from the targeting scan's guard leash (`Guard_Chase_Range`,
+  §33.4), not from a direct reset [M].
+
+**`SecureBuildPad`.** `BlockOnCommand(Guard_Target(pad), 60, Target_Has_Structure)` normally ends by the 60 s timeout or
+the break function, because the guard status stays open while the pad lives.
+
+### 33.4 Unit-level guard behaviour (formation, flag 0x02) [M unless tagged]
+
+**Following a moving object needs no further AI order** [H for the mechanism]. The formation's periodic update 0x4192b0
+runs at most once per FPS = 30 frames (+0x1d8 = now + 30). With a kind-3 goal it does two things:
+- **Guard, with the guarded object moving on a path** (its locomotor has a current path, 0x5569b0, with state ≠ 5):
+  - when the formation is within R of the object, it **copies the object's path** (0x40dbc0);
+  - it caps its speed (+0x21c, +0xa8) at min(own speed, 2 × the object's speed) [M: exact cap];
+  - with more than one block queued and the object not moving, the guard block is popped.
+- **Any kind-3 goal, with the object unfogged for the formation's owner:** the formation **re-paths toward the object**
+  (0x417520) when both hold:
+  - the object's current goal point (0x583150) is more than R from the formation's recorded goal point
+    (+0x210..+0x218, set by `Set_Move`);
+  - 0x4165f0 agrees. It always agrees for a guard block (flags 0x02) [H].
+- **R** = half the lead member's max attack range (0x3749d0 / 2). For a guard block R is capped at a constant: global
+  0x140b276c0 on land, 0x140b276c4 in space [L: the constant's name].
+
+**Arrival.** Once all members' locomotors report done, the formation has one block and its state is 1, 0x423760 raises
+signal 10 on every member and sets state 3 [H]. The guard block stays as the formation's goal, so a later move of the
+object re-paths the formation again.
+
+**Auto-engage.** The unit's own targeting scan reads the first block's flags:
+- flag 0x02 gives the response range `Guard_Chase_Range` (type +0x52c), measured from the slot goal;
+- a candidate that is attacking the guarded object adds type +0x211c to that range (TACTICAL_COMBAT, 0x4160a0 steps
+  2–5);
+- the scan sets the unit's target (ordered 0), so `Has_Attack_Target` turns true;
+- `Formation_Attack_Target` skips guard blocks, so path B never locks onto the guarded object (a friendly guarded
+  object is not hostile anyway).
+
+**Guard on a position.** The units move there in formation and stop (signal 10, state 3), and the status finishes.
+They then auto-engage within `Guard_Chase_Range` of the slot goal. Whether they walk back after a chase was not traced
+[L].
+
+### 33.5 Rule for the port
+
+1. **`TF.Guard_Target(target [, threat [, useZonePath]])`:**
+   - resolve the target as in §33.1 (a TF target gives one `Get_Int(0, n−1)` member);
+   - issue **one** group move to the TF's collectable members: kind object (or position), **guard flag**, threat;
+   - give no attack order and clear no target;
+   - return nil when nothing could be set up, else a status.
+2. **Do not follow the target by re-ordering from the status.** Following belongs to the unit / formation movement:
+   - at most once per 30 frames, re-path to the guarded object when it is more than R from the recorded goal;
+   - copy the object's path when it is moving.
+   If the port's movement layer cannot do this yet, put the stand-in in movement, keyed to the formation's guard goal.
+   It must never be a per-status timer that issues new TF orders.
+3. **The status is passive.** It finishes:
+   - **object guard:** when the object dies, gets a new order (signal 0xb) or turns hostile; when the TF is empty; when
+     all its units are gone; or, after arrival, when the object is fogged for the AI;
+   - **position guard:** when all units have arrived, when all units are gone, or when the TF is empty.
+4. **Every new order removes its units from all older statuses.** This covers every new TF movement, attack or guard
+   order, and also unit-level Lua moves, abilities and garrison.
+   - An older status left with no units finishes.
+   - **Superseded statuses must stop acting entirely**: they never issue orders again.
+5. **Modes 0 and 1 use the same rules.**
+   - Arrival is the formation's "movement finished"; the status has no radius.
+   - Object targets stay open after arrival while the target is a valid, hostile, unfogged object.
+
+> **Status 2026-11-02 (a1h t02):** implemented. `tactical_ai.cpp`: the Guard status is passive (Result nil); an object
+> guard ends when the object dies or the TF empties, a position guard when no unit moves any more; the 150-frame guard
+> refresh and the Move status's "attack-move follow" re-orders are gone; a new TF move / guard / attack order finishes
+> the TF's older Move / Guard / AttackTarget statuses (`supersede`). `battle_ai.cpp`: object-goal group moves (Guard_Target,
+> Attack_Move / Move_To on an object) get a follow record, re-pathed at most every 30 frames when the object is more than
+> R = half the lead's attack range from the recorded goal; any newer order for a unit removes it from its record
+> (AI save v3, hashed). [port] Not yet: the "turns hostile" and "fogged after arrival" ends of an object guard; unit-level
+> Lua orders, abilities and garrison orders do not supersede statuses; the guard cap constant (0x140b276c0) is [L].

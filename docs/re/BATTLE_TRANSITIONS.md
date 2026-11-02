@@ -97,7 +97,9 @@ unit id list, attacker, defender = −1, map, at_front) is called by the invade 
 event factory id 9; via 0x48ff50), Lua `GalacticTaskForce.Invade` 0x6ce600 /
 `GameObject.Invade` 0x57ada0, the story reward `INVADE_PLANET` (0x45f5c0) and the queued-battle replay
 (0x28f590). Lua `Invade` refuses when the fleet is not at a planet, the planet owner is not an enemy,
-or the fleet has no land units/transports.
+or the fleet has no land units/transports. The object-level Lua `Invade` (0x57ada0) and the story reward go through
+InvadeEvent 0x48ff50, which invades **as the local player with only the local player's units**: on a fleet the local
+player does not own it does nothing (A1_READINGS §31). `GalacticTaskForce.Invade` attacks as the fleet's owner.
 
 Defender when not given: the ground-base owner (+0x124) if the ground-base level (+0x130) > 0;
 otherwise the planet owner from 0x3956c0 if it is set and is not the neutral player (+0x4c of
