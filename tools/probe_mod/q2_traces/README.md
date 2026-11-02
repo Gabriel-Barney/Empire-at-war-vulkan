@@ -51,13 +51,23 @@ The command stream is therefore empty, and seed + setup fully determine the run 
 - run every tick;
 - read positions in bulk.
 
-It can only log through `_CustomScriptMessage`, and whether retail builds write that file at all is unknown.
-An optional Lua probe (`-LuaProbe`, vanilla only) adds what only Lua can give:
+Nor can it write a file: in retail 1.121 `_CustomScriptMessage`, `_ScriptMessage` and `_OuputDebug` write nothing
+(docs/re/LUA_SCRIPT_OUTPUT.md). An optional Lua probe (`-LuaProbe`, vanilla only) adds what only Lua can give:
 - galactic: player credits through the game's own API, planet owners and AI perception values;
 - skirmish: the game's own `GameScoring.lua` (copied unchanged from `extracted/foc_data_text.zip`) with a
-  read-only probe appended. Once per game second it logs `TSAMPLE` plus a `TPLAYER <faction> id credits tech
-  objects` line per player, and it logs `TMODE` / `TKILL` / `TBUILT` from the scoring events. The original
-  `GameService` still runs at its own rate (every 10th service).
+  read-only probe appended. It logs `TMODE` / `TKILL` / `TBUILT` from the scoring events and, at most once per game
+  second, `TSAMPLE` plus a `TPLAYER faction= id= credits= tech= objects=` line per player (taken on those events and
+  from a `Create_Thread` loop: retail never calls GameScoring's `GameService`). The original `GameService` would
+  still run every 10th service.
+
+**Lua output channel (q2f t06, 2026-11-02).** The probe scripts keep every line as a Lua string
+`Q2L1|<G or T>|<sid>|<seq>|<KIND>|<text>|END` (G = galactic plot, T = GameScoring) in a table. `q2lua_reader.py`
+(started by the run, below-normal priority) scans the game's memory for them every 10 s, read-only, like the A1 / TSW
+probes. At the end it writes `lua_records.txt`, `lua_perception.tsv` (cycle, AI, planet, one column per equation) and
+`lua_summary.json` (verdict per script). Separately, each script calls `_CustomScriptMessage` once on a canary file
+shipped in the mod (`Mods\Q2Trace\Q2Trace_Canary_Galactic.txt`, `..._Scoring.txt`). Retail deletes a file on the
+first `_CustomScriptMessage` call for that name, so a canary that is gone after the run proves that script ran
+(`run_status.json` → `lua_canary`), even if the memory scan found nothing.
 
 **Game folder as it is now (2026-10-30).** The prior patch chain (d3dx9_43 proxy, `eaw_*` files) and DXVK are
 no longer in `corruption\`, and runs do not restore them. Every run records the folder state at start and end:
@@ -80,8 +90,8 @@ galaxy is running.
 2. **Galactic run, about 12 min:** double-click `run_galactic.cmd`. The game starts in a window. Follow
    **UI steps → Galactic** below, then leave the game alone. The game closes by itself after 10 galactic days
    (7.5 min of game time).
-3. **Galactic run with the Lua probe, about 12 min:** in a command prompt in this folder, run
-   `run_galactic.cmd -LuaProbe`. Use the same clicks as step 2.
+3. **Galactic run with the Lua probe, about 12 min:** double-click `run_lua_probe.cmd` (the same as
+   `run_galactic.cmd -LuaProbe`). Use the same clicks as step 2. Details and what to check: **Lua probe run** below.
 4. **Skirmish run, about 6 min:** double-click `run_skirmish.cmd`. Follow **UI steps → Skirmish**. It stops
    after 5400 ticks (3 min of game time).
 5. **Optional, Thrawn's Revenge:** run `run_galactic.cmd -Mod tr` and `run_skirmish.cmd -Mod tr`. Pick the
@@ -92,7 +102,42 @@ galaxy is running.
    - `reference.crc`;
    - `run_status.json`;
    - `cleanup.log`;
-   - `lua_*.txt`, if any.
+   - with the Lua probe: `lua_summary.json`, `lua_records.txt`, `lua_perception.tsv`, `lua_reader.log`.
+
+### Lua probe run (q2f t06): steps for Gabriel
+
+Goal: the AI's galactic perception values (`EnemyForce.*`, `TargetPlayerID`) read through the game's own
+`EvaluatePerception`, per AI player, planet and fiscal cycle. One galactic run, about 12 minutes.
+
+1. Start Steam. Close the game if it is running. One time only: double-click `selftest.cmd` and wait for
+   `SELFTEST OK` (it also runs the probe scripts under Lua 5.0.2; no game needed).
+2. Double-click **`run_lua_probe.cmd`** in `tools\probe_mod\q2_traces\`. It installs `corruption\Mods\Q2Trace`,
+   starts the two readers and launches the game **windowed** at 1920x1080 (`MODPATH=Mods\Q2Trace WINDOWED
+   SCREENWIDTH=1920 SCREENHEIGHT=1080`). Leave the black command window open.
+3. In the game: Esc through the intro movies, then **Single Player** → **Galactic Conquest** → **Heart of the
+   Maw** → **Empire** → leave every option at its default → **Start**. If the "Active Story Objectives" dialog
+   appears, click **Close**.
+4. Then click nothing and press no keys. Let the galaxy run: after 10 galactic days (about 7.5 minutes) the game
+   closes by itself. If a battle dialog pops up ("Begin" / "Auto-resolve"), do not answer it; the trace stops after
+   60 s on its own (the Lua data up to then is kept).
+5. The command window prints `lua canary: ...` and `lua: galactic ...; scoring ...` and ends with
+   `done: exit <n>`. Send back the run folder `tools\probe_mod\q2_traces\out\<yyyymmdd-hhmmss>-galactic-vanilla-lua\`
+   (zipped). The files that matter for t06: `lua_summary.json`, `lua_perception.tsv`, `lua_records.txt`,
+   `lua_reader.log`, `run_status.json`.
+
+If the window was closed early or the PC crashed, double-click `cleanup.cmd`.
+
+How to read the result (`run_status.json` → `lua_canary` and `lua`):
+
+| canary galactic | `lua.galactic` | meaning |
+|---|---|---|
+| deleted | `ran: N cycles, M perception rows` | works; the values are in `lua_perception.tsv` |
+| deleted | `ran, but no perception rows` / `ERR` records | script runs; `EvaluatePerception` or `Get_All_Planets` failed (see `errors`). If only the `Q2_*` columns read `ERR` and `Roaming_Empire_Fleet_Target` has values, the mod's equation file was not picked up |
+| deleted | `no records` | script ran, the memory scan missed it: check the `SCAN` lines in `lua_reader.log` |
+| present | `no records` | the plot script never loaded: the override of `Story_Plots_Sandbox_12U_Empire.xml` is not used |
+
+The `scoring` canary and verdict are about the GameScoring hook; in a galactic run it loads too, but only a skirmish
+(`run_skirmish.cmd -LuaProbe`, same clicks as step 4 above) gives it battle events. Optional.
 
 **Cleanup is automatic.** It runs at the end of every run, even after an error. If a window was closed
 early or the PC crashed, double-click `cleanup.cmd`. It is safe to run any number of times.
@@ -202,12 +247,15 @@ Skirmish (space, 2 players):
 |---|---|
 | `run_galactic.cmd`, `run_skirmish.cmd` → `run_trace.ps1` | one recorded run: preflight, optional mod install, reader + game start, wait, cleanup, validate, Q1 conversion |
 | `cleanup.cmd` → `cleanup.ps1` | undo per manifest: stop the reader/game it started (pid + start time), move Lua output into the run folder, delete only files it created and whose SHA-256 still matches, remove created folders if empty, verify |
-| `selftest.cmd` → `selftest.ps1` | no game needed: hash vectors vs engine/core, reader vs `fake_game.exe`, install/cleanup on scratch fake game folders (dry run, twice, modified file, no-Mods case), preflight refusal |
+| `selftest.cmd` → `selftest.ps1` | no game needed: hash vectors vs engine/core, reader vs `fake_game.exe`, install/cleanup on scratch fake game folders (dry run, twice, modified file, no-Mods case, canary files), preflight refusal, `q2lua_reader.py selftest`, `selftest_lua.py` |
 | `build_reader.cmd` | builds `bin\q2reader.exe` and `bin\fake_game.exe` with the project-local MSVC (`/W4 /WX`). Log in `logs\q2reader_build.txt` |
 | `reader\q2_layout.hpp` | every address and offset used, each with its `docs/re` source |
 | `reader\q2reader.cpp`, `reader\fake_game.cpp` | recorder; test target that lays out the same structures, including a real MSVC `unordered_map` |
 | `q2trace.py` | `validate` (rebuild state, recompute every digest, RNG draws per tick, fiscal cycles, credits, ownership), `to-q1`, `compare`, `selftest`, `selftest-fake`. Standard library only (project venv) |
-| `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, and `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe) |
+| `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), and the two canary files |
+| `run_lua_probe.cmd` | `run_trace.ps1 -Scenario galactic -LuaProbe` |
+| `q2lua_reader.py` | `run` (started by the run: read-only memory scan for the probe's `Q2L1` records), `summarize` (rebuild the outputs from `lua_reader.log`), `selftest` |
+| `selftest_lua.py` | runs both probe scripts under stock Lua 5.0.2 (`out\tools\lua50.exe`, built with the project MSVC) with stubbed engine calls, and checks that a memory scan of that process finds every record |
 | `q2_ui.py`, `q2_scenes.json`, `refs\` | unattended menu driver (see "Unattended runs") |
 | `q2_profile.py` | `snapshot` / `restore` / `diff <run_dir>`: the player's registry settings and saved-games files |
 | `q2common.ps1` | shared paths, game detection, manifest, install |
@@ -320,7 +368,7 @@ GALACTIC_ECONOMY.md §7 items and the other requested data:
 
 | # / data | covered? | how |
 |---|---|---|
-| credits per player per fiscal cycle | **yes** | `C` lines every tick (player vector at PlayerList +0x00, found 2026-10-30; `M player_vector` line). `summary.json` → `credits_by_cycle`. The Lua cross-check wrote nothing (see Known limits) |
+| credits per player per fiscal cycle | **yes** | `C` lines every tick (player vector at PlayerList +0x00, found 2026-10-30; `M player_vector` line). `summary.json` → `credits_by_cycle`. The Lua cross-check of 2026-10-30 wrote nothing (see Known limits); the probe now has `PLAYER ... credits=` records |
 | 1 initial `next_cycle_frame` | **yes** | `F` carries mode +0x368/+0x36C/+0x370 from the first galactic tick; credits per tick. Save/load part: **no** (needs a manual mid-cycle save/load) |
 | 2 black-market LCG = synced RNG? | **partly** | the address *is* the synced RNG (MAIN_LOOP.md). The trace gives draws per tick, so the cycle frames show the extra draws. Heart of the Maw includes Nal Hutta, which has `Planet_Black_Market_Influences` |
 | per-planet income terms | **partly** | `G`: political control, runtime base value, black-market multiplier, piracy pool, corruption type, destroyed, siphoner. The income breakdown list (D +0x268) layout is undocumented, so the terms are predicted offline and checked against credit deltas |
@@ -331,7 +379,7 @@ GALACTIC_ECONOMY.md §7 items and the other requested data:
 | 5 refunds, 6 ground-cap stall, 7 carrier fill, 12 tech gate | **no** | each needs deliberate player or Lua actions that would change the game being recorded. They belong in a separate, non-hands-off probe |
 | 8 what transfers on capture, 9 orbital-control capture | **opportunistic** | object deltas list everything created and destroyed if the AI captures a planet in the window |
 | 10 strategic game speed | **no** in the default runs | needs the speed slider (UI). Repeat the galactic run at slider 0 and 4; wall seconds per cycle are in `run_status.json` |
-| 11 perception (`EnemyForce.*`, `TargetPlayerID`) | **yes** with `-LuaProbe` | `EvaluatePerception` of the 4 `Q2_*` equations for Rebel and Underworld × every planet × every cycle, with planet owners. Kept out of the baseline run because evaluating equations may touch AI state |
+| 11 perception (`EnemyForce.*`, `TargetPlayerID`) | **with `-LuaProbe`, not yet captured** | `EvaluatePerception` of the 4 `Q2_*` equations (+ the shipped `Roaming_Empire_Fleet_Target` as a control) for Rebel and Underworld × every planet × every cycle, with planet owners → `lua_perception.tsv`. Kept out of the baseline run because evaluating equations may touch AI state |
 
 ## Known limits
 
@@ -352,9 +400,11 @@ GALACTIC_ECONOMY.md §7 items and the other requested data:
   - two are [L]: the player vector (found heuristically) and the FS ring entry size;
   - a wrong ID-map layout is detected on the first sample (exit 4, `layout_error`).
 - **Lua output path:** the 2026-10-30 `-LuaProbe` runs (galactic `20261030-061228-galactic-vanilla-lua`, skirmish
-  `20261030-062751-skirmish-vanilla-lua`) wrote no `Q2Trace_Lua.txt` anywhere (game folder, Saved Games, Documents, AppData, %TEMP% searched). Either
-  `_CustomScriptMessage` writes nothing in the retail build or the probe script did not run; nothing in the trace
-  tells which. The `C` lines and `production.q2q` cover credits and queues without Lua.
+  `20261030-062751-skirmish-vanilla-lua`) wrote no `Q2Trace_Lua.txt` anywhere. Cause (2026-11-02, q2f t06,
+  docs/re/LUA_SCRIPT_OUTPUT.md): in 1.121 the file writer behind `_CustomScriptMessage` is an empty function, so no
+  Lua probe can write a file. Whether those scripts loaded is not recorded. Since then the probe keeps its lines in
+  memory for `q2lua_reader.py` and proves its load with the canary files. Not yet run against the game.
+  The `C` lines and `production.q2q` cover credits and queues without Lua.
 - **Thrawn's Revenge:**
   - the default launch is `STEAMMOD=1125571106` (the workshop folder is checked);
   - its GC map and UI labels differ, so name them with `-Label`;
