@@ -190,6 +190,53 @@ No expiry in the service: burning lasts until death [M]. First due frame per §6
   (`Specific_Death_Anim_Type/Index` +0xd98/+0xd9c) starts there; without `Remove_Upon_Death` (+0x9b) the
   animation result counts as success; animation failed and no spin-away → removed at once (0x391310(obj, 1)).
   0x3ac290 runs when type +0xed0 > 0. "DEFAULT_UNIT_DIE" is a local-visibility presentation event.
+- **Start explosion (Initialise 0x58cdb0 → 0x58cf90(kind = spin ? 1 : 0))** [H, R3f t06]: in the same call,
+  right after the decision draw. Spin: `Spin_Away_On_Death_Explosion` (list +0x2210, entries +0x2218, count
+  +0x2220) plus SFX `Spin_Away_On_Death_SFXEvent_Start_Die` (+0x12f0). No spin: `Death_Explosions` (+0xcd8: +0xce0 /
+  +0xce8) plus `Death_SFXEvent_Start_Die` (+0x12d0). The entry is picked with synced `Get_Int(0, n − 1)` when
+  n > 0 (n = 1 does not advance the RNG, 0x1ffb40 returns at once). It is spawned (0x29f810; store GOM, or mode
+  +0x20 when the explosion type's +0x3b is set) at **the dying object's current position + (0, 0,
+  `Ranged_Target_Z_Adjust` +0x4dc)**, with the object's owner (+0x58) and orientation (+0x84). Its particle data
+  gets +0x58 = the source object id, +0x68 = explosion type +0x440. When the explosion model has a particle
+  emitter, the emitter's inherited velocity (+0x204..+0x20c) = death data V (below). So a spinning wreck's
+  explosion is spawned **once, at the death position, on the death frame**.
+- **Spin-away motion is simulation state, not a render effect** (`DeathBehavior::Service` 0x58d430, death data
+  obj +0x1d0 with +0x34 set) [H unless tagged]:
+  - **V** (data +0x38..+0x40) is written only by the death-clone spawn 0x29f270, before DEATH is attached to the
+    clone: V = FPS × (A − B), where A and B are the translations of the dying object's movement-record transforms
+    (+0xa8 → +0x164 and +0x194) [M: A = current, B = previous tick, which makes V the last-tick velocity in
+    units/s]. An object without a movement record uses obj +0x248 for both, so V = 0. DEATH is attached
+    by the clone spawn and by bomb / mine / remote-bomb paths (0x58f210, 0x637190, 0x280ec0). In practice the
+    spinning wreck is the **death clone** [M: XML behaviour lists that name DEATH directly were not surveyed].
+  - **First service** (data +0x2c = 0, 0x58c7a0): with |V| = 0 no path is built. Otherwise, with T =
+    `Spin_Away_On_Death_Time` (+0x220c; vanilla 2.0, two types 1.0), p = position, E = p + T·V, d = E − p,
+    m = (p + E)/2 + (1, 1, 1): a = normalise(m × d), b = normalise(a × d), r = 0.3·|d|. **One synced
+    `Get_Float(0, 2π)`** θ, s = sin θ, c = cos θ (s = θ, c = 1 when |θ| has an exponent ≤ 0x1d000000). Q = E + r·(c·a + s·b)
+    in x and y, Q.z = E.z + r·|c·a.z + s·b.z| (always up). Control points **p, (p + E)/2, Q, E**. `SplineClass`
+    (0x22fa30) is a per-axis natural cubic spline (0x230950: tridiagonal 0.5 / 1/(4 − g) / 1/(2 − g); segment
+    coefficients a = y_i, b = D_i, c = 3(y_{i+1} − y_i) − 2D_i − D_{i+1}, d = 2(y_i − y_{i+1}) + D_i + D_{i+1}, u ∈
+    [0, 1]). Segment lengths come from adaptive chord subdivision (0x2313b0: split at the midpoint until
+    |chord / (half1 + half2) − 1| ≤ 1e−6 or |chord − halves| ≤ 1e−6). 0x22ffc0(…, 20) also builds a sampled table (not
+    used by the motion). Travelled distance +0x28 := 0; data +0x2c := obj +0x84. The same call then does the
+    first step.
+  - **Every service step**: dist += |V| / FPS. **End** when dist ≥ |V|·T, or |V| / FPS = 0, or there is no path, or
+    the sample fails (dist beyond the spline length; 0x22fe70 finds the segment by cumulative length and
+    evaluates the cubic at u = (dist − start) / segment length, linear in u). Otherwise: P = sample(dist);
+    0x3abe40 turns pitch (+0x88) and yaw (+0x8c) toward P − position, each clamped to ±the type's turn rate
+    (0x372560) per call [M: per-frame units]. Then the orientation is set to (+0x2c + 20, pitch, yaw) with
+    +0x2c += 20, i.e. the first angle (roll [M naming]) grows **20° per frame**. Finally position := P
+    (0x3a8f90).
+    So with |V| > 0 the end fires on the k-th service with k = ⌈FPS·T⌉ (60 for T = 2.0; float sum [M ±1]). The
+    wreck moves on services 1 … k − 1, the first one being the set-up service.
+  - **At the end**: 0x58cf90(kind 0) spawns `Death_Explosions` (+0xcd8, synced pick when n > 0) at the **wreck's
+    current (end) position** + z adjust, then releases the path and calls Kill(obj, 1) the same frame. With
+    V = 0 this happens on the first service, at the death position.
+  - Port: the drift changes the object's sim position, orientation, tree boxes, the end explosion's position and
+    one synced draw (θ) at the first service. It must run in the sim with these numbers. Render only shows it.
+- Non-spin corpse (same function): countdown and fade as in ANIM_PARTICLES A.7. One addition: when
+  `Death_Explosions_End` (+0xcf8, count +0xd08) is non-empty, the object is killed when the countdown expires, with
+  no fade. The end explosion itself is 0x58cf90(kind 2) from DEATH vf15 0x58d830 (position + the type offset
+  0x371be0 rotated by yaw, SFX `Death_SFXEvent_End_Die` +0x12e0) [M: vf15's caller not traced].
 - **Survivors** are spawned in world removal 0x391310 (`Die` step 7) when +0x3a0 bit 0x80 is clear:
   1. `Tactical_Respawn_Time_In_Secs` (+0x21d0) > 0 → delayed creation of the same type at now + FPS × T
      (0x2bd230); owner = object owner, or for capture-point objects the player from 0x331cc0.
