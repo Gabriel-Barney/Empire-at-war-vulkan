@@ -175,6 +175,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     attitude(id, v.roll, v.pitch);
     if (is_fighter(u)) v.fighter_phase = u.fs.phase;
     v.deploy_state = u.deploy;  // S8 t11
+    v.deploy_clip = u.dclip;
     return v;
 }
 

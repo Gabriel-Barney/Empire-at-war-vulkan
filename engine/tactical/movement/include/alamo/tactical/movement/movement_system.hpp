@@ -185,6 +185,9 @@ struct UnitView {
     float pitch = 0.0f;                      // flying / fighter pitch (degrees, wrap180; positive = nose down) - attitude()
     FighterPhase fighter_phase = FighterPhase::None;  // fighter: last combat steering phase (diagnostics)
     LocoState deploy_state = LocoState::None;  // S8 t11: Walk deploy state (None / 0x18 / 0x19 / 0x1A)
+    // S8 t11 follow-up: the deploy clip the locomotor is timing (0x19 Deploy / 0x1A Undeploy; -1 none, also while 0x18 /
+    // 0x1A wait for the turret). The host draws it (SimAnimation::deploy) when it is not the current animation.
+    int32_t deploy_clip = -1;
 };
 
 // OI tactical: one crush this tick (§5.5). The host applies kCrushDamage of the crusher type's Squash_Damage_Type

@@ -406,11 +406,39 @@ std::string fighter_types(bool fog = false) {
     return t;
 }
 
+// S8 t10 follow-up (LOB_SOLVER §3.5 "MARKER removal"): the troopers carry Remote_Bomb (PLACE_REMOTE_BOMB 64, Bomb_Type a
+// sticky GRENADE, Toss_Anim without clip data: the toss 12 frames after the stop) and the map knows Dummy_Barrage_Target.
+std::string bomb_types() {
+    std::string t = kTypes;
+    const std::string at = "<Custom_Hard_YExtent>6</Custom_Hard_YExtent>\n";
+    const size_t p = t.find(at);
+    if (p != std::string::npos)
+        t.insert(p + at.size(),
+                 "  <Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>PLACE_REMOTE_BOMB</Type><Recharge_Seconds>18</Recharge_Seconds>"
+                 "<GUI_Activated_Ability_Name>S10_Remote_Bomb</GUI_Activated_Ability_Name></Unit_Ability>"
+                 "<Unit_Ability><Type>DETONATE_REMOTE_BOMB</Type></Unit_Ability></Unit_Abilities_Data>\n"
+                 "  <Abilities SubObjectList=\"Yes\"><Remote_Bomb_Ability Name=\"S10_Remote_Bomb\"><Activation_Style>User_Input</Activation_Style>"
+                 "<Activation_Min_Range>5.0</Activation_Min_Range><Activation_Max_Range>130.0</Activation_Max_Range>"
+                 "<Bomb_Type>S10_Remote_Bomb_Proj</Bomb_Type><Toss_Anim>BOMBTOSS</Toss_Anim><Spawn_Frame>12.0</Spawn_Frame>"
+                 "</Remote_Bomb_Ability></Abilities>\n");
+    t.insert(t.rfind("</S10>"),
+             " <Projectile Name=\"S10_Remote_Bomb_Proj\"><Max_Speed>20.0</Max_Speed><Projectile_Grenade_Gravity>1.0</Projectile_Grenade_Gravity>"
+             "<Projectile_Grenade_Gravity_Lob_Mod>1.0</Projectile_Grenade_Gravity_Lob_Mod><Projectile_Grenade_Can_Lob_Slower>yes</Projectile_Grenade_Can_Lob_Slower>"
+             "<Behavior>PROJECTILE, BOMB</Behavior><Projectile_Category>GRENADE</Projectile_Category>"
+             "<Projectile_Grenade_Sticks_On_Collision>yes</Projectile_Grenade_Sticks_On_Collision><Projectile_Max_Lifetime>900.0</Projectile_Max_Lifetime>"
+             "<Projectile_Damage>0.0</Projectile_Damage><Projectile_Blast_Area_Damage>50</Projectile_Blast_Area_Damage>"
+             "<Projectile_Blast_Area_Range>30</Projectile_Blast_Area_Range><Friendly_Damage_Amount>200</Friendly_Damage_Amount></Projectile>\n"
+             " <MiscObject Name=\"Dummy_Barrage_Target\"><LandBehavior>MARKER</LandBehavior><SpaceBehavior>MARKER</SpaceBehavior>"
+             "<Is_Decoration>No</Is_Decoration><CategoryMask>Corvette</CategoryMask><Immune_To_Damage>True</Immune_To_Damage></MiscObject>\n");
+    return t;
+}
+
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
                                 bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false,
-                                bool fog_setup = false) {
+                                bool fog_setup = false, bool bomb = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (fighters && fog ? "alamo_sim_battle_tests_fighters_fog"  // S7 t22
+    d->root = fs::temp_directory_path() / (bomb ? "alamo_sim_battle_tests_bomb"  // S8 t10 follow-up
+                                           : fighters && fog ? "alamo_sim_battle_tests_fighters_fog"  // S7 t22
                                            : fighters    ? "alamo_sim_battle_tests_fighters"  // S7 t12
                                            : fog_setup ? "alamo_sim_battle_tests_fog_setup"  // FOWF t05
                                            : fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
@@ -426,7 +454,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", fighters ? fighter_types(fog)  // S7 t12 / t22
+    write_file(x / "S10Types.xml", bomb ? bomb_types()  // S8 t10 follow-up
+                                    : fighters ? fighter_types(fog)  // S7 t12 / t22
                                     : fog_setup ? fog_types()
                                    : fog_bm ? fog_bm_types()
                                    : obstacle ? obstacle_types()
@@ -4252,6 +4281,94 @@ void test_oi_objects_scheduling() {
 }
 // --- end OI objects ---
 
+// S8 t10 follow-up (LOB_SOLVER §3.5 "MARKER removal", ABILITIES_HARDPOINTS §2.9): command 57 (special ability with a
+// Dummy_Barrage_Target at a ground point) with PLACE_REMOTE_BOMB. The marker has no lifetime: it stays after the apply
+// consumed the pending ability, while the thrower waits for its toss (the [port] cleanup of other markers would drop it
+// there), and the toss kills it; the bomb (never armed) rests on the ground at the point until DETONATE_REMOTE_BOMB.
+void test_remote_bomb_marker() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test moves units
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const uint32_t dummy_type = type_of(*d, "Dummy_Barrage_Target");
+    bool invaded = false, issued = false, waited = false, tossed = false;
+    objects::ObjectId thrower = objects::kNoObjectId, marker = objects::kNoObjectId;
+    float px = 0.0f, py = 0.0f;
+    uint32_t issue_frame = 0;
+    for (uint64_t t = 0; t < 6000 && !tossed; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) continue;
+        objects::ObjectStore& st = tm->primary();
+        auto marker_alive = [&] { return marker != objects::kNoObjectId && st.alive(st.find(marker)); };
+        if (!issued) {
+            for (const objects::ObjectHandle h : st.owned_by(1))
+                if (st.alive(h) && b->combat().has_unit(st.id(h)) && b->combat().alive(st.id(h))) {
+                    thrower = st.id(h);
+                    break;
+                }
+            CHECK(thrower > 0);
+            if (thrower <= 0) return;
+            const Vec3 p = st.position(st.find(thrower));
+            px = p.x + 80.0f;
+            py = p.y;
+            commands::EventData ev(commands::EventType::TacticalSpecialAbilityWithDummyTarget);
+            ev.set_ids("users", std::vector<uint32_t>{static_cast<uint32_t>(thrower)});
+            ev.set("ability", static_cast<uint32_t>(tactical::abilities::kPlaceRemoteBomb)).set_f("x", px).set_f("y", py).set_f("z", 0.0f);
+            CHECK(b->handle_command(*tm, 1, ev, host.random().synced()) == commands::RejectReason::None);
+            for (const objects::ObjectHandle h : st.all_objects())
+                if (st.alive(h) && static_cast<uint32_t>(st.type(h)) == dummy_type) marker = st.id(h);
+            CHECK(marker_alive());
+            issued = true;
+            issue_frame = b->frame();
+            continue;
+        }
+        // Applied (the pending order is consumed), not yet tossed: the marker stays.
+        if (!waited && b->abilities().pending_type(thrower) < 0 && b->combat().projectile_count() == 0) {
+            CHECK(marker_alive());
+            waited = true;
+        }
+        for (size_t i = 0; i < b->combat().projectile_count(); ++i) {
+            const tactical::combat::ProjectileView v = b->combat().projectile(i);
+            if (!v.alive || !v.stuck) continue;
+            CHECK(!marker_alive());  // killed by the toss
+            CHECK(v.stuck_to == tactical::combat::kNoObject && std::fabs(v.pos.x - px) < 10.0f && std::fabs(v.pos.y - py) < 10.0f);
+            std::printf("  remote bomb marker: issued at %u, bomb resting at (%.1f, %.1f) at %u, marker gone\n", issue_frame,
+                        static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), b->frame());
+            tossed = true;
+        }
+    }
+    CHECK(issued && waited && tossed);
+}
+
 // S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints follow their objects.
 //   * land: a map-placed LAND_OBSTACLE bunker owns its placement stamp (object id) and loses it when it dies; a
 //     Map_Load_Spawn_Table placeholder's stamp is replaced by the spawned rock's footprint; a rock spawned during the
@@ -5072,6 +5189,7 @@ int main(int argc, char** argv) {
     test_land_drop_rules();
     std::printf("S8 t02 / S7 t13: obstacle footprints follow their objects (land stamps, space static entries)\n");
     test_runtime_obstacles(false);
+    test_remote_bomb_marker();  // S8 t10 follow-up
     test_runtime_obstacles(true);
     std::printf("S7 t12: a fighter squadron moved past an enemy keeps its move order (formation attack target)\n");
     test_fighter_move_past_enemy();

@@ -813,6 +813,7 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
             mv::AvoidModel::Mesh mesh;
             mesh.name = upper_str(mi.name);
             mesh.shield = mesh.name == "SHIELD";
+            mesh.bone_visible = mi.attach_bone >= m.skeleton.visible.size() || m.skeleton.visible[mi.attach_bone] != 0;  // S8 t13 ray set
             bool first = true;
             for (uint32_t si = mi.first_submesh; si < mi.first_submesh + mi.submesh_count && si < m.submeshes.size(); ++si) {
                 const assets::Submesh& sm = m.submeshes[si];
