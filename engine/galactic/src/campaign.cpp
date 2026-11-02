@@ -160,6 +160,12 @@ PlayerView GalacticSim::player_view(int32_t player) const {
     v.unowned_or_neutral.resize(n);
     v.held_by_ally.resize(n);
     v.hidden.resize(n);
+    // AI branch of Is_Planet_Passable_For_Player (0x3f2510): for a mover with an AI system, flag 1 vs flag 0 follows the
+    // PERCEIVED owner (Variable_Target.TargetPlayerID resolved to a player whose faction is not Is_Neutral, GALACTIC_ECONOMY
+    // 6.4). The sim keeps no fogged memory, so the stand-in is the TRUE owner [port]: a player, not neutral (the same bit
+    // as unowned_or_neutral, inverted) [M]. The AI's own view (engine/ai GalacticPerception::fill_view) overlays the
+    // remembered owner and ai_eval_failed. Evaluation never fails here (ai_eval_failed stays empty = none) [port].
+    if (v.has_ai_system) v.ai_perceived_non_neutral.resize(n);
     // GRC 1.1: the LOCAL player's raw revealed bytes (hop gate) and the mode's auto-reveal (Is_Planet_Revealed).
     v.fog_disabled = auto_reveal_;
     v.revealed.resize(n);
@@ -172,6 +178,7 @@ PlayerView GalacticSim::player_view(int32_t player) const {
         }
         v.corrupted.set(i, p.corruption != kCorruptionNone);
         v.unowned_or_neutral.set(i, !valid_player(p.owner) || faction_of(p.owner).is_neutral);
+        if (v.has_ai_system) v.ai_perceived_non_neutral.set(i, valid_player(p.owner) && !faction_of(p.owner).is_neutral);
         v.held_by_ally.set(i, allied(player, p.owner) && p.control > 0.0f);  // 0x4ad9f0: relation 0 (self / ally)
         v.hidden.set(i, p.hidden);
     }

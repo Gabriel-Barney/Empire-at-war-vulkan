@@ -251,14 +251,17 @@ struct GalPp {
                 for (const ObjectHandle u : fl.contents)
                     if (st.alive(u) && (w.mask_of(st.type(u)) & mask) != 0) s += w.power_of(st.type(u));
             }
-            if (hostile(ps.owner) && ps.starbase && st.alive(ps.starbase) && (mask & ai_category_bit("Capital")) != 0)
-                s += w.power_of(st.type(ps.starbase));  // [port] starbase members = its own power
+            // The starbase's per-tech members (Starting_Spawned_Units_Tech_N of the owner's tech level) by category; the
+            // untyped total (mask = all, the Node_Weight helper 0x5f2430) also holds its own AI_Combat_Power, a typed
+            // row never does (GALACTIC_ECONOMY §6.2, AI_GALACTIC_TOKENS §2) [port: member lists from the type data].
+            if (hostile(ps.owner) && ps.starbase && st.alive(ps.starbase))
+                s += galactic_ai_structure_force(w.sim, w.tinfo, static_cast<uint32_t>(st.type(ps.starbase)), ps.owner, mask);
         } else {
             for (const ObjectHandle u : ps.surface)
                 if (st.alive(u) && hostile(st.owner(u)) && (w.mask_of(st.type(u)) & mask) != 0) s += w.power_of(st.type(u));
-            if (hostile(ps.owner))
+            if (hostile(ps.owner))  // ground structures: per-tech members; the untyped total adds their own power [port]
                 for (const ObjectHandle u : ps.structures)
-                    if (st.alive(u) && (mask & ai_category_bit("Capital")) != 0) s += w.power_of(st.type(u));
+                    if (st.alive(u)) s += galactic_ai_structure_force(w.sim, w.tinfo, static_cast<uint32_t>(st.type(u)), ps.owner, mask);
         }
         return s;
     }

@@ -36,12 +36,35 @@ void fill_category_masks(std::vector<GalacticAiTypeInfo>& types) {
     }
 }
 
+double galactic_ai_structure_force(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, uint32_t type,
+                                   int32_t owner, uint64_t mask) {
+    const auto& gt = sim.rules().types;
+    double sum = 0.0;
+    if (type < types.size()) {
+        // Per-tech members (0x373f40 count / 0x373e30 type / 0x373d30 count, tech = the owner's tech level +0x84).
+        // [M] a level without entries falls back to the highest lower level with entries (the hangar rule).
+        const auto players = sim.players();
+        const int32_t tech = owner >= 0 && static_cast<size_t>(owner) < players.size() ? players[static_cast<size_t>(owner)].tech_level : 0;
+        for (int32_t n = std::min(tech, static_cast<int32_t>(kSpawnTechSlots) - 1); n >= 0; --n) {
+            const std::vector<SpawnMember>& list = types[type].spawn_tech[static_cast<size_t>(n)];
+            if (list.empty()) continue;
+            for (const SpawnMember& m : list)
+                if (m.type < types.size() && m.type < gt.size() && m.count > 0 && (types[m.type].category_mask & mask) != 0)
+                    sum += static_cast<double>(gt[m.type].ai_combat_power) * static_cast<double>(m.count);
+            break;
+        }
+    }
+    // The Node_Weight helper 0x5f2430 (category mask "all") adds the structure's own AI_Combat_Power on top (GALACTIC_ECONOMY
+    // §6.2); a typed row never holds it (AI_GALACTIC_TOKENS §2: "not the starbase's own power").
+    if (mask == kAllCategories && type < gt.size()) sum += static_cast<double>(gt[type].ai_combat_power);
+    return sum;
+}
+
 namespace {
 
 constexpr double kNever = 1.0e18;              // TimeSince* of an event that never happened [H]
 constexpr double kMaxFleetDistance = 100.0;    // GC+0x108 MaximumFleetMovementDistance
 constexpr double kMaxLevel = 5.0;              // GC+0xF4 / +0xF8 / +0xFC, MaximumPoliticalControl GC+0xF0
-constexpr uint64_t kAllCategories = ~uint64_t{0};
 constexpr int32_t kLifeForever = -1;
 
 // Galactic_Hints hint-set defaults [H].
@@ -194,9 +217,9 @@ std::vector<uint8_t> galactic_ai_delivery_flood(const gal::GalacticSim& sim, int
         static_cast<size_t>(owner) >= sim.players().size())
         return r;
     // The flood 0x3f12e0 under the corrected AI request flags (FIXPASS_GALACTIC §1.4, ai_reach_flood). Request flags 0
-    // and 1 are equal at every level, so the AI's perceived owner (neutral or not) no longer matters here [port: the
-    // sim's view, perceived owners unset]. Danger (flags 2 / 3) reads `dangerous` (the AI's Is_Planet_Dangerous, none
-    // when null).
+    // and 1 are equal at every AI level, so the perceived-owner bit (ai_perceived_non_neutral, which the sim's view now
+    // fills with the true owner, the AI's own view overlays the remembered one) is behaviourally inert for this flood
+    // for now. Danger (flags 2 / 3) reads `dangerous` (the AI's Is_Planet_Dangerous, none when null).
     gal::PlayerView view = sim.player_view(owner);
     if (dangerous) view.dangerous = *dangerous;
     const PlanetIndex start[1] = {from};
@@ -552,16 +575,19 @@ struct GalacticSimTokenResolver::Impl {
                 for (const ObjectHandle u : fl.contents)
                     if (st.alive(u) && (type_mask(st.type(u)) & cat) != 0) sum += power(st.type(u));
             }
-            // [port] the starbase's member list = the starbase's own power (owner on that side, Capital mask).
-            if (side(enemy, ps.owner) && ps.starbase && st.alive(ps.starbase) && (cat & ai_category_bit("Capital")) != 0)
-                sum += power(st.type(ps.starbase));
+            // The starbase (owner on that side): its per-tech members by category; the untyped total (cat = all) also holds
+            // its own power (galactic_ai_structure_force; the leaf spec itself has members only, the own power is the
+            // Node_Weight helper 0x5f2430's add [port: kept in the untyped leaf]).
+            if (side(enemy, ps.owner) && ps.starbase && st.alive(ps.starbase))
+                sum += galactic_ai_structure_force(sim, r.types_, static_cast<uint32_t>(st.type(ps.starbase)), ps.owner, cat);
         } else {
             for (const ObjectHandle u : ps.surface)
                 if (st.alive(u) && side(enemy, st.owner(u)) && (type_mask(st.type(u)) & cat) != 0) sum += power(st.type(u));
-            // [port] structure garrisons (per-tech members) = the structure's own power, owner on that side.
+            // Structure garrisons (per-tech members of every ground structure, owner on that side); the untyped total also
+            // holds the structure's own power (0x5f2430 ground variant) [port].
             if (side(enemy, ps.owner))
                 for (const ObjectHandle s : ps.structures)
-                    if (st.alive(s) && (cat & ai_category_bit("Capital")) != 0) sum += power(st.type(s));
+                    if (st.alive(s)) sum += galactic_ai_structure_force(sim, r.types_, static_cast<uint32_t>(st.type(s)), ps.owner, cat);
         }
         return sum;
     }
