@@ -1891,42 +1891,73 @@ int32_t TacticalAiWorld::Impl::tf_attack_target(int32_t tf, const lua::AiArg& ta
     return id;
 }
 
-// S10 AI land reinforcement (header comment of reinforce_landing_point).
-bool reinforce_landing_point(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
-                             bool use_reinforcement_points, Vec3f& at, const ReinforcePointRank& rank) {
-    if (!use_reinforcement_points) return true;
-    const PerceptionObject* best = nullptr;
-    double best_key = 0.0;
-    float radius = 0.0f;
+// a1g t04 - land TF.Reinforce placement (header comments of reinforce_points / reinforce_ring / reinforce_place).
+std::vector<ReinforcePoint> reinforce_points(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
+                                             const Vec3f& dest, const ReinforcePointRank& rank) {
+    std::vector<ReinforcePoint> out;
     for (size_t i = 0; i < w.objects.size() && i < facts.size(); ++i) {
         const PerceptionObject& o = w.objects[i];
         const float r = facts[i].applies.reinforcement_enabling_radius;
         if (!o.alive || r <= 0.0f || o.owner < 0 || !(o.owner == player || w.allied(player, o.owner))) continue;
-        double key = 0.0;
+        float key = 0.0f;
         if (rank) {
             if (!rank(o.position, key)) continue;
         } else {
-            const float dx = at.x - o.position.x, dy = at.y - o.position.y;
-            key = static_cast<double>(dx * dx + dy * dy);
+            const float dx = o.position.x - dest.x, dy = o.position.y - dest.y;
+            key = std::sqrt(dx * dx + dy * dy);
         }
-        if (!best || key < best_key) {
-            best = &o;
-            best_key = key;
-            radius = r;
+        out.push_back({o.position, r, key});
+    }
+    std::stable_sort(out.begin(), out.end(), [](const ReinforcePoint& a, const ReinforcePoint& b) { return a.key < b.key; });
+    return out;
+}
+
+std::vector<Vec3f> reinforce_ring(const ReinforcePoint& point) {
+    std::vector<Vec3f> out;
+    const float half = point.radius * 0.5f;
+    for (float theta = 0.0f; theta < 6.2831855f; theta += 0.7853982f) {
+        float s = 0.0f, c = 1.0f;
+        dmath::sincos(theta, s, c);
+        out.push_back({point.position.x + half * c, point.position.y + half * s, point.position.z});
+    }
+    return out;
+}
+
+bool reinforce_place(const std::vector<ReinforcePoint>& points, std::vector<TacticalReinforcement>& pending, float remaining,
+                     const ReinforceIsNull& is_null, const ReinforceLand& land) {
+    // The working list is pending[0, top); popped entries are marked (erase: placed or null) and removed at the end.
+    std::vector<uint8_t> erase(pending.size(), 0);
+    size_t top = pending.size();
+    bool all_placed = true;
+    auto pop_trailing = [&] {
+        while (top > 0) {
+            const TacticalReinforcement& r = pending[top - 1];
+            const bool null_unit = is_null && is_null(r);
+            if (!null_unit && r.population <= remaining) break;
+            erase[top - 1] = null_unit ? 1 : 0;
+            --top;
+            all_placed = false;
         }
+    };
+    pop_trailing();  // [port] (header comment)
+    for (const ReinforcePoint& pt : points) {
+        for (const Vec3f& spot : reinforce_ring(pt)) {
+            if (top == 0 || remaining < 1.0f) break;
+            const TacticalReinforcement r = pending[top - 1];  // a copy: `land` runs host code
+            if (!land(r, spot)) continue;
+            remaining -= r.population;
+            erase[top - 1] = 1;
+            --top;
+            pop_trailing();
+        }
+        if (top == 0 || remaining < 1.0f) break;
     }
-    if (!best) return false;
-    const float bx = at.x - best->position.x, by = at.y - best->position.y;
-    const float d = std::sqrt(bx * bx + by * by);
-    const float step = std::min(d, radius * 0.5f);
-    Vec3f p = best->position;
-    if (d > 0.0f) {
-        const float k = step / d;
-        p.x = p.x + (at.x - p.x) * k;
-        p.y = p.y + (at.y - p.y) * k;
-    }
-    at = p;
-    return true;
+    const bool ok = all_placed && top == 0;
+    size_t k = 0;
+    for (size_t i = 0; i < pending.size(); ++i)
+        if (!erase[i]) pending[k++] = pending[i];
+    pending.resize(k);
+    return ok;
 }
 
 int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target, const lua::AiPoint& point, double max_wait) {
@@ -1952,15 +1983,16 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
     // S10 AI land reinforcement: "can reinforce" 0x2b03e0 = the battle allows it (host) and room for one unit
     // (AI_GALACTIC_3 §3.3: (int)(1.0 + 0.5) <= cap - used); otherwise an immediately-failing ReinforceBlockStatus.
     const float cap = host.population_cap(t->player);
-    float remaining = cap - std::max(host.population_used(t->player), 0.0f);
+    const float remaining = cap - std::max(host.population_used(t->player), 0.0f);
     if (!host.can_reinforce(t->player) || (cap >= 0.0f && remaining < 1.0f)) return new_status(t->plan, tf, StatusKind::Failed);
     Vec3f p;
     if (!arg_position(target, point, p)) return -1;
-    // S10 AI land reinforcement: landing position near the target (0x6eaf60, AI_TACTICAL §7.4, A1_READINGS §25.3). The
-    // destination zone: a region target's zone, else the zone at the position. Points in a zone outside the
-    // destination's flood set at the TF goal's Reachability are dropped; the rest are ranked by the slot-7 path cost
-    // from their zone at that level; a point without a zone ranks by its 2-D distance [M: mixed keys]. A destination
-    // without a zone keeps the 2-D ranking.
+    // a1g t04 - land TF.Reinforce placement (0x6eaf60, AI_TACTICAL §7.4, A1_READINGS §25.3 / §30.7 [H]). The destination
+    // zone: a region target's zone, else the zone at the position. Points in a zone outside the destination's flood set
+    // at the TF goal's Reachability are dropped; the rest are keyed (float) by the slot-7 path cost from their zone at
+    // that level (a failed path = 1e18, sorted last); a point without a zone keys by its 2-D distance (the original's
+    // mixed keys). A destination without a zone keeps the 2-D keys. The units land on the 8-spot rings at r/2 around the
+    // points in key order (reinforce_place), not moved toward the target.
     ReinforcePointRank rank;
     if (cfg.mode == TacticalMode::Land && zones.size() > 0) {
         int32_t dest = -1;
@@ -1973,50 +2005,59 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
             const Reachability lvl = defs.goals[pi->second.goal_type].reachability;
             const std::vector<uint32_t>& set = pa->flood_set(dest, lvl);
             const Vec3f to = p;
-            rank = [this, pa, dest, lvl, &set, to](const Vec3f& at, double& key) {
+            rank = [this, pa, dest, lvl, &set, to](const Vec3f& at, float& key) {
                 const int32_t z = zone_at(at);
                 if (z < 0) {
-                    const double dx = static_cast<double>(at.x) - to.x, dy = static_cast<double>(at.y) - to.y;
+                    const float dx = at.x - to.x, dy = at.y - to.y;
                     key = std::sqrt(dx * dx + dy * dy);
                     return true;
                 }
                 if (std::find(set.begin(), set.end(), static_cast<uint32_t>(z)) == set.end()) return false;
-                key = zone_reachability_cost(pa->zone_paths(), z, dest, lvl, cfg.constants);
+                key = static_cast<float>(zone_reachability_cost(pa->zone_paths(), z, dest, lvl, cfg.constants));
                 return true;
             };
         }
     }
-    if (cfg.mode == TacticalMode::Land &&
-        !reinforce_landing_point(w, facts, t->player, cfg.constants.use_reinforcement_points, p, rank)) {
-        ++stats["Reinforce: no allied reinforcement point"];
-        return new_status(t->plan, tf, StatusKind::Failed);
+    std::vector<ReinforcePoint> points;
+    if (cfg.constants.use_reinforcement_points) {
+        points = reinforce_points(w, facts, t->player, p, rank);
+        if (points.empty()) {
+            ++stats["Reinforce: no allied reinforcement point"];
+            return new_status(t->plan, tf, StatusKind::Failed);
+        }
+    } else {
+        points.push_back({p, 0.0f, 0.0f});  // [port] without Use_Reinforcement_Points: every spot is the target itself
     }
     // Campaign (galactic parent): the galactic pool (units in orbit); skirmish: the tactical pool - both come from
-    // the host's reinforcement_pool. From the LAST pending unit to the first, each whose population fits the cap.
-    // A2 tactical (AI_GALACTIC_3 §3.4): the remaining cap (cap - max(used, 0)) is read ONCE; a unit whose pop exceeds
-    // it is skipped. S10 AI land reinforcement [inferred]: each drop the host accepts takes its population off that
-    // one reading, so the loop never issues a drop the host's per-order cap rule refuses (AI orders stay legal).
+    // the host's reinforcement_pool. A2 tactical (AI_GALACTIC_3 §3.4): the remaining cap (cap - max(used, 0)) is read
+    // ONCE; each drop the host accepts takes its population off that one reading (§30.7 step 4), so the loop never
+    // issues a drop the host's per-order cap rule refuses. A pending entry is null when it has no type or left the
+    // host's pool (it can never land: dropped from the TF, like the space poll).
+    const std::vector<TacticalReinforcement> pool = host.reinforcement_pool(t->player);
+    auto is_null = [&pool](const TacticalReinforcement& r) {
+        return r.type < 0 || std::none_of(pool.begin(), pool.end(), [&r](const TacticalReinforcement& e) { return e.key == r.key; });
+    };
     uint32_t spawned = 0;
-    for (size_t i = t->pending.size(); i-- > 0;) {
-        const TacticalReinforcement r = t->pending[i];
-        if (cap >= 0.0f && r.population > remaining) continue;
+    auto land = [&](const TacticalReinforcement& r, const Vec3f& spot) {
         const size_t before = store.owned_by(t->player).size();
         cmd::EventData ev(cmd::EventType::Reinforce);
-        ev.set("unit", static_cast<uint32_t>(r.key)).set_f("x", p.x).set_f("y", p.y).set_f("z", p.z);
-        const cmd::RejectReason rr =
-            order(t->player, ev, std::string(cfg.campaign ? "campaign" : "skirmish") + " reinforce " + type_name(r.type) + " (tf " + t->name + ")");
-        if (rr != cmd::RejectReason::None) continue;
-        remaining -= r.population;  // S10 AI land reinforcement [inferred]
-        t->pending.erase(t->pending.begin() + static_cast<std::ptrdiff_t>(i));
+        ev.set("unit", static_cast<uint32_t>(r.key)).set_f("x", spot.x).set_f("y", spot.y).set_f("z", spot.z);
+        char at[48];
+        std::snprintf(at, sizeof at, " at (%.0f, %.0f)", static_cast<double>(spot.x), static_cast<double>(spot.y));
+        if (order(t->player, ev, std::string(cfg.campaign ? "campaign" : "skirmish") + " reinforce " + type_name(r.type) + at + " (tf " + t->name + ")") !=
+            cmd::RejectReason::None)
+            return false;
         const auto owned = store.owned_by(t->player);
         for (size_t k = before; k < owned.size(); ++k)
             if (store.active(owned[k]) && store.has_behavior(owned[k], objects::beh::Locomotor)) {
                 t->units.push_back(owned[k]);
                 ++spawned;
             }
-    }
+        return true;
+    };
+    const bool placed_all = reinforce_place(points, t->pending, cap >= 0.0f ? remaining : HUGE_VALF, is_null, land);
     if (spawned > 0) t->had_units = true;
-    return new_status(t->plan, tf, spawned > 0 ? StatusKind::Done : StatusKind::Failed);
+    return new_status(t->plan, tf, placed_all ? StatusKind::Done : StatusKind::Failed);
 }
 
 // refixf t06 - SpaceReinforceBlockStatus IsFinished (vf19 0x7236f0 -> placement 0x722e80, AI_TACTICAL §7.4 [H]): one placement
