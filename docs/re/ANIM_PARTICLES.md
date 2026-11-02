@@ -377,11 +377,27 @@ loop = `Loop_Idle_Anim_00`. A port must call the same function from all of them.
 
 | field | where | parse / default |
 |---|---|---|
-| `Presence_Induced_Animations` | affected type +0x1610 (vector of 0x28-byte entries: anim type id +0, type-ref list +8 with array +0x10 and count +0x18, 16-byte elements with the type pointer at +8) | code 0x35: comma tokens. A token that converts as an anim type name starts a new entry, and any other token is a type name appended to the last entry's list. Several entries per tag and several tags are allowed. A variant re-parse clears the vector once per tag. Default empty |
-| `Presence_Range` | presence type +0x1628 | float, default 0 |
-| `Allow_Idle_When_Moving` | affected type +0x85 | bool, default false [M] |
+| `Presence_Induced_Animations` | affected type +0x1610 (vector of 0x28-byte entries: anim type id +0, type-ref list +8 with array +0x10 and count +0x18, 16-byte elements with the type pointer at +8) | code 0x35: comma tokens. A token that converts as an anim type name starts a new entry, and any other token is a type name appended to the last entry's list. Several entries per tag and several tags are allowed. A variant re-parse clears the vector once per tag. Default **empty**: the type ctor 0x367250 zeroes begin/end/capacity +0x1610/+0x1618/+0x1620 [H] |
+| `Presence_Range` | presence type +0x1628 | float, default **0.0** [H]: ctor 0x367250 writes an 8-byte 0 over +0x1628..+0x162f; nothing later sets it. The "100" seen elsewhere is vanilla XML (`Emperor_Palpatine`, `Darth_Vader`: 100.0; the AT-AT death clones: 200.0), not a default. With 0 the query box is a point, so only objects whose tree box contains the presence unit's position are hit [M] |
+| `Allow_Idle_When_Moving` | affected type +0x85 | bool, default **false** [H]: ctor 0x367250 → 0x367100 (block at type +0x10) writes the 8 bytes 01 01 00 00 00 00 00 00 at type +0x83, so +0x83 = 1, +0x84 = 1 (`Can_Indigenous_Unit_Stop`), **+0x85 = 0**; no later write. Vanilla sets `Yes` only on ambient `Indigenous_Unit` types (FoC 8: `Bird_Black_Color`, `Bird_Medium_Color`, `Bird_Light_Color`, `Desert_Sketto`, `Dust_Devil`, `Bugs Swamp`, `Kamino_Aiwha`, `Utapau_Dactillion`; EaW 6). Every presence-affected infantry type uses the default. Gate: below the table |
+| `Induced_Flinch_Range` | explosion type +0x20e0 | float, default **100.0** (0x42c80000) [H, ctor 0x367250]; A.12 |
+| `Induced_Flinch_Intensity` | projectile / explosion type +0x20e4 | float, default **1.0** [H, ctor 0x367250]; A.12. The same ctor run also sets +0x20e8 0.25, +0x20ec 0.5, +0x20f0 3.0, +0x20f4 1.0 (the flinch blend / hold / interval fields of A.7) |
 | `Unit_Presence_Relaxation_Time` | GameConstants +0x117a8 | float s, default 5.0 |
 | `IMPOSING_PRESENCE` / `IDLE` | behaviour lists | the presence unit needs IMPOSING_PRESENCE (0x40); the affected unit needs IDLE (7) |
+
+**`Allow_Idle_When_Moving` gate (R3f t06)** [H unless tagged]. Type +0x85 has exactly two readers, both on the
+**affected** unit's own type: the entry insert 0x62e450 and the first test of the IDLE service 0x62e570 (no other
+`type + 0x85` read in the decompilation [M: aliased reads not searched]). Both test the same thing: the unit has a
+locomotor (behaviour 1), +0x85 is 0, and the locomotor's vf +0x110 returns true. Then 0x62e450 writes no entry and
+0x62e570 clears the map and returns (see "Maintenance in the IDLE service" above). With +0x85 = 1 neither test fires: entries are written and aged
+while moving, and the rest of the IDLE service runs as for a standing unit.
+- **"Moving" is "has movement orders", not "speed > 0".** vf +0x110 is 0x5abbf0 = vf +0x1c0(this, 0) on every
+  ground locomotor checked. `WalkLocomotorBehaviorClass` (vftable 0x8ad798) and the team container locomotor
+  (0x8a3630) use 0x42cbd0: false without a movement record (obj +0xa8), otherwise 0x5569f0(kind 0) = the record's
+  move list (+0x138..+0x140, 0x70-byte entries) is not empty [M: the decompiler drops the arguments of that call].
+  `LandTeamInfantryLocomotorBehaviorClass` (0x8af8d0, squad members) uses 0x62c980 instead: the **team container's**
+  (obj +0x2b0) locomotor vf +0x1c0(…, 0), so a squad member counts as moving while its squad has a move order.
+- No locomotor means never moving.
 
 **Vanilla data** (FoC and EaW `GROUNDINFANTRY.XML` identical; data):
 
