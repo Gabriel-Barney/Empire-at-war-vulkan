@@ -35,17 +35,15 @@ void MovementSystem::special_idle(Unit& u) {
     u.sm.airborne = k == LocomotorKind::Flying || k == LocomotorKind::LandBomber;
 }
 
-// S7 t06: the Uses_Multiple_Locomotors swap 0x3a9910 (MOVEMENT §3.1). The behaviour factory builds the other locomotor
-// (0x4c3520), so its state starts idle; the order is dropped (to the secondary: the coordinator order is saved and the
-// unit leaves its coordinator [M: the saved order is not re-issued by the port]). [port] land only (every vanilla user
-// is a land unit; the jetpack is land-only). Engine audio loops off (STATION_HANGARS_SOUND §3.3) is the host's.
+// S7 t06 / t14: the Uses_Multiple_Locomotors swap 0x3a9910 (MOVEMENT §3.1.1) - a set, not a toggle. [port] land only
+// (every vanilla user is a land unit; the jetpack is land-only); JETPACK secondaries only (UnitDesc::
+// has_secondary_locomotor), so "on the secondary" (retail: the active locomotor is a JetPack, vf96 = 0) is on_secondary.
+// Engine audio loops off (STATION_HANGARS_SOUND §3.3) and the weapon behaviours (step 6) are the host's.
 bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
     if (cfg_.mode != MoveMode::Land || !u.d.uses_multiple_locomotors || !u.d.has_secondary_locomotor) return false;
-    if (u.on_secondary == secondary) return true;
-    u.on_secondary = secondary;
-    u.d.locomotor = secondary ? u.d.secondary_locomotor : u.primary_locomotor;
-    u.has_goal = false;
-    u.need_path = false;
+    if (u.on_secondary == secondary) return true;  // step 2: already there
+    // Both directions: the new locomotor is built and attached; the path stack's content belongs to the old one
+    // ([port] the jetpack's timed path is not a land path and the reverse, so a kept goal is re-planned).
     u.m.path.clear();
     u.m.next = 0;
     u.m.escape_until = 0;
@@ -55,17 +53,63 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
     u.turning = false;
     u.wps.clear();
     u.path_lag = 0.0f;
-    u.in_formation = false;
-    u.jiggle = V2{};
-    u.formation_speed = 3.0e38f;  // alone (the Unit defaults)
-    u.speed_cap = 3.0e38f;
-    u.hold_until = 0;
-    u.nudge_frames = 0;
-    u.blocked_frames = 0;
-    u.waits = 0;
-    special_idle(u);
-    configure(u);  // [M] Alternate_Max_Speed / _Rate_Of_Turn while on the secondary
+    u.on_secondary = secondary;
+    if (secondary) {
+        // Step 4, before the locomotor changes: the unit leaves its coordinator and Move_To re-issues its current order
+        // block to it alone (no coordinator: a move to its own position, i.e. hold). [port] no stagger draw for the
+        // one-unit Move_To ([M] in the spec); a pending start frame is kept.
+        u.in_formation = false;
+        u.jiggle = V2{};
+        u.formation_speed = 3.0e38f;  // alone
+        u.large_hover_index = -1;
+        u.speed_cap = 3.0e38f;
+        u.hold_until = 0;
+        u.nudge_frames = 0;
+        u.blocked_frames = 0;
+        u.replans = 0;
+        u.waits = 0;
+        if (u.has_goal) {
+            u.need_path = true;
+        } else {
+            u.need_path = false;
+            u.goal = u.m.pos;
+        }
+        // Steps 5-6: JetPack Initialise (0x640ef0): conform / commit at the current position, pack state := 0 (None).
+        u.d.locomotor = u.d.secondary_locomotor;
+        u.sm = SpecialMotion{};
+        u.sm.state = LocoState::None;
+        u.sm.dest = u.goal;
+    } else {
+        // Step 7: the order is left alone (goal, facing, formation, start frame); [port] a kept goal is re-planned as a
+        // land path. Walk Initialise (0x61dea0): conform / commit at the current position, pack state := 0x16.
+        u.d.locomotor = u.primary_locomotor;
+        const V2 goal = u.goal;
+        special_idle(u);  // the primary's stopped state (Walk 0x16; a Bike primary: 0x25)
+        u.goal = goal;
+        if (u.has_goal) {
+            u.need_path = true;
+            u.sm.dest = goal;
+        }
+    }
+    if (height_) u.z = terrain(u.m.pos);  // conform
     return true;
+}
+
+bool MovementSystem::jet_alternates(const Unit& u) const {
+    return cfg_.mode == MoveMode::Land && u.d.locomotor == LocomotorKind::Jetpack && locomotor_airborne_kind(u.d.locomotor, u.sm.state);
+}
+
+float MovementSystem::loco_max_speed(const Unit& u) const {
+    if (!jet_alternates(u)) return u.lp.max_speed;
+    // 0x371060: the §3.4 chain 0x376990 on Alternate_Max_Speed (no team-minimum cap); [port] the speed override
+    // replaces the base as it does for Max_Speed (configure).
+    const float base = u.speed_override >= 0.0f ? u.speed_override : u.d.alt_max_speed;
+    return std::max(base, 0.0f) * cfg_.constants.land_speed_multiplier * u.speed_factor;
+}
+
+float MovementSystem::loco_turn_rate(const Unit& u) const {
+    if (!jet_alternates(u)) return u.lp.turn_rate;
+    return std::max(u.d.alt_turn_rate, 0.0f) * cfg_.constants.land_speed_multiplier;  // 0x370fd0
 }
 
 bool MovementSystem::use_secondary_locomotor(ObjectId id, bool secondary) {
@@ -157,7 +201,10 @@ bool MovementSystem::land_spot_free(const Unit& u, V2 p) const {
 // ---------------------------------------------------------------- §4.3 JETPACK_LOCOMOTOR (vf6 0x641910)
 void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
     SpecialMotion& s = u.sm;
+    // §3.1.1: the take-off turn (0x10, 0x642740) uses Max_Rate_Of_Turn directly ([M] pack +0xe8 is not modelled), not
+    // the alternate turn rate.
     const float rate = u.lp.turn_rate;
+    bool stopped = false;  // in 0x16 at the end of this service (0x16 itself, or 0x13 no path / 0x14 re-dispatching)
     auto aim_heading = [&]() {
         V2 aim = u.wps.empty() ? u.goal : u.wps.back().pos;
         for (const SpaceWaypoint& w : u.wps)
@@ -169,7 +216,7 @@ void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
         return length_sq(d) > 0.0f ? heading_deg(d) : u.m.yaw;
     };
     switch (s.state) {
-        case LocoState::None:
+        case LocoState::None:  // vf6 case 0: no current path -> 0x16 and return (the swap back is one service later)
             if (u.has_goal && !u.need_path && !u.wps.empty()) s.state = LocoState::WalkStartTurn;
             else if (!u.has_goal) s.state = LocoState::WalkStopped;
             break;
@@ -211,10 +258,13 @@ void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
             s.state = LocoState::WalkMoving;
             break;
         case LocoState::WalkMoving: {  // 0x13 (0x6420e0)
-            if (!u.following || u.wps.size() < 2) {  // no movement
+            if (!u.following || u.wps.size() < 2) {  // no current path: 0x16, swap back in this service
                 s.state = LocoState::WalkStopped;
+                stopped = true;
                 break;
             }
+            const V2 pos0 = u.m.pos;
+            const float yaw0 = u.m.yaw;
             const SpacePose p = air_follow(u, frame);
             u.z = air_altitude(u, frame);
             const float now = static_cast<float>(frame - u.path_start + 1) + u.path_lag;
@@ -245,6 +295,10 @@ void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
                 }
             }
             if (p.done) s.state = LocoState::WalkEndMove;
+            // §3.1.1: a frame whose follower step left position and orientation unchanged -> 0x16 (the path is not done);
+            // the swap back follows one service later, possibly in the air [M whether it occurs in play]. [port] not at
+            // speed factor 0, the port's stand-in for a suspended locomotor (stun / immobilise: retail skips the service).
+            else if (u.m.pos == pos0 && u.m.yaw == yaw0 && u.speed_factor > 0.0f) s.state = LocoState::WalkStopped;
             break;
         }
         case LocoState::WalkEndMove: {  // 0x14 (0x641df0): landing sequence
@@ -265,6 +319,7 @@ void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
                     u.has_goal = false;
                     u.arrived = true;
                     u.wps.clear();
+                    stopped = true;  // FlyLandDrop finished: 0x16 and the swap back in this service
                 }
             } else {
                 anim_play(u, kAnimFlyLand, false);  // FlyIdle (or nothing) playing -> FlyLand
@@ -272,15 +327,17 @@ void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
             }
             break;
         }
-        case LocoState::WalkStopped:  // 0x16
+        case LocoState::WalkStopped:  // 0x16 (every service): speed 0, idle, then the swap back
         default:
             u.m.speed = 0.0f;
             if (height_) u.z = terrain(u.m.pos);
+            stopped = s.state == LocoState::WalkStopped;
             break;
     }
-    // S7 t06: stopped on the ground (after the landing, a stop or a failed plan), a multi-locomotor unit swaps back to
-    // its primary locomotor (0x641910 calls 0x3a9910 [M: the exact state was not traced]).
-    if (u.on_secondary && s.state == LocoState::WalkStopped && !u.need_path) swap_locomotor(u, false);
+    // S7 t14 (§3.1.1): JetPack vf6 in state 0x16 calls 0x3a9910(obj, system, 1) with no other condition. [port] the
+    // need_path guard: not while a re-plan is pending (the port plans in plan_land after the order, so a re-issued move
+    // - the re-land move 0x640880, a host order - has no path yet).
+    if (stopped && u.on_secondary && !u.need_path) swap_locomotor(u, false);
 }
 
 // ---------------------------------------------------------------- FLYING_LOCOMOTOR (vf6 0x63d7f0; FIGHTER_FLYING §6)

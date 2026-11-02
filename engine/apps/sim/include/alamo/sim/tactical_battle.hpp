@@ -261,9 +261,12 @@ public:
     // order. A unit that is idle with an empty queue starts a queued order at once. See "order queue" below.
     // `move_flags` (P1_DOUBLE_CLICK_MOVE.md §3.2): the move event's 8-bit flags, copied unchanged into MoveOrder::flags
     // (0x04 player order, 0x01 attack-move, 0x02 guard-move, 0x08 waypoint append, 0x80 double-click); AI / Lua moves 0.
+    // `switch_locomotor` (S7 t10, MOVEMENT §3.1.1 / §6.2): the MoveToPosition 1-bit field. The units with
+    // Uses_Multiple_Locomotors swap to their secondary (jetpack) locomotor first (MoveOrder::switch_locomotor; a queued
+    // order swaps them at once and queues the move). Parity only: no FoC sender sets it.
     commands::RejectReason order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x, float y,
                                       SimRng& rng, float facing_deg = tactical::movement::kNoFacing, bool attack_move = false,
-                                      bool queued = false, uint8_t move_flags = 0);
+                                      bool queued = false, uint8_t move_flags = 0, bool switch_locomotor = false);
     // Facing event (id 20, P1_DOUBLE_CLICK_MOVE.md §2.2: a land drag that started on a selected unit; rotate only) [port:
     // MovementSystem has no turn-in-place order]: one single-unit move per eligible movable unit (selection order) to its
     // own position with final facing `facing_deg`; attack orders and order queues are kept.
@@ -894,7 +897,7 @@ private:
     void advance_queues(TacticalMode& mode, SimRng& rng);
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
     void exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng, float facing_deg,
-                   bool attack_move, uint8_t flags = 0);
+                   bool attack_move, uint8_t flags = 0, bool switch_locomotor = false);
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;

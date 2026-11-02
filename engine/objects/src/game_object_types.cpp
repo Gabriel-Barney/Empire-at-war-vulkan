@@ -42,8 +42,9 @@ const Def kDefaults[] = {
     {"Space_Override_Population_Value", "-1"}, {"Land_Override_Population_Value", "-1"},
     {"Select_Box_Z_Adjust", "-1.0"}, {"Tactical_Sell_Percentage", "0.5"}, {"Spawned_Squadron_Delay_Seconds", "5.0"},
     {"Projectile_Fire_Pulse_Count", "1"}, {"Projectile_Fire_Pulse_Delay_Seconds", "1.0"},
-    {"Projectile_Max_Flight_Distance", "50.0"}, {"Alternate_Max_Speed", "1.0"}, {"Max_Thrust", "0.015"},
-    {"Max_Rate_Of_Roll", "2.0"}, {"Bank_Turn_Angle", "70.0"}, {"Max_Lift", "0.8"}, {"Stopping_Distance", "2.0"},
+    {"Projectile_Max_Flight_Distance", "50.0"}, {"Alternate_Max_Speed", "1.0"}, {"Alternate_Max_Rate_Of_Turn", "2.0"},
+    {"Max_Thrust", "0.015"}, {"Max_Rate_Of_Roll", "2.0"}, {"Bank_Turn_Angle", "70.0"}, {"Max_Lift", "0.8"},
+    {"Stopping_Distance", "2.0"},
     {"Movement_Animation_Speed", "0.25"}, {"Walk_Animation_Speed", "0.25"}, {"Crouch_Animation_Speed", "0.25"},
     {"Dense_FOW_Reveal_Range_Multiplier", "0.5"},
     // Enums whose constructor value is -1 ("none"); kept as FieldValue::i = -1 with no name.

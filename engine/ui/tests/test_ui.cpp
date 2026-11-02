@@ -791,7 +791,7 @@ void test_orders() {
         CHECK(out.size() == 1 && out[0].type() == commands::EventType::MoveToPosition);
         if (out.size() == 1) {
             CHECK(out[0].u("x") == qcode(gp.x) && out[0].u("y") == qcode(gp.y) && out[0].u("z") == qcode(0.0f));
-            CHECK(out[0].u("flags") == 0x04 && out[0].u("cancel_activity") == 0);
+            CHECK(out[0].u("flags") == 0x04 && out[0].u("switch_locomotor") == 0);
             // canonical payload bytes: 5 fields x u32 (x, y, z, flags, cancel)
             std::vector<uint8_t> bytes;
             commands::encode_payload(out[0], bytes);
