@@ -797,6 +797,69 @@ void test_linked_battle_gates() {
     std::printf("linked battle gates: local player not in a queued conflict -> AI commands run; in one -> dropped\n");
 }
 
+// a1j t05 (A1_READINGS §31.7): GalacticSim::update freezes the mode frame on the paused query 0x4b2360, so the story
+// block freezes it like the pause counter. 0x2be640 gates the hero spawn lists (0x3fc750) on the counter alone: they
+// still run under the story block.
+void test_story_block_freezes_frame() {
+    World w({{pEmpire, rA, tInfantry}, {pEmpire, rB, tInfantry}, {pUnder, rB, tInfantry}, {pUnder, rC, tFrigate}},
+            true);
+    objects::ObjectHandle hero{};
+    for (objects::ObjectHandle h : w.sim.planets()[rA].surface)
+        if (w.store.owner(h) == pEmpire) hero = h;
+    CHECK(w.store.exists(hero));
+    // Linked battle pending, the local player in no queued conflict: not frozen.
+    CHECK(w.sim.queue_linked_battle() && !w.sim.story_block());
+    int32_t f = w.sim.frame();
+    w.sim.update();
+    CHECK(w.sim.frame() > f);
+
+    // The local Empire defends a queued land conflict: the story block freezes the frame.
+    std::vector<objects::ObjectHandle> at_b;
+    for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
+        if (w.store.owner(h) == pUnder) at_b.push_back(h);
+    CHECK(w.sim.launch_units(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.sim.invade(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.sim.story_block() && w.sim.paused());
+    // A respawn due now (0.01 s rounds to 0 frames): serviced under the story block although the frame stays.
+    CHECK(w.sim.schedule_hero_respawn(hero, rA, 0.01f) && w.sim.respawns_pending(rA).size() == 1);
+    f = w.sim.frame();
+    w.sim.update();
+    CHECK(w.sim.frame() == f);
+    CHECK(w.sim.respawns_pending(rA).empty());
+    // (The bare ConflictManager serviced the queued conflict in that tick's tail; skipping the state machines under the
+    // block is the host gate's job, engine/apps/sim campaign_battles.cpp, tested in alamo_sim_battles_tests.)
+
+    // The flag cleared, the pause counter raised: frozen, and the spawn lists wait.
+    w.sim.clear_linked_battle();
+    CHECK(!w.sim.story_block());
+    w.sim.push_pause();
+    f = w.sim.frame();
+    CHECK(w.sim.schedule_hero_respawn(hero, rA, 0.01f) && w.sim.respawns_pending(rA).size() == 1);
+    w.sim.update();
+    CHECK(w.sim.frame() == f && w.sim.respawns_pending(rA).size() == 1);
+    w.sim.pop_pause();
+    std::printf("story block: frame frozen, hero spawn lists serviced; pause counter: frozen, spawn lists wait\n");
+}
+
+// a1j t05: without the story block (no linked battle record) a queued conflict of the local player leaves the frame
+// running, and the frame stops as soon as the record is queued.
+void test_story_block_not_frozen() {
+    World w({{pEmpire, rB, tInfantry}, {pUnder, rB, tInfantry}, {pUnder, rC, tFrigate}}, true);
+    std::vector<objects::ObjectHandle> at_b;
+    for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
+        if (w.store.owner(h) == pUnder) at_b.push_back(h);
+    CHECK(w.sim.launch_units(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.sim.invade(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.cm->in_queued_conflict(pEmpire) && !w.sim.story_block() && !w.sim.paused());
+    const int32_t f = w.sim.frame();
+    CHECK(w.sim.queue_linked_battle() && w.sim.story_block());
+    w.sim.update();
+    CHECK(w.sim.frame() == f);
+    w.sim.clear_linked_battle();
+    CHECK(!w.sim.paused());
+    std::printf("story block: no linked record -> not paused; record queued -> frame frozen\n");
+}
+
 // OI galactic: TACTICAL_GAPS 4.5 retreat finders, 4.2 land split, 4.8 corruption missions / super-weapon retreat,
 // STRATEGIC_GAPS 1.1 survival-roll listener.
 void test_oi_transitions() {
@@ -1027,6 +1090,8 @@ int main() {
     test_land_invasion();
     test_invade_event_gates();
     test_linked_battle_gates();
+    test_story_block_freezes_frame();
+    test_story_block_not_frozen();
     test_p4_set_retreating();  // P4 sim
     test_cargo_losses();       // BT §4.4 loss records for carried units
     test_p4_resolve_battle();  // P4 sim

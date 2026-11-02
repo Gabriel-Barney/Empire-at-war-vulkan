@@ -1595,6 +1595,59 @@ void test_linked_battle(const Data& d) {
     }
 }
 
+// a1j t05 (A1_READINGS §31.7, BT §1.4 step 2): 0x2be640 skips the space/land state machines while the story block holds
+// (a linked battle record waits and the local player is in a queued conflict); the paused query 0x4b2360 freezes the
+// galactic frame. The record is raised by hand here (no story), the Underworld fleet flies C -> B against the human
+// Empire: its conflict stays queued, nothing is voted, fought or auto-resolved and the frame stands still until the flag
+// is cleared; then the conflict runs as usual.
+void test_story_block_host(const Data& d) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 300;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (uf.empty()) return;
+    CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    uint64_t t = 0;
+    // [port] the host releases a flag that has no conflict to wait for at its battle hook, so it is raised again before
+    // every tick until the fleet's conflict holds it.
+    for (; t < 2000 && !gs->story_block(); ++t) {
+        if (!gs->linked_battle_pending()) gs->queue_linked_battle();
+        host.tick_once();
+    }
+    CHECK(gs->story_block() && battles.conflicts().space_queue().size() == 1);
+    const int32_t frozen = gs->frame();
+    for (int i = 0; i < 200; ++i) host.tick_once();
+    CHECK(gs->frame() == frozen && gs->paused());
+    CHECK(battles.conflicts().state() == galactic::ConflictState::Idle && battles.conflicts().space_queue().size() == 1);
+    CHECK(!battles.battle() && battles.battles_fought() == 0 && battles.conflicts().log().empty());
+    gs->clear_linked_battle();
+    bool started = false;
+    for (int i = 0; i < 600 && !started; ++i) {
+        host.tick_once();
+        started = battles.battle() != nullptr;
+    }
+    CHECK(started && gs->frame() > frozen);
+    std::printf("  story block: queued at tick %" PRIu64 ", frame %d frozen for 200 ticks, battle started after the flag cleared\n",
+                t, frozen);
+}
+
 void test_story_battle(const Data& d) {
     const fs::path x = d.root / "Data/XML";
     write_file(x / "Story_Plots_S10.xml", "<Story_Mode_Plots><Active_Plot>Story_S10.xml</Active_Plot></Story_Mode_Plots>\n");
@@ -5542,6 +5595,8 @@ int main(int argc, char** argv) {
     test_retreat(*d);
     std::printf("auto-resolve only\n");
     test_auto_only(*d);
+    std::printf("story block freezes the conflict state machines and the galactic frame (a1j t05)\n");
+    test_story_block_host(*d);
     std::printf("human orders + order queue (integration fixes, [port: Gabriel])\n");
     test_orders_and_queue(*d);
 #ifdef ALAMO_SIM_HAVE_STORY

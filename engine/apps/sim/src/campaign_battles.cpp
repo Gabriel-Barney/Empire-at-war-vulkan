@@ -8,6 +8,9 @@
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/sim/sim_anim.hpp"  // L1/S4 wave 2a story hookup (SimAnimation::world)
 #endif
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+#include "alamo/lua/players.hpp"  // a1j t07: TacticalGalacticContext
+#endif
 #include "save_io.hpp"  // N1 stage 2
 
 namespace alamo::sim {
@@ -20,27 +23,41 @@ public:
     bool on_invade(int32_t attacker, PlanetIndex planet, std::span<const objects::ObjectHandle> units) override {
         return b_->cm_->on_invade(attacker, planet, units);
     }
-    bool in_queued_conflict(int32_t player) const override { return b_->cm_->in_queued_conflict(player); }
+    // 0x2b0350: `player` is attacker or defender of a record in either queue. a1j t05 [port]: a corruption mission's own
+    // conflict does not count - it is the battle record, which the original keeps out of the queues until it starts
+    // (0x52bf50 -> 0x28f590 clears the flag before queueing it), so it never feeds the story block.
+    bool in_queued_conflict(int32_t player) const override {
+        for (const auto* q : {&b_->cm_->space_queue(), &b_->cm_->land_queue()})
+            for (const galactic::ConflictInfo& c : *q)
+                if ((c.attacker == player || c.defender == player) && !b_->mission_record(c)) return true;
+        return false;
+    }
     void on_service_tail() override {
-        // BT §1.4 step 2: in single player, while a story / tutorial sequence is active and the local (human) player is
-        // attacker or defender of any queued conflict, nothing of the conflict processing runs this tick.
-        if (b_->opt_.story_sequence_active && b_->opt_.story_sequence_active() && human_involved()) return;
+        // BT §1.4 step 2 (0x2be640, a1j t05): while the story block holds (GalacticSim::story_block: a linked battle record
+        // waits and the local player is attacker or defender of a queued conflict) nothing of the conflict processing runs
+        // this tick. [port] Not while a corruption mission's conflict is queued: the original starts that record at once,
+        // the port runs it through the queue, so blocking would hold it forever.
+        GalacticMode* g = b_->host_->galactic_mode();
+        if (g && g->sim() && g->sim()->story_block() && !b_->mission_queued()) return;
         b_->cm_->on_service_tail();
     }
 
 private:
-    bool human_involved() const {
-        GalacticMode* g = b_->host_->galactic_mode();
-        if (!g || !g->sim()) return false;
-        const auto& ps = g->sim()->players();
-        auto human = [&ps](int32_t p) { return p >= 0 && static_cast<size_t>(p) < ps.size() && ps[static_cast<size_t>(p)].human; };
-        for (const auto* q : {&b_->cm_->space_queue(), &b_->cm_->land_queue()})
-            for (const galactic::ConflictInfo& c : *q)
-                if (human(c.attacker) || human(c.defender)) return true;
-        return false;
-    }
     CampaignBattles* b_;
 };
+
+bool CampaignBattles::mission_record(const galactic::ConflictInfo& c) const {
+    for (const CorruptionMission& m : corruption_queued_)
+        if (m.planet == c.planet && m.player == c.attacker && m.kind == c.kind) return true;
+    return false;
+}
+
+bool CampaignBattles::mission_queued() const {
+    for (const auto* q : {&cm_->space_queue(), &cm_->land_queue()})
+        for (const galactic::ConflictInfo& c : *q)
+            if (mission_record(c)) return true;
+    return false;
+}
 // --- end battle host ---
 
 CampaignBattles::MapLoader CampaignBattles::file_map_loader(const FileProvider& files) {
@@ -105,10 +122,8 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
     };
     cm_->attach();
     // --- battle host (BT pass): optional S10 seams (campaign_battles.hpp CampaignBattleOptions "battle host") ---
-    if (opt_.story_sequence_active) {  // BT §1.4 step 2: the gate forwards to the manager unless the story block holds
-        gate_ = std::make_unique<ConflictGate>(*this);
-        g->sim()->set_conflict_hooks(gate_.get());
-    }
+    gate_ = std::make_unique<ConflictGate>(*this);  // BT §1.4 step 2: the manager runs unless the story block holds (a1j t05)
+    g->sim()->set_conflict_hooks(gate_.get());
     // BT §1.6 story lock: a locked human-involved conflict is fought. Source: the option, else the running story
     // (StorySession::autoresolve_locked); unlocked = the ConflictConfig answer (same as no decide callback).
     cm_->decide = [this](const galactic::ConflictInfo& c) {
@@ -666,6 +681,7 @@ void CampaignBattles::push_battle(SimHost& host) {
 #endif
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     ai_begin(host, m);  // A1 stage 2
+    galactic_context_begin(kind);  // a1j t07
 #endif
     register_battle_chunks();  // N1 stage 2: the running battle's save chunks
 }
@@ -1265,7 +1281,8 @@ void CampaignBattles::story_fog_reward(bool has_param, int32_t value) {
 // LAND, is land; EITHER is refused), Param3 attacker faction, Param4 map, Param5 defender faction, Param8 sandbox)
 // starts its battle at once (ConflictManager::start_linked, BT §2.9.3: queued at the front, no validation / decide;
 // not sandbox = no galactic units, the map and the mission plots supply them). While another conflict is active the
-// entry waits for a later hook with the story flag set [port: the original waits only on the pending-battle banner]. Not modelled (BT §2.9.9):
+// entry waits for a later hook with the story flag set [port: the original waits only on the pending-battle banner],
+// except that under the story block the active conflict gives way (a1j t05). Not modelled (BT §2.9.9):
 // Param6 forced type, Param9-11 presentation, Param12 post-battle resolution, Param13 banner, Param14 flagship split,
 // the last-invade unit vector (a sandbox land record has no units).
 void CampaignBattles::story_linked(SimHost& host) {
@@ -1292,8 +1309,11 @@ void CampaignBattles::story_linked(SimHost& host) {
         const StoryLinkedTactical& l = linked[story_linked_];
         if (l.params.size() < 3) continue;
         if (cm_->state() != galactic::ConflictState::Idle) {  // another conflict is active: the record waits (flag set,
-            gs.queue_linked_battle();                          // REMAINING_GAPS 6.4) and is retried at a later hook
-            return;
+            gs.queue_linked_battle();                          // REMAINING_GAPS 6.4) and is retried at a later hook.
+            // a1j t05 (A1_READINGS §31.7): while the story block holds, that conflict is frozen (0x2be640), so unless its
+            // pending vote is still open (0x28f590 step 1) it gives way and the record starts now (the state-3 path:
+            // state -1, then 0x28f590). Without the block the record keeps waiting [port: the original takes over there too].
+            if (!gs.story_block() || cm_->vote_open() || !cm_->yield_to_linked()) return;
         }
         PlanetIndex planet = kInvalidPlanet;
         const auto& names = gs.map().planets.name;
@@ -1331,6 +1351,47 @@ void CampaignBattles::story_linked(SimHost& host) {
     }
 }
 // --- end L1/S4 wave 2b ---
+
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+// a1j t07 (A1_READINGS §38): the parent galaxy of the battle's AI scripts. Target = the battle's conflict planet (0x28a7a0 ->
+// 0x28aa50: the parent's head conflict; a map battle has none). Releases (0x6147d0 [H]) draw on the player's land credit
+// transfer: amount < 0 or not below what is left (saved - released) = all of it; Add_Credits with aiGain 0 (no
+// Credit_Multiplier); released += amount, capped at saved. [port] A player without a transfer releases nothing.
+void CampaignBattles::galactic_context_begin(ModeKind kind) {
+    if (!ai_ || !opt_.tactical_ai || !opt_.galactic_resolver) return;
+    const ai::TokenResolver* res = opt_.galactic_resolver();
+    GalacticMode* g = host_->galactic_mode();
+    if (!res || !g || !g->sim()) return;
+    galactic::GalacticSim* gs = g->sim();
+    lua::TacticalGalacticContext c;
+    c.source.equations = opt_.tactical_ai->equations;
+    c.source.resolver = res;
+    const PlanetIndex planet = pending_req_.info.planet;
+    c.target = !direct_ && planet < gs->planets().size() ? static_cast<int32_t>(planet) : -1;
+    c.land = kind == ModeKind::Land;
+    if (opt_.has_galactic_ai) {
+        c.has_galactic_ai = opt_.has_galactic_ai;
+    } else {
+        c.has_galactic_ai = [gs](int32_t p) { return p >= 0 && static_cast<size_t>(p) < gs->players().size() && gs->players()[static_cast<size_t>(p)].ai; };
+    }
+#ifdef ALAMO_SIM_HAVE_AI_TACTICAL
+    c.release_credits = [this, gs](int32_t p, double amount) {
+        galactic::econ::CreditAccount* acct = gs->credit_account(p);
+        if (!acct) return;
+        for (CreditTransfer& ct : credits_) {
+            if (ct.player != p) continue;
+            const float left = ct.state.saved - ct.state.released;
+            float a = static_cast<float>(amount);
+            if (a < 0.0f || left <= a) a = left;
+            galactic::econ::add_credits(*acct, a, false, 1.0f);
+            ct.state.released = std::min(a + ct.state.released, ct.state.saved);
+            return;
+        }
+    };
+#endif
+    ai_->world().player_world().set_tactical_galactic(std::move(c));
+}
+#endif
 
 // --- L1 systems (owner: tactical-systems agent): lua::TacticalScriptHooks / RemainingScriptHooks answered by the
 // running battle's L1 systems (tactical_battle.hpp "L1 systems"). Handles are the battle mode's primary store. ---
