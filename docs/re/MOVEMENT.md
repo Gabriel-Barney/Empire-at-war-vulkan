@@ -1028,6 +1028,63 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
   animation ends; a deploy refused before Walk vf +0x118 runs (gate 0x3a1ce0, incl. locomotor vf +0x2b0) raises
   nothing. See AI_TACTICAL §7.3.3 part 3.
 
+**Turret recentre around deploy (RE, 2026-11-02)** [H unless tagged]. The turret state is in the targeting data pack
+TD = obj +0xf0:
+- current angles +0x48 / +0x4c / +0x50 and target angles +0x54 / +0x58 / +0x5c (the three components of
+  `Turret_Rest_Angle`: x, elevation, yaw);
+- +0x6c is the time the turret went idle, in seconds (frame / FPS);
+- +0x70 is the "idle hold started" byte;
+- +0xf6 is the "aiming at a target" byte.
+
+Rest angle R of the type: `Turret_Rest_Angle` (+0x5b4), or `Turret_Deployed_Rest_Angle` (+0x5c0) when the type
+`Deploys` (+0xd1) and the unit is deployed / deploy-pending (0x39a390) or **Deploying** (0x39a400: Walk state 0x18).
+- **Motion** (0x631210, run by the TURRET service 0x632270, behaviour interval 1 = every frame):
+  - Per frame, the elevation (+0x4c) moves linearly toward +0x58 by at most `Turret_Rotate_Speed` (+0x5a8,
+    **degrees per frame**, no frame-time scaling).
+  - The yaw (+0x50) moves by the shortest wrapped difference to +0x5c, by at most the same step. It is then wrapped
+    and clamped to ±`Turret_Rotate_Extent_Degrees` (+0x5a0; deployed: `Deployed_Turret_Rotate_Extent_Degrees`
+    +0x5d0).
+  - Component +0x48 never moves.
+  - The bone gets yaw (and elevation unless `Turret_XY_Only`).
+- **Idle return:** while not aiming (+0xf6 = 0) and current ≠ R:
+  - on the first such frame (+0x70 = 0) the turret holds: target := current, +0x6c := now;
+  - when now − +0x6c > `Turret_Rotate_To_Rest_Delay_Sec` (+0x5cc, constructor default **2.0 s**, no FoC unit sets
+    it), the service sets target := R and +0x6c := 0, and the turret turns to R.
+  - At R, +0x70 is cleared.
+- **0x6319d0(turret, 0) = forced recentre:** +0xf6 := 0, target := R (by the rule above), +0x6c := 0. It skips the
+  2-s delay. If +0x70 was 0, the next turret service still freezes the target for that one frame; the Walk code
+  calls 0x6319d0 again every frame [M: one lost frame, depends on behaviour order].
+- **"At rest" (0x386170)** = every component of current (+0x48..+0x50) equals **`Turret_Rest_Angle`** within 0.0001,
+  with negative values first wrapped by +360. The Walk tests always compare against the **undeployed** rest angle,
+  even in state 0x18.
+- **Where it gates:**
+  - `Deploy(true)` from state 0/0x16 starts the deploy animation **at once**, with no turret wait.
+  - The turret test applies:
+    - when reversing out of 0x1A: not at rest → straight to 0x19 + signal 0x29;
+    - in state 0x18 only when the current animation is not the deploy clip (it was overridden): wait at rest, else
+      0x6319d0;
+    - in state 0x1A before the undeploy clip starts: every undeploy waits until the turret is back at
+      `Turret_Rest_Angle`, then plays the clip.
+  - Wait ≈ ceil(max(|Δyaw| shortest, |Δelev|) / `Turret_Rotate_Speed`) frames, e.g. AT-AT (3°/frame, ±55°) ≤ 19
+    frames; AT-AA 14°/frame.
+- **Units (FoC, `Deploys` + TURRET, all WALK_LOCOMOTOR):**
+
+  | unit | `Turret_Rotate_Speed` (°/frame) | `Turret_Rotate_Extent_Degrees` |
+  |---|---|---|
+  | AT_AT_Walker | 3 | 55 |
+  | Veers_AT_AT_Walker | 2 | 55 |
+  | AT_AA_Walker | 14 | 360 |
+  | SPMAT_Walker | 3 | 360 |
+  | MPTL | 4 | 360 |
+  | HAV_Juggernaut | 5 | 200 |
+  | Gallofree_HTT_Transport | 5 | 360 |
+  | MAL_Rocket_Vehicle | 8 | 30 (deployed 360) |
+
+  MAL_Rocket_Vehicle also `Deploys`, at `Deployment_Anim_Rate` 0.5; it is missing from the list above. Only SPMAT
+  sets rest angles: rest (0,0,0), deployed rest (0,−45,0).
+  - [M] An SPMAT whose deploy clip is interrupted while in 0x18 would recentre toward the deployed rest (elevation
+    −45) but be tested against (0,0,0), so it would wait until undeployed. Not observed.
+
 ### 3.3 Tick order [H]
 
 GameObjectManager update (`0x2be640`) runs in this order:

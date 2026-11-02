@@ -441,6 +441,27 @@ Correction (S7 t26 RE, 2026-11-02) [H]: the command-57 position row is ids 50, 6
 were listed there before but take command 43 with no position. Which families return an `AbilityBlockStatus`
 and which signals finish it: AI_TACTICAL §7.3.3.
 
+Argument handling per family (0x570a50, second switch; 2026-11-02) [H]. The Lua call always needs exactly 2
+arguments (name + one argument).
+- **Toggle row:** the argument must be a bool, and it gives the mode (on / off) of command 43.
+- **Command 43 with no position** (14 FORCE_WHIRLWIND, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72): the argument
+  is **not read** (any value). Command 43 has mode **on**, position (0,0,0) and target 0x3FFFFF.
+- **Position via 43** (5, 26, 28, 42): the argument must convert to a position (0x4990b0, else "expects a target
+  position"). Command 43 has mode on, that position and target 0x3FFFFF.
+- **17 JET_PACK:** same as position via 43, after 0x397d90(unit, 17) [M: gate]. No dummy.
+- **19 TARGETED_INVULNERABILITY:** the argument must be an object or an AI target with a live object ("expects a
+  target object" / "target object is already dead"). It is **command 43**, not 40: mode on, position = the target's
+  position (obj +0x78), target id = the object's id (obj +0x50).
+- **Command-57 row** (50 RADIOACTIVE_CONTAMINATE, 67 PROXIMITY_MINES, 71 BUZZ_DROIDS, 73 SUMMON, 74 CORRUPT_SYSTEMS):
+  1. the argument must convert to a position;
+  2. a `Dummy_Barrage_Target` is created there for the unit's owner (0x29f810);
+  3. the type's `GUI_Activated_Ability_Name` CRC is checked (else "not hooked up");
+  4. a `TacticalSpecialAbility` command (0x4292e0 / 0x429da0) is built with the dummy as target object and executed
+     (0x429960), the same path as command 40 (pending ability stored, fired when in range).
+
+  Who removes the dummy for these five ids was not traced [L] (Remote_Bomb's toss kills its own, see "Ground
+  marker" below).
+
 It errors with "not hooked up to special ability logic" when a targeted type's record has no matching
 `GUI_Activated_Ability_Name` in the type's `Abilities`.
 

@@ -526,6 +526,30 @@ Defense Units, `Deploys` yes, `WALK_LOCOMOTOR`) therefore:
 - For the implementer: replace the port's terrain factor 1.0 by Land_FOW_Reveal_Range × weather sight modifier of the
   target type; pass the tolerance as the move's threat threshold.
 
+**6. Family dispatch the port needs (RE re-check of 0x570a50, 2026-11-02)** [H]. Argument rules: ABILITIES_HARDPOINTS
+§2.9 "Argument handling per family".
+
+| ids | argument | command | block |
+|---|---|---|---|
+| 50 67 71 73 74 | position (0x4990b0; [M] an object gives its position) | `Dummy_Barrage_Target` at the point, then the command-40 path with the dummy as target | always |
+| 14 23 24 25 35 36 38 44 46 49 57 61 72 | ignored | 43, mode **on**, no position, no target | never |
+| 5 26 28 42 | position | 43, mode on, position | never |
+| 17 JET_PACK | position | 43, mode on, position (no dummy) | when the jump started |
+| 19 TARGETED_INVULNERABILITY | object | 43, mode on, the object's position + id (not command 40) | never |
+| 13 15 … 66 (object list) | object | 40 | when the pending ability was stored |
+| toggle list, 2 DEPLOY | bool | 43, mode = the bool | DEPLOY always; others never |
+
+The port's `engine/lua/src/bind_objects.cpp` `ability_arg_family` (read 2026-11-02) still uses the old §2.9 lists.
+Its block rule `ability_block_rule` already matches. What to change:
+- **Position family:** {14, 17, 23, …, 72} → **{50, 67, 71, 73, 74}**. Today these five fall into Toggle and never
+  spawn the dummy.
+- **14, 23, … 72:** a toggle-on that ignores the argument. Today they need a point and then take the dummy path.
+- **17:** command 43 with the position.
+- **19:** leave the object family. Use a mode-on with the target's position and id instead.
+
+Nothing else in the dispatch is unclear. The open item is who removes the dummy of ids 50 / 67 / 71 / 73 / 74
+[L]. The port's `dummy_lifetime` 900 frames is a [port] stand-in.
+
 ### 7.4 Reinforcement drops (`TF.Reinforce(target [, maxWait])`) [H unless tagged]
 - **Land** (0x6ed5f0): requires the TF to have pending reinforcement types (else "taskforce has no reinforcements", nil). If the player currently cannot reinforce (0x2b03e0 false) it returns an immediately-failing ReinforceBlockStatus (id 0x81a). The target may be an object, an AITargetLocation or a task force (its position). Then:
   - **campaign battle** (galactic parent) 0x6ed9f0: draws the units from the player's galactic reinforcement pool (persistent units in orbit, 0x28aaa0 → +0x40);

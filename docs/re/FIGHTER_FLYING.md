@@ -755,6 +755,12 @@ idle" event from those two state handlers (NoTarget, path complete) instead of d
   word 0x1000001}. So the escort is a **guard of the carrier**: Rr = `Guard_Chase_Range` (first block 0x02), slot goal
   = the carrier's slot; `Autonomous_Move_Extension_Vs_Attacker` added for the carrier's attackers, and while the
   carrier moves only its attackers are answered (A above).
+  Following (2026-11-02, A1_READINGS §33.4.1):
+  - once per 30 frames, when the squadron is within R = min(half its base attack range, `Space_Guard_Range` 750) of
+    the moving carrier, it copies the carrier's path at the carrier's waypoint index;
+  - speed cap = min(squadron formation speed, 2 × the carrier's effective max speed, or 2 × the carrier formation's
+    speed while the carrier moves in a formation);
+  - out of R it re-paths to the carrier when its recorded goal is more than R from the carrier's.
 - Single ships (no `Squadron_Units`): ring placement around P1, spawned flag, listener, locomotor vf +0x290(1)
   [L]; **no move order**.
 - **Carrier dies:** the coordinator's target listener (0x4f77e0, signals 0x10 / 0x1a / 0x2e) converts each formation's

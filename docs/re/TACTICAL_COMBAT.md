@@ -225,7 +225,7 @@ land/space pair selected by this id.
 - **Players visited:** start at `Get_Int(0, nPlayers − 1)` (**one synced draw**) and walk the global player
   list cyclically, skipping:
   - the attacker's own player;
-  - players marked inactive (player +0x68 → +0x108);
+  - players marked inactive (player +0x68 → +0x108) — this is the faction's `Is_Neutral` flag (2026-11-02, §2.10);
   - players whose relation in attacker player +0x370[id] is not "enemy" (1);
   - all players, when the attacker sits inside an `Is_Nebula` object and the fog test 0x35f3b0 applies [M].
 - **Query:** for each visited player, `Scan_Player` (0x5662b0) runs `Query_AABB` on that player's tree with a
@@ -713,6 +713,60 @@ the movement / avoidance code keeps hulls apart (SPACE_AVOIDANCE) [M: not re-tra
 9. The observed run (ships 30–900 units from the station centre) is outside vanilla geometry: from inside the
    station, many target bones fall outside the 130° / 90° vertical cones (Q2), so few shots fire; and every hit
    that resolves to a dummy hardpoint (item 4) lands on the hull.
+
+### 2.10 Player relation table: initial values and readers (RE, 2026-11-02) [H unless tagged]
+**Table.** Player +0x370 is an int per player id; values **0 friendly (self, allies), 1 enemy, 2 neutral**. The player
+constructor fills every entry with **2**. The only writer is 0x288800(player, id, value). Readers: "friendly" =
+value 0 (0x2823c0 / 0x2823e0), "enemy" = value 1 (0x2824d0 / 0x2824f0, Lua `PlayerWrapper.Is_Enemy` 0x603760 →
+0x2824f0). Objects use their owner (capture points and planets their controller): hostile 0x39a450 / 0x39a4e0
+(value 1), allied 0x39a230 (value 0). So a relation-2 player is **neither enemy nor ally**.
+
+**Who sets the values:**
+- **Campaign / galactic** (`Create_Default_Players` 0x293390 → 0x294360; re-run on galactic resume 0x4b2c70). For
+  each ordered pair (row P, column Q), with F = P's faction and G = Q's faction:
+  1. self → 0;
+  2. F or G `Is_Neutral` (faction +0x108) → **2**;
+  3. F = G → 0;
+  4. G's name in F's `Allies` list (+0x3e0) → 0; then G's name in F's `Enemies` list (+0x3f8) → 1 (Enemies wins
+     over Allies; names compared case-insensitively);
+  5. in neither list → no write, the constructor's **2** stays ("undefined feelings" in the log).
+
+  The table can be **asymmetric**. FoC data: everything ↔ Neutral = 2; Rebel / Empire / Pirates / Sarlacc /
+  Underworld / Hutts → Hostile = 1; Hostile → those = 1, except **Hostile → Hutts = 2** (not in Hostile's
+  `Enemies`), while Hutts → Hostile = 1. Hostile's `Allies` = Neutral has no effect (rule 2 comes first).
+- **Skirmish** (0x294fa0 → 0x297300; all three callers pass 0): runs `Create_Default_Players` first, then overwrites
+  every pair: P's faction `Is_Neutral` → 2 towards everyone (**its own entry too**); else self → 0; Q's faction
+  `Is_Neutral` → 2; same faction → 0; otherwise 1. The XML lists are ignored, so Hostile is an enemy of every
+  non-neutral faction both ways.
+- **Skirmish with the map / game record byte +0xb5 set** (0x295cf0 → 0x297470) [M: a team-game setting]: same, but
+  allies are self or the same team id (player +0x54 ≠ −1); faction is not used.
+- **At run time:** Lua `PlayerWrapper.Make_Ally` (0x6046a0) writes 0, `Make_Enemy` (0x604780) writes 1 (one
+  direction: the caller's row only); command 35 `Ally` (0x689be0) toggles 0 ↔ 1 (any other value: no change), shows
+  the allegiance text and re-issues 0x38d730 with no target to the issuer's units [M: clears their attack targets].
+  Nothing writes 2 after start.
+
+**So `Is_Enemy(p, Neutral)` is false** in campaign and skirmish. Unless a script calls `Make_Enemy`, nothing treats
+the Neutral player as an enemy.
+
+**Every combat path reads this one table:**
+- auto-targeting scan (§2.2): only players whose entry is 1, and not `Is_Neutral` factions;
+- `Formation_Attack_Target` / goal-object promotion (§2.8): object owner hostile (1);
+- **human right-click attack:** the order resolver 0x2ad280 returns the attack cursor (5) only when the local
+  player's entry for the object's owner is 1; any other value gives a move / other cursor;
+- projectile segment hits, area damage and stun (§3.4, §3.5, TACTICAL_GAPS): the "enemy players" lists 0x294910 /
+  0x2824f0 (value 1);
+- the turret service drops a target whose owner is not hostile (0x632270 → TARGETING vf +0xd8).
+
+**Task-force `Attack_Move` on a non-hostile object** is **not refused**:
+- `LandTaskForceClass.Attack_Move` (0x6e9440): for a game object or an AI target whose object is hostile to the TF
+  player (0x39a4e0) the goal is the object; otherwise the goal is the object's (or the AI target's) **position**,
+  an attack-move to that point.
+- `SpaceTaskForceClass.Attack_Move` (0x6e4fc0) has no relation test: the object is the goal.
+- In both cases the units move there and auto-engage on the way. They never attack the relation-2 object itself,
+  because §2.8 path B needs relation 1. A neutral capture point is taken by presence, not by attack.
+
+Port: the combat matrix must treat value 2 like 0 for targeting, hits and area damage (neither side attacks). It
+must not refuse an AI `Attack_Move` whose goal is neutral-owned; the move goes to the point.
 
 ---
 
