@@ -550,3 +550,120 @@ jumps the camera to the group (local player only). The group number is drawn ove
 - Rally point visuals; whether `Pixel_Align` and `Snap_Location` change placement.
 - In-game probe (Gabriel): screenshots at 1024×768, 1920×1080 and 1280×1024 of the tactical HUD and
   a load screen would settle §2.4/§3.3.
+
+---
+
+## 9. Skirmish map list: official, custom and mod-folder maps (P4 GUI t06, 2026-11-02)
+
+Answers roadmap p4ui t06. **Single-player feature, not multiplayer.** `IDD_SKIRMISH_STAGING_DIALOG` (handler 0xf2690,
+the only dialog with `IDC_SKIRMISH_START_GAME_BUTTON`) has the two buttons `IDC_SELECT_OFFICIAL_MAPS` /
+`IDC_SELECT_CUSTOM_MAPS` (`TEXT_BUTTON_SELECT_OFFICIAL_MAPS` / `_CUSTOM_MAPS`, GUIDialogs.rc), the game-type list
+`IDC_GAME_TYPE_LIST`, the map list `IDC_STAGING_MAP_LIST` (LBS_SORT), the preview `IDC_IMAGE` and
+`IDC_SCENARIO_DESCRIPTION_TEXT_BOX`. The LAN / internet staging dialogs use the same two buttons and the same catalog,
+but nothing here needs them. The other "custom map" machinery is multiplayer-only and out of scope: the host-option
+keys `HO_CUSTOMMAPNAME` / `HO_CUSTOMMAPCRC` (0x74d50, 0x750e0) and the map transfer that writes a received map to
+`.\Data\CustomMaps\temp.ted` after `CreateDirectoryA(".\Data\CustomMaps\")` (0xcb330). [H]
+
+### 9.1 The map catalog (object 0x140b311a8, built once at boot by 0x47cb40) [H]
+
+It is the same table the galactic random-map picker reads (TACTICAL_GAPS §4.10, BATTLE_TRANSITIONS §2.1). Three
+directory scans, each through the MEG-aware find (§9.2), each into one of two path lists:
+
+| Scan | Pattern | List |
+|---|---|---|
+| 1 | `.\Data\Art\Maps\*.TED` | official |
+| 2 | `.\Data\CustomMaps\*.TED` | custom |
+| 3 | for each entry of the mod search list (MODPATH= / STEAMMOD= dirs in command-line order, object 0x140a14cc0, the list `FileClass::Open` searches, SUBSYSTEMS.md "File lookup priority"): `<dir>\Data\Art\Maps\*.TED` | custom |
+
+- Scan 3 puts mod-folder maps into the **custom** list, not the official one (the list argument of the third call is
+  the custom list; checked in the disassembly at 0x14047cd58). A mod's `Data\CustomMaps` folder and the
+  `FALLBACKPATH=` / EaW `GameData` loose folders are never scanned. EaW and mod **MEGs** are scanned (scan 1 sees
+  every mounted archive), so a mod whose `Data\MegaFiles.xml` mounts its own `Data\Maps.meg` (Thrawn's Revenge:
+  108 map entries, next to ~600 loose maps that are mostly campaign maps) gets its MEG maps in the official list.
+- Each scan appends `<directory of the pattern> + <found file name>` (the pattern up to and including its last `\`,
+  so `.\Data\Art\Maps\_MP_LAND_ENDOR.TED` or `<dir>\Data\Art\Maps\X.ted`), skipping a path string already in that
+  list (exact, case-sensitive compare). The same file name under two different directories is two entries.
+- Every path is then opened with the normal `FileClass` open (mod search list > FoC loose > MEGs > fallbacks,
+  PHASE2.md), so an official `.\Data\Art\Maps\X.TED` whose name a mod overrides reads the mod's copy. Each file's
+  header (§9.3) fills one 0xf0-byte entry (0x47b030, logs `   Parsing found map '%s'`). Official entries are all
+  kept, even unreadable ones; custom entries (scans 2 and 3) are kept **only when the header's custom flag (mini `0B`)
+  is 1**. Table order: official in scan order, then the kept custom entries.
+- Correction to TACTICAL_GAPS §4.10: +0x00 is the path and +0x80 the upper-cased mini 0A tag (the `CONTROL` filter
+  reads it); +0xb4 is the custom flag, so the picker's "+0xb4 = 0" means "official maps only".
+
+### 9.2 The MEG-aware find (0x217e80 first, 0x218e40 next, 0x2199d0 close) [H]
+
+- First the loose directory, by `FindFirstFileA` on the pattern as given (relative to the working directory, which
+  is the FoC install; scan 3 uses the mod dir); `.` and `..` are skipped. Every name returned is remembered in a
+  per-search set, keyed by the full path trimmed, `/` → `\` and upper-cased (0x2005e0, 0x200ba0).
+- When the loose search has no (more) files, every mounted MEG is walked in **mount order** (first mounted first:
+  EaW before FoC), entries in archive index order. An entry is returned when its directory equals the pattern's
+  directory after the same normalisation (case-insensitive; a leading `.\` matches the stored `DATA\...` names, since
+  the retail skirmish maps exist only in `maps.meg` / `Patch*.meg` and are listed [M for the `.\` step]) and its file
+  name matches the pattern's wildcard, and its path is not in the set yet. So a name present loose **and** in a MEG,
+  or in several MEGs, is returned **once**, loose first.
+- The returned name is the loose name as on disk, or the MEG entry's file name (upper case).
+
+### 9.3 Header read: top chunk 0 of the `.ted` (0x47b030) [H fields, M meanings]
+
+Chunk layout: TERRAIN_WATER_POST.md §1 (the port's `terrain::MapInfo` already decodes it). Minis of top chunk 0:
+
+| Mini | Type | Entry | Meaning (vanilla values) |
+|---|---|---|---|
+| 01 | u32 | +0xa0 | map kind: 1 land, 2 space (default −1) |
+| 02 | u32 | +0xac | player count, default 1 (vanilla MP maps 2–9, campaign maps 1) |
+| 03 | u32 | +0xb0 | max base level (5) [M] |
+| 05 | u32 | +0xa8 | faction index for the random picker (3 in vanilla) [M] |
+| 06 | u32 | +0xa4 | terrain index (TEMPERATE 0 … URBAN 6, SPACE 7) |
+| 08 | UTF-16 | +0x20 | map-name text key (`TEXT_MAP_NAME_MP_LAND_10`); without it +0x20 holds the path |
+| 09 | UTF-16 | +0x60 | planet / display name as written (`Endor`); not used by the list [M] |
+| 0A | UTF-16 | +0x80 | game-mode tag, stored upper-cased (`CONTROL` on most land MP maps); only game type 4 filters on it |
+| 0B | u8 | +0xb4 | **custom-map flag**: 0 official, 1 custom |
+| 10, 11 | f32 | +0xbc, +0xc0 | world width / height |
+| 12 | u8 | +0xb5 | the map has start positions for the preview overlay (1 on 24 of the 48 patched vanilla MP maps) |
+| 00, 04, 07 | u32 | — | read, not stored (00 = format 513) |
+
+Top chunk 3 (Vector2 list, the start positions) → +0xc8 (count +0xd8); top chunk 0x13 (raw bytes, the embedded
+preview image: 262 175 bytes in the three `Patch2.meg` maps that carry one) → +0xe0 / +0xe8.
+
+**List label** (+0x40): only when mini 08 is present: `"(%d) %s"` with the player count and the localised text of the
+key; if the text database answers `[MISSING]`, the raw key is used instead. Without mini 08 the list falls back to the
+file name (§9.4).
+
+### 9.4 Filling the skirmish list (0xfb950 → filter 0x47bf40) [H unless tagged]
+
+- `IDC_GAME_TYPE_LIST` sets the game type: 2 = land, 3 = space (0xf2690). The game type maps to the map kind 1 / 2
+  (0x28ab20; type 1 → kind 0, type 4 → kind 1). The Official / Custom buttons toggle one flag (0x140a62282, official
+  when the dialog opens) and refill the list.
+- Filter 0x47bf40, called with (game type, terrain −1 = any, faction −1 = any, base level 0, minimum players 2,
+  custom flag, no exclusion list): an entry is listed when its kind is the game type's kind, players (+0xac) ≥ 2,
+  max base level (+0xb0) ≥ 0, and its custom flag (+0xb4) **equals** the Official / Custom choice. Game type 4 would
+  also need `CONTROL` in mini 0A and honour `Quickmatch_Map_Exclusion_List`; skirmish (2 / 3) does neither.
+- Rows in table order; each row's text is the entry's label (+0x40) when set, else the file name without directory
+  and `.TED` (found case-insensitively), cut to 22 characters + `...` when longer than 25 (0xfb7e0). The list is then
+  sorted (comparator 0x104510: a per-row integer first [M: the same for every row here], then the row text,
+  `_stricmp`), so the player sees the rows ordered by label, `(2) …` before `(4) …`.
+- Selection: the map chosen last time for that game type (strings at 0x140a7c2c8 land / 0x140a7c2e8 space) if it is
+  still listed, else the first row.
+- Vanilla result after the patches: 24 land maps (`_MP_LAND_*`) and 24 space maps (`_MP_SPACE_*`), all official; no
+  custom maps. `_MP_LAND_DATHOMIR` / `_MP_LAND_UTAPAU` have 1 player in `maps.meg` and are listed only because
+  `Patch2.meg`'s copies (4 / 6 players) win the file open. No campaign map passes (all have 1 player).
+- Preview `IDC_IMAGE` (0xfacb0) [H, not needed for t06]: no map → `Galactic_Back.tga`; else the texture
+  `<file name without directory and extension>.tga`; if that does not exist, the embedded chunk-0x13 image (texture
+  `temp_map_preview_texture`); else `Generic_Space.tga` / `Generic_Land.tga`. When mini 12 is set the start
+  positions are drawn over it (0x1032f0).
+
+### 9.5 Port rules for the implementation
+
+- Catalog built once (first use), immutable, in a deterministic order (never the VFS's hash or pointer order).
+  Official = `Data\Art\Maps\*.TED` from the FoC-loose and MEG layers; custom = `Data\CustomMaps\*.TED` from the
+  FoC-loose and MEG layers plus `Data\Art\Maps\*.TED` from the mod layer. Each map is read through the normal VFS
+  lookup.
+- [port] Entries are keyed by the logical path, so a mod-folder map whose name two mod dirs share is one entry (the
+  VFS reads the earlier dir's file; the original lists two rows that load different files). The same logical path can
+  sit in both lists; the custom flag decides which tab shows it, as in the original.
+- [port] One list holds space then land maps (the existing combined list) instead of the `IDC_GAME_TYPE_LIST`
+  switch; each kind is sorted by row text, case-insensitively, ties by path. A map's kind comes from mini 01, never
+  from its name.
+- Not modelled yet (follow-up): the game-type list, remembering the last map per type, the preview image and start
+  overlay, `IDC_SCENARIO_DESCRIPTION_TEXT_BOX` (its text source is not read yet).

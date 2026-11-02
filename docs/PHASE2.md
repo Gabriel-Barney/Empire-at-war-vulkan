@@ -100,6 +100,7 @@ Rules: C++20, no third-party deps, clean-room (docs only, never `re_reference/`)
 3. MEGs, newest-mounted first: FoC 64Patch > patch2 > Patch > FoC MegaFiles.xml (later-listed wins) > EaW 64Patch > patch2 > Patch > EaW MegaFiles.xml. A mod's own `Data\MegaFiles.xml` / `Patch*.meg` replace the base ones (they are resolved through steps 1–2).
 4. Fallback chain: `FALLBACKPATH=` dirs, then auto-detected EaW `GameData\Data`.
 Campaign list: one `CampaignFiles.xml`, first match, no merge (`--merge-campaign-lists` opt-in).
+Directory scans are not file lookups (docs/re/UI.md §9.2, 2026-11-02): the original's find walks the FoC loose folder first, then every mounted MEG in mount order, each name once; the mod search list and the fallback folders are not part of it (the skirmish map catalog scans each mod dir on its own). `Vfs::list(glob, layers)` restricts a listing to chosen layers for this.
 
 ### Galactic pathing targets (from docs/re/GALACTIC.md)
 - Fleet A*: per-request scratch (re-entrant, parallel-safe); edge cost `distance / HS_Speed_Factor`
