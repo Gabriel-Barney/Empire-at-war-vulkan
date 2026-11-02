@@ -189,3 +189,13 @@ land cap +0x404). Double-click `a1_tactical\run_a1.cmd` (or `freestore_timing\ru
 "S10 PROBE A: TATOOINE" as Empire (fight the invasion, 60 s), giving no orders; send back
 `a1_tactical\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_a1.cmd` after a crash).
 Full instructions and how to read the result: `a1_tactical\README.md`.
+
+---
+
+# Fog-of-war regrow probe (`tools\probe_mod\fow_regrow\`)
+
+Roadmap FOWF t06 (FOG_OF_WAR §9 item 8): the ~6.4–6.9 s regrow window after the last reveal of a cell is undone, and
+the circle shift at the fog box's top edge. Double-click `fow_regrow\run_fow.cmd`, play skirmish land Polus Winds
+(you Empire, AI Easy Rebel, other slots closed) for 3 minutes giving no orders, then quit; send back
+`fow_regrow\out\<run>\` (`report.txt` first). Cleanup is automatic (`cleanup_fow.cmd` after a crash).
+Full instructions and how to read the result: `fow_regrow\README.md`.

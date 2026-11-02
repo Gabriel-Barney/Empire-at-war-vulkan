@@ -727,8 +727,8 @@ public:
     bool fog_active() const;
     bool fog_render_option() const;
     // OI fog: land setup phase (FOG_OF_WAR §3.4, TACTICAL_GAPS §5.4). setup() starts it on land when SetupPhaseEnabled
-    // (False in FoC and TR); the host ends it (the original's "begin battle" trigger is not traced). No-ops in space,
-    // without fog, or when not in that state.
+    // (False in FoC and TR); the setup manager (FOWF t05) ends it when every human player sent SetupPhaseTriggerEnd (32)
+    // or SetupPhaseCountdownSeconds after the first one. No-ops in space, without fog, or when not in that state.
     void fog_begin_setup_phase();
     void fog_end_setup_phase();
     bool fog_setup_phase() const;
@@ -987,6 +987,9 @@ private:
     void fog_after_deploy(TacticalMode& mode);              // setup(): dense mask, battle scale
     void fog_decay();                                       // tick(): step 4, before movement
     void fog_service(TacticalMode& mode);                   // tick(): after consume_events
+    void fog_setup_tick();                                  // tick(): after fog_service (FOWF t05 setup manager end test)
+    // FOWF t05: commands 31 SetupPhaseMove / 32 SetupPhaseTriggerEnd (handle_command).
+    commands::RejectReason fog_setup_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev);
     void fog_owner_changed(TacticalMode& mode, objects::ObjectHandle h, int32_t old_owner);  // change_owner()
     // fog follow-up: a FOW_REVEAL_PING object spawned this tick (REVEAL source while it lives) and the S9
     // AbilityEventKind::SpawnObject handler that spawns it (Spawned_Object_Type at the target, gone next tick [M]).
@@ -997,6 +1000,7 @@ private:
     tactical::fog::FogObject fog_object_of(const objects::ObjectStore& store, objects::ObjectHandle h) const;
     std::vector<tactical::fog::FogSetupObject> fog_setup_objects() const;              // OI fog
     std::vector<tactical::fog::PreventionCircle> fog_prevention_circles() const;       // OI fog
+    void fog_footprint_samples(const objects::ObjectStore& store, objects::ObjectHandle h, float* xy) const;  // FOWF t02
     void fog_service_sources(const objects::ObjectStore& store);                       // OI fog
     void fog_overrun();                                                                // OI fog
     tactical::fog::FogOfWar fog_;
