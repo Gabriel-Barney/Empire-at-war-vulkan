@@ -42,6 +42,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "alamo/core/parallel.hpp"
 #include "alamo/tactical/movement/heap.hpp"
 #include "alamo/tactical/movement/passability.hpp"
 
@@ -57,8 +58,9 @@ struct Region {
 
 class RegionMap {
 public:
-    // Builds regions, adjacency and, for each mask, components and clearance.
-    void build(const PassabilityGrid& grid, std::span<const uint32_t> masks);
+    // Builds regions, adjacency and, for each mask, components and clearance. The masks are independent: one `pf` job
+    // each, per-mask outputs (OPT3 t05), so the result is the same for any worker count.
+    void build(const PassabilityGrid& grid, std::span<const uint32_t> masks, const ParallelFor& pf = serial_for);
     uint64_t grid_version() const { return grid_version_; }
 
     uint32_t width() const { return w_; }

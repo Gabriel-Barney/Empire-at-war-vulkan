@@ -248,6 +248,62 @@ turn; each count's AI log is compared with the golden). Not converted yet: `alam
 same shape by hand and is being rewritten on the skai-skirmish branch (convert after it merges); `alamo_headless_skirmish_ai_synthetic`
 and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
 
+## OPT3 t05 / t06: spike-list fixes before threading (2026-11-02)
+
+Profiled with `alamo_headless --profile` plus temporary zones (removed again, except the per-system CRC zones below). All four fixes
+keep results identical: the per-tick CRC logs before and after are byte-identical on the FoC land battle (`--skirmish-ai foc-land`,
+3000 ticks) and the FoC space battle (`--skirmish-ai foc-station --seed 3`, 12000 ticks to the end). The land battle is also identical at
+0 / 1 / 4 / 15 workers (worker-count check above), and every golden is unchanged.
+- **`T13.end_tick` (t05).** The CRC capture is the per-system hashers on the job system. One system, `battle.ai` (the tactical AI: threat
+  grid per cell and player, plans, task forces), took 2.1 ms p50 per land tick on its own. It feeds about 65k fields one at a time, and each
+  went through the out-of-line `StateHasher::bytes()` with a byte-by-byte copy. The typed feeds (`u8`..`u64`, `f32`, `f64`) are now inline
+  and OR the value into a pending 64-bit word. That gives the same byte stream and the same digests (the pinned digest test, a new mixed-feed
+  equivalence test, and every golden). Engine/core public header change (`sim_crc.hpp`). Each CRC system's hasher is now a profiler zone
+  `crc.<name>`, so `--profile` splits T13.
+- **First battle tick (t05).** On land the setup was 129 ms. 73 ms of it was the map objects, almost all `TacticalMode::bounds_of` →
+  `BattleCatalog::avoid_model` loading each type's ALO the first time it appears, one type after another under the model-cache mutex. Then
+  41 ms of land grid (31 ms the region build, 9.6 ms the stamps, the same model loads) and 14 ms of S4 placements. `BattleCatalog::preload_models`
+  now loads the battle's types (map placements and participants) on the job system before any spawn, holding the lock only for the cache
+  lookups and inserts. Each entry depends only on the files, so the results don't change. `RegionMap::build` runs one job per movement mask
+  (13 on the FoC land maps, a component BFS plus a chamfer distance transform over 311 × 311 cells each) with per-mask outputs. That is also
+  used by the mid-battle rebuilds after a stamp change (`tick_land`).
+- **Space `tac.movement` spikes (t06).** The kinematic space planner calls `SpaceOccupancy::query_segment` for each candidate move. The query
+  walked two `std::map`s and re-formed every track piece (frame bounds, velocity with a divide) for each query. Statics and tracks are now
+  id-sorted contiguous vectors (same order, so hash and save are unchanged). Track pieces are formed once in `set_track` with the same float
+  expressions, and a per-track box cull with a 16-unit margin over the float error skips far tracks. The result is an OR of bits, so it is
+  unchanged.
+- **Synthetic galactic frame 0 (all-pairs).** No algorithmic change. `compute_all_pairs` already uses the proven-exact parallel per-target
+  Dijkstra above 150 planets. What remains is scheduling (start the frame-0 recompute in the background, as `--latency` does): OPT2.
+
+Numbers. This machine was at 100 % CPU throughout (other sessions' gates and tests), so before / after runs were alternated back to back
+and the robust statistics are given. MSVC `/O2`, default 15 workers.
+
+| Measure | Before | After |
+|---|---|---|
+| Land battle, 3000 ticks: `crc.battle.ai` p50 | 2.06 ms | 0.73 ms |
+| Land battle: `T13.end_tick` p50 | 3.14 ms | 0.87 ms |
+| Land battle: tick p50 / p99 | 6.83 / 23.3 ms | 3.85 / 18.0 ms |
+| Space battle, 12000 ticks: `T13.end_tick` p50 | 0.88 ms | 0.35 ms |
+| Space battle: `crc.battle.ai` p50 | 0.73 ms | 0.29 ms |
+| Space battle: tick p50 | 2.41 ms | 1.59 ms |
+| Space battle: `tac.movement` mean / p99 | 0.54 / 6.43 ms | 0.43 / 3.68 ms |
+| Land first tick: map objects (`bt_map_load`) | 73 ms | 2.4 ms |
+| Land first tick: obstacle stamps / S4 placements | 9.6 / 14 ms | 1.0 / 0.5 ms |
+| Land first tick: region build | 42 ms | 20 ms |
+| Land first tick: model preload (new, parallel) | — | 30-45 ms |
+
+The first-tick totals were not comparable under this load (one exe gave 206-1853 ms for the same tick), so only the same-run component
+times are listed. The model loads now run in parallel instead of inside the spawns. Re-run `bench_msvc.cmd` on a quiet machine to replace
+the OPT1 baseline table.
+
+Leftovers (files other sessions are editing, or work for OPT2):
+- `CampaignBattles::ai_begin` (tactical AI start: Lua VMs and plans, `campaign_battles_ai.cpp`, A1) is now the largest part of the first
+  battle tick, 120-130 ms here.
+- The `battle.ai` hasher still walks the threat grid cell by cell with vector-of-vector memory lists (`engine/ai/tactical`, being edited
+  by the a1i sessions). Flattening it is a t06 follow-up.
+- `bt_map_load` itself and the space setup (`tactical_battle_bt.cpp`, skai-skirmish branch).
+- The frame-0 all-pairs recompute in the background (OPT2).
+
 ## Lua GC schedule (OPT2 t04, 2026-11-02)
 
 Lua 5.0.2's collector is unchanged (whole-heap mark and sweep, no incremental GC). What changed is when it runs:
