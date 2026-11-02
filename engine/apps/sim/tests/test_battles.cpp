@@ -2308,11 +2308,16 @@ void test_foc_weapon_sources(const objects::GameObjectTypes& types, const Battle
                     example.c_str(), armed);
         CHECK(listed > 0 && armed == 0);
     }
-    {  // Fire bones over every land unit with an own weapon: how many models lack MUZZLEA_00 (those never fire).
+    {  // Fire bones over every land unit with an own weapon: how many models lack MUZZLEA_00 (those never fire). S8 t12 (a)
+       // (LOB_SOLVER §5.1 "Muzzle bones on FoC land models"): WEAPON in Behavior or LandBehavior (the land set the battle host
+       // reads) - every vanilla model has the bone. The 8 types the Union set used to list (Moldy_Crow, ..._Landing,
+       // UM07_*) carry WEAPON in SpaceBehavior only: no land own weapon.
         uint32_t with_model = 0, no_bone = 0;
         std::string missing;
         for (uint32_t t = 0; t < types.size(); ++t) {
-            if (types.get_list(t, "Projectile_Types").empty() || !types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon))
+            if (types.get_list(t, "Projectile_Types").empty() ||
+                !(types.has_behavior(t, objects::BehaviorSet::Generic, objects::beh::Weapon) ||
+                  types.has_behavior(t, objects::BehaviorSet::Land, objects::beh::Weapon)))
                 continue;
             std::vector<tactical::Vec3> bones;
             if (!catalog.muzzle_bones(t, false, bones)) continue;
@@ -2323,6 +2328,27 @@ void test_foc_weapon_sources(const objects::GameObjectTypes& types, const Battle
             }
         }
         std::printf("foc fire bones: %u land models of weapon users, %u without MUZZLEA_00: %s\n", with_model, no_bone, missing.c_str());
+        CHECK(with_model > 0 && no_bone == 0);
+    }
+    {  // S8 t10 (LOB_SOLVER §5.1): the garrison gun bone table FP_0<i>_ALT<a> of every Num_Garrison_Guns type with a model.
+        uint32_t hosts = 0, with_bones = 0;
+        std::string line;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            const int32_t guns = types.get_int(t, "Num_Garrison_Guns");
+            if (guns <= 0) continue;
+            std::vector<std::vector<tc::GarrisonBone>> table;
+            if (!catalog.garrison_bones(t, false, guns, table)) continue;
+            ++hosts;
+            size_t valid = 0;
+            for (const auto& e : table)
+                for (const tc::GarrisonBone& b : e) valid += b.valid ? 1u : 0u;
+            with_bones += valid > 0 ? 1u : 0u;
+            if (line.size() < 300)
+                line += std::string(line.empty() ? "" : ", ") + std::string(types.raw().types().name[t]) + " " + std::to_string(guns) +
+                        " guns x " + std::to_string(table.size()) + " ALT (" + std::to_string(valid) + " bones)";
+        }
+        std::printf("foc garrison guns: %u host models, %u with gun bones: %s\n", hosts, with_bones, line.c_str());
+        CHECK(hosts == 0 || with_bones > 0);
     }
 }
 
@@ -4676,6 +4702,7 @@ void test_fighter_auto_push() {
     bool no_formation_at_start = false, am_dc = false, am_moving = false, am_pushed = false;
     bool stop_cleared = false, b_auto = false, b_dc = false, c_formation = false, c_dc = false, c_pushed = false;
     bool d_idle = false, d_dropped = false, d_kept = false;
+    std::vector<objects::ObjectId> converted;
     mv::LocoState prev = mv::LocoState::None;
     for (uint64_t t = 0; t < 9000 && ph != Ph::Done; ++t) {
         fb.host->tick_once();
@@ -4755,6 +4782,7 @@ void test_fighter_auto_push() {
                     pushed = r->pushed.back();
                     c_pushed = b->combat().has_unit(pushed);  // a ship (not a squadron)
                     if (c_pushed) CHECK(b->change_owner(*tm, st.find(pushed), 0));
+                    if (c_pushed) converted.push_back(pushed);
                     ph = c_pushed ? Ph::Converted : Ph::Done;
                     since = b->frame();
                 } else if (b->frame() > since + 600) {
@@ -4766,12 +4794,21 @@ void test_fighter_auto_push() {
                     d_idle = true;
                     d_dropped = true;
                     for (const objects::ObjectId m : members)
-                        d_dropped = d_dropped && b->combat().current_target(m) != pushed;
+                        d_dropped = d_dropped && std::find(converted.begin(), converted.end(), b->combat().current_target(m)) == converted.end();
                     d_kept = r != nullptr;
                     ph = Ph::Done;
                 } else if (b->frame() > since + 120) {
                     ph = Ph::Done;
                 }
+                // A ship pushed after the conversion (a second enemy in reach) turns friendly too, so Directed_Combat runs out
+                // of goals (S8 t10-t12 shot timing brought one more frigate into reach).
+                if (ph == Ph::Converted && r)
+                    for (const objects::ObjectId k : r->pushed)
+                        if (std::find(converted.begin(), converted.end(), k) == converted.end() && b->combat().has_unit(k) &&
+                            b->combat().owner(k) != 0) {
+                            CHECK(b->change_owner(*tm, st.find(k), 0));
+                            converted.push_back(k);
+                        }
                 break;
             default: break;
         }

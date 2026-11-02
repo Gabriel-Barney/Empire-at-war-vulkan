@@ -709,6 +709,7 @@ void test_land(const Data& d) {
 // S7 t15 A1: the swap back raises "unit ability finished" (signal 0x29) for the jet trooper in the tick its flag clears.
 struct JetRun {
     bool fought = false, ordered = false, mirror = true, flew = false, landed = false, other_walks = true;
+    bool current_projectile = false;
     uint32_t shots_flying = 0, shots_after = 0, suspended_frames = 0;
     uint32_t ability_finished = 0, finished_at_clear = 0;  // the jet's signals; those in the tick its flag cleared
     CrcLog crc;
@@ -779,6 +780,8 @@ JetRun run_jet(const Data& d, int32_t workers) {
                 }
             CHECK(jet != objects::kNoObjectId && other != objects::kNoObjectId && found);
             if (jet == objects::kNoObjectId || !found) break;
+            // S8 t12 (d): Get_Current_Projectile_Type = Projectile_Types[weapon index 0]; a unit without the list: nothing
+            out.current_projectile = b->current_projectile(jet) == static_cast<objects::TypeIndex>(type_of(d, "L1_Laser_Proj"));
             const objects::ObjectId ids[] = {jet};
             out.ordered = b->order_move(*tm, 1, ids, enemy.x + 80.0f, enemy.y, host.random().synced(), tactical::movement::kNoFacing,
                                         false, false, 0, true) == commands::RejectReason::None;
@@ -820,6 +823,7 @@ void test_jet(const Data& d) {
     CHECK(a.fought && a.ordered && a.flew && a.landed && a.mirror && a.other_walks);
     CHECK(a.suspended_frames > 30 && a.shots_flying == 0 && a.shots_after > 0);
     CHECK(a.ability_finished == 1 && a.finished_at_clear == 1);
+    CHECK(a.current_projectile);
     const JetRun w = run_jet(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged && w.suspended_frames == a.suspended_frames && w.ability_finished == 1);
 }

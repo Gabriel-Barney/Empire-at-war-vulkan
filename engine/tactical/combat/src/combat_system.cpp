@@ -18,8 +18,10 @@ constexpr uint32_t kUnitRemoved = 1u << 31;  // internal: host removal (no death
 constexpr float kRadToDeg = 57.295779513082320876f;
 constexpr int32_t kBurningInterval = 30;  // OI abilities: BurningBehavior vtable +0x28 (TACTICAL_GAPS §1.8)
 constexpr int32_t kAbilityRocketAttack = 11;    // S8 t08: UnitAbilityType ROCKET_ATTACK (0x39b950(obj, 11))
-constexpr uint8_t kFlagWeaponsEnabled = 1;      // S8 t08: Mod_Flag WEAPONS_ENABLED (0x397f60(obj, 1)) [M numbering]
-constexpr uint32_t kNoService = 0xFFFFFFFFu;    // S7 t15 A2: Unit::weapon_last before the first service
+// S8 t08: Mod_Flag WEAPONS_ENABLED_FLAG (0x397f60(obj, 1); S8 t11: enum table 0x140a434a0 index 1 [H]).
+constexpr uint8_t kFlagWeaponsEnabled = 1;
+constexpr uint32_t kNoService = 0xFFFFFFFFu;    // S7 t15 A2: Unit::weapon_last of an older save, never serviced (= 0)
+constexpr float kGarrisonGunHalfAngle = 60.0f;  // S8 t10: Spawn_Projectile garrison pick, |bone yaw - target yaw|
 const PlayerInfo kDefaultPlayer{};
 
 Vec3 normalize(Vec3 v) {
@@ -224,11 +226,11 @@ bool CombatSystem::add_unit(const UnitSpawn& s, uint32_t frame, SimRng& rng) {
         nu.emitter_entries = (ms ? 1u : 0u) + (ud.passive_missile_shield_radius > 0.0f ? 1u : 0u);
     }
     if (ud.weapon_projectile >= 0) {
-        // WeaponBehavior reset at creation [L]: one synced Get_Int(0, 10).
-        const Recharge r = weapon_reset(ud.weapon_recharge, ud.weapon_pulse_count, weapon_delay(nu, nullptr),
-                                        fire_rate(nu), cfg_.fps, rng);
-        nu.weapon_cooldown = r.frames;
-        nu.weapon_pulses = r.pulses;
+        // S8 t12 (TACTICAL_COMBAT §3.1.1 "First service after spawn" / "Cooldowns"): the attach vf9 0x54c210 sets the initial
+        // delay TD +0x24 = Get_Int(0, int(FPS x Projectile_Fire_Recharge_Seconds)), one synced draw (was a weapon_reset
+        // stand-in [L]). [M] The pulse count before the first shot: Projectile_Fire_Pulse_Count (the step-7 reset value).
+        nu.weapon_cooldown = hp_first_cooldown(ud.weapon_recharge, cfg_.fps, rng);
+        nu.weapon_pulses = ud.weapon_pulse_count;
     }
     return true;
 }
@@ -327,6 +329,9 @@ bool CombatSystem::order_locked(ObjectId id) const {
     return u && u->ordered_target != kNoObject && u->locked != 0;
 }
 bool CombatSystem::ability_type_active(const Unit& u, int32_t type) const {
+    // S8 t11 (TACTICAL_COMBAT §3.1.1 "ROCKET_ATTACK detection"): 0x39b950 reads the per-type slot filled from every
+    // Unit_Abilities_Data entry; the host mirrors entries past slot 1 as kUnitRocketAttack.
+    if (type == kAbilityRocketAttack && (u.flags & kUnitRocketAttack)) return true;
     for (int s = 0; s < 2; ++s)
         if (const UnitAbilityDesc* a = ability(u, s); a && u.ability_active[static_cast<size_t>(s)] && a->ability_type == type) return true;
     return false;
@@ -1188,7 +1193,7 @@ ObjectId CombatSystem::current_target(ObjectId id) const {
     return u->auto_target;
 }
 
-void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
+void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng, bool suspended) {
     ObjectId tgt = current_target(u.id);
     // refixf t06 (TACTICAL_COMBAT §2.8 C step 2): a path-A aim holds the weapon hardpoints until the next scan pick, a lock
     // or another order replaces it [port: kept while the aimed object is a live enemy].
@@ -1215,20 +1220,25 @@ void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
     // S8 t08 (TACTICAL_COMBAT §3.1.1 "Cooldowns"): the WEAPON behaviour (own weapon) runs in the behaviour pass, before the
     // hardpoint updates; the two sources keep separate cooldowns. Its gate 0x54c910 (global switch included) is tested
     // inside, after the cooldown has elapsed.
-    if (desc_of(u).weapon_projectile >= 0) fire_unit_weapon(u, frame, rng);
+    // S8 t12 (MOVEMENT §3.2): a locomotor swap suspends TARGETING / WEAPON / SPECIAL_WEAPON only - the own weapon is not
+    // serviced and no target is pushed; the hardpoints keep counting down and firing at their last target.
+    if (desc_of(u).weapon_projectile >= 0 && !suspended) fire_unit_weapon(u, frame, rng);
     const bool transition = deploy_transition(u);
     for (uint32_t i = 0; i < u.hp_count; ++i) {
         Hardpoint& h = hps_[u.hp_begin + i];
         const HardpointDesc& hd = data_->hardpoints[h.desc];
         if (!is_weapon(hd.kind)) continue;
-        h.target = tgt;  // HP_Set_Target: owner's target + chosen sub-hardpoint
-        h.target_hp = sub;
+        if (!suspended) {
+            h.target = tgt;  // HP_Set_Target: owner's target + chosen sub-hardpoint
+            h.target_hp = sub;
+        }
         // Update_Weapon (0x387400): gates (S8 t08: none in a deploy transition), then the cooldown countdown, then the
         // weapon-state gate 0x384850 against the primary target (a refusal skips Fire_At and opportunity fire), Fire_At.
         if (!cfg_.weapons_enabled || hp_out(h) || transition) continue;
         h.cooldown -= 1;
         if (h.cooldown > 0) continue;
-        if (!hp_state_allows(u, h, live(t) ? t : nullptr)) continue;
+        const Unit* ht = unit(h.target);  // the primary target (+0x40)
+        if (!hp_state_allows(u, h, live(ht) ? ht : nullptr)) continue;
         if (fire_hardpoint(u, h, frame, rng)) continue;
         // Opportunity fire (TACTICAL_COMBAT 2.6, S9): no shot at the owner's target.
         if (cfg_.opportunity_fire && opportunity_allowed(u, hd, idle)) opportunity_fire(u, h, frame, rng);
@@ -1236,9 +1246,11 @@ void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng) {
 }
 
 bool CombatSystem::deployed_or_deploying(const Unit& u) const {
-    // 0x39a390 (S9_DEATH_CLONE_SHIELDS §1.2): Deploys, a locomotor, and deploy pending / Deployed (kUnitDeploying).
+    // 0x39a390 (S9_DEATH_CLONE_SHIELDS §1.2): Deploys, a locomotor, and deploy pending / Deployed (kUnitDeploying). S8 t11
+    // (TACTICAL_COMBAT §3.1.1 "Step 3 correction"): the walk locomotor's vf +0x120 is state == 0x19 only, so Deploying
+    // (0x18) and Undeploying (0x1A) - kUnitDeployTransition - do not count (vanilla never sets the pending flag).
     const UnitDesc& ud = desc_of(u);
-    return ud.deploys && ud.has_locomotor && (u.flags & kUnitDeploying) != 0;
+    return ud.deploys && ud.has_locomotor && (u.flags & kUnitDeploying) != 0 && (u.flags & kUnitDeployTransition) == 0;
 }
 
 bool CombatSystem::deploy_transition(const Unit& u) const {
@@ -1247,11 +1259,13 @@ bool CombatSystem::deploy_transition(const Unit& u) const {
 }
 
 bool CombatSystem::unit_weapon_allowed(const Unit& u) const {
-    // Own-weapon gate 0x54c910 (TACTICAL_COMBAT §3.1.1), in order: 1 the global weapons switch (the behaviour is enabled:
-    // a suspended one is not serviced at all); 2 no deploy transition; 3 deployed or deploying -> Fire_Weapon_When_Deployed,
-    // else _Undeployed; 4 ROCKET_ATTACK (11) active -> Fire_Weapon_When_In_Rocket_Attack_Mode, else _In_Normal_Attack_Mode;
-    // 5 Get_Unit_Ability_Mod_Flag(WEAPONS_ENABLED) over the active slots. [port] Steps 6 (locomotor states 0x1C / 0x16) and
-    // 7 (targeting state 4) are not modelled [M].
+    // Own-weapon gate 0x54c910 (TACTICAL_COMBAT §3.1.1 with "Gate details"), steps 1-6 in order (step 7, the targeting
+    // state, is in fire_unit_weapon: its refusal also restarts the burst): 1 the global weapons switch (the behaviour is
+    // enabled: a suspended one is not serviced at all); 2 no deploy transition; 3 deployed (pending / state 0x19) ->
+    // Fire_Weapon_When_Deployed, else _Undeployed; 4 ROCKET_ATTACK (11) active in any Unit_Abilities_Data entry ->
+    // Fire_Weapon_When_In_Rocket_Attack_Mode, else _In_Normal_Attack_Mode; 5 0x397f60(obj, 1): WEAPONS_ENABLED_FLAG ANDed
+    // over the active modes of entries 0 / 1 (default 1: vanilla never refuses); 6 locomotor state 0x1C (fighter Idle)
+    // without Can_Fighter_Fire_When_Idle, or state 0x16 on a locomotor whose vf +0x240 is true (host flags).
     if (!cfg_.weapons_enabled || deploy_transition(u)) return false;
     const UnitDesc& ud = desc_of(u);
     if (!(deployed_or_deploying(u) ? ud.fire_weapon_when_deployed : ud.fire_weapon_when_undeployed)) return false;
@@ -1259,7 +1273,96 @@ bool CombatSystem::unit_weapon_allowed(const Unit& u) const {
         return false;
     const UnitAbilityDesc* ab[2] = {ability(u, 0), ability(u, 1)};
     const bool act[2] = {u.ability_active[0] != 0, u.ability_active[1] != 0};
-    return ability_flag(ab, act, kFlagWeaponsEnabled);
+    if (!ability_flag(ab, act, kFlagWeaponsEnabled)) return false;
+    if ((u.flags & kUnitFighterIdle) && !ud.can_fighter_fire_when_idle) return false;
+    return (u.flags & kUnitHoverRest) == 0;
+}
+
+bool CombatSystem::target_state_attacking(const Unit& u, const Unit& t) const {
+    // TD +0x18 == 4 (TACTICAL_COMBAT §3.1.1 "Gate details" step 7, LOB_SOLVER §8 item 22): Service_Land / _Space test the
+    // current target every targeting service with slot 44 (In_Max_Range: XY distance <= R + E with the LAND_OBSTACLE aim
+    // walk; for a grenade weapon the lob solver alone, LOB_SOLVER §3.1) and !slot 45 (d <= Targeting_Min_Attack_Distance
+    // + E). The targeting interval is 1, so the port evaluates it at the weapon service. [port] State 3 (slot 48: turret /
+    // facing not yet on the target) is not modelled; a team member uses its own position (the TeamTargeting copy of the
+    // container's state is not modelled).
+    const UnitDesc& ud = desc_of(u);
+    const ProjectileDesc* gw = grenade_weapon(u);
+    float d = 0.0f, E = 0.0f;
+    if (!gw || ud.min_attack_distance > 0.0f) range_geometry(t, u.pos, d, E);
+    if (gw) {
+        if (!lob_in_range(u, *gw, t)) return false;
+    } else {
+        const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
+        if (!(d <= range + E)) return false;
+    }
+    return !(ud.min_attack_distance > 0.0f && d <= ud.min_attack_distance + E);
+}
+
+bool CombatSystem::attacking(ObjectId id) const {
+    const Unit* u = unit(id);
+    if (!live(u)) return false;
+    const Unit* t = unit(current_target(id));
+    return live(t) && target_state_attacking(*u, *t);
+}
+
+int32_t CombatSystem::model_alt_of(const Unit& u) const {
+    // TACTICAL_GAPS §6.3 (0x3ac290): every Land_Damage_Thresholds pair whose threshold >= the hull fraction sets the ALT
+    // (the last match wins), default 0.
+    const float mh = unit_max_hull(u);
+    const float f = mh > 0.0f ? u.health / mh : 0.0f;
+    int32_t alt = 0;
+    for (const auto& [threshold, a] : desc_of(u).damage_alternates)
+        if (f <= threshold) alt = a;
+    return alt;
+}
+
+int32_t CombatSystem::model_alt(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? model_alt_of(*u) : 0;
+}
+
+bool CombatSystem::garrison_fire_bones(ObjectId host, Vec3& host_pos, std::vector<Vec3>& bones) const {
+    bones.clear();
+    const Unit* h = unit(host);
+    if (!live(h)) return false;
+    const UnitDesc& hd = desc_of(*h);
+    const int32_t alt = model_alt_of(*h);
+    if (hd.num_garrison_guns == 0 || alt < 0 || static_cast<size_t>(alt) >= hd.garrison_bones.size()) return false;
+    host_pos = h->pos;
+    for (const GarrisonBone& b : hd.garrison_bones[static_cast<size_t>(alt)])
+        if (b.valid) bones.push_back(local_to_world(*h, b.pos));
+    return !bones.empty();
+}
+
+bool CombatSystem::garrison_muzzle(const Unit& u, Vec3 target, SimRng& rng, Vec3& out) const {
+    // Spawn_Projectile 0x54ade0 garrison branch (LOB_SOLVER §5.1 "Garrison fire bones in detail") [H]: the shooter is
+    // garrisoned (obj +0x3a7); host = its parent (the grandparent for a team member: the host query's answer); the host
+    // type's Num_Garrison_Guns != 0, the host model's ALT in 0..M-1 (jge) and a non-empty entry. Candidates: the bones with a
+    // transform whose x-axis yaw lies within 60 degrees of the yaw from the host's position to the target (difference
+    // wrapped to +-180). n >= 2 -> one synced Get_Int(0, n - 1); n = 1 -> no draw; n = 0 or a failed gate -> false (the
+    // shooter's own muzzle bone). [port] Bind-pose bones turned by the host's facing; "within" = |difference| <= 60.
+    if (!(u.flags & kUnitGarrisoned) || !garrison_host_) return false;
+    const Unit* h = unit(garrison_host_(u.id));
+    if (!live(h)) return false;
+    const UnitDesc& hd = desc_of(*h);
+    const int32_t alt = model_alt_of(*h);
+    if (hd.num_garrison_guns == 0 || alt < 0 || static_cast<size_t>(alt) >= hd.garrison_bones.size()) return false;
+    const std::vector<GarrisonBone>& entry = hd.garrison_bones[static_cast<size_t>(alt)];
+    const float to_target = dmath::atan2(target.y - h->pos.y, target.x - h->pos.x) * kRadToDeg;
+    const float host_yaw = dmath::atan2(h->facing.y, h->facing.x) * kRadToDeg;
+    auto within = [&](const GarrisonBone& b) {
+        return b.valid && abs_f(wrap_deg(b.yaw_deg + host_yaw - to_target)) <= kGarrisonGunHalfAngle;
+    };
+    int32_t n = 0;
+    for (const GarrisonBone& b : entry) n += within(b) ? 1 : 0;
+    if (n == 0) return false;
+    int32_t k = n >= 2 ? rng.range_int(0, n - 1) : 0;  // one synced draw for two or more candidates
+    for (const GarrisonBone& b : entry) {
+        if (!within(b) || k-- != 0) continue;
+        out = local_to_world(*h, b.pos);
+        return true;
+    }
+    return false;
 }
 
 bool CombatSystem::hp_state_allows(const Unit& u, const Hardpoint& h, const Unit* t) const {
@@ -1496,15 +1599,26 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
     // keeps elapsing while the behaviour is not serviced (jetpack suspension, stun, no base power): the first service back
     // subtracts the whole gap. [port] Every service subtracts (retail only while the cooldown is non-zero and clamps at
     // 0); ready = <= 0 either way, so the shots are the same and the steady-state counter keeps its S8 CRC format.
-    const uint32_t elapsed = u.weapon_last == kNoService ? 1u : frame - u.weapon_last;
+    // S8 t12 (TACTICAL_COMBAT §3.1.1 "First service after spawn"): the last-service frame starts at 0, so the first service
+    // subtracts the whole current frame number and a unit spawned after its drawn initial delay can fire at once.
+    const uint32_t last = u.weapon_last == kNoService ? 0u : u.weapon_last;
+    const uint32_t elapsed = frame - last;
     u.weapon_last = frame;
     const int64_t cd = static_cast<int64_t>(u.weapon_cooldown) - static_cast<int64_t>(elapsed);
     u.weapon_cooldown = cd < INT32_MIN ? INT32_MIN : static_cast<int32_t>(cd);
     if (u.weapon_cooldown > 0) return;
-    if (!unit_weapon_allowed(u)) return;  // S8 t08: own-weapon gate 0x54c910 (TACTICAL_COMBAT §3.1.1)
+    if (!unit_weapon_allowed(u)) return;  // S8 t08: own-weapon gate 0x54c910 steps 1-6 (TACTICAL_COMBAT §3.1.1)
     const UnitDesc& ud = desc_of(u);
+    // Step 7 (S8 t10 / t11, "Gate details"): a LOBBING_SUPERWEAPON object fires only for a fire-at-position order (TD
+    // +0x3d; the port's lobbing superweapons launch through the ability system, so never here). Otherwise TD +0x18 must be
+    // 4 (attacking: slot 44 && !slot 45, re-tested every service) with a non-null target; else the burst restarts (TD +0x28
+    // := Projectile_Fire_Pulse_Count) and nothing fires. This replaces the port's XY range gate (LOB_SOLVER §8 item 22).
+    if (ud.lobbing_superweapon) return;
     const Unit* tp = unit(current_target(u.id));
-    if (!live(tp)) return;
+    if (!live(tp) || !target_state_attacking(u, *tp)) {
+        u.weapon_pulses = ud.weapon_pulse_count;
+        return;
+    }
     const Unit& t = *tp;
     if ((t.flags & kUnitStealthed) && !ud.target_stealth_units && t.owner != u.owner) return;
     if (!is_enemy(u.owner, t.owner)) return;
@@ -1520,10 +1634,9 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
     if (proj < 0 || static_cast<size_t>(proj) >= data_->projectiles.size()) return;
     const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(proj)];
     const float range = fire_range(ud.max_attack_distance, mod_r(u, ModList::FireRange));  // 0x54d090: list 8
-    // [port] Straight shots keep the XY range gate (LOB_SOLVER §8 item 22 [M]: retail has none at fire time); for a
-    // grenade the solve below is the range gate (Targeting_Max_Attack_Distance is not a grenade weapon's range, §4).
+    // No range test at fire time (LOB_SOLVER §8 item 22 [H]): the targeting state above is the gate; for a grenade the
+    // launch solve below can still find no arc from the muzzle (no shot).
     const bool lob = grenade(pd);
-    if (!lob && !in_fire_range(distance_xy(u.pos, t.pos), 0.0f, range, desc_of(t).radius)) return;
     if (pd.energy_per_shot > 0.0f && has_energy_pool(u) && u.energy < pd.energy_per_shot) return;
     // S8 t06 B4 (LOB_SOLVER §5.1): the launch point is the next fire bone <Muzzle_Bone_Name>_NN (round robin per shot; with
     // more than one Projectile_Types entry and more than one bone, the bone of the weapon index), rest pose turned by the
@@ -1544,6 +1657,9 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
         }
     }
     if (!on_bone && (lob || ud.muzzle_model)) muzzle.z = muzzle.z + ud.ranged_target_z_adjust;
+    // S8 t10 (LOB_SOLVER §5.1): a garrisoned shooter whose host lists gun bones launches from a synced pick among the host's
+    // bones within 60 degrees of the target, replacing the request's bone (the own bone count above is still required).
+    if (Vec3 gm; garrison_muzzle(u, t.pos, rng, gm)) muzzle = gm;
     // S8 t04 (LOB_SOLVER §5.1 / §5.2): a grenade solves from the launch point toward the un-led target point Q (a team
     // container -> its member nearest the launch point, + the target's Ranged_Target_Z_Adjust); no arc = no shot, before
     // any draw, no cooldown / pulse change (retried next service).
@@ -1656,10 +1772,10 @@ CombatSystem::SweepHit CombatSystem::sweep_segment(const Projectile& p, Vec3 del
     pq.b = p.pos + delta;
     const ProjectileDesc& pd = data_->projectiles[p.desc];
     pq.mask = pd.does_shield_damage ? 7u : 5u;
-    auto scan = [&](int32_t q, ObjectId skip) {
+    auto scan = [&](int32_t q, SweepHit& out) {
         for (const RayHit& hit : trees_->player(static_cast<uint32_t>(q)).query_ray(ray, kSkipDead, ctx)) {
             const Unit* v = unit(static_cast<ObjectId>(hit.handle));
-            if (!live(v) || v->id == skip) continue;
+            if (!live(v)) continue;
             SweepHit c{v->id, hit.t};
             if (precise_hit_) {
                 pq.victim = v->id;
@@ -1673,18 +1789,26 @@ CombatSystem::SweepHit CombatSystem::sweep_segment(const Projectile& p, Vec3 del
                     c.mesh_hp = r.mesh ? hardpoint_by_mesh(*v, *r.mesh) : -1;
                 }
             }
-            if (best.id == kNoObject || c.t < best.t || (c.t == best.t && c.id < best.id)) best = c;
+            if (out.id == kNoObject || c.t < out.t || (c.t == out.t && c.id < out.id)) out = c;
             // Without the precise test the entries are sorted by (t, id): the first live one is this tree's minimum.
             if (!precise_hit_) break;
         }
     };
     for (int32_t q = 0; q < np; ++q)
-        if (is_enemy(p.owner, q)) scan(q, kNoObject);
+        if (is_enemy(p.owner, q)) scan(q, best);
     // §3.4 step 3 (S8 t06): nothing hit and Friendly_Damage_Amount > 0 or Causes_Infection -> the own-player variant
-    // 0x2acb90 (remote bombs stick to own units, LOB_SOLVER §3.5). [port] The shooter itself is skipped (the segment
-    // starts inside it).
-    if (best.id == kNoObject && (pd.friendly_damage_amount > 0.0f || pd.causes_infection) && p.owner >= 0 && p.owner < np)
-        scan(p.owner, p.shooter);
+    // 0x2acb90. S8 t10 ("Own-player variant 0x2acb90" [H]): the query over the projectile owner's tree skips only the
+    // projectile itself (never in a port tree), NOT the shooter, and yields its first passing candidate (the port's order:
+    // the minimum (t, id), as the hostile scan); Sweep then keeps it only when it is the projectile's own target and has no
+    // TRANSPORT_LANDING - otherwise there is no own hit (the query does not go on to the next candidate).
+    if (best.id == kNoObject && (pd.friendly_damage_amount > 0.0f || pd.causes_infection) && p.owner >= 0 && p.owner < np) {
+        SweepHit own{kNoObject, 0.0f};
+        scan(p.owner, own);
+        if (own.id != kNoObject && own.id == p.target) {
+            const Unit* v = unit(own.id);
+            if (v && !desc_of(*v).transport_landing) best = own;
+        }
+    }
     return best;
 }
 
@@ -2100,7 +2224,7 @@ void CombatSystem::kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, 
     const UnitDesc& vd = desc_of(v);
     if (cfg_.death_clones && kind != kKindNoDeathClone) {
         int32_t key = kind;
-        if (vd.deploys && vd.has_locomotor && (v.flags & kUnitDeploying))
+        if (deployed_or_deploying(v))  // S8 t11: 0x39a390 (pending or state 0x19; not in a deploy transition)
             key = kind == 8 ? kKindDeployed : kKindDeployedOther;
         else if (v.flags & kUnitInfected)
             key = kKindInfection;
@@ -3085,18 +3209,20 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             u.stun_end = 0;
             if (hooks_) hooks_->unit_effect(u.id, UnitEffect::StunEnded, u.owner, u.pos, frame);
         }
-        const bool idle = u.stun_end > frame || (desc_of(u).requires_base_power && !has_base_power(u.owner)) ||
-                          (u.flags & kUnitWeaponsSuspended) != 0;  // S7 t14: on the jetpack (MOVEMENT §3.1.1)
+        const bool idle = u.stun_end > frame || (desc_of(u).requires_base_power && !has_base_power(u.owner));
+        // S7 t14: on the jetpack (MOVEMENT §3.1.1) TARGETING and WEAPON are suspended; S8 t12 (MOVEMENT §3.2): the
+        // hardpoints are not (update_weapons' `suspended`).
+        const bool suspended = (u.flags & kUnitWeaponsSuspended) != 0;
         // S7 t15 A2: an idle unit's weapons are not serviced; the WeaponBehavior recharge still elapses (fire_unit_weapon
         // subtracts the frames since its last service when it runs again).
         u.acquired = 0;
-        if (!idle) decide(u, cands_[k], frame, rng);
+        if (!idle && !suspended) decide(u, cands_[k], frame, rng);
         if (hooks_) {
             hooks_->unit_after_targeting(u.id, frame, rng);
             if (u.flags & kUnitDead) continue;
         }
         service_repairs(u, frame);  // OI abilities: hardpoint update 0x387010 -> repair 0x387170, before the weapons
-        if (!idle) update_weapons(u, frame, rng);
+        if (!idle) update_weapons(u, frame, rng, suspended);
         converted_decay(u, frame, rng);
     }
     // E. projectile sweeps (parallel)
@@ -3914,7 +4040,7 @@ void CombatSystem::hash_units(StateHasher& h) const {
         h.i32(u.id);
         h.u32(u.desc);
         h.i32(u.owner);
-        h.u32(u.flags);
+        h.u32(u.flags & ~kUnitHostMirrorFlags);  // S8 t10 / t11: the host mirrors are derived state
         h.f32(u.health);
         h.f32(u.shield);
         h.u8(u.shield_depleted);

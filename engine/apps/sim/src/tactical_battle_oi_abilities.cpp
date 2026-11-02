@@ -171,9 +171,12 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
 #endif
     // OI follow-up t03 (A1_READINGS §28.9): the script's shares of the movement lock (Lock_Current_Orders, a Divert).
     h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id); };
-    // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range tests against a garrisoned target's host. The gun bones (garrison fire,
-    // Num_Garrison_Guns) are not modelled: garrison_fire_bones stays unset (the thrower's own Spawn_Bone is used).
+    // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range tests against a garrisoned target's host. S8 t10 (§5.1): the host's gun
+    // bones of its current ALT entry (Num_Garrison_Guns FP_0<i>_ALT<a>, CombatSystem::garrison_fire_bones).
     h.garrison_holder = [this](tc::ObjectId id) -> tc::ObjectId { return garrison_holder_of(id); };
+    h.garrison_fire_bones = [this](tc::ObjectId holder, tactical::Vec3& holder_pos, std::vector<tactical::Vec3>& bones) {
+        return combat_ && combat_->garrison_fire_bones(holder, holder_pos, bones);
+    };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
 }
