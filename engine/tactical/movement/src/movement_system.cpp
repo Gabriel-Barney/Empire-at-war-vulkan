@@ -81,13 +81,10 @@ void MovementSystem::configure(Unit& u) const {
     // 0 = immobilised). Acceleration / deceleration scale with the effective speed (3.4). x 1 is exact, so a
     // factor of 1 keeps every value bit-identical.
     const float sf = u.speed_factor;
-    // S7 t06 [M]: the Alternate_Max_Speed / _Rate_Of_Turn while the secondary locomotor is active (when set).
-    const bool alt = u.on_secondary;
-    const float type_speed = alt && u.d.alt_max_speed > 0.0f ? u.d.alt_max_speed : u.d.max_speed;
-    const float type_turn = alt && u.d.alt_turn_rate > 0.0f ? u.d.alt_turn_rate : u.d.turn_rate;
-    const float base = u.speed_override >= 0.0f ? u.speed_override : type_speed;  // OI abilities: Berserker +0x2a0
+    // S7 t14: the normal (kind 1) values; the jetpack's airborne-kind alternates are loco_max_speed / loco_turn_rate.
+    const float base = u.speed_override >= 0.0f ? u.speed_override : u.d.max_speed;  // OI abilities: Berserker +0x2a0
     u.lp.max_speed = std::max(base, 0.0f) * mult * sf;
-    u.lp.turn_rate = std::max(type_turn, 0.0f) * mult;
+    u.lp.turn_rate = std::max(u.d.turn_rate, 0.0f) * mult;
     u.lp.accel = u.d.accel > 0.0f ? u.d.accel * mult * sf : u.lp.max_speed;
     u.lp.decel = u.d.decel > 0.0f ? u.d.decel * mult * sf : u.lp.max_speed;
     u.lp.mask = cfg_.classes.mask(u.d.movement_class);
@@ -159,7 +156,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.z = u.z;
     v.yaw = u.m.yaw;
     v.speed = u.m.speed;
-    v.max_speed = u.lp.max_speed;  // S10-int
+    v.max_speed = loco_max_speed(u);  // S10-int; S7 t14: the jetpack's Alternate_Max_Speed in its airborne kind
     v.has_goal = u.has_goal;
     v.arrived = u.arrived;
     v.failed = u.failed;
@@ -288,7 +285,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
         FormationMember f;
         f.id = u.d.id;
         f.pos = u.m.pos;
-        f.max_speed = u.lp.max_speed;
+        f.max_speed = loco_max_speed(u);  // 0x41b2a0 reads vf74: S7 t14, the jetpack's alternate while airborne-kind
         f.radius = u.d.radius;
         f.spacing = u.d.formation_spacing;
         f.hero = u.d.hero;
@@ -609,14 +606,17 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
                 q.goal = u.goal;
                 q.start_heading = u.m.yaw;
                 // FIGHTER_FLYING §6: the formation speed caps the plan ([port] a formation speed <= 0, e.g. the loiter's
-                // Min_Speed of a type without one, keeps max speed).
-                q.speed = u.formation_speed > 0.0f ? std::min(u.lp.max_speed, u.formation_speed) : u.lp.max_speed;
-                q.turn_rate = u.lp.turn_rate;
+                // Min_Speed of a type without one, keeps max speed). S7 t14 (MOVEMENT §3.1.1): the request record takes
+                // vf74 / vf75, so a jetpack in its airborne kind (0 / 0xF..0x13) plans with Alternate_Max_Speed /
+                // _Rate_Of_Turn; [M] an unset OverrideAcceleration / _Deceleration (full speed in one frame) follows it.
+                const float vmax = loco_max_speed(u);
+                q.speed = u.formation_speed > 0.0f ? std::min(vmax, u.formation_speed) : vmax;
+                q.turn_rate = loco_turn_rate(u);
                 q.radius = u.d.radius;
                 q.layer = u.d.space_layer;
                 q.now = frame;
-                q.accel = u.lp.accel;
-                q.decel = u.lp.decel;
+                q.accel = u.d.accel > 0.0f ? u.lp.accel : vmax;
+                q.decel = u.d.decel > 0.0f ? u.lp.decel : vmax;
                 q.goal_facing = u.facing;
                 q.threat_threshold = u.threat;
                 q.space_layer_type = u.d.space_layer_type;
@@ -1974,9 +1974,13 @@ void MovementSystem::fighter_stop(Unit& u) {
 }
 
 // move_space: §2 step 6 state 0 -> 0x1E with a target, else 0x1B; the new path starts at waypoint 0.
+// [port] S7 t12: always 0x1B here. The new order replaces the formation's block, but the host feeds that block's attack
+// target (set_fighter_target, TacticalBattle::feed_fighter_target) only before the next fighter frame, so a target read
+// now is the OLD order's. 0x1B with a target turns into 0x1E and runs §4.3 in the same frame (§2 step 6), so a target
+// that is still valid behaves as before; a stale one (a squadron in an attack run or a dogfight given a Move_To) no longer
+// sends §4.3 into NoTarget (enter_idle reset the new path: the order was lost) or a Retarget from its dogfight cell.
 void MovementSystem::fighter_order(Unit& u) {
-    FighterTarget t;
-    u.sm.state = ftarget_get(u, t) ? LocoState::FighterDirectedCombat : LocoState::FighterMoving;
+    u.sm.state = LocoState::FighterMoving;
     u.fs.idx = 0;
 }
 

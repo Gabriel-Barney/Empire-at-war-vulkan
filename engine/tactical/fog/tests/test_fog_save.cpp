@@ -391,7 +391,7 @@ void test_rejections() {
     std::unique_ptr<FWorld> t = build(sc);
     CHECK(rejects_truncation(t->fog, good, 97));
     Bytes bad = good;
-    put_u32(bad, 0, 2);
+    put_u32(bad, 0, 1);  // version 1 (before the FOWF t05 setup manager)
     CHECK(rejects(t->fog, bad));
     bad = good;
     bad[5] = 3;  // mode

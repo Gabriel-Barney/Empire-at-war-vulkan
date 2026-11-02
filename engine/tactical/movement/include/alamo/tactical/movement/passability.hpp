@@ -114,10 +114,14 @@ public:
     std::span<const uint32_t> effective_values() const { return eff_; }
 
     // Dynamic stamping (§1.3). stamp() replaces a previous stamp of the same id. Returns the
-    // number of distinct cells stamped.
+    // number of distinct cells stamped. A footprint that lands on no cell (water rule, Fine_Tune, off the grid) is
+    // still recorded: stamped(id) is true with no cells (S8 t02: the object is a LAND_OBSTACLE occupant of nothing; its
+    // slot-43 aim walk finds no occupied cell, TACTICAL_GAPS 3.1).
     uint32_t stamp(ObjectId id, const ObstacleFootprint& fp);
     bool unstamp(ObjectId id);
     bool stamped(ObjectId id) const { return stamps_.find(id) != stamps_.end(); }
+    // S8 t02: the stamped ids, ascending (map placements' negative ids first). Hosts unstamp the objects that left.
+    std::vector<ObjectId> stamped_ids() const;
     // S8 t01 (TACTICAL_GAPS 3.1 slot 43, MOVEMENT §1.3 0x59efa0): is cell (x, y) one of the cells stamp `id` occupies
     // (the object is in that cell's hard-occupant list)? False for an unknown id or an out-of-range cell. Read-only
     // (combat's targeting scan asks it from job workers).

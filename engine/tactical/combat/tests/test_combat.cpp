@@ -638,7 +638,7 @@ void test_targeting_rules() {
     }
 }
 
-// ---- OI tactical: circular lead, lobbed flight, team targeting ------------------------------------------------
+// ---- OI tactical: circular lead, team targeting ------------------------------------------------
 
 void test_circular_lead() {
     const Vec3 m{0, 0, 0};
@@ -710,59 +710,369 @@ void test_turn_toward() {
     CHECK_NEAR(dot(e, e), 1.0, 1e-6);
 }
 
-void test_lob() {
-    // High arc: v = 10, g = 1, horizontal 50, dz 0: tan = (100 + sqrt(10000 - 2500)) / 50 = 3.732 (75 degrees).
-    const Vec3 d = lob_direction(Vec3{0, 0, 0}, Vec3{50, 0, 0}, 10.0f, 1.0f);
-    CHECK_NEAR(d.z / d.x, 3.7320508, 1e-4);
-    CHECK_NEAR(dot(d, d), 1.0, 1e-6);
-    // Out of reach (> v^2 / g = 100): 45 degrees.
-    const Vec3 e = lob_direction(Vec3{0, 0, 0}, Vec3{0, 150, 0}, 10.0f, 1.0f);
-    CHECK_NEAR(e.z, e.y, 1e-6);
-    // System: a category-3 shot from the WeaponBehavior arcs and comes down at the target's height.
-    World w;
+// ---- S8 t04: lob solver and grenade flight (docs/re/LOB_SOLVER.md) ------------------------------------------------
+
+constexpr float kDeg = 57.29577951308232f;
+float lob_dist(Vec3 a, Vec3 b) { return dmath::sqrt(dot(a - b, a - b)); }
+
+// SPMAT_Walker's Proj_Ground_SPMAT_Grenade (§1.2): v = 30, G = 1.636363636 (R = v^2 / G = 550), Can_Lob_Slower.
+ProjectileDesc spmat_grenade() {
     ProjectileDesc g;
-    g.name = "Grenade";
-    g.max_speed = 6.0f;
+    g.name = "Proj_Ground_SPMAT_Grenade";
+    g.max_speed = 30.0f;
     g.damage = 10.0f;
     g.lobbed = true;
     g.category = ProjectileCategory::Grenade;
-    g.grenade_gravity = 0.5f;
-    g.lob_mod = 0.5f;  // g = 0.25 -> range 36 / 0.25 = 144
-    w.data.projectiles.push_back(g);
-    UnitDesc thrower;
-    thrower.tactical_health = 100.0f;
-    thrower.weapon_projectile = 0;
-    thrower.weapon_recharge = 5.0f;  // one shot inside the loop (first shot after 150 + 0..10 frames)
-    thrower.max_attack_distance = 500.0f;
-    const uint32_t td = push_unit(w.data, thrower);
-    UnitDesc target;
-    target.tactical_health = 1000.0f;
-    target.radius = 2.0f;
-    const uint32_t tg = push_unit(w.data, target);
+    g.grenade_gravity = 1.0f;
+    g.lob_mod = 900.0f / 550.0f;
+    g.can_lob_slower = true;
+    g.max_lifetime = 900.0f;
+    return g;
+}
+
+void test_lob_solver() {
+    const float v = 30.0f, G = 900.0f / 550.0f;
+    LobSolution s;
+    // §2.3 table, SPMAT at 275 on flat ground: 75.0 deg / 35.4 frames at Max_Speed; with the flag 0.8 v, 64.3 deg /
+    // 26.4 frames (what retail does).
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{275, 0, 0}, v, G, false, s));
+    CHECK(s.speed == 30.0f);
+    CHECK_NEAR(s.angle * kDeg, 75.0, 0.01);
+    CHECK_NEAR(275.0f / (s.speed * dmath::cos(s.angle)), 35.42, 0.02);
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{275, 0, 0}, v, G, true, s));
+    CHECK(s.speed == 30.0f * 0.8f);
+    CHECK_NEAR(s.angle * kDeg, 64.31, 0.01);
+    CHECK_NEAR(275.0f / (s.speed * dmath::cos(s.angle)), 26.43, 0.02);
+    // d / R = 0.25: 82.8 deg without the flag; 0.512 v, 53.8 deg with it. d / R = 0.9: v, 57.9 deg either way.
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{0, 137.5f, 0}, v, G, false, s));
+    CHECK_NEAR(s.angle * kDeg, 82.76, 0.01);
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{0, 137.5f, 0}, v, G, true, s));
+    CHECK(s.speed == 30.0f * 0.8f * 0.8f * 0.8f);
+    CHECK_NEAR(s.angle * kDeg, 53.75, 0.01);
+    CHECK(lob_solve(Vec3{10, 10, 0}, Vec3{10 - 495.0f, 10, 0}, v, G, true, s));
+    CHECK(s.speed == 30.0f);
+    CHECK_NEAR(s.angle * kDeg, 57.92, 0.01);
+    // §4: maximum range v^2 / G = 550 at equal heights; + Ranged_Target_Z_Adjust 6 on the target: (v / G) sqrt(v^2 - 12 G)
+    // = 543.97 - between the two the unit is "in scan range" but there is no shot.
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{549.0f, 0, 0}, v, G, false, s));
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{551.0f, 0, 0}, v, G, false, s));
+    CHECK(lob_solve(Vec3{0, 0, 0}, Vec3{543.5f, 0, 6.0f}, v, G, true, s));
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{544.5f, 0, 6.0f}, v, G, true, s));
+    CHECK(s.angle == 0.0f);  // no solution: angle 0, speed untouched
+    CHECK_F(lob_range(30.0f, 1.0f, 900.0f / 550.0f), 550.0f);
+    // Too high: v^2 < G h is out of range even right next to it.
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{10, 0, 600}, v, G, false, s));
+    // d = 0 -> 0.0001: straight up (~90 deg); with the flag the speed steps down to about sqrt(G x 0.0001).
+    CHECK(lob_solve(Vec3{5, 5, 0}, Vec3{5, 5, 0}, v, G, false, s));
+    CHECK(s.angle * kDeg > 89.99f && s.speed == 30.0f);
+    CHECK(lob_solve(Vec3{5, 5, 0}, Vec3{5, 5, 0}, v, G, true, s));
+    CHECK(s.speed < 0.02f && s.speed > 0.01f);
+    // §8 item 13 [port]: G <= 0 is "no solution" (retail never ends the 0.8 loop at G = 0).
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{100, 0, 0}, v, 0.0f, true, s));
+    CHECK(!lob_solve(Vec3{0, 0, 0}, Vec3{100, 0, 0}, v, -1.0f, false, s));
+    // §1.1 defaults: gravity 1.05, lob mod 5.02 (G = 5.271).
+    const ProjectileDesc def;
+    CHECK(def.grenade_gravity == 1.05f && def.lob_mod == 5.02f && !def.can_lob_slower && !def.sticks_on_collision);
+    // §6.1: the closed form passes through Q at t = d / (s cos theta).
+    CHECK(lob_solve(Vec3{0, 0, 6}, Vec3{200, 100, 6}, v, G, true, s));
+    const Vec3 f = lob_forward(Vec3{2, 1, -7}, s.angle);  // yaw from the heading's XY part only
+    CHECK_NEAR(dot(f, f), 1.0, 1e-6);
+    CHECK_NEAR(dmath::asin(f.z) * kDeg, s.angle * kDeg, 1e-3);
+    const float tq = dmath::sqrt(200.0f * 200.0f + 100.0f * 100.0f) / (s.speed * dmath::cos(s.angle));
+    CHECK(lob_dist(lob_position(Vec3{0, 0, 6}, f, s.speed, G, tq), Vec3{200, 100, 6}) < 0.01f);
+    CHECK(same(lob_position(Vec3{1, 2, 3}, f, s.speed, G, 0.0f), Vec3{1, 2, 3}));
+}
+
+// A land (or space) sandbox with an SPMAT-like grenade thrower (id 1, player 0) and a target (id 2, player 1).
+struct LobWorld {
+    World w;
+    uint32_t thrower = 0, target = 0;
+    explicit LobWorld(GameMode mode = GameMode::Land, ProjectileDesc g = spmat_grenade()) {
+        w.data.projectiles.push_back(g);
+        UnitDesc t;
+        t.tactical_health = 100.0f;
+        t.weapon_projectile = 0;
+        t.weapon_recharge = 5.0f;          // the first shot after 150 + 0..10 frames, then one per 150 + 0..10
+        t.max_attack_distance = 100.0f;    // not a grenade weapon's range (§4)
+        t.ranged_target_z_adjust = 0.0f;   // launch point at the unit's position
+        thrower = push_unit(w.data, t);
+        UnitDesc v;
+        v.tactical_health = 1000.0f;
+        v.radius = 2.0f;
+        v.ranged_target_z_adjust = 0.0f;
+        target = push_unit(w.data, v);
+        CombatConfig cfg;
+        cfg.mode = mode;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+    }
+    void move(ObjectId id, Vec3 p) {
+        w.sys->set_position(id, p);
+        w.trees.update(static_cast<EntityHandle>(id), box_of(p, w.data.units[w.sys->desc_index(id)].radius));
+    }
+};
+
+void test_lob_targeting() {
+    // Slot 44 (§3.1): the solve from the attacker to the target + Ranged_Target_Z_Adjust; the scan box / attack range is
+    // v^2 / G x (1 + list 8) = 550 - Targeting_Max_Attack_Distance (100) is not used. Slot 45 is unchanged.
+    for (const float x : {300.0f, 543.5f, 544.5f, 549.0f}) {
+        LobWorld lw;
+        lw.w.data.units[lw.target].ranged_target_z_adjust = 6.0f;
+        lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+        lw.w.add(2, lw.target, 1, Vec3{x, 0, 0});
+        CHECK_F(lw.w.sys->attack_range(1), 550.0f);
+        CHECK_F(lw.w.sys->base_attack_range_of(1), 550.0f);
+        lw.w.tick();
+        CHECK(lw.w.sys->auto_target(1) == (x < 544.0f ? 2 : kNoObject));
+    }
+    {  // Targeting_Min_Attack_Distance 220 still refuses closer targets (slot 45).
+        LobWorld lw;
+        lw.w.data.units[lw.thrower].min_attack_distance = 220.0f;
+        lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+        lw.w.add(2, lw.target, 1, Vec3{200, 0, 0});
+        lw.w.tick();
+        CHECK(lw.w.sys->auto_target(1) == kNoObject);
+    }
+    {  // No arc = no shot (§5.2): an ordered target out of reach is never fired at (and no draw is spent on it).
+        LobWorld lw;
+        lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+        lw.w.add(2, lw.target, 1, Vec3{600, 0, 0});
+        lw.w.sys->order_attack(1, 2);
+        for (int i = 0; i < 400; ++i) lw.w.tick();
+        CHECK(lw.w.sys->stats().shots == 0u && lw.w.sys->projectile_count() == 0u);
+    }
+}
+
+void test_lob_weapon_flight() {
+    // SPMAT at 275 (land, flat ground at z 0): the WeaponBehavior shot launches at 0.8 v = 24 with a 64.3 deg pitch, flies
+    // N(t) = L + s t f - G t^2 / 2 z exactly and hits the target (radius 2 box) on the way down between t = 26 and 27.
+    LobWorld lw;
+    lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+    lw.w.add(2, lw.target, 1, Vec3{275, 0, 0});
+    const float G = 900.0f / 550.0f;
+    uint32_t spawn = 0, hit_frame = 0;
+    Vec3 launch, f;
+    bool exact = true;
+    for (int i = 0; i < 400 && hit_frame == 0; ++i) {
+        lw.w.tick();
+        if (lw.w.sys->stats().hits > 0) hit_frame = lw.w.frame - 1;
+        if (lw.w.sys->projectile_count() == 0) continue;
+        const ProjectileView pv = lw.w.sys->projectile(0);
+        if (spawn == 0) {
+            spawn = pv.spawn_frame;
+            launch = pv.pos;
+            f = pv.dir;
+            CHECK(pv.lob && pv.speed == 24.0f);
+            CHECK_NEAR(dmath::asin(f.z) * kDeg, 64.31, 0.01);
+            CHECK(f.y == 0.0f && f.x > 0.0f);  // yaw toward the target
+            continue;
+        }
+        const float t = static_cast<float>(lw.w.frame - 1 - spawn);
+        if (!same(pv.pos, lob_position(launch, f, 24.0f, G, t))) exact = false;
+    }
+    CHECK(spawn != 0 && exact);
+    CHECK(hit_frame == spawn + 27);
+    CHECK(lw.w.sys->health(2) == lw.w.sys->max_health(2) - 10.0f);  // direct damage (Process_Hit)
+}
+
+// One grenade launched by launch_projectile from (0, 0, 0) at `point` (no target) in a bare system.
+struct LobLaunch {
+    CombatData d;
+    std::unique_ptr<CombatSystem> sys;
+    TreeSet trees{2};
+    SimRng rng{7u};
+    uint32_t frame = 1;
+    LobLaunch(GameMode mode, ProjectileDesc g, Vec3 point, float ground = 0.0f) {
+        d.projectiles = {g};
+        CombatConfig cfg;
+        cfg.mode = mode;
+        sys = std::make_unique<CombatSystem>(d, cfg, std::vector<PlayerInfo>{PlayerInfo{}, PlayerInfo{}});
+        if (ground != 0.0f) {
+            RocketTerrain rt;
+            rt.height = [ground](float, float) { return ground; };
+            sys->set_rocket_terrain(std::move(rt));
+        }
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.from = Vec3{0, 0, 0};
+        l.point = point;
+        CHECK(sys->launch_projectile(l, frame));
+    }
+    void tick() { sys->tick(frame++, trees, rng); }
+};
+
+void test_lob_ground_and_expiry() {
+    {  // Land: the terrain stops the arc (ground test) - On_Detonate at the ground hit, not at the aim height. A plateau
+       // at z 5 is struck before the arc comes down to the aim point (z 0) at x 200.
+        LobLaunch ll(GameMode::Land, spmat_grenade(), Vec3{200, 0, 0}, 5.0f);
+        bool done = false;
+        Vec3 at;
+        for (int i = 0; i < 100 && !done; ++i) {
+            ll.tick();
+            for (const HitEvent& e : ll.sys->hit_events()) {
+                done = true;
+                at = e.position;
+                CHECK(e.victim == kNoObject);
+            }
+        }
+        CHECK(done && at.z <= 5.0f && at.z > 4.99f && at.x < 200.0f && at.x > 190.0f);
+        CHECK(ll.sys->stats().expired == 1u && ll.sys->stats().hits == 0u && ll.sys->projectile_count() == 0u);
+    }
+    {  // Space: no ground test - the grenade falls on past Q until its lifetime (> 2 s: the 61st frame) runs out.
+        ProjectileDesc g = spmat_grenade();
+        g.max_lifetime = 2.0f;
+        LobLaunch ll(GameMode::Space, g, Vec3{200, 0, 0});
+        int steps = 0;
+        while (ll.sys->projectile_count() > 0 && steps < 200) {
+            ll.tick();
+            ++steps;
+        }
+        CHECK(steps == 62);  // launched at frame 1, first stepped at 2, expires at frame 62 (61 frames > 2 s)
+        CHECK(ll.sys->stats().expired == 1u);
+    }
+    {  // §6.5: the lifetime replaces the travel budget only with Max_Lifetime > 0. Max_Flight_Distance 50, no lifetime:
+       // DistanceTravelled += s (24 per step) reaches 50 on the third step.
+        ProjectileDesc g = spmat_grenade();
+        g.max_lifetime = 0.0f;
+        g.max_flight_distance = 50.0f;
+        LobLaunch ll(GameMode::Space, g, Vec3{275, 0, 0});
+        CHECK(ll.sys->projectile(0).max_travel == 50.0f && ll.sys->projectile(0).speed == 24.0f);
+        for (int i = 0; i < 3; ++i) ll.tick();  // frame 1 (spawn), 2, 3: two steps
+        CHECK(ll.sys->projectile_count() == 1u);
+        ll.tick();
+        CHECK(ll.sys->projectile_count() == 0u);
+        g.max_lifetime = 900.0f;  // with a lifetime the budget never applies
+        LobLaunch lt(GameMode::Space, g, Vec3{275, 0, 0});
+        for (int i = 0; i < 10; ++i) lt.tick();
+        CHECK(lt.sys->projectile_count() == 1u && lt.sys->projectile(0).travelled == 24.0f * 9.0f);
+    }
+    {  // No solution: nothing is spawned.
+        CombatData d;
+        d.projectiles = {spmat_grenade()};
+        CombatSystem sys(d, CombatConfig{}, {PlayerInfo{}, PlayerInfo{}});
+        ProjectileLaunch l;
+        l.from = Vec3{0, 0, 0};
+        l.point = Vec3{600, 0, 0};
+        CHECK(!sys.launch_projectile(l, 1) && sys.projectile_count() == 0u);
+        CHECK(!sys.lob_solution(0, l.from, l.point) && sys.lob_solution(0, l.from, Vec3{500, 0, 0}));
+        d.projectiles[0].grenade_gravity = 0.0f;  // an XML 0 is kept: G = 0 -> no arc [port]
+        CHECK(!sys.lob_solution(0, l.from, Vec3{50, 0, 0}));
+    }
+}
+
+void test_lob_sticky() {
+    // §6.4: a sticky grenade that hits an object attaches to it (no contact damage), rides along, and waits for its
+    // BOMB timer; one that hits the ground rests there.
+    ProjectileDesc g = spmat_grenade();
+    g.name = "Proj_Sticky_Bomb";
+    g.max_speed = 15.0f;
+    g.lob_mod = 1.0f;  // G = 1, R = 225
+    g.sticks_on_collision = true;
+    g.blast_area_damage = 40.0f;
+    g.blast_area_range = 30.0f;
+    LobWorld lw(GameMode::Land, g);
+    lw.w.data.units[lw.thrower].weapon_projectile = -1;  // no weapon: the toss comes from the host (ability)
+    lw.w.add(1, lw.thrower, 0, Vec3{0, 0, 0});
+    lw.w.add(2, lw.target, 1, Vec3{100, 0, 0});
+    ProjectileLaunch l;
+    l.shooter = 1;
+    l.owner = 0;
+    l.from = Vec3{0, 0, 0};
+    l.target = 2;
+    l.fuse_seconds = 3.0f;
+    l.toss = true;
+    const uint32_t f0 = lw.w.frame;
+    CHECK(lw.w.sys->launch_projectile(l, f0));
+    CHECK(lw.w.sys->projectile(0).lob && !lw.w.sys->projectile(0).stuck);
+    int guard = 0;
+    while (!lw.w.sys->projectile(0).stuck && guard++ < 200) lw.w.tick();
+    ProjectileView pv = lw.w.sys->projectile(0);
+    CHECK(pv.stuck && pv.stuck_to == 2 && pv.speed == 0.0f);
+    CHECK(lw.w.sys->health(2) == lw.w.sys->max_health(2) && lw.w.sys->stats().hits == 0u);  // no contact damage
+    const Vec3 offset = pv.pos - Vec3{100, 0, 0};
+    lw.move(2, Vec3{100, 40, 0});
+    lw.w.tick();
+    CHECK(same(lw.w.sys->projectile(0).pos, Vec3{100, 40, 0} + offset));
+    while (lw.w.sys->projectile_count() > 0 && guard++ < 400) lw.w.tick();
+    CHECK(lw.w.frame - 1 == f0 + 90);  // the 3 s timer: detonation at age >= 3 s
+    CHECK(lw.w.sys->health(2) < lw.w.sys->max_health(2));  // area damage at the bomb
+    {  // ground: rests where it came down (flat ground at z 0), not at the aim height
+        LobLaunch ll(GameMode::Land, g, Vec3{100, 0, 20});
+        for (int i = 0; i < 200 && !ll.sys->projectile(0).stuck; ++i) ll.tick();
+        const ProjectileView gv = ll.sys->projectile(0);
+        CHECK(gv.stuck && gv.stuck_to == kNoObject && gv.pos.z <= 0.0f && gv.pos.z > -0.01f && gv.pos.x > 100.0f);
+    }
+}
+
+void test_lob_hardpoint() {
+    // §5.4: hardpoint shots do not use the solver - straight at the aim point at Max_Speed - and the parabola's gravity
+    // pulls them below that line.
+    World w;
+    w.data.projectiles.push_back(spmat_grenade());
+    HardpointDesc hd;
+    hd.kind = HardpointKind::WeaponMissile;
+    hd.projectile = 0;
+    hd.fire_range = 500.0f;
+    hd.max_recharge = 1.0f;
+    hd.bone_a = Vec3{0, 0, 10};
+    w.data.hardpoints.push_back(hd);
+    UnitDesc a;
+    a.tactical_health = 100.0f;
+    a.max_attack_distance = 500.0f;
+    a.hardpoints = {0};
+    const uint32_t ad = push_unit(w.data, a);
+    UnitDesc t;
+    t.tactical_health = 1000.0f;
+    t.radius = 2.0f;
+    const uint32_t td = push_unit(w.data, t);
     CombatConfig cfg;
     cfg.mode = GameMode::Land;
     cfg.inaccuracy_enabled = false;
     w.make(cfg);
-    w.add(1, td, 0, Vec3{0, 0, 0});
-    w.add(2, tg, 1, Vec3{100, 0, 0});
-    CHECK_F(w.sys->attack_range(1), 144.0f);  // per-type gravity x lob mod
-    bool spawned = false, peaked = false;
-    float max_z = 0.0f;
-    for (int i = 0; i < 400 && w.sys->stats().hits + w.sys->stats().expired == 0; ++i) {
-        w.tick();
-        if (w.sys->projectile_count() > 0) {
-            spawned = true;
-            const ProjectileView pv = w.sys->projectile(0);
-            CHECK(pv.speed > 0.0f);  // presentation view: velocity = dir x speed
-            CHECK(pv.spawn_frame <= w.frame);
-            max_z = std::max(max_z, pv.pos.z);
-            if (pv.dir.z < 0.0f) peaked = true;
-        }
+    w.add(1, ad, 0, Vec3{0, 0, 0});
+    w.add(2, td, 1, Vec3{100, 0, 0});
+    for (int i = 0; i < 60 && w.sys->projectile_count() == 0; ++i) w.tick();
+    CHECK(w.sys->projectile_count() == 1u);
+    const ProjectileView pv = w.sys->projectile(0);
+    CHECK(pv.lob && pv.speed == 30.0f);
+    CHECK(same(pv.dir, norm(Vec3{100, 0, -10})));  // straight at the aim point (the target's position)
+    w.tick();
+    const Vec3 n = w.sys->projectile(0).pos;
+    CHECK(same(n, lob_position(Vec3{0, 0, 10}, pv.dir, 30.0f, 900.0f / 550.0f, 1.0f)));
+    CHECK(n.z < 10.0f + pv.dir.z * 30.0f);  // below the straight line
+}
+
+void test_lob_save() {
+    // N1: a grenade in flight and a stuck one survive write -> read -> write byte for byte and fly on identically.
+    ProjectileDesc g = spmat_grenade();
+    g.sticks_on_collision = true;
+    LobLaunch a(GameMode::Land, g, Vec3{150, 0, 0});
+    ProjectileLaunch l2;
+    l2.from = Vec3{0, 0, 0};
+    l2.point = Vec3{80, 20, 0};
+    CHECK(a.sys->launch_projectile(l2, a.frame));
+    for (int i = 0; i < 20; ++i) a.tick();
+    CHECK(a.sys->projectile_count() == 2u && a.sys->projectile(1).stuck != a.sys->projectile(0).stuck);
+    ByteWriter wa;
+    a.sys->write(wa);
+    LobLaunch b(GameMode::Land, g, Vec3{150, 0, 0});
+    ByteReader r(wa.bytes());
+    CHECK(b.sys->read(r));
+    b.frame = a.frame;
+    b.rng = a.rng;
+    ByteWriter wb;
+    b.sys->write(wb);
+    CHECK(wa.bytes() == wb.bytes());
+    for (int i = 0; i < 40; ++i) {
+        a.tick();
+        b.tick();
     }
-    CHECK(spawned);
-    CHECK(peaked);
-    CHECK(max_z > 50.0f);  // a high arc, not a straight shot along z = 0
-    CHECK(w.sys->stats().hits + w.sys->stats().expired == 1);
+    StateHasher ha, hb;
+    a.sys->hash_projectiles(ha);
+    a.sys->hash_extended(ha);
+    b.sys->hash_projectiles(hb);
+    b.sys->hash_extended(hb);
+    CHECK(ha.digest() == hb.digest());
 }
 
 // Adds a squad unit (team id / team_leader) to a TargetWorld.
@@ -3306,7 +3616,13 @@ int main(int argc, char** argv) {
     test_inaccuracy_system();
     test_targeting_rules();
     test_circular_lead();  // OI tactical
-    test_lob();
+    test_lob_solver();
+    test_lob_targeting();
+    test_lob_weapon_flight();
+    test_lob_ground_and_expiry();
+    test_lob_sticky();
+    test_lob_hardpoint();
+    test_lob_save();
     test_turn_toward();  // S9 t05
     test_team_targeting();
     test_gaps_constants();

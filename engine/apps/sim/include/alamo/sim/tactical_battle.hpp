@@ -204,6 +204,18 @@ LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const Battl
                               uint32_t company_type);
 void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy);
 // ---- end a1g t04 follow-up ----
+// S7 t12: the space fighter locomotor's formation attack target (FIGHTER_FLYING §2 step 6 / §4.3, Formation_Attack_Target
+// 0x41a2e0, TACTICAL_COMBAT §2.8) for a squadron leader or a fighter without a squadron, from its combat and movement
+// state (rules: TacticalBattle::feed_fighter_target). Pure; kNoObjectId = no target.
+struct FighterTargetInputs {
+    objects::ObjectId ordered = kNoObjectId;      // live ordered combat target
+    objects::ObjectId goal = kNoObjectId;         // live attack goal (the move block's object)
+    bool goal_hostile = false;                    // goal owner is an enemy of the fighter's owner
+    bool moving = false;                          // the fighter has a move order (a formation)
+    objects::ObjectId auto_target = kNoObjectId;  // live combat auto target (no ordered target)
+    bool auto_hidden = false;                     // auto target hidden by fog for the fighter's owner
+};
+objects::ObjectId fighter_formation_target(const FighterTargetInputs& in);
 
 class TacticalBattle {
 public:
@@ -311,9 +323,12 @@ public:
     // order. A unit that is idle with an empty queue starts a queued order at once. See "order queue" below.
     // `move_flags` (P1_DOUBLE_CLICK_MOVE.md §3.2): the move event's 8-bit flags, copied unchanged into MoveOrder::flags
     // (0x04 player order, 0x01 attack-move, 0x02 guard-move, 0x08 waypoint append, 0x80 double-click); AI / Lua moves 0.
+    // `switch_locomotor` (S7 t10, MOVEMENT §3.1.1 / §6.2): the MoveToPosition 1-bit field. The units with
+    // Uses_Multiple_Locomotors swap to their secondary (jetpack) locomotor first (MoveOrder::switch_locomotor; a queued
+    // order swaps them at once and queues the move). Parity only: no FoC sender sets it.
     commands::RejectReason order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x, float y,
                                       SimRng& rng, float facing_deg = tactical::movement::kNoFacing, bool attack_move = false,
-                                      bool queued = false, uint8_t move_flags = 0);
+                                      bool queued = false, uint8_t move_flags = 0, bool switch_locomotor = false);
     // Facing event (id 20, P1_DOUBLE_CLICK_MOVE.md §2.2: a land drag that started on a selected unit; rotate only) [port:
     // MovementSystem has no turn-in-place order]: one single-unit move per eligible movable unit (selection order) to its
     // own position with final facing `facing_deg`; attack orders and order queues are kept.
@@ -329,6 +344,14 @@ public:
     int32_t first_hardpoint_of_type(objects::ObjectId target, int32_t type) const;
     // True when `player`'s units are left to commands (BattleConfig::skip_human_units and a human galactic player).
     bool commanded_by_player(int32_t player) const;
+    // OI follow-up t03 (A1_READINGS §28.9): movement locked (0x39ad40) = the abilities' share of the obj +0x3a8 counter,
+    // or a share a Lua bridge reports (Lock_Current_Orders, a running Divert). The lock never changes speed: a group move
+    // (player commands, AI orders, the stand-in) leaves locked units out and they keep their current order; ability
+    // moves (CONFUSE, HUNT, JET_PACK) are not filtered.
+    bool movement_locked(objects::ObjectId id) const;
+    // Registered per bridge owner `key` (an empty fn removes it; the battle outlives its AI / story bridges).
+    void set_script_movement_lock(const void* key, std::function<bool(objects::ObjectId)> fn);
+    bool script_movement_locked(objects::ObjectId id) const;  // the bridges' shares only
     // --- end human order API ---
 
     // --- P host (owner: game host agent): human reinforcements ---
@@ -448,9 +471,10 @@ public:
     float ground_height(float x, float y) const;
     // Frame count of clip `anim` (index 0) of the object's model in this mode (sim animation); 0 = unknown.
     uint32_t anim_clip_frames(const TacticalMode& mode, objects::ObjectId id, uint8_t anim) const;
-    // Frame count and fps of clip `anim` (a ModelAnimType id, index 0) of the object's model (OI t03 ability timings:
+    // Frame count and fps of clip `anim` (a ModelAnimType id, index `variant`) of the object's model (OI t03 ability timings:
     // static clip data, never the playing clock). False without a sim animation, model or clip.
-    bool anim_clip_info(const TacticalMode& mode, objects::ObjectId id, int32_t anim, uint32_t& frames, float& fps) const;
+    bool anim_clip_info(const TacticalMode& mode, objects::ObjectId id, int32_t anim, uint32_t& frames, float& fps,
+                        uint32_t variant = 0) const;
     // Plays clip `anim` of the object from `start_fraction` at `speed` (Create_Cinematic_Transport Land / Takeoff;
     // sim animation only). False without a clip.
     bool play_clip(const TacticalMode& mode, objects::ObjectId id, uint8_t anim, float start_fraction, float speed, uint64_t global_frame);
@@ -786,8 +810,8 @@ public:
     bool fog_active() const;
     bool fog_render_option() const;
     // OI fog: land setup phase (FOG_OF_WAR §3.4, TACTICAL_GAPS §5.4). setup() starts it on land when SetupPhaseEnabled
-    // (False in FoC and TR); the host ends it (the original's "begin battle" trigger is not traced). No-ops in space,
-    // without fog, or when not in that state.
+    // (False in FoC and TR); the setup manager (FOWF t05) ends it when every human player sent SetupPhaseTriggerEnd (32)
+    // or SetupPhaseCountdownSeconds after the first one. No-ops in space, without fog, or when not in that state.
     void fog_begin_setup_phase();
     void fog_end_setup_phase();
     bool fog_setup_phase() const;
@@ -898,6 +922,11 @@ private:
     void add_participant(objects::ObjectHandle g, int32_t owner, uint8_t side, bool reserve, bool starbase, bool structure);
     void deploy(TacticalMode& mode, uint32_t participant, SimRng& rng);
     void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
+    // S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints of single objects under their object id (tactical_battle.cpp).
+    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);   // LAND_OBSTACLE stamp; false: none
+    bool space_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);  // SPACE_OBSTACLE static entry
+    void land_obstacles_sync(const TacticalMode& mode);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
+    std::vector<uint8_t> land_obstacle_none_;  // S8 t02: per type, 1 = no footprint (no XML size, no model); derived, not saved
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
     std::vector<Vec3> drop_pos_;  // a1g t04 follow-up: order_reinforce's land layout slots for deploy (transient)
@@ -923,6 +952,9 @@ private:
     void unit_gone(TacticalMode& mode, Unit& u);  // container bookkeeping after a death / retreat
     // S10-int steps
     void apply_speed_factors();
+    void drop_locked(std::vector<objects::ObjectId>& ids) const;  // OI follow-up t03: group moves skip locked units
+    // OI follow-up t03: per bridge owner, registration order (not saved: the bridges' own state)
+    std::vector<std::pair<const void*, std::function<bool(objects::ObjectId)>>> script_locks_;
     void feed_attack_targets(const objects::ObjectStore& store);
     // S7 fighters (FIGHTER_FLYING.md; tactical_battle.cpp "fighter host"): squadrons / params into the MovementSystem,
     // the combat target as the formation attack target, the locomotor's Provoke / Retarget orders back into combat.
@@ -955,7 +987,7 @@ private:
     void advance_queues(TacticalMode& mode, SimRng& rng);
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
     void exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng, float facing_deg,
-                   bool attack_move, uint8_t flags = 0);
+                   bool attack_move, uint8_t flags = 0, bool switch_locomotor = false);
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;
@@ -1048,6 +1080,9 @@ private:
     void fog_after_deploy(TacticalMode& mode);              // setup(): dense mask, battle scale
     void fog_decay();                                       // tick(): step 4, before movement
     void fog_service(TacticalMode& mode);                   // tick(): after consume_events
+    void fog_setup_tick();                                  // tick(): after fog_service (FOWF t05 setup manager end test)
+    // FOWF t05: commands 31 SetupPhaseMove / 32 SetupPhaseTriggerEnd (handle_command).
+    commands::RejectReason fog_setup_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev);
     void fog_owner_changed(TacticalMode& mode, objects::ObjectHandle h, int32_t old_owner);  // change_owner()
     // fog follow-up: a FOW_REVEAL_PING object spawned this tick (REVEAL source while it lives) and the S9
     // AbilityEventKind::SpawnObject handler that spawns it (Spawned_Object_Type at the target, gone next tick [M]).
@@ -1058,6 +1093,7 @@ private:
     tactical::fog::FogObject fog_object_of(const objects::ObjectStore& store, objects::ObjectHandle h) const;
     std::vector<tactical::fog::FogSetupObject> fog_setup_objects() const;              // OI fog
     std::vector<tactical::fog::PreventionCircle> fog_prevention_circles() const;       // OI fog
+    void fog_footprint_samples(const objects::ObjectStore& store, objects::ObjectHandle h, float* xy) const;  // FOWF t02
     void fog_service_sources(const objects::ObjectStore& store);                       // OI fog
     void fog_overrun();                                                                // OI fog
     tactical::fog::FogOfWar fog_;

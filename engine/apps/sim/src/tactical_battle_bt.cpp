@@ -672,12 +672,27 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
     const TypeCrcIndex index(types);
     static const objects::BehaviorTypeId kMarker = objects::behavior_type_id("MARKER");
     const auto& names = types.raw().types().name_crc;
-    // S8 t01: a placement's LAND_OBSTACLE stamp (mv::map_stamp_id) moves to the object spawned for it, so combat's per-object
-    // cell query (PassabilityGrid::occupies, the slot-43 aim walk) finds it. [port] a Map_Load_Spawn_Table replacement
-    // leaves the placeholder's stamp under the placement id.
-    auto own_stamp = [&](const terrain::ObjectPlacement& p, objects::TypeIndex spawned, objects::ObjectHandle h) {
-        if (space_ || !movement_ || spawned != index.find(p.type_crc) || !mode.primary().exists(h)) return;
-        movement_->grid().rekey(mv::map_stamp_id(static_cast<size_t>(&p - map_.objects.data())), mode.primary().id(h));
+    // S8 t01 / S7 t13: a placement's LAND_OBSTACLE stamp / SPACE_OBSTACLE static entry (id mv::map_stamp_id) moves to the
+    // object spawned for it, so combat's per-object cell query (PassabilityGrid::occupies, the slot-43 aim walk) finds it and
+    // the entry leaves with the object (land_obstacles_sync / space_obstacles_sync). A Map_Load_Spawn_Table pick drops the
+    // placeholder's footprint and gets the spawned type's (MOVEMENT §1.3 / §2.2: the behaviours stamp on attach, the
+    // placeholder is removed); a placement that spawns nothing (no pick, a skipped map company, a failed spawn) loses it.
+    auto own_obstacles = [&](const terrain::ObjectPlacement& p, objects::TypeIndex spawned, objects::ObjectHandle h) {
+        if (!movement_) return;
+        const mv::ObjectId from = mv::map_stamp_id(static_cast<size_t>(&p - map_.objects.data()));
+        const bool live = mode.primary().alive(h);
+        const bool same = live && spawned == index.find(p.type_crc);
+        if (space_) {
+            mv::SpaceOccupancy& occ = movement_->space();
+            if (same && occ.rekey_static(from, mode.primary().id(h))) return;
+            occ.remove_static(from);
+            if (live) space_obstacle_attach(mode, h);
+        } else {
+            mv::PassabilityGrid& grid = movement_->grid();
+            if (same && grid.rekey(from, mode.primary().id(h))) return;
+            grid.unstamp(from);
+            if (live && mode.primary().has_behavior(h, objects::beh::LandObstacle)) land_obstacle_attach(mode, h);
+        }
     };
     for (const terrain::ObjectPlacement& pl : map_.objects) {
         objects::TypeIndex t = index.find(pl.type_crc);
@@ -702,7 +717,10 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
         if (const auto table = spawn_table(types, t); !table.empty()) {
             const float w = table.back().second;
             const float r1 = rng.range_float(0.0f, 1.0f);
-            if (!(r1 >= 1.0f - w)) continue;  // no spawn: the placeholder goes
+            if (!(r1 >= 1.0f - w)) {  // no spawn: the placeholder goes
+                own_obstacles(pl, objects::kNone, objects::ObjectHandle{});
+                continue;
+            }
             const float r2 = rng.range_float(0.0f, w);
             objects::TypeIndex pick = table.back().first;
             for (const auto& [x, cum] : table)
@@ -739,7 +757,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
         const bool selectable = types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Selectable);
         objects::ObjectHandle placed{};
         if (!mobile && s4_placement(mode, t, sp, pl.health_fraction, &placed)) {  // S4: capture points / garrison structures
-            own_stamp(pl, t, placed);
+            own_obstacles(pl, t, placed);
             // a1f t07: a SELECTABLE one (Secondary_Abandoned_Sensor: Tactical_Health 700, Structure, Neutral at start) is a
             // combat object too, so Destroy_Structure / attack orders can kill it; whatever its map owner (the Is_Neutral
             // player's objects are skipped by the target scan, TACTICAL_COMBAT §2.2). [port] a third party: never decides
@@ -751,14 +769,17 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
             continue;
         }
         if (mobile || selectable) {
-            if (!rules_->type(static_cast<uint32_t>(t)).members.empty()) continue;  // [port] map-placed companies
+            if (!rules_->type(static_cast<uint32_t>(t)).members.empty()) {  // [port] map-placed companies
+                own_obstacles(pl, objects::kNone, objects::ObjectHandle{});
+                continue;
+            }
             const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);
-            own_stamp(pl, t, h);
+            own_obstacles(pl, t, h);
             if (!bt_owner_neutral(owner)) bt_adopt_built(mode, h, owner, pl.health_fraction, &rng, true);
             continue;
         }
         const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);
-        own_stamp(pl, t, h);
+        own_obstacles(pl, t, h);
         if (kMarker != objects::kNoBehavior && types.has_behavior(t, objects::BehaviorSet::Union, kMarker) && owner >= 0) {
             MapMarker m;
             m.id = mode.primary().exists(h) ? mode.primary().id(h) : objects::kNoObjectId;
@@ -891,6 +912,7 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng) {
             if (parts_[i].unplaced) parts_[i].deployed = true;  // not spawned: never deployed later either
             else deploy(mode, i, rng);
         }
+    land_obstacles_sync(mode);  // S8 t02: the starbase / structures stamp on attach, before the start forces are placed
     // 6 / 7. Facing slots and anchors: the first Defending Forces marker (position, facing); the attacker's entry marker =
     //    the farthest from the first non-attacker DUMMY_GROUND_STRUCTURE with a non-zero Reinforcement_Prevention_Radius
     //    [M: the 0x2a9ff0 filter], else the nearest to the first Defending Forces marker. Space: the attacker looks at the

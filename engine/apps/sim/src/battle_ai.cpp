@@ -118,6 +118,15 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     br.order_finished = [bt](objects::ObjectId id, uint32_t) {
         return !bt->movement_->has_unit(id) || !bt->movement_->view(id).has_goal;
     };
+    // OI follow-up t03 (A1_READINGS §28.9): this bridge's shares of the movement lock - Lock_Current_Orders, and the
+    // locomotor's forced-move term while a Divert is the unit's current move (goal unchanged, not yet arrived).
+    bt->set_script_movement_lock(this, [bt, &br](objects::ObjectId id) { return lua::script_movement_locked(br, id, [bt](objects::ObjectId u, Vec3& g) {
+        if (!bt->movement_->has_unit(u)) return false;
+        const auto v = bt->movement_->view(u);
+        if (!v.has_goal || v.arrived) return false;
+        g = Vec3{v.goal.x, v.goal.y, 0.0f};
+        return true;
+    }); });
     // OI host (L1/S4 wave 1 integrator ask 2): Change_Owner of the AI VMs goes through the battle (store + TreeSet::set_owner
     // + the battle systems), as the story VMs' bridge (CampaignBattles::change_owner); before, the binding set the store only.
     TacticalMode* owner_mode = &mode;
@@ -231,6 +240,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
 
 BattleAi::~BattleAi() {
     if (b_->movement_) b_->movement_->set_threat_fn({});  // the battle outlives its AI
+    b_->set_script_movement_lock(this, {});
 #ifdef ALAMO_SIM_HAVE_FOG
     b_->set_fog_refog({});  // fog: the battle outlives its AI (CampaignBattles resets ai_ first)
 #endif
@@ -707,6 +717,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
 bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_threshold) {
     const TacticalBattle::Unit* u = b_->unit_by_id(id);
     if (!u || !u->alive || u->retreated || !u->movable) return false;
+    if (b_->movement_locked(id)) return true;  // OI follow-up t03: the locked unit keeps its order (A1_READINGS §28.9)
     const tactical::Aabb& bb = mode_->bounds();
     mv::MoveOrder o;
     o.units = {id};
@@ -741,6 +752,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (o.units.empty()) return R::InvalidUnit;
             const float x = ev.f("x"), y = ev.f("y");
             if (!std::isfinite(x) || !std::isfinite(y)) return R::InvalidPosition;
+            b_->drop_locked(o.units);  // OI follow-up t03: the group move leaves locked units out
+            if (o.units.empty()) return R::None;
             o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
             b_->movement_->move(o, host_->random().synced(), b_->frame_);
             for (const objects::ObjectId id : o.units) {
@@ -766,6 +779,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                         o.units.push_back(mid);
             if (o.units.empty()) return R::InvalidUnit;
             const Vec3 tp = st.position(th);
+            b_->drop_locked(o.units);  // OI follow-up t03
+            if (o.units.empty()) return R::None;
             for (const objects::ObjectId id : o.units) b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: kind 1
             if (o.units.size() == 1) {
                 b_->combat_->clear_order(o.units.front());
@@ -907,6 +922,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             group.threat_threshold = tt;
             const tactical::Aabb& gb = mode_->bounds();
             group.destination = {std::clamp(x, gb.min.x, gb.max.x), std::clamp(y, gb.min.y, gb.max.y)};
+            b_->drop_locked(group.units);  // OI follow-up t03: locked members keep their order [M: group-move reading]
+            if (group.units.empty()) return R::None;
             b_->movement_->move(group, host_->random().synced(), b_->frame_);  // one formation move of the team
             if (order != lua::LuaOrder::AttackMove)
                 for (const objects::ObjectId id : group.units) b_->combat_->clear_order(id);
@@ -1351,12 +1368,9 @@ void BattleAi::unit_released(int32_t player, int32_t object_id, ai::tactical::Ta
     if (!st.alive(h) || st.owner(h) != player) return;
     alamo::tactical::abilities::AbilitySystem& ab = *b_->abilities_;
     if (!ab.has_object(object_id)) return;
-    if (path == ai::tactical::TacticalAiHost::UnitRelease::TaskForce) {
-        // 0x5ff610: no Active_By_Default while movement is locked (0x39ad40).
-        const lua::ScriptObjectState* s = world_->object_bridge().find_state(static_cast<objects::ObjectId>(object_id));
-        const bool script_lock = s && (s->orders_locked || s->locomotor_suspended);
-        if (ab.immobilize_count(object_id) > 0 || script_lock || ab.hunting(object_id)) return;
-    }
+    // 0x5ff610: no Active_By_Default while movement is locked (0x39ad40: the counter's shares and the forced-move term,
+    // A1_READINGS §28.9; HUNT is not part of it).
+    if (path == ai::tactical::TacticalAiHost::UnitRelease::TaskForce && b_->movement_locked(object_id)) return;
     ab.apply_active_by_default(object_id, b_->frame_);
 }
 

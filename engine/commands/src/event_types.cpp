@@ -17,7 +17,7 @@ constexpr FieldDef Q(std::string_view n, uint8_t q) { return {n, K::Quant, q}; }
 constexpr FieldDef L(std::string_view n, uint8_t w) { return {n, K::List, w}; }
 
 constexpr FieldDef kFrameInfo[] = {B("frame", 26), B("command_count", 22), B("crc", 16)};
-constexpr FieldDef kMoveToPosition[] = {Q("x", 1), Q("y", 2), Q("z", 3), B("flags", 8), B("cancel_activity", 1)};
+constexpr FieldDef kMoveToPosition[] = {Q("x", 1), Q("y", 2), Q("z", 3), B("flags", 8), B("switch_locomotor", 1)};
 constexpr FieldDef kMoveToObject[] = {I("target"), L("movers", 32)};
 constexpr FieldDef kMoveObjectToObject[] = {I("object"), I("target")};
 constexpr FieldDef kLook[] = {Q("a", 4), Q("b", 4)};

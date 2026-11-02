@@ -15,7 +15,7 @@ namespace alamo::tactical::fog {
 namespace {
 
 constexpr uint32_t kFogGridSaveVersion = 1;
-constexpr uint32_t kFogSaveVersion = 1;
+constexpr uint32_t kFogSaveVersion = 2;  // 2: SetupPhaseCountdownSeconds and the setup manager (FOWF t05)
 
 // PackBits: control c < 128 -> c + 1 literal bytes; c >= 128 -> the next byte repeated c - 125 (3..130) times.
 // The encoder is deterministic (runs of >= 3 become repeat packets), so write -> read -> write is byte-identical.
@@ -131,7 +131,7 @@ void FogOfWar::write(ByteWriter& w) const {
     w.boolean(started_).u8(static_cast<uint8_t>(mode_));
     w.f32(k_.desired_land_cell_size).f32(k_.desired_space_cell_size).f32(k_.land_regrow_time).f32(k_.space_regrow_time);
     w.f32(k_.fps).boolean(k_.ai_uses_fog_land).boolean(k_.ai_uses_fog_space).f32(k_.tactical_overrun_multiple);
-    w.f32(k_.min_overrun_seconds).boolean(k_.setup_phase_enabled);
+    w.f32(k_.min_overrun_seconds).boolean(k_.setup_phase_enabled).f32(k_.setup_countdown_seconds);
     w.u32(static_cast<uint32_t>(players_.size()));
     for (const FogPlayer& p : players_) w.i32(p.id).boolean(p.grid).boolean(p.human);
     w.u32(static_cast<uint32_t>(grids_.size()));
@@ -159,6 +159,8 @@ void FogOfWar::write(ByteWriter& w) const {
     }
     w.f32(threshold_).u32(frame_).i32(step_);
     w.boolean(fow_active_).boolean(render_option_).boolean(setup_).boolean(overrun4_).boolean(overrun8_);
+    w.u32(static_cast<uint32_t>(setup_ready_.size())).raw(setup_ready_);
+    w.u32(setup_count_start_).i32(setup_count_frames_).boolean(setup_armed_).boolean(setup_all_ready_);
 }
 
 bool FogOfWar::read(ByteReader& r) {
@@ -181,6 +183,7 @@ bool FogOfWar::read(ByteReader& r) {
     k.tactical_overrun_multiple = r.f32();
     k.min_overrun_seconds = r.f32();
     k.setup_phase_enabled = r.boolean();
+    k.setup_countdown_seconds = r.f32();
     uint32_t n = 0;
     if (!count(6, n)) return false;
     std::vector<FogPlayer> players(n);
@@ -243,6 +246,12 @@ bool FogOfWar::read(ByteReader& r) {
     const int32_t step = r.i32();
     const bool fow_active = r.boolean(), render_option = r.boolean(), setup = r.boolean();
     const bool overrun4 = r.boolean(), overrun8 = r.boolean();
+    if (!count(1, n)) return false;
+    const std::span<const uint8_t> ready_bytes = r.raw(n);
+    std::vector<uint8_t> ready(ready_bytes.begin(), ready_bytes.end());
+    const uint32_t count_start = r.u32();
+    const int32_t count_frames = r.i32();
+    const bool armed = r.boolean(), all_ready = r.boolean();
     if (!r.ok()) return false;
     // Consistency the code relies on: one reduced sum per player list (reduce_player_list writes it), the dense mask
     // sized like every valid grid (it is indexed by their cells).
@@ -272,6 +281,11 @@ bool FogOfWar::read(ByteReader& r) {
     setup_ = setup;
     overrun4_ = overrun4;
     overrun8_ = overrun8;
+    setup_ready_ = std::move(ready);
+    setup_count_start_ = count_start;
+    setup_count_frames_ = count_frames;
+    setup_armed_ = armed;
+    setup_all_ready_ = all_ready;
     // The dense-mask link (set_dense_obstacles: every valid grid points at the shared mask).
     for (FogGrid& g : grids_)
         if (g.valid()) g.set_dense_mask(mask_.empty() ? nullptr : mask_.data());

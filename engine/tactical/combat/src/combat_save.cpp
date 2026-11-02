@@ -43,9 +43,10 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 6;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 7;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                             // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
-                                            // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost
+                                            // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
+                                            // grenade flight / sticky state
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -160,7 +161,11 @@ void CombatSystem::write(ByteWriter& w) const {
         put_vec3(w, p.pos);
         put_vec3(w, p.dir);
         w.f32(p.speed).f32(p.travelled).f32(p.max_travel).u32(p.spawn_frame).f32(p.damage).u16(p.damage_type).u8(p.kind);
-        w.u8(p.alive).u32(p.jammed_frame).u8(p.ever_jammed).f32(p.gravity).f32(p.floor_z).f32(p.fuse).u8(p.rocket);
+        w.u8(p.alive).u32(p.jammed_frame).u8(p.ever_jammed).f32(p.fuse).u8(p.rocket);
+        w.u8(p.lob).u8(p.stuck).f32(p.gravity).i32(p.stuck_to);  // S8 t04: grenade flight
+        put_vec3(w, p.launch);
+        put_vec3(w, p.lob_dir);
+        put_vec3(w, p.stuck_offset);
     }
     w.u32(static_cast<uint32_t>(rockets_.size()));
     for (const Rocket& rk : rockets_) {
@@ -395,11 +400,16 @@ bool CombatSystem::read(ByteReader& r) {
         p.alive = r.u8();
         p.jammed_frame = r.u32();
         p.ever_jammed = r.u8();
-        p.gravity = r.f32();
-        p.floor_z = r.f32();
         p.fuse = r.f32();
         p.rocket = r.u8();
-        if (!r.ok() || p.desc >= proj_descs || p.rocket > 1) return false;
+        p.lob = r.u8();
+        p.stuck = r.u8();
+        p.gravity = r.f32();
+        p.stuck_to = r.i32();
+        p.launch = get_vec3(r);
+        p.lob_dir = get_vec3(r);
+        p.stuck_offset = get_vec3(r);
+        if (!r.ok() || p.desc >= proj_descs || p.rocket > 1 || p.lob > 1 || p.stuck > 1) return false;
     }
     // refixf t01: rocket states, exactly one per rocket-flagged projectile, in the same (serial) order.
     if (!get_count(r, n, 61)) return false;

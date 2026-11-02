@@ -722,7 +722,151 @@ path clears the script share when the AI sees the unit idle (stand-in for signal
 Active_By_Default; the task-force path applies it unless movement is locked (HUNT active stands in for the locomotor
 vf+0x1d0 term [M]).
 
-### 28.9 Implemented (a1g t01, 2026-11-01)
+### 28.9 What the movement lock blocks: readers, locomotor term, script locks, lock / unlock pairs (OI abilities t02, 2026-11-01)
+
+Mode type (mode vf+0xe0): 0 galactic, 1 land, 2 space. "Locked" below = 0x39ad40 true. "Stop" = 0x3a9880 (locomotor
+vf+0x138(vf+0x188()), i.e. set its idle state; leave every coordinator 0x426d50; 0x39bcb0) or the coordinator-system
+stop 0x4261f0 (same per unit, used by INTERDICT / MISSILE_SHIELD).
+
+**1. The lock does not stop or slow the unit.** [H] Nothing in 0x3a8e50 or 0x39ad40 touches speed, the locomotor
+state or its suspend flag (pack +0x260). The first lock splits the unit off: `Split_From_Formation` (0x4f84e0) makes a
+new formation in the same coordinator and **copies the old formation's move list** (+0xf8, 0x40f1a0) into it, so the
+unit keeps its current move alone. Callers that want a freeze **Stop first, then lock** (INTERDICT, MISSILE_SHIELD,
+DEPLOY_TROOPERS, SELF_DESTRUCT with `Stop_When_Activated`, the targeted infantry abilities); callers that want "finish
+this move undisturbed" **move first, then lock** (Confuse, hero-clash MoveAction, TransportLanding unload). The order
+matters: once locked, the unit can no longer leave its coordinator.
+
+**2. Readers (callers of 0x39ad40; no other code reads obj +0x3a8 except save/load chunk 0x21 in 0x39ce40, the
+object init 0x3989a0 := 0, and the MISSILE_SHIELD inline +/− in 0x38a350)** [H unless tagged]:
+- *Move orders, coordinator level:* `Coordinator::Move_To` (0x4f8200) returns without doing anything when **any**
+  member is locked (the whole order is dropped for every member). (Before that it also does nothing when, in space,
+  the order's target object (block +0x28) is a TEAM member, or for type 3 with no target.) Coordinator remove-unit (vf+0x20 0x4f7d30, also via the
+  space override 0x5d5130) **refuses a locked unit** unless obj +0x3a0 bit 0x02 is set [M: dying]. Coordinator add
+  (0x4f6b60 via 0x438b40) refuses a unit that some coordinator already holds (0x397260 → 0x426140).
+- *Group move* (0x2a7b80, every player move event and most AI moves): has no lock test, but for a locked unit the
+  leave-old-coordinator step is refused, so the add to the new coordinator is refused too: **the locked unit is left
+  out and keeps its current order; the rest of the group gets the move normally** [H code, M as a whole]. Before that
+  it still cancels BARRAGE (5), 0x22, 0x29 and (flag) HUNT on the locked unit.
+- *Formation Set_Move* (0x41fd30, used by Divert, coordinator re-issue, space composition): walks the members in order;
+  the first locked member makes it **return** (no move appended, nothing started for any member). Members before it have
+  already had BARRAGE cancelled. Because the first lock gives the unit a formation of its own, in practice only that
+  unit's own orders are dropped.
+- *Chase response* `0x4160a0` (Guard_Chase / Idle_Chase / Attack_Move_Response range): 0 for a locked unit, so it never
+  leaves its spot to chase. Land formation building 0x43c1b0: a locked unit does not recruit others (type +0x16a4).
+  Space composition 0x5d58f0 (SpaceMovementCoordinator vf12): a locked unit does not gather nearby ships.
+- *Abilities:* `Can_Activate` 0x39b480 case 6 **HUNT** fails while locked; `Toggle_Behavior_Ability` 0x3a4070 refuses
+  to **switch on** HUNT, LURE, AVOID_DANGER, DEPLOY_TROOPERS, SELF_DESTRUCT while locked (switching off is allowed).
+- *Lua:* `Move_To` / `Move_Internal` 0x57da90 warning "...object %s is locked into existing orders. Attack_Target
+  fails." (string copied from Attack_Target) and nothing; `Attack_Target` 0x5730f0 same warning, nothing; `Divert`
+  0x575710 warning "unable to divert - object %s has had its movement locked.", false; `Can_Move` 0x5744a0 (tactical)
+  = coordinator accepts (0x425e30) **and** not locked. Warnings go through 0x248620, errors through 0x248190 [M names].
+- *UI (local player only, no sim effect):* 0x3afe0 = "some selected unit is not locked"; the move UIs 0x3b360 and
+  0x3bc30 play the refusal SFX (DAT_140b301c8) and send no event when all are locked; 0x3b090 (land) sends the event
+  and only picks ack vs refusal SFX; the galactic fleet move UI 0x3bf20 refuses a locked fleet. 0x3b070 = !locked
+  predicate (no direct caller found).
+- *AI:* free store Setup A 0x7287a0 skips locked units (and +0x3b4 hero-clash units); task-force release 0x5ff610
+  (§28.8); `SpaceTaskForce` 0x6e5aa0 refuses a locked recruit; the movement block statuses' member collection
+  (0x739200, 0x73a650, 0x73c6f0, 0x6affb0) skip locked members (no signal subscription, no order) [H code, M which
+  class each is]; ConcentrateFire apply 0x6f5550 skips locked allies (tests the TEAM container when there is one);
+  LURE 0x62b270 adds a lured unit's TEAM members to the new coordinator only when not locked.
+- *Hyperspace:* cancel 0x5c9800 and SimpleSpace arrival finish 0x624dc0 release one lock **only if** 0x39ad40 is true.
+- *Attack orders:* `Order_Attack` / `Issue_Auto_Target` (0x38d730) have no lock test, so a locked unit still takes a
+  target and fires from where it stands; the approach move is refused by the rules above [M].
+
+**3. The locomotor term vf+0x1d0 and the container terms** [H unless tagged]:
+- vf+0x1d0 = **0x42cbf0** in every locomotor class (LocomotorCommon and all twelve derived vtables); Fleet answers 0
+  (0x13b7d0). It returns the **current path record's byte +0x5c** (pack obj +0xa8, path stack +0x138/+0x140 of 0x70-byte
+  records, top = 0x5569b0); false with no pack or an empty stack. It is **not** HUNT, not suspension (that is vf+0x210
+  0x42cd10 = pack +0x260) and not hyperspace (that is vf+0x2b0 0x42c640 = state ∈ {4, 5, 0x28, 0x2b, 0x2c}).
+- The byte is the path's waypoint-list flag (path +0x18 sub-object +0x44; copied by 0x5c45d0 / 0x54e4e0). The path
+  builder 0x417520 sets it when the order's **move block byte +0x5c** is set [M: local flag traced, final store not].
+  Setters of block +0x5c = 1: **`Divert`** (0x575710, bytes 1,0,0,1) and the **TransportLanding unload exit move**
+  (0x644330). Cleared by 0x3ac210 (the unit's and its TEAM container's current path), called by the unload finish 0x6438a0.
+  Other meaning: MovingVsStopped 0x684f90 lets a mover with this flag push a stopped blocker that has a locomotor
+  aside (0x6859a0). Name: "forced move" (diversion / unload exit) [M].
+- So "movement locked" is also true **while a unit runs a Divert or unload-exit move**, until that path is popped (path
+  finished, replaced or cleared) [M duration]. A second Divert during a Divert is refused.
+- Container term: vf+0x230 is true only for **LandTeamContainer** (0x17dc70; 0 elsewhere), so it applies to members of
+  land infantry squads: the squad container's current path flag counts for every member. vf+0x228 is true only for
+  **LandTeamInfantry** (squad members); vf+0x220 is true for every locomotor except Fleet / Starship and Team (0x6305a0).
+
+**4. `Lock_Current_Orders` 0x57cd40 / `Unlock_Current_Orders` 0x581fd0, exact** [H]:
+- Owner = player of obj +0x58 (0x294bc0); none → return silently. Not AI (0x2814d0 false) → **error** "GameObjectWrapper
+  ::Lock_Current_Orders - object %s does not belong to an AI player; cannot lock." (Unlock: "...; cannot unlock.").
+- Free store F = player +0x360 → 0x4b06d0(·, mode type) → +0x50 → +0x38; listener F+0x28. Per locked object:
+  subscribe F+0x28 to the object's signals **10 and 11** (0x220e90); unlock unsubscribes both (0x220eb0).
+- Lock, no locomotor (slot 1) → **error** "...Lock_Current_Orders - %s is immobile; locking not supported.".
+- Lock, object has TEAM (obj +0x348) **and** mode ≠ 2 **and** its locomotor vf+0x230 is false (a land team whose
+  container is not a LandTeamContainer; galactic teams): for each TEAM member: not locked → 0x3a8e50(member, 1) +
+  subscribe the member; locked → **warning** "...Lock_Current_Orders - %s is already locked.  Script cannot stack
+  locks." (member's type name). Return. In space (mode 2) a team container skips this and locks itself.
+- Otherwise, locomotor vf+0x228 true (a LandTeamInfantry squad member): lock the **container** obj +0x2b0 (null →
+  silent return) if it is not locked, subscribe the container; else the "already locked" warning. vf+0x228 false: lock
+  the object itself the same way. Lua returns nothing.
+- Unlock first checks obj **+0x3b4** (set while in a hero clash): **error** "...Unlock_Current_Orders - object %s is
+  locked by a hero clash.  Cannot unlock." Then **land mode (1) and the object has TEAM**: for each member, locked →
+  0x3a8e50(member, 0) + unsubscribe, else **warning** "...Unlock_Current_Orders - object %s is not locked.". Otherwise
+  the object itself: locked → release + unsubscribe, else the same warning. Lock never tests +0x3b4.
+- Asymmetry [H code, M effect]: Lock on a land infantry squad container (LandTeamContainer) or via a squad member locks
+  the **container**; Unlock on the container walks the **members** (not locked → warnings) and leaves the container
+  locked; Unlock on a member unlocks only the member. The container's script lock then ends only through the free store
+  signal 10 / 11 handler.
+- SpaceFreeStoreClass has its own vf1 **0x6907c0** with the same signal 10 / 11 branch as 0x4d4aa0 (unsubscribe,
+  0x3a8e50(obj, 0), 0x3a82a0).
+
+**5. Lock / unlock pairs (all 40 callers of 0x3a8e50)** [H unless tagged]:
+
+| Who | Lock | Unlock |
+|---|---|---|
+| Lua script lock | 0x57cd40 | 0x581fd0, free store vf1 0x4d4aa0 / space 0x6907c0 on signal 10 / 11 |
+| INTERDICT 0x3a2240 (Disable_Movement) | activation: stop 0x4261f0, then lock | off while ability 3 active |
+| MISSILE_SHIELD (inline in 0x38a350) | on: stop 0x4261f0 **always**, deploying types vf+0x118(1), then +1 with Disable_Movement | off while active: −1 (clamped); also −1 whenever the inner `Can_Activate(t, 1)` fails, on or off (the expiry path), without an "is active" test [M: can unbalance] |
+| DEPLOY_TROOPERS behaviour | service vf23 0x58f6a0: stop, lock, start deploying (count < max) | vf24 0x58f600 and dtor 0x58f4f0: unconditional −1 |
+| SELF_DESTRUCT behaviour | vf23 0x630950: stop + lock only when the record has `Stop_When_Activated` (+0x1b1) | vf24 0x630840 / dtor 0x6306f0 when ability 0x27 is active (no Stop_When_Activated test) |
+| Infection, GrenadeAttack, RemoteBomb abilities | vf30 0x6cc640 / 0x700860 / 0x719c90: face target (0x3a8710), stop, lock | vf4 0x6cc8d0 / 0x700d00 / 0x719ee0 when done: re-enable targeting + locomotor (vf+0xb8), −1, signal 0x29 |
+| CableAttack ability | 0x6f3800: stop, lock | vf4 0x6f2d50 when its counter runs out |
+| Confuse behaviour | 0x6364e0: group move to a random point (synced draws), then lock unit and its TEAM container, flag obj +0x3a2 bit 0x80 | vf6 0x636960: when bit 0x80 set, clear it, −1 on unit and flagged container |
+| Hero clash (MeleeHeroClash) | 0x6abde0 locks both heroes (+0x18, +0x20) | vf5 0x6ac940, 0x6acb80, vf2 0x6acc30: −1, re-enable, clear +0x3b4 |
+| Hero clash MoveAction | 0x5ea910: `Move_To` (0x4f8200), then lock | End vf9 0x5ea820; stuck fallback in vf7 0x5eaab0 |
+| TransportLanding unload | 0x644330: spawned unit gets the exit move (block +0x5c = 1), then lock unit and its TEAM container (skipped when the 0x35e4c0 +0x30 flag is set [M]) | finish 0x6438a0: −1 on every unloaded unit and container, clear the path flag (0x3ac210), signal 0x19 |
+| Hyperspace arrival, Fighter | vf+0x290 0x5cb020 immediate path (state 4) or state 5 0x5cd010; cinematic 0x5c9a80 | finish 0x5c9d40 (unconditional, from states 4 and 0x2c); cancel 0x5c9800 (if locked) |
+| Hyperspace arrival, SimpleSpace | vf+0x290 0x6251d0 immediate path; state 5 0x627590; cinematic 0x5c9a80 | finish 0x624dc0 (if locked); cancel 0x5c9800 (if locked) |
+| Hyperspace arrival, Team (space squadron) | vf+0x290 0x62f800: leave coordinators, lock container, suspend | service 0x630210 → 0x630390: −1, resume |
+
+All arrivals lock **when the unit enters hyperspace-in** (state 5, or at once on the immediate / cinematic path) and
+unlock **when it lands** (finish: teleport to the destination, show, resume, locomotor idle, signal 0x19) or on cancel.
+
+**Implementer summary** (replaces the speed-0 freeze) [H unless tagged]:
+- Keep one shared counter; lock/unlock as in §28.8. The lock never changes speed and never stops the unit by itself.
+- `Disable_Movement` abilities (INTERDICT, MISSILE_SHIELD): on activation **Stop the unit** (clear its orders/path,
+  locomotor idle, own coordinator), then lock. MISSILE_SHIELD stops even without `Disable_Movement`. Turning in place is
+  not forced off; facing orders go through the same refused move path [M].
+- While locked, **refuse new move orders for that unit**: a coordinator or formation move containing a locked member is
+  dropped whole; a group move skips the locked unit (it keeps its current order) and moves the others.
+- A unit locked mid-move (script lock, Confuse, hero-clash, unload exit) **keeps executing its current move**.
+- Locked units do not chase (no guard / idle / attack-move response), still acquire targets and fire in place [M], and
+  cannot switch on HUNT / LURE / AVOID_DANGER / DEPLOY_TROOPERS / SELF_DESTRUCT.
+- Lua: Move_To, Attack_Target, Divert refuse with the warnings above; Can_Move is false; Lock/Unlock with the exact
+  owner / immobile / team / hero-clash rules of item 4.
+- Replace the "HUNT active" stand-in with: the unit's (or its land infantry squad container's) **current path carries
+  the forced-move flag** (set by Divert and by the transport-unload exit move, cleared when that path ends or by the
+  unload finish).
+- AI collectors (free store, task forces, block statuses, concentrate fire, lure) skip locked units.
+- Hyperspace arrivals: lock at hyperspace-in start, release on landing or cancel.
+
+**Port (OI follow-up t03 / t04, 2026-11-01).** The shares: `AbilitySystem::immobilize` (Disable_Movement, Grenade
+toss, Confuse, SELF_DESTRUCT with `Stop_When_Activated`; per-caller flags keep each pair balanced, saved from ability
+save v2), the script's `orders_locked` and a running Divert (`lua::script_movement_locked`: the unit's current move goal
+is still the one Divert recorded). `TacticalBattle::movement_locked` combines them. The speed-0 freeze is gone;
+`order_move` / facing orders / the AI's group moves and `move_unit` leave locked units out, an attack order does not
+approach, the stand-in and the TaskForce release path skip locked units; HUNT and the other behaviours refuse to switch
+on. Lua Lock / Unlock follow item 4 (owner, immobile, team, squad member / container, warnings); Move_To /
+Attack_Target / Divert warn and refuse; Can_Move = has a locomotor, not suspended [inferred], not locked. [port] Not
+modelled: the hero-clash +0x3b4 refusal and lock (no hero clash), hyperspace-arrival locks (no arrival model), the
+unload-exit, Infection, Remote_Bomb and cable locks (their phases are not modelled), the free-store signal 10 / 11
+release of a script lock (the AI's idle stand-in stays); DEPLOY_TROOPERS locks and unlocks in one call (no net lock).
+
+### 28.10 Implemented (a1g t01, 2026-11-01)
 
 Tactical (`TacticalFreeStore` entry `owner_pp`) and galactic (`unit_reserved`, the derived free store) follow 28.4-28.6
 through the shared `GoalSystem` (new hook `suspend_reservations` at Commit step 4; kept goals call `refresh_plan`).
@@ -1350,7 +1494,7 @@ Read 2026-11-02 from the decompiled code, the RTTI of StarWarsG.exe and the call
   5 for the one object, without the container step.
 - **Port (a1h t05): matches, no code change.** `space_reinforce_poll` adds the spawned units to the task force and
   calls no `reinforce_join_pp`; `admit` skips task-force units, so the unit is not on the free store (the 0x4d5000
-  removal). Land keeps `reinforce_joined` (a1g, §28.9). Test: alamo_ai_tactical_world_tests `test_group_orders`
+  removal). Land keeps `reinforce_joined` (a1g, §28.10). Test: alamo_ai_tactical_world_tests `test_group_orders`
   (space run): drops happen and no "reinforce unit" PP decision is logged.
 
 ### 32.2 Transport data +0x48 = the carried company type

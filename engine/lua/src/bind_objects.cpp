@@ -1068,9 +1068,19 @@ int m_is_selectable(Call& c) {
 
 int m_is_transport(Call& c) { return push_bool(c, store(c)->has_behavior(self_object(c), objects::beh::Transport)); }
 
-int m_can_move(Call& c) {  // [inferred] has a locomotor and it is not suspended
+// Can_Move (0x5744a0): the coordinator accepts the unit and it is not movement-locked (A1_READINGS §28.9) [port: "accepts"
+// = has a locomotor that is not suspended, inferred].
+int m_can_move(Call& c) {
     return push_bool(c, store(c)->has_behavior(self_object(c), objects::beh::Locomotor) &&
-                            !state_of(c, c.self->id).locomotor_suspended);
+                            !state_of(c, c.self->id).locomotor_suspended && !detail::movement_locked(c, c.self->id));
+}
+// Move_To / Attack_Target on a movement-locked unit (0x57da90 / 0x5730f0): this warning (Move_To reuses Attack_Target's
+// text) and nothing else.
+int locked_orders_warning(Call& c) {
+    const std::string name(object_type_name(c, self_object(c)));
+    c.vm->message("SCRIPT WARNING: GameObjectWrapper::Attack_Target - object " + name +
+                  " is locked into existing orders. Attack_Target fails.");
+    return 0;
 }
 
 int m_get_contained_object_count(Call& c) {
@@ -1384,6 +1394,7 @@ int m_move_to(Call& c) {
     ObjectHandle target{};
     if (position_arg(c, 1, p, &target) != PosArg::Ok)
         return c.fail("GameObjectWrapper::Move_To -- could not extract a position from parameter 1.");  // [inferred]
+    if (detail::movement_locked(c, c.self->id)) return locked_orders_warning(c);
     // REMAINING_GAPS §4.2: Move_Internal's optional numeric threat threshold T (argument 2 [M]), carried as the order's
     // arg (float bits; 0 = off). [port] with T an object target becomes a move to its current position.
     if (c.is_number(2)) {
@@ -1412,6 +1423,7 @@ int m_attack_target(Call& c) {
         const std::string name(object_type_name(c, self_object(c)));
         return c.fail("GameObjectWrapper::Attack_Target -- Parameter 1 is not a valid destination for unit %s", name.c_str());
     }
+    if (detail::movement_locked(c, c.self->id)) return locked_orders_warning(c);
     if (ScriptObjectState* s = edit_self(c)) s->attack_target = t->id;
     return issue_and_block(c, ev_attack(c.self->id, t->id));
 }
@@ -1705,8 +1717,9 @@ int m_set_targeting_priorities(Call& c) {
     return 0;
 }
 
-// Lock_Current_Orders (0x57cd40) / Unlock_Current_Orders (0x581fd0), A1_READINGS §28.8: one obj +0x3a8 movement lock
-// counter. [port] The script's share is orders_locked; the ability system holds the Disable_Movement share.
+// Lock_Current_Orders (0x57cd40) / Unlock_Current_Orders (0x581fd0), A1_READINGS §28.9 item 4: one obj +0x3a8 movement
+// lock counter. [port] The script's share is orders_locked; the ability system holds the Disable_Movement share; a
+// Divert's forced move counts as locked while it runs (detail::movement_locked).
 int32_t ability_movement_locks(Call& c, ObjectId id) {
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, id)) return a->immobilize_count(id);
@@ -1715,31 +1728,97 @@ int32_t ability_movement_locks(Call& c, ObjectId id) {
     (void)id;
     return 0;
 }
+// The type lists `token` in one of its behaviour lists (the locomotor kinds all share behaviour slot 0x01).
+bool has_behavior_token(Call& c, ObjectHandle h, std::string_view token) {
+    const objects::GameObjectTypes* ty = types(c);
+    const TypeIndex t = store(c)->type(h);
+    if (!ty || t == objects::kNone) return false;
+    for (const std::string_view tag : {"Behavior", "LandBehavior", "SpaceBehavior", "GalacticBehavior", "TacticalBehavior", "DeployedBehavior"})
+        for (const std::string_view tok : ty->get_list(t, tag))
+            if (iequal(tok, token)) return true;
+    return false;
+}
+// The owner check both bindings start with: false = return now (no owner: silently; not an AI player: the error).
+bool lock_owner_ok(Call& c, const char* fn, const char* what) {
+    const int32_t owner = store(c)->owner(self_object(c));
+    if (owner < 0) return false;
+#if ALAMO_LUA_PLAYERS
+    // 0x2814d0 [port: "not human" - a player world without the setting treats every player as AI]
+    if (const LuaPlayerWorld* w = c.vm->owner ? player_world(*c.vm->owner) : nullptr; w && w->is_human(owner)) {
+        const std::string name(object_type_name(c, self_object(c)));
+        script_error(c, "GameObjectWrapper::%s - object %s does not belong to an AI player; cannot %s.", fn, name.c_str(), what);
+        return false;
+    }
+#else
+    (void)fn;
+    (void)what;
+#endif
+    return true;
+}
+// 0x3a8e50(h, 1) for the script: a script share unless locked (then the "already locked" warning).
+void script_lock(Call& c, ObjectHandle h) {
+    const ObjectId id = store(c)->id(h);
+    if (detail::movement_locked(c, id)) {
+        const std::string name(object_type_name(c, h));
+        c.vm->message("SCRIPT WARNING: GameObjectWrapper::Lock_Current_Orders - " + name +
+                      " is already locked.  Script cannot stack locks.");
+        return;
+    }
+    if (ScriptObjectState* s = edit_state(c, id)) s->orders_locked = true;
+}
+// 0x3a8e50(h, 0) for the script when locked, else the "is not locked" warning. [port] With no script share the
+// ability's share is released (one counter in the original); a Divert's forced move has no count to release.
+void script_unlock(Call& c, ObjectHandle h) {
+    const ObjectId id = store(c)->id(h);
+    const ObjectBridge* b = bridge(c);
+    if (const ScriptObjectState* f = b ? b->find_state(id) : nullptr; f && f->orders_locked) {
+        edit_state(c, id)->orders_locked = false;
+        return;
+    }
+#if ALAMO_LUA_HAVE_ABILITIES
+    if (ab::AbilitySystem* a = ability_system(c, id); a && a->immobilize_count(id) > 0) {
+        a->lock_movement(id, false, ability_frame(c));
+        return;
+    }
+#endif
+    if (detail::movement_locked(c, id)) return;
+    const std::string name(object_type_name(c, h));
+    c.vm->message("SCRIPT WARNING: GameObjectWrapper::Unlock_Current_Orders - object " + name + " is not locked.");
+}
 int m_lock_current_orders(Call& c) {
-    ScriptObjectState* s = edit_self(c);
-    if (!s) return 0;
-    // Already movement-locked (0x39ad40): "Script cannot stack locks", nothing changes.
-    if (s->orders_locked || s->locomotor_suspended || ability_movement_locks(c, c.self->id) > 0) {
-        c.vm->message("SCRIPT WARNING: GameObjectWrapper::Lock_Current_Orders - object is already locked.  Script cannot stack locks.");
+    if (!lock_owner_ok(c, "Lock_Current_Orders", "lock")) return 0;
+    objects::ObjectStore* st = store(c);
+    const ObjectHandle self = self_object(c);
+    if (!st->has_behavior(self, objects::beh::Locomotor)) {
+        const std::string name(object_type_name(c, self));
+        return script_error(c, "GameObjectWrapper::Lock_Current_Orders - %s is immobile; locking not supported.", name.c_str());
+    }
+    // A team that is not a land squad container (locomotor vf+0x230), outside space: lock each member.
+    if (st->has_behavior(self, objects::beh::Team) && st->mode() != objects::ModeKind::Space &&
+        !has_behavior_token(c, self, "LAND_TEAM_CONTAINER_LOCOMOTOR")) {
+        for (const ObjectHandle m : contents_of(c, self)) script_lock(c, m);
         return 0;
     }
-    s->orders_locked = true;
+    // A squad member (LandTeamInfantry, vf+0x228) locks its container; no container: nothing.
+    if (has_behavior_token(c, self, "LAND_TEAM_INFANTRY_LOCOMOTOR")) {
+        if (const ObjectHandle box = container_of(c, self); box && st->alive(box)) script_lock(c, box);
+        return 0;
+    }
+    script_lock(c, self);
     return 0;
 }
 int m_unlock_current_orders(Call& c) {
-    ScriptObjectState* s = edit_self(c);
-    if (!s) return 0;
-    if (s->orders_locked) {
-        s->orders_locked = false;
+    if (!lock_owner_ok(c, "Unlock_Current_Orders", "unlock")) return 0;
+    // [port] The hero-clash refusal (obj +0x3b4, "...is locked by a hero clash.  Cannot unlock.") has no state here:
+    // no hero clash is modelled.
+    objects::ObjectStore* st = store(c);
+    const ObjectHandle self = self_object(c);
+    // Land mode with TEAM: unlock each member (the container itself stays as it is - the original's asymmetry).
+    if (st->mode() == objects::ModeKind::Land && st->has_behavior(self, objects::beh::Team)) {
+        for (const ObjectHandle m : contents_of(c, self)) script_unlock(c, m);
         return 0;
     }
-#if ALAMO_LUA_HAVE_ABILITIES
-    // No script lock but the counter is held by an ability: 0x3a8e50(obj, 0) releases that share.
-    if (ab::AbilitySystem* a = ability_system(c, c.self->id); a && a->immobilize_count(c.self->id) > 0) {
-        a->lock_movement(c.self->id, false, ability_frame(c));
-        return 0;
-    }
-#endif
+    script_unlock(c, self);
     return 0;
 }
 
@@ -2460,6 +2539,23 @@ constexpr detail::ImplEntry kImpl[] = {
 };
 
 }  // namespace
+
+namespace detail {
+bool movement_locked(Call& c, ObjectId id) {
+    if (ability_movement_locks(c, id) > 0) return true;
+    const ObjectBridge* b = bridge(c);
+    if (!b) return false;
+    const RemainingScriptHooks* hk = b->remaining;
+    const objects::ObjectStore* st = store(c);
+    std::function<bool(ObjectId, Vec3&)> goal;
+    if (hk && hk->move_goal)
+        goal = [hk, st](ObjectId i, Vec3& g) {
+            const ObjectHandle h = st->find(i);
+            return h && hk->move_goal(h, g);
+        };
+    return script_movement_locked(*b, id, goal);
+}
+}  // namespace detail
 
 std::span<const detail::ImplEntry> detail::impl_objects() { return kImpl; }
 

@@ -57,15 +57,20 @@ struct UnitDesc {
     float strafe_distance = 0.0f;       // Strafe_Distance (+0x2118)
     float prepare_strafe_height = 0.0f; // Prepare_Strafe_Height (+0x1e24)
     bool has_pre_turn_anim = false;     // Has_Pre_Turn_Anim (+0x36)
-    // ---- S7 t06: Uses_Multiple_Locomotors swap (MOVEMENT.md §3.1, 0x3a9910; MovementSystem::use_secondary_locomotor) ----
+    // ---- S7 t06 / t14: Uses_Multiple_Locomotors swap (MOVEMENT.md §3.1.1, 0x3a9910; MovementSystem::use_secondary_locomotor) ----
     bool uses_multiple_locomotors = false;  // Uses_Multiple_Locomotors (+0x74)
-    bool has_secondary_locomotor = false;   // Secondary_Locomotor_Name (+0x2078) is set ([M]: an empty name never swaps)
+    // The swap can run: Secondary_Locomotor_Name (+0x2078) is JETPACK_LOCOMOTOR and Primary_Locomotor_Name (+0x2058) is
+    // not. [port] retail tells "on the secondary" by the locomotor class (JetPack vf96 = 0, every other class 1), so a
+    // non-JetPack secondary would be rebuilt on every to-secondary call and never swapped back (weapons disabled for
+    // good), and a JetPack primary would be rebuilt every stopped frame; the port refuses both (vanilla has neither).
+    // An empty or unknown name never swaps (the factory returns null).
+    bool has_secondary_locomotor = false;
     LocomotorKind secondary_locomotor = LocomotorKind::Default;  // its kind (locomotor_kind_from_token)
-    // [M] the readers of Alternate_Max_Speed (+0x380) / Alternate_Max_Rate_Of_Turn (+0x390) are untraced: the port
-    // uses them while the secondary locomotor is active (FoC: the jetpack users set both, e.g. Dark_Trooper_PhaseII
-    // walks at 1.0 and flies at 2.5). 0 = unset (the Max_Speed / Max_Rate_Of_Turn values stay).
-    float alt_max_speed = 0.0f;
-    float alt_turn_rate = 0.0f;
+    // Alternate_Max_Speed (+0x380) / Alternate_Max_Rate_Of_Turn (+0x390), raw (type ctor defaults 1.0 / 2.0). Read only
+    // by the JETPACK locomotor in its airborne kind (pack state 0 / 0xF..0x13, §3.1.1): the planned flight and the
+    // formation speed; the take-off turn (0x10), landing (0x14) and stopped (0x16) use Max_Speed / Max_Rate_Of_Turn.
+    float alt_max_speed = 1.0f;
+    float alt_turn_rate = 2.0f;
 };
 
 // Fills the type-derived members (id / position / yaw are left to the caller). `model_radius`

@@ -1,6 +1,7 @@
 #include "alamo/tactical/movement/passability.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "alamo/core/hash.hpp"
@@ -253,6 +254,13 @@ bool PassabilityGrid::unstamp(ObjectId id) {
     apply(it->second, -1);
     stamps_.erase(it);
     return true;
+}
+
+std::vector<ObjectId> PassabilityGrid::stamped_ids() const {
+    std::vector<ObjectId> out;
+    out.reserve(stamps_.size());
+    for (const auto& kv : stamps_) out.push_back(kv.first);
+    return out;
 }
 
 bool PassabilityGrid::occupies(ObjectId id, int32_t x, int32_t y) const {
