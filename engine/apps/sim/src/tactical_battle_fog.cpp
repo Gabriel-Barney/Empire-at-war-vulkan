@@ -5,6 +5,9 @@
 
 #ifdef ALAMO_SIM_HAVE_FOG
 #include <algorithm>
+#include <cmath>
+
+#include "alamo/core/dmath.hpp"
 
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -20,6 +23,10 @@ void TacticalBattle::fog_decay() {}
 void TacticalBattle::fog_service(TacticalMode&) {}
 void TacticalBattle::fog_owner_changed(TacticalMode&, objects::ObjectHandle, int32_t) {}
 void TacticalBattle::fog_ping(objects::ObjectId) {}
+void TacticalBattle::fog_setup_tick() {}
+commands::RejectReason TacticalBattle::fog_setup_command(TacticalMode&, uint8_t, const commands::EventData&) {
+    return commands::RejectReason::NotAllowed;
+}
 
 #else
 
@@ -34,7 +41,11 @@ void TacticalBattle::fog_begin(TacticalMode& mode, uint32_t players) {
     fog_team_beh_ = objects::beh::Team;
     fw::FogSetup s;
     s.mode = space_ ? fw::FogMode::Space : fw::FogMode::Land;
-    const tactical::Aabb& b = mode.bounds();  // [port] the playable box stands in for the mode's map extents
+    // [port] The playable box stands in for the mode's map extents (vf +0x1f8). Traced (FOG_OF_WAR §1.2 [H], FOWF t01):
+    // space uses the playable box, land the whole terrain box [0, 20 W] x [0, 20 H]. The land switch waits for the AI
+    // threat grid, which must use the same box (AI_TACTICAL_PERCEPTION §4.1; BattleAi builds it from bounds()): switching
+    // the fog alone stalled the FoC Utapau skirmish on 4 of 5 seeds (2026-11-01).
+    const tactical::Aabb& b = mode.bounds();
     s.box = {b.min.x, b.min.y, b.max.x, b.max.y};
     s.constants = catalog_->fog_constants();
     s.fow_active = fog_global_active_;
@@ -56,6 +67,8 @@ void TacticalBattle::fog_begin(TacticalMode& mode, uint32_t players) {
                 fog_.set_relation(static_cast<int32_t>(a), static_cast<int32_t>(o),
                                   combat_->is_enemy(static_cast<int32_t>(a), static_cast<int32_t>(o)) ? 1 : 0);
     fog_on_ = true;
+    // FOWF t03: the setup reveal's "powered" = the target player's base power (TACTICAL_GAPS §7.3, Base_Power_Ability).
+    fog_.set_base_power([this](int32_t player) { return combat_ && combat_->has_base_power(player); });
     // fog follow-up (S9): Force Sight channelling = Reveal_All for the owner, undone at its end (FOG_OF_WAR §3.3).
     fog_pings_.clear();
     abilities_->set_fog_reveal_all([this](int32_t player, bool on) {
@@ -117,17 +130,79 @@ fw::FogObject TacticalBattle::fog_object_of(const objects::ObjectStore& store, o
     }
     const objects::ObjectId id = store.id(h);
     if (combat_ && combat_->has_unit(id)) o.object_modifier = combat_->modifier(id, tactical::combat::ModList::RevealRange);
-    // [port] no model bounding boxes in the sim: the mode's per-type half extent (Custom_Hard_*Extent or a
-    // scale-based default), centred on the position.
+    // FOWF t02 (FOG_OF_WAR §3.1 [H]): the footprint box is the type model's local collision bound (ModelClass vf +0x58 =
+    // alHModel +0x120: centre offset and half extents, not scaled or rotated); no model -> radius 10 at the position.
+    // [port] Without model data for the type (no model files, synthetic data): the mode's per-type half extent around the
+    // position, as before.
     if (fog_mode_) {
-        const tactical::Aabb bb = fog_mode_->extent_box(h);
-        o.has_model = true;
-        o.box_cx = 0.5f * (bb.min.x + bb.max.x) - p.x;
-        o.box_cy = 0.5f * (bb.min.y + bb.max.y) - p.y;
-        o.box_hx = 0.5f * (bb.max.x - bb.min.x);
-        o.box_hy = 0.5f * (bb.max.y - bb.min.y);
+        const TacticalMode::ModelRef m = fog_mode_->model_ref(t, true);
+        if (m.known) {
+            o.has_model = m.model != nullptr;
+            if (m.model) {
+                o.box_cx = m.model->bound_c.x;
+                o.box_cy = m.model->bound_c.y;
+                o.box_hx = m.model->bound_h.x;
+                o.box_hy = m.model->bound_h.y;
+            }
+        } else {
+            const tactical::Aabb bb = fog_mode_->extent_box(h);
+            o.has_model = true;
+            o.box_cx = 0.5f * (bb.min.x + bb.max.x) - p.x;
+            o.box_cy = 0.5f * (bb.min.y + bb.max.y) - p.y;
+            o.box_hx = 0.5f * (bb.max.x - bb.min.x);
+            o.box_hy = 0.5f * (bb.max.y - bb.min.y);
+        }
     }
     return o;
+}
+
+// FOWF t02 (FOG_OF_WAR §5.2 [H]): the 8 points of the oriented 2-D footprint rectangle 0x38de80 of Multisample_FOW_Check.
+// Half extents 0x371be0: Scale_Factor x Custom_Hard_X/YExtent when both > 0, else each non-positive one from the type
+// model's |collision bound half extent| x Scale_Factor (0 without a model); centre = position + the rotated Scale_Factor x
+// Custom_Hard_X/YExtent_Offset. [port] The axes come from the normalised facing vector (the original takes cos / sin of
+// the yaw in degrees); without model data for the type the mode's per-type half extent stands in for the model part; TEAM
+// objects use their type's extents (the team box 0x404450 is not modelled) and the _Deployed extents are not modelled.
+void TacticalBattle::fog_footprint_samples(const objects::ObjectStore& store, objects::ObjectHandle h, float* xy) const {
+    const objects::GameObjectTypes& types = catalog_->types();
+    const objects::TypeIndex t = store.type(h);
+    const float sf = types.get_float(t, "Scale_Factor");
+    const float scale = sf > 0.0f ? sf : 1.0f;
+    const float ex = types.get_float(t, "Custom_Hard_XExtent"), ey = types.get_float(t, "Custom_Hard_YExtent");
+    float hx = scale * ex, hy = scale * ey;
+    if (!(ex > 0.0f) || !(ey > 0.0f)) {
+        float mx = 0.0f, my = 0.0f;
+        const TacticalMode::ModelRef m = fog_mode_->model_ref(t, false);
+        if (m.known) {
+            if (m.model) {
+                mx = std::fabs(m.model->bound_h.x);
+                my = std::fabs(m.model->bound_h.y);
+            }
+        } else {
+            const tactical::Aabb bb = fog_mode_->extent_box(h);
+            mx = 0.5f * (bb.max.x - bb.min.x) / scale;
+            my = 0.5f * (bb.max.y - bb.min.y) / scale;
+        }
+        if (!(ex > 0.0f)) hx = scale * mx;
+        if (!(ey > 0.0f)) hy = scale * my;
+    }
+    const Vec3 f = store.facing(h);
+    float ax = 1.0f, ay = 0.0f;
+    if (const float len2 = f.x * f.x + f.y * f.y; len2 > 0.0f) {
+        const float inv = 1.0f / std::sqrt(len2);
+        ax = f.x * inv;
+        ay = f.y * inv;
+    }
+    const float bx = -ay, by = ax;  // b = (-sin, cos)
+    const float ox = scale * types.get_float(t, "Custom_Hard_XExtent_Offset");
+    const float oy = scale * types.get_float(t, "Custom_Hard_YExtent_Offset");
+    const Vec3 p = store.position(h);
+    const float cx = p.x + ox * ax + oy * bx, cy = p.y + ox * ay + oy * by;
+    // c +- hx a +- hy b (corners), then c + hx a, c - hy b, c - hx a, c + hy b.
+    static constexpr float k[8][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}, {1, 0}, {0, -1}, {-1, 0}, {0, 1}};
+    for (size_t i = 0; i < 8; ++i) {
+        xy[2 * i] = cx + k[i][0] * hx * ax + k[i][1] * hy * bx;
+        xy[2 * i + 1] = cy + k[i][0] * hx * ay + k[i][1] * hy * by;
+    }
 }
 
 void TacticalBattle::fog_decay() {
@@ -261,13 +336,7 @@ bool TacticalBattle::fog_object_hidden(int32_t player, objects::ObjectId id, boo
     q.z = p.z;
     const objects::TypeIndex t = store.type(h);
     q.multisample = t < catalog_->types().size() && catalog_->types().get_bool(t, "Multisample_FOW_Check");
-    if (q.multisample) {  // the bounding box's 8 corners (z = 0; only x, y matter) [port: mode half extents]
-        const tactical::Aabb bb = fog_mode_->extent_box(h);
-        for (size_t i = 0; i < 8; ++i) {
-            q.corners[2 * i] = (i & 1) ? bb.max.x : bb.min.x;
-            q.corners[2 * i + 1] = (i & 2) ? bb.max.y : bb.min.y;
-        }
-    }
+    if (q.multisample) fog_footprint_samples(store, h, q.corners.data());  // FOWF t02: the footprint rectangle (z = 0)
     return fog_.object_hidden(player, q, force);
 }
 
@@ -312,8 +381,8 @@ std::vector<fw::FogSetupObject> TacticalBattle::fog_setup_objects() const {
         so.has_locomotor = store.has_behavior(h, objects::beh::Locomotor);
         so.has_reveal = fog_reveal_beh_ != objects::kNoBehavior && store.has_behavior(h, fog_reveal_beh_);
         so.reinforcement_prevention_radius = types.get_float(t, "Reinforcement_Prevention_Radius");
-        // [port] "powered" read as: no POWERED behaviour (base power is not modelled per object here).
-        so.powered_or_unpowered = powered == objects::kNoBehavior || !store.has_behavior(h, powered);
+        // FOWF t03: obj +0x341 (POWERED slot); the base power itself is the target player's (set_base_power in fog_begin).
+        so.has_powered = powered != objects::kNoBehavior && store.has_behavior(h, powered);
         out.push_back(so);
     }
     return out;
@@ -337,6 +406,41 @@ void TacticalBattle::fog_end_setup_phase() {
 
 bool TacticalBattle::fog_setup_phase() const { return fog_on_ && fog_.setup_phase(); }
 
+// FOWF t05: the setup manager's end test, common-tick step 11 (after the GOM service): every human ready, or the countdown
+// expired.
+void TacticalBattle::fog_setup_tick() {
+    if (fog_on_ && fog_.setup_end_due(frame_)) fog_end_setup_phase();
+}
+
+// FOWF t05 (FOG_OF_WAR §3.4 "Manager details"): command 32 SetupPhaseTriggerEnd (0x5aef60) and command 31 SetupPhaseMove
+// (0x5aec70).
+commands::RejectReason TacticalBattle::fog_setup_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev) {
+    using R = commands::RejectReason;
+    if (!fog_on_) return R::NotAllowed;
+    if (ev.type() == commands::EventType::SetupPhaseTriggerEnd) {  // ready byte, then the ready handler (no phase test)
+        fog_.set_frame(frame_);
+        fog_.setup_player_ready(static_cast<int32_t>(player));
+        return R::None;
+    }
+    // Command 31: the object to the point, facing the angle (degrees). [port] Only while the setup phase runs and only the
+    // issuer's own live objects (the original's execute tests neither; its UI only drags own units during setup); z from
+    // the ground when the map has terrain (terrain snap 0x42bb40, tilt not modelled); the setup group's pick-up / drop
+    // presentation (0x3bfb10 / 0x3c0020) is not modelled.
+    if (!fog_.setup_phase()) return R::NotAllowed;
+    const uint32_t w = ev.u("object");
+    if (w == commands::kNoObject || w > 0x7FFFFFFFu) return R::InvalidUnit;
+    const objects::ObjectStore& st = mode.primary();
+    const objects::ObjectHandle h = st.find(static_cast<objects::ObjectId>(w));
+    if (!st.active(h) || st.owner(h) != static_cast<int32_t>(player)) return R::InvalidUnit;
+    const float x = ev.f("x"), y = ev.f("y"), angle = ev.f("angle");
+    float z = ev.f("z");
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(angle)) return R::InvalidPosition;
+    if (const float g = ground_height(x, y); g > -1.0e38f) z = g;
+    float sn = 0.0f, cs = 1.0f;
+    dmath::sincos(angle * (dmath::kPiF / 180.0f), sn, cs);
+    return teleport(mode, st.id(h), {x, y, z}, {cs, sn, 0.0f}) ? R::None : R::InvalidUnit;
+}
+
 // ---- OI fog: player reveal-range list --------------------------------------------------------------------------
 
 void TacticalBattle::fog_add_reveal_multiplier(int32_t player, int32_t category, uint64_t source, float multiplier) {
@@ -349,14 +453,16 @@ void TacticalBattle::fog_remove_reveal_modifier(int32_t player, uint64_t source)
 
 // ---- OI fog: space reinforcement sampler -----------------------------------------------------------------------
 
-// GOM list +0x2f0 stand-in [port]: every live object whose type has a Reinforcement_Prevention_Radius, GOM order.
+// GOM list +0x2f0 (FOWF t04, FOG_OF_WAR §9 item 10 [H]): the objects registered in the store whose type has a
+// Reinforcement_Enabling / Prevention / Base_Shield radius > 0, until their flush (dead objects not yet flushed and death
+// clones included); the prevention test keeps those with a prevention radius > 0. GOM order.
 std::vector<fw::PreventionCircle> TacticalBattle::fog_prevention_circles() const {
     std::vector<fw::PreventionCircle> out;
     if (!fog_mode_) return out;
     const objects::ObjectStore& store = fog_mode_->primary();
     const objects::GameObjectTypes& types = catalog_->types();
     for (const objects::ObjectHandle h : store.all_objects()) {
-        if (!store.active(h)) continue;  // refix t01: death clones skipped
+        if (!store.exists(h)) continue;
         const objects::TypeIndex t = store.type(h);
         if (t >= types.size()) continue;
         const float r = types.get_float(t, "Reinforcement_Prevention_Radius");

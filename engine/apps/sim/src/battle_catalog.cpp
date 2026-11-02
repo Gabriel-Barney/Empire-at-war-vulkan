@@ -144,6 +144,7 @@ BattleCatalog::BattleCatalog(const objects::GameObjectTypes& types, const FilePr
         f.tactical_overrun_multiple = constants->get_float("Tactical_Overrun_Multiple", f.tactical_overrun_multiple);
         f.min_overrun_seconds = constants->get_float("Minimum_Tactical_Overrun_Time_In_Secs", f.min_overrun_seconds);
         f.setup_phase_enabled = constants->get_bool("SetupPhaseEnabled", f.setup_phase_enabled);  // OI fog
+        f.setup_countdown_seconds = constants->get_float("SetupPhaseCountdownSeconds", f.setup_countdown_seconds);  // FOWF t05
         // --- end fog ---
 #endif
     }

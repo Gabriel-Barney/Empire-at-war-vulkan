@@ -2480,6 +2480,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     service_damage_tracking();
     profile::lap("tac.cleanup");
     fog_service(mode);  // fog of war: REVEAL sources, attacker flashes (owner: fog agent)
+    fog_setup_tick();   // FOWF t05: setup phase end (all humans ready / countdown)
     profile::lap("tac.fog");
     advance_queues(mode, rng);  // [port: Gabriel] 5b. queueable unit actions: completed orders start the next entry
     stats_.shots = combat_->stats().shots;
@@ -2519,6 +2520,7 @@ cmd::RejectReason TacticalBattle::handle_command(TacticalMode& mode, uint8_t pla
     if (t == T::Garrison || t == T::MoveToGarrison) return s4_command(mode, player, ev, rng);  // S4 garrisons
     // battle host: TacticalBuildEvent (33) / TacticalSell (34) - L1_S4_REMAINING §3.6; AI players build without a charge.
     if (t == T::Production) return hg_production_command(mode, player, ev);  // skirmish station production (else Unhandled)
+    if (t == T::SetupPhaseMove || t == T::SetupPhaseTriggerEnd) return fog_setup_command(mode, player, ev);  // FOWF t05
     if (t == T::TacticalBuild) {
         const uint32_t pw = ev.u("pad"), tw = ev.u("type_index");
         if (pw == cmd::kNoObject || pw > 0x7FFFFFFFu) return R::InvalidTarget;
