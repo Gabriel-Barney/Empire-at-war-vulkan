@@ -767,6 +767,11 @@ replaced):
 - an AI drop next to an enemy infantry squad succeeds; the same drop for a human fails when a member's box overlaps
   it.
 
+**Implemented** (a1g t04 follow-up, 2026-11-01): `land_drop_layout` / `land_drop_shape` / `land_drop_radius_ok` in
+`engine/apps/sim` (tactical_battle), used by `BattleAi::land_drop_ok` and the land `order_reinforce`; port choices in
+A1_READINGS §30.7 "Drop validity". The FoC data gives the worked example's shape (15 members, 3 x 3, squad 5, team
+container locomotor, FormationSpacing 0.5) and slots.
+
 ### 4.3 Battle load consumes the sync RNG (item 3) [H draws, M path]
 - Object construction draws synced numbers: SAP init 0x37c050 (from `Init_From_Type` 0x3989a0) does one
   `Get_Int(now, now + interval)` per special ability with interval > 0 that is allowed in the mode (first due

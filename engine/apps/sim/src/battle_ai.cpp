@@ -70,6 +70,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.log_decisions = setup.log_decisions;
     cfg.game_seed = host.session_seed();  // A2 tactical: perception '#' reseed (AI_GALACTIC_3 §7.3)
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
+    use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();
     cfg.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
 #ifdef ALAMO_AI_TACTICAL_HAVE_TERRAIN
@@ -1206,8 +1207,8 @@ bool BattleAi::space_drop_ok(int32_t player, int32_t key, const at::Vec3f& p, fl
     return b_->movement_->space().query_segment(from, to, now, now + 115.0f, ud.radius, layer | 8u, tc::kNoObject, true, b_->frame_) == 0;
 }
 
-// ---- a1g t04 follow-up: land TF.Reinforce drop validity (header) ----
-bool BattleAi::land_drop_ok(int32_t player, int32_t key, const at::Vec3f& p) {
+// ---- a1g t04 follow-up: land TF.Reinforce drop validity (header; TACTICAL_GAPS §4.2.1) ----
+bool BattleAi::land_drop_valid(int32_t player, int32_t key, const at::Vec3f& p, bool human) {
     if (b_->space_ || !b_->movement_) return true;  // land only
     if (!std::isfinite(p.x) || !std::isfinite(p.y)) return false;
     const TacticalBattle::Participant* part = nullptr;
@@ -1217,51 +1218,62 @@ bool BattleAi::land_drop_ok(int32_t player, int32_t key, const at::Vec3f& p) {
             break;
         }
     if (!part) return false;
+    const LandDropLayout lay = land_drop_layout(b_->land_drop_shape(part->type), p.x, p.y, b_->drop_yaw(part->side));
+    if (!lay.ok) return false;
     const objects::GameObjectTypes& types = mode_->types();
     const objects::ObjectStore& st = mode_->primary();
     const mv::PassabilityGrid& grid = b_->movement_->grid();
-    // Footprints of the live battle units (2-D circles of their movement radius) [port: stands in for the TreeCull AABB].
-    struct Taken {
-        float x, y, r;
-    };
-    std::vector<Taken> taken;
-    for (const TacticalBattle::Unit& u : b_->units_) {
-        if (!u.alive || u.retreated || !st.active(u.h)) continue;
-        const Vec3 q = st.position(u.h);
-        taken.push_back({q.x, q.y, u.type < types.size() ? mv::unit_desc_from_type(types, u.type).radius : 0.0f});
-    }
-    // The slots TacticalBattle::order_reinforce / deploy lay out for this entry: rows of 6 at land_spacing around the
-    // requested point (clamped to the mode bounds), facing the side's deploy facing, each clamped to the playable box
-    // (slot_position before its passability snap).
-    const tactical::Aabb& bb = mode_->bounds();
-    const float ax = std::clamp(p.x, bb.min.x, bb.max.x), ay = std::clamp(p.y, bb.min.y, bb.max.y);
-    const Vec3 f = b_->facing_[part->side];
-    const Vec3 right{-f.y, f.x, 0.0f};
-    const float spacing = b_->cfg_.land_spacing;
     float mn[2], mx[2];
     const bool box = b_->map_.playable_box(mn, mx);
-    const std::vector<uint32_t> members = b_->spawn_types(*part);
-    for (uint32_t k = 0; k < members.size(); ++k) {
-        const uint32_t t = members[k];
-        if (t >= types.size()) continue;
-        const float row = static_cast<float>(k / 6u), col = static_cast<float>(k % 6u) - 2.5f;
-        float x = ax - f.x * row * spacing + right.x * col * spacing;
-        float y = ay - f.y * row * spacing + right.y * col * spacing;
-        if (box) {
-            x = std::clamp(x, mn[0], mx[0]);
-            y = std::clamp(y, mn[1], mx[1]);
-        }
-        const mv::UnitDesc md = mv::unit_desc_from_type(types, t);
-        if (!grid.passable_world({x, y}, b_->movement_->classes().mask(md.movement_class))) return false;  // impassable
+    // 1-2. passable for the member's movement class (inside the playable box [port]); not fogged for the player.
+    for (const LandDropSlot& s : lay.slots) {
+        if (box && (s.x < mn[0] || s.x > mx[0] || s.y < mn[1] || s.y > mx[1])) return false;
+        if (s.type >= types.size()) return false;
+        const mv::UnitDesc md = mv::unit_desc_from_type(types, s.type);
+        if (!grid.passable_world({s.x, s.y}, b_->movement_->classes().mask(md.movement_class))) return false;
 #ifdef ALAMO_SIM_HAVE_FOG
-        if (b_->fog_point_fogged(player, x, y, true)) return false;  // fogged for the player (force 1)
+        if (b_->fog_point_fogged(player, s.x, s.y, true)) return false;
 #endif
-        if (space_prevention_hit(player, {x, y, 0.0f})) return false;  // non-allied Reinforcement_Prevention_Radius
-        for (const Taken& o : taken) {
-            const float dx = x - o.x, dy = y - o.y, rr = md.radius + o.r;
-            if (dx * dx + dy * dy < rr * rr) return false;  // footprint taken
-        }
     }
+    // 3. footprints: the formation box (broad phase), then each slot's own box against each blocking object's box.
+    static const objects::BehaviorTypeId kMine = objects::behavior_type_id("PROXIMITY_MINE");
+    const DropBox formation{p.x, p.y, lay.half_x, lay.half_y, b_->drop_yaw(part->side)};
+    std::vector<LandDropRadiusObject> radius;
+    for (const objects::ObjectHandle h : st.all_objects()) {  // GOM order
+        if (!st.active(h)) continue;  // dying / removing (+0x3a0 & 0x42) skipped
+        const objects::TypeIndex t = st.type(h);
+        if (t >= types.size()) continue;
+        const int32_t o = st.owner(h);
+        const bool allied = o >= 0 && (o == player || !b_->combat_->is_enemy(player, o));  // 0x2823c0 / 0x39a230
+        // 4. radius inputs (GOM list +0x2f0).
+        LandDropRadiusObject ro;
+        const Vec3 q = st.position(h);
+        ro.x = q.x;
+        ro.y = q.y;
+        ro.allied = allied;
+        ro.enabling = types.get_float(t, "Reinforcement_Enabling_Radius");
+        ro.prevention = types.get_float(t, "Reinforcement_Prevention_Radius");
+        ro.powered = st.has_behavior(h, objects::beh::Powered);
+        ro.owner_base_power = o >= 0 && b_->combat_->has_base_power(o);
+        if (ro.enabling > 0.0f || ro.prevention > 0.0f) radius.push_back(ro);
+        // footprint blockers [port]: battle units and LAND_OBSTACLE objects; never proximity mines; AI: movers ignored.
+        const bool obstacle = st.has_behavior(h, objects::beh::LandObstacle);
+        if (!obstacle && !b_->unit_by_id(st.id(h))) continue;
+        if (kMine != objects::kNoBehavior && st.has_behavior(h, kMine)) continue;
+        if (!human && st.has_behavior(h, objects::beh::Locomotor) && !obstacle) continue;
+        DropBox xb;
+        xb.cx = q.x;
+        xb.cy = q.y;
+        b_->drop_half_extents(t, xb.hx, xb.hy);
+        const Vec3 f = st.facing(h);
+        xb.yaw_deg = f.x == 0.0f && f.y == 0.0f ? 0.0f : dmath::atan2(f.y, f.x) * 57.295776f;
+        if (!(xb.hx > 0.0f) || !(xb.hy > 0.0f) || !drop_boxes_overlap(formation, xb)) continue;
+        for (const LandDropSlot& s : lay.slots)
+            if (drop_boxes_overlap(DropBox{s.x, s.y, s.hx, s.hy, s.yaw_deg}, xb)) return false;  // footprint taken
+    }
+    // 4. reinforcement radii (check-radius: AI and human drops are not forced).
+    for (const LandDropSlot& s : lay.slots)
+        if (!land_drop_radius_ok(s.x, s.y, radius, use_reinforcement_points_)) return false;
     return true;
 }
 

@@ -155,6 +155,56 @@ struct AttachedEffect {
     uint32_t frame = 0;
 };
 
+// ---- a1g t04 follow-up: land company drop layout and validity (TACTICAL_GAPS §4.2.1: 0x3b6170, 0x5abc00, 0x40f970) ----
+// One layout serves the AI drop check (BattleAi::land_drop_ok) and the reserve deploy (order_reinforce), so they agree.
+struct LandDropShape {
+    std::vector<uint32_t> members;  // Company_Units member types in list order, one per spawned member
+    std::vector<float> hx, hy;      // each member's half extents (0x371be0)
+    bool create_team = false;       // the FIRST member's Create_Team (+0x67): infantry teams, else one vehicle grid
+    uint32_t squad = 10;            // the company's Max_Squad_Size (+0x1e44)
+    bool container_locomotor = false;  // Create_Team_Type has LAND_TEAM_CONTAINER_LOCOMOTOR in its LandBehavior (+0x718)
+    float formation_spacing = 0.0f;    // the first member's FormationSpacing (+0x16d4)
+};
+struct LandDropSlot {
+    uint32_t type = 0;
+    float x = 0.0f, y = 0.0f;    // world position
+    float hx = 0.0f, hy = 0.0f;  // the member's half extents
+    float yaw_deg = 0.0f;        // the slot box's axis: yaw of the drop point -> slot (0x20acd0)
+};
+struct LandDropLayout {
+    std::vector<LandDropSlot> slots;
+    float half_x = 0.0f, half_y = 0.0f;  // broad-phase formation box half extents (world, along the drop yaw)
+    bool ok = false;                     // false: no member, or a degenerate grid (b = 0)
+};
+// The slots of `shape` dropped at (px, py) with the layout turned by `yaw_deg` (the player's entry facing): the member
+// grid (0x40f970) for vehicles; for Create_Team companies teams of min(Max_Squad_Size, n) laid out by 0x5abc00 (or
+// 0x40f970), the teams on a 0x40f970 grid from 2.5 x the team bounds, each team turned to face its offset. All float.
+LandDropLayout land_drop_layout(const LandDropShape& shape, float px, float py, float yaw_deg);
+// 2-D oriented boxes (centre, half extents, yaw in degrees); true when they overlap (separating-axis test, touching
+// boxes do not overlap).
+struct DropBox {
+    float cx = 0.0f, cy = 0.0f, hx = 0.0f, hy = 0.0f, yaw_deg = 0.0f;
+};
+bool drop_boxes_overlap(const DropBox& a, const DropBox& b);
+// The reinforcement radii of one slot (TACTICAL_GAPS §4.2.1 test 4, check-radius drops): with Use_Reinforcement_Points
+// some allied object with Reinforcement_Enabling_Radius R > 0 lies within d <= R; no non-allied object with
+// Reinforcement_Prevention_Radius P > 0 lies within d < P, except a POWERED one whose owner has no base power.
+struct LandDropRadiusObject {
+    float x = 0.0f, y = 0.0f;
+    bool allied = false;
+    float enabling = 0.0f, prevention = 0.0f;
+    bool powered = false;           // the object has the POWERED behaviour
+    bool owner_base_power = false;  // its owner's base-power list is non-empty (TACTICAL_GAPS §7.3)
+};
+bool land_drop_radius_ok(float x, float y, std::span<const LandDropRadiusObject> objects, bool use_reinforcement_points);
+// The drop shape of a company type (its Company_Units in list order, or the type itself) and the half extents 0x371be0
+// of a type: Custom_Hard_X/YExtent x Scale_Factor when both are > 0, else |land model box max x / y| x Scale_Factor;
+// [port] else the movement radius. [port] The +0x1b60 substitute type (a member without a land model) is not modelled.
+LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const BattleCatalog* catalog, const galactic::ConflictRules& rules,
+                              uint32_t company_type);
+void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy);
+// ---- end a1g t04 follow-up ----
+
 class TacticalBattle {
 public:
     TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
@@ -303,10 +353,19 @@ public:
     };
     std::vector<IconLink> icon_links() const;
     // Reinforce (COMMANDS.md id 12) from a human player: the rules of BattleAi's Reinforce (owner, undeployed reserve,
-    // the side not retreating, space unit cap -> QueueFull), deployed in rows of 6 around (x, y) clamped to the mode
-    // bounds [port]. Command phase, synced RNG. InvalidUnit when `galactic_id` is not one of the player's reserves.
+    // the side not retreating, space unit cap -> QueueFull). Space: deployed in rows of 6 around (x, y) clamped to the
+    // mode bounds [port]. Land (a1g t04 follow-up): the company drop layout around (x, y) (land_drop_layout), each slot
+    // clamped to the playable box and moved to the nearest passable cell only when it is blocked [port: the human drop
+    // check is not re-run here]. Command phase, synced RNG. InvalidUnit when `galactic_id` is not one of the player's
+    // reserves.
     commands::RejectReason order_reinforce(TacticalMode& mode, uint8_t player, objects::ObjectId galactic_id, float x, float y,
                                            SimRng& rng);
+    // a1g t04 follow-up: land_drop_shape / drop_half_extents with this battle's data. The layout yaw of a side = its
+    // deploy facing [port: the per-player entry facing, mode +0x288, is [M]].
+    LandDropShape land_drop_shape(uint32_t company_type) const;
+    void drop_half_extents(uint32_t type, float& hx, float& hy) const;
+    float drop_yaw(uint8_t side) const;
+    float player_drop_yaw(int32_t player) const { return drop_yaw(side_player(1) == player ? uint8_t{1} : uint8_t{0}); }
     // --- end P host ---
 
     // --- [port: Gabriel] queueable unit actions: the per-unit order queue (docs/PHASE4.md "Camera and controls") ---
@@ -840,6 +899,8 @@ private:
     void deploy(TacticalMode& mode, uint32_t participant, SimRng& rng);
     void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
+    Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
+    std::vector<Vec3> drop_pos_;  // a1g t04 follow-up: order_reinforce's land layout slots for deploy (transient)
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);
     void retreat_policy();

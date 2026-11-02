@@ -1564,9 +1564,9 @@ void TacticalAiWorld::Impl::reinforce_joined(const TfRec& t, int32_t unit, int32
             const auto r = m->find(filled.ref);
             if (r != m->end() && r->second == handle) m->erase(r);
         }
+        decide(t.player, "pp " + std::to_string(handle) + ": reinforce unit " + std::to_string(unit) + " " + type_name(type) +
+                             " fills a null slot");
     }
-    decide(t.player, "pp " + std::to_string(handle) + ": reinforce unit " + std::to_string(unit) + " " + type_name(type) +
-                         (slot ? " fills a null slot" : " appended"));
 }
 
 // ================================================================ plans

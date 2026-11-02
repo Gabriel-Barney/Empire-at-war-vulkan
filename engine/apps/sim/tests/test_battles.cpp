@@ -1960,6 +1960,110 @@ void test_fog_bm_battle(const Data& d) {
 #endif
 
 // FoC: a battle request built by hand (two FoC frigate groups at Kuat-like orbit) on a real space map.
+// a1g t04 follow-up (TACTICAL_GAPS §4.2.1): the land company drop layout, the oriented-box test and the radius rules.
+// The worked example: FoC Rebel_Infantry_Squad (15 x Squad_Rebel_Trooper, Max_Squad_Size 5, team container locomotor,
+// trooper half extents 3 x 3, FormationSpacing 0.5).
+LandDropShape rebel_squad_shape() {
+    LandDropShape s;
+    s.members.assign(15, 7u);
+    s.hx.assign(15, 3.0f);
+    s.hy.assign(15, 3.0f);
+    s.create_team = true;
+    s.squad = 5;
+    s.container_locomotor = true;
+    s.formation_spacing = 0.5f;
+    return s;
+}
+
+bool rebel_squad_slots_ok(const LandDropLayout& lay, float px, float py, float yaw_deg) {
+    static const float kSlots[15][2] = {{35.5f, -16.0f}, {35.5f, 0.0f},   {35.5f, 16.0f},  {19.5f, -8.0f}, {19.5f, 8.0f},
+                                        {8.0f, -16.0f},  {8.0f, 0.0f},    {8.0f, 16.0f},   {-8.0f, -8.0f}, {-8.0f, 8.0f},
+                                        {-35.5f, 16.0f}, {-35.5f, 0.0f},  {-35.5f, -16.0f}, {-19.5f, 8.0f}, {-19.5f, -8.0f}};
+    if (!lay.ok || lay.slots.size() != 15) return false;
+    if (std::fabs(lay.half_x - 41.25f) > 1e-3f || std::fabs(lay.half_y - 42.0f) > 1e-2f) return false;
+    const bool quarter = yaw_deg == 90.0f;
+    for (size_t i = 0; i < 15; ++i) {
+        const float ox = quarter ? -kSlots[i][1] : kSlots[i][0], oy = quarter ? kSlots[i][0] : kSlots[i][1];  // (x, y) -> (-y, x)
+        if (std::fabs(lay.slots[i].x - (px + ox)) > 1e-3f || std::fabs(lay.slots[i].y - (py + oy)) > 1e-3f) {
+            std::printf("  slot %zu: (%.4f, %.4f) expected (%.4f, %.4f)\n", i, static_cast<double>(lay.slots[i].x),
+                        static_cast<double>(lay.slots[i].y), static_cast<double>(px + ox), static_cast<double>(py + oy));
+            return false;
+        }
+    }
+    return true;
+}
+
+void test_land_drop_rules() {
+    // Layout: yaw 0 and the 90-degree rotation, at a drop point away from the origin.
+    const LandDropShape rebel = rebel_squad_shape();
+    CHECK(rebel_squad_slots_ok(land_drop_layout(rebel, 1000.0f, 500.0f, 0.0f), 1000.0f, 500.0f, 0.0f));
+    CHECK(rebel_squad_slots_ok(land_drop_layout(rebel, 1000.0f, 500.0f, 90.0f), 1000.0f, 500.0f, 90.0f));
+    {
+        const LandDropLayout lay = land_drop_layout(rebel, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots[0].type == 7u && lay.slots[0].hx == 3.0f);
+        CHECK(std::fabs(lay.slots[6].yaw_deg) < 1e-3f);  // (8, 0): the slot box's axis is the yaw of drop point -> slot
+        CHECK(std::fabs(lay.slots[11].yaw_deg - 180.0f) < 1e-3f);
+    }
+    {  // without the team container locomotor the team uses 0x40f970; a partial last team keeps its first slots
+        LandDropShape s = rebel;
+        s.container_locomotor = false;
+        s.members.resize(12);
+        s.hx.resize(12);
+        s.hy.resize(12);
+        const LandDropLayout lay = land_drop_layout(s, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots.size() == 12);
+    }
+    {  // vehicles: one 0x40f970 grid. Cell (2 * 10 / 20 + 0, same) = (1, 1), 4 members: side = sqrt(7.2), 2 per row.
+        LandDropShape v;
+        v.members.assign(4, 3u);
+        v.hx.assign(4, 10.0f);
+        v.hy.assign(4, 10.0f);
+        const LandDropLayout lay = land_drop_layout(v, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots.size() == 4);
+        if (lay.ok && lay.slots.size() == 4) {
+            const float side = std::sqrt(7.2f), gap = (side - 2.0f) / 3.0f;
+            CHECK(std::fabs(lay.slots[0].x - 10.0f) < 1e-3f && std::fabs(lay.slots[2].x + 10.0f) < 1e-3f);
+            CHECK(std::fabs(lay.slots[0].y - (gap - side / 2.0f + 0.5f) * 20.0f) < 1e-3f);
+            CHECK(std::fabs(lay.slots[1].y + lay.slots[0].y) < 1e-3f);  // centred row
+            CHECK(std::fabs(lay.half_x - 20.0f) < 1e-3f && std::fabs(lay.half_y - side * 10.0f) < 1e-3f);
+        }
+        v.hy.assign(4, 0.0f);  // b = 2 hy / 20 + FS = 0 -> no layout
+        CHECK(!land_drop_layout(v, 0.0f, 0.0f, 0.0f).ok);
+        CHECK(!land_drop_layout(LandDropShape{}, 0.0f, 0.0f, 0.0f).ok);
+    }
+    // Oriented boxes.
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {5.0f, 0.0f, 3.0f, 3.0f, 0.0f})));
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {6.0f, 0.0f, 3.0f, 3.0f, 0.0f})));  // touching
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {7.5f, 0.0f, 3.0f, 3.0f, 0.0f})));
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 45.0f}, {9.0f, 0.0f, 3.0f, 3.0f, 45.0f})));
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {6.5f, 0.0f, 3.0f, 3.0f, 45.0f})));  // the corner reaches 2.26
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 20.0f, 1.0f, 90.0f}, {0.0f, 15.0f, 1.0f, 1.0f, 0.0f})));   // long axis along y
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 20.0f, 1.0f, 0.0f}, {0.0f, 15.0f, 1.0f, 1.0f, 0.0f})));
+    // Radii: a POWERED enemy object with prevention radius 100, 60 from a slot, blocks only while its owner has base
+    // power; without POWERED it always blocks. Enabling (<=) needs an allied object; prevention is strict (<).
+    LandDropRadiusObject turret;
+    turret.x = 60.0f;
+    turret.prevention = 100.0f;
+    turret.powered = true;
+    turret.owner_base_power = true;
+    LandDropRadiusObject point;
+    point.allied = true;
+    point.enabling = 500.0f;
+    std::vector<LandDropRadiusObject> objs = {point, turret};
+    CHECK(!land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    objs[1].owner_base_power = false;  // the owner's base-power list is empty
+    CHECK(land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    objs[1].powered = false;
+    CHECK(!land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    CHECK(land_drop_radius_ok(-40.0f, 0.0f, objs, true));  // d = 100: not < 100
+    objs[1].allied = true;                                  // an allied object never prevents
+    CHECK(land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    CHECK(land_drop_radius_ok(500.0f, 0.0f, objs, true));   // d = 500 <= 500
+    CHECK(!land_drop_radius_ok(500.5f, 0.0f, objs, true));  // outside every enabling radius
+    CHECK(land_drop_radius_ok(500.5f, 0.0f, objs, false));  // without Use_Reinforcement_Points
+    std::printf("  land drop rules: OK\n");
+}
+
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
@@ -1985,6 +2089,20 @@ void test_foc() {
     std::printf("foc battle: contrast rows %zu, hardpoint records %zu, priority sets %zu, damage types %u\n", crules.contrast.size(),
                 catalog.hardpoint_records(), catalog.priority_sets().size(), catalog.damage().damage_count());
     CHECK(crules.contrast.size() == 11 && catalog.hardpoint_records() > 100 && !catalog.priority_sets().empty());
+    {  // a1g t04 follow-up (TACTICAL_GAPS §4.2.1 worked example): the Rebel_Infantry_Squad drop shape and layout
+        const objects::TypeIndex rq = types.resolve_name("Rebel_Infantry_Squad");
+        CHECK(rq != objects::kNone && rq < types.size());
+        if (rq != objects::kNone && rq < types.size()) {
+            const LandDropShape s = land_drop_shape(types, &catalog, crules, static_cast<uint32_t>(rq));
+            std::printf("foc drop shape Rebel_Infantry_Squad: %zu members, hx %.3f hy %.3f, team %d squad %u container %d fs %.2f\n",
+                        s.members.size(), s.hx.empty() ? 0.0 : static_cast<double>(s.hx[0]), s.hy.empty() ? 0.0 : static_cast<double>(s.hy[0]),
+                        s.create_team ? 1 : 0, s.squad, s.container_locomotor ? 1 : 0, static_cast<double>(s.formation_spacing));
+            CHECK(s.members.size() == 15 && s.create_team && s.squad == 5 && s.container_locomotor && s.formation_spacing == 0.5f);
+            CHECK(!s.hx.empty() && std::fabs(s.hx[0] - 3.0f) < 1e-4f && std::fabs(s.hy[0] - 3.0f) < 1e-4f);
+            CHECK(rebel_squad_slots_ok(land_drop_layout(s, 250.0f, -125.0f, 0.0f), 250.0f, -125.0f, 0.0f));
+            CHECK(rebel_squad_slots_ok(land_drop_layout(s, 250.0f, -125.0f, 90.0f), 250.0f, -125.0f, 90.0f));
+        }
+    }
     {  // refixf t01: rocket curve fields reach the battle tables (MPTL fires Proj_Ground_Proton_Torpedo: MPTL_Rocket,
        // straight 100, curve 50, offset 7, Target_Point_On_Terrain, Explode_When_Reached_Target_Radius)
         std::vector<uint32_t> idx;
@@ -3515,6 +3633,7 @@ void test_battle_ai_land_drop(const Data& d) {
     ts.equations = &eqs;
     ts.files = d.files.get();
     ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    ts.constants.use_reinforcement_points = false;  // the synthetic map has no reinforcement points (enabling tested below)
     namespace mv = alamo::tactical::movement;
     bool invaded = false, checked = false;
     for (uint64_t t = 0; t < 1500 && !checked; ++t) {
@@ -3532,20 +3651,6 @@ void test_battle_ai_land_drop(const Data& d) {
         if (reserves.empty()) break;
         const auto key = static_cast<int32_t>(reserves[0].galactic_id);
         BattleAi ai(*b, *tm, host, ts);
-        // A live unit of the player: a drop whose slot 0 is on it has its footprint taken.
-        ai::tactical::Vec3f own{};
-        bool have_own = false;
-        for (const objects::ObjectHandle h : tm->primary().owned_by(1))
-            if (tm->primary().active(h) && tm->movable(h)) {
-                // Slot 0 of a drop lies 2.5 x land_spacing (40) to the left of the spot along the side's deploy facing (the
-                // unit's spawn facing): drop at q + 100 * right puts slot 0 on the unit.
-                const Vec3 q = tm->primary().position(h);
-                const Vec3 f = tm->primary().facing(h);
-                own = {q.x - f.y * 100.0f, q.y + f.x * 100.0f, 0.0f};
-                have_own = true;
-                break;
-            }
-        CHECK(have_own);
         // Candidate spots over the map (every 4th cell centre right of the strip).
         auto scan = [&](std::vector<ai::tactical::Vec3f>& ok) {
             ok.clear();
@@ -3578,13 +3683,38 @@ void test_battle_ai_land_drop(const Data& d) {
         for (const auto& q : fog_ok) CHECK(ai.land_drop_ok(1, key, q));  // fog cleared: still valid (and same answer twice)
         const mv::V2 strip = mv::cell_center(2, 31);
         CHECK(!ai.land_drop_ok(1, key, {strip.x, strip.y, 0.0f}));  // impassable slots
-        if (have_own) CHECK(!ai.land_drop_ok(1, key, own));          // footprint taken
+        // TACTICAL_GAPS §4.2.1: an AI drop with a member slot on an enemy unit passes (the AI ignores movers); the same
+        // drop for a human fails (its movers block). Slot 0's offset comes from the shared layout.
+        const LandDropLayout at0 = land_drop_layout(b->land_drop_shape(reserves[0].type), 0.0f, 0.0f, b->player_drop_yaw(1));
+        CHECK(at0.ok);
+        size_t next_to_enemy = 0;
+        for (const objects::ObjectHandle h : tm->primary().owned_by(0)) {
+            if (!at0.ok || !tm->primary().active(h) || !tm->movable(h) || next_to_enemy >= 3) continue;
+            const Vec3 q = tm->primary().position(h);
+            const ai::tactical::Vec3f c{q.x - at0.slots[0].x, q.y - at0.slots[0].y, 0.0f};
+            if (!ai.land_drop_ok(1, key, c)) continue;  // refused for another reason (passability, radius, a structure)
+            CHECK(!ai.land_drop_valid(1, key, c, true));
+            ++next_to_enemy;
+        }
+        CHECK(next_to_enemy > 0);
+        {  // Use_Reinforcement_Points: a spot is valid only when every slot is within an allied enabling radius.
+            TacticalAiSetup te = ts;
+            te.constants.use_reinforcement_points = true;
+            BattleAi ae(*b, *tm, host, te);
+            size_t enabled = 0;
+            for (const auto& q : clear_ok) {
+                const bool ok = ae.land_drop_ok(1, key, q);
+                enabled += ok ? 1u : 0u;
+                if (ok) CHECK(ai.land_drop_ok(1, key, q));  // the radii only remove spots
+            }
+            std::printf("  land drop: %zu of %zu spots inside the enabling radii\n", enabled, clear_ok.size());
+        }
         if (!clear_ok.empty()) {
             CHECK(!ai.land_drop_ok(1, key + 1000, clear_ok[0]));  // unknown entry
             CHECK(!ai.land_drop_ok(0, key, clear_ok[0]));         // another player's entry
         }
-        std::printf("  land drop: %zu / %zu spots fogged-valid / valid, %zu refused only by fog (fog %s)\n", fog_ok.size(), clear_ok.size(),
-                    newly, fog ? "on" : "off");
+        std::printf("  land drop: %zu / %zu spots fogged-valid / valid, %zu refused only by fog (fog %s), %zu next to enemy units\n",
+                    fog_ok.size(), clear_ok.size(), newly, fog ? "on" : "off", next_to_enemy);
     }
     CHECK(checked);
 }
@@ -3770,9 +3900,11 @@ int main(int argc, char** argv) {
     test_battle_ai_land_mode(true);
     std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
     test_battle_ai_find_team();
-    std::printf("a1g t04 follow-up: BattleAi::land_drop_ok (impassable / fogged / footprint taken)\n");
+    std::printf("a1g t04 follow-up: BattleAi::land_drop_ok (impassable / fogged / movers / enabling radius)\n");
     test_battle_ai_land_drop(*d);
 #endif
+    std::printf("a1g t04 follow-up: land company drop layout, oriented boxes, reinforcement radii\n");
+    test_land_drop_rules();
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);
     std::printf("OI objects: behaviour Initialise draws + scheduling\n");  // OI objects

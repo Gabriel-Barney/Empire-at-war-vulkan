@@ -1015,15 +1015,17 @@ the verdict is **change**.
   spots, the ninth at θ ≈ 2π (≈ the first spot); the port follows the loop. [port] choices: a null pending entry (no
   type, or gone from the host's pool) is dropped from the TF, a non-fitting one stays pending for a later Reinforce;
   the trailing pop also runs once before the first spot; without Use_Reinforcement_Points every spot is the target.
-- **Drop validity (a1g t04 follow-up, 2026-11-01):** `TacticalAiHost::land_drop_ok(player, key, p)`, asked before each
-  spot's Reinforce order; the battle host (`BattleAi::land_drop_ok`) lays out the slots its deploy would use (rows of 6 at
-  `land_spacing` around p) and refuses the spot when a member's slot is impassable for its MovementClass (effective
-  grid, static stamps included), fogged for the player (force 1), inside a non-allied Reinforcement_Prevention_Radius
-  (2-D strict), or its footprint is taken (a live battle unit within the sum of the movement radii, 2-D strict).
-  [port]: movement radii stand in for the TreeCull AABBs; the POWERED exemption of the prevention test is not modelled;
-  the slot layout is the port's rows of 6 (the original company formation 0x5abc00 is [M]). Open: with that layout a
-  large company (Rebel_Infantry_Squad, 3 rows) finds no valid spot around the Utapau Rebel point on seeds 1-6, while
-  the tank brigades land.
+- **Drop validity (a1g t04 follow-up, 2026-11-01; layout per TACTICAL_GAPS §4.2.1):** `TacticalAiHost::land_drop_ok(player,
+  key, p)`, asked before each spot's Reinforce order. The battle host (`BattleAi::land_drop_ok`) lays out the company with
+  `land_drop_layout` (0x5abc00 teams / 0x40f970 grids, centred on p, turned by the side's yaw), the same slots
+  `TacticalBattle::order_reinforce` deploys, and refuses the spot unless every slot is inside the playable box and passable
+  for its member's MovementClass, not fogged for the player, clear of every blocking footprint (oriented slot box vs the
+  object's box after the formation-box broad phase; movers ignored for the AI, proximity mines never block) and passes the
+  radii (enabling <= with Use_Reinforcement_Points, prevention <, a POWERED object blocks only while its owner has base
+  power). [port]: the layout yaw is the side's deploy facing (the per-player entry facing is [M]); blocking objects are the
+  battle units and LAND_OBSTACLE objects; footprint boxes are Custom_Hard extents x Scale_Factor, else the land model
+  box, else the movement radius; the +0x1b60 substitute member type and the landing-transport rule are not modelled; the
+  human deploy clamps each slot to the playable box and moves only blocked slots to the nearest passable cell.
 - **Ring spot count from the disassembly (a1g follow-up, 2026-11-01): nine spots per point [H].**
   - θ lives in xmm6. It is reset to 0 (xmm9, `xorps` at 0x6eb115) for each point at 0x6eb361.
   - Each try ends with `addss xmm6, [0x140b3adb8]` at 0x6eb56a, then `comiss xmm11, xmm6` and `ja 0x6eb380`, so the
