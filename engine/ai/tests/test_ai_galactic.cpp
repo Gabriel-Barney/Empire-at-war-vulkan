@@ -1813,6 +1813,7 @@ struct LateHooks final : GoalModeHooks {
         if (ended < 0) ended = now;
     }
     void drop_potential_plan(Goal&) override {}
+    void suspend_reservations(Goal&) override {}
     float elapsed_eta(const Goal& g) override {
         // Stalled: the build still needs its whole time; on schedule: the remaining time falls with the clock.
         const float elapsed = static_cast<float>(now - g.created) / static_cast<float>(kAiFps);
