@@ -75,7 +75,8 @@ struct PerceptionObject {
     int32_t id = -1;
     int32_t owner = kNoPlayerIndex;  // player list index (obj +0x58 -> player)
     int32_t type = -1;               // own / container type (0x396380) index; a TEAM: its company type (A1_READINGS §29)
-    int32_t rep_type = -1;           // representative type (0x3973b0) index; -1 = same as `type`
+    int32_t rep_type = -1;           // representative type (0x3973b0) index; -1 = same as `type`. A TRANSPORT: its
+                                     // carried type when set (ObjectStore::carried_type, A1_READINGS §32.2), else own
     bool alive = true;               // obj +0x3a0 bit 0x40 clear
     bool has_unit_ai = false;        // UNIT_AI behaviour 0x12: the object is in the threat grid
     bool team_or_hide_when_fogged = false;  // TEAM 0x16 or HIDE_WHEN_FOGGED 0x19

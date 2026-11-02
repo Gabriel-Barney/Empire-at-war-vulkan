@@ -467,7 +467,9 @@ struct Eval {
             // (game type 1..4) or when it has no parent-mode id (+0x54); otherwise the parent-mode object with that id,
             // and the object is skipped when that one is not found. T = the source's representative type (0x3973b0); it
             // must match the category mask; the sum adds T's AI_Combat_Power (the type's power: no attenuator, health or
-            // landing-object factor).
+            // landing-object factor). a1h t08 (§32.2): a reinforcement's landing object carries its company type
+            // (transport +0x48, both modes), so T is that company, not the dropship; a cinematic transport has none (own
+            // type).
             for (const PerceptionObject& o : w.objects) {
                 if (!o.transport_landing || !o.alive || !w.is_player(o.owner)) continue;
                 if ((w.rel(P, o.owner) == 0) != friendly) continue;
