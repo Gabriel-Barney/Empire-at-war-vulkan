@@ -243,6 +243,10 @@ public:
     // S7 t21 - the unit's movement lock (0x39ad40: ability share, script lock, suspended locomotor; A1_READINGS §28.9):
     // a locked member does not join a SpaceAmbushBlockStatus (AI_TACTICAL §7.3.1). Default: never locked.
     virtual bool movement_locked(int32_t /*object_id*/) { return false; }
+    // S7 t27 - the land sight factor 0x3722a0 of land Prepare_Ambush (AI_TACTICAL §7.3.3 item 5): the weather
+    // Sight_Range_Modifier for the Weather_Category of `type` (the target's company type), for the object `object_id`
+    // (its owner decides the weather exemption); 1.0 without strong weather / no entry. Default: 1.0 (no weather).
+    virtual float sight_weather_factor(int32_t /*type*/, int32_t /*object_id*/) { return 1.0f; }
     // a1g t04 follow-up - land TF.Reinforce drop validity (LandMode vf80 0x3b5f60 -> 0x3b6170, TACTICAL_GAPS
     // §4.2.1, A1_READINGS §30.7): can pool entry `key` of `player` land at spot `p` (the company layout's centre)? The host
     // refuses unless every formation slot is passable for its member, not fogged for `player`, clear of blocking footprints
@@ -316,6 +320,12 @@ public:
     // Battle end (slot 7 / context teardown): every running plan ends (released by the goal system).
     void end_battle();
     void set_suspended(bool suspended);
+    // S7 t26 (AI_TACTICAL §7.3.3 item 2) - object signal 0xb "a new order replaces this unit's order", raised by the host
+    // when it executes an order on `object_id` (A1_READINGS §33.3: task-force movement collectors, unit Move_To /
+    // Attack_Move, MoveToObject, attack orders, ...): the Activate_Ability blocks waiting on the unit (or its team
+    // container) end - the object bridge's GameObjectWrapper blocks and the task-force AbilityBlockStatus counts. No plan
+    // event. Call at the moment the order executes (a block created after it must not see it).
+    void order_replaced(int32_t object_id);
     // FOW hook (docs/re/FOG_OF_WAR.md: a FOW cell of `player` reached state 0): threat-grid refog at the cell
     // centre (AI_TACTICAL_PERCEPTION §4). Fog itself is the FOW system's; perception reads it through the
     // PerceptionWorld object_fogged / point_fogged callbacks the host fills (absent = never fogged).
@@ -428,6 +438,11 @@ bool reinforce_join_pp(std::vector<TacticalPpPick>& picks, int32_t unit, int32_t
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);
+
+// S7 t27 (AI_TACTICAL §7.3.3 item 5): the walk step of land Prepare_Ambush (0x6ec8b0): the land sight range 0x3722a0 =
+// Land_FOW_Reveal_Range x the weather Sight_Range_Modifier of the target's company type; <= 0 -> the target type's max
+// attack range (0x3749d0). A result <= 0 means no walk (the first point, no threat / box test).
+float land_ambush_step(float land_fow_reveal_range, float weather_sight_factor, float max_attack_range);
 // The plan files of a tactical mode: every plan folder in load order, as for the galactic AI (AI_GALACTIC §1.9.1 [H]).
 std::vector<std::string> tactical_plan_files(TacticalMode mode, const std::function<std::vector<std::string>(std::string_view)>& list);
 

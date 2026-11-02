@@ -3,6 +3,7 @@
 // "battle host (BT pass)" blocks). Serial code; synced draws: retreat attrition (one inline draw per eligible unit) and the
 // hard-point draws of AbilitySystem::add_unit for pad objects.
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <string>
@@ -605,6 +606,48 @@ bool TacticalBattle::bt_owner_neutral(int32_t owner) const {
     if (owner < 0 || static_cast<size_t>(owner) >= galaxy_->players().size()) return false;
     const uint32_t f = galaxy_->players()[static_cast<size_t>(owner)].faction;
     return f < galaxy_->rules().factions.size() && galaxy_->rules().factions[f].is_neutral;
+}
+
+int32_t TacticalBattle::bt_relation(int32_t p, int32_t q) const {
+    // S7 t30 (TACTICAL_COMBAT §2.10) [H]. Players without a galactic player: enemies of everyone else (the old default).
+    const auto& ps = galaxy_->players();
+    if (p < 0 || q < 0 || static_cast<size_t>(p) >= ps.size() || static_cast<size_t>(q) >= ps.size()) return p == q ? 0 : 1;
+    const auto& fs = galaxy_->rules().factions;
+    const uint32_t fp = ps[static_cast<size_t>(p)].faction, fq = ps[static_cast<size_t>(q)].faction;
+    const bool np = bt_owner_neutral(p), nq = bt_owner_neutral(q);
+    if (cfg_.skirmish) {  // 0x297300: every pair overwritten, the XML lists ignored
+        if (np) return 2;  // its own entry too
+        if (p == q) return 0;
+        if (nq) return 2;
+        return fp == fq ? 0 : 1;
+    }
+    // Campaign (Create_Default_Players 0x294360). [port] once a script wrote the galactic table (Make_Ally / Make_Enemy),
+    // it is the source: enemy there = enemy here, anything else 0 / 2.
+    if (p == q) return 0;
+    if (!galaxy_->diplomacy_state_default()) {
+        const galactic::Relation r = galaxy_->relation(p, q);
+        if (r == galactic::Relation::Enemy) return 1;
+        return r == galactic::Relation::Neutral ? 2 : 0;
+    }
+    if (np || nq) return 2;
+    if (fp == fq) return 0;
+    if (fp >= fs.size() || fq >= fs.size()) return 1;
+    const auto same = [](std::string_view a, std::string_view b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+        return true;
+    };
+    // [port] a faction with neither list stays an enemy of every other non-neutral faction (the old default): only the
+    // synthetic test data has such factions; every shipped non-neutral faction lists its Enemies.
+    if (fs[fp].allies.empty() && fs[fp].enemies.empty()) return 1;
+    const std::string& gname = fs[fq].name;
+    int32_t v = 2;  // the constructor's value ("undefined feelings")
+    for (const std::string& n : fs[fp].allies)
+        if (same(n, gname)) v = 0;
+    for (const std::string& n : fs[fp].enemies)  // Enemies wins over Allies
+        if (same(n, gname)) v = 1;
+    return v;
 }
 
 int32_t TacticalBattle::bt_map_owner(uint32_t raw) const {

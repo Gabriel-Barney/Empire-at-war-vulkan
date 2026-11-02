@@ -104,6 +104,11 @@ enum class AbilityEventKind : uint8_t {
     // STATION_HANGARS_SOUND.md §1.1: remove `id` silently (Kill 0x391310 flag 1: no death clone / explosion /
     // survivors). Starbase_Upgrade_Ability: the upgrade object after its one service, whether or not the upgrade ran.
     RemoveSilently,
+    // S8 t10 (LOB_SOLVER §3.5 "MARKER removal"): the Remote_Bomb toss 0x71a200 ran against `target` (after the spawn
+    // attempt, whether or not a bomb spawned). When `target` is a ground-point MARKER (a Dummy_Barrage_Target) the host
+    // kills it (0x391310(marker, 1): ordinary Destroy_Object). Not raised when the toss never happens (interrupted, null
+    // target lookup, refused apply): the marker then stays.
+    MarkerTossed,
 };
 
 struct AbilityEvent {
@@ -217,6 +222,14 @@ struct AbilityHost {
     // The garrison host's position and the world positions of its gun bones (Num_Garrison_Guns FP_0<i>_ALT<a> of the
     // current ALT state), in bone order; false / empty = none. Unset: none (the thrower's own Spawn_Bone is used).
     std::function<bool(ObjectId holder, Vec3& holder_pos, std::vector<Vec3>& bones)> garrison_fire_bones;
+    // S8 t11 (MOVEMENT §3.2 "Deploy states", AI_TACTICAL §7.3.3 item 3): DEPLOY's 0x3a1ce0 -> 0x391260 -> the Walk
+    // locomotor's Deploy(on) (vf +0x118). True when the request changed the locomotor's deploy state. Set: the host owns the
+    // deploy state and reports every change with set_deploy_state() (DEPLOY Is_Active = Walk state 0x19); unset: [port] the
+    // deploy is instant (Is_Active follows the request).
+    std::function<bool(ObjectId id, bool on, uint32_t frame)> deploy;
+    // S8 t10 (LOB_SOLVER §3.5 "Facing at apply"): 0x3a8710 - snap `id`'s yaw to `yaw_deg` at once (no turn rate; roll and
+    // pitch 0). Unset: [port] the facing is not changed.
+    std::function<void(ObjectId id, float yaw_deg)> snap_yaw;
 };
 
 // OI abilities: the per-player tactical lists Battlefield_Modifier writes (§2.3.11) besides the reveal range.
@@ -389,6 +402,11 @@ public:
     bool weather_affected(int32_t player) const;
     bool hunting(ObjectId id) const;     // HUNT behaviour enabled
     bool deployed(ObjectId id) const;    // DEPLOY state (DEPLOY 2 Is_Active)
+    // S8 t11: the host's Walk deploy state of `id` (MovementSystem::deploy_state: 0 none, 0x18 Deploying, 0x19 Deployed,
+    // 0x1A Undeploying). DEPLOY Is_Active (0x39a390) := state == 0x19; combat kUnitDeploying := state == 0x19 (0x39a390,
+    // the death-clone remap and the Fire_When_(Un)Deployed gates); kUnitDeployTransition := 0x18 or 0x1A (0x39a400 /
+    // 0x39b2a0: neither weapon source fires).
+    void set_deploy_state(ObjectId id, uint8_t walk_state);
     bool spread_out(ObjectId id) const;  // SPREAD_OUT member flag obj +0x448 (default idle: Idle Crouch)
     size_t mine_count() const { return mines_.size(); }
     // REMAINING_GAPS §5.2: DEPLOY_TROOPERS behaviour data +0x40 (troopers deployed so far) and the trooper list +0x10
@@ -703,6 +721,7 @@ private:
     bool class_state(const Obj& o, SpecialClass cls) const;  // a special of that class is applied on the owner
     bool class_has(const Obj& o, SpecialClass cls) const;    // the owner lists a special of that class
     bool locked(const Obj& o) const;  // 0x39ad40: this system's share or the host's (script lock, forced move)
+    void snap_face(Obj& o, ObjectId target);  // S8 t10: 0x20acd0 + 0x3a8710 at a thrown ability's apply (LOB_SOLVER §3.5)
     void lock_pair(Obj& o, uint8_t flag, bool lock, uint32_t frame);  // a 0x3a8e50 lock / unlock pair of one caller
     void lightning_targets(Obj& o, const SpecialAbilityDesc& s, ObjectId primary, std::vector<ObjectId>& out);
 

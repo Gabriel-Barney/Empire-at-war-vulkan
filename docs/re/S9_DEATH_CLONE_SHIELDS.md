@@ -383,7 +383,7 @@ Read 2026-10-31 (refixf t01 follow-up): Spawn_Projectile 0x54ade0, 0x4c8b90, 0x4
   (obj +0x248) when no bone is used. So a rocket leaves along its launcher's barrel, not towards the target.
 - FireAtPosition +0x3c..0x44 = the aim point from 0x54a270: the target object's (bone) position with lead
   (0x399450), or the ordered ground position; for categories 0 / 3 / 4 / 6 / 7 the point **after** the fire-time
-  inaccuracy step 0x549f80 [M: aim details not re-read].
+  inaccuracy step 0x549f80 (aim rules: TACTICAL_COMBAT §3.1.1 "Own-weapon aim point", 2026-11-02).
 - Speed +0x90 = 0x370f00(type, 0) (TACTICAL_COMBAT §3.3). DistanceTravelled = 0. Launch point +0x80..0x88 = the
   spawn position. +0x18 = 0, +0x20 = −1.
 - MaxTravelDistance +0x6c = (spawn override if > 0, else MFD) + the target's radius term (0x397780, plus its

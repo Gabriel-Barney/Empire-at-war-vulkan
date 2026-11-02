@@ -428,8 +428,11 @@ function MainForce_Thread()
   local fin = b and b.IsFinished()
   local n1 = MainForce.Move_To()
   local n2 = MainForce.Move_To(nil)
-  Report(string.format("EMPTYTF player=%d count=%d p=%s b=%s fin=%s n1=%s n2=%s lost=%d", PlayerObject.Get_ID(), MainForce.Get_Force_Count(),
-    tostring(p ~= nil), tostring(b ~= nil), tostring(fin), tostring(n1), tostring(n2), Lost))
+  local d1, d2 = nil, nil  -- S7 t27: Get_Distance of the empty task force measures from (0, 0, 0), as the target's
+  if TestValid(Target) then d1 = MainForce.Get_Distance(Target) d2 = Target.Get_Distance(Create_Position(0, 0, 0)) end
+  local dist = d1 ~= nil and d2 ~= nil and d1 - d2 < 0.01 and d2 - d1 < 0.01 and d1 > 0
+  Report(string.format("EMPTYTF player=%d count=%d p=%s b=%s fin=%s n1=%s n2=%s lost=%d dist=%s", PlayerObject.Get_ID(), MainForce.Get_Force_Count(),
+    tostring(p ~= nil), tostring(b ~= nil), tostring(fin), tostring(n1), tostring(n2), Lost, tostring(dist)))
   while true do Sleep(10) end
 end
 function MainForce_No_Units_Remaining(tf)
@@ -557,6 +560,10 @@ struct MockUnit {
     int32_t target = -1;   // current target
     float hp = 0.0f, max_hp = 1.0f;
 };
+
+// S7 t33: run the same plans as a land battle (Land store and mode; the SpaceMode plans copied to LandMode; the objects
+// have the land evaluator) and, variant 6, a Move_To(Target, 5000) before the ambushes (test_prepare_ambush_land).
+bool g_land = false;
 
 class MockHost final : public TacticalAiHost {
 public:
@@ -697,7 +704,7 @@ public:
     // ---- TacticalAiHost ----
     void fill(PerceptionWorld& w, std::vector<TacticalAiObject>& f) override {
         if (w.types.empty()) {
-            w.mode = TacticalMode::Space;
+            w.mode = g_land ? TacticalMode::Land : TacticalMode::Space;
             w.map = {-4000.0f, -4000.0f, 4000.0f, 4000.0f};
             w.types = types_;
             w.players.resize(2);
@@ -733,6 +740,7 @@ public:
             a.handle = u.h;
             a.target.id = u.id;
             a.target.rep_has_space_evaluator = a.target.own_has_space_evaluator = true;
+            a.target.rep_has_land_evaluator = g_land;  // S7 t33
             a.applies.has_locomotor = o.mobile;
             a.applies.has_build_objects = u.type == tPad;
             a.free_store.has_locomotor = o.mobile;
@@ -918,6 +926,10 @@ public:
         for (MockUnit& u : units_)
             if (u.owner == owner && u.type <= tCorvette) u.hp = 0.0f;
     }
+    void kill_type(int32_t owner, int32_t type) {  // every unit of `owner` and `type` dies at the next tick
+        for (MockUnit& u : units_)
+            if (u.owner == owner && u.type == type) u.hp = 0.0f;
+    }
     // N1 save / load test support: the host's own battle state as a save restores it (units keep their handles: the
     // ObjectStore comes back with identical handle values); the damage-tracking store goes through its save format.
     bool copy_state_from(const MockHost& o) {
@@ -1025,13 +1037,23 @@ void syn_data(MemoryFiles& files, AiDefinitions& defs, EquationSet& eqs, bool sc
     files.add("Data\\Scripts\\AI\\SpaceMode\\SynRetreat.lua", kPlanRetreat);
     files.add("Data\\Scripts\\AI\\LandMode\\SynLandOnly.lua", kPlanLandOnly);
     files.add("Data\\Scripts\\FreeStore\\SynTacticalFreeStore.lua", kFreeStore);
-    defs.add_goals(kGoals, "goals.xml");
+    // S7 t33 (g_land): the same goals / templates / player types for land mode.
+    const auto mode_text = [](std::string t) {
+        if (!g_land) return t;
+        for (const auto& [from, to] : {std::pair<std::string, std::string>{"<GameMode>Space</GameMode>", "<GameMode>Land</GameMode>"},
+                                       {"SpaceFreeStoreScript", "LandFreeStoreScript"},
+                                       {"<Space>Syn_Space</Space>", "<Land>Syn_Space</Land>"}})
+            for (size_t at = t.find(from); at != std::string::npos; at = t.find(from, at + to.size())) t.replace(at, from.size(), to);
+        return t;
+    };
+    defs.add_goals(mode_text(kGoals), "goals.xml");
     defs.link();
     defs.add_function_set("SynSpaceSet", kSet, "SynSpaceSet.xml");
     defs.add_templates(kTemplates, "t.xml");
     char buf[1024];
+    const std::string player = mode_text(kPlayer);
     for (const char* n : {"SynEmpire", "SynRebel"}) {
-        std::snprintf(buf, sizeof buf, kPlayer, n);
+        std::snprintf(buf, sizeof buf, player.c_str(), n);
         defs.add_players(buf, "p.xml");
     }
     eqs.add("One", "1.0");
@@ -1080,6 +1102,7 @@ struct RunResult {
 // `hook` runs after each AI frame (the host's next tick sees what it changed).
 using RunHook = std::function<void(int32_t frame, MockHost& host, TacticalAiWorld& world)>;
 // The SynType object types for the store (variant 7: Syn_Corvette lists SPRINT in Unit_Abilities_Data).
+bool g_hero_frigate = false;  // S7 t26: Syn_Frigate is Is_Named_Hero (test_no_units_remaining_heroes)
 bool syn_object_types(MemoryFiles& tf, objects::ObjectTypeDatabase& raw, objects::GameObjectTypes& types, bool abilities) {
     const char* names[] = {"Syn_Frigate", "Syn_Corvette", "Syn_Station", "Syn_Pad", "UC_Syn_Turret"};
     std::string xml = "<SpaceUnits>";
@@ -1087,6 +1110,7 @@ bool syn_object_types(MemoryFiles& tf, objects::ObjectTypeDatabase& raw, objects
         xml += std::string("<SpaceUnit Name=\"") + names[t] + "\">";
         if (abilities && t == tCorvette)
             xml += "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>SPRINT</Type></Unit_Ability></Unit_Abilities_Data>";
+        if (g_hero_frigate && t == tFrigate) xml += "<Is_Named_Hero>Yes</Is_Named_Hero>";
         xml += "</SpaceUnit>";
     }
     tf.add("Data\\XML\\GameObjectFiles.xml", "<L><File>SynTypes.xml</File></L>");
@@ -1103,7 +1127,14 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     if (variant == 2) files.add("Data\\Scripts\\AI\\SpaceMode\\SynBuild.lua", kPlanProduce);
     if (variant == 4) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanGroupAttack);
     if (variant == 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanEmptyTf);
-    if (variant == 6) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAmbush);
+    if (variant == 6) {
+        std::string plan = kPlanAmbush;
+        if (g_land) {
+            const std::string at = "if not TestValid(Target) then ScriptExit() end\n";
+            plan.insert(plan.find(at) + at.size(), "  MainForce.Move_To(Target, 5000)\n");
+        }
+        files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", plan);
+    }
     if (variant == 7) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAbility);
     if (variant >= 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynEscort.lua", kPlanEscortOff);
     if (variant == 1) {
@@ -1115,7 +1146,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     objects::ObjectTypeDatabase raw_types;
     if (variant >= 5) CHECK(syn_object_types(type_files, raw_types, types, variant == 7));  // the object bindings read types
     objects::IdCounter ids;
-    objects::ObjectStore store(objects::ModeKind::Space, objects::StoreKind::Primary, types, &ids);
+    objects::ObjectStore store(g_land ? objects::ModeKind::Land : objects::ModeKind::Space, objects::StoreKind::Primary, types, &ids);
     GameRandom rng(2027u, 5u);
     MockHost host(store);
     host.emit_opportunity = host.allow_hijack = variant == 1;
@@ -1131,15 +1162,17 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     host.spawn(1, tCorvette, 2900.0f, -300.0f);
     host.pad_ = host.spawn(0, tPad, 0.0f, 2500.0f);  // A2 tactical: an Empire pad (Friendly_Build_Pad of Syn_Build)
     if (variant == 2) host.enable_production(station0);
-    host.add_pool(0, 1001, tCorvette, 1.0f);
-    host.add_pool(0, 1002, tFrigate, 2.0f);
-    host.add_pool(0, 1003, tCorvette, 1.0f);
-    host.add_pool(0, 1004, tCorvette, 1.0f);  // A2 tactical: enough pool units for the escort plan too
-    host.add_pool(0, 1005, tFrigate, 2.0f);
-    host.add_pool(1, 2001, tCorvette, 1.0f);
-    host.add_pool(1, 2002, tFrigate, 2.0f);
+    if (!g_land) {  // S7 t33: no reinforcement pool in the land run (the task forces take the free-store units)
+        host.add_pool(0, 1001, tCorvette, 1.0f);
+        host.add_pool(0, 1002, tFrigate, 2.0f);
+        host.add_pool(0, 1003, tCorvette, 1.0f);
+        host.add_pool(0, 1004, tCorvette, 1.0f);  // A2 tactical: enough pool units for the escort plan too
+        host.add_pool(0, 1005, tFrigate, 2.0f);
+        host.add_pool(1, 2001, tCorvette, 1.0f);
+        host.add_pool(1, 2002, tFrigate, 2.0f);
+    }
     TacticalAiConfig cfg;
-    cfg.mode = TacticalMode::Space;
+    cfg.mode = g_land ? TacticalMode::Land : TacticalMode::Space;
     cfg.players = {{0, "SynEmpire", difficulty0}, {1, "SynRebel", 1}};
     cfg.difficulties = {{"Easy_Default", 15.0f, 15.0f, 0.67f, 0.75f}, {"Normal_Default", 0.0f, 0.0f, 1.0f, 1.0f}};
     lua::LuaPlayerSetup a, b;
@@ -1928,7 +1961,14 @@ void test_save_load(int variant, int32_t save_at, int32_t frames) {
     for (size_t i = dec_a; i < a.world->decision_log().size(); ++i) da.push_back(decision_line(a.world->decision_log()[i]));
     for (size_t i = dec_b; i < b.world->decision_log().size(); ++i) db.push_back(decision_line(b.world->decision_log()[i]));
     CHECK(!da.empty() && da == db);
-    CHECK(a.world->lua_errors().empty() && b.world->lua_errors().empty());
+    // S7 t27: lua_errors also lists SCRIPT ERROR lines (not saved: diagnostics); variant 6's empty-task-force / ambush
+    // plans make some (Move_To(), bad Prepare_Ambush arguments). No other error.
+    auto only_script_errors = [variant](const std::vector<std::string>& e) {
+        for (const std::string& x : e)
+            if (variant != 6 || x.find("SCRIPT ERROR: ") == std::string::npos) return false;
+        return true;
+    };
+    CHECK(only_script_errors(a.world->lua_errors()) && only_script_errors(b.world->lua_errors()));
     CHECK(b.ai_bytes() == a.ai_bytes());
     std::printf("save / load variant %d: AI chunk %zu bytes at frame %d (%zu plans running); %d frames after the load %s "
                 "(%zu orders, %zu decisions)\n", variant, image.size(), save_at, plans_at_save, frames - save_at,
@@ -2072,13 +2112,26 @@ std::string report_of(const RunResult& r, const char* tag) {
         if (e.find(needle) != std::string::npos) return e;
     return {};
 }
+// S7 t27: lua_errors also lists the plans' "SCRIPT ERROR: ..." lines; those of the plan under test are allowed here
+// (the tests count them separately with script_errors()).
 bool only_reports(const RunResult& r, const char* tag) {
     size_t mine = 0;
     for (const std::string& e : r.errors) {
+        if (e.find("SCRIPT ERROR: ") != std::string::npos) continue;
         if (e.find(std::string(tag) + " player=") == std::string::npos) return false;
         mine += e.find(std::string(tag) + " player=0 ") != std::string::npos ? 1u : 0u;
     }
     return mine > 0;
+}
+size_t count_reports(const RunResult& r, const char* tag) {
+    size_t n = 0;
+    for (const std::string& e : r.errors) n += e.find("SCRIPT ERROR: ") == std::string::npos && e.find(std::string(tag) + " player=") != std::string::npos ? 1u : 0u;
+    return n;
+}
+size_t script_errors(const RunResult& r, const std::string& needle) {
+    size_t n = 0;
+    for (const std::string& e : r.errors) n += e.find("SCRIPT ERROR: " + needle) != std::string::npos ? 1u : 0u;
+    return n;
 }
 size_t count_decisions(const RunResult& r, const std::string& needle) {
     size_t n = 0;
@@ -2103,14 +2156,22 @@ void test_empty_task_force() {
             }
     });
     const std::string rep_line = report_of(r, "EMPTYTF");
+    if (rep_line.empty())
+        for (const std::string& e : r.errors) std::printf("  lua error: %s\n", e.c_str());
     int32_t lost_frame = -1;
     for (const std::string& d : r.decisions)
         if (lost_frame < 0 && d.find("p0 tf MainForce no units remaining") != std::string::npos) lost_frame = decision_frame(d);
     std::printf("empty task force: units killed after frame %d, No_Units_Remaining at frame %d; %s\n", kill_frame, lost_frame,
                 rep_line.c_str());
     CHECK(kill_frame > 0 && lost_frame == kill_frame + 1);
-    CHECK(rep_line.find("count=0 p=true b=true fin=true n1=nil n2=nil lost=1") != std::string::npos);
+    CHECK(rep_line.find("count=0 p=true b=true fin=true n1=nil n2=nil lost=1 dist=true") != std::string::npos);  // S7 t27: dist
     CHECK(only_reports(r, "EMPTYTF"));  // the bad Move_To calls do not unwind
+    // S7 t27: their script errors are in lua_errors (one per instance that reported: each plan VM reports once)
+    const size_t n_no_dest = script_errors(r, "No destination set for TaskForce MainForce");
+    const size_t n_bad_dest = script_errors(r, "Parameter 1 is not a valid destination for TaskForce MainForce");
+    std::printf("  script errors: no destination %zu, invalid destination %zu (of %zu lua errors)\n", n_no_dest, n_bad_dest, r.errors.size());
+    CHECK(n_no_dest >= 1 && n_no_dest == n_bad_dest);
+    CHECK(r.errors.size() == n_no_dest + n_bad_dest + count_reports(r, "EMPTYTF"));
     const RunResult again = run(30 * 60, 1, 5, nullptr, false, [kill_frame](int32_t f, MockHost& host, TacticalAiWorld&) {
         if (f == kill_frame) host.kill_mobile(0);
     });
@@ -2143,14 +2204,62 @@ void test_prepare_ambush() {
                 count_decisions(r, "ambush: no point"), rep_line.c_str());
     CHECK(checked && point_ok);
     CHECK(replans > 0);
+    // S7 t27: every ambush group move (first plan and re-plans) carries the tolerance (Lua MoveTo group order, threshold T)
+    CHECK(count_decisions(r, "ambush on ") + replans == count_decisions(r, " threat 1e+09"));
     CHECK(count_decisions(r, "p0 tf MainForce ambush: no point") >= 1);  // the "front" call with tolerance -1
     CHECK(rep_line.find("errors=true nopoint=true imm=false fin=true") != std::string::npos);
     CHECK(only_reports(r, "AMBUSH"));
+    // S7 t27: the four argument errors are script errors counted in lua_errors (per reporting instance)
+    const size_t n_amb = script_errors(r, "Invalid number of parameters") + script_errors(r, "Unrecognized direction sideways") +
+                         script_errors(r, "Parameter 3 is not a positive number") +
+                         script_errors(r, "Parameter 1 is not a game object or an AI target");
+    std::printf("  ambush script errors %zu, reports %zu\n", n_amb, count_reports(r, "AMBUSH"));
+    CHECK(n_amb >= 4 && n_amb % 4 == 0);
     bool arrived = false;  // an Empire instance saw its movers arrive (Unit_Move_Finished from the ambush block)
     for (const std::string& e : r.errors)
         arrived = arrived || (e.find("AMBUSH player=0 ") != std::string::npos && e.find(" moved=0") == std::string::npos);
     CHECK(arrived);
     const RunResult again = run(30 * 120, 1, 6);
+    CHECK(again.crc == r.crc && again.decisions == r.decisions);
+}
+
+// S7 t33 (AI_TACTICAL §7.3.1, §7.3 table): the variant-6 plans in a land battle (no reinforcement pool: the task forces take
+// the free-store units). The land TF.Move_To(Target, 5000) passes its threat tolerance to the group move (Lua MoveTo order
+// with the threshold), and the land Prepare_Ambush(Target, "BACK", 1000, 1e9) moves the force to the target's position -
+// 1000 x facing (+x) with the tolerance, in the same AI frame as the Move_To (to the target's position). Deterministic.
+void test_prepare_ambush_land() {
+    g_land = true;
+    const RunResult r = run(30 * 120, 1, 6);
+    const RunResult again = run(30 * 120, 1, 6);
+    g_land = false;
+    struct Move {
+        int32_t frame = -1;
+        std::string player;
+        double x = 0.0, y = 0.0;
+    };
+    const auto moves_with = [&r](const char* threat) {
+        std::vector<Move> out;
+        for (const std::string& d : r.decisions) {
+            if (d.find(" order tf MainForce move ") == std::string::npos || d.find(threat) == std::string::npos) continue;
+            Move m;
+            m.frame = decision_frame(d);
+            m.player = d.substr(d.find(' ') + 1, 2);
+            const size_t at = d.find("-> (");
+            if (at == std::string::npos || std::sscanf(d.c_str() + at, "-> (%lf, %lf)", &m.x, &m.y) != 2) continue;
+            out.push_back(m);
+        }
+        return out;
+    };
+    const std::vector<Move> to_target = moves_with(" threat 5000"), ambush = moves_with(" threat 1e+09");
+    size_t paired = 0;
+    for (const Move& m : to_target)
+        for (const Move& a : ambush)
+            if (a.frame == m.frame && a.player == m.player && std::fabs(a.x - (m.x - 1000.0)) < 1.0 && std::fabs(a.y - m.y) < 1.0) ++paired;
+    const std::string rep_line = report_of(r, "AMBUSH");
+    std::printf("prepare ambush (land): Move_To with the tolerance %zu, ambush moves %zu, paired (target - 1000 x) %zu; %s\n",
+                to_target.size(), ambush.size(), paired, rep_line.c_str());
+    CHECK(!to_target.empty() && !ambush.empty() && paired >= 1);
+    CHECK(rep_line.find("errors=true") != std::string::npos && only_reports(r, "AMBUSH"));
     CHECK(again.crc == r.crc && again.decisions == r.decisions);
 }
 
@@ -2198,6 +2307,80 @@ void test_ability_finished() {
     CHECK(count_decisions(r, "p0 event Unit_Ability_Finished (tf MainForce)") >= failed + activated);
 }
 
+// S7 t26 (AI_TACTICAL §7.3.3 item 2): signal 0xb (a new order replaces the unit's order: TacticalAiWorld::order_replaced,
+// raised by the host when it executes an order) ends the task-force AbilityBlockStatus count of that unit like 0x29, but
+// raises no Unit_Ability_Finished. 20 frames after the activation the corvettes get a new order: the block finishes with
+// only the failed frigates' queued events. A 0xb before the activation (the activation's own) does not count.
+void test_ability_order_replaced() {
+    int32_t act_frame = -1;
+    size_t activated = 0, failed = 0;
+    const RunResult r = run(30 * 60, 1, 7, nullptr, false, [&](int32_t f, MockHost& host, TacticalAiWorld& world) {
+        if (act_frame < 0) {
+            for (const TacticalAiDecision& d : world.decision_log())
+                if (d.player == 0 && d.text.find("tf MainForce activate ability: ") != std::string::npos) {
+                    size_t a = 0, b = 0;
+                    if (std::sscanf(d.text.c_str() + d.text.find(": ") + 2, "%zu activated, %zu failed", &a, &b) == 2 && a > 0) {
+                        act_frame = static_cast<int32_t>(d.frame);
+                        activated = a;
+                        failed = b;
+                        break;
+                    }
+                }
+            return;
+        }
+        if (f == act_frame + 20)
+            for (const MockUnit& u : host.units_)
+                if (u.owner == 0 && u.type == tCorvette) world.order_replaced(u.id);
+    });
+    const std::string rep_line = report_of(r, "ABILITY");
+    std::printf("ability block, order replaced: activated %zu failed %zu at frame %d; %s\n", activated, failed, act_frame, rep_line.c_str());
+    CHECK(act_frame > 0 && activated > 0 && failed > 0);
+    char want[96];
+    std::snprintf(want, sizeof want, "imm=false queued=0 fin=true events=%zu", failed);  // no event for the 0xb units
+    CHECK(rep_line.find(want) != std::string::npos && only_reports(r, "ABILITY"));
+    CHECK(count_decisions(r, "p0 event Unit_Ability_Finished (tf MainForce)") == 0);
+}
+
+// S7 t27 (AI_TACTICAL §7.3.3 item 5): the land Prepare_Ambush step = Land_FOW_Reveal_Range x weather sight factor (not a
+// terrain factor), else the max attack range; <= 0 -> no walk.
+// S7 t26 (AI_TACTICAL §7.3.3 item 4): No_Units_Remaining fires when every remaining entry is a hero / special weapon.
+// MainForce (the frigate and both corvettes) loses its corvettes: with Syn_Frigate Is_Named_Hero the event fires in the
+// AI frame of the deaths; without the flag the frigate keeps the task force and nothing fires.
+void test_no_units_remaining_heroes() {
+    const auto kill_corvettes = [](int32_t& kill_frame) {
+        return [&kill_frame](int32_t f, MockHost& host, TacticalAiWorld& world) {
+            if (kill_frame >= 0) return;
+            for (const TacticalAiDecision& d : world.decision_log())
+                if (d.player == 0 && d.text.find("tf MainForce activate ability:") != std::string::npos && f >= d.frame + 5) {
+                    host.kill_type(0, tCorvette);
+                    kill_frame = f;
+                    break;
+                }
+        };
+    };
+    int32_t k_plain = -1, k_hero = -1;
+    const RunResult plain = run(30 * 20, 1, 5, nullptr, false, kill_corvettes(k_plain));
+    g_hero_frigate = true;
+    const RunResult hero = run(30 * 20, 1, 5, nullptr, false, kill_corvettes(k_hero));
+    g_hero_frigate = false;
+    int32_t lost_frame = -1;
+    for (const std::string& d : hero.decisions)
+        if (lost_frame < 0 && d.find("p0 tf MainForce no units remaining") != std::string::npos) lost_frame = decision_frame(d);
+    const size_t plain_lost = count_decisions(plain, "p0 tf MainForce no units remaining");
+    std::printf("no units remaining, hero left: corvettes killed after frame %d/%d; event at frame %d (hero), %zu (plain)\n", k_plain,
+                k_hero, lost_frame, plain_lost);
+    CHECK(k_plain > 0 && k_hero > 0 && plain_lost == 0 && lost_frame == k_hero + 1);
+}
+
+void test_land_ambush_step() {
+    CHECK(land_ambush_step(400.0f, 0.5f, 300.0f) == 200.0f);  // rain: the sight modifier halves the step
+    CHECK(land_ambush_step(400.0f, 1.0f, 300.0f) == 400.0f);
+    CHECK(land_ambush_step(0.0f, 0.5f, 300.0f) == 300.0f);    // no reveal range: the max attack range
+    CHECK(land_ambush_step(400.0f, 0.0f, 300.0f) == 300.0f);  // a zero weather factor too
+    CHECK(land_ambush_step(0.0f, 1.0f, 0.0f) <= 0.0f);        // no walk
+    std::printf("land ambush step: reveal x weather, else max attack range\n");
+}
+
 void test_order_results_bounded(int variant, int32_t frames) {
     SaveSession a(variant);
     size_t worst = 0;
@@ -2232,6 +2415,10 @@ int main(int argc, char** argv) {
     // S7 t20 / t21 / t15 A1
     test_empty_task_force();
     test_prepare_ambush();
+    test_land_ambush_step();     // S7 t27
+    test_prepare_ambush_land();  // S7 t33
+    test_ability_order_replaced();  // S7 t26
+    test_no_units_remaining_heroes();  // S7 t26
     test_ability_finished();
     test_save_load(6, 30 * 4, 30 * 40);  // an ambush block in flight (member / moving lists, plan frame)
     std::printf(g_fail ? "alamo_ai_tactical_world_tests: %d FAILED\n" : "alamo_ai_tactical_world_tests: OK\n", g_fail);

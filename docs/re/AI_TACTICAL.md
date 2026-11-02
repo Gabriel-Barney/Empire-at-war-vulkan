@@ -198,6 +198,98 @@ Only for AI-owned, mobile objects (has locomotor, TEAM handled). It marks the un
   - unit has no active orders: `SPOILER_LOCK` on; kite; heal if hull < 1.0; `SPREAD_OUT` off; garrison management (`Service_Garrison`: eject healthy occupants good against an enemy within 600 when the container cannot fire, eject wounded ones near a healer, move a wounded container to the healer); attack (`Service_Attack`: nearest enemy not good against it → `Attack_Move` to its position if within `FREE_STORE_ATTACK_RANGE` 600, or always when `aggressive_mode` (first trying to garrison within 300); else `Attack_Move(enemy_location)` when aggressive); else guard (`Try_Deploy_Garrison`; `Guard_Target(nearest friendly structure)` or `Attack_Move(friendly_location)`).
 - The `Allowed_As_Defender_Land` equation is 1 in skirmish, and in campaign gates a defending AI with a base until its army is ≥ 3 × the attacker's force + reinforcements — the "defender turtles" rule.
 
+### 5.6 Land skirmish end game: how idle units reach enemies they cannot see (RE, 2026-11-02) [H unless tagged]
+Question from the port: late FoC skirmish survivors (e.g. an M1 and a TIE Crawler) park for thousands of frames about
+600 from enemy troopers that are fogged to them. Retail has **no unit-level hunt** for this; the AI layer moves the
+units, using knowledge that ignores fog. The pieces, in the order they matter:
+
+**1. Units alone never find fogged enemies.**
+- Target acquisition rejects candidates fully fogged for the shooter's player with **force 1** (TACTICAL_COMBAT §2.3
+  step 4, FOG_OF_WAR §5.3): AI players are fogged there too, whatever `AIUsesFogOfWarLand` says.
+- The scan cube is the attack range R; chase ranges are added only inside a formation block (TACTICAL_COMBAT §2.2,
+  0x566f50) and the candidate still passes the fog filter. FoC `M1_Repulsor_Tank` / `TIE_Crawler`: attack 180 / 175,
+  `Land_FOW_Reveal_Range` 200, `Idle_Chase_Range` 0, `Guard_Chase_Range` 200, `Attack_Move_Response_Range` 150.
+- Both list the HUNT behaviour (0x21) in `LandBehavior`, but HuntBehaviorClass (vtable 0x8aef40) starts **disabled**
+  (vf9 0x628800 → vf +0xc0) and is enabled only by the HUNT unit ability toggle 0x3a4070 (TACTICAL_GAPS §2.2). Neither
+  type has the HUNT unit ability (FoC HUNT users on land: `T2B_Tank`, `Pod_Walker`, `Hutt_Pod_Walker`, `Swamp_Speeder`,
+  `Vornskr_Wolf` and some companies), no shipped AI Lua activates HUNT, and AI autofire covers only special `Abilities`
+  (TACTICAL_GAPS §1.3), not `Unit_Abilities_Data`. So in vanilla the HUNT behaviour of AI units never runs [H data and
+  start state; M that nothing else enables slot 0x21: no other access to it was found]. IDLE (0x62e570) only plays
+  idle animations.
+- No map reveal happens on its own: the overrun reveal (0x364920) runs only in the networked game types 1, 2, 4, not
+  in local skirmish (FOG_OF_WAR §3.3); setup-phase reveal is off; the victory monitor reveals nothing.
+
+**2. The AI's area knowledge is live (not fogged).** With shipped `AIUsesFogOfWarLand` = False, the UNIT_AI "fogged
+for p" byte is never set for an AI player (AI_TACTICAL_PERCEPTION §4.7), so the threat layer and the concentration /
+force tokens see every enemy UNIT_AI object: the per-cell concentration 0x656800 counts live entries unless the object
+is marked fogged for Self, and memory entries only while it is. Real fog (force 1) applies only to `Applies` unit
+targets (§3.3), `Find_Nearest` (LUA_API), `DistanceToNearest*` and `TimeLastSeen`.
+
+**3. Free store, every ~2.1 s per free unit (§5.3, §5.5; `BusyTacticalFreeStore.lua`).** For a unit with no active
+orders, `Service_Attack`:
+- `closest_enemy = Find_Nearest(unit, owner, false)`: nearest **visible** enemy (force 1);
+- visible and not `Is_Good_Against(unit)`: `Attack_Move(its position)` when within 600, else (aggressive) after a
+  failed `Try_Garrison` within 300, `Attack_Move(its position)` anyway;
+- otherwise, when aggressive: `Attack_Move(enemy_location)`. `aggressive_mode` = `Allowed_As_Defender_Land` > 0,
+  which is **always 1 in skirmish**. `enemy_location` is refreshed every ~20 s by
+  `Reachable_Target(Self, "Current_Enemy_Location", "Tactical_Location", "Any_Threat", 0.5)`: score =
+  `EnemyUnitConcentration` of each hint zone (live, item 2), no source so no reachability filter, best with
+  probability 0.5, others weighted by score (one synced draw when ≥ 2 zones score > 0; §6.2). Zones with no enemy
+  UNIT_AI object whose centre cell lies in the zone's cell list score 0; no zone > 0 → nil.
+- `enemy_location` nil → `Service_Guard`: `Guard_Target(nearest friendly structure)`, else
+  `Attack_Move(friendly_location)`.
+
+So a retail AI unit with nothing to shoot walks to the zone centre (+0x30, §3.2) of a zone that really holds enemies,
+re-ordered whenever it is idle again, and acquires them once its own reveal circle (or an ally's) uncovers them.
+[M: retail can still stall when the hidden enemies sit in cells that no hint zone lists, or when the zone centre is
+farther than ~200 + R from them; `_MP_LAND_UTAPAU` has zones, TACTICAL_GAPS §6.8.]
+
+**`Has_Active_Orders`** (0x579f10, read in disassembly 0x140579fd9–0x14057a0f8) decides who gets the no-orders branch:
+- true when the unit has a current target (0x397a40);
+- false when the object has no locomotor slot (+0x333 = −1); when the locomotor behaviour or the mode's formation
+  manager (mode vf +0x228) is null the binding returns no value (nil, falsy);
+- with formation F = locomotor pack +0x1f0: **F null, or F +0x240 = 0 (not yet at the end of its only block,
+  FIGHTER_FLYING §4.10) → true**; F's last block with flag 0x10 → false; otherwise true iff the locomotor is not in
+  an idle state (vf +0x150; Walk 0x42c890: states 0, 0x16, 0x1C, 0x1E, 0x1F, 0x25–0x27, and 0x19 Deployed when type
+  +0x23b0 > 0) or is moving (vf +0x1c0).
+- Quirk: a unit that has never had a formation counts as busy, so the free store leaves it alone until something
+  orders it [H code; M how often that happens: factory and reinforcement units normally get a move].
+
+**4. Area-clearing plans (goal system, `BasicLandGoalSet`).** `Clear_Infantry` / `Clear_Vehicles` (Tactical_Location,
+High / Medium_Threat, Time_Limit 30) score zones with `EnemyUnitConcentrationNBTD {Infantry}` / `{Vehicle}` (live).
+Plans `ClearInfantry.lua` / `ClearVehicles.lua` take 1–5 Infantry | Vehicle | Air units (and 0–2 land heroes; not
+already engaged), `Attack_Move` the zone, then repeat `Attack_Move(Find_Nearest(MainForce, "Infantry", Self, false))`
+(visible only) while `Should_Clear_Infantry` > 0. `Land_Scout_Area` (`LandScout.lua`, 1 Infantry | Air | LandHero)
+`Attack_Move`s and `Explore_Area`s zones fogged for a long time (`TimeLastSeenUnnormalized` > 120 / 400 s, real fog;
+× 0.5 in skirmish).
+
+**5. Last resort: `Burn_Units_Land` and the "firesale" reveal** (goal Global, High_Priority; `BurnUnitsLand.lua`).
+- Desire `Should_Burn_Units_Land` > 0 when (skirmish, `Game.Age` > 400 s, not saving for refineries, and
+  `Want_To_Retreat_From_Land`: for a non-defender, the enemy's landed force ≥ 2 × own force + reinforcements; retreat is
+  never allowed in skirmish) or (skirmish, no unit space left, and reinforcements > 25 % of the fielded Infantry |
+  Vehicle | Air force or > the enemy's fielded force).
+- If `Should_Firesale_Land` > 0 (the same retreat wish, `Game.Age` > 300 s, **no command centre / palace**
+  (`Imperial_Command_Center`, `Rebel_Command_Center`, `U_Ground_Palace`), no refinery, credits < 2000):
+  `FogOfWar.Reveal_All(Self)` (0x6a5b00: the AI's grid +0x50 → `FOW_Object_Hidden` = visible for everything), and in a
+  non-multiplayer skirmish also `Reveal_All` for `Find_Player("local")`.
+- Then, until `Should_Firesale_Land` is 0 (so a single pass when it was 0 at the start): `Purge_Goals`, eject
+  non-vehicle garrisons, `Collect_All_Free_Units`, `SPREAD_OUT` off, nearest enemy with property `InBase` else any
+  nearest enemy (`Find_Nearest`, visible — i.e. everything after the reveal), and `Attack_Move` that one enemy in
+  ≤ 20 s blocks until it is dead (the loop does not re-pick a target while it lives).
+- After the reveal, the AI's own unit targeting (force 1) and `Find_Nearest` see every enemy, so its units also
+  auto-acquire anything within R.
+
+*For the implementer (port symptom: idle survivors next to fogged enemies):*
+1. Check the perception grid: for AI players (`AIUsesFogOfWarLand` False) the "fogged" byte must stay 0, so
+   `EnemyUnitConcentration` / `EnemyForce` count fogged enemies; keep `Find_Nearest`, unit targeting, `Applies`,
+   `DistanceToNearest*` and `TimeLastSeen` on real fog (force 1).
+2. Check the free store: `Service_Attack` must fall back to `Attack_Move(enemy_location)` in skirmish
+   (`aggressive_mode` 1), `enemy_location` must come from the hint-zone targets, and `Has_Active_Orders` must follow
+   the rule above (log `enemy_location` and `Has_Active_Orders` for the stuck M1 / TIE Crawler).
+3. Make sure the units are free-store units (not held by a plan that has stalled; a plan's units are not serviced).
+4. Implement the firesale `Reveal_All` (Lua `FogOfWar.Reveal_All`) and the Burn plan's loop as shipped.
+5. Do not add a unit-level hunt or a victory reveal: retail has neither for these units.
+
 ---
 
 ## 6. Lua query functions (exact semantics)
@@ -421,6 +513,135 @@ exiting. [H, shipped Lua + engine]
 also posts `No_Units_Remaining` from a per-service poll (`service_statuses`) and only when `pending` is empty, while
 retail posts it from the death / removal signal (before the plan runs again).
 
+### 7.3.3 `Activate_Ability` blocks, signals 0x29 / 0xb / 0x10, DEPLOY, `No_Units_Remaining` (S7 t26 and t27, RE, 2026-11-02)
+
+**1. When the Lua call returns a block** (object `GameObjectWrapper.Activate_Ability` 0x570580 → 0x570a50) [H]:
+- 0x570580 makes an `AbilityBlockStatus` (Lua id 0x825, pending count +0x40) **only when 0x570a50 returns true**;
+  otherwise it returns **nil**.
+- 0x570a50 returns false (so nil, no block) for every gate refusal: no object, argument count ≠ 2, name not a
+  string / unknown, the unit lacks the ability (0x3986b0), not ready (0x39bbd0), `Can_Activate` (0x39b480(obj, t, 1))
+  fails, wrong argument type, "not hooked up to special ability logic", dead target object.
+- After the gates it builds and executes the command at once. Its return value then depends on the ability family
+  (case lists from the second switch, decimal ids of ABILITIES_HARDPOINTS §2.1):
+
+| ids | command | returns a block? |
+|---|---|---|
+| 2 DEPLOY | 43 (mode toggle), only when the bool argument ≠ the current deployed state (0x39b950(obj, 2)); equal → nil | **always** once executed, whether or not the deploy starts |
+| 13 15 16 18 20 21 22 27 30 31 34 37 41 45 51 53 55 58 59 64 66 (object target) | 40 (`TacticalSpecialAbility`, 0x429da0 / 0x429960) | only when, after the execute, the unit's pending-ability name CRC (CD pack obj +0xf0, +0x150) equals the ability's `GUI_Activated_Ability_Name` CRC (0x371ba0), i.e. `Issue_Auto_Target` accepted and stored it |
+| 17 JET_PACK (position) | 43 with the position | only when the jump started: the unit has a locomotor and its vf +0x300 is false (= `Is_Unit_Ability_Active(17)`, 0x39b950) |
+| 50 67 71 73 74 (position) | 57-style: spawns `Dummy_Barrage_Target` at the position (0x29f810), then 0x429da0 / 0x429960 | **always** once executed |
+| 1 3 7 9 11 29 32 33 39 40 43 48 52 54 56 60 62 63 65 68 69 70 (none / bool) | 43 | **never** (nil even on success) |
+| 14 23 24 25 35 36 38 44 46 49 57 61 72 | 43 with **no** position (zeroed) | never |
+| 5 26 28 42 (position), 6 10 12 (optional target), 19 (object) | 43 | never |
+
+  Correction for ABILITIES_HARDPOINTS §2.9 (applied there 2026-11-02): the "target position (command 57,
+  `Dummy_Barrage_Target`)" row is ids 50, 67, 71, 73, 74, not 14, 23, … 72; those take command 43 with no
+  position.
+- Before executing, ability ids 2 3 5 6 13 15 16 17 18 20 21 22 27 31 32 34 37 38 39 41 45 46 50 51 52 53 55 58 59
+  64 66 67 69 71 73 74 raise **signal 0xb on the unit and on each member of its TEAM** (0x220ed0). The block subscribes
+  afterwards, so it never sees this 0xb.
+- **TaskForce `Activate_Ability`** (0x5f9890) calls 0x570a50 for each member (TF +0x78 order); a true result adds
+  that unit to the one block (count + 1, subscribe); a false result queues plan event 0x13
+  `Unit_Ability_Finished(unit)` at once. With no true result the block's count is 0 and `IsFinished` (0x57bab0,
+  count == 0) is true on the first poll. So a TF block on an "always nil" family finishes at once and every member
+  gets `Unit_Ability_Finished`.
+
+**2. What finishes a block** [H]. 0x6ae570 subscribes the block's listener (+0x30) to the unit's signals **0x29, 0xb
+and 0x10**. The listener (0x6ae4f0) does not look at the signal number: the first of the three on that unit
+decrements the count and unsubscribes all three. There is **no timeout** in the block (only `BlockOnCommand`'s
+optional `max_duration`).
+- **0x29** = "unit ability finished" (MOVEMENT §3.1.1). It is raised on the unit by any ability end, so an unrelated
+  ability's expiry (countdown 0x42f460, every ability id) or a stealth break (0x592d00 / 0x5931b0) also finishes it.
+  Raisers: 0x3a9910 (jetpack swap), 0x42f460, 0x592d00, 0x5931b0, 0x5b07c0, **0x61e930 (Walk locomotor deploy /
+  undeploy, below)**, **0x61d300**, 0x63fae0, 0x63ffd0, 0x640060, 0x6cc8d0 and the special-ability removes
+  0x6f2c20 … 0x71bcc0.
+- **0xb** = "a new order replaces this unit's order" (A1_READINGS §33.3 lists the raisers: task-force movement
+  collectors, unit `Move_To` / `Attack_Move`, `Activate_Ability` itself, `Turn_To_Face`, MoveToObject, garrison
+  enter / exit, ConcentrateFire, …). Auto targeting does not raise it.
+- **0x10** = destroyed / removed: raised only by `Detach` 0x3a8380 (death and every `Destroy_Object`) and on a fresh
+  death clone (0x29f270). It is not owner change (0x1a) and not the store removal (0x28).
+
+So a block that the ability **refused after the gates** (only possible for DEPLOY and ids 50 67 71 73 74, which return
+a block regardless) **stays pending until the unit gets a new order (0xb), any ability on it ends (0x29) or it
+dies (0x10)**. An object-target block whose pending ability never fires (target died before the unit got in range)
+likewise waits for one of the three [M: the pending-ability clear path on target death was not traced].
+
+**3. DEPLOY and 0x29** [H]. Only the Walk locomotor implements deploy (locomotor vf +0x118 = 0x61d300 in
+`WalkLocomotorBehaviorClass`; every other locomotor class has the empty 0x1fa90). FoC deployers (the three Mobile
+Defense Units, `Deploys` yes, `WALK_LOCOMOTOR`) therefore:
+- `Set_Unit_Ability_Active(2, on)` → 0x3a1ce0: refuses (no deploy request, no signal) when the unit has a
+  garrison / +0x3a7 / transport, a running ability countdown, a member that cannot activate, or its locomotor's
+  vf +0x2b0 is true [M: "moving"]. Otherwise it drops the target (TARGETING vf +0xd8(1)), leaves the coordinator and
+  calls 0x391260 → Walk vf +0x118(1).
+- 0x61d300(1): pack state 0x18/0x19 → nothing; obj +0x3a1 bit 0x40 or pack +0x2b3 set → nothing; otherwise state
+  **0x18** and play animation 25 (`Deployment_Anim_Rate`). From state 0x1a (undeploying) with the turret test
+  failing it goes straight to state 0x19 and **raises 0x29 at once**.
+- Walk vf6 0x61e930, state 0x18: when animation 25 has finished (0x39a180), state **0x19 (deployed), raise 0x29**,
+  then 0x39fec0. State 0x1a: when animation 26 has finished, state 0 and **raise 0x29**.
+- So `BuildMDUItem`'s `BlockOnCommand(MainForce.Activate_Ability("DEPLOY", true))` (no timeout) **returns when the
+  deploy animation ends**. It waits forever only when the deploy was refused (0x3a1ce0 / 0x61d300 gates) and nothing
+  else orders, kills or ends an ability on the MDU. A non-walking unit with DEPLOY would always wait (none in FoC).
+
+**4. `No_Units_Remaining` entry flags** (TF signal handler 0x5fe5d0, signals 0x10 / 0x1a) [H]:
+- First the unit is removed from the task force (vf +0x188 → base 0x5ff610: unsubscribe, drop it from the member
+  vector +0x78; if it was a member, erase the **first entry of TF +0x60 whose type equals the unit's company type**
+  (0x3973b0: the type of its transport / company / team container, else its own type) and the parallel int at +0x90).
+  A removal raises plan event 2.
+- The entry vector TF +0x60 is filled when the task force is made from the plan solve (0x66fb30 → 0x5f9fd0, one
+  entry {type wrapper, int} per planned unit of that team) and by the reinforcement drops (0x6ee010, 0x6ed9f0). It
+  therefore also holds **planned units that have not arrived yet**.
+- Then event 7 `No_Units_Remaining` is queued unless some remaining entry's type (entry +0x28) has all of:
+  `Is_Named_Hero` (type +0x13) false, `Is_Generic_Hero` (+0x14) false, `Is_Special_Weapon_In_Space` (+0x1e) false, and
+  no `LOBBING_SUPERWEAPON` (id 0x37) in the **Land** behaviour bitset (0x370320(type, 0x37, 1) reads type +0x760).
+  An empty vector raises it too. The test runs on every 0x10 / 0x1a of a member, not only when the removed unit was
+  counted.
+- For the implementer: count "real" entries = planned-or-present unit types that are not heroes, not space special
+  weapons and not lobbing superweapons; raise the event from the death / removal handler when that count is 0.
+
+**5. Land `Prepare_Ambush` step and threat (S7 t27)** [H]:
+- 0x3722a0(type, obj) is **not a terrain factor**: it is the land sight range = `Land_FOW_Reveal_Range` (type
+  +0x1d68) × the weather `Sight_Range_Modifier` for the type's `Weather_Category` (0x468510 on the weather system
+  0x140b30b40, FOG_OF_WAR §3.1.1; 1.0 when there is no strong weather or no entry). In 0x6ec8b0 it is called with
+  the **target's** company type (0x3973b0) and the target object (its owner decides the weather exemption). Step ≤ 0
+  → the target type's base max attack range (0x3749d0).
+- Step ≤ 0 after both: one `LandMovementBlockStatus` to the first point (target + minDist × u) with **no threat and
+  no map-box test**, returned even if it is already finished. Otherwise the ray walk: leave when P is outside the
+  mode box (vf +0x1f8; returns nil); threat = 0x654290 on the threat grid with rect (P.x − step/2, P.y − step/2,
+  step, step), all categories, enemies of the task force's player (0x5f7020(TF +0xf0)), **no
+  `AI_SpaceAreaThreatScaleFactor`** [M: the space walk multiplies by it, the land call passes none]; threat ≤
+  tolerance → block; else P += step × u.
+- **The threat tolerance is passed to the group move** in both modes: land 0x73c360 stores it at block +0x50 and
+  0x73bf40 writes it to the move parameter +0x54 when ≠ 1e18 (plus flags +0x48 = block +0x88, 0 here); space 0x73b180
+  writes the ambush block's +0x58 to parameter +0x54. Parameter +0x54 is the order threshold T of the space threat
+  path mode (REMAINING_GAPS §4.2: honoured only for `Space_Layer` 0 units) and the land zone-path threat tolerance
+  (A1_READINGS §3).
+- For the implementer: replace the port's terrain factor 1.0 by Land_FOW_Reveal_Range × weather sight modifier of the
+  target type; pass the tolerance as the move's threat threshold.
+
+**6. Family dispatch the port needs (RE re-check of 0x570a50, 2026-11-02)** [H]. Argument rules: ABILITIES_HARDPOINTS
+§2.9 "Argument handling per family".
+
+| ids | argument | command | block |
+|---|---|---|---|
+| 50 67 71 73 74 | position (0x4990b0; [M] an object gives its position) | `Dummy_Barrage_Target` at the point, then the command-40 path with the dummy as target | always |
+| 14 23 24 25 35 36 38 44 46 49 57 61 72 | ignored | 43, mode **on**, no position, no target | never |
+| 5 26 28 42 | position | 43, mode on, position | never |
+| 17 JET_PACK | position | 43, mode on, position (no dummy) | when the jump started |
+| 19 TARGETED_INVULNERABILITY | object | 43, mode on, the object's position + id (not command 40) | never |
+| 13 15 … 66 (object list) | object | 40 | when the pending ability was stored |
+| toggle list, 2 DEPLOY | bool | 43, mode = the bool | DEPLOY always; others never |
+
+The port's `engine/lua/src/bind_objects.cpp` `ability_arg_family` (read 2026-11-02) still uses the old §2.9 lists.
+Its block rule `ability_block_rule` already matches. What to change:
+- **Position family:** {14, 17, 23, …, 72} → **{50, 67, 71, 73, 74}**. Today these five fall into Toggle and never
+  spawn the dummy.
+- **14, 23, … 72:** a toggle-on that ignores the argument. Today they need a point and then take the dummy path.
+- **17:** command 43 with the position.
+- **19:** leave the object family. Use a mode-on with the target's position and id instead.
+
+Nothing else in the dispatch is unclear. The open item is who removes the dummy of ids 50 / 67 / 71 / 73 / 74
+[L]. The port's `dummy_lifetime` 900 frames is a [port] stand-in.
+
 ### 7.4 Reinforcement drops (`TF.Reinforce(target [, maxWait])`) [H unless tagged]
 - **Land** (0x6ed5f0): requires the TF to have pending reinforcement types (else "taskforce has no reinforcements", nil). If the player currently cannot reinforce (0x2b03e0 false) it returns an immediately-failing ReinforceBlockStatus (id 0x81a). The target may be an object, an AITargetLocation or a task force (its position). Then:
   - **campaign battle** (galactic parent) 0x6ed9f0: draws the units from the player's galactic reinforcement pool (persistent units in orbit, 0x28aaa0 → +0x40);
@@ -508,7 +729,7 @@ Lua short-circuit order matters: `(GameRandom.Get_Float() > 0.5) and Try_Ability
 > **Status 2026-10-30:** Items 1, 2 and 4 are done: the tactical perceptual evaluators are in `engine/ai/tactical/src/tactical_perception.cpp`, the threat grid in `engine/ai/tactical/src/threat_grid.cpp` (AI_TACTICAL_PERCEPTION.md), and reinforcement landing with the `Use_Reinforcement_Points` rule and the can-reinforce test in `engine/ai/tactical/src/tactical_ai.cpp:1772-1813` and `engine/ai/tactical/include/alamo/ai/tactical/constants.hpp:44-45`. Items 3 and 6 are partly done: `Explore_Area`, `Prepare_Ambush`, `Fire_Special_Weapon`, `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit` and `Is_Good_Against` are bound (`engine/lua/src/bind_ai_tactical.cpp`, `bind_script_remaining.cpp`), but `Should_Switch_Weapons` is a stub that always returns false (`engine/lua/src/bind_ai_tactical.cpp:324-328`). Item 7: HIJACK_UNIT is handled for tactical plans (`engine/ai/tactical/src/tactical_ai.cpp:1187-1199`).
 1. **Tactical perceptual evaluators**: exact definitions of the land/space tokens listed in §3.5 (`EnemyUnitConcentration(NBTD)`, `Location.*Force`, `IsContestable`, `TimeLastSeen`, `AdditionalPopulationCapacity`, `UnitSpaceAvailable`, `IsDefender`, `BaseLevel`, …). This is the largest gap for A1 parity: every tactical goal desire depends on them.
 2. **TacticalPerceptionGridClass** (0x653340 ctor, 0x6537d0, 0x657fc0, 0x6585f0): grid origin/size (likely from FOW cells × `AI_FogCellsPerThreatCell` 4), the entry weights in 0x6545d0 / 0x655e50, threat projection (`AI_*ThreatDistanceFactor`, `TurnRateFactor`, `LookAheadTime`, `AreaThreatScaleFactor`, `ThreatRangeCap`), and how `UnitAIBehavior` updates it.
-3. LandMovementBlockStatus / SpaceMovementBlockStatus completion rules (arrival radius, what counts as finished for attack-move and guard), and `Explore_Area`, `Prepare_Ambush`, `Bombing_Run`, `Fire_Special_Weapon`, `Find_Closest_Enemy` bodies. **`Prepare_Ambush` done (S7 t18, §7.3.1); empty-task-force `Move_To` / position done (S7 t17, §7.3.2).** Still open from §7.3.1/§7.3.2: the mode box vf +0x1f8 vs the playable box vf +0x208; the lost 5th signal id of the ambush member subscription [L: 0x1a]; the meaning of the type flags +0x13 / +0x14 / bit 0x37 in the No_Units_Remaining test; whether a plan can start with a 0-unit optional team.
+3. LandMovementBlockStatus / SpaceMovementBlockStatus completion rules (arrival radius, what counts as finished for attack-move and guard), and `Explore_Area`, `Prepare_Ambush`, `Bombing_Run`, `Fire_Special_Weapon`, `Find_Closest_Enemy` bodies. **`Prepare_Ambush` done (S7 t18, §7.3.1); empty-task-force `Move_To` / position done (S7 t17, §7.3.2).** Still open from §7.3.1/§7.3.2: the mode box vf +0x1f8 vs the playable box vf +0x208; the lost 5th signal id of the ambush member subscription [L: 0x1a]; ~~the meaning of the type flags +0x13 / +0x14 / bit 0x37 in the No_Units_Remaining test~~ (done 2026-11-02, §7.3.3: named hero, generic hero, Land LOBBING_SUPERWEAPON; +0x1e = Is_Special_Weapon_In_Space); whether a plan can start with a 0-unit optional team. Still open from §7.3.3: whether an object-target ability's pending entry is cleared when its target dies (else its block waits for 0xb / 0x10 / any 0x29); the meaning of locomotor vf +0x2b0 in the DEPLOY gate.
 4. Reinforcement landing positions (0x6eaf60) and the land ReinforceBlockStatus finish/fail rules. (Space resolved by refixf t06, §7.4: ring search in SpaceReinforceBlockStatus; 0x2b03e0 is the population-room test.)
 5. Free-store admission bit meanings (type bitfield +0x790 bits 0x20, 0x5b, 0x5f; obj +0x2b0/+0xf8; mode +0x38 set) and the +0x30 lock field writer; `Lua_Is_Object_On_Free_Store` / `Get_Object_Count`. **+0x30 writers/readers and the two Lua methods: done, A1_READINGS §28** (+0x30 = owning PP; `Lock_Current_Orders` is obj +0x3a8).
 6. `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit`, `Should_Switch_Weapons`, `Is_Good_Against`, `Get_Time_Till_Dead` (used by every land plan and PGEvents).

@@ -13,7 +13,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 3;  // 2: S7 t22 fighter formations, 3: a1i t04 landing objects
+constexpr uint32_t kBattleStateVersion = 5;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects)
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -235,6 +235,7 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             l1_weather_.set_data(l1_weather_data_.get());  // the saved scenario resolves in it (weather starts on the first service)
             if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done())) return false;
             attach_rocket_terrain();  // refixf t01: the host terrain is not part of the save
+            share_groups_sync();  // derived, not saved (State and Movement are read before Combat)
             return true;
         case SavePart::Abilities:
             if (!all_saveable(abilities_.get(), &l1_sw_, &l1_fields_)) return false;

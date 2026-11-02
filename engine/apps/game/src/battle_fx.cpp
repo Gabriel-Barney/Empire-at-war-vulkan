@@ -32,6 +32,14 @@ std::vector<TswCue> tsw_cues(std::span<const ta::SpecialWeaponEvent> events, con
                 c.kind = TswCue::Kind::PlanetDestroyed;
                 id = e.target;
                 break;
+            case ta::SwEventKind::LobChargeup:  // S8 t31
+                c.kind = TswCue::Kind::LobChargeup;
+                id = e.id;
+                break;
+            case ta::SwEventKind::LobCharged:
+                c.kind = TswCue::Kind::LobCharged;
+                id = e.id;
+                break;
             default: continue;
         }
         if (id == ta::kNoObject) continue;
@@ -47,9 +55,21 @@ std::vector<TswCue> tsw_cues(std::span<const ta::SpecialWeaponEvent> events, con
             c.position = {p.x, p.y, p.z};
             c.target = e.target == ta::kNoObject ? objects::kNoObjectId : e.target;
         }
+        if (c.kind == TswCue::Kind::LobChargeup || c.kind == TswCue::Kind::LobCharged) {
+            c.target = objects::kNoObjectId;
+            c.frame = e.frame;
+        }
         out.push_back(c);
     }
     return out;
+}
+
+void track_lob_chargeups(std::vector<TswCue>& active, std::span<const TswCue> cues) {
+    for (const TswCue& c : cues) {
+        if (c.kind != TswCue::Kind::LobChargeup && c.kind != TswCue::Kind::LobCharged) continue;
+        std::erase_if(active, [&c](const TswCue& a) { return a.object == c.object; });
+        if (c.kind == TswCue::Kind::LobChargeup) active.push_back(c);
+    }
 }
 
 // ---- §11.1 noise and envelopes --------------------------------------------------------------------------------------

@@ -284,6 +284,39 @@ static void test_grid() {
     CHECK(g.effective(11, 10) == kPassRebelWall && g.effective(9, 10) == kPassClear);
     CHECK(g.unstamp(78) && !g.unstamp(78));
     CHECK(g.effective(11, 10) == kPassClear);
+    // S8 t13 (MOVEMENT §1.3 "Unstamp", corrected): every unstamp recomputes the cell from base | the remaining occupants'
+    // bits, in any order, also when the removed occupant shared a bit with a remaining one. Checked against a grid
+    // stamped with only the remaining occupants.
+    {
+        const ObstacleFootprint a = make_footprint({200.0f, 200.0f}, 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f,
+                                                   kPassObstacle | kPassRebelWall);
+        const ObstacleFootprint b = make_footprint({210.0f, 200.0f}, 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f, kPassShield);
+        const ObstacleFootprint c = make_footprint({190.0f, 210.0f}, 0.0f, 40.0f, 40.0f, -20.0f, -20.0f, 0, 0, 1.0f, kPassObstacle);
+        const ObstacleFootprint* fps[3] = {&a, &b, &c};
+        const uint32_t orders[6][3] = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+        bool same = true;
+        for (const auto& ord : orders) {
+            PassabilityGrid live;
+            live.init(32, 32);
+            live.set_base(10, 10, kPassSteep);
+            for (uint32_t k = 0; k < 3; ++k) live.stamp(static_cast<ObjectId>(k + 1), *fps[k]);
+            for (uint32_t removed = 0; removed < 3; ++removed) {
+                live.unstamp(static_cast<ObjectId>(ord[removed] + 1));
+                PassabilityGrid ref;  // only the occupants still stamped
+                ref.init(32, 32);
+                ref.set_base(10, 10, kPassSteep);
+                for (uint32_t k = removed + 1; k < 3; ++k) ref.stamp(static_cast<ObjectId>(ord[k] + 1), *fps[ord[k]]);
+                for (int32_t y = 0; y < 32; ++y)
+                    for (int32_t x = 0; x < 32; ++x) same = same && live.effective(x, y) == ref.effective(x, y);
+            }
+        }
+        CHECK(same);
+        PassabilityGrid two;  // a shared bit stays while one holder remains; the other's own bit leaves
+        two.init(32, 32);
+        two.stamp(1, a);
+        two.stamp(3, c);
+        CHECK(two.effective(10, 10) == (kPassObstacle | kPassRebelWall) && two.unstamp(1) && two.effective(10, 10) == kPassObstacle);
+    }
     // Rotated footprint: 60 x 10 at yaw 90 covers a vertical strip.
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
     g.stamp(79, fp3);
@@ -2414,6 +2447,21 @@ static void test_land_obstacle_footprint() {
         "<Obstacle_Height>40</Obstacle_Height></GroundStructure>\n"
         "<GroundStructure Name=\"FineOff\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
         "<Obstacle_Height>40</Obstacle_Height><Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability></GroundStructure>\n"
+        // S8 t13: no Land_Model_Name with fine-tune off (both sizes / one size), one XML size + model box, a wall, a proxy
+        // with its own OverridePassability
+        "<GroundStructure Name=\"OffBoth\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>20</Obstacle_Height><Obstacle_X_Offset>-20</Obstacle_X_Offset><Obstacle_Y_Offset>-10</Obstacle_Y_Offset>"
+        "<Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability></GroundStructure>\n"
+        "<GroundStructure Name=\"OffOne\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Fine_Tune_Occupied_Passability>No</Fine_Tune_Occupied_Passability></GroundStructure>\n"
+        "<GroundStructure Name=\"WidthOnly\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>80</Obstacle_Width>"
+        "</GroundStructure>\n"
+        "<GroundStructure Name=\"WallSeg\"><LandBehavior>LAND_OBSTACLE, WALL</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height></GroundStructure>\n"
+        "<GroundStructure Name=\"ShieldPad\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Width>40</Obstacle_Width>"
+        "<Obstacle_Height>40</Obstacle_Height><OverridePassability>Shield</OverridePassability></GroundStructure>\n"
+        "<GroundStructure Name=\"PadUser\"><LandBehavior>LAND_OBSTACLE</LandBehavior><Obstacle_Proxy_Type>ShieldPad</Obstacle_Proxy_Type>"
+        "</GroundStructure>\n"
         "</R>");
     DirectoryProvider dp(path_to_utf8(root));
     objects::ObjectTypeDatabase raw;
@@ -2538,6 +2586,45 @@ static void test_land_obstacle_footprint() {
     PassabilityGrid empty;
     CHECK(empty.stamp(7, fp) == 0 && empty.stamped(7) && empty.stamp_cells(7).empty() && empty.stamp_secondary(7, fp) == 0 &&
           empty.secondary_stamped(7) && empty.unstamp(7) && !empty.stamped(7));
+
+    // S8 t13 (MOVEMENT §1.3 "A type without Land_Model_Name", "proxy bits").
+    const uint32_t off_both = types.resolve_name("OffBoth"), off_one = types.resolve_name("OffOne"),
+                   width_only = types.resolve_name("WidthOnly"), wall_seg = types.resolve_name("WallSeg"),
+                   shield_pad = types.resolve_name("ShieldPad"), pad_user = types.resolve_name("PadUser");
+    CHECK(off_both < types.size() && off_one < types.size() && width_only < types.size() && wall_seg < types.size() &&
+          shield_pad < types.size() && pad_user < types.size());
+    if (off_both >= types.size() || off_one >= types.size() || width_only >= types.size() || wall_seg >= types.size() ||
+        shield_pad >= types.size() || pad_user >= types.size())
+        return;
+    MapStampHooks nm;  // every type known to have no land model except WidthOnly (model box 15 x 10, no collision ray)
+    nm.ray_model = [&](uint32_t t) { return t == width_only ? StampRayModel::Model : StampRayModel::None; };
+    nm.model_half_extents = [&](uint32_t t, float& hx, float& hy, float& hz) {
+        if (t != width_only) return false;
+        hx = 15.0f, hy = 10.0f, hz = 4.0f;
+        return true;
+    };
+    PassabilityGrid ng;
+    ng.init(32, 32);
+    // Fine-tune on, no proxy, no model: never stamped (NoModel above). Fine-tune off: the explicit rectangle, no ray.
+    CHECK(land_obstacle_footprint(types, off_both, {300.0f, 300.0f}, 0.0f, 0.0f, &nm, fp) && !fp.fine_tune && fp.width == 40.0f &&
+          fp.height == 20.0f && fp.x_offset == -20.0f && fp.y_offset == -10.0f && fp.bits == kPassObstacle);
+    CHECK(ng.stamp(70, fp) == 6);  // x 280..320 (cells 14..16) x y 290..310 (cells 15..16)
+    // ... and with only one explicit size: zero samples, but stamped (retail sets "stamped" and never retries).
+    CHECK(land_obstacle_footprint(types, off_one, {300.0f, 300.0f}, 0.0f, 0.0f, &nm, fp) && fp.width == 40.0f && fp.height == 0.0f);
+    CHECK(ng.stamp(71, fp) == 0 && ng.stamped(71) && ng.stamp_cells(71).empty());
+    // Without model data in the run (Unknown) one size is still no footprint [port].
+    CHECK(!land_obstacle_footprint(types, off_one, {300.0f, 300.0f}, 0.0f, 0.0f, nullptr, fp));
+    // Each size getter separately: XML width 80, model height 2 x 10, offsets from the model box (-15, -10).
+    CHECK(land_obstacle_footprint(types, width_only, {300.0f, 300.0f}, 0.0f, 0.0f, &nm, fp) && fp.width == 80.0f &&
+          fp.height == 20.0f && fp.x_offset == -15.0f && fp.y_offset == -10.0f && fp.obstacle_height == 4.0f && !fp.fine_tune);
+    // Bits: the object's own behaviours (WALL adds EmpireWall), never the proxy's OverridePassability.
+    CHECK(land_obstacle_footprint(types, wall_seg, {300.0f, 300.0f}, 0.0f, 0.0f, nullptr, fp) &&
+          fp.bits == (kPassObstacle | kPassEmpireWall));
+    CHECK(land_obstacle_footprint(types, shield_pad, {300.0f, 300.0f}, 0.0f, 0.0f, nullptr, fp) && fp.bits == kPassShield);
+    CHECK(land_obstacle_footprint(types, pad_user, {300.0f, 300.0f}, 0.0f, 0.0f, &nm, fp) && fp.width == 40.0f &&
+          fp.bits == kPassObstacle && !fp.fine_tune);  // a proxy without a model: no ray, every sample stamps
+    CHECK(land_obstacle_bits(0, true, false) == kPassObstacle && land_obstacle_bits(0, true, true) == (kPassObstacle | kPassEmpireWall) &&
+          land_obstacle_bits(kPassRebelWall, true, true) == kPassRebelWall && land_obstacle_bits(0, false, false) == 0);
     remove_all_long(root, ec);
     std::printf("land obstacle footprint: object footprint = placement stamp, fine-tune / proxy ok\n");
 }

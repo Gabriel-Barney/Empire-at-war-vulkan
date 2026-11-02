@@ -143,6 +143,9 @@ struct MoveOrder {
     // MOVEMENT §6.1 / §6.2: the MoveToPosition "switch locomotor" bit - multi-locomotor units swap to their secondary
     // locomotor before the move (MovementSystem::use_secondary_locomotor); others ignore it.
     bool switch_locomotor = false;
+    // S7 t37 (A1_READINGS §33.4.1): an object goal (block kind 3) - the fighter formations of the order (squadrons,
+    // fighters without one) keep a FighterGuard on it, followed by the tick; -1 = a position order. Others ignore it.
+    ObjectId goal_object = -1;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
@@ -184,6 +187,12 @@ struct UnitView {
     float roll = 0.0f;                       // bike lean / flying / fighter roll (degrees, wrap180) - attitude()
     float pitch = 0.0f;                      // flying / fighter pitch (degrees, wrap180; positive = nose down) - attitude()
     FighterPhase fighter_phase = FighterPhase::None;  // fighter: last combat steering phase (diagnostics)
+    LocoState deploy_state = LocoState::None;  // S8 t11: Walk deploy state (None / 0x18 / 0x19 / 0x1A)
+    // S8 t11 follow-up: the deploy clip the locomotor is timing (0x19 Deploy / 0x1A Undeploy; -1 none, also while 0x18 /
+    // 0x1A wait for the turret). The host draws it (SimAnimation::deploy) when it is not the current animation.
+    int32_t deploy_clip = -1;
+    // S8 t24: the TURRET's current elevation / yaw (degrees, relative to the body; UnitDesc::turret units only).
+    float turret_elevation = 0.0f, turret_yaw = 0.0f;
 };
 
 // OI tactical: one crush this tick (§5.5). The host applies kCrushDamage of the crusher type's Squash_Damage_Type
@@ -260,6 +269,66 @@ public:
     // nothing). The host calls it before the JET_PACK ability's move. No draws.
     bool use_secondary_locomotor(ObjectId id, bool secondary);
 
+    // ---- S8 t11 / t12: Walk locomotor deploy states (MOVEMENT §3.2 "Deploy states", "A locomotor swap undeploys") ----
+    // Only the Walk locomotor (land, LocomotorKind::Default) deploys. deploy(id, true) = Walk vf +0x118 Deploy(true)
+    // (0x61d300): in 0x18 / 0x19 nothing; out of 0x1A with the turret not at rest (TurretRestFn) straight to 0x19 and
+    // "ability finished" at once (ReverseBlocked); else the unit stops (its order is dropped) and enters 0x18 Deploying.
+    // deploy(id, false): 0x18 / 0x19 -> 0x1A Undeploying ([port] the slot +0x35b blocker and the pending flag +0x2b3,
+    // never set in vanilla, are not modelled). Per tick (serial, ascending id, after the walk): 0x18 / 0x1A start their
+    // clip (anim 0x19 Deploy / 0x1A Undeploy) only once the turret is at rest (until then the turret recentres: the host's),
+    // at Deployment_Anim_Rate; a clip's position after n frames is start + n x step, step = fps / 30 x rate (ABILITIES_
+    // HARDPOINTS §4.13), and it has ended when position >= count - 2 - step (0x39a180). End of the Deploy clip: 0x19
+    // Deployed; end of the Undeploy clip: back to the walk (state None, the walk stopped). Each clip end raises "ability
+    // finished" (signal 0x29). Reversing: Deploy(true) out of 0x1A starts the Deploy clip at count - cur - 1 (min 0), and
+    // 0x1A out of a running Deploy clip starts the Undeploy clip at count - cur - 1 - step (min 0), cur = the reversed
+    // clip's position. No clip data (DeployClipFn unset / false): count 0, so a clip ends on the frame it starts.
+    // While in 0x18 / 0x19 / 0x1A the walk does not move the unit [port: the Walk vf6 deploy states have no move branch;
+    // an order given meanwhile waits for the undeploy]. The locomotor swap (use_secondary_locomotor, both directions)
+    // leaves the deploy states (JetPack answers "not deployed"; the Walk rebuilt on landing starts in 0x16) without a
+    // signal. No draws.
+    enum class DeployResult : uint8_t {
+        NoWalk,          // unknown unit, space, or the active locomotor is not Walk: nothing (retail 0x1fa90 / 0x13b7d0)
+        Ignored,         // the request does not apply in the current state
+        Deploying,       // -> 0x18
+        Undeploying,     // -> 0x1A
+        ReverseBlocked,  // 0x1A -> 0x19 at once (signal 0x29 raised)
+    };
+    DeployResult deploy(ObjectId id, bool on, uint32_t frame);
+    // The deploy state: None (also every non-Walk unit), WalkDeploying, WalkDeployed or WalkUndeploying.
+    LocoState deploy_state(ObjectId id) const;
+    // One deploy-state change (requests, clip ends and swaps), in the order they happen. `finished` = the change raises
+    // signal 0x29 "unit ability finished" (each clip end and the blocked reverse). take_deploy_events() hands them over
+    // and clears the list (the host drains it after the movement tick and after the ability pass; not saved: it is
+    // empty between frames when the host drains each frame).
+    struct DeployEvent {
+        ObjectId id = 0;
+        LocoState from = LocoState::None, to = LocoState::None;
+        bool finished = false;
+    };
+    std::vector<DeployEvent> take_deploy_events();
+    // Clip data for the deploy clips (frame count and fps of anim 0x19 / 0x1A on the unit's model); const, deterministic.
+    using DeployClipFn = std::function<bool(ObjectId id, int32_t anim, uint32_t& frame_count, float& fps)>;
+    void set_deploy_clip_fn(DeployClipFn fn) { deploy_clip_ = std::move(fn); }
+    // ---- S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the TURRET of a Deploys unit (UnitDesc::turret) ----
+    // Per frame after the deploy pass (serial, ascending id; TURRET service 0x632270 + motion 0x631210): while aiming the
+    // target angles are the aim point's; while not aiming and off the rest angle R the first frame holds (target :=
+    // current, idle time := now), and once now - idle > Turret_Rotate_To_Rest_Delay_Sec the target becomes R; at R the
+    // hold clears. R = Turret_Deployed_Rest_Angle in 0x18 / 0x19, else Turret_Rest_Angle. Motion: elevation linear,
+    // yaw by the shortest wrapped difference, at most Turret_Rotate_Speed degrees per frame each, then the yaw is
+    // clamped to +-(Deployed_)Turret_Rotate_Extent_Degrees. "At rest" (0x386170) = current == Turret_Rest_Angle (always
+    // the undeployed one) within 0.0001. The Walk deploy states force the recentre (0x6319d0: not aiming, target := R,
+    // no delay) every frame they wait.
+    // Aim point of the turret this frame (the unit's current target; 0x632050 aims at it): true + world position, false =
+    // not aiming. Unset: never aims.
+    using TurretAimFn = std::function<bool(ObjectId id, float& x, float& y, float& z)>;
+    void set_turret_aim_fn(TurretAimFn fn) { turret_aim_ = std::move(fn); }
+    // Test override of the at-rest test (0x386170) for every unit; unset: the turret model above.
+    using TurretRestFn = std::function<bool(ObjectId id)>;
+    void set_turret_rest_fn(TurretRestFn fn) { turret_rest_ = std::move(fn); }
+    // Teleport-free facing snap (0x3a8710; LOB_SOLVER §3.5 "Facing at apply"): the unit's yaw := yaw_deg at once (no
+    // turn rate); position and order unchanged. False when the unit is unknown.
+    bool snap_yaw(ObjectId id, float yaw_deg);
+
     // ---- REMAINING_GAPS §4.2-4.7
     // Threat at a point for an owner (TacticalPerceptionGrid point query 0x653ff0); const and thread-safe (planning
     // runs in parallel). Unset: threat factor 1.
@@ -307,6 +376,18 @@ public:
     // [port] entry to Dead_Stop 0x1F (the retail writer is untraced, "probably the Stop order"): stored orientation =
     // the current one, the path is dropped.
     bool fighter_dead_stop(ObjectId id);
+    // S7 t28 (A1_READINGS §33.4, FIGHTER_FLYING §4.10 E): a guard of a moving object. fighter_copy_path gives squadron
+    // `squad` (or a solo fighter) `from`'s space path (0x40dbc0) with every member's waypoint index at from's (S7 t35,
+    // A1_READINGS §33.4.1 [port: from's next waypoint by playback time]); each member's goal = the path end; idle / moving members fly it (Moving 0x1B), members in combat keep their
+    // state. False (nothing changed) when `from` is a fighter or follows no path. set_fighter_speed_cap sets
+    // FighterSquad::speed_cap (kFighterNoSpeedCap clears it); false without that squadron.
+    bool fighter_copy_path(ObjectId squad, ObjectId from, uint32_t frame);
+    bool set_fighter_speed_cap(ObjectId squad, float cap);
+    // S7 t37: the fighter formations' object goal blocks (FighterGuard, ascending key); `covered` is set by the host from
+    // its formation record (a pushed auto attack block is the last block). False / null without that formation's block.
+    std::span<const FighterGuard> fighter_guards() const { return fguards_; }
+    const FighterGuard* fighter_guard(ObjectId key) const;
+    bool set_fighter_guard_covered(ObjectId key, bool covered);
     std::span<const FighterEvent> fighter_events() const { return fevents_; }  // this tick
     // Save / load access (the grids' membership and the per-unit / per-squadron fighter state are sim state).
     void build_fighter_grids();  // (re)build from the playable box; membership is cleared
@@ -410,6 +491,18 @@ private:
         // S7 t06: Uses_Multiple_Locomotors (d.locomotor is the active one)
         LocomotorKind primary_locomotor = LocomotorKind::Default;  // the spawn locomotor (behaviour slot 1)
         bool on_secondary = false;
+        // S8 t11: Walk deploy state (None / 0x18 / 0x19 / 0x1A) and its clip: dclip = the clip playing (kAnimNone, 0x19
+        // Deploy, 0x1A Undeploy), started at frame dclip_start at clip position dclip_pos0 (save version 5).
+        LocoState deploy = LocoState::None;
+        int32_t dclip = -1;
+        uint32_t dclip_start = 0;
+        float dclip_pos0 = 0.0f;
+        // S8 t24: TURRET state (TD +0x48..+0x5c current / target angles x, elevation, yaw; +0x6c idle time (s); +0x70
+        // hold; +0xf6 aiming). Starts at Turret_Rest_Angle [port: the spawn pose is not traced] (save version 7).
+        float tcur[3] = {0.0f, 0.0f, 0.0f};
+        float ttgt[3] = {0.0f, 0.0f, 0.0f};
+        float tidle = 0.0f;
+        bool thold = false, taim = false;
         // FIGHTER_FLYING.md §2-§5 (space fighters)
         FighterState fs;
         FighterParams fp;
@@ -418,6 +511,24 @@ private:
     void fill_air_request(const Unit& u, uint32_t frame, SpaceRequest& q) const;  // plan_land's request (no threat)
     static void special_idle(Unit& u);          // §4.3-4.7: the idle state of the active special locomotor
     bool swap_locomotor(Unit& u, bool secondary);  // S7 t06 / t14 (0x3a9910)
+    // S8 t11 (deploy_system.cpp): clip data, clip position, clip start, the per-tick deploy pass, the state change.
+    struct DeployClip {
+        float count = 0.0f;  // frame count (0: no clip data)
+        float step = 1.0f;   // clip frames per sim frame (fps / 30 x Deployment_Anim_Rate)
+    };
+    DeployClip deploy_clip(const Unit& u, int32_t anim) const;
+    float deploy_clip_pos(const Unit& u, uint32_t frame) const;
+    bool turret_at_rest(const Unit& u) const;  // 0x386170 (or the test override)
+    // S8 t24 (deploy_system.cpp): the rest angle R, the forced recentre 0x6319d0, the per-frame TURRET pass.
+    const float* turret_rest_angle(const Unit& u) const;
+    static void turret_recentre(Unit& u, const float* rest);
+    void tick_turrets(uint32_t frame);
+    void deploy_start_clip(Unit& u, int32_t anim, float pos0, uint32_t frame);
+    void deploy_begin_clip(Unit& u, int32_t anim, uint32_t frame);  // start `anim`, reversing the current clip
+    void deploy_set(Unit& u, LocoState to, bool finished);
+    void tick_deploy(uint32_t frame);
+    void hash_deploy(StateHasher& h) const;
+    void hash_turrets(StateHasher& h) const;  // S8 t24
     // S7 t14 (§3.1.1): JetPack vf74 / vf75 - Alternate_Max_Speed / _Rate_Of_Turn (mode multiplier, speed factor /
     // override as for Max_Speed) while the active jetpack is in its airborne kind, else lp.max_speed / lp.turn_rate.
     bool jet_alternates(const Unit& u) const;
@@ -479,6 +590,14 @@ private:
     static void f_commit(Unit& u) { u.fs.b.p = f3_add(u.fs.b.p, u.fs.b.v); }
     void fighter_removed(ObjectId id);
     void fighter_order(Unit& u);
+    // S7 t37: object goal blocks (FighterGuard)
+    ObjectId fkey(const Unit& u) const { return u.fs.squad >= 0 ? u.fs.squad : u.d.id; }
+    FighterGuard* fguard_ptr(ObjectId key);
+    void fguard_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame);
+    void fguard_stop(std::span<const ObjectId> ids);
+    void fguard_removed(ObjectId id);
+    void fguard_lost(FighterGuard& g);
+    void fguard_update(uint32_t frame, SimRng& rng);
     void fighter_stop(Unit& u);
     void hash_fighters(StateHasher& h) const;
     // N1 stage 2 (movement_save.cpp)
@@ -541,7 +660,14 @@ private:
     FighterCellGrids fgrids_;
     FighterAvoidFn favoid_;
     std::vector<FighterEvent> fevents_;  // this tick
+    std::vector<FighterGuard> fguards_;  // S7 t37: ascending key
+    bool fguard_internal_ = false;       // S7 t37: a re-path of the formation update (keeps the block)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
+    // S8 t11
+    DeployClipFn deploy_clip_;
+    TurretRestFn turret_rest_;
+    TurretAimFn turret_aim_;
+    std::vector<DeployEvent> devents_;  // since the last take_deploy_events()
 };
 
 }  // namespace alamo::tactical::movement

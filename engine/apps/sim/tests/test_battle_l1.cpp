@@ -120,6 +120,10 @@ const char* kTypes = R"(<L1>
   <Projectile_Fire_Recharge_Seconds>0.5</Projectile_Fire_Recharge_Seconds></GroundInfantry>
  <GroundCompany Name="L1_Jet_Squad"><Company_Units>L1_Jet_Trooper, L1_Jet_Trooper</Company_Units>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
+ <GroundInfantry Name="L1_Deploy_Trooper"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>
+  <Unit_Abilities_Data SubObjectList="Yes"><Unit_Ability><Type>DEPLOY</Type></Unit_Ability></Unit_Abilities_Data></GroundInfantry>
+ <GroundCompany Name="L1_Deploy_Squad"><Company_Units>L1_Deploy_Trooper, L1_Deploy_Trooper</Company_Units>
+  <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
 </L1>
 )";
 
@@ -712,12 +716,16 @@ void test_land(const Data& d) {
 // S7 t15 A1: the swap back raises "unit ability finished" (signal 0x29) for the jet trooper in the tick its flag clears.
 struct JetRun {
     bool fought = false, ordered = false, mirror = true, flew = false, landed = false, other_walks = true;
+    bool current_projectile = false;
     uint32_t shots_flying = 0, shots_after = 0, suspended_frames = 0;
     uint32_t ability_finished = 0, finished_at_clear = 0;  // the jet's signals; those in the tick its flag cleared
+    uint32_t forced_frame = 0, signal_frame = 0;  // S7 t27: the host-side swap back (after that battle frame) / the signal's frame
     CrcLog crc;
 };
 
-JetRun run_jet(const Data& d, int32_t workers) {
+// force_back (S7 t27): after the first airborne frame the test swaps the trooper back to WALK outside the movement tick (as
+// a host-side swap back would, MOVEMENT §3.1.1 callers); the next tick reports signal 0x29 once and clears the flag.
+JetRun run_jet(const Data& d, int32_t workers, bool force_back = false) {
     JetRun out;
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
@@ -782,6 +790,8 @@ JetRun run_jet(const Data& d, int32_t workers) {
                 }
             CHECK(jet != objects::kNoObjectId && other != objects::kNoObjectId && found);
             if (jet == objects::kNoObjectId || !found) break;
+            // S8 t12 (d): Get_Current_Projectile_Type = Projectile_Types[weapon index 0]; a unit without the list: nothing
+            out.current_projectile = b->current_projectile(jet) == static_cast<objects::TypeIndex>(type_of(d, "L1_Laser_Proj"));
             const objects::ObjectId ids[] = {jet};
             out.ordered = b->order_move(*tm, 1, ids, enemy.x + 80.0f, enemy.y, host.random().synced(), tactical::movement::kNoFacing,
                                         false, false, 0, true) == commands::RejectReason::None;
@@ -797,8 +807,13 @@ JetRun run_jet(const Data& d, int32_t workers) {
             if (e == jet) {
                 ++out.ability_finished;
                 out.finished_at_clear += was_suspended && !suspended ? 1u : 0u;
+                if (out.signal_frame == 0) out.signal_frame = f;
             }
         was_suspended = suspended;
+        if (force_back && out.forced_frame == 0 && suspended && v.airborne) {
+            out.forced_frame = f;
+            CHECK(const_cast<tactical::movement::MovementSystem&>(b->movement()).use_secondary_locomotor(jet, false));
+        }
         out.flew = out.flew || v.airborne;
         if (out.flew && !v.secondary_locomotor && !out.landed) out.landed = v.locomotor == tactical::movement::LocomotorKind::Default;
         out.other_walks = out.other_walks && !b->movement().view(other).secondary_locomotor &&
@@ -823,8 +838,129 @@ void test_jet(const Data& d) {
     CHECK(a.fought && a.ordered && a.flew && a.landed && a.mirror && a.other_walks);
     CHECK(a.suspended_frames > 30 && a.shots_flying == 0 && a.shots_after > 0);
     CHECK(a.ability_finished == 1 && a.finished_at_clear == 1);
+    CHECK(a.current_projectile);
     const JetRun w = run_jet(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged && w.suspended_frames == a.suspended_frames && w.ability_finished == 1);
+    // S7 t27: a swap back outside the movement tick is reported once, in the first tick after it, with the flag cleared.
+    const JetRun fb = run_jet(d, 0, true);
+    std::printf("  jetpack forced swap back after frame %u: signal at frame %u (%u signals), mirror %d\n", fb.forced_frame,
+                fb.signal_frame, fb.ability_finished, fb.mirror);
+    CHECK(fb.forced_frame > 0 && fb.signal_frame == fb.forced_frame + 1 && fb.ability_finished == 1 && fb.finished_at_clear == 1);
+    CHECK(fb.mirror && fb.shots_flying == 0);
+}
+
+// ---- S7 t26: DEPLOY raises "unit ability finished" (signal 0x29) at the deploy completion ----
+// (AI_TACTICAL §7.3.3 item 3) A deploy squad is ordered DEPLOY on, then off: each deploy / undeploy clip end raises 0x29
+// once for the trooper (S8 t11: oi_deploy_sync from the movement deploy events; the trooper has no deploy clip, so the
+// clip ends in the next tick) and only then is the ability active / inactive; a second DEPLOY on while deployed changes
+// nothing and raises nothing.
+struct DeployRun {
+    bool fought = false, deployed = false, undeployed = false, repeat_refused = false;
+    uint32_t on_frame = 0, off_frame = 0, signals = 0, signal_on = 0, signal_off = 0, other_signals = 0;
+    uint32_t deployed_at = 0, undeployed_at = 0;  // the frames Is_Active flipped (the clip ends)
+};
+DeployRun run_deploy(const Data& d) {
+    DeployRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 11;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate"), dsq = type_of(d, "L1_Deploy_Squad");
+    s.forces = {{0, 1, sq}, {1, 2, fr}, {1, 2, dsq}};
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = false;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    bool invaded = false;
+    const auto dep_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Deploy_Trooper"));
+    objects::ObjectId dep = objects::kNoObjectId;
+    namespace ab = tactical::abilities;
+    for (uint64_t t = 0; t < 6000; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (out.fought) break;
+            continue;
+        }
+        out.fought = true;
+        objects::ObjectStore& st = tm->primary();
+        const uint32_t f = b->frame();
+        if (dep != objects::kNoObjectId && out.on_frame != 0 && b->combat().has_unit(dep)) {  // the clip ends: Is_Active flips
+            const bool act = b->abilities().is_active(dep, ab::kDeploy);
+            if (act && out.deployed_at == 0) out.deployed_at = f;
+            if (out.off_frame != 0 && !act && out.undeployed_at == 0) out.undeployed_at = f;
+        }
+        for (const objects::ObjectId e : b->ability_finished_events()) {
+            if (e != dep) {
+                ++out.other_signals;
+                continue;
+            }
+            ++out.signals;
+            if (out.deployed_at != 0 && f == out.deployed_at) ++out.signal_on;
+            if (out.undeployed_at != 0 && f == out.undeployed_at) ++out.signal_off;
+        }
+        if (f == 1) {
+            for (const objects::ObjectHandle h : st.owned_by(1))
+                if (dep == objects::kNoObjectId && st.alive(h) && st.type(h) == dep_t && b->combat().has_unit(st.id(h))) dep = st.id(h);
+            CHECK(dep != objects::kNoObjectId);
+            if (dep == objects::kNoObjectId) break;
+        }
+        if (dep == objects::kNoObjectId) continue;
+        const objects::ObjectId ids[] = {dep};
+        // S8 t11: with the Walk locomotor Is_Active(DEPLOY) follows the walk state (0x19 Deployed), so it is read after the
+        // clip end (this model has no clip data: the clip ends in the next tick), not right after the request.
+        if (f == 10) {  // applied in the next tick's ability phase: the signal is in frame 11's events
+            out.deployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 1;
+            out.on_frame = f;
+        }
+        if (f == 20) {
+            out.deployed = out.deployed && b->abilities().is_active(dep, ab::kDeploy);
+            out.repeat_refused = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 0;
+        }
+        if (f == 30) {
+            out.undeployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, false, f) == 1;
+            out.off_frame = f;
+        }
+        if (f == 40) out.undeployed = out.undeployed && !b->abilities().is_active(dep, ab::kDeploy);
+        if (f >= 60) break;
+    }
+    return out;
+}
+
+void test_deploy(const Data& d) {
+    const DeployRun r = run_deploy(d);
+    std::printf("  deploy: fought %d on %d (frame %u, deployed at %u) repeat refused %d off %d (frame %u, undeployed at %u): %u signals "
+                "(at the clip ends: on %u, off %u), others %u\n",
+                r.fought, r.deployed, r.on_frame, r.deployed_at, r.repeat_refused, r.undeployed, r.off_frame, r.undeployed_at, r.signals,
+                r.signal_on, r.signal_off, r.other_signals);
+    CHECK(r.fought && r.deployed && r.repeat_refused && r.undeployed);
+    CHECK(r.signals == 2 && r.signal_on == 1 && r.signal_off == 1 && r.deployed_at > r.on_frame && r.undeployed_at > r.off_frame);
 }
 
 // ---- Int-final: build pads (L1_S4_REMAINING §3.6) and the weather factor of the fog sight (FOG_OF_WAR §3.1.1) ----
@@ -1032,6 +1168,7 @@ int main(int argc, char** argv) {
     test_land(*d);
     test_pads(*d);  // Int-final
     test_jet(*d);   // S7 t10 / t14
+    test_deploy(*d);  // S7 t26
     test_foc();
     if (g_fail) {
         std::printf("alamo_sim_l1_tests: %d failure(s)\n", g_fail);

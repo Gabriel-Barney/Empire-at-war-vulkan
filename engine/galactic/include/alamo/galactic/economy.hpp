@@ -103,6 +103,9 @@ struct FactionRules {
     uint32_t leader = 0xFFFFFFFFu;            // Faction_Leader TypeIndex
     uint32_t leader_company = 0xFFFFFFFFu;    // Faction_Leader_Company TypeIndex
     uint32_t primary_enemy = 0xFFFFFFFFu;     // faction index
+    // S7 t30 (TACTICAL_COMBAT §2.10): Allies (+0x3e0) / Enemies (+0x3f8) faction names as written (comma / space
+    // separated in the XML); the campaign relation table compares them case-insensitively.
+    std::vector<std::string> allies, enemies;
 };
 
 // DifficultyAdjustments.xml entry (AI players only). No adjustment = the internal all-1.0 one [H].

@@ -432,12 +432,64 @@ which list goes with which error message]:
 |---|---|
 | none or bool (mode toggle via command 43) | 1, 3, 7, 9, 11, 29, 32, 33, 39, 40, 43, 48, 52, 54, 56, 60, 62, 63, 65, 68, 69, 70; DEPLOY (2) toggles deploy |
 | target **object** (command 40) | 13, 15, 16, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66 |
-| target **position** (command 57, spawns `Dummy_Barrage_Target`) | 14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72 |
+| target **position** (command 57 style, spawns `Dummy_Barrage_Target`) | 50, 67, 71, 73, 74 |
+| command 43 with the position zeroed (no position) | 14, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72 |
 | position via command 43 | 5, 26, 28, 42 |
 | special | 6/10/12 (HUNT, LURE, AVOID_DANGER: optional target), 17 JET_PACK (position), 19 (object) |
 
+Correction (S7 t26 RE, 2026-11-02) [H]: the command-57 position row is ids 50, 67, 71, 73, 74; ids 14, 23, … 72
+were listed there before but take command 43 with no position. Which families return an `AbilityBlockStatus`
+and which signals finish it: AI_TACTICAL §7.3.3.
+
+Argument handling per family (0x570a50, second switch; 2026-11-02) [H]. The Lua call always needs exactly 2
+arguments (name + one argument).
+- **Toggle row:** the argument must be a bool, and it gives the mode (on / off) of command 43.
+- **Command 43 with no position** (14 FORCE_WHIRLWIND, 23, 24, 25, 35, 36, 38, 44, 46, 49, 57, 61, 72): the argument
+  is **not read** (any value). Command 43 has mode **on**, position (0,0,0) and target 0x3FFFFF.
+- **Position via 43** (5, 26, 28, 42): the argument must convert to a position (0x4990b0, else "expects a target
+  position"). Command 43 has mode on, that position and target 0x3FFFFF.
+- **17 JET_PACK:** same as position via 43, after 0x397d90(unit, 17) [M: gate]. No dummy.
+- **19 TARGETED_INVULNERABILITY:** the argument must be an object or an AI target with a live object ("expects a
+  target object" / "target object is already dead"). It is **command 43**, not 40: mode on, position = the target's
+  position (obj +0x78), target id = the object's id (obj +0x50).
+- **Command-57 row** (50 RADIOACTIVE_CONTAMINATE, 67 PROXIMITY_MINES, 71 BUZZ_DROIDS, 73 SUMMON, 74 CORRUPT_SYSTEMS):
+  1. the argument must convert to a position;
+  2. a `Dummy_Barrage_Target` is created there for the unit's owner (0x29f810);
+  3. the type's `GUI_Activated_Ability_Name` CRC is checked (else "not hooked up");
+  4. a `TacticalSpecialAbility` command (0x4292e0 / 0x429da0) is built with the dummy as target object and executed
+     (0x429960), the same path as command 40 (pending ability stored, fired when in range).
+
+  Who removes the dummy for these five ids was not traced [L] (Remote_Bomb's toss kills its own, see "Ground
+  marker" below).
+
 It errors with "not hooked up to special ability logic" when a targeted type's record has no matching
 `GUI_Activated_Ability_Name` in the type's `Abilities`.
+
+**Thrown abilities: facing, lock, release and the ground marker (S8 t10, 2026-11-02)** [H unless tagged]. Full
+text: LOB_SOLVER §3.5, "MARKER removal" and "Facing at apply".
+- **Facing.** `Grenade_Attack` (0x700860) and `Remote_Bomb` (0x719c90) apply both snap the unit's yaw to the
+  target's raw position (no z adjust; roll and pitch 0) with `0x3a8710`, instantly, with no turn rate. The snap
+  is skipped while obj +0x3a0 & 0x10 (stunned / weapons disabled).
+- **Then:** stop (`0x3a9880`), movement lock `0x3a8e50(obj, 1)` (counter obj +0x3a8), disable TARGETING.
+- **The throw** waits for the locomotor to stop, not for the facing, and does not turn again.
+- **Release** (end of the animation or interruption): enable TARGETING and the locomotor, unlock (decrement the
+  counter), signal 0x29. The facing is not restored.
+- **Ground marker.** A `Dummy_Barrage_Target` (command 57) target is killed by the toss 0x71a200 after the spawn
+  attempt, even when nothing spawned. It has no lifetime of its own, so it **stays** when the toss never happens.
+  [M] Whether the GUI issues command 57 for Remote_Bomb (type 64 is in the Lua object-target list above).
+- **DEPLOY (2) "active" (§2.7 item 4).** It is `0x39a390`: the locomotor pack's pending flag +0x2b3, or Walk
+  state 0x19 (Deployed) only, not 0x18 Deploying (TACTICAL_COMBAT §3.1.1 "Gate details").
+- **Locomotor swaps and hardpoints (S8 t12).** The JET_PACK / locomotor swap (`0x3a9910`, MOVEMENT §3.1.1)
+  suspends only TARGETING, WEAPON and SPECIAL_WEAPON. **Weapon hardpoints are not suspended**:
+  - `Update_Weapon` keeps running;
+  - the hardpoints keep the target pushed before the flight, and no new target is pushed while TARGETING is
+    suspended;
+  - they are held only by their own gates.
+
+  Because a swap undeploys the unit (MOVEMENT §3.2, "A locomotor swap undeploys"), `Dark_Trooper_PhaseIII`'s
+  deployed-only missile hardpoints stop firing when it jets and stay off until it deploys again. A hardpoint with
+  `Fire_When_Undeployed` = Yes would keep firing in the air [H from the code paths; M: no vanilla unit has one,
+  not observed in game].
 
 ### 2.10 Autofire [H for state, open for the driver]
 

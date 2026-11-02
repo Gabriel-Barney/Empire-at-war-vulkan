@@ -337,7 +337,7 @@ bool AbilitySystem::read(ByteReader& r) {
         e.frame = r.u32();
         e.point = get_vec3(r);
         e.value = r.i32();
-        if (!r.ok() || kind > static_cast<uint8_t>(AbilityEventKind::RemoveSilently)) return false;
+        if (!r.ok() || kind > static_cast<uint8_t>(AbilityEventKind::MarkerTossed)) return false;
         e.kind = static_cast<AbilityEventKind>(kind);
     }
     if (!get_count(r, n, 9)) return false;

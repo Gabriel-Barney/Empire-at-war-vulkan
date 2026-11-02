@@ -3777,6 +3777,31 @@ void test_lob_abilities() {
         CHECK(!w.ab->is_active(1, kStickyBomb));
         CHECK(w.count(AbilityEventKind::Ended, 1) == 1);
     }
+    {  // S8 t10 follow-up (LOB_SOLVER §3.5 "Facing at apply", last item): a pending request whose countdown started before
+       // the apply is consumed (apply returns 1) without the face / stop / lock block - nothing thrown, not retried
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+        g.max_range = 200.0f;
+        g.projectile = 0;
+        g.fuse_time = 2.0f;
+        const uint32_t gs = add_special(w.ad, g);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+        a.specials = {gs};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        w.add(2, td, 1, {80, 0, 0});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame) == 1 && w.ab->pending_type(1) >= 0);
+        CHECK(w.ab->force_recharge(1, kStickyBomb) && w.ab->countdown_counter(1, kStickyBomb) > 0);
+        w.tick();
+        CHECK(w.ab->pending_type(1) < 0 && !w.ab->special_applied(1, name_crc("Grenade")));  // consumed, not applied
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && !w.ab->is_active(1, kStickyBomb) && w.ab->pending_type(1) < 0);
+    }
 }
 
 // S8 t06 (docs/re/LOB_SOLVER.md §3.5): Remote_Bomb world - bomber 1 (player 0; Remote_Bomb with Toss_Anim BOMBTOSS,
@@ -4100,6 +4125,129 @@ void test_infection() {
     CHECK(w.sys->infection_attached(14) && !infected(14) && w.sys->infection_suspend_count(14) == 1);
 }
 
+// S8 t10 (b)(c) (LOB_SOLVER §3.5 "Facing at apply", "MARKER removal") and S8 t11 (DEPLOY through the Walk locomotor host).
+struct SnapLog {
+    std::vector<std::pair<ObjectId, float>> calls;
+};
+void snap_host(OiWorld& w, SnapLog& log) {
+    AbilityHost h;
+    h.map_rect = [](Vec3& lo, Vec3& hi) {
+        lo = Vec3{-1000.0f, -1000.0f, 0.0f};
+        hi = Vec3{1000.0f, 1000.0f, 0.0f};
+        return true;
+    };
+    h.snap_yaw = [&log](ObjectId id, float yaw) { log.calls.emplace_back(id, yaw); };
+    w.ab->set_host(std::move(h));
+}
+
+void test_s8_apply_facing_marker_deploy() {
+    const ObjectId one[] = {1};
+    {  // Remote_Bomb: yaw snapped at the apply toward the raw target position (90 degrees), stop + lock, the toss, release
+       // without restoring the facing, then MarkerTossed for the target (the host kills it when it is a marker)
+        OiWorld w;
+        rb_world(w, Vec3{0, 120, 0}, false);
+        SnapLog log;
+        snap_host(w, log);
+        const uint32_t f0 = w.frame;
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        w.tick();
+        CHECK(log.calls.size() == 1 && log.calls[0].first == 1 && std::fabs(log.calls[0].second - 90.0f) < 1e-3f);
+        const Vec3 fc = w.sys->facing(1);
+        CHECK(std::fabs(fc.x) < 1e-5f && std::fabs(fc.y - 1.0f) < 1e-5f && w.ab->immobilize_count(1) == 1);
+        CHECK(w.count(AbilityEventKind::MarkerTossed) == 0);
+        for (int i = 0; i < 40 && w.ab->immobilize_count(1) != 0; ++i) w.tick();
+        CHECK(w.frame - 1 == f0 + 12 && w.ab->immobilize_count(1) == 0 && w.count(AbilityEventKind::Ended, 1) == 1);
+        const AbilityEvent* m = w.last(AbilityEventKind::MarkerTossed, 1);
+        CHECK(w.count(AbilityEventKind::MarkerTossed) == 1 && m && m->target == 2 && m->type == kPlaceRemoteBomb && m->frame == f0 + 12);
+        CHECK(log.calls.size() == 1 && w.sys->facing(1).y == fc.y);  // not re-faced at the throw, not restored at release
+    }
+    {  // a null spawn (out of reach at the toss): no recharge, but the marker is still removed
+        OiWorld w;
+        rb_world(w, Vec3{0, 120, 0}, false);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        w.tick();
+        w.move(2, Vec3{0, 120, 300});
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kPlaceRemoteBomb) == 0);
+        CHECK(w.count(AbilityEventKind::MarkerTossed, 1) == 1);
+    }
+    {  // the toss never happens (the bomber dies first): no MarkerTossed, the marker persists
+        OiWorld w;
+        rb_world(w, Vec3{0, 120, 0}, false);
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        w.tick();
+        DamageRequest r;
+        r.victim = 1;
+        r.amount = 1.0e6f;
+        w.sys->take_damage(r, w.frame);
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(!w.sys->alive(1) && w.count(AbilityEventKind::MarkerTossed) == 0);
+    }
+    {  // Grenade_Attack: the same snap; none while weapons are disabled (stunned)
+        for (const bool disabled : {false, true}) {
+            OiWorld w;
+            w.cd.projectiles = {lob_sticky_bomb()};
+            SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+            g.max_range = 200.0f;
+            g.projectile = 0;
+            g.fuse_time = 2.0f;
+            const uint32_t gs = add_special(w.ad, g);
+            AbilityObjectDesc a;
+            a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+            a.specials = {gs};
+            const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+            const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+            w.make(GameMode::Land);
+            SnapLog log;
+            snap_host(w, log);
+            w.add(1, ud, 0, {0, 0, 0});
+            w.add(2, td, 1, {-60, -60, 0});
+            if (disabled) w.ab->set_weapons_disabled(1, true);
+            w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame);
+            w.tick();
+            if (disabled) {
+                CHECK(log.calls.empty());
+            } else {
+                CHECK(log.calls.size() == 1 && std::fabs(log.calls[0].second + 135.0f) < 1e-3f);
+                CHECK(w.ab->special_applied(1, name_crc("Grenade")) && w.ab->immobilize_count(1) == 1);
+            }
+        }
+    }
+    {  // DEPLOY through the locomotor host: the request goes to the host, the state comes back through set_deploy_state
+        OiWorld w;
+        AbilityObjectDesc a;
+        a.unit_abilities = {rec(kDeploy, 0.0f, 0.0f)};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Walker", 100.0f), a);
+        w.make(GameMode::Land);
+        std::vector<std::pair<ObjectId, bool>> calls;
+        bool accept = true;
+        AbilityHost h;
+        h.deploy = [&](ObjectId id, bool on, uint32_t) {
+            calls.emplace_back(id, on);
+            return accept;
+        };
+        w.ab->set_host(std::move(h));
+        w.add(1, ud, 0, {0, 0, 0});
+        CHECK(w.ab->set_unit_ability_mode(one, kDeploy, true, w.frame) == 1);
+        CHECK(calls.size() == 1 && calls[0].first == 1 && calls[0].second && !w.ab->deployed(1));  // not instant
+        w.collect();
+        CHECK(w.count(AbilityEventKind::Deployed, 1) == 1 && w.count(AbilityEventKind::StopOrder, 1) == 1);
+        const uint32_t both = kUnitDeploying | kUnitDeployTransition;
+        w.ab->set_deploy_state(1, 0x18);  // Deploying: both weapon sources hold fire (the transition gate)
+        CHECK((w.sys->flags(1) & both) == kUnitDeployTransition && !w.ab->deployed(1) && !w.ab->is_active(1, kDeploy));
+        w.ab->set_deploy_state(1, 0x19);  // Deployed
+        CHECK((w.sys->flags(1) & both) == kUnitDeploying && w.ab->deployed(1) && w.ab->is_active(1, kDeploy));
+        w.ab->set_deploy_state(1, 0x1A);  // Undeploying: transition again, no longer deployed
+        CHECK((w.sys->flags(1) & both) == kUnitDeployTransition && !w.ab->deployed(1));
+        w.ab->set_deploy_state(1, 0);
+        CHECK((w.sys->flags(1) & both) == 0u);
+        accept = false;  // the locomotor refused (no Walk, or nothing to do): no Deployed event
+        CHECK(w.ab->set_unit_ability_mode(one, kDeploy, true, w.frame) <= 1);
+        w.collect();
+        CHECK(calls.size() == 2 && w.count(AbilityEventKind::Deployed, 1) == 1);
+    }
+}
+
 int main(int argc, char** argv) {
     const char* golden = nullptr;
     const char* write_golden = nullptr;
@@ -4126,6 +4274,7 @@ int main(int argc, char** argv) {
     test_lob_abilities();
     test_remote_bomb_sequence();
     test_remote_bomb_detonate();
+    test_s8_apply_facing_marker_deploy();  // S8 t10 / t11
     test_fire_and_decay();
     test_energy();
     test_ion_stun();

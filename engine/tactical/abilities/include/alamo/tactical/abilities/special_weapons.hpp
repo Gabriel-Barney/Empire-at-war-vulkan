@@ -19,7 +19,10 @@
 //     int(fps x recharge)), the flag clears and Projectile_Fire_Pulse_Count shots are queued, Projectile_Fire_Pulse_
 //     Delay_Seconds apart [M: the weapon event 0x549d70 fires the type's weapon at the target].
 //   * fire_lobbing_at (0x4ea3f0): the owner's base power when Requires_Base_Power; no range / ally / fog check; the
-//     point and the fire request are stored, the pack restarts, the shots fly at the point.
+//     point and the fire request are stored, the pack restarts. S8 t30 (TACTICAL_COMBAT §3.1.1 "Fire-at-position
+//     order"): the order goes to the weapon's own WeaponBehavior through SpecialWeaponWorld::fire_at_position (the
+//     battle host: CombatSystem::order_fire_at_position: charge-up, one shot at the point); only when that hook is
+//     unset or refuses (no combat own weapon) [port] are the shots queued here at the point.
 //   Shots are emitted by tick() into shots(): the host turns each into CombatSystem::launch_projectile (from the
 //   weapon's position). The upgrade gate (SpecialWeaponsAllowed) and the destroy-after sweep are the caller's
 //   (the Lua binding / the host), as in the original.
@@ -131,6 +134,12 @@ enum class SwEventKind : uint8_t {
     TswPlanetDestroyed,  // state 9: value = the Death_Explosions pick (-1 none), target = the dummy, point = its position
     TswDebris,        // end of state 10: every Death_By_TSW_Replacements entry at the saved point (value = pick)
     TswDone,          // state 13 serviced: back to 0 for good, victory hold released
+    // S8 t30 (TACTICAL_COMBAT §3.1.1, LobbingSuperweaponBehavior 0x4ea6f0; presentation only, raised by the battle host from
+    // CombatSystem::lob_events()): the turret is aimed and the charge-up starts (Lobbing_Superweapon_SFXEvent_Chargeup,
+    // Lobbing_Superweapon_Chargeup_Particle on Lobbing_Superweapon_Chargeup_Particle_Bone_Name); the charge-up ended
+    // and the order is charged (Lobbing_Superweapon_SFXEvent_Fire; the shot follows on the next WEAPON service).
+    LobChargeup,
+    LobCharged,
 };
 
 struct SpecialWeaponEvent {
@@ -167,6 +176,8 @@ struct SpecialWeaponWorld {
     std::function<void(ObjectId id, Vec3 position, Vec3 facing)> place;  // move the TSW (store, combat, trees)
     std::function<bool(int32_t owner)> is_battle_attacker;          // 0x28aec0 [M] (unset: false)
     std::function<uint32_t(ObjectId target)> debris_choices;        // the target dummy's Death_Explosions count (unset: 0)
+    // S8 t30: hand a lobbing order to the weapon's own WeaponBehavior (true = taken: no volley is queued here).
+    std::function<bool(ObjectId id, Vec3 point)> fire_at_position;
 };
 
 class SpecialWeaponSystem {

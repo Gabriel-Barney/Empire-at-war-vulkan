@@ -962,6 +962,20 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         TacticalMode* tm = h->tactical();
         return (battle_ && tm) ? battle_->spawn_dummy_target(*tm, owner, p, h->random().synced()) : objects::kNoObjectId;
     };
+    // S7 t31 (AI_TACTICAL §7.3.3): signal 0xb of every host reaches the story VMs' Activate_Ability blocks (the unit, and its
+    // team container); their own Activate_Ability raises it through the battle. The listener dies with the battle.
+    battle_->add_order_replaced_listener([this](objects::ObjectId id) {
+        TacticalMode* tm = host_->tactical();
+        if (!story_bridge_ || !tm) return;
+        story_bridge_->order_replaced(id);
+        const objects::ObjectStore& st = tm->primary();
+        const objects::ObjectHandle oh = st.find(id);
+        const objects::ObjectHandle team = st.exists(oh) ? st.container(oh) : objects::ObjectHandle{};
+        if (team && st.id(team) != id) story_bridge_->order_replaced(st.id(team));
+    });
+    b.raise_order_replaced = [this](objects::ObjectId id) {
+        if (battle_) battle_->raise_order_replaced(id);
+    };
     story_hooks_ = lua::TacticalScriptHooks{};
     story_transports_ = lua::CinematicTransports{};
     story_hooks_.spawn = [h](const objects::SpawnParams& p) {

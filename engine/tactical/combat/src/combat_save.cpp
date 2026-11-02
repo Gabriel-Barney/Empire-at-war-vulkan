@@ -43,12 +43,12 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 8;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 9;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                             // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
                                             // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
                                             // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
                                             // (same layout, new meaning), S7 t15 A2 last weapon service frame, S8 t06 B4
-                                            // fire-bone cycle index
+                                            // fire-bone cycle index; 9: S8 t26 fire-at-position order
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -139,6 +139,8 @@ void CombatSystem::write(ByteWriter& w) const {
         w.u8(u.acquired);
         w.i32(u.goal_target).i32(u.goal_hp).i32(u.aim_target).i32(u.aim_hp).u8(u.locked).i32(u.auto_hp);  // refixf t06
         w.u32(u.weapon_last).u32(u.weapon_bone);  // S7 t15 A2 / S8 t06 B4
+        put_vec3(w, u.lob_point);  // S8 t26 fire-at-position order
+        w.u8(u.lob_pending).u8(u.lob_charged).u32(u.lob_stamp);
         // refix t02: INFECTION behaviour
         w.u8(u.infect_attached).u32(u.infect_suspend).i32(u.infect_desc).i32(u.infect_player).i32(u.infect_source);
         w.u32(u.infect_end).u32(u.infect_next_damage).u32(static_cast<uint32_t>(u.infect_exposure.size()));
@@ -322,6 +324,10 @@ bool CombatSystem::read(ByteReader& r) {
         u.auto_hp = r.i32();
         u.weapon_last = r.u32();  // S7 t15 A2
         u.weapon_bone = r.u32();  // S8 t06 B4
+        u.lob_point = get_vec3(r);  // S8 t26
+        u.lob_pending = r.u8();
+        u.lob_charged = r.u8();
+        u.lob_stamp = r.u32();
         u.infect_attached = r.u8();
         u.infect_suspend = r.u32();
         u.infect_desc = r.i32();

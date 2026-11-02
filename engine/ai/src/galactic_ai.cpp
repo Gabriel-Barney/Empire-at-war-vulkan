@@ -820,7 +820,7 @@ void GalacticAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
     decide(pi.player, "plan " + std::to_string(id) + " " + library.plans[pi.plan].name + " ended " +
                           (pi.result ? "success" : "failure") + (by_goal_system ? " (released)" : ""));
     if (pi.vm) {
-        for (const std::string& e : pi.vm->errors()) errors.push_back(library.plans[pi.plan].name + ": " + e);
+        append_script_errors(*pi.vm, library.plans[pi.plan].name + ": ", errors);  // S7 t27: with SCRIPT ERROR lines
         lua::attach_markup_host(*pi.vm, nullptr);
         runtime->release(pi.plan, std::move(pi.vm));
     }
@@ -1757,7 +1757,7 @@ void GalacticAiWorld::Impl::service_free_store(int32_t player) {
         }
     }
     drain_world_requests(world, player, -1);
-    for (const std::string& e : vm.errors()) errors.push_back("free store " + std::to_string(player) + ": " + e);
+    append_script_errors(vm, "free store " + std::to_string(player) + ": ", errors);  // S7 t27: with SCRIPT ERROR lines
     lua::clear_script_logs(vm);
 }
 
@@ -2002,8 +2002,7 @@ const std::vector<AiDecision>& GalacticAiWorld::decision_log() const { return im
 std::vector<std::string> GalacticAiWorld::lua_errors() const {
     std::vector<std::string> e = impl_->errors;
     for (const auto& [id, p] : impl_->plans)
-        if (p.vm)
-            for (const std::string& x : p.vm->errors()) e.push_back(impl_->library.plans[p.plan].name + ": " + x);
+        if (p.vm) append_script_errors(*p.vm, impl_->library.plans[p.plan].name + ": ", e);  // S7 t27: with SCRIPT ERROR lines
     return e;
 }
 uint64_t GalacticAiWorld::orders_issued() const { return impl_->orders; }

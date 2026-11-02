@@ -354,6 +354,14 @@ void GameAudioHost::tsw_audio(std::span<const TswCue> cues, const objects::GameO
                 game_->unit_death(id, sounds(types, c.type).death_start, p);
                 ++stats_.tsw_planet_deaths;
                 break;
+            case TswCue::Kind::LobChargeup:  // S8 t31
+                game_->object_sfx(id, types.get_string(c.type, "Lobbing_Superweapon_SFXEvent_Chargeup"), p);
+                ++stats_.lob_chargeups;
+                break;
+            case TswCue::Kind::LobCharged:
+                game_->object_sfx(id, types.get_string(c.type, "Lobbing_Superweapon_SFXEvent_Fire"), p);
+                ++stats_.lob_charged;
+                break;
         }
     }
 }

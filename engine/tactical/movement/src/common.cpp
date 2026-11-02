@@ -71,6 +71,8 @@ MovementConstants MovementConstants::from_game_constants(const data::GameConstan
     c.double_click_move_max_speed_ratio = gc.get_float("DoubleClickMoveMaxSpeedRatio", c.double_click_move_max_speed_ratio);
     c.land_speed_multiplier = gc.get_float("Object_Max_Speed_Multiplier_Land", c.land_speed_multiplier);
     c.space_speed_multiplier = gc.get_float("Object_Max_Speed_Multiplier_Space", c.space_speed_multiplier);
+    c.space_guard_range = gc.get_float("Space_Guard_Range", c.space_guard_range);  // S7 t37
+    c.land_guard_range = gc.get_float("Land_Guard_Range", c.land_guard_range);
     return c;
 }
 
