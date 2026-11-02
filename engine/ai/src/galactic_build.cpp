@@ -102,6 +102,7 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
                 break;
             }
             if (take) {
+                off_free_store(take);
                 tf.units.push_back(take);
                 tf.had_units = true;
                 finish_build(t);

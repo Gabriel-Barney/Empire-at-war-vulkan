@@ -103,6 +103,7 @@ static void test_cadence() {
         bool plan_invalid(const Goal&) override { return true; }
         bool replaceable(const Goal&) override { return true; }
         void refresh_plan(Goal&) override {}
+        void suspend_reservations(Goal&) override {}
         bool uses_budget() override { return false; }
         bool can_fund(const Goal&) override { return true; }
         float category_credits(int32_t) override { return 1.0f; }
@@ -170,6 +171,142 @@ static void test_desire_and_hysteresis() {
     const double v = 12.5, w1 = -5.0, w2 = -8.0;
     const double desire = v + static_cast<double>(2.0f * static_cast<float>(w1) + 1.0f * static_cast<float>(w2));
     CHECK(desire == -5.5);
+}
+
+// a1g t01 - free-store reservations through the goal system (A1_READINGS §28.6): a mock mode whose PotentialPlans
+// want unit 1 (else a fallback unit). The proposal's solve ignores reservations and reserves nothing; the accept
+// re-solves honouring them and reserves; every Commit suspends the active goals' entries before any
+// Resolve_Category and kept goals re-assert them; a goal whose unit another PP reserved is released.
+static void test_goal_reservations() {
+    struct Pp {
+        int32_t fallback = -1;
+        std::vector<int32_t> units;
+        int32_t solves = 0;
+    };
+    struct ResHooks final : GoalModeHooks {
+        std::map<int32_t, int32_t> owner{{1, -1}, {2, -1}, {3, -1}};  // free-store entry +0x30 (-1 = 0)
+        std::map<int32_t, Pp> pps;
+        std::vector<std::string> trace;
+        int32_t next_pp = 0, next_run = 0;
+        void solve(int32_t h, bool first) {
+            Pp& p = pps[h];
+            ++p.solves;
+            p.units.clear();
+            for (const int32_t u : {1, p.fallback})
+                if (first || owner[u] < 0) {  // Setup A: PP+0x104 == 0 or +0x30 == 0
+                    p.units.push_back(u);
+                    return;
+                }
+        }
+        uint32_t target_count() override { return 0; }
+        bool applies(int32_t, uint32_t) override { return false; }
+        bool blocked(uint32_t, int32_t) override { return false; }
+        bool evaluate(const std::string& f, int32_t, double& out) override {
+            out = f == "A" ? 10.0 : 5.0;
+            return true;
+        }
+        bool accept(Goal& g) override {
+            g.pp_handle = next_pp++;
+            pps[g.pp_handle].fallback = g.type == 0 ? 2 : 3;
+            solve(g.pp_handle, true);
+            g.plan = 0;
+            g.pp_valid = true;
+            trace.push_back("propose " + std::to_string(g.pp_handle));
+            return true;
+        }
+        bool plan_activatable(const Goal& g) override {
+            solve(g.pp_handle, false);
+            trace.push_back("resolve " + std::to_string(g.pp_handle));
+            return !pps[g.pp_handle].units.empty();
+        }
+        bool plan_invalid(const Goal& g) override {
+            if (g.running < 0) return true;
+            for (const int32_t u : pps[g.pp_handle].units)
+                if (owner[u] >= 0 && owner[u] != g.pp_handle) return true;
+            return false;
+        }
+        bool replaceable(const Goal&) override { return true; }
+        void refresh_plan(Goal& g) override {
+            for (const int32_t u : pps[g.pp_handle].units) owner[u] = g.pp_handle;
+            trace.push_back("reserve " + std::to_string(g.pp_handle));
+        }
+        void suspend_reservations(Goal& g) override {
+            for (auto& [u, o] : owner)
+                if (o == g.pp_handle) o = -1;
+            trace.push_back("suspend " + std::to_string(g.pp_handle));
+        }
+        bool uses_budget() override { return false; }
+        bool can_fund(const Goal&) override { return true; }
+        float category_credits(int32_t) override { return 1.0f; }
+        void budget_add(Goal&) override {}
+        void budget_release(Goal&) override {}
+        void budget_weights() override {}
+        std::vector<int32_t> category_order() override { return {}; }
+        void queue_production(Goal&) override {}
+        void instantiate(Goal& g) override { g.running = next_run++; }
+        void end_plan(Goal&, bool) override {}
+        void drop_potential_plan(Goal& g) override {
+            for (auto& [u, o] : owner)  // the destructor: 0x6c2320 clears only its own entries
+                if (o == g.pp_handle) o = -1;
+            if (g.pp_handle >= 0) trace.push_back("drop " + std::to_string(g.pp_handle));
+            g.pp_handle = -1;
+        }
+        float elapsed_eta(const Goal&) override { return 0.0f; }
+        int32_t quota_players() override { return 1; }
+    } hooks;
+    AiDefinitions defs;
+    for (const char* n : {"Goal_A", "Goal_B"}) {
+        GoalTypeDef d;
+        d.name = n;
+        d.application = app::Global;
+        d.category = 0;
+        defs.goals.push_back(d);
+    }
+    LearningSystem learning;
+    SimRng rng(7);
+    GoalSystem gs;
+    GoalSystemConfig cfg;
+    cfg.extra_goals_per_category = 2;
+    gs.init(defs, {{0, "A"}, {1, "B"}}, &hooks, &learning, nullptr, &rng, cfg);
+    auto active = [&gs]() { return gs.active()[0].size(); };
+    auto at = [&hooks](const std::string& s) {
+        return static_cast<size_t>(std::find(hooks.trace.begin(), hooks.trace.end(), s) - hooks.trace.begin());
+    };
+
+    // Pass 1: both proposals solve unit 1 (first solve ignores reservations) and reserve nothing; A (10) is accepted
+    // first and reserves unit 1; B's accept re-solves past it to unit 3.
+    gs.service(1);
+    CHECK(gs.commits() == 1 && active() == 2);
+    CHECK(hooks.pps[0].solves == 2 && hooks.pps[1].solves == 2);
+    CHECK(at("propose 0") < at("propose 1") && at("propose 1") < at("resolve 0"));
+    CHECK(at("resolve 0") < at("reserve 0") && at("reserve 0") < at("resolve 1") && at("resolve 1") < at("reserve 1"));
+    CHECK(hooks.pps[0].units == std::vector<int32_t>{1} && hooks.pps[1].units == std::vector<int32_t>{3});
+    CHECK(hooks.owner[1] == 0 && hooks.owner[2] == -1 && hooks.owner[3] == 1);
+
+    // Pass 2: no proposals (both active). Commit step 4 suspends both before maintenance re-asserts them.
+    hooks.trace.clear();
+    gs.service(2);
+    CHECK(gs.commits() == 2 && active() == 2);
+    CHECK(at("suspend 0") < at("reserve 0") && at("suspend 1") < at("reserve 0") && at("reserve 1") < hooks.trace.size());
+    CHECK(hooks.owner[1] == 0 && hooks.owner[3] == 1);
+
+    // Another PP (99) takes unit 3: at the next Commit B's plan is invalid (its unit was stolen) and B is released;
+    // its destructor leaves PP 99's entry alone. A keeps unit 1.
+    hooks.owner[3] = 99;
+    hooks.trace.clear();
+    gs.service(3);
+    CHECK(gs.commits() == 3 && active() == 1 && gs.active()[0][0].type == 0);
+    CHECK(at("drop 1") < hooks.trace.size() && hooks.owner[3] == 99 && hooks.owner[1] == 0);
+
+    // Pass 4: B is proposed again (its first solve takes unit 1 regardless of A); A is kept and re-asserts unit 1, then
+    // B's re-solve finds unit 1 and unit 3 reserved: it cannot be activated and is dropped.
+    hooks.trace.clear();
+    gs.service(4);
+    CHECK(gs.commits() == 4 && active() == 1);
+    CHECK(hooks.pps[2].units.empty() && hooks.pps[2].solves >= 2);
+    CHECK(at("propose 2") < at("suspend 0") && at("suspend 0") < at("reserve 0") && at("reserve 0") < at("resolve 2"));
+    CHECK(at("reserve 2") == hooks.trace.size() && hooks.owner[1] == 0 && hooks.owner[2] == -1 && hooks.owner[3] == 99);
+    std::printf("goal reservations: %zu hook calls in the last pass\n", hooks.trace.size());
 }
 
 static void test_plan_pick_and_solver() {
@@ -2408,6 +2545,7 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--write-golden") == 0) g_write_golden = true;
     test_cadence();
     test_desire_and_hysteresis();
+    test_goal_reservations();
     test_plan_pick_and_solver();
     test_definitions_and_templates();
     test_synthetic_campaign();

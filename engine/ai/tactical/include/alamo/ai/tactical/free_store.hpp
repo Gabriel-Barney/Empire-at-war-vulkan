@@ -24,11 +24,16 @@
 // On_Unit_Service visits free units lowest id first. Deviation from vanilla only in which unit acts
 // first within one service pass (AI_TACTICAL 5.3 recommendation).
 //
+// Entry +0x30 (A1_READINGS §28.1, §28.4) [H]: the owning PotentialPlan (here the PP handle, -1 = unreserved). Admission
+// builds every entry unreserved; removal erases the entry, so a unit that leaves and comes back is unreserved. The
+// writers are the goal system's (tactical_ai.cpp): reserve / re-assert 0x6c2b20 (overwrites any owner), unreserve
+// 0x6c2320 / 0x6c27d0 (only the owner's). `Lock_Current_Orders` does not touch it (§28.2): the store keeps no order lock.
+//
 // Service (0x4d5a70, called on each Execution service = every 3 frames) [H] (A1_READINGS 9 [H static]):
 //   now = (float)F * 0.033333335f (mode frame F, the float at 0x140b0a344);
 //   FreeStoreService runs when ServiceRate exists and now - LastService > ServiceRate (strict),
-//   then LastService = now; afterwards On_Unit_Service(unit) for every entry whose order lock is
-//   clear, in store order, when UnitServiceRate exists and now - LastUnitService > UnitServiceRate,
+//   then LastService = now; afterwards On_Unit_Service(unit) for every entry with +0x30 == 0 (no lock test,
+//   A1_READINGS §28.5), in store order, when UnitServiceRate exists and now - LastUnitService > UnitServiceRate,
 //   then LastUnitService = now. Both stamps start at 0. The stamps are Lua numbers (double); the comparison
 //   is done in double with now widened from float [H].
 //   Result with BusyTacticalFreeStore (20 / 2): FreeStoreService is first eligible at F = 600 (now =
@@ -91,15 +96,17 @@ public:
     bool contains(int32_t object_id) const { return entries_.count(object_id) != 0; }
     size_t size() const { return entries_.size(); }
     int32_t type_count(uint32_t type_id) const;
-    // Lock_Current_Orders (0x57cd40): skip the unit in On_Unit_Service until cleared. The writer that
-    // clears it (order finished) is open item 5. False if the object is not in the store.
-    bool set_order_lock(int32_t object_id, bool locked);
-    bool order_locked(int32_t object_id) const;
-    // Free units in service order (ascending id), all or only the unlocked ones.
-    void units(std::vector<int32_t>& out, bool unlocked_only) const;
+    // Entry +0x30: the owning PotentialPlan handle, -1 = unreserved or not in the store.
+    int32_t reservation(int32_t object_id) const;
+    // 0x6c2b20: +0x30 = pp (overwrites another owner, no check). False if the object is not in the store.
+    bool reserve(int32_t object_id, int32_t pp);
+    // 0x6c2320 / 0x6c27d0: +0x30 = 0 when it is pp. False if not in the store or owned by another PP.
+    bool unreserve(int32_t object_id, int32_t pp);
+    // Free units in service order (ascending id), all or only the unreserved ones (+0x30 == 0).
+    void units(std::vector<int32_t>& out, bool unreserved_only) const;
 
-    void hash(StateHasher& h) const;  // entries ascending (id, type, lock), type counters ascending
-    // N1 save / load: u32 version (1), u32 count + entries ascending (i32 id, u32 type, bool lock); the type counters are
+    void hash(StateHasher& h) const;  // entries ascending (id, type, +0x30), type counters ascending
+    // N1 save / load: u32 version (2), u32 count + entries ascending (i32 id, u32 type, i32 +0x30); the type counters are
     // rebuilt from the entries (they always count them). False and unchanged on bad data; reads its own fields only.
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);
@@ -107,7 +114,7 @@ public:
 private:
     struct Entry {
         uint32_t type_id = 0;
-        bool locked = false;
+        int32_t owner_pp = -1;  // +0x30
     };
     std::map<int32_t, Entry> entries_;
     std::map<uint32_t, int32_t> per_type_;
@@ -131,13 +138,13 @@ struct FreeStoreServiceStep {
     float now = 0.0f;
     bool run_service = false;          // resume the script threads (FreeStoreService) first
     bool run_unit_service = false;
-    std::vector<int32_t> units;        // On_Unit_Service order (unlocked, ascending id)
+    std::vector<int32_t> units;        // On_Unit_Service order (unreserved, ascending id)
 };
 // Mode time in seconds: (float)F * (1/30).
 float free_store_mode_time(uint32_t mode_frame);
 // One free-store service at mode frame F (the caller invokes it on Execution services). Updates the
-// stamps. The unit list is a snapshot: stage 2 must re-check membership / lock before each call
-// because a callback can release or lock units.
+// stamps. The unit list is a snapshot: stage 2 must re-check membership / +0x30 before each call
+// because a callback can release or reserve units.
 void free_store_service(FreeStoreSchedule& sched, const TacticalFreeStore& store, uint32_t mode_frame,
                         FreeStoreServiceStep& out);
 
