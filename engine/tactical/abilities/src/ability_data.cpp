@@ -155,7 +155,9 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     for (std::string_view tag : {"Grenade_Type", "Bomb_Type", "Projectile_Type", "Explosion_Type"})
         if (s.projectile < 0) s.projectile = projectile_of(e, tag, r);
     s.spawn_frame = f_any(e, {"Grenade_Spawn_Frame", "Spawn_Frame"}, 0.0f);
-    s.toss_anim = s_or(e, "Toss_Anim");
+    // Grenade_Attack +0x1c0 is Grenade_Toss_Anim; Toss_Anim (+0x190) belongs to Remote_Bomb (xml_field_tables.md).
+    s.toss_anim = s_or(e, "Grenade_Toss_Anim");
+    if (s.toss_anim.empty()) s.toss_anim = s_or(e, "Toss_Anim");
     s.fuse_time = f_any(e, {"Grenade_Explode_Timer_In_Secs", "Detonation_Time_In_Secs"}, 0.0f);
     s.requires_direct_command = b_or(e, "Requires_Direct_Player_Command", false);
     s.max_targets = i_or(e, "Lightning_Max_Targets", i_or(e, "Max_Drain_Victims", i_or(e, "Max_Targets", 0)));
@@ -167,6 +169,7 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     s.anim_speedup = f_or(e, "Attack_Animation_Speedup", 1.0f);
     s.right_to_left = b_or(e, "Apply_Damage_Right_To_Left", false);
     s.attack_anim = s_or(e, "Attack_Animation");
+    s.anim_sub_index = i_or(e, "Attack_Animation_Subindex", i_or(e, "Attack_Anim_Sub_Index", 0));
     s.damage_frame = i_or(e, "Damage_Frame_Number", 0);
     s.begin_damage_frame = i_or(e, "Begin_Applying_Damage_Frame", 0);
     s.attachment_frame = i_or(e, "Attachment_Frame", 0);

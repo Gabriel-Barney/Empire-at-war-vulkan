@@ -202,7 +202,7 @@ void test_golden_canonical() {
     Command c;
     c.header = CommandHeader{2, CommandSource::AI, 7, 100, 101};
     c.payload = ev::move_to_position(0.0f, 10000.0f, -10000.0f, 0x08);
-    c.payload.set("cancel_activity", 1);
+    c.payload.set("switch_locomotor", 1);
     const auto move = from_hex(
         "0100 02 01 07000000 6400000000000000 6500000000000000 14000000"
         "ffff0100 feff0300 00000000 08000000 01000000");
@@ -266,7 +266,7 @@ void test_queued_flag() {
     Command c;
     c.header = CommandHeader{2, CommandSource::AI, 7, 100, 101};
     c.payload = ev::move_to_position(0.0f, 10000.0f, -10000.0f, 0x08);
-    c.payload.set("cancel_activity", 1);
+    c.payload.set("switch_locomotor", 1);
     const auto plain = encode_command(c);
     CHECK(plain[3] == 0x01);  // source AI, no queue bit (test_golden_canonical bytes)
     c.payload.set_queued(true);
@@ -325,10 +325,10 @@ void test_wire_golden() {
     CHECK(pk.size() == 1 && pk[0] == from_hex("a1cb010000"));
 
     // MoveToPosition(1), player 0, frame 0, x=0 (code 0x1FFFF), y=10000 (0x3FFFE), z=-10000 (0),
-    // flags 0x08, cancel 1: 6+3+26+3*18+8+1 = 98 bits, low bit first.
+    // flags 0x08, switch_locomotor 1: 6+3+26+3*18+8+1 = 98 bits, low bit first.
     Command mv;
     mv.payload = ev::move_to_position(0.0f, 10000.0f, -10000.0f, 0x08);
-    mv.payload.set("cancel_activity", 1);
+    mv.payload.set("switch_locomotor", 1);
     BitWriter bw;
     CHECK(pack_event(bw, mv, w3) == PackError::None);
     CHECK(bw.bit_size() == 98);

@@ -16,6 +16,7 @@
 #include "alamo/tactical/movement/unit_params.hpp"
 #ifdef ALAMO_SIM_HAVE_ANIM
 #include "alamo/anim/anim_types.hpp"
+#include "alamo/sim/sim_anim.hpp"
 #endif
 
 namespace alamo::sim {
@@ -155,10 +156,21 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     };
 #ifdef ALAMO_SIM_HAVE_ANIM
     // OI t03 (§4.13): clip frame count / fps from the sim model (an XML animation name resolved to its type id).
-    h.anim_clip = [this, m = &mode](tc::ObjectId id, int32_t type, std::string_view name, uint32_t& frames, float& fps) {
-        return anim_clip_info(*m, id, type >= 0 ? type : anim::find_anim_type(name), frames, fps);
+    h.anim_clip = [this, m = &mode](tc::ObjectId id, int32_t type, std::string_view name, uint32_t variant, uint32_t& frames,
+                                    float& fps) {
+        return anim_clip_info(*m, id, type >= 0 ? type : anim::find_anim_type(name), frames, fps, variant);
+    };
+    // OI follow-up t01 (§4.14): the ModelAnimType id of a name, and the type's Attack_Animation_Is_Overlay.
+    h.anim_type = [](std::string_view name) { return anim::find_anim_type(name); };
+    h.attack_overlay = [this, m = &mode](tc::ObjectId id) {
+        if (!anim_) return false;
+        const objects::ObjectStore& st = m->primary();
+        const objects::ObjectHandle oh = st.find(id);
+        return st.exists(oh) && anim_->params_for(st.type(oh), m->kind()).attack_overlay;
     };
 #endif
+    // OI follow-up t03 (A1_READINGS §28.9): the script's shares of the movement lock (Lock_Current_Orders, a Divert).
+    h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id); };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
 }
@@ -205,7 +217,8 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 Unit* u = unit_by_id(e.id);
                 if (u && u->alive && !u->retreated && u->movable && bt_rng_) {
                     // S7 t06: JET_PACK (0x3a38d0) swaps a Uses_Multiple_Locomotors unit to its secondary locomotor
-                    // (0x3a9910, MOVEMENT §3.1) before the move; the JETPACK locomotor flies it and swaps back on landing.
+                    // (0x3a9910, MOVEMENT §3.1.1) before the move; the JETPACK locomotor flies it and swaps back on landing.
+                    // Its weapons are suspended meanwhile (kUnitWeaponsSuspended, set before each combat tick).
                     if (e.type == ta::kJetPack && movement_) movement_->use_secondary_locomotor(e.id, true);
                     const objects::ObjectId ids[] = {e.id};
                     exec_move(mode, ids, e.point.x, e.point.y, *bt_rng_, mv::kNoFacing, false);

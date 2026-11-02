@@ -2900,7 +2900,7 @@ std::array<int, 2> oi_generic_timing(uint32_t count, float fps, float speedup) {
     w.make(GameMode::Land);
     if (count > 0) {
         AbilityHost h;
-        h.anim_clip = [count, fps](ObjectId id, int32_t type, std::string_view name, uint32_t& n, float& f) {
+        h.anim_clip = [count, fps](ObjectId id, int32_t type, std::string_view name, uint32_t, uint32_t& n, float& f) {
             if (id != 1 || type >= 0 || name != "POUND_ATTACK") return false;
             n = count;
             f = fps;
@@ -2936,7 +2936,7 @@ int oi_hack_timing(uint32_t count, float fps) {
     w.make(GameMode::Land);
     if (count > 0) {
         AbilityHost h;
-        h.anim_clip = [count, fps](ObjectId id, int32_t type, std::string_view, uint32_t& n, float& f) {
+        h.anim_clip = [count, fps](ObjectId id, int32_t type, std::string_view, uint32_t, uint32_t& n, float& f) {
             if (id != 1 || type != 0x5a) return false;
             n = count;
             f = fps;
@@ -2975,7 +2975,7 @@ float oi_berserker_damage(uint32_t count) {
     w.make(GameMode::Land);
     if (count > 0) {
         AbilityHost h;
-        h.anim_clip = [count](ObjectId id, int32_t type, std::string_view, uint32_t& n, float& f) {
+        h.anim_clip = [count](ObjectId id, int32_t type, std::string_view, uint32_t, uint32_t& n, float& f) {
             if (id != 1 || type != 0x68) return false;
             n = count;
             f = 30.0f;
@@ -3298,6 +3298,111 @@ void test_save_load_battle() {
                 saved.abilities.size(), saved.combat.size(), kBefore, counting, active, kAfter, events);
 }
 
+// OI follow-up t01 / t03 (ABILITIES_HARDPOINTS §4.14, A1_READINGS §28.9): a Sith with Force_Lightning (FL_Attack 0x28: a
+// 32-frame 30 fps clip when `clips`), FORCE_SIGHT and HUNT; troopers 2, 3 in range. `script_lock` is the host's share.
+void oi_gate_world(OiWorld& w, bool clips, const bool* script_lock) {
+    SpecialAbilityDesc l = oi_special("Lightning", SpecialClass::ForceLightning, ActivationStyle::UserInput);
+    l.max_range = 300.0f;
+    l.max_targets = 1;
+    l.targets_radius = 10.0f;
+    const uint32_t ls = add_special(w.ad, l);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kForceLightning, 0.0f, 30.0f, "Lightning"), rec(kForceSight, 0.0f, 0.0f), rec(kHunt, 0.0f, 0.0f)};
+    a.specials = {ls};
+    const uint32_t ud = push(w.cd, w.ad, oi_unit("Sith", 100.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), AbilityObjectDesc{});
+    w.make(GameMode::Land);
+    AbilityHost h;
+    if (clips)
+        h.anim_clip = [](ObjectId, int32_t type, std::string_view, uint32_t, uint32_t& n, float& f) {
+            if (type != 0x28) return false;
+            n = 32;
+            f = 30.0f;
+            return true;
+        };
+    h.movement_locked = [script_lock](ObjectId id) { return id == 1 && script_lock && *script_lock; };
+    h.map_rect = [](Vec3& lo, Vec3& hi) {
+        lo = Vec3{-1000.0f, -1000.0f, 0.0f};
+        hi = Vec3{1000.0f, 1000.0f, 0.0f};
+        return true;
+    };
+    w.ab->set_host(std::move(h));
+    w.add(1, ud, 0, {0, 0, 0});
+    w.add(2, td, 1, {150, 0, 0});
+    w.add(3, td, 1, {150, 100, 0});
+}
+
+void test_oi_anim_gates_and_locks() {
+    const ObjectId one[] = {1};
+    // §4.14: the cast records FL_Attack for the clip's length (end = 32 - 2 = 30 frames, then idle). While it runs a
+    // second Lightning is refused and FORCE_SIGHT is busy (Can_Activate 0x34); afterwards both pass.
+    {
+        OiWorld w;
+        oi_gate_world(w, true, nullptr);
+        CHECK(w.ab->anim_type_at(1, w.frame) == -1 && w.ab->can_activate(1, kForceSight, false, false, w.frame));
+        CHECK(w.ab->targeted_ability(one, kForceLightning, 2, -1, w.frame) == 1);
+        w.tick();
+        CHECK(!w.sys->alive(2) && w.ab->anim_type_at(1, w.frame) == 0x28);
+        CHECK(!w.ab->can_activate(1, kForceSight, false, false, w.frame));
+        CHECK(w.ab->force_recharge(1, kForceLightning, 0.0f));
+        w.ab->targeted_ability(one, kForceLightning, 3, -1, w.frame);
+        w.tick();
+        CHECK(w.sys->alive(3));  // refused: FL_Attack still runs
+        int idle = 0;
+        for (int i = 1; i <= 40 && idle == 0; ++i) {
+            w.tick();
+            if (w.ab->anim_type_at(1, w.frame) == -1) idle = i;
+        }
+        CHECK(idle == 28);  // played at frame F; idle from F + 30 (two ticks already passed)
+        CHECK(!w.ab->can_activate(1, kForceSight, false, false, w.frame));  // the gates read the previous frame's advance
+        w.tick();
+        CHECK(w.ab->can_activate(1, kForceSight, false, false, w.frame));
+        CHECK(w.ab->force_recharge(1, kForceLightning, 0.0f));
+        CHECK(w.ab->targeted_ability(one, kForceLightning, 3, -1, w.frame) == 1);
+        w.tick();
+        w.tick();
+        CHECK(!w.sys->alive(3));
+    }
+    // No clip data: no record, every gate passes (the headless runs).
+    {
+        OiWorld w;
+        oi_gate_world(w, false, nullptr);
+        CHECK(w.ab->targeted_ability(one, kForceLightning, 2, -1, w.frame) == 1);
+        w.tick();
+        CHECK(!w.sys->alive(2) && w.ab->anim_type_at(1, w.frame) == -1 && w.ab->can_activate(1, kForceSight, false, false, w.frame));
+    }
+    // §28.9: HUNT cannot be switched on while movement is locked - by this system's share or by the host's (script lock).
+    {
+        bool script_lock = false;
+        OiWorld w;
+        oi_gate_world(w, false, &script_lock);
+        CHECK(w.ab->lock_movement(1, true, w.frame) && w.ab->immobilize_count(1) == 1);
+        w.ab->set_unit_ability_mode(one, kHunt, true, w.frame);
+        CHECK(!w.ab->is_active(1, kHunt));
+        CHECK(w.ab->lock_movement(1, false, w.frame) && w.ab->immobilize_count(1) == 0);
+        script_lock = true;
+        w.ab->set_unit_ability_mode(one, kHunt, true, w.frame);
+        CHECK(!w.ab->is_active(1, kHunt));
+        script_lock = false;
+        CHECK(w.ab->set_unit_ability_mode(one, kHunt, true, w.frame) == 1 && w.ab->is_active(1, kHunt));
+    }
+    // Save v2: the animation record round-trips (write -> read -> write, same hash, same view).
+    {
+        OiWorld a, b;
+        oi_gate_world(a, true, nullptr);
+        oi_gate_world(b, true, nullptr);
+        CHECK(a.ab->targeted_ability(one, kForceLightning, 2, -1, a.frame) == 1);
+        for (int i = 0; i < 5; ++i) a.tick();
+        const SavedBattle saved = save_battle(*a.sys, *a.ab, a.rng);
+        CHECK(load_battle(*b.sys, *b.ab, b.rng, saved));
+        b.frame = a.frame;
+        const SavedBattle again = save_battle(*b.sys, *b.ab, b.rng);
+        CHECK(again.abilities == saved.abilities);
+        CHECK(battle_digest(*a.sys, *a.ab, a.rng) == battle_digest(*b.sys, *b.ab, b.rng));
+        CHECK(b.ab->anim_type_at(1, b.frame) == 0x28 && b.ab->anim_type_at(1, b.frame + 30) == -1);
+    }
+}
+
 // Land mines (spawn requests, mines, pending events) saved between the apply tick and the host's spawn step.
 struct MineScene {
     OiWorld w;
@@ -3590,6 +3695,103 @@ void test_hardpoint_online_effects() {
 // hit attaches it with the shooter's parameters, spread after Seconds_To_Infect x FPS consecutive frames in range (enemy
 // of the infecting player, Infection_CategoryMask, Distance_To_Infect), Damage_Per_Second once a second, expiry after
 // Duration_Of_Infection (suspend), resume by a spread / the API, the death-clone key 20 only while active, save round trip.
+// S8 t04 (docs/re/LOB_SOLVER.md §3.4 / §3.5, TACTICAL_GAPS §2.3.5): Grenade_Attack and Remote_Bomb need a lob solution
+// to apply, and both toss their (sticky) projectile from the unit through the spawner's grenade branch.
+ProjectileDesc lob_sticky_bomb() {
+    ProjectileDesc g;
+    g.name = "Proj_Sticky_Bomb";
+    g.max_speed = 15.0f;
+    g.lobbed = true;
+    g.category = ProjectileCategory::Grenade;
+    g.grenade_gravity = 1.0f;
+    g.lob_mod = 1.0f;  // G = 1, reach 225 on flat ground
+    g.can_lob_slower = true;
+    g.sticks_on_collision = true;
+    g.max_lifetime = 900.0f;
+    g.blast_area_damage = 30.0f;
+    g.blast_area_range = 20.0f;
+    return g;
+}
+
+void test_lob_abilities() {
+    for (const bool reachable : {true, false}) {  // Grenade_Attack
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+        g.max_range = 200.0f;
+        g.projectile = 0;
+        g.fuse_time = 2.0f;
+        const uint32_t gs = add_special(w.ad, g);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+        a.specials = {gs};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        // In range either way (80 / 100 XY); the second sits 300 up: v^2 < G h, no arc -> the apply refuses.
+        w.add(2, td, 1, reachable ? Vec3{80, 0, 0} : Vec3{100, 0, 300});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 5 && w.sys->projectile_count() == 0; ++i) w.tick();  // apply, then the throw (Spawn_Frame 0)
+        if (!reachable) {
+            for (int i = 0; i < 30; ++i) w.tick();
+            CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kStickyBomb) == 0);
+            continue;
+        }
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() != 1u) continue;
+        const ProjectileView pv = w.sys->projectile(0);
+        CHECK(pv.lob && pv.target == 2 && pv.pos.x == 0.0f && pv.pos.z == 0.0f);  // tossed from the unit
+        int guard = 0;
+        while (w.sys->projectile_count() > 0 && !w.sys->projectile(0).stuck && guard++ < 100) w.tick();
+        CHECK(w.sys->projectile_count() == 1u && w.sys->projectile(0).stuck_to == 2);
+        CHECK(w.sys->health(2) == w.sys->max_health(2));  // sticking does no damage
+        while (w.sys->projectile_count() > 0 && guard++ < 200) w.tick();
+        CHECK(w.sys->health(2) < w.sys->max_health(2));  // the 2 s timer set it off
+    }
+    for (const bool reachable : {true, false}) {  // Remote_Bomb
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc r = oi_special("Remote", SpecialClass::RemoteBomb, ActivationStyle::UserInput);
+        r.max_range = 200.0f;
+        r.projectile = 0;
+        const uint32_t rs = add_special(w.ad, r);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kPlaceRemoteBomb, 0.0f, 30.0f, "Remote"), rec(kDetonateRemoteBomb, 0.0f, 0.0f)};
+        a.specials = {rs};
+        UnitDesc bd = oi_unit("Bomber", 100.0f);
+        bd.ranged_target_z_adjust = 4.0f;
+        const uint32_t ud = push(w.cd, w.ad, bd, a);
+        UnitDesc tdesc = oi_unit("Tank", 100.0f);
+        tdesc.ranged_target_z_adjust = 6.0f;
+        const uint32_t td = push(w.cd, w.ad, tdesc, AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        w.add(2, td, 1, reachable ? Vec3{120, 0, 0} : Vec3{100, 0, 300});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        w.tick();
+        if (!reachable) {
+            for (int i = 0; i < 30; ++i) w.tick();
+            CHECK(w.sys->projectile_count() == 0u);
+            continue;
+        }
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() != 1u) continue;
+        const ProjectileView pv = w.sys->projectile(0);
+        // From the unit (+ its own Ranged_Target_Z_Adjust), not from the target point.
+        CHECK(pv.lob && pv.pos.x == 0.0f && pv.pos.y == 0.0f && pv.pos.z == 4.0f);
+        int guard = 0;
+        while (!w.sys->projectile(0).stuck && guard++ < 100) w.tick();
+        CHECK(w.sys->projectile(0).stuck && w.sys->projectile(0).stuck_to == 2);
+        for (int i = 0; i < 60; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 1u && w.sys->health(2) == w.sys->max_health(2));  // waits for the trigger
+        CHECK(w.ab->set_unit_ability_active(1, kDetonateRemoteBomb, true, w.frame));
+        CHECK(w.sys->projectile_count() == 1u && !w.sys->projectile(0).alive);  // detonated (flushed next tick)
+    }
+}
+
 void test_infection() {
     {  // XML -> SpecialAbilityDesc -> UnitDesc::infection
         const data::XmlDocument doc = data::XmlDocument::parse(
@@ -3756,6 +3958,7 @@ int main(int argc, char** argv) {
     test_last_hardpoint_kills();
     test_death_clone_remap();
     test_infection();
+    test_lob_abilities();
     test_fire_and_decay();
     test_energy();
     test_ion_stun();
@@ -3794,6 +3997,7 @@ int main(int argc, char** argv) {
     test_oi_berserker_speed();
     test_oi_stun_over_water();
     test_oi_anim_timings();
+    test_oi_anim_gates_and_locks();
     test_battle(golden, write_golden);
     test_allocations();
     test_save_load_battle();  // N1 stage 2
