@@ -130,8 +130,8 @@ struct TfRec {
 };
 
 // Ambush: S7 t21 SpaceAmbushBlockStatus (AI_TACTICAL §7.3.1); Ability: S7 t15 A1 AbilityBlockStatus of the task-force
-// Activate_Ability (MOVEMENT §3.1.1 step 6).
-enum class StatusKind : uint8_t { Done, Failed, ProduceForce, Move, AttackTarget, Guard, SpaceReinforce, Ambush, Ability };
+// Activate_Ability (MOVEMENT §3.1.1 step 6). Reinforce: a1j t01 land ReinforceBlockStatus with landings in flight.
+enum class StatusKind : uint8_t { Done, Failed, ProduceForce, Move, AttackTarget, Guard, SpaceReinforce, Ambush, Ability, Reinforce };
 
 struct StatusRec {
     int32_t id = -1;
@@ -158,6 +158,11 @@ struct StatusRec {
     uint32_t plan_frame = 0;
     bool lists = false;
     std::vector<int32_t> members, moving;
+    // a1j t01 - land ReinforceBlockStatus (A1_READINGS §36): the landings in flight as (pool key, company type), order
+    // issued (in-flight count +0x40 = its size); the plan's removable flag saved at the order (+0x44), restored when the
+    // last landing reports; Result = `result` set at the order (+0x45: every pending unit placed).
+    std::vector<std::pair<int32_t, int32_t>> landings;
+    bool saved_removable = true;
 };
 
 struct PlanInstance {
@@ -450,6 +455,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     void service_statuses(int32_t player);
     bool step_status(StatusRec& s);
     void space_reinforce_poll(StatusRec& s);  // refixf t06: SpaceReinforceBlockStatus IsFinished (AI_TACTICAL §7.4)
+    void reinforcements_unloaded(const std::vector<ReinforcementsUnloaded>& recs);  // a1j t01: signal 0x19 (0x6a1440)
     void claim_force(TfRec& t);
     // skai: the TF's pad picks (PpSource::Build) of its plan's PotentialPlan as reservations, for a Build / Build_All
     // that runs without a Produce_Force first (BuildEconStructure.lua) [M: retail's TF holds the reservations from plan
@@ -1231,6 +1237,11 @@ void TacticalAiWorld::Impl::units_lost(TfRec& t) {
         if (counted_entry_type(e.type)) return;
     for (const auto& [type, builder] : t.producing)
         if (counted_entry_type(type)) return;
+    // a1j t01: a company still in its landing (0x6ee010 put its type entries on the TF +0x60 vector at the order, 0x5f9fd0).
+    for (const auto& [id, s] : statuses)
+        if (s.kind == StatusKind::Reinforce && !s.finished && s.tf == t.id)
+            for (const auto& [key, type] : s.landings)
+                if (counted_entry_type(type)) return;
     decide(t.player, "tf " + t.name + " no units remaining");
     const TfRec copy = t;
     tf_event(copy, "No_Units_Remaining", {}, true);
@@ -1943,6 +1954,7 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             return finish(true);
         }
         case StatusKind::SpaceReinforce: return false;  // refixf t06: advanced only by the Lua poll (status_finished)
+        case StatusKind::Reinforce: return false;       // a1j t01: advanced by the signal 0x19 records (reinforcements_unloaded)
         case StatusKind::Ambush:
         case StatusKind::Ability: return false;  // S7 t21 / S7 t15 A1: advanced by the object signals (status_signals)
         case StatusKind::AttackTarget: {
@@ -2586,6 +2598,7 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
         return r.type < 0 || std::none_of(pool.begin(), pool.end(), [&r](const TacticalReinforcement& e) { return e.key == r.key; });
     };
     uint32_t spawned = 0;
+    std::vector<std::pair<int32_t, int32_t>> in_flight;  // a1j t01: (key, type) of the timed landings this call issued
     auto land = [&](const TacticalReinforcement& r, const Vec3f& spot) {
         // a1g t04 follow-up: the mode's drop validity (TacticalAiHost::land_drop_ok); a refused spot is not ordered.
         if (!host.land_drop_ok(t->player, r.key, spot)) {
@@ -2600,6 +2613,12 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
         if (order(t->player, ev, std::string(cfg.campaign ? "campaign" : "skirmish") + " reinforce " + type_name(r.type) + at + " (tf " + t->name + ")") !=
             cmd::RejectReason::None)
             return false;
+        // a1j t01 (A1_READINGS §36): the company is inside a landing object that unloads it over the next seconds; the
+        // status listens for its signal 0x19 (in-flight count + 1) and the units join the TF then (0x6a1440).
+        if (host.reinforce_in_flight(t->player, r.key)) {
+            in_flight.emplace_back(r.key, r.type);
+            return true;
+        }
         const auto owned = store.owned_by(t->player);
         for (size_t k = before; k < owned.size(); ++k)
             if (store.active(owned[k]) && store.has_behavior(owned[k], objects::beh::Locomotor)) {
@@ -2610,7 +2629,60 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
         return true;
     };
     const bool placed_all = reinforce_place(points, t->pending, cap >= 0.0f ? remaining : HUGE_VALF, is_null, land);
-    return new_status(t->plan, tf, placed_all ? StatusKind::Done : StatusKind::Failed);
+    if (in_flight.empty()) return new_status(t->plan, tf, placed_all ? StatusKind::Done : StatusKind::Failed);
+    // a1j t01 - ReinforceBlockStatus init 0x6a1120 / IsFinished 0x6a11d0 / Result 0x6a1a50 (A1_READINGS §36): unfinished
+    // while a landing is in flight; Result = every pending unit placed (0x6eaf60's return, kept at the order). While it
+    // waits the plan is not goal-system removable (+0x44 = the plan's flag, then cleared); the last landing restores it.
+    const int32_t id = new_status(t->plan, tf, StatusKind::Reinforce);
+    StatusRec& s = statuses[id];
+    s.landings = std::move(in_flight);
+    s.result = placed_all ? lua::AiStatusResult::True : lua::AiStatusResult::False;
+    if (const auto pit = plans.find(t->plan); pit != plans.end()) {
+        s.saved_removable = !pit->second.non_removable;
+        pit->second.non_removable = true;
+    }
+    return id;
+}
+
+// a1j t01 - the ReinforceBlockStatus signal handler 0x6a1440 (A1_READINGS §32.1 / §36) for each signal 0x19 record of the
+// tick, in order. The status that issued the landing of `key` for `player` drops it from its in-flight list; when its owner
+// is a live task force each unloaded unit in list order joins it (Add_Force, land 0x6e9240: off the free store) and its
+// plan's PP (0x6bf3d0). When the list empties the status finishes with the Result set at the order and the plan's
+// removable flag is restored (IsFinished 0x6a11d0). [port] The members stand for their team: the port's task forces hold
+// members (the original adds the TEAM container once); only units the untimed scan would take join (alive, the player's,
+// with a locomotor), and a unit another task force already holds stays there. A record no status waits for is ignored.
+void TacticalAiWorld::Impl::reinforcements_unloaded(const std::vector<ReinforcementsUnloaded>& recs) {
+    for (const ReinforcementsUnloaded& rec : recs) {
+        StatusRec* s = nullptr;
+        size_t at = 0;
+        for (auto& [id, st] : statuses) {
+            if (st.kind != StatusKind::Reinforce || st.finished || script_player(st.plan) != rec.player) continue;
+            const auto it = std::find_if(st.landings.begin(), st.landings.end(), [&rec](const std::pair<int32_t, int32_t>& e) { return e.first == rec.key; });
+            if (it == st.landings.end()) continue;
+            s = &st;
+            at = static_cast<size_t>(it - st.landings.begin());
+            break;
+        }
+        if (!s) continue;
+        const int32_t type = s->landings[at].second;
+        s->landings.erase(s->landings.begin() + static_cast<std::ptrdiff_t>(at));
+        if (TfRec* t = tf_rec(s->tf)) {
+            PlayerAi* pa = player_ai(t->player);
+            for (const int32_t oid : rec.units) {
+                const ObjectHandle h = store.find(oid);
+                if (!unit_ok(h, t->player) || !store.has_behavior(h, objects::beh::Locomotor) || tf_owns(h)) continue;
+                if (pa) pa->fs.remove(oid);
+                t->units.push_back(h);
+                reinforce_joined(*t, oid, type);
+            }
+            decide(t->player, "tf " + t->name + ": reinforcements unloaded " + type_name(type) + " (" + std::to_string(rec.units.size()) +
+                                  " units, " + std::to_string(s->landings.size()) + " in flight)");
+        }
+        if (s->landings.empty()) {
+            s->finished = true;
+            if (const auto pit = plans.find(s->plan); pit != plans.end()) pit->second.non_removable = !s->saved_removable;
+        }
+    }
 }
 
 bool reinforce_join_pp(std::vector<TacticalPpPick>& picks, int32_t unit, int32_t type, int32_t tf, TacticalPpPick* filled) {
@@ -3102,6 +3174,7 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     w.refresh();
     w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
     w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
+    w.reinforcements_unloaded(w.host.reinforcements_unloaded());  // a1j t01: signal 0x19 (land landings)
     w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
     const bool enabled = w.gate.enabled(ai_mode_of(w.cfg.mode));
     for (auto& pa : w.ai)
@@ -3269,10 +3342,11 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 7;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
+constexpr uint32_t kTacticalAiSaveVersion = 8;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
                                                  // 5: refixf t06 space reinforcement status fields; 6: a1g t01 PP+0x100,
                                                  // entry +0x30 moved into the free store; 7: S7 t20/t21/t15 A1 (no had_units /
-                                                 // no_units_sent; ambush / ability status fields)
+                                                 // no_units_sent; ambush / ability status fields); 8: a1j t01 land
+                                                 // reinforcement status (landings in flight, saved removable flag)
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
@@ -3280,7 +3354,7 @@ constexpr size_t kSlotBytes = io::kTargetBytes + 5;
 constexpr size_t kPlanBytes = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 3 + 4 + 1;
 constexpr size_t kTfBytes = 4 + 4 + 4 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 4;
 constexpr size_t kReinforcementBytes = 4 + 4 + 4 + 4 + 4 + 1 + 4;
-constexpr size_t kStatusBytes = 4 + 4 + 4 + 1 + 1 + 1 + 8 + 8 + 12 + 4 + 12 + 8 + 4 + 1 + 1 + 4 + 4 + 4 + 1 + 4 + 4;
+constexpr size_t kStatusBytes = 4 + 4 + 4 + 1 + 1 + 1 + 8 + 8 + 12 + 4 + 12 + 8 + 4 + 1 + 1 + 4 + 4 + 4 + 1 + 4 + 4 + 4 + 1;
 
 void put_handle(ByteWriter& w, const objects::ObjectStore& st, ObjectHandle h) {
     w.u64(h.value);
@@ -3638,6 +3712,8 @@ void TacticalAiWorld::write(ByteWriter& w) const {
             io::put_count(w, v->size());
             for (const int32_t oid : *v) w.i32(oid);
         }
+        put_pairs(w, s.landings);  // a1j t01
+        w.boolean(s.saved_removable);
     }
     // ---- PotentialPlans + reservations ----
     io::put_count(w, m.pps.size());
@@ -3910,7 +3986,7 @@ bool TacticalAiWorld::read(ByteReader& r) {
             const uint8_t kind = r.u8();
             s.finished = r.boolean();
             const uint8_t result = r.u8();
-            if (kind > static_cast<uint8_t>(StatusKind::Ability) || result > static_cast<uint8_t>(lua::AiStatusResult::False)) r.fail();
+            if (kind > static_cast<uint8_t>(StatusKind::Reinforce) || result > static_cast<uint8_t>(lua::AiStatusResult::False)) r.fail();
             s.kind = static_cast<StatusKind>(kind);
             s.result = static_cast<lua::AiStatusResult>(result);
             s.started = r.i64();
@@ -3930,6 +4006,8 @@ bool TacticalAiWorld::read(ByteReader& r) {
                 v->resize(io::count(r, 4));
                 for (int32_t& oid : *v) oid = r.i32();
             }
+            if (!get_pairs(r, s.landings)) return io::bad(r);  // a1j t01
+            s.saved_removable = r.boolean();
             if (!r.ok() || s.id < 0 || s.id >= next[2] || (!new_statuses.empty() && new_statuses.rbegin()->first >= s.id))
                 return io::bad(r);
             const int32_t id = s.id;

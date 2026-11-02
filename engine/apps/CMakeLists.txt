@@ -221,6 +221,8 @@ if(_alamo_sim)
     # reserves no longer count (BT §3.1a [H]) and the land AI loads every plan folder (AI_GALACTIC §1.9.1), so SpaceMode\RetreatPlan
     # serves Land_Retreat: seeds 1-12 all end with the Rebel attacker retreating (seed 1 at 4080; A1_READINGS §34). S7/S8 wave 5
     # (2026-11-02): main's worker-count run moved to seed 6 (ends by the Rebel retreat), so seeds 6 and 1 are checked here.
+    # a1j t01 / t02 (2026-11-02): with the timed landing unload, the Reinforce in-flight wait and the giant-vehicle push
+    # (A1_READINGS §36) seeds 1-12 still end (Rebel retreats, frames 2241-2991).
     # One entry per seed, so a change that stalls only some seeds is caught. The worker-count identity of this path is the
     # foc_land_campaign golden run.
     foreach(_seed 6 1)
