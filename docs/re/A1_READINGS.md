@@ -997,6 +997,22 @@ the verdict is **change**.
   validity of TACTICAL_GAPS §4.2 (passability, fog, footprint free) never refuses a spot and every Reinforce lands on
   the first spot of the best point. The Utapau land skirmish (foc-land) then runs to the 14400-frame battle cap on
   seeds 1, 2, 4, 6 (ends on 3, 5); before the change only seed 3 reached the cap.
+- **Ring spot count from the disassembly (a1g follow-up, 2026-11-01): nine spots per point [H].**
+  - θ lives in xmm6. It is reset to 0 (xmm9, `xorps` at 0x6eb115) for each point at 0x6eb361.
+  - Each try ends with `addss xmm6, [0x140b3adb8]` at 0x6eb56a, then `comiss xmm11, xmm6` and `ja 0x6eb380`, so the
+    loop continues while limit > θ (strict `<`). This also runs after a failed landing. The test is at the loop's end,
+    so the θ = 0 try always runs; the only exits before it are the cap and pending-list checks at 0x6eb380.
+  - θ is accumulated, not recomputed as i·step. All the math is SSE single precision (`addss` / `comiss` /
+    `mulss`); there is no x87 code in 0x6eaf60.
+  - Step 0x140b3adb8 is a function static, set once at 0x6eb6f8: `movss` float π (0x1408007dc = 0x40490fdb) then
+    `divss` 4.0 (0x1408007e0), giving 0x3f490fdb = 0.78539819.
+  - Limit xmm11 = [0x140819b3c] = 0x40c90fdb = float(2π) = 6.28318548 (loaded at 0x6eb323).
+  - Float accumulation gives θ = 0, 0x3f490fdb, …, 0x40afeddf (7π/4), then **0x40c90fda = 6.28318501**, one ulp below
+    the limit, so a ninth try runs. The next value, 7.0685830, ends the loop.
+  - The ninth spot uses cos ≈ 1 and sin ≈ −1.7e-7 of θ (calls 0x776150 / 0x776650). The direct-value shortcut, taken
+    when the float exponent field is ≤ 0x1d000000, applies only to θ = 0. So the ninth spot is about the first spot
+    again but not bit-identical.
+  - The port's nine-spot loop matches. Its constants must be these exact bit patterns, with θ accumulated in float.
 
 ### 30.8 TF link mask −1 → **keep** (equal to shipped data); parsing optional (small)
 
