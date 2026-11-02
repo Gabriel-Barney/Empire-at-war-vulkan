@@ -237,32 +237,9 @@ struct GalPp {
 
     // ---- contrast helpers (0x6c5de0 / 0x72ac70 / 0x6c4b20) ----
     double enemy_strength(bool space, uint64_t mask) const {
-        // 0x5f2430 [M: the PlanetForce Enemy totals of AI_GALACTIC_TOKENS §2; stand-ins as there]
-        const gal::PlanetState& ps = w.sim.planets()[static_cast<size_t>(target)];
-        const objects::ObjectStore& st = w.store;
-        double s = 0.0;
-        auto hostile = [&](int32_t o) { return o >= 0 && w.sim.is_hostile(player, o); };
-        if (space) {
-            for (const uint32_t f : ps.orbit) {
-                if (f >= w.sim.fleets().size()) continue;
-                const gal::FleetState& fl = w.sim.fleets()[f];
-                if (!fl.alive || fl.moving || !hostile(fl.owner)) continue;
-                for (const ObjectHandle u : fl.contents)
-                    if (st.alive(u) && (w.mask_of(st.type(u)) & mask) != 0) s += w.power_of(st.type(u));
-            }
-            // The starbase's per-tech members (Starting_Spawned_Units_Tech_N of the owner's tech level) by category; the
-            // untyped total (mask = all, the Node_Weight helper 0x5f2430) also holds its own AI_Combat_Power, a typed
-            // row never does (GALACTIC_ECONOMY §6.2, AI_GALACTIC_TOKENS §2) [port: member lists from the type data].
-            if (hostile(ps.owner) && ps.starbase && st.alive(ps.starbase))
-                s += galactic_ai_structure_force(w.sim, w.tinfo, static_cast<uint32_t>(st.type(ps.starbase)), ps.owner, mask);
-        } else {
-            for (const ObjectHandle u : ps.surface)
-                if (st.alive(u) && hostile(st.owner(u)) && (w.mask_of(st.type(u)) & mask) != 0) s += w.power_of(st.type(u));
-            if (hostile(ps.owner))  // ground structures: per-tech members; the untyped total adds their own power [port]
-                for (const ObjectHandle u : ps.structures)
-                    if (st.alive(u)) s += galactic_ai_structure_force(w.sim, w.tinfo, static_cast<uint32_t>(st.type(u)), ps.owner, mask);
-        }
-        return s;
+        // 0x5f2430 (galactic_ai_enemy_strength): the members-only leaf Target.EnemyForce.<layer>TotalUnnormalized, plus the
+        // structures' own AI_Combat_Power in the untyped totals only; a typed row is the leaf with the row's mask [M].
+        return galactic_ai_enemy_strength(w.sim, w.tinfo, static_cast<PlanetIndex>(target), player, space, mask);
     }
     float weight(uint32_t t, int32_t row) const {  // 0x5f1f90 x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3)
         if (!w.cfg.contrast || row < 0) return 0.0f;
