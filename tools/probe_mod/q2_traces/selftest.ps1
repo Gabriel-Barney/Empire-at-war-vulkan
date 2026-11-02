@@ -6,6 +6,7 @@ Q2 kit self-test, no game needed. Never touches the real game folder.
      restores the exact tree, a second cleanup is a no-op, a modified probe file is kept unless -Force,
      a Mods folder created by the install is removed again
   4. run_trace.ps1 preflight refuses a folder whose StarWarsG.exe is not FoC 1.121 (exit 20, nothing changed)
+  5. Lua probe: q2lua_reader.py selftest and selftest_lua.py (canary files: install + cleanup in step 3)
 Exit 0 = all passed.
 #>
 . (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'q2common.ps1')
@@ -51,6 +52,12 @@ Install-Q2Mod -GameRoot $fake -ManifestPath $mp -Manifest $m -DryRun
 Check ((Tree $fake) -eq $before) 'install dry run changes nothing'
 Install-Q2Mod -GameRoot $fake -ManifestPath $mp -Manifest $m
 Check (Test-Path -LiteralPath (Join-Path $fake 'corruption\Mods\Q2Trace\Data\Scripts\Story\Q2_Trace_Galactic.lua')) 'install copies the probe'
+$cs = Get-Q2CanaryState $fake
+Check ($cs.galactic -like 'present*' -and $cs.scoring -like 'present*') 'install copies both canary files'
+# the game deletes a canary when its script calls _CustomScriptMessage (here: the galactic one)
+Remove-Item -LiteralPath (Join-Path $fake "corruption\Mods\Q2Trace\$($Q2Canaries.galactic)")
+$cs = Get-Q2CanaryState $fake
+Check ($cs.galactic -like 'deleted*' -and $cs.scoring -like 'present*') 'canary state: galactic deleted, scoring present'
 $threw = $false
 try { Install-Q2Mod -GameRoot $fake -ManifestPath $mp -Manifest $m } catch { $threw = $true }
 Check $threw 'second install into an existing Q2Trace folder is refused'
@@ -92,6 +99,12 @@ Write-Q2Json $mp3 $m3
 Install-Q2Mod -GameRoot $fake2 -ManifestPath $mp3 -Manifest $m3
 Check ((Run-Cleanup @('-RunDir', $run3)) -eq 0) 'no-Mods case: cleanup exit 0'
 Check ((Tree $fake2) -eq $before2) 'no-Mods case: Mods folder removed again'
+
+# 5. Lua probe: record parser / outputs, and both probe scripts under stock Lua 5.0.2 (SKIPPED without the toolchain)
+& $Q2Python -I (Join-Path $Q2Kit 'q2lua_reader.py') selftest | Out-Null
+Check ($LASTEXITCODE -eq 0) 'q2lua_reader.py selftest'
+& $Q2Python -I (Join-Path $Q2Kit 'selftest_lua.py') | Out-Null
+Check ($LASTEXITCODE -eq 0) 'selftest_lua.py (probe scripts under Lua 5.0.2, live memory scan)'
 
 # 4. preflight refuses an unknown exe and changes nothing
 $before = Tree $fake
