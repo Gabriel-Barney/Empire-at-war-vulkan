@@ -30,7 +30,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 6;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate
+constexpr uint32_t kMovementSaveVersion = 7;  // 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate
 
 // u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
 template <class F>
@@ -302,6 +302,15 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.f32(d.alt_max_speed);
     io.f32(d.alt_turn_rate);
     io.f32(d.deployment_anim_rate);  // S8 t11 (version 5)
+    io.b(d.turret);  // S8 t24 (version 7)
+    io.f32(d.turret_speed);
+    io.f32(d.turret_extent);
+    io.f32(d.turret_deployed_extent);
+    for (size_t k = 0; k < 3; ++k) {
+        io.f32(d.turret_rest[k]);
+        io.f32(d.turret_deployed_rest[k]);
+    }
+    io.f32(d.turret_rest_delay);
 }
 
 template <class IO, class T>
@@ -438,6 +447,13 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.i32(u.dclip);
     io.u32(u.dclip_start);
     io.f32(u.dclip_pos0);
+    for (size_t k = 0; k < 3; ++k) {  // S8 t24 (version 7)
+        io.f32(u.tcur[k]);
+        io.f32(u.ttgt[k]);
+    }
+    io.f32(u.tidle);
+    io.b(u.thold);
+    io.b(u.taim);
     io_fighter(io, u.fs);
     io.f32(u.fp.max_thrust);
     io.f32(u.fp.min_follow_distance);

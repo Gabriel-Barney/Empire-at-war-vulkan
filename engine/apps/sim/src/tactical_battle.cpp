@@ -601,6 +601,18 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     movement_ = std::make_unique<mv::MovementSystem>(mc);
     // OI tactical: crush hostility = the combat relation (player +0x370 table, MOVEMENT.md 5.5).
     movement_->set_hostility([this](int32_t a, int32_t b) { return combat_ && combat_->is_enemy(a, b); });
+    // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): a Deploys unit's TURRET aims at its live current combat
+    // target (0x632050 [inferred: whenever the unit has one]); the raw position, no z adjust [inferred].
+    movement_->set_turret_aim_fn([this](objects::ObjectId id, float& x, float& y, float& z) {
+        if (!combat_ || !combat_->has_unit(id)) return false;
+        const tc::ObjectId t = combat_->current_target(id);
+        if (t == tc::kNoObject || !combat_->has_unit(t) || !combat_->alive(t)) return false;
+        const auto p = combat_->position(t);
+        x = p.x;
+        y = p.y;
+        z = p.z;
+        return true;
+    });
 #ifdef ALAMO_SIM_HAVE_ANIM
     // REMAINING_GAPS §4.3-4.7: special-locomotor anim lengths = the model's clip (variant 0) in sim frames (30 / s).
     movement_->set_anim_length_fn([this](objects::ObjectId id, int32_t type) -> uint32_t {

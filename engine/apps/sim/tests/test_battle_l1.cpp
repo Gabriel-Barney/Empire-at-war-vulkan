@@ -923,15 +923,21 @@ DeployRun run_deploy(const Data& d) {
         }
         if (dep == objects::kNoObjectId) continue;
         const objects::ObjectId ids[] = {dep};
+        // S8 t11: with the Walk locomotor Is_Active(DEPLOY) follows the walk state (0x19 Deployed), so it is read after the
+        // clip end (this model has no clip data: the clip ends in the next tick), not right after the request.
         if (f == 10) {  // applied in the next tick's ability phase: the signal is in frame 11's events
-            out.deployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 1 && b->abilities().is_active(dep, ab::kDeploy);
+            out.deployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 1;
             out.on_frame = f;
         }
-        if (f == 20) out.repeat_refused = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 0;
+        if (f == 20) {
+            out.deployed = out.deployed && b->abilities().is_active(dep, ab::kDeploy);
+            out.repeat_refused = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 0;
+        }
         if (f == 30) {
-            out.undeployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, false, f) == 1 && !b->abilities().is_active(dep, ab::kDeploy);
+            out.undeployed = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, false, f) == 1;
             out.off_frame = f;
         }
+        if (f == 40) out.undeployed = out.undeployed && !b->abilities().is_active(dep, ab::kDeploy);
         if (f >= 60) break;
     }
     return out;

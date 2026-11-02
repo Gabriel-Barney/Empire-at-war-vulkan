@@ -657,7 +657,7 @@ enum UnitFlag : uint32_t {
     kUnitWeaponsSuspended = 1u << 13,
     // S8 t08 (TACTICAL_COMBAT §3.1.1): the walk locomotor is in a deploy transition (state 0x18 Deploying or 0x1A
     // Undeploying, 0x39a400 / 0x39b2a0) - a Deploys unit with a locomotor neither fires its own weapon nor counts its
-    // weapon hardpoints down. Set by the host [port: the port's DEPLOY is instant, so nothing sets it yet].
+    // weapon hardpoints down. Set by the ability system from the Walk deploy window (S8 t11, TacticalBattle::oi_deploy_sync).
     kUnitDeployTransition = 1u << 14,
     // S8 t11 (TACTICAL_COMBAT §3.1.1 "Gate details" step 6), mirrored by the host from the locomotor before each tick:
     // locomotor state 0x1C (fighter Idle) - the own weapon holds fire unless Can_Fighter_Fire_When_Idle; and state 0x16
@@ -673,6 +673,11 @@ enum UnitFlag : uint32_t {
     // 0x4160a0 (a space fighter / squadron member with a formation record): its scan asks set_scan_range_query for the
     // cube R + Rr and for candidates beyond R. Mirrored by the host before every tick; derived state, not hashed.
     kUnitScanQuery = 1u << 18,
+    // S8 t25 (LOB_SOLVER §3.5 apply / release): TARGETING alone disabled (slot 9) - the Grenade_Attack / Remote_Bomb throw
+    // from the apply to the toss animation's end or interruption. The unit acquires no target (decide skipped); its
+    // targets are kept and the weapons are serviced as usual [M: whether retail's WEAPON fires at the kept target].
+    // Set / cleared by the ability system; saved and hashed with the other flags.
+    kUnitTargetingSuspended = 1u << 19,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
 inline constexpr uint32_t kUnitHostMirrorFlags = kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack | kUnitScanQuery;
