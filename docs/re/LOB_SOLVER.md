@@ -235,8 +235,59 @@ toss animation starts at speed 1.0.
 **Toss** 0x71a200: projectile type `Bomb_Type` (+0x188); bone = `Spawn_Bone` (+0x198) looked up on the unit's model
 (0x12d2a0); spawn request = (shooter = the unit, target = the target object, bone) → Spawn_Projectile 0x54ade0 (§5).
 **Only when a bomb was spawned** the PLACE_REMOTE_BOMB recharge (ability 0x40 = 64; 0x3a9840 → countdown 0x42fb70)
-starts. When the target is a ground-point MARKER (obj +0x343 ≠ −1), the marker is removed (0x391310(target, 1))
-[M: which removal path]. The bomb gets **no** BOMB timer: only DETONATE_REMOTE_BOMB sets it off (below).
+starts. When the target is a ground-point MARKER (obj +0x343 ≠ −1), the marker is removed (0x391310(target, 1));
+the removal path is answered in "MARKER removal" below (2026-11-02). The bomb gets **no** BOMB timer: only
+DETONATE_REMOTE_BOMB sets it off (below).
+
+**MARKER removal (2026-11-02)** [H unless tagged]. This answers the old "[M: which removal path]".
+- Order inside the toss 0x71a200: spawn; if a bomb spawned, start the recharge 0x3a9840(unit, 0x40); then, **whether
+  or not a bomb spawned**, a MARKER target is killed with 0x391310(marker, 1).
+- 0x391310 is the ordinary `Kill` (OBJECT_RUNTIME §2.2). It goes to `Destroy_Object` 0x2a64f0, which sets the dead
+  bit, removes the object from selections and queues a pending delete. The delete is flushed at the end of the frame.
+  Flag 1 enables death effects only when obj +0x3a2 & 0x20. `Dummy_Barrage_Target` has no death clone, explosion or
+  survivors, so nothing visible is expected [M on the visible effects].
+- The marker is `Dummy_Barrage_Target` (MISCOBJECTS.XML: MARKER behaviour, `Immune_To_Damage`, model
+  `w_smallbomb.alo`). Command 57's execute 0x429cb0 creates it with `Create_Object` for the issuing player
+  (ABILITIES_HARDPOINTS §2.9). `MarkerBehavior` (vtable 0x876da8; service 0x4c2f70 only reschedules itself) has
+  **no lifetime**.
+- **No toss, no removal.** The marker survives when the toss never happens:
+  - the update 0x719ee0 takes its interrupted branch (step 3 above);
+  - the target lookup 0x2aca60 returns null;
+  - or the apply is refused.
+
+  It then stays in the world until something else kills it. Only 0x71a200, 0x2a00b0 and 0x2a1eb0 kill MARKER targets.
+- [M] Whether the GUI issues command 57 for Remote_Bomb at all. Lua `Activate_Ability` lists type 64 as an
+  object-target ability (ABILITIES_HARDPOINTS §2.9).
+
+**Facing at apply (2026-11-02)** [H]. This applies to both Remote_Bomb apply 0x719c90 and Grenade_Attack 0x700860.
+- After a successful lob solve:
+  - angles = 0x20acd0(unit +0x78 → target +0x78). This uses the **raw target position**, without
+    `Ranged_Target_Z_Adjust`. Roll and pitch are zeroed: only the yaw is kept.
+  - 0x3a8710 **snaps** the unit to it at once. It writes obj +0x84…+0x8c and +0x90…+0x98 and sets obj +0x3a1 |= 1.
+    No turn rate is used. The snap is skipped when obj +0x3a0 & 0x10 (stunned / weapons disabled). The meaning of
+    +0x90 is [M].
+- Then:
+  - stop 0x3a9880 (locomotor vf +0x138(vf +0x188()));
+  - 0x426d50 and 0x39bcb0;
+  - lock 0x3a8e50(obj, 1). This increments the counter at obj +0x3a8; the first lock also calls 0x4261d0 / 0x424850
+    and 0x39bcb0.
+- The throw waits for the locomotor to stop (update step 1). It does **not** wait for the facing, and it does
+  **not re-face** the target at the toss: a target that moved after the apply is thrown at from the old facing.
+  The projectile still aims at the target's current position (§5).
+- Release (animation end or the interrupted branch):
+  - Enable TARGETING and the locomotor (vf +0xb8);
+  - unlock 0x3a8e50(obj, 0), which decrements the counter;
+  - signal 0x29.
+
+  The old facing is **not** restored.
+- Grenade_Attack only [M on the meaning]: when the unit has ABILITY_COUNTDOWN (slot byte obj +0x378) and
+  0x42f710(countdown, 0x16) > 0, the apply returns 1 **without** the face / stop / lock block.
+
+*For the implementer:*
+- Set yaw = atan2 to the target's raw position at apply, instantly, unless the unit is stunned.
+- Stop and lock movement; do not turn again at the throw; do not restore the facing at release.
+- Kill a MARKER target after the toss attempt, even when nothing spawned.
+- Leave the marker in place when the toss never happens.
 
 **Garrisoned thrower** [H]: Spawn_Projectile's garrison branch (§5.1) applies first: a shooter inside a container
 (obj +0x3a7) whose container type lists garrison fire bones (type +0x23a8) launches from a synced pick among those
@@ -250,7 +301,11 @@ whose type has `Friendly_Damage_Amount` (+0x23ec) > 0 (the stuck remote bombs):
 - then add the DEATH behaviour, run the projectile detonation 0x4c7f70 at the bomb's position, remove the bomb
   (0x391310).
 
-`Proj_Remote_Bomb` has `Friendly_Damage_Amount` 200, so its sweep also sees own units (§6.2) and it can stick to them.
+`Proj_Remote_Bomb` has `Friendly_Damage_Amount` 200, so its sweep also runs the own-player query (§6.2).
+
+**Correction (2026-11-02):** the old sentence said it "can stick to them" (own units in general), which is too wide.
+The own-player result is accepted only when it is the bomb's own target (TACTICAL_COMBAT §3.4, 2026-11-02 note). So
+a remote bomb sticks to an own unit only when that unit is the target.
 
 ### 3.6 Turret elevation (TurretBehaviorClass; also used by LobbingSuperweaponBehavior 0x631fe0)
 - Can-aim 0x631a00: if the turret's current weapon projectile is category 3, solve from the fire bone to the aim
@@ -324,6 +379,38 @@ The shared spawner used by WeaponBehavior (vf6 0x54d090), the abilities (Grenade
   two bones → a synced random point between them (3 draws); garrisoned shooter (obj +0x3a7) whose container type
   lists garrison fire bones (+0x23a8) → a synced pick among the bones within 60° of the target, which **replaces**
   the request's bone [H, 2026-11-02].
+- **Garrison fire bones in detail (2026-11-02)** [H].
+  - **Table.** The type model load 0x375380 builds it when `Num_Garrison_Guns` (type +0x23a8) ≠ 0:
+    - M = 0x12dca0(model) = the model's highest `_ALT` mesh index (renderable +0xc4, parsed from the mesh-name
+      suffix by 0x13f8c0);
+    - M entries of 0x18 bytes (a DynamicVector<int> each) at type +0x23a0, one per ALT a = 0…M−1;
+    - entry a holds, for i < `Num_Garrison_Guns`, the bone index of `FP_0<i>_ALT<a>` (i ≤ 9) or `FP_<i>_ALT<a>`
+      (i ≥ 10). A missing bone is stored as −1.
+  - **Use in `Spawn_Projectile` 0x54ade0.**
+    - The shooter has obj +0x3a7 set. The host is its parent, or the grandparent when the parent itself has a
+      parent (a team member).
+    - The host type's `Num_Garrison_Guns` must be ≠ 0. The host model's current ALT (+0xc4) must satisfy
+      0 ≤ alt < M (the bound check is `jge`). The table and that entry must be non-empty.
+    - T = the target object's position, or the request's ground point.
+    - Each bone with a valid world transform (0x12d2c0) is a candidate when the yaw of its x axis (matrix column 0)
+      is within 60° of the yaw from the host's position to T (0x20acd0; difference 0x20b100, wrapped to ±180).
+    - Pick: n ≥ 2 candidates → one synced `Get_Int(0, n−1)`; n = 1 → no draw. The chosen bone's matrix becomes the
+      launch transform and its translation the launch point.
+    - n = 0, or any gate above failing → the normal path: the request's own muzzle bone on the **shooter's** model.
+  - **Data.** `NB_Bunker` (`Garrison_Bunker_Template`, the only FoC garrison host with guns, 8 of them) has
+    `FP_00`…`FP_07` for ALT0–2. ALT3, the destroyed state, has none, and M = 3 excludes it, so a bunker in its
+    destroyed state uses the normal path.
+  - **WeaponBehavior of the garrisoned unit** (0x54d090). It is still serviced:
+    - It still needs its **own** muzzle bone count ≥ 1 (below), or there is no shot.
+    - The garrisoned flag only skips two gates: the animation-state gate 0x397040, and the gate on TURRET slot
+      +0x33d / 0x38f9e0.
+    - The unit's own muzzle flash and fire animation still run.
+    - The range is the targeting range × `Garrisoned_Max_Attack_Distance_Multiplier` (TACTICAL_COMBAT §2.2).
+- **Muzzle bones on FoC land models (2026-11-02)** [H]. Scan of the vanilla FoC XML with variants resolved, models
+  read from the FoC then EaW archives, bone names parsed from the ALO. All **415** types with WEAPON (in `Behavior`
+  or `LandBehavior`), a `Land_Model_Name` and a non-empty `Projectile_Types` have a `MUZZLEA_00` bone. No vanilla XML
+  sets `Muzzle_Bone_Name`. So the "bone count < 1 → never fires" rule below never triggers in vanilla FoC land
+  play; it matters only for mods.
 - **Target point Q**: with a target object → a team container is first replaced by its member nearest the launch point
   (0x404fc0; nearest the shooter's own container when the shooter sits in one with obj +0x33b ≠ −1; the hardpoint
   index is reset to −1, and no member → no shot); then Q = target position +
@@ -593,6 +680,25 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
 22. [M, follow-up] WeaponBehavior has **no range gate at fire time**: the request's travel override (+0x48) is the
     max attack range (0x3749d0 × (1 + list 8)); the range test is only the targeting slots'. The port keeps an XY
     range gate in `fire_unit_weapon`; confirm before removing it.
+    **Answered 2026-11-02** [H]:
+    - Neither the WeaponBehavior service 0x54d090 nor its energy check 0x54ad30 tests range. 0x54ad30 checks
+      only the `POWERED` energy cost (type +0x4b8).
+    - The gate is indirect. The own-weapon gate step 7 (TACTICAL_COMBAT §3.1.1) needs targeting state TD +0x18 = 4,
+      and the land targeting service `Service_Land` 0x634810 sets that state as follows:
+      - every targeting service, it tests the current target with slot 44 (`In_Max_Range`) and !slot 45 (inside
+        min range);
+      - in range and outside min range → state 4, or state 3 while a turret is not yet aimed / the unit is not yet
+        facing;
+      - otherwise → state 2, or the target is dropped for a deployed / deploying unit.
+    - TargetingBehavior's interval is 1 (slot 5 0x18ceb0), so the verdict is at most one service old. Within a
+      frame, the order of the TARGETING and WEAPON services follows the behaviour list [M]. For a grenade weapon,
+      slot 44 is `Lob_Solve` itself (§3.1).
+    - A fire-at-position order (TD +0x3c / +0x3d) bypasses the state test, so it has no range gate in the weapon
+      [M: the order's own movement brings it into range].
+
+    *Port:* replace the XY gate in `fire_unit_weapon` with "fire only while the targeting state is 4, as set by this
+    frame's (or the last) targeting pass using slot 44 / 45". The XY gate differs for grenades (no lob solve) and
+    for slot 43's footprint slack E.
 
 ---
 
@@ -602,8 +708,17 @@ Further differences found 2026-11-02 (input for S8 t06; port state as of 96c474e
   (§5.1), the Remote_Bomb toss (§3.5).
 - The readers of the turret "aimed" result (0x632050 / 0x631fe0 callers) [M: hold fire while 0].
 - Null-spawn bookkeeping of the other spawner users (Cluster_Bomb, lobbing superweapons, AttackAction) [M].
-- Which removal path the Remote_Bomb toss uses for a ground MARKER target (0x391310(target, 1)) [M].
-- The fire-time range gate (§8 item 22) [M].
+- Answered 2026-11-02:
+  - the MARKER removal path (§3.5, "MARKER removal");
+  - the facing at apply (§3.5, "Facing at apply");
+  - the garrison fire bones in detail (§5.1);
+  - muzzle bones on the FoC land models (§5.1);
+  - the fire-time range gate (§8 item 22: indirect, through targeting state 4).
+- Whether the GUI issues command 57 (MARKER target) for Remote_Bomb [M, **probe**]:
+  - Order a Remote_Bomb at bare ground, then interrupt the toss with a move order before frame 12 of BOMBTOSS.
+  - If a `w_smallbomb` marker stays visible at the spot, the GUI does use command 57, and the marker persists
+    after an interrupted toss.
+  - If no marker ever appears, ground targeting is not offered.
 - Whether the in-flight position can drift from Q in float (the closed form is evaluated in single precision; the
   hit is decided by the sweep, so a miss by a fraction of a unit only matters at the target's collision edge).
 - **probe** (optional): SPMAT firing at a target ~275 away on flat ground should show a ~64° arc landing in about
