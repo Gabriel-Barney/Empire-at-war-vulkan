@@ -529,6 +529,11 @@ enum class PreciseOutcome : uint8_t {
     Hit,
 };
 using PreciseHitFn = std::function<PreciseOutcome(const PreciseQuery&, PreciseResult&)>;
+// S8 t17 (FIGHTER_FLYING §4.10 A): the formation response-range test 0x4160a0(F, u, c, &Rr) of a kUnitScanQuery unit's
+// formation (its squadron's, or its own). candidate = kNoObject: c = none (the scan cube). `range` = the unit's own
+// Get_Max_Attack_Range R. Returns 0 (no response) or non-zero with rr = the response range Rr. Called from the parallel
+// gather phase: must be read-only and thread-safe.
+using ScanRangeFn = std::function<uint8_t(ObjectId unit, ObjectId candidate, float range, float& rr)>;
 
 // S8 t01 (TACTICAL_GAPS 3.1 slot 43): answer of the host's obstacle-cell query for a LAND_OBSTACLE target.
 enum class ObstacleCell : uint8_t {
@@ -664,9 +669,13 @@ enum UnitFlag : uint32_t {
     // (0x39b950 reads the per-type slot filled from every entry). The host mirrors the ability system's state; slots 0 / 1
     // are also read directly. Derived state: not hashed.
     kUnitRocketAttack = 1u << 17,
+    // S8 t17 (FIGHTER_FLYING §4.10 A, TACTICAL_COMBAT §2.2): the unit's formation answers the response-range test
+    // 0x4160a0 (a space fighter / squadron member with a formation record): its scan asks set_scan_range_query for the
+    // cube R + Rr and for candidates beyond R. Mirrored by the host before every tick; derived state, not hashed.
+    kUnitScanQuery = 1u << 18,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
-inline constexpr uint32_t kUnitHostMirrorFlags = kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack;
+inline constexpr uint32_t kUnitHostMirrorFlags = kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack | kUnitScanQuery;
 
 struct UnitSpawn {
     ObjectId id = kNoObject;
@@ -1116,6 +1125,19 @@ public:
     // refixf t07: the projectile segment query's per-entry test (precise model test, then the Collision_Box_Modifier
     // sphere). Unset: every tree-box hit is a hit (synthetic data without models).
     void set_precise_hit(PreciseHitFn fn) { precise_hit_ = std::move(fn); }
+    // ---- S8 t17: squadron targeting (FIGHTER_FLYING §4.10 A / B, TACTICAL_COMBAT §2.1 / §2.2) ----
+    // Scan cube Get_Scan_Range 0x566f50: a unit flagged kUnitScanQuery whose formation answers fn(unit, none) != 0 scans
+    // the cube R + Rr, and accepts a candidate beyond R (filter 9) when fn(unit, candidate) != 0. Every other unit: R
+    // ([port] land: no formations, so a land unit always scans R). Unset: R. Not saved (the host installs it at setup).
+    void set_scan_range_query(ScanRangeFn fn) { scan_range_ = std::move(fn); }
+    // Shared team target 0x406370: the squadron (container id) a member belongs to, kNoObject for none. Set by the host
+    // before every tick (derived state: not saved, not hashed). A member whose due scan picks a target while its own
+    // target is empty sets that target on every member (index order) that holds no live ordered target; Order_Attack on
+    // a member orders every member. A member's rescan switch changes only its own target. TeamTargeting (the container's
+    // own scan) runs for land team containers only, so squadrons get targets only from their members [port: no
+    // container units in combat, nothing to skip].
+    void set_share_group(ObjectId id, ObjectId group);
+    ObjectId share_group(ObjectId id) const;
     // Credit hooks for the repair (CampaignBattles: the galactic account). Unset: repairs are free [port].
     void set_credit_hooks(std::function<float(int32_t)> get, std::function<void(int32_t, float)> add) {
         credits_get_ = std::move(get);
@@ -1307,6 +1329,7 @@ private:
         uint16_t squad_seen = 0;
         uint8_t needs_scan = 0;  // phase C output
         uint8_t scan_due = 0;
+        ObjectId share_group = kNoObject;  // S8 t17: squadron of the shared team target (host, per tick)
     };
     struct Candidate {
         ObjectId id;
@@ -1461,6 +1484,7 @@ private:
     void decide_target(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);
     bool lock_holds(const Unit& u, const Unit& t) const;  // refixf t06: §2.8 B "while locked" drop rules
     bool promote_goal(Unit& u);                           // refixf t06: §2.8 B promotion
+    void share_target(const Unit& u, ObjectId t, float score);  // S8 t17: team target 0x406370 (scan writer)
     bool ability_type_active(const Unit& u, int32_t type) const;
     int32_t choose_target_hardpoint(const Unit& a, const Unit& t) const;
     int32_t closest_hardpoint(const Unit& t, Vec3 from, bool targetable_only) const;
@@ -1565,6 +1589,7 @@ private:
     std::vector<Repairer> repairs_;
     ObstacleCellFn obstacle_cell_;                              // OI tactical / S8 t01: LAND_OBSTACLE aim walk
     PreciseHitFn precise_hit_;                                  // refixf t07: projectile segment entry test
+    ScanRangeFn scan_range_;                                    // S8 t17: formation response range 0x4160a0
     std::function<ObjectId(ObjectId)> garrison_host_;           // S8 t10: garrison host query
     std::function<float(int32_t)> credits_get_;
     std::function<void(int32_t, float)> credits_add_;

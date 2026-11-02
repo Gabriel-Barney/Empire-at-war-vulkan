@@ -3990,6 +3990,7 @@ struct OwnOpt {
     float min_range = 0.0f;
     bool idle_fire = false, lobbing = false;
     int8_t weapons_enabled_flag = -1;  // ability slot 0's WEAPONS_ENABLED flag (-1: no ability)
+    float target_z_adjust = 0.0f;      // the target type's Ranged_Target_Z_Adjust
 };
 struct OwnWorld {
     World w;
@@ -4018,6 +4019,7 @@ struct OwnWorld {
         UnitDesc t;
         t.tactical_health = 1.0e7f;
         t.radius = 5.0f;
+        t.ranged_target_z_adjust = o.target_z_adjust;
         push_unit(w.data, t);
         CombatConfig cfg;
         cfg.mode = GameMode::Land;
@@ -4389,6 +4391,96 @@ void test_hardpoint_mode_default() {
     CHECK(g.run(90) > 0);
 }
 
+void test_own_weapon_aim_point() {
+    // S8 t17 [M/port] (0x54a270): the own weapon aims at the target position + its Ranged_Target_Z_Adjust (0x398440), so a
+    // level shot at a hover hull (collision box above its origin) climbs to the hull's centre.
+    OwnOpt opt;
+    opt.target_z_adjust = 12.0f;
+    OwnWorld o(opt, Vec3{100, 0, 0});
+    const std::vector<uint32_t> f = o.shot_frames(60);
+    CHECK(!f.empty());
+    bool seen = false;
+    for (size_t i = 0; i < o.w.sys->projectile_count(); ++i) {
+        const ProjectileView v = o.w.sys->projectile(i);
+        if (v.shooter != 1) continue;
+        seen = true;
+        const float want = 12.0f / std::sqrt(100.0f * 100.0f + 12.0f * 12.0f);
+        CHECK(std::fabs(v.dir.z - want) < 1.0e-4f);
+    }
+    CHECK(seen);
+}
+
+void test_scan_range_query() {
+    // S8 t17 (FIGHTER_FLYING §4.10 A, Get_Scan_Range 0x566f50): a kUnitScanQuery unit whose formation answers
+    // 0x4160a0(F, u, none) != 0 scans the cube R + Rr; a candidate beyond R is accepted only when 0x4160a0(F, u, c) != 0.
+    // Without the flag the query is never asked and the cube is R.
+    for (const int mode : {0, 1, 2}) {  // 0 no flag; 1 flag, c accepted; 2 flag, c refused
+        TargetWorld t;  // attacker R 1000
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{1500, 0, 0});  // beyond R, inside R + Rr (1800)
+        t.w.add(3, t.capital, 1, Vec3{0, 2500, 0});  // outside the cube
+        std::vector<ObjectId> asked;
+        t.w.sys->set_scan_range_query([&](ObjectId u, ObjectId c, float range, float& rr) -> uint8_t {
+            CHECK(u == 1 && range == 1000.0f);
+            asked.push_back(c);
+            rr = 800.0f;
+            return (c == kNoObject || mode == 1) ? 1 : 0;
+        });
+        if (mode != 0) t.w.sys->set_flag(1, kUnitScanQuery, true);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == (mode == 1 ? 2 : kNoObject));
+        CHECK(std::find(asked.begin(), asked.end(), 3) == asked.end());
+        if (mode == 0) CHECK(asked.empty());
+        if (mode != 0) CHECK(!asked.empty() && asked.front() == kNoObject && std::find(asked.begin(), asked.end(), 2) != asked.end());
+    }
+    {  // the formation does not answer (c = none -> 0): cube R, the far candidate is not even queried
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{1500, 0, 0});
+        std::vector<ObjectId> asked;
+        t.w.sys->set_scan_range_query([&](ObjectId, ObjectId c, float, float& rr) -> uint8_t {
+            asked.push_back(c);
+            rr = 800.0f;
+            return 0;
+        });
+        t.w.sys->set_flag(1, kUnitScanQuery, true);
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == kNoObject);
+        CHECK(asked.size() == 1 && asked[0] == kNoObject);
+    }
+}
+
+void test_shared_team_target() {
+    // S8 t17 (FIGHTER_FLYING §4.10 B, 0x406370): members 11 / 12 / 30 of squadron 50. 11 and 12 scanned before any enemy
+    // was there (their next scans are not due); 30 then scans with an empty target and picks 20: every member without a
+    // live ordered target gets 20 (12 keeps its order on 21). A unit outside the squadron (13) is not touched.
+    TargetWorld t;
+    t.w.add(11, t.attacker, 0, Vec3{0, 0, 0});
+    t.w.add(12, t.attacker, 0, Vec3{0, 0, 0});
+    t.w.add(13, t.attacker, 0, Vec3{0, 0, 0});
+    for (const ObjectId m : {11, 12}) t.w.sys->set_share_group(m, 50);
+    t.w.tick();
+    CHECK(t.w.sys->auto_target(11) == kNoObject && t.w.sys->next_scan(11) > t.w.frame + 1);
+    t.w.add(20, t.capital, 1, Vec3{500, 0, 0});
+    t.w.add(21, t.capital, 1, Vec3{-500, 0, 0});
+    t.w.add(30, t.attacker, 0, Vec3{0, 0, 0});
+    t.w.sys->set_share_group(30, 50);
+    t.w.sys->order_attack(12, 21);  // also orders 11 (same squadron); 30 joined later in this test: re-cleared below
+    CHECK(t.w.sys->ordered_target(11) == 21 && t.w.sys->ordered_target(12) == 21 && t.w.sys->ordered_target(13) == kNoObject);
+    t.w.sys->clear_order(11);
+    t.w.sys->clear_order(30);
+    t.w.tick();
+    CHECK(t.w.sys->auto_target(30) != kNoObject);
+    const ObjectId pick = t.w.sys->auto_target(30);
+    CHECK(t.w.sys->auto_target(11) == pick);           // shared
+    CHECK(t.w.sys->ordered_target(12) == 21);          // ordered member kept
+    CHECK(t.w.sys->auto_target(12) == kNoObject);
+    CHECK(t.w.sys->auto_target(13) == kNoObject);  // 13 is not a member (its scan is not due)
+    // Order_Attack on one member orders the squadron.
+    t.w.sys->order_attack(30, 20);
+    for (const ObjectId m : {11, 12, 30}) CHECK(t.w.sys->ordered_target(m) == 20);
+}
+
 void test_foc_data() {
     const char* root = std::getenv("ALAMO_FOC_DATA");
     if (!root || !*root) {
@@ -4608,6 +4700,9 @@ int main(int argc, char** argv) {
     test_own_player_sweep();
     test_garrison_fire_bones();
     test_hardpoint_mode_default();
+    test_own_weapon_aim_point();
+    test_scan_range_query();
+    test_shared_team_target();
     test_foc_data();
     if (bench) bench_modifiers();
     if (g_fail) {

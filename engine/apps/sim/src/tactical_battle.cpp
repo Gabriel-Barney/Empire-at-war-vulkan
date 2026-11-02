@@ -742,6 +742,12 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
             return tc::PreciseOutcome::Miss;
         });
     }
+    if (space_) {  // S8 t17 (FIGHTER_FLYING §4.10 A): the scan cube R + Rr of fighters with a formation (kUnitScanQuery)
+        const TacticalMode* tm = &mode;
+        combat_->set_scan_range_query([this, tm](tc::ObjectId u, tc::ObjectId c, float range, float& rr) {
+            return fighter_scan_range(tm->primary(), u, c, range, rr);
+        });
+    }
     combat_->bind_rng(&rng);  // Take_Damage listeners called outside the tick (host damage) draw here
     hg_setup(mode);           // hangars: SPAWN_SQUADRON descriptors and the HangarSystem (before any unit exists)
     oi_install(mode, rng);    // OI abilities: AbilityHost hooks, the abilities' RNG, repair credit hooks
@@ -1224,6 +1230,11 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
     movement_->move(o, rng, frame_);
     for (const objects::ObjectId id : o.units) {
         if (!attack_move) combat_->clear_order(id);
+        // S8 t17 (FIGHTER_FLYING §4.10 B writer 3): an ordered move (0x39f800) clears the squadron's team target - every
+        // member's Set_Target(null) and its hard points'.
+        if (const Unit* mu = attack_move || !space_ ? nullptr : unit_by_id(id);
+            mu && mu->container < containers_.size() && movement_->fighter_squad(containers_[mu->container].id))
+            combat_->clear_targets(id);
         combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: a position block has no attack goal (§2.8)
     }
     // S7 t22: the squadrons' formation (block flags: 0x01 attack-move, 0x02 guard-move; P1_DOUBLE_CLICK §3.3)
@@ -2589,6 +2600,108 @@ objects::ObjectId TacticalBattle::fighter_push(const Unit& leader, objects::Obje
     return newest();
 }
 
+// S8 t17 (FIGHTER_FLYING §4.10 A, TACTICAL_COMBAT §2.2): Get_Scan_Range 0x566f50 / the per-candidate acceptance of the
+// combat scan for a fighter (a squadron member: its squadron's formation). The inputs are fighter_push's for the auto
+// target c; c = none: no goal / attacker match and c at the slot goal (rule 7: "c = null -> 1"). Rr = the first block's
+// range (+ Autonomous_Move_Extension_Vs_Attacker for an attacker). Read-only: combat calls it from its parallel gather
+// phase (nothing else runs then); the dead pushed blocks fighter_push erases are skipped instead.
+uint8_t TacticalBattle::fighter_scan_range(const objects::ObjectStore& store, objects::ObjectId member, objects::ObjectId cand,
+                                           float range, float& rr) const {
+    rr = 0.0f;
+    const auto unit_c = [this](objects::ObjectId id) -> const Unit* {
+        const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& x, objects::ObjectId v) { return x.id < v; });
+        return it == units_.end() || it->id != id ? nullptr : &*it;
+    };
+    const auto squad_c = [this](objects::ObjectId id) -> const mv::FighterSquad* {
+        const std::span<const mv::FighterSquad> s = movement_->fighter_squads();
+        const auto it = std::lower_bound(s.begin(), s.end(), id, [](const mv::FighterSquad& q, objects::ObjectId v) { return q.id < v; });
+        return it == s.end() || it->id != id ? nullptr : &*it;
+    };
+    const auto key_of = [&](objects::ObjectId id) {  // fighter_goal_key
+        const Unit* x = id != objects::kNoObjectId ? unit_c(id) : nullptr;
+        if (x && x->container < containers_.size() && squad_c(containers_[x->container].id)) return containers_[x->container].id;
+        return id;
+    };
+    const auto goal_live = [&](objects::ObjectId k) {  // fighter_goal_live
+        if (k == objects::kNoObjectId) return false;
+        if (const mv::FighterSquad* s = squad_c(k)) return !s->members.empty();
+        const Unit* x = unit_c(k);
+        return x && x->alive && !x->retreated && store.alive(x->h) && combat_->has_unit(x->id);
+    };
+    const Unit* u = unit_c(member);
+    if (!u) return 0;
+    const FighterFormationRecord* r = fighter_formation(fighter_key(*u));
+    if (!r) return 0;
+    const mv::FighterSquad* sq = squad_c(r->key);
+    const objects::ObjectId lid = sq && !sq->members.empty() ? sq->members.front() : u->id;
+    const Unit* leader = unit_c(lid);
+    if (!leader || !movement_->has_unit(lid)) return 0;
+    std::span<const objects::ObjectId> members(&leader->id, 1);
+    if (sq) members = sq->members;
+    objects::ObjectId last_push = objects::kNoObjectId;
+    for (auto it = r->pushed.rbegin(); it != r->pushed.rend() && last_push == objects::kNoObjectId; ++it)
+        if (goal_live(*it)) last_push = *it;
+    const objects::ObjectId order_goal = key_of(combat_->attack_goal(lid));
+    const mv::UnitView lv = movement_->view(lid);
+    FighterChaseInputs ci;
+    ci.formation = true;
+    ci.flags = r->flags;
+    ci.moving = lv.has_goal && !lv.arrived;
+    ci.last_guard = (r->flags & mv::kMoveFlagGuardMove) != 0 && last_push == objects::kNoObjectId;
+    ci.single_position = !ci.moving && last_push == objects::kNoObjectId && r->goal_object == objects::kNoObjectId && !goal_live(order_goal);
+    const Unit* guarded = (r->flags & mv::kMoveFlagGuardMove) != 0 && r->goal_object != objects::kNoObjectId ? unit_c(r->goal_object) : nullptr;
+    if (guarded && (!guarded->alive || guarded->retreated || !store.alive(guarded->h))) guarded = nullptr;
+    if (guarded && movement_->has_unit(guarded->id)) {
+        const mv::UnitView gv = movement_->view(guarded->id);
+        ci.guarded_moving = gv.has_goal && gv.speed > 0.0f;
+    }
+    ci.unit = store.position(leader->h);
+    ci.goal = r->goal;
+    if (const Unit* go = r->goal_object != objects::kNoObjectId ? unit_c(r->goal_object) : nullptr;
+        go && go->alive && !go->retreated && store.alive(go->h))
+        ci.goal = store.position(go->h);
+    ci.attack_range = range;
+    uint32_t ty = leader->type;
+    if (sq && leader->container < containers_.size() && containers_[leader->container].squad_type < catalog_->types().size())
+        ty = containers_[leader->container].squad_type;
+    if (ty < fchase_have_.size() && fchase_have_[ty]) {
+        ci.guard_range = fchase_cache_[ty][0];
+        ci.idle_range = fchase_cache_[ty][1];
+        ci.attack_move_range = fchase_cache_[ty][2];
+        ci.extension = fchase_cache_[ty][3];
+    } else if (ty < catalog_->types().size()) {
+        const objects::GameObjectTypes& types = catalog_->types();
+        const auto ti = static_cast<objects::TypeIndex>(ty);
+        ci.guard_range = types.get_float(ti, "Guard_Chase_Range");
+        ci.idle_range = types.get_float(ti, "Idle_Chase_Range");
+        ci.attack_move_range = types.get_float(ti, "Attack_Move_Response_Range");
+        ci.extension = types.get_float(ti, "Autonomous_Move_Extension_Vs_Attacker");
+    }
+    if (cand == objects::kNoObjectId) {
+        ci.candidate = ci.goal;
+    } else {
+        const Unit* c = unit_c(cand);
+        if (!c || !store.alive(c->h)) return 0;
+        const objects::ObjectId tk = key_of(cand);
+        ci.candidate_is_goal = tk == order_goal || tk == key_of(r->goal_object) || tk == last_push;
+        std::span<const objects::ObjectId> attackers(&c->id, 1);
+        if (const mv::FighterSquad* cs = squad_c(tk)) attackers = cs->members;
+        for (const objects::ObjectId a : attackers) {
+            const objects::ObjectId at = combat_->has_unit(a) ? combat_->current_target(a) : objects::kNoObjectId;
+            if (at == objects::kNoObjectId) continue;
+            if ((guarded && at == guarded->id) || std::find(members.begin(), members.end(), at) != members.end()) ci.candidate_attacker = true;
+        }
+        ci.candidate = store.position(c->h);
+    }
+    const uint8_t res = fighter_chase_test(ci);
+    if (res != 0) {
+        rr = (ci.flags & mv::kMoveFlagGuardMove) != 0 ? ci.guard_range : (ci.flags & mv::kMoveFlagAttackMove) != 0 ? ci.attack_move_range : ci.idle_range;
+        if (rr < 0.0f) rr = 0.0f;
+        if (ci.candidate_attacker) rr += ci.extension;
+    }
+    return res;
+}
+
 void TacticalBattle::feed_fighter_target(const Unit& u, const objects::ObjectStore& store) {
     mv::ObjectId addr = u.id;
     if (u.container < containers_.size()) {
@@ -3114,6 +3227,12 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     ability_finished_.clear();  // S7 t15 A1: this tick's signal 0x29
     story_garrisoned_.clear();  // S4: this tick's garrison entries / structure captures
     story_captured_.clear();
+    if (space_ && movement_)  // S8 t17 (FIGHTER_FLYING §4.10 B): squadron of the shared team target, before this tick's orders
+        for (const Unit& u : units_)
+            if (combat_->has_unit(u.id))
+                combat_->set_share_group(u.id, u.container < containers_.size() && movement_->fighter_squad(containers_[u.container].id)
+                                                   ? containers_[u.container].id
+                                                   : tc::kNoObject);
     objects::ObjectStore& store = mode.primary();
     l1_weather_tick(rng);  // L1 systems: land weather service (before the common tick)
     fog_decay();  // fog of war: common-tick step 4, before the object services (owner: fog agent)
@@ -3175,6 +3294,14 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         combat_->set_flag(u.id, tc::kUnitFighterIdle, mvv.loco_state == mv::LocoState::FighterIdle);
         combat_->set_flag(u.id, tc::kUnitHoverRest, air && mvv.loco_state == mv::LocoState::WalkStopped);
         combat_->set_flag(u.id, tc::kUnitRocketAttack, abilities_ && abilities_->is_active(u.id, 11));
+        // S8 t17 (FIGHTER_FLYING §4.10 A / B): a squadron member shares its squadron's team target; a fighter whose
+        // formation record exists scans R + Rr (fighter_scan_range).
+        if (space_) {
+            const bool member = u.container < containers_.size() && movement_->fighter_squad(containers_[u.container].id);
+            combat_->set_share_group(u.id, member ? containers_[u.container].id : tc::kNoObject);
+            combat_->set_flag(u.id, tc::kUnitScanQuery,
+                              mvv.locomotor == mv::LocomotorKind::Fighter && fighter_formation(fighter_key(u)) != nullptr);
+        }
     }
     s4_positions(mode);  // S4: garrisoned units sit on their holders
     profile::lap("tac.combat_pre");
