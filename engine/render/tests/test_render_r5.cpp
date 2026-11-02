@@ -784,22 +784,26 @@ static void test_stage2_builder() {
     const std::vector<Ev> evs = {{4, &surf, {1, 2, 3}}, {4, &snd, {0, 0, 0}}, {4, nullptr, {0, 0, 0}}};
     const std::vector<render::SnapshotFootPlant> fps = render::snapshot_foot_plants(evs);
     CHECK(fps.size() == 1 && fps[0].foot == 1 && fps[0].trigger == "Generic_Footprint" && fps[0].position.z == 3.0f);
-    // Spin-away corpse motion: drifts along the death facing, yaws and rolls (render-side rates).
+    // R3f t01: a detached spin-away corpse is drawn at its record transform with kSnapSpinAway (no render-side motion);
+    // the sim's wreck transform (apply_snapshot_spin_wrecks) then moves it.
     render::SnapshotCorpse sc;
     sc.id = 40;
     sc.type = 2;
     sc.position = {100, 0, 0};
     sc.facing = {1, 0, 0};
     sc.spin_away = true;
-    sc.spin_seconds = 2.0f;
     render::SimSnapshot ss;
     render::add_snapshot_corpses(ss, table, std::span<const render::SnapshotCorpse>(&sc, 1));
     if (!table[2].model.empty()) {
-        CHECK(ss.objects.size() == 1 && (ss.objects[0].flags & render::kSnapSpinAway) &&
-              std::fabs(ss.objects[0].position.x - (100.0f + 2.0f * render::kSpinAwayDrift)) < 1e-3f &&
-              std::fabs(ss.objects[0].roll - 2.0f * render::kSpinAwayRollRate) < 1e-5f && std::fabs(ss.objects[0].facing.y) > 0.5f);
+        CHECK(ss.objects.size() == 1 && (ss.objects[0].flags & render::kSnapSpinAway) && (ss.objects[0].flags & render::kSnapCorpse) &&
+              ss.objects[0].position.x == 100.0f && ss.objects[0].roll == 0.0f && ss.objects[0].facing.x == 1.0f);
+        const render::SnapshotSpinWreck sw[] = {{40, {160, 5, 0}, {0, 1, 0}, 1.5f}, {41, {7, 7, 7}, {1, 0, 0}, 9.0f}};  // 41: absent
+        render::apply_snapshot_spin_wrecks(ss, sw);
+        CHECK(ss.objects.size() == 1 && ss.objects[0].position.x == 160.0f && ss.objects[0].position.y == 5.0f &&
+              ss.objects[0].facing.y == 1.0f && ss.objects[0].roll == 1.5f && ss.objects[0].pitch == 0.0f);
     }
-    // Store death clones (kSnapDeathClone) take their corpse record's fade and spin-away motion; nothing is appended.
+    // Store death clones (kSnapDeathClone) take their corpse record's fade and the spin-away flag (R3f t01: the motion is
+    // the sim's store transform plus the wreck roll); nothing is appended.
     {
         render::SimSnapshot dc;
         dc.objects = {sobj(10, 100), sobj(11, 0), sobj(13, 50)};
@@ -827,14 +831,16 @@ static void test_stage2_builder() {
                                              {12, false, {2, 0, {0, 0, 0}, {1, 0, 0}}, false, 40, 1.0f},  // no store object
                                              {13, false, {2, 0, {0, 0, 0}, {1, 0, 0}}, false, 40, 0.4f},
                                              {13, true, {2, 0, {0, 0, 0}, {1, 0, 0}}, true, 40, 0.1f}};  // duplicate id
-        const std::vector<render::SnapshotCorpse> rc2 = render::snapshot_corpses(raw, 100);  // 60 ticks = 2 s after death
-        CHECK(rc2.size() == 5 && rc2[0].spin_away && std::fabs(rc2[0].spin_seconds - 2.0f) < 1e-6f && !rc2[0].detached);
+        const std::vector<render::SnapshotCorpse> rc2 = render::snapshot_corpses(raw, 100);
+        CHECK(rc2.size() == 5 && rc2[0].spin_away && !rc2[0].detached);
         render::add_snapshot_corpses(dc, table, rc2);
         CHECK(dc.objects.size() == 3 && dc.objects[0].id == 10 && dc.objects[1].id == 11 && dc.objects[2].id == 13);
         const render::SnapshotObject& sp = dc.objects[0];
         CHECK((sp.flags & render::kSnapSpinAway) && !(sp.flags & render::kSnapCorpse) && sp.fade == 1.0f &&
-              std::fabs(sp.position.x - (100.0f + 2.0f * render::kSpinAwayDrift)) < 1e-3f &&
-              std::fabs(sp.roll - (0.25f + 2.0f * render::kSpinAwayRollRate)) < 1e-5f && std::fabs(sp.facing.y) > 0.5f);
+              sp.position.x == 100.0f && sp.roll == 0.25f);  // the store transform as captured
+        const render::SnapshotSpinWreck w10{10, {130, 0, 0}, {0, 1, 0}, 2.0f};
+        render::apply_snapshot_spin_wrecks(dc, std::span<const render::SnapshotSpinWreck>(&w10, 1));
+        CHECK(sp.position.x == 130.0f && sp.roll == 2.0f && sp.facing.y == 1.0f);
         CHECK(dc.objects[1].fade == 1.0f && dc.objects[1].flags == render::kSnapDrawable && dc.objects[1].position.x == 0.0f);
         CHECK(std::fabs(dc.objects[2].fade - 0.4f) < 1e-6f && !(dc.objects[2].flags & render::kSnapSpinAway) &&
               dc.objects[2].position.x == 50.0f && dc.objects[2].roll == 0.0f);
@@ -844,7 +850,7 @@ static void test_stage2_builder() {
             p = 0.0f;
             return true;
         });
-        CHECK(std::fabs(dc.objects[0].roll - (0.25f + 2.0f * render::kSpinAwayRollRate)) < 1e-5f);
+        CHECK(dc.objects[0].roll == 2.0f);
         // A dying clone (fade 0) stays hidden whatever the corpse alpha.
         render::SimSnapshot dy;
         dy.objects = {sobj(14, 0)};
@@ -1102,7 +1108,8 @@ static void test_sim_decorations_stage2(render::SurfaceFxLibrary& lib) {
     f.tick = 5 + static_cast<uint64_t>(render::kFootEffectSeconds * 30.0f) + 1;
     deco.update(f);
     CHECK(deco.effects().empty());
-    // Spin-away explosion when the spinning corpse leaves (space: no terrain).
+    // R3f t01: no render-side spin-away explosion when a spinning corpse leaves (space: no terrain): the battle spawns
+    // the Spin_Away_On_Death_Explosion as a sim PARTICLE object at the wreck's sim position.
     table.set_spin_away_explosion(3, "P_BOOM");
     render::SimDecorations space(lib, table, nullptr);
     render::InterpolatedFrame sf;
@@ -1117,10 +1124,8 @@ static void test_sim_decorations_stage2(render::SurfaceFxLibrary& lib) {
     sf.tick = 2;
     sf.objects.clear();
     space.update(sf);
-    CHECK(space.effects().size() == 1 && space.effects()[0].asset == "P_BOOM" && space.effects()[0].position.z == 9.0f &&
-          space.stats().spin_explosions == 1);
-    // ... but not when a spinning store death clone (its corpse record applied by add_snapshot_corpses) leaves the store:
-    // the battle spawns that explosion as a sim PARTICLE object (R3 t04).
+    CHECK(space.effects().empty());
+    // ... nor for a spinning store death clone (its corpse record applied by add_snapshot_corpses).
     render::SimSnapshot cs;
     cs.mode = objects::ModeKind::Space;
     cs.objects = {sobj(20, 0)};
@@ -1140,7 +1145,7 @@ static void test_sim_decorations_stage2(render::SurfaceFxLibrary& lib) {
     sf.tick = 4;
     sf.objects.clear();
     space.update(sf);
-    CHECK(space.stats().spin_explosions == 1);
+    CHECK(space.effects().empty());
     bool boom_at_clone = false;
     for (const render::SimWorldEffect& e : space.effects()) boom_at_clone = boom_at_clone || (e.asset == "P_BOOM" && e.position.z == 3.0f);
     CHECK(!boom_at_clone);

@@ -633,11 +633,13 @@ void BattleView::capture(const GameSession& session) {
     }
 #ifdef ALAMO_SIM_HAVE_ANIM
     // R3 corpses: detached ones (the battle removed the store object at death) exist only in SimAnimation; the others
-    // give their store death clone its corpse fade and spin-away motion (add_snapshot_corpses).
+    // give their store death clone its corpse fade (add_snapshot_corpses). R3f t01: the spin-away motion of both is the
+    // sim's (TacticalBattle::spin_wrecks), applied again once the detached corpses are in the snapshot.
     if (const sim::SimAnimation* a = session.animation())
         if (const sim::GameMode* top = host.modes().top()) {
             const std::vector<render::SnapshotCorpse> corpses = render::snapshot_corpses(a->corpses(*top), host.frame());
             render::add_snapshot_corpses(*snap, table_, corpses);
+            if (const sim::TacticalBattle* sb = session.battle()) render::apply_battle_spin_wrecks(*sb, *snap);  // R3f t01
             for (const render::SnapshotCorpse& c : corpses)
                 if (c.detached) ++stats_.corpses;  // the others are store death clones (counted below)
             // refix t01: a death clone (the dying unit's own-type clone included) is a store object that plays the death

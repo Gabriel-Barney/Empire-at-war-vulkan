@@ -340,6 +340,16 @@ std::string s4_types() {
                 // S10 map owners: a landing reinforcement point (REMAINING_GAPS §3.3 probe 2026-10-29)
                 " <Marker Name=\"S4_RPoint\"><Behavior>CAPTURE_POINT, REINFORCEMENT_POINT</Behavior><Capture_Point_Radius>100</Capture_Point_Radius>"
                 "<Capture_Point_Transition_Time_Seconds>1.0</Capture_Point_Transition_Time_Seconds></Marker>\n"
+                // R3f t04 (hut runs): a Property garrison holder (CanContainGarrison, no GARRISON_* behaviour: its
+                // occupants die with it) and a crew trooper with two Destruction_Survivors and a hardpoint.
+                " <SpecialStructure Name=\"S4_Hut\"><Behavior>SELECTABLE, DUMMY_GROUND_STRUCTURE</Behavior>"
+                "<Property_Flags>CanContainGarrison</Property_Flags><Garrison_Category>Infantry</Garrison_Category><Num_Garrison_Slots>4</Num_Garrison_Slots>"
+                "<Tactical_Health>150</Tactical_Health><CategoryMask>Structure</CategoryMask><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                "<Victory_Relevant>No</Victory_Relevant></SpecialStructure>\n"
+                " <GroundInfantry Name=\"S4_Survivor\"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type></GroundInfantry>\n"
+                " <GroundInfantry Name=\"S4_Crew\"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>"
+                "<Destruction_Survivors>S4_Survivor, 1.0</Destruction_Survivors><Minimum_Destruction_Survivor_Count>2</Minimum_Destruction_Survivor_Count>"
+                "<Maximum_Destruction_Survivor_Count>2</Maximum_Destruction_Survivor_Count><HardPoints>HP_S10_Laser_A</HardPoints></GroundInfantry>\n"
                 "</S10>");
     return t;
 }
@@ -1525,6 +1535,11 @@ struct S4Run {
     bool sensor_combat = false, sensor_point = false, sensor_untouched = false, sensor_killed = false, sensor_point_removed = false;
     int attack_order = -1;
     float sensor_health = -1.0f;  // last health fraction seen
+    // R3f t04 (hut runs): the crew garrisons the Property hut, the troopers kill the hut, the crew dies with it (garrison
+    // Killed, outside the combat tick): its survivors and its hardpoint event must be consumed.
+    bool crew_in_hut = false, hut_killed = false, crew_dead = false;
+    int hut_order = -1;
+    uint32_t survivors_max = 0, hp_destroyed_before = 0, hp_destroyed_after = 0, particles_before = 0, particles_after = 0;
     uint32_t garrisoned_frames = 0;
     int mission = -1, piracy = -1;
     int32_t winner = -2;
@@ -1532,7 +1547,7 @@ struct S4Run {
     float credits_before = -1.0f, credits_after = -1.0f;
 };
 
-terrain::MapData s4_map(bool sensor = false) {
+terrain::MapData s4_map(bool sensor = false, bool hut = false) {
     terrain::MapData m = land_map();
     auto place = [&m](const char* type, float x, float y, uint32_t owner, float yaw = 0.0f) {
         terrain::ObjectPlacement p;
@@ -1551,12 +1566,15 @@ terrain::MapData s4_map(bool sensor = false) {
     place("S4_Post", 900.0f, 660.0f, 2, 90.0f);                    // on the defender anchor
     place("S4_Bunker", 900.0f, 700.0f, 2, 90.0f);                  // among the defenders' first row
     if (sensor) place("S4_Sensor", 940.0f, 660.0f, 2, 90.0f);      // a1f t07: next to the defenders, neutral
+    if (hut) place("S4_Hut", 900.0f, 1000.0f, 2, 90.0f);           // R3f t04: neutral, outside the post's 300 radius
     return m;
 }
 
 // corruption: 0 none, 1 mission, 2 hero alone; attack_sensor (a1f t07): the map gets a neutral S4_Sensor and the Empire
-// troopers only attack it (frame 60), no other scripted orders.
-S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, int corruption, bool attack_sensor = false) {
+// troopers only attack it (frame 60), no other scripted orders. hut (R3f t04): the map gets a neutral S4_Hut, the
+// Empire gets an S4_Crew that garrisons it (frame 5); once inside the troopers attack the hut, no other scripted orders.
+S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, int corruption, bool attack_sensor = false,
+                    bool hut = false) {
     using R = commands::RejectReason;
     using T = commands::EventType;
     S4Run out;
@@ -1568,6 +1586,7 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     SimHost host(d.types, js, cfg);
     galactic::GalacticSetup setup = make_setup(d, true);
     setup.forces.push_back({1, 2, type_of(d, "S4_Hero")});  // an Underworld named hero rides along
+    if (hut) setup.forces.push_back({0, 1, type_of(d, "S4_Crew")});  // R3f t04: the hut's crew defends S10_B
     if (corruption) {  // a corruption mission needs a non-AI corrupting player (§4.5)
         setup.players[1].human = true;
         setup.players[1].ai = false;
@@ -1588,10 +1607,10 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     opt.battle.land_capture_countdown = 0.0f;
     std::vector<std::string>* maps = &out.maps;
     CampaignBattles battles(host, d.crules, *d.catalog,
-                            [maps, attack_sensor](const std::string& name, terrain::MapData& m) {
+                            [maps, attack_sensor, hut](const std::string& name, terrain::MapData& m) {
                                 maps->push_back(name);
                                 if (name != "S10_Land_B" && name != "S4_Land_Alt") return false;
-                                m = s4_map(attack_sensor);
+                                m = s4_map(attack_sensor, hut);
                                 return true;
                             },
                             opt);
@@ -1622,6 +1641,7 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     bool invaded = false;
     std::vector<objects::ObjectId> troopers;
     objects::ObjectId bunker = objects::kNoObjectId, post = objects::kNoObjectId, sensor = objects::kNoObjectId;
+    objects::ObjectId s_hut = objects::kNoObjectId, s_crew = objects::kNoObjectId;  // R3f t04 (hut runs)
     const objects::TypeIndex trooper_t = d.types.resolve_name("S10_Trooper");
     for (uint64_t t = 0; t < 3000; ++t) {
         host.tick_once();
@@ -1671,6 +1691,53 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
                 }
             }
             const uint32_t f = b->frame();
+            if (hut) {  // R3f t04
+                if (troopers.empty()) continue;
+                const objects::TypeIndex hut_t = d.types.resolve_name("S4_Hut"), crew_t = d.types.resolve_name("S4_Crew"),
+                                         surv_t = d.types.resolve_name("S4_Survivor");
+                // (combat units only: a dead object leaves a store death clone of its own type, S9 t04)
+                const tactical::combat::CombatSystem& cs = b->combat();
+                const auto live = [&cs](objects::ObjectId id) { return cs.has_unit(id) && cs.alive(id); };
+                objects::ObjectId hut_id = objects::kNoObjectId, crew = objects::kNoObjectId;
+                uint32_t survivors = 0;
+                for (objects::ObjectHandle h : s.all_objects()) {
+                    if (!s.alive(h) || !live(s.id(h))) continue;
+                    if (s.type(h) == hut_t) hut_id = s.id(h);
+                    if (s.type(h) == crew_t && s.owner(h) == 0) crew = s.id(h);
+                    if (s.type(h) == surv_t && s.owner(h) == 0) ++survivors;
+                }
+                out.survivors_max = std::max(out.survivors_max, survivors);
+                if (s_hut == objects::kNoObjectId) s_hut = hut_id;
+                if (s_crew == objects::kNoObjectId) s_crew = crew;
+                if (std::getenv("S4_DEBUG") && (f % 50) == 1) {
+                    const objects::ObjectHandle ch = s.find(s_crew);
+                    const objects::ObjectHandle hh = s.find(s_hut);
+                    const Vec3 cp = s.position(ch), hp = s.position(hh);
+                    std::printf("   hut f%u: hut %d (owner %d at %.0f,%.0f) crew %d (owner %d at %.0f,%.0f alive %d, holder %d, pending %d, "
+                                "can %d) survivors %u\n",
+                                f, s_hut, s.owner(hh), static_cast<double>(hp.x), static_cast<double>(hp.y), s_crew, s.owner(ch),
+                                static_cast<double>(cp.x), static_cast<double>(cp.y), s.alive(ch) ? 1 : 0, b->garrison_holder_of(s_crew),
+                                b->garrison().pending_holder(s_crew), b->can_garrison(s_crew, s_hut) ? 1 : 0, survivors);
+                }
+                if (f == 5 && s_crew != objects::kNoObjectId && s_hut != objects::kNoObjectId) {
+                    commands::EventData g(T::Garrison);
+                    g.set("unit", static_cast<uint32_t>(s_crew)).set("garrison", static_cast<uint32_t>(s_hut));
+                    host.submit(0, g);
+                }
+                if (!out.crew_in_hut && s_crew != objects::kNoObjectId && b->garrison_holder_of(s_crew) == s_hut) {
+                    out.crew_in_hut = true;
+                    out.hp_destroyed_before = b->stats().hardpoints_destroyed;
+                    out.particles_before = b->stats().particles;
+                    out.hut_order = static_cast<int>(b->order_attack(*tm, 0, troopers, s_hut, host.random().synced()));
+                }
+                if (out.crew_in_hut && !out.hut_killed && hut_id == objects::kNoObjectId) {
+                    out.hut_killed = true;
+                    out.crew_dead = crew == objects::kNoObjectId;  // the same tick: the Killed event is consumed in s4_tick
+                    out.hp_destroyed_after = b->stats().hardpoints_destroyed;
+                    out.particles_after = b->stats().particles;
+                }
+                continue;
+            }
             if (attack_sensor) {  // a1f t07
                 if (troopers.empty() || sensor == objects::kNoObjectId) continue;
                 const tactical::combat::CombatSystem& c = b->combat();
@@ -1878,6 +1945,21 @@ void test_s4_battle(const Data& d) {
         CHECK(s.attack_order == static_cast<int>(commands::RejectReason::None) && s.sensor_killed && s.sensor_point_removed);
         const S4Run s4 = run_s4_battle(d, files, 4, 0, true);
         CHECK(!first_divergence(s.crc, s4.crc).diverged);
+    }
+    // R3f t04: a garrison-kill (a Property holder's occupants die with it, outside the combat tick) consumes the
+    // occupant's Die outputs like an in-tick death: its Destruction_Survivors spawn (TACTICAL_GAPS §1.9 step 7) and its
+    // hardpoint's death event plays (Death_Explosion_Particles; ABILITIES_HARDPOINTS hardpoint death).
+    {
+        const S4Run k = run_s4_battle(d, files, 0, 0, false, true);
+        std::printf("  hut kill: crew inside %d, attack order %d, hut killed %d, crew dead %d, survivors %u, hardpoints destroyed %u -> %u, "
+                    "particles %u -> %u\n",
+                    k.crew_in_hut ? 1 : 0, k.hut_order, k.hut_killed ? 1 : 0, k.crew_dead ? 1 : 0, k.survivors_max,
+                    k.hp_destroyed_before, k.hp_destroyed_after, k.particles_before, k.particles_after);
+        CHECK(k.crew_in_hut && k.hut_order == static_cast<int>(commands::RejectReason::None) && k.hut_killed && k.crew_dead);
+        CHECK(k.survivors_max == 2);                                // both survivors of the garrison-killed crew
+        CHECK(k.hp_destroyed_after > k.hp_destroyed_before);      // the crew's hardpoint event was consumed
+        const S4Run k4 = run_s4_battle(d, files, 4, 0, false, true);
+        CHECK(!first_divergence(k.crc, k4.crc).diverged && k4.survivors_max == k.survivors_max);
     }
     // Corruption mission (human Underworld).
     const S4Run c = run_s4_battle(d, files, 0, 1);
@@ -2544,8 +2626,10 @@ struct R3Run {
     uint32_t presence_refreshes = 0, explosion_victims = 0;    // map entries written; EXPLOSION flinch victims (§A.12)
     // space
     std::map<ObjectId, std::pair<uint64_t, uint64_t>> clone_life;  // spinning clone id -> (first alive, first gone)
-    std::map<ObjectId, Vec3> clone_pos;
+    std::map<ObjectId, Vec3> clone_pos;                            // first seen position
+    std::map<ObjectId, std::pair<Vec3, Vec3>> clone_tail;          // R3f t01: (second-to-last, last) seen positions
     std::map<ObjectId, std::pair<uint64_t, Vec3>> fx;              // S10_Spin_FX id -> (first alive, position)
+    size_t spin_wrecks_max = 0;                                    // R3f t01: TacticalBattle::spin_wrecks() high-water mark
     uint64_t end_frame = 0;
     uint32_t clone_prev_checked = 0, clone_prev_copied = 0;        // clone rows whose crossfade source is the copied state
 };
@@ -2800,8 +2884,15 @@ R3Run run_r3_campaign(const Data& d, bool land, bool anim_service, int32_t worke
                 if (ty == fx_type && !out.fx.count(id)) out.fx[id] = {f, st.position(h)};
                 if (ty != clone_type) continue;
                 present.push_back(id);
-                if (out.clone_life.emplace(id, std::make_pair(f, uint64_t{0})).second) out.clone_pos[id] = st.position(h);
+                if (out.clone_life.emplace(id, std::make_pair(f, uint64_t{0})).second) {
+                    out.clone_pos[id] = st.position(h);
+                    out.clone_tail[id] = {st.position(h), st.position(h)};
+                } else {
+                    auto& tl = out.clone_tail[id];
+                    tl = {tl.second, st.position(h)};
+                }
             }
+            if (b) out.spin_wrecks_max = std::max(out.spin_wrecks_max, b->spin_wrecks().size());
             for (auto& [id, l] : out.clone_life)
                 if (l.second == 0 && std::find(present.begin(), present.end(), id) == present.end()) l.second = f;
         }
@@ -2891,25 +2982,34 @@ void test_r3_states_and_spin() {
 #endif
         CHECK(!tail.records.empty() && !sv.diverged && l.battles == s.battles);
     }
-    {  // space: spin-away clones (1.5 s) end with an S10_Spin_FX object at their position on their removal frame
+    {  // space: spin-away clones (T = 1.5 s). R3f t01 (TACTICAL_GAPS §1.9): the S10_Spin_FX start explosion is spawned on
+       // the death frame at the death position (the clone's first position; Ranged_Target_Z_Adjust 0); the wreck then
+       // flies its spline in the sim and is removed on its 45th service (|V| > 0, float sum +-1) or on its first (V = 0:
+       // a frigate that stood still).
         const R3Run h = run_r3_campaign(*d, false, false, 0, 2500);
-        uint32_t removed = 0, matched = 0, other_life = 0;
+        uint32_t removed = 0, matched = 0, other_life = 0, moved = 0, still = 0;
         for (const auto& [id, l] : h.clone_life) {
-            if (l.second == 0 || l.second >= h.end_frame) continue;
-            ++removed;
-            if (l.second - l.first != 45) ++other_life;
-            const Vec3 p = h.clone_pos.at(id);
+            const Vec3 p0 = h.clone_pos.at(id);
             for (const auto& [fid, fv] : h.fx)
-                if (fid > id && fv.first == l.second && fv.second.x == p.x && fv.second.y == p.y && fv.second.z == p.z) {
+                if (fid > id && fv.first == l.first && fv.second.x == p0.x && fv.second.y == p0.y && fv.second.z == p0.z) {
                     ++matched;
                     break;
                 }
+            if (l.second == 0 || l.second >= h.end_frame) continue;
+            ++removed;
+            const uint64_t life = l.second - l.first;
+            const Vec3 pl = h.clone_tail.at(id).second;
+            const float drift = std::fabs(pl.x - p0.x) + std::fabs(pl.y - p0.y) + std::fabs(pl.z - p0.z);
+            if (life == 1) ++still;
+            else if (life >= 44 && life <= 46 && drift > 1.0f) ++moved;
+            else ++other_life;
         }
         for (const std::string& s : h.battles) std::printf("  %s\n", s.c_str());
-        std::printf("  space r3: %zu spinning clones, %u removed in the battle (%u not after 45 frames), %zu spin explosions, %u at "
-                    "their clone's removal\n",
-                    h.clone_life.size(), removed, other_life, h.fx.size(), matched);
-        CHECK(removed > 0 && other_life == 0 && matched == removed && h.fx.size() == removed);
+        std::printf("  space r3: %zu spinning clones (wrecks max %zu), %u removed in the battle (%u flew 44-46 frames, %u stood still, "
+                    "%u other), %zu spin explosions, %u at their clone's death position and frame\n",
+                    h.clone_life.size(), h.spin_wrecks_max, removed, moved, still, other_life, h.fx.size(), matched);
+        CHECK(removed > 0 && other_life == 0 && moved > 0 && h.spin_wrecks_max > 0);
+        CHECK(matched == h.clone_life.size() && h.fx.size() == h.clone_life.size());
         // The animation service changes nothing in the sim (clone rows only: no ship models, so no start-frame draws).
         const R3Run a = run_r3_campaign(*d, false, true, 0, 2500, false);
         const auto dv = first_divergence(h.crc, a.crc);
@@ -2921,7 +3021,7 @@ void test_r3_states_and_spin() {
         for (const auto& [id, l] : c.clone_life) c_removed += l.second != 0 && l.second < c.end_frame ? 1u : 0u;
         std::printf("  space r3 + anim service (ship rows): clone rows %u (copied state %u), spin explosions %zu for %u removals\n",
                     c.clone_prev_checked, c.clone_prev_copied, c.fx.size(), c_removed);
-        CHECK(c.clone_prev_checked > 0 && c.clone_prev_copied == c.clone_prev_checked && c.fx.size() == c_removed && c_removed > 0);
+        CHECK(c.clone_prev_checked > 0 && c.clone_prev_copied == c.clone_prev_checked && c.fx.size() == c.clone_life.size() && c_removed > 0);
         const R3Run w4 = run_r3_campaign(*d, false, false, 4, 2500);
         CHECK(!first_divergence(h.crc, w4.crc).diverged && w4.clone_life == h.clone_life && w4.fx.size() == h.fx.size());
     }

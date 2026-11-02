@@ -13,7 +13,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 2;  // 2: R3 t04 pending spin-away explosions (spin_explosions_)
+constexpr uint32_t kBattleStateVersion = 3;  // 2: R3 t04 pending spin-away explosions; 3: R3f t01 spin wrecks (spin_wrecks_)
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -71,7 +71,10 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a.seq(b.particles_, timed);
     a.seq(b.dummies_, timed);
     a.seq(b.death_clones_, timed);  // refixf t04
-    a.seq(b.spin_explosions_, [](auto& x, auto& e) { x(e.id, e.type); });  // R3 t04
+    a.seq(b.spin_wrecks_, [](auto& x, auto& e) {  // R3f t01: spinning wrecks (sim-side motion)
+        x(e.id, e.h, e.type, e.end_explosion, e.owner, e.z_adjust, e.turn_rate, e.time, e.v, e.built, e.done, e.dist);
+        x(e.p0, e.q, e.e, e.seg[0], e.seg[1], e.seg[2], e.position, e.yaw, e.pitch, e.roll);
+    });
     a.seq(b.effects_, [](auto& x, auto& e) { x(e.id, e.asset, e.percent, e.frame); });
     a(b.anchor_[0], b.anchor_[1], b.facing_[0], b.facing_[1], b.placed_[0], b.placed_[1]);
     a(b.frame_, b.retreat_allowed_frame_, b.retreat_side_, b.retreat_done_frame_, b.retreat_complete_, b.finished_);
