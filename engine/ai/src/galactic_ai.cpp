@@ -3,6 +3,9 @@
 // [port] / [L] marks behaviour the RE docs do not fix.
 #include "alamo/ai/galactic_ai.hpp"
 
+#include <charconv>
+#include <span>
+
 #include "alamo/ai/ai_free_store_path.hpp"
 
 #include "alamo/data/xml.hpp"
@@ -2185,6 +2188,15 @@ std::vector<GalacticAiDifficulty> load_ai_difficulties(const FileProvider& files
     return out;
 }
 
+namespace {
+bool parse_count(std::string_view s, int32_t& out) {  // a whole decimal integer (surrounding blanks allowed)
+    s = ai_trim(s);
+    if (s.empty()) return false;
+    const auto r = std::from_chars(s.data(), s.data() + s.size(), out);
+    return r.ec == std::errc() && r.ptr == s.data() + s.size();
+}
+}  // namespace
+
 std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameObjectTypes& types) {
     std::vector<GalacticAiTypeInfo> out(types.raw().type_count());
     for (size_t t = 0; t < out.size(); ++t) {
@@ -2228,6 +2240,30 @@ std::vector<GalacticAiTypeInfo> make_galactic_ai_type_info(const objects::GameOb
             if (m != objects::kNone && static_cast<size_t>(m) < out.size()) out[static_cast<size_t>(m)].company_member = true;
         for (const objects::TypeIndex m : types.get_type_refs(ti, "Squadron_Units"))
             if (m != objects::kNone && static_cast<size_t>(m) < out.size()) out[static_cast<size_t>(m)].squadron_member = true;
+    }
+    // Starting_Spawned_Units_Tech_0..5: (type, count) lists, repeated tags appended (the hangar / tactical reading).
+    for (size_t t = 0; t < out.size(); ++t) {
+        const auto ti = static_cast<objects::TypeIndex>(t);
+        for (size_t n = 0; n < kSpawnTechSlots; ++n) {
+            const std::span<const std::string_view> toks = types.get_list(ti, "Starting_Spawned_Units_Tech_" + std::to_string(n));
+            for (size_t i = 0; i < toks.size(); ++i) {
+                std::string_view name = ai_trim(toks[i]);
+                int32_t count = 0;
+                const size_t cut = name.find(',') != std::string_view::npos ? name.find(',') : name.find_last_of(" \t");
+                bool ok = false;
+                if (cut != std::string_view::npos) {  // "Type, N" in one token
+                    ok = parse_count(name.substr(cut + 1), count);
+                    name = ai_trim(name.substr(0, cut));
+                } else if (i + 1 < toks.size()) {  // "Type" "N" as two tokens
+                    ok = parse_count(toks[i + 1], count);
+                    if (ok) ++i;
+                }
+                if (!ok || name.empty()) continue;
+                const objects::TypeIndex m = types.resolve_name(name);
+                if (m != objects::kNone && static_cast<size_t>(m) < out.size())
+                    out[t].spawn_tech[n].push_back({static_cast<uint32_t>(m), count});
+            }
+        }
     }
     fill_category_masks(out);
     return out;
