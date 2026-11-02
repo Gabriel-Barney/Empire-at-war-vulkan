@@ -1807,3 +1807,76 @@ They then auto-engage within `Guard_Chase_Range` of the slot goal. Whether they 
 > R = half the lead's attack range from the recorded goal; any newer order for a unit removes it from its record
 > (AI save v3, hashed). [port] Not yet: the "turns hostile" and "fogged after arrival" ends of an object guard; unit-level
 > Lua orders, abilities and garrison orders do not supersede statuses; the guard cap constant (0x140b276c0) is [L].
+
+## 34. Battles that never end: reserve units, one plan library, slow station sieges (a1i t01 / t02) [H unless tagged]
+
+**Question.** `alamo_headless --skirmish-ai foc-land --seed N --ticks 20000 --expect-battle-end` reached the 14400-frame
+cap on 11 of seeds 1-12 (only seed 5 ended), and foc-station on seeds 1 and 6 of 1-8. A1h named two land causes:
+fog-hidden Rebel infantry the Empire never reaches, and an undeployed Rebel reserve that kept the side alive under the
+port's "reserve counts" rule (BT §3.1a said pool units never count [M]).
+
+### 34.1 Reserve units never keep a side alive (0xb) [H]
+
+- 0x344710 case 0xb walks only the **tactical** GOM's object list (0x2a9ff0 on the tactical mode's GOM, gom +0x38).
+- A reserve unit is a galactic persistent object in the parent mode's lists (TACTICAL_GAPS §4.2). Its tactical object
+  (the landing object, §32.2) is created only when it drops (0x2b5fe0). Until then nothing of it is in the list 0xb walks.
+- 0x2c0340, the only 0xb trigger, reads no reserve or pool state.
+- So a side whose last victory-relevant tactical object leaves loses by 0xb with reserves left. BT §3.1a item 1 is now [H].
+
+**Port (a1i t01).** `TacticalBattle::check_victory` no longer counts a never-deployed participant (the rule came from
+l1sys t06, `[port]` "not adopted until probed"). No probe is needed. Left [port]: the check is still polled each tick,
+not event-driven. The "empty side gets its next pool unit" step in `reinforce` runs at the start of the next tick, after
+the victory check of the tick in which the side emptied, so it no longer saves a side.
+
+### 34.2 One plan library for every mode [H]
+
+- AI_GALACTIC §1.9.1: the loader 0x4e7e30 loads `AI\`, `AI\SpaceMode\`, `AI\LandMode\`, `AI\StoryArc\` and
+  `Interventions\` into **one** plan manager. A plan's folder does not restrict its mode; only its `Category` does.
+- Shipped FoC data has two plans that serve a mode outside their folder:
+  - `AI\SpaceMode\RetreatPlan.lua`: `Category = "Space_Retreat | Land_Retreat"`. It is the **only** plan for `Land_Retreat`.
+  - `AI\AI_Plan_ExpansionGeneric_GenerateMagicCashDrop.lua` (AI root): the skirmish magic cash drop goals for land and space.
+- The port's `tactical_plan_files` loaded only the mode's own folder, so the land AI had no `Land_Retreat` plan. In
+  foc-land seed 1 the Rebel attacker (one company on the map against four) proposed `Should_Retreat_From_Land` 64 times,
+  and each proposal ended with "no potential plan".
+
+**Port (a1i t01).** `tactical_plan_files` returns every plan folder in load order for both modes. Plans whose
+`Category` names no goal of the mode are never picked. foc-station CRCs are unchanged on seeds 1-8. Every foc-land seed
+now ends when the Rebel retreats (§34.4).
+
+### 34.3 Why the Empire never reached the hidden infantry (seed 1, before §34.2) [findings, not changed]
+
+These stalls still happen in any land battle where neither side retreats:
+- **Scouting never runs.** `Land_Scout_Area` was proposed about 6578 times and failed 6496 times ("failed Plan"). The
+  LANDSCOUT task force needs `Infantry | Air | LandHero`. The Empire's only infantry (two Imperial_Stormtrooper_Squad
+  companies) was held by `Clear_Infantry` task forces. Those are `Set_As_Goal_System_Removable(false)`, so the free store
+  never released them.
+- **`Clear_Infantry` never gets past its first Attack_Move.** It blocks on `BlockOnCommand(Attack_Move(AITarget))`. The
+  TF Move status finishes only when every unit reports movement finished (§33.2). The AT-AT (speed 0.8) never reaches
+  its formation slot: it circles 150-190 units short among stopped friendly infantry and keeps its movement goal. One
+  plan blocked from frame 196 to 5819, the next from 5917 to the cap. This is arrival in a crowded slot, owned by the
+  movement layer. Follow-up for movement.
+- **Seed 4: point-blank misses.** Both sides attack-moved into one area and parked in interleaved slots 34-89 units
+  apart, with targets in range. The last 600 frames had 252 shots and 4 hits (TACTICAL_COMBAT §2.9 port differences).
+  Follow-up for combat.
+
+### 34.4 Seed table (headless, `--workers 2`, battle cap 14400 frames)
+
+| Run | Before (main d1c8ccf) | After (§34.1 + §34.2) |
+|---|---|---|
+| foc-land 1-4, 6-12 | cap | end: Rebel retreats (0xc), frames 3045-5175 |
+| foc-land 5 | end: Empire all-destroyed, 11636 | end: Rebel retreats (0xc), 2877 |
+| foc-station 2, 4, 5, 7, 8 | end: Rebel all-destroyed | unchanged (same CRCs) |
+| foc-station 3 | end: Empire retreats, 11967 | unchanged |
+| foc-station 1, 6 | cap | cap; with a 40000-frame cap they end at 16344 and 17340 (Empire retreats, starbase lost) |
+
+### 34.5 Station seeds 1 and 6: a slow siege, not a stall (a1i t02) [findings, no change]
+
+- `Empire_Star_Base_2` launches TIE fighter / bomber squadrons and a Tartan without limit (`Reserve_Spawned_Units_Tech_0
+  ..., -1`, with a data comment saying it keeps spawning until the fighter bay hard point is destroyed). This matches
+  STATION_HANGARS_SOUND §2.4 item 6: spawning stops only when every FIGHTER_BAY hard point is destroyed.
+- In seed 1 the Rebel keeps 5-7 ships on the map (population cap) and holds about 93 000 power against about 12 000.
+  Until about frame 12600 its capital ships target the fresh squadrons, not the station. Station hit points fall from
+  3300 to 1245 at the cap and to 788 by frame 15600; the station is lost at 16344. Seed 6 behaves the same way.
+- Nothing shows a port divergence in the victory or AI code. Two things were not checked against the original: whether
+  Rebel capital ships should prefer the station or its fighter bays over fighters (targeting priority sets), and whether
+  the fighter bay hard points are ever targeted. Follow-up for combat. The foc-station test stays on seed 3.

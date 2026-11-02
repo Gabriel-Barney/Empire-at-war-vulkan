@@ -428,7 +428,7 @@ bool reinforce_join_pp(std::vector<TacticalPpPick>& picks, int32_t unit, int32_t
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);
-// The plan files of one tactical mode's folder (Data\Scripts\AI\LandMode\ or SpaceMode\), sorted [port].
+// The plan files of a tactical mode: every plan folder in load order, as for the galactic AI (AI_GALACTIC §1.9.1 [H]).
 std::vector<std::string> tactical_plan_files(TacticalMode mode, const std::function<std::vector<std::string>(std::string_view)>& list);
 
 }  // namespace alamo::ai::tactical

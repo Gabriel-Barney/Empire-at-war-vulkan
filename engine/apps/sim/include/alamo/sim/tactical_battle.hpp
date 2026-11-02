@@ -1001,10 +1001,9 @@ private:
     void complete_retreat(TacticalMode& mode, uint8_t side);
     void conclude(int32_t winner, uint8_t victory, int32_t retreated);  // finish(), after end_hold_frames
     void check_victory();
-    // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type (participant: any spawn
-    // type). Cached per type in vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
+    // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type. Cached per type in
+    // vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
     bool victory_relevant(uint32_t type);
-    bool victory_relevant(const Participant& p);
     void finish(int32_t winner, uint8_t victory, int32_t retreated);
     float side_power(uint8_t side) const;
     int32_t side_player(uint8_t side) const { return side == 0 ? req_.info.defender : req_.info.attacker; }
