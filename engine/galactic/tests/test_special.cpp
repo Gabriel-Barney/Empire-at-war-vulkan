@@ -1332,7 +1332,8 @@ void test_launch_and_linked() {
         for (PlanetIndex p = 0; p < s.planets().size(); ++p)
             if (w.planet(p).is_planet) CHECK(w.planet(p).influence == std::vector<int32_t>{id});
     }
-    {  // linked battle: commands refused while pending, a second queue refused, the hash moves.
+    {  // linked battle: a second queue refused, the hash moves. With no conflict queues the local player is in no queued
+       // conflict, so the flag alone does not pause (0x2b0350; blocked case: alamo_galactic_conflict_tests).
         World w;
         GalacticSim& s = w.sim;
         auto digest = [&s] {
@@ -1341,10 +1342,9 @@ void test_launch_and_linked() {
             return h.digest();
         };
         const auto before = digest();
-        CHECK(!s.paused() && s.queue_linked_battle() && !s.queue_linked_battle() && s.linked_battle_pending() && s.paused());
+        CHECK(!s.paused() && s.queue_linked_battle() && !s.queue_linked_battle() && s.linked_battle_pending());
+        CHECK(!s.paused() && !s.story_block());
         CHECK(digest() != before);
-        const ObjectHandle h = s.spawn_unit(pEmp, rA, tTyber);
-        CHECK(s.execute(static_cast<uint8_t>(pEmp), special_activate_event(w.pid(rA), w.oid(h))) == RejectReason::NotAllowed);
         s.clear_linked_battle();
         CHECK(!s.paused() && !s.linked_battle_pending());
     }

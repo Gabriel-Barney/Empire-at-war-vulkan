@@ -268,8 +268,12 @@ int m_tf_activate_ability(Call& c) {
         h->tf_activate_ability(c.self->id, type_name, on, AiArg{});
         return 0;
     }
-    for (const objects::ObjectHandle u : h->tf_units(c.self->id)) detail::call_object_method(c, u, "Activate_Ability", c.first, c.nargs);
-    return push_status(c, h->tf_activate_ability(c.self->id, name, on, target));
+    // S7 t15 A1 (MOVEMENT §3.1.1 step 6): the host learns which units activated (one AbilityBlockStatus count each; the
+    // others get Unit_Ability_Finished queued at once).
+    std::vector<std::pair<objects::ObjectHandle, bool>> results;
+    for (const objects::ObjectHandle u : h->tf_units(c.self->id))
+        results.emplace_back(u, detail::object_activate_ability(c, u, c.first, c.nargs));
+    return push_status(c, h->tf_activate_ability_units(c.self->id, name, on, target, results));
 }
 int m_tf_is_raid_capable(Call& c) {
     AiScriptHost* h = host_of(c.L);

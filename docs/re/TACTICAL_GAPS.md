@@ -976,7 +976,7 @@ container locomotor, FormationSpacing 0.5) and slots.
 >   (1 + Reinforcement_Deploy_Time_Multiplier list). Battle AI perception reads the landing's carried type as its
 >   representative type. `BattleConfig::landing_unload_timed` (off by default) runs the state machine instead: hidden
 >   until clear of the other landings, one team / vehicle per step on a locked exit move, unlock + record after the last,
->   saved mid-unload (battle state v2). Open: switching it on (the AI's in-flight wait), the Land / Takeoff clip times,
+>   saved mid-unload (battle state v3). Open: switching it on (the AI's in-flight wait), the Land / Takeoff clip times,
 >   the skirmish `Reinforcement_Time_Multiplier` wait, the +0xd8 hover term.
 > - item 3: `Create_Cinematic_Transport`'s persist flag is stored (`ObjectStore::landing_persist`, save v3); a persistent
 >   landing object blocks human drops.

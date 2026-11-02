@@ -1051,6 +1051,187 @@ static void test_jetpack_alternates() {
     CHECK(v.locomotor == LocomotorKind::Default && v.max_speed == mult && v.arrived);
 }
 
+// S7 t15 (MOVEMENT §3.1.1 "Acceleration / deceleration"): the planner request of a jetpack in its airborne kind takes
+// Alternate_Max_Speed / _Rate_Of_Turn, but its acceleration / deceleration are the common getters: OverrideAcceleration x
+// (effective max speed / Max_Speed), else the NORMAL effective max speed, never the alternate.
+static void test_jetpack_accel_fallback() {
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc d = trooper(1, cell_center(10, 10));  // Max_Speed 1.0, Alternate_Max_Speed 2.5, no override
+    CHECK(sys.add_unit(d));
+    UnitDesc o = trooper(2, cell_center(10, 20));
+    o.accel = 0.1f;
+    o.decel = 0.05f;
+    CHECK(sys.add_unit(o));
+    const float mult = sys.view(1).max_speed;  // the normal effective max speed (1.0 x the land multiplier)
+    SpaceRequest q;
+    CHECK(!sys.air_request(1, 0, q));  // walking: not a land air unit
+    CHECK(sys.use_secondary_locomotor(1, true) && sys.use_secondary_locomotor(2, true));
+    CHECK(sys.air_request(1, 7, q) && q.now == 7u);
+    CHECK(q.speed == 2.5f * mult && q.turn_rate == 12.0f * (mult / 1.0f));  // airborne kind: the alternates
+    CHECK(q.accel == mult && q.decel == mult);                              // the normal max speed, not 2.5 x mult
+    CHECK(sys.air_request(2, 7, q) && q.speed == 2.5f * mult && q.accel == 0.1f * mult && q.decel == 0.05f * mult);
+    CHECK(!sys.air_request(99, 7, q));
+    std::printf("jetpack accel fallback: accel %.3f (normal max %.3f, alternate %.3f)\n", static_cast<double>(mult),
+                static_cast<double>(mult), static_cast<double>(2.5f * mult));
+}
+
+// PR #19 review (S8 t09): a jetpack in flight must never repeat a pose (MOVEMENT §3.1.1: a 0x13 frame whose follower step
+// leaves position and orientation unchanged drops to 0x16 and swaps back in the air). The planner made zero-length wait
+// steps (ops 7 / 18 clamped to the goal distance) at the goal in facing mode; it no longer does. Checks the planner output
+// directly (facing-mode requests: no two consecutive waypoints with the same pose and later time) and whole flights with a
+// final facing (no repeated pose in 0x13, never 0x16 while airborne).
+static void test_jetpack_no_repeated_pose() {
+    const MovementConstants k{};
+    SpaceOccupancy occ;
+    occ.set_box({0.0f, 0.0f}, {4000.0f, 4000.0f});
+    SpaceScratch sc;
+    uint32_t paths = 0, repeats = 0;
+    for (int32_t i = 0; i < 96; ++i) {
+        SpaceRequest q;
+        q.self = 1;
+        q.start = {1000.0f + 37.0f * static_cast<float>(i % 24), 1200.0f};
+        q.goal = {1400.0f + 11.0f * static_cast<float>(i % 5), 1500.0f + 23.0f * static_cast<float>(i % 7)};
+        q.start_heading = 30.0f * static_cast<float>(i);
+        q.speed = 3.9f;
+        q.turn_rate = 9.36f;
+        q.radius = 6.0f;
+        q.accel = 1.56f;
+        q.decel = 1.56f;
+        q.goal_facing = 45.0f * static_cast<float>(i % 8);
+        // A ship of the same layer crossing the goal around the arrival time (from i >= 24): waiting can pay.
+        if (i >= 24) {
+            const float sp = 1.0f + 0.25f * static_cast<float>(i % 9);
+            std::vector<SpaceWaypoint> tw(2);
+            tw[0].pos = q.goal + V2{-800.0f, static_cast<float>(i % 3) * 10.0f - 10.0f};
+            tw[0].heading = 0.0f;
+            tw[0].speed = sp;
+            tw[1].pos = q.goal + V2{800.0f, static_cast<float>(i % 3) * 10.0f - 10.0f};
+            tw[1].heading = 0.0f;
+            tw[1].speed = sp;
+            tw[1].time = 1600.0f / sp;
+            occ.set_track(2, kLayerFrigate, 30.0f + static_cast<float>(i % 4) * 20.0f, 0, tw);
+        }
+        SpacePath out;
+        plan_space_path(occ, k, q, sc, out);
+        ++paths;
+        for (size_t w = 1; w < out.wps.size(); ++w) {
+            const SpaceWaypoint& a = out.wps[w - 1];
+            const SpaceWaypoint& b = out.wps[w];
+            if (b.time > a.time && a.pos == b.pos && a.heading == b.heading) ++repeats;
+        }
+    }
+    CHECK(repeats == 0);
+
+    uint32_t flights = 0, bad_frames = 0, air_drops = 0;
+    for (int32_t i = 0; i < 12; ++i) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(trooper(1, cell_center(10, 10 + i))));
+        CHECK(sys.add_unit(trooper(2, cell_center(40 + 3 * i, 10))));  // a second jetpack crossing the first one's route
+        SimRng rng(static_cast<uint32_t>(30 + i));
+        MoveOrder j;
+        j.units = {1};
+        j.destination = cell_center(40 + 3 * (i % 6), 30 + 2 * i);
+        j.facing_deg = 60.0f * static_cast<float>(i);
+        j.switch_locomotor = true;
+        sys.move(j, rng, 0);
+        MoveOrder j2;
+        j2.units = {2};
+        j2.destination = cell_center(40 + 3 * (i % 6) - 2, 40 + 2 * i);
+        j2.facing_deg = 30.0f * static_cast<float>(i);
+        j2.switch_locomotor = true;
+        sys.move(j2, rng, 0);
+        UnitView prev = sys.view(1);
+        for (uint32_t f = 0; f < 3000; ++f) {
+            sys.tick(f, rng);
+            const UnitView v = sys.view(1);
+            if (prev.loco_state == LocoState::WalkMoving && v.loco_state == LocoState::WalkMoving && v.pos == prev.pos &&
+                v.yaw == prev.yaw)
+                ++bad_frames;
+            if (prev.loco_state == LocoState::WalkMoving && prev.airborne && v.loco_state == LocoState::WalkStopped) ++air_drops;
+            prev = v;
+            if (v.locomotor == LocomotorKind::Default && f > 0) break;
+        }
+        CHECK(prev.locomotor == LocomotorKind::Default && prev.arrived);
+        bad_frames += sys.stats().jetpack_still_frames;
+        ++flights;
+    }
+    CHECK(bad_frames == 0 && air_drops == 0);
+    std::printf("jetpack poses: %u facing plans (%u repeated poses), %u flights (%u repeated 0x13 poses, %u mid-air drops)\n", paths,
+                repeats, flights, bad_frames, air_drops);
+}
+
+// S7 t15 (MOVEMENT §3.1.1 "Take-off turn: pack +0xe8"): with Has_Pre_Turn_Anim the take-off turn (0x10) turns at the band
+// rate picked after each clip (|e| >= 45: R; 22.5..45: R x 0.5; below: R x 0.25 x |e| / 11.25) and stays in 0x10 until the
+// turn clip reaches its last 2 frames; the first frame turns at R.
+static uint32_t band_anim_len(ObjectId id, int32_t a) {
+    switch (a) {
+        case kAnimTurnLeft:
+        case kAnimTurnRight: return 4;
+        case kAnimTurnLeftHalf:
+        case kAnimTurnRightHalf: return 6;
+        case kAnimTurnLeftQuarter:
+        case kAnimTurnRightQuarter: return 30;
+        default: return anim_len(id, a);
+    }
+}
+
+static void test_jetpack_turn_bands() {
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    sys.set_anim_length_fn(band_anim_len);
+    UnitDesc d = unit(1, cell_center(10, 10), 0, 2.0f, 6.0f, LocomotorKind::Jetpack);
+    d.turn_rate = 2.0f;
+    d.yaw_deg = 180.0f;
+    d.hover_offset = 30.0f;
+    d.has_pre_turn_anim = true;
+    CHECK(sys.add_unit(d));
+    // A static obstacle overlapping the start, ahead of the unit: the plan opens with a turn in place to an escape heading
+    // far from 180, so the take-off turn is long (the aim is the first waypoint away from the start).
+    sys.air().add_static(900, cell_center(10, 10) + V2{-30.0f, 0.0f}, 40.0f);
+    const float mult = sys.view(1).max_speed / 2.0f;
+    const float R = 2.0f * mult;
+    SimRng rng(5);
+    MoveOrder o;
+    o.units = {1};
+    o.destination = cell_center(70, 10);
+    sys.move(o, rng, 0);
+    UnitView prev = sys.view(1);
+    auto band = [](int32_t a) {  // 0 none, 1 full, 2 half, 3 quarter
+        if (a == kAnimTurnLeft || a == kAnimTurnRight) return 1;
+        if (a == kAnimTurnLeftHalf || a == kAnimTurnRightHalf) return 2;
+        if (a == kAnimTurnLeftQuarter || a == kAnimTurnRightQuarter) return 3;
+        return 0;
+    };
+    uint32_t turn_frames = 0, half_at_rate = 0, aligned_wait = 0;
+    bool first_ok = false, steps_ok = true, seen[4] = {false, false, false, false};
+    for (uint32_t f = 0; f < 600; ++f) {
+        sys.tick(f, rng);
+        const UnitView v = sys.view(1);
+        if (prev.loco_state == LocoState::WalkTurning) {  // a 0x10 service ran this frame
+            const float step = std::fabs(wrap_deg(v.yaw - prev.yaw));
+            if (turn_frames++ == 0) first_ok = near(step, R, 1e-3f);  // +0xe8 cleared by 0xF: the first frame turns at R
+            const int32_t b = band(prev.anim);
+            if (b == 1) steps_ok = steps_ok && step <= R + 1e-3f;
+            if (b == 2) {
+                steps_ok = steps_ok && step <= 0.5f * R + 1e-3f;
+                if (near(step, 0.5f * R, 1e-3f)) ++half_at_rate;
+            }
+            if (b == 3) steps_ok = steps_ok && step <= 0.5f * R + 1e-3f;  // R x 0.25 x |e| / 11.25 with |e| < 22.5
+            if (b != 0 && step == 0.0f && v.loco_state == LocoState::WalkTurning) ++aligned_wait;
+        }
+        if (v.loco_state == LocoState::WalkTurning) seen[band(v.anim)] = true;
+        prev = v;
+        if (v.loco_state == LocoState::WalkMoving) break;
+    }
+    CHECK(prev.loco_state == LocoState::WalkMoving && first_ok && steps_ok && seen[1] && seen[2] && seen[3] && half_at_rate > 0 &&
+          aligned_wait > 0);
+    std::printf("jetpack turn bands: %u turn frames, full / half / quarter %d / %d / %d, %u at R/2, %u aligned frames waiting "
+                "for the clip end\n",
+                turn_frames, seen[1] ? 1 : 0, seen[2] ? 1 : 0, seen[3] ? 1 : 0, half_at_rate, aligned_wait);
+}
+
 // S7 t14 (MOVEMENT §3.1.1 steps 4 and 7): the swap to the jetpack re-issues the unit's current order to it alone (or holds
 // it in place: the jetpack reverts one service after the next); the swap back keeps the order and the walk finishes it.
 static void test_jetpack_orders() {
@@ -1355,7 +1536,8 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // Golden digest of the final record (MSVC and clang must both produce it). S7 collision layer (2026-10-29): moved (the
 // land hash appends the collision objects; priority-ordered resolution). FIGHTER_FLYING §6 flying (2026-10-29): moved
 // (Hermite follower, attitude / altitude steps, D + dir x L loiter; flying units hash pitch, V, path index, target).
-static constexpr uint64_t kGoldenMixed = 0x81d85cc90e42fdfbull;
+// S7 t15 (2026-11-02): moved (the Has_Pre_Turn_Anim jetpack's take-off turn: band rates, one-shot clips, clip-end exit).
+static constexpr uint64_t kGoldenMixed = 0x1645f6a50ff73064ull;
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).
@@ -1591,6 +1773,9 @@ int main() {
     test_jetpack_alternates();     // S7 t14
     test_jetpack_orders();         // S7 t14
     test_multi_locomotor_types();  // S7 t14
+    test_jetpack_accel_fallback();   // S7 t15
+    test_jetpack_turn_bands();       // S7 t15
+    test_jetpack_no_repeated_pose(); // S8 t09 (PR #19 review)
     test_bike();
     test_bomber();
     test_fighter_space();

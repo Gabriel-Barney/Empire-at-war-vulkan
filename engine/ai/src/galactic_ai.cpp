@@ -9,6 +9,7 @@
 #include "alamo/ai/ai_free_store_path.hpp"
 
 #include "alamo/data/xml.hpp"
+#include "alamo/lua/gc_schedule.hpp"  // OPT2 t04
 #include "galactic_ai_impl.hpp"
 
 namespace alamo::ai {
@@ -53,9 +54,14 @@ GalacticSimTokenResolver::Hooks GalacticAiWorld::Impl::make_hooks() {
         out = pa->ctx.budget.pools_total();
         return true;
     };
+    // BudgetFractionToBuild 0x667120 fails only without a goal system (AI_GALACTIC_TOKENS) [H]. The AIBudgetClass is
+    // embedded in the goal system (+0x190), so it exists before its Init 0x6137b0; Init evaluates the category
+    // weights first (AI_GALACTIC_2 §3.2), when every rate / available still holds its constructed 0 [M: ctor zeros]
+    // (A2 f t01: failing here made the Empire's Infrastructure / MajorItem equations fail at Init, so Offensive got the
+    // whole starting bank).
     h.budget = [this](int32_t p, std::string_view category, double& rate, double& available) {
         const PlayerAi* pa = player_ai(p);
-        if (!pa || !pa->ctx.budget.initialised()) return false;
+        if (!pa) return false;
         if (category.empty()) {  // every category: budget +0x68 and the player's credits [H]
             rate = pa->ctx.budget.income_per_second();
             available = sim.credits(p);
@@ -1900,6 +1906,16 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
     w.now = now;
     if (w.perception_frame != now) {
         w.perception_frame = now;
+        {  // OPT2 t04: staggered scheduled Lua collections, once per frame before any script of this world runs
+            std::vector<lua::LuaVm*> vms;  // free stores by player, plans by id, evaluators by name (saved orders)
+            for (const auto& a : w.ai)
+                if (a && a->fs_vm) vms.push_back(a->fs_vm.get());
+            for (const auto& [id, pi] : w.plans)
+                if (pi.vm) vms.push_back(pi.vm.get());
+            for (const auto& [key, e] : w.scripts.loaded_vms())
+                if (e.vm) vms.push_back(e.vm.get());
+            lua::collect_scheduled(vms, static_cast<uint64_t>(now), w.cfg.lua_gc_pf);
+        }
         w.snap = snapshot_from_sim(w.sim, w.cfg.ai_uses_fog_galactic);
         w.perc.update(w.snap, static_cast<uint32_t>(w.sim.frame()));
         w.mem.clear();
@@ -2041,8 +2057,10 @@ std::vector<PlanetIndex> GalacticAiWorld::reach_planets(int32_t player, int leve
     return pa->source_planets(level);
 }
 
+float GalacticAiWorld::plan_production_time(int32_t running) const { return impl_->goal_production_time(running); }
+
 std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal,
-                                                           int32_t target, bool* ok) {
+                                                           int32_t target, bool* ok, float* eta) {
     Impl& w = *impl_;
     std::vector<uint32_t> out;
     if (ok) *ok = false;
@@ -2054,6 +2072,7 @@ std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std:
     if (!w.solve_potential_plan(*pa, p, g, target, rec)) return out;
     for (const PpSelection& s : rec.sel) out.push_back(s.type);
     if (ok) *ok = true;
+    if (eta) *eta = rec.eta;
     return out;
 }
 

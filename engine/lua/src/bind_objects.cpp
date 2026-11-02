@@ -915,6 +915,12 @@ int m_block_is_finished(Call& c) {
         const RemainingScriptHooks* hk = b ? b->remaining : nullptr;
         return push_bool(c, !(hk && hk->bombing_run_finished) || hk->bombing_run_finished(c.self->id));
     }
+    if (c.self->reserved == detail::kBlockAbility) {  // S7 t15 A1: AbilityBlockStatus (count 1) of one unit
+        const objects::ObjectStore* st = store(c);
+        const ObjectHandle h = st ? st->find(c.self->id) : ObjectHandle{};
+        if (!h || !st->alive(h) || st->dying(h)) return push_bool(c, true);  // signals 0xb / 0x10: death / removal [M]
+        return push_bool(c, !b || b->ability_signals(c.self->id) > static_cast<uint32_t>(c.self->value));
+    }
     if (c.self->reserved > kBlockForever) return push_bool(c, detail::galactic_block_finished(c));
     if (c.self->reserved == kBlockReinforcement) {
         const ReinforceState* r = b ? b->reinforcement(static_cast<uint32_t>(c.self->value)) : nullptr;
@@ -1237,7 +1243,24 @@ AbilityArg ability_arg_family(uint8_t t) {
 // families -> SetUnitAbilityMode(t, on, target object if any).
 // Otherwise: SetUnitAbilityMode on the direct path (COMMANDS.md §2.2 / §5). No name: the type's first unit
 // ability [inferred]. An ability the unit does not have is a no-op [inferred].
-int m_activate_ability(Call& c) {
+// S7 t15 A1 (MOVEMENT §3.1.1 step 6, ABILITIES_HARDPOINTS §2.6): on the S9 path the BlockingStatus is an AbilityBlockStatus
+// (pending count 1, push_ability_block) that finishes on the unit's next "unit ability finished" signal 0x29 or its
+// death / removal, also when the activation itself was refused [M: 0x570580 sets the count to 1 either way]; no ability
+// (unknown name, not the unit's, dead target argument) -> finished at once [inferred]. *activated (task-force
+// Activate_Ability, bind_ai.cpp): whether the S9 command accepted the unit.
+int push_ability_block(Call& c, ObjectId object) {
+    ObjectBridge* b = bridge(c);
+    if (!b) return push_block(c, object, 0);  // no bridge: nothing reports the signal -> finished
+    Ud u;
+    u.cls = cls_blocking();
+    u.id = object;
+    u.value = b->watch_ability(object);
+    u.reserved = detail::kBlockAbility;
+    detail::push_engine_userdata(c.L, u);
+    return 1;
+}
+int activate_ability(Call& c, bool* activated) {
+    if (activated) *activated = false;
     // P4 lua: in a galactic script the Ground_Activated hero trigger (Activate_Ability_Galactic 0x570670,
     // P4_SIM_SYSTEMS 6.1) through the players family; returns nothing (L1P4_LUA_GAPS 1.2 item 4).
     if (detail::galactic_activate_ability(c)) return 0;
@@ -1270,27 +1293,30 @@ int m_activate_ability(Call& c) {
         if (id == 0 || !a->has_ability(c.self->id, id)) return push_block(c, c.self->id, 0);
         const uint32_t frame = ability_frame(c);
         const ObjectId users[] = {c.self->id};
+        uint32_t accepted = 0;
         switch (ability_arg_family(id)) {
             case AbilityArg::Object:
-                if (target != objects::kNoObjectId) a->targeted_ability(users, id, target, -1, frame);
+                if (target != objects::kNoObjectId) accepted = a->targeted_ability(users, id, target, -1, frame);
                 break;
             case AbilityArg::Position: {
                 if (!has_point) break;
                 const ObjectBridge* b = bridge(c);
                 if (b && b->spawn_ability_target) {
                     const ObjectId dummy = b->spawn_ability_target(p, store(c)->owner(self));
-                    if (dummy != objects::kNoObjectId) a->targeted_ability(users, id, dummy, -1, frame);
+                    if (dummy != objects::kNoObjectId) accepted = a->targeted_ability(users, id, dummy, -1, frame);
                     break;
                 }
+                if (activated) *activated = true;  // [port] the event path: accepted by the pipeline
                 return issue_and_block(c, ev_ability_mode(c.self->id, id, true, target, p));
             }
             case AbilityArg::Toggle:
             case AbilityArg::ModePosition:
             case AbilityArg::OptionalTarget:
-                a->set_unit_ability_mode(users, id, on, frame, target);
+                accepted = a->set_unit_ability_mode(users, id, on, frame, target);
                 break;
         }
-        return push_block(c, c.self->id, 0);
+        if (activated) *activated = accepted > 0;
+        return push_ability_block(c, c.self->id);
     }
 #else
     (void)has_point;
@@ -1298,8 +1324,10 @@ int m_activate_ability(Call& c) {
     if (id == 0 || !has_ability(c, self, id)) return push_block(c, c.self->id, 0);
     if (!black_market_ok(c, self, id)) return push_block(c, c.self->id, 0);  // P4 lua: BM gate (0x570a50)
     if (ScriptObjectState* s = edit_self(c)) s->abilities[id].active = on;
+    if (activated) *activated = true;
     return issue_and_block(c, ev_ability_mode(c.self->id, id, on, target, p));
 }
+int m_activate_ability(Call& c) { return activate_ability(c, nullptr); }
 
 // Force_Ability_Recharge(name [, seconds]): without seconds the recharge starts (§2.6); with seconds
 // counter = maximum = int(FPS x s), phase unchanged (§5). No ability system: nothing to recharge.
@@ -2652,12 +2680,20 @@ void ObjectBridge::hash(StateHasher& h) const {
             }
         }
     }
+    // S7 t15 A1: watched units' ability-signal counts (only when a blocking Activate_Ability watched one: CRCs unchanged).
+    if (!ability_signals_.empty()) {
+        h.u32(static_cast<uint32_t>(ability_signals_.size()));
+        for (const auto& [id, n] : ability_signals_) {
+            h.i32(id);
+            h.u32(n);
+        }
+    }
 }
 
 // ---- N1 save / load ----
 
 namespace {
-constexpr uint32_t kBridgeSaveVersion = 1;
+constexpr uint32_t kBridgeSaveVersion = 2;  // 2: S7 t15 A1 ability-signal counts
 // ScriptObjectState's flags in save order (shared by write and read).
 template <class S>
 auto bridge_flags(S& s) {
@@ -2691,6 +2727,8 @@ void ObjectBridge::write(ByteWriter& w) const {
         w.u32(id).boolean(rs.finished).u32(static_cast<uint32_t>(rs.units.size()));
         for (const ObjectId u : rs.units) w.i32(u);
     }
+    w.u32(static_cast<uint32_t>(ability_signals_.size()));
+    for (const auto& [id, n] : ability_signals_) w.i32(id).u32(n);
 }
 
 bool ObjectBridge::read(ByteReader& r) {
@@ -2766,13 +2804,38 @@ bool ObjectBridge::read(ByteReader& r) {
         for (ObjectId& u : rs.units) u = r.i32();
         reinforcements.emplace(id, std::move(rs));
     }
+    n = r.u32();
+    if (!r.ok() || n > r.remaining() / 8) return false;
+    std::map<ObjectId, uint32_t> ability_signals;
+    for (uint32_t i = 0; i < n; ++i) {
+        const ObjectId id = r.i32();
+        const uint32_t k = r.u32();
+        if (!r.ok() || (!ability_signals.empty() && id <= ability_signals.rbegin()->first)) return false;
+        ability_signals.emplace(id, k);
+    }
     if (!r.ok()) return false;
     orders_issued = orders;
+    ability_signals_ = std::move(ability_signals);
     states_ = std::move(states);
     remaining_states_ = std::move(remaining_states);
     reinforcements_ = std::move(reinforcements);
     next_reinforcement_ = next;
     return true;
+}
+
+bool detail::object_activate_ability(Call& c, ObjectHandle unit, int first, int nargs) {
+    const int top = lua_gettop(c.L);
+    detail::push_object(c.L, *c.vm, unit);
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, -1));
+    bool activated = false;
+    if (ud && detail::object_alive(*c.vm, *ud)) {
+        char err[256];
+        err[0] = 0;
+        Call sub{c.L, c.vm, ud, first, nargs, err, sizeof err};
+        activate_ability(sub, &activated);
+    }
+    lua_settop(c.L, top);
+    return activated;
 }
 
 void attach_object_bridge(LuaVm& vm, ObjectBridge* bridge) {

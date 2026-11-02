@@ -13,7 +13,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 2;  // 2: a1i t04 landing objects
+constexpr uint32_t kBattleStateVersion = 3;  // 2: S7 t22 fighter formations, 3: a1i t04 landing objects
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -73,7 +73,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a.seq(b.effects_, [](auto& x, auto& e) { x(e.id, e.asset, e.percent, e.frame); });
     a(b.anchor_[0], b.anchor_[1], b.facing_[0], b.facing_[1], b.placed_[0], b.placed_[1]);
     a(b.drop_facing_[0], b.drop_facing_[1]);  // a1h t06
-    a.seq(b.landings_, [](auto& x, auto& l) {  // a1i t04: landing objects (state version 2)
+    a.seq(b.landings_, [](auto& x, auto& l) {  // a1i t04: landing objects (state version 3)
         x(l.id, l.h, l.participant, l.state, l.timed, l.timer_start, l.timer_len, l.unloaded, l.next_offset, l.remove_frame);
         x(l.targets, l.units);
     });
@@ -138,6 +138,8 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a(b.hg_orphans_, b.prod_used_, b.hg_tech_bonus_);
     a.seq(b.hg_upgrades_, [](auto& x, auto& u) { x(u.old_station, u.new_station, u.owner); });
     a(b.hg_launches_, b.hg_used_);
+    // S7 t22: fighter formations
+    a.seq(b.fformations_, [](auto& x, auto& f) { x(f.key, f.flags, f.goal, f.goal_object, f.pushed); });
 }
 
 void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {

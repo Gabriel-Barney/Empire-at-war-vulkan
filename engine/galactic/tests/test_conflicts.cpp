@@ -6,6 +6,7 @@
 //   4. conflict flow on a synthetic galaxy: AI vs AI auto-resolve on fleet arrival, human Fight with a
 //      tactical host (finish_battle write-back + retreat), human Pending choice (galaxy paused until
 //      choose()), land invasion, determinism (two runs give the same conflict + galactic digests).
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <span>
@@ -15,6 +16,7 @@
 #include "alamo/galactic/auto_resolve.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
+#include "alamo/galactic/special_systems.hpp"
 #include "alamo/objects/game_object_types.hpp"
 
 using namespace alamo;
@@ -735,6 +737,66 @@ void test_invade_event_gates() {
     std::printf("invade event gates: pause and linked-battle gates on the event, none on the AI's direct call\n");
 }
 
+// a1i t03 (A1_READINGS §31.7, REMAINING_GAPS 6.4): the story block (linked battle pending + the LOCAL player in a queued
+// conflict, 0x2b0350) gates the paused query 0x4b2360 and the FleetManagement 0x5af260, MoveThroughObjects 0x3c4460 and
+// SpecialAbility 0x4b4d70 executors. It never looks at the issuer: an AI player's commands run while the local player
+// is in no queued conflict, and are dropped once it is. MoveObjectToObject 0x3af410 has no gate.
+void test_linked_battle_gates() {
+    World w({{pEmpire, rA, tInfantry}, {pEmpire, rB, tInfantry}, {pUnder, rB, tFrigate}, {pUnder, rB, tInfantry},
+             {pUnder, rC, tFrigate}, {pUnder, rC, tInfantry}, {pUnder, rC, tInfantry}},
+            true);  // the Empire is the human (local) player; the Underworld is an AI player
+    CHECK(w.sim.local_player() == pEmpire);
+    const auto id = [&w](objects::ObjectHandle h) { return static_cast<uint32_t>(w.store.id(h)); };
+    std::vector<objects::ObjectHandle> under_c;
+    for (objects::ObjectHandle h : w.sim.planets()[rC].surface)
+        if (w.store.owner(h) == pUnder) under_c.push_back(h);
+    CHECK(under_c.size() == 2);
+    const uint32_t fc = w.fleet(rC, pUnder);
+    CHECK(fc != kNoFleet);
+    auto run = [&w](const commands::EventData& ev) { return w.sim.execute(static_cast<uint8_t>(pUnder), ev); };
+    auto launch = [&](objects::ObjectHandle u) {
+        return run(fleet_management_event(kFleetLaunch, commands::kNoObject, commands::kNoObject, id(u)));
+    };
+    auto path_move = [&](uint32_t f, PlanetIndex to) {
+        commands::EventData ev(commands::EventType::MoveThroughObjects);
+        ev.set("object", id(w.sim.fleets()[f].object)).set_ids("waypoints", {id(w.sim.planets()[to].object)});
+        return run(ev);
+    };
+    // No planet: refused for the target (InvalidTarget) when the gate lets it through, NotAllowed when it does not.
+    const commands::EventData special = special_activate_event(commands::kNoObject, commands::kNoObject);
+
+    // Linked battle pending, no queued conflict at all: not paused, the AI's commands run.
+    CHECK(w.sim.queue_linked_battle() && !w.cm->in_queued_conflict(pEmpire));
+    CHECK(!w.sim.story_block() && !w.sim.paused());
+    CHECK(launch(under_c[0]) == commands::RejectReason::None);
+    CHECK(run(special) == commands::RejectReason::InvalidTarget);
+
+    // The AI invades B (its direct task-force path, not gated): the local Empire defends a queued land conflict.
+    std::vector<objects::ObjectHandle> at_b;
+    for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
+        if (w.store.owner(h) == pUnder) at_b.push_back(h);
+    CHECK(w.sim.launch_units(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.sim.invade(pUnder, rB, at_b) == commands::RejectReason::None && w.cm->land_queue().size() == 1);
+    CHECK(w.cm->in_queued_conflict(pEmpire));
+    CHECK(w.sim.story_block() && w.sim.paused());
+    // Every gated AI command is dropped now, whoever issued it.
+    CHECK(launch(under_c[1]) == commands::RejectReason::NotAllowed);
+    CHECK(std::find(w.sim.planets()[rC].surface.begin(), w.sim.planets()[rC].surface.end(), under_c[1]) !=
+          w.sim.planets()[rC].surface.end());
+    CHECK(path_move(fc, rA) == commands::RejectReason::NotAllowed && !w.sim.fleets()[fc].moving);
+    CHECK(run(special) == commands::RejectReason::NotAllowed);
+    // MoveObjectToObject has no gate in the original.
+    commands::EventData move(commands::EventType::MoveObjectToObject);
+    move.set("object", id(w.sim.fleets()[fc].object)).set("target", id(w.sim.planets()[rB].object));
+    CHECK(run(move) == commands::RejectReason::None && w.sim.fleets()[fc].moving);
+
+    // The flag cleared (the linked battle started): the queued conflict alone does not pause.
+    w.sim.clear_linked_battle();
+    CHECK(w.cm->in_queued_conflict(pEmpire) && !w.sim.story_block() && !w.sim.paused());
+    CHECK(launch(under_c[1]) == commands::RejectReason::None);
+    std::printf("linked battle gates: local player not in a queued conflict -> AI commands run; in one -> dropped\n");
+}
+
 // OI galactic: TACTICAL_GAPS 4.5 retreat finders, 4.2 land split, 4.8 corruption missions / super-weapon retreat,
 // STRATEGIC_GAPS 1.1 survival-roll listener.
 void test_oi_transitions() {
@@ -946,6 +1008,7 @@ int main() {
     std::printf("land invasion\n");
     test_land_invasion();
     test_invade_event_gates();
+    test_linked_battle_gates();
     test_p4_set_retreating();  // P4 sim
     test_cargo_losses();       // BT §4.4 loss records for carried units
     test_p4_resolve_battle();  // P4 sim

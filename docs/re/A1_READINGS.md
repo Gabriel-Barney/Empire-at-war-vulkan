@@ -1458,8 +1458,55 @@ nothing):
   step]; a planet type that is not found is logged ("story: INVADE_PLANET unable to find planet") and dropped [port: the
   original crashes]; the combatant test vf+0x138 is the unit's GroundUnit kind [port]; the planet is the first planet
   row of the type (as SABOTAGE_STRUCTURE); the Param2 mismatch line goes to the session's Lua messages.
-- Not changed: `paused()` still applies the linked-battle flag to every player for the other commands (REMAINING_GAPS
-  §6.4 "[port: for every player]"); with `in_queued_conflict` available they could follow the original too.
+- ~~Not changed: `paused()` still applies the linked-battle flag to every player for the other commands (REMAINING_GAPS
+  §6.4 "[port: for every player]")~~ done in a1i t03 (below).
+
+**a1i t03 (2026-11-02): every caller of 0x2b0350 [H].** The call graph lists seven callers, and all seven use the same
+test. With S = "the flag 0x140b154d0 is set, or the list 0x140b2b360 is non-empty (never written, REMAINING_GAPS §6.4)"
+and "not multiplayer" (0x28af60(GMM) == 0), the **story block** is `S && !MP && 0x2b0350(GOM)`. 0x2b0350 compares
+records with the **local player** id (0x294a70) only. None of the callers looks at the event's issuer, so an AI
+player's command is blocked exactly when the human's is.
+
+| caller | what it is | GOM passed to 0x2b0350 | effect of the story block | pause counter GMM+0x2c |
+|---|---|---|---|---|
+| 0x4b2360 | `GalacticModeClass` vf9, the galactic "paused" query (MAIN_LOOP §1.5 slot +0x48) | the mode's own (+0x18) | returns true | > 0 → true, tested first |
+| 0x2be640 | GOM service tail (BATTLE_TRANSITIONS §1.4 step 2) | its own | the object service takes the paused branch (as for the counter) and the conflict processing does not run this tick | (galactic mode) > 0 → the paused branch |
+| 0x3c4460 | `MoveThroughObjectsEventClass` vf4 | current mode's (0x140b15418 +0x18) | event dropped | galactic mode and > 0 → dropped |
+| 0x48ff50 | `InvadeEventClass` Execute (§31.2) | current mode's | event dropped | same |
+| 0x4b4d70 | `SpecialAbilityEventClass` vf4 (every kind) | current mode's | event dropped | same |
+| 0x5af260 | `FleetManagementEventClass` vf4 (every op, 8 included) | current mode's | event dropped | same |
+| 0x68f5b0 | Lua `GalacticFreeStoreClass.Move_Object` | current mode's | warning "Galactic mode is currently paused. Move not possible, try again later.", returns false | > 0 (any mode) → same refusal |
+
+- The event executors return with no message. The block is tested before the pause counter, but both only drop.
+- Not gated: `MoveObjectToObjectEventClass` vf4 0x3af410 (it resolves the object and calls 0x39f580, no prologue),
+  `ProductionEventClass` vf4 0x524130, and `GalacticTaskForce.Invade` 0x6ce600 (§31.6).
+- So the paused query and the five command gates all compute "pause counter > 0, or the story block". The only
+  difference is the GOM: 0x4b2360 asks its own mode, while the executors ask the current mode. In galactic mode, where
+  these events run, the two are the same [M for a galactic event executed while a tactical mode is current].
+
+**Port (a1i t03).**
+- `GalacticSim::story_block()` = `linked_battle_pending && in_queued_conflict(local player)` (the port is
+  single-player only).
+- `GalacticSim::paused()` = `pause_ > 0 || story_block()` (0x4b2360). Every port gate keeps calling `paused()`, so all
+  of them now follow the original:
+  - `fleet_management` (0x5af260);
+  - MoveThroughObjects (0x3c4460);
+  - `special_command` (0x4b4d70);
+  - the Invade case (0x48ff50, now `paused()` too);
+  - the galactic AI's free-store `Move_Object` (0x68f5b0);
+  - the [port] unit-split path of MoveObjectToObject (the HUD's drag; it stands in for a FleetManagement split).
+- The other readers of `paused()` follow 0x4b2360 too: the galactic AI service and its task-force MoveTo status, the
+  free-store hop, the reveal delay and the story Lua clock.
+- The whole-fleet MoveObjectToObject stays ungated, as 0x3af410.
+- 0x2be640 is unchanged: `CampaignBattles` leaves its `story_sequence_active` seam unset (BT §2.9.3: the port starts a
+  linked battle at once; see campaign_battles.hpp).
+- Still [port]: `GalacticSim::update` freezes the mode frame only for `pause_ > 0`. 0x4b2360 also freezes it while the
+  story block holds.
+- Tests: `alamo_galactic_conflict_tests` `test_linked_battle_gates` (AI Underworld commands with the local Empire in no
+  queued conflict → FleetManagement launch runs, SpecialAbility reaches its target check; after the AI's direct
+  invasion of the Empire's planet → launch, MoveThroughObjects and SpecialAbility NotAllowed, MoveObjectToObject runs;
+  flag cleared → not paused with the conflict still queued); `alamo_galactic_special_tests` (the flag alone, with no
+  queued conflict, does not pause).
 
 ## 32. Reinforce delivery handlers and the transport carried type (a1h t05 / t08) [H unless tagged]
 
@@ -1761,6 +1808,78 @@ They then auto-engage within `Guard_Chase_Range` of the slot goal. Whether they 
 > (AI save v3, hashed). [port] Not yet: the "turns hostile" and "fogged after arrival" ends of an object guard; unit-level
 > Lua orders, abilities and garrison orders do not supersede statuses; the guard cap constant (0x140b276c0) is [L].
 
+## 34. Battles that never end: reserve units, one plan library, slow station sieges (a1i t01 / t02) [H unless tagged]
+
+**Question.** `alamo_headless --skirmish-ai foc-land --seed N --ticks 20000 --expect-battle-end` reached the 14400-frame
+cap on 11 of seeds 1-12 (only seed 5 ended), and foc-station on seeds 1 and 6 of 1-8. A1h named two land causes:
+fog-hidden Rebel infantry the Empire never reaches, and an undeployed Rebel reserve that kept the side alive under the
+port's "reserve counts" rule (BT §3.1a said pool units never count [M]).
+
+### 34.1 Reserve units never keep a side alive (0xb) [H]
+
+- 0x344710 case 0xb walks only the **tactical** GOM's object list (0x2a9ff0 on the tactical mode's GOM, gom +0x38).
+- A reserve unit is a galactic persistent object in the parent mode's lists (TACTICAL_GAPS §4.2). Its tactical object
+  (the landing object, §32.2) is created only when it drops (0x2b5fe0). Until then nothing of it is in the list 0xb walks.
+- 0x2c0340, the only 0xb trigger, reads no reserve or pool state.
+- So a side whose last victory-relevant tactical object leaves loses by 0xb with reserves left. BT §3.1a item 1 is now [H].
+
+**Port (a1i t01).** `TacticalBattle::check_victory` no longer counts a never-deployed participant (the rule came from
+l1sys t06, `[port]` "not adopted until probed"). No probe is needed. Left [port]: the check is still polled each tick,
+not event-driven. The "empty side gets its next pool unit" step in `reinforce` runs at the start of the next tick, after
+the victory check of the tick in which the side emptied, so it no longer saves a side.
+
+### 34.2 One plan library for every mode [H]
+
+- AI_GALACTIC §1.9.1: the loader 0x4e7e30 loads `AI\`, `AI\SpaceMode\`, `AI\LandMode\`, `AI\StoryArc\` and
+  `Interventions\` into **one** plan manager. A plan's folder does not restrict its mode; only its `Category` does.
+- Shipped FoC data has two plans that serve a mode outside their folder:
+  - `AI\SpaceMode\RetreatPlan.lua`: `Category = "Space_Retreat | Land_Retreat"`. It is the **only** plan for `Land_Retreat`.
+  - `AI\AI_Plan_ExpansionGeneric_GenerateMagicCashDrop.lua` (AI root): the skirmish magic cash drop goals for land and space.
+- The port's `tactical_plan_files` loaded only the mode's own folder, so the land AI had no `Land_Retreat` plan. In
+  foc-land seed 1 the Rebel attacker (one company on the map against four) proposed `Should_Retreat_From_Land` 64 times,
+  and each proposal ended with "no potential plan".
+
+**Port (a1i t01).** `tactical_plan_files` returns every plan folder in load order for both modes. Plans whose
+`Category` names no goal of the mode are never picked. foc-station CRCs are unchanged on seeds 1-8. Every foc-land seed
+now ends when the Rebel retreats (§34.4).
+
+### 34.3 Why the Empire never reached the hidden infantry (seed 1, before §34.2) [findings, not changed]
+
+These stalls still happen in any land battle where neither side retreats:
+- **Scouting never runs.** `Land_Scout_Area` was proposed about 6578 times and failed 6496 times ("failed Plan"). The
+  LANDSCOUT task force needs `Infantry | Air | LandHero`. The Empire's only infantry (two Imperial_Stormtrooper_Squad
+  companies) was held by `Clear_Infantry` task forces. Those are `Set_As_Goal_System_Removable(false)`, so the free store
+  never released them.
+- **`Clear_Infantry` never gets past its first Attack_Move.** It blocks on `BlockOnCommand(Attack_Move(AITarget))`. The
+  TF Move status finishes only when every unit reports movement finished (§33.2). The AT-AT (speed 0.8) never reaches
+  its formation slot: it circles 150-190 units short among stopped friendly infantry and keeps its movement goal. One
+  plan blocked from frame 196 to 5819, the next from 5917 to the cap. This is arrival in a crowded slot, owned by the
+  movement layer. Follow-up for movement.
+- **Seed 4: point-blank misses.** Both sides attack-moved into one area and parked in interleaved slots 34-89 units
+  apart, with targets in range. The last 600 frames had 252 shots and 4 hits (TACTICAL_COMBAT §2.9 port differences).
+  Follow-up for combat.
+
+### 34.4 Seed table (headless, `--workers 2`, battle cap 14400 frames)
+
+| Run | Before (main d1c8ccf) | After (§34.1 + §34.2) |
+|---|---|---|
+| foc-land 1-4, 6-12 | cap | end: Rebel retreats (0xc), frames 3045-5175 |
+| foc-land 5 | end: Empire all-destroyed, 11636 | end: Rebel retreats (0xc), 2877 |
+| foc-station 2, 4, 5, 7, 8 | end: Rebel all-destroyed | unchanged (same CRCs) |
+| foc-station 3 | end: Empire retreats, 11967 | unchanged |
+| foc-station 1, 6 | cap | cap; with a 40000-frame cap they end at 16344 and 17340 (Empire retreats, starbase lost) |
+
+### 34.5 Station seeds 1 and 6: a slow siege, not a stall (a1i t02) [findings, no change]
+
+- `Empire_Star_Base_2` launches TIE fighter / bomber squadrons and a Tartan without limit (`Reserve_Spawned_Units_Tech_0
+  ..., -1`, with a data comment saying it keeps spawning until the fighter bay hard point is destroyed). This matches
+  STATION_HANGARS_SOUND §2.4 item 6: spawning stops only when every FIGHTER_BAY hard point is destroyed.
+- In seed 1 the Rebel keeps 5-7 ships on the map (population cap) and holds about 93 000 power against about 12 000.
+  Until about frame 12600 its capital ships target the fresh squadrons, not the station. Station hit points fall from
+  3300 to 1245 at the cap and to 788 by frame 15600; the station is lost at 16344. Seed 6 behaves the same way.
+- Nothing shows a port divergence in the victory or AI code. Two things were not checked against the original: whether
+  Rebel capital ships should prefer the station or its fighter bays over fighters (targeting priority sets), and whether
+  the fighter bay hard points are ever targeted. Follow-up for combat. The foc-station test stays on seed 3.
 
 ## 35. The land reinforcement landing object, its unload, and the A1i drop leftovers (a1i t04 / t05) [H unless tagged]
 
@@ -1894,7 +2013,7 @@ the order.
     position (`deploy` member range) and sends it on one group move to its exit target (the 3.0 team offset or the
     vehicle slot, snapped passable) [port: no forced-move flag], locked (`landing_locked` joins `movement_locked` and
     the abilities' lock hook); the expiry after the last member unlocks them, posts the 0x19 record and removes the
-    landing. A company still inside its landing keeps its side alive like a reserve [port]. Saved (battle state v2).
+    landing. A company still inside its landing keeps its side alive [port: §34.1 counts only the landing object by its own type]. Saved (battle state v3).
     A landing destroyed while unloading drops the members not yet out [M]. Members spawn facing the side's entry
     facing, not the offset's yaw [port].
 - Perception: 0x3973b0 of the landing object is C, so `PerceptionObject::rep_type` := `ObjectStore::carried_type`; the

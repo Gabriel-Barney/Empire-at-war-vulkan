@@ -60,6 +60,7 @@
 #include "alamo/ui/render_bridge.hpp"
 #include "alamo/ui/targeting.hpp"
 #include "alamo/ui/window_input.hpp"
+#include "frame_overlay.hpp"
 #include "game_display.hpp"
 #include "game_info.hpp"
 #include "game_render.hpp"
@@ -145,6 +146,11 @@ struct Options {
     // N1 / t09: --saves-dir DIR = where the Save / Load dialogs keep saves (default: %LOCALAPPDATA%\alamo\Saves; smoke
     // runs: <png-dir>\saves).
     std::string saves_dir;
+    // OPT1 t07: --frame-overlay (F11 toggles it in live play); --profile [--profile-out FILE] [--profile-budget MS]: the
+    // tick profiler + per-phase frame times for the whole run, printed at exit (frame_overlay.hpp).
+    bool frame_overlay = false, profile = false;
+    std::string profile_out;
+    double profile_budget = 1000.0 / 30.0;
 };
 
 inline int usage() {
@@ -153,12 +159,13 @@ inline int usage() {
                  "                  [--workers N] [--frames N] [--battle-max-frames N] [--cache-dir DIR] [--mailbox|--immediate]\n"
                  "                  [--frame-cap N|display] [--video-options FILE] [--saves-dir DIR]\n"
                  "                  [--movie NAME]... [--no-intro] [--attract] [--smoke skirmish|land|campaign|saveload --png-dir DIR] [MODPATH=..]\n"
-                 "                  [FALLBACKPATH=..]\n"
+                 "                  [--frame-overlay] [--profile] [--profile-out FILE] [--profile-budget MS] [FALLBACKPATH=..]\n"
                  "       game data: --game DIR or ALAMO_FOC_DATA (the corruption folder)\n");
     return 2;
 }
 
 enum class Screen : uint8_t { Menu, SessionLoad, Galactic, BattleLoad, Battle, Quit, Movie };
+constexpr uint16_t kVkF11 = 0x7A;  // OPT1 t07: frame-time overlay toggle (not in the default hotkey table)
 constexpr int32_t kLoadIntroMaxFrames = 30;  // QA t11: the most frames the sim waits for the load screen's textures
 constexpr uint32_t kBattleEndHoldFrames = 150;  // [port] Playtest QA D1: 5 s between the victory and the summary (the last break-up plays)
 constexpr uint64_t kLoadIntroMaxTicks = 30;  // sim ticks a Fight answer may take to push its battle
@@ -299,6 +306,10 @@ public:
         if (live_input() && !save_video_profile(video_profile_path_, video_profile_)) std::printf("video options: %s not written\n", video_profile_path_.c_str());
     }
     render::DrawStats draw_stats_;
+    // OPT1 t07: the frame-time overlay and this frame's phase times (wall clock, presentation only).
+    FrameOverlay overlay_;
+    FrameTimes ft_;
+    Clock::time_point frame_t0_{};
     bool smoke_ok_ = true;
     std::vector<std::string> notes_;
     uint64_t battles_seen_ = 0;
