@@ -485,9 +485,9 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
                 if (const objects::TypeIndex q = ty.resolve_name(trim(n)); q != objects::kNone)
                     u.weapon_projectiles.push_back(projectile(static_cast<uint32_t>(q), s));
     }
-    // OI host (TACTICAL_GAPS 3.1 slot 43): obj +0x346 != 0xFF read as the type's LAND_OBSTACLE behaviour [inferred]. No
-    // obstacle-cell query is installed (the passability stamps are keyed by placement, not object id), so combat keeps
-    // the half-extent rule for these targets.
+    // OI host (TACTICAL_GAPS 3.1 slot 43): obj +0x346 != 0xFF read as the type's LAND_OBSTACLE behaviour [inferred]. S8 t01:
+    // the battle host's obstacle-cell query walks the target's passability stamp (map placements' stamps move to their
+    // objects); targets without a stamp (objects spawned during the battle) keep the half-extent rule.
     u.land_obstacle = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::LandObstacle);
     if (s.full) s9_unit_fields(t, u, s);
     return u;
@@ -609,6 +609,7 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
     d.team_container = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Team);
     d.hero = ty.get_bool(t, "Is_Named_Hero") || ty.get_bool(t, "Is_Generic_Hero");
     d.passive_missile_shield_radius = ty.get_float(t, "Passive_Missile_Shield_Radius");
+    d.destroy_when_stunned_over_water = ty.get_bool(t, "Destroy_When_Stunned_Over_Water");  // OI t02 [port]
     // 0x3979d0 [port: the mode's FOW reveal range column; land for land battles is not distinguished here]
     if (ty.get_bool(t, "Target_Stealth_Units")) d.stealth_detection_range = ty.columns().space_fow_reveal_range[t];
     ta::AbilityResolvers r;
@@ -791,6 +792,14 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
     (void)type, (void)space;
     return nullptr;
 #endif
+}
+
+bool BattleCatalog::space_model_half_extents(uint32_t type, float& half_x, float& half_y) const {
+    const tactical::movement::AvoidModel* m = avoid_model(type, true);
+    if (!m) return false;
+    half_x = m->bound_h.x;
+    half_y = m->bound_h.y;
+    return true;
 }
 
 int32_t BattleCatalog::ModelInfo::find(std::string_view bone) const {

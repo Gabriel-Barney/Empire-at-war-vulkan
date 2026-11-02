@@ -28,6 +28,9 @@
 #include "alamo/tactical/combat/combat_system.hpp"
 #include "alamo/tactical/combat/weather.hpp"
 #include "thread_parallel_for.hpp"
+#ifdef ALAMO_COMBAT_TESTS_HAVE_MOVEMENT
+#include "alamo/tactical/movement/passability.hpp"
+#endif
 #ifdef ALAMO_COMBAT_TESTS_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -930,8 +933,23 @@ void test_land_obstacle_and_weapon_index() {
     // cells of 20: the building occupies |x - 1250| < 200 on the x axis
     auto query = [](ObjectId, Vec3 p, Vec3& c) {
         c = Vec3{std::floor(p.x / 20.0f) * 20.0f + 10.0f, std::floor(p.y / 20.0f) * 20.0f + 10.0f, p.z};
-        return std::fabs(p.x - 1250.0f) < 200.0f && std::fabs(p.y) < 200.0f;
+        return std::fabs(p.x - 1250.0f) < 200.0f && std::fabs(p.y) < 200.0f ? ObstacleCell::Occupied : ObstacleCell::Free;
     };
+    {  // S8 t01: the host reports no footprint (not stamped): the half-extent rule, E = radius 300 -> taken
+        TargetWorld t;
+        const uint32_t bd = building(t);
+        t.w.make();
+        std::atomic<int> calls{0};  // the scan may run on worker threads
+        t.w.sys->set_obstacle_cell_query([&calls](ObjectId, Vec3 p, Vec3& c) {
+            calls.fetch_add(1);
+            c = p;
+            return ObstacleCell::NoFootprint;
+        });
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, bd, 1, Vec3{1250, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 2 && calls.load() > 0);
+    }
     {  // no query: E = radius 300 -> 1250 <= 1000 + 300, taken
         TargetWorld t;
         const uint32_t bd = building(t);
@@ -961,6 +979,65 @@ void test_land_obstacle_and_weapon_index() {
         t.w.tick();
         CHECK(t.w.sys->auto_target(1) == 2);
     }
+#ifdef ALAMO_COMBAT_TESTS_HAVE_MOVEMENT
+    {  // S8 t01: the walk over a real PassabilityGrid stamp (the battle host's query: PassabilityGrid::occupies)
+        namespace mv = alamo::tactical::movement;
+        mv::PassabilityGrid g;
+        g.init(96, 24);
+        // 400 x 200 footprint centred on (1250, 100): cells x 53..73 (centres 1060..1460), y 0..10.
+        CHECK(g.stamp(-1, mv::make_footprint({1250.0f, 100.0f}, 0.0f, 400.0f, 200.0f, -200.0f, -100.0f, 0, 0, 1.0f, 0)) > 0);
+        CHECK(g.occupies(-1, 53, 5) && g.occupies(-1, 73, 5) && !g.occupies(-1, 52, 5) && !g.occupies(-1, 74, 5));
+        auto host_query = [&g](ObjectId id, Vec3 p, Vec3& c) {
+            if (!g.stamped(id)) return ObstacleCell::NoFootprint;
+            const int32_t cx = mv::world_to_cell(p.x), cy = mv::world_to_cell(p.y);
+            const mv::V2 cc = mv::cell_center(cx, cy);
+            c = Vec3{cc.x, cc.y, p.z};
+            return g.occupies(id, cx, cy) ? ObstacleCell::Occupied : ObstacleCell::Free;
+        };
+        auto run = [&](float ax, float min_dist, bool& taken, bool& inside_min) {
+            TargetWorld t;
+            const uint32_t bd = building(t);
+            UnitDesc a = t.w.data.units[t.attacker];
+            a.min_attack_distance = min_dist;
+            const uint32_t ad = push_unit(t.w.data, a);
+            t.w.make();
+            t.w.sys->set_obstacle_cell_query(host_query);
+            t.w.add(1, ad, 0, Vec3{ax, 100, 0});
+            t.w.add(2, bd, 1, Vec3{1250, 100, 0});
+            t.w.tick();
+            taken = t.w.sys->auto_target(1) == 2;
+            inside_min = t.w.sys->inside_min_range(1, 2);
+        };
+        bool taken = false, inside = false;
+        // Map stamp id -1 (not the object's id): NoFootprint -> E = radius 300: 1250 <= 1300 taken, 1250 <= 1000 + 300
+        // inside the min range.
+        run(0.0f, 1000.0f, taken, inside);
+        CHECK(!taken && inside);  // min range 1000 rejects it in the scan too
+        run(0.0f, 0.0f, taken, inside);
+        CHECK(taken && !inside);
+        // The stamp handed to object 2 (rekey): walk 1250 -> 1050 (cell 53, occupied) -> 1030 (cell 52, free, centre 1040).
+        CHECK(g.rekey(-1, 2));
+        run(0.0f, 0.0f, taken, inside);
+        CHECK(!taken);  // 1040 > 1000 + sqrt(200)
+        run(30.0f, 0.0f, taken, inside);
+        CHECK(taken);  // 1010 <= 1014.14
+        run(20.0f, 0.0f, taken, inside);
+        CHECK(!taken);  // 1020 > 1014.14
+        run(40.0f, 1000.0f, taken, inside);
+        CHECK(!taken && inside);  // max: 1000 in range; min: 1000 <= 1000 + 14.14 inside -> rejected
+        run(60.0f, 950.0f, taken, inside);
+        CHECK(taken && !inside);  // d = 980: in max range, outside 950 + 14.14
+        // Attacker on the far side (x = 1500): the walk goes +x to cell 74 (centre 1480), d = 20.
+        run(1500.0f, 10.0f, taken, inside);
+        CHECK(!taken && inside);  // 20 <= 10 + 14.14: inside a min range of 10
+        // [port] attacker inside the footprint (x = 1300, len 50): steps 1250 / 1270 / 1290 / 1310, then walked 60 > 50
+        // stops on an occupied cell (66, centre 1320): d = 20.
+        run(1300.0f, 10.0f, taken, inside);
+        CHECK(!taken && inside);
+        run(1300.0f, 0.0f, taken, inside);
+        CHECK(taken && !inside);
+    }
+#endif
     {  // weapon index: Projectile_Types[obj +0x324]; a lobbed second entry changes Get_Max_Attack_Range
         TargetWorld t;
         ProjectileDesc lob;
