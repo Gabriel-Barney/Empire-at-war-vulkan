@@ -174,6 +174,16 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range tests against a garrisoned target's host. The gun bones (garrison fire,
     // Num_Garrison_Guns) are not modelled: garrison_fire_bones stays unset (the thrower's own Spawn_Bone is used).
     h.garrison_holder = [this](tc::ObjectId id) -> tc::ObjectId { return garrison_holder_of(id); };
+    // S8 t11 (MOVEMENT §3.2): DEPLOY drives the Walk locomotor's deploy states; oi_deploy_sync reports the changes back.
+    h.deploy = [this](tc::ObjectId id, bool on, uint32_t frame) {
+        if (!movement_) return false;
+        const mv::MovementSystem::DeployResult r = movement_->deploy(id, on, frame);
+        return r != mv::MovementSystem::DeployResult::NoWalk && r != mv::MovementSystem::DeployResult::Ignored;
+    };
+    // S8 t10 (LOB_SOLVER §3.5 "Facing at apply"): the thrown abilities snap the movement yaw (the combat facing follows).
+    h.snap_yaw = [this](tc::ObjectId id, float yaw_deg) {
+        if (movement_) movement_->snap_yaw(id, yaw_deg);
+    };
     hg_ability_host(h);  // hangars: DEPLOY_SQUAD gate / handler (HangarSystem::deploy_ready / deploy_squad)
     abilities_->set_host(std::move(h));
 }
@@ -233,6 +243,18 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 if (u && u->alive && u->movable && movement_) {
                     const std::vector<objects::ObjectId> ids{e.id};
                     movement_->stop(ids);
+                }
+                break;
+            }
+            case ta::AbilityEventKind::MarkerTossed: {
+                // S8 t10 (LOB_SOLVER §3.5 "MARKER removal"): the toss kills its ground-point MARKER (Dummy_Barrage_Target)
+                // with an ordinary Destroy_Object, spawned bomb or not. [port] removed here, after the ability pass.
+                for (size_t i = 0; i < dummies_.size(); ++i) {
+                    if (dummies_[i].id != e.target) continue;
+                    abilities_->remove(dummies_[i].id);
+                    if (store.alive(dummies_[i].h)) store.destroy(dummies_[i].h);
+                    dummies_.erase(dummies_.begin() + static_cast<std::ptrdiff_t>(i));
+                    break;
                 }
                 break;
             }
@@ -364,6 +386,16 @@ void TacticalBattle::oi_respawn_due(TacticalMode& mode) {
         oi_respawns_[w++] = r;
     }
     oi_respawns_.resize(w);
+}
+
+void TacticalBattle::oi_deploy_sync() {
+    if (!movement_) return;
+    for (const mv::MovementSystem::DeployEvent& e : movement_->take_deploy_events()) {
+        if (abilities_) abilities_->set_deploy_state(e.id, static_cast<uint8_t>(e.to));
+        // AI_TACTICAL §7.3.3 item 3: Walk vf6 0x61e930 raises 0x29 at the end of the Deploy / Undeploy clip, Deploy(true)
+        // 0x61d300 at once on a blocked reverse. This is the deploy's "unit ability finished".
+        if (e.finished) ability_finished_.push_back(e.id);
+    }
 }
 
 void TacticalBattle::oi_hash(StateHasher& h) const {

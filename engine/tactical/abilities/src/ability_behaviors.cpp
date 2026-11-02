@@ -508,11 +508,19 @@ void AbilitySystem::h_deploy(Obj& o, bool on, uint32_t frame) {
     const bool ok = team_gates(o, kDeploy, frame);
     if (on && !ok) return;
     stop_order(o.id, frame);
-    if (o.deployed == (on ? 1 : 0)) return;
-    o.deployed = on ? 1 : 0;
-    // S9 t04: the death-clone deploy remap reads "deploying or deployed" (S9_DEATH_CLONE_SHIELDS.md §1.2) [port: the
-    // DEPLOY state stands in for the walk locomotor's deploy-pending flag / Deployed state].
-    combat_->set_flag(o.id, combat::kUnitDeploying, on);
+    if (host_.deploy) {
+        // S8 t11 (MOVEMENT §3.2, AI_TACTICAL §7.3.3 item 3): 0x391260 calls the Walk locomotor's Deploy(on). The locomotor
+        // owns the state (0x18 Deploying, clip, 0x19 Deployed; 0x1A Undeploying, clip, 0); the host reports each change
+        // with set_deploy_state (Is_Active, kUnitDeploying, kUnitDeployTransition) and raises signal 0x29 at the clip ends.
+        if (!host_.deploy(o.id, on, frame)) return;
+    } else {
+        // [port] no locomotor host: the deploy is instant.
+        if (o.deployed == (on ? 1 : 0)) return;
+        o.deployed = on ? 1 : 0;
+        // S9 t04: the death-clone deploy remap reads "deploying or deployed" (S9_DEATH_CLONE_SHIELDS.md §1.2) [port: the
+        // DEPLOY state stands in for the walk locomotor's deploy-pending flag / Deployed state].
+        combat_->set_flag(o.id, combat::kUnitDeploying, on);
+    }
     AbilityEvent e;
     e.kind = AbilityEventKind::Deployed;
     e.type = kDeploy;
@@ -520,6 +528,16 @@ void AbilitySystem::h_deploy(Obj& o, bool on, uint32_t frame) {
     e.value = on ? 1 : 0;
     e.frame = frame;
     events_.push_back(e);
+}
+
+void AbilitySystem::set_deploy_state(ObjectId id, uint8_t walk_state) {
+    Obj* o = obj(id);
+    if (!o) return;
+    const bool deployed = walk_state == 0x19;
+    o->deployed = deployed ? 1 : 0;
+    if (!combat_->has_unit(id)) return;
+    combat_->set_flag(id, combat::kUnitDeploying, deployed);
+    combat_->set_flag(id, combat::kUnitDeployTransition, walk_state == 0x18 || walk_state == 0x1A);
 }
 
 void AbilitySystem::h_jet_pack(Obj& o, ObjectId target, uint32_t frame) {

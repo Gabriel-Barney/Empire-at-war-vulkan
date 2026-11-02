@@ -1377,6 +1377,11 @@ private:
     void oi_install(TacticalMode& mode, SimRng& rng);  // setup(): AbilityHost, RNG, credit hooks (after the combat hooks)
     void oi_events(TacticalMode& mode);                // consume_events(): ability actions, spawn requests, survivors
     void oi_respawn_due(TacticalMode& mode);           // tick(): due Tactical_Respawn creations
+    // S8 t11 / t12 (MOVEMENT §3.2): drains MovementSystem::take_deploy_events() - each Walk deploy-state change sets DEPLOY
+    // Is_Active / kUnitDeploying / kUnitDeployTransition (AbilitySystem::set_deploy_state), and each change with `finished`
+    // (a deploy / undeploy clip end, a blocked reverse) is "unit ability finished" (signal 0x29) in ability_finished_.
+    // Called after the movement tick (clip ends, before the combat flags are read) and after oi_events (requests).
+    void oi_deploy_sync();
     objects::ObjectId oi_spawn_unit(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
     void oi_hash(StateHasher& h) const;
     bool oi_company_members(int32_t type, std::vector<int32_t>& members) const;  // §5.2 Company_Units / Squadron_Units

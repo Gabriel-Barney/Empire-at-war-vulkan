@@ -32,6 +32,10 @@ struct AvoidModel {
         F3 lo, hi;
         bool shield = false;  // the `SHIELD` sub-object (skipped for types with the shield behaviour: mask 2 / 0)
         std::string name;     // ALO mesh name, upper case: the struck sub-object (TACTICAL_COMBAT §2.9 Q1 step 1)
+        // S8 t13 (MOVEMENT §1.3 "Ray mesh set"): the mesh's attach bone is visible (the renderable's hidden bit 1 =
+        // !(bone visibility bit 2)); the model builder sets it from the ALO bone visibility flag. The file's own mesh
+        // is_hidden flag does NOT clear it. Read by avoid_ray_any only.
+        bool bone_visible = true;
         std::vector<F3> tris;
     };
     std::vector<Mesh> meshes;
@@ -85,5 +89,13 @@ struct AvoidSegmentHit {
     int32_t mesh = -1;
 };
 bool avoid_precise_segment(const AvoidObstacle& o, F3 a, F3 b, uint32_t mask, uint32_t shield_mask, AvoidSegmentHit& hit);
+
+// S8 t13 (MOVEMENT §1.3 "Ray mesh set, proxy bits, missing model"): the model ray query vf +0x80 in mode 0, mask 1, as the
+// Fine_Tune_Occupied_Passability stamper calls it (alHModel 0x12c9c0 ORs alRenderableMesh 0x14c520 over its meshes): any
+// hit of the segment a -> b (world) on a collision-flagged mesh (AvoidModel::meshes; hidden-in-file meshes included)
+// whose attach bone is visible (Mesh::bone_visible), after the mesh's world AABB pretest; every triangle of the mesh
+// (0x13e900). The COLLISIONBOX path, the collide switch and the hit record are not involved; a SHIELD mesh is skipped only
+// when o.skip_shield (its mask +0xc0 is then not 1). No model: false.
+bool avoid_ray_any(const AvoidObstacle& o, F3 a, F3 b);
 
 }  // namespace alamo::tactical::movement

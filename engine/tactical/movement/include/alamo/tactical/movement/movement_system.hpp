@@ -184,6 +184,7 @@ struct UnitView {
     float roll = 0.0f;                       // bike lean / flying / fighter roll (degrees, wrap180) - attitude()
     float pitch = 0.0f;                      // flying / fighter pitch (degrees, wrap180; positive = nose down) - attitude()
     FighterPhase fighter_phase = FighterPhase::None;  // fighter: last combat steering phase (diagnostics)
+    LocoState deploy_state = LocoState::None;  // S8 t11: Walk deploy state (None / 0x18 / 0x19 / 0x1A)
 };
 
 // OI tactical: one crush this tick (§5.5). The host applies kCrushDamage of the crusher type's Squash_Damage_Type
@@ -259,6 +260,54 @@ public:
     // (UnitDesc::has_secondary_locomotor); true otherwise (also when that locomotor is already active, which changes
     // nothing). The host calls it before the JET_PACK ability's move. No draws.
     bool use_secondary_locomotor(ObjectId id, bool secondary);
+
+    // ---- S8 t11 / t12: Walk locomotor deploy states (MOVEMENT §3.2 "Deploy states", "A locomotor swap undeploys") ----
+    // Only the Walk locomotor (land, LocomotorKind::Default) deploys. deploy(id, true) = Walk vf +0x118 Deploy(true)
+    // (0x61d300): in 0x18 / 0x19 nothing; out of 0x1A with the turret not at rest (TurretRestFn) straight to 0x19 and
+    // "ability finished" at once (ReverseBlocked); else the unit stops (its order is dropped) and enters 0x18 Deploying.
+    // deploy(id, false): 0x18 / 0x19 -> 0x1A Undeploying ([port] the slot +0x35b blocker and the pending flag +0x2b3,
+    // never set in vanilla, are not modelled). Per tick (serial, ascending id, after the walk): 0x18 / 0x1A start their
+    // clip (anim 0x19 Deploy / 0x1A Undeploy) only once the turret is at rest (until then the turret recentres: the host's),
+    // at Deployment_Anim_Rate; a clip's position after n frames is start + n x step, step = fps / 30 x rate (ABILITIES_
+    // HARDPOINTS §4.13), and it has ended when position >= count - 2 - step (0x39a180). End of the Deploy clip: 0x19
+    // Deployed; end of the Undeploy clip: back to the walk (state None, the walk stopped). Each clip end raises "ability
+    // finished" (signal 0x29). Reversing: Deploy(true) out of 0x1A starts the Deploy clip at count - cur - 1 (min 0), and
+    // 0x1A out of a running Deploy clip starts the Undeploy clip at count - cur - 1 - step (min 0), cur = the reversed
+    // clip's position. No clip data (DeployClipFn unset / false): count 0, so a clip ends on the frame it starts.
+    // While in 0x18 / 0x19 / 0x1A the walk does not move the unit [port: the Walk vf6 deploy states have no move branch;
+    // an order given meanwhile waits for the undeploy]. The locomotor swap (use_secondary_locomotor, both directions)
+    // leaves the deploy states (JetPack answers "not deployed"; the Walk rebuilt on landing starts in 0x16) without a
+    // signal. No draws.
+    enum class DeployResult : uint8_t {
+        NoWalk,          // unknown unit, space, or the active locomotor is not Walk: nothing (retail 0x1fa90 / 0x13b7d0)
+        Ignored,         // the request does not apply in the current state
+        Deploying,       // -> 0x18
+        Undeploying,     // -> 0x1A
+        ReverseBlocked,  // 0x1A -> 0x19 at once (signal 0x29 raised)
+    };
+    DeployResult deploy(ObjectId id, bool on, uint32_t frame);
+    // The deploy state: None (also every non-Walk unit), WalkDeploying, WalkDeployed or WalkUndeploying.
+    LocoState deploy_state(ObjectId id) const;
+    // One deploy-state change (requests, clip ends and swaps), in the order they happen. `finished` = the change raises
+    // signal 0x29 "unit ability finished" (each clip end and the blocked reverse). take_deploy_events() hands them over
+    // and clears the list (the host drains it after the movement tick and after the ability pass; not saved: it is
+    // empty between frames when the host drains each frame).
+    struct DeployEvent {
+        ObjectId id = 0;
+        LocoState from = LocoState::None, to = LocoState::None;
+        bool finished = false;
+    };
+    std::vector<DeployEvent> take_deploy_events();
+    // Clip data for the deploy clips (frame count and fps of anim 0x19 / 0x1A on the unit's model); const, deterministic.
+    using DeployClipFn = std::function<bool(ObjectId id, int32_t anim, uint32_t& frame_count, float& fps)>;
+    void set_deploy_clip_fn(DeployClipFn fn) { deploy_clip_ = std::move(fn); }
+    // TURRET at rest (0x386170): true when the unit has no turret or it is centred. Unset: always at rest [port: the sim
+    // models no turret yaw].
+    using TurretRestFn = std::function<bool(ObjectId id)>;
+    void set_turret_rest_fn(TurretRestFn fn) { turret_rest_ = std::move(fn); }
+    // Teleport-free facing snap (0x3a8710; LOB_SOLVER §3.5 "Facing at apply"): the unit's yaw := yaw_deg at once (no
+    // turn rate); position and order unchanged. False when the unit is unknown.
+    bool snap_yaw(ObjectId id, float yaw_deg);
 
     // ---- REMAINING_GAPS §4.2-4.7
     // Threat at a point for an owner (TacticalPerceptionGrid point query 0x653ff0); const and thread-safe (planning
@@ -410,6 +459,12 @@ private:
         // S7 t06: Uses_Multiple_Locomotors (d.locomotor is the active one)
         LocomotorKind primary_locomotor = LocomotorKind::Default;  // the spawn locomotor (behaviour slot 1)
         bool on_secondary = false;
+        // S8 t11: Walk deploy state (None / 0x18 / 0x19 / 0x1A) and its clip: dclip = the clip playing (kAnimNone, 0x19
+        // Deploy, 0x1A Undeploy), started at frame dclip_start at clip position dclip_pos0 (save version 5).
+        LocoState deploy = LocoState::None;
+        int32_t dclip = -1;
+        uint32_t dclip_start = 0;
+        float dclip_pos0 = 0.0f;
         // FIGHTER_FLYING.md §2-§5 (space fighters)
         FighterState fs;
         FighterParams fp;
@@ -418,6 +473,19 @@ private:
     void fill_air_request(const Unit& u, uint32_t frame, SpaceRequest& q) const;  // plan_land's request (no threat)
     static void special_idle(Unit& u);          // §4.3-4.7: the idle state of the active special locomotor
     bool swap_locomotor(Unit& u, bool secondary);  // S7 t06 / t14 (0x3a9910)
+    // S8 t11 (deploy_system.cpp): clip data, clip position, clip start, the per-tick deploy pass, the state change.
+    struct DeployClip {
+        float count = 0.0f;  // frame count (0: no clip data)
+        float step = 1.0f;   // clip frames per sim frame (fps / 30 x Deployment_Anim_Rate)
+    };
+    DeployClip deploy_clip(const Unit& u, int32_t anim) const;
+    float deploy_clip_pos(const Unit& u, uint32_t frame) const;
+    bool turret_at_rest(const Unit& u) const { return !turret_rest_ || turret_rest_(u.d.id); }
+    void deploy_start_clip(Unit& u, int32_t anim, float pos0, uint32_t frame);
+    void deploy_begin_clip(Unit& u, int32_t anim, uint32_t frame);  // start `anim`, reversing the current clip
+    void deploy_set(Unit& u, LocoState to, bool finished);
+    void tick_deploy(uint32_t frame);
+    void hash_deploy(StateHasher& h) const;
     // S7 t14 (§3.1.1): JetPack vf74 / vf75 - Alternate_Max_Speed / _Rate_Of_Turn (mode multiplier, speed factor /
     // override as for Max_Speed) while the active jetpack is in its airborne kind, else lp.max_speed / lp.turn_rate.
     bool jet_alternates(const Unit& u) const;
@@ -542,6 +610,10 @@ private:
     FighterAvoidFn favoid_;
     std::vector<FighterEvent> fevents_;  // this tick
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
+    // S8 t11
+    DeployClipFn deploy_clip_;
+    TurretRestFn turret_rest_;
+    std::vector<DeployEvent> devents_;  // since the last take_deploy_events()
 };
 
 }  // namespace alamo::tactical::movement

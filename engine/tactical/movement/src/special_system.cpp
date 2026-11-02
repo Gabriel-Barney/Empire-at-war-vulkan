@@ -42,6 +42,10 @@ void MovementSystem::special_idle(Unit& u) {
 bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
     if (cfg_.mode != MoveMode::Land || !u.d.uses_multiple_locomotors || !u.d.has_secondary_locomotor) return false;
     if (u.on_secondary == secondary) return true;  // step 2: already there
+    // S8 t12 (MOVEMENT §3.2 "A locomotor swap undeploys"): the Walk is replaced, so its deploy state goes with it - JetPack
+    // answers "not deployed" (vf +0x120 0x13b7d0), and the Walk rebuilt on landing starts in 0x16. No signal.
+    u.dclip = kAnimNone;
+    deploy_set(u, LocoState::None, false);
     // Both directions: the new locomotor is built and attached; the path stack's content belongs to the old one
     // ([port] the jetpack's timed path is not a land path and the reverse, so a kept goal is re-planned).
     u.m.path.clear();

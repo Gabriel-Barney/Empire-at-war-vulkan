@@ -10,16 +10,18 @@
 //   (map_stamp_id) so they never collide with object ids.
 // land_obstacle_footprint: the LAND_OBSTACLE footprint of one object of type `type` at `position` / yaw / terrain height (no
 //   behaviour test). S8 t09 (MOVEMENT §1.3 [H]): the footprint type F is the type's Obstacle_Proxy_Type when it names a type,
-//   else the type itself; F supplies Obstacle_Width / _Height / _X_Offset / _Y_Offset, else (OI tactical) the model bounding
-//   box from `hooks.model_half_extents` (2 x |half extent| x F's Scale_Factor, offset -half extent x scale, vertical height
-//   = model z x scale for the water rule), and F's Fine_Tune_Occupied_Passability (default true). bits = the object type's
-//   OverridePassability or Obstacle [inferred: the cell recompute reads the occupant's own type]. Fine-tune: each sample
-//   needs the vertical segment (x, y, -1000) -> (x, y, +1000) to hit F's land model placed at the object's position / yaw,
-//   scaled by F's Scale_Factor (proxy: the object's transform x proxy scale / object scale) - hooks.mesh_ray_hit. Ray model
-//   (hooks.ray_model(F)): Model -> trimmed; None (F has no land model) -> with a proxy no ray (every sample stamps), without
-//   a proxy NOT STAMPED (false: retail returns before the loop and retries at the next service; the port's model data is
-//   const, so hosts treat it like "no footprint"); Unknown (no model data in this run, no hook) -> untrimmed [port].
-//   False also when F has neither XML size nor model extents. S8 t02: hosts stamp LAND_OBSTACLE objects spawned at run time
+//   else the type itself; F supplies the sizes, its Fine_Tune_Occupied_Passability (default true) and the ray model. S8 t13:
+//   each size (Obstacle_Width / _Height / _X_Offset / _Y_Offset) is F's XML value when non-zero, else (OI tactical) from the
+//   model bounding box `hooks.model_half_extents` (2 x |half extent| x F's Scale_Factor, offset -half extent x scale), else 0;
+//   vertical height = model z x scale for the water rule. A zero width or height samples no cell. bits =
+//   land_obstacle_bits(the OBJECT type's OverridePassability, LAND_OBSTACLE, its WALL behaviour), never the proxy's.
+//   Fine-tune: each sample needs the vertical segment (x, y, -1000) -> (x, y, +1000) to hit F's land model placed at the
+//   object's position / yaw, scaled by F's Scale_Factor (proxy: the object's transform x proxy scale / object scale) -
+//   hooks.mesh_ray_hit (hosts: avoid_ray_any). Ray model (hooks.ray_model(F)): Model -> trimmed; None (F has no
+//   Land_Model_Name) -> fine-tune on without a proxy: NOT STAMPED (false: retail returns before the loop and retries every
+//   service; the port's model data is const, so hosts treat it like "no footprint"); fine-tune off: only the explicit XML
+//   rectangle (zero samples when a size is 0); a proxy without a model: no ray (every sample stamps). Unknown (no model data
+//   in this run, no hook) -> untrimmed, and false when F lacks an XML width or height [port]. S8 t02: hosts stamp LAND_OBSTACLE objects spawned at run time
 //   with it under their object id (LandObstacleBehaviorClass stamps on its first service, unstamps on detach), and re-stamp
 //   a Map_Load_Spawn_Table placement with the type actually spawned.
 // space_from_map: playable box (0x103 04/05) and SPACE_OBSTACLE placements as static entries;
@@ -80,6 +82,9 @@ uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map,
 // hooks it needs, so it stays valid after `hooks` is gone.
 bool land_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t type, V2 position, float yaw_deg, float terrain_z,
                              const MapStampHooks* hooks, ObstacleFootprint& out);
+// S8 t13 (MOVEMENT §1.3 "proxy bits"): the passability bits of an object from its OWN type and behaviours: the type's
+// OverridePassability when non-zero, else LAND_OBSTACLE -> Obstacle (4) | WALL -> EmpireWall (0x10).
+uint32_t land_obstacle_bits(uint32_t override_bits, bool land_obstacle, bool wall);
 // S8 t09: the footprint type of `type`: its Obstacle_Proxy_Type when that names a type, else `type`.
 uint32_t land_obstacle_footprint_type(const objects::GameObjectTypes& types, uint32_t type);
 // S8 t01: the stamp id stamp_map_obstacles gives map placement `placement` (index into MapData::objects). A host that
