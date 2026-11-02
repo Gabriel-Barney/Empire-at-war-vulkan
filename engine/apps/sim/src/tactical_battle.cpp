@@ -2466,6 +2466,10 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
                 engine_loops_.engines_online(e.id, frame_);  // §3.3: idle loop on
             }
         if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
+        // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29; the Remote_Bomb toss ends at its apply
+        // (EffectOn: the port's toss has no flight phase in the ability).
+        if (e.kind == ta::AbilityEventKind::Ended || (e.kind == ta::AbilityEventKind::EffectOn && e.type == ta::kPlaceRemoteBomb))
+            ability_finished_.push_back(e.id);
     }
     oi_events(mode);  // OI abilities: ability moves / stops / owner changes, ability spawns, death survivors
     abilities_->clear_events();
@@ -2618,6 +2622,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     oi_global_frame_ = global_frame;
     stats_.frames = frame_;
     story_reinforced_.clear();  // L1/S4 wave 2b story hook: this tick's reserve deployments
+    ability_finished_.clear();  // S7 t15 A1: this tick's signal 0x29
     story_garrisoned_.clear();  // S4: this tick's garrison entries / structure captures
     story_captured_.clear();
     objects::ObjectStore& store = mode.primary();
@@ -2668,9 +2673,11 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         const mv::UnitView mvv = movement_->view(u.id);
         combat_->set_facing(u.id, tv(facing_of_yaw(mvv.yaw)));
         // S7 t14 (MOVEMENT §3.1.1 step 6): the locomotor swap disables TARGETING / WEAPON / SPECIAL_WEAPON for the jetpack
-        // flight and enables them on the swap back (then object signal 0x29: no port listener, its meaning is [M]). The
-        // swap runs inside MovementSystem (orders, the JET_PACK ability, the jetpack's state 0x16), so the flag mirrors
-        // the active locomotor here, before every combat tick.
+        // flight and enables them on the swap back. The swap runs inside MovementSystem (orders, the JET_PACK ability, the
+        // jetpack's state 0x16), so the flag mirrors the active locomotor here, before every combat tick.
+        // S7 t15 A1: the swap back then raises "unit ability finished" (signal 0x29: task-force event 19, the blocking
+        // Activate_Ability); the flag still set from the previous tick marks it.
+        if (!mvv.secondary_locomotor && (combat_->flags(u.id) & tc::kUnitWeaponsSuspended) != 0) ability_finished_.push_back(u.id);
         combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, mvv.secondary_locomotor);
     }
     s4_positions(mode);  // S4: garrisoned units sit on their holders

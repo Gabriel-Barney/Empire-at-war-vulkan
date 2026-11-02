@@ -1293,6 +1293,14 @@ void BattleAi::unit_released(int32_t player, int32_t object_id, ai::tactical::Ta
     ab.apply_active_by_default(object_id, b_->frame_);
 }
 
+// S7 t15 A1: the tick's signal 0x29 list (TacticalBattle::ability_finished_events).
+std::vector<int32_t> BattleAi::ability_finished() {
+    const std::span<const objects::ObjectId> ids = b_->ability_finished_events();
+    return std::vector<int32_t>(ids.begin(), ids.end());
+}
+
+bool BattleAi::movement_locked(int32_t object_id) { return object_id >= 0 && b_->movement_locked(object_id); }
+
 // [port] The S10 stand-in (attack-move to 70 % of the attack range of the nearest enemy) for the sides that have
 // no tactical AI, on its own cadence.
 void BattleAi::standin_orders() {

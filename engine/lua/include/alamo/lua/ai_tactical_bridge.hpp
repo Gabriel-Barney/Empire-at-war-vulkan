@@ -13,7 +13,8 @@
 // Extra methods (not in the RE binding table, counted as "extra" by binding_coverage):
 //   * LandTaskForceClass / SpaceTaskForceClass.Move_To: shadows A2's TaskForceClass.Move_To so tactical
 //     task forces accept positions and task forces as destinations (§7.3); the threat / zone-path
-//     arguments are passed to the host.
+//     arguments are passed to the host. S7 t20 (§7.3.2): no argument / not a destination -> the retail script errors
+//     (logged, no unwind) and nil; a dead object -> nil with no message.
 // The tactical EvaluatePerception (§6.5: Self / Enemy = context opponent / Human / Target = an AITargetLocation or a
 // game object) is the players family's EvaluatePerception, which forwards to this host whenever one is attached;
 // Find_Nearest and the other objects-family position arguments resolve AI targets / task forces themselves (the
@@ -82,6 +83,17 @@ public:
     // LandTaskForceClass.Bombing_Run(target) / Fire_Orbital_Bombardment(target or position) -> status id, -1 = nil.
     virtual int32_t tf_bombing_run(int32_t /*tf*/, const AiArg& /*target*/, const AiPoint& /*point*/) { return -2; }
     virtual int32_t tf_orbital_bombardment(int32_t /*tf*/, const AiArg& /*target*/, const AiPoint& /*point*/) { return -2; }
+
+    // ---- S7 t21: Prepare_Ambush(target, direction, minDist, threat [, useZonePath]) (AI_TACTICAL §7.3.1) ----
+    // Called after the binding's argument checks: `target` = a live game object or an AI target, `direction` 0 front /
+    // 1 left / 2 right / 3 back, `min_dist` > 0. Returns a status id; -1 = nil (no message); kAmbushTargetDead = "Target
+    // object is already dead"; kAmbushTargetRegion = "Target %s is invalid: AI targets must represent game objects"
+    // (*name = the target's name). Default: nil.
+    static constexpr int32_t kAmbushTargetDead = -3, kAmbushTargetRegion = -4;
+    virtual int32_t tf_prepare_ambush(int32_t /*tf*/, const AiArg& /*target*/, int /*direction*/, double /*min_dist*/,
+                                      double /*threat*/, bool /*zone_path*/, std::string* /*name*/) {
+        return -1;
+    }
 };
 
 // Makes `host` reachable from `vm`'s tactical bindings (nullptr detaches). Owner thread only.

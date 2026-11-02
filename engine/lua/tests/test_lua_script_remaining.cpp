@@ -678,6 +678,19 @@ static void test_task_forces(const Db& db) {
 struct FakeTactical final : AiTacticalScriptHost {
     std::string name;
     int32_t player = -2, target = -2, tf = -2, calls = 0;
+    int32_t ambush = -1, ambush_calls = 0, ambush_target = -2, direction = -2;  // S7 t21 Prepare_Ambush
+    double min_dist = 0.0, threat = 0.0;
+    bool zone_path = false;
+    int32_t tf_prepare_ambush(int32_t, const AiArg& t, int dir, double dist, double thr, bool zone, std::string* n) override {
+        ++ambush_calls;
+        ambush_target = t.target;
+        direction = dir;
+        min_dist = dist;
+        threat = thr;
+        zone_path = zone;
+        if (n) *n = "Gone_Target";
+        return ambush;
+    }
     int32_t tf_tactical_order(int32_t, AiTacticalOrder, const AiArg&, const AiPoint&, double, bool) override { return -1; }
     int32_t tf_attack_target(int32_t, const AiArg&, std::string_view) override { return -1; }
     int32_t tf_reinforce(int32_t, const AiArg&, const AiPoint&, double) override { return -1; }
@@ -717,6 +730,27 @@ static void test_tactical_perception(const Db& db) {
     CHECK(th.name == "Missing" && th.player == 1 && th.target == -1 && th.tf == -1);
     CHECK(run(vm, "EvaluatePerception('X', P, TF)") == "" && th.tf == 3 && th.target == -1);
     CHECK(run(vm, "EvaluatePerception(1, P)").find("Expected string") != std::string::npos);
+    // S7 t20 (AI_TACTICAL §7.3.2): Move_To argument errors are script errors (logged, no unwind) answering nil.
+    CHECK(run(vm, "m1 = TF.Move_To()") == "" && gnil(vm, "m1") && last_message_has(vm, "SCRIPT ERROR: No destination set for TaskForce"));
+    CHECK(run(vm, "m2 = TF.Move_To(nil)") == "" && gnil(vm, "m2") &&
+          last_message_has(vm, "Parameter 1 is not a valid destination for TaskForce"));
+    const size_t said = vm.messages().size();
+    CHECK(run(vm, "m3 = TF.Move_To(P)") == "" && gnil(vm, "m3") && vm.messages().size() == said + 1);
+    // S7 t21 (§7.3.1): Prepare_Ambush argument checks (land: 4 or 5 arguments), then the host's status / error codes.
+    CHECK(run(vm, "a1 = TF.Prepare_Ambush(AITarget, 'Left', 100)") == "" && gnil(vm, "a1") &&
+          last_message_has(vm, "Invalid number of parameters"));
+    CHECK(run(vm, "a2 = TF.Prepare_Ambush(AITarget, 'up', 100, 5)") == "" && gnil(vm, "a2") && last_message_has(vm, "Unrecognized direction up"));
+    CHECK(run(vm, "a3 = TF.Prepare_Ambush(AITarget, 'left', 0, 5)") == "" && gnil(vm, "a3") &&
+          last_message_has(vm, "Parameter 3 is not a positive number"));
+    CHECK(run(vm, "a4 = TF.Prepare_Ambush(5, 'left', 10, 5)") == "" && gnil(vm, "a4") && th.ambush_calls == 0);
+    CHECK(run(vm, "a5 = TF.Prepare_Ambush(AITarget, 'RiGhT', 250, 0.5, true)") == "" && gnil(vm, "a5") && th.ambush_calls == 1);
+    CHECK(th.ambush_target == 5 && th.direction == 2 && th.min_dist == 250.0 && th.threat == 0.5 && th.zone_path);
+    th.ambush = AiTacticalScriptHost::kAmbushTargetRegion;
+    CHECK(run(vm, "a6 = TF.Prepare_Ambush(AITarget, 'back', 250, 0.5)") == "" && gnil(vm, "a6") && th.direction == 3 && !th.zone_path &&
+          last_message_has(vm, "Target Gone_Target is invalid: AI targets must represent game objects"));
+    th.ambush = AiTacticalScriptHost::kAmbushTargetDead;
+    CHECK(run(vm, "a7 = TF.Prepare_Ambush(AITarget, 'front', 250, 0.5)") == "" && gnil(vm, "a7") &&
+          last_message_has(vm, "Target object is already dead") && th.direction == 0);
     attach_ai_tactical_host(vm, nullptr);
     const int32_t calls = th.calls;
     run(vm, "z = EvaluatePerception('Syn_Destroy_Desire', P, AITarget)");  // the players family's own path

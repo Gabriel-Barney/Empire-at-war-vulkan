@@ -716,6 +716,16 @@ void CampaignBattles::hook(SimHost& host) {
     for (; upgrades_seen_ < battle_->station_upgrades().size(); ++upgrades_seen_)
         host.station_replaced(battle_->station_upgrades()[upgrades_seen_].old_station, battle_->station_upgrades()[upgrades_seen_].new_station);
 #ifdef ALAMO_SIM_HAVE_STORY
+    // S7 t15 A1: signal 0x29 for the story VMs' blocking Activate_Ability (the unit, and its team container).
+    if (story_bridge_) {
+        const objects::ObjectStore& st = tm->primary();
+        for (const objects::ObjectId id : battle_->ability_finished_events()) {
+            story_bridge_->ability_finished(id);
+            const objects::ObjectHandle h = st.find(id);
+            const objects::ObjectHandle team = st.exists(h) ? st.container(h) : objects::ObjectHandle{};
+            if (team && st.id(team) != id) story_bridge_->ability_finished(st.id(team));
+        }
+    }
     story_feed(host);  // L1/S4 wave 2a: before the deaths leave the store (flushed at the next mode update)
 #endif
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI

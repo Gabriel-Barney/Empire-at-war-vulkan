@@ -228,6 +228,15 @@ public:
     virtual bool space_drop_ok(int32_t /*player*/, int32_t /*key*/, const Vec3f& /*p*/, float /*facing_deg*/, float /*sweep*/) {
         return true;
     }
+    // S7 t15 A1 - "unit ability finished" (object signal 0x29: every ability end, ABILITIES_HARDPOINTS §2.6, and the
+    // jetpack's swap back to the primary locomotor, MOVEMENT §3.1.1 step 6): the object ids that raised it since the last
+    // AI frame, in the order they happened (an id may repeat). The AI feeds its scripts' object bridge (blocking
+    // GameObjectWrapper.Activate_Ability), finishes the task-force AbilityBlockStatus counts and raises plan event 19
+    // <TF>_Unit_Ability_Finished(tf, unit) for task-force members that are not dying. Default: none.
+    virtual std::vector<int32_t> ability_finished() { return {}; }
+    // S7 t21 - the unit's movement lock (0x39ad40: ability share, script lock, suspended locomotor; A1_READINGS §28.9):
+    // a locked member does not join a SpaceAmbushBlockStatus (AI_TACTICAL §7.3.1). Default: never locked.
+    virtual bool movement_locked(int32_t /*object_id*/) { return false; }
 };
 
 struct TacticalAiPlayerConfig {
