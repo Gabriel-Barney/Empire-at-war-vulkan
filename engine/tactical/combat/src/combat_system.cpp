@@ -3216,7 +3216,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         // S7 t15 A2: an idle unit's weapons are not serviced; the WeaponBehavior recharge still elapses (fire_unit_weapon
         // subtracts the frames since its last service when it runs again).
         u.acquired = 0;
-        if (!idle && !suspended) decide(u, cands_[k], frame, rng);
+        if (!idle && !suspended && !(u.flags & kUnitTargetingSuspended)) decide(u, cands_[k], frame, rng);  // S8 t25
         if (hooks_) {
             hooks_->unit_after_targeting(u.id, frame, rng);
             if (u.flags & kUnitDead) continue;

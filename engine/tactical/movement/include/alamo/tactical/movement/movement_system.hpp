@@ -188,6 +188,8 @@ struct UnitView {
     // S8 t11 follow-up: the deploy clip the locomotor is timing (0x19 Deploy / 0x1A Undeploy; -1 none, also while 0x18 /
     // 0x1A wait for the turret). The host draws it (SimAnimation::deploy) when it is not the current animation.
     int32_t deploy_clip = -1;
+    // S8 t24: the TURRET's current elevation / yaw (degrees, relative to the body; UnitDesc::turret units only).
+    float turret_elevation = 0.0f, turret_yaw = 0.0f;
 };
 
 // OI tactical: one crush this tick (§5.5). The host applies kCrushDamage of the crusher type's Squash_Damage_Type
@@ -304,8 +306,20 @@ public:
     // Clip data for the deploy clips (frame count and fps of anim 0x19 / 0x1A on the unit's model); const, deterministic.
     using DeployClipFn = std::function<bool(ObjectId id, int32_t anim, uint32_t& frame_count, float& fps)>;
     void set_deploy_clip_fn(DeployClipFn fn) { deploy_clip_ = std::move(fn); }
-    // TURRET at rest (0x386170): true when the unit has no turret or it is centred. Unset: always at rest [port: the sim
-    // models no turret yaw].
+    // ---- S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the TURRET of a Deploys unit (UnitDesc::turret) ----
+    // Per frame after the deploy pass (serial, ascending id; TURRET service 0x632270 + motion 0x631210): while aiming the
+    // target angles are the aim point's; while not aiming and off the rest angle R the first frame holds (target :=
+    // current, idle time := now), and once now - idle > Turret_Rotate_To_Rest_Delay_Sec the target becomes R; at R the
+    // hold clears. R = Turret_Deployed_Rest_Angle in 0x18 / 0x19, else Turret_Rest_Angle. Motion: elevation linear,
+    // yaw by the shortest wrapped difference, at most Turret_Rotate_Speed degrees per frame each, then the yaw is
+    // clamped to +-(Deployed_)Turret_Rotate_Extent_Degrees. "At rest" (0x386170) = current == Turret_Rest_Angle (always
+    // the undeployed one) within 0.0001. The Walk deploy states force the recentre (0x6319d0: not aiming, target := R,
+    // no delay) every frame they wait.
+    // Aim point of the turret this frame (the unit's current target; 0x632050 aims at it): true + world position, false =
+    // not aiming. Unset: never aims.
+    using TurretAimFn = std::function<bool(ObjectId id, float& x, float& y, float& z)>;
+    void set_turret_aim_fn(TurretAimFn fn) { turret_aim_ = std::move(fn); }
+    // Test override of the at-rest test (0x386170) for every unit; unset: the turret model above.
     using TurretRestFn = std::function<bool(ObjectId id)>;
     void set_turret_rest_fn(TurretRestFn fn) { turret_rest_ = std::move(fn); }
     // Teleport-free facing snap (0x3a8710; LOB_SOLVER §3.5 "Facing at apply"): the unit's yaw := yaw_deg at once (no
@@ -475,6 +489,12 @@ private:
         int32_t dclip = -1;
         uint32_t dclip_start = 0;
         float dclip_pos0 = 0.0f;
+        // S8 t24: TURRET state (TD +0x48..+0x5c current / target angles x, elevation, yaw; +0x6c idle time (s); +0x70
+        // hold; +0xf6 aiming). Starts at Turret_Rest_Angle [port: the spawn pose is not traced] (save version 7).
+        float tcur[3] = {0.0f, 0.0f, 0.0f};
+        float ttgt[3] = {0.0f, 0.0f, 0.0f};
+        float tidle = 0.0f;
+        bool thold = false, taim = false;
         // FIGHTER_FLYING.md §2-§5 (space fighters)
         FighterState fs;
         FighterParams fp;
@@ -490,12 +510,17 @@ private:
     };
     DeployClip deploy_clip(const Unit& u, int32_t anim) const;
     float deploy_clip_pos(const Unit& u, uint32_t frame) const;
-    bool turret_at_rest(const Unit& u) const { return !turret_rest_ || turret_rest_(u.d.id); }
+    bool turret_at_rest(const Unit& u) const;  // 0x386170 (or the test override)
+    // S8 t24 (deploy_system.cpp): the rest angle R, the forced recentre 0x6319d0, the per-frame TURRET pass.
+    const float* turret_rest_angle(const Unit& u) const;
+    static void turret_recentre(Unit& u, const float* rest);
+    void tick_turrets(uint32_t frame);
     void deploy_start_clip(Unit& u, int32_t anim, float pos0, uint32_t frame);
     void deploy_begin_clip(Unit& u, int32_t anim, uint32_t frame);  // start `anim`, reversing the current clip
     void deploy_set(Unit& u, LocoState to, bool finished);
     void tick_deploy(uint32_t frame);
     void hash_deploy(StateHasher& h) const;
+    void hash_turrets(StateHasher& h) const;  // S8 t24
     // S7 t14 (§3.1.1): JetPack vf74 / vf75 - Alternate_Max_Speed / _Rate_Of_Turn (mode multiplier, speed factor /
     // override as for Max_Speed) while the active jetpack is in its airborne kind, else lp.max_speed / lp.turn_rate.
     bool jet_alternates(const Unit& u) const;
@@ -623,6 +648,7 @@ private:
     // S8 t11
     DeployClipFn deploy_clip_;
     TurretRestFn turret_rest_;
+    TurretAimFn turret_aim_;
     std::vector<DeployEvent> devents_;  // since the last take_deploy_events()
 };
 

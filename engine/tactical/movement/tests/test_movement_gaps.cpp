@@ -1867,13 +1867,11 @@ static void test_deploy() {
     const uint32_t undeployed = finished_at(1, LocoState::None, 60, 200);
     CHECK(undeployed == 87 && sys.deploy_state(1) == LocoState::None);
 
-    // The turret must be at rest before a clip starts (frame 100 deploy, rest from 110 -> ends 137).
+    // S8 t24 (MOVEMENT §3.2 "Where it gates"): Deploy(true) from the walk starts its clip at once, the turret off rest or
+    // not (frame 100 -> ends 127).
     turret_rest = false;
     CHECK(sys.deploy(1, true, 100) == DR::Deploying);
-    for (uint32_t f = 100; f < 110; ++f) sys.tick(f, rng);
-    CHECK(sys.deploy_state(1) == LocoState::WalkDeploying);
-    turret_rest = true;
-    CHECK(finished_at(1, LocoState::WalkDeployed, 110, 300) == 137);
+    CHECK(finished_at(1, LocoState::WalkDeployed, 100, 300) == 127);
     // Blocked reverse: 0x1A with the turret off rest (no clip yet); Deploy(true) -> 0x19 at once with the signal.
     turret_rest = false;
     CHECK(sys.deploy(1, false, 150) == DR::Undeploying);
@@ -1944,6 +1942,123 @@ static void test_deploy() {
     std::printf("deploy: window timing, turret wait, blocked reverse, reversal, save, locomotor swap ok\n");
 }
 
+// S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the TURRET model of Deploys units. Unit 1 AT-AT-like (3 deg
+// per frame, +-55), unit 2 SPMAT-like (3 deg per frame, 360, deployed rest elevation -45). Clips 30 frames at 30 fps.
+static void test_turret() {
+    using DR = MovementSystem::DeployResult;
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc a = trooper(1, cell_center(10, 10));
+    a.turret = true;
+    a.turret_speed = 3.0f;
+    a.turret_extent = a.turret_deployed_extent = 55.0f;
+    UnitDesc s = trooper(2, cell_center(10, 40));
+    s.turret = true;
+    s.turret_speed = 3.0f;
+    s.turret_extent = s.turret_deployed_extent = 360.0f;
+    s.turret_deployed_rest[1] = -45.0f;
+    CHECK(sys.add_unit(a) && sys.add_unit(s));
+    sys.set_deploy_clip_fn([](ObjectId, int32_t, uint32_t& n, float& fps) {
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    bool aim = false;
+    const V2 p1 = sys.view(1).pos;
+    sys.set_turret_aim_fn([&](ObjectId id, float& x, float& y, float& z) {
+        if (id != 1 || !aim) return false;
+        x = p1.x;
+        y = p1.y + 100.0f;  // 90 degrees left of the body (yaw 0)
+        z = 0.0f;
+        return true;
+    });
+    SimRng rng(3);
+    uint32_t f = 0;
+    auto run_to = [&](uint32_t end) {
+        for (; f < end; ++f) sys.tick(f, rng);
+    };
+    // Aiming: 3 degrees per frame, clamped to the 55-degree extent.
+    aim = true;
+    run_to(10);
+    CHECK(near(sys.view(1).turret_yaw, 30.0f, 1e-4f));
+    run_to(20);
+    CHECK(sys.view(1).turret_yaw == 55.0f && sys.view(2).turret_yaw == 0.0f);
+    // Idle: held for Turret_Rotate_To_Rest_Delay_Sec (2 s = 60 frames), then back to rest at 3 per frame.
+    aim = false;
+    run_to(79);
+    CHECK(sys.view(1).turret_yaw == 55.0f);
+    run_to(90);
+    CHECK(sys.view(1).turret_yaw < 55.0f && sys.view(1).turret_yaw > 0.0f);
+    run_to(110);
+    CHECK(sys.view(1).turret_yaw == 0.0f);
+    // Undeploy waits for the rest angle: aim while deployed (yaw 55), then Deploy(false) - the forced recentre skips the
+    // delay (one held frame, then 19 frames back), the Undeploy clip starts only at rest and ends 27 frames later.
+    CHECK(sys.deploy(1, true, f) == DR::Deploying);
+    run_to(f + 40);
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed);
+    aim = true;
+    run_to(f + 20);
+    CHECK(sys.view(1).turret_yaw == 55.0f);
+    aim = false;
+    (void)sys.take_deploy_events();
+    const uint32_t u0 = f;
+    CHECK(sys.deploy(1, false, u0) == DR::Undeploying);
+    uint32_t clip_at = 0, done_at = 0;
+    for (; f < u0 + 120 && done_at == 0; ++f) {
+        sys.tick(f, rng);
+        if (clip_at == 0 && sys.view(1).deploy_clip == 0x1A) {
+            clip_at = f;
+            CHECK(sys.view(1).turret_yaw == 0.0f);  // at rest when the clip starts
+        }
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 1 && e.to == LocoState::None && e.finished) done_at = f;
+    }
+    CHECK(clip_at >= u0 + 19 && clip_at <= u0 + 21 && done_at == clip_at + 27);
+    // Reversing out of 0x1A while off rest: straight to 0x19 with the signal.
+    aim = true;
+    run_to(f + 20);  // walk state: yaw 55 again
+    CHECK(sys.deploy(1, true, f) == DR::Deploying);
+    run_to(f + 40);
+    CHECK(sys.deploy(1, false, f) == DR::Undeploying);
+    aim = false;
+    sys.tick(f, rng);
+    ++f;
+    CHECK(!near(sys.view(1).turret_yaw, 0.0f, 1e-4f) && sys.deploy(1, true, f) == DR::ReverseBlocked);
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed);
+    // SPMAT: deployed, the idle return goes to the deployed rest (elevation -45); the undeploy recentres to the
+    // undeployed rest (0) before its clip.
+    CHECK(sys.deploy(2, true, f) == DR::Deploying);
+    run_to(f + 120);
+    CHECK(sys.deploy_state(2) == LocoState::WalkDeployed && sys.view(2).turret_elevation == -45.0f);
+    CHECK(sys.deploy(2, false, f) == DR::Undeploying);
+    (void)sys.take_deploy_events();
+    const uint32_t s0 = f;
+    uint32_t s_done = 0;
+    for (; f < s0 + 120 && s_done == 0; ++f) {
+        sys.tick(f, rng);
+        for (const MovementSystem::DeployEvent& e : sys.take_deploy_events())
+            if (e.id == 2 && e.to == LocoState::None && e.finished) s_done = f;
+    }
+    CHECK(s_done >= s0 + 15 + 27 && s_done <= s0 + 17 + 27 && sys.view(2).turret_elevation == 0.0f);
+    // Save round trip with the turret mid-turn: identical continuation.
+    aim = true;
+    run_to(f + 5);
+    ByteWriter w;
+    sys.write(w);
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy, 100);
+    {
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+    }
+    StateHasher ha, hb;
+    sys.hash_units(ha);
+    copy.hash_units(hb);
+    CHECK(ha.digest() == hb.digest() && copy.view(1).turret_yaw == sys.view(1).turret_yaw);
+    std::printf("turret: aim + extent, idle hold + return, undeploy wait %u frames, blocked reverse, SPMAT deployed rest, save ok\n",
+                clip_at - u0);
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -1960,6 +2075,7 @@ int main() {
     test_jetpack_turn_bands();       // S7 t15
     test_jetpack_no_repeated_pose(); // S8 t09 (PR #19 review)
     test_deploy();                   // S8 t11 / t12
+    test_turret();                   // S8 t24
     test_bike();
     test_bomber();
     test_fighter_space();

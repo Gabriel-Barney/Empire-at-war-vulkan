@@ -74,6 +74,17 @@ struct UnitDesc {
     // S8 t11 (MOVEMENT §3.2 "Deploy states"): Deployment_Anim_Rate (+0x1668, type ctor default 1.0), the speed of the
     // Walk locomotor's deploy / undeploy clips (MovementSystem::deploy).
     float deployment_anim_rate = 1.0f;
+    // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the unit TURRET of a `Deploys` type (TurretBehavior, TD
+    // +0x48..+0x5c). [port] Modelled only for Deploys types with the TURRET behaviour and Turret_Rotate_Speed > 0 (the
+    // deploy gate is its only sim reader); `turret` false = always at rest. Angles: x (never moves), elevation, yaw
+    // (degrees, relative to the body).
+    bool turret = false;
+    float turret_speed = 0.0f;                // Turret_Rotate_Speed (+0x5a8), degrees per frame
+    float turret_extent = 180.0f;             // Turret_Rotate_Extent_Degrees (+0x5a0) [port: unset 180 = no clamp]
+    float turret_deployed_extent = 180.0f;    // Deployed_Turret_Rotate_Extent_Degrees (+0x5d0) [port: unset = undeployed]
+    float turret_rest[3] = {0.0f, 0.0f, 0.0f};           // Turret_Rest_Angle (+0x5b4)
+    float turret_deployed_rest[3] = {0.0f, 0.0f, 0.0f};  // Turret_Deployed_Rest_Angle (+0x5c0)
+    float turret_rest_delay = 2.0f;           // Turret_Rotate_To_Rest_Delay_Sec (+0x5cc, ctor default 2.0 s)
 };
 
 // Fills the type-derived members (id / position / yaw are left to the caller). `model_radius`

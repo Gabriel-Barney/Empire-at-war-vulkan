@@ -358,7 +358,8 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             sp.target = target;
             sp.phase = 0;
             sp.next = frame;  // toss starts once not moving / turning
-            if (o.combat_unit) combat_->clear_targets(o.id);  // targeting suspended
+            // S8 t25: Disable TARGETING (slot 9) only - the targets are kept (was clear_targets).
+            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, true);
             return true;
         }
 
@@ -639,7 +640,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (has_target) snap_face(o, target);
             stop_order(o.id, frame);
             lock_pair(o, kLockRemoteBomb, true, frame);
-            if (o.combat_unit) combat_->clear_targets(o.id);
+            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, true);  // S8 t25: TARGETING disabled
             sp.applied = 1;
             sp.target = has_target ? target : kNoObject;
             sp.phase = 0;
@@ -1266,9 +1267,11 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
             break;
         case C::GrenadeAttack:  // vf4 0x700d00: targeting / locomotor re-enabled, unlock (A1_READINGS §28.9)
             lock_pair(o, kLockGrenade, false, frame);
+            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, false);  // S8 t25
             break;
         case C::RemoteBomb:  // S8 t06 (0x719ee0 end / interruption): TARGETING and the locomotor enabled, unlock
             lock_pair(o, kLockRemoteBomb, false, frame);
+            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, false);  // S8 t25
             break;
         case C::Earthquake:  // §4.14 remove: FB_Release / FTK_Release one-shot, then the idle loop
         case C::Telekinesis:

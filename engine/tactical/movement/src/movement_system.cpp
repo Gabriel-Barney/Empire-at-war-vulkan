@@ -111,6 +111,7 @@ bool MovementSystem::add_unit(const UnitDesc& d) {
     u.m.yaw = wrap_deg(d.yaw_deg);
     u.z = d.z;
     u.primary_locomotor = d.locomotor;  // S7 t06
+    for (size_t k = 0; k < 3; ++k) u.tcur[k] = u.ttgt[k] = d.turret_rest[k];  // S8 t24 [port: spawn pose = rest]
     special_idle(u);
     if (d.locomotor == LocomotorKind::Fighter) {  // FIGHTER_FLYING §1.5: P, O (yaw wrap360), D = P, stored O = O
         u.fs.b.p = {d.pos.x, d.pos.y, d.z};
@@ -176,6 +177,8 @@ UnitView MovementSystem::view(ObjectId id) const {
     if (is_fighter(u)) v.fighter_phase = u.fs.phase;
     v.deploy_state = u.deploy;  // S8 t11
     v.deploy_clip = u.dclip;
+    v.turret_elevation = u.tcur[1];  // S8 t24
+    v.turret_yaw = u.tcur[2];
     return v;
 }
 
@@ -1020,6 +1023,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     });
     tick_special(frame, rng);  // §4.3, 4.4, 4.6: serial, ascending id
     tick_deploy(frame);        // S8 t11: Walk deploy states (serial, ascending id)
+    tick_turrets(frame);       // S8 t24: TURRET service of the Deploys units (serial, ascending id)
     for (size_t i = 0; i < units_.size(); ++i) {
         Unit& u = units_[i];
         if (is_air(u)) {
@@ -1230,6 +1234,7 @@ void MovementSystem::hash_units(StateHasher& h) const {
     hash_special(h);  // §4.2-4.7: appended only when used (the format is unchanged otherwise)
     hash_fighters(h);  // FIGHTER_FLYING: appended only with space fighters / squadrons
     hash_deploy(h);    // S8 t11: appended only while a Walk is in a deploy state / has a deploy clip
+    hash_turrets(h);   // S8 t24: appended only when a Deploys unit has a TURRET
 }
 
 void MovementSystem::register_crc(CrcRegistry& registry, const std::string& name) const {
