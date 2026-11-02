@@ -1458,8 +1458,55 @@ nothing):
   step]; a planet type that is not found is logged ("story: INVADE_PLANET unable to find planet") and dropped [port: the
   original crashes]; the combatant test vf+0x138 is the unit's GroundUnit kind [port]; the planet is the first planet
   row of the type (as SABOTAGE_STRUCTURE); the Param2 mismatch line goes to the session's Lua messages.
-- Not changed: `paused()` still applies the linked-battle flag to every player for the other commands (REMAINING_GAPS
-  §6.4 "[port: for every player]"); with `in_queued_conflict` available they could follow the original too.
+- ~~Not changed: `paused()` still applies the linked-battle flag to every player for the other commands (REMAINING_GAPS
+  §6.4 "[port: for every player]")~~ done in a1i t03 (below).
+
+**a1i t03 (2026-11-02): every caller of 0x2b0350 [H].** The call graph lists seven callers, and all seven use the same
+test. With S = "the flag 0x140b154d0 is set, or the list 0x140b2b360 is non-empty (never written, REMAINING_GAPS §6.4)"
+and "not multiplayer" (0x28af60(GMM) == 0), the **story block** is `S && !MP && 0x2b0350(GOM)`. 0x2b0350 compares
+records with the **local player** id (0x294a70) only. None of the callers looks at the event's issuer, so an AI
+player's command is blocked exactly when the human's is.
+
+| caller | what it is | GOM passed to 0x2b0350 | effect of the story block | pause counter GMM+0x2c |
+|---|---|---|---|---|
+| 0x4b2360 | `GalacticModeClass` vf9, the galactic "paused" query (MAIN_LOOP §1.5 slot +0x48) | the mode's own (+0x18) | returns true | > 0 → true, tested first |
+| 0x2be640 | GOM service tail (BATTLE_TRANSITIONS §1.4 step 2) | its own | the object service takes the paused branch (as for the counter) and the conflict processing does not run this tick | (galactic mode) > 0 → the paused branch |
+| 0x3c4460 | `MoveThroughObjectsEventClass` vf4 | current mode's (0x140b15418 +0x18) | event dropped | galactic mode and > 0 → dropped |
+| 0x48ff50 | `InvadeEventClass` Execute (§31.2) | current mode's | event dropped | same |
+| 0x4b4d70 | `SpecialAbilityEventClass` vf4 (every kind) | current mode's | event dropped | same |
+| 0x5af260 | `FleetManagementEventClass` vf4 (every op, 8 included) | current mode's | event dropped | same |
+| 0x68f5b0 | Lua `GalacticFreeStoreClass.Move_Object` | current mode's | warning "Galactic mode is currently paused. Move not possible, try again later.", returns false | > 0 (any mode) → same refusal |
+
+- The event executors return with no message. The block is tested before the pause counter, but both only drop.
+- Not gated: `MoveObjectToObjectEventClass` vf4 0x3af410 (it resolves the object and calls 0x39f580, no prologue),
+  `ProductionEventClass` vf4 0x524130, and `GalacticTaskForce.Invade` 0x6ce600 (§31.6).
+- So the paused query and the five command gates all compute "pause counter > 0, or the story block". The only
+  difference is the GOM: 0x4b2360 asks its own mode, while the executors ask the current mode. In galactic mode, where
+  these events run, the two are the same [M for a galactic event executed while a tactical mode is current].
+
+**Port (a1i t03).**
+- `GalacticSim::story_block()` = `linked_battle_pending && in_queued_conflict(local player)` (the port is
+  single-player only).
+- `GalacticSim::paused()` = `pause_ > 0 || story_block()` (0x4b2360). Every port gate keeps calling `paused()`, so all
+  of them now follow the original:
+  - `fleet_management` (0x5af260);
+  - MoveThroughObjects (0x3c4460);
+  - `special_command` (0x4b4d70);
+  - the Invade case (0x48ff50, now `paused()` too);
+  - the galactic AI's free-store `Move_Object` (0x68f5b0);
+  - the [port] unit-split path of MoveObjectToObject (the HUD's drag; it stands in for a FleetManagement split).
+- The other readers of `paused()` follow 0x4b2360 too: the galactic AI service and its task-force MoveTo status, the
+  free-store hop, the reveal delay and the story Lua clock.
+- The whole-fleet MoveObjectToObject stays ungated, as 0x3af410.
+- 0x2be640 is unchanged: `CampaignBattles` leaves its `story_sequence_active` seam unset (BT §2.9.3: the port starts a
+  linked battle at once; see campaign_battles.hpp).
+- Still [port]: `GalacticSim::update` freezes the mode frame only for `pause_ > 0`. 0x4b2360 also freezes it while the
+  story block holds.
+- Tests: `alamo_galactic_conflict_tests` `test_linked_battle_gates` (AI Underworld commands with the local Empire in no
+  queued conflict → FleetManagement launch runs, SpecialAbility reaches its target check; after the AI's direct
+  invasion of the Empire's planet → launch, MoveThroughObjects and SpecialAbility NotAllowed, MoveObjectToObject runs;
+  flag cleared → not paused with the conflict still queued); `alamo_galactic_special_tests` (the flag alone, with no
+  queued conflict, does not pause).
 
 ## 32. Reinforce delivery handlers and the transport carried type (a1h t05 / t08) [H unless tagged]
 
