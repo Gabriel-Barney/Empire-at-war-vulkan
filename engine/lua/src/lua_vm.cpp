@@ -11,8 +11,12 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/core/profile.hpp"
 #include "alamo/lua/script_loader.hpp"
 #include "vm_internal.hpp"
+
+#include "lgc.h"     // patched internal headers (lua_src): alamo_luaC_collect, alamo_lua_gc_hook
+#include "lstate.h"  // lua_State::ci / base_ci, global_State::tmudata
 
 namespace alamo::lua {
 
@@ -178,6 +182,26 @@ const char* reader_chunk(lua_State*, void* data, size_t* size) {
     return p;
 }
 
+// OPT2 t04: profiler zones around the mark / sweep part of every collection (alamo_lua_gc_hook, a build patch of
+// lgc.c), on whichever thread runs it: "lua.gc" = all of them, "lua.gc.auto" = the automatic ones that run inside a
+// script call (what the schedule in gc_schedule.cpp is meant to make rare). Wall-clock only.
+thread_local int64_t t_gc_start = -1;
+thread_local bool t_gc_scheduled = false;  // inside LuaVm::collect_detached on this thread
+void gc_hook(lua_State*, int end) {
+    static const profile::ZoneId all = profile::register_zone("lua.gc");
+    static const profile::ZoneId automatic = profile::register_zone("lua.gc.auto");
+    if (!end) {
+        t_gc_start = profile::enabled() ? profile::now_ns() : -1;
+        return;
+    }
+    if (t_gc_start >= 0) {
+        const int64_t ns = profile::now_ns() - t_gc_start;
+        profile::add_zone_ns(all, ns);
+        if (!t_gc_scheduled) profile::add_zone_ns(automatic, ns);
+    }
+    t_gc_start = -1;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- Impl
@@ -229,6 +253,8 @@ int32_t LuaVm::Impl::start_thread(lua_State* from, int fn_index, int args_first,
 
 LuaVm::LuaVm(const LuaHost& host_in, LuaVmOptions options_in)
     : impl_(std::make_unique<Impl>()), owner_(std::this_thread::get_id()) {
+    static const bool gc_hooked = (alamo_lua_gc_hook = gc_hook, true);  // once, before any VM exists
+    (void)gc_hooked;
     Impl& vm = *impl_;
     vm.owner = this;
     vm.host = host_in;
@@ -596,6 +622,27 @@ LuaVm::HeapInfo LuaVm::heap_info() const {
     h.threshold = s.threshold;
     h.strings = s.strings;
     return h;
+}
+
+bool LuaVm::gc_busy() const {
+    check_owner();
+    const lua_State* L = impl_->L;
+    return L->ci != L->base_ci || impl_->current_thread >= 0;
+}
+
+void LuaVm::collect_detached(uint32_t threshold_percent) {  // no check_owner(): see the header
+    lua_State* L = impl_->L;
+    t_gc_scheduled = true;
+    alamo_luaC_collect(L, 0);
+    t_gc_scheduled = false;
+    const uint64_t t = static_cast<uint64_t>(G(L)->GCthreshold) * std::max<uint32_t>(threshold_percent, 100u) / 100u;
+    G(L)->GCthreshold = static_cast<lu_mem>(std::min<uint64_t>(t, MAX_LUMEM));
+}
+
+void LuaVm::run_finalizers() {
+    check_owner();
+    lua_State* L = impl_->L;
+    if (G(L)->tmudata) luaC_callGCTM(L);
 }
 
 int LuaVm::resolve_method(std::string_view cls, std::string_view name) const {
