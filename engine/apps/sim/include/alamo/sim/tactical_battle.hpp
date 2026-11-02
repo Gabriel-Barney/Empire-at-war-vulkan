@@ -155,6 +155,19 @@ struct AttachedEffect {
     uint32_t frame = 0;
 };
 
+// S7 t12: the space fighter locomotor's formation attack target (FIGHTER_FLYING §2 step 6 / §4.3, Formation_Attack_Target
+// 0x41a2e0, TACTICAL_COMBAT §2.8) for a squadron leader or a fighter without a squadron, from its combat and movement
+// state (rules: TacticalBattle::feed_fighter_target). Pure; kNoObjectId = no target.
+struct FighterTargetInputs {
+    objects::ObjectId ordered = kNoObjectId;      // live ordered combat target
+    objects::ObjectId goal = kNoObjectId;         // live attack goal (the move block's object)
+    bool goal_hostile = false;                    // goal owner is an enemy of the fighter's owner
+    bool moving = false;                          // the fighter has a move order (a formation)
+    objects::ObjectId auto_target = kNoObjectId;  // live combat auto target (no ordered target)
+    bool auto_hidden = false;                     // auto target hidden by fog for the fighter's owner
+};
+objects::ObjectId fighter_formation_target(const FighterTargetInputs& in);
+
 class TacticalBattle {
 public:
     TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,

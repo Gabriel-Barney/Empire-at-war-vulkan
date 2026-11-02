@@ -361,10 +361,34 @@ std::string obstacle_types() {
     return t;
 }
 
+// S7 t12: a TIE-like fighter squadron (FIGHTER_LOCOMOTOR members, Squadron_Units -> one TEAM container in space). Health
+// is high so the frigates' lasers do not end the test; the attack range is wide so a frigate next to the route becomes the
+// fighters' combat auto target long before they pass it.
+std::string fighter_types() {
+    std::string t = kTypes;
+    const size_t end = t.find("</S10>");
+    if (end != std::string::npos)
+        t.insert(end,
+                 " <SpaceUnit Name=\"S10_TIE\"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>20000</Tactical_Health>"
+                 "<Max_Speed>4.5</Max_Speed><Min_Speed>2.5</Min_Speed><Max_Rate_Of_Turn>3.0</Max_Rate_Of_Turn><Max_Rate_Of_Roll>5.0</Max_Rate_Of_Roll>"
+                 "<Max_Lift>4.0</Max_Lift><Max_Thrust>1.0</Max_Thrust><Bank_Turn_Angle>40</Bank_Turn_Angle><Strafe_Distance>500</Strafe_Distance>"
+                 "<CategoryMask>Fighter</CategoryMask><Targeting_Max_Attack_Distance>900</Targeting_Max_Attack_Distance>"
+                 "<Projectile_Types>S10_Blaster_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>1.0</Projectile_Fire_Recharge_Seconds>"
+                 "<Projectile_Fire_Pulse_Count>1</Projectile_Fire_Pulse_Count><Behavior>SELECTABLE</Behavior>"
+                 "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><SpaceBehavior>FIGHTER_LOCOMOTOR</SpaceBehavior>"
+                 "<Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius></SpaceUnit>\n"
+                 " <Squadron Name=\"S10_TIE_Squadron\"><Squadron_Units>S10_TIE, S10_TIE, S10_TIE</Squadron_Units>"
+                 "<Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value>"
+                 "<Squadron_Formation_Error_Tolerance>25</Squadron_Formation_Error_Tolerance></Squadron>\n"
+                 " <Team Name=\"Team\"><Behavior>TEAM</Behavior></Team>\n");
+    return t;
+}
+
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
-                                bool obstacle = false, bool team = false, bool fog_bm = false) {
+                                bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
+    d->root = fs::temp_directory_path() / (fighters ? "alamo_sim_battle_tests_fighters"  // S7 t12
+                                           : fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
                                            : obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
                                            : team     ? "alamo_sim_battle_tests_team"  // refixf t03: TEAM containers
                                            : prod   ? "alamo_sim_battle_tests_prod"  // station production
@@ -377,7 +401,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", fog_bm ? fog_bm_types()
+    write_file(x / "S10Types.xml", fighters ? fighter_types()  // S7 t12
+                                   : fog_bm ? fog_bm_types()
                                    : obstacle ? obstacle_types()
                                    : team     ? team_types()
                                    : prod   ? prod_types()
@@ -3781,6 +3806,136 @@ void test_runtime_obstacles(bool space) {
 
 }  // namespace
 
+// S7 t12 (FIGHTER_FLYING §2 step 6 / §4.3, TACTICAL_COMBAT §2.8 Formation_Attack_Target): a fighter squadron moved past
+// an enemy frigate keeps its move order. Before, the frigate (the squadron's combat auto target) became the locomotor's
+// target, the attack run reset the squadron's path (§4.3 step 4) and the squadron never reached its destination (skirmish
+// foc seed 5: a TIE squadron on Prepare_Ambush parked ~1900 short when its target went into the fog). Then an ordered
+// attack on the frigate starts Directed_Combat at once (an ordered target is the formation attack target).
+void test_fighter_move_past_enemy() {
+    namespace mv = tactical::movement;
+    {  // the pure rule
+        FighterTargetInputs in;
+        CHECK(fighter_formation_target(in) == kNoObjectId);
+        in.auto_target = 7;
+        CHECK(fighter_formation_target(in) == 7);  // idle: the auto target [port]
+        in.auto_hidden = true;
+        CHECK(fighter_formation_target(in) == kNoObjectId);  // ... unless fogged
+        in.auto_hidden = false;
+        in.moving = true;
+        CHECK(fighter_formation_target(in) == kNoObjectId);  // a position block: no object, keep Moving
+        in.goal = 9;
+        CHECK(fighter_formation_target(in) == kNoObjectId);  // a goal that is not hostile never qualifies
+        in.goal_hostile = true;
+        CHECK(fighter_formation_target(in) == 9);  // Attack_Move(object)
+        in.ordered = 11;
+        CHECK(fighter_formation_target(in) == 11);  // Attack / Attack_Target
+    }
+    auto d = make_data(false, false, false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*d, false);
+    gsetup.forces.push_back({0, 1, type_of(*d, "S10_TIE_Squadron")});
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, gsetup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;  // no stand-in orders: only the test moves units
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    using R = commands::RejectReason;
+    std::vector<objects::ObjectId> members;
+    objects::ObjectId enemy = objects::kNoObjectId;
+    mv::V2 dest{};
+    bool issued = false, auto_seen = false, arrived = false, attacked = false;
+    uint32_t combat_while_moving = 0, arrive_frame = 0, attack_frame = 0, end_frame = 0;
+    float closest_pass = 1.0e9f;
+    for (uint64_t t = 0; t < 7000; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (issued) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (b->frame() == 3 && !issued) {
+            issued = true;
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (!s.members.empty() && st.owner(st.find(s.members.front())) == 0) members = s.members;
+            CHECK(members.size() == 3);
+            if (members.empty()) break;
+            const Vec3 sp = st.position(st.find(members.front()));
+            float best = 0.0f;
+            for (const objects::ObjectHandle h : st.owned_by(1)) {
+                if (!st.alive(h) || !b->movement().has_unit(st.id(h))) continue;
+                const Vec3 p = st.position(h);
+                const float d2 = (p.x - sp.x) * (p.x - sp.x) + (p.y - sp.y) * (p.y - sp.y);
+                if (enemy == objects::kNoObjectId || d2 < best) {
+                    enemy = st.id(h);
+                    best = d2;
+                }
+            }
+            CHECK(enemy != objects::kNoObjectId);
+            if (enemy == objects::kNoObjectId) break;
+            // Straight through the enemy and 1500 beyond it (inside the playable box).
+            const Vec3 ep = st.position(st.find(enemy));
+            const float dx = ep.x - sp.x, dy = ep.y - sp.y, len = std::sqrt(dx * dx + dy * dy);
+            dest = {std::clamp(ep.x + dx / len * 1500.0f, -3700.0f, 3700.0f), std::clamp(ep.y + dy / len * 1500.0f, -3700.0f, 3700.0f)};
+            CHECK(b->order_move(*tm, 0, members, dest.x, dest.y, host.random().synced()) == R::None);
+            std::printf("  squadron %d..%d at (%.0f, %.0f), enemy %d at (%.0f, %.0f), move to (%.0f, %.0f)\n", members.front(),
+                        members.back(), static_cast<double>(sp.x), static_cast<double>(sp.y), enemy, static_cast<double>(ep.x),
+                        static_cast<double>(ep.y), static_cast<double>(dest.x), static_cast<double>(dest.y));
+            continue;
+        }
+        if (!issued) continue;
+        const objects::ObjectId lead = members.front();
+        if (!st.alive(st.find(lead)) || !b->movement().has_unit(lead)) break;
+        end_frame = b->frame();
+        const mv::UnitView v = b->movement().view(lead);
+        const bool enemy_alive = st.alive(st.find(enemy));
+        if (enemy_alive) {
+            const Vec3 lp = st.position(st.find(lead)), ep = st.position(st.find(enemy));
+            closest_pass = std::min(closest_pass, std::sqrt((lp.x - ep.x) * (lp.x - ep.x) + (lp.y - ep.y) * (lp.y - ep.y)));
+            if (!arrived && b->combat().current_target(lead) == enemy) auto_seen = true;
+        }
+        if (!arrived) {
+            if (v.loco_state == mv::LocoState::FighterDirectedCombat) ++combat_while_moving;
+            const float gx = v.pos.x - dest.x, gy = v.pos.y - dest.y;
+            if (v.arrived || gx * gx + gy * gy < 300.0f * 300.0f) {
+                arrived = true;
+                arrive_frame = b->frame();
+                if (enemy_alive) {  // then an ordered attack on the frigate: Directed_Combat from the next frame
+                    CHECK(b->order_attack(*tm, 0, members, enemy, host.random().synced()) == R::None);
+                    attack_frame = b->frame();
+                }
+            }
+        } else if (attack_frame != 0 && !attacked && b->frame() <= attack_frame + 3) {
+            attacked = v.loco_state == mv::LocoState::FighterDirectedCombat;
+        }
+        if ((arrived && (attack_frame == 0 || b->frame() > attack_frame + 3)) || b->frame() >= 3000) break;
+    }
+    std::printf("  frames to %u: enemy auto target seen %d, closest pass %.0f, Directed_Combat frames while moving %u, arrived %d (frame %u), "
+                "ordered attack -> Directed_Combat %d\n",
+                end_frame, auto_seen ? 1 : 0, static_cast<double>(closest_pass), combat_while_moving, arrived ? 1 : 0, arrive_frame,
+                attacked ? 1 : 0);
+    CHECK(issued && auto_seen && closest_pass < 560.0f);  // the frigate was the auto target and inside the strafe circle
+    CHECK(combat_while_moving == 0 && arrived);
+    CHECK(attack_frame != 0 && attacked);
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     for (int i = 1; i < argc; ++i)
@@ -3854,6 +4009,8 @@ int main(int argc, char** argv) {
     std::printf("S8 t02 / S7 t13: obstacle footprints follow their objects (land stamps, space static entries)\n");
     test_runtime_obstacles(false);
     test_runtime_obstacles(true);
+    std::printf("S7 t12: a fighter squadron moved past an enemy keeps its move order (formation attack target)\n");
+    test_fighter_move_past_enemy();
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);
     std::printf("OI objects: behaviour Initialise draws + scheduling\n");  // OI objects

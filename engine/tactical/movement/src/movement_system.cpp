@@ -1974,9 +1974,13 @@ void MovementSystem::fighter_stop(Unit& u) {
 }
 
 // move_space: §2 step 6 state 0 -> 0x1E with a target, else 0x1B; the new path starts at waypoint 0.
+// [port] S7 t12: always 0x1B here. The new order replaces the formation's block, but the host feeds that block's attack
+// target (set_fighter_target, TacticalBattle::feed_fighter_target) only before the next fighter frame, so a target read
+// now is the OLD order's. 0x1B with a target turns into 0x1E and runs §4.3 in the same frame (§2 step 6), so a target
+// that is still valid behaves as before; a stale one (a squadron in an attack run or a dogfight given a Move_To) no longer
+// sends §4.3 into NoTarget (enter_idle reset the new path: the order was lost) or a Retarget from its dogfight cell.
 void MovementSystem::fighter_order(Unit& u) {
-    FighterTarget t;
-    u.sm.state = ftarget_get(u, t) ? LocoState::FighterDirectedCombat : LocoState::FighterMoving;
+    u.sm.state = LocoState::FighterMoving;
     u.fs.idx = 0;
 }
 
