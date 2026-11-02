@@ -302,7 +302,11 @@ bool TacticalBattle::sw_fire_at_object(const TacticalMode& mode, objects::Object
 
 bool TacticalBattle::sw_fire_lobbing_at(const TacticalMode& mode, objects::ObjectId weapon, Vec3 point) {
     if (finished_) return false;
-    return l1_sw_.fire_lobbing_at(weapon, to_t(point), frame_, l1_world(mode));
+    if (!l1_sw_.fire_lobbing_at(weapon, to_t(point), frame_, l1_world(mode))) return false;
+    // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order"): the pack restart above is 0x4ea3f0's readiness half; the
+    // order itself (point + pending) goes to the weapon's own WeaponBehavior, which charges and fires it.
+    if (combat_) combat_->order_fire_at_position(weapon, to_t(point));
+    return true;
 }
 
 bool TacticalBattle::special_weapons_allowed(int32_t player) const {
@@ -523,6 +527,10 @@ void TacticalBattle::l1_weapons(TacticalMode& mode, SimRng& rng) {
     for (const ta::SpecialWeaponShot& s : l1_sw_.shots()) {
         const objects::ObjectHandle wh = st.find(s.weapon);
         if (!st.alive(wh) || s.projectile < 0) continue;
+        // S8 t26: a lobbing superweapon with an own weapon fires its order through CombatSystem (charge-up, one shot at the
+        // point); the special-weapon system's point volley is not launched [port: SpecialWeaponSystem::fire_lobbing_at
+        // still queues it - abilities follow-up].
+        if (s.at_point && combat_ && combat_->fires_at_position(s.weapon)) continue;
         tc::ProjectileLaunch l;
         l.shooter = s.weapon;
         l.owner = s.owner;

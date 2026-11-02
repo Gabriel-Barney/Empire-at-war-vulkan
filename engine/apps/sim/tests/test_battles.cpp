@@ -2381,6 +2381,31 @@ void test_foc_weapon_sources(const objects::GameObjectTypes& types, const Battle
         std::printf("foc garrison guns: %u host models, %u with gun bones: %s\n", hosts, with_bones, line.c_str());
         CHECK(hosts == 0 || with_bones > 0);
     }
+    {  // S8 t27 (TACTICAL_COMBAT §3.1.1 "Bone list"): Target_Bones found on the type's model (missing names dropped).
+        uint32_t listed = 0, with_model = 0;
+        std::string line;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            const auto names = types.get_list(t, "Target_Bones");
+            if (names.empty()) continue;
+            ++listed;
+            const bool space = types.get_string(t, "Land_Model_Name").empty();  // land model when the type has one
+            std::vector<tactical::Vec3> bones;
+            if (!catalog.target_bones(t, space, bones)) continue;
+            ++with_model;
+            CHECK(bones.size() <= names.size());
+            if (line.size() < 400)
+                line += std::string(line.empty() ? "" : ", ") + std::string(types.raw().types().name[t]) + " " +
+                        std::to_string(bones.size()) + "/" + std::to_string(names.size());
+        }
+        std::printf("foc target bones: %u types list Target_Bones, %u with a model: %s\n", listed, with_model, line.c_str());
+        CHECK(listed >= 5);
+        const objects::TypeIndex atat = types.resolve_name("AT_AT_Walker");
+        std::vector<tactical::Vec3> b;
+        if (atat != objects::kNone && catalog.target_bones(static_cast<uint32_t>(atat), false, b)) {
+            CHECK(b.size() == 3);  // MISSILE_TARGET00-02 on the land model
+            for (const tactical::Vec3& v : b) CHECK(v.z > 0.0f);
+        }
+    }
 }
 
 // FoC: a battle request built by hand (two FoC frigate groups at Kuat-like orbit) on a real space map.

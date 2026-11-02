@@ -540,6 +540,14 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
     u.can_fighter_fire_when_idle = ty.get_bool(t, "Can_Fighter_Fire_When_Idle");
     static const objects::BehaviorTypeId kLobbing = objects::behavior_type_id("LOBBING_SUPERWEAPON");
     u.lobbing_superweapon = kLobbing != objects::kNoBehavior && ty.has_behavior(t, objects::BehaviorSet::Union, kLobbing);
+    // S8 t26 / t27 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", "Bone list"): TURRET (the lobbing charge-up aims it),
+    // Lobbing_Superweapon_Chargeup_Frames (vanilla 90 [M: the default without the tag]) and the Target_Bones found on the
+    // type's model for the battle mode (battle host with model data only).
+    static const objects::BehaviorTypeId kTurret = objects::behavior_type_id("TURRET");
+    u.turret = kTurret != objects::kNoBehavior && ty.has_behavior(t, objects::BehaviorSet::Union, kTurret);
+    if (u.lobbing_superweapon && !ty.get_string(t, "Lobbing_Superweapon_Chargeup_Frames").empty())
+        u.lobbing_chargeup_frames = static_cast<uint32_t>(std::max(0, ty.get_int(t, "Lobbing_Superweapon_Chargeup_Frames")));
+    if (s.model_mode >= 0) (void)target_bones(t, s.model_mode == 1, u.target_bones);
     u.transport_landing = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::TransportLanding);
     // S8 t10 (LOB_SOLVER §5.1): Num_Garrison_Guns and the gun-bone table (battle host with model data only); the model ALT
     // comes from Land_Damage_Thresholds / _Alternates (TACTICAL_GAPS §6.3).
@@ -982,6 +990,26 @@ bool BattleCatalog::muzzle_bones(uint32_t type, bool space, std::vector<tactical
         if (b < 0) break;  // the list ends at the first missing name
         // ALO model space (nose -Y, left +X, up +Z) -> the combat unit-local frame (x forward, y left, z up), as the
         // hard-point bones (hardpoint_on_model).
+        const auto& p = m->bone_pos[static_cast<size_t>(b)];
+        out.push_back(tactical::Vec3{-p[1] * scale, p[0] * scale, p[2] * scale});
+    }
+    return true;
+}
+
+bool BattleCatalog::target_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const {
+    out.clear();
+    const auto names = types_->get_list(type, "Target_Bones");
+    if (names.empty()) return true;
+    const ModelInfo* m = model_info(type, space, false);
+    if (!m) return false;
+    float scale = types_->columns().scale_factor[type];
+    if (!(scale > 0.0f)) scale = 1.0f;
+    for (const std::string_view n : names) {
+        const std::string name = upper_str(trim(n));
+        if (name.empty()) continue;
+        const int32_t b = m->find(name);
+        if (b < 0) continue;  // missing on the model: dropped
+        // ALO model space (nose -Y, left +X, up +Z) -> the combat unit-local frame, as muzzle_bones.
         const auto& p = m->bone_pos[static_cast<size_t>(b)];
         out.push_back(tactical::Vec3{-p[1] * scale, p[0] * scale, p[2] * scale});
     }
