@@ -961,8 +961,8 @@ bool TacticalBattle::space_obstacle_attach(const TacticalMode& mode, objects::Ob
 // (the store's LAND_OBSTACLE attach order); footprint as stamp_map_obstacles at the object's position, yaw (facing = Rz(yaw)
 // (0, -1), as map placements) and height; Fine_Tune_Occupied_Passability is not trimmed (no mesh ray test for objects).
 // [inferred] a death clone whose type carries LAND_OBSTACLE (Veers_AT_AT_Walker_Death_Clone, ...) is an obstacle like any
-// object with the behaviour (MOVEMENT §1.3: wreck stamping not traced). Placement stamps left under a placement id (a skipped
-// map company) are not touched.
+// object with the behaviour (MOVEMENT §1.3: wreck stamping not traced). Placement stamps never stay under a placement id here: bt_map_load hands
+// each to its object or unstamps it (skipped company, no-spawn placeholder).
 void TacticalBattle::land_obstacles_sync(const TacticalMode& mode) {
     if (space_ || !movement_) return;
     const objects::ObjectStore& st = mode.primary();

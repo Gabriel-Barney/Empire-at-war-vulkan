@@ -325,7 +325,7 @@ void test_wire_golden() {
     CHECK(pk.size() == 1 && pk[0] == from_hex("a1cb010000"));
 
     // MoveToPosition(1), player 0, frame 0, x=0 (code 0x1FFFF), y=10000 (0x3FFFE), z=-10000 (0),
-    // flags 0x08, cancel 1: 6+3+26+3*18+8+1 = 98 bits, low bit first.
+    // flags 0x08, switch_locomotor 1: 6+3+26+3*18+8+1 = 98 bits, low bit first.
     Command mv;
     mv.payload = ev::move_to_position(0.0f, 10000.0f, -10000.0f, 0x08);
     mv.payload.set("switch_locomotor", 1);

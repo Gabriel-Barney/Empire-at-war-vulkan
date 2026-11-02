@@ -21,7 +21,7 @@
 //   (PROVISIONAL [M]: the retail getter's "2R/20" conversion is unexplained and not applied). Centre = placement position +
 //   Space_Obstacle_Offset (x along the placement facing Rz(yaw) (0, -1), y to its left [M: rotation sense], as the host's
 //   space_obstacles_sync does for units). Entry ids are map_stamp_id(placement) (S7 t13: a host that spawns an object for
-//   the placement moves the entry to the object id, SpaceOccupancy::rekey_static, so it leaves with the object).
+//   the placement moves the entry to the object id, SpaceOccupancy::rekey_static; removed when it is a battle unit that left).
 // space_obstacle_center: that centre for an object at `position` facing the unit XY direction `facing`.
 // space_obstacle_footprint: that static entry's radius and SpaceCollisionType bits for one type; false when the type has no
 //   SPACE_OBSTACLE behaviour, or no positive radius and no model extent. refixf t02: hosts use it for SPACE_OBSTACLE objects

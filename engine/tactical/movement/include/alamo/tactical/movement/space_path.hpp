@@ -113,7 +113,7 @@ public:
     bool remove_static(ObjectId id);
     bool has_static(ObjectId id) const { return statics_.find(id) != statics_.end(); }
     // S7 t13: moves static entry `from` to id `to` unchanged (a map placement's entry, ted_grid.hpp map_stamp_id, handed to
-    // the object spawned for it, so it leaves with that object). False (nothing changes) when `from` has no entry, `to`
+    // the object spawned for it; space_obstacles_sync removes it when that object is a battle unit that left). False (nothing changes) when `from` has no entry, `to`
     // already has one, or from == to.
     bool rekey_static(ObjectId from, ObjectId to);
     // The static entry of `id` (centre, radius, SpaceCollisionType bits); false when there is none.

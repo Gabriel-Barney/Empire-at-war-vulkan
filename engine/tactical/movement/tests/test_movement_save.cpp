@@ -870,7 +870,9 @@ void test_rejections() {
     Bytes bad = good;
     put_u32(bad, 0, 1);  // version (1: before the S7 t06 multi-locomotor fields)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 3);
+    put_u32(bad, 0, 2);  // 2: before S7 t14 read the alternate speed / turn raw
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 4);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
