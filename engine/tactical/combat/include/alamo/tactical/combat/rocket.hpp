@@ -81,13 +81,47 @@ struct RocketParams {
     bool explode_at_target = false;    // Explode_When_Reached_Target_Radius (+0x7e)
 };
 
+// S8 t06 (docs/re/LOB_SOLVER.md §6.6): the terrain grid the projectile ground test 0x135840 intersects. Vertex (x, y) =
+// (x cell, y cell, (float)heights[y width + x] x height_scale) (0x135a70; x / y clamped to the grid for the height lookup
+// only); cells (x, y) with 0 <= x < width - 1, 0 <= y < height - 1 (the patches' cells). Water: a plane at z =
+// water_height when water_type != 0 (1 water, 2 lava, 3 ice; TERRAIN_WATER_POST). Empty (width or height < 2, or too
+// few heights) = no grid [port: the ground test then uses a plane at z 0].
+struct GroundGrid {
+    float cell = 20.0f;                  // terrain +0x9c (the port grid: terrain::kVertexSpacing)
+    uint32_t width = 0, height = 0;      // vertices per row / column (terrain +0x10 / +0x14)
+    std::vector<int16_t> heights;        // row-major, width x height
+    float height_scale = 0.048828125f;   // terrain +0xa4 (terrain::kHeightScale)
+    float water_height = 0.0f;           // terrain +0x200
+    uint32_t water_type = 0;             // terrain +0x204
+    bool present() const {
+        return width >= 2 && height >= 2 && heights.size() >= static_cast<size_t>(width) * height;
+    }
+};
+
+// Result of ground_segment: the segment fraction t in (0, 1) and the point t D + O.
+struct GroundHit {
+    float t = 1.0f;
+    Vec3 point;
+    bool water = false;  // the water plane (not a triangle) was nearest
+};
+
+// 0x135840: the segment from -> to (D = to - from, not normalised) against the two triangles of every grid cell its XY
+// box touches (T1 = (v00, v10, v11), T2 = (v00, v11, v01); two-sided Moeller-Trumbore 0x20c410, det epsilon 0.0001,
+// 0 <= u <= 1, v >= 0, v + u <= 1, 0 < t < best), then the water plane (0x20c180: |D.z| >= 0.0001, t = -(O.z - h) / D.z,
+// 0 < t < best). Nearest t in (0, 1); false = no hit (t = 1). Float order as in the doc (no FMA).
+bool ground_segment(const GroundGrid& g, Vec3 from, Vec3 to, GroundHit& out);
+// 0x20c410 alone (exposed for the tests): true and best := t when the ray O + t D hits triangle (v0, v1, v2) with
+// 0 < t < best.
+bool ray_triangle(Vec3 O, Vec3 D, Vec3 v0, Vec3 v1, Vec3 v2, float& best);
+
 // Land terrain for mode-1 legs and the land re-plan: h(x, y) (heightmap 0x135140 / 0x135350, bilinear) and the
 // heightmap extent box (0x1320d0: centre and half sizes). [port] No height function = flat ground at z 0; no box = every
-// point is inside.
+// point is inside. S8 t06: `grid` is the heightmap for the projectile ground test (ground_segment).
 struct RocketTerrain {
     std::function<float(float, float)> height;
     bool has_box = false;
     float cx = 0.0f, cy = 0.0f, hx = 0.0f, hy = 0.0f;
+    GroundGrid grid;
     float h(float x, float y) const { return height ? height(x, y) : 0.0f; }
 };
 

@@ -133,6 +133,7 @@ struct SpecialAbilityDesc {
     int32_t projectile = -1;              // Grenade_Type / Bomb_Type / Projectile_Type / Explosion_Type (ProjectileDesc)
     float spawn_frame = 0.0f;             // Grenade_Spawn_Frame / Spawn_Frame
     std::string toss_anim;                // Toss_Anim (animation type name; t03 clip timing, empty = none)
+    std::string spawn_bone;               // Spawn_Bone (Remote_Bomb +0x198, LOB_SOLVER §3.5; empty = none)
     float fuse_time = 0.0f;               // Grenade_Explode_Timer_In_Secs / Detonation_Time_In_Secs
     bool requires_direct_command = false; // Requires_Direct_Player_Command
     // Force_Lightning / Hack / Repair (§2.3.6)

@@ -240,7 +240,7 @@ Reads the DAMAGE_TRACKING behaviour (0x3e) map of `attackerId → accumulated da
 |---|---|---|
 | `EvaluatePerception(func, player [, target])` (0x699430) | one evaluation with the same token set | H |
 | `AITargetLocationWrapper.Get_Game_Object` / `Get_Distance` / `Is_Valid` | unit target → its object; region → nil; distance from the target position | H |
-| `Project_By_Unit_Range(a, b)` (ProjectByUnitRangeClass) | kiting position away from `a` by `a`'s weapon range — body not traced | L |
+| `Project_By_Unit_Range(a, b)` (ProjectByUnitRangeClass, 0x69f6f0) | kiting position away from `a` by `a`'s weapon range: AI_TACTICAL_PERCEPTION §5 (formula); `b` through the position extractor 0x4990b0, so an **empty task force counts as (0, 0, 0)** (§7.3.2) | H |
 | `Find_Best_Local_Threat_Center(units, radius)` (FindBestLocalThreatCenterClass, clusters 0x6a8eb0) | AOE aim point for hero scripts; **consumes synced Get_Float draws** | H draw, L rest |
 | `_FindStageArea` (0x6990f0) | galactic only (needs a parent planet) | H |
 | `Reinforce_Unit(type, position \| false, player [, …, obeyZones])` (0x6a0400) | story / object-script reinforcement drop (tactical only); in a campaign battle it also creates the matching galactic fleet / persistent unit. **Not used by AI plans**; plans use `TaskForce.Reinforce` (§7.4) | H |
@@ -268,10 +268,158 @@ Tactical plans follow the framework (AI_GALACTIC §1.9): `Definitions()` declare
 | `Attack_Move(dest [, threat])` | 0x6e9440: same, mode 1 (attack-move; object dest uses 0x73c4f0) | 0x6e4fc0 |
 | `Attack_Target(unit [, …])` | 0x6e99c0: unit targets only ("use Move_To instead"); block id 0x819 | 0x6e54d0: optional hard-point type; the string `"Random"` picks a hard-point type with **Get_Int(0, 13)**, 13 meaning "any" — one synced draw |
 | `Guard_Target(target [, …])` | 0x6ebdc0: mode 2; a task-force target guards **one random unit of it** chosen with **Get_Int(0, n−1)** (no draw when n = 1) | 0x6e72c0: same rule |
-| `Explore_Area(AITarget)`, `Fire_Special_Weapon`, `Fire_Orbital_Bombardment`, `Bombing_Run`, `Prepare_Ambush`, `Find_Closest_Enemy` | 0x6eaba0, 0x6eb7f0, 0x6eb730, 0x6e9d90, 0x6ec8b0, 0x6ead30 — bodies not traced | 0x6e66a0, 0x6e6ad0, —, —, 0x6e7e00, 0x6e68a0 |
+| `Explore_Area(AITarget)`, `Fire_Special_Weapon`, `Fire_Orbital_Bombardment`, `Bombing_Run`, `Prepare_Ambush`, `Find_Closest_Enemy` | 0x6eaba0, 0x6eb7f0, 0x6eb730, 0x6e9d90, 0x6ec8b0, 0x6ead30 — bodies not traced except `Prepare_Ambush` (§7.3.1) and `Explore_Area` (L1_S4_REMAINING) | 0x6e66a0, 0x6e6ad0, —, —, 0x6e7e00 (§7.3.1), 0x6e68a0 |
 | `Activate_Ability(name, on \| target)` | generic 0x5f9890: calls each unit's `Activate_Ability` (0x570a50), returns an AbilityBlockStatus | same |
 
 Object-level orders from Lua (`unit.Move_To`, `Attack_Move`, `Guard_Target`, `Divert`, `Garrison`, `Leave_Garrison`, `Activate_Ability`) are the L1 objects bindings and execute directly (COMMANDS.md).
+
+### 7.3.1 `Prepare_Ambush(target, direction, minDist, threat)` (S7 t18, 2026-11-02)
+
+**Engine code, not Lua.** The only shipped caller is `FlankPlan.lua` (SpaceMode, FoC), FlankForce thread:
+`Prepare_Ambush(AITarget, "back", flank_dist = 1000, 500)`, then `"right"`, then `"left"` when the previous call
+returned nil. [H]
+
+**Space: `SpaceTaskForceClass` 0x6e7e00 → `SpaceAmbushBlockStatus`** (vt 0x8cef58, 0x70 bytes, ctor 0x739f90, Lua id
+0x81d). [H unless tagged]
+- **Arguments** (exactly 4, else error "Invalid number of parameters", nil):
+  1. a game object, or an AI target that represents one (AI target vtable +0x30). Dead object / AI target with no
+     location → error "Target object is already dead", nil. AI target with no object (a region) → error "Target %s
+     is invalid: AI targets must represent game objects", nil.
+  2. a string, case-insensitive (`_stricmp`): `front` → 0, `left` → 1, `right` → 2, `back` → 3 [M: the `left` /
+     `back` literals are short .rdata strings at 0x1408c26f4 / 0x1408c270c; `front` / `right` are read directly].
+     Anything else → error "Unrecognized direction %s", nil.
+  3. a number > 0 (minDist), else error "Parameter 3 is not a positive number", nil.
+  4. a number (threat tolerance), else error, nil.
+- **The return value is the block in every other case**, including when no ambush point exists: the block is then
+  already finished with result false. So in space FlankPlan's `if not flank_block` fall-backs to `right` / `left`
+  run **only after an argument error**; a failed `back` does not try the other sides. [H]
+- **Fields:** +0x40 frame of the last plan (int), +0x44 result (byte), +0x45 finished (byte), +0x48 target object,
+  +0x50 direction (ctor −1), +0x54 minDist (float), +0x58 threat (float, ctor 1e18), +0x60 moving list, +0x68 member
+  list (both `MultiLinkedListClass<GameObjectClass>`, created on the first plan). [H]
+- **Init 0x73a5a0** (task force must be a SpaceTaskForce and the target non-null, else nothing is set): store the
+  fields, clear +0x44 / +0x45, then **plan(first = true)** (0x73b180).
+
+**Ambush point P (0x73a140)** [H]:
+1. θ = target yaw in radians (obj +0x8c degrees × 0.017453292); s = sin θ, c = cos θ (for |θ| below the tiny-angle
+   threshold: s = θ, c = 1). Direction u:
+   - front (0): (c, s, 0) — ahead of the target;
+   - left (1): (−s, c, 0);
+   - right (2): (s, −c, 0);
+   - back (3): (−c, −s, −0) — behind the target;
+   - any other value: no point.
+2. step = the target type's `Space_FOW_Reveal_Range` (type +0x1d6c); if ≤ 0, `AI_SpaceEvaluatorRegionSize`
+   (GameConstants 0x140b168d0, FoC 2000).
+3. P = target position + minDist × u (all three axes).
+4. Only when a space mode exists (0x28a950(GMM, 2)); otherwise no point. Self = the task force's owner player.
+   Loop:
+   - box = mode vf +0x1f8 (centre xyz, half extents xyz) [M: the map box]; if |P − centre| > half extent on **any**
+     axis → no point (the loop ends; P never wraps back);
+   - threat = enemy force of Self in the square rect (P.x − step/2, P.y − step/2, step, step): 0x654290 on the
+     threat grid 0x140b31900 with category mask all (−1), ally flag 0 (enemy), A = 0, no exclusion, no faction, ×
+     `AI_SpaceAreaThreatScaleFactor` (AI_TACTICAL_PERCEPTION §3.3, §4.5);
+   - threat ≤ tolerance (+0x58) → **P is the ambush point**;
+   - else P += step × u (walk further out along the same ray) and repeat.
+   "No point" is the sentinel (1e18, 1e18, 1e18).
+- So the force goes to **at least minDist from the target, on the chosen side**, further out in steps of the
+  target's reveal range until the spot is safe enough. FlankPlan: 1000 behind the target's facing, then 1000 + k ×
+  reveal range, threat ≤ 500.
+
+**plan(first) (0x73b180)** [H]:
+1. +0x40 = mode frame (mode +0x10). Compute P. No point → **result 0, finished 1** (no move order).
+2. Coordinator system = mode vf +0x228; a new coordinator (0x426010).
+3. first only (0x73a650): create both lists; for each task-force member in member order (TF +0x78 vector) whose
+   object exists, whose type byte +0x1e is clear, that is **not movement-locked** (0x39ad40) and that the
+   coordinator admits (0x425e30): subscribe the block to its signals 9, 10, 0xb, 0x10 and one more [L: 0x1a, the
+   argument is lost in the decompile], and add it to the member list (+0x68). Then subscribe to the target's signal
+   0x10.
+4. For each object of the member list (list order) that the coordinator still admits: add it to the moving list
+   (+0x60), make it leave every coordinator (0x426d50) and join the new one (coordinator vf +0x18).
+5. No unit joined → release the coordinator (0x4260d0); the block stays **unfinished** (the next re-plan tries
+   again). Otherwise `Coordinator::Move_To` (0x4f8200) with {kind 1 = position P, threat tolerance = +0x58,
+   avoidance mask 0x3f, flags word 0x1000001}: a plain group move (no attack flag), the same block a TF `Move_To`
+   builds (§7.3).
+
+**IsFinished (0x73a8d0, [M] vf19)**: when not finished and mode frame − (+0x40) > **150** (0x96), **re-plan with
+first = false** (new P from the target's current position and facing, re-order every member-list unit, including
+those that already arrived). Returns +0x45. The re-plan therefore happens only when Lua polls `IsFinished`
+(FlankPlan polls once per `Sleep(5)`), at most every 150 frames. **Result (0x73ade0, [M] vf20)** returns +0x44.
+
+**Signals (0x73ab80)** [H]:
+- 9: ignored.
+- 10 (the unit's movement finished, also sent when its formation fails, MOVEMENT §4.3): remove it from the moving
+  list, raise TF Lua event 0x12 `Unit_Move_Finished(unit)` (0x6006b0); moving list empty → **result 1, finished 1**.
+- 0xb / 0x10 / 0x1a on an object: unsubscribe its 10 / 0xb / 0x10 / 0x1a. The target → target := null, **result 1,
+  finished 1** (target death counts as success). A member → remove it from both lists; when either list is empty →
+  finished 1, result = (member list not empty).
+- A signal while the lists do not exist → result 0, finished 1.
+
+**FlankPlan with these rules** (shipped Lua, [H]): FlankForce flies a plain move to P (≥ 1000 behind the target),
+re-planned every ≥ 150 frames while units are still flying; when the block is finished, every 5 s: if the target is
+valid and the task force is closer than 1000 to it, `Move_To(Project_By_Unit_Range(target, FlankForce))` (back out
+to the target's weapon range on the far side); when MainForce raises `Target_In_Range`, `ExecuteFlank` → 
+`FlankForce.Attack_Target(AITarget)`.
+
+**Land: `LandTaskForceClass` 0x6ec8b0** [H unless tagged]: same arguments plus an optional 5th boolean (4 or 5
+arguments; the 5th is `useZonePath` of `Move_To`). The same ray walk is done **once, inside the call**, with step =
+`Land_FOW_Reveal_Range` × terrain factor (0x3722a0), or the max attack range (0x3749d0) when that is ≤ 0; if both are
+≤ 0 there is no walk and the first point is used. A point found → an ordinary `LandMovementBlockStatus` (id 0x819,
+0x73c360) moving there with the threat tolerance; nil when no point is found or the new block is already finished
+(0x73cab0). No re-plan, no ambush block. Not used by shipped scripts.
+
+**Port check (2026-11-02):** `tf_tactical_order` (`engine/ai/tactical/src/tactical_ai.cpp`) maps `PrepareAmbush` to a
+`MoveTo` **onto the target position**. That is wrong: retail moves to P on the chosen side (≥ minDist away), returns
+a finished-false block (not a move onto the target) when no P exists, and re-plans while unfinished.
+
+### 7.3.2 Orders on an empty task force; `Project_By_Unit_Range` with a task force (S7 t17, RE part, 2026-11-02)
+
+**Task-force position** (TF vf46 0x5fcc60, used by the position extractor 0x4990b0, `Move_To`, `Reinforce` and
+everything that takes a "position-convertible" argument) [H]: sum of the positions of the members (TF +0x78 vector,
+member order) whose object resolves (0x5791e0 ≠ null), summed as floats per axis; if n > 0, multiply each axis by
+f = 1.0f / (float)n (a reciprocal multiply, not a divide). **With no live member the result is (0, 0, 0), and the
+extractor still reports success.** The extractor never fails for a task force.
+
+**`Project_By_Unit_Range(enemy, emptyTF)`** (0x69f6f0) therefore projects from (0, 0, 0): d = normalise((0,0,0) −
+enemy position) (fast inverse square root), result = d × R, R = the enemy's max weapon range (AI_TACTICAL_PERCEPTION
+§5); x and y are clamped into the mode box (vf +0x1f8, centre ± half extents), **z is not clamped**. It returns a
+position, not nil. Only an enemy standing exactly at (0, 0, 0) gives the warning "unable to project: positions are
+identical" and no value. [H]
+
+**`SpaceTaskForceClass::Move_To`** (0x6e7940) [H]:
+- No argument → error "No destination set for TaskForce %s", nil.
+- Argument not an object, AI target, task force or position (Lua nil included) → error "Parameter 1 is not a valid
+  destination for TaskForce %s", nil. A dead object or an AI target with no location → **nil with no message**.
+- A valid destination on an **empty** task force: the `SpaceMovementBlockStatus` is created (0x738ee0 / 0x7389a0:
+  the member collect finds nobody, the empty coordinator is released, the block is not marked finished) and
+  returned; its `IsFinished` (0x7394f0) is **true at once** because the task force has 0 members (0x5fca10). No
+  message. `BlockOnCommand(block, 5)` returns after one or two polls.
+- Retail log for a nil destination is a script error with that text; the port's "invalid target parameter" text
+  differs [cosmetic].
+
+**Can retail reach Weave with an empty task force?** Yes, but only in plans that override the empty event without
+exiting. [H, shipped Lua + engine]
+- `No_Units_Remaining` (plan event 7) is raised synchronously from the task force's own signal handler (0x5fe5d0)
+  when a member dies or is removed (signals 0x10 / 0x1a) and no remaining entry of the task force's entry vector
+  (TF +0x60; each entry's type via entry +0x28) has a type with bytes +0x13, +0x14, +0x1e clear and type bit 0x37
+  clear [M: meaning of those type flags]; also from `Release_Unit` (0x5ff2d0) and the production-failed path when
+  that vector becomes empty. It is queued to the plan and dispatched in `PumpEvents` right after the next yield,
+  before the thread runs any further Lua.
+- `Default_No_Units_Remaining` (PGEvents.lua) calls `ScriptExit()`, which sets the C exit flag and yields false
+  from the pumping thread, so a plan with the default handler (EscortPlan, FlankPlan, …) ends **before** `Weave`
+  continues to line 218.
+- `MoveToLocationRush.lua`, `HideSurpriseUnits.lua` and `HideTransports.lua` override it with
+  `EscortForce_No_Units_Remaining() EscortAlive = false end`. Their EscortForce thread runs
+  `while EscortAlive do Escort(EscortForce, MainForce) end`, so when the last escort dies during the first
+  `BlockOnCommand(tf.Attack_Target(enemy), 10)` of `Weave`, the handler clears the flag and the thread continues:
+  line 218 runs `Move_To(Project_By_Unit_Range(enemy, EscortForce))` on the empty task force (a position near the
+  map origin, see above; an immediately finished block), then the remaining `Attack_Target` / `Move_To` of `Weave`
+  and the `Escort` tail run the same way, and the loop ends because `EscortAlive` is false.
+- The escort team is `"Fighter | Corvette | Frigate = 0,4"`. Whether a plan can start with 0 escorts (and so never
+  raise event 7) depends on the plan solve [open].
+
+**Port check (2026-11-02):** `arg_position` (`tactical_ai.cpp`) returns false for a task force with no live unit, so
+`Project_By_Unit_Range` returns nil and `Move_To(nil)` fails. Retail returns (0, 0, 0) for the task force. The port
+also posts `No_Units_Remaining` from a per-service poll (`service_statuses`) and only when `pending` is empty, while
+retail posts it from the death / removal signal (before the plan runs again).
 
 ### 7.4 Reinforcement drops (`TF.Reinforce(target [, maxWait])`) [H unless tagged]
 - **Land** (0x6ed5f0): requires the TF to have pending reinforcement types (else "taskforce has no reinforcements", nil). If the player currently cannot reinforce (0x2b03e0 false) it returns an immediately-failing ReinforceBlockStatus (id 0x81a). The target may be an object, an AITargetLocation or a task force (its position). Then:
@@ -360,7 +508,7 @@ Lua short-circuit order matters: `(GameRandom.Get_Float() > 0.5) and Try_Ability
 > **Status 2026-10-30:** Items 1, 2 and 4 are done: the tactical perceptual evaluators are in `engine/ai/tactical/src/tactical_perception.cpp`, the threat grid in `engine/ai/tactical/src/threat_grid.cpp` (AI_TACTICAL_PERCEPTION.md), and reinforcement landing with the `Use_Reinforcement_Points` rule and the can-reinforce test in `engine/ai/tactical/src/tactical_ai.cpp:1772-1813` and `engine/ai/tactical/include/alamo/ai/tactical/constants.hpp:44-45`. Items 3 and 6 are partly done: `Explore_Area`, `Prepare_Ambush`, `Fire_Special_Weapon`, `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit` and `Is_Good_Against` are bound (`engine/lua/src/bind_ai_tactical.cpp`, `bind_script_remaining.cpp`), but `Should_Switch_Weapons` is a stub that always returns false (`engine/lua/src/bind_ai_tactical.cpp:324-328`). Item 7: HIJACK_UNIT is handled for tactical plans (`engine/ai/tactical/src/tactical_ai.cpp:1187-1199`).
 1. **Tactical perceptual evaluators**: exact definitions of the land/space tokens listed in §3.5 (`EnemyUnitConcentration(NBTD)`, `Location.*Force`, `IsContestable`, `TimeLastSeen`, `AdditionalPopulationCapacity`, `UnitSpaceAvailable`, `IsDefender`, `BaseLevel`, …). This is the largest gap for A1 parity: every tactical goal desire depends on them.
 2. **TacticalPerceptionGridClass** (0x653340 ctor, 0x6537d0, 0x657fc0, 0x6585f0): grid origin/size (likely from FOW cells × `AI_FogCellsPerThreatCell` 4), the entry weights in 0x6545d0 / 0x655e50, threat projection (`AI_*ThreatDistanceFactor`, `TurnRateFactor`, `LookAheadTime`, `AreaThreatScaleFactor`, `ThreatRangeCap`), and how `UnitAIBehavior` updates it.
-3. LandMovementBlockStatus / SpaceMovementBlockStatus completion rules (arrival radius, what counts as finished for attack-move and guard), and `Explore_Area`, `Prepare_Ambush`, `Bombing_Run`, `Fire_Special_Weapon`, `Find_Closest_Enemy` bodies.
+3. LandMovementBlockStatus / SpaceMovementBlockStatus completion rules (arrival radius, what counts as finished for attack-move and guard), and `Explore_Area`, `Prepare_Ambush`, `Bombing_Run`, `Fire_Special_Weapon`, `Find_Closest_Enemy` bodies. **`Prepare_Ambush` done (S7 t18, §7.3.1); empty-task-force `Move_To` / position done (S7 t17, §7.3.2).** Still open from §7.3.1/§7.3.2: the mode box vf +0x1f8 vs the playable box vf +0x208; the lost 5th signal id of the ambush member subscription [L: 0x1a]; the meaning of the type flags +0x13 / +0x14 / bit 0x37 in the No_Units_Remaining test; whether a plan can start with a 0-unit optional team.
 4. Reinforcement landing positions (0x6eaf60) and the land ReinforceBlockStatus finish/fail rules. (Space resolved by refixf t06, §7.4: ring search in SpaceReinforceBlockStatus; 0x2b03e0 is the population-room test.)
 5. Free-store admission bit meanings (type bitfield +0x790 bits 0x20, 0x5b, 0x5f; obj +0x2b0/+0xf8; mode +0x38 set) and the +0x30 lock field writer; `Lua_Is_Object_On_Free_Store` / `Get_Object_Count`. **+0x30 writers/readers and the two Lua methods: done, A1_READINGS §28** (+0x30 = owning PP; `Lock_Current_Orders` is obj +0x3a8).
 6. `Project_By_Unit_Range`, `Get_Self_Threat_Max/Sum`, `Get_AI_Power_Vs_Unit`, `Should_Switch_Weapons`, `Is_Good_Against`, `Get_Time_Till_Dead` (used by every land plan and PGEvents).

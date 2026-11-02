@@ -10,6 +10,7 @@
 #include "alamo/galactic/special_data.hpp"  // P4 tactical: special_name_crc (Black Market gate)
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/map_spawn.hpp"
+#include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
@@ -46,6 +47,42 @@ float yaw_of(Vec3 f) { return dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF); }
 
 tactical::Vec3 tv(Vec3 v) { return tactical::Vec3{v.x, v.y, v.z}; }
 Vec3 sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
+
+// S8 t09 (MOVEMENT §1.3): the LAND_OBSTACLE stamper's model hooks, one source for map placements and run-time objects: the
+// model bounding box (BattleCatalog::model_half_extents) and the Fine_Tune_Occupied_Passability ray against the type's
+// Land_Model_Name collision data (BattleCatalog::avoid_model(type, false), the model source of the precise projectile test).
+// Ray model: a type whose Land_Model_Name collision data loads -> Model; anything else -> Unknown, untrimmed [port]: no model
+// files in this run (pure headless), a model that does not load, one without collision-enabled meshes and COLLISIONBOX (which
+// meshes the retail ray query vf +0x80 tests is [M]; the port uses the precise-test set), and a type without
+// Land_Model_Name. Retail does not stamp the last kind at all (no proxy) or stamps it untrimmed (proxy); the host never
+// reports StampRayModel::None because the synthetic test data has no model names (as refixf t07's model source); in FoC no
+// LAND_OBSTACLE type with Fine_Tune and no proxy lacks a Land_Model_Name (0 of 459, 2026-11-02), so parity is unaffected.
+// The ray is the segment (x, y, -1000) -> (x, y, +1000) through the model placed by space_avoid's transform (position,
+// facing Rz(yaw) (0, -1), scale). Const data.
+mv::MapStampHooks land_stamp_hooks(const BattleCatalog* cat) {
+    mv::MapStampHooks hooks;
+    hooks.model_half_extents = [cat](uint32_t ty, float& hx, float& hy, float& hz) { return cat->model_half_extents(ty, hx, hy, hz); };
+    hooks.ray_model = [cat](uint32_t ty) {
+        if (!cat->files()) return mv::StampRayModel::Unknown;
+        const mv::AvoidModel* m = cat->avoid_model(ty, false);
+        if (!m || (!m->has_collision_box && m->meshes.empty())) return mv::StampRayModel::Unknown;
+        return mv::StampRayModel::Model;
+    };
+    hooks.mesh_ray_hit = [cat](uint32_t ty, const mv::StampPose& pose, mv::V2 xy) {
+        const mv::AvoidModel* m = cat->avoid_model(ty, false);
+        if (!m) return true;
+        mv::AvoidObstacle o;
+        o.pos = {pose.position.x, pose.position.y, pose.z};
+        const mv::V2 d = mv::dir_from_deg(pose.yaw_deg);
+        o.facing = {d.y, -d.x};
+        o.scale = pose.scale;
+        o.model = m;
+        mv::avoid_place(o);
+        mv::AvoidSegmentHit hit;
+        return mv::avoid_precise_segment(o, {xy.x, xy.y, -1000.0f}, {xy.x, xy.y, 1000.0f}, 1u, 0u, hit);
+    };
+    return hooks;
+}
 
 std::string victory_name(uint8_t v) {
     switch (v) {
@@ -580,10 +617,9 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         });
     } else {
         mv::PassabilityGrid grid = mv::grid_from_map(map_);
-        // battle host: model bounds for the LAND_OBSTACLE footprints without Obstacle_Width / _Height (MOVEMENT 1.3).
-        mv::MapStampHooks stamp_hooks;
-        const BattleCatalog* cat = catalog_;
-        stamp_hooks.model_half_extents = [cat](uint32_t t, float& hx, float& hy, float& hz) { return cat->model_half_extents(t, hx, hy, hz); };
+        // battle host: model bounds for the LAND_OBSTACLE footprints without Obstacle_Width / _Height and the
+        // Fine_Tune_Occupied_Passability ray (MOVEMENT 1.3; S8 t09: the same hooks as land_obstacle_attach).
+        const mv::MapStampHooks stamp_hooks = land_stamp_hooks(catalog_);
         mv::stamp_map_obstacles(grid, map_, types, &stamp_hooks);
         movement_->set_grid(std::move(grid));
         movement_->air().set_box({mn[0], mn[1]}, {mx[0], mx[1]});  // REMAINING_GAPS §4.3-4.6: air units plan in the playable box
@@ -627,6 +663,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
                 if (q != p) combat_->set_enemy(static_cast<int32_t>(p), static_cast<int32_t>(q), false);
     combat_->reserve(256, 2048, 32, 256);
     attach_rocket_terrain();  // refixf t01
+    combat_->set_trees(&mode.trees());  // S8 t06: between-tick detonations (also right after a load)
     if (!space_) {
         // S8 t01 (TACTICAL_GAPS 3.1 slot 43): LAND_OBSTACLE targets' aim walk over the cells their stamp occupies (map
         // placements' stamps move to the spawned objects in bt_map_load; S8 t02: objects spawned later are stamped by
@@ -733,6 +770,15 @@ void TacticalBattle::attach_rocket_terrain() {
         rt.cy = 0.5f * h;
         rt.hx = 0.5f * w;
         rt.hy = 0.5f * h;
+        // S8 t06 (LOB_SOLVER.md §6.6): the grid for the projectile ground test (cell triangles + water plane), in the
+        // same frame (origin 0, kVertexSpacing cells, int16 heights x kHeightScale).
+        rt.grid.cell = terrain::kVertexSpacing;
+        rt.grid.width = tr.width;
+        rt.grid.height = tr.height;
+        rt.grid.heights = tr.heights;
+        rt.grid.height_scale = terrain::kHeightScale;
+        rt.grid.water_height = tr.header.water_height;
+        rt.grid.water_type = static_cast<uint32_t>(tr.header.water_type);
     }
     combat_->set_rocket_terrain(std::move(rt));
 }
@@ -943,6 +989,10 @@ void TacticalBattle::space_obstacles_sync(const TacticalMode& mode) {
     if (!space_ || !movement_) return;
     mv::SpaceOccupancy& occ = movement_->space();
     const objects::ObjectStore& st = mode.primary();
+    // S8 t09: an entry re-keyed by bt_map_load to an object that is not a battle unit (an asteroid / prop with
+    // SPACE_OBSTACLE) leaves with that object, as land_obstacles_sync does for stamps (ascending id).
+    for (const mv::ObjectId id : occ.static_ids())
+        if (id > 0 && !st.alive(st.find(id))) occ.remove_static(id);
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !st.alive(u.h)) {
             occ.remove_static(u.id);
@@ -978,10 +1028,11 @@ bool TacticalBattle::space_obstacle_attach(const TacticalMode& mode, objects::Ob
 // sync: end of setup (also after the structures deploy, before the start forces: their spawn ring search sees the
 // structures), end of each tick (the next tick's pathing and targeting see the change). Gone first (ascending id), then new
 // (the store's LAND_OBSTACLE attach order); footprint as stamp_map_obstacles at the object's position, yaw (facing = Rz(yaw)
-// (0, -1), as map placements) and height; Fine_Tune_Occupied_Passability is not trimmed (no mesh ray test for objects).
-// [inferred] a death clone whose type carries LAND_OBSTACLE (Veers_AT_AT_Walker_Death_Clone, ...) is an obstacle like any
-// object with the behaviour (MOVEMENT §1.3: wreck stamping not traced). Placement stamps never stay under a placement id here: bt_map_load hands
-// each to its object or unstamps it (skipped company, no-spawn placeholder).
+// (0, -1), as map placements) and height, with the same hooks (land_stamp_hooks: Obstacle_Proxy_Type and the
+// Fine_Tune_Occupied_Passability ray apply to every stamp, S8 t09). A death clone is in the LAND_OBSTACLE table iff it kept
+// the behaviour through TacticalMode::spawn_death_clone's strip (Death_Clone_Is_Obstacle, MOVEMENT §1.3 [H]). Placement
+// stamps never stay under a placement id here: bt_map_load hands each to its object or unstamps it (skipped company,
+// no-spawn placeholder).
 void TacticalBattle::land_obstacles_sync(const TacticalMode& mode) {
     if (space_ || !movement_) return;
     const objects::ObjectStore& st = mode.primary();
@@ -1000,15 +1051,13 @@ bool TacticalBattle::land_obstacle_attach(const TacticalMode& mode, objects::Obj
     if (t >= types.size()) return false;
     if (land_obstacle_none_.size() != types.size()) land_obstacle_none_.assign(types.size(), 0);
     if (land_obstacle_none_[t]) return false;
-    mv::MapStampHooks hooks;
-    const BattleCatalog* cat = catalog_;
-    hooks.model_half_extents = [cat](uint32_t ty, float& hx, float& hy, float& hz) { return cat->model_half_extents(ty, hx, hy, hz); };
+    const mv::MapStampHooks hooks = land_stamp_hooks(catalog_);
     const Vec3 p = st.position(h), f = st.facing(h);
     // yaw of the facing Rz(yaw) (0, -1) = (sin yaw, -cos yaw): the map placements' convention (bt_map_load yaw_facing)
     const float yaw = (f.x == 0.0f && f.y == 0.0f) ? 0.0f : dmath::atan2(f.x, -f.y) * (180.0f / dmath::kPiF);
     mv::ObstacleFootprint fp;
     if (!mv::land_obstacle_footprint(types, t, {p.x, p.y}, yaw, p.z, &hooks, fp)) {
-        land_obstacle_none_[t] = 1;  // const type data: never retried
+        land_obstacle_none_[t] = 1;  // const type data (sizes, proxy, ray model): never retried
         return false;
     }
     movement_->grid().stamp(st.id(h), fp);
@@ -1093,6 +1142,7 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
         o.destination.x = std::clamp(o.destination.x, b.min.x, b.max.x);
         o.destination.y = std::clamp(o.destination.y, b.min.y, b.max.y);
         movement_->move(o, rng, frame_);
+        fighter_order(o.units, 0, Vec3{o.destination.x, o.destination.y, 0.0f});  // S7 t22
         ++stats_.orders;
     }
 }
@@ -1165,6 +1215,8 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
         if (!attack_move) combat_->clear_order(id);
         combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: a position block has no attack goal (§2.8)
     }
+    // S7 t22: the squadrons' formation (block flags: 0x01 attack-move, 0x02 guard-move; P1_DOUBLE_CLICK §3.3)
+    fighter_order(o.units, static_cast<uint8_t>((attack_move ? mv::kMoveFlagAttackMove : 0) | flags), Vec3{o.destination.x, o.destination.y, 0.0f});
 }
 
 // Attack rule of BattleAi::execute_order: order_attack, then a move into 70 % of max(range, 100) beyond 80 %.
@@ -1180,6 +1232,8 @@ uint32_t TacticalBattle::exec_attack(TacticalMode& mode, std::span<const objects
         const Unit* u = unit_by_id(id);
         if (!u || u->id == t->id || !combat_->has_unit(u->id)) continue;
         combat_->order_attack(u->id, t->id, hp);
+        if (!movement_locked(u->id))  // S7 t22: an object block (flags 0); a locked unit keeps its formation (as Move_To)
+            fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);
         ++n;
         if (!u->movable || movement_locked(u->id)) continue;  // a locked unit fires from where it stands (§28.9 [M])
         const Vec3 up = st.position(u->h);
@@ -1249,6 +1303,7 @@ cmd::RejectReason TacticalBattle::order_facing(TacticalMode& mode, uint8_t playe
         o.destination = {p.x, p.y};
         o.facing_deg = facing_deg;
         movement_->move(o, rng, frame_);
+        fighter_order(o.units, 0, Vec3{p.x, p.y, 0.0f});  // S7 t22
     }
     return R::None;
 }
@@ -1326,6 +1381,7 @@ cmd::RejectReason TacticalBattle::order_stop(TacticalMode& mode, uint8_t player,
         }
     }
     clear_queues(all);  // [port: Gabriel] Stop clears the queue
+    fighter_order_clear(all);  // S7 t22: Stop leaves the formation [M]
     if (!movers.empty()) movement_->stop(movers);
     return R::None;
 }
@@ -2256,33 +2312,188 @@ void TacticalBattle::fighter_sync() {
         d.tolerance = ct.squad_type < types.size() ? mv::squadron_tolerance_from_type(types, ct.squad_type) : 25.0f;
         movement_->set_fighter_squad(d);
     }
+    // S7 t22: a formation goes with its squadron (or fighter).
+    std::erase_if(fformations_, [this](const FighterFormationRecord& r) {
+        if (movement_->fighter_squad(r.key)) return false;
+        const Unit* x = unit_by_id(r.key);
+        return !x || !x->alive || x->retreated || !movement_->has_unit(x->id);
+    });
 }
 
-// FIGHTER_FLYING §2 step 6 / §4.3 step 2: the formation attack target Formation_Attack_Target(F, &hp, 0) (0x41a2e0,
-// TACTICAL_COMBAT §2.8: the formation's current block object, when it is hostile and the block is not a guard). A
-// squadron's target comes from its leader. fighter_formation_target (tactical_battle.hpp) picks it:
+// FIGHTER_FLYING §2 step 6 / §4.3 step 2 / §4.9: the formation attack target Formation_Attack_Target(F, &hp, -1)
+// (0x41a2e0, TACTICAL_COMBAT §2.8: newest valid block first; a block qualifies with an object hostile to the leader's
+// owner, guard blocks never). The fighter states read only this goal, never the combat target (§4.9). A squadron's
+// target comes from its leader. fighter_formation_target (tactical_battle.hpp) picks it:
 //   1. the ordered combat target (Attack / Attack_Target, the set path of a task-force Attack_Move, path B's lock, the
-//      locomotor's own Provoke / Retarget orders) [port: the ordered slot stands for the order's object block];
-//   2. else the attack goal (the current move block's object: Attack_Move(object)) when hostile to the leader's owner;
-//   3. else, while the leader has a move order (a formation whose block is a position: Move_To, Attack_Move(position),
-//      Prepare_Ambush), none: 0x41a2e0 finds no object and the squadron keeps Moving (§4.1); its weapons still fire at
-//      targets of opportunity (combat). S7 t12: the combat AUTO target was fed here too, so a squadron flying a move past
-//      an enemy ship began an attack run, §4.3 step 4 reset its path, and when that target was lost (fogged) §4.3 NoTarget
-//      parked the squadron on the spot with the move order gone (skirmish foc seed 5: TIE squadron 86 stopped ~1900 short
-//      of its Prepare_Ambush destination and idled ~750 frames);
-//   4. else (idle: no formation; §4.3 "no formation on F -> NoTarget") [port]: the combat auto target unless it is hidden
-//      for the leader's player (the retail engagement path of idle squadrons is untraced; a hidden pick would only toggle
-//      Idle <-> Directed_Combat every frame).
+//      locomotor's own Provoke / Retarget orders) [port: the ordered slot stands for the order's object block and the
+//      locked team target; while it is set the team target is locked, so §4.9 step 2 pushes no auto block];
+//   2. else the newest pushed auto attack block that is live and hostile (S7 t22: §4.9 step 2, fighter_push - the only
+//      way an auto target moves a squadron; it is newer than the order's own block);
+//   3. else the attack goal (the order's object block: Attack_Move(object)) when hostile to the leader's owner;
+//   4. else none: 0x41a2e0 finds no object (a position, guard or no formation) and the squadron keeps Moving (§4.1) or
+//      parks (§4.2); its weapons still fire at targets of opportunity (combat).
+// S7 t12's "moving -> none" rule and t12's idle "combat auto target unless hidden" stand-in are gone: a plain Move_To
+// does not peel off at enemies along the way because the chase test measures Idle_Chase_Range from its destination
+// (fighter_chase_test rule 5), an Attack_Move(position) does (Attack_Move_Response_Range, rule 4).
 // A target that is a member of a registered squadron is that squadron (a team: dogfight §4.5); otherwise the object with
 // its combat radius (0x397780) and, for an ordered hard point, the hard point's position (0x396ce0: the combat attachment
-// point, unit-local x forward / z up). hidden = FOW_Object_Hidden for the attacker's owner with force 1 (0x35f470). No
-// target clears it (the locomotor then retargets from its dogfight cell and reports Retarget).
+// point, unit-local x forward / z up). hidden = FOW_Object_Hidden for the attacker's owner with force 1 (0x35f470): no
+// filter here, so a fogged goal toggles Idle <-> Directed_Combat every frame as in retail (§4.9 step 3). No target clears
+// it (the locomotor then retargets from its dogfight cell and reports Retarget).
 objects::ObjectId fighter_formation_target(const FighterTargetInputs& in) {
     if (in.ordered != objects::kNoObjectId) return in.ordered;
+    if (in.pushed != objects::kNoObjectId) return in.pushed;
     if (in.goal != objects::kNoObjectId && in.goal_hostile) return in.goal;
-    if (in.moving) return objects::kNoObjectId;
-    if (in.auto_target != objects::kNoObjectId && !in.auto_hidden) return in.auto_target;
     return objects::kNoObjectId;
+}
+
+uint8_t fighter_chase_test(const FighterChaseInputs& in) {
+    if (!in.formation || in.candidate_is_goal) return 0;  // rule 1
+    float rr = (in.flags & mv::kMoveFlagGuardMove) != 0    ? in.guard_range
+               : (in.flags & mv::kMoveFlagAttackMove) != 0 ? in.attack_move_range
+                                                           : in.idle_range;  // rule 2
+    if (rr < 0.0f) rr = 0.0f;
+    if (in.moving && (in.flags & mv::kMoveFlagAttackMove) != 0) return 2;  // rule 4 [M: within Rr of its own path point]
+    const float dx = in.candidate.x - in.goal.x, dy = in.candidate.y - in.goal.y;
+    const float r = rr + in.attack_range;
+    return dx * dx + dy * dy <= r * r ? 1 : 0;  // rule 5 [M]
+}
+
+const FighterFormationRecord* TacticalBattle::fighter_formation(objects::ObjectId key) const {
+    const auto it = std::lower_bound(fformations_.begin(), fformations_.end(), key,
+                                     [](const FighterFormationRecord& r, objects::ObjectId k) { return r.key < k; });
+    return it != fformations_.end() && it->key == key ? &*it : nullptr;
+}
+
+FighterFormationRecord* TacticalBattle::fighter_formation_mut(objects::ObjectId key) {
+    return const_cast<FighterFormationRecord*>(std::as_const(*this).fighter_formation(key));
+}
+
+objects::ObjectId TacticalBattle::fighter_key(const Unit& u) const {
+    if (u.container < containers_.size() && containers_[u.container].team) return containers_[u.container].id;
+    return u.id;
+}
+
+objects::ObjectId TacticalBattle::fighter_goal_key(objects::ObjectId id) {
+    const Unit* x = id != objects::kNoObjectId ? unit_by_id(id) : nullptr;
+    if (x && x->container < containers_.size() && movement_->fighter_squad(containers_[x->container].id)) return containers_[x->container].id;
+    return id;
+}
+
+bool TacticalBattle::fighter_goal_live(objects::ObjectId key, const objects::ObjectStore& store) {
+    if (key == objects::kNoObjectId) return false;
+    if (const mv::FighterSquad* s = movement_->fighter_squad(key)) return !s->members.empty();
+    const Unit* x = unit_by_id(key);
+    return x && x->alive && !x->retreated && store.alive(x->h) && combat_->has_unit(x->id);
+}
+
+// A move / attack order replaces the formation of every fighter squadron it names (one record per squadron).
+void TacticalBattle::fighter_order(std::span<const objects::ObjectId> ids, uint8_t flags, Vec3 goal, objects::ObjectId goal_object) {
+    if (!space_ || !movement_) return;
+    for (const objects::ObjectId id : ids) {
+        const Unit* u = unit_by_id(id);
+        if (!u || !u->alive || u->retreated || !movement_->has_unit(id) || movement_->view(id).locomotor != mv::LocomotorKind::Fighter) continue;
+        const objects::ObjectId key = fighter_key(*u);
+        FighterFormationRecord* r = fighter_formation_mut(key);
+        if (!r) {
+            const auto it = std::lower_bound(fformations_.begin(), fformations_.end(), key,
+                                             [](const FighterFormationRecord& a, objects::ObjectId k) { return a.key < k; });
+            FighterFormationRecord nr;
+            nr.key = key;
+            r = &*fformations_.insert(it, std::move(nr));
+        }
+        r->flags = static_cast<uint8_t>(flags & (mv::kMoveFlagAttackMove | mv::kMoveFlagGuardMove));
+        r->goal = goal;
+        r->goal_object = goal_object;
+        r->pushed.clear();
+    }
+}
+
+void TacticalBattle::fighter_order_clear(std::span<const objects::ObjectId> ids) {
+    for (const objects::ObjectId id : ids)
+        if (const Unit* u = unit_by_id(id)) {
+            const objects::ObjectId key = fighter_key(*u);
+            std::erase_if(fformations_, [key](const FighterFormationRecord& r) { return r.key == key; });
+        }
+}
+
+// §4.9 step 2 (Service_Space -> Auto_Engage, LocomotorCommon 0x42d0f0 on the container's pack). t = the squadron's
+// unlocked auto target: none while the leader holds a live ordered (locked team) target; else the first member's in
+// team index order (the squadron shares the first member's pick, 0x406370 [port: combat keeps per-member auto targets]).
+// t (as its squadron when it is a team member) is pushed as the newest auto block when it is not the formation's goal
+// (newest valid block, -1) already and fighter_chase_test passes [port: rr = 1's detach into a formation of its own is
+// moot, the record is per squadron; the mode's hold table 0x4944e0 is not modelled]. No formation: nothing is pushed.
+objects::ObjectId TacticalBattle::fighter_push(const Unit& leader, objects::ObjectId key, const objects::ObjectStore& store) {
+    FighterFormationRecord* r = fighter_formation_mut(key);
+    if (!r) return objects::kNoObjectId;
+    const int32_t me = store.owner(leader.h);
+    const auto hostile = [&](objects::ObjectId k) {
+        const objects::ObjectId cu = fighter_combat_unit(k);
+        return cu != objects::kNoObjectId && combat_->has_unit(cu) && combat_->is_enemy(me, combat_->owner(cu));
+    };
+    const auto newest = [&]() -> objects::ObjectId {
+        for (auto it = r->pushed.rbegin(); it != r->pushed.rend(); ++it)
+            if (fighter_goal_live(*it, store) && hostile(*it)) return *it;
+        return objects::kNoObjectId;
+    };
+    std::erase_if(r->pushed, [&](objects::ObjectId k) { return !fighter_goal_live(k, store); });  // dead blocks never qualify again
+    if (combat_->has_unit(leader.id) && fighter_goal_live(combat_->ordered_target(leader.id), store)) return newest();
+    std::span<const objects::ObjectId> members(&leader.id, 1);
+    const mv::FighterSquad* sq = movement_->fighter_squad(key);
+    if (sq) members = sq->members;
+    objects::ObjectId t = objects::kNoObjectId;
+    for (const objects::ObjectId m : members) {
+        if (!combat_->has_unit(m) || combat_->ordered_target(m) != objects::kNoObjectId) continue;
+        const objects::ObjectId a = combat_->auto_target(m);
+        if (a != objects::kNoObjectId && fighter_goal_live(a, store)) {
+            t = a;
+            break;
+        }
+    }
+    if (t == objects::kNoObjectId) return newest();
+    const objects::ObjectId tk = fighter_goal_key(t);
+    if (!hostile(tk)) return newest();  // an owner change: the targeting service drops it at its next due frame
+    objects::ObjectId g = newest();
+    const objects::ObjectId order_goal = fighter_goal_key(combat_->attack_goal(leader.id));
+    if (g == objects::kNoObjectId && fighter_goal_live(order_goal, store) && hostile(order_goal)) g = order_goal;
+    if (tk == g) return g;
+    FighterChaseInputs ci;
+    ci.formation = true;
+    ci.flags = r->flags;
+    ci.moving = movement_->view(leader.id).has_goal;
+    ci.candidate_is_goal = tk == order_goal || tk == fighter_goal_key(r->goal_object) || (!r->pushed.empty() && tk == r->pushed.back());
+    // Rr: the squadron type's (a fighter without one: its own type's); cached per type.
+    const objects::GameObjectTypes& types = catalog_->types();
+    uint32_t ty = leader.type;
+    if (sq && leader.container < containers_.size() && containers_[leader.container].squad_type < types.size())
+        ty = containers_[leader.container].squad_type;
+    if (ty < types.size()) {
+        if (fchase_have_.size() != types.size()) {
+            fchase_have_.assign(types.size(), 0);
+            fchase_cache_.assign(types.size(), {});
+        }
+        if (!fchase_have_[ty]) {
+            const auto ti = static_cast<objects::TypeIndex>(ty);
+            fchase_cache_[ty] = {types.get_float(ti, "Guard_Chase_Range"), types.get_float(ti, "Idle_Chase_Range"),
+                                 types.get_float(ti, "Attack_Move_Response_Range")};
+            fchase_have_[ty] = 1;
+        }
+        ci.guard_range = fchase_cache_[ty][0];
+        ci.idle_range = fchase_cache_[ty][1];
+        ci.attack_move_range = fchase_cache_[ty][2];
+    }
+    ci.attack_range = combat_->attack_range(leader.id);
+    ci.goal = r->goal;
+    if (const Unit* go = r->goal_object != objects::kNoObjectId ? unit_by_id(r->goal_object) : nullptr;
+        go && go->alive && !go->retreated && store.alive(go->h))
+        ci.goal = store.position(go->h);  // an object block: the slot goal follows the object
+    const Unit* tu = unit_by_id(t);
+    ci.candidate = store.position(tu->h);
+    if (fighter_chase_test(ci) != 0) {
+        std::erase(r->pushed, tk);
+        r->pushed.push_back(tk);  // 0x41cf70: append the auto attack block {kind 3, t, hp, +0x2b = 1}
+    }
+    return newest();
 }
 
 void TacticalBattle::feed_fighter_target(const Unit& u, const objects::ObjectStore& store) {
@@ -2301,19 +2512,17 @@ void TacticalBattle::feed_fighter_target(const Unit& u, const objects::ObjectSto
     const int32_t me = store.owner(u.h);
     FighterTargetInputs in;
     if (live(combat_->ordered_target(u.id))) in.ordered = combat_->ordered_target(u.id);
+    in.pushed = fighter_push(u, addr == u.id ? fighter_key(u) : addr, store);
     if (const Unit* g = live(combat_->attack_goal(u.id))) {
         in.goal = g->id;
         in.goal_hostile = combat_->is_enemy(me, store.owner(g->h));
     }
-    in.moving = movement_->view(u.id).has_goal;
-    if (in.ordered == objects::kNoObjectId)
-        if (const Unit* a = live(combat_->current_target(u.id))) {
-            in.auto_target = a->id;
-            in.auto_hidden = fog_object_hidden(me, a->id, true);
-        }
     mv::FighterTarget ft;
-    const Unit* t = live(fighter_formation_target(in));
-    if (t) {
+    const objects::ObjectId chosen = fighter_formation_target(in);
+    if (chosen != objects::kNoObjectId && movement_->fighter_squad(chosen)) {  // a pushed squadron (a team: dogfight)
+        ft.id = chosen;
+        ft.hidden = fog_object_hidden(me, ft.id, true);
+    } else if (const Unit* t = live(chosen)) {
         const mv::FighterSquad* ts = t->container < containers_.size() ? movement_->fighter_squad(containers_[t->container].id) : nullptr;
         if (ts) {
             ft.id = ts->id;
@@ -2346,9 +2555,50 @@ void TacticalBattle::feed_fighter_target(const Unit& u, const objects::ObjectSto
                 }
             }
         }
-        ft.hidden = fog_object_hidden(store.owner(u.h), ft.id, true);
+        ft.hidden = fog_object_hidden(me, ft.id, true);
     }
     movement_->set_fighter_target(addr, ft);
+}
+
+// enter_idle (§4.7 step 4, 0x5c9ca0 -> 0x406370(team, null)): the squadron's team target is dropped - every member's
+// TARGETING Set_Target(null), the hard points' targets too - so the targeting service rescans on its next due frame; the
+// formation and its blocks are kept (§4.7, §4.9 step 3). The port detects enter_idle as a fighter that entered Idle 0x1C
+// during the movement tick (from Moving at its path end, Directed_Combat's NoTarget, Dead_Stop / hyperspace ends)
+// [port: MovementSystem reports no event]. A member's ordered target that stands for its order's object block (the
+// Attack / Attack_Move object) is kept [port: the block is the ordered slot]; Provoke / Retarget orders (team targets
+// only in retail) are dropped.
+void TacticalBattle::fighter_pre_move() {
+    fighter_pre_state_.clear();
+    if (!space_ || !movement_) return;
+    for (const Unit& u : units_) {
+        if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id)) continue;
+        const mv::UnitView v = movement_->view(u.id);
+        if (v.locomotor == mv::LocomotorKind::Fighter) fighter_pre_state_.emplace_back(u.id, static_cast<uint8_t>(v.loco_state));
+    }
+}
+
+void TacticalBattle::fighter_post_move() {
+    std::vector<objects::ObjectId> keys;  // first-seen order (units_ order)
+    for (const auto& [id, before] : fighter_pre_state_) {
+        if (before == static_cast<uint8_t>(mv::LocoState::FighterIdle) || !movement_->has_unit(id)) continue;
+        if (movement_->view(id).loco_state != mv::LocoState::FighterIdle) continue;
+        const Unit* u = unit_by_id(id);
+        if (!u) continue;
+        const objects::ObjectId key = fighter_key(*u);
+        if (std::find(keys.begin(), keys.end(), key) == keys.end()) keys.push_back(key);
+    }
+    fighter_pre_state_.clear();
+    for (const objects::ObjectId key : keys) {
+        std::span<const objects::ObjectId> members(&key, 1);
+        if (const mv::FighterSquad* s = movement_->fighter_squad(key)) members = s->members;
+        const FighterFormationRecord* r = fighter_formation(key);
+        for (const objects::ObjectId m : members) {
+            if (!combat_->has_unit(m) || combat_->current_target(m) == objects::kNoObjectId) continue;
+            const objects::ObjectId o = combat_->ordered_target(m);
+            if (o != objects::kNoObjectId && (o == combat_->attack_goal(m) || (r && o == r->goal_object))) continue;
+            combat_->clear_targets(m);
+        }
+    }
 }
 
 objects::ObjectId TacticalBattle::fighter_combat_unit(objects::ObjectId id) const {
@@ -2623,6 +2873,9 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
                 engine_loops_.engines_online(e.id, frame_);  // §3.3: idle loop on
             }
         if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
+        // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
+        // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
+        if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);
     }
     oi_events(mode);  // OI abilities: ability moves / stops / owner changes, ability spawns, death survivors
     abilities_->clear_events();
@@ -2775,6 +3028,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     oi_global_frame_ = global_frame;
     stats_.frames = frame_;
     story_reinforced_.clear();  // L1/S4 wave 2b story hook: this tick's reserve deployments
+    ability_finished_.clear();  // S7 t15 A1: this tick's signal 0x29
     story_garrisoned_.clear();  // S4: this tick's garrison entries / structure captures
     story_captured_.clear();
     objects::ObjectStore& store = mode.primary();
@@ -2796,10 +3050,12 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     fighter_sync();  // S7 fighters: new squadrons (map start, reinforcements, hangar launches, wingmen) and params
     feed_attack_targets(store);
     if (space_) avoid_snapshot(store);  // SPACE_AVOIDANCE: committed member transforms for the fighter avoidance hook
+    fighter_pre_move();  // S7 t22: fighter states before the tick (enter_idle detection)
     profile::lap("tac.pre_move");
     movement_->tick(frame_, rng, pf);
     movement_->commit(store);
     profile::lap("tac.movement");
+    fighter_post_move();  // S7 t22: enter_idle drops the squadrons' team targets (§4.7 step 4)
     forward_fighter_events();  // S7 fighters: Provoke / Retarget -> combat attack orders (before the combat tick)
     for (const objects::ObjectId id : movement_->despawned())  // §4.6: land bombers at their path end, no death effects
         if (const Unit* u = unit_by_id(id)) bt_kill_silently(mode, u->h);
@@ -2823,9 +3079,11 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         const mv::UnitView mvv = movement_->view(u.id);
         combat_->set_facing(u.id, tv(facing_of_yaw(mvv.yaw)));
         // S7 t14 (MOVEMENT §3.1.1 step 6): the locomotor swap disables TARGETING / WEAPON / SPECIAL_WEAPON for the jetpack
-        // flight and enables them on the swap back (then object signal 0x29: no port listener, its meaning is [M]). The
-        // swap runs inside MovementSystem (orders, the JET_PACK ability, the jetpack's state 0x16), so the flag mirrors
-        // the active locomotor here, before every combat tick.
+        // flight and enables them on the swap back. The swap runs inside MovementSystem (orders, the JET_PACK ability, the
+        // jetpack's state 0x16), so the flag mirrors the active locomotor here, before every combat tick.
+        // S7 t15 A1: the swap back then raises "unit ability finished" (signal 0x29: task-force event 19, the blocking
+        // Activate_Ability); the flag still set from the previous tick marks it.
+        if (!mvv.secondary_locomotor && (combat_->flags(u.id) & tc::kUnitWeaponsSuspended) != 0) ability_finished_.push_back(u.id);
         combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, mvv.secondary_locomotor);
     }
     s4_positions(mode);  // S4: garrisoned units sit on their holders
@@ -3122,6 +3380,19 @@ void TacticalBattle::hash(StateHasher& h) const {
     if (queue_used_) hash_queues(h);  // [port: Gabriel] order queues (absent until an order was queued)
     s4_hash(h);                       // S4: garrisons / capture points (absent while none exist)
     if (bt_used_) bt_hash(h);         // battle host: pad units, HIJACK reserves, lead object, attrition (absent until used)
+    if (!fformations_.empty()) {      // S7 t22: fighter formations (absent while none)
+        h.u32(static_cast<uint32_t>(fformations_.size()));
+        for (const FighterFormationRecord& r : fformations_) {
+            h.i32(r.key);
+            h.u8(r.flags);
+            h.f32(r.goal.x);
+            h.f32(r.goal.y);
+            h.f32(r.goal.z);
+            h.i32(r.goal_object);
+            h.u32(static_cast<uint32_t>(r.pushed.size()));
+            for (const objects::ObjectId k : r.pushed) h.i32(k);
+        }
+    }
 }
 
 void TacticalBattle::hash_abilities(StateHasher& h) const {

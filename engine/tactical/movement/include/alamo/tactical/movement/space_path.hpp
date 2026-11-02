@@ -116,6 +116,8 @@ public:
     // the object spawned for it; space_obstacles_sync removes it when that object is a battle unit that left). False (nothing changes) when `from` has no entry, `to`
     // already has one, or from == to.
     bool rekey_static(ObjectId from, ObjectId to);
+    // S8 t09: the static entry ids, ascending (map placements' negative ids first). Hosts remove the objects that left.
+    std::vector<ObjectId> static_ids() const;
     // The static entry of `id` (centre, radius, SpaceCollisionType bits); false when there is none.
     bool static_entry(ObjectId id, V2& center, float& radius, uint32_t& bits) const;
     // Replaces the track of `id`. `start_frame` = absolute frame of waypoint time 0.

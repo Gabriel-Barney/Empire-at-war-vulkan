@@ -453,4 +453,97 @@ bool rocket_replan_space(RocketSpline& path, Vec3 P, Vec3 E, Vec3 last_velocity,
     return true;
 }
 
+// ---- S8 t06: the terrain / water segment test 0x135840 (docs/re/LOB_SOLVER.md §6.6) ----
+
+bool ray_triangle(Vec3 O, Vec3 D, Vec3 v0, Vec3 v1, Vec3 v2, float& best) {
+    // 0x20c410: Moeller-Trumbore without back-face culling, in the doc's float order (no FMA).
+    const Vec3 e1{v1.x - v0.x, v1.y - v0.y, v1.z - v0.z};
+    const Vec3 e2{v2.x - v0.x, v2.y - v0.y, v2.z - v0.z};
+    const Vec3 P{D.y * e2.z - D.z * e2.y, D.z * e2.x - D.x * e2.z, D.x * e2.y - D.y * e2.x};
+    const float det = (P.y * e1.y + P.x * e1.x) + P.z * e1.z;
+    if (abs_f(det) < 0.0001f) return false;
+    const float inv = 1.0f / det;
+    const Vec3 T{O.x - v0.x, O.y - v0.y, O.z - v0.z};
+    const float u = ((T.y * P.y + T.x * P.x) + T.z * P.z) * inv;
+    if (!(u >= 0.0f && u <= 1.0f)) return false;
+    const Vec3 Q{T.y * e1.z - T.z * e1.y, T.z * e1.x - T.x * e1.z, T.x * e1.y - T.y * e1.x};
+    const float v = ((Q.y * D.y + Q.x * D.x) + Q.z * D.z) * inv;
+    if (!(v >= 0.0f && v + u <= 1.0f)) return false;
+    const float t = ((Q.y * e2.y + Q.x * e2.x) + Q.z * e2.z) * inv;
+    if (!(t > 0.0f && t < best)) return false;
+    best = t;
+    return true;
+}
+
+namespace {
+
+// 0x135a70: grid vertex (x, y); the height lookup clamps x / y to the grid, the position does not.
+Vec3 grid_vertex(const GroundGrid& g, int64_t x, int64_t y) {
+    const int64_t w = g.width, h = g.height;
+    const int64_t cx = x < 0 ? 0 : (x >= w ? w - 1 : x);
+    const int64_t cy = y < 0 ? 0 : (y >= h ? h - 1 : y);
+    const int16_t raw = g.heights[static_cast<size_t>(cy * w + cx)];
+    return Vec3{static_cast<float>(x) * g.cell, static_cast<float>(y) * g.cell,
+                static_cast<float>(static_cast<int32_t>(raw)) * g.height_scale};
+}
+
+// First / last cell index (inclusive) whose closed span [i c, (i + 1) c] meets [lo, hi], clamped to [0, cells - 1].
+// False when none.
+bool cell_span(float lo, float hi, float c, uint32_t cells, int64_t& first, int64_t& last) {
+    if (!(c > 0.0f) || cells == 0) return false;
+    const float n = static_cast<float>(cells);
+    float a = std::ceil(lo / c) - 1.0f, b = std::floor(hi / c);
+    if (!(a <= n) || !(b >= 0.0f)) return false;  // also NaN
+    if (a < 0.0f) a = 0.0f;
+    if (b > n - 1.0f) b = n - 1.0f;
+    first = static_cast<int64_t>(a);
+    last = static_cast<int64_t>(b);
+    return first <= last;
+}
+
+// 0x20c180: the plane z = h, both directions.
+bool ray_plane_z(Vec3 O, Vec3 D, float h, float& best) {
+    const float denom = D.z;
+    if (!(abs_f(denom) >= 0.0001f)) return false;
+    const float t = -(O.z - h) / denom;
+    if (!(t > 0.0f && t < best)) return false;
+    best = t;
+    return true;
+}
+
+}  // namespace
+
+bool ground_segment(const GroundGrid& g, Vec3 from, Vec3 to, GroundHit& out) {
+    // 1. O = from, D = to - from (not normalised); the best t starts at 1.
+    const Vec3 O = from;
+    const Vec3 D{to.x - from.x, to.y - from.y, to.z - from.z};
+    float best = 1.0f;
+    bool hit = false, water = false;
+    if (g.present()) {
+        // 2.-5. Every cell the segment's XY box touches: the patch / BVH walk visits a superset of the cells the segment
+        // can hit and keeps the nearest. [port] Cells in y, then x order; the first of equal t is kept.
+        int64_t x0 = 0, x1 = -1, y0 = 0, y1 = -1;
+        const float minx = from.x < to.x ? from.x : to.x, maxx = from.x < to.x ? to.x : from.x;
+        const float miny = from.y < to.y ? from.y : to.y, maxy = from.y < to.y ? to.y : from.y;
+        if (cell_span(minx, maxx, g.cell, g.width - 1, x0, x1) && cell_span(miny, maxy, g.cell, g.height - 1, y0, y1)) {
+            for (int64_t y = y0; y <= y1; ++y)
+                for (int64_t x = x0; x <= x1; ++x) {
+                    const Vec3 v00 = grid_vertex(g, x, y), v10 = grid_vertex(g, x + 1, y);
+                    const Vec3 v11 = grid_vertex(g, x + 1, y + 1), v01 = grid_vertex(g, x, y + 1);
+                    if (ray_triangle(O, D, v00, v10, v11, best)) hit = true;  // T1
+                    if (ray_triangle(O, D, v00, v11, v01, best)) hit = true;  // T2
+                }
+        }
+        // 6. The water plane (the toggle byte 0x140a123a1 is always set).
+        if (g.water_type != 0 && ray_plane_z(O, D, g.water_height, best)) hit = water = true;
+    } else if (ray_plane_z(O, D, 0.0f, best)) {  // [port] no grid: flat ground at z 0
+        hit = true;
+    }
+    if (!hit) return false;
+    out.t = best;
+    out.point = Vec3{best * D.x + O.x, best * D.y + O.y, best * D.z + O.z};
+    out.water = water;
+    return true;
+}
+
 }  // namespace alamo::tactical::combat

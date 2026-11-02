@@ -24,6 +24,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "alamo/objects/object_store.hpp"
@@ -176,6 +177,16 @@ public:
     virtual int32_t tf_activate_ability(int32_t tf, std::string_view /*ability*/, bool /*on*/, const AiArg& target) {
         return tf_order(tf, AiTfOrder::ActivateAbility, target);
     }
+    // S7 t15 A1 (AI_TACTICAL §7.3, MOVEMENT §3.1.1 step 6): the land / space / generic form after the binding called each
+    // unit's Activate_Ability: `units` = the task force's units (list order) with whether the activation went through.
+    // A tactical host answers an AbilityBlockStatus (pending until every activated unit raised "unit ability finished" or
+    // died / was removed) and queues Unit_Ability_Finished at once for the units that failed. Default: tf_activate_ability.
+    virtual int32_t tf_activate_ability_units(int32_t tf, std::string_view ability, bool on, const AiArg& target,
+                                              const std::vector<std::pair<objects::ObjectHandle, bool>>& /*units*/) {
+        return tf_activate_ability(tf, ability, on, target);
+    }
+    // S7 t20 (AI_TACTICAL §7.3.2): the task force's name for the retail script-error texts ("" = unknown).
+    virtual std::string tf_name(int32_t /*tf*/) { return {}; }
 
 private:
     std::map<int32_t, std::vector<int32_t>> opportunity_fire_;  // TF id -> subscribed HardPointType values (lookups only)

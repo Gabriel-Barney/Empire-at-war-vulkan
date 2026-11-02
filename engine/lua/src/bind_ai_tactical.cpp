@@ -3,6 +3,8 @@
 // vm_internal.hpp error discipline (Call::fail, never lua_error). Validation strings are the port's own unless
 // docs/re/AI_TACTICAL.md / LUA_API.md give one.
 #include <bit>
+#include <cstdarg>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -137,11 +139,82 @@ int tf_order(Call& c, AiTacticalOrder order, const char* name) {
     if (!h) return push_nil(c);
     return push_status(c, h->tf_tactical_order(c.self->id, order, a, p, number, flag));
 }
-int m_move_to(Call& c) { return tf_order(c, AiTacticalOrder::MoveTo, "Move_To"); }
+// The original's script error (logged, no unwind): the binding answers nil.
+int script_error_nil(Call& c, const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    c.vm->message(std::string("SCRIPT ERROR: ") + buf);
+    return push_nil(c);
+}
+// A GameObjectWrapper of a dead object at argument i (arg_of leaves it absent).
+bool dead_object_arg(Call& c, int i) {
+    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return false;
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
+    return ud && ud->cls == detail::cls_game_object() && !detail::object_alive(*c.vm, *ud);
+}
+std::string tf_display_name(Call& c) {
+    AiScriptHost* h = c.vm && c.vm->owner ? ai_host(*c.vm->owner) : nullptr;
+    return h ? h->tf_name(c.self->id) : std::string();
+}
+// S7 t20 (AI_TACTICAL §7.3.2, SpaceTaskForceClass 0x6e7940; the land form the same [M]): no argument -> "No destination
+// set for TaskForce %s"; an argument that is not an object, AI target, task force or position (nil included) -> "Parameter 1
+// is not a valid destination for TaskForce %s"; both logged as script errors (no unwind), nil. A dead object -> nil with no
+// message (an AI target without a location: the host answers nil).
+int m_move_to(Call& c) {
+    if (c.nargs < 1) return script_error_nil(c, "No destination set for TaskForce %s", tf_display_name(c).c_str());
+    if (dead_object_arg(c, 1)) return push_nil(c);
+    AiArg a;
+    AiPoint p;
+    arg_of(c, 1, a, p);
+    if ((!a.present && !p.present) || a.player >= 0)
+        return script_error_nil(c, "Parameter 1 is not a valid destination for TaskForce %s", tf_display_name(c).c_str());
+    return tf_order(c, AiTacticalOrder::MoveTo, "Move_To");
+}
 int m_attack_move(Call& c) { return tf_order(c, AiTacticalOrder::AttackMove, "Attack_Move"); }
 int m_guard_target(Call& c) { return tf_order(c, AiTacticalOrder::GuardTarget, "Guard_Target"); }
 int m_explore_area(Call& c) { return tf_order(c, AiTacticalOrder::ExploreArea, "Explore_Area"); }
-int m_prepare_ambush(Call& c) { return tf_order(c, AiTacticalOrder::PrepareAmbush, "Prepare_Ambush"); }
+// S7 t21 Prepare_Ambush(target, direction, minDist, threat) (AI_TACTICAL §7.3.1): space exactly 4 arguments, land 4 or 5
+// (the 5th = Move_To's useZonePath). Argument errors are script errors (logged, no unwind) with nil; the host then builds
+// the SpaceAmbushBlockStatus (space) or the one-shot move (land). [port] texts where §7.3.1 gives none: parameter 1 of
+// another class, parameter 2 not a string, parameter 4 not a number.
+int m_prepare_ambush(Call& c) {
+    static const uint32_t land = cls("LandTaskForceClass");
+    const bool is_land = c.self->cls == land;
+    if (is_land ? (c.nargs != 4 && c.nargs != 5) : c.nargs != 4) return script_error_nil(c, "Invalid number of parameters");
+    if (dead_object_arg(c, 1)) return script_error_nil(c, "Target object is already dead");
+    AiArg a;
+    AiPoint p;
+    arg_of(c, 1, a, p);
+    if (!a.object && a.target < 0) return script_error_nil(c, "Parameter 1 is not a game object or an AI target");
+    if (!c.is_string(2)) return script_error_nil(c, "Parameter 2 is not a direction string");
+    const std::string_view text = c.string(2);
+    auto same = [&text](const char* w) {
+        size_t i = 0;
+        for (; w[i] != 0; ++i) {
+            if (i >= text.size()) return false;
+            char x = text[i];
+            if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
+            if (x != w[i]) return false;
+        }
+        return i == text.size();
+    };
+    const int direction = same("front") ? 0 : same("left") ? 1 : same("right") ? 2 : same("back") ? 3 : -1;
+    if (direction < 0) return script_error_nil(c, "Unrecognized direction %s", std::string(text).c_str());
+    if (!c.is_number(3) || !(c.number(3) > 0.0)) return script_error_nil(c, "Parameter 3 is not a positive number");
+    if (!c.is_number(4)) return script_error_nil(c, "Parameter 4 is not a number");
+    const bool zone_path = is_land && c.nargs == 5 && is_bool(c, 5) && lua_toboolean(c.L, c.idx(5)) != 0;
+    AiTacticalScriptHost* h = host_of(c.L);
+    if (!h) return push_nil(c);
+    std::string name;
+    const int32_t st = h->tf_prepare_ambush(c.self->id, a, direction, c.number(3), c.number(4), zone_path, &name);
+    if (st == AiTacticalScriptHost::kAmbushTargetDead) return script_error_nil(c, "Target object is already dead");
+    if (st == AiTacticalScriptHost::kAmbushTargetRegion)
+        return script_error_nil(c, "Target %s is invalid: AI targets must represent game objects", name.c_str());
+    return push_status(c, st);
+}
 // Fire_Special_Weapon(type_name, target): SCRIPT_GAPS §1.4 / §1.5 on the task force's units (unit-list order),
 // through the L1/S4 wave-2b helper; player -1 = the first unit's owner.
 int m_fire_special_weapon(Call& c) {
