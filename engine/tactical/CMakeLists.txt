@@ -24,8 +24,9 @@ set_tests_properties(alamo_tactical_tree_save_tests PROPERTIES TIMEOUT 300)
 # so they can be developed in parallel: movement/ = S7 (alamo_tactical_movement),
 # combat/ = S8 (alamo_tactical_combat), abilities/ = S9 (alamo_tactical_abilities),
 # fog/ = fog of war (alamo_tactical_fog), garrison/ = S4 garrisons + structure capture (alamo_tactical_garrison),
-# hangar/ = SPAWN_SQUADRON launches + station-upgrade completion (alamo_tactical_hangar).
-foreach(_sub movement combat abilities fog garrison hangar)
+# hangar/ = SPAWN_SQUADRON launches + station-upgrade completion (alamo_tactical_hangar),
+# presence/ = R3 presence-induced idle + explosion flinch victims (alamo_tactical_presence).
+foreach(_sub movement combat abilities fog garrison hangar presence)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${_sub}/CMakeLists.txt)
     add_subdirectory(${_sub})
   endif()

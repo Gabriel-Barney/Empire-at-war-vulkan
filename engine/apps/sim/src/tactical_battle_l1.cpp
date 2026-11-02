@@ -417,17 +417,27 @@ float TacticalBattle::ground_height(float x, float y) const {
 }
 
 uint32_t TacticalBattle::anim_clip_frames(const TacticalMode& mode, objects::ObjectId id, uint8_t anim_type) const {
+    uint32_t frames = 0;
+    float fps = 0.0f;
+    return anim_clip_info(mode, id, anim_type, frames, fps) ? frames : 0u;
+}
+
+bool TacticalBattle::anim_clip_info(const TacticalMode& mode, objects::ObjectId id, int32_t anim_type, uint32_t& frames,
+                                    float& fps) const {
 #ifdef ALAMO_SIM_HAVE_ANIM
-    if (!anim_) return 0;
+    if (!anim_ || anim_type < 0) return false;
     const objects::ObjectStore& st = mode.primary();
     const objects::ObjectHandle h = st.find(id);
-    if (!st.exists(h)) return 0;
+    if (!st.exists(h)) return false;
     const anim::AnimModel* m = anim_->model_for(st.type(h), mode.kind());
     const anim::ClipRef* c = m ? m->clip(anim_type, 0) : nullptr;
-    return c && c->clip ? c->clip->frame_count : 0u;
+    if (!c || !c->clip || c->clip->frame_count == 0) return false;
+    frames = c->clip->frame_count;
+    fps = c->clip->fps;
+    return true;
 #else
-    (void)mode, (void)id, (void)anim_type;
-    return 0;
+    (void)mode, (void)id, (void)anim_type, (void)frames, (void)fps;
+    return false;
 #endif
 }
 

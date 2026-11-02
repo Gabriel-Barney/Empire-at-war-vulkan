@@ -274,9 +274,11 @@ void FogOfWar::source_service(int32_t id, const FogObject& o, bool contained, bo
     if (setup_) return;  // REVEAL disabled during the setup phase (TACTICAL_GAPS §5.4)
     if (setup_only) return;  // Reveal_During_Setup_Phase_Only outside the setup phase
     if (contained) {
+        // vf6 step 2: undo, clear the list; dirty and the last reveal position are kept. The exit (0x37a8d0) only
+        // clears the contained flag, so the source re-reveals once it is one cell from where it last revealed
+        // (FOG_OF_WAR §3.2 [H]).
         undo_for_allies(*s, s->owner);
         s->cells.clear();
-        s->dirty = true;  // [port] re-reveal when it leaves the container (the original's exit path is untraced)
         return;
     }
     if (!s->dirty) {

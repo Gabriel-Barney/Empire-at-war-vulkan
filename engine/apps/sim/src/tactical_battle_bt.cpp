@@ -17,6 +17,7 @@
 #include "alamo/sim/map_spawn.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
+#include "alamo/tactical/movement/ted_grid.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
 
 namespace alamo::sim {
@@ -216,6 +217,7 @@ uint32_t TacticalBattle::bt_adopt_built(TacticalMode& mode, objects::ObjectHandl
     const auto it = std::lower_bound(units_.begin(), units_.end(), u.id, [](const Unit& a, objects::ObjectId v) { return a.id < v; });
     const Unit& placed = *units_.insert(it, u);
     hg_adopt(placed, *rng);  // hangars: engine mode enter, SPAWN_SQUADRON add_carrier (attach order)
+    presence_adopt(placed, *rng);  // R3: IMPOSING_PRESENCE first-due draw (attach order)
     ++stats_.spawned;
     s4_register(mode, placed);
     l1_register(mode, placed.h, static_cast<int32_t>(placed.type));
@@ -671,6 +673,13 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
     const TypeCrcIndex index(types);
     static const objects::BehaviorTypeId kMarker = objects::behavior_type_id("MARKER");
     const auto& names = types.raw().types().name_crc;
+    // S8 t01: a placement's LAND_OBSTACLE stamp (mv::map_stamp_id) moves to the object spawned for it, so combat's per-object
+    // cell query (PassabilityGrid::occupies, the slot-43 aim walk) finds it. [port] a Map_Load_Spawn_Table replacement
+    // leaves the placeholder's stamp under the placement id.
+    auto own_stamp = [&](const terrain::ObjectPlacement& p, objects::TypeIndex spawned, objects::ObjectHandle h) {
+        if (space_ || !movement_ || spawned != index.find(p.type_crc) || !mode.primary().exists(h)) return;
+        movement_->grid().rekey(mv::map_stamp_id(static_cast<size_t>(&p - map_.objects.data())), mode.primary().id(h));
+    };
     for (const terrain::ObjectPlacement& pl : map_.objects) {
         objects::TypeIndex t = index.find(pl.type_crc);
         int32_t owner = static_cast<int32_t>(pl.owner);
@@ -731,6 +740,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
         const bool selectable = types.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Selectable);
         objects::ObjectHandle placed{};
         if (!mobile && s4_placement(mode, t, sp, pl.health_fraction, &placed)) {  // S4: capture points / garrison structures
+            own_stamp(pl, t, placed);
             // a1f t07: a SELECTABLE one (Secondary_Abandoned_Sensor: Tactical_Health 700, Structure, Neutral at start) is a
             // combat object too, so Destroy_Structure / attack orders can kill it; whatever its map owner (the Is_Neutral
             // player's objects are skipped by the target scan, TACTICAL_COMBAT §2.2). [port] a third party: never decides
@@ -744,10 +754,12 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
         if (mobile || selectable) {
             if (!rules_->type(static_cast<uint32_t>(t)).members.empty()) continue;  // [port] map-placed companies
             const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);
+            own_stamp(pl, t, h);
             if (!bt_owner_neutral(owner)) bt_adopt_built(mode, h, owner, pl.health_fraction, &rng, true);
             continue;
         }
         const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);
+        own_stamp(pl, t, h);
         if (kMarker != objects::kNoBehavior && types.has_behavior(t, objects::BehaviorSet::Union, kMarker) && owner >= 0) {
             MapMarker m;
             m.id = mode.primary().exists(h) ? mode.primary().id(h) : objects::kNoObjectId;

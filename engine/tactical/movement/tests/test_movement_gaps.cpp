@@ -791,6 +791,190 @@ static void test_flying_clearance() {
     CHECK(z0 < 60.0f && m1 == w1 && m1 > 95.0f && z1 > 90.0f && z1 <= m1 + 1.0f);
 }
 
+// S7 t06: Uses_Multiple_Locomotors WALK <-> JETPACK swap (MOVEMENT §3.1 / §6.2, 0x3a9910) and the clearance query
+// acting on the jetpacking unit (FIGHTER_FLYING §6.3.1: the airborne multi-locomotor unit is in the Corvette layer).
+static UnitDesc trooper(ObjectId id, V2 pos) {  // Dark_Trooper_PhaseII-like: WALK primary, JETPACK secondary
+    UnitDesc d = unit(id, pos, 0, 1.0f, 6.0f, LocomotorKind::Default);
+    d.uses_multiple_locomotors = true;
+    d.has_secondary_locomotor = true;
+    d.secondary_locomotor = LocomotorKind::Jetpack;
+    d.alt_max_speed = 2.5f;
+    d.alt_turn_rate = 12.0f;
+    d.hover_offset = 30.0f;
+    d.space_layer_type = 0x10;  // Land
+    return d;
+}
+
+static void test_multi_locomotor() {
+    // Type data per object for the clearance query: the trooper has Uses_Multiple_Locomotors, a 40-high box x 2.
+    auto info_fn = [](ObjectId id, ClearanceInfo& ci) {
+        if (id != 1 && id != 10) return false;
+        ci.uses_multiple_locomotors = id == 1;
+        ci.half = {10.0f, 10.0f};
+        ci.has_box = true;
+        ci.box_lo_z = 0.0f;
+        ci.box_hi_z = 40.0f;
+        ci.scale_factor = 2.0f;
+        return true;
+    };
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+    UnitDesc plain = trooper(2, cell_center(10, 20));  // no Uses_Multiple_Locomotors
+    plain.uses_multiple_locomotors = false;
+    UnitDesc unnamed = trooper(3, cell_center(10, 30));  // Bossk / IG-88: the flag without a Secondary_Locomotor_Name
+    unnamed.has_secondary_locomotor = false;
+    CHECK(sys.add_unit(plain) && sys.add_unit(unnamed));
+    const float walk_speed = sys.view(1).max_speed;
+    const float mult = walk_speed / 1.0f;
+    CHECK(!sys.use_secondary_locomotor(2, true) && !sys.use_secondary_locomotor(3, true) && !sys.use_secondary_locomotor(99, true));
+    CHECK(sys.use_secondary_locomotor(1, false) && !sys.view(1).secondary_locomotor);  // already on the primary
+    auto self_clear = [&](ObjectId id) {  // the unit's own footprint (the query does not exclude the flyer)
+        const UnitView v = sys.view(id);
+        return sys.clearance_query(id, {v.pos.x - 30.0f, v.pos.y, 0.0f}, {v.pos.x + 30.0f, v.pos.y, 0.0f}, 0.0f, info_fn);
+    };
+
+    // A plain move walks: WALK stays active, never airborne, not in layer 4.
+    SimRng rng(12);
+    MoveOrder o;
+    o.units = {1};
+    o.destination = cell_center(30, 10);
+    sys.move(o, rng, 0);
+    uint32_t f = 0;
+    bool walked = true;
+    for (; f < 2000; ++f) {
+        sys.tick(f, rng);
+        const UnitView v = sys.view(1);
+        walked = walked && v.locomotor == LocomotorKind::Default && !v.secondary_locomotor && !v.airborne && v.z == 0.0f &&
+                 self_clear(1) == 0.0f;
+        if (v.arrived) break;
+    }
+    CHECK(walked && sys.view(1).arrived);
+
+    // The switch bit: swap first (Alternate speeds), then turn / jump / fly / land, then back to WALK on the ground.
+    // Units without the swap ignore the bit and walk.
+    MoveOrder j;
+    j.units = {1};
+    j.destination = cell_center(70, 40);
+    j.switch_locomotor = true;
+    sys.move(j, rng, f);
+    MoveOrder j2;
+    j2.units = {2, 3};
+    j2.destination = cell_center(20, 60);
+    j2.switch_locomotor = true;
+    sys.move(j2, rng, f);
+    UnitView v = sys.view(1);
+    CHECK(v.locomotor == LocomotorKind::Jetpack && v.secondary_locomotor && v.has_goal && v.loco_state == LocoState::None &&
+          v.max_speed == 2.5f * mult);
+    CHECK(sys.view(2).locomotor == LocomotorKind::Default && !sys.view(2).secondary_locomotor &&
+          sys.view(3).locomotor == LocomotorKind::Default && !sys.view(3).secondary_locomotor);
+    const uint64_t draws0 = rng.draws();
+    std::vector<uint8_t> states;
+    float max_z = 0.0f, max_speed = 0.0f;
+    bool layer_ok = true, others_walk = true;
+    uint32_t back = 0;
+    for (++f; f < 5000; ++f) {
+        sys.tick(f, rng);
+        v = sys.view(1);
+        if (v.locomotor == LocomotorKind::Jetpack &&
+            (states.empty() || states.back() != static_cast<uint8_t>(v.loco_state)))
+            states.push_back(static_cast<uint8_t>(v.loco_state));
+        max_z = std::max(max_z, v.z);
+        max_speed = std::max(max_speed, v.speed);
+        // Layer 4 exactly while the jetpack is active in states 0 / 0x0F..0x13 (kind 2): the query hits the unit's box.
+        const bool kind2 = v.locomotor == LocomotorKind::Jetpack && locomotor_airborne_kind(v.locomotor, v.loco_state);
+        const float c = self_clear(1);
+        layer_ok = layer_ok && (kind2 ? c == 80.0f + v.z : c == 0.0f);
+        for (ObjectId w : {2, 3}) others_walk = others_walk && sys.view(w).locomotor == LocomotorKind::Default && !sys.view(w).airborne;
+        if (v.locomotor == LocomotorKind::Default) {
+            back = f;
+            break;
+        }
+    }
+    // 0x16 is not seen with the jetpack active: the landing's last frame swaps back (0 may be skipped when the plan is
+    // ready at once).
+    const std::vector<uint8_t> want = {0x00, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14};
+    CHECK(back > 0 && (states == want || std::equal(states.begin(), states.end(), want.begin() + 1, want.end())));
+    CHECK(layer_ok && others_walk && rng.draws() == draws0);  // no synced draws
+    CHECK(max_z >= 70.0f - 1e-3f && max_speed > 1.5f * walk_speed);  // Hover_Offset over the plateau; Alternate_Max_Speed
+    v = sys.view(1);
+    CHECK(!v.secondary_locomotor && v.max_speed == walk_speed && v.arrived && !v.airborne && v.z == 40.0f &&
+          distance(v.pos, j.destination) < 1.0f && self_clear(1) == 0.0f);
+    std::printf("multi-locomotor: jetpack %zu states, back on WALK at frame %u, max z %.2f, max speed %.2f (walk %.2f)\n",
+                states.size(), back, static_cast<double>(max_z), static_cast<double>(max_speed), static_cast<double>(walk_speed));
+    // Walking again after the landing.
+    o.destination = cell_center(80, 40);
+    sys.move(o, rng, f);
+    bool walked2 = true;
+    for (++f; f < back + 400; ++f) {
+        sys.tick(f, rng);
+        walked2 = walked2 && sys.view(1).locomotor == LocomotorKind::Default && !sys.view(1).airborne;
+    }
+    CHECK(walked2 && sys.view(1).pos.x > v.pos.x + 50.0f);
+
+    // A stop in flight lands the unit (0x14) and the swap back follows on the ground.
+    j.destination = cell_center(20, 80);
+    sys.move(j, rng, f);
+    for (++f; sys.view(1).loco_state != LocoState::WalkMoving && f < back + 1000; ++f) sys.tick(f, rng);
+    CHECK(sys.view(1).airborne && sys.view(1).secondary_locomotor);
+    const ObjectId stop_ids[] = {1};
+    sys.stop(stop_ids);
+    CHECK(sys.view(1).loco_state == LocoState::WalkEndMove);
+    const uint32_t stop_at = f;
+    for (; sys.view(1).secondary_locomotor && f < stop_at + 1000; ++f) sys.tick(f, rng);
+    v = sys.view(1);
+    CHECK(!v.secondary_locomotor && v.locomotor == LocomotorKind::Default && !v.airborne && !v.has_goal &&
+          v.z == (v.pos.x > 1000.0f ? 40.0f : 0.0f));
+
+    // Space: no swap.
+    MovementConfig sc;
+    sc.mode = MoveMode::Space;
+    MovementSystem space{sc};
+    CHECK(space.add_unit(trooper(1, {0.0f, 0.0f})) && !space.use_secondary_locomotor(1, true));
+
+    // The clearance hook acts on the jetpacking trooper: a flyer overtaking it climbs over its box only while it flies
+    // (FIGHTER_FLYING §6.3.1). With a plain (walking) move the flyer cruises at Hover_Offset.
+    auto run = [&](bool jet, float& out_z) {
+        MovementSystem s{MovementConfig{}};
+        land_system(s, 120);
+        UnitDesc fl = unit(10, {100.0f, 600.0f}, 6, 3.0f, 10.0f, LocomotorKind::Flying);
+        fl.hover_offset = 50.0f;
+        fl.z = 50.0f;
+        fl.space_layer_type = kLayerFrigate;
+        UnitDesc tr = trooper(1, {500.0f, 600.0f});
+        tr.yaw_deg = 0.0f;  // facing the destination
+        tr.max_speed = 0.2f;
+        tr.alt_max_speed = 0.2f;  // slow: the flyer overtakes it
+        tr.hover_offset = 25.0f;
+        CHECK(s.add_unit(fl) && s.add_unit(tr));
+        FlyingHooks hk;
+        hk.clearance = [&s, &info_fn](ObjectId id, FlyVec3 a, FlyVec3 b, float m) { return s.clearance_query(id, a, b, m, info_fn); };
+        s.set_flying_hooks(hk);
+        SimRng r(9);
+        MoveOrder ot;
+        ot.units = {1};
+        ot.destination = {900.0f, 600.0f};
+        ot.switch_locomotor = jet;
+        s.move(ot, r, 0);
+        MoveOrder of;
+        of.units = {10};
+        of.destination = {900.0f, 600.0f};
+        s.move(of, r, 0);
+        out_z = 0.0f;
+        for (uint32_t k = 0; k < 200; ++k) {
+            s.tick(k, r);
+            if (s.view(10).pos.x <= 620.0f) out_z = std::max(out_z, s.view(10).z);
+        }
+        CHECK(s.view(10).pos.x > 620.0f && s.view(1).airborne == jet && s.view(1).secondary_locomotor == jet);
+    };
+    float walk_z = 0.0f, jet_z = 0.0f;
+    run(false, walk_z);
+    run(true, jet_z);
+    std::printf("multi-locomotor clearance: flyer max z %.2f over the walking trooper, %.2f over the jetpacking one\n",
+                static_cast<double>(walk_z), static_cast<double>(jet_z));
+    CHECK(walk_z < 60.0f && jet_z > 90.0f);
+}
+
 static void test_bike() {
     MovementSystem sys{MovementConfig{}};
     land_system(sys, 100);
@@ -1178,6 +1362,7 @@ int main() {
     test_jetpack();
     test_flying();
     test_flying_clearance();
+    test_multi_locomotor();
     test_bike();
     test_bomber();
     test_fighter_space();

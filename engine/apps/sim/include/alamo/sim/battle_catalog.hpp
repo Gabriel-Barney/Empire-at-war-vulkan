@@ -80,6 +80,8 @@ public:
     float space_health_multiplier() const { return space_health_mult_; }
     // GameConstants SpaceIdleMovementSpeed (STATION_HANGARS_SOUND §3: engine loops moving at >= 1.1 x this speed).
     float space_idle_movement_speed() const { return space_idle_speed_; }
+    // GameConstants Unit_Presence_Relaxation_Time (R3 presence map lifetime, ANIM_PARTICLES §A.11; default 5 s).
+    float presence_relaxation_seconds() const { return presence_relaxation_; }
     float land_health_multiplier() const { return land_health_mult_; }
     // GameConstants Land_ / Space_Capture_Allowed_Countdown_Seconds, Garrisoned_Max_Attack_Distance_Multiplier
     // (REMAINING_GAPS §3.3); < 0 = not read (the battle keeps its config value).
@@ -126,6 +128,9 @@ public:
     // fallback) for the fighter avoidance test: collision bound, COLLISIONBOX, collision-enabled mesh triangles in model
     // space (bind pose). Null without model data. Cached per (type, mode) behind the model mutex.
     const tactical::movement::AvoidModel* avoid_model(uint32_t type, bool space) const;
+    // S7 t07 (MOVEMENT §2.2 model-extent fallback, SpaceObstacleHooks): half x / y of avoid_model(type, space = true)'s
+    // collision bound (1 / 1 when the model has no collision mesh); false without model data.
+    bool space_model_half_extents(uint32_t type, float& half_x, float& half_y) const;
     // --- end battle host ---
 #ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war GameConstants (Desired{Land,Space}FOWCellSize, {Land,Space}FOWRegrowTime, AIUsesFogOfWar{Land,Space},
@@ -174,6 +179,7 @@ private:
     std::map<std::string, Tags> hardpoints_;  // upper-cased name -> tags (lookup only)
     float space_health_mult_ = 1.5f, land_health_mult_ = 1.0f;
     float space_idle_speed_ = 0.0f;
+    float presence_relaxation_ = 5.0f;
     float land_capture_countdown_ = -1.0f, space_capture_countdown_ = -1.0f, garrisoned_range_mult_ = -1.0f;
     float threat_decay_step_ = 0.05f;
     float engines_disabled_speed_ = 0.4f;

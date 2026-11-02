@@ -821,7 +821,7 @@ list 8):
   |---|---|---|
   | 1 | homing | 0x4cf870 |
   | 2, 5, 9 | ballistic, `Bomb_Fall_Accel` (+0x1e88) | — |
-  | 3 | grenade/lob gravity (+0x1e80/+0x1e84) | 0x4ceea0 |
+  | 3 | grenade/lob gravity (+0x1e80/+0x1e84); closed-form parabola, LOB_SOLVER.md §6 | 0x4ceea0 |
   | 4, 6 | spline | 0x4cfc40 |
   | 8 | spline with an area pulse | 0x4cf460 |
   | anything else | straight | 0x4cec80 |
