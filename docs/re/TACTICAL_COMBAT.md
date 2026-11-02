@@ -878,6 +878,11 @@ has a weapon hardpoint. That rule is **wrong**: it should key on the WEAPON beha
 combat system already runs both sources side by side (`CombatSystem::update_weapons`), but implements neither gate
 above, so with the catalog fixed it would also need the deploy / rocket-mode gates to keep the sources alternating.
 
+The behaviour is attached by the type's `WEAPON` behaviour (0x0A) and is serviced like any behaviour, besides the
+hard points [M: no code path that turns it off when weapon hard points exist was found]. So a type that lists both
+fires its `Projectile_Types` too. FoC: `M1_Repulsor_Tank` is the only such type; its `HP_2M_Tank_00` hard point excludes
+Air / Vehicle / Structure, so only the WeaponBehavior shot hurts vehicles (a1h t01; port: `battle_catalog.cpp`).
+
 ### 3.2 Damage and armor tables [H]
 - **Where they are:** GAMECONSTANTS.XML holds `<Damage_Types>`, `<Armor_Types>` and
   `<Damage_To_Armor_Mod> damage, armor, factor </Damage_To_Armor_Mod>`. The GameConstants instance is at

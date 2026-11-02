@@ -320,6 +320,8 @@ function Definitions()
 end
 function MainForce_Thread()
   BlockOnCommand(MainForce.Produce_Force())
+  local home = FindTarget(MainForce, "One", "Friendly_Structure", 1.0)
+  if home then QuickReinforce(MainForce, home) end
   if MainForce.Get_Force_Count() < 2 or not TestValid(Target) then
     ScriptExit()
   end
@@ -1509,8 +1511,8 @@ void test_tactical_production() {
     CHECK(again.crc == r.crc && again.decisions == r.decisions && again.executed == r.executed);
 }
 
-// S10 AI land reinforcement (TACTICAL_GAPS §4.2, 0x6eaf60 [M]): a land drop goes next to the own / allied reinforcement
-// point nearest the target, at most half its enabling radius toward the target; none -> no landing position.
+// a1g t04 - land TF.Reinforce placement (0x6eaf60, A1_READINGS §30.7 [H]): own / allied live reinforcement points sorted
+// stably by their float key, the units (LAST first) one per accepted spot on the r/2 ring of each point in turn.
 void test_reinforce_landing() {
     PerceptionWorld w;
     w.players.resize(3);
@@ -1532,33 +1534,170 @@ void test_reinforce_landing() {
     add(3, 2, 500.0f, 400.0f, 250.0f, true);  // allied point, 640 from the target
     add(4, 0, 950.0f, 0.0f, 250.0f, false);   // dead own point
     add(5, 0, 990.0f, 0.0f, 0.0f, true);      // own unit without an enabling radius
-    Vec3f at{1000.0f, 0.0f, 0.0f};
-    CHECK(reinforce_landing_point(w, facts, 0, true, at));
-    // allied point 3: moved 125 (radius / 2) toward the target along (500, -400) / 640.3
-    CHECK(std::fabs(at.x - (500.0f + 500.0f * 125.0f / 640.3124f)) < 0.01f && std::fabs(at.y - (400.0f - 400.0f * 125.0f / 640.3124f)) < 0.01f);
-    Vec3f near{10.0f, 20.0f, 0.0f};  // within half the radius of point 2: the target itself
-    CHECK(reinforce_landing_point(w, facts, 0, true, near) && near.x == 10.0f && near.y == 20.0f);
+    const Vec3f target{1000.0f, 0.0f, 0.0f};
     {
-        // A1_READINGS §25.3 ranking: the allied point (x 500) is dropped (zone outside the flood set), the own point
-        // keeps the lower key of the rest; a tie keeps the first in snapshot order.
+        // Steps 1-3: candidates = own / allied live objects with a radius; default key = 2-D distance (float).
+        const std::vector<ReinforcePoint> pts = reinforce_points(w, facts, 0, target);
+        CHECK(pts.size() == 2);
+        CHECK(pts[0].position.x == 500.0f && pts[0].radius == 250.0f && pts[0].key == std::sqrt(500.0f * 500.0f + 400.0f * 400.0f));
+        CHECK(pts[1].position.x == 0.0f && pts[1].key == 1000.0f);
+        // Rank: drops the allied point; equal keys keep snapshot order; a failed path (1e18) sorts last.
         int asked = 0;
-        Vec3f ranked{1000.0f, 0.0f, 0.0f};
-        CHECK(reinforce_landing_point(w, facts, 0, true, ranked, [&asked](const Vec3f& pt, double& key) {
+        const std::vector<ReinforcePoint> ranked = reinforce_points(w, facts, 0, target, [&asked](const Vec3f& pt, float& key) {
             ++asked;
-            key = 3.0;
+            key = 3.0f;
             return pt.x != 500.0f;
-        }));
-        CHECK(asked == 2 && ranked.x == 125.0f && ranked.y == 0.0f);  // point 2 moved 125 toward the target
-        Vec3f dropped{1000.0f, 0.0f, 0.0f};
-        CHECK(!reinforce_landing_point(w, facts, 0, true, dropped, [](const Vec3f&, double&) { return false; }));
+        });
+        CHECK(asked == 2 && ranked.size() == 1 && ranked[0].position.x == 0.0f);
+        CHECK(reinforce_points(w, facts, 0, target, [](const Vec3f&, float&) { return false; }).empty());
+        add(6, 2, -50.0f, 0.0f, 100.0f, true);   // allied: tie with point 3 (key 3) -> after it (snapshot order)
+        add(7, 0, 2000.0f, 0.0f, 100.0f, true);  // own: unreachable (1e18) -> last
+        const std::vector<ReinforcePoint> mixed = reinforce_points(w, facts, 0, target, [](const Vec3f& pt, float& key) {
+            key = pt.x == 2000.0f ? 1.0e18f : pt.x == 0.0f ? 7.0f : 3.0f;
+            return true;
+        });
+        CHECK(mixed.size() == 4 && mixed[0].position.x == 500.0f && mixed[1].position.x == -50.0f && mixed[2].position.x == 0.0f &&
+              mixed[3].position.x == 2000.0f);
+        w.objects.resize(5);
+        facts.resize(5);
     }
-    Vec3f none{1000.0f, 0.0f, 0.0f};
-    CHECK(reinforce_landing_point(w, facts, 1, true, none));  // player 1 owns point 1
-    CHECK(none.x == 900.0f + 100.0f && none.y == 0.0f);
+    {
+        // Step 4 ring: θ += 0.7853982f while θ < 6.2831855f -> nine float steps (the ninth θ = 6.283185 ≈ 2π).
+        const std::vector<Vec3f> ring = reinforce_ring({{100.0f, 200.0f, 7.0f}, 40.0f, 0.0f});
+        CHECK(ring.size() == 9);
+        CHECK(ring[0].x == 120.0f && ring[0].y == 200.0f && ring[0].z == 7.0f);
+        CHECK(std::fabs(ring[1].x - (100.0f + 20.0f * 0.70710678f)) < 1e-4f && std::fabs(ring[1].y - (200.0f + 20.0f * 0.70710678f)) < 1e-4f);
+        CHECK(std::fabs(ring[2].x - 100.0f) < 1e-4f && std::fabs(ring[2].y - 220.0f) < 1e-4f);
+        CHECK(std::fabs(ring[4].x - 80.0f) < 1e-4f && std::fabs(ring[4].y - 200.0f) < 1e-4f);
+        CHECK(std::fabs(ring[8].x - 120.0f) < 1e-4f && std::fabs(ring[8].y - 200.0f) < 1e-4f);
+    }
+    auto unit = [](int32_t key, float pop) {
+        TacticalReinforcement r;
+        r.key = key;
+        r.type = 0;
+        r.population = pop;
+        return r;
+    };
+    struct Landed {
+        int32_t key;
+        Vec3f at;
+    };
+    const float inf = HUGE_VALF;
+    {
+        // Spec test (§30.7): two allied points, three pending units -> p1 + r/2 (1, 0), p1 + r/2 (0.7071, 0.7071),
+        // p1 + r/2 (0, 1), the LAST unit first.
+        const std::vector<ReinforcePoint> pts = reinforce_points(w, facts, 0, target);
+        std::vector<TacticalReinforcement> pending = {unit(11, 1.0f), unit(12, 1.0f), unit(13, 1.0f)};
+        std::vector<Landed> landed;
+        CHECK(reinforce_place(pts, pending, inf, {}, [&landed](const TacticalReinforcement& r, const Vec3f& at) {
+            landed.push_back({r.key, at});
+            return true;
+        }));
+        CHECK(pending.empty() && landed.size() == 3);
+        const Vec3f p1 = pts[0].position;
+        const float h = pts[0].radius * 0.5f;
+        CHECK(landed[0].key == 13 && landed[0].at.x == p1.x + h && landed[0].at.y == p1.y);
+        CHECK(landed[1].key == 12 && std::fabs(landed[1].at.x - (p1.x + h * 0.70710678f)) < 1e-3f &&
+              std::fabs(landed[1].at.y - (p1.y + h * 0.70710678f)) < 1e-3f);
+        CHECK(landed[2].key == 11 && std::fabs(landed[2].at.x - p1.x) < 1e-3f && std::fabs(landed[2].at.y - (p1.y + h)) < 1e-3f);
+        // Same inputs, same bits (no RNG, no state).
+        std::vector<TacticalReinforcement> again = {unit(11, 1.0f), unit(12, 1.0f), unit(13, 1.0f)};
+        std::vector<Landed> landed2;
+        CHECK(reinforce_place(pts, again, inf, {}, [&landed2](const TacticalReinforcement& r, const Vec3f& at) {
+            landed2.push_back({r.key, at});
+            return true;
+        }));
+        CHECK(landed2.size() == 3 && std::memcmp(&landed2[2].at, &landed[2].at, sizeof(Vec3f)) == 0);
+    }
+    {
+        // Cascade: refused spots go on with the same unit; the first point refuses everything -> all land on point 2.
+        const std::vector<ReinforcePoint> pts = reinforce_points(w, facts, 0, target);
+        std::vector<TacticalReinforcement> pending = {unit(21, 1.0f), unit(22, 1.0f)};
+        std::vector<Landed> landed;
+        int tries = 0;
+        CHECK(reinforce_place(pts, pending, inf, {}, [&](const TacticalReinforcement& r, const Vec3f& at) {
+            ++tries;
+            if (std::fabs(at.x - pts[0].position.x) <= pts[0].radius) return false;
+            landed.push_back({r.key, at});
+            return true;
+        }));
+        CHECK(tries == 9 + 2 && landed.size() == 2 && landed[0].key == 22 && landed[0].at.x == pts[1].position.x + pts[1].radius * 0.5f);
+        // A refused spot (the host's land_drop_ok) sends the same unit to the next ring spot: spot 0 refused -> unit 22 at
+        // spot 1, unit 21 at spot 2 (one unit per accepted spot).
+        const std::vector<Vec3f> ring0 = reinforce_ring(pts[0]);
+        std::vector<TacticalReinforcement> two = {unit(23, 1.0f), unit(24, 1.0f)};
+        std::vector<Landed> next;
+        std::vector<Vec3f> asked_at;
+        CHECK(reinforce_place(pts, two, inf, {}, [&](const TacticalReinforcement& r, const Vec3f& at) {
+            asked_at.push_back(at);
+            if (std::memcmp(&at, &ring0[0], sizeof(Vec3f)) == 0) return false;
+            next.push_back({r.key, at});
+            return true;
+        }));
+        CHECK(asked_at.size() == 3 && next.size() == 2);
+        CHECK(next[0].key == 24 && std::memcmp(&next[0].at, &ring0[1], sizeof(Vec3f)) == 0);
+        CHECK(next[1].key == 23 && std::memcmp(&next[1].at, &ring0[2], sizeof(Vec3f)) == 0);
+        // Ten units on one point of nine spots: nine placed, one left -> false.
+        std::vector<ReinforcePoint> one = {pts[0]};
+        std::vector<TacticalReinforcement> many;
+        for (int32_t k = 0; k < 10; ++k) many.push_back(unit(30 + k, 1.0f));
+        CHECK(!reinforce_place(one, many, inf, {}, [](const TacticalReinforcement&, const Vec3f&) { return true; }));
+        CHECK(many.size() == 1 && many[0].key == 30);
+    }
+    {
+        // Cap read once (remaining 3): unit 44 (pop 1) lands, then the trailing null 43 (popped, removed) and non-fitting
+        // 42 (pop 5, popped, kept pending) go; 41 (pop 2) lands; remaining 0 < 1 stops. Not all placed -> false.
+        const std::vector<ReinforcePoint> pts = reinforce_points(w, facts, 0, target);
+        std::vector<TacticalReinforcement> pending = {unit(40, 1.0f), unit(41, 2.0f), unit(42, 5.0f), unit(43, 1.0f), unit(44, 1.0f)};
+        std::vector<int32_t> keys;
+        CHECK(!reinforce_place(pts, pending, 3.0f, [](const TacticalReinforcement& r) { return r.key == 43; },
+                               [&keys](const TacticalReinforcement& r, const Vec3f&) {
+                                   keys.push_back(r.key);
+                                   return true;
+                               }));
+        CHECK(keys == std::vector<int32_t>({44, 41}));
+        CHECK(pending.size() == 2 && pending[0].key == 40 && pending[1].key == 42);
+        // [port] the trailing pop also runs before the first spot: a non-fitting last unit does not block the others.
+        std::vector<TacticalReinforcement> front = {unit(50, 1.0f), unit(51, 9.0f)};
+        keys.clear();
+        CHECK(!reinforce_place(pts, front, 2.0f, {}, [&keys](const TacticalReinforcement& r, const Vec3f&) {
+            keys.push_back(r.key);
+            return true;
+        }));
+        CHECK(keys == std::vector<int32_t>({50}) && front.size() == 1 && front[0].key == 51);
+    }
+    CHECK(reinforce_points(w, facts, 1, target).size() == 1);  // player 1 owns point 1
     w.objects[0].alive = false;
-    Vec3f lost{1000.0f, 0.0f, 0.0f};
-    CHECK(!reinforce_landing_point(w, facts, 1, true, lost));  // no live point of its own or an ally's
-    CHECK(reinforce_landing_point(w, facts, 1, false, lost) && lost.x == 1000.0f);  // Use_Reinforcement_Points off
+    CHECK(reinforce_points(w, facts, 1, target).empty());  // no live point of its own or an ally's
+    {
+        // 0x6bf3d0 (A1_READINGS §28.4): a delivered unit fills the first null slot (a pick of another source) of its type,
+        // keeping that slot's task force / team, else it is appended as a FreeStore pick of the given task force.
+        auto pick = [](int32_t type, PpSource src, int32_t ref, int32_t tf, int32_t team) {
+            TacticalPpPick k;
+            k.type = type;
+            k.source = src;
+            k.ref = ref;
+            k.tf = tf;
+            k.team = team;
+            return k;
+        };
+        std::vector<TacticalPpPick> picks = {pick(3, PpSource::FreeStore, 10, 0, 0), pick(3, PpSource::Reinforcement, 77, 1, 2),
+                                             pick(3, PpSource::Build, 5, 1, 3), pick(4, PpSource::Produce, -1, 0, 1)};
+        TacticalPpPick old;
+        CHECK(reinforce_join_pp(picks, 900, 3, 1, &old));  // the FreeStore unit 10 is not a null slot; the pool slot is
+        CHECK(old.source == PpSource::Reinforcement && old.ref == 77 && old.tf == 1 && old.team == 2);
+        CHECK(picks.size() == 4 && picks[1].source == PpSource::FreeStore && picks[1].ref == 900 && picks[1].tf == 1 &&
+              picks[1].team == 2 && picks[1].type == 3);
+        CHECK(reinforce_join_pp(picks, 901, 3, 0, &old));  // next null slot of type 3: the build pad pick
+        CHECK(old.source == PpSource::Build && old.ref == 5 && picks[2].ref == 901 && picks[2].source == PpSource::FreeStore);
+        CHECK(!reinforce_join_pp(picks, 902, 3, 0));  // no null slot of type 3 left: appended
+        CHECK(picks.size() == 5 && picks[4].type == 3 && picks[4].source == PpSource::FreeStore && picks[4].ref == 902 &&
+              picks[4].tf == 0 && picks[4].team == -1);
+        CHECK(reinforce_join_pp(picks, 903, 4, 0));  // the type-4 "to be produced" slot
+        CHECK(picks[3].ref == 903 && picks[3].source == PpSource::FreeStore && picks[3].team == 1);
+        CHECK(!reinforce_join_pp(picks, 904, 9, 2));  // another type: appended
+        CHECK(picks.size() == 6 && picks[5].type == 9 && picks[5].tf == 2);
+    }
     std::printf("reinforce landing: OK\n");
 }
 }  // namespace
@@ -1796,7 +1935,7 @@ void test_save_load(int variant, int32_t save_at, int32_t frames) {
     CHECK(corrupt(lib_at, {static_cast<uint8_t>(image[lib_at] + 1)}));  // plan library size
     CHECK(corrupt(mode_at, {1}));                            // land instead of space
     CHECK(corrupt(next_plan_at, {0, 0, 0, 0}));              // next plan id 0 (plan ids start at 1)
-    CHECK(corrupt(perception_world_at, {2}));                // PerceptionWorld version
+    CHECK(corrupt(perception_world_at, {9}));                // PerceptionWorld version (2 since a1g t03)
     CHECK(corrupt(perception_world_at + 4, {7}));            // PerceptionWorld mode
     CHECK(corrupt(n - 1, {1}));                              // the last count (missing evaluators) past the data
     std::printf("  rejection: %zu truncated / corrupted AI chunks refused, reader unchanged\n", tried);
@@ -1875,6 +2014,12 @@ void test_group_orders() {
     std::printf("space reinforce ring search: %zu drops (%zu on ring 500 at a station), %zu outside the allowed strip\n", drops, ring_drops,
                 bad_drops);
     CHECK(drops > 0 && bad_drops == 0 && ring_drops > 0);
+    // a1h t05 (A1_READINGS §32.1): a space delivery only joins the task force. SpaceReinforceBlockStatus's handler
+    // (0x723ac0) never calls 0x6bf3d0, so no delivered unit joins a plan's PP (the land path logs "reinforce unit").
+    size_t pp_joins = 0;
+    for (const std::string& d : r.decisions) pp_joins += d.find(": reinforce unit ") != std::string::npos ? 1u : 0u;
+    std::printf("space reinforce: %zu PP joins (0x6bf3d0 is land only)\n", pp_joins);
+    CHECK(pp_joins == 0);
     std::printf("group orders: %zu attack-move group orders (2+ units), %zu one-unit, %zu Shield_Generator attacks, %zu Lua errors\n",
                 groups, single, shield, r.errors.size());
     for (size_t i = 0; i < r.errors.size() && i < 5; ++i) std::printf("  lua error: %s\n", r.errors[i].c_str());

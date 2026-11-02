@@ -275,9 +275,19 @@ void TacticalBattle::fog_service(TacticalMode& mode) {
         fog_.source_fired(fog_object_of(store, sh), e.target_owner);
     }
     fog_service_sources(store);
-    // fog follow-up: FOW_REVEAL_PING objects (S9 SpawnObject, e.g. Proj_Special_Land_FOW_Reveal_Ping_Blast) reveal
-    // through their own REVEAL behaviour while they live (FOG_OF_WAR §3.3 [M]); removed sources are undone, so the
-    // cells regrow ~6.4-6.9 s later.
+    // a1h t01: REVEAL (0x18) is a behaviour of the object, serviced every frame whether or not it is a battle unit
+    // (FOG_OF_WAR §3.2): map markers and capture points such as Reinforcement_Point (REVEAL, Land_FOW_Reveal_Range 275)
+    // reveal for their owner's allies too. A live non-unit REVEAL object without a source joins the list below.
+    if (fog_reveal_beh_ != objects::kNoBehavior)
+        for (const objects::ObjectHandle h : store.all_objects()) {
+            if (!store.alive(h) || !store.has_behavior(h, fog_reveal_beh_)) continue;
+            const objects::ObjectId id = store.id(h);
+            if (!fog_.has_source(id) && !unit_by_id(id) && std::find(fog_pings_.begin(), fog_pings_.end(), id) == fog_pings_.end())
+                fog_pings_.push_back(id);
+        }
+    // fog follow-up: FOW_REVEAL_PING objects (S9 SpawnObject, e.g. Proj_Special_Land_FOW_Reveal_Ping_Blast) and the
+    // other non-unit REVEAL objects reveal through their own REVEAL behaviour while they live (FOG_OF_WAR §3.3 [M]);
+    // removed sources are undone, so the cells regrow ~6.4-6.9 s later.
     size_t w = 0;
     for (const objects::ObjectId id : fog_pings_) {
         const objects::ObjectHandle h = store.find(id);

@@ -38,6 +38,7 @@ uint32_t ObjectStore::alloc_slot() {
     registered_serviced_.push_back(0);
     container_.push_back({});
     attach_parent_.push_back({});
+    carried_type_.push_back(kNone);
     behaviors_.emplace_back();
     beh_state_.emplace_back();
     std::array<uint8_t, kBehaviorTypeCount> none;
@@ -106,6 +107,7 @@ ObjectHandle ObjectStore::create(const SpawnParams& p) {
     registered_serviced_[s] = 0;
     container_[s] = p.container;
     attach_parent_[s] = p.attach_parent;
+    carried_type_[s] = kNone;
     behaviors_[s].clear();
     beh_state_[s].clear();
     behavior_index_[s].fill(0xFF);
@@ -242,6 +244,13 @@ bool ObjectStore::has_behavior(ObjectHandle h, BehaviorTypeId id) const {
     return exists(h) && id < kBehaviorTypeCount && behavior_index_[h.slot()][id] != 0xFF;
 }
 
+bool ObjectStore::set_carried_type(ObjectHandle h, TypeIndex carried) {
+    if (!alive(h) || (carried != kNone && carried >= types_->size())) return false;
+    if (!has_behavior(h, beh::Transport) && !has_behavior(h, beh::TransportLanding)) return false;
+    carried_type_[h.slot()] = carried;
+    return true;
+}
+
 void ObjectStore::set_position(ObjectHandle h, Vec3 p) {
     if (exists(h)) position_[h.slot()] = p;
 }
@@ -312,6 +321,7 @@ void ObjectStore::remove_object(uint32_t slot) {
         if (it != m.end() && *it == slot) m.erase(it);  // duplicates: member once
     }
     used_[slot] = 0;
+    carried_type_[slot] = kNone;
     gen_[slot] = gen_[slot] + 1 == 0 ? 1 : gen_[slot] + 1;  // stale handles fail from now on
     free_.push_back(slot);
 }
@@ -412,11 +422,22 @@ void ObjectStore::hash_state(StateHasher& hs) const {
         hs.u32(d.p.type);
         hs.i32(d.p.owner);
     }
+    // a1h t08: the carried types (id order), only when an object has one.
+    uint32_t carried = 0;
+    for (uint32_t s : slots) carried += carried_type_[s] != kNone ? 1u : 0u;
+    if (carried != 0) {
+        hs.u32(carried);
+        for (uint32_t s : slots)
+            if (carried_type_[s] != kNone) {
+                hs.i32(id_[s]);
+                hs.u32(carried_type_[s]);
+            }
+    }
 }
 
 // ---- N1 save / load ----------------------------------------------------------------------------------
 //
-// Layout (v1, little-endian, ByteWriter):
+// Layout (v2, little-endian, ByteWriter; v1 = the same without the last line):
 //   u32 version | u8 mode | u8 kind | u64 type count | u64 types digest | i32 id counter next()
 //   u32 last update frame | u64 attach draws
 //   u32 slot count, per slot (all slots, free ones too):
@@ -432,6 +453,7 @@ void ObjectStore::hash_state(StateHasher& hs) const {
 //   u32 n, per entry: u32 due | u32 type | i32 owner | f32 x3 position | f32 x3 facing | i32 parent-mode id
 //                     | u64 container | u64 attach parent                     delayed creations (queue order)
 //   u32 n + u64 handles        dead objects pending the flush (destroy order)
+//   u32 n, per entry: u32 slot | u32 type       carried types (a1h t08), slot ascending, objects that have one
 namespace {
 
 constexpr size_t kSlotMinBytes = 4 + 1 + 4 + 4 + 4 + 4 + 7 * 4 + 1 + 1 + 8 + 8 + 4;
@@ -521,10 +543,16 @@ void ObjectStore::write(ByteWriter& w) const {
         w.i32(d.p.parent_mode_id).u64(d.p.container.value).u64(d.p.attach_parent.value);
     }
     put_handles(w, pending_);
+    uint32_t carried = 0;
+    for (uint32_t s = 0; s < cap; ++s) carried += carried_type_[s] != kNone ? 1u : 0u;
+    w.u32(carried);
+    for (uint32_t s = 0; s < cap; ++s)
+        if (carried_type_[s] != kNone) w.u32(s).u32(carried_type_[s]);
 }
 
 bool ObjectStore::read(ByteReader& r) {
-    if (r.u32() != kSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if ((version != 1 && version != kSaveVersion) || !r.ok()) return false;
     const uint8_t saved_mode = r.u8(), saved_kind = r.u8();
     const uint64_t type_count = r.u64(), digest = r.u64();
     if (!r.ok() || saved_mode != static_cast<uint8_t>(mode_) || saved_kind != static_cast<uint8_t>(kind_) ||
@@ -550,6 +578,7 @@ bool ObjectStore::read(ByteReader& r) {
     t.registered_serviced_.resize(cap);
     t.container_.resize(cap);
     t.attach_parent_.resize(cap);
+    t.carried_type_.assign(cap, kNone);
     t.behaviors_.resize(cap);
     t.beh_state_.resize(cap);
     std::array<uint8_t, kBehaviorTypeCount> none;
@@ -675,6 +704,18 @@ bool ObjectStore::read(ByteReader& r) {
     if (!get_handles(r, t.pending_) ||
         !check_list(t.pending_, want_dead, [&t](uint32_t s) { return (t.flags_[s] & kFlagDead) != 0; }))
         return false;
+    if (version >= 2) {  // carried types: registered transports only, slot ascending, each a valid type
+        uint32_t ncarried = 0;
+        if (!get_count(r, 8, ncarried)) return false;
+        for (uint32_t i = 0, prev_slot = 0; i < ncarried; ++i) {
+            const uint32_t s = r.u32();
+            const TypeIndex carried = r.u32();
+            if (!r.ok() || (i > 0 && s <= prev_slot) || s >= cap || !t.used_[s] || carried >= ntypes) return false;
+            if (t.behavior_index_[s][beh::Transport] == 0xFF && t.behavior_index_[s][beh::TransportLanding] == 0xFF) return false;
+            t.carried_type_[s] = carried;
+            prev_slot = s;
+        }
+    }
     if (!r.ok()) return false;
 
     gen_ = std::move(t.gen_);
@@ -690,6 +731,7 @@ bool ObjectStore::read(ByteReader& r) {
     registered_serviced_ = std::move(t.registered_serviced_);
     container_ = std::move(t.container_);
     attach_parent_ = std::move(t.attach_parent_);
+    carried_type_ = std::move(t.carried_type_);
     behaviors_ = std::move(t.behaviors_);
     beh_state_ = std::move(t.beh_state_);
     behavior_index_ = std::move(t.behavior_index_);

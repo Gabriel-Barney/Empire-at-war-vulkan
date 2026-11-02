@@ -722,7 +722,9 @@ No sim effect. Data: FoC 1 planet with starbase stealth and 7 with ground-base s
   conflict not yet queued, so the state-machine block does not apply); with Param13 = 0 (all Underworld links)
   0x28f590 clears it in the same call that wrote it, so the block is never seen.
 - **The list at 0x140b2b360** has no writer anywhere in the binary (reads plus the destructor 0x7ef5b0 only), so it is always empty.
-- **Effect.** While set, in SP and when the local player is in a queued conflict (0x2b0350):
+- **Effect.** While set, in SP and when the local player is in a queued conflict (0x2b0350: the local player is
+  attacker or defender of any record, not only the head, in the space or the land queue; the SP test is in the
+  callers; A1_READINGS §31.6):
   - conflict state machines do not run (0x2be640);
   - SpecialAbility commands are dropped (0x4b4d70 prologue);
   - FleetManagement 0x5af260, Lua free-store `Move_To` 0x68f5b0 and the GUI moves 0x3c4460 / 0x48ff50 refuse moves;

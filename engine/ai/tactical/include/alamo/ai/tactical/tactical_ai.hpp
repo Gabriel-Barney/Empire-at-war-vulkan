@@ -47,9 +47,13 @@
 // ids = (player << 20) | slot.
 //
 // A2 tactical: slot 10 = Find_Plan_For_Goal (one synced draw) + the tactical PotentialPlan solve (tactical_pp.hpp:
-// the land / space marshaller lists on run_pp_solver; a failed solve rejects the candidate); the selection's free-store
-// units / pool entries / pads are reserved (+0x30) until the task force's Produce_Force gathers them (free units join,
-// pool entries become pending reinforcements, pads become Build reservations; nothing is bought: AI_GALACTIC_3 §1.11).
+// the land / space marshaller lists on run_pp_solver; a failed solve rejects the candidate). Reservations follow
+// A1_READINGS §28.6 (a1g t01): the proposal's solve ignores free-store reservations and reserves nothing; at accept in
+// Resolve_Category the PP is re-solved honouring them, then its free-store units (entry +0x30), pool entries and pads
+// are reserved; every Commit suspends the +0x30 entries and kept goals re-assert them; a plan whose unit another PP
+// reserved meanwhile is invalid; a unit a task force releases leaves its PP. The task force's Produce_Force gathers the
+// selection (free units join, pool entries become pending reinforcements, pads become Build reservations; nothing is
+// bought: AI_GALACTIC_3 §1.11).
 // FIRST-CUT PARTS (docs/PHASE4.md A1 open items): blocking-status
 // completion rules (open item 3) are this port's: move = every live unit without a movement goal (A2 tactical: an
 // Attack_Move to an object completes when the object dies, units re-ordered only when it moved), attack =
@@ -71,6 +75,7 @@
 #include "alamo/ai/tactical/damage_tracking.hpp"
 #include "alamo/ai/tactical/free_store.hpp"
 #include "alamo/ai/tactical/perception_world.hpp"
+#include "alamo/ai/tactical/tactical_pp.hpp"  // a1g t04: TacticalPpPick (reinforce_join_pp)
 #include "alamo/commands/command.hpp"
 #include "alamo/commands/events.hpp"
 #include "alamo/lua/players.hpp"
@@ -237,6 +242,12 @@ public:
     // S7 t21 - the unit's movement lock (0x39ad40: ability share, script lock, suspended locomotor; A1_READINGS §28.9):
     // a locked member does not join a SpaceAmbushBlockStatus (AI_TACTICAL §7.3.1). Default: never locked.
     virtual bool movement_locked(int32_t /*object_id*/) { return false; }
+    // a1g t04 follow-up - land TF.Reinforce drop validity (LandMode vf80 0x3b5f60 -> 0x3b6170, TACTICAL_GAPS
+    // §4.2.1, A1_READINGS §30.7): can pool entry `key` of `player` land at spot `p` (the company layout's centre)? The host
+    // refuses unless every formation slot is passable for its member, not fogged for `player`, clear of blocking footprints
+    // and inside the reinforcement radii (enabling / prevention). A refused spot sends the unit to the next ring spot. Default:
+    // every spot valid (hosts without the hook).
+    virtual bool land_drop_ok(int32_t /*player*/, int32_t /*key*/, const Vec3f& /*p*/) { return true; }
 };
 
 struct TacticalAiPlayerConfig {
@@ -363,22 +374,53 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Ranks one reinforcement point for reinforce_landing_point: false drops it, otherwise `key` (lower first).
-using ReinforcePointRank = std::function<bool(const Vec3f& point, double& key)>;
+// a1g t04 - land TF.Reinforce placement (0x6eaf60, A1_READINGS §30.7 [H]).
+// Ranks one reinforcement point for reinforce_points: false drops it, otherwise `key` (lower first; float, as the
+// original's multimap key).
+using ReinforcePointRank = std::function<bool(const Vec3f& point, float& key)>;
 
-// S10 AI land reinforcement - the landing position of a land TF.Reinforce near `at` (0x6eaf60; drop validity
-// TACTICAL_GAPS §4.2 [H radius rule]). With Use_Reinforcement_Points a drop slot is valid only within 2-D <=
-// Reinforcement_Enabling_Radius of an allied live object. The candidates are the own / allied live objects with an
-// enabling radius > 0; `rank` drops and orders them (A1_READINGS §25.3: points whose zone is not in the destination's
-// flood set at the TF goal's level are dropped, the rest sorted by the slot-7 path cost from the point's zone; without a
-// region on either side by the 2-D distance). Without `rank` the key is the 2-D distance² to `at`. The lowest key wins
-// (strict <: the first in snapshot (GOM) order wins a tie), and `at` := that object's position moved toward `at` by
-// min(distance, radius / 2) [port: the host lays its formation slots around the point; half the radius keeps them
-// inside]. False = no candidate left (nothing can land; Reinforce fails). Without Use_Reinforcement_Points `at` is
-// kept. The host keeps its own drop checks (passability, fog, footprint, prevention radius) [port: not repeated
-// here]. `facts` has the same order as `w.objects`. No RNG.
-bool reinforce_landing_point(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
-                             bool use_reinforcement_points, Vec3f& at, const ReinforcePointRank& rank = {});
+// One allied reinforcement point in landing order.
+struct ReinforcePoint {
+    Vec3f position;
+    float radius = 0.0f;  // the type's Reinforcement_Enabling_Radius (+0x1e20)
+    float key = 0.0f;     // sort key (lower first)
+};
+
+// The candidate points of a land TF.Reinforce towards `dest` (§30.7 steps 1-3): the own / allied live objects with an
+// enabling radius > 0, in snapshot (GOM = land store list) order; `rank` drops and keys them (A1_READINGS §25.3 / §30.7:
+// a point whose zone is outside the destination's flood set is dropped, otherwise key = the slot-7 path cost from its zone
+// (a failed path = 1e18, kept and sorted last); without a region on either side the 2-D distance). Without `rank` the
+// key is the 2-D distance sqrtf(dx² + dy²) to `dest`. Sorted ascending by key, stable (equal keys keep snapshot order).
+// `facts` has the same order as `w.objects`. No RNG.
+std::vector<ReinforcePoint> reinforce_points(const PerceptionWorld& w, const std::vector<TacticalAiObject>& facts, int32_t player,
+                                             const Vec3f& dest, const ReinforcePointRank& rank = {});
+
+// The landing spots around one point, in try order (§30.7 step 4): θ = 0, then θ += 0.7853982f (float) while
+// θ < 6.2831855f; spot = (px + (r/2)·cos θ, py + (r/2)·sin θ, pz) in float (cos / sin: dmath, identical on every
+// compiler). The float accumulation reaches 6.283185 < 6.2831855 after eight steps, so the loop yields NINE spots, the
+// ninth at θ ≈ 2π (≈ the first spot) [H loop bounds; the ninth spot follows from them].
+std::vector<Vec3f> reinforce_ring(const ReinforcePoint& point);
+
+// Lands the pending units on the ring spots of `points` (§30.7 steps 4-5). For each point in order, for each of its
+// spots: stop when no unit is left or the remaining population `remaining` (the cap read once; +inf = no cap) is < 1;
+// else `land` the LAST pending unit at the spot. On success the unit is removed from `pending` and its population taken
+// off `remaining`; then trailing units that are null (`is_null`) or do not fit (population > remaining) are popped
+// (null ones removed from `pending`, non-fitting ones kept there for a later Reinforce; either clears "all placed").
+// A failed spot goes on to the next spot with the same unit. [port: the trailing pop also runs once before the first
+// spot, so a non-fitting last unit, which the host would refuse at every spot, does not block the others.]
+// Returns true only when every unit was placed and none was popped unplaced.
+using ReinforceLand = std::function<bool(const TacticalReinforcement& unit, const Vec3f& spot)>;
+using ReinforceIsNull = std::function<bool(const TacticalReinforcement& unit)>;
+bool reinforce_place(const std::vector<ReinforcePoint>& points, std::vector<TacticalReinforcement>& pending, float remaining,
+                     const ReinforceIsNull& is_null, const ReinforceLand& land);
+
+// a1g t04 + t01 - 0x6bf3d0 (PP, unit) (A1_READINGS §28.4): a unit delivered by a land TF.Reinforce joins the plan's
+// PotentialPlan unit list PP+0x108 (the FreeStore picks): it fills the first "null" slot of its type (a pick of another
+// source, i.e. not a free-store unit, with the same type: it becomes a FreeStore pick of `unit`, keeping its task force /
+// team) or is appended as a FreeStore pick of task force `tf`. Returns true when a null slot was filled; `filled` (if
+// given) receives that slot's previous pick, whose pool / pad reservation the caller releases. The entry +0x30 = PP
+// part is the caller's (the free store's reserve).
+bool reinforce_join_pp(std::vector<TacticalPpPick>& picks, int32_t unit, int32_t type, int32_t tf, TacticalPpPick* filled = nullptr);
 
 // DifficultyAdjustments.xml: the tactical fields.
 std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvider& files);

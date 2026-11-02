@@ -70,6 +70,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.log_decisions = setup.log_decisions;
     cfg.game_seed = host.session_seed();  // A2 tactical: perception '#' reseed (AI_GALACTIC_3 §7.3)
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
+    use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();
     cfg.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
 #ifdef ALAMO_AI_TACTICAL_HAVE_TERRAIN
@@ -262,6 +263,7 @@ bool BattleAi::controls(int32_t player) const {
 
 void BattleAi::update() {
     if (b_->finished_) return;
+    follow_service();
     world_->update(static_cast<int64_t>(host_->frame()), b_->frame_);
     standin_orders();
 }
@@ -279,11 +281,28 @@ std::string BattleAi::summary() const {
            }();
 }
 
-void BattleAi::hash(StateHasher& h) const { world_->hash(h); }
+void BattleAi::hash(StateHasher& h) const {
+    world_->hash(h);
+    h.u32(static_cast<uint32_t>(follows_.size()));  // a1h t02
+    for (const ObjectFollow& f : follows_) {
+        h.u32(static_cast<uint32_t>(f.units.size()));
+        for (const objects::ObjectId id : f.units) h.i32(id);
+        h.i32(f.target);
+        h.f32(f.gx);
+        h.f32(f.gy);
+        h.f32(f.r);
+        h.f32(f.threat);
+        h.u32(f.next);
+    }
+}
 
 // ---- N1 stage 2 save / load (owner: n2-host): chunk "battle.ai" ---------------------------------------------------
 namespace {
-constexpr uint32_t kBattleAiSaveVersion = 2;  // 2: UnitAI re-projection stamps
+constexpr uint32_t kBattleAiSaveVersion = 3;  // 2: UnitAI re-projection stamps; 3: a1h t02 object-goal follow records
+template <class A, class F>
+void follow_fields(A& a, F& f) {
+    a(f.units, f.target, f.gx, f.gy, f.r, f.threat, f.next);
+}
 }
 
 void BattleAi::write(ByteWriter& w) const {
@@ -291,6 +310,7 @@ void BattleAi::write(ByteWriter& w) const {
     write_section(w, [this](ByteWriter& sub) { write_if_saveable(*world_, sub); });
     save_io::Out o(w);
     o(ai_side_, stale_, executed_, opp_prev_, unit_ai_stamps_);
+    o.seq(follows_, [](save_io::Out& a, const ObjectFollow& f) { follow_fields(a, f); });
 }
 
 bool BattleAi::read(ByteReader& r) {
@@ -303,6 +323,8 @@ bool BattleAi::read(ByteReader& r) {
     std::map<objects::ObjectId, int32_t> stamps;
     save_io::In in(r);
     in(side, stale, executed, opp, stamps);
+    std::vector<ObjectFollow> follows;
+    in.seq(follows, [](save_io::In& a, ObjectFollow& f) { follow_fields(a, f); });
     if (!r.ok() || !r.done() || side != ai_side_) return false;  // the AI players are rebuilt by start()
     const std::map<objects::ObjectId, int32_t> stamps_before = unit_ai_stamps_;
     unit_ai_stamps_ = std::move(stamps);  // before relink(): its fill() must find every listed object stamped (no draws)
@@ -318,6 +340,7 @@ bool BattleAi::read(ByteReader& r) {
         return false;
     }
     stale_ = stale;
+    follows_ = std::move(follows);
     executed_ = std::move(executed);
     opp_prev_ = std::move(opp);
     return true;
@@ -496,6 +519,27 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             return (map->passability_at(cx, cy) & (terrain::kPassSteep | terrain::kPassWater)) != 0u;
         };
     }
+    // A1_READINGS §30.3: game type in {1..4} = skirmish / MP. [port] no MP; the port's skirmish battles are game type 3.
+    // Set every fill (a load restores it too); the callbacks below are installed whenever missing, so a world read
+    // from a save (which keeps only the callbacks its owner copies) gets them back at the next fill.
+    w.skirmish_or_mp = b_->cfg_.skirmish;
+    if (!w.parent_rep_type) {
+        // The parent-mode (galactic) object by id (0x28aa50), not found -> -1; its type [M: 0x3973b0 on the galactic
+        // object; the port's galactic units / companies are their own representative type, no TRANSPORT carried type].
+        const galactic::GalacticSim* gal = b_->galaxy_;
+        w.parent_rep_type = [gal](int32_t id) -> int32_t {
+            if (!gal || id < 0) return -1;
+            const objects::ObjectStore& gs = gal->store();
+            const objects::ObjectHandle gh = gs.find(id);
+            return gs.exists(gh) ? static_cast<int32_t>(gs.type(gh)) : -1;
+        };
+    }
+    // A1_READINGS §30.4: IsValidBombingTarget's shield step = inside any player's active BASE_SHIELD (3-D), the L1
+    // strike validity test. `inside_shield` (IsInside*Shield) stays unset: always 0 in shipped data.
+    if (!b_->space_ && !w.in_active_base_shield) {
+        const TacticalBattle* sb = b_;
+        w.in_active_base_shield = [sb](const at::Vec3f& p) { return sb->l1_base_shield_covers({p.x, p.y, p.z}); };
+    }
 #ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent): the real fog with force = 1 (the AI target-selection form); the AI gate
     // (non-human players unfogged while AIUsesFogOfWar is False) is applied by the perception's own force-0
@@ -605,6 +649,8 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         static const objects::BehaviorTypeId kDummyGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
         o.transport_landing = st.has_behavior(h, objects::beh::TransportLanding);
+        // obj +0x54 (A1_READINGS §30.3): the galactic counterpart's id, -1 none
+        if (const objects::ObjectId pm = st.parent_mode_id(h); pm != objects::kNoObjectId) o.parent_object = pm;
         o.visible_to = ~0ull;
         // land: the first zone (list order) whose cell set holds the position's cell (A1_READINGS §4, ZoneLocator)
         if (!zones_.empty()) o.zone = zone_locator_.zone_at(p.x, p.y);
@@ -709,6 +755,66 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
     return true;
 }
 
+// ---- a1h t02: object-goal follow (A1_READINGS §33.4, rule §33.5.2) ----------------------------------------------------
+
+void BattleAi::follow_drop(const std::vector<objects::ObjectId>& units) {
+    for (ObjectFollow& f : follows_)
+        f.units.erase(std::remove_if(f.units.begin(), f.units.end(),
+                                     [&units](objects::ObjectId id) { return std::find(units.begin(), units.end(), id) != units.end(); }),
+                      f.units.end());
+    follows_.erase(std::remove_if(follows_.begin(), follows_.end(), [](const ObjectFollow& f) { return f.units.empty(); }), follows_.end());
+}
+
+void BattleAi::follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat) {
+    if (units.empty()) return;
+    const TacticalBattle::Unit* lead = b_->unit_by_id(units.front());
+    ObjectFollow f;
+    f.units = units;
+    f.target = target;
+    f.gx = x;
+    f.gy = y;
+    // R = half the lead member's max attack range (0x3749d0 / 2) [port: the guard cap constant 0x140b276c0 is not known].
+    f.r = lead ? 0.5f * lead->range : 0.0f;
+    f.threat = threat;
+    f.next = b_->frame_ + 30;  // the formation update runs at most once per FPS frames
+    follows_.push_back(std::move(f));
+}
+
+void BattleAi::follow_service() {
+    const objects::ObjectStore& st = mode_->primary();
+    const tactical::Aabb& bb = mode_->bounds();
+    for (ObjectFollow& f : follows_) {
+        f.units.erase(std::remove_if(f.units.begin(), f.units.end(),
+                                     [this](objects::ObjectId id) {
+                                         const TacticalBattle::Unit* u = b_->unit_by_id(id);
+                                         return !u || !u->alive || u->retreated || !u->movable;
+                                     }),
+                      f.units.end());
+        const objects::ObjectHandle th = st.find(f.target);
+        const TacticalBattle::Unit* tu = b_->unit_by_id(f.target);
+        if (!st.alive(th) || (tu && (!tu->alive || tu->retreated))) f.units.clear();  // signal 0x10: the goal ends
+        if (f.units.empty() || b_->frame_ < f.next) continue;
+        f.next = b_->frame_ + 30;
+        // [port] the object's goal point (0x583150) is read as its position; the path copy of a moving object (0x40dbc0)
+        // is the same re-path.
+        const Vec3 tp = st.position(th);
+        const float dx = tp.x - f.gx, dy = tp.y - f.gy;
+        if (dx * dx + dy * dy <= f.r * f.r) continue;
+        f.gx = tp.x;
+        f.gy = tp.y;
+        if (f.units.size() == 1) {
+            move_unit(f.units.front(), tp.x, tp.y, f.threat);
+            continue;
+        }
+        mv::MoveOrder o;
+        o.units = f.units;
+        o.threat_threshold = f.threat;
+        o.destination = {std::clamp(tp.x, bb.min.x, bb.max.x), std::clamp(tp.y, bb.min.y, bb.max.y)};
+        b_->movement_->move(o, host_->random().synced(), b_->frame_);
+    }
+    follows_.erase(std::remove_if(follows_.begin(), follows_.end(), [](const ObjectFollow& f) { return f.units.empty(); }), follows_.end());
+}
+
 cmd::RejectReason BattleAi::execute(uint8_t player, const cmd::EventData& ev) {
     const cmd::RejectReason r = execute_order(player, ev);
     std::string key(ev.def().name);
@@ -737,6 +843,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             b_->drop_locked(o.units);  // OI follow-up t03: the group move leaves locked units out
             if (o.units.empty()) return R::None;
             o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
+            follow_drop(o.units);
             b_->movement_->move(o, host_->random().synced(), b_->frame_);
             for (const objects::ObjectId id : o.units) {
                 b_->combat_->clear_order(id);
@@ -747,7 +854,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
         }
         case T::MoveToObject: {
             // Lua Move_To(object) without a threat threshold (ev_move_to_object): a move to the target's current position,
-            // like the LuaOrder MoveTo path [port: the original's follow-object behaviour is not modelled].
+            // like the LuaOrder MoveTo path; a1h t02: the group then follows the object (follow_service, A1_READINGS §33.4).
             const uint32_t tw = ev.u("target");
             const objects::ObjectHandle th = tw <= 0x7FFFFFFFu ? st.find(static_cast<objects::ObjectId>(tw)) : objects::ObjectHandle{};
             if (!st.alive(th)) {
@@ -766,6 +873,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (o.units.empty()) return R::None;
             for (const objects::ObjectId id : o.units) b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: kind 1
             b_->fighter_order(o.units, 0, tp);  // S7 t22: a position snapshot (kind 1)
+            follow_drop(o.units);
+            follow_add(o.units, static_cast<objects::ObjectId>(tw), tp.x, tp.y, mv::kThreatOff);
             if (o.units.size() == 1) {
                 b_->combat_->clear_order(o.units.front());
                 return move_unit(o.units.front(), tp.x, tp.y) ? R::None : R::InvalidUnit;
@@ -791,6 +900,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             for (const uint32_t id : ev.ids("attackers"))
                 for (const objects::ObjectId mid : team_units(player, id))
                     if (std::find(attackers.begin(), attackers.end(), mid) == attackers.end()) attackers.push_back(mid);
+            follow_drop(attackers);  // a1h t02: a newer order (signal 0xb, A1_READINGS §33.3)
             for (const objects::ObjectId aid : attackers) {
                 const TacticalBattle::Unit* u = b_->unit_by_id(aid);
                 if (!u) continue;
@@ -824,6 +934,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     if (std::find(ids.begin(), ids.end(), mid) == ids.end()) ids.push_back(mid);
             if (ids.empty()) return R::InvalidUnit;
             if (order == lua::LuaOrder::Stop) {
+                follow_drop(ids);  // a1h t02
                 for (const objects::ObjectId id : ids) {
                     const objects::ObjectId one[] = {id};
                     if (b_->unit_by_id(id)->movable) b_->movement_->stop(one);
@@ -838,6 +949,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             for (const objects::ObjectId id : ids)
                 if (b_->unit_by_id(id)->movable) group.units.push_back(id);
             if (group.units.empty()) return R::InvalidUnit;
+            follow_drop(ids);  // a1h t02: the collector raises signal 0xb on each unit it takes (A1_READINGS §33.3)
             const TacticalBattle::Unit* u = b_->unit_by_id(group.units.front());
             float x = std::bit_cast<float>(le32(b, 8)), y = std::bit_cast<float>(le32(b, 12));
             const uint32_t tw = le32(b, 4);
@@ -905,6 +1017,10 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 tw != cmd::kNoObject && order != lua::LuaOrder::MoveTo ? static_cast<objects::ObjectId>(tw) : objects::kNoObjectId;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
+            if (tw != cmd::kNoObject) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
+                const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
+                follow_add(group.units, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt);
+            }
             // refixf t02 / t06 (MOVEMENT §6.3 [H]): Lua Attack_Move / Move_To on a task force build one parameter block and ONE
             // coordinator for all its units, so the formation slots and the destination reservations (§2.4 step 4) give each
             // unit its own spot. The tactical AI now sends that as one group order (the ids above); the t02 stand-in that
@@ -1218,6 +1334,11 @@ bool BattleAi::space_drop_ok(int32_t player, int32_t key, const at::Vec3f& p, fl
     const mv::V2 from{p.x - sweep * static_cast<float>(cs), p.y - sweep * static_cast<float>(sn)};
     const float now = static_cast<float>(b_->frame_);
     return b_->movement_->space().query_segment(from, to, now, now + 115.0f, ud.radius, layer | 8u, tc::kNoObject, true, b_->frame_) == 0;
+}
+
+// ---- a1g t04 follow-up: land TF.Reinforce drop validity (header; TACTICAL_GAPS §4.2.1) ----
+bool BattleAi::land_drop_valid(int32_t player, int32_t key, const at::Vec3f& p, bool human) {
+    return b_->land_drop_valid(*mode_, player, static_cast<objects::ObjectId>(key), p.x, p.y, human, use_reinforcement_points_);  // a1h t06
 }
 
 std::vector<objects::ObjectId> BattleAi::team_units(uint8_t player, uint32_t wire) const {

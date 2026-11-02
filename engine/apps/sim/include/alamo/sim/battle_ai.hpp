@@ -14,7 +14,7 @@
 //                                  (order_attack_issue, path A) and drops refusing units; land: min-range staging [M].
 //                                  Every other move / stop clears the attack goal
 //   Reinforce                   -> A2 tactical: TacticalBattle::order_reinforce (the human path: undeployed reserve,
-//                                  side not retreating, space unit cap, rows of 6 around the clamped point [port])
+//                                  side not retreating, space unit cap; land: the company drop layout, space: rows of 6 [port])
 //   Retreat                     -> TacticalBattle::request_retreat
 //   40 / 43 / 57 / 58           -> TacticalBattle::handle_command (abilities)
 //   TacticalBuild               -> A2 tactical: the player build event 0x42edf0 refusals (UC / built present, pad
@@ -139,12 +139,34 @@ public:
     bool space_drop_frame(int32_t player, ai::tactical::SpaceDropFrame& out) override;
     bool space_prevention_hit(int32_t player, const ai::tactical::Vec3f& p) override;
     bool space_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p, float facing_deg, float sweep) override;
+    // a1g t04 follow-up - land TF.Reinforce drop validity: TacticalBattle::land_drop_valid (a1h t06: moved to the host so the
+    // Reinforce command re-runs it) with this battle's mode. AI drops pass human = false (movers ignored, landing
+    // transports block).
+    bool land_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p) override { return land_drop_valid(player, key, p, false); }
+    bool land_drop_valid(int32_t player, int32_t key, const ai::tactical::Vec3f& p, bool human);
     // --- end battle host ---
 
 private:
     float type_population(int32_t type) const;  // A2 tactical: pop(T, mode) 0x373500
     float allow_reinforcement_fraction_ = 0.0f;  // A2 tactical: Allow_Reinforcement_Percentage_Normalized
+    bool use_reinforcement_points_ = true;       // a1g t04 follow-up: Use_Reinforcement_Points (GC +0x118a0)
     void standin_orders();
+    // a1h t02 (A1_READINGS §33.4 / §33.5 rule 2): a group move with an object goal (Guard_Target, Attack_Move or Move_To on
+    // an object) follows the object in the movement layer, not by AI re-orders: at most once per 30 frames the group is
+    // re-pathed when the object is more than R (half the lead member's attack range) from the recorded goal. Any newer
+    // order for a unit takes it out of its follow record (signal 0xb, §33.3); an empty record or a dead object ends it.
+    struct ObjectFollow {
+        std::vector<objects::ObjectId> units;
+        objects::ObjectId target = objects::kNoObjectId;
+        float gx = 0.0f, gy = 0.0f;  // the recorded goal point (formation +0x210..+0x218)
+        float r = 0.0f;              // R
+        float threat = 0.0f;         // the move's threat tolerance (kThreatOff = none)
+        uint32_t next = 0;           // the next battle frame the formation update may re-path (+0x1d8)
+    };
+    std::vector<ObjectFollow> follows_;  // issue order
+    void follow_drop(const std::vector<objects::ObjectId>& units);
+    void follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat);
+    void follow_service();
     commands::RejectReason execute_order(uint8_t player, const commands::EventData& ev);
     bool move_unit(objects::ObjectId id, float x, float y, float threat_threshold = ::alamo::tactical::movement::kThreatOff);
 

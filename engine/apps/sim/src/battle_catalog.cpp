@@ -96,6 +96,7 @@ BattleCatalog::BattleCatalog(const objects::GameObjectTypes& types, const FilePr
         land_capture_countdown_ = constants->get_float("Land_Capture_Allowed_Countdown_Seconds", land_capture_countdown_);
         space_capture_countdown_ = constants->get_float("Space_Capture_Allowed_Countdown_Seconds", space_capture_countdown_);
         garrisoned_range_mult_ = constants->get_float("Garrisoned_Max_Attack_Distance_Multiplier", garrisoned_range_mult_);
+        use_reinforcement_points_ = constants->get_bool("Use_Reinforcement_Points", use_reinforcement_points_);  // a1h t06
         threat_decay_step_ = constants->get_float("AI_SpaceThreatDecayStep", threat_decay_step_);
         engines_disabled_speed_ = constants->get_float("Engines_Disabled_Speed_Modifier", engines_disabled_speed_);
         nebula_ability_disable_ = constants->get_float("Nebula_Ability_Disable_Time", nebula_ability_disable_);
@@ -495,6 +496,8 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
     // behaviour (0x0A: Behavior plus the battle mode's LandBehavior / SpaceBehavior list; every list without a mode) and a
     // non-empty Projectile_Types, independent of weapon hardpoints (the two sources fire side by side, gated by the
     // Fire_Weapon_When_* / Fire_When_* flags). Projectile_Types without WEAPON is never fired (abilities / Lua read it).
+    // a1h t01: M1_Repulsor_Tank (WEAPON + HP_2M_Tank_00, which excludes Air / Vehicle / Structure) fires its
+    // Proj_M1_Laser_Cannon at vehicles through this weapon.
     const auto projs = ty.get_list(t, "Projectile_Types");
     const bool weapon_behavior =
         s.model_mode < 0 ? ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon)

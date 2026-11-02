@@ -43,11 +43,12 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 7;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+constexpr uint32_t kCombatSaveVersion = 8;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
                                             // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
-                                            // target hardpoint (auto_hp); 6: S8 t04 grenade flight / sticky state;
-                                            // 7: S8 t06 stuck_offset in the parent's frame (same layout, new meaning),
-                                            // S7 t15 A2 last weapon service frame, S8 t06 B4 fire-bone cycle index
+                                            // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
+                                            // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
+                                            // (same layout, new meaning), S7 t15 A2 last weapon service frame, S8 t06 B4
+                                            // fire-bone cycle index
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -213,7 +214,7 @@ void CombatSystem::write(ByteWriter& w) const {
     for (const DamageEvent& e : damage_events_) {
         w.i32(e.victim).i32(e.source).i32(e.source_owner).boolean(e.source_is_projectile).i32(e.projectile_desc);
         w.u8(e.kind).i32(e.hardpoint).f32(e.after_multipliers).f32(e.absorbed).f32(e.energy_absorbed);
-        w.f32(e.to_hardpoint).f32(e.to_hull).boolean(e.killed).u32(e.frame);
+        w.f32(e.to_hardpoint).f32(e.to_hull).f32(e.hull_lost).boolean(e.killed).u32(e.frame);
     }
     w.u32(static_cast<uint32_t>(hit_events_.size()));
     for (const HitEvent& e : hit_events_) {
@@ -520,7 +521,7 @@ bool CombatSystem::read(ByteReader& r) {
         e.id = r.i32();
         e.percent = r.u8();
     }
-    if (!get_count(r, n, 47)) return false;
+    if (!get_count(r, n, 51)) return false;
     std::vector<DamageEvent> damage_events(n);
     for (DamageEvent& e : damage_events) {
         e.victim = r.i32();
@@ -535,6 +536,7 @@ bool CombatSystem::read(ByteReader& r) {
         e.energy_absorbed = r.f32();
         e.to_hardpoint = r.f32();
         e.to_hull = r.f32();
+        e.hull_lost = r.f32();
         e.killed = r.boolean();
         e.frame = r.u32();
         if (!r.ok() || !proj_ok(e.projectile_desc)) return false;

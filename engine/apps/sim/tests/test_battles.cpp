@@ -108,6 +108,7 @@ const char* kTypes = R"(<S10>
   <Projectile_Types>S10_Blaster_Proj</Projectile_Types><Projectile_Fire_Recharge_Seconds>1.0</Projectile_Fire_Recharge_Seconds>
   <Projectile_Fire_Pulse_Count>1</Projectile_Fire_Pulse_Count><MovementClass>Infantry</MovementClass>
   <Behavior>SELECTABLE, WEAPON</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>
+  <Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>
  </GroundInfantry>
  <GroundCompany Name="S10_Squad"><Company_Units>S10_Trooper, S10_Trooper, S10_Trooper, S10_Trooper</Company_Units>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
@@ -1306,16 +1307,18 @@ LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
 // assembles the Underworld squads in orbit of S10_C into a fleet, BlockOnCommand(fleet.Move_To(S10_B)) (the Empire's
 // planet, an Empire squad on the surface), Sleep(1), fleet.Invade(). The block must last until the fleet is in orbit
 // of S10_B (StorySession's order_finished); before a1f t08 it finished at once, Invade() ran in hyperspace and was
-// dropped, so the fleet sat in orbit with either human. The probe's SpawnList is replaced by squads lifted into orbit
-// here: Spawn_Unit at a galactic planet is not registered with the GalacticSim (no fleet, no surface entry), so
-// Assemble_Fleet of freshly spawned units returns nil in the port (open item). Two runs: Underworld human (the probe's
-// fallback: the original invaded at once) and Empire human with Underworld AI (the probe's preferred variant: the
-// original's fleet stayed in orbit and never invaded; the port invades - open question, see the a1f t08 report).
+// dropped, so the fleet sat in orbit with either human. The squads are spawned at S10_C with Spawn_Unit (the probe's
+// SpawnList; a1g t06: registered with the GalacticSim, so Assemble_Fleet flies them). Two runs: Underworld human (the
+// probe's fallback: the original invaded at once) and Empire human with an Underworld without galactic AI (the probe's
+// preferred variant, AI_Player_Control None: the original's fleet stayed in orbit and never invaded). a1g t05
+// (A1_READINGS §31): fleet.Invade() is issued by the LOCAL player with its own ground units only, so with a human
+// Empire nothing lands, silently.
 struct ProbeInvadeRun {
     std::string conflicts, story;
     std::vector<std::string> lua;
     size_t land_queued = 0;  // most land conflicts queued at once
     uint32_t fought = 0;
+    bool fleet_at_target = false;  // an Underworld fleet with ground units in orbit of S10_B at the end
 };
 ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool human_empire) {
     ProbeInvadeRun out;
@@ -1328,14 +1331,10 @@ ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool h
     setup.players[0].human = human_empire;
     setup.players[0].ai = !human_empire;
     setup.players[1].human = !human_empire;
-    setup.players[1].ai = human_empire;
+    setup.players[1].ai = false;  // human, or the probe's AI_Player_Control None (no galactic AI)
     galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
     CHECK(gs != nullptr);
     if (!gs) return out;
-    std::vector<objects::ObjectHandle> up;  // Underworld's squads at S10_C into an orbit fleet (stand-in for SpawnList)
-    for (objects::ObjectHandle h : gs->planets()[2].surface)
-        if (gs->store().owner(h) == 1) up.push_back(h);
-    CHECK(up.size() == 2 && gs->launch_units(1, 2, up) == commands::RejectReason::None);
     StoryStart st;
     st.files = &files;
     st.plot_sets = {{human_empire ? 0 : 1, "Story_Plots_Probe.xml"}};
@@ -1358,6 +1357,10 @@ ProbeInvadeRun run_probe_invade(const Data& d, const FileProvider& files, bool h
         out.land_queued = std::max(out.land_queued, battles.conflicts().land_queue().size());
     }
     out.fought = battles.battles_fought();
+    for (const uint32_t f : gs->fleets_at(1, 1))
+        for (const objects::ObjectHandle m : gs->fleets()[f].contents)
+            if (gs->store().alive(m) && gs->rules().types[gs->store().type(m)].kind == galactic::UnitKind::GroundUnit)
+                out.fleet_at_target = true;
     if (host.story()) {
         out.lua = host.story()->lua_messages();
         out.story = host.story()->log_text("probe");
@@ -1381,9 +1384,9 @@ void test_probe_invade(const Data& d) {
                "function Base_Definitions() ServiceRate = 0.1 stage = 0 end\n"
                "function main() while true do\n"
                "  if stage == 0 and GetCurrentTime() >= 1 then\n"
-               "    uw = Find_Player('Underworld') tgt = FindPlanet('S10_B') units = {}\n"
-               "    for _, u in pairs(Find_All_Objects_Of_Type(Find_Object_Type('S10_Squad'))) do\n"
-               "      if u.Get_Owner().Get_ID() == uw.Get_ID() then table.insert(units, u) end end\n"
+               "    uw = Find_Player('Underworld') tgt = FindPlanet('S10_B') src = FindPlanet('S10_C') units = {}\n"
+               "    for _, t in ipairs({'S10_Squad', 'S10_Squad'}) do\n"
+               "      for _, u in pairs(Spawn_Unit(Find_Object_Type(t), src, uw)) do table.insert(units, u) end end\n"
                "    fleet = Assemble_Fleet(units)\n"
                "    if fleet then Story_Event('FLEET') block = fleet.Move_To(tgt) stage = 1 else stage = 9 end\n"
                "  elseif stage == 1 and block.IsFinished() then\n"
@@ -1398,16 +1401,115 @@ void test_probe_invade(const Data& d) {
         const ProbeInvadeRun r = run_probe_invade(d, files, human_empire);
         auto fired = [&r](const char* ev) { return r.story.find(std::string(" P_") + ev + " ") != std::string::npos; };
         std::printf("  human %s: fleet %d, block ended in orbit %d (elsewhere %d), invade issued %d, land conflicts queued %zu, "
-                    "fought %u\n    %s\n",
-                    human_empire ? "Empire (Underworld AI)" : "Underworld", fired("FLEET") ? 1 : 0, fired("ARRIVED") ? 1 : 0,
-                    fired("NOT_THERE") ? 1 : 0, fired("INVADED") ? 1 : 0, r.land_queued, r.fought, r.conflicts.c_str());
+                    "fought %u, fleet in orbit of S10_B at the end %d\n    %s\n",
+                    human_empire ? "Empire (Underworld AI None)" : "Underworld", fired("FLEET") ? 1 : 0, fired("ARRIVED") ? 1 : 0,
+                    fired("NOT_THERE") ? 1 : 0, fired("INVADED") ? 1 : 0, r.land_queued, r.fought, r.fleet_at_target ? 1 : 0,
+                    r.conflicts.c_str());
         for (const std::string& m : r.lua) std::printf("    lua: %s\n", m.c_str());
         CHECK(r.lua.empty());
         CHECK(fired("FLEET") && fired("ARRIVED") && !fired("NOT_THERE") && fired("INVADED"));
-        // Both humans: the land conflict is queued and fought. Human Underworld = the original. Human Empire: the
-        // original's AI fleet never invaded (probe 2026-10-31, not explained by the specs: open question).
-        CHECK(r.land_queued == 1 && r.fought == 1);
-        CHECK(r.conflicts.find(" land S10_B Underworld vs Empire") != std::string::npos);
+        if (human_empire) {
+            // The original (probe 2026-10-31, A1_READINGS §31): Invade() issued by the local Empire keeps no Underworld
+            // unit, nothing lands, the fleet stays in orbit.
+            CHECK(r.land_queued == 0 && r.fought == 0 && r.fleet_at_target);
+        } else {
+            CHECK(r.land_queued == 1 && r.fought == 1);
+            CHECK(r.conflicts.find(" land S10_B Underworld vs Empire") != std::string::npos);
+        }
+    }
+}
+
+// a1h t04 (A1_READINGS §31.6): story reward INVADE_PLANET. A galactic story script brings two Underworld squads into orbit
+// of S10_B (Empire) and raises GO; the plot's GO event has the reward INVADE_PLANET S10_B [company]. The reward picks the
+// first ground unit of a fleet in orbit friendly to the plot's player (Underworld) that matches the company filter and
+// issues ONE Invade event with that unit as the LOCAL player: with a human Underworld one squad lands (a land conflict
+// with one unit); with a human Empire (an AI plot) the executor keeps no unit and nothing happens, silently; a filter
+// that matches nothing logs the mismatch and issues nothing.
+struct InvadeRewardRun {
+    size_t land_queued = 0, landing_units = 0;  // most land conflicts queued at once; units of the first one seen
+    std::vector<std::string> lua;
+    std::string story;
+};
+InvadeRewardRun run_invade_reward(const Data& d, const FileProvider& files, bool human_empire) {
+    InvadeRewardRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup setup = make_setup(d, true);
+    setup.players[0].human = human_empire;
+    setup.players[0].ai = false;
+    setup.players[1].human = !human_empire;
+    setup.players[1].ai = false;
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(setup));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{1, "Story_Plots_Reward.xml"}};  // the Underworld's plot
+    std::vector<std::string> diag;
+    CHECK(host.start_story(st, &diag));
+    for (const auto& m : diag) std::printf("  story diag: %s\n", m.c_str());
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 300;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    for (uint64_t t = 0; t < 900; ++t) {
+        host.tick_once();
+        const auto& q = battles.conflicts().land_queue();
+        out.land_queued = std::max(out.land_queued, q.size());
+        if (!q.empty() && out.landing_units == 0) out.landing_units = q[0].units.size();
+    }
+    if (host.story()) {
+        out.lua = host.story()->lua_messages();
+        out.story = host.story()->log_text("reward");
+    }
+    return out;
+}
+
+void test_invade_planet_reward(const Data& d) {
+    const fs::path x = d.root / "Data/XML";
+    write_file(x / "Story_Plots_Reward.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Reward</Lua_Script><Active_Plot>Story_Reward.xml</Active_Plot></Story_Mode_Plots>\n");
+    write_file(d.root / "Data/Scripts/Story/Story_Reward.lua",
+               "function Base_Definitions() ServiceRate = 0.1 stage = 0 end\n"
+               "function main() while true do\n"
+               "  if stage == 0 and GetCurrentTime() >= 1 then\n"
+               "    uw = Find_Player('Underworld') units = {}\n"
+               "    for _, t in ipairs({'S10_Squad', 'S10_Squad'}) do\n"
+               "      for _, u in pairs(Spawn_Unit(Find_Object_Type(t), FindPlanet('S10_C'), uw)) do table.insert(units, u) end end\n"
+               "    fleet = Assemble_Fleet(units) block = fleet.Move_To(FindPlanet('S10_B')) stage = 1\n"
+               "  elseif stage == 1 and block.IsFinished() then Story_Event('GO') stage = 2 end\n"
+               "  coroutine.yield(true) end end\n");
+    struct Case {
+        bool human_empire;
+        const char* company;
+        size_t land_queued, landing_units;
+        bool mismatch_logged;
+    };
+    for (const Case& c : {Case{false, "S10_SQUAD", 1, 1, false}, Case{false, "", 1, 1, false}, Case{true, "S10_SQUAD", 0, 0, false},
+                          Case{false, "S10_Squad", 0, 0, true}}) {
+        write_file(x / "Story_Reward.xml",
+                   std::string("<Story>\n <Event Name=\"P_GO\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>GO</Event_Param2>"
+                               "<Reward_Type>INVADE_PLANET</Reward_Type><Reward_Param1>S10_B</Reward_Param1>") +
+                       (*c.company ? std::string("<Reward_Param2>") + c.company + "</Reward_Param2>" : std::string()) + "</Event>\n</Story>\n");
+        DirectoryProvider files(path_to_utf8(d.root));  // after the plot file is written
+        const InvadeRewardRun r = run_invade_reward(d, files, c.human_empire);
+        bool mismatch = false;
+        for (const std::string& m : r.lua) mismatch = mismatch || m.find("INVADE PLANET - S10_SQUAD does not match S10_Squad") != std::string::npos;
+        std::printf("  INVADE_PLANET human %s, company '%s': land conflicts %zu with %zu unit(s), mismatch logged %d\n",
+                    c.human_empire ? "Empire" : "Underworld", c.company, r.land_queued, r.landing_units, mismatch ? 1 : 0);
+        CHECK(r.story.find(" P_GO ") != std::string::npos);
+        CHECK(r.land_queued == c.land_queued && r.landing_units == c.landing_units && mismatch == c.mismatch_logged);
+        CHECK(r.lua.size() == (c.mismatch_logged ? 2u : 0u));  // both squads mismatch
     }
 }
 
@@ -2215,6 +2317,110 @@ void test_foc_weapon_sources(const objects::GameObjectTypes& types, const Battle
 }
 
 // FoC: a battle request built by hand (two FoC frigate groups at Kuat-like orbit) on a real space map.
+// a1g t04 follow-up (TACTICAL_GAPS §4.2.1): the land company drop layout, the oriented-box test and the radius rules.
+// The worked example: FoC Rebel_Infantry_Squad (15 x Squad_Rebel_Trooper, Max_Squad_Size 5, team container locomotor,
+// trooper half extents 3 x 3, FormationSpacing 0.5).
+LandDropShape rebel_squad_shape() {
+    LandDropShape s;
+    s.members.assign(15, 7u);
+    s.hx.assign(15, 3.0f);
+    s.hy.assign(15, 3.0f);
+    s.create_team = true;
+    s.squad = 5;
+    s.container_locomotor = true;
+    s.formation_spacing = 0.5f;
+    return s;
+}
+
+bool rebel_squad_slots_ok(const LandDropLayout& lay, float px, float py, float yaw_deg) {
+    static const float kSlots[15][2] = {{35.5f, -16.0f}, {35.5f, 0.0f},   {35.5f, 16.0f},  {19.5f, -8.0f}, {19.5f, 8.0f},
+                                        {8.0f, -16.0f},  {8.0f, 0.0f},    {8.0f, 16.0f},   {-8.0f, -8.0f}, {-8.0f, 8.0f},
+                                        {-35.5f, 16.0f}, {-35.5f, 0.0f},  {-35.5f, -16.0f}, {-19.5f, 8.0f}, {-19.5f, -8.0f}};
+    if (!lay.ok || lay.slots.size() != 15) return false;
+    if (std::fabs(lay.half_x - 41.25f) > 1e-3f || std::fabs(lay.half_y - 42.0f) > 1e-2f) return false;
+    const bool quarter = yaw_deg == 90.0f;
+    for (size_t i = 0; i < 15; ++i) {
+        const float ox = quarter ? -kSlots[i][1] : kSlots[i][0], oy = quarter ? kSlots[i][0] : kSlots[i][1];  // (x, y) -> (-y, x)
+        if (std::fabs(lay.slots[i].x - (px + ox)) > 1e-3f || std::fabs(lay.slots[i].y - (py + oy)) > 1e-3f) {
+            std::printf("  slot %zu: (%.4f, %.4f) expected (%.4f, %.4f)\n", i, static_cast<double>(lay.slots[i].x),
+                        static_cast<double>(lay.slots[i].y), static_cast<double>(px + ox), static_cast<double>(py + oy));
+            return false;
+        }
+    }
+    return true;
+}
+
+void test_land_drop_rules() {
+    // Layout: yaw 0 and the 90-degree rotation, at a drop point away from the origin.
+    const LandDropShape rebel = rebel_squad_shape();
+    CHECK(rebel_squad_slots_ok(land_drop_layout(rebel, 1000.0f, 500.0f, 0.0f), 1000.0f, 500.0f, 0.0f));
+    CHECK(rebel_squad_slots_ok(land_drop_layout(rebel, 1000.0f, 500.0f, 90.0f), 1000.0f, 500.0f, 90.0f));
+    {
+        const LandDropLayout lay = land_drop_layout(rebel, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots[0].type == 7u && lay.slots[0].hx == 3.0f);
+        CHECK(std::fabs(lay.slots[6].yaw_deg) < 1e-3f);  // (8, 0): the slot box's axis is the yaw of drop point -> slot
+        CHECK(std::fabs(lay.slots[11].yaw_deg - 180.0f) < 1e-3f);
+    }
+    {  // without the team container locomotor the team uses 0x40f970; a partial last team keeps its first slots
+        LandDropShape s = rebel;
+        s.container_locomotor = false;
+        s.members.resize(12);
+        s.hx.resize(12);
+        s.hy.resize(12);
+        const LandDropLayout lay = land_drop_layout(s, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots.size() == 12);
+    }
+    {  // vehicles: one 0x40f970 grid. Cell (2 * 10 / 20 + 0, same) = (1, 1), 4 members: side = sqrt(7.2), 2 per row.
+        LandDropShape v;
+        v.members.assign(4, 3u);
+        v.hx.assign(4, 10.0f);
+        v.hy.assign(4, 10.0f);
+        const LandDropLayout lay = land_drop_layout(v, 0.0f, 0.0f, 0.0f);
+        CHECK(lay.ok && lay.slots.size() == 4);
+        if (lay.ok && lay.slots.size() == 4) {
+            const float side = std::sqrt(7.2f), gap = (side - 2.0f) / 3.0f;
+            CHECK(std::fabs(lay.slots[0].x - 10.0f) < 1e-3f && std::fabs(lay.slots[2].x + 10.0f) < 1e-3f);
+            CHECK(std::fabs(lay.slots[0].y - (gap - side / 2.0f + 0.5f) * 20.0f) < 1e-3f);
+            CHECK(std::fabs(lay.slots[1].y + lay.slots[0].y) < 1e-3f);  // centred row
+            CHECK(std::fabs(lay.half_x - 20.0f) < 1e-3f && std::fabs(lay.half_y - side * 10.0f) < 1e-3f);
+        }
+        v.hy.assign(4, 0.0f);  // b = 2 hy / 20 + FS = 0 -> no layout
+        CHECK(!land_drop_layout(v, 0.0f, 0.0f, 0.0f).ok);
+        CHECK(!land_drop_layout(LandDropShape{}, 0.0f, 0.0f, 0.0f).ok);
+    }
+    // Oriented boxes.
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {5.0f, 0.0f, 3.0f, 3.0f, 0.0f})));
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {6.0f, 0.0f, 3.0f, 3.0f, 0.0f})));  // touching
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {7.5f, 0.0f, 3.0f, 3.0f, 0.0f})));
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 45.0f}, {9.0f, 0.0f, 3.0f, 3.0f, 45.0f})));
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 3.0f, 3.0f, 0.0f}, {6.5f, 0.0f, 3.0f, 3.0f, 45.0f})));  // the corner reaches 2.26
+    CHECK((drop_boxes_overlap({0.0f, 0.0f, 20.0f, 1.0f, 90.0f}, {0.0f, 15.0f, 1.0f, 1.0f, 0.0f})));   // long axis along y
+    CHECK((!drop_boxes_overlap({0.0f, 0.0f, 20.0f, 1.0f, 0.0f}, {0.0f, 15.0f, 1.0f, 1.0f, 0.0f})));
+    // Radii: a POWERED enemy object with prevention radius 100, 60 from a slot, blocks only while its owner has base
+    // power; without POWERED it always blocks. Enabling (<=) needs an allied object; prevention is strict (<).
+    LandDropRadiusObject turret;
+    turret.x = 60.0f;
+    turret.prevention = 100.0f;
+    turret.powered = true;
+    turret.owner_base_power = true;
+    LandDropRadiusObject point;
+    point.allied = true;
+    point.enabling = 500.0f;
+    std::vector<LandDropRadiusObject> objs = {point, turret};
+    CHECK(!land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    objs[1].owner_base_power = false;  // the owner's base-power list is empty
+    CHECK(land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    objs[1].powered = false;
+    CHECK(!land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    CHECK(land_drop_radius_ok(-40.0f, 0.0f, objs, true));  // d = 100: not < 100
+    objs[1].allied = true;                                  // an allied object never prevents
+    CHECK(land_drop_radius_ok(0.0f, 0.0f, objs, true));
+    CHECK(land_drop_radius_ok(500.0f, 0.0f, objs, true));   // d = 500 <= 500
+    CHECK(!land_drop_radius_ok(500.5f, 0.0f, objs, true));  // outside every enabling radius
+    CHECK(land_drop_radius_ok(500.5f, 0.0f, objs, false));  // without Use_Reinforcement_Points
+    std::printf("  land drop rules: OK\n");
+}
+
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
@@ -2240,6 +2446,20 @@ void test_foc() {
     std::printf("foc battle: contrast rows %zu, hardpoint records %zu, priority sets %zu, damage types %u\n", crules.contrast.size(),
                 catalog.hardpoint_records(), catalog.priority_sets().size(), catalog.damage().damage_count());
     CHECK(crules.contrast.size() == 11 && catalog.hardpoint_records() > 100 && !catalog.priority_sets().empty());
+    {  // a1g t04 follow-up (TACTICAL_GAPS §4.2.1 worked example): the Rebel_Infantry_Squad drop shape and layout
+        const objects::TypeIndex rq = types.resolve_name("Rebel_Infantry_Squad");
+        CHECK(rq != objects::kNone && rq < types.size());
+        if (rq != objects::kNone && rq < types.size()) {
+            const LandDropShape s = land_drop_shape(types, &catalog, crules, static_cast<uint32_t>(rq));
+            std::printf("foc drop shape Rebel_Infantry_Squad: %zu members, hx %.3f hy %.3f, team %d squad %u container %d fs %.2f\n",
+                        s.members.size(), s.hx.empty() ? 0.0 : static_cast<double>(s.hx[0]), s.hy.empty() ? 0.0 : static_cast<double>(s.hy[0]),
+                        s.create_team ? 1 : 0, s.squad, s.container_locomotor ? 1 : 0, static_cast<double>(s.formation_spacing));
+            CHECK(s.members.size() == 15 && s.create_team && s.squad == 5 && s.container_locomotor && s.formation_spacing == 0.5f);
+            CHECK(!s.hx.empty() && std::fabs(s.hx[0] - 3.0f) < 1e-4f && std::fabs(s.hy[0] - 3.0f) < 1e-4f);
+            CHECK(rebel_squad_slots_ok(land_drop_layout(s, 250.0f, -125.0f, 0.0f), 250.0f, -125.0f, 0.0f));
+            CHECK(rebel_squad_slots_ok(land_drop_layout(s, 250.0f, -125.0f, 90.0f), 250.0f, -125.0f, 90.0f));
+        }
+    }
     {  // refixf t01: rocket curve fields reach the battle tables (MPTL fires Proj_Ground_Proton_Torpedo: MPTL_Rocket,
        // straight 100, curve 50, offset 7, Target_Point_On_Terrain, Explode_When_Reached_Target_Radius)
         std::vector<uint32_t> idx;
@@ -3751,6 +3971,138 @@ void test_battle_ai_find_team() {
     }
     CHECK(checked);
 }
+
+// a1g t04 follow-up: BattleAi::land_drop_ok (TACTICAL_GAPS §4.2): the land Reinforce drop validity of a reserve entry. A spot
+// is refused when a slot is impassable (an Obstacle strip on the map), fogged for the player (force 1), or its footprint is
+// taken (a live unit stands there); an unknown entry is refused; otherwise accepted.
+// a1h t06: the test is run by the host (TacticalBattle::land_drop_valid); blockers are the Collidable_By_Projectile_Living
+// objects and S10_Trooper carries hard extents 6 x 6 (a type with neither extents nor a model has a zero drop cell: refused).
+void test_battle_ai_land_drop(const Data& d) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    constexpr int32_t kStrip = 5;  // cells x < 5: Obstacle
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                m.legacy_passability.assign(63u * 63u, 0);
+                                for (uint32_t x = 0; x < 5u; ++x)  // kStrip
+                                    for (uint32_t y = 0; y < 63u; ++y) m.legacy_passability[x * 63u + y] = 2;
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d.files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    ts.constants.use_reinforcement_points = false;  // the synthetic map has no reinforcement points (enabling tested below)
+    namespace mv = alamo::tactical::movement;
+    bool invaded = false, checked = false;
+    for (uint64_t t = 0; t < 1500 && !checked; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() != 1) continue;
+        checked = true;
+        const auto reserves = b->reserves(1);
+        CHECK(reserves.size() == 1);
+        if (reserves.empty()) break;
+        const auto key = static_cast<int32_t>(reserves[0].galactic_id);
+        BattleAi ai(*b, *tm, host, ts);
+        // Candidate spots over the map (every 4th cell centre right of the strip).
+        auto scan = [&](std::vector<ai::tactical::Vec3f>& ok) {
+            ok.clear();
+            for (int32_t cy = 4; cy < 60; cy += 4)
+                for (int32_t cx = kStrip + 6; cx < 58; cx += 4) {
+                    const mv::V2 c = mv::cell_center(cx, cy);
+                    if (ai.land_drop_ok(1, key, {c.x, c.y, 0.0f})) ok.push_back({c.x, c.y, 0.0f});
+                }
+        };
+        std::vector<ai::tactical::Vec3f> fog_ok, clear_ok;
+        scan(fog_ok);
+        size_t newly = 0;
+#ifdef ALAMO_SIM_HAVE_FOG
+        const bool fog = b->fog() != nullptr;
+        if (fog) {
+            b->fog()->reveal_all(1);  // nothing fogged for player 1 any more
+            scan(clear_ok);
+            for (const auto& q : clear_ok)
+                newly += std::none_of(fog_ok.begin(), fog_ok.end(), [&q](const ai::tactical::Vec3f& e) { return e.x == q.x && e.y == q.y; });
+            CHECK(newly > 0);           // spots refused only because they were fogged
+            CHECK(clear_ok.size() > fog_ok.size());
+        } else {
+            clear_ok = fog_ok;
+        }
+#else
+        const bool fog = false;
+        clear_ok = fog_ok;
+#endif
+        CHECK(!clear_ok.empty());
+        for (const auto& q : fog_ok) CHECK(ai.land_drop_ok(1, key, q));  // fog cleared: still valid (and same answer twice)
+        const mv::V2 strip = mv::cell_center(2, 31);
+        CHECK(!ai.land_drop_ok(1, key, {strip.x, strip.y, 0.0f}));  // impassable slots
+        // a1h t06 (§4.2.2 item 5): the Reinforce command re-runs the test and refuses the whole drop (no clamp, no move).
+        CHECK(b->order_reinforce(*tm, 1, reserves[0].galactic_id, strip.x, strip.y, host.random().synced()) ==
+              commands::RejectReason::InvalidPosition);
+        CHECK(b->reserves(1).size() == 1);
+        // TACTICAL_GAPS §4.2.1: an AI drop with a member slot on an enemy unit passes (the AI ignores movers); the same
+        // drop for a human fails (its movers block). Slot 0's offset comes from the shared layout.
+        const LandDropLayout at0 = land_drop_layout(b->land_drop_shape(reserves[0].type), 0.0f, 0.0f, b->player_drop_yaw(1));
+        CHECK(at0.ok);
+        size_t next_to_enemy = 0;
+        for (const objects::ObjectHandle h : tm->primary().owned_by(0)) {
+            if (!at0.ok || !tm->primary().active(h) || !tm->movable(h) || next_to_enemy >= 3) continue;
+            const Vec3 q = tm->primary().position(h);
+            const ai::tactical::Vec3f c{q.x - at0.slots[0].x, q.y - at0.slots[0].y, 0.0f};
+            if (!ai.land_drop_ok(1, key, c)) continue;  // refused for another reason (passability, radius, a structure)
+            CHECK(!ai.land_drop_valid(1, key, c, true));
+            ++next_to_enemy;
+        }
+        CHECK(next_to_enemy > 0);
+        {  // Use_Reinforcement_Points: a spot is valid only when every slot is within an allied enabling radius.
+            TacticalAiSetup te = ts;
+            te.constants.use_reinforcement_points = true;
+            BattleAi ae(*b, *tm, host, te);
+            size_t enabled = 0;
+            for (const auto& q : clear_ok) {
+                const bool ok = ae.land_drop_ok(1, key, q);
+                enabled += ok ? 1u : 0u;
+                if (ok) CHECK(ai.land_drop_ok(1, key, q));  // the radii only remove spots
+            }
+            std::printf("  land drop: %zu of %zu spots inside the enabling radii\n", enabled, clear_ok.size());
+        }
+        if (!clear_ok.empty()) {
+            CHECK(!ai.land_drop_ok(1, key + 1000, clear_ok[0]));  // unknown entry
+            CHECK(!ai.land_drop_ok(0, key, clear_ok[0]));         // another player's entry
+        }
+        std::printf("  land drop: %zu / %zu spots fogged-valid / valid, %zu refused only by fog (fog %s), %zu next to enemy units\n",
+                    fog_ok.size(), clear_ok.size(), newly, fog ? "on" : "off", next_to_enemy);
+    }
+    CHECK(checked);
+}
 #endif
 // --- end OI host ---
 
@@ -4496,6 +4848,7 @@ int main(int argc, char** argv) {
     test_linked_battle(*d);
     std::printf("story Invade() of a scripted fleet (a1f t08, S10 PROBE A)\n");
     test_probe_invade(*d);
+    test_invade_planet_reward(*d);
     std::printf("S4 story battles: orders, garrisons, capture, map load, corruption missions\n");
     {
         auto ds4 = make_data(false, false, true);  // S4
@@ -4548,7 +4901,11 @@ int main(int argc, char** argv) {
     test_battle_ai_land_mode(true);
     std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
     test_battle_ai_find_team();
+    std::printf("a1g t04 follow-up: BattleAi::land_drop_ok (impassable / fogged / movers / enabling radius)\n");
+    test_battle_ai_land_drop(*d);
 #endif
+    std::printf("a1g t04 follow-up: land company drop layout, oriented boxes, reinforcement radii\n");
+    test_land_drop_rules();
     std::printf("S8 t02 / S7 t13: obstacle footprints follow their objects (land stamps, space static entries)\n");
     test_runtime_obstacles(false);
     test_runtime_obstacles(true);
