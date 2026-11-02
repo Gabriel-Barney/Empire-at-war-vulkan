@@ -413,6 +413,19 @@ void GalacticAiWorld::Impl::market_planet(PlanetIndex p) {
     }
 }
 
+// An AI player's pay-as-you-go installment a for the head of queue q at planet p (0x53b900, AI_GALACTIC_2 §3.4; q2f
+// t01) [H]: while the planet's AIPlanetBuildQueue has a current task (+0x18), the installment is paid from that task's
+// goal budget (may pause); otherwise from the refund accumulator (always paid). [port] A current task that left the map
+// or whose goal struct is gone counts as none. A player without a PlayerAi pays as a human (credits >= a).
+float GalacticAiWorld::Impl::installment(PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a) {
+    PlayerAi* pa = player_ai(head.player);
+    if (!pa) return sim.players()[static_cast<size_t>(head.player)].account.credits >= a ? a : -1.0f;
+    const int32_t current = p < planet_queues.size() && q <= 1 ? planet_queues[p][q].current : -1;
+    const auto it = current >= 0 ? builds.find(current) : builds.end();
+    if (it == builds.end()) return pa->ctx.budget.installment(-1, 0, a);
+    return pa->ctx.budget.installment(it->second.category, it->second.goal_key, a);
+}
+
 // PRODUCTION_QUEUED polls (every 3 frames, galactic) and the producing tasks' queue items.
 void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
     std::vector<int32_t> ids;
@@ -483,49 +496,54 @@ void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
     }
 }
 
-// 0x525200 stand-in [M] (galactic_goal_time.hpp): over the running plan's unfinished build tasks (task id order), the
-// largest time until the task's item is built, from the current queues (no reservations: they are plan-time estimates):
-//   producing at P   -> the sim queue's time up to and including its item (the head's remaining, then build times);
-//   claimed at P     -> the sim queue's time + the build times of P's claimed tasks up to and including it;
-//   bidding for P    -> the sim queue's time + all of P's claimed tasks + its own build time there (0x371230);
-//   no planet yet    -> its build time without a planet (nobody bids: the time only grows through elapsed).
-// 0 when no task is unfinished (the production is over or the plan has none).
+// 0x525200 (AI_GALACTIC_2 §3.4 "Goal production time"; q2f t01) [H]: over the player's build tasks (id order = the
+// execution system's list order) that sit on a planet build queue and belong to the running plan's goal (or to no task
+// force), the largest queue wait (0x53bb20) + build time at that planet. Tasks on the global market without a bid add
+// nothing. [M] a task "on a planet build queue" (+0xc8) = producing at P, else bidding for / claimed by P (bid_planet).
+// 0 when no task matches (the production is over or the plan has none); the goal is always activated here (the
+// maintenance test only runs for goals with a running plan).
 float GalacticAiWorld::Impl::goal_production_time(int32_t running) const {
+    const auto pit = plans.find(running);
+    if (running < 0 || pit == plans.end()) return 0.0f;
+    const int32_t player = pit->second.player;
+    const PlayerAi* pa = player_ai(player);
+    if (!pa) return 0.0f;
+    const auto goal_of = [pa](int32_t plan) -> const Goal* {
+        for (const auto& cat : pa->ctx.goals.active())
+            for (const Goal& g : cat)
+                if (g.running == plan) return &g;
+        return nullptr;
+    };
+    // slack(T) at P = goal ETA - (NOW - goal created) / FPS - btime(T, P); no goal: 1e18.
+    const auto slack = [&](const BuildTask& t, PlanetIndex p) -> float {
+        const Goal* g = t.tf >= 0 ? goal_of(t.plan) : nullptr;
+        if (!g) return 1e18f;
+        return (g->eta - static_cast<float>(now - g->created) / static_cast<float>(kAiFps)) - btime_at(t.player, t.type, p);
+    };
+    const bool payg = sim.pays_as_you_go(player);
     float t = 0.0f;
-    if (running < 0) return t;
-    const auto sim_time = [this](PlanetIndex p, uint32_t q, const BuildTask* upto) {
-        float s = 0.0f;
-        int32_t same = 0;
-        const auto queue = sim.queue_of(p, q);
-        for (size_t i = 0; i < queue.size(); ++i) {
-            s += i == 0 ? queue[i].remaining : queue[i].build_time;
-            if (upto && queue[i].type == upto->type && queue[i].player == upto->player && ++same > upto->queue_entries_before) break;
-        }
-        return s;
-    };
-    const auto claimed_time = [this](PlanetIndex p, uint32_t q, int32_t upto) {
-        float s = 0.0f;
-        for (const int32_t id : planet_queues[p][q].tasks) {
-            const auto it = builds.find(id);
-            if (it == builds.end() || it->second.state != BuildState::Queued) continue;
-            s += btime_at(it->second.player, it->second.type, p);
-            if (id == upto) break;
-        }
-        return s;
-    };
     for (const auto& entry : builds) {
-        const BuildTask& b = entry.second;
-        if (b.plan != running || (b.state != BuildState::Queued && b.state != BuildState::Producing)) continue;
-        float need = 0.0f;
-        if (b.state == BuildState::Producing && valid_planet(b.producing_at)) {
-            need = sim_time(b.producing_at, b.queue, &b);
-        } else if (valid_planet(b.bid_planet) && b.queue <= 1) {
-            need = sim_time(b.bid_planet, b.queue, nullptr) + claimed_time(b.bid_planet, b.queue, b.listed ? -1 : b.id);
-            if (b.listed) need += btime_at(b.player, b.type, b.bid_planet);  // on the market: not in the planet's list yet
-        } else {
-            need = btime_none(b.type);
+        const BuildTask& x = entry.second;
+        if (x.player != player || (x.state != BuildState::Queued && x.state != BuildState::Producing)) continue;
+        if (x.tf >= 0 && x.plan != running) continue;
+        const PlanetIndex p = x.state == BuildState::Producing ? x.producing_at : x.bid_planet;
+        if (!valid_planet(p) || x.queue > 1 || static_cast<size_t>(p) >= planet_queues.size()) continue;
+        // 0x53bb20(Q, 0, X): the current item's remaining time, then Q's listed tasks with no more slack than X.
+        const auto sim_queue = sim.queue_of(p, x.queue);
+        float wait = sim_queue.empty() ? 0.0f : sim_queue[0].remaining;
+        const PlanetBuildQueue& Q = planet_queues[p][x.queue];
+        if (Q.current != x.id && x.tf >= 0) {  // [port] a task without a task force is never ranked (no goal to read)
+            const float sx = slack(x, p);
+            for (const int32_t id : Q.tasks) {
+                const auto yt = builds.find(id);
+                if (yt == builds.end()) continue;
+                const BuildTask& y = yt->second;
+                if (slack(y, p) > sx) continue;
+                const float bt = btime_at(y.player, y.type, p), ft = funds_time(y);
+                wait += payg ? std::max(bt, ft) : bt + ft;
+            }
         }
-        t = std::max(t, need);
+        t = std::max(t, wait + btime_at(x.player, x.type, p));
     }
     return t;
 }

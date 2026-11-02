@@ -632,6 +632,12 @@ public:
     void set_production_service_hook(std::function<void(PlanetIndex)> hook) { production_hook_ = std::move(hook); }
     uint32_t add_production_service_hook(std::function<void(PlanetIndex)> hook);  // id for remove_ (never 0)
     void remove_production_service_hook(uint32_t id);
+    // q2f t01: an AI player's pay-as-you-go installment goes through its AI budget (0x53b900, AI_GALACTIC_2 §3.4). The
+    // hook gets the planet, the queue index, the queue head and the installment a, and returns the credits to pay (>= 0;
+    // the credits floor at 0 and the build advances) or a negative value (the build pauses). Without a hook every
+    // player pays as a human: credits >= a, then a. Not hashed.
+    using InstallmentHook = std::function<float(PlanetIndex planet, uint32_t queue, const BuildEntry& head, float a)>;
+    void set_installment_hook(InstallmentHook hook) { installment_hook_ = std::move(hook); }
 
     // ---- story / script event stream (S4, galactic_events.hpp) --------------------------------------------
     // Off by default. Events are appended in emission order; the stream is not part of hash_state.
@@ -1085,6 +1091,7 @@ private:
     uint32_t next_hook_id_ = 1;
     std::vector<float> last_income_;  // per player
     std::function<void(PlanetIndex)> production_hook_;
+    InstallmentHook installment_hook_;
     std::vector<std::pair<uint32_t, std::function<void(PlanetIndex)>>> production_hooks_;
     // OI galactic (hashed in the "OIG1" tail once non-default)
     std::vector<int32_t> stealthed_;      // ObjectIds with the galactic stealth byte set, ascending

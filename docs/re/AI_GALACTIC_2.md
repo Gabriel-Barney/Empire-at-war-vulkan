@@ -467,6 +467,38 @@ Called from 0x4b2ef0 inside the fiscal cycle's payment loop, per player right af
   - If c + a > 0 and the player is PAYG (AI): r = 0x5f7d40(goal's plan, c + a) (committed spend reclaimed from unfinished production) [M]; A −= r, P −= r, budget +0x80 += r.
   - So +0x80 accumulates reclaimed spend, enters Σ every tick, and the drift term offsets it. Port it as is.
 - **Spend:** `Allocate_Resources(n)` and the build-task charge 0x6110e0: req −= n, alloc += n.
+- **Installment 0x53b900(Q, n)** (pay-as-you-go production, GALACTIC_ECONOMY §2.5; q2f t01) [H]. Q = the planet's
+  AIPlanetBuildQueue for the head's queue (0x559b40(planet +0xd0, queue)).
+  - **Q has a current build task** (Q +0x18, the task now producing there, §2.3): 0x64adb0. The goal is the task's plan's goal
+    (+0xa0 → +0xf0 → +0x88); `have` = min(alloc, c + a) of its struct (0x613690).
+    - If `(int)(have − n) < 0`: let x = alloc (struct +0x2c, 0x612f90; the goal cost +0x78 when the goal has no
+      running plan +0x60). When x < n, s += n − x (0x614310). Return 0, so the build pauses.
+    - Otherwise p = min(n, have). The player pays p (Add_Credits −p, credits floor 0), then 0x615700(budget, goal, p):
+      category P −= p; s = max(s − p, 0); alloc = max(alloc − p, 0); a −= p; if a < 0 then c = max(c + a, 0) and a = 0.
+      Return 1.
+  - **No current task** (e.g. a scripted build): 0x615700(budget, null, n): budget +0x80 = max(+0x80 − n, 0).
+    The player pays n (Add_Credits −n; the credits floor at 0, so the build never waits for money). Return 1.
+  - Q's planet owner has no AI (player +0x360 null): return 0. The service only calls 0x53b900 for an AI player, so in practice a 0 comes from the goal branch, and the build pauses.
+- **Goal production time 0x525200(execution system, G)** (the maintenance time test's ETA = this + elapsed, AI_GALACTIC
+  §1.6; q2f t01, 2026-11-02) [H]:
+  - G null → 1e18. G not activated (goal state +0x74 ≤ 0; −1 at creation, 1 after activation 0x693550, 3 after
+    deactivation 0x693750) → G's ETA (+0x7c).
+  - Otherwise, over the execution system's build tasks (list +0x40, list order), each task X that is on a planet build
+    queue (X +0xc8 = that AIPlanetBuildQueue Q) and either has no task force (+0xa0 null) or whose plan's goal is G:
+    - Q has no planet (Q +0x28 null): A = max(A, btime(X's type, no planet)) (0x371230).
+    - Otherwise B = max(B, wait + btime(X's type, Q's planet)), wait = 0x53bb20(Q, 0, X) below.
+  - Returns A + B (0 when no task matches).
+  - Tasks that are not on any planet queue (still on the global market with no bid) add nothing.
+- **Queue wait 0x53bb20(Q, extra, X)** [H]:
+  - Without X: Q +0x50 (the queue's own running total), plus 0x53bda0(Q) when `extra`.
+  - With X: wait = the current item's remaining time (0x401ba0, as the market's step 1). If Q has a task list (+0x10)
+    and X is not Q's current task (+0x18):
+    - slack(T) = T's goal ETA − (NOW − T's goal creation frame) / FPS − btime(T's type, Q's planet); a list entry
+      with no task has slack 1e18.
+    - For each entry Y of Q's list (list order) with slack(Y) ≤ slack(X): wait += btime(Y's type) + fundsTime(Y)
+      when X's player pays up front, or max(btime(Y's type), fundsTime(Y)) when it pays as it goes (0x289050).
+      fundsTime = 0x6490d0 (§2.3).
+    - Plus 0x53bda0(Q) when `extra`.
 - **Flush_All_Resources 0x6bcdf0:** 0x6931e0(goal, goal cost) then 0x6927d0 [M: releases alloc down to cost, then re-adds].
 - **Flush_Category(name) 0x6bce70:** look up the category through enum 0x140b31088, then 0x612cb0(budget, cat) [H call]. Its effect "available = 0" (AI_GALACTIC §1.8) is [M]; the body was not re-read.
 - **AdditionalCost** is charged once at plan instantiation (AI_GALACTIC §1.9.4 step 5). It also seeds PP gross/net cost (§1.4 Budget), so `MinimumCost` compares gross cost against MinimumCost + AdditionalCost.

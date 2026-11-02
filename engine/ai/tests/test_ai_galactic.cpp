@@ -1857,8 +1857,9 @@ static void test_goal_time_drop() {
     CHECK(late_goal_released_after(false, 10.0f, LateMode::Stalled) < 0);  // Set_As_Goal_System_Removable(false): kept
     CHECK(late_goal_released_after(true, 0.0f, LateMode::Stalled) < 0);    // ETA 0 -> AllowedTime 0 = no limit
 
-    // The 0x525200 stand-in in a world: a Barracks plan at P0 (Upgrade_Starbase goal). While its build task waits or
-    // produces, the plan's production time is > 0 and falls; it is 0 once the task finished.
+    // 0x525200 in a world (AI_GALACTIC_2 §3.4, q2f t01): a Barracks plan at P0 (Upgrade_Starbase goal). While its build
+    // task bids it is the build time; while it produces, the head's remaining time + the build time again, so it jumps
+    // when production starts and then falls; it is 0 once the task finished.
     ParityWorld pw(false, {"BuildBarracks"});
     float first = -1.0f, last = -1.0f, peak = 0.0f;
     int64_t seen = 0, zero_after = 0;
@@ -1885,7 +1886,7 @@ static void test_goal_time_drop() {
     std::printf("goal time drop: Barracks plan %d production time first %.1f, peak %.1f, last %.1f (%lld frames > 0, %lld at 0 after)\n",
                 plan, static_cast<double>(first), static_cast<double>(peak), static_cast<double>(last), static_cast<long long>(seen),
                 static_cast<long long>(zero_after));
-    CHECK(plan >= 0 && seen > 0 && first > 0.0f && last < first && zero_after > 0);
+    CHECK(plan >= 0 && seen > 0 && first > 0.0f && peak > first && last < peak && zero_after > 0);
     CHECK(pw.world->plan_production_time(-1) == 0.0f && pw.world->plan_production_time(123456) == 0.0f);
 }
 
