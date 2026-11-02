@@ -360,8 +360,8 @@ public:
     // the current one, the path is dropped.
     bool fighter_dead_stop(ObjectId id);
     // S7 t28 (A1_READINGS §33.4, FIGHTER_FLYING §4.10 E): a guard of a moving object. fighter_copy_path gives squadron
-    // `squad` (or a solo fighter) the rest of `from`'s space path (0x40dbc0) [M: the waypoints after from's playback
-    // time]; each member's goal = the path end; idle / moving members fly it (Moving 0x1B), members in combat keep their
+    // `squad` (or a solo fighter) `from`'s space path (0x40dbc0) with every member's waypoint index at from's (S7 t35,
+    // A1_READINGS §33.4.1 [port: from's next waypoint by playback time]); each member's goal = the path end; idle / moving members fly it (Moving 0x1B), members in combat keep their
     // state. False (nothing changed) when `from` is a fighter or follows no path. set_fighter_speed_cap sets
     // FighterSquad::speed_cap (kFighterNoSpeedCap clears it); false without that squadron.
     bool fighter_copy_path(ObjectId squad, ObjectId from, uint32_t frame);

@@ -2009,16 +2009,18 @@ void MovementSystem::fighter_order(Unit& u) {
     if (FighterSquad* c = fsquad(u)) c->speed_cap = kFighterNoSpeedCap;  // S7 t28: a new Set_Move resets the formation speed
 }
 
-// S7 t28 (A1_READINGS §33.4 0x40dbc0, FIGHTER_FLYING §4.10 E): the guard's path copy.
+// S7 t28 / t35 (A1_READINGS §33.4.1 step 3, 0x40dbc0, FIGHTER_FLYING §4.10 E): the guard's path copy. The whole path is
+// copied and every member's waypoint index is set to the object's, so the escort joins at the object's progress.
+// [port] the object's index = its next waypoint by playback time (a space ship's path has no pass index).
 bool MovementSystem::fighter_copy_path(ObjectId squad, ObjectId from, uint32_t frame) {
     if (cfg_.mode != MoveMode::Space) return false;
     const Unit* s = unit_ptr(from);
     if (!s || is_fighter(*s) || !s->following || s->wps.empty()) return false;
     const float t = static_cast<float>(frame - s->path_start) + s->path_lag;  // from's playback time (tick_space)
-    std::vector<SpaceWaypoint> rest;
-    for (const SpaceWaypoint& w : s->wps)
-        if (w.time > t) rest.push_back(w);
-    if (rest.empty()) return false;
+    uint32_t at = 0;
+    while (at < s->wps.size() && !(s->wps[at].time > t)) ++at;
+    if (at >= s->wps.size()) return false;  // the object's path is complete: not moving
+    const std::vector<SpaceWaypoint> path = s->wps;
     std::vector<ObjectId> ids;
     if (const FighterSquad* c = squad_ptr(squad)) {
         ids = c->members;
@@ -2029,9 +2031,9 @@ bool MovementSystem::fighter_copy_path(ObjectId squad, ObjectId from, uint32_t f
     for (ObjectId m : ids) {
         Unit* u = unit_ptr(m);
         if (!u || !is_fighter(*u)) continue;
-        u->wps = rest;
-        u->fs.idx = 0;
-        u->goal = rest.back().pos;
+        u->wps = path;
+        u->fs.idx = at;
+        u->goal = path.back().pos;
         u->has_goal = true;
         u->need_path = false;
         u->arrived = false;

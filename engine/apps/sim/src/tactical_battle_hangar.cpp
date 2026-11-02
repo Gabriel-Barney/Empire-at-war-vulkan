@@ -10,7 +10,7 @@
 //    ship: rings r = 0 / 200 / 400 / 600 / 800 at 45 degree steps around the flyout point), bind_launch, the initial
 //    order (S7 t24, escort: a guard of the carrier - a move to the carrier's position with the guard flag 0x02 and the
 //    squadron's formation record {flags 0x02, goal object = the carrier}, so its auto targets are chased within
-//    Guard_Chase_Range of the carrier, followed by hg_guard_follow (S7 t28: path copy and speed cap); else a move to the flyout point), then
+//    Guard_Chase_Range of the carrier, followed by hg_guard_follow (S7 t28 / t35: path copy and speed cap); else a move to the flyout point), then
 //    clear_requests().
 //  * Removal: squadron container / single ship gone -> squadron_removed; carrier gone -> remove_carrier.
 //  * Station upgrade (SpawnPurpose::StationUpgrade): spawn Next_Level_Base for S's owner at S, complete_station_upgrade,
@@ -337,27 +337,31 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
     return bound;
 }
 
-// S7 t24 / t28 (A1_READINGS §33.4, FIGHTER_FLYING §4.10 E, STATION_HANGARS_SOUND §2.5): the escort's guard of its carrier
-// follows the carrier without further orders - the formation's periodic update 0x4192b0, at most once per 30 frames
-// (FighterFormationRecord::follow_next). R = half the lead member's max attack range [port: the guard cap constant
-// 0x140b276c4 is not known; BattleAi's object follow uses the same R].
-//   1. The carrier moving on a path (has a goal, not arrived): the squadron caps its formation speed at min(own, 2 x the
-//      carrier's max speed) [M: the carrier's speed], and when its leader is within R of the carrier and not fighting
-//      [M] it copies the rest of the carrier's path (0x40dbc0, MovementSystem::fighter_copy_path); the record goal
-//      becomes the carrier's goal point [M]. The carrier not moving: no cap.
-//   2. The carrier's current goal point (0x583150: its move goal, else its position) more than R from the record goal:
-//      a guard re-path to that point (0x417520; a new move clears the speed cap).
-// The re-path / copy keeps the formation record (flags, goal object, pushed auto blocks). The carrier gone (signal 0x10):
-// fighter_sync turns the record into a position guard at its goal point, flags 0x02 kept (§4.10 E).
-// [port] not modelled: popping the guard block when more blocks are queued and the carrier stops; locked members keep
-// their order on a re-path (drop_locked).
+// S7 t24 / t28 / t35 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E, STATION_HANGARS_SOUND §2.5): the escort's guard of
+// its carrier follows the carrier without further orders. Host stand-in for the formation update 0x4192b0 (the movement
+// layer has no object goal blocks), at most once per 30 frames per record (FighterFormationRecord::follow_next = +0x1d8):
+//   gates: the record has live movable members (lead = the first); T = the lead's team container type, else its own.
+//   R = Get_Base_Attack_Range / 2 [port: the lead's range], capped at Space_Guard_Range 750 when the last block is the
+//   guard block (the record has no pushed auto block).
+//   3. Last block = the guard block and T's Space_Layer 0 (or Disregard_Space_Layer_For_Guard_Attack_Move):
+//      - carrier moving (a goal, not arrived): the formation speed is reset (no cap); with the lead within R (3D,
+//        strict) the squadron copies the carrier's path at the carrier's waypoint index (fighter_copy_path) and its cap
+//        is 2 x S, S = the carrier's formation speed while it moves in one, else its effective max speed;
+//      - carrier stopped: [port] a guard last block is the record's only block (queued blocks are not modelled), so
+//        nothing is popped.
+//   4. No copy: unless the carrier is fogged for the lead's owner, re-path (a guard move to the carrier's position, the
+//      object block's goal point [M]) when the recorded goal is more than R from it; a new move resets the cap.
+// [port] a pushed auto block as the last block: no host re-path (the fighter combat states chase it). The re-path / copy
+// keeps the formation record. The carrier gone (signal 0x10): fighter_sync turns the record into a position guard at
+// its goal point, flags 0x02 kept (§4.10 E). Locked members keep their order on a re-path (drop_locked).
 void TacticalBattle::hg_guard_follow(TacticalMode& mode, SimRng& rng) {
     if (!space_ || !movement_) return;
+    constexpr float kSpaceGuardRange = 750.0f;  // GameConstants +0x11EC0 Space_Guard_Range (FoC) [port: constant]
+    const objects::GameObjectTypes& types = catalog_->types();
     const objects::ObjectStore& store = mode.primary();
     const tactical::Aabb& bb = mode.bounds();
     for (FighterFormationRecord& r : fformations_) {  // key order
         if (r.follow_next == 0 || frame_ < r.follow_next) continue;
-        r.follow_next = frame_ + 30;
         const Unit* g = r.goal_object != objects::kNoObjectId ? unit_by_id(r.goal_object) : nullptr;
         if (!g || !g->alive || g->retreated || !store.alive(g->h)) {  // §4.10 E: a position guard at the last goal point
             r.goal_object = objects::kNoObjectId;
@@ -375,32 +379,42 @@ void TacticalBattle::hg_guard_follow(TacticalMode& mode, SimRng& rng) {
             const Unit* u = unit_by_id(id);
             return !u || !u->alive || u->retreated || !u->movable || !movement_->has_unit(id);
         });
-        if (ids.empty()) continue;
+        if (ids.empty()) continue;  // 1. no members / no lead
+        r.follow_next = frame_ + 30;
         const Unit* lead = unit_by_id(ids.front());
-        const float rr = 0.5f * lead->range;
+        objects::TypeIndex tt = static_cast<objects::TypeIndex>(lead->type);
+        if (lead->container < containers_.size() && containers_[lead->container].squad_type < types.size())
+            tt = static_cast<objects::TypeIndex>(containers_[lead->container].squad_type);
+        // 2. R
+        const bool last_guard = (r.flags & mv::kMoveFlagGuardMove) != 0 && r.pushed.empty();
+        if (!last_guard) continue;  // [port] see above
+        const float rr = std::min(0.5f * lead->range, kSpaceGuardRange);
         const Vec3 gp = store.position(g->h);
-        Vec3 goal_point = gp;
-        if (movement_->has_unit(g->id)) {
+        // 3. guard follow
+        const bool layer0 = types.get_mask(tt, "Space_Layer") == 0 || types.get_bool(tt, "Disregard_Space_Layer_For_Guard_Attack_Move");
+        if (layer0 && movement_->has_unit(g->id)) {
             const mv::UnitView gv = movement_->view(g->id);
-            const bool moving = gv.has_goal && !gv.arrived;
-            if (moving) goal_point = Vec3{gv.goal.x, gv.goal.y, 0.0f};
-            // 1. a moving carrier: speed cap, path copy within R
-            movement_->set_fighter_speed_cap(r.key, moving ? 2.0f * gv.max_speed : mv::kFighterNoSpeedCap);
-            const mv::UnitView lv = movement_->view(ids.front());
-            const float lx = lv.pos.x - gp.x, ly = lv.pos.y - gp.y;
-            const bool calm = lv.loco_state == mv::LocoState::FighterIdle || lv.loco_state == mv::LocoState::FighterMoving;
-            if (moving && calm && lx * lx + ly * ly <= rr * rr && movement_->fighter_copy_path(r.key, g->id, frame_))
-                r.goal = goal_point;
+            if (gv.has_goal && !gv.arrived) {
+                movement_->set_fighter_speed_cap(r.key, mv::kFighterNoSpeedCap);  // F speed := the formation speed
+                const Vec3 lp = store.position(lead->h);
+                const float lx = lp.x - gp.x, ly = lp.y - gp.y, lz = lp.z - gp.z;
+                if (lx * lx + ly * ly + lz * lz < rr * rr && movement_->fighter_copy_path(r.key, g->id, frame_)) {
+                    const float sp = gv.formation_speed < 1.0e38f ? gv.formation_speed : gv.max_speed;
+                    movement_->set_fighter_speed_cap(r.key, 2.0f * sp);
+                    continue;  // copied: no re-path
+                }
+            }
         }
-        // 2. the carrier's goal point away from the record goal: re-path
-        const float dx = goal_point.x - r.goal.x, dy = goal_point.y - r.goal.y;
+        // 4. re-path
+        if (fog_object_hidden(store.owner(lead->h), g->id, false)) continue;
+        const float dx = gp.x - r.goal.x, dy = gp.y - r.goal.y;
         if (dx * dx + dy * dy <= rr * rr) continue;
         drop_locked(ids);
         if (ids.empty()) continue;
         mv::MoveOrder o;
         o.units = std::move(ids);
         o.flags = mv::kMoveFlagGuardMove;
-        o.destination = {std::clamp(goal_point.x, bb.min.x, bb.max.x), std::clamp(goal_point.y, bb.min.y, bb.max.y)};
+        o.destination = {std::clamp(gp.x, bb.min.x, bb.max.x), std::clamp(gp.y, bb.min.y, bb.max.y)};
         movement_->move(o, rng, frame_);
         r.goal = Vec3{o.destination.x, o.destination.y, 0.0f};
     }
