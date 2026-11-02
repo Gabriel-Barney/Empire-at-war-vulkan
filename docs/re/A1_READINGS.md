@@ -1746,13 +1746,16 @@ the break function, because the guard status stays open while the pad lives.
 ### 33.4 Unit-level guard behaviour (formation, flag 0x02) [M unless tagged]
 
 **Following a moving object needs no further AI order** [H for the mechanism]. The formation's periodic update 0x4192b0
-runs at most once per FPS = 30 frames (+0x1d8 = now + 30). With a kind-3 goal it does two things:
+runs at most once per FPS = 30 frames (+0x1d8 = now + 30), and **only while the formation is moving (state 1)**; after
+arrival the 30-frame re-check 0x410a60 takes over (FIGHTER_FLYING §4.11 A, 2026-11-03). With a kind-3 goal it does two
+things:
 - **Guard, with the guarded object moving on a path** (its locomotor has a current path, 0x5569b0, with state ≠ 5):
   - when the formation is within R of the object, it **copies the object's path** (0x40dbc0);
   - it caps its speed (+0x21c, +0xa8) at min(own speed, 2 × the object's speed). Exact rule (2026-11-02, §33.4.1):
     the object's **effective max** speed, or its formation's speed while it moves in a formation, never its current
     velocity;
-  - with more than one block queued and the object not moving, the guard block is popped.
+  - with more than one block queued and the object not moving, the guard block is popped (stack rules, shift
+    waypoints and auto blocks over a guard: FIGHTER_FLYING §4.11 B).
 - **Any kind-3 goal, with the object unfogged for the formation's owner:** the formation **re-paths toward the object**
   (0x417520) when both hold:
   - the object's current goal point (0x583150) is more than R from the formation's recorded goal point
@@ -1764,8 +1767,10 @@ runs at most once per FPS = 30 frames (+0x1d8 = now + 30). With a kind-3 goal it
   (2026-11-02, §33.4.1).
 
 **Arrival.** Once all members' locomotors report done, the formation has one block and its state is 1, 0x423760 raises
-signal 10 on every member and sets state 3 [H]. The guard block stays as the formation's goal, so a later move of the
-object re-paths the formation again.
+signal 10 on every member (in reverse member order) and sets state 3 [H]. The guard block stays as the formation's
+goal, so a later move of the object re-paths the formation again: in state 3, every 30 frames, 0x410a60 re-plans
+(state 0) as soon as some member with TARGETING is out of its max attack range of the object or inside its min range
+(FIGHTER_FLYING §4.11 A) [H].
 
 **Auto-engage.** The unit's own targeting scan reads the first block's flags:
 - flag 0x02 gives the response range `Guard_Chase_Range` (type +0x52c), measured from the slot goal;
@@ -1782,14 +1787,18 @@ They then auto-engage within `Guard_Chase_Range` of the slot goal. Whether they 
 #### 33.4.1 Formation update 0x4192b0 for an object goal, exact (RE, 2026-11-02) [H unless tagged]
 Notation: F = formation; blocks F +0xf8..+0x100, 0x68 bytes each; "last block" = blocks[n−1] (0x41a4e0 / 0x41af10).
 Flag 0x02 = guard, block +0x24 = kind, +0x28 = object.
+> Corrected and completed 2026-11-03 (s78f t02): FIGHTER_FLYING §4.11 (block stack, fog, team objects, the D ≤ R
+> rule, solo-fighter speed, implementation checklist). The fixes are applied below.
 1. **Gates.** It returns when:
    - F has no members;
    - frame < F +0x1d8;
-   - F has no lead (0x41a9b0, which also returns the lead position L);
+   - (F +0x1d8 := frame + FPS (30) is set here, before the next two gates)
+   - F has no lead (0x41a9b0). L is the members' **centroid** (3D mean; one member: its position), not the lead's
+     position; the lead is the member nearest L among those not already at their goal (FIGHTER_FLYING §4.11 G 3);
    - F has one member and that member's locomotor state is 0x26 (Land_Fly circling).
 
-   Otherwise F +0x1d8 := frame + FPS (30). T is the lead's type, read from its team container, else the company
-   type (0x3973b0), else its own type.
+   T is the type of the lead's first team member when the lead is a team container (team data +0x110), else the
+   company type (0x3973b0) when lead +0x337 = −1, else its own type.
 2. **R** = `Get_Base_Attack_Range`(T, lead) / 2. When the last block has flag 0x02: R := min(R, `Space_Guard_Range`
    750) in space, min(R, `Land_Guard_Range` 150) on land (other modes: no cap).
 3. **Guard follow / pop**. This applies only when the last block has flag 0x02 and an object, **and** T's
@@ -1797,45 +1806,60 @@ Flag 0x02 = guard, block +0x24 = kind, +0x28 = object.
    - FoC lead types with layer 0: squadrons, fighters, GroundCompany, HeroCompany.
    - Capital / frigate / corvette ships and solo `Land`-layer vehicles / heroes skip this step and use only step 4.
    - **The guarded object counts as "not moving"** when it has no locomotor pack, no current path (0x5569b0), path
-     state 5, or a formation whose last block has flag 0x10 [L: meaning of 0x10].
+     state 5, or a formation whose last block has flag 0x10 (the space idle-movement block, never issued with FoC
+     data, FIGHTER_FLYING §4.11 G 7) [M].
      - If F has **more than one block**: the **last** block is popped (F +0x100 −= 0x68) and F state (+0x1d0) := 0.
      - If no remaining block names the object, F stops listening to the object's signals 0x10 / 0x1a / 0x2e
-       (0x220eb0) [M: unsubscribe].
-     - Then step 4 runs on the new last block. With one block nothing is popped.
+       (0x220eb0) [H: F subscribed itself in the block push 0x41fd30].
+     - Then step 4 runs on the new last block in the same call, with the R of step 2 (not recomputed) and the
+       recorded goal unchanged. With one block nothing is popped. This pop has none of the side effects of the
+       ordinary pop 0x4105a0 (FIGHTER_FLYING §4.11 B 2).
    - **Moving** (the object is following a path):
      1. F speed (+0x21c and +0xa8) := the formation speed (0x41b2a0, slowest member). This resets any earlier cap.
      2. If |L − object position| < R (3D, strict), compute S:
         - S = the object's effective max speed `0x370f00`(company type, object), **not its current speed**;
         - when the object is in a formation whose last block lacks flag 0x10, S = that formation's speed +0x21c (the
           speed it is travelling at).
-     3. The cap is min(F speed, 2 × S). Copy the object's current path into F's path (+0x68, 0x40dbc0); F speed :=
-        the cap.
+     3. The cap is min(F speed, 2 × S). If F's path already equals the object's path (0x40ded0), F speed := the cap
+        and the update **returns** (no re-issue, no step 4). Else copy the object's current path into F's path
+        (+0x68, 0x40dbc0); F speed := the cap; footprint check 0x40eb90(members, 2, 1).
      4. Every member that is not deployed / deploying (or has type +0x23b0 ≠ 0) gets the new path (locomotor
         vf +0x158(0), vf +0x190(path), vf +0x148(0)). Its waypoint index (path +0x60 / +0x64) is set to the object's,
         so the escort joins the object's path at the object's progress.
      5. When the copied path has one node, F state := 3.
      6. Out of R: no copy and no cap (the speed reset above stands); go to step 4.
 4. **Re-path** (when step 3 did not copy), with the last block.
-   - It is skipped when the block's object is fogged for the lead's owner (0x35f470).
+   - It is skipped when the block's object is fogged for the lead's owner (0x35f470, force 1); the update then goes
+     to step 5 (pop when the last block lacks 0x04). Step 3 has no fog test (FIGHTER_FLYING §4.11 C).
    - D = |F recorded goal (+0x210 / +0x214) − the block's current goal point (0x583150)| (2D).
    - **No re-path** when any of these hold:
-     - space, the lead has no TEAM slot, the block is kind 3 on a team object, and 0x4f72e0 accepts it;
-     - space, kind 3, and the lead's and object's locomotor packs share +0x1c4 / +0x1c8 (≠ −1) [L];
-     - D ≤ R, and (the last block is not a non-guard object block, or 0x40edd0, or the object is not moving).
+     - space, the lead has no TEAM slot, the block is kind 3 on a team object, and 0x4f72e0 accepts it
+       (0x4f72e0(F +0x220, the object's current attack target): that target belongs to F's coordinator);
+     - space, kind 3, and the lead's and object's locomotor packs share +0x1c4 / +0x1c8 (≠ −1): the same fighter
+       dogfight cell (FIGHTER_FLYING §5);
+     - D ≤ R, and (the last block is not a non-guard object block, or 0x40edd0 (every member can already hit the
+       object), or the **lead** is not stopping: pack state 0x14 / 0x15, or blocks[0] attack-move and the lead not
+       moving). Corrected 2026-11-03: the earlier "the object is not moving" was wrong.
 
-     In the D ≤ R case, idle members get their speed refreshed in one sub-case [L].
-   - Otherwise, when 0x4165f0 agrees (always for a guard block), it re-paths with 0x417520(members, lead, L, 2) and
-     re-issues the members' paths as in step 3.
+     In the D ≤ R case, a land formation (F +0x228 = 1) with a non-guard object block, every member able to hit the
+     object and the lead not stopping, stops: path cut to its first node, members' locomotors halted when 0x40e7a0
+     agrees (FIGHTER_FLYING §4.11 E) [M for the halt call].
+   - Otherwise, when 0x4165f0 agrees (always for a guard block; the leash test for a block above another,
+     FIGHTER_FLYING §4.11 E) and members[0]'s UNIT_AI does not veto (0x4f5780), it re-paths with
+     0x417520(members, lead, L, 2) and re-issues the members' paths as in step 3 (no waypoint-index copy; with a
+     non-guard object block, members already in range and not moving keep their path).
 5. **No re-path.** Step 4 runs only when n < 2, or when blocks[n−2] is not a guard block with an object, or when
    0x4165f0 agrees. When it ends without re-pathing (0x4165f0 false) or was skipped, and the last block lacks flag
-   0x04 (player order), F re-forms (0x4220d0, when T has a `Space_Layer` and the mode is space) or releases
-   (0x4105a0). A guard last block never gets here, because 0x4165f0 is always true for it.
+   0x04 (player order), F pops its last block (0x4105a0; nothing when n = 1), or, when T has a `Space_Layer` and the
+   mode is space, calls 0x4220d0 instead (clears byte +0x140 of each member's +0xf0 object [L]; no pop). A guard last
+   block gets here only through the fog skip of step 4 (corrected 2026-11-03).
 
 For FIGHTER_FLYING §4.10 E (squadron escorting its carrier):
 - R = min(half the squadron's base attack range, 750).
 - Within R the squadron flies the carrier's own path at its index, capped at 2 × the carrier's max speed (or 2 × the
   carrier formation's speed while the carrier moves in a formation).
 - When the carrier stops with no other queued block, the guard block stays; with a queued block it is popped.
+- A solo fighter guarding an object gets the same cap through its own formation (FIGHTER_FLYING §4.11 F).
 
 ### 33.5 Rule for the port
 
@@ -1869,6 +1893,8 @@ For FIGHTER_FLYING §4.10 E (squadron escorting its carrier):
 > R = half the lead's attack range from the recorded goal; any newer order for a unit removes it from its record
 > (AI save v3, hashed). [port] Not yet: the "turns hostile" and "fogged after arrival" ends of an object guard; unit-level
 > Lua orders, abilities and garrison orders do not supersede statuses; the guard cap constant (0x140b276c0) is [L].
+> RE 2026-11-03 (s78f t02): the cap constants are settled (GC +0x11ec0 `Space_Guard_Range` 750, +0x11ec4
+> `Land_Guard_Range` 150; FIGHTER_FLYING §4.11 G 1).
 
 ## 34. Battles that never end: reserve units, one plan library, slow station sieges (a1i t01 / t02) [H unless tagged]
 
