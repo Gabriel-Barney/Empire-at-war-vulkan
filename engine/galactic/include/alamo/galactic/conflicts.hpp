@@ -204,6 +204,7 @@ public:
     void on_space_conflict(PlanetIndex planet, int32_t attacker) override;
     bool on_invade(int32_t attacker, PlanetIndex planet, std::span<const ObjectHandle> units) override;
     void on_service_tail() override;
+    bool in_queued_conflict(int32_t player) const override;
 
     // ---- direct entry points (Lua / story / tests) ----
     bool initiate_space_conflict(PlanetIndex planet, int32_t attacker, int32_t defender = kNoPlayer,

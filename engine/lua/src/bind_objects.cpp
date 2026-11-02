@@ -831,7 +831,8 @@ int g_find_nearest(Call& c) {
     return 1;
 }
 
-// Spawn_Unit(type, location, player): a table with the spawned unit (a company: its container).
+// Spawn_Unit(type, location, player): a table with the spawned unit (a company: its container). At a planet in a
+// galactic script: GalacticSim::spawn_unit (detail::galactic_spawn_unit), so Assemble_Fleet / Move_To / saves see it.
 int g_spawn_unit(Call& c) {
     if (c.nargs != 3) return c.fail("LuaSpawnUnitCommandClass -- Invalid number of parameters.");
     const Ud* t = c.userdata(1, detail::cls_type());
@@ -844,7 +845,10 @@ int g_spawn_unit(Call& c) {
         return c.fail("LuaSpawnUnitCommandClass -- Invalid parameter for location.");  // [inferred]
     lua_newtable(c.L);
     if (!store(c)) return 1;
-    const ObjectHandle h = spawn(c, static_cast<TypeIndex>(t->value), p->id, pos, loc, true);
+    // a1g t06: at a planet of the galactic sim the unit is placed by the sim (fleet / surface / planet, one company
+    // object); anywhere else it is created directly with its company members.
+    ObjectHandle h = loc ? detail::galactic_spawn_unit(c, static_cast<uint32_t>(t->value), p->id, loc) : ObjectHandle{};
+    if (!h) h = spawn(c, static_cast<TypeIndex>(t->value), p->id, pos, loc, true);
     detail::push_object(c.L, *c.vm, h);
     lua_rawseti(c.L, -2, 1);
     return 1;

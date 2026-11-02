@@ -234,6 +234,13 @@ void galactic_trigger(Call& c, const std::vector<std::pair<objects::ObjectHandle
 bool black_market_allows(Call& c, int32_t player, std::string_view ability_name, bool must_be_bought);
 // --- end P4 lua ---
 
+// a1g t06: Spawn_Unit at a planet in a galactic script (the VM's store is the galactic sim's, `location` is one of its
+// planets): GalacticSim::spawn_unit, so the unit lives in the sim like a produced one (space units in the owner's orbit
+// fleet, companies landed or in a new fleet, ground units on the surface, structures on the planet; one object per
+// company: the members are the company's views, no member objects). Null when not handled (no galactic sim, not a
+// planet, a type without a galactic role): the caller then creates the object directly.
+objects::ObjectHandle galactic_spawn_unit(Call& c, uint32_t type, int32_t player, objects::ObjectHandle location);
+
 // Store tag of a GameObjectWrapper's object (Ud::reserved, LuaVm::Impl::store_tag): 0 the VM's store, 1 the parent
 // mode's store (L1/S4 wave 2b, Get_Parent_Mode_Object).
 inline constexpr int32_t kParentStoreTag = 1;

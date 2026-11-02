@@ -92,16 +92,9 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
             t.bid_planet = t.dest;
         } else if (def.allow_free_store_units) {
             // The free store can supply the unit (0x4d2bd0) -> no charge [M: the unit joins the task force now].
-            ObjectHandle take;
-            for (const ObjectHandle u : free_units(tf.player)) {
-                if (store.type(u) != type) continue;
-                const auto r = unit_reserved.find(store.id(u));
-                if (r != unit_reserved.end() && r->second != pi->pp) continue;
-                if (planet_of_unit(u) == kInvalidPlanet) continue;
-                take = u;
-                break;
-            }
+            const ObjectHandle take = free_store_supply(tf.player, type);
             if (take) {
+                off_free_store(take);
                 tf.units.push_back(take);
                 tf.had_units = true;
                 finish_build(t);
@@ -118,6 +111,15 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
     }
     tf.wanted.clear();
     tf.wanted_source.clear();
+}
+
+// 0x4d2bd0 (a1h t07): the first free-store unit of `type` at a planet. It does not read the entry's +0x30 owner
+// (A1_READINGS §28.5), so a unit another PotentialPlan reserved can be taken; that plan's validity test (0x6c45e0)
+// then fails at the next Commit.
+ObjectHandle GalacticAiWorld::Impl::free_store_supply(int32_t player, uint32_t type) const {
+    for (const ObjectHandle u : free_units(player))
+        if (store.type(u) == type && planet_of_unit(u) != kInvalidPlanet) return u;
+    return {};
 }
 
 void GalacticAiWorld::Impl::finish_build(BuildTask& b) {

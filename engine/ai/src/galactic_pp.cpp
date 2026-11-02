@@ -65,6 +65,7 @@ struct GalPp {
     int32_t category;
     float time_limit;
     int reach_level;
+    bool first_solve = true;  // PP+0x104 == 0 (Init at proposal): FreeStore Setup A ignores +0x30
 
     std::vector<PpRec> recs;
     std::map<uint32_t, uint32_t> rec_of_type;  // dedup set (keyed by type index)
@@ -300,8 +301,8 @@ public:
         const std::vector<int32_t> hops = p_.has_target() ? p_.w.hops_to(p_.tplanet()) : std::vector<int32_t>{};
         for (const ObjectHandle u : p_.w.free_units(p_.player)) {
             const objects::ObjectId id = p_.w.store.id(u);
-            const auto res = p_.w.unit_reserved.find(id);
-            if (res != p_.w.unit_reserved.end()) continue;  // reserved by another PP (+0x30)
+            // A candidate needs PP+0x104 == 0 (the first solve) or +0x30 == 0 (A1_READINGS §28.5).
+            if (!p_.first_solve && p_.w.unit_reserved.count(id) != 0) continue;
             const PlanetIndex at = p_.w.planet_of_unit(u);
             if (at == kInvalidPlanet) continue;  // moving / in transit
             const gal::TypeInfo* x = p_.ti(p_.w.store.type(u));
@@ -951,8 +952,9 @@ const std::vector<uint32_t>& GalacticAiWorld::Impl::team_type_list(uint32_t plan
 }
 
 bool GalacticAiWorld::Impl::solve_potential_plan(PlayerAi& pa, uint32_t plan, uint32_t goal_type, int32_t target,
-                                                 PotentialPlanRec& out) {
+                                                 PotentialPlanRec& out, bool first_solve) {
     GalPp pp(*this, pa, plan, goal_type, target);
+    pp.first_solve = first_solve;
     // Reset 0x6c3080: PP+0x30 = category available, +0x34 = its rate, +0x38 = +0x30.
     pp.avail = pa.ctx.budget.available(pp.category);
     pp.rate = pa.ctx.budget.rate(pp.category);
@@ -1025,20 +1027,81 @@ bool GalacticAiWorld::Impl::solve_potential_plan(PlayerAi& pa, uint32_t plan, ui
         s.source = pp.sel_source[i];
         s.queue = pp.sel_queue[i];
         s.btime = pp.sel_btime[i];
+        if (s.unit) out.reserved_units.push_back(store.id(s.unit));  // PP+0x108
         out.sel.push_back(s);
     }
     return true;
 }
 
+// The galactic free store is derived: the player's live units no task force holds (free_units).
+bool GalacticAiWorld::Impl::on_free_store(int32_t player, objects::ObjectId id) const {
+    const ObjectHandle u = store.find(id);
+    if (!store.alive(u) || store.owner(u) != player || tf_owns(u)) return false;
+    for (const ObjectHandle f : player_units(player))
+        if (f == u) return true;
+    return false;
+}
+
+// 0x6c4a50 (A1_READINGS §28.6 step 3): the new proposal's PP is solved again (PP+0x104 >= 1: units another PP reserved
+// are skipped, PP+0x108 rebuilt); a failed solve = the plan cannot be activated. [M] 0x6c4a50 runs the same solver
+// 0x6c3da0, so the re-solve draws its own synced numbers in Resolve_Category order. The goal keeps Init's cost / ETA
+// (+0x78 / +0x7c) [M: 0x6c4a50 is not read to copy them]. A proposal's PP has no queue or unit reservation yet (both
+// start at its accept), so the record is replaced.
+bool GalacticAiWorld::Impl::resolve_pp(PlayerAi& pa, const Goal& g) {
+    const auto it = pps.find(g.pp_handle);
+    if (it == pps.end()) return false;
+    PotentialPlanRec rec;
+    if (!solve_potential_plan(pa, it->second.plan, g.type, g.target, rec, false)) {
+        ++stats[defs.goals[g.type].name + " re-solve failed (" + library.plans[it->second.plan].name + ")"];
+        return false;
+    }
+    rec.contrast_ok = it->second.contrast_ok;
+    it->second = std::move(rec);
+    return true;
+}
+
+// 0x6c2d60 -> 0x6c2b20 (A1_READINGS §28.4): +0x30 = this PP for every PP+0x108 unit still on the free store,
+// overwriting any other PP's value (no check).
 void GalacticAiWorld::Impl::reserve_pp_units(int32_t handle) {
     const auto it = pps.find(handle);
     if (it == pps.end()) return;
-    for (const PpSelection& s : it->second.sel)
-        if (s.unit) {
-            const objects::ObjectId id = store.id(s.unit);
-            unit_reserved[id] = handle;  // free-store entry +0x30
-            it->second.reserved_units.push_back(id);
-        }
+    for (const objects::ObjectId id : it->second.reserved_units)
+        if (on_free_store(it->second.player, id)) unit_reserved[id] = handle;
+}
+
+// 0x6c0be0 at Commit start (§28.6 step 2): the PP's +0x30 entries are cleared until 0x6c2d60 re-asserts them.
+void GalacticAiWorld::Impl::suspend_pp_units(int32_t handle) {
+    const auto it = pps.find(handle);
+    if (it == pps.end()) return;
+    for (const objects::ObjectId id : it->second.reserved_units) {
+        const auto r = unit_reserved.find(id);
+        if (r != unit_reserved.end() && r->second == handle) unit_reserved.erase(r);
+    }
+}
+
+// 0x6c45e0 (from 0x6c47c0): invalid when a PP+0x108 unit still on the free store is reserved by another PP.
+bool GalacticAiWorld::Impl::pp_stolen(int32_t handle) const {
+    const auto it = pps.find(handle);
+    if (it == pps.end()) return false;
+    for (const objects::ObjectId id : it->second.reserved_units) {
+        const auto r = unit_reserved.find(id);
+        if (r != unit_reserved.end() && r->second != handle && on_free_store(it->second.player, id)) return true;
+    }
+    return false;
+}
+
+// 0x6c27d0 (PP, unit) for a unit leaving a task force of plan `plan_id`: +0x30 = 0 if it is the plan's PP, and the unit
+// leaves PP+0x108 (later re-asserts skip it). The galactic free store takes it back by itself (derived).
+void GalacticAiWorld::Impl::pp_unit_left(int32_t plan_id, ObjectHandle u) {
+    const auto pit = plans.find(plan_id);
+    if (pit == plans.end() || pit->second.pp < 0) return;
+    const auto it = pps.find(pit->second.pp);
+    if (it == pps.end()) return;
+    const objects::ObjectId id = store.id(u);
+    const auto r = unit_reserved.find(id);
+    if (r != unit_reserved.end() && r->second == pit->second.pp) unit_reserved.erase(r);
+    auto& v = it->second.reserved_units;
+    v.erase(std::remove(v.begin(), v.end(), id), v.end());
 }
 
 void GalacticAiWorld::Impl::release_pp(int32_t handle) {

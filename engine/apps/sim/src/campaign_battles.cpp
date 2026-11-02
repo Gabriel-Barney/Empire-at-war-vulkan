@@ -20,6 +20,7 @@ public:
     bool on_invade(int32_t attacker, PlanetIndex planet, std::span<const objects::ObjectHandle> units) override {
         return b_->cm_->on_invade(attacker, planet, units);
     }
+    bool in_queued_conflict(int32_t player) const override { return b_->cm_->in_queued_conflict(player); }
     void on_service_tail() override {
         // BT §1.4 step 2: in single player, while a story / tutorial sequence is active and the local (human) player is
         // attacker or defender of any queued conflict, nothing of the conflict processing runs this tick.

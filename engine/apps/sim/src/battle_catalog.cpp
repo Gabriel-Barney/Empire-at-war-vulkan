@@ -95,6 +95,7 @@ BattleCatalog::BattleCatalog(const objects::GameObjectTypes& types, const FilePr
         land_capture_countdown_ = constants->get_float("Land_Capture_Allowed_Countdown_Seconds", land_capture_countdown_);
         space_capture_countdown_ = constants->get_float("Space_Capture_Allowed_Countdown_Seconds", space_capture_countdown_);
         garrisoned_range_mult_ = constants->get_float("Garrisoned_Max_Attack_Distance_Multiplier", garrisoned_range_mult_);
+        use_reinforcement_points_ = constants->get_bool("Use_Reinforcement_Points", use_reinforcement_points_);  // a1h t06
         threat_decay_step_ = constants->get_float("AI_SpaceThreatDecayStep", threat_decay_step_);
         engines_disabled_speed_ = constants->get_float("Engines_Disabled_Speed_Modifier", engines_disabled_speed_);
         nebula_ability_disable_ = constants->get_float("Nebula_Ability_Disable_Time", nebula_ability_disable_);
@@ -473,9 +474,11 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
         u.hardpoints.push_back(static_cast<uint32_t>(h));
         weapon_hp = weapon_hp || tc::is_weapon(s.d->hardpoints[static_cast<size_t>(h)].kind);
     }
-    // Non-hardpoint weapon (WeaponBehavior): Projectile_Types, when no weapon hardpoint fires [M].
+    // Non-hardpoint weapon (WeaponBehavior): Projectile_Types, when no weapon hardpoint fires [M], or when the type lists the
+    // WEAPON behaviour (0x0A, WeaponBehaviorClass, serviced besides the hard points; a1h t01: M1_Repulsor_Tank, the only FoC
+    // type with both, fires its Proj_M1_Laser_Cannon at vehicles - its HP_2M_Tank_00 excludes Air / Vehicle / Structure).
     const auto projs = ty.get_list(t, "Projectile_Types");
-    if (!weapon_hp && !projs.empty()) {
+    if ((!weapon_hp || ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Weapon)) && !projs.empty()) {
         const objects::TypeIndex pt = ty.resolve_name(trim(projs.front()));
         if (pt != objects::kNone) {
             u.weapon_projectile = projectile(static_cast<uint32_t>(pt), s);

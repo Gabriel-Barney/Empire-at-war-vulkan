@@ -389,6 +389,14 @@ bool ConflictManager::on_invade(int32_t attacker, PlanetIndex planet, std::span<
     return land_invade(planet, std::vector<ObjectHandle>(units.begin(), units.end()), attacker);
 }
 
+bool ConflictManager::in_queued_conflict(int32_t player) const {
+    if (player == kNoPlayer) return false;
+    for (const std::vector<ConflictInfo>* q : {&space_q_, &land_q_})
+        for (const ConflictInfo& c : *q)
+            if (c.attacker == player || c.defender == player) return true;
+    return false;
+}
+
 void ConflictManager::refresh_in_battle(PlanetIndex planet) {
     bool on = false;
     for (const ConflictInfo& c : space_q_) on = on || c.planet == planet;

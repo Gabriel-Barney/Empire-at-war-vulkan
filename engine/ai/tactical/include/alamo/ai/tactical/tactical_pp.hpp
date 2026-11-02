@@ -5,7 +5,8 @@
 //
 // The solve runs where the galactic one does: in Find_Plan_For_Goal at proposal time (slot 10, land and space
 // 0x6b8850), so its synced draws (Plan Setup C ints, IgnoreTarget contrast floats) happen during proposal, in cursor
-// order. A failed solve rejects the candidate. The solved selection is what Produce_Force gathers.
+// order. A failed solve rejects the candidate. The accept in Resolve_Category solves it again (0x6c4a50, A1_READINGS
+// §28.6), drawing again. The solved selection is what Produce_Force gathers.
 //
 // The input is a plain snapshot (filled by TacticalAiWorld from its PerceptionWorld, free store, the host's
 // reinforcement pool and build pads), so the solver is testable without a world. Candidates are object TYPES
@@ -36,7 +37,7 @@ struct PpFreeUnit {
     int32_t type = -1;        // PerceptionWorld type index (own type)
     Vec3f position;
     float health = 1.0f;      // hull fraction
-    bool reserved = false;    // entry +0x30: reserved by another PotentialPlan of this player
+    bool reserved = false;    // Setup A skip: entry +0x30 set and not the PP's first solve (A1_READINGS §28.5; host fills)
     // FreeStore distance key over the TF stages (AI_GALACTIC_3 §1.2, A1_READINGS §25.3), computed by the host:
     // (Σ finite Low_Threat path cost² from the unit's zone + Σ 2-D distance² to each stage) / stages, when at least one
     // cost was finite; < 0 = none finite (the key is then the 2-D distance² to the goal target).

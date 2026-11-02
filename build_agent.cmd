@@ -16,6 +16,7 @@ set B=build-%~2-%~1
 set LOG=logs\agent_%~2_%~1.txt
 if not exist logs mkdir logs
 call "%TC%\msvc\setup_x64.bat" >nul
+call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
 set PATH=%TC%\llvm\bin;%TC%\venv\Scripts;%PATH%
 if /i "%~1"=="clang" (
