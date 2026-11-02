@@ -483,12 +483,16 @@ Called from 0x4b2ef0 inside the fiscal cycle's payment loop, per player right af
   §1.6; q2f t01, 2026-11-02) [H]:
   - G null → 1e18. G not activated (goal state +0x74 ≤ 0; −1 at creation, 1 after activation 0x693550, 3 after
     deactivation 0x693750) → G's ETA (+0x7c).
-  - Otherwise, over the execution system's build tasks (list +0x40, list order), each task X that is on a planet build
-    queue (X +0xc8 = that AIPlanetBuildQueue Q) and either has no task force (+0xa0 null) or whose plan's goal is G:
-    - Q has no planet (Q +0x28 null): A = max(A, btime(X's type, no planet)) (0x371230).
-    - Otherwise B = max(B, wait + btime(X's type, Q's planet)), wait = 0x53bb20(Q, 0, X) below.
+  - Otherwise, over the execution system's build tasks (list +0x40, list order), each task X that has a bid record
+    (X +0xc8) and either has no task force (+0xa0 null) or whose plan's goal is G:
+    - The bid record (0x58 bytes, 0x6954b0) is made when the task enters PRODUCTION_QUEUED (state 0x17: 0x648980,
+      0x6492f0); its +0x28 is the bid planet (null until a planet bids; 0x695a30 resets it). Production start
+      (0x64abf0) and the task's end (0x64ad00) release it, so a producing task adds nothing.
+    - No bid planet: A = max(A, btime(X's type, no planet)) (0x371230).
+    - Bid planet P: B = max(B, wait + btime(X's type, P)), wait = 0x53bb20(Q, 0, X) below with Q = P's
+      AIPlanetBuildQueue for X's queue index (0x559b40(P +0xd0, index): 1 unless the type is a ground company /
+      structure, by type +0x86c / +0xf0c / behaviour 0x5F).
   - Returns A + B (0 when no task matches).
-  - Tasks that are not on any planet queue (still on the global market with no bid) add nothing.
 - **Queue wait 0x53bb20(Q, extra, X)** [H]:
   - Without X: Q +0x50 (the queue's own running total), plus 0x53bda0(Q) when `extra`.
   - With X: wait = the current item's remaining time (0x401ba0, as the market's step 1). If Q has a task list (+0x10)
