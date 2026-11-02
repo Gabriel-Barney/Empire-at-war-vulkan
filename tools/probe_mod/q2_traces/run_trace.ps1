@@ -7,7 +7,9 @@ Q2 reference traces: one recorded run of the original game (FoC Steam x64 1.121)
   -Scenario skirmish   space skirmish, hands-off; stops after -Ticks logic ticks
   -Mod vanilla|tr      vanilla FoC (default) or Thrawn's Revenge (STEAMMOD=1125571106); -ModArg overrides
   -LuaProbe            also install the Lua probe (vanilla only; mod folder Mods\Q2Trace): galactic = story plot script,
-                       skirmish = the game's GameScoring.lua with a read-only tactical probe appended
+                       skirmish = the game's GameScoring.lua with a read-only tactical probe appended. Its records are
+                       collected by q2lua_reader.py (read-only memory scan, docs/re/LUA_SCRIPT_OUTPUT.md) into
+                       lua_records.txt / lua_perception.tsv / lua_summary.json; run_status.json -> lua_canary / lua
   -Days 10 -Ticks 5400 -KeyEvery 300
   -WaitSessionMin 20   time allowed for menus + loading before the trace starts
   -TimeoutMin 30       hard limit for the traced part
@@ -119,6 +121,9 @@ Write-Q2 "run $runId"
 Write-Q2 "game    $root (sha256 ok)"
 Write-Q2 "args    StarWarsG.exe $($gameArgs -join ' ')"
 Write-Q2 "reader  q2reader.exe $($readerArgs -join ' ')"
+$luaReaderArgs = @('-I', ('"' + (Join-Path $Q2Kit 'q2lua_reader.py') + '"'), 'run', '--run-dir', ('"' + $runDir + '"'),
+                   '--wait-process-sec', $(if ($NoLaunch) { $waitSec } else { 180 }))
+if ($LuaProbe) { Write-Q2 "lua     python $($luaReaderArgs -join ' ') (below-normal priority)" }
 Write-Q2 "output  $runDir"
 Write-Q2 "folder  $($folderBefore.summary)"
 Write-Q2 "driver  $(if ($useDriver) { 'q2_ui.py drive ' + $Scenario } else { 'off (drive the menus by hand)' })"
@@ -145,6 +150,15 @@ try {
     $quoted = $readerArgs | ForEach-Object { $s = [string]$_; if ($s -match '[\s"]') { '"' + $s.Replace('"', '\"') + '"' } else { $s } }
     $readerProc = Start-Process -FilePath $reader -ArgumentList ($quoted -join ' ') -PassThru -WindowStyle Hidden
     $manifest.reader_pid = $readerProc.Id; Write-Q2Json $manifestPath $manifest
+    if ($LuaProbe) {
+        # Lua records: retail _CustomScriptMessage writes no file, so the probe keeps them in the game's memory
+        $luaProc = Start-Process -FilePath $Q2Python -ArgumentList ($luaReaderArgs -join ' ') -PassThru -WindowStyle Hidden
+        try { $luaProc.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal } catch { }
+        $manifest.lua_reader_pid = $luaProc.Id
+        $manifest.lua_reader_start_utc = $luaProc.StartTime.ToUniversalTime().ToString('o')
+        Write-Q2Json $manifestPath $manifest
+        Write-Q2 "lua reader started (pid $($luaProc.Id))"
+    }
     if (-not $NoLaunch) {
         $game = Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -ArgumentList ($gameArgs -join ' ') -PassThru
         $manifest.game_pid = $game.Id
@@ -192,6 +206,10 @@ try {
 } finally {
     Write-Q2 'cleanup (always)'
     if ($driverProc -and -not $driverProc.HasExited) { Stop-Process -Id $driverProc.Id -Force -ErrorAction SilentlyContinue }
+    if ($LuaProbe -and (Test-Path -LiteralPath (Join-Path $root "corruption\Mods\$Q2ModName"))) {
+        $status.lua_canary = Get-Q2CanaryState $root
+        Write-Q2 "lua canary: galactic $($status.lua_canary.galactic); scoring $($status.lua_canary.scoring)"
+    }
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Q2Kit 'cleanup.ps1') -RunDir $runDir
     $cleanExit = $LASTEXITCODE
     $status.cleanup_exit = $cleanExit
@@ -219,6 +237,16 @@ if ((Test-Path -LiteralPath $trace) -and (Get-Item -LiteralPath $trace).Length -
     $status.validate_exit = $LASTEXITCODE
     & $Q2Python -I (Join-Path $Q2Kit 'q2trace.py') to-q1 $trace $q1
     $status.summary = $summary; $status.q1 = $q1
+}
+if ($LuaProbe) {
+    # rebuilds the outputs from lua_reader.log, also when cleanup had to stop the reader before it wrote them
+    & $Q2Python -I (Join-Path $Q2Kit 'q2lua_reader.py') summarize --run-dir $runDir | Out-Null
+    $ls = Read-Q2Json (Join-Path $runDir 'lua_summary.json')
+    if ($ls) {
+        $status.lua = [ordered]@{ records = $ls.records; galactic = $ls.scripts.G.verdict; scoring = $ls.scripts.T.verdict
+                                  errors = @($ls.errors).Count }
+        Write-Q2 "lua: galactic $($ls.scripts.G.verdict); scoring $($ls.scripts.T.verdict)"
+    }
 }
 $code = 30
 if ($status.trace) { $code = $(if ($readerExit -eq 0) { 0 } else { 10 }) }

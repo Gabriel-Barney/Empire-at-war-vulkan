@@ -1115,29 +1115,81 @@ end
 -- Q2 reference traces (tools/probe_mod/q2_traces): tactical Lua probe, appended to an unchanged copy of
 -- the game's own GameScoring.lua (the scoring script is the one Lua script that runs in a skirmish).
 -- Read-only: it calls no GameRandom, spawns nothing, gives no orders and changes no scoring state.
--- Only in tactical modes (the galactic probe is Q2_Trace_Galactic.lua). Output through _CustomScriptMessage:
---   Q2TLUA 1 ...                                        script loaded
---   TMODE start|end <mode> <map> frame <f>              mode events
---   TSAMPLE frame <f> time <s>                          at most once per game second (ServiceRate 1)
---   TPLAYER <faction> id <id> credits <c> tech <t> objects <n>
---   TKILL frame <f> type <T> owner <id> killer <id>     Tactical_Unit_Destroyed_Event
---   TBUILT frame <f> type <T> player <id>               Tactical_Production_End_Event
--- The original GameService still runs every 10th service, as at its own ServiceRate 10.
+--
+-- Output channel (docs/re/LUA_SCRIPT_OUTPUT.md): retail 1.121 writes no file for _CustomScriptMessage, so every line
+-- is kept as a Lua string "Q2L1|T|<sid>|<seq>|<KIND>|<text>|END" in Q2L_Records, found by q2lua_reader.py (read-only
+-- memory scan). The first _CustomScriptMessage call deletes the canary file Mods\Q2Trace\Q2Trace_Canary_Scoring.txt
+-- (retail DeleteFileA on first use of a name), which proves the script ran even without the scan.
+-- Kinds:
+--   LOAD / CANARY / DEF                                   script loaded (every GameScoring instance)
+--   TMODE start|end mode=<mode> map=<map> lframe=<f>      mode events
+--   TSAMPLE why=<event|service|thread> lframe=<f> time=<s>   at most once per game second, then one
+--   TPLAYER faction=<f> id=<id> credits=<c> tech=<t> objects=<n>   per faction
+--   TKILL lframe=<f> type=<T> owner=<id> killer=<id>      Tactical_Unit_Destroyed_Event
+--   TBUILT lframe=<f> type=<T> player=<id>                Tactical_Production_End_Event
+--   SERVICE / THREAD                                      first GameService call; sampling thread start / end
+--   ERR                                                   each distinct pcall error once
+-- Sampling: retail never calls GameScoring's GameService (its main() loop does not run: TSW probe 2026-10-31), so
+-- samples are taken on the scoring events and by a Create_Thread loop started at each tactical mode start (whether
+-- that thread is serviced is itself recorded: THREAD start). The GameService wrapper stays for the case it runs.
 --/////////////////////////////////////////////////////////////////////////////////////////////////
 
-Q2T_FILE = "Q2Trace_Lua.txt"
+Q2L_NEEDLE = "Q2L" .. "1|T|"
+Q2L_CANARY = "Mods\\Q2Trace\\Q2Trace_Canary_Scoring.txt"
+Q2L_MAX = 20000
 Q2T_FACTIONS = { "Empire", "Rebel", "Underworld", "Pirates" }
+
+if Q2L_Records == nil then
+	Q2L_Records = {}
+	Q2L_Seq = 0
+	Q2L_Sid = string.gsub(tostring(Q2L_Records), "^table: ", "")
+	Q2L_Errors = {}
+end
 Q2T_Services = 0
 Q2T_LastSample = -1000
+Q2T_Mode = 0
 
-function Q2T_Log(line)
-	_CustomScriptMessage(Q2T_FILE, line .. "\n")
+function Q2L_Say(kind, text)
+	if Q2L_Seq >= Q2L_MAX then
+		return
+	end
+	Q2L_Seq = Q2L_Seq + 1
+	local s = string.gsub(tostring(text), "[^ -~]", "?")
+	s = string.gsub(s, "|", "/")
+	s = string.sub(s, 1, 320)
+	Q2L_Records[Q2L_Seq] = Q2L_NEEDLE .. Q2L_Sid .. "|" .. Q2L_Seq .. "|" .. kind .. "|" .. s .. "|END"
 end
 
-function Q2T_Frame()
-	local ok, f = pcall(function() return GetCurrentTime.Frame() end)
-	if ok then return tostring(f) end
+function Q2L_Error(where, err)
+	local key = where .. " " .. tostring(err)
+	if Q2L_Errors[key] == nil then
+		Q2L_Errors[key] = true
+		Q2L_Say("ERR", key)
+	end
+end
+
+function Q2L_Str(f)
+	local ok, v = pcall(f)
+	if ok and v ~= nil then
+		return tostring(v)
+	end
 	return "?"
+end
+
+function Q2L_Canary()
+	if Q2L_CanaryDone then
+		return
+	end
+	Q2L_CanaryDone = true
+	local ok, err = pcall(_CustomScriptMessage, Q2L_CANARY, "q2 canary\n")
+	Q2L_Say("CANARY", "file=" .. Q2L_CANARY .. " ok=" .. tostring(ok) .. " err=" .. tostring(err))
+end
+
+Q2L_Say("LOAD", "GameScoring probe chunk ran")
+Q2L_Canary()
+
+function Q2T_Frame()
+	return Q2L_Str(function() return GetCurrentTime.Frame() end)
 end
 
 function Q2T_Tactical()
@@ -1146,47 +1198,63 @@ end
 
 function Q2T_PlayerId(p)
 	if p == nil then return "nil" end
-	local ok, id = pcall(function() return p.Get_ID() end)
-	if ok then return tostring(id) end
-	return "?"
+	return Q2L_Str(function() return p.Get_ID() end)
 end
 
 function Q2T_TypeName(t)
 	if t == nil then return "nil" end
-	local ok, n = pcall(function() return t.Get_Name() end)
-	if ok and n then return tostring(n) end
-	return "?"
+	return Q2L_Str(function() return t.Get_Name() end)
 end
 
-function Q2T_Sample()
-	Q2T_Log(string.format("TSAMPLE frame %s time %s", Q2T_Frame(), tostring(GetCurrentTime())))
+function Q2T_Sample(why)
+	Q2L_Say("TSAMPLE", "why=" .. why .. " lframe=" .. Q2T_Frame() .. " time=" .. Q2L_Str(GetCurrentTime))
 	for _, name in ipairs(Q2T_FACTIONS) do
 		local p = Find_Player(name)
 		if p then
-			local ok, credits = pcall(function() return p.Get_Credits() end)
-			local ok2, tech = pcall(function() return p.Get_Tech_Level() end)
-			local ok3, objs = pcall(function() return Find_All_Objects_Of_Type(p) end)
-			local n = "?"
-			if ok3 and objs then n = tostring(table.getn(objs)) end
-			Q2T_Log(string.format("TPLAYER %s id %s credits %s tech %s objects %s", name, Q2T_PlayerId(p),
-				tostring(ok and credits), tostring(ok2 and tech), n))
+			local n = Q2L_Str(function() return table.getn(Find_All_Objects_Of_Type(p)) end)
+			Q2L_Say("TPLAYER", "faction=" .. name .. " id=" .. Q2T_PlayerId(p) ..
+				" credits=" .. Q2L_Str(function() return p.Get_Credits() end) ..
+				" tech=" .. Q2L_Str(function() return p.Get_Tech_Level() end) .. " objects=" .. n)
 		end
 	end
 end
 
+-- At most one sample per game second, only in tactical modes.
+function Q2T_MaybeSample(why)
+	if not Q2T_Tactical() then
+		return
+	end
+	local ok, t = pcall(GetCurrentTime)
+	if ok and t ~= nil and t - Q2T_LastSample >= 1.0 then
+		Q2T_LastSample = t
+		local ok2, err = pcall(Q2T_Sample, why)
+		if not ok2 then
+			Q2L_Error("Q2T_Sample", err)
+		end
+	end
+end
+
+function Q2T_Thread(n)
+	Q2L_Say("THREAD", "start mode=" .. tostring(n) .. " lframe=" .. Q2T_Frame())
+	while Q2T_Mode == n and Q2T_Tactical() do
+		Q2T_MaybeSample("thread")
+		Sleep(1)
+	end
+	Q2L_Say("THREAD", "end mode=" .. tostring(n) .. " lframe=" .. Q2T_Frame())
+end
+
 function Definitions()
+	Q2L_Say("DEF", "Definitions ran lframe=" .. Q2T_Frame())
 	ServiceRate = 1
-	Q2T_Log("Q2TLUA 1 loaded frame " .. Q2T_Frame())
 end
 
 Q2T_Orig_GameService = GameService
 function GameService()
 	Q2T_Services = Q2T_Services + 1
-	local t = GetCurrentTime()
-	if Q2T_Tactical() and t ~= nil and t - Q2T_LastSample >= 1.0 then
-		Q2T_LastSample = t
-		pcall(Q2T_Sample)
+	if Q2T_Services == 1 then
+		Q2L_Say("SERVICE", "first GameService call lframe=" .. Q2T_Frame())
 	end
+	Q2T_MaybeSample("service")
 	if math.mod(Q2T_Services, 10) == 0 and Q2T_Orig_GameService then
 		Q2T_Orig_GameService()
 	end
@@ -1194,34 +1262,43 @@ end
 
 Q2T_Orig_Mode_Starting = Game_Mode_Starting_Event
 function Game_Mode_Starting_Event(mode_name, map_name)
-	pcall(function() Q2T_Log(string.format("TMODE start %s %s frame %s", tostring(mode_name), tostring(map_name), Q2T_Frame())) end)
+	Q2L_Say("TMODE", "start mode=" .. tostring(mode_name) .. " map=" .. tostring(map_name) .. " lframe=" .. Q2T_Frame())
 	Q2T_LastSample = -1000
+	Q2T_Mode = Q2T_Mode + 1
 	Q2T_Orig_Mode_Starting(mode_name, map_name)
+	if Q2T_Tactical() then
+		local ok, err = pcall(Create_Thread, "Q2T_Thread", Q2T_Mode)
+		if not ok then
+			Q2L_Error("Create_Thread", err)
+		end
+		Q2T_MaybeSample("event")
+	end
 end
 
 Q2T_Orig_Mode_Ending = Game_Mode_Ending_Event
 function Game_Mode_Ending_Event(mode_name)
-	pcall(function() Q2T_Log(string.format("TMODE end %s - frame %s", tostring(mode_name), Q2T_Frame())) end)
+	Q2L_Say("TMODE", "end mode=" .. tostring(mode_name) .. " map=- lframe=" .. Q2T_Frame())
+	Q2T_Mode = Q2T_Mode + 1
 	Q2T_Orig_Mode_Ending(mode_name)
 end
 
 Q2T_Orig_Unit_Destroyed = Tactical_Unit_Destroyed_Event
 function Tactical_Unit_Destroyed_Event(object, killer)
-	pcall(function()
-		local t, owner = "?", "?"
-		local ok, ty = pcall(function() return object.Get_Type() end)
-		if ok then t = Q2T_TypeName(ty) end
-		local ok2, o = pcall(function() return object.Get_Owner() end)
-		if ok2 then owner = Q2T_PlayerId(o) end
-		Q2T_Log(string.format("TKILL frame %s type %s owner %s killer %s", Q2T_Frame(), t, owner, Q2T_PlayerId(killer)))
+	local ok, err = pcall(function()
+		local t = Q2L_Str(function() return object.Get_Type().Get_Name() end)
+		local owner = Q2L_Str(function() return object.Get_Owner().Get_ID() end)
+		Q2L_Say("TKILL", "lframe=" .. Q2T_Frame() .. " type=" .. t .. " owner=" .. owner .. " killer=" .. Q2T_PlayerId(killer))
 	end)
+	if not ok then
+		Q2L_Error("TKILL", err)
+	end
+	Q2T_MaybeSample("event")
 	Q2T_Orig_Unit_Destroyed(object, killer)
 end
 
 Q2T_Orig_Production_End = Tactical_Production_End_Event
 function Tactical_Production_End_Event(object_type, player, location)
-	pcall(function()
-		Q2T_Log(string.format("TBUILT frame %s type %s player %s", Q2T_Frame(), Q2T_TypeName(object_type), Q2T_PlayerId(player)))
-	end)
+	Q2L_Say("TBUILT", "lframe=" .. Q2T_Frame() .. " type=" .. Q2T_TypeName(object_type) .. " player=" .. Q2T_PlayerId(player))
+	Q2T_MaybeSample("event")
 	Q2T_Orig_Production_End(object_type, player, location)
 end
