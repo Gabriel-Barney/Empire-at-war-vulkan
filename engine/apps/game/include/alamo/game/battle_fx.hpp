@@ -10,8 +10,14 @@
 //                     PlanetDestroyed state 9 with a live target dummy: camera shake (0x2cdbb0, §11.1) at the dummy and
 //                                     its type's Death_SFXEvent_Start_Die; the sim has killed the dummy (silently) and
 //                                     spawned the Death_Explosions pick (`pick`) in the same tick.
+//                     LobChargeup     S8 t31 (TACTICAL_COMBAT.md "Charge-up"): a LOBBING_SUPERWEAPON unit was aimed at its
+//                                     fire-at-position point: its type's Lobbing_Superweapon_SFXEvent_Chargeup and the
+//                                     Lobbing_Superweapon_Chargeup_Particle on Lobbing_Superweapon_Chargeup_Particle_Bone_Name
+//                     LobCharged      its Lobbing_Superweapon_Chargeup_Frames ran out (the order is charged):
+//                                     Lobbing_Superweapon_SFXEvent_Fire
 //                   Read right after the battle tick: the dummy killed at state 9 is still in the store (dead, not
 //                   flushed until the next tick's store update), so its type is readable. No dummy (§4 step 3) = no cue.
+//   track_lob_chargeups  the charge-ups whose particle is shown (BattleView attaches it to the unit's bone).
 //   noise / ease    §11.1: Perlin's improved gradient noise with the CUBIC fade, its 3-octave fBm, the shake envelope
 //                   (0x7da450) and the shot's trapezoid speed profile (0x49bb40).
 //   CameraShake     §11.1 CameraEffectTrackers of the cinematic controller: each {effect, start, duration} is evaluated at
@@ -41,17 +47,25 @@ class GameObjectTypes;
 namespace alamo::game {
 
 struct TswCue {
-    enum class Kind : uint8_t { Firing, AttackAnim, PlanetDestroyed };
+    enum class Kind : uint8_t { Firing, AttackAnim, PlanetDestroyed, LobChargeup, LobCharged };
     Kind kind = Kind::Firing;
-    objects::ObjectId object = objects::kNoObjectId;  // the TSW (Firing / AttackAnim) or the target dummy (PlanetDestroyed)
+    objects::ObjectId object = objects::kNoObjectId;  // the TSW (Firing / AttackAnim), the target dummy (PlanetDestroyed)
+                                                      // or the lobbing unit (LobChargeup / LobCharged)
     objects::TypeIndex type = objects::kNone;         // that object's type
     tactical::Vec3 position;                          // the object's position (PlanetDestroyed: the dummy's point)
     objects::ObjectId target = objects::kNoObjectId;  // Firing / AttackAnim: the target dummy (kNoObjectId when none)
     int32_t pick = 0;                                 // PlanetDestroyed: index of the Death_Explosions entry the sim spawned
+    uint32_t frame = 0;                               // LobChargeup / LobCharged: the battle frame of the event
 };
 
 // In event order. Events whose object is not in `store` (flushed / unknown) give no cue.
 std::vector<TswCue> tsw_cues(std::span<const tactical::abilities::SpecialWeaponEvent> events, const objects::ObjectStore& store);
+
+// S8 t31: `active` = the charge-ups whose Lobbing_Superweapon_Chargeup_Particle is shown, in start order. A LobChargeup
+// cue adds its unit (a unit already listed is restarted: new frame, moved to the end), a LobCharged cue removes it. The
+// host also drops the units whose order is gone (cancelled, unit dead: CombatSystem::fire_at_position_state != 1)
+// [port: the particle is listed for the charge-up only; the spec just "starts" it].
+void track_lob_chargeups(std::vector<TswCue>& active, std::span<const TswCue> cues);
 
 // ---- §11.1 noise and envelopes --------------------------------------------------------------------------------------
 inline constexpr int32_t kCinematicFps = 30;  // FPS of the cinematic controller (frames = tactical frames)

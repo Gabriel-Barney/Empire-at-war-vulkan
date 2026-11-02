@@ -356,6 +356,8 @@ bool GalacticView::settled() const { return models_ && models_->all_finished(); 
 // ------------------------------------------------------------------------------------------------ battle
 bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& session, uint32_t width, uint32_t height, std::string* err) {
     gpu_ = &gpu;
+    types_ = &data.types;
+    lob_chargeups_.clear();
     local_ = session.local_player();
     const sim::TacticalBattle* b = session.battle();
     const sim::TacticalMode* tm = session.host().modes().top_tactical();
@@ -561,6 +563,7 @@ bool BattleView::kill_nearest_move_ack(ui::Vec3 p) {
 
 void BattleView::stop(GpuCore& gpu) {
     acks_.clear();
+    lob_chargeups_.clear();
     gpu.ring.wait_idle();
     gpu.ctx->wait_idle();
     gpu.renderer.set_scene_hook(nullptr);
@@ -594,16 +597,45 @@ void BattleView::stop(GpuCore& gpu) {
     bg_.clear();
 }
 
+// S8 t31: SnapshotEffect::percent of a lobbing charge-up particle [port: one free key next to kEffectJamming].
+constexpr uint8_t kEffectLobChargeup = 239;
+
+void BattleView::append_lob_chargeups(const sim::TacticalBattle& battle, render::SimSnapshot& snap) {
+    // The order is gone (cancelled, unit dead) or charged: no particle.
+    std::erase_if(lob_chargeups_, [&battle](const TswCue& c) { return battle.combat().fire_at_position_state(c.object) != 1; });
+    if (lob_chargeups_.empty() || types_ == nullptr) return;
+    std::vector<render::SnapshotEffect> fx;
+    for (const TswCue& c : lob_chargeups_) {
+        if (c.type == objects::kNone || c.type >= types_->size()) continue;
+        const std::string_view particle = types_->get_string(c.type, "Lobbing_Superweapon_Chargeup_Particle");
+        if (particle.empty()) continue;
+        render::SnapshotEffect e;
+        e.id = c.object;
+        e.asset = std::string(particle);
+        const objects::TypeIndex ti = table_.find(e.asset);  // a particle object type: its model, else the name as a file
+        if (ti != objects::kNone && table_.valid(ti) && !table_[ti].model.empty()) e.asset = table_[ti].model;
+        e.percent = kEffectLobChargeup;
+        e.frame = c.frame;
+        e.bone = std::string(types_->get_string(c.type, "Lobbing_Superweapon_Chargeup_Particle_Bone_Name"));
+        fx.push_back(std::move(e));
+    }
+    render::append_snapshot_effects(snap, fx);
+}
+
 void BattleView::capture(const GameSession& session) {
     const sim::SimHost& host = session.host();
     auto snap = std::make_shared<render::SimSnapshot>();
     const ParallelFor pf = jobs::make_parallel_for(*gpu_->js);
+    if (const sim::TacticalBattle* b = session.battle())  // S8 t31: every tick's cues, also when no snapshot is made
+        if (const sim::TacticalMode* tm = host.modes().top_tactical())
+            track_lob_chargeups(lob_chargeups_, tsw_cues(b->special_weapon_events(), tm->primary()));
     if (!render::capture_snapshot(host, table_, *snap, pf)) return;
     if (const sim::TacticalBattle* b = session.battle()) {
         render::apply_battle_state(*b, *snap, &table_, &beam_styles_);  // R5: + the ability beam records
         render::apply_battle_projectiles(*b, *snap, table_);  // live projectiles (lasers, missiles) as plain data
         render::apply_battle_zaps(*b, *snap, buffer_.latest().curr.get(), &beam_styles_);  // R5: laser-defense zaps (the tick clears the sim event)
         render::apply_battle_jamming(*b, local_, *snap, &table_);  // R5: Is_Jammed ids, jammer blobs / owner particles
+        append_lob_chargeups(*b, *snap);                            // S8 t31: lobbing charge-up particles
         // Int-final: garrisoned objects (the battle's garrison host) are not drawn (R3 kSnapContained).
         render::apply_contained(*snap, [b](const render::SnapshotObject& o) { return b->contained_by(o.id) != objects::kNoObjectId; });
 #ifdef ALAMO_SIM_HAVE_FOG
