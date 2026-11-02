@@ -52,9 +52,12 @@
 //
 // OI tactical (PHASE4 open items, S8): circular lead over a three-position history (formulas.hpp circular_lead,
 // replaces linear lead in Fire_At / WeaponBehavior / host launches; straight tracks keep linear lead bit-for-bit),
-// lobbed flight for category-3 shots (per-type Projectile_Grenade_Gravity x Lob_Mod, high ballistic arc, detonation
-// on coming down to the aim height), team targeting (members score with their squad head's priority set, filter 7
-// accepts the head's weapon, filter 9 accepts the head's current target out of range).
+// team targeting (members score with their squad head's priority set, filter 7 accepts the head's weapon, filter 9
+// accepts the head's current target out of range).
+// S8 t04 (docs/re/LOB_SOLVER.md): category-3 (grenade) shots - slot 44 = the lob solver finds an arc; the launch solves
+// from the launch point to the un-led target point (lead / inaccuracy turn the yaw only), no solution = no shot;
+// hardpoint grenades leave straight at the aim point; the flight is the closed-form parabola, detonating on the land
+// ground test (On_Detonate at the hit) or an object hit; sticky grenades attach / rest; lifetime-only expiry.
 //
 // DETERMINISM: no pointer-keyed or hashed containers are iterated; candidate lists, ray hits and
 // radius queries come sorted by object id from the S6 tree; float math is IEEE single, no FMA, sqrt
@@ -155,10 +158,13 @@ struct ProjectileDesc {
     bool does_hitpoint_damage = true;      // Projectile_Does_Hitpoint_Damage
     bool homing = false;                   // Projectile_Category 1 [L: re-aims at the target each step]
     bool lobbed = false;                   // Projectile_Category 3 (range = Max_Speed^2 / (gravity x lob mod))
-    float lob_mod = 1.0f;                  // Projectile_Grenade_Gravity_Lob_Mod (+0x1e84)
-    // OI tactical: Projectile_Grenade_Gravity (type +0x1e80, per projectile type); <= 0 -> CombatConfig::grenade_gravity.
-    // Lobbed shots (category 3 / `lobbed`) fly the ballistic arc of formulas.hpp lob_direction under gravity x lob mod.
-    float grenade_gravity = 0.0f;
+    // S8 t04 (docs/re/LOB_SOLVER.md §1.1): G = Projectile_Grenade_Gravity (+0x1e80) x Projectile_Grenade_Gravity_Lob_Mod
+    // (+0x1e84); constructor defaults 1.05 / 5.02, an XML 0 is kept (G = 0). Category-3 shots (`lobbed`) launch on the
+    // lob solver's arc (formulas.hpp lob_solve; hardpoint shots straight at the aim point) and fly lob_position.
+    float lob_mod = 5.02f;
+    float grenade_gravity = 1.05f;
+    bool can_lob_slower = false;           // Projectile_Grenade_Can_Lob_Slower (+0x4a): the 0.8 speed steps
+    bool sticks_on_collision = false;      // Projectile_Grenade_Sticks_On_Collision (+0x4b): attach / rest, no damage
     float max_flight_distance = 0.0f;      // Projectile_Max_Flight_Distance
     float max_lifetime = 0.0f;             // Projectile_Max_Lifetime (seconds)
     float blast_area_damage = 0.0f;        // Projectile_Blast_Area_Damage
@@ -428,7 +434,6 @@ struct CombatConfig {
     // mesh it struck; the port has no collision meshes, so the hit goes to the closest live hardpoint whose bone lies
     // within this distance of the impact point (a stand-in for the hardpoint's Collision_Mesh extent), else the hull.
     float hardpoint_mesh_radius = 40.0f;
-    float grenade_gravity = 1.0f;
     // Diminishing_Firepower curve as (seconds since last hit, factor) points (OI tactical, TACTICAL_GAPS 3.3: a
     // natural cubic spline through the points sorted by x, float; before the first / past the last point the end
     // value); empty = 1.0.
@@ -731,6 +736,11 @@ struct ProjectileView {
     // 0 for an armed bomb) and the spawn frame.
     float speed = 0.0f;
     uint32_t spawn_frame = 0;
+    // S8 t04: a grenade (category 3) flying the closed-form parabola (pos / dir are the last step's point and chord;
+    // speed = the launch speed s), and a sticky grenade that stopped: attached to `stuck_to` (kNoObject: resting).
+    bool lob = false;
+    bool stuck = false;
+    ObjectId stuck_to = kNoObject;
 };
 
 // refixf t01: a spline rocket's flight state (projectile data pack fields of S9_DEATH_CLONE_SHIELDS.md §2.4.1).
@@ -760,6 +770,11 @@ struct ProjectileLaunch {
     // at `from` and detonate when the fuse ran out (lifetime expiry, area damage + detonation effects) [port: no
     // flight for armed bombs]. < 0: normal flight.
     float fuse_seconds = -1.0f;
+    // S8 t04 (LOB_SOLVER §5, abilities Grenade_Attack / Remote_Bomb): the BOMB timer runs while the shot flies instead of
+    // placing it at `from` - a category-3 projectile is tossed on the lob solver's arc (launch_projectile's grenade
+    // branch) and `fuse_seconds` >= 0 sets it off wherever it is (in flight, stuck or resting). Without `toss` a
+    // category-3 launch with a fuse is still placed; one without a fuse always takes the grenade branch.
+    bool toss = false;
 };
 
 struct CombatStats {  // diagnostics (not hashed)
@@ -867,9 +882,18 @@ public:
     // A host-launched projectile (ProjectileLaunch). Max travel = the 3-D distance to the aim point (+ the target's
     // radius for a unit target), so a point shot detonates at the point (expiry: area damage / ion stun). It is
     // first stepped on the next tick, as weapon shots. False for an unknown projectile or a dead / missing target.
+    // S8 t04: a category-3 projectile (LOB_SOLVER §5.1 / §5.2) leaves from `from` toward the un-led target point (the
+    // target's position + its Ranged_Target_Z_Adjust, or `point`) on the solver's arc and speed, the yaw from the led aim;
+    // no solution -> nothing is spawned, false.
     bool launch_projectile(const ProjectileLaunch& l, uint32_t frame);
+    // S8 t04 (LOB_SOLVER §2, §3): the lob solver for ProjectileDesc `projectile` (category 3 only; G = gravity x lob
+    // mod, Can_Lob_Slower) from `from` to `to`; false = no arc (or not a grenade). `out` may be null.
+    bool lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolution* out = nullptr) const;
+    // 0x398440: the unit's position + its type's Ranged_Target_Z_Adjust (z); the origin for an unknown id.
+    Vec3 target_point(ObjectId id) const;
     // refixf t01: land rocket terrain (heightmap h(x, y) and its extent box, S9_DEATH_CLONE_SHIELDS.md §2.4.4 mode 1,
-    // §2.4.6 ground points). Read in the serial commit phase only. Unset [port]: flat ground at z 0, no box.
+    // §2.4.6 ground points). Read in the serial commit phase only; S8 t04: also the land grenade ground test (LOB_SOLVER
+    // §6.2). Unset [port]: flat ground at z 0, no box.
     void set_rocket_terrain(RocketTerrain t) { rocket_terrain_ = std::move(t); }
     const RocketTerrain& rocket_terrain() const { return rocket_terrain_; }
     // Spline-rocket state of projectile i (serial order); false when it is not a spline rocket.
@@ -1206,11 +1230,18 @@ private:
         uint8_t alive = 1;
         uint32_t jammed_frame = 0;  // S9 (hash_extended)
         uint8_t ever_jammed = 0;
-        // OI tactical: lobbed flight (category 3). Gravity per frame^2 (0 = straight flight) and the detonation
-        // height (the aim point's z; ground-test stand-in [port]). Hashed in hash_extended for lobbed shots only.
+        // S8 t04 (LOB_SOLVER §5.3 / §6): grenade flight (category 3). `lob` set: N(t) = launch + speed t lob_dir -
+        // 1/2 gravity t^2 z with t = frame - spawn_frame (the pack's launch point, InitialFacing forward and G). A sticky
+        // grenade that hit something stops: `stuck`, attached to `stuck_to` at `stuck_offset` (world, from its position)
+        // or resting (kNoObject). Hashed in hash_extended for grenades only.
+        uint8_t lob = 0;
+        uint8_t stuck = 0;
         float gravity = 0.0f;
-        float floor_z = 0.0f;
-        float fuse = -1.0f;  // OI abilities: armed bomb lifetime override (seconds; < 0 none), hashed when set
+        Vec3 launch, lob_dir, stuck_offset;
+        ObjectId stuck_to = kNoObject;
+        // OI abilities: BOMB timer (seconds; < 0 none), hashed when set. Without `lob` the shot sits where it was placed
+        // (armed bomb); a tossed grenade (ProjectileLaunch::toss) flies with it running.
+        float fuse = -1.0f;
         uint8_t rocket = 0;  // refixf t01: spline rocket (state in rockets_, same serial); hashed in hash_extended
     };
     // refixf t01: spline-rocket flight state, one per Projectile with rocket != 0, serial order (S9 §2.4.1 pack fields).
@@ -1289,7 +1320,21 @@ private:
     Vec3 velocity(const Unit& u) const;
     // OI tactical: Compute_Lead_Point (0x399450): circular lead over the three-position history (formulas.hpp).
     Vec3 lead_point(const Unit& t, Vec3 muzzle, Vec3 aim0, float projectile_speed) const;
-    float lob_gravity(const ProjectileDesc& pd) const;  // gravity x lob mod (0 = not lobbed)
+    // S8 t04: category 3 (Projectile_Category 3 / `lobbed`) and its G = gravity x lob mod (may be <= 0 from XML).
+    static bool grenade(const ProjectileDesc& pd) { return pd.lobbed || pd.category == ProjectileCategory::Grenade; }
+    static float lob_g(const ProjectileDesc& pd) { return pd.grenade_gravity * pd.lob_mod; }
+    // Slot 44 for a grenade weapon (LOB_SOLVER §3.1): an arc from the attacker to the target point exists.
+    bool lob_in_range(const Unit& a, const ProjectileDesc& pd, const Unit& t) const;
+    // The current weapon's projectile when it is a grenade (slot 42 -> category 3), else nullptr.
+    const ProjectileDesc* grenade_weapon(const Unit& u) const;
+    // §5.1 target point Q: a team container (a unit other live units name as their team) -> its live member nearest
+    // `from` (0x404fc0; XY distance, ties by id [port]); then position + Ranged_Target_Z_Adjust.
+    const Unit& lob_member(const Unit& t, Vec3 from) const;
+    Vec3 lob_target_point(const Unit& t) const;
+    // §6 grenade flight: the step's end point N (from the closed form) and the land ground test of P -> N.
+    Vec3 lob_next(const Projectile& p, uint32_t frame) const;
+    bool ground_hit(Vec3 a, Vec3 b, float& t) const;
+    void lob_step(uint32_t i, uint32_t frame, SimRng& rng);
     // OI tactical (team targeting, TACTICAL_COMBAT 2.3 / 2.4): the unit's squad "container" - the unit whose id is
     // its team id when that is a combat unit, else the team's team_leader member; nullptr when none / itself.
     const Unit* team_head(const Unit& u) const;
@@ -1325,8 +1370,12 @@ private:
     bool opportunity_valid(const Unit& u, const Hardpoint& h, const Unit& t) const;
     float weapon_delay(const Unit& u, const HardpointDesc* hd) const;
     float fire_rate(const Unit& u) const;
+    // `lob` (S8 t04): the solver's result for a WeaponBehavior grenade (launch from `muzzle`, speed / pitch from it, yaw
+    // from `aim`; `q_point` = the un-led Q for the travel budget); nullptr: straight at `aim` (hardpoints - a
+    // category-3 hardpoint shot still flies the parabola at Max_Speed).
     void spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t pdesc, float damage, uint16_t damage_type,
-               Vec3 muzzle, Vec3 aim, const Unit& target, int32_t target_hp, float range, uint32_t frame);
+               Vec3 muzzle, Vec3 aim, const Unit& target, int32_t target_hp, float range, uint32_t frame,
+               const LobSolution* lob = nullptr, Vec3 q_point = {});
 
     // projectiles / damage
     void sweep(uint32_t pi, QueryContext& ctx);

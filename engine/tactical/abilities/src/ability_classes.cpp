@@ -232,6 +232,9 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!alive_unit(target)) return false;
             if (s.requires_direct_command && !direct_ctx_ && combat_->ai_player(o.owner)) return false;
             if (!range_ok(o, s, target) || s.projectile < 0) return false;
+            // S8 t04 (LOB_SOLVER §3.4): Grenade_Type is a category-3 projectile with a lob solution from the unit's
+            // position to the target's position (no z adjust); otherwise refused (the ability is not consumed).
+            if (!combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, combat_->position(target))) return false;
             if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return false;  // unit ability 22's counter <= 0
             stop_order(o.id, frame);
             sp.applied = 1;
@@ -489,14 +492,27 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
 
         case C::RemoteBomb: {  // tossed like a grenade; DETONATE_REMOTE_BOMB (65) sets it off (0x280ec0)
             if (s.projectile < 0) return false;
-            if (target != kNoObject && combat_->has_unit(target) && !range_ok(o, s, target)) return false;
-            const Vec3 at = (target != kNoObject && combat_->has_unit(target)) ? combat_->position(target) : me;
+            const bool has_target = target != kNoObject && combat_->has_unit(target);
+            if (has_target && !range_ok(o, s, target)) return false;
+            // S8 t04 (LOB_SOLVER §3.5): Bomb_Type needs a lob solution from the unit's position to the target's position +
+            // Ranged_Target_Z_Adjust (0x398440); the toss (0x71a200) then goes through the spawner from the unit
+            // (launch_projectile's grenade branch: its own solve from the launch point, nothing spawned without one).
+            // [port] The garrison container redirect of the range test is not modelled; without a target object the bomb
+            // is still placed at the unit (no command-57 point here).
             combat::ProjectileLaunch l;
+            if (has_target) {
+                const Vec3 q = combat_->target_point(target);
+                if (!combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, q)) return false;
+                l.from = o.combat_unit ? combat_->target_point(o.id) : me;  // §5.1: no fire bone -> + own z adjust
+                l.target = target;
+                l.toss = true;
+            } else {
+                l.from = me;
+            }
             l.shooter = o.combat_unit ? o.id : kNoObject;
             l.owner = o.owner;
             l.projectile = static_cast<uint32_t>(s.projectile);
-            l.from = at;
-            l.point = at;
+            l.point = me;
             l.fuse_seconds = 1.0e9f;  // armed until detonated
             if (combat_->launch_projectile(l, frame) && combat_->projectile_count() > 0)
                 remote_bombs_.push_back(RemoteBomb{o.owner, combat_->projectile(combat_->projectile_count() - 1).serial});
@@ -704,9 +720,14 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                     l.shooter = o.combat_unit ? o.id : kNoObject;
                     l.owner = o.owner;
                     l.projectile = static_cast<uint32_t>(s.projectile);
-                    l.from = combat_->position(sp.target);  // [port] lands at the target, its BOMB armed with the timer
-                    l.point = l.from;
-                    l.fuse_seconds = s.fuse_time;
+                    // S8 t04 (TACTICAL_GAPS §2.3.5, LOB_SOLVER §5): thrown from the unit through the spawner (the
+                    // grenade branch: solve, arc, nothing without an arc) with its BOMB armed with the timer. [port] No
+                    // Spawn_Bone: the launch point is the unit's position + its Ranged_Target_Z_Adjust.
+                    l.from = o.combat_unit ? combat_->target_point(o.id) : position(o);
+                    l.target = sp.target;
+                    l.point = combat_->position(sp.target);
+                    l.fuse_seconds = s.fuse_time > 0.0f ? s.fuse_time : -1.0f;  // [port] no timer: impact only
+                    l.toss = true;
                     combat_->launch_projectile(l, frame);
                 }
                 o.active[kStickyBomb] = 1;

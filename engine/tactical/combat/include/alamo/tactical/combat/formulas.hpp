@@ -95,13 +95,28 @@ inline constexpr float kLeadMaxCircleRadius = 1000.0f;
 inline constexpr float kLeadRootLo = 0.1f, kLeadRootHi = 1000.0f, kLeadRootTolerance = 0.001f;
 inline constexpr int kLeadRootIterations = 15;
 
-// ---- lobbed flight (section 3.3, category 3, 0x4ceea0) [M] (OI tactical) ----------------------------------------
-// Gravity per frame^2 = Projectile_Grenade_Gravity x Projectile_Grenade_Gravity_Lob_Mod (the same product as the
-// range rule above). Launch direction for a shot from `muzzle` to `aim` at speed v (per frame): the HIGH ballistic
-// arc tan(theta) = (v^2 + sqrt(v^4 - g (g d^2 + 2 dz v^2))) / (g d) ([inferred]: "lob"; the flight body was not
-// read); out of reach (negative discriminant) -> 45 degrees, the maximum-range angle of the v^2 / g range rule;
-// no horizontal distance -> straight at the aim point. Returns a unit vector.
-Vec3 lob_direction(Vec3 muzzle, Vec3 aim, float speed, float gravity);
+// ---- lob solver (S8 t04, docs/re/LOB_SOLVER.md §2, 0x54a6f0) [H] -------------------------------------------------
+// The closed-form HIGH arc from `from` to `to` at launch speed v (Max_Speed, per frame) under G = gravity x lob mod
+// (per frame^2), in the code's float order: d = sqrt((P.x - Q.x)^2 + (P.y - Q.y)^2), h = Q.z - P.z, dd = d or 0.0001
+// when d == 0; per speed: v2 = v v, disc = (v2 v2 - ((G 2) h) v2) - ((G G) dd) dd (< 0: none), den = ((h h) / (dd dd)
+// + 1) 2 (0: none), u = ((v2 - G h) - sqrt(disc)) / den (< 0: none), angle = acos(sqrt(u) / v). `can_lob_slower`
+// (Projectile_Grenade_Can_Lob_Slower) repeats at v x 0.8 while a solution exists and returns the LAST success (the
+// slowest speed that still reaches). False = no solution (angle 0, speed untouched). [port] G <= 0 is "no solution"
+// (retail loops forever with the flag, §2.5 / §8 item 13); sqrt / acos are dmath (retail: CRT sqrtf / acosf); the
+// acos argument is clamped to 1; the loop stops after kLobMaxPasses passes (never reached for G > 0, §2.4).
+struct LobSolution {
+    float angle = 0.0f;  // elevation above the horizontal, radians, [0, pi/2]
+    float speed = 0.0f;  // launch speed per frame (Max_Speed x 0.8^k)
+};
+inline constexpr int kLobMaxPasses = 256;
+bool lob_solve(Vec3 from, Vec3 to, float max_speed, float G, bool can_lob_slower, LobSolution& out);
+// Grenade flight position (LOB_SOLVER §6.1, 0x4ceea0) [H]: N(t) = L + s t f - 1/2 G t^2 z, t = frames since the
+// creation frame (first step 1), f = the launch forward vector (cos yaw cos theta, sin yaw cos theta, sin theta), in the
+// code's operand order (the exact-zero terms dropped: they do not change any bit).
+Vec3 lob_position(Vec3 launch, Vec3 f, float speed, float G, float t);
+// Launch forward vector (§5.3): yaw from `heading` (the led, inaccurate aim direction, XY), pitch theta up.
+// [port] A heading without an XY part keeps yaw 0.
+Vec3 lob_forward(Vec3 heading, float angle);
 
 // ---- projectile turn (Turn_Toward 0x3abe40 with rate -1, S9_DEATH_CLONE_SHIELDS.md §2.3) [H] -------------------
 // Turns the unit heading `dir` toward `goal` (any length): yaw (atan2(y, x)) and pitch (atan2(z, |xy|)) deltas, each

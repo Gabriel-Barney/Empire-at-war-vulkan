@@ -1997,6 +1997,27 @@ void test_foc() {
                   torp->explode_when_reached_target_radius && torp->max_flight_distance == 720.0f);
         }
     }
+    {  // S8 t04 (LOB_SOLVER §1.2): Underworld_Merc fires Proj_Merc_Concussion_Grenade through Projectile_Types - GRENADE,
+       // v 10, gravity 0.7 x lob mod 0.8 (G 0.56, R = v^2 / G = 178.6), Can_Lob_Slower, not sticky, lifetime 900.
+        std::vector<uint32_t> idx;
+        const BattleTables bt = catalog.build_battle({static_cast<uint32_t>(types.resolve_name("Underworld_Merc"))}, idx);
+        const tactical::combat::ProjectileDesc* g = nullptr;
+        for (const tactical::combat::ProjectileDesc& pd : bt.combat.projectiles)
+            if (pd.name == "Proj_Merc_Concussion_Grenade") g = &pd;
+        CHECK(g != nullptr && bt.combat.units.size() == 1 && bt.combat.units[0].weapon_projectile >= 0 &&
+              &bt.combat.projectiles[static_cast<size_t>(bt.combat.units[0].weapon_projectile)] == g);
+        if (g) {
+            std::printf("foc grenade: %s cat %d v %.1f gravity %.9g lob mod %.3g slower %d sticky %d lifetime %.0f\n", g->name.c_str(),
+                        static_cast<int>(g->category), static_cast<double>(g->max_speed), static_cast<double>(g->grenade_gravity),
+                        static_cast<double>(g->lob_mod), g->can_lob_slower ? 1 : 0, g->sticks_on_collision ? 1 : 0,
+                        static_cast<double>(g->max_lifetime));
+            CHECK(g->lobbed && g->category == tactical::combat::ProjectileCategory::Grenade && g->max_speed == 10.0f &&
+                  g->grenade_gravity == 0.7f && g->lob_mod == 0.8f && g->can_lob_slower && !g->sticks_on_collision &&
+                  g->max_lifetime == 900.0f);
+            const float r = tactical::combat::lob_range(g->max_speed, g->grenade_gravity, g->lob_mod);
+            CHECK(r > 178.5f && r < 178.6f);
+        }
+    }
     {  // --- S4 (owner: S4 agent): shipped corruption options (PLANETS.XML) and garrison / capture descriptors ---
         const std::vector<galactic::CorruptionOption> ae = galactic::corruption_options(types, types.resolve_name("AetenII"));
         size_t missions = 0, options = 0;
