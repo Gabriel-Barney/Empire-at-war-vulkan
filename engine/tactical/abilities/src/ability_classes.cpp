@@ -347,7 +347,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             // S8 t04 (LOB_SOLVER §3.4): Grenade_Type is a category-3 projectile with a lob solution from the unit's
             // position to the target's position (no z adjust); otherwise refused (the ability is not consumed).
             if (!combat_->lob_solution(static_cast<uint32_t>(s.projectile), me, combat_->position(target))) return false;
-            if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return false;  // unit ability 22's counter <= 0
+            // S8 t10 follow-up (LOB_SOLVER §3.5 "Facing at apply", last item): with ABILITY_COUNTDOWN and unit ability 22's
+            // counter > 0 the apply returns 1 WITHOUT the face / stop / lock / pending block: the request is consumed (a
+            // pending order is not retried) and nothing is thrown [M on the meaning; the port applies the flow as read].
+            if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return true;
             snap_face(o, target);  // S8 t10: yaw snapped to the target's raw position
             stop_order(o.id, frame);
             lock_pair(o, kLockGrenade, true, frame);  // stop, lock (0x3a8e50 1; A1_READINGS §28.9)

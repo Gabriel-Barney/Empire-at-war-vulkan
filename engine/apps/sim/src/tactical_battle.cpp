@@ -613,8 +613,10 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     // S8 t11 (MOVEMENT §3.2): the Walk deploy clips (anim 0x19 / 0x1A, variant 0 [port]: retail draws a synced variant).
     movement_->set_deploy_clip_fn([this](objects::ObjectId id, int32_t type, uint32_t& frames, float& fps) {
         const anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr;
+        // S8 t11 follow-up: the drawn variant once it plays (SimAnimation::deploy, drive_animation), else variant 0.
+        const anim::SlotView sv = w ? w->slot(id) : anim::SlotView{};
         const anim::AnimModel* m = w ? w->model(id) : nullptr;
-        const anim::ClipRef* c = m ? m->clip(type, 0) : nullptr;
+        const anim::ClipRef* c = sv.type == type && sv.clip ? sv.clip : (m ? m->clip(type, 0) : nullptr);
         if (!c || !c->clip || c->clip->fps <= 0.0f) return false;
         frames = c->clip->frame_count;
         fps = c->clip->fps;
@@ -2743,6 +2745,15 @@ void TacticalBattle::drive_animation(SimRng& rng, uint64_t gframe) {
         in.movable = u.movable;
         if (u.movable) {
             const mv::UnitView v = movement_->view(u.id);
+            if (v.deploy_state != mv::LocoState::None) {
+                // S8 t11 follow-up (MOVEMENT §3.2, 0x61e930): the Walk deploy states own the animation - the Deploy /
+                // Undeploy clip (synced random variant at Deployment_Anim_Rate) starts when the locomotor starts timing
+                // it; Deployed keeps the finished clip. [port] a reversed clip is drawn from its first frame.
+                if (v.deploy_state != mv::LocoState::WalkDeployed && v.deploy_clip >= 0 && w->current_type(u.id) != v.deploy_clip &&
+                    anim_->deploy(*gm, u.id, v.deploy_clip == static_cast<int32_t>(anim::kAnimUndeploy), rng, gframe))
+                    ++stats_.anim_plays;
+                continue;
+            }
             if (v.locomotor != mv::LocomotorKind::Default) {  // REMAINING_GAPS §4.3-4.7: the locomotor picks the clip
                 if (v.anim != mv::kAnimNone && w->current_type(u.id) != v.anim) {
                     anim::PlayRequest req;

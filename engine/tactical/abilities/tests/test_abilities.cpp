@@ -3777,6 +3777,31 @@ void test_lob_abilities() {
         CHECK(!w.ab->is_active(1, kStickyBomb));
         CHECK(w.count(AbilityEventKind::Ended, 1) == 1);
     }
+    {  // S8 t10 follow-up (LOB_SOLVER §3.5 "Facing at apply", last item): a pending request whose countdown started before
+       // the apply is consumed (apply returns 1) without the face / stop / lock block - nothing thrown, not retried
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+        g.max_range = 200.0f;
+        g.projectile = 0;
+        g.fuse_time = 2.0f;
+        const uint32_t gs = add_special(w.ad, g);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+        a.specials = {gs};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        w.add(2, td, 1, {80, 0, 0});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame) == 1 && w.ab->pending_type(1) >= 0);
+        CHECK(w.ab->force_recharge(1, kStickyBomb) && w.ab->countdown_counter(1, kStickyBomb) > 0);
+        w.tick();
+        CHECK(w.ab->pending_type(1) < 0 && !w.ab->special_applied(1, name_crc("Grenade")));  // consumed, not applied
+        for (int i = 0; i < 30; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u && !w.ab->is_active(1, kStickyBomb) && w.ab->pending_type(1) < 0);
+    }
 }
 
 // S8 t06 (docs/re/LOB_SOLVER.md §3.5): Remote_Bomb world - bomber 1 (player 0; Remote_Bomb with Toss_Anim BOMBTOSS,
