@@ -69,6 +69,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.constants = setup.constants;
     cfg.log_decisions = setup.log_decisions;
     cfg.game_seed = host.session_seed();  // A2 tactical: perception '#' reseed (AI_GALACTIC_3 §7.3)
+    cfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
     use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();
@@ -139,7 +140,13 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     bt->movement_->set_threat_fn([threat_world](int32_t owner, mv::V2 p) { return threat_world->point_danger(owner, p.x, p.y); });
     // --- L1 bindings (script_remaining.hpp): Divert / Is_On_Diversion of the AI scripts (L1_S4_REMAINING §2.3) ---
     objects::ObjectStore* ast = &mode.primary();
-    remaining_.move_to = [this, ast](objects::ObjectHandle u, Vec3 p) { return ast->alive(u) && move_unit(ast->id(u), p.x, p.y); };
+    remaining_.move_to = [this, ast](objects::ObjectHandle u, Vec3 p) {
+        if (!ast->alive(u)) return false;
+        const objects::ObjectId id = ast->id(u);
+        if (!move_unit(id, p.x, p.y)) return false;
+        if (!b_->movement_locked(id)) b_->fighter_order(std::span<const objects::ObjectId>(&id, 1), 0, Vec3{p.x, p.y, 0.0f});  // S7 t22
+        return true;
+    };
     remaining_.move_goal = [bt, ast](objects::ObjectHandle u, Vec3& goal) {
         if (!ast->alive(u) || !bt->movement_->has_unit(ast->id(u))) return false;
         const mv::UnitView v = bt->movement_->view(ast->id(u));
@@ -843,6 +850,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 b_->combat_->clear_order(id);
                 b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: a position block
             }
+            b_->fighter_order(o.units, 0, Vec3{o.destination.x, o.destination.y, 0.0f});  // S7 t22: the squadrons' formation
             return R::None;
         }
         case T::MoveToObject: {
@@ -865,6 +873,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             b_->drop_locked(o.units);  // OI follow-up t03
             if (o.units.empty()) return R::None;
             for (const objects::ObjectId id : o.units) b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: kind 1
+            b_->fighter_order(o.units, 0, tp);  // S7 t22: a position snapshot (kind 1)
             follow_drop(o.units);
             follow_add(o.units, static_cast<objects::ObjectId>(tw), tp.x, tp.y, mv::kThreatOff);
             if (o.units.size() == 1) {
@@ -898,6 +907,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 if (!u) continue;
                 b_->combat_->order_attack(u->id, t->id, hp);
                 b_->combat_->set_attack_goal(u->id, t->id, hp);  // refixf t06: Attack_Target block (kind 3, hard point, §2.8)
+                if (!b_->movement_locked(u->id))  // S7 t22: an object block; a locked unit keeps its formation (as Move_To)
+                    b_->fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);
                 ++n;
                 if (!u->movable) continue;
                 const Vec3 up = st.position(u->h);
@@ -931,6 +942,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     b_->combat_->clear_order(id);
                     b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06
                 }
+                b_->fighter_order_clear(ids);  // S7 t22: Stop leaves the formation [M]
                 return R::None;
             }
             if (order != lua::LuaOrder::MoveTo && order != lua::LuaOrder::AttackMove && order != lua::LuaOrder::Guard) return R::Unhandled;
@@ -997,6 +1009,13 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (order != lua::LuaOrder::AttackMove || tw == cmd::kNoObject)  // refixf t06: position / guard / move blocks
                 for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
             if (!std::isfinite(x) || !std::isfinite(y)) return R::InvalidPosition;
+            // S7 t22: the squadrons' formation - block flags 0x01 attack-move / 0x02 guard; an Attack_Move / Guard of an
+            // object keeps it as the slot goal (Move_To(object) is a position snapshot, kind 1).
+            const uint8_t fflags = order == lua::LuaOrder::AttackMove ? mv::kMoveFlagAttackMove
+                                   : order == lua::LuaOrder::Guard    ? mv::kMoveFlagGuardMove
+                                                                      : uint8_t{0};
+            const objects::ObjectId fobj =
+                tw != cmd::kNoObject && order != lua::LuaOrder::MoveTo ? static_cast<objects::ObjectId>(tw) : objects::kNoObjectId;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
             if (tw != cmd::kNoObject) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
@@ -1009,6 +1028,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             // merged one frame's per-unit orders here is gone. An object's own Lua order stays a one-unit move.
             if (group.units.size() == 1) {  // a single unit: unchanged path
                 if (order != lua::LuaOrder::AttackMove) b_->combat_->clear_order(u->id);
+                if (!b_->movement_locked(u->id)) b_->fighter_order(group.units, fflags, Vec3{x, y, 0.0f}, fobj);
                 return move_unit(u->id, x, y, tt) ? R::None : R::InvalidUnit;
             }
             group.threat_threshold = tt;
@@ -1017,6 +1037,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             b_->drop_locked(group.units);  // OI follow-up t03: locked members keep their order [M: group-move reading]
             if (group.units.empty()) return R::None;
             b_->movement_->move(group, host_->random().synced(), b_->frame_);  // one formation move of the team
+            b_->fighter_order(group.units, fflags, Vec3{group.destination.x, group.destination.y, 0.0f}, fobj);  // S7 t22
             if (order != lua::LuaOrder::AttackMove)
                 for (const objects::ObjectId id : group.units) b_->combat_->clear_order(id);
             return R::None;
@@ -1401,6 +1422,14 @@ void BattleAi::unit_released(int32_t player, int32_t object_id, ai::tactical::Ta
     ab.apply_active_by_default(object_id, b_->frame_);
 }
 
+// S7 t15 A1: the tick's signal 0x29 list (TacticalBattle::ability_finished_events).
+std::vector<int32_t> BattleAi::ability_finished() {
+    const std::span<const objects::ObjectId> ids = b_->ability_finished_events();
+    return std::vector<int32_t>(ids.begin(), ids.end());
+}
+
+bool BattleAi::movement_locked(int32_t object_id) { return object_id >= 0 && b_->movement_locked(object_id); }
+
 // [port] The S10 stand-in (attack-move to 70 % of the attack range of the nearest enemy) for the sides that have
 // no tactical AI, on its own cadence.
 void BattleAi::standin_orders() {
@@ -1426,7 +1455,9 @@ void BattleAi::standin_orders() {
         if (dist <= 0.8f * range) continue;
         const Vec3 ep = st.position(best->h);
         const float k = (dist - 0.7f * range) / dist;
-        move_unit(u.id, up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k);
+        const Vec3 dest{up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k, 0.0f};
+        move_unit(u.id, dest.x, dest.y);
+        if (!b_->movement_locked(u.id)) b_->fighter_order(std::span<const objects::ObjectId>(&u.id, 1), 0, dest);  // S7 t22
         ++b_->stats_.orders;
     }
 }

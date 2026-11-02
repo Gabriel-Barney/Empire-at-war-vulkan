@@ -159,10 +159,10 @@ void end_tick() {
 
 uint64_t ticks_recorded() { return st().closed; }
 
-std::vector<TickRecord> snapshot() {
+std::vector<TickRecord> snapshot(uint32_t max_ticks) {
     State& s = st();
     std::vector<TickRecord> out;
-    const uint64_t n = std::min<uint64_t>(s.closed, s.ring.size());
+    const uint64_t n = std::min<uint64_t>({s.closed, s.ring.size(), max_ticks});
     out.reserve(static_cast<size_t>(n));
     const uint64_t first = s.closed - n;
     for (uint64_t i = 0; i < n; ++i) out.push_back(s.ring[(first + i) % s.ring.size()]);

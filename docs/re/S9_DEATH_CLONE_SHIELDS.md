@@ -130,6 +130,11 @@ Suspend is vfunc +0xc0 (+1). What suspends it, if anything, was not traced [L: c
   and copies the dying object's current animation state (0x395590 → 0x3a92f0). When the dying object has none and
   the clone type's byte +0x93 is set, it gets animation 0 instead [M on +0x93's tag]. The `DEATH` behaviour
   (DeathBehavior) is then attached to the clone through the behaviour factory (0x4c3520).
+- **Behaviour strip** [H] (2026-11-02): between the animation copy and the DEATH attach, every behaviour of the clone
+  except HIDE_WHEN_FOGGED (0x19), IMPOSING_PRESENCE (0x40) and LAND_OBSTACLE (0x14, only when the clone type's
+  `Death_Clone_Is_Obstacle` +0x92 is set; default true) is detached (vf15) and removed (0x3a54c0). So a clone never
+  targets, fires, moves, spawns, shields or holds a space obstacle entry, whatever its type lists. Consequences for
+  passability and space occupancy: MOVEMENT §1.3 "Death clones and wrecks", §2.2.
 - Infantry special case [L]: when the dying type is in category `Infantry`, the clone type lacks behaviours 0x19
   HIDE_WHEN_FOGGED, 0x40 IMPOSING_PRESENCE, 0x14 LAND_OBSTACLE and 0x55 PROXIMITY_MINE (and a 0x5051d0 test), and
   K ≠ 4 (Force lightning), the clone is created through a different object manager (mode +0x20 → +0x20). It is

@@ -908,6 +908,30 @@ static void test_store() {
     CHECK(land.behavior_index(a, beh::Locomotor) == 2 && land.serviced_behavior_count(a) == 4);
     CHECK(land.has_behavior(a, beh::Team) && !land.has_behavior(a, 0x10));
     CHECK(land.add_behavior(a, 0x45) && !land.add_behavior(a, 0x45) && land.behaviors(a).back() == 0x45);
+    // S8 t09: Remove_Behavior (the death-clone strip): one instance leaves, later ones move down with their state; the
+    // object leaves the per-type table and category list with the last instance. Saved and reloaded unchanged.
+    {
+        ObjectStore st(ModeKind::Space, StoreKind::Primary, types);
+        const ObjectHandle o = st.create(sp);  // Selectable, Locomotor, Locomotor, StarshipCombatant, SHIELDED
+        const ObjectHandle o2 = st.create(sp);
+        CHECK(!st.remove_behavior(o, 5) && !st.remove_behavior(ObjectHandle{}, 0));
+        CHECK(st.remove_behavior(o, 1) && st.behaviors(o).size() == 4 && st.behavior_index(o, beh::Locomotor) == 1 &&
+              st.behavior_table(beh::Locomotor).members.size() == 2);
+        CHECK(st.remove_behavior(o, 1) && !st.has_behavior(o, beh::Locomotor) && st.behavior_index(o, 0x10) == 2 &&
+              !st.behavior_serviced(o, 1) && st.behavior_serviced(o, 2));
+        CHECK(st.behavior_table(beh::Locomotor).members.size() == 1 && st.behavior_table(beh::Locomotor).insertion.size() == 1 &&
+              st.behavior_table(beh::Locomotor).insertion[0] == o2 && st.has_behavior(o2, beh::Locomotor));
+        ByteWriter w;
+        st.write(w);
+        ObjectStore back(ModeKind::Space, StoreKind::Primary, types);
+        const std::vector<uint8_t> saved = w.bytes();
+        ByteReader rd(saved);
+        CHECK(back.read(rd));
+        StateHasher h1, h2;
+        st.hash_state(h1);
+        back.hash_state(h2);
+        CHECK(h1.digest() == h2.digest() && !back.has_behavior(back.find(st.id(o)), beh::Locomotor));
+    }
     // Rock has only a dummy behaviour: not serviced.
     sp.type = rock;
     const ObjectHandle r = land.create(sp);

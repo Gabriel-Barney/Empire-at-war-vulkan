@@ -158,6 +158,7 @@ bool SimHost::start_story(const StoryStart& start, std::vector<std::string>* dia
     }
     auto s = std::make_unique<StorySession>(*g->sim(), g->primary(), g->types(), random_);
     s->set_command_pipeline(pipeline_.get());  // orders issued while the scripts load
+    s->set_lua_gc_parallel_for(pf_);            // OPT2 t04: scheduled Lua collections on the host's job system
     g->sim()->set_emit_events(true);
     StoryStart st = start;  // Int-final: the session-wide GlobalValue table for every plot VM
     if (!st.global_values) st.global_values = global_values();

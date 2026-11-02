@@ -8,6 +8,8 @@
 //
 // Usage: alamo_game [--game DIR] [--width W --height H] [--hidden] [--audio device|null|off] [--seed S] [--workers N]
 //                   [--frames N] [--battle-max-frames N] [--cache-dir DIR] [--mailbox|--immediate] [MODPATH=..]
+//                   [--frame-overlay] [--profile [--profile-out FILE] [--profile-budget MS]]   OPT1 frame-time overlay
+//                   (F11 toggles it) / tick profiler + per-phase frame report at exit (frame_overlay.hpp)
 //        alamo_game --smoke skirmish|campaign|land|saveload --png-dir DIR [...]   scripted input through the real menus
 //                   (tests; saveload: the save / load menus, app_script_saveload.cpp);
 //                   ends with the presentation-on/off check (the run's per-tick CRC log == a fresh presentation-free
@@ -239,6 +241,12 @@ bool App::init() {
             panel_shells_.apply(p->layout());
         }
     }
+    // OPT1: the tick profiler (wall clock; the sim only writes it) and the frame-time overlay.
+    if (opt_.profile) {
+        profile::start(65536);
+        overlay_.set_log(true);
+    }
+    if (opt_.frame_overlay) overlay_.set_shown(true, opt_.profile);
     if (!opt_.smoke.empty()) make_script();
     if (!opt_.movies.empty() && next_movie()) screen_ = Screen::Movie;
     else show_menu_after_intro();
@@ -257,6 +265,21 @@ int App::run() {
         if (opt_.frames >= 0 && static_cast<long>(frames_) >= opt_.frames) break;
         if (!script_.empty() && script_step_ >= script_.size()) break;
         if (script_.empty() && screen_ == Screen::Menu && !ui_.gui.top() && input_.key_pressed(ui::vk::kEscape)) break;
+    }
+    if (profile::enabled()) {
+        profile::stop();  // the CRC check's replays below are not part of the run
+        if (opt_.profile) {
+            const std::string text = overlay_.report() + profile::format_report(profile::build_report(profile::snapshot(), opt_.profile_budget));
+            std::printf("%s", text.c_str());
+            if (!opt_.profile_out.empty()) {
+                if (FILE* pf = std::fopen(opt_.profile_out.c_str(), "wb")) {
+                    std::fwrite(text.data(), 1, text.size(), pf);
+                    std::fclose(pf);
+                } else {
+                    std::fprintf(stderr, "cannot write %s\n", opt_.profile_out.c_str());
+                }
+            }
+        }
     }
     int rc = 0;
     if (!script_.empty()) {
@@ -357,6 +380,10 @@ int main(int argc, char** argv) {
             opt.frame_cap_set = true;
         } else if (a == "--video-options") opt.video_options = next();
         else if (a == "--saves-dir") opt.saves_dir = next();
+        else if (a == "--frame-overlay") opt.frame_overlay = true;
+        else if (a == "--profile") opt.profile = true;
+        else if (a == "--profile-out") opt.profile = true, opt.profile_out = next();
+        else if (a == "--profile-budget") opt.profile_budget = std::strtod(next().c_str(), nullptr);
         else if (a.find('=') != std::string::npos) opt.game_args.push_back(a);
         else return usage();
     }

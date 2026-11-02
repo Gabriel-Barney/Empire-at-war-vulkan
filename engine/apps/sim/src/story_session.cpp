@@ -14,6 +14,7 @@
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
+#include "alamo/lua/gc_schedule.hpp"  // OPT2 t04
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/presentation.hpp"
@@ -1164,6 +1165,14 @@ double StorySession::t9_seconds(uint64_t mode_frame) {
 void StorySession::service(uint64_t frame, double mode_seconds) {
     frame_ = frame;
     seconds_ = mode_seconds;
+    {  // OPT2 t04: staggered scheduled Lua collections, before any plot script of this service runs
+        std::vector<lua::LuaVm*> vms;  // galactic sets, then the tactical set, scripts in set order (saved orders)
+        for (const auto& s : sets_)
+            for (const Script& sc : s->scripts) vms.push_back(sc.vm.get());
+        if (tactical_ && tactical_->set)
+            for (const Script& sc : tactical_->set->scripts) vms.push_back(sc.vm.get());
+        lua::collect_scheduled(vms, frame, lua_gc_pf_);
+    }
     const bool paused = sim_->paused();
     for (const auto& s : sets_) s->model.set_clock(static_cast<uint32_t>(frame), mode_seconds, paused);
     for (int round = 0; round < kMaxRounds; ++round) {

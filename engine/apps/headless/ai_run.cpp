@@ -290,10 +290,12 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         battles.conflicts().on_survival_roll = [&world_ptr](int32_t owner, uint32_t type, bool survived) {
             if (world_ptr) world_ptr->record_auto_resolve_survival(owner, type, survived);
         };
+        ai::GalacticAiConfig wcfg = gcfg;
+        wcfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
         world_holder = std::make_unique<ai::GalacticAiWorld>(
             *gs, host.galactic_mode()->primary(), &types, files.get(), host.random(), defs, eqs, tinfo,
             [&host](uint8_t p, const commands::EventData& ev) { return host.execute_direct(p, commands::CommandSource::AI, ev); },
-            gcfg);
+            wcfg);
         ai::GalacticAiWorld& world = *world_holder;
         world_ptr = &world;
         std::vector<std::string> wd;

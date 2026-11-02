@@ -80,7 +80,9 @@ inline void lap(const char* zone) {
 }
 void end_tick();                   // closes the record
 uint64_t ticks_recorded();         // ticks closed since start() (may exceed the ring size)
-std::vector<TickRecord> snapshot();  // the ring contents, oldest first
+// The ring contents, oldest first; at most the newest `max_ticks` (the alamo_game overlay reads only its window).
+// Sim thread, or while no tick runs.
+std::vector<TickRecord> snapshot(uint32_t max_ticks = 0xFFFFFFFFu);
 
 // ---- report ----
 struct ZoneStat {

@@ -158,6 +158,7 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     // Grenade_Attack +0x1c0 is Grenade_Toss_Anim; Toss_Anim (+0x190) belongs to Remote_Bomb (xml_field_tables.md).
     s.toss_anim = s_or(e, "Grenade_Toss_Anim");
     if (s.toss_anim.empty()) s.toss_anim = s_or(e, "Toss_Anim");
+    s.spawn_bone = s_or(e, "Spawn_Bone");  // S8 t06: Remote_Bomb toss bone (LOB_SOLVER §3.5)
     s.fuse_time = f_any(e, {"Grenade_Explode_Timer_In_Secs", "Detonation_Time_In_Secs"}, 0.0f);
     s.requires_direct_command = b_or(e, "Requires_Direct_Player_Command", false);
     s.max_targets = i_or(e, "Lightning_Max_Targets", i_or(e, "Max_Drain_Victims", i_or(e, "Max_Targets", 0)));

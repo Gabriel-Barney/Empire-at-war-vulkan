@@ -204,7 +204,7 @@ uint32_t TacticalBattle::l1_desc_of(int32_t type) {
     d.pulse_delay_seconds = types.get_float(ti, "Projectile_Fire_Pulse_Delay_Seconds");
     for (size_t i = 0; i < types_used_.size(); ++i)  // the weapon projectile from the battle tables
         if (static_cast<int32_t>(types_used_[i]) == type && descs_[i] < tables_->combat.units.size())
-            d.projectile = tables_->combat.units[descs_[i]].weapon_projectile;
+            d.projectile = tables_->combat.units[descs_[i]].listed_projectile;  // S8 t08: with or without WEAPON
     d.valid_targets = types.get_mask(ti, "Special_Weapon_Valid_Targets");
     d.requires_base_power = types.get_bool(ti, "Requires_Base_Power");
     d.target_action_index = types.get_int(ti, "Special_Weapon_Target_Action_Index");
