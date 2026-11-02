@@ -10,7 +10,7 @@
 //    ship: rings r = 0 / 200 / 400 / 600 / 800 at 45 degree steps around the flyout point), bind_launch, the initial
 //    order (S7 t24, escort: a guard of the carrier - a move to the carrier's position with the guard flag 0x02 and the
 //    squadron's formation record {flags 0x02, goal object = the carrier}, so its auto targets are chased within
-//    Guard_Chase_Range of the carrier, followed by hg_guard_follow; else a move to the flyout point), then
+//    Guard_Chase_Range of the carrier, followed by hg_guard_follow (S7 t28: path copy and speed cap); else a move to the flyout point), then
 //    clear_requests().
 //  * Removal: squadron container / single ship gone -> squadron_removed; carrier gone -> remove_carrier.
 //  * Station upgrade (SpawnPurpose::StationUpgrade): spawn Next_Level_Base for S's owner at S, complete_station_upgrade,
@@ -337,16 +337,20 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
     return bound;
 }
 
-// S7 t24 (A1_READINGS §33.4 [M], STATION_HANGARS_SOUND §2.5): the escort's guard of its carrier follows the carrier
-// without further orders. At most once per 30 frames (FighterFormationRecord::follow_next) the squadron re-paths to the
-// carrier's position when it lies more than R from the recorded goal point (record goal, set at the launch and by each
-// re-path); R = half the lead member's max attack range [port: the guard cap constant 0x140b276c4 is not known; BattleAi's
-// object follow uses the same R]. The re-path keeps the formation record (flags, goal object, pushed auto blocks), so an
-// attacking squadron keeps its attack (its formation target is unchanged). The carrier gone (signal 0x10) ends the follow;
-// the guard block becomes a position block at the last goal point, flags 0x02 kept (FIGHTER_FLYING §4.10 E; fighter_sync
-// does the same for every guard record).
-// [port] not modelled: copying a moving carrier's path when within R and the 2x speed cap; locked members keep their
-// order (drop_locked).
+// S7 t24 / t28 (A1_READINGS §33.4, FIGHTER_FLYING §4.10 E, STATION_HANGARS_SOUND §2.5): the escort's guard of its carrier
+// follows the carrier without further orders - the formation's periodic update 0x4192b0, at most once per 30 frames
+// (FighterFormationRecord::follow_next). R = half the lead member's max attack range [port: the guard cap constant
+// 0x140b276c4 is not known; BattleAi's object follow uses the same R].
+//   1. The carrier moving on a path (has a goal, not arrived): the squadron caps its formation speed at min(own, 2 x the
+//      carrier's max speed) [M: the carrier's speed], and when its leader is within R of the carrier and not fighting
+//      [M] it copies the rest of the carrier's path (0x40dbc0, MovementSystem::fighter_copy_path); the record goal
+//      becomes the carrier's goal point [M]. The carrier not moving: no cap.
+//   2. The carrier's current goal point (0x583150: its move goal, else its position) more than R from the record goal:
+//      a guard re-path to that point (0x417520; a new move clears the speed cap).
+// The re-path / copy keeps the formation record (flags, goal object, pushed auto blocks). The carrier gone (signal 0x10):
+// fighter_sync turns the record into a position guard at its goal point, flags 0x02 kept (§4.10 E).
+// [port] not modelled: popping the guard block when more blocks are queued and the carrier stops; locked members keep
+// their order on a re-path (drop_locked).
 void TacticalBattle::hg_guard_follow(TacticalMode& mode, SimRng& rng) {
     if (!space_ || !movement_) return;
     const objects::ObjectStore& store = mode.primary();
@@ -358,6 +362,7 @@ void TacticalBattle::hg_guard_follow(TacticalMode& mode, SimRng& rng) {
         if (!g || !g->alive || g->retreated || !store.alive(g->h)) {  // §4.10 E: a position guard at the last goal point
             r.goal_object = objects::kNoObjectId;
             r.follow_next = 0;
+            movement_->set_fighter_speed_cap(r.key, mv::kFighterNoSpeedCap);
             continue;
         }
         std::vector<objects::ObjectId> ids;
@@ -374,14 +379,28 @@ void TacticalBattle::hg_guard_follow(TacticalMode& mode, SimRng& rng) {
         const Unit* lead = unit_by_id(ids.front());
         const float rr = 0.5f * lead->range;
         const Vec3 gp = store.position(g->h);
-        const float dx = gp.x - r.goal.x, dy = gp.y - r.goal.y;
+        Vec3 goal_point = gp;
+        if (movement_->has_unit(g->id)) {
+            const mv::UnitView gv = movement_->view(g->id);
+            const bool moving = gv.has_goal && !gv.arrived;
+            if (moving) goal_point = Vec3{gv.goal.x, gv.goal.y, 0.0f};
+            // 1. a moving carrier: speed cap, path copy within R
+            movement_->set_fighter_speed_cap(r.key, moving ? 2.0f * gv.max_speed : mv::kFighterNoSpeedCap);
+            const mv::UnitView lv = movement_->view(ids.front());
+            const float lx = lv.pos.x - gp.x, ly = lv.pos.y - gp.y;
+            const bool calm = lv.loco_state == mv::LocoState::FighterIdle || lv.loco_state == mv::LocoState::FighterMoving;
+            if (moving && calm && lx * lx + ly * ly <= rr * rr && movement_->fighter_copy_path(r.key, g->id, frame_))
+                r.goal = goal_point;
+        }
+        // 2. the carrier's goal point away from the record goal: re-path
+        const float dx = goal_point.x - r.goal.x, dy = goal_point.y - r.goal.y;
         if (dx * dx + dy * dy <= rr * rr) continue;
         drop_locked(ids);
         if (ids.empty()) continue;
         mv::MoveOrder o;
         o.units = std::move(ids);
         o.flags = mv::kMoveFlagGuardMove;
-        o.destination = {std::clamp(gp.x, bb.min.x, bb.max.x), std::clamp(gp.y, bb.min.y, bb.max.y)};
+        o.destination = {std::clamp(goal_point.x, bb.min.x, bb.max.x), std::clamp(goal_point.y, bb.min.y, bb.max.y)};
         movement_->move(o, rng, frame_);
         r.goal = Vec3{o.destination.x, o.destination.y, 0.0f};
     }

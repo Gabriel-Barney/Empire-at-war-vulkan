@@ -2328,6 +2328,7 @@ void TacticalBattle::fighter_sync() {
         if (g && g->alive && !g->retreated) continue;
         r.goal_object = objects::kNoObjectId;
         r.follow_next = 0;
+        movement_->set_fighter_speed_cap(r.key, mv::kFighterNoSpeedCap);  // S7 t28: no moving object to keep pace with
     }
 }
 

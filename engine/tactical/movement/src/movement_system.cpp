@@ -1639,7 +1639,8 @@ void MovementSystem::f_moving(Unit& u) {
             return;
         }
     }
-    f_follow(u, u.lp.max_speed, u.d.layer_z);  // formation_speed_or_max(); path kind 1 is not produced by the port
+    // formation_speed_or_max() (S7 t28: a guard's speed cap, A1_READINGS §33.4); path kind 1 is not produced by the port
+    f_follow(u, c ? std::min(u.lp.max_speed, c->speed_cap) : u.lp.max_speed, u.d.layer_z);
     f_commit(u);
 }
 
@@ -2000,6 +2001,54 @@ void MovementSystem::fighter_stop(Unit& u) {
 void MovementSystem::fighter_order(Unit& u) {
     u.sm.state = LocoState::FighterMoving;
     u.fs.idx = 0;
+    if (FighterSquad* c = fsquad(u)) c->speed_cap = kFighterNoSpeedCap;  // S7 t28: a new Set_Move resets the formation speed
+}
+
+// S7 t28 (A1_READINGS §33.4 0x40dbc0, FIGHTER_FLYING §4.10 E): the guard's path copy.
+bool MovementSystem::fighter_copy_path(ObjectId squad, ObjectId from, uint32_t frame) {
+    if (cfg_.mode != MoveMode::Space) return false;
+    const Unit* s = unit_ptr(from);
+    if (!s || is_fighter(*s) || !s->following || s->wps.empty()) return false;
+    const float t = static_cast<float>(frame - s->path_start) + s->path_lag;  // from's playback time (tick_space)
+    std::vector<SpaceWaypoint> rest;
+    for (const SpaceWaypoint& w : s->wps)
+        if (w.time > t) rest.push_back(w);
+    if (rest.empty()) return false;
+    std::vector<ObjectId> ids;
+    if (const FighterSquad* c = squad_ptr(squad)) {
+        ids = c->members;
+    } else if (const Unit* x = unit_ptr(squad); x && is_fighter(*x) && x->fs.squad < 0) {
+        ids.push_back(squad);
+    }
+    bool any = false;
+    for (ObjectId m : ids) {
+        Unit* u = unit_ptr(m);
+        if (!u || !is_fighter(*u)) continue;
+        u->wps = rest;
+        u->fs.idx = 0;
+        u->goal = rest.back().pos;
+        u->has_goal = true;
+        u->need_path = false;
+        u->arrived = false;
+        u->failed = false;
+        u->fallback = false;
+        u->following = true;
+        u->path_start = frame;
+        u->path_lag = 0.0f;
+        u->facing = kNoFacing;
+        const LocoState st = u->sm.state;
+        if (st == LocoState::FighterIdle || st == LocoState::FighterMoving || st == LocoState::None)
+            u->sm.state = LocoState::FighterMoving;
+        any = true;
+    }
+    return any;
+}
+
+bool MovementSystem::set_fighter_speed_cap(ObjectId squad, float cap) {
+    FighterSquad* c = squad_ptr(squad);
+    if (!c) return false;
+    c->speed_cap = cap;
+    return true;
 }
 
 // A unit (any kind) or squadron leaves: fighters drop it from their squadron, the grids and their locks; targets that
@@ -2215,6 +2264,7 @@ void MovementSystem::hash_fighters(StateHasher& h) const {
         hash_cell(h, s.park);
         hash_f3(h, s.dest);
         hash_target(h, s.target);
+        if (s.speed_cap != kFighterNoSpeedCap) h.f32(s.speed_cap);  // S7 t28: only while capped (format unchanged otherwise)
     }
     h.u32(static_cast<uint32_t>(fevents_.size()));
     for (const FighterEvent& e : fevents_) {
