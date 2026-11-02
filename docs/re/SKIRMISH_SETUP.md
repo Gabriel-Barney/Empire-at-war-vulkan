@@ -289,3 +289,15 @@ Port status (headless `--skirmish-ai skirmish` / `foc-land`, `tactical_battle_sk
 | §5 income | per-frame float add of (base × multiplier + additive) / interval / 30 for the object's own stream; a mod on the object's own stream (the supply dock) counts while the object lives; mods on other streams are not applied [M]. |
 | §6 unit cap | ConflictFactionInfo::unit_cap_for_players: sorted keys, linear, 0 outside, integer part (2 players: 9); N = the two slots. |
 | L1_S4 §4.2 capture start gate | 0 in skirmish map battles. |
+| Time limit | none for the skirmish host (the port's 8-minute campaign battle limit is off; the run ends at `--ticks`). |
+| L1_S4 §3.6 pad rule 0x42e400 | a Neutral-faction owner (map props) does not block a pad (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"); with `Influences_Capture_Point` defaulting to true, every prop near a pad blocked it before [M]. The Lua `pad_rule` copy (`engine/lua`) still uses the battle's `is_enemy` [open]. |
+| AI_TACTICAL §7.5 Build / Build_All | a task force with no reservations takes its pad picks from its plan's PotentialPlan first (BuildEconStructure.lua calls Build_All without Produce_Force) [M: retail's TF holds them from plan start]. |
+| AI_TACTICAL_PERCEPTION TacticalBuiltStructureCount | counts the player's finished structures on build pads (pre-built base included) [M]. Before, nothing was counted, so `Num_Refineries` stayed 0 and `Tactical_Multiplayer_Should_Build_Units_Generic_Land` (gated by `Is_Initial_Skirmish_State_Established`) never fired. |
+| AI_GALACTIC_3 §1.11 produced unit | a task force with a unit still in production is not empty (No_Units_Remaining waits for it); before, the Produce_Force plan ended 3 frames after its order. |
+
+Land skirmish result (headless `foc-land`, _MP_LAND_UTAPAU, both slots AI, 2026-11-02): the Rebel takes the Outpost pad and
+builds a Ground Mining Facility (frame 3575), then buys tech 2 and 3, upgrades, turrets, every base structure, three
+Mineral Processors, vehicles and heroes; the Empire stays at its pre-built base with Boba Fett and infantry, builds one
+Mineral Processor, and its Destroy_Structure plans fail. Geonosis (space, idle human Empire): the Rebel's credits at frame
+600 are 2500.0, as in the retail trace; later the Rebel takes fewer extractor pads than retail (2 vs 5 by 5400): its
+Secure_Build_Pad_Space plans (MOVETOLOCATIONRUSH) end in failure 15 frames after they start [open].

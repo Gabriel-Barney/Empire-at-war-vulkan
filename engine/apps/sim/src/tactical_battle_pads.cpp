@@ -122,7 +122,8 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
             const objects::TypeIndex t = st.type(h);
             if (t >= types.size() || !types.get_bool(t, "Influences_Capture_Point")) continue;
             const int32_t o = st.owner(h);
-            const bool allied = o == owner || (combat_ && !combat_->is_enemy(owner, o));
+            // skai: a Neutral-faction owner (map props) is not an enemy (see BattleAi::build_pad_check).
+            const bool allied = o == owner || (combat_ && !combat_->is_enemy(owner, o)) || bt_owner_neutral(o);
             if (allied) continue;
             const Vec3 q = st.position(h);
             const double dx = static_cast<double>(q.x) - pp.x, dy = static_cast<double>(q.y) - pp.y, dz = static_cast<double>(q.z) - pp.z;

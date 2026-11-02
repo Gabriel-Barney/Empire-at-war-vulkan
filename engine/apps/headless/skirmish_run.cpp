@@ -656,7 +656,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         sim::CampaignBattleOptions bo;
         bo.conflict.human_choice = galactic::BattleChoice::Fight;
         bo.conflict.fight_ai_battles = true;
-        bo.battle.max_frames = kBattleFrames;
+        bo.battle.max_frames = s.map_host ? 0 : kBattleFrames;  // skai: a skirmish has no time limit (it ends at --ticks)
         bo.battle.skirmish = s.skirmish;
         bo.battle.skirmish_map = s.map_host;        // skai: team markers, income, skirmish victory
         bo.battle.skip_human_units = s.human >= 0;  // skai: the idle human gets no stand-in orders

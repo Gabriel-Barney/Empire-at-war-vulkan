@@ -563,6 +563,11 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     for (const TacticalBattle::L1BombingRun& run : b_->l1_runs_)
         for (const TacticalBattle::L1Bomber& bm : run.bombers) bombing_run_objects.push_back(bm.id);
     std::sort(bombing_run_objects.begin(), bombing_run_objects.end());
+    // skai: the finished structures standing on build pads (PadState::built), ascending (TacticalBuiltStructureCount).
+    std::vector<objects::ObjectId> pad_built;
+    for (const TacticalBattle::PadState& ps : b_->pads_)
+        if (ps.built != objects::kNoObjectId) pad_built.push_back(ps.built);
+    std::sort(pad_built.begin(), pad_built.end());
     w.objects.clear();
     out.clear();
     std::map<objects::ObjectId, int32_t> stamps;
@@ -642,6 +647,9 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         // t48: Variable_Self.BaseLevel in land skirmish: the count of P's alive objects with this behaviour.
         static const objects::BehaviorTypeId kDummyGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
+        // skai: TacticalBuiltStructureCount's free-store table of built structures (0x4d3630) [M]: the finished structures on
+        // build pads (pre-built skirmish base included). Unset, Num_Refineries stayed 0 and the land skirmish AI never bought units.
+        o.built_structure = std::binary_search(pad_built.begin(), pad_built.end(), id);
         o.transport_landing = st.has_behavior(h, objects::beh::TransportLanding);
         // obj +0x54 (A1_READINGS §30.3): the galactic counterpart's id, -1 none
         if (const objects::ObjectId pm = st.parent_mode_id(h); pm != objects::kNoObjectId) o.parent_object = pm;
@@ -1252,7 +1260,9 @@ at::PadCheck BattleAi::build_pad_check(int32_t player, int32_t pad, int32_t) {
         const objects::TypeIndex t = st.type(h);
         if (t >= types.size() || !types.get_bool(t, "Influences_Capture_Point")) continue;
         const int32_t o = st.owner(h);
-        if (o == owner || !c.is_enemy(owner, o)) continue;
+        // skai: a Neutral-faction owner (map props) is not an enemy (BATTLE_TRANSITIONS §0xb: "a Neutral player is simply not
+        // an enemy"; the port keeps it in the other players' combat rows only for ordered attacks).
+        if (o == owner || !c.is_enemy(owner, o) || b_->bt_owner_neutral(o)) continue;
         const Vec3 q = st.position(h);
         const double dx = static_cast<double>(q.x) - pp.x, dy = static_cast<double>(q.y) - pp.y, dz = static_cast<double>(q.z) - pp.z;
         if (dx * dx + dy * dy + dz * dz <= r * r) return at::PadCheck::Blocked;
