@@ -212,11 +212,11 @@ public:
     const MovementClassTable& classes() const { return cfg_.classes; }
 
     // ---- land world
-    void set_grid(PassabilityGrid grid);
+    void set_grid(PassabilityGrid grid, const ParallelFor& pf = serial_for);  // pf: the region build (OPT3 t05)
     PassabilityGrid& grid() { return grid_; }  // stamping / unstamping; regions rebuild next tick
     const PassabilityGrid& grid() const { return grid_; }
     const RegionMap& regions() const { return regions_; }
-    void rebuild_regions_if_dirty();
+    void rebuild_regions_if_dirty(const ParallelFor& pf = serial_for);
     using HeightFn = std::function<float(float x, float y)>;  // const and thread-safe
     void set_height_fn(HeightFn fn) { height_ = std::move(fn); }
 

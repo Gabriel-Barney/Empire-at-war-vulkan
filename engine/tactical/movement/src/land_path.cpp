@@ -23,7 +23,7 @@ inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : 
 }  // namespace
 
 // ---------------------------------------------------------------- region map
-void RegionMap::build(const PassabilityGrid& grid, std::span<const uint32_t> masks) {
+void RegionMap::build(const PassabilityGrid& grid, std::span<const uint32_t> masks, const ParallelFor& pf) {
     w_ = grid.width();
     h_ = grid.height();
     grid_version_ = grid.version();
@@ -107,54 +107,60 @@ void RegionMap::build(const PassabilityGrid& grid, std::span<const uint32_t> mas
     }
     adj_begin_.push_back(static_cast<uint32_t>(adj_.size()));
 
-    // Per mask: components (BFS in region index order) and clearance.
-    std::vector<int32_t> queue;
-    for (uint32_t mask : masks_) {
-        std::vector<int32_t> comp(regions_.size(), -1);
-        int32_t next = 0;
-        for (size_t ri = 0; ri < regions_.size(); ++ri) {
-            if (comp[ri] >= 0 || !passable(regions_[ri].bits, mask)) continue;
-            queue.clear();
-            queue.push_back(static_cast<int32_t>(ri));
-            comp[ri] = next;
-            for (size_t qi = 0; qi < queue.size(); ++qi) {
-                for (int32_t nb : neighbors(queue[qi])) {
-                    if (comp[static_cast<size_t>(nb)] >= 0 || !passable(regions_[static_cast<size_t>(nb)].bits, mask)) continue;
-                    comp[static_cast<size_t>(nb)] = next;
-                    queue.push_back(nb);
+    // Per mask: components (BFS in region index order) and clearance; one job per mask, each writing its own slot.
+    comp_.resize(masks_.size());
+    clear_.resize(masks_.size());
+    pf(static_cast<uint32_t>(masks_.size()), 1, [&](uint32_t mb, uint32_t me) {
+        std::vector<int32_t> queue;
+        std::vector<int32_t> d;
+        for (uint32_t mi = mb; mi < me; ++mi) {
+            const uint32_t mask = masks_[mi];
+            std::vector<int32_t>& comp = comp_[mi];
+            comp.assign(regions_.size(), -1);
+            int32_t next = 0;
+            for (size_t ri = 0; ri < regions_.size(); ++ri) {
+                if (comp[ri] >= 0 || !passable(regions_[ri].bits, mask)) continue;
+                queue.clear();
+                queue.push_back(static_cast<int32_t>(ri));
+                comp[ri] = next;
+                for (size_t qi = 0; qi < queue.size(); ++qi) {
+                    for (int32_t nb : neighbors(queue[qi])) {
+                        if (comp[static_cast<size_t>(nb)] >= 0 || !passable(regions_[static_cast<size_t>(nb)].bits, mask)) continue;
+                        comp[static_cast<size_t>(nb)] = next;
+                        queue.push_back(nb);
+                    }
+                }
+                ++next;
+            }
+
+            // Chamfer 3-4 distance to the nearest blocked cell; outside the grid counts as blocked.
+            constexpr int32_t kBig = 1 << 28;
+            d.assign(n, kBig);
+            for (uint32_t y = 0; y < h_; ++y)
+                for (uint32_t x = 0; x < w_; ++x)
+                    if (!grid.passable_cell(static_cast<int32_t>(x), static_cast<int32_t>(y), mask)) d[static_cast<size_t>(y) * w_ + x] = 0;
+            auto get = [&](int32_t x, int32_t y) -> int32_t {
+                if (x < 0 || y < 0 || static_cast<uint32_t>(x) >= w_ || static_cast<uint32_t>(y) >= h_) return 0;
+                return d[static_cast<size_t>(y) * w_ + static_cast<size_t>(x)];
+            };
+            for (int32_t y = 0; y < static_cast<int32_t>(h_); ++y) {
+                for (int32_t x = 0; x < static_cast<int32_t>(w_); ++x) {
+                    int32_t& c = d[static_cast<size_t>(y) * w_ + static_cast<size_t>(x)];
+                    c = std::min({c, get(x - 1, y) + 3, get(x, y - 1) + 3, get(x - 1, y - 1) + 4, get(x + 1, y - 1) + 4});
                 }
             }
-            ++next;
-        }
-        comp_.push_back(std::move(comp));
-
-        // Chamfer 3-4 distance to the nearest blocked cell; outside the grid counts as blocked.
-        constexpr int32_t kBig = 1 << 28;
-        std::vector<int32_t> d(n, kBig);
-        for (uint32_t y = 0; y < h_; ++y)
-            for (uint32_t x = 0; x < w_; ++x)
-                if (!grid.passable_cell(static_cast<int32_t>(x), static_cast<int32_t>(y), mask)) d[static_cast<size_t>(y) * w_ + x] = 0;
-        auto get = [&](int32_t x, int32_t y) -> int32_t {
-            if (x < 0 || y < 0 || static_cast<uint32_t>(x) >= w_ || static_cast<uint32_t>(y) >= h_) return 0;
-            return d[static_cast<size_t>(y) * w_ + static_cast<size_t>(x)];
-        };
-        for (int32_t y = 0; y < static_cast<int32_t>(h_); ++y) {
-            for (int32_t x = 0; x < static_cast<int32_t>(w_); ++x) {
-                int32_t& c = d[static_cast<size_t>(y) * w_ + static_cast<size_t>(x)];
-                c = std::min({c, get(x - 1, y) + 3, get(x, y - 1) + 3, get(x - 1, y - 1) + 4, get(x + 1, y - 1) + 4});
+            for (int32_t y = static_cast<int32_t>(h_) - 1; y >= 0; --y) {
+                for (int32_t x = static_cast<int32_t>(w_) - 1; x >= 0; --x) {
+                    int32_t& c = d[static_cast<size_t>(y) * w_ + static_cast<size_t>(x)];
+                    c = std::min({c, get(x + 1, y) + 3, get(x, y + 1) + 3, get(x + 1, y + 1) + 4, get(x - 1, y + 1) + 4});
+                }
             }
+            std::vector<float>& cl = clear_[mi];
+            cl.assign(n, 0.0f);
+            for (size_t i = 0; i < n; ++i)
+                cl[i] = d[i] <= 0 ? 0.0f : static_cast<float>(d[i]) * (kCellSize / 3.0f) - kHalfCell;
         }
-        for (int32_t y = static_cast<int32_t>(h_) - 1; y >= 0; --y) {
-            for (int32_t x = static_cast<int32_t>(w_) - 1; x >= 0; --x) {
-                int32_t& c = d[static_cast<size_t>(y) * w_ + static_cast<size_t>(x)];
-                c = std::min({c, get(x + 1, y) + 3, get(x, y + 1) + 3, get(x + 1, y + 1) + 4, get(x - 1, y + 1) + 4});
-            }
-        }
-        std::vector<float> cl(n, 0.0f);
-        for (size_t i = 0; i < n; ++i)
-            cl[i] = d[i] <= 0 ? 0.0f : static_cast<float>(d[i]) * (kCellSize / 3.0f) - kHalfCell;
-        clear_.push_back(std::move(cl));
-    }
+    });
 }
 
 int32_t RegionMap::mask_slot(uint32_t mask) const {

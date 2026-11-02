@@ -763,10 +763,14 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
 #ifdef ALAMO_SIM_HAVE_ASSETS
     namespace mv = tactical::movement;
     if (!files_ || type >= types_->size()) return nullptr;
-    std::lock_guard<std::mutex> lock(model_cache_->mutex);
     const std::pair<uint32_t, uint32_t> key{type, space ? 1u : 0u};
-    auto it = model_cache_->avoid.find(key);
-    if (it != model_cache_->avoid.end()) return it->second.get();
+    {
+        std::lock_guard<std::mutex> lock(model_cache_->mutex);
+        auto it = model_cache_->avoid.find(key);
+        if (it != model_cache_->avoid.end()) return it->second.get();
+    }
+    // Built outside the lock (OPT3 t05: preload_models loads types in parallel); two threads building the same key make
+    // the same entry and the first one stored is kept.
     std::unique_ptr<mv::AvoidModel> out;
     const std::string_view name = trim(types_->get_string(type, space ? "Space_Model_Name" : "Land_Model_Name"));
     assets::ModelAsset m;
@@ -833,9 +837,8 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
             out->bound_h = {(bound.max.x - bound.min.x) * 0.5f, (bound.max.y - bound.min.y) * 0.5f, (bound.max.z - bound.min.z) * 0.5f};
         }
     }
-    const mv::AvoidModel* r = out.get();
-    model_cache_->avoid.emplace(key, std::move(out));
-    return r;
+    std::lock_guard<std::mutex> lock(model_cache_->mutex);
+    return model_cache_->avoid.emplace(key, std::move(out)).first->second.get();
 #else
     (void)type, (void)space;
     return nullptr;
@@ -861,9 +864,11 @@ const BattleCatalog::ModelInfo* BattleCatalog::model_info(uint32_t type, bool sp
 #ifdef ALAMO_SIM_HAVE_ASSETS
     if (!files_ || type >= types_->size()) return nullptr;
     const uint32_t code = (space ? 1u : 0u) | (fallback ? 2u : 0u);
-    std::lock_guard<std::mutex> lock(model_cache_->mutex);
-    auto it = model_cache_->entries.find({type, code});
-    if (it != model_cache_->entries.end()) return it->second.get();
+    {
+        std::lock_guard<std::mutex> lock(model_cache_->mutex);
+        auto it = model_cache_->entries.find({type, code});
+        if (it != model_cache_->entries.end()) return it->second.get();
+    }  // built outside the lock, as avoid_model
     std::vector<const char*> order = {space ? "Space_Model_Name" : "Land_Model_Name"};
     if (fallback) {
         order.push_back(space ? "Land_Model_Name" : "Space_Model_Name");
@@ -890,9 +895,8 @@ const BattleCatalog::ModelInfo* BattleCatalog::model_info(uint32_t type, bool sp
         }
         break;  // the first named model field decides (a missing file: no model data)
     }
-    const ModelInfo* out = info.get();
-    model_cache_->entries.emplace(std::make_pair(type, code), std::move(info));
-    return out;
+    std::lock_guard<std::mutex> lock(model_cache_->mutex);
+    return model_cache_->entries.emplace(std::make_pair(type, code), std::move(info)).first->second.get();
 #else
     (void)type, (void)space, (void)fallback;
     return nullptr;
@@ -906,6 +910,35 @@ bool BattleCatalog::model_half_extents(uint32_t type, float& half_x, float& half
     half_y = 0.5f * (m->max[1] - m->min[1]);
     height_z = m->max[2] - m->min[2];
     return true;
+}
+
+void BattleCatalog::preload_models(std::span<const uint32_t> types, bool space, const ParallelFor& pf) const {
+#ifdef ALAMO_SIM_HAVE_ASSETS
+    if (!files_) return;
+    std::vector<uint32_t> todo;  // distinct types not cached yet, ascending
+    {
+        std::lock_guard<std::mutex> lock(model_cache_->mutex);
+        for (const uint32_t t : types) {
+            if (t >= types_->size()) continue;
+            const bool avoid = model_cache_->avoid.count({t, space ? 1u : 0u}) == 0;
+            const bool info = !space && model_cache_->entries.count({t, 2u}) == 0;
+            if (avoid || info) todo.push_back(t);
+        }
+    }
+    std::sort(todo.begin(), todo.end());
+    todo.erase(std::unique(todo.begin(), todo.end()), todo.end());
+    if (todo.empty()) return;
+    const RangeFn body = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            (void)avoid_model(todo[i], space);
+            if (!space) (void)model_info(todo[i], false, true);
+        }
+    };
+    if (pf) pf(static_cast<uint32_t>(todo.size()), 1, body);
+    else serial_for(static_cast<uint32_t>(todo.size()), 1, body);
+#else
+    (void)types, (void)space, (void)pf;
+#endif
 }
 
 bool BattleCatalog::muzzle_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const {
