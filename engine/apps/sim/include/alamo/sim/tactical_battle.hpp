@@ -314,8 +314,8 @@ public:
     std::span<const objects::ObjectId> story_reinforced() const { return story_reinforced_; }
     // S7 t15 A1 - "unit ability finished" (object signal 0x29) raised during the last tick(), in order: ability ends
     // (AbilitySystem Ended: countdown expiry, special removals, the Remote_Bomb toss at its Toss_Anim end) and the jetpack's swap
-    // back to the primary locomotor (MOVEMENT §3.1.1 step 6, seen before the combat tick as the end of the weapons
-    // suspension: [port] one tick late when the swap runs after it). The tactical AI and the story bridge read it.
+    // back to the primary locomotor (MOVEMENT §3.1.1 step 6, seen as the end of the weapons suspension before the combat
+    // tick, or at the end of the tick when the swap runs after that point: S7 t27). The tactical AI and the story bridge read it.
     std::span<const objects::ObjectId> ability_finished_events() const { return ability_finished_; }
     // The Dummy_Barrage_Target of a position-targeted ability for `player` (command 57; Lua Activate_Ability with a
     // position through ObjectBridge::spawn_ability_target). Returns its id, kNoObjectId when the type is missing.
@@ -1083,6 +1083,7 @@ private:
     void clear_queues(std::span<const objects::ObjectId> ids);
     std::vector<objects::ObjectId> enqueue(std::span<const objects::ObjectId> ids, const QueuedOrder& o);  // -> run now
     void advance_queues(TacticalMode& mode, SimRng& rng);
+    void late_swap_back_signals();  // S7 t27: signal 0x29 for a jetpack swap back after the combat_pre loop
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
     void exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng, float facing_deg,
                    bool attack_move, uint8_t flags = 0, bool switch_locomotor = false);

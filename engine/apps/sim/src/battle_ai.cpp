@@ -816,8 +816,47 @@ void BattleAi::follow_service() {
     follows_.erase(std::remove_if(follows_.begin(), follows_.end(), [](const ObjectFollow& f) { return f.units.empty(); }), follows_.end());
 }
 
+// S7 t26 (AI_TACTICAL §7.3.3 item 2, A1_READINGS §33.3): the orders executed here (group / unit moves, MoveToObject, attack,
+// the Lua object orders Move_To / Attack_Move / Guard_Target / Stop) raise signal 0xb on each unit they take (TEAM
+// containers: their members; the world adds the container), which ends the Activate_Ability blocks waiting on it.
+// [port] Orders of other hosts (human commands, story pipelines) do not raise it yet.
+bool BattleAi::hostile_owner(uint8_t player, int32_t owner) const {
+    return b_->combat_->is_enemy(static_cast<int32_t>(player), owner) && !b_->bt_owner_neutral(owner);
+}
+
+void BattleAi::order_signals(uint8_t player, const cmd::EventData& ev) {
+    using T = cmd::EventType;
+    std::vector<uint32_t> wire;
+    switch (ev.type()) {
+        case T::MoveToPositionFacing: wire = ev.ids("units"); break;
+        case T::MoveToObject: wire = ev.ids("movers"); break;
+        case T::Attack: wire = ev.ids("attackers"); break;
+        case T::PortExtension: {
+            const uint32_t sub = ev.u("subtype");
+            const auto b = ev.bytes_view("data");
+            if (sub < lua::kLuaOrderSubtype || sub > lua::kLuaOrderSubtype + 0xFFu || b.size() < lua::kLuaOrderPayloadBytes) return;
+            const auto order = static_cast<lua::LuaOrder>(sub - lua::kLuaOrderSubtype);
+            if (order != lua::LuaOrder::MoveTo && order != lua::LuaOrder::AttackMove && order != lua::LuaOrder::Guard &&
+                order != lua::LuaOrder::Stop)
+                return;
+            wire.push_back(le32(b, 0));
+            for (size_t off = lua::kLuaOrderPayloadBytes; off + 4 <= b.size(); off += 4) wire.push_back(le32(b, off));
+            break;
+        }
+        default: return;
+    }
+    std::vector<objects::ObjectId> done;
+    for (const uint32_t w : wire)
+        for (const objects::ObjectId id : team_units(player, w))
+            if (std::find(done.begin(), done.end(), id) == done.end()) {
+                done.push_back(id);
+                world_->order_replaced(id);
+            }
+}
+
 cmd::RejectReason BattleAi::execute(uint8_t player, const cmd::EventData& ev) {
     const cmd::RejectReason r = execute_order(player, ev);
+    if (r == cmd::RejectReason::None) order_signals(player, ev);
     std::string key(ev.def().name);
     if (ev.type() == cmd::EventType::PortExtension) key += "." + std::to_string(ev.u("subtype") & 0xFFu);
     auto& e = executed_[key + (r == cmd::RejectReason::None ? "" : std::string(" ") + std::string(cmd::reject_reason_name(r)))];
@@ -889,7 +928,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
         case T::Attack: {
             const uint32_t tw = ev.u("target");
             const TacticalBattle::Unit* t = tw <= 0x7FFFFFFFu ? b_->unit_by_id(static_cast<objects::ObjectId>(tw)) : nullptr;
-            if (!t || !t->alive || t->retreated || !b_->combat_->is_enemy(player, st.owner(t->h))) return R::InvalidTarget;
+            if (!t || !t->alive || t->retreated || !hostile_owner(player, st.owner(t->h))) return R::InvalidTarget;
             int32_t hp = -1;
             if (const uint32_t ref2 = ev.u("ref2"); ref2 > 0)
                 for (uint32_t k = 0; k < b_->combat_->hardpoint_count(t->id) && hp < 0; ++k)
@@ -964,7 +1003,22 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 x = tp.x;
                 y = tp.y;
                 const TacticalBattle::Unit* tu = b_->unit_by_id(static_cast<objects::ObjectId>(tw));
-                if (order == lua::LuaOrder::AttackMove && tu && tu->alive && !tu->retreated && b_->combat_->has_unit(tu->id)) {
+                const bool attackable = tu && tu->alive && !tu->retreated && b_->combat_->has_unit(tu->id);
+                if (order == lua::LuaOrder::AttackMove && attackable && !hostile_owner(player, st.owner(tu->h))) {
+                    // S7 t28 (TACTICAL_COMBAT §2.8 table, "TF.Attack_Move(non-hostile object)"): Order_Attack is refused for
+                    // every armed member, so only unarmed members move (none -> the order fails and the units keep their
+                    // auto targets); no path B (Formation_Attack_Target needs a hostile object). An object's own Attack_Move
+                    // (arg 0) issues no Order_Attack: a plain move to the object.
+                    if (le32(b, 20) & at::kTfAttackMoveIssueAttack) {
+                        std::vector<objects::ObjectId> kept;
+                        for (const objects::ObjectId id : group.units)
+                            if (!b_->combat_->has_unit(id) || !b_->combat_->can_attack(id)) kept.push_back(id);
+                        if (kept.empty()) return R::InvalidTarget;
+                        group.units = std::move(kept);
+                        u = b_->unit_by_id(group.units.front());
+                    }
+                    for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
+                } else if (order == lua::LuaOrder::AttackMove && attackable) {
                     // refixf t06 (TACTICAL_COMBAT §2.8): an Attack_Move on an object. A: a task-force order (arg bit, header)
                     // issues Order_Attack (ordered 1) to every unit now; a refusing unit is dropped from the move, none left
                     // -> the order fails. B: the object is each moving unit's formation attack goal (the combat system locks
@@ -1429,6 +1483,11 @@ std::vector<int32_t> BattleAi::ability_finished() {
 }
 
 bool BattleAi::movement_locked(int32_t object_id) { return object_id >= 0 && b_->movement_locked(object_id); }
+float BattleAi::sight_weather_factor(int32_t type, int32_t) {
+    const objects::GameObjectTypes& types = b_->catalog_->types();
+    if (b_->space_ || type < 0 || static_cast<size_t>(type) >= types.size()) return 1.0f;
+    return b_->weather().sight_modifier(types.get_string(static_cast<objects::TypeIndex>(type), "Weather_Category"));
+}
 
 // [port] The S10 stand-in (attack-move to 70 % of the attack range of the nearest enemy) for the sides that have
 // no tactical AI, on its own cadence.
