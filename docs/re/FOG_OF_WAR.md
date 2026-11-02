@@ -64,6 +64,18 @@ DECORATIONS.md §2.1 labels +0x08 / +0x10 as unknown; they are the reveal count 
 
 - Box: the mode's map extents (mode vtable +0x1f8: centre c, half size h): x0 = cx − hx, x1 = cx + hx,
   y0 = cy − hy, y1 = cy + hy (0x35eb40). Same box as the threat grid (AI_TACTICAL_PERCEPTION §4.1).
+  When all six values are 0 no grid is created at all. [H, 2026-11-01] The slot per mode:
+  - **Land** (0x3b8020): the terrain (land mode +0x338, alTerrain) box 0x1320d0, cached at the first call: with
+    W, H = the vertex grid size (terrain +0x10 / +0x14, TERRAIN_WATER_POST §1.3) and spacing 20 (+0x9c):
+    fx = (float)W × 20, fy = (float)H × 20; centre (fx × 0.5, fy × 0.5, (zmax + zmin) × 0.5), half (|fx| × 0.5,
+    |fy| × 0.5, |zmax − zmin| × 0.5) with zmin / zmax over every vertex height × 0.048828125, both started at 0.
+    So the land fog box is **[0, 20·W] × [0, 20·H], the whole terrain, not the playable box** (Endor: [0, 6220]²
+    against the playable (300, 1160)–(5920, 5060)). No terrain → the zero box → no grids.
+    Port status (2026-11-01): the port still uses the playable box on land; it switches together with the AI threat
+    grid, which uses the same box (AI_TACTICAL_PERCEPTION §4.1), FOWF t01.
+  - **Space** (0x4d7780): mode +0x390.., the **playable box** (.ted 0x103 minis 04/05, SPACE_AND_OPEN). (The camera
+    box +0x3a8, minis 07/08, is vf +0x208.)
+  - Base `GameModeClass` (0x35e390): the zero box (galactic).
 - Desired cell = `DesiredLandFOWCellSize` (GameConstants +0x11c0, shipped **15.0**) on land,
   `DesiredSpaceFOWCellSize` (+0x11c4, shipped **100.0**) in space (selected by mode type 1 / 2). The ctor
   takes explicit cell sizes but the only caller passes 0 → desired sizes are used.
@@ -165,6 +177,11 @@ A count-reset helper (0x4c0d90) sets the listed counts to 0.
   (0x39a230: p's relation table entry for the owner ≠ 0; planets use their planet owner): centre =
   object position + model bounding-box centre (obj +0x2a0 vtable +0x58), r = max of the two box half
   extents (10 when the object has no model), rDense = r. Used to show an enemy object itself.
+  [H, 2026-11-01] The box is ModelClass vf +0x58 = 0x264920: the render model's **local collision bound**
+  (alHModel +0x120, SPACE_AVOIDANCE §3.2: bind-pose union of the collision meshes; centre 0, half 1 when the render
+  object is not an alHModel), **not scaled and not rotated** (the world AABB 0x264ab0 is a different call). Centre =
+  P + (c.x, c.y, c.z), r = max(h.x, h.y). Without a model the centre local is **never written** (stack garbage); the
+  flash 0x365630 and Temporary_Reveal use the object position there — a port uses the position.
 - **Sight mode** — otherwise:
   - base = land: `Land_FOW_Reveal_Range` (type +0x1d68) × weather factor (0x3722a0 → 0x468510, §3.1.1);
     space: `Space_FOW_Reveal_Range` (+0x1d6c). Default 0.
@@ -242,12 +259,17 @@ Fields: +0x40/+0x44 x, y at the last reveal; +0x48 squared move threshold; +0x50
 `SetupPhaseEnabled` (GameConstants +0x2ef) gates it (0x3c05d0). While the setup phase is active the
 decay (§4) does not run and the renderer uses palette 2 (`SetupPhaseFOWColor`).
 - **Setup reveal** (0x3c01e0), at start and at end: for every object (GOM order), target player = owner,
-  or the record's +4 player when the type has `Reveal_For_Attacker` (+0x5a), or +8 when
-  `Reveal_For_Defender` (+0x5b) (then force = 1). The object reveals for that player (RevealObject with
+  or the record's +4 player when the type has `Reveal_For_Attacker` (+0x5a) and +4 ≠ −1, else +8 when
+  `Reveal_For_Defender` (+0x5b) and +8 ≠ −1 (then force = 1). The object reveals for that player (RevealObject with
   that force, into a static list that is never undone) when it has `Reveal_During_Setup_Phase(_Only)`
-  (+0x58 / +0x59), or when it has a locomotor and (force or a REVEAL behaviour). Objects of the +8 player
-  with `Reinforcement_Prevention_Radius` (+0x1df8) ≠ 0 (and powered, or not POWERED) also reveal a circle
-  of that radius **for the +4 player**, whose counts are then zeroed (0x4c0d90).
+  (+0x58 / +0x59), or when **force, or it has both a REVEAL behaviour and a locomotor** [H, 2026-11-01: an earlier
+  reading "locomotor and (force or REVEAL)" dropped forced objects without a locomotor]. Only an object that revealed
+  then checks the prevention circle [H, 2026-11-01]: `Reinforcement_Prevention_Radius` (+0x1df8) ≠ 0, **target
+  player** = +8, +4 ≠ −1 and (the object has no POWERED behaviour (obj +0x341 = −1) or the **target player has base
+  power**: 0x527520 on the player's tactical data, mode vf +0x220, TACTICAL_GAPS §7.3 — a per-player flag, true while
+  an allied Base_Power_Ability source lives; empty list = false). Then it reveals a circle of that radius **for the +4
+  player** through the position reveal 0x35d080 (battle scale applies; rNormal = radius, rDense = 0, so on land, with
+  no dense mask, the full circle) and that list's counts are zeroed (0x4c0d90).
   Then, while setup continues: Binarise(grid[+8], grid[+4]) (0x4c1830) — +8's counted cells → state 0xFF,
   others → 0 (counts kept); on +4's grid every cell +8 sees is forced to state 0 / count 0, +4's counted cells
   elsewhere become state 0xFF / count 1, and its uncounted cells elsewhere state 0. **Every fade byte of both
@@ -263,6 +285,17 @@ decay (§4) does not run and the renderer uses palette 2 (`SetupPhaseFOWColor`).
   its first call with 0x140b169c8 [M: `SetupPhaseCountdownSeconds`, shipped 5] and sets +0x36 := the AND of
   player +0x184 (ready) over the human players (+0x62). So the first ready player starts a 5 s countdown and
   the phase ends at its expiry or as soon as every human is ready. `SetupPhaseEnabled` is False in FoC and TR.
+- **Manager details** [H, 2026-11-01]: 0x140b169c8 = GameConstants +0x11c8 = `SetupPhaseCountdownSeconds` (float,
+  shipped 5; 0x140b15aef = GC +0x2ef = `SetupPhaseEnabled`). The countdown (0x4ad3a0) stores the mode frame F₀ and
+  (int)(30 × seconds) frames; expired (0x4ad350) when F₀ + frames ≤ F. Command 32 (0x5aef60) sets the issuer's ready
+  byte, then, when the mode has a setup manager, runs 0x3bed70 — no "phase active" test; the armed flag +0x35 is never
+  cleared. The end test runs at common-tick step 11 (MAIN_LOOP §3.3, after the GOM service).
+- **Command 31 `SetupPhaseMove`** (execute 0x5aec70, payload id32, q1–q3, q6): with a live object of that id
+  (no owner or phase test in the execute) the position and angle are dequantised, the object is placed there
+  (0x3bff00: terrain snap 0x42bb40 for z and tilt, facing = the angle, forced transform flush 0x3a8f90), space
+  formation members follow their container, then the manager's pick-up / drop pair 0x3bfb10 / 0x3c0020 (0) runs on
+  the object's setup group: selectable again, HIDE_WHEN_FOGGED re-enabled, model shown (presentation). The drag
+  validity colour (`SetupPhaseInvalidDragColor`) is client side.
 - Open item 4: after setup end the counts of all sources are 0 but REVEAL behaviours only re-reveal
   after moving one cell, so stationary units' cells would regrow after 6 s. Something not traced
   (behaviour vtable +0xb8 called by 0x3bfba0) probably marks them dirty.
@@ -328,6 +361,20 @@ has Reveal_All active (+0x50). Otherwise sample points (0x35dec0): the object po
 with `Multisample_FOW_Check` (type +0x87), eight points from the object's bounding box (0x38de80 corners
 via 0x20d1c0…0x20d380, z = 0). The object is **hidden iff every sample point is fogged** under §5.1
 (same AI gate and force).
+
+**The "bounding box" is the oriented 2-D footprint rectangle 0x38de80**, not the model box [H, 2026-11-01] (the same
+rectangle the space static colliders use, L1_S4_REMAINING §3.3):
+- θ = obj +0x8c (facing yaw, degrees) × 0.017453292; a = (cos θ, sin θ), b = (−sin θ, cos θ).
+- Centre c = P + ox·a + oy·b with (ox, oy) = `Scale_Factor` × (`Custom_Hard_XExtent_Offset`, `_YExtent_Offset`)
+  (type +0x658 × +0x16c4 / +0x16c8).
+- Half extents (hx, hy) = 0x396850: a TEAM object with a team box uses its members' box (0x404450); otherwise the
+  type's 0x371be0: `Scale_Factor` × (`Custom_Hard_XExtent`, `Custom_Hard_YExtent`) (+0x16bc / +0x16c0) when both are
+  > 0; else each one that is ≤ 0 comes from |half extent| of the type's model for the current mode (0x3729f0, ModelClass
+  vf +0x58 = the local collision bound, §3.1) × `Scale_Factor`, and both are 0 without a model. Deployed units
+  (`Deploys` +0xd1 with the locomotor in its deployed state) use 0x371d20 (`Custom_Hard_X/YExtent_Deployed`, same
+  fallback) [M for the state test].
+- The eight points: c ± hx·a ± hy·b (four corners), then c + hx·a, c − hy·b, c − hx·a, c + hy·b (edge midpoints).
+  Their order does not matter (all must be fogged).
 
 ### 5.3 Consumers (for reference) [H for the call, M for the role]
 Targeting filter (TACTICAL_COMBAT §2.3, **force 1** per disassembly — AI players are fogged too;
@@ -455,12 +502,21 @@ does nothing. Garbage collection of the cells object does **not** undo (dtor 0x6
    size; harmless only if no such machine exists in MP.
 7. ~~Space reinforcement FOW sampler and palette 3~~ — resolved [H]: render-only prevention-radius overlay; the
    sim rule is SpaceMode vf80. TACTICAL_GAPS.md §5.5 (drop validity §4.2).
-8. Probe (Gabriel launches; kit under tools/probe_mod/): a land skirmish script that every 15 frames logs
+8. Probe (Gabriel launches; kit under tools/probe_mod/fow_regrow/): a land skirmish script that every 15 frames logs
    `FogOfWar`-independent visibility of an enemy unit walking out of sight (via a STORY_FOG_OBJECT_REVEAL
    on a human plot player), to confirm the ~6.9 s regrow window and the top-edge circle shift.
 9. ~~Garrison exit path, binarise of the +4 grid, setup-phase end trigger, overrun game types~~ — resolved
    2026-11-01 [H]: §3.2 (exit does not mark dirty), §3.4 (fade bytes zeroed; start / end triggers), §3.3
    (multiplayer only).
+10. ~~Port stand-ins (FOWF t01–t05)~~ — resolved 2026-11-01 [H]: map extents per mode (§1.2: land = whole terrain),
+    footprint box = local collision bound (§3.1), Multisample = oriented Custom_Hard rectangle (§5.2), setup "powered"
+    = the target player's base power and the corrected reveal condition (§3.4), setup manager countdown / commands 31,
+    32 (§3.4). **GOM list +0x2f0** (list object +0x2e8, used by the prevention test 0x4d8d10 and the land drop
+    validity): every object registered in the store (Create_Object 0x29f810, re-registration 0x2b5ad0 on load) whose
+    type has `Reinforcement_Enabling_Radius` (+0x1e20) > 0, `Reinforcement_Prevention_Radius` (+0x1df8) > 0 or
+    `Base_Shield_Radius` (+0x21f4) > 0, appended in creation order; removed only by Remove_Object 0x2a6a00 at the
+    store flush. No alive / owner test on membership: dead objects stay until their flush, and death clones are members
+    when their own type qualifies. The prevention test filters radius > 0 and non-allied owners (0x39a230), 2-D, strict <.
 
 ---
 

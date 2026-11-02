@@ -343,9 +343,10 @@ std::string obstacle_types() {
 }
 
 std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = false, bool bm = false, bool prod = false,
-                                bool obstacle = false, bool team = false, bool fog_bm = false) {
+                                bool obstacle = false, bool team = false, bool fog_bm = false, bool fog_setup = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
+    d->root = fs::temp_directory_path() / (fog_setup ? "alamo_sim_battle_tests_fog_setup"  // FOWF t05
+                                           : fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
                                            : obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
                                            : team     ? "alamo_sim_battle_tests_team"  // refixf t03: TEAM containers
                                            : prod   ? "alamo_sim_battle_tests_prod"  // station production
@@ -358,7 +359,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", fog_bm ? fog_bm_types()
+    write_file(x / "S10Types.xml", fog_setup ? fog_types()
+                                   : fog_bm ? fog_bm_types()
                                    : obstacle ? obstacle_types()
                                    : team     ? team_types()
                                    : prod   ? prod_types()
@@ -398,7 +400,11 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
                " <Armor_Types>Armor_Default, Armor_Ship</Armor_Types>\n"
                " <Damage_To_Armor_Mod>Damage_Laser, Armor_Ship, 0.8</Damage_To_Armor_Mod>\n"
                " <AutoResolveLoserAttrition>0.80</AutoResolveLoserAttrition>\n"
-               " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n</GameConstants>\n");
+               " <Space_Retreat_Allowed_Countdown_Seconds>5.0</Space_Retreat_Allowed_Countdown_Seconds>\n" +
+                   std::string(fog_setup ? " <SetupPhaseEnabled>True</SetupPhaseEnabled>\n"  // FOWF t05: a mod's land setup phase
+                                           " <SetupPhaseCountdownSeconds>3</SetupPhaseCountdownSeconds>\n"
+                                         : "") +
+                   "</GameConstants>\n");
     write_file(d->root / "Data/Scripts/Library/PGAICommands.lua", kLua);
     d->files = std::make_unique<DirectoryProvider>(path_to_utf8(d->root));
     std::vector<std::string> diag;
@@ -1937,6 +1943,118 @@ void test_fog_battle(const Data& d) {
 #endif
 
 #ifdef ALAMO_SIM_HAVE_FOG
+// FOWF t05: a land battle with a mod-style setup phase (SetupPhaseEnabled, SetupPhaseCountdownSeconds 3). During setup
+// the human moves an own unit with SetupPhaseMove (31; an enemy unit is refused); SetupPhaseTriggerEnd (32) from the AI arms the 90-frame
+// countdown, from the (only) human ends the phase at the next tick; afterwards 31 is refused.
+struct SetupRun {
+    bool setup_at_start = false, moved = false, enemy_refused = false, refused_after = false;
+    int ready_cmd = -1;
+    uint32_t ready_frame = 0, end_frame = 0;
+};
+
+SetupRun run_setup_battle(const Data& d, uint8_t ready_player, int32_t workers) {
+    SetupRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.fog = true;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    std::vector<std::string> diag;
+    CHECK(battles.attach(&diag));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    using R = commands::RejectReason;
+    auto move_cmd = [](objects::ObjectId id, float x, float y, float angle) {
+        commands::EventData ev(commands::EventType::SetupPhaseMove);
+        ev.set("object", static_cast<uint32_t>(id)).set_f("x", x).set_f("y", y).set_f("z", 0.0f).set_f("angle", angle);
+        return ev;
+    };
+    bool invaded = false, seen = false;
+    for (uint64_t t = 0; t < 4000 && !out.refused_after; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) {
+                CHECK(gs->invade(1, 1, {}) == R::None);
+                invaded = true;
+            }
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || !b->fog()) continue;
+        const objects::ObjectStore& st = tm->primary();
+        if (!seen) {
+            seen = true;
+            out.setup_at_start = b->fog_setup_phase();
+        }
+        if (b->frame() == 10 && b->fog_setup_phase()) {
+            for (objects::ObjectHandle h : st.owned_by(1))
+                if (st.active(h)) {
+                    out.enemy_refused = host.execute_direct(0, commands::CommandSource::Player, move_cmd(st.id(h), 600.0f, 600.0f, 0.0f)) == R::InvalidUnit;
+                    break;
+                }
+            for (objects::ObjectHandle h : st.owned_by(0)) {
+                if (!st.active(h) || !b->combat().has_unit(st.id(h))) continue;
+                const Vec3 p = st.position(h);
+                const commands::EventData ev = move_cmd(st.id(h), p.x + 40.0f, p.y + 30.0f, 90.0f);
+                const R r = host.execute_direct(0, commands::CommandSource::Player, ev);
+                const Vec3 q = st.position(h), f = st.facing(h);
+                out.moved = r == R::None && q.x == ev.f("x") && q.y == ev.f("y") && std::fabs(q.x - p.x - 40.0f) < 1.0f &&
+                            std::fabs(f.x) < 1.0e-3f && std::fabs(f.y - 1.0f) < 1.0e-3f;
+                break;
+            }
+            out.ready_frame = b->frame();
+            out.ready_cmd = static_cast<int>(host.execute_direct(ready_player, commands::CommandSource::Player,
+                                                                 commands::EventData(commands::EventType::SetupPhaseTriggerEnd)));
+        }
+        if (out.ready_frame && !out.end_frame && !b->fog_setup_phase()) {
+            out.end_frame = b->frame();
+            for (objects::ObjectHandle h : st.owned_by(0))
+                if (st.active(h)) {
+                    out.refused_after = host.execute_direct(0, commands::CommandSource::Player, move_cmd(st.id(h), 600.0f, 600.0f, 0.0f)) == R::NotAllowed;
+                    break;
+                }
+            if (!out.refused_after) break;
+        }
+    }
+    return out;
+}
+
+void test_fog_setup_battle(const Data& d) {
+    const SetupRun ai = run_setup_battle(d, 1, 0), human = run_setup_battle(d, 0, 0), ai4 = run_setup_battle(d, 1, 4);
+    for (const SetupRun* r : {&ai, &human})
+        std::printf("  ready from %s: setup at start %d, own move %d, enemy refused %d, ready cmd %d at frame %u, "
+                    "phase ended at frame %u, move refused after %d\n",
+                    r == &ai ? "AI" : "human", r->setup_at_start ? 1 : 0, r->moved ? 1 : 0,
+                    r->enemy_refused ? 1 : 0, r->ready_cmd, r->ready_frame, r->end_frame, r->refused_after ? 1 : 0);
+    for (const SetupRun* r : {&ai, &human}) {
+        CHECK(r->setup_at_start && r->moved && r->enemy_refused && r->refused_after);
+        CHECK(r->ready_cmd == static_cast<int>(commands::RejectReason::None) && r->ready_frame == 10);
+    }
+    CHECK(ai.end_frame == ai.ready_frame + 90);       // 3 s x 30 fps after the first ready
+    CHECK(human.end_frame == human.ready_frame + 1);  // every human ready: the next tick's end test
+    CHECK(ai4.end_frame == ai.end_frame && ai4.moved && ai4.refused_after);
+}
+
 // FOW t01: Battlefield_Modifier feeds the fog reveal list (space battle, fog_bm data; see fog_bm_probe).
 void test_fog_bm_battle(const Data& d) {
     const Run a = run_campaign(d, false, true, 0, 2500, 0.0f, true);
@@ -3618,6 +3736,11 @@ int main(int argc, char** argv) {
     {
         auto dbm = make_data(true, false, false, false, false, false, false, true);
         test_fog_bm_battle(*dbm);
+    }
+    std::printf("fog of war: land setup phase manager (FOWF t05)\n");
+    {
+        auto dsetup = make_data(false, false, false, false, false, false, false, false, true);
+        test_fog_setup_battle(*dsetup);
     }
 #endif
 #ifdef ALAMO_SIM_HAVE_ANIM
