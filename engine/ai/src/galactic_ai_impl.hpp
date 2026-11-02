@@ -27,6 +27,7 @@
 #include "alamo/lua/players.hpp"
 #include "alamo/lua/script_gaps.hpp"
 #include "alamo/lua/script_remaining.hpp"  // L1 final
+#include "galactic_slots.hpp"
 #include "alamo/objects/game_object_types.hpp"
 
 namespace alamo::ai {
@@ -350,6 +351,13 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     gal::Bitset ai_dangerous(int32_t player) const;
     PlanetIndex nearest_owned(int32_t player, int32_t target) const;
     bool can_build_at(int32_t player, uint32_t type, PlanetIndex p) const { return galactic_ai_can_build(sim, player, type, p); }
+    // Ground structure slots (A2 f t01): the slot max 0x372740 = planet data +0x230, seeded from the planet type's
+    // Special_Structures_Land (+0x92C) (AI_GALACTIC_TOKENS MaxStructureSlots, STRATEGIC_GAPS §1 step 18) [H];
+    // -1 = tag absent = no cap [port, as GalacticSim::build_check]. Used 0x3f8af0 = the ground structures on the
+    // surface, 0 when the planet has no ground base (D+0x130 > 0 ? D+0x160 : 0, OpenStructureSlotsUnnormalized) [H].
+    // Not the legacy <Max_Ground_Base> tag (set only on Galaxy_Core_Art_Model, so 0 on every real planet).
+    int32_t ground_slot_max(PlanetIndex p) const { return galactic_ai_ground_slot_max(sim, p); }
+    int32_t ground_slots_used(PlanetIndex p) const { return galactic_ai_ground_slots_used(sim, p); }
     uint32_t next_starbase_type(int32_t player, PlanetIndex p) const;
     bool applies(int32_t self, int32_t target, uint32_t flags) const;
     int32_t script_player(int32_t script) const;

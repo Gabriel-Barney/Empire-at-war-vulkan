@@ -439,11 +439,11 @@ void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
             if (b.bound && valid_planet(b.dest)) {  // the target's structure slots are full
                 const gal::TypeInfo* ti = type_info(b.type);
                 const gal::PlanetState& ps = sim.planets()[b.dest];
-                const auto& mg = sim.map().planets.max_ground_base;
                 const auto& msb = sim.map().planets.max_space_base;
                 if (ti && ti->kind == gal::UnitKind::GroundStructure) {
-                    const int32_t slots = b.dest < mg.size() && mg[b.dest] >= 0 ? mg[b.dest] : 5;
-                    if (static_cast<int32_t>(ps.structures.size()) >= slots) fail_build(b, "structure slots full");
+                    // 0x3f8af0 vs 0x372740 (Special_Structures_Land, not <Max_Ground_Base>; galactic_slots.hpp) [H].
+                    const int32_t slots = ground_slot_max(b.dest);
+                    if (slots >= 0 && ground_slots_used(b.dest) >= slots) fail_build(b, "structure slots full");
                 } else if (ti && ti->kind == gal::UnitKind::StarBase) {
                     const int32_t slots = b.dest < msb.size() && msb[b.dest] >= 0 ? msb[b.dest] : 5;
                     if (ps.starbase_level >= slots) fail_build(b, "starbase maxed");

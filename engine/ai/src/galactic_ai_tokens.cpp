@@ -10,6 +10,7 @@
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/objects/enums.hpp"
+#include "galactic_slots.hpp"
 
 namespace alamo::ai {
 
@@ -507,9 +508,12 @@ struct GalacticSimTokenResolver::Impl {
             if (ai_iequal(rules.types[t].name, n)) return true;
         return false;
     }
+    // D+0x230 = the planet type's Special_Structures_Land (+0x92C) (MaxStructureSlots; MaxGroundbaseLevel takes
+    // min(5, it) [M: the D path 0x4b7eb0 is unread, the no-D path is type+0x92C]); not the legacy <Max_Ground_Base>
+    // (0 on every shipped planet). Tag absent (-1) -> 5 [port] (galactic_slots.hpp, A2 f t01).
     int32_t max_ground_base(size_t p) const {
-        const auto& m = sim.map().planets.max_ground_base;
-        return p < m.size() && m[p] >= 0 ? m[p] : 5;
+        const int32_t m = galactic_ai_ground_slot_max(sim, static_cast<PlanetIndex>(p));
+        return m >= 0 ? m : 5;
     }
     int32_t max_space_base(size_t p) const {
         const auto& m = sim.map().planets.max_space_base;
@@ -939,8 +943,9 @@ struct GalacticSimTokenResolver::Impl {
         if (k == "MAXSTARBASELEVELUNNORMALIZED") return out = max_space_base(p), true;
         if (k == "MAXGROUNDBASELEVEL") return out = std::min(5, max_ground_base(p)) / kMaxLevel, true;
         if (k == "MAXGROUNDBASELEVELUNNORMALIZED") return out = std::min(5, max_ground_base(p)), true;
-        // Structure slots [port: D+0x230 ground slots = Max_Ground_Base, no orbital (D+0x234) slots].
-        const int32_t used_ground = sim.ground_base_level(static_cast<PlanetIndex>(p)) > 0 ? static_cast<int32_t>(ps.structures.size()) : 0;
+        // Structure slots: D+0x230 ground slots (Special_Structures_Land), used 0x3f8af0 (galactic_slots.hpp, A2 f t01)
+        // [port: no orbital (D+0x234) slots].
+        const int32_t used_ground = galactic_ai_ground_slots_used(sim, static_cast<PlanetIndex>(p));
         if (k == "MAXSTRUCTURESLOTS") return out = max_ground_base(p) / kMaxLevel, true;
         if (k == "MAXSTRUCTURESLOTSUNNORMALIZED") return out = max_ground_base(p), true;
         if (k == "OPENSTRUCTURESLOTS")

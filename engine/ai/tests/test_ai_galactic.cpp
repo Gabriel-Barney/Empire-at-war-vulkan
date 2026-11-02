@@ -41,6 +41,7 @@
 #include "alamo/lua/players.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
+#include "../src/galactic_slots.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
@@ -1043,6 +1044,23 @@ function MagicForce_Thread()
   ScriptExit()
 end
 )";
+// A2 f t01: a ground-structure plan on a friendly target (Upgrade_Starbase = the synthetic Infrastructure goal).
+static const char* kPlanBuildBarracks = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Upgrade_Starbase"
+  TaskForce = { { "BaseForce", "Barracks = 1" } }
+end
+function BaseForce_Thread()
+  BaseForce.Set_As_Goal_System_Removable(false)
+  BlockOnCommand(BaseForce.Produce_Force())
+  BaseForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+function BaseForce_Production_Failed(tf, t)
+  ScriptExit()
+end
+)";
 
 struct ParityWorld {
     MemoryFiles files;
@@ -1059,13 +1077,18 @@ struct ParityWorld {
     uint32_t hero = 0, planet_r = 0;
     std::vector<std::string> orders;
 
-    // only: the plan files to load (by base name), empty = all.
+    // only: the plan files to load (by base name), empty = all. rules_tweak: applied to the rules before the sim starts;
+    // eq_first: equations added before the synthetic ones (a name added here wins: the first definition is kept).
     ParityWorld(bool pop_cap, const std::vector<std::string>& only,
-                const std::function<void(gal::GalacticSetup&)>& tweak = {}) {
+                const std::function<void(gal::GalacticSetup&)>& tweak = {},
+                const std::function<void(gal::GalacticRules&)>& rules_tweak = {},
+                const std::function<void(EquationSet&)>& eq_first = {}) {
+        if (eq_first) eq_first(eqs);
         syn_data(files, defs, eqs, plan_files);
         files.add("Data\\Scripts\\AI\\HeroAttach.lua", kPlanHeroAttach);
         files.add("Data\\Scripts\\AI\\HeroDeny.lua", kPlanHeroDeny);
         files.add("Data\\Scripts\\AI\\MagicSpace.lua", kPlanMagic);
+        files.add("Data\\Scripts\\AI\\BuildBarracks.lua", kPlanBuildBarracks);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -1096,6 +1119,7 @@ struct ParityWorld {
             rules.constants.ai_uses_galactic_pop_cap = true;
             rules.types[tCorvette].population = 50;  // more than any capacity of this map
         }
+        if (rules_tweak) rules_tweak(rules);
         store = std::make_unique<objects::ObjectStore>(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
         rng = std::make_unique<GameRandom>(4242u, 77u);
         sim = std::make_unique<gal::GalacticSim>(rules, *store, rng->synced());
@@ -1273,6 +1297,117 @@ static void test_production_disabled_and_delivery() {
         CHECK(r2.size() == 8 && r2[0] && r2[1] && !r2[2] && !r2[3]);
         const std::vector<uint8_t> r5 = galactic_ai_delivery_flood(*pw.sim, 1, 0, galactic_ai_delivery_mode(true, false));
         CHECK(r5.size() == 8 && r5[1] && r5[2] && r5[3]);
+    }
+}
+
+// A2 f t01 (1): ProductionM's ground-structure slot check is used slots 0x3f8af0 (ground structures, 0 without a
+// ground base) + queued < the planet type's Special_Structures_Land (0x372740, D+0x230), not the map's legacy
+// <Max_Ground_Base>; plus the per-planet cap Build_Max_Instances_Per_Planet (0x3f94f0). The same slot max feeds the
+// MaxStructureSlots / OpenStructureSlots tokens. P0 (the Empire's) holds SB1 + one Barracks.
+static void test_ground_structure_slots() {
+    const std::vector<std::string> only = {"BuildBarracks"};
+    const auto map_ground = [](int32_t v) {
+        return [v](gal::GalacticSetup& s) {
+            for (auto& m : s.map.planets.max_ground_base) m = v;
+        };
+    };
+    const auto slots = [](int32_t v) { return [v](gal::GalacticRules& r) { r.types[tPlanet].ground_structure_slots = v; }; };
+    auto solve = [](ParityWorld& pw, bool& ok) {
+        pw.run(2);  // first service: templates, budget
+        ok = false;
+        return pw.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 0, &ok);
+    };
+    auto token = [](ParityWorld& pw, const char* text) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        c.target = 0;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        CHECK(r.ok);
+        return r.value;
+    };
+    bool ok = false;
+    {
+        // No Special_Structures_Land (-1): unlimited; the tokens fall back to 5.
+        ParityWorld pw(false, only);
+        const std::vector<uint32_t> s = solve(pw, ok);
+        CHECK(ok && pw.has(s, tBarracks));
+        CHECK(galactic_ai_ground_slot_max(*pw.sim, 0) == -1 && galactic_ai_ground_slots_used(*pw.sim, 0) == 1);
+        CHECK(galactic_ai_ground_slots_used(*pw.sim, 2) == 0 && galactic_ai_ground_slot_max(*pw.sim, 99) == 0);
+        CHECK(token(pw, "Variable_Target.MaxStructureSlotsUnnormalized") == 5.0);
+        CHECK(token(pw, "Variable_Target.OpenStructureSlotsUnnormalized") == 4.0);
+    }
+    {
+        // 3 slots, the map's <Max_Ground_Base> 0 (as on every shipped planet): 1 used < 3 -> solved.
+        ParityWorld pw(false, only, map_ground(0), slots(3));
+        const std::vector<uint32_t> s = solve(pw, ok);
+        std::printf("ground slots: Special_Structures_Land 3, Max_Ground_Base 0 -> %s\n", ok ? "solved" : "vetoed");
+        CHECK(ok && pw.has(s, tBarracks));
+        CHECK(galactic_ai_ground_slot_max(*pw.sim, 0) == 3);
+        CHECK(token(pw, "Variable_Target.MaxStructureSlotsUnnormalized") == 3.0);
+        CHECK(token(pw, "Variable_Target.OpenStructureSlotsUnnormalized") == 2.0);
+        CHECK(token(pw, "Variable_Target.MaxGroundbaseLevelUnnormalized") == 3.0);
+    }
+    {
+        // 1 slot, already used by the Barracks: vetoed although <Max_Ground_Base> is 5.
+        ParityWorld pw(false, only, map_ground(5), slots(1));
+        const std::vector<uint32_t> s = solve(pw, ok);
+        std::printf("ground slots: Special_Structures_Land 1 (used 1), Max_Ground_Base 5 -> %s\n", ok ? "solved" : "vetoed");
+        CHECK(!ok && !pw.has(s, tBarracks));
+        CHECK(token(pw, "Variable_Target.OpenStructureSlotsUnnormalized") == 0.0);
+    }
+    {
+        // Build_Max_Instances_Per_Planet 1 with one Barracks present: vetoed with unlimited slots.
+        ParityWorld pw(false, only, {}, [](gal::GalacticRules& r) { r.types[tBarracks].max_instances_per_planet = 1; });
+        const std::vector<uint32_t> s = solve(pw, ok);
+        CHECK(!ok && !pw.has(s, tBarracks));
+    }
+}
+
+// A2 f t01 (2): BudgetFractionToBuild 0x667120 fails only without a goal system / for an unknown type. Before the
+// budget's Init it reads the constructed zeros (an empty category = income rate + credits; a category = 0 / 0 -> D = 0
+// -> never), so a template budget equation that reads it does not fail at Init (AI_GALACTIC_2 §3.2): the category keeps
+// its weight and gets its share of the starting credits.
+static void test_budget_fraction_before_init() {
+    const char* frac = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Barracks\"}";
+    const char* frac_infra = "Variable_Self.BudgetFractionToBuild {Parameter_Type = \"Barracks\", Parameter_Category = \"Infrastructure\"}";
+    auto token = [](ParityWorld& pw, const char* text, bool& ok) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    bool ok = false;
+    {
+        ParityWorld pw(false, {"BuildBarracks"});  // no update yet: the budget is not initialised
+        const double all = token(pw, frac, ok);
+        CHECK(ok && all > 0.0 && all <= 500.0 / 6000.0);  // R / (time * income rate + credits)
+        const double infra = token(pw, frac_infra, ok);
+        CHECK(ok && infra == 1.0e18);
+        CHECK(pw.world->tactical_budget_rows(0).empty() || pw.world->tactical_budget_rows(0)[0].available == 0.0f);
+    }
+    {
+        ParityWorld pw(false, {"BuildBarracks"}, {}, {}, [frac_infra](EquationSet& e) {
+            e.add("Infra_Budget", std::string("3 + 0 * ") + frac_infra);  // wins over the synthetic "3"
+        });
+        pw.run(1);  // first service: templates, budget Init
+        int funded = 0;
+        float total = 0.0f;
+        for (const GalacticAiWorld::TacticalBudgetRow& r : pw.world->tactical_budget_rows(0)) {
+            funded += r.available > 0.0f ? 1 : 0;
+            total += r.available;
+        }
+        const double infra = token(pw, frac_infra, ok);
+        std::printf("budget init with BudgetFractionToBuild in Infra_Budget: %d funded categories, total %.0f, Barracks fraction %.4f\n",
+                    funded, static_cast<double>(total), infra);
+        CHECK(funded == 2);                      // Offensive and Infrastructure (Defensive = Zero)
+        CHECK(ok && infra > 0.0 && infra < 1.0);  // Infrastructure holds more than one Barracks
     }
 }
 
@@ -2502,6 +2637,8 @@ int main(int argc, char** argv) {
     test_starbase_force_split();
     test_parity_rules();
     test_production_disabled_and_delivery();
+    test_ground_structure_slots();
+    test_budget_fraction_before_init();
     test_free_store_path_rules();
     test_free_store_world();
     test_underworld_special();
