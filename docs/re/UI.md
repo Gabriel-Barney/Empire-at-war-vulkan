@@ -19,7 +19,7 @@ section (MasterTextFile).
 timing and anchors (§2.3 here), the hero roster, the galactic day pips, and the order-button enable rules.
 **GALACTIC_DIALOGS.md** (2026-10-28) covers the battle-pending banner (`pending_battle_shell` /
 `story_pending_battle_shell`), the mission holocron and `IDD_STORY_SUMMARY_DIALOG`, the auto-resolve result
-screens, the fleet organiser (`i_main_organize`) visibility, build-pad / queue / resource-panel details of the
+screens, the fleet organiser (`i_main_organize`) visibility (its pane fill: §7 here; IME gadgets: §8), build-pad / queue / resource-panel details of the
 galactic bar, and the font `Stretch_Factor` rule (§3.4 here).
 
 ---
@@ -550,3 +550,98 @@ jumps the camera to the group (local player only). The group number is drawn ove
 - Rally point visuals; whether `Pixel_Align` and `Snap_Location` change placement.
 - In-game probe (Gabriel): screenshots at 1024×768, 1920×1080 and 1280×1024 of the tactical HUD and
   a load screen would settle §2.4/§3.3.
+- §7.4: what the organiser's "pathfinder" header pad (`q*_0000`) holds in single player and the default of
+  GameConstants `Pathfinder_Slot_Index`; §7.2 the slot-0 → pane 2 reading for a foreign orbit [M].
+
+---
+
+## 7. Fleet organiser panes for one, two or three fleets (p4ui t04, 2026-11-02)
+
+Answers the P4 open item "which `i_galactic_organize` panels show for 1..3 fleets". Read in the organiser
+update 0x3e83a0 and its two fill routines 0x3e2cf0 / 0x3e1b70; component ids from the command-bar table
+(0xa174e0, GALACTIC_DIALOGS.md header); pane pad bases from the 3-entry int table at 0x140a28880
+(0x79, 0x9c, 0xbf). Companion: GALACTIC_DIALOGS.md §4 (when the organiser shows), GALAXY_MAP_PRESENTATION.md
+§1.3 (the map's slot rule, which the organiser repeats).
+
+### 7.1 Panes are not chosen by the fleet count [H]
+- The three frames `q1_frame` / `q2_frame` / `q3_frame` are **meshes of the shell model**, not components (no
+  `q*_frame` entry in the component table, no string for them in the executable), so they draw whenever the
+  shell `i_main_organize` (0x5a) draws. Nothing in the organiser code hides a frame.
+- The tab labels `text_fleet1..3` (0x271..0x273) are set to `TEXT_FLEET_PANE_0..2` and shown for **all three**
+  panes on every update, whatever the number of fleets (loop of 3 in 0x3e83a0).
+- So with one, two or three fleets (or none) the organiser always shows **three panes**, "Fleet 1/2/3" from left
+  to right. Only the pane contents change: which fleet fills which pane (§7.2) and which unit pads show (§7.3).
+
+### 7.2 Which fleet fills which pane [H unless marked]
+Pane k = frame `q{k+1}_frame`; its unit pads are `q{k+1}_0001 .. q{k+1}_0406` (34 pads, row-major `q{n}_RRCC`,
+R 0..4, C 0..6, `_0000` excluded); its header pad is `q{k+1}_0000` (§7.4). A fleet's **slot** is its own orbit
+slot 0..2 (fleet +0xc0 → +0x48), the field the map buttons use (GALAXY_MAP_PRESENTATION §1.3). "Orbit owner" =
+0x3f9270: the forced owner of a contested planet if one is set, else the owner of the first non-stealthed
+slotted fleet in orbit order, else the first stealthed one's, else nobody.
+
+| orbit owner | pane 0 (`q1`) | pane 1 (`q2`) | pane 2 (`q3`) |
+|---|---|---|---|
+| the local player (0x3e2cf0) | the units of **every** local-player fleet in orbit with slot 0, merged into one pane (0x3f9370 lists the orbit's fleets with a given slot) | the fleet in slot 1 | the fleet in slot 2 |
+| anyone else, or nobody (0x3e1b70) | the units of every **non-local** fleet in orbit (slots 0..2), a fleet included only if allied with the local player (0x39a230) or the planet is visible to the local player (0x50b3f0 / 0x50b5a0) and the fleet is not stealthed (0x3a9760); drawn with the pad draw's "foreign" flag (0x309a80 argument 6) | the local player's slot-1 fleet(s) | the local player's slot-0 **and** slot-2 fleets [M: the decompiled loop maps slot 0 → pane 2, 1 → 1, 2 → 2, so 0 and 2 share pane 2] |
+
+- This is the map rule of GALAXY_MAP_PRESENTATION §1.3 ("enemy fleets go to slot 0, an own slot-0 fleet moves to
+  slot 2") applied to the panes: pane k shows what map button k shows.
+- Inside a pane the units are grouped per type into stacks (one pad per stack, the count as text), filled from the
+  pane's first pad upward in the order the fleets list them (0x3cc040 / 0x3d7470); at most 34 stacks per pane,
+  further stacks are not drawn [M].
+- A pane with no fleet keeps its frame and its tab; its unit pads are empty (§7.3).
+- Drops (0x3d02e0, unchanged): a drop on pane k addresses the fleet in slot k; a drop on an empty pane makes a new
+  fleet in slot k (FleetManagement with the slot), on an occupied one merges ("merge_fleets").
+
+### 7.3 Unit pads that show [M]
+- Pads holding a stack are shown and enabled.
+- Every pad of a pane is reset first; the reset hides it unless the HUD's drag / hover component (+0x2160) is set,
+  in which case it is shown empty and enabled. Reading: **empty pads show only while something is dragged** (as
+  drop targets); otherwise a pane shows only its filled pads.
+
+### 7.4 The `q*_0000` header pad ("Fleet PF") [H data, L meaning]
+- `q{n}_0000` is in group `Fleet PF`, blank texture `i_button_pathfinder.tga`, tooltip `TEXT_TOOLTIP_PATHFINDER`.
+  Both fill routines show and enable it whenever the organiser updates (pane base − 1); it is not one of the 34 unit
+  pads (units start at `_0001`).
+- It holds one unit of the pane's fleet whose fleet-slot record id (unit +0x1b0 → +8) equals the global loaded from
+  GameConstants `Pathfinder_Slot_Index` (0x140b278b0); a second such unit in the same fleet is ejected by the HUD
+  (an event, then 0x3a87c0). `Pathfinder_Slot_Index` is absent from vanilla FoC GameConstants and its default was not
+  read. **[L]**: what a "pathfinder slot" is in single player. Port leftover (p4uio).
+
+### 7.5 Port mapping
+- ui: draw all three panes and tabs whenever the organiser shows; fill the panes by slot per §7.2 (the host feeds
+  each fleet's slot and whether it is the local player's), not in provider order; foreign units in pane 0 are drawn
+  but not draggable; empty pads only during a drag (§7.3).
+- apps: the organiser provider feeds every fleet in orbit at the planet that the local player may see (own, allied,
+  or visible and not stealthed), with its slot and owner flag; the planet's `GalacticPlanetInfo::orbit_local`
+  (already fed for the map) picks the table row.
+
+---
+
+## 8. IME edit boxes (p4ui t05, 2026-11-02)
+
+Question: does any single-player screen open the IME dialog (text input for Asian-language keyboards)?
+**Answer: no.** [H]
+
+- The GUI has one IME-aware gadget, `GUIGadgetIMEEditboxClass` (gadget type 0x1d, made from a dialog control of class
+  `"IMEEditBox"`, factory 0x1dcf90 → 0x1f3100), plus a locale indicator `GUIGadgetIMELocaleIndicatorClass`
+  (`"IMELocaleIndicator"`). Only these talk to the IME: they register with the static IME message hook (list
+  0x140a13740, added by 0x1d4060 from the gadget's focus paths 0x1f6700 / 0x1f84d0), and only they associate or
+  dissociate the window's input context (imm32 `ImmAssociateContext`, loaded at boot by 0x1d3c20; the boot only reads
+  the default context, 0x1d4700, and does not disable it).
+- The IME hook is the first step of the window procedure (0x1d4170 from 0x60c60, §0 item 6). With no IME gadget
+  registered it consumes nothing.
+- In the shipped `GUIDialogs.rc` the only `IMEEditBox` / `IMELocaleIndicator` controls are in `IDD_IME_TEST_DIALOG`
+  (`IDC_IME_TEST_EDITBOX`, `IDC_CUSTOM2`). The routine that opens it (0x12ae70; close 0x12aff0, callback 0x12b030)
+  has **no caller** in the executable: a leftover developer test.
+- Every other text field is a plain `EDITTEXT` (`GUIGadgetEditboxClass`): save names, profile / player names,
+  passwords, lobby and in-game chat. `IDC_IME_EDITBOX` in `IDD_INGAME_CHAT_DIALOG` is, despite its name, a plain
+  `EDITTEXT` (and that chat is multiplayer only). `IDC_IME_EDIT_BOX` (1208) and `IDC_IME_EDITBOX2` (1235) exist in
+  `Resource.h` only.
+- Plain edit boxes take characters from `WM_CHAR` (§4.2). Because the game never dissociates the window's input
+  context, a system IME still composes in its own window and the committed text reaches the game as `WM_CHAR`
+  [M: Windows' default handling of `WM_IME_CHAR` / `WM_IME_COMPOSITION`, not traced inside the game].
+
+Port: nothing to build; the IME dialog is not needed for single player (t05 closed). The port's edit boxes already
+take `WM_CHAR` text (P4 integrator ask 1); a host window that leaves the IME messages to `DefWindowProc` gets
+committed IME text the same way.
