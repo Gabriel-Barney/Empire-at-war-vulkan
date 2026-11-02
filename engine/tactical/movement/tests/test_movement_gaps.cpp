@@ -6,16 +6,22 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <string>
 #include <thread>
 #include <vector>
 
+#include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/corridor.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
+#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/object_types.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical::movement;
@@ -65,6 +71,8 @@ static UnitDesc unit(ObjectId id, V2 pos, int32_t cls, float speed, float radius
     d.pos = pos;
     d.max_speed = speed;
     d.turn_rate = 6.0f;
+    d.alt_max_speed = speed;  // S7 t14: a jetpack flies with the alternates; the same values keep these scenarios
+    d.alt_turn_rate = 6.0f;
     d.movement_class = cls;
     d.collision_class = kUccInfantry;
     d.radius = radius;
@@ -975,6 +983,220 @@ static void test_multi_locomotor() {
     CHECK(walk_z < 60.0f && jet_z > 90.0f);
 }
 
+// S7 t14 (MOVEMENT §3.1.1): Alternate_Max_Speed / _Rate_Of_Turn apply only to the jetpack in its airborne kind (pack state 0
+// / 0xF..0x13): the formation speed and the planned flight; the take-off turn (0x10) turns at Max_Rate_Of_Turn and the
+// landing (0x14) reports Max_Speed.
+static void test_jetpack_alternates() {
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc d = trooper(1, cell_center(10, 10));
+    d.turn_rate = 3.0f;  // the alternate is 12
+    CHECK(sys.add_unit(d));
+    CHECK(sys.add_unit(unit(2, cell_center(10, 12), 0, 1.5f, 6.0f, LocomotorKind::Default)));  // between 1.0 and 2.5
+    const float mult = sys.view(1).max_speed;  // Max_Speed 1.0 x the land multiplier
+    CHECK(sys.use_secondary_locomotor(1, true));
+    UnitView v = sys.view(1);
+    CHECK(v.locomotor == LocomotorKind::Jetpack && v.loco_state == LocoState::None && v.max_speed == 2.5f * mult);
+    SimRng rng(4);
+    MoveOrder o;
+    o.units = {1, 2};
+    o.destination = cell_center(60, 11);
+    sys.move(o, rng, 0);
+    // One formation: the slowest member is the walker (1.5), not the trooper's Max_Speed (1.0).
+    CHECK(sys.view(2).formation_speed == 1.5f * mult && sys.view(1).formation_speed == 1.5f * mult);
+
+    // Alone, facing away from the destination: the take-off turn (0x10) is limited by Max_Rate_Of_Turn, the flight by
+    // Alternate_Max_Speed.
+    MovementSystem one{MovementConfig{}};
+    land_system(one, 100);
+    d.yaw_deg = 180.0f;
+    CHECK(one.add_unit(d));
+    MoveOrder j;
+    j.units = {1};
+    j.destination = cell_center(60, 10);
+    j.switch_locomotor = true;
+    one.move(j, rng, 0);
+    v = one.view(1);
+    bool speeds_ok = true, turn_ok = true, seen_landing = false, seen_kind2 = false;
+    uint32_t turn_frames = 0;
+    float max_step = 0.0f, max_speed = 0.0f, prev_yaw = v.yaw;
+    LocoState prev = v.loco_state;
+    uint32_t f = 0;
+    for (; f < 3000; ++f) {
+        one.tick(f, rng);
+        v = one.view(1);
+        if (v.locomotor != LocomotorKind::Jetpack) break;
+        const bool kind2 = locomotor_airborne_kind(v.locomotor, v.loco_state);
+        speeds_ok = speeds_ok && v.max_speed == (kind2 ? 2.5f : 1.0f) * mult;
+        seen_kind2 = seen_kind2 || kind2;
+        seen_landing = seen_landing || v.loco_state == LocoState::WalkEndMove;
+        if (prev == LocoState::WalkTurning || v.loco_state == LocoState::WalkTurning) {
+            const float step = std::fabs(wrap_deg(v.yaw - prev_yaw));
+            turn_ok = turn_ok && step <= 3.0f * mult + 1e-3f;
+            max_step = std::max(max_step, step);
+            ++turn_frames;
+        }
+        max_speed = std::max(max_speed, v.speed);
+        prev = v.loco_state;
+        prev_yaw = v.yaw;
+    }
+    std::printf("jetpack alternates: take-off turn %u frames (max step %.2f, Max_Rate_Of_Turn %.2f), max flight speed %.2f "
+                "(alternate %.2f), back on WALK at %u\n",
+                turn_frames, static_cast<double>(max_step), static_cast<double>(3.0f * mult), static_cast<double>(max_speed),
+                static_cast<double>(2.5f * mult), f);
+    // The turn reached the normal rate and never the alternate one (12 x the multiplier).
+    CHECK(speeds_ok && seen_kind2 && seen_landing && turn_ok && turn_frames > 0 && max_step > 2.0f * mult);
+    CHECK(max_speed > 2.0f * mult && max_speed <= 2.5f * mult + 1e-3f);  // flown at the alternate, not at Max_Speed 1.0
+    v = one.view(1);
+    CHECK(v.locomotor == LocomotorKind::Default && v.max_speed == mult && v.arrived);
+}
+
+// S7 t14 (MOVEMENT §3.1.1 steps 4 and 7): the swap to the jetpack re-issues the unit's current order to it alone (or holds
+// it in place: the jetpack reverts one service after the next); the swap back keeps the order and the walk finishes it.
+static void test_jetpack_orders() {
+    {  // hold: no order -> pack state 0 -> 0x16 at the next service -> WALK at the one after
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+        SimRng rng(1);
+        CHECK(sys.use_secondary_locomotor(1, true));
+        CHECK(sys.view(1).loco_state == LocoState::None && !sys.view(1).has_goal);
+        sys.tick(0, rng);
+        CHECK(sys.view(1).secondary_locomotor && sys.view(1).loco_state == LocoState::WalkStopped);
+        sys.tick(1, rng);
+        CHECK(!sys.view(1).secondary_locomotor && sys.view(1).locomotor == LocomotorKind::Default &&
+              sys.view(1).pos == cell_center(10, 10) && rng.draws() == 0);
+    }
+    {  // re-issue: a walking formation member keeps its goal alone and flies there
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(trooper(1, cell_center(10, 10))) &&
+              sys.add_unit(unit(2, cell_center(10, 12), 0, 1.0f, 6.0f, LocomotorKind::Default)));
+        SimRng rng(2);
+        MoveOrder o;
+        o.units = {1, 2};
+        o.destination = cell_center(40, 11);
+        sys.move(o, rng, 0);
+        uint32_t f = 0;
+        for (; f < 40; ++f) sys.tick(f, rng);
+        const UnitView w = sys.view(1);
+        CHECK(w.has_goal && w.formation_speed < 1.0e30f);
+        const uint64_t draws = rng.draws();
+        CHECK(sys.use_secondary_locomotor(1, true));
+        UnitView v = sys.view(1);
+        CHECK(v.locomotor == LocomotorKind::Jetpack && v.has_goal && v.goal == w.goal && v.formation_speed > 1.0e30f &&
+              v.loco_state == LocoState::None && rng.draws() == draws);  // no stagger draw
+        bool flew = false;
+        for (; f < 3000 && sys.view(1).secondary_locomotor; ++f) {
+            sys.tick(f, rng);
+            flew = flew || sys.view(1).airborne;
+        }
+        v = sys.view(1);
+        CHECK(flew && v.locomotor == LocomotorKind::Default && v.arrived && distance(v.pos, w.goal) < 1.0f);
+    }
+    {  // swap back in flight: the order is kept and walked
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(trooper(1, cell_center(10, 10))));
+        SimRng rng(3);
+        MoveOrder j;
+        j.units = {1};
+        j.destination = cell_center(40, 10);
+        j.switch_locomotor = true;
+        sys.move(j, rng, 0);
+        uint32_t f = 0;
+        for (; f < 2000 && sys.view(1).loco_state != LocoState::WalkMoving; ++f) sys.tick(f, rng);
+        for (const uint32_t end = f + 10; f < end; ++f) sys.tick(f, rng);
+        UnitView v = sys.view(1);
+        CHECK(v.airborne && v.secondary_locomotor && v.has_goal);
+        const V2 goal = v.goal;
+        CHECK(sys.use_secondary_locomotor(1, false));
+        v = sys.view(1);
+        CHECK(v.locomotor == LocomotorKind::Default && !v.secondary_locomotor && !v.airborne && v.has_goal && v.goal == goal &&
+              v.z == (v.pos.x > 1000.0f ? 40.0f : 0.0f));  // Walk Initialise conforms to the terrain
+        bool walked = true;
+        for (const uint32_t end = f + 3000; f < end && !sys.view(1).arrived; ++f) {
+            sys.tick(f, rng);
+            walked = walked && sys.view(1).locomotor == LocomotorKind::Default && !sys.view(1).airborne;
+        }
+        v = sys.view(1);
+        CHECK(walked && v.arrived && distance(v.pos, goal) < 1.0f);
+    }
+}
+
+// S7 t14 / PR #14 review: the swap needs a JETPACK_LOCOMOTOR Secondary_Locomotor_Name and a non-JETPACK primary (retail
+// would rebuild a non-JetPack secondary on every call and never swap back, MOVEMENT §3.1.1 step 2); unit_desc_from_type
+// reads Alternate_Max_Speed / _Rate_Of_Turn unconditionally (type defaults 1.0 / 2.0).
+static void test_multi_locomotor_types() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "alamo_tactical_movement_gaps_multi_types";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    auto put = [](const std::filesystem::path& p, const std::string& s) {
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << s;
+    };
+    const std::string multi = "<Uses_Multiple_Locomotors>Yes</Uses_Multiple_Locomotors><LandBehavior>WALK_LOCOMOTOR</LandBehavior>";
+    put(root / "Data/XML/GameObjectFiles.xml", "<L><File>ML.xml</File></L>");
+    put(root / "Data/XML/ML.xml",
+        "<R>\n"
+        "<GroundInfantry Name=\"Jet\">" + multi + "<Primary_Locomotor_Name>WALK_LOCOMOTOR</Primary_Locomotor_Name>"
+        "<Secondary_Locomotor_Name>JETPACK_LOCOMOTOR</Secondary_Locomotor_Name></GroundInfantry>\n"
+        "<GroundInfantry Name=\"Jet_Alt\">" + multi + "<Secondary_Locomotor_Name>jetpack_locomotor</Secondary_Locomotor_Name>"
+        "<Alternate_Max_Speed>2.5</Alternate_Max_Speed><Alternate_Max_Rate_Of_Turn>6</Alternate_Max_Rate_Of_Turn></GroundInfantry>\n"
+        "<GroundInfantry Name=\"Bike_Secondary\">" + multi + "<Primary_Locomotor_Name>WALK_LOCOMOTOR</Primary_Locomotor_Name>"
+        "<Secondary_Locomotor_Name>BIKE_LOCOMOTOR</Secondary_Locomotor_Name></GroundInfantry>\n"
+        "<GroundInfantry Name=\"Walk_Secondary\">" + multi + "<Secondary_Locomotor_Name>WALK_LOCOMOTOR</Secondary_Locomotor_Name>"
+        "</GroundInfantry>\n"
+        "<GroundInfantry Name=\"Jet_Primary\">" + multi + "<Primary_Locomotor_Name>JETPACK_LOCOMOTOR</Primary_Locomotor_Name>"
+        "<Secondary_Locomotor_Name>JETPACK_LOCOMOTOR</Secondary_Locomotor_Name></GroundInfantry>\n"
+        "<GroundInfantry Name=\"Unknown_Secondary\">" + multi + "<Secondary_Locomotor_Name>NOT_A_LOCOMOTOR</Secondary_Locomotor_Name>"
+        "</GroundInfantry>\n"
+        "<GroundInfantry Name=\"No_Secondary\">" + multi + "</GroundInfantry>\n"
+        "</R>");
+    DirectoryProvider dp(path_to_utf8(root));
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(dp) && types.build(raw, &dp));
+    const auto desc = [&types](const char* name) {
+        const uint32_t t = types.resolve_name(name);
+        CHECK(t < types.size());
+        return t < types.size() ? unit_desc_from_type(types, t) : UnitDesc{};
+    };
+    const UnitDesc jet = desc("Jet"), alt = desc("Jet_Alt"), bike = desc("Bike_Secondary"), walk = desc("Walk_Secondary");
+    const UnitDesc jprim = desc("Jet_Primary"), unknown = desc("Unknown_Secondary"), none = desc("No_Secondary");
+    CHECK(jet.uses_multiple_locomotors && jet.has_secondary_locomotor && jet.secondary_locomotor == LocomotorKind::Jetpack &&
+          jet.alt_max_speed == 1.0f && jet.alt_turn_rate == 2.0f);  // the type defaults
+    CHECK(alt.has_secondary_locomotor && alt.alt_max_speed == 2.5f && alt.alt_turn_rate == 6.0f);
+    CHECK(bike.uses_multiple_locomotors && !bike.has_secondary_locomotor && bike.secondary_locomotor == LocomotorKind::Bike);
+    CHECK(!walk.has_secondary_locomotor && !jprim.has_secondary_locomotor && !unknown.has_secondary_locomotor &&
+          !none.has_secondary_locomotor);
+    // A refused secondary never swaps: the switch bit walks, the order is not re-issued, nothing to swap back from.
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc b = bike;
+    b.id = 1;
+    b.pos = cell_center(10, 10);
+    UnitDesc j = jet;
+    j.id = 2;
+    j.pos = cell_center(10, 30);
+    CHECK(sys.add_unit(b) && sys.add_unit(j));
+    CHECK(!sys.use_secondary_locomotor(1, true) && !sys.use_secondary_locomotor(1, false));
+    CHECK(sys.use_secondary_locomotor(2, true) && sys.view(2).locomotor == LocomotorKind::Jetpack);
+    SimRng rng(6);
+    MoveOrder o;
+    o.units = {1};
+    o.destination = cell_center(30, 10);
+    o.switch_locomotor = true;
+    sys.move(o, rng, 0);
+    bool walked = true;
+    for (uint32_t f = 0; f < 2000 && !sys.view(1).arrived; ++f) {
+        sys.tick(f, rng);
+        walked = walked && sys.view(1).locomotor == LocomotorKind::Default && !sys.view(1).secondary_locomotor;
+    }
+    CHECK(walked && sys.view(1).arrived && !sys.view(2).secondary_locomotor);  // the idle jetpacker reverted meanwhile
+    remove_all_long(root, ec);
+}
+
 static void test_bike() {
     MovementSystem sys{MovementConfig{}};
     land_system(sys, 100);
@@ -1363,6 +1585,9 @@ int main() {
     test_flying();
     test_flying_clearance();
     test_multi_locomotor();
+    test_jetpack_alternates();     // S7 t14
+    test_jetpack_orders();         // S7 t14
+    test_multi_locomotor_types();  // S7 t14
     test_bike();
     test_bomber();
     test_fighter_space();

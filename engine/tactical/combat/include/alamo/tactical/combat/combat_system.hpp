@@ -590,6 +590,11 @@ enum UnitFlag : uint32_t {
     // (attached by a Causes_Infection hit or a spread, cleared while suspended); set_flag(kUnitInfected) attaches /
     // suspends it like the behaviour calls. Read by the death-clone remap.
     kUnitInfected = 1u << 12,
+    // S7 t14 (MOVEMENT §3.1.1 step 6): TARGETING / WEAPON / SPECIAL_WEAPON suspended (Disable, suspend count +1) while
+    // the unit is on its jetpack (the host mirrors MovementSystem's UnitView::secondary_locomotor). The unit neither
+    // acquires targets nor fires (its weapons do not count down); orders and targets are kept. [port] a flag stands for
+    // the counter: the swap disables once (never twice) and the swap back enables (count - 1, floor 0).
+    kUnitWeaponsSuspended = 1u << 13,
 };
 
 struct UnitSpawn {

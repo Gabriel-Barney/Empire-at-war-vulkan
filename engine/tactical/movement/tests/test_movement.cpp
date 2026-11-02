@@ -2026,10 +2026,12 @@ static void test_real_data() {
         const UnitDesc dt2 = desc("Dark_Trooper_PhaseII"), boba = desc("Boba_Fett"), bossk = desc("Bossk");
         const UnitDesc dt1 = desc("Dark_Trooper_PhaseI");
         CHECK(dt2.uses_multiple_locomotors && dt2.has_secondary_locomotor && dt2.secondary_locomotor == LocomotorKind::Jetpack &&
-              dt2.max_speed == 1.0f && dt2.alt_max_speed == 2.5f && dt2.alt_turn_rate == 0.0f && dt2.hover_offset == 70.0f);
+              dt2.max_speed == 1.0f && dt2.alt_max_speed == 2.5f && dt2.alt_turn_rate == 2.0f && dt2.hover_offset == 70.0f);  // t14: unset turn = 2.0
         CHECK(boba.uses_multiple_locomotors && boba.secondary_locomotor == LocomotorKind::Jetpack && boba.alt_max_speed == 2.5f &&
               boba.alt_turn_rate == 6.0f);
         CHECK(bossk.uses_multiple_locomotors && !bossk.has_secondary_locomotor);
+        const UnitDesc dt3 = desc("Dark_Trooper_PhaseIII");  // S7 t14: Alternate 1.8, turn unset -> 2.0 (MOVEMENT §3.1.1)
+        CHECK(dt3.has_secondary_locomotor && dt3.alt_max_speed == 1.8f && dt3.alt_turn_rate == 2.0f);
         CHECK(!dt1.uses_multiple_locomotors && !dt1.has_secondary_locomotor);
         CHECK(locomotor_kind_from_type(types, types.resolve_name("Dark_Trooper_PhaseII"), MoveMode::Land) == LocomotorKind::Default);
     }

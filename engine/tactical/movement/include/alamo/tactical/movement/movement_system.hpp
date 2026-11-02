@@ -78,16 +78,23 @@
 //           the host. The fighter cell grids are built from the playable box at the first space tick with a fighter;
 //           their membership is hashed into "<name>.space", the fighter state into "<name>" (both only once fighters
 //           exist). No draws.
-//   multi - S7 t06, Uses_Multiple_Locomotors (MOVEMENT §3.1, 0x3a9910; land only): UnitDesc::locomotor is the ACTIVE
-//           locomotor. use_secondary_locomotor(id, true) (the JET_PACK ability's call, 0x3a38d0) or a move with
-//           MoveOrder::switch_locomotor (the MoveToPosition 1-bit, §6.2) swaps a unit whose type has a
-//           Secondary_Locomotor_Name to it: the current order is dropped (retail saves the coordinator order and leaves
-//           the coordinator [M: the saved order is not re-issued; the move that follows replaces it]), the locomotor
-//           state restarts idle, and the Alternate_Max_Speed / _Rate_Of_Turn apply [M]. The jetpack swaps back to the
-//           primary (the spawn locomotor) when it is stopped on the ground (state 0x16 after the landing, or after a stop
-//           / a failed plan) [M: 0x641910 calls 0x3a9910; the exact state was not traced]. While the jetpack is active in
-//           states 0 / 0x0F..0x13 the unit is in the Corvette tracking layer (object_tracking_layer), so the flying
-//           clearance query (clearance_query) lifts flyers over it. No draws.
+//   multi - S7 t06 / t14, Uses_Multiple_Locomotors (MOVEMENT §3.1.1, 0x3a9910; land only): UnitDesc::locomotor is the
+//           ACTIVE locomotor. use_secondary_locomotor(id, true) (the JET_PACK ability's call, 0x3a38d0) or a move with
+//           MoveOrder::switch_locomotor (the MoveToPosition 1-bit, §6.2; no FoC sender sets it) swaps a unit whose type
+//           has a JETPACK_LOCOMOTOR Secondary_Locomotor_Name to it. Before the swap the unit's current order is
+//           re-issued to it alone (goal / facing / threat kept, formation dropped, re-planned; [port] no stagger draw)
+//           or, without an order, it holds its position; the jetpack starts in pack state 0 (None), so with no order it
+//           reverts one service later. The swap back runs in the jetpack's state 0x16 (every service in it): in the
+//           same service when 0x16 is reached from 0x13 with no current path or from the landing (0x14), one service
+//           later from None or from a 0x13 frame that left position and yaw unchanged ([port] not while a re-plan is
+//           pending, need_path). It keeps the order (goal, facing, formation; the walk re-plans a land path to a kept
+//           goal [port]) and starts the primary stopped (Walk 0x16) on the terrain. Alternate_Max_Speed / _Rate_Of_Turn
+//           apply only to the jetpack in its airborne kind (0 / 0x0F..0x13): the timed path request and the formation
+//           speed (loco_max_speed / loco_turn_rate; UnitView::max_speed); the take-off turn 0x10, the landing 0x14 and
+//           0x16 use Max_Speed / Max_Rate_Of_Turn. In the same kind the unit is in the Corvette tracking layer
+//           (object_tracking_layer), so the flying clearance query (clearance_query) lifts flyers over it. The host
+//           suspends TARGETING / WEAPON / SPECIAL_WEAPON while UnitView::secondary_locomotor is set (§3.1.1 step 6).
+//           No draws.
 // RNG: FLYING loiter re-issue - one synced range_float(-90, 90) per re-issue without an attack target (serial,
 // ascending id, after the parallel walk). No other new draws.
 // PROVISIONAL: MovingVsMoving retail resolution states are not modelled (MOVEMENT.md §8); corridor squeeze
@@ -243,10 +250,11 @@ public:
     // order is dropped) and is placed at `pos` / `z` with yaw `yaw_deg`; land: the collision tree entry moves; space:
     // a stationary occupancy track from `frame`. No draws. False when the unit is unknown.
     bool teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint32_t frame);
-    // S7 t06 (MOVEMENT §3.1, 0x3a9910): swap a Uses_Multiple_Locomotors unit to its secondary locomotor (true) or back
-    // to its primary (false); see "multi" in the header comment. Returns false when the unit is unknown, the mode is
-    // space, or the type has no Uses_Multiple_Locomotors / no Secondary_Locomotor_Name; true otherwise (also when that
-    // locomotor is already active, which changes nothing). The host calls it before the JET_PACK ability's move.
+    // S7 t06 / t14 (MOVEMENT §3.1.1, 0x3a9910): swap a Uses_Multiple_Locomotors unit to its secondary locomotor (true)
+    // or back to its primary (false); see "multi" in the header comment. Returns false when the unit is unknown, the mode
+    // is space, or the type has no Uses_Multiple_Locomotors / no JETPACK Secondary_Locomotor_Name
+    // (UnitDesc::has_secondary_locomotor); true otherwise (also when that locomotor is already active, which changes
+    // nothing). The host calls it before the JET_PACK ability's move. No draws.
     bool use_secondary_locomotor(ObjectId id, bool secondary);
 
     // ---- REMAINING_GAPS §4.2-4.7
@@ -402,7 +410,12 @@ private:
     };
     bool is_air(const Unit& u) const;           // land Jetpack / Flying / LandBomber
     static void special_idle(Unit& u);          // §4.3-4.7: the idle state of the active special locomotor
-    bool swap_locomotor(Unit& u, bool secondary);  // S7 t06 (0x3a9910)
+    bool swap_locomotor(Unit& u, bool secondary);  // S7 t06 / t14 (0x3a9910)
+    // S7 t14 (§3.1.1): JetPack vf74 / vf75 - Alternate_Max_Speed / _Rate_Of_Turn (mode multiplier, speed factor /
+    // override as for Max_Speed) while the active jetpack is in its airborne kind, else lp.max_speed / lp.turn_rate.
+    bool jet_alternates(const Unit& u) const;
+    float loco_max_speed(const Unit& u) const;
+    float loco_turn_rate(const Unit& u) const;
     bool ground_collider(const Unit& u) const;  // takes part in land collision / crush
     void tick_special(uint32_t frame, SimRng& rng);
     void step_jetpack(Unit& u, uint32_t frame);

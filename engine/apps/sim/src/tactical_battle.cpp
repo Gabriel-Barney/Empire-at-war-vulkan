@@ -1050,12 +1050,13 @@ int32_t TacticalBattle::first_hardpoint_of_type(objects::ObjectId target, int32_
 }
 
 void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng,
-                               float facing_deg, bool attack_move, uint8_t flags) {
+                               float facing_deg, bool attack_move, uint8_t flags, bool switch_locomotor) {
     s4_cancel(ids);  // S4: a move replaces a pending garrison enter
     const tactical::Aabb& bb = mode.bounds();
     mv::MoveOrder o;
     o.units.assign(ids.begin(), ids.end());
     o.flags = flags;  // P1_DOUBLE_CLICK_MOVE.md §3.2: the event flags, unchanged
+    o.switch_locomotor = switch_locomotor;  // S7 t10: MoveToPosition's 1-bit (MOVEMENT §6.2)
     o.destination = {std::clamp(x, bb.min.x, bb.max.x), std::clamp(y, bb.min.y, bb.max.y)};
     if (std::isfinite(facing_deg)) o.facing_deg = facing_deg;
     movement_->move(o, rng, frame_);
@@ -1096,7 +1097,7 @@ uint32_t TacticalBattle::exec_attack(TacticalMode& mode, std::span<const objects
 
 cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x,
                                              float y, SimRng& rng, float facing_deg, bool attack_move, bool queued,
-                                             uint8_t move_flags) {
+                                             uint8_t move_flags, bool switch_locomotor) {
     using R = cmd::RejectReason;
     if (finished_ || !movement_) return R::NotAllowed;
     const auto own = owned_units<Unit>(mode.primary(), player, units, [this](objects::ObjectId id) { return unit_by_id(id); }, true);
@@ -1108,9 +1109,12 @@ cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player,
         for (const objects::ObjectId id : ids) abilities_->order_cancel(id, frame_);
     if (!queued) {
         clear_queues(ids);
-        exec_move(mode, ids, x, y, rng, facing_deg, attack_move, move_flags);
+        exec_move(mode, ids, x, y, rng, facing_deg, attack_move, move_flags, switch_locomotor);
         return R::None;
     }
+    // MOVEMENT §6.2: the swap comes first, then the waypoint queue (each swapped unit continues its re-issued order).
+    if (switch_locomotor)
+        for (const objects::ObjectId id : ids) movement_->use_secondary_locomotor(id, true);
     const tactical::Aabb& bb = mode.bounds();
     QueuedOrder q;
     q.kind = QueuedOrder::Kind::Move;
@@ -2326,7 +2330,13 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !u.movable) continue;
         combat_->set_position(u.id, tv(store.position(u.h)));
-        combat_->set_facing(u.id, tv(facing_of_yaw(movement_->view(u.id).yaw)));
+        const mv::UnitView mvv = movement_->view(u.id);
+        combat_->set_facing(u.id, tv(facing_of_yaw(mvv.yaw)));
+        // S7 t14 (MOVEMENT §3.1.1 step 6): the locomotor swap disables TARGETING / WEAPON / SPECIAL_WEAPON for the jetpack
+        // flight and enables them on the swap back (then object signal 0x29: no port listener, its meaning is [M]). The
+        // swap runs inside MovementSystem (orders, the JET_PACK ability, the jetpack's state 0x16), so the flag mirrors
+        // the active locomotor here, before every combat tick.
+        combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, mvv.secondary_locomotor);
     }
     s4_positions(mode);  // S4: garrisoned units sit on their holders
     profile::lap("tac.combat_pre");

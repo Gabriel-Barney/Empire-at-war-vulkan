@@ -529,8 +529,9 @@ void AbilitySystem::h_jet_pack(Obj& o, ObjectId target, uint32_t frame) {
     // REMAINING_GAPS §4.3, does the flight). Countdown on the acting record (the member's in a team, record_of):
     // Expiration_Seconds (+0x28) = 0 -> recharge at once (0x42fb70), else the active phase (0x42fde0). Every shipped
     // user has no Expiration, so 17 is never "active" (the locomotor must not use Is_Active(17) as a flight flag). No RNG.
-    // [port] not modelled: the optional garrison release (type +0x74, 0x3a9910) and the order record's non-default
-    // fields (4, 0x3f, 0x1000001, -999 [L meaning]).
+    // The locomotor swap (0x3a9910, MOVEMENT §3.1.1; type +0x74) is the host's, on the MoveOrder event
+    // (MovementSystem::use_secondary_locomotor). [port] not modelled: the order record's non-default fields (4, 0x3f,
+    // 0x1000001, -999 [L meaning]).
     if (!team_gates(o, kJetPack, frame)) return;
     const UnitAbilityRecord* r = record_of(o, kJetPack);
     if (!r || target == kNoObject || !combat_->has_unit(target)) return;
