@@ -43,12 +43,13 @@ namespace alamo::tactical::combat {
 
 namespace {
 
-constexpr uint32_t kCombatSaveVersion = 9;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
-                                            // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
-                                            // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
-                                            // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
-                                            // (same layout, new meaning), S7 t15 A2 last weapon service frame, S8 t06 B4
-                                            // fire-bone cycle index; 9: S8 t26 fire-at-position order
+constexpr uint32_t kCombatSaveVersion = 10;  // 2: refix t02 INFECTION state, refix t03 death clone key; 3: refixf t01 rockets;
+                                             // 4: refixf t06 attack goal / weapon aim / order lock; 5: refixf t06 scan
+                                             // target hardpoint (auto_hp); 6: a1g t03 damage event hull_lost; 7: S8 t04
+                                             // grenade flight / sticky state; 8: S8 t06 stuck_offset in the parent's frame
+                                             // (same layout, new meaning), S7 t15 A2 last weapon service frame, S8 t06 B4
+                                             // fire-bone cycle index; 9: S8 t26 fire-at-position order; 10: s78f t03
+                                             // targeting state + its target, s78f t04 lobbing turret angles
 constexpr uint32_t kWeatherSaveVersion = 1;
 constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 
@@ -141,6 +142,7 @@ void CombatSystem::write(ByteWriter& w) const {
         w.u32(u.weapon_last).u32(u.weapon_bone);  // S7 t15 A2 / S8 t06 B4
         put_vec3(w, u.lob_point);  // S8 t26 fire-at-position order
         w.u8(u.lob_pending).u8(u.lob_charged).u32(u.lob_stamp);
+        w.f32(u.lob_tpitch).f32(u.lob_tyaw).u8(u.tstate).i32(u.ttarget);  // s78f t04 / t03
         // refix t02: INFECTION behaviour
         w.u8(u.infect_attached).u32(u.infect_suspend).i32(u.infect_desc).i32(u.infect_player).i32(u.infect_source);
         w.u32(u.infect_end).u32(u.infect_next_damage).u32(static_cast<uint32_t>(u.infect_exposure.size()));
@@ -328,6 +330,11 @@ bool CombatSystem::read(ByteReader& r) {
         u.lob_pending = r.u8();
         u.lob_charged = r.u8();
         u.lob_stamp = r.u32();
+        u.lob_tpitch = r.f32();  // s78f t04
+        u.lob_tyaw = r.f32();
+        u.tstate = r.u8();  // s78f t03
+        u.ttarget = r.i32();
+        if (u.tstate > 4) return false;
         u.infect_attached = r.u8();
         u.infect_suspend = r.u32();
         u.infect_desc = r.i32();

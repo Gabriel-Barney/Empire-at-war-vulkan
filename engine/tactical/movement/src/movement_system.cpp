@@ -1,6 +1,7 @@
 #include "alamo/tactical/movement/movement_system.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include "alamo/objects/object_store.hpp"
 
@@ -179,6 +180,14 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.deploy_clip = u.dclip;
     v.turret_elevation = u.tcur[1];  // S8 t24
     v.turret_yaw = u.tcur[2];
+    if (u.d.turret && u.taim) {  // s78f t03: the aim state (0x386170 equality: negatives wrapped by +360, within 0.0001)
+        const bool dep = u.deploy == LocoState::WalkDeploying || u.deploy == LocoState::WalkDeployed;
+        const float ext = dep ? u.d.turret_deployed_extent : u.d.turret_extent;
+        const auto w = [](float a) { return a < 0.0f ? a + 360.0f : a; };
+        bool eq = true;
+        for (size_t k = 0; k < 3; ++k) eq = eq && std::fabs(w(u.tcur[k]) - w(u.ttgt[k])) <= 0.0001f;
+        v.turret_aim = std::fabs(u.ttgt[2]) > ext ? int8_t{-1} : eq ? int8_t{1} : int8_t{0};
+    }
     return v;
 }
 

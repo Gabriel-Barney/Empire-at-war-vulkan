@@ -193,6 +193,10 @@ struct UnitView {
     int32_t deploy_clip = -1;
     // S8 t24: the TURRET's current elevation / yaw (degrees, relative to the body; UnitDesc::turret units only).
     float turret_elevation = 0.0f, turret_yaw = 0.0f;
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): the TURRET's aim toward the host's aim point - 1 the current
+    // angles equal the target angles (0x386170), 0 still slewing, -1 no turret model, not aiming, or the aim yaw is beyond
+    // the (deployed) rotate extent (the can-aim test fails). Derived from the turret state.
+    int8_t turret_aim = -1;
 };
 
 // OI tactical: one crush this tick (§5.5). The host applies kCrushDamage of the crusher type's Squash_Damage_Type

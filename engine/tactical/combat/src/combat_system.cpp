@@ -183,6 +183,8 @@ bool CombatSystem::add_unit(const UnitSpawn& s, uint32_t frame, SimRng& rng) {
     u.last_pos = s.position;
     u.prev_pos = s.position;  // OI tactical
     u.facing = s.facing;
+    u.lob_tpitch = ud.turret_rest_pitch;  // s78f t04: the TURRET starts at Turret_Rest_Angle
+    u.lob_tyaw = ud.turret_rest_yaw;
     u.next_scan = frame;  // first scan due at once [L]
     u.mods.reserve(4);  // host / ability inserts stay allocation-free for the usual few entries
     u.hp_begin = static_cast<uint32_t>(hps_.size());
@@ -1269,6 +1271,14 @@ ObjectId CombatSystem::current_target(ObjectId id) const {
         const Unit* o = unit(u->ordered_target);
         if (live(o)) return u->ordered_target;
     }
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Team targeting copies"): a ground team member keeps no target of its own (TD +8
+    // null); its WEAPON reads the container's (the head's own order / scan target, not a copy).
+    if (u->auto_target == kNoObject) {
+        if (const Unit* h = land_team_head(*u)) {
+            if (h->ordered_target != kNoObject && live(unit(h->ordered_target))) return h->ordered_target;
+            return h->auto_target;
+        }
+    }
     return u->auto_target;
 }
 
@@ -1360,19 +1370,17 @@ bool CombatSystem::unit_weapon_allowed(const Unit& u) const {
     return (u.flags & kUnitHoverRest) == 0;
 }
 
-bool CombatSystem::target_state_attacking(const Unit& u, const Unit& t) const {
-    // TD +0x18 == 4 (TACTICAL_COMBAT §3.1.1 "Gate details" step 7, LOB_SOLVER §8 item 22): Service_Land / _Space test the
-    // current target every targeting service with slot 44 (In_Max_Range: XY distance <= R + E with the LAND_OBSTACLE aim
-    // walk; for a grenade weapon the lob solver alone, LOB_SOLVER §3.1) and !slot 45 (d <= Targeting_Min_Attack_Distance
-    // + E). The targeting interval is 1, so the port evaluates it at the weapon service. [port] State 3 (slot 48: turret /
-    // facing not yet on the target) is not modelled; a team member uses its own position (the TeamTargeting copy of the
-    // container's state is not modelled).
+bool CombatSystem::in_attack_range(const Unit& u, Vec3 from, const Unit& t) const {
+    // Slot 44 && !slot 45 (TACTICAL_COMBAT §3.1.1 "Gate details" step 7, LOB_SOLVER §8 item 22): In_Max_Range (XY distance
+    // <= R + E with the LAND_OBSTACLE aim walk; for a grenade weapon the lob solver alone, LOB_SOLVER §3.1) and not inside
+    // Targeting_Min_Attack_Distance + E, from the targeting object's position.
     const UnitDesc& ud = desc_of(u);
     const ProjectileDesc* gw = grenade_weapon(u);
     float d = 0.0f, E = 0.0f;
-    if (!gw || ud.min_attack_distance > 0.0f) range_geometry(t, u.pos, d, E);
+    if (!gw || ud.min_attack_distance > 0.0f) range_geometry(t, from, d, E);
     if (gw) {
-        if (!lob_in_range(u, *gw, t)) return false;
+        LobSolution s;  // as lob_in_range (one pass at Max_Speed decides the yes / no)
+        if (!lob_solve(from, lob_target_point(t), gw->max_speed, lob_g(*gw), false, s)) return false;
     } else {
         const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
         if (!(d <= range + E)) return false;
@@ -1383,8 +1391,234 @@ bool CombatSystem::target_state_attacking(const Unit& u, const Unit& t) const {
 bool CombatSystem::attacking(ObjectId id) const {
     const Unit* u = unit(id);
     if (!live(u)) return false;
+    const ObjectId tid = current_target(id);
+    const Unit* t = unit(tid);
+    return live(t) && u->tstate == 4 && u->ttarget == tid;
+}
+
+uint8_t CombatSystem::targeting_state(ObjectId id) const {
+    const Unit* u = unit(id);
+    if (!u) return 0;
+    if (u->tstate == 0) return 0;
+    return u->ttarget == current_target(id) ? u->tstate : uint8_t{1};  // another target: Set_Target's state 1
+}
+
+bool CombatSystem::needs_turn(ObjectId id) const {
+    const Unit* u = unit(id);
+    if (!live(u)) return false;
     const Unit* t = unit(current_target(id));
-    return live(t) && target_state_attacking(*u, *t);
+    return live(t) && needs_turn_to(*u, *t);
+}
+
+float CombatSystem::turn_step(const Unit& u) const {
+    // 0x372560: Max_Rate_Of_Turn x Object_Max_Speed_Multiplier_Land (degrees per frame) [port: the type flag (+0x790 byte 1
+    // bit 0) that skips the multiplier is not read].
+    return desc_of(u).turn_rate * cfg_.turn_multiplier_land;
+}
+
+bool CombatSystem::needs_turn_to(const Unit& u, const Unit& t) const {
+    // Slot 48 0x568230 (TACTICAL_COMBAT §3.1.1 "Slot 48") [H]: |wrap(yaw(obj -> target) - obj yaw)| > tol, tol = 0x372560 / 2
+    // and 0.01 degrees when that half is >= 90 (0x20af60). Yaws from 0x20acd0 in [0, 360); the difference wrapped to
+    // (-180, 180]. A team-container target is replaced by its member nearest the shooter (0x404fc0) [port: the
+    // pending-ability member first is not modelled]. [port] No turn rate or no locomotor: never true (nothing could turn
+    // it; retail would hold state 3).
+    const UnitDesc& ud = desc_of(u);
+    const float rate = turn_step(u);
+    if (!(rate > 0.0f) || !ud.has_locomotor) return false;
+    float tol = rate * 0.5f;
+    if (tol >= 90.0f) tol = 0.01f;
+    const Unit& m = lob_member(t, u.pos);
+    const float dx = m.pos.x - u.pos.x, dy = m.pos.y - u.pos.y;
+    const float to = (dx == 0.0f && dy == 0.0f) ? 0.0f : dmath::atan2(dy, dx) * kRadToDeg;
+    const float yaw = dmath::atan2(u.facing.y, u.facing.x) * kRadToDeg;
+    return abs_f(wrap_deg(to - yaw)) > tol;
+}
+
+void CombatSystem::face_toward(Unit& u, Vec3 p, float max_step) {
+    // max_step < 0: the facing snap 0x394440 (yaw to the target; [port] no pitch: port units stay level, so
+    // Targeting_Land_Model_Stay_Horiz_Flat changes nothing). Else the [port] turn request: the locomotor's vf +0x2e8 [M]
+    // modelled as one turn step of at most `max_step` degrees toward the target (the rate slot 48 measures against).
+    // [port] An object without a locomotor (a structure) keeps its facing: no snap, no turn.
+    if (!desc_of(u).has_locomotor) return;
+    const float dx = p.x - u.pos.x, dy = p.y - u.pos.y;
+    const float to = (dx == 0.0f && dy == 0.0f) ? 0.0f : dmath::atan2(dy, dx) * kRadToDeg;
+    float yaw = to;
+    if (max_step >= 0.0f) {
+        const float cur = dmath::atan2(u.facing.y, u.facing.x) * kRadToDeg;
+        const float d = wrap_deg(to - cur);
+        yaw = abs_f(d) <= max_step ? to : cur + (d > 0.0f ? max_step : -max_step);
+    }
+    const float r = yaw / kRadToDeg;
+    const Vec3 f{dmath::cos(r), dmath::sin(r), 0.0f};
+    u.facing = f;
+    if (hooks_) hooks_->facing_set(u.id, f);
+}
+
+void CombatSystem::attack_idle(Unit& u, bool arg, uint32_t frame, SimRng& rng) {
+    // Slot 47 0x569540 (TACTICAL_COMBAT §3.1.1 "Slot 47"): the pose itself is the host's (animation). [port] The
+    // Auto_Deploys + Deploys branch (a deploy request while the ordered flag TD +0xf4 is set) is not modelled.
+    const UnitDesc& ud = desc_of(u);
+    if (ud.auto_deploys && ud.deploys && !ud.fire_weapon_when_undeployed) return;
+    if (hooks_) hooks_->attack_idle(u.id, arg, frame, rng);
+}
+
+void CombatSystem::set_tstate(Unit& u, uint8_t s, ObjectId target) {
+    // Slot 31 0x568c80 [H]: s = 4 is not written (the old state stays) while the type has Is_Stationary_When_Attacking and
+    // the locomotor is moving. [port] Signal 0x1E on the first entry to 4 and the pending-ability rules (TD +0x148 /
+    // +0x150) are not modelled.
+    if (s == 4 && desc_of(u).stationary_when_attacking && (u.flags & kUnitMoving)) {
+        if (u.ttarget != target) u.tstate = 1;  // the old state of a new target: Set_Target's 1
+        u.ttarget = target;
+        return;
+    }
+    u.tstate = s;
+    u.ttarget = target;
+}
+
+void CombatSystem::drop_target(Unit& u) {
+    // Slot 27: the current target is cleared (TD +8 / +0x10, state 0): the order (and its lock / goal) and the scan pick.
+    u.ordered_target = kNoObject;
+    u.ordered_hp = -1;
+    u.locked = 0;
+    u.auto_target = kNoObject;
+    u.auto_hp = -1;
+    u.target_score = 0.0f;
+    u.tstate = 0;
+    u.ttarget = kNoObject;
+}
+
+const CombatSystem::Unit* CombatSystem::land_team_head(const Unit& u) const {
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Team targeting copies"): a ground team's members (Squad_* types) have no TARGETING;
+    // the container's TeamTargeting scans, keeps the target and writes the state into them. [port] The container is the
+    // team head (team_head: the container when it is a combat unit, else the team_leader member standing in for it).
+    if (cfg_.mode != GameMode::Land || u.team == 0) return nullptr;
+    return team_head(u);
+}
+
+void CombatSystem::targeting_service(Unit& u, uint32_t frame, SimRng& rng) {
+    // Service_Land 0x634810 / Service_Space 0x633ae0 after the scan (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 /
+    // 48 and team copies") [H unless tagged]. The state belongs to the current target (TD +8).
+    const ObjectId tid = current_target(u.id);
+    const Unit* t = unit(tid);
+    if (!live(t)) {
+        u.tstate = 0;  // target clear 0x565f90
+        u.ttarget = kNoObject;
+        return;
+    }
+    const UnitDesc& ud = desc_of(u);
+    const bool in_range = in_attack_range(u, u.pos, *t);
+    if (cfg_.mode != GameMode::Land) {
+        // Space: no TURRET -> 4; TURRET: aimed 4 / not yet 3 ([port] the host's aim state; cannot aim: not modelled).
+        // Slot 48 is not used. Out of range: 2.
+        uint8_t s = 2;
+        if (in_range) s = (ud.turret && hooks_ && hooks_->turret_aim_state(u.id) == 0) ? uint8_t{3} : uint8_t{4};
+        set_tstate(u, s, tid);
+        return;
+    }
+    if (!in_range) {
+        // Out of range: the turret aim is released [port: the host's turret follows the current target]; a unit neither
+        // deployed nor deploying, or with Max_Dist_Walk_While_Deployed > 0, gets 2; a deployed / deploying one drops it.
+        if (!deployed_or_deploying(u) || ud.max_dist_walk_while_deployed > 0.0f) {
+            set_tstate(u, 2, tid);
+        } else {
+            drop_target(u);
+        }
+        return;
+    }
+    const bool moving = (u.flags & kUnitMoving) != 0;
+    uint8_t s = 4;
+    if (ud.turret) {
+        // 1. TURRET: nothing in a Walk deploy transition, nor for an undeployed Auto_Deploys + Deploys unit without
+        //    Fire_Weapon_When_Undeployed (the state is left as it was). Else aimed -> 4, still slewing -> 3. [port] The
+        //    can-aim test 0x631cc0 (the extents, the lob arc) and its drop / body-turn branch are the host's turret model.
+        if (deploy_transition(u) || (ud.auto_deploys && ud.deploys && !deployed_or_deploying(u) && !ud.fire_weapon_when_undeployed))
+            return;
+        s = (hooks_ && hooks_->turret_aim_state(u.id) == 0) ? uint8_t{3} : uint8_t{4};
+    } else if (ud.weapon_projectile >= 0) {
+        // 2. WEAPON, no TURRET. Moving: 4 only when the model has no Attack clip (infantry with attack animations do not
+        //    fire on the move). Not moving: slot 48; facing off and (no Deploys, or Must_Face_Target_To_Attack_When_Deployed,
+        //    or Fire_Weapon_When_Undeployed): slot 47(1), state 3, the turn request, slot 48 again (now facing -> 4);
+        //    otherwise a non-deployer's facing is snapped to the target, state 4. [port] The auto-deploy check 0x568e60 is
+        //    not modelled.
+        if (moving) {
+            s = (u.flags & kUnitAttackClip) ? uint8_t{2} : uint8_t{4};
+        } else if (needs_turn_to(u, *t) && (!ud.deploys || ud.must_face_target_when_deployed || ud.fire_weapon_when_undeployed)) {
+            attack_idle(u, true, frame, rng);
+            set_tstate(u, 3, tid);
+            face_toward(u, lob_member(*t, u.pos).pos, turn_step(u));
+            s = needs_turn_to(u, *t) ? uint8_t{3} : uint8_t{4};
+        } else {
+            if (!ud.deploys) face_toward(u, lob_member(*t, u.pos).pos, -1.0f);
+            s = 4;
+        }
+    }
+    set_tstate(u, s, tid);
+    if (u.tstate == 4) attack_idle(u, true, frame, rng);
+}
+
+void CombatSystem::team_targeting_service(Unit& head, uint32_t frame, SimRng& rng) {
+    // TeamTargetingBehaviorClass 0x62ee00 -> 0x62eeb0 (TACTICAL_COMBAT §3.1.1 "Team targeting copies") [H unless tagged],
+    // ground teams only. The container's state, written raw into every member (slot 31 0x62f550: no signal, no hold
+    // rule); members keep no target of their own and read the container's (current_target). Member order = the team
+    // list ([port] ascending id). In range: a moving container -> 4 only while SPREAD_OUT (7) is active, else 2. Not
+    // moving: no member needs to turn -> every member's facing is snapped to the target, 4; else slot 47(0) on the
+    // members, 3, the turn request ([port] one turn step on each member that needs it), 4 when none needs to turn any
+    // more. No TURRET branch. Out of range: 2. State 4 -> slot 47(1) on each member (each draws its own blend).
+    std::vector<Unit*> members;
+    for (Unit& m : units_)
+        if (&m != &head && !(m.flags & kUnitDead) && land_team_head(m) == &head) members.push_back(&m);
+    const ObjectId tid = current_target(head.id);
+    const Unit* t = unit(tid);
+    uint8_t s = 0;
+    if (live(t)) {
+        // Slot 44 / 45 from the container's position with its projectile (slot 42: [port] the head's weapon, else the
+        // first member's).
+        const Unit* src = &head;
+        if (desc_of(head).weapon_projectile < 0)
+            for (const Unit* m : members)
+                if (desc_of(*m).weapon_projectile >= 0) {
+                    src = m;
+                    break;
+                }
+        s = 2;
+        if (in_attack_range(*src, head.pos, *t)) {
+            if (head.flags & kUnitMoving) {
+                s = ability_type_active(head, 7) ? uint8_t{4} : uint8_t{2};
+            } else {
+                const auto any_turn = [&] {
+                    if (needs_turn_to(head, *t)) return true;
+                    for (const Unit* m : members)
+                        if (needs_turn_to(*m, *t)) return true;
+                    return false;
+                };
+                if (!any_turn()) {
+                    face_toward(head, lob_member(*t, head.pos).pos, -1.0f);
+                    for (Unit* m : members) face_toward(*m, lob_member(*t, m->pos).pos, -1.0f);
+                    s = 4;
+                } else {
+                    for (Unit* m : members) attack_idle(*m, false, frame, rng);
+                    if (needs_turn_to(head, *t)) face_toward(head, lob_member(*t, head.pos).pos, turn_step(head));
+                    for (Unit* m : members)
+                        if (needs_turn_to(*m, *t)) face_toward(*m, lob_member(*t, m->pos).pos, turn_step(*m));
+                    s = any_turn() ? uint8_t{3} : uint8_t{4};
+                }
+            }
+        }
+    }
+    if (s == 0) {
+        head.tstate = 0;
+        head.ttarget = kNoObject;
+    } else {
+        set_tstate(head, s, tid);
+    }
+    for (Unit* m : members) {  // the raw copy
+        m->tstate = s;
+        m->ttarget = s == 0 ? kNoObject : tid;
+    }
+    if (s == 4) {
+        if (desc_of(head).weapon_projectile >= 0) attack_idle(head, true, frame, rng);  // [port] a member standing in
+        for (Unit* m : members) attack_idle(*m, true, frame, rng);
+    }
 }
 
 int32_t CombatSystem::model_alt_of(const Unit& u) const {
@@ -1403,45 +1637,73 @@ int32_t CombatSystem::model_alt(ObjectId id) const {
     return u ? model_alt_of(*u) : 0;
 }
 
-bool CombatSystem::garrison_fire_bones(ObjectId host, Vec3& host_pos, std::vector<Vec3>& bones) const {
+bool CombatSystem::host_fire_bones(const Unit& h, std::vector<GarrisonFireBone>& out) const {
+    // LOB_SOLVER §5.1 "Garrison pick inputs" (s78f t03) [H unless tagged]: the bones of the host model's current ALT entry
+    // (model +0xc4, from Land_Damage_Thresholds / _Alternates: model_alt_of), table order i = 0 .. Num_Garrison_Guns - 1,
+    // missing bones skipped; each as its 3x4 world matrix of the current pose (0x12d2c0): translation = the launch point,
+    // x axis (column 0) -> yaw = atan2(m4, m0) in [0, 360) (0x20acd0). [port] The bind pose x the host transform (position
+    // + yaw; port units have no pitch / roll): exact for vanilla, whose only gun host NB_Bunker has no animation clip;
+    // a modded animated host would differ. [port] The ALT is re-derived from the current hull fraction (retail stores it
+    // after each hull damage, keeping the old one when the table names an ALT beyond the model's).
+    out.clear();
+    const UnitDesc& hd = desc_of(h);
+    const int32_t alt = model_alt_of(h);
+    if (hd.num_garrison_guns == 0 || alt < 0 || static_cast<size_t>(alt) >= hd.garrison_bones.size()) return false;
+    const float host_yaw = dmath::atan2(h.facing.y, h.facing.x) * kRadToDeg;
+    for (const GarrisonBone& b : hd.garrison_bones[static_cast<size_t>(alt)]) {
+        if (!b.valid) continue;
+        GarrisonFireBone f;
+        f.pos = local_to_world(h, b.pos);
+        float y = b.yaw_deg + host_yaw;  // the world x axis' yaw, into [0, 360)
+        while (y >= 360.0f) y -= 360.0f;
+        while (y < 0.0f) y += 360.0f;
+        f.yaw_deg = y;
+        out.push_back(f);
+    }
+    return !out.empty();
+}
+
+bool CombatSystem::garrison_fire_bones(ObjectId host, Vec3& host_pos, std::vector<GarrisonFireBone>& bones) const {
     bones.clear();
     const Unit* h = unit(host);
     if (!live(h)) return false;
-    const UnitDesc& hd = desc_of(*h);
-    const int32_t alt = model_alt_of(*h);
-    if (hd.num_garrison_guns == 0 || alt < 0 || static_cast<size_t>(alt) >= hd.garrison_bones.size()) return false;
     host_pos = h->pos;
-    for (const GarrisonBone& b : hd.garrison_bones[static_cast<size_t>(alt)])
-        if (b.valid) bones.push_back(local_to_world(*h, b.pos));
-    return !bones.empty();
+    return host_fire_bones(*h, bones);
+}
+
+bool garrison_bone_within(float bone_yaw, Vec3 host, Vec3 target) {
+    // LOB_SOLVER §5.1 [H]: target yaw 0x20acd0(host -> T) in [0, 360) (0 when T is straight above / below the host); the
+    // difference bone - target into [0, 360) (0x20b100), > 180 -> -360; a candidate when |d| <= 60.
+    const float dx = target.x - host.x, dy = target.y - host.y;
+    float ty = (dx == 0.0f && dy == 0.0f) ? 0.0f : dmath::atan2(dy, dx) * kRadToDeg;
+    if (ty < 0.0f) ty += 360.0f;
+    float d = bone_yaw - ty;
+    while (d >= 360.0f) d -= 360.0f;
+    while (d < 0.0f) d += 360.0f;
+    if (d > 180.0f) d -= 360.0f;
+    return abs_f(d) <= kGarrisonGunHalfAngle;
 }
 
 bool CombatSystem::garrison_muzzle(const Unit& u, Vec3 target, SimRng& rng, Vec3& out) const {
-    // Spawn_Projectile 0x54ade0 garrison branch (LOB_SOLVER §5.1 "Garrison fire bones in detail") [H]: the shooter is
-    // garrisoned (obj +0x3a7); host = its parent (the grandparent for a team member: the host query's answer); the host
-    // type's Num_Garrison_Guns != 0, the host model's ALT in 0..M-1 (jge) and a non-empty entry. Candidates: the bones with a
-    // transform whose x-axis yaw lies within 60 degrees of the yaw from the host's position to the target (difference
-    // wrapped to +-180). n >= 2 -> one synced Get_Int(0, n - 1); n = 1 -> no draw; n = 0 or a failed gate -> false (the
-    // shooter's own muzzle bone). [port] Bind-pose bones turned by the host's facing; "within" = |difference| <= 60.
+    // Spawn_Projectile 0x54ade0 garrison branch (LOB_SOLVER §5.1 "Garrison fire bones in detail" / "Garrison pick inputs")
+    // [H]: the shooter is garrisoned (obj +0x3a7); host = its parent (the grandparent for a team member: the host query's
+    // answer); the host type's Num_Garrison_Guns != 0, the host model's ALT in 0..M-1 (jge) and a non-empty entry.
+    // Candidates (host_fire_bones, table order): the bones whose x-axis yaw lies within 60 degrees of the yaw from the
+    // host's position to `target` (the target object's raw position, a team container not yet replaced, or the ground
+    // point). n >= 2 -> one synced Get_Int(0, n - 1); n = 1 -> no draw; n = 0 or a failed gate -> false (the shooter's
+    // own muzzle bone).
     if (!(u.flags & kUnitGarrisoned) || !garrison_host_) return false;
     const Unit* h = unit(garrison_host_(u.id));
     if (!live(h)) return false;
-    const UnitDesc& hd = desc_of(*h);
-    const int32_t alt = model_alt_of(*h);
-    if (hd.num_garrison_guns == 0 || alt < 0 || static_cast<size_t>(alt) >= hd.garrison_bones.size()) return false;
-    const std::vector<GarrisonBone>& entry = hd.garrison_bones[static_cast<size_t>(alt)];
-    const float to_target = dmath::atan2(target.y - h->pos.y, target.x - h->pos.x) * kRadToDeg;
-    const float host_yaw = dmath::atan2(h->facing.y, h->facing.x) * kRadToDeg;
-    auto within = [&](const GarrisonBone& b) {
-        return b.valid && abs_f(wrap_deg(b.yaw_deg + host_yaw - to_target)) <= kGarrisonGunHalfAngle;
-    };
+    std::vector<GarrisonFireBone> bones;
+    if (!host_fire_bones(*h, bones)) return false;
     int32_t n = 0;
-    for (const GarrisonBone& b : entry) n += within(b) ? 1 : 0;
+    for (const GarrisonFireBone& b : bones) n += garrison_bone_within(b.yaw_deg, h->pos, target) ? 1 : 0;
     if (n == 0) return false;
     int32_t k = n >= 2 ? rng.range_int(0, n - 1) : 0;  // one synced draw for two or more candidates
-    for (const GarrisonBone& b : entry) {
-        if (!within(b) || k-- != 0) continue;
-        out = local_to_world(*h, b.pos);
+    for (const GarrisonFireBone& b : bones) {
+        if (!garrison_bone_within(b.yaw_deg, h->pos, target) || k-- != 0) continue;
+        out = b.pos;
         return true;
     }
     return false;
@@ -1702,7 +1964,8 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
     const Unit* tp = nullptr;
     if (!ground) {
         tp = unit(current_target(u.id));
-        if (!live(tp) || !target_state_attacking(u, *tp)) {
+        // s78f t03: the state of the last targeting service (a team member: the container's raw copy) for this target.
+        if (!live(tp) || u.tstate != 4 || u.ttarget != tp->id) {
             u.weapon_pulses = ud.weapon_pulse_count;
             return;
         }
@@ -1750,8 +2013,11 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
     if (Vec3 gm; garrison_muzzle(u, tp ? tp->pos : u.lob_point, rng, gm)) muzzle = gm;
     // S8 t04 (LOB_SOLVER §5.1 / §5.2): Spawn_Projectile replaces a team-container target by its member nearest the launch
     // point (the hardpoint index is reset). A grenade solves from the launch point toward the un-led target point Q (the
-    // member + its Ranged_Target_Z_Adjust, or the ground point as given); no arc = no shot, before any draw, no cooldown /
-    // pulse change (retried next service; a fire-at-position order stays charged).
+    // member + its Ranged_Target_Z_Adjust, or the ground point as given); no arc = no shot, no cooldown / pulse change
+    // (retried next service; a fire-at-position order stays charged). s78f t06 (LOB_SOLVER §5.2 "Order and draws"): the
+    // solve comes AFTER the garrison pick above and BEFORE the aim draws below, as in retail - a garrisoned shooter with
+    // two or more qualifying host bones has already spent its Get_Int when the solve finds no arc (kept on purpose: the
+    // retry spends one draw per service); a non-garrisoned shooter spends none.
     // [port] The projectile keeps the container as its target object.
     const Unit* am = tp ? &lob_member(*tp, muzzle) : nullptr;
     LobSolution sol;
@@ -1811,37 +2077,74 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
 }
 
 bool CombatSystem::own_launch_point(const Unit& u, Vec3& out) const {
-    // [port] The turret's fire bone (LOB_SOLVER §3.6) is not modelled: the unit's first fire bone (rest pose), else the
-    // position + its own Ranged_Target_Z_Adjust - the own weapon's launch point without the round robin.
+    // LOB_SOLVER §3.6 "Charge-up aim" step 2: the weapon's NEXT fire bone (the WEAPON pack's cycle index TD +0xf0 into its
+    // bone list; rest pose turned by the facing, as fire_unit_weapon); [port] no model data: the position + its own
+    // Ranged_Target_Z_Adjust (the own weapon's no-model launch point). A known model without fire bones: none.
     const UnitDesc& ud = desc_of(u);
     if (ud.muzzle_model) {
-        if (ud.muzzle_bones.empty()) return false;
-        out = local_to_world(u, ud.muzzle_bones[0]);
+        const auto n = static_cast<uint32_t>(ud.muzzle_bones.size());
+        if (n == 0) return false;
+        out = local_to_world(u, ud.muzzle_bones[u.weapon_bone < n ? u.weapon_bone : 0u]);
         return true;
     }
     out = Vec3{u.pos.x, u.pos.y, u.pos.z + ud.ranged_target_z_adjust};
     return true;
 }
 
+bool CombatSystem::lob_turret_aim(Unit& u) {
+    // 0x631fe0(turret, ordered point) with the aim update 0x631210 (LOB_SOLVER §3.6 "Charge-up aim", s78f t04) [H unless
+    // tagged]: target angles toward the point as given, relative to the body (yaw from the turret bone - [port] the object
+    // position: no turret bone offsets in the combat data - minus the facing yaw, wrapped; pitch geometric with up
+    // negative, or -theta from Lob_Solve from the weapon's next fire bone for a category-3 projectile, no solution -> not
+    // aimed); outside Turret_Rotate_Extent_Degrees (or, unless Turret_XY_Only, Turret_Elevate_Extent_Degrees) -> not aimed.
+    // A unit without deploy states always uses the undeployed extents. Then one slew step: pitch and yaw each move
+    // toward the target by at most Turret_Rotate_Speed degrees (yaw by the wrapped difference, then wrapped and clamped to
+    // +-extent). Aimed (1) only when the current angles equal the target after the step (0x386170: within 0.0001 after
+    // mapping negatives into [0, 360)). [port] Turret_Rotate_Speed <= 0: the target is reached at once.
+    const UnitDesc& ud = desc_of(u);
+    const int32_t proj = fired_weapon_projectile(u);
+    if (proj < 0 || static_cast<size_t>(proj) >= data_->projectiles.size()) return false;
+    const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(proj)];
+    const Vec3 p = u.lob_point;
+    const float dx = p.x - u.pos.x, dy = p.y - u.pos.y, dz = p.z - u.pos.z;
+    const float to = (dx == 0.0f && dy == 0.0f) ? 0.0f : dmath::atan2(dy, dx) * kRadToDeg;
+    const float yaw = wrap_deg(to - dmath::atan2(u.facing.y, u.facing.x) * kRadToDeg);
+    float pitch = -dmath::atan2(dz, dmath::sqrt(dx * dx + dy * dy)) * kRadToDeg;
+    if (grenade(pd)) {  // can-aim 0x631a00: a category-3 projectile solves from the next fire bone
+        Vec3 from;
+        LobSolution s;
+        if (!own_launch_point(u, from) || !lob_solve(from, p, pd.max_speed, lob_g(pd), pd.can_lob_slower, s)) return false;
+        pitch = -s.angle * kRadToDeg;
+    }
+    if (abs_f(yaw) > ud.turret_extent) return false;
+    if (!ud.turret_xy_only && abs_f(pitch) > ud.turret_elevate_extent) return false;
+    const float sp = ud.turret_rotate_speed;
+    if (!(sp > 0.0f)) {
+        u.lob_tpitch = pitch;
+        u.lob_tyaw = yaw;
+    } else {
+        const float de = pitch - u.lob_tpitch;
+        u.lob_tpitch = abs_f(de) <= sp ? pitch : u.lob_tpitch + (de > 0.0f ? sp : -sp);
+        const float dyaw = wrap_deg(yaw - u.lob_tyaw);
+        const float ny = wrap_deg(abs_f(dyaw) <= sp ? yaw : u.lob_tyaw + (dyaw > 0.0f ? sp : -sp));
+        u.lob_tyaw = std::clamp(ny, -ud.turret_extent, ud.turret_extent);
+    }
+    const auto w = [](float v) { return v < 0.0f ? v + 360.0f : v; };
+    return abs_f(w(u.lob_tpitch) - w(pitch)) <= 0.0001f && abs_f(w(u.lob_tyaw) - w(yaw)) <= 0.0001f;
+}
+
 void CombatSystem::lobbing_service(Unit& u, uint32_t frame) {
     // S8 t26 (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", LobbingSuperweaponBehavior vf6 0x4ea6f0) [H unless tagged]:
-    // while the order is pending and the charge-up stamp is 0, aim the TURRET at the point (0x631fe0, LOB_SOLVER §3.6: a
-    // lob solution from the launch point and the turret angles reached); no TURRET / no solution / not aimed -> wait (no
-    // timeout). [port] The turret angles are not modelled: aimed as soon as the solution exists. Once aimed the stamp :=
-    // now; when now >= stamp + Lobbing_Superweapon_Chargeup_Frames: charged (TD +0x3d) := 1, stamp := 0. The chargeup /
-    // fire SFX and particle are presentation (not modelled here).
+    // while the order is pending and the charge-up stamp is 0, aim the TURRET at the point (0x631fe0: s78f t04, the slew
+    // of lob_turret_aim; the charge-up starts on the service where the angles are reached); no TURRET / no solution /
+    // outside the extents / still slewing -> wait (no timeout). Once aimed the stamp := now; when now >= stamp +
+    // Lobbing_Superweapon_Chargeup_Frames: charged (TD +0x3d) := 1, stamp := 0. After the stamp the turret holds its aim
+    // (TD +0xf6 stays set; the next order slews from there). The chargeup / fire SFX and particle are presentation.
     if (!u.lob_pending) return;
     const UnitDesc& ud = desc_of(u);
     if (u.lob_stamp == 0) {
         if (!ud.turret) return;
-        const int32_t proj = fired_weapon_projectile(u);
-        if (proj < 0 || static_cast<size_t>(proj) >= data_->projectiles.size()) return;
-        const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(proj)];
-        if (grenade(pd)) {  // can-aim 0x631a00: only a category-3 projectile solves
-            Vec3 from;
-            LobSolution s;
-            if (!own_launch_point(u, from) || !lob_solve(from, u.lob_point, pd.max_speed, lob_g(pd), pd.can_lob_slower, s)) return;
-        }
+        if (!lob_turret_aim(u)) return;
         u.lob_stamp = frame;
         lob_events_.push_back({u.id, false, frame, u.lob_point});  // S8 t30: chargeup SFX + particle
     }
@@ -3298,6 +3601,14 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     team_heads_.clear();
     for (const auto& [team, index] : leaders_) team_heads_.emplace_back(team, units_[index].id);
     std::sort(team_heads_.begin(), team_heads_.end());
+    // s78f t03: the heads of ground teams (TeamTargeting services in phase D), ascending id.
+    land_heads_.clear();
+    if (cfg_.mode == GameMode::Land)
+        for (uint32_t i = 0; i < n; ++i)
+            if (!(units_[i].flags & kUnitDead))
+                if (const Unit* h = land_team_head(units_[i])) land_heads_.push_back(h->id);
+    std::sort(land_heads_.begin(), land_heads_.end());
+    land_heads_.erase(std::unique(land_heads_.begin(), land_heads_.end()), land_heads_.end());
     if (!leaders_.empty()) {
         std::sort(leaders_.begin(), leaders_.end());
         for (uint32_t i = 0; i < n; ++i) {
@@ -3385,7 +3696,17 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         // S7 t15 A2: an idle unit's weapons are not serviced; the WeaponBehavior recharge still elapses (fire_unit_weapon
         // subtracts the frames since its last service when it runs again).
         u.acquired = 0;
-        if (!idle && !suspended && !(u.flags & kUnitTargetingSuspended)) decide(u, cands_[k], frame, rng);  // S8 t25
+        if (!idle && !suspended && !(u.flags & kUnitTargetingSuspended)) {  // S8 t25
+            // s78f t03: TARGETING = the scan, then the state service (TACTICAL_COMBAT §3.1.1 "Targeting states"). A ground
+            // team member has no TARGETING (its container's service writes its state); the head's is TeamTargeting.
+            if (!land_team_head(u)) {
+                decide(u, cands_[k], frame, rng);
+                if (std::binary_search(land_heads_.begin(), land_heads_.end(), u.id))
+                    team_targeting_service(u, frame, rng);
+                else
+                    targeting_service(u, frame, rng);
+            }
+        }
         if (hooks_) {
             hooks_->unit_after_targeting(u.id, frame, rng);
             if (u.flags & kUnitDead) continue;
@@ -4330,6 +4651,16 @@ void CombatSystem::hash_extended(StateHasher& h) const {
             h.u8(u.lob_pending);
             h.u8(u.lob_charged);
             h.u32(u.lob_stamp);
+        }
+        if (desc_of(u).lobbing_superweapon && desc_of(u).turret) {  // s78f t04: the lobbing turret's angles
+            h.u8(0x3B);
+            h.f32(u.lob_tpitch);
+            h.f32(u.lob_tyaw);
+        }
+        if (u.tstate != 0) {  // s78f t03: targeting state TD +0x18 and its target (format unchanged at 0)
+            h.u8(0x18);
+            h.u8(u.tstate);
+            h.i32(u.ttarget);
         }
         if (u.auto_hp >= 0) {  // refixf t06 round 3: the scan target's fixed hardpoint (format unchanged without one)
             h.u8(0x29);

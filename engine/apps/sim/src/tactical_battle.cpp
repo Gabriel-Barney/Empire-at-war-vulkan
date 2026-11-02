@@ -162,6 +162,47 @@ public:
     }
     void unit_begin(tc::ObjectId id, uint32_t frame, SimRng& rng) override { a_->unit_begin(id, frame, rng); }
     void unit_after_targeting(tc::ObjectId id, uint32_t frame, SimRng& rng) override { a_->unit_after_targeting(id, frame, rng); }
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Slot 47"): the attack-idle pose 0x569400 - clip 6 Attack Idle, index 0, looping,
+    // speed 1, blend = one synced Get_Float(0.2, 0.75), when (arg 0 or Locomotor_Has_Animation_Priority clear), the
+    // locomotor is not moving and the current clip is not a flinch (79-86), Attack (5) or Attack Idle (6). The draw is
+    // spent whether or not the model has the clip (the blend is the call's argument). [M] The animation gate 0x397040 is
+    // read as false. Without an animation world nothing is played or drawn [port].
+    void attack_idle(tc::ObjectId id, bool arg, uint32_t frame, SimRng& rng) override {
+        (void)frame;
+#ifdef ALAMO_SIM_HAVE_ANIM
+        if (!world_ || !world_->contains(id)) return;
+        const tc::CombatSystem& c = *b_->combat_;
+        if (c.flags(id) & tc::kUnitMoving) return;
+        if (arg) {
+            const int32_t t = c.data().units[c.desc_index(id)].object_type;
+            const objects::GameObjectTypes& ty = b_->catalog_->types();
+            if (t >= 0 && static_cast<size_t>(t) < ty.size() && ty.get_bool(static_cast<objects::TypeIndex>(t), "Locomotor_Has_Animation_Priority"))
+                return;
+        }
+        const int32_t cur = world_->current_type(id);
+        if (anim::is_flinch(cur) || cur == anim::kAnimAttack || cur == anim::kAnimAttackIdle) return;
+        anim::PlayRequest r;
+        r.type = anim::kAnimAttackIdle;
+        r.index = 0;
+        r.loop = true;
+        r.blend_seconds = rng.range_float(0.2f, 0.75f);
+        r.speed = 1.0f;
+        world_->play(id, r, &rng, gframe_);
+#else
+        (void)id, (void)arg, (void)rng;
+#endif
+    }
+    // s78f t03: the facing snap / [port] turn step of the targeting service moves the locomotor's yaw (combat's facing is
+    // re-read from the movement view before each tick).
+    void facing_set(tc::ObjectId id, tactical::Vec3 f) override {
+        if (b_->movement_ && b_->movement_->has_unit(id)) b_->movement_->snap_yaw(id, dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF));
+    }
+    // s78f t03: the TURRET aim of a Deploys turret unit (MovementSystem S8 t24 model, one frame behind the combat target);
+    // other turrets are not modelled (-1: treated as aimed).
+    int8_t turret_aim_state(tc::ObjectId id) const override {
+        if (!b_->movement_ || !b_->movement_->has_unit(id)) return -1;
+        return b_->movement_->view(id).turret_aim;
+    }
     bool shot_allowed(tc::ObjectId shooter, tc::ObjectId target, int32_t target_hp, int32_t& projectile) override {
 #ifdef ALAMO_SIM_HAVE_ANIM
         // ANIM_PARTICLES A.8: the weapon refuses to fire while the object plays a flinch clip.
@@ -3720,6 +3761,15 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         combat_->set_flag(u.id, tc::kUnitFighterIdle, mvv.loco_state == mv::LocoState::FighterIdle);
         combat_->set_flag(u.id, tc::kUnitHoverRest, air && mvv.loco_state == mv::LocoState::WalkStopped);
         combat_->set_flag(u.id, tc::kUnitRocketAttack, abilities_ && abilities_->is_active(u.id, 11));
+        // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): the locomotor is moving (an order in progress or speed), and
+        // the model has an Attack clip (0x397ae0(obj, 5)): a moving land unit without TURRET fires only without one.
+        combat_->set_flag(u.id, tc::kUnitMoving, mvv.has_goal || mvv.speed > 0.0f);
+        bool attack_clip = false;
+#ifdef ALAMO_SIM_HAVE_ANIM
+        if (const anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr)
+            if (const anim::AnimModel* m = w->contains(u.id) ? w->model(u.id) : nullptr) attack_clip = m->variant_count(anim::kAnimAttack) > 0;
+#endif
+        combat_->set_flag(u.id, tc::kUnitAttackClip, attack_clip);
         // S8 t17 (FIGHTER_FLYING §4.10 A / B): a squadron member shares its squadron's team target; a fighter whose
         // formation record exists scans R + Rr (fighter_scan_range).
         if (space_) {

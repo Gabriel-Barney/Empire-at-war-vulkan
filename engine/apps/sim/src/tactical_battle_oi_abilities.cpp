@@ -173,9 +173,10 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     // a1i t04: + the unload exit path of a landing object's unloaded units (§35.2, the locomotor's forced-move term).
     h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id) || landing_locked(id); };
     // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range tests against a garrisoned target's host. S8 t10 (§5.1): the host's gun
-    // bones of its current ALT entry (Num_Garrison_Guns FP_0<i>_ALT<a>, CombatSystem::garrison_fire_bones).
+    // bones of its current ALT entry (Num_Garrison_Guns FP_0<i>_ALT<a>, CombatSystem::garrison_fire_bones; s78f t03: world
+    // position and x-axis yaw of the current pose).
     h.garrison_holder = [this](tc::ObjectId id) -> tc::ObjectId { return garrison_holder_of(id); };
-    h.garrison_fire_bones = [this](tc::ObjectId holder, tactical::Vec3& holder_pos, std::vector<tactical::Vec3>& bones) {
+    h.garrison_fire_bones = [this](tc::ObjectId holder, tactical::Vec3& holder_pos, std::vector<tc::GarrisonFireBone>& bones) {
         return combat_ && combat_->garrison_fire_bones(holder, holder_pos, bones);
     };
     // S8 t11 (MOVEMENT §3.2): DEPLOY drives the Walk locomotor's deploy states; oi_deploy_sync reports the changes back.

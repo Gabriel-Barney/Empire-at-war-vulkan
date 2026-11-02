@@ -281,6 +281,46 @@ static void test_task_force(const Db& db) {
     g_units = nullptr;
 }
 
+// LandTaskForce.Fire_Special_Weapon (AI_TACTICAL §7.3.4, s78f t04): exactly 2 arguments, a string type name, a game object
+// (or AI target) target - a plain position is an error; the first READY lobbing unit of the type is returned even when the
+// fire order is refused; none ready -> false.
+static void test_land_task_force(const Db& db) {
+    Env e(db, objects::ModeKind::Land);
+    LuaVm& vm = *e.vm;
+    const objects::ObjectHandle l1 = make(e.store, db.t("Lobber"), 1, {0, 0, 0});
+    const objects::ObjectHandle l2 = make(e.store, db.t("Lobber"), 1, {0, 0, 0});
+    const objects::ObjectHandle l3 = make(e.store, db.t("Lobber"), 1, {0, 0, 0});
+    const objects::ObjectHandle marker = make(e.store, db.t("Bomb_Marker"), 1, {0, 0, 0});
+    make(e.store, db.t("Ship"), 2, {40, 50, 6});
+    std::vector<objects::ObjectHandle> units{l1, l2, l3};
+    g_units = &units;
+    bool ready2 = true, ready3 = true;
+    e.hooks.weapon_readiness = [&](objects::ObjectHandle h) {
+        return h == l1 ? 0.5f : h == l2 ? (ready2 ? 1.0f : 0.0f) : (ready3 ? 1.0f : 0.0f);
+    };
+    std::vector<objects::ObjectHandle> ordered;
+    Vec3 lobbed{};
+    e.hooks.fire_lobbing_at = [&](objects::ObjectHandle h, Vec3 p) {
+        ordered.push_back(h);
+        lobbed = p;
+        return false;  // refused: the unit is still returned and later units are not tried
+    };
+    lua_register(vm.state(), "TF_Fire", tf_fire);
+    CHECK(run(vm, "x = Find_First_Object('Ship') r = TF_Fire(false, 'Lobber', x)") == "" && !gnil(vm, "r"));
+    CHECK(ordered.size() == 1 && ordered[0] == l2 && lobbed.x == 40.0f && lobbed.y == 50.0f && lobbed.z == 6.0f);
+    CHECK(!e.store.alive(marker));  // the owner's destroy-after sweep ran
+    // Wrong argument count / type name / target kind: script errors, nothing ordered.
+    CHECK(run(vm, "a = TF_Fire(false, 'Lobber')") == "" && gnil(vm, "a") && last_message_has(vm, "expected 2 got 1"));
+    CHECK(run(vm, "b = TF_Fire(false, 7, x)") == "" && gnil(vm, "b") && last_message_has(vm, "Expected string"));
+    CHECK(run(vm, "p = TF_Fire(false, 'Lobber', x.Get_Position())") == "" && gnil(vm, "p") &&
+          last_message_has(vm, "Expected game object or target location"));
+    CHECK(ordered.size() == 1);
+    // No ready unit of the type -> false.
+    ready2 = ready3 = false;
+    CHECK(run(vm, "n = TF_Fire(false, 'Lobber', x)") == "" && !gnil(vm, "n") && !gtrue(vm, "n") && ordered.size() == 1);
+    g_units = nullptr;
+}
+
 static void test_tsw_and_spawn(const Db& db) {
     Env e(db, objects::ModeKind::Space);
     LuaVm& vm = *e.vm;
@@ -455,6 +495,7 @@ int main() {
     test_laser_defense(db);
     test_fire_special_weapon(db);
     test_task_force(db);
+    test_land_task_force(db);
     test_tsw_and_spawn(db);
     test_landing_machine();
     test_cinematic_transport(db);

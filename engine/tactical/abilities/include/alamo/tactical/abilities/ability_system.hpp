@@ -219,9 +219,10 @@ struct AbilityHost {
     // S8 t06 (LOB_SOLVER §3.5, L1_S4_REMAINING §3.5 garrison fire): the garrison host (obj +0x2b0) of a garrisoned unit,
     // kNoObject when not inside. Unset: [port] a garrisoned unit (combat kUnitGarrisoned) is its own container.
     std::function<ObjectId(ObjectId unit)> garrison_holder;
-    // The garrison host's position and the world positions of its gun bones (Num_Garrison_Guns FP_0<i>_ALT<a> of the
-    // current ALT state), in bone order; false / empty = none. Unset: none (the thrower's own Spawn_Bone is used).
-    std::function<bool(ObjectId holder, Vec3& holder_pos, std::vector<Vec3>& bones)> garrison_fire_bones;
+    // The garrison host's position and its gun bones (Num_Garrison_Guns FP_0<i>_ALT<a> of the current ALT state) in the
+    // host's current pose: world position and x-axis yaw (s78f t03, LOB_SOLVER §5.1 "Garrison pick inputs"), bone order;
+    // false / empty = none. Unset: none (the thrower's own Spawn_Bone is used).
+    std::function<bool(ObjectId holder, Vec3& holder_pos, std::vector<combat::GarrisonFireBone>& bones)> garrison_fire_bones;
     // S8 t11 (MOVEMENT §3.2 "Deploy states", AI_TACTICAL §7.3.3 item 3): DEPLOY's 0x3a1ce0 -> 0x391260 -> the Walk
     // locomotor's Deploy(on) (vf +0x118). True when the request changed the locomotor's deploy state. Set: the host owns the
     // deploy state and reports every change with set_deploy_state() (DEPLOY Is_Active = Walk state 0x19); unset: [port] the
