@@ -160,19 +160,60 @@ Vec3 circular_lead(Vec3 muzzle, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 offset, float s,
     return pos_at(t);
 }
 
-Vec3 lob_direction(Vec3 muzzle, Vec3 aim, float v, float g) {
-    const Vec3 d = aim - muzzle;
-    const float dh = dmath::sqrt(d.x * d.x + d.y * d.y);
-    if (!(dh > 0.0f) || !(g > 0.0f) || !(v > 0.0f)) {
-        const float l = dmath::sqrt(dot(d, d));
-        return l > 0.0f ? d * (1.0f / l) : Vec3{1.0f, 0.0f, 0.0f};
+bool lob_solve(Vec3 from, Vec3 to, float max_speed, float G, bool can_lob_slower, LobSolution& out) {
+    out.angle = 0.0f;
+    if (!(G > 0.0f)) return false;  // [port] §8 item 13: G <= 0 never terminates with Can_Lob_Slower in retail
+    // §2.2 step 1, computed once: x term first.
+    const float dx = from.x - to.x, dy = from.y - to.y;
+    const float d = dmath::sqrt(dx * dx + dy * dy);
+    const float h = to.z - from.z;
+    const float dd = d == 0.0f ? 0.0001f : d;  // step 2
+    float v = max_speed;
+    float best_speed = 0.0f, best_angle = 0.0f;
+    for (int pass = 0; pass < kLobMaxPasses; ++pass) {  // §2.3
+        out.angle = 0.0f;
+        const float v2 = v * v;
+        const float disc = (v2 * v2 - ((G * 2.0f) * h) * v2) - ((G * G) * dd) * dd;
+        if (disc < 0.0f) break;
+        const float den = ((h * h) / (dd * dd) + 1.0f) * 2.0f;
+        if (den == 0.0f) break;
+        const float u = ((v2 - G * h) - dmath::sqrt(disc)) / den;
+        if (u < 0.0f) break;
+        float c = dmath::sqrt(u) / v;
+        if (!(c >= 0.0f)) break;  // [port] NaN (v == 0 or non-finite data): no solution at this speed
+        if (c > 1.0f) c = 1.0f;   // [port] a rounding step past 1 would make acos NaN
+        const float theta = dmath::acos(c);
+        out.angle = theta;
+        best_angle = theta;
+        best_speed = v;
+        if (!can_lob_slower) break;
+        v = v * 0.8f;
     }
-    const float v2 = v * v;
-    const float disc = v2 * v2 - g * (g * dh * dh + 2.0f * d.z * v2);
-    const float tan_t = disc >= 0.0f ? (v2 + dmath::sqrt(disc)) / (g * dh) : 1.0f;
-    const float c = 1.0f / dmath::sqrt(1.0f + tan_t * tan_t);
-    const float hx = d.x / dh, hy = d.y / dh;
-    return Vec3{hx * c, hy * c, tan_t * c};
+    if (best_speed != 0.0f) {
+        out.angle = best_angle;
+        out.speed = best_speed;
+        return true;
+    }
+    out.angle = 0.0f;
+    return false;
+}
+
+Vec3 lob_position(Vec3 L, Vec3 f, float s, float G, float t) {
+    // §6.1 operand order: x = (f.x s) t + L.x, y = (f.y s) t + L.y, z = (f.z s + (-G) t 0.5) t + L.z.
+    return Vec3{(f.x * s) * t + L.x, (f.y * s) * t + L.y, (f.z * s + ((-G) * t) * 0.5f) * t + L.z};
+}
+
+Vec3 lob_forward(Vec3 heading, float angle) {
+    float sn = 0.0f, cs = 1.0f;
+    dmath::sincos(angle, sn, cs);
+    const float l2 = heading.x * heading.x + heading.y * heading.y;
+    float hx = 1.0f, hy = 0.0f;
+    if (l2 > 0.0f) {
+        const float inv = 1.0f / dmath::sqrt(l2);
+        hx = heading.x * inv;
+        hy = heading.y * inv;
+    }
+    return Vec3{hx * cs, hy * cs, sn};
 }
 
 namespace {

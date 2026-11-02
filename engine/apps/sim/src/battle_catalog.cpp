@@ -248,10 +248,14 @@ int32_t BattleCatalog::projectile(uint32_t t, BuildState& s) const {
     p.max_rate_of_turn = ty.get_float(t, "Max_Rate_Of_Turn");  // S9 t05: missile-shield / homing turn limit
     p.causes_infection = ty.get_bool(t, "Causes_Infection");    // S9 t04: INFECTION behaviour on hit
     p.lobbed = cat == 3;
-    // --- OI tactical: per-type grenade gravity / lob mod (TACTICAL_COMBAT 2.2, 3.3; lobbed flight in combat) ---
-    if (ty.get_float(t, "Projectile_Grenade_Gravity") > 0.0f) p.grenade_gravity = ty.get_float(t, "Projectile_Grenade_Gravity");
-    if (ty.get_float(t, "Projectile_Grenade_Gravity_Lob_Mod") > 0.0f) p.lob_mod = ty.get_float(t, "Projectile_Grenade_Gravity_Lob_Mod");
-    // --- end OI tactical ---
+    // --- S8 t04 (LOB_SOLVER.md §1.1): grenade gravity / lob mod - an XML value (0 included) replaces the constructor
+    // defaults 1.05 / 5.02 (ProjectileDesc); Can_Lob_Slower (0.8 speed steps), Sticks_On_Collision ---
+    if (!ty.get_string(t, "Projectile_Grenade_Gravity").empty()) p.grenade_gravity = ty.get_float(t, "Projectile_Grenade_Gravity");
+    if (!ty.get_string(t, "Projectile_Grenade_Gravity_Lob_Mod").empty())
+        p.lob_mod = ty.get_float(t, "Projectile_Grenade_Gravity_Lob_Mod");
+    p.can_lob_slower = ty.get_bool(t, "Projectile_Grenade_Can_Lob_Slower");
+    p.sticks_on_collision = ty.get_bool(t, "Projectile_Grenade_Sticks_On_Collision");
+    // --- end S8 t04 ---
     if (!ty.get_string(t, "Projectile_Does_Shield_Damage").empty()) p.does_shield_damage = ty.get_bool(t, "Projectile_Does_Shield_Damage");
     if (!ty.get_string(t, "Projectile_Does_Hitpoint_Damage").empty())
         p.does_hitpoint_damage = ty.get_bool(t, "Projectile_Does_Hitpoint_Damage");
@@ -511,7 +515,9 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
     u.energy_refresh_rate = ty.get_float(t, "Energy_Refresh_Rate");
     u.requires_base_power = ty.get_bool(t, "Requires_Base_Power");
     u.passive_missile_shield_radius = ty.get_float(t, "Passive_Missile_Shield_Radius");
-    u.ranged_target_z_adjust = ty.get_float(t, "Ranged_Target_Z_Adjust");
+    // S8 t04 (LOB_SOLVER §1.1): type +0x4dc, constructor default 6.0 when the tag is absent.
+    u.ranged_target_z_adjust =
+        ty.get_string(t, "Ranged_Target_Z_Adjust").empty() ? 6.0f : ty.get_float(t, "Ranged_Target_Z_Adjust");
     u.converted_die_time = ty.get_float(t, "Converted_To_Enemy_Die_Time_Seconds");
     u.has_locomotor = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Locomotor);
     // Death_Clone: (key name, type) pairs (S9_DEATH_CLONE_SHIELDS.md §1.4): the static tDamageType enum first, else

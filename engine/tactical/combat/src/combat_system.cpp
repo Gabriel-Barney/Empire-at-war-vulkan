@@ -595,10 +595,9 @@ float CombatSystem::base_attack_range(const Unit& u) const {
         if (a && u.ability_active[static_cast<size_t>(s)] && a->range_override > 0.0f) return a->range_override;
     }
     const UnitDesc& ud = desc_of(u);
-    if (ud.weapon_projectile >= 0) {
-        const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(fired_weapon_projectile(u))];
-        if (pd.lobbed) return lob_range(pd.max_speed, pd.grenade_gravity > 0.0f ? pd.grenade_gravity : cfg_.grenade_gravity, pd.lob_mod);
-    }
+    // 0x3749d0 step 2 (LOB_SOLVER §4): a grenade weapon's range is Max_Speed^2 / (lob mod x gravity) [port: 0 for G <= 0];
+    // Targeting_Max_Attack_Distance is not read. Scan box / approach only - acceptance is the solver (slot 44).
+    if (const ProjectileDesc* gw = grenade_weapon(u)) return lob_range(gw->max_speed, gw->grenade_gravity, gw->lob_mod);
     // Deployed / garrisoned multipliers and the transport contribution are not modelled [M].
     return ud.max_attack_distance;
 }
@@ -633,10 +632,52 @@ Vec3 CombatSystem::lead_point(const Unit& t, Vec3 muzzle, Vec3 aim0, float proje
     return circular_lead(muzzle, t.prev_pos, t.last_pos, t.pos, aim0 - t.pos, projectile_speed, cfg_.fps);
 }
 
-float CombatSystem::lob_gravity(const ProjectileDesc& pd) const {
-    if (!pd.lobbed && pd.category != ProjectileCategory::Grenade) return 0.0f;
-    const float g = (pd.grenade_gravity > 0.0f ? pd.grenade_gravity : cfg_.grenade_gravity) * pd.lob_mod;
-    return g > 0.0f ? g : 0.0f;
+const ProjectileDesc* CombatSystem::grenade_weapon(const Unit& u) const {
+    if (desc_of(u).weapon_projectile < 0) return nullptr;
+    const int32_t p = fired_weapon_projectile(u);
+    if (p < 0 || static_cast<size_t>(p) >= data_->projectiles.size()) return nullptr;
+    const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(p)];
+    return grenade(pd) ? &pd : nullptr;
+}
+
+bool CombatSystem::lob_in_range(const Unit& a, const ProjectileDesc& pd, const Unit& t) const {
+    // Slot 44 0x567b40 (LOB_SOLVER §3.1): Lob_Solve(attacker position, candidate position + Ranged_Target_Z_Adjust). The
+    // yes / no answer does not depend on Can_Lob_Slower (§2.3), so one pass at Max_Speed decides it.
+    LobSolution s;
+    return lob_solve(a.pos, lob_target_point(t), pd.max_speed, lob_g(pd), false, s);
+}
+
+Vec3 CombatSystem::lob_target_point(const Unit& t) const {
+    return Vec3{t.pos.x, t.pos.y, t.pos.z + desc_of(t).ranged_target_z_adjust};  // 0x398440
+}
+
+const CombatSystem::Unit& CombatSystem::lob_member(const Unit& t, Vec3 from) const {
+    const Unit* best = nullptr;
+    float best_d2 = 0.0f;
+    for (const Unit& m : units_) {  // ascending id: the first of equally near members wins
+        if (&m == &t || !live(&m) || m.team == 0 || m.team != static_cast<uint32_t>(t.id)) continue;
+        const float d2 = distance2_xy(from, m.pos);
+        if (!best || d2 < best_d2) {
+            best = &m;
+            best_d2 = d2;
+        }
+    }
+    return best ? *best : t;
+}
+
+Vec3 CombatSystem::target_point(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? lob_target_point(*u) : Vec3{};
+}
+
+bool CombatSystem::lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolution* out) const {
+    if (projectile >= data_->projectiles.size()) return false;
+    const ProjectileDesc& pd = data_->projectiles[projectile];
+    if (!grenade(pd)) return false;  // 0x54a6f0 returns false at once for any other category
+    LobSolution s;
+    const bool ok = lob_solve(from, to, pd.max_speed, lob_g(pd), pd.can_lob_slower, s);
+    if (ok && out) *out = s;
+    return ok;
 }
 
 float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
@@ -851,11 +892,14 @@ bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const
     // 9: range acceptance (OI tactical, TACTICAL_GAPS 3.1): slot 44 "in max range" = XY distance <= R + E and NOT slot
     // 45 "inside min range" (d <= Targeting_Min_Attack_Distance + E, types with a min distance only); E = the target's
     // footprint half-extent along the line of sight. OR the target is the container's (squad head's) current target
-    // (team targeting, filter 9 [H]).
+    // (team targeting, filter 9 [H]). S8 t04 (LOB_SOLVER §3.1): a grenade weapon's slot 44 is the lob solver alone (no R,
+    // E, FireRange modifier or LAND_OBSTACLE walk); slot 45 is unchanged.
+    const ProjectileDesc* gw = grenade_weapon(a);
     float d = 0.0f, E = 0.0f;
-    range_geometry(t, a.pos, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
+    if (!gw || ad.min_attack_distance > 0.0f) range_geometry(t, a.pos, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
     const bool head_target = head && current_target(head->id) == t.id;
-    if (!(d <= range + E) && !head_target) return false;
+    const bool in_max = gw ? lob_in_range(a, *gw, t) : d <= range + E;
+    if (!in_max && !head_target) return false;
     if (ad.min_attack_distance > 0.0f && d <= ad.min_attack_distance + E && !head_target) return false;
     // 10: stealth
     if ((t.flags & kUnitStealthed) && !ad.target_stealth_units && a.owner != t.owner) return false;
@@ -946,8 +990,12 @@ bool CombatSystem::promote_goal(Unit& u) {
     if (!desc_of(*t).is_valid_target) return false;
     float d = 0.0f, E = 0.0f;
     range_geometry(*t, u.pos, d, E);
-    const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
-    if (!(d <= range + E)) return false;  // slot 44
+    if (const ProjectileDesc* gw = grenade_weapon(u)) {
+        if (!lob_in_range(u, *gw, *t)) return false;  // slot 44, grenade weapon (S8 t04: LOB_SOLVER §3.1)
+    } else {
+        const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
+        if (!(d <= range + E)) return false;  // slot 44
+    }
     const float mn = desc_of(u).min_attack_distance;
     if (mn > 0.0f && d <= mn + E) return false;  // slot 45
     int32_t hp = -1;
@@ -1404,10 +1452,21 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
     if (proj < 0 || static_cast<size_t>(proj) >= data_->projectiles.size()) return;
     const ProjectileDesc& pd = data_->projectiles[static_cast<size_t>(proj)];
     const float range = fire_range(ud.max_attack_distance, mod_r(u, ModList::FireRange));  // 0x54d090: list 8
-    const float dist = distance_xy(u.pos, t.pos);
-    if (!in_fire_range(dist, 0.0f, range, desc_of(t).radius)) return;
+    // S8 t04 (LOB_SOLVER §5.1 / §5.2): a grenade launches from the shooter's position + its own Ranged_Target_Z_Adjust
+    // (no fire bone) toward the un-led target point Q (a team container -> its member nearest the launch point, + the
+    // target's Ranged_Target_Z_Adjust); no arc = no shot, before any draw. [port] For a grenade the solve is the range
+    // gate (Targeting_Max_Attack_Distance is not a grenade weapon's range, §4); other shots keep the XY range gate.
+    const bool lob = grenade(pd);
+    LobSolution sol;
+    Vec3 muzzle = u.pos, q;
+    if (lob) {
+        muzzle.z = muzzle.z + ud.ranged_target_z_adjust;
+        q = lob_target_point(lob_member(t, muzzle));
+        if (!lob_solve(muzzle, q, pd.max_speed, lob_g(pd), pd.can_lob_slower, sol)) return;
+    } else if (!in_fire_range(distance_xy(u.pos, t.pos), 0.0f, range, desc_of(t).radius)) {
+        return;
+    }
     if (pd.energy_per_shot > 0.0f && has_energy_pool(u) && u.energy < pd.energy_per_shot) return;
-    const Vec3 muzzle = u.pos;
     Vec3 aim = lead_point(t, muzzle, t.pos, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
     if (cfg_.inaccuracy_enabled) {  // [L] fixed-radius branch only (no per-hardpoint table)
         float r = scale_inaccuracy(ud.fire_inaccuracy_fixed_radius, inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy));
@@ -1421,7 +1480,8 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
         }
         if (r > 0.0f) aim = aim + inaccuracy_offset(r, rng);
     }
-    spawn(u, pd, static_cast<uint32_t>(proj), pd.damage * dscale, pd.damage_type, muzzle, aim, t, thp, range, frame);
+    spawn(u, pd, static_cast<uint32_t>(proj), pd.damage * dscale, pd.damage_type, muzzle, aim, t, thp, range, frame,
+          lob ? &sol : nullptr, q);
     if (pd.energy_per_shot > 0.0f && has_energy_pool(u)) {
         u.energy = u.energy - pd.energy_per_shot;
         if (u.energy < 0.0f) u.energy = 0.0f;
@@ -1443,7 +1503,8 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
 }
 
 void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t pdesc, float damage, uint16_t damage_type,
-                         Vec3 muzzle, Vec3 aim, const Unit& target, int32_t target_hp, float range, uint32_t frame) {
+                         Vec3 muzzle, Vec3 aim, const Unit& target, int32_t target_hp, float range, uint32_t frame,
+                         const LobSolution* lob, Vec3 q_point) {
     Projectile p;
     p.serial = next_serial_++;
     p.desc = pdesc;
@@ -1463,13 +1524,23 @@ void CombatSystem::spawn(const Unit& shooter, const ProjectileDesc& pd, uint32_t
     // refixf t01 (S9 §2.4.10 step 1, MaxTravelDistance +0x6c): the same rule for rockets [H]; [M] the target radius term
     // is the retail radius helper 0x397780 (+ its container's when garrisoned), here UnitDesc::radius.
     const float base = range > 0.0f ? range : pd.max_flight_distance;
-    p.max_travel = base > 0.0f ? base + desc_of(target).radius + abs_f(aim.z - muzzle.z) : 0.0f;
-    // OI tactical: lobbed shots (category 3) leave on the ballistic arc to the aim point (formulas.hpp lob_direction).
-    const float g = lob_gravity(pd);
-    if (g > 0.0f) {
-        p.gravity = g;
-        p.floor_z = aim.z;
-        p.dir = lob_direction(muzzle, aim, pd.max_speed, g);
+    // S8 t04 (LOB_SOLVER §5.3): a solved grenade's height term is |Q.z - L.z| (the un-led target point).
+    const float dz = lob ? abs_f(q_point.z - muzzle.z) : abs_f(aim.z - muzzle.z);
+    p.max_travel = base > 0.0f ? base + desc_of(target).radius + dz : 0.0f;
+    // S8 t04 (LOB_SOLVER §5.3 / §5.4): category 3 flies the closed-form parabola from the launch point. WeaponBehavior
+    // shots take the solver's pitch theta and speed s with the yaw of the led, inaccurate aim; hardpoint shots (Fire_At
+    // 0x3825b0, no solver) leave straight at the aim point at Max_Speed and gravity pulls them below that line.
+    if (grenade(pd)) {
+        p.lob = 1;
+        p.gravity = lob_g(pd);
+        p.launch = muzzle;
+        if (lob) {
+            p.lob_dir = lob_forward(aim - muzzle, lob->angle);
+            p.speed = lob->speed;  // pack +0x90 := the solver's speed
+        } else {
+            p.lob_dir = p.dir;
+        }
+        p.dir = p.lob_dir;
     }
     // refixf t01 (S9 §2.4.10 step 1): a spline rocket keeps FireAtPosition = `aim` and the launch point. [M] `aim` is the
     // shared fire path's aim point (target / hardpoint position, circular lead, then the fire-time inaccuracy) standing in
@@ -1536,8 +1607,12 @@ int32_t CombatSystem::hardpoint_by_mesh(const Unit& v, const std::string& mesh) 
 void CombatSystem::sweep(uint32_t pi, QueryContext& ctx) {
     const Projectile& p = projectiles_[pi];
     SweepHit best{kNoObject, 0.0f};
-    if (p.alive && p.spawn_frame < frame_ && p.fuse < 0.0f) {  // OI abilities: armed bombs only detonate on the fuse
-        if (p.rocket) {
+    // OI abilities: placed bombs only detonate on the fuse; S8 t04: a stuck sticky grenade no longer sweeps.
+    const bool placed = p.fuse >= 0.0f && !p.lob;
+    if (p.alive && p.spawn_frame < frame_ && !placed && !p.stuck) {
+        if (p.lob) {
+            best = sweep_segment(p, lob_next(p, frame_) - p.pos, ctx);  // S8 t04: P -> N(t) (LOB_SOLVER §6.2 step 3)
+        } else if (p.rocket) {
             // refixf t01: a planned spline rocket sweeps P -> N, N = the path sampled at s + speed (§2.4.2 steps 2 / 5;
             // read-only here, the commit phase advances s). An unplanned one (first flight step) is planned and swept in
             // the serial commit phase (its plan draws).
@@ -2659,6 +2734,120 @@ void CombatSystem::rocket_step(uint32_t i, uint32_t frame, SimRng& rng) {
     if (expire) expire_projectile(i, frame);
 }
 
+// ---- S8 t04: grenade flight (docs/re/LOB_SOLVER.md §6, ProjectileBehavior category 3 0x4ceea0) ----
+
+Vec3 CombatSystem::lob_next(const Projectile& p, uint32_t frame) const {
+    // §6.1: evaluated from scratch each step; t = frames since the creation frame (the first step, the frame after the
+    // spawn, has t = 1).
+    return lob_position(p.launch, p.lob_dir, p.speed, p.gravity, static_cast<float>(frame - p.spawn_frame));
+}
+
+bool CombatSystem::ground_hit(Vec3 a, Vec3 b, float& t) const {
+    // Ground test 0x4d0630 (§6.2 step 3): the segment a -> b against the terrain heightmap (0x135840). [port] The
+    // heightmap segment walk was not read: the segment is sampled every <= kGroundStep XY units (at least its two
+    // ends) and the first sample at or below h(x, y) after one above it is refined by kGroundBisect halvings; the
+    // reported fraction is the at-or-below end, so the hit point never lies above the ground. A segment that starts at
+    // or below the ground only hits once it has come out above it (a launch point below the surface is not a hit).
+    constexpr float kGroundStep = 10.0f;  // half the terrain vertex spacing (20)
+    constexpr int kGroundMaxSamples = 64, kGroundBisect = 12;
+    const RocketTerrain& tr = rocket_terrain_;
+    const Vec3 d = b - a;
+    const float lxy = dmath::sqrt(d.x * d.x + d.y * d.y);
+    int n = static_cast<int>(std::ceil(lxy / kGroundStep));
+    n = n < 1 ? 1 : (n > kGroundMaxSamples ? kGroundMaxSamples : n);
+    auto above = [&](float f) {
+        const Vec3 p = a + d * f;
+        return p.z - tr.h(p.x, p.y);
+    };
+    float t0 = 0.0f, f0 = above(0.0f);
+    for (int k = 1; k <= n; ++k) {
+        float t1 = static_cast<float>(k) / static_cast<float>(n);
+        const float f1 = above(t1);
+        if (f0 > 0.0f && !(f1 > 0.0f)) {
+            for (int it = 0; it < kGroundBisect; ++it) {
+                const float tm = (t0 + t1) * 0.5f;
+                if (above(tm) > 0.0f) t0 = tm;
+                else t1 = tm;
+            }
+            t = t1;
+            return true;
+        }
+        t0 = t1;
+        f0 = f1;
+    }
+    return false;
+}
+
+void CombatSystem::lob_step(uint32_t i, uint32_t frame, SimRng& rng) {
+    // §6.2 in the serial commit phase (projectile serial order). No reference into projectiles_ is used after a call that
+    // can spawn (hit processing, detonation).
+    Projectile& p = projectiles_[i];
+    const ProjectileDesc& pd = data_->projectiles[p.desc];
+    const float age = static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps);
+    // BOMB timer (Grenade_Explode_Timer / Remote_Bomb): sets the grenade off wherever it is.
+    const bool fuse_out = p.fuse >= 0.0f && age >= p.fuse;
+    if (p.stuck) {
+        // §6.4: flight stopped (vfunc +0xc0). Attached grenades ride on their object [port: an attachment at a fixed
+        // world offset from the object's position; the bone / normal orientation is presentation]. They wait for the
+        // BOMB timer or the remote detonation; [port] one without a timer keeps the lifetime rule (no BOMB behaviour of
+        // the projectile type is modelled).
+        if (p.stuck_to != kNoObject)
+            if (const Unit* v = unit(p.stuck_to); live(v)) p.pos = v->pos + p.stuck_offset;
+        if (fuse_out || (p.fuse < 0.0f && pd.max_lifetime > 0.0f && age > pd.max_lifetime)) expire_projectile(i, frame);
+        return;
+    }
+    // 1. N = N(t); 2. facing := the chord P -> N.
+    const Vec3 P = p.pos;
+    const Vec3 N = lob_next(p, frame);
+    const Vec3 seg = N - P;
+    const float l2 = dot(seg, seg);
+    if (l2 > 0.0f) p.dir = seg * (1.0f / dmath::sqrt(l2));
+    // 3. sweep: the object hit of phase E (re-swept when its victim died earlier in this phase) and the land-only ground
+    //    test; the object hit wins when its fraction <= the ground fraction.
+    SweepHit hit = sweep_[i];
+    if (hit.id != kNoObject && !live(unit(hit.id))) {
+        ++stats_.resweeps;
+        hit = sweep_segment(p, seg, serial_ctx_);
+    }
+    float tg = 1.0f;
+    const bool ground = cfg_.mode == GameMode::Land && ground_hit(P, N, tg);
+    const bool object = hit.id != kNoObject && (!ground || hit.t <= tg);
+    if (pd.sticks_on_collision && (object || ground)) {
+        // 5. §6.4: no damage; attach to the struck object or rest on the ground, then wait (BOMB timer / remote).
+        p.stuck = 1;
+        p.speed = 0.0f;
+        if (object) {
+            p.pos = P + seg * hit.t;
+            p.stuck_to = hit.id;
+            p.stuck_offset = p.pos - unit(hit.id)->pos;
+        } else {
+            p.pos = P + seg * tg;
+            p.stuck_to = kNoObject;
+        }
+        if (fuse_out) expire_projectile(i, frame);
+        return;
+    }
+    if (object) {  // 4. Process_Hit (direct + area damage, effects)
+        Unit* v = unit(hit.id);
+        p.alive = 0;
+        Projectile pc = p;
+        process_hit(pc, *v, hit.t, frame, rng, &seg, hit.mesh_hp);
+        return;
+    }
+    if (ground) {  // 4. On_Detonate 0x4cb070 at the ground hit point: no direct damage, area damage + effects there
+        p.pos = P + seg * tg;
+        expire_projectile(i, frame);
+        return;
+    }
+    // Move_And_Expire 0x4c7050 (§6.5): DistanceTravelled += s; the lifetime rule replaces the travel budget when the
+    // budget is 0 or the type has a Max_Lifetime > 0 (every grenade is category 3).
+    p.pos = N;
+    p.travelled = p.travelled + p.speed;
+    const bool lifetime_rule = !(p.max_travel > 0.0f) || pd.max_lifetime > 0.0f;
+    const bool expire = fuse_out || (lifetime_rule ? age > pd.max_lifetime : p.travelled >= p.max_travel);
+    if (expire) expire_projectile(i, frame);
+}
+
 // ================================================================================================
 // tick
 // ================================================================================================
@@ -2836,6 +3025,10 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             rocket_step(i, frame, rng);
             continue;
         }
+        if (projectiles_[i].lob) {  // S8 t04: grenade (0x4ceea0)
+            lob_step(i, frame, rng);
+            continue;
+        }
         SweepHit hit = sweep_[i];
         if (hit.id != kNoObject && !live(unit(hit.id))) {  // victim died earlier in this phase
             ++stats_.resweeps;
@@ -2880,21 +3073,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         p.pos = p.pos + p.dir * p.speed;
         p.travelled = p.travelled + p.speed;
         bool expire;
-        if (p.gravity > 0.0f) {
-            // OI tactical: lobbed flight (0x4ceea0) [M/port] - gravity bends the velocity after the step; the shot
-            // detonates when it comes down to its aim height (the ground test 0x4d0630 stand-in), or by its lifetime
-            // when it has one (3.3 expiry: category 3 with a lifetime). The travel limit does not apply to the arc.
-            const Vec3 v{p.dir.x * p.speed, p.dir.y * p.speed, p.dir.z * p.speed - p.gravity};
-            const float sp = dmath::sqrt(dot(v, v));
-            if (sp > 0.0f) {
-                p.dir = v * (1.0f / sp);
-                p.speed = sp;
-            }
-            const bool landed = p.dir.z < 0.0f && p.pos.z <= p.floor_z;
-            if (landed) p.pos.z = p.floor_z;
-            expire = landed || (pd.max_lifetime > 0.0f &&
-                                static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps) > pd.max_lifetime);
-        } else if (p.fuse >= 0.0f) {  // OI abilities: armed bomb timer
+        if (p.fuse >= 0.0f) {  // OI abilities: armed bomb timer
             expire = static_cast<float>(frame - p.spawn_frame) / static_cast<float>(cfg_.fps) >= p.fuse;
         } else {
             expire = p.max_travel > 0.0f
@@ -2984,6 +3163,9 @@ ProjectileView CombatSystem::projectile(size_t i) const {
     v.alive = p.alive != 0;
     v.speed = p.speed;
     v.spawn_frame = p.spawn_frame;
+    v.lob = p.lob != 0;
+    v.stuck = p.stuck != 0;
+    v.stuck_to = p.stuck_to;
     return v;
 }
 
@@ -3107,7 +3289,11 @@ bool CombatSystem::special_weapon_fire(ObjectId station, ObjectId target) {
 bool CombatSystem::launch_projectile(const ProjectileLaunch& l, uint32_t frame) {
     if (l.projectile >= data_->projectiles.size()) return false;
     const ProjectileDesc& pd = data_->projectiles[l.projectile];
-    Vec3 aim = l.point;
+    // S8 t04 (LOB_SOLVER §5): the shared spawner's grenade branch - every category-3 launch except a placed bomb (a fuse
+    // without `toss`). Q = the un-led target point (team container -> nearest member, + Ranged_Target_Z_Adjust) or the
+    // ground point; no arc -> nothing is spawned.
+    const bool lob = grenade(pd) && (l.fuse_seconds < 0.0f || l.toss);
+    Vec3 aim = l.point, q = l.point;
     float radius = 0.0f;
     if (l.target != kNoObject) {
         const Unit* t = unit(l.target);
@@ -3117,7 +3303,10 @@ bool CombatSystem::launch_projectile(const ProjectileLaunch& l, uint32_t frame) 
             aim = hp_world(*t, data_->hardpoints[hps_[t->hp_begin + static_cast<uint32_t>(l.target_hp)].desc]);
         aim = lead_point(*t, l.from, aim, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
         radius = desc_of(*t).radius;
+        if (lob) q = lob_target_point(lob_member(*t, l.from));
     }
+    LobSolution sol;
+    if (lob && !lob_solve(l.from, q, pd.max_speed, lob_g(pd), pd.can_lob_slower, sol)) return false;
     Projectile p;
     p.serial = next_serial_++;
     p.desc = l.projectile;
@@ -3137,7 +3326,18 @@ bool CombatSystem::launch_projectile(const ProjectileLaunch& l, uint32_t frame) 
     // [port] travel to the aim point (+ the target's radius): a point shot expires (detonates) there. A shot with
     // no distance at all (aim == from) falls back to the lifetime rule.
     p.max_travel = dist > 0.0f ? dist + radius : 0.0f;
-    if (l.fuse_seconds >= 0.0f) {  // OI abilities: an armed bomb sits where it was placed until the fuse runs out
+    if (lob) {
+        // §5.3: pitch theta and speed s from the solve, yaw from the led aim; MaxTravelDistance = Projectile_Max_Flight_
+        // Distance (no request override) + the target radius + |Q.z - L.z| [M: 0 without a flight distance -> lifetime].
+        p.lob = 1;
+        p.gravity = lob_g(pd);
+        p.launch = l.from;
+        p.lob_dir = lob_forward(aim - l.from, sol.angle);
+        p.dir = p.lob_dir;
+        p.speed = sol.speed;
+        p.max_travel = pd.max_flight_distance > 0.0f ? pd.max_flight_distance + radius + abs_f(q.z - l.from.z) : 0.0f;
+        p.fuse = l.fuse_seconds;  // a tossed bomb's timer runs during the flight
+    } else if (l.fuse_seconds >= 0.0f) {  // OI abilities: an armed bomb sits where it was placed until the fuse runs out
         p.speed = 0.0f;
         p.max_travel = 0.0f;
         p.fuse = l.fuse_seconds;
@@ -3760,9 +3960,21 @@ void CombatSystem::hash_extended(StateHasher& h) const {
         h.u32(p.serial);
         h.u32(p.jammed_frame);
         h.u8(p.ever_jammed);
-        if (p.gravity > 0.0f) {  // OI tactical: lobbed flight state (absent for straight shots: format unchanged)
+        if (p.lob) {  // S8 t04: grenade flight state (absent for other shots: format unchanged)
+            h.u8(0x33);
             h.f32(p.gravity);
-            h.f32(p.floor_z);
+            for (const Vec3& v : {p.launch, p.lob_dir}) {
+                h.f32(v.x);
+                h.f32(v.y);
+                h.f32(v.z);
+            }
+            h.u8(p.stuck);
+            if (p.stuck) {
+                h.i32(p.stuck_to);
+                h.f32(p.stuck_offset.x);
+                h.f32(p.stuck_offset.y);
+                h.f32(p.stuck_offset.z);
+            }
         }
         if (p.fuse >= 0.0f) h.f32(p.fuse);  // OI abilities: armed bombs only
         if (p.rocket) {  // refixf t01: spline-rocket state (absent for other projectiles: format unchanged)
