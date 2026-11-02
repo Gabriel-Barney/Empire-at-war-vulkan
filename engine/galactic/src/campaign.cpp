@@ -311,6 +311,12 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
         const PlanetIndex home = setup.players[static_cast<size_t>(local_player_)].home;
         if (valid_planet(home) && planets_[home].is_planet) planets_[home].revealed = true;
     }
+    // q2f t02 [H]: the mode's frame-0 fiscal cycle runs before the galaxy is built (Q2 traces: no objects at mode frame
+    // 0, F fields last 0 / next 1350 / cycle 1 there, credits unchanged until mode frame 1351), so it pays nobody, feeds
+    // no AI income tick and rerolls no black-market planet. Only its bookkeeping (GE 1.2 steps 2-4) is left.
+    last_cycle_frame_ = 0;
+    next_cycle_frame_ = econ::fiscal_period_frames(rules_->constants.fiscal_cycle_seconds);
+    cycle_counter_ = 1;
     return true;
 }
 

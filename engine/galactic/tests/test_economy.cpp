@@ -320,17 +320,20 @@ void test_income() {
     CHECK(s.player_income(pUnder, false) == 8.0f);
     CHECK(s.player_income(pNeutral, false) == 0.0f);  // Is_Neutral faction: no income
     CHECK(w.sim.players()[pEmpire].account.cap == 80000.0f && w.sim.players()[pUnder].account.cap == 40000.0f);
-    // First fiscal cycle on frame 0 [L]; AI income x 1.2.
+    // q2f t02 [H]: the frame-0 cycle ran before the galaxy existed (start() leaves its bookkeeping: day 1, next 1350), so
+    // frame 0 pays nothing; the first payment is on frame 1350. AI income x 1.2.
+    CHECK(s.galactic_day() == 1 && s.last_cycle_frame() == 0 && s.next_cycle_frame() == 1350 && s.frame() == 0);
     w.run(1);
     CHECK(s.galactic_day() == 1 && s.next_cycle_frame() == 1350 && s.frame() == 1);
-    CHECK(s.credits(pEmpire) == 5045.0f);
-    CHECK(s.credits(pUnder) == 5000.0f + 8.0f * 1.2f);
+    CHECK(s.credits(pEmpire) == 5000.0f && s.credits(pUnder) == 5000.0f);
     w.run(1348);  // frames 1..1348
     CHECK(s.galactic_day() == 1);
     w.run(1);  // frame 1349
-    CHECK(s.galactic_day() == 1);
-    w.run(1);  // frame 1350: second cycle
-    CHECK(s.galactic_day() == 2 && s.credits(pEmpire) == 5090.0f);
+    CHECK(s.galactic_day() == 1 && s.credits(pEmpire) == 5000.0f);
+    w.run(1);  // frame 1350: first paid cycle
+    CHECK(s.galactic_day() == 2 && s.last_cycle_frame() == 1350 && s.next_cycle_frame() == 2700);
+    CHECK(s.credits(pEmpire) == 5045.0f);
+    CHECK(s.credits(pUnder) == 5000.0f + 8.0f * 1.2f);
     // Pause freezes the mode frame.
     s.push_pause();
     w.run(5);
@@ -630,7 +633,7 @@ std::pair<std::vector<GalacticEvent>, uint64_t> event_scenario(bool emit) {
     std::vector<GalacticEvent> all;
     CHECK(s.launch_units(pUnder, rD, std::vector<ObjectHandle>{w.planet(rD).surface[0]}) == RejectReason::None);
     const uint32_t f = w.fleet(rD, pUnder);
-    w.run(1);  // frame 0: first fiscal cycle
+    w.run(1);  // frame 0 (no fiscal cycle: the first is on frame 1350, q2f t02)
     CHECK(s.move_fleet(pUnder, f, rC) == RejectReason::None);
     for (int i = 0; i < 3000 && w.fl(f).moving; ++i) w.run(1);
     CHECK(s.invade(pUnder, rC, {}) == RejectReason::None);
@@ -657,32 +660,41 @@ void test_event_stream() {
     const auto again = event_scenario(true);
     CHECK(event_digest(again.first) == event_digest(evs));
     using K = GalacticEventKind;
+    // GalacticDayPassed: one per paid fiscal cycle, on frames 1350, 2700, ... with the day after the increment (the
+    // frame-0 cycle runs before the galaxy exists and emits nothing, q2f t02). The other events in order:
+    std::vector<GalacticEvent> o;
+    int32_t days = 0;
+    for (const GalacticEvent& e : evs) {
+        if (e.kind != K::GalacticDayPassed) {
+            o.push_back(e);
+            continue;
+        }
+        ++days;
+        CHECK(e.frame == 1350 * days && e.value == days + 1);
+    }
     std::vector<K> kinds;
-    for (const GalacticEvent& e : evs) kinds.push_back(e.kind);
+    for (const GalacticEvent& e : o) kinds.push_back(e.kind);
     // D -> C runs through B (D_B, B_C routes): pass-through arrival + departure at B.
-    const std::vector<K> expect = {K::GalacticDayPassed,  K::FleetDeparted,      K::FleetArrived,
-                                   K::FleetDeparted,      K::FleetArrived,       K::UnitsLanded,
-                                   K::PlanetOwnerChanged, K::CorruptionChanged,  K::ProductionBegin,
-                                   K::ProductionBegin,    K::ProductionCanceled, K::ProductionCompleted,
-                                   K::TechLevelChanged,   K::CorruptionChanged,  K::ObjectDestroyed,
-                                   K::ObjectDestroyed};
+    const std::vector<K> expect = {K::FleetDeparted,      K::FleetArrived,       K::FleetDeparted,     K::FleetArrived,
+                                   K::UnitsLanded,        K::PlanetOwnerChanged, K::CorruptionChanged, K::ProductionBegin,
+                                   K::ProductionBegin,    K::ProductionCanceled, K::ProductionCompleted, K::TechLevelChanged,
+                                   K::CorruptionChanged,  K::ObjectDestroyed,    K::ObjectDestroyed};
     CHECK(kinds == expect);
     if (kinds != expect) std::printf("%s", event_digest(evs).c_str());
     if (kinds.size() == expect.size()) {
-        CHECK(evs[0].frame == 0 && evs[0].value == 1);
-        CHECK(evs[1].planet == rD && evs[1].other_planet == rB && evs[1].player == pUnder);
-        CHECK(evs[2].planet == rB && evs[2].value == kArrivePassThrough && evs[2].frame > evs[1].frame);
-        CHECK(evs[3].planet == rB && evs[3].other_planet == rC && evs[3].frame == evs[2].frame);
-        CHECK(evs[4].planet == rC && evs[4].value == kArriveFinal && evs[4].fleet == evs[1].fleet);
-        CHECK(evs[5].planet == rC && evs[5].value == 1);
-        CHECK(evs[6].planet == rC && evs[6].player == pUnder && evs[6].other_player == pNeutral &&
-              evs[6].frame == evs[5].frame);
-        CHECK(evs[7].value == kCorruptionRacketeering && evs[7].player == pUnder);
-        CHECK(evs[8].type == tTechUp && evs[8].value == kSpaceQueue && evs[9].type == tInfantry);
-        CHECK(evs[10].type == tInfantry && evs[10].other_player == 1);
-        CHECK(evs[11].type == tTechUp && evs[11].object == 0 && evs[12].value == 2 && evs[12].other_player == 1);
-        CHECK(evs[13].planet == rB && evs[13].value == kCorruptionPiracy);
-        CHECK(evs[14].type == tFrigate && evs[14].planet == rA && evs[15].type == kNoIndex);
+        CHECK(o[0].planet == rD && o[0].other_planet == rB && o[0].player == pUnder);
+        CHECK(o[1].planet == rB && o[1].value == kArrivePassThrough && o[1].frame > o[0].frame);
+        CHECK(o[2].planet == rB && o[2].other_planet == rC && o[2].frame == o[1].frame);
+        CHECK(o[3].planet == rC && o[3].value == kArriveFinal && o[3].fleet == o[0].fleet);
+        CHECK(o[4].planet == rC && o[4].value == 1);
+        CHECK(o[5].planet == rC && o[5].player == pUnder && o[5].other_player == pNeutral &&
+              o[5].frame == o[4].frame);
+        CHECK(o[6].value == kCorruptionRacketeering && o[6].player == pUnder);
+        CHECK(o[7].type == tTechUp && o[7].value == kSpaceQueue && o[8].type == tInfantry);
+        CHECK(o[9].type == tInfantry && o[9].other_player == 1);
+        CHECK(o[10].type == tTechUp && o[10].object == 0 && o[11].value == 2 && o[11].other_player == 1);
+        CHECK(o[12].planet == rB && o[12].value == kCorruptionPiracy);
+        CHECK(o[13].type == tFrigate && o[13].planet == rA && o[14].type == kNoIndex);
     }
 }
 
@@ -701,12 +713,16 @@ void test_a2_income_hook() {
     });
     CHECK(id != 0 && s.last_income(pUnder) == 0.0f && s.last_income(99) == 0.0f);
     const float under0 = s.credits(pUnder);
-    w.run(1);  // frame 0: first fiscal cycle
+    w.run(1);  // frame 0: no fiscal cycle (the first is on frame 1350, q2f t02), so no tick
+    CHECK(ticks.empty() && s.last_income(pUnder) == 0.0f);
+    while (s.frame() < s.next_cycle_frame()) w.run(1);
+    CHECK(s.credits(pUnder) == under0);
+    w.run(1);  // frame 1350: first fiscal cycle
     // Empire is human (no tick), Neutral earns nothing (no tick): only Underworld.
     CHECK(ticks.size() == 1);
     if (ticks.size() == 1) {
-        CHECK(ticks[0].player == pUnder && ticks[0].gain == 8.0f && ticks[0].period_seconds == 45.0f && ticks[0].day == 1 &&
-              ticks[0].frame == 0);  // raw income: Underworld's Credit_Multiplier 1.2 is not in it
+        CHECK(ticks[0].player == pUnder && ticks[0].gain == 8.0f && ticks[0].period_seconds == 45.0f && ticks[0].day == 2 &&
+              ticks[0].frame == 1350);  // raw income: Underworld's Credit_Multiplier 1.2 is not in it
         CHECK(credits_at_tick[0] == under0 + 8.0f * 1.2f);  // fired after this player's Add_Credits
     }
     CHECK(s.last_income(pEmpire) == 45.0f && s.last_income(pUnder) == 8.0f && s.last_income(pNeutral) == 0.0f);
@@ -717,7 +733,7 @@ void test_a2_income_hook() {
     w.run(1);
     const float before = s.credits(pUnder);
     w.run(1);
-    CHECK(ticks.size() == 2 && ticks[1].gain == 8.0f && ticks[1].day == 2 && ticks[1].frame == 1350);
+    CHECK(ticks.size() == 2 && ticks[1].gain == 8.0f && ticks[1].day == 3 && ticks[1].frame == 2700);
     CHECK(s.credits(pUnder) - before < 8.0f * 1.2f - 1.0f);
     s.remove_income_hook(id);
     const int32_t stop = s.next_cycle_frame();
@@ -730,7 +746,7 @@ void test_a2_income_hook() {
     std::vector<IncomeTick> at;
     t.add_income_hook([&at](const IncomeTick& k) { at.push_back(k); });
     t.add_credits(pEmpire, 79990.0f - t.credits(pEmpire));
-    a.run(1);
+    a.run(1351);  // frames 0..1350: the first fiscal cycle (q2f t02)
     CHECK(at.size() == 2 && t.credits(pEmpire) == 80000.0f);
     if (at.size() == 2) CHECK(at[0].player == pEmpire && at[0].gain == 45.0f && at[1].player == pUnder);
     // An AI player with no income this cycle (Underworld owns nothing here): no Add_Credits and no tick.
@@ -738,7 +754,7 @@ void test_a2_income_hook() {
     std::vector<IncomeTick> zt;
     z.sim.add_income_hook([&zt](const IncomeTick& k) { zt.push_back(k); });
     CHECK(z.sim.player_income(pUnder, false) == 0.0f);
-    z.run(1);
+    z.run(1351);
     CHECK(zt.size() == 1 && !zt.empty() && zt[0].player == pEmpire && z.sim.last_income(pUnder) == 0.0f);
 }
 
