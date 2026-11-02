@@ -1897,6 +1897,11 @@ bool GalacticAiWorld::start(std::vector<std::string>* diagnostics) {
         w.sim.set_production_service_hook([token, self](PlanetIndex p) {
             if (!token.expired()) self->market_planet(p);
         });
+        // q2f t01: an AI player's pay-as-you-go installments go through its budget (0x53b900).
+        w.sim.set_installment_hook([token, self, gs = &w.sim](PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a) {
+            if (!token.expired()) return self->installment(p, q, head, a);
+            return gs->players()[static_cast<size_t>(head.player)].account.credits >= a ? a : -1.0f;  // no AI any more
+        });
     }
     return any;
 }

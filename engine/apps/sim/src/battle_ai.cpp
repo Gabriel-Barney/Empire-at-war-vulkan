@@ -63,9 +63,9 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.difficulties = setup.difficulties;
     cfg.attacker = b_->req_.info.attacker;
     cfg.defender = b_->req_.info.defender;
-    // t48: the port's skirmish battles also run under a galaxy, but are not campaign battles. [port] land skirmish stays on the
-    // campaign rules: it has no skirmish base, and without barracks, command center and refinery the shipped equations only scout.
-    cfg.campaign = !b_->cfg_.skirmish || !b_->space_;
+    // t48: the port's skirmish battles also run under a galaxy, but are not campaign battles. t50: that holds for land skirmish
+    // too now that it has its skirmish base (TacticalBattle::bt_skirmish_base): the shipped skirmish equations and plans run.
+    cfg.campaign = !b_->cfg_.skirmish;
     cfg.constants = setup.constants;
     cfg.log_decisions = setup.log_decisions;
     cfg.game_seed = host.session_seed();  // A2 tactical: perception '#' reseed (AI_GALACTIC_3 §7.3)
@@ -377,7 +377,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     if (w.types.empty()) {
         // Static parts (types indexed by objects::TypeIndex, players, relations, map, hard points).
         w.mode = b_->space_ ? at::TacticalMode::Space : at::TacticalMode::Land;
-        w.campaign = !b_->cfg_.skirmish || !b_->space_;  // as TacticalAiConfig::campaign above
+        w.campaign = !b_->cfg_.skirmish;  // as TacticalAiConfig::campaign above
         const tactical::Aabb& bb = mode_->bounds();
         w.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
         // S10 land outcome: the campaign start markers behind IsFriendly / IsEnemyStartLocation (AI_TACTICAL_PERCEPTION
@@ -589,6 +589,11 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     for (const TacticalBattle::L1BombingRun& run : b_->l1_runs_)
         for (const TacticalBattle::L1Bomber& bm : run.bombers) bombing_run_objects.push_back(bm.id);
     std::sort(bombing_run_objects.begin(), bombing_run_objects.end());
+    // skai: the finished structures standing on build pads (PadState::built), ascending (TacticalBuiltStructureCount).
+    std::vector<objects::ObjectId> pad_built;
+    for (const TacticalBattle::PadState& ps : b_->pads_)
+        if (ps.built != objects::kNoObjectId) pad_built.push_back(ps.built);
+    std::sort(pad_built.begin(), pad_built.end());
     w.objects.clear();
     out.clear();
     std::map<objects::ObjectId, int32_t> stamps;
@@ -669,6 +674,9 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         // t48: Variable_Self.BaseLevel in land skirmish: the count of P's alive objects with this behaviour.
         static const objects::BehaviorTypeId kDummyGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
+        // skai: TacticalBuiltStructureCount's free-store table of built structures (0x4d3630) [M]: the finished structures on
+        // build pads (pre-built skirmish base included). Unset, Num_Refineries stayed 0 and the land skirmish AI never bought units.
+        o.built_structure = std::binary_search(pad_built.begin(), pad_built.end(), id);
         o.transport_landing = st.has_behavior(h, objects::beh::TransportLanding);
         // obj +0x54 (A1_READINGS §30.3): the galactic counterpart's id, -1 none
         if (const objects::ObjectId pm = st.parent_mode_id(h); pm != objects::kNoObjectId) o.parent_object = pm;
@@ -1186,11 +1194,25 @@ bool BattleAi::can_reinforce(int32_t player) {
 // --- A2 tactical: tactical population caps (AI_GALACTIC_3 §3.3) [H]: space = the faction's Space_Tactical_Unit_Cap;
 // land campaign battle = Max_Ground_Forces_On_Planet for the defender, min(that, capacity) for any other player, where
 // capacity = Base_Population_Capacity + Σ Additional_Population_Capacity of the player's live objects in the battle
-// (the reinforcement points it holds). [port] land skirmish takes the same rule: no Land_Skirmish_Unit_Cap curve yet. ---
+// (the reinforcement points it holds). t50: a land skirmish is min(capacity, Land_Skirmish_Unit_Cap_By_Player_Count at the player
+// count), the capacity counting the player's and its allies' objects (§3.3 / §3.3 "plus, in skirmish, those of allied players"). ---
 float BattleAi::population_cap(int32_t player) {
     const auto& ps = b_->galaxy_->players();
     const uint32_t f = player >= 0 && static_cast<size_t>(player) < ps.size() ? ps[static_cast<size_t>(player)].faction : galactic::kNoIndex;
     if (b_->space_) return b_->rules_->faction(f).space_unit_cap;
+    if (b_->skirmish_land()) {
+        const float curve = b_->skirmish_land_unit_cap(player);
+        const objects::ObjectStore& st = mode_->primary();
+        const objects::GameObjectTypes& types = mode_->types();
+        int32_t capacity = f < b_->galaxy_->rules().factions.size() ? b_->galaxy_->rules().factions[f].base_population_capacity : 0;
+        for (int32_t q = 0; q < static_cast<int32_t>(ps.size()); ++q) {
+            if (q != player && b_->combat_->is_enemy(player, q)) continue;
+            for (const objects::ObjectHandle h : st.owned_by(q))
+                if (st.active(h) && st.type(h) < types.size()) capacity += types.get_int(st.type(h), "Additional_Population_Capacity");
+        }
+        const float cap = static_cast<float>(capacity);
+        return curve < 0.0f ? cap : std::min(cap, curve);
+    }
     const float planet_cap = static_cast<float>(b_->galaxy_->rules().constants.max_ground_forces_on_planet);
     if (player == b_->req_.info.defender) return planet_cap;
     const objects::ObjectStore& st = mode_->primary();
@@ -1289,7 +1311,7 @@ std::vector<at::TacticalPad> BattleAi::build_pads(int32_t player) {
         const Vec3 q = st.position(h);
         p.position = {q.x, q.y, q.z};
         bool in_row = false;
-        for (const std::string_view tok : types.get_list(st.type(h), "Tactical_Buildable_Objects_Campaign")) {
+        for (const std::string_view tok : types.get_list(st.type(h), b_->pad_list_tag())) {
             const objects::TypeIndex t = types.resolve_name(tok);
             if (t == objects::kNone || t >= types.size()) {
                 in_row = pad_name_equal(tok, faction);
@@ -1327,7 +1349,9 @@ at::PadCheck BattleAi::build_pad_check(int32_t player, int32_t pad, int32_t) {
         const objects::TypeIndex t = st.type(h);
         if (t >= types.size() || !types.get_bool(t, "Influences_Capture_Point")) continue;
         const int32_t o = st.owner(h);
-        if (o == owner || !c.is_enemy(owner, o)) continue;
+        // skai: a Neutral-faction owner (map props) is not an enemy (BATTLE_TRANSITIONS §0xb: "a Neutral player is simply not
+        // an enemy"; the port keeps it in the other players' combat rows only for ordered attacks).
+        if (o == owner || !c.is_enemy(owner, o) || b_->bt_owner_neutral(o)) continue;
         const Vec3 q = st.position(h);
         const double dx = static_cast<double>(q.x) - pp.x, dy = static_cast<double>(q.y) - pp.y, dz = static_cast<double>(q.z) - pp.z;
         if (dx * dx + dy * dy + dz * dz <= r * r) return at::PadCheck::Blocked;

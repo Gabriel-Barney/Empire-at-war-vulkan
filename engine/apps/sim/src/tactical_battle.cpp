@@ -787,6 +787,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     fog_begin(mode, players);  // fog of war: grids (owner: fog agent)
     bt_map_load(mode, rng);      // REMAINING_GAPS §3.1: map objects in map order (Map_Load_Spawn_Table draws)
     bt_pad_restore(mode);        // §6.5: persistent pad children
+    bt_skirmish_base(mode);      // t50: the land skirmish's pre-built base
     l1_setup(mode);            // L1 systems: special weapons / hyperspace / engines (before the deploys)
     bt_place_forces(mode, rng);  // §3.2: starbase, structures, defender / attacker start forces
     bt_landing_points(mode);     // §3.3: the attacker's map-owned reinforcement points
@@ -3742,6 +3743,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     expire_objects(mode);
     s4_tick(mode, rng);  // S4: garrison enters / exits / ejects, structure capture
     pads_tick(mode);     // Int-final: build pads (construction completion, children gone)
+    sk_income(mode);     // skai: skirmish map battles: the Income_Stream credit trickle
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants follow the live shields (land)
     service_damage_tracking();
     profile::lap("tac.cleanup");
@@ -3753,6 +3755,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     stats_.shots = combat_->stats().shots;
     stats_.hits = combat_->stats().hits;
     // 6. victory.
+    if (!finished_ && end_hold_until_ == 0) sk_check_victory(mode);  // skai: skirmish map battles
     check_victory();
     if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
     space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units
@@ -4058,7 +4061,10 @@ std::string TacticalBattle::summary() const {
            " ability activations, " + std::to_string(stats_.particles) + " particle objects, " + std::to_string(stats_.props + stats_.death_clones) +
            " props/clones, winner " + faction(result_.winner) + ", victory " + victory_name(result_.victory) + ", retreated " +
            faction(result_.retreated) + ", galactic losses " + std::to_string(result_.destroyed.size()) +
-           (result_.starbase_destroyed ? " + starbase" : "");
+           (result_.starbase_destroyed ? " + starbase" : "") +
+           (skirmish_land() ? ", skirmish base " + std::to_string(stats_.skirmish_prebuilt) + " pre-built of " + std::to_string(stats_.skirmish_pads) +
+                                  " pads, " + std::to_string(stats_.pad_builds) + " structures started"
+                            : std::string());
 }
 
 void TacticalBattle::hash(StateHasher& h) const {

@@ -20,6 +20,8 @@ struct MapRunOptions {
     bool ai = true;             // AI stand-in controllers (synced RNG, execute_direct)
     bool quiet = false;
     bool expect_battle_end = false;  // --skirmish-ai: fail unless the battle ends with a winner before the frame limit
+    bool expect_skirmish_base = false;  // --skirmish-ai foc-land (t50): fail unless both sides start with their pre-built base and fight
+    std::string human;          // --skirmish-ai foc-land / skirmish (skai): the faction whose slot is an idle human
 };
 
 int map_run(const MapRunOptions& opt);

@@ -451,6 +451,17 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     bool step_status(StatusRec& s);
     void space_reinforce_poll(StatusRec& s);  // refixf t06: SpaceReinforceBlockStatus IsFinished (AI_TACTICAL §7.4)
     void claim_force(TfRec& t);
+    // skai: the TF's pad picks (PpSource::Build) of its plan's PotentialPlan as reservations, for a Build / Build_All
+    // that runs without a Produce_Force first (BuildEconStructure.lua) [M: retail's TF holds the reservations from plan
+    // start]. Only when the TF has none yet.
+    void claim_pads(TfRec& t) {
+        const auto pit = plans.find(t.plan);
+        if (pit == plans.end()) return;
+        const auto ppit = pps.find(pit->second.pp);
+        if (ppit == pps.end()) return;
+        for (const TacticalPpPick& k : ppit->second.picks)
+            if (k.tf == static_cast<int32_t>(t.def) && k.source == PpSource::Build) t.reservations.emplace_back(k.ref, k.type);
+    }
     // A new object of a type a task force of its owner is producing (TfRec::producing, task forces in id order, first
     // entry of the type) joins that task force instead of the free store (AI_GALACTIC_3 §1.11: the build task registers
     // the unit with the plan). True when claimed.
@@ -1327,7 +1338,10 @@ void TacticalAiWorld::Impl::claim_force(TfRec& t) {
                     t.pending.push_back(*it);
                     break;
                 }
-                case PpSource::Build: t.reservations.emplace_back(k.ref, k.type); break;
+                case PpSource::Build:  // skai: claim_pads may have taken it already
+                    if (std::find(t.reservations.begin(), t.reservations.end(), std::make_pair(k.ref, k.type)) == t.reservations.end())
+                        t.reservations.emplace_back(k.ref, k.type);
+                    break;
                 case PpSource::Produce: {
                     const PlanDefinition& def = library.plans[pit->second.plan];
                     if (!def.magic_plan) {
@@ -2692,6 +2706,7 @@ void TacticalAiWorld::Impl::space_reinforce_poll(StatusRec& s) {
 
 int32_t TacticalAiWorld::Impl::tf_build_all(int32_t tf) {
     TfRec* t = tf_rec(tf);
+    if (t && t->reservations.empty()) claim_pads(*t);
     if (!t || t->reservations.empty()) return -1;
     uint32_t issued = 0;
     for (const auto& [pad, type] : t->reservations) {
@@ -2718,6 +2733,7 @@ int32_t TacticalAiWorld::Impl::tf_build(int32_t tf, std::string_view type_name_i
         if (ai_iequal(w.types[k].name, type_name_in)) type = static_cast<int32_t>(k);
     if (type < 0) return -1;
     int32_t pad_id = pad.object ? id_of(pad.object) : -1;
+    if (pad_id < 0 && t->reservations.empty()) claim_pads(*t);
     if (pad_id < 0)
         for (const auto& [p, ty] : t->reservations)
             if (ty == type) pad_id = p;

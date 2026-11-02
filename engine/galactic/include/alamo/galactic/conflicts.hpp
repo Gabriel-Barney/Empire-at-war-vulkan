@@ -47,6 +47,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -80,6 +81,10 @@ struct ConflictFactionInfo {
     float space_retreat_countdown = 10.0f;    // Space_Retreat_Countdown_Seconds (+0x20b0)
     float land_retreat_countdown = 10.0f;     // Land_Retreat_Countdown_Seconds (+0x2190)
     int32_t map_faction = 0;                  // random-map faction index: Rebel 0, Empire 1, Pirates 2, Underworld 4, Hutts 5
+    // Land_Skirmish_Unit_Cap_By_Player_Count (+0x2cd8): (player count, unit cap) keys in file order (shipped 0,10, 1,10, 8,5).
+    // t50 / skai: unit_cap_for_players() evaluates it (SKIRMISH_SETUP §6: linear, 0 outside the keys, integer part).
+    std::vector<std::pair<float, float>> land_skirmish_unit_cap;
+    float unit_cap_for_players(float players) const;  // < 0: the faction has no curve
 };
 struct ConflictRules {
     AutoResolveConstants auto_resolve;

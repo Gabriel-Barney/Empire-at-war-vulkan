@@ -176,6 +176,29 @@ void AiBudget::paid(int32_t c, uint32_t goal, float n) {
     if (GoalEntry* e = find(c, goal)) e->s += n;
 }
 
+float AiBudget::installment(int32_t c, uint32_t goal, float n) {
+    GoalEntry* e = find(c, goal);
+    if (!e) {
+        refund_ = std::max(refund_ - n, 0.0f);
+        return n;
+    }
+    const float have = std::min(e->alloc, e->c + e->a);
+    if (static_cast<int32_t>(have - n) < 0) {
+        if (e->alloc < n) e->s += n - e->alloc;
+        return -1.0f;
+    }
+    const float p = std::min(n, have);
+    cat_[static_cast<size_t>(c)].P -= p;
+    e->s = std::max(e->s - p, 0.0f);
+    e->alloc = std::max(e->alloc - p, 0.0f);
+    e->a -= p;
+    if (e->a < 0.0f) {
+        e->c = std::max(e->c + e->a, 0.0f);
+        e->a = 0.0f;
+    }
+    return p;
+}
+
 void AiBudget::set_request(int32_t c, uint32_t goal, float req) {
     if (GoalEntry* e = find(c, goal)) e->req = req;
 }

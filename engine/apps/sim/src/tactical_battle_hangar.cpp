@@ -110,8 +110,8 @@ void TacticalBattle::hg_add_types() {
         const std::vector<uint32_t> now = types_used_;
         for (const uint32_t t : now) {
             const auto ti = static_cast<objects::TypeIndex>(t);
-            // Skirmish space: the tactical production lists (every faction row) join the tables.
-            if (cfg_.skirmish && space_)
+            // Skirmish (space; skai t03: land too): the tactical production lists (every faction row) join the tables.
+            if (cfg_.skirmish)
                 for (const std::string_view tok : types.get_list(ti, kBuildList)) {
                     const objects::TypeIndex x = types.resolve_name(hg_trim(tok));
                     if (x != objects::kNone) use_spawnable(static_cast<int32_t>(x));
@@ -598,9 +598,22 @@ void TacticalBattle::hg_production(TacticalMode& mode, SimRng& rng) {
             abilities_->add_container(id, desc_of(static_cast<uint32_t>(t)), o.player, none, frame_, &rng);
             hg_upgrade_objs_.push_back(HgUpgradeObject{id, h});
         } else {
-            // Other types: the normal tactical spawn at the builder [port: no initial order].
+            // Other types: the normal tactical spawn at the builder [port: no initial order]. skai t03, land: retail puts the
+            // finished unit in the reinforcement pool for a Reinforce drop (SKIRMISH_SETUP §3); [port] the pool holds only
+            // galactic objects, so the company appears kLandProducedOffset in front of its builder instead.
+            Vec3 at = pos;
+            if (!space_) {
+                const float len = std::sqrt(facing.x * facing.x + facing.y * facing.y);
+                constexpr float kLandProducedOffset = 120.0f;
+                if (len > 0.0f) {
+                    at.x += facing.x / len * kLandProducedOffset;
+                    at.y += facing.y / len * kLandProducedOffset;
+                } else {
+                    at.y -= kLandProducedOffset;
+                }
+            }
             std::vector<objects::ObjectId> ordered;
-            (void)hg_spawn(mode, o.type, o.player, pos, facing, pos, false, rng, ordered);
+            (void)hg_spawn(mode, o.type, o.player, at, facing, at, false, rng, ordered);
         }
     }
 }

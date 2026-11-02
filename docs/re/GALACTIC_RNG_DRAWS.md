@@ -32,6 +32,10 @@ Ticks 2–12, retail / port (same in both traces and with or without `--story`):
 
 ## 3. What is left (open)
 
+- **Update 2026-11-02 (q2f t01 on main with A2f t01–t03):** tick 1 is now **84** draws. The build (59) and story
+  (4) rows are unchanged, so the first AI proposal pass now draws about 21 (it was 33), against roughly 60–65 in retail.
+  A2f t03 cut the PP solves (starbase power out of the typed rows), and the t01 budget fixes do not touch tick 1.
+  The gap is now about 46 draws, all in row 4, and still needs probe P1 to split by site.
 - **Row 4 is the gap.** About 25–30 draws of the 34 still missing are in the first AI proposal pass. That is a count
   difference (more candidates, goals or solver iterations in retail), not an order difference, so it belongs to the
   galactic AI work (A2 / q2f t01), and the per-frame number needs debugger probe P1 (AI_GALACTIC_3 §10 probe table:

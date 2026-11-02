@@ -986,6 +986,24 @@ void test_retreat_direct_hop() {
     }
 }
 
+// t50: Land_Skirmish_Unit_Cap_By_Player_Count keys (players, cap): shipped 0,10, 1,10, 8,5.
+void test_land_skirmish_unit_cap() {
+    ConflictFactionInfo f;
+    CHECK(f.unit_cap_for_players(2.0f) < 0.0f);  // no curve
+    f.land_skirmish_unit_cap = {{0.0f, 10.0f}, {1.0f, 10.0f}, {8.0f, 5.0f}};
+    CHECK(f.unit_cap_for_players(0.0f) == 10.0f);
+    CHECK(f.unit_cap_for_players(1.0f) == 10.0f);
+    CHECK(f.unit_cap_for_players(8.0f) == 5.0f);
+    // skai (SKIRMISH_SETUP §6): 0 outside the curve, the integer part inside (2 players: 9.29 -> 9, 4: 7.86 -> 7).
+    CHECK(f.unit_cap_for_players(20.0f) == 0.0f);
+    CHECK(f.unit_cap_for_players(-3.0f) == 0.0f);
+    CHECK(f.unit_cap_for_players(2.0f) == 9.0f);
+    CHECK(f.unit_cap_for_players(4.0f) == 7.0f);
+    f.land_skirmish_unit_cap = {{8.0f, 5.0f}, {0.0f, 10.0f}, {1.0f, 10.0f}};  // sorted by x on use
+    CHECK(f.unit_cap_for_players(2.0f) == 9.0f);
+    CHECK(f.unit_cap_for_players(4.5f) < f.unit_cap_for_players(2.0f));  // never rises with more players
+}
+
 }  // namespace
 
 int main() {
@@ -1016,6 +1034,8 @@ int main() {
     test_oi_transitions();  // OI galactic
     std::printf("retreat direct hop\n");
     test_retreat_direct_hop();  // BATTLE_TRANSITIONS §3.3a
+    std::printf("land skirmish unit cap\n");
+    test_land_skirmish_unit_cap();  // t50
     if (g_fail) {
         std::printf("%d check(s) FAILED\n", g_fail);
         return 1;
