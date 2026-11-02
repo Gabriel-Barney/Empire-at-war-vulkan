@@ -4620,6 +4620,21 @@ void test_fire_at_position() {
         const std::vector<uint32_t> again = o->shot_frames(200);
         CHECK(again.size() == 1 && !again.empty() && again[0] == f1 + 91);
     }
+    {  // S8 t30: the presentation events - chargeup when the turret is aimed (stamp), charged at the end of the charge-up
+        auto o = make(true, 90, 0.2f);
+        const Vec3 at{150, 40, 0};
+        CHECK(o->w.sys->order_fire_at_position(1, at));
+        const uint32_t f0 = o->w.frame;
+        std::vector<std::pair<uint32_t, bool>> seen;
+        for (int i = 0; i < 120; ++i) {
+            o->w.tick();
+            for (const LobEvent& e : o->w.sys->lob_events()) {
+                CHECK(e.id == 1 && e.point.x == at.x && e.point.y == at.y);
+                seen.emplace_back(e.frame, e.charged);
+            }
+        }
+        CHECK(seen == (std::vector<std::pair<uint32_t, bool>>{{f0, false}, {f0 + 90, true}}));
+    }
     {  // no TURRET: the turret aim never succeeds, the order waits (no timeout)
         auto o = make(false, 90, 0.2f);
         CHECK(o->w.sys->order_fire_at_position(1, Vec3{150, 0, 0}));

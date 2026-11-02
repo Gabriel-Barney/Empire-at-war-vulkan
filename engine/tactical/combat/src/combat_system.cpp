@@ -1843,10 +1843,12 @@ void CombatSystem::lobbing_service(Unit& u, uint32_t frame) {
             if (!own_launch_point(u, from) || !lob_solve(from, u.lob_point, pd.max_speed, lob_g(pd), pd.can_lob_slower, s)) return;
         }
         u.lob_stamp = frame;
+        lob_events_.push_back({u.id, false, frame, u.lob_point});  // S8 t30: chargeup SFX + particle
     }
     if (u.lob_stamp != 0 && frame >= u.lob_stamp + ud.lobbing_chargeup_frames) {
         u.lob_charged = 1;
         u.lob_stamp = 0;
+        lob_events_.push_back({u.id, true, frame, u.lob_point});  // S8 t30: Lobbing_Superweapon_SFXEvent_Fire
     }
 }
 
@@ -3265,6 +3267,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     damage_events_.clear();
     hit_events_.clear();  // S10-int
     shot_events_.clear();  // OI fog
+    lob_events_.clear();   // S8 t30
     survivor_events_.clear();  // OI abilities
     const auto n = static_cast<uint32_t>(units_.size());
 
