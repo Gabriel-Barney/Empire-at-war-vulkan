@@ -301,7 +301,7 @@ Port that ubershader first and validate it against the lifted `.hlsl` (`MESHBUMP
 
 ## 6. Validation plan
 
-1. **Golden images.** Use the same camera, light and SPH inputs for the D3D9 original (RenderDoc capture,
+1. **Golden images.** Use the same camera, light and SPH inputs for the D3D9 original (apitrace capture,
    or a d3d9 proxy dumping constants) and the Vulkan port, per effect. Compare with a per-pixel tolerance
    of 2/255 (ps_1_x precision is about 8-10 bits, so allow more for `_bx2`-heavy DX8 paths if we port
    those).
