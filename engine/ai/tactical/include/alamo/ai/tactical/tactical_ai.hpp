@@ -47,9 +47,13 @@
 // ids = (player << 20) | slot.
 //
 // A2 tactical: slot 10 = Find_Plan_For_Goal (one synced draw) + the tactical PotentialPlan solve (tactical_pp.hpp:
-// the land / space marshaller lists on run_pp_solver; a failed solve rejects the candidate); the selection's free-store
-// units / pool entries / pads are reserved (+0x30) until the task force's Produce_Force gathers them (free units join,
-// pool entries become pending reinforcements, pads become Build reservations; nothing is bought: AI_GALACTIC_3 §1.11).
+// the land / space marshaller lists on run_pp_solver; a failed solve rejects the candidate). Reservations follow
+// A1_READINGS §28.6 (a1g t01): the proposal's solve ignores free-store reservations and reserves nothing; at accept in
+// Resolve_Category the PP is re-solved honouring them, then its free-store units (entry +0x30), pool entries and pads
+// are reserved; every Commit suspends the +0x30 entries and kept goals re-assert them; a plan whose unit another PP
+// reserved meanwhile is invalid; a unit a task force releases leaves its PP. The task force's Produce_Force gathers the
+// selection (free units join, pool entries become pending reinforcements, pads become Build reservations; nothing is
+// bought: AI_GALACTIC_3 §1.11).
 // FIRST-CUT PARTS (docs/PHASE4.md A1 open items): blocking-status
 // completion rules (open item 3) are this port's: move = every live unit without a movement goal (A2 tactical: an
 // Attack_Move to an object completes when the object dies, units re-ordered only when it moved), attack =

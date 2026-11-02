@@ -36,7 +36,7 @@ bool space_free_store_admits(const FreeStoreObjectInfo& o) {
 }
 
 bool TacticalFreeStore::admit(int32_t object_id, uint32_t type_id) {
-    const auto [it, inserted] = entries_.try_emplace(object_id, Entry{type_id, false});
+    const auto [it, inserted] = entries_.try_emplace(object_id, Entry{type_id, -1});
     if (!inserted) return false;
     ++per_type_[type_id];
     return true;
@@ -56,22 +56,29 @@ int32_t TacticalFreeStore::type_count(uint32_t type_id) const {
     return it == per_type_.end() ? 0 : it->second;
 }
 
-bool TacticalFreeStore::set_order_lock(int32_t object_id, bool locked) {
+int32_t TacticalFreeStore::reservation(int32_t object_id) const {
+    const auto it = entries_.find(object_id);
+    return it == entries_.end() ? -1 : it->second.owner_pp;
+}
+
+bool TacticalFreeStore::reserve(int32_t object_id, int32_t pp) {
     const auto it = entries_.find(object_id);
     if (it == entries_.end()) return false;
-    it->second.locked = locked;
+    it->second.owner_pp = pp;
     return true;
 }
 
-bool TacticalFreeStore::order_locked(int32_t object_id) const {
+bool TacticalFreeStore::unreserve(int32_t object_id, int32_t pp) {
     const auto it = entries_.find(object_id);
-    return it != entries_.end() && it->second.locked;
+    if (it == entries_.end() || it->second.owner_pp != pp) return false;
+    it->second.owner_pp = -1;
+    return true;
 }
 
-void TacticalFreeStore::units(std::vector<int32_t>& out, bool unlocked_only) const {
+void TacticalFreeStore::units(std::vector<int32_t>& out, bool unreserved_only) const {
     out.clear();
     for (const auto& [id, e] : entries_)
-        if (!unlocked_only || !e.locked) out.push_back(id);
+        if (!unreserved_only || e.owner_pp < 0) out.push_back(id);
 }
 
 void TacticalFreeStore::hash(StateHasher& h) const {
@@ -79,7 +86,7 @@ void TacticalFreeStore::hash(StateHasher& h) const {
     for (const auto& [id, e] : entries_) {
         h.i32(id);
         h.u32(e.type_id);
-        h.boolean(e.locked);
+        h.i32(e.owner_pp);
     }
     h.u32(static_cast<uint32_t>(per_type_.size()));
     for (const auto& [t, n] : per_type_) {

@@ -319,6 +319,8 @@ function Definitions()
 end
 function MainForce_Thread()
   BlockOnCommand(MainForce.Produce_Force())
+  local home = FindTarget(MainForce, "One", "Friendly_Structure", 1.0)
+  if home then QuickReinforce(MainForce, home) end
   if MainForce.Get_Force_Count() < 2 or not TestValid(Target) then
     ScriptExit()
   end

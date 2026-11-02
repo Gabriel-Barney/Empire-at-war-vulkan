@@ -722,6 +722,22 @@ path clears the script share when the AI sees the unit idle (stand-in for signal
 Active_By_Default; the task-force path applies it unless movement is locked (HUNT active stands in for the locomotor
 vf+0x1d0 term [M]).
 
+### 28.9 Implemented (a1g t01, 2026-11-01)
+
+Tactical (`TacticalFreeStore` entry `owner_pp`) and galactic (`unit_reserved`, the derived free store) follow 28.4-28.6
+through the shared `GoalSystem` (new hook `suspend_reservations` at Commit step 4; kept goals call `refresh_plan`).
+On_Unit_Service skips only reserved entries; the order-lock skip is gone. Port decisions:
+- [M] The accept re-solve (0x6c4a50) draws its own synced numbers (Plan Setup C start team, IgnoreTarget contrast),
+  since it runs the same solver. Replaying the first solve's draws was tried: it changed the land outcomes little.
+- [port] The goal keeps Init's cost / ETA after the re-solve.
+- Not modelled: the queue-slot flag 0 / 1 of 0x53bee0, the tactical credits reservation, 0x6bf3d0 (a Reinforce
+  delivery joins PP+0x108 reserved), and the Setup A lock test (0x39ad40).
+- `galactic_build.cpp` still reads `unit_reserved` when a build task takes a store unit (0x4d2bd0 does not read +0x30
+  per 28.5) [open].
+- Effect: a proposal's first solve no longer skips units an earlier proposal of the same Commit picked, so more goals
+  are accepted with smaller forces. The FoC land skirmish (`--skirmish-ai foc-land`) now ends inside 14400 frames on
+  seeds 7, 10 and 12 of 1-12 (before: 1, 2, 4, 5 and 6 of 1-6), so the outcome test on the default seed 1 fails [open].
+
 ## 29. TEAM containers in the threat grid (a1f t04) [H unless tagged]
 
 Example throughout: a land skirmish, company `Imperial_Stormtrooper_Squad` (18 `Company_Units` =
@@ -1002,6 +1018,22 @@ the verdict is **change**.
   the slot layout is the port's rows of 6 (the original company formation 0x5abc00 is [M]). Open: with that layout a
   large company (Rebel_Infantry_Squad, 3 rows) finds no valid spot around the Utapau Rebel point on seeds 1-6, while
   the tank brigades land.
+- **Ring spot count from the disassembly (a1g follow-up, 2026-11-01): nine spots per point [H].**
+  - θ lives in xmm6. It is reset to 0 (xmm9, `xorps` at 0x6eb115) for each point at 0x6eb361.
+  - Each try ends with `addss xmm6, [0x140b3adb8]` at 0x6eb56a, then `comiss xmm11, xmm6` and `ja 0x6eb380`, so the
+    loop continues while limit > θ (strict `<`). This also runs after a failed landing. The test is at the loop's end,
+    so the θ = 0 try always runs; the only exits before it are the cap and pending-list checks at 0x6eb380.
+  - θ is accumulated, not recomputed as i·step. All the math is SSE single precision (`addss` / `comiss` /
+    `mulss`); there is no x87 code in 0x6eaf60.
+  - Step 0x140b3adb8 is a function static, set once at 0x6eb6f8: `movss` float π (0x1408007dc = 0x40490fdb) then
+    `divss` 4.0 (0x1408007e0), giving 0x3f490fdb = 0.78539819.
+  - Limit xmm11 = [0x140819b3c] = 0x40c90fdb = float(2π) = 6.28318548 (loaded at 0x6eb323).
+  - Float accumulation gives θ = 0, 0x3f490fdb, …, 0x40afeddf (7π/4), then **0x40c90fda = 6.28318501**, one ulp below
+    the limit, so a ninth try runs. The next value, 7.0685830, ends the loop.
+  - The ninth spot uses cos ≈ 1 and sin ≈ −1.7e-7 of θ (calls 0x776150 / 0x776650). The direct-value shortcut, taken
+    when the float exponent field is ≤ 0x1d000000, applies only to θ = 0. So the ninth spot is about the first spot
+    again but not bit-identical.
+  - The port's nine-spot loop matches. Its constants must be these exact bit patterns, with θ accumulated in float.
 
 ### 30.8 TF link mask −1 → **keep** (equal to shipped data); parsing optional (small)
 
