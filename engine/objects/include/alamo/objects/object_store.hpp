@@ -147,6 +147,13 @@ public:
     // parity CRC (position / facing / health) is unchanged. Systems that cache owners (GalacticSim data
     // packs, tactical TreeSet) are the caller's to update.
     bool set_owner(ObjectHandle h, int32_t owner);
+    // a1h t08 - transport carried type (TransportDataPack +0x48, A1_READINGS §32.2 [H]): the company type a TRANSPORT
+    // carries, which is its representative type (0x3973b0) when set. The original sets it in galactic company production
+    // (0x4f45c0) and on a land reinforcement's landing object (0x4ee230 from 0x2b5fe0: the galactic parent's
+    // representative type in campaign, the reinforced type in skirmish); Create_Cinematic_Transport leaves it unset.
+    // Only live objects with TRANSPORT or TRANSPORT_LANDING (the pack at obj +0xc8) have it; kNone clears it. False and
+    // nothing changed otherwise or for a type index out of range. A new object starts with none.
+    bool set_carried_type(ObjectHandle h, TypeIndex carried);
 
     // Store update (Â§5.3): pre-service hook (spatial-tree refit), serviced objects newest-first
     // (those alive when the loop started), delayed creations (last-to-first, due <= frame), flush.
@@ -225,6 +232,7 @@ public:
     uint8_t flags(ObjectHandle h) const { return flags_[h.slot()]; }
     ObjectHandle container(ObjectHandle h) const { return container_[h.slot()]; }
     ObjectHandle attach_parent(ObjectHandle h) const { return attach_parent_[h.slot()]; }
+    TypeIndex carried_type(ObjectHandle h) const { return exists(h) ? carried_type_[h.slot()] : kNone; }  // a1h t08
     bool has_behavior(ObjectHandle h, BehaviorTypeId id) const;
     std::span<const BehaviorTypeId> behaviors(ObjectHandle h) const { return behaviors_[h.slot()]; }  // attach order
     // Per instance (index into behaviors(h)): serviced flag, interval, next-service frame.
@@ -248,7 +256,8 @@ public:
     // ---- CRC ----
     // Original frame-CRC part (primary store): wrapping sum of parity_object_crc over live objects.
     uint32_t parity_crc() const;
-    // Ordered state digest for the Q1 registry: live and dead-pending objects by id ascending.
+    // Ordered state digest for the Q1 registry: live and dead-pending objects by id ascending. The carried types are
+    // hashed after them only when an object has one, so a store without any keeps the digest it had before a1h t08.
     void hash_state(StateHasher& h) const;
     // N1 save / load (contract: alamo/core/save_file.hpp). write() stores the whole runtime state: the
     // id counter's next(), every slot (generation, used flag and all per-slot data, also of free slots,
@@ -265,8 +274,9 @@ public:
     // counter (a primary store's shared counter gets the same value from every store of that game).
     // False and nothing changed (store and counter) on a version / mode / kind / types mismatch, an
     // inconsistent list or truncated data. Like SimRng / StoryModel it does not require r.done(): the
-    // caller checks that at the end of its chunk.
-    static constexpr uint32_t kSaveVersion = 1;
+    // caller checks that at the end of its chunk. Version 2 (a1h t08) adds the carried types at the end; a version 1
+    // save still loads (no carried types).
+    static constexpr uint32_t kSaveVersion = 2;
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);
     // Registers "<name>" (ordered digest) and "<name>.parity" (parity sum) with a CrcRegistry.
@@ -311,6 +321,7 @@ private:
     std::vector<float> health_;
     std::vector<uint8_t> flags_, registered_serviced_;
     std::vector<ObjectHandle> container_, attach_parent_;
+    std::vector<TypeIndex> carried_type_;  // kNone: none (always kNone on a free slot)
     std::vector<std::vector<BehaviorTypeId>> behaviors_;
     std::vector<std::vector<BehaviorState>> beh_state_;  // parallel to behaviors_
     std::vector<std::array<uint8_t, kBehaviorTypeCount>> behavior_index_;  // 0xFF = absent

@@ -608,7 +608,7 @@ For each threat cell (zone: the evaluator's threat-cell set in list order; rect:
 | **0x6c2b20**, from **0x6c2d60** (reserve / refresh) | +0x30 = PP for every PP+0x108 unit still on the store. It overwrites any other PP's value (no check) | Resolve_Category 0x6c8970: the greedy accept and the weighted random accept, just before Activate; step 3, each active goal that is kept with a valid plan. Maintenance 0x722a30: each surviving goal | **accept** of a new proposal; **re-assert** for kept goals in every Commit |
 | **0x6c2320** (unreserve) | +0x30 = 0 where +0x30 == PP (only if PP+0x100) | **0x6c0be0**, Commit_Proposed_Goals 0x6c8710 step 4, once for every active goal with a PP, before any Resolve_Category; the PP destructor 0x6bec20 | start of every Commit: all reservations are suspended. Destructor: the goal is released or its PP replaced |
 | 0x6c27d0 (PP, unit) | +0x30 = 0 if == PP. A unit not on the store is re-admitted (vf+0x98, fresh entry) | TaskForce vf49 0x5ff610 (a unit leaves a task force: `Release_Unit`, `Release_Forces`, plan end 0x5f6a50 step 3); AIBuildTask FSM 0x64aec0, state WAIT_FOR_FREESTORE_ALLOC, when the claimed unit is ready | the unit leaves the plan. It is also removed from PP+0x108, so later re-asserts skip it |
-| 0x6bf3d0 (PP, unit) | admits the unit if needed; +0x30 = PP; adds the unit to PP+0x108 (into a null slot of the same type, else appended) | ReinforceBlockStatus code 0x6a1440 (a unit delivered for a plan's `Reinforce`) [M caller name] | a running plan receives a new unit |
+| 0x6bf3d0 (PP, unit) | admits the unit if needed; +0x30 = PP; adds the unit to PP+0x108 (into a null slot of the same type, else appended) | ReinforceBlockStatus 0x6a1440 = its signal-0x19 handler ("reinforcements unloaded" from the landing transport), for each unloaded unit (its TEAM container instead, once) of a task force's Reinforce; land only, the space status does not call it (§32.1) | a running plan receives a new unit |
 | 0x4d5000 removal | erases the node | vf+0xa0: the free store's signal handler on destroy (0x10) or owner change (0x1a); a task force taking the unit | death, capture, or the TF takes the unit |
 
 - Nothing else writes node +0x30. All users of the map lookup helpers (0x4d2930, 0x4d2940, 0x6be900) were read.
@@ -736,8 +736,8 @@ On_Unit_Service skips only reserved entries; the order-lock skip is gone. Port d
   the first null slot of its type, i.e. a pick of another source, keeps that slot's task force / team; else appended).
   [port] Task-force units stay off the free store, so the unit is not admitted and +0x30 = PP is set only if it is on the
   store; the delivered entry's type stands for the new object (not perceived yet); a filled slot's pool / pad
-  reservation of this PP is released. The space poll (SpaceReinforceBlockStatus) does not call it [open: the caller
-  0x6a1440 is [M]].
+  reservation of this PP is released. The space poll (SpaceReinforceBlockStatus) does not call it: confirmed, its own
+  handler 0x723ac0 only adds the unit to the task force and removes it from the free store (§32.1, a1h t05).
 - `galactic_build.cpp` still reads `unit_reserved` when a build task takes a store unit (0x4d2bd0 does not read +0x30
   per 28.5) [open].
 - Effect: a proposal's first solve no longer skips units an earlier proposal of the same Commit picked, so more goals
@@ -774,8 +774,8 @@ Team data pack = obj +0x110 (TeamDataPackClass, ctor 0x4ec680 zeroes +0x50 / +0x
 
 - **0x396380(team)** = +0x58 (via 0x404be0) when non-null, else 0x3973b0. Checked in the disassembly.
   For the example: `Imperial_Stormtrooper_Squad`.
-- **0x3973b0(team)** = FLEET (4) → fleet +0x70; else TRANSPORT (5) → transport +0x48; else TEAM → +0x50 (0x404c20);
-  else, or when that is null, the object's own type (+0x298). For the example: `Stormtrooper_Team`.
+- **0x3973b0(team)** = FLEET (4) → fleet +0x70; else TRANSPORT (5) → transport +0x48 (the carried company type,
+  §32.2); else TEAM → +0x50 (0x404c20); else, or when the chosen field is null, the object's own type (+0x298). For the example: `Stormtrooper_Team`.
 - A container spawned without the helper (both fields 0) gives its own type for both [M: no such path traced].
 
 ### 29.3 AI_Combat_Power of that type
@@ -940,12 +940,13 @@ the verdict is **change**.
     power (no health or attenuator factor).
 - Rule: add `skirmish_or_mp` to PerceptionWorld (game type ∈ {1..4}) and `parent_object` per object (+0x54; −1 =
   none). Include as above. Power = the AI_Combat_Power rule of `rep_type` (for a TRANSPORT, 0x3973b0 gives transport
-  +0x48 [M: the carried type]), not the landing object's own power. Test: one landing object in (a) skirmish,
+  +0x48: the carried company type, §32.2), not the landing object's own power. Test: one landing object in (a) skirmish,
   (b) campaign with a resolvable parent (the parent's type's power), (c) campaign with an unresolvable parent
   (skipped).
 - Implemented (a1g t03): `PerceptionWorld::skirmish_or_mp` (host: the battle is a skirmish; no MP), `parent_object`
-  (store parent-mode id) and the `parent_rep_type` callback (host: the galactic object's type, -1 when not found [port:
-  no TRANSPORT carried type in the port's galaxy]). Tests (a)-(c) in alamo_ai_tactical_perception_tests.
+  (store parent-mode id) and the `parent_rep_type` callback (host: the galactic object's type, -1 when not found; the
+  port's galactic company object has the company type as its own type, which is the original transport's +0x48).
+  Tests (a)-(c) in alamo_ai_tactical_perception_tests. The landing object's own carried type: §32.2 (a1h t08).
 
 ### 30.4 §21 `inside_shield` not filled → leaves **keep** 0; IsValidBombingTarget **change** (small)
 
@@ -1191,3 +1192,71 @@ code.]
   - `engine/lua/tests/test_lua_players.cpp` `test_galactic_ops`: `Invade()` on a fleet the local player does not own
     issues no order (`orders_issued` unchanged); on a fleet it owns, one order with player = local.
 - No probe is needed: the binary settles it, and it matches the 2026-10-31 run.
+
+## 32. Reinforce delivery handlers and the transport carried type (a1h t05 / t08) [H unless tagged]
+
+Read 2026-11-02 from the decompiled code, the RTTI of StarWarsG.exe and the call graph.
+
+### 32.1 Who calls 0x6bf3d0: the land ReinforceBlockStatus unload handler; the space status does not
+
+- **Vtables (RTTI).** ReinforceBlockStatus: primary 0x8b9990, signal-listener base at status +0x30 0x8b9a40 (COL
+  offset 0x30), slot 1 = **0x6a1440**. SpaceReinforceBlockStatus: 0x8ce108 / 0x8ce1b8 (offset 0x30), slot 1 =
+  **0x723ac0**. So both are the statuses' signal handlers (this = status + 0x30). 0x6bf3d0 has one caller, 0x6a1440.
+- **0x6a1440** (land; signal 0x19 with ReinforcementsUnloadedDataClass data, sent by the TransportLanding unload finish
+  0x6438a0 with the transport pack's ReinforcementsUnloadedDataClass at +0x98):
+  1. Stops listening to 0x19 on the sender (0x220eb0).
+  2. The data must be a ReinforcementsUnloadedDataClass (class chain); otherwise nothing more.
+  3. In-flight count (status +0x40) − 1.
+  4. Owner = status +0x28 (0x6021a0). When its class chain contains TaskForceClass (descriptor 0x140a441e0, returned
+     by TaskForceClass vf4 0x5fcd90): a static "handled" list is cleared, then for each non-null unit of the data list
+     (+0x10, count +0x18), in list order:
+     - the unit's container (+0x2b0) stands for it when it has one; an object already handled in this call is skipped;
+     - it is wrapped (GameObjectWrapper 0x5751d0, the task force's player) in a one-entry list and the task force's
+       `Add_Force` (vf+0xa0; land override 0x6e9240) gets it;
+     - **0x6bf3d0(PP, object)** with PP = task force +0xf0 (plan) → +0x88 → +0x68 [M field names]: admit to the free
+       store if missing (0x4d2c90), +0x30 = PP, the PP listens to 0x1a / 0x10 on it, PP+0x108 gets it (§28.4).
+  5. Otherwise (owner not a task force) [M: which caller makes such a status]: each unit (its container when 0x39b1a0
+     says it is garrisoned) not yet in the status's own result list (+0x48, compared by wrapped object) is appended as
+     a wrapper for player status +0x50 and removed from its owner's free store (owner's player +0x360, the AI of the
+     current mode (0x4b03b0) → +0x50 → +0x38, vf+0xa0 = 0x4d5000).
+- **0x723ac0** (space): the sender is the arriving object (listener at obj +0x38). In-flight count (status +0x78) − 1.
+  Owner a TaskForceClass: `Add_Force` (space override 0x6e4e30) with that one object, then the object is **removed
+  from the free store** (0x5f6fb0(plan) → +0x28 → +0x50 → +0x38, vf+0xa0 = 0x4d5000) [M: the chain ends at the same
+  AI-player free store as 0x6bf3d0's]. **No 0x6bf3d0: no +0x30, no PP+0x108.** Owner not a task force: as land step
+  5 for the one object, without the container step.
+- **Port (a1h t05): matches, no code change.** `space_reinforce_poll` adds the spawned units to the task force and
+  calls no `reinforce_join_pp`; `admit` skips task-force units, so the unit is not on the free store (the 0x4d5000
+  removal). Land keeps `reinforce_joined` (a1g, §28.9). Test: alamo_ai_tactical_world_tests `test_group_orders`
+  (space run): drops happen and no "reinforce unit" PP decision is logged.
+
+### 32.2 Transport data +0x48 = the carried company type
+
+- The pack at obj +0xc8 is **TransportDataPackClass** (ctor 0x4ed470), shared by TRANSPORT and TRANSPORT_LANDING (the
+  cinematic landing fields of SCRIPT_GAPS, +0x50 / +0xbd / +0xc0 / +0xc4 / +0xc8 / +0xc9, are in it; the ctor's
+  +0xc0 = 1.0 and +0xc4 = 2.0 are the Create_Cinematic_Transport defaults). The ctor sets +0x48 = null.
+- Reader: 0x4f3bb0 (TransportBehaviorClass), used by 0x3973b0. Writers (call graph; a linear scan of .text for stores
+  to +0x48 through a +0xc8 load finds only 0x4f45c7):
+  - **0x4f45c0(transport, type)**, from 0x400f30 (galactic company production, STRATEGIC_GAPS §1.7): the company type.
+  - **0x4ee230(pack, type)**, from 0x2b5fe0: +0x48 = type; when type ≠ null and pack +0x70 ≠ null, pack +0x70 → +0x30 =
+    type +0x11c [M meaning].
+- **0x2b5fe0 = the landing object of one land reinforcement** [H code, M names]:
+  - campaign (the unit id is found in the parent mode, 0x28aa50): landing type = the galactic object's type, or its
+    +0x1e68 [M: landing variant] when set; created at the drop point (z raised by Hover_Offset +0x1b68); obj +0x54 =
+    the galactic object's id; TRANSPORT_LANDING attached by name; **+0x48 = 0x3973b0(galactic object)**, i.e. the
+    galactic transport's company type;
+  - skirmish (the id names a type of the player's reinforcement list): landing type = that type's
+    Company_Transport_Unit[0] (+0x938 → +8), or its +0x1e68; **+0x48 = that type** (the reinforced company);
+  - both then call 0x29bcd0(mode, landing object, carried type) [M: not read].
+- Cinematic transports (Create_Cinematic_Transport 0x2cb7a0) never set it: +0x48 stays null.
+- So **0x3973b0(landing object) = the carried company type** for a reinforcement drop in both modes, and the object's
+  own type for a cinematic transport (the TRANSPORT branch is null, the TEAM branch is not tried).
+- Effect on the §30.3 sums: a reinforcement drop counts its company type's power (0x370e60), not the dropship's (the
+  shipped `_Landing` variants inherit AI_Combat_Power 10 from their base transports); a cinematic transport counts 10.
+  The campaign parent route gives the same company type.
+- **Port (a1h t08):** `ObjectStore::carried_type` / `set_carried_type` (TransportDataPack +0x48; only objects with
+  TRANSPORT or TRANSPORT_LANDING; saved; hashed only when an object has one). The perception landing sum takes T from
+  `rep_type` (the host's 0x3973b0) in skirmish / without a parent and from `parent_rep_type` in campaign; test (d) in
+  alamo_ai_tactical_perception_tests. The port's galaxy needs no carried type: its company object's own type is the
+  company type (`GalacticSim::representative_type`). [open] The battle host spawns no landing transports yet (units
+  drop directly, TACTICAL_GAPS §4.2.1, a1h t06); when it does, it sets the carried type as 0x2b5fe0 does and fills
+  `PerceptionObject::rep_type` from it.

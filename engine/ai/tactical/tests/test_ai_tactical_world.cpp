@@ -1854,6 +1854,12 @@ void test_group_orders() {
     std::printf("space reinforce ring search: %zu drops (%zu on ring 500 at a station), %zu outside the allowed strip\n", drops, ring_drops,
                 bad_drops);
     CHECK(drops > 0 && bad_drops == 0 && ring_drops > 0);
+    // a1h t05 (A1_READINGS §32.1): a space delivery only joins the task force. SpaceReinforceBlockStatus's handler
+    // (0x723ac0) never calls 0x6bf3d0, so no delivered unit joins a plan's PP (the land path logs "reinforce unit").
+    size_t pp_joins = 0;
+    for (const std::string& d : r.decisions) pp_joins += d.find(": reinforce unit ") != std::string::npos ? 1u : 0u;
+    std::printf("space reinforce: %zu PP joins (0x6bf3d0 is land only)\n", pp_joins);
+    CHECK(pp_joins == 0);
     std::printf("group orders: %zu attack-move group orders (2+ units), %zu one-unit, %zu Shield_Generator attacks, %zu Lua errors\n",
                 groups, single, shield, r.errors.size());
     for (size_t i = 0; i < r.errors.size() && i < 5; ++i) std::printf("  lua error: %s\n", r.errors[i].c_str());

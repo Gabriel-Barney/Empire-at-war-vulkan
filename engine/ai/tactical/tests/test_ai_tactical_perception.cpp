@@ -1277,6 +1277,17 @@ static void test_a1g_readings() {
         CHECK(friendly() == 550.0);
         f.p.cache().clear();
         CHECK(f.val("Variable_Self.FriendlyForceUnnormalized {Parameter_Category = GameObjectCategoryType[Infantry]}") == 0.0);
+        // (d) a1h t08 (§32.2): a reinforcement's landing object carries its company type (transport +0x48, the host's
+        // rep_type): in skirmish and without a parent id T is that carried type, not the dropship's own type.
+        f.w.parent_rep_type = [](int32_t id) { return id == 500 ? int32_t{kStarDestroyer} : -1; };
+        f.w.objects.back().rep_type = kStarDestroyer;
+        f.w.objects.back().parent_object = -1;
+        CHECK(friendly() == 2550.0);  // campaign, no parent id: the carried type (Star_Destroyer 2000)
+        f.w.skirmish_or_mp = true;
+        f.w.objects.back().parent_object = 500;
+        CHECK(friendly() == 2550.0);  // skirmish: the landing object's own carried type, the parent is not read
+        f.w.objects.back().rep_type = -1;  // a cinematic transport (none carried): its own type
+        CHECK(friendly() == 650.0);
     }
     {  // §30.4: IsValidBombingTarget fails inside any active base shield (host callback, 3-D); IsInside*Shield stay 0
         Fixture f;
