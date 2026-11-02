@@ -110,6 +110,13 @@ const char* kTypes = R"(<L1>
  <SpecialStructure Name="L1_Turret"><Victory_Relevant>Yes</Victory_Relevant><Tactical_Health>500</Tactical_Health></SpecialStructure>
  <GroundInfantry Name="L1_Scout"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type><Land_FOW_Reveal_Range>300</Land_FOW_Reveal_Range>
   <Behavior>SELECTABLE, REVEAL</Behavior></GroundInfantry>
+ <GroundInfantry Name="L1_Jet_Trooper"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>
+  <Uses_Multiple_Locomotors>Yes</Uses_Multiple_Locomotors><Primary_Locomotor_Name>WALK_LOCOMOTOR</Primary_Locomotor_Name>
+  <Secondary_Locomotor_Name>JETPACK_LOCOMOTOR</Secondary_Locomotor_Name><Alternate_Max_Speed>2.5</Alternate_Max_Speed>
+  <Hover_Offset>30</Hover_Offset><Projectile_Types>L1_Laser_Proj</Projectile_Types>
+  <Projectile_Fire_Recharge_Seconds>0.5</Projectile_Fire_Recharge_Seconds></GroundInfantry>
+ <GroundCompany Name="L1_Jet_Squad"><Company_Units>L1_Jet_Trooper, L1_Jet_Trooper</Company_Units>
+  <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
 </L1>
 )";
 
@@ -695,6 +702,118 @@ void test_land(const Data& d) {
     const LandRun w = run_land(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged && a.trace == w.trace);
 }
+// ---- S7 t10 / t14: the MoveToPosition switch-locomotor bit through order_move, weapons suspended on the jetpack ----
+// (MOVEMENT §3.1.1 step 6 / §6.2) A Uses_Multiple_Locomotors trooper (WALK primary, JETPACK secondary, a blaster) is ordered
+// with the switch bit next to an enemy trooper: it swaps, flies and lands, then swaps back to WALK. While on the jetpack
+// the combat flag kUnitWeaponsSuspended mirrors the active locomotor and it fires nothing; back on WALK it fires again.
+struct JetRun {
+    bool fought = false, ordered = false, mirror = true, flew = false, landed = false, other_walks = true;
+    uint32_t shots_flying = 0, shots_after = 0, suspended_frames = 0;
+    CrcLog crc;
+};
+
+JetRun run_jet(const Data& d, int32_t workers) {
+    JetRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 11;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate"), jsq = type_of(d, "L1_Jet_Squad");
+    s.forces = {{0, 1, sq}, {1, 2, fr}, {1, 2, jsq}};
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = false;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    bool invaded = false;
+    const auto jet_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Jet_Trooper"));
+    objects::ObjectId jet = objects::kNoObjectId, other = objects::kNoObjectId;
+    std::vector<uint32_t> seen;  // projectile serials of the jet trooper
+    for (uint64_t t = 0; t < 6000; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (out.fought) break;
+            continue;
+        }
+        out.fought = true;
+        objects::ObjectStore& st = tm->primary();
+        const uint32_t f = b->frame();
+        if (f == 1) {
+            for (const objects::ObjectHandle h : st.owned_by(1))
+                if (st.alive(h) && st.type(h) == jet_t && b->combat().has_unit(st.id(h))) (jet == objects::kNoObjectId ? jet : other) = st.id(h);
+            Vec3 enemy{};
+            bool found = false;
+            for (const objects::ObjectHandle h : st.owned_by(0))
+                if (!found && st.alive(h) && b->combat().has_unit(st.id(h))) {
+                    enemy = st.position(h);
+                    found = true;
+                }
+            CHECK(jet != objects::kNoObjectId && other != objects::kNoObjectId && found);
+            if (jet == objects::kNoObjectId || !found) break;
+            const objects::ObjectId ids[] = {jet};
+            out.ordered = b->order_move(*tm, 1, ids, enemy.x + 80.0f, enemy.y, host.random().synced(), tactical::movement::kNoFacing,
+                                        false, false, 0, true) == commands::RejectReason::None;
+            out.ordered = out.ordered && b->movement().view(jet).secondary_locomotor;  // swapped at once (§6.2)
+            continue;  // the combat flag follows at the next tick, before its combat phase
+        }
+        if (jet == objects::kNoObjectId || !b->combat().has_unit(jet)) continue;
+        const tactical::movement::UnitView v = b->movement().view(jet);
+        const bool suspended = (b->combat().flags(jet) & tactical::combat::kUnitWeaponsSuspended) != 0;
+        out.mirror = out.mirror && suspended == v.secondary_locomotor;
+        if (suspended) ++out.suspended_frames;
+        out.flew = out.flew || v.airborne;
+        if (out.flew && !v.secondary_locomotor && !out.landed) out.landed = v.locomotor == tactical::movement::LocomotorKind::Default;
+        out.other_walks = out.other_walks && !b->movement().view(other).secondary_locomotor &&
+                          (b->combat().flags(other) & tactical::combat::kUnitWeaponsSuspended) == 0;
+        for (size_t i = 0; i < b->combat().projectile_count(); ++i) {
+            const tactical::combat::ProjectileView p = b->combat().projectile(i);
+            if (p.shooter != jet || std::find(seen.begin(), seen.end(), p.serial) != seen.end()) continue;
+            seen.push_back(p.serial);
+            if (suspended) ++out.shots_flying;
+            else if (out.landed) ++out.shots_after;
+        }
+        if (out.landed && out.shots_after > 0) break;
+    }
+    out.crc = host.crc_log();
+    return out;
+}
+
+void test_jet(const Data& d) {
+    const JetRun a = run_jet(d, 0);
+    std::printf("  jetpack: fought %d ordered %d flew %d landed %d mirror %d suspended %u frames, shots in flight %u, after %u\n",
+                a.fought, a.ordered, a.flew, a.landed, a.mirror, a.suspended_frames, a.shots_flying, a.shots_after);
+    CHECK(a.fought && a.ordered && a.flew && a.landed && a.mirror && a.other_walks);
+    CHECK(a.suspended_frames > 30 && a.shots_flying == 0 && a.shots_after > 0);
+    const JetRun w = run_jet(d, 4);
+    CHECK(!first_divergence(a.crc, w.crc).diverged && w.suspended_frames == a.suspended_frames);
+}
+
 // ---- Int-final: build pads (L1_S4_REMAINING §3.6) and the weather factor of the fog sight (FOG_OF_WAR §3.1.1) ----
 struct PadRun {
     bool fought = false, refused_rules = false, refused_full = false, started = false, uc_seen = false, built = false, cleared = false;
@@ -889,6 +1008,7 @@ int main(int argc, char** argv) {
     test_tsw_lost(*d);
     test_land(*d);
     test_pads(*d);  // Int-final
+    test_jet(*d);   // S7 t10 / t14
     test_foc();
     if (g_fail) {
         std::printf("alamo_sim_l1_tests: %d failure(s)\n", g_fail);

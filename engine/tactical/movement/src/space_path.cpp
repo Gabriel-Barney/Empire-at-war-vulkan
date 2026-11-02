@@ -1,6 +1,7 @@
 #include "alamo/tactical/movement/space_path.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace alamo::tactical::movement {
 
@@ -37,6 +38,24 @@ void SpaceOccupancy::add_static(ObjectId id, V2 center, float radius, uint32_t b
     statics_[id] = Static{center, radius, bits};
 }
 bool SpaceOccupancy::remove_static(ObjectId id) { return statics_.erase(id) != 0; }
+
+bool SpaceOccupancy::rekey_static(ObjectId from, ObjectId to) {
+    if (from == to || statics_.find(to) != statics_.end()) return false;
+    auto node = statics_.extract(from);
+    if (node.empty()) return false;
+    node.key() = to;
+    statics_.insert(std::move(node));
+    return true;
+}
+
+bool SpaceOccupancy::static_entry(ObjectId id, V2& center, float& radius, uint32_t& bits) const {
+    const auto it = statics_.find(id);
+    if (it == statics_.end()) return false;
+    center = it->second.c;
+    radius = it->second.r;
+    bits = it->second.bits;
+    return true;
+}
 
 void SpaceOccupancy::set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps) {
     if (wps.empty()) {

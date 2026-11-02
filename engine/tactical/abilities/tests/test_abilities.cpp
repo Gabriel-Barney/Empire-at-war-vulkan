@@ -3695,6 +3695,103 @@ void test_hardpoint_online_effects() {
 // hit attaches it with the shooter's parameters, spread after Seconds_To_Infect x FPS consecutive frames in range (enemy
 // of the infecting player, Infection_CategoryMask, Distance_To_Infect), Damage_Per_Second once a second, expiry after
 // Duration_Of_Infection (suspend), resume by a spread / the API, the death-clone key 20 only while active, save round trip.
+// S8 t04 (docs/re/LOB_SOLVER.md §3.4 / §3.5, TACTICAL_GAPS §2.3.5): Grenade_Attack and Remote_Bomb need a lob solution
+// to apply, and both toss their (sticky) projectile from the unit through the spawner's grenade branch.
+ProjectileDesc lob_sticky_bomb() {
+    ProjectileDesc g;
+    g.name = "Proj_Sticky_Bomb";
+    g.max_speed = 15.0f;
+    g.lobbed = true;
+    g.category = ProjectileCategory::Grenade;
+    g.grenade_gravity = 1.0f;
+    g.lob_mod = 1.0f;  // G = 1, reach 225 on flat ground
+    g.can_lob_slower = true;
+    g.sticks_on_collision = true;
+    g.max_lifetime = 900.0f;
+    g.blast_area_damage = 30.0f;
+    g.blast_area_range = 20.0f;
+    return g;
+}
+
+void test_lob_abilities() {
+    for (const bool reachable : {true, false}) {  // Grenade_Attack
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc g = oi_special("Grenade", SpecialClass::GrenadeAttack, ActivationStyle::UserInput);
+        g.max_range = 200.0f;
+        g.projectile = 0;
+        g.fuse_time = 2.0f;
+        const uint32_t gs = add_special(w.ad, g);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kStickyBomb, 0.0f, 30.0f, "Grenade")};
+        a.specials = {gs};
+        const uint32_t ud = push(w.cd, w.ad, oi_unit("Trooper", 100.0f), a);
+        const uint32_t td = push(w.cd, w.ad, oi_unit("Tank", 100.0f), AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        // In range either way (80 / 100 XY); the second sits 300 up: v^2 < G h, no arc -> the apply refuses.
+        w.add(2, td, 1, reachable ? Vec3{80, 0, 0} : Vec3{100, 0, 300});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kStickyBomb, 2, -1, w.frame) == 1);
+        for (int i = 0; i < 5 && w.sys->projectile_count() == 0; ++i) w.tick();  // apply, then the throw (Spawn_Frame 0)
+        if (!reachable) {
+            for (int i = 0; i < 30; ++i) w.tick();
+            CHECK(w.sys->projectile_count() == 0u && w.ab->countdown_counter(1, kStickyBomb) == 0);
+            continue;
+        }
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() != 1u) continue;
+        const ProjectileView pv = w.sys->projectile(0);
+        CHECK(pv.lob && pv.target == 2 && pv.pos.x == 0.0f && pv.pos.z == 0.0f);  // tossed from the unit
+        int guard = 0;
+        while (w.sys->projectile_count() > 0 && !w.sys->projectile(0).stuck && guard++ < 100) w.tick();
+        CHECK(w.sys->projectile_count() == 1u && w.sys->projectile(0).stuck_to == 2);
+        CHECK(w.sys->health(2) == w.sys->max_health(2));  // sticking does no damage
+        while (w.sys->projectile_count() > 0 && guard++ < 200) w.tick();
+        CHECK(w.sys->health(2) < w.sys->max_health(2));  // the 2 s timer set it off
+    }
+    for (const bool reachable : {true, false}) {  // Remote_Bomb
+        OiWorld w;
+        w.cd.projectiles = {lob_sticky_bomb()};
+        SpecialAbilityDesc r = oi_special("Remote", SpecialClass::RemoteBomb, ActivationStyle::UserInput);
+        r.max_range = 200.0f;
+        r.projectile = 0;
+        const uint32_t rs = add_special(w.ad, r);
+        AbilityObjectDesc a;
+        a.unit_abilities = {oi_gui(kPlaceRemoteBomb, 0.0f, 30.0f, "Remote"), rec(kDetonateRemoteBomb, 0.0f, 0.0f)};
+        a.specials = {rs};
+        UnitDesc bd = oi_unit("Bomber", 100.0f);
+        bd.ranged_target_z_adjust = 4.0f;
+        const uint32_t ud = push(w.cd, w.ad, bd, a);
+        UnitDesc tdesc = oi_unit("Tank", 100.0f);
+        tdesc.ranged_target_z_adjust = 6.0f;
+        const uint32_t td = push(w.cd, w.ad, tdesc, AbilityObjectDesc{});
+        w.make(GameMode::Land);
+        w.add(1, ud, 0, {0, 0, 0});
+        w.add(2, td, 1, reachable ? Vec3{120, 0, 0} : Vec3{100, 0, 300});
+        const ObjectId one[] = {1};
+        CHECK(w.ab->targeted_ability(one, kPlaceRemoteBomb, 2, -1, w.frame) == 1);
+        w.tick();
+        if (!reachable) {
+            for (int i = 0; i < 30; ++i) w.tick();
+            CHECK(w.sys->projectile_count() == 0u);
+            continue;
+        }
+        CHECK(w.sys->projectile_count() == 1u);
+        if (w.sys->projectile_count() != 1u) continue;
+        const ProjectileView pv = w.sys->projectile(0);
+        // From the unit (+ its own Ranged_Target_Z_Adjust), not from the target point.
+        CHECK(pv.lob && pv.pos.x == 0.0f && pv.pos.y == 0.0f && pv.pos.z == 4.0f);
+        int guard = 0;
+        while (!w.sys->projectile(0).stuck && guard++ < 100) w.tick();
+        CHECK(w.sys->projectile(0).stuck && w.sys->projectile(0).stuck_to == 2);
+        for (int i = 0; i < 60; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 1u && w.sys->health(2) == w.sys->max_health(2));  // waits for the trigger
+        CHECK(w.ab->set_unit_ability_active(1, kDetonateRemoteBomb, true, w.frame));
+        CHECK(w.sys->projectile_count() == 1u && !w.sys->projectile(0).alive);  // detonated (flushed next tick)
+    }
+}
+
 void test_infection() {
     {  // XML -> SpecialAbilityDesc -> UnitDesc::infection
         const data::XmlDocument doc = data::XmlDocument::parse(
@@ -3861,6 +3958,7 @@ int main(int argc, char** argv) {
     test_last_hardpoint_kills();
     test_death_clone_remap();
     test_infection();
+    test_lob_abilities();
     test_fire_and_decay();
     test_energy();
     test_ion_stun();

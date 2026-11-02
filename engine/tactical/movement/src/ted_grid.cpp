@@ -1,5 +1,8 @@
 #include "alamo/tactical/movement/ted_grid.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <unordered_map>
 
 #include "alamo/objects/game_object_types.hpp"
@@ -45,6 +48,25 @@ PassabilityGrid grid_from_map(const terrain::MapData& map) {
     return g;
 }
 
+bool land_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t t, V2 position, float yaw_deg, float terrain_z,
+                             const MapStampHooks* hooks, ObstacleFootprint& out) {
+    if (t >= types.size()) return false;
+    const float w = types.get_float(t, "Obstacle_Width"), hgt = types.get_float(t, "Obstacle_Height");
+    const float scale = types.get_float(t, "Scale_Factor") > 0.0f ? types.get_float(t, "Scale_Factor") : 1.0f;
+    // OI tactical: model-bbox footprint when the XML sizes are not set (§1.3).
+    float hx = 0.0f, hy = 0.0f, hz = 0.0f;
+    const bool have_model = hooks && hooks->model_half_extents && hooks->model_half_extents(t, hx, hy, hz);
+    if ((!(w > 0.0f) || !(hgt > 0.0f)) && !(have_model && (w > 0.0f || std::fabs(hx) > 0.0f) && (hgt > 0.0f || std::fabs(hy) > 0.0f)))
+        return false;
+    const uint32_t bits = static_cast<uint32_t>(types.get_mask(t, "OverridePassability"));
+    out = make_footprint(position, yaw_deg, w, hgt, types.get_float(t, "Obstacle_X_Offset"), types.get_float(t, "Obstacle_Y_Offset"),
+                         have_model ? hx : 0.0f, have_model ? hy : 0.0f, scale, bits);
+    out.terrain_z = terrain_z;
+    // Vertical height = model bbox z x scale; unknown model height: treat as tall (always stamps).
+    out.obstacle_height = have_model ? std::fabs(hz) * scale : 1.0e6f;
+    return true;
+}
+
 uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map, const objects::GameObjectTypes& types,
                              const MapStampHooks* hooks) {
     const auto idx = crc_index(types);
@@ -55,20 +77,8 @@ uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map,
         if (it == idx.end()) continue;
         const uint32_t t = it->second;
         if (!types.has_behavior(t, objects::BehaviorSet::Union, kLandObstacle)) continue;
-        const float w = types.get_float(t, "Obstacle_Width"), hgt = types.get_float(t, "Obstacle_Height");
-        const float scale = types.get_float(t, "Scale_Factor") > 0.0f ? types.get_float(t, "Scale_Factor") : 1.0f;
-        // OI tactical: model-bbox footprint when the XML sizes are not set (§1.3).
-        float hx = 0.0f, hy = 0.0f, hz = 0.0f;
-        const bool have_model = hooks && hooks->model_half_extents && hooks->model_half_extents(t, hx, hy, hz);
-        if ((!(w > 0.0f) || !(hgt > 0.0f)) && !(have_model && (w > 0.0f || std::fabs(hx) > 0.0f) && (hgt > 0.0f || std::fabs(hy) > 0.0f)))
-            continue;
-        const uint32_t bits = static_cast<uint32_t>(types.get_mask(t, "OverridePassability"));
-        ObstacleFootprint fp = make_footprint({o.position[0], o.position[1]}, o.rotation_deg[2], w, hgt,
-                                              types.get_float(t, "Obstacle_X_Offset"), types.get_float(t, "Obstacle_Y_Offset"),
-                                              have_model ? hx : 0.0f, have_model ? hy : 0.0f, scale, bits);
-        fp.terrain_z = o.position[2];
-        // Vertical height = model bbox z x scale; unknown model height: treat as tall (always stamps).
-        fp.obstacle_height = have_model ? std::fabs(hz) * scale : 1.0e6f;
+        ObstacleFootprint fp;
+        if (!land_obstacle_footprint(types, t, {o.position[0], o.position[1]}, o.rotation_deg[2], o.position[2], hooks, fp)) continue;
         if (hooks && hooks->mesh_ray_hit && types.get_bool(t, "Fine_Tune_Occupied_Passability")) {
             const auto* mr = &hooks->mesh_ray_hit;
             fp.fine_tune = [mr, i](V2 xy) { return (*mr)(i, xy); };
@@ -76,6 +86,13 @@ uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map,
         if (grid.stamp(map_stamp_id(i), fp) > 0) ++n;
     }
     return n;
+}
+
+V2 space_obstacle_center(const objects::GameObjectTypes& types, uint32_t t, V2 position, V2 f) {
+    // S7 t07: + Space_Obstacle_Offset, x along the facing, y to its left [M: rotation sense].
+    if (t >= types.size()) return position;
+    const std::array<float, 4> off = types.get_vec(t, "Space_Obstacle_Offset");
+    return {position.x + off[0] * f.x - off[1] * f.y, position.y + off[0] * f.y + off[1] * f.x};
 }
 
 uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const objects::GameObjectTypes* types,
@@ -92,12 +109,8 @@ uint32_t space_from_map(SpaceOccupancy& occ, const terrain::MapData& map, const 
         float r = 0.0f;
         uint32_t bits = 0;
         if (!space_obstacle_footprint(*types, it->second, r, bits, hooks)) continue;
-        // S7 t07: + Space_Obstacle_Offset, x along the placement facing Rz(yaw) (0, -1), y to its left [M: rotation sense].
-        const std::array<float, 4> off = types->get_vec(it->second, "Space_Obstacle_Offset");
-        const V2 d = dir_from_deg(o.rotation_deg[2]);  // (cos, sin): facing = (sin, -cos), left = (cos, sin)
-        const V2 f{d.y, -d.x};
-        occ.add_static(-static_cast<ObjectId>(i) - 1,
-                       {o.position[0] + off[0] * f.x - off[1] * f.y, o.position[1] + off[0] * f.y + off[1] * f.x}, r, bits);
+        const V2 d = dir_from_deg(o.rotation_deg[2]);  // (cos, sin): the placement facing Rz(yaw) (0, -1) = (sin, -cos)
+        occ.add_static(map_stamp_id(i), space_obstacle_center(*types, it->second, {o.position[0], o.position[1]}, {d.y, -d.x}), r, bits);
         ++n;
     }
     return n;

@@ -45,12 +45,12 @@ cmd::RejectReason route_battle_order(sim::CampaignBattles& battles, sim::SimHost
 
     // P1_DOUBLE_CLICK_MOVE.md §3.2: the move events' 8-bit flags go unchanged into MoveOrder::flags; attack-move (orders
     // kept) = flag 0x01. Units: the event's list when it has one (MoveToPositionFacing / Facing), else the selection.
-    const auto move = [&](const std::vector<objects::ObjectId>& list, float x, float y, float facing) {
+    const auto move = [&](const std::vector<objects::ObjectId>& list, float x, float y, float facing, bool switch_locomotor) {
         if (!finite(x) || !finite(y)) return result(R::InvalidPosition);
         const uint8_t flags = static_cast<uint8_t>(ev.u("flags") & 0xFFu);
         const bool attack_move = (flags & tactical::movement::kMoveFlagAttackMove) != 0;
         const R r = battle->order_move(*tm, player, list, x, y, rng, finite(facing) ? facing : tactical::movement::kNoFacing,
-                                       attack_move, ev.queued(), flags);
+                                       attack_move, ev.queued(), flags, switch_locomotor);
         if (r == R::None && stats) ++stats->moves;
         return result(r);
     };
@@ -63,18 +63,19 @@ cmd::RejectReason route_battle_order(sim::CampaignBattles& battles, sim::SimHost
         y = ev.f("by");
     };
     switch (ev.type()) {
-        case T::MoveToPosition: return move(selection, ev.f("x"), ev.f("y"), tactical::movement::kNoFacing);
+        case T::MoveToPosition:  // S7 t10: the 1-bit swaps Uses_Multiple_Locomotors units first (MOVEMENT §6.2)
+            return move(selection, ev.f("x"), ev.f("y"), tactical::movement::kNoFacing, ev.u("switch_locomotor") != 0);
         case T::MoveToPositionFacing:  // id 47: point + final facing (angle in degrees), units list (empty: the selection)
-            return move(units_or_selection(), ev.f("x"), ev.f("y"), ev.f("angle"));
+            return move(units_or_selection(), ev.f("x"), ev.f("y"), ev.f("angle"), false);
         case T::MoveToRay: {  // id 14
             float x = 0.0f, y = 0.0f;
             ray_point(x, y);
-            return move(selection, x, y, tactical::movement::kNoFacing);
+            return move(selection, x, y, tactical::movement::kNoFacing, false);
         }
         case T::MoveToRayFacing: {  // id 19: the anchor's ray + plane point, final facing
             float x = 0.0f, y = 0.0f;
             ray_point(x, y);
-            return move(selection, x, y, ev.f("angle"));
+            return move(selection, x, y, ev.f("angle"), false);
         }
         case T::Facing: {  // id 20: rotate only (a land drag that started on a selected unit)
             const R r = battle->order_facing(*tm, player, units_or_selection(), ev.f("angle"), rng);

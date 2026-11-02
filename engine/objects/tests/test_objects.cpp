@@ -362,6 +362,8 @@ static void test_types_synthetic() {
     CHECK(ty.resolved(T("Later2")) && ty.resolve_pass(T("Later2")) == 1 && ty.get_float(T("Later2"), "Max_Speed") == 7.0f);
     CHECK(!ty.resolved(T("Cyc1")) && !ty.resolved(T("Cyc2")) && !ty.resolved(T("Self")) && !ty.resolved(T("Orphan")));
     CHECK(ty.get_float(T("Orphan"), "Max_Speed") == 4.0f && ty.get_float(T("Orphan"), "Mass") == 0.995f);
+    // S7 t14 (MOVEMENT §3.1.1, type ctor 0x367250): the jetpack's alternate speed / turn rate defaults.
+    CHECK(ty.get_float(T("Orphan"), "Alternate_Max_Speed") == 1.0f && ty.get_float(T("Orphan"), "Alternate_Max_Rate_Of_Turn") == 2.0f);
     CHECK(ty.stats().variants == 8 && ty.stats().unresolved == 4 && ty.stats().resolved_pass0 == 2 &&
           ty.stats().resolved_later == 2 && ty.stats().passes == 10);
     // Squadron derivation.

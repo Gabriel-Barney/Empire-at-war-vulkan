@@ -155,6 +155,19 @@ struct AttachedEffect {
     uint32_t frame = 0;
 };
 
+// S7 t12: the space fighter locomotor's formation attack target (FIGHTER_FLYING §2 step 6 / §4.3, Formation_Attack_Target
+// 0x41a2e0, TACTICAL_COMBAT §2.8) for a squadron leader or a fighter without a squadron, from its combat and movement
+// state (rules: TacticalBattle::feed_fighter_target). Pure; kNoObjectId = no target.
+struct FighterTargetInputs {
+    objects::ObjectId ordered = kNoObjectId;      // live ordered combat target
+    objects::ObjectId goal = kNoObjectId;         // live attack goal (the move block's object)
+    bool goal_hostile = false;                    // goal owner is an enemy of the fighter's owner
+    bool moving = false;                          // the fighter has a move order (a formation)
+    objects::ObjectId auto_target = kNoObjectId;  // live combat auto target (no ordered target)
+    bool auto_hidden = false;                     // auto target hidden by fog for the fighter's owner
+};
+objects::ObjectId fighter_formation_target(const FighterTargetInputs& in);
+
 class TacticalBattle {
 public:
     TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
@@ -261,9 +274,12 @@ public:
     // order. A unit that is idle with an empty queue starts a queued order at once. See "order queue" below.
     // `move_flags` (P1_DOUBLE_CLICK_MOVE.md §3.2): the move event's 8-bit flags, copied unchanged into MoveOrder::flags
     // (0x04 player order, 0x01 attack-move, 0x02 guard-move, 0x08 waypoint append, 0x80 double-click); AI / Lua moves 0.
+    // `switch_locomotor` (S7 t10, MOVEMENT §3.1.1 / §6.2): the MoveToPosition 1-bit field. The units with
+    // Uses_Multiple_Locomotors swap to their secondary (jetpack) locomotor first (MoveOrder::switch_locomotor; a queued
+    // order swaps them at once and queues the move). Parity only: no FoC sender sets it.
     commands::RejectReason order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x, float y,
                                       SimRng& rng, float facing_deg = tactical::movement::kNoFacing, bool attack_move = false,
-                                      bool queued = false, uint8_t move_flags = 0);
+                                      bool queued = false, uint8_t move_flags = 0, bool switch_locomotor = false);
     // Facing event (id 20, P1_DOUBLE_CLICK_MOVE.md §2.2: a land drag that started on a selected unit; rotate only) [port:
     // MovementSystem has no turn-in-place order]: one single-unit move per eligible movable unit (selection order) to its
     // own position with final facing `facing_deg`; attack orders and order queues are kept.
@@ -848,6 +864,11 @@ private:
     void add_participant(objects::ObjectHandle g, int32_t owner, uint8_t side, bool reserve, bool starbase, bool structure);
     void deploy(TacticalMode& mode, uint32_t participant, SimRng& rng);
     void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
+    // S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints of single objects under their object id (tactical_battle.cpp).
+    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);   // LAND_OBSTACLE stamp; false: none
+    bool space_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);  // SPACE_OBSTACLE static entry
+    void land_obstacles_sync(const TacticalMode& mode);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
+    std::vector<uint8_t> land_obstacle_none_;  // S8 t02: per type, 1 = no footprint (no XML size, no model); derived, not saved
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);
@@ -906,7 +927,7 @@ private:
     void advance_queues(TacticalMode& mode, SimRng& rng);
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
     void exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng, float facing_deg,
-                   bool attack_move, uint8_t flags = 0);
+                   bool attack_move, uint8_t flags = 0, bool switch_locomotor = false);
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;
