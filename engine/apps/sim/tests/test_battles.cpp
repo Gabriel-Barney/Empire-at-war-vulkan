@@ -4990,7 +4990,14 @@ void test_fighter_auto_push() {
                 for (const objects::ObjectId m : members) b_auto = b_auto || b->combat().auto_target(m) != objects::kNoObjectId;
                 b_dc = b_dc || v.loco_state == mv::LocoState::FighterDirectedCombat;
                 if (b->frame() >= since + 300) {
-                    const Vec3 lp = st.position(st.find(lead));
+                    Vec3 lp = st.position(st.find(lead));
+                    // S8 t17: the attack-move's scan cube R + Rr (FIGHTER_FLYING §4.10 A) engages earlier, so the stop can
+                    // leave the squadron beyond R + Idle_Chase_Range of the enemy: the idle move ends 700 from it.
+                    if (const objects::ObjectHandle eh = st.find(enemy); st.alive(eh)) {
+                        const Vec3 ep = st.position(eh);
+                        const float dx = lp.x - ep.x, dy = lp.y - ep.y, d = std::sqrt(dx * dx + dy * dy);
+                        if (d > 700.0f) lp = Vec3{ep.x + dx / d * 700.0f, ep.y + dy / d * 700.0f, lp.z};
+                    }
                     CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
                     const FighterFormationRecord* nr = b->fighter_formation(squad);
                     c_formation = nr && nr->flags == 0 && nr->pushed.empty();

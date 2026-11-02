@@ -293,14 +293,46 @@ bool CombatSystem::ability_active(ObjectId id, int slot) const {
 void CombatSystem::order_attack(ObjectId attacker, ObjectId target, int32_t hardpoint) {
     Unit* u = unit(attacker);
     if (!u) return;
-    u->ordered_target = target;
-    u->ordered_hp = hardpoint;
-    u->locked = 0;
-    u->aim_target = kNoObject;  // refixf t06: the order re-aims the hardpoints
-    u->aim_hp = -1;
-    u->auto_target = kNoObject;  // an order drops the auto target (0x565e50)
-    u->auto_hp = -1;
-    u->target_score = 0.0f;
+    auto order = [&](Unit& w) {
+        w.ordered_target = target;
+        w.ordered_hp = hardpoint;
+        w.locked = 0;
+        w.aim_target = kNoObject;  // refixf t06: the order re-aims the hardpoints
+        w.aim_hp = -1;
+        w.auto_target = kNoObject;  // an order drops the auto target (0x565e50)
+        w.auto_hp = -1;
+        w.target_score = 0.0f;
+    };
+    order(*u);
+    // S8 t17 (FIGHTER_FLYING §4.10 B writer 2, TACTICAL_COMBAT §2.8 C step 3): the set path writes the squadron's team
+    // target, so every member is ordered (index order = id order; the host's per-member orders make this idempotent).
+    if (u->share_group != kNoObject)
+        for (Unit& w : units_)
+            if (&w != u && w.share_group == u->share_group && !(w.flags & kUnitDead)) order(w);
+}
+void CombatSystem::set_share_group(ObjectId id, ObjectId group) {
+    if (Unit* u = unit(id)) u->share_group = group;
+}
+ObjectId CombatSystem::share_group(ObjectId id) const {
+    const Unit* u = unit(id);
+    return u ? u->share_group : kNoObject;
+}
+void CombatSystem::share_target(const Unit& u, ObjectId t, float score) {
+    // 0x406370(team, t, hp): every member (team list, index order [port: id order]) Set_Target(t, hp, order 0, lock 0)
+    // [M: the scan's order flag 0x4061d0 read as 0]. [port] A member holding a live ordered target keeps it (the port keeps
+    // the ordered slot apart from the scan's); its auto slot is not touched.
+    const Unit* tu = unit(t);
+    if (!live(tu)) return;
+    for (Unit& w : units_) {
+        if (&w == &u || w.share_group != u.share_group || (w.flags & kUnitDead)) continue;
+        if (w.ordered_target != kNoObject && live(unit(w.ordered_target))) continue;
+        if (w.auto_target != t) w.auto_hp = choose_target_hardpoint(w, *tu);
+        w.auto_target = t;
+        w.target_score = score;
+        w.aim_target = kNoObject;
+        w.aim_hp = -1;
+        w.acquired = 1;
+    }
 }
 void CombatSystem::clear_order(ObjectId attacker) {
     if (Unit* u = unit(attacker)) {
@@ -904,7 +936,13 @@ bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const
     if (!gw || ad.min_attack_distance > 0.0f) range_geometry(t, a.pos, d, E);  // OI tactical: + the LAND_OBSTACLE aim walk
     const bool head_target = head && current_target(head->id) == t.id;
     const bool in_max = gw ? lob_in_range(a, *gw, t) : d <= range + E;
-    if (!in_max && !head_target) return false;
+    // S8 t17 (FIGHTER_FLYING §4.10 A, last paragraph): beyond R, a formation unit also accepts c when 0x4160a0(F, u, c)
+    // != 0 (the formation's response range).
+    const auto responds = [&] {
+        float rr = 0.0f;
+        return (a.flags & kUnitScanQuery) && scan_range_ && scan_range_(a.id, t.id, range, rr) != 0;
+    };
+    if (!in_max && !head_target && !responds()) return false;
     if (ad.min_attack_distance > 0.0f && d <= ad.min_attack_distance + E && !head_target) return false;
     // 10: stealth
     if ((t.flags & kUnitStealthed) && !ad.target_stealth_units && a.owner != t.owner) return false;
@@ -949,7 +987,14 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
         if (valid && (u.target_score == 1.0f || sticky(u, *cur, frame_))) return;
     }
     u.needs_scan = 1;
-    const Aabb box{{u.pos.x - range, u.pos.y - range, u.pos.z - range}, {u.pos.x + range, u.pos.y + range, u.pos.z + range}};
+    // S8 t17: Get_Scan_Range 0x566f50 (FIGHTER_FLYING §4.10 A) - R + Rr while the unit's formation answers 0x4160a0(F, u,
+    // none) != 0, else R ([port] the land "R with a TURRET slot, else 0" branch needs a land formation: none in the port).
+    float half = range;
+    if ((u.flags & kUnitScanQuery) && scan_range_) {
+        float rr = 0.0f;
+        if (scan_range_(u.id, kNoObject, range, rr) != 0 && rr > 0.0f) half = range + rr;
+    }
+    const Aabb box{{u.pos.x - half, u.pos.y - half, u.pos.z - half}, {u.pos.x + half, u.pos.y + half, u.pos.z + half}};
     const auto np = static_cast<int32_t>(std::min<uint32_t>(player_count(), trees_->player_count()));
     for (int32_t p = 0; p < np; ++p) {
         if (!is_enemy(u.owner, p) || !players_[static_cast<size_t>(p)].active) continue;
@@ -1094,6 +1139,10 @@ void CombatSystem::decide_target(Unit& u, std::vector<Candidate>& cands, uint32_
     }
 done:
     if (best) {
+        // S8 t17 (FIGHTER_FLYING §4.10 B, writer 1): a squadron member whose own target is empty when its due scan picks
+        // sets the team target 0x406370 - every member's Set_Target. A member that had a target (keep / switch) sets only
+        // its own.
+        const bool team_pick = u.share_group != kNoObject && u.auto_target == kNoObject;
         // §2.9 Q3: Set_Target fixes the target hardpoint (Choose_Target_Hardpoint); the same target is not re-set.
         if (best->id != u.auto_target) {
             const Unit* bt = unit(best->id);
@@ -1104,6 +1153,7 @@ done:
         u.aim_target = kNoObject;  // refixf t06: Order_Attack(unit, pick, ordered 0) re-aims the hardpoints (§2.8 C)
         u.aim_hp = -1;
         u.acquired = 1;  // OI abilities: Issue_Auto_Target for the acquired target (the autofire driver, abilities)
+        if (team_pick) share_target(u, best->id, best->score);
     } else {
         u.auto_target = kNoObject;
         u.auto_hp = -1;
@@ -1669,7 +1719,12 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
         q = lob_target_point(lob_member(t, muzzle));
         if (!lob_solve(muzzle, q, pd.max_speed, lob_g(pd), pd.can_lob_slower, sol)) return;
     }
-    Vec3 aim = lead_point(t, muzzle, t.pos, pd.max_speed * static_cast<float>(cfg_.fps));  // OI tactical: circular lead
+    // S8 t17 [M/port] aim point (0x54a270, "the target object's (bone) position", no-bone fallback not re-read): the
+    // target position + its type's Ranged_Target_Z_Adjust (0x398440), the point every other own-weapon test reads (slots
+    // 43 / 44, the grenade Q). The bare position is the model origin: a hover hull (M1_Repulsor_Tank, collision box
+    // 4.9-18.7 above its origin, z adjust 12) let every level or uphill shot pass under it, so it was never hit.
+    // [L] Target_Bones lists (8 vanilla types) are not modelled.
+    Vec3 aim = lead_point(t, muzzle, lob_target_point(t), pd.max_speed * static_cast<float>(cfg_.fps));  // circular lead
     if (cfg_.inaccuracy_enabled) {  // [L] fixed-radius branch only (no per-hardpoint table)
         float r = scale_inaccuracy(ud.fire_inaccuracy_fixed_radius, inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy));
         if (cfg_.mode == GameMode::Land && weather_scale(pd) != 1.0f) r = r * weather_scale(pd);  // L1 systems: weather
