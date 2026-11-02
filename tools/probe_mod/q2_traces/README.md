@@ -86,7 +86,11 @@ galaxy is running.
    after 5400 ticks (3 min of game time).
 5. **Optional, Thrawn's Revenge:** run `run_galactic.cmd -Mod tr` and `run_skirmish.cmd -Mod tr`. Pick the
    smallest GC map and type its name with `-Label "<map>"`.
-6. **Send back:** zip `out\` and send it. Leave out `out\selftest`. Each run has its own folder:
+6. **Optional, land skirmish (skai t04), about 8 min:** `run_skirmish_land.cmd`. The menu driver knows only Geonosis, so
+   pick the map by hand as the script header says (Land, Utapau, you = Empire, slot 2 Rebel Medium AI, Advanced Default),
+   then leave the game alone. It settles the land items of `docs/re/SKIRMISH_SETUP.md` §10 (pre-built pads, AI credit
+   charges, start units, pad capture).
+7. **Send back:** zip `out\` and send it. Leave out `out\selftest`. Each run has its own folder:
    - `trace.q2t`;
    - `summary.json`;
    - `reference.crc`;
