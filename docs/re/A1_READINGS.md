@@ -50,6 +50,7 @@ Conventions:
 | 28 | Free-store entry +0x30 = the `Lock_Current_Orders` order lock [M] (a1f t03) | **corrected**: +0x30 is the owning PotentialPlan pointer. Set when a goal is accepted or kept in Resolve_Category (0x6c2d60), not at proposal; cleared at every Commit start (0x6c0be0) and by the PP destructor. `Lock_Current_Orders` is an object counter (+0x3a8) that On_Unit_Service does not test | [H] |
 | 29 | TEAM containers in the threat grid (a1f t04) | teams with UNIT_AI get one whole-object entry, no TEAM exclusion; members (no UNIT_AI) get nothing. 0x396380(team) = the company type (team data +0x58), 0x3973b0 = `Create_Team_Type`. Power = the company's load-derived sum × clamp(`Max_Squad_Size` / `Company_Units` count, 0, 1), a static share, not live fill (stormtrooper team: 126 × 0.5 = 63); radius from the first member type (140) | [H] |
 | 30 | A1 [M] / [port] choices reviewed (a1f t06) | **change**: §12 cell order (exact stdext hash_set emulation; zone +0x90 order differs from evaluator +0xb0 order), §7 clamp the recorded hull loss, §19 gate (game type 1..4 or no parent id, else the parent object's type), §21 bombing test gets the real BASE_SHIELD test and a 3-D prevention distance, Reinforce placement (8-spot ring per ranked point). **Keep**: §15 full removal, §14 stamp draw point, Reinforce mixed keys (the original's), TF link mask −1 (+0x94 is a CellPassabilityType mask, unset in every shipped plan); IsInside*Shield leaves are always 0 in shipped data | [H] / [M] where tagged |
+| 31 | Why the original's AI-owned story fleet never invaded (S10 PROBE A, human Empire; a1g t05) | **explained**: Lua `fleet.Invade()` (GameObjectWrapper 0x57ada0) executes an InvadeEvent stamped with the **local** player, and the executor 0x48ff50 keeps only units owned by that player. A fleet the local player does not own lands nothing, silently. Not the Move_To block, not the AI taking the fleet | [H] |
 
 ---
 
@@ -989,3 +990,139 @@ the verdict is **change**.
   The port's −1 is exact.
 - Optional rule (for mods): parse a TF token that names a CellPassabilityType ([M] `|`-separated, case-insensitive)
   into the mask, and pass it to `flood_pick`.
+
+## 31. Story `Invade()` on a fleet the local player does not own (a1g t05) [H unless tagged]
+
+**Question.** In the S10 probe campaign "S10 PROBE A: TATOOINE" (`tools/probe_mod/s10_map_owners`, story script
+`s10_story.lua`: `SpawnList` at Byss, `Assemble_Fleet`, `BlockOnCommand(fleet.Move_To(Tatooine))`, `Sleep(1)`,
+`fleet.Invade()`, the pattern of the shipped `Story_Campaign_Underworld.lua`), the original behaved differently by human
+side (2026-10-31 run, a1f t08):
+- human **Underworld** (the fleet's owner is the local player): the invasion started at once;
+- human **Empire** (Underworld = `AI_Player_Control Underworld, None`): the Underworld fleet reached Tatooine orbit and
+  **never invaded**.
+
+The port invades in both cases (`alamo_sim_battle_tests`, `test_probe_invade`).
+
+### 31.1 Answer
+
+Lua `Invade()` on a fleet object (`GameObjectWrapper.Invade`, 0x57ada0) does not invade as the fleet's owner. It builds
+an `InvadeEventClass` on the stack and executes it directly. The event's issuing player is the **local player**, and the
+executor lands only units that the issuing player owns.
+
+So with a human Empire, the AI Underworld fleet's units (owner Underworld) are all filtered out. Nothing is queued, no
+message is logged and Lua gets no error. The fleet stays in orbit. With a human Underworld, issuer and owner agree and
+the land conflict is queued at once. Both probe outcomes follow from this one rule.
+
+### 31.2 The chain
+
+1. **0x57ada0 `GameObjectWrapper::Invade`** (Lua; returns no values, so there is nothing to block on):
+   - more than 0 arguments: error "invalid number of parameters. Expected 0";
+   - not a fleet (behaviour slot +0x336 = −1): error "this function is only valid on fleets";
+   - walks the parent chain (+0x2b0) to an object with the planet slot (+0x335 ≠ −1). No such parent (in hyperspace):
+     warning "this fleet is not at a planet. Cannot initiate invasion", nothing else happens;
+   - enemy test 0x2824f0 (planet owner's player, **fleet owner's** player; owner index at obj +0x58, player via 0x294bc0).
+     Not enemies: warning "fleet owner %s is not an enemy of planet %s owner %s. Cannot initiate invasion";
+   - collects the fleet's contents (0x3965f0) and keeps the land units (+0x337 ≠ −1: transports / companies). None:
+     warning "fleet contains no land units. Cannot initiate invasion";
+   - otherwise: event ctor 0x48fce0 → 0x512c50 → **EventClass ctor 0x5126c0, which sets event +0x24 = local player id**
+     (0x294a70 = PlayerList +0x30 index → player +0x4c). Then 0x4903c0(event, units, planet, **player = −1**, flag 1):
+     it copies up to 127 unit ids (+0x48, count +0x244), sets the planet id (+0x248) and flag +0x24c, and changes +0x24
+     **only when player ≠ −1**. So the issuer stays the local player. Then Execute 0x48ff50 is called directly.
+2. **0x48ff50 `InvadeEventClass` Execute:**
+   - **Prologue gates** (galactic mode object present):
+     - mode type (vf+0xe0) = 0 (galactic) and the galactic pause / battle-pending counter 0x140b1540c (GMM+0x2c) > 0 →
+       return;
+     - single-player, the linked-battle flag 0x140b154d0 set (REMAINING_GAPS §6.4) and the local player in a queued
+       conflict (0x2b0350) → return.
+   - For each unit id: resolve it (0x2aca60). The unit is **kept only if its owner (obj +0x58) == event +0x24**.
+   - For every resolved unit, kept or not: story check 0x326a30(story manager, unit, planet, 1), which asks each active
+     plot through 0x52eb10. Any hit sets "suppress" [M: a story LAND_ON-style hook claims the landing]. Then
+     0x328720(story manager, planet, unit).
+   - After the loop: one more 0x326a30(story manager, 0, planet, 1).
+   - Not suppressed and that last check false: if the kept list is non-empty, **`Land_Invade` 0x2b0520**(planet, kept
+     ids, **attacker = event +0x24**, defender −1, map 0, at_front 0). An empty kept list → nothing, and there is no
+     message on any path. Last check true: 0x3286f0 instead.
+
+| probe variant | local player | fleet owner | kept units | result |
+|---|---|---|---|---|
+| human Empire (preferred) | Empire | Underworld (AI None) | none | no `Land_Invade`; the fleet stays in orbit (observed) |
+| human Underworld (fallback) | Underworld | Underworld | all land units | `Land_Invade`(Tatooine, attacker Underworld) → land conflict vs Empire (observed) |
+
+3. **Who else builds an InvadeEvent, and with which issuer:**
+
+| caller | player argument to 0x4903c0 | issuer |
+|---|---|---|
+| 0x57ada0 Lua `GameObjectWrapper.Invade` | −1 | local player |
+| 0x45f5c0 story reward `INVADE_PLANET` | −1. It goes through the outgoing queue (0x3b01f0 on 0x140b2ed18), one event per land unit of the orbit objects that are friendly (0x39a2c0) to the plot's player (+0x228 → +0x638) [M: plot-player reading] | local player (stamped again at flush) |
+| 0x3d5640 / 0x3d6c50 galactic UI | −1 | local player (the human's own order) |
+| 0x3d2900 | an object's owner (+0x58) [M: which object] | that owner |
+| 0x433eb0 fleet-locomotor auto-land (STRATEGIC_GAPS §1.3) | a fleet member's owner (+0x58) | the fleet's owner [M] |
+| 0x884c0 / 0xa7de0 | −1 | local player [L: callers not identified] |
+
+The AI plan path does **not** use the event: `GalacticTaskForce.Invade` 0x6ce600 calls `Land_Invade` directly with
+attacker = the fleet owner's player id (0x294bc0(owner)+0x4c). AI-plan invasions therefore work for any owner. Only the
+object-level Lua `Invade()` and the story reward are tied to the local player.
+
+4. **The local player is fixed during scripts.** The local index (PlayerList +0x30) is set by setup 0x2924d0 (by
+   faction; it also sets `Is_Human` +0x62), reset to 0 by 0x2918d0 / 0x297630, and saved and restored around a player
+   list rebuild (the caller near 0x297630). No story or AI code switches it while a script runs. [H for the writers
+   found / M that none is missed]
+
+### 31.3 The three candidates
+
+1. **Move_To / BlockOnCommand on a non-human fleet: not the cause.** The fleet reached orbit in the original. If the
+   block had ended early, `Invade()` would have hit the parent walk in 0x57ada0 and logged "not at a planet". The human
+   Underworld run invaded, so the block ends with the fleet at the planet. The port's a1f t08 change (an order on a
+   fleet finishes when the fleet stops) stays.
+2. **Invade / Land_Invade with an AI attacker: the cause** (§31.1, §31.2). `Land_Invade` itself accepts any attacker
+   ≠ defender (BATTLE_TRANSITIONS §1.3, §2.9.7). The AI attacker never reaches it, because the event lands only the
+   local player's units and attacks as the local player.
+3. **The AI taking the fleet: not the cause.**
+   - The probe's Underworld runs AIPlayerType `None` (`PLAYER_NONE.XML`). It has no `GalacticFreeStoreScript`, only
+     space/land goal sets (`BasicOffensiveSpaceSet`, `BasicLandGoalSet`, `AI_GoalSet_ExpansionGeneric_Land`) and the
+     galactic template `None_Template`. So nothing galactic proposes a plan for the fleet or moves it [M: no galactic
+     free-store script = no galactic free-store moves]. That matches the fleet staying in orbit.
+   - Ownership does not change either way, so the 0x48ff50 filter result would be the same.
+
+### 31.4 Consequence for the shipped campaign
+
+`Story_Campaign_Underworld.lua` (FoC) spawns Empire (`Empire_Attack`, `empire_land_fleet.Invade()`) and Rebel
+(retaliation, `rebel_land_fleet.Invade()`) land fleets and sends them against Underworld planets. In
+`CAMPAIGNS_UNDERWORLD_STORY.XML` the human is Underworld (`AI_Player_Control Underworld, ScriptableHuman`; Empire,
+Rebel, Hutts and Pirates are `None`). By §31.2 these `Invade()` calls land nothing in the original: the land fleet
+arrives in orbit and stays there. The space fleet sent before it does fight, through the normal arrival conflict.
+[H for the code path; not observed in the shipped campaign. An optional probe could confirm it; the port follows the
+code.]
+
+### 31.5 Port vs original, rule, test
+
+- **Port today:**
+  - `engine/lua/src/bind_players.cpp` `m_invade` issues the Invade event with **player = the fleet's owner**
+    (`fl.owner`). The unit list holds all of the fleet's ground units. It has no enemy test and no warnings.
+  - `GalacticSim::invade` (`engine/galactic/src/campaign.cpp`, Invade event case) then queues the land conflict for
+    that owner.
+  - An **empty** unit list there means "every ground unit of the player at the planet", which 0x48ff50 never does.
+- **Rule** (module `lua`, `m_invade`; no galactic change needed):
+  1. Refusals as 0x57ada0, in order, as Lua warnings, with nothing issued:
+     - not a fleet;
+     - not at a planet (moving / in hyperspace);
+     - planet owner not an enemy of the **fleet owner**;
+     - the fleet has no ground units.
+  2. Issuer = the **local player** (`LuaPlayerWorld::local_player()`, the same as `Find_Player("local")`), not the fleet
+     owner.
+  3. Units = the fleet's ground units whose owner == issuer, in content order, at most 127. If none: return, with no
+     event and no message (the original drops it silently).
+  4. Otherwise one Invade event on the direct path with player = issuer (as now). Return nothing.
+  - Never send an empty unit list from this path, because the galactic executor reads an empty list as "all units".
+- **Also from 0x48ff50, for the galactic Invade executor (module `galactic`; check whether it already holds):**
+  - drop unit ids not owned by the issuer;
+  - drop the whole event while the galactic pause / battle-pending counter is raised, or while a linked battle is
+    pending and the local player is in a queued conflict.
+- **Test** (`engine/apps/sim/tests/test_battles.cpp` `test_probe_invade`):
+  - human-Empire run: give Underworld no galactic AI (`setup.players[1].ai = false`, the probe's `None`; otherwise the
+    port's galactic AI may invade by its own plan). After the 900 ticks: `land_queued == 0`, `fought == 0`, the fleet
+    still in orbit of S10_B, the story events FLEET / ARRIVED / INVADED fired, and no Lua message;
+  - human-Underworld run unchanged: one land conflict "land S10_B Underworld vs Empire", fought once.
+  - `engine/lua/tests/test_lua_players.cpp` `test_galactic_ops`: `Invade()` on a fleet the local player does not own
+    issues no order (`orders_issued` unchanged); on a fleet it owns, one order with player = local.
+- No probe is needed: the binary settles it, and it matches the 2026-10-31 run.
