@@ -79,8 +79,8 @@ struct ObstacleFootprint {
     uint32_t bits = kPassObstacle;  // OverridePassability, or the behaviour default (Obstacle)
     float terrain_z = 0.0f;         // terrain height under the object (water rule)
     float obstacle_height = 0.0f;   // model bbox z * scale (water rule)
-    // OI tactical: Fine_Tune_Occupied_Passability (§1.3): when set, a sample is stamped only if the vertical ray
-    // (z +1000 -> -1000) at its world XY hits the object's collision mesh. Must be deterministic (const data).
+    // OI tactical: Fine_Tune_Occupied_Passability (§1.3): when set, a sample is stamped only if the vertical segment
+    // (z -1000 -> +1000) at its world XY hits the object's collision mesh. Must be deterministic (const data).
     std::function<bool(V2 world_xy)> fine_tune;
 };
 // From the type fields: Obstacle_Width/Height/X/Y_Offset when set, else 2*|half extent|*scale and
@@ -114,8 +114,8 @@ public:
     std::span<const uint32_t> effective_values() const { return eff_; }
 
     // Dynamic stamping (§1.3). stamp() replaces a previous stamp of the same id. Returns the
-    // number of distinct cells stamped. A footprint that lands on no cell (water rule, Fine_Tune, off the grid) is
-    // still recorded: stamped(id) is true with no cells (S8 t02: the object is a LAND_OBSTACLE occupant of nothing; its
+    // number of distinct cells stamped. A footprint that lands on no cell (water rule, Fine_Tune, off the grid, an empty
+    // grid) is still recorded: stamped(id) is true with no cells (S8 t02: the object is a LAND_OBSTACLE occupant of nothing; its
     // slot-43 aim walk finds no occupied cell, TACTICAL_GAPS 3.1).
     uint32_t stamp(ObjectId id, const ObstacleFootprint& fp);
     bool unstamp(ObjectId id);

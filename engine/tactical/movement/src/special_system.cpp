@@ -201,8 +201,8 @@ bool MovementSystem::land_spot_free(const Unit& u, V2 p) const {
 // ---------------------------------------------------------------- §4.3 JETPACK_LOCOMOTOR (vf6 0x641910)
 void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
     SpecialMotion& s = u.sm;
-    // §3.1.1: the take-off turn (0x10, 0x642740) uses Max_Rate_Of_Turn directly ([M] pack +0xe8 is not modelled), not
-    // the alternate turn rate.
+    // §3.1.1: the take-off turn (0x10, 0x642740) turns at pack +0xe8 (the band rate) when > 0, else R = Max_Rate_Of_Turn x
+    // the mode multiplier, never the alternate turn rate.
     const float rate = u.lp.turn_rate;
     bool stopped = false;  // in 0x16 at the end of this service (0x16 itself, or 0x13 no path / 0x14 re-dispatching)
     auto aim_heading = [&]() {
@@ -225,18 +225,49 @@ void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
             s.turn_left = err > 0.0f;
             if (u.sp.has_pre_turn_anim && std::fabs(err) > 0.0f)
                 anim_play(u, err > 0.0f && err < 180.0f ? kAnimTurnLeftBegin : kAnimTurnRightBegin, false);
+            s.turn_band_rate = 0.0f;  // S7 t15: 0xF clears +0xe8 right before 0x10 (the first turn frame turns at R)
             s.state = LocoState::WalkTurning;
             break;
         }
-        case LocoState::WalkTurning: {  // 0x10 (0x642740)
+        case LocoState::WalkTurning: {  // 0x10 (0x642740), S7 t15 (MOVEMENT §3.1.1 "Take-off turn")
+            // 1-2. r = +0xe8 when > 0, else R; turn by min(|e|, r); r_left = r - |e| when |e| <= r, else 0.
             const float desired = aim_heading();
-            const float err = wrap_deg(desired - u.m.yaw);
-            const TurnAnim ta = jetpack_turn_anim(err, rate, u.sp.has_pre_turn_anim);
-            if (ta.anim != kAnimNone && !s.anim.playing(ta.anim)) anim_play(u, ta.anim, true);
-            if (ta.anim != kAnimNone) s.anim.rate = ta.rate;
-            if (err != 0.0f) s.turn_left = err > 0.0f;
-            u.m.yaw = turn_toward(u.m.yaw, desired, rate);
-            if (std::fabs(wrap_deg(desired - u.m.yaw)) <= 0.01f) s.state = LocoState::WalkEndTurn;
+            const float r = s.turn_band_rate > 0.0f ? s.turn_band_rate : rate;
+            const float e0 = wrap_deg(desired - u.m.yaw);
+            const float r_left = std::fabs(e0) <= r ? r - std::fabs(e0) : 0.0f;
+            if (e0 != 0.0f) s.turn_left = e0 > 0.0f;
+            u.m.yaw = turn_toward(u.m.yaw, desired, r);
+            // 3. c = the animation is in its last 2 frames (port: frames + 2 >= length; a clip of unknown length is always
+            // ending); the port's path is ready whenever 0x10 runs (0xF needs it), so "no path or path +0x6d" holds and
+            // step 4 never fires.
+            const bool c = s.anim.loop ? false : s.anim.frames + 2u >= s.anim.length;
+            const bool turn_anim = s.anim.id == kAnimTurnLeft || s.anim.id == kAnimTurnRight || s.anim.id == kAnimTurnLeftHalf ||
+                                   s.anim.id == kAnimTurnRightHalf || s.anim.id == kAnimTurnLeftQuarter ||
+                                   s.anim.id == kAnimTurnRightQuarter;
+            if (turn_anim && !c) break;  // 5. keep turning at the band rate until the clip ends
+            if (r_left <= 0.0f) {        // 6. not aligned this frame: pick a turn animation
+                if (u.sp.has_pre_turn_anim) {
+                    // Band on the error left after this frame's turn: the band value is the yaw rate of the next frames.
+                    const float e = wrap_deg(desired - u.m.yaw);
+                    const TurnAnim ta = jetpack_turn_anim(e, rate, true);
+                    if (ta.anim == kAnimNone) {  // |e| < R: no animation, +0xe8 := R, End Turn
+                        s.turn_band_rate = rate;
+                        s.state = LocoState::WalkEndTurn;
+                        break;
+                    }
+                    anim_play(u, ta.anim, false);
+                    s.anim.rate = 1.0f;  // [M] the runtime constant speed DAT_140b39958 (presentation only)
+                    s.turn_band_rate = ta.rate;
+                } else if (!turn_anim && anim_len_ && anim_len_(u.d.id, kAnimTurnLeft) > 0u) {
+                    // Without Has_Pre_Turn_Anim: anim 3 / 4 by the sign of the frame-start error, only when anim 3 exists
+                    // and no turn animation plays; +0xe8 is not written.
+                    const TurnAnim ta = jetpack_turn_anim(e0, rate, false);
+                    anim_play(u, ta.anim, false);
+                    s.anim.rate = ta.rate;
+                }
+                break;
+            }
+            s.state = LocoState::WalkEndTurn;  // 7.
             break;
         }
         case LocoState::WalkEndTurn:  // 0x11 (0x640b30)
@@ -298,7 +329,10 @@ void MovementSystem::step_jetpack(Unit& u, uint32_t frame) {
             // §3.1.1: a frame whose follower step left position and orientation unchanged -> 0x16 (the path is not done);
             // the swap back follows one service later, possibly in the air [M whether it occurs in play]. [port] not at
             // speed factor 0, the port's stand-in for a suspended locomotor (stun / immobilise: retail skips the service).
-            else if (u.m.pos == pos0 && u.m.yaw == yaw0 && u.speed_factor > 0.0f) s.state = LocoState::WalkStopped;
+            else if (u.m.pos == pos0 && u.m.yaw == yaw0 && u.speed_factor > 0.0f) {
+                s.state = LocoState::WalkStopped;
+                ++stats_.jetpack_still_frames;
+            }
             break;
         }
         case LocoState::WalkEndMove: {  // 0x14 (0x641df0): landing sequence
@@ -639,6 +673,7 @@ void MovementSystem::hash_special(StateHasher& h) const {
         h.boolean(s.anim.loop);
         h.boolean(s.airborne);
         h.boolean(s.turn_left);
+        if (s.turn_band_rate != 0.0f) h.f32(s.turn_band_rate);  // S7 t15: only during a Has_Pre_Turn_Anim take-off turn
         h.f32(s.lean);
         h.u32(s.idle_frames);
         h.boolean(s.turn_back);

@@ -136,6 +136,25 @@ bool ObjectStore::add_behavior(ObjectHandle h, BehaviorTypeId id) {
     return true;
 }
 
+bool ObjectStore::remove_behavior(ObjectHandle h, uint32_t index) {
+    if (!exists(h)) return false;
+    const uint32_t s = h.slot();
+    auto& list = behaviors_[s];
+    if (index >= list.size()) return false;
+    const BehaviorTypeId id = list[index];
+    list.erase(list.begin() + static_cast<std::ptrdiff_t>(index));
+    beh_state_[s].erase(beh_state_[s].begin() + static_cast<std::ptrdiff_t>(index));
+    behavior_index_[s].fill(0xFF);
+    for (size_t k = 0; k < list.size(); ++k) behavior_index_[s][list[k]] = static_cast<uint8_t>(k);  // later instance wins
+    if (behavior_index_[s][id] == 0xFF) {  // last instance gone: out of the per-type table and category list
+        BehaviorTable& t = tables_[id];
+        const auto it = std::lower_bound(t.members.begin(), t.members.end(), s);
+        if (it != t.members.end() && *it == s) t.members.erase(it);
+        t.insertion.erase(std::remove(t.insertion.begin(), t.insertion.end(), h), t.insertion.end());
+    }
+    return true;
+}
+
 uint32_t ObjectStore::serviced_behavior_count(ObjectHandle h) const {
     if (!exists(h)) return 0;
     uint32_t n = 0;
