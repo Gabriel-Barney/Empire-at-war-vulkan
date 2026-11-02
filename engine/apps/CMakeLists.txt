@@ -163,13 +163,13 @@ if(_alamo_sim)
     # (Gabriel, 2026-11-02). a1h t01 (2026-11-02): with the M1 WeaponBehavior fix, passive / superseded guard statuses
     # (A1_READINGS §33) and non-unit REVEAL sources (FOG_OF_WAR §3.2: a held Reinforcement_Point lifts its owner's fog, so AI
     # drops there pass the fog test) seeds 5, 7 and 11 end (all destroyed); the others still reach the cap with fog-hidden
-    # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. The test runs seed 5 (ends at
-    # frame 10879) with --expect-battle-end again. One ctest entry per worker count so they run
+    # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. S8 t10-t12 (2026-11-02, own-weapon state-4 gate, first-service delay): seeds 3 and 4 of 1-8 end, the test runs seed 3 (ends at
+    # frame 10131) with --expect-battle-end again. One ctest entry per worker count so they run
     # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
     # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
     set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome
-             COMMAND alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --workers 0 --quiet --expect-battle-end
+             COMMAND alamo_headless --skirmish-ai foc-land --seed 3 --ticks 20000 --workers 0 --quiet --expect-battle-end
                      --crc-out ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome PROPERTIES TIMEOUT 1800
                          FIXTURES_SETUP alamo_land_outcome_w0)
@@ -180,14 +180,14 @@ if(_alamo_sim)
     list(REMOVE_ITEM _land_outcome_workers 0)
     foreach(_w IN LISTS _land_outcome_workers)
       add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_w${_w}
-               COMMAND alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --workers ${_w} --quiet --expect-battle-end
+               COMMAND alamo_headless --skirmish-ai foc-land --seed 3 --ticks 20000 --workers ${_w} --quiet --expect-battle-end
                        --golden ${_land_outcome_crc})
       set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_w${_w} PROPERTIES TIMEOUT 1800
                            FIXTURES_REQUIRED alamo_land_outcome_w0)
     endforeach()
     # OPT1: the tick profiler is wall-clock and write-only; a run with --profile must give the same CRCs as the 0-worker run.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_profiled
-             COMMAND alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --workers 4 --quiet --profile
+             COMMAND alamo_headless --skirmish-ai foc-land --seed 3 --ticks 20000 --workers 4 --quiet --profile
                      --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt --golden ${_land_outcome_crc})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
                          FIXTURES_REQUIRED alamo_land_outcome_w0)
@@ -197,9 +197,9 @@ if(_alamo_sim)
     # host-side object follow (A1_READINGS §33.4) and non-unit REVEAL sources (FOG_OF_WAR §3.2) together, seed 3 reaches the
     # cap; seeds 1, 2, 4-7 end. After merging main's S7/S8 work (fighter formation targets, run-time obstacles) on top of
     # a1h, seeds 2-5, 7, 8 of 1-8 end and 1, 6 reach the cap; seed 3 ends again (station lost, defenders all retreat, frame
-    # 11967), so the test is back on seed 3.
+    # 11967), so the test is back on seed 3. S8 t10-t12 (2026-11-02): seeds 1, 2, 4-8 end, 3 reaches the cap; the test runs seed 2 (all destroyed, frame 9292).
     add_test(NAME alamo_headless_skirmish_ai_foc_station
-             COMMAND alamo_headless --skirmish-ai foc-station --seed 3 --ticks 20000 --workers 4 --quiet --expect-battle-end)
+             COMMAND alamo_headless --skirmish-ai foc-station --seed 2 --ticks 20000 --workers 4 --quiet --expect-battle-end)
     # t48: the default seed reaches QuickReinforce's anti-idle; 0 Lua errors (it may run to the frame limit: half the seeds do, the
     # station holds). refixf t02 (2026-10-31): back on the default seed. It had stacked the rebel ships on the station's centre
     # (3300,0,0) - Project_By_Unit_Range nil, Move_To failed (also seed 4): the station is now a space static entry and a task

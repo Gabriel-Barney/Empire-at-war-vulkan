@@ -753,18 +753,24 @@ objects::TypeIndex TacticalBattle::current_projectile(objects::ObjectId id) cons
     const objects::ObjectStore& st = l1_mode_->primary();
     objects::ObjectHandle h = st.find(id);
     for (size_t c = 0; c < containers_.size(); ++c)
-        if (containers_[c].id == id)
+        if (containers_[c].id == id) {
+            bool member = false;  // S8 t12: a team container answers for its first member; an empty team: nothing
             for (const Unit& u : units_)
                 if (u.container == c && u.alive && !u.retreated) {
                     h = u.h;
+                    member = true;
                     break;
                 }
+            if (!member) return objects::kNone;
+        }
     if (!st.alive(h)) return objects::kNone;
     const auto refs = catalog_->types().get_type_refs(st.type(h), "Projectile_Types");
     if (refs.empty()) return objects::kNone;
-    // OI host: the weapon index (SWAP_WEAPONS / Permanent_Weapon_Swap) picks the list entry; outside the list: entry 0.
+    // S8 t12 (TACTICAL_COMBAT §3.1.1 "Lua Get_Current_Projectile_Type", 0x578470): Projectile_Types[obj +0x324] (the weapon
+    // index: 0 at creation, SWAP_WEAPONS / Permanent_Weapon_Swap), with no WEAPON behaviour test; an index outside the list
+    // returns nothing.
     const int32_t wi = combat_ && combat_->has_unit(st.id(h)) ? combat_->weapon_index(st.id(h)) : 0;
-    return wi >= 0 && static_cast<size_t>(wi) < refs.size() ? refs[static_cast<size_t>(wi)] : refs.front();
+    return wi >= 0 && static_cast<size_t>(wi) < refs.size() ? refs[static_cast<size_t>(wi)] : objects::kNone;
 }
 
 bool TacticalBattle::opposite_sides_of_shield(Vec3 a, Vec3 b, int32_t player, bool friendly, bool shield_damage) const {

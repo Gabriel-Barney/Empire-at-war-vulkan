@@ -690,6 +690,8 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
             if (!g.stamped(id)) return tc::ObstacleCell::NoFootprint;
             return g.occupies(id, cx, cy) ? tc::ObstacleCell::Occupied : tc::ObstacleCell::Free;
         });
+        // S8 t10 (LOB_SOLVER §5.1): a garrisoned shooter's host for the garrison gun bones (obj +0x2b0).
+        combat_->set_garrison_host_query([this](tc::ObjectId id) -> tc::ObjectId { return garrison_holder_of(id); });
     }
     abilities_ = std::make_unique<ta::AbilitySystem>(*combat_, tables_->abilities, catalog_->ability_config(space_, cfg_.skirmish));
     abilities_->reserve(256, 512);
@@ -3094,6 +3096,14 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         // Activate_Ability); the flag still set from the previous tick marks it.
         if (!mvv.secondary_locomotor && (combat_->flags(u.id) & tc::kUnitWeaponsSuspended) != 0) ability_finished_.push_back(u.id);
         combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, mvv.secondary_locomotor);
+        // S8 t11 (TACTICAL_COMBAT §3.1.1 "Gate details" step 6): fighter Idle (0x1C), and Walk Stopped (0x16) on a locomotor
+        // whose vf +0x240 is true (Flying, JetPack, LandBomber; [port] Starship: the port's space locomotors keep no 0x16).
+        // ROCKET_ATTACK in any Unit_Abilities_Data entry ("ROCKET_ATTACK detection").
+        const bool air = mvv.locomotor == mv::LocomotorKind::Flying || mvv.locomotor == mv::LocomotorKind::Jetpack ||
+                         mvv.locomotor == mv::LocomotorKind::LandBomber;
+        combat_->set_flag(u.id, tc::kUnitFighterIdle, mvv.loco_state == mv::LocoState::FighterIdle);
+        combat_->set_flag(u.id, tc::kUnitHoverRest, air && mvv.loco_state == mv::LocoState::WalkStopped);
+        combat_->set_flag(u.id, tc::kUnitRocketAttack, abilities_ && abilities_->is_active(u.id, 11));
     }
     s4_positions(mode);  // S4: garrisoned units sit on their holders
     profile::lap("tac.combat_pre");

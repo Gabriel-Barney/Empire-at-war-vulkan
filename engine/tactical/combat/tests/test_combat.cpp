@@ -3977,6 +3977,418 @@ void test_muzzle_bones() {
     }
 }
 
+// ================================================================================================
+// S8 t10 - t12: own-weapon gate steps 5-7, first service, own-player sweep, garrison fire bones
+// ================================================================================================
+
+// An own-weapon shooter (id 1, player 0, type 0) at the origin and a tough target (id 2, player 1) at `at`; the shooter
+// is ordered onto the target. `opt` edits the shooter type before the system is made; `start` is the spawn frame.
+struct OwnOpt {
+    float recharge = 0.2f;
+    int32_t pulses = 1;
+    float pulse_delay = 0.0f;
+    float min_range = 0.0f;
+    bool idle_fire = false, lobbing = false;
+    int8_t weapons_enabled_flag = -1;  // ability slot 0's WEAPONS_ENABLED flag (-1: no ability)
+};
+struct OwnWorld {
+    World w;
+    OwnWorld(OwnOpt o, Vec3 at, uint32_t start = 1) {
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        if (o.weapons_enabled_flag >= 0) {
+            UnitAbilityDesc a;
+            a.ability_type = 1;
+            a.flag[1] = o.weapons_enabled_flag;  // Mod_Flag index 1 = WEAPONS_ENABLED
+            w.data.abilities.push_back(a);
+        }
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.min_attack_distance = o.min_range;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = o.recharge;
+        s.weapon_pulse_count = o.pulses;
+        s.weapon_pulse_delay = o.pulse_delay;
+        s.can_fighter_fire_when_idle = o.idle_fire;
+        s.lobbing_superweapon = o.lobbing;
+        if (o.weapons_enabled_flag >= 0) s.abilities = {0, -1};
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.frame = start;
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, at);
+        w.sys->order_attack(1, 2);
+    }
+    void move(ObjectId id, Vec3 p) {
+        w.sys->set_position(id, p);
+        w.trees.update(static_cast<EntityHandle>(id), box_of(p, w.data.units[w.sys->desc_index(id)].radius));
+    }
+    uint64_t run(int ticks) {
+        const uint64_t s0 = w.sys->stats().shots;
+        for (int i = 0; i < ticks; ++i) w.tick();
+        return w.sys->stats().shots - s0;
+    }
+    // Frames of the shots fired over `ticks` ticks.
+    std::vector<uint32_t> shot_frames(int ticks) {
+        std::vector<uint32_t> out;
+        for (int i = 0; i < ticks; ++i) {
+            const uint64_t s0 = w.sys->stats().shots;
+            const uint32_t f = w.frame;
+            w.tick();
+            if (w.sys->stats().shots != s0) out.push_back(f);
+        }
+        return out;
+    }
+};
+
+void test_own_weapon_targeting_state() {
+    // S8 t10 (e) / t11 step 7 (TACTICAL_COMBAT §3.1.1 "Gate details", LOB_SOLVER §8 item 22): the own weapon fires only in
+    // targeting state 4 (slot 44 && !slot 45, re-tested every service); otherwise the burst restarts.
+    {  // in range: fires; attacking() holds
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        CHECK(o.run(60) > 0);
+        CHECK(o.w.sys->attacking(1));
+    }
+    {  // ordered onto a target out of range: never fires; brought into range: fires at once (the recharge ran out)
+        OwnWorld o(OwnOpt{}, Vec3{600, 0, 0});
+        CHECK(o.run(60) == 0);
+        CHECK(!o.w.sys->attacking(1) && o.w.sys->current_target(1) == 2);
+        o.move(2, Vec3{100, 0, 0});
+        const std::vector<uint32_t> f = o.shot_frames(1);
+        CHECK(f.size() == 1);
+        CHECK(o.w.sys->attacking(1));
+    }
+    {  // inside Targeting_Min_Attack_Distance (slot 45): no fire; outside it: fire
+        OwnOpt opt;
+        opt.min_range = 50.0f;
+        OwnWorld o(opt, Vec3{30, 0, 0});
+        CHECK(o.run(60) == 0 && !o.w.sys->attacking(1));
+        o.move(2, Vec3{150, 0, 0});
+        CHECK(o.run(30) > 0 && o.w.sys->attacking(1));
+    }
+    {  // a 3-pulse burst (pulse delay 3 frames, recharge 5 s): a service out of range restarts it (3 more pulses)
+        OwnOpt opt;
+        opt.recharge = 5.0f;
+        opt.pulses = 3;
+        opt.pulse_delay = 0.1f;
+        OwnWorld b(opt, Vec3{100, 0, 0});
+        // control: the first burst gives 3 pulses 3 frames apart
+        const std::vector<uint32_t> fb = b.shot_frames(200);
+        CHECK(fb.size() >= 3 && fb[1] == fb[0] + 3 && fb[2] == fb[1] + 3);
+        // stopped right after the first pulse
+        OwnWorld d(opt, Vec3{100, 0, 0});
+        uint32_t first = 0;
+        for (int i = 0; i < 400 && first == 0; ++i) {
+            const std::vector<uint32_t> s = d.shot_frames(1);
+            if (!s.empty()) first = s[0];
+        }
+        CHECK(first != 0);
+        d.move(2, Vec3{900, 0, 0});  // out of range for 10 services (the pulse delay runs out: pulses := 3)
+        CHECK(d.run(10) == 0);
+        d.move(2, Vec3{100, 0, 0});
+        const std::vector<uint32_t> after = d.shot_frames(10);  // 3 pulses, not the 2 left of the first burst
+        CHECK(after.size() == 3);
+        CHECK(after.size() == 3 && after[1] == after[0] + 3 && after[2] == after[1] + 3);
+    }
+    {  // no live target: nothing fires, attacking() false
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        o.w.sys->kill_unit(2, 1, kKindNormal, o.w.frame);
+        o.w.trees.remove(2);
+        CHECK(o.run(30) == 0 && !o.w.sys->attacking(1));
+    }
+}
+
+void test_own_weapon_gate_steps() {
+    // S8 t11 (TACTICAL_COMBAT §3.1.1 "Gate details"): steps 5 - 7 and the step-3 correction.
+    {  // step 5: an active mode whose WEAPONS_ENABLED flag is 0 refuses; inactive or flag 1: fires
+        OwnOpt opt;
+        opt.weapons_enabled_flag = 0;
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_ability_active(1, 0, true);
+        CHECK(o.run(60) == 0);
+        o.w.sys->set_ability_active(1, 0, false);
+        CHECK(o.run(30) > 0);
+        opt.weapons_enabled_flag = 1;
+        OwnWorld e(opt, Vec3{100, 0, 0});
+        e.w.sys->set_ability_active(1, 0, true);
+        CHECK(e.run(60) > 0);
+    }
+    {  // step 6: fighter Idle (0x1C) refuses without Can_Fighter_Fire_When_Idle
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        o.w.sys->set_flag(1, kUnitFighterIdle, true);
+        CHECK(o.run(60) == 0);
+        o.w.sys->set_flag(1, kUnitFighterIdle, false);
+        CHECK(o.run(30) > 0);
+        OwnOpt opt;
+        opt.idle_fire = true;
+        OwnWorld f(opt, Vec3{100, 0, 0});
+        f.w.sys->set_flag(1, kUnitFighterIdle, true);
+        CHECK(f.run(60) > 0);
+    }
+    {  // step 6: state 0x16 on an air locomotor (vf +0x240) refuses, Can_Fighter_Fire_When_Idle or not
+        OwnOpt opt;
+        opt.idle_fire = true;
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_flag(1, kUnitHoverRest, true);
+        CHECK(o.run(60) == 0);
+        o.w.sys->set_flag(1, kUnitHoverRest, false);
+        CHECK(o.run(30) > 0);
+    }
+    {  // step 7: LOBBING_SUPERWEAPON never fires its own weapon at a target (fire-at-position orders only)
+        OwnOpt opt;
+        opt.lobbing = true;
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        CHECK(o.run(90) == 0);
+    }
+    {  // the host-mirror flags are not hashed (the CRC follows the behaviour, not the mirror)
+        OwnWorld a(OwnOpt{}, Vec3{100, 0, 0}), b(OwnOpt{}, Vec3{100, 0, 0});
+        b.w.sys->set_flag(1, kUnitRocketAttack, true);
+        StateHasher ha, hb;
+        a.w.sys->hash_units(ha);
+        b.w.sys->hash_units(hb);
+        CHECK(ha.digest() == hb.digest());
+    }
+    {  // step 4: ROCKET_ATTACK active in any Unit_Abilities_Data entry (the host mirror kUnitRocketAttack): T4B's own
+       // weapon (Fire_Weapon_When_In_Rocket_Attack_Mode No) stops, its hardpoints fire
+        const SourceFlags t4b_own{true, true, false, true}, t4b_hp{true, true, true, false};
+        SourceWorld sw(t4b_own, t4b_hp, false);
+        sw.w.sys->set_flag(1, kUnitRocketAttack, true);
+        const std::array<uint32_t, 2> n = sw.run(120);
+        CHECK(n[0] == 0 && n[1] > 0);
+    }
+    {  // step 3 correction: deploying / undeploying (the transition) is not "deployed" for the death-clone remap either
+        World w;
+        UnitDesc walker;
+        walker.tactical_health = 100.0f;
+        walker.radius = 5.0f;
+        walker.deploys = true;
+        walker.has_locomotor = true;
+        walker.death_clones = {{1, 50}, {12, 53}};
+        push_unit(w.data, walker);
+        w.make();
+        w.add(1, 0, 1, Vec3{0, 0, 0});
+        w.add(2, 0, 1, Vec3{100, 0, 0});
+        w.sys->set_flag(1, kUnitDeploying, true);
+        w.sys->set_flag(2, kUnitDeploying | kUnitDeployTransition, true);
+        w.sys->kill_unit(1, kNoObject, kKindNormal, w.frame);
+        CHECK(!w.sys->deaths().empty() && w.sys->deaths().back().death_clone == 53);
+        w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);
+        CHECK(!w.sys->deaths().empty() && w.sys->deaths().back().death_clone == 50);
+    }
+}
+
+void test_hardpoints_fire_while_suspended() {
+    // S8 t12 (e) (MOVEMENT §3.2): a locomotor swap suspends TARGETING / WEAPON only; the hardpoints keep firing.
+    const SourceFlags any{};
+    SourceWorld sw(any, any, false);
+    const std::array<uint32_t, 2> n = sw.run(60);
+    CHECK(n[0] > 0 && n[1] > 0);
+    sw.w.sys->set_flag(1, kUnitWeaponsSuspended, true);
+    const std::array<uint32_t, 2> m = sw.run(60);
+    CHECK(m[0] == 0 && m[1] > 0);
+}
+
+void test_first_service() {
+    // S8 t12 (c) (TACTICAL_COMBAT §3.1.1 "First service after spawn"): the initial delay is Get_Int(0, FPS x recharge)
+    // and the first service subtracts the whole frame number (last service 0).
+    OwnOpt opt;
+    opt.recharge = 5.0f;
+    {  // spawned at frame 1: the first shot comes on frame max(delay, 1)
+        SimRng r(12345u);
+        const int32_t delay = r.range_int(0, 150);
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        const std::vector<uint32_t> f = o.shot_frames(200);
+        CHECK(!f.empty() && f[0] == static_cast<uint32_t>(std::max(delay, 1)));
+    }
+    {  // spawned at frame 1000 (past any drawn delay): fires on its first service
+        OwnWorld o(opt, Vec3{100, 0, 0}, 1000);
+        const std::vector<uint32_t> f = o.shot_frames(5);
+        CHECK(!f.empty() && f[0] == 1000u);
+    }
+}
+
+void test_own_player_sweep() {
+    // S8 t10 (d) (TACTICAL_COMBAT §3.4 "Own-player variant 0x2acb90"): with Friendly_Damage_Amount > 0 and no hostile hit,
+    // the owner's tree yields its first candidate (the projectile alone is skipped); the hit stands only when it is the
+    // projectile's own target without TRANSPORT_LANDING.
+    struct Sweep {
+        World w;
+        explicit Sweep(bool landing) {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            p.damage = 10.0f;
+            p.friendly_damage_amount = 10.0f;
+            p.max_flight_distance = 3000.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc u;
+            u.tactical_health = 1000.0f;
+            u.radius = 5.0f;
+            push_unit(w.data, u);
+            UnitDesc l = u;
+            l.transport_landing = landing;
+            push_unit(w.data, l);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            w.add(1, 0, 0, Vec3{-500, 0, 0});  // the shooter, away from the path
+            w.add(3, 0, 0, Vec3{100, 0, 0});   // a friendly in the path
+            w.add(4, 1, 0, Vec3{200, 0, 0});   // friendly target behind it
+            w.add(5, 0, 1, Vec3{200, 300, 0}); // an enemy (off the path)
+        }
+        void fire(ObjectId target) {
+            ProjectileLaunch l;
+            l.shooter = 1;
+            l.owner = 0;
+            l.projectile = 0;
+            l.from = Vec3{0, 0, 0};
+            l.target = target;
+            CHECK(w.sys->launch_projectile(l, w.frame));
+            for (int i = 0; i < 40; ++i) w.tick();
+        }
+    };
+    {  // aimed at the friendly target 4: the friendly 3 in front is the first candidate but not the target - no hit
+       // there, the flight goes on and the target is hit
+        Sweep s(false);
+        s.fire(4);
+        CHECK(s.w.sys->health(3) == s.w.sys->max_health(3));
+        CHECK(s.w.sys->health(4) < s.w.sys->max_health(4) && s.w.sys->stats().hits == 1u);
+    }
+    {  // the same target with TRANSPORT_LANDING: never an own-player hit
+        Sweep s(true);
+        s.fire(4);
+        CHECK(s.w.sys->health(3) == s.w.sys->max_health(3) && s.w.sys->health(4) == s.w.sys->max_health(4) && s.w.sys->stats().hits == 0u);
+    }
+}
+
+void test_garrison_fire_bones() {
+    // S8 t10 (a) (LOB_SOLVER §5.1 "Garrison fire bones in detail"): a garrisoned shooter launches from its host's gun bones.
+    struct Garrison {
+        World w;
+        uint32_t last = 0;
+        Garrison(std::vector<std::vector<GarrisonBone>> bones, std::vector<std::pair<float, int32_t>> alts, bool garrisoned) {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 0.2f;
+            push_unit(w.data, s);
+            UnitDesc h;
+            h.tactical_health = 1000.0f;
+            h.radius = 5.0f;
+            h.num_garrison_guns = 2;
+            h.garrison_bones = std::move(bones);
+            h.damage_alternates = std::move(alts);
+            push_unit(w.data, h);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            push_unit(w.data, t);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            w.add(1, 0, 0, Vec3{0, 0, 0});
+            w.add(2, 2, 1, Vec3{0, 100, 0});                // north of the host
+            w.add(3, 1, 0, Vec3{0, 0, 0}, Vec3{0, 1, 0});  // host facing +y: local (x, y, z) -> world (-y, x, z)
+            if (garrisoned) w.sys->set_flag(1, kUnitGarrisoned, true);
+            w.sys->set_garrison_host_query([](ObjectId id) { return id == 1 ? ObjectId{3} : kNoObject; });
+            w.sys->order_attack(1, 2);
+            d0 = w.rng.draws();
+        }
+        uint64_t d0 = 0;
+        uint64_t draws() const { return w.rng.draws() - d0; }  // synced draws while ticking
+        std::vector<Vec3> launches(int ticks) {
+            std::vector<Vec3> out;
+            for (int i = 0; i < ticks; ++i) {
+                w.tick();
+                for (size_t k = 0; k < w.sys->projectile_count(); ++k) {
+                    const ProjectileView pv = w.sys->projectile(k);
+                    if (pv.serial <= last) continue;
+                    last = pv.serial;
+                    out.push_back(pv.pos);
+                }
+            }
+            return out;
+        }
+    };
+    // ALT 0: bone 0 at local (5, 0, 3) pointing local +x (world +y: the target), bone 1 at (-5, 0, 3) pointing local -x.
+    GarrisonBone fwd{true, Vec3{5, 0, 3}, 0.0f}, back{true, Vec3{-5, 0, 3}, 180.0f}, fwd2{true, Vec3{6, 1, 4}, 30.0f};
+    const Vec3 wf{0, 5, 3}, wf2{-1, 6, 4};
+    {  // one candidate: that bone, no draw (the synced stream matches the ungarrisoned run)
+        Garrison g({{fwd, back}}, {}, true), n({{fwd, back}}, {}, false);
+        const std::vector<Vec3> l = g.launches(60), ln = n.launches(60);
+        CHECK(!l.empty() && l.size() == ln.size());
+        bool ok = true;
+        for (const Vec3& p : l) ok = ok && same(p, wf);
+        CHECK(ok);
+        CHECK(!ln.empty() && same(ln.front(), Vec3{0, 0, 0}));  // not garrisoned: the shooter's own launch point
+        CHECK(n.draws() == g.draws());
+    }
+    {  // two candidates: one synced Get_Int(0, 1) per shot, both bones in use. Up to the first shot both runs draw the
+       // same; the shot's tick draws one more in the garrisoned run.
+        Garrison g({{fwd, back, fwd2}}, {}, true), n({{fwd, back, fwd2}}, {}, false);
+        bool shot = false;
+        for (int i = 0; i < 200 && !shot; ++i) {
+            const uint64_t g0 = g.draws(), n0 = n.draws();
+            const size_t gl = g.launches(1).size(), nl = n.launches(1).size();
+            CHECK(gl == nl);
+            shot = gl > 0;
+            CHECK(g.draws() - g0 == n.draws() - n0 + (shot ? 1u : 0u));
+        }
+        CHECK(shot);
+        const std::vector<Vec3> l = g.launches(120);
+        CHECK(l.size() >= 4);
+        bool ok = true, any_f = false, any_f2 = false;
+        for (const Vec3& p : l) {
+            ok = ok && (same(p, wf) || same(p, wf2));
+            any_f = any_f || same(p, wf);
+            any_f2 = any_f2 || same(p, wf2);
+        }
+        CHECK(ok && any_f && any_f2);
+    }
+    {  // no bone within 60 degrees: the shooter's own launch point
+        Garrison g({{back}}, {}, true);
+        const std::vector<Vec3> l = g.launches(30);
+        CHECK(!l.empty() && same(l.front(), Vec3{0, 0, 0}));
+    }
+    {  // the host's ALT (Land_Damage_Thresholds / _Alternates) picks the entry; ALT >= M: the own launch point
+        Garrison g({{back}, {fwd}}, {{1.0f, 0}, {0.66f, 1}, {0.33f, 2}}, true);
+        CHECK(g.w.sys->model_alt(3) == 0);
+        g.w.sys->set_health(3, 500.0f);  // 0.5: ALT 1
+        CHECK(g.w.sys->model_alt(3) == 1);
+        std::vector<Vec3> l = g.launches(30);
+        CHECK(!l.empty() && same(l.back(), wf));
+        Vec3 hp;
+        std::vector<Vec3> bones;
+        CHECK(g.w.sys->garrison_fire_bones(3, hp, bones) && bones.size() == 1 && same(bones[0], wf) && same(hp, Vec3{0, 0, 0}));
+        g.w.sys->set_health(3, 200.0f);  // 0.2: ALT 2 = M -> no garrison bones
+        CHECK(g.w.sys->model_alt(3) == 2);
+        CHECK(!g.w.sys->garrison_fire_bones(3, hp, bones));
+        l = g.launches(30);
+        CHECK(!l.empty() && same(l.back(), Vec3{0, 0, 0}));
+    }
+}
+
+void test_hardpoint_mode_default() {
+    // S8 t12 (b): Fire_When_In_<Mode>_Mode defaults to 1 - without the No the hardpoint fires in DEFEND.
+    GateWorld g(true);
+    g.w.data.hardpoints[0].no_fire_modes.clear();
+    CHECK(g.run(90) > 0);
+}
+
 void test_foc_data() {
     const char* root = std::getenv("ALAMO_FOC_DATA");
     if (!root || !*root) {
@@ -4189,6 +4601,13 @@ int main(int argc, char** argv) {
     test_hardpoint_state_gate();
     test_weapon_suspend_elapse();  // S7 t15 A2
     test_muzzle_bones();  // S8 t06 B4
+    test_own_weapon_targeting_state();  // S8 t10 - t12
+    test_own_weapon_gate_steps();
+    test_hardpoints_fire_while_suspended();
+    test_first_service();
+    test_own_player_sweep();
+    test_garrison_fire_bones();
+    test_hardpoint_mode_default();
     test_foc_data();
     if (bench) bench_modifiers();
     if (g_fail) {

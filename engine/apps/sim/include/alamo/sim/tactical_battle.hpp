@@ -596,8 +596,8 @@ public:
     int32_t final_blow_player(objects::ObjectId id) const;
     // Get_All_Projectile_Types (§2.1): the projectile type of every live hard point with a projectile (HardPoints
     // order), then the type's Projectile_Types. Get_Current_Projectile_Type: Projectile_Types[weapon index] (combat
-    // weapon_index: SWAP_WEAPONS / Permanent_Weapon_Swap), Projectile_Types[0] when the index is outside the list. TEAM
-    // containers answer for their first live member.
+    // weapon_index: SWAP_WEAPONS / Permanent_Weapon_Swap; no WEAPON behaviour needed), none when the index is outside the
+    // list (S8 t12). TEAM containers answer for their first live member (none for an empty team).
     std::vector<objects::TypeIndex> projectile_types(objects::ObjectId id) const;
     objects::TypeIndex current_projectile(objects::ObjectId id) const;
     // Are_On_Opposite_Sides_Of_Shield (§1.2): an active BASE_SHIELD with Base_Shield_Radius > 0 that holds exactly one
