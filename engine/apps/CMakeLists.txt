@@ -151,6 +151,14 @@ if(_alamo_sim)
              COMMAND alamo_headless --skirmish-ai foc --workers 4 --quiet
                      --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_golden.crc)
     set_tests_properties(alamo_headless_skirmish_ai_synthetic alamo_headless_skirmish_ai_foc PROPERTIES TIMEOUT 1200)
+    # skai (q2f t04): the skirmish host on _MP_SPACE_GEONOSIS with an idle human Empire (the retail Geonosis trace's setup): stations
+    # from the team markers, both slots' default squadrons, MP_Default_Credits, the per-frame station income; skipped without ALAMO_FOC_DATA.
+    add_test(NAME alamo_headless_skirmish_ai_geonosis
+             COMMAND alamo_headless --skirmish-ai skirmish --map _MP_SPACE_GEONOSIS --human Empire --seed 1103945700 --ticks 900 --workers 4 --quiet)
+    set_tests_properties(alamo_headless_skirmish_ai_geonosis PROPERTIES TIMEOUT 1200)
+    alamo_label_slow(alamo_headless_skirmish_ai_geonosis)
+    # skai: foc-land is the skirmish host (the battle started on the map, the land default forces, income, skirmish victory, land
+    # production) since 2026-11-02; before that a galactic invasion with campaign companies (t50).
     # t50: FoC land SKIRMISH (_MP_LAND_UTAPAU: the explicit Empire / Rebel pads, Player_N_Spawn_Point_Marker, MP_Default_Credits, the
     # pre-built Command Center + Barracks, the skirmish pad lists / prices / pop-cap curve, the shipped skirmish equations), 2 min of battle;
     # skipped (exit 0) without ALAMO_FOC_DATA.

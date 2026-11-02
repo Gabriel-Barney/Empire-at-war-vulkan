@@ -257,3 +257,35 @@ present goes through neutral first (2 x 5 s). When the pad's child dies the pad 
   in the trace may be the start force or the station garrison. [M]
 - How an Income_Stream_Mod_Ability binds to its target stream. [M]
 - The "human gets no refund on auto-cancel" reading of 0x498820 via 0x498170. [M]
+
+## 10. Trace evidence and port status (skai, 2026-11-02)
+
+From the retail Geonosis trace (q2f, `tools/probe_mod/q2_traces/out/20261030-062751-skirmish-vanilla-lua`, seed 0x41ccdfe4,
+human Empire idle vs AI Rebel Medium), read without the binary:
+
+- Influences_Capture_Point unset = true [H, trace]: the Rebel AI owns a Mineral_Extractor_Pad by frame 600 with X-Wings as its
+  only mobile units, and X-Wing sets no Influences_Capture_Point (the shipped data sets it False on 150 types, True on 38).
+  The port read an unset tag as false, so no shipped infantry or fighter could take a pad.
+- The AI's credits fall in tactical play (Rebel 6000 → 2500 / 900 / 226 at frames 600 / 1200 / 1800, while it starts
+  extractors, then rises with their income to 2112 at 5400). §3 says AI tactical *production* is never charged, so these
+  costs are pad builds (TacticalBuild, L1_S4 §3.6) and/or the station upgrade; which ones is open [M]. The port still
+  charges the AI for production (Tactical_Build_Cost_Multiplayer) [port].
+- Frame-0 objects: each slot has its skirmish station, its Standalone_Space_Maps_Special_Weapon (§2.3) and 2 squadrons
+  of its Space_Skirmish_AI_Default_Forces (Empire 14 TIE Interceptors, Rebel 10 X-Wings); the idle human gets them too.
+- No hangar launches in 5400 frames for the idle human (its station keeps 14 interceptors, no TIE Fighters). The port's
+  skirmish station hangar launches its Starting_Spawned_Units at once [port, open].
+
+Port status (headless `--skirmish-ai skirmish` / `foc-land`, `tactical_battle_skirmish.cpp`):
+
+| Item | Port |
+|---|---|
+| §1 slot map | slot 0 / 1 = the two battle players by ascending id (Empire 0, Rebel 1); non-playable players follow in GalacticRules order, not the lobby order [M]. |
+| §2 step 3 credits | MP_Default_Credits for the two slots when the battle starts. |
+| §2.2 starting forces | the factions' Space_ / Land_Skirmish_AI_Default_Forces as the battle's start participants at the slot's start anchor (Player_k / Team_tt spawn markers, bt_skirmish_anchors); no garrison re-delivery (§2.4) [port]. |
+| §2.3 space special weapons | not placed [port, open]. |
+| §2.5 / §2.6 pre-built pads | t50 rule kept: the Team_NN Command Center and Barracks pads of both slots start built, from MultiplayerStructureMarker data. §2.5 says retail reads that data only in campaign and pre-builds from the map's pre-placed pad type (+0x18), which the port's map reader does not decode [M, open]. |
+| §3 production | land and space skirmish; a finished land company appears 120 units in front of its builder instead of joining the reinforcement pool [port]. |
+| §4 victory | 0x13 (land) and 0x16 (space) polled each frame, declared at once, reported as 0x0e / 0x0f [port]. |
+| §5 income | per-frame float add of (base × multiplier + additive) / interval / 30 for the object's own stream; a mod on the object's own stream (the supply dock) counts while the object lives; mods on other streams are not applied [M]. |
+| §6 unit cap | ConflictFactionInfo::unit_cap_for_players: sorted keys, linear, 0 outside, integer part (2 players: 9); N = the two slots. |
+| L1_S4 §4.2 capture start gate | 0 in skirmish map battles. |
