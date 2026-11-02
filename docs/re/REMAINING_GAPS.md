@@ -453,14 +453,16 @@ WALK and swap, MOVEMENT §3.1.1); TR 6.
 | 0x14 End Move (0x641df0) | landing sequence; details below |
 | 0x16 Stopped | speed 0, idle; then swap back to the primary locomotor (0x3a9910(obj, system, 1); MOVEMENT §3.1.1) |
 
-- **Turning** (0x10). With type +0x36 set, for heading error e and type turn rate r:
+- **Turning** (0x10). With type +0x36 set, for heading error e and type turn rate r, the band sets the **yaw rate
+  of the following frames** (pack +0xe8), not an animation rate (the animation plays at a constant speed):
   - |e| < r: no animation;
-  - |e| < 22.5°: anim 0x16 / 0x18 at rate r × 0.25 × |e| / 11.25;
-  - |e| < 45°: anim 0x15 / 0x17 at rate r × 0.5;
-  - otherwise anim 3 / 4 at the full rate.
+  - |e| < 22.5°: anim 0x16 / 0x18, yaw rate r × 0.25 × |e| / 11.25;
+  - |e| < 45°: anim 0x15 / 0x17, yaw rate r × 0.5;
+  - otherwise anim 3 / 4, yaw rate r.
 
-  Without +0x36: anim 3 / 4 at speed (angle / rate) × 0.03333, capped by GC 0x140b16d28.
-- **Start Move** (0x12): anim 0x30 (Jump). When it finishes, shift every waypoint time by (now − first waypoint time), loop 0x31 (FlyIdle), set airborne (0x3a7e30) → 0x13.
+  Without +0x36: anim 3 / 4 at animation speed (angle / rate) × 0.03333, capped by GC 0x140b16d28; yaw rate r.
+  Full flow: MOVEMENT §3.1.1 "Take-off turn" (2026-11-02).
+- **Start Move** (0x12): anim 0x30 (Jump). When it finishes, shift every waypoint time by (now − first waypoint time), loop 0x31 (FlyIdle), engine moving loop on (0x3a7e30; audio only, MOVEMENT §3.1.1) → 0x13.
 - **Moving** (0x13): follow the timed path (vf +0x1d8 [M]) and set the altitude (below). No movement → 0x16. Path done → 0x14.
   - **Landing test,** while FlyLand is not yet playing and (last waypoint time − now) ≤ 7 frames (0x140a44334): the last waypoint must pass the movement-class test (0x50e280) and be unoccupied (0x538200). Then play 0x32 (FlyLand) and clear airborne. Otherwise re-issue a move to the same point (0x640880, radius 50).
 - **End Move** (0x14):

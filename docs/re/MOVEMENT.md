@@ -672,14 +672,48 @@ passes it and skips the call when the mode has none.
 
      The locomotor data pack (obj +0xa8: path stack, speed, formation pointer +0x1f0) belongs to the object and
      **survives the swap**; only the state is reset by the new locomotor.
-   - engine sounds off: moving loop `0x3a7e30(obj, 0)`, idle loop `0x3a7cf0(obj, 0)` (STATION_HANGARS_SOUND §3.3);
+   - engine sounds off: moving loop `0x3a7e30(obj, 0)`, idle loop `0x3a7cf0(obj, 0)` (STATION_HANGARS_SOUND §3.3).
+     **Audio only** [H] (2026-11-02): the two functions only start / stop the SFX and set the flags obj +0x3B6 /
+     +0x3B5, which are read only by audio code, save / load (`0x33a580` / `0x33c160`), the state copy `0x472560`
+     and the TSW audio `0x42a7b0`. No sim result depends on them;
    - **weapons:** behaviours TARGETING (9), WEAPON (10) and SPECIAL_WEAPON (0x2F), each if present:
-     - to the secondary: Disable (vf24 +0xc0: suspend count +0x3c + 1; the WEAPON override `0x54ac30` also clears the
-       hardpoints' fire state and hides their muzzle meshes);
+     - to the secondary: Disable (vf24 +0xc0: suspend count +0x3c + 1). TARGETING (vftable `0x8b0d88`) and
+       SPECIAL_WEAPON (`0x8756e0`) use the base `0x4c30b0`. The WEAPON override `0x54ac30` [H] calls the base, then
+       clears the unit's **own muzzle flash** (not hardpoints): when the weapon data pack (obj +0xf0) belongs to this
+       behaviour (pack +0x80 == it), for each fire bone i < pack +0xd0 whose flash countdown (int array pack +0xc8)
+       is > 0: countdown := 0, hide the `<bone>_FLASH` mesh (pack +0xa8[i]) and, when i < pack +0xe8, the
+       `<bone>_LIGHT` mesh (pack +0xd8[i]). These are the meshes a shot shows for 4 frames. **Visual only**: the
+       target (pack +8), the cooldown (pack +0x24), the pulse / burst counters and the fire-bone cycle index are
+       not touched;
      - to the primary: Enable (vf23 +0xb8, `0x4c30a0`: count − 1, floor 0), then object signal **0x29** (`0x220ed0`
-       on obj +0x38; the signal abilities raise when their state changes [M: meaning]).
+       on obj +0x38) = **"unit ability finished"** (below).
 
      A suspended behaviour is not serviced (§3.3), so **a unit on its jetpack neither targets nor fires**.
+
+     **The weapon cooldown keeps elapsing while suspended** [H]. The WeaponBehavior service `0x54d090` does not count
+     its cooldown down by one per service: it keeps the last serviced frame at pack +0x2c (rewritten every service) and,
+     when the cooldown (pack +0x24, int frames) is non-zero and pack byte +0x3d is 0, takes delta = frame − pack +0x2c;
+     delta > cooldown (unsigned compare) → cooldown := 0, else cooldown −= delta, and a non-zero result ends the
+     service (no shot). A suspended behaviour is not serviced, so pack +0x2c stays at the last pre-flight frame and the
+     first service after the swap back subtracts the whole flight time. A shot whose recharge ran out in the air is
+     ready on the first frame back on the ground.
+
+     **Signal 0x29 listeners** [H] (raised by every ability end, ABILITIES_HARDPOINTS §2.6, and here). Two kinds:
+     - **Task forces** (TaskForceClass Receive_Signal `0x5fe5d0`, case 0x29). Add_Force `0x5f9a90` registers the task
+       force on each member; it unregisters in vf1. Skipped when the unit has obj +0x3a0 bit 0x02 set (dying /
+       being removed). Otherwise the unit is wrapped as a Lua value (`0x5751d0` / `0x256d40`) and the plan event
+       **0x13 = `<TaskForce>_Unit_Ability_Finished(tf, unit)`** is dispatched (`0x6006b0`; AI_GALACTIC_2 §5.2 event
+       19). PGEVENTS' `Default_Unit_Ability_Finished` is empty, so only plans that define the handler react.
+     - **Lua blocking status of `Activate_Ability`** (AbilityBlockStatus, vftable `0x89a558`; its listener sub-object
+       at +0x30 has vf1 `0x6ae4f0`). Made by `GameObjectWrapper.Activate_Ability` `0x570580` (pending count +0x40 = 1)
+       and by TaskForce `Activate_Ability` `0x5f9890` (one per unit that activated). Each registers on its unit for
+       signals **0x29, 0xb and 0x10** (`0x6ae570`); the first of them decrements the count and unregisters all three.
+       `IsFinished` `0x57bab0` = (count == 0). TaskForce `Activate_Ability` also queues `Unit_Ability_Finished` at
+       once for each unit whose activation failed. So `BlockOnCommand(unit.Activate_Ability("JET_PACK", target),
+       timeout)` returns when the jetpack swaps back (or on 0xb / 0x10, meanings not traced here). FoC user:
+       AI/LANDMODE/BOBAFETTFLAMEINFANTRY.LUA (lines 153 and 168).
+
+     This is **sim-relevant** (AI Lua flow), not presentation.
 7. The current **order is left alone on the to-primary path**: no coordinator change, the unit stays in the
    coordinator it was in; the walk locomotor starts stopped (0x16).
 
@@ -739,7 +773,48 @@ and only while it is airborne-kind:
   - the formation speed (`0x41b2a0`, the slowest member's vf74; P1_DOUBLE_CLICK_MOVE): the alternate speed while the
     member is airborne-kind.
 - **Not** read through them: the jetpack's take-off turn (0x10, `0x642740`) uses pack +0xe8 or, when that is ≤ 0,
-  `Max_Rate_Of_Turn` (`0x372560`) directly; the landing (0x14) and the stopped state set no speed from them.
+  `Max_Rate_Of_Turn` (`0x372560`) directly (below); the landing (0x14) and the stopped state set no speed from them.
+- **Acceleration / deceleration** [H] (2026-11-02): JetPack vf91 / vf92 are the common `0x42c400` / `0x42c4c0`.
+  Acceleration = `OverrideAcceleration` (type +0x3c0) × (effective max speed / `Max_Speed`), where the effective
+  max speed is `Max_Speed` capped by the team minimum and passed through the `0x376990` chain (via `0x372fe0`), i.e.
+  the override scaled by the same modifier ratio as the **normal** speed. When that is ≤ 0 the result is `0x370f00`
+  = the normal effective max speed. Deceleration is the same with +0x3c4. The alternate speed is **never** used
+  for either, airborne or not. The planner request reads them in `0x59d4a0` (request +0x1ec := vf91,
+  +0x1f0 := vf92; defaults: the max speed +0xf0); with `Walk_Transition` (type +0x35) the animation-based branch
+  applies instead. Vanilla jetpack users all set an override (0.1 / 0.05), so the ≤ 0 fallback is mod-only.
+
+**Take-off turn: pack +0xe8** [H] (2026-11-02). Pack +0xe8 is the locomotor data pack's float "turn rate of the
+current turn-animation band". Readers: `0x640af0` (current turn rate: +0xe8 when > 0, else `0x372560`(type) =
+`Max_Rate_Of_Turn` × mode multiplier × global factor = R), the JetPack turn `0x642740` and Walk. Writers: Walk
+`0x6204f0`, JetPack `0x642740`; zeroed together with +0xec by the pack ctor `0x553f00` and LandTeamInfantry vf6
+`0x62ca10`; and **JetPack state 0xF sets it to 0 right before entering 0x10** (vf6 `0x641910` case 0xF). So the first
+take-off turn frame always turns at R, the normal rate (never the alternate one). `0x642740`, per service:
+1. r = +0xe8 when > 0, else R.
+2. e = the wrapped yaw error toward the path aim (`0x640cc0`); turn by min(|e|, r) toward it; r_left = r − |e| when
+   |e| ≤ r, else 0. Set the orientation (roll 0, pitch 0) and commit (vf95).
+3. path = the current path (`0x5569b0`); c = the animation is in its last 2 frames (`0x39a180`); anim = the current
+   animation (`0x3956a0`).
+4. If not (r_left ≤ 0 or c or path) → state 0x11 (End Turn).
+5. Else if anim ∈ {3, 4, 0x15, 0x16, 0x17, 0x18} and not c → return (keep turning, the band rate stays).
+6. Else if (no path or path +0x6d) and r_left ≤ 0, pick a turn animation, then return:
+   - with `Has_Pre_Turn_Anim` (type +0x36): play idle, re-measure e after this frame's turn and band on |e| (the sign
+     of e picks left / right):
+     - |e| ≥ 45 → anim 3 / 4, +0xe8 := R;
+     - 22.5 ≤ |e| < 45 → anim 0x15 / 0x17, +0xe8 := R × 0.5;
+     - R ≤ |e| < 22.5 → anim 0x16 / 0x18, +0xe8 := R × 0.25 × |e| / 11.25;
+     - |e| < R → no animation, +0xe8 := R, End Turn.
+
+     The animation plays at the runtime constant speed `DAT_140b39958` with the blend time `0x3736a0`(type);
+   - without +0x36: only when anim 3 exists (`0x38f9e0(obj, 3)`) and no turn animation is playing (`0x61df80`):
+     anim 3 / 4 by the sign of the frame-start error at speed min(|e0| / current rate × 0.03333, GC `0x140b16d28`).
+     +0xe8 is not written (stays 0, so R).
+7. Else → End Turn.
+
+So the band value is the **yaw rate of the following frames**, not an animation rate, and the state stays in 0x10
+until the turn animation reaches its last 2 frames even once the unit is aligned. The vanilla jetpack users
+(Boba_Fett, Dark_Trooper_PhaseII / III) do not set `Has_Pre_Turn_Anim`, so they turn at R throughout (vanilla
+`Max_Rate_Of_Turn` 20; Boba's `Alternate_Max_Rate_Of_Turn` 6 is not used here). The "last 2 frames" test reads the
+animation clock; a port uses the n × rate × speed rule of ABILITIES_HARDPOINTS §4.13 instead.
 - Defaults (type ctor `0x367250`): `Alternate_Max_Speed` **1.0**, `Alternate_Max_Rate_Of_Turn` **2.0**. FoC data:
   Boba_Fett 2.5 / 6.0; Dark_Trooper_PhaseII 2.5 / unset (2.0); Dark_Trooper_PhaseIII 1.8 / unset (2.0). Bossk, IG-88,
   Silri, Tyber_Zann and Urai_Fen also set them (2.5–2.7 / 6.0) but never fly; Dark_Trooper_PhaseI sets only the turn.
@@ -754,7 +829,8 @@ Silri_No_Abilities, Tyber_Zann, Tyber_Zann_Prisoner, Urai_Fen (no `Secondary_Loc
 WALK primary). No FoC type lists JETPACK_LOCOMOTOR in a behaviour list.
 
 **Open** [M]: whether a one-unit `Move_To` in step 4 draws synced RNG; whether the JET_PACK move's path exists at the
-jetpack's first service; the meaning of signal 0x29.
+jetpack's first service; the meanings of signals 0xb / 0x10 that also release an `Activate_Ability` block.
+(Answered 2026-11-02: signal 0x29, the WEAPON Disable side effects, pack +0xe8, the acceleration, the engine loops.)
 
 ### 3.2 Locomotor state (`LocomotorStateType`, enum `0x5e2e30`, data pack +0x48) [H]
 
