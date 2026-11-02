@@ -482,7 +482,7 @@ straight down" in RENDER.md §1.3 item 8 is this debug view. Not used by decorat
 5. Removal of dead decals and any cap on decal count. [L]
 6. Dynamic-track terrain subdivision rule (quad count per point, 0x15a8f0). [L]
 
-Capture additions (DXVK/RenderDoc): on Naboo 02, find the bucket-0 draws after the terrain: lit-vertex
+Capture additions (DXVK/apitrace; RenderDoc is out of scope): on Naboo 02, find the bucket-0 draws after the terrain: lit-vertex
 ribbons with `w_waves00` and a translating texture matrix (type 3), then the FOW pass (DESTCOLOR/ZERO,
 one draw per visible patch, a ~375×260-class texture); in bucket 7 after the water, the water-plane
 tracks. On UM11, one `D_master_decal.tga` draw with ZERO/SRCCOLOR (MODULATE).
