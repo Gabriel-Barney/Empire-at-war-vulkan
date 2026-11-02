@@ -38,6 +38,8 @@ void SpaceOccupancy::add_static(ObjectId id, V2 center, float radius, uint32_t b
     put(statics_, id, Static{center, radius, bits});
 }
 bool SpaceOccupancy::remove_static(ObjectId id) { return erase(statics_, id); }
+bool SpaceOccupancy::has_static(ObjectId id) const { return find(statics_, id) != statics_.end(); }
+bool SpaceOccupancy::has_track(ObjectId id) const { return find(tracks_, id) != tracks_.end(); }
 
 bool SpaceOccupancy::rekey_static(ObjectId from, ObjectId to) {
     if (from == to || find(statics_, to) != statics_.end()) return false;

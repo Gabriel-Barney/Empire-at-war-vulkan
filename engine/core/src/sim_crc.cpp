@@ -15,7 +15,7 @@ namespace {
 
 constexpr uint64_t kP5 = 0x27D4EB2F165667C5ull;
 
-inline uint64_t round_word(uint64_t h, uint64_t w) { return detail::hash_round(h, w); }
+inline uint64_t round_word(uint64_t h, uint64_t w) { return StateHasher::round(h, w); }
 inline uint64_t load_le(const unsigned char* p) {  // little-endian host (static_assert in StateHasher::span)
     uint64_t w;
     std::memcpy(&w, p, 8);

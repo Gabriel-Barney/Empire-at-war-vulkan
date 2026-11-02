@@ -46,14 +46,13 @@
 
 namespace alamo {
 
-namespace detail {
-inline constexpr uint64_t kHashP1 = 0x9E3779B185EBCA87ull;
-inline constexpr uint64_t kHashP2 = 0xC2B2AE3D27D4EB4Full;
-inline uint64_t hash_round(uint64_t h, uint64_t w) noexcept { return std::rotl(h + w * kHashP2, 31) * kHashP1; }
-}  // namespace detail
-
 class StateHasher {
 public:
+    // One round of the algorithm above (P1 / P2 are the xxHash64 primes).
+    static uint64_t round(uint64_t h, uint64_t w) noexcept {
+        return std::rotl(h + w * 0xC2B2AE3D27D4EB4Full, 31) * 0x9E3779B185EBCA87ull;
+    }
+
     explicit StateHasher(uint64_t seed = 0) noexcept;
 
     // Raw canonical bytes (caller guarantees: no padding, no pointers, defined content).
@@ -122,7 +121,7 @@ private:
             tail_len_ = t;
             return;
         }
-        h_ = detail::hash_round(h_, acc_);
+        h_ = round(h_, acc_);
         tail_len_ = t - 8;
         acc_ = tail_len_ != 0 ? x >> (8u * (n - tail_len_)) : 0;
     }

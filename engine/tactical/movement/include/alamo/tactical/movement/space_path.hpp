@@ -113,7 +113,7 @@ public:
 
     void add_static(ObjectId id, V2 center, float radius, uint32_t bits = kSpaceStatic);
     bool remove_static(ObjectId id);
-    bool has_static(ObjectId id) const { return find(statics_, id) != statics_.end(); }
+    bool has_static(ObjectId id) const;
     // S7 t13: moves static entry `from` to id `to` unchanged (a map placement's entry, ted_grid.hpp map_stamp_id, handed to
     // the object spawned for it; space_obstacles_sync removes it when that object is a battle unit that left). False (nothing changes) when `from` has no entry, `to`
     // already has one, or from == to.
@@ -123,7 +123,7 @@ public:
     // Replaces the track of `id`. `start_frame` = absolute frame of waypoint time 0.
     void set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps);
     void clear_track(ObjectId id);
-    bool has_track(ObjectId id) const { return find(tracks_, id) != tracks_.end(); }
+    bool has_track(ObjectId id) const;
 
     // OR of the bits of every entry the circle (radius) swept a -> b over absolute frames [t0, t1]
     // touches. `layer`: tracks of that layer are tested; statics are tested when `with_static`.
