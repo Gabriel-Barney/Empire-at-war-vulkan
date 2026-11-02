@@ -5059,8 +5059,10 @@ void test_fighter_auto_push() {
 // carrier. The launched squadron's formation record is {flags 0x02, goal object = the carrier} with a host follow, so its
 // chase range is Guard_Chase_Range around the carrier; when the carrier moves away, the squadron re-paths to it (at most
 // once per 30 frames, when the carrier is more than half the leader's attack range from the recorded goal) and keeps the
-// guard record (flags, goal object). S7 t28: while the carrier moves the squadron flies a copy of its path at most twice
-// its speed. A new order of the squadron ends the follow (a plain move record).
+// guard record (flags, goal object). S7 t28 / t35 (A1_READINGS §33.4.1): while the carrier moves the squadron, within
+// R = min(range / 2, Space_Guard_Range 750) of it, flies a copy of its path at most twice its speed; once the carrier has
+// stopped, the squadron re-paths to it (the recorded goal ends next to the carrier's destination). A new order of the
+// squadron ends the follow (a plain move record).
 void test_hangar_escort_guard() {
     namespace mv = tactical::movement;
     using R = commands::RejectReason;
