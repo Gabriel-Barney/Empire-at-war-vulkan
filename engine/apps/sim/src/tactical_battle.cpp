@@ -1780,12 +1780,33 @@ void TacticalBattle::fighter_sync() {
     }
 }
 
-// FIGHTER_FLYING §4.3 step 2: the formation attack target (0x41a2e0) from the combat target (ordered, else auto). A
-// squadron's target comes from its leader; a target that is a member of a registered squadron is that squadron (a
-// team: dogfight §4.5); otherwise the object with its combat radius (0x397780) and, for an ordered hard point, the
-// hard point's position (0x396ce0: the combat attachment point, unit-local x forward / z up). hidden = FOW_Object_Hidden
-// for the attacker's owner with force 1 (0x35f470). No combat target clears it (the locomotor then retargets from its
-// dogfight cell and reports Retarget).
+// FIGHTER_FLYING §2 step 6 / §4.3 step 2: the formation attack target Formation_Attack_Target(F, &hp, 0) (0x41a2e0,
+// TACTICAL_COMBAT §2.8: the formation's current block object, when it is hostile and the block is not a guard). A
+// squadron's target comes from its leader. fighter_formation_target (tactical_battle.hpp) picks it:
+//   1. the ordered combat target (Attack / Attack_Target, the set path of a task-force Attack_Move, path B's lock, the
+//      locomotor's own Provoke / Retarget orders) [port: the ordered slot stands for the order's object block];
+//   2. else the attack goal (the current move block's object: Attack_Move(object)) when hostile to the leader's owner;
+//   3. else, while the leader has a move order (a formation whose block is a position: Move_To, Attack_Move(position),
+//      Prepare_Ambush), none: 0x41a2e0 finds no object and the squadron keeps Moving (§4.1); its weapons still fire at
+//      targets of opportunity (combat). S7 t12: the combat AUTO target was fed here too, so a squadron flying a move past
+//      an enemy ship began an attack run, §4.3 step 4 reset its path, and when that target was lost (fogged) §4.3 NoTarget
+//      parked the squadron on the spot with the move order gone (skirmish foc seed 5: TIE squadron 86 stopped ~1900 short
+//      of its Prepare_Ambush destination and idled ~750 frames);
+//   4. else (idle: no formation; §4.3 "no formation on F -> NoTarget") [port]: the combat auto target unless it is hidden
+//      for the leader's player (the retail engagement path of idle squadrons is untraced; a hidden pick would only toggle
+//      Idle <-> Directed_Combat every frame).
+// A target that is a member of a registered squadron is that squadron (a team: dogfight §4.5); otherwise the object with
+// its combat radius (0x397780) and, for an ordered hard point, the hard point's position (0x396ce0: the combat attachment
+// point, unit-local x forward / z up). hidden = FOW_Object_Hidden for the attacker's owner with force 1 (0x35f470). No
+// target clears it (the locomotor then retargets from its dogfight cell and reports Retarget).
+objects::ObjectId fighter_formation_target(const FighterTargetInputs& in) {
+    if (in.ordered != objects::kNoObjectId) return in.ordered;
+    if (in.goal != objects::kNoObjectId && in.goal_hostile) return in.goal;
+    if (in.moving) return objects::kNoObjectId;
+    if (in.auto_target != objects::kNoObjectId && !in.auto_hidden) return in.auto_target;
+    return objects::kNoObjectId;
+}
+
 void TacticalBattle::feed_fighter_target(const Unit& u, const objects::ObjectStore& store) {
     mv::ObjectId addr = u.id;
     if (u.container < containers_.size()) {
@@ -1795,9 +1816,26 @@ void TacticalBattle::feed_fighter_target(const Unit& u, const objects::ObjectSto
             addr = cid;
         }
     }
+    const auto live = [&](objects::ObjectId id) -> const Unit* {
+        const Unit* x = id != objects::kNoObjectId ? unit_by_id(id) : nullptr;
+        return x && x->alive && !x->retreated && store.alive(x->h) && combat_->has_unit(x->id) ? x : nullptr;
+    };
+    const int32_t me = store.owner(u.h);
+    FighterTargetInputs in;
+    if (live(combat_->ordered_target(u.id))) in.ordered = combat_->ordered_target(u.id);
+    if (const Unit* g = live(combat_->attack_goal(u.id))) {
+        in.goal = g->id;
+        in.goal_hostile = combat_->is_enemy(me, store.owner(g->h));
+    }
+    in.moving = movement_->view(u.id).has_goal;
+    if (in.ordered == objects::kNoObjectId)
+        if (const Unit* a = live(combat_->current_target(u.id))) {
+            in.auto_target = a->id;
+            in.auto_hidden = fog_object_hidden(me, a->id, true);
+        }
     mv::FighterTarget ft;
-    const Unit* t = unit_by_id(combat_->current_target(u.id));
-    if (t && t->alive && !t->retreated && store.alive(t->h) && combat_->has_unit(t->id)) {
+    const Unit* t = live(fighter_formation_target(in));
+    if (t) {
         const mv::FighterSquad* ts = t->container < containers_.size() ? movement_->fighter_squad(containers_[t->container].id) : nullptr;
         if (ts) {
             ft.id = ts->id;
