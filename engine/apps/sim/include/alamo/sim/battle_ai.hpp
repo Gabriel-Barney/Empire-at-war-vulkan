@@ -147,6 +147,11 @@ public:
     // transports block).
     bool land_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p) override { return land_drop_valid(player, key, p, false); }
     bool land_drop_valid(int32_t player, int32_t key, const ai::tactical::Vec3f& p, bool human);
+    // a1j t01 - land TF.Reinforce with BattleConfig::landing_unload_timed (A1_READINGS §36): reinforce_in_flight = the
+    // player's timed landing object of pool entry `key` (participant galactic id) has not finished its unload;
+    // reinforcements_unloaded = TacticalBattle::landings_unloaded() of the tick just run (owner, galactic id, units).
+    bool reinforce_in_flight(int32_t player, int32_t key) override;
+    std::vector<ai::tactical::ReinforcementsUnloaded> reinforcements_unloaded() override;
     // --- end battle host ---
 
 private:

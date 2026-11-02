@@ -734,9 +734,11 @@ No sim effect. Data: FoC 1 planet with starbase stealth and 7 with ground-base s
   only while the local player is in a queued conflict (table: A1_READINGS §31.7, a1i t03).
 - **Port:** `linked_battle_pending`, set by LINK_TACTICAL and the corruption mission, cleared when that battle starts.
   `GalacticSim::story_block()` = the flag and `in_queued_conflict(local player)`; `paused()` = pause counter or
-  `story_block()`, used by every command gate (a1i t03, 2026-11-02; it replaces "[port: for every player]"). Still
-  [port]: the mode-frame freeze in `GalacticSim::update` ignores the story block; 0x2be640's block is not wired
-  (`CampaignBattles::story_sequence_active`).
+  `story_block()`, used by every command gate (a1i t03, 2026-11-02; it replaces "[port: for every player]"). a1j t05
+  (2026-11-02): `GalacticSim::update` freezes the mode frame on `paused()` (hero spawn lists still run under the block,
+  as 0x2be640), and `CampaignBattles`' conflict gate skips the state machines while the block holds; a waiting
+  LINK_TACTICAL record takes over the frozen active conflict (A1_READINGS §31.7). [port] corruption-mission conflicts
+  neither feed nor obey the block.
 
 ### 6.5 Build pads (extends L1_S4_REMAINING §3.6) [H unless tagged]
 - **UC attachment bone** (0x42e280):

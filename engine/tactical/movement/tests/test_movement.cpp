@@ -1175,6 +1175,26 @@ static void test_land_group() {
     bool g4ok = true;
     run_land(s4, 0, 2000, rng, serial_for, g4ok);
     CHECK(s4.view(1).arrived && distance(s4.view(1).pos, cell_center(30, 30)) < 36.0f + 60.0f + 1.0f && s4.stats().early_arrivals == 1);
+
+    // a1j t02 (A1_READINGS §36.4): a Giant Vehicle pushes a stopped unit it does not crush aside (0x684f90 -> 0x6859a0)
+    // and keeps its path: no path-around, it arrives at its destination, the parked infantry stands off the line.
+    MovementSystem s5{MovementConfig{}};
+    PassabilityGrid g5;
+    g5.init(60, 40);
+    s5.set_grid(std::move(g5));
+    s5.add_unit(land_unit(1, cell_center(5, 20), 11, 1.0f, 30.0f, kUccGiantVehicle));
+    s5.add_unit(land_unit(2, cell_center(30, 20), 0, 1.5f, 5.0f, kUccInfantry));  // parked on the line
+    MoveOrder e;
+    e.units = {1};
+    e.destination = cell_center(55, 20);
+    s5.move(e, rng, 0);
+    bool g5ok = true;
+    run_land(s5, 0, 3000, rng, serial_for, g5ok);
+    const V2 pushed = s5.view(2).pos;
+    std::printf("giant push: arrived %d, dynamic re-paths %u, infantry moved to (%.1f, %.1f)\n", s5.view(1).arrived ? 1 : 0,
+                s5.stats().dynamic_repaths, static_cast<double>(pushed.x), static_cast<double>(pushed.y));
+    CHECK(g5ok && s5.view(1).arrived && distance(s5.view(1).pos, cell_center(55, 20)) < 1.0f && s5.stats().dynamic_repaths == 0);
+    CHECK(std::fabs(pushed.y - cell_center(30, 20).y) > 5.0f);
 }
 
 // ---------------------------------------------------------------- space
@@ -1451,11 +1471,15 @@ static void test_oi_land() {
         }
         CHECK(all.size() == 1 && all[0].crusher == 1 && all[0].victim == 10);
         CHECK(sys.has_unit(11) && sys.has_unit(12) && sys.has_unit(13));
+        // a1j t02 (A1_READINGS §36.4): the friendly trooper on the line was pushed aside, not crushed.
+        const V2 p11 = sys.view(11).pos;
+        CHECK(std::fabs(p11.y - cell_center(30, 20).y) > 5.0f);
         // Hostility comes from the host (combat relations).
         sys.set_hostility([](int32_t, int32_t) { return true; });
         sys.set_owner(1, 5);
         MoveOrder back = o;
-        back.destination = cell_center(5, 20);
+        const V2 from = sys.view(1).pos;
+        back.destination = from + (p11 - from) * 1.5f;  // straight back over the pushed trooper
         sys.move(back, rng, 3000);
         all.clear();
         for (uint32_t f = 3000; f < 6000 && sys.view(1).has_goal; ++f) {
