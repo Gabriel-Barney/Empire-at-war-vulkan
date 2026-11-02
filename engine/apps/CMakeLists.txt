@@ -165,7 +165,10 @@ if(_alamo_sim)
     # drops there pass the fog test) seeds 5, 7 and 11 end (all destroyed); the others still reach the cap with fog-hidden
     # Rebel infantry or an undeployed Rebel reserve that counts as alive [port, BT §3.1a]. S8 t10-t12 (2026-11-02, own-weapon state-4 gate, first-service delay): seeds 3 and 4 of 1-8 end, the test runs seed 3 (ends at
     # frame 10131) with --expect-battle-end again. After the S7/S8 wave-5 merge (dd752f0) seed 3 reaches the cap and seeds 1, 2, 6, 7
-    # of 1-8 end (all destroyed); the test runs seed 6 (ends at frame 10032). One ctest entry per worker count so they run
+    # of 1-8 end (all destroyed); the test runs seed 6 (ends at frame 10032). S7 t36 (2026-11-02): land now also loads
+    # SpaceMode\RetreatPlan.lua (category "Space_Retreat | Land_Retreat", one plan manager in retail), so the outnumbered Rebel
+    # invaders retreat (campaign battle: Allowed_To_Retreat_From_Land) and seeds 1-8 all end, "all-retreated", at 2241-2802
+    # battle frames; the test stays on seed 6 (2641 ticks). One ctest entry per worker count so they run
     # side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against it (the --check-workers
     # counts: jobs::determinism_worker_counts, N = hardware threads - 1).
     set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
@@ -213,8 +216,9 @@ if(_alamo_sim)
     # refixf t06 (task-force Attack_Move on an object, damage to hardpointed targets). One entry per seed so they run side by side
     # under ctest -j (each ~10 s: "slow" through the regex below); skipped (exit 0) without ALAMO_FOC_DATA. S7 t23
     # (2026-11-02): seeds 9-16 end as well (5000-8300 frames) except 13, left out: its end hangs on the Empire's BurnUnits
-    # Attack_Move loop on the neutral / own Skirmish_Merchant_Dock (14400-frame cap before S7 t24, ends after it).
-    foreach(_seed 1 2 3 4 5 6 7 8 9 10 11 12 14 15 16)
+    # Attack_Move loop on the neutral / own Skirmish_Merchant_Dock (14400-frame cap before S7 t24, ends after it). S7 t30/t36
+    # (2026-11-02, relation table with neutral = 2, merged S8 t17): seeds 1-16 all end (5355-9915 ticks), so 13 is back.
+    foreach(_seed 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
       add_test(NAME alamo_headless_skirmish_ai_foc_outcome_s${_seed}
                COMMAND alamo_headless --skirmish-ai foc --seed ${_seed} --ticks 16000 --workers 0 --quiet --expect-battle-end)
       set_tests_properties(alamo_headless_skirmish_ai_foc_outcome_s${_seed} PROPERTIES TIMEOUT 1200)

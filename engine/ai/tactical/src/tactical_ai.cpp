@@ -4135,13 +4135,19 @@ std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvid
 }
 
 std::vector<std::string> tactical_plan_files(TacticalMode mode, const std::function<std::vector<std::string>(std::string_view)>& list) {
-    const std::string folder = ai_upper_copy(mode == TacticalMode::Land ? kPlanFolders[2] : kPlanFolders[1]);
+    // S7 t36: retail loads every plan folder into one manager (AI_GALACTIC §1.9.1, 0x4e7e30) and a goal takes any plan whose
+    // Category names it, so land also sees SpaceMode\RetreatPlan.lua ("Space_Retreat | Land_Retreat", AI_TACTICAL §7 RetreatPlan
+    // "both modes"). Before, land had only LandMode\ and every Land_Retreat proposal ended "no plan". [port] land = SpaceMode\
+    // then LandMode\ (retail folder order); space keeps SpaceMode\ alone: no shipped LandMode plan names a space goal.
+    std::vector<std::string> folders{ai_upper_copy(kPlanFolders[1])};
+    if (mode == TacticalMode::Land) folders.push_back(ai_upper_copy(kPlanFolders[2]));
     std::vector<std::string> out;
-    for (const std::string& f : list_plan_files(list)) {
-        const std::string u = ai_upper_copy(f);
-        if (u.size() > folder.size() && u.compare(0, folder.size(), folder) == 0 && u.find('\\', folder.size()) == std::string::npos)
-            out.push_back(f);
-    }
+    for (const std::string& folder : folders)
+        for (const std::string& f : list_plan_files(list)) {
+            const std::string u = ai_upper_copy(f);
+            if (u.size() > folder.size() && u.compare(0, folder.size(), folder) == 0 && u.find('\\', folder.size()) == std::string::npos)
+                out.push_back(f);
+        }
     return out;
 }
 

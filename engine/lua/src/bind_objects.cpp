@@ -1104,7 +1104,17 @@ int m_contains_object_type(Call& c) {
     return push_bool(c, false);
 }
 
-int m_has_active_orders(Call& c) { return push_bool(c, state_of(c, c.self->id).has_orders); }
+// Has_Active_Orders (0x579f10, AI_TACTICAL §5.6): true while the unit has a current target (0x397a40), whatever its
+// orders; S7 t36 adds that term (before, a fighting unit whose Lua order had finished counted as idle and the free store
+// re-ordered it). [port] Otherwise the issued-order flag, cleared by the host when the unit neither moves nor targets; the
+// retail formation rules (arrived block flag 0x10, locomotor idle states, "never had a formation = busy") are not modelled.
+int m_has_active_orders(Call& c) {
+    const ScriptObjectState& s = state_of(c, c.self->id);
+    if (s.has_orders) return push_bool(c, true);
+    const objects::ObjectStore* st = store(c);
+    const ObjectHandle t = st->find(s.attack_target);
+    return push_bool(c, t && st->alive(t));
+}
 
 int m_get_attack_target(Call& c) {
     const objects::ObjectStore* st = store(c);

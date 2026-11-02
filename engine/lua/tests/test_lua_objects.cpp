@@ -660,6 +660,9 @@ static void test_orders(const Db& db) {
     CHECK(rec.cmds.back().payload.type() == EventType::Attack && rec.cmds.back().payload.u("target") == 3 &&
           rec.cmds.back().payload.ids("attackers") == std::vector<uint32_t>{1});
     CHECK(gnum(vm, "hat") == 1.0 && gnum(vm, "gat") == 3.0);
+    // S7 t36 (AI_TACTICAL §5.6): a current target keeps Has_Active_Orders true after the order flag has been cleared.
+    s.bridge.state(1).has_orders = false;
+    CHECK(run(vm, "ao3 = t1.Has_Active_Orders() and 1 or 0") == "" && gnum(vm, "ao3") == 1.0);
     CHECK(run(vm, "t1.Attack_Move(t2) t1.Guard_Target(Create_Position(1, 1, 0)) t1.Hyperspace_Away(true)") == "");
     CHECK(rec.cmds.size() == 6);
     CHECK(rec.cmds[3].payload.u("subtype") == kLuaOrderSubtype + static_cast<uint32_t>(LuaOrder::AttackMove) &&
