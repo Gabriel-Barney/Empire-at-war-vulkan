@@ -1206,6 +1206,65 @@ bool BattleAi::space_drop_ok(int32_t player, int32_t key, const at::Vec3f& p, fl
     return b_->movement_->space().query_segment(from, to, now, now + 115.0f, ud.radius, layer | 8u, tc::kNoObject, true, b_->frame_) == 0;
 }
 
+// ---- a1g t04 follow-up: land TF.Reinforce drop validity (header) ----
+bool BattleAi::land_drop_ok(int32_t player, int32_t key, const at::Vec3f& p) {
+    if (b_->space_ || !b_->movement_) return true;  // land only
+    if (!std::isfinite(p.x) || !std::isfinite(p.y)) return false;
+    const TacticalBattle::Participant* part = nullptr;
+    for (const TacticalBattle::Participant& q : b_->parts_)
+        if (q.galactic_id == static_cast<objects::ObjectId>(key) && q.owner == player && q.reserve && !q.deployed) {
+            part = &q;
+            break;
+        }
+    if (!part) return false;
+    const objects::GameObjectTypes& types = mode_->types();
+    const objects::ObjectStore& st = mode_->primary();
+    const mv::PassabilityGrid& grid = b_->movement_->grid();
+    // Footprints of the live battle units (2-D circles of their movement radius) [port: stands in for the TreeCull AABB].
+    struct Taken {
+        float x, y, r;
+    };
+    std::vector<Taken> taken;
+    for (const TacticalBattle::Unit& u : b_->units_) {
+        if (!u.alive || u.retreated || !st.active(u.h)) continue;
+        const Vec3 q = st.position(u.h);
+        taken.push_back({q.x, q.y, u.type < types.size() ? mv::unit_desc_from_type(types, u.type).radius : 0.0f});
+    }
+    // The slots TacticalBattle::order_reinforce / deploy lay out for this entry: rows of 6 at land_spacing around the
+    // requested point (clamped to the mode bounds), facing the side's deploy facing, each clamped to the playable box
+    // (slot_position before its passability snap).
+    const tactical::Aabb& bb = mode_->bounds();
+    const float ax = std::clamp(p.x, bb.min.x, bb.max.x), ay = std::clamp(p.y, bb.min.y, bb.max.y);
+    const Vec3 f = b_->facing_[part->side];
+    const Vec3 right{-f.y, f.x, 0.0f};
+    const float spacing = b_->cfg_.land_spacing;
+    float mn[2], mx[2];
+    const bool box = b_->map_.playable_box(mn, mx);
+    const std::vector<uint32_t> members = b_->spawn_types(*part);
+    for (uint32_t k = 0; k < members.size(); ++k) {
+        const uint32_t t = members[k];
+        if (t >= types.size()) continue;
+        const float row = static_cast<float>(k / 6u), col = static_cast<float>(k % 6u) - 2.5f;
+        float x = ax - f.x * row * spacing + right.x * col * spacing;
+        float y = ay - f.y * row * spacing + right.y * col * spacing;
+        if (box) {
+            x = std::clamp(x, mn[0], mx[0]);
+            y = std::clamp(y, mn[1], mx[1]);
+        }
+        const mv::UnitDesc md = mv::unit_desc_from_type(types, t);
+        if (!grid.passable_world({x, y}, b_->movement_->classes().mask(md.movement_class))) return false;  // impassable
+#ifdef ALAMO_SIM_HAVE_FOG
+        if (b_->fog_point_fogged(player, x, y, true)) return false;  // fogged for the player (force 1)
+#endif
+        if (space_prevention_hit(player, {x, y, 0.0f})) return false;  // non-allied Reinforcement_Prevention_Radius
+        for (const Taken& o : taken) {
+            const float dx = x - o.x, dy = y - o.y, rr = md.radius + o.r;
+            if (dx * dx + dy * dy < rr * rr) return false;  // footprint taken
+        }
+    }
+    return true;
+}
+
 std::vector<objects::ObjectId> BattleAi::team_units(uint8_t player, uint32_t wire) const {
     std::vector<objects::ObjectId> out;
     if (wire == cmd::kNoObject || wire > 0x7FFFFFFFu) return out;

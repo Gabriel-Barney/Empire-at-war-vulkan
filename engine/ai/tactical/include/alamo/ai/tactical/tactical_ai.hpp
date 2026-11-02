@@ -228,6 +228,12 @@ public:
     virtual bool space_drop_ok(int32_t /*player*/, int32_t /*key*/, const Vec3f& /*p*/, float /*facing_deg*/, float /*sweep*/) {
         return true;
     }
+    // a1g t04 follow-up - land TF.Reinforce drop validity (LandMode vf80 0x3b5f60 -> 0x3b6170, TACTICAL_GAPS §4.2,
+    // A1_READINGS §30.7): can pool entry `key` of `player` land at spot `p`? The host refuses when a formation slot of the
+    // entry's units is impassable for its movement class, fogged for `player` (force 1), has its footprint taken, or lies
+    // inside a non-allied Reinforcement_Prevention_Radius. A refused spot sends the unit to the next ring spot. Default:
+    // every spot valid (hosts without the hook).
+    virtual bool land_drop_ok(int32_t /*player*/, int32_t /*key*/, const Vec3f& /*p*/) { return true; }
 };
 
 struct TacticalAiPlayerConfig {

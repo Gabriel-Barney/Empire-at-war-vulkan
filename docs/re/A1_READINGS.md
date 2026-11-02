@@ -993,10 +993,15 @@ the verdict is **change**.
   spots, the ninth at θ ≈ 2π (≈ the first spot); the port follows the loop. [port] choices: a null pending entry (no
   type, or gone from the host's pool) is dropped from the TF, a non-fitting one stays pending for a later Reinforce;
   the trailing pop also runs once before the first spot; without Use_Reinforcement_Points every spot is the target.
-  Open: the land host accepts any spot (it snaps each formation slot to the nearest passable cell), so the drop
-  validity of TACTICAL_GAPS §4.2 (passability, fog, footprint free) never refuses a spot and every Reinforce lands on
-  the first spot of the best point. The Utapau land skirmish (foc-land) then runs to the 14400-frame battle cap on
-  seeds 1, 2, 4, 6 (ends on 3, 5); before the change only seed 3 reached the cap.
+- **Drop validity (a1g t04 follow-up, 2026-11-01):** `TacticalAiHost::land_drop_ok(player, key, p)`, asked before each
+  spot's Reinforce order; the battle host (`BattleAi::land_drop_ok`) lays out the slots its deploy would use (rows of 6 at
+  `land_spacing` around p) and refuses the spot when a member's slot is impassable for its MovementClass (effective
+  grid, static stamps included), fogged for the player (force 1), inside a non-allied Reinforcement_Prevention_Radius
+  (2-D strict), or its footprint is taken (a live battle unit within the sum of the movement radii, 2-D strict).
+  [port]: movement radii stand in for the TreeCull AABBs; the POWERED exemption of the prevention test is not modelled;
+  the slot layout is the port's rows of 6 (the original company formation 0x5abc00 is [M]). Open: with that layout a
+  large company (Rebel_Infantry_Squad, 3 rows) finds no valid spot around the Utapau Rebel point on seeds 1-6, while
+  the tank brigades land.
 
 ### 30.8 TF link mask −1 → **keep** (equal to shipped data); parsing optional (small)
 

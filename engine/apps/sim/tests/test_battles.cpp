@@ -3474,6 +3474,120 @@ void test_battle_ai_find_team() {
     }
     CHECK(checked);
 }
+
+// a1g t04 follow-up: BattleAi::land_drop_ok (TACTICAL_GAPS §4.2): the land Reinforce drop validity of a reserve entry. A spot
+// is refused when a slot is impassable (an Obstacle strip on the map), fogged for the player (force 1), or its footprint is
+// taken (a live unit stands there); an unknown entry is refused; otherwise accepted.
+void test_battle_ai_land_drop(const Data& d) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    constexpr int32_t kStrip = 5;  // cells x < 5: Obstacle
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                m.legacy_passability.assign(63u * 63u, 0);
+                                for (uint32_t x = 0; x < 5u; ++x)  // kStrip
+                                    for (uint32_t y = 0; y < 63u; ++y) m.legacy_passability[x * 63u + y] = 2;
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d.files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    namespace mv = alamo::tactical::movement;
+    bool invaded = false, checked = false;
+    for (uint64_t t = 0; t < 1500 && !checked; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() != 1) continue;
+        checked = true;
+        const auto reserves = b->reserves(1);
+        CHECK(reserves.size() == 1);
+        if (reserves.empty()) break;
+        const auto key = static_cast<int32_t>(reserves[0].galactic_id);
+        BattleAi ai(*b, *tm, host, ts);
+        // A live unit of the player: a drop whose slot 0 is on it has its footprint taken.
+        ai::tactical::Vec3f own{};
+        bool have_own = false;
+        for (const objects::ObjectHandle h : tm->primary().owned_by(1))
+            if (tm->primary().active(h) && tm->movable(h)) {
+                // Slot 0 of a drop lies 2.5 x land_spacing (40) to the left of the spot along the side's deploy facing (the
+                // unit's spawn facing): drop at q + 100 * right puts slot 0 on the unit.
+                const Vec3 q = tm->primary().position(h);
+                const Vec3 f = tm->primary().facing(h);
+                own = {q.x - f.y * 100.0f, q.y + f.x * 100.0f, 0.0f};
+                have_own = true;
+                break;
+            }
+        CHECK(have_own);
+        // Candidate spots over the map (every 4th cell centre right of the strip).
+        auto scan = [&](std::vector<ai::tactical::Vec3f>& ok) {
+            ok.clear();
+            for (int32_t cy = 4; cy < 60; cy += 4)
+                for (int32_t cx = kStrip + 6; cx < 58; cx += 4) {
+                    const mv::V2 c = mv::cell_center(cx, cy);
+                    if (ai.land_drop_ok(1, key, {c.x, c.y, 0.0f})) ok.push_back({c.x, c.y, 0.0f});
+                }
+        };
+        std::vector<ai::tactical::Vec3f> fog_ok, clear_ok;
+        scan(fog_ok);
+        size_t newly = 0;
+#ifdef ALAMO_SIM_HAVE_FOG
+        const bool fog = b->fog() != nullptr;
+        if (fog) {
+            b->fog()->reveal_all(1);  // nothing fogged for player 1 any more
+            scan(clear_ok);
+            for (const auto& q : clear_ok)
+                newly += std::none_of(fog_ok.begin(), fog_ok.end(), [&q](const ai::tactical::Vec3f& e) { return e.x == q.x && e.y == q.y; });
+            CHECK(newly > 0);           // spots refused only because they were fogged
+            CHECK(clear_ok.size() > fog_ok.size());
+        } else {
+            clear_ok = fog_ok;
+        }
+#else
+        const bool fog = false;
+        clear_ok = fog_ok;
+#endif
+        CHECK(!clear_ok.empty());
+        for (const auto& q : fog_ok) CHECK(ai.land_drop_ok(1, key, q));  // fog cleared: still valid (and same answer twice)
+        const mv::V2 strip = mv::cell_center(2, 31);
+        CHECK(!ai.land_drop_ok(1, key, {strip.x, strip.y, 0.0f}));  // impassable slots
+        if (have_own) CHECK(!ai.land_drop_ok(1, key, own));          // footprint taken
+        if (!clear_ok.empty()) {
+            CHECK(!ai.land_drop_ok(1, key + 1000, clear_ok[0]));  // unknown entry
+            CHECK(!ai.land_drop_ok(0, key, clear_ok[0]));         // another player's entry
+        }
+        std::printf("  land drop: %zu / %zu spots fogged-valid / valid, %zu refused only by fog (fog %s)\n", fog_ok.size(), clear_ok.size(),
+                    newly, fog ? "on" : "off");
+    }
+    CHECK(checked);
+}
 #endif
 // --- end OI host ---
 
@@ -3656,6 +3770,8 @@ int main(int argc, char** argv) {
     test_battle_ai_land_mode(true);
     std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
     test_battle_ai_find_team();
+    std::printf("a1g t04 follow-up: BattleAi::land_drop_ok (impassable / fogged / footprint taken)\n");
+    test_battle_ai_land_drop(*d);
 #endif
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);

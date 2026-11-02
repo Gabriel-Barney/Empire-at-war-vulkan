@@ -1469,6 +1469,21 @@ void test_reinforce_landing() {
             return true;
         }));
         CHECK(tries == 9 + 2 && landed.size() == 2 && landed[0].key == 22 && landed[0].at.x == pts[1].position.x + pts[1].radius * 0.5f);
+        // A refused spot (the host's land_drop_ok) sends the same unit to the next ring spot: spot 0 refused -> unit 22 at
+        // spot 1, unit 21 at spot 2 (one unit per accepted spot).
+        const std::vector<Vec3f> ring0 = reinforce_ring(pts[0]);
+        std::vector<TacticalReinforcement> two = {unit(23, 1.0f), unit(24, 1.0f)};
+        std::vector<Landed> next;
+        std::vector<Vec3f> asked_at;
+        CHECK(reinforce_place(pts, two, inf, {}, [&](const TacticalReinforcement& r, const Vec3f& at) {
+            asked_at.push_back(at);
+            if (std::memcmp(&at, &ring0[0], sizeof(Vec3f)) == 0) return false;
+            next.push_back({r.key, at});
+            return true;
+        }));
+        CHECK(asked_at.size() == 3 && next.size() == 2);
+        CHECK(next[0].key == 24 && std::memcmp(&next[0].at, &ring0[1], sizeof(Vec3f)) == 0);
+        CHECK(next[1].key == 23 && std::memcmp(&next[1].at, &ring0[2], sizeof(Vec3f)) == 0);
         // Ten units on one point of nine spots: nine placed, one left -> false.
         std::vector<ReinforcePoint> one = {pts[0]};
         std::vector<TacticalReinforcement> many;

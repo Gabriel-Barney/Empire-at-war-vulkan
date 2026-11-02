@@ -2039,6 +2039,11 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
     };
     uint32_t spawned = 0;
     auto land = [&](const TacticalReinforcement& r, const Vec3f& spot) {
+        // a1g t04 follow-up: the mode's drop validity (TacticalAiHost::land_drop_ok); a refused spot is not ordered.
+        if (!host.land_drop_ok(t->player, r.key, spot)) {
+            ++stats["Reinforce: land spot refused"];
+            return false;
+        }
         const size_t before = store.owned_by(t->player).size();
         cmd::EventData ev(cmd::EventType::Reinforce);
         ev.set("unit", static_cast<uint32_t>(r.key)).set_f("x", spot.x).set_f("y", spot.y).set_f("z", spot.z);

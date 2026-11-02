@@ -135,6 +135,15 @@ public:
     bool space_drop_frame(int32_t player, ai::tactical::SpaceDropFrame& out) override;
     bool space_prevention_hit(int32_t player, const ai::tactical::Vec3f& p) override;
     bool space_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p, float facing_deg, float sweep) override;
+    // a1g t04 follow-up - land TF.Reinforce drop validity (TACTICAL_GAPS §4.2, LandMode vf80 0x3b5f60 -> 0x3b6170): the
+    // reserve entry `key` of `player` (not deployed) with its slots laid out as order_reinforce / deploy would (rows of 6
+    // at land_spacing around p clamped to the mode bounds, playable-box clamp, before the passability snap). Each slot of
+    // each member: passable for the member's MovementClass on the effective grid (static stamps included), not fogged for
+    // `player` (force 1; fog builds), outside every non-allied Reinforcement_Prevention_Radius (space_prevention_hit,
+    // 2-D strict) [port: the POWERED exemption is not modelled], and its footprint free: no live battle unit within
+    // (member radius + unit radius), 2-D strict [port: movement radii stand in for the TreeCull AABBs]. Unknown entry ->
+    // false. Space battles -> true (space_drop_ok covers them).
+    bool land_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p) override;
     // --- end battle host ---
 
 private:
