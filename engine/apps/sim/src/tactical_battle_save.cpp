@@ -13,7 +13,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 1;
+constexpr uint32_t kBattleStateVersion = 2;  // 2: S7 t22 fighter formations
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -133,6 +133,8 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a(b.hg_orphans_, b.prod_used_, b.hg_tech_bonus_);
     a.seq(b.hg_upgrades_, [](auto& x, auto& u) { x(u.old_station, u.new_station, u.owner); });
     a(b.hg_launches_, b.hg_used_);
+    // S7 t22: fighter formations
+    a.seq(b.fformations_, [](auto& x, auto& f) { x(f.key, f.flags, f.goal, f.goal_object, f.pushed); });
 }
 
 void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {

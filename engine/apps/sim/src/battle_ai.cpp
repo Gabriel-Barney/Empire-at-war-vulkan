@@ -736,6 +736,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 b_->combat_->clear_order(id);
                 b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: a position block
             }
+            b_->fighter_order(o.units, 0, Vec3{o.destination.x, o.destination.y, 0.0f});  // S7 t22: the squadrons' formation
             return R::None;
         }
         case T::MoveToObject: {
@@ -758,6 +759,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             b_->drop_locked(o.units);  // OI follow-up t03
             if (o.units.empty()) return R::None;
             for (const objects::ObjectId id : o.units) b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: kind 1
+            b_->fighter_order(o.units, 0, tp);  // S7 t22: a position snapshot (kind 1)
             if (o.units.size() == 1) {
                 b_->combat_->clear_order(o.units.front());
                 return move_unit(o.units.front(), tp.x, tp.y) ? R::None : R::InvalidUnit;
@@ -788,6 +790,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 if (!u) continue;
                 b_->combat_->order_attack(u->id, t->id, hp);
                 b_->combat_->set_attack_goal(u->id, t->id, hp);  // refixf t06: Attack_Target block (kind 3, hard point, §2.8)
+                b_->fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);  // S7 t22: an object block
                 ++n;
                 if (!u->movable) continue;
                 const Vec3 up = st.position(u->h);
@@ -820,6 +823,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     b_->combat_->clear_order(id);
                     b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06
                 }
+                b_->fighter_order_clear(ids);  // S7 t22: Stop leaves the formation [M]
                 return R::None;
             }
             if (order != lua::LuaOrder::MoveTo && order != lua::LuaOrder::AttackMove && order != lua::LuaOrder::Guard) return R::Unhandled;
@@ -885,6 +889,13 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (order != lua::LuaOrder::AttackMove || tw == cmd::kNoObject)  // refixf t06: position / guard / move blocks
                 for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
             if (!std::isfinite(x) || !std::isfinite(y)) return R::InvalidPosition;
+            // S7 t22: the squadrons' formation - block flags 0x01 attack-move / 0x02 guard; an Attack_Move / Guard of an
+            // object keeps it as the slot goal (Move_To(object) is a position snapshot, kind 1).
+            const uint8_t fflags = order == lua::LuaOrder::AttackMove ? mv::kMoveFlagAttackMove
+                                   : order == lua::LuaOrder::Guard    ? mv::kMoveFlagGuardMove
+                                                                      : uint8_t{0};
+            const objects::ObjectId fobj =
+                tw != cmd::kNoObject && order != lua::LuaOrder::MoveTo ? static_cast<objects::ObjectId>(tw) : objects::kNoObjectId;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
             // refixf t02 / t06 (MOVEMENT §6.3 [H]): Lua Attack_Move / Move_To on a task force build one parameter block and ONE
@@ -893,6 +904,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             // merged one frame's per-unit orders here is gone. An object's own Lua order stays a one-unit move.
             if (group.units.size() == 1) {  // a single unit: unchanged path
                 if (order != lua::LuaOrder::AttackMove) b_->combat_->clear_order(u->id);
+                if (!b_->movement_locked(u->id)) b_->fighter_order(group.units, fflags, Vec3{x, y, 0.0f}, fobj);
                 return move_unit(u->id, x, y, tt) ? R::None : R::InvalidUnit;
             }
             group.threat_threshold = tt;
@@ -901,6 +913,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             b_->drop_locked(group.units);  // OI follow-up t03: locked members keep their order [M: group-move reading]
             if (group.units.empty()) return R::None;
             b_->movement_->move(group, host_->random().synced(), b_->frame_);  // one formation move of the team
+            b_->fighter_order(group.units, fflags, Vec3{group.destination.x, group.destination.y, 0.0f}, fobj);  // S7 t22
             if (order != lua::LuaOrder::AttackMove)
                 for (const objects::ObjectId id : group.units) b_->combat_->clear_order(id);
             return R::None;

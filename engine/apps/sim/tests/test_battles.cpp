@@ -363,9 +363,11 @@ std::string obstacle_types() {
 
 // S7 t12: a TIE-like fighter squadron (FIGHTER_LOCOMOTOR members, Squadron_Units -> one TEAM container in space). Health
 // is high so the frigates' lasers do not end the test; the attack range is wide so a frigate next to the route becomes the
-// fighters' combat auto target long before they pass it.
-std::string fighter_types() {
-    std::string t = kTypes;
+// fighters' combat auto target long before they pass it. S7 t22: the squadron's chase ranges are the FoC X-wing squadron's
+// (Guard 1000 / Idle 200 / Attack_Move_Response 300); `fog` starts from the fog test types (frigates REVEAL 900 and
+// HIDE_WHEN_FOGGED; the fighters reveal nothing).
+std::string fighter_types(bool fog = false) {
+    std::string t = fog ? fog_types() : std::string(kTypes);
     const size_t end = t.find("</S10>");
     if (end != std::string::npos)
         t.insert(end,
@@ -379,8 +381,14 @@ std::string fighter_types() {
                  "<Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius></SpaceUnit>\n"
                  " <Squadron Name=\"S10_TIE_Squadron\"><Squadron_Units>S10_TIE, S10_TIE, S10_TIE</Squadron_Units>"
                  "<Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value>"
-                 "<Squadron_Formation_Error_Tolerance>25</Squadron_Formation_Error_Tolerance></Squadron>\n"
+                 "<Squadron_Formation_Error_Tolerance>25</Squadron_Formation_Error_Tolerance><Guard_Chase_Range>1000.0</Guard_Chase_Range>"
+                 "<Idle_Chase_Range>200.0</Idle_Chase_Range><Attack_Move_Response_Range>300.0</Attack_Move_Response_Range></Squadron>\n"
                  " <Team Name=\"Team\"><Behavior>TEAM</Behavior></Team>\n");
+    // fog: a 2100 attack range, so an ordered attack stops the squadron at 0.7 x 2100 = 1470, outside the frigates' 1400 (no
+    // shots at it, so no attacker flash reveals the target).
+    if (fog)
+        if (const size_t p = t.find("<CategoryMask>Fighter</CategoryMask><Targeting_Max_Attack_Distance>900"); p != std::string::npos)
+            t.replace(p, 70, "<CategoryMask>Fighter</CategoryMask><Targeting_Max_Attack_Distance>2100");
     return t;
 }
 
@@ -388,7 +396,8 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
                                 bool obstacle = false, bool team = false, bool fog_bm = false, bool fighters = false,
                                 bool fog_setup = false) {
     auto d = std::make_unique<Data>();
-    d->root = fs::temp_directory_path() / (fighters    ? "alamo_sim_battle_tests_fighters"  // S7 t12
+    d->root = fs::temp_directory_path() / (fighters && fog ? "alamo_sim_battle_tests_fighters_fog"  // S7 t22
+                                           : fighters    ? "alamo_sim_battle_tests_fighters"  // S7 t12
                                            : fog_setup ? "alamo_sim_battle_tests_fog_setup"  // FOWF t05
                                            : fog_bm ? "alamo_sim_battle_tests_fog_bm"  // FOW t01
                                            : obstacle ? "alamo_sim_battle_tests_obstacle"  // refixf t02
@@ -403,7 +412,7 @@ std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool s4 = f
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", fighters ? fighter_types()  // S7 t12
+    write_file(x / "S10Types.xml", fighters ? fighter_types(fog)  // S7 t12 / t22
                                     : fog_setup ? fog_types()
                                    : fog_bm ? fog_bm_types()
                                    : obstacle ? obstacle_types()
@@ -3932,22 +3941,17 @@ void test_runtime_obstacles(bool space) {
 // attack on the frigate starts Directed_Combat at once (an ordered target is the formation attack target).
 void test_fighter_move_past_enemy() {
     namespace mv = tactical::movement;
-    {  // the pure rule
+    {  // the pure rule (S7 t22: no auto-target input - an auto target reaches the squadron only as a pushed block)
         FighterTargetInputs in;
-        CHECK(fighter_formation_target(in) == kNoObjectId);
-        in.auto_target = 7;
-        CHECK(fighter_formation_target(in) == 7);  // idle: the auto target [port]
-        in.auto_hidden = true;
-        CHECK(fighter_formation_target(in) == kNoObjectId);  // ... unless fogged
-        in.auto_hidden = false;
-        in.moving = true;
-        CHECK(fighter_formation_target(in) == kNoObjectId);  // a position block: no object, keep Moving
+        CHECK(fighter_formation_target(in) == kNoObjectId);  // a position block / no formation: no object, keep Moving
         in.goal = 9;
         CHECK(fighter_formation_target(in) == kNoObjectId);  // a goal that is not hostile never qualifies
         in.goal_hostile = true;
         CHECK(fighter_formation_target(in) == 9);  // Attack_Move(object)
+        in.pushed = 7;
+        CHECK(fighter_formation_target(in) == 7);  // a pushed auto block is newer than the order's block
         in.ordered = 11;
-        CHECK(fighter_formation_target(in) == 11);  // Attack / Attack_Target
+        CHECK(fighter_formation_target(in) == 11);  // Attack / Attack_Target (locked team target)
     }
     auto d = make_data(false, false, false, false, false, false, false, false, true);
     jobs::JobSystem js(jobs::JobSystemConfig{0});
@@ -4055,6 +4059,295 @@ void test_fighter_move_past_enemy() {
     CHECK(attack_frame != 0 && attacked);
 }
 
+// S7 t22 (FIGHTER_FLYING §4.9 step 2, TACTICAL_COMBAT §2.8 "Targets of opportunity"): the response-range test 0x4160a0.
+void test_fighter_chase_rule() {
+    FighterChaseInputs in;
+    in.guard_range = 1000.0f;
+    in.idle_range = 200.0f;
+    in.attack_move_range = 300.0f;
+    in.attack_range = 500.0f;
+    in.candidate = {650.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);  // no formation: no chase (its weapons still fire in range)
+    in.formation = true;
+    CHECK(fighter_chase_test(in) == 1);  // idle: 650 <= Idle_Chase_Range 200 + range 500 from the slot goal
+    in.candidate = {750.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);  // beyond it
+    in.moving = true;
+    CHECK(fighter_chase_test(in) == 0);  // a plain move: measured from its destination, no peel-off on the way
+    in.flags = 0x01;
+    CHECK(fighter_chase_test(in) == 2);  // an attack-move under way responds (Attack_Move_Response_Range, rule 4)
+    in.candidate = {5000.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 2);  // [M] the squadron is at its own path point (the scan bounds the distance)
+    in.moving = false;
+    CHECK(fighter_chase_test(in) == 0);  // arrived: rule 5 with Attack_Move_Response_Range
+    in.candidate = {790.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);  // 790 <= 300 + 500
+    in.flags = 0x02;
+    in.candidate = {1450.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);  // guard: Guard_Chase_Range 1000 + 500
+    in.moving = true;
+    CHECK(fighter_chase_test(in) == 1);  // a guard move is not an attack-move: rule 5 while moving too
+    in.candidate = {1550.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);
+    in.candidate = {100.0f, 0.0f, 0.0f};
+    in.candidate_is_goal = true;
+    CHECK(fighter_chase_test(in) == 0);  // the first / last block's object: path B, not a chase
+    in.candidate_is_goal = false;
+    in.flags = 0;
+    in.moving = false;
+    in.idle_range = -1.0f;  // Rr < 0 -> 0
+    in.candidate = {450.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 1);
+    in.candidate = {550.0f, 0.0f, 0.0f};
+    CHECK(fighter_chase_test(in) == 0);
+}
+
+namespace {
+struct FighterBattle {
+    std::unique_ptr<Data> d;
+    std::unique_ptr<jobs::JobSystem> js;
+    std::unique_ptr<SimHost> host;
+    std::unique_ptr<CampaignBattles> battles;
+    galactic::GalacticSim* gs = nullptr;
+};
+
+// The S7 t12 fighter battle: the TIE squadron (player 0) joins the S10 space fight; no stand-in orders.
+bool start_fighter_battle(FighterBattle& fb, bool fog) {
+    fb.d = make_data(fog, false, false, false, false, false, false, false, true);
+    fb.js = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    fb.host = std::make_unique<SimHost>(fb.d->types, *fb.js, cfg);
+    galactic::GalacticSetup gsetup = make_setup(*fb.d, false);
+    gsetup.forces.push_back({0, 1, type_of(*fb.d, "S10_TIE_Squadron")});
+    fb.gs = fb.host->start_galactic(fb.d->rules, gsetup);
+    CHECK(fb.gs != nullptr);
+    if (!fb.gs) return false;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = fog;
+    fb.battles = std::make_unique<CampaignBattles>(*fb.host, fb.d->crules, *fb.d->catalog,
+                                                   [](const std::string& name, terrain::MapData& m) {
+                                                       if (name != "S10_Space_B") return false;
+                                                       m = space_map();
+                                                       return true;
+                                                   },
+                                                   opt);
+    CHECK(fb.battles->attach(nullptr));
+    const std::vector<uint32_t> uf = fb.gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(fb.gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    return true;
+}
+}  // namespace
+
+// S7 t22 (FIGHTER_FLYING §4.9): an auto target moves a squadron only after it is pushed into the squadron's formation. One
+// battle, in phases:
+//  A. no order yet: no formation. Then an Attack_Move(position) through the nearest enemy: the enemy (the auto target) is
+//     pushed while the move is under way (Attack_Move_Response_Range) and the squadron starts its attack run (the PR #19
+//     review: such squadrons never did);
+//  B. Stop leaves the formation: the squadron idles next to its auto target for 300 frames and never attacks it;
+//  C. a plain move to where it is gives it a formation again: the auto target lies within Idle_Chase_Range + range of the
+//     slot goal, is pushed and attacked;
+//  D. the pushed target turns friendly (Change_Owner): Directed_Combat finds no goal and runs enter_idle, which drops the
+//     members' combat targets (the team target, §4.7 step 4) and keeps the formation.
+void test_fighter_auto_push() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, false)) return;
+    enum class Ph { Wait, AttackMove, Stopped, Idle, Converted, Done } ph = Ph::Wait;
+    std::vector<objects::ObjectId> members;
+    objects::ObjectId squad = objects::kNoObjectId, enemy = objects::kNoObjectId, pushed = objects::kNoObjectId;
+    uint32_t since = 0;
+    bool no_formation_at_start = false, am_dc = false, am_moving = false, am_pushed = false;
+    bool stop_cleared = false, b_auto = false, b_dc = false, c_formation = false, c_dc = false, c_pushed = false;
+    bool d_idle = false, d_dropped = false, d_kept = false;
+    mv::LocoState prev = mv::LocoState::None;
+    for (uint64_t t = 0; t < 9000 && ph != Ph::Done; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (ph != Ph::Wait) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (ph == Ph::Wait) {
+            if (b->frame() != 3) continue;
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (!s.members.empty() && st.owner(st.find(s.members.front())) == 0) {
+                    members = s.members;
+                    squad = s.id;
+                }
+            CHECK(members.size() == 3);
+            if (members.empty()) break;
+            no_formation_at_start = b->fighter_formation(squad) == nullptr;
+            const Vec3 sp = st.position(st.find(members.front()));
+            float best = 0.0f;
+            for (const objects::ObjectHandle h : st.owned_by(1)) {
+                if (!st.alive(h) || !b->movement().has_unit(st.id(h))) continue;
+                const Vec3 p = st.position(h);
+                const float d2 = (p.x - sp.x) * (p.x - sp.x) + (p.y - sp.y) * (p.y - sp.y);
+                if (enemy == objects::kNoObjectId || d2 < best) {
+                    enemy = st.id(h);
+                    best = d2;
+                }
+            }
+            CHECK(enemy != objects::kNoObjectId);
+            if (enemy == objects::kNoObjectId) break;
+            const Vec3 ep = st.position(st.find(enemy));
+            const float dx = ep.x - sp.x, dy = ep.y - sp.y, len = std::sqrt(dx * dx + dy * dy);
+            const float gx = std::clamp(ep.x + dx / len * 1500.0f, -3700.0f, 3700.0f), gy = std::clamp(ep.y + dy / len * 1500.0f, -3700.0f, 3700.0f);
+            CHECK(b->order_move(*tm, 0, members, gx, gy, fb.host->random().synced(), mv::kNoFacing, true) == R::None);
+            const FighterFormationRecord* r = b->fighter_formation(squad);
+            CHECK(r && r->flags == mv::kMoveFlagAttackMove && r->pushed.empty());
+            ph = Ph::AttackMove;
+            since = b->frame();
+            continue;
+        }
+        const objects::ObjectId lead = members.front();
+        if (!st.alive(st.find(lead)) || !b->movement().has_unit(lead)) break;
+        const mv::UnitView v = b->movement().view(lead);
+        const FighterFormationRecord* r = b->fighter_formation(squad);
+        switch (ph) {
+            case Ph::AttackMove:
+                if (v.loco_state == mv::LocoState::FighterDirectedCombat) {
+                    am_dc = true;
+                    am_moving = !v.arrived;
+                    am_pushed = r && !r->pushed.empty();
+                    CHECK(b->order_stop(*tm, 0, members) == R::None);
+                    stop_cleared = b->fighter_formation(squad) == nullptr;
+                    ph = Ph::Stopped;
+                    since = b->frame();
+                } else if (b->frame() > since + 2500) {
+                    ph = Ph::Done;
+                }
+                break;
+            case Ph::Stopped:
+                for (const objects::ObjectId m : members) b_auto = b_auto || b->combat().auto_target(m) != objects::kNoObjectId;
+                b_dc = b_dc || v.loco_state == mv::LocoState::FighterDirectedCombat;
+                if (b->frame() >= since + 300) {
+                    const Vec3 lp = st.position(st.find(lead));
+                    CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
+                    const FighterFormationRecord* nr = b->fighter_formation(squad);
+                    c_formation = nr && nr->flags == 0 && nr->pushed.empty();
+                    ph = Ph::Idle;
+                    since = b->frame();
+                }
+                break;
+            case Ph::Idle:
+                if (v.loco_state == mv::LocoState::FighterDirectedCombat && r && !r->pushed.empty()) {
+                    c_dc = true;
+                    pushed = r->pushed.back();
+                    c_pushed = b->combat().has_unit(pushed);  // a ship (not a squadron)
+                    if (c_pushed) CHECK(b->change_owner(*tm, st.find(pushed), 0));
+                    ph = c_pushed ? Ph::Converted : Ph::Done;
+                    since = b->frame();
+                } else if (b->frame() > since + 600) {
+                    ph = Ph::Done;
+                }
+                break;
+            case Ph::Converted:
+                if (prev != mv::LocoState::FighterIdle && v.loco_state == mv::LocoState::FighterIdle) {
+                    d_idle = true;
+                    d_dropped = true;
+                    for (const objects::ObjectId m : members)
+                        d_dropped = d_dropped && b->combat().current_target(m) != pushed;
+                    d_kept = r != nullptr;
+                    ph = Ph::Done;
+                } else if (b->frame() > since + 120) {
+                    ph = Ph::Done;
+                }
+                break;
+            default: break;
+        }
+        prev = v.loco_state;
+    }
+    std::printf("  auto push: squadron %d, enemy %d; attack-move: Directed_Combat %d (moving %d, pushed %d); stop: formation gone %d, "
+                "auto target %d, Directed_Combat %d; idle move: formation %d, Directed_Combat %d (pushed %d); converted: idle %d, "
+                "targets dropped %d, formation kept %d\n",
+                squad, enemy, am_dc ? 1 : 0, am_moving ? 1 : 0, am_pushed ? 1 : 0, stop_cleared ? 1 : 0, b_auto ? 1 : 0, b_dc ? 1 : 0,
+                c_formation ? 1 : 0, c_dc ? 1 : 0, pushed, d_idle ? 1 : 0, d_dropped ? 1 : 0, d_kept ? 1 : 0);
+    CHECK(no_formation_at_start);
+    CHECK(am_dc && am_moving && am_pushed);
+    CHECK(stop_cleared && b_auto && !b_dc);
+    CHECK(c_formation && c_dc && c_pushed);
+    CHECK(d_idle && d_dropped && d_kept);
+}
+
+#ifdef ALAMO_SIM_HAVE_FOG
+// S7 t22 (FIGHTER_FLYING §4.9 step 3): a goal hidden by fog for the squadron's player is still its formation goal, so the
+// squadron toggles Idle <-> Directed_Combat every frame (Directed_Combat: fogged -> NoTarget -> enter_idle; Idle: a goal
+// that is not dying -> Directed_Combat), as in retail. Here the goal is an ordered Attack on an enemy frigate that no
+// player-0 REVEAL source sees (the fighters reveal nothing); enter_idle keeps the order's object block.
+void test_fighter_fog_toggle() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, true)) return;
+    std::vector<objects::ObjectId> members;
+    objects::ObjectId squad = objects::kNoObjectId, enemy = objects::kNoObjectId;
+    bool issued = false, stayed_hidden = true, order_kept = true;
+    uint32_t settle = 0, window = 0, toggles = 0;
+    mv::LocoState prev = mv::LocoState::None;
+    for (uint64_t t = 0; t < 6000; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (issued) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (!issued) {
+            if (b->frame() != 3) continue;
+            issued = true;
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (!s.members.empty() && st.owner(st.find(s.members.front())) == 0) {
+                    members = s.members;
+                    squad = s.id;
+                }
+            const Vec3 sp = members.empty() ? Vec3{} : st.position(st.find(members.front()));
+            float best = 0.0f;
+            for (const objects::ObjectHandle h : st.owned_by(1)) {
+                if (!st.alive(h) || !b->movement().has_unit(st.id(h)) || !b->fog_object_hidden(0, st.id(h), true)) continue;
+                const Vec3 p = st.position(h);
+                const float d2 = (p.x - sp.x) * (p.x - sp.x) + (p.y - sp.y) * (p.y - sp.y);
+                if (enemy == objects::kNoObjectId || d2 < best) {
+                    enemy = st.id(h);
+                    best = d2;
+                }
+            }
+            CHECK(members.size() == 3 && enemy != objects::kNoObjectId);
+            if (members.empty() || enemy == objects::kNoObjectId) break;
+            CHECK(b->order_attack(*tm, 0, members, enemy, fb.host->random().synced()) == R::None);
+            continue;
+        }
+        const objects::ObjectId lead = members.front();
+        if (!st.alive(st.find(lead)) || !st.alive(st.find(enemy))) break;
+        const mv::UnitView v = b->movement().view(lead);
+        if (settle == 0 && !v.has_goal && v.loco_state != mv::LocoState::FighterMoving) settle = b->frame();
+        if (settle != 0 && b->frame() > settle + 5) {
+            ++window;
+            if (v.loco_state != prev) ++toggles;
+            stayed_hidden = stayed_hidden && b->fog_object_hidden(0, enemy, true);
+            order_kept = order_kept && b->combat().ordered_target(lead) == enemy;
+            if (window >= 60) break;
+        }
+        prev = v.loco_state;
+    }
+    const FighterFormationRecord* r = nullptr;
+    if (TacticalBattle* b = fb.battles->battle()) r = b->fighter_formation(squad);
+    std::printf("  fog toggle: squadron %d attacks hidden enemy %d; settled at %u, %u state changes in %u frames, hidden %d, order kept %d\n",
+                squad, enemy, settle, toggles, window, stayed_hidden ? 1 : 0, order_kept ? 1 : 0);
+    CHECK(window >= 60 && stayed_hidden && order_kept && toggles >= 58);
+    CHECK(r && r->goal_object == enemy);
+}
+#endif
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     for (int i = 1; i < argc; ++i)
@@ -4135,6 +4428,13 @@ int main(int argc, char** argv) {
     test_runtime_obstacles(true);
     std::printf("S7 t12: a fighter squadron moved past an enemy keeps its move order (formation attack target)\n");
     test_fighter_move_past_enemy();
+    std::printf("S7 t22: squadron auto targets through the formation push (chase test, Stop, idle chase, enter_idle)\n");
+    test_fighter_chase_rule();
+    test_fighter_auto_push();
+#ifdef ALAMO_SIM_HAVE_FOG
+    std::printf("S7 t22: a fogged formation goal toggles Idle <-> Directed_Combat\n");
+    test_fighter_fog_toggle();
+#endif
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);
     std::printf("OI objects: behaviour Initialise draws + scheduling\n");  // OI objects
