@@ -130,11 +130,11 @@ struct BattleConfig {
     // GALAXY_MAP_PRESENTATION §6: a map battle (CampaignBattles::start_map_battle, the attract demo's Load_Map): no
     // conflict behind it, so the branched-map discard (single player with a defender, bt_map_prepass) does not apply.
     bool map_battle = false;
-    // a1i t04 (A1_READINGS §35.2 / §35.3): false (default) = a landing object's company appears at the Reinforce order
-    // (every unload step at once); true = the TransportLanding state machine: hidden until its footprint is clear of the
-    // other landings, then one team / vehicle per 2 s x (1 + s) step on a locked exit move, unlocked with the signal 0x19
-    // record after the last. Off until the tactical AI waits for landings_unloaded() (TF.Reinforce in-flight count).
-    bool landing_unload_timed = false;
+    // a1i t04 (A1_READINGS §35.2 / §35.3): true (default since a1j t01) = the TransportLanding state machine: hidden until
+    // its footprint is clear of the other landings, then one team / vehicle per 2 s x (1 + s) step on a locked exit move,
+    // unlocked with the signal 0x19 record after the last (the tactical AI's TF.Reinforce waits for it, A1_READINGS §36);
+    // false = [port] a landing object's company appears at the Reinforce order (every unload step at once).
+    bool landing_unload_timed = true;
     // skai (q2f t04): a skirmish map battle with the skirmish setup (the headless skirmish host; with skirmish and map_battle):
     // both slots' team markers become their faction's objects, Income_Stream_Ability pays, the skirmish victory rules apply
     // (tactical_battle_skirmish.cpp). The attract demo's map battle leaves it off.

@@ -513,6 +513,38 @@ function MainForce_Unit_Ability_Finished(tf, unit)
   if TestValid(unit) then Finished = (Finished or 0) + 1 end  -- other plan instances get the event too
 end
 )";
+// a1j t01 (A1_READINGS §36, variant 8, land with g_landing): the task force asks for more than the free store holds, so
+// Produce_Force leaves pool entries pending; one Reinforce, then the block is polled until it finishes (the units come
+// with the landing's signal 0x19, kLandingDelay frames after the order).
+const char* kPlanLanding = R"(
+require("SynAICommands")
+function Report(m) error(m) end
+ScriptPoolCount = 1
+function Definitions()
+  Category = "Syn_Land_Only"
+  TaskForce = { { "MainForce", "Frigate | Corvette = 5,6" } }
+end
+function MainForce_Thread()
+  if Reported then
+    while true do Sleep(10) end
+  end
+  BlockOnCommand(MainForce.Produce_Force())
+  local before = MainForce.Get_Force_Count()
+  local st = MainForce.Reinforce(AITarget)
+  if not st then ScriptExit() end
+  local start = GetCurrentTime()
+  local polls = 0
+  while not st.IsFinished() do
+    polls = polls + 1
+    PumpEvents()
+  end
+  Reported = true
+  Report(string.format("LANDING player=%d polls=%d waited=%.2f before=%d after=%d result=%s", PlayerObject.Get_ID(), polls,
+    GetCurrentTime() - start, before, MainForce.Get_Force_Count(), tostring(st.Result())))
+  MainForce.Attack_Move(AITarget)
+  while true do Sleep(10) end
+end
+)";
 const char* kFreeStore = R"(
 require("SynBase")
 function Base_Definitions()
@@ -564,6 +596,10 @@ struct MockUnit {
 // S7 t33: run the same plans as a land battle (Land store and mode; the SpaceMode plans copied to LandMode; the objects
 // have the land evaluator) and, variant 6, a Move_To(Target, 5000) before the ambushes (test_prepare_ambush_land).
 bool g_land = false;
+// a1j t01: land landings in the mock (g_land runs): 0 off (Reinforce spawns at once), 1 a Reinforce unloads its unit
+// kLandingDelay frames later with a signal 0x19 record, 2 the landing dies before its unit is out (a record without units).
+int g_landing = 0;
+constexpr uint32_t kLandingDelay = 60;
 
 class MockHost final : public TacticalAiHost {
 public:
@@ -643,6 +679,19 @@ public:
             builds_.erase(builds_.begin() + static_cast<std::ptrdiff_t>(i));
             if (const MockUnit* b = unit(builder_)) spawn(0, tCorvette, b->pos.x + 100.0f, b->pos.y);
             ++built;
+        }
+        for (size_t i = 0; i < landings_.size();) {  // a1j t01: the landings that finish their unload this frame
+            const MockLanding l = landings_[i];
+            if (l.due > frame) {
+                ++i;
+                continue;
+            }
+            landings_.erase(landings_.begin() + static_cast<std::ptrdiff_t>(i));
+            ReinforcementsUnloaded rec;
+            rec.player = l.player;
+            rec.key = l.key;
+            if (g_landing == 1) rec.units.push_back(spawn(l.player, l.type, l.x, l.y));
+            unloaded_.push_back(std::move(rec));
         }
         for (MockUnit& u : units_) {
             if (!u.has_goal) continue;
@@ -743,6 +792,7 @@ public:
             a.target.rep_has_land_evaluator = g_land;  // S7 t33
             a.applies.has_locomotor = o.mobile;
             a.applies.has_build_objects = u.type == tPad;
+            if (g_landing > 0 && u.type == tStation) a.applies.reinforcement_enabling_radius = 400.0f;  // a1j t01: land drop points
             a.free_store.has_locomotor = o.mobile;
             a.free_store.is_starship_combatant = o.mobile;
             a.moving = u.has_goal;
@@ -831,7 +881,8 @@ public:
                 }
                 line += " key " + std::to_string(it->key);
                 if (ring_test) line += " at " + std::to_string(static_cast<int>(ev.f("x"))) + "," + std::to_string(static_cast<int>(ev.f("y")));
-                spawn(player, it->type, ev.f("x"), ev.f("y"));
+                if (g_landing > 0) landings_.push_back({player, it->key, it->type, ev.f("x"), ev.f("y"), build_frame_ + kLandingDelay});
+                else spawn(player, it->type, ev.f("x"), ev.f("y"));
                 pool.erase(it);
                 break;
             }
@@ -921,6 +972,22 @@ public:
         return out;
     }
     bool movement_locked(int32_t id) override { return std::find(locked.begin(), locked.end(), id) != locked.end(); }
+    // a1j t01: the Reinforce's landing has not unloaded yet; the signal 0x19 records of this frame's tick.
+    bool reinforce_in_flight(int32_t player, int32_t key) override {
+        return std::any_of(landings_.begin(), landings_.end(), [&](const MockLanding& l) { return l.player == player && l.key == key; });
+    }
+    std::vector<ReinforcementsUnloaded> reinforcements_unloaded() override {
+        std::vector<ReinforcementsUnloaded> out = std::move(unloaded_);
+        unloaded_.clear();
+        return out;
+    }
+    struct MockLanding {
+        int32_t player = -1, key = -1, type = -1;
+        float x = 0.0f, y = 0.0f;
+        uint32_t due = 0;
+    };
+    std::vector<MockLanding> landings_;
+    std::vector<ReinforcementsUnloaded> unloaded_;
     std::vector<int32_t> ability_signals, locked;
     void kill_mobile(int32_t owner) {  // every mobile unit of `owner` dies at the next tick
         for (MockUnit& u : units_)
@@ -959,6 +1026,8 @@ public:
         builder_ = o.builder_;
         build_frame_ = o.build_frame_;
         builds_ = o.builds_;
+        landings_ = o.landings_;
+        unloaded_ = o.unloaded_;
         return true;
     }
     const DamageTrackingStore& damage_store() const { return dt_; }
@@ -978,6 +1047,13 @@ public:
             h.f32(u.pos.y);
             h.f32(u.hp);
             h.i32(u.target);
+        }
+        if (g_landing > 0) {  // a1j t01 (not in the golden runs)
+            h.u32(static_cast<uint32_t>(landings_.size()));
+            for (const MockLanding& l : landings_) {
+                h.i32(l.key);
+                h.u32(l.due);
+            }
         }
     }
 
@@ -1136,6 +1212,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", plan);
     }
     if (variant == 7) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAbility);
+    if (variant == 8) files.add("Data\\Scripts\\AI\\LandMode\\SynLandOnly.lua", kPlanLanding);  // replaces kPlanLandOnly
     if (variant >= 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynEscort.lua", kPlanEscortOff);
     if (variant == 1) {
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanMagic);
@@ -1162,7 +1239,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     host.spawn(1, tCorvette, 2900.0f, -300.0f);
     host.pad_ = host.spawn(0, tPad, 0.0f, 2500.0f);  // A2 tactical: an Empire pad (Friendly_Build_Pad of Syn_Build)
     if (variant == 2) host.enable_production(station0);
-    if (!g_land) {  // S7 t33: no reinforcement pool in the land run (the task forces take the free-store units)
+    if (!g_land || g_landing > 0) {  // S7 t33: no reinforcement pool in the land run (the task forces take the free-store units)
         host.add_pool(0, 1001, tCorvette, 1.0f);
         host.add_pool(0, 1002, tFrigate, 2.0f);
         host.add_pool(0, 1003, tCorvette, 1.0f);
@@ -1808,7 +1885,7 @@ struct SaveSession {
     objects::ObjectTypeDatabase raw_types;
     objects::GameObjectTypes types;
     objects::IdCounter ids;
-    objects::ObjectStore store{objects::ModeKind::Space, objects::StoreKind::Primary, types, &ids};
+    objects::ObjectStore store{g_land ? objects::ModeKind::Land : objects::ModeKind::Space, objects::StoreKind::Primary, types, &ids};
     GameRandom rng{2027u, 5u};
     MockHost host{store};
     std::unique_ptr<TacticalAiWorld> world;
@@ -1830,6 +1907,7 @@ struct SaveSession {
         };
         if (variant == 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", quiet(kPlanEmptyTf));
         if (variant == 6) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", quiet(kPlanAmbush));
+        if (variant == 8) files.add("Data\\Scripts\\AI\\LandMode\\SynLandOnly.lua", quiet(kPlanLanding));  // a1j t01 (g_land)
         if (variant >= 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynEscort.lua", kPlanEscortOff);
         if (variant == 1) {
             files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanMagic);
@@ -1854,7 +1932,7 @@ struct SaveSession {
         host.add_pool(1, 2001, tCorvette, 1.0f);
         host.add_pool(1, 2002, tFrigate, 2.0f);
         TacticalAiConfig cfg;
-        cfg.mode = TacticalMode::Space;
+        cfg.mode = g_land ? TacticalMode::Land : TacticalMode::Space;
         cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
         cfg.difficulties = {{"Easy_Default", 15.0f, 15.0f, 0.67f, 0.75f}, {"Normal_Default", 0.0f, 0.0f, 1.0f, 1.0f}};
         lua::LuaPlayerSetup a, b;
@@ -2311,6 +2389,56 @@ void test_ability_finished() {
 // raised by the host when it executes an order) ends the task-force AbilityBlockStatus count of that unit like 0x29, but
 // raises no Unit_Ability_Finished. 20 frames after the activation the corvettes get a new order: the block finishes with
 // only the failed frigates' queued events. A 0xb before the activation (the activation's own) does not count.
+// a1j t01 (A1_READINGS §36): land TF.Reinforce with landings (variant 8). The ReinforceBlockStatus stays unfinished until
+// the landing's signal 0x19 record (kLandingDelay frames after the order), then the unit is in the task force and the
+// block's Result is the placement result. lost: the landing dies before its unit is out (the host's record without
+// units, TacticalBattle's detach rule): the block still finishes and the task force gains nothing.
+void test_landing_wait(bool lost) {
+    g_land = true;
+    g_landing = lost ? 2 : 1;
+    const RunResult r = run(30 * 60, 1, 8);
+    g_land = false;
+    g_landing = 0;
+    const std::string rep_line = report_of(r, "LANDING");
+    int polls = -1, before = -1, after = -1;
+    double waited = -1.0;
+    char result[16] = {};
+    if (!rep_line.empty())
+        std::sscanf(rep_line.c_str() + rep_line.find("LANDING"), "LANDING player=0 polls=%d waited=%lf before=%d after=%d result=%15s", &polls,
+                    &waited, &before, &after, result);
+    int32_t order_frame = -1, unload_frame = -1;
+    for (const std::string& d : r.decisions) {
+        if (order_frame < 0 && d.find(" p0 order skirmish reinforce ") != std::string::npos && d.find("(tf MainForce)") != std::string::npos)
+            order_frame = decision_frame(d);
+        if (unload_frame < 0 && d.find(" p0 tf MainForce: reinforcements unloaded ") != std::string::npos) unload_frame = decision_frame(d);
+    }
+    std::printf("landing wait (%s): order at %d, unloaded at %d; %s\n", lost ? "lost" : "unloaded", order_frame, unload_frame, rep_line.c_str());
+    CHECK(only_reports(r, "LANDING"));
+    CHECK(order_frame > 0 && unload_frame == order_frame + static_cast<int32_t>(kLandingDelay));
+    CHECK(polls > 0 && waited >= static_cast<double>(kLandingDelay) / 30.0 - 0.1);
+    CHECK(before >= 0 && (lost ? after == before : after > before));
+    CHECK(std::string(result) == "true" || std::string(result) == "false");
+    CHECK(count_decisions(r, lost ? "(0 units, 0 in flight)" : "(1 units, 0 in flight)") >= 1);
+}
+
+// a1j t01: save / load with a landing in flight (the status's landings and saved removable flag, the mock's landing).
+void test_landing_save() {
+    g_land = true;
+    g_landing = 1;
+    int32_t save_at = -1;
+    {
+        SaveSession probe(8);
+        for (int32_t f = 1; f <= 30 * 60 && save_at < 0; ++f) {
+            probe.step(f);
+            if (!probe.host.landings_.empty()) save_at = f + static_cast<int32_t>(kLandingDelay) / 2;
+        }
+    }
+    CHECK(save_at > 0);
+    if (save_at > 0) test_save_load(8, save_at, save_at + 300);
+    g_land = false;
+    g_landing = 0;
+}
+
 void test_ability_order_replaced() {
     int32_t act_frame = -1;
     size_t activated = 0, failed = 0;
@@ -2421,6 +2549,9 @@ int main(int argc, char** argv) {
     test_no_units_remaining_heroes();  // S7 t26
     test_ability_finished();
     test_save_load(6, 30 * 4, 30 * 40);  // an ambush block in flight (member / moving lists, plan frame)
+    test_landing_wait(false);  // a1j t01
+    test_landing_wait(true);
+    test_landing_save();
     std::printf(g_fail ? "alamo_ai_tactical_world_tests: %d FAILED\n" : "alamo_ai_tactical_world_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;
 }

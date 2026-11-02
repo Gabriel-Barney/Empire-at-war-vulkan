@@ -930,6 +930,12 @@ bool MovementSystem::resolve_blocker(Unit& a, uint32_t blocker, float contact, u
         ++stats_.early_arrivals;
         return true;
     }
+    // A Giant Vehicle pushes a stopped blocker it does not crush aside and keeps its path (decision 0x684f90, push
+    // 0x6859a0; A1_READINGS §36.4).
+    if (a.d.collision_class == kUccGiantVehicle && push_aside(a, b)) {
+        a.waits = 0;
+        return true;
+    }
     if (full) {
         const size_t ai = static_cast<size_t>(&a - units_.data());
         std::vector<uint32_t> cand;
@@ -987,6 +993,30 @@ bool MovementSystem::resolve_blocker(Unit& a, uint32_t blocker, float contact, u
         a.hold_until = 0;
     }
     return false;
+}
+
+// Push 0x6859a0 (A1_READINGS §36.4): b steps aside along a's heading turned 45 degrees toward b's side. [port] b walks
+// the radii + 2 at its own max speed through the nudge (passability-checked per frame), no free-position search and no
+// return move; the first step must be passable. A deploying / deployed b is not pushed. A b still stepping aside counts
+// as pushed (the original pushes a blocker that is moving again, decision 0x684f90 step 2).
+bool MovementSystem::push_aside(const Unit& a, Unit& b) {
+    if (b.nudge_frames > 0) return true;
+    if (!(b.lp.max_speed > 0.0f)) return false;
+    if (b.deploy == LocoState::WalkDeploying || b.deploy == LocoState::WalkDeployed) return false;
+    if (a.m.next >= a.m.path.size()) return false;
+    const V2 h = normalize_retail(a.m.path[a.m.next] - a.m.pos);
+    if (!(length_sq(h) > 0.0f)) return false;
+    constexpr float kCos45 = 0.70710678f;
+    const V2 rel = b.m.pos - a.m.pos;
+    const float sin45 = cross(h, rel) <= 0.0f ? -kCos45 : kCos45;  // -45 degrees when b is on a's right
+    const V2 dir{h.x * kCos45 - h.y * sin45, h.x * sin45 + h.y * kCos45};
+    const V2 step = dir * b.lp.max_speed;
+    if (!try_nudge(b.m, step, b.lp.mask, &grid_)) return false;
+    update_tree(b);
+    const float d = a.d.radius + b.d.radius + 2.0f;
+    b.nudge = step;
+    b.nudge_frames = static_cast<uint32_t>(std::ceil(d / b.lp.max_speed)) - 1u;
+    return true;
 }
 
 void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& pf) {

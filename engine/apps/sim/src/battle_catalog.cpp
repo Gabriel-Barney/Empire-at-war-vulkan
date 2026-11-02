@@ -468,9 +468,22 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
         const float sc = ty.get_float(t, "Scale_Factor") > 0.0f ? ty.get_float(t, "Scale_Factor") : 1.0f;
         u.hard_x_extent = ty.get_float(t, "Custom_Hard_XExtent") * sc;
         u.hard_y_extent = ty.get_float(t, "Custom_Hard_YExtent") * sc;
+        // A1j t04 (TACTICAL_GAPS 3.1 slot 43, 0x371e70 / 0x372040): the model-bbox fallback of the extents, |max.x| / |max.y|.
+        if (s.model_mode >= 0)
+            if (const ModelInfo* mi = model_info(t, s.model_mode == 1, false); mi && mi->has_bounds) {
+                u.model_x_extent = (mi->max[0] < 0.0f ? -mi->max[0] : mi->max[0]) * sc;
+                u.model_y_extent = (mi->max[1] < 0.0f ? -mi->max[1] : mi->max[1]) * sc;
+            }
     }
     // --- end OI tactical ---
     u.fire_inaccuracy_fixed_radius = ty.get_float(t, "Targeting_Fire_Inaccuracy_Fixed_Radius");
+    {  // A1j t03 (TACTICAL_COMBAT §3.1.2): Targeting_Fire_Inaccuracy `<category>, <distance>` pairs (code 0x3d, XML order)
+        const objects::EnumConverter& cat = ty.enums().get(objects::EnumId::GameObjectCategory);
+        const std::span<const std::string_view> fi = ty.get_list(t, "Targeting_Fire_Inaccuracy");
+        for (size_t i = 0; i + 1 < fi.size(); i += 2)
+            if (const auto m = cat.lookup(trim(fi[i])))
+                u.fire_inaccuracy.push_back({static_cast<uint64_t>(*m), static_cast<float>(objects::c_atof(trim(fi[i + 1])))});
+    }
     const std::string_view set = trim(ty.get_string(t, "Targeting_Priority_Set"));
     for (size_t i = 0; i < priority_sets_.size() && !set.empty(); ++i)
         if (iequal(priority_sets_[i].name, set)) {

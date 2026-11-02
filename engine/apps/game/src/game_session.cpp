@@ -218,6 +218,9 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     bo.object_removed = [this](int32_t owner, uint32_t type, uint32_t original, bool survived) {
         if (galactic_ai_) galactic_ai_->record_object_removal(owner, type, original, survived);
     };
+    // a1j t07 (A1_READINGS §38): Evaluate_In_Galactic_Context / Release_Credits_For_Tactical in a land battle read the galactic
+    // AI's world (0x69e1b0).
+    bo.galactic_resolver = [this]() -> const ai::TokenResolver* { return galactic_ai_ ? &galactic_ai_->resolver() : nullptr; };
 #endif
     sim::CampaignBattles::MapLoader loader;
     if (spec_.kind == SessionKind::Skirmish) {

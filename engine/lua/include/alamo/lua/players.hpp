@@ -37,6 +37,7 @@
 //     the world's own table (defaults above) only backs sim-less worlds (tactical / skirmish / tests).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
@@ -116,6 +117,25 @@ struct BudgetFlushRequest {
     std::string category;
 };
 
+// a1j t07 (docs/re/A1_READINGS.md §38): the parent galaxy of a tactical mode, as its AI scripts see it. The battle host
+// sets it on the tactical AI's world (LuaPlayerWorld::set_tactical_galactic); not saved (the host sets it again when a
+// loaded battle is rebuilt). With it:
+//   * Evaluate_In_Galactic_Context (0x69e1b0): the perception is evaluated with `source` (the galactic equations and a
+//     galactic resolver), Self = the player, Target = `target`, Human = the local player; errors (script errors, as the
+//     original's): unknown perception, a player without a galactic AI (`has_galactic_ai`), a failed evaluation. No
+//     conflict record (target -1): no value [L]. [port] Enemy = LuaPlayerWorld::enemy_of (the original binds the
+//     galactic AI's opponent).
+//   * Release_Credits_For_Tactical (0x603c70): land only, the player must have an AI and a galactic AI, then
+//     `release_credits(player, amount)` (amount < 0: none given) - the host's 0x6147d0 on the land credit transfer.
+// Without it both keep their sim-less behaviour (galactic_perception() with no target; releases are queued).
+struct TacticalGalacticContext {
+    PerceptionSource source;
+    int32_t target = -1;  // planet index of the parent's head conflict (0x28a7a0 -> 0x28aa50)
+    bool land = false;    // the tactical mode is land
+    std::function<bool(int32_t player)> has_galactic_ai;  // 0x4b06d0(AI system, galactic) != null
+    std::function<void(int32_t player, double amount)> release_credits;
+};
+
 class LuaPlayerWorld {
 public:
     // Players = the sim's players (ids = sim player ids). `sim` must outlive the world (nullptr detaches).
@@ -138,6 +158,11 @@ public:
     }
     const PerceptionSource& perception() const { return current_; }
     const PerceptionSource& galactic_perception() const { return galactic_ctx_; }
+    void set_tactical_galactic(TacticalGalacticContext c) {
+        tactical_galactic_ = std::move(c);
+        has_tactical_galactic_ = true;
+    }
+    const TacticalGalacticContext* tactical_galactic() const { return has_tactical_galactic_ ? &tactical_galactic_ : nullptr; }
 
     // ---- facts (sim when attached, else setup) ----
     std::string faction_name(int32_t p) const;  // as written
@@ -189,6 +214,8 @@ private:
     int32_t local_ = -1;
     bool ai_suspended_ = false;
     PerceptionSource current_, galactic_ctx_;
+    TacticalGalacticContext tactical_galactic_;
+    bool has_tactical_galactic_ = false;
 };
 
 // Makes `world` reachable from `vm`'s bindings (nullptr detaches). Owner thread only.
