@@ -933,9 +933,9 @@ static void test_sim_hooks() {
     CHECK(fleet_events > 0 && fleet_rejected == 0);
 }
 
-// A2 t03 (Conquer_Opponent): the starbase's own AI_Combat_Power belongs in the untyped force totals only (GALACTIC_ECONOMY
-// 6.2 Node_Weight helper 0x5f2430, mask "all"); a typed row holds the starbase's per-tech spawned members by category
-// (AI_GALACTIC_TOKENS 2: "not the starbase's own power"). Shared by the PotentialPlan Contrast rows and the token leaf.
+// A2 t03 (Conquer_Opponent): the force leaf Target.EnemyForce.SpaceTotalUnnormalized holds the starbase's per-tech
+// spawned members only (AI_GALACTIC_TOKENS 2: "not the starbase's own power"), typed or not; the starbase's own
+// AI_Combat_Power is the helper 0x5f2430's add (GALACTIC_ECONOMY 6.2) and lands in the PotentialPlan's untyped totals only.
 static void test_starbase_force_split() {
     MemoryFiles files;
     AiDefinitions defs;
@@ -970,14 +970,21 @@ static void test_starbase_force_split() {
                    corv = static_cast<uint32_t>(ai_category_bit("Corvette"));
     CHECK(cap != 0 && frig != 0 && corv != 0 && sim.planets()[7].starbase && sim.planets()[7].owner == 1);
     CHECK(sim.players()[1].tech_level == 1);  // slot 1 empty: the fallback reads slot 0
-    // The shared helper (PotentialPlan enemy_strength + token leaf): untyped = members + own power, typed = members only.
-    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, kAllCategories) == 2600.0);
-    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, cap) == 0.0);  // the starbase is a Capital, its own power is NOT in the row
-    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, frig) == 1000.0);
-    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, corv) == 1000.0);
-    CHECK(galactic_ai_structure_force(sim, ti, tSB1, 1, frig | corv) == 2000.0);
-    CHECK(galactic_ai_structure_force(sim, ti, tSB2, 1, kAllCategories) == 1200.0);  // no members: the untyped total is its power
-    CHECK(galactic_ai_structure_force(sim, ti, tSB2, 1, cap) == 0.0);
+    // The per-tech members of a type: never its own power, typed or untyped.
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, kAllCategories) == 2000.0);
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, cap) == 0.0);  // the starbase is a Capital, its own power is NOT in the row
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, frig) == 1000.0);
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, corv) == 1000.0);
+    CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, frig | corv) == 2000.0);
+    CHECK(galactic_ai_member_force(sim, ti, tSB2, 1, kAllCategories) == 0.0);  // no members
+    // The leaf (members only) and the 0x5f2430 helper (+ the starbase's own power in the untyped total only).
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 2000.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 2600.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap) == 0.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, frig) == 1000.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, frig | corv) == 2000.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 0, 0, true, kAllCategories) == 0.0);  // its own base is not enemy strength
+    CHECK(galactic_ai_planet_force(sim, ti, 0, 0, false, true, kAllCategories) == 2000.0);  // Friendly side: its members
     // The token leaf on the live sim (Self = Empire, Target = P7).
     GalacticAiConfig cfg;
     cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
@@ -995,7 +1002,7 @@ static void test_starbase_force_split() {
         CHECK(r.ok);
         return r.value;
     };
-    CHECK(value("Space_All") == 2600.0);
+    CHECK(value("Space_All") == 2000.0);  // members only: the own 600 is not in the leaf
     CHECK(value("Space_Capital") == 0.0);
     CHECK(value("Space_Frigate") == 1000.0);
     CHECK(value("Space_Corvette") == 1000.0);
@@ -1004,7 +1011,106 @@ static void test_starbase_force_split() {
     // The Empire's own base is not enemy force from its point of view.
     c.target = 0;
     CHECK(value("Space_All") == 0.0);
-    std::printf("starbase force split: untyped 2600 (members 2000 + own 600), Capital row 0, Frigate row 1000\n");
+    std::printf("starbase force split: leaf 2000 (members), helper 0x5f2430 untyped 2600 (+ own 600), Capital row 0, Frigate row 1000\n");
+}
+
+// A2 t03: per-tech members of the other objects the force totals walk (AI_GALACTIC_TOKENS 2 / 3): every unit of an orbiting
+// fleet adds its type's members to the space leaf ("each unit's type power (category) + its per-tech members"); every
+// ground structure adds its members (never its own power) to the ground leaf; surface units add only their power; a
+// ground structure with Is_Special_Weapon_In_Space adds its own power to the space leaf by the structure mask (Capital
+// default); the player-root totals add the members of every walked object.
+static void test_force_members() {
+    MemoryFiles files;
+    AiDefinitions defs;
+    EquationSet eqs;
+    std::vector<std::string> plan_files;
+    syn_data(files, defs, eqs, plan_files);
+    eqs.add("Space_All", "Variable_Target.EnemyForce.SpaceTotalUnnormalized");
+    eqs.add("Space_Capital", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Capital\"}");
+    eqs.add("Space_Frigate", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Frigate\"}");
+    eqs.add("Space_Corvette", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Corvette\"}");
+    eqs.add("Ground_All", "Variable_Target.EnemyForce.GroundTotalUnnormalized");
+    eqs.add("Ground_Infantry", "Variable_Target.EnemyForce.GroundTotalUnnormalized {Parameter_Category = \"Infantry\"}");
+    eqs.add("Game_Space", "Game.EnemyForce.SpaceTotalUnnormalized");
+    eqs.add("Self_Space", "Variable_Self.SpaceTotalUnnormalized");
+    eqs.add("Self_Ground", "Variable_Self.GroundTotalUnnormalized");
+    eqs.link();
+    gal::GalacticRules rules = syn_rules();  // SB1 600, Frigate 1000, Corvette 500, Infantry 200
+    rules.types[tBarracks].ai_combat_power = 300.0f;
+    rules.types[tSB2].kind = gal::UnitKind::GroundStructure;  // SB2 stands in for an ion cannon (ground, +0x1E), power 1200
+    rules.types[tSB2].base_level = 0;
+    rules.types[tSB2].required_star_base = 0;
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+    GameRandom rng(4242u, 77u);
+    gal::GalacticSim sim(rules, store, rng.synced());
+    gal::GalacticSetup setup = syn_setup();
+    // The Rebel holds P7: a level-1 base, a barracks, an "ion cannon", a frigate fleet and an infantry company.
+    setup.forces = {{0, 0, tSB1}, {1, 7, tSB1}, {1, 7, tBarracks}, {1, 7, tSB2}, {1, 7, tFrigate}, {1, 7, tInfantry}};
+    CHECK(sim.start(setup));
+    std::vector<GalacticAiTypeInfo> tinfo(tTypes);
+    tinfo[tFrigate].categories = {"FRIGATE"};
+    tinfo[tCorvette].categories = {"CORVETTE"};
+    tinfo[tInfantry].categories = {"INFANTRY"};
+    tinfo[tBarracks].categories = tinfo[tSB2].categories = {"STRUCTURE"};
+    tinfo[tSB1].categories = {"CAPITAL"};
+    tinfo[tSB1].spawn_tech[0] = {{tCorvette, 2}};   // starbase hangar: 1000
+    tinfo[tFrigate].spawn_tech[0] = {{tCorvette, 1}};  // carrier hangar: 500
+    tinfo[tBarracks].spawn_tech[0] = {{tInfantry, 3}};  // land garrison: 600
+    tinfo[tInfantry].spawn_tech[0] = {{tInfantry, 5}};  // a surface unit's list is never read by the planet leaf
+    tinfo[tSB2].special_weapon_space = true;
+    fill_category_masks(tinfo);
+    const std::span<const GalacticAiTypeInfo> ti(tinfo);
+    const uint64_t cap = ai_category_bit("Capital"), frig = ai_category_bit("Frigate"), corv = ai_category_bit("Corvette"),
+                   inf = ai_category_bit("Infantry");
+    const gal::PlanetState& p7 = sim.planets()[7];
+    CHECK(p7.owner == 1 && p7.starbase && p7.structures.size() == 2 && p7.surface.size() == 1 && !p7.orbit.empty());
+    // Space leaf: frigate 1000 + its corvette 500 + the base's corvettes 1000 + the special-weapon structure's own 1200
+    // (Capital rows only: the +0x1658 default); the starbase's own 600 never.
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 3700.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, frig) == 1000.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, corv) == 1500.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, cap) == 1200.0);
+    // Ground leaf: infantry 200 (not its own list) + barracks members 600; the structures' own power (300, 1200) never.
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, false, kAllCategories) == 800.0);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, false, inf) == 800.0);
+    // 0x5f2430: + the starbase's own 600 (space) / the ground structures' own 300 + 1200 (ground), untyped only.
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 4300.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, corv) == 1500.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, kAllCategories) == 2300.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, inf) == 800.0);
+    // The token leaves on the live sim (Self = Empire).
+    GalacticAiConfig cfg;
+    cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
+    cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
+    GalacticAiWorld world(sim, store, &types, &files, rng, defs, eqs, tinfo,
+                          [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, cfg);
+    CHECK(world.load_plans(plan_files) && world.start());
+    sim.update();
+    world.update_player(0, 1, true, false);
+    EvalContext c;
+    c.self = 0;
+    c.target = 7;
+    auto value = [&](const char* name) {
+        const EvalResult r = evaluate(eqs, eqs.find(name), c, world.resolver());
+        CHECK(r.ok);
+        return r.value;
+    };
+    CHECK(value("Space_All") == 3700.0);
+    CHECK(value("Space_Capital") == 1200.0);
+    CHECK(value("Space_Frigate") == 1000.0);
+    CHECK(value("Space_Corvette") == 1500.0);
+    CHECK(value("Ground_All") == 800.0);
+    CHECK(value("Ground_Infantry") == 800.0);
+    CHECK(value("Game_Space") == 3700.0);  // Σ planets: only P7 holds Rebel force
+    // Player root (Self = Rebel): space = base 600 (Capital default) + frigate 1000, ground = infantry 200; members of
+    // every walked object in both: base 1000 + frigate 500 + barracks 600 + infantry 1000 = 3100 [M literal reading].
+    c.self = 1;
+    CHECK(value("Self_Space") == 4700.0);
+    CHECK(value("Self_Ground") == 3300.0);
+    std::printf("force members: space leaf 3700 (fleet + carrier members + base members + special weapon), ground leaf 800, "
+                "0x5f2430 untyped 4300 / 2300\n");
 }
 
 // A2 galactic, AI_GALACTIC_3 rules: heroes never attach through their AI script (§2.4), the TerrainType veto (§6.3),
@@ -2500,6 +2606,7 @@ int main(int argc, char** argv) {
     test_path_finder_world();
     test_sim_hooks();
     test_starbase_force_split();
+    test_force_members();
     test_parity_rules();
     test_production_disabled_and_delivery();
     test_free_store_path_rules();
