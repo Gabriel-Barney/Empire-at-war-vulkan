@@ -3084,8 +3084,8 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         }
         const bool idle = u.stun_end > frame || (desc_of(u).requires_base_power && !has_base_power(u.owner)) ||
                           (u.flags & kUnitWeaponsSuspended) != 0;  // S7 t14: on the jetpack (MOVEMENT §3.1.1)
-    // S7 t15 A2: an idle unit's weapons are not serviced; the WeaponBehavior recharge still elapses (fire_unit_weapon
-    // subtracts the frames since its last service when it runs again).
+        // S7 t15 A2: an idle unit's weapons are not serviced; the WeaponBehavior recharge still elapses (fire_unit_weapon
+        // subtracts the frames since its last service when it runs again).
         u.acquired = 0;
         if (!idle) decide(u, cands_[k], frame, rng);
         if (hooks_) {

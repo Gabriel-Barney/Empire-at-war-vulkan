@@ -930,6 +930,9 @@ public:
     // §2.4.6 ground points). Read in the serial commit phase only; S8 t04: also the land grenade ground test (LOB_SOLVER
     // §6.2). Unset [port]: flat ground at z 0, no box.
     void set_rocket_terrain(RocketTerrain t) { rocket_terrain_ = std::move(t); }
+    // S8 t06: the host's tree set for detonations it triggers between ticks (DETONATE_REMOTE_BOMB). Set at setup so a
+    // detonation before the first tick after a load queries the same trees as an uninterrupted run; tick() also sets it.
+    void set_trees(const TreeSet* trees) { last_trees_ = trees; }
     const RocketTerrain& rocket_terrain() const { return rocket_terrain_; }
     // Spline-rocket state of projectile i (serial order); false when it is not a spline rocket.
     bool rocket(size_t i, RocketView& out) const;
@@ -1524,7 +1527,7 @@ private:
     CombatStats stats_;
     // per-tick parameters for the parallel phases (lambdas capture `this` only)
     const TreeSet* trees_ = nullptr;
-    // S8 t06: the last tick's tree set (host-owned), for detonations the host triggers between ticks (DETONATE_REMOTE_BOMB)
+    // S8 t06: the host's tree set (set_trees, and each tick), for detonations the host triggers between ticks
     const TreeSet* last_trees_ = nullptr;
     std::mutex ctx_mutex_;
     std::vector<std::unique_ptr<QueryContext>> ctx_all_;

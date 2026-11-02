@@ -662,6 +662,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
                 if (q != p) combat_->set_enemy(static_cast<int32_t>(p), static_cast<int32_t>(q), false);
     combat_->reserve(256, 2048, 32, 256);
     attach_rocket_terrain();  // refixf t01
+    combat_->set_trees(&mode.trees());  // S8 t06: between-tick detonations (also right after a load)
     if (!space_) {
         // S8 t01 (TACTICAL_GAPS 3.1 slot 43): LAND_OBSTACLE targets' aim walk over the cells their stamp occupies (map
         // placements' stamps move to the spawned objects in bt_map_load; S8 t02: objects spawned later are stamped by
@@ -1212,7 +1213,8 @@ uint32_t TacticalBattle::exec_attack(TacticalMode& mode, std::span<const objects
         const Unit* u = unit_by_id(id);
         if (!u || u->id == t->id || !combat_->has_unit(u->id)) continue;
         combat_->order_attack(u->id, t->id, hp);
-        fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);  // S7 t22: an object block (flags 0)
+        if (!movement_locked(u->id))  // S7 t22: an object block (flags 0); a locked unit keeps its formation (as Move_To)
+            fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);
         ++n;
         if (!u->movable || movement_locked(u->id)) continue;  // a locked unit fires from where it stands (§28.9 [M])
         const Vec3 up = st.position(u->h);

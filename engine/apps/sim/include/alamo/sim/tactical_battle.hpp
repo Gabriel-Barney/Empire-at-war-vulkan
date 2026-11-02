@@ -248,7 +248,7 @@ public:
     // Reserve units deployed during the last tick() (StorySession STORY_REINFORCE), deploy order.
     std::span<const objects::ObjectId> story_reinforced() const { return story_reinforced_; }
     // S7 t15 A1 - "unit ability finished" (object signal 0x29) raised during the last tick(), in order: ability ends
-    // (AbilitySystem Ended: countdown expiry, special removals; the Remote_Bomb toss at its apply) and the jetpack's swap
+    // (AbilitySystem Ended: countdown expiry, special removals, the Remote_Bomb toss at its Toss_Anim end) and the jetpack's swap
     // back to the primary locomotor (MOVEMENT §3.1.1 step 6, seen before the combat tick as the end of the weapons
     // suspension: [port] one tick late when the swap runs after it). The tactical AI and the story bridge read it.
     std::span<const objects::ObjectId> ability_finished_events() const { return ability_finished_; }

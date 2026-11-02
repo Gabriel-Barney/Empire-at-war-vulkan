@@ -138,7 +138,13 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     bt->movement_->set_threat_fn([threat_world](int32_t owner, mv::V2 p) { return threat_world->point_danger(owner, p.x, p.y); });
     // --- L1 bindings (script_remaining.hpp): Divert / Is_On_Diversion of the AI scripts (L1_S4_REMAINING §2.3) ---
     objects::ObjectStore* ast = &mode.primary();
-    remaining_.move_to = [this, ast](objects::ObjectHandle u, Vec3 p) { return ast->alive(u) && move_unit(ast->id(u), p.x, p.y); };
+    remaining_.move_to = [this, ast](objects::ObjectHandle u, Vec3 p) {
+        if (!ast->alive(u)) return false;
+        const objects::ObjectId id = ast->id(u);
+        if (!move_unit(id, p.x, p.y)) return false;
+        if (!b_->movement_locked(id)) b_->fighter_order(std::span<const objects::ObjectId>(&id, 1), 0, Vec3{p.x, p.y, 0.0f});  // S7 t22
+        return true;
+    };
     remaining_.move_goal = [bt, ast](objects::ObjectHandle u, Vec3& goal) {
         if (!ast->alive(u) || !bt->movement_->has_unit(ast->id(u))) return false;
         const mv::UnitView v = bt->movement_->view(ast->id(u));
@@ -790,7 +796,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 if (!u) continue;
                 b_->combat_->order_attack(u->id, t->id, hp);
                 b_->combat_->set_attack_goal(u->id, t->id, hp);  // refixf t06: Attack_Target block (kind 3, hard point, §2.8)
-                b_->fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);  // S7 t22: an object block
+                if (!b_->movement_locked(u->id))  // S7 t22: an object block; a locked unit keeps its formation (as Move_To)
+                    b_->fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, t->id);
                 ++n;
                 if (!u->movable) continue;
                 const Vec3 up = st.position(u->h);
@@ -1326,7 +1333,9 @@ void BattleAi::standin_orders() {
         if (dist <= 0.8f * range) continue;
         const Vec3 ep = st.position(best->h);
         const float k = (dist - 0.7f * range) / dist;
-        move_unit(u.id, up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k);
+        const Vec3 dest{up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k, 0.0f};
+        move_unit(u.id, dest.x, dest.y);
+        if (!b_->movement_locked(u.id)) b_->fighter_order(std::span<const objects::ObjectId>(&u.id, 1), 0, dest);  // S7 t22
         ++b_->stats_.orders;
     }
 }
