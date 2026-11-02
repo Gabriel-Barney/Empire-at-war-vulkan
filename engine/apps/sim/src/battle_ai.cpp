@@ -69,6 +69,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.constants = setup.constants;
     cfg.log_decisions = setup.log_decisions;
     cfg.game_seed = host.session_seed();  // A2 tactical: perception '#' reseed (AI_GALACTIC_3 §7.3)
+    cfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
     use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();

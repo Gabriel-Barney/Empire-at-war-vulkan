@@ -34,6 +34,7 @@
 #include "alamo/galactic/cadence.hpp"  // PHASE2_ANSWERS Q11 all-pairs cadence (land path finder)
 #include "alamo/lua/ai_bridge.hpp"
 #include "alamo/lua/ai_tactical_bridge.hpp"
+#include "alamo/lua/gc_schedule.hpp"  // OPT2 t04
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/lua/script_remaining.hpp"  // L1 final
@@ -2989,6 +2990,16 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     Impl& w = *impl_;
     w.now = now;
     w.mode_frame = mode_frame;
+    {  // OPT2 t04: staggered scheduled Lua collections, once per update before any script of this world runs
+        std::vector<lua::LuaVm*> vms;  // free stores by player, plans by id, evaluators by name (saved orders)
+        for (const auto& pa : w.ai)
+            if (pa && pa->fs_vm) vms.push_back(pa->fs_vm.get());
+        for (const auto& [id, pi] : w.plans)
+            if (pi.vm) vms.push_back(pi.vm.get());
+        for (const auto& [key, e] : w.scripts.loaded_vms())
+            if (e.vm) vms.push_back(e.vm.get());
+        lua::collect_scheduled(vms, static_cast<uint64_t>(now), w.cfg.lua_gc_pf);
+    }
     w.refresh();
     w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
     w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29

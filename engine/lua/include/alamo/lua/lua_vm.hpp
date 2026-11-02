@@ -5,6 +5,8 @@
 // call claim_ownership() between frames). Every entry point checks it and aborts on a foreign
 // thread; no job-system worker may touch a VM. Lua itself is not thread-safe and scripts draw from
 // the synchronized RNG, so script execution is part of the sim's single-threaded semantic order.
+// One exception (OPT2 t04): collect_detached() runs a collection on a worker while the owner waits
+// for it (gc_schedule.hpp); it runs no Lua code.
 //
 // Determinism (rule 3):
 //   * the VM is the original's Lua 5.0.2 (double numbers), compiled as C++ with /fp:precise or
@@ -155,6 +157,18 @@ public:
         uint32_t strings = 0;    // interned strings
     };
     HeapInfo heap_info() const;
+
+    // ---- garbage collection (OPT2 t04, scheduled by alamo/lua/gc_schedule.hpp) ----
+    // True while a Lua call runs in this VM (a script, a binding, a service): no scheduled collection then.
+    bool gc_busy() const;
+    // One full collection (Lua 5.0.2's own mark and sweep and new threshold, the latter then scaled by
+    // threshold_percent, at least 100) WITHOUT the __gc finalizers, which wait for run_finalizers(). The one entry
+    // point that may run on a thread that does not own the VM: a job worker of collect_scheduled() while the owner
+    // thread waits for that job and nothing else touches the VM. It runs no Lua code and touches nothing outside
+    // this VM's own heap. Requires !gc_busy().
+    void collect_detached(uint32_t threshold_percent = 100);
+    // Runs the finalizers the last collect_detached() queued, if any (owner thread, between services).
+    void run_finalizers();
 
     struct Impl;
 
