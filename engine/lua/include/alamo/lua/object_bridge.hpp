@@ -252,10 +252,14 @@ public:
     // creation) returns the unit's count, which the block keeps; the host calls ability_finished(id) for every signal, in
     // its order (ids no block watches are ignored, so a battle without blocking Activate_Ability keeps its CRCs). The
     // block is finished once ability_signals(id) moved past its value.
+    // S7 t26 (AI_TACTICAL §7.3.3 item 2): the block listens to signals 0x29, 0xb and 0x10 alike (the first ends it), so the
+    // count is of all three: ability_finished (0x29) and order_replaced (0xb: a new order replaces the unit's order);
+    // 0x10 (death / removal) the block reads from the store.
     uint32_t watch_ability(objects::ObjectId id) { return ability_signals_[id]; }
     void ability_finished(objects::ObjectId id) {
         if (const auto it = ability_signals_.find(id); it != ability_signals_.end()) ++it->second;
     }
+    void order_replaced(objects::ObjectId id) { ability_finished(id); }
     uint32_t ability_signals(objects::ObjectId id) const {
         const auto it = ability_signals_.find(id);
         return it == ability_signals_.end() ? 0u : it->second;

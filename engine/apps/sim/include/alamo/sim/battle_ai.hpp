@@ -119,6 +119,9 @@ public:
     std::vector<int32_t> ability_finished() override;
     // S7 t21: TacticalBattle::movement_locked (0x39ad40) for the ambush member list.
     bool movement_locked(int32_t object_id) override;
+    // S7 t27: the L1 weather system's Sight_Range_Modifier for the type's Weather_Category (every owner weather-affected
+    // [port], as the fog's land sight range).
+    float sight_weather_factor(int32_t type, int32_t object_id) override;
     // HIJACK_UNIT (AI_GALACTIC_3 §4.3): GalacticSim::magic_spawn at the battle planet, a surface unit launched into the
     // orbit fleet (FAILED when that fails, e.g. blockaded), TacticalBattle::add_reserve; returns the new pool entry.
     // Refused before spawning when the type is not in the battle tables. [port] the galactic AI free store is not touched.
@@ -184,6 +187,8 @@ private:
     // (draw_unit_ai_stamps, two synced draws) when fill() first lists it; ascending id.
     std::map<objects::ObjectId, int32_t> unit_ai_stamps_;
     std::vector<objects::ObjectId> team_units(uint8_t player, uint32_t wire) const;  // battle host: unit or TEAM members
+    // S7 t26: signal 0xb (a new order replaces the unit's order) on every unit an executed AI / script order took.
+    void order_signals(uint8_t player, const commands::EventData& ev);
     lua::TacticalScriptHooks tactical_;    // battle host: script_gaps.hpp hooks of the tactical AI VMs (L1 final list)
 #ifdef ALAMO_LUA_HAVE_FOG
     // refixf t03: only object_hidden is set (Find_Nearest's FOW_Object_Hidden test); fog stays null, so the AI VMs'

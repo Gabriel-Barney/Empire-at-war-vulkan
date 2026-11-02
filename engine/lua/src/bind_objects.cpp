@@ -1233,6 +1233,17 @@ AbilityArg ability_arg_family(uint8_t t) {
         if (x == t) return AbilityArg::OptionalTarget;
     return AbilityArg::Toggle;  // the none / bool list, DEPLOY, and types the table does not list [inferred]
 }
+// S7 t26 (AI_TACTICAL §7.3.3 item 1, second switch of 0x570a50 [H]): when Activate_Ability returns a block.
+enum class AbilityBlockRule : uint8_t { Never, Accepted, Always };
+AbilityBlockRule ability_block_rule(uint8_t t) {
+    static constexpr uint8_t kAccepted[] = {13, 15, 16, 17, 18, 20, 21, 22, 27, 30, 31, 34, 37, 41, 45, 51, 53, 55, 58, 59, 64, 66};
+    static constexpr uint8_t kAlways[] = {2, 50, 67, 71, 73, 74};
+    for (const uint8_t x : kAccepted)
+        if (x == t) return AbilityBlockRule::Accepted;
+    for (const uint8_t x : kAlways)
+        if (x == t) return AbilityBlockRule::Always;
+    return AbilityBlockRule::Never;
+}
 #endif
 
 // Activate_Ability([name], [on | target object | target position]) -> BlockingStatus.
@@ -1244,10 +1255,12 @@ AbilityArg ability_arg_family(uint8_t t) {
 // Otherwise: SetUnitAbilityMode on the direct path (COMMANDS.md §2.2 / §5). No name: the type's first unit
 // ability [inferred]. An ability the unit does not have is a no-op [inferred].
 // S7 t15 A1 (MOVEMENT §3.1.1 step 6, ABILITIES_HARDPOINTS §2.6): on the S9 path the BlockingStatus is an AbilityBlockStatus
-// (pending count 1, push_ability_block) that finishes on the unit's next "unit ability finished" signal 0x29 or its
-// death / removal, also when the activation itself was refused [M: 0x570580 sets the count to 1 either way]; no ability
-// (unknown name, not the unit's, dead target argument) -> finished at once [inferred]. *activated (task-force
-// Activate_Ability, bind_ai.cpp): whether the S9 command accepted the unit.
+// (pending count 1, push_ability_block) that finishes on the unit's next signal 0x29 ("unit ability finished"), 0xb (a new
+// order replaces its order, ObjectBridge::order_replaced) or its death / removal (0x10); no timeout. S7 t26 (AI_TACTICAL
+// §7.3.3 items 1-2): the block exists only when 0x570a50 answers true (ability_block_rule); a gate refusal (unknown name,
+// not the unit's, dead target argument, DEPLOY already in the requested state) and the "never" families answer nil.
+// *activated (task-force Activate_Ability, bind_ai.cpp): that true result (the task force counts the unit; the others get
+// Unit_Ability_Finished queued at once).
 int push_ability_block(Call& c, ObjectId object) {
     ObjectBridge* b = bridge(c);
     if (!b) return push_block(c, object, 0);  // no bridge: nothing reports the signal -> finished
@@ -1283,16 +1296,19 @@ int activate_ability(Call& c, bool* activated) {
             on = to_bool(c, 2);
         } else {
             ObjectHandle th{};
-            if (position_arg(c, 2, p, &th) != PosArg::Ok) return push_block(c, c.self->id, 0);  // dead target: no-op
+            if (position_arg(c, 2, p, &th) != PosArg::Ok) return push_nil(c);  // dead target: no-op, nil (S7 t26: 0x570a50 false)
             if (th) target = store(c)->id(th);
             has_point = true;
         }
     }
 #if ALAMO_LUA_HAVE_ABILITIES
     if (ab::AbilitySystem* a = ability_system(c, c.self->id)) {
-        if (id == 0 || !a->has_ability(c.self->id, id)) return push_block(c, c.self->id, 0);
+        if (id == 0 || !a->has_ability(c.self->id, id)) return push_nil(c);  // S7 t26: a gate refusal answers nil
+        // S7 t26 (§7.3.3 item 1): DEPLOY executes only when the requested state differs from the current one; equal -> nil.
+        if (id == ab::kDeploy && a->is_active(c.self->id, id) == on) return push_nil(c);
         const uint32_t frame = ability_frame(c);
         const ObjectId users[] = {c.self->id};
+        const bool gates = a->is_ready(c.self->id, id, frame) && a->can_activate(c.self->id, id, true, true, frame);
         uint32_t accepted = 0;
         switch (ability_arg_family(id)) {
             case AbilityArg::Object:
@@ -1315,8 +1331,18 @@ int activate_ability(Call& c, bool* activated) {
                 accepted = a->set_unit_ability_mode(users, id, on, frame, target);
                 break;
         }
-        if (activated) *activated = accepted > 0;
-        return push_ability_block(c, c.self->id);
+        // S7 t26 (§7.3.3 item 1): whether 0x570a50 answers true (a block; the task force counts the unit) depends on the
+        // family: DEPLOY always once executed; the object-target ids when the pending ability was stored (accepted);
+        // JET_PACK when the jump started [port: accepted - the port's jump goes through the pending-ability path]; the
+        // Dummy_Barrage_Target ids 50 67 71 73 74 always once the gates passed; every other ability nil, even on success.
+        bool block = false;
+        switch (ability_block_rule(id)) {
+            case AbilityBlockRule::Always: block = id == ab::kDeploy || gates; break;
+            case AbilityBlockRule::Accepted: block = accepted > 0; break;
+            case AbilityBlockRule::Never: break;
+        }
+        if (activated) *activated = block;
+        return block ? push_ability_block(c, c.self->id) : push_nil(c);
     }
 #else
     (void)has_point;

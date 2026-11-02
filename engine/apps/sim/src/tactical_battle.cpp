@@ -2876,6 +2876,10 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
         // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
         // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
         if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);
+        // S7 t26 (AI_TACTICAL §7.3.3 item 3): DEPLOY raises 0x29 when the deploy (anim 25 -> state 0x19) or undeploy (anim
+        // 26 -> state 0) clip ends, at once on a blocked reverse. The port's DEPLOY state change is instant (AbilitySystem
+        // Deployed event), so the signal is raised here, the one place S8 t11 moves to the end of its deploy window.
+        if (e.kind == ta::AbilityEventKind::Deployed) ability_finished_.push_back(e.id);
     }
     oi_events(mode);  // OI abilities: ability moves / stops / owner changes, ability spawns, death survivors
     abilities_->clear_events();
@@ -3107,6 +3111,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     fog_setup_tick();   // FOWF t05: setup phase end (all humans ready / countdown)
     profile::lap("tac.fog");
     advance_queues(mode, rng);  // [port: Gabriel] 5b. queueable unit actions: completed orders start the next entry
+    late_swap_back_signals();   // S7 t27: a jetpack swap back after the combat_pre loop raises signal 0x29 in this tick
     stats_.shots = combat_->stats().shots;
     stats_.hits = combat_->stats().hits;
     // 6. victory.
@@ -3116,6 +3121,19 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     land_obstacles_sync(mode);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
     hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
     profile::lap("tac.victory");
+}
+
+// S7 t27 (MOVEMENT §3.1.1 step 6): the swap back raises signal 0x29 at once. The combat_pre loop sees the swaps of the
+// movement tick; a swap back later in the tick (after that loop: ability events, orders, queues) is reported here, in the
+// same tick, and the flag cleared so the next combat_pre loop does not report it again.
+void TacticalBattle::late_swap_back_signals() {
+    if (!movement_ || !combat_) return;
+    for (const Unit& u : units_) {
+        if (!u.alive || u.retreated || !u.movable || !combat_->has_unit(u.id)) continue;
+        if ((combat_->flags(u.id) & tc::kUnitWeaponsSuspended) == 0 || movement_->view(u.id).secondary_locomotor) continue;
+        ability_finished_.push_back(u.id);
+        combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, false);
+    }
 }
 
 // ---- commands / owner ---------------------------------------------------------------------------------------------

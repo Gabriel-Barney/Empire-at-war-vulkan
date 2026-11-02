@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <span>
 
@@ -86,6 +87,15 @@ cmd::EventData lua_order_event(lua::LuaOrder order, std::span<const uint32_t> un
     for (size_t i = 1; i < n; ++i) put_u32(b.data() + lua::kLuaOrderPayloadBytes + 4 * (i - 1), units[i]);
     ev.set_bytes("data", std::span<const uint8_t>(b.data(), b.size()));
     return ev;
+}
+
+// S7 t27: a threat tolerance as the Lua MoveTo order's argument word (float bits; BattleAi reads 0 as "no threshold", so a
+// tolerance of +0.0 is sent as the smallest positive float [port]) and its decision-log suffix.
+uint32_t threat_bits(float t) { return t == 0.0f ? 1u : std::bit_cast<uint32_t>(t); }
+std::string threat_text(float t) {
+    char b[48];
+    std::snprintf(b, sizeof b, " threat %g", static_cast<double>(t));
+    return b;
 }
 
 AiMode ai_mode_of(TacticalMode m) { return m == TacticalMode::Land ? AiMode::Land : AiMode::Space; }
@@ -424,12 +434,17 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     // entry failed. When nothing is left (no unit, no pending reinforcement, no build in progress [M: the TF +0x60 entry
     // vector's type-flag test]) plan event 7 No_Units_Remaining is queued to the plan (dispatched by its next PumpEvents).
     void units_lost(TfRec& t);
+    bool counted_entry_type(int32_t type) const;  // S7 t26: an entry type that keeps the task force (not hero / SW)
     // S7 t15 A1 / S7 t21: per-frame object signals of the ambush / ability statuses (deaths, target death, movement
     // finished) and the host's "unit ability finished" signals (0x29).
     void status_signals();
     void ability_signals(const std::vector<int32_t>& ids);
+    // S7 t26: signal 0xb on a unit (and its team container): the blocks waiting on it end (no plan event).
+    void order_signal(int32_t oid);
+    // S7 t26: the ability blocks waiting on `oid` (or its team `team_id`) lose that unit (any of 0x29 / 0xb / 0x10).
+    void ability_block_signal(int32_t oid, int32_t team_id);
     int32_t tf_member_of(int32_t object_id) const;  // the task force holding the object or its team container, -1 none
-    bool ambush_point(const StatusRec& s, int32_t player, Vec3f& out) const;
+    bool ambush_point(const StatusRec& s, int32_t player, Vec3f& out, bool* no_walk = nullptr) const;
     void ambush_plan(StatusRec& s, bool first);
     void opportunity_events(const std::vector<OpportunityTargetEvent>& events);  // STRATEGIC_GAPS §5.3
     void service_statuses(int32_t player);
@@ -456,7 +471,10 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     }
 
     // ---- tactical orders ----
-    int32_t issue_move(TfRec& t, AiTacticalOrder order, const Vec3f& dest, int32_t target_object);
+    // S7 t27: `threat` (MoveTo only) = the group move's threat tolerance (MOVEMENT REMAINING_GAPS §4.2 threshold T), sent
+    // as the Lua MoveTo group order; without one the MoveToPositionFacing group move.
+    int32_t issue_move(TfRec& t, AiTacticalOrder order, const Vec3f& dest, int32_t target_object,
+                       std::optional<float> threat = std::nullopt);
     std::vector<uint32_t> movable_ids(const TfRec& t);  // the task force's movable units, list order
 
     // ================= lua::AiScriptHost (A2 family) =================
@@ -622,7 +640,8 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         Vec3f b;
         if (!t || !arg_position(other, point, b)) return -1.0;
         prune_tf(*t);
-        if (t->units.empty()) return -1.0;
+        // S7 t27 (AI_TACTICAL §7.3.2): Get_Distance takes the task-force position (vf46), so an empty task force measures
+        // from (0, 0, 0) like every other position-convertible use (S7 t20), not nil.
         return dist3(tf_center(*t), b);
     }
     void tf_set_targeting_priorities(int32_t tf, std::string_view set) override {
@@ -1177,8 +1196,30 @@ void TacticalAiWorld::Impl::refresh() {
     }
 }
 
+// S7 t26 (AI_TACTICAL §7.3.3 item 4, TF signal handler 0x5fe5d0): on every member loss (0x10 / 0x1a, Release_Unit, a failed
+// production entry) event 7 is queued unless a remaining entry of the TF +0x60 vector - members (by company type),
+// claimed reinforcements not yet arrived, builds in progress [port: the entry vector] - has a type that is not
+// Is_Named_Hero, not Is_Generic_Hero, not Is_Special_Weapon_In_Space and has no land LOBBING_SUPERWEAPON (0x37). So a
+// task force left with only heroes / special weapons gets No_Units_Remaining, again on each further loss.
+bool TacticalAiWorld::Impl::counted_entry_type(int32_t type) const {
+    if (!types || type < 0 || static_cast<size_t>(type) >= types->size()) return true;
+    const auto ti = static_cast<objects::TypeIndex>(type);
+    constexpr objects::BehaviorTypeId kLobbingSuperweapon = 0x37;
+    return !types->get_bool(ti, "Is_Named_Hero") && !types->get_bool(ti, "Is_Generic_Hero") &&
+           !types->get_bool(ti, "Is_Special_Weapon_In_Space") && !types->has_behavior(ti, objects::BehaviorSet::Land, kLobbingSuperweapon);
+}
+
 void TacticalAiWorld::Impl::units_lost(TfRec& t) {
-    if (!t.units.empty() || !t.pending.empty() || !t.producing.empty()) return;
+    for (const ObjectHandle u : t.units) {
+        if (!store.exists(u)) continue;
+        const ObjectHandle team = store.container(u);
+        const objects::TypeIndex ty = team && store.exists(team) ? store.type(team) : store.type(u);  // company type 0x3973b0
+        if (ty == objects::kNone || counted_entry_type(static_cast<int32_t>(ty))) return;
+    }
+    for (const TacticalReinforcement& e : t.pending)
+        if (counted_entry_type(e.type)) return;
+    for (const auto& [type, builder] : t.producing)
+        if (counted_entry_type(type)) return;
     decide(t.player, "tf " + t.name + " no units remaining");
     const TfRec copy = t;
     tf_event(copy, "No_Units_Remaining", {}, true);
@@ -1212,7 +1253,7 @@ void TacticalAiWorld::Impl::service_free_store(PlayerAi& p) {
         lua::set_number_global(vm, "LastUnitService", p.sched.last_unit_service);
     }
     drain_world_requests(p.player, -1);
-    for (const std::string& e : vm.errors()) errors.push_back("free store " + std::to_string(p.player) + ": " + e);
+    append_script_errors(vm, "free store " + std::to_string(p.player) + ": ", errors);  // S7 t27: with SCRIPT ERROR lines
     lua::clear_script_logs(vm);
 }
 
@@ -1713,7 +1754,7 @@ void TacticalAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
     decide(pi.player, "plan " + std::to_string(id) + " " + library.plans[pi.plan].name + " ended " + (pi.result ? "success" : "failure") +
                           (by_goal_system ? " (released)" : ""));
     if (pi.vm) {
-        for (const std::string& e : pi.vm->errors()) errors.push_back(library.plans[pi.plan].name + ": " + e);
+        append_script_errors(*pi.vm, library.plans[pi.plan].name + ": ", errors);  // S7 t27: with SCRIPT ERROR lines
         runtime->release(pi.plan, std::move(pi.vm));
     }
     plans.erase(it);
@@ -1931,14 +1972,18 @@ std::vector<uint32_t> TacticalAiWorld::Impl::movable_ids(const TfRec& t) {
     return ids;
 }
 
-int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const Vec3f& dest, int32_t target_object) {
+int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const Vec3f& dest, int32_t target_object,
+                                          std::optional<float> threat) {
     const std::vector<uint32_t> ids = movable_ids(t);
     const char* what = kind == AiTacticalOrder::AttackMove ? "attack-move" : kind == AiTacticalOrder::GuardTarget ? "guard" : "move";
     char buf[96];
     std::snprintf(buf, sizeof buf, " %zu units -> (%.0f, %.0f)", ids.size(), static_cast<double>(dest.x), static_cast<double>(dest.y));
     if (ids.empty()) return new_status(t.plan, t.id, StatusKind::Failed);
     bool any = false;
-    if (kind == AiTacticalOrder::MoveTo) {
+    if (kind == AiTacticalOrder::MoveTo && threat) {
+        any = order(t.player, lua_order_event(lua::LuaOrder::MoveTo, ids, -1, dest, threat_bits(*threat)),
+                    std::string("tf ") + t.name + " " + what + buf + threat_text(*threat)) == cmd::RejectReason::None;
+    } else if (kind == AiTacticalOrder::MoveTo) {
         cmd::EventData ev(cmd::EventType::MoveToPositionFacing);
         ev.set_f("x", dest.x).set_f("y", dest.y).set_f("z", dest.z).set_ids("units", ids);
         any = order(t.player, ev, std::string("tf ") + t.name + " " + what + buf) == cmd::RejectReason::None;
@@ -2013,13 +2058,22 @@ int32_t TacticalAiWorld::Impl::tf_tactical_order(int32_t tf, lua::AiTacticalOrde
 
 // ---- S7 t21: Prepare_Ambush (AI_TACTICAL §7.3.1) ----
 
+float land_ambush_step(float land_fow_reveal_range, float weather_sight_factor, float max_attack_range) {
+    const float sight = land_fow_reveal_range * weather_sight_factor;  // 0x3722a0
+    return sight > 0.0f ? sight : max_attack_range;                     // <= 0: 0x3749d0
+}
+
 // Ambush point (0x73a140): P = target + minDist x u on the chosen side, walked further out along u in steps of the target
 // type's Space_FOW_Reveal_Range (<= 0: AI_SpaceEvaluatorRegionSize) until the enemy force of `player` in the step x step
 // square around P (threat grid, all categories, x AI_SpaceAreaThreatScaleFactor) is <= the tolerance; no point once P
-// leaves the map box on an axis. Land (0x6ec8b0): step = Land_FOW_Reveal_Range (x the terrain factor 0x3722a0, [port]
-// 1.0), else the target's max attack range; both <= 0 -> the first point, no threat test. [port] The yaw's sin / cos are
-// the target's facing vector normalised (XY); a zero facing counts as yaw 0. [port] At most 4096 steps.
-bool TacticalAiWorld::Impl::ambush_point(const StatusRec& s, int32_t player, Vec3f& out) const {
+// leaves the map box on an axis. Land (0x6ec8b0, S7 t27 AI_TACTICAL §7.3.3 item 5): step = the land sight range 0x3722a0
+// of the target's company type (0x3973b0: its team container's type, else its own) = Land_FOW_Reveal_Range x the weather
+// Sight_Range_Modifier of its Weather_Category (host sight_weather_factor), else the target type's max attack range; both
+// <= 0 -> the first point, no threat / box test (`*no_walk` set). The land threat is not scaled [M: the land call passes no
+// AI_SpaceAreaThreatScaleFactor]. [port] The yaw's sin / cos are the target's facing vector normalised (XY); a zero facing
+// counts as yaw 0. [port] At most 4096 steps.
+bool TacticalAiWorld::Impl::ambush_point(const StatusRec& s, int32_t player, Vec3f& out, bool* no_walk) const {
+    if (no_walk) *no_walk = false;
     const ObjectHandle h = store.find(s.target);
     if (!store.alive(h) || s.direction < 0 || s.direction > 3) return false;
     const Vec3 f = store.facing(h);
@@ -2036,27 +2090,29 @@ bool TacticalAiWorld::Impl::ambush_point(const StatusRec& s, int32_t player, Vec
         default: u = {-c, -sn, -0.0f}; break;  // back
     }
     const bool land = cfg.mode == TacticalMode::Land;
-    const objects::TypeIndex ty = store.type(h);
+    objects::TypeIndex ty = store.type(h);
+    if (land)
+        if (const ObjectHandle team = store.container(h); team && store.exists(team)) ty = store.type(team);  // company type
     float step = 0.0f;
     if (types && ty != objects::kNone) {
         const auto& col = land ? types->columns().land_fow_reveal_range : types->columns().space_fow_reveal_range;
         if (static_cast<size_t>(ty) < col.size()) step = col[static_cast<size_t>(ty)];
     }
-    if (step <= 0.0f) {
-        if (land) {
-            const PerceptionObject* o = object(s.target);
-            step = o ? o->max_attack_range : 0.0f;
-        } else {
-            step = cfg.constants.space_region_size;
-        }
+    if (land) {
+        const PerceptionObject* o = object(s.target);
+        const float weather = ty != objects::kNone ? host.sight_weather_factor(static_cast<int32_t>(ty), s.target) : 1.0f;
+        step = land_ambush_step(step, weather, o ? o->max_attack_range : 0.0f);
+    } else if (step <= 0.0f) {
+        step = cfg.constants.space_region_size;
     }
     const Vec3f t = pos_of(h);
     Vec3f p{t.x + s.min_dist * u.x, t.y + s.min_dist * u.y, t.z + s.min_dist * u.z};
     if (land && step <= 0.0f) {
         out = p;
+        if (no_walk) *no_walk = true;
         return true;
     }
-    const float scale = land ? cfg.constants.land_area_threat_scale : cfg.constants.space_area_threat_scale;
+    const float scale = land ? 1.0f : cfg.constants.space_area_threat_scale;
     std::vector<uint32_t> cells;
     for (int k = 0; k < 4096; ++k) {
         if (p.x < cfg.map.min_x || p.x > cfg.map.max_x || p.y < cfg.map.min_y || p.y > cfg.map.max_y) return false;
@@ -2110,9 +2166,10 @@ void TacticalAiWorld::Impl::ambush_plan(StatusRec& s, bool first) {
     if (ids.empty()) return;
     char buf[96];
     std::snprintf(buf, sizeof buf, " %zu units -> (%.0f, %.0f)", ids.size(), static_cast<double>(p.x), static_cast<double>(p.y));
-    cmd::EventData ev(cmd::EventType::MoveToPositionFacing);  // the TF Move_To group move (threat tolerance not modelled)
-    ev.set_f("x", p.x).set_f("y", p.y).set_f("z", p.z).set_ids("units", ids);
-    order(t->player, ev, "tf " + t->name + (first ? " ambush on " : " ambush re-plan on ") + std::to_string(s.target) + buf);
+    // Coordinator::Move_To {kind 1 = P, threat tolerance = +0x58}: S7 t27 the group move carries the tolerance (the Lua
+    // MoveTo group order: one formation move with the movement threshold T).
+    order(t->player, lua_order_event(lua::LuaOrder::MoveTo, ids, -1, p, threat_bits(s.threat)),
+          "tf " + t->name + (first ? " ambush on " : " ambush re-plan on ") + std::to_string(s.target) + buf + threat_text(s.threat));
     s.last_order = now;
 }
 
@@ -2139,11 +2196,13 @@ int32_t TacticalAiWorld::Impl::tf_prepare_ambush(int32_t tf, const lua::AiArg& t
     probe.threat = static_cast<float>(threat);
     if (cfg.mode == TacticalMode::Land) {
         // Land (0x6ec8b0): the walk once, then an ordinary movement block to P; nil without a point or when the block is
-        // already finished (no unit to move).
+        // already finished (no unit to move) - S7 t27 (§7.3.3 item 5): without a walk (step <= 0) the block is returned
+        // even when already finished. The move carries the tolerance (move parameter +0x54) in both cases.
         Vec3f p;
-        if (!ambush_point(probe, t->player, p)) return -1;
-        const int32_t id = issue_move(*t, AiTacticalOrder::MoveTo, p, -1);
-        if (statuses[id].finished) {
+        bool no_walk = false;
+        if (!ambush_point(probe, t->player, p, &no_walk)) return -1;
+        const int32_t id = issue_move(*t, AiTacticalOrder::MoveTo, p, -1, probe.threat);
+        if (statuses[id].finished && !no_walk) {
             statuses.erase(id);
             return -1;
         }
@@ -2198,6 +2257,26 @@ int32_t TacticalAiWorld::Impl::tf_activate_ability_units(int32_t tf, std::string
     return id;
 }
 
+void TacticalAiWorld::Impl::ability_block_signal(int32_t oid, int32_t team_id) {
+    for (auto& [sid, s] : statuses) {
+        if (s.kind != StatusKind::Ability || s.finished) continue;
+        auto it = std::find(s.members.begin(), s.members.end(), oid);
+        if (it == s.members.end() && team_id >= 0) it = std::find(s.members.begin(), s.members.end(), team_id);
+        if (it == s.members.end()) continue;
+        s.members.erase(it);
+        if (s.members.empty()) s.finished = true;
+    }
+}
+
+void TacticalAiWorld::Impl::order_signal(int32_t oid) {
+    const ObjectHandle h = store.find(oid);
+    bridge.order_replaced(oid);
+    const ObjectHandle team = store.exists(h) ? store.container(h) : ObjectHandle{};
+    const int32_t team_id = team ? id_of(team) : -1;
+    if (team_id >= 0 && team_id != oid) bridge.order_replaced(team_id);
+    ability_block_signal(oid, team_id);
+}
+
 // S7 t15 A1: the host's signal 0x29 list (its order). Each id feeds the scripts' object bridge (blocking
 // GameObjectWrapper.Activate_Ability, the team container too), decrements the ability statuses that wait on the unit (or
 // its team) once, and - unless the unit is dying (obj +0x3a0 bit 0x02) - raises plan event 19 Unit_Ability_Finished(tf,
@@ -2209,14 +2288,7 @@ void TacticalAiWorld::Impl::ability_signals(const std::vector<int32_t>& ids) {
         const ObjectHandle team = store.exists(h) ? store.container(h) : ObjectHandle{};
         const int32_t team_id = team ? id_of(team) : -1;
         if (team_id >= 0 && team_id != oid) bridge.ability_finished(team_id);
-        for (auto& [sid, s] : statuses) {
-            if (s.kind != StatusKind::Ability || s.finished) continue;
-            auto it = std::find(s.members.begin(), s.members.end(), oid);
-            if (it == s.members.end() && team_id >= 0) it = std::find(s.members.begin(), s.members.end(), team_id);
-            if (it == s.members.end()) continue;
-            s.members.erase(it);
-            if (s.members.empty()) s.finished = true;
-        }
+        ability_block_signal(oid, team_id);
         if (!store.alive(h) || store.dying(h)) continue;
         const int32_t tf = tf_member_of(oid);
         const TfRec* t = tf >= 0 ? tf_rec(tf) : nullptr;
@@ -2251,7 +2323,12 @@ void TacticalAiWorld::Impl::status_signals() {
         const TfRec* t = tf_rec(s.tf);
         const int32_t player = t ? t->player : -1;
         if (s.kind == StatusKind::Ability) {
-            s.members.erase(std::remove_if(s.members.begin(), s.members.end(), [&](int32_t id) { return gone(id, player); }),
+            // S7 t26 (§7.3.3 item 2): signal 0x10 (death / removal) ends the unit's count; an owner change (0x1a) does not.
+            s.members.erase(std::remove_if(s.members.begin(), s.members.end(),
+                                           [&](int32_t id) {
+                                               const ObjectHandle h = store.find(id);
+                                               return !store.alive(h) || store.dying(h);
+                                           }),
                             s.members.end());
             if (s.members.empty()) s.finished = true;
             continue;
@@ -3019,12 +3096,13 @@ void TacticalAiWorld::end_battle() {
     for (const int32_t id : ids) w.end_plan(id, true);
     for (auto& a : w.ai)
         if (a && a->fs_vm) {
-            for (const std::string& e : a->fs_vm->errors()) w.errors.push_back("free store " + std::to_string(a->player) + ": " + e);
+            append_script_errors(*a->fs_vm, "free store " + std::to_string(a->player) + ": ", w.errors);  // S7 t27
             a->fs_vm.reset();
         }
 }
 
 void TacticalAiWorld::set_suspended(bool suspended) { impl_->gate.suspend(suspended); }
+void TacticalAiWorld::order_replaced(int32_t object_id) { impl_->order_signal(object_id); }
 void TacticalAiWorld::refog(int32_t player, float x, float y) { impl_->perc.grid().refog_at(player, x, y, impl_->mode_frame); }
 bool TacticalAiWorld::is_ai_player(int32_t player) const { return impl_->player_ai(player) != nullptr; }
 int32_t TacticalAiWorld::opponent(int32_t player) const {
@@ -3051,11 +3129,9 @@ const std::vector<TacticalAiDecision>& TacticalAiWorld::decision_log() const { r
 std::vector<std::string> TacticalAiWorld::lua_errors() const {
     std::vector<std::string> e = impl_->errors;
     for (const auto& [id, p] : impl_->plans)
-        if (p.vm)
-            for (const std::string& x : p.vm->errors()) e.push_back(impl_->library.plans[p.plan].name + ": " + x);
+        if (p.vm) append_script_errors(*p.vm, impl_->library.plans[p.plan].name + ": ", e);  // S7 t27: with SCRIPT ERROR lines
     for (const auto& a : impl_->ai)
-        if (a && a->fs_vm)
-            for (const std::string& x : a->fs_vm->errors()) e.push_back("free store " + std::to_string(a->player) + ": " + x);
+        if (a && a->fs_vm) append_script_errors(*a->fs_vm, "free store " + std::to_string(a->player) + ": ", e);
     return e;
 }
 uint64_t TacticalAiWorld::orders_issued() const { return impl_->orders; }
