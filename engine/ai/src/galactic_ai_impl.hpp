@@ -395,6 +395,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // 0x525200 stand-in [M] (galactic_goal_time.hpp): the time the running plan's unfinished build tasks still need.
     float goal_production_time(int32_t running) const;
     void service_build_tasks(int32_t player);  // PRODUCTION_QUEUED polls, claims, failures
+    float installment(PlanetIndex p, uint32_t q, const gal::BuildEntry& head, float a);  // PAYG installment (q2f t01)
     void fail_build(BuildTask& b, const char* why);
     void finish_build(BuildTask& b);
     void end_plan_builds(int32_t plan);

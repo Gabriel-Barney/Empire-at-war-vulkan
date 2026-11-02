@@ -390,12 +390,15 @@ The two queues are serviced in order: ground (0), then space (1). Only the **hea
    - **Up-front payer:** the countdown advances. Remaining seconds are cached in +0x1c. UI speech fires at 60 s
      and 10 s boundaries (0x401e50). [H]
    - **Pay as you go:** the installment is a = (prev_remaining − remaining) / T × C (0x498ec0).
-     - An AI player asks its budget for a (0x53b900).
-     - A PAYG human needs credits ≥ a and then pays a.
+     - A player with an AI system (player +0x360, 0x2814d0) whose byte +0x62 is 0 pays through its AI budget,
+       0x53b900(the planet's AIPlanetBuildQueue for that queue, a). The rule is in AI_GALACTIC_2 §3.4 "Installment"
+       (q2f t01, 2026-11-02): while that queue has a current AI build task, the installment is paid from the task's
+       goal budget and can be refused; otherwise it is always paid.
+     - Any other PAYG player (a human with Pay_As_You_Go) needs credits ≥ a and then pays a.
      - On success the timer advances. On failure the timer is re-armed from now with the cached remaining time
        (0x499090), which **pauses** the build.
-     
-     [H] for the arithmetic, [M] that the AI budget call deducts the credits.
+
+     [H] (0x402840 service branch, 0x53b900, 0x64adb0, 0x615700 read 2-11-2026).
 
 The production service is reached through the galactic store's "planet production service" step (OBJECT_RUNTIME
 §5.3 step 3, 0x3fc750). [M]

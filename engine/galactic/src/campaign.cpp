@@ -804,11 +804,17 @@ void GalacticSim::service_production(PlanetIndex planet) {
             e.remaining = rem;  // countdown advances (speech at 60 s / 10 s is UI)
             continue;
         }
-        // Pay as you go: installment for the time that passed [H]. The AI budget call 0x53b900 is modelled as
-        // "credits >= a, then pay" [M].
+        // Pay as you go: installment for the time that passed [H]. An AI player pays through its AI budget (0x53b900,
+        // q2f t01 [H]: the hook decides how much, the credits floor at 0); anyone else needs credits >= a.
         const float a = econ::payg_installment(e.remaining, rem, e.build_time, e.cost);
-        if (players_[static_cast<size_t>(e.player)].account.credits >= a) {
-            add_credits(e.player, -a, false);
+        const PlayerState& owner = players_[static_cast<size_t>(e.player)];
+        float pay = -1.0f;
+        if (installment_hook_ && owner.ai && !owner.human)
+            pay = installment_hook_(planet, q, e, a);
+        else if (owner.account.credits >= a)
+            pay = a;
+        if (pay >= 0.0f) {
+            add_credits(e.player, -pay, false);
             e.remaining = rem;
         } else {
             e.start = now;  // re-armed from now with the cached remaining time: paused (0x499090)

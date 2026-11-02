@@ -287,7 +287,7 @@ Notation: A = active vector, P = proposals, `limit = template[+0xe8] + |A|`.
    - the budget cannot fund it (0x6129c0);
    - effective desire ≤ 0 and it is replaceable;
    - it has a plan that is invalid (0x6c47c0), unless the template flag +0x60→+0xa8 is set;
-   - **galactic only:** AllowedTime < ETA and it is replaceable. ETA = 0x525200 + elapsed (NOW − created)/FPS.
+   - **galactic only:** AllowedTime < ETA and it is replaceable. ETA = 0x525200 (AI_GALACTIC_2 §3.4 "Goal production time", read 2026-11-02 [H]) + elapsed (NOW − created)/FPS.
 
    Survivors get their plan refreshed (0x6c2d60) and are re-added to the budget. "Replaceable" (0x692740) means: no running plan, or the plan has not called `Set_As_Goal_System_Removable(false)`.
 2. **Filter P.** Keep proposals whose target still Applies, then sort P.
