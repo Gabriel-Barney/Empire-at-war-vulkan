@@ -24,8 +24,7 @@
 //     *_LEFT / *_RIGHT triggers by foot], settings for the surface at the foot -> Decal_Name through RuntimeDecals at the
 //     foot (the object's heading) and Particle_Name as a one-shot world effect at the foot, listed for
 //     kFootEffectSeconds then dropped.
-//   * Spin-away corpses (kSnapSpinAway) that left the frame: the type's Spin_Away_On_Death_Explosion as a one-shot world
-//     effect at their last position (also on space maps, which have no terrain decorations).
+//   (R3f t01: the Spin_Away_On_Death_Explosion is no longer a decoration; the battle spawns it as a sim object.)
 // Output: track_meshes() / decal_geometry() for WorldRenderer::set_dynamic_tracks / set_runtime_decals (apply());
 // effects() for particles::sync_sim_frame's world effects.
 // Space maps (no terrain) produce nothing. Foot-plant triggers (AT_AT_FOOTPRINT, INFANTRY_FOOT_PLANT, ...) need an
@@ -59,7 +58,6 @@ struct SimDecorationStats {
     uint32_t live_decals = 0;
     uint32_t surface_particles = 0;  // last tick: objects with a SurfaceFX particle attached
     uint64_t foot_plants = 0, foot_decals = 0, foot_puffs = 0, foot_unmatched = 0;
-    uint64_t spin_explosions = 0;  // R3: Spin_Away_On_Death_Explosion puffs
 };
 
 inline constexpr float kFootEffectSeconds = 4.0f;  // [port] lifetime of a footprint puff's world-effect entry
@@ -101,7 +99,6 @@ private:
     std::map<std::pair<objects::ObjectId, int>, Gen> gens_;  // (id, side 0 centre / 1 left / 2 right), ordered
     std::vector<objects::ObjectId> prev_ids_;                // ascending
     std::vector<Vec3> prev_pos_;                             // same order: positions of the previous tick (speed)
-    std::vector<SnapshotObject> prev_spin_;                  // spin-away corpses of the previous tick (ascending id)
     struct Puff {
         SimWorldEffect fx;
         float until = 0.0f;

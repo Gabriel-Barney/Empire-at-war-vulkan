@@ -150,8 +150,8 @@ public:
                                    uint64_t frame, uint8_t damage_kind, bool spin_away = false);
     // Corpses of `mode` (ascending id). `detached` ones have no store object: the renderer draws them from
     // Corpse::info with the row's pose (AnimWorld row of the same id) and Corpse::alpha(frame); `spin_away`
-    // ones spin until removal (the spin motion is render-side). R3 t04: a spinning death clone's Spin_Away_On_Death_Explosion
-    // is a sim PARTICLE object the battle spawns when it removes the clone (TacticalBattle::remove_death_clones).
+    // ones spin until removal. R3f t01: the spin motion and its explosions (Spin_Away_On_Death_Explosion at the death,
+    // Death_Explosions at the end) are the battle's (TacticalBattle::spin_wrecks).
     std::span<const anim::Corpse> corpses(const GameMode& mode) const;
 
     // Locomotor clip selection of a unit (AnimBehaviors::service_locomotor with the type's parameters; the

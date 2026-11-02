@@ -328,12 +328,15 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
     }
     // c. Die step 7 (§1.9): Tactical_Respawn (delayed) and Destruction_Survivors, event order. Owner rule 0x3751a0
     //    [port: the dying object's owner].
-    for (const tc::SurvivorEvent& s : combat_->survivor_events()) {
-        if (s.respawn) {
-            oi_respawns_.push_back(OiRespawn{s.due_frame, s.type, s.owner, oi_sv(s.position), oi_sv(s.facing)});
-        } else {
-            oi_spawn_unit(mode, s.type, oi_sv(s.position), oi_sv(s.facing), s.owner);
-        }
+    for (const tc::SurvivorEvent& s : combat_->survivor_events()) oi_consume_survivor(mode, s);
+}
+
+// R3f t04: one Die step 7 survivor event (also called by the garrison Killed consumer for out-of-tick kills).
+void TacticalBattle::oi_consume_survivor(TacticalMode& mode, const tc::SurvivorEvent& s) {
+    if (s.respawn) {
+        oi_respawns_.push_back(OiRespawn{s.due_frame, s.type, s.owner, oi_sv(s.position), oi_sv(s.facing)});
+    } else {
+        oi_spawn_unit(mode, s.type, oi_sv(s.position), oi_sv(s.facing), s.owner);
     }
 }
 
