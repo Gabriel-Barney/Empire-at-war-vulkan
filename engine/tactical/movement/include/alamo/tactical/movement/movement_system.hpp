@@ -78,6 +78,16 @@
 //           the host. The fighter cell grids are built from the playable box at the first space tick with a fighter;
 //           their membership is hashed into "<name>.space", the fighter state into "<name>" (both only once fighters
 //           exist). No draws.
+//   multi - S7 t06, Uses_Multiple_Locomotors (MOVEMENT §3.1, 0x3a9910; land only): UnitDesc::locomotor is the ACTIVE
+//           locomotor. use_secondary_locomotor(id, true) (the JET_PACK ability's call, 0x3a38d0) or a move with
+//           MoveOrder::switch_locomotor (the MoveToPosition 1-bit, §6.2) swaps a unit whose type has a
+//           Secondary_Locomotor_Name to it: the current order is dropped (retail saves the coordinator order and leaves
+//           the coordinator [M: the saved order is not re-issued; the move that follows replaces it]), the locomotor
+//           state restarts idle, and the Alternate_Max_Speed / _Rate_Of_Turn apply [M]. The jetpack swaps back to the
+//           primary (the spawn locomotor) when it is stopped on the ground (state 0x16 after the landing, or after a stop
+//           / a failed plan) [M: 0x641910 calls 0x3a9910; the exact state was not traced]. While the jetpack is active in
+//           states 0 / 0x0F..0x13 the unit is in the Corvette tracking layer (object_tracking_layer), so the flying
+//           clearance query (clearance_query) lifts flyers over it. No draws.
 // RNG: FLYING loiter re-issue - one synced range_float(-90, 90) per re-issue without an attack target (serial,
 // ascending id, after the parallel walk). No other new draws.
 // PROVISIONAL: MovingVsMoving retail resolution states are not modelled (MOVEMENT.md §8); corridor squeeze
@@ -123,6 +133,9 @@ struct MoveOrder {
     float facing_deg = kNoFacing;
     uint8_t flags = 0;            // kMoveFlag* below (the MoveToPosition event's u8 flags, copied unchanged)
     float threat_threshold = kThreatOff;  // REMAINING_GAPS §4.2: threshold T (off = 1e18)
+    // MOVEMENT §6.1 / §6.2: the MoveToPosition "switch locomotor" bit - multi-locomotor units swap to their secondary
+    // locomotor before the move (MovementSystem::use_secondary_locomotor); others ignore it.
+    bool switch_locomotor = false;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
@@ -156,7 +169,8 @@ struct UnitView {
     float formation_speed = 3.0e38f;     // land: slowest member's max speed of its formation (3e38 = alone)
     int32_t large_hover_index = -1;      // land: index (+0x22c) of its LargeHover formation in the last order, else -1
     // REMAINING_GAPS §4.3-4.7: special locomotors
-    LocomotorKind locomotor = LocomotorKind::Default;
+    LocomotorKind locomotor = LocomotorKind::Default;  // the active locomotor
+    bool secondary_locomotor = false;                  // S7 t06: the Uses_Multiple_Locomotors secondary is active
     LocoState loco_state = LocoState::None;  // special kinds only
     int32_t anim = kAnimNone;                // requested animation (special kinds)
     bool airborne = false;
@@ -229,6 +243,11 @@ public:
     // order is dropped) and is placed at `pos` / `z` with yaw `yaw_deg`; land: the collision tree entry moves; space:
     // a stationary occupancy track from `frame`. No draws. False when the unit is unknown.
     bool teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint32_t frame);
+    // S7 t06 (MOVEMENT §3.1, 0x3a9910): swap a Uses_Multiple_Locomotors unit to its secondary locomotor (true) or back
+    // to its primary (false); see "multi" in the header comment. Returns false when the unit is unknown, the mode is
+    // space, or the type has no Uses_Multiple_Locomotors / no Secondary_Locomotor_Name; true otherwise (also when that
+    // locomotor is already active, which changes nothing). The host calls it before the JET_PACK ability's move.
+    bool use_secondary_locomotor(ObjectId id, bool secondary);
 
     // ---- REMAINING_GAPS §4.2-4.7
     // Threat at a point for an owner (TacticalPerceptionGrid point query 0x653ff0); const and thread-safe (planning
@@ -325,7 +344,8 @@ public:
     //           shape-independent)
     //   u32 quota, f32 map floor, MovementStats, units (ascending id, every Unit field: UnitDesc incl. the type name,
     //   locomotor params, land motion + path, goal / order state, collision timers, space waypoints / playback / turn,
-    //   speed factor / override / lag, jiggle, threat, special motion + params, fighter state + params), the collision
+    //   speed factor / override / lag, jiggle, threat, special motion + params, the multi-locomotor primary kind and
+    //   active flag (version 2), fighter state + params), the collision
     //   layer, this tick's crush / despawn / fighter events (the host may read them after a load; crush and despawn
     //   are hashed), the squadrons (ascending id) and the fighter cell grids.
     // Not saved: MovementConfig (definitions), the hooks, the query scratch. read() returns false and leaves the system
@@ -373,11 +393,16 @@ private:
         float threat = kThreatOff;  // order threshold T
         SpecialMotion sm;
         SpecialParams sp;
+        // S7 t06: Uses_Multiple_Locomotors (d.locomotor is the active one)
+        LocomotorKind primary_locomotor = LocomotorKind::Default;  // the spawn locomotor (behaviour slot 1)
+        bool on_secondary = false;
         // FIGHTER_FLYING.md §2-§5 (space fighters)
         FighterState fs;
         FighterParams fp;
     };
     bool is_air(const Unit& u) const;           // land Jetpack / Flying / LandBomber
+    static void special_idle(Unit& u);          // §4.3-4.7: the idle state of the active special locomotor
+    bool swap_locomotor(Unit& u, bool secondary);  // S7 t06 (0x3a9910)
     bool ground_collider(const Unit& u) const;  // takes part in land collision / crush
     void tick_special(uint32_t frame, SimRng& rng);
     void step_jetpack(Unit& u, uint32_t frame);

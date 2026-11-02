@@ -81,9 +81,13 @@ void MovementSystem::configure(Unit& u) const {
     // 0 = immobilised). Acceleration / deceleration scale with the effective speed (3.4). x 1 is exact, so a
     // factor of 1 keeps every value bit-identical.
     const float sf = u.speed_factor;
-    const float base = u.speed_override >= 0.0f ? u.speed_override : u.d.max_speed;  // OI abilities: Berserker +0x2a0
+    // S7 t06 [M]: the Alternate_Max_Speed / _Rate_Of_Turn while the secondary locomotor is active (when set).
+    const bool alt = u.on_secondary;
+    const float type_speed = alt && u.d.alt_max_speed > 0.0f ? u.d.alt_max_speed : u.d.max_speed;
+    const float type_turn = alt && u.d.alt_turn_rate > 0.0f ? u.d.alt_turn_rate : u.d.turn_rate;
+    const float base = u.speed_override >= 0.0f ? u.speed_override : type_speed;  // OI abilities: Berserker +0x2a0
     u.lp.max_speed = std::max(base, 0.0f) * mult * sf;
-    u.lp.turn_rate = std::max(u.d.turn_rate, 0.0f) * mult;
+    u.lp.turn_rate = std::max(type_turn, 0.0f) * mult;
     u.lp.accel = u.d.accel > 0.0f ? u.d.accel * mult * sf : u.lp.max_speed;
     u.lp.decel = u.d.decel > 0.0f ? u.d.decel * mult * sf : u.lp.max_speed;
     u.lp.mask = cfg_.classes.mask(u.d.movement_class);
@@ -109,15 +113,8 @@ bool MovementSystem::add_unit(const UnitDesc& d) {
     u.m.pos = d.pos;
     u.m.yaw = wrap_deg(d.yaw_deg);
     u.z = d.z;
-    if (d.locomotor != LocomotorKind::Default) {  // §4.3-4.7: idle states
-        u.sm.state = d.locomotor == LocomotorKind::Bike    ? LocoState::BikeStopped
-                     : d.locomotor == LocomotorKind::Flying ? LocoState::FlyNoPath
-                     : d.locomotor == LocomotorKind::Fighter ? LocoState::FighterIdle
-                                                             : LocoState::WalkStopped;
-        u.sm.dest = d.pos;
-        u.goal = d.pos;
-        u.sm.airborne = d.locomotor == LocomotorKind::Flying || d.locomotor == LocomotorKind::LandBomber;
-    }
+    u.primary_locomotor = d.locomotor;  // S7 t06
+    special_idle(u);
     if (d.locomotor == LocomotorKind::Fighter) {  // FIGHTER_FLYING §1.5: P, O (yaw wrap360), D = P, stored O = O
         u.fs.b.p = {d.pos.x, d.pos.y, d.z};
         u.fs.b.o.yaw = fighter_wrap360(d.yaw_deg);
@@ -174,6 +171,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.large_hover_index = u.large_hover_index;
     v.jiggle = u.jiggle;
     v.locomotor = u.d.locomotor;  // §4.3-4.7
+    v.secondary_locomotor = u.on_secondary;  // S7 t06
     v.loco_state = u.sm.state;
     v.anim = u.sm.anim.id;
     v.airborne = u.sm.airborne;
@@ -270,6 +268,8 @@ void MovementSystem::move(const MoveOrder& order, SimRng& rng, uint32_t frame) {
         idx.push_back(static_cast<uint32_t>(i));
     }
     if (idx.empty()) return;
+    if (order.switch_locomotor)  // MOVEMENT §6.2: multi-locomotor units swap first (others ignore the bit)
+        for (uint32_t i : idx) swap_locomotor(units_[i], true);
     std::vector<uint32_t> delays(idx.size(), 0);
     if (order.flags & kMoveFlagQueue)
         for (uint32_t& dl : delays) dl = static_cast<uint32_t>(rng.range_int(0, cfg_.constants.max_move_frame_delay));

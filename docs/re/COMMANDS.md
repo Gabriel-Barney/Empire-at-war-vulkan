@@ -132,7 +132,7 @@ parentheses where it was read directly. Otherwise the payload comes from Execute
 
 | id | class | S/N | payload (wire order) | effect | conf |
 |---|---|---|---|---|---|
-| 1 | MoveToPosition | S | q1 x, q2 y, q3 z, 8-bit flags, 1-bit (0x3ad050) | moves Sel to the point (group move). Flag bit 3 selects an alternative group-move routine. The 1-bit field makes certain selected units cancel an activity first. Also notifies the tutorial/story "unit moved" hook for local-player units | H payload, L flag meanings |
+| 1 | MoveToPosition | S | q1 x, q2 y, q3 z, 8-bit flags, 1-bit (0x3ad050) | moves Sel to the point (group move). Flag bit 3 selects an alternative group-move routine. The 1-bit field swaps selected `Uses_Multiple_Locomotors` units to their secondary locomotor first (0x3a9910; no FoC sender sets it, MOVEMENT §3.1.1). Also notifies the tutorial/story "unit moved" hook for local-player units | H payload, L flag meanings |
 | 2 | MoveToObject | S | id32 target, list32 movers (0x3aefc0) | movers move to/onto the target. An empty list means Sel | H |
 | 3 | MoveObjectToObject | S | id32 object, id32 target | single explicit object to target: galactic fleet hop (free-store path step 0x71f710), AI/Lua moves | M |
 | 10 | MoveThroughObjects | S | list8 waypoint ids, id32 (0x3c4390) | galactic multi-hop fleet route [M]. Execute checks a per-player galactic flag first | H payload |

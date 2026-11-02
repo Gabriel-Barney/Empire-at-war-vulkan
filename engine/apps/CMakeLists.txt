@@ -196,6 +196,15 @@ if(_alamo_sim)
     add_test(NAME alamo_headless_skirmish_ai_foc_station_lua
              COMMAND alamo_headless --skirmish-ai foc-station --ticks 20000 --workers 4 --quiet)
     set_tests_properties(alamo_headless_skirmish_ai_foc_station alamo_headless_skirmish_ai_foc_station_lua PROPERTIES TIMEOUT 1800)
+    # S7 t09 (2026-11-01): the FoC space skirmish (as alamo_headless_skirmish_ai_foc) must reach a decisive outcome before the
+    # 14400-frame limit on every seed. It ran to the limit on ~10 of 16 seeds after S7 t03 (2026-10-29); seeds 1-64 end since
+    # refixf t06 (task-force Attack_Move on an object, damage to hardpointed targets). One entry per seed so they run side by side
+    # under ctest -j (each ~10 s: "slow" through the regex below); skipped (exit 0) without ALAMO_FOC_DATA.
+    foreach(_seed 1 2 3 4 5 6 7 8)
+      add_test(NAME alamo_headless_skirmish_ai_foc_outcome_s${_seed}
+               COMMAND alamo_headless --skirmish-ai foc --seed ${_seed} --ticks 16000 --workers 0 --quiet --expect-battle-end)
+      set_tests_properties(alamo_headless_skirmish_ai_foc_outcome_s${_seed} PROPERTIES TIMEOUT 1200)
+    endforeach()
   endif()
   # --- end A1 ---
   # --- N1 save / load (owner: n1-host): --save-session / --load / --save-check (headless/save_run.cpp) ---

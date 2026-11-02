@@ -284,7 +284,7 @@ in .data (docs/re/xml_field_tables.md).
 | Handler | Behaviour |
 |---|---|
 | **DEPLOY 0x3a1ce0** [H flow, M names] | Gates: Force block, garrison count, no other mode active, all team members pass `Can_Activate`, locomotor not busy. The unit stops (0x426d50 + 0x39bcb0). on → deploy 0x391260 (adds `DeployedBehavior`); off → undeploy 0x3ac100(obj, 0). Gates failing: on returns false; off still notifies targeting (vf +0xd8) and undeploys. No countdown; `Is_Active` = deployed state |
-| **JET_PACK 0x3a38d0** | Same gates. 2-D distance to the point ≤ record `Effective_Radius` (+0x20; skipped when negative). Optional garrison release (type +0x74). Issues a **move** (0x2a7b80) of the unit / team to the point; the jump itself is the JETPACK locomotor (MOVEMENT §8 item 10, open). Countdown: start recharge when `Expiration_Seconds` = 0, else start active. No RNG |
+| **JET_PACK 0x3a38d0** | Same gates. 2-D distance to the point ≤ record `Effective_Radius` (+0x20; skipped when negative). Then, for a `Uses_Multiple_Locomotors` (type +0x74) unit, the locomotor swap to the secondary (0x3a9910; not a garrison release, MOVEMENT §3.1.1). Issues a **move** (0x2a7b80) of the unit / team to the point; the jump itself is the JETPACK locomotor (REMAINING_GAPS §4.3). Countdown: start recharge when `Expiration_Seconds` = 0, else start active. No RNG |
 | **BARRAGE 0x3a1930** | Needs BARRAGE behaviour (0x1d) and data (obj +0x178). on, none running (data +0xc = 0): **refused when the point is fogged for the owner** (`FOW_Point_Test` force 1); otherwise start at the point (0x5920b0). on while running → true (re-target exception). off: early-deactivate if active and not recharging, stop (0x592420) |
 | **SPREAD_OUT 0x3a3500** | Team gates. on → start active (0x42fde0), off → early-deactivate (0x42f320). Every member: +0x448 := on, reset to default idle (§6.2 → Idle Crouch); re-layout the formation (0x422040) and clear container locomotor +0x2a4. Spacing in team slot geometry not traced [M]. Effects: `Mod_Multiplier` SPEED 0.5, TAKE_DAMAGE 0.5 |
 | **ROCKET_ATTACK 0x3a3260** | Gates; writes slot 11's active byte (+0x488) and starts / early-deactivates the countdown. The rocket-firing reader is the weapon path [M, not traced] |
@@ -424,7 +424,8 @@ Damage_Percentage +0x188, Damage_Interval_In_Secs +0x18c) [H]
 Grenade_Type +0x1b0, Toss_Anim +0x1c0, Spawn_Frame +0x1c4, Spawn_Bone +0x1c8, Explode_Timer +0x1e8) [H]
 - Accepts: enemy, filter, target type +0x41, alive, model. Apply: with Requires_Direct_Player_Command and no
   direct command, AI / non-human users refused (0x2814d0 / player +0x62); in range; Grenade_Type is a lobbed
-  projectile (type +0x1fe8 = 3) with a solution (0x54a6f0); unit ability 22's counter ≤ 0. Face, stop, lock
+  projectile (type +0x1fe8 = 3) with a solution (0x54a6f0, unit position → target position, no z adjust;
+  LOB_SOLVER.md §3.4); unit ability 22's counter ≤ 0. Face, stop, lock
   (0x3a8e50 1), throw pending (+0x17c), store target, suspend targeting.
 - Update: once not moving/turning, toss animation (−1 = at once); at frame ≥ Spawn_Frame throw once
   (0x700a70): spawn from the bone through the projectile spawner (**one id**), arm its BOMB with the timer,
@@ -546,6 +547,9 @@ min range"). `Scan_Player` 0x5662b0 accepts a candidate when slot 44 is true **a
 container contribution through 0x4160a0 can also accept).
 - **Slot 44:** current weapon's projectile (slot 42, weapon set obj +0x324) of `Projectile_Category` 3
   (grenade) → lob solver 0x54a6f0; otherwise slot 43 (0x5673b0).
+  **Spec of the solver, the grenade launch and flight: [LOB_SOLVER.md](LOB_SOLVER.md)** (S8 t03, 2026-11-01): in range ⇔ a
+  closed-form high arc from the attacker position to the target + `Ranged_Target_Z_Adjust` exists at `Max_Speed` under
+  G = gravity × lob mod; none of slot 43's R / E / redirect rules apply.
 - **Slot 43:** in range iff XY distance(attacker, aim point) ≤ R + E; zero offset counts as in range.
   - R = slot 40 `Get_Max_Attack_Range`; **override**: combatant pack ordered target (+0x148 / +0x150 ≠ 0)
     equal to the candidate or its container and a pending special ability → R = the ability's vfunc +0xd8
