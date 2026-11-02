@@ -438,7 +438,9 @@ This replaces the port's [L] `fighter_station_step`.
    - Solo fighter: D = P + V, stored orientation = O, enter_idle (§4.7).
    - Squadron:
      - leave the dogfight grid (C);
-     - if self == L: clear the team's target (0x4061d0) [M], then for each member m (index order):
+     - if self == L: clear the team's **ordered-attack flag** (0x4061d0(team, 0): team data +0x45 := 0; the team
+       target itself is cleared by each member's enter_idle, §4.7) [H, corrected S7 t19], then for each member m
+       (index order):
        m.D = (L.x + L.V.x, L.y + L.V.y, Layer_Z_Adjust(self type)), m's stored orientation = L's, then m's
        enter_idle.
    - Commit P += V.
@@ -535,12 +537,24 @@ c = tgt.pack.dogfight cell.
 5. Who sets 0x1F is **untraced** (probably the Stop order).
 
 ### 4.7 enter_idle (0x5cb750) [H]
-- **Solo fighter:** state 0x1C, leave the coordinator (0x5c9ca0), reset the path stack.
-- **In a squadron:**
-  1. leave the parking grid;
-  2. clear the team's two target slots (0x4061f0 / 0x4061d0) [M];
-  3. state 0x1C, leave the coordinator, reset the path stack;
-  4. **register a parking cell** (0x4fafd0 = lookup(G_P, self, register = true), §5). This overwrites D (own and
+> **Corrected (S7 t19, 2026-11-02):** 0x5c9ca0 is "drop the target", **not** "leave the coordinator", and
+> 0x4061f0 / 0x4061d0 are the team's ordered-move / ordered-attack **flags**, not target slots. enter_idle does not
+> leave the coordinator and does not touch the formation (pack +0x1f0) or its queued blocks: **the formation goal
+> survives enter_idle.** The calls, in order:
+- **Solo fighter** (no container, or the container has no TEAM slot):
+  1. state 0x1C (0x559250: pack +0x48);
+  2. drop the target (0x5c9ca0): the fighter's TARGETING (slot 9) vf +0xd8(0) (TACTICAL_COMBAT §2.5 slot 27);
+  3. reset the path stack (0x554480(pack, obj, 0): remove the path entries from the one whose id +0x4c equals pack
+     +0x248 onward, or all of them when +0x248 = 0; re-register (0x559260); pack +0x288 = NOW).
+- **In a squadron** (team = the container's TEAM behaviour, slot 0x16; team data = container +0x110):
+  1. leave the parking grid G_P (0x4f9d40);
+  2. team data +0x44 := 0 (0x4061f0, ordered-move flag) and +0x45 := 0 (0x4061d0, ordered-attack flag);
+  3. state 0x1C;
+  4. drop the target (0x5c9ca0): +0x45 := 0 again, **team target := null** (0x406370(team, null, −1): team data
+     +0x30 / +0x38 cleared, and every member's TARGETING gets `Set_Target(null)`), and the container leaves the
+     dogfight grid G_D (0x4f9d50);
+  5. reset the path stack (as above);
+  6. **register a parking cell** (0x4fafd0 = lookup(G_P, self, register = true), §5). This overwrites D (own and
      C's) with the cell centre, so every idle squadron gets its own 120-unit slot.
 
 ### 4.8 Hyperspace states [H]
@@ -552,6 +566,84 @@ These match L1_S4_REMAINING §3.4 (states 4, 5, 0x28, 0x2c), which this document
 - **State 0x28 (0x5cd680):** step along obj +0x98 (yaw): 8.125/frame while the timer > 90, then the faction's
   `Space_Retreat_Flight_Move_Increment`. Killed at 0.
 - The profile table 0x140b27a10 is still unread (MOVEMENT §8 item 5).
+
+### 4.9 Auto targets of squadrons and the formation goal (S7 t19, 2026-11-02)
+The fighter states never read the combat target. They read only the **formation goal**:
+`Formation_Attack_Target(F, &hp, i)` (0x41a2e0, TACTICAL_COMBAT §2.8 A) on F = the container's (or the solo
+fighter's) locomotor pack +0x1f0. Idle → Directed_Combat (§4.2 step 5) needs F ≠ null and a goal that is not dying;
+Directed_Combat (§4.3) takes its target from the same call. An auto target moves a squadron only after it has been
+**pushed into the formation as an attack block**. [H]
+
+**Team data** (container +0x110, TeamDataPackClass) fields used here [H]:
+
+| field | writer | meaning |
+|---|---|---|
+| +0x30 / +0x38 | 0x406370(team, t, hp) | team target object (a team member is replaced by its container) / hard-point index; +0x48 := 10 when t ≠ null. Every member's TARGETING gets `Set_Target(t, hp, order = +0x45, lock = +0x45)` (vf +0xd0) and every member weapon hard point (type 5..10) `HP_Set_Target(t, hp)` (0x387b70) |
+| +0x44 | 0x4061f0 | ordered-move flag: 1 from an ordered move (0x39f800 with ordered set; it also clears the team target), 0 from an ordered attack and from enter_idle |
+| +0x45 | 0x4061d0 | ordered-attack flag = the lock passed to members: Order_Attack (0x38d730) writes it **only when ordered = 1** (+0x44 := 0, +0x45 := 1); the scan path below writes the scan's flag; enter_idle, NoTarget and 0x5c9ca0 write 0 |
+| +0x20..+0x28 | 0x4061a0 | ordered-move destination (+0x48 := 10) |
+
+**1. Acquisition** (`Service_Space` 0x633ae0, run by every object's TARGETING behaviour (slot 9) in object service
+order; TACTICAL_COMBAT §2.1–2.4) [H; M: whether the squadron container's own TARGETING scans as well as the
+members']:
+- With no current target (TD +8 null) the scan (0x568a00) picks one; fogged candidates are never picked (scan filter
+  4). For a member of a squadron: team +0x45 := the scan's 4th output byte [M: set when the pick is the formation
+  goal], then 0x406370(team, pick, hp): **the whole squadron shares the first member's pick** (later members already
+  have it as their target). A solo fighter: `Set_Target(pick, hp, order = that byte, lock 0)`.
+- With a target: the keep / switch step (TACTICAL_COMBAT §2.5). A target that is garrisoned, +0x3b4, dying or dead,
+  stealthed for this attacker, or **hidden by fog for the attacker's player (0x35f470, force 1; skipped while unit
+  ability 5 is active)** is dropped (slot 27) and the service returns.
+
+**2. Feeding the formation** (same service, after the hard-point step) [H]. Let t = TD +8, F = the container's (or
+own) pack +0x1f0, "in range" = slot 44 true and slot 45 false, "locked" = slot 33.
+- **Ordered chase:** t not dying, locked, **not** in range, F ≠ null, and F's goal (0x41a2e0(F, &hp, 0)) is not t (nor
+  t's container) or has another hard point → a **new coordinator** (mode vf +0x228, 0x426010): the serviced object
+  leaves every coordinator (0x426d50), joins it, and `Coordinator::Move_To` {kind 3 = object (t's container when t is
+  a team member), hard point = TD +0x10, mask 0x3f, threat none, flags word 0x1000001}.
+- **Auto engage:** otherwise, t not dying, **not** locked, the object is not in the mode's hold table [L: 0x4944e0 on
+  mode +0x38, a list of flagged entries holding object lists], F ≠ null, and F's goal (0x41a2e0(F, &hp, −1)) or its
+  hard point differs from (t, TD +0x10) → the container's (or own) locomotor vf +0x260 (`Auto_Engage(t, hp)`):
+  - squadron container: `TeamLocomotor` 0x630140 = LocomotorCommon 0x42d0f0 on the container, then each member
+    locomotor that answers vf +0x220 gets vf +0x260 too;
+  - **LocomotorCommon 0x42d0f0** (space: works on the container): needs pack +0x1f0 = F; t = null and F has a goal →
+    0x4105a0 on F [M: ends the pushed block] and return; F's goal ≠ t → rr = 0x4160a0(F, unit, t)
+    (TACTICAL_COMBAT §2.8: 0 when out of the chase range; Rr = `Guard_Chase_Range` for a guard block,
+    `Attack_Move_Response_Range` for an attack-move block, else `Idle_Chase_Range`; FoC squadrons 1000 / 300 / 200);
+    rr ≠ 0 → when rr = 1, first detach the unit into a formation of its own (0x424850); then **append an attack
+    block** to the (possibly new) formation (0x41cf70): {kind 3, object = t (its container when t is a team member),
+    hard point = hp, flag +0x2b = 1 [M: "auto" block], mask 0x3f, threat none};
+  - **fighter vf +0x260** (0x5cb580), for a fighter inside a squadron: when t is a squadron (team) and the own lock
+    timer (pack +0x1d8) has expired, lock the first member of t's team (index order) whose timer has expired (the
+    §4.5 lock(x) pairing, 10 s); never pushes a block. A solo fighter uses LocomotorCommon.
+- After the push, Formation_Attack_Target(F, −1) (newest valid block first) returns t, so the Idle squadron turns
+  to Directed_Combat on its next frame (§4.2 step 5) and attacks (§4.3–4.5).
+- **No formation (pack +0x1f0 null): no engagement movement at all.** The squadron keeps parking / orbiting (§4.2)
+  and its weapons fire at t only if t comes into range.
+- While moving on a plain `Move_To` (position block, flags 0), 0x4160a0 uses `Idle_Chase_Range` measured from the
+  slot goal [M, TACTICAL_COMBAT §2.8 rule 5], so a squadron flying a long move does not peel off at enemies along the
+  way; on an attack-move it reacts within `Attack_Move_Response_Range` of its current path point.
+
+**3. Goal object hidden by fog** (derived from the steps above; each step [H]):
+1. Directed_Combat: the goal is fogged for the own player (0x35f470) → NoTarget (§4.3 step 5). No path (the attack
+   reset it) → the leader clears team +0x45 and every member enter_idle (§4.7): state 0x1C, team target dropped,
+   parking cell re-registered. **The formation block is kept.**
+2. Next frame, Idle (§4.2 step 5): the formation goal exists and is not dying (no fog test) → state 0x1E.
+3. Next frame, Directed_Combat → fogged → NoTarget → enter_idle again.
+So **retail also toggles Idle ↔ Directed_Combat every frame** while the goal stays fogged: Idle frames steer toward
+the parking cell (§4.2), NoTarget frames only commit P += V. Meanwhile the targeting service, whose target was
+dropped by enter_idle, rescans on its next due frame (every 30–45 frames): a visible enemy found there is pushed as
+a newer block (step 2) and the squadron attacks it instead. The fogged block goes away when the goal dies (the goal
+becomes a position, MOVEMENT §6.3) or a new order replaces the formation; when the goal becomes visible again,
+Directed_Combat resumes the attack run. [M for "nothing else removes the block": the coordinator's own service was
+not traced]
+
+**Port check (2026-11-02):** `fighter_formation_target` (`engine/apps/sim/src/tactical_battle.cpp`) feeds the combat
+auto target straight into the fighter target when the squadron is not moving (rule 4, "unless hidden"), and the
+squadron keeps the attack goal on enter_idle. The second part matches retail (the toggle on a fogged goal is retail
+behaviour). The first part is a stand-in: retail engages an auto target only through the formation push of step 2
+(needs a formation, the chase-range test and the not-locked / not-in-range-of-ordered conditions), and the scan has
+already filtered fogged candidates, so "unless hidden" only matters for a target that became fogged after
+acquisition, which the targeting service drops anyway.
 
 ---
 
@@ -968,6 +1060,12 @@ container's locomotor.
      exceeds 1.33 × the formation extent, with a leader aim of 2 × Min_Speed.
 5. **MOVEMENT §8 item 5:** global speed factor 0x140a28568 = 1.0; team slot threshold 0x140a4431c = 4.0; Hermite
    basis = §6.1. Still unread: 0x140b27a10 (hyperspace profile) and the land k-means / rank caps.
+6. **S7 t19 (2026-11-02):**
+   - this document's §4.3 / §4.7: 0x5c9ca0 drops the target (it does not leave the coordinator); 0x4061f0 /
+     0x4061d0 are the team's ordered-move / ordered-attack flags (team data +0x44 / +0x45), not target slots; the
+     formation goal survives enter_idle (§4.7, §4.9);
+   - TACTICAL_COMBAT §2.8 C step 3: `Order_Attack` writes 0x4061f0(0) / 0x4061d0(1) **only when ordered = 1**; an
+     auto target (ordered = 0) leaves both flags unchanged and only sets the team target (0x406370).
 
 ---
 
@@ -1009,7 +1107,12 @@ container's locomotor.
    - the 0x5c5060 corner shift length (0x54f700) [L];
    - who enters Dead_Stop 0x1F;
    - unit abilities 0x29 / 0x22 in the provocation test (by number only);
-   - the exact ring enumeration of 0x4fb160 [M].
+   - the exact ring enumeration of 0x4fb160 [M];
+   - §4.9: the lifetime of a squadron's formation after its move ends (who clears pack +0x1f0 for an idle squadron:
+     coordinator service / 0x421910 / 0x410b80 callers not traced), so whether a long-idle squadron still has a
+     formation to push auto targets into; the scan's 4th output byte; what 0x4105a0 does to the formation on
+     `Auto_Engage(null)`; the hold table 0x4944e0; whether anything besides death / a new order removes a fogged
+     goal block.
 2. **Flying:**
    - how state 0x26 is left;
    - the clearance query 0x63b640: resolved (§6.3.1). Still open there: the entry builder 0x6b3b00 (entry AABB and
