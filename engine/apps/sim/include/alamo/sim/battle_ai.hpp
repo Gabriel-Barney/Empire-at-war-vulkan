@@ -70,6 +70,10 @@ struct TacticalAiSetup {
     // background recompute latency (0 = the original timing).
     bool stagger = true;
     uint32_t path_latency = galactic::kDefaultAllPairsLatency;
+    // OPT2 t10 (TacticalAiConfig::pp_streams / pp_latency): slot-10 solves on their own RNG streams, applied pp_latency
+    // frames after their slice; pp_streams false = the original synced draws in proposal order.
+    bool pp_streams = true;
+    uint32_t pp_latency = ai::tactical::kDefaultPpLatency;
 };
 
 // [port] faction -> AIPlayerType for non-human playable players: Empire -> BasicEmpire, Rebel -> BasicRebel,
@@ -160,6 +164,17 @@ public:
 
 private:
     float type_population(int32_t type) const;  // A2 tactical: pop(T, mode) 0x373500
+    // OPT2 t10: build_pad_check's blocker scan. The live Influences_Capture_Point objects (store order) are listed once
+    // per build_pads call instead of once per pad, and the type flag is memoised per type (0 unknown, 1 no, 2 yes).
+    struct CaptureInfluencer {
+        objects::ObjectHandle h;
+        int32_t owner = -1;
+        Vec3 position;
+    };
+    std::vector<uint8_t> influences_capture_;
+    bool influences_capture(objects::TypeIndex t);
+    std::vector<CaptureInfluencer> capture_influencers();
+    ai::tactical::PadCheck pad_check(int32_t player, int32_t pad, const std::vector<CaptureInfluencer>& influencers);
     float allow_reinforcement_fraction_ = 0.0f;  // A2 tactical: Allow_Reinforcement_Percentage_Normalized
     bool use_reinforcement_points_ = true;       // a1g t04 follow-up: Use_Reinforcement_Points (GC +0x118a0)
     void standin_orders();

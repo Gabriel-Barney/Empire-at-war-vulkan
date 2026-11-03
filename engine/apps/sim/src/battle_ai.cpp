@@ -74,7 +74,9 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.background = jobs::make_background_start(host.jobs());  // OPT2 t02: background path recomputes
     cfg.path_latency = setup.path_latency;
     cfg.stagger = setup.stagger;  // OPT2 t01
-    cfg.pf = host.parallel_for();  // OPT2 t03: goal candidates' perception values
+    cfg.pf = host.parallel_for();  // OPT2 t03: goal candidates' perception values; OPT2 t10: slot-10 solves
+    cfg.pp_streams = setup.pp_streams;  // OPT2 t10
+    cfg.pp_latency = setup.pp_latency;
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
     use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();
@@ -1315,6 +1317,7 @@ bool pad_name_equal(std::string_view a, std::string_view b) {
 // row for the player's faction (S10 battles are campaign battles, as pad_build).
 std::vector<at::TacticalPad> BattleAi::build_pads(int32_t player) {
     std::vector<at::TacticalPad> out;
+    const std::vector<CaptureInfluencer> influencers = capture_influencers();  // OPT2 t10: once for every pad
     const objects::ObjectStore& st = mode_->primary();
     const objects::GameObjectTypes& types = mode_->types();
     std::string faction;
@@ -1325,7 +1328,7 @@ std::vector<at::TacticalPad> BattleAi::build_pads(int32_t player) {
         if (!st.alive(h) || !st.has_behavior(h, kBuildObjects)) continue;
         const objects::ObjectId id = st.id(h);
         // TacticalBuild Setup A (AI_GALACTIC_3 §1.7): friendly / visible, empty and unblocked (0x42e400), cooldown over.
-        if (build_pad_check(player, static_cast<int32_t>(id), -1) != at::PadCheck::Ok) continue;
+        if (pad_check(player, static_cast<int32_t>(id), influencers) != at::PadCheck::Ok) continue;
         at::TacticalPad p;
         p.id = id;
         const Vec3 q = st.position(h);
@@ -1350,6 +1353,27 @@ std::vector<at::TacticalPad> BattleAi::build_pads(int32_t player) {
 // for the player), game rules (0x42e400: empty and no live non-allied Influences_Capture_Point object within the pad
 // type's Capture_Point_Radius, 3-D), rebuild cooldown (0x42daf0).
 at::PadCheck BattleAi::build_pad_check(int32_t player, int32_t pad, int32_t) {
+    return pad_check(player, pad, capture_influencers());
+}
+
+bool BattleAi::influences_capture(objects::TypeIndex t) {
+    const objects::GameObjectTypes& types = mode_->types();
+    if (t >= types.size()) return false;
+    if (influences_capture_.size() < types.size()) influences_capture_.resize(types.size(), 0);
+    uint8_t& f = influences_capture_[t];
+    if (f == 0) f = types.get_bool(t, "Influences_Capture_Point") ? 2 : 1;
+    return f == 2;
+}
+
+std::vector<BattleAi::CaptureInfluencer> BattleAi::capture_influencers() {
+    std::vector<CaptureInfluencer> out;
+    const objects::ObjectStore& st = mode_->primary();
+    for (const objects::ObjectHandle h : st.all_objects())
+        if (st.alive(h) && influences_capture(st.type(h))) out.push_back({h, st.owner(h), st.position(h)});
+    return out;
+}
+
+at::PadCheck BattleAi::pad_check(int32_t player, int32_t pad, const std::vector<CaptureInfluencer>& influencers) {
     const objects::ObjectStore& st = mode_->primary();
     const objects::GameObjectTypes& types = mode_->types();
     const objects::ObjectHandle ph = pad >= 0 ? st.find(static_cast<objects::ObjectId>(pad)) : objects::ObjectHandle{};
@@ -1364,15 +1388,13 @@ at::PadCheck BattleAi::build_pad_check(int32_t player, int32_t pad, int32_t) {
     const objects::TypeIndex pt = st.type(ph);
     const double r = pt < types.size() ? static_cast<double>(types.get_float(pt, "Capture_Point_Radius")) : 0.0;
     const Vec3 pp = st.position(ph);
-    for (const objects::ObjectHandle h : st.all_objects()) {
-        if (!st.alive(h) || h == ph) continue;
-        const objects::TypeIndex t = st.type(h);
-        if (t >= types.size() || !types.get_bool(t, "Influences_Capture_Point")) continue;
-        const int32_t o = st.owner(h);
+    for (const CaptureInfluencer& x : influencers) {
+        if (x.h == ph) continue;
+        const int32_t o = x.owner;
         // skai: a Neutral-faction owner (map props) is not an enemy (BATTLE_TRANSITIONS §0xb: "a Neutral player is simply not
         // an enemy"; the port keeps it in the other players' combat rows only for ordered attacks).
         if (o == owner || !c.is_enemy(owner, o) || b_->bt_owner_neutral(o)) continue;
-        const Vec3 q = st.position(h);
+        const Vec3 q = x.position;
         const double dx = static_cast<double>(q.x) - pp.x, dy = static_cast<double>(q.y) - pp.y, dz = static_cast<double>(q.z) - pp.z;
         if (dx * dx + dy * dy + dz * dz <= r * r) return at::PadCheck::Blocked;
     }

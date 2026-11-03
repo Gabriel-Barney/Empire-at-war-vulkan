@@ -28,6 +28,11 @@ struct MapRunOptions {
     // frames, as the original). Not recorded in saves.
     int64_t ai_latency = -1;  // < 0: the default
     bool ai_stagger = true;
+    // OPT2 t10 (--skirmish-ai): --no-pp-streams (slot-10 plan picks and solves draw from the synced stream in proposal order,
+    // the original) and --pp-latency F (frames from a slice to the apply of its solves, default
+    // ai::tactical::kDefaultPpLatency). Not recorded in saves.
+    bool pp_streams = true;
+    int64_t pp_latency = -1;  // < 0: the default
 };
 
 int map_run(const MapRunOptions& opt);

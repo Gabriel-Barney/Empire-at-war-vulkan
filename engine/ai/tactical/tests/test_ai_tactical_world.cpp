@@ -2439,6 +2439,24 @@ void test_landing_save() {
     g_landing = 0;
 }
 
+// OPT2 t10: save / load with slot-10 solves pending (a slice's PotentialPlan solves started, applied on the next frame):
+// the AI chunk carries the pending goals and the solves' results; the loaded run continues identically.
+void test_pp_pending_save() {
+    int32_t save_at = -1;
+    {
+        SaveSession probe(0);
+        for (int32_t f = 1; f <= 30 * 60 && save_at < 0; ++f) {
+            probe.step(f);
+            for (int32_t p = 0; p < 2 && save_at < 0; ++p) {
+                const AiContext* c = probe.world->context(p);
+                if (c && c->goals.accept_pending() && probe.world->running_plans() > 0) save_at = f;
+            }
+        }
+    }
+    CHECK(save_at > 0);
+    if (save_at > 0) test_save_load(0, save_at, save_at + 30 * 30);
+}
+
 void test_ability_order_replaced() {
     int32_t act_frame = -1;
     size_t activated = 0, failed = 0;
@@ -2538,6 +2556,7 @@ int main(int argc, char** argv) {
     test_save_load(0, 30 * 35, 30 * 120);  // the golden skirmish (2 plans running at frame 1050)
     test_save_load(1, 30 * 30, 30 * 60);   // opportunity-fire subscriptions, HIJACK spawns
     test_save_load(3, 30 * 40, 30 * 80);   // Script_ evaluator VMs
+    test_pp_pending_save();               // OPT2 t10
     test_order_results_bounded(0, 30 * 120);
     test_order_results_bounded(1, 30 * 60);  // with the opportunity-fire and HIJACK plans
     // S7 t20 / t21 / t15 A1

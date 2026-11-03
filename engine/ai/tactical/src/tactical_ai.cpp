@@ -61,6 +61,23 @@ constexpr size_t kTfGroupOrderMaxUnits = 4096;       // [port] ids in one group 
 
 int32_t target_id(int32_t player, int32_t slot) { return (player << kSlotBits) | slot; }
 
+// OPT2 t10: the seed of a slot-10 candidate's own RNG stream, a function of (session seed, frame, player, goal source,
+// target) only (splitmix64 finaliser chain).
+uint64_t pp_mix(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+uint32_t pp_stream_seed(uint32_t game_seed, int64_t frame, int32_t player, uint32_t source, int32_t target) {
+    uint64_t h = pp_mix(game_seed);
+    h = pp_mix(h ^ static_cast<uint64_t>(frame));
+    h = pp_mix(h ^ static_cast<uint64_t>(static_cast<uint32_t>(player)));
+    h = pp_mix(h ^ source);
+    h = pp_mix(h ^ static_cast<uint64_t>(static_cast<uint32_t>(target)));
+    return static_cast<uint32_t>(h >> 32);
+}
+
 // EnumConversionClass<HardPointType> (TACTICAL_COMBAT §2.4, refixf t06 [H]): the short names only, value = index; 11 has
 // no name. Lookups trim and upper-case the token (case-insensitive); a HARD_POINT_* token does not resolve.
 const char* kHardPointTypeNames[] = {
@@ -263,6 +280,10 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     uint64_t saved_types_digest = 0;
     // first_solve: Init at proposal (PP+0x104 == 0, FreeStore Setup A ignores +0x30); else the re-solve at accept.
     bool solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, TacticalPpResult& out, bool first_solve);
+    // The solve's input (no RNG set). snapshot (OPT2 t10): the host / world callbacks are replaced by their answers
+    // (can_build_now for the plan's team types, enemy_strength for the masks the Contrast marshaller asks), so the solve
+    // reads nothing that changes after this call and may run on any thread, now or frames later.
+    void pp_input(PlayerAi& p, uint32_t plan, const Goal& g, bool first_solve, bool snapshot, TacticalPpInput& in);
     bool resolve_pp(PlayerAi& p, const Goal& g);          // 0x6c4a50: re-solve at accept (A1_READINGS §28.6 step 3)
     void reserve_pp(int32_t handle);                      // 0x6c2d60 (+ 0x6c2b20)
     void suspend_pp(int32_t handle);                      // 0x6c0be0's +0x30 part (Commit step 4)
@@ -272,6 +293,29 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     TacticalFreeStore* pp_store(int32_t handle);
     void reinforce_joined(const TfRec& t, int32_t unit, int32_t type);  // 0x6bf3d0 for a land TF.Reinforce delivery
     double enemy_strength_at(int32_t player, const Vec3f& at, int32_t zone, uint64_t mask) const;
+    // OPT2 t10: enemy_strength_at for several masks in one pass (each sum in the same object order: identical values).
+    std::vector<double> enemy_strengths_at(int32_t player, const Vec3f& at, int32_t zone, std::span<const uint64_t> masks) const;
+    // OPT2 t10: the host answers every first solve of one player's proposal slice reads (build pads, reinforcement pool,
+    // population). They only change in the battle tick or through an executed order, and no order runs between a
+    // slice's candidates (an order a Script_ evaluator might issue clears the cache), so the slice asks the host once
+    // per answer instead of once per candidate (BattleAi::build_pads scans every object per pad). player < 0: no slice
+    // open, solves ask the host.
+    struct PpSliceHost {
+        int32_t player = -1;
+        bool pads_ok = false, pool_ok = false, pop_ok = false;
+        std::vector<TacticalPad> pads;
+        std::vector<TacticalReinforcement> pool;
+        float pop_cap = 0.0f, pop_used = 0.0f;
+        std::vector<int8_t> can_build;  // per type: -1 not asked, 0 / 1 (snapshot inputs)
+        void open(int32_t p) {
+            player = p;
+            clear();
+        }
+        void clear() {
+            pads_ok = pool_ok = pop_ok = false;
+            can_build.clear();
+        }
+    } pp_slice;
     // --- end A2 tactical ---
 
     // ---- helpers ----
@@ -950,44 +994,136 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         return w->evaluate_concurrent(player, function, target_handle(target), out);
     }
     void evaluated(const std::string&) override { ++w->eval_count; }
+    void slice_begin() override { w->pp_slice.open(player); }  // OPT2 t10 (PpSliceHost)
+    void slice_end() override { w->pp_slice.player = -1; }
     bool accept(Goal& g) override {
         // Slot 10 (0x6b8850, land and space): Find_Plan_For_Goal only - one synced draw (§4.4).
-        if (g.source < ctx.goals.sources().size()) ++w->stats["~ proposed " + ctx.goals.sources()[g.source].function];
-        std::vector<uint32_t> cand;
+        ALAMO_PROFILE_SCOPE("tac.ai.accept");  // OPT2 t10: slot 10 (plan pick + first PotentialPlan solve)
         std::vector<double> ratio;
-        for (size_t i = 0; i < w->library.plans.size(); ++i)
-            if (ctx.templates.plan_value(static_cast<uint32_t>(i)) > 0 && w->library.plans[i].serves(g.type)) {
-                cand.push_back(static_cast<uint32_t>(i));
-                ratio.push_back(ctx.learning.plan_success_ratio(static_cast<uint32_t>(i)));
-            }
-        const std::string& gname = w->defs.goals[g.type].name;
-        if (cand.empty()) {
-            ++w->stats[gname + " no plan"];
-            return false;
-        }
-        const uint32_t k = pick_weighted(ratio, w->rng.synced());
+        if (!plan_candidates(g, ratio)) return false;
+        const uint32_t plan = pp_cand[pick_weighted(ratio, w->rng.synced())];
         // --- A2 tactical: the PotentialPlan solve inside Find_Plan_For_Goal (land / space marshaller lists);
         // a failed solve rejects the candidate (AI_GALACTIC_2 §1.5.4, as galactic). Init's first solve: it ignores
         // the free-store reservations and reserves nothing (A1_READINGS §28.6 step 1). ---
         TacticalPpResult pp;
-        if (!w->solve_pp(*this, cand[k], g, pp, true)) {
-            ++w->stats[gname + " no potential plan (" + w->library.plans[cand[k]].name + ", failed " + pp.last_veto + ")"];
+        w->solve_pp(*this, plan, g, pp, true);
+        return accept_result(g, plan, pp);
+    }
+    // Slot 10's plan list: the plans that serve the goal type and whose template value is positive (pp_cand), with
+    // their success ratios. False (counted) when there is none.
+    std::vector<uint32_t> pp_cand;
+    bool plan_candidates(const Goal& g, std::vector<double>& ratio) {
+        if (g.source < ctx.goals.sources().size()) ++w->stats["~ proposed " + ctx.goals.sources()[g.source].function];
+        pp_cand.clear();
+        for (size_t i = 0; i < w->library.plans.size(); ++i)
+            if (ctx.templates.plan_value(static_cast<uint32_t>(i)) > 0 && w->library.plans[i].serves(g.type)) {
+                pp_cand.push_back(static_cast<uint32_t>(i));
+                ratio.push_back(ctx.learning.plan_success_ratio(static_cast<uint32_t>(i)));
+            }
+        if (!pp_cand.empty()) return true;
+        ++w->stats[w->defs.goals[g.type].name + " no plan"];
+        return false;
+    }
+    // The end of slot 10 once the solve is known: a failed solve rejects g, else the PotentialPlan record is created.
+    bool accept_result(Goal& g, uint32_t plan, TacticalPpResult& pp) {
+        const std::string& gname = w->defs.goals[g.type].name;
+        if (!pp.ok) {
+            ++w->stats[gname + " no potential plan (" + w->library.plans[plan].name + ", failed " + pp.last_veto + ")"];
             return false;
         }
         ++w->stats[gname + " accepted"];
         const int32_t h = w->next_pp++;
         TacPpRec rec;
         rec.player = player;
-        rec.plan = cand[k];
+        rec.plan = plan;
         rec.picks = std::move(pp.picks);
         w->pps.emplace(h, std::move(rec));
         g.pp_handle = h;
         // --- end A2 tactical ---
-        g.plan = cand[k];
+        g.plan = plan;
         g.pp_valid = true;
         g.cost = 0.0f;
         g.eta = 0.0f;
         return true;
+    }
+    // ---- OPT2 t10: batched accept (ai_goals.hpp; TacticalAiConfig::pp_streams / pp_latency) ----
+    // pp_solves: the slice's prepared solves (inputs with their own RNG stream); pp_plans: their plans (kept for the
+    // apply); pp_out: their results once known; pp_job: the slice's solves in the background (pp_latency > 0). A save
+    // waits for pp_job and writes pp_out (fetch_pp), so a loaded run applies the same results on the same frame.
+    struct PpSolve {
+        TacticalPpInput in;
+        SimRng rng;
+    };
+    std::vector<PpSolve> pp_solves;
+    std::vector<uint32_t> pp_plans;
+    mutable std::vector<TacticalPpResult> pp_out;
+    mutable bool pp_out_ready = false;
+    mutable LatencyJob<std::vector<TacticalPpResult>> pp_job;
+    static void run_pp_solves(std::vector<PpSolve>& s, std::vector<TacticalPpResult>& out, const ParallelFor& pf) {
+        out.assign(s.size(), TacticalPpResult{});
+        const auto body = [&s, &out](uint32_t b, uint32_t e) {
+            for (uint32_t i = b; i < e; ++i) {
+                ALAMO_PROFILE_SCOPE("tac.ai.pp");  // OPT2 t10: one solve (any thread)
+                s[i].in.rng = &s[i].rng;
+                solve_tactical_pp(s[i].in, out[i]);
+            }
+        };
+        const auto n = static_cast<uint32_t>(s.size());
+        if (n >= 2) pf(n, 1, body);
+        else body(0, n);
+    }
+    void fetch_pp() const {
+        if (pp_out_ready) return;
+        pp_out = std::move(pp_job.finish());
+        pp_out_ready = true;
+    }
+    bool accept_batched() override { return w->cfg.pp_streams; }
+    uint32_t accept_latency() override { return w->cfg.pp_latency; }
+    bool accept_prepare(Goal& g, uint32_t i) override {
+        ALAMO_PROFILE_SCOPE("tac.ai.accept");
+        if (i == 0) {
+            pp_solves.clear();
+            pp_plans.clear();
+        }
+        std::vector<double> ratio;
+        if (!plan_candidates(g, ratio)) return false;
+        PpSolve s;
+        s.rng.seed(pp_stream_seed(w->cfg.game_seed, g.created, player, g.source, g.target));
+        const uint32_t plan = pp_cand[pick_weighted(ratio, s.rng)];
+        w->pp_input(*this, plan, g, true, true, s.in);
+        pp_solves.push_back(std::move(s));
+        pp_plans.push_back(plan);
+        return true;
+    }
+    void accept_start(uint32_t n, int64_t now, int64_t ready) override {
+        ALAMO_PROFILE_SCOPE("tac.ai.accept");
+        (void)n;
+        pp_job.cancel();
+        pp_out.clear();
+        if (ready <= now) {
+            run_pp_solves(pp_solves, pp_out, w->cfg.pf);
+            pp_out_ready = true;
+        } else {
+            pp_out_ready = false;
+            pp_job.kick(now, ready, w->cfg.background,
+                        [solves = std::move(pp_solves), fan = w->cfg.pf](std::vector<TacticalPpResult>& out) mutable {
+                            run_pp_solves(solves, out, fan);
+                        });
+        }
+        pp_solves.clear();
+    }
+    bool accept_finish(Goal& g, uint32_t i) override {
+        ALAMO_PROFILE_SCOPE("tac.ai.accept");
+        fetch_pp();
+        if (i >= pp_out.size() || i >= pp_plans.size()) return false;
+        return accept_result(g, pp_plans[i], pp_out[i]);
+    }
+    void accept_cancel() override {
+        pp_job.cancel();
+        pp_solves.clear();
+        pp_plans.clear();
+        pp_out.clear();
+        pp_out_ready = false;
     }
     bool plan_activatable(const Goal& g) override {
         return g.pp_valid && g.plan != kAiNone && ctx.templates.plan_value(g.plan) > 0 && w->resolve_pp(*this, g);
@@ -1493,6 +1629,13 @@ void TacticalAiWorld::Impl::claim_force(TfRec& t) {
 
 bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, TacticalPpResult& out, bool first_solve) {
     TacticalPpInput in;
+    pp_input(p, plan, g, first_solve, false, in);
+    in.rng = &rng.synced();
+    return solve_tactical_pp(in, out);
+}
+
+void TacticalAiWorld::Impl::pp_input(PlayerAi& p, uint32_t plan, const Goal& g, bool first_solve, bool snapshot,
+                                     TacticalPpInput& in) {
     in.mode = cfg.mode;
     in.def = &library.plans[plan];
     in.plan = plan;
@@ -1577,11 +1720,20 @@ bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, 
         }
         in.free_units.push_back(u);
     }
+    // OPT2 t10: inside a proposal slice the first solves share the host's answers (PpSliceHost).
+    PpSliceHost& sh = pp_slice;
+    const bool shared = first_solve && sh.player == p.player;
+    if (shared && !sh.pool_ok) {
+        sh.pool = host.reinforcement_pool(p.player);
+        sh.pool_ok = true;
+    }
+    std::vector<TacticalReinforcement> own_pool;
+    if (!shared) own_pool = host.reinforcement_pool(p.player);
     std::set<int32_t> held;
     for (const auto& [id, t] : tfs)
         if (t.player == p.player)
             for (const TacticalReinforcement& r : t.pending) held.insert(r.key);
-    for (const TacticalReinforcement& r : host.reinforcement_pool(p.player)) {
+    for (const TacticalReinforcement& r : shared ? sh.pool : own_pool) {
         PpPoolEntry e;
         e.key = r.key;
         e.type = r.type;
@@ -1596,7 +1748,13 @@ bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, 
     std::set<int32_t> pads_held;
     for (const auto& [id, t] : tfs)
         for (const auto& rv : t.reservations) pads_held.insert(rv.first);
-    for (const TacticalPad& pd : host.build_pads(p.player)) {
+    if (shared && !sh.pads_ok) {
+        sh.pads = host.build_pads(p.player);
+        sh.pads_ok = true;
+    }
+    std::vector<TacticalPad> own_pads;
+    if (!shared) own_pads = host.build_pads(p.player);
+    for (const TacticalPad& pd : shared ? sh.pads : own_pads) {
         PpPad x;
         x.id = pd.id;
         x.position = pd.position;
@@ -1604,21 +1762,63 @@ bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, 
         x.reserved = pads_held.count(pd.id) != 0 || pad_reserved.count(pd.id) != 0;
         in.pads.push_back(std::move(x));
     }
-    in.pop_cap = host.population_cap(p.player);
-    in.pop_used = host.population_used(p.player);
+    if (shared && !sh.pop_ok) {
+        sh.pop_cap = host.population_cap(p.player);
+        sh.pop_used = host.population_used(p.player);
+        sh.pop_ok = true;
+    }
+    in.pop_cap = shared ? sh.pop_cap : host.population_cap(p.player);
+    in.pop_used = shared ? sh.pop_used : host.population_used(p.player);
     in.campaign = cfg.campaign;
     in.health_threshold = cfg.constants.health_low_percent_threshold;
     const int32_t builder = p.player;
-    in.can_build_now = [this, builder](int32_t type) { return host.can_build_now(builder, type); };
     in.contrast = host.contrast();
     in.contrast_multiplier = p.contrast_mult;
     in.recent_failures = in.has_target ? p.ctx.learning.recent_plan_failures(plan, g.target, now) : 0;
     const int32_t self = p.player;
     const Vec3f at = in.target_position;
     const int32_t zone = in.target_zone;
-    in.enemy_strength = [this, self, at, zone](uint64_t mask) { return enemy_strength_at(self, at, zone, mask); };
-    in.rng = &rng.synced();
-    return solve_tactical_pp(in, out);
+    if (!snapshot) {
+        in.can_build_now = [this, builder](int32_t type) { return host.can_build_now(builder, type); };
+        in.enemy_strength = [this, self, at, zone](uint64_t mask) { return enemy_strength_at(self, at, zone, mask); };
+        return;
+    }
+    // OPT2 t10 snapshot. TacticalBuild asks can_build_now only for team types of a plan without free-store units / magic
+    // (tactical_pp.cpp TacticalBuildM::score); the answers are shared by the slice (PpSliceHost, cleared by any order).
+    if (!(in.def->allow_free_store_units || in.def->magic_plan)) {
+        std::vector<int32_t> ok;
+        for (const TaskForceDef& d : in.def->task_forces)
+            for (const TeamDef& t : d.teams)
+                for (const int32_t ty : pp_team_types(d, t, w.types, in.category_mask)) {
+                    if (std::find(ok.begin(), ok.end(), ty) != ok.end()) continue;
+                    bool yes = false;
+                    if (shared) {  // the pool / pads cache's condition
+                        std::vector<int8_t>& c = pp_slice.can_build;
+                        if (c.size() < w.types.size()) c.resize(w.types.size(), int8_t{-1});
+                        int8_t& v = c[static_cast<size_t>(ty)];
+                        if (v < 0) v = static_cast<int8_t>(host.can_build_now(builder, ty) ? 1 : 0);
+                        yes = v == 1;
+                    } else {
+                        yes = host.can_build_now(builder, ty);
+                    }
+                    if (yes) ok.push_back(ty);
+                }
+        in.can_build_now = [types_ok = std::move(ok)](int32_t type) {
+            return std::find(types_ok.begin(), types_ok.end(), type) != types_ok.end();
+        };
+    }
+    // Contrast Setup A asks the total (all bits) and every contrast row's enemy mask, only with a target and no IgnoreTarget.
+    if (in.has_target && !in.def->ignore_target) {
+        std::vector<uint64_t> masks{~uint64_t{0}};
+        if (in.contrast)
+            for (size_t j = 0; j < in.contrast->size(); ++j) masks.push_back(in.contrast->rows[j].enemy_mask);
+        std::vector<double> v = enemy_strengths_at(self, at, zone, masks);
+        in.enemy_strength = [mk = std::move(masks), sums = std::move(v)](uint64_t mask) {
+            for (size_t k = 0; k < mk.size(); ++k)
+                if (mk[k] == mask) return sums[k];
+            return 0.0;
+        };
+    }
 }
 
 // Enemy strength at a tactical target for a category mask (the Contrast requirement 0x6c5de0 / 0x5f2430 in tactical)
@@ -1637,6 +1837,25 @@ double TacticalAiWorld::Impl::enemy_strength_at(int32_t player, const Vec3f& at,
             continue;
         }
         s += static_cast<double>(o.combat_power);
+    }
+    return s;
+}
+
+std::vector<double> TacticalAiWorld::Impl::enemy_strengths_at(int32_t player, const Vec3f& at, int32_t zone,
+                                                               std::span<const uint64_t> masks) const {
+    std::vector<double> s(masks.size(), 0.0);
+    const float half = cfg.constants.space_region_size * 0.5f;
+    for (const PerceptionObject& o : w.objects) {
+        if (!o.alive || o.owner < 0 || o.owner == player || w.rel(player, o.owner) != 1) continue;
+        const PerceptionType* t = w.type_of(o);
+        if (!t) continue;
+        if (cfg.mode == TacticalMode::Land) {
+            if (zone >= 0 && zones.size() > 0 && (o.zone >= 0 ? o.zone : zone_at(o.position)) != zone) continue;
+        } else if (std::fabs(o.position.x - at.x) > half || std::fabs(o.position.y - at.y) > half) {
+            continue;
+        }
+        for (size_t k = 0; k < masks.size(); ++k)
+            if ((t->category & masks[k]) != 0) s[k] += static_cast<double>(o.combat_power);
     }
     return s;
 }
@@ -3091,6 +3310,7 @@ TacticalAiWorld::TacticalAiWorld(objects::ObjectStore& store, const objects::Gam
     Impl& w = *impl_;
     w.world.set_players(w.cfg.lua_players);
     w.pipeline.set_handler([&w](uint64_t, const cmd::Command& c) {
+        w.pp_slice.clear();  // OPT2 t10: an order may change what the host answers
         const cmd::RejectReason r = w.host.execute(c.header.player, c.payload);
         ++w.orders;
         if (r != cmd::RejectReason::None) ++w.rejected;
@@ -3303,6 +3523,7 @@ size_t TacticalAiWorld::free_store_size(int32_t player) const {
 size_t TacticalAiWorld::background_jobs_in_flight() const {
     size_t n = 0;
     for (const auto& a : impl_->ai) n += (a && a->path_job.in_flight()) ? 1u : 0u;
+    for (const auto& a : impl_->ai) n += (a && a->ctx.goals.accept_pending()) ? 1u : 0u;  // OPT2 t10: slot-10 solves
     return n;
 }
 size_t TacticalAiWorld::live_targets(int32_t player) const {
@@ -3436,12 +3657,13 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 9;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
+constexpr uint32_t kTacticalAiSaveVersion = 10;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
                                                  // 5: refixf t06 space reinforcement status fields; 6: a1g t01 PP+0x100,
                                                  // entry +0x30 moved into the free store; 7: S7 t20/t21/t15 A1 (no had_units /
                                                  // no_units_sent; ambush / ability status fields); 8: a1j t01 land
                                                  // reinforcement status (landings in flight, saved removable flag); 9: OPT3
-                                                 // t04 the in-flight background land path recompute
+                                                 // t04 the in-flight background land path recompute; 10: OPT2 t10
+                                                 // the pending slot-10 solves (plans + results)
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
@@ -3758,6 +3980,28 @@ void TacticalAiWorld::write(ByteWriter& w) const {
             w.i64(p.path_job.ready_frame());
             io::put_vec(w, p.path_pend);
         }
+        // 10: OPT2 t10, the pending slot-10 solves. Their job is pure, so the save waits for it and writes the results
+        // (smaller than the inputs); the loaded run applies them on the goal system's saved ready frame.
+        const bool pending = p.ctx.goals.accept_pending();
+        w.boolean(pending);
+        if (pending) {
+            p.fetch_pp();
+            io::put_vec(w, p.pp_plans);
+            io::put_count(w, p.pp_out.size());
+            for (const TacticalPpResult& o : p.pp_out) {
+                w.boolean(o.ok);
+                w.u32(static_cast<uint32_t>(o.candidates));
+                w.str(o.last_veto);
+                io::put_count(w, o.picks.size());
+                for (const TacticalPpPick& k : o.picks) {
+                    w.i32(k.type);
+                    w.u8(static_cast<uint8_t>(k.source));
+                    w.i32(k.ref);
+                    w.i32(k.tf);
+                    w.i32(k.team);
+                }
+            }
+        }
     }
     // ---- plans ----
     io::put_count(w, m.plans.size());
@@ -3955,6 +4199,9 @@ bool TacticalAiWorld::read(ByteReader& r) {
         bool path_in_flight = false;  // OPT3 t04
         int64_t path_kick = 0, path_ready = 0;
         std::vector<uint32_t> path_pend;
+        bool pp_pending = false;  // OPT2 t10
+        std::vector<uint32_t> pp_plans;
+        std::vector<TacticalPpResult> pp_out;
     };
     std::vector<StagedPlayer> staged(m.ai.size());
     for (size_t i = 0; i < m.ai.size(); ++i) {
@@ -4022,6 +4269,31 @@ bool TacticalAiWorld::read(ByteReader& r) {
             sp.path_ready = r.i64();
             if (!io::get_vec(r, sp.path_pend)) return false;
             if (!sp.paths_built || sp.path_ready < sp.path_kick || sp.path_pend.size() != m.zones.size()) return io::bad(r);
+        }
+        sp.pp_pending = r.boolean();
+        if (sp.pp_pending) {
+            if (!io::get_vec(r, sp.pp_plans)) return false;
+            sp.pp_out.resize(io::count(r, 1 + 4 + 4 + 4));
+            for (TacticalPpResult& o : sp.pp_out) {
+                o.ok = r.boolean();
+                o.candidates = r.u32();
+                o.last_veto = r.str();
+                o.picks.resize(io::count(r, 17));
+                for (TacticalPpPick& k : o.picks) {
+                    k.type = r.i32();
+                    const uint8_t source = r.u8();
+                    if (source > static_cast<uint8_t>(PpSource::Produce)) r.fail();
+                    k.source = static_cast<PpSource>(source);
+                    k.ref = r.i32();
+                    k.tf = r.i32();
+                    k.team = r.i32();
+                }
+            }
+            for (const uint32_t pl : sp.pp_plans)
+                if (pl >= m.library.plans.size()) return io::bad(r);
+            if (!r.ok() || sp.pp_out.size() != sp.pp_plans.size() || !sp.ctx.goals.accept_pending()) return io::bad(r);
+        } else if (sp.ctx.goals.accept_pending()) {
+            return io::bad(r);
         }
     }
     // ---- plans ----
@@ -4278,6 +4550,10 @@ bool TacticalAiWorld::read(ByteReader& r) {
         pa.paths = sp.paths_built ? std::move(sp.paths) : ZoneGraph{};
         pa.path_pend = std::move(sp.path_pend);
         if (sp.path_in_flight) pa.start_paths_job(sp.path_kick, sp.path_ready, {});  // OPT3 t04: again, inline
+        pa.accept_cancel();  // OPT2 t10: the saved results stand in for the solves
+        pa.pp_plans = std::move(sp.pp_plans);
+        pa.pp_out = std::move(sp.pp_out);
+        pa.pp_out_ready = sp.pp_pending;
     }
     m.plans = std::move(new_plans);  // the replaced plan VMs are destroyed (not pooled)
     m.tfs = std::move(new_tfs);

@@ -442,8 +442,9 @@ for timing only.
   `alamo_headless_save_skirmish_foc_land_scheduled` (`--save-when scheduled`: save on the first tick at or after `--save-at` with
   a job in flight, `--save-check` compares the loaded run's CRC log with the uninterrupted one).
 - **Not converted (follow-ups).** Galactic AI perception (`GalacticPerception::update`) runs once per frame and the same frame's
-  readers use its results; investigated in OPT2 t11 below and left serial. Task-force planning (the PP solve) draws from the synced RNG in proposal order and its accept is synchronous: a
-  background solve needs per-solve RNG streams and a pending-goal state first.
+  readers use its results; investigated in OPT2 t11 below and left serial. Task-force planning (the PP solve) drew from the
+  synced RNG in proposal order and its accept was synchronous; OPT2 t10 gave it per-solve RNG streams, a pending-goal state and
+  a background job ("Slot 10 accept (OPT2 t10)" below).
 - **`alamo_game`** passes the same background hook to its galactic AI (`game_session.cpp`; results unchanged, the smoke goldens
   did not move).
 
@@ -576,8 +577,9 @@ Changed (results identical for any fan-out):
   The galactic AI passes no `candidate_pf` (unchanged; its goal scoring is CP3). The tactical leaf cache's hit counter (saved, not
   hashed) now counts only the serial evaluations, so it stays independent of timing (`LeafCacheUncounted`).
 
-Left serial: slot 10 accept (the PotentialPlan solve draws synced random numbers a data-dependent number of times, so a candidate's
-solve cannot start before the previous ones finish; it is now the largest part of the remaining land spikes); fog, anim, trees and
+Left serial: slot 10 accept (the PotentialPlan solve drew synced random numbers a data-dependent number of times, so a candidate's
+solve could not start before the previous ones finished; OPT2 t10 below found most of its cost in the host's build-pad query and
+moved the solves onto their own streams); fog, anim, trees and
 cleanup (0.1 ms or less per tick, below the cost of a dispatch, and fog writes one shared grid); movement and combat were already
 parallel (combat's phase D stays serial for its draws). `crc.battle.ai` (about 0.9 ms per land tick) is OPT3's.
 
@@ -599,6 +601,88 @@ Determinism: per-tick CRC logs byte-identical to `origin/main` for land (7000 ti
 4, 16 and 15 workers and for galactic HotM (18000 ticks) at 15; every golden unchanged. `alamo_ai_galactic_tests`
 `test_goal_batched_values` compares no batching, serial, reverse-order and 4-thread fan-outs (CRC per tick, draws, evaluation
 count and the serial call trace).
+
+## Slot 10 accept (OPT2 t10, 2026-11-03)
+
+Slot 10 (`PlayerAi::accept`: the plan pick, then the first PotentialPlan solve) was half of the land battle's tick time on
+`origin/main` (temporary zone, 7000 land ticks: 2.6 ms of a 5.2 ms mean tick, p99 16.5 ms). Two changes:
+
+- **Host answers once per slice [port, same results].** Most of that time was not the solver but the host's build-pad query
+  (`BattleAi::build_pads` re-listed every capture-point blocker for every pad, for every candidate). `BattleAi` now lists the
+  blockers once per query and remembers per object type whether it can block a capture point; the tactical AI asks the host
+  for pads, reinforcement pool and population once per proposal slice (`PpSliceHost`, opened by the new `slice_begin()` /
+  `slice_end()` hooks of the goal system and cleared by any executed order). CRC logs stayed byte-identical to main (land,
+  land campaign, space, HotM at 0 / 1 / 4 / 16 / 15 workers).
+- **Batched accept on own RNG streams [port, moves results]** (`ai_goals.hpp` "BATCHED ACCEPT", `TacticalAiConfig::pp_streams`
+  / `pp_latency`). Each candidate's plan pick and solve draw from a stream seeded by (session seed, frame, player, goal source,
+  target) instead of the synced stream, so no solve waits for the previous one. In visit order `accept_prepare()` picks the plan
+  and copies the solve's input, replacing the two world callbacks by their answers (`can_build_now` for the plan's team types,
+  `enemy_strength` for the Contrast masks, `enemy_strengths_at` sums all masks in one pass, same object order); the goal is
+  pending. After the slice the solves run as one `LatencyJob` (kick on frame N, applied at the start of N + `pp_latency`,
+  default 1, before that frame's slice; latency 0 runs them on the `ParallelFor` inside the slice). The apply
+  (`accept_finish()`: veto, PotentialPlan record, then the budget test and insert) is serial in visit order. No new slice starts
+  while solves are pending; a pass whose last slice left solves pending commits after the apply; `block_proposals()` drops
+  pending goals. The plan's re-solve at Commit (`resolve_pp`) still reads the live world, so a picked unit that died between
+  kick and apply is handled as before.
+- **Knobs.** `alamo_headless --no-pp-streams` (`TacticalAiSetup::pp_streams = false`) restores the synced draws in proposal
+  order: with it every golden from before this change passes unchanged (full MSVC ctest, 166 / 166). `--pp-latency F` sets the
+  apply delay (0 = in the slice).
+- **Saves.** Goal system save version 2: the pending goals, their ready frame and whether the pass waits for them. Tactical AI
+  save version 10: when solves are pending the save waits for the job and writes its results (plan, ok, picks), not its inputs
+  as the OPT3 t04 path job does: the inputs hold copies of the pool, pads and enemy strengths and are much larger than the
+  picks, and the job is pure, so waiting for it at a save costs one batch of solves (about 1 ms). The loaded run applies the
+  saved results on the saved ready frame. Tests: `alamo_ai_galactic_tests` `test_goal_batched_accept` (latency 0 / 1, serial /
+  reversed / threaded fan-out give the same CRCs, a save while pending continues identically, a block while pending),
+  `alamo_ai_tactical_world_tests` `test_pp_pending_save` (save on the first frame with solves pending, 900 frames after the load
+  identical, every truncation / corruption refused), `alamo_headless_save_skirmish_foc_land_scheduled` (`--save-when
+  scheduled` counts pending solves as a job in flight, `TacticalAiWorld::background_jobs_in_flight`).
+
+Moved goldens (MSVC; clang matches), first differing tick and cause: plans now start one frame later (the apply delay) and the
+plan picks / solve draws come from the per-candidate streams, so the AI's command stream changes first:
+
+| Golden | First diff | Run length before → after | Winner |
+|---|---|---|---|
+| `skirmish_ai_synthetic_golden.crc` | tick 114 | 730 → 697 ticks | Empire, both |
+| `skirmish_ai_foc_golden.crc` (space, Kuat) | tick 34 | 5868 → 6627 ticks | Empire, both |
+| `skirmish_ai_foc_land_golden.crc` | tick 14 | 3600 ticks (cap) | no end in the window, both |
+| `skirmish_ai_foc_land_campaign_golden.crc` | tick 27 | 3008 → 2819 ticks | Empire (Rebel retreat), both |
+| `ai_tactical_world_crc.txt` (synthetic mock) | frame 3 (plans at 4) | 176 lines | - |
+| `game_smoke_skirmish.crc` / `.rec` | tick 23 | 3122 → 3128 recorded ticks | - |
+| `game_smoke_campaign.crc` | tick 1019 (its battle) | same | - |
+| `game_smoke_land.crc` / `.rec` | tick 57 | same length | - |
+
+The smoke recordings move because the smoke scripts wait on game state before their next input. HotM (galactic AI only) is
+unchanged. Outcome seeds, `--no-pp-streams` against the new default (same winner on every one): FoC space seeds 1-16 all Empire
+(seed 2, which reached the 14400 cap before, now ends at 8158; it is still not in the test list since the stall it hit is not
+fixed); `foc-station` seed 2 and default seed Rebel both (victory all-retreated → all-destroyed); land campaign seeds 6 and 1
+Empire both; the 7000-tick land outcome keeps its skirmish base (`--expect-skirmish-base` ok, 6 structures started instead of 0).
+
+Worker counts (new defaults, 0 / 1 / 4 / 16 / 15 workers, `--crc-out` compared byte for byte): land 7000 ticks, land campaign,
+space `foc-station --seed 3`, HotM 18000 ticks all identical across counts; `--pp-latency 0` (solves on the `ParallelFor`) land
+and space at 0 / 4 / 15 identical; synthetic `--check-workers` at latency 0, 1 and 3 identical. HotM is byte-identical to main.
+
+Before / after (`alamo_headless --profile`, 15 workers, two rounds each, run alternately; machine otherwise idle: no other
+alamo / compiler / ctest process, CPU 0-63 % sampled around the runs; the land and space runs after the change play different
+games, so compare distributions). Main = `origin/main` 6d63bcf with temporary zones, cache = the first change only:
+
+| Scenario | Tick mean ms | p50 | p99 | Accept mean / p99 ms |
+|---|---|---|---|---|
+| FoC land 7000 ticks, main | 5.19 / 5.17 | 2.76 / 2.72 | 20.3 / 20.2 | 2.62 / 16.5 |
+| land, cache | 2.71 / 2.69 | 1.81 / 1.81 | 13.5 / 13.4 | 0.171 / 1.03 |
+| land, streams (default) | 2.53 / 2.53 | 1.67 / 1.67 | 12.5 / 12.6 | 0.081 / 0.38 |
+| FoC space `foc-station --seed 3`, main | 1.17 / 1.17 | 1.07 / 1.07 | 2.80 / 2.80 | 0.240 / 1.05 |
+| space, cache | 0.98 / 0.98 | 0.87 / 0.86 | 2.39 / 2.40 | 0.065 / 0.29 |
+| space, streams | 1.00 / 1.01 | 0.90 / 0.91 | 2.30 / 2.30 | 0.033 / 0.11 |
+
+`tac.ai.p<n>` (one player's AI service) p99, land: main 10.2 / 10.4 ms, cache 9.4 / 9.5, streams 8.8 / 8.9. The solves themselves
+(`tac.ai.pp`, now on a worker during the next frame's other passes) are 0.12 ms mean, 1.0 ms p99 per solve on land and 0.05 /
+0.26 ms on space. Max tick is battle setup (frame 1, 190-206 ms) in every run. An earlier pair of rounds under heavy load
+(CPU 43-96 %, 3-10 other heavy processes) gave the same picture for the cache change: land mean 8.35 / 7.15 → 4.13 / 2.92 ms,
+ticks over 33 ms 92 / 67 → 17 / 1.
+
+Remaining land spikes (follow-ups, not started): `ai.goals` p99 11 ms, max 25-27 ms, now almost all candidate values: OPT2 t03's
+batched `evaluate_prepared` (one heavy candidate per slice takes up to 33 ms under load; a slice's values wait for its slowest
+one) and the `Script_` evaluators run in place (up to 9 ms; Lua, serial).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
