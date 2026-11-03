@@ -45,4 +45,18 @@ uint32_t collect_scheduled(std::span<LuaVm* const> vms, uint64_t tick, const Par
     return n;
 }
 
+void prepare_detached_close(std::vector<std::unique_ptr<LuaVm>>& vms) {
+    std::erase_if(vms, [](const std::unique_ptr<LuaVm>& vm) { return !vm; });
+    for (std::unique_ptr<LuaVm>& vm : vms) vm->finalize_for_close();
+}
+
+void destroy_detached(std::vector<std::unique_ptr<LuaVm>>& vms, const ParallelFor& pf) {
+    prepare_detached_close(vms);
+    if (vms.empty()) return;
+    pf(static_cast<uint32_t>(vms.size()), 1, [&vms](uint32_t begin, uint32_t end) {
+        for (uint32_t i = begin; i < end; ++i) vms[i].reset();
+    });
+    vms.clear();
+}
+
 }  // namespace alamo::lua

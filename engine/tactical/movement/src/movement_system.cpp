@@ -1,7 +1,9 @@
 #include "alamo/tactical/movement/movement_system.hpp"
 
 #include <algorithm>
+#include <cmath>
 
+#include "alamo/core/dmath.hpp"
 #include "alamo/objects/object_store.hpp"
 
 namespace alamo::tactical::movement {
@@ -161,6 +163,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.has_goal = u.has_goal;
     v.arrived = u.arrived;
     v.failed = u.failed;
+    v.pushed = u.pushed;  // a1k t03
     v.goal = u.goal;
     v.replans = u.replans;
     v.space_fallback = u.fallback;
@@ -358,6 +361,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 u.in_formation = f.size() > 1;  // OI tactical
                 u.jiggle = V2{};
                 u.blocked_frames = 0;
+                end_push(u);  // a1k t03 [port]: a new move ends a pushed move
                 u.replans = 0;
                 u.waits = 0;
                 u.hold_until = 0;
@@ -462,6 +466,7 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
         u.m.next = 0;
         u.m.speed = 0.0f;
         u.m.state = LocoState::WalkStopped;
+        end_push(u);  // a1k t03 [port]: a stop ends a pushed move
         u.following = false;
         u.turning = false;
         u.wps.clear();
@@ -505,6 +510,7 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
     u.blocked_frames = 0;
     u.hold_until = 0;
     u.nudge_frames = 0;
+    end_push(u);  // a1k t03 [port]: a teleport ends a pushed move
     u.m.pos = pos;
     u.m.yaw = wrap_deg(yaw_deg);
     u.z = z;
@@ -742,7 +748,7 @@ bool MovementSystem::collision_applies(const CollisionObject& c, uint32_t frame)
         case CollisionKind::MovingVsStopped:
             return !crushes(a, b) && checker_moving(a, frame) && !other_moving(b) && mvs_contact(a, b) >= 0.0f;
         case CollisionKind::StoppedVsStopped:
-            return !a.has_goal && !b.has_goal &&
+            return !a.has_goal && !b.has_goal && !a.pushed && !b.pushed &&
                    overlap_ratio(a.m.pos, a.d.radius, b.m.pos, b.d.radius) > cfg_.constants.minimum_stopped_vs_stopped_overlap;
     }
     return false;
@@ -782,10 +788,11 @@ void MovementSystem::detect_collisions(uint32_t frame) {
                 coll_.add(kind, a.d.id, b.d.id, frame);
                 ++stats_.collisions_created;
             }
-        } else if (!a.has_goal) {
+        } else if (!a.has_goal && !a.pushed) {
             for (uint32_t bi : cand) {
                 const Unit& b = units_[bi];
-                if (b.has_goal || !collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
+                // a1k t03: a pushed unit's locomotor moves, so it is not stopped.
+                if (b.has_goal || b.pushed || !collision_classes_interact(a.d.collision_class, b.d.collision_class)) continue;
                 if (overlap_ratio(a.m.pos, a.d.radius, b.m.pos, b.d.radius) <= k.minimum_stopped_vs_stopped_overlap) continue;
                 if (coll_.has_pair(a.d.id, b.d.id)) continue;
                 coll_.add(CollisionKind::StoppedVsStopped, a.d.id, b.d.id, frame);
@@ -995,12 +1002,12 @@ bool MovementSystem::resolve_blocker(Unit& a, uint32_t blocker, float contact, u
     return false;
 }
 
-// Push 0x6859a0 (A1_READINGS §36.4): b steps aside along a's heading turned 45 degrees toward b's side. [port] b walks
-// the radii + 2 at its own max speed through the nudge (passability-checked per frame), no free-position search and no
-// return move; the first step must be passable. A deploying / deployed b is not pushed. A b still stepping aside counts
-// as pushed (the original pushes a blocker that is moving again, decision 0x684f90 step 2).
+// Push 0x6859a0 (A1_READINGS §36.4, §40): direction = a's heading turned 45 degrees toward b's side; the free-position
+// search (push_spot) and a land path to the spot; b walks it as a pushed move over its order move (§40.3: no return
+// move). A deploying / deployed b is not pushed. [port] A b already on a pushed move counts as pushed (the original
+// pushes a blocker that is moving again, decision 0x684f90 step 2).
 bool MovementSystem::push_aside(const Unit& a, Unit& b) {
-    if (b.nudge_frames > 0) return true;
+    if (b.pushed) return true;
     if (!(b.lp.max_speed > 0.0f)) return false;
     if (b.deploy == LocoState::WalkDeploying || b.deploy == LocoState::WalkDeployed) return false;
     if (a.m.next >= a.m.path.size()) return false;
@@ -1010,13 +1017,142 @@ bool MovementSystem::push_aside(const Unit& a, Unit& b) {
     const V2 rel = b.m.pos - a.m.pos;
     const float sin45 = cross(h, rel) <= 0.0f ? -kCos45 : kCos45;  // -45 degrees when b is on a's right
     const V2 dir{h.x * kCos45 - h.y * sin45, h.x * sin45 + h.y * kCos45};
-    const V2 step = dir * b.lp.max_speed;
-    if (!try_nudge(b.m, step, b.lp.mask, &grid_)) return false;
-    update_tree(b);
-    const float d = a.d.radius + b.d.radius + 2.0f;
-    b.nudge = step;
-    b.nudge_frames = static_cast<uint32_t>(std::ceil(d / b.lp.max_speed)) - 1u;
+    V2 spot;
+    LandPath out;
+    if (push_spot(b, dir, spot)) {
+        // 0x67b730: b's land path to the spot (synchronous); no path fails the push.
+        LandPathRequest q;
+        q.start = b.m.pos;
+        q.goal = spot;
+        q.mask = b.lp.mask;
+        q.clearance_radius = b.d.radius > kCellSize ? b.d.radius : 0.0f;
+        LandPathScratch sc;
+        find_land_path(grid_, regions_, q, sc, out);
+    }
+    if (!out.ok || out.points.size() < 2) {
+        ++stats_.push_failures;
+        return false;
+    }
+    b.pushed = true;
+    b.push_path = std::move(out.points);
+    b.push_next = 1;
+    b.push_blocked = 0;
+    b.nudge_frames = 0;
+    ++stats_.pushes;
     return true;
+}
+
+// a1k t03: the push search's footprint radius 0x3969f0 = the length of the hard extents (A1_READINGS §40.2) and the
+// mover's extent 0x372040 (§40.1). [port] A type without hard extents uses its soft radius (the model fallback of
+// 0x371be0 is not loaded).
+static float hard_footprint(const UnitDesc& d) {
+    return d.hard_x > 0.0f || d.hard_y > 0.0f ? std::sqrt(d.hard_x * d.hard_x + d.hard_y * d.hard_y) : d.radius;
+}
+static float hard_y_extent(const UnitDesc& d) { return d.hard_y > 0.0f ? d.hard_y : d.radius; }
+
+// Free-position search 0x440f90 with the push's set-up 0x440be0 (A1_READINGS §40.1-40.2): rings around b from radius 0
+// (step 1, +0.8 per ring up to min(1.5 r, 10), at most 20 rings), n = trunc(R 2pi / r) + 1 samples (at least 4 after
+// ring 0) at theta = 2pi i / n counter-clockwise from `dir`; mode 2: only theta <= pi/4 lies on the ring, the other
+// samples 0.33 from b. The first sample that is on the map, reachable, unoccupied and off the paths of the movers
+// heading into b is the spot. r = b's hard footprint radius. [port] reachability = b's mask and region component;
+// occupancy = the collision tree (ground colliders other than b whose hard footprint box overlaps the box
+// r + FormationSpacing x 5); the movers' remaining paths stand for their path approximations (clearance = mover's Y
+// extent + r + 4).
+bool MovementSystem::push_spot(const Unit& b, V2 dir, V2& out) const {
+    constexpr float kPi = 3.1415927f;
+    constexpr float kCone = 0.78539819f;  // pi / 4 (+0x3c)
+    constexpr float kOutsideCone = 0.33f;  // +0x40
+    constexpr uint32_t kRings = 20;
+    const float r = hard_footprint(b.d);
+    const float half = r + b.d.formation_spacing * 20.0f * 0.25f;  // + the margin +0x48
+    float max_step = r * 1.5f;
+    if (max_step == 0.0f) max_step = 5.0f;
+    max_step = std::min(max_step, 10.0f);
+    // 0x505490: the other participants of b's MovingVsStopped collisions (kind 3), in collision-list order.
+    struct Avoid {
+        const Unit* u;
+        float clearance;
+    };
+    std::vector<Avoid> avoid;
+    for (const CollisionObject& c : coll_.list()) {
+        if (c.kind != CollisionKind::MovingVsStopped || c.b != b.d.id) continue;
+        const int32_t i = find(c.a);
+        if (i < 0) continue;
+        const Unit& m = units_[static_cast<size_t>(i)];
+        if (m.m.next < m.m.path.size()) avoid.push_back({&m, hard_y_extent(m.d) + r + 4.0f});
+    }
+    // Orientation (0x20acd0): yaw in degrees in [0, 360), then radians as the search reads it.
+    float yaw_deg = 0.0f;
+    if (dir.x != 0.0f || dir.y != 0.0f) {
+        yaw_deg = dmath::atan2(dir.y, dir.x) * 57.295776f;
+        if (yaw_deg < 0.0f) yaw_deg += 360.0f;
+    }
+    const float yaw = yaw_deg * 0.017453292f;
+    const float sy = fighter_sin(yaw), cy = fighter_cos(yaw);
+    // 0x50ecd0: both cells pass b's mask and lie in one connected region of it.
+    const int32_t bcx = world_to_cell(b.m.pos.x), bcy = world_to_cell(b.m.pos.y);
+    if (!grid_.passable_cell(bcx, bcy, b.lp.mask)) return false;
+    const int32_t comp = regions_built_ ? regions_.component_at(b.slot, bcx, bcy) : -1;
+    // The tree holds each unit's soft-radius box (update_tree); widen the query so a hard footprint larger than it is
+    // still found.
+    float widen = 0.0f;
+    for (const Unit& o : units_) widen = std::max(widen, hard_footprint(o.d) - std::max(o.d.radius, 1.0f));
+    float ring_r = 0.0f, step = 1.0f;
+    for (uint32_t ring = 0; ring < kRings; ++ring) {
+        uint32_t n = 1;
+        if (r > 0.0f) n = static_cast<uint32_t>(static_cast<int64_t>(ring_r * 2.0f * kPi / r)) + 1u;
+        if (ring != 0) n = std::max(4u, n);
+        for (uint32_t i = 0; i < n; ++i) {
+            const float th = (static_cast<float>(i) / static_cast<float>(n)) * kPi * 2.0f;
+            const float rho = th > kCone ? kOutsideCone : ring_r;
+            const float st = fighter_sin(th), ct = fighter_cos(th);
+            const V2 p{b.m.pos.x + (ct * cy - st * sy) * rho, b.m.pos.y + (st * cy + ct * sy) * rho};
+            const int32_t cx = world_to_cell(p.x), cyy = world_to_cell(p.y);
+            if (!grid_.in_range(cx, cyy) || !grid_.passable_cell(cx, cyy, b.lp.mask)) continue;
+            if (comp >= 0 && regions_.component_at(b.slot, cx, cyy) != comp) continue;
+            bool occupied = false;
+            const float q = half + widen;
+            const tactical::Aabb box{{p.x - q, p.y - q, -1.0f}, {p.x + q, p.y + q, 1.0f}};
+            for (EntityHandle eh : tree_.query_aabb(box, QueryFilter{}, qctx_)) {
+                const int32_t oi = find(static_cast<ObjectId>(eh));
+                if (oi < 0) continue;
+                const Unit& o = units_[static_cast<size_t>(oi)];
+                if (o.d.id == b.d.id || !ground_collider(o)) continue;
+                const float ro = hard_footprint(o.d);
+                if (std::abs(o.m.pos.x - p.x) <= ro + half && std::abs(o.m.pos.y - p.y) <= ro + half) {
+                    occupied = true;
+                    break;
+                }
+            }
+            if (occupied) continue;
+            bool on_path = false;
+            for (const Avoid& av : avoid) {
+                V2 s0 = av.u->m.pos;
+                for (size_t k = av.u->m.next; k < av.u->m.path.size() && !on_path; ++k) {
+                    const V2 s1 = av.u->m.path[k];
+                    const V2 seg = s1 - s0;
+                    const float l2 = length_sq(seg);
+                    const float t = l2 > 0.0f ? std::clamp(dot(p - s0, seg) / l2, 0.0f, 1.0f) : 0.0f;
+                    on_path = length_sq(p - (s0 + seg * t)) < av.clearance * av.clearance;
+                    s0 = s1;
+                }
+                if (on_path) break;
+            }
+            if (on_path) continue;
+            out = p;
+            return true;
+        }
+        ring_r += step;
+        step = std::min(step + 0.8f, max_step);
+    }
+    return false;
+}
+
+void MovementSystem::end_push(Unit& u) {
+    u.pushed = false;
+    u.push_path.clear();
+    u.push_next = 0;
+    u.push_blocked = 0;
 }
 
 void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
@@ -1042,6 +1178,19 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             if (is_air(u)) continue;  // §4.3-4.6: serial pass below
             const bool bike = u.d.locomotor == LocomotorKind::Bike;
             const float yaw0 = u.m.yaw;
+            // a1k t03 (A1_READINGS §40.3): the pushed move is the top of the path stack; the order path waits under it.
+            if (u.pushed && u.deploy == LocoState::None) {
+                std::swap(u.m.path, u.push_path);
+                std::swap(u.m.next, u.push_next);
+                const uint32_t escape = u.m.escape_until;
+                u.m.escape_until = 0;
+                res[i] = walk_step(u.m, u.lp, kInf, &grid_, nullptr);
+                u.m.escape_until = escape;
+                std::swap(u.m.path, u.push_path);
+                std::swap(u.m.next, u.push_next);
+                if (bike) bike_frame(u, yaw0, true);
+                continue;
+            }
             // S8 t11: a Walk in a deploy state does not move (MovementSystem::deploy).
             if (!u.has_goal || u.need_path || frame < u.start_frame || u.deploy != LocoState::None) {
                 if (bike) bike_frame(u, yaw0, false);
@@ -1066,25 +1215,36 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             continue;
         }
         const WalkResult& r = res[i];
-        if (r.arrived) {
-            u.has_goal = false;
-            u.arrived = true;
-        }
-        if (r.blocked) {
-            ++stats_.blocked_steps;
-            if (++u.blocked_frames >= kReplanAfterBlocked) {
-                u.blocked_frames = 0;
-                if (++u.replans > kMaxReplans) {
-                    u.has_goal = false;
-                    u.failed = true;
-                } else {
-                    u.need_path = true;
-                    u.start_frame = frame + 1;
-                    ++stats_.replans;
-                }
+        if (u.pushed) {
+            // a1k t03: the pushed path ended -> the move underneath continues (an idle unit stays at the spot).
+            // [port] a pushed walk blocked for kReplanAfterBlocked frames ends where it is.
+            if (r.blocked) ++stats_.blocked_steps;
+            if (r.arrived || (r.blocked && ++u.push_blocked >= kReplanAfterBlocked)) {
+                end_push(u);
+            } else if (r.moved) {
+                u.push_blocked = 0;
             }
-        } else if (r.moved) {
-            u.blocked_frames = 0;
+        } else {
+            if (r.arrived) {
+                u.has_goal = false;
+                u.arrived = true;
+            }
+            if (r.blocked) {
+                ++stats_.blocked_steps;
+                if (++u.blocked_frames >= kReplanAfterBlocked) {
+                    u.blocked_frames = 0;
+                    if (++u.replans > kMaxReplans) {
+                        u.has_goal = false;
+                        u.failed = true;
+                    } else {
+                        u.need_path = true;
+                        u.start_frame = frame + 1;
+                        ++stats_.replans;
+                    }
+                }
+            } else if (r.moved) {
+                u.blocked_frames = 0;
+            }
         }
         if (u.nudge_frames > 0) {
             --u.nudge_frames;
@@ -1259,6 +1419,15 @@ void MovementSystem::hash_units(StateHasher& h) const {
         h.f32(u.jiggle.x);  // OI tactical
         h.f32(u.jiggle.y);
         h.boolean(u.in_formation);
+        if (u.pushed) {  // a1k t03: hashed only while a pushed move is active
+            h.u32(u.push_next);
+            h.u32(u.push_blocked);
+            h.u32(static_cast<uint32_t>(u.push_path.size()));
+            for (const V2& p : u.push_path) {
+                h.f32(p.x);
+                h.f32(p.y);
+            }
+        }
     }
     h.u32(static_cast<uint32_t>(crush_.size()));  // OI tactical
     for (const CrushEvent& e : crush_) {

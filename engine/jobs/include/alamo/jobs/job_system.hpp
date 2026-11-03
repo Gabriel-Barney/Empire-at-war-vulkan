@@ -203,4 +203,23 @@ inline alamo::ParallelFor make_parallel_for(JobSystem& js) {
     };
 }
 
+// OPT2 t02: backs the AI's fixed-latency background hook (alamo/ai/latency_job.hpp BackgroundStart) with `js` (which must
+// outlive it): `work` runs as one Background-priority job and the returned function blocks until it finished, running
+// other work meanwhile. The returned function must be called once before the job's data goes away (LatencyJob always
+// does). A serial system runs `work` inline and returns an empty function. The returned function may outlive `js` (an AI
+// world that outlives its host): `js`'s destructor runs every queued job, so a finished counter never touches `js`.
+inline std::function<std::function<void()>(std::function<void()>)> make_background_start(JobSystem& js) {
+    return [&js](std::function<void()> work) -> std::function<void()> {
+        if (js.serial()) {
+            work();
+            return {};
+        }
+        auto counter = std::make_shared<JobCounter>();
+        js.spawn(*counter, std::move(work), Priority::Background);
+        return [&js, counter] {
+            if (!counter->done()) js.wait(*counter);
+        };
+    };
+}
+
 }  // namespace alamo::jobs

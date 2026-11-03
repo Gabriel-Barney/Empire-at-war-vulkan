@@ -5,6 +5,13 @@
 
 namespace alamo::ai::tactical {
 
+namespace {
+thread_local bool t_uncounted = false;  // LeafCacheUncounted
+}  // namespace
+
+LeafCacheUncounted::LeafCacheUncounted() : prev_(t_uncounted) { t_uncounted = true; }
+LeafCacheUncounted::~LeafCacheUncounted() { t_uncounted = prev_; }
+
 bool leaf_cache_hit(int32_t lifetime_s, uint32_t stamp, uint32_t now) {
     if (lifetime_s == kCacheNone || stamp == 0) return false;
     if (lifetime_s == kCacheForever) return true;
@@ -20,7 +27,7 @@ bool LeafCache::lookup(const LeafCacheKey& key, int32_t lifetime_s, uint32_t now
     const auto it = map_.find(key);
     if (it == map_.end() || !leaf_cache_hit(lifetime_s, it->second.stamp, now)) return false;
     out = it->second.value;
-    ++hits_;
+    if (!t_uncounted) ++hits_;
     return true;
 }
 
