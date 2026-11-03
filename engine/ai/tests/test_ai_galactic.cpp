@@ -413,7 +413,9 @@ static void test_goal_batched_values() {
     const ParallelFor reverse = [](uint32_t count, uint32_t, const RangeFn& fn) {
         for (uint32_t i = count; i-- > 0;) fn(i, i + 1);
     };
-    const ParallelFor threads = [](uint32_t count, uint32_t, const RangeFn& fn) {
+    uint32_t fan_outs = 0;  // batches with at least 4 prepared values (ai_goals.cpp kMinFanOut) reach the ParallelFor
+    const ParallelFor threads = [&fan_outs](uint32_t count, uint32_t, const RangeFn& fn) {
+        ++fan_outs;
         std::vector<std::thread> ts;
         for (uint32_t k = 0; k < 4; ++k)
             ts.emplace_back([&fn, count, k] {
@@ -431,8 +433,9 @@ static void test_goal_batched_values() {
         CHECK(b.crc == ref.crc && b.draws == ref.draws && b.counted == ref.counted && b.trace == ref.trace);
         CHECK(b.prepared > 0 && b.prepared < b.counted);
     }
-    std::printf("goal batched values: %u evaluations, %llu draws, %zu ticks identical\n", ref.counted,
-                static_cast<unsigned long long>(ref.draws), ref.crc.size());
+    CHECK(fan_outs > 0);
+    std::printf("goal batched values: %u evaluations, %llu draws, %zu ticks identical, %u fan-outs\n", ref.counted,
+                static_cast<unsigned long long>(ref.draws), ref.crc.size(), fan_outs);
 }
 
 static void test_plan_pick_and_solver() {

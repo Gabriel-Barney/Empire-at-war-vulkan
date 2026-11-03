@@ -134,18 +134,22 @@ bool GoalSystem::proposal_slice(int64_t now) {
     };
     auto flush = [&] {
         if (batch_.empty()) return;
-        bool any = false;
+        uint32_t prepared = 0;
         for (Candidate& c : batch_) {
             c.prepared = hooks_->prepare_evaluation(sources_[c.source].function) ? 1 : 0;
-            any = any || c.prepared;
+            prepared += c.prepared;
         }
-        if (any)
-            (*pf)(static_cast<uint32_t>(batch_.size()), 1, [this](uint32_t b, uint32_t e) {
-                for (uint32_t i = b; i < e; ++i) {
-                    Candidate& c = batch_[i];
-                    if (c.prepared) c.ok = hooks_->evaluate_prepared(sources_[c.source].function, c.target, c.value) ? 1 : 0;
-                }
-            });
+        const auto values = [this](uint32_t b, uint32_t e) {
+            for (uint32_t i = b; i < e; ++i) {
+                Candidate& c = batch_[i];
+                if (c.prepared) c.ok = hooks_->evaluate_prepared(sources_[c.source].function, c.target, c.value) ? 1 : 0;
+            }
+        };
+        // Fewer than kMinFanOut prepared values run in place: waking helpers costs about what they take (a space battle's
+        // slices hold 2-3 values of about 20 us; a land battle's about 5 of about 120 us).
+        constexpr uint32_t kMinFanOut = 4;
+        if (prepared >= kMinFanOut) (*pf)(static_cast<uint32_t>(batch_.size()), 1, values);
+        else if (prepared > 0) values(0, static_cast<uint32_t>(batch_.size()));
         for (const Candidate& c : batch_) evaluate_candidate(c.source, c.target, &c);
         batch_.clear();
     };
