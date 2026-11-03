@@ -311,6 +311,133 @@ static void test_goal_reservations() {
     std::printf("goal reservations: %zu hook calls in the last pass\n", hooks.trace.size());
 }
 
+// OPT2 t03 - batched goal values (ai_goals.hpp): a mode with candidate_pf() evaluates the slice's prepared candidates
+// first (any thread, any range order) and commits every candidate in visit order; an unprepared function ("S", a Script_
+// stand-in that draws from the synced RNG) is evaluated in place. Proposals, accepts, draws and evaluation counts must
+// equal the unbatched run for every fan-out.
+static void test_goal_batched_values() {
+    struct BatchHooks final : GoalModeHooks {
+        const ParallelFor* pf = nullptr;
+        SimRng* rng = nullptr;
+        std::vector<std::string> trace;  // serial calls only; a batched value is logged where evaluated() commits it
+        uint32_t counted = 0;
+        mutable std::atomic<uint32_t> prepared{0};  // evaluate_prepared() calls, any thread
+        static double value(const std::string& f, int32_t t) { return f == "A" ? 3.0 + t : 8.0 - 1.5 * t; }
+        uint32_t target_count() override { return 9; }
+        bool applies(int32_t t, uint32_t) override { return t % 3 != 1; }
+        bool blocked(uint32_t, int32_t t) override { return t == 6; }
+        bool evaluate(const std::string& f, int32_t t, double& out) override {
+            ++counted;
+            trace.push_back("eval " + f);
+            out = f == "S" ? static_cast<double>(rng->range_int(-2, 6)) : value(f, t);
+            return f != "B" || t != 3;
+        }
+        const ParallelFor* candidate_pf() override { return pf; }
+        bool prepare_evaluation(const std::string& f) override { return f != "S"; }
+        bool evaluate_prepared(const std::string& f, int32_t t, double& out) const override {
+            prepared.fetch_add(1, std::memory_order_relaxed);
+            out = value(f, t);
+            return f != "B" || t != 3;
+        }
+        void evaluated(const std::string& f) override {
+            ++counted;
+            trace.push_back("eval " + f);
+        }
+        bool accept(Goal& g) override {
+            const int32_t r = rng->range_int(0, 3);
+            trace.push_back("accept " + std::to_string(g.type) + " " + std::to_string(g.target) + " " + std::to_string(g.desire));
+            if (r == 0) return false;
+            g.plan = 0;
+            g.pp_valid = true;
+            return true;
+        }
+        bool plan_activatable(const Goal&) override { return true; }
+        bool plan_invalid(const Goal& g) override { return g.running < 0; }
+        bool replaceable(const Goal&) override { return true; }
+        void refresh_plan(Goal&) override {}
+        void suspend_reservations(Goal&) override {}
+        bool uses_budget() override { return false; }
+        bool can_fund(const Goal&) override { return true; }
+        float category_credits(int32_t) override { return 1.0f; }
+        void budget_add(Goal&) override {}
+        void budget_release(Goal&) override {}
+        void budget_weights() override {}
+        std::vector<int32_t> category_order() override { return {0}; }
+        void queue_production(Goal&) override {}
+        void instantiate(Goal& g) override { g.running = 1; }
+        void end_plan(Goal&, bool) override {}
+        void drop_potential_plan(Goal&) override {}
+        float elapsed_eta(const Goal&) override { return 0.0f; }
+        int32_t quota_players() override { return 4; }  // quota 5: slices end mid-source
+    };
+    struct Run {
+        std::vector<std::string> trace;
+        std::vector<uint64_t> crc;
+        uint32_t counted = 0, prepared = 0;
+        uint64_t draws = 0;
+    };
+    auto run = [](const ParallelFor* pf) {
+        AiDefinitions defs;
+        for (const char* n : {"Goal_A", "Goal_S", "Goal_B", "Goal_G"}) {
+            GoalTypeDef d;
+            d.name = n;
+            d.application = std::strcmp(n, "Goal_G") == 0 ? app::Global : app::Enemy;
+            d.category = 0;
+            defs.goals.push_back(d);
+        }
+        LearningSystem learning;
+        SimRng rng(99);
+        BatchHooks hooks;
+        hooks.pf = pf;
+        hooks.rng = &rng;
+        GoalSystem gs;
+        gs.init(defs, {{0, "A"}, {1, "S"}, {2, "B"}, {3, "A"}}, &hooks, &learning, nullptr, &rng, {});
+        Run r;
+        uint32_t evals = 0;
+        for (int64_t f = 1; f <= 40; ++f) {
+            gs.service(f);
+            evals += gs.evaluations_last_pass();
+            StateHasher h;
+            gs.hash(h);
+            rng.hash(h);
+            r.crc.push_back(h.digest());
+        }
+        r.trace = std::move(hooks.trace);
+        r.counted = hooks.counted;
+        r.prepared = hooks.prepared.load();
+        r.draws = rng.draws();
+        CHECK(gs.passes() > 2 && evals > 0);
+        return r;
+    };
+    const ParallelFor serial = serial_for;
+    const ParallelFor reverse = [](uint32_t count, uint32_t, const RangeFn& fn) {
+        for (uint32_t i = count; i-- > 0;) fn(i, i + 1);
+    };
+    uint32_t fan_outs = 0;  // batches with at least 4 prepared values (ai_goals.cpp kMinFanOut) reach the ParallelFor
+    const ParallelFor threads = [&fan_outs](uint32_t count, uint32_t, const RangeFn& fn) {
+        ++fan_outs;
+        std::vector<std::thread> ts;
+        for (uint32_t k = 0; k < 4; ++k)
+            ts.emplace_back([&fn, count, k] {
+                for (uint32_t i = k; i < count; i += 4) fn(i, i + 1);
+            });
+        for (std::thread& t : ts) t.join();
+    };
+    const Run ref = run(nullptr);
+    uint32_t evals_in_place = 0;
+    for (const std::string& s : ref.trace) evals_in_place += s.rfind("eval ", 0) == 0 ? 1u : 0u;
+    CHECK(evals_in_place == ref.counted && ref.draws > 0 && ref.prepared == 0);
+    for (const ParallelFor* pf : {&serial, &reverse, &threads}) {
+        const Run b = run(pf);
+        // The same evaluations (in place or committed from the batch) and accepts, in the same order.
+        CHECK(b.crc == ref.crc && b.draws == ref.draws && b.counted == ref.counted && b.trace == ref.trace);
+        CHECK(b.prepared > 0 && b.prepared < b.counted);
+    }
+    CHECK(fan_outs > 0);
+    std::printf("goal batched values: %u evaluations, %llu draws, %zu ticks identical, %u fan-outs\n", ref.counted,
+                static_cast<unsigned long long>(ref.draws), ref.crc.size(), fan_outs);
+}
+
 static void test_plan_pick_and_solver() {
     // One synced draw: r = range_float(0, total), first cumulative >= r.
     SimRng a(1234), b(1234);
@@ -3171,6 +3298,7 @@ int main(int argc, char** argv) {
     test_cadence();
     test_desire_and_hysteresis();
     test_goal_reservations();
+    test_goal_batched_values();
     test_plan_pick_and_solver();
     test_definitions_and_templates();
     test_plan_load_parallel();
