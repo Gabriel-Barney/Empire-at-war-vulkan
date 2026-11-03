@@ -216,13 +216,14 @@ void set_nil_global(LuaVm& vm, std::string_view name);
 // the next PumpEvents); else called at once (protected). Skipped when the script is exiting. Returns
 // false when no handler exists. Errors go to *err.
 struct AiEventArg {
-    enum Kind : uint8_t { Nil, Number, Boolean, String, Player, Object, TaskForce } kind = Nil;
+    enum Kind : uint8_t { Nil, Number, Boolean, String, Player, Object, TaskForce, Type } kind = Nil;
     double number = 0.0;
     bool boolean = false;
     std::string text;
     int32_t id = -1;  // player / task force id
     objects::ObjectHandle object;
     AiTaskForceKind tf_kind = AiTaskForceKind::Galactic;
+    uint32_t type = 0xFFFFFFFFu;  // Type: GameObjectTypeWrapper of this type index (out of range -> nil; q6 t09)
 };
 bool dispatch_task_force_event(LuaVm& vm, int32_t tf, AiTaskForceKind kind, std::string_view tf_name,
                                std::string_view event, const std::vector<AiEventArg>& args, bool queued,

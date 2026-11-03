@@ -107,6 +107,10 @@ public:
     bool call(std::string_view global_function, std::string* err = nullptr);
     // True when the global `name` is a function (raw lookup, no metamethods; q6 t06: optional engine calls).
     bool has_function(std::string_view name);
+    // q6 t09 (GAME_SCORING.md §2 ServiceRate / LastService): a global number by raw lookup. get_number is false (out
+    // unchanged) when the global is not a Lua number (nil, a string, ...); set_number writes a new number global.
+    bool get_number(std::string_view name, double& out);
+    void set_number(std::string_view name, double value);
 
     // ---- script threads ----
     // Create_Thread(name) from C++. Returns the thread id, or -1 if `name` is not a global function.

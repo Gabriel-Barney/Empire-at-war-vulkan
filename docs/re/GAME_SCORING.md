@@ -233,12 +233,47 @@ Next, for stats screens and mods like TR:
 
 Can wait / skip: Get_CRC (MP only), the debug file-watcher reload, the `from save` attach path.
 
-## Port status (2026-11-03, q6 t06)
+## Port status (2026-11-03, q6 t06 / t09)
 
 - Done (port notes 1-3): `SimHost::set_scoring_script(files, name)` (`engine/apps/sim/include/alamo/sim/sim_host.hpp`);
   `start_game` on an empty stack re-creates the VM after the GlobalValue clear and before `start_galactic` sets the
   players up, so before `start_story`; top level, `Base_Definitions()` (skipped when missing), `main` thread created.
   The VM is dropped when the stack empties [port]. `GameSession` always enables it; `alamo_headless` with `--scoring`.
   The session GlobalValue table is the store (saved with the game; a load restores it after the re-creation, as §4).
-- Not yet: the Service pump of §2 (so `main` never resumes), the event calls of §3, the UI readers of §7, saving the
-  script's own tables (§6: stats are empty after a load).
+- Done (q6 t09, port notes 4-5; comment block at `SimHost::set_scoring_script`):
+  - §2 Service at `GameModeManager::update`'s "gmm.scoring" step (`ModeTickContext::scoring`), before the mode tick:
+    `ServiceRate` / `LastService` read as Lua numbers (`LuaVm::get_number`), now = (float)frame / (float)30 widened,
+    strict compare in double, one `service_threads()` with time = now and frame = global frame, then release on
+    `ScriptExit` or on any Lua error since the last Service (thread or event call; a release found pending at a due
+    Service skips the pump), else `LastService = now`.
+  - `Game_Mode_Starting_Event(mode, map)`: queued when a mode is set up and delivered at the next Service, before the pump
+    [port: the original calls it inside the setup]: galactic from `start_galactic` (map = `set_scoring_campaign`, else the
+    SessionDescriptor campaign), tactical from `CampaignBattles::push_battle` (map = the battle request's map).
+    `Game_Mode_Ending_Event(mode)` in `end_game_mode` before every pop. Mode names "Galactic" / "Land" / "Space".
+  - `Reset_Tactical_Stats()`: `CampaignBattles` at auto-resolve begin, read off the conflict manager each hook (state
+    AutoSetup / AutoRunning seen, else a new auto-resolved log entry), and before the HUD `resolve_battle`.
+  - Galactic events from the story session's T9 drains (`StorySession::set_scoring_tap`), called after T9 in stream
+    order: `Galactic_Planet_Faction_Change`, `Galactic_Production_Begin_Event` / `_Canceled_Event` (planet object, type
+    wrapper), `Galactic_Production_End_Event` (the object, its team container, else the type).
+  - With a story session the scoring VM also gets the story's player world, object bridge and presentation families.
+  - Determinism: every call is on the sim thread at those fixed points; `alamo_sim_tests` `test_scoring_story` checks
+    the CRC log and the script's log for every worker count; `GameRandom.Free_Random` (ranged) stays on the free stream
+    (`test_scoring_service`).
+- Measured on Thrawn's Revenge 3.3 (`alamo_headless --story --scoring` and `--economy --galactic-ai --story --scoring`,
+  `Thrawn_Empire`, 2000 ticks): no Lua errors, no release. `Game_Mode_Starting_Event("Galactic", "Thrawn_Empire")`
+  builds the deepcore GameScoring plugin runner ("Loaded 3 plugins"), `main` runs (534 Services in 2000 frames at
+  `ServiceRate = 0.1`), the plugin runner's MessageQueue processes every Service, the stats dump runs at frame 1497.
+  The TR galactic AI builds nothing in these runs, so no galactic event call was exercised there (1 event call in
+  12000 ticks). Cost: about 7 % of the AI run's wall time.
+- Open:
+  - `Galactic_Unit_Destroyed_Event`: wired (object, neutral player as the killer) but only called while the object is
+    still alive; the stream is read after the destroy, so in practice it never fires. Needs a death hook in GalacticSim
+    at the destroy moment, and the killer player.
+  - `Tactical_Unit_Destroyed_Event`, `Tactical_Production_End_Event`: the scoring VM is bound to the galactic store, so
+    tactical objects have no wrapper in it (and the port's tactical deaths are already dead when the battle host reads
+    them). Needs a dual-store wrapper (the parent-store tag in reverse) or a VM store switch per mode.
+  - `Galactic_Starbase_Level_Change` (the stream has the new level, not the old / new types), `Galactic_Neutralized_Event`,
+    `Player_Quit_Event`: no source yet.
+  - Galactic events only arrive with a story session (no story: nobody drains the stream at a fixed point).
+  - The UI readers of §7, saving the script's own tables (§6: stats are empty after a load; a load re-creates the
+    script, so `Game_Mode_Starting_Event("Galactic")` runs again at the first frame after it).

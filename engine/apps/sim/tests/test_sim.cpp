@@ -783,15 +783,24 @@ struct Run {
     size_t fired = 0;
     float empire_credits = 0;
     int32_t empire_tech = 0;
+    // q6 t09 (scoring runs): the script's GlobalValue Scoring_Log, its messages and the host counters.
+    std::string scoring_log;
+    std::vector<std::string> scoring_messages;
+    uint64_t scoring_services = 0, scoring_calls = 0, scoring_releases = 0;
 };
 
-static Run run(const World& w, const FileProvider& files, int32_t workers, uint64_t ticks) {
+// scoring: the GameScoring script name to run (q6 t09; nullptr = none, the S4 golden run).
+static Run run(const World& w, const FileProvider& files, int32_t workers, uint64_t ticks, const char* scoring = nullptr) {
     const GalacticRules r = rules();
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
     cfg.seed = 7;
     cfg.story_crc = true;
     SimHost host(w.types, js, cfg);
+    if (scoring) {
+        host.set_scoring_script(&files, scoring);
+        host.set_scoring_campaign("StoryTest");
+    }
     GalacticSim* gs = host.start_galactic(r, setup());
     CHECK(gs != nullptr);
     if (!gs) return {};
@@ -822,11 +831,19 @@ static Run run(const World& w, const FileProvider& files, int32_t workers, uint6
             CHECK(gs->invade(pUnder, rC, {}) == RejectReason::None);
             landed = true;
         }
-        if (t == 200) host.start_game(ModeKind::Space);
+        if (t == 200) {
+            host.start_game(ModeKind::Space);
+            host.scoring_mode_started(ModeKind::Space, "Test_Space_Map");  // q6 t09 (no-op without a script)
+        }
         if (t == 230) host.end_game_mode();
         host.tick_once();
     }
     Run out;
+    out.scoring_log = host.global_values()->get("Scoring_Log").text;
+    out.scoring_messages = host.scoring_messages();
+    out.scoring_services = host.scoring_services();
+    out.scoring_calls = host.scoring_calls();
+    out.scoring_releases = host.scoring_releases();
     out.log = host.story()->log_text("S4 synthetic story campaign, seed 7, " + std::to_string(ticks) + " ticks");
     out.crc = host.crc_log();
     out.fired = host.story()->log().size();
@@ -936,6 +953,233 @@ static void test_scoring_script(const World& w) {
     SimHost plain(w.types, js, SimConfig{});
     CHECK(plain.start_galactic(r, su) != nullptr);
     CHECK(plain.scoring_vm() == nullptr && plain.global_values()->get("MOD_ID").kind == lua::AiGlobalValue::Nil);
+}
+
+// q6 t09: the frames the Service of GAME_SCORING.md §2 pumps at for `rate`: now = (float)frame / (float)30 widened,
+// due when there is no LastService or now - LastService > rate (strict, double).
+static std::string expected_pumps(double rate, uint64_t ticks) {
+    std::string out;
+    bool has_last = false;
+    double last = 0.0;
+    for (uint64_t f = 1; f <= ticks; ++f) {
+        const double now = static_cast<double>(static_cast<float>(f) / 30.0f);
+        if (has_last && !(now - last > rate)) continue;
+        out += "P" + std::to_string(f) + ";";
+        last = now;
+        has_last = true;
+    }
+    return out;
+}
+
+// Only the "P<frame>;" entries of a scoring log.
+static std::string pump_entries(const std::string& log) {
+    std::string out;
+    size_t i = 0;
+    while (i < log.size()) {
+        const size_t e = log.find(';', i);
+        const std::string tok = log.substr(i, e == std::string::npos ? std::string::npos : e - i);
+        if (!tok.empty() && tok[0] == 'P' && tok.size() > 1 && tok[1] >= '0' && tok[1] <= '9') out += tok + ";";
+        if (e == std::string::npos) break;
+        i = e + 1;
+    }
+    return out;
+}
+
+// The shared part of the q6 t09 test scripts: Log() appends to GlobalValue Scoring_Log; main logs every pump.
+static const char* kScoringCommon =
+    "ScriptPoolCount = 0\n"
+    "function Log(s) ScoringLog = (ScoringLog or \"\") .. s .. \";\" GlobalValue.Set(\"Scoring_Log\", ScoringLog) end\n"
+    "function Game_Mode_Starting_Event(mode, map) Log(\"S:\" .. mode .. \":\" .. tostring(map)) end\n"
+    "function Game_Mode_Ending_Event(mode) Log(\"E:\" .. mode) end\n"
+    "function Reset_Tactical_Stats() Log(\"R\") end\n";
+
+// q6 t09 (GAME_SCORING.md §2 / §3): the Service pump (ServiceRate / LastService), the release on ScriptExit and on a Lua
+// error (thread or event call), the mode starting / ending events, GameRandom.Free_Random off the synced stream.
+static void test_scoring_service(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_scoring_service";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    auto script = [&root](const char* name, const std::string& body) {
+        write_file(root / "Data/Scripts/Miscellaneous" / (std::string(name) + ".lua"), std::string(kScoringCommon) + body);
+    };
+    // Pump timing at ServiceRate 1 (30 frames, float rounding) and the mode events around a tactical push.
+    script("Scoring_Rate",
+           "function Base_Definitions() ServiceRate = 1 end\n"
+           "function main() while true do Log(\"P\" .. GetCurrentTime.Frame()) coroutine.yield(true) end end\n");
+    // ServiceRate 0: every frame (now grows by 1/30 each frame).
+    script("Scoring_Every",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function main() while true do Log(\"P\" .. GetCurrentTime.Frame()) coroutine.yield(true) end end\n");
+    script("Scoring_Exit",
+           "function Base_Definitions() ServiceRate = 0 n = 0 end\n"
+           "function main() while true do n = n + 1 Log(\"P\" .. n) if n == 3 then _ScriptExit() end coroutine.yield(true) end end\n");
+    script("Scoring_Thread_Error",
+           "function Base_Definitions() ServiceRate = 0 n = 0 end\n"
+           "function main() while true do n = n + 1 Log(\"P\" .. n) if n == 2 then error(\"boom\") end coroutine.yield(true) end end\n");
+    script("Scoring_Event_Error",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function Game_Mode_Starting_Event(mode, map) error(\"bad start\") end\n"
+           "function main() while true do Log(\"P\") coroutine.yield(true) end end\n");
+    script("Scoring_No_Rate",
+           "function Base_Definitions() ServiceRate = \"10\" end\n"  // not a number: absent
+           "function main() while true do Log(\"P\") coroutine.yield(true) end end\n");
+    auto free_script = [&script](const char* name, bool draw) {
+        script(name, std::string("function Base_Definitions() ServiceRate = 0 sum = 0 end\n"
+                                 "function main() while true do ") +
+                         (draw ? "sum = sum + GameRandom.Free_Random(1, 100) " : "") +
+                         "coroutine.yield(true) end end\n");
+    };
+    free_script("Scoring_Free", true);
+    free_script("Scoring_Plain", false);
+    DirectoryProvider files(path_to_utf8(root));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    const GalacticRules r = rules();
+    const GalacticSetup su = setup();
+    struct Session {
+        std::unique_ptr<SimHost> host;
+        std::string log() const { return host->global_values()->get("Scoring_Log").text; }
+    };
+    auto start = [&](const char* name) {
+        Session s;
+        s.host = std::make_unique<SimHost>(w.types, js, SimConfig{});
+        s.host->set_scoring_script(&files, name);
+        s.host->set_scoring_campaign("Scoring_Campaign");
+        CHECK(s.host->start_galactic(r, su) != nullptr);
+        CHECK(s.host->scoring_vm() != nullptr);
+        return s;
+    };
+    auto dump = [](const Session& s) {
+        for (const std::string& m : s.host->scoring_messages()) std::printf("  scoring: %s\n", m.c_str());
+    };
+    {  // ServiceRate 1 over 200 frames; a land mode pushed at frame 100 and popped at frame 150; Reset_Tactical_Stats.
+        Session s = start("Scoring_Rate");
+        s.host->run_fast(99);
+        s.host->start_game(ModeKind::Land);
+        s.host->scoring_mode_started(ModeKind::Land, "Scoring_Map");
+        s.host->run_fast(50);
+        s.host->scoring_reset_tactical_stats();
+        CHECK(s.host->end_game_mode());
+        s.host->run_fast(50);
+        const std::string l = s.log();
+        const std::string pumps = pump_entries(l);
+        CHECK(pumps == expected_pumps(1.0, 199));
+        CHECK(s.host->scoring_services() == static_cast<uint64_t>(std::count(pumps.begin(), pumps.end(), ';')));
+        // The galactic start is delivered before the first pump, the land start at the next frame's Service.
+        CHECK(l.rfind("S:Galactic:Scoring_Campaign;P1;", 0) == 0);
+        const size_t land = l.find("S:Land:Scoring_Map;");
+        CHECK(land != std::string::npos && l.find("P", land) != std::string::npos);
+        CHECK(l.find("R;E:Land;") != std::string::npos);
+        CHECK(s.host->end_game_mode());  // the last mode: Game_Mode_Ending_Event, then the script goes with the stack
+        CHECK(s.host->scoring_vm() == nullptr && s.log().size() > 12 && s.log().substr(s.log().size() - 11) == "E:Galactic;");
+        CHECK(s.host->scoring_releases() == 0);
+        dump(s);
+    }
+    {  // ServiceRate 0: one pump per frame.
+        Session s = start("Scoring_Every");
+        s.host->run_fast(10);
+        CHECK(pump_entries(s.log()) == expected_pumps(0.0, 10) && s.host->scoring_services() == 10);
+    }
+    {  // ScriptExit in the third pump: released right after it, nothing later.
+        Session s = start("Scoring_Exit");
+        s.host->run_fast(10);
+        CHECK(s.log() == "S:Galactic:Scoring_Campaign;P1;P2;P3;");
+        CHECK(s.host->scoring_vm() == nullptr && s.host->scoring_releases() == 1 && s.host->scoring_services() == 3);
+        CHECK(!s.host->scoring_messages().empty() && s.host->scoring_messages().back().find("released (ScriptExit)") != std::string::npos);
+    }
+    {  // A Lua error in the thread: released after that pump.
+        Session s = start("Scoring_Thread_Error");
+        s.host->run_fast(10);
+        CHECK(s.log() == "S:Galactic:Scoring_Campaign;P1;P2;");
+        CHECK(s.host->scoring_vm() == nullptr && s.host->scoring_releases() == 1);
+        CHECK(!s.host->scoring_messages().empty() && s.host->scoring_messages().back().find("released (Lua error)") != std::string::npos);
+    }
+    {  // A Lua error in an event call: the next due Service releases the script without pumping.
+        Session s = start("Scoring_Event_Error");
+        s.host->run_fast(5);
+        CHECK(s.log().empty() && s.host->scoring_services() == 0);
+        CHECK(s.host->scoring_vm() == nullptr && s.host->scoring_releases() == 1 && s.host->scoring_calls() == 1);
+        bool named = false;
+        for (const std::string& m : s.host->scoring_messages()) named = named || m.find("Game_Mode_Starting_Event: ") != std::string::npos;
+        CHECK(named);
+    }
+    {  // ServiceRate not a number: no Service at all, the events still run, the script stays.
+        Session s = start("Scoring_No_Rate");
+        s.host->run_fast(40);
+        CHECK(s.log() == "S:Galactic:Scoring_Campaign;" && s.host->scoring_services() == 0 && s.host->scoring_vm() != nullptr);
+    }
+    {  // GameRandom.Free_Random (ranged) draws from the free stream: the synced RNG and the frame CRCs are unchanged.
+        Session a = start("Scoring_Free");
+        Session b = start("Scoring_Plain");
+        a.host->run_fast(60);
+        b.host->run_fast(60);
+        CHECK(a.host->scoring_releases() == 0 && b.host->scoring_releases() == 0);
+        dump(a);
+        CHECK(a.host->random().synced().state() == b.host->random().synced().state());
+        CHECK(!first_divergence(a.host->crc_log(), b.host->crc_log()).diverged);
+    }
+}
+
+// q6 t09: GameScoring in the S4 synthetic story campaign (production, conquest, a space mode pushed and popped): the
+// galactic event calls arrive in stream order after T9, and the run is identical for every worker count (rule 3).
+static const char* kScoringStory =
+    "function Base_Definitions() ServiceRate = 0.1 end\n"
+    "function main() while true do Log(\"P\" .. GetCurrentTime.Frame()) GameRandom(1, 6) coroutine.yield(true) end end\n"
+    "function Galactic_Production_Begin_Event(planet, t) Log(\"PB:\" .. tostring(planet ~= nil) .. tostring(t ~= nil)) end\n"
+    "function Galactic_Production_Canceled_Event(planet, t) Log(\"PC\") end\n"
+    "function Galactic_Production_End_Event(planet, o) Log(\"PE:\" .. tostring(planet ~= nil) .. tostring(o ~= nil)) end\n"
+    "function Galactic_Planet_Faction_Change(planet, n, o) Log(\"FC:\" .. tostring(planet ~= nil and n ~= nil and o ~= nil)) end\n"
+    "function Galactic_Unit_Destroyed_Event(object, killer) Log(\"UD\") end\n";
+
+static void test_scoring_story(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_scoring_story";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_Host_Test.xml", kPlots);
+    write_file(root / "Data/XML/Story_Host_Test.xml", kPlot);
+    write_file(root / "Data/Scripts/Story/Story_Host_Test.lua", kScript);
+    write_file(root / "Data/Scripts/Miscellaneous/GameScoring.lua", std::string(kScoringCommon) + kScoringStory);
+    DirectoryProvider files(path_to_utf8(root));
+    const uint64_t ticks = 400;
+    const Run a = run(w, files, 0, ticks, "GameScoring");
+    for (const std::string& m : a.scoring_messages) std::printf("  scoring: %s\n", m.c_str());
+    std::printf("scoring story: %" PRIu64 " services, %" PRIu64 " calls, log %zu bytes, final CRC %016" PRIx64 "\n",
+                a.scoring_services, a.scoring_calls, a.scoring_log.size(), a.crc.records.empty() ? 0 : a.crc.records.back().combined);
+    const std::string& l = a.scoring_log;
+    std::string events;  // the log without the pumps
+    for (size_t i = 0; i < l.size();) {
+        const size_t e = l.find(';', i);
+        const std::string tok = l.substr(i, e - i);
+        if (!(tok.size() > 1 && tok[0] == 'P' && tok[1] >= '0' && tok[1] <= '9')) events += tok + ";";
+        if (e == std::string::npos) break;
+        i = e + 1;
+    }
+    std::printf("  scoring story events: %s\n", events.c_str());
+    CHECK(a.scoring_releases == 0);
+    CHECK(l.rfind("S:Galactic:StoryTest;P1;", 0) == 0);
+    CHECK(pump_entries(l) == expected_pumps(0.1, ticks));
+    auto count = [&l](const std::string& tok) {
+        size_t n = 0;
+        for (size_t i = l.find(tok); i != std::string::npos; i = l.find(tok, i + 1)) ++n;
+        return n;
+    };
+    // The two fighters (the type wrapper is nil here: the synthetic galactic rules' type indices are past the test
+    // World's object types; with game data they are the same table).
+    CHECK(count("PB:true") == 2);
+    CHECK(count("PE:truetrue;") == 2);
+    CHECK(count("FC:true;") >= 1);      // Underworld takes C
+    CHECK(count("S:Space:Test_Space_Map;") == 1 && count("E:Space;") == 1);
+    CHECK(l.find("S:Space:Test_Space_Map;") < l.find("E:Space;"));
+    // A scoring run differs from the plain one (its GlobalValue and RNG draws are sim state) but not across workers.
+    const Run plain = run(w, files, 0, ticks);
+    CHECK(first_divergence(a.crc, plain.crc).diverged);
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        if (workers == 0) continue;
+        const Run b = run(w, files, workers, ticks, "GameScoring");
+        const auto d = first_divergence(a.crc, b.crc);
+        std::printf("  scoring story workers %2d: %s, scoring log %s\n", workers, d.message.c_str(),
+                    b.scoring_log == a.scoring_log ? "identical" : "DIFFERS");
+        CHECK(!d.diverged && b.scoring_log == a.scoring_log && b.log == a.log);
+    }
 }
 }  // namespace story_test
 
@@ -1997,6 +2241,8 @@ int main(int argc, char** argv) {
     test_story_wave2a();
     story_test::test_many_players(*world);  // Q6
     story_test::test_scoring_script(*world);  // q6 t06
+    story_test::test_scoring_service(*world);  // q6 t09
+    story_test::test_scoring_story(*world);    // q6 t09
 #else
     std::printf("story: built without engine/lua, skipped\n");
 #endif

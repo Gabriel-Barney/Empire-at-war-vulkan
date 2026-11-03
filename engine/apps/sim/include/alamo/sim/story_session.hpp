@@ -411,6 +411,11 @@ public:
         drain_tap_ = std::move(fn);
     }
     // --- end OI host ---
+    // q6 t09 (SimHost only): every drained batch (all rounds, stream order), after the drain tap, for the GameScoring
+    // event calls. Read-only: the host copies the events and calls the script after T9 (SimHost::tick_once).
+    void set_scoring_tap(std::function<void(const std::vector<galactic::GalacticEvent>& events)> fn) {
+        scoring_tap_ = std::move(fn);
+    }
     // --- OI galactic (owner: galactic agent): BT §1.6 story lock 0x4472a0 ("this planet's battle must be fought"),
     // written by the story rewards DISABLE_AUTORESOLVE / ENABLE_AUTORESOLVE (global flag +0x41) and
     // RESTRICT_AUTORESOLVE (Param1 planet, Param2 1 add / 0 remove: the planet list +0x308) [M: field wiring]. Source for
@@ -523,6 +528,7 @@ private:
     std::function<void(bool, int32_t)> enable_victory_;        // story t06 wiring: ENABLE_VICTORY (tactical plots)
     std::function<void(const std::string&, bool)> victory_;    // story t06 wiring: VICTORY (tactical plots)
     std::function<void(int, const std::vector<galactic::GalacticEvent>&)> drain_tap_;  // OI host
+    std::function<void(const std::vector<galactic::GalacticEvent>&)> scoring_tap_;    // q6 t09
     bool autoresolve_disabled_ = false;              // OI galactic: story lock global flag (+0x41)
     std::vector<PlanetIndex> autoresolve_planets_;   // OI galactic: story lock planet list (+0x308), insertion order
     void route_corruption_mission(int32_t winner, uint64_t frame);

@@ -591,6 +591,7 @@ void push_arg(lua_State* L, LuaVm::Impl& vm, const AiEventArg& a) {
             else
                 lua_pushnil(L);
             break;
+        case AiEventArg::Type: detail::push_type(L, vm, a.type); break;
         default: lua_pushnil(L); break;
     }
 }

@@ -307,6 +307,12 @@ private:
     // land battles set 1, space battles keep the previous value: FOG_OF_WAR §8 item 2).
     bool fog_active_ = true, fog_render_ = true;
     bool ar_requested_ = false;  // P4 sim: auto_resolve_battle() stopped the running battle
+    // q6 t09: SimHost::scoring_reset_tactical_stats at auto-resolve begin, read off the conflict manager every hook: an
+    // auto-resolve seen running (AutoSetup / AutoRunning), or a new auto-resolved log entry not seen running (forced, same
+    // pass). Not saved: the log position is taken at the first hook (also after a load).
+    size_t ar_log_seen_ = 0;
+    bool ar_log_init_ = false, ar_reset_sent_ = false;
+    void scoring_auto_resolve();
     // --- S4 (owner: S4 agent): corruption missions ---
     struct CorruptionMission {
         PlanetIndex planet = kInvalidPlanet;

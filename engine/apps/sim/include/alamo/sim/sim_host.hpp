@@ -6,13 +6,13 @@
 //   T2  scheduled commands with frame <= new frame: CommandPipeline::begin_tick(frame) (drain in
 //       tick -> player -> sequence order, batch CRC hook, recording/replay, handler per command)
 //   T4  TreeCull: rebuild dirty spatial trees of the top tactical mode (sim time = frame / 30)
-//   T5  GameModeManager::Update: scoring [stub], then ONLY the top mode's tick
+//   T5  GameModeManager::Update: the GameScoring Service (q6 t09, set_scoring_script), then ONLY the top mode's tick
 //   T6  scene animations [stub]
 //   T7  PlayerList update: per player in index order, the player's controller (AI / script stand-ins
 //       issue orders through execute_direct here, like the original AI)
 //   T8  global Lua [stub]
 //   T9  story (S4): StorySession::service when start_story ran (story_session.hpp); trace step
-//       "T9.story" only then
+//       "T9.story" only then; then the GameScoring galactic event calls (q6 t09; "T9.scoring" only with a script)
 //   T10-T11 tutorial, campaign end [stubs]
 //   T12 Post_Tick: top mode frame += 1 unless paused
 //   T13 End_Tick: event bus delivery, then the CRC record of this frame (CrcRecorder)
@@ -82,7 +82,8 @@ class FileProvider;
 namespace alamo::lua {
 class GlobalValueStore;
 class LuaVm;
-}
+struct AiEventArg;
+}  // namespace alamo::lua
 namespace alamo::galactic {
 struct GalacticRules;
 struct GalacticSetup;
@@ -144,11 +145,43 @@ public:
     // and gets its main thread. Mods set session globals there (Thrawn's Revenge: GlobalValue MOD_ID, which its plot
     // scripts read; vanilla: Allow_AI_Controlled_Fog_Reveal = 1, read by the BurnUnits AI plans). Dropped when the
     // stack empties [port: the original keeps it until the next session]. Empty name (default) = no script.
-    // [port] Not serviced yet (no main / ServiceRate pump) and no event calls (Game_Mode_Starting_Event, ...).
+    //
+    // q6 t09, the Service (§2) and the event calls (§3). Every call into the script runs on the sim thread at a fixed
+    // point of the tick, in an order that depends only on sim state (never on the worker count), and the VM draws
+    // GameRandom from the session RNG like every script (GameRandom.Free_Random keeps the free stream, LuaVm):
+    //   * T5, GameModeManager::update's "gmm.scoring" step (before the mode tick): first the queued
+    //     Game_Mode_Starting_Event(mode, map) of the modes set up since the last frame (galactic: start_galactic, map =
+    //     set_scoring_campaign() else the SessionDescriptor campaign; tactical: scoring_mode_started from the battle host
+    //     [port: delivered at the next frame's service instead of inside the setup]); then the Service: no number
+    //     ServiceRate = nothing; now = (float)frame / (float)30 as a double; when LastService is not a number or
+    //     now - LastService > ServiceRate: the script's threads are resumed once (LuaVm::service_threads, time = now,
+    //     frame = global frame), then the script is RELEASED (VM dropped, no more calls this session) when it called
+    //     ScriptExit or any call into it (event or thread) raised a Lua error since the last Service, else LastService =
+    //     now. A release found pending at a due Service skips the pump.
+    //   * end_game_mode: Game_Mode_Ending_Event(mode) for every popped mode, before the pop.
+    //   * after T9: the galactic events the story session drained this tick (StorySession::set_scoring_tap; only with a
+    //     story session), in stream order: PlanetOwnerChanged -> Galactic_Planet_Faction_Change(planet, new, old) when
+    //     new != old (a missing player = the neutral player); ProductionBegin / Canceled -> Galactic_Production_Begin_ /
+    //     _Canceled_Event(planet, type); ProductionCompleted -> Galactic_Production_End_Event(planet, object (its team
+    //     container), else the type); ObjectDestroyed -> Galactic_Unit_Destroyed_Event(object, neutral player) only while
+    //     the object is still alive in the store [port: the stream is read after the destroy, so in practice skipped].
+    //   * scoring_reset_tactical_stats(): Reset_Tactical_Stats() (the battle host at auto-resolve begin).
+    // Missing functions are skipped; calls are protected and not threads (they cannot yield). With a story session the
+    // scoring VM also gets the story's player world, object bridge and presentation families.
     void set_scoring_script(const FileProvider* files, std::string name);
     const lua::LuaVm* scoring_vm() const;
     // "<frame> GameScoring: <what>" lines: load / Base_Definitions errors and the script's own messages.
     const std::vector<std::string>& scoring_messages() const { return scoring_messages_; }
+    // q6 t09: map_name of the galactic Game_Mode_Starting_Event (the campaign name); empty = SessionDescriptor::campaign.
+    void set_scoring_campaign(std::string name) { scoring_campaign_ = std::move(name); }
+    // q6 t09: the battle host, once a tactical mode is set up (map loaded): queues Game_Mode_Starting_Event.
+    void scoring_mode_started(ModeKind kind, std::string map_name);
+    // q6 t09: Reset_Tactical_Stats() at auto-resolve begin (BATTLE_TRANSITIONS §"auto-resolve").
+    void scoring_reset_tactical_stats();
+    // q6 t09 diagnostics: Services that pumped the threads this session, event calls made, releases (exit / error).
+    uint64_t scoring_services() const { return scoring_services_; }
+    uint64_t scoring_calls() const { return scoring_calls_; }
+    uint64_t scoring_releases() const { return scoring_releases_; }
     GameModeManager& modes() { return modes_; }
     const GameModeManager& modes() const { return modes_; }
     TacticalMode* tactical() { return modes_.top_tactical(); }
@@ -344,6 +377,20 @@ private:
     std::string scoring_name_;
     std::vector<std::string> scoring_messages_;
     void create_scoring(GameMode& m);
+    // q6 t09
+    std::string scoring_campaign_;
+    std::vector<std::pair<std::string, std::string>> scoring_starts_;  // (mode, map) waiting for the next Service
+    std::vector<galactic::GalacticEvent> scoring_events_;              // tapped from the story drains, delivered after T9
+    bool scoring_failed_ = false;  // the original's exited flag: a Lua error in an event call / thread
+    size_t scoring_seen_messages_ = 0, scoring_seen_errors_ = 0;
+    uint64_t scoring_services_ = 0, scoring_calls_ = 0, scoring_releases_ = 0;
+    void service_scoring();
+    void scoring_flush_starts();
+    void scoring_deliver_events();
+    bool scoring_call(std::string_view function, const std::vector<lua::AiEventArg>& args);
+    void scoring_collect();
+    void scoring_release(std::string_view why);
+    void scoring_note(std::string_view what);
     uint32_t last_present_ms_ = 0;
     bool have_present_ = false;
     // N1 save / load

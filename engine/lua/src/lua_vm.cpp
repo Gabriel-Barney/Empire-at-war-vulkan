@@ -384,6 +384,25 @@ bool LuaVm::has_function(std::string_view name) {
     return is_function;
 }
 
+bool LuaVm::get_number(std::string_view name, double& out) {
+    check_owner();
+    lua_State* L = impl_->L;
+    lua_pushlstring(L, name.data(), name.size());
+    lua_rawget(L, LUA_GLOBALSINDEX);
+    const bool is_number = lua_type(L, -1) == LUA_TNUMBER;
+    if (is_number) out = static_cast<double>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    return is_number;
+}
+
+void LuaVm::set_number(std::string_view name, double value) {
+    check_owner();
+    lua_State* L = impl_->L;
+    lua_pushlstring(L, name.data(), name.size());
+    lua_pushnumber(L, static_cast<lua_Number>(value));
+    lua_rawset(L, LUA_GLOBALSINDEX);
+}
+
 int32_t LuaVm::create_thread(std::string_view global_function) {
     check_owner();
     lua_State* L = impl_->L;

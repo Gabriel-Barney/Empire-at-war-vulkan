@@ -1,4 +1,4 @@
-﻿#include "alamo/sim/sim_host.hpp"
+#include "alamo/sim/sim_host.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -6,7 +6,13 @@
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #ifdef ALAMO_SIM_HAVE_STORY
+#include "alamo/lua/ai_bridge.hpp"         // q6 t09: call_global_function / AiEventArg (GameScoring event calls)
+#include "alamo/lua/object_bridge.hpp"     // q6 t09: the story's families for the scoring VM
+#include "alamo/lua/presentation.hpp"
 #include "alamo/lua/script_remaining.hpp"  // L1 bindings: process-wide GlobalValue store
+#if defined(ALAMO_LUA_PLAYERS)
+#include "alamo/lua/players.hpp"
+#endif
 #endif
 
 namespace alamo::sim {
@@ -157,10 +163,13 @@ const lua::LuaVm* SimHost::scoring_vm() const {
 void SimHost::create_scoring(GameMode& m) {
 #ifdef ALAMO_SIM_HAVE_STORY
     scoring_vm_.reset();
+    scoring_starts_.clear();
+    scoring_events_.clear();
+    scoring_failed_ = false;
+    scoring_seen_messages_ = scoring_seen_errors_ = 0;
+    scoring_services_ = scoring_calls_ = scoring_releases_ = 0;
     if (scoring_name_.empty() || !scoring_files_) return;
-    auto note = [this](std::string_view what) {
-        scoring_messages_.push_back(std::to_string(frame_) + " " + scoring_name_ + ": " + std::string(what));
-    };
+    auto note = [this](std::string_view what) { scoring_note(what); };
     lua::LuaHost host;
     host.store = &m.primary();
     host.types = &m.types();
@@ -175,10 +184,203 @@ void SimHost::create_scoring(GameMode& m) {
     if (!vm->require(scoring_name_, &err)) note("require: " + err);
     else if (vm->has_function("Base_Definitions") && !vm->call("Base_Definitions", &err)) note("Base_Definitions: " + err);
     vm->create_thread("main");  // missing main: no thread (§1.1 step 5)
-    for (const std::string& msg : vm->messages()) note(msg);
     scoring_vm_ = std::move(vm);
+    scoring_collect();
 #else
     (void)m;
+#endif
+}
+
+void SimHost::scoring_note(std::string_view what) {
+    scoring_messages_.push_back(std::to_string(frame_) + " " + scoring_name_ + ": " + std::string(what));
+}
+
+// q6 t09 (GAME_SCORING.md §2 / §3). Everything below runs on the sim thread at the fixed points listed in sim_host.hpp.
+#ifdef ALAMO_SIM_HAVE_STORY
+namespace {
+constexpr const char* scoring_mode_name(ModeKind k) {
+    return k == ModeKind::Galactic ? "Galactic" : k == ModeKind::Land ? "Land" : "Space";  // [M strings]
+}
+lua::AiEventArg arg_string(std::string s) {
+    lua::AiEventArg a;
+    a.kind = lua::AiEventArg::String;
+    a.text = std::move(s);
+    return a;
+}
+lua::AiEventArg arg_player(int32_t p) {
+    lua::AiEventArg a;
+    a.kind = lua::AiEventArg::Player;
+    a.id = p;
+    return a;
+}
+lua::AiEventArg arg_object(objects::ObjectHandle h) {
+    lua::AiEventArg a;
+    a.kind = lua::AiEventArg::Object;
+    a.object = h;
+    return a;
+}
+lua::AiEventArg arg_type(uint32_t t) {
+    lua::AiEventArg a;
+    a.kind = lua::AiEventArg::Type;
+    a.type = t;
+    return a;
+}
+}  // namespace
+#endif
+
+// New lines of the VM's message / error logs -> scoring_messages(); a new thread error is the exited flag.
+void SimHost::scoring_collect() {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (!scoring_vm_) return;
+    const std::vector<std::string>& msgs = scoring_vm_->messages();
+    for (; scoring_seen_messages_ < msgs.size(); ++scoring_seen_messages_) scoring_note(msgs[scoring_seen_messages_]);
+    const std::vector<std::string>& errs = scoring_vm_->errors();
+    for (; scoring_seen_errors_ < errs.size(); ++scoring_seen_errors_) {
+        scoring_note("error: " + errs[scoring_seen_errors_]);
+        scoring_failed_ = true;
+    }
+#endif
+}
+
+void SimHost::scoring_release(std::string_view why) {
+#ifdef ALAMO_SIM_HAVE_STORY
+    scoring_note(std::string("released (") + std::string(why) + ")");
+    scoring_vm_.reset();
+    scoring_starts_.clear();
+    scoring_events_.clear();
+    ++scoring_releases_;
+#else
+    (void)why;
+#endif
+}
+
+// §3: by global name; missing = skipped; protected, synchronous, not a thread. An error is the exited flag (§2 step 5).
+bool SimHost::scoring_call(std::string_view function, const std::vector<lua::AiEventArg>& args) {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (!scoring_vm_ || !scoring_vm_->has_function(function)) return false;
+    scoring_vm_->set_time(static_cast<double>(static_cast<float>(frame_) / static_cast<float>(kSimTicksPerSecond)));
+    scoring_vm_->set_frame(static_cast<uint32_t>(frame_));
+    std::string err;
+    ++scoring_calls_;
+    const bool ok = lua::call_global_function(*scoring_vm_, function, args, &err);
+    if (!ok) {
+        scoring_note(std::string(function) + ": " + (err.empty() ? std::string("error") : err));
+        scoring_failed_ = true;
+    }
+    scoring_collect();
+    return ok;
+#else
+    (void)function;
+    (void)args;
+    return false;
+#endif
+}
+
+void SimHost::scoring_mode_started(ModeKind kind, std::string map_name) {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (scoring_vm_) scoring_starts_.emplace_back(scoring_mode_name(kind), std::move(map_name));
+#else
+    (void)kind;
+    (void)map_name;
+#endif
+}
+
+void SimHost::scoring_reset_tactical_stats() {
+#ifdef ALAMO_SIM_HAVE_STORY
+    scoring_call("Reset_Tactical_Stats", {});
+#endif
+}
+
+void SimHost::scoring_flush_starts() {
+#ifdef ALAMO_SIM_HAVE_STORY
+    std::vector<std::pair<std::string, std::string>> starts;
+    starts.swap(scoring_starts_);
+    for (auto& [mode, map] : starts) {
+        if (mode == "Galactic" && map.empty()) map = scoring_campaign_.empty() ? session_.campaign : scoring_campaign_;
+        scoring_call("Game_Mode_Starting_Event", {arg_string(mode), arg_string(map)});
+    }
+#endif
+}
+
+// §2 Service, at GameModeManager::update's "gmm.scoring" step.
+void SimHost::service_scoring() {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (!scoring_vm_) return;
+    scoring_flush_starts();
+    if (!scoring_vm_) return;
+    lua::LuaVm& vm = *scoring_vm_;
+    double rate = 0.0;
+    if (!vm.get_number("ServiceRate", rate)) return;  // no ServiceRate: no threads ever run
+    const double now = static_cast<double>(static_cast<float>(frame_) / static_cast<float>(kSimTicksPerSecond));
+    double last = 0.0;
+    if (vm.get_number("LastService", last) && !(now - last > rate)) return;
+    if (!scoring_failed_ && !vm.exit_requested()) {
+        vm.set_time(now);
+        vm.set_frame(static_cast<uint32_t>(frame_));
+        vm.service_threads();
+        ++scoring_services_;
+        scoring_collect();
+    }
+    if (scoring_failed_ || vm.exit_requested()) {
+        scoring_release(scoring_failed_ ? "Lua error" : "ScriptExit");
+        return;
+    }
+    vm.set_number("LastService", now);
+#endif
+}
+
+// After T9: the galactic events the story drained this tick (stream order).
+void SimHost::scoring_deliver_events() {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (scoring_events_.empty()) return;
+    std::vector<galactic::GalacticEvent> events;
+    events.swap(scoring_events_);
+    GalacticMode* g = galactic_mode();
+    const galactic::GalacticSim* gs = g ? g->sim() : nullptr;
+    if (!gs) return;
+    const objects::ObjectStore& st = gs->store();
+    using K = galactic::GalacticEventKind;
+    auto planet_object = [gs](PlanetIndex p) {
+        return p < gs->planets().size() ? gs->planets()[p].object : objects::ObjectHandle{};
+    };
+    auto player_or_neutral = [gs](int32_t p) {
+        return p >= 0 && static_cast<size_t>(p) < gs->players().size() ? p : gs->neutral_player();
+    };
+    auto object_of = [&st](int32_t id) { return id > 0 ? st.find(static_cast<ObjectId>(id)) : objects::ObjectHandle{}; };
+    for (const galactic::GalacticEvent& e : events) {
+        if (!scoring_vm_) return;
+        switch (e.kind) {
+            case K::PlanetOwnerChanged:
+                if (e.player != e.other_player)
+                    scoring_call("Galactic_Planet_Faction_Change", {arg_object(planet_object(e.planet)),
+                                                                    arg_player(player_or_neutral(e.player)),
+                                                                    arg_player(player_or_neutral(e.other_player))});
+                break;
+            case K::ProductionBegin:
+                scoring_call("Galactic_Production_Begin_Event", {arg_object(planet_object(e.planet)), arg_type(e.type)});
+                break;
+            case K::ProductionCanceled:
+                scoring_call("Galactic_Production_Canceled_Event", {arg_object(planet_object(e.planet)), arg_type(e.type)});
+                break;
+            case K::ProductionCompleted: {
+                objects::ObjectHandle h = object_of(e.object);
+                if (st.alive(h)) {
+                    const objects::ObjectHandle team = st.container(h);
+                    if (st.alive(team)) h = team;
+                }
+                scoring_call("Galactic_Production_End_Event",
+                             {arg_object(planet_object(e.planet)), st.alive(h) ? arg_object(h) : arg_type(e.type)});
+                break;
+            }
+            case K::ObjectDestroyed: {
+                const objects::ObjectHandle h = object_of(e.object);
+                if (st.alive(h))
+                    scoring_call("Galactic_Unit_Destroyed_Event", {arg_object(h), arg_player(gs->neutral_player())});
+                break;
+            }
+            default: break;
+        }
+    }
 #endif
 }
 
@@ -216,6 +418,20 @@ bool SimHost::start_story(const StoryStart& start, std::vector<std::string>* dia
         return false;
     }
     story_ = std::move(s);
+#ifdef ALAMO_SIM_HAVE_STORY
+    // q6 t09: the scoring VM reaches the session's players, objects and presentation like the plot scripts, and gets the
+    // galactic events every T9 drain takes from the stream (delivered after T9).
+    if (scoring_vm_) {
+#if defined(ALAMO_LUA_PLAYERS)
+        lua::attach_player_world(*scoring_vm_, story_->player_world());
+#endif
+        lua::attach_object_bridge(*scoring_vm_, story_->object_bridge());
+        lua::attach_presentation(*scoring_vm_, story_->presentation());
+    }
+    story_->set_scoring_tap([this](const std::vector<galactic::GalacticEvent>& events) {
+        if (scoring_vm_) scoring_events_.insert(scoring_events_.end(), events.begin(), events.end());
+    });
+#endif
     return true;
 }
 
@@ -239,11 +455,16 @@ galactic::GalacticSim* SimHost::start_galactic(const galactic::GalacticRules& ru
         return nullptr;
     }
     mode.attach_sim(std::move(sim));
+    scoring_mode_started(ModeKind::Galactic, {});  // q6 t09: map = the campaign name, resolved at delivery
     return mode.sim();
 }
 
 bool SimHost::end_game_mode() {
 #ifdef ALAMO_SIM_HAVE_STORY
+    if (scoring_vm_ && modes_.top()) {  // q6 t09: Game_Mode_Ending_Event before the mode's shutdown (§3, signal 0x24)
+        scoring_flush_starts();          // a mode set up and ended within one frame still started first
+        scoring_call("Game_Mode_Ending_Event", {arg_string(scoring_mode_name(modes_.top()->kind()))});
+    }
     if (modes_.depth() <= 1) scoring_vm_.reset();  // q6 t06: before the store its wrappers point into
 #endif
     if (story_) {
@@ -278,6 +499,9 @@ bool SimHost::tick_once() {
     ctx.pf = &pf_;
     ctx.players = cfg_.players;
     ctx.trace = trace_;
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (scoring_vm_) ctx.scoring = [this] { service_scoring(); };  // q6 t09: GAME_SCORING.md §2
+#endif
     modes_.update(ctx);
     step("T5.gmm_update");
     if (after_mode_update_) {  // S10: tactical battle of a galactic conflict (campaign_battles.hpp)
@@ -308,6 +532,12 @@ bool SimHost::tick_once() {
         story_->service(frame_, mode_seconds);
         step("T9.story");
     }
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (scoring_vm_) {  // q6 t09: GameScoring galactic event calls (the events this T9 drained, stream order)
+        scoring_deliver_events();
+        step("T9.scoring");
+    }
+#endif
     // --- OI host (owner: game host agent): pacing / parity inputs from this tick's presentation state ---
     if (after_story_) after_story_(*this);
     // --- end OI host ---
