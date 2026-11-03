@@ -1063,6 +1063,7 @@ bool GalacticAiWorld::read(ByteReader& r) {
         pa.reach_frame = sp.reach_frame;
         pa.reach = std::move(sp.reach);
         pa.paths = std::move(sp.paths);
+        pa.paths.set_background(m.cfg.path_latency, m.cfg.background);  // OPT2 t02: this world's settings
         pa.sources = std::move(sp.sources);
         if (!sp.has_fs) pa.fs_vm.reset();
         else if (sp.fs_vm) pa.fs_vm = std::move(sp.fs_vm);

@@ -38,10 +38,11 @@
 //              fights AI-vs-AI conflicts tactically with the tactical AI on every AI side. "+anim": the sim-owned
 //              animation (SimAnimation, "anim" chunk / CRC system); skirmish: only "+anim" counts.
 //   --story    hotm / galactic: the campaign's story plot sets (StorySession, story CRC).
-//   --save-when any|battle|galactic|pending   save at the first tick >= T where saving is allowed and: any; a tactical battle is
-//              on the mode stack; no battle on the stack (the battles then start after the load); a conflict is queued /
-//              being decided with no battle running (not reachable in the all-AI sessions: the conflict manager decides and
-//              the battle host pushes the battle within one tick).
+//   --save-when any|battle|galactic|pending|scheduled   save at the first tick >= T where saving is allowed and: any; a
+//              tactical battle is on the mode stack; no battle on the stack (the battles then start after the load); a
+//              conflict is queued / being decided with no battle running (not reachable in the all-AI sessions: the conflict
+//              manager decides and the battle host pushes the battle within one tick); scheduled (OPT3 t04): an AI background
+//              job (galactic or land path recompute, latency_job.hpp) is in flight.
 // The check also asserts that the synced RNG (state + draw count) after loading equals the saving run's at the save
 // tick and at T+K.
 #pragma once
@@ -73,7 +74,7 @@ struct SaveRunOptions {
     std::string battles;            // --battles auto|fight|fight-all[+anim]
     bool story = false;             // --story
     std::string map;                // --map (skirmish)
-    std::string save_when = "any";  // --save-when any|battle|galactic|pending
+    std::string save_when = "any";  // --save-when any|battle|galactic|pending|scheduled
 };
 
 int save_run(const SaveRunOptions& opt);

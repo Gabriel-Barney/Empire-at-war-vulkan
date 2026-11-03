@@ -78,7 +78,9 @@
 #include "alamo/ai/tactical/tactical_pp.hpp"  // a1g t04: TacticalPpPick (reinforce_join_pp)
 #include "alamo/commands/command.hpp"
 #include "alamo/commands/events.hpp"
+#include "alamo/ai/latency_job.hpp"  // OPT2 t02
 #include "alamo/core/parallel.hpp"  // OPT2 t04: lua_gc_pf
+#include "alamo/galactic/cadence.hpp"
 #include "alamo/lua/players.hpp"
 #include "alamo/objects/object_store.hpp"
 
@@ -301,6 +303,13 @@ struct TacticalAiConfig {
     // OPT2 t04: fan-out for the per-update scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); OPT3
     // t09: also for load_plans (one job per plan file). Any value gives identical results.
     ParallelFor lua_gc_pf = serial_for;
+    // OPT2 t02: the land path finders' cadence recomputes (Execution, 90 frames) run on `background` (latency_job.hpp;
+    // empty = inline at the kick, same results) and are applied `path_latency` mode frames after the kick (0 = the
+    // original timing).
+    uint32_t path_latency = galactic::kDefaultAllPairsLatency;
+    BackgroundStart background;
+    // OPT2 t01: per-player planning phases (AiContext::set_stagger); false = the original timing.
+    bool stagger = true;
     // OPT2 t03: fan-out for the goal candidates' perception values (ai_goals.hpp batched values); any value gives
     // identical results.
     ParallelFor pf = serial_for;
@@ -355,6 +364,8 @@ public:
     const AiContext* context(int32_t player) const;
     size_t free_store_size(int32_t player) const;
     size_t live_targets(int32_t player) const;
+    // OPT2 t02: background land path recomputes in flight (save tests: --save-when scheduled).
+    size_t background_jobs_in_flight() const;
     size_t running_plans() const;
     const std::vector<TacticalAiDecision>& decision_log() const;
     std::vector<std::string> lua_errors() const;

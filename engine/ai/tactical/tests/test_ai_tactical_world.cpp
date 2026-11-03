@@ -2082,7 +2082,7 @@ void test_save_load(int variant, int32_t save_at, int32_t frames) {
         std::copy(v.begin(), v.end(), bad.begin() + static_cast<std::ptrdiff_t>(at));
         return rejects(bad, true);
     };
-    CHECK(corrupt(0, {9}));                                  // version
+    CHECK(corrupt(0, {static_cast<uint8_t>(image[0] + 1)}));  // version (a future one)
     CHECK(corrupt(4, {3}));                                  // AI player count
     CHECK(corrupt(8, {7}));                                  // the pattern's first bool
     CHECK(corrupt(9, {0}));                                  // player 1 not an AI player

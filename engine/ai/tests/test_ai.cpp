@@ -25,6 +25,7 @@
 #include "alamo/ai/galactic_perception.hpp"
 #include "alamo/ai/galactic_seed.hpp"
 #include "alamo/ai/perception_equations.hpp"
+#include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: '#' reseed CRC
 #include "alamo/core/log.hpp"
@@ -609,18 +610,39 @@ static void test_path_finder_costs_and_fog() {
 
 // The finder on the Q11 cadence over a perturbed synthetic galaxy: K AI players, staggered, 90-frame services every
 // 3 frames (the Execution interval). Digest over every finder's hash after each frame + all paths at the end.
-static uint64_t run_path_finders(uint32_t planets, uint32_t ais, uint32_t frames, const ParallelFor& pf) {
+// OPT2 t02 / OPT3 t04: `latency` > 0 runs the background mode on `bg` (publish at the start of each frame); `save_at` >= 0
+// saves every finder at the start of that frame and continues with fresh finders read from the save
+// (`saved_in_flight`: whether a recompute was in flight then).
+static uint64_t run_path_finders(uint32_t planets, uint32_t ais, uint32_t frames, const ParallelFor& pf, uint32_t latency = 0,
+                                 const BackgroundStart& bg = {}, int32_t save_at = -1, bool* saved_in_flight = nullptr) {
     const galactic::PlanetGraph graph = galactic::PlanetGraph::build(synthetic_map(planets, 23), {}, pf);
     GalacticSnapshot s = make_synthetic_snapshot(planets, ais, 7);
     for (uint32_t p = 0; p < planets; ++p) s.revealed.set(p, p % 13 != 5);  // some fog for the gate
     GalacticPerception gp;
     gp.reset(s);
     std::vector<AiPathFinder> f(ais);
+    for (AiPathFinder& x : f) x.set_background(latency, bg);
     StateHasher h;
     for (uint32_t fr = 0; fr < frames; ++fr) {
         perturb_snapshot(s, 3, fr);
         gp.update(s, fr, pf);
         const auto frame = static_cast<int32_t>(fr);
+        if (frame == save_at) {
+            ByteWriter w;
+            for (const AiPathFinder& x : f) {
+                x.write(w);
+                if (saved_in_flight) *saved_in_flight = *saved_in_flight || x.pending();
+            }
+            std::vector<AiPathFinder> loaded(ais);
+            ByteReader r(w.bytes());
+            for (AiPathFinder& x : loaded) {
+                x.set_background(latency, bg);
+                CHECK(x.read(r, graph, pf));
+            }
+            CHECK(r.ok() && r.done());
+            f = std::move(loaded);
+        }
+        for (AiPathFinder& x : f) x.publish(frame);
         for (uint32_t a = 0; a < ais; ++a) {
             const auto p = static_cast<PlayerId>(a);
             if (fr == 1) f[a].create(graph, gp.all_pairs_input(p), frame, static_cast<int32_t>(a), static_cast<int32_t>(ais), pf);
@@ -639,6 +661,60 @@ static uint64_t run_path_finders(uint32_t planets, uint32_t ais, uint32_t frames
     CHECK(reachable > 0);
     for (const AiPathFinder& x : f) CHECK(x.recomputes() >= frames / 90);
     return h.digest();
+}
+
+// OPT2 t02: the background mode. A recompute kicked on frame N is applied on N + latency exactly (never earlier, also
+// when it finished at once), results are identical for every worker count, and a save with recomputes in flight loads
+// into a run identical to the uninterrupted one (OPT3 t04).
+static void test_path_finder_background() {
+    const galactic::PlanetGraph g = galactic::PlanetGraph::build(diamond_map());
+    const std::vector<double> flat(4, 0.0);
+    std::vector<double> costly(4, 0.0);
+    costly[1] = 5000.0;  // B expensive: A -> C goes over D
+    AiPathFinder f;
+    f.set_background(15);
+    f.create(g, ai_path_input(flat, nullptr, true, false), 10, 1, 3);  // creation stays synchronous; next = 40
+    CHECK(f.path(0, 2) == (std::vector<PlanetIndex>{0, 1, 2}) && !f.pending());
+    const galactic::AllPairsInput in = ai_path_input(costly, nullptr, true, false);
+    CHECK(f.service(40, g, [&] { return in; }) && f.pending() && f.ready_frame() == 55 && f.recomputes() == 2);
+    for (int32_t fr = 40; fr < 55; ++fr) {
+        CHECK(!f.publish(fr));
+        CHECK(f.path(0, 2) == (std::vector<PlanetIndex>{0, 1, 2}));  // the previous matrices until N + k
+    }
+    CHECK(f.publish(55) && !f.pending() && f.path(0, 2) == (std::vector<PlanetIndex>{0, 3, 2}) && f.matrix_recomputes() == 2);
+    CHECK(!f.publish(56));
+    // Hash covers the in-flight state.
+    AiPathFinder a, b;
+    for (AiPathFinder* x : {&a, &b}) {
+        x->set_background(15);
+        x->create(g, ai_path_input(flat, nullptr, true, false), 0, 0, 1);
+    }
+    CHECK(b.service(90, g, [&] { return ai_path_input(flat, nullptr, true, false); }));
+    StateHasher ha, hb;
+    a.hash(ha);
+    b.hash(hb);
+    CHECK(ha.digest() != hb.digest());
+    // Same results as the synchronous run apart from the timing; identical for every host and worker count; saves.
+    const uint64_t sync = run_path_finders(160, 3, 400, serial_for);
+    const uint64_t serial = run_path_finders(160, 3, 400, serial_for, 15);
+    CHECK(serial != sync);
+    CHECK(run_path_finders(160, 3, 400, thread_pf(4), 15) == serial);
+    // Kicks (creation at 1, slots 0..2 of 3, services every 3rd frame): 4, 94, 184 / 31, 121, 211 / 61, 151, 241.
+    for (const int32_t save_at : {136, 160, 200}) {
+        bool in_flight = false;
+        CHECK(run_path_finders(160, 3, 400, serial_for, 15, {}, save_at, &in_flight) == serial);
+        CHECK(in_flight == (save_at != 200));  // 136: kicked at 121, due that frame; 160: kicked at 151
+    }
+#ifdef ALAMO_AI_HAVE_JOBS
+    for (int32_t workers : {0, 1, 4, 16, -1}) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        const ParallelFor pf = jobs::make_parallel_for(js);
+        const BackgroundStart bg = jobs::make_background_start(js);
+        CHECK(run_path_finders(160, 3, 400, pf, 15, bg) == serial);
+        CHECK(run_path_finders(160, 3, 400, pf, 15, bg, 160) == serial);
+        CHECK(run_path_finders(300, 3, 200, pf, 15, bg) == run_path_finders(300, 3, 200, serial_for, 15));
+    }
+#endif
 }
 
 static void test_path_finder_determinism() {
@@ -827,6 +903,7 @@ int main(int argc, char** argv) {
     test_path_finder_cadence();
     test_path_finder_costs_and_fog();
     test_path_finder_determinism();
+    test_path_finder_background();
     real_data(env_or("ALAMO_FOC_DATA", "/home/claude/data/foc"), "FoC", true);
     real_data(env_or("ALAMO_EAW_DATA", "/home/claude/data/eaw"), "EaW", false);
     std::printf(g_fail ? "alamo_ai_tests: %d failure(s)\n" : "alamo_ai_tests: OK\n", g_fail);
