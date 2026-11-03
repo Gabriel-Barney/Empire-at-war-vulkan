@@ -20,9 +20,12 @@
 //                                   state; Land / Space radios switch the _SPACE variant
 //     IDD_SUMMARY_SCREEN_PRODUCTION / _FLEETS / _ECONOMY   planet rows (6 / 10 / 6 visible, IDC_SCROLLBAR_SLIDER scrolls),
 //                                   sub-page radios; column buttons -> SummarySort{tag}, Planetary -> SummaryPlanetary
-// [port] choices: tech tint locked 70 grey / available white / researched 150,255,150; the data chart is drawn as 2-unit
+// Tech tree art (UI.md §3.7.2): IDC_RIGHT_ARROWn / _DRIGHT_ / _RRIGHT_ / _DOWN_ get i_tree_arrow_right / _2right / _3right /
+// _down.tga, white; the fleet summary's IDC_HEROES_DIVIDERS(r-1) is the right arrow above each filled row r >= 1.
+// [port] choices: tech icon tint locked 90 grey, available and researched white (the original has no researched colour;
+// TechState keeps the value); the data chart is drawn as 2-unit
 // dots every 2 units along each segment, the y range 0..max(values) (min 0); summary trackbar v scrolls by
-// round(v / 100 * (rows - visible)); missing rows / icons are hidden; the arrows / dividers stay as data.
+// round(v / 100 * (rows - visible)); missing rows / icons are hidden.
 #pragma once
 #include <cstdint>
 #include <functional>

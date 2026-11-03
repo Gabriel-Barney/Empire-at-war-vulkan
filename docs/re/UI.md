@@ -19,7 +19,7 @@ section (MasterTextFile).
 timing and anchors (§2.3 here), the hero roster, the galactic day pips, and the order-button enable rules.
 **GALACTIC_DIALOGS.md** (2026-10-28) covers the battle-pending banner (`pending_battle_shell` /
 `story_pending_battle_shell`), the mission holocron and `IDD_STORY_SUMMARY_DIALOG`, the auto-resolve result
-screens, the fleet organiser (`i_main_organize`) visibility, build-pad / queue / resource-panel details of the
+screens, the fleet organiser (`i_main_organize`) visibility (its pane fill: §7 here; IME gadgets: §8), build-pad / queue / resource-panel details of the
 galactic bar, and the font `Stretch_Factor` rule (§3.4 here).
 
 ---
@@ -426,6 +426,85 @@ command bar per component `Mouse_Over_SFX` (mostly `GUI_Highlight_Mouse_Over`) a
 Underworld}_SFX`, toggles `GUI_Toggle_*_On/Off`. Menu music: `Main_Menu_Music_Event`; load screen
 music GameConstants `Music_Event_Battle_Load_Screen`. UI sounds use the free (non-sync) RNG. [H]
 
+### 3.7 Colour combos and tech-tree arrows (2026-11-02, p4ui t03)
+
+Sources: the staging colour fill 0xfa1c0, the slot refresh 0xfe7c0, the LAN lobby fill 0xb1240, the colour-change
+handlers 0x288c0 / 0xb6410 / 0x2ba70, `GUIGadgetComboboxClass` (0x1e7920 vtable; set-current-item 0x1e7a60, field layout 0x1e8520),
+the custom-image texture setter 0x1eb000, the tech-tree page fill 0x11ebc0, the battle-end fill 0x88fe0 and the
+fleet summary row fill 0x116070; data: `GUIDialogs.rc`, `GUIDialogs.xml`, FoC `MT_CommandBar.mtd`.
+
+#### 3.7.1 Player-colour combo
+
+- **Controls**: `IDC_PLAYER_COLOR_0..8` on `IDD_SKIRMISH_STAGING_DIALOG`, `IDD_LAN_STAGING_DIALOG`,
+  `IDD_INTERNET_STAGING_DIALOG` (75 × 216 units, `CBS_DROPDOWN`; `_0` also has `CBS_SORT`, which the gadget does
+  not act on [M]), and `IDC_LAN_COLOR_SELECT` on `IDD_LAN_LOBBY_DIALOG` (73 × 169). They are ordinary combo
+  gadgets with the default combo skin (`Combo_Box_Left_Cap` `i_dialogue_combo_left.tga` 2 × 25,
+  `Combo_Box_Text_Box` `i_dialogue_combo_middle.tga` 2 × 25 stretched, `Combo_Box_Popdown_Button` /
+  `_Mouse_Over` / `_Pressed` `i_dialogue_scroll_small_down*.tga` 22 × 25): **no colour-specific textures or
+  frame**. [H]
+- **Items are text, not swatches.** Every colour combo is filled with one item per palette entry, index
+  i = 0..8 (9 entries), item data = i. The item text is a single character and the item carries a top and a
+  bottom text colour, both set to palette colour i (so no gradient). The palette is the 9 GameConstants
+  `MP_Color_Blue, _Red, _Green, _Orange, _Cyan, _Purple, _Yellow, _Gray, _Eight` (SPACE_AND_OPEN.md §B.3; the
+  same table the player colours use). [H]
+  - Staging combos: the character is byte 0xFE converted with the OEM code page = **U+25A0 BLACK SQUARE ■**.
+  - LAN lobby `IDC_LAN_COLOR_SELECT`: byte 0xDB through the OEM code page = **U+2588 FULL BLOCK █**.
+  - [port] use these two code points directly (0xFE / 0xDB map to them in the US and Western-European OEM pages
+    437 / 850; the port does not depend on the system code page).
+- **Font**: per-control `GUIDialogs.xml` fonts: `IDC_PLAYER_COLOR_n` = Arial Unicode MS, `Size` 35,
+  `Stretch_Factor` 0.25; `IDC_LAN_COLOR_SELECT` = Arial Unicode MS 30, `Stretch_Factor` 0.20; both
+  `Top_Color` = `Bottom_Color` = 33,37,47,255, no emboss / outline (that colour is only the font default; the
+  item colours replace it). With the stretch rule (§3.4, GALACTIC_DIALOGS.md §6: height × s, width kept at the
+  unstretched average character width) the glyph comes out as a **flat wide bar**: about a quarter of the
+  35-pt glyph's height at its full width. That bar is the whole "swatch". [H for data, M for the look]
+- **Field (closed combo)**: the current item's text is drawn with the item's two colours in the control font.
+  Placement for **every** combo gadget (not only colour combos): horizontally **centred** in the field part
+  left of the pop-down button (x = field left + (field width − button width) / 2 − text width / 2), vertically
+  centred on the control. Only a combo flagged left-justified starts at the field's left edge plus a small inset
+  (0.005 of the screen width); the only caller of that flag is `IDC_INTERNET_HOST_CLAN_COMBO`. If the text is
+  wider than (field width − 2 × padding − button width) the gadget drops **trailing characters** until it fits
+  (no ellipsis). [H for the formulas, M for the padding field]
+- **Drop-down list**: the rows are the combo's list items, each drawn in its own item colours with the control
+  font; hover / selected highlight and scrolling are the generic combo list's (no colour-specific art). [M]
+- **States**: no per-state colour art: hover only swaps the pop-down button texture
+  (`Combo_Box_Popdown_Button_Mouse_Over`), open = `_Pressed`; a disabled combo (not your slot / not the host)
+  keeps its item colours. [M]
+- **Selection**: the chosen item's data (0..8) is the player's colour index; a slot's combo is set from that
+  index (clamped to the palette). [H]
+
+#### 3.7.2 Tech-tree arrows
+
+- **Controls**: plain `PETROGLYPH_DIALOG_IMAGE` controls placed in `GUIDialogs.rc` between the unit icons:
+  `IDC_RIGHT_ARROWn`, `IDC_DRIGHT_ARROWn`, `IDC_RRIGHT_ARROWn`, `IDC_DOWN_ARROWn` (n ≤ 30 in the shipped data;
+  `IDC_DRIGHT_ARROW` has no instance). Counts: `IDD_TECH_TREE_EMPIRE` 24, `_REBEL` 22, `_BLACKMARKET` 21,
+  `_EMPIRE_SPACE` 7, `_REBEL_SPACE` and `_BLACKMARKET_SPACE` 1 each (the long `IDC_RIGHT_ARROW21`, 845 × 14
+  units: the tech-level axis under the `IDC_STATIC_TECHn` captions). **Placement is entirely the .rc rectangle**;
+  no code positions arrows relative to tech levels or units. `GUIDialogs.xml` has no entries for them. [H]
+- **Fill** (each time a tech-tree page is filled): for n = 0..99 and each of the four prefixes, if the dialog
+  has that control and it is visible, set its texture and tint, then clear the image's overlay layers to
+  transparent: [H]
+
+  | prefix | texture | MTD rect (FoC `MT_CommandBar`) |
+  |---|---|---|
+  | `IDC_RIGHT_ARROWn` | `i_tree_arrow_right.tga` | 30 × 14 |
+  | `IDC_DRIGHT_ARROWn` | `i_tree_arrow_2right.tga` | 30 × 14 |
+  | `IDC_RRIGHT_ARROWn` | `i_tree_arrow_3right.tga` | 30 × 14 |
+  | `IDC_DOWN_ARROWn` | `i_tree_arrow_down.tga` | 14 × 30 |
+
+  Tint 255,255,255,255, alpha-blended draw mode (2D selector 2, PrimAlpha, §6). The texture fills the control
+  rectangle (so the 845-unit axis is the 30 × 14 arrow stretched). [H for texture / tint, M for stretch]
+- **No locked / researched states on arrows**: every arrow is white whatever the player has researched. [H]
+- **Unit icons** (`IDC_TECHTREE_<type>`, same fill, after the arrows): for every object type that belongs to the
+  viewing player's faction, the name with `-` replaced by `_` gives the control; if it exists its texture =
+  the type's icon, tint **white** 255,255,255,255, **or grey 90,90,90,255** when the player's tech level is below
+  the type's `Tech_Level`, or the type is build-locked for that player (flag + the player's unlocked test). No
+  "researched" colour. Icons use draw mode 0; the tooltip is the type's text. [H for colours, M for the lock test]
+- **Same arrow art elsewhere**: `IDD_BATTLE_END_DIALOG` `IDC_RIGHT_ARROW1` / `_2` (255 × 14, between the two
+  sides' unit columns) get `i_tree_arrow_right.tga`, alpha mode, white [M for the tint argument], every time the
+  dialog is filled. `IDD_SUMMARY_SCREEN_FLEETS` `IDC_HEROES_DIVIDERSk` (824 × 14 row separators): when row r is
+  filled, `IDC_HEROES_DIVIDERS(r − 1)` gets `i_tree_arrow_right.tga`, white, alpha mode, and is shown; when row r
+  is empty that divider and the row's icon are hidden. [H]
+
 ---
 
 ## 4. Input routing (P1 input layer)
@@ -550,6 +629,101 @@ jumps the camera to the group (local player only). The group number is drawn ove
 - Rally point visuals; whether `Pixel_Align` and `Snap_Location` change placement.
 - In-game probe (Gabriel): screenshots at 1024×768, 1920×1080 and 1280×1024 of the tactical HUD and
   a load screen would settle §2.4/§3.3.
+- §7.4: what the organiser's "pathfinder" header pad (`q*_0000`) holds in single player and the default of
+  GameConstants `Pathfinder_Slot_Index`; §7.2 the slot-0 → pane 2 reading for a foreign orbit [M].
+
+---
+
+## 7. Fleet organiser panes for one, two or three fleets (p4ui t04, 2026-11-02)
+
+Answers the P4 open item "which `i_galactic_organize` panels show for 1..3 fleets". Read in the organiser
+update 0x3e83a0 and its two fill routines 0x3e2cf0 / 0x3e1b70; component ids from the command-bar table
+(0xa174e0, GALACTIC_DIALOGS.md header); pane pad bases from the 3-entry int table at 0x140a28880
+(0x79, 0x9c, 0xbf). Companion: GALACTIC_DIALOGS.md §4 (when the organiser shows), GALAXY_MAP_PRESENTATION.md
+§1.3 (the map's slot rule, which the organiser repeats).
+
+### 7.1 Panes are not chosen by the fleet count [H]
+- The three frames `q1_frame` / `q2_frame` / `q3_frame` are **meshes of the shell model**, not components (no
+  `q*_frame` entry in the component table, no string for them in the executable), so they draw whenever the
+  shell `i_main_organize` (0x5a) draws. Nothing in the organiser code hides a frame.
+- The tab labels `text_fleet1..3` (0x271..0x273) are set to `TEXT_FLEET_PANE_0..2` and shown for **all three**
+  panes on every update, whatever the number of fleets (loop of 3 in 0x3e83a0).
+- So with one, two or three fleets (or none) the organiser always shows **three panes**, "Fleet 1/2/3" from left
+  to right. Only the pane contents change: which fleet fills which pane (§7.2) and which unit pads show (§7.3).
+
+### 7.2 Which fleet fills which pane [H unless marked]
+Pane k = frame `q{k+1}_frame`; its unit pads are `q{k+1}_0001 .. q{k+1}_0406` (34 pads, row-major `q{n}_RRCC`,
+R 0..4, C 0..6, `_0000` excluded); its header pad is `q{k+1}_0000` (§7.4). A fleet's **slot** is its own orbit
+slot 0..2 (fleet +0xc0 → +0x48), the field the map buttons use (GALAXY_MAP_PRESENTATION §1.3). "Orbit owner" =
+0x3f9270: the forced owner of a contested planet if one is set, else the owner of the first non-stealthed
+slotted fleet in orbit order, else the first stealthed one's, else nobody.
+
+| orbit owner | pane 0 (`q1`) | pane 1 (`q2`) | pane 2 (`q3`) |
+|---|---|---|---|
+| the local player (0x3e2cf0) | the units of **every** local-player fleet in orbit with slot 0, merged into one pane (0x3f9370 lists the orbit's fleets with a given slot) | the fleet in slot 1 | the fleet in slot 2 |
+| anyone else, or nobody (0x3e1b70) | the units of every **non-local** fleet in orbit (slots 0..2), a fleet included only if allied with the local player (0x39a230) or the planet is visible to the local player (0x50b3f0 / 0x50b5a0) and the fleet is not stealthed (0x3a9760); drawn with the pad draw's "foreign" flag (0x309a80 argument 6) | the local player's slot-1 fleet(s) | the local player's slot-0 **and** slot-2 fleets [M: the decompiled loop maps slot 0 → pane 2, 1 → 1, 2 → 2, so 0 and 2 share pane 2] |
+
+- This is the map rule of GALAXY_MAP_PRESENTATION §1.3 ("enemy fleets go to slot 0, an own slot-0 fleet moves to
+  slot 2") applied to the panes: pane k shows what map button k shows.
+- Inside a pane the units are grouped per type into stacks (one pad per stack, the count as text), filled from the
+  pane's first pad upward in the order the fleets list them (0x3cc040 / 0x3d7470); at most 34 stacks per pane,
+  further stacks are not drawn [M].
+- A pane with no fleet keeps its frame and its tab; its unit pads are empty (§7.3).
+- Drops (0x3d02e0, unchanged): a drop on pane k addresses the fleet in slot k; a drop on an empty pane makes a new
+  fleet in slot k (FleetManagement with the slot), on an occupied one merges ("merge_fleets").
+
+### 7.3 Unit pads that show [M]
+- Pads holding a stack are shown and enabled.
+- Every pad of a pane is reset first; the reset hides it unless the HUD's drag / hover component (+0x2160) is set,
+  in which case it is shown empty and enabled. Reading: **empty pads show only while something is dragged** (as
+  drop targets); otherwise a pane shows only its filled pads.
+
+### 7.4 The `q*_0000` header pad ("Fleet PF") [H data, L meaning]
+- `q{n}_0000` is in group `Fleet PF`, blank texture `i_button_pathfinder.tga`, tooltip `TEXT_TOOLTIP_PATHFINDER`.
+  Both fill routines show and enable it whenever the organiser updates (pane base − 1); it is not one of the 34 unit
+  pads (units start at `_0001`).
+- It holds one unit of the pane's fleet whose fleet-slot record id (unit +0x1b0 → +8) equals the global loaded from
+  GameConstants `Pathfinder_Slot_Index` (0x140b278b0); a second such unit in the same fleet is ejected by the HUD
+  (an event, then 0x3a87c0). `Pathfinder_Slot_Index` is absent from vanilla FoC GameConstants and its default was not
+  read. **[L]**: what a "pathfinder slot" is in single player. Port leftover (p4uio).
+
+### 7.5 Port mapping
+- ui: draw all three panes and tabs whenever the organiser shows; fill the panes by slot per §7.2 (the host feeds
+  each fleet's slot and whether it is the local player's), not in provider order; foreign units in pane 0 are drawn
+  but not draggable; empty pads only during a drag (§7.3).
+- apps: the organiser provider feeds every fleet in orbit at the planet that the local player may see (own, allied,
+  or visible and not stealthed), with its slot and owner flag; the planet's `GalacticPlanetInfo::orbit_local`
+  (already fed for the map) picks the table row.
+
+---
+
+## 8. IME edit boxes (p4ui t05, 2026-11-02)
+
+Question: does any single-player screen open the IME dialog (text input for Asian-language keyboards)?
+**Answer: no.** [H]
+
+- The GUI has one IME-aware gadget, `GUIGadgetIMEEditboxClass` (gadget type 0x1d, made from a dialog control of class
+  `"IMEEditBox"`, factory 0x1dcf90 → 0x1f3100), plus a locale indicator `GUIGadgetIMELocaleIndicatorClass`
+  (`"IMELocaleIndicator"`). Only these talk to the IME: they register with the static IME message hook (list
+  0x140a13740, added by 0x1d4060 from the gadget's focus paths 0x1f6700 / 0x1f84d0), and only they associate or
+  dissociate the window's input context (imm32 `ImmAssociateContext`, loaded at boot by 0x1d3c20; the boot only reads
+  the default context, 0x1d4700, and does not disable it).
+- The IME hook is the first step of the window procedure (0x1d4170 from 0x60c60, §0 item 6). With no IME gadget
+  registered it consumes nothing.
+- In the shipped `GUIDialogs.rc` the only `IMEEditBox` / `IMELocaleIndicator` controls are in `IDD_IME_TEST_DIALOG`
+  (`IDC_IME_TEST_EDITBOX`, `IDC_CUSTOM2`). The routine that opens it (0x12ae70; close 0x12aff0, callback 0x12b030)
+  has **no caller** in the executable: a leftover developer test.
+- Every other text field is a plain `EDITTEXT` (`GUIGadgetEditboxClass`): save names, profile / player names,
+  passwords, lobby and in-game chat. `IDC_IME_EDITBOX` in `IDD_INGAME_CHAT_DIALOG` is, despite its name, a plain
+  `EDITTEXT` (and that chat is multiplayer only). `IDC_IME_EDIT_BOX` (1208) and `IDC_IME_EDITBOX2` (1235) exist in
+  `Resource.h` only.
+- Plain edit boxes take characters from `WM_CHAR` (§4.2). Because the game never dissociates the window's input
+  context, a system IME still composes in its own window and the committed text reaches the game as `WM_CHAR`
+  [M: Windows' default handling of `WM_IME_CHAR` / `WM_IME_COMPOSITION`, not traced inside the game].
+
+Port: nothing to build; the IME dialog is not needed for single player (t05 closed). The port's edit boxes already
+take `WM_CHAR` text (P4 integrator ask 1); a host window that leaves the IME messages to `DefWindowProc` gets
+committed IME text the same way.
 
 ---
 

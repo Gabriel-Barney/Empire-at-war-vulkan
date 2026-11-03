@@ -116,9 +116,15 @@ struct GalacticFleetSlot {
     uint32_t count = 1;
     bool selected = false;
 };
+// One fleet in orbit at the selected planet, as the organiser sees it (UI.md §7.2). The HUD, not the host, decides which
+// of the three panes q1 / q2 / q3 it fills, from `slot`, `enemy` and the planet's GalacticPlanetInfo::orbit_local; the
+// provider order only breaks ties. Several fleets can share a pane (own slot-0 fleets, every foreign fleet): their stacks
+// follow each other from the pane's first pad.
 struct GalacticFleet {
     uint32_t fleet = 0;                 // fleet object id
     std::vector<GalacticFleetSlot> units;
+    int32_t slot = -1;                  // the fleet's own orbit slot 0..2 (galactic FleetState::slot); -1 = unknown, first free pane [port]
+    bool enemy = false;                 // not the local player's (foreign or allied): drawn in pane 0, not draggable, clicks do nothing [port]
 };
 struct GalacticBuildOption {
     uint16_t type_index = 0;
@@ -150,7 +156,9 @@ struct GalacticSpecialAbility {
 struct GalacticProviders {
     std::function<void(uint32_t planet, std::vector<GalacticBuildOption>& out)> build_options;
     std::function<void(std::vector<HudQueueEntry>& out)> build_queue;
-    std::function<void(uint32_t planet, std::vector<GalacticFleet>& out)> fleets;          // organiser (max 3)
+    // Organiser (UI.md §7): every fleet in orbit at the planet that the local player may see (own, allied, or visible and
+    // not stealthed), each with its slot and enemy flag; any number, the HUD places them in the three panes.
+    std::function<void(uint32_t planet, std::vector<GalacticFleet>& out)> fleets;
     std::function<void(uint32_t planet, std::vector<GalacticFleetSlot>& out)> land_forces;  // max 20
     std::function<void(std::vector<HudObjective>& out)> objectives;                        // StorySession objectives
     // g_special_ability rows for the selected planet, in display order (host: the local player's units there with a
@@ -438,7 +446,8 @@ private:
         std::vector<uint32_t> select;  // fleet / land pads
         // drag and drop
         bool draggable = false;
-        int32_t fleet_index = -1;      // 0..2 organiser fleet, -1 land forces
+        int32_t fleet_index = -1;      // 0..2 organiser pane, -1 land forces
+        bool foreign = false;          // organiser pad of a non-local fleet: no drag, no click, no drop target (UI.md §7.2)
         uint32_t fleet = 0, unit = 0;  // unit 0 = fleet header
         std::string icon;
     };
