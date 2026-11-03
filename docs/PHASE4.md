@@ -771,6 +771,36 @@ original timing 575 as A1k reported), `game_smoke_skirmish.crc` / `.rec` tick 10
 two headless goldens. Worker counts 0 / 1 / 4 / 16 / 15 identical (Kuat seeds 1 and 2, foc-station 2, foc-land-campaign 1,
 foc-land 7000 ticks).
 
+## Profile after OPT2 (OPT2 t07, OPT3 t10, 2026-11-03)
+
+The OPT1 scenarios re-run on main 1b8c5f5 (after #42-#48), same PC and build type as the OPT1 table, nothing else running (CPU 6-11 %
+before and after). `bench_msvc.cmd` plus two more rounds; median of 3 runs each, the runs agree within about 2 %.
+
+| Scenario | Ticks | W15 mean / p50 / p99 / max (ms) | W0 mean / p50 / p99 / max (ms) | OPT1 W15 (2026-10-30) |
+|---|---|---|---|---|
+| FoC HotM, every faction an AI | 18000 | 0.208 / 0.182 / 0.513 / 4.35 | 0.178 / 0.153 / 0.458 / 4.51 | 0.21 / 0.19 / 0.52 / 3.1 |
+| 400-planet synthetic, 4 AIs | 900 | 0.479 / 0.376 / 1.53 / 4.71 | 1.50 / 0.81 / 14.2 / 56.5 | 0.48 / 0.39 / 2.99 / 11.9 |
+| FoC land battle (`foc-land-campaign`) | 3014 | 1.38 / 1.32 / 2.21 / 69.7 | 2.02 / 1.82 / 3.47 / 297 | 3.42 / 3.06 / 6.39 / 104.7 |
+| FoC space battle with station (`foc-station --seed 3`) | 12173 | 0.890 / 0.799 / 2.15 / 58.5 | 0.922 / 0.812 / 2.40 / 236 | 1.02 / 0.95 / 2.17 / 66.9 |
+
+The land and space battles are not the same games as in OPT1: AI changes since then end the land battle at 3014 ticks (was 12374)
+and the space battle at 12173 (was 9072), so compare per-tick numbers, not totals.
+
+Budget check (`--profile-budget 33.33`, default workers):
+- **p99 below 16.7 ms: met** in all four, max 2.2 ms (land p99 6.39 → 2.21 ms; synthetic 2.99 → 1.53 ms, its frame-0 all-pairs now in
+  the background).
+- **No tick above 33.3 ms: met** on the galactic runs; **not met on one tick per battle**, the first battle tick (land 69.7 ms, space
+  58.5 ms; OPT1: 104.7 / 66.9 ms). It is battle setup: `T5.battles` with the parallel plan load (`lua.exec` about 320-335 ms of thread
+  time over the workers, about 7 ms of it `lua.gc.auto`). At W0 the same tick takes 236-297 ms. Every other battle tick is under
+  12 ms; the next worst are the battle-end tick (land 27 ms, space 23.5 ms), the second battle tick (first perception, 6.8-11 ms) and
+  space `tac.movement` / `tac.events` ticks (7-8.6 ms).
+- The galactic runs' max: HotM 4.3-4.5 ms is `ai.goals` on a goal-proposal frame (frame 132, mostly Lua; CP3 territory); synthetic
+  4.7 ms is `sys.ai.all_pairs` at frame 15, where the frame-0 background recompute is applied (the zone includes
+  any wait for the job and the adopt).
+
+What is left for the 33.3 ms limit is battle setup and teardown, which are one-off ticks: spread setup over several ticks or prepare it
+before the battle's first tick (moves goldens), and the remaining items listed under OPT3 t09 (land obstacle stamps, galactic plan load).
+
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
 `build_asan.cmd` runs clang 20 (MSVC ABI) with UBSan by default; `ALAMO_SANITIZE=address` adds ASan.
