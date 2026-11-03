@@ -12,6 +12,8 @@
 //     untouched), fast forward, the attract demo session (AI vs AI, no human, replayable) and its controller, and the
 //     camera / controls decisions on the synced hotkey / binding tables.
 //   * L1/S4 wave 1: StoryUiFeed's transition rules (story_ui.hpp) and the story UI port event round trip.
+//   * story t13: LinkedBattleOverlay (story_ui.hpp) - a linked battle's P10 letterbox / P11 input block, the script
+//     hand-over and the kHandOverFrames fallback.
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -789,6 +791,56 @@ bool special_run(const game::GameData& data, const game::SessionSpec& spec, comm
     out.crc = s.host().crc_log();
     out.ticks = s.ticks();
     return true;
+}
+
+// story t13: the P10 bars are fully in from the first frame and stay until a script letterbox op (or the fallback); the
+// P11 block holds until a script control op (or the fallback), then follows the scripts' lock; a plain battle holds nothing
+// but still draws the scripts' letterbox.
+void linked_overlay_test() {
+    using O = game::LinkedBattleOverlay;
+    constexpr float kDt = 1.0f / 30.0f;
+    {  // Kessel UM01: P9 0, P10 1, P11 1 -> letterbox + input block
+        O o;
+        o.begin(true, true, 0);
+        CHECK(o.letterbox_level() == 1.0f && o.letterbox_held() && o.input_blocked() && o.input_held());
+        for (uint32_t f = 1; f < 40; ++f) o.update(f, false, kDt);
+        CHECK(o.letterbox_level() == 1.0f && o.input_blocked());  // nothing from the script yet
+        o.script_letterbox(true);  // Letter_Box_In(0): the script owns the bars, still in
+        o.script_controls();       // Lock_Controls(1)
+        o.update(40, true, kDt);
+        CHECK(!o.letterbox_held() && o.letterbox_level() == 1.0f && !o.input_held() && o.input_blocked());
+        o.update(41, false, kDt);  // Lock_Controls(0): the block follows the script
+        CHECK(!o.input_blocked());
+        o.update(42, true, kDt);   // a midtro locks again: P11 battles block again
+        CHECK(o.input_blocked());
+        o.script_letterbox(false);  // Letter_Box_Out: 0.5 s slide
+        o.update(43, false, 0.25f);
+        CHECK(o.letterbox_level() > 0.4f && o.letterbox_level() < 0.6f && !o.input_blocked());
+        o.update(44, false, 0.5f);
+        CHECK(o.letterbox_level() == 0.0f);
+        o.reset();
+        CHECK(o.letterbox_level() == 0.0f && !o.input_blocked() && !o.letterbox_held());
+    }
+    {  // no script ever takes over: both holds end kHandOverFrames after the start (battle started at frame 10)
+        O o;
+        o.begin(true, true, 10);
+        o.update(10 + O::kHandOverFrames - 1, false, kDt);
+        CHECK(o.letterbox_held() && o.input_blocked() && o.letterbox_level() == 1.0f);
+        o.update(10 + O::kHandOverFrames, false, kDt);
+        CHECK(!o.letterbox_held() && !o.input_held() && !o.input_blocked() && o.letterbox_level() < 1.0f);
+        o.update(11 + O::kHandOverFrames, false, 1.0f);
+        CHECK(o.letterbox_level() == 0.0f);
+    }
+    {  // P10 with P9 = 1 (no letterbox), P11 0: nothing held; a script lock does not block a battle without P11
+        O o;
+        o.begin(false, false, 0);
+        o.update(1, true, kDt);
+        CHECK(o.letterbox_level() == 0.0f && !o.input_blocked() && !o.letterbox_held() && !o.input_held());
+        o.script_letterbox(true);  // the scripts' letterbox is drawn in any battle
+        o.update(2, true, 0.5f);
+        CHECK(o.letterbox_level() == 1.0f && !o.input_blocked());
+    }
+    std::printf("linked overlay: P10 letterbox / P11 block / hand-over checked\n");
 }
 
 // Story dialog script parse (story_script.hpp): colours, waits, cues, movie, EXTRA_TEXT, chapters.
@@ -1924,6 +1976,7 @@ int main() {
     radar_feed_test();
 #endif
     story_ui_test();
+    linked_overlay_test();
     story_script_test();
     story_scripts_real_test();
     game::GameData data;

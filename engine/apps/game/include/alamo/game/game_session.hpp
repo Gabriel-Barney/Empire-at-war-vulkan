@@ -197,6 +197,12 @@ public:
     // GALACTIC_DIALOGS §1.4: the story lock (DISABLE / RESTRICT_AUTORESOLVE, StorySession::autoresolve_locked) forbids
     // auto-resolving a battle at `planet`: the prompt offers Begin only. False without a running story.
     bool autoresolve_locked(PlanetIndex planet) const;
+    // story t13 (BT §2.9.3 step 2): the one-button pending banner (story_pending_battle_shell) of a LINK_TACTICAL record with
+    // P13 = 1 (CampaignBattles::linked_banner_up, the galaxy paused): its record, and Begin = ResumeGame 51 (a command; the
+    // record starts at the next hook). False / null when no banner is up or the Begin is already in flight.
+    bool linked_banner_pending() const;
+    const sim::CampaignBattles::LinkedRecord* linked_banner_record() const;
+    bool begin_linked();
     bool auto_resolving() const;
     // P4 host requests (commands; true when submitted). Their results come at the command phase (port_event):
     // withdraw = Withdrawl 49 -> ConflictManager::set_retreating(issuer), result ignored (P4_SIM_SYSTEMS §9.2);
@@ -314,6 +320,7 @@ private:
     bool paused_ = false, pause_pending_ = false;
     uint64_t pause_events_ = 0;
     bool choice_sent_ = false;  // a battle choice is in flight for the pending conflict
+    bool banner_sent_ = false;  // story t13: the linked banner's Begin is in flight (cleared once the banner is down)
     PortEventStats port_stats_;
     commands::RejectReason port_event(uint8_t player, const commands::EventData& ev);
     void land_skirmish_invade();

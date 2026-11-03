@@ -252,6 +252,14 @@ void App::lua_presentation() {
             m.buttons = {U"Retry", U"Quit"};
             if (screens_.show_message(m)) ++retry_boxes_;
         }
+        if (session_->battle()) {  // story t13: the battle's letterbox overlay and the P11 hand-over (story_ui.hpp)
+            using Op = lua::PresentationOp;
+            if (e.op == Op::LetterBoxIn || e.op == Op::LetterBoxOn) linked_ui_.script_letterbox(true);
+            else if (e.op == Op::LetterBoxOut || e.op == Op::LetterBoxOff) linked_ui_.script_letterbox(false);
+            else if (e.op == Op::LockControls || e.op == Op::StartCinematicMode || e.op == Op::EndCinematicMode ||
+                     e.op == Op::StartCinematicCamera || e.op == Op::EndCinematicCamera)
+                linked_ui_.script_controls();
+        }
     }
     audio_.apply_presentation(log->events(), &lua_audio_seq_);
 #ifdef ALAMO_UI_HAVE_LUA
@@ -533,6 +541,18 @@ void App::begin_battle() {
     const bool space = tm && tm->kind() == objects::ModeKind::Space;
     const PlanetIndex planet = b ? b->request().info.planet : kInvalidPlanet;
     battle_place_ = battle_place_name(planet);
+    // story t13 (BT §2.9.1 P10 / P11): a story-linked battle opens with the record's presentation (applied by the start,
+    // CampaignBattles::linked_presentation); any other battle with nothing held.
+    {
+        const sim::CampaignBattles* cb = session_->battles();
+        const bool linked = b && cb && b->request().linked;
+        const sim::CampaignBattles::LinkedPresentation none;
+        const sim::CampaignBattles::LinkedPresentation& lp = linked ? cb->linked_presentation() : none;
+        linked_ui_.begin(lp.letterbox, lp.presentation_b, b ? b->frame() : 0);
+        if (linked)
+            std::printf("battle %" PRIu64 ": story link, letterbox %s, input block %s\n", battles_seen_, lp.letterbox ? "on" : "off",
+                        lp.presentation_b ? "on" : "off");
+    }
     // QA t11: the dialog first, the blocking BattleView::start only after it has been presented (a Fight answer or a
     // skirmish start opened it even earlier, before the tactical push's own load).
     if (ui_.load.is_open()) load_intro_frames_ = 1;
@@ -595,11 +615,26 @@ void App::end_battle() {
     }
 #endif
     cinematic_reset();  // refixf t05: a shot still running when the battle ends (the hold is released before frame 765)
+    linked_ui_.reset();  // story t13
     bview_.stop(gpu_);
     if (ui_.load.is_open()) ui_.load.close();
     orders_.set_selection({});
     queues_.clear();
     if (demo_session()) return;  // OI host: no battle-end screen; the attract controller moves on (screen_ stays Menu)
+    // story t13 (BT §2.9.6): the battle end took the dialog-skip flag 0x140b305ed of a LINK_TACTICAL record: the dialog
+    // callback 0x87770 returns without the battle-summary dialog. [M] It also sets the galactic mode's battle-end-closed flag
+    // (+0x188, STORY.md §4.1 step 6): GENERIC battle_end_closed now, as a closed screen would raise it.
+    const sim::CampaignBattles* cb = session_ ? session_->battles() : nullptr;
+    if (cb && cb->linked_presentation().last_battle_skipped_dialog && session_->spec().kind != SessionKind::Skirmish) {
+        show_battle_end(false);
+        story_ui_.generic("battle_end_closed");
+        ++linked_dialog_skips_;
+        std::printf("battle end: story link, no battle-summary dialog\n");
+        screen_ = Screen::Galactic;
+        gview_.capture(session_->host());
+        audio_.music(MusicScene::Galactic, local_faction());
+        return;
+    }
     show_battle_end();  // IDD_BATTLE_END_DIALOG; ticks wait for Continue (presentation-only hold)
     if (session_ && session_->spec().kind == SessionKind::Skirmish) {
         screen_ = Screen::Menu;  // the battle-end screen's Continue goes back to the main menu

@@ -629,10 +629,13 @@ void App::battle_input() {
         return st->exists(hh) ? static_cast<uint32_t>(st->type(hh)) : 0xFFFFFFFFu;
     };
     std::vector<commands::EventData> cmds;
+    // story t13 (UI.md §4, flag 0x140a28c91): while a linked battle's P11 input block holds the world gets no mouse input -
+    // no drop point, no targeted pick, no selection / orders. The HUD, the camera and the keys are not blocked.
+    const bool world_blocked = linked_ui_.input_blocked();
     // Reinforcement drop (TacticalHud BeginReinforcement): the next world left click is the landing point (ground plane
     // z = 0, land: the terrain height there [port]); a right click cancels. The click is not an order.
     bool drop_click = false;
-    if (reinforce_unit_ != 0) {
+    if (reinforce_unit_ != 0 && !world_blocked) {
         // The release after a right double press is swallowed (P1_DOUBLE_CLICK_MOVE.md §1.1): it does not cancel.
         if (input_.button(ui::Button::Right).click && !input_.button(ui::Button::Right).in_double_press) {
             reinforce_unit_ = 0;
@@ -653,7 +656,7 @@ void App::battle_input() {
     // Targeted-ability pick (TargetingController, before the order translator: a frame whose click it used is not an
     // order). The click becomes the ability command through the command stream (UI.md §4.1; cmds -> route_commands).
     bool targeted = false;
-    if (!drop_click && targeting_.active()) {
+    if (!drop_click && !world_blocked && targeting_.active()) {
         std::vector<ui::UiOrder> picks;
         targeted = targeting_.update(target_input_, ui_.bindings, ctx, picks);
         for (ui::UiOrder& o : picks) {
@@ -661,7 +664,7 @@ void App::battle_input() {
             cmds.push_back(std::move(o.event));
         }
     }
-    if (!drop_click && !targeted) orders_.update(input_, ui_.bindings, ctx);
+    if (!drop_click && !targeted && !world_blocked) orders_.update(input_, ui_.bindings, ctx);
     // Orders carry their queued flag (shift: queueable actions) into the command stream; voice per command (UiOrder::voice).
     std::vector<uint8_t> voice(cmds.size(), 1);
     for (ui::UiOrder& o : orders_.take_orders()) {

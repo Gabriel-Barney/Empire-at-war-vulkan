@@ -174,7 +174,7 @@ void App::handle_screen_actions(const std::vector<ui::ScreenAction>& acts) {
     }
 }
 
-void App::show_battle_end() {
+void App::show_battle_end(bool dialog) {
     ui::BattleEndInfo info;
     const std::string log = session_ && session_->battles() && !session_->battles()->log().empty() ? session_->battles()->log().back() : std::string();
     // [port] winner from the battle summary ("winner <faction>,").
@@ -184,8 +184,6 @@ void App::show_battle_end() {
         winner = log.substr(w + 7, e == std::string::npos ? std::string::npos : e - w - 7);
         info.victory = iequal(winner, local_faction());
     }
-    // Battle-end win / lose music, mode 16 (STRATEGIC_GAPS §7.4); a lost battle names the winner as the enemy faction.
-    audio_.battle_end(info.victory, info.victory ? std::string_view() : std::string_view(winner));
     // L1/S4 wave 1 (SCRIPT_GAPS.md 4.2): the local player lost a battle that ran a tactical plot set -> STORY_MISSION_LOST
     // to the galactic story, name = that plots file (the shipped Param1 values) [inferred: the original's "monitor
     // MISSION_LOST name" source is not specified].
@@ -209,6 +207,9 @@ void App::show_battle_end() {
             (owner == local_player() ? info.your_losses : info.enemy_losses).push_back(std::move(u));
         }
     info.can_save_replay = false;  // N1
+    if (!dialog) return;  // story t13: a linked battle's skip - the story and score bookkeeping above, no screen, no music
+    // Battle-end win / lose music, mode 16 (STRATEGIC_GAPS §7.4); a lost battle names the winner as the enemy faction.
+    audio_.battle_end(info.victory, info.victory ? std::string_view() : std::string_view(winner));
     battle_end_open_ = screens_.show_battle_end(info);
 }
 
@@ -416,6 +417,11 @@ void App::auto_resolve_result(const galactic::GalacticSim& g, const galactic::Co
 void App::answer_battle_prompt(bool auto_resolve) {
     if (!choice_open_) return;
     choice_open_ = false;
+    if (prompt_.linked) {  // story t13: the P13 banner has Begin only; the battle (and its load screen) starts at the next hook
+        const bool sent = session_ && session_->begin_linked();
+        std::printf("battle choice: begin (story link%s)\n", sent ? "" : ", not sent");
+        return;
+    }
     const bool ar = auto_resolve && !prompt_.story_pending;
     const galactic::BattleChoice c = ar ? galactic::BattleChoice::AutoResolve : galactic::BattleChoice::Fight;
     const galactic::GalacticSim* g = session_ ? session_->galaxy() : nullptr;
@@ -457,6 +463,28 @@ void App::open_battle_prompt(const galactic::GalacticSim& g, const galactic::Con
                 utf8_of(prompt_.title).c_str(), prompt_.land ? "land" : "space", prompt_.story_pending ? "begin only" : "begin / auto-resolve",
                 prompt_.left.units, prompt_.left.stacks, prompt_.left.icon.c_str(), prompt_.right.units, prompt_.right.stacks,
                 prompt_.right.icon.c_str());
+}
+
+// story t13 (BT §2.9.3 step 2): a LINK_TACTICAL record with P13 = 1 waits behind the one-button pending banner (the
+// story_pending_battle_shell, chosen because the linked-battle flag 0x140b30545 is set) with the galaxy paused; Begin
+// (answer_battle_prompt) sends ResumeGame 51 and the record starts at the next hook. No auto-resolve, no force graphs (the
+// single shell has none; a non-sandbox link takes no galactic units anyway).
+void App::open_linked_banner(const galactic::GalacticSim& g, const sim::CampaignBattles::LinkedRecord& r) {
+    prompt_ = {};
+    prompt_.planet = r.planet;
+    prompt_.land = r.kind == galactic::ConflictKind::Land;
+    prompt_.story_pending = true;
+    prompt_.linked = true;
+    prompt_.planet_name = planet_label(data_, ui_.text, g, r.planet);
+    prompt_.title = prompt_.planet_name + (prompt_.land ? txt("TEXT_TACTICAL_LAND_BATTLE_IS_PENDING", U": PLANETARY BATTLE IMMINENT!")
+                                                        : txt("TEXT_TACTICAL_SPACE_BATTLE_IS_PENDING", U": SPACE BATTLE IMMINENT!"));
+    audio_.battle_pending(prompt_.land);
+    choice_open_ = true;
+    ++choices_;
+    ++prompts_story_;
+    ++linked_banners_;
+    std::printf("battle prompt: %s (%s, story link, begin only, map %s)\n", utf8_of(prompt_.title).c_str(), prompt_.land ? "land" : "space",
+                r.map.c_str());
 }
 
 // GALACTIC_DIALOGS §2.1: a Story_Dialog event's chapter goes to the mission holocron; b_story_arc_g flashes, the faction's
@@ -577,6 +605,10 @@ void App::galactic_screens() {
     if (story_summary_open_ && !ui_.gui.find(ui::dlg::kStorySummary)) story_summary_open_ = false;  // closed by Esc
     if (session_->battle_choice_pending() && !choice_open_)
         if (const galactic::ConflictInfo* c = session_->conflict_head()) open_battle_prompt(*g, *c);
+    // story t13: the linked record's banner (it can also go down without Begin, e.g. a loaded save shows it again).
+    if (choice_open_ && prompt_.linked && !(session_->battles() && session_->battles()->linked_banner_up())) choice_open_ = false;
+    if (!choice_open_)
+        if (const sim::CampaignBattles::LinkedRecord* r = session_->linked_banner_record()) open_linked_banner(*g, *r);
     if (const sim::CampaignBattles* b = session_->battles()) {
         const std::vector<galactic::ConflictLogEntry>& log = b->conflicts().log();
         while (ar_log_seen_ < log.size()) {

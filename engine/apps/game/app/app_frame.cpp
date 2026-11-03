@@ -73,7 +73,8 @@ bool App::render_frame() {
         ok = gpu_.renderer.render(*f, cmd, pt, ui::to_view_matrices(cp, w, h), gview_.main, render::DrawMode::Lit, gro, &draw_stats_,
                                   nullptr, gview_.background);
     } else if (battle) {
-        if (screen_ == Screen::Battle && !cinematic_hides_hud())
+        // story t13: no selection circles while a linked battle's P11 input block holds (UI.md §1.3, flag 0x140a28c91).
+        if (screen_ == Screen::Battle && !cinematic_hides_hud() && !linked_ui_.input_blocked())
             bview_.set_selection_blobs(ui_.tactical_hud.selection_blobs());  // last HUD build's circles (one frame behind)
         else bview_.set_selection_blobs({});  // load screen / attract demo: no selection
         const auto prep0 = Clock::now();
@@ -481,6 +482,7 @@ void App::frame() {
         else demo_camera();
     }
     lua_presentation();
+    linked_ui_step();  // story t13: after this frame's Lua ops
     story_reward_step();  // L1/S4 wave 1: START_MOVIE / MULTIMEDIA reward media
     if (screen_ == Screen::Galactic && session_) galactic_screens();
     if (screen_ != Screen::Movie) {
