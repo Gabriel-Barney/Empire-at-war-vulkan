@@ -286,13 +286,27 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
             galactic_ai_->set_global_values(host_->global_values());  // Int-final: session-wide GlobalValue table
             ai::GalacticAiWorld* w = galactic_ai_.get();
             sim::CampaignBattles* b = battles_.get();
-            for (const ai::GalacticAiPlayerConfig& pc : gcfg.players)
-                host_->set_controller(static_cast<uint8_t>(pc.player), [w, b](sim::SimHost& hh, uint8_t p, uint64_t frame) {
+            // q6: every player but the human and the neutral player gets the T7 controller, because the story reward
+            // SWITCH_CONTROL (below) can give a player an AI later; a player without an AI does nothing there (as before:
+            // no update_player call for it).
+            for (size_t pi = 0; pi < setup_.players.size(); ++pi) {
+                if (setup_.players[pi].human || static_cast<int32_t>(pi) == gs->neutral_player()) continue;
+                host_->set_controller(static_cast<uint8_t>(pi), [w, b](sim::SimHost& hh, uint8_t p, uint64_t frame) {
+                    if (!w->is_ai_player(p)) return;
                     const sim::GameMode* top = hh.modes().top();
                     const bool galactic_top = top && !top->tactical();
                     const bool busy = b->conflicts().state() == galactic::ConflictState::AutoRunning;
                     w->update_player(p, static_cast<int64_t>(frame), galactic_top, busy);
                 });
+            }
+            // q6: story reward SWITCH_CONTROL (AI_GALACTIC.md §1.2: Player::Set_AI_Type, then the difficulty) -> the
+            // galactic AI, while the reward applies in T9: the new AI takes its first service at the next T7. Difficulty =
+            // the session's [M: the original reads the session difficulty global]; the human keeps its control [port].
+            host_->set_switch_control_hook([this](const sim::StorySwitchControl& sw) {
+                if (!galactic_ai_ || sw.player < 0 || static_cast<size_t>(sw.player) >= setup_.players.size()) return;
+                if (setup_.players[static_cast<size_t>(sw.player)].human) return;
+                galactic_ai_->set_ai_type(sw.player, sw.ai_type, std::clamp(spec_.difficulty, 0, 2));
+            });
             // N1 / t09: the galactic AI's chunk, as alamo_headless save_run registers it.
             sim::SaveParticipant ai_part;
             ai_part.name = "ai";

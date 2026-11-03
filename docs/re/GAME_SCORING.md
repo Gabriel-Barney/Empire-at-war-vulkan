@@ -265,6 +265,11 @@ Can wait / skip: Get_CRC (MP only), the debug file-watcher reload, the `from sav
   `ServiceRate = 0.1`), the plugin runner's MessageQueue processes every Service, the stats dump runs at frame 1497.
   The TR galactic AI builds nothing in these runs, so no galactic event call was exercised there (1 event call in
   12000 ticks). Cost: about 7 % of the AI run's wall time.
+- Measured after q6 (story chain, 2026-11-03; `--economy --galactic-ai --story --scoring`, 4000 ticks): the deepcore
+  crossplot bus works end to end through the GlobalValue keys - GC_MasterScript publishes `INITIALIZE_AI` on
+  `busid:main:publish` at frame 271, the GameScoring main bus hands it to GCPlayerAgnostic's OptionsHandler, and
+  StoryUtil.ChangeAIPlayer's 20 SWITCH_CONTROL rewards set the AI types at frame 281 (STORY.md §8 items 9-12).
+  Event calls: 69 (Thrawn_Empire) / 66 (CrimsonEmpire_Pentastar), from 1 before.
 - Open:
   - `Galactic_Unit_Destroyed_Event`: wired (object, neutral player as the killer) but only called while the object is
     still alive; the stream is read after the destroy, so in practice it never fires. Needs a death hook in GalacticSim

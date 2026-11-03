@@ -1181,6 +1181,131 @@ static void test_scoring_story(const World& w) {
         CHECK(!d.diverged && b.scoring_log == a.scoring_log && b.log == a.log);
     }
 }
+
+// q6 (Thrawn's Revenge story chain): (1) a frame-1 event reaches a PGStoryMode-style script whose state machine starts
+// at load - Story_Event_Trigger only switches state when CurrentState == NextState, which holds only after main's first
+// resume; the load-time resume (StorySession::start_threads_at_load) puts it there before the first T9's STORY_ELAPSED
+// dispatch (T9 step 2) - (2) a prereq-less Perpetual STORY_ELAPSED fires first where the T9 clock has accumulated
+// Param1 seconds since the first T9, then at every T9 (STORY.md §4.7: the accumulator is never cleared [M]),
+// (3) SWITCH_CONTROL rewards reach the host hook (SimHost::set_switch_control_hook), from an XML reward (faction name)
+// and from a Lua Set_Reward_Parameter(0, player object) like StoryUtil.ChangeAIPlayer. Same results for every worker count.
+static const char* kQ6Plot =
+    "<Story>\n"
+    " <Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n"
+    " <Event Name=\"Cycle\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>2</Event_Param1><Perpetual>True</Perpetual></Event>\n"
+    " <Event Name=\"Switch_Xml\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>SWITCH_XML</Event_Param2>"
+    "<Reward_Type>SWITCH_CONTROL</Reward_Type><Reward_Param1>Underworld</Reward_Param1><Reward_Param2>TestAI</Reward_Param2></Event>\n"
+    " <Event Name=\"Switch_Lua\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>SWITCH_LUA</Event_Param2>"
+    "<Reward_Type>SWITCH_CONTROL</Reward_Type></Event>\n"
+    "</Story>\n";
+// PGStateMachine.lua's rule in miniature: main = Process_States moves CurrentState to NextState; a story event only
+// requests a state change while the machine is settled (CurrentState == NextState).
+static const char* kQ6Script =
+    "function Base_Definitions() ServiceRate = 0.1 NextState = \"Init\" end\n"
+    "function Story_Event_Trigger(name)\n"
+    "  if CurrentState ~= NextState then return end\n"
+    "  if name == \"Begin\" and CurrentState == \"Init\" then NextState = \"Started\" end\n"
+    "end\n"
+    "function main()\n"
+    "  while true do\n"
+    "    if CurrentState ~= NextState then\n"
+    "      CurrentState = NextState\n"
+    "      if CurrentState == \"Started\" then\n"
+    "        Story_Event(\"SWITCH_XML\")\n"
+    "        local ev = Get_Story_Plot(\"Story_Q6.xml\").Get_Event(\"Switch_Lua\")\n"
+    "        ev.Set_Reward_Parameter(0, Find_Player(\"Empire\"))\n"
+    "        ev.Set_Reward_Parameter(1, \"OtherAI\")\n"
+    "        Story_Event(\"SWITCH_LUA\")\n"
+    "      end\n"
+    "    end\n"
+    "    coroutine.yield(true)\n"
+    "  end\n"
+    "end\n";
+
+static void test_q6_story_chain(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_q6_story_chain";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_Q6.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_Q6</Lua_Script><Active_Plot>Story_Q6.xml</Active_Plot>"
+               "<Suspended_Plot /></Story_Mode_Plots>\n");
+    write_file(root / "Data/XML/Story_Q6.xml", kQ6Plot);
+    write_file(root / "Data/Scripts/Story/Story_Q6.lua", kQ6Script);
+    DirectoryProvider files(path_to_utf8(root));
+    constexpr uint64_t kTicks = 150;
+    std::string first_log, first_switch;
+    for (int32_t workers : jobs::determinism_worker_counts()) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimConfig cfg;
+        cfg.seed = 7;
+        cfg.story_crc = true;
+        SimHost host(w.types, js, cfg);
+        std::vector<StorySwitchControl> switches;
+        host.set_switch_control_hook([&switches](const StorySwitchControl& sw) { switches.push_back(sw); });
+        const GalacticRules r = rules();
+        GalacticSim* gs = host.start_galactic(r, setup());
+        CHECK(gs != nullptr);
+        if (!gs) return;
+        StoryStart st;
+        st.files = &files;
+        st.plot_sets = {{pEmpire, "Story_Plots_Q6.xml"}};
+        std::vector<std::string> diag;
+        CHECK(host.start_story(st, &diag) && host.story());
+        for (const auto& d : diag) std::printf("  q6 story diag: %s\n", d.c_str());
+        if (!host.story()) return;
+        std::vector<std::pair<uint64_t, double>> clock;  // global frame after the tick, the T9 clock of that tick
+        for (uint64_t t = 1; t <= kTicks; ++t) {
+            const uint64_t seen = host.galactic_mode()->frame();
+            host.tick_once();
+            clock.emplace_back(host.frame(), StorySession::t9_seconds(seen));
+        }
+        for (const std::string& m : host.story()->lua_messages()) std::printf("  q6 story lua: %s\n", m.c_str());
+        CHECK(host.story()->lua_messages().empty());
+        std::map<std::string, std::vector<uint64_t>> fired;
+        std::string log;
+        for (const StoryLogEntry& e : host.story()->log()) {
+            fired[e.event].push_back(e.frame);
+            log += e.text() + "\n";
+        }
+        // (1) Begin at the first T9; its Story_Event_Trigger switched the settled machine, so the first Lua service of
+        // that T9 entered "Started" and raised both notifications in the same frame.
+        const uint64_t f1 = clock.front().first;
+        CHECK(fired["Begin"] == std::vector<uint64_t>{f1});
+        CHECK(fired["Switch_Xml"] == std::vector<uint64_t>{f1});
+        CHECK(fired["Switch_Lua"] == std::vector<uint64_t>{f1});
+        // (3) both rewards reached the hook, resolved to players.
+        CHECK(switches.size() == 2);
+        std::string sw_text;
+        for (const StorySwitchControl& sw : switches)
+            sw_text += std::to_string(sw.frame) + " " + std::to_string(sw.plot_set) + " " + std::to_string(sw.player) + " " +
+                       sw.player_text + " " + sw.ai_type + "\n";
+        CHECK(switches.size() == 2 && switches[0].player == pUnder && switches[0].ai_type == "TestAI" &&
+              switches[0].player_text == "Underworld" && switches[0].frame == f1);
+        CHECK(switches.size() == 2 && switches[1].player == pEmpire && switches[1].ai_type == "OtherAI" &&
+              switches[1].player_text == "#player:0");
+        // (2) Cycle: LastTime = the first T9's clock, accumulated += now - LastTime; first fire at accumulated >= 2 s,
+        // then at every T9 to the end of the run.
+        double acc = 0.0;
+        uint64_t first_fire = 0;
+        for (size_t i = 1; i < clock.size() && !first_fire; ++i) {
+            acc += clock[i].second - clock[i - 1].second;
+            if (acc >= 2.0) first_fire = clock[i].first;
+        }
+        std::vector<uint64_t> expect;
+        for (uint64_t f = first_fire; first_fire && f <= clock.back().first; ++f) expect.push_back(f);
+        std::printf("  q6 story chain, workers %2d: Begin @%" PRIu64 ", Cycle first @%" PRIu64 " (x%zu), %zu SWITCH_CONTROL\n",
+                    workers, f1, fired["Cycle"].empty() ? 0 : fired["Cycle"].front(), fired["Cycle"].size(), switches.size());
+        CHECK(first_fire >= 60 && first_fire <= 62);  // 2 s = 60 galactic frames after the first T9 (+-1: float clock)
+        CHECK(fired["Cycle"] == expect);
+        if (first_log.empty()) {
+            first_log = log;
+            first_switch = sw_text;
+        } else {
+            CHECK(log == first_log && sw_text == first_switch);
+        }
+    }
+    remove_all_long(root, ec);
+}
 }  // namespace story_test
 
 static void test_story_synthetic(const World& w) {
@@ -2243,6 +2368,7 @@ int main(int argc, char** argv) {
     story_test::test_scoring_script(*world);  // q6 t06
     story_test::test_scoring_service(*world);  // q6 t09
     story_test::test_scoring_story(*world);    // q6 t09
+    story_test::test_q6_story_chain(*world);   // q6: load-time resume, Perpetual ELAPSED, SWITCH_CONTROL hook
 #else
     std::printf("story: built without engine/lua, skipped\n");
 #endif

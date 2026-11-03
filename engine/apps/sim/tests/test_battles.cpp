@@ -1767,11 +1767,14 @@ void test_story_battle(const Data& d) {
                " <Event Name=\"Fog_Object\"><Event_Type>STORY_FOG_OBJECT_REVEAL</Event_Type><Event_Param1>S10_Corvette</Event_Param1></Event>\n"
                "</Story>\n");
     write_file(d.root / "Data/Scripts/Story/Story_S10_Tac.lua",
-               "function Base_Definitions() ServiceRate = 0.1 done = false revealed = false end\n"
+               // q6: main's first resume is at load (STORY.md §8 item 9), so the reveal waits a few services: the
+               // battle's fog must be seen on before ENABLE_FOW 0 switches it off.
+               "function Base_Definitions() ServiceRate = 0.1 done = false revealed = false waits = 0 end\n"
                "function main() while true do\n"
                "  if not done then local f = Find_First_Object('S10_Frigate')\n"
                "    if f then local h = f.Get_Hull() if h > 0 and h <= 1 then Story_Event('TAC_SCRIPT') end\n"
                "      f.Activate_Ability('POWER_TO_WEAPONS') done = true end\n"
+               "  elseif waits < 3 then waits = waits + 1\n"
                "  elseif not revealed then local f = Find_First_Object('S10_Frigate') local p = Find_Player('Empire')\n"
                "    if f and p then cells = FogOfWar.Reveal(p, f, 20000) revealed = true\n"
                "      if cells then Story_Event('FOG_CELLS') end end end\n"

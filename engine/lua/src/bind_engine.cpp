@@ -8,6 +8,10 @@
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/objects/game_object_types.hpp"
+#if defined(ALAMO_LUA_PLAYERS)
+#include "alamo/galactic/campaign.hpp"  // q6: a planet's owner (m_object_get_owner)
+#include "alamo/lua/players.hpp"
+#endif
 #include "vm_internal.hpp"
 
 namespace alamo::lua {
@@ -68,7 +72,22 @@ int m_object_get_parent_mode_id(Call& c) {
 }
 
 int m_object_get_owner(Call& c) {
-    detail::push_player(c.L, *c.vm, c.vm->host.store->owner(self_object(c)));
+    const objects::ObjectHandle self = self_object(c);
+    int32_t owner = c.vm->host.store->owner(self);
+#if defined(ALAMO_LUA_PLAYERS)
+    // q6 [inferred]: a galactic planet object reports the planet's owner (GalacticSim PlanetState::owner, the owner every
+    // galactic system reads). The port's planet objects are created without a store owner (campaign.cpp: "planets
+    // report their owner from the data pack"), so the store alone said -1 for every planet; mod scripts read
+    // FindPlanet(x).Get_Owner().Get_Faction_Name() for every planet at start (Thrawn's Revenge GalacticConquest,
+    // RandomSpawnManager). Only with a player world attached to the galactic sim whose store this VM reads.
+    if (c.vm->owner)
+        if (const LuaPlayerWorld* w = player_world(*c.vm->owner))
+            if (const galactic::GalacticSim* sim = w->galactic(); sim && c.vm->host.store == &sim->store()) {
+                const PlanetIndex p = sim->planet_of(self);
+                if (p != kInvalidPlanet && static_cast<size_t>(p) < sim->planets().size()) owner = sim->planets()[p].owner;
+            }
+#endif
+    detail::push_player(c.L, *c.vm, owner);
     return 1;
 }
 

@@ -520,6 +520,7 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             s.model.set_script_vm(p, sc.vm.get());  // Story_Event_Trigger synchronously at Fire (§1.5)
             s.scripts.push_back(std::move(sc));
             collect(si, "load");  // Story_Event calls from Definitions (none in the shipped scripts)
+            start_threads_at_load(s, static_cast<uint32_t>(si), s.scripts.back(), seconds_);
         }
     }
     return true;
@@ -851,6 +852,19 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
     } else if (type == "ENABLE_FOW") {  // fog follow-up (FOG_OF_WAR.md §6.6): no Param1 -> FOW off; atoi(P1) 0 -> off + hidden
         const std::string p1 = std::string(trim(at(0)));
         if (enable_fow_) enable_fow_(!p1.empty(), static_cast<int32_t>(std::atoi(p1.c_str())));
+    } else if (type == "SWITCH_CONTROL") {  // q6 (AI_GALACTIC.md §1.2, reward case 0x30): the host's AI (header)
+        StorySwitchControl sw;
+        sw.frame = frame_;
+        sw.plot_set = s.number;
+        sw.player_text = std::string(trim(at(0)));
+        sw.ai_type = std::string(trim(at(1)));
+        if (sw.player_text.rfind("#player:", 0) == 0) {
+            const int32_t p = to_int(sw.player_text.substr(8), -1);
+            sw.player = p >= 0 && static_cast<size_t>(p) < sim_->players().size() ? p : -1;
+        } else {
+            sw.player = sim_->player_of_faction(sw.player_text);
+        }
+        if (switch_control_) switch_control_(sw);
     } else if (type == "ENABLE_VICTORY" || type == "VICTORY") {  // story t06 wiring: tactical plot set -> the battle
         const bool tactical = tactical_ && tactical_->set.get() == &s;
         const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
@@ -1147,6 +1161,18 @@ void StorySession::collect_set(Set& s, uint32_t number, std::string_view via) {
     auto& errs = s.model.script_errors();
     for (const std::string& m : errs) lua_messages_.push_back(std::to_string(frame_) + " story: " + m);
     errs.clear();
+}
+
+// q6 [port reading] (header comment, docs/re/STORY.md §8 item 9): one resume of the new script's threads at load, so a
+// PGStoryMode state machine is in its first state's PumpEvents (CurrentState == NextState) before the first story event
+// can fire. Not a Service: LastService / the rate gate are untouched, the first T9 still services the script.
+void StorySession::start_threads_at_load(Set& s, uint32_t number, Script& sc, double seconds) {
+    sc.vm->set_time(seconds);
+    sc.vm->set_frame(static_cast<uint32_t>(frame_));
+    sc.vm->service_threads();
+    const auto& errors = sc.vm->errors();
+    for (; sc.errors_seen < errors.size(); ++sc.errors_seen) lua_note(sc, errors[sc.errors_seen]);
+    collect_set(s, number, "load");
 }
 
 // One plot script's Lua service (T9 step 3), gated by its ServiceRate / LastService.
@@ -1543,6 +1569,7 @@ bool StorySession::load_tactical(const std::string& plots, int32_t player, std::
         s.model.set_script_vm(p, sc.vm.get());
         s.scripts.push_back(std::move(sc));
         collect_set(s, s.number, "load");
+        start_threads_at_load(s, s.number, s.scripts.back(), 0.0);  // tactical story time starts at 0
     }
     tactical_headers_.push_back("# tactical plot set " + std::to_string(s.number) + ": player " + std::to_string(player) + " " +
                                 plots + " (" + std::to_string(s.model.plot_count()) + " plots, " +
