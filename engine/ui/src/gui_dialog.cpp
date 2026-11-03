@@ -1227,12 +1227,12 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
                 if (row == c.selected) fill(dl, layer, rr, style_.selection);
                 GuiRect tr = rr;
                 tr.min.x += 2.0f;
-                if (static_cast<size_t>(row) < c.item_colors.size())
-                    fill(dl, layer, {{tr.min.x + 1.0f, tr.min.y + 2.0f}, {tr.max.x - 2.0f, tr.max.y - 2.0f}}, c.item_colors[static_cast<size_t>(row)]);
-                else {
+                {
                     const size_t ri = static_cast<size_t>(row);
-                    const Rgba8* tc = ri < c.item_text_colors.size() && c.item_text_colors[ri].a > 0 ? &c.item_text_colors[ri] : nullptr;
-                    draw_text(dl, layer, d, i, c.items[ri], tr, TextAlign::Left, false, true, !c.enabled, tc);
+                    // UI.md §3.7.1: an item colour recolours the item's text (flat), also on a disabled control.
+                    const Rgba8* ic = ri < c.item_colors.size() ? &c.item_colors[ri] : nullptr;
+                    const Rgba8* tc = ic ? ic : ri < c.item_text_colors.size() && c.item_text_colors[ri].a > 0 ? &c.item_text_colors[ri] : nullptr;
+                    draw_text(dl, layer, d, i, c.items[ri], tr, TextAlign::Left, false, true, !c.enabled && !ic, tc);
                 }
             }
             if (scroll) {
@@ -1266,12 +1266,20 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
                 fill(dl, layer, {{f.max.x - bw, f.min.y}, f.max}, style_.fallback_button);
             if (focused) fill(dl, layer, f, style_.focus);
             if (c.selected >= 0 && static_cast<size_t>(c.selected) < c.items.size()) {
+                // UI.md §3.7.1: the text is centred in the field left of the pop-down button (left-justified: the field's
+                // left edge plus a small inset); when wider than the field less 2 x padding trailing characters are dropped.
+                const size_t sel = static_cast<size_t>(c.selected);
+                const Rgba8* ic = sel < c.item_colors.size() ? &c.item_colors[sel] : nullptr;
                 GuiRect tr{f.min, {f.max.x - bw, f.max.y}};
-                tr.min.x += kFieldInset;
-                if (static_cast<size_t>(c.selected) < c.item_colors.size())
-                    fill(dl, layer, {{tr.min.x, tr.min.y + 3.0f}, {tr.max.x - 3.0f, tr.max.y - 3.0f}}, c.item_colors[static_cast<size_t>(c.selected)]);
-                else
-                    draw_text(dl, layer, d, i, c.items[static_cast<size_t>(c.selected)], tr, TextAlign::Left, false, true, !c.enabled);
+                const float avail = tr.width() - 2.0f * kFieldInset;
+                std::u32string_view txt = c.items[sel];
+                if (fonts_) {
+                    const HudTextStyle ms = text_style(d, i, false);
+                    if (ms.font >= 0)
+                        while (!txt.empty() && measure_text_block(*fonts_, canvas_, txt, 0.0f, ms).width > avail) txt.remove_suffix(1);
+                }
+                if (c.left_justified) tr.min.x += kFieldInset;
+                draw_text(dl, layer, d, i, txt, tr, c.left_justified ? TextAlign::Left : TextAlign::Center, false, true, !c.enabled && !ic, ic);
             }
             if (c.open) {  // drop-down list on the popup layer
                 const GuiRect lr = combo_list(d, i);
@@ -1284,10 +1292,8 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
                     if (static_cast<int32_t>(k) == c.selected || rr.contains(cursor_)) fill(dl, kPopupLayer, rr, style_.selection);
                     GuiRect tr = rr;
                     tr.min.x += 2.0f;
-                    if (k < c.item_colors.size())
-                        fill(dl, kPopupLayer, {{tr.min.x + 1.0f, tr.min.y + 2.0f}, {tr.max.x - 2.0f, tr.max.y - 2.0f}}, c.item_colors[k]);
-                    else
-                        draw_text(dl, kPopupLayer, d, i, c.items[k], tr, TextAlign::Left, false, true);
+                    draw_text(dl, kPopupLayer, d, i, c.items[k], tr, TextAlign::Left, false, true, false,
+                              k < c.item_colors.size() ? &c.item_colors[k] : nullptr);
                 }
             }
             break;
