@@ -89,12 +89,18 @@ bool GoalSystem::skip(uint32_t goal_type, int32_t target) {
 
 bool GoalSystem::proposal_slice(int64_t now) {
     uint32_t used = 0;
-    auto evaluate_candidate = [&](uint32_t src, int32_t target) {
+    auto evaluate_candidate = [&](uint32_t src, int32_t target, const Candidate* batched) {
         const GoalSource& s = sources_[src];
         const GoalTypeDef& def = defs_->goals[s.goal_type];
         ++evals_pass_;
         double v = 0.0;
-        if (!hooks_->evaluate(s.function, target, v)) return;
+        if (batched && batched->prepared) {
+            hooks_->evaluated(s.function);
+            if (!batched->ok) return;
+            v = batched->value;
+        } else if (!hooks_->evaluate(s.function, target, v)) {
+            return;
+        }
         const int32_t c1 = learning_->recent_goal_failures(s.goal_type, target, now);
         const int32_t c2 = learning_->recent_activation_failures(s.goal_type, target, now);
         const double desire = v + static_cast<double>(static_cast<float>(c1) * def.per_failure_desire_adjust +
@@ -119,6 +125,30 @@ bool GoalSystem::proposal_slice(int64_t now) {
         }
         insert(std::move(g));
     };
+    // OPT2 t03: batched values (header comment): the walk only records the candidates; flush() evaluates and commits them.
+    const ParallelFor* pf = hooks_->candidate_pf();
+    batch_.clear();
+    auto visit = [&](uint32_t src, int32_t target) {
+        if (pf) batch_.push_back({src, target});
+        else evaluate_candidate(src, target, nullptr);
+    };
+    auto flush = [&] {
+        if (batch_.empty()) return;
+        bool any = false;
+        for (Candidate& c : batch_) {
+            c.prepared = hooks_->prepare_evaluation(sources_[c.source].function) ? 1 : 0;
+            any = any || c.prepared;
+        }
+        if (any)
+            (*pf)(static_cast<uint32_t>(batch_.size()), 1, [this](uint32_t b, uint32_t e) {
+                for (uint32_t i = b; i < e; ++i) {
+                    Candidate& c = batch_[i];
+                    if (c.prepared) c.ok = hooks_->evaluate_prepared(sources_[c.source].function, c.target, c.value) ? 1 : 0;
+                }
+            });
+        for (const Candidate& c : batch_) evaluate_candidate(c.source, c.target, &c);
+        batch_.clear();
+    };
     while (cursor_source_ < sources_.size()) {
         const GoalSource& s = sources_[cursor_source_];
         const GoalTypeDef& def = defs_->goals[s.goal_type];
@@ -129,9 +159,12 @@ bool GoalSystem::proposal_slice(int64_t now) {
         }
         if (def.global()) {
             if (cursor_target_ == 0 && !skip(s.goal_type, -1)) {
-                if (used >= quota_) return false;
+                if (used >= quota_) {
+                    flush();
+                    return false;
+                }
                 ++used;
-                evaluate_candidate(cursor_source_, -1);
+                visit(cursor_source_, -1);
             }
             ++cursor_source_;
             cursor_target_ = 0;
@@ -144,14 +177,18 @@ bool GoalSystem::proposal_slice(int64_t now) {
                 ++cursor_target_;
                 continue;
             }
-            if (used >= quota_) return false;
+            if (used >= quota_) {
+                flush();
+                return false;
+            }
             ++used;
-            evaluate_candidate(cursor_source_, t);
+            visit(cursor_source_, t);
             ++cursor_target_;
         }
         ++cursor_source_;
         cursor_target_ = 0;
     }
+    flush();
     cursor_source_ = cursor_target_ = 0;
     evals_last_ = evals_pass_;
     evals_pass_ = 0;

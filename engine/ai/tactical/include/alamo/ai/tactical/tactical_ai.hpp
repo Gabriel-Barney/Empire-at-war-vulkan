@@ -286,6 +286,9 @@ struct TacticalAiConfig {
     // OPT2 t04: fan-out for the per-update scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); any
     // value gives identical results.
     ParallelFor lua_gc_pf = serial_for;
+    // OPT2 t03: fan-out for the goal candidates' perception values (ai_goals.hpp batched values); any value gives
+    // identical results.
+    ParallelFor pf = serial_for;
 };
 
 struct TacticalAiDecision {
