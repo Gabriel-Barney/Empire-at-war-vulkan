@@ -23,6 +23,9 @@
 #include "alamo/lua/presentation.hpp"
 #include "alamo/lua/story_model.hpp"
 #include "alamo/sim/story_session.hpp"
+#if defined(ALAMO_LUA_PLAYERS)
+#include "alamo/lua/players.hpp"  // q6: the story player world's perception source
+#endif
 #endif
 
 namespace alamo::game {
@@ -335,6 +338,14 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
                 });
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
                 if (galactic_ai_) galactic_ai_->attach_story_world(host_->story()->player_world());
+#if defined(ALAMO_LUA_PLAYERS)
+                // q6: the plot scripts' EvaluatePerception answers from the galactic AI's equations and token resolver,
+                // as in alamo_headless (Thrawn's Revenge's VictoryHandler / StoryUtil read perceptions every service).
+                if (galactic_ai_ && d.ai)
+                    if (lua::LuaPlayerWorld* sw = host_->story()->player_world())
+                        sw->set_perception({&d.ai->equations, &galactic_ai_->resolver()},
+                                           {&d.ai->equations, &galactic_ai_->resolver()});
+#endif
 #endif
             }
         }
