@@ -310,8 +310,10 @@ SkirmishMapPreview read_skirmish_map_preview(const FileProvider& files, std::str
         for (uint32_t i = 0; i < n; ++i) {
             float xy[2];
             std::memcpy(xy, k.payload.data() + 4 + 8 * static_cast<size_t>(i), 8);
-            const float u = xy[0] / w + (space ? 0.5f : 0.0f), v = xy[1] / h + (space ? 0.5f : 0.0f);
-            pv.starts.emplace_back(std::clamp(u, 0.0f, 1.0f), 1.0f - std::clamp(v, 0.0f, 1.0f));
+            // UI.md 9.6.1: space maps are first shifted by half the world size (centred on the origin), land maps not
+            // (origin at the lower-left corner); fx = x / width, fy = y / height, each clamped to 0..1; image y = 1 - fy.
+            const float fx = space ? (xy[0] + w * 0.5f) / w : xy[0] / w, fy = space ? (xy[1] + h * 0.5f) / h : xy[1] / h;
+            pv.starts.emplace_back(std::clamp(fx, 0.0f, 1.0f), 1.0f - std::clamp(fy, 0.0f, 1.0f));
         }
     }
     return pv;

@@ -193,7 +193,8 @@ struct SkirmishMapInfo {
 };
 // p4uim t03 (docs/re/UI.md section 9.6): what IDC_IMAGE shows for the selected map. `texture` is the image the host chose
 // (<stem>.tga, else the map's embedded image, else Generic_Space / Generic_Land.tga; "" = none); `starts` are the start
-// positions as 0..1 fractions of the image (x right, y down), drawn over it when the map has them (mini 12).
+// positions as 0..1 fractions of the image (x right, y down), drawn over it as the numbers 1..N when the map has them
+// (mini 12, UI.md 9.6.1).
 struct SkirmishPreview {
     std::string texture;
     std::vector<Vec2f> starts;
@@ -293,7 +294,7 @@ public:
     // Which tab the skirmish staging list shows: false Official (the dialog's state when it opens), true Custom.
     bool skirmish_custom_tab() const { return custom_tab_; }
     // p4uim t01: the game type IDC_GAME_TYPE_LIST selects (the list shows the maps of that type): true Space, false Land.
-    // A dialog opened for the first time starts on Space [port]; later on the type of the map started last (t02).
+    // A dialog opened for the first time starts on Land; later on the type selected last, remembered at once (UI.md 9.7).
     bool skirmish_space_type() const { return space_type_; }
     // p4uia t01: the colour index shown in skirmish slot `slot` (0..7), -1 when the slot is not shown.
     int32_t skirmish_colour(int32_t slot) const;
@@ -312,7 +313,8 @@ private:
     void fill_skirmish_maps(GuiDialog& d);  // the list of the active tab and game type, from maps_
     void fill_skirmish_game_types(GuiDialog& d);
     void fill_skirmish_colours(GuiDialog& d);
-    void fill_skirmish_preview(GuiDialog& d);  // IDC_IMAGE, its start markers and IDC_SCENARIO_DESCRIPTION_TEXT_BOX
+    void fill_skirmish_preview(GuiDialog& d);  // IDC_IMAGE and its start numbers; IDC_SCENARIO_DESCRIPTION_TEXT_BOX stays hidden
+    void resolve_skirmish_colours(GuiDialog& d);  // the colour clash rule (UI.md 9.7), slot order
     std::u32string skirmish_row_text(const SkirmishMapInfo& m) const;
     void fill_saves(GuiDialog& d);
     void fill_audio(GuiDialog& d, const AudioVolumes& v);
@@ -344,9 +346,8 @@ private:
     std::vector<SkirmishMapInfo> maps_;
     std::vector<size_t> map_view_;   // skirmish list rows -> index into maps_ (active tab, sorted)
     bool custom_tab_ = false;        // skirmish list: Custom tab active
-    bool space_type_ = true;         // skirmish list: Space game type (false Land)
-    int32_t last_type_ = -1;         // the game type of the last StartSkirmish (0 land, 1 space), -1 = none yet
-    std::string last_map_[2];        // the map the last StartSkirmish used per game type [0 land, 1 space] ("" = none yet)
+    bool space_type_ = false;        // skirmish list: Space game type (false Land); the type selected last (UI.md 9.7)
+    std::string last_map_[2];        // the map selected last per game type [0 land, 1 space] ("" = none yet; UI.md 9.5)
     std::vector<Rgba8> colour_palette_;   // the host palette read when the skirmish dialog opened
     int32_t slot_colour_[8] = {0, 1, 2, 3, 4, 5, 6, 7};  // colour index of each skirmish slot (default = the slot index)
     std::string quit_action_;  // "exit" / "main"; N1 / t09: "overwrite" / "delete" (confirm_save_)
