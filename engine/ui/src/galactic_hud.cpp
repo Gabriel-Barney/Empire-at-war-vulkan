@@ -760,8 +760,41 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         if (f.providers.fleets) f.providers.fleets(sel->planet, fleets);
         if (f.providers.land_forces) f.providers.land_forces(sel->planet, land);
     }
+    // UI.md §7.2: pane k = frame q{k+1}; a fleet's pane comes from its orbit slot, not from the provider order. Orbit owner
+    // = the local player (the planet's orbit_local): slot k -> pane k, every slot-0 fleet merged into pane 0, non-local fleets
+    // (allied ones too) not shown. Otherwise every
+    // non-local fleet -> pane 0 (merged), slot 1 -> pane 1, slots 0 and 2 -> pane 2 (merged) [M]. The same rule as the map's
+    // build_planet_stacks (§1.3). Fleets without a slot or whose pane is taken take the first empty pane in feed order [port,
+    // as the map]; with none left they are not shown.
+    constexpr size_t kPanes = 3;
+    std::vector<const GalacticFleet*> panes[kPanes];
+    {
+        std::vector<const GalacticFleet*> later;
+        for (const GalacticFleet& gf : fleets) {
+            std::vector<const GalacticFleet*>* to = nullptr;
+            if (sel->orbit_local) {
+                if (gf.enemy) continue;  // §7.2 first row: only the local player's fleets fill the panes
+                if (gf.slot == 0) to = &panes[0];
+                else if (gf.slot > 0 && gf.slot < 3 && panes[gf.slot].empty()) to = &panes[gf.slot];
+            } else if (gf.enemy) {
+                to = &panes[0];
+            } else if (gf.slot == 0 || gf.slot == 2) {
+                to = &panes[2];
+            } else if (gf.slot == 1 && panes[1].empty()) {
+                to = &panes[1];
+            }
+            if (to) to->push_back(&gf);
+            else later.push_back(&gf);
+        }
+        for (const GalacticFleet* gf : later)
+            for (auto& pane : panes)
+                if (pane.empty()) {
+                    pane.push_back(gf);
+                    break;
+                }
+    }
     auto draw_slot = [&](int32_t ci, const GalacticFleetSlot& s, std::vector<uint32_t> select, int32_t fleet_index, uint32_t fleet,
-                         uint32_t unit) {
+                         uint32_t unit, bool foreign) {
         const auto u = static_cast<uint32_t>(ci);
         ButtonRuntime& r = buttons_.state(u);
         r.hidden = false;
@@ -779,7 +812,8 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         ps.component = ci;
         ps.select = std::move(select);
         const std::string_view dd = c.raw_value("DRAG_AND_DROP");
-        ps.draggable = !dd.empty() && (dd[0] == 'T' || dd[0] == 't' || dd[0] == 'Y' || dd[0] == 'y' || dd[0] == '1');
+        ps.draggable = !foreign && !dd.empty() && (dd[0] == 'T' || dd[0] == 't' || dd[0] == 'Y' || dd[0] == 'y' || dd[0] == '1');
+        ps.foreign = foreign;
         ps.fleet_index = fleet_index;
         ps.fleet = fleet;
         ps.unit = unit;
@@ -787,34 +821,40 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         pads_.push_back(std::move(ps));
         return true;
     };
-    for (size_t fl = 0; fl < fleet_.size(); ++fl) {
+    for (size_t fl = 0; fl < fleet_.size() && fl < kPanes; ++fl) {  // all three panes always: the frames and tabs are shell geometry (§7.1)
         const std::vector<int32_t>& slots = fleet_[fl];
-        const GalacticFleet* fd = fl < fleets.size() ? &fleets[fl] : nullptr;
+        const std::vector<const GalacticFleet*>& in_pane = panes[fl];
+        const GalacticFleet* fd = in_pane.empty() ? nullptr : in_pane.front();
         const auto fi = static_cast<int32_t>(fl);
-        // Fleet header (q{n}_fleet): the faction's big fleet icon; dragging it drags the whole fleet.
+        // Fleet header (q{n}_fleet): the faction's big fleet icon of the pane's first fleet; dragging it drags the whole fleet
+        // (not for a foreign one, whose header is shown but inert) [port].
         if (fl < fleet_header_.size() && fleet_header_[fl] >= 0) {
             if (fd) {
                 GalacticFleetSlot hs;
                 hs.object = fd->fleet;
-                draw_slot(fleet_header_[fl], hs, {fd->fleet}, fi, fd->fleet, 0);
+                draw_slot(fleet_header_[fl], hs, fd->enemy ? std::vector<uint32_t>{} : std::vector<uint32_t>{fd->fleet}, fi, fd->fleet, 0, fd->enemy);
             } else {
                 buttons_.state(static_cast<uint32_t>(fleet_header_[fl])).hidden = true;
             }
         }
-        for (size_t k = 0; k < slots.size(); ++k) {
-            if (!fd || k >= fd->units.size()) {
-                buttons_.state(static_cast<uint32_t>(slots[k])).hidden = true;
-                continue;
+        // The pane's unit pads fill from the first pad upward, fleet after fleet (UI.md §7.2); further stacks are not drawn.
+        size_t next = 0;
+        for (const GalacticFleet* gf : in_pane)
+            for (const GalacticFleetSlot& u : gf->units) {
+                if (next >= slots.size()) break;
+                if (draw_slot(slots[next], u, gf->enemy ? std::vector<uint32_t>{} : std::vector<uint32_t>{u.object}, fi, gf->fleet, u.object,
+                              gf->enemy))
+                    ++stats_.fleet_slots;
+                ++next;
             }
-            if (draw_slot(slots[k], fd->units[k], {fd->units[k].object}, fi, fd->fleet, fd->units[k].object)) ++stats_.fleet_slots;
-        }
+        for (; next < slots.size(); ++next) buttons_.state(static_cast<uint32_t>(slots[next])).hidden = true;
     }
     for (size_t k = 0; k < land_.size(); ++k) {
         if (k >= land.size()) {
             buttons_.state(static_cast<uint32_t>(land_[k])).hidden = true;
             continue;
         }
-        if (draw_slot(land_[k], land[k], {land[k].object}, -1, 0, land[k].object)) ++stats_.land_slots;
+        if (draw_slot(land_[k], land[k], {land[k].object}, -1, 0, land[k].object, false)) ++stats_.land_slots;
     }
 }
 
@@ -970,7 +1010,7 @@ void GalacticHud::drag_update(const RoutedInput& routed, std::vector<commands::E
     drag_.cursor_px = cur;
     drag_.over_component = routed.hover_component;
     const PadSlot* over = pad_of(drag_.over_component);
-    drag_.over_fleet = over && over->fleet_index >= 0 && over->fleet != drag_.fleet;
+    drag_.over_fleet = over && over->fleet_index >= 0 && !over->foreign && over->fleet != drag_.fleet;  // never merge into a foreign fleet
     drag_.over_planet = drag_.over_component < 0 ? planet_at(cur.x, cur.y) : -1;
     // Over a fleet slot (an empty oval or a fleet button): its planet counts as the planet under the cursor.
     drag_.over_slot = -1;
@@ -1000,7 +1040,7 @@ void GalacticHud::drop(std::vector<commands::EventData>& out) {
     const bool from_fleet = drag_.fleet_index >= 0;
     const uint32_t unit = drag_.unit != 0 ? drag_.unit : kNone;
     if (over && over->fleet_index >= 0) {  // onto a fleet pad
-        if (over->fleet == drag_.fleet) return;
+        if (over->fleet == drag_.fleet || over->foreign) return;  // a foreign pad is no drop target (UI.md §7.2)
         if (from_fleet) out.push_back(fleet_management_event(over->fleet, drag_.fleet, unit, ops_.merge));
         else out.push_back(fleet_management_event(over->fleet, kNone, unit, ops_.launch));
         return;
@@ -1525,6 +1565,7 @@ void GalacticHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
         for (const PadSlot& s : pads_) {
             if (s.component != k.component) continue;
             handled = true;
+            if (s.foreign) break;  // UI.md §7.2 [port]: a foreign fleet's pads are drawn, not clickable
             if (s.is_queue) {
                 if (k.button == Button::Left)
                     out.push_back(commands::ev::production(s.queue.type_index, s.queue.location, true, s.queue.queue, s.queue.index));
