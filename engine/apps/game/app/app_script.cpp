@@ -2,6 +2,8 @@
 // (app_script_saveload.cpp) are declared in app_script.hpp.
 #include "app_script.hpp"
 
+#include <cctype>
+
 namespace alamo_game_app {
 
 // ------------------------------------------------------------------------------------------------ script
@@ -96,7 +98,17 @@ ScriptStep step_select_row(std::string dialog, std::string control, std::functio
                 if (st->phase == 0) {
                     const int32_t i = d->find(control);
                     const ui::GuiRect r = d->control_rect(static_cast<size_t>(i));
-                    const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), r.max.y - 6.0f);
+                    const float cx = 0.5f * (r.min.x + r.max.x);
+                    float cy = r.max.y - 6.0f;
+                    // q6 t02: a mod layout can put another control over the list's top row (Thrawn's Revenge: the game type list
+                    // covers the staging map list's first row): click lower, on the first point the list itself owns.
+                    // Vanilla layouts leave the top row free, so the point is unchanged there.
+                    for (int32_t k = 0; k < 64 && cy > r.min.y + 6.0f; ++k) {
+                        const int32_t hit = d->control_at({cx, cy});
+                        if (hit < 0 || hit == i) break;
+                        cy -= 4.0f;
+                    }
+                    const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(cx, cy);
                     *px = {static_cast<int32_t>(p.x), static_cast<int32_t>(p.y)};
                 }
                 if (st->phase <= 3) {
@@ -749,7 +761,13 @@ ScriptStep step_combat(bool land) {
                     if (an->stats().muzzle_flashes == 0) a.notes_.push_back("combat: no muzzle flash");
                 }
 #endif
-                if (!land && a.bview_.stats().lasers_peak == 0) a.notes_.push_back("space combat: no laser bolt drawn");
+                // q6 t02: a mod may draw its bolts as projectile models (Thrawn's Revenge: Proj_Space_Laser_*.alo) instead of
+                // procedural lasers; only a battle with neither is noted. Vanilla lines unchanged.
+                if (!land && a.bview_.stats().lasers_peak == 0)
+                    a.notes_.push_back(a.bview_.stats().model_projectiles_peak > 0
+                                           ? "space combat: no procedural laser bolt drawn (" + std::to_string(a.bview_.stats().model_projectiles_peak) +
+                                                 " model projectiles peak)"
+                                           : std::string("space combat: no laser bolt drawn"));
                 std::printf("script: %s combat - %" PRIu64 " shots, %" PRIu64 " hits, %u deaths, %u corpse draws, %" PRIu64 " scorch decals, %u anim plays, %u peak laser bolts, %u impact / death effects\n",
                             land ? "land" : "space", bs.shots, bs.hits, bs.deaths, a.bview_.stats().corpses, a.bview_.stats().decals, bs.anim_plays,
                             a.bview_.stats().lasers_peak, bs.particles);
@@ -1218,7 +1236,15 @@ void App::make_script() {
                 const auto& st = a.demo_stats_;
                 std::printf("script: attract camera (%s) - %u frames, followed hull nose-on/tail-on in %u (longest run %u frames), nearby hulls %u / %u nose-on/tail-on\n",
                             a.demo_side_view_ ? "side view" : "first stand-in", st.frames, st.target_nose_on, st.longest_run, st.hulls_nose_on, st.hulls);
-                if (st.frames == 0 || st.target_nose_on * 4 > st.frames) {
+                // q6 t02: a demo map without combat units (Thrawn's Revenge's End_Demo_Attract_* place only props) has
+                // nothing to follow: noted, not a failure. Vanilla demos always follow a hull (frames > 0).
+                const sim::TacticalBattle* b = a.session_->battle();
+                bool any_unit = false;
+                for (const render::SnapshotObject& o : a.bview_.frame().objects)
+                    if (b && o.owner >= 0 && b->combat().has_unit(o.id)) any_unit = true;
+                if (st.frames == 0 && !any_unit) {
+                    a.notes_.push_back("attract demo: no combat unit on the demo map, camera check skipped");
+                } else if (st.frames == 0 || st.target_nose_on * 4 > st.frames) {
                     a.notes_.push_back("attract camera shows the followed hull nose-on / tail-on for a long stretch");
                     a.smoke_ok_ = false;
                 }
@@ -1318,8 +1344,26 @@ void App::make_script() {
         // Row 0; the space skirmish buys corvettes (kSmokeSkirmishBuyType, a cap-counted combat ship) when the list has them.
         const bool space_buy = prefix == "game_skirmish";
         s.push_back(step_select_row(ui::dlg::kBuyUnits, "IDC_SKIRMISH_BUY_FORCES_LISTBOX", [space_buy](App& a) {
-            for (size_t i = 0; space_buy && i < a.buy_.units.size(); ++i)
-                if (a.buy_.units[i].type == kSmokeSkirmishBuyType) return i;
+            // q6 t02: data without the stock corvette (mods): ALAMO_SMOKE_BUY_TYPE names the type; else the first listed
+            // *_Corvette, else the first row that is not Build_Initially_Locked (Thrawn's Revenge lists a locked cheat unit
+            // first). Vanilla always finds kSmokeSkirmishBuyType.
+            const std::string want = env_or_empty("ALAMO_SMOKE_BUY_TYPE");
+            const std::vector<ui::BuyUnitEntry>& u = a.buy_.units;
+            for (size_t i = 0; i < u.size(); ++i)
+                if (!want.empty() && iequal(u[i].type, want)) return i;
+            if (!space_buy) return size_t{0};
+            for (size_t i = 0; i < u.size(); ++i)
+                if (u[i].type == kSmokeSkirmishBuyType) return i;
+            const auto upper_name = [](std::string n) {
+                for (char& c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                return n;
+            };
+            for (size_t i = 0; i < u.size(); ++i)
+                if (upper_name(u[i].type).find("_CORVETTE") != std::string::npos) return i;
+            for (size_t i = 0; i < u.size(); ++i) {
+                const uint32_t t = a.data_.rules.find_type(u[i].type);
+                if (t != galactic::kNoIndex && !a.data_.rules.types[t].build_initially_locked) return i;
+            }
             return size_t{0};
         }));
         s.push_back(step_click_control(ui::dlg::kBuyUnits, "IDC_BUY_BUTTON"));
@@ -1361,6 +1405,36 @@ void App::make_script() {
     } else {
         s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_CUSTOM_CAMPAIGN_BUTTON"));
         s.push_back(step_shot("game_campaign_select.png"));
+        // q6 t02: ALAMO_SMOKE_CAMPAIGN_SET=<Campaign_Set> plays that custom set instead of the list's first one (a mod's
+        // first set can be a scripted menu: Thrawn's Revenge's GCMenu). Unset: the first row, as before.
+        if (const std::string want = env_or_empty("ALAMO_SMOKE_CAMPAIGN_SET"); !want.empty()) {
+            auto row = std::make_shared<int64_t>(-1);  // the row, looked up once
+            s.push_back(step_select_row("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG", "IDC_STAGING_MAP_LIST", [want, row](App& a) {
+                if (*row < 0) {
+                    *row = 0;
+                    const ui::CampaignMenu menu = ui::build_campaign_menu(a.data_.db);
+                    bool found = false;
+                    for (size_t i = 0; i < menu.custom.size() && !found; ++i)
+                        if (iequal(menu.custom[i].set, want)) *row = static_cast<int64_t>(i), found = true;
+                    if (!found) a.notes_.push_back("ALAMO_SMOKE_CAMPAIGN_SET " + want + ": no such custom campaign set, first row kept");
+                }
+                return static_cast<size_t>(*row);
+            }));
+            // step_select_row stops at the first row >= the wanted one (its click can land below it): Up keys back to it.
+            auto key_frame = std::make_shared<bool>(false);
+            s.push_back({"campaign set row", [row, key_frame](App& a, ui::InputFrame& f) {
+                             ui::GuiDialog* d = a.ui_.gui.find("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG");
+                             const ui::GuiControl* c = d ? d->get("IDC_STAGING_MAP_LIST") : nullptr;
+                             if (!c || c->selected < 0 || static_cast<int64_t>(c->selected) <= *row) return true;
+                             *key_frame = !*key_frame;
+                             if (*key_frame) {
+                                 f.keys_down.set(ui::vk::kUp);
+                                 f.keys_pressed.set(ui::vk::kUp);
+                             }
+                             return false;
+                         },
+                         2000});
+        }
         s.push_back(step_click_control("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG", "IDC_PLAY_BUTTON"));
         s.push_back(step_wait("galactic map", [](App& a) { return a.screen_ == Screen::Galactic; }, 600));
         s.push_back(step_ticks("galaxy runs", 30));

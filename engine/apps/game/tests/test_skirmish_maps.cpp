@@ -256,6 +256,41 @@ void test_fake_install() {
     fs::remove_all(T, ec);
 }
 
+// q6 t02: skirmish_space_maps / skirmish_land_maps leave out maps whose file is empty through the normal lookup (Thrawn's
+// Revenge ships a 0-byte _MP_SPACE_KUAT.ted over the FoC one); KUAT still goes first when it reads.
+void test_map_lists_skip_empty() {
+    const fs::path T = fs::temp_directory_path() / "alamo_game_skirmish_lists_test";
+    fs::remove_all(T);
+    const fs::path FOC = T / "corruption", MOD = T / "Mod", MAPS = fs::path("Data") / "Art" / "Maps";
+    write_file(FOC / "StarWarsG.exe", {'M', 'Z'});
+    for (const char* n : {"_MP_SPACE_ALPHA", "_MP_SPACE_KUAT", "_MP_SPACE_ZETA"}) write_file(FOC / MAPS / (std::string(n) + ".ted"), ted(2, 2, 0));
+    for (const char* n : {"_MP_LAND_ALPHA", "_MP_LAND_BETA"}) write_file(FOC / MAPS / (std::string(n) + ".ted"), ted(1, 2, 0));
+    const auto lists = [&](bool with_mod) {
+        alamo::game::GameData d;
+        alamo::vfs::VfsConfig cfg;
+        cfg.foc_root = alamo::path_to_utf8(FOC);
+        if (with_mod) cfg.mod_paths = {alamo::path_to_utf8(MOD)};
+        cfg.eaw_root = std::string();
+        std::string err;
+        auto v = alamo::vfs::Vfs::create(cfg, &err);
+        CHECK(v != nullptr);
+        d.vfs = v.get();
+        d.files = std::move(v);
+        return std::make_pair(alamo::game::skirmish_space_maps(d), alamo::game::skirmish_land_maps(d));
+    };
+    const auto plain = lists(false);
+    CHECK(plain.first == (std::vector<std::string>{"_MP_SPACE_KUAT", "_MP_SPACE_ALPHA", "_MP_SPACE_ZETA"}));
+    CHECK(plain.second == (std::vector<std::string>{"_MP_LAND_ALPHA", "_MP_LAND_BETA"}));
+    write_file(MOD / MAPS / "_MP_SPACE_KUAT.ted", {});  // empty mod copies hide the maps
+    write_file(MOD / MAPS / "_MP_LAND_BETA.ted", {});
+    write_file(MOD / MAPS / "_MP_SPACE_MOD.ted", ted(2, 2, 0));
+    const auto modded = lists(true);
+    CHECK(modded.first == (std::vector<std::string>{"_MP_SPACE_ALPHA", "_MP_SPACE_MOD", "_MP_SPACE_ZETA"}));
+    CHECK(modded.second == (std::vector<std::string>{"_MP_LAND_ALPHA"}));
+    std::error_code ec;
+    fs::remove_all(T, ec);
+}
+
 // The shipped data (ALAMO_FOC_DATA): UI.md 9.4 "Vanilla result after the patches: 24 land and 24 space maps, all official, no custom".
 void test_real_data() {
     const char* root = std::getenv("ALAMO_FOC_DATA");
@@ -290,6 +325,7 @@ void test_real_data() {
 int main() {
     test_preview();
     test_fake_install();
+    test_map_lists_skip_empty();
     test_real_data();
     std::printf(g_fail ? "alamo_game_skirmish_maps_tests: %d failure(s)\n" : "alamo_game_skirmish_maps_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;

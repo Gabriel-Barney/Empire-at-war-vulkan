@@ -114,7 +114,9 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
             return fail("skirmish map " + spec_.skirmish_map + ": " + err);
         spec_.skirmish.land = !skirmish_map_.is_space();  // the map decides: space battle or land invasion
         if (spec_.attract && spec_.skirmish.land) return fail("attract demo: " + spec_.skirmish_map + " is not a space map");
-        if (!make_skirmish_galaxy(d, spec_.skirmish, setup_, &err)) return fail(err);
+        SkirmishSetup sk = spec_.skirmish;
+        sk.no_forces = spec_.attract;  // q6 t02: the demo's forces are cleared below; a mod faction without a fleet must not fail it
+        if (!make_skirmish_galaxy(d, sk, setup_, &err)) return fail(err);
         // GALAXY_MAP_PRESENTATION §6: the attract demo is a plain tactical space battle on the map. The map's object owners
         // are player indices in faction order (Factions.xml then Expansion_Factions.xml: Rebel 0, Empire 1, ..., Neutral 3,
         // Underworld 6), so every faction becomes the player of its index; AI on the Rebel and Underworld players (0x22f10's

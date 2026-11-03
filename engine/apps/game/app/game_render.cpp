@@ -726,6 +726,7 @@ void BattleView::prepare(GpuCore& gpu, float alpha) {
         if (beams_on_) gpu.renderer.set_beams(render::beams_from_frame(frame_, &beam_styles_, beam_bone_), p.curr->tick);
         gpu.renderer.set_lasers(builder_->lasers(), laser_k_);  // the frame's laser projectiles (Transparent bucket, main scene)
         stats_.lasers_peak = std::max(stats_.lasers_peak, static_cast<uint32_t>(builder_->lasers().size()));
+        stats_.model_projectiles_peak = std::max(stats_.model_projectiles_peak, istats_.projectiles_drawn - istats_.projectiles_lasers);
 #ifdef ALAMO_PARTICLES_HAVE_SIM
         if (pattach_) {
             render::particles::sync_sim_frame(*pattach_, frame_, table_, *models_, *builder_, pose_fn_ ? &pose_fn_ : nullptr, &popt_,
