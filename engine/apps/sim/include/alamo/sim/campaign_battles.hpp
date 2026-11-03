@@ -201,7 +201,8 @@ public:
         int8_t corruption_type = -1;                                  // story t08: the corruption mission's type (else -1)
     };
     // P9-P11 as 0x28f590 step 4 applies them (globals, kept until the next linked start; saved). Sim-side state only: the
-    // arrival hold and the presentation overlays are read by systems the port does not have yet (BT §2.9.9 item 1).
+    // arrival hold is read by the running battle (story t12, TacticalBattle::set_arrival_hold); the presentation overlays by
+    // the UI (story t13, BT §2.9.9 item 1).
     struct LinkedPresentation {
         int32_t arrival = 0;              // GMM+0x30 = P9
         bool arrival_cinematic = false;   // 0x140b27d5e (P9 != 0) [M: arrival cinematic on]
