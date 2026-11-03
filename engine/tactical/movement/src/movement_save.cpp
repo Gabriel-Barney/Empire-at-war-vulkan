@@ -30,7 +30,7 @@ constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 8;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow
+constexpr uint32_t kMovementSaveVersion = 9;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y
 
 // u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
 template <class F>
@@ -270,6 +270,8 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.i32(d.movement_class);
     io.i32(d.collision_class);
     io.f32(d.radius);
+    io.f32(d.hard_x);
+    io.f32(d.hard_y);
     io.f32(d.formation_spacing);
     io.b(d.hero);
     io.str(d.type_name);
@@ -424,6 +426,10 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.u32(u.hold_until);
     io.v2(u.nudge);
     io.u32(u.nudge_frames);
+    io.b(u.pushed);  // a1k t03 (version 9)
+    io.v2s(u.push_path);
+    io.u32(u.push_next);
+    io.u32(u.push_blocked);
     io.wps(u.wps);
     io.u32(u.path_start);
     io.b(u.following);
@@ -502,6 +508,8 @@ void io_stats(IO& io, S& s) {  // MovementStats
     io.u32(s.collisions_cancelled);
     io.u32(s.collisions_resolved);
     io.u32(s.jetpack_still_frames);  // S8 t09 (version 4)
+    io.u32(s.pushes);  // a1k t03 (version 9)
+    io.u32(s.push_failures);
 }
 
 uint64_t collision_pair_key(ObjectId a, ObjectId b) {  // as collision.cpp pair_key
