@@ -445,6 +445,8 @@ for timing only.
   token resolver reads its memory, so a latency there changes what the resolver sees, not only when; it costs under 1 ms a frame
   on HotM. Task-force planning (the PP solve) draws from the synced RNG in proposal order and its accept is synchronous: a
   background solve needs per-solve RNG streams and a pending-goal state first.
+- **`alamo_game`** passes the same background hook to its galactic AI (`game_session.cpp`; results unchanged, the smoke goldens
+  did not move).
 
 Moved goldens (regenerated with MSVC; each run again with one knob against the old golden to name the cause):
 
@@ -466,6 +468,9 @@ an AI (18000 ticks), the 400-planet synthetic (`--record-stream --synthetic 400 
 the FoC space battle with station (`--skirmish-ai foc-station --seed 3`, 9598 ticks), and in the suite `alamo_headless_galactic_ai_human*`
 and `alamo_headless_skirmish_ai_foc_land_outcome*` (land). `alamo_ai_tests` runs the path finder's background job on job systems with
 0 / 1 / 4 / 16 / default workers, saving mid-job. `build_asan.cmd` passes with UBSan and with `ALAMO_SANITIZE=address`.
+Re-run after merging OPT3 t09 (#42) and OPT2 t03 (#43): every golden above still matches unchanged (MSVC and clang 166/166),
+`--ai-latency 0 --no-ai-stagger` still matches main's six headless goldens, and the check above (plus land, `foc-land`, 7000 ticks)
+is again identical at 0 / 1 / 4 / 16 / 15 workers with MSVC = clang.
 
 Numbers (`--profile --profile-budget 33.33`, the OPT1 scenarios at the default worker count, one exe; "old" = `--ai-latency 0
 --no-ai-stagger` (`--latency 0` for the synthetic), run back to back with "new" while other sessions loaded the PC, so compare
