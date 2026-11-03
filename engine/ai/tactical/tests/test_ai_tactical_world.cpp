@@ -1490,6 +1490,62 @@ struct PpFixture {
     }
 };
 
+// q6 t03: a mod's GameObjectCategoryType.xml (Thrawn's Revenge renumbers the categories and adds AirGunship, AirSpeeder,
+// InfantryHero, ...) reaches the tactical AI's name -> mask lookups. Before, the AI resolved names through the built-in
+// vanilla table while the types' CategoryMask bits came from the mod's enum, so TR's land team specs ("Infantry |
+// Vehicle | AirGunship | AirSpeeder = 1, 10") matched no type and nearly every land plan failed the Plan marshaller.
+void test_mod_category_enum() {
+    MemoryFiles tf;
+    tf.add("Data\\XML\\Enum\\GameObjectCategoryType.xml",
+           "<EnumDefinition><Fighter>0x1</Fighter><Infantry>0x100</Infantry><Vehicle>0x200</Vehicle>"
+           "<AirSpeeder>0x400</AirSpeeder><AirGunship>0x800</AirGunship><Structure>0x1000</Structure>"
+           "<InfantryHero>0x8000000</InfantryHero><All>0xFFFFFFFFFFFFFFFF</All><None>0</None></EnumDefinition>");
+    tf.add("Data\\XML\\GameObjectFiles.xml", "<L><File>ModTypes.xml</File></L>");
+    tf.add("Data\\XML\\ModTypes.xml",
+           "<Types><GroundInfantry Name=\"Mod_Trooper\"><CategoryMask>Infantry</CategoryMask></GroundInfantry>"
+           "<GroundVehicle Name=\"Mod_Gunship\"><CategoryMask>AirGunship</CategoryMask></GroundVehicle>"
+           "<GroundStructure Name=\"Mod_Barracks\"><CategoryMask>Structure</CategoryMask></GroundStructure></Types>");
+    objects::ObjectTypeDatabase raw;
+    objects::GameObjectTypes types;
+    CHECK(raw.load(tf) && types.build(raw, &tf) && types.size() == 3);
+    const auto mod = tactical_category_resolver(&types);
+    CHECK(mod && !tactical_category_resolver(nullptr));
+    if (!mod) return;
+    CHECK(mod("Infantry") == 0x100 && mod("AirGunship") == 0x800 && mod("infantryhero") == 0x8000000 && mod("LandHero") == 0);
+    const TacticalPerception stock;  // the built-in vanilla table: Infantry 0x80, no AirGunship
+    CHECK(stock.config().category_mask("Infantry") == 0x80 && stock.config().category_mask("AirGunship") == 0);
+    std::vector<PerceptionType> pts(types.size());
+    for (objects::TypeIndex t = 0; t < types.size(); ++t) {
+        pts[t].name = std::string(types.raw().types().name[t]);
+        pts[t].category = types.get_mask(t, "CategoryMask");
+    }
+    CHECK(pts[0].category == 0x100 && pts[1].category == 0x800);
+    TaskForceDef d;
+    CHECK(parse_task_force({"MainForce", "Infantry | Vehicle | AirGunship | AirSpeeder = 1, 10"}, d) && d.teams.size() == 1);
+    if (d.teams.size() != 1) return;
+    CHECK((pp_team_types(d, d.teams[0], pts, mod) == std::vector<int32_t>{0, 1}));
+    CHECK(pp_team_types(d, d.teams[0], pts, stock.config().category_mask).empty());  // the old lookup: no candidates
+    // The solve: one free trooper fills the team (min 1) through the mod resolver.
+    PlanDefinition def;
+    def.name = "MOD_TEST";
+    def.task_forces.push_back(d);
+    SimRng rng{5u};
+    TacticalPpInput in;
+    in.mode = TacticalMode::Land;
+    in.def = &def;
+    in.player = 0;
+    in.faction = "Empire";
+    in.types = &pts;
+    in.category_mask = mod;
+    in.rng = &rng;
+    in.free_units = {{21, 0, {}, 1.0f, false}};
+    TacticalPpResult r;
+    CHECK(solve_tactical_pp(in, r) && r.picks.size() == 1 && r.picks[0].source == PpSource::FreeStore && r.picks[0].ref == 21);
+    in.category_mask = stock.config().category_mask;
+    CHECK(!solve_tactical_pp(in, r) && r.last_veto == "Plan");
+    std::printf("mod category enum: OK\n");
+}
+
 void test_potential_plan() {
     // 1. Reinforcement (AI_GALACTIC_3 §1.4): a pool unit scores 2.0 and replaces a free unit of its type that is not at
     //    the stage (key >= 300); the 50 % rule; a used entry no longer matches; then the remaining free unit.
@@ -2724,6 +2780,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--write-golden") == 0) g_write_golden = true;
     test_potential_plan();
+    test_mod_category_enum();  // q6 t03
     test_skirmish();
     test_opportunity_and_hijack();
     test_group_orders();
