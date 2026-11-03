@@ -1026,14 +1026,17 @@ void test_retreat(const Data& d) {
         return std::count_if(r.losses.begin(), r.losses.end(), [&](const auto& l) { return l.object_type == t && l.owner == owner; });
     };
     CHECK(count(a, base, 0) == 1);
-    CHECK(a.hold_ticks == 0);
-    // With a hold the result waits (the world keeps ticking), same winner and write-back; deterministic across runs.
-    const Run b = run_campaign(d, false, true, 0, 2600, 0.95f, true, 90);
-    CHECK(b.hold_ticks == 90);
+    // story t06 (BT §3.1a): 0xc is declared when the retreat completes and the battle ends after the record's 210-frame
+    // countdown (the world keeps ticking).
+    CHECK(a.hold_ticks == 210);
+    // A longer end hold (BattleConfig::end_hold_frames) is a minimum on that countdown: same winner and write-back;
+    // deterministic across runs.
+    const Run b = run_campaign(d, false, true, 0, 2700, 0.95f, true, 300);
+    CHECK(b.hold_ticks == 300);
     CHECK(b.battles.size() == 1 && b.battles[0].find("all-retreated") != std::string::npos && b.battles[0].find("+ starbase") != std::string::npos);
     CHECK(b.conflicts.size() == 1 && b.conflicts[0].find("retreat Empire") != std::string::npos);
     CHECK(b.empire_frigate_alive && count(b, base, 0) == 1);
-    const Run c = run_campaign(d, false, true, 4, 2600, 0.95f, true, 90);
+    const Run c = run_campaign(d, false, true, 4, 2700, 0.95f, true, 300);
     CHECK(!first_divergence(b.crc, c.crc).diverged);
 }
 
@@ -3143,7 +3146,7 @@ void test_death_clone_removal() {
                     wreck ? "(DIE clip)" : "(no clip)", h.life.size(), removed, static_cast<unsigned long long>(expect), other,
                     static_cast<unsigned long long>(base_made), static_cast<unsigned long long>(h.end_frame), h.alive_at_end);
         CHECK(removed > 0 && other == 0);              // headless: removed at the planned frame (were never removed before)
-        CHECK(base_clones == 1 && base_made == h.end_frame);  // made on the last tick ...
+        CHECK(base_clones == 1 && base_made + 210 == h.end_frame);  // made at the declaration (story t06: 210 frames to the end) ...
         CHECK(h.alive_at_end == 0);                    // ... and gone with the battle, like every clone left
         for (const auto& [id, l] : h.life) CHECK(l.second != 0);  // no clone object after the battle
         // The animation service changes nothing in the sim: same CRC log, same clone lifetimes; its corpse rows follow
@@ -4458,7 +4461,122 @@ void test_final_tick_losses(const Data& d) {
     CHECK(battles.battles_fought() == 1 && !battles.battle());
     const size_t recorded = battles.last_battle_losses().size();
     std::printf("  final tick: %zu deaths seen per tick, %zu in the loss records\n", seen, recorded);
-    CHECK(seen > 0 && recorded > seen);
+    // story t06: the battle now ends 210 frames after the victory declaration, so the deaths come before the final tick;
+    // the records still hold every one of them.
+    CHECK(seen > 0 && recorded >= seen);
+}
+
+// story t06 (BT §3.1a): the tactical victory monitor in the S10 space battle (Underworld 1 attacks the Empire 0).
+//   held:    ENABLE_VICTORY 0 at the battle's first tick (Param1-less and extra "1" rewards change nothing); the fight runs
+//            to its end with every 0xb / 0xf test queued, nothing declared, the battle running; ENABLE_VICTORY 1 releases
+//            the hold and replays the queue: a victory is declared at once, its 210-frame countdown ends the battle.
+//   VICTORY: the reward for the Empire (Param2 1: 1 s, silent) at battle frame 10 releases a raised hold and ends the
+//            battle 30 frames later as a story victory, the Underworld retreating; an unknown faction (-1) does nothing.
+struct MonitorRun {
+    bool started = false, declared_while_held = false, ended = false;
+    size_t queued = 0;
+    int32_t hold_after_noops = -1, declared_type = -1, declared_player = -2, countdown = -1;
+    bool silent = false, unknown_refused = false;
+    uint32_t release_frame = 0, end_frame = 0;
+    std::string summary;
+    CrcLog crc;
+};
+
+MonitorRun run_monitor(const Data& d, bool story_victory, int32_t workers) {
+    MonitorRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 0;  // no time limit: only the monitor ends the battle
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    uint32_t last_deaths = 0, quiet = 0, last_frame = 0;
+    for (uint64_t t = 0; t < 9000; ++t) {
+        host.tick_once();
+        TacticalBattle* b = battles.battle();
+        if (!b) {
+            if (!out.started) continue;
+            out.ended = true;  // finished in this tick, popped in its hook
+            out.end_frame = last_frame + 1;
+            out.summary = battles.log().empty() ? std::string() : battles.log().back();
+            break;
+        }
+        last_frame = b->frame();
+        if (!out.started) {
+            out.started = true;
+            b->reward_enable_victory(true, 0);   // hold 1
+            b->reward_enable_victory(false, 0);  // no Param1: nothing
+            b->reward_enable_victory(true, 1);   // release: 0 (nothing queued yet)
+            b->reward_enable_victory(true, 1);   // not held: nothing (stays 0)
+            b->reward_enable_victory(true, 0);   // hold 1 again
+            out.hold_after_noops = b->victory_hold();
+        }
+        const uint32_t f = b->frame();
+        if (b->finished()) continue;
+        if (story_victory) {
+            if (f == 10) {
+                out.unknown_refused = !b->reward_victory(-1, false) && !b->victory_declared();
+                CHECK(b->reward_victory(0, true));
+                out.release_frame = f;
+                out.declared_type = b->victory_declared_type();
+                out.declared_player = b->victory_declared_player();
+                out.countdown = b->victory_countdown();
+                out.silent = b->victory_declared_silent();
+            }
+            continue;
+        }
+        if (out.release_frame != 0) continue;
+        if (b->victory_declared()) out.declared_while_held = true;
+        const uint32_t deaths = b->stats().deaths;
+        quiet = deaths == last_deaths ? quiet + 1 : 0;
+        last_deaths = deaths;
+        if (deaths > 0 && quiet >= 300) {  // the fight is over: release with replay
+            out.queued = b->victory_queued();
+            b->reward_enable_victory(true, 1);
+            out.release_frame = f;
+            out.declared_type = b->victory_declared() ? b->victory_declared_type() : -1;
+            out.declared_player = b->victory_declared() ? b->victory_declared_player() : -2;
+            out.countdown = b->victory_countdown();
+            out.silent = b->victory_declared_silent();
+        }
+    }
+    out.crc = host.crc_log();
+    return out;
+}
+
+void test_victory_monitor(const Data& d) {
+    const MonitorRun h = run_monitor(d, false, 0);
+    std::printf("  held: hold after the no-ops %d, queued %zu at release frame %u, declared type 0x%x for %d (countdown %d), end %u; %s\n",
+                h.hold_after_noops, h.queued, h.release_frame, static_cast<unsigned>(h.declared_type), h.declared_player, h.countdown,
+                h.end_frame, h.summary.c_str());
+    CHECK(h.started && h.hold_after_noops == 1 && !h.declared_while_held && h.queued > 0 && h.release_frame > 0);
+    CHECK(h.declared_type == galactic::kVictoryAllDestroyed || h.declared_type == galactic::kVictoryStarbaseDestroyed);
+    CHECK(h.declared_player == 0 || h.declared_player == 1);
+    CHECK(h.countdown == 210 && !h.silent && h.ended && h.end_frame == h.release_frame + 210);
+    const MonitorRun v = run_monitor(d, true, 0);
+    std::printf("  VICTORY: unknown refused %d, declared type 0x%x for %d (countdown %d, silent %d) at %u, end %u; %s\n",
+                v.unknown_refused ? 1 : 0, static_cast<unsigned>(v.declared_type), v.declared_player, v.countdown, v.silent ? 1 : 0,
+                v.release_frame, v.end_frame, v.summary.c_str());
+    CHECK(v.started && v.unknown_refused && v.declared_type == galactic::kVictoryStory && v.declared_player == 0 && v.countdown == 30 && v.silent);
+    CHECK(v.ended && v.end_frame == v.release_frame + 30);
+    CHECK(v.summary.find("winner Empire, victory 16, retreated Underworld") != std::string::npos);
+    const MonitorRun h4 = run_monitor(d, false, 4);
+    CHECK(!first_divergence(h.crc, h4.crc).diverged && h4.end_frame == h.end_frame);
 }
 
 // --- OI objects: behaviour Initialise draws (TACTICAL_GAPS 6.4) through the SimHost's synced RNG ---
@@ -5687,6 +5805,8 @@ int main(int argc, char** argv) {
 #endif
     std::printf("t41: the final tick's deaths are in the battle's loss records\n");
     test_final_tick_losses(*d);
+    std::printf("story t06: tactical victory monitor (hold, queued tests, ENABLE_VICTORY, VICTORY reward)\n");
+    test_victory_monitor(*d);
     std::printf("OI objects: behaviour Initialise draws + scheduling\n");  // OI objects
     test_oi_objects_scheduling();
     test_foc();
