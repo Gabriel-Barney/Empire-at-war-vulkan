@@ -95,6 +95,7 @@ struct Db {
                    "<SpaceUnit Name=\"No_Index_Weapon\"><Is_Special_Weapon_In_Space>Yes</Is_Special_Weapon_In_Space>"
                    "<Special_Weapon_Index>-1</Special_Weapon_Index></SpaceUnit>\n"
                    "<GroundStructure Name=\"Lobber\"><Behavior>LOBBING_SUPERWEAPON</Behavior></GroundStructure>\n"
+                   "<GroundStructure Name=\"Land_Lobber\"><LandBehavior>LOBBING_SUPERWEAPON</LandBehavior></GroundStructure>\n"
                    "<StarBase Name=\"Station\"><Behavior>DUMMY_STAR_BASE</Behavior></StarBase>\n"
                    "<SpaceUnit Name=\"Ship\"><Behavior>STARSHIP_LOCOMOTOR</Behavior><Max_Speed>5</Max_Speed>"
                    "<CategoryMask>Capital</CategoryMask></SpaceUnit>\n"
@@ -287,9 +288,9 @@ static void test_task_force(const Db& db) {
 static void test_land_task_force(const Db& db) {
     Env e(db, objects::ModeKind::Land);
     LuaVm& vm = *e.vm;
-    const objects::ObjectHandle l1 = make(e.store, db.t("Lobber"), 1, {0, 0, 0});
-    const objects::ObjectHandle l2 = make(e.store, db.t("Lobber"), 1, {0, 0, 0});
-    const objects::ObjectHandle l3 = make(e.store, db.t("Lobber"), 1, {0, 0, 0});
+    const objects::ObjectHandle l1 = make(e.store, db.t("Land_Lobber"), 1, {0, 0, 0});
+    const objects::ObjectHandle l2 = make(e.store, db.t("Land_Lobber"), 1, {0, 0, 0});
+    const objects::ObjectHandle l3 = make(e.store, db.t("Land_Lobber"), 1, {0, 0, 0});
     const objects::ObjectHandle marker = make(e.store, db.t("Bomb_Marker"), 1, {0, 0, 0});
     make(e.store, db.t("Ship"), 2, {40, 50, 6});
     std::vector<objects::ObjectHandle> units{l1, l2, l3};
@@ -306,18 +307,21 @@ static void test_land_task_force(const Db& db) {
         return false;  // refused: the unit is still returned and later units are not tried
     };
     lua_register(vm.state(), "TF_Fire", tf_fire);
-    CHECK(run(vm, "x = Find_First_Object('Ship') r = TF_Fire(false, 'Lobber', x)") == "" && !gnil(vm, "r"));
+    CHECK(run(vm, "x = Find_First_Object('Ship') r = TF_Fire(false, 'Land_Lobber', x)") == "" && !gnil(vm, "r"));
     CHECK(ordered.size() == 1 && ordered[0] == l2 && lobbed.x == 40.0f && lobbed.y == 50.0f && lobbed.z == 6.0f);
     CHECK(!e.store.alive(marker));  // the owner's destroy-after sweep ran
     // Wrong argument count / type name / target kind: script errors, nothing ordered.
-    CHECK(run(vm, "a = TF_Fire(false, 'Lobber')") == "" && gnil(vm, "a") && last_message_has(vm, "expected 2 got 1"));
+    CHECK(run(vm, "a = TF_Fire(false, 'Land_Lobber')") == "" && gnil(vm, "a") && last_message_has(vm, "expected 2 got 1"));
     CHECK(run(vm, "b = TF_Fire(false, 7, x)") == "" && gnil(vm, "b") && last_message_has(vm, "Expected string"));
-    CHECK(run(vm, "p = TF_Fire(false, 'Lobber', x.Get_Position())") == "" && gnil(vm, "p") &&
+    CHECK(run(vm, "p = TF_Fire(false, 'Land_Lobber', x.Get_Position())") == "" && gnil(vm, "p") &&
           last_message_has(vm, "Expected game object or target location"));
+    // A type with LOBBING_SUPERWEAPON only in its generic <Behavior> set is not a land special weapon (AI_TACTICAL
+    // §7.3.4: 0x370320(type, 0x37, 1) reads the Land set).
+    CHECK(run(vm, "q = TF_Fire(false, 'Lobber', x)") == "" && gnil(vm, "q") && last_message_has(vm, "Lobber is not a land special weapon"));
     CHECK(ordered.size() == 1);
     // No ready unit of the type -> false.
     ready2 = ready3 = false;
-    CHECK(run(vm, "n = TF_Fire(false, 'Lobber', x)") == "" && !gnil(vm, "n") && !gtrue(vm, "n") && ordered.size() == 1);
+    CHECK(run(vm, "n = TF_Fire(false, 'Land_Lobber', x)") == "" && !gnil(vm, "n") && !gtrue(vm, "n") && ordered.size() == 1);
     g_units = nullptr;
 }
 

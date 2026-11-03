@@ -3010,6 +3010,11 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
+    for (const uint32_t v : {9u, 11u}) {  // s78f: the version before (t03 / t04 took 10) and after the current one
+        bad = saved;
+        put_u32_at(bad, 0, v);
+        CHECK(rejected(bad));
+    }
     bad = saved;
     put_u32_at(bad, 4, 3);  // player count
     CHECK(rejected(bad));
@@ -5254,6 +5259,57 @@ void test_team_targeting_copy() {
             ++ticks;
         }
         CHECK(ticks == 18 && t.w.sys->targeting_state(10) == 4);  // 178 degrees at 10 per service
+    }
+    {  // s78f review: a member that picked its own target before its head existed drops it when it becomes a member, so
+       // it reads the head's target and never keeps a dead id
+        World w;
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(2, 1, 1, Vec3{200, 5, 0});
+        const auto add = [&](ObjectId id, bool leader, Vec3 at) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = 0;
+            sp.owner = 0;
+            sp.position = at;
+            sp.facing = Vec3{1, 0, 0};
+            sp.team = 7;
+            sp.team_leader = leader;
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+            TreeMembership m;
+            m.owner = 0;
+            CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+        };
+        add(11, false, Vec3{0, 10, 0});
+        w.tick();
+        const bool own = w.sys->auto_target(11) == 2;  // no head yet: its own scan picked the target
+        add(12, true, Vec3{0, 0, 0});  // ids ascend: the head joins after the member
+        w.tick();
+        const bool joined = w.sys->auto_target(11) == kNoObject && w.sys->current_target(11) == w.sys->current_target(12);
+        // The target dies: the member holds no own id (the old bug kept returning it forever) and reads the head's slot,
+        // which the head's own scan replaces.
+        w.sys->kill_unit(2, kNoObject, 0, w.frame);
+        for (int i = 0; i < 90; ++i) w.tick();
+        const bool dropped = w.sys->auto_target(11) == kNoObject && w.sys->current_target(11) == w.sys->current_target(12) &&
+                             w.sys->current_target(12) != 2;
+        std::printf("team member join: own target %d, cleared on join %d, dead target dropped %d\n", own ? 1 : 0, joined ? 1 : 0,
+                    dropped ? 1 : 0);
+        CHECK(own && joined && dropped);
     }
 }
 

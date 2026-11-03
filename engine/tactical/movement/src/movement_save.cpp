@@ -464,11 +464,11 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.f32(u.fp.max_thrust);
     io.f32(u.fp.min_follow_distance);
     io.f32(u.fp.attack_range);
-    io_chase(io, u.fp.chase);  // s78f t02 (version 9)
+    io_chase(io, u.fp.chase);  // s78f t02 (version 10)
 }
 
 template <class IO, class C>
-void io_chase(IO& io, C& c) {  // FighterChaseRanges (s78f t02, version 9)
+void io_chase(IO& io, C& c) {  // FighterChaseRanges (s78f t02, version 10)
     io.f32(c.guard);
     io.f32(c.idle);
     io.f32(c.attack_move);
@@ -488,11 +488,11 @@ void io_squad(IO& io, S& s) {  // FighterSquad
     io.f3(s.dest);
     io_target(io, s.target);
     io.b(s.guard_follow);  // S7 t37 (version 8)
-    io_chase(io, s.chase);  // s78f t02 (version 9; FighterSquad::speed_cap of version 5 dropped)
+    io_chase(io, s.chase);  // s78f t02 (version 10; FighterSquad::speed_cap of version 5 dropped)
 }
 
 template <class IO, class B>
-void io_block(IO& io, B& b) {  // FighterBlock (s78f t02, version 9)
+void io_block(IO& io, B& b) {  // FighterBlock (s78f t02, version 10)
     io.u8(b.kind);
     io.i32(b.object);
     io.i32(b.hard_point);
@@ -506,7 +506,7 @@ void io_block(IO& io, B& b) {  // FighterBlock (s78f t02, version 9)
 }
 
 template <class IO, class G>
-void io_form(IO& io, G& g) {  // FighterFormation (s78f t02, version 9; replaces S7 t37's FighterGuard)
+void io_form(IO& io, G& g) {  // FighterFormation (s78f t02, version 10; replaces S7 t37's FighterGuard)
     io.i32(g.key);
     io.u8(g.state);
     io.v2(g.goal);

@@ -412,6 +412,13 @@ public:
     bool fighter_push(ObjectId key, ObjectId object, int32_t hard_point = -1);
     // Pop 0x4105a0 (n > 1 only; side effects B 1). False when nothing was popped.
     bool fighter_pop(ObjectId key);
+    // s78f review (§4.11 B 1 "new group move"): a group move of `order.units` that moves nobody now (an attack order whose
+    // fighters are already in range): each fighter formation is replaced by one holding the order's block, as move()
+    // does, in state 1 (the members' current paths stand for the plan [port]). No unit moves.
+    void fighter_new_order(const MoveOrder& order, uint32_t frame);
+    // s78f review: an object that is not a unit of this system (a station, a structure) is gone: blocks naming it are
+    // converted / removed as at a unit's removal (listener 0x4f77e0, fform_removed).
+    void object_removed(ObjectId id) { fighter_removed(id); }
     void set_fighter_formation_hooks(FighterFormationHooks hooks) { fhooks_ = std::move(hooks); }
     std::span<const FighterEvent> fighter_events() const { return fevents_; }  // this tick
     // Save / load access (the grids' membership and the per-unit / per-squadron fighter state are sim state).
@@ -469,7 +476,7 @@ public:
     //   active flag (version 2), fighter state + params), the collision
     //   layer, this tick's crush / despawn / fighter events (the host may read them after a load; crush and despawn
     //   are hashed), the squadrons (ascending id), the fighter cell grids, this tick's fighter events and the fighter
-    //   formations (s78f t02, version 9: ascending key, each block stack bottom first).
+    //   formations (s78f t02, version 10: ascending key, each block stack bottom first).
     // Not saved: MovementConfig (definitions), the hooks, the query scratch. read() returns false and leaves the system
     // unchanged on a version / mode / map mismatch, an invalid value (enum, order, count) or truncated data.
     // HyperspaceDepartures / EngineControl (hyperspace.hpp) have their own write / read for the battle host.

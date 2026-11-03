@@ -199,6 +199,17 @@ void MovementSystem::fform_order(const MoveOrder& order, const std::vector<uint3
     }
 }
 
+void MovementSystem::fighter_new_order(const MoveOrder& order, uint32_t frame) {
+    if (cfg_.mode != MoveMode::Space) return;
+    std::vector<uint32_t> idx;
+    for (const ObjectId id : order.units) {
+        const int32_t i = find(id);
+        if (i < 0 || std::find(idx.begin(), idx.end(), static_cast<uint32_t>(i)) != idx.end()) continue;
+        idx.push_back(static_cast<uint32_t>(i));
+    }
+    fform_order(order, idx, frame);
+}
+
 // The waypoint-queue move (MOVEMENT §6.2, 0x2a8240): a fighter whose formation exists hands the block to it (once per
 // formation, first-seen order; coordinator vf +0x30 -> 0x420f70) and does not move now; the others stay in `idx`.
 void MovementSystem::fform_waypoint(const MoveOrder& order, std::vector<uint32_t>& idx) {
@@ -586,9 +597,19 @@ void MovementSystem::fform_update(FighterFormation& f, uint32_t frame, SimRng& r
 
 // 0x410a60 (A), state 3, the same timer: a = 0x4165f0, c = 0x40edd0. !a && !c -> pop; !a && c && n >= 2 with an object
 // below -> pop; a && !c -> F speed := -1, state 0 (re-plan); else nothing.
+// [port] (s78f review, B 3): a guard top with blocks below it whose object is not moving is dropped here as in 0x4192b0
+// step 3 (state 0, the next block is planned). Retail reaches that pop in state 1 within one check ("a guard followed by
+// shift waypoints lasts only while G moves"); the port's members can finish the plan move to a still G before the timer,
+// so the formation arrives (state 3: an object top never pops on arrival) with the guard still on top.
 void MovementSystem::fform_recheck(FighterFormation& f, uint32_t frame, SimRng& rng) {
     (void)rng;
     f.next = frame + kFighterGuardInterval;
+    if (const FighterBlock& t = f.blocks.back(); f.blocks.size() > 1 && (t.flags & kMoveFlagGuardMove) != 0 &&
+                                                 t.kind == kFighterBlockObject && f.follow && !fobject_moving(t.object)) {
+        f.blocks.pop_back();  // as step 3: no patrol re-queue, no goal update
+        f.state = kFormationPlan;
+        return;
+    }
     const bool a = fform_leash(f), c = fform_can_hit(f);
     const size_t n = f.blocks.size();
     if (!a && !c) {

@@ -630,9 +630,8 @@ int land_task_force_fire_special_weapon(Call& c, const char* kName, const std::v
     if (!c.is_string(1)) return script_error(c, "%s -- invalid type for parameter 1. Expected string", kName);
     const std::string name(c.string(1));
     const TypeIndex t = ty ? ty->raw().find(name) : objects::kNone;
-    const bool lobbing = t != objects::kNone && t < ty->size() &&
-                         (ty->has_behavior(t, objects::BehaviorSet::Generic, kBehLobbing) ||
-                          ty->has_behavior(t, objects::BehaviorSet::Land, kBehLobbing));
+    // 0x370320(type, 0x37, 1): the Land behaviour set only (a type with it in <Behavior> alone is refused).
+    const bool lobbing = t != objects::kNone && t < ty->size() && ty->has_behavior(t, objects::BehaviorSet::Land, kBehLobbing);
     if (!lobbing) return script_error(c, "%s -- %s is not a land special weapon!", kName, name.c_str());
     Vec3 point;
     if (const Ud* a = c.userdata(2, cls_target())) {

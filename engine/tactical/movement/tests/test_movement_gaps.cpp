@@ -1617,7 +1617,8 @@ static void test_fighter_guard() {
 //  3. an auto block pushed over a guard: the pre-pop replaces an earlier auto block but never the guard; the auto block
 //     is popped when the fighter leaves Guard_Chase_Range of the guarded object (0x410a60 / 0x4165f0);
 //  4. a hidden auto target over a guard is dropped (fog: step 5 / 0x410a60);
-//  5. an arrived single object block whose object is hidden becomes a position guard at L (C 3).
+//  5. an arrived single object block whose object is hidden becomes a position guard at L (C 3);
+//  6. / 7. s78f review: an arrived guard with a shift waypoint pops within one check; fighter_new_order; object_removed.
 static void test_fighter_formation_stack() {
     MovementConfig cfg;
     cfg.mode = MoveMode::Space;
@@ -1807,12 +1808,111 @@ static void test_fighter_formation_stack() {
             c3 = h && h->blocks.size() == 1 && h->blocks[0].kind == kFighterBlockPosition && h->blocks[0].flags == kMoveFlagGuardMove;
         }
     }
+    // 6. s78f review (B 3): the guard has ARRIVED (state 3) next to a still object, then a shift waypoint is queued: the
+    // re-plan to the guard ends at once (state 3 again with the guard on top), yet the guard pops within one 30-frame check.
+    bool arrived_first = false, arrived_pop = false, rearrived = false;
+    uint32_t wp_frame = 0, arrived_pop_frame = 0;
+    {
+        MovementSystem sys(cfg);
+        build(sys);
+        SimRng rng(9);
+        guard(sys, rng, 0);
+        uint32_t fr = 0;
+        for (; fr < 600; ++fr) sys.tick(fr, rng);
+        // Queue the waypoint right after a 0x410a60 check, so the timer is a full interval away.
+        while (fr < 700 && sys.fighter_formation(1) && sys.fighter_formation(1)->next != fr + kFighterGuardInterval - 1u) sys.tick(fr++, rng);
+        arrived_first = sys.fighter_formation(1) && sys.fighter_formation(1)->state == kFormationArrived;
+        wp_frame = fr;
+        waypoint(sys, rng, fr, {1000.0f, 1000.0f});
+        for (uint32_t k = 0; k < 200 && !arrived_pop; ++k, ++fr) {
+            sys.tick(fr, rng);
+            const FighterFormation* h = sys.fighter_formation(1);
+            rearrived = rearrived || (h && h->blocks.size() == 2 && h->state == kFormationArrived);
+            if (h && h->blocks.size() == 1 && h->blocks[0].kind == kFighterBlockPosition) {
+                arrived_pop = true;
+                arrived_pop_frame = fr;
+            }
+        }
+    }
+    // 6b. The same after a follow: the guarded object moves a short way and stops; the escort's copied path ends with it,
+    // so the formation can arrive (state 3, guard on top) before its next check. The guard still pops within one check of
+    // the object's stop. Several trip lengths (different timer phases).
+    uint32_t follow_runs = 0, follow_ok = 0, follow_rearrived = 0;
+    for (float trip = 200.0f; trip <= 1400.0f; trip += 100.0f) {
+        MovementSystem sys(cfg);
+        build(sys);
+        SimRng rng(9);
+        guard(sys, rng, 0);
+        uint32_t fr = 0;
+        for (; fr < 400; ++fr) sys.tick(fr, rng);
+        MoveOrder mc;
+        mc.units = {2};
+        mc.destination = {0.0f, -trip};
+        sys.move(mc, rng, fr);
+        waypoint(sys, rng, fr, {1000.0f, 1000.0f});
+        uint32_t stop = 0;
+        bool popped6 = false, re = false;
+        for (uint32_t k = 0; k < 3000 && !popped6; ++k, ++fr) {
+            sys.tick(fr, rng);
+            const UnitView cv = sys.view(2);
+            if (stop == 0 && (!cv.has_goal || cv.arrived)) stop = fr;
+            const FighterFormation* h = sys.fighter_formation(1);
+            re = re || (h && h->blocks.size() == 2 && h->state == kFormationArrived);
+            if (h && h->blocks.size() == 1 && h->blocks[0].kind == kFighterBlockPosition) {
+                popped6 = true;
+                ++follow_runs;
+                if (stop > 0 && fr <= stop + kFighterGuardInterval + 1u) ++follow_ok;
+                if (re) ++follow_rearrived;
+            }
+        }
+        if (!popped6) ++follow_runs;
+    }
+    // 7. s78f review: a new group move that moves nobody (fighter_new_order) replaces the stack; a non-mover named by an
+    // auto block (a station positioned by the hook) that is gone (object_removed) loses the block at once.
+    bool new_order = false, station_pop = false;
+    {
+        MovementSystem sys(cfg);
+        build(sys);
+        FighterFormationHooks hk;
+        hk.position = [](ObjectId o, F3& p) {
+            if (o != 60) return false;
+            p = {200.0f, 100.0f, 0.0f};
+            return true;
+        };
+        sys.set_fighter_formation_hooks(hk);
+        SimRng rng(9);
+        guard(sys, rng, 0);
+        waypoint(sys, rng, 1, {1000.0f, 1000.0f});
+        uint32_t fr = 1;
+        for (; fr < 40; ++fr) sys.tick(fr, rng);
+        CHECK(sys.fighter_push(1, 60));
+        const size_t before = sys.fighter_formation(1) ? sys.fighter_formation(1)->blocks.size() : 0;
+        sys.object_removed(60);
+        const FighterFormation* h = sys.fighter_formation(1);
+        station_pop = before >= 2 && h && h->blocks.size() == before - 1 && h->blocks.back().object != 60;
+        MoveOrder a;
+        a.units = {1};
+        a.destination = {600.0f, 0.0f};
+        a.goal_object = 3;
+        const V2 goal0 = sys.view(1).goal;
+        sys.fighter_new_order(a, fr);
+        h = sys.fighter_formation(1);
+        new_order = h && h->blocks.size() == 1 && h->blocks[0].kind == kFighterBlockObject && h->blocks[0].object == 3 &&
+                    h->blocks[0].flags == 0 && h->state == kFormationMoving && sys.view(1).goal.x == goal0.x && sys.view(1).goal.y == goal0.y;
+    }
     std::printf("fighter formation stack: waypoint queued %d (not moved %d, saved %d), guard popped %d (frame %u), flew to "
                 "it %d; patrol loop %d, waypoint limit %d; auto pre-pop %d, kept near %d, leash pop %d; hidden pop %d; hidden "
-                "goal -> position guard %d\n",
+                "goal -> position guard %d; arrived guard %d + waypoint (frame %u, re-arrived %d) popped %d (frame %u); after a follow %u of %u "
+                "popped within a check of the stop (%u re-arrived first); station gone -> block dropped %d; in-range group move "
+                "replaces the stack %d\n",
                 queued ? 1 : 0, not_moved ? 1 : 0, saved ? 1 : 0, popped ? 1 : 0, pop_frame, flew ? 1 : 0, loop ? 1 : 0,
-                limit ? 1 : 0, prepop ? 1 : 0, kept_near ? 1 : 0, leash_pop ? 1 : 0, hidden_pop ? 1 : 0, c3 ? 1 : 0);
+                limit ? 1 : 0, prepop ? 1 : 0, kept_near ? 1 : 0, leash_pop ? 1 : 0, hidden_pop ? 1 : 0, c3 ? 1 : 0,
+                arrived_first ? 1 : 0, wp_frame, rearrived ? 1 : 0, arrived_pop ? 1 : 0, arrived_pop_frame, follow_ok, follow_runs, follow_rearrived, station_pop ? 1 : 0,
+                new_order ? 1 : 0);
     CHECK(queued && not_moved && saved && popped && pop_frame <= 5u + kFighterGuardInterval + 1u && flew);
+    CHECK(arrived_first && arrived_pop && arrived_pop_frame <= wp_frame + kFighterGuardInterval + 1u);
+    CHECK(follow_runs > 0 && follow_ok == follow_runs);
+    CHECK(station_pop && new_order);
     CHECK(loop && limit);
     CHECK(prepop && kept_near && leash_pop);
     CHECK(hidden_pop);

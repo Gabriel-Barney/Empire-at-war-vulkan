@@ -1131,6 +1131,7 @@ void TacticalBattle::bt_kill_silently(TacticalMode& mode, objects::ObjectHandle 
         hg_unit_removed(id);  // hangars / engine loops
         abilities_->remove(id);
         if (u->movable) movement_->remove_unit(id);
+        else movement_->object_removed(id);  // s78f review: fighter formation blocks naming it
         unit_gone(mode, *u);
     }
     mode.destroy(h);

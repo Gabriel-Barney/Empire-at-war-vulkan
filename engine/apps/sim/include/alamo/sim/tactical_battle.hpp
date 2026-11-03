@@ -303,6 +303,21 @@ struct FighterFormationRecord {
     objects::ObjectId goal_object = kNoObjectId;  // object block (Attack / Attack_Move / Guard of an object): the goal follows it
     // s78f t02: the auto attack blocks (0x41cf70) live in the movement layer's block stack (MovementSystem::fighter_push,
     // FighterBlock::pushed); TacticalBattle::fighter_pushed reads them (the S7 t22 `pushed` list is gone).
+    // s78f review: while the movement formation exists, flags / goal / goal_object follow its CURRENT block that is not an
+    // auto block (TacticalBattle::fighter_order_view, refreshed by fighter_sync): the order's own block keeps the order's
+    // values (a guard stays a guard of its object while it is on top), a queued waypoint (0x08) below it takes over once
+    // the order's block is popped.
+};
+
+// s78f review (FIGHTER_FLYING §4.11 B, 0x4160a0): the order block the host's chase tests read. `first_flags` = blocks[0]'s
+// flags (0x4160a0 rule 2 and 0x4165f0 pick Rr from the FIRST block: Guard_Chase_Range only when the bottom block is a
+// guard, so a guard with a shift waypoint queued below it reads the waypoint's range, as the movement leash does); `flags`,
+// `goal`, `goal_object` = the current order block (guard status, the guarded object, the slot goal). 0x01 / 0x02 bits only.
+struct FighterOrderView {
+    uint8_t first_flags = 0;
+    uint8_t flags = 0;
+    Vec3 goal;
+    objects::ObjectId goal_object = kNoObjectId;
 };
 
 class TacticalBattle {
@@ -956,6 +971,8 @@ public:
     // s78f t02: the auto attack blocks of `key`'s movement formation (FighterBlock::pushed), bottom to top.
     std::vector<objects::ObjectId> fighter_pushed(objects::ObjectId key) const;
     const FighterFormationRecord* fighter_formation(objects::ObjectId key) const;
+    // s78f review: the order block of `r` as the chase tests read it (FighterOrderView). Const read only.
+    FighterOrderView fighter_order_view(const FighterFormationRecord& r) const;
     // S7 render attitude (MovementSystem::attitude in radians, for render::object_transform): roll right-handed about
     // the forward axis (positive = right wing down; a left turn banks negative), pitch right-handed about the left axis
     // (positive = nose down), applied pitch then roll to the level yaw frame of the store facing. Space fighters, land

@@ -3651,12 +3651,22 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     team_heads_.clear();
     for (const auto& [team, index] : leaders_) team_heads_.emplace_back(team, units_[index].id);
     std::sort(team_heads_.begin(), team_heads_.end());
-    // s78f t03: the heads of ground teams (TeamTargeting services in phase D), ascending id.
+    // s78f t03: the heads of ground teams (TeamTargeting services in phase D), ascending id. A member keeps no target of
+    // its own (TD +8 null, TACTICAL_COMBAT §3.1.1 "Team targeting copies"): one it picked before it became a member (its
+    // head appeared later) is dropped here, since its scan no longer runs to replace it (s78f review).
     land_heads_.clear();
     if (cfg_.mode == GameMode::Land)
         for (uint32_t i = 0; i < n; ++i)
             if (!(units_[i].flags & kUnitDead))
-                if (const Unit* h = land_team_head(units_[i])) land_heads_.push_back(h->id);
+                if (const Unit* h = land_team_head(units_[i])) {
+                    land_heads_.push_back(h->id);
+                    Unit& m = units_[i];
+                    if (m.auto_target != kNoObject) {
+                        m.auto_target = kNoObject;
+                        m.auto_hp = -1;
+                        m.target_score = 0.0f;
+                    }
+                }
     std::sort(land_heads_.begin(), land_heads_.end());
     land_heads_.erase(std::unique(land_heads_.begin(), land_heads_.end()), land_heads_.end());
     if (!leaders_.empty()) {
