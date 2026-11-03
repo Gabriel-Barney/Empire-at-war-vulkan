@@ -387,6 +387,29 @@ Moved goldens (regenerated with MSVC; each run again with one knob against the o
 | `apps/headless/testdata/skirmish_ai_foc_land_golden.crc`, `skirmish_ai_foc_land_campaign_golden.crc` | stagger and latency (each alone moves it) | tick 2 / 23, system `battle.ai` (the hash holds an in-flight job's ready frame) |
 
 `replay_golden.crc` did not move: the recorded stream stores its latency (0) in its metadata and replays with it.
+The `alamo_game` smoke goldens `game_smoke_campaign.crc` and `game_smoke_land.crc` moved too (MSVC = clang; first difference
+campaign tick 1 `ai.goals` / `rng`, land tick 51 `battle.ai`; `alamo_game` has no timing knobs, so these were not re-run at the old
+timing). Space skirmish outcome seeds: 6 and 9 now end, 2 reaches the 14400-frame cap (it ends at 5724 with `--no-ai-stagger`).
+
+Worker-count check (OPT3 t07): per-tick CRC logs identical at 0 / 1 / 4 / 16 / 15 workers and MSVC = clang for HotM with every faction
+an AI (18000 ticks), the 400-planet synthetic (`--record-stream --synthetic 400 --ais 4 --frames 900`, latency 15, then `--replay`),
+the FoC space battle with station (`--skirmish-ai foc-station --seed 3`, 9598 ticks), and in the suite `alamo_headless_galactic_ai_human*`
+and `alamo_headless_skirmish_ai_foc_land_outcome*` (land). `alamo_ai_tests` runs the path finder's background job on job systems with
+0 / 1 / 4 / 16 / default workers, saving mid-job. `build_asan.cmd` passes with UBSan and with `ALAMO_SANITIZE=address`.
+
+Numbers (`--profile --profile-budget 33.33`, the OPT1 scenarios at the default worker count, one exe; "old" = `--ai-latency 0
+--no-ai-stagger` (`--latency 0` for the synthetic), run back to back with "new" while other sessions loaded the PC, so compare
+the pairs, not with the OPT1 table):
+
+| Scenario | Old: tick mean / p99 / max (ms) | New: tick mean / p99 / max (ms) | What moved |
+|---|---|---|---|
+| 400-planet synthetic, 4 AIs (900 ticks) | 0.46 / 2.96 / 12.5 | 0.48 / 1.64 / 5.4 | the frame-0 all-pairs (11.9 ms) runs in the background; worst tick is frame 15 waiting for it (the run is not paced: 15 ticks are ~6 ms here, 500 ms in the game) |
+| HotM, every faction an AI (18000 ticks) | 0.21 / 0.55 / 3.0 | 0.20 / 0.50 / 4.8 | `ai.planning` / `ai.execution` active on 17893 / 18000 ticks instead of ~6000, max 0.42 -> 0.37 / 0.30 -> 0.18 ms; the max tick is `ai.goals` (every frame, not staggered) |
+| FoC land battle (`foc-land-campaign`) | 4.35 / 14.5 / 309 | 4.38 / 14.0 / 297 | `ai.execution` p99 0.64 -> 0.06 ms, max 0.88 -> 0.23 ms (zone-graph recompute off the sim thread); the max is the first battle tick (setup) |
+| FoC space battle with station | 1.35 / 2.93 / 233 | 1.22 / 2.90 / 248 | `ai.execution` max 0.47 -> 0.25 ms; the max is the first battle tick (setup) |
+
+The AI's own per-tick peaks were already small next to battle setup and `ai.goals` (the goal evaluation runs every frame for every
+player: the next candidate for spreading, OPT2 t03 / follow-ups).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
