@@ -70,6 +70,9 @@ CampaignBattles::CampaignBattles(SimHost& host, const galactic::ConflictRules& r
     : host_(&host), rules_(&rules), catalog_(&catalog), loader_(std::move(loader)), opt_(options) {}
 
 CampaignBattles::~CampaignBattles() {
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    if (lua_close_wait_) lua_close_wait_();
+#endif
     if (cm_) {  // N1: the save participants attach() registered
         host_->remove_save_participant("galactic.conflicts");
         host_->remove_save_participant("battles");
@@ -644,7 +647,7 @@ void CampaignBattles::push_battle(SimHost& host) {
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     if (opt_.tactical_ai) bc.order_interval = bc.reinforce_interval = 0;  // A1: the tactical AI orders and reinforces
 #endif
-    battle_ = std::make_unique<TacticalBattle>(*catalog_, *g->sim(), *rules_, pending_req_, bc);
+    battle_ = std::make_unique<TacticalBattle>(*catalog_, *g->sim(), *rules_, pending_req_, bc, host.parallel_for());
     upgrades_seen_ = 0;
     battle_->set_animation(opt_.animation);  // S10-int (null: no sim-owned animation)
     battle_->set_clone_models(opt_.clone_models);  // refixf t04 (null: the battle's own, from the catalog files)

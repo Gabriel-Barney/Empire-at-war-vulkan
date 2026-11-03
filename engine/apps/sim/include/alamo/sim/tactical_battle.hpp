@@ -305,8 +305,9 @@ struct FighterFormationRecord {
 
 class TacticalBattle {
 public:
+    // `pf` (OPT3 t09): the model loads of the battle tables' build run on it (results do not depend on it).
     TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
-                   galactic::BattleRequest request, BattleConfig cfg = {});
+                   galactic::BattleRequest request, BattleConfig cfg = {}, const ParallelFor& pf = serial_for);
     ~TacticalBattle();
     TacticalBattle(const TacticalBattle&) = delete;
     TacticalBattle& operator=(const TacticalBattle&) = delete;
@@ -1276,6 +1277,8 @@ private:
     std::unique_ptr<BattleTables> tables_;
     std::vector<uint32_t> types_used_;  // every type spawned in this battle, first-use order
     std::vector<uint32_t> descs_;       // CombatData::units index per types_used_ entry
+    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;  // OPT3 t09: constructor / setup's table build (null after setup)
+    void tables_extend();  // tables_ / descs_ := the build of types_used_ (only the appended types are built)
     std::unique_ptr<tactical::movement::MovementSystem> movement_;
     std::vector<tactical::movement::ClearanceInfo> clr_types_;  // §6.3.1: per type (derived from type / model data)
     std::vector<uint8_t> clr_known_;                            // clr_types_[t] computed

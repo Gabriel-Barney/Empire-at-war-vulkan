@@ -656,6 +656,10 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     s.ai->defs = &s.defs;
     s.ai->equations = &s.eqs;
     s.ai->files = s.files.get();
+    if (opt.ai_latency >= 0) s.ai->path_latency = static_cast<uint32_t>(opt.ai_latency);  // OPT2 t01 / t02 parity knobs
+    s.ai->stagger = opt.ai_stagger;
+    s.ai->pp_streams = opt.pp_streams;  // OPT2 t10 parity knobs
+    if (opt.pp_latency >= 0) s.ai->pp_latency = static_cast<uint32_t>(opt.pp_latency);
     const uint64_t max_ticks = opt.ticks_set ? opt.ticks : 30 * 600;
     struct Out {
         CrcLog crc;

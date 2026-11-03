@@ -68,6 +68,13 @@ uint32_t land_zone_node_cost(double threat_sum);
 // Weight with node cost 0 (no threat grid / no threat): 0x10000 + hop.
 uint32_t default_zone_edge_weight(const HintZone& a, const HintZone& b);
 
+// OPT2 t02: a ZoneGraph::compute() result (node costs, edges, all-pairs), applied with ZoneGraph::adopt().
+struct ZoneGraphResult {
+    std::vector<uint32_t> node_cost;
+    ::alamo::galactic::detail::RawOwned raw;
+    ::alamo::galactic::AllPairsMatrices m;
+};
+
 class ZoneGraph {
 public:
     // Builds the graph and runs Recompute_All_Pairs (node costs 0). `pf` parallelises rows for a fixed k (exact).
@@ -79,6 +86,12 @@ public:
     // weights. An empty `threat` = no threat grid (every cost 0).
     void recompute_with_threat(const ZoneThreatFn& threat, const ParallelFor& pf = serial_for);
     std::span<const uint32_t> node_costs() const { return node_cost_; }
+    // OPT2 t02 (background recompute, applied later): the node costs recompute_with_threat would set; the §6.1 weights and
+    // Recompute_All_Pairs for those costs into `out` without changing this graph (reads only the static zones and links,
+    // so it may run on a worker while the sim thread reads this graph); adopt() applies such a result (swaps it in).
+    std::vector<uint32_t> threat_node_costs(const ZoneThreatFn& threat) const;
+    void compute(std::span<const uint32_t> node_cost, ZoneGraphResult& out, const ParallelFor& pf = serial_for) const;
+    void adopt(ZoneGraphResult& r);
 
     uint32_t size() const { return static_cast<uint32_t>(zones_.size()); }
     const HintZone& zone(uint32_t i) const { return zones_[i]; }
@@ -111,6 +124,9 @@ public:
     bool read(ByteReader& r);
 
 private:
+    void build_raw(const ZoneEdgeWeightFn& weight, std::span<const uint32_t> node_cost,
+                   ::alamo::galactic::detail::RawOwned& raw) const;
+
     std::vector<HintZone> zones_;
     ZoneLocator locator_;
     std::vector<int32_t> link_target_;  // per (zone, link) flattened: resolved index or -1

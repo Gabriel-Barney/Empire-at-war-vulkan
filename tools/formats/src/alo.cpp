@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 
 namespace alamo::alo {
 
@@ -132,17 +133,26 @@ std::uint32_t parse_vertices(const Chunk& c, std::uint32_t count, VertexBuffer& 
     vb.extra.resize(count);
     vb.bone_index.resize(count);
     vb.bone_weight.resize(count);
-    auto r = c.reader();
-    for (std::uint32_t i = 0; i < count; ++i) {
-        vb.position[i] = r.vec3();
-        vb.normal[i] = r.vec3();
-        for (auto& u : vb.uv) u[i] = r.vec2();
-        vb.tangent[i] = r.vec3();
-        vb.binormal[i] = r.vec3();
-        vb.color[i] = r.vec4();
-        vb.extra[i] = legacy ? Vec4{1, 1, 1, 1} : r.vec4();  // absent in 128-byte records
-        for (auto& b : vb.bone_index[i]) b = r.u32();
-        vb.bone_weight[i] = r.vec4();
+    // The record is little-endian floats / u32s in field order (the size check above covers every record), copied field
+    // by field straight into the arrays (OPT3 t11: the per-value reader dominated battle model loads).
+    static_assert(sizeof(Vec2) == 8 && sizeof(Vec3) == 12 && sizeof(Vec4) == 16 && sizeof(vb.bone_index[0]) == 16);
+    const std::uint8_t* rec = c.data.data();
+    for (std::uint32_t i = 0; i < count; ++i, rec += stride) {
+        const std::uint8_t* f = rec;
+        auto take = [&f](auto& out) {
+            std::memcpy(&out, f, sizeof out);
+            f += sizeof out;
+        };
+        take(vb.position[i]);
+        take(vb.normal[i]);
+        for (auto& u : vb.uv) take(u[i]);
+        take(vb.tangent[i]);
+        take(vb.binormal[i]);
+        take(vb.color[i]);
+        if (legacy) vb.extra[i] = Vec4{1, 1, 1, 1};  // absent in 128-byte records
+        else take(vb.extra[i]);
+        take(vb.bone_index[i]);
+        take(vb.bone_weight[i]);
     }
     return static_cast<std::uint32_t>(stride);
 }
@@ -223,12 +233,10 @@ SubMesh parse_submesh_data(const Chunk& c, Material&& mat, Ctx& ctx) {
             case 0x10007:
                 vchunk = *ch;
                 break;
-            case 0x10004: {
-                auto r = ch->reader();
+            case 0x10004:
                 sm.indices.resize(ch->data.size() / 2);
-                for (auto& i : sm.indices) i = r.u16();
+                if (!sm.indices.empty()) std::memcpy(sm.indices.data(), ch->data.data(), sm.indices.size() * 2);  // LE u16
                 break;
-            }
             case 0x10006: {
                 auto r = ch->reader();
                 sm.bone_map.resize(ch->data.size() / 4);

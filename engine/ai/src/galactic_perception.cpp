@@ -3,6 +3,7 @@
 #include "alamo/ai/galactic_perception.hpp"
 
 #include "alamo/ai/ai_path_finder.hpp"
+#include "alamo/core/profile.hpp"
 
 #include <utility>
 
@@ -203,6 +204,7 @@ void GalacticPerception::reset(const GalacticSnapshot& s) {
 }
 
 void GalacticPerception::observe(const GalacticSnapshot& s, uint32_t frame) {
+    ALAMO_PROFILE_SCOPE("ai.perc.observe");  // OPT2 t11
     if (s.planet_count != planets_ || s.players.size() != tracked_.size()) reset(s);
     frame_ = frame;
     for (size_t pi = 0; pi < tracked_.size(); ++pi) {
@@ -234,6 +236,7 @@ void GalacticPerception::observe(const GalacticSnapshot& s, uint32_t frame) {
 }
 
 void GalacticPerception::evaluate(const GalacticSnapshot& s, const ParallelFor& pf) {
+    ALAMO_PROFILE_SCOPE("ai.perc.evaluate");  // OPT2 t11
     if (s.planet_count != planets_ || s.players.size() != tracked_.size()) reset(s);
     // Is_Planet_Revealed (0x3fa420) from the LOCAL masks.
     for (uint32_t i = 0; i < planets_; ++i) {
@@ -306,6 +309,7 @@ void GalacticPerception::evaluate_player(const GalacticSnapshot& s, PlayerId pla
 }
 
 void GalacticPerception::fill_view(const GalacticSnapshot& s, PlayerId p, galactic::PlayerView& view) const {
+    ALAMO_PROFILE_SCOPE("ai.perc.fill_view");  // OPT2 t11
     const uint32_t n = planets_;
     const PerceptionPlayer me = s.is_player(p) ? s.players[static_cast<size_t>(p)] : PerceptionPlayer{};
     view.is_human = me.is_human;

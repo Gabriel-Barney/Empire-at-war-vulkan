@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/parallel.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/tactical/movement/common.hpp"
 
@@ -120,6 +121,10 @@ public:
     // grid) is still recorded: stamped(id) is true with no cells (S8 t02: the object is a LAND_OBSTACLE occupant of nothing; its
     // slot-43 aim walk finds no occupied cell, TACTICAL_GAPS 3.1).
     uint32_t stamp(ObjectId id, const ObstacleFootprint& fp);
+    // OPT3 t11: stamp() for each entry in list order, with the cells of every entry sampled through `pf` first (the
+    // sampling reads only the base grid and the footprint, so the footprints' fine_tune must be safe to call
+    // concurrently). Same grid and stamps as the stamp() loop. Returns each entry's stamp() count, list order.
+    std::vector<uint32_t> stamp_all(std::span<const std::pair<ObjectId, ObstacleFootprint>> list, const ParallelFor& pf = serial_for);
     bool unstamp(ObjectId id);
     bool stamped(ObjectId id) const { return stamps_.find(id) != stamps_.end(); }
     // S8 t02: the stamped ids, ascending (map placements' negative ids first). Hosts unstamp the objects that left.

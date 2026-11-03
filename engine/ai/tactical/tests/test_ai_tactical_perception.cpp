@@ -732,6 +732,44 @@ static void test_duplicate_zone_names() {
     CHECK(g.p.evaluator_handle(g.h_zone2) == g.h_zone2 && g.p.evaluator_handle(g.h_outside) == g.h_outside);
 }
 
+// OPT2 t13: OpenBuildPadCount {Parameter_Type}: a pad counts when its own type is listed (case-insensitive), else when the
+// host's pad_accepts hook accepts one of the listed types (known names only, in list order, stopping at the first yes); no
+// hook means only the pad's own type counts.
+static void test_open_pad_types() {
+    Fixture f;
+    PerceptionObject pad2 = make_obj(18, -1, kTurret, kLandOff + 300.0f, kLandOff + 200.0f, 0.0f, 0.0f);
+    pad2.is_build_pad = true;
+    pad2.has_unit_ai = false;
+    f.w.objects.push_back(pad2);
+    f.w.index();
+    CHECK(f.val("Variable_Self.OpenBuildPadCount") == 2.0);
+    CHECK(f.val("Variable_Self.OpenBuildPadCount {Parameter_Type = \"skirmish_build_pad\"}") == 1.0);
+    CHECK(f.val("Variable_Self.OpenBuildPadCount {Parameter_Type = \"E_Ground_Barracks\"}") == 0.0);  // no hook
+    struct Call {
+        int32_t pad, type;
+        std::string faction;
+    };
+    std::vector<Call> calls;
+    f.w.pad_accepts = [&calls](int32_t pad_type, int32_t type, std::string_view faction) {
+        calls.push_back({pad_type, type, std::string(faction)});
+        return type == kBarracks && pad_type == kPad;
+    };
+    CHECK(f.val("Variable_Self.OpenBuildPadCount {Parameter_Type = \"No_Such_Type\", Parameter_Type = \"Darth_Vader\", "
+                "Parameter_Type = \"E_Ground_Barracks\"}") == 1.0);
+    const std::string faction = f.w.players[0].faction;
+    CHECK(calls.size() == 4);  // pad 16: Darth_Vader, E_Ground_Barracks (yes); pad 18: both (no)
+    if (calls.size() == 4) {
+        CHECK(calls[0].pad == kPad && calls[0].type == kHero && calls[0].faction == faction);
+        CHECK(calls[1].pad == kPad && calls[1].type == kBarracks);
+        CHECK(calls[2].pad == kTurret && calls[2].type == kHero && calls[3].pad == kTurret && calls[3].type == kBarracks);
+    }
+    calls.clear();
+    CHECK(f.val("Variable_Self.OpenBuildPadCount {Parameter_Type = \"Skirmish_Build_Pad\", Parameter_Type = \"Darth_Vader\"}") ==
+          1.0);
+    // pad 16 is listed by its own type; pad 18 asks for every listed type in order
+    CHECK(calls.size() == 2 && calls[0].pad == kTurret && calls[0].type == kPad && calls[1].type == kHero);
+}
+
 static void test_script_hook() {
     Fixture f;
     double v = 0;
@@ -1329,6 +1367,7 @@ int main(int argc, char** argv) {
     test_grid_projection();
     test_tokens();
     test_duplicate_zone_names();
+    test_open_pad_types();
     test_script_hook();
     test_zone_threat();
     test_lua_functions();

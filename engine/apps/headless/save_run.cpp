@@ -137,6 +137,18 @@ struct Session {
     std::function<void()> after_tick;  // harness step between ticks (skirmish: the land invasion)
     galactic::GalacticSim* gs = nullptr;
     bool tactical_top() const { return host->modes().depth() > 1; }
+    // OPT3 t04 (--save-when scheduled): AI background jobs in flight (galactic and battle path finders).
+    size_t ai_jobs_in_flight() const {
+        size_t n = 0;
+#ifdef ALAMO_SAVE_RUN_GALACTIC
+        if (world) n += world->background_jobs_in_flight();
+#endif
+#if defined(ALAMO_SIM_HAVE_BATTLES) && defined(ALAMO_SIM_HAVE_AI_TACTICAL)
+        const sim::CampaignBattles* b = battles ? battles.get() : skirmish.battles.get();
+        if (b && b->tactical_ai()) n += b->tactical_ai()->world().background_jobs_in_flight();
+#endif
+        return n;
+    }
     // A conflict queued / being decided on the galaxy, no battle running (--save-when pending).
     bool conflict_pending() const {
 #ifdef ALAMO_SIM_HAVE_BATTLES
@@ -625,6 +637,7 @@ public:
         sim::SimHost* hp = &host;
         ai::GalacticAiConfig wcfg = gcfg_;
         wcfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
+        wcfg.background = jobs::make_background_start(host.jobs());  // OPT2 t02: background path recomputes
         s->world = std::make_unique<ai::GalacticAiWorld>(
             *s->gs, host.galactic_mode()->primary(), &types_, files_.get(), host.random(), defs_, eqs_, tinfo_,
             [hp](uint8_t p, const commands::EventData& ev) { return hp->execute_direct(p, commands::CommandSource::AI, ev); }, wcfg);
@@ -822,8 +835,8 @@ bool run_ticks(Session& s, uint64_t n, std::string& err) {
 // 10 min of game time later; battle / pending: 30 min), and saves.
 bool run_to_save(Session& s, uint64_t at, const std::string& when, SaveFile& save, std::string& err) {
     sim::SimHost& host = *s.host;
-    if (when != "any" && when != "battle" && when != "galactic" && when != "pending") {
-        err = "--save-when " + when + " (any | battle | galactic | pending)";
+    if (when != "any" && when != "battle" && when != "galactic" && when != "pending" && when != "scheduled") {
+        err = "--save-when " + when + " (any | battle | galactic | pending | scheduled)";
         return false;
     }
     if (host.frame() < at && !run_ticks(s, at - host.frame(), err)) return false;
@@ -842,6 +855,10 @@ bool run_to_save(Session& s, uint64_t at, const std::string& when, SaveFile& sav
             why = "no conflict pending";
             return false;
         }
+        if (when == "scheduled" && s.ai_jobs_in_flight() == 0) {  // OPT3 t04: a save with AI work in flight
+            why = "no AI background job in flight";
+            return false;
+        }
         return host.save_allowed(&why);
     };
     while (!ready()) {
@@ -853,7 +870,8 @@ bool run_to_save(Session& s, uint64_t at, const std::string& when, SaveFile& sav
         if (!run_ticks(s, 1, err)) return false;
     }
     if (host.frame() != at) std::printf("save: not at tick %" PRIu64 " (%s); saved at tick %" PRIu64 "\n", at, why.c_str(), host.frame());
-    std::printf("save: mode stack depth %zu%s\n", static_cast<size_t>(host.modes().depth()), s.conflict_pending() ? ", conflict pending" : "");
+    std::printf("save: mode stack depth %zu%s, %zu AI background job(s) in flight\n", static_cast<size_t>(host.modes().depth()),
+                s.conflict_pending() ? ", conflict pending" : "", s.ai_jobs_in_flight());
     return host.save(save, &err);
 }
 

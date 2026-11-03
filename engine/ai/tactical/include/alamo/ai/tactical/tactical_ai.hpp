@@ -78,7 +78,9 @@
 #include "alamo/ai/tactical/tactical_pp.hpp"  // a1g t04: TacticalPpPick (reinforce_join_pp)
 #include "alamo/commands/command.hpp"
 #include "alamo/commands/events.hpp"
+#include "alamo/ai/latency_job.hpp"  // OPT2 t02
 #include "alamo/core/parallel.hpp"  // OPT2 t04: lua_gc_pf
+#include "alamo/galactic/cadence.hpp"
 #include "alamo/lua/players.hpp"
 #include "alamo/objects/object_store.hpp"
 
@@ -231,6 +233,13 @@ public:
     // Called during the AI update. Default: nothing.
     enum class UnitRelease : uint8_t { OrderLockDone, TaskForce };
     virtual void unit_released(int32_t /*player*/, int32_t /*object_id*/, UnitRelease /*path*/) {}
+    // a1k t01 (A1_READINGS §39.2): a live unit left a task force (TaskForceClass vf49 0x5ff610: Release_Unit /
+    // Release_Forces, plan end, owner change). The original writes the unit's (and each hard point's) type values back
+    // into its targeting data: priority set = Targeting_Priority_Set (TD +0x160 := type +0x520), stickiness threshold
+    // = Targeting_Stickiness_Time_Threshold (TD +0x158 := type +0x528), so a task force's Set_Targeting_Priorities
+    // (SetClassPriorities) lasts only while the unit is a member. Unconditional (no movement-lock test). Called during
+    // the AI update, before unit_released. Default: nothing.
+    virtual void unit_left_task_force(int32_t /*object_id*/) {}
     // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4). space_drop_frame: the player's entry facing and the
     // playable box (false: facing 0, no box). space_prevention_hit (0x4d8d10): `p` lies inside the
     // Reinforcement_Prevention_Radius (2-D, strict) of a live object whose owner is not allied with `player`.
@@ -270,6 +279,9 @@ public:
     virtual std::vector<ReinforcementsUnloaded> reinforcements_unloaded() { return {}; }
 };
 
+// OPT2 t10: frames from a proposal slice to the apply of its PotentialPlan solves (TacticalAiConfig::pp_latency).
+inline constexpr uint32_t kDefaultPpLatency = 1;
+
 struct TacticalAiPlayerConfig {
     int32_t player = -1;
     std::string ai_type;     // AIPlayerType ("BasicEmpire")
@@ -298,9 +310,25 @@ struct TacticalAiConfig {
     std::vector<std::string> plan_files;            // load order (the mode's plan folder)
     bool log_decisions = true;
     uint32_t game_seed = 0;                         // A2 tactical: session seed (perception '#' reseed, AI_GALACTIC_3 §7.3)
-    // OPT2 t04: fan-out for the per-update scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); any
-    // value gives identical results.
+    // OPT2 t04: fan-out for the per-update scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); OPT3
+    // t09: also for load_plans (one job per plan file). Any value gives identical results.
     ParallelFor lua_gc_pf = serial_for;
+    // OPT2 t02: the land path finders' cadence recomputes (Execution, 90 frames) run on `background` (latency_job.hpp;
+    // empty = inline at the kick, same results) and are applied `path_latency` mode frames after the kick (0 = the
+    // original timing).
+    uint32_t path_latency = galactic::kDefaultAllPairsLatency;
+    BackgroundStart background;
+    // OPT2 t01: per-player planning phases (AiContext::set_stagger); false = the original timing.
+    bool stagger = true;
+    // OPT2 t03: fan-out for the goal candidates' perception values (ai_goals.hpp batched values); any value gives
+    // identical results.
+    ParallelFor pf = serial_for;
+    // OPT2 t10: slot 10 as a batched accept (ai_goals.hpp): the plan pick and the PotentialPlan solve of each candidate
+    // draw from the candidate's own RNG stream (seeded by session seed, frame, player, goal source and target) instead
+    // of the synced stream; the slice's solves run on `pf` (pp_latency 0) or as one job on `background`, applied
+    // pp_latency frames after the slice. false = the original synced draws in proposal order (pp_latency unused).
+    bool pp_streams = true;
+    uint32_t pp_latency = kDefaultPpLatency;
 };
 
 struct TacticalAiDecision {
@@ -334,6 +362,12 @@ public:
     void update(int64_t now, uint32_t mode_frame);
     // Battle end (slot 7 / context teardown): every running plan ends (released by the goal system).
     void end_battle();
+    // OPT3 t11: closes every Lua VM of this world (running plans, free stores, evaluators, plan pools) instead of one by
+    // one in the destructor: their finalizers run here (lua::prepare_detached_close), then the VMs, which now only hold
+    // memory, are freed as one job on cfg.background; without one, through cfg.lua_gc_pf before this returns. Returns
+    // the job's wait function (empty when nothing is left running): call it before the job system goes away. Call
+    // after end_battle(), right before destroying the world: no script may run afterwards. Owner thread of the VMs.
+    std::function<void()> release_scripts();
     void set_suspended(bool suspended);
     // S7 t26 (AI_TACTICAL §7.3.3 item 2) - object signal 0xb "a new order replaces this unit's order", raised by the host
     // when it executes an order on `object_id` (A1_READINGS §33.3: task-force movement collectors, unit Move_To /
@@ -352,6 +386,8 @@ public:
     const AiContext* context(int32_t player) const;
     size_t free_store_size(int32_t player) const;
     size_t live_targets(int32_t player) const;
+    // OPT2 t02: background land path recomputes in flight (save tests: --save-when scheduled).
+    size_t background_jobs_in_flight() const;
     size_t running_plans() const;
     const std::vector<TacticalAiDecision>& decision_log() const;
     std::vector<std::string> lua_errors() const;
