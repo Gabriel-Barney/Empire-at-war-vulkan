@@ -197,6 +197,8 @@ land/space pair selected by this id.
   Correction (S7 t25 RE, 2026-11-02) [H]: it runs only when the container's locomotor kind (vf +0x238) is 1 (Walk,
   Bike, LandTeamContainer, LandTeamInfantry), i.e. ground team containers only, not "in space only". Space squadron
   containers (Team locomotor, kind 2) never scan; their target comes from the members' own TARGETING.
+  What the ground container pushes to its members (state, ordered flag, attack-idle pose; not the target): §3.1.1
+  "Targeting states, slots 47 / 48 and team copies" (s78f, 2026-11-03).
 - **Shared squadron target (2026-11-02)** [H]. A member whose own target is empty and whose due scan picks t sets
   the team target (0x406370, team data = container +0x110: +0x30 = t, +0x38 = hard point) and calls `Set_Target` on
   **every** member in index order, overwriting their targets; `Order_Attack`'s set path does the same. A member that
@@ -952,7 +954,8 @@ above.
     the members). Entering 4 raises signal 0x1E. **4 = attacking**: the target is in range (slot 44) and not inside
     the min range (slot 45), set by `Service_Land` 0x634810 / `_Space` / 0x62eeb0. State 3 = in range but the turret
     or facing is not ready yet (slot 48 0x568230 is true while the facing is off the target direction by more than
-half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor; 0x20af60 compare [M on its units]). State 2 = out of
+half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor; 0x20af60 compare; units and the full
+    state table: "Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)" below). State 2 = out of
     range. This is the fire-time range gate (LOB_SOLVER §8 item 22).
   - After a shot from a LOBBING_SUPERWEAPON object, TD +0x3c / +0x3d and +0x30…+0x38 are cleared.
 - **ROCKET_ATTACK detection (step 4, hardpoint step 6).** 0x39b950(obj, 11, 1) reads the per-type slot
@@ -982,6 +985,113 @@ half of 0x372560 = `Max_Rate_Of_Turn` (+0x38c) × the speed / difficulty factor;
   - A team container (slot byte +0x348 ≠ −1) is first replaced by its first member (0x4ec820 on team +0x110: list
     +0x10, count +0x18). An empty team returns nothing.
 
+**Targeting states, slots 47 / 48 and team copies (s78f, 2026-11-03)** [H unless tagged]. TD = obj +0xf0; the TD
+pack is shared by TARGETING, WEAPON (TD +0x80 = the WeaponBehavior, stored by its attach 0x54ceb0) and TURRET
+(TD +0x88 = the TurretBehavior, stored by its attach 0x632120).
+
+*States of TD +0x18* (written only through slot 31 and the team copy of it, below; the writers found are 0x565f90,
+0x569160, the land / space / team services and 0x62f550):
+
+| state | written by | meaning |
+|---|---|---|
+| 0 | target clear 0x565f90 | no target |
+| 1 | `Set_Target` 0x569160 | target just set, not yet evaluated |
+| 2 | the services | target out of range (slot 44 false or slot 45 true), or "hold fire" (below), or a moving unit that may not fire on the move |
+| 3 | the services | in range, but the turret has not reached its aim, or the body must still turn to face the target |
+| 4 | the services | attacking: the own-weapon gate step 7 passes |
+
+*Land unit service* (`Service_Land` 0x634810), after the target checks, when slot 44 is true and slot 45 false:
+1. **TURRET present (TD +0x88):** nothing happens while the unit is in a Walk deploy transition (0x18 / 0x1A), or
+   while it is an `Auto_Deploys` (+0xd0) `Deploys` (+0xd1) unit that is not deployed (0x39a390) and has
+   `Fire_Weapon_When_Undeployed` (+0xaf) clear: the state is left as it was. Otherwise:
+   - the turret can aim at the target (0x631cc0) → aim it (0x632050): angles reached → **4**, else **3**;
+   - it cannot aim (outside `Turret_Rotate_Extent` / `_Elevate_Extent`, or no lob arc) → if the unit is deployed,
+     or the target is not the formation's attack target (0x41a2e0), or the target type's
+     `Should_Cause_Limited_Turrets_To_Turn` (+0x80) is clear: the target is dropped (slot 27) and the service ends;
+     else the body turns: unless the unit is moving, locomotor vf +0x218 gets the vector to the target (a team
+     target: its member, 0x566aa0) [M: the turn request]; state **3**.
+2. **No TURRET, WEAPON present (TD +0x80):**
+   - **moving** (0x39ade0 = locomotor vf +0x1c0(0)): state **4** when the model has **no** Attack (type 5) clip
+     (0x397ae0(obj, 5) = the clip count), else **2**. So infantry with attack animations do not fire while they
+     move; vehicles without them do.
+   - **not moving:** t = slot 48 (needs to turn). An auto-deploy check (0x568e60) may request the deploy
+     (0x391260). Then:
+     - t true and (`Deploys` clear, or `Must_Face_Target_To_Attack_When_Deployed` (+0xa6), or
+       `Fire_Weapon_When_Undeployed` (+0xaf)): slot 47(1), state **3**; then the locomotor's vf +0x2e8(target) (turn
+       request [M: name]) and slot 48 again: still off → stays 3; now facing → **4**;
+     - otherwise: when `Deploys` is clear the facing is **snapped** to the target (0x394440: yaw and pitch from
+       obj +0x78 to the target position (a team target: its member); pitch 0 when
+       `Targeting_Land_Model_Stay_Horiz_Flat` (+0xad); with the flag clear, locomotor vf +0x2f8 is then called
+       [M]); state **4**. A deployer that need not face (no +0xa6, no +0xaf) gets 4 without the snap.
+3. **Neither TURRET nor WEAPON:** state **4**.
+
+After that, in every case: state 4 → slot 47(1). Out of range (slot 44 false or slot 45 true): the turret aim is
+released (0x6319d0(turret, 1): "aim requested" TD +0xf6 := 0); with a target, a unit that is neither deployed nor
+deploying, or whose `Max_Dist_Walk_While_Deployed` (+0x23b0) > 0, gets state **2**; a deployed / deploying one drops
+the target. **Hold fire:** last, state 4 with target == the pending-ability target (TD +0x148) and the target type's
+`Should_Attacker_Hold_Fire_For_Special_Ability` (+0x9e) set → state **2** (land, space and team services).
+
+*Space unit service* (0x633ae0): in range → no TURRET: **4**; TURRET: can aim → aimed **4** / not yet **3**; cannot aim
+→ drop the target. Slot 48 is not used in space; there is no facing state.
+
+*Slot 48* (0x568230, "needs to turn"; read-only, no state of its own). True when |wrap(yaw(obj +0x78 → target
++0x78) − obj yaw (+0x8c))| > tol, tol = 0x372560(type) / 2 = `Max_Rate_Of_Turn` (+0x38c, degrees; per frame [M],
+from the turn-time formula in MOVEMENT) × the
+mode multiplier (land `Object_Max_Speed_Multiplier_Land` 1.56; factor 1 when type flag (+0x790) byte 1 bit 0) / 2,
+**except tol ≥ 90 → 0.01°** (0x20af60). Yaw from 0x20acd0 (degrees, [0, 360)); the difference is wrapped to
+(−180, 180]. Target redirect: a team-container target with a shooter whose slot byte +0x33b ≠ −1 is replaced by
+the pending-ability target when that is one of its members, else by its member nearest the shooter (0x404fc0).
+**Readers:** only `Service_Land` (own-weapon branch, twice) and the TeamTargeting land service 0x62eeb0 (twice,
+through its override). No other caller (WEAPON, the gate, Lua and space never read it).
+
+*Slot 31* (0x568c80, set state s):
+- s = 4: the first time (current ≠ 4) signal **0x1E** is raised on the object; for a member of a team with a
+  member list, only the team's first member (0x4ec820) raises it, on the container. Then the pending-ability pack
+  (obj +0x100) is told the target (0x37c9a0).
+- s = 4 is **not written** (the old state stays) when the pending-ability target and the current target (each
+  replaced by its container when it has one) are the same object and a pending ability is set (TD +0x150 ≠ 0), or
+  when the type has `Is_Stationary_When_Attacking` (+0x26) and the locomotor's vf +0x1a8 ("moving") is true.
+- Any other s is written as is.
+
+*Slot 47* (0x569540, attack-idle pose; called with 1 at state 4 and on the own-weapon "needs to turn" path):
+- an `Auto_Deploys` + `Deploys` unit without `Fire_Weapon_When_Undeployed`: when TD +0xf4 (the ordered-target flag
+  written by slot 32 from `Set_Target`) is set and the current clip is not 25 (Deploy), request the deploy
+  (0x391260);
+- any other unit: when (argument 0 or `Locomotor_Has_Animation_Priority` (+0x37) clear), the locomotor is not moving
+  (vf +0x1a8), the current clip is not a flinch (79–86, 0x27b590), not 5 (Attack) and not 6 (Attack Idle), and the
+  animation gate 0x397040 is false: play clip 6 Attack Idle, index 0, looping, **blend = one synced
+  `Get_Float(0.2, 0.75)`** (0x1401ffbb0 on 0x140a13e24), speed 1.0. So entering the pose costs one synced draw;
+  while clip 5 or 6 plays, nothing is drawn.
+
+*Team targeting copies* (`TeamTargetingBehaviorClass`, vtable 0x8afd90, on ground team containers only: its service
+0x62ee00 runs 0x62eeb0 when the container's locomotor kind is 1 and (obj +0x3a1 & 2 clear or
+`Targeting_Allowed_When_Burning` (+0x83))). Member order = the team list order (0x405300 count, 0x4052d0 index).
+Overrides:
+- **slot 31** (0x62f550): the base on the container, then the **same state written raw** to every member's
+  TD +0x18 (no signal, no hold rule). So members can be in state 4 while the base kept the container's old state.
+- **slot 32** (0x62f4c0): the base (TD +0xf4 := flag, when a target exists or the flag is 0), then the flag written
+  raw to every member's TD +0xf4.
+- **slot 47** (0x62f5e0): the container itself does nothing; 0x569400 (the slot-47 body above) runs on **each
+  member** in order, so each member entering the pose draws its own `Get_Float(0.2, 0.75)`.
+- **slot 48** (0x62ed60): true when **any** member needs to turn (0x568120 per member, same rule).
+- **slot 42** (0x62ecc0, projectile for the range slots): the first member whose `Projectile_Types` has the index.
+- **Not copied:** the target TD +8 and the hardpoint TD +0x10. Land team members (`Squad_*` types:
+  `LAND_TEAM_INFANTRY_LOCOMOTOR`, WEAPON, no TARGETING) keep TD +8 null; their WEAPON service and 0x54c190 fall back
+  to the container's TD +8 when their own is null and the container's locomotor answers vf +0x230 (LandTeamContainer
+  only) [M: no other writer of a land member's TD +8 was looked for].
+- *Team service differences* (0x62eeb0, in range): a **moving** container → state 4 only while SPREAD_OUT (7) is
+  active (0x39b950(container, 7, 1)), else 2. Not moving: no member needs to turn → every member's facing is
+  snapped to the target (0x394440; a team target: its member) and state 4; else slot 47(0) on the members, state 3,
+  the container's locomotor vf +0x2e8(target), and 4 if no member needs to turn any more. No TURRET branch.
+- Space squadrons have no team targeting service; their shared target is FIGHTER_FLYING §4.10 B (team data +0x30,
+  `Set_Target` on every member).
+
+*For the implementer:* keep one state per object (0–4) and gate the own weapon on 4. Land: turret units use "turret
+aimed"; weapon units use "facing within half a frame of turn" (snap when within, turn request when not); moving
+units fire only without Attack clips. Team containers compute the state and push it raw to the members; members use
+the container's target. Draw `Get_Float(0.2, 0.75)` each time a unit (or each team member) enters Attack Idle
+through slot 47.
+
 *For the implementer:*
 - Gate the own weapon on targeting state 4 (in range and outside min range), not on an XY distance.
 - Treat the Walk states 0x18 / 0x1A as "no fire", and count only 0x19 (or the pending flag) as deployed.
@@ -1006,14 +1116,17 @@ the ordered ground point, +0x3c = "order pending", +0x3d = "charged, fire now". 
   - Lua `GameObject.Fire_Special_Weapon(target, player)` 0x576220: readiness ≥ 1.0 (SCRIPT_GAPS §1.1);
   - Lua `LandTaskForce.Fire_Special_Weapon(type_name, target)` 0x6eb7f0: the first task-force unit whose
     representative type (0x3973b0) **is** the named type and is ready (≥ 1.0); point = the target object's bare
-    position, or the AI target's position (SCRIPT_GAPS §1.4). The only shipped AI user is the skirmish/campaign land
+    position, or the AI target's position (SCRIPT_GAPS §1.4; a region AI target with no object is accepted and fires
+    at the region centre: AI_TACTICAL §7.3.4, s78f 2026-11-03). The only shipped AI user is the skirmish/campaign land
     plan `FireMagnepulse.lua` (goal `Fire_Magnepulse`, BasicLandGoalSet), which names `Ground_Magnepulse_Cannon`.
     The skirmish build `Skirmish_Ground_Magnepulse_Cannon_E` is a `Variant_Of_Existing_Type` of it, i.e. a separate
     type object, so the type test should fail and the AI should never fire the skirmish cannon through this plan [M:
     variant identity under the task-force match and 0x3973b0 not checked at run time; in-game probe below].
 - **Charge-up** in the behaviour service 0x4ea6f0 (vf6), every service while +0x3c is set and the charge-up stamp
   (pack +0x24) is 0: aim the TURRET behaviour (0xb) at the point with 0x631fe0 (LOB_SOLVER §3.6: lob solution and
-  turret angles reached). No TURRET, no solution, or not yet aimed → wait (retried next service; no timeout). Once
+  turret angles reached; the turret **slews** at `Turret_Rotate_Speed` degrees per service before "aimed", and a unit
+  without deploy states always uses the undeployed limits: LOB_SOLVER §3.6 "Charge-up aim", s78f 2026-11-03). No
+  TURRET, no solution, or not yet aimed → wait (retried next service; no timeout). Once
   aimed: play `Lobbing_Superweapon_SFXEvent_Chargeup` (type +0x2328), start `Lobbing_Superweapon_Chargeup_Particle`
   on its bone (+0x2300 / +0x2308), stamp pack +0x24 := now. When now ≥ stamp + `Lobbing_Superweapon_Chargeup_Frames`
   (+0x2348; vanilla 90): play `Lobbing_Superweapon_SFXEvent_Fire` (+0x2338), **TD +0x3d := 1**, stamp := 0. The same
@@ -1119,6 +1232,27 @@ The behaviour is attached by the type's `WEAPON` behaviour (0x0A) and is service
 hard points [M: no code path that turns it off when weapon hard points exist was found]. So a type that lists both
 fires its `Projectile_Types` too. FoC: `M1_Repulsor_Tank` is the only such type; its `HP_2M_Tank_00` hard point excludes
 Air / Vehicle / Structure, so only the WeaponBehavior shot hurts vehicles (a1h t01; port: `battle_catalog.cpp`).
+
+**Implementation checklist for the own weapon (s78f, 2026-11-03).** One WeaponBehavior service, in retail order; the
+details are in the blocks above and in LOB_SOLVER §5.
+1. Flash timers; elapsed = frame − TD +0x2c, TD +0x2c := frame; recharge countdown TD +0x24 (skipped while the
+   lobbing order is charged). Pulse count reset when it differs from `Projectile_Fire_Pulse_Count`.
+2. Gate 0x54c910 (steps 1–7). Step 7 reads the **state** set by the last TARGETING / TeamTargeting service
+   ("Targeting states" above); team members read the state the container pushed and the container's target.
+3. Target relation, animation, TURRET-slot and facing gates; energy check (no draws in 1–3).
+4. Advance the fire-bone cycle index (it stays advanced when the spawn fails).
+5. `Spawn_Projectile` (LOB_SOLVER §5, "Order and draws", s78f): early refusals → launch point (**garrison pick: one
+   synced `Get_Int` when ≥ 2 host bones qualify**) → team-target redirect → **lob solve, return null on no arc** →
+   aim (`Target_Bones` `Get_Int`, inaccuracy draws) → create.
+6. Null spawn: stop here (no flash, animation, pulse or recharge change; retried next service).
+7. Success: flash, Attack clip (0.4 / 0.1 blend), SFX, pulse / recharge (0x54d8f0), lobbing order cleared.
+
+Data the port needs for steps 2 and 5:
+- the garrison bones as **world matrices** of the host's current pose (translation = launch point, column 0 = the
+  x axis whose yaw is tested), from the host's current damage ALT (LOB_SOLVER §5.1 "Garrison pick inputs", s78f);
+- the targeting state per object, with the team copy rules (slots 31 / 32 / 47 / 48) and slot 47's synced
+  `Get_Float(0.2, 0.75)` when a unit enters Attack Idle;
+- for lobbing superweapons: the turret slew (LOB_SOLVER §3.6 "Charge-up aim") before the charge-up starts.
 
 #### 3.1.2 Own-weapon (`Projectile_Types`) inaccuracy 0x549f80 (A1j t03, 2026-11-02) [H unless tagged]
 Called from the own-weapon fire path after the aim point (0x54a270, §3.1.1 "Own-weapon aim point") and the lead.
@@ -1874,7 +2008,9 @@ Names are proposals. The Ghidra project was not updated. Grouped by section:
 18. `DeathBehaviorClass`, death clones and destruction survivors. (Spin-away and survivors: TACTICAL_GAPS.md §1.9.)
 
 > **Status 2026-10-30:** Item 18 is partly done. Spin-away, `Destruction_Survivors` and death clones are in `engine/tactical/combat/src/combat_system.cpp:1556-1599` (`death_spawns`, the death-clone loop, the spin-away draw). What remains: the deploy / infection key remaps of the death clone are not modelled (comment at `combat_system.cpp:1558`).
-19. Land facing and arc logic (`Base_Land_Targeting_Arc_Angle_Coefficient`, 0x633ae0).
+19. Land facing and arc logic (`Base_Land_Targeting_Arc_Angle_Coefficient`, 0x633ae0). **Partly answered (s78f,
+    2026-11-03):** the land facing test (slot 48, half a frame of turn), the snap / turn request and the state 3 rules
+    are in §3.1.1 "Targeting states, slots 47 / 48 and team copies"; the arc coefficient itself is still open.
 20. ~~AI autofire~~ — in the sim (`Issue_Auto_Target` 0x37d280): TACTICAL_GAPS.md §1.3.
 
 > **Status 2026-10-30:** Item 20 is implemented in the abilities module: the autofire driver and its synced candidate pick are in `engine/tactical/abilities/src/ability_behaviors.cpp:160-237`.

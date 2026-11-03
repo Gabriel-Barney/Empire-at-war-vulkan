@@ -288,8 +288,9 @@ uint8_t fighter_chase_test(const FighterChaseInputs& in);
 // S7 t22: a squadron's (or a fighter's without one) formation as the host keeps it (FIGHTER_FLYING §4.9) [port: the
 // retail coordinator / formation objects are not modelled]. Created by every move / attack order of the squadron (all
 // order paths: human, Lua / AI, hangar launch (S7 t24: a carrier escort is a guard of the carrier: flags 0x02, goal object
-// = the carrier, S7 t37: followed by the movement layer's object goal block, mv::FighterGuard, whose recorded goal and
-// object loss the record mirrors; a station launch a move to the flyout point), stand-in orders); replaced by the next
+// = the carrier, followed by the movement layer's formation, mv::FighterFormation (S7 t37 / s78f t02), whose guard
+// block's recorded goal and object loss the record mirrors; a station launch a move to the flyout point), stand-in
+// orders); replaced by the next
 // order; removed by Stop and when the squadron is gone. [M, §11 open item "lifetime of a squadron's formation after its
 // move ends"] It survives the end of the move and enter_idle (the retail formation goal survives enter_idle, §4.7, and Idle_Chase_Range is measured
 // from an arrived formation's slot goal, TACTICAL_COMBAT §2.8 rule 5), so an idle squadron that was ever ordered still
@@ -300,7 +301,23 @@ struct FighterFormationRecord {
     uint8_t flags = 0;                            // the order's block flags (0x01 attack-move, 0x02 guard)
     Vec3 goal;                                    // slot goal: the order's destination (an object order: its position then)
     objects::ObjectId goal_object = kNoObjectId;  // object block (Attack / Attack_Move / Guard of an object): the goal follows it
-    std::vector<objects::ObjectId> pushed;        // auto attack blocks (0x41cf70), oldest first; one entry per object
+    // s78f t02: the auto attack blocks (0x41cf70) live in the movement layer's block stack (MovementSystem::fighter_push,
+    // FighterBlock::pushed); TacticalBattle::fighter_pushed reads them (the S7 t22 `pushed` list is gone).
+    // s78f review: while the movement formation exists, flags / goal / goal_object follow its CURRENT block that is not an
+    // auto block (TacticalBattle::fighter_order_view, refreshed by fighter_sync): the order's own block keeps the order's
+    // values (a guard stays a guard of its object while it is on top), a queued waypoint (0x08) below it takes over once
+    // the order's block is popped.
+};
+
+// s78f review (FIGHTER_FLYING §4.11 B, 0x4160a0): the order block the host's chase tests read. `first_flags` = blocks[0]'s
+// flags (0x4160a0 rule 2 and 0x4165f0 pick Rr from the FIRST block: Guard_Chase_Range only when the bottom block is a
+// guard, so a guard with a shift waypoint queued below it reads the waypoint's range, as the movement leash does); `flags`,
+// `goal`, `goal_object` = the current order block (guard status, the guarded object, the slot goal). 0x01 / 0x02 bits only.
+struct FighterOrderView {
+    uint8_t first_flags = 0;
+    uint8_t flags = 0;
+    Vec3 goal;
+    objects::ObjectId goal_object = kNoObjectId;
 };
 
 class TacticalBattle {
@@ -951,7 +968,11 @@ public:
 
     const tactical::movement::MovementSystem& movement() const { return *movement_; }
     // S7 t22: the formation record of a squadron container (or a fighter without one); null = no formation.
+    // s78f t02: the auto attack blocks of `key`'s movement formation (FighterBlock::pushed), bottom to top.
+    std::vector<objects::ObjectId> fighter_pushed(objects::ObjectId key) const;
     const FighterFormationRecord* fighter_formation(objects::ObjectId key) const;
+    // s78f review: the order block of `r` as the chase tests read it (FighterOrderView). Const read only.
+    FighterOrderView fighter_order_view(const FighterFormationRecord& r) const;
     // S7 render attitude (MovementSystem::attitude in radians, for render::object_transform): roll right-handed about
     // the forward axis (positive = right wing down; a left turn banks negative), pitch right-handed about the left axis
     // (positive = nose down), applied pitch then roll to the level yaw frame of the store facing. Space fighters, land
@@ -1224,7 +1245,7 @@ private:
                                float& rr) const;
     // enter_idle (§4.7 step 4): fighters that entered Idle during the movement tick drop their (team) combat target.
     void fighter_enter_idle();
-    void fighter_guard_covered();  // S7 t37  // S7 t25: the movement tick's EnterIdle events drop the squadrons' team targets
+    void fighter_formation_hooks();  // s78f t02: MovementSystem::set_fighter_formation_hooks (space setup)
     std::vector<FighterFormationRecord> fformations_;
     std::vector<std::array<float, 4>> fchase_cache_;  // per type: Guard / Idle_Chase_Range, Attack_Move_Response_Range,
                                                       // Autonomous_Move_Extension_Vs_Attacker (derived)

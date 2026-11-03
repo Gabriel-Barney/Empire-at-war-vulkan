@@ -1298,26 +1298,25 @@ ObjectId AbilitySystem::remote_bomb_range_target(ObjectId target) const {
 }
 
 Vec3 AbilitySystem::remote_bomb_launch(Obj& o, const SpecialAbilityDesc& s, ObjectId target) {
-    // Spawn_Projectile launch point L (§5.1). A garrisoned thrower whose host lists gun bones: a synced pick
-    // (Get_Int(0, n - 1), one draw) among the bones within 60 degrees (horizontal) of the host -> target direction [M: the
-    // angle measured from the host position]; none within -> the normal muzzle [M].
+    // Spawn_Projectile launch point L (§5.1, ABILITIES_HARDPOINTS §2.9 "Garrisoned thrower", s78f t03). A garrisoned
+    // thrower whose host lists gun bones: the candidates are the bones (host's current ALT, current pose, table order)
+    // whose x-axis yaw lies within 60 degrees of the yaw from the host position to the target's raw position
+    // (combat::garrison_bone_within, as combat's garrison_muzzle); n >= 2 -> one synced Get_Int(0, n - 1), n = 1 -> no
+    // draw; the chosen bone's translation is L. None within -> the normal muzzle.
     if (o.combat_unit && combat_->has_unit(o.id) && (combat_->flags(o.id) & combat::kUnitGarrisoned) && host_.garrison_holder &&
         host_.garrison_fire_bones && combat_->has_unit(target)) {
         const ObjectId holder = host_.garrison_holder(o.id);
         Vec3 hp;
-        std::vector<Vec3> bones;
+        std::vector<combat::GarrisonFireBone> bones;
         if (holder != kNoObject && host_.garrison_fire_bones(holder, hp, bones) && !bones.empty()) {
             const Vec3 tp = combat_->position(target);
-            const float tx = tp.x - hp.x, ty = tp.y - hp.y;
-            const float tl = dmath::sqrt(tx * tx + ty * ty);
             std::vector<Vec3> within;
-            for (const Vec3& b : bones) {
-                const float bx = b.x - hp.x, by = b.y - hp.y;
-                const float bl = dmath::sqrt(bx * bx + by * by);
-                // cos(angle) >= cos 60 = 0.5; a bone (or target) on the host's axis counts as within [port]
-                if (!(bl > 0.0f) || !(tl > 0.0f) || (bx * tx + by * ty) >= 0.5f * (bl * tl)) within.push_back(b);
+            for (const combat::GarrisonFireBone& b : bones)
+                if (combat::garrison_bone_within(b.yaw_deg, hp, tp)) within.push_back(b.pos);
+            if (!within.empty()) {
+                const auto n = static_cast<int32_t>(within.size());
+                return within[static_cast<size_t>(n >= 2 ? draw_int(0, n - 1) : 0)];
             }
-            if (!within.empty()) return within[static_cast<size_t>(draw_int(0, static_cast<int32_t>(within.size()) - 1))];
         }
     }
     // The request's bone: Spawn_Bone on the unit's model (0x12d2a0); no such bone -> the shooter's position + its own

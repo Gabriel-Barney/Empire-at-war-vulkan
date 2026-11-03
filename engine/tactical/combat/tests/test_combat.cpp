@@ -3010,6 +3010,11 @@ void test_save_rejects() {
     bad = saved;
     put_u32_at(bad, 0, 99);
     CHECK(rejected(bad));
+    for (const uint32_t v : {9u, 11u}) {  // s78f: the version before (t03 / t04 took 10) and after the current one
+        bad = saved;
+        put_u32_at(bad, 0, v);
+        CHECK(rejected(bad));
+    }
     bad = saved;
     put_u32_at(bad, 4, 3);  // player count
     CHECK(rejected(bad));
@@ -4505,13 +4510,26 @@ void test_garrison_fire_bones() {
         std::vector<Vec3> l = g.launches(30);
         CHECK(!l.empty() && same(l.back(), wf));
         Vec3 hp;
-        std::vector<Vec3> bones;
-        CHECK(g.w.sys->garrison_fire_bones(3, hp, bones) && bones.size() == 1 && same(bones[0], wf) && same(hp, Vec3{0, 0, 0}));
+        std::vector<GarrisonFireBone> bones;
+        // s78f t03: the world position and the x-axis yaw of the current pose (host facing +y: local yaw 0 -> world 90)
+        CHECK(g.w.sys->garrison_fire_bones(3, hp, bones) && bones.size() == 1 && same(bones[0].pos, wf) && same(hp, Vec3{0, 0, 0}));
+        CHECK(bones.size() == 1 && std::fabs(bones[0].yaw_deg - 90.0f) < 1e-4f);
         g.w.sys->set_health(3, 200.0f);  // 0.2: ALT 2 = M -> no garrison bones
         CHECK(g.w.sys->model_alt(3) == 2);
         CHECK(!g.w.sys->garrison_fire_bones(3, hp, bones));
         l = g.launches(30);
         CHECK(!l.empty() && same(l.back(), Vec3{0, 0, 0}));
+    }
+    {  // s78f t03 (LOB_SOLVER §5.1 "Garrison pick inputs"): the bone's x-axis yaw is tested, not the angle of its position
+       // around the host: a bone behind the host (local -x) pointing forward (yaw 0) is a candidate; one in front pointing
+       // backward is not.
+        const GarrisonBone behind_fwd{true, Vec3{-5, 0, 3}, 0.0f}, front_back{true, Vec3{5, 0, 3}, 180.0f};
+        Garrison g({{front_back, behind_fwd}}, {}, true);
+        const std::vector<Vec3> l = g.launches(30);
+        CHECK(!l.empty() && same(l.front(), Vec3{0, -5, 3}));
+        // the free test: 60 degrees inclusive, the difference wrapped through 360
+        CHECK(garrison_bone_within(350.0f, Vec3{0, 0, 0}, Vec3{10, 0, 0}) && garrison_bone_within(60.0f, Vec3{0, 0, 0}, Vec3{10, 0, 0}));
+        CHECK(!garrison_bone_within(61.0f, Vec3{0, 0, 0}, Vec3{10, 0, 0}) && garrison_bone_within(180.0f, Vec3{0, 0, 0}, Vec3{-10, -1e-3f, 0}));
     }
 }
 
@@ -5031,6 +5049,317 @@ void bench_modifiers() {
     }
 }
 
+// ================================================================================================
+// s78f t03 / t04: targeting states 0-4, slots 47 / 48, TeamTargeting copy, charge-up turret slew
+// ================================================================================================
+
+struct StateHooks final : CombatHooks {
+    std::vector<std::pair<ObjectId, bool>> idle;  // slot 47 calls (id, arg)
+    std::vector<ObjectId> faced;                  // facing_set calls
+    int8_t aim = -1;                              // turret_aim_state answer
+    bool draw = false;                            // attack_idle draws Get_Float(0.2, 0.75) like the host
+    void attack_idle(ObjectId id, bool arg, uint32_t, SimRng& rng) override {
+        idle.emplace_back(id, arg);
+        if (draw) (void)rng.range_float(0.2f, 0.75f);
+    }
+    void facing_set(ObjectId id, Vec3) override { faced.push_back(id); }
+    int8_t turret_aim_state(ObjectId) const override { return aim; }
+};
+
+float yaw_of(Vec3 f) { return std::atan2(f.y, f.x) * 57.29578f; }
+
+void test_targeting_states() {
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies").
+    const auto turner = [](float rate) {
+        OwnOpt opt;
+        opt.edit = [rate](CombatData& d) { d.units[0].turn_rate = rate; };
+        return opt;
+    };
+    {  // slot 48: target 90 degrees off, Max_Rate_Of_Turn 10 (x the land multiplier 1): state 3 and a 10-degree turn step
+       // per service; the 9th service turns onto the target -> 4 at once (slot 48 re-tested), and the weapon fires.
+        OwnWorld o(turner(10.0f), Vec3{0, 100, 0});
+        StateHooks h;
+        o.w.sys->set_hooks(&h);
+        CHECK(o.w.sys->needs_turn(1));
+        for (int i = 0; i < 8; ++i) {
+            o.w.tick();
+            CHECK(o.w.sys->targeting_state(1) == 3 && !o.w.sys->attacking(1));
+        }
+        CHECK(o.w.sys->stats().shots == 0);
+        CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - 80.0f) < 1e-3f);
+        CHECK(h.faced.size() == 8 && !h.idle.empty() && h.idle.front() == std::make_pair(ObjectId{1}, true));
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4 && o.w.sys->attacking(1) && !o.w.sys->needs_turn(1));
+        CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - 90.0f) < 1e-3f);
+        CHECK(o.run(60) > 0);
+    }
+    {  // within half a frame of turn (tol 5): the facing is snapped onto the target, state 4 on the first service
+        OwnWorld o(turner(10.0f), Vec3{100, 4, 0});
+        StateHooks h;
+        o.w.sys->set_hooks(&h);
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4 && h.faced.size() == 1);
+        CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - std::atan2(4.0f, 100.0f) * 57.29578f) < 1e-3f);
+    }
+    {  // half a frame >= 90: tolerance 0.01 degrees (a 1-degree miss needs the turn step, which lands on the target)
+        OwnWorld o(turner(200.0f), Vec3{100, 1.75f, 0});
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4);
+        CHECK(std::fabs(yaw_of(o.w.sys->facing(1)) - std::atan2(1.75f, 100.0f) * 57.29578f) < 1e-3f);
+    }
+    {  // no locomotor: [port] slot 48 never true (a structure keeps its facing and fires)
+        OwnOpt opt = turner(10.0f);
+        opt.edit = [](CombatData& d) {
+            d.units[0].turn_rate = 10.0f;
+            d.units[0].has_locomotor = false;
+        };
+        OwnWorld o(opt, Vec3{0, 100, 0});
+        o.w.tick();
+        CHECK(o.w.sys->targeting_state(1) == 4 && std::fabs(yaw_of(o.w.sys->facing(1))) < 1e-3f);
+    }
+    {  // moving: state 4 without an Attack clip (fires on the move), 2 with one (no fire)
+        OwnWorld a(turner(10.0f), Vec3{0, 100, 0}), b(turner(10.0f), Vec3{0, 100, 0});
+        a.w.sys->set_flag(1, kUnitMoving, true);
+        b.w.sys->set_flag(1, kUnitMoving, true);
+        b.w.sys->set_flag(1, kUnitAttackClip, true);
+        CHECK(a.run(60) > 0 && a.w.sys->targeting_state(1) == 4);
+        CHECK(b.run(60) == 0 && b.w.sys->targeting_state(1) == 2);
+        CHECK(std::fabs(yaw_of(a.w.sys->facing(1))) < 1e-3f);  // no turn while moving
+    }
+    {  // Is_Stationary_When_Attacking: state 4 is not written while moving (the old state stays: 1 for a new target)
+        OwnOpt opt;
+        opt.edit = [](CombatData& d) { d.units[0].stationary_when_attacking = true; };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        o.w.sys->set_flag(1, kUnitMoving, true);
+        CHECK(o.run(30) == 0 && o.w.sys->targeting_state(1) == 1);
+        o.w.sys->set_flag(1, kUnitMoving, false);
+        CHECK(o.run(30) > 0 && o.w.sys->targeting_state(1) == 4);
+    }
+    {  // TURRET: the host's aim state - slewing (0) -> 3, reached (1) or not modelled (-1) -> 4
+        OwnOpt opt;
+        opt.edit = [](CombatData& d) { d.units[0].turret = true; };
+        OwnWorld o(opt, Vec3{100, 0, 0});
+        StateHooks h;
+        h.aim = 0;
+        o.w.sys->set_hooks(&h);
+        CHECK(o.run(30) == 0 && o.w.sys->targeting_state(1) == 3);
+        h.aim = 1;
+        CHECK(o.run(30) > 0 && o.w.sys->targeting_state(1) == 4);
+    }
+    {  // out of range: 2 (target kept); a deployed unit drops it unless Max_Dist_Walk_While_Deployed > 0
+        for (const float walk : {0.0f, 5.0f}) {
+            OwnOpt opt;
+            opt.edit = [walk](CombatData& d) {
+                d.units[0].deploys = true;
+                d.units[0].max_dist_walk_while_deployed = walk;
+            };
+            OwnWorld o(opt, Vec3{600, 0, 0}), u(opt, Vec3{600, 0, 0});
+            o.w.sys->set_flag(1, kUnitDeploying, true);
+            o.w.tick();
+            u.w.tick();
+            CHECK(u.w.sys->targeting_state(1) == 2 && u.w.sys->current_target(1) == 2);
+            if (walk > 0.0f) CHECK(o.w.sys->targeting_state(1) == 2 && o.w.sys->current_target(1) == 2);
+            else CHECK(o.w.sys->targeting_state(1) == 0 && o.w.sys->current_target(1) == kNoObject);
+        }
+    }
+    {  // slot 47 at state 4 every service (the host draws only when the pose starts); a Set_Target to another object
+       // reads as state 1 until the next service; the state survives write -> read and is hashed
+        OwnWorld o(OwnOpt{}, Vec3{100, 0, 0});
+        StateHooks h;
+        h.draw = true;
+        o.w.sys->set_hooks(&h);
+        o.w.tick();
+        o.w.tick();
+        CHECK(h.idle.size() == 2 && o.w.sys->targeting_state(1) == 4);
+        ByteWriter wa;
+        o.w.sys->write(wa);
+        OwnWorld c(OwnOpt{}, Vec3{100, 0, 0});
+        ByteReader r(wa.bytes());
+        CHECK(c.w.sys->read(r) && c.w.sys->targeting_state(1) == 4);
+        StateHasher ha, hc;
+        o.w.sys->hash_extended(ha);
+        c.w.sys->hash_extended(hc);
+        CHECK(ha.digest() == hc.digest());
+        o.w.add(3, 1, 1, Vec3{120, 0, 0});
+        o.w.sys->order_attack(1, 3);
+        CHECK(o.w.sys->targeting_state(1) == 1 && !o.w.sys->attacking(1));
+    }
+}
+
+void test_team_targeting_copy() {
+    // s78f t03 (§3.1.1 "Team targeting copies"), land: the members of a ground team have no TARGETING. The head (here the
+    // team_leader member standing in for the container) scans; the members read its target, get its state raw, any
+    // member off the target makes the team state 3, and each member runs slot 47.
+    struct Team {
+        World w;
+        StateHooks h;
+        Team(Vec3 target, Vec3 member_facing) {
+            ProjectileDesc p;
+            p.max_speed = 20.0f;
+            w.data.projectiles.push_back(p);
+            UnitDesc s;
+            s.tactical_health = 100.0f;
+            s.max_attack_distance = 300.0f;
+            s.weapon_projectile = 0;
+            s.weapon_recharge = 0.2f;
+            s.turn_rate = 10.0f;
+            push_unit(w.data, s);
+            UnitDesc t;
+            t.tactical_health = 1.0e7f;
+            t.radius = 5.0f;
+            push_unit(w.data, t);
+            CombatConfig cfg;
+            cfg.mode = GameMode::Land;
+            cfg.inaccuracy_enabled = false;
+            w.make(cfg);
+            w.sys->set_hooks(&h);
+            w.add(2, 1, 1, target);
+            for (const ObjectId id : {ObjectId{10}, ObjectId{11}}) {
+                UnitSpawn sp;
+                sp.id = id;
+                sp.desc = 0;
+                sp.owner = 0;
+                sp.position = Vec3{0, id == 10 ? 0.0f : 10.0f, 0};
+                sp.facing = id == 11 ? member_facing : Vec3{1, 0, 0};
+                sp.team = 7;
+                sp.team_leader = id == 10;
+                CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+                TreeMembership m;
+                m.owner = 0;
+                CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+            }
+        }
+    };
+    {  // every member on the target: the head's scan target, state 4 copied, both fire, one slot 47 per member
+        Team t(Vec3{200, 5, 0}, Vec3{1, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->auto_target(10) == 2 && t.w.sys->auto_target(11) == kNoObject && t.w.sys->current_target(11) == 2);
+        CHECK(t.w.sys->targeting_state(10) == 4 && t.w.sys->targeting_state(11) == 4);
+        size_t n10 = 0, n11 = 0;
+        for (const auto& [id, arg] : t.h.idle) (id == 10 ? n10 : n11) += arg ? 1u : 0u;
+        CHECK(n10 == 1 && n11 == 1);
+        bool shot10 = false, shot11 = false;
+        for (int i = 0; i < 60; ++i) {
+            t.w.tick();
+            for (size_t k = 0; k < t.w.sys->projectile_count(); ++k) {
+                shot10 = shot10 || t.w.sys->projectile(k).shooter == 10;
+                shot11 = shot11 || t.w.sys->projectile(k).shooter == 11;
+            }
+        }
+        CHECK(shot10 && shot11);
+    }
+    {  // the member faces away: the team is in state 3 (slot 47(0) on the members) until it has turned, then 4 for all
+        Team t(Vec3{200, 5, 0}, Vec3{-1, 0, 0});
+        t.w.tick();
+        CHECK(t.w.sys->targeting_state(10) == 3 && t.w.sys->targeting_state(11) == 3);
+        CHECK(!t.h.idle.empty() && t.h.idle.front() == std::make_pair(ObjectId{11}, false));
+        int ticks = 1;
+        while (t.w.sys->targeting_state(11) != 4 && ticks < 40) {
+            t.w.tick();
+            ++ticks;
+        }
+        CHECK(ticks == 18 && t.w.sys->targeting_state(10) == 4);  // 178 degrees at 10 per service
+    }
+    {  // s78f review: a member that picked its own target before its head existed drops it when it becomes a member, so
+       // it reads the head's target and never keeps a dead id
+        World w;
+        ProjectileDesc p;
+        p.max_speed = 20.0f;
+        w.data.projectiles.push_back(p);
+        UnitDesc s;
+        s.tactical_health = 100.0f;
+        s.max_attack_distance = 300.0f;
+        s.weapon_projectile = 0;
+        s.weapon_recharge = 0.2f;
+        push_unit(w.data, s);
+        UnitDesc t;
+        t.tactical_health = 1.0e7f;
+        t.radius = 5.0f;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        cfg.inaccuracy_enabled = false;
+        w.make(cfg);
+        w.add(2, 1, 1, Vec3{200, 5, 0});
+        const auto add = [&](ObjectId id, bool leader, Vec3 at) {
+            UnitSpawn sp;
+            sp.id = id;
+            sp.desc = 0;
+            sp.owner = 0;
+            sp.position = at;
+            sp.facing = Vec3{1, 0, 0};
+            sp.team = 7;
+            sp.team_leader = leader;
+            CHECK(w.sys->add_unit(sp, w.frame, w.rng));
+            TreeMembership m;
+            m.owner = 0;
+            CHECK(w.trees.add(static_cast<EntityHandle>(id), box_of(sp.position, 1.0f), 1u, m));
+        };
+        add(11, false, Vec3{0, 10, 0});
+        w.tick();
+        const bool own = w.sys->auto_target(11) == 2;  // no head yet: its own scan picked the target
+        add(12, true, Vec3{0, 0, 0});  // ids ascend: the head joins after the member
+        w.tick();
+        const bool joined = w.sys->auto_target(11) == kNoObject && w.sys->current_target(11) == w.sys->current_target(12);
+        // The target dies: the member holds no own id (the old bug kept returning it forever) and reads the head's slot,
+        // which the head's own scan replaces.
+        w.sys->kill_unit(2, kNoObject, 0, w.frame);
+        for (int i = 0; i < 90; ++i) w.tick();
+        const bool dropped = w.sys->auto_target(11) == kNoObject && w.sys->current_target(11) == w.sys->current_target(12) &&
+                             w.sys->current_target(12) != 2;
+        std::printf("team member join: own target %d, cleared on join %d, dead target dropped %d\n", own ? 1 : 0, joined ? 1 : 0,
+                    dropped ? 1 : 0);
+        CHECK(own && joined && dropped);
+    }
+}
+
+void test_charge_up_slew() {
+    // s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the lobbing TURRET slews Turret_Rotate_Speed degrees per service from
+    // Turret_Rest_Angle; the charge-up starts on the service where the angles are reached; the turret then holds its aim.
+    const auto make = [](float extent) {
+        OwnOpt opt;
+        opt.lobbing = true;
+        opt.recharge = 0.2f;
+        opt.edit = [extent](CombatData& d) {
+            d.units[0].turret = true;
+            d.units[0].lobbing_chargeup_frames = 90;
+            d.units[0].turret_rotate_speed = 4.0f;
+            d.units[0].turret_extent = extent;
+            d.units[0].turret_elevate_extent = 85.0f;
+            d.units[0].turret_rest_pitch = -45.0f;
+        };
+        return std::make_unique<OwnWorld>(opt, Vec3{100, 0, 0});
+    };
+    {  // a point behind the cannon: 45 services of yaw slew (180 / 4), then 90 frames of charge-up
+        auto o = make(360.0f);
+        const Vec3 at{-150, 0, 0};
+        CHECK(o->w.sys->order_fire_at_position(1, at));
+        const uint32_t f0 = o->w.frame;
+        std::vector<uint32_t> charge;
+        std::vector<uint32_t> shots;
+        for (int i = 0; i < 300; ++i) {
+            const uint64_t s0 = o->w.sys->stats().shots;
+            const uint32_t f = o->w.frame;
+            o->w.tick();
+            for (const LobEvent& e : o->w.sys->lob_events())
+                if (!e.charged) charge.push_back(e.frame);
+            if (o->w.sys->stats().shots != s0) shots.push_back(f);
+        }
+        CHECK(charge.size() == 1 && !charge.empty() && charge[0] == f0 + 44);
+        CHECK(shots.size() == 1 && !shots.empty() && shots[0] == f0 + 44 + 91);
+        // the turret held its aim: the next order at the same point charges on its first service
+        CHECK(o->w.sys->order_fire_at_position(1, at));
+        const uint32_t f1 = o->w.frame;
+        const std::vector<uint32_t> again = o->shot_frames(200);
+        CHECK(again.size() == 1 && !again.empty() && again[0] == f1 + 91);
+    }
+    {  // outside Turret_Rotate_Extent_Degrees: never aimed, the order waits
+        auto o = make(90.0f);
+        CHECK(o->w.sys->order_fire_at_position(1, Vec3{-150, 0, 0}));
+        CHECK(o->run(300) == 0 && o->w.sys->fire_at_position_state(1) == 1);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -5105,6 +5434,9 @@ int main(int argc, char** argv) {
     test_own_weapon_aim_point();
     test_own_weapon_target_bones();  // S8 t27
     test_fire_at_position();         // S8 t26
+    test_targeting_states();         // s78f t03
+    test_team_targeting_copy();      // s78f t03
+    test_charge_up_slew();           // s78f t04
     test_hardpoint_aim_target_bones();  // S8 t27
     test_scan_range_query();
     test_shared_team_target();

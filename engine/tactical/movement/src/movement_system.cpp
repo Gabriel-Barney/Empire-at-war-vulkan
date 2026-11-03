@@ -182,6 +182,14 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.deploy_clip = u.dclip;
     v.turret_elevation = u.tcur[1];  // S8 t24
     v.turret_yaw = u.tcur[2];
+    if (u.d.turret && u.taim) {  // s78f t03: the aim state (0x386170 equality: negatives wrapped by +360, within 0.0001)
+        const bool dep = u.deploy == LocoState::WalkDeploying || u.deploy == LocoState::WalkDeployed;
+        const float ext = dep ? u.d.turret_deployed_extent : u.d.turret_extent;
+        const auto w = [](float a) { return a < 0.0f ? a + 360.0f : a; };
+        bool eq = true;
+        for (size_t k = 0; k < 3; ++k) eq = eq && std::fabs(w(u.tcur[k]) - w(u.ttgt[k])) <= 0.0001f;
+        v.turret_aim = std::fabs(u.ttgt[2]) > ext ? int8_t{-1} : eq ? int8_t{1} : int8_t{0};
+    }
     return v;
 }
 
@@ -272,6 +280,7 @@ void MovementSystem::move(const MoveOrder& order, SimRng& rng, uint32_t frame) {
         if (std::find(idx.begin(), idx.end(), static_cast<uint32_t>(i)) != idx.end()) continue;
         idx.push_back(static_cast<uint32_t>(i));
     }
+    if (!fform_internal_) fform_waypoint(order, idx);  // s78f t02: fighters with a formation append the block instead
     if (idx.empty()) return;
     if (order.switch_locomotor)  // MOVEMENT §6.2: multi-locomotor units swap first (others ignore the bit)
         for (uint32_t i : idx) swap_locomotor(units_[i], true);
@@ -280,7 +289,7 @@ void MovementSystem::move(const MoveOrder& order, SimRng& rng, uint32_t frame) {
         for (uint32_t& dl : delays) dl = static_cast<uint32_t>(rng.range_int(0, cfg_.constants.max_move_frame_delay));
     if (cfg_.mode == MoveMode::Land) move_land(order, idx, frame, delays, rng);
     else move_space(order, idx, frame, delays);
-    if (!fguard_internal_) fguard_order(order, idx, frame);  // S7 t37: the order's block replaces the formation's
+    if (!fform_internal_) fform_order(order, idx, frame);  // s78f t02: a new formation holding the order's block
 }
 
 void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
@@ -454,7 +463,7 @@ void MovementSystem::move_space(const MoveOrder& order, const std::vector<uint32
 }
 
 void MovementSystem::stop(std::span<const ObjectId> ids) {
-    fguard_stop(ids);  // S7 t37: Stop drops the formations' object goal blocks
+    fform_stop(ids);  // S7 t37 / s78f t02: Stop drops the fighter formations
     for (ObjectId id : ids) {
         const int32_t i = find(id);
         if (i < 0) continue;
@@ -552,7 +561,7 @@ void MovementSystem::tick(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
     fevents_.clear();
     if (cfg_.mode == MoveMode::Land) tick_land(frame, rng, pf);  // jiggle draws (see header)
     else {
-        fguard_update(frame, rng);  // S7 t37: the formation update 0x4192b0 of the fighter formations' object goals
+        fform_tick(frame, rng);  // s78f t02: the fighter formations' step (plan, arrival, 0x4192b0, 0x410a60)
         tick_space(frame, pf);
     }
 }
@@ -1503,8 +1512,8 @@ void MovementSystem::register_speed_crc(CrcRegistry& registry, const std::string
 // ================================================================ space fighters (FIGHTER_FLYING.md §2-§5)
 // Serial in ascending id (tick_fighters). Getters (§1.4): turn / roll / lift = the configured rates (mode multiplier
 // applied), thrust = FighterParams::max_thrust (raw), minspeed = SpecialParams::min_speed, maxspeed = the effective
-// max speed. [port] choices: avoid_speed() = minspeed and formation_speed_or_max() = maxspeed (the port has no space
-// formation object: the 0x5ca430 / 0x5ca390 formation branches never apply); the squadron's "container path" is its
+// max speed. s78f t02: avoid_speed() / formation_speed_or_max() read the fighter formation (fform_speed_read: F +0x21c
+// under a guard top with an object, FIGHTER_FLYING §4.11 F), else minspeed / maxspeed; the squadron's "container path" is its
 // leader's path; the land clamp §3.7 is not modelled (space only: it is the identity there); the modifier events
 // (Out_Of_Combat_Defense_Adjustment, §4.1 step 1) belong to combat and are not raised here.
 MovementSystem::Unit* MovementSystem::unit_ptr(ObjectId id) {
@@ -1728,7 +1737,7 @@ bool MovementSystem::f_avoid(Unit& u, F3& aim, float& tb, float& thb, float& lb)
     if (favoid_(u.d.id, centre, half, p, e, hit)) {
         F3 away = f3_sub(p, hit);
         if (away == F3{}) away = {1.0f, 0.0f, 0.0f};
-        f_steer(u, f3_add(away, p), k.min_speed, tb, thb, lb);  // avoid_speed()
+        f_steer(u, f3_add(away, p), favoid_speed(u), tb, thb, lb);  // avoid_speed()
         f.hold = kFighterAvoidHold;
         return true;
     }
@@ -1853,8 +1862,9 @@ void MovementSystem::f_moving(Unit& u) {
             return;
         }
     }
-    // formation_speed_or_max() (S7 t28: a guard's speed cap, A1_READINGS §33.4); path kind 1 is not produced by the port
-    f_follow(u, c ? std::min(u.lp.max_speed, c->speed_cap) : u.lp.max_speed, u.d.layer_z);
+    // formation_speed_or_max() (s78f t02, FIGHTER_FLYING §4.11 F: F +0x21c of the container's / own formation while its
+    // top is a guard with an object and it has a path, so a solo fighter is capped too); path kind 1 is not produced
+    f_follow(u, fformation_speed(u), u.d.layer_z);
     f_commit(u);
 }
 
@@ -1875,7 +1885,7 @@ void MovementSystem::f_idle(Unit& u) {
         const Unit& l = fleader(u);
         const bool leader = &l == &u;
         F3 d = l.fs.dest;  // a local copy of L's D
-        const float v = fighter_squad_idle(f.b.p, l.fs.b.p, d, leader, k.min_speed);
+        const float v = fighter_squad_idle(f.b.p, l.fs.b.p, d, leader, favoid_speed(u));  // avoid_speed()
         F3 aim = d;
         if (!leader) {
             const F3 sl = fslot(c, l.d.id), ss = fslot(c, u.d.id);
@@ -1970,7 +1980,7 @@ void MovementSystem::f_combat(Unit& u, uint32_t frame) {
             const FighterKin k = fkin(u);
             float tb = k.turn, thb = k.thrust, lb = k.lift;
             F3 a = t.p;
-            if (!f_avoid(u, a, tb, thb, lb)) f_steer(u, a, k.max_speed, tb, thb, lb);  // formation_speed_or_max()
+            if (!f_avoid(u, a, tb, thb, lb)) f_steer(u, a, fformation_speed(u), tb, thb, lb);  // formation_speed_or_max()
             f_commit(u);
             return;
         }
@@ -2043,7 +2053,7 @@ void MovementSystem::f_chase(Unit& u, const Unit& x, RelAngles rel, float& tb, f
     const F3 d = f3_sub(x.fs.b.p, u.fs.b.p);
     const float d2 = (d.x * d.x + d.y * d.y) + d.z * d.z;
     const float mfd = u.fp.min_follow_distance;
-    const float v = mfd * mfd <= d2 ? f3_length(x.fs.b.v) : k.min_speed;  // match its speed, else avoid_speed()
+    const float v = mfd * mfd <= d2 ? f3_length(x.fs.b.v) : favoid_speed(u);  // match its speed, else avoid_speed()
     fighter_speed_step(u.fs.b, v, thb);
 }
 
@@ -2112,7 +2122,7 @@ void MovementSystem::f_dogfight(Unit& u, const FTgt& t, uint32_t frame) {
                 }
                 F3 aa = o->fs.b.p;
                 if (f_avoid(u, aa, tb, thb, lb)) return;
-                f_steer(u, aa, k.max_speed, tb, thb, lb);  // formation_speed_or_max()
+                f_steer(u, aa, fformation_speed(u), tb, thb, lb);  // formation_speed_or_max()
                 return;
             }
             if (expired) {  // scan the cell in join order (0x39a4e0 hostility)
@@ -2215,7 +2225,6 @@ void MovementSystem::fighter_stop(Unit& u) {
 void MovementSystem::fighter_order(Unit& u) {
     u.sm.state = LocoState::FighterMoving;
     u.fs.idx = 0;
-    if (FighterSquad* c = fsquad(u)) c->speed_cap = kFighterNoSpeedCap;  // S7 t28: a new Set_Move resets the formation speed
 }
 
 // S7 t28 / t35 (A1_READINGS §33.4.1 step 3, 0x40dbc0, FIGHTER_FLYING §4.10 E): the guard's path copy. The whole path is
@@ -2262,163 +2271,10 @@ bool MovementSystem::fighter_copy_path(ObjectId squad, ObjectId from, uint32_t f
     return any;
 }
 
-bool MovementSystem::set_fighter_speed_cap(ObjectId squad, float cap) {
-    FighterSquad* c = squad_ptr(squad);
-    if (!c) return false;
-    c->speed_cap = cap;
-    return true;
-}
-
-// ---- S7 t37: object goal blocks of fighter formations (A1_READINGS §33.4.1, FIGHTER_FLYING §4.10 E; fighter.hpp)
-FighterGuard* MovementSystem::fguard_ptr(ObjectId key) {
-    auto it = std::lower_bound(fguards_.begin(), fguards_.end(), key, [](const FighterGuard& g, ObjectId v) { return g.key < v; });
-    return it != fguards_.end() && it->key == key ? &*it : nullptr;
-}
-
-const FighterGuard* MovementSystem::fighter_guard(ObjectId key) const {
-    auto it = std::lower_bound(fguards_.begin(), fguards_.end(), key, [](const FighterGuard& g, ObjectId v) { return g.key < v; });
-    return it != fguards_.end() && it->key == key ? &*it : nullptr;
-}
-
-bool MovementSystem::set_fighter_guard_covered(ObjectId key, bool covered) {
-    FighterGuard* g = fguard_ptr(key);
-    if (!g) return false;
-    g->covered = covered;
-    return true;
-}
-
-// A move order: each fighter formation it reaches loses its block; with an object goal it gets the new kind-3 block
-// (recorded goal = the order's destination, clamped as move_space clamps it; first update FPS frames later [M]).
-void MovementSystem::fguard_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame) {
-    if (cfg_.mode != MoveMode::Space) return;
-    std::vector<ObjectId> keys;
-    for (uint32_t i : idx)
-        if (is_fighter(units_[i])) keys.push_back(fkey(units_[i]));
-    if (keys.empty()) return;
-    std::sort(keys.begin(), keys.end());
-    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
-    V2 dest = order.destination;
-    if (space_.has_box()) {
-        dest.x = std::clamp(dest.x, space_.box_min().x, space_.box_max().x);
-        dest.y = std::clamp(dest.y, space_.box_min().y, space_.box_max().y);
-    }
-    for (const ObjectId k : keys) {
-        std::erase_if(fguards_, [k](const FighterGuard& g) { return g.key == k; });
-        if (order.goal_object < 0) continue;
-        FighterGuard g;
-        g.key = k;
-        g.object = order.goal_object;
-        g.flags = order.flags;
-        g.goal = dest;
-        g.next = frame + kFighterGuardInterval;
-        if (const FighterSquad* c = squad_ptr(k)) {
-            g.follow = c->guard_follow;
-        } else if (const Unit* u = unit_ptr(k)) {
-            g.follow = u->d.space_layer_type == 0;
-        }
-        auto it = std::lower_bound(fguards_.begin(), fguards_.end(), k, [](const FighterGuard& x, ObjectId v) { return x.key < v; });
-        fguards_.insert(it, g);
-    }
-}
-
-void MovementSystem::fguard_stop(std::span<const ObjectId> ids) {
-    if (fguards_.empty()) return;
-    for (const ObjectId id : ids)
-        if (const Unit* u = unit_ptr(id); u && is_fighter(*u)) {
-            const ObjectId k = fkey(*u);
-            std::erase_if(fguards_, [k](const FighterGuard& g) { return g.key == k; });
-        }
-}
-
-// A unit or squadron leaves: its own block goes; blocks naming it lose their object.
-void MovementSystem::fguard_removed(ObjectId id) {
-    if (fguards_.empty()) return;
-    std::erase_if(fguards_, [id](const FighterGuard& g) { return g.key == id; });
-    for (FighterGuard& g : fguards_)
-        if (g.object == id) fguard_lost(g);
-}
-
-// Listener 0x4f77e0 -> 0x41a580: kind 1, object null, position = the last waypoint of the formation's path (the lead's),
-// else the recorded goal; flags kept. The speed cap goes with the object [M].
-void MovementSystem::fguard_lost(FighterGuard& g) {
-    g.object = -1;
-    const Unit* l = nullptr;
-    if (FighterSquad* c = squad_ptr(g.key)) {
-        if (!c->members.empty()) l = unit_ptr(c->members.front());
-        c->speed_cap = kFighterNoSpeedCap;
-    } else {
-        l = unit_ptr(g.key);
-    }
-    if (l && !l->wps.empty()) g.goal = l->wps.back().pos;
-}
-
-// The formation update 0x4192b0 for an object goal (A1_READINGS §33.4.1), key order:
-//   1. gates: members (the lead = the first); next := frame + FPS.
-//   2. R = the lead's max attack range / 2 [port: FighterParams::attack_range for Get_Base_Attack_Range(T, lead)]; a guard
-//      last block caps it at Space_Guard_Range (space) / Land_Guard_Range (land).
-//   3. guard last block and `follow`: the object moving on a path (a goal, not arrived): the formation speed is reset (no
-//      cap); the lead within R (3D, strict) and idle or moving [M] -> copy the object's path at its waypoint index
-//      (fighter_copy_path) and cap the speed at 2 x S (S = the object's formation speed while it moves in one, else its
-//      effective max speed); done. The object stopped: one block, nothing to pop [port].
-//   4. else re-path (a move of the members to the object's position [M: the block's goal point]) when the recorded goal is
-//      more than R from it; the re-path records its destination. [port] not modelled: the fog test of the object for the
-//      lead's owner, the team-object / shared-pack exceptions [L], a non-guard object block's D <= R case (0x40edd0).
-//   A covered block (a host auto attack block is last): no update [port: the fighter states chase that block].
-void MovementSystem::fguard_update(uint32_t frame, SimRng& rng) {
-    if (fguards_.empty()) return;
-    const float cap = cfg_.mode == MoveMode::Space ? cfg_.constants.space_guard_range : cfg_.constants.land_guard_range;
-    for (size_t gi = 0; gi < fguards_.size(); ++gi) {
-        if (fguards_[gi].object < 0 || frame < fguards_[gi].next) continue;
-        std::vector<ObjectId> mem;
-        if (const FighterSquad* c = squad_ptr(fguards_[gi].key)) {
-            mem = c->members;
-        } else if (unit_ptr(fguards_[gi].key)) {
-            mem.push_back(fguards_[gi].key);
-        }
-        if (mem.empty()) continue;
-        fguards_[gi].next = frame + kFighterGuardInterval;
-        const Unit* o = unit_ptr(fguards_[gi].object);
-        if (!o) {  // [port] the object left this system without a removal
-            fguard_lost(fguards_[gi]);
-            continue;
-        }
-        const Unit* l = unit_ptr(mem.front());
-        if (!l || fguards_[gi].covered) continue;
-        const bool guard = (fguards_[gi].flags & kMoveFlagGuardMove) != 0;
-        float rr = 0.5f * l->fp.attack_range;
-        if (guard) rr = std::min(rr, cap);
-        if (guard && fguards_[gi].follow && o->has_goal && !o->arrived) {
-            FighterSquad* c = squad_ptr(fguards_[gi].key);
-            if (c) c->speed_cap = kFighterNoSpeedCap;  // F speed := the formation speed
-            const float dx = l->m.pos.x - o->m.pos.x, dy = l->m.pos.y - o->m.pos.y, dz = l->z - o->z;
-            const bool calm = l->sm.state == LocoState::FighterIdle || l->sm.state == LocoState::FighterMoving;
-            if (dx * dx + dy * dy + dz * dz < rr * rr && calm && fighter_copy_path(fguards_[gi].key, o->d.id, frame)) {
-                const float s = o->formation_speed < 1.0e38f ? o->formation_speed : loco_max_speed(*o);
-                if (c) c->speed_cap = 2.0f * s;
-                continue;
-            }
-        }
-        V2 dest = o->m.pos;
-        if (space_.has_box()) {
-            dest.x = std::clamp(dest.x, space_.box_min().x, space_.box_max().x);
-            dest.y = std::clamp(dest.y, space_.box_min().y, space_.box_max().y);
-        }
-        if (length_sq(dest - fguards_[gi].goal) <= rr * rr) continue;
-        MoveOrder mo;
-        mo.units = mem;
-        mo.destination = dest;
-        mo.flags = static_cast<uint8_t>(fguards_[gi].flags & ~kMoveFlagQueue);
-        fguard_internal_ = true;
-        move(mo, rng, frame);
-        fguard_internal_ = false;
-        fguards_[gi].goal = dest;
-    }
-}
-
 // A unit (any kind) or squadron leaves: fighters drop it from their squadron, the grids and their locks; targets that
 // name it become dying ([port]: the retail death signals, 0x220e90 / 0x220eb0).
 void MovementSystem::fighter_removed(ObjectId id) {
-    fguard_removed(id);  // S7 t37: the formation's own end, or its object's (listener 0x4f77e0)
+    fform_removed(id);  // S7 t37 / s78f t02: the formation's own end, or its objects' (listener 0x4f77e0)
     if (Unit* u = unit_ptr(id); u && is_fighter(*u)) {
         if (FighterSquad* c = fsquad(*u)) {
             for (size_t n = 0; n < c->members.size(); ++n)
@@ -2497,26 +2353,28 @@ bool MovementSystem::set_fighter_squad(const FighterSquadDesc& desc) {
     s->tolerance = desc.tolerance;
     s->guard_follow = desc.guard_follow;  // S7 t37
     for (ObjectId m : s->members) unit_ptr(m)->fs.squad = desc.id;
-    // S7 t37: an object goal block given to the members before their squadron was registered (a hangar launch orders the
-    // spawned fighters in the same frame) is the squadron's: the first member's (team index order) moves to the container.
-    if (!fguards_.empty()) {
-        FighterGuard moved;
+    s->chase = desc.chase;              // s78f t02
+    // S7 t37 / s78f t02: a formation given to the members before their squadron was registered (a hangar launch orders
+    // the spawned fighters in the same frame) is the squadron's: the first member's (team index order) moves to the
+    // container; the members' own formations go.
+    if (!fforms_.empty()) {
+        FighterFormation moved;
         bool have = false;
         for (ObjectId m : s->members)
-            if (const FighterGuard* g = fguard_ptr(m); g && !have) {
+            if (const FighterFormation* g = fform_ptr(m); g && !have) {
                 moved = *g;
                 have = true;
             }
         const std::vector<ObjectId> now_members = s->members;
-        std::erase_if(fguards_, [&now_members](const FighterGuard& g) {
+        std::erase_if(fforms_, [&now_members](const FighterFormation& g) {
             return std::find(now_members.begin(), now_members.end(), g.key) != now_members.end();
         });
-        if (have && !fguard_ptr(desc.id)) {
+        if (have && !fform_ptr(desc.id)) {
             moved.key = desc.id;
             moved.follow = s->guard_follow;
-            auto it = std::lower_bound(fguards_.begin(), fguards_.end(), desc.id,
-                                       [](const FighterGuard& x, ObjectId v) { return x.key < v; });
-            fguards_.insert(it, moved);
+            auto it = std::lower_bound(fforms_.begin(), fforms_.end(), desc.id,
+                                       [](const FighterFormation& x, ObjectId v) { return x.key < v; });
+            fforms_.insert(it, std::move(moved));
         }
     }
     return true;
@@ -2652,7 +2510,6 @@ void MovementSystem::hash_fighters(StateHasher& h) const {
         hash_cell(h, s.park);
         hash_f3(h, s.dest);
         hash_target(h, s.target);
-        if (s.speed_cap != kFighterNoSpeedCap) h.f32(s.speed_cap);  // S7 t28: only while capped (format unchanged otherwise)
         if (!s.guard_follow) h.u8(0x47);  // S7 t37: only when not following (format unchanged otherwise)
     }
     h.u32(static_cast<uint32_t>(fevents_.size()));
@@ -2661,18 +2518,32 @@ void MovementSystem::hash_fighters(StateHasher& h) const {
         h.i32(e.who);
         h.i32(e.target);
     }
-    if (!fguards_.empty()) {  // S7 t37
-        h.u32(0x47524444u);  // "GRDD"
-        h.u32(static_cast<uint32_t>(fguards_.size()));
-        for (const FighterGuard& g : fguards_) {
+    if (!fforms_.empty()) {  // s78f t02 (replaces S7 t37's "GRDD")
+        h.u32(0x46464F52u);  // "FFOR"
+        h.u32(static_cast<uint32_t>(fforms_.size()));
+        for (const FighterFormation& g : fforms_) {
             h.i32(g.key);
-            h.i32(g.object);
-            h.u8(g.flags);
+            h.u32(static_cast<uint32_t>(g.blocks.size()));
+            for (const FighterBlock& b : g.blocks) {
+                h.u8(b.kind);
+                h.i32(b.object);
+                h.i32(b.hard_point);
+                h.f32(b.point.x);
+                h.f32(b.point.y);
+                h.f32(b.facing);
+                h.f32(b.threat);
+                h.u8(b.flags);
+                h.boolean(b.pushed);
+                h.boolean(b.own_speed);
+                h.boolean(b.loop);
+            }
+            h.u8(g.state);
             h.f32(g.goal.x);
             h.f32(g.goal.y);
             h.u32(g.next);
+            h.f32(g.speed);
+            h.boolean(g.single_arrived);
             h.boolean(g.follow);
-            h.boolean(g.covered);
         }
     }
 }

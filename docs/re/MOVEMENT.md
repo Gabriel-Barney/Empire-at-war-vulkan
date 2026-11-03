@@ -1505,6 +1505,7 @@ Three separate spatial structures exist. The port can unify them only if every q
 - 0x08: queue as a waypoint (shift); also enables the random start delay of §1.6. [H]
 - 0x20: skip destination validation. [M]
 - 0x80: double-click "run" with speed-matched recruitment (§4.2). [H] Input, wire and full bit table: P1_DOUBLE_CLICK_MOVE.md (it corrects 0x02 to guard-move; attack-move is 0x01).
+- Also (2026-11-03, FIGHTER_FLYING §4.11): 0x04 player order (added by the waypoint append; decides pops on arrival and in the formation update); 0x10 space idle-movement block (speed capped at `SpaceIdleMovementSpeed`; `ShouldUseSpaceIdleMovement` is false in FoC); 0x40 raise signal 0x2a on pop. Bytes: +0x50 push class [M], +0x58 expiry frame with +0x61 "timed", +0x5d each member closes at its own speed, +0x5e patrol loop. [H for the readers]
 
 ### 6.2 Dispatch [H]
 
@@ -1530,6 +1531,7 @@ Three separate spatial structures exist. The port can unify them only if every q
    - for each formation in order, `0x4105a0` then `Formation::Set_Move` (`0x423c10`).
 
 **Waypoint queue** (`0x2a8240`): a unit already in a coordinator (`0x426140`) appends the parameters to that coordinator (vf +0x30), once per distinct coordinator in first-seen order. Units with no coordinator form a new one.
+- vf +0x30 (`0x4f7770`, land and space) calls `0x420f70` on each formation. Each formation keeps a **stack** of move blocks (F +0xf8; the last block is the current one). `0x420f70` inserts the block at the **bottom** with flag 0x04, so it runs after everything already queued. Limit `MaxWaypointsPerPath` (GC +0x13f0, FoC 6) blocks with 0x08; a click within 20 (land) / 80 (space) of an earlier player waypoint closes a patrol loop (byte +0x5e) instead. Push, pop, arrival and the guard pop: FIGHTER_FLYING §4.11 B (s78f t02, 2026-11-03). [H]
 
 **MoveToObject:** no coordinator. Each unit (the listed ones, or the whole selection when the count is 0) gets `0x39f580(unit, target)` directly.
 

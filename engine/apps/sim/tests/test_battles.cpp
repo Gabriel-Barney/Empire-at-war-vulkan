@@ -5366,6 +5366,14 @@ void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
             b->write_part(TacticalBattle::SavePart::State, w);
             ByteReader r(w.bytes());
             CHECK(b->read_part(TacticalBattle::SavePart::State, r));
+            // s78f t02: battle state version 7 (FighterFormationRecord::pushed dropped, after main's story t06 v6): 6 and 8
+            // are refused.
+            std::vector<uint8_t> stale(w.bytes().begin(), w.bytes().end());
+            for (const uint32_t v : {6u, 8u}) {
+                for (size_t k = 0; k < 4; ++k) stale[k] = static_cast<uint8_t>(v >> (8 * k));
+                ByteReader rs(stale);
+                CHECK(!b->read_part(TacticalBattle::SavePart::State, rs));
+            }
             StateHasher h1;
             b->hash(h1);
             CHECK(h0.digest() == h1.digest() && b->landings_in_flight(1) == 1);
@@ -5560,7 +5568,7 @@ void test_fighter_auto_push() {
             const float gx = std::clamp(ep.x + dx / len * 1500.0f, -3700.0f, 3700.0f), gy = std::clamp(ep.y + dy / len * 1500.0f, -3700.0f, 3700.0f);
             CHECK(b->order_move(*tm, 0, members, gx, gy, fb.host->random().synced(), mv::kNoFacing, true) == R::None);
             const FighterFormationRecord* r = b->fighter_formation(squad);
-            CHECK(r && r->flags == mv::kMoveFlagAttackMove && r->pushed.empty());
+            CHECK(r && r->flags == mv::kMoveFlagAttackMove && b->fighter_pushed(squad).empty());
             ph = Ph::AttackMove;
             since = b->frame();
             continue;
@@ -5574,7 +5582,7 @@ void test_fighter_auto_push() {
                 if (v.loco_state == mv::LocoState::FighterDirectedCombat) {
                     am_dc = true;
                     am_moving = !v.arrived;
-                    am_pushed = r && !r->pushed.empty();
+                    am_pushed = r && !b->fighter_pushed(squad).empty();
                     CHECK(b->order_stop(*tm, 0, members) == R::None);
                     stop_cleared = b->fighter_formation(squad) == nullptr;
                     ph = Ph::Stopped;
@@ -5597,15 +5605,15 @@ void test_fighter_auto_push() {
                     }
                     CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
                     const FighterFormationRecord* nr = b->fighter_formation(squad);
-                    c_formation = nr && nr->flags == 0 && nr->pushed.empty();
+                    c_formation = nr && nr->flags == 0 && b->fighter_pushed(squad).empty();
                     ph = Ph::Idle;
                     since = b->frame();
                 }
                 break;
             case Ph::Idle:
-                if (v.loco_state == mv::LocoState::FighterDirectedCombat && r && !r->pushed.empty()) {
+                if (v.loco_state == mv::LocoState::FighterDirectedCombat && r && !b->fighter_pushed(squad).empty()) {
                     c_dc = true;
-                    pushed = r->pushed.back();
+                    pushed = b->fighter_pushed(squad).back();
                     c_pushed = b->combat().has_unit(pushed);  // a ship (not a squadron)
                     if (c_pushed) CHECK(b->change_owner(*tm, st.find(pushed), 0));
                     if (c_pushed) converted.push_back(pushed);
@@ -5629,7 +5637,7 @@ void test_fighter_auto_push() {
                 // A ship pushed after the conversion (a second enemy in reach) turns friendly too, so Directed_Combat runs out
                 // of goals (S8 t10-t12 shot timing brought one more frigate into reach).
                 if (ph == Ph::Converted && r)
-                    for (const objects::ObjectId k : r->pushed)
+                    for (const objects::ObjectId k : b->fighter_pushed(squad))
                         if (std::find(converted.begin(), converted.end(), k) == converted.end() && b->combat().has_unit(k) &&
                             b->combat().owner(k) != 0) {
                             CHECK(b->change_owner(*tm, st.find(k), 0));
@@ -5657,9 +5665,9 @@ void test_fighter_auto_push() {
 // chase range is Guard_Chase_Range around the carrier; when the carrier moves away, the squadron re-paths to it (at most
 // once per 30 frames, when the carrier is more than half the leader's attack range from the recorded goal) and keeps the
 // guard record (flags, goal object). S7 t28 / t35 (A1_READINGS §33.4.1): while the carrier moves the squadron, within
-// R = min(range / 2, Space_Guard_Range 750) of it, flies a copy of its path at most twice its speed; once the carrier has
-// stopped, the squadron re-paths to it (the recorded goal ends next to the carrier's destination). A new order of the
-// squadron ends the follow (a plain move record).
+// R = min(range / 2, Space_Guard_Range 750) of it, flies a copy of its path at most twice its speed (s78f t02: only while
+// the squadron's formation moves, FIGHTER_FLYING §4.11 A; the leader's goal reaches the carrier's destination). A new
+// order of the squadron ends the follow (a plain move record, a position block).
 void test_hangar_escort_guard() {
     namespace mv = tactical::movement;
     using R = commands::RejectReason;
@@ -5693,9 +5701,11 @@ void test_hangar_escort_guard() {
                 if (!s.members.empty() && r && r->goal_object == carrier) {
                     squad = s.id;
                     members = s.members;
-                    const mv::FighterGuard* fg = b->movement().fighter_guard(s.id);  // S7 t37: the movement layer's block
-                    guard_record = r->flags == mv::kMoveFlagGuardMove && r->pushed.empty() && fg && fg->object == carrier &&
-                                   fg->flags == mv::kMoveFlagGuardMove && fg->next > b->frame() && fg->follow;
+                    // S7 t37 / s78f t02: the movement layer's formation holds the guard block as its only block.
+                    const mv::FighterFormation* fg = b->movement().fighter_formation(s.id);
+                    guard_record = r->flags == mv::kMoveFlagGuardMove && b->fighter_pushed(s.id).empty() && fg && fg->blocks.size() == 1 &&
+                                   fg->blocks[0].kind == mv::kFighterBlockObject && fg->blocks[0].object == carrier &&
+                                   fg->blocks[0].flags == mv::kMoveFlagGuardMove && fg->next > b->frame() && fg->follow;
                 }
             }
             if (squad == objects::kNoObjectId) {
@@ -5714,26 +5724,33 @@ void test_hangar_escort_guard() {
         if (!r || members.empty() || !b->movement().has_unit(members.front())) break;
         kept = kept && r->flags == mv::kMoveFlagGuardMove && r->goal_object == carrier;
         const mv::UnitView v = b->movement().view(members.front());
-        // S7 t28: while the carrier moves, the squadron's speed cap is 2 x the carrier's speed and, its leader within R of
-        // the carrier, it flies a copy of the carrier's path (its goal = the carrier's goal point).
+        // S7 t28 / s78f t02: while the carrier moves, the squadron formation's speed (F +0x21c) is capped at min(its own speed,
+        // 2 x the carrier's speed) and, its centre within R of the carrier, it flies a copy of the carrier's path (its goal =
+        // the carrier's goal point).
         const mv::UnitView cv = b->movement().view(carrier);
         const bool c_moving = cv.has_goal && !cv.arrived;
-        for (const mv::FighterSquad& s : b->movement().fighter_squads())
-            if (s.id == squad && c_moving && s.speed_cap == 2.0f * cv.max_speed) capped = true;
+        if (const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+            ff && c_moving && ff->speed >= 0.0f && ff->speed <= 2.0f * cv.max_speed)
+            capped = true;
         if (!copied && c_moving && v.has_goal && v.goal.x == cv.goal.x && v.goal.y == cv.goal.y) {
             copied = true;
             copy_frame = b->frame();
         }
-        const float gx = r->goal.x - dest.x, gy = r->goal.y - dest.y;
-        const float mx = v.goal.x - r->goal.x, my = v.goal.y - r->goal.y;
-        if (!followed && gx * gx + gy * gy < 600.0f * 600.0f && mx * mx + my * my < 150.0f * 150.0f) {
-            followed = true;  // the record's goal moved with the carrier and the leader's slot goal is next to that point
+        // s78f t02: the follow is the path copy / re-path of the formation (FIGHTER_FLYING §4.11 A): the leader's goal moved
+        // with the carrier to its destination while the guard block stays the formation's only block.
+        const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+        const bool guard_kept = ff && ff->blocks.size() == 1 && ff->blocks[0].object == carrier;
+        const float gx = v.goal.x - dest.x, gy = v.goal.y - dest.y;
+        if (!followed && guard_kept && v.has_goal && gx * gx + gy * gy < 600.0f * 600.0f) {
+            followed = true;
             follow_frame = b->frame();
             // A plain move order of the squadron replaces the guard: no follow any more.
             const Vec3 lp = st.position(st.find(members.front()));
             CHECK(b->order_move(*tm, 0, members, lp.x, lp.y, fb.host->random().synced()) == R::None);
             const FighterFormationRecord* nr = b->fighter_formation(squad);
-            ended = nr && nr->flags == 0 && nr->goal_object == objects::kNoObjectId && !b->movement().fighter_guard(squad);
+            const mv::FighterFormation* nf = b->movement().fighter_formation(squad);
+            ended = nr && nr->flags == 0 && nr->goal_object == objects::kNoObjectId && nf && nf->blocks.size() == 1 &&
+                    nf->blocks[0].kind == mv::kFighterBlockPosition && (nf->blocks[0].flags & mv::kMoveFlagGuardMove) == 0;
             break;
         }
         if (b->frame() > move_frame + 3000) break;
@@ -5748,11 +5765,240 @@ void test_hangar_escort_guard() {
     CHECK(capped && copied);
 }
 
+// s78f review (FIGHTER_FLYING §4.11 B 1 / B 3, 0x4160a0): host and movement stack agree around a shift waypoint: a
+// launched escort (guard of its carrier) gets a shift-queued waypoint while the carrier moves: the waypoint goes to
+//     the bottom of the movement stack and the host record still mirrors the guard on top (flags 0x02, goal object = the
+//     carrier; Rr from the first block = the waypoint's); once the carrier stops the guard pops and the record follows the
+//     waypoint (a position block: no guard, no object, goal = the waypoint).
+void test_escort_waypoint() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, false, true)) return;
+    const uint32_t carrier_type = type_of(*fb.d, "S10_Carrier");
+    objects::ObjectId carrier = objects::kNoObjectId, squad = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    mv::V2 wp{};
+    bool queued = false, guard_while_moving = false, still_guard = true, popped = false, follows_wp = false;
+    uint32_t pop_frame = 0, stop_frame = 0, guard_frames = 0;
+    for (uint64_t t = 0; t < 6000; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (carrier != objects::kNoObjectId) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (carrier == objects::kNoObjectId) {
+            for (const objects::ObjectHandle h : st.owned_by(0))
+                if (st.alive(h) && st.type(h) == carrier_type) carrier = st.id(h);
+            if (carrier == objects::kNoObjectId) continue;
+        }
+        if (!st.alive(st.find(carrier))) break;
+        const Vec3 cp = st.position(st.find(carrier));
+        if (squad == objects::kNoObjectId) {
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (const FighterFormationRecord* r = b->fighter_formation(s.id); !s.members.empty() && r && r->goal_object == carrier) {
+                    squad = s.id;
+                    members = s.members;
+                }
+            if (squad == objects::kNoObjectId) {
+                if (b->frame() > 300) break;
+                continue;
+            }
+            const objects::ObjectId cid[1] = {carrier};
+            CHECK(b->order_move(*tm, 0, cid, cp.x, cp.y + (cp.y > 0.0f ? -1200.0f : 1200.0f), fb.host->random().synced()) == R::None);
+            wp = {cp.x + (cp.x > 0.0f ? -1500.0f : 1500.0f), cp.y};
+            CHECK(b->order_move(*tm, 0, members, wp.x, wp.y, fb.host->random().synced(), mv::kNoFacing, false, true) == R::None);
+            const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+            queued = ff && ff->blocks.size() == 2 && ff->blocks[0].kind == mv::kFighterBlockPosition && ff->blocks[1].object == carrier &&
+                     (ff->blocks[1].flags & mv::kMoveFlagGuardMove) != 0;
+            continue;
+        }
+        if (members.empty() || !b->movement().has_unit(members.front())) break;
+        const FighterFormationRecord* r = b->fighter_formation(squad);
+        const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+        if (!r || !ff || ff->blocks.empty()) break;
+        const mv::UnitView cv = b->movement().view(carrier);
+        const bool c_moving = cv.has_goal && !cv.arrived;
+        if (!c_moving && stop_frame == 0) stop_frame = b->frame();
+        const bool guard_top = ff->blocks.back().kind == mv::kFighterBlockObject && ff->blocks.back().object == carrier &&
+                               (ff->blocks.back().flags & mv::kMoveFlagGuardMove) != 0;
+        if (!popped && guard_top) {
+            const FighterOrderView ov = b->fighter_order_view(*r);
+            const bool g = r->flags == mv::kMoveFlagGuardMove && r->goal_object == carrier && ov.first_flags == 0;
+            still_guard = still_guard && g;
+            if (c_moving) {
+                guard_while_moving = guard_while_moving || g;
+                ++guard_frames;
+            }
+        }
+        if (!popped && ff->blocks.size() == 1 && ff->blocks[0].kind == mv::kFighterBlockPosition) {
+            popped = true;
+            pop_frame = b->frame();
+        }
+        if (popped && !follows_wp && b->frame() > pop_frame) {
+            follows_wp = r->flags == 0 && r->goal_object == objects::kNoObjectId && r->goal.x == ff->blocks[0].point.x &&
+                         r->goal.y == ff->blocks[0].point.y && std::abs(r->goal.x - wp.x) < 1.0f && std::abs(r->goal.y - wp.y) < 1.0f;
+            break;
+        }
+        if (b->frame() > 4000) break;
+    }
+    std::printf("  escort + shift waypoint: squadron %d queued below the guard %d, guard record while the carrier moves %d "
+                "(%u frames, kept %d), carrier stopped frame %u, guard popped %d (frame %u), record follows the waypoint %d\n",
+                squad, queued ? 1 : 0, guard_while_moving ? 1 : 0, guard_frames, still_guard ? 1 : 0, stop_frame, popped ? 1 : 0,
+                pop_frame, follows_wp ? 1 : 0);
+    CHECK(squad != objects::kNoObjectId && queued && guard_while_moving && still_guard);
+    CHECK(popped && stop_frame > 0 && pop_frame <= stop_frame + 2u * mv::kFighterGuardInterval + 1u && follows_wp);
+}
+
+// s78f review (FIGHTER_FLYING §4.11 B 1 / B 3 "new group move"): an Attack on an enemy already in range (exec_attack moves
+// nobody) still replaces the squadron's whole stack (a launch guard with a shift waypoint below it) by the object block.
+void test_escort_attack_in_range() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, false, true)) return;
+    const uint32_t carrier_type = type_of(*fb.d, "S10_Carrier");
+    objects::ObjectId carrier = objects::kNoObjectId, squad = objects::kNoObjectId, enemy = objects::kNoObjectId;
+    bool two = false, attack_stack = false, attack_record = false, in_range = false;
+    for (uint64_t t = 0; t < 3000 && squad == objects::kNoObjectId; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) continue;
+        const objects::ObjectStore& st = tm->primary();
+        if (carrier == objects::kNoObjectId)
+            for (const objects::ObjectHandle h : st.owned_by(0))
+                if (st.alive(h) && st.type(h) == carrier_type) carrier = st.id(h);
+        if (carrier == objects::kNoObjectId) continue;
+        std::vector<objects::ObjectId> members;
+        for (const mv::FighterSquad& s : b->movement().fighter_squads())
+            if (const FighterFormationRecord* r = b->fighter_formation(s.id); !s.members.empty() && r && r->goal_object == carrier) {
+                squad = s.id;
+                members = s.members;
+            }
+        if (squad == objects::kNoObjectId) {
+            if (b->frame() > 300) break;
+            continue;
+        }
+        const Vec3 cp = st.position(st.find(carrier));
+        CHECK(b->order_move(*tm, 0, members, cp.x + 900.0f, cp.y, fb.host->random().synced(), mv::kNoFacing, false, true) == R::None);
+        const mv::FighterFormation* ff = b->movement().fighter_formation(squad);
+        two = ff && ff->blocks.size() == 2 && ff->blocks[1].object == carrier;
+        for (const objects::ObjectHandle h : st.owned_by(1))
+            if (st.alive(h) && b->movement().has_unit(st.id(h)) && b->combat().has_unit(st.id(h)) &&
+                b->movement().view(st.id(h)).locomotor != mv::LocomotorKind::Fighter) {
+                enemy = st.id(h);
+                break;
+            }
+        CHECK(enemy != objects::kNoObjectId);
+        if (enemy == objects::kNoObjectId) break;
+        const Vec3 ep = st.position(st.find(enemy));
+        in_range = true;
+        for (size_t k = 0; k < members.size(); ++k) {
+            const Vec3 at{ep.x + 15.0f * static_cast<float>(k + 1), ep.y + 20.0f, ep.z};
+            CHECK(b->teleport(*tm, members[k], at, Vec3{1, 0, 0}));
+            const float dx = at.x - ep.x, dy = at.y - ep.y;
+            in_range = in_range && std::sqrt(dx * dx + dy * dy) <= 80.0f;  // exec_attack: inside 0.8 x max(range, 100)
+        }
+        CHECK(b->order_attack(*tm, 0, members, enemy, fb.host->random().synced()) == R::None);
+        const mv::FighterFormation* af = b->movement().fighter_formation(squad);
+        attack_stack = af && af->blocks.size() == 1 && af->blocks[0].kind == mv::kFighterBlockObject && af->blocks[0].object == enemy &&
+                       af->blocks[0].flags == 0 && !af->blocks[0].pushed;
+        const FighterFormationRecord* ar = b->fighter_formation(squad);
+        attack_record = ar && ar->flags == 0 && ar->goal_object == enemy;
+    }
+    std::printf("  in-range attack: squadron %d (guard + waypoint stack %d), enemy %d in range %d: stack replaced by the object "
+                "block %d (record %d)\n",
+                squad, two ? 1 : 0, enemy, in_range ? 1 : 0, attack_stack ? 1 : 0, attack_record ? 1 : 0);
+    CHECK(squad != objects::kNoObjectId && two && in_range && attack_stack && attack_record);
+}
+
+// s78f review (FIGHTER_FLYING §4.11 B 1, §4.10 E): an auto block on a station (a non-mover: no movement unit) is dropped
+// when the station dies - the death reaches MovementSystem::object_removed, and the position hook reads only live objects.
+// The player-0 star base is handed to player 1 so player 0's TIE squadron, ordered next to it, auto-attacks it; player 0's
+// frigate and corvette are ordered to attack it too so it dies inside the test.
+void test_fighter_station_dies() {
+    namespace mv = tactical::movement;
+    using R = commands::RejectReason;
+    FighterBattle fb;
+    if (!start_fighter_battle(fb, false)) return;
+    const uint32_t sb_type = type_of(*fb.d, "S10_Star_Base_1");
+    objects::ObjectId squad = objects::kNoObjectId, station = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    bool pushed = false, died = false, dropped = false, record_dropped = false;
+    uint32_t push_frame = 0, death_frame = 0;
+    for (uint64_t t = 0; t < 9000; ++t) {
+        fb.host->tick_once();
+        TacticalBattle* b = fb.battles->battle();
+        TacticalMode* tm = fb.host->tactical();
+        if (!b || !tm) {
+            if (squad != objects::kNoObjectId) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        if (squad == objects::kNoObjectId) {
+            if (b->frame() != 3) continue;
+            for (const mv::FighterSquad& s : b->movement().fighter_squads())
+                if (!s.members.empty() && st.owner(st.find(s.members.front())) == 0) {
+                    squad = s.id;
+                    members = s.members;
+                }
+            std::vector<objects::ObjectId> ships;
+            for (const objects::ObjectHandle h : st.owned_by(0)) {
+                if (!st.alive(h)) continue;
+                if (st.type(h) == sb_type) station = st.id(h);
+                else if (b->movement().has_unit(st.id(h)) && b->movement().view(st.id(h)).locomotor != mv::LocomotorKind::Fighter)
+                    ships.push_back(st.id(h));
+            }
+            CHECK(squad != objects::kNoObjectId && station != objects::kNoObjectId);
+            if (squad == objects::kNoObjectId || station == objects::kNoObjectId) break;
+            CHECK(!b->movement().has_unit(station));  // a non-mover
+            CHECK(b->change_owner(*tm, st.find(station), 1));
+            const Vec3 sp = st.position(st.find(station));
+            for (size_t k = 0; k < members.size(); ++k)
+                CHECK(b->teleport(*tm, members[k], Vec3{sp.x + 500.0f + 40.0f * static_cast<float>(k), sp.y, sp.z}, Vec3{-1, 0, 0}));
+            CHECK(b->order_move(*tm, 0, members, sp.x + 500.0f, sp.y, fb.host->random().synced()) == R::None);
+            if (!ships.empty()) CHECK(b->order_attack(*tm, 0, ships, station, fb.host->random().synced()) == R::None);
+            continue;
+        }
+        const objects::ObjectHandle sh = st.find(station);
+        const bool alive = st.alive(sh);
+        if (alive) {
+            if (!pushed)
+                for (const objects::ObjectId k : b->fighter_pushed(squad))
+                    if (k == station) {
+                        pushed = true;
+                        push_frame = b->frame();
+                    }
+            if (b->frame() > 8000) break;
+            continue;
+        }
+        died = true;
+        death_frame = b->frame();
+        dropped = true;
+        if (const mv::FighterFormation* ff = b->movement().fighter_formation(squad))
+            for (const mv::FighterBlock& bl : ff->blocks) dropped = dropped && !(bl.kind == mv::kFighterBlockObject && bl.object == station);
+        const FighterFormationRecord* r = b->fighter_formation(squad);
+        record_dropped = !r || r->goal_object != station;
+        break;
+    }
+    std::printf("  station dies: squadron %d, station %d; auto block on it %d (frame %u), died %d (frame %u), blocks dropped "
+                "at once %d, record %d\n",
+                squad, station, pushed ? 1 : 0, push_frame, died ? 1 : 0, death_frame, dropped ? 1 : 0, record_dropped ? 1 : 0);
+    CHECK(pushed && died && dropped && record_dropped);
+}
+
 #ifdef ALAMO_SIM_HAVE_FOG
 // S7 t22 (FIGHTER_FLYING §4.9 step 3): a goal hidden by fog for the squadron's player is still its formation goal, so the
 // squadron toggles Idle <-> Directed_Combat every frame (Directed_Combat: fogged -> NoTarget -> enter_idle; Idle: a goal
 // that is not dying -> Directed_Combat), as in retail. Here the goal is an ordered Attack on an enemy frigate that no
 // player-0 REVEAL source sees (the fighters reveal nothing); enter_idle keeps the order's object block.
+// s78f review: the Attack's movement formation now holds the object block (exec_attack, §4.11 B 1), so after arrival the
+// hidden-goal rule C 3 re-plans it toward the object (d >= 40: state 0, the plan's move, state 1, the members done at
+// once, state 3 again): every third frame is a plan frame, so the state changes twice per three frames.
 void test_fighter_fog_toggle() {
     namespace mv = tactical::movement;
     using R = commands::RejectReason;
@@ -5813,7 +6059,7 @@ void test_fighter_fog_toggle() {
     if (TacticalBattle* b = fb.battles->battle()) r = b->fighter_formation(squad);
     std::printf("  fog toggle: squadron %d attacks hidden enemy %d; settled at %u, %u state changes in %u frames, hidden %d, order kept %d\n",
                 squad, enemy, settle, toggles, window, stayed_hidden ? 1 : 0, order_kept ? 1 : 0);
-    CHECK(window >= 60 && stayed_hidden && order_kept && toggles >= 58);
+    CHECK(window >= 60 && stayed_hidden && order_kept && toggles >= 38);
     CHECK(r && r->goal_object == enemy);
 }
 #endif
@@ -5919,6 +6165,10 @@ int main(int argc, char** argv) {
     test_fighter_auto_push();
     std::printf("S7 t24: a carrier's launch guards the carrier (Guard_Chase_Range, follows it)\n");
     test_hangar_escort_guard();
+    std::printf("s78f review: host record vs the movement stack (shift waypoint, attack order, a dying station)\n");
+    test_escort_waypoint();
+    test_escort_attack_in_range();
+    test_fighter_station_dies();
 #ifdef ALAMO_SIM_HAVE_FOG
     std::printf("S7 t22: a fogged formation goal toggles Idle <-> Directed_Combat\n");
     test_fighter_fog_toggle();

@@ -143,14 +143,20 @@ struct MoveOrder {
     // MOVEMENT §6.1 / §6.2: the MoveToPosition "switch locomotor" bit - multi-locomotor units swap to their secondary
     // locomotor before the move (MovementSystem::use_secondary_locomotor); others ignore it.
     bool switch_locomotor = false;
-    // S7 t37 (A1_READINGS §33.4.1): an object goal (block kind 3) - the fighter formations of the order (squadrons,
-    // fighters without one) keep a FighterGuard on it, followed by the tick; -1 = a position order. Others ignore it.
+    // S7 t37 / s78f t02 (A1_READINGS §33.4.1, FIGHTER_FLYING §4.11): an object goal (block kind 3); -1 = a position
+    // order (kind 1). Space only: each fighter formation the order reaches (a squadron, or a fighter without one) gets a
+    // new block stack holding the order's block (FighterFormation), run by the tick. Others ignore it.
     ObjectId goal_object = -1;
+    // s78f t02 (MOVEMENT §6.2 waypoint-queue move 0x2a8240 -> coordinator vf +0x30 -> 0x420f70): space fighters whose
+    // formation exists append the order's block to it (inserted at the bottom with flag 0x04; FIGHTER_FLYING §4.11 B 1)
+    // instead of moving now; the order's other units (and fighters without a formation) move as a plain order.
+    bool waypoint = false;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
 // 0x01 / 0x02 select the response chase range (Attack_Move_Response_Range / Guard_Chase_Range, else Idle_Chase_Range,
-// 0x4160a0); no reader in this module (the chase range lives with the combat side). 0x04 has no modelled reader [L].
+// 0x4160a0 / 0x4165f0); in this module the fighter formations read them (FIGHTER_FLYING §4.11). 0x04 player order: the
+// fighter formations' arrival pop and step 5 read it (the waypoint append adds it).
 inline constexpr uint8_t kMoveFlagAttackMove = 0x01;
 inline constexpr uint8_t kMoveFlagGuardMove = 0x02;
 inline constexpr uint8_t kMoveFlagPlayerOrder = 0x04;
@@ -194,6 +200,10 @@ struct UnitView {
     int32_t deploy_clip = -1;
     // S8 t24: the TURRET's current elevation / yaw (degrees, relative to the body; UnitDesc::turret units only).
     float turret_elevation = 0.0f, turret_yaw = 0.0f;
+    // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): the TURRET's aim toward the host's aim point - 1 the current
+    // angles equal the target angles (0x386170), 0 still slewing, -1 no turret model, not aiming, or the aim yaw is beyond
+    // the (deployed) rotate extent (the can-aim test fails). Derived from the turret state.
+    int8_t turret_aim = -1;
 };
 
 // OI tactical: one crush this tick (§5.5). The host applies kCrushDamage of the crusher type's Squash_Damage_Type
@@ -376,21 +386,40 @@ public:
     bool set_fighter_target(ObjectId id, const FighterTarget& t);
     bool set_fighter_params(ObjectId id, const FighterParams& p);  // Max_Thrust, Minimum_Follow_Distance, attack range
     void set_fighter_avoid_fn(FighterAvoidFn fn) { favoid_ = std::move(fn); }
+    // s78f t02: the fighter formations' host data (fog, attack targets, range, non-mover positions; FighterFormationHooks).
+    // The fighter formation API itself is below (fighter_formations / fighter_push / fighter_pop).
     // [port] entry to Dead_Stop 0x1F (the retail writer is untraced, "probably the Stop order"): stored orientation =
     // the current one, the path is dropped.
     bool fighter_dead_stop(ObjectId id);
     // S7 t28 (A1_READINGS §33.4, FIGHTER_FLYING §4.10 E): a guard of a moving object. fighter_copy_path gives squadron
     // `squad` (or a solo fighter) `from`'s space path (0x40dbc0) with every member's waypoint index at from's (S7 t35,
-    // A1_READINGS §33.4.1 [port: from's next waypoint by playback time]); each member's goal = the path end; idle / moving members fly it (Moving 0x1B), members in combat keep their
-    // state. False (nothing changed) when `from` is a fighter or follows no path. set_fighter_speed_cap sets
-    // FighterSquad::speed_cap (kFighterNoSpeedCap clears it); false without that squadron.
+    // A1_READINGS §33.4.1 [port: from's next waypoint by playback time]); each member's goal = the path end; idle / moving
+    // members fly it (Moving 0x1B), members in combat keep their state. False (nothing changed) when `from` is a fighter
+    // or follows no path.
     bool fighter_copy_path(ObjectId squad, ObjectId from, uint32_t frame);
-    bool set_fighter_speed_cap(ObjectId squad, float cap);
-    // S7 t37: the fighter formations' object goal blocks (FighterGuard, ascending key); `covered` is set by the host from
-    // its formation record (a pushed auto attack block is the last block). False / null without that formation's block.
-    std::span<const FighterGuard> fighter_guards() const { return fguards_; }
-    const FighterGuard* fighter_guard(ObjectId key) const;
-    bool set_fighter_guard_covered(ObjectId key, bool covered);
+    // ---- s78f t02: fighter formations (FighterFormation block stacks, FIGHTER_FLYING §4.11; fighter_formation.cpp) ----
+    // Per tick (space, before the fighter pass; formations in ascending key, serial): state 0 / 5 -> plan the top (a move
+    // of the members to the top's goal point), state 1; state 1 -> the arrival 0x423760 (every member done: n = 1 ->
+    // state 3; n >= 2 -> an object top stays (state 3), a 0x04 position top pops only when blocks[n-2] has 0x08, any other
+    // position top pops), then 0x4192b0 once per FPS frames; state 3 -> with one block +0x240 := 1 and the hidden-goal
+    // rule (C 3), then 0x410a60 on the same timer. Details: fighter_formation.cpp.
+    std::span<const FighterFormation> fighter_formations() const { return fforms_; }
+    const FighterFormation* fighter_formation(ObjectId key) const;  // null without one (key = squadron or solo fighter)
+    // Push 0x41fd30 of an auto attack block (LocomotorCommon 0x42d0f0 -> 0x41cf70): {kind 3, `object`, hard point,
+    // flags 0, push class "auto", +0x5d = 1} on the formation of `key`, after the pre-pop (B 1). False (nothing changed)
+    // without a formation, for a block naming a fighter inside a squadron (D 1) or an unknown object. The formation plans
+    // toward it (state 0) on the next tick.
+    bool fighter_push(ObjectId key, ObjectId object, int32_t hard_point = -1);
+    // Pop 0x4105a0 (n > 1 only; side effects B 1). False when nothing was popped.
+    bool fighter_pop(ObjectId key);
+    // s78f review (§4.11 B 1 "new group move"): a group move of `order.units` that moves nobody now (an attack order whose
+    // fighters are already in range): each fighter formation is replaced by one holding the order's block, as move()
+    // does, in state 1 (the members' current paths stand for the plan [port]). No unit moves.
+    void fighter_new_order(const MoveOrder& order, uint32_t frame);
+    // s78f review: an object that is not a unit of this system (a station, a structure) is gone: blocks naming it are
+    // converted / removed as at a unit's removal (listener 0x4f77e0, fform_removed).
+    void object_removed(ObjectId id) { fighter_removed(id); }
+    void set_fighter_formation_hooks(FighterFormationHooks hooks) { fhooks_ = std::move(hooks); }
     std::span<const FighterEvent> fighter_events() const { return fevents_; }  // this tick
     // Save / load access (the grids' membership and the per-unit / per-squadron fighter state are sim state).
     void build_fighter_grids();  // (re)build from the playable box; membership is cleared
@@ -429,8 +458,9 @@ public:
     // ---- N1 stage 2 save / load (contract: alamo/core/save_file.hpp; src/movement_save.cpp) ----
     // The loader builds the battle the same way first: MovementSystem(same MovementConfig), set_grid(grid_from_map) +
     // the same map stamps, the same space / air boxes and static entries, every hook (set_height_fn, set_hostility,
-    // set_threat_fn, set_anim_length_fn, set_flying_hooks, set_fighter_avoid_fn); then read() replaces ALL mutable
-    // state, so no host call is needed after it (no relink: cross-references are object ids, hooks are not touched).
+    // set_threat_fn, set_anim_length_fn, set_flying_hooks, set_fighter_avoid_fn, set_fighter_formation_hooks); then read()
+    // replaces ALL mutable state, so no host call is needed after it (no relink: cross-references are object ids, hooks are
+    // not touched).
     // Units added by the rebuild are replaced by the saved ones (read() is not additive).
     // Layout: u32 version, u8 mode (must equal mode()), then sections (u32 length + bytes):
     //   grid    PassabilityGrid::write (stamps + version; the map-derived part is checked by digest, not restored)
@@ -445,7 +475,8 @@ public:
     //   speed factor / override / lag, jiggle, threat, special motion + params, the multi-locomotor primary kind and
     //   active flag (version 2), fighter state + params), the collision
     //   layer, this tick's crush / despawn / fighter events (the host may read them after a load; crush and despawn
-    //   are hashed), the squadrons (ascending id) and the fighter cell grids.
+    //   are hashed), the squadrons (ascending id), the fighter cell grids, this tick's fighter events and the fighter
+    //   formations (s78f t02, version 10: ascending key, each block stack bottom first).
     // Not saved: MovementConfig (definitions), the hooks, the query scratch. read() returns false and leaves the system
     // unchanged on a version / mode / map mismatch, an invalid value (enum, order, count) or truncated data.
     // HyperspaceDepartures / EngineControl (hyperspace.hpp) have their own write / read for the battle host.
@@ -600,14 +631,35 @@ private:
     static void f_commit(Unit& u) { u.fs.b.p = f3_add(u.fs.b.p, u.fs.b.v); }
     void fighter_removed(ObjectId id);
     void fighter_order(Unit& u);
-    // S7 t37: object goal blocks (FighterGuard)
+    // s78f t02: fighter formations (fighter_formation.cpp)
     ObjectId fkey(const Unit& u) const { return u.fs.squad >= 0 ? u.fs.squad : u.d.id; }
-    FighterGuard* fguard_ptr(ObjectId key);
-    void fguard_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame);
-    void fguard_stop(std::span<const ObjectId> ids);
-    void fguard_removed(ObjectId id);
-    void fguard_lost(FighterGuard& g);
-    void fguard_update(uint32_t frame, SimRng& rng);
+    FighterFormation* fform_ptr(ObjectId key);
+    std::vector<ObjectId> fform_members(ObjectId key);  // fighter units of the formation (team index order)
+    bool fform_block_ok(const FighterBlock& b);          // D 1: no fighter inside a squadron; a kind-3 block has an object
+    bool fobject_pos(ObjectId id, F3& p);                // a block object's position (mover, squadron box centre, hook)
+    bool fblock_goal(const FighterBlock& b, V2& out);    // goal point 0x583680 / 0x583150 (clamped to the playable box)
+    bool fform_hidden(ObjectId key, ObjectId object);    // FOW_Object_Hidden for the lead's owner, force 1
+    float fform_unit_speed(ObjectId key);                // 0x41b2a0 (min member max speed)
+    void fform_waypoint(const MoveOrder& order, std::vector<uint32_t>& idx);  // removes the appended fighters from idx
+    void fform_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame);
+    F3 fform_centre(const std::vector<ObjectId>& members);  // L (G 3 / I 9)
+    bool fobject_moving(ObjectId id);                       // "G moving" (a current path, not complete)
+    FighterCell fobject_cell(ObjectId id);                  // the object's dogfight cell (pack +0x1c4 / +0x1c8)
+    float favoid_speed(Unit& u);                            // avoid_speed 0x5ca430
+    float fformation_speed(Unit& u);                        // formation_speed_or_max 0x5ca390
+    void fform_append(FighterFormation& f, FighterBlock b);  // 0x420f70
+    void fform_pop(FighterFormation& f);                     // 0x4105a0
+    void fform_stop(std::span<const ObjectId> ids);
+    void fform_removed(ObjectId id);
+    void fform_lost(FighterFormation& f, size_t block);
+    void fform_tick(uint32_t frame, SimRng& rng);
+    void fform_plan(FighterFormation& f, uint32_t frame, SimRng& rng);
+    void fform_repath(FighterFormation& f, V2 dest, uint32_t frame, SimRng& rng, bool keep_in_range);
+    void fform_update(FighterFormation& f, uint32_t frame, SimRng& rng);   // 0x4192b0
+    void fform_recheck(FighterFormation& f, uint32_t frame, SimRng& rng);  // 0x410a60
+    bool fform_leash(FighterFormation& f);                                  // 0x4165f0
+    bool fform_can_hit(FighterFormation& f);                                // 0x40edd0
+    float fform_speed_read(Unit& u, bool need_path);  // 0x5ca390 / 0x5ca430: F +0x21c under a guard top, else -1
     void fighter_stop(Unit& u);
     void hash_fighters(StateHasher& h) const;
     // N1 stage 2 (movement_save.cpp)
@@ -673,8 +725,9 @@ private:
     FighterCellGrids fgrids_;
     FighterAvoidFn favoid_;
     std::vector<FighterEvent> fevents_;  // this tick
-    std::vector<FighterGuard> fguards_;  // S7 t37: ascending key
-    bool fguard_internal_ = false;       // S7 t37: a re-path of the formation update (keeps the block)
+    std::vector<FighterFormation> fforms_;  // s78f t02: ascending key
+    bool fform_internal_ = false;           // a plan / re-path of the formation tick (keeps the formation)
+    FighterFormationHooks fhooks_;          // s78f t02 (not saved: the loader re-sets them)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
     // S8 t11
     DeployClipFn deploy_clip_;

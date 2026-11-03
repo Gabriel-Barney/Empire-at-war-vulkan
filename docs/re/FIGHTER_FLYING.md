@@ -606,12 +606,13 @@ own) pack +0x1f0, "in range" = slot 44 true and slot 45 false, "locked" = slot 3
   - squadron container: `TeamLocomotor` 0x630140 = LocomotorCommon 0x42d0f0 on the container, then each member
     locomotor that answers vf +0x220 gets vf +0x260 too;
   - **LocomotorCommon 0x42d0f0** (space: works on the container): needs pack +0x1f0 = F; t = null and F has a goal →
-    0x4105a0 on F [M: ends the pushed block] and return; F's goal ≠ t → rr = 0x4160a0(F, unit, t)
+    0x4105a0 on F (pops the top block when F has more than one, §4.11 B) and return; F's goal ≠ t → rr = 0x4160a0(F, unit, t)
     (TACTICAL_COMBAT §2.8: 0 when out of the chase range; Rr = `Guard_Chase_Range` for a guard block,
     `Attack_Move_Response_Range` for an attack-move block, else `Idle_Chase_Range`; FoC squadrons 1000 / 300 / 200);
     rr ≠ 0 → when rr = 1, first detach the unit into a formation of its own (0x424850); then **append an attack
     block** to the (possibly new) formation (0x41cf70): {kind 3, object = t (its container when t is a team member),
-    hard point = hp, flag +0x2b = 1 [M: "auto" block], mask 0x3f, threat none};
+    hard point = hp, flags 0, block byte +0x5d = 1 (the "+0x2b" local; each member closes at its own speed), mask
+    0x3f, threat none}; the push and its pre-pop: §4.11 B;
   - **fighter vf +0x260** (0x5cb580), for a fighter inside a squadron: when t is a squadron (team) and the own lock
     timer (pack +0x1d8) has expired, lock the first member of t's team (index order) whose timer has expired (the
     §4.5 lock(x) pairing, 10 s); never pushes a block. A solo fighter uses LocomotorCommon.
@@ -761,6 +762,9 @@ idle" event from those two state handlers (NoTarget, path complete) instead of d
   - speed cap = min(squadron formation speed, 2 × the carrier's effective max speed, or 2 × the carrier formation's
     speed while the carrier moves in a formation);
   - out of R it re-paths to the carrier when its recorded goal is more than R from the carrier's.
+  - these run only while the squadron's formation is moving (state 1); after arrival the 30-frame re-check 0x410a60
+    re-plans when a member is out of weapon range of the carrier (§4.11 A). Queued blocks, fog, auto blocks over the
+    guard and the solo-fighter cap: §4.11.
 - Single ships (no `Squadron_Units`): ring placement around P1, spawned flag, listener, locomotor vf +0x290(1)
   [L]; **no move order**.
 - **Carrier dies:** the coordinator's target listener (0x4f77e0, signals 0x10 / 0x1a / 0x2e) converts each formation's
@@ -782,6 +786,250 @@ idle" event from those two state handlers (NoTarget, path complete) instead of d
 So a battle whose last enemies are squadrons parked outside every chase range of the other side lasts until an AI
 plan (free store `BusyTacticalFreeStore`, attack plans) orders them. Long tails in the port should be compared with
 these ranges before adding any rule.
+
+### 4.11 0x4192b0 leftovers: block stack, fog, team objects, non-guard blocks, solo speed (s78f t02, 2026-11-03) [H unless tagged]
+
+Read from 0x4192b0 and its callees 0x4165f0, 0x40edd0, 0x40e7a0, 0x41a9b0, 0x583680, 0x5ca390, and from the block
+writers 0x423c10, 0x4f8200, 0x41fd30, 0x420f70, 0x4105a0, 0x423760, 0x423070, 0x4234d0, 0x410a60, 0x42d0f0. This
+settles the [port] / [M] items left by S7 t35 / t37 and corrects A1_READINGS §33.4.1 in places (list in H).
+
+Notation. F = formation (0x290 bytes). Block stack = F +0xf8..+0x100, 0x68-byte move blocks (MOVEMENT §6.1 layout),
+n = count. **"Top" = blocks[n−1] = the current block; blocks[0] = the bottom.** Block fields used here: +0x24 kind
+(1 position, 2 ray, 3 object, 4 "stay"), +0x28 object, +0x30 hard point, +0x18..+0x20 stored point (1e18 = none),
++0x48 flags, +0x50 push class [M: name], +0x58 expiry frame, +0x5d "close at own speed" (P1 §3.4), +0x5e patrol
+loop byte, +0x61 timed byte, +0x62 [L]. Flags: 0x01 attack-move, 0x02 guard, 0x04 player order, 0x08 queued
+waypoint, 0x10 space idle movement (see G), 0x20 skip validation, 0x40 raise signal 0x2a on pop. F fields: +0x1d0
+state, +0x1d8 next-check frame, +0x210..+0x218 recorded goal, +0x21c formation speed (−1 = unset), +0x220
+coordinator, +0x228 formation type (1 land, 2 space [M]), +0x230 path-progress object, +0x240 "arrived on its only
+block" byte. FPS = 30.
+
+**A. When 0x4192b0 runs.** Its only call chain is the formation step 0x422b70 → **state 1** handler 0x423760 →
+0x41dbb0 → 0x4192b0 (call graph: no other callers). So the guard follow / path copy / guard pop / re-path of
+A1_READINGS §33.4.1 run **only while the formation is moving (state 1)**. The other states:
+- 0 / 2: plan (0x41c1a0), then state 1.
+- 3 (0x423070) and 4 (0x4234d0): when n = 1, F +0x240 := 1 and the top's flag 0x20 is cleared. With n = 1 and an
+  object on the top: if the object is stealthed (0x39b140) and the lead's type lacks `Target_Stealth_Units` (+0xa4),
+  or the object is fogged for the lead's owner (0x35f470, force 1), see C step 3. Otherwise (state 3 only, space, GC
+  `ShouldUseSpaceIdleMovement` set: false in FoC) an idle-movement branch; otherwise **0x410a60**.
+- **0x410a60, the arrived re-check** (also once per 30 frames, sharing the timer F +0x1d8; it sets
+  F +0x1d8 := frame + int(FPS + 0.5)):
+  a = 0x4165f0(F) (leash test, E), c = 0x40edd0(F) (every member can hit the top's object from where it stands, E).
+  - a false and c false → pop the top (0x4105a0; no effect when n = 1).
+  - a false, c true, n ≥ 2 and blocks[n−2] has an object → pop the top.
+  - a true and c false → F speed := −1, state := 0 (re-plan: the formation moves again).
+  - otherwise nothing.
+
+  For a **guard** top (a is always true for it) this means: after arrival, every 30 frames, the formation re-plans
+  toward the guarded object as soon as any member with TARGETING is out of its max attack range of the object, or
+  inside its min range (0x40edd0 false). This is the "later move of the object re-paths the formation" of
+  A1_READINGS §33.4. With no TARGETING-bearing member, 0x40edd0 is true and nothing happens.
+
+**B. The block stack (item 1).**
+1. **Writers.**
+   | function | what it does to the stack |
+   |---|---|
+   | `Set_Move` 0x423c10(F, b, clear) | refused when (space and b.object's container +0x2b0 has a TEAM slot +0x348) or (kind 3 and no object). clear → empty the stack. Empty → b becomes the only block. Otherwise b equal to blocks[0] (0x40dc90: kind, flags, +0x4c, +0x50, +0x54, bytes +0x5e/+0x60..+0x63 and the kind's own fields) → **return, nothing changes**; else **blocks[0] := b** (the blocks above it stay). Then recorded goal := goal(b, members[0]); if blocks[0].kind ≠ 0: F speed := −1, state := 0. Set_Move does not subscribe F to the object. |
+   | `Coordinator::Move_To` 0x4f8200 | per formation: pop once (0x4105a0), then `Set_Move(F, b, 0)`. A fresh coordinator (every group move) has empty formations, so b becomes the only block. |
+   | **Push** 0x41fd30(F, b) | refused when: space and b.object is a squadron member (as above); kind 0; kind 3 without object; b.object dying / dead (+0x3a0 & 2); any member order-locked (0x39ad40). Members with unit ability 5 active get it switched off. **Pre-pop** while n > 1: kind-3 b → pop the top unless the top is a guard (0x02), has +0x5e set, or has a different +0x50; other kinds → pop the top unless the top is kind 3 or has +0x5e set. Never pops the bottom block. Then a non-guard object b gets land staging (F +0x228 = 1, 0x438c10, TACTICAL_COMBAT §2.8), a new path-progress object at F +0x230, and a hard point when it has none or a destroyed one (0x394610). **b is appended on top.** Recorded goal := goal(b); F subscribes to the object's signals 0x10 / 0x1a / 0x2e; F speed := −1; state := 0. |
+   | **Waypoint append** 0x420f70(F, b) (coordinator vf +0x30 = 0x4f7770, one call per formation; reached from the shift-queued MoveToPosition / MoveToRay, MOVEMENT §6.2) | refused in space when b.object is a squadron member, and for kind 3 without object. Refused when the stack already holds `MaxWaypointsPerPath` (GC +0x13f0, FoC **6**) blocks with flag 0x08. b gets flag **0x04**. Empty stack → b is the only block. Else: b equal to blocks[0] → ignored; else if some blocks[i], 1 ≤ i ≤ n−1, has flag 0x04 and its goal is within **20** (land) / **80** (other modes) of b's goal (2D) → **patrol loop**: blocks[0..i] get byte +0x5e := 1 and b is not added; else **b is inserted at the bottom (index 0)**, so it runs after everything already queued. Finally, when n = 1 or state = 3: state := 0. |
+   | **Pop** 0x4105a0 | only when n > 1. Removes the top T. T has +0x5e → T gets flag 0x08 and is re-inserted at the bottom (the patrol cycles). T named an object that no remaining block names → F's listener (F +0x258) leaves that object's 0x10 / 0x1a / 0x2e. The path-progress object F +0x230 is freed. Recorded goal := goal(new top, members[0]). State := **5 if T was kind 3, else 0** [M: state 5 handler 0x422e50 not read]. Each member: T flag 0x40 → signal 0x2a; `Space_Layer` member → 0x3a8710; T lacks 0x10 and the member's unit ability 5 is active → switched off. |
+   | Arrival 0x423760 (state 1) | when every member is done (or, for a timed top, +0x61 set, when frame ≥ top +0x58): n = 1 and state 1 → signal 10 on every member in **reverse member order**, state := 3. n ≥ 2: an object top **never pops on arrival** (state := 3); a player-order (0x04) position top pops only when blocks[n−2] has 0x08 (else state := 3); any other position top pops. After that pop: T had 0x10 and +0x62 → state := 3. |
+   | State 3 / 4 hidden goal | `Set_Move(F, position, clear = 1)`: see C step 3. |
+   | Target listener 0x4f77e0 | object death converts blocks[0] of each formation to a position (§4.10 E). |
+2. **Guard-block pop (0x4192b0 step 3).** Conditions: the top is a guard with an object G, T's `Space_Layer` is 0
+   (or `Disregard_Space_Layer_For_Guard_Attack_Move`), G "not moving" (no locomotor pack, no current path, path
+   state 5, or G's formation top has flag 0x10), and **n > 1**. Then:
+   - F +0x100 −= 0x68 (the top is dropped) and state := 0;
+   - when no remaining block names G, F (itself, not F +0x258) leaves G's signals 0x10 / 0x1a / 0x2e;
+   - **unlike 0x4105a0** it does not re-queue a patrol block, does not update the recorded goal, does not free
+     F +0x230, raises no 0x2a and does not touch ability 5;
+   - R is **not recomputed**: step 4 then runs on the new top in the same call with the R computed for the guard
+     (capped at 750 / 150). The recorded goal still holds the guard's goal, so D is usually > R and the formation
+     re-paths to the new top at once (subject to E's tests); otherwise state 0 makes the next formation step plan it.
+   - F speed is left as it was (possibly the 2 × S cap of an earlier follow) [M: whether the next plan recomputes it
+     was not traced; fighters ignore it anyway once the top is not a guard, F].
+3. **What player and host actions do to a guard.**
+   - **Shift-queued move after a guard** (0x420f70): the waypoint goes to the bottom; the guard stays on top (current)
+     and n becomes 2. If F had arrived (state 3), state := 0, so it re-plans and enters state 1. In state 1, every
+     30 frames: G moving → keep following (copy / re-path); G not moving → the guard is popped and the formation
+     proceeds to the queued waypoints. So **a guard followed by shift waypoints lasts only while G moves**; on a
+     stationary G it ends within one 30-frame check.
+   - **A shift-queued guard** (a guard block with 0x08 inserted at the bottom) behaves the same once it reaches the
+     top: if waypoints are queued below it, it pops as soon as G is found not moving.
+   - **Host auto attack** (LocomotorCommon 0x42d0f0 → 0x41cf70 → Push): t = null and F holds an enemy non-guard
+     object block (0x41a2e0) → **pop the top** (0x4105a0) and stop. Otherwise, when 0x4160a0 ≠ 0 (rr = 1 first splits
+     the unit into its own formation, 0x424850), Push {kind 3, object = t or its container, hard point, flags 0,
+     +0x50 = 0, +0x5d = 1, +0x60 = 1, +0x63 = 1 [L for the last two]}, then every member's TARGETING gets
+     `Set_Target(t, hp, 1, 0)`. The pre-pop replaces an earlier auto block of the same +0x50 class but **never removes a
+     guard block**, so the guard stays below the auto block. While the auto block is on top: R is uncapped (the cap
+     needs a guard top), step 3 (follow / pop) is skipped, and step 4 runs only when 0x4165f0 (E) agrees, i.e. the lead
+     is within the guard's leash; otherwise the auto block (no 0x04) is popped and the guard resumes. In state 3 the
+     same happens through 0x410a60.
+   - A **new group move** (any human or AI order) builds a new coordinator: the formation is new and the old stack is
+     gone; this is the only way a human order replaces the stack.
+
+**C. The fog test (item 2).**
+1. **In 0x4192b0 step 4:** `FOW_Object_Hidden(mode, lead +0x58 (owner), top.object, force = 1)` (0x35f470; AI
+   players are fogged too). Only the re-path step is gated; **step 3 (guard follow and path copy) has no fog test**,
+   so an escort keeps copying the path of a guarded object that is fogged for it. An allied object with REVEAL, or an
+   object with neither TEAM nor HIDE_WHEN_FOGGED, is never hidden (FOG_OF_WAR §5.2), so own carriers never trigger it.
+2. **When it fails (object hidden):** no re-path; go to step 5: if the top lacks flag 0x04 → pop it (0x4105a0; no
+   effect when n = 1), or, in space when T has a `Space_Layer`, 0x4220d0 instead (each member's +0xf0 sub-object
+   gets byte +0x140 := 0 [L: meaning]; no pop). With 0x04 (player order) → nothing. So a hidden top with a block
+   below it (an auto block over a guard, a queued block) is dropped every 30 frames while hidden; a single hidden
+   object block keeps its current path.
+3. **After arrival (states 3 / 4, n = 1, object hidden or stealthed for the lead):** P = the object's goal point
+   0x583200(top, lead): with the object hidden, the block's stored point +0x18..+0x20 when it is not 1e18 [M: no
+   writer of it for object blocks was found besides the 1e18 default, so in practice the object's true position];
+   with the object stealthed and no `Target_Stealth_Units`, the lead's own position. d = 2D |L − P|.
+   - d ≥ 40 → state := 0 (re-plan toward P).
+   - d < 40 → `Set_Move(F, copy of the top with kind 1, position = L, object = null, clear = 1)` (flags kept, so a
+     guard becomes a position guard at L) and every member gets 0x38d730(member, null, 0, 1, …) [M: clears its attack
+     order]. The status of A1_READINGS §33.2 sees this as "object fogged after arrival".
+4. **Other fog tests on the same blocks:** 0x4165f0 is false for a non-guard top whose object is hidden; 0x40edd0 is
+   false for a hidden or (without `Target_Stealth_Units` on members[0]'s type) stealthed object.
+
+**D. Team-object and team-member rules (item 3).**
+1. **Blocks never name a fighter inside a squadron in space.** Set_Move, Move_To, Push and the waypoint append refuse
+   such a block; 0x42d0f0 replaces a team-member target by its container (+0x2b0). The goal is always the squadron
+   container.
+2. **Lead type T:** a lead whose team data (+0x110) has members → **the type of its first team member** (index 0);
+   else the company type (0x3973b0) when lead +0x337 = −1; else its own type. R (`Get_Base_Attack_Range`(T, lead)/2) and
+   the `Space_Layer` gate use T: a squadron formation uses its first fighter's type.
+3. **No re-path vetoes (space, top kind 3), checked before D:**
+   - the lead is **not** a team container (+0x348 = −1), the object **is** one, and the object's current attack target
+     (0x397a40(object, 0)) belongs to F's coordinator (0x4f72e0(F +0x220, x): x's formation's coordinator is F +0x220,
+     or x is in its unit list +0x28..+0x30). A ship chasing a squadron that is attacking its own group does not re-path:
+     the squadron comes to it.
+   - the lead's and the object's locomotor packs hold the **same dogfight cell** (pack +0x1c4 / +0x1c8, the G_D cell
+     of §5; ≠ −1). Upgrades the [L] of A1_READINGS §33.4.1.
+4. **Formation speed 0x41b2a0:** min over members of locomotor vf +0x250; a team-container member in space uses
+   0x370f00(type, member) instead (type = own type when F +0x228 = 1, else the company type). Top flag 0x10 → at most
+   GC `SpaceIdleMovementSpeed` (+0x1554, 0.0 in FoC).
+5. **0x40edd0:** a team-container member whose locomotor vf +0x230 is false is tested through its first team member;
+   in space, with F +0x240 set, team-container members are skipped. Busy members (0x39a350) and members without
+   TARGETING (+0x33b = −1) are skipped.
+6. **0x4165f0** adds `Autonomous_Move_Extension_Vs_Attacker` for the guarded object's attackers only when the guarded
+   object has slots +0x370 and +0x333 (§4.10 A).
+7. **Goal point 0x583680** for an object block: the hard point's position when the block names one (0x396ce0); on
+   land, for a team-container object, the member returned by the viewer's TARGETING 0x566aa0 [M: nearest]; else the
+   object's position (+0x78..+0x80). Kind 2 (ray): the ray point at the viewer's z; kind 4: the viewer's own position.
+   Clamped to the playable box, z to ±5000 (0x583150).
+8. A fighter in a squadron reads its **container's** formation (pack +0x1f0 of +0x2b0) for speed (F).
+
+**E. Non-guard blocks and the D ≤ R rule (item 4).**
+- **R** = `Get_Base_Attack_Range`(T, lead) / 2, computed once at the top of the call from the current top (cap only
+  for a guard top).
+- **D** = 2D distance between the recorded goal (F +0x210 / +0x214) and the top's current goal point
+  (0x583150(top, lead), D 7). The recorded goal is written by Set_Move, Push, Pop and **every re-path** (0x417520
+  stores the new goal), but not by the guard pop.
+- **bVar7** = the top is kind 3 without flag 0x02 (ordered attack, Move_To / Attack_Move on an object, auto block).
+- **c** = 0x40edd0(F): true when there is no top, no member or no object; false when the object is stealthed and
+  members[0]'s type lacks `Target_Stealth_Units`, or hidden for members[0]'s owner; else false when **any** tested
+  member (D 5) is inside its min range from where it stands (TARGETING slot 46, 0x5683a0) or outside its max range
+  (slot 43, 0x5673b0), or, in a land formation, its line of fire is blocked (0x3b5ad0); else true. (With n > 1 and a
+  0x10 top it tests blocks[n−2].)
+- **stopping** = the lead's pack state is 0x14 (Walk End Move) or 0x15 (Pre Stopped), or blocks[0] has flag 0x01 and
+  the lead is not moving (0x39ade0). (The code also accepts F state 3, which cannot occur here, A.)
+- **Rule:** after the D 3 vetoes, **no re-path when D ≤ R, unless** bVar7 and not c and stopping. So:
+  - guard and position tops: re-path only when the goal moved more than R since the last recorded goal;
+  - non-guard object tops: also re-path when the formation is stopping short of a position from which every member can
+    hit the object.
+- **D ≤ R, no re-path, land stop:** when F +0x228 = 1, bVar7, not stopping, c, and 0x40e7a0(F) (land only: no member
+  has a blocked line of fire (0x3b5ad0, heights raised by `Ranged_Target_Z_Adjust` +0x4dc), and no infantry member
+  (`UnitCollisionClass` +0x169c = 5) has an infantry non-member of another formation in its footprint [M]) → F's path is cut to its first node (0x54e780(path, 0)) and every member whose locomotor vf +0x1b8 is
+  false gets vf +0x138(vf +0x188()) [M: stop in place]. This replaces "idle members get their speed refreshed [L]".
+- **Re-path** (D > R, or the exception): only when 0x4165f0(F) is true:
+  - guard top → true;
+  - top flag 0x10 → false; top object hidden for members[0]'s owner → false;
+  - n = 1 → false in space when T has a `Space_Layer` (and not `Disregard_…`), else true iff blocks[0] is kind 3
+    (capital ships therefore never re-path to a moving attack target here; with no 0x04 they get 0x4220d0, C 2);
+  - n ≥ 2 → the leash test (§4.10 A and TACTICAL_COMBAT §2.8 use the same ranges): Rr and anchor = (top has no object
+    or blocks[0] lacks 0x01) and blocks[n−2] +0x5e clear → Rr = blocks[0] guard ? `Guard_Chase_Range` :
+    `Idle_Chase_Range`, anchor = goal(blocks[n−2]); else Rr = `Attack_Move_Response_Range`, anchor = F's current path
+    point (F +0x230; last node; the lead position L without one). Attacker extension as in §4.10 A; a moving guarded
+    object answers only its attackers (false otherwise). False when |L − anchor| (2D) ≥ Rr; when the object is farther
+    than Rr from the anchor, the answer is 0x5672b0 at the point Rr from the anchor toward it; else true.
+
+  Then members[0]'s UNIT_AI (slot 0x12) vetoes when 0x4f5780 is true: its company type has `Keep_Moving_In_Battle`
+  (+0x6a, unset in FoC) or byte +0x38 of its +0x108 object is set [L]. Then 0x417520(members, lead, L, 2); on failure
+  return (0x417520 ends with state := 3 on its failure path [M]); on success the members get the new path as in step 3 (G 4).
+- n ≥ 2 and blocks[n−2] is a guard with an object and 0x4165f0 is false: step 4 is skipped entirely and step 5 pops
+  the (auto) top when it lacks 0x04.
+
+**F. Solo fighter speed cap (item 5).** Yes, a solo fighter gets it, from its **own** formation [H]:
+- 0x4192b0 caps F +0x21c / +0xa8 for any formation whose T has `Space_Layer` 0, whatever its members are.
+- The fighter reads it in `formation_speed_or_max` 0x5ca390 (§3.8): pack = the container's (+0x2b0) when the fighter
+  is in a squadron, **else its own pack**; when that pack has a formation **and a current path** (0x5569b0) and the
+  formation's **top** is a guard (0x02) with an object, the speed is F +0x21c (0x41b440); else maxspeed. `avoid_speed`
+  0x5ca430 uses min(minspeed, 0.5 × F +0x21c) under the same top test (no path test).
+- So the cap acts only while the top is the guard block. The hangar never gives a single-ship launch a guard
+  (§4.10 E), so a solo fighter is capped only when a player or AI guard order names an object for it.
+
+**G. Other details of 0x4192b0 (item 6).**
+1. **R cap constants** [H, address arithmetic and XML]: 0x140b276c0 = GC +0x11ec0 `Space_Guard_Range` (FoC 750.0),
+   0x140b276c4 = GC +0x11ec4 `Land_Guard_Range` (150.0); mode 2 → 750, mode 1 → 150, other modes uncapped; R :=
+   min(R, cap). `MaxWaypointsPerPath` = GC +0x13f0 (6).
+2. **Gate order:** no members → return; frame < F +0x1d8 → return; **then** F +0x1d8 := int(float(FPS) +
+   float(frame)); no lead → return; one member whose pack state is 0x26 → return. (The timer is set before the lead
+   gates.)
+3. **Lead and L** (0x41a9b0): one member → that member, L = its position. Several → L = the **centroid** (3D mean of
+   member positions, summed in member order); lead = the member nearest L (3D, strict <, first wins) among members
+   whose goal point for the top (0x583150) differs from their position, or any member when the top is kind 4;
+   fallback members[0]. The follow distance |L − G| and the leash use L, not the lead's position.
+4. **Copy branch** (G moving): F speed := formation speed (0x41b2a0); within R, S and the cap as in A1_READINGS
+   §33.4.1. If F's path already equals G's path (0x40ded0: same node count, node fields, path +0x30 / +0x34) → only
+   F speed := cap and **return** (no re-issue, no step 4). Else copy, F speed := cap, then: footprint check
+   0x40eb90(members, 2, 1) (MOVEMENT §4.3 step 5); a copied path of one node → state 3 (no signal 10); otherwise
+   each member that is not deployed (0x39a390) / deploying (0x39a400), or whose type +0x23b0 ≠ 0, gets the path
+   (locomotor vf +0x158(0), +0x190(path), +0x148(0)); 0x410170(member) → its path +0x6d := 1 [L]; its waypoint index
+   (path +0x60 / +0x64) := G's.
+5. **Re-path re-issue** (same loop, no index copy): with a non-guard object top, a member that is in max range
+   (slot 44), not inside min range (slot 45) and not moving (locomotor vf +0x1c0(0) false) keeps its own path.
+6. **S edge case:** G in a formation whose top lacks 0x10 → S = G's F +0x21c, which is −1 between G's new order and
+   its next plan; the cap is then min(F speed, −2) = −2 [M: what the locomotors do with it was not traced].
+7. **Flag 0x10** = the space idle-movement block: 0x41b2a0 caps a 0x10 top's speed at `SpaceIdleMovementSpeed`,
+   and the state-3 idle branch needs `ShouldUseSpaceIdleMovement` (false in FoC). In FoC no 0x10 blocks were found, so
+   "G's top has 0x10" (step 3 not moving; S rule) does not occur [M].
+
+**H. Corrections to A1_READINGS §33.4 / §33.4.1** (applied there 2026-11-03):
+- L is the members' centroid (one member: its position), not the lead's position.
+- The D ≤ R exception tests whether the **lead** is stopping (E), not whether the object is moving.
+- Step 5 / the fog path: a guard top **can** reach step 5, when its object is hidden; 0x4220d0 does not re-form,
+  it clears a member byte [L].
+- The "idle members get their speed refreshed [L]" sub-case is the land stop of E.
+- 0x4192b0 runs only in state 1; after arrival the follow is 0x410a60 (A).
+
+**I. Implementation checklist** (port: `MovementSystem::fguard_update`, `mv::FighterGuard`,
+`engine/tactical/movement/src/movement_system.cpp`):
+1. Hold a block **stack** per formation record (top = current): Set_Move replaces the bottom (or clears, for a
+   state-3 hidden goal); Push appends on top after the B 1 pre-pop; the shift append inserts at the bottom with
+   0x04, the 6-waypoint limit, the duplicate test and the patrol-loop test (20 / 80); Pop drops the top with the
+   B 1 side effects (patrol re-queue, recorded goal, state 5 / 0, ability 5).
+2. Run the 0x4192b0 logic only while the formation is moving (state 1); after arrival run 0x410a60 on the same
+   30-frame timer (re-plan when not every member can hit the guarded object; pop a non-guard top whose leash broke).
+3. Guard pop (step 3): top guard, G not moving, n > 1 → drop the top without the Pop side effects, state 0, keep R
+   and the recorded goal, then run step 4 on the new top in the same update.
+4. Host auto attack: push the auto block above the guard (never removing it); while it is on top use the uncapped R,
+   skip step 3, and pop it when 0x4165f0 fails (step 5 / 0x410a60). This replaces the port's "covered: no update".
+5. Fog: gate only step 4 (`FOW_Object_Hidden`, lead's owner, force 1); hidden → pop a top without 0x04 when n ≥ 2;
+   arrived with a hidden / stealthed single object block → C 3 (40-unit rule, position guard at L).
+6. Team rules D 1–D 5: squadron containers as block objects; T = first team member's type; the two space vetoes
+   (squadron attacking our coordinator; same dogfight cell).
+7. Non-guard tops: E's D ≤ R exception and the land stop; 0x4165f0's leash for n ≥ 2; the UNIT_AI veto (always false
+   in FoC data unless obj +0x108 +0x38 is set [L]).
+8. Speed: give a solo fighter's own formation the same cap and let the fighter read F speed only while its top is a
+   guard with an object and it has a current path (F); squadron members read the container's formation.
+9. Use L = the formation members' centroid (for a squadron formation: the container's position, i.e. the members' box
+   centre of §4.10 B), not the first fighter's position; drop the port's [M] "lead idle or moving" condition on the
+   copy (retail has none); add the "paths equal → cap only" early return.
+10. Tests: a shift waypoint after a guard of a stationary object pops the guard within 30 frames; an auto block over a
+    guard pops when the lead leaves `Guard_Chase_Range` of the guarded object; a solo fighter guarding a moving carrier
+    flies at ≤ 2 × the carrier's max speed; a hidden auto target over a guard is dropped.
+
+No in-game probe is needed for these rules. An optional probe (tools/probe_mod/): order a squadron to guard a moving
+frigate, shift-click a waypoint, and log the squadron formation's block count and state (F +0xf8..+0x100, +0x1d0)
+when the frigate stops, to confirm B 3.
 
 ---
 
@@ -1248,14 +1496,17 @@ container's locomotor.
    - the exact ring enumeration of 0x4fb160 [M];
    - §4.9: the lifetime of a squadron's formation after its move ends (who clears pack +0x1f0 for an idle squadron:
      coordinator service / 0x421910 / 0x410b80 callers not traced), so whether a long-idle squadron still has a
-     formation to push auto targets into; the scan's 4th output byte; what 0x4105a0 does to the formation on
-     `Auto_Engage(null)`; the hold table 0x4944e0; whether anything besides death / a new order removes a fogged
-     goal block.
+     formation to push auto targets into; the scan's 4th output byte; the hold table 0x4944e0.
+     Answered 2026-11-03 (§4.11 B / C): `Auto_Engage(null)` pops the top block (the auto block) when n > 1; a fogged
+     top block over another block is popped by 0x4192b0 step 5 when it lacks 0x04, and a single fogged object block is
+     turned into a position at L after arrival (40-unit rule).
+   - §4.11: what the locomotors do with a negative formation speed (G 6); the state-5 handler 0x422e50; the writer of
+     an object block's stored point +0x18..+0x20 (C 3); obj +0x108 +0x38 in the UNIT_AI re-path veto [L].
 2. **Flying:**
    - how state 0x26 is left;
    - the clearance query 0x63b640: resolved (§6.3.1). Still open there: the entry builder 0x6b3b00 (entry AABB and
      half-extents) [M], and whether land transports ever hold a Corvette-layer record [L];
-   - the formation destination kinds of 0x583680 [M];
+   - the formation destination kinds of 0x583680: read 2026-11-03 (§4.11 D 7; kind 4 = the viewer's own position);
    - the jetpack follower 0x641010 was not compared line by line.
 3. **0x5070b0:** exact arithmetic; `Stopped_Rate_Of_Turn` readers.
 4. **Hyperspace:** the profile table 0x140b27a10 (unchanged from MOVEMENT §8).
