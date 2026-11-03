@@ -684,9 +684,9 @@ int main(int argc, char** argv) {
     // story t06 (BT §3.1a): it no longer ends at frame 1. 0xb is only tested when a victory-relevant object leaves a player,
     // and nothing does at the start (a side that never had a relevant object cannot lose by 0xb). Checked over the first
     // 300 battle frames: still running, nothing declared. [port] Still open: the plot's ENABLE_VICTORY 0 hold and its
-    // VICTORY ending wait for the story reward wiring; the jailed UMP_TYBER_ZANN prop (a Variant_Of_Existing_Type of the
-    // Victory_Relevant Tyber_Zann, an Underworld object from frame 0 in the original, §3.1a item 4) is dropped by the
-    // branched-map discard (REMAINING_GAPS §3.1 item 4: owner = attacker; the 0x140b155d8 exception is not modelled).
+    // VICTORY ending wait for the story reward wiring. story t10: the jailed UMP_TYBER_ZANN prop (a Variant_Of_Existing_Type
+    // of the Victory_Relevant Tyber_Zann, an Underworld object from frame 0 in the original, §3.1a item 4) survives the
+    // branched-map discard: a linked battle keeps attacker-owned objects (REMAINING_GAPS §3.1 item 4, global 0x140b155d8).
     {
         game::SessionSpec story = fought_campaign();
         story.campaign = "Full_Story_Campaign_Underworld";
@@ -701,7 +701,7 @@ int main(int argc, char** argv) {
         if (kessel) {
             const galactic::BattleRequest& r = s.battles()->conflicts().active_request();
             CHECK(r.forces.size() == 2 && r.forces[0].start.empty() && r.forces[1].start.empty() && r.forces[1].reserve.empty());
-            // The jailed Tyber (reported; see above): an Underworld victory-relevant object on the map at the start.
+            // The jailed Tyber (story t10): an Underworld victory-relevant object on the map at the start.
             const sim::TacticalMode* tm = s.host().modes().top_tactical();
             const objects::TypeIndex ut = data.types.resolve_name("UMP_TYBER_ZANN");
             CHECK(ut != objects::kNone && data.types.get_bool(ut, "Victory_Relevant"));  // inherited from Tyber_Zann
@@ -718,6 +718,7 @@ int main(int argc, char** argv) {
             std::printf("story link: Kessel UM01 jailed Tyber %d; after 300 ticks battle %s at frame %u, declared %d, hold %d\n", tyber ? 1 : 0,
                         after && !after->finished() ? "running" : "ended", frames, after && after->victory_declared() ? 1 : 0,
                         after ? after->victory_hold() : 0);
+            CHECK(tyber && r.linked);
             CHECK(after && !after->finished() && !after->victory_declared() && frames >= 299);
         }
     }

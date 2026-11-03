@@ -149,6 +149,9 @@ struct BattleRequest {
     std::vector<ObjectHandle> structures;  // land: the defender's ground structures
     bool land_base_destruction_forces_retreat = false;
     bool space_station_destruction_forces_retreat = false;
+    // story t10 (REMAINING_GAPS §3.1 item 4, [M] global 0x140b155d8): a linked battle (LINK_TACTICAL / corruption
+    // mission record): the branched-map discard also keeps attacker-owned objects (Kessel UM01's jailed UMP_TYBER_ZANN).
+    bool linked = false;
 };
 struct BattleResult {
     int32_t winner = kNoPlayer;

@@ -299,6 +299,7 @@ void CampaignBattles::write_state(ByteWriter& w) const {
     if (flight != 0) {
         save_io::Out o(w);
         request_io(o, pending_req_);
+        o(pending_req_.linked);  // v3
     }
     write_linked(w);  // v3
 }
@@ -353,6 +354,7 @@ bool CampaignBattles::read_state(ByteReader& r) {
     if (flight != 0) {
         save_io::In in(r);
         request_io(in, req);
+        if (version >= 3) in(req.linked);
     }
     LinkedState linked_state;  // v3 (older saves: the defaults, no record)
     if (version >= 3) read_linked(r, linked_state);

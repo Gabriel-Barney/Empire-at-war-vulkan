@@ -1029,6 +1029,7 @@ bool ConflictManager::start_linked(LinkedBattle b) {
 bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked, uint32_t forced_type, bool flagship) {
     BattleRequest req;
     req.info = head;
+    req.linked = linked != Linked::No;
     const bool space = head.kind == ConflictKind::Space;
     const PlanetState& p = sim_->planets()[head.planet];
     const auto& store = sim_->store();
