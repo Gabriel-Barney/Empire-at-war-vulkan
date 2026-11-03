@@ -172,6 +172,9 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     cfg.players = sim::session_players(setup_.players.size());
     host_ = std::make_unique<sim::SimHost>(d.types, *js_, cfg);
     if (replay) host_->replay_from(replay);
+    // q6 t06: the GameScoring script, re-created by every new session before the players and plots (GAME_SCORING.md).
+    if (const auto scoring = d.db.constants().get("Game_Scoring_Script_Name"))
+        host_->set_scoring_script(d.files.get(), std::string(*scoring));
     galactic::GalacticSim* gs = host_->start_galactic(d.rules, setup_, diag);
     if (!gs) return fail("galactic session did not start");
     gs->set_emit_events(true);

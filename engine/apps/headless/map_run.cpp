@@ -193,6 +193,9 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         cfg.story_crc = true;
         cfg.players = sim::session_players(setup.players.size());
         sim::SimHost host(types, js, cfg);
+        if (opt.scoring)  // q6 t06
+            if (const auto scoring = db.constants().get("Game_Scoring_Script_Name"))
+                host.set_scoring_script(files.get(), std::string(*scoring));
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
         sim::StoryStart st;
@@ -215,6 +218,7 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         if (!opt.quiet && workers == (opt.check_workers ? jobs::determinism_worker_counts().front() : opt.workers)) {
             for (const auto& e : s.log()) std::printf("  %s\n", e.text().c_str());
             for (const auto& m : s.lua_messages()) std::printf("  lua: %s\n", m.c_str());
+            for (const auto& m : host.scoring_messages()) std::printf("  scoring: %s\n", m.c_str());
         }
         return true;
     };

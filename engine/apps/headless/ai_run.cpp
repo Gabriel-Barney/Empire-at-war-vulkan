@@ -230,8 +230,13 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         cfg.story_crc = aopt.story;
         cfg.players = sim::session_players(setup.players.size());
         sim::SimHost host(types, js, cfg);
+        if (opt.scoring)  // q6 t06
+            if (const auto scoring = db.constants().get("Game_Scoring_Script_Name"))
+                host.set_scoring_script(files.get(), std::string(*scoring));
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
+        if (print)
+            for (const auto& m : host.scoring_messages()) std::printf("scoring: %s\n", m.c_str());
         if (aopt.story) {
             if (!cdef) return false;
 #ifdef ALAMO_SIM_HAVE_STORY

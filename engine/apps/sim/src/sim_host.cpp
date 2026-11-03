@@ -125,15 +125,61 @@ GameMode& SimHost::start_game(ModeKind kind) {
         random_.seed_session(cfg_.seed);
         modes_.reset_ids();
     }
+    const bool new_session = modes_.empty();
     GameMode& m = modes_.push(kind);
     // --- OI objects: behaviour Initialise draws its first due frame from the synced RNG (TACTICAL_GAPS 6.4);
     //     primary store only (the secondary store is local / cosmetic) ---
     m.primary().bind_sync_rng(&random_.synced());
     // --- end OI objects ---
+    if (new_session) create_scoring(m);  // q6 t06: before the players are set up and the plots load
     pacing_.select_active(m.tactical());
     pacing_.set_stopped(false);
     if (story_ && m.tactical()) story_->host_event(StoryHostEvent::TacticalStarted, frame_);
     return m;
+}
+
+void SimHost::set_scoring_script(const FileProvider* files, std::string name) {
+    scoring_files_ = files;
+    scoring_name_ = std::move(name);
+}
+
+const lua::LuaVm* SimHost::scoring_vm() const {
+#ifdef ALAMO_SIM_HAVE_STORY
+    return scoring_vm_.get();
+#else
+    return nullptr;
+#endif
+}
+
+// GAME_SCORING.md §1.1 / §1.2: release the old script, then a fresh unpooled state: the file's top level (require),
+// Base_Definitions(), the main thread (created, not resumed). Errors are kept as messages; the session goes on without
+// the script's globals.
+void SimHost::create_scoring(GameMode& m) {
+#ifdef ALAMO_SIM_HAVE_STORY
+    scoring_vm_.reset();
+    if (scoring_name_.empty() || !scoring_files_) return;
+    auto note = [this](std::string_view what) {
+        scoring_messages_.push_back(std::to_string(frame_) + " " + scoring_name_ + ": " + std::string(what));
+    };
+    lua::LuaHost host;
+    host.store = &m.primary();
+    host.types = &m.types();
+    host.rng = &random_;
+    host.files = scoring_files_;
+    host.campaign = m.kind() == ModeKind::Galactic;
+    lua::LuaVmOptions opt;
+    opt.script_name = scoring_name_;
+    auto vm = std::make_unique<lua::LuaVm>(host, opt);
+    lua::attach_global_values(*vm, &global_values_);
+    std::string err;
+    if (!vm->require(scoring_name_, &err)) note("require: " + err);
+    else if (vm->has_function("Base_Definitions") && !vm->call("Base_Definitions", &err)) note("Base_Definitions: " + err);
+    vm->create_thread("main");  // missing main: no thread (§1.1 step 5)
+    for (const std::string& msg : vm->messages()) note(msg);
+    scoring_vm_ = std::move(vm);
+#else
+    (void)m;
+#endif
 }
 
 lua::GlobalValueStore* SimHost::global_values() {  // Int-final
@@ -197,6 +243,9 @@ galactic::GalacticSim* SimHost::start_galactic(const galactic::GalacticRules& ru
 }
 
 bool SimHost::end_game_mode() {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (modes_.depth() <= 1) scoring_vm_.reset();  // q6 t06: before the store its wrappers point into
+#endif
     if (story_) {
         if (modes_.depth() <= 1) story_.reset();  // the galactic mode (bottom) ends: the story with it
         else if (modes_.top() && modes_.top()->tactical()) story_->host_event(StoryHostEvent::TacticalEnded, frame_);
