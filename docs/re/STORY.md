@@ -403,3 +403,30 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
    set use the same flags (`StoryModel::share_flags`). Before 2026-11-02 each plot set had its own table, so a mission's
    `SET_FLAG <Faction>_A0xM0y_WIN` (20 such flags in FoC, e.g. `EMPIRE_A01M03_WIN`, set in the tactical plots) never
    reached the campaign plot's STORY_FLAG.
+9. **First resume at load** (§1.5, §4.1) [port reading, q6 2026-11-03]: after `Base_Definitions()` and
+   `Create_Thread("main")` the session resumes the new script's threads once (`StorySession::start_threads_at_load`,
+   galactic and tactical plot scripts). Not a Service: LastService and the rate gate are untouched, so the first T9 still
+   services the script. Why: PGStateMachine's `Story_Event_Trigger` only switches state while `CurrentState ==
+   NextState`, which holds only after `main` (Process_States) has run once, and T9 dispatches the frame-1
+   STORY_ELAPSED events (step 2) before the first Lua service (step 3). Without it every prereq-less `STORY_ELAPSED 0`
+   start event of a state-machine script was dropped: about 60 shipped FoC plots (most tactical missions'
+   `<Mission>_Begin`) and Thrawn's Revenge's `Zoom_Zoom` / `Trigger_Determine_Faction`, so TR's master and
+   player-agnostic plots never left `PG_Story_State_Init`. The original's order here is not traced (the scripts work in
+   retail, so their machine is settled before the first event); test: `alamo_sim_tests` `test_q6_story_chain`.
+10. **SWITCH_CONTROL** (AI_GALACTIC.md §1.2, reward 0x30) [port, q6]: the reward goes to the host
+    (`StorySession::set_switch_control_hook`, installed by `SimHost::set_switch_control_hook` before the plots load) with
+    Reward_Param1 resolved to a player (faction name, or a player object set from Lua: `#player:N`) and Reward_Param2 the
+    AIPlayerType name. `alamo_headless --galactic-ai --story` and `GameSession` call `GalacticAiWorld::set_ai_type` at
+    once (inside T9), difficulty Normal / the session's; the human keeps its control. `alamo_headless --galactic-ai
+    --story` also gives the story player world the galactic AI's equations and resolver as its perception source, so
+    plot scripts' `EvaluatePerception` answers (TR's VictoryHandler / StoryUtil / RandomSpawnManager need it);
+    `GameSession` does not yet (open).
+11. **Perpetual STORY_ELAPSED, open**: the port keeps §4.7 (accumulator never cleared: fires at every T9 after the
+    first fire; `test_q6_story_chain` checks it at session level). Thrawn's Revenge's `Galactic_Cycle_Increment` /
+    `Galactic_Cycle_Finished` (Player_Agnostic_Plot, `STORY_ELAPSED 40`, Perpetual, no prereq) drive a week counter,
+    which reads as if retail re-arms the 40 s period. Needs a retail probe (fire count of a Perpetual ELAPSED over
+    120 s) before changing §4.7.
+12. **Planet `Get_Owner`** [port, q6]: a galactic planet object's `GameObjectWrapper.Get_Owner` returns the galactic
+    planet owner (`PlanetState::owner`). The port creates planet objects without a store owner, so before q6 every
+    planet reported player -1 to Lua (mod scripts that sort planets by `Get_Owner().Get_Faction_Name()`, e.g. TR's
+    deepcore GalacticConquest, saw no owned planet). Test: `alamo_lua_players_tests`.

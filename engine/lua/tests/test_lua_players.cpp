@@ -891,6 +891,11 @@ void test_galactic_ops() {
     CHECK(run(vm, "af3.Change_Owner(und) ufa = F2.Get_Parent_Object() uc = ufa.Get_Contained_Object_Count()") == "");
     CHECK(gnum(vm, "uc") == 3.0 && sim.fleets_at(0, 1).size() == 1 && sim.fleets_at(0, 0).size() == 0 && g.store->owner(c[2]) == 1);
     CHECK(run(vm, "PC.Change_Owner(emp)") == "" && sim.planets()[2].owner == 0);  // same owner: nothing
+    // q6: a planet's Get_Owner is the galactic planet owner (the planet object has no store owner).
+    CHECK(g.store->owner(g.planet(2)) < 0);
+    CHECK(run(vm, "po1 = PC.Get_Owner().Get_ID() po2 = PA.Get_Owner().Get_ID() pn = PC.Get_Owner().Get_Faction_Name()") == "");
+    CHECK(gnum(vm, "po1") == 0.0 && gnum(vm, "po2") == static_cast<double>(sim.planets()[0].owner));
+    CHECK(run(vm, "pe = (pn == emp.Get_Faction_Name())") == "" && gtrue(vm, "pe"));
     // Invade (a1g t05, A1_READINGS §31): issued by the local player (Empire) with its own ground units only. ufa is
     // Underworld's fleet without ground units, PA no fleet: warnings, no order.
     const uint32_t issued = bridge.orders_issued;

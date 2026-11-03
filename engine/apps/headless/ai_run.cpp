@@ -30,6 +30,9 @@
 #include "alamo/sim/campaign_battles.hpp"
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/sim/story_session.hpp"
+#if defined(ALAMO_LUA_PLAYERS)
+#include "alamo/lua/players.hpp"  // q6: the story player world's perception source
+#endif
 #endif
 #include "alamo/vfs/vfs.hpp"
 #include "port_trace.hpp"
@@ -106,23 +109,6 @@ bool load_human_script(const std::string& path, std::vector<HumanCommand>& out, 
     std::stable_sort(out.begin(), out.end(), [](const HumanCommand& x, const HumanCommand& y) { return x.frame < y.frame; });
     return true;
 }
-
-#ifdef ALAMO_SIM_HAVE_STORY
-// q6 t07: a fired story reward "SWITCH_CONTROL[<player>|<AI type>]" (the story log's reward text) -> its two
-// parameters. Reward_Param1 = the player (faction name, or "#player:N" for a player object), Reward_Param2 = the
-// AIPlayerType name. Thrawn's Revenge fires it from Lua (StoryUtil.ChangeAIPlayer: Set_Reward_Parameter + Story_Event).
-bool parse_switch_control(const std::string& reward, std::string& player, std::string& type) {
-    static constexpr std::string_view kHead = "SWITCH_CONTROL[";
-    if (reward.size() < kHead.size() + 1 || reward.compare(0, kHead.size(), kHead) != 0 || reward.back() != ']') return false;
-    const std::string body = reward.substr(kHead.size(), reward.size() - kHead.size() - 1);
-    const size_t bar = body.find('|');
-    if (bar == std::string::npos) return false;
-    player = body.substr(0, bar);
-    const size_t bar2 = body.find('|', bar + 1);
-    type = body.substr(bar + 1, bar2 == std::string::npos ? std::string::npos : bar2 - bar - 1);
-    return !player.empty() && !type.empty();
-}
-#endif
 
 }  // namespace
 
@@ -267,11 +253,42 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         host.set_scoring_campaign(name);  // q6 t09: Game_Mode_Starting_Event("Galactic", campaign)
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
+        ai::GalacticAiWorld* world_ptr = nullptr;
+#ifdef ALAMO_SIM_HAVE_STORY
+        std::vector<sim::StorySwitchControl> switch_pending;  // q6: SWITCH_CONTROL rewards before the AI world exists
+        auto apply_switch = [&](const sim::StorySwitchControl& sw) {
+            std::string note = std::to_string(sw.frame) + " SWITCH_CONTROL " + sw.player_text + " " + sw.ai_type + ": ";
+            if (sw.player < 0 || static_cast<size_t>(sw.player) >= setup.players.size()) {
+                note += "no such player";
+            } else if (sw.player == human) {
+                note += "scripted human, ignored";
+            } else {
+                std::vector<std::string> wd;
+                const bool changed = world_ptr->set_ai_type(sw.player, sw.ai_type, 1, &wd);
+                const std::string now = world_ptr->ai_type(sw.player);
+                note += changed ? "p" + std::to_string(sw.player) + " is now " + (now.empty() ? std::string("Human") : now)
+                                : (wd.empty() ? std::string("no change") : wd.front());
+            }
+            if (print && aopt.verbose) std::printf("galactic-ai: %s\n", note.c_str());
+        };
+#endif
         if (aopt.story) {
             if (!cdef) return false;
 #ifdef ALAMO_SIM_HAVE_STORY
             // q2f t03: the campaign's story plot sets (as map_run.cpp story_run). The retail sandbox runs them, and their
             // start-of-game hero spawns are part of its tick-1 RNG draws (docs/re/GALACTIC_RNG_DRAWS.md).
+            // q6: story reward SWITCH_CONTROL (AI_GALACTIC §1.2: Set_AI_Type, then the difficulty) -> the galactic AI, while
+            // the reward applies (T9): the new AI is in place for the next T7, as in the original. Difficulty = the run's
+            // Normal [port: the original reads the session difficulty global]. The scripted human keeps its control [port].
+            // Every other player already has a T7 controller (below). A reward before the AI world exists (a load-time
+            // Story_Event) waits for it.
+            host.set_switch_control_hook([&](const sim::StorySwitchControl& sw) {
+                if (!world_ptr) {
+                    switch_pending.push_back(sw);
+                    return;
+                }
+                apply_switch(sw);
+            });
             sim::StoryStart st;
             st.files = files.get();
             st.plot_sets = sim::campaign_plot_sets(*cdef, *gs);
@@ -304,7 +321,6 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         bo.conflict.fight_ai_battles = aopt.battles == "fight-all";
         bo.tactical = aopt.battles != "auto";
         sim::load_tactical_systems(*files, rules, &db.constants(), bo);  // Int-final: weather, retreat, strikes data
-        ai::GalacticAiWorld* world_ptr = nullptr;
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
         // --- A2 hook: the AI's galactic budget categories for the A1 land-battle credit transfer ---
         std::vector<std::vector<ai::tactical::TacticalBudgetCategory>> budget_rows(gs->players().size());
@@ -345,6 +361,19 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         }
         world.register_crc(host.crc_registry());
         world.set_global_values(host.global_values());  // Int-final: session-wide GlobalValue table
+#ifdef ALAMO_SIM_HAVE_STORY
+        if (aopt.story && host.story()) {
+#if defined(ALAMO_LUA_PLAYERS)
+            // q6: the plot scripts' EvaluatePerception (STORY_LUA: the player's galactic perception) answers from the
+            // galactic AI's equations and token resolver, as the AI's own scripts do (Thrawn's Revenge's VictoryHandler /
+            // StoryUtil read Max_Shipyard_Level etc. every service). The world outlives the host (world_holder).
+            if (lua::LuaPlayerWorld* sw = host.story()->player_world())
+                sw->set_perception({&eqs, &world.resolver()}, {&eqs, &world.resolver()});
+#endif
+            for (const sim::StorySwitchControl& sw : switch_pending) apply_switch(sw);
+            switch_pending.clear();
+        }
+#endif
         // T7: the AI players' updates, player index order (SimHost calls controllers in index order). q6 t07: every player
         // but the scripted human gets one, because a SWITCH_CONTROL reward can give a player an AI later; a player
         // without an AI does nothing there (as before: no update_player call).
@@ -421,38 +450,8 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         std::string owner_log;
         uint32_t owner_changes = 0;
         if (trace.is_open()) trace.start(*gs, cfg.seed);
-        size_t story_seen = 0;  // q6 t07: fired story log entries already scanned for SWITCH_CONTROL
         while (n < opt.ticks && host.tick_once()) {
             ++n;
-#ifdef ALAMO_SIM_HAVE_STORY
-            // q6 t07: story reward SWITCH_CONTROL (AI_GALACTIC §1.2: Set_AI_Type, then the difficulty). [port] The story
-            // session leaves this reward to the host and has no hook for it, so the host reads the fired log after the
-            // tick: the new AI is in place before the next T7, as when the reward runs in T9; only this tick's end-of-tick
-            // AI CRC still shows the old one. Difficulty = the run's Normal [port: the original reads the session
-            // difficulty global]. The scripted human keeps its control [port].
-            if (const sim::StorySession* story = host.story()) {
-                const auto& fired = story->log();
-                for (; story_seen < fired.size(); ++story_seen) {
-                    std::string who, type;
-                    if (!parse_switch_control(fired[story_seen].reward, who, type)) continue;
-                    int32_t player = -1;
-                    if (who.rfind("#player:", 0) == 0) player = std::atoi(who.c_str() + 8);
-                    else player = gs->player_of_faction(who);
-                    std::string note = std::to_string(fired[story_seen].frame) + " SWITCH_CONTROL " + who + " " + type + ": ";
-                    if (player < 0 || static_cast<size_t>(player) >= setup.players.size()) {
-                        note += "no such player";
-                    } else if (player == human) {
-                        note += "scripted human, ignored";
-                    } else {
-                        std::vector<std::string> sd;
-                        const bool changed = world.set_ai_type(player, type, 1, &sd);
-                        note += changed ? "p" + std::to_string(player) + " is now " + (world.ai_type(player).empty() ? "Human" : world.ai_type(player))
-                                        : (sd.empty() ? "no change" : sd.front());
-                    }
-                    if (print && aopt.verbose) std::printf("galactic-ai: %s\n", note.c_str());
-                }
-            }
-#endif
             if (trace.is_open()) {
                 const sim::GameMode* top = host.modes().top();
                 PortStateTrace::Sample ts;
@@ -520,6 +519,14 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
                         host.scoring_services(), host.scoring_calls(), host.scoring_releases(),
                         host.scoring_vm() ? "running" : "gone");
         }
+#ifdef ALAMO_SIM_HAVE_STORY
+        if (print && aopt.story && host.story()) {  // q6: the plot scripts' Lua notes (errors, load failures)
+            const sim::StorySession& st = *host.story();
+            std::printf("galactic-ai: story: %zu events fired, %zu Lua notes\n", st.log().size(), st.lua_messages().size());
+            if (aopt.verbose)
+                for (const auto& m : st.lua_messages()) std::printf("  story lua: %s\n", m.c_str());
+        }
+#endif
         if (print && aopt.verbose) {
             std::map<std::string, uint32_t> errs;
             for (std::string e : le) {

@@ -291,6 +291,13 @@ public:
     // state, draw synced randomness or issue orders. No trace step. ---
     void set_after_story_hook(ModeUpdateHook hook) { after_story_ = std::move(hook); }
     // --- end OI host ---
+    // q6: the story reward SWITCH_CONTROL (StorySession::set_switch_control_hook) -> the host's AI players. Kept here and
+    // installed on every story session start_story creates, before its plots load (a load-time Story_Event can fire it).
+    // Set it before start_story; the hook runs on the sim thread inside T9 (or the load) and may call set_controller.
+    void set_switch_control_hook(std::function<void(const StorySwitchControl&)> hook) {
+        switch_control_ = std::move(hook);
+        if (story_) story_->set_switch_control_hook(switch_control_);
+    }
 
     // ---- N1 save / load (owner: n1-host; save_session.hpp) ----
     // The application describes the session it built (kind, campaign, data, players, options, data fingerprint);
@@ -369,6 +376,7 @@ private:
     bool groups_used_ = false;                                               // P host
     ModeUpdateHook before_story_;                                            // P4 host
     ModeUpdateHook after_story_;                                             // OI host
+    std::function<void(const StorySwitchControl&)> switch_control_;          // q6: SWITCH_CONTROL reward -> host AI
 #ifdef ALAMO_SIM_HAVE_STORY
     lua::GlobalValueStore global_values_;  // Int-final
 #endif

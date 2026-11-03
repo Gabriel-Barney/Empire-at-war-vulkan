@@ -16,7 +16,13 @@
 //   for each plot set in player-list order: StoryModel::load_plots; then for each plot with a
 //   <Lua_Script>, in plot order: new LuaVm (host = galactic primary store, object types, the session's
 //   GameRandom, the host's FileProvider), attach_story, require(<script>), Base_Definitions(),
-//   Create_Thread("main") (PGBase.lua / PGStateMachine.lua: main = Process_States).
+//   Create_Thread("main") (PGBase.lua / PGStateMachine.lua: main = Process_States), then ONE resume of the
+//   script's threads at load (q6 [port reading], start_threads_at_load): PGStoryMode's state machine reaches its first
+//   state's PumpEvents before any story event can fire. Story_Event_Trigger only switches state when
+//   CurrentState == NextState, i.e. after main's first resume; the frame-1 STORY_ELAPSED dispatch (T9 step 2) comes
+//   before the first T9 Lua service (step 3), and about 60 shipped FoC plots (most tactical missions: <Mission>_Begin,
+//   prereq-less STORY_ELAPSED 0, a StoryModeEvents state) plus Thrawn's Revenge's start events (Zoom_Zoom, Trigger_Determine_Faction) need that event to reach the state
+//   machine. Not a Service: the first T9 still services the script (no LastService / rate change).
 //
 // T9 story service (SimHost::tick_once, after T7 players / T8 global Lua; docs/re/STORY.md 4.1):
 //   0. [port] the original dispatches game notifications synchronously when they happen; here the
@@ -309,6 +315,18 @@ struct StoryLogEntry {
     std::string text() const;
 };
 
+// q6: one SWITCH_CONTROL story reward (AI_GALACTIC.md §1.2: reward case 0x30 -> Player::Set_AI_Type, then the
+// difficulty). Reward_Param1 = the player (a faction name, or "#player:N" for a player object set from Lua, e.g. Thrawn's
+// Revenge's StoryUtil.ChangeAIPlayer: Set_Reward_Parameter + Story_Event), Reward_Param2 = the AIPlayerType name ("Human"
+// removes the AI). `player` is the resolved player index (-1 = no such faction / player).
+struct StorySwitchControl {
+    uint64_t frame = 0;
+    uint32_t plot_set = 0;
+    int32_t player = -1;
+    std::string player_text;  // Reward_Param1 as text
+    std::string ai_type;      // Reward_Param2, trimmed
+};
+
 class StorySession {
 public:
     static constexpr int kMaxRounds = 8;
@@ -393,6 +411,11 @@ public:
     // FogOfWar::reward_enable_fow, else its carried FOW-active / render option). Unset: the reward does nothing [port].
     void set_enable_fow_hook(std::function<void(bool has_param, int32_t value)> fn) { enable_fow_ = std::move(fn); }
     // --- end fog follow-up ---
+    // q6: story reward SWITCH_CONTROL from any plot set goes to the host's AI (StorySwitchControl), synchronously while
+    // the reward applies (T9, or a load-time Lua Story_Event). The host owns the AI players: it sets the type and
+    // difficulty and gives a player that has no AI controller one. Unset: the reward does nothing [port]. SimHost installs
+    // its hook (SimHost::set_switch_control_hook) before the plots load. Not hashed (the AI world hashes its own state).
+    void set_switch_control_hook(std::function<void(const StorySwitchControl&)> fn) { switch_control_ = std::move(fn); }
     // --- story t06 wiring (the tactical victory monitor, BT §3.1a): rewards of the TACTICAL plot set go to the running
     // battle. ENABLE_VICTORY -> enable(Reward_Param1 given, atoi(Reward_Param1)); VICTORY -> victory(Reward_Param1 = the
     // faction name as written, atoi(Reward_Param2) != 0 = short and silent); the battle host resolves the faction (unknown:
@@ -529,11 +552,13 @@ private:
     std::function<void(const std::string&, bool)> victory_;    // story t06 wiring: VICTORY (tactical plots)
     std::function<void(int, const std::vector<galactic::GalacticEvent>&)> drain_tap_;  // OI host
     std::function<void(const std::vector<galactic::GalacticEvent>&)> scoring_tap_;    // q6 t09
+    std::function<void(const StorySwitchControl&)> switch_control_;               // q6: SWITCH_CONTROL reward hook
     bool autoresolve_disabled_ = false;              // OI galactic: story lock global flag (+0x41)
     std::vector<PlanetIndex> autoresolve_planets_;   // OI galactic: story lock planet list (+0x308), insertion order
     void route_corruption_mission(int32_t winner, uint64_t frame);
     void collect_set(Set& s, uint32_t number, std::string_view via);
     void service_script_in(Set& s, uint32_t number, Script& sc, uint64_t frame, double seconds);
+    void start_threads_at_load(Set& s, uint32_t number, Script& sc, double seconds);  // q6: the first resume (header comment)
     void service_tactical(uint64_t frame);
     void route_tactical(uint64_t frame);
     void poll_tactical();
