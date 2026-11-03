@@ -669,10 +669,10 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
     const std::vector<StoryParam> rp = plots_[p].events[e].reward_params;
     const std::string p1(text_at(rp, 0)), p2(text_at(rp, 1)), p3(text_at(rp, 2));
     if (type == "SET_FLAG") {
-        if (!p2.empty()) flags_[upper(p1)] = parse_int(p2, 0);
+        if (!p2.empty()) (*flags_)[upper(p1)] = parse_int(p2, 0);
     } else if (type == "INCREMENT_FLAG") {
-        const auto it = flags_.find(upper(p1));
-        if (!p2.empty() && it != flags_.end()) it->second += parse_int(p2, 0);  // undefined: nothing
+        const auto it = flags_->find(upper(p1));
+        if (!p2.empty() && it != flags_->end()) it->second += parse_int(p2, 0);  // undefined: nothing
     } else if (type == "ADD_OBJECTIVE") {
         add_objective(p1, false);
     } else if (type == "OBJECTIVE_COMPLETE" || type == "OBJECTIVE_FAILED") {
@@ -769,7 +769,9 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     const StoryEventDef& def = plots_[p].events[e];
     StoryEventState& st = plots_[p].state[e];
     const auto& ep = def.event_params;
-    // Parameters set from Lua as objects / players [port]: compared by id through the generic rule.
+    // Player (or host-made object) parameter values [port]: compared by id through the generic rule. Lua's
+    // Set_Event_Parameter stores objects and types as their type name (bind_story.cpp, story t02), so those take the
+    // type's own rule below like XML text.
     bool lua_values = false;
     for (const StoryParam& q : ep) lua_values = lua_values || q.kind != StoryParam::Kind::Text;
     if (lua_values) {
@@ -1069,8 +1071,8 @@ void StoryModel::service_plot(uint32_t p) {
         const int32_t op = op_text.empty() ? 3 : enum_value(op_text);  // ctor default EQUAL_TO
         const double value = static_cast<double>(parse_int(text_at(def.event_params, 1), 0));
         for (const std::string& name : name_list(text_at(def.event_params, 0))) {
-            const auto it = flags_.find(name);
-            if (it == flags_.end()) continue;  // undefined flag: skipped
+            const auto it = flags_->find(name);
+            if (it == flags_->end()) continue;  // undefined flag: skipped
             if (compare(static_cast<double>(it->second), op, value)) {
                 fire(p, e);
                 break;
@@ -1106,13 +1108,13 @@ void StoryModel::update(uint32_t frame, double seconds, bool paused) {
 // ------------------------------------------------------------------------------------------ state
 
 int32_t StoryModel::flag(std::string_view name) const {
-    const auto it = flags_.find(upper(trim(name)));
-    return it == flags_.end() ? kUndefinedFlag : it->second;
+    const auto it = flags_->find(upper(trim(name)));
+    return it == flags_->end() ? kUndefinedFlag : it->second;
 }
 
-bool StoryModel::has_flag(std::string_view name) const { return flags_.count(upper(trim(name))) != 0; }
+bool StoryModel::has_flag(std::string_view name) const { return flags_->count(upper(trim(name))) != 0; }
 
-void StoryModel::set_flag(std::string_view name, int32_t value) { flags_[upper(trim(name))] = value; }
+void StoryModel::set_flag(std::string_view name, int32_t value) { (*flags_)[upper(trim(name))] = value; }
 
 void StoryModel::add_blip(std::string_view name, int32_t object_id) {
     for (StoryBlip& b : blips_)
@@ -1235,8 +1237,8 @@ void StoryModel::hash(StateHasher& h) const {
         }
         h.u32(static_cast<uint32_t>(plot.pending_script_triggers.size()));
     }
-    h.u32(static_cast<uint32_t>(flags_.size()));
-    for (const auto& [name, value] : flags_) {
+    h.u32(static_cast<uint32_t>(flags_->size()));
+    for (const auto& [name, value] : *flags_) {
         h.str(name);
         h.i32(value);
     }
@@ -1334,8 +1336,8 @@ void StoryModel::write(ByteWriter& w) const {
     w.f64(time_);
     w.u8(paused_ ? 1 : 0);
     w.i32(player_);
-    w.u32(static_cast<uint32_t>(flags_.size()));
-    for (const auto& [name, value] : flags_) {
+    w.u32(static_cast<uint32_t>(flags_->size()));
+    for (const auto& [name, value] : *flags_) {
         put_str(w, name);
         w.i32(value);
     }
@@ -1510,7 +1512,7 @@ bool StoryModel::read(ByteReader& r) {
     time_ = time;
     paused_ = paused;
     player_ = player;
-    flags_ = std::move(flags);
+    *flags_ = std::move(flags);
     objectives_ = std::move(objectives);
     blips_ = std::move(blips);
     highlights_ = std::move(highlights);
