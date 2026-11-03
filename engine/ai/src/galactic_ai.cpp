@@ -387,7 +387,9 @@ std::string GalacticAiWorld::Impl::tf_goal_type_name(int32_t tf) {
     return defs.goals[pit->second.goal_type].name;
 }
 
-bool GalacticAiWorld::Impl::tf_collect_free_units(int32_t tf) {
+// [port] every free unit, the category mask ignored: the galactic task force's slot 47 is a stub in the original (0x13b7d0
+// returns 0, so 0x5fc040 collects nothing there; A1_READINGS §39.3), not changed here.
+bool GalacticAiWorld::Impl::tf_collect_free_units(int32_t tf, uint64_t /*category_mask*/) {
     const auto it = tfs.find(tf);
     if (it == tfs.end()) return false;
     for (const ObjectHandle u : free_units(it->second.player)) {

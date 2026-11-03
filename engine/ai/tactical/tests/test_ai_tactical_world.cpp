@@ -439,6 +439,43 @@ function MainForce_No_Units_Remaining(tf)
   Lost = (Lost or 0) + 1
 end
 )";
+// a1k t01 (A1_READINGS §39, variant 9): an AreaSweep-shaped plan collects the free corvettes (Collect_All_Free_Units with a
+// category: never a frigate) and sets the task force's priority set; a DestroyUnit-shaped plan (one frigate) sets another
+// set, attacks the target and ends, so its goal is dropped and re-proposed. Both sets last only while the unit is a member.
+const char* kPlanCollect = R"(
+require("SynAICommands")
+ScriptPoolCount = 1
+function Definitions()
+  Category = "Syn_Sweep_Area"
+  TaskForce = { { "SweepForce", "Corvette = 1,1" } }
+end
+function SweepForce_Thread()
+  BlockOnCommand(SweepForce.Produce_Force())
+  SweepForce.Collect_All_Free_Units("Corvette")
+  for i, u in pairs(SweepForce.Get_Unit_Table()) do
+    if u.Get_Type().Get_Name() ~= "Syn_Corvette" then error("COLLECT took " .. u.Get_Type().Get_Name()) end
+  end
+  SweepForce.Set_Targeting_Priorities("Syn_Sweep_Set")
+  Sleep(15)
+  SweepForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+)";
+const char* kPlanReplan = R"(
+require("SynAICommands")
+ScriptPoolCount = 1
+function Definitions()
+  Category = "Syn_Destroy_Unit"
+  TaskForce = { { "MainForce", "Frigate = 1,1" } }
+end
+function MainForce_Thread()
+  BlockOnCommand(MainForce.Produce_Force())
+  MainForce.Set_Targeting_Priorities("Syn_Destroy_Set")
+  if TestValid(Target) then BlockOnCommand(MainForce.Attack_Target(Target), 10) end
+  MainForce.Set_Plan_Result(true)
+  ScriptExit()
+end
+)";
 // S7 t21 (AI_TACTICAL §7.3.1): Prepare_Ambush argument errors (nil), a "front" ambush whose every point is too dangerous
 // (tolerance -1: finished at once with result false), then a "BACK" ambush (case-insensitive) with a large tolerance: the
 // group flies to 1000 behind the target (facing +x), re-plans after 150 frames while flying, and finishes when every
@@ -949,7 +986,10 @@ public:
     // A1_READINGS §28.8: Active_By_Default re-apply requests (script lock's order done / task-force release), in call order.
     void unit_released(int32_t player, int32_t object_id, UnitRelease path) override {
         released.emplace_back(player, object_id, static_cast<int32_t>(path));
+        calls.emplace_back(build_frame_, object_id, 1 + static_cast<int32_t>(path));
     }
+    // a1k t01 (A1_READINGS §39.2): task-force leaves (0x5ff610), in call order with unit_released in `calls`.
+    void unit_left_task_force(int32_t object_id) override { calls.emplace_back(build_frame_, object_id, 0); }
     // refixf t06 (AI_TACTICAL §7.4): with ring_test the space drop test refuses every point with |x| > 3200 (the strips
     // behind both stations), so a reinforcement at a station needs the ring search; entry facing 0 -> first direction -x.
     bool space_drop_frame(int32_t, SpaceDropFrame& f) override {
@@ -1020,6 +1060,7 @@ public:
         opp_frame = o.opp_frame;
         hijacks = o.hijacks;
         released = o.released;
+        calls = o.calls;
         types_ = o.types_;
         pool_ = o.pool_;
         produce_ = o.produce_;
@@ -1038,6 +1079,7 @@ public:
     uint32_t opp_frame = 0;
     std::vector<std::string> hijacks;
     std::vector<std::tuple<int32_t, int32_t, int32_t>> released;  // (player, object id, UnitRelease)
+    std::vector<std::tuple<uint32_t, int32_t, int32_t>> calls;     // a1k t01: (frame, object id, 0 left task force | 1 + UnitRelease)
 
     void hash(StateHasher& h) const {
         h.u32(static_cast<uint32_t>(units_.size()));
@@ -1163,6 +1205,7 @@ struct RunResult {
     std::string summary;
     std::vector<std::string> pp_stats;  // A2 tactical
     std::vector<std::tuple<int32_t, int32_t, int32_t>> released;  // host unit_released calls (player, id, path)
+    std::vector<std::tuple<uint32_t, int32_t, int32_t>> calls;    // a1k t01: MockHost::calls
     std::map<std::string, uint32_t> stats;              // world.stats() at the end
     size_t released_at_start = 0;                       // ... after frame 1
     uint32_t built = 0;                                 // variant 2: units the host built
@@ -1174,11 +1217,13 @@ struct RunResult {
 // variant 0: the golden skirmish; 1: only the opportunity-fire and MagicPlan plans, the host emits acquisitions and
 // accepts HIJACK spawns (STRATEGIC_GAPS §5.3, AI_GALACTIC_3 §4.3); 2: production; 3: Script_ evaluators (kEvalProbe);
 // 4: refixf t06 group orders (kPlanGroupAttack); 5: S7 t20 empty task force (kPlanEmptyTf); 6: S7 t21 Prepare_Ambush
-// (kPlanAmbush); 7: S7 t15 A1 task-force Activate_Ability (kPlanAbility, typed store: the corvettes have SPRINT).
+// (kPlanAmbush); 7: S7 t15 A1 task-force Activate_Ability (kPlanAbility, typed store: the corvettes have SPRINT); 8: a1j t01
+// landings (kPlanLanding); 9: a1k t01 re-plan / Collect_All_Free_Units / priority-set lifetime (kPlanCollect, kPlanReplan).
 // `hook` runs after each AI frame (the host's next tick sees what it changed).
 using RunHook = std::function<void(int32_t frame, MockHost& host, TacticalAiWorld& world)>;
 // The SynType object types for the store (variant 7: Syn_Corvette lists SPRINT in Unit_Abilities_Data).
 bool g_hero_frigate = false;  // S7 t26: Syn_Frigate is Is_Named_Hero (test_no_units_remaining_heroes)
+bool g_original_timing = false;  // a1k t01: TacticalAiConfig::stagger / pp_streams off (the original's planning timing)
 bool syn_object_types(MemoryFiles& tf, objects::ObjectTypeDatabase& raw, objects::GameObjectTypes& types, bool abilities) {
     const char* names[] = {"Syn_Frigate", "Syn_Corvette", "Syn_Station", "Syn_Pad", "UC_Syn_Turret"};
     std::string xml = "<SpaceUnits>";
@@ -1213,6 +1258,10 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     }
     if (variant == 7) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAbility);
     if (variant == 8) files.add("Data\\Scripts\\AI\\LandMode\\SynLandOnly.lua", kPlanLanding);  // replaces kPlanLandOnly
+    if (variant == 9) {  // a1k t01
+        files.add("Data\\Scripts\\AI\\SpaceMode\\SynSweep.lua", kPlanCollect);
+        files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanReplan);
+    }
     if (variant >= 5) files.add("Data\\Scripts\\AI\\SpaceMode\\SynEscort.lua", kPlanEscortOff);
     if (variant == 1) {
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanMagic);
@@ -1261,6 +1310,10 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     cfg.attacker = 1;
     cfg.defender = 0;
     cfg.map = {-4000.0f, -4000.0f, 4000.0f, 4000.0f};
+    if (g_original_timing) {  // a1k t01: the OPT2 t01 / t10 timing knobs off (test_replan_and_priority_lifetime)
+        cfg.stagger = false;
+        cfg.pp_streams = false;
+    }
     const auto lister = [&files](std::string_view glob) {
         const std::string g(glob);
         return files.list(g.substr(0, g.find('*')));
@@ -1333,6 +1386,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     if (hijacks) *hijacks = host.hijacks;
     out.built = host.built;
     out.released = host.released;
+    out.calls = host.calls;
     return out;
 }
 
@@ -2256,6 +2310,131 @@ void test_empty_task_force() {
     CHECK(again.crc == r.crc && again.decisions == r.decisions);
 }
 
+// a1k t01 (A1_READINGS §39): variant 9. (1) Collect_All_Free_Units("Corvette") takes only free corvettes (kPlanCollect
+// raises "COLLECT took ..." otherwise). (2) A task force's Set_Targeting_Priorities lasts while the unit is a member: every
+// unit that carried a plan's set is reported to the host as leaving its task force (0x5ff610) by the end, its script
+// record is cleared then, and on the free-store path the leave comes before its unit_released (Active_By_Default) in the
+// same frame. (3) Re-plan timing (§39.1): after a DestroyUnit plan ends, its goal is dropped at the next commit and the
+// next DestroyUnit plan of the player starts at most two commits later (Normal: no sleep after a commit, so within about
+// two proposal passes); Easy (15 s sleep after each commit) re-plans later than Normal.
+// (2) and (3) in full at the original planning timing (no stagger, synced PotentialPlan draws: §39.1 is the original's
+// cadence). At the port's default timing (OPT2 t01 / t10) plans start later, so a unit may still be a member at the end
+// and Easy may not re-plan within the run: there a leave and a cleared record still go together, unit by unit.
+struct ReplanTimeline {
+    RunResult r;
+    std::vector<int32_t> commits;              // player 0's commit frames
+    std::map<int32_t, int32_t> set_first;      // object id -> first frame it carried a plan's set
+    std::map<int32_t, int32_t> cleared;        // object id -> first later frame its record was empty again
+    std::map<int32_t, bool> set_at_end;        // object id -> its record held a set on the last frame
+    std::vector<std::pair<int32_t, int32_t>> gaps;  // (plan end frame, next DestroyUnit start frame) of player 0
+};
+ReplanTimeline replan_run(int32_t difficulty0, int32_t frames, bool original_timing) {
+    ReplanTimeline t;
+    uint32_t seen = 0;
+    g_original_timing = original_timing;
+    t.r = run(frames, difficulty0, 9, nullptr, false, [&t, &seen](int32_t f, MockHost& host, TacticalAiWorld& world) {
+        if (const AiContext* c = world.context(0); c && c->goals.commits() != seen) {
+            seen = c->goals.commits();
+            t.commits.push_back(f);
+        }
+        for (const MockUnit& u : host.units_) {
+            const lua::ScriptObjectState* s = world.object_bridge().find_state(static_cast<objects::ObjectId>(u.id));
+            const bool set = s && !s->targeting_priorities.empty();
+            if (set && !t.set_first.count(u.id)) t.set_first[u.id] = f;
+            if (!set && t.set_first.count(u.id) && !t.cleared.count(u.id)) t.cleared[u.id] = f;
+            if (set && t.cleared.count(u.id) && t.cleared[u.id] < t.set_first[u.id]) t.cleared.erase(u.id);
+            t.set_at_end[u.id] = set;
+        }
+    });
+    g_original_timing = false;
+    int32_t ended = -1;
+    for (const std::string& d : t.r.decisions) {
+        if (d.find(" p0 plan ") == std::string::npos || d.find(" SYNDESTROY ") == std::string::npos) continue;
+        if (d.find(" ended ") != std::string::npos) ended = decision_frame(d);
+        else if (d.find(" for Syn_Destroy_Unit") != std::string::npos && ended >= 0) {
+            t.gaps.emplace_back(ended, decision_frame(d));
+            ended = -1;
+        }
+    }
+    return t;
+}
+struct LeaveCounts {
+    size_t carried = 0, left = 0, cleared = 0, ordered = 0, releases = 0;
+    size_t paired = 0;  // units whose leave and cleared record agree (no clear without a leave, no leave without a clear)
+};
+LeaveCounts leave_counts(const ReplanTimeline& n) {
+    LeaveCounts c;
+    for (const auto& [id, first] : n.set_first) {
+        ++c.carried;
+        bool saw_left = false;
+        for (size_t i = 0; i < n.r.calls.size(); ++i) {
+            const auto& [frame, obj, kind] = n.r.calls[i];
+            if (obj != id || static_cast<int32_t>(frame) < first) continue;
+            if (kind == 0) saw_left = true;
+            if (kind == 1 + static_cast<int32_t>(TacticalAiHost::UnitRelease::TaskForce)) {
+                ++c.releases;
+                // the leave of the same unit in the same frame came first
+                bool before = false;
+                for (size_t j = 0; j < i; ++j)
+                    before = before || (std::get<0>(n.r.calls[j]) == frame && std::get<1>(n.r.calls[j]) == obj && std::get<2>(n.r.calls[j]) == 0);
+                c.ordered += before ? 1u : 0u;
+            }
+        }
+        const auto cl = n.cleared.find(id);
+        const bool was_cleared = cl != n.cleared.end() && cl->second > first;
+        const auto e = n.set_at_end.find(id);
+        const bool still_set = e != n.set_at_end.end() && e->second;
+        c.left += saw_left ? 1u : 0u;
+        c.cleared += was_cleared ? 1u : 0u;
+        // a unit that left had its record cleared (a later plan may set it again); one that has not left still carries its set
+        c.paired += saw_left ? (was_cleared ? 1u : 0u) : (!was_cleared && still_set ? 1u : 0u);
+    }
+    return c;
+}
+void test_replan_and_priority_lifetime() {
+    // the original planning timing: (1), (2) and (3) in full
+    const ReplanTimeline n = replan_run(1, 30 * 120, true);
+    for (const std::string& e : n.r.errors) std::printf("  lua error: %s\n", e.c_str());
+    CHECK(script_errors(n.r, "COLLECT took") == 0);
+    CHECK(n.r.errors.empty());
+    const LeaveCounts c = leave_counts(n);
+    // (3) re-plan timing
+    int32_t worst_commits = 0, worst_frames = 0;
+    for (const auto& [end, start] : n.gaps) {
+        int32_t k = 0;
+        for (const int32_t cm : n.commits) k += cm > end && cm <= start ? 1 : 0;
+        worst_commits = std::max(worst_commits, k);
+        worst_frames = std::max(worst_frames, start - end);
+    }
+    const ReplanTimeline e = replan_run(0, 30 * 120, true);
+    int32_t easy_frames = 0;
+    for (const auto& [end, start] : e.gaps) easy_frames = std::max(easy_frames, start - end);
+    std::printf("re-plan / priority lifetime: %zu units carried a plan's set, %zu left their task force, %zu cleared, %zu of %zu "
+                "free-store releases after the leave; %zu re-plans (Normal), worst %d frames / %d commits (Easy: %zu, worst %d "
+                "frames); %zu commits\n", c.carried, c.left, c.cleared, c.ordered, c.releases, n.gaps.size(), worst_frames,
+                worst_commits, e.gaps.size(), easy_frames, n.commits.size());
+    CHECK(c.carried >= 2);  // a frigate (Syn_Destroy_Set) and a corvette (Syn_Sweep_Set)
+    CHECK(c.left == c.carried && c.cleared == c.carried && c.paired == c.carried);
+    CHECK(c.releases > 0 && c.ordered == c.releases);
+    CHECK(n.gaps.size() >= 2);
+    CHECK(worst_commits >= 1 && worst_commits <= 2);
+    CHECK(!e.gaps.empty() && easy_frames > worst_frames);
+    const ReplanTimeline again = replan_run(1, 30 * 120, true);
+    CHECK(again.r.crc == n.r.crc && again.r.calls == n.r.calls);
+    // the port's default timing: (1), and (2) unit by unit (a unit may still be a member at the end)
+    const ReplanTimeline d = replan_run(1, 30 * 120, false);
+    CHECK(script_errors(d.r, "COLLECT took") == 0);
+    CHECK(d.r.errors.empty());
+    const LeaveCounts dc = leave_counts(d);
+    std::printf("  default timing: %zu carried a set, %zu left (and cleared: %zu), %zu still members; %zu of %zu releases after "
+                "the leave; %zu re-plans\n", dc.carried, dc.left, dc.cleared, dc.carried - dc.left, dc.ordered, dc.releases,
+                d.gaps.size());
+    CHECK(dc.carried >= 2 && dc.left >= 1);
+    CHECK(dc.paired == dc.carried);
+    CHECK(dc.releases > 0 && dc.ordered == dc.releases);
+    CHECK(!d.gaps.empty());
+}
+
 // S7 t21 (AI_TACTICAL §7.3.1): Prepare_Ambush through the space task force. The first ambush order goes to the target's
 // position - 1000 x facing (+x: "back" = -x), every unit of the force; while flying it re-plans (> 150 frames since
 // the last plan, polled by BlockOnCommand); the block finishes (movement finished for every mover, or a death rule).
@@ -2571,6 +2750,7 @@ int main(int argc, char** argv) {
     test_landing_wait(false);  // a1j t01
     test_landing_wait(true);
     test_landing_save();
+    test_replan_and_priority_lifetime();  // a1k t01
     std::printf(g_fail ? "alamo_ai_tactical_world_tests: %d FAILED\n" : "alamo_ai_tactical_world_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;
 }
