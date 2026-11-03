@@ -132,6 +132,16 @@ public:
     // T7 entry point (see the header comment). `galactic_on_top`: the galactic mode is the top mode;
     // `auto_resolve_busy`: an auto-resolve runs (Planning-only exception).
     void update_player(int32_t player, int64_t now, bool galactic_on_top, bool auto_resolve_busy);
+    // q6 t07: Player::Set_AI_Type during the session (AI_GALACTIC §1.2; the story reward SWITCH_CONTROL, which Thrawn's
+    // Revenge uses to turn its campaigns' "None" players into real AIs). "Human" deletes the player's AI; an unknown type
+    // adds "Unrecognized AI player type <name>" to `diagnostics` and changes nothing [port: the old AI stays]; any other
+    // type replaces the player's AI with a fresh one of that type at `difficulty` (0 Easy, 1 Normal, 2 Hard), which
+    // starts with its first service at the next update_player (opponent pick, path finder, templates). The old AI's
+    // running plans end as released by the goal system, its PotentialPlans and free-store moves are dropped. The same
+    // type and difficulty again: no change [port]. Returns true when the player's AI changed (decision log "ai type X").
+    // Call on the sim thread between updates. Players that get an AI this way need a T7 controller from the host.
+    bool set_ai_type(int32_t player, std::string_view type, int32_t difficulty, std::vector<std::string>* diagnostics = nullptr);
+    std::string ai_type(int32_t player) const;  // the player's AIPlayerType name ("" = no AI)
     // Suspend_AI / galactic pause (TheAI gate).
     void set_suspended(bool suspended);
     void set_galactic_paused(bool paused);

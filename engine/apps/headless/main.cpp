@@ -45,6 +45,8 @@
 //   alamo_headless --economy --galactic-ai [--battles auto|fight|fight-all] [--ai-log FILE] [--ai-golden FILE] ...
 //       A2: AI-vs-AI galactic campaign, every playable faction a galactic AI player (ai_run.hpp).
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
+//       [--ai-type FACTION=TYPE ...]: that faction's AI player type from the start instead of the campaign's AI_Player_Control
+//       (q6 t07 [port] test knob: as a SWITCH_CONTROL story reward at frame 0, e.g. Thrawn's Revenge's INITIALIZE_AI types).
 //       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py.
 //       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
 //       [--ai-latency F] [--no-ai-stagger] (also --skirmish-ai): OPT2 t02 / t01 parity knobs - the AI path recompute latency
@@ -171,6 +173,7 @@ struct Options {
     bool galactic_ai = false;
     std::string ai_log, ai_golden;
     std::string ai_human, ai_human_script;  // A2 galactic: --human FACTION [--human-script FILE]
+    std::vector<std::string> ai_types;      // q6 t07: --ai-type FACTION=TYPE (repeatable)
     std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs)
     int64_t ai_latency = -1;                // OPT2 t02: --ai-latency F (galactic / tactical AI path recomputes)
     bool ai_stagger = true;                 // OPT2 t01: --no-ai-stagger
@@ -832,6 +835,7 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--ai-golden") opt.ai_golden = next();
         else if (a == "--human") opt.ai_human = next();                // A2 galactic
         else if (a == "--human-script") opt.ai_human_script = next();  // A2 galactic
+        else if (a == "--ai-type") opt.ai_types.push_back(next());        // q6 t07
         else if (a == "--trace-out") opt.trace_out = next();            // q2f t05
         else if (a == "--ai-latency") opt.ai_latency = std::strtoll(next().c_str(), nullptr, 10);  // OPT2 t02
         else if (a == "--no-ai-stagger") opt.ai_stagger = false;                                   // OPT2 t01
@@ -938,6 +942,7 @@ static int headless_main(int argc, char** argv) {
             a.ai_golden = opt.ai_golden;
             a.human = opt.ai_human;                // A2 galactic
             a.human_script = opt.ai_human_script;  // A2 galactic
+            a.ai_types = opt.ai_types;             // q6 t07
             a.trace_out = opt.trace_out;           // q2f t05
             a.story = opt.story;                   // q2f t03
             a.verbose = !opt.quiet;

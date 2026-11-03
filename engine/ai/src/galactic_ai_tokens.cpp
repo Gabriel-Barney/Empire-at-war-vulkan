@@ -172,7 +172,7 @@ const std::string_view kKnownPaths[] = {
     "ISCORRUPTED", "ISCONNECTEDTOCORRUPTION", "ISCORRUPTIONTRANSITIONACTIVE", "RETAINSRESIDUALINFLUENCE",
     "TIMESINCECORRUPTIONCHANGE", "ISSURFACEACCESSIBLE", "HASCREDITSIPHON", "TARGETPOLITICALCONTROL", "TARGETPLAYERID",
     "TIMESINCESPACECONFLICT", "TIMESINCEGROUNDCONFLICT", "TIMESINCECONVERSION", "HASSTARBASEOFLEVEL",
-    "HASGROUNDBASEOFLEVEL", "HASSTRUCTURE", "STRUCTURECOUNT", "ISFACTION", "OWNER.ISFACTION", "TYPE.TOKEN",
+    "HASGROUNDBASEOFLEVEL", "HASSTRUCTURE", "STRUCTURECOUNT", "ISFACTION", "OWNER.ISFACTION", "TYPE.TOKEN", "TYPE.ISTYPE",
     "BLACKMARKETABILITIESAVAILABLE", "BLACKMARKETMINIMUMABILITYPRICE", "BLACKMARKETPRICEMODIFIER",
     // planet forces (EnemyForce. / FriendlyForce. prefixes)
     "ENEMYFORCE.SPACETOTALUNNORMALIZED", "ENEMYFORCE.GROUNDTOTALUNNORMALIZED", "ENEMYFORCE.SPACETOTAL",
@@ -1138,6 +1138,14 @@ struct GalacticSimTokenResolver::Impl {
             return false;
         }
         if (k == "TYPE.TOKEN") return out = static_cast<double>(ps.type), true;  // [L] the type evaluator's token
+        // q6 t07: the planet's type evaluator is the global per-type evaluator the tactical side uses (A1_READINGS §23):
+        // IsType = 1.0 when the planet's OWN type name is listed in Parameter_Type (case-insensitive), else 0.0; a planet
+        // without a type fails. [M: the galactic wiring; the leaf is the shared one.] Stock galactic equations never use it;
+        // Thrawn's Revenge picks planets by name with it (BasicGalacticEquations_Generated.xml, ...).
+        if (k == "TYPE.ISTYPE") {
+            if (ps.type >= rules.types.size()) return false;
+            return out = b2d(type_named(ps.type, param_texts(params, "Parameter_Type"))), true;
+        }
         if (k == "BLACKMARKETABILITIESAVAILABLE" || k == "BLACKMARKETMINIMUMABILITYPRICE") {
             const bool avail = k == "BLACKMARKETABILITIESAVAILABLE";
             return leaf(avail ? "T:BLACKMARKETABILITIESAVAILABLE" : "T:BLACKMARKETMINIMUMABILITYPRICE", ip, avail ? 5 : 6, params,
