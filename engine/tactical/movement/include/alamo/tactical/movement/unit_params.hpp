@@ -29,6 +29,10 @@ struct UnitDesc {
     int32_t movement_class = -1;  // MovementClass
     int32_t collision_class = -1; // UnitCollisionClass
     float radius = 10.0f;         // soft footprint radius
+    // a1k t03 (A1_READINGS §40): Custom_Hard_XExtent / Custom_Hard_YExtent x Scale_Factor (0x371be0); 0 = unset. Read
+    // only by the push search (footprint radius 0x3969f0, mover extent 0x372040); unset falls back to `radius`.
+    float hard_x = 0.0f;
+    float hard_y = 0.0f;
     float formation_spacing = 0.0f;  // FormationSpacing (cells)
     bool hero = false;            // CategoryMask has Hero
     std::string type_name;
