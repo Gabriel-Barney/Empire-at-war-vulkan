@@ -375,6 +375,9 @@ public:
     // lists still run.
     void push_pause() { ++pause_; }
     void pop_pause() { if (pause_ > 0) --pause_; }
+    // The counter alone (0x140b1540c): the "paused" argument of the story T9 (STORY.md 4.1 step 2) reads only this, not
+    // the story block.
+    int32_t pause_count() const { return pause_; }
     // The galactic "paused" query 0x4b2360: the pause counter, or the story block below. The command executors
     // (SpecialAbility 0x4b4d70, FleetManagement 0x5af260, MoveThroughObjects 0x3c4460, Invade 0x48ff50) and Lua
     // Move_Object 0x68f5b0 test the same two conditions (A1_READINGS §31.7).

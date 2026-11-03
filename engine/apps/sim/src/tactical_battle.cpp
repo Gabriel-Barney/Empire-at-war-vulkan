@@ -349,7 +349,8 @@ private:
 // ---- construction ---------------------------------------------------------------------------------------------
 
 TacticalBattle::TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy,
-                               const galactic::ConflictRules& rules, galactic::BattleRequest request, BattleConfig cfg)
+                               const galactic::ConflictRules& rules, galactic::BattleRequest request, BattleConfig cfg,
+                               const ParallelFor& pf)
     : catalog_(&catalog), galaxy_(&galaxy), rules_(&rules), req_(std::move(request)), cfg_(cfg) {
     space_ = req_.info.kind == galactic::ConflictKind::Space;
     for (const galactic::BattleForces& f : req_.forces) {
@@ -395,10 +396,23 @@ TacticalBattle::TacticalBattle(const BattleCatalog& catalog, const galactic::Gal
         use(static_cast<uint32_t>(dummy));
     }
     l1_add_types(types_used_);  // L1 systems: the mode's special-weapon types (projectiles in the tables)
-    tables_ = std::make_unique<BattleTables>(catalog.build_battle(types_used_, descs_, space_));  // battle host: model bones
+    tables_ = std::make_unique<BattleTables>();  // battle host: model bones
+    tables_build_ = catalog.begin_battle(*tables_, space_);
+    tables_build_->pf = pf;
+    tables_extend();
 }
 
 TacticalBattle::~TacticalBattle() = default;
+
+void TacticalBattle::tables_extend() {
+    // OPT3 t09: setup appends types several times; each step builds only the new ones (BattleCatalog::extend_battle) instead
+    // of rebuilding every type from the start. Same tables and descriptor indices either way.
+    if (tables_build_) {
+        catalog_->extend_battle(*tables_build_, types_used_, descs_);
+        return;
+    }
+    tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+}
 
 // N1 stage 2 (tactical_battle_save.cpp): after a load, the combat hooks get the tick context of the saving run's last
 // battle tick (command-phase hooks before the next battle tick use it).
@@ -547,15 +561,6 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
             r.known = r.model != nullptr;
             return r;
         });
-        // OPT3 t05: the model files of the map's placements and the participants load in parallel here instead of one
-        // type at a time inside the spawns and stamps below (the first battle tick's largest cost); results unchanged.
-        const TypeCrcIndex index(catalog_->types());
-        std::vector<uint32_t> types;
-        types.reserve(map_.objects.size() + parts_.size());
-        for (const terrain::ObjectPlacement& pl : map_.objects)
-            if (const objects::TypeIndex t = index.find(pl.type_crc); t != objects::kNone) types.push_back(static_cast<uint32_t>(t));
-        for (const Participant& p : parts_) types.push_back(p.type);
-        catalog_->preload_models(types, space, pf);
     }
 #endif
     // --- OI objects: computed behaviour intervals (SHIELDED / POWERED) from GameConstants, before any object exists ---
@@ -568,12 +573,27 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         mode.primary().set_interval_config(ic);
     }
     // --- end OI objects ---
+    if (tables_build_) tables_build_->pf = pf;  // OPT3 t09
     bt_rng_ = &rng;            // battle host: pad objects join the battle with their add_unit draws
     bt_players_ = players;
     bt_map_prepass();          // REMAINING_GAPS §3.1: base-level filter + branched-map discard; map types -> tables
     bt_add_pad_types(map_);    // battle host: the map's pad UC / constructed types join the tables (before combat exists)
     oi_add_ability_types();    // OI abilities: ability-spawned / survivor types join the tables (before combat exists)
     hg_add_types();            // hangars: launched squadrons / ships and the station chain join the tables
+#ifdef ALAMO_SIM_HAVE_ASSETS
+    // OPT3 t05 / t09: the model files of the map's placements (after the prepass: a land skirmish's team markers are its pads
+    // now) and the participants load in parallel here instead of one type at a time inside the spawns and stamps below
+    // (the first battle tick's largest cost); results unchanged.
+    if (catalog_->files()) {
+        const TypeCrcIndex index(catalog_->types());
+        std::vector<uint32_t> types;
+        types.reserve(map_.objects.size() + parts_.size());
+        for (const terrain::ObjectPlacement& pl : map_.objects)
+            if (const objects::TypeIndex t = index.find(pl.type_crc); t != objects::kNone) types.push_back(static_cast<uint32_t>(t));
+        for (const Participant& p : parts_) types.push_back(p.type);
+        catalog_->preload_models(types, map_.is_space(), pf);
+    }
+#endif
     const objects::GameObjectTypes& types = catalog_->types();
     float mn[2] = {-5000.0f, -5000.0f}, mx[2] = {5000.0f, 5000.0f};
     if (!map_.playable_box(mn, mx)) {
@@ -655,7 +675,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         // battle host: model bounds for the LAND_OBSTACLE footprints without Obstacle_Width / _Height and the
         // Fine_Tune_Occupied_Passability ray (MOVEMENT 1.3; S8 t09: the same hooks as land_obstacle_attach).
         const mv::MapStampHooks stamp_hooks = land_stamp_hooks(catalog_);
-        mv::stamp_map_obstacles(grid, map_, types, &stamp_hooks);
+        mv::stamp_map_obstacles(grid, map_, types, &stamp_hooks, pf);  // OPT3 t11: footprints sampled in parallel
         movement_->set_grid(std::move(grid), pf);
         movement_->air().set_box({mn[0], mn[1]}, {mx[0], mx[1]});  // REMAINING_GAPS §4.3-4.6: air units plan in the playable box
         const terrain::MapData* m = &map_;
@@ -796,6 +816,8 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     land_obstacles_sync(mode);   // S8 t02: LAND_OBSTACLE objects spawned during the setup (MOVEMENT §1.3)
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants (land)
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
+    vm_setup(mode);          // story t06: victory monitor records (§2.5) and the start's victory-relevant objects
+    tables_build_.reset();  // OPT3 t09: the tables are complete
 }
 
 // S8 t17 (FIGHTER_FLYING §4.10 B): each combat unit's squadron for the shared team target. Derived state (not saved):
@@ -2433,7 +2455,7 @@ void TacticalBattle::hash_queues(StateHasher& h) const {
 
 bool TacticalBattle::request_retreat(int32_t player) {
     const int32_t side = player == req_.info.defender ? 0 : player == req_.info.attacker ? 1 : -1;
-    if (side < 0 || finished_ || end_hold_until_ != 0 || frame_ < retreat_allowed_frame_ || retreat_side_ >= 0) return false;
+    if (side < 0 || finished_ || vm_declared_ || frame_ < retreat_allowed_frame_ || retreat_side_ >= 0) return false;
     const uint32_t f = static_cast<size_t>(player) < galaxy_->players().size() ? galaxy_->players()[static_cast<size_t>(player)].faction
                                                                                  : galactic::kNoIndex;
     const float secs = space_ ? rules_->faction(f).space_retreat_countdown : rules_->faction(f).land_retreat_countdown;
@@ -2496,6 +2518,7 @@ void TacticalBattle::complete_retreat(TacticalMode& mode, uint8_t side) {
         if (cfg_.end_hold_frames > 0) mode.destroy(u.h);
     }
     retreat_complete_ = true;
+    vm_retreat_complete(side_player(side));  // story t06: 0x340750 (holds released, 0xc tested)
 }
 
 void TacticalBattle::service_damage_tracking() {
@@ -2534,7 +2557,7 @@ bool TacticalBattle::stop_for_auto_resolve(int32_t player) {
     // Gate (P4_SIM_SYSTEMS §9.3 step 1): the retreat coordinator's "can retreat" check for the player = 0, i.e. the
     // checks of request_retreat: a side, not finished, retreat allowed (countdown), no retreat running.
     const bool side = player == req_.info.defender || player == req_.info.attacker;
-    if (!side || finished_ || end_hold_until_ != 0 || frame_ < retreat_allowed_frame_ || retreat_side_ >= 0) return false;
+    if (!side || finished_ || vm_declared_ || frame_ < retreat_allowed_frame_ || retreat_side_ >= 0) return false;
     finish(kNoPlayer, galactic::kVictoryAllDestroyed, kNoPlayer);
     return true;
 }
@@ -2560,17 +2583,6 @@ std::vector<uint32_t> black_market_blocked_abilities(const ta::AbilityData& data
 }
 // --- end P4 tactical ---
 
-void TacticalBattle::conclude(int32_t winner, uint8_t victory, int32_t retreated) {
-    if (cfg_.end_hold_frames == 0) {
-        finish(winner, victory, retreated);
-        return;
-    }
-    end_hold_until_ = frame_ + cfg_.end_hold_frames;
-    end_winner_ = winner;
-    end_victory_ = victory;
-    end_retreated_ = retreated;
-}
-
 std::vector<TacticalBattle::RemovalRecord> TacticalBattle::unit_losses() const {
     std::vector<RemovalRecord> out;
     for (const RemovalRecord& r : bt_removals_) {
@@ -2579,67 +2591,6 @@ std::vector<TacticalBattle::RemovalRecord> TacticalBattle::unit_losses() const {
         if (!team) out.push_back(r);
     }
     return out;
-}
-
-void TacticalBattle::check_victory() {
-    if (finished_) return;
-    if (end_hold_until_ != 0) {  // Playtest QA D1: decided; the world keeps running until the hold is over
-        if (frame_ >= end_hold_until_) finish(end_winner_, end_victory_, end_retreated_);
-        return;
-    }
-    // L1 systems: the TSW victory monitor hold (TSW_PLANET_DESTROY §2): nothing is declared from the TSW's fire until
-    // its state-13 service; this check is the replay on the release frame, the TSW's story victory (0x10) first.
-    if (l1_sw_.victory_holds() > 0) return;
-    if (l1_tsw_story_winner_ >= 0) {
-        const int32_t w = l1_tsw_story_winner_;
-        l1_tsw_story_winner_ = -1;
-        conclude(w, galactic::kVictoryStory, w == req_.info.attacker ? req_.info.defender : req_.info.attacker);
-        return;
-    }
-    if (retreat_complete_) {
-        conclude(side_player(static_cast<uint8_t>(1 - retreat_side_)), galactic::kVictoryAllRetreated, side_player(static_cast<uint8_t>(retreat_side_)));
-        return;
-    }
-    bool has[2] = {false, false};
-    bool station_lost = false;
-    // BT §3.1a item 1 (0x372230): an object keeps its side alive for 0xb only when its own type (not its container's) is
-    // victory-relevant in this mode: Victory_Relevant, else Space_ / Land_Victory_Relevant (all default false). Data only:
-    // no behaviour / category test, so the Death Stars (Victory_Relevant No / unset) never count (TSW_PLANET_DESTROY §8;
-    // probe 2026-10-31 (l1sys t06): the defender won 0xb with the attacker's Death Star alive). [port] polled every tick,
-    // not the retail event trigger (a relevant object leaving a player), so a side with no relevant object at all loses at
-    // once instead of never by 0xb.
-    for (const Unit& u : units_)
-        if (u.alive && !u.retreated && !parts_[u.participant].third && victory_relevant(u.type))  // §3.1: third-party map objects
-            has[u.side] = true;
-    // battle host: BT §2.5 land victory 0xe (ALL_ENEMY_BASE_COMPONENTS_DESTROYED, Land_Base_Destruction_Forces_Retreat) for
-    // the attacker once every defender ground structure died. [port] 0xd (rogue-faction base components) not modelled.
-    uint32_t base_parts = 0, base_alive = 0;
-    for (const Participant& p : parts_) {
-        // BT §3.1a item 1 [H] (A1_READINGS §34.1): a never-deployed participant (reserve / pool) never counts; it is a
-        // galactic object until its landing object is created at drop time (0x2b5fe0).
-        if (p.starbase && p.deployed && p.alive == 0) station_lost = true;
-        if (p.structure && p.side == 0) {
-            ++base_parts;
-            if (!p.deployed || p.alive > 0) ++base_alive;
-        }
-    }
-    // a1i t04 [port]: a company inside its landing (timed unload) keeps its side alive; the original counts only the
-    // landing object itself, by its own type's victory relevance (§34.1) [M: not checked for the FoC landing types].
-    for (const Landing& l : landings_) {
-        const Participant& lp = parts_[l.participant];
-        if (l.timed && l.state != 3 && victory_relevant(lp)) has[lp.side] = true;
-    }
-    if (space_ && station_lost && req_.space_station_destruction_forces_retreat) {
-        conclude(req_.info.attacker, galactic::kVictoryStarbaseDestroyed, kNoPlayer);
-    } else if (!space_ && req_.land_base_destruction_forces_retreat && base_parts > 0 && base_alive == 0) {
-        conclude(req_.info.attacker, galactic::kVictoryEnemyBaseDestroyed, kNoPlayer);
-    } else if (!has[1]) {
-        conclude(req_.info.defender, galactic::kVictoryAllDestroyed, kNoPlayer);  // also both empty: the defender holds
-    } else if (!has[0]) {
-        conclude(req_.info.attacker, galactic::kVictoryAllDestroyed, kNoPlayer);
-    } else if (cfg_.max_frames > 0 && frame_ >= cfg_.max_frames) {
-        finish(req_.info.defender, galactic::kVictoryAllRetreated, req_.info.attacker);  // [port] time limit
-    }
 }
 
 bool TacticalBattle::victory_relevant(uint32_t type) {
@@ -2653,15 +2604,6 @@ bool TacticalBattle::victory_relevant(uint32_t type) {
         c = r ? 2 : 1;
     }
     return c == 2;
-}
-
-bool TacticalBattle::victory_relevant(const Participant& p) {
-    if (p.other_type >= 0) return victory_relevant(static_cast<uint32_t>(p.other_type));  // §3.2 step 3
-    const galactic::ConflictTypeInfo& ti = rules_->type(p.type);
-    if (ti.members.empty()) return victory_relevant(p.type);
-    for (const auto& [mt, n] : ti.members)
-        if (n > 0 && victory_relevant(mt)) return true;
-    return false;
 }
 
 void TacticalBattle::apply_speed_factors() {
@@ -3436,6 +3378,7 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
         const Vec3 face = store.facing(u->h);
         const int32_t owner = store.owner(u->h);
         mode.destroy(u->h);
+        vm_deaths_.push_back(u->id);  // story t06: the victory monitor sees this tick's deaths in this order
         if (u->movable) movement_->remove_unit(u->id);
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
         if (u->tracked) damage_tracking_.disable(u->id);
@@ -3766,8 +3709,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     stats_.shots = combat_->stats().shots;
     stats_.hits = combat_->stats().hits;
     // 6. victory.
-    if (!finished_ && end_hold_until_ == 0) sk_check_victory(mode);  // skai: skirmish map battles
-    check_victory();
+    check_victory(mode);  // story t06: the victory monitor (losses since the last tick, countdown, end)
     if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
     space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units
     land_obstacles_sync(mode);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
@@ -4084,11 +4026,17 @@ void TacticalBattle::hash(StateHasher& h) const {
     h.i32(retreat_side_);
     h.u32(retreat_done_frame_);
     h.boolean(retreat_complete_);
-    if (end_hold_until_ != 0) {  // absent = older streams unchanged (end_hold_frames 0 never sets it)
-        h.u32(end_hold_until_);
-        h.i32(end_winner_);
-        h.u8(end_victory_);
-        h.i32(end_retreated_);
+    if (vm_declared_ || vm_hold_ != 0 || !vm_queue_.empty()) {  // story t06: the victory monitor (absent while idle)
+        h.boolean(vm_declared_);
+        h.u8(vm_decl_.type);
+        h.i32(vm_decl_.player);
+        h.i32(vm_countdown_);
+        h.i32(vm_hold_);
+        h.u32(static_cast<uint32_t>(vm_queue_.size()));
+        for (const auto& [type, player] : vm_queue_) {
+            h.u8(type);
+            h.i32(player);
+        }
     }
     h.u32(placed_[0]);
     h.u32(placed_[1]);

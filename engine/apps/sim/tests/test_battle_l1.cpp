@@ -660,10 +660,13 @@ void test_tsw_follow(const Data& d) {
         CHECK(a.destroy_frame == a.tsw_fire_frame + 48);
         CHECK(a.debris_frame == a.destroy_frame + 10);
         CHECK(a.galaxy_same_tick && a.fleets_kept && a.owner_kept && a.dummy_killed);
-        // Held on every frame from the fire to the one before the release (state 13 serviced at destroy + 10 + 40 + 1);
-        // the battle ends in the release tick (the TswDone event and the end are in the same tick).
-        CHECK(a.held_from_fire && !a.finished_while_held && a.first_unheld == 0);
-        CHECK(a.end_frame == a.destroy_frame + 10 + 40 + 1 && a.last_held == a.end_frame - 1);
+        // Held on every frame from the fire until a release, never held again after it, never finished while held.
+        // story t06 (BT §3.1a): follow 1 - the Empire's retreat completes inside the hold and releases every level (0x340750,
+        // no replay), 0xc is declared at once and the battle ends 210 frames later; follow 2 - the TSW's state-13 service
+        // (destroy + 10 + 40 + 1) releases the hold and replays the queued story victory {0x10, 30 frames}.
+        CHECK(a.held_from_fire && !a.finished_while_held && a.first_unheld != 0 && a.last_held == a.first_unheld - 1);
+        if (follow == 1) CHECK(a.first_unheld > a.tsw_fire_frame && a.first_unheld < a.destroy_frame && a.end_frame == a.first_unheld + 210);
+        else CHECK(a.first_unheld == a.destroy_frame + 10 + 40 + 1 && a.end_frame == a.first_unheld + 30);
         if (follow == 1) {
             CHECK(!a.story_pending && a.claims == 0);
             CHECK(a.summary.find("winner Underworld, victory all-retreated, retreated Empire") != std::string::npos);
@@ -680,8 +683,9 @@ void test_tsw_follow(const Data& d) {
 // L1 systems t06 (docs/re/BATTLE_TRANSITIONS.md §3.1a item 1, TSW_PLANET_DESTROY.md §8; probe 2026-10-31, l1sys t06):
 // only victory-relevant types keep a side alive. The test types set Victory_Relevant Yes, L1_Death_Star sets none of the
 // three flags (like Death_Star_II). After the planet kill and the hold release the Underworld (attacker) escort frigates
-// die (the third one retreated at frame 2+5+90); with only the Death Star left the battle ends at once: the Empire
-// (defender) wins all-destroyed 90 frames after the Hyperspace_Away, the Death Star alive and undamaged. 0 / 4 workers.
+// die (the third one retreated at frame 2+5+90); with only the Death Star left the Empire (defender) wins all-destroyed,
+// declared at the deaths 90 frames after the Hyperspace_Away (story t06: the 0xb test of the escorts' loss) and ended 210
+// frames later, the Death Star alive and undamaged. 0 / 4 workers.
 void test_tsw_lost(const Data& d) {
     const Run a = run(d, 0, 3);
     std::printf("  TSW lost: destroy %u first unheld %u kill %u (escorts %zu) end %u; Death Star alive %d health %.1f (start %.1f); %s\n",
@@ -689,7 +693,7 @@ void test_tsw_lost(const Data& d) {
                 static_cast<double>(a.ds_health0), a.summary.c_str());
     CHECK(a.tsw_fired && a.planet_destroyed && a.ended);
     CHECK(a.first_unheld == a.destroy_frame + 10 + 40 + 1 && a.kill_frame == a.first_unheld && a.escorts_killed == 2);
-    CHECK(a.end_frame == a.kill_frame + 90);
+    CHECK(a.end_frame == a.kill_frame + 90 + 210);
     CHECK(a.ds_alive && a.ds_health0 > 0.0f && a.ds_health == a.ds_health0);  // alive and undamaged
     CHECK(a.summary.find("winner Empire, victory all-destroyed") != std::string::npos);
     const Run b = run(d, 4, 3);

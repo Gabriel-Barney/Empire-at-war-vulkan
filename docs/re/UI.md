@@ -426,6 +426,85 @@ command bar per component `Mouse_Over_SFX` (mostly `GUI_Highlight_Mouse_Over`) a
 Underworld}_SFX`, toggles `GUI_Toggle_*_On/Off`. Menu music: `Main_Menu_Music_Event`; load screen
 music GameConstants `Music_Event_Battle_Load_Screen`. UI sounds use the free (non-sync) RNG. [H]
 
+### 3.7 Colour combos and tech-tree arrows (2026-11-02, p4ui t03)
+
+Sources: the staging colour fill 0xfa1c0, the slot refresh 0xfe7c0, the LAN lobby fill 0xb1240, the colour-change
+handlers 0x288c0 / 0xb6410 / 0x2ba70, `GUIGadgetComboboxClass` (0x1e7920 vtable; set-current-item 0x1e7a60, field layout 0x1e8520),
+the custom-image texture setter 0x1eb000, the tech-tree page fill 0x11ebc0, the battle-end fill 0x88fe0 and the
+fleet summary row fill 0x116070; data: `GUIDialogs.rc`, `GUIDialogs.xml`, FoC `MT_CommandBar.mtd`.
+
+#### 3.7.1 Player-colour combo
+
+- **Controls**: `IDC_PLAYER_COLOR_0..8` on `IDD_SKIRMISH_STAGING_DIALOG`, `IDD_LAN_STAGING_DIALOG`,
+  `IDD_INTERNET_STAGING_DIALOG` (75 × 216 units, `CBS_DROPDOWN`; `_0` also has `CBS_SORT`, which the gadget does
+  not act on [M]), and `IDC_LAN_COLOR_SELECT` on `IDD_LAN_LOBBY_DIALOG` (73 × 169). They are ordinary combo
+  gadgets with the default combo skin (`Combo_Box_Left_Cap` `i_dialogue_combo_left.tga` 2 × 25,
+  `Combo_Box_Text_Box` `i_dialogue_combo_middle.tga` 2 × 25 stretched, `Combo_Box_Popdown_Button` /
+  `_Mouse_Over` / `_Pressed` `i_dialogue_scroll_small_down*.tga` 22 × 25): **no colour-specific textures or
+  frame**. [H]
+- **Items are text, not swatches.** Every colour combo is filled with one item per palette entry, index
+  i = 0..8 (9 entries), item data = i. The item text is a single character and the item carries a top and a
+  bottom text colour, both set to palette colour i (so no gradient). The palette is the 9 GameConstants
+  `MP_Color_Blue, _Red, _Green, _Orange, _Cyan, _Purple, _Yellow, _Gray, _Eight` (SPACE_AND_OPEN.md §B.3; the
+  same table the player colours use). [H]
+  - Staging combos: the character is byte 0xFE converted with the OEM code page = **U+25A0 BLACK SQUARE ■**.
+  - LAN lobby `IDC_LAN_COLOR_SELECT`: byte 0xDB through the OEM code page = **U+2588 FULL BLOCK █**.
+  - [port] use these two code points directly (0xFE / 0xDB map to them in the US and Western-European OEM pages
+    437 / 850; the port does not depend on the system code page).
+- **Font**: per-control `GUIDialogs.xml` fonts: `IDC_PLAYER_COLOR_n` = Arial Unicode MS, `Size` 35,
+  `Stretch_Factor` 0.25; `IDC_LAN_COLOR_SELECT` = Arial Unicode MS 30, `Stretch_Factor` 0.20; both
+  `Top_Color` = `Bottom_Color` = 33,37,47,255, no emboss / outline (that colour is only the font default; the
+  item colours replace it). With the stretch rule (§3.4, GALACTIC_DIALOGS.md §6: height × s, width kept at the
+  unstretched average character width) the glyph comes out as a **flat wide bar**: about a quarter of the
+  35-pt glyph's height at its full width. That bar is the whole "swatch". [H for data, M for the look]
+- **Field (closed combo)**: the current item's text is drawn with the item's two colours in the control font.
+  Placement for **every** combo gadget (not only colour combos): horizontally **centred** in the field part
+  left of the pop-down button (x = field left + (field width − button width) / 2 − text width / 2), vertically
+  centred on the control. Only a combo flagged left-justified starts at the field's left edge plus a small inset
+  (0.005 of the screen width); the only caller of that flag is `IDC_INTERNET_HOST_CLAN_COMBO`. If the text is
+  wider than (field width − 2 × padding − button width) the gadget drops **trailing characters** until it fits
+  (no ellipsis). [H for the formulas, M for the padding field]
+- **Drop-down list**: the rows are the combo's list items, each drawn in its own item colours with the control
+  font; hover / selected highlight and scrolling are the generic combo list's (no colour-specific art). [M]
+- **States**: no per-state colour art: hover only swaps the pop-down button texture
+  (`Combo_Box_Popdown_Button_Mouse_Over`), open = `_Pressed`; a disabled combo (not your slot / not the host)
+  keeps its item colours. [M]
+- **Selection**: the chosen item's data (0..8) is the player's colour index; a slot's combo is set from that
+  index (clamped to the palette). [H]
+
+#### 3.7.2 Tech-tree arrows
+
+- **Controls**: plain `PETROGLYPH_DIALOG_IMAGE` controls placed in `GUIDialogs.rc` between the unit icons:
+  `IDC_RIGHT_ARROWn`, `IDC_DRIGHT_ARROWn`, `IDC_RRIGHT_ARROWn`, `IDC_DOWN_ARROWn` (n ≤ 30 in the shipped data;
+  `IDC_DRIGHT_ARROW` has no instance). Counts: `IDD_TECH_TREE_EMPIRE` 24, `_REBEL` 22, `_BLACKMARKET` 21,
+  `_EMPIRE_SPACE` 7, `_REBEL_SPACE` and `_BLACKMARKET_SPACE` 1 each (the long `IDC_RIGHT_ARROW21`, 845 × 14
+  units: the tech-level axis under the `IDC_STATIC_TECHn` captions). **Placement is entirely the .rc rectangle**;
+  no code positions arrows relative to tech levels or units. `GUIDialogs.xml` has no entries for them. [H]
+- **Fill** (each time a tech-tree page is filled): for n = 0..99 and each of the four prefixes, if the dialog
+  has that control and it is visible, set its texture and tint, then clear the image's overlay layers to
+  transparent: [H]
+
+  | prefix | texture | MTD rect (FoC `MT_CommandBar`) |
+  |---|---|---|
+  | `IDC_RIGHT_ARROWn` | `i_tree_arrow_right.tga` | 30 × 14 |
+  | `IDC_DRIGHT_ARROWn` | `i_tree_arrow_2right.tga` | 30 × 14 |
+  | `IDC_RRIGHT_ARROWn` | `i_tree_arrow_3right.tga` | 30 × 14 |
+  | `IDC_DOWN_ARROWn` | `i_tree_arrow_down.tga` | 14 × 30 |
+
+  Tint 255,255,255,255, alpha-blended draw mode (2D selector 2, PrimAlpha, §6). The texture fills the control
+  rectangle (so the 845-unit axis is the 30 × 14 arrow stretched). [H for texture / tint, M for stretch]
+- **No locked / researched states on arrows**: every arrow is white whatever the player has researched. [H]
+- **Unit icons** (`IDC_TECHTREE_<type>`, same fill, after the arrows): for every object type that belongs to the
+  viewing player's faction, the name with `-` replaced by `_` gives the control; if it exists its texture =
+  the type's icon, tint **white** 255,255,255,255, **or grey 90,90,90,255** when the player's tech level is below
+  the type's `Tech_Level`, or the type is build-locked for that player (flag + the player's unlocked test). No
+  "researched" colour. Icons use draw mode 0; the tooltip is the type's text. [H for colours, M for the lock test]
+- **Same arrow art elsewhere**: `IDD_BATTLE_END_DIALOG` `IDC_RIGHT_ARROW1` / `_2` (255 × 14, between the two
+  sides' unit columns) get `i_tree_arrow_right.tga`, alpha mode, white [M for the tint argument], every time the
+  dialog is filled. `IDD_SUMMARY_SCREEN_FLEETS` `IDC_HEROES_DIVIDERSk` (824 × 14 row separators): when row r is
+  filled, `IDC_HEROES_DIVIDERS(r − 1)` gets `i_tree_arrow_right.tga`, white, alpha mode, and is shown; when row r
+  is empty that divider and the row's icon are hidden. [H]
+
 ---
 
 ## 4. Input routing (P1 input layer)
@@ -677,3 +756,120 @@ Question: does any single-player screen open the IME dialog (text input for Asia
 Port: nothing to build; the IME dialog is not needed for single player (t05 closed). The port's edit boxes already
 take `WM_CHAR` text (P4 integrator ask 1); a host window that leaves the IME messages to `DefWindowProc` gets
 committed IME text the same way.
+
+---
+
+## 9. Skirmish map list: official, custom and mod-folder maps (P4 GUI t06, 2026-11-02)
+
+Answers roadmap p4ui t06. **Single-player feature, not multiplayer.** `IDD_SKIRMISH_STAGING_DIALOG` (handler 0xf2690,
+the only dialog with `IDC_SKIRMISH_START_GAME_BUTTON`) has the two buttons `IDC_SELECT_OFFICIAL_MAPS` /
+`IDC_SELECT_CUSTOM_MAPS` (`TEXT_BUTTON_SELECT_OFFICIAL_MAPS` / `_CUSTOM_MAPS`, GUIDialogs.rc), the game-type list
+`IDC_GAME_TYPE_LIST`, the map list `IDC_STAGING_MAP_LIST` (LBS_SORT), the preview `IDC_IMAGE` and
+`IDC_SCENARIO_DESCRIPTION_TEXT_BOX`. The LAN / internet staging dialogs use the same two buttons and the same catalog,
+but nothing here needs them. The other "custom map" machinery is multiplayer-only and out of scope: the host-option
+keys `HO_CUSTOMMAPNAME` / `HO_CUSTOMMAPCRC` (0x74d50, 0x750e0) and the map transfer that writes a received map to
+`.\Data\CustomMaps\temp.ted` after `CreateDirectoryA(".\Data\CustomMaps\")` (0xcb330). [H]
+
+### 9.1 The map catalog (object 0x140b311a8, built once at boot by 0x47cb40) [H]
+
+It is the same table the galactic random-map picker reads (TACTICAL_GAPS §4.10, BATTLE_TRANSITIONS §2.1). Three
+directory scans, each through the MEG-aware find (§9.2), each into one of two path lists:
+
+| Scan | Pattern | List |
+|---|---|---|
+| 1 | `.\Data\Art\Maps\*.TED` | official |
+| 2 | `.\Data\CustomMaps\*.TED` | custom |
+| 3 | for each entry of the mod search list (MODPATH= / STEAMMOD= dirs in command-line order, object 0x140a14cc0, the list `FileClass::Open` searches, SUBSYSTEMS.md "File lookup priority"): `<dir>\Data\Art\Maps\*.TED` | custom |
+
+- Scan 3 puts mod-folder maps into the **custom** list, not the official one (the list argument of the third call is
+  the custom list; checked in the disassembly at 0x14047cd58). A mod's `Data\CustomMaps` folder and the
+  `FALLBACKPATH=` / EaW `GameData` loose folders are never scanned. EaW and mod **MEGs** are scanned (scan 1 sees
+  every mounted archive), so a mod whose `Data\MegaFiles.xml` mounts its own `Data\Maps.meg` (Thrawn's Revenge:
+  108 map entries, next to ~600 loose maps that are mostly campaign maps) gets its MEG maps in the official list.
+- Each scan appends `<directory of the pattern> + <found file name>` (the pattern up to and including its last `\`,
+  so `.\Data\Art\Maps\_MP_LAND_ENDOR.TED` or `<dir>\Data\Art\Maps\X.ted`), skipping a path string already in that
+  list (exact, case-sensitive compare). The same file name under two different directories is two entries.
+- Every path is then opened with the normal `FileClass` open (mod search list > FoC loose > MEGs > fallbacks,
+  PHASE2.md), so an official `.\Data\Art\Maps\X.TED` whose name a mod overrides reads the mod's copy. Each file's
+  header (§9.3) fills one 0xf0-byte entry (0x47b030, logs `   Parsing found map '%s'`). Official entries are all
+  kept, even unreadable ones; custom entries (scans 2 and 3) are kept **only when the header's custom flag (mini `0B`)
+  is 1**. Table order: official in scan order, then the kept custom entries.
+- Correction to TACTICAL_GAPS §4.10: +0x00 is the path and +0x80 the upper-cased mini 0A tag (the `CONTROL` filter
+  reads it); +0xb4 is the custom flag, so the picker's "+0xb4 = 0" means "official maps only".
+
+### 9.2 The MEG-aware find (0x217e80 first, 0x218e40 next, 0x2199d0 close) [H]
+
+- First the loose directory, by `FindFirstFileA` on the pattern as given (relative to the working directory, which
+  is the FoC install; scan 3 uses the mod dir); `.` and `..` are skipped. Every name returned is remembered in a
+  per-search set, keyed by the full path trimmed, `/` → `\` and upper-cased (0x2005e0, 0x200ba0).
+- When the loose search has no (more) files, every mounted MEG is walked in **mount order** (first mounted first:
+  EaW before FoC), entries in archive index order. An entry is returned when its directory equals the pattern's
+  directory after the same normalisation (case-insensitive; a leading `.\` matches the stored `DATA\...` names, since
+  the retail skirmish maps exist only in `maps.meg` / `Patch*.meg` and are listed [M for the `.\` step]) and its file
+  name matches the pattern's wildcard, and its path is not in the set yet. So a name present loose **and** in a MEG,
+  or in several MEGs, is returned **once**, loose first.
+- The returned name is the loose name as on disk, or the MEG entry's file name (upper case).
+
+### 9.3 Header read: top chunk 0 of the `.ted` (0x47b030) [H fields, M meanings]
+
+Chunk layout: TERRAIN_WATER_POST.md §1 (the port's `terrain::MapInfo` already decodes it). Minis of top chunk 0:
+
+| Mini | Type | Entry | Meaning (vanilla values) |
+|---|---|---|---|
+| 01 | u32 | +0xa0 | map kind: 1 land, 2 space (default −1) |
+| 02 | u32 | +0xac | player count, default 1 (vanilla MP maps 2–9, campaign maps 1) |
+| 03 | u32 | +0xb0 | max base level (5) [M] |
+| 05 | u32 | +0xa8 | faction index for the random picker (3 in vanilla) [M] |
+| 06 | u32 | +0xa4 | terrain index (TEMPERATE 0 … URBAN 6, SPACE 7) |
+| 08 | UTF-16 | +0x20 | map-name text key (`TEXT_MAP_NAME_MP_LAND_10`); without it +0x20 holds the path |
+| 09 | UTF-16 | +0x60 | planet / display name as written (`Endor`); not used by the list [M] |
+| 0A | UTF-16 | +0x80 | game-mode tag, stored upper-cased (`CONTROL` on most land MP maps); only game type 4 filters on it |
+| 0B | u8 | +0xb4 | **custom-map flag**: 0 official, 1 custom |
+| 10, 11 | f32 | +0xbc, +0xc0 | world width / height |
+| 12 | u8 | +0xb5 | the map has start positions for the preview overlay (1 on 24 of the 48 patched vanilla MP maps) |
+| 00, 04, 07 | u32 | — | read, not stored (00 = format 513) |
+
+Top chunk 3 (Vector2 list, the start positions) → +0xc8 (count +0xd8); top chunk 0x13 (raw bytes, the embedded
+preview image: 262 175 bytes in the three `Patch2.meg` maps that carry one) → +0xe0 / +0xe8.
+
+**List label** (+0x40): only when mini 08 is present: `"(%d) %s"` with the player count and the localised text of the
+key; if the text database answers `[MISSING]`, the raw key is used instead. Without mini 08 the list falls back to the
+file name (§9.4).
+
+### 9.4 Filling the skirmish list (0xfb950 → filter 0x47bf40) [H unless tagged]
+
+- `IDC_GAME_TYPE_LIST` sets the game type: 2 = land, 3 = space (0xf2690). The game type maps to the map kind 1 / 2
+  (0x28ab20; type 1 → kind 0, type 4 → kind 1). The Official / Custom buttons toggle one flag (0x140a62282, official
+  when the dialog opens) and refill the list.
+- Filter 0x47bf40, called with (game type, terrain −1 = any, faction −1 = any, base level 0, minimum players 2,
+  custom flag, no exclusion list): an entry is listed when its kind is the game type's kind, players (+0xac) ≥ 2,
+  max base level (+0xb0) ≥ 0, and its custom flag (+0xb4) **equals** the Official / Custom choice. Game type 4 would
+  also need `CONTROL` in mini 0A and honour `Quickmatch_Map_Exclusion_List`; skirmish (2 / 3) does neither.
+- Rows in table order; each row's text is the entry's label (+0x40) when set, else the file name without directory
+  and `.TED` (found case-insensitively), cut to 22 characters + `...` when longer than 25 (0xfb7e0). The list is then
+  sorted (comparator 0x104510: a per-row integer first [M: the same for every row here], then the row text,
+  `_stricmp`), so the player sees the rows ordered by label, `(2) …` before `(4) …`.
+- Selection: the map chosen last time for that game type (strings at 0x140a7c2c8 land / 0x140a7c2e8 space) if it is
+  still listed, else the first row.
+- Vanilla result after the patches: 24 land maps (`_MP_LAND_*`) and 24 space maps (`_MP_SPACE_*`), all official; no
+  custom maps. `_MP_LAND_DATHOMIR` / `_MP_LAND_UTAPAU` have 1 player in `maps.meg` and are listed only because
+  `Patch2.meg`'s copies (4 / 6 players) win the file open. No campaign map passes (all have 1 player).
+- Preview `IDC_IMAGE` (0xfacb0) [H, not needed for t06]: no map → `Galactic_Back.tga`; else the texture
+  `<file name without directory and extension>.tga`; if that does not exist, the embedded chunk-0x13 image (texture
+  `temp_map_preview_texture`); else `Generic_Space.tga` / `Generic_Land.tga`. When mini 12 is set the start
+  positions are drawn over it (0x1032f0).
+
+### 9.5 Port rules for the implementation
+
+- Catalog built once (first use), immutable, in a deterministic order (never the VFS's hash or pointer order).
+  Official = `Data\Art\Maps\*.TED` from the FoC-loose and MEG layers; custom = `Data\CustomMaps\*.TED` from the
+  FoC-loose and MEG layers plus `Data\Art\Maps\*.TED` from the mod layer. Each map is read through the normal VFS
+  lookup.
+- [port] Entries are keyed by the logical path, so a mod-folder map whose name two mod dirs share is one entry (the
+  VFS reads the earlier dir's file; the original lists two rows that load different files). The same logical path can
+  sit in both lists; the custom flag decides which tab shows it, as in the original.
+- [port] One list holds space then land maps (the existing combined list) instead of the `IDC_GAME_TYPE_LIST`
+  switch; each kind is sorted by row text, case-insensitively, ties by path. A map's kind comes from mini 01, never
+  from its name.
+- Not modelled yet (follow-up): the game-type list, remembering the last map per type, the preview image and start
+  overlay, `IDC_SCENARIO_DESCRIPTION_TEXT_BOX` (its text source is not read yet).

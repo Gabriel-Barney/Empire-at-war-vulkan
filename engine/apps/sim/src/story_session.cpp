@@ -453,6 +453,7 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             return false;
         }
         for (const std::string& w : set->model.warnings()) note("story " + ps.plots_file + ": " + w);
+        if (!sets_.empty()) set->model.share_flags(sets_.front()->model);  // one global flag table (STORY.md §0)
         set->model.set_player(ps.player);
         set->model.category_mask = category_resolver(*types_);  // wave 2a: WIN/LOSE_BATTLES CLASS_* tests
         set->model.faction_of = faction_resolver(*sim_);        // wave 2b: FILTER_* compare factions
@@ -829,6 +830,13 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
     } else if (type == "ENABLE_FOW") {  // fog follow-up (FOG_OF_WAR.md §6.6): no Param1 -> FOW off; atoi(P1) 0 -> off + hidden
         const std::string p1 = std::string(trim(at(0)));
         if (enable_fow_) enable_fow_(!p1.empty(), static_cast<int32_t>(std::atoi(p1.c_str())));
+    } else if (type == "ENABLE_VICTORY" || type == "VICTORY") {  // story t06 wiring: tactical plot set -> the battle
+        const bool tactical = tactical_ && tactical_->set.get() == &s;
+        const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
+        if (tactical && type == "ENABLE_VICTORY" && enable_victory_)
+            enable_victory_(!p1.empty(), static_cast<int32_t>(std::atoi(p1.c_str())));
+        else if (tactical && type == "VICTORY" && victory_)
+            victory_(p1, std::atoi(p2.c_str()) != 0);
     } else if (type == "SET_TACTICAL_MAP") {
         // S4 (L1_S4_REMAINING.md §4.4, 0x461d90): Reward_Param1 = map file; Reward_Param2 location via the CRC keyword map
         // (SPACE 1 -> space slot; 0 / missing -> land slot; anything else: "invalid location (GROUND/SPACE)", ignored);
@@ -1173,7 +1181,10 @@ void StorySession::service(uint64_t frame, double mode_seconds) {
             for (const Script& sc : tactical_->set->scripts) vms.push_back(sc.vm.get());
         lua::collect_scheduled(vms, frame, lua_gc_pf_);
     }
-    const bool paused = sim_->paused();
+    // l1s3 t02: the T9 "paused" argument = the galactic pause / battle-pending counter 0x140b1540c > 0 (STORY.md 4.1
+    // step 2, STRATEGIC_GAPS 4 [H]) - the counter only: the story block (GalacticSim::story_block) freezes the mode frame
+    // too but is not this argument. Only galactic story time is ever paused (the tactical T9 passes false).
+    const bool paused = sim_->pause_count() > 0;
     for (const auto& s : sets_) s->model.set_clock(static_cast<uint32_t>(frame), mode_seconds, paused);
     for (int round = 0; round < kMaxRounds; ++round) {
         // Notifications raised since the last service: galactic stream, then host events.
@@ -1455,6 +1466,9 @@ bool StorySession::load_tactical(const std::string& plots, int32_t player, std::
     }
     if (diagnostics)
         for (const std::string& w : set->model.warnings()) diagnostics->push_back("story " + plots + ": " + w);
+    // The tactical story shares the galactic flag table (STORY.md §0 [H]): a mission's SET_FLAG <mission>_WIN is what the
+    // campaign plot's STORY_FLAG waits for.
+    if (!sets_.empty()) set->model.share_flags(sets_.front()->model);
     set->model.set_player(player);
     set->model.category_mask = category_resolver(*types_);
     set->model.faction_of = faction_resolver(*sim_);  // wave 2b

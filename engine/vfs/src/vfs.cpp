@@ -535,7 +535,9 @@ std::string Vfs::origin(std::string_view path) const {
     return r ? r->location : std::string();
 }
 
-std::vector<std::string> Vfs::list(std::string_view glob) const {
+std::vector<std::string> Vfs::list(std::string_view glob) const { return list(glob, kLayerAll); }
+
+std::vector<std::string> Vfs::list(std::string_view glob, uint32_t layers) const {
     const std::string pat = normalize_path(glob);
     std::set<std::string> names;
     const auto add_loose = [&](const LooseRoot& lr) {
@@ -543,15 +545,19 @@ std::vector<std::string> Vfs::list(std::string_view glob) const {
             if (glob_rec(pat, kv.first)) names.insert(kv.first);
         }
     };
-    for (const auto& m : impl_->mods) add_loose(m);
-    add_loose(impl_->base);
-    for (const auto& a : impl_->archives) {
-        for (const auto& e : a->entries()) {
-            std::string n = normalize_path(e.name);
-            if (glob_rec(pat, n)) names.insert(std::move(n));
+    if (layers & kLayerMod)
+        for (const auto& m : impl_->mods) add_loose(m);
+    if (layers & kLayerBase) add_loose(impl_->base);
+    if (layers & kLayerMeg) {
+        for (const auto& a : impl_->archives) {
+            for (const auto& e : a->entries()) {
+                std::string n = normalize_path(e.name);
+                if (glob_rec(pat, n)) names.insert(std::move(n));
+            }
         }
     }
-    for (const auto& f : impl_->fallbacks) add_loose(f);
+    if (layers & kLayerFallback)
+        for (const auto& f : impl_->fallbacks) add_loose(f);
     return std::vector<std::string>(names.begin(), names.end());
 }
 

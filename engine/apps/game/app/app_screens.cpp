@@ -44,6 +44,12 @@ float App::render_alpha() {
     return render::tick_alpha(static_cast<uint32_t>(ms_since(t0_)), last_tick_ms_, period);
 }
 
+bool App::skirmish_map_is_land(const std::string& map) const {
+    if (skirmish_catalog_)
+        if (const game::SkirmishMapEntry* e = game::find_skirmish_map(*skirmish_catalog_, map); e && (e->kind == 1 || e->kind == 2)) return e->kind == 1;
+    return map.find("_LAND") != std::string::npos;
+}
+
 // Skirmish buy-units screen (IDD_SKIRMISH_BUY_UNITS_DIALOG): [port] 10000 credits, the human faction's buildable space
 // units (land map: ground units) by cost; bought units replace the default fleet, none bought = the default fleet.
 void App::open_buy_units(const SessionSpec& spec) {
@@ -51,7 +57,7 @@ void App::open_buy_units(const SessionSpec& spec) {
     bought_.clear();
     buy_ = {};
     buy_.credits = opt_.smoke == "skirmish" ? 20000 : 10000;  // [smoke] room for a fleet larger than the space unit cap
-    const bool land = spec.skirmish_map.find("_LAND") != std::string::npos;
+    const bool land = skirmish_map_is_land(spec.skirmish_map);
     const uint32_t fac = data_.rules.find_faction(spec.skirmish.human_faction);
     for (uint32_t t = 0; t < data_.rules.types.size() && buy_.units.size() < 24; ++t) {
         const galactic::TypeInfo& ti = data_.rules.types[t];
@@ -106,7 +112,7 @@ void App::handle_screen_actions(const std::vector<ui::ScreenAction>& acts) {
                 std::vector<std::string> units;
                 for (const auto& [type, n] : bought_)
                     for (uint32_t k = 0; k < n; ++k) units.push_back(type);
-                const bool land = s.skirmish_map.find("_LAND") != std::string::npos;
+                const bool land = skirmish_map_is_land(s.skirmish_map);
                 if (!units.empty()) (land ? s.skirmish.ground_human : s.skirmish.units_human) = units;
                 if (!start_session(s)) {
                     notes_.push_back("skirmish on " + s.skirmish_map + " did not start");

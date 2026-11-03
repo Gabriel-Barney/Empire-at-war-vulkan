@@ -1,6 +1,8 @@
 #include "alamo/ai/ai_lua_runtime.hpp"
 
 #include <algorithm>
+#include <map>
+#include <mutex>
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
@@ -103,12 +105,63 @@ bool read_plan_definition(lua::LuaVm& vm, const AiDefinitions& defs, PlanDefinit
     return true;
 }
 
+// Whole-file reads of one base provider, remembered (found or not) by the exact path asked for. Binds to the first
+// base it is given; any other base is passed through uncached.
+class PlanScriptRuntime::ReadCache final : public FileProvider {
+public:
+    const FileProvider* wrap(const FileProvider* base) {
+        if (!base) return nullptr;
+        std::lock_guard lock(mutex_);
+        if (!base_) base_ = base;
+        return base_ == base ? this : base;
+    }
+    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
+        std::shared_ptr<const std::vector<uint8_t>> hit;
+        bool known = false;
+        {
+            std::lock_guard lock(mutex_);
+            if (auto it = files_.find(path); it != files_.end()) {
+                known = true;
+                hit = it->second;
+            }
+        }
+        if (!known) {
+            std::vector<uint8_t> bytes;
+            if (base_->read(path, bytes)) hit = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+            std::lock_guard lock(mutex_);
+            files_.try_emplace(std::string(path), hit);  // a racing job read the same bytes
+        }
+        if (!hit) {
+            out.clear();
+            return false;
+        }
+        out = *hit;
+        return true;
+    }
+    bool exists(std::string_view path) const override { return base_->exists(path); }
+    std::string origin(std::string_view path) const override { return base_->origin(path); }
+
+private:
+    mutable std::mutex mutex_;
+    const FileProvider* base_ = nullptr;
+    mutable std::map<std::string, std::shared_ptr<const std::vector<uint8_t>>, std::less<>> files_;  // null = not found
+};
+
+PlanScriptRuntime::PlanScriptRuntime(VmSetup setup) : setup_(std::move(setup)), read_cache_(std::make_shared<ReadCache>()) {}
+
 std::unique_ptr<lua::LuaVm> PlanScriptRuntime::make_vm(const std::string& name, const std::string& chunk,
                                                         const std::string& chunk_name, std::string* err) {
+    ++created_;
+    return build_vm(name, chunk, chunk_name, err);
+}
+
+std::unique_ptr<lua::LuaVm> PlanScriptRuntime::build_vm(const std::string& name, const std::string& chunk,
+                                                         const std::string& chunk_name, std::string* err) const {
     lua::LuaVmOptions opt;
     opt.script_name = name;
-    auto vm = std::make_unique<lua::LuaVm>(setup_.host ? setup_.host() : lua::LuaHost{}, opt);
-    ++created_;
+    lua::LuaHost host = setup_.host ? setup_.host() : lua::LuaHost{};
+    host.files = read_cache_->wrap(host.files);
+    auto vm = std::make_unique<lua::LuaVm>(host, opt);
     if (setup_.prepare) setup_.prepare(*vm);
     std::string e;
     if (!vm->run(chunk, chunk_name, &e)) {
@@ -119,53 +172,79 @@ std::unique_ptr<lua::LuaVm> PlanScriptRuntime::make_vm(const std::string& name, 
 }
 
 size_t PlanScriptRuntime::load(const FileProvider& files, const std::vector<std::string>& paths, const AiDefinitions& defs,
-                               PlanLibrary& library, std::vector<std::string>* diag) {
+                               PlanLibrary& library, std::vector<std::string>* diag, const ParallelFor& pf) {
+    // OPT3 t09: each path's load VM (read, chunk, Base_Definitions, definition globals) is built on its own job: per-path
+    // outputs, nothing outside the new VM is written (the bindings attach the host by pointer; the shipped plans'
+    // chunks and Definitions() only set their own globals). The results are committed below in path order on this
+    // thread, which takes the VMs over, so the library, the pools, vms_created() and the diagnostics are the serial ones.
+    struct Built {
+        bool read = false;
+        std::string name, source;
+        std::unique_ptr<lua::LuaVm> vm;  // null when the chunk or Base_Definitions failed
+        PlanDefinition def;
+        bool def_ok = false;
+        std::vector<std::string> diag;  // this path's messages after the duplicate test
+    };
+    std::vector<Built> built(paths.size());
+    pf(static_cast<uint32_t>(paths.size()), 1, [&](uint32_t begin, uint32_t end) {
+        std::vector<uint8_t> bytes;
+        for (uint32_t i = begin; i < end; ++i) {
+            const std::string& path = paths[i];
+            Built& b = built[i];
+            if (!files.read(path, bytes)) continue;
+            b.read = true;
+            b.name = file_base_name(path);
+            b.source.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            std::string err;
+            b.vm = build_vm(b.name, b.source, path, &err);
+            if (!b.vm) {
+                b.diag.push_back(err);
+                continue;
+            }
+            lua::set_bool_global(*b.vm, "PlanDefinitionLoad", true);
+            if (!b.vm->call("Base_Definitions", &err)) {
+                b.diag.push_back(path + ": Base_Definitions: " + err);
+                b.vm.reset();
+                continue;
+            }
+            b.def.name = b.name;
+            b.def.file = path;
+            for (uint32_t f = 0; f < std::size(kPlanFolders); ++f) {
+                const std::string folder = kPlanFolders[f];
+                if (path.size() > folder.size() && ai_iequal(std::string_view(path).substr(0, folder.size()), folder) &&
+                    path.find('\\', folder.size()) == std::string::npos)
+                    b.def.folder = f;
+            }
+            b.def_ok = read_plan_definition(*b.vm, defs, b.def, &b.diag);
+            if (b.def_ok) lua::clear_script_logs(*b.vm);
+        }
+    });
     size_t loaded = 0;
-    std::vector<uint8_t> bytes;
     for (size_t i = 0; i < paths.size(); ++i) {
         const std::string& path = paths[i];
-        if (!files.read(path, bytes)) {
+        Built& b = built[i];
+        if (b.vm) b.vm->claim_ownership();  // a job worker made it; that job has finished
+        if (!b.read) {
             if (diag) diag->push_back(path + ": cannot read");
             continue;
         }
-        const std::string name = file_base_name(path);
-        if (library.find(name) != kAiNone) {
-            if (diag) diag->push_back(path + ": duplicate plan name " + name + " (first kept)");
+        if (library.find(b.name) != kAiNone) {  // the VM built for a duplicate is dropped (the serial load made none)
+            if (diag) diag->push_back(path + ": duplicate plan name " + b.name + " (first kept)");
             continue;
         }
-        std::string source(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        std::string err;
-        std::unique_ptr<lua::LuaVm> vm = make_vm(name, source, path, &err);
-        if (!vm) {
-            if (diag) diag->push_back(err);
-            continue;
-        }
-        lua::set_bool_global(*vm, "PlanDefinitionLoad", true);
-        if (!vm->call("Base_Definitions", &err)) {
-            if (diag) diag->push_back(path + ": Base_Definitions: " + err);
-            continue;
-        }
-        PlanDefinition def;
-        def.name = name;
-        def.file = path;
-        for (uint32_t f = 0; f < std::size(kPlanFolders); ++f) {
-            const std::string folder = kPlanFolders[f];
-            if (path.size() > folder.size() && ai_iequal(std::string_view(path).substr(0, folder.size()), folder) &&
-                path.find('\\', folder.size()) == std::string::npos)
-                def.folder = f;
-        }
-        if (!read_plan_definition(*vm, defs, def, diag)) continue;
+        ++created_;
+        if (diag) diag->insert(diag->end(), b.diag.begin(), b.diag.end());
+        if (!b.vm || !b.def_ok) continue;
         Entry e;
-        e.name = name;
+        e.name = b.name;
         e.file = path;
-        e.source = std::move(source);
-        e.pool_count = def.pool_count;
-        lua::clear_script_logs(*vm);
+        e.source = std::move(b.source);
+        e.pool_count = b.def.pool_count;
         if (e.pool_count != 0) {
-            e.pristine = vm.get();
-            e.free.push_back(std::move(vm));
+            e.pristine = b.vm.get();
+            e.free.push_back(std::move(b.vm));
         }
-        library.plans.push_back(std::move(def));
+        library.plans.push_back(std::move(b.def));
         entries_.push_back(std::move(e));
         ++loaded;
     }
@@ -203,9 +282,20 @@ std::unique_ptr<lua::LuaVm> PlanScriptRuntime::fresh(uint32_t plan, std::string*
 std::unique_ptr<lua::LuaVm> PlanScriptRuntime::blank_vm(const std::string& name) {
     lua::LuaVmOptions opt;
     opt.script_name = name;
-    auto vm = std::make_unique<lua::LuaVm>(setup_.host ? setup_.host() : lua::LuaHost{}, opt);
+    lua::LuaHost host = setup_.host ? setup_.host() : lua::LuaHost{};
+    host.files = read_cache_->wrap(host.files);
+    auto vm = std::make_unique<lua::LuaVm>(host, opt);
     if (setup_.prepare) setup_.prepare(*vm);
     return vm;
+}
+
+void PlanScriptRuntime::take_vms(std::vector<std::unique_ptr<lua::LuaVm>>& out) {
+    for (Entry& e : entries_) {
+        for (std::unique_ptr<lua::LuaVm>& vm : e.free) out.push_back(std::move(vm));
+        e.free.clear();
+        e.pristine = nullptr;
+        e.digest_known = false;
+    }
 }
 
 void PlanScriptRuntime::restore_pools(std::vector<std::vector<std::unique_ptr<lua::LuaVm>>> pools, size_t created) {

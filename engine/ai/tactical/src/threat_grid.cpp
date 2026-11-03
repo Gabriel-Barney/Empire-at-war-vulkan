@@ -1,6 +1,7 @@
 #include "alamo/ai/tactical/threat_grid.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 
@@ -570,59 +571,81 @@ float TacticalPerceptionGrid::cells_danger(const PerceptionWorld& w, int32_t pla
 }
 
 void TacticalPerceptionGrid::hash(StateHasher& h) const {
-    h.u8(static_cast<uint8_t>(mode_));
-    h.i32(fow_x_);
-    h.i32(fow_y_);
-    h.i32(nx_);
-    h.i32(ny_);
-    h.f32(left_);
-    h.f32(top_);
-    h.f32(cell_w_);
-    h.f32(cell_h_);
-    h.f32(half_diag_);
-    h.u64(category_union_);
-    h.u32(players_);
-    for (uint32_t c = 0; c < cell_count(); ++c) {
-        h.u32(static_cast<uint32_t>(live_[c].size()));
-        for (const uint32_t ei : live_[c]) {
-            h.i32(entries_[ei].object);
-            h.i32(entries_[ei].hard_point);
+    // OPT3 t09: the fields are gathered into one contiguous buffer (their little-endian bytes, in the order the typed
+    // feeds had) and hashed with one bytes() call: the same byte stream and digest, without a feed per field.
+    thread_local std::vector<unsigned char> buf;
+    buf.clear();
+    const auto put = [](auto v) {
+        static_assert(std::endian::native == std::endian::little);
+        const size_t at = buf.size();
+        buf.resize(at + sizeof v);
+        std::memcpy(buf.data() + at, &v, sizeof v);
+    };
+    const auto put_entries = [&](const std::vector<uint32_t>& list) {
+        const size_t at = buf.size();
+        buf.resize(at + 4 + 8 * list.size());
+        unsigned char* o = buf.data() + at;
+        const auto n = static_cast<uint32_t>(list.size());
+        std::memcpy(o, &n, 4);
+        o += 4;
+        for (const uint32_t ei : list) {
+            const int32_t v[2] = {entries_[ei].object, entries_[ei].hard_point};
+            std::memcpy(o, v, 8);
+            o += 8;
         }
-    }
+    };
+    put(static_cast<uint8_t>(mode_));
+    put(fow_x_);
+    put(fow_y_);
+    put(nx_);
+    put(ny_);
+    put(left_);
+    put(top_);
+    put(cell_w_);
+    put(cell_h_);
+    put(half_diag_);
+    put(category_union_);
+    put(players_);
+    const uint32_t cells = cell_count();
+    buf.reserve(buf.size() + 4 * static_cast<size_t>(cells) * (1 + 4 * players_));
+    for (uint32_t c = 0; c < cells; ++c) put_entries(live_[c]);
     for (uint32_t p = 0; p < players_; ++p) {
-        for (uint32_t c = 0; c < cell_count(); ++c) {
-            h.f32(threat_[p][c]);
-            h.f32(snapshot_[p][c]);
-            h.i32(last_seen_[p][c]);
-            h.u32(static_cast<uint32_t>(memory_[p][c].size()));
-            for (const uint32_t ei : memory_[p][c]) {
-                h.i32(entries_[ei].object);
-                h.i32(entries_[ei].hard_point);
-            }
+        const std::vector<float>& threat = threat_[p];
+        const std::vector<float>& snapshot = snapshot_[p];
+        const std::vector<int32_t>& last_seen = last_seen_[p];
+        const std::vector<std::vector<uint32_t>>& memory = memory_[p];
+        for (uint32_t c = 0; c < cells; ++c) {
+            const size_t at = buf.size();
+            buf.resize(at + 12);
+            std::memcpy(buf.data() + at, &threat[c], 4);
+            std::memcpy(buf.data() + at + 4, &snapshot[c], 4);
+            std::memcpy(buf.data() + at + 8, &last_seen[c], 4);
+            put_entries(memory[c]);
         }
-        h.u32(static_cast<uint32_t>(player_objects_[p].size()));
-        for (const int32_t id : player_objects_[p]) h.i32(id);
+        put(static_cast<uint32_t>(player_objects_[p].size()));
+        for (const int32_t id : player_objects_[p]) put(id);
     }
-    h.u32(static_cast<uint32_t>(objects_.size()));
+    put(static_cast<uint32_t>(objects_.size()));
     for (const auto& [id, g] : objects_) {
-        h.i32(id);
-        h.i32(g.owner);
-        h.u32(g.next_check);
-        for (const uint8_t f : g.fogged) h.u8(f);
+        put(id);
+        put(g.owner);
+        put(g.next_check);
+        for (const uint8_t f : g.fogged) put(f);
         for (const uint32_t ei : g.entries) {
             const Entry& e = entries_[ei];
-            h.i32(e.hard_point);
-            h.f32(e.radius);
-            h.f32(e.gx);
-            h.f32(e.gy);
-            h.f32(e.area);
-            h.i32(e.center_cell);
-            h.boolean(e.projected);
-            h.f32(e.v);
+            put(e.hard_point);
+            put(e.radius);
+            put(e.gx);
+            put(e.gy);
+            put(e.area);
+            put(e.center_cell);
+            put(static_cast<uint8_t>(e.projected ? 1 : 0));
+            put(e.v);
         }
     }
-    h.u32(static_cast<uint32_t>(registration_order_.size()));
-    for (const int32_t id : registration_order_) h.i32(id);
+    put(static_cast<uint32_t>(registration_order_.size()));
+    for (const int32_t id : registration_order_) put(id);
+    h.bytes(buf.data(), buf.size());
 }
 
 }  // namespace alamo::ai::tactical

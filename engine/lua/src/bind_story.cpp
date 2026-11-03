@@ -245,20 +245,48 @@ int m_plot_reset(Call& c) {
 
 int m_event_is_valid(Call& c) { return push_bool(c, self_event_valid(c)); }
 
+// story t02: Set_Event_Parameter / Set_Reward_Parameter go through the event's vf2 (STORY.md 0.2: "set parameter i
+// (0-based) from a list of strings"), the same setter the XML loader uses, so a Lua-set parameter is matched by the
+// event type's own rule (name lists, per-name counts, thresholds, comparisons) exactly like the XML text.
+//   * The index is 0-based: 0 = Event_Param1 / Reward_Param1. [H by the shipped scripts: Intervention_Build_Units
+//     (0 = the CONSTRUCT type, 1 = the count), Empire Act IV (1 = the SPACE_TACTICAL planet, Param1 is the plots file),
+//     Set_Reward_Parameter(0, credits) for CREDITS.]
+//   * The value becomes text [port: the conversion is not traced]: a number as Lua's tostring, a string as is, a
+//     boolean 1 / 0, a game object its type name (planets are named by their type in every story rule), a game object
+//     type its name. A player stays a player value (compared by id; no shipped script passes one).
+// Setting an event parameter restarts the per-name countdowns (re-read from Param2 / Param3 at the next evaluation).
+bool to_story_text(Call& c, int i, StoryParam& out) {
+    if (const detail::Ud* o = c.userdata(i, detail::cls_game_object())) {
+        if (!detail::object_alive(*c.vm, *o) || !c.vm->host.store || !c.vm->host.types) return false;
+        const objects::TypeIndex t = c.vm->host.store->type(detail::object_handle(*o));
+        if (t >= c.vm->host.types->raw().type_count()) return false;
+        out = StoryParam::of_text(c.vm->host.types->raw().types().name[t]);
+        return true;
+    }
+    if (const detail::Ud* t = c.userdata(i, detail::cls_type())) {
+        if (!c.vm->host.types || t->value >= c.vm->host.types->raw().type_count()) return false;
+        out = StoryParam::of_text(c.vm->host.types->raw().types().name[static_cast<size_t>(t->value)]);
+        return true;
+    }
+    return to_param(c, i, out);
+}
+
 int set_param_common(Call& c, bool reward) {
     const char* who = reward ? "StoryEventWrapper::Set_Reward_Parameter" : "StoryEventWrapper::Set_Event_Parameter";
     if (c.nargs != 2) return c.fail("%s -- invalid number of parameters. Expected 2, got %d.", who, c.nargs);
     if (!c.is_number(1)) return c.fail("%s -- invalid type for parameter 1. Expected number.", who);
-    const int32_t index = detail::to_int(c.number(1));  // 1-based, like Event_ParamN / Reward_ParamN
+    const int32_t index = detail::to_int(c.number(1));  // 0-based (vf2)
     StoryParam p;
-    if (index < 1 || index > 64 || !to_param(c, 2, p))
+    if (index < 0 || index >= 64 || !to_story_text(c, 2, p))
         return c.fail("%s -- must set exactly one parameter per parameter index.", who);
     if (!self_event_valid(c)) return 0;
     StoryEventDef& def = self_event(c);
     std::vector<StoryParam>& v = reward ? def.reward_params : def.event_params;
-    if (v.size() < static_cast<size_t>(index)) v.resize(static_cast<size_t>(index));
-    v[static_cast<size_t>(index - 1)] = std::move(p);
-    ++self_event_state(c).lua_edits;
+    if (v.size() <= static_cast<size_t>(index)) v.resize(static_cast<size_t>(index) + 1);
+    v[static_cast<size_t>(index)] = std::move(p);
+    StoryEventState& st = self_event_state(c);
+    if (!reward) st.countdowns.clear();
+    ++st.lua_edits;
     return 0;
 }
 int m_event_set_event_parameter(Call& c) { return set_param_common(c, false); }

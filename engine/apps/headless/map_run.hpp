@@ -23,6 +23,16 @@ struct MapRunOptions {
     bool expect_skirmish_base = false;  // --skirmish-ai foc-land (t50): fail unless both sides start with their pre-built base and fight
     std::string human;          // --skirmish-ai foc-land / skirmish (skai): the faction whose slot is an idle human
     bool fail_on_lua_errors = false;  // --skirmish-ai: fail on any tactical AI Lua error (foc-station always does), a1j t07
+    // OPT2 t01 / t02 parity knobs (--galactic-ai, --skirmish-ai): --ai-latency F (AI path recompute latency, default
+    // galactic::kDefaultAllPairsLatency; 0 = the original timing) and --no-ai-stagger (every AI player plans on the same
+    // frames, as the original). Not recorded in saves.
+    int64_t ai_latency = -1;  // < 0: the default
+    bool ai_stagger = true;
+    // OPT2 t10 (--skirmish-ai): --no-pp-streams (slot-10 plan picks and solves draw from the synced stream in proposal order,
+    // the original) and --pp-latency F (frames from a slice to the apply of its solves, default
+    // ai::tactical::kDefaultPpLatency). Not recorded in saves.
+    bool pp_streams = true;
+    int64_t pp_latency = -1;  // < 0: the default
 };
 
 int map_run(const MapRunOptions& opt);

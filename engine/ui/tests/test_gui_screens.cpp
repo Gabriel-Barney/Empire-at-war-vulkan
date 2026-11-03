@@ -582,7 +582,12 @@ void test_targeting() {
 #endif
 }
 
+namespace test_gui_screens_t {
+void test_skirmish_maps();  // test_gui_skirmish_maps.cpp (p4ui t06)
+}
+
 int main() {
+    test_skirmish_maps();
     test_screens();
     test_advanced_video();
     test_video_vsync_mode();
