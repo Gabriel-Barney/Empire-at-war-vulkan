@@ -892,6 +892,69 @@ static std::string golden_text(const CampaignResult& r) {
     return o.str();
 }
 
+// OPT3 t09: PlanScriptRuntime::load builds the load VMs through a ParallelFor and commits them in path order, so a
+// threaded load equals the serial one: library, pools, pristine digests, VM count and diagnostics (a script error, a
+// missing file and a duplicate plan name included).
+static void test_plan_load_parallel() {
+    MemoryFiles files;
+    AiDefinitions defs;
+    EquationSet eqs;
+    std::vector<std::string> plan_files;
+    syn_data(files, defs, eqs, plan_files);
+    files.add("Data\\Scripts\\AI\\Broken.lua", "require(\"SynAICommands\")\nfunction Definitions(\n");
+    files.add("Data\\Scripts\\AI\\LandMode\\Conquer.lua", kPlanConquer);  // same name as AI\Conquer: dropped
+    plan_files.insert(plan_files.begin() + 1, "Data\\Scripts\\AI\\Broken.lua");
+    plan_files.push_back("Data\\Scripts\\AI\\Missing.lua");
+    plan_files.push_back("Data\\Scripts\\AI\\LandMode\\Conquer.lua");
+    objects::GameObjectTypes types;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types);
+    GameRandom rng(1u, 2u);
+    struct Result {
+        size_t loaded = 0, created = 0;
+        std::vector<std::string> names, diag;
+        std::vector<size_t> pooled;
+        std::vector<uint64_t> digests;
+    };
+    auto run = [&](const ParallelFor& pf) {
+        PlanScriptRuntime::VmSetup setup;
+        setup.host = [&] {
+            lua::LuaHost h;
+            h.store = &store;
+            h.types = &types;
+            h.rng = &rng;
+            h.files = &files;
+            return h;
+        };
+        PlanScriptRuntime rt(std::move(setup));
+        PlanLibrary lib;
+        Result r;
+        r.loaded = rt.load(files, plan_files, defs, lib, &r.diag, pf);
+        r.created = rt.vms_created();
+        for (uint32_t i = 0; i < lib.plans.size(); ++i) {
+            const PlanDefinition& d = lib.plans[i];
+            r.names.push_back(d.name + "|" + d.file + "|" + std::to_string(d.folder) + "|" + std::to_string(d.task_forces.size()) +
+                              "|" + std::to_string(d.pool_count));
+        }
+        for (uint32_t i = 0; i < rt.plan_count(); ++i) {
+            r.pooled.push_back(rt.pooled(i));
+            r.digests.push_back(rt.pristine_digest(i));
+        }
+        return r;
+    };
+    const Result serial = run(serial_for);
+    CHECK(serial.loaded == 3 && serial.names.size() == 3);  // BuildSpace, Conquer, UpgradeStarbase
+    CHECK(serial.diag.size() >= 3);                         // the script error, the missing file, the duplicate
+    for (unsigned threads : {2u, 4u, 8u}) {
+        const Result par = run(thread_pf(threads));
+        CHECK(par.loaded == serial.loaded);
+        CHECK(par.created == serial.created);
+        CHECK(par.names == serial.names);
+        CHECK(par.diag == serial.diag);
+        CHECK(par.pooled == serial.pooled);
+        CHECK(par.digests == serial.digests);
+    }
+}
+
 static void test_synthetic_campaign() {
     const int32_t frames = 30 * 900;  // 15 minutes of galactic time
     const CampaignResult base = run_synthetic(1, frames);
@@ -3110,6 +3173,7 @@ int main(int argc, char** argv) {
     test_goal_reservations();
     test_plan_pick_and_solver();
     test_definitions_and_templates();
+    test_plan_load_parallel();
     test_synthetic_campaign();
     test_path_finder_world();
     test_sim_hooks();

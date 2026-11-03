@@ -244,9 +244,9 @@ scenario(s) it ran and the result in the PR. Two forms, both comparing every cou
 
 Converted: `alamo_headless_replay_workers*` (per-process, the 0-worker entry also against `replay_golden.crc`; `alamo_headless_replay_golden`
 now runs the in-process form) and `alamo_headless_galactic_ai_human*` (36000 ticks, was one `--check-workers` entry running the counts in
-turn; each count's AI log is compared with the golden). Not converted yet: `alamo_headless_skirmish_ai_foc_land_outcome*` already has the
-same shape by hand and is being rewritten on the skai-skirmish branch (convert after it merges); `alamo_headless_skirmish_ai_synthetic`
-and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
+turn; each count's AI log is compared with the golden) and `alamo_headless_skirmish_ai_foc_land_outcome*` (OPT3 t08: 7000-tick land
+skirmish, the 0-worker entry also checks `--expect-skirmish-base`; `_profiled` compares a `--profile` run with the same 0-worker log).
+Not converted: `alamo_headless_skirmish_ai_synthetic` and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
 
 ## OPT3 t05 / t06: spike-list fixes before threading (2026-11-02)
 
@@ -297,12 +297,82 @@ times are listed. The model loads now run in parallel instead of inside the spaw
 the OPT1 baseline table.
 
 Leftovers (files other sessions are editing, or work for OPT2):
-- `CampaignBattles::ai_begin` (tactical AI start: Lua VMs and plans, `campaign_battles_ai.cpp`, A1) is now the largest part of the first
-  battle tick, 120-130 ms here.
-- The `battle.ai` hasher still walks the threat grid cell by cell with vector-of-vector memory lists (`engine/ai/tactical`, being edited
-  by the a1i sessions). Flattening it is a t06 follow-up.
-- `bt_map_load` itself and the space setup (`tactical_battle_bt.cpp`, skai-skirmish branch).
+- ~~`CampaignBattles::ai_begin` (tactical AI start: Lua VMs and plans, `campaign_battles_ai.cpp`, A1) is now the largest part of the first
+  battle tick, 120-130 ms here.~~ Done in OPT3 t09 (below).
+- ~~The `battle.ai` hasher still walks the threat grid cell by cell with vector-of-vector memory lists (`engine/ai/tactical`, being edited
+  by the a1i sessions). Flattening it is a t06 follow-up.~~ Done in OPT3 t09.
+- ~~`bt_map_load` itself and the space setup (`tactical_battle_bt.cpp`, skai-skirmish branch).~~ OPT3 t09: the table rebuilds and model
+  loads of the setup; what is left is listed there.
 - The frame-0 all-pairs recompute in the background (OPT2).
+
+## OPT3 t09: battle-setup spikes; OPT2 t08: battle-AI measurement (2026-11-02)
+
+The first battle tick was the only tick over 33.3 ms (OPT1: land 104 ms, space 67 ms). Profiled with temporary zones (removed again).
+Before the fix, on this loaded machine: the tactical AI's plan load took 313 ms of the land campaign battle's first tick and 310 ms of the
+space one. Building the battle tables took about 150 ms of the land skirmish's, half of it in model-file parsing. Three fixes, all with
+identical results:
+- **Plan load in parallel** (`PlanScriptRuntime::load`, `engine/ai`). Every plan file gets its own fresh Lua VM (54 land / 27 space
+  plans, each running the PG library scripts and `Definitions()`). The VMs are now built through a `ParallelFor`, one job per file, and
+  committed in path order (`LuaVm::claim_ownership`, then the duplicate check, the VM count and the diagnostics in the old order). The
+  shipped `Definitions()` only set globals and call `DebugMessage`, and the bindings only attach registry pointers, so the jobs share
+  nothing. The tactical AI passes its `lua_gc_pf` (the SimHost job system); the galactic AI still loads serially (a follow-up).
+  `alamo_ai_galactic_tests` `test_plan_load_parallel`: a 2 / 4 / 8-thread load equals the serial load (library, pools, pristine
+  digests, VM count, diagnostics including a script error, a missing file and a duplicate plan).
+- **Battle tables built incrementally** (`BattleCatalog::begin_battle` / `extend_battle`, `TacticalBattle::tables_extend`). The setup
+  appends types to its list several times (prepass, pads, abilities, hangars). Each time, all tables were rebuilt from the start. The
+  build is a left fold over the type list, so each step now builds only the new types. A new type's model data (bones, avoid
+  model, land stamp extents) is preloaded in parallel first, parsing each ALO once for all three cache entries (`BattleCatalog::preload`).
+  The setup's own model preload (OPT3 t05) moved after the prepass, so a land skirmish's pads are in it.
+- **`battle.ai` hasher flattened** (`TacticalPerceptionGrid::hash`): the grid is serialised into one buffer and hashed with one
+  `bytes()` call (same byte stream, same digests).
+
+Checks: per-tick CRC logs byte-identical to the unchanged build, full length, on the land campaign battle
+(`--skirmish-ai foc-land-campaign --ticks 20000`), the space battle (`foc-station --seed 3 --ticks 20000`) and the land skirmish
+(`foc-land --ticks 3000`). The land skirmish and the space battle are also identical at 0 / 1 / 4 / 16 workers. After merging main
+(A1j), `build_gate.cmd`: clang 163/163 and sanitizer 54/54 passed with 0 warnings; MSVC built with 0 warnings and 158/163 passed, the other 5 (`alamo_commands_tests`, `alamo_ai_tests`, `alamo_ai_tactical_tests`, `alamo_ai_story_save_size_late`, `alamo_render_galactic_headless_check`) timed out under load and passed on a `-j 2` re-run. Every golden passed, including the smoke and land-outcome worker-count entries. After merging main again (Q2F t09 goldens), the gate passed clean: MSVC and clang 163/163, sanitizer 54/54, 0 warnings.
+
+First battle tick, before / after (ms, MSVC `/O2`, 15 workers). The machine was at 100 % CPU from other sessions the whole time, so these
+are minima of alternating runs (before and after back to back), several times the quiet-machine values; the OPT1 table's quiet first
+ticks were land 104 ms and space 67 ms. Batch 1 ran under lighter load than batch 2.
+
+| Batch (runs per exe) | Land campaign battle (frame 22) | Land skirmish (frame 1) | Space battle (frame 33) |
+|---|---|---|---|
+| 1 (3): before | 403 | 884 | 347 |
+| 1 (3): plan load in parallel | 127 | 605 | 92 |
+| 1 (3): + incremental tables, preload after the prepass | 124 | 436 | 79 |
+| 1b (4): the same / + one parse per ALO (final) | 282 / 232 | 583 / 400 | 220 / 157 |
+| 2 (5): before / final (heaviest load) | 514 / 546 | 1248 / 685 | 464 / 424 |
+
+On the first two batches the first tick is 3-4.5 x shorter in space and on the land campaign battle and about 2 x on the land skirmish.
+Batch 2 was too noisy to show more than the skirmish gain (medians 2140 / 1405 ms, space 836 / 553 ms). Whether the quiet first tick is now
+under 33.3 ms needs a quiet re-run (`bench_msvc.cmd`); scaling batch 1 by its before / quiet ratio (3.9 land, 5.2 space) gives roughly 32 ms on the land campaign battle and 15 ms in
+space (an estimate, not a measurement). `bench_msvc.cmd` was not re-run: the machine was still at 82 % CPU (5 other `alamo_headless` runs) at the end, so the OPT1 table above is unchanged.
+
+What is left of the setup spike (land skirmish, same profile): the land obstacle stamps (`mv::stamp_map_obstacles`, Fine_Tune ray
+tests, a quarter to a third of the setup; `engine/tactical/movement`, the per-object-pass session's area), placing the start forces and the
+pre-built base, and the region build. If the first tick still exceeds 33.3 ms on a quiet machine, the next step is OPT2 work:
+spreading setup over ticks or preparing it before the battle starts (that moves goldens).
+
+**OPT2 t08 measurement (battle AI, Lua).** New profiler zones: `tac.ai` (the tactical AI's update), `tac.ai.perception` (snapshot,
+threat grid, signals), `tac.ai.p0`..`p8+` (each AI player's service: goals, plans, free store) and `lua.exec` (outermost Lua
+execution on a thread: `run`, `require`, `call`, `service_threads` and the AI binding calls; nested calls are not counted twice).
+The galactic AI already had `T7.p<n>`. Runs on the merged branch at the default worker count. The machine was at 100 % CPU (about 10
+other `alamo_headless`, 12 ctest and 17 compiler processes), so absolute times are several times too high; the shares are what
+count:
+
+| Scenario (ticks run) | AI share of tick time | AI per tick mean / p50 (ms) | perception share | per player (p0 / p1) share | `lua.exec` share | `lua.exec` / AI |
+|---|---|---|---|---|---|---|
+| FoC land skirmish (`foc-land --ticks 7000`) | 20.1 % (`tac.ai`) | 18.0 / 6.8 | 3.7 % | 9.1 / 7.2 % | 0.1 % | 0.5 % |
+| FoC land campaign battle (`foc-land-campaign`, ends at 2074 since A1j) | 13.8 % | 19.3 / 4.6 | 2.5 % | 6.2 / 4.8 % | 0.2 % | 1.5 % |
+| FoC space battle (`foc-station --seed 3`, 14433 ticks) | 5.1 % | 1.7 / 0.78 | 1.3 % | 2.0 / 1.9 % | 0.3 % | 5.5 % |
+| Galactic HotM, every faction an AI (`--economy --galactic-ai --ticks 18000`) | 47 % (`T7.p*`) | 0.41 / 0.19 | — | 21.3 / 18.8 % | 3.1 % | 6.6 % (upper bound: includes story scripts) |
+
+What it says: the Lua scripts are a small part of the AI's cost (0.5-1.5 % of the battle AI's time on land, 5.5 % in space, under 7 % in the galactic AI). Almost all AI time is the C++ work behind each player's
+service (goal evaluation, plan selection, task forces) and the shared perception. Running the AI players' Lua in parallel
+(`docs/OPT_RESEARCH.md` section 5) would therefore save at most the `lua.exec` share, and it needs per-player id spaces, command
+queues, RNG streams and evaluator VMs. **Not worth it.** If the battle AI needs to be faster, profile inside `tac.ai.p<n>`
+(per-player services in parallel need the same infrastructure; the perception refresh is a per-cell pass that could use per-index
+outputs).
 
 ## Lua GC schedule (OPT2 t04, 2026-11-02)
 
@@ -318,8 +388,8 @@ Lua 5.0.2's collector is unchanged (whole-heap mark and sweep, no incremental GC
   via `BattleAi`, story via `SimHost::start_story`, galactic AI via `GalacticAiConfig::lua_gc_pf` in `alamo_headless`). Per-VM
   work only: Lua 5.0.2 keeps every collector structure in the state's own `global_State`, and the build patches already make
   collections address-independent. `__gc` finalizers are split off (`alamo_luaC_collect`, a build patch of `lgc.c`) and run
-  afterwards on the sim thread in list order. `alamo_game`'s galactic AI (`apps/game/game_session.cpp`) still passes no
-  `lua_gc_pf`, so it collects serially (still staggered).
+  afterwards on the sim thread in list order. `alamo_game`'s galactic AI (`apps/game/game_session.cpp`) passes the host's
+  `ParallelFor` too since OPT2 t09 (2026-11-02; the smoke CRC goldens are unchanged).
 - **Profiler zones**: `lua.gc` (every collection's mark / sweep, on any thread), `lua.gc.auto` (the automatic ones inside a
   script call: the spikes this is about), `lua.gc.batch` (wall time of a host's scheduled batch).
 - **Determinism**: no shipped FoC / EaW script (584 Lua files) uses weak tables, `__gc`, `newproxy` or `gcinfo`, so collection

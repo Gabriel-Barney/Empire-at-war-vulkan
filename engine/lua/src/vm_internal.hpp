@@ -23,12 +23,36 @@
 #include <lua.h>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/profile.hpp"
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 
 namespace alamo::lua {
 
 namespace detail {
+
+// OPT2 t08 (measurement): profiler zone "lua.exec" = time of the outermost Lua execution on this thread (a chunk run,
+// a call, a thread service, an AI event / global call); a call made inside it (a binding calling another VM) is part of
+// it. Wall-clock and write-only like every profiler zone.
+class ExecZone {
+public:
+    ExecZone() noexcept : outer_(depth()++ == 0), scope_(outer_ ? zone() : profile::kNoZone) {}
+    ~ExecZone() { --depth(); }
+    ExecZone(const ExecZone&) = delete;
+    ExecZone& operator=(const ExecZone&) = delete;
+
+private:
+    static int& depth() noexcept {
+        thread_local int d = 0;
+        return d;
+    }
+    static profile::ZoneId zone() noexcept {
+        static const profile::ZoneId z = profile::register_zone("lua.exec");
+        return z;
+    }
+    bool outer_;
+    profile::Scope scope_;
+};
 
 inline constexpr uint32_t kNoBinding = 0xFFFFFFFFu;
 inline constexpr uint32_t kNoClass = 0xFFFFFFFFu;

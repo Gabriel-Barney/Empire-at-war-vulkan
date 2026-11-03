@@ -774,6 +774,7 @@ bool dispatch_task_force_event(LuaVm& vm, int32_t tf, AiTaskForceKind kind, std:
     }
     push_tf(L, tf, kind);
     for (const AiEventArg& a : args) push_arg(L, *impl, a);
+    const detail::ExecZone zone;  // OPT2 t08: lua.exec
     const int st = lua_pcall(L, static_cast<int>(args.size()) + 1, 0, 0);
     bool ok = true;
     if (st != 0) {
@@ -791,6 +792,7 @@ bool call_global_function(LuaVm& vm, std::string_view name, const std::vector<Ai
     const int top = lua_gettop(L);
     if (!push_global_function(L, name)) return false;
     for (const AiEventArg& a : args) push_arg(L, *impl, a);
+    const detail::ExecZone zone;  // OPT2 t08: lua.exec
     const int st = lua_pcall(L, static_cast<int>(args.size()), 0, 0);
     bool ok = true;
     if (st != 0) {
@@ -809,6 +811,7 @@ bool call_global_number(LuaVm& vm, std::string_view name, const std::vector<AiEv
     const int top = lua_gettop(L);
     if (!push_global_function(L, name)) return false;
     for (const AiEventArg& a : args) push_arg(L, *impl, a);
+    const detail::ExecZone zone;  // OPT2 t08: lua.exec
     const int st = lua_pcall(L, static_cast<int>(args.size()), 1, 0);
     bool ok = false;
     if (st != 0) {

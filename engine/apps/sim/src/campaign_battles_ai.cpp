@@ -1,6 +1,8 @@
 // A1 stage 2 (owner: A1 agent): CampaignBattles' tactical AI hookup (campaign_battles.hpp, battle_ai.hpp).
 #include "alamo/sim/campaign_battles.hpp"
 
+#include "alamo/core/profile.hpp"
+
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
 namespace alamo::sim {
 
@@ -17,6 +19,7 @@ void CampaignBattles::ai_begin(SimHost& host, GameMode& mode) {
 }
 
 void CampaignBattles::ai_update() {
+    ALAMO_PROFILE_SCOPE("tac.ai");  // OPT2 t08: the battle's tactical AI (inside T5.battles)
     if (ai_) ai_->update();
 }
 
