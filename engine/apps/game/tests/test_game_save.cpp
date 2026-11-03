@@ -680,9 +680,13 @@ int main(int argc, char** argv) {
         CHECK(!save_check(data, js, argv[0], dir, saves, land_fought).empty());
     }
     // L1 story t05: the opening Kessel land mission (LINK_TACTICAL UM01, BT §2.9) starts as a tactical land battle on its
-    // map at the hook after its reward, with no galactic units (the map and the M01 plot supply them). [port] it then ends
-    // at once: the victory hold (ENABLE_VICTORY 0 in the M01 plot), the VICTORY reward and the Victory_Relevant counting
-    // (BT §3.1a) are not modelled yet, so the story save below uses a human-fought battle instead.
+    // map at the hook after its reward, with no galactic units (the map and the M01 plot supply them).
+    // story t06 (BT §3.1a): it no longer ends at frame 1. 0xb is only tested when a victory-relevant object leaves a player,
+    // and nothing does at the start (a side that never had a relevant object cannot lose by 0xb). Checked over the first
+    // 300 battle frames: still running, nothing declared. [port] Still open: the plot's ENABLE_VICTORY 0 hold and its
+    // VICTORY ending wait for the story reward wiring; the jailed UMP_TYBER_ZANN prop (a Variant_Of_Existing_Type of the
+    // Victory_Relevant Tyber_Zann, an Underworld object from frame 0 in the original, §3.1a item 4) is dropped by the
+    // branched-map discard (REMAINING_GAPS §3.1 item 4: owner = attacker; the 0x140b155d8 exception is not modelled).
     {
         game::SessionSpec story = fought_campaign();
         story.campaign = "Full_Story_Campaign_Underworld";
@@ -697,11 +701,30 @@ int main(int argc, char** argv) {
         if (kessel) {
             const galactic::BattleRequest& r = s.battles()->conflicts().active_request();
             CHECK(r.forces.size() == 2 && r.forces[0].start.empty() && r.forces[1].start.empty() && r.forces[1].reserve.empty());
+            // The jailed Tyber (reported; see above): an Underworld victory-relevant object on the map at the start.
+            const sim::TacticalMode* tm = s.host().modes().top_tactical();
+            const objects::TypeIndex ut = data.types.resolve_name("UMP_TYBER_ZANN");
+            CHECK(ut != objects::kNone && data.types.get_bool(ut, "Victory_Relevant"));  // inherited from Tyber_Zann
+            bool tyber = false;
+            if (tm)
+                for (const objects::ObjectHandle h : tm->primary().all_objects())
+                    tyber = tyber || (tm->primary().active(h) && tm->primary().type(h) == ut && tm->primary().owner(h) == r.info.attacker);
+            uint32_t frames = 0;
+            for (uint64_t i = 0; i < 300 && s.battle() && !s.battle()->finished(); ++i) {
+                s.tick();
+                if (s.battle()) frames = s.battle()->stats().frames;
+            }
+            const sim::TacticalBattle* after = s.battle();
+            std::printf("story link: Kessel UM01 jailed Tyber %d; after 300 ticks battle %s at frame %u, declared %d, hold %d\n", tyber ? 1 : 0,
+                        after && !after->finished() ? "running" : "ended", frames, after && after->victory_declared() ? 1 : 0,
+                        after ? after->victory_hold() : 0);
+            CHECK(after && !after->finished() && !after->victory_declared() && frames >= 299);
         }
     }
     // t08: the FoC story campaign (Full_Story_Campaign_Underworld as the human Underworld: story plots and their Lua VMs,
-    // the battle's tactical story VMs) saved mid-battle: the human's first attack, fought (the Kessel mission above ends
-    // at once). Size guard: about twice the 2026-10-31 size.
+    // the battle's tactical story VMs) saved mid-battle. story t06: the Kessel mission above no longer ends at once, so
+    // this is that story mission (M01 plot and Lua running), saved at battle tick 150 without orders (the Underworld has
+    // no two orderable units there yet). Size guard: about twice the 2026-10-31 size.
     {
         game::SessionSpec story = fought_campaign();
         story.campaign = "Full_Story_Campaign_Underworld";
@@ -713,9 +736,6 @@ int main(int argc, char** argv) {
         c.at = 150;
         c.after = 300;
         c.choice = galactic::BattleChoice::Fight;
-        c.attack = 0;
-        c.attack_at = 60;  // no idle fleet next to a revealed enemy at the start
-        c.orders = true;
         const std::string p = save_check(data, js, argv[0], dir, saves, c);
         CHECK(!p.empty());
         if (!p.empty()) {

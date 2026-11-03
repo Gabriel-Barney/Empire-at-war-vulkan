@@ -44,9 +44,11 @@
 //      damaged-smoke events -> attached_effects() (render); ability events (EnginesOffline); clear_events;
 //      death clones whose planned removal frame came are destroyed; PARTICLE objects whose
 //      Particle_Lifetime_Frames ran out are destroyed; dummy targets without a pending ability are removed;
-//   6. victory: a side without victory-relevant units (BT §3.1a) on the map and in its pool loses (0xb); a
-//      completed retreat (0xc); station destroyed (0xf); max_frames [port time limit: the defender holds, the attacker withdraws].
-//      The tick that finishes the battle removes every death clone left (forever ones too) [port].
+//   6. victory monitor (BT §3.1a, tactical_battle_victory.cpp): event driven - a victory-relevant object leaving a player
+//      (death / removal / owner change) tests 0xb (then 0xe land / 0xf space) for that player's enemies, a completed retreat
+//      tests 0xc; the hold counter (ENABLE_VICTORY, TSW) queues tests; a declaration ends the battle after its record's
+//      countdown (210 frames, story VICTORY 7 s / 1 s); max_frames [port time limit: the defender holds, the attacker
+//      withdraws]. The tick that finishes the battle removes every death clone left (forever ones too) [port].
 // RESULT: winner, victory type, retreated player, galactic objects whose every tactical counterpart died
 // (never-deployed reserves and retreated units survive), starbase destroyed.
 // Determinism: units and participants in vectors by id / request order; all draws on the synced RNG in
@@ -103,8 +105,9 @@ struct BattleConfig {
     uint32_t reinforce_interval = 300; // [port] reserve deployment cadence (frames)
     uint32_t max_frames = 27000;       // [port] time limit (15 min)
     float retreat_ratio = 0.0f;        // [port] stand-in retreat threshold (0 = never retreat)
-    // [port] Playtest QA D1: frames the battle keeps running between the victory check passing and the result (the mode pop),
-    // so the last death's break-up can play. 0 = same tick (BT §3.1; headless, tests, the attract demo). The time limit never holds.
+    // [port] Playtest QA D1: frames the battle keeps running at least between the victory declaration and the result (the mode
+    // pop), so the last death's break-up can play. story t06: the monitor's own countdown (BT §3.1a: 210 frames, VICTORY 30 /
+    // 210) now runs in every battle; this is a minimum on it (0 = the record's countdown only). The time limit never holds.
     uint32_t end_hold_frames = 0;
     float space_spacing = 250.0f;      // [port] formation spacing (world units)
     float land_spacing = 40.0f;
@@ -590,9 +593,42 @@ public:
     // all destroyed, station / base, time limit); at the release the checks run once that frame, a pending story victory
     // first: (TSW owner, 0x10, the other side retreats).
     int32_t tsw_kill_owner() const { return l1_tsw_kill_owner_; }
-    void set_tsw_story_victory(int32_t player) { l1_tsw_story_winner_ = player; }
+    // story t06: adds the monitor record {0x10, player, 30 frames} and tests it (queued while held: it then fires at the
+    // TSW's state-13 release). tsw_story_victory() = that player until the monitor declares (-1 none).
+    void set_tsw_story_victory(int32_t player);
     int32_t tsw_story_victory() const { return l1_tsw_story_winner_; }
-    bool victory_held() const { return l1_sw_.victory_holds() > 0; }
+    bool victory_held() const { return victory_hold() > 0; }
+    // --- story t06: tactical victory monitor (BT §3.1a; tactical_battle_victory.cpp) ---
+    // Records (§2.5, registered at setup, countdown 210 frames): 0xb and 0xc for the attacker and the defender when their
+    // faction is not Is_Neutral; 0xe for the attacker with Land_Base_Destruction_Forces_Retreat (land), 0xf for the attacker
+    // with Space_Station_Destruction_Forces_Retreat (space); a skirmish map battle instead 0x13 (land) / 0x16 (space) per slot
+    // player (SKIRMISH_SETUP §4). [port] 0xd and the AI 0x11 are not registered.
+    // Tests (§3.1a item 2): 0xb only when a victory-relevant object (Victory_Relevant, else Land_ / Space_Victory_Relevant of
+    // its own type) leaves player P - removal, death, owner change, a completed retreat - for every enemy E of P that is the
+    // attacker or defender (ascending player id), then 0xe / 0xf; skirmish: 0x13 / 0x16 when the object is a base component.
+    // E wins 0xb when no active victory-relevant object of an enemy of E is left (no behaviour, category or reserve test).
+    // [port] losses are found at the end of each battle tick by comparing the relevant objects (id, owner) with the last
+    // tick's: this tick's combat deaths first in death order, then the others by ascending id. A completed retreat releases
+    // every hold (no replay) and tests 0xc at once. While held (count > 0) a test only queues {type, player} (no duplicates).
+    // Declared: the record is copied, its countdown runs one per battle tick from the next tick; the battle finishes when
+    // declared, the countdown <= 0 and the hold <= 0. Nothing is evaluated at frame 0 / 1, and a side that never had a
+    // relevant object cannot lose by 0xb.
+    // Story rewards (the host forwards them, BT §3.1a item 3): ENABLE_VICTORY (reward 0x1d): has_param && value == 0 -> hold
+    // + 1; has_param && value != 0 -> release one level with replay, only while held; no Param1 -> nothing (value =
+    // atoi(Reward_Param1)). VICTORY: player = the faction of Reward_Param1 (< 0: nothing; the host logs "Unable to find
+    // faction %s to force victory"), short_silent = atoi(Reward_Param2) != 0; releases every hold without replay, adds {0x10,
+    // player, 7 s (short: 1 s, silent)} and tests it (type 0x10 always passes). True when that test declared it.
+    void reward_enable_victory(bool has_param, int32_t value);
+    bool reward_victory(int32_t player, bool short_silent);
+    // The hold counter (+0x5c; TSW fire / release included). Raise = max(0, h + 1); a TSW release = h - 1 (may go below 0).
+    int32_t victory_hold() const;
+    bool victory_declared() const { return vm_declared_; }
+    uint8_t victory_declared_type() const { return vm_decl_.type; }     // monitor type (0x13 / 0x16 for skirmish)
+    int32_t victory_declared_player() const { return vm_decl_.player; }
+    bool victory_declared_silent() const { return vm_decl_.silent; }    // +0x15: no TEXT_WIN / LOSE_TACTICAL
+    int32_t victory_countdown() const { return vm_countdown_; }
+    size_t victory_queued() const { return vm_queue_.size(); }           // deferred {type, player} tests
+    // --- end story t06 ---
     // Teleport (0x3a8f90): store, movement (stops the unit), combat, trees. False when the object is not alive.
     bool teleport(TacticalMode& mode, objects::ObjectId id, Vec3 position, Vec3 facing);
     // Locomotor vf +0x2a8(keep_parent_link, delay) (L1_S4_REMAINING §3.4): a live battle unit with a FIGHTER /
@@ -838,10 +874,14 @@ public:
     // --- end BT pass ---
 
     bool finished() const { return finished_; }
-    // Playtest QA D1: the result is decided and BattleConfig::end_hold_frames is running out. Hosts start the fade to the summary
-    // here; end_hold_frames_left() = ticks until finished().
-    bool end_hold_active() const { return end_hold_until_ != 0 && !finished_; }
-    uint32_t end_hold_frames_left() const { return end_hold_active() && end_hold_until_ > frame_ ? end_hold_until_ - frame_ : 0; }
+    // Playtest QA D1 / story t06: a victory is declared and its countdown is running out. Hosts start the fade to the summary
+    // here; end_hold_frames_left() = ticks until finished() (at least 1 while the monitor is held).
+    bool end_hold_active() const { return vm_declared_ && !finished_; }
+    uint32_t end_hold_frames_left() const {
+        if (!end_hold_active()) return 0;
+        const int32_t left = vm_countdown_ > 0 ? vm_countdown_ : 0;
+        return static_cast<uint32_t>(victory_hold() > 0 && left < 1 ? 1 : left);
+    }
     const galactic::BattleResult& result() const { return result_; }
     const galactic::BattleRequest& request() const { return req_; }
     const BattleStats& stats() const { return stats_; }
@@ -1115,13 +1155,34 @@ private:
     void issue_orders(TacticalMode& mode, SimRng& rng);
     void retreat_policy();
     void complete_retreat(TacticalMode& mode, uint8_t side);
-    void conclude(int32_t winner, uint8_t victory, int32_t retreated);  // finish(), after end_hold_frames
-    void check_victory();
+    // --- story t06: victory monitor (tactical_battle_victory.cpp) ---
+    struct VmRecord {
+        uint8_t type = 0;
+        int32_t player = -1;
+        int32_t countdown = 0;  // +8: frames from the declaration to the end
+        bool silent = false;    // +0x15
+    };
+    struct VmTracked {  // a victory-relevant object at the last scan
+        objects::ObjectId id = objects::kNoObjectId;
+        int32_t owner = -1;
+        bool base = false;  // skirmish map: DUMMY_LAND_BASE_LEVEL_COMPONENT (land) / DUMMY_STAR_BASE (space)
+    };
+    void vm_setup(TacticalMode& mode);  // end of setup(): records + the first scan
+    void vm_scan(const TacticalMode& mode, std::vector<VmTracked>& out);
+    void vm_add_record(uint8_t type, int32_t player, int32_t countdown, bool silent);
+    bool vm_test(uint8_t type, int32_t player);       // 0x344710 with its gates
+    bool vm_evaluate(uint8_t type, int32_t player);   // the condition alone
+    bool vm_blocker(int32_t player, bool base_only);  // an active relevant object of an enemy of `player`
+    void vm_object_lost(const VmTracked& t);          // 0x2c0340
+    void vm_retreat_complete(int32_t retreated);      // 0x340750
+    void vm_raise();                                  // 0x341fe0
+    void vm_release(bool replay);                     // 0x3440a0
+    void vm_sync_tsw();                               // TSW fire / state-13 holds -> raise / release
+    bool vm_base_object(const objects::ObjectStore& st, objects::ObjectHandle h) const;
+    void check_victory(TacticalMode& mode);
     // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type. Cached per type in
     // vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
     bool victory_relevant(uint32_t type);
-    // a1i t04 [port]: a company still inside a timed landing: its members' types (or the other type, §3.2 step 3).
-    bool victory_relevant(const Participant& p);
     void finish(int32_t winner, uint8_t victory, int32_t retreated);
     float side_power(uint8_t side) const;
     int32_t side_player(uint8_t side) const { return side == 0 ? req_.info.defender : req_.info.attacker; }
@@ -1277,9 +1338,18 @@ private:
     int32_t retreat_side_ = -1;        // side retreating (-1 none)
     uint32_t retreat_done_frame_ = 0;  // countdown end
     bool retreat_complete_ = false;
-    uint32_t end_hold_until_ = 0;  // Playtest QA D1: frame of the decided result (0 = none); the result fields below wait for it
-    int32_t end_winner_ = -1, end_retreated_ = -1;
-    uint8_t end_victory_ = 0;
+    // story t06: victory monitor state (saved; hashed once declared, held or queued)
+    bool vm_declared_ = false;
+    VmRecord vm_decl_;
+    int32_t vm_countdown_ = 0;
+    int32_t vm_hold_ = 0;
+    std::vector<std::pair<uint8_t, int32_t>> vm_queue_;  // +0x60 AwaitingVictoryTestType {type, player}
+    std::vector<VmRecord> vm_records_;
+    std::vector<VmTracked> vm_tracked_;                    // last scan, ascending id
+    uint32_t vm_tsw_seen_ = 0;                             // l1_sw_.victory_holds() at the last sync
+    uint32_t vm_declared_frame_ = 0;                       // frame_ of the declaration (the countdown runs from the next tick)
+    std::vector<objects::ObjectId> vm_deaths_;             // transient: this tick's combat deaths in event order
+    TacticalMode* vm_mode_ = nullptr;
     bool finished_ = false;
     galactic::BattleResult result_;
     BattleStats stats_;
@@ -1488,7 +1558,6 @@ private:
     std::vector<SkIncome> sk_income_;
     const SkIncome& sk_income_of(uint32_t type);
     void sk_income(const TacticalMode& mode);           // tick: the Income_Stream credit trickle
-    bool sk_check_victory(const TacticalMode& mode);    // tick: the skirmish victory rules (true: concluded)
     void bt_team_positions(TacticalMode& mode);                            // tick, after the movement commit
     std::vector<RemovalRecord> bt_removals_;
     std::vector<objects::ObjectId> bt_landing_;
