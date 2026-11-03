@@ -1357,8 +1357,12 @@ void GalacticSim::arrive(uint32_t fleet) {
 void GalacticSim::update() {
     sync_starbases();  // refix t05: no planet keeps a starbase level without its starbase object
     reveal_prestep();  // GRC 1.3: first in the galactic frame, also while paused (step 2 tests the pause)
-    if (pause_ > 0) {  // galactic pause: mode frame frozen, behaviours not serviced [H]
-        if (conflicts_) conflicts_->on_service_tail();  // S10: the conflict state machine keeps running
+    if (paused()) {  // 0x4b2360: the pause counter or the story block; mode frame frozen, behaviours not serviced [H]
+        // A1_READINGS §31.7 (a1j t05): 0x2be640 gates the hero spawn lists (0x3fc750) on the counter alone, so they run
+        // under the story block only.
+        if (pause_ == 0) service_respawns();
+        // S10: the conflict tail still runs; the story block's skip of the state machines is the hook's (0x2be640 step 2).
+        if (conflicts_) conflicts_->on_service_tail();
         return;
     }
     // 1. Object services, newest registered first; only objects registered before the loop [M].

@@ -1860,6 +1860,7 @@ bool GalacticAiWorld::start(std::vector<std::string>* diagnostics) {
         p.ctx.budget.reset(w.defs.categories.size());
         GoalSystemConfig gcfg;
         gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
+        gcfg.extra_goals_per_category = type->goal_set_extension_size;  // AIPlayerType +0xE8 (0x721b60) [H]
         p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
         p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, p.ctx.opponent, eq, -1, out); });
         if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)

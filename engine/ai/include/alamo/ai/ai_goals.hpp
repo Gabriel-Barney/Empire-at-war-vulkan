@@ -25,8 +25,8 @@
 // [port] Every sort is std::stable_sort descending (the original's std::sort is insertion sort, i.e.
 // stable, up to 32 elements and unstable above; ties keep insertion order here - a documented deviation
 // that is only lockstep-safe because every peer runs this code). Category order: stable descending by
-// normalised budget weight [M]. The per-category extra-goal count (template int +0xe8, open item 6) is
-// GoalSystemConfig::extra_goals_per_category.
+// normalised budget weight [M]. The per-category extra-goal count (AIPlayerType GoalSetExtensionSize, +0xE8 of the
+// player type, not of the template) is GoalSystemConfig::extra_goals_per_category.
 //
 // FREE-STORE RESERVATIONS (entry +0x30, A1_READINGS §28.6) [H]: slot 10's solve (accept) reserves nothing and ignores
 // reservations; Commit step 4 suspends every active goal's reservations (suspend_reservations, 0x6c0be0) before any
@@ -115,7 +115,9 @@ public:
 
 struct GoalSystemConfig {
     int32_t sleep_frames = 0;             // Goal_Cycle_Sleep_Duration x FPS (slot 11)
-    int32_t extra_goals_per_category = 1; // template +0xe8 [L, open item 6]
+    // AIPlayerType GoalSetExtensionSize (+0xE8, default 2) [H]. The galactic AI passes its player type's value; the
+    // tactical AI still uses this default of 1 (its goldens move with 2; follow-up for the tactical owner).
+    int32_t extra_goals_per_category = 1;
 };
 
 class GoalSystem {

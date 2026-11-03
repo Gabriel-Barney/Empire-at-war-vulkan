@@ -1595,6 +1595,59 @@ void test_linked_battle(const Data& d) {
     }
 }
 
+// a1j t05 (A1_READINGS §31.7, BT §1.4 step 2): 0x2be640 skips the space/land state machines while the story block holds
+// (a linked battle record waits and the local player is in a queued conflict); the paused query 0x4b2360 freezes the
+// galactic frame. The record is raised by hand here (no story), the Underworld fleet flies C -> B against the human
+// Empire: its conflict stays queued, nothing is voted, fought or auto-resolved and the frame stands still until the flag
+// is cleared; then the conflict runs as usual.
+void test_story_block_host(const Data& d) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, make_setup(d, false));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 300;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Space_B") return false;
+                                m = space_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (uf.empty()) return;
+    CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    uint64_t t = 0;
+    // [port] the host releases a flag that has no conflict to wait for at its battle hook, so it is raised again before
+    // every tick until the fleet's conflict holds it.
+    for (; t < 2000 && !gs->story_block(); ++t) {
+        if (!gs->linked_battle_pending()) gs->queue_linked_battle();
+        host.tick_once();
+    }
+    CHECK(gs->story_block() && battles.conflicts().space_queue().size() == 1);
+    const int32_t frozen = gs->frame();
+    for (int i = 0; i < 200; ++i) host.tick_once();
+    CHECK(gs->frame() == frozen && gs->paused());
+    CHECK(battles.conflicts().state() == galactic::ConflictState::Idle && battles.conflicts().space_queue().size() == 1);
+    CHECK(!battles.battle() && battles.battles_fought() == 0 && battles.conflicts().log().empty());
+    gs->clear_linked_battle();
+    bool started = false;
+    for (int i = 0; i < 600 && !started; ++i) {
+        host.tick_once();
+        started = battles.battle() != nullptr;
+    }
+    CHECK(started && gs->frame() > frozen);
+    std::printf("  story block: queued at tick %" PRIu64 ", frame %d frozen for 200 ticks, battle started after the flag cleared\n",
+                t, frozen);
+}
+
 void test_story_battle(const Data& d) {
     const fs::path x = d.root / "Data/XML";
     write_file(x / "Story_Plots_S10.xml", "<Story_Mode_Plots><Active_Plot>Story_S10.xml</Active_Plot></Story_Mode_Plots>\n");
@@ -4893,11 +4946,14 @@ void test_fighter_move_past_enemy() {
 
 // a1i t04 / t05: a land Reinforce of a company with a Company_Transport_Unit spawns its landing object (the transport's
 // Landing_Transport_Variant at the drop point, z + Hover_Offset, TRANSPORT_LANDING, carried type = the company).
-// Untimed (default): the members spawn at the 3.0-factor unload offsets at the order, the unloaded record is posted and
-// the landing object leaves after (teams + 1) x 2 s. Timed (BattleConfig::landing_unload_timed): the company stays in the
-// hidden landing; one team per 2 s leaves on a locked exit move; the last step unlocks them, posts the record and removes
-// the landing; the battle state saves and loads mid-unload. Also the deployed extents getter.
-void test_landing_drop(bool timed) {
+// Untimed ([port] option): the members spawn at the 3.0-factor unload offsets at the order, the unloaded record is posted
+// and the landing object leaves after (teams + 1) x 2 s. Timed (BattleConfig::landing_unload_timed, the default since a1j
+// t01): the company stays in the hidden landing; one team per 2 s leaves on a locked exit move; the last step unlocks
+// them, posts the record and removes the landing; the battle state saves and loads mid-unload. Also the deployed extents
+// getter. a1j t01 (A1_READINGS §36), timed with `destroy_at` > 0: the landing object is destroyed `destroy_at` frames after
+// the order; the next service posts the signal 0x19 record of the detach (vf15 0x6442d0) with the units out so far
+// (destroy_at 90: team 0; destroy_at 30: none [port: the original sends nothing then]), unlocked, and the rest never spawns.
+void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, true);
     const objects::TypeIndex lander = d->types.resolve_name("S10_Lander"), landing_t = d->types.resolve_name("S10_Lander_Landing");
     CHECK(lander != objects::kNone && landing_t != objects::kNone);
@@ -5036,7 +5092,7 @@ void test_landing_drop(bool timed) {
         const uint32_t spawned = b->stats().spawned - spawned_before;
         if (since == 1u) CHECK(!b->landing_hidden(landing_id) && spawned == 0);
         if (since == 60u) CHECK(spawned == 0);
-        if (since == 61u || since == 121u) {
+        if ((since == 61u || since == 121u) && (destroy_at == 0 || since < destroy_at)) {
             const uint32_t want = since == 61u ? 2u : 4u;
             CHECK(spawned == want);
             const objects::ObjectId uid = b->story_reinforced().empty() ? objects::kNoObjectId : b->story_reinforced().back();
@@ -5044,6 +5100,28 @@ void test_landing_drop(bool timed) {
             const Vec3 mp = st.position(st.find(uid));
             CHECK(std::fabs(mp.x - st.position(lh).x) < 30.0f && std::fabs(mp.y - st.position(lh).y) < 30.0f);  // spawned at the landing
             CHECK(b->landings_in_flight(1) == 1 && b->landings_unloaded().empty());
+        }
+        if (destroy_at > 0) {  // a1j t01: the landing destroyed mid-unload
+            if (since == destroy_at) {
+                CHECK(st.alive(lh) && tm->destroy(lh));
+                continue;
+            }
+            if (since == destroy_at + 1u) {
+                const uint32_t out = destroy_at > 61u ? 2u : 0u;
+                const auto recs = b->landings_unloaded();
+                CHECK(recs.size() == 1 && b->landings_in_flight(1) == 0 && spawned == out);
+                if (recs.size() == 1) {
+                    CHECK(recs[0].landing == landing_id && recs[0].galactic_id == key && recs[0].owner == 1 && recs[0].units.size() == out);
+                    for (const objects::ObjectId u : recs[0].units) CHECK(!b->movement_locked(u));
+                }
+                seen_alive_late = true;
+                continue;
+            }
+            if (since > destroy_at + 1u) {
+                CHECK(spawned == (destroy_at > 61u ? 2u : 0u) && b->landings_unloaded().empty());  // the rest never comes
+                if (since >= 200u) gone = true;
+            }
+            continue;
         }
         if (since == 90u && !saved) {  // mid-unload save / load of the battle state (in-flight landing included)
             StateHasher h0;
@@ -5073,8 +5151,9 @@ void test_landing_drop(bool timed) {
         }
     }
     CHECK(dropped && seen_alive_late && gone);
-    if (timed) CHECK(saved);
-    std::printf("  landing drop (%s): landing %d at frame %u\n", timed ? "timed" : "untimed", static_cast<int>(landing_id), drop_frame);
+    if (timed && destroy_at == 0) CHECK(saved);
+    std::printf("  landing drop (%s%s): landing %d at frame %u\n", timed ? "timed" : "untimed", destroy_at > 0 ? ", destroyed" : "",
+                static_cast<int>(landing_id), drop_frame);
 }
 
 // S7 t22 / t25 (FIGHTER_FLYING §4.10 A, TACTICAL_COMBAT §2.8 "Targets of opportunity"): the response-range test 0x4160a0.
@@ -5516,6 +5595,8 @@ int main(int argc, char** argv) {
     test_retreat(*d);
     std::printf("auto-resolve only\n");
     test_auto_only(*d);
+    std::printf("story block freezes the conflict state machines and the galactic frame (a1j t05)\n");
+    test_story_block_host(*d);
     std::printf("human orders + order queue (integration fixes, [port: Gabriel])\n");
     test_orders_and_queue(*d);
 #ifdef ALAMO_SIM_HAVE_STORY
@@ -5587,6 +5668,8 @@ int main(int argc, char** argv) {
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);
     test_landing_drop(true);
+    test_landing_drop(true, 90);  // a1j t01: destroyed with team 0 out
+    test_landing_drop(true, 30);  // a1j t01: destroyed before any unit is out
     std::printf("S8 t02 / S7 t13: obstacle footprints follow their objects (land stamps, space static entries)\n");
     test_runtime_obstacles(false);
     test_remote_bomb_marker();  // S8 t10 follow-up

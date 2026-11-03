@@ -22,6 +22,7 @@ struct MapRunOptions {
     bool expect_battle_end = false;  // --skirmish-ai: fail unless the battle ends with a winner before the frame limit
     bool expect_skirmish_base = false;  // --skirmish-ai foc-land (t50): fail unless both sides start with their pre-built base and fight
     std::string human;          // --skirmish-ai foc-land / skirmish (skai): the faction whose slot is an idle human
+    bool fail_on_lua_errors = false;  // --skirmish-ai: fail on any tactical AI Lua error (foc-station always does), a1j t07
     // OPT2 t01 / t02 parity knobs (--galactic-ai, --skirmish-ai): --ai-latency F (AI path recompute latency, default
     // galactic::kDefaultAllPairsLatency; 0 = the original timing) and --no-ai-stagger (every AI player plans on the same
     // frames, as the original). Not recorded in saves.

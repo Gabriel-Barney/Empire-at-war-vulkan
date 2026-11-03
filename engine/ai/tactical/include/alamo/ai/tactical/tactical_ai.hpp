@@ -161,6 +161,15 @@ struct OpportunityTargetEvent {
     int32_t hardpoint_type = -1;  // HardPointType of the hard point (5..10 for weapons)
 };
 
+// a1j t01 - signal 0x19 "reinforcements unloaded" (ReinforcementsUnloadedDataClass, A1_READINGS §32.1 / §36): a land
+// landing object finished its unload (0x6438a0) or was removed while unloading (detach vf15 0x6442d0). `key` = the
+// Reinforce event's unit field (the pool entry); `units` = the unloaded object ids in spawn order.
+struct ReinforcementsUnloaded {
+    int32_t player = -1;
+    int32_t key = -1;
+    std::vector<int32_t> units;
+};
+
 // --- A2 tactical: a build pad the player can build on (the TacticalBuild marshaller's pool, AI_TACTICAL §5.1
 // side table 0x4d29a0): visible, empty, friendly or neutral [M], and the UC_ types its pad type lists for the
 // player's faction (Tactical_Buildable_Objects_Multiplayer in skirmish, _Campaign otherwise). ---
@@ -255,6 +264,12 @@ public:
     // and inside the reinforcement radii (enabling / prevention). A refused spot sends the unit to the next ring spot. Default:
     // every spot valid (hosts without the hook).
     virtual bool land_drop_ok(int32_t /*player*/, int32_t /*key*/, const Vec3f& /*p*/) { return true; }
+    // a1j t01 - land TF.Reinforce with a timed landing (ReinforceBlockStatus, A1_READINGS §36). reinforce_in_flight: the
+    // Reinforce of pool entry `key` just executed for `player` put the company in a landing object that has not finished
+    // its unload (the units come later, by reinforcements_unloaded). reinforcements_unloaded: the signal 0x19 records of
+    // the tick just run, in the order they were sent. Defaults: never in flight, none (the units exist at the order).
+    virtual bool reinforce_in_flight(int32_t /*player*/, int32_t /*key*/) { return false; }
+    virtual std::vector<ReinforcementsUnloaded> reinforcements_unloaded() { return {}; }
 };
 
 struct TacticalAiPlayerConfig {
