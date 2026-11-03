@@ -862,6 +862,17 @@ or a sim-only model load (positions, indices and skeleton only). The second batt
   destructor then wrote to the freed system (test fixture order, `World::make`); `luaG_checkcode` indexed `luaP_opmodes` with an opcode
   from a corrupt save (patch in `engine/lua/CMakeLists.txt`, the save is now rejected).
 
+## Test thread pools under a loaded machine (2026-11-03)
+
+`alamo_ai_tactical_tests` (2 s) ran past ctest's 600 s timeout at 100% CPU. Not a deadlock: it finished once the load went.
+Its `make_thread_pf` spawned and joined fresh `std::thread`s on every call, and the zone all-pairs (Floyd-Warshall) makes one
+call per k, about 9300 over the shipped maps; each join waited for the new threads to get a time slice. Reproduced with 48
+busy-loop processes on the 16 cores: still running at 150 s (`alamo_ai_tactical_perception_tests`, same helper: still
+running at 120 s). Fix: `engine/ai/tactical/tests/thread_parallel_for.hpp`, a persistent pool whose caller claims chunks too
+and waits only for chunks a thread has claimed, never for a worker to wake. Same load: 15 s and 7 s. The pools in
+`engine/tactical/tests` and `engine/galactic/tests/thread_parallel_for.hpp` still wait for every worker to report back on each
+call, and the `engine/ai/tests` / `engine/tactical/movement/tests` helpers still spawn per call.
+
 ## Open items
 
 **How to read this list** (status tags added 2026-10-28; inline, ✅ marks a finished sub-item, often also struck through, and ⬜ marks one still open):
