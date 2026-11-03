@@ -228,12 +228,16 @@ void GalacticHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
         if (const int32_t i = find_fmt(table, "land_fleet_%02d", k); i >= 0) land_.push_back(i);
     fleet_header_.clear();
     for (int k = 1; k <= 3; ++k) fleet_header_.push_back(find_fmt(table, "q%d_fleet", k));
+    pathfinder_.assign(3, -1);
     for (int fl = 0; fl < 3; ++fl)
         for (int r = 0; r < 5; ++r)
             for (int c = 0; c < 7; ++c) {
                 char n[32];
                 std::snprintf(n, sizeof n, "q%d_%02d%02d", fl + 1, r, c);
-                if (const int32_t i = table.find(n); i >= 0) fleet_[static_cast<size_t>(fl)].push_back(i);
+                const int32_t i = table.find(n);
+                if (i < 0) continue;
+                if (r == 0 && c == 0) pathfinder_[static_cast<size_t>(fl)] = i;  // UI.md §7.4: the header pad is no unit pad
+                else fleet_[static_cast<size_t>(fl)].push_back(i);
             }
     dynamic_.assign(table.size(), 0);
     auto mark = [&](int32_t i) {
@@ -247,6 +251,7 @@ void GalacticHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
         for (int32_t i : *v) mark(i);
     for (const auto& v : fleet_)
         for (int32_t i : v) mark(i);
+    for (int32_t i : pathfinder_) mark(i);
     // Every g_* label component and the tactical-only components are not command-bar buttons here.
     for (uint32_t i = 0; i < table.size(); ++i) {
         const std::string& n = table[i].name;
@@ -794,7 +799,7 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
                 }
     }
     auto draw_slot = [&](int32_t ci, const GalacticFleetSlot& s, std::vector<uint32_t> select, int32_t fleet_index, uint32_t fleet,
-                         uint32_t unit, bool foreign) {
+                         uint32_t unit, bool foreign, bool empty = false) {
         const auto u = static_cast<uint32_t>(ci);
         ButtonRuntime& r = buttons_.state(u);
         r.hidden = false;
@@ -812,11 +817,12 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         ps.component = ci;
         ps.select = std::move(select);
         const std::string_view dd = c.raw_value("DRAG_AND_DROP");
-        ps.draggable = !foreign && !dd.empty() && (dd[0] == 'T' || dd[0] == 't' || dd[0] == 'Y' || dd[0] == 'y' || dd[0] == '1');
+        ps.draggable = !foreign && !empty && !dd.empty() && (dd[0] == 'T' || dd[0] == 't' || dd[0] == 'Y' || dd[0] == 'y' || dd[0] == '1');
         ps.foreign = foreign;
         ps.fleet_index = fleet_index;
         ps.fleet = fleet;
         ps.unit = unit;
+        ps.empty = empty;
         ps.icon = s.icon;
         pads_.push_back(std::move(ps));
         return true;
@@ -837,17 +843,49 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
                 buttons_.state(static_cast<uint32_t>(fleet_header_[fl])).hidden = true;
             }
         }
-        // The pane's unit pads fill from the first pad upward, fleet after fleet (UI.md §7.2); further stacks are not drawn.
-        size_t next = 0;
-        for (const GalacticFleet* gf : in_pane)
+        const uint32_t pane_fleet = fd ? fd->fleet : 0;
+        const bool pane_foreign = fd && fd->enemy;
+        // UI.md §7.4: q{n}_0000 ("Fleet PF", the pathfinder) is the header pad, not a unit pad; the unit pads are q{n}_0001
+        // upward. It is always shown, empty (no unit is a pathfinder until flagship battles exist), and inert [port]: no
+        // drag, click or drop (a foreign-style empty pad).
+        if (pathfinder_[fl] >= 0) draw_slot(pathfinder_[fl], GalacticFleetSlot{}, {}, fi, pane_fleet, 0, true, true);
+        // UI.md §7.2: the pane's units, grouped per fleet and type into stacks (one pad each, the count as text), fill the unit
+        // pads upward, fleet after fleet; further stacks are not drawn. Dragging a stack takes its first unit.
+        struct Stack {
+            const GalacticFleet* fleet;
+            GalacticFleetSlot slot;  // the first unit, count summed
+            std::vector<uint32_t> members;
+        };
+        std::vector<Stack> stacks;
+        for (const GalacticFleet* gf : in_pane) {
+            const size_t first = stacks.size();
             for (const GalacticFleetSlot& u : gf->units) {
-                if (next >= slots.size()) break;
-                if (draw_slot(slots[next], u, gf->enemy ? std::vector<uint32_t>{} : std::vector<uint32_t>{u.object}, fi, gf->fleet, u.object,
-                              gf->enemy))
-                    ++stats_.fleet_slots;
-                ++next;
+                Stack* into = nullptr;
+                if (u.type != kNoSlotType)
+                    for (size_t k = first; k < stacks.size(); ++k)
+                        if (stacks[k].slot.type == u.type) into = &stacks[k];
+                if (into) {
+                    into->slot.count += u.count;
+                    into->slot.selected = into->slot.selected || u.selected;
+                    into->members.push_back(u.object);
+                } else {
+                    stacks.push_back({gf, u, {u.object}});
+                }
             }
-        for (; next < slots.size(); ++next) buttons_.state(static_cast<uint32_t>(slots[next])).hidden = true;
+        }
+        size_t next = 0;
+        for (const Stack& st : stacks) {
+            if (next >= slots.size()) break;
+            if (draw_slot(slots[next], st.slot, st.fleet->enemy ? std::vector<uint32_t>{} : st.members, fi, st.fleet->fleet, st.slot.object,
+                          st.fleet->enemy))
+                ++stats_.fleet_slots;
+            ++next;
+        }
+        // UI.md §7.3: the pads without a stack show (empty, as drop targets) only while something is dragged.
+        for (; next < slots.size(); ++next) {
+            if (drag_.active) draw_slot(slots[next], GalacticFleetSlot{}, {}, fi, pane_fleet, 0, pane_foreign, true);
+            else buttons_.state(static_cast<uint32_t>(slots[next])).hidden = true;
+        }
     }
     for (size_t k = 0; k < land_.size(); ++k) {
         if (k >= land.size()) {
@@ -916,6 +954,15 @@ bool GalacticHud::slot_drop(const StackHit& sh, std::vector<commands::EventData>
         }
     }
     return true;
+}
+
+// The slot a drop on an empty organiser pane addresses: the selected planet's slot of that pane (UI.md §7.2, pane k = slot k).
+GalacticHud::StackHit GalacticHud::pane_hit(const PadSlot& pad) const {
+    StackHit h;
+    h.component = pad.component;
+    h.planet = selected_id_;
+    h.slot = pad.fleet_index;
+    return h;
 }
 
 const GalacticHud::PadSlot* GalacticHud::pad_of(int32_t component) const {
@@ -1015,6 +1062,11 @@ void GalacticHud::drag_update(const RoutedInput& routed, std::vector<commands::E
     // Over a fleet slot (an empty oval or a fleet button): its planet counts as the planet under the cursor.
     drag_.over_slot = -1;
     drag_.over_slot_planet = drag_.over_slot_fleet = 0;
+    if (over && over->empty && over->fleet == 0 && !over->foreign) {  // an empty pane: the drop makes a new fleet in its slot
+        drag_.valid = selected_id_ != 0 && slot_drop(pane_hit(*over), nullptr);
+        drag_.over_fleet = drag_.valid;
+        return;
+    }
     if (drag_.over_component >= 0 && drag_.over_component == planet_fleet_)
         if (const StackHit* sh = stack_at(planet_fleet_, cur.x, cur.y)) {
             drag_.over_slot = sh->slot;
@@ -1040,7 +1092,12 @@ void GalacticHud::drop(std::vector<commands::EventData>& out) {
     const bool from_fleet = drag_.fleet_index >= 0;
     const uint32_t unit = drag_.unit != 0 ? drag_.unit : kNone;
     if (over && over->fleet_index >= 0) {  // onto a fleet pad
-        if (over->fleet == drag_.fleet || over->foreign) return;  // a foreign pad is no drop target (UI.md §7.2)
+        if (over->foreign) return;  // a foreign pad is no drop target (UI.md §7.2)
+        if (over->empty && over->fleet == 0) {  // an empty pane k: a new fleet in slot k (UI.md §7.2, §7.3)
+            if (selected_id_ != 0) slot_drop(pane_hit(*over), &out);
+            return;
+        }
+        if (over->fleet == drag_.fleet) return;
         if (from_fleet) out.push_back(fleet_management_event(over->fleet, drag_.fleet, unit, ops_.merge));
         else out.push_back(fleet_management_event(over->fleet, kNone, unit, ops_.launch));
         return;

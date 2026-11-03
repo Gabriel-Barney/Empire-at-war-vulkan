@@ -629,8 +629,8 @@ jumps the camera to the group (local player only). The group number is drawn ove
 - Rally point visuals; whether `Pixel_Align` and `Snap_Location` change placement.
 - In-game probe (Gabriel): screenshots at 1024×768, 1920×1080 and 1280×1024 of the tactical HUD and
   a load screen would settle §2.4/§3.3.
-- §7.4: what the organiser's "pathfinder" header pad (`q*_0000`) holds in single player and the default of
-  GameConstants `Pathfinder_Slot_Index`; §7.2 the slot-0 → pane 2 reading for a foreign orbit [M].
+- ~~§7.4: the organiser's "pathfinder" header pad and `Pathfinder_Slot_Index`~~ (answered, p4uio t01); §7.2 the slot-0 →
+  pane 2 reading for a foreign orbit [M].
 
 ---
 
@@ -667,7 +667,9 @@ slotted fleet in orbit order, else the first stealthed one's, else nobody.
   slot 2") applied to the panes: pane k shows what map button k shows.
 - Inside a pane the units are grouped per type into stacks (one pad per stack, the count as text), filled from the
   pane's first pad upward in the order the fleets list them (0x3cc040 / 0x3d7470); at most 34 stacks per pane,
-  further stacks are not drawn [M].
+  further stacks are not drawn [M]. Port (p4uio t03): stacks are made per fleet and unit type (the host feeds the object
+  type index), so a pane holding several fleets (own slot 0, foreign) shows one stack per fleet and type, and a drag
+  names one fleet; the stack's count is the pad text, a click selects all its members, a drag takes its first unit only.
 - A pane with no fleet keeps its frame and its tab; its unit pads are empty (§7.3).
 - Drops (0x3d02e0, unchanged): a drop on pane k addresses the fleet in slot k; a drop on an empty pane makes a new
   fleet in slot k (FleetManagement with the slot), on an occupied one merges ("merge_fleets").
@@ -676,16 +678,46 @@ slotted fleet in orbit order, else the first stealthed one's, else nobody.
 - Pads holding a stack are shown and enabled.
 - Every pad of a pane is reset first; the reset hides it unless the HUD's drag / hover component (+0x2160) is set,
   in which case it is shown empty and enabled. Reading: **empty pads show only while something is dragged** (as
-  drop targets); otherwise a pane shows only its filled pads.
+  drop targets); otherwise a pane shows only its filled pads. Port (p4uio t02): while a drag is active every unit pad
+  without a stack draws empty; a drop on an empty pad of an empty pane k makes a new fleet in slot k (the map's
+  slot-oval rule: unit → detach with slot, fleet header → op 8, land unit → launch as a new fleet), on an empty pad of
+  an occupied pane it merges into that pane's first fleet, and a foreign pane is no target.
 
-### 7.4 The `q*_0000` header pad ("Fleet PF") [H data, L meaning]
+### 7.4 The `q*_0000` header pad ("Fleet PF", the fleet's pathfinder) [H unless marked] (p4uio t01, 2026-11-03)
 - `q{n}_0000` is in group `Fleet PF`, blank texture `i_button_pathfinder.tga`, tooltip `TEXT_TOOLTIP_PATHFINDER`.
-  Both fill routines show and enable it whenever the organiser updates (pane base − 1); it is not one of the 34 unit
-  pads (units start at `_0001`).
-- It holds one unit of the pane's fleet whose fleet-slot record id (unit +0x1b0 → +8) equals the global loaded from
-  GameConstants `Pathfinder_Slot_Index` (0x140b278b0); a second such unit in the same fleet is ejected by the HUD
-  (an event, then 0x3a87c0). `Pathfinder_Slot_Index` is absent from vanilla FoC GameConstants and its default was not
-  read. **[L]**: what a "pathfinder slot" is in single player. Port leftover (p4uio).
+  Both fill routines show and enable it whenever the organiser updates (pane base − 1), **filled or not**: an empty
+  header pad draws its blank pathfinder texture. It is not one of the 34 unit pads (units start at `_0001`).
+- **The index.** `Pathfinder_Slot_Index` = GameConstants +0x120b0 (0x140b278b0, int, parser type 0x6). The GameConstants
+  defaults routine 0x2c91c0 sets it to **999**; the tag is in neither FoC nor EaW `GAMECONSTANTS.XML` (only
+  `Preferred_Pathfinder_Types`, an unrelated invasion list), so vanilla runs with 999. The code also handles −1 (then
+  every comparison below matches "no index"), but nothing sets −1.
+- **The unit field.** Unit +0x1b0 is a lazily allocated per-unit UI record (0x38 bytes, ctor 0x564ed0); +8 is the unit's
+  **GUI index**, −1 when there is no record. Setter 0x3a87c0(unit, idx) (−1 clears). The network-safe copy is the
+  event `SetGUIIndexEventClass` (ctor 0x5b1170, args 0x5b06b0(obj id, idx), sent via 0x3b01f0 on 0x140b2ed18); its
+  execute 0x5b12a0 sets record +0x32 := (idx == `Pathfinder_Slot_Index`), the sim-visible **"is pathfinder"** flag.
+  The only writer of 999 is the header-pad drop below, so **no unit starts as pathfinder**: in vanilla SP the pad is
+  empty until the player drops a unit on it [H for the code; M that no Lua/story path sets it, none found].
+- **Drop on the header pad** (0x3d63f0, a component drop callback, no direct callers): refused with a HUD message /
+  sound (0x2d5290) when the dragged unit's type has table-2 property 0x2c (0x370320, the "always deployed" property of
+  BATTLE_TRANSITIONS §split rule 1 [M]). Otherwise: if the pad's pane is the dragged unit's own pane (pad id + 1 has the
+  same parent) the fleet's current pathfinder is cleared (0x3ccdd0: every unit with GUI index 999 → −1, with the
+  event); from another pane the unit is first moved into this pane's fleet (0x3d0790). Then the unit gets GUI index
+  999 (event + 0x3a87c0). So the pad is a drop target that **appoints the fleet's single pathfinder**.
+- **Fill** (stack builder 0x3cac60): the first unit of the pane with GUI index 999 goes to the header pad (not into a
+  stack); any further one is reset to −1 (event, then 0x3a87c0). Drop on a pane (0x3d02e0): if the target fleet already
+  has a pathfinder, the dropped unit/fleet's pathfinder is cleared (0x3ccdd0) before the merge, so a merged fleet keeps
+  the target's.
+- **What it does in the sim.** Only the battle-start split 0x2bd500 reads +0x32: with the `flagship` argument (P14 of a
+  story `LINK_TACTICAL` space battle, sandbox only; BATTLE_TRANSITIONS step 5) the first pathfinder unit starts the
+  battle and the rest go to reserve ("Setting pathfinder for space battle"). Ordinary galactic space battles ignore it;
+  skirmish has no organiser. [M: flagship path seen used only by story scripts; tutorial / campaign XML comments name
+  `Reward_Param6` "Hero pathfinder name", which may be the same mechanism, not traced] **[L]**.
+- **Port:** units start at `q{n}_0001`; keep `_0000` apart, always shown (empty = blank texture) and enabled as a drop
+  target; a drop sets the unit's pathfinder flag (one per fleet, rejecting types with the always-deployed property),
+  the pad shows that unit. Until the port implements `LINK_TACTICAL` flagship battles the flag has no sim effect, so a
+  minimal port may draw the empty pad and ignore drops on it [M recommendation]. Port (p4uio t01): units start at
+  `q{n}_0001`; `q{n}_0000` is drawn in all three panes, empty and inert (no drag, click or drop) until flagship battles
+  exist.
 
 ### 7.5 Port mapping
 - ui: draw all three panes and tabs whenever the organiser shows; fill the panes by slot per §7.2 (the host feeds
