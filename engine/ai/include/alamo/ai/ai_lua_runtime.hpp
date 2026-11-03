@@ -24,6 +24,7 @@
 #include "alamo/ai/ai_definitions.hpp"
 #include "alamo/ai/ai_plans.hpp"
 #include "alamo/ai/perception_equations.hpp"
+#include "alamo/core/parallel.hpp"
 #include "alamo/lua/lua_vm.hpp"
 
 namespace alamo::ai {
@@ -40,9 +41,11 @@ public:
     };
     explicit PlanScriptRuntime(VmSetup setup) : setup_(std::move(setup)) {}
 
-    // Loads `paths` (already in load order). Appends to `library`.
+    // Loads `paths` (already in load order). Appends to `library`. OPT3 t09: the paths' load VMs are built through
+    // `pf` (one job per path, committed in path order: the result does not depend on it); `files` must allow
+    // concurrent reads (the VFS and DirectoryProvider do).
     size_t load(const FileProvider& files, const std::vector<std::string>& paths, const AiDefinitions& defs,
-                PlanLibrary& library, std::vector<std::string>* diag);
+                PlanLibrary& library, std::vector<std::string>* diag, const ParallelFor& pf = serial_for);
     // A VM of `plan` (pooled or fresh, Base_Definitions already run). nullptr on a script error.
     std::unique_ptr<lua::LuaVm> acquire(uint32_t plan, std::string* err = nullptr);
     // Back to the pool (or destroyed when not poolable / the pool is full).
@@ -86,6 +89,9 @@ private:
         mutable uint64_t digest = 0;           // pristine_digest() cache
         mutable bool digest_known = false;
     };
+    // make_vm without the count: safe on any thread while setup_ is (load's jobs).
+    std::unique_ptr<lua::LuaVm> build_vm(const std::string& name, const std::string& chunk, const std::string& chunk_name,
+                                         std::string* err) const;
     VmSetup setup_;
     std::vector<Entry> entries_;  // by plan index
     size_t created_ = 0;

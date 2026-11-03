@@ -45,6 +45,19 @@ struct LeafCacheKey {
 // The hit rule on its own (tests).
 bool leaf_cache_hit(int32_t lifetime_s, uint32_t stamp, uint32_t now);
 
+// OPT2 t03: while one lives, lookups on its thread count no hits. Batched goal values evaluate concurrently, and which of
+// two evaluations sharing a missing key hits depends on timing; the counter (saved, not hashed) counts the serial ones.
+class LeafCacheUncounted {
+public:
+    LeafCacheUncounted();
+    ~LeafCacheUncounted();
+    LeafCacheUncounted(const LeafCacheUncounted&) = delete;
+    LeafCacheUncounted& operator=(const LeafCacheUncounted&) = delete;
+
+private:
+    bool prev_;
+};
+
 class LeafCache {
 public:
     // True and `out` set when the key has a live entry for `now` under `lifetime_s`.

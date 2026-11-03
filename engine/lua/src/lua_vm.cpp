@@ -324,6 +324,7 @@ bool LuaVm::compile(std::string_view chunk, std::string_view chunk_name, std::st
 
 bool LuaVm::run(std::string_view chunk, std::string_view chunk_name, std::string* err) {
     check_owner();
+    const detail::ExecZone zone;
     lua_State* L = impl_->L;
     std::string_view data = chunk;
     const std::string name = "@" + std::string(chunk_name);
@@ -339,6 +340,7 @@ bool LuaVm::run(std::string_view chunk, std::string_view chunk_name, std::string
 
 bool LuaVm::require(std::string_view name, std::string* err) {
     check_owner();
+    const detail::ExecZone zone;
     lua_State* L = impl_->L;
     lua_pushstring(L, "require");
     lua_rawget(L, LUA_GLOBALSINDEX);
@@ -353,6 +355,7 @@ bool LuaVm::require(std::string_view name, std::string* err) {
 
 bool LuaVm::call(std::string_view global_function, std::string* err) {
     check_owner();
+    const detail::ExecZone zone;
     lua_State* L = impl_->L;
     lua_pushlstring(L, global_function.data(), global_function.size());
     lua_rawget(L, LUA_GLOBALSINDEX);
@@ -382,6 +385,7 @@ int32_t LuaVm::create_thread(std::string_view global_function) {
 
 size_t LuaVm::service_threads() {
     check_owner();
+    const detail::ExecZone zone;
     Impl& vm = *impl_;
     std::vector<int32_t> ids;
     ids.reserve(vm.threads.size());

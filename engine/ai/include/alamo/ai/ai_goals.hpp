@@ -20,6 +20,12 @@
 // higher desire). Desire / priority stored as (float), clamped to [0, 1e18]. A failed evaluation counts as
 // an evaluation with no proposal [port].
 //
+// BATCHED VALUES (OPT2 t03) [port, same results]: a mode whose candidate_pf() is set walks the slice first (the
+// walk reads only the proposable / skip / applies state, which evaluations, slot 10 and insert do not change),
+// then evaluates the candidates whose function prepare_evaluation() accepts on that ParallelFor (const, one output
+// per candidate), then runs every candidate's Learning terms, slot 10 and insert in visit order. A rejected
+// function (Script_ evaluators: Lua and synced draws) is evaluated in place in that serial loop, as before.
+//
 // COMMIT (0x6c8710) and RESOLVE (0x6c8970): exactly §1.6, with the hysteresis
 //   eff(d) = state > 0 && 0.01 < d < 40 ? d + (1 - (d - 0.01) / 39.99) * 1.6 : d.
 // [port] Every sort is std::stable_sort descending (the original's std::sort is insertion sort, i.e.
@@ -42,6 +48,7 @@
 #include "alamo/ai/ai_definitions.hpp"
 #include "alamo/ai/ai_learning.hpp"
 #include "alamo/ai/ai_templates.hpp"
+#include "alamo/core/parallel.hpp"
 
 namespace alamo {
 class ByteReader;
@@ -111,6 +118,20 @@ public:
     virtual void drop_potential_plan(Goal& g) = 0;     // proposals discarded / goal released
     virtual float elapsed_eta(const Goal& g) = 0;      // galactic: ETA estimate + elapsed (0x525200)
     virtual int32_t quota_players() = 0;               // players - active humans
+    // OPT2 t03, batched values (header comment). Default: none, every candidate is evaluated in place.
+    virtual const ParallelFor* candidate_pf() { return nullptr; }
+    // Serial, before the batch. True: `function` may be evaluated by evaluate_prepared() on any thread.
+    virtual bool prepare_evaluation(const std::string& function) {
+        (void)function;
+        return false;
+    }
+    // Concurrent const evaluation of a prepared function (the same value evaluate() gives at this point of the slice).
+    virtual bool evaluate_prepared(const std::string& function, int32_t target, double& out) const {
+        (void)function, (void)target, (void)out;
+        return false;
+    }
+    // Serial, in visit order, once per prepared candidate: the bookkeeping evaluate() does for itself.
+    virtual void evaluated(const std::string& function) { (void)function; }
 };
 
 struct GoalSystemConfig {
@@ -186,6 +207,14 @@ private:
     std::vector<int32_t> exclusion_;  // per goal type (+0x260)
     std::vector<uint32_t> block_list_;  // +0x2a0 (goal serials)
     bool blocked_ = false;              // = !block_list_.empty()
+    // OPT2 t03: one slice's candidates (visit order) and their batched values; scratch, rebuilt every slice
+    struct Candidate {
+        uint32_t source = 0;
+        int32_t target = -1;
+        uint8_t prepared = 0, ok = 0;
+        double value = 0.0;
+    };
+    std::vector<Candidate> batch_;
     // cursor (+0x178..+0x18c)
     uint32_t cursor_source_ = 0, cursor_target_ = 0;
     uint32_t quota_ = 0;

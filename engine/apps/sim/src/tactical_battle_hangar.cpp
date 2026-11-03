@@ -130,7 +130,7 @@ void TacticalBattle::hg_add_types() {
             if (!next.empty()) use(types.resolve_name(next));
         }
         if (types_used_.size() == before) break;
-        tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+        tables_extend();
     }
 }
 

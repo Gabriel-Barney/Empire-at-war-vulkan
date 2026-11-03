@@ -137,6 +137,11 @@ public:
     // model_info(type, false, true), the stamp extents) on `pf`, one job per type, so a battle's first tick does not read
     // the files one type after another. Same entries as the lazy loads (same files -> same answer): only the time moves.
     void preload_models(std::span<const uint32_t> types, bool space, const ParallelFor& pf) const;
+    // OPT3 t09: the general form. `what` = kPreload* bits: avoid_model(type, space), model_info(type, space, false) (the
+    // bones build_battle reads; extend_battle preloads all three), model_info(type, space, true) (the stamp extents). One
+    // job per model file, which is parsed once for every entry that reads it.
+    static constexpr uint32_t kPreloadAvoid = 1, kPreloadBones = 2, kPreloadExtents = 4;
+    void preload(std::span<const uint32_t> types, bool space, uint32_t what, const ParallelFor& pf) const;
     // S8 t06 B4 (LOB_SOLVER §5.1, WeaponBehavior data pack init 0x54cb00): the fire bones <Muzzle_Bone_Name>_00, _01, ...
     // (default MUZZLEA) of the type's model for the mode (Space_ / Land_Model_Name, no fallback) until a name is missing,
     // as bind-pose offsets in the combat unit-local frame (x forward, y left, z up) x Scale_Factor. False without model
@@ -172,6 +177,13 @@ public:
     // from the unit model falls back to the attachment bone; Model_To_Attach bones are not read]. Without model data the
     // tables equal build_battle's.
     BattleTables build_battle(const std::vector<uint32_t>& unit_types, std::vector<uint32_t>& out_unit_index, bool space) const;
+    // OPT3 t09: the same build in steps, for the battle setup, which appends types to its list several times. The build is
+    // a left fold over the list, so extend_battle() builds only the entries appended since its last call onto `out`
+    // (bound by begin_battle, which must outlive the build) and appends their out_unit_index entries: afterwards `out`
+    // and out_unit_index equal build_battle(unit_types, out_unit_index, space). `unit_types` may only grow at the end.
+    struct BattleBuild;
+    std::unique_ptr<BattleBuild> begin_battle(BattleTables& out, bool space) const;
+    void extend_battle(BattleBuild& b, const std::vector<uint32_t>& unit_types, std::vector<uint32_t>& out_unit_index) const;
 
 private:
     using Tags = std::vector<std::pair<std::string, std::string>>;  // (upper-cased tag, trimmed text)
@@ -180,20 +192,33 @@ private:
         BattleTables* full = nullptr;  // null: plain build()
         std::map<std::string, int32_t> hp_index;
         std::map<uint32_t, int32_t> proj_index;
+        std::map<uint32_t, uint32_t> unit_index;  // type -> UnitDesc index (a repeated type shares it)
         int32_t model_mode = -1;  // battle host: -1 no model data, 0 land, 1 space
     };
+
+public:
+    struct BattleBuild {
+        BuildState state;
+        size_t built = 0;          // unit_types entries built so far
+        ParallelFor pf = serial_for;  // preload of the appended types
+    };
+
+private:
     int32_t hardpoint_on_model(int32_t base, uint32_t unit_type, BuildState& s) const;  // battle host
     void load_hardpoints(const FileProvider& files, std::vector<std::string>* diag);
     void load_priority_sets(const FileProvider& files, std::vector<std::string>* diag);
     tactical::combat::UnitDesc unit_desc(uint32_t t, BuildState& s) const;
     int32_t projectile(uint32_t t, BuildState& s) const;
     int32_t hardpoint(std::string_view name, BuildState& s) const;
-    void build_units(const std::vector<uint32_t>& unit_types, std::vector<uint32_t>& out_unit_index, BuildState& s) const;
+    // Builds unit_types[first..] onto `s`, appending to out_unit_index.
+    void build_units(const std::vector<uint32_t>& unit_types, size_t first, std::vector<uint32_t>& out_unit_index, BuildState& s) const;
     void s9_unit_fields(uint32_t t, tactical::combat::UnitDesc& u, BuildState& s) const;
     tactical::abilities::AbilityObjectDesc ability_desc(uint32_t t, BuildState& s) const;
     // The XML element of raw-store field `f` (through the source document), null node if not found.
     bool field_node(uint32_t f, data::XmlNode& out) const;
     int32_t type_or_none(std::string_view name) const;
+    std::string avoid_path(uint32_t type, bool space) const;  // OPT3 t09: the model file an entry reads, "" none
+    std::string info_path(uint32_t type, bool space, bool fallback) const;
 
     const objects::GameObjectTypes* types_;
     tactical::combat::DamageArmorTable damage_;

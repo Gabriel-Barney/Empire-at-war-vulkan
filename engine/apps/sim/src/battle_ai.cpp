@@ -74,6 +74,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.background = jobs::make_background_start(host.jobs());  // OPT2 t02: background path recomputes
     cfg.path_latency = setup.path_latency;
     cfg.stagger = setup.stagger;  // OPT2 t01
+    cfg.pf = host.parallel_for();  // OPT2 t03: goal candidates' perception values
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
     use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();
@@ -598,16 +599,27 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     for (const TacticalBattle::PadState& ps : b_->pads_)
         if (ps.built != objects::kNoObjectId) pad_built.push_back(ps.built);
     std::sort(pad_built.begin(), pad_built.end());
-    w.objects.clear();
-    out.clear();
-    std::map<objects::ObjectId, int32_t> stamps;
+    // OPT2 t03: the listed objects (store order) first; their entries are built on the job system (per-index outputs, every
+    // read below is const); the UNIT_AI stamp draws then run serially in store order.
+    std::vector<objects::ObjectHandle> listed;
     for (const objects::ObjectHandle h : st.all_objects()) {
         if (!st.active(h) || st.has_behavior(h, objects::beh::Particle)) continue;
+        const TacticalBattle::Unit* u = b_->unit_by_id(st.id(h));
+        if (u && (!u->alive || u->retreated)) continue;
+        listed.push_back(h);
+    }
+    w.objects.clear();
+    out.clear();
+    w.objects.resize(listed.size());
+    out.resize(listed.size());
+    static const objects::BehaviorTypeId kDummyStarBase = objects::behavior_type_id("DUMMY_STAR_BASE");
+    static const objects::BehaviorTypeId kDummyGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
+    const auto build = [&](size_t i) {
+        const objects::ObjectHandle h = listed[i];
         const objects::ObjectId id = st.id(h);
         const auto type = static_cast<int32_t>(st.type(h));
         const auto ti = st.type(h);
         const TacticalBattle::Unit* u = b_->unit_by_id(id);
-        if (u && (!u->alive || u->retreated)) continue;
         at::PerceptionObject o;
         o.id = id;
         o.owner = st.owner(h);
@@ -670,13 +682,11 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         // t41: Variable_Self.BaseLevel in space (AI_TACTICAL_PERCEPTION, Player tokens). Unset, every station read as level 0, so a
         // defender holding one passed the "BaseLevel == 0" retreat test of the shipped Want_To_Retreat_From_Space.
         // [inferred] the level (0x397540) = the type's Base_Level: the battle does not lower it while the station lives.
-        static const objects::BehaviorTypeId kDummyStarBase = objects::behavior_type_id("DUMMY_STAR_BASE");
         if (kDummyStarBase != objects::kNoBehavior && st.has_behavior(h, kDummyStarBase)) {
             o.dummy_star_base = true;
             o.starbase_level = types.get_int(ti, "Base_Level");
         }
         // t48: Variable_Self.BaseLevel in land skirmish: the count of P's alive objects with this behaviour.
-        static const objects::BehaviorTypeId kDummyGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
         // skai: TacticalBuiltStructureCount's free-store table of built structures (0x4d3630) [M]: the finished structures on
         // build pads (pre-built skirmish base included). Unset, Num_Refineries stayed 0 and the land skirmish AI never bought units.
@@ -756,19 +766,25 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
             }
         }
         a.damage_tracking = o.has_damage_tracking || st.has_behavior(h, kDamageTracking);
-        // UnitAI data pack (A1_READINGS §14): two synced draws per UNIT_AI object, F + Get_Int(0, 300) - 300 then
-        // F + Get_Int(0, 150) - 150. [port] drawn when fill() first lists the object (store order, after the battle tick
-        // of its creation frame), not inside the object's construction.
-        if (st.has_behavior(h, kUnitAi)) {
-            const auto it = unit_ai_stamps_.find(id);
-            const int32_t stamp = it != unit_ai_stamps_.end()
-                                      ? it->second
-                                      : at::draw_unit_ai_stamps(host_->random().synced(), b_->frame_).reprojection_check;
-            stamps.emplace(id, stamp);
-            a.reprojection_stamp = stamp;
-        }
-        w.objects.push_back(std::move(o));
-        out.push_back(std::move(a));
+        w.objects[i] = std::move(o);
+        out[i] = std::move(a);
+    };
+    host_->parallel_for()(static_cast<uint32_t>(listed.size()), 64, [&build](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) build(i);
+    });
+    // UnitAI data pack (A1_READINGS §14): two synced draws per UNIT_AI object, F + Get_Int(0, 300) - 300 then
+    // F + Get_Int(0, 150) - 150. [port] drawn when fill() first lists the object (store order, after the battle tick
+    // of its creation frame), not inside the object's construction.
+    std::map<objects::ObjectId, int32_t> stamps;
+    for (size_t i = 0; i < listed.size(); ++i) {
+        if (!st.has_behavior(listed[i], kUnitAi)) continue;
+        const objects::ObjectId id = w.objects[i].id;
+        const auto it = unit_ai_stamps_.find(id);
+        const int32_t stamp = it != unit_ai_stamps_.end()
+                                  ? it->second
+                                  : at::draw_unit_ai_stamps(host_->random().synced(), b_->frame_).reprojection_check;
+        stamps.emplace(id, stamp);
+        out[i].reprojection_stamp = stamp;
     }
     unit_ai_stamps_ = std::move(stamps);  // objects no longer listed drop out
 }

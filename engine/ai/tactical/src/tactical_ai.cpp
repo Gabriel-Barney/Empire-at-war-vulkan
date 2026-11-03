@@ -2,6 +2,7 @@
 // bridge, task forces, blocking statuses (see tactical_ai.hpp). [port] / [L] / [M] mark behaviour the RE docs
 // do not fix.
 #include "alamo/ai/tactical/tactical_ai.hpp"
+#include "alamo/core/profile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -221,6 +222,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     TacticalPerception perc;
     ZoneGraph zones;
     std::map<std::string, uint32_t> eq_index;
+    std::vector<uint8_t> eq_script_free;  // OPT2 t03: per equation, 0 not known yet, 1 being checked, 2 Script_-free, 3 not
 
     // Lua
     lua::LuaPlayerWorld world;
@@ -296,24 +298,60 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         return -1;
     }
     int32_t opponent_of(int32_t player) const;
-    bool evaluate(int32_t self, const std::string& fn, int32_t handle, double& out) {
-        const uint32_t e = equation(fn);
-        if (e == kUnresolved) {
-            ++stats["unknown equation " + fn];
-            return false;
-        }
+    EvalContext eval_context(int32_t self, int32_t handle) const {
         EvalContext c;
         c.self = self;
         c.target = handle;
         c.location = handle;
         c.enemy = opponent_of(self);
         c.human = first_human();
-        c.rng = &rng.synced();  // Script_ evaluators only
         // A2 tactical: the '#' reseed inputs (AI_GALACTIC_3 §7.3): session seed + the target's name CRC.
         c.game_seed = cfg.game_seed;
         if (const auto it = handle_name_crc.find(handle); it != handle_name_crc.end()) c.target_name_crc = it->second;
+        return c;
+    }
+    bool evaluate(int32_t self, const std::string& fn, int32_t handle, double& out) {
+        const uint32_t e = equation(fn);
+        if (e == kUnresolved) {
+            ++stats["unknown equation " + fn];
+            return false;
+        }
+        EvalContext c = eval_context(self, handle);
+        c.rng = &rng.synced();  // Script_ evaluators only
         const EvalResult r = perc.evaluate(eqs, e, c, w);
         ++eval_count;
+        if (!r.ok) return false;
+        out = r.value;
+        return true;
+    }
+    // OPT2 t03: an equation with no Script_ reference (itself or through its Function_ references) evaluates const and
+    // re-entrantly (perception_equations.hpp, tactical_perception.hpp), so goal candidates may evaluate it on any thread.
+    // Serial (sim thread): resolves `fn` and memoises the answer per equation.
+    bool concurrent_equation(const std::string& fn) {
+        const uint32_t e = equation(fn);
+        if (e == kUnresolved) return false;  // evaluate() counts it
+        if (eq_script_free.size() != eqs.size()) eq_script_free.assign(eqs.size(), 0);
+        return script_free(e);
+    }
+    bool script_free(uint32_t e) {
+        uint8_t& state = eq_script_free[e];
+        if (state != 0) return state != 3;  // 1: a Function_ cycle (fails at evaluation, no Script_ on this path)
+        state = 1;
+        bool pure = true;
+        for (const ExprNode& n : eqs.equation(e).expr.nodes) {
+            if (n.op == Op::Script) pure = false;
+            else if (n.op == Op::Function && n.ref != kUnresolved && n.ref < eqs.size() && !script_free(n.ref)) pure = false;
+            if (!pure) break;
+        }
+        eq_script_free[e] = pure ? 2 : 3;
+        return pure;
+    }
+    // The evaluate() of a function concurrent_equation() accepted, without its bookkeeping (counted serially).
+    bool evaluate_concurrent(int32_t self, const std::string& fn, int32_t handle, double& out) const {
+        const auto it = eq_index.find(ai_upper_copy(ai_trim(fn)));
+        if (it == eq_index.end() || it->second == kUnresolved) return false;
+        const LeafCacheUncounted uncounted;
+        const EvalResult r = perc.evaluate(eqs, it->second, eval_context(self, handle), w);  // rng unset: no Script_
         if (!r.ok) return false;
         out = r.value;
         return true;
@@ -899,10 +937,19 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         if (!s.t.has_reachability()) return false;
         return flood_set(s.t.zone, w->defs.goals[goal_type].reachability).empty();
     }
-    bool evaluate(const std::string& function, int32_t target, double& out) override {
-        const int32_t h = target >= 0 && static_cast<size_t>(target) < slots.size() ? slots[static_cast<size_t>(target)].handle : -1;
-        return w->evaluate(player, function, h, out);
+    int32_t target_handle(int32_t target) const {
+        return target >= 0 && static_cast<size_t>(target) < slots.size() ? slots[static_cast<size_t>(target)].handle : -1;
     }
+    bool evaluate(const std::string& function, int32_t target, double& out) override {
+        return w->evaluate(player, function, target_handle(target), out);
+    }
+    // OPT2 t03: batched goal values (ai_goals.hpp) on the host's job system.
+    const ParallelFor* candidate_pf() override { return &w->cfg.pf; }
+    bool prepare_evaluation(const std::string& function) override { return w->concurrent_equation(function); }
+    bool evaluate_prepared(const std::string& function, int32_t target, double& out) const override {
+        return w->evaluate_concurrent(player, function, target_handle(target), out);
+    }
+    void evaluated(const std::string&) override { ++w->eval_count; }
     bool accept(Goal& g) override {
         // Slot 10 (0x6b8850, land and space): Find_Plan_For_Goal only - one synced draw (§4.4).
         if (g.source < ctx.goals.sources().size()) ++w->stats["~ proposed " + ctx.goals.sources()[g.source].function];
@@ -3094,7 +3141,7 @@ lua::LuaPlayerWorld& TacticalAiWorld::player_world() { return impl_->world; }
 bool TacticalAiWorld::load_plans(std::vector<std::string>* diagnostics) {
     Impl& w = *impl_;
     if (!w.files) return false;
-    return w.runtime->load(*w.files, w.cfg.plan_files, w.defs, w.library, diagnostics) > 0;
+    return w.runtime->load(*w.files, w.cfg.plan_files, w.defs, w.library, diagnostics, w.cfg.lua_gc_pf) > 0;
 }
 
 bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
@@ -3202,16 +3249,24 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
         lua::collect_scheduled(vms, static_cast<uint64_t>(now), w.cfg.lua_gc_pf);
     }
     {
-        ALAMO_PROFILE_SCOPE("ai.tac.refresh");  // OPT2 t01: perception snapshot, object signals, UNIT_AI service
+        ALAMO_PROFILE_SCOPE("tac.ai.perception");  // OPT2 t08: snapshot, threat grid, signals
         w.refresh();
+        w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
+        w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
+        w.reinforcements_unloaded(w.host.reinforcements_unloaded());  // a1j t01: signal 0x19 (land landings)
+        w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
     }
-    w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
-    w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
-    w.reinforcements_unloaded(w.host.reinforcements_unloaded());  // a1j t01: signal 0x19 (land landings)
-    w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
     const bool enabled = w.gate.enabled(ai_mode_of(w.cfg.mode));
+    // OPT2 t08: one zone per AI player's service (goals, plans, free store; their Lua is also in lua.exec).
+    static const profile::ZoneId kPlayerZone[] = {
+        profile::register_zone("tac.ai.p0"), profile::register_zone("tac.ai.p1"), profile::register_zone("tac.ai.p2"),
+        profile::register_zone("tac.ai.p3"), profile::register_zone("tac.ai.p4"), profile::register_zone("tac.ai.p5"),
+        profile::register_zone("tac.ai.p6"), profile::register_zone("tac.ai.p7"), profile::register_zone("tac.ai.p8+")};
     for (auto& pa : w.ai)
-        if (pa) pa->ctx.service(now, enabled, false);
+        if (pa) {
+            const profile::Scope zone(kPlayerZone[std::clamp<int32_t>(pa->player, 0, 8)]);
+            pa->ctx.service(now, enabled, false);
+        }
     // The pipeline posts a diagnostic CommandResult per direct order and nothing subscribes on this bus: drop them here
     // or the queue grows for the whole battle. Sim code never reads it (events.hpp), so no CRC or saved state depends on it.
     w.pipeline.events().deliver();

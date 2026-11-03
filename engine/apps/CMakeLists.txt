@@ -184,36 +184,23 @@ if(_alamo_sim)
              COMMAND alamo_headless --skirmish-ai foc-land-campaign --ticks 3600 --workers 4 --quiet
                      --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_land_campaign_golden.crc)
     set_tests_properties(alamo_headless_skirmish_ai_foc_land alamo_headless_skirmish_ai_foc_land_campaign PROPERTIES TIMEOUT 1200)
-    # S10 land outcome, t50: the land skirmish played on (0/1/4/N workers identical); skipped (exit 0) without ALAMO_FOC_DATA. What it asserts
+    # S10 land outcome, t50: the land skirmish played on (0/1/4/16/N workers identical); skipped (exit 0) without ALAMO_FOC_DATA. What it asserts
     # is structure, not a seed's luck (--expect-skirmish-base): both sides start with their pre-built base (Command Center + Barracks of both
     # slots), the shipped skirmish AI issues orders, shots are fired, 0 Lua errors. Whether the skirmish AI takes the enemy base inside the
     # 15-minute limit is not asserted: it does not (the Destroy_Structure plan reaches the base at ~frame 11000 and fails; open item).
-    # One ctest entry per worker count so they run side by side under ctest -j: the 0-worker run writes the CRC log, the others compare against
-    # it (the --check-workers counts: jobs::determinism_worker_counts, N = hardware threads - 1).
-    set(_land_outcome_crc ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_w0.crc)
-    add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome
-             COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --workers 0 --quiet --expect-skirmish-base
-                     --crc-out ${_land_outcome_crc})
-    set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome PROPERTIES TIMEOUT 1800
-                         FIXTURES_SETUP alamo_land_outcome_w0)
-    cmake_host_system_information(RESULT _logical_cores QUERY NUMBER_OF_LOGICAL_CORES)
-    math(EXPR _default_workers "${_logical_cores} - 1")
-    set(_land_outcome_workers 1 4 ${_default_workers})
-    list(REMOVE_DUPLICATES _land_outcome_workers)
-    list(REMOVE_ITEM _land_outcome_workers 0)
-    foreach(_w IN LISTS _land_outcome_workers)
-      add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_w${_w}
-               COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --workers ${_w} --quiet
-                       --golden ${_land_outcome_crc})
-      set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_w${_w} PROPERTIES TIMEOUT 1800
-                           FIXTURES_REQUIRED alamo_land_outcome_w0)
-    endforeach()
+    # OPT3 t08: the worker-count check (alamo_add_worker_count_check, docs/PHASE4.md "Worker-count check"): the 0-worker entry writes
+    # the CRC log and checks the base (--expect-skirmish-base), _w1 / _w4 / _w16 / _w<N> compare against it.
+    alamo_add_worker_count_check(alamo_headless_skirmish_ai_foc_land_outcome
+        COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --quiet
+        SETUP_ARGS --expect-skirmish-base
+        TIMEOUT 1800 SLOW)
     # OPT1: the tick profiler is wall-clock and write-only; a run with --profile must give the same CRCs as the 0-worker run.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_outcome_profiled
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 7000 --workers 4 --quiet --profile
-                     --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt --golden ${_land_outcome_crc})
+                     --profile-out ${CMAKE_CURRENT_BINARY_DIR}/land_outcome_profile.txt
+                     --golden ${alamo_headless_skirmish_ai_foc_land_outcome_CRC})
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_outcome_profiled PROPERTIES TIMEOUT 1800
-                         FIXTURES_REQUIRED alamo_land_outcome_w0)
+                         FIXTURES_REQUIRED alamo_headless_skirmish_ai_foc_land_outcome_w0)
     # The campaign-rules land invasion (foc-land-campaign; before skai this was foc-land) must END with a winner before the frame
     # limit. a1g (2026-11-02): after the free-store reservations (§28) and the land Reinforce drop layout (§30.7, TACTICAL_GAPS
     # §4.2.1) no seed 1-12 ended before the 14400-frame cap. a1h t01: with the M1 WeaponBehavior fix, passive / superseded guard

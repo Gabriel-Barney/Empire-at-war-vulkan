@@ -157,7 +157,7 @@ void TacticalBattle::bt_add_pad_types(const terrain::MapData& map) {
             const objects::TypeIndex ft = types.resolve_name(types.get_string(uc, "Tactical_Buildable_Constructed"));
             if (ft != objects::kNone && ft < types.size()) use(ft);
         }
-    if (types_used_.size() != before) tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+    if (types_used_.size() != before) tables_extend();
 }
 
 // ---- pad objects as battle units -----------------------------------------------------------------------------------
@@ -749,7 +749,7 @@ void TacticalBattle::bt_map_prepass() {
         kept.push_back(std::move(pl));
     }
     map_.objects = std::move(kept);
-    if (types_used_.size() != before) tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+    if (types_used_.size() != before) tables_extend();
 }
 
 void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
