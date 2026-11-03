@@ -6,11 +6,15 @@
 //   * the same multi-VM run gives identical script results, heap accounting and save images serially and on a job
 //     system with 0 / 1 / 4 / 16 workers (rule 3);
 //   * a run saved and loaded mid-way continues exactly like the uninterrupted run (the slot comes from saved state);
-//   * no scheduled collection while a Lua call is in progress (gc_busy).
+//   * no scheduled collection while a Lua call is in progress (gc_busy);
+//   * OPT3 t11 teardown (destroy_detached): every VM's pending finalizer runs once, on the calling thread, also when a
+//     finalizer creates new finalizable userdata (freed unfinalized, as lua_close does); the frees run on the workers.
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
@@ -288,6 +292,49 @@ static void test_busy() {
     g_busy_vm = nullptr;
 }
 
+static std::atomic<int> g_close_calls{0}, g_close_foreign{0};
+static std::thread::id g_close_owner;
+static int l_close_probe(lua_State*) {
+    ++g_close_calls;
+    if (std::this_thread::get_id() != g_close_owner) ++g_close_foreign;
+    return 0;
+}
+
+static void test_destroy_detached() {
+    // kScript's sentinel re-arms a new finalizable proxy from inside its finalizer; Closed() is called by each.
+    g_close_owner = std::this_thread::get_id();
+    auto build = [](uint32_t count) {
+        std::vector<std::unique_ptr<LuaVm>> vms;
+        for (uint32_t i = 0; i < count; ++i) {
+            vms.push_back(make_vm(i));
+            lua_State* L = vms.back()->state();
+            lua_pushstring(L, "Closed");
+            lua_pushcfunction(L, l_close_probe);
+            lua_rawset(L, LUA_GLOBALSINDEX);
+            CHECK(run(*vms.back(), "local p = newproxy(true) getmetatable(p).__gc = function() Closed() end keep_p = p") == "");
+        }
+        vms.push_back(nullptr);  // skipped
+        return vms;
+    };
+    g_close_calls = 0;
+    g_close_foreign = 0;
+    auto vms = build(6);
+    destroy_detached(vms, serial_for);
+    CHECK(vms.empty());
+    CHECK(g_close_calls == 6 && g_close_foreign == 0);
+#ifdef ALAMO_LUA_HAVE_JOBS
+    for (const int32_t workers : {1, 4}) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        g_close_calls = 0;
+        g_close_foreign = 0;
+        auto more = build(12);
+        destroy_detached(more, jobs::make_parallel_for(js));
+        CHECK(more.empty());
+        CHECK(g_close_calls == 12 && g_close_foreign == 0);
+    }
+#endif
+}
+
 int main() {
     log::set_min_level(log::Level::Error);
     test_due();
@@ -295,6 +342,7 @@ int main() {
     test_workers();
     test_save_load();
     test_busy();
+    test_destroy_detached();
     if (g_fail) {
         std::printf("alamo_lua_gc_tests: %d failure(s)\n", g_fail);
         return 1;

@@ -404,6 +404,7 @@ private:
     // --- A1 stage 2 tactical AI hookup (campaign_battles_ai.cpp) ---
     std::unique_ptr<BattleAi> ai_;
     std::vector<std::string> ai_log_;
+    std::function<void()> lua_close_wait_;  // OPT3 t11: the last battle's VM-freeing job (TacticalAiWorld::release_scripts)
     void ai_begin(SimHost& host, GameMode& mode);
     void ai_update();
     void ai_end();

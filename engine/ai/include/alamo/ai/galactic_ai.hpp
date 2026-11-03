@@ -35,6 +35,7 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/ai/ai_definitions.hpp"
 #include "alamo/ai/ai_path_finder.hpp"
+#include "alamo/ai/latency_job.hpp"
 #include "alamo/ai/ai_plans.hpp"
 #include "alamo/ai/galactic_ai_tokens.hpp"
 #include "alamo/commands/command.hpp"
@@ -88,6 +89,13 @@ struct GalacticAiConfig {
     const galactic::ContrastTable* contrast = nullptr;
     // Fan-out for the per-AI all-pairs recompute (AiPathFinder); any value gives identical matrices.
     ParallelFor path_pf = serial_for;
+    // OPT2 t02: the path finders' cadence recomputes run on `background` (latency_job.hpp; empty = inline at the kick,
+    // same results) and are applied `path_latency` galactic frames after the kick (0 = the original timing).
+    uint32_t path_latency = galactic::kDefaultAllPairsLatency;
+    BackgroundStart background;
+    // OPT2 t01: each AI player's Perception / Goal / Planning / Execution / Learning clocks start on a fixed per-player
+    // phase (AiContext::set_stagger). false = every player on the same frames (the original timing).
+    bool stagger = true;
     // OPT2 t04: fan-out for the per-frame scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); any
     // value gives identical results.
     ParallelFor lua_gc_pf = serial_for;
@@ -162,6 +170,8 @@ public:
     bool is_ai_player(int32_t player) const;
     const AiContext* context(int32_t player) const;
     size_t running_plans() const;
+    // OPT2 t02: background path recomputes in flight (save tests: --save-when scheduled).
+    size_t background_jobs_in_flight() const;
     size_t running_plans(int32_t player) const;
     const std::vector<AiDecision>& decision_log() const;
     std::vector<std::string> lua_errors() const;  // plan / free-store script errors (since start)

@@ -116,9 +116,9 @@ bool land_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t t, 
 }
 
 uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map, const objects::GameObjectTypes& types,
-                             const MapStampHooks* hooks) {
+                             const MapStampHooks* hooks, const ParallelFor& pf) {
     const auto idx = crc_index(types);
-    uint32_t n = 0;
+    std::vector<std::pair<ObjectId, ObstacleFootprint>> list;
     for (size_t i = 0; i < map.objects.size(); ++i) {
         const terrain::ObjectPlacement& o = map.objects[i];
         auto it = idx.find(o.type_crc);
@@ -127,8 +127,11 @@ uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map,
         if (!types.has_behavior(t, objects::BehaviorSet::Union, kLandObstacle)) continue;
         ObstacleFootprint fp;
         if (!land_obstacle_footprint(types, t, {o.position[0], o.position[1]}, o.rotation_deg[2], o.position[2], hooks, fp)) continue;
-        if (grid.stamp(map_stamp_id(i), fp) > 0) ++n;
+        list.emplace_back(map_stamp_id(i), std::move(fp));
     }
+    uint32_t n = 0;
+    for (const uint32_t cells : grid.stamp_all(list, pf))
+        if (cells > 0) ++n;
     return n;
 }
 

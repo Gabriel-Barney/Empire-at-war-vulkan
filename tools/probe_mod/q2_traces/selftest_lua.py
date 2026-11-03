@@ -128,6 +128,42 @@ print("CANARY_CALLS " .. table.getn(Q2S.canary) .. " " .. tostring(Q2S.canary[1]
 Q2S_Dump()
 '''
 
+# One plan copy (whole file: the shipped part and the probe block). The chunk runs twice as a pooled script state may
+# run it again: the wrap must not stack. The thread produces one unit; Conquer_Pirate also gets a production failure.
+PLAN = r'''
+function ScriptExit() Q2S.exits = (Q2S.exits or 0) + 1 end
+function BlockOnCommand(c) Q2S.t = Q2S.t + 20; Q2S.frame = Q2S.frame + 600 end
+function Q2S_Named(n) return { Get_Name = function() return n end } end
+Q2S.units = {}
+Q2S.produced = 0
+Q2S_Force = {
+	Set_As_Goal_System_Removable = function() end,
+	Produce_Force = function()
+		Q2S.produced = Q2S.produced + 1
+		table.insert(Q2S.units, { Get_Type = function() return Q2S_Named("CORELLIAN_GUNBOAT") end })
+		return "cmd"
+	end,
+	Set_Plan_Result = function(r) Q2S.result = r end,
+	Are_All_Units_On_Free_Store = function() return false end,
+	Get_Unit_Table = function() return Q2S.units end }
+ReserveForce = Q2S_Force
+MainForce = Q2S_Force
+PlayerObject = Q2S_Players.Rebel
+Target = { Get_Game_Object = function() return { Get_Type = function() return Q2S_Named("Kashyyyk") end } end }
+dofile(Q2S_SCRIPT)
+Definitions()
+dofile(Q2S_SCRIPT)
+Definitions()
+getfenv(0)[Q2S_TF .. "_Thread"]()
+if Q2S_TF == "MainForce" then MainForce_Production_Failed(MainForce, Q2S_Named("PIRATE_FIGHTER")) end
+print("RESULT " .. tostring(Q2S.result) .. " PRODUCED " .. Q2S.produced .. " EXITS " .. tostring(Q2S.exits or 0) ..
+	" CATEGORY " .. tostring(Category))
+Q2S_Dump()
+'''
+PLANS = [('BuildSpaceForcesPlan.lua', 'Build_Space_Forces', 'ReserveForce'),
+         ('BuildGroundForcesPlan.lua', 'Build_Ground_Forces', 'ReserveForce'),
+         ('ConquerPiratePlan.lua', 'Conquer_Pirate', 'MainForce')]
+
 
 def check(cond, what):
     print(('  ok    ' if cond else '  FAIL  ') + what)
@@ -271,6 +307,29 @@ def main():
     check(any(ln == 'ORIG 1 1 1 1 2 THREADS 1' for ln in lines), 'scoring: shipped handlers called, GameService every 10th')
     if found is not None:
         check(found == set(raw), 'scoring: live memory scan finds exactly the printed records')
+
+    for fname, plan, tf in PLANS:
+        lines, found = run_harness(lua, 'plan_' + plan, os.path.join(MOD, 'AI', fname),
+                                   'Q2S_TF = %s\n' % lua_str(tf) + PLAN)
+        recs, raw = records_of(lines)
+        kinds = {}
+        for r in recs:
+            kinds[r[3]] = kinds.get(r[3], 0) + 1
+        pirate = tf == 'MainForce'
+        check(len(recs) == len(raw) and recs and all(r[0] == 'P' for r in recs),
+              '%s: records parse, src P (%d)' % (plan, len(recs)))
+        check(kinds.get('LOAD') == 1 and kinds.get('PSTART') == 1 and kinds.get('PDONE') == 1 and
+              kinds.get('PFAIL', 0) == (1 if pirate else 0), '%s: LOAD, one start and end, failures %s' % (plan, kinds))
+        check(any(ln == 'RESULT true PRODUCED 1 EXITS %d CATEGORY %s' % (1 if pirate else 0, plan) for ln in lines),
+              '%s: shipped thread and handlers ran once (%s)' % (plan, [ln for ln in lines if ln.startswith('RESULT')]))
+        done = [r[4] for r in recs if r[3] == 'PDONE']
+        check(done and ('plan=%s player=REBEL target=Kashyyyk' % plan) in done[0] and
+              done[0].endswith('units=1 CORELLIAN_GUNBOAT'), '%s: PDONE text %s' % (plan, done))
+        if pirate:
+            fail = [r[4] for r in recs if r[3] == 'PFAIL']
+            check(fail and 'args=2 ? PIRATE_FIGHTER' in fail[0], '%s: PFAIL names the failed type %s' % (plan, fail))
+        if found is not None:
+            check(found == set(raw), '%s: live memory scan finds exactly the printed records' % plan)
 
     print('SELFTEST_LUA ' + ('FAILED (%d)' % len(FAILS) if FAILS else 'OK'))
     return 1 if FAILS else 0

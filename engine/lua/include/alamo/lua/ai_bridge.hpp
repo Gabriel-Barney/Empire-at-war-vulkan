@@ -92,7 +92,9 @@ public:
     virtual void tf_release_unit(int32_t tf, objects::ObjectHandle unit) = 0;
     virtual std::vector<objects::ObjectHandle> tf_units(int32_t tf) = 0;
     virtual std::string tf_goal_type_name(int32_t tf) = 0;
-    virtual bool tf_collect_free_units(int32_t tf) = 0;
+    // Collect_All_Free_Units([category]) (0x5fc040): `category_mask` = the GameObjectCategoryType bits of the argument,
+    // ~0 without one (a1k t01, A1_READINGS §39.3). The host takes the free units whose type matches.
+    virtual bool tf_collect_free_units(int32_t tf, uint64_t category_mask) = 0;
 
     // ---- blocking statuses ----
     virtual bool status_finished(int32_t status) = 0;
