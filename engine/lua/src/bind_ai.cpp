@@ -11,6 +11,7 @@
 //   * GalacticFreeStoreClass.Get_Object_Count / Is_Object_On_Free_Store: the table lists them on
 //     AIFreeStoreClass only and the registry has no AIFreeStoreClass parent for GalacticFreeStoreClass.
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -317,9 +318,21 @@ int m_tf_goal_type_name(Call& c) {
     lua_pushlstring(c.L, s.data(), s.size());
     return 1;
 }
+// Collect_All_Free_Units([category]) (0x5fc040, A1_READINGS §39.3): 0 or 1 argument, a GameObjectCategoryType mask
+// string (default every bit); an unknown category collects nothing. No result.
 int m_tf_collect_all_free_units(Call& c) {
-    AiScriptHost* h = host_of(c.L);
-    return push_bool(c, h && h->tf_collect_free_units(c.self->id));
+    if (c.nargs > 1)
+        return c.fail("TaskForceClass::Collect_All_Free_Units -- invalid number of parameters.  Expected 0 or 1, got %d.", c.nargs);
+    uint64_t mask = ~uint64_t{0};
+    if (c.nargs == 1) {
+        if (!c.is_string(1)) return c.fail("TaskForceClass::Collect_All_Free_Units -- parameter 1 is not a string.");
+        const objects::GameObjectTypes* types = c.vm->host.types;
+        const auto m = types ? types->enums().get(objects::EnumId::GameObjectCategory).convert(c.string(1)) : std::nullopt;
+        if (!m) return c.fail("TaskForceClass::Collect_All_Free_Units -- unrecognized game object category %s.", std::string(c.string(1)).c_str());
+        mask = static_cast<uint64_t>(*m);
+    }
+    if (AiScriptHost* h = host_of(c.L)) h->tf_collect_free_units(c.self->id, mask);
+    return 0;
 }
 int m_not_pool_safe(Call& c) { return push_bool(c, false); }
 
