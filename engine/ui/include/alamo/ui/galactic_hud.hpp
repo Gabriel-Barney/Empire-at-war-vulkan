@@ -110,11 +110,16 @@ struct GalacticPlanetInfo {
     std::string garrison_icon;
     std::vector<GalacticPlanetStack> stacks;
 };
+// GalacticFleetSlot::type of a unit the host did not classify: it is never merged into a stack.
+inline constexpr uint32_t kNoSlotType = 0xFFFFFFFFu;
 struct GalacticFleetSlot {
     uint32_t object = 0;
     std::string icon;
     uint32_t count = 1;
     bool selected = false;
+    // UI.md §7.2: units of one fleet with the same type share one organiser pad (a stack with a count). Host: the unit's
+    // object type index; kNoSlotType = its own stack. Land-force slots ignore it.
+    uint32_t type = kNoSlotType;
 };
 // One fleet in orbit at the selected planet, as the organiser sees it (UI.md §7.2). The HUD, not the host, decides which
 // of the three panes q1 / q2 / q3 it fills, from `slot`, `enemy` and the planet's GalacticPlanetInfo::orbit_local; the
@@ -437,7 +442,8 @@ private:
     };
     std::vector<AbilityRow> ability_rows_;
     std::vector<int32_t> build_pad_, create_, queue_, land_;
-    std::vector<std::vector<int32_t>> fleet_;  // [fleet][slot] q{n}_RRCC
+    std::vector<std::vector<int32_t>> fleet_;  // [fleet][slot] unit pads q{n}_0001 .. q{n}_0406 (UI.md §7.2)
+    std::vector<int32_t> pathfinder_;          // [fleet] the header pad q{n}_0000 (UI.md §7.4), -1 if absent
     struct PadSlot {
         int32_t component = -1;
         GalacticBuildOption option;
@@ -448,7 +454,8 @@ private:
         bool draggable = false;
         int32_t fleet_index = -1;      // 0..2 organiser pane, -1 land forces
         bool foreign = false;          // organiser pad of a non-local fleet: no drag, no click, no drop target (UI.md §7.2)
-        uint32_t fleet = 0, unit = 0;  // unit 0 = fleet header
+        uint32_t fleet = 0, unit = 0;  // unit 0 = fleet header; a stack: its first unit (a drag takes that one unit)
+        bool empty = false;            // an empty organiser pad shown while dragging (UI.md §7.3): fleet 0 = a pane without a fleet
         std::string icon;
     };
     std::vector<PadSlot> pads_;
@@ -466,6 +473,7 @@ private:
     };
     std::vector<StackHit> stack_hits_;
     const StackHit* stack_at(int32_t component, float px, float py) const;  // pixel position
+    StackHit pane_hit(const PadSlot& pad) const;
     StackHit press_stack_;
     // drag and drop
     FleetOps ops_;

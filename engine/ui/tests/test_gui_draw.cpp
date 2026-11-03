@@ -1095,8 +1095,8 @@ void test_real(Gpu& g, const std::string& src_dir) {
             hk.faction_alt = 1;
             hk.time = 1.0;
             hack.build(hk);
-            // Drag fleet slot q1_0000 towards a planet.
-            const int32_t qc = table.find("q1_0000");
+            // Drag fleet slot q1_0001 towards a planet.
+            const int32_t qc = table.find("q1_0001");
             ui::Vec2f qp{-1, -1};
             for (const ui::HudHitBox& h : hud.hit_boxes())
                 if (h.component == qc) qp = hud.canvas().canvas_to_pixel(0.5f * (h.min.x + h.max.x), 0.5f * (h.min.y + h.max.y));
