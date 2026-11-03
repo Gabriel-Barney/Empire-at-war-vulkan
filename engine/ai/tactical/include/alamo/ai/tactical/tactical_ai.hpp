@@ -272,6 +272,9 @@ public:
     virtual std::vector<ReinforcementsUnloaded> reinforcements_unloaded() { return {}; }
 };
 
+// OPT2 t10: frames from a proposal slice to the apply of its PotentialPlan solves (TacticalAiConfig::pp_latency).
+inline constexpr uint32_t kDefaultPpLatency = 1;
+
 struct TacticalAiPlayerConfig {
     int32_t player = -1;
     std::string ai_type;     // AIPlayerType ("BasicEmpire")
@@ -313,6 +316,12 @@ struct TacticalAiConfig {
     // OPT2 t03: fan-out for the goal candidates' perception values (ai_goals.hpp batched values); any value gives
     // identical results.
     ParallelFor pf = serial_for;
+    // OPT2 t10: slot 10 as a batched accept (ai_goals.hpp): the plan pick and the PotentialPlan solve of each candidate
+    // draw from the candidate's own RNG stream (seeded by session seed, frame, player, goal source and target) instead
+    // of the synced stream; the slice's solves run on `pf` (pp_latency 0) or as one job on `background`, applied
+    // pp_latency frames after the slice. false = the original synced draws in proposal order (pp_latency unused).
+    bool pp_streams = true;
+    uint32_t pp_latency = kDefaultPpLatency;
 };
 
 struct TacticalAiDecision {

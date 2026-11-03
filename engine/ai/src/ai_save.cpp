@@ -18,7 +18,7 @@ using save::put;
 using save::put_vec;
 
 namespace {
-constexpr uint32_t kGoalsVersion = 1, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 1, kContextVersion = 1,
+constexpr uint32_t kGoalsVersion = 2, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 1, kContextVersion = 1,
                    kGateVersion = 1, kPathVersion = 2, kPerceptionVersion = 1, kSnapshotVersion = 1;
 
 void put_goal(ByteWriter& w, const Goal& g) {
@@ -163,6 +163,11 @@ void GoalSystem::write(ByteWriter& w) const {
     w.u32(commits_);
     w.u32(next_serial_);
     w.i64(now_);
+    // 2: OPT2 t10, the batched-accept goals whose solves are in flight (the mode saves the solves themselves)
+    w.i64(pending_ready_);
+    w.boolean(pending_pass_done_);
+    w.u32(static_cast<uint32_t>(pending_.size()));
+    for (const Goal& g : pending_) put_goal(w, g);
 }
 
 bool GoalSystem::read(ByteReader& r) {
@@ -197,6 +202,15 @@ bool GoalSystem::read(ByteReader& r) {
     t.commits_ = r.u32();
     t.next_serial_ = r.u32();
     t.now_ = r.i64();
+    t.pending_ready_ = r.i64();
+    t.pending_pass_done_ = r.boolean();
+    const uint32_t np = save::count(r, 60);
+    t.pending_.assign(np, Goal{});
+    for (Goal& g : t.pending_) {
+        get_goal(r, g);
+        if (g.type >= goal_types || g.source >= sources_.size()) r.fail();
+    }
+    if (t.pending_ready_ < 0 && (np > 0 || t.pending_pass_done_)) r.fail();
     if (!r.ok() || t.blocked_ != !t.block_list_.empty()) return false;
     *this = std::move(t);
     return true;

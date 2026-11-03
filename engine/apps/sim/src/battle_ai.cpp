@@ -74,7 +74,9 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.background = jobs::make_background_start(host.jobs());  // OPT2 t02: background path recomputes
     cfg.path_latency = setup.path_latency;
     cfg.stagger = setup.stagger;  // OPT2 t01
-    cfg.pf = host.parallel_for();  // OPT2 t03: goal candidates' perception values
+    cfg.pf = host.parallel_for();  // OPT2 t03: goal candidates' perception values; OPT2 t10: slot-10 solves
+    cfg.pp_streams = setup.pp_streams;  // OPT2 t10
+    cfg.pp_latency = setup.pp_latency;
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
     use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();

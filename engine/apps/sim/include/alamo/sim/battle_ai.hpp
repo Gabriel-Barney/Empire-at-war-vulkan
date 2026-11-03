@@ -70,6 +70,10 @@ struct TacticalAiSetup {
     // background recompute latency (0 = the original timing).
     bool stagger = true;
     uint32_t path_latency = galactic::kDefaultAllPairsLatency;
+    // OPT2 t10 (TacticalAiConfig::pp_streams / pp_latency): slot-10 solves on their own RNG streams, applied pp_latency
+    // frames after their slice; pp_streams false = the original synced draws in proposal order.
+    bool pp_streams = true;
+    uint32_t pp_latency = ai::tactical::kDefaultPpLatency;
 };
 
 // [port] faction -> AIPlayerType for non-human playable players: Empire -> BasicEmpire, Rebel -> BasicRebel,

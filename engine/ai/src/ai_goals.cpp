@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
@@ -46,6 +47,9 @@ void GoalSystem::init(const AiDefinitions& defs, std::vector<GoalSource> sources
     countdown_ = 0;
     evals_pass_ = evals_last_ = 0;
     quota_ = 0;
+    pending_.clear();
+    pending_ready_ = -1;
+    pending_pass_done_ = false;
 }
 
 int32_t GoalSystem::exclusion_count(uint32_t goal_type) const {
@@ -62,6 +66,14 @@ bool GoalSystem::proposable(uint32_t goal_type) const {
 
 void GoalSystem::service(int64_t now) {
     now_ = now;
+    if (pending_ready_ >= 0) {  // OPT2 t10: a slice's solves are in flight
+        if (now < pending_ready_) return;
+        apply_pending();
+        if (std::exchange(pending_pass_done_, false)) {
+            end_pass(now);
+            return;
+        }
+    }
     if (countdown_ > 0) {
         --countdown_;
         return;
@@ -71,6 +83,14 @@ void GoalSystem::service(int64_t now) {
         quota_ = static_cast<uint32_t>(std::max(1, static_cast<int32_t>(20.0f / static_cast<float>(players) + 0.5f)));
     }
     if (!proposal_slice(now)) return;
+    if (pending_ready_ >= 0) {  // OPT2 t10: Commit once the last slice's solves are applied
+        pending_pass_done_ = true;
+        return;
+    }
+    end_pass(now);
+}
+
+void GoalSystem::end_pass(int64_t now) {
     hooks_->budget_weights();
     commit(now);
     const int32_t players = std::max(1, hooks_->quota_players());
@@ -97,6 +117,7 @@ bool GoalSystem::proposal_slice(int64_t now) {
         SliceScope& operator=(const SliceScope&) = delete;
     } scope(hooks_);
     uint32_t used = 0;
+    const bool batch_accept = hooks_->accept_batched();  // OPT2 t10
     auto evaluate_candidate = [&](uint32_t src, int32_t target, const Candidate* batched) {
         const GoalSource& s = sources_[src];
         const GoalTypeDef& def = defs_->goals[s.goal_type];
@@ -120,31 +141,39 @@ bool GoalSystem::proposal_slice(int64_t now) {
         g.target = target;
         g.desire = g.priority = clamp_desire(desire);
         g.created = now;
+        if (batch_accept) {  // OPT2 t10: pending until the slice's solves are applied
+            if (!hooks_->accept_prepare(g, static_cast<uint32_t>(pending_.size()))) {
+                hooks_->drop_potential_plan(g);
+                return;
+            }
+            pending_.push_back(std::move(g));
+            return;
+        }
         if (!hooks_->accept(g)) {
             hooks_->drop_potential_plan(g);
             return;
         }
-        if (hooks_->uses_budget()) {
-            const float at = allowed_time(g);
-            if (!((at <= 0.0f || at >= g.eta) && hooks_->can_fund(g))) {
-                hooks_->drop_potential_plan(g);
-                return;
-            }
-        }
-        insert(std::move(g));
+        accept_tail(std::move(g));
     };
     // OPT2 t03: batched values (header comment): the walk only records the candidates; flush() evaluates and commits them.
+    // OPT2 t10: batched accept walks the same way (with no candidate_pf every value is evaluated in place in flush()).
     const ParallelFor* pf = hooks_->candidate_pf();
     batch_.clear();
     auto visit = [&](uint32_t src, int32_t target) {
-        if (pf) batch_.push_back({src, target});
+        if (pf || batch_accept) batch_.push_back({src, target});
         else evaluate_candidate(src, target, nullptr);
+    };
+    auto start_solves = [&] {  // OPT2 t10
+        if (pending_.empty()) return;
+        pending_ready_ = now + static_cast<int64_t>(hooks_->accept_latency());
+        hooks_->accept_start(static_cast<uint32_t>(pending_.size()), now, pending_ready_);
+        if (pending_ready_ == now) apply_pending();
     };
     auto flush = [&] {
         if (batch_.empty()) return;
         uint32_t prepared = 0;
         for (Candidate& c : batch_) {
-            c.prepared = hooks_->prepare_evaluation(sources_[c.source].function) ? 1 : 0;
+            c.prepared = pf && hooks_->prepare_evaluation(sources_[c.source].function) ? 1 : 0;
             prepared += c.prepared;
         }
         const auto values = [this](uint32_t b, uint32_t e) {
@@ -160,6 +189,7 @@ bool GoalSystem::proposal_slice(int64_t now) {
         else if (prepared > 0) values(0, static_cast<uint32_t>(batch_.size()));
         for (const Candidate& c : batch_) evaluate_candidate(c.source, c.target, &c);
         batch_.clear();
+        start_solves();
     };
     while (cursor_source_ < sources_.size()) {
         const GoalSource& s = sources_[cursor_source_];
@@ -205,6 +235,31 @@ bool GoalSystem::proposal_slice(int64_t now) {
     evals_last_ = evals_pass_;
     evals_pass_ = 0;
     return true;
+}
+
+void GoalSystem::accept_tail(Goal g) {
+    if (hooks_->uses_budget()) {
+        const float at = allowed_time(g);
+        if (!((at <= 0.0f || at >= g.eta) && hooks_->can_fund(g))) {
+            hooks_->drop_potential_plan(g);
+            return;
+        }
+    }
+    insert(std::move(g));
+}
+
+void GoalSystem::apply_pending() {
+    std::vector<Goal> p = std::move(pending_);
+    pending_.clear();
+    pending_ready_ = -1;
+    for (size_t i = 0; i < p.size(); ++i) {
+        Goal& g = p[i];
+        if (!hooks_->accept_finish(g, static_cast<uint32_t>(i))) {
+            hooks_->drop_potential_plan(g);
+            continue;
+        }
+        accept_tail(std::move(g));
+    }
 }
 
 void GoalSystem::insert(Goal g) {
@@ -255,6 +310,11 @@ void GoalSystem::block_proposals(uint32_t goal_serial) {
     }
     block_list_.push_back(goal_serial);
     blocked_ = true;
+    if (!pending_.empty()) {  // OPT2 t10: proposals made before the block are dropped with the proposed set
+        for (Goal& g : pending_) hooks_->drop_potential_plan(g);
+        pending_.clear();
+        hooks_->accept_cancel();
+    }
 }
 
 void GoalSystem::unblock_proposals(uint32_t goal_serial) {
@@ -563,6 +623,12 @@ void GoalSystem::hash(StateHasher& h) const {
     for (const int32_t x : exclusion_) h.i32(x);
     h.u32(static_cast<uint32_t>(block_list_.size()));
     for (const uint32_t x : block_list_) h.u32(x);
+    if (pending_ready_ >= 0) {  // OPT2 t10: only while solves are pending (nothing extra in the original order)
+        h.i64(pending_ready_);
+        h.boolean(pending_pass_done_);
+        h.u32(static_cast<uint32_t>(pending_.size()));
+        for (const Goal& g : pending_) goal(g);
+    }
 }
 
 }  // namespace alamo::ai

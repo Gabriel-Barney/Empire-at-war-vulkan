@@ -49,6 +49,9 @@
 //       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
 //       [--ai-latency F] [--no-ai-stagger] (also --skirmish-ai): OPT2 t02 / t01 parity knobs - the AI path recompute latency
 //       (default 15 frames, 0 = the original timing) and every AI player planning on the same frames (the original).
+//       [--no-pp-streams] [--pp-latency F] (--skirmish-ai): OPT2 t10 parity knobs - slot-10 plan picks and PotentialPlan
+//       solves on the synced stream in proposal order (the original), and the frames from a goal slice to the apply of
+//       its solves (default 1; 0 = in the slice, on the job system).
 //   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-land-campaign|foc-station|skirmish [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
 //       [--expect-skirmish-base]: foc-land only (t50): fail unless both sides start with a pre-built base, the AI acts and shots are fired.
@@ -169,6 +172,8 @@ struct Options {
     std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs)
     int64_t ai_latency = -1;                // OPT2 t02: --ai-latency F (galactic / tactical AI path recomputes)
     bool ai_stagger = true;                 // OPT2 t01: --no-ai-stagger
+    bool pp_streams = true;                 // OPT2 t10: --no-pp-streams
+    int64_t pp_latency = -1;                // OPT2 t10: --pp-latency F
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
     std::string skirmish_ai;
     bool expect_battle_end = false;  // S10 land outcome: --expect-battle-end
@@ -826,6 +831,8 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--trace-out") opt.trace_out = next();            // q2f t05
         else if (a == "--ai-latency") opt.ai_latency = std::strtoll(next().c_str(), nullptr, 10);  // OPT2 t02
         else if (a == "--no-ai-stagger") opt.ai_stagger = false;                                   // OPT2 t01
+        else if (a == "--no-pp-streams") opt.pp_streams = false;                                   // OPT2 t10
+        else if (a == "--pp-latency") opt.pp_latency = std::strtoll(next().c_str(), nullptr, 10);   // OPT2 t10
         else if (a == "--aggressor") opt.aggressor = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--battle-retreat") opt.battle_retreat = static_cast<float>(std::strtod(next().c_str(), nullptr));
         else if (a == "--battle-max-frames") opt.battle_max_frames = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
@@ -904,6 +911,8 @@ static int headless_main(int argc, char** argv) {
         m.quiet = opt.quiet;
         m.ai_latency = opt.ai_latency;  // OPT2 t01 / t02 parity knobs
         m.ai_stagger = opt.ai_stagger;
+        m.pp_streams = opt.pp_streams;  // OPT2 t10 parity knobs
+        m.pp_latency = opt.pp_latency;
         if (!opt.skirmish_ai.empty()) {  // A1 stage 2: --skirmish-ai synthetic|foc [--map NAME]
             m.map = opt.map;
             m.expect_battle_end = opt.expect_battle_end;

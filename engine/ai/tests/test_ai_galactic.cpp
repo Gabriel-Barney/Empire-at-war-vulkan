@@ -315,6 +315,194 @@ static void test_goal_reservations() {
 // first (any thread, any range order) and commits every candidate in visit order; an unprepared function ("S", a Script_
 // stand-in that draws from the synced RNG) is evaluated in place. Proposals, accepts, draws and evaluation counts must
 // equal the unbatched run for every fan-out.
+// OPT2 t10: the batched accept (ai_goals.hpp "BATCHED ACCEPT"). Every candidate's solve draws a data-dependent number of
+// times from its own stream (seeded by frame, source and target), so the results and the synced stream's draws are
+// the same for any fan-out; at latency 1 the solves of frame N are applied on N + 1 (never earlier), a save
+// with solves pending continues exactly as the uninterrupted run, and a block drops the pending goals.
+static void test_goal_batched_accept() {
+    struct Solve {
+        SimRng rng;
+        int32_t target = -1;
+        bool ok = false;
+        uint32_t plan = 0;
+    };
+    struct AcceptHooks final : GoalModeHooks {
+        const ParallelFor* pf = nullptr;
+        uint32_t latency = 0;
+        int64_t frame = 0, ready = -1;
+        bool early = false;     // an accept_finish before its ready frame
+        uint32_t finishes = 0;
+        std::vector<Solve> solves;
+        uint32_t target_count() override { return 9; }
+        bool applies(int32_t t, uint32_t) override { return t % 3 != 1; }
+        bool blocked(uint32_t, int32_t) override { return false; }
+        bool evaluate(const std::string& f, int32_t t, double& out) override {
+            out = f == "A" ? 3.0 + t : 8.0 - 1.5 * t;
+            return true;
+        }
+        bool accept(Goal&) override { return false; }  // never called: batched
+        bool accept_batched() override { return true; }
+        uint32_t accept_latency() override { return latency; }
+        bool accept_prepare(Goal& g, uint32_t i) override {
+            if (i == 0) solves.clear();
+            if (g.target == 6) return false;  // rejected before its solve
+            Solve s;
+            s.rng.seed(static_cast<uint32_t>(g.created * 7919 + g.source * 131 + static_cast<uint32_t>(g.target + 1)));
+            s.target = g.target;
+            solves.push_back(s);
+            return i + 1 == solves.size();
+        }
+        void accept_start(uint32_t n, int64_t now, int64_t r) override {
+            CHECK(n == solves.size() && r == now + latency);
+            ready = r;
+            const auto body = [this](uint32_t b, uint32_t e) {
+                for (uint32_t i = b; i < e; ++i) {
+                    Solve& s = solves[i];
+                    const int32_t k = s.rng.range_int(1, 4);
+                    int32_t last = 0;
+                    for (int32_t j = 0; j < k; ++j) last = s.rng.range_int(0, 99);
+                    s.ok = last % 3 != 0;
+                    s.plan = static_cast<uint32_t>(last % 2);
+                }
+            };
+            if (pf) (*pf)(n, 1, body);
+            else body(0, n);
+        }
+        bool accept_finish(Goal& g, uint32_t i) override {
+            early = early || frame < ready;
+            ++finishes;
+            if (i >= solves.size() || solves[i].target != g.target || !solves[i].ok) return false;
+            g.plan = solves[i].plan;
+            g.pp_valid = true;
+            return true;
+        }
+        void accept_cancel() override { solves.clear(); }
+        bool plan_activatable(const Goal&) override { return true; }
+        bool plan_invalid(const Goal& g) override { return g.running < 0; }
+        bool replaceable(const Goal&) override { return true; }
+        void refresh_plan(Goal&) override {}
+        void suspend_reservations(Goal&) override {}
+        bool uses_budget() override { return false; }
+        bool can_fund(const Goal&) override { return true; }
+        float category_credits(int32_t) override { return 1.0f; }
+        void budget_add(Goal&) override {}
+        void budget_release(Goal&) override {}
+        void budget_weights() override {}
+        std::vector<int32_t> category_order() override { return {0}; }
+        void queue_production(Goal&) override {}
+        void instantiate(Goal& g) override { g.running = 1; }
+        void end_plan(Goal&, bool) override {}
+        void drop_potential_plan(Goal&) override {}
+        float elapsed_eta(const Goal&) override { return 0.0f; }
+        int32_t quota_players() override { return 4; }  // quota 5: slices end mid-source
+    };
+    AiDefinitions defs;
+    for (const char* n : {"Goal_A", "Goal_B", "Goal_G"}) {
+        GoalTypeDef d;
+        d.name = n;
+        d.application = std::strcmp(n, "Goal_G") == 0 ? app::Global : app::Enemy;
+        d.category = 0;
+        defs.goals.push_back(d);
+    }
+    const std::vector<GoalSource> sources{{0, "A"}, {1, "B"}, {2, "A"}};
+    constexpr int64_t kFrames = 60;
+    struct Run {
+        std::vector<uint64_t> crc;
+        uint64_t draws = 0;
+        uint32_t passes = 0, finishes = 0, pending_frames = 0;
+    };
+    // save_at > 0: after that frame's service the goal system and the hooks are saved and the run continues from the copy.
+    auto run = [&](const ParallelFor* pf, uint32_t latency, int64_t save_at, int64_t block_at) {
+        LearningSystem learning;
+        SimRng rng(99);
+        auto hooks = std::make_unique<AcceptHooks>();
+        hooks->pf = pf;
+        hooks->latency = latency;
+        auto gs = std::make_unique<GoalSystem>();
+        gs->init(defs, sources, hooks.get(), &learning, nullptr, &rng, {});
+        Run r;
+        for (int64_t f = 1; f <= kFrames; ++f) {
+            hooks->frame = f;
+            gs->service(f);
+            if (f == block_at) {
+                gs->block_proposals(77);
+                CHECK(!gs->accept_pending() || hooks->solves.empty());
+                gs->unblock_proposals(77);
+            }
+            r.pending_frames += gs->accept_pending() ? 1u : 0u;
+            StateHasher h;
+            gs->hash(h);
+            rng.hash(h);
+            r.crc.push_back(h.digest());
+            if (f == save_at) {
+                CHECK(gs->accept_pending());
+                ByteWriter w;
+                gs->write(w);
+                auto h2 = std::make_unique<AcceptHooks>(*hooks);  // the mode saves its solves' results
+                auto g2 = std::make_unique<GoalSystem>();
+                g2->init(defs, sources, h2.get(), &learning, nullptr, &rng, {});
+                ByteReader rd(w.bytes());
+                CHECK(g2->read(rd) && rd.done());
+                CHECK(g2->accept_pending() && g2->accept_ready_frame() == gs->accept_ready_frame());
+                hooks = std::move(h2);
+                gs = std::move(g2);
+            }
+        }
+        r.draws = rng.draws();
+        r.passes = gs->passes();
+        r.finishes = hooks->finishes;
+        CHECK(!hooks->early && r.passes > 2 && r.finishes > 0);
+        return r;
+    };
+    const ParallelFor serial = serial_for;
+    const ParallelFor reverse = [](uint32_t count, uint32_t, const RangeFn& fn) {
+        for (uint32_t i = count; i-- > 0;) fn(i, i + 1);
+    };
+    const ParallelFor threads = [](uint32_t count, uint32_t, const RangeFn& fn) {
+        std::vector<std::thread> ts;
+        for (uint32_t k = 0; k < 4; ++k)
+            ts.emplace_back([&fn, count, k] {
+                for (uint32_t i = k; i < count; i += 4) fn(i, i + 1);
+            });
+        for (std::thread& t : ts) t.join();
+    };
+    for (const uint32_t latency : {0u, 1u}) {
+        const Run ref = run(nullptr, latency, 0, 0);
+        CHECK((ref.pending_frames > 0) == (latency > 0));  // latency 0 never leaves solves pending at the end of a frame
+        for (const ParallelFor* pf : {&serial, &reverse, &threads}) {
+            const Run b = run(pf, latency, 0, 0);
+            // the synced stream (in the CRC) sees only the goal system's own draws, the same for any fan-out
+            CHECK(b.crc == ref.crc && b.draws == ref.draws && b.finishes == ref.finishes && b.passes == ref.passes);
+        }
+        if (latency > 0) {
+            // A save with solves pending: find a frame that ends with solves in flight, save there.
+            int64_t at = 0;
+            for (int64_t f = 5; f < kFrames && at == 0; ++f) {
+                LearningSystem learning;
+                SimRng rng(99);
+                AcceptHooks hk;
+                hk.latency = latency;
+                GoalSystem gs;
+                gs.init(defs, sources, &hk, &learning, nullptr, &rng, {});
+                for (int64_t g = 1; g <= f; ++g) {
+                    hk.frame = g;
+                    gs.service(g);
+                }
+                if (gs.accept_pending()) at = f;
+            }
+            CHECK(at > 0);
+            const Run saved = run(&threads, latency, at, 0);
+            CHECK(saved.crc == ref.crc && saved.finishes == ref.finishes);
+            // A block while solves are pending drops them (the run goes on, still deterministic).
+            const Run blocked = run(nullptr, latency, 0, at);
+            const Run blocked2 = run(&threads, latency, 0, at);
+            CHECK(blocked.crc == blocked2.crc && blocked.crc != ref.crc);
+        }
+        std::printf("goal batched accept, latency %u: %u passes, %u finishes, %u frames with solves pending\n", latency,
+                    ref.passes, ref.finishes, ref.pending_frames);
+    }
+}
+
 static void test_goal_batched_values() {
     struct BatchHooks final : GoalModeHooks {
         const ParallelFor* pf = nullptr;
@@ -3314,6 +3502,7 @@ int main(int argc, char** argv) {
     test_desire_and_hysteresis();
     test_goal_reservations();
     test_goal_batched_values();
+    test_goal_batched_accept();  // OPT2 t10
     test_plan_pick_and_solver();
     test_definitions_and_templates();
     test_plan_load_parallel();
