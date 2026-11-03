@@ -329,7 +329,7 @@ identical results:
 Checks: per-tick CRC logs byte-identical to the unchanged build, full length, on the land campaign battle
 (`--skirmish-ai foc-land-campaign --ticks 20000`), the space battle (`foc-station --seed 3 --ticks 20000`) and the land skirmish
 (`foc-land --ticks 3000`). The land skirmish and the space battle are also identical at 0 / 1 / 4 / 16 workers. After merging main
-(A1j), every golden passes in the gate, MSVC and clang.
+(A1j), `build_gate.cmd`: clang 163/163 and sanitizer 54/54 passed with 0 warnings; MSVC built with 0 warnings and 158/163 passed, the other 5 (`alamo_commands_tests`, `alamo_ai_tests`, `alamo_ai_tactical_tests`, `alamo_ai_story_save_size_late`, `alamo_render_galactic_headless_check`) timed out under load and passed on a `-j 2` re-run. Every golden passed, including the smoke and land-outcome worker-count entries.
 
 First battle tick, before / after (ms, MSVC `/O2`, 15 workers). The machine was at 100 % CPU from other sessions the whole time, so these
 are minima of alternating runs (before and after back to back), several times the quiet-machine values; the OPT1 table's quiet first
@@ -346,7 +346,7 @@ ticks were land 104 ms and space 67 ms. Batch 1 ran under lighter load than batc
 On the first two batches the first tick is 3-4.5 x shorter in space and on the land campaign battle and about 2 x on the land skirmish.
 Batch 2 was too noisy to show more than the skirmish gain (medians 2140 / 1405 ms, space 836 / 553 ms). Whether the quiet first tick is now
 under 33.3 ms needs a quiet re-run (`bench_msvc.cmd`); scaling batch 1 by its before / quiet ratio (3.9 land, 5.2 space) gives roughly 32 ms on the land campaign battle and 15 ms in
-space (an estimate, not a measurement).
+space (an estimate, not a measurement). `bench_msvc.cmd` was not re-run: the machine was still at 82 % CPU (5 other `alamo_headless` runs) at the end, so the OPT1 table above is unchanged.
 
 What is left of the setup spike (land skirmish, same profile): the land obstacle stamps (`mv::stamp_map_obstacles`, Fine_Tune ray
 tests, a quarter to a third of the setup; `engine/tactical/movement`, the per-object-pass session's area), placing the start forces and the
