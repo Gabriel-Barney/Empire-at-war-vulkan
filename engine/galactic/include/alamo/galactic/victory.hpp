@@ -20,7 +20,14 @@
 // Leader): GalacticSim::victory_claims(); a claim wins for its player when the player's side lists the type and the
 // countdown (mode frames) has run out.
 // [port] a playable player is eliminated when it owns no planet and no live unit (fleet member, surface unit,
-// structure, starbase).
+// structure, starbase). The original has no such test: in the galactic monitor a player loses only when another
+// player's condition passes (STRATEGIC_GAPS §1.4; BATTLE_TRANSITIONS §3.1a: no start delay, no "has had units" latch,
+// but there the event-driven tactical trigger means a side that never owned anything cannot lose).
+// [port] q6 (EliminationLatch): with a latch, a player counts as eliminated only once some earlier check saw it own
+// something. Thrawn's Revenge campaigns start the human with no planet and no fleet (its story Lua hands them out), and
+// the bare rule ended them at the first check. Vanilla campaigns give every playable player a planet or unit at start,
+// so the latch is armed at the first check and nothing changes there. Open: whether the original ever ends a galactic
+// campaign for a player that owns nothing when no other player's condition passes (the literal reading: never).
 //
 // Pure queries on the sim: nothing here changes or hashes state.
 #pragma once
@@ -63,11 +70,28 @@ struct VictoryResult {
     std::vector<int32_t> eliminated;            // playable players with nothing left, player order
     bool finished() const { return winner != kNoPlayer; }
 };
-VictoryResult check_victory(const GalacticSim& sim, const VictoryRules& rules);
+// [port] q6: which players have owned something (a planet or a live unit) at a check since the latch was made. Host state
+// (presentation side, like the campaign-end dialog it gates): not saved; after a load the first check re-arms every player
+// that owns something then.
+class EliminationLatch {
+public:
+    bool armed(int32_t player) const {
+        return player >= 0 && static_cast<size_t>(player) < seen_.size() && seen_[static_cast<size_t>(player)] != 0;
+    }
+    void arm(int32_t player);
+    void reset() { seen_.clear(); }
+
+private:
+    std::vector<uint8_t> seen_;
+};
+
+// `latch` null: the bare elimination rule. Non-null: players that own something now arm it, and an unarmed player is not
+// eliminated (it is tested for its side's conditions like any other).
+VictoryResult check_victory(const GalacticSim& sim, const VictoryRules& rules, EliminationLatch* latch = nullptr);
 bool player_eliminated(const GalacticSim& sim, int32_t player);
 // One test for one player (side = the player's list), polled or event-driven.
 bool victory_condition_met(const GalacticSim& sim, const VictorySide& side, VictoryCondition k, int32_t player);
 // Host helper: +1 = `player` won, -1 = another player won or `player` is eliminated, 0 = going on.
-int32_t victory_outcome(const GalacticSim& sim, const VictoryRules& rules, int32_t player);
+int32_t victory_outcome(const GalacticSim& sim, const VictoryRules& rules, int32_t player, EliminationLatch* latch = nullptr);
 
 }  // namespace alamo::galactic

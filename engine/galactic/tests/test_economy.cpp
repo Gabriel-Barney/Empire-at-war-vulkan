@@ -1027,6 +1027,16 @@ void test_a2_victory() {
     CHECK(player_eliminated(s, pUnder) && !player_eliminated(s, pEmpire));
     v = check_victory(s, r);
     CHECK(!v.finished() && v.eliminated == std::vector<int32_t>{pUnder} && victory_outcome(s, r, pUnder) == -1);
+    // q6 [port] EliminationLatch: a player the latch never saw own anything is not eliminated (Thrawn's Revenge starts
+    // the human with nothing); one it saw is, as before.
+    {
+        EliminationLatch fresh;
+        CHECK(victory_outcome(s, r, pUnder, &fresh) == 0 && !fresh.armed(pUnder) && fresh.armed(pEmpire));
+        CHECK(check_victory(s, r, &fresh).eliminated.empty());
+        EliminationLatch seen;
+        seen.arm(pUnder);
+        CHECK(victory_outcome(s, r, pUnder, &seen) == -1 && check_victory(s, r, &seen).eliminated == std::vector<int32_t>{pUnder});
+    }
     // All planets: every planet's owner the Empire or allied with it (SG 1.4: neutral-owned planets block).
     r.human.conditions = {VictoryCondition::AllPlanetsControlled};
     CHECK(check_victory(s, r).winner == kNoPlayer);

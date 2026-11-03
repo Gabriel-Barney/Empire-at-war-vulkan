@@ -377,6 +377,7 @@ public:
     std::vector<ui::HeroEntry> galactic_heroes_;
     size_t gui_calls_seen_ = 0, gui_log_events_ = 0;
     uint64_t gui_calls_applied_ = 0, reticle_orders_ = 0, reticle_frames_ = 0;
+    uint64_t buy_bar_behind_camera_ = 0;  // q6: frames the selected builder's buy bar was hidden (builder behind the camera)
     bool hud_hit_debug_ = false;
     // ALAMO_HUD_HIT_DEBUG=x,y: probe that fixed pixel instead of the cursor (smoke runs) and list the visible shells.
     int32_t hud_hit_px_ = -1, hud_hit_py_ = -1;
@@ -429,6 +430,7 @@ public:
     BattleTally tally_;
     bool campaign_over_ = false;
     galactic::VictoryRules victory_rules_;  // Int-verify: the campaign's victory conditions (start_session)
+    galactic::EliminationLatch elimination_latch_;  // q6 [port]: no elimination before the player has owned something
     bool choice_open_ = false;
     // GALACTIC_DIALOGS §1 battle prompt: the banner (pending_battle_shell / story_pending_battle_shell) fed through
     // GalacticHudFrame::battle while choice_open_; its clicks are HudAction BattleBegin / BattleAutoResolve.

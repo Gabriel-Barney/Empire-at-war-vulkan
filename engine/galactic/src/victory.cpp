@@ -199,12 +199,21 @@ bool player_eliminated(const GalacticSim& sim, int32_t player) {
     return true;
 }
 
-VictoryResult check_victory(const GalacticSim& sim, const VictoryRules& rules) {
+void EliminationLatch::arm(int32_t player) {
+    if (player < 0) return;
+    const size_t i = static_cast<size_t>(player);
+    if (seen_.size() <= i) seen_.resize(i + 1, 0);
+    seen_[i] = 1;
+}
+
+VictoryResult check_victory(const GalacticSim& sim, const VictoryRules& rules, EliminationLatch* latch) {
     VictoryResult out;
     for (size_t i = 0; i < sim.players().size(); ++i) {
         const int32_t p = static_cast<int32_t>(i);
         if (!playable(sim, p)) continue;
-        if (player_eliminated(sim, p)) {
+        const bool gone = player_eliminated(sim, p);
+        if (latch && !gone) latch->arm(p);
+        if (gone && (!latch || latch->armed(p))) {
             out.eliminated.push_back(p);
             continue;
         }
@@ -220,8 +229,8 @@ VictoryResult check_victory(const GalacticSim& sim, const VictoryRules& rules) {
     return out;
 }
 
-int32_t victory_outcome(const GalacticSim& sim, const VictoryRules& rules, int32_t player) {
-    const VictoryResult r = check_victory(sim, rules);
+int32_t victory_outcome(const GalacticSim& sim, const VictoryRules& rules, int32_t player, EliminationLatch* latch) {
+    const VictoryResult r = check_victory(sim, rules, latch);
     if (r.winner == player) return 1;
     if (r.finished() || std::find(r.eliminated.begin(), r.eliminated.end(), player) != r.eliminated.end()) return -1;
     return 0;
