@@ -60,6 +60,9 @@
 //       skai (q2f t04): foc-land and skirmish are the skirmish host: Empire (slot 0) vs Rebel (slot 1) on an _MP_ map
 //       (skirmish: --map, default _MP_SPACE_GEONOSIS), MP_Default_Credits, the factions' skirmish default forces, the battle
 //       started on the map; [--human FACTION]: that slot is an idle human (no AI, no orders).
+//       q6 t02: [--ai FACTION[,FACTION]] the slots' factions (mods, MODPATH=): two names = slot 0, slot 1 (--human may name one);
+//       one name = the AI slot (slot 1) beside the --human faction (slot 0). Each AI slot plays its faction's Basic_AI, starts with
+//       its Space_ / Land_Skirmish_AI_Default_Forces (else the cheapest buildable units, [port]).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land skirmish (t50), foc-land-campaign: the campaign-rules land invasion.
 //       [--fail-on-lua-errors]: fail on any tactical AI Lua error (foc-station always does; a1j t07).
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
@@ -181,6 +184,7 @@ struct Options {
     int64_t pp_latency = -1;                // OPT2 t10: --pp-latency F
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
     std::string skirmish_ai;
+    std::string skirmish_factions;  // q6 t02: --ai FACTION[,FACTION]
     bool expect_battle_end = false;  // S10 land outcome: --expect-battle-end
     bool expect_skirmish_base = false;  // t50: --expect-skirmish-base
     bool fail_on_lua_errors = false;  // a1j t07: --fail-on-lua-errors
@@ -828,6 +832,7 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--battles") opt.battles = next();  // S10
         else if (a == "--galactic-ai") opt.galactic_ai = true;  // A2
         else if (a == "--skirmish-ai") opt.skirmish_ai = next();  // A1 stage 2
+        else if (a == "--ai") opt.skirmish_factions = next();     // q6 t02
         else if (a == "--expect-battle-end") opt.expect_battle_end = true;  // S10 land outcome
         else if (a == "--expect-skirmish-base") opt.expect_skirmish_base = true;  // t50
         else if (a == "--fail-on-lua-errors") opt.fail_on_lua_errors = true;  // a1j t07
@@ -927,6 +932,7 @@ static int headless_main(int argc, char** argv) {
             m.expect_battle_end = opt.expect_battle_end;
             m.expect_skirmish_base = opt.expect_skirmish_base;
             m.human = opt.ai_human;  // skai: --skirmish-ai skirmish --human FACTION
+            m.ai_factions = opt.skirmish_factions;  // q6 t02
             m.fail_on_lua_errors = opt.fail_on_lua_errors;
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
         }
