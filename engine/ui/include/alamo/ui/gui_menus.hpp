@@ -182,9 +182,14 @@ struct SaveGameInfo {
     std::u32string label;  // list text
 };
 struct SkirmishMapInfo {
-    std::string map;       // map file / id
-    std::u32string label;
+    std::string map;       // map file / id (what StartSkirmish carries)
+    std::u32string label;  // list text; empty = the row text is built from name_key / players / map (FrontEnd, UI.md 9.3 / 9.4)
     uint32_t max_players = 2;
+    // p4ui t06 (docs/re/UI.md section 9). The skirmish staging list shows the rows of one tab (`custom`), space maps first.
+    std::string name_key{}; // the map's name text key (UTF-8, mini 08), "" = none: the row shows the file name
+    uint32_t players = 0;   // player count for the "(N) " prefix, 0 = use max_players
+    bool custom = false;    // Custom tab (true) or Official tab (false)
+    bool space = false;     // a space map (sorted before the land maps)
 };
 
 struct MenuAction {
@@ -268,6 +273,11 @@ public:
     // N1 / t09: re-reads the saves provider into an open save / load dialog (the host deleted or wrote a save).
     void refresh_saves();
     double resolution_confirm_remaining() const { return res_confirm_ ? std::max(0.0, res_deadline_ - now_) : 0.0; }
+    // p4ui t06: the row of `map` (its SkirmishMapInfo::map, case-insensitive) in the skirmish staging list as shown now
+    // (active tab, sorted), -1 when that map is not listed there. Valid while the skirmish dialog is open.
+    int32_t skirmish_map_row(std::string_view map) const;
+    // Which tab the skirmish staging list shows: false Official (the dialog's state when it opens), true Custom.
+    bool skirmish_custom_tab() const { return custom_tab_; }
 
 private:
     void go(std::string_view dialog);    // replace the top dialog
@@ -280,6 +290,8 @@ private:
     void fill_campaign_select(GuiDialog& d);
     void fill_custom_staging(GuiDialog& d);
     void fill_skirmish(GuiDialog& d);
+    void fill_skirmish_maps(GuiDialog& d);  // the list of the active tab, from maps_
+    std::u32string skirmish_row_text(const SkirmishMapInfo& m) const;
     void fill_saves(GuiDialog& d);
     void fill_audio(GuiDialog& d, const AudioVolumes& v);
     void fill_video(GuiDialog& d);
@@ -308,6 +320,9 @@ private:
     bool keys_dirty_ = false;
     std::vector<SaveGameInfo> saves_;
     std::vector<SkirmishMapInfo> maps_;
+    std::vector<size_t> map_view_;   // skirmish list rows -> index into maps_ (active tab, sorted)
+    bool custom_tab_ = false;        // skirmish list: Custom tab active
+    std::string last_map_;           // the map the last StartSkirmish used ("" = none yet)
     std::string quit_action_;  // "exit" / "main"; N1 / t09: "overwrite" / "delete" (confirm_save_)
     std::string confirm_save_;  // the save an overwrite / delete confirmation is about
     bool save_blocked_ = false; // the open Save dialog's save_blocker refused

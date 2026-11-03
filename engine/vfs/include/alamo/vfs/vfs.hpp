@@ -115,6 +115,18 @@ public:
     // (upper-case, '\\'), sorted by byte order. Glob: '*' and '?' do not cross '\\'; '**' does.
     // Example: list("Data\\Scripts\\AI\\*.lua").
     std::vector<std::string> list(std::string_view glob) const;
+    // Layer bits for the restricted list(): which layers' files are searched.
+    //   kLayerMod       the mod search list's Data trees
+    //   kLayerBase      FoC loose <foc_root>\Data
+    //   kLayerMeg       every mounted MEG (EaW and FoC)
+    //   kLayerFallback  FALLBACKPATH dirs and the EaW GameData folder
+    static constexpr uint32_t kLayerMod = 1u, kLayerBase = 2u, kLayerMeg = 4u, kLayerFallback = 8u;
+    static constexpr uint32_t kLayerAll = kLayerMod | kLayerBase | kLayerMeg | kLayerFallback;
+    // The same listing over the selected layers only (list(glob) == list(glob, kLayerAll)): the logical paths that
+    // exist in at least one selected layer, each once, normalised, sorted. A name present in a selected layer is
+    // listed whether or not an unselected higher-priority layer overrides it (this lists names, not resolutions).
+    // Example: list("Data\\CustomMaps\\*.TED", kLayerBase | kLayerMeg). Unknown bits are ignored.
+    std::vector<std::string> list(std::string_view glob, uint32_t layers) const;
 
     // Multi-line dump of the layers and MEG mount order (highest priority first).
     std::string describe() const;
