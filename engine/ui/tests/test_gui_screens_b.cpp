@@ -718,8 +718,8 @@ void test_info_screens() {
     CHECK(is.info_page() == InfoPage::TechTree && is.info_dialog() == "IDD_TECH_TREE_EMPIRE" && !acts.empty() &&
           acts.back().kind == ScreenAction::Kind::InfoPageChanged && acts.back().button == static_cast<int32_t>(InfoPage::TechTree));
     d = env.gui.find("IDD_TECH_TREE_EMPIRE");
-    CHECK(d && env.gui.find(dlg::kDataChart) == nullptr && d->get("IDC_TECHTREE_E_Ground_Barracks")->tint == (Rgba8{150, 255, 150, 255}) &&
-          d->get("IDC_TECHTREE_Imperial_Stormtrooper_Squad")->tint == (Rgba8{70, 70, 70, 255}) &&
+    CHECK(d && env.gui.find(dlg::kDataChart) == nullptr && d->get("IDC_TECHTREE_E_Ground_Barracks")->tint == (Rgba8{255, 255, 255, 255}) &&
+          d->get("IDC_TECHTREE_Imperial_Stormtrooper_Squad")->tint == (Rgba8{90, 90, 90, 255}) &&
           !d->get("IDC_TECHTREE_Dark_Trooper_PhaseI")->visible && d->get("IDC_TECH_TREE_LAND")->checked);
     is.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Checked, "IDD_TECH_TREE_EMPIRE", "IDC_TECH_TREE_SPACE", 1)}, acts);
     CHECK(is.info_dialog() == "IDD_TECH_TREE_EMPIRE_SPACE" && env.gui.find("IDD_TECH_TREE_EMPIRE_SPACE")->get("IDC_TECHTREE_Star_Destroyer")->visible);
