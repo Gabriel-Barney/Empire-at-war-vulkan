@@ -2,7 +2,8 @@
 // ConflictManager::write / read, "galactic.conflicts"; layout in src/galactic_save.cpp).
 //   1. synthetic galaxy with a conflict manager: a scripted run (production, multi-hop fleet moves, a space conflict
 //      waiting for the human's choice, a tactical battle in progress, a land invasion auto-resolved, corruption
-//      transition, visibility entries, hero respawn, stealth, claims, relations, slots, linked battle, income entries);
+//      transition, visibility entries, hero respawn, stealth, claims, victory hold, relations, slots, linked battle, income
+//      entries);
 //      saved at fixed ticks and at every conflict state change. Each save is loaded into a FRESH GalacticSim + manager
 //      built from the same setup (start(), the store restored, then read) and continued to the end of the run: every
 //      tick's galactic hash, store hash + parity, RNG, conflict hash, save bytes and drained S4 events must equal the
@@ -614,7 +615,11 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             s.count_corruption(pUnder, 1);
             break;
         case 35: s.set_relation(pEmpire, pNeutral, Relation::Ally); break;
-        case 40: s.claim_victory(pUnder, 3, 100000); break;
+        case 40:
+            s.claim_victory(pUnder, 3, 100000);
+            s.victory_hold_raise();  // story t11: the galactic monitor hold (save v2)
+            s.victory_hold_raise();
+            break;
         case 45:
             s.set_siphon(rA, pUnder, 0.25f, s.frame() + 2000);
             s.add_income_entry(rB, 15.0f, s.frame() + 1500);

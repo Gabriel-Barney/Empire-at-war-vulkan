@@ -418,6 +418,13 @@ void GalacticSim::claim_victory(int32_t player, uint8_t type, int32_t countdown)
     claims_.push_back(c);
 }
 
+bool GalacticSim::story_victory(int32_t player, bool short_silent) {
+    if (!valid_player(player)) return false;
+    victory_hold_ = 0;  // 0x343f80(..., 0): every level, no replay
+    claim_victory(player, kVictoryStoryClaim, short_silent ? 30 : 210);
+    return true;
+}
+
 ObjectHandle GalacticSim::super_weapon_at(PlanetIndex planet) const {
     if (!valid_planet(planet)) return {};
     for (uint32_t f : planets_[planet].orbit) {
@@ -511,7 +518,7 @@ bool GalacticSim::tsw_destroy_planet(PlanetIndex planet, int32_t tsw_owner, bool
 // ---- CRC tail --------------------------------------------------------------------------------------------------------------
 
 bool GalacticSim::oi_state_default() const {
-    if (!claims_.empty() || linked_battle_pending_) return false;
+    if (!claims_.empty() || linked_battle_pending_ || victory_hold_ != 0) return false;
     for (int32_t id : stealthed_)
         if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) return false;
     for (const PlayerState& p : players_)
@@ -533,6 +540,10 @@ void GalacticSim::hash_oi(StateHasher& h) const {
         h.u8(c.type);
         h.i32(c.frame);
         h.i32(c.countdown);
+    }
+    if (victory_hold_ != 0) {  // story t11 (only once used, so older captures keep their CRC)
+        h.u32(0x56484C44u);  // "VHLD"
+        h.i32(victory_hold_);
     }
     for (const PlayerState& p : players_) {
         h.i32(p.max_tech_level);

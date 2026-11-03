@@ -395,8 +395,9 @@ public:
     // --- story t06 wiring (the tactical victory monitor, BT §3.1a): rewards of the TACTICAL plot set go to the running
     // battle. ENABLE_VICTORY -> enable(Reward_Param1 given, atoi(Reward_Param1)); VICTORY -> victory(Reward_Param1 = the
     // faction name as written, atoi(Reward_Param2) != 0 = short and silent); the battle host resolves the faction (unknown:
-    // "Unable to find faction %s to force victory", nothing). Unset, or a galactic plot set's reward: nothing [port: the
-    // galactic victory monitor / campaign end is not modelled]. ---
+    // "Unable to find faction %s to force victory", nothing). Unset: nothing. A galactic plot set's rewards (story t11) act
+    // on the galactic monitor directly: GalacticSim::victory_hold_raise / victory_hold_release / story_victory (the
+    // campaign end, galactic::check_victory); an unknown VICTORY faction is logged in lua_messages(). ---
     void set_victory_hooks(std::function<void(bool has_param, int32_t value)> enable,
                            std::function<void(const std::string& faction, bool short_silent)> victory) {
         enable_victory_ = std::move(enable);

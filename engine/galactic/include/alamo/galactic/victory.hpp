@@ -19,8 +19,11 @@
 // Event-driven (3 Super_Weapon_Destruction, 6 Super_Weapon_Destroys_Last_Enemy_Planet, 7 Super_Weapon_Kills_Enemy_
 // Leader): GalacticSim::victory_claims(); a claim wins for its player when the player's side lists the type and the
 // countdown (mode frames) has run out.
+// Story rewards (story t11, GalacticSim::victory_hold / story_victory): while the monitor is held nobody wins; a story
+// claim (type 0x10, the VICTORY reward) is a declaration: the first one in claim order wins for its player (playable or
+// not) once its countdown ran out, and until then no other condition can win.
 // [port] a playable player is eliminated when it owns no planet and no live unit (fleet member, surface unit,
-// structure, starbase).
+// structure, starbase); elimination is reported even while the monitor is held.
 //
 // Pure queries on the sim: nothing here changes or hashes state.
 #pragma once
@@ -38,6 +41,7 @@ enum class VictoryCondition : uint8_t {
     AllPlanetsControlled = 0, OpponentControlsNoPlanets = 1, CreditsAccrued = 2, SuperWeaponDestruction = 3,
     PercentageControl = 4, ConquerEnemyHomeworldAndLeader = 5, SuperWeaponDestroysLastEnemyPlanet = 6,
     SuperWeaponKillsEnemyLeader = 7, KillEnemyLeader = 8, ControlNamedPlanets = 9, CyclesElapsed = 10,
+    StoryTriggered = 0x10,  // SUB_TACTICAL_STORY_MODE_TRIGGERED_VICTORY: the story VICTORY reward (never in a side's list)
     Unknown = 0xFF
 };
 VictoryCondition parse_victory_condition(std::string_view name);

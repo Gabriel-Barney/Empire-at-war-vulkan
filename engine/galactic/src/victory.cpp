@@ -153,6 +153,7 @@ bool victory_condition_met(const GalacticSim& sim, const VictorySide& side, Vict
         for (const VictoryClaim& c : sim.victory_claims())
             if (c.player == player && c.type == static_cast<uint8_t>(k) && sim.frame() >= c.frame + c.countdown) return true;
         return false;
+    case VictoryCondition::StoryTriggered:
     case VictoryCondition::Unknown:
         break;
     }
@@ -201,6 +202,17 @@ bool player_eliminated(const GalacticSim& sim, int32_t player) {
 
 VictoryResult check_victory(const GalacticSim& sim, const VictoryRules& rules) {
     VictoryResult out;
+    // story t11: a story claim is declared at once (0x343b90); it decides the result once its countdown ran out.
+    bool decided = sim.victory_hold() > 0;
+    for (const VictoryClaim& c : sim.victory_claims()) {
+        if (c.type != GalacticSim::kVictoryStoryClaim) continue;
+        if (!decided && sim.frame() >= c.frame + c.countdown) {
+            out.winner = c.player;
+            out.how = VictoryCondition::StoryTriggered;
+        }
+        decided = true;
+        break;
+    }
     for (size_t i = 0; i < sim.players().size(); ++i) {
         const int32_t p = static_cast<int32_t>(i);
         if (!playable(sim, p)) continue;
@@ -208,7 +220,7 @@ VictoryResult check_victory(const GalacticSim& sim, const VictoryRules& rules) {
             out.eliminated.push_back(p);
             continue;
         }
-        if (out.winner != kNoPlayer) continue;
+        if (decided || out.winner != kNoPlayer) continue;
         const VictorySide& side = sim.players()[i].human ? rules.human : rules.ai;
         for (VictoryCondition k : side.conditions)
             if (victory_condition_met(sim, side, k, p)) {

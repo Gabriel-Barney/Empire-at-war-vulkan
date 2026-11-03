@@ -1161,6 +1161,7 @@ float TacticalBattle::side_power(uint8_t side) const {
 }
 
 void TacticalBattle::reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides) {
+    if (arrival_held()) return;  // story t12: reinforcements wait in hyperspace
     for (uint8_t side = 0; side < 2; ++side) {
         bool empty = true;
         float live_pop = 0.0f;
@@ -1541,6 +1542,7 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
         Participant& p = parts_[i];
         if (p.galactic_id != galactic_id || p.owner != static_cast<int32_t>(player) || !p.reserve || p.deployed) continue;
         if (retreat_side_ == static_cast<int32_t>(p.side)) return R::NotAllowed;
+        if (arrival_held()) return R::NotAllowed;  // story t12: the hyperspace hold (space only)
         if (space_) {  // the unit cap rule (BattleAi::execute_order Reinforce); land: no tactical cap in the S10 battle
             const uint32_t f = galaxy_->players()[static_cast<size_t>(player)].faction;
             float used = 0.0f;

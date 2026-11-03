@@ -12,7 +12,8 @@
 //         except the definition-derived position and links (visibility lists, income breakdown, both build queues,
 //         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list)
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
-//   u32 + i32 stealthed ids; u32 + victory claims; u32 + pending S4 events (GalacticEvent, emission order)
+//   u32 + i32 stealthed ids; u32 + victory claims; (v2) i32 victory hold; u32 + pending S4 events (GalacticEvent,
+//   emission order)
 // Object references: a handle whose object exists (live or dead-not-flushed) is written as its ObjectId and resolved
 // with ObjectStore::find on read (the store is restored first; an unknown id fails the read). A handle that refers to
 // no object any more (stale, or null) is written as kNoObjectId + its raw value, which read keeps as the same stale
@@ -40,7 +41,7 @@ namespace alamo::galactic {
 
 namespace {
 
-constexpr uint32_t kGalacticSaveVersion = 1;
+constexpr uint32_t kGalacticSaveVersion = 2;  // v2 (story t11): + i32 victory hold; reads v1
 constexpr uint32_t kConflictSaveVersion = 2;  // v2: BattleRequest::linked (story t10)
 
 // Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never
@@ -219,6 +220,7 @@ void GalacticSim::write(ByteWriter& w) const {
     for (int32_t id : stealthed_) w.i32(id);
     w.u32(static_cast<uint32_t>(claims_.size()));
     for (const VictoryClaim& c : claims_) w.i32(c.player).u8(c.type).i32(c.frame).i32(c.countdown);
+    w.i32(victory_hold_);
     w.u32(static_cast<uint32_t>(events_.size()));
     for (const GalacticEvent& e : events_) {
         w.i32(e.frame).u8(static_cast<uint8_t>(e.kind)).i32(e.player).i32(e.other_player);
@@ -228,7 +230,8 @@ void GalacticSim::write(ByteWriter& w) const {
 
 bool GalacticSim::read(ByteReader& r) {
     const objects::ObjectStore& st = *store_;
-    if (r.u32() != kGalacticSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (version < 1 || version > kGalacticSaveVersion || !r.ok()) return false;
     const uint32_t rows = r.u32(), routes = r.u32(), types = r.u32(), np = r.u32();
     if (!r.ok() || rows != planets_.size() || routes != map_.routes.size() || types != rules_->types.size() ||
         np != players_.size())
@@ -457,6 +460,8 @@ bool GalacticSim::read(ByteReader& r) {
         c.countdown = r.i32();
         if (!r.ok() || !player_ok(c.player)) return false;
     }
+    const int32_t hold = version >= 2 ? r.i32() : 0;
+    if (hold < 0) return false;
     uint32_t ne = 0;
     if (!get_count(r, ne, 37)) return false;
     std::vector<GalacticEvent> events(ne);
@@ -497,6 +502,7 @@ bool GalacticSim::read(ByteReader& r) {
     fleets_ = std::move(fleets);
     stealthed_ = std::move(stealthed);
     claims_ = std::move(claims);
+    victory_hold_ = hold;
     events_ = std::move(events);
     // Rebuilt caches: store slot -> fleet / planet (creation order, so a reused slot maps to the newest fleet as
     // create_fleet left it), the per-tick owner derivation scratch, the spawn payload latch.
