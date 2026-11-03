@@ -26,6 +26,9 @@
 // per candidate), then runs every candidate's Learning terms, slot 10 and insert in visit order. A rejected
 // function (Script_ evaluators: Lua and synced draws) is evaluated in place in that serial loop, as before.
 //
+// SLICE BRACKET (OPT2 t10) [port, same results]: slice_begin() / slice_end() enclose each proposal slice (every slot 10
+// of the slice runs in between). The tactical AI uses it to ask the host once per slice for what its solves read.
+//
 // COMMIT (0x6c8710) and RESOLVE (0x6c8970): exactly §1.6, with the hysteresis
 //   eff(d) = state > 0 && 0.01 < d < 40 ? d + (1 - (d - 0.01) / 39.99) * 1.6 : d.
 // [port] Every sort is std::stable_sort descending (the original's std::sort is insertion sort, i.e.
@@ -132,6 +135,10 @@ public:
     }
     // Serial, in visit order, once per prepared candidate: the bookkeeping evaluate() does for itself.
     virtual void evaluated(const std::string& function) { (void)function; }
+    // OPT2 t10: brackets each proposal slice (every slot 10 of the slice runs in between), so a mode may share host
+    // answers between the slice's solves. Default: nothing.
+    virtual void slice_begin() {}
+    virtual void slice_end() {}
 };
 
 struct GoalSystemConfig {

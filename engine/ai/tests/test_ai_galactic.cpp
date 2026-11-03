@@ -322,11 +322,23 @@ static void test_goal_batched_values() {
         std::vector<std::string> trace;  // serial calls only; a batched value is logged where evaluated() commits it
         uint32_t counted = 0;
         mutable std::atomic<uint32_t> prepared{0};  // evaluate_prepared() calls, any thread
+        // OPT2 t10: slice_begin() / slice_end() bracket every slice; every batched value commit and slot 10 lies inside one.
+        bool open = false, bracket_ok = true;
+        uint32_t slices = 0;
+        void slice_begin() override {
+            bracket_ok = bracket_ok && !open;
+            open = true;
+            ++slices;
+        }
+        void slice_end() override {
+            bracket_ok = bracket_ok && open;
+            open = false;
+        }
         static double value(const std::string& f, int32_t t) { return f == "A" ? 3.0 + t : 8.0 - 1.5 * t; }
         uint32_t target_count() override { return 9; }
         bool applies(int32_t t, uint32_t) override { return t % 3 != 1; }
         bool blocked(uint32_t, int32_t t) override { return t == 6; }
-        bool evaluate(const std::string& f, int32_t t, double& out) override {
+        bool evaluate(const std::string& f, int32_t t, double& out) override {  // also Commit's re-evaluation
             ++counted;
             trace.push_back("eval " + f);
             out = f == "S" ? static_cast<double>(rng->range_int(-2, 6)) : value(f, t);
@@ -340,10 +352,12 @@ static void test_goal_batched_values() {
             return f != "B" || t != 3;
         }
         void evaluated(const std::string& f) override {
+            bracket_ok = bracket_ok && open;
             ++counted;
             trace.push_back("eval " + f);
         }
         bool accept(Goal& g) override {
+            bracket_ok = bracket_ok && open;
             const int32_t r = rng->range_int(0, 3);
             trace.push_back("accept " + std::to_string(g.type) + " " + std::to_string(g.target) + " " + std::to_string(g.desire));
             if (r == 0) return false;
@@ -407,6 +421,7 @@ static void test_goal_batched_values() {
         r.prepared = hooks.prepared.load();
         r.draws = rng.draws();
         CHECK(gs.passes() > 2 && evals > 0);
+        CHECK(hooks.bracket_ok && !hooks.open && hooks.slices > gs.passes());  // quota 5: several slices per pass
         return r;
     };
     const ParallelFor serial = serial_for;

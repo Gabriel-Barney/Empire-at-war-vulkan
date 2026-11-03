@@ -88,6 +88,14 @@ bool GoalSystem::skip(uint32_t goal_type, int32_t target) {
 }
 
 bool GoalSystem::proposal_slice(int64_t now) {
+    // OPT2 t10: slice_end() on every return path.
+    struct SliceScope {
+        GoalModeHooks* h;
+        explicit SliceScope(GoalModeHooks* x) : h(x) { h->slice_begin(); }
+        ~SliceScope() { h->slice_end(); }
+        SliceScope(const SliceScope&) = delete;
+        SliceScope& operator=(const SliceScope&) = delete;
+    } scope(hooks_);
     uint32_t used = 0;
     auto evaluate_candidate = [&](uint32_t src, int32_t target, const Candidate* batched) {
         const GoalSource& s = sources_[src];

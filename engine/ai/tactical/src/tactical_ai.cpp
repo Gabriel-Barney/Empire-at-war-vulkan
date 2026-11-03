@@ -272,6 +272,23 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     TacticalFreeStore* pp_store(int32_t handle);
     void reinforce_joined(const TfRec& t, int32_t unit, int32_t type);  // 0x6bf3d0 for a land TF.Reinforce delivery
     double enemy_strength_at(int32_t player, const Vec3f& at, int32_t zone, uint64_t mask) const;
+    // OPT2 t10: the host answers every first solve of one player's proposal slice reads (build pads, reinforcement pool,
+    // population). They only change in the battle tick or through an executed order, and no order runs between a
+    // slice's candidates (an order a Script_ evaluator might issue clears the cache), so the slice asks the host once
+    // per answer instead of once per candidate (BattleAi::build_pads scans every object per pad). player < 0: no slice
+    // open, solves ask the host.
+    struct PpSliceHost {
+        int32_t player = -1;
+        bool pads_ok = false, pool_ok = false, pop_ok = false;
+        std::vector<TacticalPad> pads;
+        std::vector<TacticalReinforcement> pool;
+        float pop_cap = 0.0f, pop_used = 0.0f;
+        void open(int32_t p) {
+            player = p;
+            pads_ok = pool_ok = pop_ok = false;
+        }
+        void clear() { pads_ok = pool_ok = pop_ok = false; }
+    } pp_slice;
     // --- end A2 tactical ---
 
     // ---- helpers ----
@@ -950,8 +967,11 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         return w->evaluate_concurrent(player, function, target_handle(target), out);
     }
     void evaluated(const std::string&) override { ++w->eval_count; }
+    void slice_begin() override { w->pp_slice.open(player); }  // OPT2 t10 (PpSliceHost)
+    void slice_end() override { w->pp_slice.player = -1; }
     bool accept(Goal& g) override {
         // Slot 10 (0x6b8850, land and space): Find_Plan_For_Goal only - one synced draw (§4.4).
+        ALAMO_PROFILE_SCOPE("tac.ai.accept");  // OPT2 t10: slot 10 (plan pick + first PotentialPlan solve)
         if (g.source < ctx.goals.sources().size()) ++w->stats["~ proposed " + ctx.goals.sources()[g.source].function];
         std::vector<uint32_t> cand;
         std::vector<double> ratio;
@@ -1577,11 +1597,20 @@ bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, 
         }
         in.free_units.push_back(u);
     }
+    // OPT2 t10: inside a proposal slice the first solves share the host's answers (PpSliceHost).
+    PpSliceHost& sh = pp_slice;
+    const bool shared = first_solve && sh.player == p.player;
+    if (shared && !sh.pool_ok) {
+        sh.pool = host.reinforcement_pool(p.player);
+        sh.pool_ok = true;
+    }
+    std::vector<TacticalReinforcement> own_pool;
+    if (!shared) own_pool = host.reinforcement_pool(p.player);
     std::set<int32_t> held;
     for (const auto& [id, t] : tfs)
         if (t.player == p.player)
             for (const TacticalReinforcement& r : t.pending) held.insert(r.key);
-    for (const TacticalReinforcement& r : host.reinforcement_pool(p.player)) {
+    for (const TacticalReinforcement& r : shared ? sh.pool : own_pool) {
         PpPoolEntry e;
         e.key = r.key;
         e.type = r.type;
@@ -1596,7 +1625,13 @@ bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, 
     std::set<int32_t> pads_held;
     for (const auto& [id, t] : tfs)
         for (const auto& rv : t.reservations) pads_held.insert(rv.first);
-    for (const TacticalPad& pd : host.build_pads(p.player)) {
+    if (shared && !sh.pads_ok) {
+        sh.pads = host.build_pads(p.player);
+        sh.pads_ok = true;
+    }
+    std::vector<TacticalPad> own_pads;
+    if (!shared) own_pads = host.build_pads(p.player);
+    for (const TacticalPad& pd : shared ? sh.pads : own_pads) {
         PpPad x;
         x.id = pd.id;
         x.position = pd.position;
@@ -1604,8 +1639,13 @@ bool TacticalAiWorld::Impl::solve_pp(PlayerAi& p, uint32_t plan, const Goal& g, 
         x.reserved = pads_held.count(pd.id) != 0 || pad_reserved.count(pd.id) != 0;
         in.pads.push_back(std::move(x));
     }
-    in.pop_cap = host.population_cap(p.player);
-    in.pop_used = host.population_used(p.player);
+    if (shared && !sh.pop_ok) {
+        sh.pop_cap = host.population_cap(p.player);
+        sh.pop_used = host.population_used(p.player);
+        sh.pop_ok = true;
+    }
+    in.pop_cap = shared ? sh.pop_cap : host.population_cap(p.player);
+    in.pop_used = shared ? sh.pop_used : host.population_used(p.player);
     in.campaign = cfg.campaign;
     in.health_threshold = cfg.constants.health_low_percent_threshold;
     const int32_t builder = p.player;
@@ -3091,6 +3131,7 @@ TacticalAiWorld::TacticalAiWorld(objects::ObjectStore& store, const objects::Gam
     Impl& w = *impl_;
     w.world.set_players(w.cfg.lua_players);
     w.pipeline.set_handler([&w](uint64_t, const cmd::Command& c) {
+        w.pp_slice.clear();  // OPT2 t10: an order may change what the host answers
         const cmd::RejectReason r = w.host.execute(c.header.player, c.payload);
         ++w.orders;
         if (r != cmd::RejectReason::None) ++w.rejected;
