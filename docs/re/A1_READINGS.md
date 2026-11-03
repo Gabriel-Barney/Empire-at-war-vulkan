@@ -2535,3 +2535,36 @@ collect rule (targets and task-force members change):
 Unchanged: the headless synthetic, geonosis and foc-land (skirmish) goldens, the sim battle / l1 goldens, the campaign
 and screens smoke goldens. The station entry (seed 2) and all 16 Kuat outcome entries pass. Every other test passes (the ones that timed out or lost the GPU under other sessions' load
 passed when re-run alone).
+
+### 39.7 On top of the OPT2 AI timing: Kuat seed 2 (OPT2 t12, 2026-11-03) [port observation]
+
+Merged onto main after OPT2 t01 / t02 (staggered AI clocks, background paths) and t10 (slot 10 on per-candidate RNG
+streams, background PotentialPlan solve). Kuat seed 2 had reached the cap with the stagger and, after t10, still did with
+`--no-pp-streams`. That stall was this section's collect rule:
+- From frame 3719 the Empire's BURNUNITS plan (BURNUNITS.LUA: `Purge_Goals`, then `MainForce.Collect_All_Free_Units()`
+  with no argument, every category; then `Attack_Move` on the nearest enemy "Structure | Capital" while it is valid,
+  collecting again before each move) took 10 units, reserved ones and other plans' members included. From 4906 it
+  attack-moved on one point (-5298, 5293) every 606 frames until the cap. Every other Empire goal failed at the
+  PotentialPlan stage (DestroyUnit / FlankPlan / DestroyUnitMinimal "failed Plan"): no free unit was left. The Rebels'
+  last ship, an Alliance_Assault_Frigate (category Frigate, so never BURNUNITS' target), moved around near that point
+  from about frame 7200, and nothing died for the rest of the run.
+- With 39.3 the collect skips reserved units and members: BURNUNITS gets 5 units, Escort / DestroyUnit plans keep theirs,
+  and the frigate dies (seed 2 `--no-pp-streams` ends at 11047, Empire, all destroyed).
+- Ablation on the merged build (seed 2, `--no-pp-streams`): neither change → cap (as main); the collect rule alone → ends
+  at 6696; the priority reset alone → cap. The default timing (main 8158) and the original timing (`--no-ai-stagger
+  --ai-latency 0 --no-pp-streams`, 5724) ended anyway: the stall needs the plan order of that one timing.
+
+Outcome seeds on the merged build (`--workers 0 --expect-battle-end`; main = origin/main 1f09584): Kuat 1-16 all end, Empire
+all destroyed, with the defaults (5818-9894) and with `--no-pp-streams` (6122-11047; main: 15/16, seed 2 at the cap);
+foc-station 1-8 all end, Rebel (9480-13985; main: 5/8, 5 / 6 / 8 at the cap); foc-land-campaign 1-12 all end, Empire, the
+Rebels retreating (2239-3550, main 2047-3559); the 7000-tick foc-land run is identical to main. Station seed 6 ends with one
+Lua error: AI_PLAN_EXPANSIONGENERIC_DEFENDSPACESTATION calls `Find_Nearest(Target, ...)` after its Target (the station)
+died (open: whether the original stops a plan's thread when its target dies; the station test runs seed 2).
+
+Goldens regenerated (MSVC; first difference main → merged, and the cause by ablation at the default timing):
+- `skirmish_ai_foc_golden.crc`: tick 322 `battle.combat` (the priority reset; the collect rule alone first at 3460);
+  6627 → 7536 ticks. At the original timing the first difference is tick 652, as in 39.6.
+- `skirmish_ai_foc_land_campaign_golden.crc`: tick 471 `battle.ai` (the priority reset only; the collect rule alone
+  changes nothing here); 2819 → 3014 ticks. Original timing: tick 575, as in 39.6.
+- `game_smoke_skirmish.crc` / `.rec`: tick 1050 `battle.combat`, 3128 → 3649 lines; `game_smoke_land.crc`: tick 1074
+  `battle.combat`, same length (`alamo_game` has no timing knobs).

@@ -684,6 +684,37 @@ Remaining land spikes (follow-ups, not started): `ai.goals` p99 11 ms, max 25-27
 batched `evaluate_prepared` (one heavy candidate per slice takes up to 33 ms under load; a slice's values wait for its slowest
 one) and the `Script_` evaluators run in place (up to 9 ms; Lua, serial).
 
+## Space outcome seed 2 and A1k t01 on the OPT2 timing (OPT2 t12, 2026-11-03)
+
+Kuat (`--skirmish-ai foc`) seed 2 was out of the space outcome list: it reached the cap with OPT2 t01's stagger and, after t10,
+still with `--no-pp-streams`. A1k t01 (branch `claude/a1k-space-replan-6392f0`, A1_READINGS §39) is merged here and is the fix:
+the Empire's BURNUNITS plan collected every free unit (reserved ones and other plans' members too) and attack-moved on one point
+from frame 4906, so every other plan failed its PotentialPlan and the Rebels' last frigate was never attacked. Ablation on seed 2
+with `--no-pp-streams`: the collect rule alone ends it (6696), the priority reset alone does not (A1_READINGS §39.7). Seed 2 is
+back in `alamo_headless_skirmish_ai_foc_outcome_s*` (all 16; 6 and 9 were already back). The re-plan test checks the §39.1
+cadence at the original planning timing (`TacticalAiConfig::stagger` / `pp_streams` off) and the leave / clear pairing at the
+default timing too (there a unit can still be a member at frame 3600 and Easy may not re-plan within the run).
+
+| Seeds (`--workers 0 --expect-battle-end`) | origin/main 1f09584 | this merge |
+|---|---|---|
+| Kuat 1-16, defaults | 16/16 (4885-11590) | 16/16 (5818-9894), Empire all destroyed every seed |
+| Kuat 1-16, `--no-pp-streams` | 15/16, seed 2 at the cap | 16/16 (6122-11047) |
+| Kuat 2, `--no-ai-stagger --ai-latency 0 --no-pp-streams` | 5724 | 6629 |
+| foc-station 1-8 | 5/8 (5, 6, 8 at the cap) | 8/8, Rebel (9480-13985); seed 6 has 1 Lua error (DefendSpaceStation's `Find_Nearest` on its dead Target) |
+| foc-land-campaign 1-12 | 12/12, Empire (Rebels retreat) | 12/12, the same winners (2239-3550) |
+| foc-land 7000 ticks | skirmish base ok | identical CRC log |
+
+Winners: the same on every seed that ended on main; the three station seeds that reached the cap now end with the Rebels winning.
+Victory kinds that changed: station 2 and 7 all destroyed → all retreated, station 3 all retreated → all destroyed.
+
+Goldens regenerated (MSVC; first difference against main; cause from main vs merged under each knob set and an ablation of the two
+halves): `skirmish_ai_foc_golden.crc` tick 322 `battle.combat` (priority reset; collect rule alone from 3460; `--no-pp-streams`
+1188, original timing 652 as A1k reported), `skirmish_ai_foc_land_campaign_golden.crc` tick 471 `battle.ai` (priority reset only;
+original timing 575 as A1k reported), `game_smoke_skirmish.crc` / `.rec` tick 1050 `battle.combat` (3128 → 3649 lines),
+`game_smoke_land.crc` tick 1074 `battle.combat`. With both halves switched off the merged build is byte-identical to main on the
+two headless goldens. Worker counts 0 / 1 / 4 / 16 / 15 identical (Kuat seeds 1 and 2, foc-station 2, foc-land-campaign 1,
+foc-land 7000 ticks).
+
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
 `build_asan.cmd` runs clang 20 (MSVC ABI) with UBSan by default; `ALAMO_SANITIZE=address` adds ASan.

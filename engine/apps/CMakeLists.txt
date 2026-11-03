@@ -231,6 +231,7 @@ if(_alamo_sim)
     # a1j t03 / t04 (2026-11-02): seed 2 still ends (Rebel, all retreated, 8010); seeds 2 and 4-7 of 1-8 end, 1 / 3 / 8 reach the
     # cap through the space AI's late re-plan at the station (A1_READINGS §37.5; roadmap a1k t01). a1k t01 (2026-11-02,
     # A1_READINGS §39): seeds 1-8 all end (6852-12496); seed 2 ends at 10107 (Rebel, all retreated).
+    # OPT2 t12 (2026-11-03, a1k t01 on the OPT2 AI timing): seeds 1-8 all end (9480-13985); seed 2 at 10203 (Rebel, all retreated).
     add_test(NAME alamo_headless_skirmish_ai_foc_station
              COMMAND alamo_headless --skirmish-ai foc-station --seed 2 --ticks 20000 --workers 4 --quiet --expect-battle-end)
     # t48: the default seed reaches QuickReinforce's anti-idle; 0 Lua errors (it may run to the frame limit: half the seeds do, the
@@ -254,6 +255,11 @@ if(_alamo_sim)
     # the cap instead (it ends at 5724 with --no-ai-stagger; the stall is not traced, likely the same a1k t01 re-plan).
     # a1k t01 (2026-11-02): fixed (Collect_All_Free_Units' category filter / reservation / movement lock, the task force's
     # priority set reset when a unit leaves it, A1_READINGS §39): seeds 1-16 all end (5982-12149), so 6 and 9 are back.
+    # OPT2 t12 (2026-11-03): seed 2's stall was the same collect rule. On main with OPT2 t10's --no-pp-streams it reaches the cap:
+    # from frame 3719 the Empire's BURNUNITS MainForce (Collect_All_Free_Units() with every category) took 10 units, the reserved
+    # ones and the members of other plans included, and attack-moved on one point from 4906 on, while every other plan failed its
+    # PotentialPlan for want of free units; the Rebels' last frigate was never attacked. With a1k t01 merged on top of OPT2 seeds
+    # 1-16 all end with the defaults (5818-9894) and with --no-pp-streams (6122-11047), so seed 2 is back.
     foreach(_seed RANGE 1 16)
       add_test(NAME alamo_headless_skirmish_ai_foc_outcome_s${_seed}
                COMMAND alamo_headless --skirmish-ai foc --seed ${_seed} --ticks 16000 --workers 0 --quiet --expect-battle-end)
