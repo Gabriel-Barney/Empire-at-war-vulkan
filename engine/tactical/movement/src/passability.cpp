@@ -251,6 +251,29 @@ uint32_t PassabilityGrid::stamp(ObjectId id, const ObstacleFootprint& fp) {
     return n;
 }
 
+std::vector<uint32_t> PassabilityGrid::stamp_all(std::span<const std::pair<ObjectId, ObstacleFootprint>> list, const ParallelFor& pf) {
+    std::vector<Stamp> sampled(list.size());
+    const bool cells = w_ != 0 && h_ != 0;
+    if (cells)
+        pf(static_cast<uint32_t>(list.size()), 1, [&](uint32_t begin, uint32_t end) {
+            for (uint32_t i = begin; i < end; ++i) sample_cells(list[i].second, sampled[i].cells);
+        });
+    std::vector<uint32_t> out(list.size());
+    for (size_t i = 0; i < list.size(); ++i) {
+        const auto& [id, fp] = list[i];
+        unstamp(id);
+        Stamp& s = sampled[i];
+        s.bits = fp.bits & 0x1FFu;
+        if (cells) {
+            if (counts_.empty()) counts_.assign(base_.size(), std::array<uint16_t, 9>{});
+            apply(s, 1);
+        }
+        out[i] = static_cast<uint32_t>(s.cells.size());
+        stamps_.emplace(id, std::move(s));
+    }
+    return out;
+}
+
 bool PassabilityGrid::unstamp(ObjectId id) {
     auto it = stamps_.find(id);
     if (it == stamps_.end()) return false;

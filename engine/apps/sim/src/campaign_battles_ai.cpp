@@ -31,6 +31,9 @@ void CampaignBattles::ai_end() {
     for (const ai::tactical::TacticalAiDecision& d : ai_->world().decision_log())
         ai_log_.push_back("  " + std::to_string(d.frame) + " p" + std::to_string(d.player) + " " + d.text);
     for (const auto& [k, n] : ai_->world().stats()) ai_log_.push_back("  stat " + k + " " + std::to_string(n));
+    // OPT3 t11: the AI's Lua VMs are freed by a background job instead of inside the battle-end tick.
+    if (lua_close_wait_) lua_close_wait_();
+    lua_close_wait_ = ai_->world().release_scripts();
     ai_.reset();
 }
 

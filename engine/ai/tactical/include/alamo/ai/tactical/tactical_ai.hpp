@@ -362,6 +362,12 @@ public:
     void update(int64_t now, uint32_t mode_frame);
     // Battle end (slot 7 / context teardown): every running plan ends (released by the goal system).
     void end_battle();
+    // OPT3 t11: closes every Lua VM of this world (running plans, free stores, evaluators, plan pools) instead of one by
+    // one in the destructor: their finalizers run here (lua::prepare_detached_close), then the VMs, which now only hold
+    // memory, are freed as one job on cfg.background; without one, through cfg.lua_gc_pf before this returns. Returns
+    // the job's wait function (empty when nothing is left running): call it before the job system goes away. Call
+    // after end_battle(), right before destroying the world: no script may run afterwards. Owner thread of the VMs.
+    std::function<void()> release_scripts();
     void set_suspended(bool suspended);
     // S7 t26 (AI_TACTICAL §7.3.3 item 2) - object signal 0xb "a new order replaces this unit's order", raised by the host
     // when it executes an order on `object_id` (A1_READINGS §33.3: task-force movement collectors, unit Move_To /

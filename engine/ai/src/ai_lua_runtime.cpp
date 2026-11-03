@@ -1,6 +1,8 @@
 #include "alamo/ai/ai_lua_runtime.hpp"
 
 #include <algorithm>
+#include <map>
+#include <mutex>
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
@@ -103,6 +105,50 @@ bool read_plan_definition(lua::LuaVm& vm, const AiDefinitions& defs, PlanDefinit
     return true;
 }
 
+// Whole-file reads of one base provider, remembered (found or not) by the exact path asked for. Binds to the first
+// base it is given; any other base is passed through uncached.
+class PlanScriptRuntime::ReadCache final : public FileProvider {
+public:
+    const FileProvider* wrap(const FileProvider* base) {
+        if (!base) return nullptr;
+        std::lock_guard lock(mutex_);
+        if (!base_) base_ = base;
+        return base_ == base ? this : base;
+    }
+    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
+        std::shared_ptr<const std::vector<uint8_t>> hit;
+        bool known = false;
+        {
+            std::lock_guard lock(mutex_);
+            if (auto it = files_.find(path); it != files_.end()) {
+                known = true;
+                hit = it->second;
+            }
+        }
+        if (!known) {
+            std::vector<uint8_t> bytes;
+            if (base_->read(path, bytes)) hit = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+            std::lock_guard lock(mutex_);
+            files_.try_emplace(std::string(path), hit);  // a racing job read the same bytes
+        }
+        if (!hit) {
+            out.clear();
+            return false;
+        }
+        out = *hit;
+        return true;
+    }
+    bool exists(std::string_view path) const override { return base_->exists(path); }
+    std::string origin(std::string_view path) const override { return base_->origin(path); }
+
+private:
+    mutable std::mutex mutex_;
+    const FileProvider* base_ = nullptr;
+    mutable std::map<std::string, std::shared_ptr<const std::vector<uint8_t>>, std::less<>> files_;  // null = not found
+};
+
+PlanScriptRuntime::PlanScriptRuntime(VmSetup setup) : setup_(std::move(setup)), read_cache_(std::make_shared<ReadCache>()) {}
+
 std::unique_ptr<lua::LuaVm> PlanScriptRuntime::make_vm(const std::string& name, const std::string& chunk,
                                                         const std::string& chunk_name, std::string* err) {
     ++created_;
@@ -113,7 +159,9 @@ std::unique_ptr<lua::LuaVm> PlanScriptRuntime::build_vm(const std::string& name,
                                                          const std::string& chunk_name, std::string* err) const {
     lua::LuaVmOptions opt;
     opt.script_name = name;
-    auto vm = std::make_unique<lua::LuaVm>(setup_.host ? setup_.host() : lua::LuaHost{}, opt);
+    lua::LuaHost host = setup_.host ? setup_.host() : lua::LuaHost{};
+    host.files = read_cache_->wrap(host.files);
+    auto vm = std::make_unique<lua::LuaVm>(host, opt);
     if (setup_.prepare) setup_.prepare(*vm);
     std::string e;
     if (!vm->run(chunk, chunk_name, &e)) {
@@ -234,9 +282,20 @@ std::unique_ptr<lua::LuaVm> PlanScriptRuntime::fresh(uint32_t plan, std::string*
 std::unique_ptr<lua::LuaVm> PlanScriptRuntime::blank_vm(const std::string& name) {
     lua::LuaVmOptions opt;
     opt.script_name = name;
-    auto vm = std::make_unique<lua::LuaVm>(setup_.host ? setup_.host() : lua::LuaHost{}, opt);
+    lua::LuaHost host = setup_.host ? setup_.host() : lua::LuaHost{};
+    host.files = read_cache_->wrap(host.files);
+    auto vm = std::make_unique<lua::LuaVm>(host, opt);
     if (setup_.prepare) setup_.prepare(*vm);
     return vm;
+}
+
+void PlanScriptRuntime::take_vms(std::vector<std::unique_ptr<lua::LuaVm>>& out) {
+    for (Entry& e : entries_) {
+        for (std::unique_ptr<lua::LuaVm>& vm : e.free) out.push_back(std::move(vm));
+        e.free.clear();
+        e.pristine = nullptr;
+        e.digest_known = false;
+    }
 }
 
 void PlanScriptRuntime::restore_pools(std::vector<std::vector<std::unique_ptr<lua::LuaVm>>> pools, size_t created) {

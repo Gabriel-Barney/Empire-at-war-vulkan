@@ -3376,6 +3376,27 @@ TacticalAiWorld::~TacticalAiWorld() {
     impl_->runtime.reset();
 }
 
+std::function<void()> TacticalAiWorld::release_scripts() {
+    Impl& w = *impl_;
+    std::vector<std::unique_ptr<lua::LuaVm>> vms;
+    for (auto& [id, p] : w.plans) vms.push_back(std::move(p.vm));
+    for (auto& a : w.ai)
+        if (a) vms.push_back(std::move(a->fs_vm));
+    w.scripts.take_vms(vms);
+    if (w.runtime) w.runtime->take_vms(vms);
+    lua::prepare_detached_close(vms);
+    if (vms.empty()) return {};
+    if (!w.cfg.background) {
+        lua::destroy_detached(vms, w.cfg.lua_gc_pf);
+        return {};
+    }
+    auto owned = std::make_shared<std::vector<std::unique_ptr<lua::LuaVm>>>(std::move(vms));
+    return w.cfg.background([owned] {
+        ALAMO_PROFILE_SCOPE("lua.close.job");
+        owned->clear();
+    });
+}
+
 lua::ObjectBridge& TacticalAiWorld::object_bridge() { return impl_->bridge; }
 void TacticalAiWorld::set_global_values(lua::GlobalValueStore* store) { impl_->gv_store = store; }  // Int-final
 lua::LuaPlayerWorld& TacticalAiWorld::player_world() { return impl_->world; }
