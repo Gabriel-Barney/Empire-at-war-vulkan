@@ -110,6 +110,7 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
         jobs::JobSystem js(jobs::JobSystemConfig{workers});
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
+        cfg.players = sim::session_players(setup.players.size());
         sim::SimHost host(types, js, cfg);
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;

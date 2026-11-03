@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 
@@ -18,22 +19,45 @@ namespace alamo::game {
 
 namespace {
 
+// Q5: runs one loader step and records it in out.stages (name, its diagnostics, time, result).
+template <class F>
+bool stage(GameData& out, const char* name, F&& step) {
+    GameData::LoadStage s;
+    s.name = name;
+    s.first_diag = out.diagnostics.size();
+    const auto t0 = std::chrono::steady_clock::now();
+    s.ok = step(out.diagnostics);
+    s.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    s.diag_count = out.diagnostics.size() - s.first_diag;
+    out.stages.push_back(std::move(s));
+    return out.stages.back().ok;
+}
+
 bool load_common(GameData& out, std::string* err) {
-    std::vector<std::string>& diag = out.diagnostics;
-    if (!out.db.load(*out.files, {}, &diag)) {
+    if (!stage(out, "game database", [&](std::vector<std::string>& diag) { return out.db.load(*out.files, {}, &diag); })) {
         if (err) *err = "game database: load failed under " + out.root;
         return false;
     }
-    if (!out.raw.load(*out.files, &diag) || !out.types.build(out.raw, out.files.get(), &diag)) {
+    if (!stage(out, "object types", [&](std::vector<std::string>& diag) {
+            return out.raw.load(*out.files, &diag) && out.types.build(out.raw, out.files.get(), &diag);
+        })) {
         if (err) *err = "GameObjectFiles.xml not found / object types failed under " + out.root;
         return false;
     }
-    if (!galactic::load_galactic_rules(*out.files, out.db, out.types, out.rules, &diag)) {
+    if (!stage(out, "galactic rules", [&](std::vector<std::string>& diag) {
+            return galactic::load_galactic_rules(*out.files, out.db, out.types, out.rules, &diag);
+        })) {
         if (err) *err = "galactic rules: load failed";
         return false;
     }
-    galactic::load_conflict_rules(*out.files, out.db, out.types, out.rules, out.crules, &diag);  // missing parts: defaults
-    out.catalog = std::make_unique<sim::BattleCatalog>(out.types, out.files.get(), &out.db.constants(), &diag);
+    stage(out, "conflict rules", [&](std::vector<std::string>& diag) {
+        galactic::load_conflict_rules(*out.files, out.db, out.types, out.rules, out.crules, &diag);  // missing parts: defaults
+        return true;
+    });
+    stage(out, "battle catalog", [&](std::vector<std::string>& diag) {
+        out.catalog = std::make_unique<sim::BattleCatalog>(out.types, out.files.get(), &out.db.constants(), &diag);
+        return true;
+    });
     return true;
 }
 
@@ -66,8 +90,8 @@ bool load_game_data(const std::string& root, const std::vector<std::string>& arg
     out.files = std::move(v);
     if (!load_common(out, err)) return false;
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
-    {  // AI data (as alamo_headless --galactic-ai): definitions, equations, plan scripts, difficulties, type facts
-        auto a = std::make_shared<AiData>();
+    stage(out, "AI data", [&](std::vector<std::string>&) {  // as alamo_headless --galactic-ai: definitions, equations,
+        auto a = std::make_shared<AiData>();                  // plan scripts, difficulties, type facts
         const vfs::Vfs* vp = out.vfs;
         const auto lister = [vp](std::string_view g) { return vp->list(g); };
         if (ai::load_ai_definitions(*out.files, ai::list_ai_data(lister), a->defs)) {
@@ -89,7 +113,8 @@ bool load_game_data(const std::string& root, const std::vector<std::string>& arg
         } else {
             out.diagnostics.push_back("AI definitions not found: AI players use the S10 stand-in");
         }
-    }
+        return true;
+    });
 #endif
     return true;
 }

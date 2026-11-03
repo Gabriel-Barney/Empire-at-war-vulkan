@@ -108,6 +108,17 @@ std::string base_name(std::string_view path) {
     return std::string(cut == std::string_view::npos ? path : path.substr(cut + 1));
 }
 
+// Q6 [port]: a plots / plot file name is read under Data\XML as written (Thrawn's Revenge lists
+// "Conquests\Historical\...\Story_Plots_X.xml"; the original loads those), then by its base name (the earlier port rule;
+// the FoC names have no folder, so both give the same path). Returns the path read, "" when neither exists.
+std::string read_xml_file(const FileProvider& files, std::string_view name, std::vector<uint8_t>& bytes) {
+    std::string as_written(name);
+    std::replace(as_written.begin(), as_written.end(), '/', '\\');
+    for (const std::string& path : {"Data\\XML\\" + as_written, "Data\\XML\\" + base_name(name)})
+        if (files.read(path, bytes)) return path;
+    return {};
+}
+
 bool is_sep(char ch) { return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == ','; }
 
 // A list parameter (the generic list parser: whitespace and commas [M]), upper-cased.
@@ -445,9 +456,9 @@ void StoryModel::build_plot_order() {
 
 bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_file, std::string* err) {
     std::vector<uint8_t> bytes;
-    const std::string path = "Data\\XML\\" + base_name(plots_file);
-    if (!files.read(path, bytes)) {
-        if (err) *err = "cannot read " + path;
+    const std::string path = read_xml_file(files, plots_file, bytes);
+    if (path.empty()) {
+        if (err) *err = "cannot read Data\\XML\\" + std::string(plots_file);
         return false;
     }
     const data::XmlDocument doc = data::XmlDocument::parse(bytes, path);
@@ -465,10 +476,9 @@ bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_fi
         }
         if (text.empty()) continue;  // <Suspended_Plot /> placeholder creates nothing
         const bool active = tag == "Active_Plot";  // Â§2.1: exactly this tag; any other tag loads suspended
-        const std::string plot_path = "Data\\XML\\" + base_name(text);
         std::vector<uint8_t> plot_bytes;
-        if (!files.read(plot_path, plot_bytes)) {
-            if (err) *err = "cannot read plot " + plot_path + " (listed in " + path + ")";
+        if (read_xml_file(files, text, plot_bytes).empty()) {
+            if (err) *err = "cannot read plot Data\\XML\\" + std::string(text) + " (listed in " + path + ")";
             return false;
         }
         std::string perr;

@@ -237,16 +237,37 @@ std::string StoryLogEntry::text() const {
 }
 
 std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, const galactic::GalacticSim& sim) {
+    // Q6 [port]: <Story_Name> (campaign field type 0x1b, a string list; docs/re/xml_field_tables.md, no FoC sample) read as
+    // "Faction, plot file" pairs, as Thrawn's Revenge writes it. Used for a faction without a <Faction>_Story_Name (which
+    // one the original prefers is not recovered; the FoC data never has both). Later tags and pairs of a faction lose.
+    std::vector<std::pair<std::string, std::string>> pairs;
+    for (const std::string_view list : campaign.raw_values("Story_Name")) {
+        std::vector<std::string_view> items;
+        for (size_t at = 0; at <= list.size();) {
+            const size_t comma = std::min(list.find(',', at), list.size());
+            if (const std::string_view item = trim(list.substr(at, comma - at)); !item.empty()) items.push_back(item);
+            at = comma + 1;
+        }
+        for (size_t i = 0; i + 1 < items.size(); i += 2) pairs.emplace_back(items[i], items[i + 1]);
+    }
     std::vector<StoryPlotSet> out;
     const auto players = sim.players();
     for (size_t p = 0; p < players.size(); ++p) {
         const uint32_t f = players[p].faction;
         if (f >= sim.rules().factions.size()) continue;
-        const std::string tag = sim.rules().factions[f].name + "_Story_Name";
+        const std::string& faction = sim.rules().factions[f].name;
+        const std::string tag = faction + "_Story_Name";
+        bool found = false;
         for (const auto& [t, v] : campaign.raw)
             if (iequal(t, tag) && !trim(v).empty()) {
                 out.push_back({static_cast<int32_t>(p), std::string(trim(v))});
+                found = true;
                 break;
+            }
+        for (size_t i = 0; !found && i < pairs.size(); ++i)
+            if (iequal(pairs[i].first, faction)) {
+                out.push_back({static_cast<int32_t>(p), pairs[i].second});
+                found = true;
             }
     }
     return out;

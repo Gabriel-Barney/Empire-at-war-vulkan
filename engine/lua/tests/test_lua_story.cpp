@@ -352,6 +352,17 @@ static void test_plots_file() {
     CHECK(fired_names(m) == "A1,B1,");  // first T9 after activation
     StoryModel bad;
     CHECK(!bad.load_plots(dp, "Missing.xml", &err) && !err.empty());
+    // Q6: names with a folder below Data\XML (Thrawn's Revenge) are read as written; a folder that does not exist falls
+    // back to the base name (the FoC rule).
+    write_file(root / "Data/XML/Conquests/Sub/Story_Plots_S.xml",
+               "<Story_Mode_Plots><Active_Plot>Conquests\\Sub\\S1.xml</Active_Plot>"
+               "<Active_Plot>Nowhere/B.xml</Active_Plot></Story_Mode_Plots>");
+    write_file(root / "Data/XML/Conquests/Sub/S1.xml", "<Story><Event Name=\"S1\"><Event_Type>STORY_ELAPSED</Event_Type>"
+                                                       "<Event_Param1>0</Event_Param1></Event></Story>");
+    DirectoryProvider dp2(root.string());  // DirectoryProvider indexes its files when it is made
+    StoryModel sub;
+    CHECK(sub.load_plots(dp2, "Conquests\\Sub\\Story_Plots_S.xml", &err));
+    CHECK(sub.plot_count() == 2 && sub.find_plot("S1.xml") == 0 && sub.find_plot("B.xml") == 1);
     fs::remove_all(root, ec);
 }
 

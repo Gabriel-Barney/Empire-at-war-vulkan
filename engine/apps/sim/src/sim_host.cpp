@@ -24,6 +24,9 @@ SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, Sim
       modes_(types, cfg.players < kMaxPlayers ? cfg.players : kMaxPlayers),
       sched_(js) {
     if (cfg_.players > kMaxPlayers) cfg_.players = kMaxPlayers;
+    // Q6: every player may submit orders (a mod's campaign can have more than the scheduler's default 8). Only raised, so
+    // sessions of up to 8 players keep their recorded scheduler config.
+    if (cfg_.scheduler.max_players < cfg_.players) cfg_.scheduler.max_players = static_cast<uint8_t>(cfg_.players);
     cfg_.scheduler.first_tick = 1;  // the first drain is tick 1 (T2 runs after the frame increment)
     random_.seed_free(cfg_.free_seed);
     make_pipeline(cfg_.scheduler);
@@ -176,6 +179,12 @@ GalacticMode* SimHost::galactic_mode() {
 
 galactic::GalacticSim* SimHost::start_galactic(const galactic::GalacticRules& rules, const galactic::GalacticSetup& setup,
                                                std::vector<std::string>* diagnostics) {
+    if (setup.players.size() > cfg_.players) {
+        if (diagnostics)
+            diagnostics->push_back("galactic setup has " + std::to_string(setup.players.size()) + " players, the session " +
+                                   std::to_string(cfg_.players) + " (SimConfig::players, at most " + std::to_string(kMaxPlayers) + ")");
+        return nullptr;
+    }
     auto& mode = static_cast<GalacticMode&>(start_game(ModeKind::Galactic));
     auto sim = std::make_unique<galactic::GalacticSim>(rules, mode.primary(), random_.synced());
     sim->set_parallel_for(pf_);

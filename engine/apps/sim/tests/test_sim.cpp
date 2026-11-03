@@ -836,6 +836,56 @@ static Run run(const World& w, const FileProvider& files, int32_t workers, uint6
     CHECK(host.story()->lua_messages().empty());
     return out;
 }
+
+// Q6: a campaign with more players than the default session (Thrawn's Revenge: 22). The host refuses it at the default
+// size (those players would get no controller), starts it sized with session_players, and every player has a controller
+// slot; <Story_Name> "Faction, file" pairs give plot sets to factions without a <Faction>_Story_Name.
+static void test_many_players(const World& w) {
+    CHECK(session_players(3) == 8 && session_players(22) == 22 && session_players(100) == kMaxPlayers);
+    GalacticRules r = rules();
+    GalacticSetup s = setup();
+    for (uint32_t i = 0; i < 17; ++i) {  // 3 + 17 = 20 players: Mod_0..Mod_16 (planet-less AI factions)
+        FactionRules f;
+        f.name = "Mod_" + std::to_string(i);
+        f.can_control_planets = f.is_playable = true;
+        r.factions.push_back(f);
+        PlayerSetup p;
+        p.faction = static_cast<uint32_t>(r.factions.size() - 1);
+        p.ai = true;
+        p.credits = 1000.0f;
+        s.players.push_back(p);
+    }
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    {
+        SimHost host(w.types, js, SimConfig{});
+        std::vector<std::string> diag;
+        CHECK(host.start_galactic(r, s, &diag) == nullptr);
+        CHECK(!diag.empty() && diag.front().find("20 players") != std::string::npos);
+    }
+    SimConfig cfg;
+    cfg.players = session_players(s.players.size());
+    SimHost host(w.types, js, cfg);
+    GalacticSim* gs = host.start_galactic(r, s);
+    CHECK(gs != nullptr && host.players() == 20);
+    if (!gs) return;
+    uint64_t last_frame = 0;
+    host.set_controller(19, [&last_frame](SimHost&, uint8_t, uint64_t frame) { last_frame = frame; });
+    host.run_fast(5);
+    CHECK(last_frame > 0);  // the last player's controller runs
+
+    data::CampaignDef c;
+    c.raw = {{"Empire_Story_Name", "Story_Plots_E.xml"},
+             {"Story_Name", " Empire, Ignored.xml, Mod_3 , Sub\\Story_Plots_M3.xml,\n Mod_16, M16.xml, Dangling "},
+             {"Story_Name", "Mod_3, Later.xml, Mod_5, M5.xml"}};
+    const std::vector<StoryPlotSet> sets = campaign_plot_sets(c, *gs);
+    CHECK(sets.size() == 4);
+    if (sets.size() == 4) {
+        CHECK(sets[0].player == pEmpire && sets[0].plots_file == "Story_Plots_E.xml");  // the faction tag wins
+        CHECK(sets[1].player == 3 + 3 && sets[1].plots_file == "Sub\\Story_Plots_M3.xml");  // the first pair wins
+        CHECK(sets[2].player == 3 + 5 && sets[2].plots_file == "M5.xml");
+        CHECK(sets[3].player == 3 + 16 && sets[3].plots_file == "M16.xml");
+    }
+}
 }  // namespace story_test
 
 static void test_story_synthetic(const World& w) {
@@ -1894,6 +1944,7 @@ int main(int argc, char** argv) {
     test_story_t9_clock(*world);    // host follow-up: T9 time argument
     test_story_wave1();
     test_story_wave2a();
+    story_test::test_many_players(*world);  // Q6
 #else
     std::printf("story: built without engine/lua, skipped\n");
 #endif

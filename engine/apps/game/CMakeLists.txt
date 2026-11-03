@@ -22,6 +22,7 @@ add_library(alamo_game_core STATIC
   src/battle_summary.cpp
   src/story_ui.cpp
   src/save_games.cpp
+  src/mod_check.cpp
 )
 target_include_directories(alamo_game_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_game_core PUBLIC alamo_sim alamo_vfs alamo_data alamo_core alamo_engine_flags)
@@ -38,6 +39,10 @@ if(TARGET alamo_ui_hud)  # OI host: hotkey table + menus (game_controls.hpp)
   target_link_libraries(alamo_game_core PUBLIC alamo_ui_hud)
   target_compile_definitions(alamo_game_core PUBLIC ALAMO_GAME_HAVE_CONTROLS=1)
   target_sources(alamo_game_core PRIVATE src/radar_feed.cpp)  # radar feeds (radar_feed.hpp)
+endif()
+if(TARGET alamo_lua_vm)  # Q5 mod check: compiles the data's Lua scripts (mod_check.cpp)
+  target_link_libraries(alamo_game_core PRIVATE alamo_lua_vm)
+  target_compile_definitions(alamo_game_core PRIVATE ALAMO_GAME_HAVE_LUA_VM=1)
 endif()
 if(TARGET alamo_audio)
   target_link_libraries(alamo_game_core PUBLIC alamo_audio)
@@ -94,6 +99,16 @@ add_executable(alamo_game_battle_fx_tests tests/test_battle_fx.cpp)
 target_link_libraries(alamo_game_battle_fx_tests PRIVATE alamo_core alamo_game_core)
 add_test(NAME alamo_game_battle_fx_tests COMMAND alamo_game_battle_fx_tests)
 set_tests_properties(alamo_game_battle_fx_tests PROPERTIES TIMEOUT 120)
+
+# Q5 mod diagnostics (mod_check.hpp): alamo_mod_check --game DIR [MODPATH=..] reports what the port makes of a mod's data.
+# The test runs it on a fake install with a mod folder (new / replaced files, a broken script, a campaign without planets)
+# in its own temp folder; with ALAMO_FOC_DATA also the shipped data (no errors).
+add_executable(alamo_mod_check tools/mod_check_main.cpp)
+target_link_libraries(alamo_mod_check PRIVATE alamo_core alamo_game_core)
+add_executable(alamo_game_mod_check_tests tests/test_mod_check.cpp)
+target_link_libraries(alamo_game_mod_check_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_mod_check_tests COMMAND alamo_game_mod_check_tests)
+set_tests_properties(alamo_game_mod_check_tests PROPERTIES TIMEOUT 300)
 
 function(alamo_game_add_exe)
   foreach(_dep alamo_render_sim alamo_render_galactic alamo_ui_draw alamo_ui_hud alamo_ui_rhi)

@@ -16,6 +16,7 @@ GalacticSession::GalacticSession(const objects::GameObjectTypes& types, jobs::Jo
     : host_(types, js, [&] {
           sim::SimConfig cfg;
           cfg.seed = spec.seed;
+          cfg.players = sim::session_players(setup.players.size());
           return cfg;
       }()),
       spec_(spec),
