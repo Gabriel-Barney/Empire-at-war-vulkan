@@ -881,6 +881,27 @@ void ConflictManager::split_space_forces(int32_t player, const std::vector<Objec
     for (uint32_t i = 0; i < units.size(); ++i) (start[i] ? out.start : out.reserve).push_back(units[i]);
 }
 
+// story t07: 0x2bd500 rules 2 / 3 (BT §2.3). [port] a forced type / flagship with no matching unit falls through to the next
+// rule (rule 1, the always-deployed types, is not modelled, as in the cap split).
+void ConflictManager::split_space_forces(int32_t player, const std::vector<ObjectHandle>& units, BattleForces& out, uint32_t forced_type,
+                                         bool flagship, const std::vector<ObjectHandle>& leads) const {
+    size_t pick = units.size();
+    if (forced_type != kNoIndex)
+        for (size_t i = 0; i < units.size() && pick == units.size(); ++i)
+            if (static_cast<uint32_t>(sim_->store().type(units[i])) == forced_type) pick = i;
+    if (pick == units.size() && flagship)
+        for (size_t i = 0; i < units.size() && pick == units.size(); ++i)
+            if (std::find(leads.begin(), leads.end(), units[i]) != leads.end()) pick = i;
+    if (pick == units.size()) {
+        split_space_forces(player, units, out);
+        return;
+    }
+    out.player = player;
+    out.start.clear();
+    out.reserve.clear();
+    for (size_t i = 0; i < units.size(); ++i) (i == pick ? out.start : out.reserve).push_back(units[i]);
+}
+
 // OI galactic: Raid_Force_* test 0x432e20 (TACTICAL_GAPS 4.2), the battle host's reading: required faction, every
 // member free or limited (free mask tested first [M]), 1 <= limited <= max, heroes <= max.
 bool ConflictManager::raid_force(int32_t player, const std::vector<ObjectHandle>& units) const {
@@ -902,6 +923,16 @@ bool ConflictManager::raid_force(int32_t player, const std::vector<ObjectHandle>
 }
 
 void ConflictManager::split_land_forces(const ConflictInfo& head, BattleForces& d, BattleForces& a) const {
+    split_land_impl(head, d, a, kNoIndex, false);
+}
+
+void ConflictManager::split_land_forces(const ConflictInfo& head, BattleForces& d, BattleForces& a, uint32_t forced_type) const {
+    split_land_impl(head, d, a, forced_type, true);
+}
+
+// linked (story t07, a sandbox LINK_TACTICAL record): [port] record units the attacker already landed (a link fired by
+// STORY_LAND_ON / DEPLOY: the original's last-invade vector holds the just-landed units) count like record units in orbit.
+void ConflictManager::split_land_impl(const ConflictInfo& head, BattleForces& d, BattleForces& a, uint32_t forced_type, bool linked) const {
     d.player = head.defender;
     d.start = surface_units(head.planet, head.defender);  // every surface object starts, no cap
     d.reserve.clear();
@@ -910,8 +941,10 @@ void ConflictManager::split_land_forces(const ConflictInfo& head, BattleForces& 
     a.reserve.clear();
     const std::vector<ObjectHandle> cargo = orbit_cargo(head.planet, head.attacker);
     std::vector<ObjectHandle> rec;  // the record's units that are still in orbit, record order
+    const std::vector<ObjectHandle> landed = linked ? surface_units(head.planet, head.attacker) : std::vector<ObjectHandle>{};
     for (ObjectHandle h : head.units)
-        if (std::find(cargo.begin(), cargo.end(), h) != cargo.end()) rec.push_back(h);
+        if (std::find(cargo.begin(), cargo.end(), h) != cargo.end() || std::find(landed.begin(), landed.end(), h) != landed.end())
+            rec.push_back(h);
     if (rec.empty()) return;
     if (raid_force(head.attacker, rec)) {
         a.start = rec;
@@ -924,7 +957,14 @@ void ConflictManager::split_land_forces(const ConflictInfo& head, BattleForces& 
         return t < gt.size() ? std::string_view(gt[t].name) : std::string_view();
     };
     ObjectHandle lead;
+    if (forced_type != kNoIndex)  // rule (a): the forced type (the fleet-lead byte has no port source)
+        for (ObjectHandle h : rec)
+            if (static_cast<uint32_t>(sim_->store().type(h)) == forced_type) {
+                lead = h;
+                break;
+            }
     for (const std::string& want : rules_->preferred_pathfinder_types) {
+        if (lead) break;
         for (int pass = 0; pass < 2 && !lead; ++pass)
             for (ObjectHandle h : rec)
                 if (hero(h) == (pass == 1) && iequal(name(h), want)) {
@@ -978,7 +1018,7 @@ bool ConflictManager::start_linked(LinkedBattle b) {
                               : land_invade(b.planet, std::move(b.units), b.attacker, b.defender, std::move(b.map), true);
     if (!queued) return false;
     active_ = b.kind;
-    if (begin_battle(queue(b.kind).front(), b.sandbox ? Linked::Sandbox : Linked::Plain)) {
+    if (begin_battle(queue(b.kind).front(), b.sandbox ? Linked::Sandbox : Linked::Plain, b.forced_type, b.flagship_split)) {
         state_ = ConflictState::InBattle;
         return true;
     }
@@ -986,9 +1026,10 @@ bool ConflictManager::start_linked(LinkedBattle b) {
     return false;
 }
 
-bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked) {
+bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked, uint32_t forced_type, bool flagship) {
     BattleRequest req;
     req.info = head;
+    req.linked = linked != Linked::No;
     const bool space = head.kind == ConflictKind::Space;
     const PlanetState& p = sim_->planets()[head.planet];
     const auto& store = sim_->store();
@@ -1013,13 +1054,27 @@ bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked) {
     } else if (space) {
         for (int32_t pl : {head.defender, head.attacker}) {
             BattleForces f;
-            if (linked == Linked::Sandbox && !human(pl)) f.player = pl;  // §2.9.5 sandbox: AI sides get nothing
-            else split_space_forces(pl, orbit_units(head.planet, pl, true), f);
+            if (linked == Linked::Sandbox && !human(pl)) {
+                f.player = pl;  // §2.9.5 sandbox: AI sides get nothing
+            } else if (linked == Linked::Sandbox) {  // story t07: 0x2bce30 with Param6 / Param14
+                const std::vector<ObjectHandle> units = orbit_units(head.planet, pl, true);
+                std::vector<ObjectHandle> leads;  // [port] a fleet's lead ship = its first space unit (fleet order)
+                for (uint32_t fi : sim_->fleets_at(head.planet, pl))
+                    for (ObjectHandle m : sim_->fleets()[fi].contents)
+                        if (std::find(units.begin(), units.end(), m) != units.end()) {
+                            leads.push_back(m);
+                            break;
+                        }
+                split_space_forces(pl, units, f, forced_type, flagship, leads);
+            } else {
+                split_space_forces(pl, orbit_units(head.planet, pl, true), f);
+            }
             req.forces.push_back(std::move(f));
         }
     } else {  // OI galactic: TACTICAL_GAPS 4.2 land split (sandbox, BT §2.9.5: humanOnly = 1)
         BattleForces d, a;
-        split_land_forces(head, d, a);
+        if (linked == Linked::Sandbox) split_land_forces(head, d, a, forced_type);  // story t07: Param6 lead rule (a)
+        else split_land_forces(head, d, a);
         for (BattleForces* f : {&d, &a})
             if (linked == Linked::Sandbox && !human(f->player)) {
                 f->start.clear();
@@ -1034,7 +1089,7 @@ bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked) {
     return start_battle && start_battle(request_);
 }
 
-void ConflictManager::finish_battle(const BattleResult& result) {
+void ConflictManager::finish_battle(const BattleResult& result, LinkedResolution resolution) {
     if (state_ != ConflictState::InBattle || queue(active_).empty()) return;
     const ConflictInfo head = queue(active_).front();
     const bool space = head.kind == ConflictKind::Space;
@@ -1091,6 +1146,9 @@ void ConflictManager::finish_battle(const BattleResult& result) {
     // OI galactic (TACTICAL_GAPS 4.8 step 4): a super weapon the winner cannot kill makes the winner retreat.
     if (sim_->super_weapon_forces_retreat(planet, W)) R = W;
     e.retreating = R;
+    // story t07 (BT §2.9.6): a linked battle with a resolution won by a human skips the retreat of R (space: only the
+    // defender side's fleet retreat) and applies the resolution after the landing.
+    const bool resolve = resolution != LinkedResolution::None && human(W);
     // §3.2 planet write-back.
     const PlanetState& p = sim_->planets()[planet];
     if (!space && W == A) {
@@ -1101,7 +1159,7 @@ void ConflictManager::finish_battle(const BattleResult& result) {
     if (W == A) sim_->clear_queue(planet, space ? kSpaceQueue : kGroundQueue);
     // §3.3 fleets / ground.
     if (!space) {
-        if (R != kNoPlayer) {
+        if (R != kNoPlayer && !resolve) {
             if (R == D) retreat_ground(R, planet);
             else retreat_fleets(R, planet);
         }
@@ -1109,16 +1167,60 @@ void ConflictManager::finish_battle(const BattleResult& result) {
     } else {
         for (int32_t side : {D, A}) {
             if ((R == kNoPlayer && side != W) || (R != kNoPlayer && side == R)) {
+                if (resolve && side == D) continue;
                 retreat_fleets(side, planet);
                 const PlanetState& pp = sim_->planets()[planet];
                 if (pp.starbase_owner == side && store.alive(pp.starbase)) sim_->replace_starbase(planet, kNoIndex);
             }
         }
     }
+    if (resolve) apply_resolution(head, resolution);
     post_results(head, W, L, R, result.victory);
     rewrite_defenders(L, W);
     log_.push_back(std::move(e));
     pop_head(head.kind);
+}
+
+// story t07: the post-battle resolution of a linked battle (0x2a7580 -> land 0x2aa510 / space 0x2aa8e0, BT §2.9.6).
+// [M] for the base steps: "cut to level 0" = the owner's ground structures destroyed (the port's ground base level is
+// the structure count) / the starbase removed; 0x27f370's per-type player call is not modelled [port].
+void ConflictManager::apply_resolution(const ConflictInfo& head, LinkedResolution resolution) {
+    const bool space = head.kind == ConflictKind::Space;
+    const PlanetIndex planet = head.planet;
+    const auto& store = sim_->store();
+    const bool want_human = resolution == LinkedResolution::RetreatPlayer;
+    if (resolution == LinkedResolution::DestroyAi) {
+        if (space) {
+            std::vector<ObjectHandle> fleets;  // AI fleets in orbit (orbit order), members released with the fleet
+            for (uint32_t fi : sim_->planets()[planet].orbit) {
+                const FleetState& f = sim_->fleets()[fi];
+                if (f.alive && !f.moving && f.owner != kNoPlayer && !human(f.owner)) fleets.push_back(f.object);
+            }
+            for (ObjectHandle f : fleets) sim_->destroy_object(f);
+        } else {
+            std::vector<ObjectHandle> kill;  // every AI-owned surface unit (surface order)
+            for (ObjectHandle u : sim_->planets()[planet].surface)
+                if (store.alive(u) && store.owner(u) != kNoPlayer && !human(store.owner(u))) kill.push_back(u);
+            for (ObjectHandle u : kill) sim_->destroy_object(u);
+        }
+    } else {
+        for (int32_t side : {head.attacker, head.defender}) {
+            if (side == kNoPlayer || human(side) != want_human) continue;
+            if (space) retreat_fleets(side, planet);
+            else retreat_ground(side, planet);
+        }
+    }
+    // The base step: RetreatPlayer cuts a human-owned base, RetreatAi / DestroyAi an AI-owned one.
+    const PlanetState& p = sim_->planets()[planet];
+    if (space) {
+        if (p.starbase_level > 0 && store.alive(p.starbase) && p.starbase_owner != kNoPlayer && human(p.starbase_owner) == want_human)
+            sim_->replace_starbase(planet, kNoIndex);
+    } else {
+        std::vector<ObjectHandle> cut;
+        for (ObjectHandle st : p.structures)
+            if (store.alive(st) && store.owner(st) != kNoPlayer && human(store.owner(st)) == want_human) cut.push_back(st);
+        for (ObjectHandle st : cut) sim_->destroy_object(st);
+    }
 }
 
 // OI galactic: corruption-mission battle end (TACTICAL_GAPS 4.8, 0x28bf10).

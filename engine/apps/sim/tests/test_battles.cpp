@@ -1300,9 +1300,21 @@ struct LinkedRun {
     size_t forces = 0, def_start = 0, att_start = 0, att_reserve = 0;
     uint32_t fought = 0;
     std::string log, conflicts;
+    // story t07: the record's P9-P14 as the battle sees them, and the P13 banner (ask = the battle dialog answers Pending).
+    CampaignBattles::LinkedPresentation presentation;
+    galactic::LinkedResolution resolution = galactic::LinkedResolution::None, resolution_after = galactic::LinkedResolution::None;
+    bool skipped_dialog = false;
+    uint64_t banner_tick = 0, begin_tick = 0;
+    bool paused_in_banner = true, begin_refused_early = false;
+    // story t10: `post` puts an Underworld (attacker) S10_Trooper (Is_Branched_Map_Discardable by default) on the land map;
+    // -1 = not checked, else whether it is in the battle at its first frame; and the request's linked flag.
+    int post_kept = -1;
+    bool request_linked = false;
 };
 
-LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
+// `params9`: Reward_Param9.. XML appended after Param8 (story t07). `ask`: human_choice Pending (the game's battle dialog), so
+// a P13 banner waits for ResumeGame, sent 20 ticks after it went up. `post`: see LinkedRun::post_kept.
+LinkedRun run_linked(const Data& d, bool space, bool sandbox, const std::string& params9 = {}, bool ask = false, bool post = false) {
     LinkedRun out;
     const fs::path x = d.root / "Data/XML";
     write_file(x / "Story_Plots_Link.xml", "<Story_Mode_Plots><Active_Plot>Story_Link.xml</Active_Plot></Story_Mode_Plots>\n");
@@ -1313,7 +1325,7 @@ LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
                    (space ? "SPACE" : "LAND") + "</Reward_Param2><Reward_Param3>Underworld</Reward_Param3><Reward_Param4> " +
                    (space ? "S10_Space_B" : "S10_Land_B") + " </Reward_Param4><Reward_Param5>Empire</Reward_Param5>"
                    "<Reward_Param6></Reward_Param6><Reward_Param7></Reward_Param7><Reward_Param8>" + (sandbox ? "1" : "0") +
-                   "</Reward_Param8></Event>\n</Story>\n");
+                   "</Reward_Param8>" + params9 + "</Event>\n</Story>\n");
     DirectoryProvider files(path_to_utf8(d.root));
     jobs::JobSystem js(jobs::JobSystemConfig{0});
     SimConfig cfg;
@@ -1331,13 +1343,21 @@ LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
     std::vector<std::string> diag;
     CHECK(host.start_story(st, &diag));
     CampaignBattleOptions opt;
-    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.conflict.human_choice = ask ? galactic::BattleChoice::Pending : galactic::BattleChoice::Fight;
     opt.battle.max_frames = 300;
     CampaignBattles battles(host, d.crules, *d.catalog,
-                            [](const std::string& name, terrain::MapData& m) {
+                            [post](const std::string& name, terrain::MapData& m) {
                                 if (name == "S10_Space_B") m = space_map();
                                 else if (name == "S10_Land_B") m = land_map();
                                 else return false;
+                                if (post && name == "S10_Land_B") {
+                                    terrain::ObjectPlacement pl;
+                                    pl.type_crc = name_crc("S10_Trooper");
+                                    pl.owner = 1;  // Underworld (faction index 1)
+                                    pl.position[0] = 700.0f;
+                                    pl.position[1] = 1800.0f;
+                                    m.objects.push_back(pl);
+                                }
                                 return true;
                             },
                             opt);
@@ -1345,11 +1365,24 @@ LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
     for (uint64_t t = 0; t < 400 && battles.battles_fought() == 0; ++t) {
         const size_t fired = host.story() ? host.story()->linked_tactical().size() : 0;
         host.tick_once();
-        out.flag_after_tick = out.flag_after_tick || gs->linked_battle_pending();
+        // story t07: the record waits while its banner is up (the flag stays set then, so it is only tracked outside it)
+        out.flag_after_tick = out.flag_after_tick || (gs->linked_battle_pending() && !battles.linked_banner_up() && !battles.linked_record());
         if (host.story() && fired == 0 && !host.story()->linked_tactical().empty()) out.reward_tick = host.frame();
+        if (battles.linked_banner_up()) {
+            if (out.banner_tick == 0) out.banner_tick = host.frame();
+            out.paused_in_banner = out.paused_in_banner && gs->paused();
+            if (host.frame() == out.banner_tick + 20 && out.begin_tick == 0) {
+                commands::EventData ev(commands::EventType::ResumeGame);
+                ev.set("flag", 0);  // Begin
+                host.submit(0, ev);
+                out.begin_tick = host.frame() + 1;  // executed at the next tick's command phase
+            }
+        }
         if (battles.battle() && !out.started) {
             out.started = true;
             out.start_tick = host.frame();
+            out.presentation = battles.linked_presentation();
+            out.resolution = battles.linked_resolution();
             out.land = battles.battle()->ground_height(0.0f, 0.0f) > -1e30f;
             const galactic::BattleRequest& r = battles.conflicts().active_request();
             out.forces = r.forces.size();
@@ -1358,10 +1391,22 @@ LinkedRun run_linked(const Data& d, bool space, bool sandbox) {
                 out.att_start = r.forces[1].start.size();
                 out.att_reserve = r.forces[1].reserve.size();
             }
+            out.request_linked = r.linked;
         }
     }
-    for (int t = 0; t < 400 && battles.battle(); ++t) host.tick_once();  // run the battle out
+    for (int t = 0; t < 400 && battles.battle(); ++t) {  // run the battle out
+        host.tick_once();
+        if (post && out.post_kept < 0 && battles.battle() && host.tactical() && battles.battle()->frame() >= 1) {
+            const objects::ObjectStore& ts = host.tactical()->primary();
+            const objects::TypeIndex pt = d.types.resolve_name("S10_Trooper");
+            out.post_kept = 0;
+            for (const objects::ObjectHandle h : ts.all_objects())
+                if (ts.alive(h) && ts.type(h) == pt && ts.owner(h) == battles.battle()->request().info.attacker) out.post_kept = 1;
+        }
+    }
     out.fought = battles.battles_fought();
+    out.resolution_after = battles.linked_resolution();
+    out.skipped_dialog = battles.linked_presentation().last_battle_skipped_dialog;
     for (const std::string& l : battles.log()) out.log += l + "; ";
     for (const auto& e : battles.conflicts().log()) out.conflicts += e.text(*gs) + "; ";
     return out;
@@ -1595,7 +1640,48 @@ void test_linked_battle(const Data& d) {
         CHECK(r.def_start == (sandbox ? 1u : 0u));  // not sandbox: no galactic unit; sandbox: the human defender's squad
         CHECK(r.fought == 1 && r.log.find("LINK_TACTICAL S10_B") != std::string::npos && r.log.find(" started") != std::string::npos);
         CHECK(r.conflicts.find(space ? " space S10_B " : " land S10_B ") != std::string::npos);
+        // story t07: defaults (P9 1, P12 DESTROY_AI, P13 on but answered at once headless); the dialog skip is taken at the end.
+        CHECK(r.resolution == galactic::LinkedResolution::DestroyAi && r.resolution_after == galactic::LinkedResolution::None);
+        CHECK(r.presentation.arrival == 1 && r.presentation.arrival_cinematic && !r.presentation.hyperspace_hold);
+        CHECK(!r.presentation.presentation_a && !r.presentation.presentation_b && r.skipped_dialog && r.banner_tick == 0);
     }
+}
+
+// story t07 (BT §2.9.1 / §2.9.3): LINK_TACTICAL Param9-14. (1) P9 2 / P10 1 / P11 1 / P12 RETREAT_PLAYER / P13 0 / P14 0: the
+// arrival hold and presentation flags are set at the start, GOM+0x61c = RETREAT_PLAYER during the battle and cleared by its
+// end; a bad P12 keyword is logged and falls back to DESTROY_AI. (2) The P13 banner with the battle dialog (Pending): the
+// record waits with the galaxy paused until ResumeGame (Begin), then starts at the next hook; before it, no battle.
+void test_linked_params(const Data& d) {
+    const auto p = [](int n, const char* v) { return "<Reward_Param" + std::to_string(n) + ">" + v + "</Reward_Param" + std::to_string(n) + ">"; };
+    const LinkedRun a = run_linked(d, true, false, p(9, "2") + p(10, "1") + p(11, "1") + p(12, "RETREAT_PLAYER") + p(13, "0") + p(14, "0"));
+    std::printf("  P9-P14: started tick %" PRIu64 " (reward %" PRIu64 "), arrival %d hold %d A %d letterbox %d B %d, resolution %d -> %d, "
+                "dialog skipped %d\n",
+                a.start_tick, a.reward_tick, a.presentation.arrival, a.presentation.hyperspace_hold ? 1 : 0, a.presentation.presentation_a ? 1 : 0,
+                a.presentation.letterbox ? 1 : 0, a.presentation.presentation_b ? 1 : 0, static_cast<int>(a.resolution),
+                static_cast<int>(a.resolution_after), a.skipped_dialog ? 1 : 0);
+    CHECK(a.started && a.start_tick == a.reward_tick + 1 && a.fought == 1);
+    CHECK(a.presentation.arrival == 2 && a.presentation.arrival_cinematic && a.presentation.hyperspace_hold);
+    CHECK(a.presentation.presentation_a && a.presentation.letterbox && a.presentation.presentation_b);
+    CHECK(a.resolution == galactic::LinkedResolution::RetreatPlayer && a.resolution_after == galactic::LinkedResolution::None);
+    CHECK(a.skipped_dialog);
+    const LinkedRun u = run_linked(d, false, false, p(9, "0") + p(12, "RETREAT_EVERYONE"));
+    CHECK(u.started && u.resolution == galactic::LinkedResolution::DestroyAi && !u.presentation.arrival_cinematic && !u.presentation.hyperspace_hold);
+    CHECK(u.log.find("Unknown resolution RETREAT_EVERYONE") != std::string::npos);
+    const LinkedRun b = run_linked(d, true, false, {}, true);  // P13 default on, the dialog answers Pending
+    std::printf("  P13 banner: reward tick %" PRIu64 ", banner %" PRIu64 ", Begin %" PRIu64 ", battle %" PRIu64 ", paused %d\n    battles: %s\n",
+                b.reward_tick, b.banner_tick, b.begin_tick, b.start_tick, b.paused_in_banner ? 1 : 0, b.log.c_str());
+    CHECK(b.banner_tick == b.reward_tick + 1 && b.paused_in_banner && b.begin_tick == b.banner_tick + 21);
+    CHECK(b.started && b.start_tick == b.begin_tick && b.fought == 1);  // Begin at the command phase, pushed at that tick's hook
+    CHECK(b.log.find("LINK_TACTICAL S10_B space banner") != std::string::npos && !b.flag_after_tick);
+}
+
+// story t10 (REMAINING_GAPS §3.1 item 4, [M] global 0x140b155d8; BT §3.1a item 4): a linked battle keeps the attacker's
+// Is_Branched_Map_Discardable map objects (Kessel UM01's jailed UMP_TYBER_ZANN): an Underworld S10_Trooper placed on the
+// map, which a normal invade drops (as the S4_Post of the map owners test: owner = attacker), is in the linked land battle.
+void test_linked_map_objects(const Data& d) {
+    const LinkedRun r = run_linked(d, false, false, {}, false, true);
+    std::printf("  linked land: attacker's branched-discardable trooper kept %d, request linked %d\n", r.post_kept, r.request_linked ? 1 : 0);
+    CHECK(r.started && r.request_linked && r.post_kept == 1);
 }
 
 // a1j t05 (A1_READINGS §31.7, BT §1.4 step 2): 0x2be640 skips the space/land state machines while the story block holds
@@ -1752,6 +1838,8 @@ struct S4Run {
     uint32_t garrisoned_frames = 0;
     int mission = -1, piracy = -1;
     int32_t winner = -2;
+    size_t mission_units = 99;          // story t08: galactic units in the mission battle's request (start + reserve)
+    uint64_t mission_tick = 0, battle_tick = 0;
     int32_t corruption_b = -2, corruption_a = -2;
     float credits_before = -1.0f, credits_after = -1.0f;
 };
@@ -1778,7 +1866,7 @@ terrain::MapData s4_map(bool sensor = false) {
     return m;
 }
 
-// corruption: 0 none, 1 mission, 2 hero alone; attack_sensor (a1f t07): the map gets a neutral S4_Sensor and the Empire
+// corruption: 0 none, 1 mission, 2 hero alone, 3 (story t08) mission with no Underworld unit near S10_B; attack_sensor (a1f t07): the map gets a neutral S4_Sensor and the Empire
 // troopers only attack it (frame 60), no other scripted orders.
 S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, int corruption, bool attack_sensor = false) {
     using R = commands::RejectReason;
@@ -1807,7 +1895,10 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
     for (const auto& m : diag) std::printf("  story diag: %s\n", m.c_str());
     CampaignBattleOptions opt;
     opt.conflict.human_choice = galactic::BattleChoice::Fight;
-    opt.battle.max_frames = 6000;
+    // story t08 + t06: a corruption mission brings no galactic unit and the victory monitor tests only when a
+    // victory-relevant object leaves a player, so the synthetic mission (no plot VICTORY) ends at the time limit, where
+    // the defender holds [port]; kept short so the galaxy is back before the piracy step at tick 2700.
+    opt.battle.max_frames = corruption ? 1200 : 6000;
     opt.battle.skip_human_units = corruption == 0;  // the corruption runs let the stand-in fight for both sides
     opt.battle.land_capture_countdown = 0.0f;
     std::vector<std::string>* maps = &out.maps;
@@ -1842,7 +1933,7 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
         for (int i = 0; i < 4 && !gs->planet_revealed_raw(1); ++i) host.tick_once();
         CHECK(gs->planet_revealed_raw(1));
     }
-    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == R::None);
+    if (!uf.empty() && corruption != 3) CHECK(gs->move_fleet(1, uf[0], 1) == R::None);
     bool invaded = false;
     std::vector<objects::ObjectId> troopers;
     objects::ObjectId bunker = objects::kNoObjectId, post = objects::kNoObjectId, sensor = objects::kNoObjectId;
@@ -1855,6 +1946,19 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
             // S10_A's Piracy option has no mission: applied directly (AI or human corrupter) as a 5 s timed gain (GRC 4.3).
             out.piracy = static_cast<int>(battles.start_corruption(0, 1, 1));
             out.corruption_a = gs->corruption_transition_active(0) ? gs->effective_corruption_type(0) : int8_t{-2};
+        }
+        if (corruption == 3 && !invaded && host.modes().depth() == 1) {  // story t08: the linked start needs no unit in orbit
+            CHECK(gs->fleets_at(1, 1).empty());
+            out.credits_before = gs->credits(1);
+            out.mission = static_cast<int>(battles.start_corruption(1, 1, 2));
+            out.credits_after = gs->credits(1);
+            out.mission_tick = host.frame();
+            invaded = true;
+        }
+        if (!out.battle_tick && battles.battle()) {
+            out.battle_tick = host.frame();
+            out.mission_units = 0;
+            for (const galactic::BattleForces& bf : battles.conflicts().active_request().forces) out.mission_units += bf.start.size() + bf.reserve.size();
         }
         if (!invaded && host.modes().depth() == 1) {
             const std::vector<uint32_t> f = gs->fleets_at(1, 1);
@@ -2119,14 +2223,28 @@ void test_s4_battle(const Data& d) {
     if (c.winner == 1) CHECK(c.corruption_b == 2);
     CHECK(c.log.find("CorruptionMission") != std::string::npos);
     CHECK(c.piracy == static_cast<int>(CampaignBattles::CorruptionStart::Applied) && fired_in(c.log, "Pirated"));
+    CHECK(c.mission_units == 0);  // story t08: not sandbox, the map and the mission plots supply every unit
+    // story t08: no Underworld unit anywhere near S10_B - the mission starts at once through the linked record (BT §2.9.3,
+    // L1_S4_REMAINING §4.5), its battle is pushed at the next hook and the mission's story events follow its winner.
+    const S4Run n = run_s4_battle(d, files, 0, 3);
+    for (const auto& m : n.battles) std::printf("  %s\n", m.c_str());
+    std::printf("  corruption, no units in orbit: mission %d (tick %" PRIu64 ", battle tick %" PRIu64 ", galactic units %zu), winner %d\n",
+                n.mission, n.mission_tick, n.battle_tick, n.mission_units, n.winner);
+    CHECK(n.mission == static_cast<int>(CampaignBattles::CorruptionStart::MissionQueued) && n.credits_after == n.credits_before - 500.0f);
+    CHECK(n.battle_tick == n.mission_tick + 1 && n.mission_units == 0 && (n.winner == 0 || n.winner == 1));
+    CHECK(n.log.find("CorruptionMission") != std::string::npos);
+    CHECK(fired_in(n.log, "Corrupt_Done") == (n.winner == 1) && fired_in(n.log, "Corrupt_Failed") == (n.winner != 1));
+    bool started_line = false;
+    for (const std::string& m : n.battles) started_line = started_line || m == "corruption: mission land started";
+    CHECK(started_line);
     const S4Run c4 = run_s4_battle(d, files, 4, 1);
     CHECK(c4.log == c.log && !first_divergence(c.crc, c4.crc).diverged);
     // The mission with the hero alone: the defenders win -> _FAILED, no corruption.
     const S4Run f = run_s4_battle(d, files, 0, 2);
     std::printf("  corruption, hero alone: mission %d, winner %d, B corruption %d; Corrupt_Done %d, Corrupt_Failed %d\n", f.mission,
                 f.winner, f.corruption_b, fired_in(f.log, "Corrupt_Done") ? 1 : 0, fired_in(f.log, "Corrupt_Failed") ? 1 : 0);
-    // battle host: TACTICAL_GAPS §4.2 - the hero leads, but the attacker's other ground units in orbit wait in the
-    // reserve and reinforce (ConflictManager land split), so the mission may now be won: the story events follow the winner.
+    // story t08: the mission starts through the linked record (not sandbox): no galactic unit enters, so the units the
+    // test picks no longer matter; the story events follow the winner.
     CHECK(f.mission == static_cast<int>(CampaignBattles::CorruptionStart::MissionQueued) && (f.winner == 0 || f.winner == 1));
     CHECK(fired_in(f.log, "Corrupt_Failed") == (f.winner != 1) && fired_in(f.log, "Corrupt_Done") == (f.winner == 1) &&
           (f.winner == 1 ? f.corruption_b == 2 : f.corruption_b == -1));
@@ -5722,6 +5840,8 @@ int main(int argc, char** argv) {
     test_story_battle(*d);
     std::printf("linked battle flag (REMAINING_GAPS 6.4)\n");
     test_linked_battle(*d);
+    test_linked_params(*d);  // story t07
+    test_linked_map_objects(*d);  // story t10
     std::printf("story Invade() of a scripted fleet (a1f t08, S10 PROBE A)\n");
     test_probe_invade(*d);
     test_invade_planet_reward(*d);
