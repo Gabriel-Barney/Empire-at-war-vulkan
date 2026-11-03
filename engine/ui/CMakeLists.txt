@@ -214,3 +214,13 @@ if(TARGET alamo_render)
   add_test(NAME alamo_ui_render_bridge_tests COMMAND alamo_ui_render_bridge_tests)
   set_tests_properties(alamo_ui_render_bridge_tests PROPERTIES TIMEOUT 60)
 endif()
+
+# p4ui t04 (CPU, synthetic data): which fleet fills which of the three organiser panes (docs/re/UI.md §7).
+add_executable(alamo_ui_organizer_tests tests/test_gui_organizer.cpp)
+target_link_libraries(alamo_ui_organizer_tests PRIVATE alamo_ui_hud alamo_data)
+if(TARGET alamo_vfs)
+  target_link_libraries(alamo_ui_organizer_tests PRIVATE alamo_vfs)
+  target_compile_definitions(alamo_ui_organizer_tests PRIVATE ALAMO_UI_HAVE_VFS=1)
+endif()
+add_test(NAME alamo_ui_organizer_tests COMMAND alamo_ui_organizer_tests)
+set_tests_properties(alamo_ui_organizer_tests PROPERTIES TIMEOUT 60)
