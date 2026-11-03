@@ -45,7 +45,7 @@ using save::get_vec;
 using save::put_vec;
 
 namespace {
-constexpr uint32_t kWorldVersion = 2;  // 2: pristine pooled VMs by reference
+constexpr uint32_t kWorldVersion = 3;  // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07)
 constexpr uint32_t kResolverVersion = 1;
 constexpr int kMaxValueDepth = 32;
 
@@ -381,6 +381,11 @@ void GalacticAiWorld::write(ByteWriter& w) const {
     // ---- shape ----
     w.u32(static_cast<uint32_t>(m.ai.size()));
     for (const auto& a : m.ai) w.boolean(a != nullptr);
+    for (const auto& a : m.ai)  // q6 t07: types may differ from the session's start (set_ai_type)
+        if (a) {
+            w.str(a->type->name);
+            w.i32(a->difficulty);
+        }
     w.u32(static_cast<uint32_t>(m.library.plans.size()));
     w.u32(static_cast<uint32_t>(m.sim.planets().size()));
     // ---- counters ----
@@ -632,10 +637,39 @@ bool GalacticAiWorld::read(ByteReader& r) {
     if (r.u32() != kWorldVersion || !r.ok()) return false;
     // ---- shape: the loader rebuilt the same session ----
     if (r.u32() != m.ai.size() || !r.ok()) return false;
-    for (const auto& a : m.ai)
-        if (r.boolean() != (a != nullptr) || !r.ok()) return false;
+    std::vector<uint8_t> present(m.ai.size());
+    for (uint8_t& b : present) b = r.boolean() ? 1 : 0;
+    if (!r.ok()) return false;
+    // q6 t07: the saved AI players' types. A player whose type / difficulty differs from this world's (set_ai_type ran
+    // in the saved session) gets a fresh staged AI player of the saved type, built as set_ai_type builds it.
+    std::vector<GalacticAiPlayerConfig> saved_cfg;
+    for (size_t i = 0; i < present.size(); ++i) {
+        if (!present[i]) continue;
+        GalacticAiPlayerConfig pc;
+        pc.player = static_cast<int32_t>(i);
+        pc.ai_type = r.str();
+        pc.difficulty = r.i32();
+        if (!r.ok() || !m.defs.find_player(pc.ai_type) || pc.difficulty < 0 || pc.difficulty > 2) return false;
+        saved_cfg.push_back(std::move(pc));
+    }
     if (r.u32() != lib || r.u32() != planets || !r.ok()) return false;
-    auto valid_ai = [&m](int32_t p) { return m.player_ai(p) != nullptr; };
+    std::vector<std::unique_ptr<PlayerAi>> fresh(m.ai.size());
+    {
+        std::vector<GalacticAiPlayerConfig> live_cfg = std::move(m.cfg.players);
+        m.cfg.players = saved_cfg;  // make_player's stagger ordinal reads the saved player list
+        for (const GalacticAiPlayerConfig& pc : saved_cfg) {
+            const PlayerAi* cur = m.player_ai(pc.player);
+            const AiPlayerTypeDef* type = m.defs.find_player(pc.ai_type);
+            if (!cur || cur->type != type || cur->difficulty != pc.difficulty)
+                fresh[static_cast<size_t>(pc.player)] = m.make_player(pc.player, type, pc.difficulty, nullptr);
+        }
+        m.cfg.players = std::move(live_cfg);
+    }
+    auto staged_ai = [&m, &present, &fresh](size_t i) -> PlayerAi* {
+        if (i >= present.size() || !present[i]) return nullptr;
+        return fresh[i] ? fresh[i].get() : m.ai[i].get();
+    };
+    auto valid_ai = [&staged_ai](int32_t p) { return p >= 0 && staged_ai(static_cast<size_t>(p)) != nullptr; };
     // ---- counters ----
     const int64_t now = r.i64(), perception_frame = r.i64();
     const int32_t market_sim_frame = r.i32(), current_plan = r.i32();
@@ -680,8 +714,8 @@ bool GalacticAiWorld::read(ByteReader& r) {
     // ---- AI players ----
     std::vector<StagedPlayer> players(m.ai.size());
     for (size_t i = 0; i < m.ai.size(); ++i) {
-        if (!m.ai[i]) continue;
-        PlayerAi& pa = *m.ai[i];
+        if (!staged_ai(i)) continue;
+        PlayerAi& pa = *staged_ai(i);
         StagedPlayer& sp = players[i];
         sp.ctx = pa.ctx;
         if (!sp.ctx.read(r)) return false;
@@ -1053,6 +1087,12 @@ bool GalacticAiWorld::read(ByteReader& r) {
     m.world.tactical_releases = std::move(world.releases);
     m.world.budget_flushes = std::move(world.flushes);
     m.globals = std::move(globals);
+    for (size_t i = 0; i < m.ai.size(); ++i) {  // q6 t07: the saved AI player set (fresh players replace changed ones)
+        if (!present[i]) m.ai[i].reset();
+        else if (fresh[i]) m.ai[i] = std::move(fresh[i]);
+    }
+    m.cfg.players = std::move(saved_cfg);
+    if (!m.cfg.players.empty()) m.install_sim_hooks();
     for (size_t i = 0; i < m.ai.size(); ++i) {
         if (!m.ai[i]) continue;
         PlayerAi& pa = *m.ai[i];

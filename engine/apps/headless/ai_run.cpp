@@ -107,6 +107,23 @@ bool load_human_script(const std::string& path, std::vector<HumanCommand>& out, 
     return true;
 }
 
+#ifdef ALAMO_SIM_HAVE_STORY
+// q6 t07: a fired story reward "SWITCH_CONTROL[<player>|<AI type>]" (the story log's reward text) -> its two
+// parameters. Reward_Param1 = the player (faction name, or "#player:N" for a player object), Reward_Param2 = the
+// AIPlayerType name. Thrawn's Revenge fires it from Lua (StoryUtil.ChangeAIPlayer: Set_Reward_Parameter + Story_Event).
+bool parse_switch_control(const std::string& reward, std::string& player, std::string& type) {
+    static constexpr std::string_view kHead = "SWITCH_CONTROL[";
+    if (reward.size() < kHead.size() + 1 || reward.compare(0, kHead.size(), kHead) != 0 || reward.back() != ']') return false;
+    const std::string body = reward.substr(kHead.size(), reward.size() - kHead.size() - 1);
+    const size_t bar = body.find('|');
+    if (bar == std::string::npos) return false;
+    player = body.substr(0, bar);
+    const size_t bar2 = body.find('|', bar + 1);
+    type = body.substr(bar + 1, bar2 == std::string::npos ? std::string::npos : bar2 - bar - 1);
+    return !player.empty() && !type.empty();
+}
+#endif
+
 }  // namespace
 
 int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
@@ -182,7 +199,16 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         galactic::PlayerSetup& ps = setup.players[p];
         const std::string fac = ps.faction < rules.factions.size() ? rules.factions[ps.faction].name : std::string();
         std::string type = ai::campaign_ai_type(control, basic_ai, fac, true);
-        if (!type.empty() && !defs.find_player(type)) type.clear();  // unknown type: no AI ("Unrecognized AI player type")
+        for (const std::string& o : aopt.ai_types) {  // q6 t07 [port] --ai-type FACTION=TYPE (last one wins)
+            const size_t eq = o.find('=');
+            if (eq != std::string::npos && ai::ai_iequal(ai::ai_trim(std::string_view(o).substr(0, eq)), fac))
+                type = ai::ai_iequal(ai::ai_trim(std::string_view(o).substr(eq + 1)), "Human") ? std::string()
+                                                                                                 : std::string(ai::ai_trim(std::string_view(o).substr(eq + 1)));
+        }
+        if (!type.empty() && !defs.find_player(type)) {
+            std::printf("galactic-ai: player %zu (%s): Unrecognized AI player type %s\n", p, fac.c_str(), type.c_str());
+            type.clear();
+        }  // unknown type: no AI ("Unrecognized AI player type")
         if (type.empty() || (ps.faction < rules.factions.size() && rules.factions[ps.faction].is_neutral)) continue;
         if (!aopt.human.empty() && human < 0 && ai::ai_iequal(fac, aopt.human)) {
             ps.human = true;
@@ -214,6 +240,11 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
                 "%zu equations\n",
                 name.c_str(), setup.map.planets.size(), gcfg.players.size(), human, human_cmds.size(), defs.goals.size(), plan_files.size(),
                 eqs.size());
+    if (aopt.verbose) {  // q6 t07: which AIPlayerType each AI player got
+        std::string types_line = "galactic-ai: AI types:";
+        for (const ai::GalacticAiPlayerConfig& pc : gcfg.players) types_line += " p" + std::to_string(pc.player) + "=" + pc.ai_type;
+        std::printf("%s\n", types_line.c_str());
+    }
 
     struct Out {
         CrcLog crc;
@@ -315,14 +346,19 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         }
         world.register_crc(host.crc_registry());
         world.set_global_values(host.global_values());  // Int-final: session-wide GlobalValue table
-        // T7: the AI players' updates, player index order (SimHost calls controllers in index order).
-        for (const ai::GalacticAiPlayerConfig& pc : gcfg.players)
-            host.set_controller(static_cast<uint8_t>(pc.player), [&world, &battles](sim::SimHost& h, uint8_t p, uint64_t frame) {
+        // T7: the AI players' updates, player index order (SimHost calls controllers in index order). q6 t07: every player
+        // but the scripted human gets one, because a SWITCH_CONTROL reward can give a player an AI later; a player
+        // without an AI does nothing there (as before: no update_player call).
+        for (size_t pi = 0; pi < setup.players.size(); ++pi) {
+            if (static_cast<int32_t>(pi) == human) continue;
+            host.set_controller(static_cast<uint8_t>(pi), [&world, &battles](sim::SimHost& h, uint8_t p, uint64_t frame) {
+                if (!world.is_ai_player(p)) return;
                 const sim::GameMode* top = h.modes().top();
                 const bool galactic_top = top && !top->tactical();
                 const bool busy = battles.conflicts().state() == galactic::ConflictState::AutoRunning;
                 world.update_player(p, static_cast<int64_t>(frame), galactic_top, busy);
             });
+        }
         // The scripted human (--human): its recorded commands go through the scheduled pipeline (SimHost::submit).
         std::vector<std::string> human_log;
         size_t next_cmd = 0;
@@ -386,8 +422,38 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         std::string owner_log;
         uint32_t owner_changes = 0;
         if (trace.is_open()) trace.start(*gs, cfg.seed);
+        size_t story_seen = 0;  // q6 t07: fired story log entries already scanned for SWITCH_CONTROL
         while (n < opt.ticks && host.tick_once()) {
             ++n;
+#ifdef ALAMO_SIM_HAVE_STORY
+            // q6 t07: story reward SWITCH_CONTROL (AI_GALACTIC §1.2: Set_AI_Type, then the difficulty). [port] The story
+            // session leaves this reward to the host and has no hook for it, so the host reads the fired log after the
+            // tick: the new AI is in place before the next T7, as when the reward runs in T9; only this tick's end-of-tick
+            // AI CRC still shows the old one. Difficulty = the run's Normal [port: the original reads the session
+            // difficulty global]. The scripted human keeps its control [port].
+            if (const sim::StorySession* story = host.story()) {
+                const auto& fired = story->log();
+                for (; story_seen < fired.size(); ++story_seen) {
+                    std::string who, type;
+                    if (!parse_switch_control(fired[story_seen].reward, who, type)) continue;
+                    int32_t player = -1;
+                    if (who.rfind("#player:", 0) == 0) player = std::atoi(who.c_str() + 8);
+                    else player = gs->player_of_faction(who);
+                    std::string note = std::to_string(fired[story_seen].frame) + " SWITCH_CONTROL " + who + " " + type + ": ";
+                    if (player < 0 || static_cast<size_t>(player) >= setup.players.size()) {
+                        note += "no such player";
+                    } else if (player == human) {
+                        note += "scripted human, ignored";
+                    } else {
+                        std::vector<std::string> sd;
+                        const bool changed = world.set_ai_type(player, type, 1, &sd);
+                        note += changed ? "p" + std::to_string(player) + " is now " + (world.ai_type(player).empty() ? "Human" : world.ai_type(player))
+                                        : (sd.empty() ? "no change" : sd.front());
+                    }
+                    if (print && aopt.verbose) std::printf("galactic-ai: %s\n", note.c_str());
+                }
+            }
+#endif
             if (trace.is_open()) {
                 const sim::GameMode* top = host.modes().top();
                 PortStateTrace::Sample ts;

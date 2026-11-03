@@ -3216,6 +3216,105 @@ static void test_save_synthetic() {
     check_save_load(in, "synthetic", 30 * 90, 30 * 240, 48, false);
 }
 
+// q6 t07: Variable_Target.Type.IsType on a planet reads the planet's own type name (Thrawn's Revenge picks planets by
+// name with it). ParityWorld: P2 is SynPlanetRestricted, the others SynPlanet.
+static void test_planet_type_is_type() {
+    ParityWorld pw(false, {"BuildBarracks"});
+    pw.run(2);
+    auto token = [&pw](const char* text, int32_t target, bool& ok) {
+        EquationSet e;
+        e.add("T", text);
+        e.link();
+        EvalContext c;
+        c.self = 0;
+        c.target = target;
+        const EvalResult r = evaluate(e, e.find("T"), c, pw.world->resolver());
+        ok = r.ok;
+        return r.value;
+    };
+    bool ok = false;
+    CHECK(token("Variable_Target.Type.IsType {Parameter_Type = \"SynPlanet\"}", 0, ok) == 1.0 && ok);
+    CHECK(token("Variable_Target.Type.IsType {Parameter_Type = \"synplanet\"}", 1, ok) == 1.0 && ok);  // case-insensitive
+    CHECK(token("Variable_Target.Type.IsType {Parameter_Type = \"SynPlanetRestricted\"}", 0, ok) == 0.0 && ok);
+    CHECK(token("Variable_Target.Type.IsType {Parameter_Type = \"SynPlanetRestricted\"}", 2, ok) == 1.0 && ok);
+    CHECK(token("Variable_Target.Type.IsType {Parameter_Type = \"SynPlanet\"}", 2, ok) == 0.0 && ok);  // own name only
+    CHECK(token("Variable_Target.Type.IsType", 0, ok) == 0.0 && ok);                                   // no names listed
+}
+
+// q6 t07: GalacticAiWorld::set_ai_type (the SWITCH_CONTROL story reward, AI_GALACTIC §1.2). A player with no AI gets
+// one mid-game and plays; an unknown type is refused and logged; "Human" removes the AI; the N1 save carries the AI
+// player types, so a loader's world rebuilt from the starting configuration takes the switched players back.
+static void test_ai_type_switch() {
+    MemoryFiles files;
+    AiDefinitions defs;
+    EquationSet eqs;
+    SaveRigInputs in;
+    syn_data(files, defs, eqs, in.plan_files);
+    const gal::GalacticRules rules = syn_rules();
+    const gal::GalacticSetup setup = syn_setup();
+    objects::GameObjectTypes types;
+    in.rules = &rules;
+    in.setup = &setup;
+    in.types = &types;
+    in.files = &files;
+    in.defs = &defs;
+    in.eqs = &eqs;
+    in.tinfo.resize(tTypes);
+    in.tinfo[tFrigate].categories = {"FRIGATE"};
+    in.tinfo[tCorvette].categories = {"CORVETTE"};
+    in.tinfo[tInfantry].categories = {"INFANTRY"};
+    in.tinfo[tSB1].categories = in.tinfo[tSB2].categories = {"STRUCTURE"};
+    in.cfg.players = {{0, "SynEmpire", 1}};  // the Rebels start without an AI
+    in.cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
+    in.seed_synced = 4242u;
+    in.seed_free = 77u;
+    in.conflicts = true;
+    SaveRig a(in), b(in);
+    const bool started = a.start() && b.start();
+    CHECK(started);
+    if (!started) return;
+    CHECK(save_lockstep(a, {&b}, 1, 300, "ai type switch"));
+    CHECK(!a.world->is_ai_player(1) && a.world->ai_type(1).empty() && a.world->ai_type(0) == "SynEmpire");
+    std::vector<std::string> diag;
+    CHECK(!a.world->set_ai_type(1, "Bogus", 1, &diag) && !a.world->is_ai_player(1));
+    CHECK(diag.size() == 1 && diag[0] == "Unrecognized AI player type Bogus");
+    CHECK(!a.world->set_ai_type(1, "Human", 1) && !a.world->set_ai_type(99, "SynRebel", 1));  // no AI to remove; bad slot
+    CHECK(!a.world->set_ai_type(0, "SynEmpire", 1));                                          // same type: no change
+    for (SaveRig* r : {&a, &b}) CHECK(r->world->set_ai_type(1, " SynRebel ", 1));
+    CHECK(a.world->is_ai_player(1) && a.world->ai_type(1) == "SynRebel" && a.crc() == b.crc());
+    CHECK(!a.world->set_ai_type(1, "synrebel", 1));
+    CHECK(save_lockstep(a, {&b}, 301, 30 * 240, "ai type switch"));
+    size_t p1 = 0;
+    bool switch_logged = false;
+    for (const AiDecision& d : a.world->decision_log())
+        if (d.player == 1) {
+            ++p1;
+            switch_logged = switch_logged || (d.frame == 300 && d.text == "ai type SynRebel");
+        }
+    std::printf("ai type switch: the Rebels' AI from frame 300: %zu decisions, %zu running plans, %llu orders\n", p1,
+                a.world->running_plans(), static_cast<unsigned long long>(a.world->orders_issued()));
+    CHECK(switch_logged && p1 > 5);
+    // N1: B's world rebuilt from the starting configuration (Rebels without an AI) takes the switched type back.
+    const bool lua = lua_state_persists();
+    if (!lua)
+        for (SaveRig* r : {&a, &b}) r->world->set_save_lua_state(false);
+    const std::vector<uint8_t> bytes = a.save();
+    const GameRandom rng_before = b.rng;
+    CHECK(b.make_world());
+    b.rng = rng_before;
+    if (!lua) b.world->set_save_lua_state(false);
+    CHECK(!b.world->is_ai_player(1));
+    CHECK(b.load(bytes) && b.world->ai_type(1) == "SynRebel" && b.ai_digest() == a.ai_digest() && b.save() == bytes);
+    const int32_t at = 301 + 30 * 240;
+    if (lua) CHECK(save_lockstep(a, {&b}, at, 30 * 60, "ai type switch (loaded)"));
+    // "Human" removes the AI; a save without it loaded into a world that has it drops it.
+    CHECK(a.world->set_ai_type(1, "Human", 1) && !a.world->is_ai_player(1) && a.world->running_plans() <= b.world->running_plans());
+    CHECK(a.world->decision_log().back().text == "ai type Human");
+    const std::vector<uint8_t> human = a.save();
+    CHECK(b.world->is_ai_player(1) && b.load(human) && !b.world->is_ai_player(1) && b.ai_digest() == a.ai_digest());
+    if (lua) CHECK(save_lockstep(a, {&b}, at + 30 * 60, 30 * 30, "ai type switch (human)"));
+}
+
 // ================================================================ FoC data
 
 #ifdef ALAMO_AI_HAVE_VFS
@@ -3522,6 +3621,8 @@ int main(int argc, char** argv) {
     test_free_store_world();
     test_underworld_special();
     test_save_synthetic();
+    test_planet_type_is_type();
+    test_ai_type_switch();
 #ifdef ALAMO_AI_HAVE_VFS
     test_foc_data();
     test_save_foc();
