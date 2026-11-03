@@ -317,6 +317,37 @@ static void test_grid() {
         two.stamp(3, c);
         CHECK(two.effective(10, 10) == (kPassObstacle | kPassRebelWall) && two.unstamp(1) && two.effective(10, 10) == kPassObstacle);
     }
+    // OPT3 t11: stamp_all (cells sampled through a ParallelFor, here one that runs the entries back to front) gives the
+    // grid and stamps of the stamp() loop, also with a fine-tune ray, a repeated id and an id stamped before.
+    {
+        std::vector<std::pair<ObjectId, ObstacleFootprint>> list;
+        for (uint32_t k = 0; k < 9; ++k) {
+            ObstacleFootprint f = make_footprint({60.0f + 25.0f * static_cast<float>(k), 150.0f + 7.0f * static_cast<float>(k)},
+                                                 static_cast<float>(k) * 35.0f, 50.0f, 30.0f, -25.0f, -15.0f, 0, 0, 1.0f,
+                                                 k % 2 ? kPassRebelWall : 0u);
+            if (k % 3 == 0) f.fine_tune = [](V2 p) { return (static_cast<int32_t>(p.x / 10.0f) + static_cast<int32_t>(p.y / 10.0f)) % 2 == 0; };
+            list.emplace_back(static_cast<ObjectId>(k == 7 ? 2 : k), std::move(f));
+        }
+        const ParallelFor backwards = [](uint32_t n, uint32_t, const RangeFn& fn) {
+            for (uint32_t i = n; i-- > 0;) fn(i, i + 1);
+        };
+        PassabilityGrid ser, par;
+        for (PassabilityGrid* q : {&ser, &par}) {
+            q->init(32, 32);
+            q->set_base(8, 9, kPassSteep);
+            q->stamp(4, make_footprint({40.0f, 40.0f}, 0.0f, 30.0f, 30.0f, -15.0f, -15.0f, 0, 0, 1.0f, 0));
+        }
+        std::vector<uint32_t> counts;
+        for (const auto& [id, f] : list) counts.push_back(ser.stamp(id, f));
+        CHECK(par.stamp_all(list, backwards) == counts);
+        bool same = ser.stamped_ids() == par.stamped_ids();
+        for (const ObjectId id : ser.stamped_ids()) {
+            const auto a = ser.stamp_cells(id), b = par.stamp_cells(id);
+            same = same && std::equal(a.begin(), a.end(), b.begin(), b.end());
+        }
+        const auto ea = ser.effective_values(), eb = par.effective_values();
+        CHECK(same && std::equal(ea.begin(), ea.end(), eb.begin(), eb.end()));
+    }
     // Rotated footprint: 60 x 10 at yaw 90 covers a vertical strip.
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
     g.stamp(79, fp3);

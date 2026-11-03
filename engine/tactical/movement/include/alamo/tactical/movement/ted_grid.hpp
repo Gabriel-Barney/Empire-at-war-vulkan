@@ -76,8 +76,10 @@ struct MapStampHooks {
     std::function<StampRayModel(uint32_t type)> ray_model;
     std::function<bool(uint32_t model_type, const StampPose& pose, V2 world_xy)> mesh_ray_hit;
 };
+// OPT3 t11: the footprints' cells are sampled through `pf` (PassabilityGrid::stamp_all), so the hooks' mesh_ray_hit must
+// then be safe to call concurrently; any value gives the same grid.
 uint32_t stamp_map_obstacles(PassabilityGrid& grid, const terrain::MapData& map, const objects::GameObjectTypes& types,
-                             const MapStampHooks* hooks = nullptr);
+                             const MapStampHooks* hooks = nullptr, const ParallelFor& pf = serial_for);
 // S8 t02 / t09: the LAND_OBSTACLE footprint of one object (rules above). `out.fine_tune` (when set) holds copies of the
 // hooks it needs, so it stays valid after `hooks` is gone.
 bool land_obstacle_footprint(const objects::GameObjectTypes& types, uint32_t type, V2 position, float yaw_deg, float terrain_z,

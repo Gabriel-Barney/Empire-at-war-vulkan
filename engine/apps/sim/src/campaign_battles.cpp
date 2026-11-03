@@ -70,6 +70,9 @@ CampaignBattles::CampaignBattles(SimHost& host, const galactic::ConflictRules& r
     : host_(&host), rules_(&rules), catalog_(&catalog), loader_(std::move(loader)), opt_(options) {}
 
 CampaignBattles::~CampaignBattles() {
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    if (lua_close_wait_) lua_close_wait_();
+#endif
     if (cm_) {  // N1: the save participants attach() registered
         host_->remove_save_participant("galactic.conflicts");
         host_->remove_save_participant("battles");

@@ -675,7 +675,7 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         // battle host: model bounds for the LAND_OBSTACLE footprints without Obstacle_Width / _Height and the
         // Fine_Tune_Occupied_Passability ray (MOVEMENT 1.3; S8 t09: the same hooks as land_obstacle_attach).
         const mv::MapStampHooks stamp_hooks = land_stamp_hooks(catalog_);
-        mv::stamp_map_obstacles(grid, map_, types, &stamp_hooks);
+        mv::stamp_map_obstacles(grid, map_, types, &stamp_hooks, pf);  // OPT3 t11: footprints sampled in parallel
         movement_->set_grid(std::move(grid), pf);
         movement_->air().set_box({mn[0], mn[1]}, {mx[0], mx[1]});  // REMAINING_GAPS §4.3-4.6: air units plan in the playable box
         const terrain::MapData* m = &map_;

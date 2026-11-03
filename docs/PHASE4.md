@@ -801,6 +801,47 @@ Budget check (`--profile-budget 33.33`, default workers):
 What is left for the 33.3 ms limit is battle setup and teardown, which are one-off ticks: spread setup over several ticks or prepare it
 before the battle's first tick (moves goldens), and the remaining items listed under OPT3 t09 (land obstacle stamps, galactic plan load).
 
+## Worst ticks after OPT2 (OPT3 t11, 2026-11-03)
+
+Profiled with temporary zones (removed again) on the three battle scenarios at W15 on a quiet PC: `foc-land-campaign` (3014 ticks),
+`foc-station --seed 3` (12173) and the land skirmish `foc-land` (3000). Four changes, all golden-neutral: the per-tick CRC logs of all
+three runs are byte-identical to main ad9216b.
+
+| Worst tick (ms, W15) | main ad9216b | after |
+|---|---|---|
+| Land campaign, first battle tick | 75.3 | 55.1 |
+| Space station, first battle tick | 56.5 | 42.4 |
+| Land skirmish, first tick | 192.7 | 138.8 |
+| Land battle-end tick | 27.0 | 5.3 |
+| Space battle-end tick | 23.5 | below 8.4 (out of the worst 3) |
+
+- **Battle end: Lua VMs closed off the tick.** About 23 ms of the end tick was `TacticalAiWorld`'s destructor closing its plan, evaluator
+  and free-store VMs one by one. `TacticalAiWorld::release_scripts` (called from `CampaignBattles::ai_end`) now runs every VM's
+  finalizers on the sim thread (`LuaVm::finalize_for_close`: `lua_close`'s own steps; userdata a finalizer creates are marked finalized,
+  as `lua_close` never finalizes them), so destroying a VM afterwards only frees its own heap and runs no Lua code. The VMs are then freed
+  as one job on the AI's `background` hook (`lua::prepare_detached_close`; without a background hook through `lua_gc_pf`,
+  `lua::destroy_detached`). `CampaignBattles` waits for the job before the next battle's AI ends and in its destructor. Nothing reads a
+  closed VM, so results do not depend on it. `alamo_lua_gc_tests` `test_destroy_detached`: every finalizer runs once, on the calling
+  thread, also with a finalizer that re-arms a new finalizable proxy, serially and on 1 / 4 workers.
+- **`require` read cache for plan VMs.** Every plan VM requires the same PG library files, each through up to 22 script-root lookups.
+  `PlanScriptRuntime` now gives its VMs a per-runtime `FileProvider` that remembers every read (found or not; thread-safe for the
+  parallel plan load). Bytes only: each VM still parses its own chunk, so the VMs, their serials and pristine digests are unchanged
+  (a shared bytecode cache was rejected for that reason). Plan-load file reads: about 98 → 25 ms of thread time per battle.
+- **Map obstacle stamps in parallel.** The land skirmish's `stamp_map_obstacles` took about 60 ms, nearly all of it
+  Fine_Tune_Occupied_Passability rays against collision meshes. The footprints are still built serially (they call the model hooks), then
+  `PassabilityGrid::stamp_all` samples every footprint's cells through the battle's `ParallelFor` (sampling reads only the base grid and
+  the footprint) and stamps them in map order: same grid and stamps. Skirmish: 60 → 17 ms. `alamo_movement_tests` `test_grid`:
+  `stamp_all` with a back-to-front `ParallelFor`, a fine-tune ray, a repeated id and an already stamped id equals the `stamp()` loop.
+- **Faster ALO decode** (`tools/formats/src/alo.cpp`). Vertex records and index lists were read value by value through the bounds-checked
+  reader; after the existing size check they are now copied field by field. Same arrays. `alo::parse` thread time: land 51 → 29 ms,
+  skirmish 333 → 223 ms.
+
+What is left in the first battle tick (all one-off setup, already spread over the workers): the parallel plan load (land about 20 ms
+wall, 250 ms of Lua thread time, mostly parsing the PG libraries in every plan VM), model loading (skirmish about 570 ms of thread time:
+VFS read, parse, render-vertex packing the sim does not need), and serial steps such as the skirmish's `bt_place_forces` (about 25 ms,
+per-object stamps in RNG order). Getting under 33.3 ms needs setup spread over several ticks or prepared before the battle (moves goldens),
+or a sim-only model load (positions, indices and skeleton only). The second battle tick (first perception, 8-11 ms) is unchanged.
+
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
 `build_asan.cmd` runs clang 20 (MSVC ABI) with UBSan by default; `ALAMO_SANITIZE=address` adds ASan.

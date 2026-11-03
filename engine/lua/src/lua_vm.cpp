@@ -15,6 +15,8 @@
 #include "alamo/lua/script_loader.hpp"
 #include "vm_internal.hpp"
 
+#include "ldo.h"     // luaD_rawrunprotected (finalize_for_close)
+#include "lfunc.h"   // luaF_close
 #include "lgc.h"     // patched internal headers (lua_src): alamo_luaC_collect, alamo_lua_gc_hook
 #include "lstate.h"  // lua_State::ci / base_ci, global_State::tmudata
 
@@ -647,6 +649,29 @@ void LuaVm::run_finalizers() {
     check_owner();
     lua_State* L = impl_->L;
     if (G(L)->tmudata) luaC_callGCTM(L);
+}
+
+namespace {
+void call_all_finalizers(lua_State* L, void*) { luaC_callGCTM(L); }
+}  // namespace
+
+void LuaVm::finalize_for_close() {
+    check_owner();
+    lua_State* L = G(impl_->L)->mainthread;
+    // lua_close's steps before close_state (lstate.c): a second lua_close then finds nothing left to finalize.
+    luaF_close(L, L->stack);
+    luaC_separateudata(L);
+    L->errfunc = 0;
+    do {
+        L->ci = L->base_ci;
+        L->base = L->top = L->ci->base;
+        L->nCcalls = 0;
+    } while (luaD_rawrunprotected(L, call_all_finalizers, nullptr) != 0);
+    // lua_close finalizes only the userdata that were finalizable when it started; one a finalizer created is freed
+    // unfinalized. Mark those finalized (lgc.c markfinalized: bit 1 of `marked` cleared) so the later lua_close, on
+    // whichever thread, runs no Lua code either.
+    for (GCObject* o = G(L)->rootudata; o != nullptr; o = o->gch.next)
+        gcotou(o)->uv.marked = static_cast<lu_byte>(gcotou(o)->uv.marked & ~(1u << 1));
 }
 
 int LuaVm::resolve_method(std::string_view cls, std::string_view name) const {
