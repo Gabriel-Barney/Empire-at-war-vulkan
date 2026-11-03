@@ -3325,6 +3325,14 @@ bool TacticalAiWorld::Impl::script_evaluate(const EvalContext& c, std::string_vi
 
 // ================================================================ TacticalAiWorld
 
+std::function<uint64_t(std::string_view)> tactical_category_resolver(const objects::GameObjectTypes* types) {
+    if (!types) return {};  // TacticalPerception::init falls back to the built-in table
+    return [types](std::string_view name) -> uint64_t {
+        const auto v = types->enums().get(objects::EnumId::GameObjectCategory).lookup(name);
+        return v ? static_cast<uint64_t>(*v) : 0u;
+    };
+}
+
 TacticalAiWorld::TacticalAiWorld(objects::ObjectStore& store, const objects::GameObjectTypes* types, const FileProvider* files,
                                  GameRandom& rng, const AiDefinitions& defs, const EquationSet& equations, TacticalAiHost& host,
                                  TacticalAiConfig cfg)
@@ -3363,7 +3371,10 @@ TacticalAiWorld::TacticalAiWorld(objects::ObjectStore& store, const objects::Gam
     });
     w.gate.start_game();
     // Shared perception: threat grid over the map, evaluator handles; land zone graph.
-    w.perc.init(w.cfg.mode, w.cfg.constants, w.cfg.map, static_cast<uint32_t>(std::max<size_t>(w.cfg.lua_players.size(), 1)), w.cfg.zones);
+    TacticalPerceptionConfig pcfg;
+    pcfg.category_mask = tactical_category_resolver(w.types);  // q6 t03: the loaded category enum (mods renumber it)
+    w.perc.init(w.cfg.mode, w.cfg.constants, w.cfg.map, static_cast<uint32_t>(std::max<size_t>(w.cfg.lua_players.size(), 1)), w.cfg.zones,
+                pcfg);
     if (w.cfg.mode == TacticalMode::Land && !w.cfg.zones.empty()) w.zones.build(w.cfg.zones);
 }
 

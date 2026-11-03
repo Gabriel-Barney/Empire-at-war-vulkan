@@ -67,6 +67,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "alamo/ai/ai_definitions.hpp"
@@ -336,6 +337,12 @@ struct TacticalAiDecision {
     int32_t player = -1;
     std::string text;
 };
+
+// q6 t03: the GameObjectCategoryType name -> mask resolver of a tactical AI world (perception parameters, PotentialPlan
+// team specs and RequiredCategories): the loaded types' converter (Data\XML\Enum\GameObjectCategoryType.xml, which mods
+// such as Thrawn's Revenge redefine; the objects' CategoryMask bits come from the same converter); no types -> the
+// objects module's built-in vanilla table. 0 for an unknown name.
+std::function<uint64_t(std::string_view)> tactical_category_resolver(const objects::GameObjectTypes* types);
 
 class TacticalAiWorld {
 public:
