@@ -2325,7 +2325,8 @@ ridge flew through it.
   AITarget dies. In seed 8 the Calamaris kill their AITarget (a Tartan) at frame 3300, then get no new goal until
   frame 12900 and spend 9000 frames auto-targeting fighters at 1360 from the station. In the original the same data
   gives the same auto choice, so the question is how soon the AI re-plans an attack on the station
-  (engine/ai/tactical, battle_ai.cpp; not changed here).
+  (engine/ai/tactical, battle_ai.cpp; not changed here). Answered in §39 (a1k t01): the override ends when the unit
+  leaves the task force, and the late re-plan was the port's Collect_All_Free_Units taking the capitals.
 
 ### 37.6 Battle ends, `--skirmish-ai <map> --seed N --ticks 20000 --workers 4 --expect-battle-end`
 
@@ -2430,3 +2431,107 @@ once per battle.
 - Result: `alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --expect-battle-end --fail-on-lua-errors`:
   Lua errors 10 → 0; the battle still ends (Empire, all-retreated, 2799 of 14400 frames); final CRC b0d57b4a7a9d00b0 →
   9a32632080b3609d (the Rebel plan FUNDTACTICALSTRUCTURES now funds its player instead of dying).
+
+## 39. How soon the space AI re-plans after a plan's target dies; the task-force priority set's lifetime (a1k t01) [H unless tagged]
+
+**Question (from §37.5 / §37.7).** After a DestroyUnit plan's AITarget dies, Rebel capital ships on the foc-station
+map (and Empire ships at Kuat seeds 6 / 9) get no new goal for 4000-9600 frames and auto-target fighters. How soon does
+the original re-plan, how long does a `SetClassPriorities` override last, and what do the ships shoot in between?
+Read 2026-11-02 from the goal service / commit (AI_GALACTIC §1.3-1.6), TaskForceClass vf47 / vf49, the Lua global
+`Collect_All_Free_Units` (0x5fc040) and the shipped scripts (DESTROYUNIT.LUA, AREASWEEP.LUA, PGTASKFORCE.LUA,
+BUSYTACTICALFREESTORE.LUA).
+
+### 39.1 Re-plan cadence (the port already matches)
+- The goal service runs every frame (0x6cacd0): one proposal slice of `quota` evaluations per frame, a whole pass spread
+  over about 5 s (quota = ceil(evaluations of the last pass / (FPS × 5)), capped), then budget weights, Commit, and a
+  sleep of `Goal_Cycle_Sleep_Duration` (FoC: 0 s Normal / Hard, 15 s Easy). With few targets a pass takes a few frames.
+- A plan's end (success, failure, or every unit gone) calls the goal's `plan_ended`; the goal is dropped at the next
+  Commit. Slot 9 skips only (goal type, target) pairs that are still active (or reachability-blocked), so the next pass
+  proposes the same goal type again on any other target, and on the same target once the old goal is gone.
+- So on Normal a finished plan is replaced within one to two passes (the synthetic test below: at most 24 frames, 2
+  commits; Easy: 927 frames). There is no extra hold-off after a target dies. The 4000-9600-frame gaps were **not** the
+  cadence: proposals were made on every pass, but DestroyUnit on the station found no free capital ship for its
+  `MainForce` (PotentialPlan "failed Plan": the team's minimum count not met), see 39.3.
+
+### 39.2 The task force's priority set lasts only while the unit is a member
+- `SetClassPriorities(tf, name)` (PGTASKFORCE.LUA) calls `tf.Set_Targeting_Priorities(name .. "_" .. class, class)` per
+  class; the task force writes the set into each matching member's targeting data (TD +0x160).
+- TaskForceClass vf49 (0x5ff610, the unit leaves the task force: Release_Unit / Release_Forces, plan end, owner change)
+  first re-admits the unit to the free store (0x6c27d0 clears its PotentialPlan reservation), then **unconditionally**
+  writes the type's values back into the unit's and each hard point's targeting data: TD +0x160 := type +0x520
+  (`Targeting_Priority_Set`), TD +0x158 := type +0x528 (`Targeting_Stickiness_Time_Threshold`). Only then comes the
+  Active_By_Default re-apply (gated by the movement lock 0x39ad40, §28.8).
+- So `Capital_Attack_Move` (no Capital entry: a station scores 1e18, §37.5) stays on a Calamari only while it is in the
+  DestroyUnit task force; once released it is back on its type's set (`Capital`).
+- **In between** (no goal, in the free store): auto-acquire with the type's own set. BusyTacticalFreeStore services the
+  free store (ServiceRate 20 s, 2 units per service) and sends idle units to `Service_Attack` on enemies within 600.
+- **Port divergence (fixed):** the port never reset the set on leaving, so ships kept `Capital_Attack_Move` (or an
+  AreaSweep set) for the rest of the battle and kept preferring fighters over the station.
+
+### 39.3 `Collect_All_Free_Units([category])` (0x5fc040 → TF vf47 0x6e5aa0 → 0x6bfb40)
+- Lua: 0 or 1 argument, a GameObjectCategoryType mask string (default every bit; an unknown name is a script error); no
+  result.
+- 0x6bfb40 walks the player's free store in order and takes each unit whose **representative type's CategoryMask** has a
+  bit of the mask (a type with no categories never matches), that is **not a member** of a task force already, whose
+  **movement is not locked** (0x39ad40), and that **no PotentialPlan has reserved** (entry +0x30 != 0). Each one leaves
+  the free store, joins the task force, is appended to the plan's selection (PP +0x108) and reserved to that plan.
+- The galactic task force's slot 47 is a stub (0x13b7d0 returns 0): galactic plans collect nothing.
+- **Port divergence (the root cause):** the port's tactical collect took every free unit, ignoring the category, the
+  reservation and the lock. AREASWEEP.LUA collects `"Fighter | Corvette | Frigate"`, so the port's sweeps took the
+  capital ships (and units reserved for other plans) and parked them at sweep cells, and DestroyUnit on the station had
+  no capital ship to take: it failed at the PotentialPlan stage on every pass.
+
+### 39.4 Port (engine/ai/tactical, engine/apps/sim, engine/lua)
+- `TaskForceClass.Collect_All_Free_Units` passes the category mask (`AiScriptHost::tf_collect_free_units(tf, mask)`);
+  `TacticalAiWorld` applies 39.3 (representative type's category, not a member, not movement-locked, not reserved).
+  [port] It does not append to PP +0x108: the unit has left the free store, so the later 0x6c27d0 would have nothing to
+  clear. [port] The galactic world still collects every free unit (not changed here; retail collects nothing).
+- New host hook `TacticalAiHost::unit_left_task_force(id)`, called on the free-store release (after re-admission,
+  before `unit_released`) and when a member changes owner. The world clears the script record of the set
+  (`ScriptObjectState::targeting_priorities`, objects outside the combat model); `BattleAi` clears the combat override
+  (`CombatSystem::set_priority_override(id, -1)`; hard points share the unit's set there). [port] The stickiness
+  threshold has no combat-side override, so there is nothing to reset for it.
+- No save-format change (no saved field added; tactical AI save version stays 8).
+- Test: `alamo_ai_tactical_world_tests` `test_replan_and_priority_lifetime` (variant 9): a sweep plan collects
+  `"Corvette"` and must never get a frigate; every unit that carried a plan's set gets `unit_left_task_force` and its
+  record cleared, before its `unit_released` on the free-store path; DestroyUnit re-plans within 2 commits on Normal and
+  later on Easy.
+
+### 39.5 Battle ends, `--skirmish-ai <map> --seed N --ticks 20000 --workers 0 --expect-battle-end` (Kuat: `--ticks 16000`)
+
+| seed | foc-station before | foc-station after | Kuat (`foc`) before | Kuat after | foc-land-campaign before | after |
+|---|---|---|---|---|---|---|
+| 1 | cap | Rebel, all-retreated, 10305 | 6098 | 8330 | 2052 | 2241 |
+| 2 | Rebel, all-retreated, 8010 | Rebel, all-retreated, 10107 | 5724 | 6629 | 2985 | 2979 |
+| 3 | cap | Rebel, all-retreated, 8283 | 7348 | 7451 | 2988 | 2985 |
+| 4 | Rebel, all-retreated, 13467 | Rebel, all-destroyed, 12496 | 9163 | 9003 | 2049 | 2049 |
+| 5 | Rebel, all-destroyed, 10934 | Rebel, all-retreated, 11454 | 5733 | 5982 | 2988 | 2985 |
+| 6 | Rebel, all-destroyed, 9082 | Rebel, all-retreated, 11082 | cap | 12149 | 3348 | 3168 |
+| 7 | Rebel, all-destroyed, 10030 | Rebel, all-retreated, 6852 | 8345 | 9728 | 2799 | 2988 |
+| 8 | cap | Rebel, all-retreated, 8943 | 6622 | 7616 | 3177 | 2985 |
+| 9 |  |  | cap | 11752 | 2799 | 2988 |
+| 10 |  |  | 8713 | 11616 | 2796 | 3171 |
+| 11 |  |  | 8398 | 7528 | 2988 | 3174 |
+| 12 |  |  | 5973 | 7333 | 2988 | 2988 |
+| 13 |  |  | 6652 | 7098 |  |  |
+| 14 |  |  | 7590 | 7729 |  |  |
+| 15 |  |  | 8377 | 8212 |  |  |
+| 16 |  |  | 6938 | 6304 |  |  |
+
+Cap = not ended at 14400. Kuat: every run Empire, all-destroyed; foc-land-campaign: every run Empire, all-retreated.
+Station 5/8 → 8/8, Kuat 14/16 → 16/16, land campaign 12/12 → 12/12. Ablation (not committed): the collect rule alone
+gives station 7/8 (5 at the cap) and Kuat 16/16; the priority reset alone gives station 5/8 (1, 4, 7 at the cap) and Kuat
+15/16 (9 at the cap); both are needed. Kuat 6 and 9 are back in `alamo_headless_skirmish_ai_foc_outcome_s*`; the
+station test stays on seed 2.
+
+### 39.6 Golden and test effects (not regenerated)
+
+MSVC and clang build with 0 warnings and give the same CRCs. CRC goldens that move, all from the priority reset and the
+collect rule (targets and task-force members change):
+- `alamo_headless_skirmish_ai_foc`: `battle.combat` first differs at tick 652.
+- `alamo_headless_skirmish_ai_foc_land_campaign`: `battle.combat` first differs at tick 575.
+- Game smoke `game_smoke_skirmish.crc` (`battle.abilities` / `battle.ai` at tick 1292; the battle runs longer, 3588 vs
+  3125 lines) and `game_smoke_land.crc` (the same systems at tick 1071).
+Unchanged: the headless synthetic, geonosis and foc-land (skirmish) goldens, the sim battle / l1 goldens, the campaign
+and screens smoke goldens. The station entry (seed 2) and all 16 Kuat outcome entries pass. Every other test passes (the ones that timed out or lost the GPU under other sessions' load
+passed when re-run alone).

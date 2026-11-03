@@ -1514,6 +1514,11 @@ void BattleAi::unit_released(int32_t player, int32_t object_id, ai::tactical::Ta
     ab.apply_active_by_default(object_id, b_->frame_);
 }
 
+void BattleAi::unit_left_task_force(int32_t object_id) {
+    if (b_->finished_ || !b_->combat_ || object_id < 0) return;
+    if (b_->combat_->priority_override(object_id) >= 0) b_->combat_->set_priority_override(object_id, -1);
+}
+
 // S7 t15 A1: the tick's signal 0x29 list (TacticalBattle::ability_finished_events).
 std::vector<int32_t> BattleAi::ability_finished() {
     const std::span<const objects::ObjectId> ids = b_->ability_finished_events();

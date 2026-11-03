@@ -132,6 +132,10 @@ public:
     // share AbilitySystem::immobilize_count > 0, script orders_locked / locomotor_suspended; [port] HUNT active stands
     // in for the locomotor term).
     void unit_released(int32_t player, int32_t object_id, ai::tactical::TacticalAiHost::UnitRelease path) override;
+    // a1k t01 (A1_READINGS §39.2, 0x5ff610): a unit left a task force -> its combat priority-set override is cleared
+    // (CombatSystem::set_priority_override(id, -1): the type's Targeting_Priority_Set again; hard points share the unit's
+    // set in the combat model). [port] The stickiness threshold has no combat-side override to reset.
+    void unit_left_task_force(int32_t object_id) override;
     // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4, TACTICAL_GAPS §4.2). Entry facing = the player's side
     // deploy facing (TacticalBattle facing_ [port: stands in for the mode +0x288 record]); playable box = the mode bounds.
     // Prevention = live objects with Reinforcement_Prevention_Radius whose owner is not allied (not the player, and an

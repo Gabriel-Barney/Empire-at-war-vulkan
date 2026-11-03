@@ -202,7 +202,7 @@ struct FakeAi final : AiScriptHost {
     void tf_release_unit(int32_t, ObjectHandle) override {}
     std::vector<ObjectHandle> tf_units(int32_t tf) override { return tf == 3 ? units : std::vector<ObjectHandle>{}; }
     std::string tf_goal_type_name(int32_t) override { return {}; }
-    bool tf_collect_free_units(int32_t) override { return false; }
+    bool tf_collect_free_units(int32_t, uint64_t) override { return false; }
     bool status_finished(int32_t) override { return true; }
     AiStatusResult status_result(int32_t) override { return AiStatusResult::Nil; }
     bool target_valid(int32_t t) override { return t == 5; }

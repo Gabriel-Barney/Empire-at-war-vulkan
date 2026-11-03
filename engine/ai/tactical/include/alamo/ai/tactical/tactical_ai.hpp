@@ -231,6 +231,13 @@ public:
     // Called during the AI update. Default: nothing.
     enum class UnitRelease : uint8_t { OrderLockDone, TaskForce };
     virtual void unit_released(int32_t /*player*/, int32_t /*object_id*/, UnitRelease /*path*/) {}
+    // a1k t01 (A1_READINGS §39.2): a live unit left a task force (TaskForceClass vf49 0x5ff610: Release_Unit /
+    // Release_Forces, plan end, owner change). The original writes the unit's (and each hard point's) type values back
+    // into its targeting data: priority set = Targeting_Priority_Set (TD +0x160 := type +0x520), stickiness threshold
+    // = Targeting_Stickiness_Time_Threshold (TD +0x158 := type +0x528), so a task force's Set_Targeting_Priorities
+    // (SetClassPriorities) lasts only while the unit is a member. Unconditional (no movement-lock test). Called during
+    // the AI update, before unit_released. Default: nothing.
+    virtual void unit_left_task_force(int32_t /*object_id*/) {}
     // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4). space_drop_frame: the player's entry facing and the
     // playable box (false: facing 0, no box). space_prevention_hit (0x4d8d10): `p` lies inside the
     // Reinforcement_Prevention_Radius (2-D, strict) of a live object whose owner is not allied with `player`.

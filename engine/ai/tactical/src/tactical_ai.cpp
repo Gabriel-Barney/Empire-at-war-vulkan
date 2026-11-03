@@ -375,7 +375,18 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     }
     void prune_tf(TfRec& t) {
         auto& u = t.units;
+        // a1k t01: a member taken by another player leaves through 0x5ff610 too (its targeting data reset).
+        for (const ObjectHandle h : u)
+            if (store.alive(h) && store.owner(h) != t.player) left_task_force(id_of(h));
         u.erase(std::remove_if(u.begin(), u.end(), [this, &t](ObjectHandle h) { return !unit_ok(h, t.player); }), u.end());
+    }
+    // a1k t01 (A1_READINGS §39.2, 0x5ff610): a unit leaving a task force gets its type's targeting priority set again: the
+    // script record of a task-force Set_Targeting_Priorities is cleared (objects outside the combat model), then the host
+    // resets its combat override.
+    void left_task_force(int32_t id) {
+        if (const lua::ScriptObjectState* s = bridge.find_state(id); s && !s->targeting_priorities.empty())
+            bridge.state(id).targeting_priorities.clear();
+        host.unit_left_task_force(id);
     }
     bool tf_owns(ObjectHandle u) const {
         for (const auto& [id, t] : tfs)
@@ -555,7 +566,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         if (pit == plans.end() || pit->second.goal_type >= defs.goals.size()) return {};
         return defs.goals[pit->second.goal_type].name;
     }
-    bool tf_collect_free_units(int32_t tf) override;
+    bool tf_collect_free_units(int32_t tf, uint64_t category_mask) override;
     bool status_finished(int32_t status) override {
         const auto it = statuses.find(status);
         if (it == statuses.end()) return true;
@@ -1106,13 +1117,15 @@ void TacticalAiWorld::Impl::admit(PlayerAi& p, size_t index, bool call_lua) {
 
 void TacticalAiWorld::Impl::release_to_free_store(int32_t player, ObjectHandle u, int32_t pp) {
     if (pp >= 0 && store.alive(u)) pp_unit_left(pp, id_of(u));  // 0x6c27d0: out of PP+0x108, +0x30 = 0 if it is pp
+    if (!store.alive(u)) return;
     PlayerAi* p = player_ai(player);
-    if (!p || !p->ctx.initialised() || !store.alive(u) || tf_owns(u)) return;
     const PerceptionObject* o = object(id_of(u));
-    if (!o) return;
-    admit(*p, static_cast<size_t>(o - w.objects.data()), false);
+    const bool readmit = p && p->ctx.initialised() && o && !tf_owns(u);
+    if (readmit) admit(*p, static_cast<size_t>(o - w.objects.data()), false);
+    // a1k t01 (A1_READINGS §39.2): then the type's targeting priority set / stickiness again (0x5ff610, unconditional).
+    left_task_force(id_of(u));
     // Active_By_Default after the free store took the unit back or refused it (0x5ff610, A1_READINGS §28.8).
-    if (o->alive && o->owner == player) host.unit_released(player, o->id, TacticalAiHost::UnitRelease::TaskForce);
+    if (readmit && o->alive && o->owner == player) host.unit_released(player, o->id, TacticalAiHost::UnitRelease::TaskForce);
 }
 
 void TacticalAiWorld::Impl::refresh() {
@@ -1290,15 +1303,24 @@ bool TacticalAiWorld::Impl::free_store_has(int32_t script, ObjectHandle unit) {
     return p->fs.contains(id_of(unit));
 }
 
-bool TacticalAiWorld::Impl::tf_collect_free_units(int32_t tf) {
+// a1k t01 (A1_READINGS §39.3): Collect_All_Free_Units (0x5fc040 -> task force vf47 0x6e5aa0 -> 0x6bfb40) takes, in
+// free-store order, each unit whose representative type's CategoryMask has a bit of `category_mask` (a type without
+// categories never matches), that is not a member already, whose movement is not locked (0x39ad40) and that no
+// PotentialPlan has reserved (entry +0x30). [port] It is not appended to the plan's PP selection (PP+0x108, which
+// 0x6bfb40 also does): it has left the free store, so the later 0x6c27d0 would have nothing to clear.
+bool TacticalAiWorld::Impl::tf_collect_free_units(int32_t tf, uint64_t category_mask) {
     TfRec* t = tf_rec(tf);
     PlayerAi* p = t ? player_ai(t->player) : nullptr;
     if (!p) return false;
     std::vector<int32_t> ids;
-    p->fs.units(ids, false);
+    p->fs.units(ids, true);
     for (const int32_t id : ids) {
         const ObjectHandle h = store.find(id);
-        if (!unit_ok(h, t->player)) continue;
+        const PerceptionObject* o = object(id);
+        if (!unit_ok(h, t->player) || !o || tf_owns(h) || host.movement_locked(id)) continue;
+        const int32_t ty = o->rep_type >= 0 ? o->rep_type : o->type;
+        const uint64_t cat = ty >= 0 && static_cast<size_t>(ty) < w.types.size() ? w.types[static_cast<size_t>(ty)].category : 0;
+        if ((cat & category_mask) == 0) continue;
         p->fs.remove(id);
         t->units.push_back(h);
     }
