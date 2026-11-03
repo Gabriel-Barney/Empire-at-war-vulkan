@@ -148,12 +148,15 @@ public:
     bool change_owner(objects::ObjectHandle h, int32_t owner);
     // --- S4 (owner: S4 agent): corruption missions (engine/galactic corruption.hpp; [inferred] rule there) ---
     // `player` corrupts `planet` with corruption `type` (CorruptionTypeEnum 0..7). The planet type's option of that type
-    // with a tactical mission queues a conflict at the queue front (land: land_invade with `units`; space:
-    // initiate_space_conflict) on the option's map, attacker = `player`, defender = the planet's owner; when that battle
-    // starts its tactical story is the option's Tactical_Script_Name and StorySession::set_corruption_mission(player,
-    // type) is set (no story session: the corruption is applied here when `player` wins). An option without a mission
-    // corrupts the planet at once. Refused: unknown planet / player, the player owns the planet, the planet already
-    // has that corruption, no such option, or the conflict could not be queued. Call between ticks (sim thread).
+    // with a tactical mission (story t08, L1_S4_REMAINING §4.5) writes the linked-battle record (queue_linked: the option's
+    // kind and map, attacker = `player`, defender = the planet owner's faction, plots = Tactical_Script_Name, not sandbox:
+    // no galactic unit enters, the map and the plots supply them) and starts it at once (start_linked_record), so no
+    // ground unit has to be in orbit; `units`, when given, replace the last-invade vector [port]. When that battle starts
+    // its tactical story is the option's Tactical_Script_Name and StorySession::set_corruption_mission(player, type) is set
+    // (no story session: the corruption is applied here when `player` wins). An option without a mission corrupts the
+    // planet at once. Refused (cost refunded once charged): unknown planet / player, the player owns the planet, the planet
+    // already has that corruption, no such option, a linked record already waits, or the start is refused. The record
+    // may wait (banner, another active conflict): MissionQueued all the same. Call between ticks (sim thread).
     enum class CorruptionStart : uint8_t { Refused = 0, Applied = 1, MissionQueued = 2 };
     CorruptionStart start_corruption(PlanetIndex planet, int32_t player, int8_t type, std::vector<objects::ObjectHandle> units = {});
     // --- end S4 ---
@@ -176,6 +179,63 @@ public:
     // battle hook like a conflict's battle; its end writes nothing back to the galaxy (no ConflictManager::finish_battle).
     // False when tactical battles are off, a battle runs or is pending, or the map does not load as r.info.kind.
     bool start_map_battle(galactic::BattleRequest r);
+    // --- story t07 / t08 (owner: link-tactical): the linked-battle record GMM+0xf0 (BT §2.7, §2.9) ---
+    // One record at most, written by a LINK_TACTICAL reward (story_linked: Reward_Param1..14, BT §2.9.1) or a corruption
+    // mission (start_corruption), and started by start_linked_record (0x28f590) right after it is written and at every hook
+    // without a battle until it starts or is dropped.
+    struct LinkedRecord {
+        galactic::ConflictKind kind = galactic::ConflictKind::Land;  // P2 (GROUND / a word the keyword map lacks: land)
+        PlanetIndex planet = kInvalidPlanet;                          // P1
+        int32_t attacker = -1;                                        // P3 (player)
+        std::string map;                                              // P4
+        std::string defender;                                         // P5 faction name, resolved at the start (-1 unknown)
+        uint32_t forced_type = galactic::kNoIndex;                    // P6 galactic type index (sandbox splits)
+        std::string plots;                                            // P7 Story_Plots file
+        bool sandbox = false;                                         // P8
+        int32_t arrival = 1;                                          // P9 arrival options
+        bool presentation_a = false, presentation_b = false;          // P10 / P11
+        galactic::LinkedResolution resolution = galactic::LinkedResolution::DestroyAi;  // P12
+        bool banner = true;                                           // P13: the pending banner first (+0x179)
+        bool flagship_split = true;                                   // P14
+        bool banner_shown = false;                                    // +0x178
+        int8_t corruption_type = -1;                                  // story t08: the corruption mission's type (else -1)
+    };
+    // P9-P11 as 0x28f590 step 4 applies them (globals, kept until the next linked start; saved). Sim-side state only: the
+    // arrival hold and the presentation overlays are read by systems the port does not have yet (BT §2.9.9 item 1).
+    struct LinkedPresentation {
+        int32_t arrival = 0;              // GMM+0x30 = P9
+        bool arrival_cinematic = false;   // 0x140b27d5e (P9 != 0) [M: arrival cinematic on]
+        bool hyperspace_hold = false;     // 0x140b27d5f (P9 == 2): reinforcements wait in hyperspace until Resume_Hyperspace_In
+        bool presentation_a = false;      // GMM+0x34 = P10 (overlay +0xf, 0x140a28c93 = !P10) [L]
+        bool letterbox = false;           // P10 and P9 != 1: 0x140b27ee0 = 0, 0x140b27ee4 = 6, 0x140a28c20 = 1 [L]
+        bool presentation_b = false;      // P11: overlay +0xe, cinematic input block 0x140a28c91 [M]
+        bool skip_battle_dialog = false;  // 0x140b305ed: set by a record write, taken by the next battle end (0x87770)
+        bool last_battle_skipped_dialog = false;  // the last battle end saw the flag: no battle-summary dialog
+    };
+    enum class LinkedStart : uint8_t { NoRecord = 0, Waiting = 1, Banner = 2, Started = 3, Refused = 4 };
+    // 0x28bd70: refused (false, nothing written) when a record is present, the planet / kind / attacker is invalid or the map
+    // or defender name is empty. Sets GalacticSim::queue_linked_battle (0x140b30545) and skip_battle_dialog.
+    bool queue_linked(LinkedRecord r);
+    // 0x28f590 (BT §2.9.3). Waiting: a normal conflict's pending vote is open, or another conflict is active and does not give
+    // way (a1j t05 story block rule) [port: the original takes over]. Banner (P13, first pass): with a decide callback that
+    // answers Pending (the game's battle dialog) the banner is up, one galactic pause level is raised and the record waits
+    // for linked_begin(); otherwise (headless) the banner is answered at once [port]. Started: the record is consumed,
+    // GOM+0x61c := P12, P9-P11 applied, ConflictManager::start_linked (land units = the last-invade vector, then cleared).
+    // Refused: consumed and dropped (invalid record, unknown defender, ConflictManager refusal; logged).
+    LinkedStart start_linked_record();
+    // The banner's Begin (0x28c7e0; also ResumeGame 51 while the banner is up): the pause level is released and the record
+    // starts at the next hook. False when no banner is up.
+    bool linked_begin();
+    const LinkedRecord* linked_record() const { return lk_.present ? &lk_.record : nullptr; }
+    bool linked_banner_up() const { return lk_.banner_up; }
+    const LinkedPresentation& linked_presentation() const { return lk_.presentation; }
+    galactic::LinkedResolution linked_resolution() const { return lk_.resolution; }  // GOM+0x61c (the running linked battle)
+    // Lua Resume_Hyperspace_In (0x543570): clears the hold. HOOK [lua]: no script binding calls it yet.
+    void resume_hyperspace_in() { lk_.presentation.hyperspace_hold = false; }
+    // The global last-invade vector 0x140a172b0: the units of the last human invade (ConflictGate::on_invade) or landing
+    // (a human UnitsLanded routed by the story: the last `value` surface units, as StorySession maps it [port]).
+    std::span<const objects::ObjectHandle> last_invade() const { return lk_.last_invade; }
+    // --- end story t07 / t08 ---
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     const BattleAi* tactical_ai() const { return ai_.get(); }  // A1: the running battle's AI (null: none)
     const std::vector<std::string>& ai_log() const { return ai_log_; }  // A1: one AI summary per battle
@@ -256,6 +316,24 @@ private:
         std::string plots;
     };
     std::vector<CorruptionMission> corruption_queued_;  // started, battle not pushed yet (queue order)
+    // --- story t07 / t08 (owner: link-tactical): campaign_battles.cpp "linked-battle record" block ---
+    struct LinkedState {  // saved in "battles" (v3) and hashed in "battle.state" once off its defaults
+        LinkedRecord record;
+        std::string source;  // the record's log prefix ("story: LINK_TACTICAL <P1>" / "corruption: mission")
+        bool present = false;
+        bool banner_up = false;  // the banner waits for linked_begin() (one galactic pause level held)
+        galactic::LinkedResolution resolution = galactic::LinkedResolution::None;  // GOM+0x61c
+        LinkedPresentation presentation;
+        std::vector<objects::ObjectHandle> last_invade;
+        uint64_t triggers_seen = 0;  // story trigger log entries already scanned for UnitsLanded
+    };
+    LinkedState lk_;
+    bool linked_waits_banner(const LinkedRecord& r) const;
+    void linked_end_battle();  // battle end: the dialog-skip flag is taken (0x87770)
+    void write_linked(ByteWriter& w) const;
+    static void read_linked(ByteReader& r, LinkedState& out);
+    void hash_linked(StateHasher& h) const;
+    // --- end story t07 / t08 ---
     CorruptionMission corruption_active_;               // the running battle's mission (player -1: none)
     CorruptionStart last_corruption_ = CorruptionStart::Refused;  // Int-final: result of the last corruption command
     commands::RejectReason corruption_command(uint8_t player, const commands::EventData& ev);  // Int-final
@@ -286,8 +364,10 @@ private:
     lua::CinematicTransports story_transports_;
     std::map<objects::ObjectId, uint8_t> story_motion_;  // per movable unit: bit 0 arrived, bit 1 moving (lookup by id)
     std::vector<objects::ObjectId> story_base_ids_;      // galactic ids of the request's starbase / structures
-    size_t story_linked_ = 0;                            // linked_tactical() entries already started
+    size_t story_linked_ = 0;                            // linked_tactical() entries already consumed
     void story_linked(SimHost& host);
+    void story_landings(SimHost& host);  // story t07: human UnitsLanded triggers -> last_invade_
+    bool parse_link_tactical(const std::vector<std::string>& params, LinkedRecord& out, std::string& why);  // story t07
     // --- end L1/S4 wave 2b ---
     // --- fog follow-up (owner: fog follow-up agent) ---
     // story_begin -> story_fog_begin: the battle's FogOfWar for the tactical story VMs (story_hooks_.fog = story_fog_:
@@ -324,6 +404,7 @@ private:
     // --- A1 stage 2 tactical AI hookup (campaign_battles_ai.cpp) ---
     std::unique_ptr<BattleAi> ai_;
     std::vector<std::string> ai_log_;
+    std::function<void()> lua_close_wait_;  // OPT3 t11: the last battle's VM-freeing job (TacticalAiWorld::release_scripts)
     void ai_begin(SimHost& host, GameMode& mode);
     void ai_update();
     void ai_end();

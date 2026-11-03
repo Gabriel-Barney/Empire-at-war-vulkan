@@ -1,6 +1,7 @@
 // --- skai (q2f t04): skirmish map battles. A skirmish started straight on its _MP_ map (CampaignBattles::start_map_battle with
-// BattleConfig::skirmish, TacticalBattle::skirmish_map): the Income_Stream_Ability credit trickle and the skirmish victory
-// conditions (docs/re/SKIRMISH_SETUP.md). Serial code, no synced draws; credits go through the host's credit hooks.
+// BattleConfig::skirmish, TacticalBattle::skirmish_map): the Income_Stream_Ability credit trickle (docs/re/SKIRMISH_SETUP.md).
+// The skirmish victory types 0x13 / 0x16 are the victory monitor's (tactical_battle_victory.cpp, story t06). Serial code, no
+// synced draws; credits go through the host's credit hooks.
 #include <algorithm>
 #include <cstdlib>
 #include <string>
@@ -98,34 +99,6 @@ void TacticalBattle::sk_income(const TacticalMode& mode) {
         const float per_interval = in.value * in.multiplier + in.additive;
         credits_add_(owner, per_interval / in.interval * kFrameSeconds);
     }
-}
-
-bool TacticalBattle::sk_check_victory(const TacticalMode& mode) {
-    // Skirmish victory (docs/re/SKIRMISH_SETUP.md §4; GameConstants MP_Default_Land_Tactical_Win_Condition
-    // SKIRMISH_ALL_ENEMY_BASE_COMPONENTS_DESTROYED 0x13, MP_Default_Space_Tactical_Win_Condition
-    // SKIRMISH_SPACE_ENEMY_STARBASE_DESTROYED 0x16): a slot player loses once it owns no live Victory_Relevant object with
-    // behaviour DUMMY_LAND_BASE_LEVEL_COMPONENT (land) / DUMMY_STAR_BASE (space). [port] polled every frame (retail: when such an
-    // object leaves a player), declared at once (retail: a 210-frame countdown record per player), the other slot wins; the
-    // retail ids are reported as their campaign equivalents 0x0e / 0x0f. A map without a base for one slot ends at the first check.
-    if (!skirmish_map()) return false;
-    static const objects::BehaviorTypeId kLandBase = objects::behavior_type_id("DUMMY_LAND_BASE_LEVEL_COMPONENT");
-    static const objects::BehaviorTypeId kStarBase = objects::behavior_type_id("DUMMY_STAR_BASE");
-    const objects::BehaviorTypeId want = space_ ? kStarBase : kLandBase;
-    if (want == objects::kNoBehavior) return false;
-    const objects::ObjectStore& st = mode.primary();
-    const int32_t slots[2] = {skirmish_slot_player(0), skirmish_slot_player(1)};
-    if (slots[0] < 0 || slots[1] < 0) return false;
-    bool alive[2] = {false, false};
-    for (int s = 0; s < 2; ++s)
-        for (const objects::ObjectHandle h : st.owned_by(slots[s]))
-            if (st.active(h) && st.has_behavior(h, want) && victory_relevant(static_cast<uint32_t>(st.type(h)))) {
-                alive[s] = true;
-                break;
-            }
-    if (alive[0] == alive[1]) return false;  // both standing (or neither has one): no skirmish result
-    const uint8_t victory = space_ ? galactic::kVictoryStarbaseDestroyed : galactic::kVictoryEnemyBaseDestroyed;
-    conclude(alive[0] ? slots[0] : slots[1], victory, galactic::kNoPlayer);
-    return true;
 }
 
 }  // namespace alamo::sim

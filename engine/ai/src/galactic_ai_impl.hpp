@@ -464,7 +464,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     void tf_release_unit(int32_t tf, ObjectHandle unit) override;
     std::vector<ObjectHandle> tf_units(int32_t tf) override;
     std::string tf_goal_type_name(int32_t tf) override;
-    bool tf_collect_free_units(int32_t tf) override;
+    bool tf_collect_free_units(int32_t tf, uint64_t category_mask) override;
     bool status_finished(int32_t status) override {
         const auto it = statuses.find(status);
         return it == statuses.end() || it->second.finished;
@@ -546,7 +546,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     std::vector<std::vector<uint8_t>> reach;
     // AI execution path finder (GALACTIC.md §4): created at first service, serviced by execution_service.
     AiPathFinder paths;
-    PlayerAi(GalacticAiWorld::Impl* world, int32_t p, const AiPlayerTypeDef* t, int32_t d) : w(world), player(p), type(t), difficulty(d) {}
+    PlayerAi(GalacticAiWorld::Impl* world, int32_t p, const AiPlayerTypeDef* t, int32_t d);
 
     // ---- GoalModeHooks ----
     uint32_t target_count() override { return static_cast<uint32_t>(w->sim.planets().size()); }

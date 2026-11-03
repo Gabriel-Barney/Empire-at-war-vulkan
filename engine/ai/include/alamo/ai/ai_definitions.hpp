@@ -70,6 +70,9 @@ struct AiPlayerTypeDef {
     std::vector<std::string> function_sets;                   // GoalProposalFunctionSets (list order)
     std::array<std::vector<std::string>, kAiModeCount> templates;  // element 0 = base template
     std::array<std::string, 3> difficulty;                    // Easy / Normal / Hard adjustment names
+    // GoalSetExtensionSize (+0xE8, ctor 0x60f400 default 2, parser 0x60f840: atoi, unsigned min 5): the extra goals a
+    // goal-system category keeps beyond its active ones (Commit / Resolve_Category truncation 0x721b60) [H].
+    int32_t goal_set_extension_size = 2;
 };
 
 class AiDefinitions {

@@ -294,7 +294,8 @@ Every marshaller call runs over the list in this order. This includes commit, so
   - **IgnoreTarget → one synced float draw in [0, power(T)/500]** (0x532480).
   - Hero record → 0.
   - Otherwise v = the best contribution over the candidate's (entry, w) pairs, starting from −1. P = power(T) × health of the chosen free unit (0x396df0) when there is one.
-    - With R = remaining: the pair is considered when (tactical, or a free unit exists) or (target·T < R and the pop-cap allowance permits).
+    - Nothing is considered when P ≤ 0 (0x72b6a0).
+    - With R = remaining: a pair is considered only when **w > 0 and R > 0**, and then when (tactical, or a free unit exists) or (target·T < R and the pop-cap allowance permits). [H, q2f t09: 0x72b6a0 tests `0 < w && 0 < R` before the free-unit / tactical flag; the contained-unit variant 0x72b3e0 does the same. An earlier reading let a free unit score against an entry already met, so a galactic plan took every free unit with any weight.]
     - d = max(R − w·P, 0), m = max(R, w·P), s = (1 − (d/m)²) × w. Take the max s; the entry index goes to rec+0x14.
     - The escort list is scored too when there is an escort TF and (the candidate has an escort team or main contrast is met).
     - Galactic adds the contributions of contained units (+0x60), each clamped ≥ 0.
@@ -723,7 +724,7 @@ There is no engine-side "aggression" timer. Continuous offence comes from these 
 4. **Budget tick period** 0x4b2010 and the meaning of the refund accumulator +0x80 (it is never reset outside init).
 5. **Free-store eligibility field names** (§1.4 engaged test), the health threshold constant 0x140b27338 (.bss, set at runtime), and 0x5f22c0 (terrain preference).
 6. **Plan end and Block_Goal_Proposal:** whether a plan's exit removes its +0x2A0 entries.
-7. **Template int +0xE8** (extra goals per category, AI_GALACTIC §1.6) was not re-verified.
+7. ~~**Template int +0xE8** (extra goals per category, AI_GALACTIC §1.6) was not re-verified.~~ Resolved (q2f t09): it is the AIPlayerType's `GoalSetExtensionSize`, default 2 (AI_GALACTIC §1.6 Commit step 5) [H].
 8. **Probe** (tools/probe_mod; Gabriel must launch): log the per-frame synced RNG draw count during a galactic AI-vs-AI proposal pass. Expected: Find_Plan pick + Plan Setup C team picks + IgnoreTarget contrast floats + MagicPlan production floats (§1.5).
 9. **Token bodies not read:** GrossIncome / NetIncome / Maintenance tails, AverageStarbase/Groundbase, bitfield / antistealth details, planet-type list +0x20C8.
 10. (2026-10-28) Survival = per-type survival ratio of the learning system (1.0 when unseen), the MagicPlan veto 0x375270 = "Super" category, flag +0x29 = squadron member, 0x5C/0x5B = DUMMY_STAR_BASE / DUMMY_GROUND_BASE: STRATEGIC_GAPS §1.1, §1.2, §1.5. Equation grammar / precedence: STRATEGIC_GAPS §3.

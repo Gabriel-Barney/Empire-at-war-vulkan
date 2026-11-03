@@ -59,9 +59,16 @@ Nor can it write a file: in retail 1.121 `_CustomScriptMessage`, `_ScriptMessage
   second, `TSAMPLE` plus a `TPLAYER faction= id= credits= tech= objects=` line per player (taken on those events and
   from a `Create_Thread` loop: retail never calls GameScoring's `GameService`). The original `GameService` would
   still run every 10th service.
+- AI plans (q2f t09, 2026-11-02): unchanged copies of the shipped `BuildSpaceForcesPlan.lua`,
+  `BuildGroundForcesPlan.lua` and `ConquerPiratePlan.lua` (from `extracted/foc_data_text.zip`) with a read-only block
+  appended that wraps the task-force thread: `PSTART` / `PDONE` records with galactic time, frame, plan, faction,
+  target and the task force's unit types, and for Conquer_Pirate a `PFAIL` record per production failure (the names
+  of the handler's arguments). Src `P`; plan scripts are pooled, so one sid covers several plan instances. It shows
+  which units retail's Build_Space_Forces / Build_Ground_Forces pick, when, and why Conquer_Pirate plans fail. A plain
+  `run_lua_probe.cmd` run collects them (`lua_records.txt`, lines `P ... PSTART|PDONE|PFAIL`).
 
 **Lua output channel (q2f t06, 2026-11-02).** The probe scripts keep every line as a Lua string
-`Q2L1|<G or T>|<sid>|<seq>|<KIND>|<text>|END` (G = galactic plot, T = GameScoring) in a table. `q2lua_reader.py`
+`Q2L1|<G, T or P>|<sid>|<seq>|<KIND>|<text>|END` (G = galactic plot, T = GameScoring, P = AI plan hooks) in a table. `q2lua_reader.py`
 (started by the run, below-normal priority) scans the game's memory for them every 10 s, read-only, like the A1 / TSW
 probes. At the end it writes `lua_records.txt`, `lua_perception.tsv` (cycle, AI, planet, one column per equation) and
 `lua_summary.json` (verdict per script). Separately, each script calls `_CustomScriptMessage` once on a canary file
@@ -146,6 +153,12 @@ How to read the result (`run_status.json` → `lua_canary` and `lua`):
 
 The `scoring` canary and verdict are about the GameScoring hook; in a galactic run it loads too, but only a skirmish
 (`run_skirmish.cmd -LuaProbe`, same clicks as step 4 above) gives it battle events. Optional.
+
+`lua.plans` (q2f t09) reads `loaded: N plan scripts; S thread starts, D ends, F production failures`. What it must
+show for q2f t09 (docs/re/Q2F_T09_REBEL_PRODUCTION.md): the Rebel's first `Build_Space_Forces` `PDONE` (unit types;
+the port picks a Marauder where retail's queue starts a Corellian gunboat at frame 109), the first
+`Build_Ground_Forces` `PSTART` / `PDONE` (retail's queue shows light tank, tank buster and infantry by frame 559), and
+every `Conquer_Pirate` start and failure with its target.
 
 **Cleanup is automatic.** It runs at the end of every run, even after an error. If a window was closed
 early or the PC crashed, double-click `cleanup.cmd`. It is safe to run any number of times.
@@ -260,7 +273,7 @@ Skirmish (space, 2 players):
 | `reader\q2_layout.hpp` | every address and offset used, each with its `docs/re` source |
 | `reader\q2reader.cpp`, `reader\fake_game.cpp` | recorder; test target that lays out the same structures, including a real MSVC `unordered_map` |
 | `q2trace.py` | `validate` (rebuild state, recompute every digest, RNG draws per tick, fiscal cycles, credits, ownership), `to-q1`, `compare`, `selftest`, `selftest-fake`. Standard library only (project venv) |
-| `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), and the two canary files |
+| `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), `Scripts\AI\` copies of three plan scripts (original + plan probe, q2f t09), and the two canary files |
 | `run_lua_probe.cmd` | `run_trace.ps1 -Scenario galactic -LuaProbe` |
 | `q2lua_reader.py` | `run` (started by the run: read-only memory scan for the probe's `Q2L1` records), `summarize` (rebuild the outputs from `lua_reader.log`), `selftest` |
 | `selftest_lua.py` | runs both probe scripts under stock Lua 5.0.2 (`out\tools\lua50.exe`, built with the project MSVC) with stubbed engine calls, and checks that a memory scan of that process finds every record |
