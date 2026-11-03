@@ -244,8 +244,8 @@ if ($LuaProbe) {
     $ls = Read-Q2Json (Join-Path $runDir 'lua_summary.json')
     if ($ls) {
         $status.lua = [ordered]@{ records = $ls.records; galactic = $ls.scripts.G.verdict; scoring = $ls.scripts.T.verdict
-                                  errors = @($ls.errors).Count }
-        Write-Q2 "lua: galactic $($ls.scripts.G.verdict); scoring $($ls.scripts.T.verdict)"
+                                  plans = $ls.scripts.P.verdict; errors = @($ls.errors).Count }
+        Write-Q2 "lua: galactic $($ls.scripts.G.verdict); scoring $($ls.scripts.T.verdict); plans $($ls.scripts.P.verdict)"
     }
 }
 $code = 30

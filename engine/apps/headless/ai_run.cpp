@@ -24,6 +24,7 @@
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
+#include "alamo/jobs/job_system.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "alamo/sim/campaign_battles.hpp"
@@ -292,6 +293,9 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         };
         ai::GalacticAiConfig wcfg = gcfg;
         wcfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
+        wcfg.background = jobs::make_background_start(host.jobs());  // OPT2 t02: background path recomputes
+        if (opt.ai_latency >= 0) wcfg.path_latency = static_cast<uint32_t>(opt.ai_latency);  // parity knobs
+        wcfg.stagger = opt.ai_stagger;
         world_holder = std::make_unique<ai::GalacticAiWorld>(
             *gs, host.galactic_mode()->primary(), &types, files.get(), host.random(), defs, eqs, tinfo,
             [&host](uint8_t p, const commands::EventData& ev) { return host.execute_direct(p, commands::CommandSource::AI, ev); },

@@ -34,7 +34,9 @@
 // plans by id, evaluators by name ...). Only the finalizer order depends on it.
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <span>
+#include <vector>
 
 #include "alamo/core/parallel.hpp"
 #include "alamo/lua/lua_vm.hpp"
@@ -56,5 +58,14 @@ bool gc_due(const LuaVm::HeapInfo& h, uint64_t tick, const GcPolicy& policy = {}
 // in progress is never due. Returns the number of VMs collected.
 uint32_t collect_scheduled(std::span<LuaVm* const> vms, uint64_t tick, const ParallelFor& pf = serial_for,
                            const GcPolicy& policy = {});
+
+// Teardown (OPT3 t11: a battle's AI holds dozens of plan, evaluator and free-store VMs, and closing them one by one
+// made the battle-end tick). prepare_detached_close drops the null entries of `vms` and runs every VM's finalizers on
+// the calling thread, VM by VM in list order (LuaVm::finalize_for_close); afterwards destroying a VM only frees its
+// own heap (CRT allocator, thread-safe), so the VMs may be destroyed on any thread, in any order. The calling thread
+// must own every VM and no script may be running in any of them. destroy_detached does both, the frees through `pf`
+// (one VM per index), and clears the list. Game state does not depend on either: nothing is read from a closed VM.
+void prepare_detached_close(std::vector<std::unique_ptr<LuaVm>>& vms);
+void destroy_detached(std::vector<std::unique_ptr<LuaVm>>& vms, const ParallelFor& pf = serial_for);
 
 }  // namespace alamo::lua

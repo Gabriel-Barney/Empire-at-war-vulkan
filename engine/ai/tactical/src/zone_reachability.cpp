@@ -156,14 +156,20 @@ bool ZoneGraph::links_to(uint32_t from, uint32_t to, uint32_t mask) const {
     return false;
 }
 
-void ZoneGraph::recompute_with_threat(const ZoneThreatFn& threat, const ParallelFor& pf) {
-    node_cost_.assign(zones_.size(), 0u);
+std::vector<uint32_t> ZoneGraph::threat_node_costs(const ZoneThreatFn& threat) const {
+    std::vector<uint32_t> cost(zones_.size(), 0u);
     if (threat)  // Node_Weight (vf3), node index order
-        for (uint32_t i = 0; i < size(); ++i) node_cost_[i] = land_zone_node_cost(threat(i));
+        for (uint32_t i = 0; i < size(); ++i) cost[i] = land_zone_node_cost(threat(i));
+    return cost;
+}
+
+void ZoneGraph::recompute_with_threat(const ZoneThreatFn& threat, const ParallelFor& pf) {
+    node_cost_ = threat_node_costs(threat);
     recompute({}, pf);
 }
 
-void ZoneGraph::recompute(const ZoneEdgeWeightFn& weight, const ParallelFor& pf) {
+void ZoneGraph::build_raw(const ZoneEdgeWeightFn& weight, std::span<const uint32_t> node_cost,
+                          ::alamo::galactic::detail::RawOwned& raw) const {
     const uint32_t n = size();
     struct Edge {
         uint32_t to, w;
@@ -176,7 +182,8 @@ void ZoneGraph::recompute(const ZoneEdgeWeightFn& weight, const ParallelFor& pf)
             const int32_t i = link_target_[li++];
             if (i < 0 || static_cast<uint32_t>(i) == j || l.kind == 0) continue;
             const auto from = static_cast<uint32_t>(i);
-            const uint32_t w = weight ? weight(from, j, l.kind) : land_zone_edge_weight(zones_[from], zones_[j], node_cost_[j]);
+            const uint32_t cost = j < node_cost.size() ? node_cost[j] : 0u;
+            const uint32_t w = weight ? weight(from, j, l.kind) : land_zone_edge_weight(zones_[from], zones_[j], cost);
             if (w == ::alamo::galactic::kUnlinked) continue;
             out[from].push_back({j, w});
         }
@@ -189,18 +196,34 @@ void ZoneGraph::recompute(const ZoneEdgeWeightFn& weight, const ParallelFor& pf)
         out[i].erase(std::unique(out[i].begin(), out[i].end(), [](const Edge& a, const Edge& b) { return a.to == b.to; }),
                      out[i].end());
     }
-    raw_ = {};
-    raw_.n = n;
-    raw_.offsets.assign(size_t(n) + 1, 0);
+    raw = {};
+    raw.n = n;
+    raw.offsets.assign(size_t(n) + 1, 0);
     for (uint32_t i = 0; i < n; ++i) {
-        raw_.offsets[i + 1] = raw_.offsets[i] + static_cast<uint32_t>(out[i].size());
+        raw.offsets[i + 1] = raw.offsets[i] + static_cast<uint32_t>(out[i].size());
         for (const Edge& e : out[i]) {
-            raw_.nbr.push_back(e.to);
-            raw_.w.push_back(e.w);
+            raw.nbr.push_back(e.to);
+            raw.w.push_back(e.w);
         }
     }
-    raw_.node.assign(n, 1);
+    raw.node.assign(n, 1);
+}
+
+void ZoneGraph::recompute(const ZoneEdgeWeightFn& weight, const ParallelFor& pf) {
+    build_raw(weight, node_cost_, raw_);
     ::alamo::galactic::detail::reference_raw(raw_.view(), m_, pf);
+}
+
+void ZoneGraph::compute(std::span<const uint32_t> node_cost, ZoneGraphResult& out, const ParallelFor& pf) const {
+    out.node_cost.assign(node_cost.begin(), node_cost.end());
+    build_raw({}, out.node_cost, out.raw);
+    ::alamo::galactic::detail::reference_raw(out.raw.view(), out.m, pf);
+}
+
+void ZoneGraph::adopt(ZoneGraphResult& r) {
+    std::swap(node_cost_, r.node_cost);
+    std::swap(raw_, r.raw);
+    std::swap(m_, r.m);
 }
 
 bool ZoneGraph::path(uint32_t from, uint32_t to, std::vector<uint32_t>& zones) const {
