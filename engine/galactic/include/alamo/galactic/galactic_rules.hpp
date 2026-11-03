@@ -27,7 +27,8 @@ inline constexpr uint32_t kNoIndex = 0xFFFFFFFFu;
 // How a type takes part in the galaxy. The original classifies by category flags (GE 2.1 / 2.5:
 // 0x5c starbase, 0x5e/0x60/4/0x61 starbase upgrade families, 0x5f ground structure) [M]; the port
 // derives them from the XML element kind (StarBase, GroundStructure/GroundBase/SpecialStructure,
-// Squadron, ground companies/infantry/vehicles) until the flag tables are recovered.
+// Squadron, ground companies/infantry/vehicles) and, since q6 t03, from the DUMMY_* behaviours those
+// flags turned out to be (galactic_unit_kind below).
 enum class UnitKind : uint8_t {
     Other = 0,
     SpaceUnit = 1,        // ships, space heroes: live in fleets
@@ -121,6 +122,21 @@ inline bool is_orbital_structure_type(const TypeInfo& t) { return t.dummy == kDu
 inline bool is_star_base_type(const TypeInfo& t) {
     return t.dummy != 0 ? t.dummy == kDummyStarBase : t.kind == UnitKind::StarBase;
 }
+
+// Galactic role (q6 t03). The element tag carries no behaviour in the original (OBJECT_TYPES §2); galactic code tests
+// the DUMMY_* behaviours (SG 1.2, AI_GALACTIC_TOKENS). The port's older element-tag table stays for the vanilla tags.
+//   unit_kind_from_element: the tag table alone (Other for a tag outside it).
+//   unit_kind_from_dummy:   DUMMY_STAR_BASE -> StarBase, DUMMY_GROUND_BASE / _GROUND_STRUCTURE / _ORBITAL_STRUCTURE ->
+//                           GroundStructure, DUMMY_GROUND_COMPANY -> GroundUnit, DUMMY_SPACE_FIGHTER_SQUADRON ->
+//                           Squadron, DUMMY_STARSHIP -> SpaceUnit; Other for 0.
+//   galactic_unit_kind:     a tag in the table takes the behaviour's role when it has one, else the table's (no vanilla
+//                           FoC / EaW type has a behaviour that disagrees with its tag); a tag outside the table takes
+//                           the behaviour's role, except the vanilla tags whose vanilla types the port always left Other
+//                           (is_vanilla_unclassified_element), so vanilla data maps exactly as before.
+UnitKind unit_kind_from_element(std::string_view element, bool hyperspace);
+UnitKind unit_kind_from_dummy(uint8_t dummy);
+bool is_vanilla_unclassified_element(std::string_view element);
+UnitKind galactic_unit_kind(std::string_view element, bool hyperspace, uint8_t dummy);
 
 // Terrain enum (AI_GALACTIC_3 Â§6.1, BATTLE_TRANSITIONS map picker order): Temperate 0 .. Urban 6, Space 7.
 inline constexpr const char* kTerrainNames[] = {"Temperate", "Arctic", "Desert", "Forest", "Swamp", "Volcanic", "Urban", "Space"};
