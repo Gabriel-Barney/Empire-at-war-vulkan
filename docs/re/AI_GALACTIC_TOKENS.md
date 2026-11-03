@@ -176,7 +176,8 @@ nested evaluation that fails fails the token.
 | ActiveGoals | 0x6e0490 | 0 | number of active goals whose category ∈ `Parameter_Category` mask (0x721f70 on the goal system of the current mode) | fails without AI system |
 | StoryTrigger | 0x6e08e0 | 0 | 1.0 if 0x4dd530(system, `Parameter_Name`) [M story flag] | fails if name absent |
 | HomePlanet | sub 0x6df790 / 0x6df650 | — | sub-evaluator of the home planet [M] | — |
-| BudgetAllocation | 0x6e0560 | 2 | not read | — |
+| BudgetAllocation | 0x6e0560 | 2 | Self only: normalised weight of the budget category `Parameter_Category` (an AIGoalCategoryType value); §8.3 | fails if the player is not Self |
+| TimeSinceSpaceDefender / …SpaceAttacker / …GroundDefender / …GroundAttacker | 0x66b950 / 0x66b900 / 0x66b8b0 / 0x66b860 | 0 | (now − stamp)/FPS seconds; never stamped → 1e18; §8.2 | — (any galactic player root) |
 
 ## 4. Game root (GalacticGame 0x66e380 → base 0x6e2170; Game.<side> = GameForce 0x6e3d40)
 
@@ -282,3 +283,132 @@ registered on planets.)
 5. 0x6136b0 (AI CreditsUnnormalized) — total of budget pools vs player credits.
 6. Cache key: 0x5f3e60 hashes the binding set; whether the hash includes Self (so Human-rooted and Self-rooted leaves
    share entries) is [M] (AI_TACTICAL_PERCEPTION §1.2).
+7. (q6) §8: whether any land path other than the auto-resolve start raises signal 0x13 on a planet through a
+   dispatcher other than 0x220ed0; and whether the tactical budget map is empty (§8.3 "Tactical").
+
+## 8. Player-rooted tokens used by Thrawn's Revenge (q6, 2026-11-03)
+
+TR's galactic equations use three player tokens that the shipped FoC equations never use:
+`GovernmentEquations.xml` (`240 > Variable_Self.TimeSinceSpaceDefender`, `480 > Variable_Self.TimeSinceGroundDefender`),
+`OffensiveGalaticEquations.xml` (`40 >` and `80 > Variable_Self.TimeSinceGroundDefender`) and `BudgetingEquations.xml`
+(`Variable_Self.BudgetAllocation{Parameter_Category = AIGoalCategoryType[MajorItem]} * Function_Current_Credits.Evaluate
+> 10000`). This section specifies them and their attacker twins.
+
+### 8.1 Token table and dispatch [H]
+
+- **Name → id.** The static registration 0x5b43d0 registers every token name with the token manager (global pointer
+  0x140b310a8, vf+0x20(name, &id)) and stores the id in a global. A failed registration logs "Unable to initialize
+  <name> perception token!". The ids used here:
+
+| global | token |
+|---|---|
+| 0x140a43d7c | `BudgetAllocation` |
+| 0x140a43eac | `TimeSinceSpaceDefender` |
+| 0x140a43eb0 | `TimeSinceSpaceAttacker` |
+| 0x140a43eb4 | `TimeSinceGroundDefender` |
+| 0x140a43eb8 | `TimeSinceGroundAttacker` |
+| 0x140a43c60 | `Parameter_Category` (stored as a pointer-sized value, LuaValue class 10, by the parameter parser 0x5f3aa0) |
+
+- **Id → leaf.** Each evaluator class has a registration function (its vf+0x40) that builds leaf nodes and inserts them
+  with 0x64cbd0(evaluator, token id, node). A path walk (0x4dd1d0) finds the root evaluator, then looks each further
+  token up in the current evaluator's map. A token with no entry fails the path (§5).
+- **Who registers them.** The four `TimeSince*er` ids appear only in the GalacticPlayer registration 0x66b9f0 (visible
+  leaves built by 0x665ec0, cache lifetime **0**). `BudgetAllocation` is registered in the base Player registration
+  0x6e09c0 (visible leaf, lifetime **2** s), which the galactic and the tactical player evaluators both run.
+
+### 8.2 TimeSinceSpaceDefender / SpaceAttacker / GroundDefender / GroundAttacker
+
+**State.** Each GalacticPlayer evaluator (vt 0x8b4828; ctors 0x6667d0 / 0x666850, size 0xB8) keeps four int frame
+stamps, all **−1** at construction [H]:
+
+| field | stamp | leaf |
+|---|---|---|
+| +0xA8 | space defender | 0x66b950 |
+| +0xAC | ground defender | 0x66b8b0 |
+| +0xB0 | space attacker | 0x66b900 |
+| +0xB4 | ground attacker | 0x66b860 |
+
+**Value** (all four leaves; no parameters, no Self check) [H]: stamp = −1 → **1e18** (the float constant 1e18 widened
+to double, 999999984306749440.0); otherwise (NOW − stamp) / FPS as a double. NOW is the global logic frame 0x140b0a320
+(FrameSynchronizer +0) and FPS the int at 0x140b0a340 (30). The subtraction is done in int. Range: ≥ 0 seconds, or the
+1e18 sentinel. The leaf never fails.
+
+The clock is the global logic frame, not the galactic mode frame (mode +0x10) [H]. The global frame keeps counting
+while a tactical battle runs, so time spent in battle counts towards these values [M].
+
+**Writer: the listener 0x66d490** (the evaluator's signal-listener sub-object at +0x88) [H]:
+- Signal **0x11**: take the space-conflict queue head of the galactic game-object manager (0x28a950(GMM, 0) → mode →
+  +0x18 → 0x2ad0e0; record layout BATTLE_TRANSITIONS §1.1). If the evaluator's player id (player = evaluator +0x98, id
+  at player +0x4C) equals the record's defender id (+8): space-defender stamp = NOW. Otherwise, if it equals the
+  attacker id (+4): space-attacker stamp = NOW.
+- Signal **0x13**: the same with the land-conflict queue head (0x2ac5a0): defender → ground-defender stamp, attacker →
+  ground-attacker stamp.
+- Any other signal is passed to the base listener 0x6e1680. A null player changes nothing.
+
+**Subscription** (vf+0x60 = 0x66d6c0, the player re-bind) [H]: it unsubscribes the listener from signals 0x11 and 0x13
+on every object of the perception system's target list (evaluator +0xA0 → vf+0x40; each entry's object via vf+0x30,
+signal generator at object +0x38). It then re-binds the player (base 0x6e1690) and, if the evaluator has a player,
+subscribes again to 0x11 and 0x13 on the same objects. The target list holds one entry per planet, so the evaluator
+hears these two signals from **every planet** [M: list = the planet target list of §0].
+
+**Senders.** All 183 call sites of the signal send 0x220ed0 were checked, including tail jumps [H]:
+- **0x11** is raised on the planet only by the galactic space-conflict service 0x2b92e0 (GOM; space queue data +0x470):
+  - state −1 (new head): after every participating unit and fleet member has been tagged (each also gets 0x11 on its
+    own generator, which the player evaluators do not hear), the planet gets 0x11 and the state becomes 4. This is the
+    start of a space conflict, whatever is chosen next (tactical battle, auto-resolve, retreat);
+  - validation failure (0x2befe0 false: attacker == defender, or one side cannot fight): the planet gets 0x11
+    **before** the head is removed, so the listener still sees the dropped record and stamps its attacker and defender
+    as well.
+- **0x13** is raised on the planet only by `AutoResolveClass` vf3 (0x608080) on its land path (flag +0x3D == 0), when a
+  land auto-resolve begins. The land-conflict service 0x2b76a0 sends no 0x13. So **`TimeSinceGroundDefender` and
+  `…GroundAttacker` change only when a land battle is auto-resolved** (AI-vs-AI invasions, or a human who picks
+  auto-resolve). A land battle fought in tactical mode leaves them unchanged [H for the sender list; M that no other
+  path reaches these listeners, open item 7].
+- Signals 0x12 / 0x14 (the planet tokens `TimeSinceSpaceConflict` / `TimeSinceGroundConflict`, §1) are different: they
+  are raised at battle **end** by 0x2a7580.
+
+**Scope** [H unless tagged]:
+- Per (perception system, player): every AI player's perception system has one GalacticPlayer evaluator per player,
+  each with its own four stamps. They all hear the same planet signals, so they agree, except that an evaluator created
+  or re-bound later has missed the earlier events [M].
+- **Saved:** the save vfunc 0x66d5a0 writes the base evaluator data (0x6d8250), then chunk 0x20000 with micro-chunks
+  0 = +0xA8, 1 = +0xB0, 2 = +0xAC, 3 = +0xB4 (4 bytes each). The load vfunc 0x66ccd0 reads the same chunk back.
+- **Roots.** Registered on every galactic player evaluator, so valid on `Variable_Self`, `Variable_Enemy` (when bound),
+  `Variable_Human` (when bound) and `Variable_Target.Owner`. Not registered on the planet (`Variable_Target.TimeSince
+  SpaceDefender` fails), on the Game root, or on any tactical evaluator (tactical uses fail).
+
+**Equation consequence.** `240 > Variable_Self.TimeSinceSpaceDefender` is 1.0 for 240 s of logic frames after a space
+conflict in which the AI is the defender starts (or is dropped), and 0.0 before the first one (1e18).
+
+### 8.3 BudgetAllocation (0x6e0560) [H unless tagged]
+
+- **Self only.** Fails (returns false) unless the evaluator's player (+0x98) is the player that owns the perception
+  system (bindings → system +0x58 → +0x50). So `Variable_Self.BudgetAllocation` works. On `Variable_Enemy`,
+  `Variable_Human`, or `Target.Owner` (unless that owner is Self) the leaf fails and the whole equation fails.
+- **Parameter.** `Parameter_Category` (global 0x140a43c60), read with 0x5f4780, default **−1** when absent. Only the low
+  32 bits are used as the key. In TR it is an AIGoalCategoryType value (`AIGoalCategoryType[MajorItem]`), the same
+  enum that names the categories of a budget (`<MajorItem>`, `<Infrastructure>`, `<Offensive>` … in the templates) [M
+  for the key being that enum value].
+- **Budget.** Goal system = evaluator +0xA0 (perception system) → +0x28 (AI context) → +0x40. Budget = goal system
+  +0x190 (AIBudgetClass, AI_GALACTIC_2 §3).
+- **Value.** 0x612ee0(budget, key) looks the key up in the budget's category map (hash map at budget +0x30 / +0x40 /
+  +0x58, int key at node +0x10, category at node +0x18) and returns the category's float at +0x3C, widened to double.
+  That float is the **normalised weight** w of AI_GALACTIC_2 §3.2: init 0x6137b0 and every reweight 0x614590 set it
+  to the equation value with negatives → 0, then w / Σw, or 1/count when Σw = 0. A key that is not in the map → **0.0**
+  (not a failure).
+- **Range.** [0, 1]; over all categories of the player's budget the weights sum to 1. No parameter → key −1 → 0.0 [M:
+  no category is stored under −1].
+- **Timing.** No clock. The value changes only when the budget is reweighted (each commit, and at init), plus the 2 s
+  leaf cache. During a reweight, 0x614590 writes each category's raw value to +0x3C as it goes and normalises in a
+  second loop. An equation that reads `BudgetAllocation` from inside a budget weight equation can therefore see a raw
+  value for categories already evaluated in that pass, unless its cached value is still fresh [M].
+- **Tactical.** The same leaf is on the tactical player roots. The budget is galactic-only (AI_GALACTIC_2 §3), so in
+  tactical the map is expected to be empty and the value 0.0 [L: not traced].
+
+### 8.4 Port notes
+
+- Register the four `TimeSince*er` leaves on the galactic player evaluator with the stamps above, fed by "space conflict
+  head started or dropped at a planet" and "land auto-resolve began at a planet"; 1e18 when never stamped; saved with
+  the player evaluator.
+- `BudgetAllocation`: Self-only, keyed by the AIGoalCategoryType value, returns the category's current normalised
+  weight, 0.0 for an unknown category.
