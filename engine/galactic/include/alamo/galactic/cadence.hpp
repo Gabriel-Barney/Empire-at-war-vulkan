@@ -15,6 +15,9 @@ namespace alamo::galactic {
 
 inline constexpr int32_t kAllPairsRecomputePeriod = 90;  // 0x5a frames
 inline constexpr int32_t kLazyCreatedNextRecompute = 0;
+// OPT2 t02 [port]: the default latency of a background (cadence) recompute: kicked on frame N, applied on N + 15 (half a
+// second at 30 frames/s, well inside the 90-frame period). 0 = the original timing (computed and read on frame N).
+inline constexpr uint32_t kDefaultAllPairsLatency = 15;
 
 // K = number of player slots - number of active human players (+0x62 and +0x180 set).
 constexpr int32_t stagger_divisor(int32_t player_slots, int32_t active_humans) {

@@ -1195,7 +1195,7 @@ The infantry turn-animation time = angle / rate × 1/30 (`0x62bef0`).
 - `Walker_Acceleration_Magic_Number` (+0x1d50): parsed (`0x36c000`) and zeroed (`0x31b590`) only.
 - `MaxObstacleCostSpace`, `ObstacleAreaOverlapForMaxSpace`, `UseLinearCollisionChecks`, `MaxObstacleCostLand`.
 - `MaxLandFormationFormupFrames`, `Formation_Formup_Wait_Style`: not found in the formation code (§4.4).
-- `RepushDistance`: no reference at its expected address.
+- `RepushDistance` (GameConstants +0x1494) and `MinimumPushReturnDistance` (type +0x3cc): no reader (a1k t03, §5.4).
 
 Any of these may have readers that were not found. Parse them and treat them as inert until a probe shows otherwise.
 
@@ -1419,8 +1419,22 @@ For each registered mover, **in registration-list order**:
 
 **Processing order:**
 - Each frame, active collisions are sorted by a priority float and resolved in that order under the dynamic quota (§1.5).
-- The MovingVsMoving resolution methods (`0x677650…0x6814f0`), `RepushDistance = 6` and `MinimumPushReturnDistance` (type +0x3cc, readers `0x1d6290`/`0x1d7cf0`) were **not traced**.
-- Recommended behaviour pending a probe: a pushed unit steps aside along the push vector and returns once the pusher has passed by at least MinimumPushReturnDistance. [L]
+- The MovingVsMoving resolution methods (`0x677650…0x6814f0`) were **not traced**.
+
+**Push `0x6859a0` and the pushed unit (a1k t03, A1_READINGS §36.4 / §40)** [H]:
+- Direction d = the pusher's heading turned ±45° toward the blocker's side.
+- Free-position search `0x440f90` (set up by `0x440be0`, cone mode 2): rings around the blocker, radius 0, 1, 2.8, 5.4, …
+  (step +0.8 per ring up to min(1.5 r, 10), r = footprint radius √(hx² + hy²) of the hard extents), at most 20 rings, n = trunc(R·2π / r) + 1 samples
+  (≥ 4 after ring 0) at angles θ = 2πi / n from d. Only θ ≤ π/4 is sampled at the ring radius (the rest at 0.33 from
+  the blocker). First sample in that order that is inside the map box, **reachable** (same connected region for its
+  movement class, `0x50ecd0`), **unoccupied** (no other object in a box of half size r + 5 × `FormationSpacing`) and
+  **off the paths** of the movers in its MovingVsStopped collisions (clearance = mover hard Y extent + r + 4) wins. None →
+  the push fails.
+- The blocker gets a land path to the spot as a new record on top of its **path stack** (pack +0x138, kind 4, or 7 when
+  the pusher could crush it); its own records stay underneath. When the pushed path ends it is popped and an
+  unfinished path below resumes from its waypoint index; an idle unit stays at the spot.
+- **There is no return move:** `MinimumPushReturnDistance` (type +0x3cc) and `RepushDistance` (GameConstants +0x1494)
+  have no reader in the binary.
 
 ### 5.5 Crush (`SquashBehaviorClass`, vf6 `0x629fa0`; vftable `0x8af300`) [H]
 
@@ -1587,7 +1601,7 @@ Three separate spatial structures exist. The port can unify them only if every q
 6. Whether land ground units ever use the lattice planner of §2.1 (its land branches exist).
 7. Formation speed computation; formup wait styles; `MaxLandFormationFormupFrames`.
 8. Space formation layouts (`0x4fca30`, `0x4fdfb0`, `0x4fd5b0`, `0x4fea10`), `Merge_Formation`, `Split_From_Formation`, `Squadron_Formation_Error_Tolerance`.
-9. MovingVsMoving resolution (`0x677650…0x6814f0`), push and return (`RepushDistance`, `MinimumPushReturnDistance`), `TerrainCollisionClass` trigger, footprint field semantics. (The collision **priority sort** of §5.4 is resolved: ascending priority = crowd − age, crowd = 5 × objects in a 160 × 160 box; TACTICAL_GAPS.md §6.7.)
+9. MovingVsMoving resolution (`0x677650…0x6814f0`), (push and return: resolved, §5.4 / A1_READINGS §40), `TerrainCollisionClass` trigger, footprint field semantics. (The collision **priority sort** of §5.4 is resolved: ascending priority = crowd − age, crowd = 5 × objects in a 160 × 160 box; TACTICAL_GAPS.md §6.7.)
 10. Bike, Flying, JetPack and LandBomber locomotors, LocomotorCommon `0x5070b0` (the shared turn core that reads `Min_Speed_Fraction_For_Turn` +0x3ac), `Stopped_Rate_Of_Turn` (+0x3b0) readers, fighter attack runs and team slot geometry `0x62d620`.
 11. Hyperspace: the camera-dependence of arrival staggering, `Hyperspace_Speed` readers, `Cinematic_Hyperspace_In` / `Resume_Hyperspace_In`.
 12. Guard, Divert, MoveObjectToObject and SetupPhaseMove payloads.

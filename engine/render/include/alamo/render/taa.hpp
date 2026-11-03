@@ -6,7 +6,13 @@
 //     view-projection (camera motion only - the translated D3D9 materials have no motion vectors), clips it to the
 //     current 3x3 neighbourhood (YCoCg variance box) and blends kTaaCurrentWeight of the current frame in;
 //   * reset: the history restarts (current frame only) on the first TAA frame, after a frame without TAA, on a
-//     resize, on a camera cut (taa_history_usable below) and on Renderer::reset_taa_history().
+//     resize, on a camera cut (taa_history_usable below) and on Renderer::reset_taa_history();
+//   * disocclusion: the resolve also keeps the previous frame's linear scene depth. Where the depth the reprojection
+//     expects differs from the depth that was stored there (something moved into or out of the pixel - the materials
+//     have no motion vectors, so a moving object shows up as exactly this), the history is dropped for that pixel
+//     (taa_linear_depth below is the CPU twin of the shader's LinearDepth);
+//   * confidence: the clip box is wider where the history sits still and narrower where it moved, and the blend weight
+//     rises with how far the history had to be clipped, so trails of moving objects fade in a few frames.
 #pragma once
 #include <cstdint>
 
@@ -33,9 +39,16 @@ struct TaaCamera {
     Mat4 view_proj;
     Float3 eye{0, 0, 0}, forward{0, 0, -1};
     float proj_x = 0, proj_y = 0, far_plane = 0;  // projection x / y scale, far plane (0: not a perspective projection)
+    // Depth rows of the projection (m[2][2], m[2][3]) and its kind: what taa_linear_depth needs to turn a 0..1 NDC depth
+    // back into a view distance.
+    float depth_a = 0, depth_b = 0;
+    bool perspective = false;
     uint32_t width = 0, height = 0;
 };
 TaaCamera taa_camera(const ViewMatrices& unjittered);
+// View-space distance of an NDC depth in 0..1 under `c`'s projection: perspective b / (ndc + a), orthographic (b - ndc) / a.
+// 0 when the camera is not valid or the denominator vanishes.
+float taa_linear_depth(const TaaCamera& c, float ndc);
 // False when the previous frame's history cannot be reprojected into `cur`: no previous frame, a different size,
 // a field-of-view change over 2 %, a turn over ~11 degrees (forward dot < 0.98) or a move over 5 % of the far plane
 // (perspective; orthographic: any eye move over 5 % of the larger x / y extent) in one frame - a teleport / camera cut.

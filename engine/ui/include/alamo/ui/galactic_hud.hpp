@@ -110,15 +110,26 @@ struct GalacticPlanetInfo {
     std::string garrison_icon;
     std::vector<GalacticPlanetStack> stacks;
 };
+// GalacticFleetSlot::type of a unit the host did not classify: it is never merged into a stack.
+inline constexpr uint32_t kNoSlotType = 0xFFFFFFFFu;
 struct GalacticFleetSlot {
     uint32_t object = 0;
     std::string icon;
     uint32_t count = 1;
     bool selected = false;
+    // UI.md §7.2: units of one fleet with the same type share one organiser pad (a stack with a count). Host: the unit's
+    // object type index; kNoSlotType = its own stack. Land-force slots ignore it.
+    uint32_t type = kNoSlotType;
 };
+// One fleet in orbit at the selected planet, as the organiser sees it (UI.md §7.2). The HUD, not the host, decides which
+// of the three panes q1 / q2 / q3 it fills, from `slot`, `enemy` and the planet's GalacticPlanetInfo::orbit_local; the
+// provider order only breaks ties. Several fleets can share a pane (own slot-0 fleets, every foreign fleet): their stacks
+// follow each other from the pane's first pad.
 struct GalacticFleet {
     uint32_t fleet = 0;                 // fleet object id
     std::vector<GalacticFleetSlot> units;
+    int32_t slot = -1;                  // the fleet's own orbit slot 0..2 (galactic FleetState::slot); -1 = unknown, first free pane [port]
+    bool enemy = false;                 // not the local player's (foreign or allied): drawn in pane 0, not draggable, clicks do nothing [port]
 };
 struct GalacticBuildOption {
     uint16_t type_index = 0;
@@ -150,7 +161,9 @@ struct GalacticSpecialAbility {
 struct GalacticProviders {
     std::function<void(uint32_t planet, std::vector<GalacticBuildOption>& out)> build_options;
     std::function<void(std::vector<HudQueueEntry>& out)> build_queue;
-    std::function<void(uint32_t planet, std::vector<GalacticFleet>& out)> fleets;          // organiser (max 3)
+    // Organiser (UI.md §7): every fleet in orbit at the planet that the local player may see (own, allied, or visible and
+    // not stealthed), each with its slot and enemy flag; any number, the HUD places them in the three panes.
+    std::function<void(uint32_t planet, std::vector<GalacticFleet>& out)> fleets;
     std::function<void(uint32_t planet, std::vector<GalacticFleetSlot>& out)> land_forces;  // max 20
     std::function<void(std::vector<HudObjective>& out)> objectives;                        // StorySession objectives
     // g_special_ability rows for the selected planet, in display order (host: the local player's units there with a
@@ -429,7 +442,8 @@ private:
     };
     std::vector<AbilityRow> ability_rows_;
     std::vector<int32_t> build_pad_, create_, queue_, land_;
-    std::vector<std::vector<int32_t>> fleet_;  // [fleet][slot] q{n}_RRCC
+    std::vector<std::vector<int32_t>> fleet_;  // [fleet][slot] unit pads q{n}_0001 .. q{n}_0406 (UI.md §7.2)
+    std::vector<int32_t> pathfinder_;          // [fleet] the header pad q{n}_0000 (UI.md §7.4), -1 if absent
     struct PadSlot {
         int32_t component = -1;
         GalacticBuildOption option;
@@ -438,8 +452,10 @@ private:
         std::vector<uint32_t> select;  // fleet / land pads
         // drag and drop
         bool draggable = false;
-        int32_t fleet_index = -1;      // 0..2 organiser fleet, -1 land forces
-        uint32_t fleet = 0, unit = 0;  // unit 0 = fleet header
+        int32_t fleet_index = -1;      // 0..2 organiser pane, -1 land forces
+        bool foreign = false;          // organiser pad of a non-local fleet: no drag, no click, no drop target (UI.md §7.2)
+        uint32_t fleet = 0, unit = 0;  // unit 0 = fleet header; a stack: its first unit (a drag takes that one unit)
+        bool empty = false;            // an empty organiser pad shown while dragging (UI.md §7.3): fleet 0 = a pane without a fleet
         std::string icon;
     };
     std::vector<PadSlot> pads_;
@@ -457,6 +473,7 @@ private:
     };
     std::vector<StackHit> stack_hits_;
     const StackHit* stack_at(int32_t component, float px, float py) const;  // pixel position
+    StackHit pane_hit(const PadSlot& pad) const;
     StackHit press_stack_;
     // drag and drop
     FleetOps ops_;

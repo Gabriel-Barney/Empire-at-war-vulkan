@@ -8,6 +8,9 @@
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/sim/sim_anim.hpp"  // L1/S4 wave 2a story hookup (SimAnimation::world)
 #endif
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+#include "alamo/lua/players.hpp"  // a1j t07: TacticalGalacticContext
+#endif
 #include "save_io.hpp"  // N1 stage 2
 
 namespace alamo::sim {
@@ -18,29 +21,49 @@ public:
     explicit ConflictGate(CampaignBattles& b) : b_(&b) {}
     void on_space_conflict(PlanetIndex planet, int32_t attacker) override { b_->cm_->on_space_conflict(planet, attacker); }
     bool on_invade(int32_t attacker, PlanetIndex planet, std::span<const objects::ObjectHandle> units) override {
+        // story t07: the last-invade vector 0x140a172b0 (InvadeEvent 0x48ff50, every id of the event; human invades only:
+        // the AI's task-force invasions call Land_Invade directly) [port: any human invade reaching the conflict hooks].
+        GalacticMode* g = b_->host_->galactic_mode();
+        if (g && g->sim() && attacker >= 0 && static_cast<size_t>(attacker) < g->sim()->players().size() &&
+            g->sim()->players()[static_cast<size_t>(attacker)].human)
+            b_->lk_.last_invade.assign(units.begin(), units.end());
         return b_->cm_->on_invade(attacker, planet, units);
     }
-    bool in_queued_conflict(int32_t player) const override { return b_->cm_->in_queued_conflict(player); }
+    // 0x2b0350: `player` is attacker or defender of a record in either queue. a1j t05 [port]: a corruption mission's own
+    // conflict does not count - it is the battle record, which the original keeps out of the queues until it starts
+    // (0x52bf50 -> 0x28f590 clears the flag before queueing it), so it never feeds the story block.
+    bool in_queued_conflict(int32_t player) const override {
+        for (const auto* q : {&b_->cm_->space_queue(), &b_->cm_->land_queue()})
+            for (const galactic::ConflictInfo& c : *q)
+                if ((c.attacker == player || c.defender == player) && !b_->mission_record(c)) return true;
+        return false;
+    }
     void on_service_tail() override {
-        // BT §1.4 step 2: in single player, while a story / tutorial sequence is active and the local (human) player is
-        // attacker or defender of any queued conflict, nothing of the conflict processing runs this tick.
-        if (b_->opt_.story_sequence_active && b_->opt_.story_sequence_active() && human_involved()) return;
+        // BT §1.4 step 2 (0x2be640, a1j t05): while the story block holds (GalacticSim::story_block: a linked battle record
+        // waits and the local player is attacker or defender of a queued conflict) nothing of the conflict processing runs
+        // this tick. [port] Not while a corruption mission's conflict is queued: the original starts that record at once,
+        // the port runs it through the queue, so blocking would hold it forever.
+        GalacticMode* g = b_->host_->galactic_mode();
+        if (g && g->sim() && g->sim()->story_block() && !b_->mission_queued()) return;
         b_->cm_->on_service_tail();
     }
 
 private:
-    bool human_involved() const {
-        GalacticMode* g = b_->host_->galactic_mode();
-        if (!g || !g->sim()) return false;
-        const auto& ps = g->sim()->players();
-        auto human = [&ps](int32_t p) { return p >= 0 && static_cast<size_t>(p) < ps.size() && ps[static_cast<size_t>(p)].human; };
-        for (const auto* q : {&b_->cm_->space_queue(), &b_->cm_->land_queue()})
-            for (const galactic::ConflictInfo& c : *q)
-                if (human(c.attacker) || human(c.defender)) return true;
-        return false;
-    }
     CampaignBattles* b_;
 };
+
+bool CampaignBattles::mission_record(const galactic::ConflictInfo& c) const {
+    for (const CorruptionMission& m : corruption_queued_)
+        if (m.planet == c.planet && m.player == c.attacker && m.kind == c.kind) return true;
+    return false;
+}
+
+bool CampaignBattles::mission_queued() const {
+    for (const auto* q : {&cm_->space_queue(), &cm_->land_queue()})
+        for (const galactic::ConflictInfo& c : *q)
+            if (mission_record(c)) return true;
+    return false;
+}
 // --- end battle host ---
 
 CampaignBattles::MapLoader CampaignBattles::file_map_loader(const FileProvider& files) {
@@ -53,6 +76,9 @@ CampaignBattles::CampaignBattles(SimHost& host, const galactic::ConflictRules& r
     : host_(&host), rules_(&rules), catalog_(&catalog), loader_(std::move(loader)), opt_(options) {}
 
 CampaignBattles::~CampaignBattles() {
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    if (lua_close_wait_) lua_close_wait_();
+#endif
     if (cm_) {  // N1: the save participants attach() registered
         host_->remove_save_participant("galactic.conflicts");
         host_->remove_save_participant("battles");
@@ -105,10 +131,8 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
     };
     cm_->attach();
     // --- battle host (BT pass): optional S10 seams (campaign_battles.hpp CampaignBattleOptions "battle host") ---
-    if (opt_.story_sequence_active) {  // BT §1.4 step 2: the gate forwards to the manager unless the story block holds
-        gate_ = std::make_unique<ConflictGate>(*this);
-        g->sim()->set_conflict_hooks(gate_.get());
-    }
+    gate_ = std::make_unique<ConflictGate>(*this);  // BT §1.4 step 2: the manager runs unless the story block holds (a1j t05)
+    g->sim()->set_conflict_hooks(gate_.get());
     // BT §1.6 story lock: a locked human-involved conflict is fought. Source: the option, else the running story
     // (StorySession::autoresolve_locked); unlocked = the ConflictConfig answer (same as no decide callback).
     cm_->decide = [this](const galactic::ConflictInfo& c) {
@@ -153,6 +177,7 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
 #else
             h.u32(0);  // no credit transfers (same layout without engine/ai)
 #endif
+            hash_linked(h);  // story t07 / t08 (no bytes while the linked state is at its defaults)
         });
         reg.add("battle.movement", [this](StateHasher& h) {
             h.boolean(battle_ != nullptr);
@@ -209,7 +234,7 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
 
 // --- N1 save / load (owner: n1-host; stage 2 n2-host; campaign_battles.hpp) ---
 namespace {
-constexpr uint32_t kBattlesSaveVersion = 2;  // 2: + the battle in flight (stage 2)
+constexpr uint32_t kBattlesSaveVersion = 3;  // 2: + the battle in flight (stage 2); 3: + the linked-battle state (story t07)
 constexpr uint32_t kBattleLevelVersion = 1;
 constexpr uint32_t kMaxBattlesCount = 1u << 24;
 
@@ -274,7 +299,9 @@ void CampaignBattles::write_state(ByteWriter& w) const {
     if (flight != 0) {
         save_io::Out o(w);
         request_io(o, pending_req_);
+        o(pending_req_.linked);  // v3
     }
+    write_linked(w);  // v3
 }
 
 bool CampaignBattles::read_state(ByteReader& r) {
@@ -289,7 +316,7 @@ bool CampaignBattles::read_state(ByteReader& r) {
         m.plots = r.str();
     };
     const uint32_t version = r.u32();
-    if (version != 1 && version != kBattlesSaveVersion) return false;
+    if (version < 1 || version > kBattlesSaveVersion) return false;
     const uint32_t fought = r.u32();
     const bool fog_active = r.boolean(), fog_render = r.boolean(), ar_requested = r.boolean(), direct = r.boolean();
     const uint8_t last = r.u8();
@@ -327,7 +354,10 @@ bool CampaignBattles::read_state(ByteReader& r) {
     if (flight != 0) {
         save_io::In in(r);
         request_io(in, req);
+        if (version >= 3) in(req.linked);
     }
+    LinkedState linked_state;  // v3 (older saves: the defaults, no record)
+    if (version >= 3) read_linked(r, linked_state);
     if (!r.ok() || !r.done() || flight > 2) return false;
     // The battle in flight. Running: without a battle (load pass 1) the request is staged for rebuild(); with one (pass 2,
     // after the rebuild) it must be the saved battle. Pending: the map is loaded again (the battle is pushed at the next hook).
@@ -347,6 +377,7 @@ bool CampaignBattles::read_state(ByteReader& r) {
     pad_records_ = std::move(pads);
     corruption_queued_ = std::move(queued);
     corruption_active_ = std::move(active);
+    lk_ = std::move(linked_state);
 #ifdef ALAMO_SIM_HAVE_STORY
     story_linked_ = static_cast<size_t>(linked);
 #endif
@@ -534,6 +565,7 @@ commands::RejectReason CampaignBattles::resume_game(uint8_t player, const comman
     // -> fight (state 3), bit 1 -> auto-resolve with the force flag (0x29c020, state 6). [port] single player takes the MP
     // rule (the retail SP dialog calls 0x28c7e0 directly, not through the command stream); other states: NotAllowed.
     (void)player;
+    if (lk_.banner_up) return linked_begin() ? commands::RejectReason::None : commands::RejectReason::NotAllowed;  // story t07: P13
     if (!cm_ || cm_->state() != galactic::ConflictState::Vote) return commands::RejectReason::NotAllowed;
     cm_->choose(ev.u("flag") != 0 ? galactic::BattleChoice::AutoResolve : galactic::BattleChoice::Fight);
     return commands::RejectReason::None;
@@ -629,7 +661,7 @@ void CampaignBattles::push_battle(SimHost& host) {
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     if (opt_.tactical_ai) bc.order_interval = bc.reinforce_interval = 0;  // A1: the tactical AI orders and reinforces
 #endif
-    battle_ = std::make_unique<TacticalBattle>(*catalog_, *g->sim(), *rules_, pending_req_, bc);
+    battle_ = std::make_unique<TacticalBattle>(*catalog_, *g->sim(), *rules_, pending_req_, bc, host.parallel_for());
     upgrades_seen_ = 0;
     battle_->set_animation(opt_.animation);  // S10-int (null: no sim-owned animation)
     battle_->set_clone_models(opt_.clone_models);  // refixf t04 (null: the battle's own, from the catalog files)
@@ -666,6 +698,7 @@ void CampaignBattles::push_battle(SimHost& host) {
 #endif
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     ai_begin(host, m);  // A1 stage 2
+    galactic_context_begin(kind);  // a1j t07
 #endif
     register_battle_chunks();  // N1 stage 2: the running battle's save chunks
 }
@@ -682,18 +715,22 @@ void CampaignBattles::hook(SimHost& host) {
         return;
     }
 #ifdef ALAMO_SIM_HAVE_STORY
-    if (!battle_) story_linked(host);  // L1/S4 wave 2b: story-forced battles (LINK_TACTICAL)
+    if (!battle_) {
+        story_landings(host);  // story t07: the last-invade vector from this T9's human landings (before the rewards)
+        story_linked(host);    // L1/S4 wave 2b: story-forced battles (LINK_TACTICAL records)
+    }
+#endif
+    if (!battle_ && !pending_ && lk_.present) start_linked_record();  // story t07 / t08: a waiting record (0x28f590 again)
     if (pending_) {  // BT §2.9.3: a linked battle is pushed in the hook that started it (the hook after its reward)
         push_battle(host);
         return;
     }
-#endif
     if (!battle_) corruption_prune();  // S4: corruption missions whose conflict was dropped
     if (!battle_ && cm_) {  // REMAINING_GAPS 6.4 [port]: a linked conflict that left the queues without a start (dropped by
                             // the validation / auto-resolved) releases the flag, else the galaxy would stay blocked
         GalacticMode* gm = host.galactic_mode();
-        if (gm && gm->sim() && gm->sim()->linked_battle_pending() && cm_->land_queue().empty() && cm_->space_queue().empty() &&
-            cm_->state() == galactic::ConflictState::Idle)
+        if (gm && gm->sim() && gm->sim()->linked_battle_pending() && !lk_.present && cm_->land_queue().empty() &&
+            cm_->space_queue().empty() && cm_->state() == galactic::ConflictState::Idle)
             gm->sim()->clear_linked_battle();
     }
     if (!battle_) return;
@@ -781,11 +818,16 @@ void CampaignBattles::hook(SimHost& host) {
 #endif
     // P4 sim: an auto-resolved battle was written back above. battle host: a corruption mission skips the normal write-back
     // and BattleWon / Lost (ConflictManager::finish_corruption_mission, TACTICAL_GAPS 4.8).
+    const galactic::LinkedResolution resolution = lk_.resolution;  // story t07: GOM+0x61c, cleared by every battle end
+    lk_.resolution = galactic::LinkedResolution::None;
     if (direct_) {
         direct_ = false;  // start_map_battle: nothing to write back
-    } else if (!auto_resolved) {
-        if (corruption_battle) cm_->finish_corruption_mission(result);
-        else cm_->finish_battle(result);
+    } else {
+        linked_end_battle();
+        if (!auto_resolved) {
+            if (corruption_battle) cm_->finish_corruption_mission(result);
+            else cm_->finish_battle(result, resolution);
+        }
     }
 }
 
@@ -838,16 +880,13 @@ CampaignBattles::CorruptionStart CampaignBattles::start_corruption(PlanetIndex p
     if (gs.credits(player) < cost) return CorruptionStart::Refused;
     // Mission only with a tactical slot, a non-AI corrupting player, single player [§4.5; AI corrupters apply directly].
     const bool mission = o->tactical && gs.players()[static_cast<size_t>(player)].human;
-    if (mission && o->kind == galactic::ConflictKind::Land && units.empty()) {
-        // [port] a land conflict needs the attacker's units in orbit (ConflictManager validation): every ground unit of
-        // the player's fleets at the planet (fleet order, content order), as GalacticSim::invade with an empty list.
-        for (const uint32_t fi : gs.fleets_at(planet, player))
-            for (const objects::ObjectHandle h : gs.fleets()[fi].contents)
-                if (gs.store().alive(h) && gs.store().type(h) < gs.rules().types.size() &&
-                    gs.rules().types[gs.store().type(h)].kind == galactic::UnitKind::GroundUnit)
-                    units.push_back(h);
-        if (units.empty()) return CorruptionStart::Refused;
+    // story t08: the mission's record names the planet owner's faction (0x28bd70 refuses an empty defender name).
+    std::string defender_faction;
+    if (ps.owner >= 0 && static_cast<size_t>(ps.owner) < gs.players().size()) {
+        const uint32_t f = gs.players()[static_cast<size_t>(ps.owner)].faction;
+        if (f < gs.rules().factions.size()) defender_faction = gs.rules().factions[f].name;
     }
+    if (mission && (lk_.present || defender_faction.empty() || o->map.empty())) return CorruptionStart::Refused;
     // --- P4 sim (owner: galactic agent): the executor's order (P4_SIM_SYSTEMS §5.2): credits, the charge, then the
     // planet type's Required_Unit check (no refund when it fails) and the consumed prerequisites.
     if (gs.corruption_charge(player, planet, type, cost) != galactic::CorruptionCharge::Charged) return CorruptionStart::Refused;
@@ -859,17 +898,202 @@ CampaignBattles::CorruptionStart CampaignBattles::start_corruption(PlanetIndex p
         log_.push_back("corruption: type " + std::to_string(type) + " started (5 s)");
         return CorruptionStart::Applied;
     }
-    const bool ok = o->kind == galactic::ConflictKind::Space ? cm_->initiate_space_conflict(planet, player, ps.owner, o->map, true)
-                                                              : cm_->land_invade(planet, std::move(units), player, ps.owner, o->map, true);
+    // story t08 (L1_S4_REMAINING §4.5 mission path): 0x28bd70 writes the record, 0x28f590 starts it at once (no normal
+    // conflict, so no ground unit has to be in orbit). The other record fields keep the reset values of 0x28c640 [port: the
+    // executor's arguments for them are not traced]: not sandbox, P9 1, P10 / P11 off, no resolution, banner on, flagship on.
+    LinkedRecord rec;
+    rec.kind = o->kind;
+    rec.planet = planet;
+    rec.attacker = player;
+    rec.map = o->map;
+    rec.defender = defender_faction;
+    rec.plots = o->plots;
+    rec.resolution = galactic::LinkedResolution::None;
+    rec.corruption_type = type;
+    if (!units.empty()) lk_.last_invade = std::move(units);  // [port] the caller's units stand in for the last-invade vector
+    bool ok = queue_linked(std::move(rec));
+    if (ok) {
+        lk_.source = "corruption: mission";
+        ok = start_linked_record() != LinkedStart::Refused;  // waiting (banner, another conflict) still counts as queued
+    }
     log_.push_back("corruption: type " + std::to_string(type) + " mission on " + o->map + (ok ? " queued" : " refused"));
     if (!ok) {
         if (cost > 0.0f) gs.add_credits(player, cost);  // [port] refunded when the battle cannot be queued
         return CorruptionStart::Refused;
     }
-    corruption_queued_.push_back({planet, player, type, o->kind, o->plots});
-    gs.queue_linked_battle();  // REMAINING_GAPS 6.4: the mission queue (0x52bf50) raises the same flag
     return CorruptionStart::MissionQueued;
 }
+
+// --- story t07 / t08 (owner: link-tactical): the linked-battle record (campaign_battles.hpp, BT §2.7 / §2.9) ---
+bool CampaignBattles::queue_linked(LinkedRecord r) {
+    GalacticMode* g = host_->galactic_mode();
+    if (lk_.present || !g || !g->sim() || !cm_) return false;
+    const bool kind_ok = r.kind == galactic::ConflictKind::Land || r.kind == galactic::ConflictKind::Space;
+    if (!kind_ok || r.planet >= g->sim()->planets().size() || r.attacker < 0 || r.map.empty() || r.defender.empty()) return false;
+    r.banner_shown = false;
+    lk_.record = std::move(r);
+    lk_.present = true;
+    lk_.source.clear();
+    g->sim()->queue_linked_battle();            // 0x140b30545 (REMAINING_GAPS 6.4)
+    lk_.presentation.skip_battle_dialog = true;  // 0x140b305ed
+    return true;
+}
+
+bool CampaignBattles::linked_waits_banner(const LinkedRecord& r) const {
+    // The one-button pending banner waits for the player's Begin only where a battle dialog answers (a decide callback that
+    // returns Pending: the game host's ask_battle_choice); headless runs answer it at once [port].
+    if (!cm_ || !cm_->decide) return false;
+    galactic::ConflictInfo c;
+    c.kind = r.kind;
+    c.planet = r.planet;
+    c.attacker = r.attacker;
+    c.map = r.map;
+    if (GalacticMode* g = host_->galactic_mode(); g && g->sim()) c.defender = g->sim()->player_of_faction(r.defender);
+    return cm_->decide(c) == galactic::BattleChoice::Pending;
+}
+
+CampaignBattles::LinkedStart CampaignBattles::start_linked_record() {
+    if (!lk_.present) return LinkedStart::NoRecord;
+    if (lk_.banner_up) return LinkedStart::Banner;
+    GalacticMode* g = host_->galactic_mode();
+    if (!g || !g->sim() || !cm_ || battle_ || pending_) return LinkedStart::Waiting;
+    galactic::GalacticSim& gs = *g->sim();
+    // Step 1: a normal conflict's pending vote is up (Strategic_Queue_Tactical_Battles, pause raised, state 0): wait.
+    if (rules_->queue_tactical_battles && cm_->vote_open()) return LinkedStart::Waiting;
+    // [port] another conflict is active: the record waits, except that under the story block that conflict gives way (a1j t05,
+    // A1_READINGS §31.7: the 0x2be640 state-3 path, state -1 then 0x28f590). The original takes over in every case.
+    if (cm_->state() != galactic::ConflictState::Idle && (!gs.story_block() || cm_->vote_open() || !cm_->yield_to_linked()))
+        return LinkedStart::Waiting;
+    LinkedRecord& rec0 = lk_.record;
+    const bool space = rec0.kind == galactic::ConflictKind::Space;
+    const std::string what = (lk_.source.empty() ? std::string("linked battle") : lk_.source) + (space ? " space" : " land") +
+                             (rec0.sandbox ? " sandbox" : "");
+    // Step 2: the pending banner (P13), once per record.
+    if (rec0.banner && !rec0.banner_shown) {
+        rec0.banner_shown = true;
+        if (linked_waits_banner(rec0)) {
+            lk_.banner_up = true;
+            g->push_pause();  // 0x28bb80 inline: one galactic pause level while the banner is up
+            log_.push_back(what + " banner");
+            return LinkedStart::Banner;
+        }
+    }
+    // Step 3: the record is copied and cleared (0x28c640), then checked.
+    const LinkedRecord rec = std::move(lk_.record);
+    lk_.record = LinkedRecord{};
+    lk_.present = false;
+    const bool valid = (rec.kind == galactic::ConflictKind::Land || space) && rec.attacker >= 0 && rec.planet < gs.planets().size() &&
+                       gs.planets()[rec.planet].is_planet && !rec.map.empty();
+    if (!valid) {
+        gs.clear_linked_battle();
+        log_.push_back(what + " refused");
+        return LinkedStart::Refused;
+    }
+    // Step 4: the defender (-1 when the faction is unknown: the queueing derives one), GOM+0x61c, P9-P11.
+    lk_.resolution = rec.resolution;
+    LinkedPresentation& pr = lk_.presentation;
+    pr.arrival = rec.arrival;
+    pr.arrival_cinematic = rec.arrival != 0;  // 0x2cbb50: 0 -> both off, 2 -> both on, anything else -> +0x34e only
+    pr.hyperspace_hold = rec.arrival == 2;
+    pr.presentation_a = rec.presentation_a;
+    pr.letterbox = rec.presentation_a && rec.arrival != 1;
+    pr.presentation_b = rec.presentation_b;
+    // Steps 5-7: queued at the front and started at once (ConflictManager::start_linked); land takes the last-invade vector.
+    galactic::ConflictManager::LinkedBattle b;
+    b.kind = rec.kind;
+    b.planet = rec.planet;
+    b.attacker = rec.attacker;
+    b.defender = gs.player_of_faction(rec.defender);
+    b.map = rec.map;
+    b.sandbox = rec.sandbox;
+    b.forced_type = rec.forced_type;
+    b.flagship_split = rec.flagship_split;
+    if (!space) {
+        b.units = std::move(lk_.last_invade);
+        lk_.last_invade.clear();
+    }
+    const bool ok = cm_->start_linked(std::move(b));
+    log_.push_back(what + (ok ? " started" : " refused"));
+    if (!ok) {  // §2.9.7 [port]: refused and logged (the original starts the battle anyway)
+        lk_.resolution = galactic::LinkedResolution::None;
+        gs.clear_linked_battle();
+        return LinkedStart::Refused;
+    }
+    if (rec.corruption_type >= 0)  // §4.5: the pending corruption mission (0x28bbf0) of this battle
+        corruption_queued_.push_back({rec.planet, rec.attacker, rec.corruption_type, rec.kind, rec.plots});
+    return LinkedStart::Started;
+}
+
+bool CampaignBattles::linked_begin() {
+    if (!lk_.banner_up) return false;
+    lk_.banner_up = false;
+    if (GalacticMode* g = host_->galactic_mode()) g->pop_pause();
+    return true;  // the record starts at the next hook (start_linked_record: the banner was shown)
+}
+
+void CampaignBattles::linked_end_battle() {
+    lk_.presentation.last_battle_skipped_dialog = lk_.presentation.skip_battle_dialog;
+    lk_.presentation.skip_battle_dialog = false;
+}
+
+namespace {
+template <class Ar, class Rec>
+void linked_record_io(Ar& a, Rec& r) {
+    a(r.kind, r.planet, r.attacker, r.map, r.defender, r.forced_type, r.plots, r.sandbox, r.arrival, r.presentation_a, r.presentation_b);
+    a(r.resolution, r.banner, r.flagship_split, r.banner_shown, r.corruption_type);
+}
+template <class Ar, class Pr>
+void linked_presentation_io(Ar& a, Pr& p) {
+    a(p.arrival, p.arrival_cinematic, p.hyperspace_hold, p.presentation_a, p.letterbox, p.presentation_b, p.skip_battle_dialog,
+      p.last_battle_skipped_dialog);
+}
+}  // namespace
+
+void CampaignBattles::write_linked(ByteWriter& w) const {
+    save_io::Out o(w);
+    o(lk_.present, lk_.banner_up, lk_.source, lk_.resolution, lk_.last_invade, lk_.triggers_seen);
+    LinkedRecord rec = lk_.record;
+    linked_record_io(o, rec);
+    LinkedPresentation pr = lk_.presentation;
+    linked_presentation_io(o, pr);
+}
+
+void CampaignBattles::read_linked(ByteReader& r, LinkedState& out) {
+    save_io::In in(r);
+    in(out.present, out.banner_up, out.source, out.resolution, out.last_invade, out.triggers_seen);
+    linked_record_io(in, out.record);
+    linked_presentation_io(in, out.presentation);
+    if (static_cast<uint8_t>(out.resolution) > static_cast<uint8_t>(galactic::LinkedResolution::DestroyAi) ||
+        static_cast<uint8_t>(out.record.resolution) > static_cast<uint8_t>(galactic::LinkedResolution::DestroyAi))
+        r.fail();
+}
+
+void CampaignBattles::hash_linked(StateHasher& h) const {
+    const LinkedPresentation& p = lk_.presentation;
+    const bool presentation_default = p.arrival == 0 && !p.arrival_cinematic && !p.hyperspace_hold && !p.presentation_a && !p.letterbox &&
+                                      !p.presentation_b;
+    if (!lk_.present && !lk_.banner_up && lk_.resolution == galactic::LinkedResolution::None && presentation_default) return;
+    h.u32(0x4C4B5444u);  // "LKTD"
+    h.boolean(lk_.present);
+    h.boolean(lk_.banner_up);
+    h.u8(static_cast<uint8_t>(lk_.resolution));
+    h.i32(p.arrival);
+    for (const bool f : {p.arrival_cinematic, p.hyperspace_hold, p.presentation_a, p.letterbox, p.presentation_b}) h.boolean(f);
+    if (!lk_.present) return;
+    const LinkedRecord& r = lk_.record;
+    h.u8(static_cast<uint8_t>(r.kind));
+    h.u32(static_cast<uint32_t>(r.planet));
+    h.i32(r.attacker);
+    h.str(r.map);
+    h.str(r.defender);
+    h.u32(r.forced_type);
+    h.str(r.plots);
+    h.i32(r.arrival);
+    h.u8(static_cast<uint8_t>(r.resolution));
+    for (const bool f : {r.sandbox, r.presentation_a, r.presentation_b, r.banner, r.flagship_split, r.banner_shown}) h.boolean(f);
+    h.i32(r.corruption_type);
+}
+// --- end story t07 / t08 ---
 
 // Missions whose conflict left the queues without a battle (dropped by the validation, auto-resolved) are forgotten.
 void CampaignBattles::corruption_prune() {
@@ -1260,77 +1484,169 @@ void CampaignBattles::story_fog_reward(bool has_param, int32_t value) {
 }
 // --- end fog follow-up ---
 
-// --- L1/S4 wave 2b: story-forced battles. Each new StorySession::linked_tactical() entry (a LINK_TACTICAL reward,
-// BT §2.9.1: Param1 planet (map name or planet type name), Param2 SPACE / GROUND (a word the keyword map lacks, as
-// LAND, is land; EITHER is refused), Param3 attacker faction, Param4 map, Param5 defender faction, Param8 sandbox)
-// starts its battle at once (ConflictManager::start_linked, BT §2.9.3: queued at the front, no validation / decide;
-// not sandbox = no galactic units, the map and the mission plots supply them). While another conflict is active the
-// entry waits for a later hook with the story flag set [port: the original waits only on the pending-battle banner]. Not modelled (BT §2.9.9):
-// Param6 forced type, Param9-11 presentation, Param12 post-battle resolution, Param13 banner, Param14 flagship split,
-// the last-invade unit vector (a sandbox land record has no units).
+// --- L1/S4 wave 2b: story-forced battles. Each new StorySession::linked_tactical() entry (a LINK_TACTICAL reward) is
+// parsed (parse_link_tactical, BT §2.9.1), written as the linked-battle record (queue_linked, 0x28bd70: refused while a
+// record waits) and started at once (start_linked_record, 0x28f590; story t07). Entries left after a start wait for a
+// later hook (the battle is pending). ---
+namespace {
+bool same_text(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
+        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
+        if (x != y) return false;
+    }
+    return true;
+}
+std::string trimmed_text(std::string_view v) {
+    while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
+    while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.remove_suffix(1);
+    return std::string(v);
+}
+// [port] a reward bool: an integer (atoi != 0) or TRUE / YES; empty = the default.
+bool reward_bool(const std::string& v, bool def) {
+    if (v.empty()) return def;
+    if (same_text(v, "TRUE") || same_text(v, "YES")) return true;
+    return std::atoi(v.c_str()) != 0;
+}
+}  // namespace
+
+// BT §2.9.1: P1 planet (map name or planet type name), P2 SPACE / GROUND (a word the keyword map lacks, as LAND, is land;
+// EITHER is refused), P3 attacker faction, P4 map, P5 defender faction (P1-P5 non-empty, else silently nothing), P6 forced
+// type, P7 plots, P8 sandbox, P9 arrival (default 1), P10 / P11 presentation, P12 resolution (RETREAT_PLAYER / RETREAT_AI /
+// DESTROY_AI; empty or unknown = DESTROY_AI, unknown logged), P13 banner (default on), P14 flagship split (default on).
+bool CampaignBattles::parse_link_tactical(const std::vector<std::string>& params, LinkedRecord& out, std::string& why) {
+    why.clear();
+    GalacticMode* g = host_->galactic_mode();
+    if (!g || !g->sim()) return false;
+    const galactic::GalacticSim& gs = *g->sim();
+    auto param = [&params](size_t i) { return i < params.size() ? trimmed_text(params[i]) : std::string(); };
+    for (size_t i = 0; i < 5; ++i)
+        if (param(i).empty()) return false;
+    PlanetIndex planet = kInvalidPlanet;
+    const auto& names = gs.map().planets.name;
+    for (PlanetIndex i = 0; i < gs.planets().size() && planet == kInvalidPlanet; ++i) {
+        const uint32_t ty = gs.planets()[i].type;
+        if ((i < names.size() && same_text(names[i], params[0])) ||
+            (ty < gs.rules().types.size() && same_text(gs.rules().types[ty].name, params[0])))
+            planet = i;
+    }
+    const int32_t attacker = gs.player_of_faction(params[2]);
+    const std::string mode = param(1);
+    if (planet == kInvalidPlanet || attacker < 0 || same_text(mode, "EITHER")) {
+        why = "planet / mode / attacker invalid";
+        return false;
+    }
+    out = LinkedRecord{};
+    out.kind = same_text(mode, "SPACE") ? galactic::ConflictKind::Space : galactic::ConflictKind::Land;
+    out.planet = planet;
+    out.attacker = attacker;
+    out.map = param(3);
+    out.defender = param(4);
+    if (const std::string t = param(5); !t.empty())  // P6: unknown type = none
+        for (uint32_t i = 0; i < gs.rules().types.size() && out.forced_type == galactic::kNoIndex; ++i)
+            if (same_text(gs.rules().types[i].name, t)) out.forced_type = i;
+    out.plots = param(6);
+    out.sandbox = std::atoi(param(7).c_str()) != 0;
+    if (const std::string v = param(8); !v.empty()) out.arrival = std::atoi(v.c_str());
+    out.presentation_a = reward_bool(param(9), false);
+    out.presentation_b = reward_bool(param(10), false);
+    if (const std::string v = param(11); !v.empty()) {
+        if (same_text(v, "RETREAT_PLAYER")) out.resolution = galactic::LinkedResolution::RetreatPlayer;
+        else if (same_text(v, "RETREAT_AI")) out.resolution = galactic::LinkedResolution::RetreatAi;
+        else if (same_text(v, "DESTROY_AI")) out.resolution = galactic::LinkedResolution::DestroyAi;
+        else log_.push_back("story: LINK_TACTICAL " + params[0] + ": Unknown resolution " + v);  // 0 -> 3
+    }
+    out.banner = reward_bool(param(12), true);
+    out.flagship_split = reward_bool(param(13), true);
+    return true;
+}
+
 void CampaignBattles::story_linked(SimHost& host) {
     StorySession* s = host.story();
-    GalacticMode* g = host.galactic_mode();
-    if (!s || !g || !g->sim() || !cm_) return;
-    galactic::GalacticSim& gs = *g->sim();
+    if (!s || !cm_) return;
     const std::vector<StoryLinkedTactical>& linked = s->linked_tactical();
-    auto same = [](std::string_view a, std::string_view b) {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i) {
-            const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-            const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-            if (x != y) return false;
-        }
-        return true;
-    };
-    auto trimmed = [](std::string_view v) {
-        while (!v.empty() && (v.front() == ' ' || v.front() == '	')) v.remove_prefix(1);
-        while (!v.empty() && (v.back() == ' ' || v.back() == '	')) v.remove_suffix(1);
-        return std::string(v);
-    };
-    for (; story_linked_ < linked.size(); ++story_linked_) {
+    for (; story_linked_ < linked.size() && !pending_; ++story_linked_) {
         const StoryLinkedTactical& l = linked[story_linked_];
-        if (l.params.size() < 3) continue;
-        if (cm_->state() != galactic::ConflictState::Idle) {  // another conflict is active: the record waits (flag set,
-            gs.queue_linked_battle();                          // REMAINING_GAPS 6.4) and is retried at a later hook
-            return;
-        }
-        PlanetIndex planet = kInvalidPlanet;
-        const auto& names = gs.map().planets.name;
-        for (PlanetIndex i = 0; i < gs.planets().size() && planet == kInvalidPlanet; ++i) {
-            const uint32_t ty = gs.planets()[i].type;
-            if ((i < names.size() && same(names[i], l.params[0])) ||
-                (ty < gs.rules().types.size() && same(gs.rules().types[ty].name, l.params[0])))
-                planet = i;
-        }
-        const int32_t attacker = gs.player_of_faction(l.params[2]);
-        const int32_t defender = l.params.size() > 4 && !l.params[4].empty() ? gs.player_of_faction(l.params[4]) : galactic::kNoPlayer;
-        const std::string mode = trimmed(l.params[1]);
-        if (planet == kInvalidPlanet || attacker < 0 || same(mode, "EITHER")) {
-            log_.push_back("story: LINK_TACTICAL " + l.params[0] + " not started (planet / mode / attacker invalid)");
+        LinkedRecord rec;
+        std::string why;
+        const std::string name = l.params.empty() ? std::string() : l.params[0];
+        if (!parse_link_tactical(l.params, rec, why)) {
+            if (!why.empty()) log_.push_back("story: LINK_TACTICAL " + name + " not started (" + why + ")");
             continue;
         }
-        galactic::ConflictManager::LinkedBattle b;
-        b.kind = same(mode, "SPACE") ? galactic::ConflictKind::Space : galactic::ConflictKind::Land;
-        b.planet = planet;
-        b.attacker = attacker;
-        b.defender = defender;
-        b.map = l.params.size() > 3 ? trimmed(l.params[3]) : std::string();
-        b.sandbox = l.params.size() > 7 && std::atoi(trimmed(l.params[7]).c_str()) != 0;
-        const bool space = b.kind == galactic::ConflictKind::Space;
-        const bool sandbox = b.sandbox;
-        gs.queue_linked_battle();  // REMAINING_GAPS 6.4: the record's story flag; the start (start_battle) clears it
-        const bool ok = cm_->start_linked(std::move(b));
-        if (!ok) gs.clear_linked_battle();
-        log_.push_back("story: LINK_TACTICAL " + l.params[0] + (space ? " space" : " land") + (sandbox ? " sandbox" : "") +
-                       (ok ? " started" : " refused"));
-        if (ok) {  // the battle is pending (pushed by the caller in this hook)
-            ++story_linked_;
-            return;
+        if (!queue_linked(std::move(rec))) {
+            log_.push_back("story: LINK_TACTICAL " + name + " not started (a linked battle record waits)");
+            continue;
         }
+        lk_.source = "story: LINK_TACTICAL " + name;
+        start_linked_record();  // the reward handler's 0x28f590 (the galaxy is the current mode)
+    }
+}
+
+// story t07: the last-invade vector from the landings the story routed (STORY_LAND_ON / DEPLOY sources): a human player's
+// UnitsLanded = the last `value` surface units of that player at the planet [port: StorySession's own mapping].
+void CampaignBattles::story_landings(SimHost& host) {
+    StorySession* s = host.story();
+    GalacticMode* g = host.galactic_mode();
+    if (!s || !g || !g->sim()) return;
+    const galactic::GalacticSim& gs = *g->sim();
+    const std::vector<StoryTrigger>& tr = s->triggers();
+    if (lk_.triggers_seen > tr.size()) lk_.triggers_seen = tr.size();  // another session
+    for (; lk_.triggers_seen < tr.size(); ++lk_.triggers_seen) {
+        const galactic::GalacticEvent& e = tr[static_cast<size_t>(lk_.triggers_seen)].event;
+        if (e.kind != galactic::GalacticEventKind::UnitsLanded || e.value <= 0 || e.planet >= gs.planets().size() || e.player < 0 ||
+            static_cast<size_t>(e.player) >= gs.players().size() || !gs.players()[static_cast<size_t>(e.player)].human)
+            continue;
+        std::vector<objects::ObjectHandle> mine;
+        for (const objects::ObjectHandle u : gs.planets()[e.planet].surface)
+            if (gs.store().alive(u) && gs.store().owner(u) == e.player) mine.push_back(u);
+        const size_t k = std::min(mine.size(), static_cast<size_t>(e.value));
+        lk_.last_invade.assign(mine.end() - static_cast<std::ptrdiff_t>(k), mine.end());
     }
 }
 // --- end L1/S4 wave 2b ---
+
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+// a1j t07 (A1_READINGS §38): the parent galaxy of the battle's AI scripts. Target = the battle's conflict planet (0x28a7a0 ->
+// 0x28aa50: the parent's head conflict; a map battle has none). Releases (0x6147d0 [H]) draw on the player's land credit
+// transfer: amount < 0 or not below what is left (saved - released) = all of it; Add_Credits with aiGain 0 (no
+// Credit_Multiplier); released += amount, capped at saved. [port] A player without a transfer releases nothing.
+void CampaignBattles::galactic_context_begin(ModeKind kind) {
+    if (!ai_ || !opt_.tactical_ai || !opt_.galactic_resolver) return;
+    const ai::TokenResolver* res = opt_.galactic_resolver();
+    GalacticMode* g = host_->galactic_mode();
+    if (!res || !g || !g->sim()) return;
+    galactic::GalacticSim* gs = g->sim();
+    lua::TacticalGalacticContext c;
+    c.source.equations = opt_.tactical_ai->equations;
+    c.source.resolver = res;
+    const PlanetIndex planet = pending_req_.info.planet;
+    c.target = !direct_ && planet < gs->planets().size() ? static_cast<int32_t>(planet) : -1;
+    c.land = kind == ModeKind::Land;
+    if (opt_.has_galactic_ai) {
+        c.has_galactic_ai = opt_.has_galactic_ai;
+    } else {
+        c.has_galactic_ai = [gs](int32_t p) { return p >= 0 && static_cast<size_t>(p) < gs->players().size() && gs->players()[static_cast<size_t>(p)].ai; };
+    }
+#ifdef ALAMO_SIM_HAVE_AI_TACTICAL
+    c.release_credits = [this, gs](int32_t p, double amount) {
+        galactic::econ::CreditAccount* acct = gs->credit_account(p);
+        if (!acct) return;
+        for (CreditTransfer& ct : credits_) {
+            if (ct.player != p) continue;
+            const float left = ct.state.saved - ct.state.released;
+            float a = static_cast<float>(amount);
+            if (a < 0.0f || left <= a) a = left;
+            galactic::econ::add_credits(*acct, a, false, 1.0f);
+            ct.state.released = std::min(a + ct.state.released, ct.state.saved);
+            return;
+        }
+    };
+#endif
+    ai_->world().player_world().set_tactical_galactic(std::move(c));
+}
+#endif
 
 // --- L1 systems (owner: tactical-systems agent): lua::TacticalScriptHooks / RemainingScriptHooks answered by the
 // running battle's L1 systems (tactical_battle.hpp "L1 systems"). Handles are the battle mode's primary store. ---

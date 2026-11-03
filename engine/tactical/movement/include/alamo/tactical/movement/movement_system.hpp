@@ -177,6 +177,7 @@ struct UnitView {
     bool has_goal = false;   // moving or waiting to move
     bool arrived = false;    // reached its last ordered destination
     bool failed = false;     // the last order could not be pathed
+    bool pushed = false;     // a1k t03: walking a pushed move to a free spot (A1_READINGS §40.3)
     V2 goal;
     uint32_t replans = 0;
     bool space_fallback = false;  // the last space plan failed every try (straight line flown)
@@ -220,6 +221,8 @@ struct MovementStats {
     // S8 t09 (PR #19 review): jetpack 0x13 frames whose follower step left position and orientation unchanged (the
     // §3.1.1 drop to 0x16, possibly in the air). Expected 0 for planned flights (the planner makes no zero-length steps).
     uint32_t jetpack_still_frames = 0;
+    // a1k t03 (A1_READINGS §40): pushes started (a spot found and a path to it) and push attempts with no spot / path.
+    uint32_t pushes = 0, push_failures = 0;
 };
 
 class MovementSystem {
@@ -494,6 +497,13 @@ private:
         uint32_t hold_until = 0;  // try again later: speed 0 until this frame
         V2 nudge;
         uint32_t nudge_frames = 0;
+        // a1k t03 (A1_READINGS §40.3): the pushed move (push 0x6859a0), the top record of the locomotor's path stack: the
+        // path to the free spot, walked over the order move (m.path / goal stay underneath and resume when it ends).
+        // push_blocked = consecutive blocked frames of the pushed walk (save version 9).
+        bool pushed = false;
+        std::vector<V2> push_path;
+        uint32_t push_next = 0;
+        uint32_t push_blocked = 0;
         // space
         std::vector<SpaceWaypoint> wps;
         uint32_t path_start = 0;
@@ -673,6 +683,9 @@ private:
     void resolve_collision(CollisionObject& c, bool full, uint32_t frame, std::vector<uint8_t>& acted);
     void mvm_response(Unit& x, const Unit& y, uint32_t frame);
     bool resolve_blocker(Unit& a, uint32_t blocker, float contact, uint32_t frame, bool full);
+    bool push_aside(const Unit& a, Unit& b);
+    bool push_spot(const Unit& b, V2 dir, V2& out) const;  // free-position search 0x440f90 (A1_READINGS §40.2)
+    static void end_push(Unit& u);
     void update_tree(const Unit& u);
     V2 pick_land_slot(const Unit& u, V2 slot, std::vector<uint64_t>& taken) const;
     void move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,

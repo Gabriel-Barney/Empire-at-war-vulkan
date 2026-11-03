@@ -149,6 +149,9 @@ struct BattleRequest {
     std::vector<ObjectHandle> structures;  // land: the defender's ground structures
     bool land_base_destruction_forces_retreat = false;
     bool space_station_destruction_forces_retreat = false;
+    // story t10 (REMAINING_GAPS §3.1 item 4, [M] global 0x140b155d8): a linked battle (LINK_TACTICAL / corruption
+    // mission record): the branched-map discard also keeps attacker-owned objects (Kessel UM01's jailed UMP_TYBER_ZANN).
+    bool linked = false;
 };
 struct BattleResult {
     int32_t winner = kNoPlayer;
@@ -171,6 +174,10 @@ struct ConflictLogEntry {
     std::string map;            // tactical battles
     std::string text(const GalacticSim& sim) const;
 };
+
+// LINK_TACTICAL Reward_Param12 (BT §2.9.1 / §2.9.6, GOM+0x61c): applied at the end of a story-linked battle that a human
+// player won. None (0) = no resolution (the corruption mission's record, [port]; an unknown keyword is DestroyAi).
+enum class LinkedResolution : uint8_t { None = 0, RetreatPlayer = 1, RetreatAi = 2, DestroyAi = 3 };
 
 struct ConflictConfig {
     BattleChoice human_choice = BattleChoice::AutoResolve;  // headless answer to the pending-battle choice
@@ -223,7 +230,10 @@ public:
     // the space / land split for the human sides only, AI sides get nothing. False, nothing queued, when another
     // conflict is active (state not Idle: the caller retries) or the queueing is refused (attacker == defender, no
     // defender; [port] the original starts anyway, §2.9.7); false, dropped and logged, when the start fails (no host,
-    // map not loaded; [port] the original leaves it queued, §2.9.4).
+    // map not loaded; [port] the original leaves it queued, §2.9.4). story t07: a sandbox battle's human sides use
+    // forced_type (Reward_Param6) and, in space, flagship_split (Param14): space 0x2bd500 rules 2 / 3 (the first unit of
+    // the forced type, else [port] the first fleet's first member, starts; the rest is reserve); land 0x2bc6a0 rule (a)
+    // (the first record unit of the forced type leads).
     struct LinkedBattle {
         ConflictKind kind = ConflictKind::Land;
         PlanetIndex planet = kInvalidPlanet;
@@ -231,12 +241,25 @@ public:
         std::string map;                  // Reward_Param4
         bool sandbox = false;             // Reward_Param8
         std::vector<ObjectHandle> units;  // land: the record's units (the original's last-invade vector)
+        uint32_t forced_type = kNoIndex;  // Reward_Param6 (galactic type index; kNoIndex = none)
+        bool flagship_split = true;       // Reward_Param14
     };
     bool start_linked(LinkedBattle b);
+    // a1j t05 (A1_READINGS §31.7): the active conflict gives way to a waiting story-linked record (the 0x2be640 state-3 path
+    // with the record present: state -1, then 0x28f590 starts the record at the queue front). The head stays queued and is
+    // decided again from Idle after the record's battle; its pause level is released. False, nothing changed, while Idle or
+    // InBattle. vote_open(): the pending vote is up and unanswered, where the record waits (0x28f590 step 1).
+    bool yield_to_linked();
+    bool vote_open() const { return state_ == ConflictState::Vote && !has_choice_; }
     // Answer to a Pending choice (Vote state). Ignored otherwise.
     void choose(BattleChoice c);
-    // The host's tactical battle ended (state InBattle): write-back, next conflict.
-    void finish_battle(const BattleResult& result);
+    // The host's tactical battle ended (state InBattle): write-back, next conflict. story t07: `resolution` = the linked
+    // battle's Reward_Param12 (GOM+0x61c, BT §2.9.6). When it is not None and the winner is human: the retreat of R is
+    // skipped (land; space: only the defender's fleet retreat), and after the landing the resolution runs at the planet:
+    // RetreatPlayer / RetreatAi retreat the ground units (space: fleets) of the human / AI sides among attacker and
+    // defender and cut a human / AI-owned ground base (starbase) to level 0 [M]; DestroyAi destroys every AI-owned surface
+    // unit (space: AI fleets in orbit with their members), then cuts an AI base as RetreatAi.
+    void finish_battle(const BattleResult& result, LinkedResolution resolution = LinkedResolution::None);
     // --- P4 sim (owner: galactic agent) ---
     // AutoResolve.Set_Retreating(player) (BT §4.6 vf5 0x60cf00; P4_SIM_SYSTEMS §9.2: Withdrawl event 49 has no payload,
     // player = the header's player id, and its executor ignores this result, so an early / second withdraw is a silent
@@ -265,11 +288,17 @@ public:
     const AutoResolveResult& last_auto_resolve() const { return last_ar_; }
     // Space force split 0x2bd500 (§2.3 rule 4) for one player's units (list order).
     void split_space_forces(int32_t player, const std::vector<ObjectHandle>& units, BattleForces& out) const;
+    // story t07: 0x2bd500 with a forced type / the flagship flag (rules 2 / 3, BT §2.3): the first unit of `forced_type`
+    // (else, with `flagship`, the first of `leads`) starts, every other unit is reserve; neither found = the cap split above.
+    void split_space_forces(int32_t player, const std::vector<ObjectHandle>& units, BattleForces& out, uint32_t forced_type,
+                            bool flagship, const std::vector<ObjectHandle>& leads) const;
     // OI galactic: land force split 0x2bc6a0 (TACTICAL_GAPS 4.2): the defender's surface units all start (no cap); the
     // attacker's record units all start when they pass the Raid_Force_* test, else only the lead unit (first
     // Preferred_Pathfinder_Types match among non-heroes, then heroes; else the first non-hero, else the first hero; the
     // fleet-lead / forced-type rule (a) has no source) starts and every other attacker unit in orbit goes to reserve.
     void split_land_forces(const ConflictInfo& head, BattleForces& defender, BattleForces& attacker) const;
+    // story t07: rule (a) with a forced type (LINK_TACTICAL Param6): the first record unit of `forced_type` leads.
+    void split_land_forces(const ConflictInfo& head, BattleForces& defender, BattleForces& attacker, uint32_t forced_type) const;
     bool raid_force(int32_t player, const std::vector<ObjectHandle>& units) const;  // 0x432e20
     // OI galactic: retreat destination finders (TACTICAL_GAPS 4.5). Candidates = planets newest first (reverse row order),
     // smallest squared 3-D distance (double, strict <); filters in order: orbit controller = player (starbase owner when
@@ -316,7 +345,9 @@ private:
     ArCombatant combatant_of(ObjectHandle h, bool space) const;
     // battle
     enum class Linked : uint8_t { No, Plain, Sandbox };  // start_linked's force rule (BT §2.9.5)
-    bool begin_battle(const ConflictInfo& head, Linked linked = Linked::No);
+    bool begin_battle(const ConflictInfo& head, Linked linked = Linked::No, uint32_t forced_type = kNoIndex, bool flagship = false);
+    void apply_resolution(const ConflictInfo& head, LinkedResolution resolution);  // story t07 (0x2aa510 / 0x2aa8e0)
+    void split_land_impl(const ConflictInfo& head, BattleForces& d, BattleForces& a, uint32_t forced_type, bool linked) const;
     std::string choose_map(const ConflictInfo& head, int32_t base_level, bool* ok);
     // write-back
     PlanetIndex nearest_planet(PlanetIndex from, PlanetIndex exclude, int32_t filter, int32_t player) const;

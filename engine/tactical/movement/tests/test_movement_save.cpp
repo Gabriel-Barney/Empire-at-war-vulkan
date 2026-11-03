@@ -882,9 +882,11 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 7);
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 8);  // 8: before the s78f t02 fighter formation block stacks (9)
+    put_u32(bad, 0, 8);  // 8: before the a1k t03 pushed move (9)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 10);
+    put_u32(bad, 0, 9);  // 9: before the s78f t02 fighter formation block stacks (10)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 11);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

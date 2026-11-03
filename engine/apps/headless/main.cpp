@@ -6,8 +6,9 @@
 //   alamo_headless --data <dir> --all             run every campaign, summary table
 //   alamo_headless --synthetic N [...]            N-planet random galaxy (mod-scale stress)
 //   alamo_headless --selfcheck                    synthetic run at 0/1/4/N workers, per-tick CRCs must match
-//   --latency F    run AI all-pairs as background jobs published F frames after the kick (default 0 =
-//                  vanilla: computed and read on the same frame)
+//   --latency F    AI all-pairs recomputes run as background jobs published F frames after the kick (OPT2 t02:
+//                  default galactic::kDefaultAllPairsLatency = 15; 0 = the original timing, computed and read on
+//                  the same frame)
 //
 // Q1 replay / CRC (see docs/PHASE4.md Q1, alamo/core/sim_crc.hpp, alamo/commands/recording.hpp):
 //   alamo_headless --replay STREAM [--workers N] [--frames N] [--crc-out FILE] [--golden FILE]
@@ -46,6 +47,11 @@
 //       [--human FACTION [--human-script FILE]]: that faction is a scripted human (fixed recorded command stream).
 //       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py.
 //       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
+//       [--ai-latency F] [--no-ai-stagger] (also --skirmish-ai): OPT2 t02 / t01 parity knobs - the AI path recompute latency
+//       (default 15 frames, 0 = the original timing) and every AI player planning on the same frames (the original).
+//       [--no-pp-streams] [--pp-latency F] (--skirmish-ai): OPT2 t10 parity knobs - slot-10 plan picks and PotentialPlan
+//       solves on the synced stream in proposal order (the original), and the frames from a goal slice to the apply of
+//       its solves (default 1; 0 = in the slice, on the job system).
 //   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-land-campaign|foc-station|skirmish [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
 //       [--expect-skirmish-base]: foc-land only (t50): fail unless both sides start with a pre-built base, the AI acts and shots are fired.
@@ -53,12 +59,13 @@
 //       (skirmish: --map, default _MP_SPACE_GEONOSIS), MP_Default_Credits, the factions' skirmish default forces, the battle
 //       started on the map; [--human FACTION]: that slot is an idle human (no AI, no orders).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land skirmish (t50), foc-land-campaign: the campaign-rules land invasion.
+//       [--fail-on-lua-errors]: fail on any tactical AI Lua error (foc-station always does; a1j t07).
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
 //       reward, cause) with the game-side trigger stream, and per-tick CRCs incl. "story". Campaign
 //       default Full_Story_Campaign_Underworld.
 // N1 save / load (save_run.hpp, engine/apps/sim save_session.hpp):
 //   alamo_headless --save-session synthetic|hotm|galactic|skirmish [--campaign NAME] --save-at T FILE [--ticks K] [--crc-out F]
-//       [--battles auto|fight|fight-all[+anim]] [--story] [--map M] [--save-when any|battle|galactic|pending]   (stage 2, save_run.hpp)
+//       [--battles auto|fight|fight-all[+anim]] [--story] [--map M] [--save-when any|battle|galactic|pending|scheduled]   (stage 2, save_run.hpp)
 //       Runs a session to tick T, saves it to FILE, runs K more ticks.
 //   alamo_headless --load FILE [--ticks K] [--crc-out F] [--replay STREAM.acmd] [--record-orders OUT.acmd]
 //       Rebuilds the saved session from its descriptor, loads it and runs K ticks (replaying / recording orders).
@@ -136,7 +143,7 @@ struct Options {
     int32_t workers = -1;
     uint32_t ais = 2;
     bool ais_set = false;
-    uint32_t latency = 0;  // 0 = vanilla timing; >0 = background recompute visible k frames later
+    uint32_t latency = alamo::galactic::kDefaultAllPairsLatency;  // 0 = vanilla timing; >0 = background, visible k frames later
     uint32_t synthetic = 0;
     bool list = false;
     bool all = false;
@@ -163,13 +170,18 @@ struct Options {
     std::string ai_log, ai_golden;
     std::string ai_human, ai_human_script;  // A2 galactic: --human FACTION [--human-script FILE]
     std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs)
+    int64_t ai_latency = -1;                // OPT2 t02: --ai-latency F (galactic / tactical AI path recomputes)
+    bool ai_stagger = true;                 // OPT2 t01: --no-ai-stagger
+    bool pp_streams = true;                 // OPT2 t10: --no-pp-streams
+    int64_t pp_latency = -1;                // OPT2 t10: --pp-latency F
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
     std::string skirmish_ai;
     bool expect_battle_end = false;  // S10 land outcome: --expect-battle-end
     bool expect_skirmish_base = false;  // t50: --expect-skirmish-base
+    bool fail_on_lua_errors = false;  // a1j t07: --fail-on-lua-errors
     // N1 save / load (save_run.hpp)
     std::string save_session, save_file, load_file;
-    std::string save_when = "any";  // N1 stage 2: --save-when any|battle|galactic|pending
+    std::string save_when = "any";  // N1 stage 2: --save-when any|battle|galactic|pending|scheduled
     uint64_t save_at = 0;
     bool save_at_set = false, save_check = false;
     std::vector<std::string> expect_pending;
@@ -606,7 +618,7 @@ int usage() {
                  "       alamo_headless --economy --battles auto|fight|fight-all [--aggressor FRAMES] [--battle-retreat R]\n"
                  "                      [--battle-max-frames N] (+ the --economy options)\n"
                  "       alamo_headless --save-session synthetic|hotm|galactic|skirmish [--campaign NAME] --save-at T FILE [--ticks K]\n"
-                 "         [--battles auto|fight|fight-all[+anim]] [--story] [--map M] [--save-when any|battle|galactic|pending]\n"
+                 "         [--battles auto|fight|fight-all[+anim]] [--story] [--map M] [--save-when any|battle|galactic|pending|scheduled]\n"
                  "                      [--crc-out F] [--record-orders F] [--seed S] [--workers W]\n"
                  "       alamo_headless --load FILE [--ticks K] [--crc-out F] [--replay STREAM] [--record-orders F] [--workers W]\n"
                  "       alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b,...]\n");
@@ -710,7 +722,7 @@ int replay_mode(const Options& opt) {
     Options o = opt;
     const uint32_t planets = meta_u32(rec, "planets", 120);
     o.ais = meta_u32(rec, "ais", 3);
-    o.latency = meta_u32(rec, "latency", 0);
+    o.latency = meta_u32(rec, "latency", alamo::galactic::kDefaultAllPairsLatency);
     o.frames = opt.frames_set ? opt.frames : static_cast<uint32_t>(rec.end_tick ? rec.end_tick : 600);
     const auto map = make_synthetic(planets, static_cast<uint32_t>(rec.seed));
     const std::string stream_name = std::filesystem::path(opt.replay).filename().string();
@@ -811,11 +823,16 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--skirmish-ai") opt.skirmish_ai = next();  // A1 stage 2
         else if (a == "--expect-battle-end") opt.expect_battle_end = true;  // S10 land outcome
         else if (a == "--expect-skirmish-base") opt.expect_skirmish_base = true;  // t50
+        else if (a == "--fail-on-lua-errors") opt.fail_on_lua_errors = true;  // a1j t07
         else if (a == "--ai-log") opt.ai_log = next();
         else if (a == "--ai-golden") opt.ai_golden = next();
         else if (a == "--human") opt.ai_human = next();                // A2 galactic
         else if (a == "--human-script") opt.ai_human_script = next();  // A2 galactic
         else if (a == "--trace-out") opt.trace_out = next();            // q2f t05
+        else if (a == "--ai-latency") opt.ai_latency = std::strtoll(next().c_str(), nullptr, 10);  // OPT2 t02
+        else if (a == "--no-ai-stagger") opt.ai_stagger = false;                                   // OPT2 t01
+        else if (a == "--no-pp-streams") opt.pp_streams = false;                                   // OPT2 t10
+        else if (a == "--pp-latency") opt.pp_latency = std::strtoll(next().c_str(), nullptr, 10);   // OPT2 t10
         else if (a == "--aggressor") opt.aggressor = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--battle-retreat") opt.battle_retreat = static_cast<float>(std::strtod(next().c_str(), nullptr));
         else if (a == "--battle-max-frames") opt.battle_max_frames = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
@@ -892,11 +909,16 @@ static int headless_main(int argc, char** argv) {
         m.realtime = opt.realtime;
         m.ai = !opt.no_ai;
         m.quiet = opt.quiet;
+        m.ai_latency = opt.ai_latency;  // OPT2 t01 / t02 parity knobs
+        m.ai_stagger = opt.ai_stagger;
+        m.pp_streams = opt.pp_streams;  // OPT2 t10 parity knobs
+        m.pp_latency = opt.pp_latency;
         if (!opt.skirmish_ai.empty()) {  // A1 stage 2: --skirmish-ai synthetic|foc [--map NAME]
             m.map = opt.map;
             m.expect_battle_end = opt.expect_battle_end;
             m.expect_skirmish_base = opt.expect_skirmish_base;
             m.human = opt.ai_human;  // skai: --skirmish-ai skirmish --human FACTION
+            m.fail_on_lua_errors = opt.fail_on_lua_errors;
             return skirmish_ai_run(m, opt.skirmish_ai, opt.ai_log);
         }
         if (opt.story && !(opt.economy && opt.galactic_ai)) {
@@ -942,11 +964,11 @@ static int headless_main(int argc, char** argv) {
 
     if (opt.selfcheck) {
         // Determinism across worker counts on a mod-scale synthetic galaxy, for vanilla timing
-        // (latency 0) and for background recomputes published 30 frames later. Every tick's CRC
-        // record (not just the final checksum) must match the serial run.
+        // (latency 0), the default background latency and background recomputes published 30 frames
+        // later. Every tick's CRC record (not just the final checksum) must match the serial run.
         const auto map = make_synthetic(220, 12345);
         bool ok = true;
-        for (uint32_t lat : {0u, 30u}) {
+        for (uint32_t lat : {0u, alamo::galactic::kDefaultAllPairsLatency, 30u}) {
             Options o = opt;
             o.frames = 360;
             o.ais = 3;
@@ -971,7 +993,7 @@ static int headless_main(int argc, char** argv) {
                 if (lat == 0 && r.skipped == 0) ok = false;
             }
         }
-        std::printf(ok ? "selfcheck: OK (identical checksums and per-tick CRCs for 0/1/4/N workers, latency 0 and 30)\n"
+        std::printf(ok ? "selfcheck: OK (identical checksums and per-tick CRCs for 0/1/4/N workers, latency 0, 15 and 30)\n"
                        : "selfcheck: FAILED\n");
         return ok ? 0 : 1;
     }

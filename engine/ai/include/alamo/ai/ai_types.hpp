@@ -79,10 +79,12 @@ struct ServiceClock {
     float interval = 0.0f;  // seconds (slot 3)
     int64_t next = 0;       // absolute next-service frame (+0x30)
     bool due(int64_t now) const { return next <= now; }
-    void reschedule(int64_t now) {
+    // Frames between two services: max(1, (int)(interval x FPS)).
+    int32_t period() const {
         const auto frames = static_cast<int32_t>(interval * static_cast<float>(kAiFps));
-        next = now + (frames < 1 ? 1 : frames);
+        return frames < 1 ? 1 : frames;
     }
+    void reschedule(int64_t now) { next = now + period(); }
 };
 
 // Subsystem intervals (slot 3) [H].

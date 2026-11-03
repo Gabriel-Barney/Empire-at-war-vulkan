@@ -13,7 +13,7 @@ namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 6;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save)
+constexpr uint32_t kBattleStateVersion = 7;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save)
 constexpr uint32_t kBattlePartVersion = 1;
 
 // One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
@@ -78,7 +78,11 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
         x(l.targets, l.units);
     });
     a(b.frame_, b.retreat_allowed_frame_, b.retreat_side_, b.retreat_done_frame_, b.retreat_complete_, b.finished_);
-    a(b.end_hold_until_, b.end_winner_, b.end_victory_, b.end_retreated_);
+    // story t06: victory monitor
+    a(b.vm_declared_, b.vm_decl_.type, b.vm_decl_.player, b.vm_decl_.countdown, b.vm_decl_.silent, b.vm_countdown_, b.vm_hold_);
+    a(b.vm_queue_, b.vm_tsw_seen_, b.vm_declared_frame_);
+    a.seq(b.vm_records_, [](auto& x, auto& r) { x(r.type, r.player, r.countdown, r.silent); });
+    a.seq(b.vm_tracked_, [](auto& x, auto& t) { x(t.id, t.owner, t.base); });
     a(b.result_.winner, b.result_.victory, b.result_.retreated, b.result_.destroyed, b.result_.starbase_destroyed);
     {
         auto& s = b.stats_;

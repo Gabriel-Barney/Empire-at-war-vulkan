@@ -6,8 +6,9 @@
   q2lua_reader.py selftest                      no game needed; ends with SELFTEST_Q2LUA OK / FAILED
 
 Why: retail _CustomScriptMessage writes no file (docs/re/LUA_SCRIPT_OUTPUT.md), so the probe scripts
-(mod\\Q2Trace: Q2_Trace_Galactic.lua and the GameScoring.lua hook) keep every line as a Lua string
-"Q2L1|<src>|<sid>|<seq>|<KIND>|<text>|END" (src G = galactic plot, T = GameScoring; sid = the script instance).
+(mod\\Q2Trace: Q2_Trace_Galactic.lua, the GameScoring.lua hook and the Scripts\\AI plan hooks) keep every line as a
+Lua string "Q2L1|<src>|<sid>|<seq>|<KIND>|<text>|END" (src G = galactic plot, T = GameScoring, P = AI plan hooks;
+sid = the script instance).
 This reader scans the game's committed private memory for them every --scan-sec seconds with
 tools/probe_mod/a1_tactical/a1mem.py: OpenProcess + ReadProcessMemory only, never writes, injects or suspends.
 It ends when the game exits (the Q2 trace reader closes the game at the end of the trace).
@@ -32,8 +33,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'a1_tactical'))
 
 NEEDLE = b'Q2L1|'
 # a1mem.Proc.scan returns 400 bytes per hit: the scripts cap the text at 320 characters
-RECORD_RE = re.compile(rb'Q2L1\|([GT])\|([0-9A-Fa-fx]{1,20})\|([0-9]{1,6})\|([A-Z]{1,12})\|([ -~]{0,330}?)\|END')
-SCRIPTS = {'G': 'galactic plot (Q2_Trace_Galactic.lua)', 'T': 'GameScoring hook'}
+RECORD_RE = re.compile(rb'Q2L1\|([GTP])\|([0-9A-Fa-fx]{1,20})\|([0-9]{1,6})\|([A-Z]{1,12})\|([ -~]{0,330}?)\|END')
+SCRIPTS = {'G': 'galactic plot (Q2_Trace_Galactic.lua)', 'T': 'GameScoring hook',
+           'P': 'AI plan hooks (Scripts\\AI: Build_Space_Forces, Build_Ground_Forces, Conquer_Pirate)'}
 
 
 def parse_hits(hits):
@@ -89,6 +91,9 @@ def summarize(records):
                 verdict = 'ran, but no perception rows (see errors)'
             else:
                 verdict = 'loaded (LOAD/DEF), but the state machine never entered Q2_State_Trace'
+        elif src == 'P':
+            verdict = 'loaded: %d plan scripts; %d thread starts, %d ends, %d production failures' % (
+                k.get('LOAD', 0), k.get('PSTART', 0), k.get('PDONE', 0), k.get('PFAIL', 0))
         else:
             sampled = k.get('TSAMPLE', 0)
             verdict = 'loaded; %d samples, %d mode events, %d kills, %d built; service=%s thread=%s' % (
@@ -219,12 +224,14 @@ def selftest(_a):
             (0x4000, b'Q2L1|T|0x9|1|LOAD|GameScoring probe chunk ran|END\x00'),
             (0x5000, b'Q2L1|T|0x9|2|CANARY|file=Mods\\Q2Trace\\Q2Trace_Canary_Scoring.txt ok=true err=nil|END'),
             (0x6000, b'Q2L1|G|0x1a2b|8|PERC'),  # cut record (chunk end): ignored
-            (0x7000, b'Q2L1|G|0x1a2b|9|ERR|EvaluatePerception Q2_Target_Player [string "?"]: bad|END')]
+            (0x7000, b'Q2L1|G|0x1a2b|9|ERR|EvaluatePerception Q2_Target_Player [string "?"]: bad|END'),
+            (0x8000, b'Q2L1|P|0x77|2|PSTART|t=3.4 frame=102 plan=Build_Space_Forces player=REBEL target=? units=0|END')]
     p = parse_hits(hits)
-    check(len(p) == 5, 'parse: 5 full records, source text and cut record ignored (%d)' % len(p))
+    check(len(p) == 6, 'parse: 6 full records, source text and cut record ignored (%d)' % len(p))
     recs = [r[:5] for r in p]
     uniq, rows, eqs, s = summarize(recs)
-    check(len(uniq) == 4, 'dedup: 4 distinct records')
+    check(len(uniq) == 5, 'dedup: 5 distinct records')
+    check(s['scripts']['P']['verdict'].startswith('loaded: 0 plan scripts; 1 thread starts'), 'plan hook verdict')
     check(rows and rows[0][2].get('planet') == 'Nal_Hutta' and rows[0][2].get('Q2_Space_Total') == '12.5',
           'perception row parsed')
     check(eqs == ['Q2_Space_Total', 'Q2_Target_Player'], 'equation columns in first-seen order')
@@ -244,7 +251,7 @@ def selftest(_a):
     with open(os.path.join(out, 'lua_perception.tsv'), encoding='ascii') as f:
         tsv = f.read().splitlines()
     check(len(tsv) == 2 and tsv[1].split('\t')[4] == 'Nal_Hutta', 'lua_perception.tsv written')
-    check(s2['records'] == 4, 'lua_summary.json written')
+    check(s2['records'] == 5, 'lua_summary.json written')
     print('SELFTEST_Q2LUA ' + ('FAILED (%d)' % len(fails) if fails else 'OK'))
     return 1 if fails else 0
 

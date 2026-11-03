@@ -371,9 +371,13 @@ public:
     int32_t next_cycle_frame() const { return next_cycle_frame_; }
     int32_t last_cycle_frame() const { return last_cycle_frame_; }
     // Galactic pause counter (GMM +0x2c, MAIN_LOOP 1.5): while > 0 the mode frame is frozen and nothing
-    // is serviced.
+    // is serviced. The story block below freezes the frame the same way (paused(), a1j t05), except that the hero spawn
+    // lists still run.
     void push_pause() { ++pause_; }
     void pop_pause() { if (pause_ > 0) --pause_; }
+    // The counter alone (0x140b1540c): the "paused" argument of the story T9 (STORY.md 4.1 step 2) reads only this, not
+    // the story block.
+    int32_t pause_count() const { return pause_; }
     // The galactic "paused" query 0x4b2360: the pause counter, or the story block below. The command executors
     // (SpecialAbility 0x4b4d70, FleetManagement 0x5af260, MoveThroughObjects 0x3c4460, Invade 0x48ff50) and Lua
     // Move_Object 0x68f5b0 test the same two conditions (A1_READINGS §31.7).

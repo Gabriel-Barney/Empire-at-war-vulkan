@@ -797,6 +797,69 @@ void test_linked_battle_gates() {
     std::printf("linked battle gates: local player not in a queued conflict -> AI commands run; in one -> dropped\n");
 }
 
+// a1j t05 (A1_READINGS §31.7): GalacticSim::update freezes the mode frame on the paused query 0x4b2360, so the story
+// block freezes it like the pause counter. 0x2be640 gates the hero spawn lists (0x3fc750) on the counter alone: they
+// still run under the story block.
+void test_story_block_freezes_frame() {
+    World w({{pEmpire, rA, tInfantry}, {pEmpire, rB, tInfantry}, {pUnder, rB, tInfantry}, {pUnder, rC, tFrigate}},
+            true);
+    objects::ObjectHandle hero{};
+    for (objects::ObjectHandle h : w.sim.planets()[rA].surface)
+        if (w.store.owner(h) == pEmpire) hero = h;
+    CHECK(w.store.exists(hero));
+    // Linked battle pending, the local player in no queued conflict: not frozen.
+    CHECK(w.sim.queue_linked_battle() && !w.sim.story_block());
+    int32_t f = w.sim.frame();
+    w.sim.update();
+    CHECK(w.sim.frame() > f);
+
+    // The local Empire defends a queued land conflict: the story block freezes the frame.
+    std::vector<objects::ObjectHandle> at_b;
+    for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
+        if (w.store.owner(h) == pUnder) at_b.push_back(h);
+    CHECK(w.sim.launch_units(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.sim.invade(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.sim.story_block() && w.sim.paused());
+    // A respawn due now (0.01 s rounds to 0 frames): serviced under the story block although the frame stays.
+    CHECK(w.sim.schedule_hero_respawn(hero, rA, 0.01f) && w.sim.respawns_pending(rA).size() == 1);
+    f = w.sim.frame();
+    w.sim.update();
+    CHECK(w.sim.frame() == f);
+    CHECK(w.sim.respawns_pending(rA).empty());
+    // (The bare ConflictManager serviced the queued conflict in that tick's tail; skipping the state machines under the
+    // block is the host gate's job, engine/apps/sim campaign_battles.cpp, tested in alamo_sim_battles_tests.)
+
+    // The flag cleared, the pause counter raised: frozen, and the spawn lists wait.
+    w.sim.clear_linked_battle();
+    CHECK(!w.sim.story_block());
+    w.sim.push_pause();
+    f = w.sim.frame();
+    CHECK(w.sim.schedule_hero_respawn(hero, rA, 0.01f) && w.sim.respawns_pending(rA).size() == 1);
+    w.sim.update();
+    CHECK(w.sim.frame() == f && w.sim.respawns_pending(rA).size() == 1);
+    w.sim.pop_pause();
+    std::printf("story block: frame frozen, hero spawn lists serviced; pause counter: frozen, spawn lists wait\n");
+}
+
+// a1j t05: without the story block (no linked battle record) a queued conflict of the local player leaves the frame
+// running, and the frame stops as soon as the record is queued.
+void test_story_block_not_frozen() {
+    World w({{pEmpire, rB, tInfantry}, {pUnder, rB, tInfantry}, {pUnder, rC, tFrigate}}, true);
+    std::vector<objects::ObjectHandle> at_b;
+    for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
+        if (w.store.owner(h) == pUnder) at_b.push_back(h);
+    CHECK(w.sim.launch_units(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.sim.invade(pUnder, rB, at_b) == commands::RejectReason::None);
+    CHECK(w.cm->in_queued_conflict(pEmpire) && !w.sim.story_block() && !w.sim.paused());
+    const int32_t f = w.sim.frame();
+    CHECK(w.sim.queue_linked_battle() && w.sim.story_block());
+    w.sim.update();
+    CHECK(w.sim.frame() == f);
+    w.sim.clear_linked_battle();
+    CHECK(!w.sim.paused());
+    std::printf("story block: no linked record -> not paused; record queued -> frame frozen\n");
+}
+
 // OI galactic: TACTICAL_GAPS 4.5 retreat finders, 4.2 land split, 4.8 corruption missions / super-weapon retreat,
 // STRATEGIC_GAPS 1.1 survival-roll listener.
 void test_oi_transitions() {
@@ -1006,6 +1069,113 @@ void test_land_skirmish_unit_cap() {
 
 }  // namespace
 
+// story t07 (BT §2.9.6): LINK_TACTICAL Param12 at the end of a linked battle. The human Empire attacks the AI Underworld at
+// B (land: two infantry and a barracks on the surface; space: a frigate fleet). The loser would retreat (R = defender);
+// with a resolution won by the human that retreat is skipped and the resolution runs instead. An AI winner: nothing.
+void test_linked_resolution() {
+    using LR = LinkedResolution;
+    struct Case {
+        bool space;
+        LR res;
+        int32_t winner;
+        size_t under_units, under_structures;  // Underworld at B afterwards (surface units / structures; space: fleets in orbit)
+    };
+    for (const Case& c : {Case{false, LR::None, pEmpire, 0, 1}, Case{false, LR::RetreatPlayer, pEmpire, 2, 1},
+                          Case{false, LR::RetreatAi, pEmpire, 0, 0}, Case{false, LR::DestroyAi, pEmpire, 0, 0},
+                          Case{false, LR::DestroyAi, pUnder, 2, 1}, Case{true, LR::RetreatPlayer, pEmpire, 1, 0},
+                          Case{true, LR::DestroyAi, pEmpire, 0, 0}}) {
+        std::vector<StartingForce> f = {{pEmpire, rA, tInfantry}};
+        if (c.space) f.insert(f.end(), {{pEmpire, rB, tFrigate}, {pUnder, rB, tFrigate}, {pUnder, rB, tCorvette}});
+        else f.insert(f.end(), {{pUnder, rB, tInfantry}, {pUnder, rB, tInfantry}, {pUnder, rB, tBarracks}});
+        World w(std::move(f), true);
+        w.cm->start_battle = [](const BattleRequest&) { return true; };
+        ConflictManager::LinkedBattle b;
+        b.kind = c.space ? ConflictKind::Space : ConflictKind::Land;
+        b.planet = rB;
+        b.attacker = pEmpire;
+        b.defender = pUnder;
+        b.map = "M";
+        CHECK(w.cm->start_linked(b) && w.cm->battle_active());
+        BattleResult r;
+        r.winner = c.winner;
+        r.retreated = c.winner == pEmpire ? pUnder : kNoPlayer;
+        w.cm->finish_battle(r, c.res);
+        size_t units = 0, structures = 0;
+        if (c.space) {
+            for (uint32_t fi : w.sim.fleets_at(rB, pUnder))
+                if (w.sim.fleets()[fi].alive && !w.sim.fleets()[fi].moving) ++units;
+        } else {
+            for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
+                if (w.store.alive(h) && w.store.owner(h) == pUnder) ++units;
+            for (objects::ObjectHandle h : w.sim.planets()[rB].structures)
+                if (w.store.alive(h) && w.store.owner(h) == pUnder) ++structures;
+        }
+        std::printf("linked resolution %s %d, winner %d: Underworld at B %zu unit(s)/fleet(s), %zu structure(s)\n", c.space ? "space" : "land",
+                    static_cast<int>(c.res), c.winner, units, structures);
+        CHECK(units == c.under_units && structures == c.under_structures && !w.cm->battle_active());
+    }
+}
+
+// story t07 (BT §2.3 rules 2 / 3, TACTICAL_GAPS §4.2 rule (a)): a sandbox linked battle's human side with Param6 (forced type)
+// and Param14 (flagship split). Space: the human Empire's frigate + two corvettes at B against the AI Underworld.
+void test_linked_sandbox_split() {
+    struct Case {
+        uint32_t forced;
+        bool flagship;
+        size_t start, reserve;
+        uint32_t start_type;
+    };
+    for (const Case& c : {Case{tCorvette, true, 1, 2, tCorvette}, Case{kNoIndex, true, 1, 2, tFrigate}, Case{kNoIndex, false, 3, 0, kNoIndex},
+                          Case{tDeathStar, false, 3, 0, kNoIndex}}) {
+        World w({{pEmpire, rB, tFrigate}, {pEmpire, rB, tCorvette}, {pEmpire, rB, tCorvette}, {pUnder, rB, tFrigate}}, true);
+        w.cm->start_battle = [](const BattleRequest&) { return true; };
+        ConflictManager::LinkedBattle b;
+        b.kind = ConflictKind::Space;
+        b.planet = rB;
+        b.attacker = pEmpire;
+        b.defender = pUnder;
+        b.map = "M";
+        b.sandbox = true;
+        b.forced_type = c.forced;
+        b.flagship_split = c.flagship;
+        CHECK(w.cm->start_linked(b));
+        const BattleRequest& q = w.cm->active_request();
+        CHECK(q.forces.size() == 2 && q.forces[0].start.empty() && q.forces[0].reserve.empty());  // the AI defender: nothing
+        if (q.forces.size() != 2) continue;
+        const BattleForces& a = q.forces[1];
+        std::printf("linked sandbox space forced %u flagship %d: start %zu reserve %zu\n", c.forced, c.flagship ? 1 : 0, a.start.size(),
+                    a.reserve.size());
+        CHECK(a.start.size() == c.start && a.reserve.size() == c.reserve);
+        if (c.start_type != kNoIndex && !a.start.empty()) CHECK(static_cast<uint32_t>(w.store.type(a.start[0])) == c.start_type);
+    }
+    // Land: the record units are the Empire's infantry that already landed on B (a link fired by STORY_LAND_ON / DEPLOY):
+    // the forced type leads, the other record unit waits in the reserve; not sandbox: nobody.
+    for (const bool sandbox : {true, false}) {
+        World w({{pEmpire, rB, tInfantry}, {pEmpire, rB, tInfantry}, {pUnder, rB, tBarracks}}, true);
+        w.cm->start_battle = [](const BattleRequest&) { return true; };
+        ConflictManager::LinkedBattle b;
+        b.kind = ConflictKind::Land;
+        b.planet = rB;
+        b.attacker = pEmpire;
+        b.defender = pUnder;
+        b.map = "M";
+        b.sandbox = sandbox;
+        b.forced_type = tInfantry;
+        for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
+            if (w.store.owner(h) == pEmpire) b.units.push_back(h);
+        CHECK(b.units.size() == 2);
+        const objects::ObjectHandle first = b.units.empty() ? objects::ObjectHandle{} : b.units[0];
+        CHECK(w.cm->start_linked(b));
+        const BattleRequest& q = w.cm->active_request();
+        CHECK(q.forces.size() == 2);
+        if (q.forces.size() != 2) continue;
+        std::printf("linked land %s: attacker start %zu reserve %zu\n", sandbox ? "sandbox" : "plain", q.forces[1].start.size(),
+                    q.forces[1].reserve.size());
+        if (sandbox) CHECK(q.forces[1].start.size() == 1 && q.forces[1].start[0] == first && q.forces[1].reserve.size() == 1);
+        else CHECK(q.forces[1].start.empty() && q.forces[1].reserve.empty());
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("contrast\n");
@@ -1027,6 +1197,8 @@ int main() {
     test_land_invasion();
     test_invade_event_gates();
     test_linked_battle_gates();
+    test_story_block_freezes_frame();
+    test_story_block_not_frozen();
     test_p4_set_retreating();  // P4 sim
     test_cargo_losses();       // BT §4.4 loss records for carried units
     test_p4_resolve_battle();  // P4 sim
@@ -1036,6 +1208,9 @@ int main() {
     test_retreat_direct_hop();  // BATTLE_TRANSITIONS §3.3a
     std::printf("land skirmish unit cap\n");
     test_land_skirmish_unit_cap();  // t50
+    std::printf("linked battle params (story t07)\n");
+    test_linked_resolution();
+    test_linked_sandbox_split();
     if (g_fail) {
         std::printf("%d check(s) FAILED\n", g_fail);
         return 1;

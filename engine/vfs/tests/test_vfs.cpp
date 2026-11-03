@@ -519,6 +519,60 @@ int main() {
         CHECK(alamo::remove_all_long(TL, lec) > 0 && !lec);
     }
 
+    // list(glob, layers): the layer-restricted listing, on its own fixture folder (unique to this block).
+    {
+        const fs::path TX = fs::temp_directory_path() / "alamo_vfs_test_list_layers";
+        fs::remove_all(TX);
+        const fs::path FX = TX / "corruption", MX = TX / "ModX", BX = TX / "Fallback";
+        const fs::path MAPS = fs::path("Data") / "Art" / "Maps";
+        write_file(FX / "StarWarsG.exe", "MZ");
+        write_file(FX / MAPS / "Loose_Only.ted", "L");
+        write_file(FX / MAPS / "Both.ted", "L");
+        write_file(FX / MAPS / "Mod_Over_Base.ted", "L");
+        write_meg(FX / "Data" / "Patch.meg", {{"DATA\\ART\\MAPS\\BOTH.TED", "M"},
+                                              {"DATA\\ART\\MAPS\\MEG_ONLY.TED", "M"},
+                                              {"DATA\\XML\\NOT_A_MAP.XML", "M"}});
+        write_file(MX / MAPS / "Mod_Only.TED", "D");
+        write_file(MX / MAPS / "mod_over_base.ted", "D");
+        write_file(BX / MAPS / "Fb_Only.ted", "F");
+        VfsConfig cx;
+        cx.foc_root = u8(FX);
+        cx.mod_paths = {u8(MX)};
+        cx.fallback_paths = {u8(BX)};
+        cx.eaw_root = std::string();  // no EaW
+        std::string errx;
+        auto vx = Vfs::create(cx, &errx);
+        CHECK(vx != nullptr);
+        if (vx) {
+            using L = std::vector<std::string>;
+            const auto p = [](const char* n) { return std::string("DATA\\ART\\MAPS\\") + n + ".TED"; };
+            const std::string g = "Data\\Art\\Maps\\*.TED";
+            CHECK(vx->mounts().size() == 1);
+            CHECK(vx->list(g, Vfs::kLayerMod) == (L{p("MOD_ONLY"), p("MOD_OVER_BASE")}));
+            CHECK(vx->list(g, Vfs::kLayerBase) == (L{p("BOTH"), p("LOOSE_ONLY"), p("MOD_OVER_BASE")}));
+            CHECK(vx->list(g, Vfs::kLayerMeg) == (L{p("BOTH"), p("MEG_ONLY")}));
+            CHECK(vx->list(g, Vfs::kLayerFallback) == (L{p("FB_ONLY")}));
+            // Base + MEG: BOTH is loose and in the MEG, listed once.
+            CHECK(vx->list(g, Vfs::kLayerBase | Vfs::kLayerMeg) == (L{p("BOTH"), p("LOOSE_ONLY"), p("MEG_ONLY"), p("MOD_OVER_BASE")}));
+            // All layers = the plain list(); mask 0 and unknown bits select nothing.
+            const L everything = {p("BOTH"), p("FB_ONLY"), p("LOOSE_ONLY"), p("MEG_ONLY"), p("MOD_ONLY"), p("MOD_OVER_BASE")};
+            CHECK(vx->list(g) == everything);
+            CHECK(vx->list(g, Vfs::kLayerAll) == everything);
+            CHECK(vx->list(g, 0).empty());
+            CHECK(vx->list(g, 0x100u).empty());
+            // The glob still applies per layer (the XML entry in the MEG does not match the map glob).
+            CHECK(vx->list("Data\\XML\\*.XML", Vfs::kLayerMeg) == (L{"DATA\\XML\\NOT_A_MAP.XML"}));
+            CHECK(vx->list("Data\\XML\\*.XML", Vfs::kLayerBase | Vfs::kLayerMod).empty());
+            // A name listed from a layer is not an assertion about what a read returns (the mod copy wins).
+            CHECK(read_str(*vx, p("MOD_OVER_BASE")) == "D");
+        } else {
+            std::printf("layers create failed: %s\n", errx.c_str());
+        }
+        vx.reset();
+        std::error_code lx;
+        fs::remove_all(TX, lx);
+    }
+
     if (std::getenv("ALAMO_VFS_DESCRIBE")) std::printf("%s", v->describe().c_str());
     v.reset();
     std::error_code ec;

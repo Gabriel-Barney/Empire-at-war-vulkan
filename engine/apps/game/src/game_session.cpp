@@ -218,6 +218,9 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     bo.object_removed = [this](int32_t owner, uint32_t type, uint32_t original, bool survived) {
         if (galactic_ai_) galactic_ai_->record_object_removal(owner, type, original, survived);
     };
+    // a1j t07 (A1_READINGS §38): Evaluate_In_Galactic_Context / Release_Credits_For_Tactical in a land battle read the galactic
+    // AI's world (0x69e1b0).
+    bo.galactic_resolver = [this]() -> const ai::TokenResolver* { return galactic_ai_ ? &galactic_ai_->resolver() : nullptr; };
 #endif
     sim::CampaignBattles::MapLoader loader;
     if (spec_.kind == SessionKind::Skirmish) {
@@ -255,7 +258,9 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
     if (use_ai) {
         sim::SimHost* h = host_.get();
-        galactic_ai_ = std::make_unique<ai::GalacticAiWorld>(
+        gcfg.lua_gc_pf = host_->parallel_for();  // OPT2 t09: scheduled Lua collections on the host's job system
+        gcfg.background = jobs::make_background_start(host_->jobs());  // OPT2 t02: background path recomputes
+        galactic_ai_ =std::make_unique<ai::GalacticAiWorld>(
             *gs, host_->galactic_mode()->primary(), &d.types, d.files.get(), host_->random(), d.ai->defs, d.ai->equations, d.ai->type_info,
             [h](uint8_t p, const commands::EventData& ev) { return h->execute_direct(p, commands::CommandSource::AI, ev); }, gcfg);
         std::vector<std::string> wd;

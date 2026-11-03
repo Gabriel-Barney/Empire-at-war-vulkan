@@ -1554,7 +1554,7 @@ static void test_fighter_guard() {
         if (under >= 15 && sys.view(1).loco_state == LocoState::FighterMoving) fastest = std::max(fastest, sys.view(1).speed);
     }
     const bool slow = fastest > 0.0f && fastest <= cap + 1e-3f;
-    // Save round trip with a live formation (movement save v9): same formation, identical continuation.
+    // Save round trip with a live formation (movement save v10): same formation, identical continuation.
     {
         ByteWriter w;
         sys.write(w);

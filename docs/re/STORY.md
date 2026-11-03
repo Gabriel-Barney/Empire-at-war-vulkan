@@ -14,7 +14,8 @@ or `StorySubPlotClass` (plot) and are only there so later RE passes can find the
 | Event (`StoryEventClass` + 27 subclasses, factory `0x453310`) | One `<Event>` | `+0x38` event type; `+0x3c` reward type; `+0x4c` **triggered**; `+0x4d` **active** (armed); `+0x4e` Multiplayer; `+0x4f` **disabled**; `+0x228` owning plot; `+0x2d8` Inactive_Delay; `+0x2dc` inactivity timer start; `+0x2e0` Branch; `+0x300` Perpetual; `+0x304` activation time; `+0x308` Timeout; `+0x318/+0x320` Prereq groups (names); `+0x330/+0x338` Prereq groups (resolved pointers); `+0x348/+0x350` dependants; `+0x358` XML index [H] |
 
 Story flags (SET_FLAG / STORY_FLAG) live in one global table, keyed by the upper-cased flag name; an
-undefined flag reads as `-99999999` (`0x327d00`) [H]. Flags are therefore shared by all plots and players.
+undefined flag reads as `-99999999` (`0x327d00`) [H]. Flags are therefore shared by all plots and players (and by the
+galactic and tactical story managers: port §8 item 8).
 
 ### 0.1 Event type numbers [H]
 
@@ -60,7 +61,7 @@ GREATER_THAN_EQUAL_TO, LESS_THAN_EQUAL_TO` = 1..6 (the comparison switches use e
 
 | Slot | Offset | Role |
 |---|---|---|
-| vf2 | +0x10 | Set parameter `i` (0-based Event_Param index) from a list of strings; called once per non-empty Event_ParamN at creation (`0x4562a0`) and by Lua `Set_Event_Parameter` |
+| vf2 | +0x10 | Set parameter `i` (0-based Event_Param index) from a list of strings; called once per non-empty Event_ParamN at creation (`0x4562a0`) and by Lua `Set_Event_Parameter` (whose index is that 0-based `i`, §8 item 2) |
 | vf3 | +0x18 | **Evaluate** a dispatched game notification (`data1`, `data2`); calls Fire when it matches |
 | vf4 | +0x20 | Reset (base `0x45e480`: if the event has ≥ 1 Prereq group, set active = 0 and cancel its timeout; subclasses also restore counters) |
 | vf7 | +0x38 | On-activate hook (only ELAPSED `0x4511f0` and OBJECTIVE_TIMEOUT `0x451290` override it: start the timer) |
@@ -153,7 +154,7 @@ Children of `<Story_Mode_Plots>` are read in order:
   (Empire Act II has no script).
 - The plot is stored under the CRC of the text **as written** (case kept). Lookups by name (`0x328370`, used by
   Get_Story_Plot and STORY_ELEMENT) hash without upper-casing, so the case must match [M: the CRC
-  routine `0x215a30` is assumed to be case-sensitive].
+  routine `0x215a30` is assumed to be case-sensitive; the port matches case-insensitively, §8 item 7].
 
 `<Suspended_Plot />` with no text creates nothing.
 
@@ -337,7 +338,7 @@ only dialog / chapter tags shipped events use are `Story_Dialog`, `Story_Chapter
 
 1. Timeout (`<Timeout>`, `+0x308`): registration on arm and cancellation on fire are seen. The expiry handler
    (indirect plot call in T9) was not resolved: does it fire the event, or fail it? [L: fires, given the 60 s
-   default for SPEECH_DONE].
+   default for SPEECH_DONE]. Port reading: §8 item 4.
 2. ~~Lua `Activate`/`Suspend` bodies~~ confirmed from the bytes: plot (wrapper +0x38) +0x660 := 1 / 0 when non-null,
    no return values (STRATEGIC_GAPS §4) [H].
 3. ~~Exact T9 time argument~~ = (float)(mode frame) × seconds-per-frame 0x140b0a344; paused = galactic and counter
@@ -352,3 +353,53 @@ only dialog / chapter tags shipped events use are `Story_Dialog`, `Story_Chapter
 
 8. Save/load: ELAPSED saves LastTime, accumulated and initialised (`0x463580`). Plot-level save traced (0x52fe20:
    active flag, owner, every event's own save, plot script state): STRATEGIC_GAPS §4 [H].
+
+## 8. Port readings (roadmap STORY groups `story` t01–t03, `l1s3` t01–t03; 2026-11-02)
+
+How the port (`engine/lua/src/story_model.cpp`, `bind_story.cpp`, `engine/apps/sim/src/story_session.cpp`) reads the
+rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.cpp` (`test_prereqs_elapsed_perpetual`,
+`test_exact_params`, `test_branches`, `test_timeouts_and_pause`, `test_conquer_count_plots_flags`, `test_bindings`).
+
+1. **Prereqs, ELAPSED arming, Perpetual** (§1.2, §3, §4.6, §4.7): as written. One group per `<Prereq>` tag (OR),
+   names inside a tag AND, whitespace or commas; edge-triggered. A prereq-armed ELAPSED counts from its activation time;
+   a prereq-less one from its first T9 while its plot is active. Perpetual has no once-per-frame limit: a notified type
+   fires once per matching notification (two in one frame fire twice), and a Perpetual ELAPSED fires at every T9 after
+   its first fire (the accumulator is never cleared) [M]. The timer mechanism also means that any **initialised** timer
+   (not only a prereq-armed one, §4.7 last bullet) adds the whole suspension gap at its first T9 after its plot is
+   activated again, since LastTime is only refreshed by an evaluation [M].
+2. **Parameter matching** (§5): the generic rule (types without a modelled evaluator, e.g. RETREAT, SELECT_PLANET, the
+   String family with a pushed parameter) compares each non-empty parameter for equality (case-insensitive text, or
+   equal numbers) - no count or threshold. Counts and thresholds exist only where §5 lists them.
+   **Lua `Set_Event_Parameter(i, v)` / `Set_Reward_Parameter(i, v)`** go through vf2: **i is 0-based** (0 = Param1)
+   [H by the shipped scripts: `Intervention_Build_Units` sets 0 = the CONSTRUCT type and 1 = the count, Empire Act IV
+   sets 1 = the SPACE_TACTICAL planet (Param1 is the plots file), `Set_Reward_Parameter(0, credits)` for CREDITS].
+   [port] vf2 takes strings; the conversion of a Lua value is not traced: a number as Lua's `tostring`, a string as is,
+   a boolean 1 / 0, a game object its **type name** (planets are named by their type in every rule), a game object
+   type its name. A player value is kept as a player and matched by id (no shipped script passes one). So a Lua-set
+   parameter is matched by the event type's own rule (name lists, per-name counts, thresholds), like XML text, and
+   setting an event parameter restarts that event's per-name countdowns. Index range 0..63; anything else, or a nil /
+   table value, fails with "must set exactly one parameter per parameter index".
+3. **Branches** (§6.2): as written - RESET_BRANCH compares the branch byte-exact, resets in table order, re-checks the
+   branch's events (TRIGGER fires), then fires Param2 (even when disabled it is still called: Fire does nothing);
+   depth 3, so an event that resets its own branch and fires itself through Param2 fires 1 + 3 times. DISABLE_BRANCH
+   needs Param2 (`atoi(P2) != 0` disables, 0 re-enables); no reset touches the disabled flag.
+4. **Timeout expiry** (§7 item 1) [L, kept]: an expired Timeout **fires** the event, at the plot's T9 step 3 while
+   the plot is active and the event is armed, unfired and enabled (time = mode time, the paused flag is not applied
+   [port]). A Timeout is registered only when the event is armed by its prereqs (or RESET_BRANCH's re-check), never at
+   load, so a prereq-less event's `<Timeout>` (including SPEECH_DONE's 60 s default) never runs; the Perpetual re-arm
+   does not register it again. Lua `Activate` / `Suspend`: plot flag only, no return values (§7 item 2, [H]).
+5. **T9 time and the paused flag** (§7 item 3): time = `(float)(mode frame) x (float)(1/30)` (galactic: the galactic
+   mode frame; tactical: frames since the battle's push [port: the tactical mode is never paused, so this is its mode
+   frame]). Paused = the galactic pause / battle-pending counter (`GalacticSim::pause_count() > 0`, GMM +0x2c mirrored)
+   **only**; the story block that also freezes the galactic frame (A1_READINGS §31.7) is not part of it. The tactical
+   T9 is never paused.
+6. **CONQUER_COUNT scope** (§7 item 5) [port]: the conquest dispatch is raised for every planet owner change, whoever
+   the new owner is, and reaches every plot set (no player argument); CONQUER_COUNT counts it with no filter.
+   No shipped event uses CONQUER_COUNT.
+7. **Plot lookups** (§2.1, §7 item 6) [port]: Get_Story_Plot, STORY_ELEMENT and `find_plot` match the file name
+   **case-insensitively** and ignore a path; the plot walk order still uses the CRC of the name as written. Shipped
+   data has no case mismatch (§7 data check), so the two readings cannot differ there.
+8. **Story flags** (§0) [H]: one table for the whole session - every galactic plot set and the tactical story's plot
+   set use the same flags (`StoryModel::share_flags`). Before 2026-11-02 each plot set had its own table, so a mission's
+   `SET_FLAG <Faction>_A0xM0y_WIN` (20 such flags in FoC, e.g. `EMPIRE_A01M03_WIN`, set in the tactical plots) never
+   reached the campaign plot's STORY_FLAG.

@@ -39,6 +39,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -286,7 +287,13 @@ public:
     int32_t flag(std::string_view name) const;  // kUndefinedFlag when never set
     bool has_flag(std::string_view name) const;
     void set_flag(std::string_view name, int32_t value);  // no evaluation (FLAG events are polled)
-    const std::map<std::string, int32_t>& flags() const { return flags_; }  // upper-case names
+    const std::map<std::string, int32_t>& flags() const { return *flags_; }  // upper-case names
+    // Story flags are ONE global table shared by every plot and player (STORY.md §0 [H]; the tactical missions' SET_FLAG
+    // ..._WIN is read by the galactic campaign's STORY_FLAG). A model starts with a table of its own; a host with several
+    // plot sets (one per faction, the tactical story) makes them use one table. hash() / write() cover the table in each
+    // model; read() replaces its contents (so every sharing model sees the loaded flags).
+    void share_flags(const StoryModel& with) { flags_ = with.flags_; }
+    bool shares_flags(const StoryModel& with) const { return flags_ == with.flags_; }
     const std::vector<StoryObjective>& objectives() const { return objectives_; }
     void add_objective(std::string_view text, bool from_lua);
     const std::vector<StoryBlip>& blips() const { return blips_; }
@@ -343,7 +350,7 @@ private:
     std::vector<uint32_t> plot_walk_;
     std::vector<LuaVm*> script_vms_;  // per plot
     std::vector<std::string> script_errors_;
-    std::map<std::string, int32_t> flags_;
+    std::shared_ptr<std::map<std::string, int32_t>> flags_ = std::make_shared<std::map<std::string, int32_t>>();
     std::vector<StoryObjective> objectives_;
     std::vector<StoryBlip> blips_;
     std::vector<StoryHighlight> highlights_;

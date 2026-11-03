@@ -76,7 +76,7 @@ void TacticalBattle::oi_add_ability_types() {
                 use(t);
             }
         if (types_used_.size() == before) break;
-        tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+        tables_extend();
     }
 }
 

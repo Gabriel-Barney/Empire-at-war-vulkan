@@ -66,6 +66,14 @@ struct TacticalAiSetup {
     int32_t difficulty = 1;  // 0 Easy, 1 Normal, 2 Hard
     ai::tactical::TacticalAiConstants constants;
     bool log_decisions = true;
+    // OPT2 t01 / t02 (TacticalAiConfig::stagger / path_latency): per-player planning phases; the land path finder's
+    // background recompute latency (0 = the original timing).
+    bool stagger = true;
+    uint32_t path_latency = galactic::kDefaultAllPairsLatency;
+    // OPT2 t10 (TacticalAiConfig::pp_streams / pp_latency): slot-10 solves on their own RNG streams, applied pp_latency
+    // frames after their slice; pp_streams false = the original synced draws in proposal order.
+    bool pp_streams = true;
+    uint32_t pp_latency = ai::tactical::kDefaultPpLatency;
 };
 
 // [port] faction -> AIPlayerType for non-human playable players: Empire -> BasicEmpire, Rebel -> BasicRebel,
@@ -132,6 +140,10 @@ public:
     // share AbilitySystem::immobilize_count > 0, script orders_locked / locomotor_suspended; [port] HUNT active stands
     // in for the locomotor term).
     void unit_released(int32_t player, int32_t object_id, ai::tactical::TacticalAiHost::UnitRelease path) override;
+    // a1k t01 (A1_READINGS §39.2, 0x5ff610): a unit left a task force -> its combat priority-set override is cleared
+    // (CombatSystem::set_priority_override(id, -1): the type's Targeting_Priority_Set again; hard points share the unit's
+    // set in the combat model). [port] The stickiness threshold has no combat-side override to reset.
+    void unit_left_task_force(int32_t object_id) override;
     // refixf t06 - space TF.Reinforce ring search (AI_TACTICAL §7.4, TACTICAL_GAPS §4.2). Entry facing = the player's side
     // deploy facing (TacticalBattle facing_ [port: stands in for the mode +0x288 record]); playable box = the mode bounds.
     // Prevention = live objects with Reinforcement_Prevention_Radius whose owner is not allied (not the player, and an
@@ -147,10 +159,26 @@ public:
     // transports block).
     bool land_drop_ok(int32_t player, int32_t key, const ai::tactical::Vec3f& p) override { return land_drop_valid(player, key, p, false); }
     bool land_drop_valid(int32_t player, int32_t key, const ai::tactical::Vec3f& p, bool human);
+    // a1j t01 - land TF.Reinforce with BattleConfig::landing_unload_timed (A1_READINGS §36): reinforce_in_flight = the
+    // player's timed landing object of pool entry `key` (participant galactic id) has not finished its unload;
+    // reinforcements_unloaded = TacticalBattle::landings_unloaded() of the tick just run (owner, galactic id, units).
+    bool reinforce_in_flight(int32_t player, int32_t key) override;
+    std::vector<ai::tactical::ReinforcementsUnloaded> reinforcements_unloaded() override;
     // --- end battle host ---
 
 private:
     float type_population(int32_t type) const;  // A2 tactical: pop(T, mode) 0x373500
+    // OPT2 t10: build_pad_check's blocker scan. The live Influences_Capture_Point objects (store order) are listed once
+    // per build_pads call instead of once per pad, and the type flag is memoised per type (0 unknown, 1 no, 2 yes).
+    struct CaptureInfluencer {
+        objects::ObjectHandle h;
+        int32_t owner = -1;
+        Vec3 position;
+    };
+    std::vector<uint8_t> influences_capture_;
+    bool influences_capture(objects::TypeIndex t);
+    std::vector<CaptureInfluencer> capture_influencers();
+    ai::tactical::PadCheck pad_check(int32_t player, int32_t pad, const std::vector<CaptureInfluencer>& influencers);
     float allow_reinforcement_fraction_ = 0.0f;  // A2 tactical: Allow_Reinforcement_Percentage_Normalized
     bool use_reinforcement_points_ = true;       // a1g t04 follow-up: Use_Reinforcement_Points (GC +0x118a0)
     void standin_orders();

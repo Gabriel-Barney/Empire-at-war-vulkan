@@ -817,6 +817,8 @@ must not refuse an AI `Attack_Move` whose goal is neutral-owned; the move goes t
       override (ability data +0x1b4). If r > 0: **3 synced `Get_Float(−r, r)`**, X then Y then Z.
     - Otherwise d = the hardpoint's `Fire_Inaccuracy_Distance` entry whose category mask matches the target.
       Then s = d × distance / `Get_Fire_Range`, and 3 synced `Get_Float(−s, s)` (X, Y, Z).
+      **A1j t03 [H]:** the three draws are made only when the scaled d > 0, the XY distance > 0 and
+      `Get_Fire_Range` > 0; otherwise no draw and no offset (no table entry for the target's category means d = 0).
     - **Doubling verified in disassembly [H]** (getters 0x374890 for r and 0x53ff30 for d). Each loads 1.0
       from 0x1407ffaf8. In land mode only, it subtracts the AI-difficulty accuracy (0x468750, which returns 1.0
       when it doesn't apply), giving f. It returns v × f + v (`mulss` then `addss`).
@@ -1252,6 +1254,32 @@ Data the port needs for steps 2 and 5:
   `Get_Float(0.2, 0.75)` when a unit enters Attack Idle;
 - for lobbing superweapons: the turret slew (LOB_SOLVER §3.6 "Charge-up aim") before the charge-up starts.
 
+#### 3.1.2 Own-weapon (`Projectile_Types`) inaccuracy 0x549f80 (A1j t03, 2026-11-02) [H unless tagged]
+Called from the own-weapon fire path after the aim point (0x54a270, §3.1.1 "Own-weapon aim point") and the lead.
+Disabled by the same debug flag as step 10.
+1. **Fixed radius:** r = `Targeting_Fire_Inaccuracy_Fixed_Radius` (type +0x1ff8, getter 0x374890: scaled ×(2 − m)
+   on land, ×2 in space, as step 10). [M] An ability override replaces r unscaled (the object's behaviour slot
+   obj +0x38a / data obj +0x230 +0x14; the port keeps the step 10 ability override). If r > 0:
+   - `Get_Float(−r, r)` for X, then for Y;
+   - **the Z draw only in space** (mode ≠ land). Land shots draw **2**, space shots 3.
+2. **Otherwise, with a target object:** d = the shooter type's **`Targeting_Fire_Inaccuracy`** table (type +0x508,
+   getter 0x3747c0; XML `<category>, <distance>` pairs, kept in XML order): the **first** entry whose category mask
+   hits the target's `CategoryMask`, scaled like r (×(2 − m) on land, ×2 in space; the port also applies its land
+   weather factor, as for r and step 10).
+   [M] When the type has more than one weapon entry the larger of this and the current weapon's own table
+   (0x378e50 / 0x373670) is used; not modelled (FoC own-weapon types have one entry).
+   - L = the 3D distance from the muzzle to the **led** aim point; if d > 0 and L ≠ 0:
+     s = d × L / `Targeting_Max_Attack_Distance` (type +0x500) and 3 draws `Get_Float(−s, s)` (X, Y, Z).
+     [port] A zero `Targeting_Max_Attack_Distance` keeps the draws with s = 0 (retail would divide by zero).
+   - No entry for the target's category, or no target object: no draw.
+3. Categories DEFAULT / GRENADE / ROCKET / MPTL_ROCKET / LASER (mask 0xd9) aim at the offset point. MISSILE / BOMB /
+   STATIC_BOMB keep the led point and carry the offset in the projectile pack instead [M; port: the offset is applied
+   to the aim point for every category].
+
+FoC data: 437 `Targeting_Fire_Inaccuracy` entries (infantry, vehicles, fighters), against 5 types with a fixed radius.
+Before A1j the port ignored the table, so most land units fired with no spread. Example: AT-AT `Infantry, 30.0` with
+`Targeting_Max_Attack_Distance` 300: at 150 units s = 15 (30 at AI accuracy 0), so infantry are often missed.
+
 ### 3.2 Damage and armor tables [H]
 - **Where they are:** GAMECONSTANTS.XML holds `<Damage_Types>`, `<Armor_Types>` and
   `<Damage_To_Armor_Mod> damage, armor, factor </Damage_To_Armor_Mod>`. The GameConstants instance is at
@@ -1295,7 +1323,15 @@ Data the port needs for steps 2 and 5:
 
 ### 3.4 Hit detection [M]
 `Sweep` (0x4c97a0):
-1. Run a ground test (0x4d0630).
+1. Run a ground test (0x4d0630) on the step's segment. **A1j t03 [H]:**
+   - land only (no test in space);
+   - `Projectile_Category` DEFAULT (0) and unknown (−1): the test is **skipped while the target point is still
+     ahead**, i.e. the sign of (target point − position) equals the sign of the step on all three axes (sign(0)
+     counts as +). Target point = the targeted hardpoint's world position (0x396ce0) when the pack has a hardpoint
+     index, else the target's position + `Ranged_Target_Z_Adjust` (0x398440). No target object: tested;
+   - every other category (LASER 7 included) is tested on every step;
+   - a ground (or water) hit with no earlier object hit detonates the projectile at the ground point
+     (On_Detonate 0x4cb070: no direct damage, area damage and effects there).
 2. Run `GOM::Find_First_Object_Hit_By_Segment_All_Enemies` (0x2abcf0; HOTSPOTS §3 has the loop). Collision
    mask: 7 if `Projectile_Does_Shield_Damage`, else 5.
 3. If nothing was hit and the projectile has either `Friendly_Damage_Amount` (+0x23ec) > 0 or

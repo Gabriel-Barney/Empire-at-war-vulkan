@@ -753,11 +753,14 @@ bool CombatSystem::lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolu
 
 float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
     // TACTICAL_GAPS 3.1 slot 43 E (no LAND_OBSTACLE): |dot(target facing, line of sight)| > 0.7071 -> the X extent, else
-    // the Y extent (Custom_Hard_X/YExtent x Scale_Factor). [port] Without a hard extent: the target radius (the sim has
-    // no model bounding boxes). The +10 for a moving team and the melee redirect apply to team-container targets, which
-    // the port never has (candidates are units / members); the LAND_OBSTACLE walk is range_geometry.
+    // the Y extent. A1j t04 (0x371e70 / 0x372040): per axis Custom_Hard_X/YExtent x Scale_Factor, else |model bbox
+    // max.x / max.y| x Scale_Factor (model_x / y_extent); [port] the radius only when the host gave no model data. The
+    // +10 for a moving team and the melee redirect apply to team-container targets, which the port never has
+    // (candidates are units / members); the LAND_OBSTACLE walk is range_geometry.
     const UnitDesc& td = desc_of(t);
-    if (!(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f)) return td.radius;
+    const float ex = td.hard_x_extent > 0.0f ? td.hard_x_extent : td.model_x_extent >= 0.0f ? td.model_x_extent : td.radius;
+    const float ey = td.hard_y_extent > 0.0f ? td.hard_y_extent : td.model_y_extent >= 0.0f ? td.model_y_extent : td.radius;
+    if (!(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f) && td.model_x_extent < 0.0f) return td.radius;
     float dx = t.pos.x - from.x, dy = t.pos.y - from.y;
     const float l2 = dx * dx + dy * dy;
     if (!(l2 > 0.0f)) return 0.0f;  // zero offset counts as in range
@@ -774,9 +777,7 @@ float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
         fx = 1.0f;
         fy = 0.0f;
     }
-    const float x = td.hard_x_extent > 0.0f ? td.hard_x_extent : td.radius;
-    const float y = td.hard_y_extent > 0.0f ? td.hard_y_extent : td.radius;
-    return abs_f(fx * dx + fy * dy) > 0.7071f ? x : y;
+    return abs_f(fx * dx + fy * dy) > 0.7071f ? ex : ey;
 }
 
 const CombatSystem::Unit* CombatSystem::team_head(const Unit& u) const {
@@ -1909,9 +1910,11 @@ bool CombatSystem::fire_hardpoint(Unit& u, Hardpoint& h, uint32_t frame, SimRng&
                     dd = e.distance;
                     break;
                 }
-            float spread = inaccuracy_spread(scale_inaccuracy(dd, f), dist, range);
-            if (ws != 1.0f) spread = spread * ws;
-            aim = aim + inaccuracy_offset(spread, rng);
+            // A1j t03 (0x381dc0, TACTICAL_COMBAT §3.1 step 10): the three draws are made only when the scaled distance,
+            // the XY distance and Get_Fire_Range are all > 0.
+            float ds = scale_inaccuracy(dd, f);
+            if (ws != 1.0f) ds = ds * ws;
+            if (ds > 0.0f && dist > 0.0f && range > 0.0f) aim = aim + inaccuracy_offset(inaccuracy_spread(ds, dist, range), rng);
         }
     }
     // 11. spawn (an override projectile keeps the hardpoint's damage / type overrides [M])
@@ -2036,9 +2039,15 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
         if (am == tp) ahp = tp->id == u.ordered_target ? u.ordered_hp : tp->id == u.auto_target ? u.auto_hp : -1;
         aim = lead_point(*am, muzzle, own_aim_point(*am, ahp, rng), pd.max_speed * static_cast<float>(cfg_.fps));  // circular lead
     }
-    if (cfg_.inaccuracy_enabled) {  // [L] fixed-radius branch only (no per-hardpoint table)
-        float r = scale_inaccuracy(ud.fire_inaccuracy_fixed_radius, inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy));
-        if (cfg_.mode == GameMode::Land && weather_scale(pd) != 1.0f) r = r * weather_scale(pd);  // L1 systems: weather
+    if (cfg_.inaccuracy_enabled) {
+        // A1j t03: own-weapon inaccuracy 0x549f80 (TACTICAL_COMBAT §3.1.2) [H unless tagged]. Fixed radius r > 0: X and Y
+        // draws in (-r, r); the Z draw is made in space only. Otherwise, with a target object: d = the first
+        // Targeting_Fire_Inaccuracy entry hitting the target's CategoryMask (scaled like r), and when d > 0 and the 3D
+        // muzzle -> led aim distance L != 0: s = d x L / Targeting_Max_Attack_Distance, X, Y, Z draws in (-s, s).
+        const float f = inaccuracy_f(cfg_.mode, player(u.owner).ai_accuracy);
+        const float ws = cfg_.mode == GameMode::Land ? weather_scale(pd) : 1.0f;  // L1 systems: weather
+        float r = scale_inaccuracy(ud.fire_inaccuracy_fixed_radius, f);
+        if (ws != 1.0f) r = r * ws;
         for (int s = 0; s < 2; ++s) {
             const UnitAbilityDesc* ab = ability(u, s);
             if (ab && u.ability_active[static_cast<size_t>(s)] && ab->inaccuracy_override > 0.0f) {
@@ -2046,7 +2055,26 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
                 break;
             }
         }
-        if (r > 0.0f) aim = aim + inaccuracy_offset(r, rng);
+        if (r > 0.0f) {
+            Vec3 o;
+            o.x = rng.range_float(-r, r);
+            o.y = rng.range_float(-r, r);
+            if (cfg_.mode == GameMode::Space) o.z = rng.range_float(-r, r);
+            aim = aim + o;
+        } else if (am) {
+            float d = 0.0f;
+            for (const InaccuracyEntry& e : ud.fire_inaccuracy)
+                if (e.category_mask & desc_of(*am).category_mask) {
+                    d = e.distance;
+                    break;
+                }
+            d = scale_inaccuracy(d, f);
+            if (ws != 1.0f) d = d * ws;
+            const float L = distance3(muzzle, aim);
+            // [port] Targeting_Max_Attack_Distance <= 0 would divide by zero in retail: the draws are kept, spread 0.
+            if (d > 0.0f && L != 0.0f)
+                aim = aim + inaccuracy_offset(ud.max_attack_distance > 0.0f ? d * L / ud.max_attack_distance : 0.0f, rng);
+        }
     }
     spawn(u, pd, static_cast<uint32_t>(proj), pd.damage * dscale, pd.damage_type, muzzle, aim, tp, thp, range, frame,
           lob ? &sol : nullptr, q);
@@ -2314,7 +2342,10 @@ void CombatSystem::sweep(uint32_t pi, QueryContext& ctx) {
                 best = sweep_segment(p, n - p.pos, ctx);
             }
         } else {
-            best = sweep_segment(p, p.dir * p.speed, ctx);
+            const Vec3 delta = p.dir * p.speed;
+            best = sweep_segment(p, delta, ctx);
+            // A1j t03: Sweep 0x4c97a0 step 1, the land ground test 0x4d0630 of the same segment (TACTICAL_COMBAT §3.4).
+            if (straight_ground_test(p, delta)) best.ground = ground_hit(p.pos, p.pos + delta, best.gh);
         }
     }
     sweep_[pi] = best;
@@ -3440,6 +3471,25 @@ bool CombatSystem::ground_hit(Vec3 a, Vec3 b, GroundHit& out) const {
     return ground_segment(rocket_terrain_.grid, a, b, out);
 }
 
+bool CombatSystem::straight_ground_test(const Projectile& p, Vec3 delta) const {
+    // A1j t03 (TACTICAL_COMBAT §3.4 step 1, 0x4d0630) [H]: land mode only. For Projectile_Category DEFAULT (and an unknown
+    // category, -1; the port parses those as DEFAULT) the test is skipped while the target point is still ahead: the sign
+    // of (target point - position) equals the sign of the step on all three axes (sign(0) = +). Target point = the
+    // targeted hardpoint's position (0x396ce0) with a hardpoint index, else position + Ranged_Target_Z_Adjust (0x398440).
+    // No target: tested. Every other category (LASER 7 included) is tested on every step.
+    if (cfg_.mode != GameMode::Land) return false;
+    if (data_->projectiles[p.desc].category != ProjectileCategory::Default) return true;
+    const Unit* t = unit(p.target);
+    if (!live(t)) return true;  // [port] a dead target stands for the cleared pack reference
+    Vec3 tp;
+    if (p.target_hp >= 0 && static_cast<uint32_t>(p.target_hp) < t->hp_count)
+        tp = hp_world(*t, data_->hardpoints[hps_[t->hp_begin + static_cast<uint32_t>(p.target_hp)].desc]);
+    else
+        tp = lob_target_point(*t);
+    auto sgn = [](float v) { return v >= 0.0f; };
+    return !(sgn(tp.x - p.pos.x) == sgn(delta.x) && sgn(tp.y - p.pos.y) == sgn(delta.y) && sgn(tp.z - p.pos.z) == sgn(delta.z));
+}
+
 Vec3 CombatSystem::stuck_local(const Unit& v, Vec3 world) const {
     // S8 t06 (§6.4, LOB_SOLVER §8 item 18): the stuck point in the parent's frame (yaw of its facing, as local_to_world),
     // so it turns with the parent. [port] Retail carries it on the hit bone (bone animation and pitch / roll ignored).
@@ -3748,11 +3798,18 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
             sweep(i, serial_ctx_);
             hit = sweep_[i];
         }
-        if (hit.id != kNoObject) {
+        // A1j t03: the object hit wins when its segment fraction <= the ground fraction; a ground hit detonates there
+        // (On_Detonate 0x4cb070: no direct damage, area damage and effects at the ground point), as lob_step.
+        if (hit.id != kNoObject && (!hit.ground || hit.t <= hit.gh.t)) {
             Unit* v = unit(hit.id);
             projectiles_[i].alive = 0;
             Projectile pc = projectiles_[i];
             process_hit(pc, *v, hit.t, frame, rng, nullptr, hit.mesh_hp);
+            continue;
+        }
+        if (hit.ground) {
+            projectiles_[i].pos = hit.gh.point;
+            expire_projectile(i, frame);
             continue;
         }
         Projectile& p = projectiles_[i];

@@ -32,6 +32,10 @@
 #include "alamo/sim/sim_anim.hpp"
 #include "alamo/sim/sim_host.hpp"
 #include "alamo/vfs/vfs.hpp"
+#ifdef ALAMO_HEADLESS_HAVE_GALACTIC_AI
+#include "alamo/ai/galactic_ai.hpp"         // a1j t07: make_galactic_ai_type_info
+#include "alamo/ai/galactic_ai_tokens.hpp"  // a1j t07: GalacticSimTokenResolver
+#endif
 #else
 #include "alamo/objects/game_object_types.hpp"  // N1 stage 2 stubs
 #endif
@@ -588,6 +592,29 @@ std::string battle_state_text(uint64_t tick, sim::SimHost& host, const galactic:
     return out + "\n";
 }
 
+// a1j t07 (A1_READINGS §38): the battle AI's parent galaxy (Evaluate_In_Galactic_Context, Release_Credits_For_Tactical).
+// These hosts run no galactic AI, so the resolver is a GalacticSimTokenResolver over the galaxy, refreshed at each battle
+// start, with no hooks (an AI player's CreditsUnnormalized reads its credits, not a galactic budget) [port]; the galactic
+// players with `ai` set count as having a galactic AI (CampaignBattleOptions::has_galactic_ai unset). The option keeps the
+// resolver alive (shared_ptr in the callback).
+void add_galactic_context([[maybe_unused]] const Session& s, [[maybe_unused]] const galactic::GalacticSim& gs,
+                          [[maybe_unused]] sim::CampaignBattleOptions& bo) {
+#ifdef ALAMO_HEADLESS_HAVE_GALACTIC_AI
+    struct Context {
+        std::vector<ai::GalacticAiTypeInfo> types;
+        std::unique_ptr<ai::GalacticSimTokenResolver> res;
+    };
+    auto c = std::make_shared<Context>();
+    c->types = ai::make_galactic_ai_type_info(s.types);
+    c->res = std::make_unique<ai::GalacticSimTokenResolver>(gs, c->types, nullptr, ai::GalacticSimTokenResolver::Hooks{});
+    const galactic::GalacticSim* g = &gs;
+    bo.galactic_resolver = [c, g]() -> const ai::TokenResolver* {
+        c->res->refresh(g->frame());
+        return c->res.get();
+    };
+#endif
+}
+
 }  // namespace
 
 int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log) {
@@ -629,6 +656,10 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     s.ai->defs = &s.defs;
     s.ai->equations = &s.eqs;
     s.ai->files = s.files.get();
+    if (opt.ai_latency >= 0) s.ai->path_latency = static_cast<uint32_t>(opt.ai_latency);  // OPT2 t01 / t02 parity knobs
+    s.ai->stagger = opt.ai_stagger;
+    s.ai->pp_streams = opt.pp_streams;  // OPT2 t10 parity knobs
+    if (opt.pp_latency >= 0) s.ai->pp_latency = static_cast<uint32_t>(opt.pp_latency);
     const uint64_t max_ticks = opt.ticks_set ? opt.ticks : 30 * 600;
     struct Out {
         CrcLog crc;
@@ -662,6 +693,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         bo.battle.skip_human_units = s.human >= 0;  // skai: the idle human gets no stand-in orders
         bo.tactical_ai = s.ai;
         sim::load_tactical_systems(*s.files, s.rules, &s.db.constants(), bo);  // Int-final: weather, retreat, strikes data
+        add_galactic_context(s, *gs, bo);  // a1j t07
         const terrain::MapData* mp = &map;
         sim::CampaignBattles battles(host, s.crules, *s.catalog,
                                      [mp](const std::string&, terrain::MapData& m) {
@@ -798,8 +830,12 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
             std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], dv.message.c_str());
             if (dv.diverged) good = false;
         }
-    // t48: shipped scripts against the port: a Lua error here is a port bug until shown otherwise.
-    if (kind == "foc-station" && first.lua_errors != 0) good = false;
+    // t48: shipped scripts against the port: a Lua error here is a port bug until shown otherwise. a1j t07: any kind with
+    // --fail-on-lua-errors.
+    if ((kind == "foc-station" || opt.fail_on_lua_errors) && first.lua_errors != 0) {
+        std::printf("Lua errors: %zu (none allowed)\n", first.lua_errors);
+        good = false;
+    }
     if (opt.expect_battle_end) {  // S10 land outcome: a real result before the frame limit
         const bool ended_ok = first.ended && first.battle_frames < kBattleFrames && first.winner != "-";
         std::printf("battle outcome: %s, winner %s, victory %s, %lu of %u frames\n", ended_ok ? "ended" : "NOT ENDED",
@@ -931,6 +967,7 @@ bool skirmish_save_start(const SkirmishSaveData& d, sim::SimHost& host, bool ani
     bo.battle.skirmish = s.skirmish;
     bo.tactical_ai = s.ai;
     sim::load_tactical_systems(*s.files, s.rules, &s.db.constants(), bo);
+    add_galactic_context(s, *gs, bo);  // a1j t07
 #ifdef ALAMO_SIM_HAVE_ANIM
     if (anim) {
         auto a = std::make_shared<sim::SimAnimation>(s.types, *s.files);

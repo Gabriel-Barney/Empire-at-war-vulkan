@@ -529,6 +529,38 @@ void test_perception() {
           std::string::npos);
     CHECK(run(vm, "EvaluatePerception('X', 3)").find("Expected player object.") != std::string::npos);
     CHECK(run(vm, "Evaluate_In_Galactic_Context(1, und)").find("parameter 1. Expected string.") != std::string::npos);
+
+    // a1j t07 (A1_READINGS §38): a campaign land battle's galactic context. Evaluate_In_Galactic_Context runs in the
+    // galactic world with the battle's planet as target (0x69e1b0); Release_Credits_For_Tactical goes to the host
+    // (0x603c70 -> 0x6147d0) instead of the release queue.
+    g.world.set_perception({&eq, &tr}, {&eq, &tr});  // the tactical world's own equations: not used by the context
+    std::vector<std::pair<int32_t, double>> released;
+    TacticalGalacticContext tg;
+    tg.source = {&geq, &gres};
+    tg.target = 0;  // planet A
+    tg.land = true;
+    tg.has_galactic_ai = [](int32_t p) { return p == 1; };
+    tg.release_credits = [&released](int32_t p, double a) { released.emplace_back(p, a); };
+    g.world.set_tactical_galactic(tg);
+    const size_t queued = g.world.tactical_releases.size();
+    CHECK(run(vm, "t1 = Evaluate_In_Galactic_Context('Enemy_Space', und); t2 = Evaluate_In_Galactic_Context('Constant', und); "
+                  "und.Release_Credits_For_Tactical(t1); und.Release_Credits_For_Tactical()") == "");
+    CHECK(gnum(vm, "t1") == 500.0 && gnum(vm, "t2") == 6.0);
+    CHECK(released.size() == 2 && released[0] == std::make_pair(1, 500.0) && released[1] == std::make_pair(1, -1.0));
+    CHECK(g.world.tactical_releases.size() == queued);
+    CHECK(run(vm, "Evaluate_In_Galactic_Context('Constant', emp)").find("has no galactic AI.") != std::string::npos);
+    CHECK(run(vm, "Evaluate_In_Galactic_Context('Nope', und)").find("Unrecognised perception function Nope.") !=
+          std::string::npos);
+    CHECK(run(vm, "Evaluate_In_Galactic_Context('Constant')").find("Expected 2, got 1.") != std::string::npos);
+    CHECK(run(vm, "und.Release_Credits_For_Tactical(nil)").find("Expected number.") != std::string::npos);
+    CHECK(run(vm, "emp.Release_Credits_For_Tactical(5)").find("player is not AI controlled.") != std::string::npos);
+    CHECK(released.size() == 2);
+    tg.target = -1;  // no battle record: no result, no error
+    tg.land = false;
+    g.world.set_tactical_galactic(tg);
+    CHECK(run(vm, "t3 = Evaluate_In_Galactic_Context('Constant', und)") == "" && gnil(vm, "t3"));
+    CHECK(run(vm, "und.Release_Credits_For_Tactical(1)").find("only valid in land tactical") != std::string::npos);
+    CHECK(released.size() == 2);
 }
 
 // Shipped Data\XML\AI\PerceptualEquations through EvaluatePerception == ai::evaluate, bit for bit.
@@ -926,7 +958,7 @@ public:
     void tf_release_unit(int32_t, objects::ObjectHandle) override {}
     std::vector<objects::ObjectHandle> tf_units(int32_t tf) override { return tf == 3 ? units : std::vector<objects::ObjectHandle>{}; }
     std::string tf_goal_type_name(int32_t) override { return {}; }
-    bool tf_collect_free_units(int32_t) override { return false; }
+    bool tf_collect_free_units(int32_t, uint64_t) override { return false; }
     bool status_finished(int32_t) override { return true; }
     AiStatusResult status_result(int32_t) override { return AiStatusResult::True; }
     bool target_valid(int32_t) override { return false; }

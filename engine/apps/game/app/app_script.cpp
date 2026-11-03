@@ -1312,7 +1312,16 @@ void App::make_script() {
     };
     if (opt_.smoke == "land") {  // land skirmish: the first land map of the list (rows after the space maps)
         s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_SKIRMISH_GAMES_BUTTON"));
-        s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_STAGING_MAP_LIST", [](App& a) { return a.space_map_count_; }));
+        s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_STAGING_MAP_LIST", [](App& a) {
+            // The first land map by name (the old list's first land row): its row in the staging list as the front end sorted it;
+            // else the first land row of the Official tab.
+            const std::vector<std::string> land = skirmish_land_maps(a.data_);
+            int32_t row = land.empty() ? -1 : a.ui_.front.skirmish_map_row(land.front());
+            if (row < 0 && a.skirmish_catalog_)
+                for (const SkirmishMapEntry& e : skirmish_map_rows(*a.skirmish_catalog_, false))
+                    if (e.kind == 1 && row < 0) row = a.ui_.front.skirmish_map_row(e.map);
+            return static_cast<size_t>(std::max<int32_t>(row, 0));
+        }));
         s.push_back(step_shot("game_land_staging.png"));
         s.push_back(step_click_control("IDD_SKIRMISH_STAGING_DIALOG", "IDC_SKIRMISH_START_GAME_BUTTON"));
         buy_steps("game_land");

@@ -317,6 +317,37 @@ static void test_grid() {
         two.stamp(3, c);
         CHECK(two.effective(10, 10) == (kPassObstacle | kPassRebelWall) && two.unstamp(1) && two.effective(10, 10) == kPassObstacle);
     }
+    // OPT3 t11: stamp_all (cells sampled through a ParallelFor, here one that runs the entries back to front) gives the
+    // grid and stamps of the stamp() loop, also with a fine-tune ray, a repeated id and an id stamped before.
+    {
+        std::vector<std::pair<ObjectId, ObstacleFootprint>> list;
+        for (uint32_t k = 0; k < 9; ++k) {
+            ObstacleFootprint f = make_footprint({60.0f + 25.0f * static_cast<float>(k), 150.0f + 7.0f * static_cast<float>(k)},
+                                                 static_cast<float>(k) * 35.0f, 50.0f, 30.0f, -25.0f, -15.0f, 0, 0, 1.0f,
+                                                 k % 2 ? kPassRebelWall : 0u);
+            if (k % 3 == 0) f.fine_tune = [](V2 p) { return (static_cast<int32_t>(p.x / 10.0f) + static_cast<int32_t>(p.y / 10.0f)) % 2 == 0; };
+            list.emplace_back(static_cast<ObjectId>(k == 7 ? 2 : k), std::move(f));
+        }
+        const ParallelFor backwards = [](uint32_t n, uint32_t, const RangeFn& fn) {
+            for (uint32_t i = n; i-- > 0;) fn(i, i + 1);
+        };
+        PassabilityGrid ser, par;
+        for (PassabilityGrid* q : {&ser, &par}) {
+            q->init(32, 32);
+            q->set_base(8, 9, kPassSteep);
+            q->stamp(4, make_footprint({40.0f, 40.0f}, 0.0f, 30.0f, 30.0f, -15.0f, -15.0f, 0, 0, 1.0f, 0));
+        }
+        std::vector<uint32_t> counts;
+        for (const auto& [id, f] : list) counts.push_back(ser.stamp(id, f));
+        CHECK(par.stamp_all(list, backwards) == counts);
+        bool same = ser.stamped_ids() == par.stamped_ids();
+        for (const ObjectId id : ser.stamped_ids()) {
+            const auto a = ser.stamp_cells(id), b = par.stamp_cells(id);
+            same = same && std::equal(a.begin(), a.end(), b.begin(), b.end());
+        }
+        const auto ea = ser.effective_values(), eb = par.effective_values();
+        CHECK(same && std::equal(ea.begin(), ea.end(), eb.begin(), eb.end()));
+    }
     // Rotated footprint: 60 x 10 at yaw 90 covers a vertical strip.
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
     g.stamp(79, fp3);
@@ -1175,6 +1206,152 @@ static void test_land_group() {
     bool g4ok = true;
     run_land(s4, 0, 2000, rng, serial_for, g4ok);
     CHECK(s4.view(1).arrived && distance(s4.view(1).pos, cell_center(30, 30)) < 36.0f + 60.0f + 1.0f && s4.stats().early_arrivals == 1);
+
+    // a1j t02 (A1_READINGS §36.4): a Giant Vehicle pushes a stopped unit it does not crush aside (0x684f90 -> 0x6859a0)
+    // and keeps its path: no path-around, it arrives at its destination, the parked infantry stands off the line.
+    MovementSystem s5{MovementConfig{}};
+    PassabilityGrid g5;
+    g5.init(60, 40);
+    s5.set_grid(std::move(g5));
+    s5.add_unit(land_unit(1, cell_center(5, 20), 11, 1.0f, 30.0f, kUccGiantVehicle));
+    s5.add_unit(land_unit(2, cell_center(30, 20), 0, 1.5f, 5.0f, kUccInfantry));  // parked on the line
+    MoveOrder e;
+    e.units = {1};
+    e.destination = cell_center(55, 20);
+    s5.move(e, rng, 0);
+    bool g5ok = true;
+    run_land(s5, 0, 3000, rng, serial_for, g5ok);
+    const V2 pushed = s5.view(2).pos;
+    std::printf("giant push: arrived %d, dynamic re-paths %u, infantry moved to (%.1f, %.1f)\n", s5.view(1).arrived ? 1 : 0,
+                s5.stats().dynamic_repaths, static_cast<double>(pushed.x), static_cast<double>(pushed.y));
+    CHECK(g5ok && s5.view(1).arrived && distance(s5.view(1).pos, cell_center(55, 20)) < 1.0f && s5.stats().dynamic_repaths == 0);
+    CHECK(std::fabs(pushed.y - cell_center(30, 20).y) > 5.0f);
+}
+
+// a1k t03 (A1_READINGS §40): the push's free-position search 0x440f90, the pushed move and what follows it.
+static void test_push_search() {
+    // A Giant Vehicle (radius 30) on the line y = row 20 meets parked infantry (radius 5) on the line. The infantry is on
+    // the line (cross = 0: the right side, d = heading - 45 degrees); the search samples the 45-degree arc from d and the
+    // first spot off the pusher's path (clearance 30 + 5 + 4 = 39) is ring 12 (radius 60.3) at theta 0, i.e. d itself.
+    {
+        MovementSystem s{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(60, 40);
+        s.set_grid(std::move(g));
+        s.add_unit(land_unit(1, cell_center(5, 20), 11, 1.0f, 30.0f, kUccGiantVehicle));
+        s.add_unit(land_unit(2, cell_center(30, 20), 0, 1.5f, 5.0f, kUccInfantry));
+        SimRng rng(5);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(55, 20);
+        s.move(o, rng, 0);
+        const V2 b0 = cell_center(30, 20);
+        uint32_t f = 0, push_frame = 0, end_frame = 0;
+        bool order_kept = true;
+        for (; f < 3000; ++f) {
+            s.tick(f, rng);
+            const UnitView v = s.view(2);
+            if (v.pushed && push_frame == 0) push_frame = f;
+            if (push_frame && !v.pushed && end_frame == 0) end_frame = f;
+            order_kept = order_kept && !v.has_goal && !v.arrived;  // a pushed move is no order
+            if (end_frame && !s.view(1).has_goal) break;
+        }
+        const V2 spot = s.view(2).pos;
+        const float ring = 60.3f * 0.70710678f;  // R12 at -45 degrees
+        std::printf("push search: pushed at %u, reached the spot at %u, spot (%.2f, %.2f) from (%.2f, %.2f)\n", push_frame,
+                    end_frame, static_cast<double>(spot.x), static_cast<double>(spot.y), static_cast<double>(b0.x),
+                    static_cast<double>(b0.y));
+        CHECK(s.stats().pushes == 1 && s.stats().push_failures == 0 && push_frame > 0 && end_frame > push_frame);
+        CHECK(std::fabs(spot.x - (b0.x + ring)) < 0.5f && std::fabs(spot.y - (b0.y - ring)) < 0.5f);
+        CHECK(order_kept && s.view(1).arrived && distance(s.view(1).pos, cell_center(55, 20)) < 1.0f && s.stats().dynamic_repaths == 0);
+        // No return move (MinimumPushReturnDistance / RepushDistance have no reader): the idle unit stays at the spot.
+        for (uint32_t n = 0; n < 300; ++n) s.tick(++f, rng);
+        CHECK(distance(s.view(2).pos, spot) < 0.01f && !s.view(2).pushed && !s.view(2).has_goal);
+    }
+    // No free spot: a one-cell corridor leaves no reachable sample off the pusher's path (clearance 10 + 5 + 4 = 19 >
+    // the half corridor): the push fails every time and the blocker is never moved (the decision falls through to the
+    // path-around / try-again rules; their fallback, not the push, is what lets the Giant Vehicle creep past).
+    {
+        MovementSystem s{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(60, 40);
+        std::vector<uint32_t> v(60 * 40, kPassImpassable);
+        for (int x = 2; x < 58; ++x) v[static_cast<size_t>(20) * 60 + static_cast<size_t>(x)] = kPassClear;
+        g.set_base(v);
+        s.set_grid(std::move(g));
+        s.add_unit(land_unit(1, cell_center(5, 20), 0, 1.0f, 10.0f, kUccGiantVehicle));
+        s.add_unit(land_unit(2, cell_center(30, 20), 0, 1.5f, 5.0f, kUccInfantry));
+        SimRng rng(6);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(55, 20);
+        s.move(o, rng, 0);
+        bool never_pushed = true;
+        for (uint32_t f = 0; f < 1500; ++f) {
+            s.tick(f, rng);
+            never_pushed = never_pushed && !s.view(2).pushed;
+        }
+        std::printf("push search, no spot: %u failed pushes, giant at x %.1f\n", s.stats().push_failures,
+                    static_cast<double>(s.view(1).pos.x));
+        CHECK(never_pushed && s.stats().pushes == 0 && s.stats().push_failures > 0);
+        CHECK(distance(s.view(2).pos, cell_center(30, 20)) < 0.01f);
+    }
+    // The move under the push resumes: the blocker holds an order that has not started yet (path not planned, start
+    // frame 900), so it is stopped and gets pushed; the pushed path is walked first, the order stays underneath and
+    // runs from the spot when it starts. A new order (or stop) ends a pushed move.
+    {
+        MovementSystem s{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(60, 40);
+        s.set_grid(std::move(g));
+        s.add_unit(land_unit(1, cell_center(5, 20), 11, 1.0f, 30.0f, kUccGiantVehicle));
+        s.add_unit(land_unit(2, cell_center(30, 20), 0, 1.5f, 5.0f, kUccInfantry));
+        SimRng rng(7);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(55, 20);
+        s.move(o, rng, 0);
+        MoveOrder later;
+        later.units = {2};
+        later.destination = cell_center(30, 35);
+        s.move(later, rng, 900);
+        CHECK(s.view(2).has_goal && s.view(2).start_frame >= 900);
+        uint32_t push_frame = 0, end_frame = 0;
+        bool kept = true;
+        uint32_t f = 0;
+        for (; f < 3000; ++f) {
+            s.tick(f, rng);
+            const UnitView v = s.view(2);
+            if (v.pushed && push_frame == 0) push_frame = f;
+            if (push_frame && !v.pushed && end_frame == 0) end_frame = f;
+            if (push_frame && !end_frame) kept = kept && v.has_goal && distance(v.goal, cell_center(30, 35)) < 1.0f;
+            if (v.arrived) break;
+        }
+        std::printf("push resume: pushed at %u, spot reached at %u, order arrived at %u\n", push_frame, end_frame, f);
+        CHECK(push_frame > 0 && push_frame < 900 && end_frame > push_frame && end_frame < 900 && kept);
+        CHECK(s.view(2).arrived && distance(s.view(2).pos, cell_center(30, 35)) < 1.0f && f > 900);
+        // A stop during a pushed move ends it.
+        MovementSystem s2{MovementConfig{}};
+        PassabilityGrid g2;
+        g2.init(60, 40);
+        s2.set_grid(std::move(g2));
+        s2.add_unit(land_unit(1, cell_center(5, 20), 11, 1.0f, 30.0f, kUccGiantVehicle));
+        s2.add_unit(land_unit(2, cell_center(30, 20), 0, 0.2f, 5.0f, kUccInfantry));  // slow: still walking when stopped
+        MoveOrder o2;
+        o2.units = {1};
+        o2.destination = cell_center(55, 20);
+        s2.move(o2, rng, 0);
+        bool stopped = false;
+        for (uint32_t n = 0; n < 2000 && !stopped; ++n) {
+            s2.tick(n, rng);
+            if (s2.view(2).pushed) {
+                const ObjectId two = 2;
+                s2.stop(std::span<const ObjectId>(&two, 1));
+                stopped = true;
+            }
+        }
+        CHECK(stopped && !s2.view(2).pushed);
+    }
 }
 
 // ---------------------------------------------------------------- space
@@ -1451,11 +1628,15 @@ static void test_oi_land() {
         }
         CHECK(all.size() == 1 && all[0].crusher == 1 && all[0].victim == 10);
         CHECK(sys.has_unit(11) && sys.has_unit(12) && sys.has_unit(13));
+        // a1j t02 (A1_READINGS §36.4): the friendly trooper on the line was pushed aside, not crushed.
+        const V2 p11 = sys.view(11).pos;
+        CHECK(std::fabs(p11.y - cell_center(30, 20).y) > 5.0f);
         // Hostility comes from the host (combat relations).
         sys.set_hostility([](int32_t, int32_t) { return true; });
         sys.set_owner(1, 5);
         MoveOrder back = o;
-        back.destination = cell_center(5, 20);
+        const V2 from = sys.view(1).pos;
+        back.destination = from + (p11 - from) * 1.5f;  // straight back over the pushed trooper
         sys.move(back, rng, 3000);
         all.clear();
         for (uint32_t f = 3000; f < 6000 && sys.view(1).has_goal; ++f) {
@@ -2646,6 +2827,7 @@ int main() {
     test_collision_layer();  // S7 collision priority sort
     test_collision_system();
     test_land_group();
+    test_push_search();
     test_space();
     test_space_group();
     test_oi_land();  // OI tactical

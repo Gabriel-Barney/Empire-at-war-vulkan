@@ -450,7 +450,8 @@ constexpr uint64_t kCatFighter = 0x1, kCatCapital = 0x8;
 
 // Shooter with one weapon hardpoint at its centre (no bone B, no muzzle draw) and a stationary target;
 // returns the first projectile's direction and fills `expected` from a copy of the RNG.
-void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float override_radius, bool use_table, float expect_r) {
+void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float override_radius, bool use_table, float expect_r,
+                     uint64_t target_category = kCatCapital) {
     World w;
     w.data.projectiles.push_back(ProjectileDesc{});
     w.data.projectiles[0].max_speed = 10.0f;
@@ -477,7 +478,7 @@ void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float ov
     UnitDesc target;
     target.tactical_health = 1e6f;
     target.radius = 10.0f;
-    target.category_mask = kCatCapital;
+    target.category_mask = target_category;
     const uint32_t ds = push_unit(w.data, shooter), dt = push_unit(w.data, target);
     CombatConfig cfg;
     cfg.mode = mode;
@@ -493,13 +494,64 @@ void inaccuracy_case(GameMode mode, float accuracy, float fixed_radius, float ov
         w.tick();
         if (w.sys->projectile_count() == 1) {
             const uint64_t tick_draws = w.rng.draws() - copy.draws();
+            if (expect_r > 0.0f) {
+                Vec3 off;
+                off.x = copy.range_float(-expect_r, expect_r);
+                off.y = copy.range_float(-expect_r, expect_r);
+                off.z = copy.range_float(-expect_r, expect_r);
+                const Vec3 expect = norm(Vec3{500, 0, 0} + off);
+                CHECK(same(w.sys->projectile(0).dir, expect));
+                CHECK(tick_draws == 3);  // 3 inaccuracy; the full recharge Get_Int(100, 100) has no draw
+            } else {
+                // A1j t03 (0x381dc0): a table distance of 0 (no entry for the target's category) makes no draws.
+                CHECK(same(w.sys->projectile(0).dir, Vec3{1, 0, 0}));
+                CHECK(tick_draws == 0);
+            }
+        }
+    }
+    CHECK(w.sys->projectile_count() == 1);
+}
+
+// A1j t03: own-weapon inaccuracy 0x549f80 (TACTICAL_COMBAT §3.1.2). A shooter with its own weapon (no hardpoints, no
+// muzzle bones) at the origin and a stationary capital 500 away; the first shot's direction must be the target plus
+// the first `xyz_draws` draws of the firing tick in (-expect_r, expect_r) (2: X and Y only, 0: no offset). [The tick's
+// draw count is not checked: the recharge's range_int(0, 10) takes a state-dependent number of draws.]
+void own_inaccuracy_case(GameMode mode, float fixed_radius, bool use_table, float expect_r, int xyz_draws) {
+    World w;
+    w.data.projectiles.push_back(ProjectileDesc{});
+    w.data.projectiles[0].max_speed = 10.0f;
+    w.data.projectiles[0].damage = 1.0f;
+    UnitDesc shooter;
+    shooter.tactical_health = 100.0f;
+    shooter.max_attack_distance = 1000.0f;
+    shooter.weapon_projectile = 0;
+    shooter.weapon_recharge = 1.0f;
+    shooter.fire_inaccuracy_fixed_radius = fixed_radius;
+    if (use_table) shooter.fire_inaccuracy = {{kCatFighter, 70.0f}, {kCatCapital, 7.0f}, {kCatCapital, 99.0f}};  // first hit
+    UnitDesc target;
+    target.tactical_health = 1e6f;
+    target.radius = 10.0f;
+    target.category_mask = kCatCapital;
+    const uint32_t ds = push_unit(w.data, shooter), dt = push_unit(w.data, target);
+    CombatConfig cfg;
+    cfg.mode = mode;
+    PlayerInfo p0;
+    p0.ai_accuracy = 1.0f;
+    w.make(cfg, {p0, PlayerInfo{}});
+    w.add(1, ds, 0, Vec3{0, 0, 0});
+    w.add(2, dt, 1, Vec3{500, 0, 0});
+    w.sys->order_attack(1, 2);
+    for (int i = 0; i < 40 && w.sys->projectile_count() == 0; ++i) {
+        SimRng copy = w.rng;
+        w.tick();
+        if (w.sys->projectile_count() == 1) {
             Vec3 off;
-            off.x = copy.range_float(-expect_r, expect_r);
-            off.y = copy.range_float(-expect_r, expect_r);
-            off.z = copy.range_float(-expect_r, expect_r);
-            const Vec3 expect = norm(Vec3{500, 0, 0} + off);
-            CHECK(same(w.sys->projectile(0).dir, expect));
-            CHECK(tick_draws == 3);  // 3 inaccuracy; the full recharge Get_Int(100, 100) has no draw
+            if (xyz_draws >= 2) {
+                off.x = copy.range_float(-expect_r, expect_r);
+                off.y = copy.range_float(-expect_r, expect_r);
+            }
+            if (xyz_draws == 3) off.z = copy.range_float(-expect_r, expect_r);
+            CHECK(same(w.sys->projectile(0).dir, norm(Vec3{500, 0, 0} + off)));
         }
     }
     CHECK(w.sys->projectile_count() == 1);
@@ -510,6 +562,13 @@ void test_inaccuracy_system() {
     inaccuracy_case(GameMode::Space, 1.0f, 0.0f, 0.0f, true, 7.0f);    // table: 7 x 2 x 500 / 1000
     inaccuracy_case(GameMode::Space, 1.0f, 5.0f, 5.0f, false, 5.0f);   // ability override: unscaled
     inaccuracy_case(GameMode::Land, 0.6f, 5.0f, 0.0f, false, 5.0f * (1.0f - 0.6f) + 5.0f);  // (2 - acc) x
+    inaccuracy_case(GameMode::Space, 1.0f, 0.0f, 0.0f, true, 0.0f, kCatFighter);           // table distance 0: no draws
+    // A1j t03 own weapon: the fixed radius draws X and Y, Z in space only; the type table s = d x L / max distance.
+    own_inaccuracy_case(GameMode::Land, 5.0f, false, 5.0f, 2);
+    own_inaccuracy_case(GameMode::Space, 5.0f, false, 10.0f, 3);
+    own_inaccuracy_case(GameMode::Land, 0.0f, true, 7.0f * 500.0f / 1000.0f, 3);
+    own_inaccuracy_case(GameMode::Space, 0.0f, true, 14.0f * 500.0f / 1000.0f, 3);
+    own_inaccuracy_case(GameMode::Space, 0.0f, false, 0.0f, 0);  // no table entry: no offset
 }
 
 struct TargetWorld {
@@ -912,6 +971,61 @@ GroundGrid flat_grid(uint32_t w, uint32_t h, int16_t level) {
     g.height_scale = 0.0625f;
     g.heights.assign(static_cast<size_t>(w) * h, level);
     return g;
+}
+
+// A1j t03 (TACTICAL_COMBAT §3.4, 0x4d0630): the land ground test of straight shots. A plateau at z 5 (vertices x >= 160)
+// lies between the launch at (0, 0, 1) and the point / target at x 300.
+void test_straight_ground_test() {
+    GroundGrid g = flat_grid(20, 4, 0);
+    for (uint32_t y = 0; y < g.height; ++y)
+        for (uint32_t x = 8; x < g.width; ++x) g.heights[y * g.width + x] = 80;
+    ProjectileDesc shot;
+    shot.max_speed = 10.0f;
+    shot.damage = 10.0f;
+    // No target: tested on every step in land (detonation on the ramp x 140..160 below z 1), never in space.
+    for (const GameMode mode : {GameMode::Land, GameMode::Space}) {
+        LobLaunch ll(mode, shot, Vec3{300, 0, 1}, &g);
+        Vec3 at;
+        bool done = false;
+        for (int i = 0; i < 100 && !done; ++i) {
+            ll.tick();
+            for (const HitEvent& e : ll.sys->hit_events()) {
+                done = true;
+                at = e.position;
+            }
+        }
+        CHECK(done);
+        if (mode == GameMode::Land)
+            CHECK(at.x > 140.0f && at.x < 144.0f && std::fabs(at.z - (at.x - 140.0f) * 0.25f) < 0.01f);
+        else
+            CHECK(at.x > 290.0f);
+    }
+    // A target ahead on all three axes: a DEFAULT shot skips the test and hits; a LASER is tested and detonates.
+    for (const ProjectileCategory cat : {ProjectileCategory::Default, ProjectileCategory::Laser}) {
+        World w;
+        shot.category = cat;
+        w.data.projectiles = {shot};
+        UnitDesc t;
+        t.tactical_health = 1e6f;
+        t.radius = 10.0f;
+        const uint32_t td = push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = GameMode::Land;
+        w.make(cfg);
+        RocketTerrain rt;
+        rt.grid = g;
+        w.sys->set_rocket_terrain(std::move(rt));
+        w.add(2, td, 1, Vec3{300, 0, 0});
+        ProjectileLaunch l;
+        l.owner = 0;
+        l.from = Vec3{0, 0, 1};
+        l.target = 2;
+        CHECK(w.sys->launch_projectile(l, w.frame));
+        for (int i = 0; i < 60 && w.sys->projectile_count() != 0; ++i) w.tick();
+        CHECK(w.sys->projectile_count() == 0u);
+        CHECK(w.sys->stats().hits == (cat == ProjectileCategory::Default ? 1u : 0u));
+        CHECK(w.sys->stats().expired == (cat == ProjectileCategory::Default ? 0u : 1u));
+    }
 }
 
 void test_lob_ground_and_expiry() {
@@ -1393,6 +1507,20 @@ void test_gaps_constants() {
     v2.w.add(2, wd3, 1, Vec3{1150, 0, 0}, {1, 0, 0});  // end-on: E = 200 -> in range
     v2.w.tick();
     CHECK(v2.w.sys->auto_target(1) == 2);
+    // A1j t04 (0x371e70 / 0x372040): without Custom_Hard extents E falls back to |model bbox max.x / max.y| x Scale_Factor.
+    for (const bool end_on : {true, false}) {
+        TargetWorld m;
+        UnitDesc boxed = m.w.data.units[m.capital];
+        boxed.model_x_extent = 200.0f;
+        boxed.model_y_extent = 20.0f;
+        boxed.radius = 200.0f;
+        const uint32_t bd = push_unit(m.w.data, boxed);
+        m.w.make();
+        m.w.add(1, m.attacker, 0, Vec3{0, 0, 0});
+        m.w.add(2, bd, 1, Vec3{1150, 0, 0}, end_on ? Vec3{1, 0, 0} : Vec3{0, 1, 0});
+        m.w.tick();
+        CHECK(m.w.sys->auto_target(1) == (end_on ? ObjectId{2} : kNoObject));
+    }
 }
 
 // OI tactical: TACTICAL_GAPS 3.1 slot 43 with a LAND_OBSTACLE target (aim walk toward the attacker over the cells the
@@ -5199,6 +5327,7 @@ int main(int argc, char** argv) {
     test_choose_target_hardpoint_by_type();
     test_damage_table();
     test_inaccuracy_system();
+    test_straight_ground_test();
     test_targeting_rules();
     test_circular_lead();  // OI tactical
     test_lob_solver();

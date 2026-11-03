@@ -157,7 +157,7 @@ void TacticalBattle::bt_add_pad_types(const terrain::MapData& map) {
             const objects::TypeIndex ft = types.resolve_name(types.get_string(uc, "Tactical_Buildable_Constructed"));
             if (ft != objects::kNone && ft < types.size()) use(ft);
         }
-    if (types_used_.size() != before) tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+    if (types_used_.size() != before) tables_extend();
 }
 
 // ---- pad objects as battle units -----------------------------------------------------------------------------------
@@ -670,8 +670,9 @@ void TacticalBattle::bt_map_prepass() {
     // level (D +0x130 land / +0x148 space) is destroyed; an unknown owner id is destroyed ("An object was saved with a
     // Player ID that no longer exists!"); the branched-map discard (single player, defender given, type
     // Is_Branched_Map_Discardable) keeps only owner = defender, Loads_When_Faction_Present and owner = attacker, an owner
-    // faction without Can_Control_Planets, or an Is_Marker type [M: the behaviour test 0x370320 (arguments lost) and the
-    // global 0x140b155d8 exception are not modelled]. The dropped placements leave map_ (no grid stamp, no spawn). The
+    // faction without Can_Control_Planets, or an Is_Marker type [M: the behaviour test 0x370320 (arguments lost) is not
+    // modelled]; story t10: a linked battle (the [M] global 0x140b155d8 != -1, [port] = BattleRequest::linked) also keeps
+    // owner = attacker (Kessel UM01's jailed UMP_TYBER_ZANN). The dropped placements leave map_ (no grid stamp, no spawn). The
     // kept placements' selectable / mobile types and every Map_Load_Spawn_Table entry join the battle tables.
     const objects::GameObjectTypes& types = catalog_->types();
     const TypeCrcIndex index(types);
@@ -738,8 +739,8 @@ void TacticalBattle::bt_map_prepass() {
         const objects::TypeIndex t = index.find(pl.type_crc);
         if (t != objects::kNone && t < types.size()) {
             if (def >= 0 && !cfg_.map_battle && types.get_bool(t, "Is_Branched_Map_Discardable")) {
-                const bool keep = o == def || (types.get_bool(t, "Loads_When_Faction_Present") && o == att) || !can_control(o) ||
-                                  types.get_bool(t, "Is_Marker");
+                const bool keep = o == def || ((req_.linked || types.get_bool(t, "Loads_When_Faction_Present")) && o == att) ||
+                                  !can_control(o) || types.get_bool(t, "Is_Marker");
                 if (!keep) continue;
             }
             if (combat_candidate(t)) use(static_cast<uint32_t>(t));
@@ -749,7 +750,7 @@ void TacticalBattle::bt_map_prepass() {
         kept.push_back(std::move(pl));
     }
     map_.objects = std::move(kept);
-    if (types_used_.size() != before) tables_ = std::make_unique<BattleTables>(catalog_->build_battle(types_used_, descs_, space_));
+    if (types_used_.size() != before) tables_extend();
 }
 
 void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {

@@ -116,7 +116,8 @@ set_tests_properties(alamo_ui_gui_tests PROPERTIES TIMEOUT 120)
 
 # P4 completion tests (CPU): in-game screens, advanced video, multiplayer screens (UI only), HUD panels, camera hotkeys;
 # real GUIDialogs.rc / CommandBarComponents through the VFS with ALAMO_FOC_DATA.
-add_executable(alamo_ui_screens_tests tests/test_gui_screens.cpp tests/test_gui_screens_a.cpp tests/test_gui_screens_b.cpp tests/test_gui_screens_c.cpp)
+add_executable(alamo_ui_screens_tests tests/test_gui_screens.cpp tests/test_gui_screens_a.cpp tests/test_gui_screens_b.cpp tests/test_gui_screens_c.cpp
+  tests/test_gui_skirmish_maps.cpp)
 target_link_libraries(alamo_ui_screens_tests PRIVATE alamo_ui_hud alamo_data)
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_ui_screens_tests PRIVATE alamo_vfs)
@@ -124,6 +125,13 @@ if(TARGET alamo_vfs)
 endif()
 add_test(NAME alamo_ui_screens_tests COMMAND alamo_ui_screens_tests)
 set_tests_properties(alamo_ui_screens_tests PROPERTIES TIMEOUT 120)
+
+# p4ui t03 (CPU): colour combos draw item text in the item colour, lobby glyph items, tech-tree arrows / tints, battle-end
+# arrows, fleet summary dividers (docs/re/UI.md §3.7).
+add_executable(alamo_ui_colour_arrows_tests tests/test_gui_colour_arrows.cpp)
+target_link_libraries(alamo_ui_colour_arrows_tests PRIVATE alamo_ui_hud alamo_data)
+add_test(NAME alamo_ui_colour_arrows_tests COMMAND alamo_ui_colour_arrows_tests)
+set_tests_properties(alamo_ui_colour_arrows_tests PROPERTIES TIMEOUT 120)
 
 # P2 HUD, GPU side (only with the renderer): the HUD Vulkan pass after the post chain (hud_renderer.hpp),
 # selection circles as 3D primitives (selection_blob.hpp), header-only snapshot bridge (hud_sim_bridge.hpp).
@@ -207,3 +215,13 @@ if(TARGET alamo_render)
   add_test(NAME alamo_ui_render_bridge_tests COMMAND alamo_ui_render_bridge_tests)
   set_tests_properties(alamo_ui_render_bridge_tests PROPERTIES TIMEOUT 60)
 endif()
+
+# p4ui t04 (CPU, synthetic data): which fleet fills which of the three organiser panes (docs/re/UI.md §7).
+add_executable(alamo_ui_organizer_tests tests/test_gui_organizer.cpp)
+target_link_libraries(alamo_ui_organizer_tests PRIVATE alamo_ui_hud alamo_data)
+if(TARGET alamo_vfs)
+  target_link_libraries(alamo_ui_organizer_tests PRIVATE alamo_vfs)
+  target_compile_definitions(alamo_ui_organizer_tests PRIVATE ALAMO_UI_HAVE_VFS=1)
+endif()
+add_test(NAME alamo_ui_organizer_tests COMMAND alamo_ui_organizer_tests)
+set_tests_properties(alamo_ui_organizer_tests PROPERTIES TIMEOUT 60)

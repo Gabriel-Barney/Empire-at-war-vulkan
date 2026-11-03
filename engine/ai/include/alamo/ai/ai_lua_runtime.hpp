@@ -24,6 +24,7 @@
 #include "alamo/ai/ai_definitions.hpp"
 #include "alamo/ai/ai_plans.hpp"
 #include "alamo/ai/perception_equations.hpp"
+#include "alamo/core/parallel.hpp"
 #include "alamo/lua/lua_vm.hpp"
 
 namespace alamo::ai {
@@ -38,11 +39,13 @@ public:
         std::function<lua::LuaHost()> host;            // store / types / rng / files for new VMs
         std::function<void(lua::LuaVm&)> prepare;      // attach families (players world, AI host, ...)
     };
-    explicit PlanScriptRuntime(VmSetup setup) : setup_(std::move(setup)) {}
+    explicit PlanScriptRuntime(VmSetup setup);
 
-    // Loads `paths` (already in load order). Appends to `library`.
+    // Loads `paths` (already in load order). Appends to `library`. OPT3 t09: the paths' load VMs are built through
+    // `pf` (one job per path, committed in path order: the result does not depend on it); `files` must allow
+    // concurrent reads (the VFS and DirectoryProvider do).
     size_t load(const FileProvider& files, const std::vector<std::string>& paths, const AiDefinitions& defs,
-                PlanLibrary& library, std::vector<std::string>* diag);
+                PlanLibrary& library, std::vector<std::string>* diag, const ParallelFor& pf = serial_for);
     // A VM of `plan` (pooled or fresh, Base_Definitions already run). nullptr on a script error.
     std::unique_ptr<lua::LuaVm> acquire(uint32_t plan, std::string* err = nullptr);
     // Back to the pool (or destroyed when not poolable / the pool is full).
@@ -68,6 +71,8 @@ public:
     // runtime's pristine(plan) VM, which is kept there (and stays pristine); every other VM of the old pools is destroyed.
     void restore_pools(std::vector<std::vector<std::unique_ptr<lua::LuaVm>>> pools, size_t created);
     void set_vms_created(size_t created) { created_ = created; }  // undoes the count of VMs a failed load made
+    // Teardown (OPT3 t11): moves every pooled VM to the end of `out` (plan order, pool order) and empties the pools.
+    void take_vms(std::vector<std::unique_ptr<lua::LuaVm>>& out);
     // N1 save size: the VM load() pooled for `plan` while it has never been acquired - pooled VMs only run between
     // acquire and release, so it is still exactly as load() left it, and every session rebuilt from the same data
     // holds the same one. Null when there is none. A save names it (by plan and pristine_digest) instead of storing
@@ -86,7 +91,15 @@ private:
         mutable uint64_t digest = 0;           // pristine_digest() cache
         mutable bool digest_known = false;
     };
+    // make_vm without the count: safe on any thread while setup_ is (load's jobs).
+    std::unique_ptr<lua::LuaVm> build_vm(const std::string& name, const std::string& chunk, const std::string& chunk_name,
+                                         std::string* err) const;
     VmSetup setup_;
+    // OPT3 t11: the files the VMs' require / dofile / loadfile read (host.files), cached for every VM of this runtime:
+    // one plan load requires the same libraries in every plan VM, each through up to 22 script-root lookups. Bytes
+    // only (each VM still parses its own chunk), so a VM is the same with or without it. Safe for load()'s jobs.
+    class ReadCache;
+    std::shared_ptr<ReadCache> read_cache_;
     std::vector<Entry> entries_;  // by plan index
     size_t created_ = 0;
 };
@@ -114,6 +127,11 @@ public:
         missing_.clear();
     }
     size_t loaded() const { return vms_.size(); }
+    // Teardown (OPT3 t11): moves every loaded VM to the end of `out` (name order) and forgets them (missing kept).
+    void take_vms(std::vector<std::unique_ptr<lua::LuaVm>>& out) {
+        for (auto& [key, l] : vms_) out.push_back(std::move(l.vm));
+        vms_.clear();
+    }
 
     // ---- N1 save / load ----
     struct Loaded {
