@@ -28,7 +28,8 @@
 // modelled (IDD_INTERNET_LOGIN_DIALOG is never opened); combos show the strings the network layer supplies (factions,
 // colours, teams); a game list row is "name  map  players/max  ping"; chat keeps the last 200 lines; the staging
 // option display (IDC_GAME_OPTIONS_CLIENT_DISPLAY_LEFT / _RIGHT) shows "option" / "setting" lines joined by "\n", for
-// clients only (it overlaps the host's map buttons); colour combos draw swatches when StagingState::color_values is set.
+// clients only (it overlaps the host's map buttons); colour combos hold one glyph per palette entry (U+25A0 staging, U+2588 LAN lobby) drawn in the entry's colour when
+// StagingState::color_values / set_colors values are given (UI.md §3.7.1).
 #pragma once
 #include <cstdint>
 #include <span>
@@ -68,7 +69,7 @@ struct StagingState {
     std::vector<std::u32string> maps;
     int32_t map = -1;
     std::vector<std::u32string> factions, colors, teams;
-    std::vector<Rgba8> color_values;  // optional: colour combos draw swatches (GuiControl::item_colors)
+    std::vector<Rgba8> color_values;  // optional: colour combo items become one glyph per entry in that colour (GuiControl::item_colors)
     std::vector<std::pair<std::u32string, std::u32string>> options;  // display lines (option, setting)
     std::string map_image;         // IDC_IMAGE texture
 };

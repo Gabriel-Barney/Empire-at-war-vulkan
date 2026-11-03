@@ -313,7 +313,8 @@ public:
     bool smoke_ok_ = true;
     std::vector<std::string> notes_;
     uint64_t battles_seen_ = 0;
-    size_t space_map_count_ = 0;  // skirmish list rows before the first land map
+    // p4ui t06: the skirmish map catalog (UI.md section 9), built once when the menus are set up (null before).
+    std::shared_ptr<const game::SkirmishMapCatalog> skirmish_catalog_;
     // ---- P4 screens, panels, hotkeys, cursor, radar (second hosting pass) ----
     ui::GameScreens screens_;
     ui::InfoScreens info_;
@@ -548,6 +549,8 @@ public:
     void route_commands(std::vector<commands::EventData>& cmds, std::span<const uint8_t> voice = {});
     void toggle_pause();
     void open_buy_units(const SessionSpec& spec);
+    // A land skirmish map? Its catalog kind (mini 01) when the map is cataloged, else the old name rule ("_LAND" in the name).
+    bool skirmish_map_is_land(const std::string& map) const;
     // Planet type shown for battle planet row `p`: in a skirmish the map's planet (skirmish_map_planet_type, [port]),
     // else / when the map names none the row's own type.
     uint32_t display_planet_type(const galactic::GalacticSim& g, PlanetIndex p) const;

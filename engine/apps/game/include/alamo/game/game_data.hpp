@@ -110,6 +110,36 @@ inline constexpr PlanetIndex kSkirmishHumanPlanet = 2, kSkirmishBattlePlanet = 1
 std::vector<std::string> skirmish_space_maps(const GameData& data);
 // Land skirmish maps (Data\Art\Maps\_MP_LAND_*.ted), sorted. Empty without a VFS.
 std::vector<std::string> skirmish_land_maps(const GameData& data);
+// ---- Skirmish map catalog (docs/re/UI.md section 9, roadmap p4ui t06) --------------------------------------------------
+// The menu's map table: three scans over the layers, each map's header (top chunk 0 of the .ted) read through the normal
+// VFS lookup (mod > FoC loose > MEGs > fallbacks, so a mod's copy of an official map name decides its header).
+//   official      Data\Art\Maps\*.TED   from the FoC-loose and MEG layers; every entry kept, readable or not
+//   custom scan   Data\CustomMaps\*.TED from the FoC-loose and MEG layers, plus Data\Art\Maps\*.TED from the mod layer;
+//                 an entry is kept only when its custom flag (mini 0B) is 1
+// Entries are keyed by the logical path (one entry per path per list; the same path can sit in both lists), in path order.
+struct SkirmishMapEntry {
+    std::string path;      // normalised logical path, e.g. "DATA\ART\MAPS\_MP_LAND_ENDOR.TED"
+    std::string map;       // map id for SessionSpec::skirmish_map / terrain::map_path: the file stem when the file is directly
+                           // under DATA\ART\MAPS\ ("_MP_LAND_ENDOR"), else the full logical path
+    uint32_t kind = 0;     // mini 01: 1 land, 2 space (0 = absent or unreadable)
+    uint32_t players = 1;  // mini 02, 1 when absent
+    bool custom = false;   // mini 0B == 1: the Custom tab shows it, else the Official tab
+    std::string name_key;  // mini 08 (UTF-8 text key), "" when absent
+    bool readable = false; // the file was read and its map-info chunk decoded
+};
+struct SkirmishMapCatalog {
+    std::vector<SkirmishMapEntry> official;
+    std::vector<SkirmishMapEntry> custom_scan;  // kept entries only (custom flag 1)
+};
+// Builds the catalog (reads every candidate's header once). Empty over a null VFS / GameData without one.
+SkirmishMapCatalog build_skirmish_map_catalog(const vfs::Vfs& vfs);
+SkirmishMapCatalog build_skirmish_map_catalog(const GameData& data);
+// The skirmish list of one tab: entries of `official` then `custom_scan` with kind 1 or 2, players >= 2 and
+// custom == `custom_tab` (UI.md 9.4); a logical path listed in both lists appears once.
+std::vector<SkirmishMapEntry> skirmish_map_rows(const SkirmishMapCatalog& catalog, bool custom_tab);
+// The entry for a map id (a stem, a file name or a path: the terrain::map_path rule, case-insensitive), nullptr when absent.
+const SkirmishMapEntry* find_skirmish_map(const SkirmishMapCatalog& catalog, std::string_view map);
+
 // [port] (no RE rule) the planet type a skirmish map stands for: the name after "_MP_SPACE_" / "_MP_LAND_" (path and
 // extension dropped, case ignored) when it names a PLANET type, e.g. _MP_LAND_TATOOINE -> "Tatooine"; "" otherwise.
 // Presentation only (load screen portrait, tactical HUD planet name): the skirmish galaxy's planets keep the

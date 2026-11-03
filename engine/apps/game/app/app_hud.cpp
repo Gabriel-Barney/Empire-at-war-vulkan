@@ -484,21 +484,39 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
     }
     const GameSession* s = session_.get();
     const std::vector<ui::HudTypeInfo>* types = &ui_.hud_types;
+    // UI.md §7.5: every fleet in orbit that the local player may see, with its slot and enemy flag; the ui places them in the
+    // three panes. The visibility is the map stacks' rule (planet_icons): own and allied fleets always, others with
+    // FleetPresence and not all-stealthed, their units only with FleetContents (else one blank unit, as the map's single stack).
     f.providers.fleets = [s, types](uint32_t planet, std::vector<ui::GalacticFleet>& out) {
         const galactic::GalacticSim* gs = s ? s->galaxy() : nullptr;
         if (!gs) return;
+        const PlanetIndex row = planet_index(*gs, planet);
+        if (row == kInvalidPlanet) return;
+        using PI = galactic::GalacticSim::PlanetInfo;
+        const int32_t me = s->local_player();
+        const bool presence = gs->can_see_planet_info(me, row, PI::FleetPresence);
+        const bool contents = gs->can_see_planet_info(me, row, PI::FleetContents);
         const objects::ObjectStore& st = gs->store();
         for (const galactic::FleetState& fl : gs->fleets()) {
-            if (!fl.alive || fl.owner != s->local_player() || fl.planet == kInvalidPlanet) continue;
-            const galactic::PlanetState& p = gs->planets()[fl.planet];
-            if (!st.exists(p.object) || static_cast<uint32_t>(st.id(p.object)) != planet || out.size() >= 3) continue;
+            if (!fl.alive || fl.planet != row || fl.contents.empty()) continue;
+            const bool own = me >= 0 && fl.owner >= 0 && gs->allied(me, fl.owner);
+            if (!own && !presence) continue;
             ui::GalacticFleet gf;
-            gf.fleet = static_cast<uint32_t>(st.id(fl.object));
+            gf.fleet = st.alive(fl.object) ? static_cast<uint32_t>(st.id(fl.object)) : 0u;
+            gf.slot = fl.slot;
+            gf.enemy = fl.owner != me;
+            bool all_stealth = true;
             for (const objects::ObjectHandle m : fl.contents) {
                 if (!st.alive(m)) continue;
+                all_stealth = all_stealth && gs->hidden(m);
+                if (!own && !contents) {
+                    if (gf.units.empty()) gf.units.push_back({0u, std::string(), 1, false});
+                    continue;
+                }
                 const objects::TypeIndex t = st.type(m);
                 gf.units.push_back({static_cast<uint32_t>(st.id(m)), t < types->size() ? (*types)[t].icon_name : std::string(), 1, false});
             }
+            if (gf.units.empty() || gf.fleet == 0 || (!own && all_stealth)) continue;
             out.push_back(std::move(gf));
         }
     };
