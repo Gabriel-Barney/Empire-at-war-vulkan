@@ -890,6 +890,88 @@ static void test_foc_campaigns() {
     }
 }
 
+// q6 t03 (STORY.md §1.1, §3): Thrawn's Revenge's Thrawn_Empire plot names a prereq `Unlock_Wayland` that no event
+// defines (the event is `Trigger_Unlock_Wayland`; the other plot of the set and the plot's Lua do not define it either).
+// The name is dropped from its group with a warning, so the event is nobody's dependant and never arms, however many
+// other events fire; a definition in another plot does not resolve it. Only a RESET_BRANCH re-check arms it (its now
+// empty group counts as satisfied). Names that do exist resolve case-insensitively.
+static const char kUnknownPrereq[] = R"(<Story>
+  <Event Name="Obroa_Skai_Raid"><Event_Type>STORY_GENERIC</Event_Type><Event_Param1>raid</Event_Param1></Event>
+  <Event Name="Trigger_Unlock_Wayland"><Event_Type>STORY_TRIGGER</Event_Type><Prereq>Obroa_Skai_Raid</Prereq></Event>
+  <Event Name="Jump_Camera_Wayland"><Event_Type>STORY_TRIGGER</Event_Type><Branch>Wayland</Branch>
+     <Prereq>Unlock_Wayland</Prereq></Event>
+  <Event Name="Flash_Wayland"><Event_Type>STORY_TRIGGER</Event_Type><Prereq>Unlock_Wayland</Prereq></Event>
+  <Event Name="Mixed_Case"><Event_Type>STORY_TRIGGER</Event_Type><Prereq>trigger_unlock_WAYLAND</Prereq></Event>
+  <Event Name="Reset_W"><Event_Type>STORY_GENERIC</Event_Type><Event_Param1>reset</Event_Param1>
+     <Reward_Type>RESET_BRANCH</Reward_Type><Reward_Param1>Wayland</Reward_Param1></Event>
+</Story>)";
+
+static void test_unknown_prereq() {
+    StoryModel m;
+    std::string err;
+    CHECK(m.add_plot("Story_ThrawnCampaign_Empire.xml", kUnknownPrereq, true, {}, &err) == 0);
+    CHECK(m.warnings().size() == 2);
+    for (const std::string& w : m.warnings()) CHECK(w.find("has unknown prereq UNLOCK_WAYLAND") != std::string::npos);
+    CHECK(m.add_plot("Other.xml",
+                     "<Story><Event Name=\"Unlock_Wayland\"><Event_Type>STORY_GENERIC</Event_Type>"
+                     "<Event_Param1>other</Event_Param1></Event></Story>",
+                     true, {}, &err) == 1);
+    CHECK(m.warnings().size() == 2);
+    const uint32_t jump = m.find_event(0, "Jump_Camera_Wayland"), flash = m.find_event(0, "Flash_Wayland");
+    CHECK(m.plot(0).events[jump].unresolved_prereq && m.plot(0).events[jump].prereqs.size() == 1 &&
+          m.plot(0).events[jump].prereqs[0].empty());
+    m.update(0, 0.0);
+    const StoryParam other[] = {StoryParam::of_text("other")};
+    CHECK(m.push_trigger("STORY_GENERIC", other) == 1 && fired_count(m, "Unlock_Wayland") == 1);  // plot 1 only
+    const StoryParam raid[] = {StoryParam::of_text("raid")};
+    CHECK(m.push_trigger("STORY_GENERIC", raid) == 3);  // Obroa_Skai_Raid, then Trigger_Unlock_Wayland and Mixed_Case
+    CHECK(fired_count(m, "Trigger_Unlock_Wayland") == 1 && fired_count(m, "Mixed_Case") == 1);
+    for (uint32_t f = 1; f <= 3; ++f) m.update(f, static_cast<double>(f));
+    CHECK(fired_count(m, "Jump_Camera_Wayland") == 0 && fired_count(m, "Flash_Wayland") == 0);
+    CHECK(!m.plot(0).state[jump].armed && !m.plot(0).state[flash].armed);
+    // RESET_BRANCH Wayland: the re-check finds the empty group satisfied, arms Jump_Camera_Wayland and (TRIGGER) fires it.
+    const StoryParam reset[] = {StoryParam::of_text("reset")};
+    CHECK(m.push_trigger("STORY_GENERIC", reset) == 2);
+    CHECK(fired_count(m, "Jump_Camera_Wayland") == 1 && fired_count(m, "Flash_Wayland") == 0);
+}
+
+// q6 t03: Thrawn's Revenge (workshop 1125571106, next to a Steam FoC install) plot sets load; their load warnings are
+// printed. Thrawn_Empire's Empire set has the two `Unlock_Wayland` warnings (a data error in the mod, see above).
+static void test_tr_campaign_plots() {
+#ifdef ALAMO_LUA_HAVE_VFS
+    const std::string foc = env("ALAMO_FOC_DATA");
+    const size_t at = foc.find("\\steamapps\\common\\");
+    const std::string tr = at == std::string::npos ? std::string() : foc.substr(0, at) + "\\steamapps\\workshop\\content\\32470\\1125571106";
+    if (tr.empty() || !fs::exists(path_from_utf8(tr + "\\Data\\XML\\GameObjectFiles.xml"))) {
+        std::printf("  Thrawn's Revenge not found next to ALAMO_FOC_DATA: TR plots skipped\n");
+        return;
+    }
+    vfs::VfsConfig cfg;
+    cfg.foc_root = foc;
+    cfg.mod_paths = {tr};
+    std::string err;
+    std::unique_ptr<vfs::Vfs> files = vfs::Vfs::create(cfg, &err);
+    CHECK(files != nullptr);
+    if (!files) return;
+    int32_t wayland = 0;
+    for (const char* set : {"Conquests\\Historical\\9_ABY_ThrawnCampaign\\Story_Plots_ThrawnCampaign_Empire.xml",
+                            "Conquests\\Historical\\9_ABY_ThrawnCampaign\\Story_Plots_ThrawnCampaign_Container.xml",
+                            "Conquests\\Historical\\9_ABY_ThrawnCampaign\\Story_Plots_ThrawnCampaign_Rebel.xml",
+                            "Conquests\\Historical\\10_ABY_OperationShadowHand\\Story_Plots_OperationShadowHand_Empire.xml",
+                            "Conquests\\Historical\\10_ABY_OperationShadowHand\\Story_Plots_OperationShadowHand_Container.xml",
+                            "Conquests\\Historical\\10_ABY_OperationShadowHand\\Story_Plots_OperationShadowHand_Rebel.xml"}) {
+        StoryModel m;
+        CHECK(m.load_plots(*files, set, &err));
+        std::printf("  TR %s: %zu plots, %zu load warnings\n", set, m.plot_count(), m.warnings().size());
+        for (const std::string& w : m.warnings()) {
+            std::printf("    %s\n", w.c_str());
+            wayland += w.find("unknown prereq UNLOCK_WAYLAND") != std::string::npos ? 1 : 0;
+        }
+    }
+    CHECK(wayland == 2);
+#endif
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     log::set_min_level(log::Level::Warn);
@@ -901,10 +983,12 @@ int main() {
     test_prereqs_elapsed_perpetual();
     test_exact_params();
     test_branches();
+    test_unknown_prereq();  // q6 t03
     test_timeouts_and_pause();
     test_conquer_count_plots_flags();
     test_coverage();
     test_foc_campaigns();
+    test_tr_campaign_plots();  // q6 t03
     if (g_fail) {
         std::printf("alamo_lua_story_tests: %d FAILED\n", g_fail);
         return 1;

@@ -195,6 +195,14 @@ whose accumulated time already reached its threshold therefore fires on its next
   If an event is reset by RESET_EVENT while all of its prereqs remain triggered, it stays unarmed until one of
   those prereqs fires again.
 - List separators: whitespace and commas are both accepted by the generic list parser [M].
+- Consequence for an unknown name (2026-11-03, q6 t03, from the rules above, no new binary reading): the name is
+  dropped, the event is not in that name's dependants list, and when the name was the group's only one the group is
+  empty. Such an event is armed only by a RESET_BRANCH re-check of its branch (where the empty group counts as
+  satisfied), never by other events firing. Mod data with this: Thrawn's Revenge `Story_ThrawnCampaign_Empire.xml`
+  `Jump_Camera_Wayland` / `Flash_Wayland` (Prereq `Unlock_Wayland`; the event is named `Trigger_Unlock_Wayland`, no
+  other plot of the set and no script defines it) and `Story_OperationShadowHand_Container.xml` (four events on
+  `NR_Byss_Raid_Mothma_Speech`, whose definition is commented out). Neither has a Branch, so those events never fire.
+  The port keeps the load warning (the original logs "Unable to find event ..."). Test: `test_unknown_prereq`.
 
 ## 4. Evaluation order and cadence (question 4)
 
