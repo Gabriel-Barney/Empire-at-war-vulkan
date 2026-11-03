@@ -680,9 +680,65 @@ games, so compare distributions). Main = `origin/main` 6d63bcf with temporary zo
 (CPU 43-96 %, 3-10 other heavy processes) gave the same picture for the cache change: land mean 8.35 / 7.15 → 4.13 / 2.92 ms,
 ticks over 33 ms 92 / 67 → 17 / 1.
 
-Remaining land spikes (follow-ups, not started): `ai.goals` p99 11 ms, max 25-27 ms, now almost all candidate values: OPT2 t03's
+Remaining land spikes: `ai.goals` p99 11 ms, max 25-27 ms, now almost all candidate values: OPT2 t03's
 batched `evaluate_prepared` (one heavy candidate per slice takes up to 33 ms under load; a slice's values wait for its slowest
-one) and the `Script_` evaluators run in place (up to 9 ms; Lua, serial).
+one) and the `Script_` evaluators run in place (up to 9 ms; Lua, serial). Fixed in OPT2 t13 (next section).
+
+## Goal-scoring spikes (OPT2 t13, 2026-11-03)
+
+**Where the time went.** Profiled with temporary zones inside the goal system (slice, batched values, in-place values, Commit) and
+temporary per-equation and per-leaf timers (removed again), on the FoC land skirmish (`--skirmish-ai foc-land --ticks 7000`), the land
+campaign battle (`foc-land-campaign`) and the space battle (`foc-station --seed 3`). On land, one equation made the spikes:
+`Need_To_Sell_Tactical_Structure` took 10.8 ms per evaluation on average (max 19.6 ms; 987 evaluations, 10.6 s of the run). It calls
+five `Need_*` equations twice each, and they share more sub-equations, so one candidate evaluates a few thousand leaves. Most of those
+leaves are cheap or come from the leaf cache. One is not: **`Variable_Self.OpenBuildPadCount {Parameter_Type = ...}`** (cache lifetime 0, so
+it is computed every time) ran `type_index()` for every open pad and every listed name. Each call is a case-insensitive scan of every
+object type name, and the result fed only the host's `pad_accepts` hook, which no host installs. That leaf was 25.5 s of the 28.6 s spent
+in all perception leaves on land: 66,749 calls at about 380 us each. The other heavy equations (`Need_*_Turret`,
+`Tactical_Multiplayer_Should_Build_*`) and the in-place `Script_` ones (`Need_To_Secure_Contestable_Land`: Lua plus the same leaf) were slow for
+the same reason. The Lua evaluator calls themselves are about 3.5 us each (`TargetHasProperty`). Space has no such leaf: its goal values are
+20-35 us per candidate and `ai.goals` p99 is under 1 ms.
+
+**Fix [port, same results]** (`tactical_perception.cpp`, `OpenBuildPadCount`): the listed names' type indices are looked up once per call,
+and only when `pad_accepts` is installed. The hook is called with the same arguments in the same order as before, and `type_index()` is a pure
+lookup. `alamo_ai_tactical_perception_tests` `test_open_pad_types` covers the hook path: own-type match, unknown names, call order, and stopping
+at the first yes. After the fix, the same instrumented land run spends 2.6 s in perception leaves instead of 28.6 s, and
+`Need_To_Sell_Tactical_Structure` takes 0.63 ms (max 0.91 ms).
+
+Checks: per-tick CRC logs are byte-identical to `origin/main` (1f09584) for land (7000 ticks), the land campaign battle (to its end, 2819),
+space (to its end, 9579) and HotM (18000 ticks). Worker-count check: land and space at 0 / 1 / 4 / 16 / 15 workers all equal main's
+15-worker log. Clang's logs equal main's MSVC logs for all four. No golden changed. No parallel code was added.
+
+Before / after (`alamo_headless --profile --profile-budget 33.33`, MSVC `/O2`, 15 workers, main and this branch run alternately, two rounds
+of one run each). Other sessions loaded the PC. CPU load and the count of other alamo / compiler / ctest processes were sampled around every run:
+round 1 at 74-99 % CPU with 8-10 processes, round 2 for land and the land campaign at 56-84 % with 0-6 processes. Round 2 is the cleaner
+comparison. The tick max is battle setup in every run (frame 1 / 22 / 33).
+
+| Scenario, round (load) | Tick mean / p50 / p99 ms | Ticks > 33.3 ms | `ai.goals` mean / p99 / max ms | `tac.ai.p0` / `p1` p99 ms |
+|---|---|---|---|---|
+| Land 7000 ticks, r1 (heavy): main | 4.07 / 2.36 / 23.9 | 23 | 2.01 / 21.3 / 58.4 | 17.6 / 17.4 |
+| Land, r1: t13 | 3.06 / 2.75 / 7.32 | 1 | 0.62 / 3.05 / 11.0 | 1.94 / 1.89 |
+| Land, r2 (~60 %): main | 3.07 / 1.93 / 19.7 | 7 | 1.49 / 18.1 / 34.2 | 13.7 / 14.0 |
+| Land, r2: t13 | 1.73 / 1.65 / 2.56 | 1 | 0.28 / 1.01 / 4.27 | 0.65 / 0.69 |
+| Land campaign (2819 ticks), r1 (heavy): main | 2.95 / 2.46 / 7.88 | 2 | 0.97 / 5.07 / 17.2 | 3.82 / 3.95 |
+| Land campaign, r1: t13 | 2.40 / 2.17 / 6.22 | 2 | 0.49 / 2.22 / 16.4 | 1.54 / 1.56 |
+| Land campaign, r2 (~60 %): main | 1.63 / 1.37 / 3.68 | 1 | 0.47 / 2.32 / 5.15 | 1.88 / 2.00 |
+| Land campaign, r2: t13 | 1.39 / 1.32 / 2.39 | 1 | 0.24 / 0.76 / 4.16 | 0.52 / 0.55 |
+| Space (9579 ticks), r2: main | 1.18 / 0.99 / 3.31 | 4 | 0.14 / 0.76 / 5.49 | 0.42 / 0.32 |
+| Space, r2: t13 | 1.11 / 1.02 / 2.65 | 2 | 0.14 / 0.75 / 3.13 | 0.42 / 0.35 |
+
+Space is unchanged within noise, as expected: the fix does not touch its path. Its round-2 runs straddled a load jump from 4 % to 100 % CPU
+(12 processes). The land campaign's `ai.goals` max of 16 ms in round 1 is one preempted tick (`tac.ai.p1` 16.1 ms, its round-2 max 4.0 ms).
+
+What is left over budget or near it (follow-ups, not goal scoring):
+- `ai.goals.commit` 4-7 ms on about 10-13 ticks per land battle: the PotentialPlan re-solve at activation (`plan_activatable`, up to 3.3 ms)
+  and plan instantiation (up to 4.3 ms). Re-evaluating the incumbents is at most 0.66 ms.
+- `tac.movement`: land 10-12 ms at frames 62-66 (both builds), space 41 ms at frame 4651.
+- Battle teardown: the land campaign's last tick (2819) is 26 ms and space's (9579) is 24-39 ms in `T5.battles` outside the `tac.*` zones.
+- `tac.ai.perception` on the first AI tick of a battle: 7.6 ms on land, 10.5 ms on the land campaign.
+- In the goal values, half of the remaining leaf time is building the leaf-cache key (`canonical_params` text) and the mutex-guarded
+  `std::map` lookup (about 1 us per cached leaf). A shared lock and precomputed parameter text would cut it, but goal values are
+  no longer a spike source (land `ai.goals.values` p99 about 1 ms).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
