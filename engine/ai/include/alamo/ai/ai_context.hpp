@@ -12,6 +12,13 @@
 // Perception 10 s (only reschedules), Learning 10 s (pruning) [H].
 // NOW is the global logic frame. No wall clock is read anywhere (the prior patch's 6 ms pacing is not
 // original and is not ported, §1.3).
+//
+// OPT2 t01 stagger [port]: in the original every AI player's Perception / Goal / Planning / Execution / Learning clocks
+// start at 0, so all players plan on the same frames (every 3rd frame). set_stagger(slot, slots) gives a player a fixed
+// tick offset from its AI ordinal (players in index order): on the first service each of these clocks gets its first
+// due frame NOW + stagger_offset(slot, slots, period) (the Goal clock, which runs every frame, takes the Planning
+// period: it shifts the first goal-proposal pass), after which the clocks reschedule as before, so a player keeps its
+// phase. Slot 0 keeps the original timing. Tick numbers only; the clocks are saved, the stagger is the owner's setting.
 #pragma once
 #include <array>
 #include <cstdint>
@@ -54,6 +61,13 @@ public:
     void service(int64_t now, bool enabled, bool auto_resolve_busy);
 
     bool initialised() const { return initialised_; }
+    // OPT2 t01: this player's AI ordinal and the AI player count (call before the first service).
+    void set_stagger(int32_t slot, int32_t slots) {
+        stagger_slot_ = slot;
+        stagger_slots_ = slots;
+    }
+    // (slot x period / slots) mod period: the slots spread evenly over one period; 0 for slots <= 1 or period <= 1.
+    static int32_t stagger_offset(int32_t slot, int32_t slots, int32_t period);
     int32_t opponent = -1;  // +0x30
     GoalSystem goals;
     TemplateSystem templates;
@@ -76,6 +90,7 @@ private:
     bool initialised_ = false;
     ContextModeServices* services_ = nullptr;
     TemplateSystem::Evaluator eval_;
+    int32_t stagger_slot_ = 0, stagger_slots_ = 0;  // OPT2 t01
 };
 
 // TheAIClass (vt 0x8795f8): enable gate only (§1.1). Is-enabled = master && perMode[mode] [H]; Start_Game

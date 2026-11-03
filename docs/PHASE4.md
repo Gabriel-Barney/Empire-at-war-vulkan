@@ -344,6 +344,50 @@ more than their headroom within one period (not traced per VM; a fresh plan VM l
 so the parallel batch matters only for bursts. Running the AI players' scripts themselves in parallel was investigated and left
 as OPT2 t08 (`docs/OPT_RESEARCH.md` section 5: the AI bindings write shared AI state and draw from the one synced RNG stream).
 
+## AI scheduling (OPT2 t01 / t02, OPT3 t04, 2026-11-02)
+
+Two changes to *when* the AI thinks; what it computes is unchanged. Both are scheduled by tick number only (rule 3), and
+`alamo_headless --ai-latency 0 --no-ai-stagger` (galactic and skirmish AI runs) restores the old timing: with those two knobs every
+golden of the suite passed unchanged before the defaults were switched (MSVC, 2026-11-02), so the goldens that moved below moved
+for timing only.
+- **Stagger (t01).** `AiContext::set_stagger(slot, slots)`: each AI player's Perception / Goal / Planning / Execution / Learning
+  clocks start `(slot * period / slots) % period` frames after initialisation, `slot` = the player's ordinal among the world's AI
+  players (by player index), `slots` = their number. Players on the same period no longer all plan on the same frame. Galactic
+  (`GalacticAiConfig::stagger`) and tactical (`TacticalAiConfig::stagger`, `BattleAi` via `TacticalAiSetup::stagger`); default on.
+- **Fixed-latency background jobs (t02).** `alamo/ai/latency_job.hpp`: `LatencyJob<T>` kicks a computation on tick N from a copy
+  of its inputs and applies the result on tick N + k, never earlier, blocking on N + k when the job is late. The host hook
+  `BackgroundStart` (like `ParallelFor`; `jobs::make_background_start` runs it as one Background-priority job, a serial host runs it
+  inline at the kick with the same result) keeps engine/ai free of engine/jobs. Converted:
+  - galactic AI all-pairs path recomputes (`AiPathFinder`, Q11 cadence every 90 frames): k = `galactic::kDefaultAllPairsLatency`
+    = 15 frames by default (`GalacticAiConfig::path_latency`). The creation recompute stays synchronous (the AI needs paths on
+    its first frame). `alamo_headless --synthetic`'s `--latency` defaults to the same 15 (was a flag, default 0).
+  - tactical zone reachability (land path finder, `ZoneReachability::compute` / `adopt`): the execution-service recompute is
+    kicked with the threat costs of that frame and adopted 15 frames later (`TacticalAiConfig::path_latency`).
+  The CRC hashes a job's ready frame only while it is in flight, so the latency-0 path hashes exactly what it did before.
+- **Save rule (OPT3 t04).** Stagger needs no save data: the clocks' next-due frames are already saved, and the phases are a
+  function of the player list. An in-flight job is saved as its inputs plus kick / ready frame (`AiPathFinder` save version 2,
+  tactical AI world version 8); a load re-runs it inline from those inputs and applies it on the saved ready frame, so the loaded
+  run applies the same matrices on the same tick. Tests: `alamo_ai_tests` (`test_path_finder_background`: save at three points of a
+  job's life, 0 / 1 / 4 / 16 / default workers), `alamo_headless_save_hotm_scheduled` and
+  `alamo_headless_save_skirmish_foc_land_scheduled` (`--save-when scheduled`: save on the first tick at or after `--save-at` with
+  a job in flight, `--save-check` compares the loaded run's CRC log with the uninterrupted one).
+- **Not converted (follow-ups).** Galactic AI perception (`GalacticPerception::update`) runs once per frame and the same frame's
+  token resolver reads its memory, so a latency there changes what the resolver sees, not only when; it costs under 1 ms a frame
+  on HotM. Task-force planning (the PP solve) draws from the synced RNG in proposal order and its accept is synchronous: a
+  background solve needs per-solve RNG streams and a pending-goal state first.
+
+Moved goldens (regenerated with MSVC; each run again with one knob against the old golden to name the cause):
+
+| Golden | Moved by | First difference |
+|---|---|---|
+| `ai/tests/golden/ai_galactic_synthetic_crc.txt` | stagger (p1 plans 1 frame later) | the 15-min synthetic campaign cascades: end state E=0 R=8 became E=4 R=4 |
+| `ai/tactical/tests/golden/ai_tactical_world_crc.txt` | stagger + latency | p1 decisions 1 frame later; move targets from paths applied 15 frames after the kick |
+| `apps/headless/testdata/galactic_ai_hotm_golden.txt`, `galactic_ai_hotm_human_golden.txt` | stagger only (latency 15 alone matches) | AI decision log |
+| `apps/headless/testdata/skirmish_ai_synthetic_golden.crc`, `skirmish_ai_foc_golden.crc` (space) | stagger only (latency alone identical) | tick 114 / 34, system `rng` (AI draws on other frames) |
+| `apps/headless/testdata/skirmish_ai_foc_land_golden.crc`, `skirmish_ai_foc_land_campaign_golden.crc` | stagger and latency (each alone moves it) | tick 2 / 23, system `battle.ai` (the hash holds an in-flight job's ready frame) |
+
+`replay_golden.crc` did not move: the recorded stream stores its latency (0) in its metadata and replays with it.
+
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
 `build_asan.cmd` runs clang 20 (MSVC ABI) with UBSan by default; `ALAMO_SANITIZE=address` adds ASan.

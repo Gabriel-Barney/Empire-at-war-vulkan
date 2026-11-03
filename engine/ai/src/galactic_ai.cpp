@@ -7,6 +7,7 @@
 #include <span>
 
 #include "alamo/ai/ai_free_store_path.hpp"
+#include "alamo/core/profile.hpp"
 
 #include "alamo/data/xml.hpp"
 #include "alamo/lua/gc_schedule.hpp"  // OPT2 t04
@@ -637,6 +638,11 @@ void PlayerAi::drop_potential_plan(Goal& g) {
         w->pps.erase(g.pp_handle);
     }
     g.pp_handle = -1;
+}
+
+PlayerAi::PlayerAi(GalacticAiWorld::Impl* world, int32_t p, const AiPlayerTypeDef* t, int32_t d)
+    : w(world), player(p), type(t), difficulty(d) {
+    paths.set_background(world->cfg.path_latency, world->cfg.background);  // OPT2 t02
 }
 
 int32_t PlayerAi::quota_players() {
@@ -1856,6 +1862,11 @@ bool GalacticAiWorld::start(std::vector<std::string>* diagnostics) {
         gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
         p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
         p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, p.ctx.opponent, eq, -1, out); });
+        if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)
+            int32_t ordinal = 0;
+            for (const GalacticAiPlayerConfig& o : w.cfg.players) ordinal += o.player < pc.player ? 1 : 0;
+            p.ctx.set_stagger(ordinal, static_cast<int32_t>(w.cfg.players.size()));
+        }
         const std::string& fs = type->free_store_script[static_cast<size_t>(AiMode::Galactic)];
         if (!fs.empty() && w.files) {
             std::vector<uint8_t> bytes;
@@ -1910,6 +1921,7 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
     Impl& w = *impl_;
     w.now = now;
     if (w.perception_frame != now) {
+        ALAMO_PROFILE_SCOPE("ai.gal.frame");  // OPT2 t01: once-per-frame work (GC, snapshot, perception, story requests)
         w.perception_frame = now;
         {  // OPT2 t04: staggered scheduled Lua collections, once per frame before any script of this world runs
             std::vector<lua::LuaVm*> vms;  // free stores by player, plans by id, evaluators by name (saved orders)
@@ -1921,6 +1933,9 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
                 if (e.vm) vms.push_back(e.vm.get());
             lua::collect_scheduled(vms, static_cast<uint64_t>(now), w.cfg.lua_gc_pf);
         }
+        // OPT2 t02: background path recomputes due on this galactic frame are applied before anything reads them.
+        for (const auto& a : w.ai)
+            if (a) a->paths.publish(static_cast<int32_t>(w.sim.frame()));
         w.snap = snapshot_from_sim(w.sim, w.cfg.ai_uses_fog_galactic);
         w.perc.update(w.snap, static_cast<uint32_t>(w.sim.frame()));
         w.mem.clear();
@@ -1993,6 +2008,11 @@ const AiContext* GalacticAiWorld::context(int32_t player) const {
     return p ? &p->ctx : nullptr;
 }
 size_t GalacticAiWorld::running_plans() const { return impl_->plans.size(); }
+size_t GalacticAiWorld::background_jobs_in_flight() const {
+    size_t n = 0;
+    for (const auto& a : impl_->ai) n += (a && a->paths.pending()) ? 1u : 0u;
+    return n;
+}
 size_t GalacticAiWorld::running_plans(int32_t player) const {
     size_t n = 0;
     for (const auto& [id, p] : impl_->plans) n += p.player == player ? 1u : 0u;

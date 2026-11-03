@@ -283,6 +283,12 @@ if(_alamo_sim)
                    --save-at 1800 ${CMAKE_CURRENT_BINARY_DIR}/n1_save_hotm.alsv --ticks 3600 --workers 4 --quiet)
   set_tests_properties(alamo_headless_save_synthetic PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
   set_tests_properties(alamo_headless_save_hotm PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77)
+  # OPT3 t04: saved mid-schedule - at the first tick >= T with a galactic AI path recompute in flight (kicked, applied 15
+  # frames later) and the AI players on their staggered planning phases; the loaded runs must match the uninterrupted CRCs.
+  add_test(NAME alamo_headless_save_hotm_scheduled
+           COMMAND alamo_headless --save-session hotm --save-when scheduled --save-check
+                   --save-at 1800 ${CMAKE_CURRENT_BINARY_DIR}/n1_save_hotm_scheduled.alsv --ticks 1800 --workers 4 --quiet)
+  set_tests_properties(alamo_headless_save_hotm_scheduled PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77)
   # N1 stage 2 (owner: n2-host): saves during a tactical battle (headless/save_run.hpp "Stage 2 options"). Each saves at
   # the first tick >= T matching --save-when and runs the full check (in-process, fresh-process, both replays, synced RNG).
   # All need ALAMO_FOC_DATA (skipped, exit 0, without it).
@@ -309,8 +315,13 @@ if(_alamo_sim)
     add_test(NAME alamo_headless_save_hotm_before_battle
              COMMAND alamo_headless --save-session hotm --battles fight-all --story --save-when galactic --save-check
                      --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_hotm_before_battle.alsv --ticks 1800 --workers 4 --quiet)
+    # OPT3 t04: the land skirmish saved with a land path recompute in flight (tactical AI, 15-frame latency).
+    add_test(NAME alamo_headless_save_skirmish_foc_land_scheduled
+             COMMAND alamo_headless --save-session skirmish --campaign foc-land --save-when scheduled --save-check
+                     --save-at 900 ${CMAKE_CURRENT_BINARY_DIR}/n2_save_skirmish_foc_land_scheduled.alsv --ticks 1200 --workers 4 --quiet)
     set_tests_properties(alamo_headless_save_skirmish_foc alamo_headless_save_skirmish_foc_land alamo_headless_save_hotm_battle
-                         alamo_headless_save_hotm_before_battle PROPERTIES TIMEOUT 1800 SKIP_RETURN_CODE 77)
+                         alamo_headless_save_hotm_before_battle alamo_headless_save_skirmish_foc_land_scheduled
+                         PROPERTIES TIMEOUT 1800 SKIP_RETURN_CODE 77)
     if(TARGET alamo_anim)
       # A battle with the animation on (anim worlds of the galaxy and the battle mode).
       add_test(NAME alamo_headless_save_skirmish_anim

@@ -546,7 +546,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     std::vector<std::vector<uint8_t>> reach;
     // AI execution path finder (GALACTIC.md §4): created at first service, serviced by execution_service.
     AiPathFinder paths;
-    PlayerAi(GalacticAiWorld::Impl* world, int32_t p, const AiPlayerTypeDef* t, int32_t d) : w(world), player(p), type(t), difficulty(d) {}
+    PlayerAi(GalacticAiWorld::Impl* world, int32_t p, const AiPlayerTypeDef* t, int32_t d);
 
     // ---- GoalModeHooks ----
     uint32_t target_count() override { return static_cast<uint32_t>(w->sim.planets().size()); }

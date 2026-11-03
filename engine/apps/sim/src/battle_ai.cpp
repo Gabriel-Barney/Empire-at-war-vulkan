@@ -12,6 +12,7 @@
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/jobs/job_system.hpp"
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/sim_host.hpp"
@@ -70,6 +71,9 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.log_decisions = setup.log_decisions;
     cfg.game_seed = host.session_seed();  // A2 tactical: perception '#' reseed (AI_GALACTIC_3 §7.3)
     cfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
+    cfg.background = jobs::make_background_start(host.jobs());  // OPT2 t02: background path recomputes
+    cfg.path_latency = setup.path_latency;
+    cfg.stagger = setup.stagger;  // OPT2 t01
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
     use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
     const tactical::Aabb& bb = mode.bounds();

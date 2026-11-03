@@ -28,6 +28,7 @@
 #include "alamo/core/dmath.hpp"  // refixf t06: space reinforcement ring directions
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: crc32 (perception '#' reseed)
+#include "alamo/core/profile.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/xml.hpp"
@@ -775,6 +776,27 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         paths.recompute_with_threat(w->perc.grid().valid() ? w->perc.zone_threat_fn(w->w, player) : ZoneThreatFn{});
         ++w->stats["land path finder recomputes"];
     }
+    // OPT2 t02: a cadence recompute in the background (TacticalAiConfig::path_latency): the node costs are taken from the
+    // threat grid on the kick frame, the all-pairs runs on the host's background hook (ZoneGraph::compute reads only
+    // the static zones and links) and is applied on kick + latency (publish_paths, start of the update). Declared after
+    // `paths`, so it is destroyed (waited for) first; `paths` is only replaced with no job in flight.
+    LatencyJob<ZoneGraphResult> path_job;
+    std::vector<uint32_t> path_pend;  // the in-flight recompute's node costs (N1 / OPT3 t04)
+    void kick_paths(int32_t frame) {
+        if (path_job.in_flight()) publish_paths(path_job.ready_frame());
+        path_pend = paths.threat_node_costs(w->perc.grid().valid() ? w->perc.zone_threat_fn(w->w, player) : ZoneThreatFn{});
+        start_paths_job(frame, frame + static_cast<int64_t>(w->cfg.path_latency), w->cfg.background);
+        ++w->stats["land path finder recomputes"];
+    }
+    void start_paths_job(int64_t kick, int64_t ready, const BackgroundStart& bg) {
+        path_job.kick(kick, ready, bg, [g = &paths, cost = path_pend](ZoneGraphResult& out) { g->compute(cost, out); });
+    }
+    bool publish_paths(int64_t frame) {
+        if (!path_job.due(frame)) return false;
+        paths.adopt(path_job.finish());
+        path_pend.clear();
+        return true;
+    }
 
     PlayerAi(TacticalAiWorld::Impl* world, int32_t p, const AiPlayerTypeDef* t, int32_t d)
         : w(world), player(p), type(t), difficulty(d), ctx(ai_mode_of(world->cfg.mode)), list(world->cfg.mode) {}
@@ -977,7 +999,8 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
             const auto f = static_cast<int32_t>(w->mode_frame);
             if (galactic::recompute_due(f, next_recompute)) {
                 next_recompute = galactic::next_after_service(f);
-                recompute_paths();
+                if (w->cfg.path_latency == 0) recompute_paths();
+                else kick_paths(f);
             }
         }
         w->service_statuses(player);
@@ -3051,6 +3074,11 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
         gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
         p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
         p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, eq, -1, out); });
+        if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)
+            int32_t ordinal = 0;
+            for (const TacticalAiPlayerConfig& o : w.cfg.players) ordinal += o.player < pc.player ? 1 : 0;
+            p.ctx.set_stagger(ordinal, static_cast<int32_t>(w.cfg.players.size()));
+        }
         // Free-store script (Land / Space FreeStoreScript of the AIPlayerType).
         const std::string& fs = type->free_store_script[mi];
         if (!fs.empty() && w.files) {
@@ -3089,6 +3117,8 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     Impl& w = *impl_;
     w.now = now;
     w.mode_frame = mode_frame;
+    for (auto& pa : w.ai)  // OPT2 t02: background land path recomputes due on this mode frame
+        if (pa) pa->publish_paths(static_cast<int64_t>(mode_frame));
     {  // OPT2 t04: staggered scheduled Lua collections, once per update before any script of this world runs
         std::vector<lua::LuaVm*> vms;  // free stores by player, plans by id, evaluators by name (saved orders)
         for (const auto& pa : w.ai)
@@ -3099,7 +3129,10 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
             if (e.vm) vms.push_back(e.vm.get());
         lua::collect_scheduled(vms, static_cast<uint64_t>(now), w.cfg.lua_gc_pf);
     }
-    w.refresh();
+    {
+        ALAMO_PROFILE_SCOPE("ai.tac.refresh");  // OPT2 t01: perception snapshot, object signals, UNIT_AI service
+        w.refresh();
+    }
     w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
     w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
     w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
@@ -3138,6 +3171,11 @@ const AiContext* TacticalAiWorld::context(int32_t player) const {
 size_t TacticalAiWorld::free_store_size(int32_t player) const {
     const PlayerAi* p = impl_->player_ai(player);
     return p ? p->fs.size() : 0;
+}
+size_t TacticalAiWorld::background_jobs_in_flight() const {
+    size_t n = 0;
+    for (const auto& a : impl_->ai) n += (a && a->path_job.in_flight()) ? 1u : 0u;
+    return n;
 }
 size_t TacticalAiWorld::live_targets(int32_t player) const {
     const PlayerAi* p = impl_->player_ai(player);
@@ -3190,6 +3228,7 @@ void TacticalAiWorld::hash(StateHasher& h) const {
         if (a->paths_built) {  // land path finder (TACTICAL_GAPS §6.1): cadence + all-pairs matrices
             h.i32(a->next_recompute);
             a->paths.hash(h);
+            if (a->path_job.in_flight()) h.i64(a->path_job.ready_frame());  // OPT2 t02 (nothing extra in the original timing)
         }
     }
     w.perc.hash(h);
@@ -3269,10 +3308,11 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 7;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
+constexpr uint32_t kTacticalAiSaveVersion = 8;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
                                                  // 5: refixf t06 space reinforcement status fields; 6: a1g t01 PP+0x100,
                                                  // entry +0x30 moved into the free store; 7: S7 t20/t21/t15 A1 (no had_units /
-                                                 // no_units_sent; ambush / ability status fields)
+                                                 // no_units_sent; ambush / ability status fields); 8: OPT3 t04 the
+                                                 // in-flight background land path recompute
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
@@ -3583,6 +3623,12 @@ void TacticalAiWorld::write(ByteWriter& w) const {
         w.boolean(p.paths_built);
         w.i32(p.next_recompute);
         if (p.paths_built) p.paths.write(w);
+        w.boolean(p.path_job.in_flight());  // 8: OPT3 t04, the in-flight background path recompute
+        if (p.path_job.in_flight()) {
+            w.i64(p.path_job.kick_frame());
+            w.i64(p.path_job.ready_frame());
+            io::put_vec(w, p.path_pend);
+        }
     }
     // ---- plans ----
     io::put_count(w, m.plans.size());
@@ -3775,6 +3821,9 @@ bool TacticalAiWorld::read(ByteReader& r) {
         bool paths_built = false;
         int32_t next_recompute = 0;
         ZoneGraph paths;
+        bool path_in_flight = false;  // OPT3 t04
+        int64_t path_kick = 0, path_ready = 0;
+        std::vector<uint32_t> path_pend;
     };
     std::vector<StagedPlayer> staged(m.ai.size());
     for (size_t i = 0; i < m.ai.size(); ++i) {
@@ -3835,6 +3884,13 @@ bool TacticalAiWorld::read(ByteReader& r) {
         if (sp.paths_built) {
             sp.paths = m.zones;  // the player's graph is a copy of the battle's, re-weighted by its threat
             if (!sp.paths.read(r)) return false;
+        }
+        sp.path_in_flight = r.boolean();
+        if (sp.path_in_flight) {
+            sp.path_kick = r.i64();
+            sp.path_ready = r.i64();
+            if (!io::get_vec(r, sp.path_pend)) return false;
+            if (!sp.paths_built || sp.path_ready < sp.path_kick || sp.path_pend.size() != m.zones.size()) return io::bad(r);
         }
     }
     // ---- plans ----
@@ -4085,7 +4141,10 @@ bool TacticalAiWorld::read(ByteReader& r) {
         pa.floods = std::move(sp.floods);
         pa.paths_built = sp.paths_built;
         pa.next_recompute = sp.next_recompute;
+        pa.path_job.cancel();
         pa.paths = sp.paths_built ? std::move(sp.paths) : ZoneGraph{};
+        pa.path_pend = std::move(sp.path_pend);
+        if (sp.path_in_flight) pa.start_paths_job(sp.path_kick, sp.path_ready, {});  // OPT3 t04: again, inline
     }
     m.plans = std::move(new_plans);  // the replaced plan VMs are destroyed (not pooled)
     m.tfs = std::move(new_tfs);

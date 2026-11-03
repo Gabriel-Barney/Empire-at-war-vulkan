@@ -66,6 +66,10 @@ struct TacticalAiSetup {
     int32_t difficulty = 1;  // 0 Easy, 1 Normal, 2 Hard
     ai::tactical::TacticalAiConstants constants;
     bool log_decisions = true;
+    // OPT2 t01 / t02 (TacticalAiConfig::stagger / path_latency): per-player planning phases; the land path finder's
+    // background recompute latency (0 = the original timing).
+    bool stagger = true;
+    uint32_t path_latency = galactic::kDefaultAllPairsLatency;
 };
 
 // [port] faction -> AIPlayerType for non-human playable players: Empire -> BasicEmpire, Rebel -> BasicRebel,
