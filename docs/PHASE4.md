@@ -442,9 +442,9 @@ for timing only.
   `alamo_headless_save_skirmish_foc_land_scheduled` (`--save-when scheduled`: save on the first tick at or after `--save-at` with
   a job in flight, `--save-check` compares the loaded run's CRC log with the uninterrupted one).
 - **Not converted (follow-ups).** Galactic AI perception (`GalacticPerception::update`) runs once per frame and the same frame's
-  token resolver reads its memory, so a latency there changes what the resolver sees, not only when; it costs under 1 ms a frame
-  on HotM. Task-force planning (the PP solve) drew from the synced RNG in proposal order and its accept was synchronous; OPT2
-  t10 gave it per-solve RNG streams, a pending-goal state and a background job ("Slot 10 accept (OPT2 t10)" below).
+  readers use its results; investigated in OPT2 t11 below and left serial. Task-force planning (the PP solve) drew from the
+  synced RNG in proposal order and its accept was synchronous; OPT2 t10 gave it per-solve RNG streams, a pending-goal state and
+  a background job ("Slot 10 accept (OPT2 t10)" below).
 - **`alamo_game`** passes the same background hook to its galactic AI (`game_session.cpp`; results unchanged, the smoke goldens
   did not move).
 
@@ -485,6 +485,76 @@ the pairs, not with the OPT1 table):
 
 The AI's own per-tick peaks were already small next to battle setup and `ai.goals` (the goal evaluation runs every frame for every
 player: the next candidate for spreading, OPT2 t03 / follow-ups).
+
+## Galactic perception latency (OPT2 t11, 2026-11-03)
+
+Question: should the galactic AI's per-frame perception update become a fixed-latency background job (`LatencyJob`, as the
+all-pairs in t02)? Answer: **no, leave it serial; t11 can be closed.** It costs too little to matter, and a latency changes
+what the AI decides. A prototype was built and measured; it is not merged (branch `claude/opt2-gal-perception-prototype`,
+commit 08cda18). The profiler zones it needed are kept.
+
+**Cost.** New zones: `ai.gal.snapshot` (`snapshot_from_sim`), `ai.gal.perception` (`GalacticPerception::update`, split into
+`ai.perc.observe` / `ai.perc.evaluate`), `ai.gal.memcopy`, `ai.gal.refresh`, `ai.gal.danger` (the danger mask,
+`ai_dangerous`) and `ai.perc.fill_view`. `alamo_headless --profile`, MSVC, default worker count. The galactic runs were on a
+nearly idle PC (CPU 0-12 %), the synthetic run at about 70 %:
+
+| Scenario | Tick mean / p99 (ms) | Perception mean / p99 / max (ms) | Share of `ai.*` |
+|---|---|---|---|
+| HotM, every faction an AI (13 planets, 4 AIs, 18000 ticks) | 0.21 / 0.55 | 0.008 / 0.014 / 0.07 | 4.8 % (8.9 % with snapshot and danger mask) |
+| HotM, scripted human Rebel (36000 ticks) | 0.20 / 0.76 | 0.007 / 0.012 / 1.5 (one preempted tick) | 4.5 % (11.6 %) |
+| FoC `Sandbox_Equal_Footing_Underworld`, the largest FoC galaxy (56 planets, 4 AIs, 18000 ticks) | 0.55 / 1.69 | 0.036 / 0.061 / 0.11 | 7.9 % (11.2 %) |
+| 400-planet synthetic, 4 AIs (`--synthetic 400 --ais 4`, 900 ticks; its own perception in `main.cpp`) | 0.49 / 1.51 | 0.27 / 0.44 / 0.70 (system `sys.ai.perception`, incl. 4 x `fill_view`) | 56 % of the tick (no other AI here) |
+
+On real galaxies, perception's p99 is 0.06 ms at most, 0.4 % of the 16.7 ms p99 budget; `ai.goals` (63 % of the tick) is
+what costs. Only the synthetic shows a visible share, and it is still 0.44 ms at p99. 82-92 % of perception time is `evaluate`: the four
+consumer paths go through the general equation evaluator for each (AI, planet) pair, although each is a single token.
+
+**Who reads perception in the same frame.** The concern in t02 was that the token resolver reads perception memory. It does
+not: `GalacticSimTokenResolver` receives the perception resolver (`set_s2`) but never calls it. Every `EnemyForce.*` token
+in goal, planning and Lua (`EvaluatePerception`, `FindTarget`) evaluations is computed live from the sim
+(`galactic_ai_planet_force`, with the resolver's own leaf cache). So the per-frame `w.mem` copy and `w.s2` are dead work
+(0.001 ms). The only readers of the published results are:
+- the danger mask (`ai_dangerous` -> `fill_view`: `HasSpaceForce` plus the snapshot's starbase / held-by-ally rules). It feeds
+  the reachability floods: goal `blocked()` on every proposal pass, `source_planets` (cached 10 s) for planning / PP, and
+  market delivery reachability (production, during T5, so already one frame old). `TargetPlayerID` also feeds the
+  `ai_eval_failed` / `ai_perceived_non_neutral` PlayerView fields;
+- the path finder inputs (`all_pairs_input`: Node_Weight and the fog gate), read when the 90-frame recompute starts and applied
+  15 frames later (t02).
+With a latency of k frames, the danger mask and passability would lag k frames. The node values would then be k + 15 frames
+old when applied. A split variant (observe and the danger bits inline, Node_Weight deferred) would remove the lag but save
+almost nothing: the danger bits come from the same `evaluate` calls. The cheaper fix, if this ever matters, needs no latency
+and changes no result: read the four bare-token paths directly from memory instead of through the evaluator, and compute
+Node_Weight only for an AI whose path recompute starts this frame.
+
+**Prototype** (`GalacticAiConfig::perception_latency`, `alamo_headless --ai-perception-latency F`, default 0). The first update
+runs inline. After that, a job kicked on host frame N from a copy of N's snapshot is published on N + F, and the next job is
+kicked then. Only one job runs at a time, so the AI sees perception refreshed every F frames and F to 2F - 1 frames old. The
+job's buffer carries the memory from one kick to the next. Measured:
+- Knob off: final CRCs and AI logs equal to the goldens.
+- Knob on, worker count: CRC logs identical at 0 / 1 / 4 / 16 / 15 workers. Checked on HotM and on Equal Footing with an idle
+  human (seed 2), 18000 ticks each, latency 15.
+- Tick time: the sim thread's perception time drops to the publish copy (mean < 0.001 ms). Tick mean and p99 do not move
+  measurably: HotM 0.209 / 0.546 -> 0.217 / 0.621 ms, Equal Footing 0.552 / 1.692 -> 0.570 / 1.858 ms. The run-to-run noise
+  is larger than the 0.03 ms saved.
+- Drift: compared the decision log, per-system CRC logs and end state against the knob-off run for the same seed. Campaigns:
+  HotM + scripted human, Equal Footing all-AI, and Equal Footing + idle human Empire; seeds 1-4, 36000 ticks each, so 12 runs
+  per latency. Plus HotM all-AI and Equal Footing all-AI, 18000 ticks, latency 15.
+  - Latency 15: the decision log was identical in every run and the end state (owners, credits) in 12 / 12. CRC logs
+    differ in 6 of the 14 runs (final CRC in 5), and only in `ai.goals` (first tick 1654 on HotM, 3106-29452 elsewhere): proposal-pass counters
+    and the proposed list change when a reachability-blocked candidate is skipped in one run and evaluated in the other. In one run
+    (Equal Footing + human, seed 2) the synced RNG also differs on 20 ticks from 7854, then matches again.
+  - Latency 30: 11 / 12 identical decisions and end state. In Equal Footing + human, seed 2, the first difference is a plan
+    ending one frame earlier (frame 7937), after which about 2450 decision lines differ on each side. At 36000 ticks, Rebel holds 19
+    planets and Underworld 18, instead of 18 and 19 (3 ownership changes instead of 4).
+- Save / load with a job in flight: not implemented (the prototype is not kept).
+
+**Recommendation.** Do not ship perception latency in either the full or the split form. On the real galaxies there is no
+gain to measure (≤ 0.06 ms p99 against 16.7 ms), and it adds a behaviour change (rare at 15 frames, outcome-changing at 30),
+save state for the in-flight job, and a second copy of perception state. If bigger galaxies or the synthetic ever make
+`ai.perc.evaluate` matter, use the direct-read and on-demand Node_Weight changes above first; neither changes a golden.
+Separately, removing the dead `w.mem` / `w.s2` copy is a clean-up for whoever next edits the token resolver. Whether the
+goal resolver should read fogged perception memory instead of the live sim (the `set_s2` hook) is a parity question for
+S2 / CP3, not a scheduling one.
 
 ## Serial per-object passes on the job system (OPT2 t03, 2026-11-02)
 

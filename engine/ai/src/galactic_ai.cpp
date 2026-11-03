@@ -492,6 +492,7 @@ std::vector<PlanetIndex> PlayerAi::flood(int mode, std::vector<uint8_t>* reached
 
 gal::Bitset GalacticAiWorld::Impl::ai_dangerous(int32_t player) const {
     if (snap.planet_count != sim.planets().size()) return {};
+    ALAMO_PROFILE_SCOPE("ai.gal.danger");  // OPT2 t11: the perception reader on the goal / market paths
     gal::PlayerView v;
     perc.fill_view(snap, player, v);
     return std::move(v.dangerous);
@@ -1937,13 +1938,25 @@ void GalacticAiWorld::update_player(int32_t player, int64_t now, bool galactic_o
         // OPT2 t02: background path recomputes due on this galactic frame are applied before anything reads them.
         for (const auto& a : w.ai)
             if (a) a->paths.publish(static_cast<int32_t>(w.sim.frame()));
-        w.snap = snapshot_from_sim(w.sim, w.cfg.ai_uses_fog_galactic);
-        w.perc.update(w.snap, static_cast<uint32_t>(w.sim.frame()));
-        w.mem.clear();
-        for (uint32_t p = 0; p < w.snap.player_count(); ++p) w.mem.push_back(w.perc.memory(static_cast<int32_t>(p)));
-        w.s2 = std::make_unique<GalacticTokenResolver>(w.snap, w.mem);
-        w.res.set_s2(w.s2.get());
-        w.res.refresh(w.sim.frame());
+        {
+            ALAMO_PROFILE_SCOPE("ai.gal.snapshot");  // OPT2 t11: perception cost, split
+            w.snap = snapshot_from_sim(w.sim, w.cfg.ai_uses_fog_galactic);
+        }
+        {
+            ALAMO_PROFILE_SCOPE("ai.gal.perception");  // OPT2 t11
+            w.perc.update(w.snap, static_cast<uint32_t>(w.sim.frame()));
+        }
+        {
+            ALAMO_PROFILE_SCOPE("ai.gal.memcopy");  // OPT2 t11
+            w.mem.clear();
+            for (uint32_t p = 0; p < w.snap.player_count(); ++p) w.mem.push_back(w.perc.memory(static_cast<int32_t>(p)));
+            w.s2 = std::make_unique<GalacticTokenResolver>(w.snap, w.mem);
+            w.res.set_s2(w.s2.get());
+        }
+        {
+            ALAMO_PROFILE_SCOPE("ai.gal.refresh");  // OPT2 t11
+            w.res.refresh(w.sim.frame());
+        }
         // Story requests and Suspend_AI from the story session's world (and the AI's own).
         bool suspended = w.world.ai_suspended();
         for (lua::LuaPlayerWorld* sw : w.story_worlds) {
