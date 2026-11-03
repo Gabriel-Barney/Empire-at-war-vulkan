@@ -146,10 +146,18 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         gcfg.story_campaign = spec_.kind == SessionKind::Campaign && spec_.story;
         gcfg.ai_uses_fog_galactic = d.db.constants().get_bool("AIUsesFogOfWarGalactic", gcfg.ai_uses_fog_galactic);  // shipped False
         const uint32_t diff = d.rules.find_difficulty(difficulty_name(spec_.difficulty));
+        // q6 t08: the type from the data (resolve_ai_type): campaigns read the campaign's AI_Player_Control pairs, a
+        // skirmish gives only its AI slot (ps.ai) the faction's Basic_AI (SKIRMISH_SETUP §2.1). Stock factions as before.
+        const std::vector<std::string>* control = nullptr;
+        if (spec_.kind == SessionKind::Campaign)
+            if (const data::CampaignDef* c = d.db.find_campaign(spec_.campaign)) control = &c->ai_player_control;
+        const std::vector<std::string> no_pairs;
+        if (spec_.kind == SessionKind::Campaign && !control) control = &no_pairs;
         for (size_t p = 0; p < setup_.players.size(); ++p) {
             galactic::PlayerSetup& ps = setup_.players[p];
             if (ps.human || ps.faction >= d.rules.factions.size() || d.rules.factions[ps.faction].is_neutral) continue;
-            const std::string type = ai_type_for(d.rules.factions[ps.faction].name);
+            if (spec_.kind == SessionKind::Skirmish && !ps.ai) continue;
+            const std::string type = resolve_ai_type(d.rules.factions[ps.faction].name, d.basic_ai, control, &d.ai->defs);
             if (type.empty()) continue;
             ps.ai = true;
             ps.difficulty = diff;
