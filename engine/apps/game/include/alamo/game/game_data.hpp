@@ -137,6 +137,9 @@ struct SkirmishSetup {
     // p4uia t02: the colour index (0..8, GameConstants MP_Color_* entry) of player 0 (human) and 1 (AI) chosen on the
     // staging screen; players without an entry keep their index. Presentation only: the setup and the sim ignore it.
     std::vector<uint8_t> colors;
+    // q6 t02 [port]: no starting forces and no "unknown unit" failure - the attract demo clears the forces anyway (every unit
+    // comes from its map), and a mod's Underworld may have no default fleet (Thrawn's Revenge). Not saved (the demo is never).
+    bool no_forces = false;
 };
 bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic::GalacticSetup& out, std::string* err = nullptr);
 // [port] default skirmish fleets for the stock factions (Empire / Rebel / Underworld); empty for others.
@@ -163,7 +166,9 @@ std::vector<std::string> data_fallback_forces(const GameData& data, const std::s
 inline constexpr PlanetIndex kSkirmishHumanPlanet = 2, kSkirmishBattlePlanet = 1;
 
 // Space skirmish maps of the data (Data\Art\Maps\_MP_SPACE_*.ted through the VFS), sorted, "_MP_SPACE_KUAT" first
-// when present (the A1 skirmish golden's map). Empty without a VFS.
+// when present (the A1 skirmish golden's map). Empty without a VFS. [port] Both lists leave out a map whose loose file (through
+// the normal lookup) is empty or cannot be sized (Thrawn's Revenge ships a 0-byte _MP_SPACE_KUAT.ted); MEG entries are kept,
+// so vanilla lists are unchanged.
 std::vector<std::string> skirmish_space_maps(const GameData& data);
 // Land skirmish maps (Data\Art\Maps\_MP_LAND_*.ted), sorted. Empty without a VFS.
 std::vector<std::string> skirmish_land_maps(const GameData& data);

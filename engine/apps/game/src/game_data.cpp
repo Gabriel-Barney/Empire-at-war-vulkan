@@ -6,7 +6,9 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <optional>
 
+#include "alamo/core/file_provider.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/sim/save_session.hpp"
 #include "alamo/terrain/chunk.hpp"
@@ -409,6 +411,7 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic
         return n;
     };
     // Defender (AI) holds the battle planet first, then the human's forces at the far planet.
+    if (s.no_forces) return true;
     uint32_t na = 0, nh = 0;
     if (s.land) {
         na = add(1, kSkirmishBattlePlanet, s.ground_ai, s.ai_faction, true);
@@ -428,6 +431,19 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic
 }
 
 namespace {
+// q6 t02 [port]: a listed map whose loose file (through the normal lookup, mod first) is empty or cannot be sized is left
+// out - Thrawn's Revenge ships 0-byte _MP_SPACE_KUAT.ted / _MP_LAND_*.ted files over the FoC maps. A file stat, not a read
+// (mod maps run to 20 MB each). MEG entries are kept as indexed. No shipped FoC / EaW map is empty, so vanilla lists are
+// unchanged.
+bool map_file_usable(const vfs::Vfs& v, const std::string& path) {
+    const std::optional<vfs::Vfs::Resolution> r = v.resolve(path);
+    if (!r) return false;
+    if (r->layer == vfs::Vfs::Resolution::Meg) return true;
+    std::error_code ec;
+    const std::uintmax_t n = std::filesystem::file_size(path_from_utf8(r->location), ec);
+    return !ec && n > 0;
+}
+
 std::vector<std::string> list_maps(const GameData& data, const char* glob) {
     std::vector<std::string> out;
     if (!data.vfs) return out;
@@ -436,7 +452,9 @@ std::vector<std::string> list_maps(const GameData& data, const char* glob) {
         if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
         if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
         stem = upper(stem);
-        if (std::find(out.begin(), out.end(), stem) == out.end()) out.push_back(stem);
+        if (std::find(out.begin(), out.end(), stem) != out.end()) continue;
+        if (!map_file_usable(*data.vfs, p)) continue;
+        out.push_back(stem);
     }
     std::sort(out.begin(), out.end());
     return out;
@@ -459,16 +477,7 @@ std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::
 }
 
 std::vector<std::string> skirmish_space_maps(const GameData& data) {
-    std::vector<std::string> out;
-    if (!data.vfs) return out;
-    for (const std::string& p : data.vfs->list("Data\\Art\\Maps\\_MP_SPACE_*.ted")) {
-        std::string stem = p;
-        if (const size_t s = stem.find_last_of("\\/"); s != std::string::npos) stem = stem.substr(s + 1);
-        if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
-        stem = upper(stem);
-        if (std::find(out.begin(), out.end(), stem) == out.end()) out.push_back(stem);
-    }
-    std::sort(out.begin(), out.end());
+    std::vector<std::string> out = list_maps(data, "Data\\Art\\Maps\\_MP_SPACE_*.ted");
     if (const auto it = std::find(out.begin(), out.end(), "_MP_SPACE_KUAT"); it != out.end()) std::rotate(out.begin(), it, it + 1);
     return out;
 }
