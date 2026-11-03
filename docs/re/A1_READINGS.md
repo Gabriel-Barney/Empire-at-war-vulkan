@@ -1498,15 +1498,59 @@ player's command is blocked exactly when the human's is.
 - The other readers of `paused()` follow 0x4b2360 too: the galactic AI service and its task-force MoveTo status, the
   free-store hop, the reveal delay and the story Lua clock.
 - The whole-fleet MoveObjectToObject stays ungated, as 0x3af410.
-- 0x2be640 is unchanged: `CampaignBattles` leaves its `story_sequence_active` seam unset (BT §2.9.3: the port starts a
-  linked battle at once; see campaign_battles.hpp).
-- Still [port]: `GalacticSim::update` freezes the mode frame only for `pause_ > 0`. 0x4b2360 also freezes it while the
-  story block holds.
+- ~~0x2be640 is unchanged: `CampaignBattles` leaves its `story_sequence_active` seam unset~~ wired in a1j t05 (below).
+- ~~Still [port]: `GalacticSim::update` freezes the mode frame only for `pause_ > 0`~~ done in a1j t05 (below).
 - Tests: `alamo_galactic_conflict_tests` `test_linked_battle_gates` (AI Underworld commands with the local Empire in no
   queued conflict → FleetManagement launch runs, SpecialAbility reaches its target check; after the AI's direct
   invasion of the Empire's planet → launch, MoveThroughObjects and SpecialAbility NotAllowed, MoveObjectToObject runs;
   flag cleared → not paused with the conflict still queued); `alamo_galactic_special_tests` (the flag alone, with no
   queued conflict, does not pause).
+
+**a1j t05 (2026-11-02): the 0x2be640 block and the frame freeze [H unless tagged].** Read from 0x4b2360 and 0x2be640.
+- 0x4b2360 (the galactic mode's vf9, MAIN_LOOP §1.5 slot +0x48) returns true for the pause counter 0x140b1540c > 0, and
+  otherwise for the story block (flag 0x140b154d0 or the never-written list 0x140b2b360, not multiplayer, 0x2b0350 on
+  the mode's own GOM). The main loop freezes the galactic mode frame on this query (MAIN_LOOP T12), so the frame stands
+  still under the story block exactly as under the counter.
+- 0x2be640, in order:
+  1. Object services: "paused" = (galactic mode and counter > 0) or the story block. Paused → the objects are serviced
+     with the paused flag only when 0x140b2766c is set, otherwise skipped; not paused → serviced normally.
+  2. Hero spawn lists 0x3fc750 (each planet's behaviour 3): only when the mode is galactic and the counter is < 1.
+     **The story block does not gate them.**
+  3. The +0x140 list (0x3ac530) and the frame-keyed delayed creation list at +0x5f8 run every tick, blocked or not.
+  4. The state 1 / 2 path of a chosen battle (zoom / pre-battle cinematic, BT §1.4 step 1) runs before the block test:
+     at its end state → 3, one pause level released (0x28c720), the dialog closed (0x28c6c0), and **when the record
+     flag is set, state → −1 and 0x28f590 starts the queued record** in place of the chosen conflict.
+  5. The story block (same test as 0x4b2360, with 0x2b0350 inlined on both queues): the space head (0x2ad100 /
+     0x2b92e0) and the land head (0x2b76a0) are skipped. 0x2a62d0 runs after in every case.
+- So under the block: frame frozen, objects not serviced, conflicts frozen, hero respawns still due-checked (against a
+  frozen frame, so only entries already due fire).
+
+**Port (a1j t05).**
+- `GalacticSim::update` takes its paused branch on `paused()` (counter or story block): frame and behaviours frozen;
+  `service_respawns()` still runs there when the counter is 0 (step 2); the conflict tail still runs.
+- `CampaignBattles` installs its conflict gate always (the `story_sequence_active` seam is gone): the tail returns
+  without servicing the `ConflictManager` while `GalacticSim::story_block()` holds (step 5).
+- [port] A corruption mission's own conflict does not count for `in_queued_conflict`, and the gate does not block while
+  one is queued: the original keeps that record outside the queues until 0x28f590 starts it (and clears the flag
+  first), the port runs it through the queue, so blocking would hold it forever.
+- `CampaignBattles::story_linked`: a LINK_TACTICAL record that finds another conflict active sets the flag and waits
+  (as before); when the story block then holds, the active conflict gives way (`ConflictManager::yield_to_linked`:
+  pause released, state Idle, the conflict stays queued) and the record starts at once - the original's step 4 path
+  (state −1 → 0x28f590). [port] Not while the human's vote is still open (`vote_open()`): the record waits for the
+  answer; the original's state 1 / 2 only exist after the choice. Not under the block (local player in no queued
+  conflict) the record keeps waiting for Idle [port: the original takes over at step 4 there too].
+- [port] the host still releases a flag that has nothing to wait for (queues empty, `ConflictManager` Idle) at its
+  battle hook (REMAINING_GAPS §6.4).
+- Out of ownership, for the integrator: `GalacticMode::paused` (engine/apps/sim game_modes.hpp, the host mode frame
+  T12) tests only its own counter; the 0x4b2360 form is `paused_ || pause_count_ > 0 || (sim_ && sim_->story_block())`.
+  `GalacticSim::frame()` (what the galactic code reads) is frozen by `update` either way.
+- Tests: `alamo_galactic_conflict_tests` `test_story_block_freezes_frame` (story block: frame frozen, a due hero respawn
+  serviced; counter: frozen, the respawn waits) and `test_story_block_not_frozen` (queued conflict without the record:
+  not paused; record queued: frozen); `alamo_sim_battle_tests` `test_story_block_host` (the record raised by hand while
+  an Underworld fleet flies into the human Empire's system: the space conflict stays queued, no vote / battle /
+  auto-resolve, galactic frame frozen for 200 ticks; flag cleared → the battle starts).
+- Golden CRCs: none expected to move (headless and smoke runs never end a tick with the flag set: the port starts a
+  linked battle in the hook that sees it, and the gate hashes nothing).
 
 ## 32. Reinforce delivery handlers and the transport carried type (a1h t05 / t08) [H unless tagged]
 
@@ -2065,7 +2109,7 @@ the order.
   no clearance wait (state 4) and no skirmish `Reinforcement_Time_Multiplier` wait (its constant F is unknown).
 - **Two modes (`BattleConfig::landing_unload_timed`).** The port's tactical AI (`tf_reinforce`) takes the units it
   finds right after the Reinforce order and finishes the status at once; it has no in-flight count and no 0x19 handler.
-  - **Untimed (default) [port]:** every unload step runs at the order (members placed at their unload slots), the 0x19
+  - **Untimed [port] (the default until a1j, §36.3):** every unload step runs at the order (members placed at their unload slots), the 0x19
     record is posted at once (`TacticalBattle::landings_unloaded()`, cleared when the next tick starts); the landing
     object stays for the steps' timers ((steps + 1) x 2 s x (1 + s)) and then takes off (removed at once).
   - **Timed:** the reserve leaves the pool at the order (deployed) and the company stays inside. `landing_service`
@@ -2118,3 +2162,271 @@ the order.
      (`model_info(type, true)`); blockers = live, not dying store objects passing the filters above with a
      `Space_Model_Name`, box = `TacticalMode::bounds_of` in x / y; touching boxes do not block [M]. [port] When a member's
      model is named but not loaded (no model data, e.g. headless runs without art), the whole drop keeps the rows of 6.
+
+## 36. The land Reinforce block waits for the landings; parked infantry in a giant vehicle's way (a1j t01 / t02) [H unless tagged]
+
+### 36.1 `ReinforceBlockStatus` (Lua class id 0x81a, ctor 0x69fbb0) [H]
+
+The land `Reinforce` (`LandTaskForceClass` vf, skirmish path 0x6ee010) returns this status; `QuickReinforce` loops
+`while block and not BlockOnCommand(block) do block = Reinforce(target) end` (land: no `max_duration`; the space
+version waits 3 s).
+
+| Offset | Field |
+|---|---|
+| +0x40 | in-flight count (ctor 0) |
+| +0x44 | saved goal-system-removable flag (ctor 1) |
+| +0x45 | result byte (TF owner) |
+| +0x48 | result list (non-TF owner) |
+| +0x50 | player |
+| +0x58 | reserved drop point (ctor sentinel 0x5d5e0b6b) |
+
+- **Init 0x6a1120(status, owner, inFlight, result, player, pos):** stores the four values. When the owner is a task force,
+  +0x44 := the plan's removable flag (plan +0x98, the flag `Set_As_Goal_System_Removable` writes, 0x5f7650) and then
+  plan +0x98 := 0: **the plan cannot be removed by the goal system while its reinforcements are in the air.**
+- **Skirmish land reinforce 0x6ee010:**
+  - in-flight := the number of drop positions 0x6eaf60 returned (12-byte entries); result := 0x6eaf60's return (every
+    pending unit placed and none trimmed);
+  - the spawn loop runs from the last pending unit; the cap is read once (0x2acb10) and not decremented; a unit whose
+    cost is over the cap reuses the position index;
+  - each spawned landing (0x2b5fe0, §35.1) gets a listener for signal 0x19 on landing +0x38, then 0x6c1dc0(plan, C) and
+    0x5f9fd0(tf, type, −1), which add type entries to the TF's +0x60 / +0x90 lists (C itself, each member type, or
+    ceil(count / team size) copies of C) so the plan's force counts include the units in the air;
+  - a refused landing still counts as in flight (the original status would never finish then) [H, by the code path];
+  - 0x6eaf60's third parameter (max wait) is unused.
+- **IsFinished 0x6a11d0:** finished iff +0x40 == 0. **There is no timeout.** On finishing, 0x6a1930 removes the reserved
+  drop point from the global list DAT_140b3a2d0 and restores plan +0x98 := +0x44.
+- **Result 0x6a1a50:** the +0x48 list (non-TF owner) or the byte +0x45.
+- **Signal handler 0x6a1440 (signal 0x19, `ReinforcementsUnloadedDataClass`):** stop listening to that landing; in-flight
+  −= 1; for a TF owner, each unloaded unit (a team member stands for its container; one already handled is skipped) is
+  added to the TF (vf+0xa0, land 0x6e9240 `Add_Force`) and to the plan (0x6bf3d0(plan, obj)).
+
+### 36.2 A landing destroyed while it unloads [H]
+
+`TransportLandingBehaviorClass` (vftable 0x8b31f8) slot 15 = 0x6442d0, the detach that runs when the object is deleted
+(MOVEMENT §3.1.1). When the pack's units-out count (+0xb0) is not 0 it calls the unload finish 0x6438a0 (unlock, signal
+0x19 with the units already out) and removes the dust effect. With **0 units out it sends nothing**, so the original
+status above waits for ever; the units not yet out are lost with the landing (§35.3 [M] is now [H] for the signal; the
+members inside die with it).
+
+### 36.3 Rule for the port (a1j t01)
+
+- `BattleConfig::landing_unload_timed` is on by default (§35.3's timed mode); the untimed mode stays a [port] option for
+  tests.
+- `tf_reinforce` (land) keeps a `Reinforce` status per order while any landing it issued is in flight
+  (`TacticalAiHost::reinforce_in_flight`); each `ReinforcementsUnloaded` record (the battle's 0x19 records) removes its
+  landing, adds the unloaded units to the TF (free store → TF, `reinforce_joined`), and the status finishes when none is
+  left. While it is open the plan is not removable (saved / restored as +0x44); the in-flight types count as TF entries
+  for `units_lost`. Result = all placed. Saved (tactical AI save v8).
+- [port] The in-flight count is the landings actually issued, not the drop positions: a refused landing does not hang
+  the status.
+- [port] A landing destroyed with **0 units out** posts an empty 0x19 record, so the status finishes instead of waiting
+  for ever (no timeout is added; the original has none).
+- [port] Unloaded units another task force already holds are skipped (the original's Setup A excludes locked units,
+  §28.2; the port's delivery runs after the units unlock).
+
+### 36.4 `Clear_Infantry` holds its infantry until every member arrives; a giant vehicle pushes parked friends aside (a1j t02)
+
+**How the original releases the units [H].** `ClearInfantry.lua` calls `Set_As_Goal_System_Removable(false)` after
+`QuickReinforce` and then blocks on `Attack_Move(AITarget, Get_Self_Threat_Max())`; its while loop re-evaluates
+`Should_Clear_Infantry` only after that block returns. A non-removable plan is never taken apart by the goal system and
+the free store gets its units back only when the plan's thread ends (`ScriptExit`). Members that arrive early get
+`MainForce_Unit_Move_Finished` → a unit-level `Attack_Move(kill_target or tf)`; they stay in the task force. So the
+infantry is held until the slowest member reports movement finished (signal 10, §33.2) — the port does the same. There
+is no timeout or release path in the original for a member that never arrives.
+
+**Why a member never arrived (port, foc-land seed 7 without the retreat plan).** p0's first `Clear_Infantry` task force
+(AT-AT, M1s, Stormtrooper squads) blocked from frame 215 to the 14400 cap. The AT-AT (`Max_Speed` 0.5 × land 1.56 =
+0.78 / frame, about 4500 frames for its 3300-unit path) stopped 170 units short of its slot: two parked friendly
+`Squad_Stormtrooper` members stood 102-108 units from its goal, on its path. The port's MovingVsStopped resolution (the
+early arrival needs the blocker within the radii + `LandDestinationProximity` of the goal **and** the mover on its final
+approach) fell through to the dynamic path-around every collision check, the new path met the next parked trooper, and
+the AT-AT circled for ever (about 100 dynamic re-paths in 1500 frames).
+
+**What the original does there: the MovingVsStopped decision 0x684f90 [H for the branch, M for the distances].**
+Mover m (MovingVsStopped participant 0), blocker b (participant 1, stopped); classes from type +0x169c.
+- Before the class rules: m moving (locomotor vf+0x1b0), `cvar8` = 0x5c8900(m, b) (m is hostile to b, has the SQUASH
+  behaviour 0x26 and b is squashable: the crush test of MOVEMENT §5.5) and the push-ability test 0x5c8890(b).
+- **Giant rule:** m is a Giant Vehicle (9) **and** (b is Infantry / Bike (5 / 6) **or** m is moving) **and** m cannot
+  crush b → call the push 0x6859a0; success → state 5 (Resolved), **m keeps its path**. Failure → the remaining rules
+  (re-route / path around / try again later); a later step skips the second push attempt (`bVar5`).
+- Push 0x6859a0(collision):
+  1. b has no locomotor (object +0x333 == −1, the locomotor behaviour slot [M: name]): a death-clone obstacle (type
+     +0xcf) is destroyed (0x391310) and the push succeeds; anything else fails.
+  2. b's type float +0x23b0 ≤ 0 [M: name] and b is deploying or deployed (0x39a400 / 0x39a390, the locomotor deploy
+     states of §35.4 item 1) → fails.
+  3. Direction: m's heading (locomotor vf+0x1f8 → x / y, normalised) turned by **45°** toward b's side: −45° when
+     (b − m) · (−h.y, h.x) ≤ 0, else +45° (0x2bab90).
+  4. A free-position search (0x440be0 / 0x440f90) for b from b's position along that direction, cone π/4, factor 0.33
+     [M: the search distance]; none → fails.
+  5. A path request for b to the spot (0x67b730; Infantry / Giant classes set request flag 1; `MovementBoxExpansionFactor`
+     when > 0); no path → fails. Otherwise b's locomotor takes the path as a **pushed** move (mode 4, or 7 when m could
+     crush b; locomotor data +0x6d := 1; deploy-ish states 0x16 / 0x25 are reset by 0x559250). It is a locomotor move,
+     not a unit order (no new order signal). Success.
+- What a pushed unit does after the pusher has passed (`MinimumPushReturnDistance`, `RepushDistance`) is not traced
+  (MOVEMENT §5.4) [L].
+
+**Port (a1j t02).** `MovementSystem::resolve_blocker`: after the early-arrival test and before the path-around, a Giant
+Vehicle mover pushes the stopped blocker (any class it does not crush; the port has only moving or stopped land
+participants, so "m is moving" always holds) and keeps its path; the collision is Resolved. [port] The push: direction
+as item 3 (heading = m's path direction to its next point); b walks aside over `ceil(d / speed)` frames at its own max
+speed through the existing nudge (passability-checked each frame), d = the radii + 2 (the distance the port's fallback push
+already used); no free-position search, no return move; a deploying / deployed b is not pushed (item 2 with +0x23b0
+taken as ≤ 0); a b still stepping aside counts as pushed (the original pushes a blocker that moves again, decision step 2).
+A b that cannot step at all (impassable first step) fails the push
+and the old path-around runs.
+
+## 37. Land hit / miss rules and capital-ship targeting at a station (a1j t03 / t04) [H unless tagged]
+
+**Questions.** t03: parked land units miss at point-blank range (foc-land seed 4: 252 shots, 4 hits in 600 frames).
+t04: in foc-station seeds 1 and 6 the Rebel capital ships shoot the station's fighters instead of the station or its
+fighter bays until about frame 12600.
+
+### 37.1 The point-blank misses were the muzzle / aim height, already fixed on main
+
+- Reproduced on d1c8ccf (before S8 t17 / t27): the shots left at ground level and aimed at the target's ground
+  position, so they passed under hovering or raised models (M1_Repulsor_Tank 1-5 % hits, Crawler at a T2B 0 %).
+- On a4b9223 (main, with muzzle bones, `Ranged_Target_Z_Adjust` and `Target_Bones` from S8 t17 / t27) the same pairs
+  hit 80-93 %. No further change was needed for this symptom.
+
+### 37.2 Own-weapon inaccuracy 0x549f80 (TACTICAL_COMBAT §3.1.2) [H]
+
+- Fixed radius (`Targeting_Fire_Inaccuracy_Fixed_Radius`): X and Y draws, **the Z draw in space only**. The port drew
+  3 on land.
+- Otherwise the type's **`Targeting_Fire_Inaccuracy`** table (type +0x508, 437 FoC entries, first category match,
+  scaled like the radius): s = d × |muzzle − led aim| / `Targeting_Max_Attack_Distance`, 3 draws. The port ignored the
+  table, so nearly every land unit fired with no spread (only 5 types have a fixed radius).
+- [M] the max with the weapon entry's own table (types with several weapons), the behaviour-slot override radius, and
+  MISSILE / BOMB / STATIC_BOMB carrying the offset in the pack instead of aiming at it: not modelled.
+
+### 37.3 Hardpoint inaccuracy draw gate 0x381dc0 (TACTICAL_COMBAT §3.1 step 10) [H]
+
+The distance branch draws only when the scaled distance, the XY distance and `Get_Fire_Range` are all > 0. The port
+drew 3 (with spread 0) for a target category with no table entry. Space CRCs move by this.
+
+### 37.4 Ground test of straight shots 0x4d0630 (TACTICAL_COMBAT §3.4 step 1) [H]
+
+Land only. DEFAULT / unknown categories skip the test while the target point is ahead on all three axes (sign test);
+every other category (LASER included) and a shot with no target are tested each step. A ground hit before any object
+hit detonates the shot at the ground point. The port had no ground test for straight shots, so shots fired into a
+ridge flew through it.
+
+### 37.5 Capital-ship target choice at a station (t04)
+
+- Selection (§2.4 scoring / replacement) and the path-B formation-goal promotion (§2.8 B) match the spec; no change.
+- **Divergence: slot 43's extent E.** Retail: `Custom_Hard_X/YExtent` × `Scale_Factor`, else |model bbox max.x / max.y| ×
+  `Scale_Factor` (0x371e70 / 0x372040, TACTICAL_GAPS §3.1). The port fell back to the unit radius; for
+  `Empire_Star_Base_2` (no Custom_Hard extents, no model radius passed) that is the collision-class constant, far
+  smaller than the station's box. Ships 2000-2500 from the station's centre were out of range, so the Attack_Move goal
+  on the station was never promoted. Fixed: `UnitDesc::model_x_extent / model_y_extent` from the catalog's model box.
+  Seed 1: the Calamari Cruisers now lock the station by frame 6000 (before: about 9000).
+- **What is left is AI-side (not combat).** The space AI's `SetClassPriorities(MainForce, "Attack_Move")` sets the
+  `Capital_Attack_Move` override (it has no Capital entry, so a station scores 1e18 and every fighter or bomber outranks
+  it in auto-acquire; it is reached only through the goal, path B). The override stays on the ships after the plan's
+  AITarget dies. In seed 8 the Calamaris kill their AITarget (a Tartan) at frame 3300, then get no new goal until
+  frame 12900 and spend 9000 frames auto-targeting fighters at 1360 from the station. In the original the same data
+  gives the same auto choice, so the question is how soon the AI re-plans an attack on the station
+  (engine/ai/tactical, battle_ai.cpp; not changed here).
+
+### 37.6 Battle ends, `--skirmish-ai <map> --seed N --ticks 20000 --workers 4 --expect-battle-end`
+
+| seed | foc-land before (a4b9223) | foc-land after | foc-station before | foc-station after |
+|---|---|---|---|---|
+| 1 | Empire, all-retreated, 2433 | Empire, all-retreated, 2241 | cap | cap |
+| 2 | Empire, all-retreated, 2799 | Empire, all-retreated, 2988 | Rebel, all-destroyed, 8616 | Rebel, all-retreated, 8010 |
+| 3 | Empire, all-retreated, 2802 | Empire, all-retreated, 2802 | Rebel, all-retreated, 14118 | cap |
+| 4 | Empire, all-retreated, 2244 | Empire, all-retreated, 2619 | Rebel, all-destroyed, 13054 | Rebel, all-retreated, 13467 |
+| 5 | Empire, all-retreated, 2799 | Empire, all-retreated, 2988 | Rebel, all-destroyed, 12770 | Rebel, all-destroyed, 10934 |
+| 6 | Empire, all-retreated, 2988 | Empire, all-retreated, 2994 | Rebel, all-retreated, 10326 | Rebel, all-destroyed, 9082 |
+| 7 | Empire, all-retreated, 2991 | Empire, all-retreated, 2799 | cap | Rebel, all-destroyed, 10030 |
+| 8 | Empire, all-retreated, 2802 | Empire, all-retreated, 2994 | Rebel, all-retreated, 13791 | cap |
+| 9 | Empire, all-retreated, 2802 | Empire, all-retreated, 2988 |  |  |
+| 10 | Empire, all-retreated, 2988 | Empire, all-retreated, 2802 |  |  |
+| 11 | Empire, all-retreated, 2799 | Empire, all-retreated, 2799 |  |  |
+| 12 | Empire, all-retreated, 3183 | Empire, all-retreated, 2802 |  |  |
+
+Cells: winner, victory kind (all-retreated = the loser's units all retreated), end frame; cap = not ended at
+14400. Land: all 12 still end (2241-2994, before 2244-3183). Station: 5 of 8 end (before 6 of 8): 6 ends earlier by
+destruction, 7 now ends; 3 and 8 now reach the cap, 1 still does. Seed 8 is the AI gap of §37.5 (no goal 3300-12900).
+
+### 37.7 Golden and test effects (not regenerated)
+
+MSVC and clang: 152 of 161 pass, 0 warnings, the same CRCs on both. Failing, all from the new draws / extents:
+- CRC goldens: `alamo_sim_battle_tests` (synthetic tick 477, queue tick 399, bm tick 405: `rng` first),
+  `alamo_sim_l1_tests` (tick 127, `rng`), `alamo_headless_skirmish_ai_synthetic` (tick 341, `rng`),
+  `_foc` (tick 654, `battle.combat`), `_foc_land` (tick 837, `rng`), game smoke skirmish / land CRC logs.
+- `alamo_headless_skirmish_ai_foc_outcome_s6` / `_s9` (Kuat, `--expect-battle-end`) reach the cap; the other 14 seeds
+  end at 5724-9163 (before 5814-8506). Ablation: reverting all three space changes (extent fallback, own-weapon table,
+  hardpoint draw gate) restores the old runs exactly (7116 / 7503); reverting any one of them alone makes both seeds
+  end again, so this is path sensitivity, not one rule. In the new seed 6 run the Empire's Tartan and bombers have no
+  goal and no target from frame 8700 to about 12900 while a lone Nebulon B duels the Star Destroyer: the same AI
+  re-plan gap as §37.5. The combat unit test's space golden (`combat_space_crc.txt`) is unchanged.
+
+## 38. Galactic-context evaluation and the tactical credit release in a campaign land battle (a1j t07) [H unless tagged]
+
+Read 2026-11-02 from 0x69e1b0, 0x603c70 and 0x6147d0 (AI_TACTICAL §1.3 has the battle-start transfer 0x612b00 and the
+battle-end return 0x614a70). The symptom: every campaign land battle of the headless `foc-land` run logged Lua errors at
+`FUNDTACTICALSTRUCTURES.LUA:79` (10 in seed 5), because `Evaluate_In_Galactic_Context("Land_Tactical_Budget_Clamped",
+PlayerObject)` returned nothing and `PlayerObject.Release_Credits_For_Tactical(nil)` then failed its type check.
+
+### 38.1 `Evaluate_In_Galactic_Context` (0x69e1b0, tactical Lua global)
+1. No galactic mode under the current mode (0x28aa00 on the GMM) → script error "This function may only be used in
+   tactical games spawned from campaign mode.", no result.
+2. Exactly 2 arguments ("Invalid number of parameters.  Expected 2, got %d."); 1 = a string naming a perception
+   function ("Expected string." / "Unrecognised perception function %s."); 2 = a player object ("Expected player
+   object.").
+3. The player's AI (+0x360) → its **galactic** AI player (0x4b06d0(ai, 0)); none → "AI player %s has no galactic AI.",
+   no result.
+4. A perception context over the galactic AI's evaluator (+0x38): Self = the player (name id +0x478), Enemy = the galactic
+   AI's enemy player (0x5f55c0 of +0x28) when there is one, Human = the local player (0x294a00) when there is one,
+   Target = the **galactic planet of the current battle**: 0x28a7a0(GMM) gives the battle record, 0x28aa50 resolves it in
+   the galactic mode, the target is that object's +0xb8 → +0x354. No battle record → nothing is evaluated and the call
+   returns no result (no error).
+5. `PerceptionFunctionClass::Evaluate` on that context: success → one number pushed; failure → "Evaluate_Perception:
+   Error evaluating perception function %s.", no result.
+So the evaluation runs entirely in the galactic AI's world (galactic tokens, `Variable_Self.CreditsUnnormalized` =
+the galactic credits, `Variable_Target` = the battle's planet), not in the tactical one.
+
+### 38.2 `PlayerWrapper.Release_Credits_For_Tactical` (0x603c70)
+1. No player → nothing. The current mode must be land (vf +0xe0 == 1), else "this script function is only valid in
+   land tactical".
+2. 0 or 1 arguments ("invalid number of parameters.  Expected 0 or 1, got %d."); 1 = a number, else "invalid type for
+   parameter 1.  Expected number." (and nothing happens). No argument = −1.
+3. The player's AI (+0x360) null → "this action is not possible: player is not AI controlled."; no galactic AI
+   (0x4b06d0) → "player has no associated galactic AI." (warning call 0x248620). The galactic AI's budget (+0x40) null →
+   nothing. Else 0x6147d0(budget + 400, amount).
+
+### 38.3 The release (0x6147d0)
+`remaining = saved(+0x88) − released(+0x8c)`; an amount < 0 or ≥ remaining becomes `remaining`; `Add_Credits(player,
+amount, aiGain = false)` (0x27f370; no Credit_Multiplier: the third argument is 0); `released = min(amount + released,
+saved)`. `saved` is the galactic credits the battle-start transfer kept back (AI_TACTICAL §1.3: credits − Σtake), so
+the script moves part of the galactic purse into the tactical player's credits once per battle; at battle end
+0x614a70 sets credits = saved and adds back leftover − released (AI_TACTICAL §1.3).
+
+Shipped data: `Land_Tactical_Budget_Clamped` = clamp(Land_Tactical_Budget, 0, CreditsUnnormalized / (PlanetsControlled
++ 1)), with `Land_Tactical_Budget` = (GenericPlanetValue + 2 × Target.FriendlyForce.GroundTotal + 3 ×
+Target.GroundbaseLevel) / 5 × 2500 + 200 (BudgetingEquations.xml). FundTacticalStructures (not for Pirates) calls it
+once per battle.
+
+### 38.4 Port
+- `lua::TacticalGalacticContext` (engine/lua players.hpp), set on the battle's `LuaPlayerWorld`
+  (`set_tactical_galactic`): the galactic `PerceptionSource` (types, resolver, synced RNG, seed), the battle's planet
+  index as target (−1 = none), the land flag, `has_galactic_ai(player)` and `release_credits(player, amount)`.
+- `Evaluate_In_Galactic_Context` with the context set follows 38.1 (messages as above; target −1 or no resolver → no
+  result, step 4); without it the old tactical-world path stays (skirmish: step 1's error belongs to that path).
+  [port] Enemy = the port's `enemy_of`, Human = the local player.
+- `Release_Credits_For_Tactical` with the context set follows 38.2 / 38.3; without it the old queue path.
+- `CampaignBattles::galactic_context_begin` (engine/apps/sim, called by `push_battle` after the battle AI starts) builds
+  the context from `CampaignBattleOptions::galactic_resolver` (the galactic AI world's resolver; unset → no context) and
+  `has_galactic_ai` (default: the galactic player's `ai` flag); the release adds to the player's credit account (which
+  holds the tactical credits during the battle, AI_TACTICAL §1.3) with `galactic::econ::add_credits(..., ai = false,
+  multiplier 1)` against the battle's saved / released pair (`CreditTransfer`). [port] A player without a transfer
+  record (no land transfer ran for it) releases nothing.
+- Headless (`engine/apps/headless/skirmish_run.cpp`): the campaign battle has no `GalacticAiWorld`, so
+  `add_galactic_context` gives it a `GalacticSimTokenResolver` over the run's `GalacticSim` (refreshed to the galactic
+  frame on each use). `--fail-on-lua-errors` makes any tactical Lua error fail the run (foc-station always did).
+- Out of ownership, for the integrator: `engine/apps/game/src/game_session.cpp` should pass
+  `bo.galactic_resolver = [w] { return &w->resolver(); };` (the session's `GalacticAiWorld`) and, when the game knows
+  which players have a galactic AI, `bo.has_galactic_ai`.
+- Result: `alamo_headless --skirmish-ai foc-land --seed 5 --ticks 20000 --expect-battle-end --fail-on-lua-errors`:
+  Lua errors 10 → 0; the battle still ends (Empire, all-retreated, 2799 of 14400 frames); final CRC b0d57b4a7a9d00b0 →
+  9a32632080b3609d (the Rebel plan FUNDTACTICALSTRUCTURES now funds its player instead of dying).

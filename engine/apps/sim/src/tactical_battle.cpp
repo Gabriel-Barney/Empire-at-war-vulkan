@@ -1980,9 +1980,26 @@ void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
         sim::drop_half_extents(types, catalog_, store.type(l.h), b.hx, b.hy);
         return b;
     };
+    auto unloaded = [&](const Landing& l) {  // 0x6438a0: the signal 0x19 record (ReinforcementsUnloadedDataClass)
+        const Participant& P = parts_[l.participant];
+        LandingUnload rec;
+        rec.landing = l.id;
+        rec.galactic_id = P.galactic_id;
+        rec.owner = P.owner;
+        rec.carried_type = P.type;
+        rec.units = l.units;
+        landings_unloaded_.push_back(std::move(rec));
+    };
     for (size_t li = 0; li < landings_.size(); ++li) {
         Landing& l = landings_[li];
         if (!store.alive(l.h)) {
+            // a1j t01 (A1_READINGS §36): a timed landing destroyed before its finish. Its behaviour's detach (vf15 0x6442d0,
+            // run when the object is deleted) finishes the unload when a unit is out (+0xb0 != 0): unlock, signal 0x19 with
+            // the units out so far. With none out the original sends nothing and the Reinforce status waits forever
+            // [port: the record is sent with no units, so the status's in-flight count still reaches 0]. The members not
+            // yet out are lost.
+            if (l.timed && l.state != 3) unloaded(l);
+            l.units.clear();
             l.state = 3;
             l.remove_frame = 0;
             continue;
@@ -2007,13 +2024,7 @@ void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
         const std::vector<uint32_t> members = spawn_types(P);
         const auto n = static_cast<uint32_t>(members.size());
         if (l.unloaded >= n) {  // 0x6438a0: finish
-            LandingUnload rec;
-            rec.landing = l.id;
-            rec.galactic_id = P.galactic_id;
-            rec.owner = P.owner;
-            rec.carried_type = P.type;
-            rec.units = l.units;
-            landings_unloaded_.push_back(std::move(rec));
+            unloaded(l);
             l.units.clear();  // unlocked
             l.state = 3;
             l.remove_frame = frame_;

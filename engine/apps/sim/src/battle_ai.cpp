@@ -1537,6 +1537,26 @@ std::vector<int32_t> BattleAi::ability_finished() {
 }
 
 bool BattleAi::movement_locked(int32_t object_id) { return object_id >= 0 && b_->movement_locked(object_id); }
+
+bool BattleAi::reinforce_in_flight(int32_t player, int32_t key) {
+    for (const TacticalBattle::Landing& l : b_->landings_) {
+        const TacticalBattle::Participant& p = b_->parts_[l.participant];
+        if (l.timed && l.state != 3 && p.owner == player && p.galactic_id == key) return true;
+    }
+    return false;
+}
+
+std::vector<ai::tactical::ReinforcementsUnloaded> BattleAi::reinforcements_unloaded() {
+    std::vector<ai::tactical::ReinforcementsUnloaded> out;
+    for (const TacticalBattle::LandingUnload& rec : b_->landings_unloaded()) {
+        ai::tactical::ReinforcementsUnloaded r;
+        r.player = rec.owner;
+        r.key = rec.galactic_id;
+        r.units.assign(rec.units.begin(), rec.units.end());
+        out.push_back(std::move(r));
+    }
+    return out;
+}
 float BattleAi::sight_weather_factor(int32_t type, int32_t) {
     const objects::GameObjectTypes& types = b_->catalog_->types();
     if (b_->space_ || type < 0 || static_cast<size_t>(type) >= types.size()) return 1.0f;

@@ -628,6 +628,7 @@ private:
     void resolve_collision(CollisionObject& c, bool full, uint32_t frame, std::vector<uint8_t>& acted);
     void mvm_response(Unit& x, const Unit& y, uint32_t frame);
     bool resolve_blocker(Unit& a, uint32_t blocker, float contact, uint32_t frame, bool full);
+    bool push_aside(const Unit& a, Unit& b);
     void update_tree(const Unit& u);
     V2 pick_land_slot(const Unit& u, V2 slot, std::vector<uint64_t>& taken) const;
     void move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
