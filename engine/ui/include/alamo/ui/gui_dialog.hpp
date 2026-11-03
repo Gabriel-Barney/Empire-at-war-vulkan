@@ -110,9 +110,10 @@ struct GuiControl {
     std::u32string text;               // caption (resolved) / edit text
     int32_t value = 0, range_min = 0, range_max = 100;  // slider / progress
     std::vector<std::u32string> items; // list / combo
-    // [port] per-item colour swatches (list / combo): item k with a colour draws a filled box instead of its text. The
-    // multiplayer colour combos (IDC_PLAYER_COLOR_n: a 35 pt glyph at Stretch_Factor 0.25 in GUIDialogs.xml - a colour
-    // block in the original) use it.
+    // Per-item colours (list / combo): item k with a colour has its TEXT drawn flat in that colour (both gradient ends,
+    // control font; kept when the control is disabled) - UI.md §3.7.1. The multiplayer colour combos fill each item with
+    // one glyph (U+25A0 / U+2588), which the per-control font (IDC_PLAYER_COLOR_n: Arial Unicode MS 35, Stretch_Factor
+    // 0.25) turns into a flat wide bar: the colour "swatch".
     std::vector<Rgba8> item_colors;
     // [port] per-item text colours (list): item k is drawn in item_text_colors[k] (flat, no font gradient) when that
     // colour's alpha is > 0, else in the skin's font colours. Story dialog scripts' TEXTCOLOR lines use it.
@@ -120,6 +121,7 @@ struct GuiControl {
     int32_t selected = -1;             // list / combo selection
     int32_t top = 0;                   // first visible list row
     bool open = false;                 // combo drop-down shown
+    bool left_justified = false;       // combo: closed-field text starts at the left edge + inset instead of centred (UI.md §3.7.1)
     size_t caret = 0;                  // edit caret (code points)
     size_t max_chars = 256;            // edit limit [port]
     bool read_only = false;            // edit: keys are not typed into it (key-capture fields)

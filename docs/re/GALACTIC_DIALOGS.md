@@ -309,7 +309,8 @@ ui: battle-end dialog (shared with the tactical end). Keep the progress dialog b
   ("Planet Info"), `Text_Land_Fleet`, big fleet icons `q1..q4_fleet`, `collision_background`.
 - **Shown only** (0x3e83a0, every HUD update) when a planet is selected (+0x2150), the galactic camera is in
   its planet close-up state (camera +0x44 = 3, the zoom-in of 26.jpg), the organiser flag (+0x26a4) is set,
-  and the advanced planet map is not open. Otherwise hidden. Entering the planet map hides it and the main
+  and the advanced planet map is not open. Otherwise hidden. Which fleet fills which of the three panes (all
+  three always drawn, whatever the fleet count): UI.md §7 (2026-11-02). Entering the planet map hides it and the main
   bar; leaving restores both (0x3c5fc0 / 0x3ce970).
 - Port (33/34.webp) shows the frames over the galaxy view and anchored low (over the command bar). Fix: top
   anchor per `Model_Offset_Y`, and show only in the planet close-up. **ui** (+ the shell anchor in the HUD
