@@ -1265,3 +1265,140 @@ type name 0x407c00), but only one optional string, in argument 2; failure → er
 - The empty-string filter → mask 0 path depends on tokenizer 0x2010e0 returning no token for an empty string [M].
 - Which store a galactic script sees while a tactical battle runs (galactic story scripts during a battle): the
   function always uses the current mode's store; which Lua contexts are serviced then was not traced.
+
+## Unit order bindings: target arguments (q6 TR, 2026-11-03)
+
+Hand-written section (keep it when regenerating). Exposed by Thrawn's Revenge:
+`Data/Scripts/FreeStore/BusyTacticalFreeStore.lua:229` calls `object.Attack_Target(best_target)` with the result of
+`FindTarget.Reachable_Target(PlayerObject, "Unit_Needs_To_Be_Destroyed_Freestore", "Enemy_Unit", "Any_Threat", 1.0,
+object, range)`. `Reachable_Target` always returns an **AITargetLocationWrapper** (AI_TACTICAL §6.2), so the original
+accepts an AI target here.
+
+Conventions as SCRIPT_GAPS §0: "error" = 0x248190, "warning" = 0x248620. Lua class ids [H]: GameObjectWrapper
+0x140a43b18 (wrapper object at +0x60), AITargetLocationWrapper 0x140a44280 (AI target at +0x38; its object via vf+0x30,
+its position via vf+0x68), TaskForceClass 0x140a441e0, PositionWrapper 0x140a44290 (x, y, z at +0x28 / +0x2C / +0x30),
+Lua table 0x140a15790, string 0x140a157d0, number 0x140a157c0.
+
+### What an error does to the script [H unless tagged]
+
+- Neither helper unwinds the Lua stack: the binding returns at once with **no value**, so the caller sees `nil` and the
+  script keeps running. There is no Lua error, so `pcall` reports success.
+- The error helper 0x248190 has no logger in the shipped build (callback 0xb09d40 null), so it only sets byte +0x121 of
+  the script object (LUA_SCRIPT_OUTPUT §1, last paragraph). The warning helper does not set it.
+- The script service 0x247a90 checks that flag after each thread it resumes: once it is set it stops resuming the
+  script's other threads, and at the end of the pass calls 0x2488e0. That function kills all the script's threads and
+  clears `LuaThreadTable`, then either re-runs `Flush_G` and `Base_Definitions` (when byte +0x124 is set) or closes the
+  Lua state and unregisters the script. So in the original a binding **error** ends the calling script (or resets it) at
+  the end of its current service pass. A **warning** has no such effect [H for the code path; M for what +0x124 means].
+
+### GameObjectWrapper.Attack_Target([units,] target) — 0x5730f0 [H]
+
+1. The current mode must answer true to mode vf+0xF0 (tactical), else error "this command is only supported in
+   tactical modes".
+2. No argument → error. The wrapper's own object dead (+0x60 null) → returns nothing **without** an error.
+3. The calling object movement-locked (0x39ad40, A1_READINGS §28.8) → warning "locked into existing orders", nothing
+   returned. Only the calling object is tested, even when a unit table is passed.
+4. If argument 1 is a Lua table, it is the list of attackers and the target is argument 2; otherwise the attackers are
+   the calling object alone and the target is argument 1. Too few arguments → error "Expected %d, got %d".
+5. **Target argument.** The conversion is inline here, not a shared helper. It accepts exactly two classes:
+
+| target argument | resolves to | failure |
+|---|---|---|
+| GameObjectWrapper | its object (+0x60) | object dead → error "Target is already dead." |
+| AITargetLocationWrapper | the AI target's object (AI target vf+0x30) | AI target (+0x38) null → error "Target is already dead."; AI target without an object (a region or cell target, e.g. `Tactical_Location`) → error "destination is not valid for an attack command." |
+| anything else: nil, PositionWrapper, TaskForce, number, string, table, player | — | error "Parameter 1 is not a valid destination for unit %s" (always says "Parameter 1") |
+
+   A unit-type AI target (`Enemy_Unit`, as in TR) therefore attacks that unit. The target is not checked against the
+   attacker itself.
+6. No movement coordinator system (mode vf+0x228) → error. No new formation from 0x426010 → error.
+7. **Attackers.** Each table entry must be a GameObjectWrapper. Other entries → warning (the text is a copy-paste:
+   "Find_Best_Local_Threat_Center -- invalid type for entry at index %d in object table.") and are skipped. Dead entries
+   are skipped silently. The live ones are **sorted by object id** (+0x50, ascending; a bubble sort in a static
+   vector). Then, per attacker:
+   - 0x38f5d0(obj), then the attack test 0x38d730(obj, target, 0, 1, 0, −1, 0). If it fails → warning "object %s unable
+     to attack %s.", and the unit is skipped;
+   - if the coordinator accepts the unit (0x425e30): add it (0x426d50), signal 0xB on the unit, add it to the
+     formation (vf+0x18), and append it to the order's unit list;
+   - otherwise, a unit in no team container (obj +0x348 == −1) → warning "unable to make object %s move.". A team
+     container: each member of its team behaviour (slot 0x16) is added the same way. If the container has no team
+     behaviour, the binding returns at once with nothing.
+8. It then builds a `UnitMovementBlockStatus` (0x6ad850; +0x20 = 0x824; 0x6ad960(status, self, units, target)) and
+   issues the formation order 0x4f8200 with kind **3** (object target) and the target object. It returns the status
+   (a blocking object) **even when no attacker was accepted**.
+
+### Move_To / Attack_Move / Guard_Target — shared body Move_Internal 0x57da90 [H]
+
+The three tactical bindings share one body. The flags argument: `Move_To` 0x57e520 → 0 (in galactic mode, mode type 0,
+`Move_To` goes to the galactic mover 0x57d8c0 instead); `Attack_Move` 0x5730e0 → 1; `Guard_Target` 0x579da0 → 2
+(both are register-load-and-jump stubs). Same tactical-mode check, error on a dead caller ("this object is already
+dead"), and locked → warning, as Attack_Target. Argument 1 may be a unit table, as above; non-GameObjectWrapper
+entries → **error** "Entry %d in unit array is not a gameobject." (the loop carries on, but the error flag is set).
+
+**Destination argument** (argument 1, or 2 after a table). Four classes are accepted; anything else (nil, number,
+string, player) → error "Parameter 1 is not a valid destination for unit %s".
+
+| destination | Move_To (0) | Attack_Move (1) / Guard_Target (2) |
+|---|---|---|
+| AITargetLocationWrapper (AI target +0x38 null → error "Target is already dead.") | position: AI target vf+0x68 | object target: AI target vf+0x30, unless it is null, the caller itself, or the caller's container (obj +0x2B0); then the position vf+0x68 |
+| GameObjectWrapper (object dead → error "Target is already dead.") | position: object +0x78 / +0x7C / +0x80 | object target, unless it is the caller or its container; then its position |
+| TaskForceClass | position: task force vf+0x170 | Guard_Target only: the first member object that is not the caller or its container, else vf+0x170. Attack_Move: vf+0x170 |
+| PositionWrapper | position +0x28..+0x30 | same position |
+
+Then, in space mode only (mode vf+0xE0 == 2), an optional string = a space collision type for avoidance, looked up in
+the enum at 0x140b310e8 (unknown → error "unknown space collision type %s"); the order stores its bitwise complement
+(default 0x3F when absent). Then an optional number (default 1e18) stored in the order record [L: a distance or speed
+limit]. Each unit is added as in Attack_Target step 7, **in table order, without sorting**. If no unit was accepted →
+warning "failed to move any objects", nothing returned. Otherwise a `UnitMovementBlockStatus` (0x5761e0(0x824),
+0x6ad960) is created, and the order 0x4f8200 gets kind 3 with the object when an object target was resolved, else
+kind 1 with the position, plus the flags. The status is returned (0x256d40).
+
+**Shared conversion.** There is no shared target-conversion helper. Attack_Target and Move_Internal each test the Lua
+class ids inline, in the same order (AITargetLocationWrapper, then GameObjectWrapper; Move_Internal then TaskForce and
+PositionWrapper). The AI target's object and position come from its vf+0x30 and vf+0x68 in both. Attack_Target accepts
+only the two object-carrying classes and needs an object; Move_Internal also accepts positions and task forces and
+falls back to a position. The task-force variants (`SpaceTaskForceClass` 0x6e54d0 / `LandTaskForceClass` 0x6e99c0
+`Attack_Target`, …) are separate functions with their own messages and were not read here.
+
+## EvaluatePerception(name, player [, target]) — 0x699430: nil versus 0 [H]
+
+The binding returns either one number or **nothing** (nil in Lua). It never substitutes 0. A failed evaluation returns
+nothing: PerceptionFunctionG.dll leaves the output untouched and returns false (AI_GALACTIC_3 §7.1). Paths that
+return nothing:
+
+| case | helper |
+|---|---|
+| not 2 or 3 arguments; argument 1 not a string; unknown function name ("Unrecognised perception function %s") | error |
+| argument 2 not a PlayerWrapper | error |
+| argument 3 present but neither AITargetLocationWrapper nor GameObjectWrapper | error |
+| argument 3 dead: AI target +0x38 null, or the GameObjectWrapper's object gone ("target is already dead") | error |
+| the player has no AI (player +0x360 null) | error |
+| the AI has no context for the current mode, or it is not initialised (0x4b06d0(AI, mode type), byte +0x69 = 0) | **warning** |
+| `PerceptionFunctionClass::Evaluate` false: any failing leaf (unregistered token, unbound root, Self-only leaf on another player, a fogged leaf's failure), a / b with a ≠ 0 and b = 0, Clamp with lo > hi | error |
+
+Bindings: Self = the player; Enemy = the goal system's opponent if any; Human = the first human player if any;
+Target from argument 3. A GameObjectWrapper target binds the planet's perception id (planet data +0x354) when the
+object is a planet (byte obj +0x335 ≠ −1), else the object's name string (0x4dc3a0). An AI target binds via its
+vf+0x28. With only 2 arguments no Target is bound, so any `Variable_Target` path fails → nil. The evaluation runs on the
+perception system of the **current** mode's AI context.
+
+**PATHBONUSFORDISTANTTARGETS.LUA:83** (vanilla FoC and TR are the same here, apart from `/ 2.0` and `Sleep(2.0)`):
+`(EvaluatePerception("GenericPlanetValue", PlayerObject, planet) + EvaluatePerception("Is_Neglected_By_My_Opponent_Space",
+PlayerObject, planet)) / 2`. The planet comes from `FindPlanet.Get_All_Planets()` and passed `TestValid` just before,
+with no yield in between. PlayerObject is the AI. The thread is a galactic plan, and the galactic mode does not tick
+under a tactical battle (MAIN_LOOP §0 item 6), so it runs only while the galactic mode is current. That leaves only the
+equation itself as a source of nil:
+- vanilla `GenericPlanetValue` = (15·BaseIncome + MaxStructureSlots + 2·MaxGroundbaseLevel + 2·MaxStarbaseLevel +
+  10·TradeRoutes) / 30 and `Is_Neglected_By_My_Opponent_Space` = IsHumanControlled · ((EnemyForce.HasSpaceForce +
+  EnemyForce.HasGroundForce) > 0) · (1 − EnemyForce.SpaceTotalNBPTM). These are all planet leaves that fail only
+  without a planet data pack (§1–2 of AI_GALACTIC_TOKENS). The NBPTM normalisation returns 0 for a zero numerator and
+  clamps otherwise (AI_GALACTIC_TOKENS §0), and the divisor is a constant. So **the original script cannot get nil
+  there in a normal game; the arithmetic always sees two numbers** [M: relies on no planet lacking its data pack].
+- TR's `GenericPlanetValue` adds `5.0 * Function_Max_Shipyard_Level.Evaluate`, built from
+  `Variable_Target.Type.IsType {Parameter_Type = …}` sums. `Target.Type` is the planet's GameObjectType evaluator (0x6d8040
+  binds the root evaluator found for the planet's type-name token; GameObjectTypePerceptualEvaluator 0x64fcb0, whose
+  registration 0x650000 has `Token` 0x64ff50 and `IsType` 0x64fd60, reading `Parameter_Type` 0x140a43c68) [H]. So it is
+  valid in the original, provided a type evaluator exists for the planet's type [L: which types get one was not traced].
+  A port that fails `Type.IsType` on planets turns line 83 into nil + number → a Lua arithmetic error in that plan
+  thread.
+- A nil would come only from the warning row (AI context of the current mode missing or not initialised, e.g. during
+  galactic start-up) [L: not observed].
