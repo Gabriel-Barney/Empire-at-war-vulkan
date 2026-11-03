@@ -459,6 +459,24 @@ static void test_synthetic(const render::SyntheticSimWorld& w) {
                              mark = w.types.resolve_name("Sim_Marker");
     CHECK(table[frig].model == render::kSyntheticModel && table[corv].model == render::kSyntheticModel && table[mark].model.empty());
     CHECK(table[frig].scale == 60.0f && table[corv].scale == 40.0f && table[frig].lod_bias == 4.0f && table[frig].max_health == 1200.0f);
+    {   // p4uia t02: set_owner_colours replaces owner % 9 for the owners it lists
+        uint8_t idx = 0;
+        table.team_color(1, table[frig], idx);
+        CHECK(idx == 1);
+        table.set_owner_colours({5, 2});
+        table.team_color(0, table[frig], idx);
+        CHECK(idx == 5);
+        const materials::float4 c1 = table.team_color(1, table[frig], idx);
+        CHECK(idx == 2 && c1.x == table.palette()[2].x && c1.y == table.palette()[2].y);
+        table.team_color(4, table[frig], idx);
+        CHECK(idx == 4);  // past the list: owner % 9
+        table.set_owner_colours({40});
+        table.team_color(0, table[frig], idx);
+        CHECK(idx == 40 % 9);
+        table.set_owner_colours({});
+        table.team_color(0, table[frig], idx);
+        CHECK(idx == 0);
+    }
 
     // Read-only: CRC logs with and without the render side after every tick.
     RunSpec off;

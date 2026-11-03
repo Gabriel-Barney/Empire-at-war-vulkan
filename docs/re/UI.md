@@ -868,8 +868,31 @@ file name (§9.4).
 - [port] Entries are keyed by the logical path, so a mod-folder map whose name two mod dirs share is one entry (the
   VFS reads the earlier dir's file; the original lists two rows that load different files). The same logical path can
   sit in both lists; the custom flag decides which tab shows it, as in the original.
-- [port] One list holds space then land maps (the existing combined list) instead of the `IDC_GAME_TYPE_LIST`
-  switch; each kind is sorted by row text, case-insensitively, ties by path. A map's kind comes from mini 01, never
-  from its name.
-- Not modelled yet (follow-up): the game-type list, remembering the last map per type, the preview image and start
-  overlay, `IDC_SCENARIO_DESCRIPTION_TEXT_BOX` (its text source is not read yet).
+- `IDC_GAME_TYPE_LIST` (p4uim t01): two rows, Land then Space (`TEXT_GAME_TYPE_TEAM_LAND` / `_TEAM_SPACE`; the other
+  game types of the text database are not offered), and the map list shows only the rows of that type; a map's kind comes
+  from mini 01 (never its name), each list is sorted by row text, case-insensitively, ties by path. [port] A first opening
+  is on Space (keeps the smoke runs on Kuat; the original's default row is not read); later openings start on the type of
+  the map started last.
+- The map chosen last is remembered **per game type** (p4uim t02, 9.4): Start stores the map id for its type, and any refill
+  (opening, tab switch, type switch) selects that map when the active tab lists it, else Kuat on Space [port], else row 0.
+
+### 9.6 Preview, start overlay, description and colours (p4uim t03 / t04, p4uia t01 / t02, 2026-11-03)
+
+- **Colour combos** (`IDC_PLAYER_COLOR_n`, UI.md 3.7.1): the used slots (local player + one AI [port]) are filled with
+  the 9 palette entries from the host (`MP_Color_*`, byte RGB), one U+25A0 item per entry; the default colour is the slot
+  index. [port] Two players never share a colour: choosing the other slot's colour swaps the two. Start carries the colour
+  index of each player in player order; the host applies it to the battle's team colours (presentation only: the sim never
+  reads a colour). Without a palette the combos stay hidden.
+- **Preview** `IDC_IMAGE` (9.4, 0xfacb0): the host picks `<file stem>.tga`, else the map's embedded top chunk 0x13, else
+  `Generic_Space.tga` / `Generic_Land.tga`. The shipped `_MP_*` previews are `Data\Art\Textures\<stem>.DDS` found through
+  the `.tga` name; chunk 0x13 is a complete **TGA file** (256 x 256, 32 bit, `Saved by ...` id field; 262 175 bytes in
+  the three `Patch2.meg` maps that have one: `_MP_LAND_HONOGHR`, `_MP_LAND_UTAPAU`, `_MP_SPACE_DATHOMIR`) decoded in memory
+  and registered under `temp_map_preview_texture:<stem>`.
+- **Start overlay** (mini 12, top chunk 3, 0x1032f0): square markers at the start positions, start i in slot i's colour
+  [port: the original's marker art is not read]. Position fraction: land maps run 0..width / 0..height from the lower-left
+  corner, space maps are centred on the origin (checked against the patched `_MP_*` maps: land coordinates inside
+  0..width, space coordinates within +-width/2) [M]; world +Y is up, the image's y runs down. Without mini 12 nothing is drawn.
+- **Description** `IDC_SCENARIO_DESCRIPTION_TEXT_BOX` [port, M]: the shipped text database has no per-map description key
+  (only `TEXT_MAP_NAME_*`), so the box shows the selected game type's description (`TEXT_GAME_DESCRIPTION_TEAM_LAND` /
+  `_TEAM_SPACE`). It sits inside the `IDC_IMAGE` rectangle in `GUIDialogs.rc` (22,85,179,167 inside 17,73,190,192) and so is
+  drawn over the preview. What the original puts in it is still open.

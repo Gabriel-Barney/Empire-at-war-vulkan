@@ -189,7 +189,14 @@ struct SkirmishMapInfo {
     std::string name_key{}; // the map's name text key (UTF-8, mini 08), "" = none: the row shows the file name
     uint32_t players = 0;   // player count for the "(N) " prefix, 0 = use max_players
     bool custom = false;    // Custom tab (true) or Official tab (false)
-    bool space = false;     // a space map (sorted before the land maps)
+    bool space = false;     // a space map: listed under the Space game type, else under Land (p4uim t01)
+};
+// p4uim t03 (docs/re/UI.md section 9.6): what IDC_IMAGE shows for the selected map. `texture` is the image the host chose
+// (<stem>.tga, else the map's embedded image, else Generic_Space / Generic_Land.tga; "" = none); `starts` are the start
+// positions as 0..1 fractions of the image (x right, y down), drawn over it when the map has them (mini 12).
+struct SkirmishPreview {
+    std::string texture;
+    std::vector<Vec2f> starts;
 };
 
 struct MenuAction {
@@ -218,6 +225,8 @@ struct MenuAction {
     Kind kind = Kind::ResumeGame;
     std::string campaign, faction, map, save;
     std::vector<std::string> factions;
+    // StartSkirmish (p4uia t02): the colour index (0..8, a GameConstants MP_Color_* entry) of each player, in player order.
+    std::vector<int32_t> colors;
     int32_t difficulty = 1;
     AudioVolumes audio;
     VideoSettings video;
@@ -234,6 +243,11 @@ struct MenuProviders {
     std::function<std::u32string()> save_blocker;
     std::function<bool(const std::string&)> save_exists;
     std::function<std::vector<SkirmishMapInfo>()> skirmish_maps;
+    // p4uia t01: the 9 GameConstants MP_Color_* entries (the host palette) the skirmish colour combos offer; null / empty:
+    // the combos stay hidden.
+    std::function<std::vector<Rgba8>()> player_colors;
+    // p4uim t03: the preview of a map row (null: no image). Called when the selection changes; the host caches.
+    std::function<SkirmishPreview(const SkirmishMapInfo&)> skirmish_preview;
     std::function<AudioVolumes()> audio;
     std::function<VideoSettings()> video;
     std::function<GameplaySettings()> gameplay;
@@ -278,6 +292,11 @@ public:
     int32_t skirmish_map_row(std::string_view map) const;
     // Which tab the skirmish staging list shows: false Official (the dialog's state when it opens), true Custom.
     bool skirmish_custom_tab() const { return custom_tab_; }
+    // p4uim t01: the game type IDC_GAME_TYPE_LIST selects (the list shows the maps of that type): true Space, false Land.
+    // A dialog opened for the first time starts on Space [port]; later on the type of the map started last (t02).
+    bool skirmish_space_type() const { return space_type_; }
+    // p4uia t01: the colour index shown in skirmish slot `slot` (0..7), -1 when the slot is not shown.
+    int32_t skirmish_colour(int32_t slot) const;
 
 private:
     void go(std::string_view dialog);    // replace the top dialog
@@ -290,7 +309,10 @@ private:
     void fill_campaign_select(GuiDialog& d);
     void fill_custom_staging(GuiDialog& d);
     void fill_skirmish(GuiDialog& d);
-    void fill_skirmish_maps(GuiDialog& d);  // the list of the active tab, from maps_
+    void fill_skirmish_maps(GuiDialog& d);  // the list of the active tab and game type, from maps_
+    void fill_skirmish_game_types(GuiDialog& d);
+    void fill_skirmish_colours(GuiDialog& d);
+    void fill_skirmish_preview(GuiDialog& d);  // IDC_IMAGE, its start markers and IDC_SCENARIO_DESCRIPTION_TEXT_BOX
     std::u32string skirmish_row_text(const SkirmishMapInfo& m) const;
     void fill_saves(GuiDialog& d);
     void fill_audio(GuiDialog& d, const AudioVolumes& v);
@@ -322,7 +344,11 @@ private:
     std::vector<SkirmishMapInfo> maps_;
     std::vector<size_t> map_view_;   // skirmish list rows -> index into maps_ (active tab, sorted)
     bool custom_tab_ = false;        // skirmish list: Custom tab active
-    std::string last_map_;           // the map the last StartSkirmish used ("" = none yet)
+    bool space_type_ = true;         // skirmish list: Space game type (false Land)
+    int32_t last_type_ = -1;         // the game type of the last StartSkirmish (0 land, 1 space), -1 = none yet
+    std::string last_map_[2];        // the map the last StartSkirmish used per game type [0 land, 1 space] ("" = none yet)
+    std::vector<Rgba8> colour_palette_;   // the host palette read when the skirmish dialog opened
+    int32_t slot_colour_[8] = {0, 1, 2, 3, 4, 5, 6, 7};  // colour index of each skirmish slot (default = the slot index)
     std::string quit_action_;  // "exit" / "main"; N1 / t09: "overwrite" / "delete" (confirm_save_)
     std::string confirm_save_;  // the save an overwrite / delete confirmation is about
     bool save_blocked_ = false; // the open Save dialog's save_blocker refused
