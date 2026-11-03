@@ -5,6 +5,8 @@
 #include <filesystem>
 
 #include "alamo/sim/save_session.hpp"
+#include "alamo/terrain/chunk.hpp"
+#include "alamo/terrain/ted.hpp"
 #include "alamo/vfs/vfs.hpp"
 #ifdef ALAMO_GAME_HAVE_GALACTIC_AI
 #include "alamo/ai/ai_lua_runtime.hpp"
@@ -253,6 +255,78 @@ std::vector<std::string> skirmish_space_maps(const GameData& data) {
     std::sort(out.begin(), out.end());
     if (const auto it = std::find(out.begin(), out.end(), "_MP_SPACE_KUAT"); it != out.end()) std::rotate(out.begin(), it, it + 1);
     return out;
+}
+
+namespace {
+constexpr std::string_view kOfficialDir = "DATA\\ART\\MAPS\\";
+
+// The header of one candidate through the normal lookup (UI.md 9.1 / 9.3).
+SkirmishMapEntry read_map_entry(const FileProvider& files, const std::string& path) {
+    SkirmishMapEntry e;
+    e.path = path;
+    e.map = path;
+    if (path.size() > kOfficialDir.size() && path.compare(0, kOfficialDir.size(), kOfficialDir) == 0 &&
+        path.find('\\', kOfficialDir.size()) == std::string::npos) {
+        e.map = path.substr(kOfficialDir.size());
+        if (e.map.size() > 4 && e.map.compare(e.map.size() - 4, 4, ".TED") == 0) e.map.resize(e.map.size() - 4);
+    }
+    std::vector<uint8_t> bytes;
+    if (!files.read(path, bytes)) return e;
+    terrain::ParseOptions opt;
+    opt.environments_only = true;  // chunk 0 only (plus the cheap environment set); later chunks are never trusted here
+    terrain::MapData md;
+    std::string err;
+    terrain::parse_ted(bytes, md, &err, opt);  // a malformed later chunk leaves the already decoded header usable
+    if (!md.info.present) return e;
+    e.readable = true;
+    e.kind = md.info.map_type;
+    e.players = terrain::find_mini(md.info.raw, 0x02) ? md.info.counts[0] : 1u;
+    e.custom = md.info.flag_0b == 1;
+    e.name_key = md.info.name_key;
+    return e;
+}
+}  // namespace
+
+SkirmishMapCatalog build_skirmish_map_catalog(const vfs::Vfs& vfs) {
+    SkirmishMapCatalog c;
+    constexpr uint32_t kLoose = vfs::Vfs::kLayerBase | vfs::Vfs::kLayerMeg;
+    for (const std::string& p : vfs.list("Data\\Art\\Maps\\*.TED", kLoose)) c.official.push_back(read_map_entry(vfs, p));
+    std::vector<std::string> custom = vfs.list("Data\\CustomMaps\\*.TED", kLoose);
+    for (std::string& p : vfs.list("Data\\Art\\Maps\\*.TED", vfs::Vfs::kLayerMod)) custom.push_back(std::move(p));
+    std::sort(custom.begin(), custom.end());
+    custom.erase(std::unique(custom.begin(), custom.end()), custom.end());
+    for (const std::string& p : custom) {
+        SkirmishMapEntry e = read_map_entry(vfs, p);
+        if (e.readable && e.custom) c.custom_scan.push_back(std::move(e));
+    }
+    return c;
+}
+
+SkirmishMapCatalog build_skirmish_map_catalog(const GameData& data) {
+    return data.vfs ? build_skirmish_map_catalog(*data.vfs) : SkirmishMapCatalog{};
+}
+
+std::vector<SkirmishMapEntry> skirmish_map_rows(const SkirmishMapCatalog& catalog, bool custom_tab) {
+    std::vector<SkirmishMapEntry> out;
+    const auto add = [&](const std::vector<SkirmishMapEntry>& list) {
+        for (const SkirmishMapEntry& e : list) {
+            if (!e.readable || (e.kind != 1 && e.kind != 2) || e.players < 2 || e.custom != custom_tab) continue;
+            if (std::any_of(out.begin(), out.end(), [&](const SkirmishMapEntry& o) { return o.path == e.path; })) continue;
+            out.push_back(e);
+        }
+    };
+    add(catalog.official);
+    add(catalog.custom_scan);
+    return out;
+}
+
+const SkirmishMapEntry* find_skirmish_map(const SkirmishMapCatalog& catalog, std::string_view map) {
+    if (map.empty()) return nullptr;
+    const std::string path = terrain::map_path(map);
+    for (const auto* list : {&catalog.official, &catalog.custom_scan})
+        for (const SkirmishMapEntry& e : *list)
+            if (e.path == path) return &e;
+    return nullptr;
 }
 
 }  // namespace alamo::game

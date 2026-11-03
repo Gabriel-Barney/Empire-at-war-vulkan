@@ -81,10 +81,38 @@ bool App::init() {
     gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
     // Menus: skirmish maps from the data, audio volumes from the host.
     ui::MenuProviders mp;
-    // Skirmish maps: space maps (Kuat first), then land maps (a land map starts a land skirmish).
-    std::vector<std::string> maps = skirmish_space_maps(data_);
-    space_map_count_ = maps.size();
-    for (const std::string& m : skirmish_land_maps(data_)) maps.push_back(m);
+    // Skirmish maps (UI.md section 9, p4ui t06): the catalog of Data\Art\Maps, Data\CustomMaps and the mod folders' maps, read once;
+    // the front end filters the rows of the Official / Custom tab. Without a single catalog row (a data folder with no MP maps
+    // or no VFS) the old name lists stand in: space maps (Kuat first), then land maps.
+    skirmish_catalog_ = std::make_shared<const SkirmishMapCatalog>(build_skirmish_map_catalog(data_));
+    std::vector<ui::SkirmishMapInfo> map_rows;
+    for (const bool custom_tab : {false, true}) {
+        for (const SkirmishMapEntry& e : skirmish_map_rows(*skirmish_catalog_, custom_tab)) {
+            ui::SkirmishMapInfo i;
+            i.map = e.map;
+            i.max_players = e.players;
+            i.players = e.players;
+            i.name_key = e.name_key;
+            i.custom = custom_tab;
+            i.space = e.kind == 2;
+            map_rows.push_back(std::move(i));
+        }
+    }
+    if (map_rows.empty()) {
+        std::vector<std::string> names = skirmish_space_maps(data_);
+        const size_t space_count = names.size();
+        for (const std::string& m : skirmish_land_maps(data_)) names.push_back(m);
+        for (size_t k = 0; k < names.size(); ++k) {
+            ui::SkirmishMapInfo i;
+            i.map = names[k];
+            i.space = k < space_count;
+            map_rows.push_back(std::move(i));
+        }
+    }
+    std::printf("skirmish maps: %zu official, %zu custom rows (%zu + %zu catalog entries)\n",
+                static_cast<size_t>(std::count_if(map_rows.begin(), map_rows.end(), [](const ui::SkirmishMapInfo& m) { return !m.custom; })),
+                static_cast<size_t>(std::count_if(map_rows.begin(), map_rows.end(), [](const ui::SkirmishMapInfo& m) { return m.custom; })),
+                skirmish_catalog_->official.size(), skirmish_catalog_->custom_scan.size());
     mp.camera_settings = [this] { return camera_; };
     mp.gameplay = [this] { return gameplay_; };
     // Video options: the primary display's modes (the current window size selected, else the largest mode under it); the
@@ -140,15 +168,7 @@ bool App::init() {
         return ui::utf8_to_utf32(session_->check_save());
     };
     mp.save_exists = [this](const std::string& name) { return game::save_exists(saves_dir_, name); };
-    mp.skirmish_maps = [maps] {
-        std::vector<ui::SkirmishMapInfo> v;
-        for (const std::string& m : maps) {
-            ui::SkirmishMapInfo i;
-            i.map = m;
-            v.push_back(i);
-        }
-        return v;
-    };
+    mp.skirmish_maps = [map_rows] { return map_rows; };
     if (!ui_.init(gpu_, data_, std::move(mp), &err)) {
         std::fprintf(stderr, "UI: %s\n", err.c_str());
         return false;

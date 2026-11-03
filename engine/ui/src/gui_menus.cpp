@@ -9,6 +9,7 @@
 #include <iterator>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/ui/hud_components.hpp"  // utf8_to_utf32
 
 namespace alamo::ui {
 
@@ -38,6 +39,26 @@ std::u32string ascii32(std::string_view s) {
     std::u32string o;
     for (char c : s) o.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
     return o;
+}
+
+// UI.md 9.4: a map without a name key lists as its file name, directory and ".TED" dropped, cut to 22 characters + "..." when
+// longer than 25.
+std::string map_file_label(std::string_view map) {
+    if (const size_t s = map.find_last_of("\\/"); s != std::string_view::npos) map.remove_prefix(s + 1);
+    if (map.size() >= 4 && iequal(map.substr(map.size() - 4), ".TED")) map.remove_suffix(4);
+    if (map.size() > 25) return std::string(map.substr(0, 22)) + "...";
+    return std::string(map);
+}
+
+// Case-insensitive row order (ASCII folded; other code points by value): the original's _stricmp.
+char32_t fold32(char32_t c) { return c >= U'A' && c <= U'Z' ? static_cast<char32_t>(c - U'A' + U'a') : c; }
+bool row_text_less(const std::u32string& a, const std::u32string& b) {
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        const char32_t x = fold32(a[i]), y = fold32(b[i]);
+        if (x != y) return x < y;
+    }
+    return a.size() < b.size();
 }
 
 constexpr const char* kMain = "IDD_MAIN_MENU_DIALOG";
@@ -532,11 +553,63 @@ void FrontEnd::fill_custom_staging(GuiDialog& d) {
     d.show("IDC_SELECT_CUSTOM_MAPS", false);  // [port] no custom maps
 }
 
+std::u32string FrontEnd::skirmish_row_text(const SkirmishMapInfo& m) const {
+    if (!m.label.empty()) return m.label;
+    if (m.name_key.empty()) return ascii32(map_file_label(m.map));
+    // "(%d) %s": the player count and the localised name; the raw key when the text database has no entry (UI.md 9.3).
+    std::u32string t = gui_->text_db() && gui_->text_db()->find(m.name_key) ? gui_->caption_text(m.name_key) : utf8_to_utf32(m.name_key);
+    return ascii32("(" + std::to_string(m.players ? m.players : m.max_players) + ") ") + t;
+}
+
+// The active tab's maps: space maps first, then land maps (the port's one combined list), each by row text
+// case-insensitively, ties by map id (UI.md 9.4 / 9.5). The selection is the map started last when it is listed, else
+// _MP_SPACE_KUAT [port: stands in for the original's "map chosen last", and keeps the smoke runs on Kuat], else row 0.
+void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
+    struct Row {
+        size_t index;
+        std::u32string text;
+    };
+    std::vector<Row> rows;
+    for (size_t i = 0; i < maps_.size(); ++i)
+        if (maps_[i].custom == custom_tab_) rows.push_back({i, skirmish_row_text(maps_[i])});
+    std::sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
+        const SkirmishMapInfo &ma = maps_[a.index], &mb = maps_[b.index];
+        if (ma.space != mb.space) return ma.space;
+        if (a.text != b.text) {
+            const bool ab = row_text_less(a.text, b.text), ba = row_text_less(b.text, a.text);
+            if (ab != ba) return ab;
+        }
+        if (ma.map != mb.map) return ma.map < mb.map;
+        return a.index < b.index;
+    });
+    map_view_.clear();
+    std::vector<std::u32string> items;
+    int32_t sel = rows.empty() ? -1 : 0;
+    int32_t kuat = -1, last = -1;
+    for (size_t r = 0; r < rows.size(); ++r) {
+        const SkirmishMapInfo& m = maps_[rows[r].index];
+        map_view_.push_back(rows[r].index);
+        items.push_back(std::move(rows[r].text));
+        if (kuat < 0 && iequal(m.map, "_MP_SPACE_KUAT")) kuat = static_cast<int32_t>(r);
+        if (last < 0 && !last_map_.empty() && iequal(m.map, last_map_)) last = static_cast<int32_t>(r);
+    }
+    if (last >= 0) sel = last;
+    else if (kuat >= 0) sel = kuat;
+    d.set_items("IDC_STAGING_MAP_LIST", std::move(items), sel);
+}
+
+int32_t FrontEnd::skirmish_map_row(std::string_view map) const {
+    for (size_t r = 0; r < map_view_.size(); ++r)
+        if (iequal(maps_[map_view_[r]].map, map)) return static_cast<int32_t>(r);
+    return -1;
+}
+
 void FrontEnd::fill_skirmish(GuiDialog& d) {
     maps_ = p_.skirmish_maps ? p_.skirmish_maps() : std::vector<SkirmishMapInfo>{};
-    std::vector<std::u32string> items;
-    for (const SkirmishMapInfo& m : maps_) items.push_back(m.label.empty() ? ascii32(m.map) : m.label);
-    d.set_items("IDC_STAGING_MAP_LIST", std::move(items), maps_.empty() ? -1 : 0);
+    custom_tab_ = false;  // the Official tab is active when the dialog opens
+    fill_skirmish_maps(d);
+    d.show("IDC_SELECT_OFFICIAL_MAPS", true);
+    d.show("IDC_SELECT_CUSTOM_MAPS", true);
     std::vector<std::u32string> factions;
     for (const std::string& f : p_.skirmish_factions) factions.push_back(faction_label(f));
     char id[32];
@@ -556,7 +629,6 @@ void FrontEnd::fill_skirmish(GuiDialog& d) {
         std::snprintf(id, sizeof id, "IDC_PLAYER_COLOR_%d", p);
         d.show(id, false);
     }
-    d.show("IDC_SELECT_CUSTOM_MAPS", false);
 }
 
 void FrontEnd::fill_saves(GuiDialog& d) {
@@ -991,11 +1063,15 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
     } else if (iequal(n, kSkirmish) && d) {
         if (is("IDC_CANCEL_BUTTON")) go(kSingle);
         else if (is("IDC_SELECT_OPTIONS")) push(kAdvanced);
-        else if (is("IDC_SKIRMISH_START_GAME_BUTTON")) {
+        else if (is("IDC_SELECT_OFFICIAL_MAPS") || is("IDC_SELECT_CUSTOM_MAPS")) {
+            custom_tab_ = is("IDC_SELECT_CUSTOM_MAPS");
+            fill_skirmish_maps(*d);
+        } else if (is("IDC_SKIRMISH_START_GAME_BUTTON")) {
             const GuiControl* list = d->get("IDC_STAGING_MAP_LIST");
-            if (list && list->selected >= 0 && static_cast<size_t>(list->selected) < maps_.size()) {
+            if (list && list->selected >= 0 && static_cast<size_t>(list->selected) < map_view_.size()) {
                 MenuAction a = act(MenuAction::Kind::StartSkirmish);
-                a.map = maps_[static_cast<size_t>(list->selected)].map;
+                a.map = maps_[map_view_[static_cast<size_t>(list->selected)]].map;
+                last_map_ = a.map;
                 for (int32_t p = 0; p < 2; ++p) {
                     char id[32];
                     std::snprintf(id, sizeof id, "IDC_PLAYER_FACTION_%d", p);
