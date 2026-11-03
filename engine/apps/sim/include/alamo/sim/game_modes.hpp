@@ -74,6 +74,9 @@ struct ModeTickContext {
     const ParallelFor* pf = nullptr;
     uint32_t players = 8;
     std::vector<std::string>* trace = nullptr;
+    // q6 t09: the scoring-manager service (GAME_SCORING.md §2), run by GameModeManager::update at its "gmm.scoring"
+    // step, before the mode tick. Empty = nothing (the host has no GameScoring script).
+    std::function<void()> scoring;
     double sim_time() const { return static_cast<double>(global_frame) / static_cast<double>(30); }
 };
 
@@ -339,7 +342,7 @@ public:
     TacticalMode* top_tactical();
     const TacticalMode* top_tactical() const;
 
-    // GameModeManager::Update: scoring service [stub], then ONLY the top mode's tick.
+    // GameModeManager::Update: scoring service (ctx.scoring), then ONLY the top mode's tick.
     void update(const ModeTickContext& ctx);
     // Post_Tick: top mode frame += 1 unless paused.
     void post_tick();

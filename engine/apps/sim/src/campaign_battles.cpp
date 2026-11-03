@@ -701,9 +701,32 @@ void CampaignBattles::push_battle(SimHost& host) {
     galactic_context_begin(kind);  // a1j t07
 #endif
     register_battle_chunks();  // N1 stage 2: the running battle's save chunks
+    host.scoring_mode_started(kind, pending_req_.map);  // q6 t09: Game_Mode_Starting_Event(Land / Space, map)
+}
+
+// q6 t09 (campaign_battles.hpp ar_log_seen_): Reset_Tactical_Stats once per auto-resolve, at its begin when it is seen
+// running, else when its log entry appears.
+void CampaignBattles::scoring_auto_resolve() {
+    if (!cm_) return;
+    const std::vector<galactic::ConflictLogEntry>& log = cm_->log();
+    if (!ar_log_init_ || ar_log_seen_ > log.size()) {
+        ar_log_seen_ = log.size();
+        ar_log_init_ = true;
+    }
+    for (; ar_log_seen_ < log.size(); ++ar_log_seen_) {
+        if (log[ar_log_seen_].how != 1) continue;
+        if (ar_reset_sent_) ar_reset_sent_ = false;  // the one seen running ended
+        else host_->scoring_reset_tactical_stats();
+    }
+    const galactic::ConflictState s = cm_->state();
+    if ((s == galactic::ConflictState::AutoSetup || s == galactic::ConflictState::AutoRunning) && !ar_reset_sent_) {
+        host_->scoring_reset_tactical_stats();
+        ar_reset_sent_ = true;
+    }
 }
 
 void CampaignBattles::hook(SimHost& host) {
+    scoring_auto_resolve();  // q6 t09
 #ifdef ALAMO_SIM_HAVE_STORY
     if (StorySession* s = host.story(); s && s != story_fog_session_) {  // fog follow-up: ENABLE_FOW story rewards
         s->set_enable_fow_hook([this](bool has_param, int32_t value) { story_fog_reward(has_param, value); });
@@ -779,6 +802,9 @@ void CampaignBattles::hook(SimHost& host) {
     const bool auto_resolved = ar_requested_;
     ar_requested_ = false;
     if (auto_resolved) {
+        scoring_auto_resolve();               // q6 t09: entries before this one are settled first
+        host.scoring_reset_tactical_stats();  // q6 t09: the HUD auto-resolve begins inside resolve_battle
+        ar_reset_sent_ = true;                // its log entry consumes it
         result.winner = cm_->resolve_battle(result);
         log_.push_back("auto-resolve from tactical: winner " + std::to_string(result.winner));
     }

@@ -606,7 +606,8 @@ const TacticalMode* GameModeManager::top_tactical() const {
 }
 
 void GameModeManager::update(const ModeTickContext& ctx) {
-    // 1. countdown [stub]; 2. scoring-manager service [stub]; 3. ONLY the current mode ticks.
+    // 1. countdown [stub]; 2. scoring-manager service (q6 t09: ModeTickContext::scoring); 3. ONLY the current mode ticks.
+    if (ctx.scoring) ctx.scoring();
     if (ctx.trace) ctx.trace->emplace_back("gmm.scoring");
     if (GameMode* t = top()) t->tick(ctx);
     // 4-5. vote manager, MP battle-vote timeout [stubs].

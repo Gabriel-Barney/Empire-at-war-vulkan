@@ -1212,6 +1212,7 @@ void StorySession::service(uint64_t frame, double mode_seconds) {
         scratch_.clear();
         sim_->drain_events(scratch_);
         if (drain_tap_ && !scratch_.empty()) drain_tap_(round, scratch_);  // OI host: presentation tap (read-only)
+        if (scoring_tap_ && !scratch_.empty()) scoring_tap_(scratch_);      // q6 t09: GameScoring events (copied)
         std::vector<StoryTrigger> batch;
         batch.reserve(scratch_.size() + pending_host_.size() + pending_ui_.size());
         for (const galactic::GalacticEvent& e : scratch_)
