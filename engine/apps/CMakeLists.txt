@@ -107,6 +107,11 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
   set_tests_properties(alamo_sim_tests PROPERTIES TIMEOUT 600)
 endif()
 
+# q6 t03: alamo_game_rules (game/rules), the skirmish rules alamo_headless's skirmish host and alamo_game share.
+if(_alamo_sim)
+  add_subdirectory(game/rules)
+endif()
+
 # Headless host: load game data through the VFS, build a campaign's galaxy, and run the
 # deterministic tick with per-AI all-pairs recomputes on the job system. Also the Phase 2 smoke test.
 # With alamo_sim: --map NAME --ticks N runs a tactical map through the G0 host.
@@ -157,6 +162,7 @@ if(_alamo_sim)
   # --- A1 stage 2 (owner: A1 agent): --skirmish-ai synthetic|foc (headless/skirmish_run.cpp). Goldens: regenerate
   # after an intended change with the same command and --crc-out <golden path> (MSVC); clang must match. ---
   target_sources(alamo_headless PRIVATE headless/skirmish_run.cpp)
+  target_link_libraries(alamo_headless PRIVATE alamo_game_rules)  # q6 t03: AI types, default forces, map planet type
   if(TARGET alamo_ai_tactical_world)
     add_test(NAME alamo_headless_skirmish_ai_synthetic
              COMMAND alamo_headless --skirmish-ai synthetic --check-workers --quiet

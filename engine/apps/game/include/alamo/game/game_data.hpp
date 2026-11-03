@@ -20,6 +20,7 @@
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
+#include "alamo/game/skirmish_rules.hpp"  // q6 t03: AI types, default forces, map planet type (shared with alamo_headless)
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "alamo/sim/battle_catalog.hpp"
@@ -55,26 +56,7 @@ struct AiData {
 #endif
 };
 #endif
-// [port] the stock factions' AIPlayerType as the port has always assigned it: Empire -> BasicEmpire, Rebel -> BasicRebel,
-// Underworld -> AI_Player_Underworld; "" otherwise. FoC's Factions.xml / Expansion_Factions.xml Basic_AI agree.
-std::string ai_type_for(const std::string& faction);
-// q6 t08: a "stock" faction keeps the port's hard-coded AI type and skirmish forces: ai_type_for(faction) is set and the
-// data's Basic_AI (`basic_ai`: upper-case faction name -> type, ai::load_faction_basic_ai) is absent or the same name
-// (case-insensitive). A mod that redefines Empire with another Basic_AI (Thrawn's Revenge: GenericAI) is not stock.
-bool is_stock_faction(const std::string& faction, const std::map<std::string, std::string>& basic_ai);
-#ifdef ALAMO_GAME_HAVE_GALACTIC_AI
-// q6 t08: the AIPlayerType a non-human player of `faction` gets ("" = no AI; AI_GALACTIC §1.2):
-//   stock faction (is_stock_faction)   ai_type_for(faction), unchanged. [port] FoC campaigns' AI_Player_Control pairs
-//                                      are not read for them (e.g. "Empire, None" / "Rebel, BasicRebel_NoOpenings" in the
-//                                      shipped campaigns, the port's sessions have always used Basic_AI).
-//   no Basic_AI                        "" (as before for Pirates / Hostile / Hutts ...).
-//   skirmish (campaign_control null)   the faction's Basic_AI (SKIRMISH_SETUP §2.1: AI slots get Faction.Basic_AI).
-//   campaign                           ai::campaign_ai_type(*campaign_control, basic_ai, faction, false): the campaign's
-//                                      AI_Player_Control pair; no pair = no AI (only the pairs call Set_AI_Type [M]).
-// A type `defs` does not define is no AI (Set_AI_Type: "Unrecognized AI player type"); defs null = not checked.
-std::string resolve_ai_type(const std::string& faction, const std::map<std::string, std::string>& basic_ai,
-                            const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs);
-#endif
+// ai_type_for / is_stock_faction / resolve_ai_type: alamo/game/skirmish_rules.hpp (q6 t03).
 
 struct GameData {
     std::string root;                      // game folder (FoC "corruption") or synthetic data folder
@@ -91,10 +73,8 @@ struct GameData {
     std::map<std::string, std::string> basic_ai;
     // q6 t08: Faction Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4) as written, per upper-case faction
     // name (FactionFiles.xml order; the last definition with a list wins, as alamo_headless's skirmish host).
-    struct SkirmishForces {
-        std::vector<std::string> space, land;
-    };
-    std::map<std::string, SkirmishForces> skirmish_forces;
+    using SkirmishForces = game::SkirmishForces;  // skirmish_rules.hpp load_skirmish_forces
+    SkirmishForceTable skirmish_forces;
     std::vector<std::string> diagnostics;
     // Q5: one record per loader step, in load order; the step's diagnostics are diagnostics[first_diag, + diag_count).
     // ms is wall clock (reports only, never read by the sim).
@@ -142,11 +122,10 @@ struct SkirmishSetup {
     bool no_forces = false;
 };
 bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic::GalacticSetup& out, std::string* err = nullptr);
-// [port] default skirmish fleets for the stock factions (Empire / Rebel / Underworld); empty for others.
-std::vector<std::string> default_skirmish_fleet(const std::string& faction);
-std::vector<std::string> default_skirmish_ground(const std::string& faction);
-// q6 t08: the default forces make_skirmish_galaxy uses, as type names the data defines:
-//   stock faction (is_stock_faction)  the lists above, unchanged (names unknown to the data are kept; the galaxy skips them).
+// q6 t08: the default forces make_skirmish_galaxy uses, as type names the data defines (skirmish_rules.hpp
+// skirmish_default_forces with the alamo_game options: stock lists, hyperspace leader):
+//   stock faction (is_stock_faction)  default_skirmish_fleet / _ground(faction), unchanged (names unknown to the data are
+//                                     kept; the galaxy skips them).
 //   other factions                    the faction's Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4),
 //                                     names the data does not define, and types the galaxy cannot hold (space: not a
 //                                     SpaceUnit / Squadron kind; land: not a GroundUnit kind), dropped. [port] none left: up
@@ -212,10 +191,8 @@ struct SkirmishMapPreview {
 };
 SkirmishMapPreview read_skirmish_map_preview(const FileProvider& files, std::string_view map, bool space);
 
-// [port] (no RE rule) the planet type a skirmish map stands for: the name after "_MP_SPACE_" / "_MP_LAND_" (path and
-// extension dropped, case ignored) when it names a PLANET type, e.g. _MP_LAND_TATOOINE -> "Tatooine"; "" otherwise.
-// Presentation only (load screen portrait, tactical HUD planet name): the skirmish galaxy's planets keep the
-// Kuat / Coruscant type, because a map's planet type may forbid the setup (Alderaan: Planet_Surface_Accessible No).
-std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::string_view map);
+// skirmish_map_planet_type (skirmish_rules.hpp): presentation only here (load screen portrait, tactical HUD planet name):
+// the skirmish galaxy's planets keep the Kuat / Coruscant type, because a map's planet type may forbid the setup (Alderaan:
+// Planet_Surface_Accessible No).
 
 }  // namespace alamo::game

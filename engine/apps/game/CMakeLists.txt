@@ -26,6 +26,7 @@ add_library(alamo_game_core STATIC
 )
 target_include_directories(alamo_game_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_game_core PUBLIC alamo_sim alamo_vfs alamo_data alamo_core alamo_engine_flags)
+target_link_libraries(alamo_game_core PUBLIC alamo_game_rules)  # q6 t03: skirmish rules shared with alamo_headless (rules/)
 if(TARGET alamo_ai_galactic)  # A2 galactic AI for the AI players (needs engine/ai + engine/lua)
   target_link_libraries(alamo_game_core PUBLIC alamo_ai_galactic)
   target_compile_definitions(alamo_game_core PUBLIC ALAMO_GAME_HAVE_GALACTIC_AI=1)
