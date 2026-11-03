@@ -344,6 +344,51 @@ more than their headroom within one period (not traced per VM; a fresh plan VM l
 so the parallel batch matters only for bursts. Running the AI players' scripts themselves in parallel was investigated and left
 as OPT2 t08 (`docs/OPT_RESEARCH.md` section 5: the AI bindings write shared AI state and draw from the one synced RNG stream).
 
+## Serial per-object passes on the job system (OPT2 t03, 2026-11-02)
+
+Ranking (`alamo_headless --profile` with temporary zones, 15 workers): in the FoC land battle (`--skirmish-ai foc-land`) nearly all
+of `T5.battles` is the tactical AI, not the battle passes. Per tick, p50 / p99: goal system `ai.c.goals` 3.5 / 177 ms (inside it,
+candidate perception values and slot 10 accept (the PotentialPlan solve) about equal), `BattleAi::fill` (the AI's per-object view of
+the battle) 1.6 / 19 ms; the battle's own passes are small (`tac.fog` 0.08, `tac.movement` 0.03, `tac.combat` 0.03, `tac.cleanup`
+0.02, `tac.trees` 0.02, `tac.anim` 0.000 ms p50). In the FoC space battle (`foc-station --seed 3`) `T5.battles` is 0.6 ms p50:
+movement and combat 0.2-0.3 each (both already parallel), accept 0.32, fill 0.14, values 0.11. The galactic run's time is the
+galactic AI (CP3, not here); `gal.sim` is 0.01 ms.
+
+Changed (results identical for any fan-out):
+- **`BattleAi::fill`** (`apps/sim/battle_ai.cpp`): the listed objects are collected in store order, their entries built through
+  the SimHost `ParallelFor` (grain 64, one output slot per object, const reads only), then the UNIT_AI re-projection stamps are
+  drawn serially in store order (the only synced draws).
+- **Goal-candidate values** (`ai/ai_goals.cpp`, "BATCHED VALUES" in `ai_goals.hpp`): a mode with `candidate_pf()` walks a proposal
+  slice first, evaluates the candidates whose perception function has no `Script_` reference (Lua and synced draws) on the job
+  system (`TacticalAiConfig::pf`, set by `BattleAi`), then runs learning terms, accept and insert for every candidate in visit
+  order. Slices with fewer than 4 such values run them in place (space: 2-3 values of about 20 us; land: about 5 of 120 us).
+  The galactic AI passes no `candidate_pf` (unchanged; its goal scoring is CP3). The tactical leaf cache's hit counter (saved, not
+  hashed) now counts only the serial evaluations, so it stays independent of timing (`LeafCacheUncounted`).
+
+Left serial: slot 10 accept (the PotentialPlan solve draws synced random numbers a data-dependent number of times, so a candidate's
+solve cannot start before the previous ones finish; it is now the largest part of the remaining land spikes); fog, anim, trees and
+cleanup (0.1 ms or less per tick, below the cost of a dispatch, and fog writes one shared grid); movement and combat were already
+parallel (combat's phase D stays serial for its draws). `crc.battle.ai` (about 0.9 ms per land tick) is OPT3's.
+
+Before / after (`origin/main` 15cba66 against this branch, 15 workers, both at AboveNormal priority and run alternately because
+other sessions kept the PC at about 100 % CPU; two rounds each, so treat single numbers as ±20 %):
+
+| Scenario | Tick p50 ms | Tick p99 ms | Tick mean ms | `T5.battles` p50 / p99 ms |
+|---|---|---|---|---|
+| FoC land, 2000 ticks, before | 3.2 / 4.7 | 73 / 95 | 11.1 / 13.5 | 2.2-2.8 / 72-93 |
+| FoC land, after | 2.3 / 3.8 | 28 / 39 | 7.2 / 9.9 | 1.2-1.9 / 27-37 |
+| FoC space, 4000 ticks, before | 1.25 / 1.16 | 3.39 / 3.40 | 1.45 / 1.35 | 0.47-0.52 / 1.8-2.0 |
+| FoC space, after | 1.28 / 1.31 | 3.47 / 3.51 | 1.48 / 1.50 | 0.51-0.53 / 2.0-2.1 |
+
+Max tick (frame 1, battle setup, 0.9-1.6 s) is unchanged. Per pass (land, earlier zoned runs): fill p50 1.6 → 0.70 ms, p99 19 →
+1.3-3.5 ms; job slots busy 1 % → 5 %; worst non-setup ticks 170-190 → 50-84 ms. Space is unchanged within noise (fill gains about
+70 us, the small value batches run in place).
+
+Determinism: per-tick CRC logs byte-identical to `origin/main` for land (7000 ticks) and space (to the end, 14433 ticks) at 0, 1,
+4, 16 and 15 workers and for galactic HotM (18000 ticks) at 15; every golden unchanged. `alamo_ai_galactic_tests`
+`test_goal_batched_values` compares no batching, serial, reverse-order and 4-thread fan-outs (CRC per tick, draws, evaluation
+count and the serial call trace).
+
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 
 `build_asan.cmd` runs clang 20 (MSVC ABI) with UBSan by default; `ALAMO_SANITIZE=address` adds ASan.
