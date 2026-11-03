@@ -329,7 +329,7 @@ identical results:
 Checks: per-tick CRC logs byte-identical to the unchanged build, full length, on the land campaign battle
 (`--skirmish-ai foc-land-campaign --ticks 20000`), the space battle (`foc-station --seed 3 --ticks 20000`) and the land skirmish
 (`foc-land --ticks 3000`). The land skirmish and the space battle are also identical at 0 / 1 / 4 / 16 workers. After merging main
-(A1j), `build_gate.cmd`: clang 163/163 and sanitizer 54/54 passed with 0 warnings; MSVC built with 0 warnings and 158/163 passed, the other 5 (`alamo_commands_tests`, `alamo_ai_tests`, `alamo_ai_tactical_tests`, `alamo_ai_story_save_size_late`, `alamo_render_galactic_headless_check`) timed out under load and passed on a `-j 2` re-run. Every golden passed, including the smoke and land-outcome worker-count entries.
+(A1j), `build_gate.cmd`: clang 163/163 and sanitizer 54/54 passed with 0 warnings; MSVC built with 0 warnings and 158/163 passed, the other 5 (`alamo_commands_tests`, `alamo_ai_tests`, `alamo_ai_tactical_tests`, `alamo_ai_story_save_size_late`, `alamo_render_galactic_headless_check`) timed out under load and passed on a `-j 2` re-run. Every golden passed, including the smoke and land-outcome worker-count entries. After merging main again (Q2F t09 goldens), the gate passed clean: MSVC and clang 163/163, sanitizer 54/54, 0 warnings.
 
 First battle tick, before / after (ms, MSVC `/O2`, 15 workers). The machine was at 100 % CPU from other sessions the whole time, so these
 are minima of alternating runs (before and after back to back), several times the quiet-machine values; the OPT1 table's quiet first
