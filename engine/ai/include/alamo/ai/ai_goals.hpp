@@ -20,13 +20,32 @@
 // higher desire). Desire / priority stored as (float), clamped to [0, 1e18]. A failed evaluation counts as
 // an evaluation with no proposal [port].
 //
+// BATCHED VALUES (OPT2 t03) [port, same results]: a mode whose candidate_pf() is set walks the slice first (the
+// walk reads only the proposable / skip / applies state, which evaluations, slot 10 and insert do not change),
+// then evaluates the candidates whose function prepare_evaluation() accepts on that ParallelFor (const, one output
+// per candidate), then runs every candidate's Learning terms, slot 10 and insert in visit order. A rejected
+// function (Script_ evaluators: Lua and synced draws) is evaluated in place in that serial loop, as before.
+//
+// SLICE BRACKET (OPT2 t10) [port, same results]: slice_begin() / slice_end() enclose each proposal slice (every slot 10
+// of the slice runs in between). The tactical AI uses it to ask the host once per slice for what its solves read.
+//
+// BATCHED ACCEPT (OPT2 t10) [port, moves results]: a mode whose accept_batched() is true splits slot 10. In visit order,
+// accept_prepare() runs the part before the solve (the tactical plan pick and the solve's inputs, drawing from the
+// candidate's own RNG stream, not the synced one) and the candidate becomes PENDING (solve i of the slice, i = visit
+// order among the prepared). After the slice, accept_start() runs the slice's solves (any thread, any order) and
+// accept_finish() + the budget test + insert run for every pending goal in visit order on frame now + accept_latency():
+// in the slice itself for latency 0, else at the start of that frame's service, before its next slice. No new slice
+// starts while solves are pending, so slices keep one per frame at latency <= 1; a pass whose last slice left solves
+// pending commits when they are applied. block_proposals() drops the pending goals (accept_cancel()). Pending goals and
+// their ready frame are hashed and saved only while pending (latency 0 hashes and saves nothing new).
+//
 // COMMIT (0x6c8710) and RESOLVE (0x6c8970): exactly §1.6, with the hysteresis
 //   eff(d) = state > 0 && 0.01 < d < 40 ? d + (1 - (d - 0.01) / 39.99) * 1.6 : d.
 // [port] Every sort is std::stable_sort descending (the original's std::sort is insertion sort, i.e.
 // stable, up to 32 elements and unstable above; ties keep insertion order here - a documented deviation
 // that is only lockstep-safe because every peer runs this code). Category order: stable descending by
-// normalised budget weight [M]. The per-category extra-goal count (template int +0xe8, open item 6) is
-// GoalSystemConfig::extra_goals_per_category.
+// normalised budget weight [M]. The per-category extra-goal count (AIPlayerType GoalSetExtensionSize, +0xE8 of the
+// player type, not of the template) is GoalSystemConfig::extra_goals_per_category.
 //
 // FREE-STORE RESERVATIONS (entry +0x30, A1_READINGS §28.6) [H]: slot 10's solve (accept) reserves nothing and ignores
 // reservations; Commit step 4 suspends every active goal's reservations (suspend_reservations, 0x6c0be0) before any
@@ -42,6 +61,7 @@
 #include "alamo/ai/ai_definitions.hpp"
 #include "alamo/ai/ai_learning.hpp"
 #include "alamo/ai/ai_templates.hpp"
+#include "alamo/core/parallel.hpp"
 
 namespace alamo {
 class ByteReader;
@@ -111,11 +131,48 @@ public:
     virtual void drop_potential_plan(Goal& g) = 0;     // proposals discarded / goal released
     virtual float elapsed_eta(const Goal& g) = 0;      // galactic: ETA estimate + elapsed (0x525200)
     virtual int32_t quota_players() = 0;               // players - active humans
+    // OPT2 t03, batched values (header comment). Default: none, every candidate is evaluated in place.
+    virtual const ParallelFor* candidate_pf() { return nullptr; }
+    // Serial, before the batch. True: `function` may be evaluated by evaluate_prepared() on any thread.
+    virtual bool prepare_evaluation(const std::string& function) {
+        (void)function;
+        return false;
+    }
+    // Concurrent const evaluation of a prepared function (the same value evaluate() gives at this point of the slice).
+    virtual bool evaluate_prepared(const std::string& function, int32_t target, double& out) const {
+        (void)function, (void)target, (void)out;
+        return false;
+    }
+    // Serial, in visit order, once per prepared candidate: the bookkeeping evaluate() does for itself.
+    virtual void evaluated(const std::string& function) { (void)function; }
+    // OPT2 t10: brackets each proposal slice (every slot 10 of the slice runs in between), so a mode may share host
+    // answers between the slice's solves. Default: nothing.
+    virtual void slice_begin() {}
+    virtual void slice_end() {}
+    // OPT2 t10, batched accept (header comment). Default: off, slot 10 runs accept() in place.
+    virtual bool accept_batched() { return false; }
+    virtual uint32_t accept_latency() { return 0; }  // frames from a slice to its accept_finish() calls
+    // Serial, visit order: slot 10 up to its solve, which becomes solve `i` of the slice. False rejects g.
+    virtual bool accept_prepare(Goal& g, uint32_t i) {
+        (void)g, (void)i;
+        return false;
+    }
+    // Serial, once per slice with prepared solves: starts solves 0..n-1; their results are read on frame `ready`.
+    virtual void accept_start(uint32_t n, int64_t now, int64_t ready) { (void)n, (void)now, (void)ready; }
+    // Serial, visit order, on the ready frame: the rest of slot 10 for solve i (fills g.plan / g.pp_*). False rejects g.
+    virtual bool accept_finish(Goal& g, uint32_t i) {
+        (void)g, (void)i;
+        return false;
+    }
+    // The started solves will not be finished (block_proposals() while they were pending).
+    virtual void accept_cancel() {}
 };
 
 struct GoalSystemConfig {
     int32_t sleep_frames = 0;             // Goal_Cycle_Sleep_Duration x FPS (slot 11)
-    int32_t extra_goals_per_category = 1; // template +0xe8 [L, open item 6]
+    // AIPlayerType GoalSetExtensionSize (+0xE8, default 2) [H]. The galactic AI passes its player type's value; the
+    // tactical AI still uses this default of 1 (its goldens move with 2; follow-up for the tactical owner).
+    int32_t extra_goals_per_category = 1;
 };
 
 class GoalSystem {
@@ -132,6 +189,8 @@ public:
     int32_t countdown() const { return countdown_; }
     uint32_t evaluations_last_pass() const { return evals_last_; }
     uint32_t passes() const { return passes_; }
+    bool accept_pending() const { return pending_ready_ >= 0; }  // OPT2 t10: batched-accept solves in flight
+    int64_t accept_ready_frame() const { return pending_ready_; }
     uint32_t commits() const { return commits_; }
     int32_t exclusion_count(uint32_t goal_type) const;
     bool proposable(uint32_t goal_type) const;
@@ -161,6 +220,9 @@ public:
 
 private:
     bool proposal_slice(int64_t now);  // true when the pass completed
+    void end_pass(int64_t now);        // budget weights, Commit, next quota and sleep
+    void accept_tail(Goal g);          // slot 10's budget test, then insert
+    void apply_pending();              // OPT2 t10: accept_finish + accept_tail of the pending goals
     bool skip(uint32_t goal_type, int32_t target);
     void insert(Goal g);
     void commit(int64_t now);
@@ -184,6 +246,19 @@ private:
     std::vector<int32_t> exclusion_;  // per goal type (+0x260)
     std::vector<uint32_t> block_list_;  // +0x2a0 (goal serials)
     bool blocked_ = false;              // = !block_list_.empty()
+    // OPT2 t03: one slice's candidates (visit order) and their batched values; scratch, rebuilt every slice
+    struct Candidate {
+        uint32_t source = 0;
+        int32_t target = -1;
+        uint8_t prepared = 0, ok = 0;
+        double value = 0.0;
+    };
+    std::vector<Candidate> batch_;
+    // OPT2 t10 batched accept: the goals whose solves are in flight (visit order), their ready frame (-1: none) and
+    // whether their slice completed the pass (Commit waits for them).
+    std::vector<Goal> pending_;
+    int64_t pending_ready_ = -1;
+    bool pending_pass_done_ = false;
     // cursor (+0x178..+0x18c)
     uint32_t cursor_source_ = 0, cursor_target_ = 0;
     uint32_t quota_ = 0;

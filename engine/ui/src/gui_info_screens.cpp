@@ -275,6 +275,21 @@ void InfoScreens::fill_chart(GuiDialog& d) {
 
 void InfoScreens::fill_tech(GuiDialog& d) {
     d.set_checked(tech_.space ? "IDC_TECH_TREE_SPACE" : "IDC_TECH_TREE_LAND", true);
+    // UI.md §3.7.2: every visible arrow image n = 0..99 gets its art, white (no per-state tint); the rectangle comes from the .rc.
+    struct ArrowArt {
+        const char* fmt;
+        const char* texture;
+    };
+    static constexpr ArrowArt kArrows[] = {{"IDC_RIGHT_ARROW%d", "i_tree_arrow_right.tga"},
+                                           {"IDC_DRIGHT_ARROW%d", "i_tree_arrow_2right.tga"},
+                                           {"IDC_RRIGHT_ARROW%d", "i_tree_arrow_3right.tga"},
+                                           {"IDC_DOWN_ARROW%d", "i_tree_arrow_down.tga"}};
+    for (const ArrowArt& a : kArrows)
+        for (int32_t n = 0; n < 100; ++n)
+            if (GuiControl* c = d.get(id_n(a.fmt, n)); c && c->visible) {
+                c->image = a.texture;
+                c->tint = Rgba8{255, 255, 255, 255};
+            }
     for (size_t i = 0; i < d.size(); ++i) {
         GuiControl& c = d[i];
         const std::string_view id = c.id();
@@ -284,7 +299,7 @@ void InfoScreens::fill_tech(GuiDialog& d) {
         c.visible = has;
         if (!has) continue;
         c.image = it.icon;
-        c.tint = it.state == TechState::Locked ? Rgba8{70, 70, 70, 255} : it.state == TechState::Researched ? Rgba8{150, 255, 150, 255} : Rgba8{};
+        c.tint = it.state == TechState::Locked ? Rgba8{90, 90, 90, 255} : Rgba8{255, 255, 255, 255};  // no "researched" colour
     }
 }
 
@@ -321,6 +336,11 @@ void InfoScreens::fill_summary(GuiDialog& d) {
             if (row) set(id_n("IDC_PLANET_NAME%d", r), row->name);
             for (int32_t f = 0; f < 15; ++f)
                 image(d, id_nn("IDC_ROW%d_FLEET%d", r, f), row && static_cast<size_t>(f) < row->fleets.size() ? row->fleets[static_cast<size_t>(f)] : std::string());
+            if (r >= 1) {  // UI.md §3.7.2: the divider above a filled row is the right arrow, white; hidden with the row
+                const std::string div = id_n("IDC_HEROES_DIVIDERS%d", r - 1);
+                image(d, div, row ? std::string("i_tree_arrow_right.tga") : std::string());
+                if (GuiControl* dc = d.get(div)) dc->tint = Rgba8{255, 255, 255, 255};
+            }
         }
     } else if (page_ == InfoPage::SummaryEconomy) {
         const auto& rows = summary_.economy;

@@ -169,6 +169,11 @@ public:
     void collect_detached(uint32_t threshold_percent = 100);
     // Runs the finalizers the last collect_detached() queued, if any (owner thread, between services).
     void run_finalizers();
+    // Teardown (OPT3 t11): runs on the owner thread the Lua code lua_close would run - the __gc finalizers of every
+    // finalizable userdata, with lua_close's own steps (upvalues closed, finalizers separated, errors retried) - so
+    // that destroying the VM afterwards only frees this VM's memory and may run on another thread
+    // (destroy_detached, gc_schedule.hpp). No Lua code may run in the VM after it. Requires !gc_busy().
+    void finalize_for_close();
 
     struct Impl;
 

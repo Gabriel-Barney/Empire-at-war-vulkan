@@ -49,6 +49,17 @@ LobbyEvent ev(LobbyEvent::Kind k) {
     return e;
 }
 
+// UI.md §3.7.1: with palette values supplied a colour combo holds one glyph per palette entry, drawn in the entry's
+// colour: U+25A0 for the staging combos, U+2588 for IDC_LAN_COLOR_SELECT [port: code points, not OEM bytes 0xFE / 0xDB].
+constexpr char32_t kStagingColourGlyph = 0x25A0, kLanColourGlyph = 0x2588;
+// Fills a colour combo; without values the text items are kept.
+void fill_colour_combo(GuiDialog& d, std::string_view id, const std::vector<std::u32string>& names, int32_t selected,
+                       const std::vector<Rgba8>& values, char32_t glyph) {
+    const std::vector<std::u32string> items = values.empty() ? names : std::vector<std::u32string>(values.size(), std::u32string(1, glyph));
+    d.set_items(id, items, items.empty() || selected < 0 ? -1 : std::min(selected, static_cast<int32_t>(items.size()) - 1));
+    if (GuiControl* c = d.get(id)) c->item_colors = values;
+}
+
 constexpr const char* kAcceptTexture = "i_dialogue_check_on.tga";  // [port] accept mark art
 const char* const kLobbyDialogs[] = {dlg::kMultiplayer, dlg::kLanLobby,      dlg::kLanStaging, dlg::kInternetStaging,
                                      dlg::kInternetHome, dlg::kInternetLobby, dlg::kDirectConnect, dlg::kPassword,
@@ -150,8 +161,7 @@ void LobbyScreens::show_lan_lobby() {
     if (!d) return;
     d->show("IDC_GAME_LIST2", false);  // [port] second list overlaps the column buttons
     d->set_text("IDC_LAN_NAME_EDIT", local_name_);
-    d->set_items("IDC_LAN_COLOR_SELECT", colors_, color_);
-    if (GuiControl* c = d->get("IDC_LAN_COLOR_SELECT")) c->item_colors = color_values_;
+    fill_colour_combo(*d, "IDC_LAN_COLOR_SELECT", colors_, color_, color_values_, kLanColourGlyph);
     fill_games(*d);
     fill_chat(*d);
 }
@@ -294,9 +304,14 @@ void LobbyScreens::fill_staging(GuiDialog& d) {
             d.enable(id, editable);
         };
         combo(fac, s.factions, sl->faction);
-        combo(col, s.colors, sl->color);
+        if (s.color_values.empty()) {
+            combo(col, s.colors, sl->color);
+        } else {
+            d.show(col, filled);
+            fill_colour_combo(d, col, s.colors, sl->color, s.color_values, kStagingColourGlyph);
+            d.enable(col, editable);
+        }
         combo(team, s.teams, sl->team);
-        if (GuiControl* cc = d.get(col)) cc->item_colors = s.color_values;
         d.show(acc, sl->state == SlotState::Human && sl->accepted);
         d.set_image(acc, kAcceptTexture);
     }
@@ -384,8 +399,7 @@ void LobbyScreens::set_colors(std::vector<std::u32string> colors, int32_t select
     color_values_ = std::move(values);
     color_ = selected;
     if (GuiDialog* d = gui_ ? gui_->find(dlg::kLanLobby) : nullptr) {
-        d->set_items("IDC_LAN_COLOR_SELECT", colors_, color_);
-        if (GuiControl* c = d->get("IDC_LAN_COLOR_SELECT")) c->item_colors = color_values_;
+        fill_colour_combo(*d, "IDC_LAN_COLOR_SELECT", colors_, color_, color_values_, kLanColourGlyph);
     }
 }
 void LobbyScreens::add_chat(std::u32string line) {

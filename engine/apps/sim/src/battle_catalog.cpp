@@ -736,11 +736,11 @@ ta::AbilityObjectDesc BattleCatalog::ability_desc(uint32_t t, BuildState& s) con
     return d;
 }
 
-void BattleCatalog::build_units(const std::vector<uint32_t>& unit_types, std::vector<uint32_t>& out_unit_index,
+void BattleCatalog::build_units(const std::vector<uint32_t>& unit_types, size_t first, std::vector<uint32_t>& out_unit_index,
                                 BuildState& s) const {
-    std::map<uint32_t, uint32_t> unit_index;
-    out_unit_index.clear();
-    for (uint32_t t : unit_types) {
+    std::map<uint32_t, uint32_t>& unit_index = s.unit_index;
+    for (size_t i = first; i < unit_types.size(); ++i) {
+        const uint32_t t = unit_types[i];
         const auto it = unit_index.find(t);
         if (it != unit_index.end()) {
             out_unit_index.push_back(it->second);
@@ -770,7 +770,8 @@ tc::CombatData BattleCatalog::build(const std::vector<uint32_t>& unit_types, std
     d.priority_sets = priority_sets_;
     BuildState s;
     s.d = &d;
-    build_units(unit_types, out_unit_index, s);
+    out_unit_index.clear();
+    build_units(unit_types, 0, out_unit_index, s);
     return d;
 }
 
@@ -781,7 +782,8 @@ BattleTables BattleCatalog::build_battle(const std::vector<uint32_t>& unit_types
     BuildState s;
     s.d = &b.combat;
     s.full = &b;
-    build_units(unit_types, out_unit_index, s);
+    out_unit_index.clear();
+    build_units(unit_types, 0, out_unit_index, s);
     return b;
 }
 
@@ -793,13 +795,131 @@ struct BattleCatalog::ModelCache {
     std::map<std::pair<uint32_t, uint32_t>, std::unique_ptr<tactical::movement::AvoidModel>> avoid;  // (type, space)
 };
 
+#ifdef ALAMO_SIM_HAVE_ASSETS
+namespace {
+
 // SPACE_AVOIDANCE §3.2 / §5.3 / §5.4 from the ALO: collision bound = union of the collision-enabled meshes' 0x402 boxes
 // through their bones' bind-pose transforms (centre 0, half 1 without one); COLLISIONBOX = the mesh of that name
 // (case-insensitive), its box the same way; collision meshes = their submesh triangles in model space (static vertices
 // through bind_world[attach bone], skinned vertices are model space already), ALO order, `SHIELD` flagged.
+std::unique_ptr<tactical::movement::AvoidModel> avoid_from_asset(const assets::ModelAsset& m) {
+    namespace mv = tactical::movement;
+    auto out = std::make_unique<mv::AvoidModel>();
+    const auto& bw = m.skeleton.bind_world;
+    auto bone = [&bw](uint32_t b) { return b < bw.size() ? bw[b] : assets::Mat3x4::identity(); };
+    auto f3 = [](const assets::Float3& v) { return mv::F3{v.x, v.y, v.z}; };
+    bool any = false;
+    assets::Aabb bound;
+    for (const assets::MeshInfo& mi : m.meshes) {
+        const assets::Aabb box = assets::transform_aabb(bone(mi.attach_bone), mi.file_bounds);
+        if (upper_str(mi.name) == "COLLISIONBOX" && box.valid()) {
+            out->has_collision_box = true;
+            out->cbox_c = {(box.min.x + box.max.x) * 0.5f, (box.min.y + box.max.y) * 0.5f, (box.min.z + box.max.z) * 0.5f};
+            out->cbox_h = {(box.max.x - box.min.x) * 0.5f, (box.max.y - box.min.y) * 0.5f, (box.max.z - box.min.z) * 0.5f};
+        }
+        if (!mi.collision_enabled) continue;
+        if (box.valid()) {
+            bound = any ? assets::merge(bound, box) : box;
+            any = true;
+        }
+        mv::AvoidModel::Mesh mesh;
+        mesh.name = upper_str(mi.name);
+        mesh.shield = mesh.name == "SHIELD";
+        mesh.bone_visible = mi.attach_bone >= m.skeleton.visible.size() || m.skeleton.visible[mi.attach_bone] != 0;  // S8 t13 ray set
+        bool first = true;
+        for (uint32_t si = mi.first_submesh; si < mi.first_submesh + mi.submesh_count && si < m.submeshes.size(); ++si) {
+            const assets::Submesh& sm = m.submeshes[si];
+            const size_t stride = assets::vertex_stride(sm.layout);
+            const assets::Mat3x4 xf = sm.skinned() ? assets::Mat3x4::identity() : bone(sm.attach_bone);
+            auto vert = [&](uint32_t i) {
+                float p[3] = {0.0f, 0.0f, 0.0f};
+                if (static_cast<size_t>(i) * stride + sizeof(p) <= sm.vertices.size())
+                    std::memcpy(p, sm.vertices.data() + static_cast<size_t>(i) * stride, sizeof(p));
+                return xf.transform_point({p[0], p[1], p[2]});
+            };
+            const size_t isz = assets::index_size(sm.index_type);
+            for (uint32_t k = 0; k + 2 < sm.index_count && (static_cast<size_t>(k) + 3) * isz <= sm.indices.size(); k += 3) {
+                for (uint32_t c = 0; c < 3; ++c) {
+                    uint32_t ix = 0;
+                    if (isz == 2) {
+                        uint16_t v16 = 0;
+                        std::memcpy(&v16, sm.indices.data() + static_cast<size_t>(k + c) * 2, 2);
+                        ix = v16;
+                    } else {
+                        std::memcpy(&ix, sm.indices.data() + static_cast<size_t>(k + c) * 4, 4);
+                    }
+                    const assets::Float3 q = vert(ix);
+                    mesh.tris.push_back(f3(q));
+                    if (first) {
+                        mesh.lo = mesh.hi = f3(q);
+                        first = false;
+                    } else {
+                        mesh.lo = {std::min(mesh.lo.x, q.x), std::min(mesh.lo.y, q.y), std::min(mesh.lo.z, q.z)};
+                        mesh.hi = {std::max(mesh.hi.x, q.x), std::max(mesh.hi.y, q.y), std::max(mesh.hi.z, q.z)};
+                    }
+                }
+            }
+        }
+        if (!mesh.tris.empty()) out->meshes.push_back(std::move(mesh));
+    }
+    if (any) {
+        out->bound_c = {(bound.min.x + bound.max.x) * 0.5f, (bound.min.y + bound.max.y) * 0.5f, (bound.min.z + bound.max.z) * 0.5f};
+        out->bound_h = {(bound.max.x - bound.min.x) * 0.5f, (bound.max.y - bound.min.y) * 0.5f, (bound.max.z - bound.min.z) * 0.5f};
+    }
+    return out;
+}
+
+// model_info's entry: bind-pose bounds, bones, _ALT index.
+std::unique_ptr<BattleCatalog::ModelInfo> info_from_asset(const assets::ModelAsset& m) {
+    auto info = std::make_unique<BattleCatalog::ModelInfo>();
+    if (m.bounds.min.x <= m.bounds.max.x && m.bounds.min.y <= m.bounds.max.y && m.bounds.min.z <= m.bounds.max.z) {
+        info->has_bounds = true;
+        info->min[0] = m.bounds.min.x, info->min[1] = m.bounds.min.y, info->min[2] = m.bounds.min.z;
+        info->max[0] = m.bounds.max.x, info->max[1] = m.bounds.max.y, info->max[2] = m.bounds.max.z;
+    }
+    for (size_t b = 0; b < m.skeleton.size(); ++b) {
+        info->bones.push_back(upper_str(m.skeleton.names[b]));
+        const assets::Mat3x4& w = m.skeleton.bind_world[b];
+        info->bone_pos.push_back({w.m[0][3], w.m[1][3], w.m[2][3]});
+        info->bone_rot.push_back({w.m[0][0], w.m[0][1], w.m[0][2], w.m[1][0], w.m[1][1], w.m[1][2], w.m[2][0], w.m[2][1], w.m[2][2]});
+    }
+    // S8 t10 (0x12dca0 / 0x13f8c0): the highest digit after "_ALT" in the mesh names.
+    for (const assets::MeshInfo& mi : m.meshes) {
+        const std::string n = upper_str(mi.name);
+        for (size_t i = 0; i + 5 <= n.size(); ++i)
+            if (n.compare(i, 4, "_ALT") == 0 && n[i + 4] >= '0' && n[i + 4] <= '9') {
+                info->max_alt = std::max<int32_t>(info->max_alt, n[i + 4] - '0');
+                break;
+            }
+    }
+    return info;
+}
+
+}  // namespace
+
+// OPT3 t09: the model file an entry reads ("" none: the entry is null). avoid_model reads the mode's field; model_info
+// the first named field of its order (a missing file: no model data).
+std::string BattleCatalog::avoid_path(uint32_t type, bool space) const {
+    const std::string_view name = trim(types_->get_string(type, space ? "Space_Model_Name" : "Land_Model_Name"));
+    return name.empty() ? std::string() : assets::model_path(name);
+}
+
+std::string BattleCatalog::info_path(uint32_t type, bool space, bool fallback) const {
+    std::vector<const char*> order = {space ? "Space_Model_Name" : "Land_Model_Name"};
+    if (fallback) {
+        order.push_back(space ? "Land_Model_Name" : "Space_Model_Name");
+        order.push_back("Galactic_Model_Name");
+    }
+    for (const char* tag : order) {
+        const std::string_view name = trim(types_->get_string(type, tag));
+        if (!name.empty()) return assets::model_path(name);
+    }
+    return {};
+}
+#endif
+
 const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, bool space) const {
 #ifdef ALAMO_SIM_HAVE_ASSETS
-    namespace mv = tactical::movement;
     if (!files_ || type >= types_->size()) return nullptr;
     const std::pair<uint32_t, uint32_t> key{type, space ? 1u : 0u};
     {
@@ -807,75 +927,12 @@ const tactical::movement::AvoidModel* BattleCatalog::avoid_model(uint32_t type, 
         auto it = model_cache_->avoid.find(key);
         if (it != model_cache_->avoid.end()) return it->second.get();
     }
-    // Built outside the lock (OPT3 t05: preload_models loads types in parallel); two threads building the same key make
-    // the same entry and the first one stored is kept.
-    std::unique_ptr<mv::AvoidModel> out;
-    const std::string_view name = trim(types_->get_string(type, space ? "Space_Model_Name" : "Land_Model_Name"));
+    // Built outside the lock (OPT3 t05: preload loads files in parallel); two threads building the same key make the
+    // same entry and the first one stored is kept.
+    std::unique_ptr<tactical::movement::AvoidModel> out;
+    const std::string path = avoid_path(type, space);
     assets::ModelAsset m;
-    if (!name.empty() && assets::load_model(*files_, assets::model_path(name), m)) {
-        out = std::make_unique<mv::AvoidModel>();
-        const auto& bw = m.skeleton.bind_world;
-        auto bone = [&bw](uint32_t b) { return b < bw.size() ? bw[b] : assets::Mat3x4::identity(); };
-        auto f3 = [](const assets::Float3& v) { return mv::F3{v.x, v.y, v.z}; };
-        bool any = false;
-        assets::Aabb bound;
-        for (const assets::MeshInfo& mi : m.meshes) {
-            const assets::Aabb box = assets::transform_aabb(bone(mi.attach_bone), mi.file_bounds);
-            if (upper_str(mi.name) == "COLLISIONBOX" && box.valid()) {
-                out->has_collision_box = true;
-                out->cbox_c = {(box.min.x + box.max.x) * 0.5f, (box.min.y + box.max.y) * 0.5f, (box.min.z + box.max.z) * 0.5f};
-                out->cbox_h = {(box.max.x - box.min.x) * 0.5f, (box.max.y - box.min.y) * 0.5f, (box.max.z - box.min.z) * 0.5f};
-            }
-            if (!mi.collision_enabled) continue;
-            if (box.valid()) {
-                bound = any ? assets::merge(bound, box) : box;
-                any = true;
-            }
-            mv::AvoidModel::Mesh mesh;
-            mesh.name = upper_str(mi.name);
-            mesh.shield = mesh.name == "SHIELD";
-            mesh.bone_visible = mi.attach_bone >= m.skeleton.visible.size() || m.skeleton.visible[mi.attach_bone] != 0;  // S8 t13 ray set
-            bool first = true;
-            for (uint32_t si = mi.first_submesh; si < mi.first_submesh + mi.submesh_count && si < m.submeshes.size(); ++si) {
-                const assets::Submesh& sm = m.submeshes[si];
-                const size_t stride = assets::vertex_stride(sm.layout);
-                const assets::Mat3x4 xf = sm.skinned() ? assets::Mat3x4::identity() : bone(sm.attach_bone);
-                auto vert = [&](uint32_t i) {
-                    float p[3] = {0.0f, 0.0f, 0.0f};
-                    if (static_cast<size_t>(i) * stride + sizeof(p) <= sm.vertices.size())
-                        std::memcpy(p, sm.vertices.data() + static_cast<size_t>(i) * stride, sizeof(p));
-                    return xf.transform_point({p[0], p[1], p[2]});
-                };
-                const size_t isz = assets::index_size(sm.index_type);
-                for (uint32_t k = 0; k + 2 < sm.index_count && (static_cast<size_t>(k) + 3) * isz <= sm.indices.size(); k += 3) {
-                    for (uint32_t c = 0; c < 3; ++c) {
-                        uint32_t ix = 0;
-                        if (isz == 2) {
-                            uint16_t v16 = 0;
-                            std::memcpy(&v16, sm.indices.data() + static_cast<size_t>(k + c) * 2, 2);
-                            ix = v16;
-                        } else {
-                            std::memcpy(&ix, sm.indices.data() + static_cast<size_t>(k + c) * 4, 4);
-                        }
-                        const assets::Float3 q = vert(ix);
-                        mesh.tris.push_back(f3(q));
-                        if (first) {
-                            mesh.lo = mesh.hi = f3(q);
-                            first = false;
-                        } else {
-                            mesh.lo = {std::min(mesh.lo.x, q.x), std::min(mesh.lo.y, q.y), std::min(mesh.lo.z, q.z)};
-                            mesh.hi = {std::max(mesh.hi.x, q.x), std::max(mesh.hi.y, q.y), std::max(mesh.hi.z, q.z)};
-                        }
-                    }
-                }
-            }
-            if (!mesh.tris.empty()) out->meshes.push_back(std::move(mesh));
-        }
-        if (any) {
-            out->bound_c = {(bound.min.x + bound.max.x) * 0.5f, (bound.min.y + bound.max.y) * 0.5f, (bound.min.z + bound.max.z) * 0.5f};
-            out->bound_h = {(bound.max.x - bound.min.x) * 0.5f, (bound.max.y - bound.min.y) * 0.5f, (bound.max.z - bound.min.z) * 0.5f};
-        }
-    }
+    if (!path.empty() && assets::load_model(*files_, path, m)) out = avoid_from_asset(m);
     std::lock_guard<std::mutex> lock(model_cache_->mutex);
     return model_cache_->avoid.emplace(key, std::move(out)).first->second.get();
 #else
@@ -908,41 +965,10 @@ const BattleCatalog::ModelInfo* BattleCatalog::model_info(uint32_t type, bool sp
         auto it = model_cache_->entries.find({type, code});
         if (it != model_cache_->entries.end()) return it->second.get();
     }  // built outside the lock, as avoid_model
-    std::vector<const char*> order = {space ? "Space_Model_Name" : "Land_Model_Name"};
-    if (fallback) {
-        order.push_back(space ? "Land_Model_Name" : "Space_Model_Name");
-        order.push_back("Galactic_Model_Name");
-    }
     std::unique_ptr<ModelInfo> info;
-    for (const char* tag : order) {
-        const std::string_view name = trim(types_->get_string(type, tag));
-        if (name.empty()) continue;
-        assets::ModelAsset m;
-        if (assets::load_model(*files_, assets::model_path(name), m)) {
-            info = std::make_unique<ModelInfo>();
-            if (m.bounds.min.x <= m.bounds.max.x && m.bounds.min.y <= m.bounds.max.y && m.bounds.min.z <= m.bounds.max.z) {
-                info->has_bounds = true;
-                info->min[0] = m.bounds.min.x, info->min[1] = m.bounds.min.y, info->min[2] = m.bounds.min.z;
-                info->max[0] = m.bounds.max.x, info->max[1] = m.bounds.max.y, info->max[2] = m.bounds.max.z;
-            }
-            for (size_t b = 0; b < m.skeleton.size(); ++b) {
-                info->bones.push_back(upper_str(m.skeleton.names[b]));
-                const assets::Mat3x4& w = m.skeleton.bind_world[b];
-                info->bone_pos.push_back({w.m[0][3], w.m[1][3], w.m[2][3]});
-                info->bone_rot.push_back({w.m[0][0], w.m[0][1], w.m[0][2], w.m[1][0], w.m[1][1], w.m[1][2], w.m[2][0], w.m[2][1], w.m[2][2]});
-            }
-            // S8 t10 (0x12dca0 / 0x13f8c0): the highest digit after "_ALT" in the mesh names.
-            for (const assets::MeshInfo& mi : m.meshes) {
-                const std::string n = upper_str(mi.name);
-                for (size_t i = 0; i + 5 <= n.size(); ++i)
-                    if (n.compare(i, 4, "_ALT") == 0 && n[i + 4] >= '0' && n[i + 4] <= '9') {
-                        info->max_alt = std::max<int32_t>(info->max_alt, n[i + 4] - '0');
-                        break;
-                    }
-            }
-        }
-        break;  // the first named model field decides (a missing file: no model data)
-    }
+    const std::string path = info_path(type, space, fallback);
+    assets::ModelAsset m;
+    if (!path.empty() && assets::load_model(*files_, path, m)) info = info_from_asset(m);
     std::lock_guard<std::mutex> lock(model_cache_->mutex);
     return model_cache_->entries.emplace(std::make_pair(type, code), std::move(info)).first->second.get();
 #else
@@ -961,31 +987,64 @@ bool BattleCatalog::model_half_extents(uint32_t type, float& half_x, float& half
 }
 
 void BattleCatalog::preload_models(std::span<const uint32_t> types, bool space, const ParallelFor& pf) const {
+    preload(types, space, kPreloadAvoid | (space ? 0u : kPreloadExtents), pf);
+}
+
+void BattleCatalog::preload(std::span<const uint32_t> types, bool space, uint32_t what, const ParallelFor& pf) const {
 #ifdef ALAMO_SIM_HAVE_ASSETS
     if (!files_) return;
-    std::vector<uint32_t> todo;  // distinct types not cached yet, ascending
+    // The entries of `types` not cached yet, grouped by the file they read (path order): one job per file parses it once
+    // and builds each of its entries (OPT3 t09; t05 parsed a file once per entry).
+    struct Want {
+        uint32_t type;
+        uint32_t kind;  // kPreloadAvoid / kPreloadBones / kPreloadExtents
+    };
+    const uint32_t sc = space ? 1u : 0u;
+    std::map<std::string, std::vector<Want>> by_path;
     {
         std::lock_guard<std::mutex> lock(model_cache_->mutex);
+        auto want = [&](uint32_t t, uint32_t kind, bool cached, std::string path) {
+            if (cached) return;
+            std::vector<Want>& w = by_path[std::move(path)];
+            for (const Want& x : w)
+                if (x.type == t && x.kind == kind) return;  // a type listed twice
+            w.push_back({t, kind});
+        };
         for (const uint32_t t : types) {
             if (t >= types_->size()) continue;
-            const bool avoid = model_cache_->avoid.count({t, space ? 1u : 0u}) == 0;
-            const bool info = !space && model_cache_->entries.count({t, 2u}) == 0;
-            if (avoid || info) todo.push_back(t);
+            if (what & kPreloadAvoid) want(t, kPreloadAvoid, model_cache_->avoid.count({t, sc}) != 0, avoid_path(t, space));
+            if (what & kPreloadBones) want(t, kPreloadBones, model_cache_->entries.count({t, sc}) != 0, info_path(t, space, false));
+            if (what & kPreloadExtents)
+                want(t, kPreloadExtents, model_cache_->entries.count({t, sc | 2u}) != 0, info_path(t, space, true));
         }
     }
-    std::sort(todo.begin(), todo.end());
-    todo.erase(std::unique(todo.begin(), todo.end()), todo.end());
-    if (todo.empty()) return;
+    std::vector<const std::pair<const std::string, std::vector<Want>>*> jobs;
+    jobs.reserve(by_path.size());
+    for (const auto& e : by_path) jobs.push_back(&e);
+    if (jobs.empty()) return;
     const RangeFn body = [&](uint32_t b, uint32_t e) {
         for (uint32_t i = b; i < e; ++i) {
-            (void)avoid_model(todo[i], space);
-            if (!space) (void)model_info(todo[i], false, true);
+            const auto& [path, wants] = *jobs[i];
+            assets::ModelAsset m;
+            const bool ok = !path.empty() && assets::load_model(*files_, path, m);
+            for (const Want& w : wants) {
+                if (w.kind == kPreloadAvoid) {
+                    std::unique_ptr<tactical::movement::AvoidModel> out = ok ? avoid_from_asset(m) : nullptr;
+                    std::lock_guard<std::mutex> lock(model_cache_->mutex);
+                    model_cache_->avoid.emplace(std::make_pair(w.type, sc), std::move(out));
+                } else {
+                    std::unique_ptr<ModelInfo> out = ok ? info_from_asset(m) : nullptr;
+                    const uint32_t code = w.kind == kPreloadExtents ? (sc | 2u) : sc;
+                    std::lock_guard<std::mutex> lock(model_cache_->mutex);
+                    model_cache_->entries.emplace(std::make_pair(w.type, code), std::move(out));
+                }
+            }
         }
     };
-    if (pf) pf(static_cast<uint32_t>(todo.size()), 1, body);
-    else serial_for(static_cast<uint32_t>(todo.size()), 1, body);
+    if (pf) pf(static_cast<uint32_t>(jobs.size()), 1, body);
+    else serial_for(static_cast<uint32_t>(jobs.size()), 1, body);
 #else
-    (void)types, (void)space, (void)pf;
+    (void)types, (void)space, (void)what, (void)pf;
 #endif
 }
 
@@ -1121,14 +1180,34 @@ int32_t BattleCatalog::hardpoint_on_model(int32_t base, uint32_t unit_type, Buil
 
 BattleTables BattleCatalog::build_battle(const std::vector<uint32_t>& unit_types, std::vector<uint32_t>& out_unit_index, bool space) const {
     BattleTables b;
-    b.combat.damage = damage_;
-    b.combat.priority_sets = priority_sets_;
-    BuildState s;
-    s.d = &b.combat;
-    s.full = &b;
-    s.model_mode = space ? 1 : 0;
-    build_units(unit_types, out_unit_index, s);
+    out_unit_index.clear();
+    const std::unique_ptr<BattleBuild> build = begin_battle(b, space);
+    extend_battle(*build, unit_types, out_unit_index);
     return b;
+}
+
+std::unique_ptr<BattleCatalog::BattleBuild> BattleCatalog::begin_battle(BattleTables& out, bool space) const {
+    out = BattleTables{};
+    out.combat.damage = damage_;
+    out.combat.priority_sets = priority_sets_;
+    auto b = std::make_unique<BattleBuild>();
+    b->state.d = &out.combat;
+    b->state.full = &out;
+    b->state.model_mode = space ? 1 : 0;
+    return b;
+}
+
+void BattleCatalog::extend_battle(BattleBuild& b, const std::vector<uint32_t>& unit_types, std::vector<uint32_t>& out_unit_index) const {
+    if (unit_types.size() <= b.built) return;
+    if (b.state.model_mode >= 0) {
+        // The new types' bone data, loaded in parallel before the serial build below finds it cached; their avoid models
+        // and (land) stamp extents come from the same parse, for the setup steps that follow.
+        const bool space = b.state.model_mode == 1;
+        preload(std::span<const uint32_t>(unit_types).subspan(b.built), space,
+                kPreloadBones | kPreloadAvoid | (space ? 0u : kPreloadExtents), b.pf);
+    }
+    build_units(unit_types, b.built, out_unit_index, b.state);
+    b.built = unit_types.size();
 }
 
 }  // namespace alamo::sim

@@ -125,6 +125,13 @@ endif()
 add_test(NAME alamo_ui_screens_tests COMMAND alamo_ui_screens_tests)
 set_tests_properties(alamo_ui_screens_tests PROPERTIES TIMEOUT 120)
 
+# p4ui t03 (CPU): colour combos draw item text in the item colour, lobby glyph items, tech-tree arrows / tints, battle-end
+# arrows, fleet summary dividers (docs/re/UI.md §3.7).
+add_executable(alamo_ui_colour_arrows_tests tests/test_gui_colour_arrows.cpp)
+target_link_libraries(alamo_ui_colour_arrows_tests PRIVATE alamo_ui_hud alamo_data)
+add_test(NAME alamo_ui_colour_arrows_tests COMMAND alamo_ui_colour_arrows_tests)
+set_tests_properties(alamo_ui_colour_arrows_tests PROPERTIES TIMEOUT 120)
+
 # P2 HUD, GPU side (only with the renderer): the HUD Vulkan pass after the post chain (hud_renderer.hpp),
 # selection circles as 3D primitives (selection_blob.hpp), header-only snapshot bridge (hud_sim_bridge.hpp).
 if(TARGET alamo_render AND TARGET alamo_rhi)

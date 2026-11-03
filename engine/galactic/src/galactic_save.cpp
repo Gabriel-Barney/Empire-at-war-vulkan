@@ -41,7 +41,7 @@ namespace alamo::galactic {
 namespace {
 
 constexpr uint32_t kGalacticSaveVersion = 1;
-constexpr uint32_t kConflictSaveVersion = 1;
+constexpr uint32_t kConflictSaveVersion = 2;  // v2: BattleRequest::linked (story t10)
 
 // Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never
 // allocate.
@@ -633,6 +633,7 @@ void ConflictManager::write(ByteWriter& w) const {
     put_handle(w, st, request_.starbase);
     put_handles(w, st, request_.structures);
     w.boolean(request_.land_base_destruction_forces_retreat).boolean(request_.space_station_destruction_forces_retreat);
+    w.boolean(request_.linked);
 
     w.u32(static_cast<uint32_t>(planet_map_.size()));
     for (const std::string& m : planet_map_) w.str(m);
@@ -646,7 +647,8 @@ void ConflictManager::write(ByteWriter& w) const {
 
 bool ConflictManager::read(ByteReader& r) {
     const objects::ObjectStore& st = sim_->store();
-    if (r.u32() != kConflictSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (version < 1 || version > kConflictSaveVersion || !r.ok()) return false;
     const uint32_t rows = r.u32();
     if (!r.ok() || rows != sim_->planets().size()) return false;
     const int32_t P = static_cast<int32_t>(sim_->players().size());
@@ -759,6 +761,7 @@ bool ConflictManager::read(ByteReader& r) {
     if (!get_handle(r, st, req.starbase) || !get_handles(r, st, req.structures)) return false;
     req.land_base_destruction_forces_retreat = r.boolean();
     req.space_station_destruction_forces_retreat = r.boolean();
+    if (version >= 2) req.linked = r.boolean();
 
     uint32_t nmaps = 0;
     if (!r.ok() || !get_count(r, nmaps, 4)) return false;

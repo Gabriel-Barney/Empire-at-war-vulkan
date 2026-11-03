@@ -33,6 +33,8 @@
 //   Rewards the host applies (SET_TECH_LEVEL, CREDITS) run synchronously inside Fire (on_reward); the
 //   galactic events they raise are dispatched in further rounds of the same T9 (at most kMaxRounds).
 //   Story_Event_Trigger(name) reaches the plot's script synchronously at Fire (StoryModel::set_script_vm).
+//   Story flags are one table for the session (STORY.md §0 [H]): every galactic plot set and the tactical plot set share
+//   the first set's table (StoryModel::share_flags), so a mission's SET_FLAG ..._WIN reaches the campaign's STORY_FLAG.
 //
 // Notification mapping (STORY.md 5; planets are named by their TYPE name):
 //   PlanetOwnerChanged   STORY_CONQUER (name = planet type, owner = new owner) + STORY_CONQUER_COUNT
@@ -390,6 +392,16 @@ public:
     // FogOfWar::reward_enable_fow, else its carried FOW-active / render option). Unset: the reward does nothing [port].
     void set_enable_fow_hook(std::function<void(bool has_param, int32_t value)> fn) { enable_fow_ = std::move(fn); }
     // --- end fog follow-up ---
+    // --- story t06 wiring (the tactical victory monitor, BT §3.1a): rewards of the TACTICAL plot set go to the running
+    // battle. ENABLE_VICTORY -> enable(Reward_Param1 given, atoi(Reward_Param1)); VICTORY -> victory(Reward_Param1 = the
+    // faction name as written, atoi(Reward_Param2) != 0 = short and silent); the battle host resolves the faction (unknown:
+    // "Unable to find faction %s to force victory", nothing). Unset, or a galactic plot set's reward: nothing [port: the
+    // galactic victory monitor / campaign end is not modelled]. ---
+    void set_victory_hooks(std::function<void(bool has_param, int32_t value)> enable,
+                           std::function<void(const std::string& faction, bool short_silent)> victory) {
+        enable_victory_ = std::move(enable);
+        victory_ = std::move(victory);
+    }
     // --- OI host (owner: game host agent): presentation tap of every batch T9 drains from the galactic event stream
     // (round 0 = the T2..T8 events; rounds 1+ = events raised inside T9 by Lua calls / story rewards, e.g. Lua
     // Activate_Ability's SpecialDialog for a human). Read-only: called before the batch is routed; it must not change
@@ -507,6 +519,8 @@ private:
     int32_t corruption_player_ = -1, corruption_type_ = -1;  // wave 2b: pending corruption mission
     std::string tactical_map_[2];                              // S4: SET_TACTICAL_MAP land / space slots
     std::function<void(bool, int32_t)> enable_fow_;            // fog follow-up: ENABLE_FOW reward hook
+    std::function<void(bool, int32_t)> enable_victory_;        // story t06 wiring: ENABLE_VICTORY (tactical plots)
+    std::function<void(const std::string&, bool)> victory_;    // story t06 wiring: VICTORY (tactical plots)
     std::function<void(int, const std::vector<galactic::GalacticEvent>&)> drain_tap_;  // OI host
     bool autoresolve_disabled_ = false;              // OI galactic: story lock global flag (+0x41)
     std::vector<PlanetIndex> autoresolve_planets_;   // OI galactic: story lock planet list (+0x308), insertion order

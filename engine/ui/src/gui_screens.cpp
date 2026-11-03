@@ -309,7 +309,11 @@ bool GameScreens::show_battle_end(const BattleEndInfo& info) {
         d->set_value(bars[side], 0);
         d->show(bars[side], n[side] > static_cast<size_t>(kLossRows));
     }
-    for (const char* a : {"IDC_RIGHT_ARROW1", "IDC_RIGHT_ARROW2"}) d->show(a, false);  // [port] no art known
+    for (const char* a : {"IDC_RIGHT_ARROW1", "IDC_RIGHT_ARROW2"}) {  // UI.md §3.7.2: the tech-tree right arrow, white
+        d->set_image(a, "i_tree_arrow_right.tga");
+        if (GuiControl* ac = d->get(a)) ac->tint = Rgba8{255, 255, 255, 255};
+        d->show(a, true);
+    }
     layout_battle_end_rows(*d, info);
     fill_battle_end_units(*d);
     set_countdown(info.countdown);

@@ -275,12 +275,12 @@ This is hysteresis favouring incumbents.
 2. Sort each active per-category vector by effective desire, descending. std::sort (0x720eb0): insertion sort up to 32 elements, so stable; unstable above that.
 3. Sort category ids (global list order) by normalized budget weight (cat+0x3c). The direction is probably descending. [M]
 4. For each category in that order, each active goal with a PotentialPlan gets 0x6c0be0. That queues production for PP units that need building, once per PP (§1.9.3).
-5. Sort each proposed category and truncate it to `template[+0xe8] + |active(cat)|` (0x721b60). Template = AIPlayer+0x28→+0x30. [M that +0xe8 is a template int]
+5. Sort each proposed category and truncate it to `extension + |active(cat)|` (0x721b60). `extension` = the int at +0xE8 of the **AIPlayerType** (goal system +0x80 → +0x28 → +0x28 → +0x30), not of a template: the XML tag `GoalSetExtensionSize` (AIPlayerType parser 0x60f840: `atoi`, then unsigned `min(v, 5)`), default **2** (AIPlayerType ctor 0x60f400, a 0xF0-byte object). No shipped AI player file sets the tag, so every vanilla AI keeps 2. (The AI template, ctor 0x6709a0, has an unordered_map bucket mask at +0xE8, which is why "template" was a misreading.) [H, q2f t09]
 6. Run Resolve_Category for each category in sorted order. Then clear the proposed set.
 
 **Resolve_Category(cat)** [H unless noted]
 
-Notation: A = active vector, P = proposals, `limit = template[+0xe8] + |A|`.
+Notation: A = active vector, P = proposals, `limit = extension + |A|` (extension = AIPlayerType GoalSetExtensionSize, step 5 above).
 
 1. **No surviving proposals.** Run *maintenance* (0x722a30) on A and return. Maintenance drops a goal (releasing its budget) when any of these holds:
    - it is Released, or has no plan link;
@@ -849,7 +849,7 @@ AI orders bypass the command queue but obey the same rules as human orders. [H]
 3. **Instantiation marshallers:** the per-mode order (data 0x140a449a0) and each marshaller's score and veto rules: FreeStore (AllowFreeStoreUnits / AllowEngagedUnits / MagicPlanStealing), Budget (MinimumCost / AdditionalCost), Contrast (tolerance DAT_140b3a544, MinimumTotalSize / Force, RequiredCategories), Production, Hero, TechTree, TerrainType. This is the largest remaining gap for A2 parity.
 4. **AIPlanetBuildQueue** planet choice (0x53b7d0 / 0x695720), AIBuildTask hijack (0x648370) and ground production (0x648120).
 5. PlanetAITargetLocation `Applies` body (planet ownership vs application flags); the consumer of Reachability levels; the threat-level → PlanetReachability mapping (0x664210).
-6. Goal-system list +0x2a0 (blocks all proposals when non-empty); goal ETA writer and 0x525200; the template int +0xe8 (extra goals per category).
+6. Goal-system list +0x2a0 (blocks all proposals when non-empty); goal ETA writer and 0x525200; ~~the template int +0xe8 (extra goals per category)~~ (resolved q2f t09: AIPlayerType GoalSetExtensionSize, default 2, §1.6 Commit step 5).
 7. Budget per-tick accrual sign (0x614340); release refund path 0x5f7d40 / 0x289050.
 8. Event code ↔ name table (DAT_140b3a208, static initialisers).
 9. Bodies of Test_Target_Contrast, Block / Unblock_Goal_Proposal, Collect_All_Free_Units, Are_All_Units_On_Free_Store.

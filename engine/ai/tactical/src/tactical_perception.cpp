@@ -936,15 +936,18 @@ struct Eval {
                 if (P != ctx.self) return false;
                 std::vector<std::string_view> types;
                 param_names(ps, "Parameter_Type", types);
+                // OPT2 t13: the listed types' indices once per call, and only when the host answers pad_accepts (each
+                // type_index() scans every type name; it was run per open pad and name, 90 % of land goal scoring).
+                std::vector<int32_t> accepts;
+                if (w.pad_accepts)
+                    for (const std::string_view t : types) accepts.push_back(type_index(t));
                 uint32_t c = 0;
                 for (const PerceptionObject& o : w.objects) {
                     if (!o.alive || !o.is_build_pad || o.built_type >= 0) continue;
                     if (!types.empty()) {
                         bool ok = listed(types, type_name(o.type));
-                        for (size_t i = 0; !ok && i < types.size(); ++i) {
-                            const int32_t ti = type_index(types[i]);
-                            ok = ti >= 0 && w.pad_accepts && w.pad_accepts(o.type, ti, pl.faction);
-                        }
+                        for (size_t i = 0; !ok && i < accepts.size(); ++i)
+                            ok = accepts[i] >= 0 && w.pad_accepts(o.type, accepts[i], pl.faction);
                         if (!ok) continue;
                     }
                     ++c;

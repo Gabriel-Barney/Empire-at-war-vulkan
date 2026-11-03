@@ -18,8 +18,8 @@ using save::put;
 using save::put_vec;
 
 namespace {
-constexpr uint32_t kGoalsVersion = 1, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 1, kContextVersion = 1,
-                   kGateVersion = 1, kPathVersion = 1, kPerceptionVersion = 1, kSnapshotVersion = 1;
+constexpr uint32_t kGoalsVersion = 2, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 1, kContextVersion = 1,
+                   kGateVersion = 1, kPathVersion = 2, kPerceptionVersion = 1, kSnapshotVersion = 1;
 
 void put_goal(ByteWriter& w, const Goal& g) {
     w.u32(g.serial);
@@ -163,6 +163,11 @@ void GoalSystem::write(ByteWriter& w) const {
     w.u32(commits_);
     w.u32(next_serial_);
     w.i64(now_);
+    // 2: OPT2 t10, the batched-accept goals whose solves are in flight (the mode saves the solves themselves)
+    w.i64(pending_ready_);
+    w.boolean(pending_pass_done_);
+    w.u32(static_cast<uint32_t>(pending_.size()));
+    for (const Goal& g : pending_) put_goal(w, g);
 }
 
 bool GoalSystem::read(ByteReader& r) {
@@ -197,6 +202,15 @@ bool GoalSystem::read(ByteReader& r) {
     t.commits_ = r.u32();
     t.next_serial_ = r.u32();
     t.now_ = r.i64();
+    t.pending_ready_ = r.i64();
+    t.pending_pass_done_ = r.boolean();
+    const uint32_t np = save::count(r, 60);
+    t.pending_.assign(np, Goal{});
+    for (Goal& g : t.pending_) {
+        get_goal(r, g);
+        if (g.type >= goal_types || g.source >= sources_.size()) r.fail();
+    }
+    if (t.pending_ready_ < 0 && (np > 0 || t.pending_pass_done_)) r.fail();
     if (!r.ok() || t.blocked_ != !t.block_list_.empty()) return false;
     *this = std::move(t);
     return true;
@@ -378,18 +392,35 @@ bool AiEnableGate::read(ByteReader& r) {
 
 // ================================================================ AiPathFinder
 
+void AiPathFinder::Input::write(ByteWriter& w) const {
+    put_vec(w, value);
+    put_vec(w, cost);
+    w.boolean(has_revealed);
+    save::put_bitset(w, revealed);
+    put_vec(w, zoff);
+}
+
+bool AiPathFinder::Input::read(ByteReader& r) {
+    if (!r.ok() || !get_vec(r, value) || !get_vec(r, cost)) return false;
+    has_revealed = r.boolean();
+    return r.ok() && save::get_bitset(r, revealed) && get_vec(r, zoff);
+}
+
+// Version 2 (OPT2 t02 / OPT3 t04): + the in-flight background recompute (kick and ready frame, its input).
 void AiPathFinder::write(ByteWriter& w) const {
     w.u32(kPathVersion);
     w.boolean(created_);
     w.i32(next_);
     w.u32(runs_);
     w.u64(digest_);
-    w.u32(matrix_recomputes());
-    put_vec(w, in_value_);
-    put_vec(w, in_cost_);
-    w.boolean(in_has_revealed_);
-    save::put_bitset(w, in_revealed_);
-    put_vec(w, in_zoff_);
+    w.u32(matrix_runs_);
+    in_.write(w);
+    w.boolean(job_.in_flight());
+    if (job_.in_flight()) {
+        w.i64(job_.kick_frame());
+        w.i64(job_.ready_frame());
+        pend_.write(w);
+    }
 }
 
 bool AiPathFinder::read(ByteReader& r, const galactic::PlanetGraph& graph, const ParallelFor& pf) {
@@ -399,24 +430,25 @@ bool AiPathFinder::read(ByteReader& r, const galactic::PlanetGraph& graph, const
     t.next_ = r.i32();
     t.runs_ = r.u32();
     t.digest_ = r.u64();
-    const uint32_t matrix_runs = r.u32();
-    if (!r.ok() || !get_vec(r, t.in_value_) || !get_vec(r, t.in_cost_)) return false;
-    t.in_has_revealed_ = r.boolean();
-    if (!r.ok() || !save::get_bitset(r, t.in_revealed_) || !get_vec(r, t.in_zoff_)) return false;
-    if (t.created_) {
-        // Rebuild the matrices (and the cache's stored inputs) from the last recompute's input.
-        const galactic::AllPairsInput in = t.last_input();
-        t.cache_.update(graph, in, pf);
-        StateHasher h;
-        const galactic::AllPairsMatrices& m = t.cache_.matrices();
-        h.u32(m.size());
-        h.span(m.weights());
-        h.span(m.preds());
-        if (h.digest() != t.digest_ || matrix_runs < t.cache_.recompute_count()) return false;
-        t.matrix_base_ = matrix_runs - t.cache_.recompute_count();
-    } else {
-        t.matrix_base_ = matrix_runs;
+    t.matrix_runs_ = r.u32();
+    if (!t.in_.read(r)) return false;
+    const bool in_flight = r.boolean();
+    int64_t kick = 0, ready = 0;
+    if (in_flight) {
+        kick = r.i64();
+        ready = r.i64();
+        if (!t.pend_.read(r) || ready < kick) return false;
     }
+    if (!r.ok()) return false;
+    if (t.created_) {
+        // Rebuild the published matrices (and the cache's change detection) from the last applied recompute's input.
+        t.cache_.update(graph, t.in_.view(), pf);
+        if (matrices_digest(t.cache_.matrices()) != t.digest_) return false;
+    }
+    // The in-flight recompute again, inline: its result is applied on the saved ready frame (latency_job.hpp).
+    if (in_flight) t.start_job(static_cast<int32_t>(kick), static_cast<int32_t>(ready), graph, pf, {});
+    job_.cancel();
+    t.set_background(latency_, std::move(bg_));
     *this = std::move(t);
     return true;
 }

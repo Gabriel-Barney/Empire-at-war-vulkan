@@ -1,5 +1,6 @@
 #include "alamo/ai/ai_context.hpp"
 
+#include "alamo/core/profile.hpp"
 #include "alamo/core/sim_crc.hpp"
 
 namespace alamo::ai {
@@ -9,6 +10,11 @@ AiContext::AiContext(AiMode mode) : mode_(mode) {}
 void AiContext::attach(ContextModeServices* services, TemplateSystem::Evaluator eval) {
     services_ = services;
     eval_ = std::move(eval);
+}
+
+int32_t AiContext::stagger_offset(int32_t slot, int32_t slots, int32_t period) {
+    if (slots <= 1 || period <= 1 || slot <= 0) return 0;
+    return static_cast<int32_t>((static_cast<int64_t>(slot) * period / slots) % period);
 }
 
 void AiContext::service(int64_t now, bool enabled, bool auto_resolve_busy) {
@@ -27,6 +33,10 @@ void AiContext::service(int64_t now, bool enabled, bool auto_resolve_busy) {
         services_->template_init(now);
         templates.clear_changed();
         initialised_ = true;
+        // OPT2 t01: this player's fixed phase (header comment).
+        for (ServiceClock* c : {&perception_clock, &planning_clock, &execution_clock, &learning_clock})
+            c->next = now + stagger_offset(stagger_slot_, stagger_slots_, c->period());
+        goal_clock.next = now + stagger_offset(stagger_slot_, stagger_slots_, planning_clock.period());
     }
     if (perception_clock.due(now)) {
         perception_clock.reschedule(now);
@@ -36,16 +46,19 @@ void AiContext::service(int64_t now, bool enabled, bool auto_resolve_busy) {
     if (goal_clock.due(now)) {
         goal_clock.reschedule(now);
         ++service_counts[1];
+        ALAMO_PROFILE_SCOPE("ai.goals");  // OPT2 t01: per-subsystem AI time
         goals.service(now);
     }
     if (planning_clock.due(now)) {
         planning_clock.reschedule(now);
         ++service_counts[2];
+        ALAMO_PROFILE_SCOPE("ai.planning");  // OPT2 t01: per-subsystem AI time
         services_->planning_service(now);
     }
     if (execution_clock.due(now)) {
         execution_clock.reschedule(now);
         ++service_counts[3];
+        ALAMO_PROFILE_SCOPE("ai.execution");  // OPT2 t01: per-subsystem AI time
         services_->execution_service(now);
     }
     if (learning_clock.due(now)) {
@@ -56,6 +69,7 @@ void AiContext::service(int64_t now, bool enabled, bool auto_resolve_busy) {
     if (template_clock.due(now)) {
         template_clock.reschedule(now);
         ++service_counts[5];
+        ALAMO_PROFILE_SCOPE("ai.templates");  // OPT2 t01: per-subsystem AI time
         templates.service(eval_);
         if (templates.changed()) {
             templates.clear_changed();

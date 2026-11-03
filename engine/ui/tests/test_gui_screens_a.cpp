@@ -600,13 +600,16 @@ void test_lobby() {
           s->get("IDC_PLAYER_FACTION_0")->enabled && s->get("IDC_LAN_START_GAME_BUTTON")->enabled &&
           s->get("IDC_STAGING_MAP_LIST")->selected == 0 && s->get("IDC_ACCEPT_PLAYER_0")->image == "i_dialogue_check_on.tga" &&
           s->get("IDC_PLAYER_COLOR_0")->item_colors.size() == 2);
-    {  // the colour combo draws a swatch (no glyphs) for its selected item
+    {  // the colour combo holds one glyph per colour and draws it (text, no filled box) in the item colour (UI.md §3.7.1)
+        CHECK(s->get("IDC_PLAYER_COLOR_0")->items.size() == 2 && s->get("IDC_PLAYER_COLOR_0")->items[0] == U"■");
         HudDrawList sdl;
         env.gui.build(sdl, env.now);
-        bool red = false;
-        for (uint32_t layer = 0; layer < kHudLayers; ++layer)
-            for (const HudQuad& q : sdl.items(layer, HudList::Alpha)) red = red || (q.color == Rgba8{255, 0, 0, 255});
-        CHECK(red);
+        bool red_glyph = false, red_box = false;
+        for (uint32_t layer = 0; layer < kHudLayers; ++layer) {
+            for (const HudQuad& q : sdl.items(layer, HudList::Text)) red_glyph = red_glyph || (q.color == Rgba8{255, 0, 0, 255});
+            for (const HudQuad& q : sdl.items(layer, HudList::Alpha)) red_box = red_box || (q.color == Rgba8{255, 0, 0, 255});
+        }
+        CHECK(red_glyph && !red_box);
     }
     ev.clear();
     lob.update(std::vector<GuiEvent>{event(GuiEvent::Kind::SelectionChanged, dlg::kLanStaging, "IDC_PLAYER_FACTION_1", 0),
