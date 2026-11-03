@@ -561,9 +561,9 @@ std::u32string FrontEnd::skirmish_row_text(const SkirmishMapInfo& m) const {
     return ascii32("(" + std::to_string(m.players ? m.players : m.max_players) + ") ") + t;
 }
 
-// The active tab's maps: space maps first, then land maps (the port's one combined list), each by row text
-// case-insensitively, ties by map id (UI.md 9.4 / 9.5). The selection is the map started last when it is listed, else
-// _MP_SPACE_KUAT [port: stands in for the original's "map chosen last", and keeps the smoke runs on Kuat], else row 0.
+// The rows of the active tab and game type (UI.md 9.4: a space map is listed under Space, the others under Land), each by
+// row text case-insensitively, ties by map id. The selection is the map started last for that game type when it is listed
+// (t02), else _MP_SPACE_KUAT on the Space type [port: keeps the smoke runs on Kuat], else row 0.
 void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
     struct Row {
         size_t index;
@@ -571,10 +571,9 @@ void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
     };
     std::vector<Row> rows;
     for (size_t i = 0; i < maps_.size(); ++i)
-        if (maps_[i].custom == custom_tab_) rows.push_back({i, skirmish_row_text(maps_[i])});
+        if (maps_[i].custom == custom_tab_ && maps_[i].space == space_type_) rows.push_back({i, skirmish_row_text(maps_[i])});
     std::sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
         const SkirmishMapInfo &ma = maps_[a.index], &mb = maps_[b.index];
-        if (ma.space != mb.space) return ma.space;
         if (a.text != b.text) {
             const bool ab = row_text_less(a.text, b.text), ba = row_text_less(b.text, a.text);
             if (ab != ba) return ab;
@@ -586,16 +585,18 @@ void FrontEnd::fill_skirmish_maps(GuiDialog& d) {
     std::vector<std::u32string> items;
     int32_t sel = rows.empty() ? -1 : 0;
     int32_t kuat = -1, last = -1;
+    const std::string& last_map = last_map_[space_type_ ? 1 : 0];
     for (size_t r = 0; r < rows.size(); ++r) {
         const SkirmishMapInfo& m = maps_[rows[r].index];
         map_view_.push_back(rows[r].index);
         items.push_back(std::move(rows[r].text));
-        if (kuat < 0 && iequal(m.map, "_MP_SPACE_KUAT")) kuat = static_cast<int32_t>(r);
-        if (last < 0 && !last_map_.empty() && iequal(m.map, last_map_)) last = static_cast<int32_t>(r);
+        if (kuat < 0 && space_type_ && iequal(m.map, "_MP_SPACE_KUAT")) kuat = static_cast<int32_t>(r);
+        if (last < 0 && !last_map.empty() && iequal(m.map, last_map)) last = static_cast<int32_t>(r);
     }
     if (last >= 0) sel = last;
     else if (kuat >= 0) sel = kuat;
     d.set_items("IDC_STAGING_MAP_LIST", std::move(items), sel);
+    fill_skirmish_preview(d);
 }
 
 int32_t FrontEnd::skirmish_map_row(std::string_view map) const {
@@ -604,9 +605,63 @@ int32_t FrontEnd::skirmish_map_row(std::string_view map) const {
     return -1;
 }
 
+void FrontEnd::fill_skirmish_game_types(GuiDialog& d) {
+    // Land first (game type 2), then Space (3) as in UI.md 9.4; the names are the text database's game type entries.
+    d.set_items("IDC_GAME_TYPE_LIST", {text_or("TEXT_GAME_TYPE_TEAM_LAND", gui_->port_text(U"Land")),
+                                       text_or("TEXT_GAME_TYPE_TEAM_SPACE", gui_->port_text(U"Space"))},
+                space_type_ ? 1 : 0);
+}
+
+void FrontEnd::fill_skirmish_colours(GuiDialog& d) {
+    char id[32];
+    for (int32_t p = 0; p < 2; ++p) {  // the used slots [port: local player + one AI]
+        std::snprintf(id, sizeof id, "IDC_PLAYER_COLOR_%d", p);
+        const bool has = !colour_palette_.empty();
+        d.show(id, has);
+        if (!has) continue;
+        // UI.md 3.7.1: one U+25A0 per palette entry, drawn in the entry's colour.
+        d.set_items(id, std::vector<std::u32string>(colour_palette_.size(), std::u32string(1, 0x25A0)),
+                    std::min(slot_colour_[p], static_cast<int32_t>(colour_palette_.size()) - 1));
+        if (GuiControl* c = d.get(id)) c->item_colors = colour_palette_;
+    }
+}
+
+int32_t FrontEnd::skirmish_colour(int32_t slot) const {
+    return slot >= 0 && slot < 2 && !colour_palette_.empty() ? std::min(slot_colour_[slot], static_cast<int32_t>(colour_palette_.size()) - 1) : -1;
+}
+
+// IDC_IMAGE and IDC_SCENARIO_DESCRIPTION_TEXT_BOX for the selected row (UI.md 9.6).
+void FrontEnd::fill_skirmish_preview(GuiDialog& d) {
+    const GuiControl* list = d.get("IDC_STAGING_MAP_LIST");
+    const SkirmishMapInfo* m = list && list->selected >= 0 && static_cast<size_t>(list->selected) < map_view_.size()
+                                   ? &maps_[map_view_[static_cast<size_t>(list->selected)]]
+                                   : nullptr;
+    SkirmishPreview pv;
+    if (m && p_.skirmish_preview) pv = p_.skirmish_preview(*m);
+    d.set_image("IDC_IMAGE", pv.texture);
+    if (GuiControl* c = d.get("IDC_IMAGE")) {
+        c->markers.clear();
+        for (size_t i = 0; i < pv.starts.size(); ++i) {  // start i in the colour of slot i
+            Rgba8 col{255, 255, 255, 255};
+            if (!colour_palette_.empty()) {
+                const int32_t shown = i < 2 ? skirmish_colour(static_cast<int32_t>(i)) : -1;
+                col = colour_palette_[shown >= 0 ? static_cast<size_t>(shown) : i % colour_palette_.size()];
+            }
+            c->markers.push_back({pv.starts[i], col});
+        }
+    }
+    // [port, M] the shipped text database has no per-map description: the box shows the game type's description.
+    d.set_text("IDC_SCENARIO_DESCRIPTION_TEXT_BOX",
+               m ? gui_unescape(text_or(space_type_ ? "TEXT_GAME_DESCRIPTION_TEAM_SPACE" : "TEXT_GAME_DESCRIPTION_TEAM_LAND", std::u32string())) : std::u32string());
+}
+
 void FrontEnd::fill_skirmish(GuiDialog& d) {
     maps_ = p_.skirmish_maps ? p_.skirmish_maps() : std::vector<SkirmishMapInfo>{};
+    colour_palette_ = p_.player_colors ? p_.player_colors() : std::vector<Rgba8>{};
+    for (int32_t i = 0; i < 8; ++i) slot_colour_[i] = i;  // the default colour is the slot index
     custom_tab_ = false;  // the Official tab is active when the dialog opens
+    if (last_type_ >= 0) space_type_ = last_type_ == 1;
+    fill_skirmish_game_types(d);
     fill_skirmish_maps(d);
     d.show("IDC_SELECT_OFFICIAL_MAPS", true);
     d.show("IDC_SELECT_CUSTOM_MAPS", true);
@@ -626,9 +681,9 @@ void FrontEnd::fill_skirmish(GuiDialog& d) {
         d.set_items(id, factions, factions.empty() ? -1 : std::min<int32_t>(p, static_cast<int32_t>(factions.size()) - 1));
         std::snprintf(id, sizeof id, "IDC_PLAYER_TEAM_%d", p);
         d.set_items(id, {U"1", U"2"}, p);
-        std::snprintf(id, sizeof id, "IDC_PLAYER_COLOR_%d", p);
-        d.show(id, false);
     }
+    fill_skirmish_colours(d);
+    fill_skirmish_preview(d);  // the markers follow the slot colours
 }
 
 void FrontEnd::fill_saves(GuiDialog& d) {
@@ -972,6 +1027,31 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
     const std::string_view n = e.dialog;
     if (iequal(n, kCampaignSelect)) fill_campaign_select(*d);
     else if (iequal(n, kCustomStaging) && e.control == "IDC_STAGING_MAP_LIST") fill_custom_staging(*d);
+    else if (iequal(n, kSkirmish) && e.kind == GuiEvent::Kind::SelectionChanged) {
+        if (e.control == "IDC_GAME_TYPE_LIST" && e.value >= 0 && e.value < 2) {
+            if (space_type_ != (e.value == 1)) {
+                space_type_ = e.value == 1;
+                fill_skirmish_maps(*d);
+            }
+        } else if (e.control == "IDC_STAGING_MAP_LIST") {
+            fill_skirmish_preview(*d);
+        } else if (istarts(e.control, "IDC_PLAYER_COLOR_") && e.control.size() == 18 && e.value >= 0 &&
+                   static_cast<size_t>(e.value) < colour_palette_.size()) {
+            // [port] one colour per player: picking the colour of the other slot swaps the two.
+            const int32_t slot = e.control.back() - '0';
+            if (slot >= 0 && slot < 2) {
+                const int32_t other = 1 - slot;
+                if (slot_colour_[other] == e.value) {
+                    slot_colour_[other] = slot_colour_[slot];
+                    char id[32];
+                    std::snprintf(id, sizeof id, "IDC_PLAYER_COLOR_%d", other);
+                    d->set_selected(id, slot_colour_[other]);
+                }
+                slot_colour_[slot] = e.value;
+                fill_skirmish_preview(*d);
+            }
+        }
+    }
     else if (iequal(n, kAudio) && e.kind == GuiEvent::Kind::ValueChanged) {
         MenuAction a = act(MenuAction::Kind::PreviewAudio);
         a.audio = read_audio(*d);
@@ -1071,8 +1151,10 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             if (list && list->selected >= 0 && static_cast<size_t>(list->selected) < map_view_.size()) {
                 MenuAction a = act(MenuAction::Kind::StartSkirmish);
                 a.map = maps_[map_view_[static_cast<size_t>(list->selected)]].map;
-                last_map_ = a.map;
+                last_map_[space_type_ ? 1 : 0] = a.map;
+                last_type_ = space_type_ ? 1 : 0;
                 for (int32_t p = 0; p < 2; ++p) {
+                    a.colors.push_back(slot_colour_[p]);
                     char id[32];
                     std::snprintf(id, sizeof id, "IDC_PLAYER_FACTION_%d", p);
                     const GuiControl* f = d->get(id);

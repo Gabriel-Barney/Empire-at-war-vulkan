@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 
 #include "alamo/sim/save_session.hpp"
@@ -286,6 +287,35 @@ SkirmishMapEntry read_map_entry(const FileProvider& files, const std::string& pa
     return e;
 }
 }  // namespace
+
+SkirmishMapPreview read_skirmish_map_preview(const FileProvider& files, std::string_view map, bool space) {
+    SkirmishMapPreview pv;
+    std::vector<uint8_t> bytes;
+    if (!files.read(terrain::map_path(map), bytes)) return pv;
+    pv.found = true;
+    terrain::MapData md;
+    terrain::ParseOptions opt;
+    opt.environments_only = true;  // the header only; chunks 3 and 0x13 are taken from the top-level sequence below
+    terrain::parse_ted(bytes, md, nullptr, opt);
+    std::vector<terrain::ChunkView> top;
+    if (!terrain::read_chunks(bytes, top)) return pv;
+    for (const terrain::ChunkView& k : top) {
+        if (k.id == 0x13 && !k.has_children) pv.embedded_image.assign(k.payload.begin(), k.payload.end());
+        if (k.id != 3 || k.has_children || k.payload.size() < 4) continue;
+        const float w = md.info.world_width, h = md.info.world_height;
+        if (!md.info.present || md.info.flag_12 == 0 || !(w > 0.0f) || !(h > 0.0f)) continue;
+        uint32_t n = 0;
+        std::memcpy(&n, k.payload.data(), 4);
+        if (n > (k.payload.size() - 4) / 8) continue;
+        for (uint32_t i = 0; i < n; ++i) {
+            float xy[2];
+            std::memcpy(xy, k.payload.data() + 4 + 8 * static_cast<size_t>(i), 8);
+            const float u = xy[0] / w + (space ? 0.5f : 0.0f), v = xy[1] / h + (space ? 0.5f : 0.0f);
+            pv.starts.emplace_back(std::clamp(u, 0.0f, 1.0f), 1.0f - std::clamp(v, 0.0f, 1.0f));
+        }
+    }
+    return pv;
+}
 
 SkirmishMapCatalog build_skirmish_map_catalog(const vfs::Vfs& vfs) {
     SkirmishMapCatalog c;

@@ -1334,6 +1334,11 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
         }
         case GuiGadgetType::CustomImage:
             if (!c.image.empty()) quad(dl, layer, c.image, r, c.tint);
+            for (const GuiMarker& m : c.markers) {  // 8-unit squares with a dark rim
+                const float mx = r.min.x + m.pos.x * r.width(), my = r.min.y + m.pos.y * r.height();
+                fill(dl, layer, {{mx - 4.0f, my - 4.0f}, {mx + 4.0f, my + 4.0f}}, {0, 0, 0, 255});
+                fill(dl, layer, {{mx - 3.0f, my - 3.0f}, {mx + 3.0f, my + 3.0f}}, m.color);
+            }
             break;
         default: break;
     }

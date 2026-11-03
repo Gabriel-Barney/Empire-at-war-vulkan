@@ -61,6 +61,28 @@ ScriptStep step_click_control(std::string dialog, std::string control) {
             600};
 }
 
+// Clicks the first row of a list (the skirmish staging game type list: row 0 = Land).
+ScriptStep step_click_first_row(std::string dialog, std::string control) {
+    auto st = std::make_shared<ClickState>();
+    auto px = std::make_shared<std::pair<int32_t, int32_t>>(0, 0);
+    return {"click first row of " + dialog + "/" + control, [st, px, dialog, control](App& a, ui::InputFrame& f) {
+                if (st->phase > 0) return click_at(*st, f, px->first, px->second, ui::Button::Left);
+                ui::GuiDialog* d = a.ui_.gui.find(dialog);
+                if (!d || d != a.ui_.gui.top()) return false;
+                const int32_t i = d->find(control);
+                if (i < 0) {
+                    std::fprintf(stderr, "script: %s has no %s\n", dialog.c_str(), control.c_str());
+                    a.script_failed_ = true;
+                    return true;
+                }
+                const ui::GuiRect r = d->control_rect(static_cast<size_t>(i));
+                const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), r.max.y - 6.0f);
+                *px = {static_cast<int32_t>(p.x), static_cast<int32_t>(p.y)};
+                return click_at(*st, f, px->first, px->second, ui::Button::Left);
+            },
+            600};
+}
+
 // Selects list row `row` like a player: click the first row (selects + focuses the list), then Down until it is reached.
 ScriptStep step_select_row(std::string dialog, std::string control, std::function<size_t(App&)> row) {
     auto st = std::make_shared<ClickState>();
@@ -1312,6 +1334,8 @@ void App::make_script() {
     };
     if (opt_.smoke == "land") {  // land skirmish: the first land map of the list (rows after the space maps)
         s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_SKIRMISH_GAMES_BUTTON"));
+        s.push_back(step_click_first_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST"));  // p4uim t01: the Land game type
+        s.push_back(step_wait("land game type listed", [](App& a) { return !a.ui_.front.skirmish_space_type(); }, 60));
         s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_STAGING_MAP_LIST", [](App& a) {
             // The first land map by name (the old list's first land row): its row in the staging list as the front end sorted it;
             // else the first land row of the Official tab.

@@ -102,6 +102,12 @@ struct GuiStyle {
     float edit_caret_blink = 0.5f;
 };
 
+// A small square drawn over a custom image: `pos` is a 0..1 fraction of the control rectangle (x right, y down).
+struct GuiMarker {
+    Vec2f pos{};
+    Rgba8 color{255, 255, 255, 255};
+};
+
 struct GuiControl {
     const RcControl* def = nullptr;
     GuiGadgetType type = GuiGadgetType::Unknown;
@@ -132,6 +138,7 @@ struct GuiControl {
     int32_t fit_lines = 0;
     size_t fit_keep_tail = 0;          // [port] t47: code points at the end of the text the "..." may not hide (fit_text_lines)
     std::string image;                 // custom image texture ("" = none)
+    std::vector<GuiMarker> markers;    // custom image: squares over the image (p4uim t03 skirmish start positions)
     Rgba8 tint{255, 255, 255, 255};
     int32_t radio_group = -1;          // radio buttons: group index (WS_GROUP rule)
     Vec2f offset{};                    // [port] canvas-unit shift of the control rectangle (backdrop hotspots, +Y up)

@@ -143,6 +143,11 @@ void GameUi::upload_pages(GpuCore& gpu, render::PlanetPortraits* portraits) {
             else pages.set_failed(e.page);
             continue;
         }
+        if (const auto m = memory_textures.find(e.name); m != memory_textures.end()) {
+            if (gpu.hud.set_image_page(e.page, *m->second)) pages.set_loaded(e.page, m->second->width, m->second->height);
+            else pages.set_failed(e.page);
+            continue;
+        }
         const auto tex = gpu.cache->texture(e.name);
         if (!tex || tex->is_fallback || !gpu.hud.set_image_page(e.page, *tex)) pages.set_failed(e.page);
         else pages.set_loaded(e.page, tex->width, tex->height);

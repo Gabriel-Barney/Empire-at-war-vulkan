@@ -367,6 +367,7 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     }
     space_ = tm->kind() == objects::ModeKind::Space;
     table_.build(data.types, space_ ? objects::ModeKind::Space : objects::ModeKind::Land, gpu.resolver.get());
+    table_.set_owner_colours(session.spec().kind == SessionKind::Skirmish ? session.spec().skirmish.colors : std::vector<uint8_t>{});  // p4uia t02
     builder_ = std::make_unique<render::SimInstanceBuilder>(table_, gpu.resolver.get());
     const std::string map = session.spec().kind == SessionKind::Skirmish ? session.spec().skirmish_map : b->request().map;
     scene_ = std::make_unique<render::MapScene>();
