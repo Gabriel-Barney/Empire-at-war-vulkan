@@ -256,6 +256,8 @@ public:
     bool galactic_ai_running() const;
     bool story_running() const { return host_ && host_->story() != nullptr; }
     uint64_t galactic_ai_orders() const;
+    // q6 t08: per player the galactic AI type the session gave it ("" = none; empty before start / without the galactic AI).
+    const std::vector<std::string>& ai_types() const { return ai_types_; }
 #ifdef ALAMO_SIM_HAVE_ANIM
     const sim::SimAnimation* animation() const { return anim_.get(); }
 #endif

@@ -8,6 +8,7 @@
 // Render-free (no GPU): used by alamo_game and its headless tests / replays.
 #pragma once
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -54,9 +55,26 @@ struct AiData {
 #endif
 };
 #endif
-// [port] AIPlayerType per faction (the campaign's AI_Player_Control pairs are not carried by GalacticSetup):
-// Empire -> BasicEmpire, Rebel -> BasicRebel, Underworld -> AI_Player_Underworld; "" otherwise.
+// [port] the stock factions' AIPlayerType as the port has always assigned it: Empire -> BasicEmpire, Rebel -> BasicRebel,
+// Underworld -> AI_Player_Underworld; "" otherwise. FoC's Factions.xml / Expansion_Factions.xml Basic_AI agree.
 std::string ai_type_for(const std::string& faction);
+// q6 t08: a "stock" faction keeps the port's hard-coded AI type and skirmish forces: ai_type_for(faction) is set and the
+// data's Basic_AI (`basic_ai`: upper-case faction name -> type, ai::load_faction_basic_ai) is absent or the same name
+// (case-insensitive). A mod that redefines Empire with another Basic_AI (Thrawn's Revenge: GenericAI) is not stock.
+bool is_stock_faction(const std::string& faction, const std::map<std::string, std::string>& basic_ai);
+#ifdef ALAMO_GAME_HAVE_GALACTIC_AI
+// q6 t08: the AIPlayerType a non-human player of `faction` gets ("" = no AI; AI_GALACTIC §1.2):
+//   stock faction (is_stock_faction)   ai_type_for(faction), unchanged. [port] FoC campaigns' AI_Player_Control pairs
+//                                      are not read for them (e.g. "Empire, None" / "Rebel, BasicRebel_NoOpenings" in the
+//                                      shipped campaigns, the port's sessions have always used Basic_AI).
+//   no Basic_AI                        "" (as before for Pirates / Hostile / Hutts ...).
+//   skirmish (campaign_control null)   the faction's Basic_AI (SKIRMISH_SETUP §2.1: AI slots get Faction.Basic_AI).
+//   campaign                           ai::campaign_ai_type(*campaign_control, basic_ai, faction, false): the campaign's
+//                                      AI_Player_Control pair; no pair = no AI (only the pairs call Set_AI_Type [M]).
+// A type `defs` does not define is no AI (Set_AI_Type: "Unrecognized AI player type"); defs null = not checked.
+std::string resolve_ai_type(const std::string& faction, const std::map<std::string, std::string>& basic_ai,
+                            const std::vector<std::string>* campaign_control, const ai::AiDefinitions* defs);
+#endif
 
 struct GameData {
     std::string root;                      // game folder (FoC "corruption") or synthetic data folder
@@ -69,6 +87,14 @@ struct GameData {
     galactic::ConflictRules crules;
     std::unique_ptr<sim::BattleCatalog> catalog;
     std::shared_ptr<AiData> ai;  // null: no AI data / built without engine/ai galactic AI
+    // q6 t08: Faction.Basic_AI (ai::load_faction_basic_ai: upper-case faction name -> AIPlayerType; empty without engine/ai).
+    std::map<std::string, std::string> basic_ai;
+    // q6 t08: Faction Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4) as written, per upper-case faction
+    // name (FactionFiles.xml order; the last definition with a list wins, as alamo_headless's skirmish host).
+    struct SkirmishForces {
+        std::vector<std::string> space, land;
+    };
+    std::map<std::string, SkirmishForces> skirmish_forces;
     std::vector<std::string> diagnostics;
     // Q5: one record per loader step, in load order; the step's diagnostics are diagnostics[first_diag, + diag_count).
     // ms is wall clock (reports only, never read by the sim).
@@ -116,6 +142,24 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic
 // [port] default skirmish fleets for the stock factions (Empire / Rebel / Underworld); empty for others.
 std::vector<std::string> default_skirmish_fleet(const std::string& faction);
 std::vector<std::string> default_skirmish_ground(const std::string& faction);
+// q6 t08: the default forces make_skirmish_galaxy uses, as type names the data defines:
+//   stock faction (is_stock_faction)  the lists above, unchanged (names unknown to the data are kept; the galaxy skips them).
+//   other factions                    the faction's Space_ / Land_Skirmish_AI_Default_Forces (SKIRMISH_SETUP §2 step 4),
+//                                     names the data does not define, and types the galaxy cannot hold (space: not a
+//                                     SpaceUnit / Squadron kind; land: not a GroundUnit kind), dropped. [port] none left: up
+//                                     to three of the faction's buildable units (data_fallback_forces).
+//   space, other factions             [port] the port hosts a skirmish as a galactic hop, so the fleet needs a hyperspace
+//                                     member: the first one moves to the front; without one the faction's cheapest buildable
+//                                     hyperspace ship that holds the list's non-hyperspace squadrons (else the cheapest) is
+//                                     put in front. Retail places these squadrons directly at the map's spawn markers.
+std::vector<std::string> default_skirmish_fleet(const GameData& data, const std::string& faction);
+std::vector<std::string> default_skirmish_ground(const GameData& data, const std::string& faction);
+// q6 t08 [port] (no RE rule: retail places nothing without a default force list): the faction's buildable units of one
+// mode - land: GroundUnit types, space: hyperspace SpaceUnit types with Max_Speed > 0 (no stations) - with
+// Build_Cost_Credits > 0, Tech_Level >= 1, Affiliation naming the faction, no Required_Planets, no build limit of 0, not a
+// hero, not cinematic-only, not a company / squadron member and not Build_Initially_Locked; ordered by (build cost, name).
+// Returns the two cheapest and the median one (distinct, in that order), fewer when there are fewer.
+std::vector<std::string> data_fallback_forces(const GameData& data, const std::string& faction, bool land);
 inline constexpr PlanetIndex kSkirmishHumanPlanet = 2, kSkirmishBattlePlanet = 1;
 
 // Space skirmish maps of the data (Data\Art\Maps\_MP_SPACE_*.ted through the VFS), sorted, "_MP_SPACE_KUAT" first

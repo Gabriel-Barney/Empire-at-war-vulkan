@@ -105,10 +105,20 @@ set_tests_properties(alamo_game_battle_fx_tests PROPERTIES TIMEOUT 120)
 # in its own temp folder; with ALAMO_FOC_DATA also the shipped data (no errors).
 add_executable(alamo_mod_check tools/mod_check_main.cpp)
 target_link_libraries(alamo_mod_check PRIVATE alamo_core alamo_game_core)
+# q6 t02: alamo_session_run starts a GameSession (campaign or skirmish) on any data set (MODPATH=..) and ticks it, no window.
+add_executable(alamo_session_run tools/session_run_main.cpp)
+target_link_libraries(alamo_session_run PRIVATE alamo_core alamo_game_core)
 add_executable(alamo_game_mod_check_tests tests/test_mod_check.cpp)
 target_link_libraries(alamo_game_mod_check_tests PRIVATE alamo_core alamo_game_core)
 add_test(NAME alamo_game_mod_check_tests COMMAND alamo_game_mod_check_tests)
 set_tests_properties(alamo_game_mod_check_tests PROPERTIES TIMEOUT 300)
+
+# q6 t08: AI player types (Basic_AI / AI_Player_Control) and default skirmish forces for mod factions on synthetic data in its
+# own temp folder; with ALAMO_FOC_DATA also the shipped factions (they resolve as the port's hard-coded tables).
+add_executable(alamo_game_mod_faction_tests tests/test_mod_factions.cpp)
+target_link_libraries(alamo_game_mod_faction_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_mod_faction_tests COMMAND alamo_game_mod_faction_tests)
+set_tests_properties(alamo_game_mod_faction_tests PROPERTIES TIMEOUT 300)
 
 function(alamo_game_add_exe)
   foreach(_dep alamo_render_sim alamo_render_galactic alamo_ui_draw alamo_ui_hud alamo_ui_rhi)
