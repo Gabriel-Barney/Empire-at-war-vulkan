@@ -313,8 +313,9 @@ bool load_game(Session& s, std::vector<std::string>& diag) {
 }
 
 // 3 planets A - B - C; the defender (player 0) holds B's orbit, the attacker (player 1) moves in from C.
+// q6 t02: `slots` = the factions of players 0 and 1 (empty = Empire, Rebel).
 galactic::GalacticSetup make_galaxy(const Session& s, uint32_t planet_type, const std::vector<uint32_t>& defender,
-                                    const std::vector<uint32_t>& attacker, float credits = 0.0f) {
+                                    const std::vector<uint32_t>& attacker, float credits = 0.0f, const std::vector<uint32_t>& slots = {}) {
     galactic::GalacticSetup g;
     GalaxyMap& m = g.map;
     m.campaign_name = "A1_Skirmish";
@@ -331,18 +332,20 @@ galactic::GalacticSetup make_galaxy(const Session& s, uint32_t planet_type, cons
     }
     g.planet_type = {planet_type, planet_type, planet_type};
     galactic::PlayerSetup e;
-    e.faction = s.rules.find_faction("Empire");
+    e.faction = slots.size() == 2 ? slots[0] : s.rules.find_faction("Empire");
     e.ai = true;
     e.credits = credits;
     galactic::PlayerSetup r = e;
-    r.faction = s.rules.find_faction("Rebel");
+    r.faction = slots.size() == 2 ? slots[1] : s.rules.find_faction("Rebel");
     galactic::PlayerSetup n;
     n.faction = s.rules.find_faction("Neutral");
+    for (uint32_t f = 0; f < s.rules.factions.size() && n.faction == galactic::kNoIndex; ++f)  // q6 t02: a mod's neutral faction
+        if (s.rules.factions[f].is_neutral) n.faction = f;
     g.players = {e, r, n};
     // S10 map owners [probe 2026-10-29]: a Hostile player besides Neutral (map owners resolve by faction; natives -> Hostile).
     galactic::PlayerSetup h;
     h.faction = s.rules.find_faction("Hostile");
-    if (h.faction != galactic::kNoIndex) g.players.push_back(h);
+    if (h.faction != galactic::kNoIndex && h.faction != e.faction && h.faction != r.faction) g.players.push_back(h);
     for (const uint32_t t : defender) g.forces.push_back({0, 1, t});
     for (const uint32_t t : attacker) g.forces.push_back({1, 2, t});
     return g;
@@ -398,9 +401,8 @@ bool synthetic_session(Session& s, std::vector<std::string>& diag) {
     return true;
 }
 
-// land: a land battle; land_skirmish (t50): that battle is a skirmish (an _MP_LAND_ map, MP_Default_Credits), else the campaign invasion.
-bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, bool land, bool station = false,
-                 bool land_skirmish = false) {
+// The FoC data (+ MODPATH=) through the VFS: game data, AI definitions, equations, tactical plans and difficulties.
+bool foc_load(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped) {
     const std::string root = opt.game_dir.empty() ? env_value("ALAMO_FOC_DATA") : opt.game_dir;
     std::error_code ec;
     if (root.empty() || !fs::is_directory(path_from_utf8(root) / "Data", ec)) {
@@ -426,6 +428,13 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
     s.ai->space_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Space, list);
     s.ai->land_plans = ai::tactical::tactical_plan_files(ai::tactical::TacticalMode::Land, list);
     s.ai->difficulties = ai::tactical::load_tactical_ai_difficulties(*s.files);
+    return true;
+}
+
+// land: a land battle; land_skirmish (t50): that battle is a skirmish (an _MP_LAND_ map, MP_Default_Credits), else the campaign invasion.
+bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, bool land, bool station = false,
+                 bool land_skirmish = false) {
+    if (!foc_load(s, opt, diag, skipped)) return false;
     std::vector<uint32_t> emp, reb;
     if (land) {  // battle host: --skirmish-ai foc-land - Empire companies hold the planet, Rebel companies invade
         s.land = true;
@@ -499,14 +508,144 @@ std::vector<std::string> skirmish_default_forces(const FileProvider& files, cons
     return out;
 }
 
+std::string trimmed(std::string_view v) {
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.remove_prefix(1);
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
+    return std::string(v);
+}
+
+std::string upper_ascii(std::string v) {
+    for (char& c : v) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return v;
+}
+
+// ---- q6 t02: the skirmish host's data rules for any faction (mods through MODPATH=) ----
+// Mirrors of engine/apps/game game_data.cpp (alamo_headless does not link alamo_game_core, which pulls UI / audio; unify
+// once the rules move to a library both link): data_default_forces / data_fallback_forces, resolve_ai_type (skirmish:
+// no campaign pairs) and skirmish_map_planet_type.
+
+// game_data ai_type_for: the stock factions' types.
+std::string stock_ai_type(const std::string& faction) {
+    const std::string f = upper_ascii(faction);
+    if (f == "EMPIRE") return "BasicEmpire";
+    if (f == "REBEL") return "BasicRebel";
+    if (f == "UNDERWORLD") return "AI_Player_Underworld";
+    return {};
+}
+
+// game_data resolve_ai_type for a skirmish AI slot (SKIRMISH_SETUP §2.1): a stock faction whose Basic_AI is absent or the
+// stock type keeps the stock type; any other faction plays its Basic_AI when the AI data defines it ("Human", unknown or
+// no Basic_AI = no AI).
+std::string skirmish_ai_type(const std::string& faction, const std::map<std::string, std::string>& basic_ai, const ai::AiDefinitions& defs) {
+    const std::string stock = stock_ai_type(faction);
+    const auto it = basic_ai.find(upper_ascii(trimmed(faction)));
+    if (!stock.empty() && (it == basic_ai.end() || iequal(trimmed(it->second), stock))) return stock;
+    if (it == basic_ai.end()) return {};
+    std::string t = trimmed(it->second);
+    if (iequal(t, "Human") || !defs.find_player(t)) t.clear();
+    return t;
+}
+
+bool hop_capable(const galactic::TypeInfo& t) {
+    return (t.kind == galactic::UnitKind::SpaceUnit || t.kind == galactic::UnitKind::Squadron) && t.hyperspace && t.hyperspace_speed > 0.0f;
+}
+
+// game_data buildable_units: the faction's buildable units ordered by (build cost, name) (no heroes, members, locked,
+// planet-bound or unbuildable types; space: hyperspace-capable ships that move).
+std::vector<uint32_t> buildable_units(const Session& s, uint32_t faction, bool land) {
+    const galactic::GalacticRules& rules = s.rules;
+    std::vector<uint32_t> c;
+    for (uint32_t i = 0; i < rules.types.size(); ++i) {
+        const galactic::TypeInfo& t = rules.types[i];
+        if (land ? t.kind != galactic::UnitKind::GroundUnit : (t.kind != galactic::UnitKind::SpaceUnit || !hop_capable(t))) continue;
+        if (t.build_cost <= 0 || t.tech_level < 1 || t.named_hero || t.generic_hero || t.cinematic_only || t.company_member ||
+            t.squadron_member || t.build_initially_locked || t.limit_lifetime == 0 || t.limit_current == 0 || !t.required_planets.empty())
+            continue;
+        if (!land && (i >= s.types.size() || !(s.types.get_float(i, "Max_Speed") > 0.0f))) continue;  // stations
+        const bool any = t.affiliation.empty() && !t.data_rules;
+        if (!any && std::find(t.affiliation.begin(), t.affiliation.end(), faction) == t.affiliation.end()) continue;
+        c.push_back(i);
+    }
+    std::sort(c.begin(), c.end(), [&](uint32_t a, uint32_t b) {
+        const galactic::TypeInfo &x = rules.types[a], &y = rules.types[b];
+        return x.build_cost != y.build_cost ? x.build_cost < y.build_cost : x.name < y.name;
+    });
+    return c;
+}
+
+// A slot's starting forces (game_data data_default_forces): the faction's Space_ / Land_Skirmish_AI_Default_Forces, keeping
+// the types the scaffold galaxy can hold (space: space units / squadrons; land: ground units; unknown names dropped); none
+// left: [port] the faction's cheapest buildable units (game_data data_fallback_forces: picks 0, 1 and size / 2).
+// Not mirrored: game_data's hard-coded stock lists for Empire / Rebel / Underworld (this host has always started every
+// faction from its XML list, which the checked-in goldens hold) and its hyperspace leader (this host starts the battle on the
+// map, no galactic hop).
+std::vector<uint32_t> skirmish_slot_forces(const Session& s, const std::string& faction, bool land, std::vector<std::string>& diag) {
+    const galactic::GalacticRules& rules = s.rules;
+    std::vector<uint32_t> out;
+    for (const std::string& n : skirmish_default_forces(*s.files, faction, land)) {
+        const uint32_t t = rules.find_type(n);
+        const galactic::UnitKind k = t == galactic::kNoIndex ? galactic::UnitKind::Other : rules.types[t].kind;
+        if (land ? k == galactic::UnitKind::GroundUnit : k == galactic::UnitKind::SpaceUnit || k == galactic::UnitKind::Squadron)
+            out.push_back(t);
+        else
+            diag.push_back("skirmish host: " + faction + " default force " + n + (t == galactic::kNoIndex ? " not found" : " has no galactic role") +
+                           ", dropped");
+    }
+    if (!out.empty()) return out;
+    const uint32_t fi = rules.find_faction(faction);
+    if (fi == galactic::kNoIndex) return out;
+    const std::vector<uint32_t> c = buildable_units(s, fi, land);
+    for (const size_t k : {size_t{0}, size_t{1}, c.size() / 2})
+        if (k < c.size() && std::find(out.begin(), out.end(), c[k]) == out.end()) out.push_back(c[k]);
+    std::string names;
+    for (const uint32_t t : out) names += " " + rules.types[t].name;
+    diag.push_back("skirmish host: " + faction + " starts with its cheapest buildable units [port]:" + names);
+    return out;
+}
+
+// The scaffold galaxy's planet type: Utapau, then Coruscant (the stock picks the goldens hold), then the map's planet
+// (game_data skirmish_map_planet_type: _MP_SPACE_<P> / _MP_LAND_<P> naming a planet type), then the first planet type.
+uint32_t skirmish_host_planet(const Session& s) {
+    const galactic::GalacticRules& rules = s.rules;
+    const auto planet = [&](std::string_view n) {
+        const uint32_t t = rules.find_type(n);
+        return t != galactic::kNoIndex && rules.types[t].kind == galactic::UnitKind::Planet ? t : galactic::kNoIndex;
+    };
+    uint32_t p = rules.find_type("Utapau");
+    if (p == galactic::kNoIndex) p = rules.find_type("Coruscant");
+    std::string stem = upper_ascii(s.map);
+    if (const size_t k = stem.find_last_of("\\/"); k != std::string::npos) stem = stem.substr(k + 1);
+    if (const size_t d = stem.find_last_of('.'); d != std::string::npos) stem = stem.substr(0, d);
+    for (const std::string_view prefix : {std::string_view("_MP_SPACE_"), std::string_view("_MP_LAND_")})
+        if (p == galactic::kNoIndex && stem.size() > prefix.size() && stem.compare(0, prefix.size(), prefix) == 0)
+            p = planet(std::string_view(stem).substr(prefix.size()));
+    for (uint32_t t = 0; t < rules.types.size() && p == galactic::kNoIndex; ++t)
+        if (rules.types[t].kind == galactic::UnitKind::Planet) p = t;
+    return p;
+}
+
+std::vector<std::string> split_factions(std::string_view v) {
+    std::vector<std::string> out;
+    size_t at = 0;
+    while (at <= v.size()) {
+        size_t end = v.find(',', at);
+        if (end == std::string_view::npos) end = v.size();
+        if (std::string n = trimmed(v.substr(at, end - at)); !n.empty()) out.push_back(std::move(n));
+        at = end + 1;
+    }
+    return out;
+}
+
 // skai (q2f t04): the skirmish host. foc-land: _MP_LAND_UTAPAU, both slots AI; skirmish: --map (default _MP_SPACE_GEONOSIS),
-// --human FACTION makes that slot an idle human. Slot 0 = Empire (player 0), slot 1 = Rebel (player 1), the retail trace's
-// owners. MP_Default_Credits each; the default forces wait at planets 0 / 2 of the scaffold galaxy (no conflict) and become
-// the battle's starting units; the base, pads and stations come from the map's team markers.
+// --human FACTION makes that slot an idle human. Slot 0 = player 0, slot 1 = player 1: Empire / Rebel by default (the retail
+// trace's owners), q6 t02: --ai FACTION[,FACTION] (MapRunOptions::ai_factions) for any factions of the data. MP_Default_Credits
+// each; the starting forces (skirmish_slot_forces) wait at planets 0 / 2 of the scaffold galaxy (no conflict) and become the
+// battle's starting units; the base, pads and stations come from the map's team markers. Each AI slot plays skirmish_ai_type.
 bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, const std::string& kind) {
     MapRunOptions o = opt;
     if (o.map.empty()) o.map = kind == "foc-land" ? "_MP_LAND_UTAPAU" : "_MP_SPACE_GEONOSIS";
-    if (!foc_session(s, o, diag, skipped, true, false, true)) return false;
+    if (!foc_load(s, o, diag, skipped)) return false;
+    s.map = o.map;
     terrain::MapData probe;
     if (!terrain::load_map(*s.files, s.map, probe)) {
         diag.push_back("skirmish host: map " + s.map + " not loaded");
@@ -515,8 +654,35 @@ bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std
     s.land = !probe.is_space();
     s.skirmish = true;
     s.map_host = true;
+    // Slots: Empire, Rebel; --ai A,B: A, B; --human H --ai A: H, A.
+    std::vector<std::string> names = split_factions(o.ai_factions);
+    if (names.empty()) names = {"Empire", "Rebel"};
+    else if (names.size() == 1 && !o.human.empty()) names.insert(names.begin(), o.human);
+    if (names.size() != 2) {
+        diag.push_back("skirmish host: --ai " + o.ai_factions + ": name two factions, or one beside --human");
+        return false;
+    }
+    std::vector<uint32_t> slots;
+    for (const std::string& n : names) {
+        const uint32_t f = s.rules.find_faction(n);
+        if (f == galactic::kNoIndex || s.rules.factions[f].is_neutral) {
+            diag.push_back("skirmish host: faction " + n + " unknown or neutral");
+            return false;
+        }
+        slots.push_back(f);
+    }
+    if (slots[0] == slots[1]) {
+        diag.push_back("skirmish host: both slots are " + names[0]);
+        return false;
+    }
+    const uint32_t planet = skirmish_host_planet(s);
+    if (planet == galactic::kNoIndex) {
+        diag.push_back("skirmish host: the data has no planet type");
+        return false;
+    }
     const float credits = static_cast<float>(std::max(0, s.db.constants().get_int("MP_Default_Credits", 0)));
-    s.setup = make_galaxy(s, s.setup.planet_type.empty() ? galactic::kNoIndex : s.setup.planet_type[0], {}, {}, credits);
+    s.setup = make_galaxy(s, planet, {}, {}, credits, slots);
+    auto basic_ai = std::make_shared<const std::map<std::string, std::string>>(ai::load_faction_basic_ai(*s.files));
     for (int32_t p = 0; p < 2; ++p) {
         galactic::PlayerSetup& ps = s.setup.players[static_cast<size_t>(p)];
         const std::string& faction = s.rules.factions[ps.faction].name;
@@ -525,21 +691,31 @@ bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std
             ps.ai = false;
             s.human = p;
         }
-        const std::vector<std::string> forces = skirmish_default_forces(*s.files, faction, s.land);
-        if (forces.empty()) diag.push_back("skirmish host: " + faction + " has no skirmish default forces");
-        for (const std::string& n : forces) {
-            const uint32_t ty = s.rules.find_type(n);
-            if (ty == galactic::kNoIndex) {
-                diag.push_back("skirmish host: default force type " + n + " not found");
-                return false;
-            }
-            s.setup.forces.push_back({p, static_cast<PlanetIndex>(p == 0 ? 0 : 2), ty});
+        const std::vector<uint32_t> forces = skirmish_slot_forces(s, faction, s.land, diag);
+        if (forces.empty()) {
+            diag.push_back("skirmish host: " + faction + " has no starting forces");
+            return false;
         }
+        std::string line = "skirmish host: slot " + std::to_string(p) + " " + faction + " (" +
+                           (ps.human ? std::string("idle human") : "AI " + skirmish_ai_type(faction, *basic_ai, s.defs)) + "), starts with";
+        for (const uint32_t ty : forces) {
+            s.setup.forces.push_back({p, static_cast<PlanetIndex>(p == 0 ? 0 : 2), ty});
+            line += " " + s.rules.types[ty].name;
+        }
+        diag.push_back(line);
     }
     if (!o.human.empty() && s.human < 0) {
-        diag.push_back("skirmish host: --human " + o.human + " is neither slot's faction (Empire, Rebel)");
+        diag.push_back("skirmish host: --human " + o.human + " is neither slot's faction (" + names[0] + ", " + names[1] + ")");
         return false;
     }
+    diag.push_back("skirmish host: galaxy planet type " + s.rules.types[planet].name + ", map " + s.map);
+    const ai::AiDefinitions* defs = &s.defs;
+    s.ai->ai_type = [basic_ai, defs](int32_t player, const galactic::GalacticSim& g) -> std::string {
+        if (player < 0 || static_cast<size_t>(player) >= g.players().size()) return {};
+        const galactic::PlayerState& ps = g.players()[static_cast<size_t>(player)];
+        if (ps.human || ps.faction >= g.rules().factions.size() || g.rules().factions[ps.faction].is_neutral) return {};
+        return skirmish_ai_type(g.rules().factions[ps.faction].name, *basic_ai, *defs);
+    };
     return true;
 }
 
@@ -635,6 +811,9 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         for (const std::string& d : diag) std::fprintf(stderr, "  %s\n", d.c_str());
         return 2;
     }
+    if (host && !opt.quiet)  // q6 t02: the slots, their AI types and starting forces (stdout only, nothing hashed)
+        for (const std::string& d : diag)
+            if (d.rfind("skirmish host: ", 0) == 0) std::printf("%s\n", d.c_str());
     terrain::MapData map;
     if (foc) {
         if (!terrain::load_map(*s.files, s.map, map) || map.is_space() == s.land) {

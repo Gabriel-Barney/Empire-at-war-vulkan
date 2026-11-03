@@ -172,6 +172,15 @@ if(_alamo_sim)
              COMMAND alamo_headless --skirmish-ai skirmish --map _MP_SPACE_GEONOSIS --human Empire --seed 1103945700 --ticks 900 --workers 4 --quiet)
     set_tests_properties(alamo_headless_skirmish_ai_geonosis PROPERTIES TIMEOUT 1200)
     alamo_label_slow(alamo_headless_skirmish_ai_geonosis)
+    # q6 t02: the skirmish host's slots from the data (--ai FACTION[,FACTION]): Underworld (AI_Player_Underworld, its Space_ /
+    # Land_Skirmish_AI_Default_Forces) in slot 0 of a space skirmish, and as the AI beside an idle human Empire on land; no Lua errors.
+    # Skipped (exit 0) without ALAMO_FOC_DATA.
+    add_test(NAME alamo_headless_skirmish_ai_slots_space
+             COMMAND alamo_headless --skirmish-ai skirmish --map _MP_SPACE_GEONOSIS --ai Underworld,Rebel --ticks 900 --workers 4 --quiet
+                     --fail-on-lua-errors)
+    add_test(NAME alamo_headless_skirmish_ai_slots_land
+             COMMAND alamo_headless --skirmish-ai foc-land --human Empire --ai Underworld --ticks 900 --workers 4 --quiet --fail-on-lua-errors)
+    set_tests_properties(alamo_headless_skirmish_ai_slots_space alamo_headless_skirmish_ai_slots_land PROPERTIES TIMEOUT 600)
     # skai: foc-land is the skirmish host (the battle started on the map, the land default forces, income, skirmish victory, land
     # production) since 2026-11-02; before that a galactic invasion with campaign companies (t50).
     # t50: FoC land SKIRMISH (_MP_LAND_UTAPAU: the explicit Empire / Rebel pads, Player_N_Spawn_Point_Marker, MP_Default_Credits, the
