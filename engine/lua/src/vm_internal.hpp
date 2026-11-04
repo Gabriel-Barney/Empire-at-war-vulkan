@@ -5,8 +5,8 @@
 //   * binding implementations (ImplFn) never call lua_error / luaL_check*. q6 t11 (docs/re/LUA_API.md "Binding error
 //     model across all bindings"): a binding never raises a Lua error at all. An error-level diagnostic is
 //     Call::script_error_stop (log, set the script's stop flag, return no values), a warning Call::script_warning (log
-//     only); the legacy Call::fail (writes Call::err, returns -1: the dispatcher raises it, pcall catches it) is left
-//     only in bind_story.cpp (open item: convert it);
+//     only); the legacy Call::fail (writes Call::err, returns -1: the dispatcher raises it, pcall catches it) is no
+//     longer used by any binding;
 //   * the dispatcher's outermost frame (no C++ locals) raises the Lua error for the port's own failures only (an
 //     unbound binding, a C++ exception, a legacy fail()) after the implementation has returned and destroyed
 //     everything.
@@ -239,7 +239,7 @@ struct Call {
     }
     const Ud* userdata(int i, uint32_t cls) const;  // nullptr unless an engine userdata of `cls`
     // Legacy (unwinds): writes err, returns -1; the dispatcher raises it as a Lua error that pcall catches. q6 t11: not
-    // the original's behaviour; only bind_story.cpp still uses it (open item).
+    // the original's behaviour; no binding uses it (kept for the port's own failures).
     int fail(const char* fmt, ...);
     // q6 t03 / t11 (LUA_API.md "What an error does to the script", "Binding error model across all bindings"): the
     // original's script error 0x248190, used for every error-level diagnostic of every binding. Logs "SCRIPT ERROR:

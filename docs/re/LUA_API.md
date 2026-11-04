@@ -1741,10 +1741,15 @@ Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
 
 ### Port status (q6 t11, 2026-11-04)
 
-- Every binding family except `bind_story.cpp` reports errors through `Call::script_error_stop` (the family helpers
-  `script_error` of bind_objects / bind_fog / bind_script_gaps / bind_script_remaining / bind_ai_tactical call it or set
-  the flag the same way; `script_error_nil` is gone). Warnings go through `Call::script_warning` or the family
-  `script_warning`, which set no flag. `Call::fail` (unwinds) is left only in `bind_story.cpp` (23 sites, open item).
+- Every binding family reports errors through `Call::script_error_stop` (the family helpers `script_error` of
+  bind_objects / bind_fog / bind_script_gaps / bind_script_remaining / bind_ai_tactical call it or set the flag the same
+  way; `script_error_nil` is gone). Warnings go through `Call::script_warning` or the family `script_warning`, which set
+  no flag. No binding calls `Call::fail` any more (kept in vm_internal.hpp, unused).
+- Mode-gate text: the generic "<name> -- this command is only supported in tactical modes" / "... in galactic mode",
+  except the bindings with their own recovered text (bindings.cpp `kGateTexts`: Find_Nearest, Find_Nearest_Space_Field,
+  Are_On_Opposite_Sides_Of_Shield, Spawn_Special_Weapon, Create_Cinematic_Transport, Start_Cinematic_Space_Retreat,
+  Get_Energy, Hyperspace_Away, Get_AI_Power_Vs_Unit). The dispatcher tests the gate before the argument count, so
+  `Find_Nearest` with a wrong count in galactic mode reports the mode (the exe tests the count first).
 - The dispatcher (bindings.cpp `invoke`) tests the mode gate first (the globals and methods of "Mode gates"; the store of
   the VM, or the parent store for a parent-mode wrapper; no store = no gate), then the dead-wrapper rule of a
   GameObjectWrapper method (default silent; the "already dead" errors; the "this object is dead!" warnings; `Is_Valid`,
@@ -1757,5 +1762,6 @@ Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
   galactic mode the port still evaluates the galactic perception [port].
 - A PlayerWrapper without a player (no player world, or an id the world lacks) returns nothing silently.
 - Hosts: AI plans (galactic and tactical: the plan ends), GameScoring (released), object scripts (released) and story
-  plot scripts (service_threads kills the threads; the plot's VM stays attached) honour the flag after the pass.
-  Open: `StoryModel::call_script` / `deliver_script_triggers` still call `Story_Event_Trigger` in a stopped plot script.
+  plot scripts honour the flag after the pass. A story plot's VM stays attached: service_threads kills its threads,
+  and `StoryModel::call_script` / `deliver_script_triggers` no longer call its `Story_Event_Trigger` (the events still
+  fire; the flag is saved with the VM) [port: the exe's plot-script teardown is not traced].

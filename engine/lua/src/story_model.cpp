@@ -616,6 +616,9 @@ void StoryModel::call_script(uint32_t p, const std::string& name) {
         plot.pending_script_triggers.push_back(name);
         return;
     }
+    // q6 t11 (LUA_API.md "Binding error model across all bindings"): a binding error set the plot script's stop flag;
+    // the script has ended, so its Story_Event_Trigger is not called any more (the event itself still fires).
+    if (vm->exit_requested()) return;
     // Synchronous (0x52f920). A fresh Lua thread, so the call is safe while one of the VM's script
     // threads is running (Story_Event from a script).
     lua_State* L = vm->state();
@@ -1373,6 +1376,7 @@ size_t StoryModel::deliver_script_triggers(uint32_t plot, LuaVm& vm, std::string
     lua_State* L = vm.state();
     size_t n = 0;
     for (const std::string& name : queue) {
+        if (vm.exit_requested()) break;  // q6 t11: a stopped plot script gets no more triggers (as call_script)
         lua_pushstring(L, "Story_Event_Trigger");
         lua_rawget(L, LUA_GLOBALSINDEX);
         if (lua_type(L, -1) != LUA_TFUNCTION) {
