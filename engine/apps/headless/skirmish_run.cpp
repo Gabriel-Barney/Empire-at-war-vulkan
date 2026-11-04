@@ -755,7 +755,13 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
         cfg.players = 4;
+        cfg.object_scripts = opt.object_scripts;  // q6
         sim::SimHost host(s.types, js, cfg);
+        if (opt.object_scripts) {  // q6: game-object scripts, and the GameScoring script that sets the mod's GlobalValues
+            host.set_object_script_files(s.files.get());
+            if (const auto scoring = s.db.constants().get("Game_Scoring_Script_Name"))
+                host.set_scoring_script(s.files.get(), std::string(*scoring));
+        }
         galactic::GalacticSim* gs = host.start_galactic(s.rules, s.setup);
         if (!gs) return false;
         sim::CampaignBattleOptions bo;
@@ -815,6 +821,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         unsigned long prebuilt = 0, pads = 0, structures = 0, shots = 0;
         std::vector<std::string> error_list;
         std::string state_text;  // skai: --ai-log state lines
+        std::string script_state;  // q6: --object-scripts, the battle's last state line (units per player)
         bool credits_set = !s.map_host;
         for (; t < max_ticks; ++t) {
             host.tick_once();
@@ -838,6 +845,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                 structures = bs.pad_builds;
                 shots = static_cast<unsigned long>(bs.shots);
                 if (!ai_log.empty() && (bs.frames == 1 || bs.frames % 600 == 0)) state_text += battle_state_text(t + 1, host, *gs, *tb);
+                if (opt.object_scripts && (bs.frames == 1 || bs.frames % 600 == 0)) script_state = battle_state_text(t + 1, host, *gs, *tb);
             }
             if (battles.battles_fought() > 0 && !battles.battle() && host.modes().depth() == 1) {
                 ++t;
@@ -859,6 +867,24 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         out.structures = structures;
         out.shots = shots;
         for (const std::string& e : error_list) out.text += "  Lua error: " + e + "\n";
+        if (const sim::ObjectScriptHost* os = host.object_scripts()) {  // q6: diagnostics only (nothing hashed)
+            const sim::ObjectScriptHost::Stats& st = os->stats();
+            std::snprintf(buf, sizeof buf,
+                          "  object scripts: %" PRIu64 " attached, %" PRIu64 " load failures, %" PRIu64 " pumps, %" PRIu64
+                          " first-pump draws, released %" PRIu64 " exit / %" PRIu64 " dead / %" PRIu64 " mode end, %" PRIu64
+                          " thread errors, %zu live, %" PRIu64 " errors\n",
+                          st.attached, st.load_failures, st.pumps, st.first_draws, st.released_exit, st.released_dead,
+                          st.released_mode, st.thread_errors, os->live(), os->error_total());
+            out.text += buf;
+            for (const auto& [text, n] : os->error_counts()) out.text += "  object script error x" + std::to_string(n) + ": " + text + "\n";
+            if (!opt.quiet) {
+                size_t shown_m = 0;
+                for (const std::string& m : os->messages())
+                    if (shown_m++ < 40) out.text += "  object script: " + m + "\n";
+            }
+            if (!script_state.empty()) out.text += "  last " + script_state;
+            for (const std::string& m : host.scoring_messages()) out.text += "  scoring: " + m + "\n";
+        }
         for (const std::string& l : battles.log()) {
             out.text += "  " + l + "\n";
             const size_t c = l.find(": "), w = l.find(", winner "), v = l.find(", victory ");

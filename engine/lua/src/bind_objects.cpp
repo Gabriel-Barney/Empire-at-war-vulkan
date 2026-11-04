@@ -574,14 +574,24 @@ ObjectHandle spawn(Call& c, TypeIndex type, int32_t owner, Vec3 pos, ObjectHandl
     sp.position = pos;
     sp.facing = location ? st->facing(location) : Vec3{1.0f, 0.0f, 0.0f};
     if (location && st->mode() == objects::ModeKind::Galactic) sp.container = location;
-    const ObjectHandle h = st->create(sp);
+    // q6 object scripts: a host that adopts script-spawned units into its systems (the battle's trees / combat /
+    // movement) creates them through ObjectBridge::spawn_unit; unset (every host before q6): the store alone.
+    const ObjectBridge* b = bridge(c);
+    auto create = [&](const objects::SpawnParams& p) {
+        if (b && b->spawn_unit) {
+            const ObjectHandle made = b->spawn_unit(p);
+            if (made) return made;
+        }
+        return st->create(p);
+    };
+    const ObjectHandle h = create(sp);
     if (company && types(c)) {
         for (const TypeIndex m : types(c)->get_type_refs(type, "Company_Units")) {
             if (m == objects::kNone) continue;
             objects::SpawnParams ms = sp;
             ms.type = m;
             ms.container = h;
-            st->create(ms);
+            create(ms);
         }
     }
     return h;
@@ -2237,16 +2247,30 @@ int m_type_is_affected_by_missile_shield(Call& c) {
 
 // ---------------------------------------------------------------- proximity events
 //
-// Event_Object_In_Range(func, range [, player]) registers `func` on the receiver; Service_Wrapper()
-// (PGBase's PumpEvents / PGCommands' Process_Proximities call it every pump) queues one GetEvent
-// event per object in range: func with GetEvent.Params() = {receiver, object}; PumpEvents then calls
-// func(receiver, object) inside the script thread. Cancel_Event_Object_In_Range(func) removes it.
-// Registrations are kept in the VM (registry array, registration order); candidates in ascending id.
-// [inferred] (not in the RE docs): the event repeats on every service while the object stays in
-// range (shipped handlers cancel themselves or filter); in range = 3D centre distance <= range;
-// candidates = every live object except the receiver, of `player` when one is given; registering the
-// same function twice on one object updates range / player instead of adding a second entry.
-constexpr char kProxKey[] = "alamo.objects.prox";  // {n = count, [i] = {id, fn, range, player}}
+// q6 object scripts, docs/re/OBJECT_SCRIPTS.md §4.3 [H unless tagged]:
+//   * Event_Object_In_Range(func, range [, a3 [, a4]]) APPENDS a registration (no dedupe) to the receiver's list in
+//     this VM (the original keeps the list on the per-(object, script) wrapper; one VM = one script, so a per-VM list
+//     keyed by object id is the same thing). a3 / a4 may each be a PlayerWrapper (player filter) or a
+//     GameObjectTypeWrapper (type filter), in either order. Errors (fewer than 2 arguments, arg 1 not a function, arg 2
+//     not a number, a3 / a4 of another type [port]) are the script error (+0x121: Call::script_error_stop).
+//   * Cancel_Event_Object_In_Range(func) removes every registration of the receiver with that function; no argument:
+//     the script error.
+//   * Service_Wrapper() visits each registration of the receiver not yet done in this call and calls
+//     func(receiver, object) SYNCHRONOUSLY for every object whose position lies in the axis-aligned box of half-size
+//     range around the receiver's position, skipping dead objects, Is_Decoration types, projectiles (behaviour 0x08),
+//     particles (0x0C) and the receiver; with a player filter only objects of that player or its allies (relation Self /
+//     Ally of the player world [port: no world, no ally but the player itself]). A hit's garrisoned objects (the
+//     bridge's contents_of) are visited first, last to first. With a type filter only objects of exactly that type
+//     fire. A callback that registers or cancels restarts the scan at the first registration (done ones are skipped),
+//     so each registration fires at most once per call. There is no enter / leave edge: an object in range fires on
+//     every call.
+// [port] Hit order: ascending object id (the original's is its spatial tree's query order, OBJECT_SCRIPTS §8 item 4);
+// the box test uses the object's position (not its model box); TEAM containers are skipped (they stand for their
+// members, which are hits themselves); a dead garrisoned object is skipped (the original passes an empty wrapper);
+// each object fires at most once per registration and call. A callback's Lua error stops the call and is a binding
+// error (the thread that called Service_Wrapper dies with the message) [port M].
+constexpr char kProxKey[] = "alamo.objects.prox";  // {n = count, c = list-change counter, s = call serial,
+                                                    //  [i] = {id, fn, range, player (-1 none), type (-1 none), done}}
 
 int push_prox(lua_State* L) {
     lua_pushstring(L, kProxKey);
@@ -2260,36 +2284,25 @@ int push_prox(lua_State* L) {
     }
     return lua_gettop(L);
 }
-int prox_count(lua_State* L, int t) {
-    lua_pushstring(L, "n");
+double prox_field(lua_State* L, int t, const char* key) {
+    lua_pushstring(L, key);
     lua_rawget(L, t);
-    const int n = static_cast<int>(lua_tonumber(L, -1));
+    const double v = lua_tonumber(L, -1);
     lua_pop(L, 1);
-    return n;
+    return v;
 }
-void set_prox_count(lua_State* L, int t, int n) {
-    lua_pushstring(L, "n");
-    lua_pushnumber(L, n);
+void set_prox_field(lua_State* L, int t, const char* key, double v) {
+    lua_pushstring(L, key);
+    lua_pushnumber(L, v);
     lua_rawset(L, t);
 }
+int prox_count(lua_State* L, int t) { return static_cast<int>(prox_field(L, t, "n")); }
+void prox_changed(lua_State* L, int t) { set_prox_field(L, t, "c", prox_field(L, t, "c") + 1.0); }
 double rec_field(lua_State* L, int rec, int i) {
     lua_rawgeti(L, rec, i);
     const double v = lua_tonumber(L, -1);
     lua_pop(L, 1);
     return v;
-}
-// Index (1-based) of the registration (object id, function at fn_index), 0 if none.
-int find_prox(lua_State* L, int t, ObjectId id, int fn_index) {
-    const int n = prox_count(L, t);
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, t, i);
-        const int rec = lua_gettop(L);
-        lua_rawgeti(L, rec, 2);
-        const bool same = rec_field(L, rec, 1) == static_cast<double>(id) && lua_rawequal(L, -1, fn_index);
-        lua_settop(L, rec - 1);
-        if (same) return i;
-    }
-    return 0;
 }
 // Removes entry i, keeping the order of the rest.
 void remove_prox(lua_State* L, int t, int i) {
@@ -2300,27 +2313,25 @@ void remove_prox(lua_State* L, int t, int i) {
     }
     lua_pushnil(L);
     lua_rawseti(L, t, n);
-    set_prox_count(L, t, n - 1);
+    set_prox_field(L, t, "n", n - 1);
 }
 
 int m_event_object_in_range(Call& c) {
-    if (c.nargs < 2 || c.nargs > 3) return c.fail("GameObjectWrapper::Event_Object_In_Range -- Invalid number of params.");
-    if (lua_type(c.L, c.idx(1)) != LUA_TFUNCTION)
-        return c.fail("GameObjectWrapper::Event_Object_In_Range -- Expected function object as parameter 1.");
-    if (!c.is_number(2)) return c.fail("GameObjectWrapper::Event_Object_In_Range -- Expected number as parameter 2.");
-    int32_t player = -1;
-    if (c.nargs == 3 && !lua_isnil(c.L, c.idx(3))) {
-        const Ud* p = player_arg(c, 3);
-        if (!p) return c.fail("GameObjectWrapper::Event_Object_In_Range -- Expected player as parameter 3.");  // [inferred]
-        player = p->id;
+    constexpr const char* kName = "GameObjectWrapper::Event_Object_In_Range";
+    if (c.nargs < 2) return c.script_error_stop("%s -- Invalid number of params.", kName);
+    if (lua_type(c.L, c.idx(1)) != LUA_TFUNCTION) return c.script_error_stop("%s -- Expected function object as parameter 1.", kName);
+    if (!c.is_number(2)) return c.script_error_stop("%s -- Expected number as parameter 2.", kName);
+    int32_t player = -1, type = -1;
+    for (int i = 3; i <= c.nargs && i <= 4; ++i) {
+        if (lua_isnil(c.L, c.idx(i))) continue;  // [port] nil = no filter (PGCommands' Register_Prox passes nil)
+        if (const Ud* p = player_arg(c, i)) player = p->id;
+        else if (const Ud* t = c.userdata(i, detail::cls_type())) type = static_cast<int32_t>(t->value);
+        else return c.script_error_stop("%s -- Expected player or object type as parameter %d.", kName, i);  // [port]
     }
+    if (!store(c)->alive(self_object(c))) return 0;  // a dead object: nothing
     lua_State* L = c.L;
     const int t = push_prox(L);
-    int i = find_prox(L, t, c.self->id, c.idx(1));
-    if (i == 0) {
-        i = prox_count(L, t) + 1;
-        set_prox_count(L, t, i);
-    }
+    const int i = prox_count(L, t) + 1;
     lua_newtable(L);
     lua_pushnumber(L, c.self->id);
     lua_rawseti(L, -2, 1);
@@ -2330,73 +2341,152 @@ int m_event_object_in_range(Call& c) {
     lua_rawseti(L, -2, 3);
     lua_pushnumber(L, player);
     lua_rawseti(L, -2, 4);
+    lua_pushnumber(L, type);
+    lua_rawseti(L, -2, 5);
+    lua_pushnumber(L, 0);
+    lua_rawseti(L, -2, 6);
     lua_rawseti(L, t, i);
+    set_prox_field(L, t, "n", i);
+    prox_changed(L, t);
     lua_settop(L, t - 1);
     return 0;
 }
 
 int m_cancel_event_object_in_range(Call& c) {
-    if (c.nargs != 1) return c.fail("GameObjectWrapper::Cancel_Event_Object_In_Range -- Invalid number of params.");
+    if (c.nargs < 1) return c.script_error_stop("GameObjectWrapper::Cancel_Event_Object_In_Range -- Invalid number of params.");
     if (lua_type(c.L, c.idx(1)) != LUA_TFUNCTION)  // the original reuses Event_Object_In_Range's message
-        return c.fail("GameObjectWrapper::Event_Object_In_Range -- Expected function object as parameter 1.");
+        return c.script_error_stop("GameObjectWrapper::Event_Object_In_Range -- Expected function object as parameter 1.");
     lua_State* L = c.L;
     const int t = push_prox(L);
-    if (const int i = find_prox(L, t, c.self->id, c.idx(1))) remove_prox(L, t, i);
+    bool removed = false;
+    for (int i = prox_count(L, t); i >= 1; --i) {
+        lua_rawgeti(L, t, i);
+        const int rec = lua_gettop(L);
+        lua_rawgeti(L, rec, 2);
+        const bool same = rec_field(L, rec, 1) == static_cast<double>(c.self->id) && lua_rawequal(L, -1, c.idx(1));
+        lua_settop(L, rec - 1);
+        if (same) {
+            remove_prox(L, t, i);
+            removed = true;
+        }
+    }
+    if (removed) prox_changed(L, t);
     lua_settop(L, t - 1);
     return 0;
 }
 
-// Candidates of a proximity test around `center`, ascending id (deterministic).
-void range_candidates(Call& c, Vec3 center, float range, std::vector<ObjectId>& out) {
+// The objects one registration fires for, in call order (see above).
+void prox_hits(Call& c, ObjectHandle self, double range, int32_t player, int32_t type, std::vector<ObjectHandle>& out) {
     out.clear();
     const objects::ObjectStore* st = store(c);
+    const objects::GameObjectTypes* ty = types(c);
+    const Vec3 center = st->position(self);
+    std::vector<ObjectId> ids;
     const ObjectBridge* b = bridge(c);
     if (b && b->objects_in_range) {
-        b->objects_in_range(center, range, out);
+        // The hook answers a sphere; the box's corners are sqrt(3) x range away (it may over-report: tested below).
+        b->objects_in_range(center, static_cast<float>(range * 1.7320508075688772), ids);
     } else {
         for (const ObjectHandle h : st->all_objects())
-            if (st->alive(h)) out.push_back(st->id(h));
+            if (st->alive(h)) ids.push_back(st->id(h));
     }
-    std::sort(out.begin(), out.end());
-    out.erase(std::unique(out.begin(), out.end()), out.end());
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+#if ALAMO_LUA_PLAYERS
+    const LuaPlayerWorld* world = c.vm->owner ? player_world(*c.vm->owner) : nullptr;
+#endif
+    auto allied = [&](int32_t owner) {
+        if (owner == player) return true;
+#if ALAMO_LUA_PLAYERS
+        if (world) {
+            const PlayerRelation r = world->relation(player, owner);
+            return r == PlayerRelation::Self || r == PlayerRelation::Ally;
+        }
+#endif
+        return false;
+    };
+    auto excluded = [&](ObjectHandle h) {
+        if (!st->alive(h) || h == self) return true;
+        const TypeIndex t = st->type(h);
+        if (ty && t < ty->size() && ty->get_bool(t, "Is_Decoration")) return true;
+        return st->has_behavior(h, objects::beh::Projectile) || st->has_behavior(h, objects::beh::Particle) ||
+               st->has_behavior(h, objects::beh::Team);
+    };
+    auto in_box = [&](Vec3 p) {
+        const double dx = static_cast<double>(p.x) - static_cast<double>(center.x);
+        const double dy = static_cast<double>(p.y) - static_cast<double>(center.y);
+        const double dz = static_cast<double>(p.z) - static_cast<double>(center.z);
+        return dx <= range && -dx <= range && dy <= range && -dy <= range && dz <= range && -dz <= range;
+    };
+    std::vector<ObjectId> seen;
+    auto visit = [&](ObjectHandle h) {
+        if (type >= 0 && static_cast<int32_t>(st->type(h)) != type) return;
+        const ObjectId id = st->id(h);
+        if (std::find(seen.begin(), seen.end(), id) != seen.end()) return;
+        seen.push_back(id);
+        out.push_back(h);
+    };
+    for (const ObjectId id : ids) {
+        const ObjectHandle h = st->find(id);
+        if (!h || excluded(h) || !in_box(st->position(h))) continue;
+        if (player >= 0 && !allied(st->owner(h))) continue;
+        if (b && b->contents_of) {
+            const std::vector<ObjectHandle> in = b->contents_of(h);
+            for (size_t k = in.size(); k-- > 0;)
+                if (st->alive(in[k]) && in[k] != self) visit(in[k]);
+        }
+        visit(h);
+    }
 }
 
 int m_service_wrapper(Call& c) {
     lua_State* L = c.L;
     const objects::ObjectStore* st = store(c);
     const ObjectHandle self = self_object(c);
-    const Vec3 center = st->position(self);
     const int t = push_prox(L);
-    std::vector<ObjectId> ids;
-    const int n = prox_count(L, t);
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, t, i);
-        const int rec = lua_gettop(L);
-        if (rec_field(L, rec, 1) != static_cast<double>(c.self->id)) {
+    const double serial = prox_field(L, t, "s") + 1.0;  // this call's "done" mark
+    set_prox_field(L, t, "s", serial);
+    std::vector<ObjectHandle> hits;
+    std::string failure;
+    bool restart = true;
+    while (restart && failure.empty()) {
+        restart = false;
+        for (int i = 1; i <= prox_count(L, t) && !restart && failure.empty(); ++i) {
+            lua_rawgeti(L, t, i);
+            const int rec = lua_gettop(L);
+            if (lua_type(L, rec) != LUA_TTABLE || rec_field(L, rec, 1) != static_cast<double>(c.self->id) ||
+                rec_field(L, rec, 6) == serial) {
+                lua_settop(L, rec - 1);
+                continue;
+            }
+            lua_pushnumber(L, serial);
+            lua_rawseti(L, rec, 6);
+            const double range = rec_field(L, rec, 3);
+            const auto player = static_cast<int32_t>(rec_field(L, rec, 4));
+            const auto type = static_cast<int32_t>(rec_field(L, rec, 5));
+            prox_hits(c, self, range, player, type, hits);
+            const double changed = prox_field(L, t, "c");
+            for (const ObjectHandle h : hits) {
+                if (!st->alive(self)) break;  // the receiver died in a callback (Despawn): nothing more
+                if (!st->alive(h)) continue;
+                lua_rawgeti(L, rec, 2);
+                detail::push_object(L, *c.vm, self);
+                detail::push_object(L, *c.vm, h);
+                if (lua_pcall(L, 2, 0, 0) != 0) {
+                    failure = lua_isstring(L, -1) ? lua_tostring(L, -1) : "error in a proximity callback";
+                    lua_pop(L, 1);
+                    break;
+                }
+                if (prox_field(L, t, "c") != changed) {  // registered / cancelled: restart at the first entry
+                    restart = true;
+                    break;
+                }
+            }
             lua_settop(L, rec - 1);
-            continue;
+            if (!st->alive(self)) break;
         }
-        const double range = rec_field(L, rec, 3);
-        const auto player = static_cast<int32_t>(rec_field(L, rec, 4));
-        range_candidates(c, center, static_cast<float>(range), ids);
-        lua_rawgeti(L, rec, 2);  // fn at rec + 1
-        for (const ObjectId id : ids) {
-            if (id == c.self->id) continue;
-            const ObjectHandle h = st->find(id);
-            if (!h || !st->alive(h)) continue;
-            if (player >= 0 && st->owner(h) != player) continue;
-            if (distance(center, st->position(h)) > range) continue;
-            lua_newtable(L);  // params {receiver, object}
-            detail::push_object(L, *c.vm, self);
-            lua_rawseti(L, -2, 1);
-            detail::push_object(L, *c.vm, h);
-            lua_rawseti(L, -2, 2);
-            detail::queue_event(L, rec + 1, lua_gettop(L));
-            lua_pop(L, 1);
-        }
-        lua_settop(L, rec - 1);
     }
-    // Registrations of objects that are gone are dropped (order of the rest kept).
+    // Registrations of objects that are gone are dropped (order of the rest kept). [port]
     for (int i = prox_count(L, t); i >= 1; --i) {
         lua_rawgeti(L, t, i);
         const auto id = static_cast<ObjectId>(rec_field(L, lua_gettop(L), 1));
@@ -2405,6 +2495,7 @@ int m_service_wrapper(Call& c) {
         if (!h || !st->alive(h)) remove_prox(L, t, i);
     }
     lua_settop(L, t - 1);
+    if (!failure.empty()) return c.fail("GameObjectWrapper::Service_Wrapper -- %s", failure.c_str());
     return 0;
 }
 

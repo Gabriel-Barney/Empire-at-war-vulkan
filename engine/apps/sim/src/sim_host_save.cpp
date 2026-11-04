@@ -87,6 +87,11 @@ bool SimHost::save_allowed(std::string* why) const {
         const std::string b = story_->save_blocker();
         if (!b.empty()) return no(b);
     }
+    // q6 (OBJECT_SCRIPTS.md §7.2): game-object Lua scripts have no state save yet; a load would re-attach fresh scripts
+    // (TR's company spawner would spawn its company again), so a session with a live object script is not saved.
+    if (object_scripts_ && object_scripts_->live() > 0)
+        return no("game-object Lua scripts are running (" + std::to_string(object_scripts_->live()) +
+                  "): their state is not saved yet");
     for (const SaveParticipant& p : participants_)
         if (p.blocker) {
             const std::string b = p.blocker();

@@ -39,6 +39,9 @@ struct MapRunOptions {
     // q6 t06 (--story, --galactic-ai): --scoring runs the GameConstants Game_Scoring_Script_Name script at the session start
     // (SimHost::set_scoring_script) as the game does. Off by default: its GlobalValue writes enter the frame CRC.
     bool scoring = false;
+    // q6 (--skirmish-ai): --object-scripts turns on SimConfig::object_scripts (game-object Lua scripts, OBJECT_SCRIPTS.md)
+    // and the GameScoring script (mods set GlobalValue MOD_ID there, which their object scripts read). Off by default.
+    bool object_scripts = false;
 };
 
 int map_run(const MapRunOptions& opt);

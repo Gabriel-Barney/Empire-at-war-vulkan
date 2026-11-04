@@ -129,6 +129,7 @@ ObjectHandle ObjectStore::create(const SpawnParams& p) {
         if (by_owner_.size() <= o) by_owner_.resize(o + 1);
         by_owner_[o].push_back(h);
     }
+    if (on_created) on_created(*this, h);  // q6 object scripts (host attach hook)
     return h;
 }
 

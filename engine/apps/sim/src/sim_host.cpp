@@ -35,6 +35,12 @@ SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, Sim
     if (cfg_.scheduler.max_players < cfg_.players) cfg_.scheduler.max_players = static_cast<uint8_t>(cfg_.players);
     cfg_.scheduler.first_tick = 1;  // the first drain is tick 1 (T2 runs after the frame increment)
     random_.seed_free(cfg_.free_seed);
+    if (cfg_.object_scripts) {  // q6: game-object Lua scripts (object_scripts.hpp)
+        object_scripts_ = std::make_unique<ObjectScriptHost>(random_);
+#ifdef ALAMO_SIM_HAVE_STORY
+        object_scripts_->set_global_values(&global_values_);
+#endif
+    }
     make_pipeline(cfg_.scheduler);
     register_crc();
     recorder_ = std::make_unique<jobs::CrcRecorder>(sched_, registry_, cfg_.parallel_crc);
@@ -138,10 +144,21 @@ GameMode& SimHost::start_game(ModeKind kind) {
     m.primary().bind_sync_rng(&random_.synced());
     // --- end OI objects ---
     if (new_session) create_scoring(m);  // q6 t06: before the players are set up and the plots load
+    if (object_scripts_) {  // q6: scripts attach to every object the mode's primary store creates from now on
+        if (new_session) {
+            object_players_.reset();
+            object_scripts_->set_campaign(kind == ModeKind::Galactic);
+        }
+        object_scripts_->mode_pushed(m);
+    }
     pacing_.select_active(m.tactical());
     pacing_.set_stopped(false);
     if (story_ && m.tactical()) story_->host_event(StoryHostEvent::TacticalStarted, frame_);
     return m;
+}
+
+void SimHost::set_object_script_files(const FileProvider* files) {
+    if (object_scripts_) object_scripts_->set_files(files);
 }
 
 void SimHost::set_scoring_script(const FileProvider* files, std::string name) {
@@ -432,6 +449,12 @@ bool SimHost::start_story(const StoryStart& start, std::vector<std::string>* dia
         lua::attach_presentation(*scoring_vm_, story_->presentation());
     }
     scoring_players_.reset();  // q6 t03: the story's world replaces the scoring VM's own
+    if (object_scripts_) {     // q6: the galactic objects' scripts get the story's world and object bridge
+#if defined(ALAMO_LUA_PLAYERS)
+        object_scripts_->set_player_world(g->primary(), story_->player_world());
+#endif
+        object_scripts_->set_bridge(g->primary(), story_->object_bridge());
+    }
     story_->set_scoring_tap([this](const std::vector<galactic::GalacticEvent>& events) {
         if (scoring_vm_) scoring_events_.insert(scoring_events_.end(), events.begin(), events.end());
     });
@@ -470,6 +493,15 @@ galactic::GalacticSim* SimHost::start_galactic(const galactic::GalacticRules& ru
         lua::attach_player_world(*scoring_vm_, scoring_players_.get());
     }
 #endif
+#if defined(ALAMO_SIM_HAVE_STORY) && defined(ALAMO_LUA_PLAYERS)
+    // q6 object scripts: the galactic objects' scripts (attached while the sim set the galaxy up) and the battle hosts'
+    // tactical scripts without a story session reach the campaign's players through a world of their own [port].
+    if (object_scripts_ && !story_) {
+        object_players_ = std::make_shared<lua::LuaPlayerWorld>();
+        object_players_->attach_galactic(mode.sim());
+        object_scripts_->set_player_world(mode.primary(), object_players_.get());
+    }
+#endif
     scoring_mode_started(ModeKind::Galactic, {});  // q6 t09: map = the campaign name, resolved at delivery
     return mode.sim();
 }
@@ -485,6 +517,10 @@ bool SimHost::end_game_mode() {
         scoring_players_.reset();  // q6 t03: after the VM that points to it
     }
 #endif
+    if (object_scripts_ && modes_.top()) {  // q6: the mode's object scripts go before its store
+        object_scripts_->mode_popping(*modes_.top());
+        if (modes_.depth() <= 1) object_players_.reset();
+    }
     if (story_) {
         if (modes_.depth() <= 1) story_.reset();  // the galactic mode (bottom) ends: the story with it
         else if (modes_.top() && modes_.top()->tactical()) story_->host_event(StoryHostEvent::TacticalEnded, frame_);
@@ -520,6 +556,7 @@ bool SimHost::tick_once() {
 #ifdef ALAMO_SIM_HAVE_STORY
     if (scoring_vm_) ctx.scoring = [this] { service_scoring(); };  // q6 t09: GAME_SCORING.md §2
 #endif
+    if (object_scripts_) ctx.object_scripts = [this](GameMode& m) { object_scripts_->service(m); };  // q6
     modes_.update(ctx);
     step("T5.gmm_update");
     if (after_mode_update_) {  // S10: tactical battle of a galactic conflict (campaign_battles.hpp)

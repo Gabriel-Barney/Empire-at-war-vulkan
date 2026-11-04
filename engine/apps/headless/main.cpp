@@ -166,6 +166,7 @@ struct Options {
     // S4 story
     bool story = false;
     bool scoring = false;  // q6 t06: --scoring
+    bool object_scripts = false;  // q6: --object-scripts
     std::string story_out, story_golden;
     // S10 battle transitions (battle_run.hpp): --battles auto|fight|fight-all
     std::string battles;
@@ -625,6 +626,8 @@ int usage() {
                  "       alamo_headless --economy | --story (--game DIR | --data DIR) [--campaign NAME] [--ticks N] [--workers W]\n"
                  "                      [--seed S] [--check-workers] [--story-out FILE] [--story-golden FILE] [--crc-out FILE]\n"
                  "                      [--scoring] (run the GameScoring script at the session start, as the game does)\n"
+                 "                      [--object-scripts] (game-object Lua scripts, docs/re/OBJECT_SCRIPTS.md; --skirmish-ai:\n"
+                 "                      also runs the GameScoring script)\n"
                  "       alamo_headless --economy --battles auto|fight|fight-all [--aggressor FRAMES] [--battle-retreat R]\n"
                  "                      [--battle-max-frames N] (+ the --economy options)\n"
                  "       alamo_headless --save-session synthetic|hotm|galactic|skirmish [--campaign NAME] --save-at T FILE [--ticks K]\n"
@@ -827,6 +830,7 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--economy") opt.economy = true;
         else if (a == "--story") opt.story = true;
         else if (a == "--scoring") opt.scoring = true;  // q6 t06
+        else if (a == "--object-scripts") opt.object_scripts = true;  // q6
         else if (a == "--story-out") opt.story_out = next();
         else if (a == "--story-golden") opt.story_golden = next();
         else if (a == "--battles") opt.battles = next();  // S10
@@ -927,6 +931,7 @@ static int headless_main(int argc, char** argv) {
         m.pp_streams = opt.pp_streams;  // OPT2 t10 parity knobs
         m.pp_latency = opt.pp_latency;
         m.scoring = opt.scoring;  // q6 t06
+        m.object_scripts = opt.object_scripts;  // q6
         if (!opt.skirmish_ai.empty()) {  // A1 stage 2: --skirmish-ai synthetic|foc [--map NAME]
             m.map = opt.map;
             m.expect_battle_end = opt.expect_battle_end;

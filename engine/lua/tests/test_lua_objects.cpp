@@ -276,37 +276,58 @@ static void test_find(const Db& db) {
     CHECK(contains(run(vm, "Create_Position(1, 2, 'a')"), "LuaCreatePosition -- Invalid parameter, expected 3 floats"));
 }
 
-// Stage 3: proximity events through GetEvent / PumpEvents, reinforcements, Get_Space_Station.
+// Stage 3: proximity events (q6, OBJECT_SCRIPTS.md §4.3: synchronous callbacks), reinforcements, Get_Space_Station.
 static void test_stage3(const Db& db) {
     Scene s(db);
     LuaVm& vm = *s.vm;
     // t1 @0; trooper 2 @10, tank @5, gun @(5,1) (all p2); markers @100/@200 (no owner).
-    const char* pump = "ev = GetEvent() while ev do ev(unpack(GetEvent.Params())) ev = GetEvent() end ";
-    CHECK(run(vm, std::string("hits = '' function Prox(self_obj, trig) hits = hits .. self_obj.Get_Object_ID() .. '>' .. "
-                              "trig.Get_Object_ID() .. ',' end t1.Event_Object_In_Range(Prox, 6) t1.Service_Wrapper() ") +
-                      pump) == "");
-    CHECK(gstr(vm, "hits") == "1>3,1>6,");  // ascending id, 3D centre distance <= range
-    // Same function again: range / player updated (not added); player filter.
-    CHECK(run(vm, std::string("hits = '' t1.Event_Object_In_Range(Prox, 20, p2) t1.Service_Wrapper() ") + pump) == "");
-    CHECK(gstr(vm, "hits") == "1>2,1>3,1>6,");
-    // Repeats while in range [inferred]; Cancel stops it.
-    CHECK(run(vm, std::string("hits = '' t1.Service_Wrapper() t1.Cancel_Event_Object_In_Range(Prox) t1.Service_Wrapper() ") +
-                      pump) == "");
-    CHECK(gstr(vm, "hits") == "1>2,1>3,1>6,");
-    CHECK(contains(run(vm, "t1.Event_Object_In_Range(5, 1)"), "Event_Object_In_Range -- Expected function object as parameter 1."));
-    CHECK(contains(run(vm, "t1.Event_Object_In_Range(Prox, 'x')"), "Expected number as parameter 2."));
-    CHECK(contains(run(vm, "t1.Event_Object_In_Range(Prox)"), "Event_Object_In_Range -- Invalid number of params."));
-    CHECK(contains(run(vm, "t1.Cancel_Event_Object_In_Range()"), "Cancel_Event_Object_In_Range -- Invalid number of params."));
-    // A host spatial query narrows the candidates (the binding still re-tests the distance).
+    // Box of half-size 5: the tank (5,0,0) and the gun (5,1,0) are in it (the gun is sqrt(26) > 5 away: a box, not a
+    // sphere); called synchronously inside Service_Wrapper, ascending id.
+    CHECK(run(vm, "hits = '' function Prox(self_obj, trig) hits = hits .. self_obj.Get_Object_ID() .. '>' .. "
+                  "trig.Get_Object_ID() .. ',' end t1.Event_Object_In_Range(Prox, 5) t1.Service_Wrapper()") == "");
+    CHECK(gstr(vm, "hits") == "1>3,1>6,");
+    // The same function again is a second registration (no dedupe); player filter p2 (owner or ally).
+    CHECK(run(vm, "hits = '' t1.Event_Object_In_Range(Prox, 20, p2) t1.Service_Wrapper()") == "");
+    CHECK(gstr(vm, "hits") == "1>3,1>6,1>2,1>3,1>6,");
+    // Fires on every call (no enter / leave edge); Cancel removes every registration of the function.
+    CHECK(run(vm, "hits = '' t1.Service_Wrapper() t1.Cancel_Event_Object_In_Range(Prox) t1.Service_Wrapper()") == "");
+    CHECK(gstr(vm, "hits") == "1>3,1>6,1>2,1>3,1>6,");
+    // Type filter (either argument slot), player filter of a player with nothing else in range.
+    CHECK(run(vm, "hits = '' t1.Event_Object_In_Range(Prox, 20, Find_Object_Type('Tank')) t1.Service_Wrapper() "
+                  "t1.Cancel_Event_Object_In_Range(Prox) t1.Event_Object_In_Range(Prox, 20, p2, Find_Object_Type('Trooper')) "
+                  "t1.Service_Wrapper() t1.Cancel_Event_Object_In_Range(Prox) t1.Event_Object_In_Range(Prox, 20, p1) "
+                  "t1.Service_Wrapper() t1.Cancel_Event_Object_In_Range(Prox)") == "");
+    CHECK(gstr(vm, "hits") == "1>3,1>2,");
+    // A callback that cancels itself fires once; one that registers restarts the scan, done entries are skipped.
+    CHECK(run(vm, "hits = '' function Once(o, t) hits = hits .. 'o' .. t.Get_Object_ID() .. ',' "
+                  "o.Cancel_Event_Object_In_Range(Once) end t1.Event_Object_In_Range(Once, 20) t1.Service_Wrapper() "
+                  "t1.Service_Wrapper()") == "");
+    CHECK(gstr(vm, "hits") == "o2,");
+    CHECK(run(vm, "hits = '' added = false function Adder(o, t) hits = hits .. 'a' .. t.Get_Object_ID() .. ',' "
+                  "if not added then added = true o.Event_Object_In_Range(Prox, 5) end end "
+                  "t1.Event_Object_In_Range(Adder, 20) t1.Service_Wrapper() t1.Cancel_Event_Object_In_Range(Adder) "
+                  "t1.Cancel_Event_Object_In_Range(Prox)") == "");
+    CHECK(gstr(vm, "hits") == "a2,1>3,1>6,");
+    // A callback's Lua error is the binding's error (the calling thread dies).
+    CHECK(contains(run(vm, "function Bad(o, t) error('boom') end t1.Event_Object_In_Range(Bad, 20) t1.Service_Wrapper()"),
+                   "Service_Wrapper -- "));
+    CHECK(run(vm, "t1.Cancel_Event_Object_In_Range(Bad)") == "" && !vm.exit_requested());
+    // A host spatial query narrows the candidates (the binding still re-tests the box).
     s.bridge.objects_in_range = [&s](Vec3, float, std::vector<objects::ObjectId>& out) { out = {s.store.id(s.tank)}; };
-    CHECK(run(vm, std::string("hits = '' t1.Event_Object_In_Range(Prox, 20) t1.Service_Wrapper() ") + pump) == "");
+    CHECK(run(vm, "hits = '' t1.Event_Object_In_Range(Prox, 20) t1.Service_Wrapper() t1.Cancel_Event_Object_In_Range(Prox)") == "");
     CHECK(gstr(vm, "hits") == "1>3,");
     s.bridge.objects_in_range = nullptr;
-    // GetEvent keeps posted named events FIFO with engine events; Params nil for them.
+    // GetEvent keeps posted named events FIFO; Params nil for them.
     vm.post_event("Named");
-    CHECK(run(vm, "named = 0 function Named() named = named + 1 end ev = GetEvent() pn = tostring(GetEvent.Params()) ev() "
-                  "t1.Cancel_Event_Object_In_Range(Prox)") == "");
+    CHECK(run(vm, "named = 0 function Named() named = named + 1 end ev = GetEvent() pn = tostring(GetEvent.Params()) ev()") == "");
     CHECK(gnum(vm, "named") == 1.0 && gstr(vm, "pn") == "nil");
+    // Argument errors are the script error (+0x121: logged, the script's exit flag; no unwind).
+    CHECK(run(vm, "t1.Event_Object_In_Range(5, 1)") == "" &&
+          last_message_has(vm, "Event_Object_In_Range -- Expected function object as parameter 1.") && vm.exit_requested());
+    CHECK(run(vm, "t1.Event_Object_In_Range(Prox, 'x')") == "" && last_message_has(vm, "Expected number as parameter 2."));
+    CHECK(run(vm, "t1.Event_Object_In_Range(Prox)") == "" && last_message_has(vm, "Event_Object_In_Range -- Invalid number of params."));
+    CHECK(run(vm, "t1.Cancel_Event_Object_In_Range()") == "" &&
+          last_message_has(vm, "Cancel_Event_Object_In_Range -- Invalid number of params."));
 
     // Reinforce_Unit without a host hook: created at once at the location (company container), finished.
     CHECK(run(vm, "blk = Reinforce_Unit(Find_Object_Type('Trooper_Team'), Create_Position(50, 0, 0), p1, true, false) "

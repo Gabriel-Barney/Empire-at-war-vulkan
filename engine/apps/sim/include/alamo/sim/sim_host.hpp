@@ -68,6 +68,7 @@
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/jobs/tick.hpp"
 #include "alamo/sim/game_modes.hpp"
+#include "alamo/sim/object_scripts.hpp"
 #include "alamo/sim/pacing.hpp"
 #include "alamo/sim/save_session.hpp"
 #include "alamo/sim/story_session.hpp"
@@ -105,6 +106,9 @@ struct SimConfig {
     commands::SchedulerConfig scheduler = commands::SchedulerConfig::single_player();
     bool parallel_crc = true;                                   // CRC hashers on the job system
     bool story_crc = false;                                     // register the "story" CRC system (S4)
+    // q6: game-object Lua scripts (object_scripts.hpp, docs/re/OBJECT_SCRIPTS.md). Off by default: the attach and the
+    // first-pump draws change the synced stream, so sessions without it keep their CRC streams and goldens.
+    bool object_scripts = false;
 };
 
 // Per-player controller run at T7 (AI / script stand-ins). May call execute_direct.
@@ -183,6 +187,17 @@ public:
     uint64_t scoring_services() const { return scoring_services_; }
     uint64_t scoring_calls() const { return scoring_calls_; }
     uint64_t scoring_releases() const { return scoring_releases_; }
+    // q6: game-object Lua scripts (SimConfig::object_scripts; object_scripts.hpp). Null when off. The host hooks every
+    // pushed mode's primary store, services the scripts at T5 after the store update, attaches the session GlobalValue
+    // table, the galactic player world (start_galactic; the story's in start_story) and the story's object bridge;
+    // battle hosts set their store's bridge / world (ObjectScriptHost::set_bridge). Scripts load through
+    // set_object_script_files (null: nothing attaches).
+    ObjectScriptHost* object_scripts() { return object_scripts_.get(); }
+    const ObjectScriptHost* object_scripts() const { return object_scripts_.get(); }
+    void set_object_script_files(const FileProvider* files);
+    // The player world object scripts of a tactical store without a story session use (the galactic sim's players);
+    // null before start_galactic, without object scripts or without the players family.
+    lua::LuaPlayerWorld* object_script_players() { return object_players_.get(); }
     GameModeManager& modes() { return modes_; }
     const GameModeManager& modes() const { return modes_; }
     TacticalMode* tactical() { return modes_.top_tactical(); }
@@ -430,6 +445,10 @@ private:
     // q6 t06: last member, so it is destroyed before the stores, the RNG and the GlobalValue table it points to.
     std::unique_ptr<lua::LuaVm> scoring_vm_;
 #endif
+    // q6 object scripts: after the stores, the RNG and the GlobalValue table (destroyed before them); the player world
+    // before the host whose VMs point to it.
+    std::shared_ptr<lua::LuaPlayerWorld> object_players_;
+    std::unique_ptr<ObjectScriptHost> object_scripts_;
 };
 
 }  // namespace alamo::sim
