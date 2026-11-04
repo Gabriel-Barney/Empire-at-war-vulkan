@@ -412,15 +412,17 @@ int m_event_set_reward_type(Call& c) {
     return 0;
 }
 
-// Set_Dialog(name) - 0x73e9a0: exactly 1 string; it becomes the event's Story_Dialog (+0x230; Fire step 6 records it,
-// StoryModel::dialog_log). The chapter, the tag and the Add_Dialog_Text list are untouched. [port] the original also
-// loads Data\Scripts\Story\<name>.txt (the story dialog script, cached by name); the port has no dialog script loader.
+// Set_Dialog(name) - 0x73e9a0: exactly 1 string; it becomes the event's Story_Dialog (+0x230; Fire step 6 adds the
+// holocron record). The chapter, the tag and the Add_Dialog_Text list are untouched. The dialog script
+// Data\Scripts\Story\<name>.txt loads at the call (0x47d9c0, cached by the exact name): StoryModel::dialog_loads, which
+// the presentation host loads.
 int m_event_set_dialog(Call& c) {
     static const char kWho[] = "StoryEventWrapper::Set_Dialog -- ";
     if (!self_event_valid(c)) return 0;
     if (c.nargs != 1) return c.script_error_stop("%sinvalid number of parameters. Expected 1, got %d.", kWho, c.nargs);
     if (!c.is_string(1)) return c.script_error_stop("%sinvalid type for parameter 1. Expected string.", kWho);
     self_event(c).story_dialog = std::string(c.string(1));
+    self_model(c)->request_dialog_load(c.string(1));
     ++self_event_state(c).lua_edits;
     return 0;
 }

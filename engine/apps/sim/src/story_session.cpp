@@ -440,6 +440,14 @@ lua::LuaPlayerWorld* StorySession::player_world() {
 
 const lua::StoryModel& StorySession::model(size_t set) const { return sets_.at(set)->model; }
 lua::StoryModel& StorySession::model(size_t set) { return sets_.at(set)->model; }
+const lua::StoryHolocron* StorySession::holocron() const {
+    if (!sets_.empty()) return &sets_.front()->model.holocron();
+    return tactical_ && tactical_->set ? &tactical_->set->model.holocron() : nullptr;
+}
+void StorySession::mark_holocron_read(size_t index) {
+    if (!sets_.empty()) sets_.front()->model.holocron().mark_read(index);
+    else if (tactical_ && tactical_->set) tactical_->set->model.holocron().mark_read(index);
+}
 int32_t StorySession::plot_set_player(size_t set) const { return sets_.at(set)->player; }
 size_t StorySession::script_count() const {
     size_t n = 0;
@@ -478,7 +486,10 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             return false;
         }
         for (const std::string& w : set->model.warnings()) note("story " + ps.plots_file + ": " + w);
-        if (!sets_.empty()) set->model.share_flags(sets_.front()->model);  // one global flag table (STORY.md §0)
+        if (!sets_.empty()) {
+            set->model.share_flags(sets_.front()->model);     // one global flag table (STORY.md §0)
+            set->model.share_holocron(sets_.front()->model);  // one holocron list (GALACTIC_DIALOGS §2.8)
+        }
         set->model.set_player(ps.player);
         set->model.category_mask = category_resolver(*types_);  // wave 2a: WIN/LOSE_BATTLES CLASS_* tests
         set->model.faction_of = faction_resolver(*sim_);        // wave 2b: FILTER_* compare factions
@@ -1535,7 +1546,10 @@ bool StorySession::load_tactical(const std::string& plots, int32_t player, std::
         for (const std::string& w : set->model.warnings()) diagnostics->push_back("story " + plots + ": " + w);
     // The tactical story shares the galactic flag table (STORY.md §0 [H]): a mission's SET_FLAG <mission>_WIN is what the
     // campaign plot's STORY_FLAG waits for.
-    if (!sets_.empty()) set->model.share_flags(sets_.front()->model);
+    if (!sets_.empty()) {
+        set->model.share_flags(sets_.front()->model);
+        set->model.share_holocron(sets_.front()->model);  // the holocron list is global too (GALACTIC_DIALOGS §2.8)
+    }
     set->model.set_player(player);
     set->model.category_mask = category_resolver(*types_);
     set->model.faction_of = faction_resolver(*sim_);  // wave 2b
@@ -1624,6 +1638,8 @@ void StorySession::end_battle(int32_t winner, uint64_t frame) {
         }
     }
     route_corruption_mission(winner, frame);  // wave 2b
+    // The tactical plots go: holocron records of their events keep a copy of their dialog lines [port].
+    if (tactical_->set) tactical_->set->model.holocron().detach(&tactical_->set->model);
     tactical_.reset();
 }
 
@@ -1922,7 +1938,9 @@ void StorySession::poll_tactical() {
 // (owner: n1-host) SimHost chunks "story", "story.lua", "story.bridge", "story.players" (story_session.hpp).
 namespace {
 
-constexpr uint32_t kStorySaveVersion = 2;  // 2 (stage 2): + the attached tactical story
+// 2 (stage 2): + the attached tactical story; 3 (q6 t14): + the holocron list (GALACTIC_DIALOGS §2.8). 1 and 2 still load
+// (with an empty holocron).
+constexpr uint32_t kStorySaveVersion = 3;
 constexpr uint32_t kMaxSaveCount = 1u << 24;
 
 uint32_t read_count(ByteReader& r) {
@@ -2056,6 +2074,17 @@ void StorySession::write(ByteWriter& w) const {
     }
     write_strings(w, lines_);
     write_strings(w, lua_messages_);
+    // v3: the holocron list; a record names its event's plot set by number (galactic sets, then the tactical one).
+    w.boolean(holocron() != nullptr);
+    if (const lua::StoryHolocron* h = holocron())
+        write_section(w, [this, h](ByteWriter& sub) {
+            h->write(sub, [this](const lua::StoryModel* m) -> int32_t {
+                for (const auto& sp : sets_)
+                    if (&sp->model == m) return static_cast<int32_t>(sp->number);
+                if (tactical_ && tactical_->set && &tactical_->set->model == m) return static_cast<int32_t>(tactical_->set->number);
+                return -1;
+            });
+        });
     // v2: the attached tactical story.
     w.boolean(tactical_ != nullptr);
     if (!tactical_) return;
@@ -2081,7 +2110,7 @@ void StorySession::write(ByteWriter& w) const {
 
 bool StorySession::read(ByteReader& r) {
     const uint32_t version = r.u32();
-    if (version != 1 && version != kStorySaveVersion) return false;
+    if (version < 1 || version > kStorySaveVersion) return false;
     const uint64_t frame = r.u64();
     const double seconds = r.f64();
     struct SetIn {
@@ -2162,6 +2191,13 @@ bool StorySession::read(ByteReader& r) {
         e.via = r.str();
     }
     if (!read_strings(r, lines) || !read_strings(r, lua_messages) || !r.ok()) return false;
+    bool has_holocron = false;
+    std::span<const uint8_t> holocron_bytes;
+    if (version >= 3) {
+        has_holocron = r.boolean();
+        if (has_holocron) holocron_bytes = r.raw(r.u32());
+        if (!r.ok()) return false;
+    }
     // v2: the attached tactical story (stage 2; see the header for the two load passes).
     bool has_tac = false, has_set = false, has_own = false;
     uint64_t tac_start = 0;
@@ -2226,6 +2262,18 @@ bool StorySession::read(ByteReader& r) {
         Set& s = *tactical_->set;
         ByteReader mr(tac_set.model);
         if (!s.model.read(mr) || !mr.ok() || !mr.done() || tac_set.fired_seen > s.model.fired().size()) return false;
+    }
+    // The holocron (v3; older saves: none) after the models, then its references re-linked to the loaded plot sets (the
+    // tactical one only in pass 2, when the battle is rebuilt).
+    lua::StoryHolocron* holo = !sets_.empty() ? &sets_.front()->model.holocron()
+                               : tactical_ && tactical_->set ? &tactical_->set->model.holocron() : nullptr;
+    if (holo && has_holocron) {
+        ByteReader hr(holocron_bytes);
+        if (!holo->read(hr) || !hr.ok() || !hr.done()) return false;
+        for (const auto& sp : sets_) holo->relink(static_cast<int32_t>(sp->number), &sp->model);
+        if (tactical_ && tactical_->set) holo->relink(static_cast<int32_t>(tactical_->set->number), &tactical_->set->model);
+    } else if (holo) {
+        holo->clear();
     }
     if (tactical_ && has_own) {  // read in place: the tactical VMs hold this bridge
         ByteReader br(own_bridge);
@@ -2323,7 +2371,7 @@ bool StorySession::read_scripts(ByteReader& r) {
         return true;
     };
     const uint32_t version = r.u32();
-    if (version != 1 && version != kStorySaveVersion) return false;
+    if (version < 1 || version > kStorySaveVersion) return false;
     const uint32_t nsets = read_count(r);
     if (!r.ok() || nsets != sets_.size()) return false;
     std::vector<Set*> targets;

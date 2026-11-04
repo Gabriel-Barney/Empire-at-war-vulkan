@@ -717,6 +717,8 @@ static void test_dialog_setters() {
     // Set_Dialog: the event's Story_Dialog only.
     CHECK(run(vm, "ev.Add_Dialog_Text('X') ev.Set_Dialog('Intervention_Dialog')") == "" &&
           def.story_dialog == "Intervention_Dialog" && def.dialog.size() == 1);
+    // ... and loads that dialog script at the call (q6 t14, GALACTIC_DIALOGS §2.8).
+    CHECK(!m.dialog_loads().empty() && m.dialog_loads().back() == "Intervention_Dialog");
     // An event wrapper whose event is gone: every method returns silently, before any argument check.
     StoryModel empty;
     attach_story(vm, &empty);
@@ -725,6 +727,98 @@ static void test_dialog_setters() {
                   "ev.Set_Reward_Type() ev.Clear_Dialog_Text()") == "");
     CHECK(vm.messages().size() == msgs);
     fs::remove_all(root, ec);
+}
+
+// q6 t14 (STORY.md §1.6, §6.2; GALACTIC_DIALOGS §2.8): Fire step 6 and the holocron list.
+static void test_holocron() {
+    StoryModel m;
+    std::string err;
+    const char* kHoloPlot =
+        "<Story>"
+        "<Event Name=\"A\"><Event_Type>STORY_TRIGGER</Event_Type><Story_Dialog>Dlg_A</Story_Dialog><Story_Chapter>2</Story_Chapter>"
+        "<Perpetual>True</Perpetual></Event>"
+        "<Event Name=\"B\"><Event_Type>STORY_TRIGGER</Event_Type><Story_Dialog>Dlg_B</Story_Dialog><Story_Chapter>0</Story_Chapter>"
+        "<Story_Tag>Goal_B</Story_Tag><Story_Var>Kuat</Story_Var><Story_Dialog_SFX>True</Story_Dialog_SFX>"
+        "<Story_Dialog_Popup>True</Story_Dialog_Popup></Event>"
+        "<Event Name=\"TagOnly\"><Event_Type>STORY_TRIGGER</Event_Type><Story_Tag>T</Story_Tag></Event>"
+        "<Event Name=\"Done\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>STORY_GOAL_COMPLETED</Reward_Type>"
+        "<Reward_Param1>Dlg_A_2</Reward_Param1></Event>"
+        "<Event Name=\"Gone\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>REMOVE_STORY_GOAL</Reward_Type>"
+        "<Reward_Param1>Goal_B</Reward_Param1></Event>"
+        "</Story>";
+    CHECK(m.add_plot("Holo.xml", kHoloPlot, true, {}, &err) == 0);
+    // The dialog scripts are asked for when the plot loads (0x4562a0), names as written.
+    CHECK(m.dialog_loads() == (std::vector<std::string>{"Dlg_A", "Dlg_B"}));
+    const StoryEventDef& b = m.plot(0).events[1];
+    CHECK(b.story_var == "Kuat" && b.story_dialog_sfx && b.story_dialog_popup && !m.plot(0).events[0].story_dialog_sfx);
+    std::vector<std::string> reward_hook;
+    m.on_reward = [&](uint32_t, uint32_t, const std::string& type, const std::vector<StoryParam>&) { reward_hook.push_back(type); };
+    const StoryHolocron& h = m.holocron();
+    const uint64_t crc0 = digest(m);
+    CHECK(m.trigger_event(0, 0));  // A: no Story_Tag -> "<dialog>_<chapter>", auto-tag
+    CHECK(h.size() == 1 && h.entries()[0].tag == "Dlg_A_2" && h.entries()[0].auto_tag && h.entries()[0].chapter == 2 &&
+          h.entries()[0].model == &m && h.entries()[0].plot == 0 && h.entries()[0].event == 0 && !h.entries()[0].completed);
+    // The record references the event's Add_Dialog_Text list: a later edit shows in it.
+    CHECK(h.lines(h.entries()[0]).empty());
+    m.plot(0).events[0].dialog.push_back("Line 1");
+    CHECK(h.lines(h.entries()[0]) == (std::vector<std::string>{"Line 1"}));
+    CHECK(m.trigger_event(0, 0));  // fired again (Perpetual): a second record, newest first, no de-duplication
+    CHECK(h.size() == 2 && h.entries()[0].id > h.entries()[1].id && h.entries()[0].tag == "Dlg_A_2");
+    CHECK(m.trigger_event(0, 1));  // B: its own tag, Story_Var, popup + SFX in the presentation record
+    CHECK(h.size() == 3 && h.entries()[0].tag == "Goal_B" && !h.entries()[0].auto_tag && h.entries()[0].var == "Kuat");
+    CHECK(h.log().size() == 3 && h.log().back().popup && h.log().back().sfx && h.log().back().tag == "Goal_B" &&
+          h.log().back().holocron_id == h.entries()[0].id && h.log().back().plot_name == "Holo.xml" && !h.log()[0].popup);
+    CHECK(m.dialog_log().size() == 3);
+    CHECK(m.trigger_event(0, 2) && h.size() == 3 && h.log().size() == 3);  // a Story_Tag without a Story_Dialog: nothing
+    CHECK(m.trigger_event(0, 3));  // STORY_GOAL_COMPLETED Dlg_A_2: the NEWEST record with the tag
+    CHECK(h.entries()[1].completed && !h.entries()[2].completed && !h.entries()[0].completed);
+    CHECK(m.trigger_event(0, 4));  // REMOVE_STORY_GOAL Goal_B
+    CHECK(h.size() == 2 && h.entries()[0].tag == "Dlg_A_2" && h.entries()[0].completed);
+    CHECK(reward_hook.empty());  // both are the model's rewards, not the host's
+    // [port] the list is not in the per-tick CRC (no sim rule reads it): the digest moves only with the fires.
+    StoryModel twin;
+    CHECK(twin.add_plot("Holo.xml", kHoloPlot, true, {}, &err) == 0);
+    for (const uint32_t e : {0u, 0u, 1u, 2u, 3u, 4u}) twin.trigger_event(0, e);
+    twin.plot(0).events[0].dialog.push_back("Line 1");
+    CHECK(digest(twin) == digest(m) && digest(m) != crc0);
+    m.holocron().mark_read(1);
+    CHECK(h.entries()[1].read && !h.entries()[0].read && digest(twin) == digest(m));
+    CHECK(!m.holocron().remove_tag("No_Such_Tag") && !m.holocron().complete_tag("dlg_a_2"));  // exact compare
+    // One list for every plot set (share_holocron), records keep their own model.
+    StoryModel other;
+    other.share_holocron(m);
+    CHECK(other.add_plot("Other.xml",
+                         "<Story><Event Name=\"O\"><Event_Type>STORY_TRIGGER</Event_Type><Story_Dialog>Dlg_O</Story_Dialog>"
+                         "<Story_Chapter>1</Story_Chapter><Story_Tag>Tag_O</Story_Tag></Event></Story>",
+                         true, {}, &err) == 0);
+    CHECK(other.trigger_event(0, 0) && h.size() == 3 && h.entries()[0].model == &other && h.entries()[0].tag == "Tag_O");
+    other.plot(0).events[0].dialog = {"O1", "O2"};
+    // Save / load: references by set number, re-linked after the read.
+    ByteWriter w;
+    h.write(w, [&](const StoryModel* p) { return p == &m ? 0 : p == &other ? 1 : -1; });
+    StoryHolocron back;
+    ByteReader r(w.bytes());
+    CHECK(back.read(r) && r.ok() && r.done() && back.size() == 3);
+    CHECK(back.lines(back.entries()[0]).empty());  // not linked yet
+    back.relink(0, &m);
+    back.relink(1, &other);
+    for (size_t i = 0; i < 3; ++i) {
+        const StoryHolocronEntry &x = h.entries()[i], &y = back.entries()[i];
+        CHECK(x.id == y.id && x.tag == y.tag && x.dialog == y.dialog && x.chapter == y.chapter && x.completed == y.completed &&
+              x.read == y.read && x.auto_tag == y.auto_tag && y.model == x.model && back.lines(y) == h.lines(x));
+    }
+    CHECK(back.add(StoryHolocronEntry{}) > h.entries()[0].id);  // ids continue after the load
+    // A plot set going away: its records keep a copy of their lines (and save it).
+    m.holocron().detach(&other);
+    CHECK(h.entries()[0].model == nullptr && h.lines(h.entries()[0]) == (std::vector<std::string>{"O1", "O2"}));
+    ByteWriter w2;
+    h.write(w2, [&](const StoryModel* p) { return p == &m ? 0 : -1; });
+    StoryHolocron back2;
+    ByteReader r2(w2.bytes());
+    CHECK(back2.read(r2) && back2.lines(back2.entries()[0]) == (std::vector<std::string>{"O1", "O2"}));
+    ByteReader cut(std::span<const uint8_t>(w2.bytes().data(), w2.bytes().size() - 1));
+    StoryHolocron back3;
+    CHECK(!back3.read(cut) && back3.size() == 0);
 }
 
 static void test_ai_flags() {
@@ -1217,6 +1311,7 @@ int main() {
     test_ai_flags();
     test_story_table();      // q6 t03
     test_dialog_setters();   // q6 t03
+    test_holocron();         // q6 t14
     test_prereqs_elapsed_perpetual();
     test_exact_params();
     test_branches();

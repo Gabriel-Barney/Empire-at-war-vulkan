@@ -447,15 +447,19 @@ public:
     PlanetIndex auto_planet_ = kInvalidPlanet;
     size_t ar_log_seen_ = 0;
     bool battle_end_auto_ = false;    // the open battle-end screen follows an auto-resolve
-    // §2 mission holocron: the chapters of Story_Dialog events (TITLE + body lines), newest last; the b_story_arc_g flash.
+    // §2 mission holocron. The list itself is sim state (sim::StorySession::holocron, GALACTIC_DIALOGS §2.8); here the
+    // presented adds (Story_Dialog events, oldest first; presentation log only), the loaded story dialog scripts and the
+    // summary's selection (a record id, 0 = the first row) and rows (record ids); the b_story_arc_g flash.
     struct HolocronChapter {
-        std::u32string title;
-        std::vector<std::u32string> lines;
-        std::vector<ui::Rgba8> colors;
-        std::string dialog;
+        std::string dialog, tag;
         int32_t chapter = -1;
+        uint64_t id = 0;
     };
     std::vector<HolocronChapter> holocron_chapters_;
+    StoryDialogCache story_scripts_;
+    StoryScriptLoads story_loads_;
+    uint64_t summary_entry_ = 0;
+    std::vector<uint64_t> summary_rows_;
     bool holocron_flash_ = false;     // b_story_arc_g flashes until the summary is opened
     bool story_summary_open_ = false; // IDD_STORY_SUMMARY_DIALOG open: ticks held (the summary's galactic pause, §2.2)
     // Screen-text lines (§2.1 transmission line, white; §3.1 auto-resolve result, red) [port: printed and kept until a ui
@@ -471,9 +475,8 @@ public:
     void open_battle_prompt(const galactic::GalacticSim& g, const galactic::ConflictInfo& c);
     std::string representative_icon(std::span<const objects::ObjectHandle> units, bool hero_filter = false) const;
     void answer_battle_prompt(bool auto_resolve);
-    int32_t summary_chapter_ = -1;  // the story summary's selected chapter (-1 = the newest)
     void auto_resolve_result(const galactic::GalacticSim& g, const galactic::ConflictLogEntry& e);
-    void add_holocron_chapter(const ui::StoryDialogInfo& info, const StoryDialogMeta& meta);
+    void add_holocron_chapter(const StoryDialogMeta& meta, size_t lines);
     void screen_line(std::u32string text, ui::Rgba8 color);
     std::u32string txt(std::string_view id, std::u32string_view fallback) const;
     std::u32string faction_label(int32_t player) const;

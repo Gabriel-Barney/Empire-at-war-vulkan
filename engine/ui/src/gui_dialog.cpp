@@ -488,7 +488,8 @@ bool GuiManager::wrap_list_items(GuiDialog& d, std::string_view control) {
     std::vector<std::u32string> items;
     std::vector<Rgba8> colors, text_colors;
     for (size_t k = 0; k < c.items.size(); ++k) {
-        std::vector<std::u32string> rows = wrap_text(*fonts_, font, c.items[k], max_px);
+        // GALACTIC_DIALOGS §2.7: a backslash-n escape in the text becomes a line break here, where the text is wrapped.
+        std::vector<std::u32string> rows = wrap_text(*fonts_, font, gui_unescape(c.items[k]), max_px);
         if (rows.empty()) rows.emplace_back();
         for (std::u32string& r : rows) {
             items.push_back(std::move(r));

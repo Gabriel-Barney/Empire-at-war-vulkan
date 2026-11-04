@@ -2047,6 +2047,8 @@ struct Result {
     bool scoped_ok = false;
     bool battles_ok = false;
     bool special_ok = false;  // P4 lua
+    size_t holocron = 0;      // q6 t14
+    bool holocron_saved = false;
 };
 
 static Result run(const objects::GameObjectTypes& types, const FileProvider& files, int32_t workers) {
@@ -2165,6 +2167,16 @@ static Result run(const objects::GameObjectTypes& types, const FileProvider& fil
         out.dialog_tag = d[0].tag;
         out.dialog_chapter = d[0].chapter;
     }
+    // q6 t14: the holocron record of that fire, saved with the session (v3) and re-linked to its event on load.
+    if (const lua::StoryHolocron* h = story.holocron()) {
+        out.holocron = h->size();
+        story.mark_holocron_read(0);
+        ByteWriter w;
+        story.write(w);
+        ByteReader rd(w.bytes());
+        out.holocron_saved = h->size() == 1 && story.read(rd) && h->size() == 1 && h->entries()[0].tag == "Era_Tag" &&
+                             h->entries()[0].read && h->entries()[0].model == &story.model(0) && h->entries()[0].chapter == 2;
+    }
     return out;
 }
 }  // namespace story_wave1
@@ -2199,6 +2211,7 @@ static void test_story_wave1() {
         }
     CHECK(a.scoped_ok && a.battles_ok && a.dialogs == 1 && a.dialog_tag == "Era_Tag" && a.dialog_chapter == 2);
     CHECK(a.special_ok);  // P4 lua
+    CHECK(a.holocron == 1 && a.holocron_saved);  // q6 t14
     CHECK(a.log.find("UiSelectUnit") != std::string::npos && a.log.find("PlanetDestroyed") != std::string::npos);
     CHECK(!a.log.empty() && a.log == b.log);
     std::printf("story wave 1: %zu log bytes, identical for 0/1/4/15 workers: %s\n", a.log.size(), a.log == b.log ? "yes" : "NO");
