@@ -132,8 +132,9 @@ bool GalacticAiWorld::Impl::evaluate(int32_t self, int32_t opponent, const std::
     c.rng = &rng.synced();
     const EvalResult r = ai::evaluate(eqs, e, c, res);
     ++eval_count;
-    if (target >= 0 || r.ok) ++stats[std::string("~ eval ") + (r.ok ? (r.value > 0.0 ? "pos " : "nonpos ") : "FAIL ") + fn];
-    else ++stats["~ eval FAIL " + fn];
+    // Port diagnostics (never hashed): a failure names its first failing site (q6 t10).
+    if (r.ok) ++stats[std::string("~ eval ") + (r.value > 0.0 ? "pos " : "nonpos ") + fn];
+    else ++stats["~ eval FAIL " + fn + " at " + eval_failure_site(eqs, r)];
     if (!r.ok) return false;
     out = r.value;
     return true;

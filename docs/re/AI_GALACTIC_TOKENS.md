@@ -412,3 +412,11 @@ conflict in which the AI is the defender starts (or is dropped), and 0.0 before 
   the player evaluator.
 - `BudgetAllocation`: Self-only, keyed by the AIGoalCategoryType value, returns the category's current normalised
   weight, 0.0 for an unknown category.
+- Port status (q6 t10, 2026-11-04): galactic leaf done (q6 t03). Tactical player roots (`engine/ai/tactical`
+  tactical_perception.cpp): Self-only as above, value 0.0 for every key (no tactical budget, [L] as stated); before t10
+  the tactical leaf also returned 0.0 on Enemy / Human / Owner roots instead of failing.
+- Port status (q6 t10): with no human player (headless `--galactic-ai` without `--human`), TR's
+  `Allow_Blind_Space_Production` (via `Needs_More_Space_Force_Globally`: `Variable_Human.SpaceTotalUnnormalized`) and
+  `Should_Conquer_Opponent_Planet` (via `Player_Danger_Score`: `Variable_Human.PlanetsControlled`) fail on every
+  evaluation, as AI_GALACTIC_2 §4.3 requires; with `--human Empire` both evaluate. The headless `proposals` summary now
+  names the first failing site (`~ eval FAIL <eq> at <token path | Function_X | Script_X | error>`).

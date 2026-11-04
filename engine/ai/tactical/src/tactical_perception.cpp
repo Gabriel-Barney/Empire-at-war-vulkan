@@ -1028,7 +1028,14 @@ struct Eval {
             }
             case Leaf::CreditsUnnormalized: out = P == ctx.self ? static_cast<double>(pl.credits) : 0.0; return true;
             case Leaf::TechLevel: out = static_cast<double>(pl.tech_level); return true;
-            case Leaf::BudgetAllocation: case Leaf::StoryTrigger: case Leaf::ActiveGoals: out = 0.0; return true;  // [M] galactic
+            // q6 t10 BudgetAllocation 0x6e0560 (AI_GALACTIC_TOKENS 8.3, base Player registration, lifetime 2 s) [H]: Self only,
+            // else the leaf fails; the budget is galactic-only, so the tactical category map is empty and every key reads
+            // 0.0 [L: not traced, open item 7].
+            case Leaf::BudgetAllocation:
+                if (P != ctx.self) return false;
+                out = 0.0;
+                return true;
+            case Leaf::StoryTrigger: case Leaf::ActiveGoals: out = 0.0; return true;  // [M] galactic
             default: return false;
         }
     }
