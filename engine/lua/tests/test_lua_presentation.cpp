@@ -15,6 +15,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/lua/ai_bridge.hpp"  // reset_script_threads
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/presentation.hpp"
@@ -38,10 +39,19 @@ static int g_fail = 0;
         }                                                            \
     } while (0)
 
+// q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings"): a binding error does not unwind; it logs
+// "SCRIPT ERROR: ..." and sets the script's stop flag. run() reports those lines as its result (a Lua error as before)
+// and clears the flag, so the next snippet runs on a live script.
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
+    const size_t m0 = vm.messages().size();
     if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
-    return {};
+    if (!vm.exit_requested()) return {};
+    std::string out;
+    for (size_t i = m0; i < vm.messages().size(); ++i)
+        if (vm.messages()[i].rfind("SCRIPT ERROR: ", 0) == 0) out += vm.messages()[i] + "\n";
+    reset_script_threads(vm);
+    return out.empty() ? std::string("stop") : out;
 }
 
 static double gnum(LuaVm& vm, const char* name) {
@@ -54,6 +64,11 @@ static double gnum(LuaVm& vm, const char* name) {
 }
 
 static bool contains(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
+// q6 t11: an invalid camera position is a warning (logged "SCRIPT WARNING: ...", the binding returns, no stop).
+static bool warned(LuaVm& vm, const std::string& code, const char* part) {
+    return run(vm, code).empty() && !vm.exit_requested() && !vm.messages().empty() &&
+           vm.messages().back().rfind("SCRIPT WARNING: ", 0) == 0 && contains(vm.messages().back(), part);
+}
 
 // PGBase.lua-shaped helpers (same structure as the shipped Sleep / BlockOnCommand / PumpEvents).
 static const char* kHelpers =
@@ -209,11 +224,11 @@ static void test_argument_contracts() {
     CHECK(contains(run(vm, "Letter_Box_In({})"), "LuaLetterBoxIn -- Invalid parameter 1, expected a float"));
     CHECK(contains(run(vm, "Lock_Controls()"), "LuaLockControls -- Expected float parameter 1"));
     CHECK(contains(run(vm, "Set_Cinematic_Camera_Key(marker, 1, 2)"), "LuaSetCinematicCameraKey -- Expected 8 parameters"));
-    CHECK(contains(run(vm, "Set_Cinematic_Camera_Key(5, 300, 5, 100, 1, 0, 0, 0)"),
-                   "LuaSetCinematicCameraKey -- Invalid parameter 1, expected a position."));
+    CHECK(warned(vm, "Set_Cinematic_Camera_Key(5, 300, 5, 100, 1, 0, 0, 0)",
+                 "LuaSetCinematicCameraKey -- Invalid parameter 1, expected a position."));
     CHECK(contains(run(vm, "Transition_Cinematic_Target_Key(marker, 'x', 0, 0, 0, 0, 0, 0, 0)"),
                    "LuaTransitionCinematicTargetKey -- Invalid parameter 2, expected a float"));
-    CHECK(contains(run(vm, "Point_Camera_At(nil)"), "LuaPointCamera -- Expected position parameter 1"));
+    CHECK(warned(vm, "Point_Camera_At(nil)", "LuaPointCamera -- Expected position parameter 1"));
     CHECK(contains(run(vm, "Start_Cinematic_Camera(3)"), "LuaStartCinematicCamera -- invalid type for parameter 1. Expected bool."));
     CHECK(contains(run(vm, "Enable_Fog(1)"), "LuaEnableFog -- invalid type for parameter 1. Expected bool."));
     CHECK(contains(run(vm, "Enable_Distance_Fog()"), "Enable_Distance_Fog -- invalid number of parameters. Expected 1, got 0."));

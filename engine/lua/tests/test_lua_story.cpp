@@ -14,6 +14,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/lua/ai_bridge.hpp"  // reset_script_threads
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/story_model.hpp"
@@ -463,11 +464,11 @@ static void test_bindings() {
     auto last_msg_has = [&vm](const char* text) {
         return !vm.messages().empty() && vm.messages().back().find(text) != std::string::npos;
     };
-    CHECK(run(vm, "Story_Event()").find("Expected 1 or 2, got 0") != std::string::npos);
-    CHECK(run(vm, "Story_Event(3)").find("Expected string") != std::string::npos);
-    CHECK(run(vm, "Get_Story_Plot()").find("Get_Story_Plot -- invalid number of parameters") != std::string::npos);
-    CHECK(run(vm, "Add_Objective('x')").find("Expected 2, got 1") != std::string::npos);
-    CHECK(run(vm, "Add_Radar_Blip(5, 'n')").find("could not deduce a position") != std::string::npos);
+    CHECK(run(vm, "Story_Event()") == "" && vm.exit_requested() && last_msg_has("Expected 1 or 2, got 0"));
+    CHECK(run(vm, "Story_Event(3)") == "" && vm.exit_requested() && last_msg_has("Expected string"));
+    CHECK(run(vm, "Get_Story_Plot()") == "" && vm.exit_requested() && last_msg_has("Get_Story_Plot -- invalid number of parameters"));
+    CHECK(run(vm, "Add_Objective('x')") == "" && vm.exit_requested() && last_msg_has("Expected 2, got 1"));
+    CHECK(run(vm, "Add_Radar_Blip(5, 'n')") == "" && vm.exit_requested() && last_msg_has("could not deduce a position"));
     CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Parameter('a', 1)") == "" &&
           last_msg_has("Set_Reward_Parameter -- invalid type for parameter 1. Expected number."));
     CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Parameter(1, {})") == "" &&
@@ -482,7 +483,8 @@ static void test_bindings() {
           last_msg_has("Set_Reward_Type -- invalid type for parameter 1. Expected string."));
     CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Dialog()") == "" &&
           last_msg_has("Set_Dialog -- invalid number of parameters. Expected 1, got 0."));
-    CHECK(run(vm, "Check_Story_Flag(1, 'F', nil, true)").find("Expected player") != std::string::npos);
+    CHECK(run(vm, "Check_Story_Flag(1, 'F', nil, true)") == "" && vm.exit_requested() && last_msg_has("Expected player"));
+    reset_script_threads(vm);  // q6 t11: the binding errors above stopped the script; a live script for what follows
 
     // StoryPlotWrapper.Reset / Suspend / Activate.
     CHECK(run(vm, "p = Get_Story_Plot('Story_Test.xml') p.Suspend()") == "" && !m.plot(0).active);
@@ -499,6 +501,23 @@ static void test_bindings() {
     const size_t n = m.deliver_script_triggers(0, vm, &err);
     CHECK(n == m.fired().size() && gstr(vm, "got") == expect);
     CHECK(m.deliver_script_triggers(0, vm) == 0);
+    // q6 t11 (LUA_API.md "Binding error model across all bindings"): a binding error stops the plot script; its events
+    // still fire, but Story_Event_Trigger is not called any more (the queued names are dropped).
+    {
+        const auto fire_one = [&m] {  // an enabled event of plot 0
+            for (uint32_t e = 0; e < m.plot(0).events.size(); ++e)
+                if (m.trigger_event(0, e)) return true;
+            return false;
+        };
+        const size_t fired0 = m.fired().size();
+        CHECK(run(vm, "got = '' Story_Event() after = 'yes'") == "" && vm.exit_requested() && gstr(vm, "after") == "yes");
+        CHECK(fire_one() && m.fired().size() > fired0);  // (with its cascade)
+        CHECK(m.deliver_script_triggers(0, vm) == 0 && gstr(vm, "got") == "");
+        reset_script_threads(vm);
+        const size_t fired1 = m.fired().size();
+        CHECK(fire_one() && m.deliver_script_triggers(0, vm) == m.fired().size() - fired1 &&
+              gstr(vm, "got") == fired_names(m, fired1));
+    }
 
     // story t02: parameters set from Lua take the event type's own rule (the shipped Intervention_Build_Units /
     // Empire Act IV patterns): a type + count on STORY_CONSTRUCT counts down, a reward amount lands in Reward_Param1, a

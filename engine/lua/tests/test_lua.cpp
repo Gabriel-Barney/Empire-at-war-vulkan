@@ -19,6 +19,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/lua/ai_bridge.hpp"  // reset_script_threads
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
 #include "alamo/lua/script_loader.hpp"
@@ -55,6 +56,18 @@ static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
     if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
     return {};
+}
+
+// q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings"): `code` runs without a Lua error, a binding
+// error logged "SCRIPT ERROR: ...<text>..." and set the stop flag; the flag (and the threads) are then reset.
+static bool stopped(LuaVm& vm, const std::string& code, const char* text) {
+    const size_t m0 = vm.messages().size();
+    const bool ok = run(vm, code).empty() && vm.exit_requested();
+    bool found = false;
+    for (size_t i = m0; i < vm.messages().size(); ++i)
+        found = found || (vm.messages()[i].rfind("SCRIPT ERROR: ", 0) == 0 && vm.messages()[i].find(text) != std::string::npos);
+    reset_script_threads(vm);
+    return ok && found;
 }
 
 // Global as string / number (after running code that sets it).
@@ -238,8 +251,8 @@ static void test_random_and_math() {
     // ... ranged forms from the free stream in single player (synced untouched) ...
     CHECK(run(vm, "r = GameRandom.Free_Random(1, 6)") == "");
     CHECK(gnum(vm, "r") == ref.free().range_int(1, 6) && rng.synced() == ref.synced() && rng.free() == ref.free());
-    CHECK(run(vm, "GameRandom.Free_Random(1)").find("Invalid parameter 2") != std::string::npos);
-    CHECK(run(vm, "GameRandom('x')").find("Invalid parameter 1") != std::string::npos);
+    CHECK(stopped(vm, "GameRandom.Free_Random(1)", "Invalid parameter 2"));
+    CHECK(stopped(vm, "GameRandom('x')", "Invalid parameter 1"));
     // ... and from the synchronized stream in multiplayer.
     vm.host().multiplayer = true;
     CHECK(run(vm, "m = GameRandom.Free_Random(1, 6)") == "");
@@ -384,7 +397,10 @@ static void test_threads() {
               "main_id = GetThreadID()\n") == "");
     CHECK(gnum(vm, "a") == 0.0 && gnum(vm, "b") == 1.0 && gnum(vm, "main_id") == -1.0);
     CHECK(vm.thread_count() == 2 && vm.thread_active(0) && vm.thread_active(1));
-    CHECK(run(vm, "Create_Thread('NoSuchFunction')").find("LuaCreateThread") != std::string::npos);
+    {  // q6 t11: a script error (the stop flag), so in a VM of its own to keep this one's threads
+        LuaVm v2(LuaHost{});
+        CHECK(stopped(v2, "Create_Thread('NoSuchFunction')", "LuaCreateThread"));
+    }
     vm.service_threads();
     CHECK(gstr(vm, "trace") == "A1(0) B1(1) ");
     vm.service_threads();
@@ -500,12 +516,16 @@ static void test_objects() {
     CHECK(run(vm, "Find_All_Objects_Of_Type()") == "" &&
           vm.messages().back().find("Expected a filter parameter") != std::string::npos);
 
-    // Dead object: Is_Valid false immediately (before the flush), methods raise "this object is dead!".
+    // Dead object: Is_Valid false immediately (before the flush); q6 t11 (LUA_API.md "Dead or null wrappers"): other
+    // methods return nothing, silently (no message, no stop flag).
     CHECK(store.destroy(t2));
     CHECK(run(vm, "v1 = victim.Is_Valid() and 1 or 0") == "" && gnum(vm, "v1") == 0.0);
-    std::string e = run(vm, "victim.Get_Type()");
-    CHECK(e.find("GameObjectWrapper::Get_Type -- this object is dead!") != std::string::npos);
-    CHECK(run(vm, "victim.Get_Position()").find("this object is dead!") != std::string::npos);  // unbound, but dead first
+    reset_script_threads(vm);  // the filter errors above stopped the script (q6 t11)
+    const size_t m_dead = vm.messages().size();
+    const std::string e_dead = run(vm, "nt = (function(...) return arg.n end)(victim.Get_Type()) np = (function(...) return arg.n end)(victim.Get_Position())");
+    if (!e_dead.empty()) std::printf("  dead: %s\n", e_dead.c_str());
+    CHECK(e_dead.empty() && gnum(vm, "nt") == 0.0 && gnum(vm, "np") == 0.0);  // Get_Position: unbound here, but dead first
+    CHECK(!vm.exit_requested() && vm.messages().size() == m_dead);
     store.flush();
     CHECK(run(vm, "v2 = victim.Is_Valid() and 1 or 0 n2 = table.getn(Find_All_Objects_Of_Type(tt)) s = tostring(victim)") == "");
     CHECK(gnum(vm, "v2") == 0.0 && gnum(vm, "n2") == 2.0 && gstr(vm, "s").find("[dead]") != std::string::npos);

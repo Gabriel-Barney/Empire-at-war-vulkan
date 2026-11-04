@@ -52,6 +52,20 @@ static std::string run(LuaVm& vm, const std::string& code) {
     if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
     return {};
 }
+// q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings"): a binding error does not unwind; it logs
+// "SCRIPT ERROR: ..." and sets the script's stop flag. run_stop() reports those lines as its result (a Lua error as
+// before) and clears the flag, so the next snippet runs on a live script.
+static std::string run_stop(LuaVm& vm, const std::string& code) {
+    std::string err;
+    const size_t m0 = vm.messages().size();
+    if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
+    if (!vm.exit_requested()) return {};
+    std::string out;
+    for (size_t i = m0; i < vm.messages().size(); ++i)
+        if (vm.messages()[i].rfind("SCRIPT ERROR: ", 0) == 0) out += vm.messages()[i] + "\n";
+    reset_script_threads(vm);
+    return out.empty() ? std::string("stop") : out;
+}
 static std::string gstr(LuaVm& vm, const char* name) {
     lua_State* L = vm.state();
     lua_pushstring(L, name);
@@ -222,14 +236,14 @@ static void test_find(const Db& db) {
                   "h2 = Find_Hint(Find_Object_Type('marker_generic'), 'SPAWNPOINT').Get_Object_ID() "
                   "h3 = tostring(Find_Hint('Trooper', 'spawnpoint')) h4 = tostring(Find_Hint('Marker_Generic', 'nope'))") == "");
     CHECK(gnum(vm, "h1") == 5.0 && gnum(vm, "h2") == 5.0 && gstr(vm, "h3") == "nil" && gstr(vm, "h4") == "nil");
-    CHECK(contains(run(vm, "Find_Hint('x')"), "LuaFindMarkerCommandClass -- Invalid number of parameters."));
-    CHECK(contains(run(vm, "Find_Hint(5, 'x')"), "LuaFindMarkerCommandClass -- Expected type or name for parameter 1"));
+    CHECK(contains(run_stop(vm, "Find_Hint('x')"), "LuaFindMarkerCommandClass -- Invalid number of parameters."));
+    CHECK(contains(run_stop(vm, "Find_Hint(5, 'x')"), "LuaFindMarkerCommandClass -- Expected type or name for parameter 1"));
     // Find_All_Objects_With_Hint: newest first.
     CHECK(run(vm, "l = Find_All_Objects_With_Hint('SpawnPoint') hn = table.getn(l) hs = l[1].Get_Object_ID() .. ',' .. l[2].Get_Object_ID() "
                   "he = table.getn(Find_All_Objects_With_Hint('none'))") == "");
     CHECK(gnum(vm, "hn") == 2.0 && gstr(vm, "hs") == "5,4" && gnum(vm, "he") == 0.0);
-    CHECK(contains(run(vm, "Find_All_Objects_With_Hint()"), "invalid number of parameters. Expected 1, got 0."));
-    CHECK(contains(run(vm, "Find_All_Objects_With_Hint(1)"), "invalid type for parameter 1. Expected string."));
+    CHECK(contains(run_stop(vm, "Find_All_Objects_With_Hint()"), "invalid number of parameters. Expected 1, got 0."));
+    CHECK(contains(run_stop(vm, "Find_All_Objects_With_Hint(1)"), "invalid type for parameter 1. Expected string."));
     CHECK(run(vm, "gh = Find_Hint('Marker_Generic', 'spawnpoint').Get_Hint() gn = tostring(t1.Get_Hint())") == "");
     CHECK(gstr(vm, "gh") == "SpawnPoint" && gstr(vm, "gn") == "nil");
     // Find_First_Object: newest first, case-insensitive type name.
@@ -270,10 +284,10 @@ static void test_find(const Db& db) {
                   "ps = tostring(pos)") == "");
     CHECK(gnum(vm, "x") == 5.0 && gnum(vm, "y") == 0.0 && gnum(vm, "d") == 5.0 && gnum(vm, "d2") == 5.0);
     CHECK(gnum(vm, "pv") == 1.0 && gnum(vm, "same") == 1.0 && gstr(vm, "ps") == "PositionWrapper");
-    CHECK(contains(run(vm, "t1.Get_Distance()"), "Expceted 1, got 0."));
-    CHECK(contains(run(vm, "t1.Get_Distance(5)"), "could not extract a position from parameter 1."));
-    CHECK(contains(run(vm, "Create_Position(1, 2)"), "LuaCreatePosition -- Expected 3 float parameters"));
-    CHECK(contains(run(vm, "Create_Position(1, 2, 'a')"), "LuaCreatePosition -- Invalid parameter, expected 3 floats"));
+    CHECK(contains(run_stop(vm, "t1.Get_Distance()"), "Expceted 1, got 0."));
+    CHECK(contains(run_stop(vm, "t1.Get_Distance(5)"), "could not extract a position from parameter 1."));
+    CHECK(contains(run_stop(vm, "Create_Position(1, 2)"), "LuaCreatePosition -- Expected 3 float parameters"));
+    CHECK(contains(run_stop(vm, "Create_Position(1, 2, 'a')"), "LuaCreatePosition -- Invalid parameter, expected 3 floats"));
 }
 
 // Stage 3: proximity events (q6, OBJECT_SCRIPTS.md §4.3: synchronous callbacks), reinforcements, Get_Space_Station.
@@ -309,7 +323,7 @@ static void test_stage3(const Db& db) {
                   "t1.Cancel_Event_Object_In_Range(Prox)") == "");
     CHECK(gstr(vm, "hits") == "a2,1>3,1>6,");
     // A callback's Lua error is the binding's error (the calling thread dies).
-    CHECK(contains(run(vm, "function Bad(o, t) error('boom') end t1.Event_Object_In_Range(Bad, 20) t1.Service_Wrapper()"),
+    CHECK(contains(run_stop(vm, "function Bad(o, t) error('boom') end t1.Event_Object_In_Range(Bad, 20) t1.Service_Wrapper()"),
                    "Service_Wrapper -- "));
     CHECK(run(vm, "t1.Cancel_Event_Object_In_Range(Bad)") == "" && !vm.exit_requested());
     // A host spatial query narrows the candidates (the binding still re-tests the box).
@@ -355,17 +369,17 @@ static void test_stage3(const Db& db) {
     CHECK(run(vm, "f4 = b3.IsFinished() and 1 or 0 r4 = b3.Result()[1].Get_Object_ID()") == "" && gnum(vm, "f4") == 1.0 &&
           gnum(vm, "r4") == 1.0);
     s.bridge.reinforce = nullptr;
-    CHECK(contains(run(vm, "Reinforce_Unit('Tank')"), "LuaReinforceCommandClass::Reinforce -- Invalid number of parameters."));
-    CHECK(contains(run(vm, "Reinforce_Unit('Nope', false, p1)"), "Reinforce -- Invalid parameter for type."));
-    CHECK(contains(run(vm, "Reinforce_Unit('Tank', false, 5)"), "Reinforce -- Invalid parameter for player."));
-    CHECK(contains(run(vm, "Reinforce_Unit('Tank', 5, p1)"), "Reinforce -- Invalid position parameter."));
+    CHECK(contains(run_stop(vm, "Reinforce_Unit('Tank')"), "LuaReinforceCommandClass::Reinforce -- Invalid number of parameters."));
+    CHECK(contains(run_stop(vm, "Reinforce_Unit('Nope', false, p1)"), "Reinforce -- Invalid parameter for type."));
+    CHECK(contains(run_stop(vm, "Reinforce_Unit('Tank', false, 5)"), "Reinforce -- Invalid parameter for player."));
+    CHECK(contains(run_stop(vm, "Reinforce_Unit('Tank', 5, p1)"), "Reinforce -- Invalid position parameter."));
     // Spawn_From_Reinforcement_Pool: direct spawn stand-in, or the host's pool.
     CHECK(run(vm, "sp = Spawn_From_Reinforcement_Pool(Find_Object_Type('Tank'), tank, p1) sn = table.getn(sp) "
                   "st = sp[1].Get_Type().Get_Name()") == "" && gnum(vm, "sn") == 1.0 && gstr(vm, "st") == "Tank");
     s.bridge.spawn_from_pool = [](objects::TypeIndex, int32_t, Vec3) { return std::vector<objects::ObjectHandle>{}; };
     CHECK(run(vm, "sn2 = table.getn(Spawn_From_Reinforcement_Pool('Tank', tank, p1))") == "" && gnum(vm, "sn2") == 0.0);
     s.bridge.spawn_from_pool = nullptr;
-    CHECK(contains(run(vm, "Spawn_From_Reinforcement_Pool('Tank', tank)"), "Expected 3, got 2"));
+    CHECK(contains(run_stop(vm, "Spawn_From_Reinforcement_Pool('Tank', tank)"), "Expected 3, got 2"));
     // Get_Space_Station: the player's newest StarBase.
     const objects::ObjectHandle station = make(s.store, db.t("Station"), 2, {0, 50, 0});
     CHECK(run(vm, "ss = p2.Get_Space_Station().Get_Object_ID() ss1 = tostring(p1.Get_Space_Station())") == "");
@@ -473,8 +487,8 @@ static void test_queries(const Db& db) {
     CHECK(gstr(vm, "nm") == "Tank" && gnum(vm, "c1") == 1.0 && gnum(vm, "c2") == 0.0 && gnum(vm, "c3") == 0.0);
     CHECK(gnum(vm, "pr") == 1.0 && gnum(vm, "pr2") == 0.0 && gnum(vm, "sh") == 1.0 && gnum(vm, "sh2") == 0.0);
     CHECK(gstr(vm, "st") == "Tank" && gnum(vm, "sel") == 1.0 && gnum(vm, "mv") == 1.0 && gnum(vm, "mv2") == 0.0 && gnum(vm, "tr") == 0.0);
-    CHECK(contains(run(vm, "t1.Is_Category()"), "GameObjectWrapper::Is_Category -- invalid number of parameters. Expected 1, got 0."));
-    CHECK(contains(run(vm, "t1.Is_Category(1)"), "GameObjectWrapper::Is_Category -- parameter 1 is not a valid string."));
+    CHECK(contains(run_stop(vm, "t1.Is_Category()"), "GameObjectWrapper::Is_Category -- invalid number of parameters. Expected 1, got 0."));
+    CHECK(contains(run_stop(vm, "t1.Is_Category(1)"), "GameObjectWrapper::Is_Category -- parameter 1 is not a valid string."));
     // Type wrapper data.
     CHECK(run(vm, "ht = Find_Object_Type('Hero_Ship') hero = ht.Is_Hero() and 1 or 0 nohero = Find_Object_Type('Tank').Is_Hero() and 1 or 0 "
                   "cr = ht.Get_Combat_Rating() tl = ht.Get_Tech_Level() bc = ht.Get_Build_Cost() sc = ht.Get_Score_Cost_Credits() "
@@ -485,7 +499,7 @@ static void test_queries(const Db& db) {
     CHECK(run(vm, "a1 = t1.Has_Ability('SPRINT') and 1 or 0 a2 = t1.Has_Ability('stealth') and 1 or 0 a3 = t1.Has_Ability('JET_PACK') and 1 or 0 "
                   "a4 = tank.Has_Ability('SPRINT') and 1 or 0 r1 = t1.Is_Ability_Ready('SPRINT') and 1 or 0") == "");
     CHECK(gnum(vm, "a1") == 1.0 && gnum(vm, "a2") == 1.0 && gnum(vm, "a3") == 0.0 && gnum(vm, "a4") == 0.0 && gnum(vm, "r1") == 1.0);
-    CHECK(contains(run(vm, "t1.Has_Ability(1)"), "GameObjectWrapper::Has_Ability -- invalid type for ability 1. Expected string."));
+    CHECK(contains(run_stop(vm, "t1.Has_Ability(1)"), "GameObjectWrapper::Has_Ability -- invalid type for ability 1. Expected string."));
 }
 
 static void test_spawn_and_state(const Db& db) {
@@ -521,9 +535,9 @@ static void test_spawn_and_state(const Db& db) {
     CHECK(said("Lock_Current_Orders - Squad is already locked.") == 1 && said("object Squaddie is not locked.") == 2);
     CHECK(run(vm, "sq.Despawn()") == "");
     CHECK(gnum(vm, "own") == 1.0 && gnum(vm, "tx") == 200.0 && gnum(vm, "par") == gnum(vm, "tid"));
-    CHECK(contains(run(vm, "Spawn_Unit(Find_Object_Type('Tank'), mk)"), "LuaSpawnUnitCommandClass -- Invalid number of parameters."));
-    CHECK(contains(run(vm, "Spawn_Unit('Tank', mk, p1)"), "LuaSpawnUnitCommandClass -- Invalid parameter for type."));
-    CHECK(contains(run(vm, "Spawn_Unit(Find_Object_Type('Tank'), mk, 1)"), "LuaSpawnUnitCommandClass -- Invalid parameter for player."));
+    CHECK(contains(run_stop(vm, "Spawn_Unit(Find_Object_Type('Tank'), mk)"), "LuaSpawnUnitCommandClass -- Invalid number of parameters."));
+    CHECK(contains(run_stop(vm, "Spawn_Unit('Tank', mk, p1)"), "LuaSpawnUnitCommandClass -- Invalid parameter for type."));
+    CHECK(contains(run_stop(vm, "Spawn_Unit(Find_Object_Type('Tank'), mk, 1)"), "LuaSpawnUnitCommandClass -- Invalid parameter for player."));
     // Despawn of a TEAM despawns the members, reverse order; the team stays.
     CHECK(run(vm, "team.Despawn() alive = team.Is_Valid() and 1 or 0 m1 = members[1].Is_Valid() and 1 or 0 "
                   "m2 = members[2].Is_Valid() and 1 or 0 cnt2 = team.Get_Contained_Object_Count()") == "");
@@ -553,9 +567,9 @@ static void test_spawn_and_state(const Db& db) {
                   "g.Despawn() gv = g.Is_Valid() and 1 or 0") == "");
     CHECK(gnum(vm, "gx") == 1.0 && gnum(vm, "gy") == 2.0 && gnum(vm, "gz") == 3.0 && gnum(vm, "go") == 1.0 &&
           gstr(vm, "gnil") == "nil" && gnum(vm, "gv") == 0.0);
-    CHECK(contains(run(vm, "Create_Generic_Object('Tank', 5, p1)"), "Could not deduce a creation position from parameter 2."));
-    CHECK(contains(run(vm, "Create_Generic_Object('Tank', t1, 5)"), "Invalid type for parameter 3. Expected player."));
-    CHECK(contains(run(vm, "Create_Generic_Object('Tank', t1)"), "Invalid number of parameters. Expected 3, got 2."));
+    CHECK(contains(run_stop(vm, "Create_Generic_Object('Tank', 5, p1)"), "Could not deduce a creation position from parameter 2."));
+    CHECK(contains(run_stop(vm, "Create_Generic_Object('Tank', t1, 5)"), "Invalid type for parameter 3. Expected player."));
+    CHECK(contains(run_stop(vm, "Create_Generic_Object('Tank', t1)"), "Invalid number of parameters. Expected 3, got 2."));
     // Hull / damage / invulnerability / cannot-be-killed / hardpoint.
     CHECK(run(vm, "h0 = tank.Get_Hull() tank.Take_Damage(100) h1 = tank.Get_Hull() tank.Make_Invulnerable(true) tank.Take_Damage(100) "
                   "h2 = tank.Get_Hull() tank.Make_Invulnerable(false) tank.Set_Cannot_Be_Killed(true) tank.Take_Damage(10000) "
@@ -587,9 +601,9 @@ static void test_spawn_and_state(const Db& db) {
         s.store.set_health(s.trooper2, before);
         s.bridge.take_damage = nullptr;
     }
-    CHECK(contains(run(vm, "t1.Take_Damage('a')"), "Take_Damage -- invalid type for parameter 1. Expected number."));
-    CHECK(contains(run(vm, "t1.Make_Invulnerable(1)"), "Make_Invulnerable -- invalid type for parameter 1. Expected boolean."));
-    CHECK(contains(run(vm, "t1.Make_Invulnerable()"), "Make_Invulnerable -- invalid number of parameters. Expected 1, got 0."));
+    CHECK(contains(run_stop(vm, "t1.Take_Damage('a')"), "Take_Damage -- invalid type for parameter 1. Expected number."));
+    CHECK(contains(run_stop(vm, "t1.Make_Invulnerable(1)"), "Make_Invulnerable -- invalid type for parameter 1. Expected boolean."));
+    CHECK(contains(run_stop(vm, "t1.Make_Invulnerable()"), "Make_Invulnerable -- invalid number of parameters. Expected 1, got 0."));
     // Script flags land in the bridge state.
     // (A suspended locomotor is not part of the movement lock, A1_READINGS §28.9; Can_Move is false for either.)
     CHECK(run(vm, "t1.Hide(true) t1.Set_Selectable(false) t1.Prevent_AI_Usage(true) t1.Prevent_All_Fire(true) "
@@ -607,19 +621,19 @@ static void test_spawn_and_state(const Db& db) {
     CHECK(s.bridge.state(2).hidden && gnum(vm, "pf") == 1.0 && gnum(vm, "sel") == 0.0 && gnum(vm, "mv") == 0.0);
     CHECK(run(vm, "t1.Override_Max_Speed(false) t1.Unlock_Current_Orders()") == "" && s.bridge.state(1).max_speed_override < 0.0f &&
           !s.bridge.state(1).orders_locked);
-    CHECK(contains(run(vm, "t1.Hide()"), "GameObjectWrapper::Hide -- Missing required boolean parameter."));
-    CHECK(contains(run(vm, "t1.Hide(1)"), "GameObjectWrapper::Hide -- Expected bool parameter."));
-    CHECK(contains(run(vm, "t1.Prevent_AI_Usage()"), "GameObjectWrapper::Prevent_AI_Usage -- Expected bool parameter."));
-    CHECK(contains(run(vm, "t1.Highlight()"), "GameObjectWrapper::Highlight -- invalid number of parameters. Expected 1 or 2."));
-    CHECK(contains(run(vm, "t1.Override_Max_Speed('x')"), "Override_Max_Speed -- Expected a number or boolean parameter."));
-    CHECK(contains(run(vm, "Hide_Object(t1)"), "LuaHideObject -- Expected gameobject pointer parameter 1, float parameter 2"));
+    CHECK(contains(run_stop(vm, "t1.Hide()"), "GameObjectWrapper::Hide -- Missing required boolean parameter."));
+    CHECK(contains(run_stop(vm, "t1.Hide(1)"), "GameObjectWrapper::Hide -- Expected bool parameter."));
+    CHECK(contains(run_stop(vm, "t1.Prevent_AI_Usage()"), "GameObjectWrapper::Prevent_AI_Usage -- Expected bool parameter."));
+    CHECK(contains(run_stop(vm, "t1.Highlight()"), "GameObjectWrapper::Highlight -- invalid number of parameters. Expected 1 or 2."));
+    CHECK(contains(run_stop(vm, "t1.Override_Max_Speed('x')"), "Override_Max_Speed -- Expected a number or boolean parameter."));
+    CHECK(contains(run_stop(vm, "Hide_Object(t1)"), "LuaHideObject -- Expected gameobject pointer parameter 1, float parameter 2"));
     // Teleport / facing.
     CHECK(run(vm, "t2.Teleport(Create_Position(7, 8, 9)) a, b2, c = t2.Get_Position().Get_XYZ() "
                   "t1.Teleport_And_Face(t2) d = t1.Get_Distance(t2) t1.Face_Immediate(Create_Position(7, 18, 9))") == "");
     CHECK(gnum(vm, "a") == 7.0 && gnum(vm, "b2") == 8.0 && gnum(vm, "c") == 9.0 && gnum(vm, "d") == 0.0);
     CHECK(s.store.facing(s.trooper1).x == 0.0f && s.store.facing(s.trooper1).y == 1.0f);
-    CHECK(contains(run(vm, "t1.Teleport_And_Face(Create_Position(1, 1, 1))"), "Expected game object for parameter 1, got position instead."));
-    CHECK(contains(run(vm, "t1.Teleport()"), "GameObjectWrapper::Teleport -- invalid number of parameters. Expected 1, got 0."));
+    CHECK(contains(run_stop(vm, "t1.Teleport_And_Face(Create_Position(1, 1, 1))"), "Expected game object for parameter 1, got position instead."));
+    CHECK(contains(run_stop(vm, "t1.Teleport()"), "GameObjectWrapper::Teleport -- invalid number of parameters. Expected 1, got 0."));
     {  // q6 t12 (L1_S4_REMAINING §3.4): with the tactical teleport hook, Teleport moves the unit there (facing kept)
         TacticalScriptHooks hk;
         objects::ObjectHandle moved{};
@@ -636,7 +650,7 @@ static void test_spawn_and_state(const Db& db) {
         CHECK(s.store.position(s.trooper2).x == 7.0f);  // the host moved it (here: nothing did)
         s.bridge.tactical = nullptr;
     }
-    CHECK(contains(run(vm, "t1.Face_Immediate()"), "Face_Immediate -- Missing required position or gameobject parameter."));
+    CHECK(contains(run_stop(vm, "t1.Face_Immediate()"), "Face_Immediate -- Missing required position or gameobject parameter."));
     // Change_Owner goes through the host hook.
     int32_t new_owner = -5;
     objects::ObjectHandle changed{};
@@ -646,7 +660,7 @@ static void test_spawn_and_state(const Db& db) {
         return true;
     };
     CHECK(run(vm, "t1.Change_Owner(p2)") == "" && changed == s.trooper1 && new_owner == 2);
-    CHECK(contains(run(vm, "t1.Change_Owner(5)"), "Change_Owner -- invalid type for parameter 1. Expected PlayerWrapper."));
+    CHECK(contains(run_stop(vm, "t1.Change_Owner(5)"), "Change_Owner -- invalid type for parameter 1. Expected PlayerWrapper."));
     // Set_Garrison_Spawn notifies the host (handle + value) and keeps the stored flag; bad calls don't notify.
     // (The hook-unset path already ran above: Set_Garrison_Spawn(true) only stored the flag.)
     int gs_calls = 0;
@@ -661,8 +675,8 @@ static void test_spawn_and_state(const Db& db) {
           !s.bridge.state(1).garrison_spawn);
     CHECK(run(vm, "t2.Set_Garrison_Spawn(true)") == "" && gs_calls == 2 && gs_obj == s.trooper2 && gs_value &&
           s.bridge.state(2).garrison_spawn);
-    CHECK(contains(run(vm, "t1.Set_Garrison_Spawn(1)"), "Set_Garrison_Spawn -- invalid type for parameter 1. Expected boolean."));
-    CHECK(contains(run(vm, "t1.Set_Garrison_Spawn()"), "Set_Garrison_Spawn -- invalid number of parameters. Expected 1, got 0."));
+    CHECK(contains(run_stop(vm, "t1.Set_Garrison_Spawn(1)"), "Set_Garrison_Spawn -- invalid type for parameter 1. Expected boolean."));
+    CHECK(contains(run_stop(vm, "t1.Set_Garrison_Spawn()"), "Set_Garrison_Spawn -- invalid number of parameters. Expected 1, got 0."));
     CHECK(gs_calls == 2);
     s.bridge.garrison_spawn_changed = nullptr;
     CHECK(run(vm, "t1.Set_Garrison_Spawn(true)") == "" && gs_calls == 2 && s.bridge.state(1).garrison_spawn);
@@ -685,22 +699,29 @@ static void test_dead_handles(const Db& db) {
     CHECK(gnum(vm, "rn") == 1.0 && vm.exit_requested());
     reset_script_threads(vm);
     CHECK(run(vm, "r = 1 r = victim.Attack_Target(t1) rn = r == nil and 1 or 0") == "" && gnum(vm, "rn") == 1.0 && !vm.exit_requested());
-    for (const char* m : {"Get_Position()", "Despawn()", "Take_Damage(1)", "Hide(true)", "Get_Hull()",
-                          "Is_Category('Infantry')", "Activate_Ability('SPRINT')"}) {
+    // q6 t11: a dead caller is silent in most methods (nothing returned, no message, no stop); the WarnNothing ones log
+    // "SCRIPT WARNING: GameObjectWrapper::<m> -- this object is dead!" and go on.
+    for (const char* m : {"Get_Position()", "Hide(true)", "Get_Hull()", "Is_Category('Infantry')", "Activate_Ability('SPRINT')"}) {
+        const size_t m0 = vm.messages().size();
+        CHECK(run(vm, std::string("nr = (function(...) return arg.n end)(victim.") + m + ")") == "" && gnum(vm, "nr") == 0.0 &&
+              vm.messages().size() == m0 && !vm.exit_requested());
+    }
+    for (const char* m : {"Despawn()", "Take_Damage(1)"}) {
         const std::string_view call(m);
         const std::string method(call.substr(0, call.find('(')));
-        const std::string e = run(vm, std::string("victim.") + m);
-        CHECK(contains(e, ("GameObjectWrapper::" + method + " -- this object is dead!").c_str()));
+        CHECK(run(vm, std::string("victim.") + m) == "" && !vm.exit_requested() &&
+              last_message_has(vm, ("SCRIPT WARNING: GameObjectWrapper::" + method + " -- this object is dead!").c_str()));
     }
     CHECK(run(vm, "Find_Nearest(victim)") == "" &&
           last_message_has(vm, "Find_Nearest - parameter 1 is already dead; cannot extract a position from it."));
-    CHECK(contains(run(vm, "t1.Get_Distance(victim)"), "could not extract a position from parameter 1."));
+    reset_script_threads(vm);
+    CHECK(contains(run_stop(vm, "t1.Get_Distance(victim)"), "could not extract a position from parameter 1."));
     CHECK(run(vm, "t1.Attack_Target(victim)") == "" && last_message_has(vm, "SCRIPT ERROR: GameObjectWrapper::Attack_Target -- Target is already dead."));
     CHECK(run(vm, "t1.Attack_Target(5)") == "" &&
           last_message_has(vm, "Attack_Target -- Parameter 1 is not a valid destination for unit Trooper"));
     reset_script_threads(vm);
-    CHECK(contains(run(vm, "t1.Teleport_And_Face(victim)"), "Teleport_And_Face -- Invalid game object given for parameter 1."));
-    CHECK(contains(run(vm, "Hide_Object(victim, 1)"), "LuaHideObject -- Invalid parameter 1, expected a game object"));
+    CHECK(contains(run_stop(vm, "t1.Teleport_And_Face(victim)"), "Teleport_And_Face -- Invalid game object given for parameter 1."));
+    CHECK(contains(run_stop(vm, "Hide_Object(victim, 1)"), "LuaHideObject -- Invalid parameter 1, expected a game object"));
     // Dead objects are skipped by every finder; dead before the flush already.
     CHECK(run(vm, "ff = Find_First_Object('Trooper').Get_Object_ID() fn = Find_Nearest(tank, 'Trooper').Get_Object_ID()") == "");
     CHECK(gnum(vm, "ff") == 1.0 && gnum(vm, "fn") == 1.0);
@@ -771,7 +792,7 @@ static void test_orders(const Db& db) {
     CHECK(run(vm, "t1.Turn_To_Face(Create_Position(0, 10, 0))") == "");
     CHECK(rec.cmds.back().payload.type() == EventType::Facing && rec.cmds.back().payload.ids("units") == std::vector<uint32_t>{1});
     CHECK(std::fabs(rec.cmds.back().payload.f("angle") - 90.0f) < 0.1f);
-    CHECK(contains(run(vm, "t1.Turn_To_Face()"), "Turn_To_Face -- invalid number of parameters. Expected 1, got 0."));
+    CHECK(contains(run_stop(vm, "t1.Turn_To_Face()"), "Turn_To_Face -- invalid number of parameters. Expected 1, got 0."));
     // Abilities: SetUnitAbilityMode / SetAbilityAutofire on the direct path.
     CHECK(run(vm, "t1.Activate_Ability('SPRINT') act = t1.Is_Ability_Active('SPRINT') and 1 or 0 rdy = t1.Is_Ability_Ready('SPRINT') and 1 or 0") == "");
     {
@@ -788,7 +809,7 @@ static void test_orders(const Db& db) {
     CHECK(run(vm, "t1.Set_Single_Ability_Autofire('STEALTH', true) af = t1.Is_Ability_Autofire('STEALTH') and 1 or 0") == "");
     CHECK(rec.cmds.back().payload.type() == EventType::SetAbilityAutofire && rec.cmds.back().payload.u("ability") == 48 &&
           gnum(vm, "af") == 1.0);
-    CHECK(contains(run(vm, "t1.Set_Single_Ability_Autofire('STEALTH')"), "Expected 2, got 1."));
+    CHECK(contains(run_stop(vm, "t1.Set_Single_Ability_Autofire('STEALTH')"), "Expected 2, got 1."));
     // Garrison / Leave_Garrison / Sell.
     CHECK(run(vm, "t1.Garrison(tank) t1.Leave_Garrison() tank.Sell()") == "");
     const size_t n = rec.cmds.size();
@@ -994,6 +1015,91 @@ static void test_wave1(const Db& db) {
     CHECK(run(vm, "Bunker.Destroy_Contained_Objects(0.5)") == "" && !s.store.alive(inside) && s.store.alive(tank_in));
 }
 
+// q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings").
+static size_t messages_with(LuaVm& vm, const char* text) {
+    size_t n = 0;
+    for (const std::string& m : vm.messages()) n += m.find(text) != std::string::npos ? 1u : 0u;
+    return n;
+}
+
+static void test_binding_error_model(const Db& db) {
+    {
+        Scene s(db);
+        LuaVm& vm = *s.vm;
+        // A binding error is not a Lua error: pcall reports success, the call returns no value, the code runs on.
+        CHECK(run(vm, "ok, e = pcall(function() return t1.Is_Category() end) okv = ok and 1 or 0 "
+                      "ne = (function(...) return arg.n end)(t1.Is_Category()) after = 1") == "");
+        CHECK(gnum(vm, "okv") == 1.0 && gstr(vm, "e") == "<nil>" && gnum(vm, "ne") == 0.0 && gnum(vm, "after") == 1.0);
+        CHECK(vm.exit_requested() &&
+              last_message_has(vm, "SCRIPT ERROR: GameObjectWrapper::Is_Category -- invalid number of parameters. Expected 1, got 0."));
+        reset_script_threads(vm);
+        // The error ends the script at the end of the pass: the erring thread runs to its yield, no other thread is resumed
+        // and every thread is gone afterwards.
+        CHECK(run(vm, "function A() t1.Has_Property() a_after = 1 coroutine.yield(true) a_never = 1 end "
+                      "function B() b_ran = 1 end Create_Thread('A') Create_Thread('B')") == "");
+        vm.service_threads();
+        CHECK(gnum(vm, "a_after") == 1.0 && gstr(vm, "a_never") == "<nil>" && gstr(vm, "b_ran") == "<nil>");
+        CHECK(vm.exit_requested() && vm.thread_count() == 0 && vm.errors().empty());
+        vm.service_threads();  // nothing left to resume, the flag stays
+        CHECK(vm.exit_requested() && gstr(vm, "a_never") == "<nil>");
+        reset_script_threads(vm);
+
+        // nil arguments count: Is_Category('Infantry', nil) has two arguments.
+        CHECK(run(vm, "r = t1.Is_Category('Infantry', nil)") == "" && vm.exit_requested() &&
+              last_message_has(vm, "Is_Category -- invalid number of parameters. Expected 1, got 2."));
+        reset_script_threads(vm);
+        // Argument counts from the code, not from the stale messages.
+        CHECK(run(vm, "FindTarget(t1, 'P', 'A', 1, 2, 3)") == "" && vm.exit_requested() &&
+              last_message_has(vm, "FindTarget -- invalid number of parameters"));
+        reset_script_threads(vm);
+        CHECK(run(vm, "GiveDesireBonus(nil, 'G', t1, 1)") == "" && vm.exit_requested() &&
+              last_message_has(vm, "Give_Desire_Bonus : invalid number of parameters. Expected 4, got 4."));
+        reset_script_threads(vm);
+        CHECK(run(vm, "EvaluatePerception('Is_Campaign')") == "" && vm.exit_requested() &&
+              last_message_has(vm, "Evaluate_Perception: Invalid number of parameters. Expected 2 or 3, got 1."));
+        reset_script_threads(vm);
+        const size_t before = vm.messages().size();
+        CHECK(run(vm, "Set_Cinematic_Target_Key(t1, 0, 0, 0, 0, 0, 0, 0, 0)") == "" && !vm.exit_requested() &&
+              vm.messages().size() == before);  // 9 arguments: accepted
+        CHECK(run(vm, "Set_Cinematic_Target_Key(t1, 0, 0)") == "" && vm.exit_requested());
+        reset_script_threads(vm);
+
+        // Warnings log and continue (no flag).
+        CHECK(run(vm, "Point_Camera_At(5) w1 = 1") == "" && !vm.exit_requested() && gnum(vm, "w1") == 1.0 &&
+              last_message_has(vm, "SCRIPT WARNING: LuaPointCamera -- Expected position parameter 1"));
+
+        // Dead wrappers: silent by default, Is_Valid false, the listed errors and warnings.
+        CHECK(run(vm, "victim = t2") == "");
+        CHECK(s.store.destroy(s.trooper2));
+        const size_t m0 = vm.messages().size();
+        CHECK(run(vm, "np = (function(...) return arg.n end)(victim.Get_Position()) nh = (function(...) return arg.n end)(victim.Get_Hull()) "
+                      "nc = (function(...) return arg.n end)(victim.Is_Category('Infantry')) vv = tostring(victim.Is_Valid())") == "");
+        CHECK(gnum(vm, "np") == 0.0 && gnum(vm, "nh") == 0.0 && gnum(vm, "nc") == 0.0 && !gtrue(vm, "vv") &&
+              gstr(vm, "vv") == "false");
+        CHECK(!vm.exit_requested() && vm.messages().size() == m0);
+        CHECK(run(vm, "nd = (function(...) return arg.n end)(victim.Despawn()) td = victim.Get_Time_Till_Dead()") == "" && !vm.exit_requested());
+        CHECK(gnum(vm, "nd") == 0.0 && gnum(vm, "td") == 0.0 &&
+              messages_with(vm, "SCRIPT WARNING: GameObjectWrapper::Despawn -- this object is dead!") == 1 &&
+              last_message_has(vm, "SCRIPT WARNING: GameObjectWrapper::Get_Time_Till_Dead -- this object is dead!"));
+        CHECK(run(vm, "dd = victim.Get_Distance(t1)") == "" && vm.exit_requested() &&
+              last_message_has(vm, "SCRIPT ERROR: GameObjectWrapper::Get_Distance -- this object is already dead"));
+        reset_script_threads(vm);
+    }
+    {
+        // The mode gate comes before the dead-wrapper check: a dead object's Get_Hull in a galactic mode is an error.
+        Scene s(db, objects::ModeKind::Galactic);
+        LuaVm& vm = *s.vm;
+        CHECK(run(vm, "victim = t2") == "");
+        CHECK(s.store.destroy(s.trooper2));
+        CHECK(run(vm, "h = victim.Get_Hull() after = 1") == "" && gnum(vm, "after") == 1.0 && vm.exit_requested() &&
+              last_message_has(vm, "SCRIPT ERROR: GameObjectWrapper::Get_Hull -- this command is only supported in tactical modes"));
+        reset_script_threads(vm);
+        CHECK(run(vm, "Zoom_Camera(1, 2)") == "" && vm.exit_requested() &&
+              last_message_has(vm, "SCRIPT ERROR: Zoom_Camera -- this command is only supported in tactical modes"));
+        reset_script_threads(vm);
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     log::set_min_level(log::Level::Warn);
@@ -1007,6 +1113,7 @@ int main() {
     test_stage3(db);
     test_spawn_and_state(db);
     test_dead_handles(db);
+    test_binding_error_model(db);
     test_wave1(db);
 #if ALAMO_LUA_HAVE_COMMANDS
     test_orders(db);

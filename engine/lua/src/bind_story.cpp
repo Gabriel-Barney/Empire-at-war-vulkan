@@ -152,11 +152,11 @@ std::string type_display_name(Call& c, const StoryModel* m, objects::TypeIndex t
 // (StoryTable::story_event, table order; no player filter, no first-match stop); a dead object goes as "no object".
 int g_story_event(Call& c) {
     if (c.nargs < 1 || c.nargs > 2)
-        return c.fail("StoryEvent -- invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("StoryEvent -- invalid type for parameter 1. Expected string");
+        return c.script_error_stop("StoryEvent -- invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("StoryEvent -- invalid type for parameter 1. Expected string");
     const detail::Ud* obj = c.nargs == 2 ? c.userdata(2, detail::cls_game_object()) : nullptr;
     if (c.nargs == 2 && !lua_isnil(c.L, c.idx(2)) && !obj)
-        return c.fail("StoryEvent -- invalid type for parameter 2. Expected game object.");
+        return c.script_error_stop("StoryEvent -- invalid type for parameter 2. Expected game object.");
     StoryModel* m = story(c);
     if (!m) {
         no_story(c, "Story_Event");
@@ -178,8 +178,8 @@ int g_story_event(Call& c) {
 // table) - by the CRC-32 of the name as passed: case and path must match the Story_Plots text, no ".xml" is added. The
 // table is unique, so at most one plot matches. Not found: warning "Get_Story_Plot -- plot %s not found.", no value.
 int g_get_story_plot(Call& c) {
-    if (c.nargs != 1) return c.fail("Get_Story_Plot -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("Get_Story_Plot -- invalid type for parameter 1. Expected string.");
+    if (c.nargs != 1) return c.script_error_stop("Get_Story_Plot -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("Get_Story_Plot -- invalid type for parameter 1. Expected string.");
     const StoryModel* m = story(c);
     const std::string_view name = c.string(1);
     if (const StoryTable* t = story_table(c.L); t && t->set_count() != 0) {
@@ -206,10 +206,10 @@ int g_get_story_plot(Call& c) {
 // raised by the host (StoryModel::raise_ai_flag) per (player, name, location); reset clears on read.
 int g_check_story_flag(Call& c) {
     if (c.nargs != 4)
-        return c.fail("Check_AI_Story_Flag -- invalid number of parameters. Expected between 4, got %d.", c.nargs);
+        return c.script_error_stop("Check_AI_Story_Flag -- invalid number of parameters. Expected between 4, got %d.", c.nargs);
     const detail::Ud* player = c.userdata(1, detail::cls_player());
-    if (!player) return c.fail("Check_AI_Story_Flag -- invalid type for parameter 1. Expected player");
-    if (!c.is_string(2)) return c.fail("Check_AI_Story_Flag -- invalid type for parameter 2. Expected string");
+    if (!player) return c.script_error_stop("Check_AI_Story_Flag -- invalid type for parameter 1. Expected player");
+    if (!c.is_string(2)) return c.script_error_stop("Check_AI_Story_Flag -- invalid type for parameter 2. Expected string");
     const detail::Ud* loc = c.userdata(3, detail::cls_game_object());
     const bool reset = lua_toboolean(c.L, c.idx(4)) != 0;
     StoryModel* m = story(c);
@@ -219,10 +219,10 @@ int g_check_story_flag(Call& c) {
 
 // Add_Objective(text_id, boolean). [inferred] the boolean is not modelled.
 int g_add_objective(Call& c) {
-    if (c.nargs != 2) return c.fail("Add_Objective -- invalid number of parameters. Expected 2, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("Add_Objective -- invalid type for parameter 1. Expected string.");
+    if (c.nargs != 2) return c.script_error_stop("Add_Objective -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("Add_Objective -- invalid type for parameter 1. Expected string.");
     if (lua_type(c.L, c.idx(2)) != LUA_TBOOLEAN)
-        return c.fail("Add_Objective -- invalid type for parameter 2. Expected boolean.");
+        return c.script_error_stop("Add_Objective -- invalid type for parameter 2. Expected boolean.");
     StoryModel* m = story(c);
     if (!m) {
         no_story(c, "Add_Objective");
@@ -234,37 +234,37 @@ int g_add_objective(Call& c) {
 
 // Add_Radar_Blip(object, name). [inferred] a blip of the same name is replaced.
 int g_add_radar_blip(Call& c) {
-    if (c.nargs != 2) return c.fail("Add_Radar_Blip -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+    if (c.nargs != 2) return c.script_error_stop("Add_Radar_Blip -- invalid number of parameters. Expected 2, got %d.", c.nargs);
     const detail::Ud* o = c.userdata(1, detail::cls_game_object());
     if (!o || !detail::object_alive(*c.vm, *o))
-        return c.fail("Add_Radar_Blip -- could not deduce a position from parameter 1.");
-    if (!c.is_string(2)) return c.fail("Add_Radar_Blip -- invalid type for parameter 2. Expected string.");
+        return c.script_error_stop("Add_Radar_Blip -- could not deduce a position from parameter 1.");
+    if (!c.is_string(2)) return c.script_error_stop("Add_Radar_Blip -- invalid type for parameter 2. Expected string.");
     if (StoryModel* m = story(c)) m->add_blip(c.string(2), o->id);
     return 0;
 }
 
 int g_remove_radar_blip(Call& c) {
-    if (c.nargs != 1) return c.fail("Remove_Radar_Blip -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("Remove_Radar_Blip -- invalid type for parameter 1. Expected strng.");
+    if (c.nargs != 1) return c.script_error_stop("Remove_Radar_Blip -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("Remove_Radar_Blip -- invalid type for parameter 1. Expected strng.");
     if (StoryModel* m = story(c)) m->remove_blip(c.string(1));
     return 0;
 }
 
 int g_add_planet_highlight(Call& c) {
     if (c.nargs != 2)
-        return c.fail("Add_Planet_Highlight -- invalid number of parameters. Expected 2, got %d.", c.nargs);
+        return c.script_error_stop("Add_Planet_Highlight -- invalid number of parameters. Expected 2, got %d.", c.nargs);
     const detail::Ud* o = c.userdata(1, detail::cls_game_object());
     if (!o || !detail::object_alive(*c.vm, *o))
-        return c.fail("Add_Planet_Highlight -- invalid type for parameter 1. Expected game object.");
-    if (!c.is_string(2)) return c.fail("Add_Planet_Highlight -- invalid type for parameter 2. Expected string.");
+        return c.script_error_stop("Add_Planet_Highlight -- invalid type for parameter 1. Expected game object.");
+    if (!c.is_string(2)) return c.script_error_stop("Add_Planet_Highlight -- invalid type for parameter 2. Expected string.");
     if (StoryModel* m = story(c)) m->add_highlight(c.string(2), o->id);
     return 0;
 }
 
 int g_remove_planet_highlight(Call& c) {
     if (c.nargs != 1)
-        return c.fail("Remove_Planet_Highlight -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("Remove_Planet_Highlight -- invalid type for parameter 1. Expected strng.");
+        return c.script_error_stop("Remove_Planet_Highlight -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("Remove_Planet_Highlight -- invalid type for parameter 1. Expected strng.");
     if (StoryModel* m = story(c)) m->remove_highlight(c.string(1));
     return 0;
 }
@@ -275,8 +275,8 @@ int m_plot_is_valid(Call& c) { return push_bool(c, self_plot_valid(c)); }
 
 int m_plot_get_event(Call& c) {
     if (c.nargs != 1)
-        return c.fail("StoryPlotWrapper::Get_Event -- invalid number of parameters. Expected 1, got %d.", c.nargs);
-    if (!c.is_string(1)) return c.fail("StoryPlotWrapper::Get_Event -- invalid type for parameter 1. Expected string.");
+        return c.script_error_stop("StoryPlotWrapper::Get_Event -- invalid number of parameters. Expected 1, got %d.", c.nargs);
+    if (!c.is_string(1)) return c.script_error_stop("StoryPlotWrapper::Get_Event -- invalid type for parameter 1. Expected string.");
     if (!self_plot_valid(c)) return push_nil(c);
     const uint32_t plot = static_cast<uint32_t>(c.self->id);
     const uint32_t e = self_model(c)->find_event(plot, c.string(1));

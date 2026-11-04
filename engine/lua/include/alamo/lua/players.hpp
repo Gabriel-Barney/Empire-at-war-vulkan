@@ -175,6 +175,10 @@ public:
     int32_t tech_level(int32_t p) const;
     void set_tech_level(int32_t p, int32_t level);
     int32_t find_faction_player(std::string_view faction) const;  // lowest id, -1 if none
+    // q6 t11 (docs/re/LUA_API.md "Lookups", Find_Player): 1 when `faction` names a faction of the game data (the attached
+    // GalacticSim's FactionFiles list, case-insensitive), 0 when it does not, -1 when the world has no faction list (no
+    // GalacticSim attached) [port: Find_Player then cannot tell an unknown faction from one without a player].
+    int faction_known(std::string_view faction) const;
 
     // ---- diplomacy ----
     PlayerRelation relation(int32_t a, int32_t b) const;

@@ -2,10 +2,14 @@
 //
 // Error discipline: Lua 5.0 raises errors with longjmp, which skips C++ destructors. So no Lua error
 // is ever raised while a C++ object with a destructor is alive in a binding:
-//   * binding implementations (ImplFn) never call lua_error / luaL_check*; they write the message
-//     into Call::err (Call::fail) and return -1, or throw a C++ exception (caught by the dispatcher);
-//   * the dispatcher's outermost frame (no C++ locals) raises the Lua error after the
-//     implementation has returned and destroyed everything.
+//   * binding implementations (ImplFn) never call lua_error / luaL_check*. q6 t11 (docs/re/LUA_API.md "Binding error
+//     model across all bindings"): a binding never raises a Lua error at all. An error-level diagnostic is
+//     Call::script_error_stop (log, set the script's stop flag, return no values), a warning Call::script_warning (log
+//     only); the legacy Call::fail (writes Call::err, returns -1: the dispatcher raises it, pcall catches it) is no
+//     longer used by any binding;
+//   * the dispatcher's outermost frame (no C++ locals) raises the Lua error for the port's own failures only (an
+//     unbound binding, a C++ exception, a legacy fail()) after the implementation has returned and destroyed
+//     everything.
 // Only allocation failures inside lua_push* can still longjmp out of an implementation.
 #pragma once
 #include <cstdint>
@@ -138,12 +142,30 @@ const std::vector<std::string>& class_names();
 uint32_t class_id(std::string_view cls);
 uint32_t parent_class(uint32_t cls);  // kNoClass at the root (LuaUserVar)
 
+// q6 t11 (LUA_API.md "Mode gates", "Dead or null wrappers"): what the dispatcher checks before the implementation runs.
+// The mode gate is tested first (an error), then the dead-wrapper rule of a GameObjectWrapper method.
+enum class ModeGate : uint8_t {
+    None,
+    Tactical,  // error in a galactic mode (the VM's store, or the parent store for a parent-mode wrapper)
+    Galactic,  // error in a tactical mode
+};
+enum class DeadRule : uint8_t {
+    Silent,       // the default: returns nothing, no message, no flag
+    Binding,      // the implementation tests it (Is_Valid = false, the unit orders, the proximity events)
+    Error,        // script error "this object is already dead" (Call::script_error_stop)
+    WarnNothing,  // warning "this object is dead!", returns nothing
+    WarnZero,     // warning "this object is dead!", returns 0
+};
+
 struct MethodSlot {
     uint32_t row = kNoBinding;  // binding row, kNoBinding for extra (implemented-only) methods
     uint32_t cls = kNoClass;    // owner
     ImplFn fn = nullptr;        // nullptr = unbound stub
     std::string label;          // "GameObjectWrapper.Get_Position"
+    ModeGate gate = ModeGate::None;
+    DeadRule dead = DeadRule::Silent;  // GameObjectWrapper methods only
 };
+ModeGate global_gate(uint32_t row);
 const std::vector<MethodSlot>& method_slots();
 // Walks cls, its parents, then LuaUserVar. Returns an index into method_slots() or kNoBinding.
 uint32_t find_method(uint32_t cls, std::string_view name);
@@ -216,15 +238,19 @@ struct Call {
         return s ? std::string_view(s, lua_strlen(L, idx(i))) : std::string_view();
     }
     const Ud* userdata(int i, uint32_t cls) const;  // nullptr unless an engine userdata of `cls`
-    int fail(const char* fmt, ...);                 // writes err, returns -1
-    // q6 t03 (LUA_API.md "What an error does to the script"): the original's script error 0x248190. Logs "SCRIPT ERROR:
+    // Legacy (unwinds): writes err, returns -1; the dispatcher raises it as a Lua error that pcall catches. q6 t11: not
+    // the original's behaviour; no binding uses it (kept for the port's own failures).
+    int fail(const char* fmt, ...);
+    // q6 t03 / t11 (LUA_API.md "What an error does to the script", "Binding error model across all bindings"): the
+    // original's script error 0x248190, used for every error-level diagnostic of every binding. Logs "SCRIPT ERROR:
     // <text>" and sets the script's exited flag (+0x121, LuaVm::Impl::exit_requested, the flag ScriptExit sets), with no
     // Lua error: the binding returns nothing (returns 0), pcall succeeds, the calling thread runs on to its next yield,
     // and service_threads then resumes no other thread of the script and kills them all at the end of the pass; the
-    // hosts release the script on exit_requested(). Used by the GameObjectWrapper unit order bindings only so far: the
-    // other bindings either unwind (fail()) or log "SCRIPT ERROR" through their family's script_error() helper without
-    // the flag (open item: move those to this path).
+    // hosts release the script on exit_requested(). A binding that carries on after an error (a loop entry, a defaulted
+    // argument) ignores the return value.
     int script_error_stop(const char* fmt, ...);
+    // The original's warning 0x248620: logs "SCRIPT WARNING: <text>", sets no flag, returns 0 (nothing).
+    int script_warning(const char* fmt, ...);
 };
 
 // Pushers. Wrappers are cached per VM: the same engine entity gives the SAME userdata every time, so

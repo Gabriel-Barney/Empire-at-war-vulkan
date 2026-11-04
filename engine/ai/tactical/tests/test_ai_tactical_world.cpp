@@ -476,7 +476,7 @@ function MainForce_Thread()
   ScriptExit()
 end
 )";
-// S7 t21 (AI_TACTICAL §7.3.1): Prepare_Ambush argument errors (nil), a "front" ambush whose every point is too dangerous
+// S7 t21 (AI_TACTICAL §7.3.1): Prepare_Ambush argument errors (nothing returned, the plan stops: q6 t11), a "front" ambush whose every point is too dangerous
 // (tolerance -1: finished at once with result false), then a "BACK" ambush (case-insensitive) with a large tolerance: the
 // group flies to 1000 behind the target (facing +x), re-plans after 150 frames while flying, and finishes when every
 // mover's movement finished (Unit_Move_Finished each) or on the target's / members' deaths.
@@ -496,16 +496,18 @@ function MainForce_Thread()
   Moved = 0
   BlockOnCommand(MainForce.Produce_Force())
   if not TestValid(Target) then ScriptExit() end
-  local e1 = MainForce.Prepare_Ambush(Target, "back", 1000)
-  local e2 = MainForce.Prepare_Ambush(Target, "sideways", 1000, 500)
-  local e3 = MainForce.Prepare_Ambush(Target, "back", -5, 500)
-  local e4 = MainForce.Prepare_Ambush(MainForce, "back", 1000, 500)
   local nb = MainForce.Prepare_Ambush(Target, "front", 1000, -1)
   local nopoint = nb ~= nil and nb.IsFinished() and nb.Result() == false
   local b = MainForce.Prepare_Ambush(Target, "BACK", 1000, 1.0e9)
   local imm = b ~= nil and b.IsFinished()
   BlockOnCommand(b, 90)
   Reported = true
+  -- q6 t11: a binding error stops the plan at the end of this pass (no unwinding), so the errors come last, just
+  -- before the report (which raises in the same pass)
+  local e1 = MainForce.Prepare_Ambush(Target, "back", 1000)
+  local e2 = MainForce.Prepare_Ambush(Target, "sideways", 1000, 500)
+  local e3 = MainForce.Prepare_Ambush(Target, "back", -5, 500)
+  local e4 = MainForce.Prepare_Ambush(MainForce, "back", 1000, 500)
   Report(string.format("AMBUSH player=%d errors=%s nopoint=%s imm=%s fin=%s res=%s moved=%d", PlayerObject.Get_ID(),
     tostring(e1 == nil and e2 == nil and e3 == nil and e4 == nil), tostring(nopoint), tostring(imm),
     tostring(b ~= nil and b.IsFinished()), tostring(b ~= nil and b.Result()), Moved or 0))

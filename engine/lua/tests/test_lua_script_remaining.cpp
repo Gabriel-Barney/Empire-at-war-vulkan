@@ -58,6 +58,20 @@ static std::string run(LuaVm& vm, const std::string& code) {
     if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
     return {};
 }
+// q6 t11 (docs/re/LUA_API.md "Binding error model across all bindings"): a binding error does not unwind; it logs
+// "SCRIPT ERROR: ..." and sets the script's stop flag. run_stop() reports those lines as its result (a Lua error as
+// before) and clears the flag, so the next snippet runs on a live script.
+static std::string run_stop(LuaVm& vm, const std::string& code) {
+    std::string err;
+    const size_t m0 = vm.messages().size();
+    if (!vm.run(code, "test", &err)) return err.empty() ? "error" : err;
+    if (!vm.exit_requested()) return {};
+    std::string out;
+    for (size_t i = m0; i < vm.messages().size(); ++i)
+        if (vm.messages()[i].rfind("SCRIPT ERROR: ", 0) == 0) out += vm.messages()[i] + "\n";
+    reset_script_threads(vm);
+    return out.empty() ? std::string("stop") : out;
+}
 static bool gtrue(LuaVm& vm, const char* name) {
     lua_State* L = vm.state();
     lua_pushstring(L, name);
@@ -539,7 +553,7 @@ static void test_object_methods(const Db& db) {
     // Get_Energy is tactical only.
     Env gal(db, objects::ModeKind::Galactic);
     gal.global("Ship", make(gal.store, db.t("Ship"), 0, {0, 0, 0}));
-    CHECK(run(*gal.vm, "Ship.Get_Energy()") == "" && last_message_has(*gal.vm, "only valid in tactical mode"));
+    CHECK(run(*gal.vm, "Ship.Get_Energy()") == "" && gal.vm->exit_requested() && last_message_has(*gal.vm, "Get_Energy -- only valid in tactical mode"));
 }
 
 static void test_player_methods(const Db& db) {
@@ -588,8 +602,8 @@ static void test_task_forces(const Db& db) {
     CHECK(run(vm, "a = TF.Add_Force(Ship); n = TF.Get_Force_Count(); ty = TF.Get_Type_Of_Unit(2).Get_Name(); "
                   "t0 = TF.Get_Type_Of_Unit(0).Get_Name(); t9 = TF.Get_Type_Of_Unit(9); tn = TF.Get_Type_Of_Unit(-1)") == "");
     CHECK(gnil(vm, "a") && gnum(vm, "n") == 3.0 && gstr(vm, "ty") == "Ship" && gstr(vm, "t0") == "Trooper" && gnil(vm, "t9") && gnil(vm, "tn"));
-    CHECK(run(vm, "TF.Add_Force(3)").find("expected a GameObjectClass") != std::string::npos);
-    CHECK(run(vm, "TF.Get_Type_Of_Unit('x')").find("expected an integer index") != std::string::npos);
+    CHECK(run_stop(vm, "TF.Add_Force(3)").find("expected a GameObjectClass") != std::string::npos);
+    CHECK(run_stop(vm, "TF.Get_Type_Of_Unit('x')").find("expected an integer index") != std::string::npos);
     // Opportunity-fire subscriptions: weapon hard-point types only.
     CHECK(run(vm, "TF.Add_Opportunity_Fire_Event_Subscription('HARD_POINT_WEAPON_LASER'); "
                   "TF.Add_Opportunity_Fire_Event_Subscription('hard_point_weapon_torpedo')") == "");
@@ -629,8 +643,8 @@ static void test_task_forces(const Db& db) {
         CHECK(s1 && s2 && s3 && s1->targeting_priorities == "Trooper_Set" && s2->targeting_priorities == "Trooper_Set" &&
               s3->targeting_priorities == "Capital_Set");
     }
-    CHECK(run(vm, "TF.Set_Targeting_Priorities()").find("Expected 1 or 2, got 0") != std::string::npos);
-    CHECK(run(vm, "TF.Set_Targeting_Priorities('a', 3)").find("parameter 2. Expected string.") != std::string::npos);
+    CHECK(run_stop(vm, "TF.Set_Targeting_Priorities()").find("Expected 1 or 2, got 0") != std::string::npos);
+    CHECK(run_stop(vm, "TF.Set_Targeting_Priorities('a', 3)").find("parameter 2. Expected string.") != std::string::npos);
     // Find_Closest_Enemy.
     CHECK(run(vm, "ce = TF.Find_Closest_Enemy('Infantry'); ca = TF.Find_Closest_Enemy(); cx = TF.Find_Closest_Enemy('Fighter')") == "");
     CHECK(gid(vm, "ce") == e.store.id(enemy_near) && gid(vm, "ca") == e.store.id(enemy_ship) && gnil(vm, "cx"));
@@ -886,7 +900,7 @@ static void test_tactical_perception(const Db& db) {
     CHECK(gnum(vm, "a") == 7.5 && gnum(vm, "b") == 7.5 && gnum(vm, "c") == 7.5 && gnil(vm, "d") && th.calls == 4);
     CHECK(th.name == "Missing" && th.player == 1 && th.target == -1 && th.tf == -1);
     CHECK(run(vm, "EvaluatePerception('X', P, TF)") == "" && th.tf == 3 && th.target == -1);
-    CHECK(run(vm, "EvaluatePerception(1, P)").find("Expected string") != std::string::npos);
+    CHECK(run_stop(vm, "EvaluatePerception(1, P)").find("Expected string") != std::string::npos);
     // S7 t20 (AI_TACTICAL §7.3.2): Move_To argument errors are script errors (logged, no unwind) answering nil.
     CHECK(run(vm, "m1 = TF.Move_To()") == "" && gnil(vm, "m1") && last_message_has(vm, "SCRIPT ERROR: No destination set for TaskForce"));
     CHECK(run(vm, "m2 = TF.Move_To(nil)") == "" && gnil(vm, "m2") &&
@@ -935,7 +949,7 @@ static void test_l1_system_hooks(const Db& db) {
     CHECK(run(vm, "r = Ship.Hyperspace_Away(); Ship.Hyperspace_Away(false)") == "" && gnil(vm, "r"));
     const std::string sid = std::to_string(e.store.id(ship));
     CHECK(jumps == (std::vector<std::string>{sid + ":0:1", sid + ":0:0"}));
-    CHECK(run(vm, "Prop.Hyperspace_Away()").find("no locomotor") != std::string::npos);
+    CHECK(run_stop(vm, "Prop.Hyperspace_Away()").find("no locomotor") != std::string::npos);
     // Is_In_*: the host's per-object answer; -1 -> the point test.
     e.hooks.object_in_field = [ship](ObjectHandle h, uint32_t kind) { return h == ship ? (kind == kFieldNebula ? 1 : 0) : -1; };
     CHECK(run(vm, "a = Ship.Is_In_Nebula(); b = Ship.Is_In_Ion_Storm(); c = Prop.Is_In_Nebula()") == "");
@@ -980,7 +994,7 @@ static void test_l1_system_hooks(const Db& db) {
     CHECK(run(lv, "P.Disable_Bombing_Run(true); P.Disable_Orbital_Bombardment(false); P.Remove_Orbital_Bombardment(true)") == "");
     CHECK(sw == (std::vector<std::string>{"run 0 on", "bomb 0 off", "remove 0 on"}) && world.states()[0].bombing_run_disabled &&
           world.states()[0].orbital_bombardment_removed);
-    CHECK(run(lv, "P.Disable_Bombing_Run(1)").find("Expected boolean.") != std::string::npos && sw.size() == 3);
+    CHECK(run_stop(lv, "P.Disable_Bombing_Run(1)").find("Expected boolean.") != std::string::npos && sw.size() == 3);
     attach_player_world(lv, nullptr);
 #endif
 }
