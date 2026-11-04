@@ -229,7 +229,9 @@ Next, for stats screens and mods like TR:
    when it has exited or errored. Mods may act on the sim from here, so keep it at that fixed point in the frame and
    keep `GameRandom.Free_Random` on its own stream.
 6. Save: the port's own format only needs the GlobalValue store (already saved) and, if the stats screens are wanted
-   across a load, the script's tables; otherwise re-create the script on load and accept empty stats.
+   across a load, the script's tables; otherwise re-create the script on load and accept empty stats. **Superseded
+   by LUA_SAVE.md (q6 t19):** the port saves the whole script state (`scoring` chunk, LUA_SAVE §6), so stats,
+   `LastService` and the threads survive a load.
 
 Can wait / skip: Get_CRC (MP only), the debug file-watcher reload, the `from save` attach path.
 

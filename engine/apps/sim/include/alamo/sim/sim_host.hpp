@@ -438,6 +438,12 @@ private:
     bool read_globals(ByteReader& r);
     void write_spatial(ByteWriter& w) const;
     bool read_spatial(ByteReader& r);
+    // q6 t19: "scoring" (the GameScoring script, LUA_SAVE.md) while a scoring script is configured; "object_scripts"
+    // (ObjectScriptHost::write / read) while the object-script host exists. Write: false (+ *err) when a VM's Lua state
+    // cannot be saved.
+    bool scoring_configured() const;
+    bool write_scoring(ByteWriter& w, std::string* err) const;
+    bool read_scoring(ByteReader& r);
     bool has_tactical_mode() const;
     // N1 stage 2: load pass 1 (before the rebuild) reads "frame" / "objects" for the bottom `load_base_depth_` modes
     // only (0 = every mode, the depth must match).

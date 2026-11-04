@@ -2,8 +2,8 @@
 
 Question: what does retail FoC write into a save game for a live Lua script (object script, story plot script, AI plan
 script, GameScoring script and the two other AI owners), which Lua values survive, what is rebuilt instead, and how is
-the state restored on load? The port refuses saves while object scripts are live (OBJECT_SCRIPTS §7.3 "Saves"); this
-document is what it needs to stop refusing.
+the state restored on load? The port refused saves while object scripts were live (OBJECT_SCRIPTS §7.2); this
+document is what it needed to stop refusing (done in q6 t19, §6).
 
 Answer in one paragraph:
 - Every script owner saves the same thing: the script **file name** and one **LuaScriptClass state block**
@@ -325,3 +325,20 @@ The image merges into the fresh state (table 1 = existing globals, nil values sk
 3. The +0x30 record int width (the decompile drops the size argument of micro 7; the reader stores 4 bytes) and the
    unsaved +0x38 start argument (only matters for a thread created but never resumed before the save). [L]
 4. What the AI plan's LuaVars +0x50 / +0x58 / +0xA0 and the +0x90 sub-object are (AI owner only). [L]
+
+---
+
+## 6. Port status (q6 t19, 2026-11-04)
+
+The port's own format (N1), matching the behaviour above, not retail's bytes:
+
+| item | port |
+|---|---|
+| Image | `LuaVm::write` / `read` (`engine/lua/src/vm_persist.cpp`, unchanged, version 1): the whole heap. A superset of §3: **upvalues, closure environments, identity across threads, `coroutine.create` threads and command objects in locals are kept** (the §4.2 port notes' recommended choice; TR's deepcore closures and the `test_lua_save` lockstep tests need them). A light userdata outside the registry attachments refuses the save (retail writes garbage, §3.2) |
+| Block (§2) | `engine/lua/include/alamo/lua/script_save.hpp` (`kScriptBlockVersion` 1): name, the VM options, thread records (id, start function, started / killed) and the next id, the image, an FNV-1a checksum. `read_script_block` checks name / options and, for `ScriptLoad::FromSave`, that the target ran nothing (`LuaVm::fresh`); the restored thread records must equal the header's. Test: `alamo_lua_script_save_tests` |
+| Story plots | `story.lua` chunk version 4 (was 3: a bare `LuaVm` image per plot): a block per plot, read with `ScriptLoad::Any` into the rebuilt plot VMs (their state is replaced whole) |
+| GameScoring | new `scoring` chunk (`SimHost::write_scoring`): the block, the VM's own player world, queued mode-start events, the tapped events, the failed flag and counters. Before q6 t19 nothing was saved (a load restarted the script fresh) |
+| Object scripts | new `object_scripts` chunk (`ObjectScriptHost::write` / `read`, OBJECT_SCRIPTS §2.6): per live script its object, pool name and instance; every pool with its free instances; the type instances ([port] retail rebuilds those at type setup). Load = the §4.1 from-save path: new VM by name, GlobalValue and the holder store's bridges attached, then the block (no top level, `Base_Definitions`, `main` or `Object`). `save_allowed` no longer refuses live object scripts |
+| AI plans | `galactic_ai_save.cpp` keeps its own `LuaVm` images (already a superset); not moved to the block |
+| `ScriptShouldCRC` (§2.1) | not modelled: the port has no per-script CRC; the global survives in the image anyway |
+| Determinism | `alamo_headless_save_synthetic` (story plot + GameScoring + object scripts, save at 450, in-process and fresh-process loads and the replays compared with the uninterrupted run); `alamo_sim_tests` `object_script_test::test_save_load` (two-pass battle load, 150 ticks after the load CRC-identical) |

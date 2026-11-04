@@ -1369,7 +1369,7 @@ static std::unique_ptr<OsWorld> make_os_world() {
     write_file(w->root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>Os.xml</File></GameObjectFiles>\n");
     std::string xml = "<Os>\n";
     for (const char* n : {"Os_Attach", "Os_Gate", "Os_NoRate", "Os_Exit", "Os_ExitDefs", "Os_BindErr", "Os_ThreadErr", "Os_Death",
-                          "Os_Prox", "Os_Spawner", "Os_Missing", "Os_Pool", "Os_Pool3", "Os_Pool0"})
+                          "Os_Prox", "Os_Spawner", "Os_Missing", "Os_Pool", "Os_Pool3", "Os_Pool0", "Os_Save"})
         xml += std::string(" <GroundInfantry Name=\"") + n + "\"><Tactical_Health>10</Tactical_Health><Lua_Script>" + n +
                (std::string(n) == "Os_Gate" ? ".lua" : "") + "</Lua_Script></GroundInfantry>\n";
     xml += " <GroundInfantry Name=\"Os_Attach_Variant\"><Variant_Of_Existing_Type>Os_Attach</Variant_Of_Existing_Type></GroundInfantry>\n"
@@ -1449,6 +1449,31 @@ static std::unique_ptr<OsWorld> make_os_world() {
     script(r, "Os_Pool3", "Tag = 'P3'\nScriptPoolCount = 3\n" + pool_body);
     script(r, "Os_Pool0", "Tag = 'P0'\nScriptPoolCount = 0\n" + pool_body);
     script(r, "Os_Pool4", "Tag = 'P4'\nScriptPoolCount = 4\n" + pool_body);
+    // q6 t19 save / load (§2.6): OnEnter-style work counted once (SaveOnEnter), `main` sleeping in an inline PGBase Sleep,
+    // a second thread waiting for a flag set by main, a closure counter (upvalue), a cycle and a shared table, the Object
+    // wrapper kept in a table (identity), a first-pump draw (ServiceRate > 0). Every pump writes a GlobalValue (frame CRC).
+    script(r, "Os_Save",
+           "TopRuns = (TopRuns or 0) + 1\n"
+           "function Sleep(t) local s = GetCurrentTime() while GetCurrentTime() - s < t do coroutine.yield(true) end end\n"
+           "local function counter() local c = 0 return function() c = c + 1 return c end end\n"
+           "function Base_Definitions() ServiceRate = 0.1 Ring = {} Ring.self = Ring Shared = {n = 0} "
+           "Graph = {a = Shared, b = Shared, list = {Shared, Ring}} end\n"
+           "function Waiter() while true do if Signal then Signal = nil Signals = (Signals or 0) + 1 "
+           "GlobalValue.Set('SaveSig' .. Object.Get_Object_ID(), Signals) end coroutine.yield(true) end end\n"
+           "function main()\n"
+           "  GlobalValue.Set('SaveOnEnter', (GlobalValue.Get('SaveOnEnter') or 0) + 1)\n"
+           "  local tick = counter()\n"
+           "  Mine = {obj = Object}\n"
+           "  Create_Thread('Waiter')\n"
+           "  while true do\n"
+           "    local n = tick()\n"
+           "    Shared.n = Shared.n + 1\n"
+           "    if n == 3 or n == 9 or n == 20 then Signal = true end\n"
+           "    GlobalValue.Set('Save' .. Object.Get_Object_ID(), n .. '/' .. Graph.a.n .. '/' .. tostring(Graph.a == Graph.b) .. '/' "
+           "..  tostring(Graph.list[2].self == Ring) .. '/' .. tostring(Mine.obj == Object) .. '/' .. TopRuns)\n"
+           "    Sleep(0.25)\n"
+           "  end\n"
+           "end\n");
     w->files = std::make_unique<DirectoryProvider>(path_to_utf8(w->root));
     CHECK(w->db.load(*w->files));
     CHECK(w->types.build(w->db));
@@ -1489,8 +1514,8 @@ static void test_attach_and_gate(const OsWorld& w) {
         CHECK(gv_text(host, "Main").empty());     // main created, not run
         host.run_fast(1);
         CHECK(gv_text(host, "Main") == "OS_ATTACH_VARIANT/" + std::to_string(host.tactical()->primary().id(v)));
-        std::string why;
-        CHECK(!host.save_allowed(&why));
+        std::string why;  // q6 t19: refused for the bare tactical mode (no rebuilder), not for the scripts
+        CHECK(!host.save_allowed(&why) && why.find("game-object") == std::string::npos);
         // A missing file: no script (counted).
         spawn(host, w, "Os_Missing", 0, {0, 0, 0});
         CHECK(os.live() == 1 && os.stats().load_failures == 1 && os.error_total() == 1);
@@ -1602,7 +1627,8 @@ static void test_proximity_and_spawner(const OsWorld& w) {
         CHECK(!st.alive(dummy) && gv_num(host, "SpawnerDone") == 1.0 && host.object_scripts()->live() == 0 &&
               host.object_scripts()->stats().released_dead == 1);
     }
-    {   // Galactic store: Get_Game_Mode is "Galactic", the spawner exits on its first pump; a live script blocks the save.
+    {   // Galactic store: Get_Game_Mode is "Galactic", the spawner exits on its first pump; q6 t19: a live script no
+        // longer blocks the save.
         SimHost host(w.types, js, os_config(true));
         host.set_object_script_files(w.files.get());
         GameMode& gal = host.start_game(ModeKind::Galactic);
@@ -1610,7 +1636,7 @@ static void test_proximity_and_spawner(const OsWorld& w) {
         sp.type = static_cast<objects::TypeIndex>(w.db.find("Os_Attach"));
         gal.primary().create(sp);
         std::string why;
-        CHECK(!host.save_allowed(&why) && why.find("game-object Lua scripts") != std::string::npos);
+        CHECK(host.object_scripts()->live() == 1 && host.save_allowed(&why));
         sp.type = static_cast<objects::TypeIndex>(w.db.find("Os_Spawner"));
         gal.primary().create(sp);
         host.run_fast(1);
@@ -1728,6 +1754,114 @@ static void test_pool(const OsWorld& w) {
                 static_cast<unsigned long long>(os.stats().pooled_releases));
 }
 
+// q6 t19 (§2.6, LUA_SAVE): object scripts in a save. A bare galactic session plus a battle glue participant that pushes a
+// Land mode at load (two-pass load, as in test_save_session); scripts in both stores, mid-thread (Sleep, a waiting
+// thread), pooled (held and free instances, a pooled release before the save), unpooled (ScriptPoolCount 0), the type
+// instance. The load runs nothing of the scripts (no top level, Base_Definitions, main or Object: SaveOnEnter, TopRuns
+// and the pool counters unchanged) and the run continues with the uninterrupted run's CRCs (GlobalValue writes are in
+// the frame CRC, first-pump draws in the rng CRC).
+static void test_save_load(const OsWorld& w) {
+    struct Glue {
+        SimHost* host = nullptr;
+        bool resume = false;
+        int rebuilds = 0;
+    };
+    auto make = [&w](jobs::JobSystem& js, std::shared_ptr<Glue>& g) {
+        auto h = std::make_unique<SimHost>(w.types, js, os_config(true));
+        h->set_object_script_files(w.files.get());
+        h->start_game(ModeKind::Galactic);
+        g = std::make_shared<Glue>();
+        g->host = h.get();
+        SaveParticipant p;
+        p.name = "test.battle";
+        p.write = [g](ByteWriter& out) { out.boolean(g->host->modes().depth() > 1); };
+        p.read = [g](ByteReader& in) {
+            const bool tactical = in.boolean();
+            if (!in.ok()) return false;
+            g->resume = tactical && g->host->modes().depth() == 1;
+            return true;
+        };
+        p.rebuild = [g] {
+            if (!g->resume) return std::string();
+            g->resume = false;
+            ++g->rebuilds;
+            g->host->start_game(ModeKind::Land);
+            return std::string();
+        };
+        h->add_save_participant(std::move(p));
+        return h;
+    };
+    auto bottom = [](SimHost& h) -> objects::ObjectStore& { return h.modes().at(h.modes().depth() - 1).primary(); };
+    auto create = [&w](objects::ObjectStore& st, const char* type) {
+        objects::SpawnParams sp;
+        sp.type = static_cast<objects::TypeIndex>(w.db.find(type));
+        sp.owner = 0;
+        sp.facing = {1.0f, 0.0f, 0.0f};
+        return st.create(sp);
+    };
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    std::shared_ptr<Glue> ga, gb;
+    auto a = make(js, ga);
+    ObjectScriptHost& osa = *a->object_scripts();
+    const ObjectHandle gal_save = create(bottom(*a), "Os_Save");
+    create(bottom(*a), "Os_Gate");
+    a->run_fast(20);
+    a->start_game(ModeKind::Land);
+    std::vector<ObjectHandle> land;
+    for (const char* t : {"Os_Save", "Os_Save", "Os_Pool", "Os_Pool", "Os_Pool0", "Os_TypeScript", "Os_Prox"})
+        land.push_back(spawn(*a, w, t, 0, {static_cast<float>(10 * land.size()), 0, 0}));
+    spawn(*a, w, "Os_Plain", 1, {75, 10, 0});
+    a->run_fast(25);
+    a->tactical()->destroy(land[2]);  // a pooled release: Flush_G + Base_Definitions, the instance waits free
+    a->run_fast(6);
+    std::string why;
+    CHECK(osa.live() == 8 && a->save_allowed(&why));
+    SaveFile save;
+    CHECK(a->save(save, &why) && save.find("object_scripts") != nullptr);
+    if (!why.empty()) std::printf("  object script save: %s\n", why.c_str());
+    const ObjectScriptHost::Stats at_save = osa.stats();
+    const std::vector<ObjectScriptHost::PoolInfo> pools_at_save = osa.pools();
+    const double on_enter = gv_num(*a, "SaveOnEnter"), pbd = gv_num(*a, "PBD"), p4bd = gv_num(*a, "P4BD");
+    CHECK(on_enter == 3.0 && at_save.pooled_releases == 1);
+    a->run_fast(150);
+    CrcLog log_a;
+    for (const CrcRecord& rec : a->crc_log().records)
+        if (rec.tick >= save.tick) log_a.records.push_back(rec);
+    log_a.systems = a->crc_log().systems;
+    log_a.parity_parts = a->crc_log().parity_parts;
+
+    auto b = make(js, gb);
+    LoadReport rep;
+    CHECK(b->load(save, &why, &rep));
+    if (!rep.ok()) std::printf("  object script load: %s\n", rep.text().c_str());
+    ObjectScriptHost& osb = *b->object_scripts();
+    CHECK(b->modes().depth() == 2 && gb->rebuilds == 1 && osb.live() == 8 && osb.type_instances() == 1);
+    const ObjectScriptHost::Stats s = osb.stats();
+    CHECK(s.attached == at_save.attached && s.loaded == at_save.loaded && s.reused == at_save.reused &&
+          s.pumps == at_save.pumps && s.first_draws == at_save.first_draws && s.pooled_releases == at_save.pooled_releases);
+    const std::vector<ObjectScriptHost::PoolInfo> pools_b = osb.pools();
+    CHECK(pools_b.size() == pools_at_save.size());
+    for (size_t i = 0; i < pools_b.size() && i < pools_at_save.size(); ++i)
+        CHECK(pools_b[i].name == pools_at_save[i].name && pools_b[i].size == pools_at_save[i].size &&
+              pools_b[i].in_use == pools_at_save[i].in_use);
+    CHECK(osb.has_script(bottom(*b), gal_save) && osb.has_script(b->tactical()->primary(), land[0]) &&
+          !osb.has_script(b->tactical()->primary(), land[2]));
+    CHECK(b->run_fast(150) == 150);
+    const CrcDivergence dv = first_divergence(log_a, b->crc_log());
+    if (dv.diverged) std::printf("  object script save: %s\n", dv.message.c_str());
+    CHECK(!dv.diverged);
+    // Nothing re-ran at the load (the OnEnter count, the top levels, the pooled Base_Definitions), the threads went on.
+    CHECK(gv_num(*b, "SaveOnEnter") == on_enter && gv_num(*a, "SaveOnEnter") == on_enter && gv_num(*b, "PBD") == pbd &&
+          gv_num(*b, "P4BD") == p4bd);
+    const std::string key = "Save" + std::to_string(bottom(*a).id(gal_save));
+    CHECK(gv_text(*b, key.c_str()) == gv_text(*a, key.c_str()) && gv_text(*b, key.c_str()).find("/true/true/true/1") != std::string::npos);
+    CHECK(gv_text(*b, "Gate") == gv_text(*a, "Gate") && gv_text(*b, "Hits") == gv_text(*a, "Hits") && !gv_text(*a, "Hits").empty());
+    CHECK(osb.stats().pumps == osa.stats().pumps && osb.stats().first_draws == osa.stats().first_draws);
+    std::printf("object scripts save: %zu chunks, %zu live scripts restored at tick %" PRIu64 ", 150 ticks %s, %s\n",
+                save.chunks().size(), osb.live(), save.tick, dv.diverged ? "DIVERGED" : "identical",
+                gv_text(*b, key.c_str()).c_str());
+}
+
 static void test_object_scripts() {
     const auto w = make_os_world();
     test_attach_and_gate(*w);
@@ -1735,6 +1869,7 @@ static void test_object_scripts() {
     test_proximity_and_spawner(*w);
     test_pool(*w);
     test_worker_counts(*w);
+    test_save_load(*w);
     std::error_code ec;
     remove_all_long(w->root, ec);
     std::printf("object scripts: attach, gate, release, proximity, spawner, worker counts checked\n");

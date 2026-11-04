@@ -4,8 +4,13 @@
 
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/sim/sim_host.hpp"
+#include "alamo/core/log.hpp"
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/lua/script_remaining.hpp"  // GlobalValueStore, process_global_values
+#include "alamo/lua/script_save.hpp"       // q6 t19: the GameScoring script block
+#if defined(ALAMO_LUA_PLAYERS)
+#include "alamo/lua/players.hpp"
+#endif
 #endif
 
 namespace alamo::sim {
@@ -18,8 +23,10 @@ constexpr uint32_t kMaxCount = 1u << 24;
 // Host chunk names in save / load order (a story session adds its four after "globals").
 constexpr const char* kHostChunks[] = {"frame", "objects", "galactic.state", "players", "rng", "commands", "globals"};
 constexpr const char* kStoryChunks[] = {"story", "story.lua", "story.bridge", "story.players", "story.presentation"};
-// "spatial" (stage 2) follows "objects" while a tactical mode is on the stack.
-constexpr const char* kReserved[] = {"session", "spatial"};
+// "spatial" (stage 2) follows "objects" while a tactical mode is on the stack; q6 t19: "scoring" (a GameScoring script
+// is configured) and "object_scripts" (the object-script host exists) follow the story chunks.
+constexpr const char* kReserved[] = {"session", "spatial", "scoring", "object_scripts"};
+constexpr uint32_t kScoringSaveVersion = 1;  // the "scoring" chunk's own bytes
 
 bool valid_name(std::string_view n) {
     if (n.empty()) return false;
@@ -87,11 +94,7 @@ bool SimHost::save_allowed(std::string* why) const {
         const std::string b = story_->save_blocker();
         if (!b.empty()) return no(b);
     }
-    // q6 (OBJECT_SCRIPTS.md §7.2): game-object Lua scripts have no state save yet; a load would re-attach fresh scripts
-    // (TR's company spawner would spawn its company again), so a session with a live object script is not saved.
-    if (object_scripts_ && object_scripts_->live() > 0)
-        return no("game-object Lua scripts are running (" + std::to_string(object_scripts_->live()) +
-                  "): their state is not saved yet");
+    // q6 t19: game-object Lua scripts are saved ("object_scripts", OBJECT_SCRIPTS.md §2.6), so they no longer block.
     for (const SaveParticipant& p : participants_)
         if (p.blocker) {
             const std::string b = p.blocker();
@@ -263,6 +266,138 @@ bool SimHost::read_globals(ByteReader& r) {
 #endif
 }
 
+// "scoring" (q6 t19, LUA_SAVE.md; GAME_SCORING.md §6): u32 envelope, u32 kScoringSaveVersion, str script name, u8 has VM
+// (false: released before the save); with a VM: u32 length + the lua::write_script_block bytes, u8 own player world
+// (+ u32 length + LuaPlayerWorld::write: the world start_galactic gives the VM while no story runs); then the queued
+// Game_Mode_Starting_Event (mode, map) pairs, the tapped galactic events not delivered yet, the failed flag and the
+// service / call / release counters. The load reads the block into the rebuilt session's scoring VM (ScriptLoad::Any:
+// its new-game state is replaced whole, the host attachments - GlobalValue, players, bridge, presentation - kept).
+bool SimHost::scoring_configured() const {
+#ifdef ALAMO_SIM_HAVE_STORY
+    return !scoring_name_.empty() && scoring_files_ != nullptr;
+#else
+    return false;
+#endif
+}
+
+bool SimHost::write_scoring(ByteWriter& w, std::string* err) const {
+    w.u32(kChunkVersion).u32(kScoringSaveVersion);
+    w.str(scoring_name_);
+#ifdef ALAMO_SIM_HAVE_STORY
+    w.boolean(scoring_vm_ != nullptr);
+    if (scoring_vm_) {
+        ByteWriter block;
+        lua::write_script_block(block, *scoring_vm_);
+        if (!scoring_vm_->save_error().empty()) {
+            if (err) *err = "GameScoring script " + scoring_name_ + ": " + scoring_vm_->save_error();
+            return false;
+        }
+        w.u32(static_cast<uint32_t>(block.size())).raw(block.bytes());
+#if defined(ALAMO_LUA_PLAYERS)
+        w.boolean(scoring_players_ != nullptr);
+        if (scoring_players_) write_section(w, [this](ByteWriter& sub) { scoring_players_->write(sub); });
+#else
+        w.boolean(false);
+#endif
+    }
+    w.u32(static_cast<uint32_t>(scoring_starts_.size()));
+    for (const auto& [mode, map] : scoring_starts_) w.str(mode).str(map);
+    w.u32(static_cast<uint32_t>(scoring_events_.size()));
+    for (const galactic::GalacticEvent& e : scoring_events_) {
+        w.i32(e.frame).u8(static_cast<uint8_t>(e.kind)).i32(e.player).i32(e.other_player);
+        w.u32(e.planet).u32(e.other_planet).u32(e.fleet).u32(e.type).i32(e.object).i32(e.value);
+    }
+    w.boolean(scoring_failed_);
+    w.u64(scoring_services_).u64(scoring_calls_).u64(scoring_releases_);
+#else
+    (void)err;
+    w.boolean(false);
+#endif
+    return true;
+}
+
+bool SimHost::read_scoring(ByteReader& r) {
+    if (r.u32() != kChunkVersion || r.u32() != kScoringSaveVersion) return false;
+    const std::string name = r.str();
+    const bool has_vm = r.boolean();
+    if (!r.ok() || name != scoring_name_) return false;
+#ifdef ALAMO_SIM_HAVE_STORY
+    std::span<const uint8_t> block, world_bytes;
+    bool own_players = false;
+    if (has_vm) {
+        const uint32_t n = r.u32();
+        if (!r.ok() || n > r.remaining()) return false;
+        block = r.raw(n);
+        own_players = r.boolean();
+        if (own_players) {
+            const uint32_t pn = r.u32();
+            if (!r.ok() || pn > r.remaining()) return false;
+            world_bytes = r.raw(pn);
+        }
+    }
+    const uint32_t ns = r.u32();
+    if (!r.ok() || ns > kMaxCount) return false;
+    std::vector<std::pair<std::string, std::string>> starts(ns);
+    for (auto& [mode, map] : starts) {
+        mode = r.str();
+        map = r.str();
+    }
+    const uint32_t ne = r.u32();
+    if (!r.ok() || ne > kMaxCount) return false;
+    std::vector<galactic::GalacticEvent> events(ne);
+    for (galactic::GalacticEvent& e : events) {
+        e.frame = r.i32();
+        const uint8_t kind = r.u8();
+        if (kind >= static_cast<uint8_t>(galactic::GalacticEventKind::Count)) return false;
+        e.kind = static_cast<galactic::GalacticEventKind>(kind);
+        e.player = r.i32();
+        e.other_player = r.i32();
+        e.planet = r.u32();
+        e.other_planet = r.u32();
+        e.fleet = r.u32();
+        e.type = r.u32();
+        e.object = r.i32();
+        e.value = r.i32();
+    }
+    const bool failed = r.boolean();
+    const uint64_t services = r.u64(), calls = r.u64(), releases = r.u64();
+    if (!r.ok() || !r.done()) return false;
+    if (has_vm) {
+        if (!scoring_vm_) return false;  // the rebuilt session has no scoring VM to restore into
+#if defined(ALAMO_LUA_PLAYERS)
+        if (own_players) {
+            if (!scoring_players_) return false;
+            ByteReader pr(world_bytes);
+            if (!scoring_players_->read(pr) || !pr.ok() || !pr.done()) return false;
+        }
+#else
+        (void)world_bytes;
+        if (own_players) return false;
+#endif
+        ByteReader br(block);
+        std::string e;
+        if (!lua::read_script_block(br, *scoring_vm_, lua::ScriptLoad::Any, &e)) {
+            log::write(log::Level::Warn, "sim", "load: GameScoring script " + scoring_name_ + ": " + e);
+            return false;
+        }
+        scoring_seen_messages_ = scoring_vm_->messages().size();
+        scoring_seen_errors_ = scoring_vm_->errors().size();
+    } else {
+        scoring_vm_.reset();  // released before the save
+        scoring_players_.reset();
+    }
+    scoring_starts_ = std::move(starts);
+    scoring_events_ = std::move(events);
+    scoring_failed_ = failed;
+    scoring_services_ = services;
+    scoring_calls_ = calls;
+    scoring_releases_ = releases;
+    return true;
+#else
+    return !has_vm && r.ok() && r.done();
+#endif
+}
+
 // -------------------------------------------------------------------------------------------- save
 bool SimHost::save(SaveFile& out, std::string* err) const {
     std::string why;
@@ -309,6 +444,22 @@ bool SimHost::save(SaveFile& out, std::string* err) const {
         add("story.players", kChunkVersion, p);
         add("story.presentation", kChunkVersion, pr);
     }
+    if (scoring_configured()) {  // q6 t19
+        ByteWriter w;
+        if (!write_scoring(w, &why)) {
+            if (err) *err = "save not possible: " + why;
+            return false;
+        }
+        add("scoring", kChunkVersion, w);
+    }
+    if (object_scripts_) {  // q6 t19
+        ByteWriter w;
+        if (!object_scripts_->write(w, &why)) {
+            if (err) *err = "save not possible: " + why;
+            return false;
+        }
+        add("object_scripts", kChunkVersion, w);
+    }
     for (const SaveParticipant& p : participants_) {
         ByteWriter w;
         p.write(w);
@@ -328,6 +479,8 @@ void SimHost::read_chunks(const SaveFile& in, LoadReport& rep) {
         if (std::string_view(name) == "objects" && has_tactical_mode()) expected.emplace_back("spatial");
     }
     if (story_) expected.insert(expected.end(), std::begin(kStoryChunks), std::end(kStoryChunks));
+    if (scoring_configured()) expected.emplace_back("scoring");             // q6 t19
+    if (object_scripts_) expected.emplace_back("object_scripts");          // q6 t19
     for (const SaveParticipant& p : participants_) expected.push_back(p.name);
     for (const std::string& name : expected) {
         const SaveChunk* c = in.find(name);
@@ -356,6 +509,13 @@ void SimHost::read_chunks(const SaveFile& in, LoadReport& rep) {
             else if (name == "story.bridge") ok = story_->read_bridge(r);
             else if (name == "story.players") ok = story_->read_players(r);
             else if (name == "story.presentation") ok = story_->read_presentation(r);
+            else if (name == "scoring") ok = read_scoring(r);
+            else if (name == "object_scripts") {
+                // Pass 1 of a battle load skips it: the battle's store is pushed by the rebuild, pass 2 restores every store.
+                std::string why;
+                ok = load_base_depth_ != 0 || object_scripts_->read(r, &why);
+                if (!ok) log::write(log::Level::Warn, "sim", "load: object_scripts: " + why);
+            }
             else ok = false;
             ok = ok && r.ok() && (r.done() || load_base_depth_ != 0);
         }

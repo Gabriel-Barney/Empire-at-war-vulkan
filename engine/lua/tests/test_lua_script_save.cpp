@@ -331,8 +331,8 @@ static void test_refusals(const World& w) {
     CHECK(!restore(rebuilt, good, ScriptLoad::FromSave, &err));
     CHECK(image(rebuilt) == rb0);
     CHECK(restore(rebuilt, good, ScriptLoad::Any, &err));
+    CHECK(block(rebuilt) == good);  // before gstr below runs code in it
     CHECK(gstr(rebuilt, "rebuilt_only") == "nil" && rebuilt.thread_list() == a.thread_list());
-    CHECK(block(rebuilt) == good);
 
     // Damaged and truncated blocks.
     LuaVm target(w.host(&rng), plot_options());
@@ -406,16 +406,17 @@ end
     LuaVm b(w.host(&rng_b), o);  // from-save: no require, no Base_Definitions, no main, no Object
     CHECK(restore(b, saved, ScriptLoad::FromSave, &err));
     CHECK(b.thread_count() == 1 && b.thread_list().size() == 1);
-    CHECK(gstr(b, "Object.Get_Object_ID()") == "3");
+    // The same query in both VMs keeps their heaps in step (gstr runs code).
+    CHECK(gstr(a, "Object.Get_Object_ID()") == "3" && gstr(b, "Object.Get_Object_ID()") == "3");
     for (uint32_t f = 6; f < 20; ++f) {
         for (LuaVm* vm : {&a, &b}) {
             vm->set_time(f / 30.0);
             vm->service_threads();
         }
     }
+    CHECK(block(a) == block(b));  // before the one-sided queries below
     CHECK(gstr(b, "Spawned") == "1" && gstr(b, "Ticks") == gstr(a, "Ticks") && gstr(b, "Ticks") == "20");
     CHECK(b.messages().empty());  // no second 'spawn', no 'object changed'
-    CHECK(block(a) == block(b));
 }
 
 int main() {
