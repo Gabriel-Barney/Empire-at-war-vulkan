@@ -16,6 +16,7 @@
 
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/log.hpp"
+#include "alamo/lua/ai_bridge.hpp"  // reset_script_threads
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/fog_bridge.hpp"
 #include "alamo/lua/lua_vm.hpp"
@@ -594,7 +595,14 @@ static void test_dead_handles(const Db& db) {
     CHECK(run(vm, "victim = t2") == "");
     s.bridge.state(2).hidden = true;
     CHECK(s.store.destroy(s.trooper2));
-    for (const char* m : {"Move_To(t1)", "Get_Position()", "Despawn()", "Take_Damage(1)", "Hide(true)", "Get_Hull()",
+    // q6 t03: the unit order bindings handle a dead caller themselves (LUA_API.md "Unit order bindings"): Move_To is a
+    // script error (no unwind, the exited flag), Attack_Target returns nothing.
+    CHECK(run(vm, "r = 1 r = victim.Move_To(t1) rn = r == nil and 1 or 0") == "" &&
+          last_message_has(vm, "SCRIPT ERROR: GameObjectWrapper::Move_To -- this object is already dead"));
+    CHECK(gnum(vm, "rn") == 1.0 && vm.exit_requested());
+    reset_script_threads(vm);
+    CHECK(run(vm, "r = 1 r = victim.Attack_Target(t1) rn = r == nil and 1 or 0") == "" && gnum(vm, "rn") == 1.0 && !vm.exit_requested());
+    for (const char* m : {"Get_Position()", "Despawn()", "Take_Damage(1)", "Hide(true)", "Get_Hull()",
                           "Is_Category('Infantry')", "Activate_Ability('SPRINT')"}) {
         const std::string_view call(m);
         const std::string method(call.substr(0, call.find('(')));
@@ -604,7 +612,10 @@ static void test_dead_handles(const Db& db) {
     CHECK(run(vm, "Find_Nearest(victim)") == "" &&
           last_message_has(vm, "Find_Nearest - parameter 1 is already dead; cannot extract a position from it."));
     CHECK(contains(run(vm, "t1.Get_Distance(victim)"), "could not extract a position from parameter 1."));
-    CHECK(contains(run(vm, "t1.Attack_Target(victim)"), "Attack_Target -- Parameter 1 is not a valid destination for unit Trooper"));
+    CHECK(run(vm, "t1.Attack_Target(victim)") == "" && last_message_has(vm, "SCRIPT ERROR: GameObjectWrapper::Attack_Target -- Target is already dead."));
+    CHECK(run(vm, "t1.Attack_Target(5)") == "" &&
+          last_message_has(vm, "Attack_Target -- Parameter 1 is not a valid destination for unit Trooper"));
+    reset_script_threads(vm);
     CHECK(contains(run(vm, "t1.Teleport_And_Face(victim)"), "Teleport_And_Face -- Invalid game object given for parameter 1."));
     CHECK(contains(run(vm, "Hide_Object(victim, 1)"), "LuaHideObject -- Invalid parameter 1, expected a game object"));
     // Dead objects are skipped by every finder; dead before the flush already.

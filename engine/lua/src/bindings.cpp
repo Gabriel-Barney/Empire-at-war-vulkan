@@ -242,6 +242,17 @@ int Call::fail(const char* fmt, ...) {
     return -1;
 }
 
+int Call::script_error_stop(const char* fmt, ...) {
+    char buf[640];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    vm->message(std::string("SCRIPT ERROR: ") + buf);
+    vm->exit_requested = true;
+    return 0;
+}
+
 const Ud* Call::userdata(int i, uint32_t cls) const {
     if (!has(i) || lua_type(L, idx(i)) != LUA_TUSERDATA) return nullptr;
     const auto* ud = static_cast<const Ud*>(lua_touserdata(L, idx(i)));
@@ -370,8 +381,12 @@ int method_call(lua_State* L) {
     const uint32_t slot = static_cast<uint32_t>(lua_tonumber(L, lua_upvalueindex(3)));
     const MethodSlot& s = method_slots()[slot];
     const char* name = s.label.c_str() + class_names()[s.cls].size() + 1;
+    // q6 t03: the unit order bindings handle a dead caller themselves (LUA_API.md "Unit order bindings": Attack_Target
+    // returns nothing, Move_Internal reports a script error).
     const bool dead_check = ud->cls == cls_game_object() && std::strcmp(name, "Is_Valid") != 0 &&
-                            std::strcmp(name, "Is_Pool_Safe") != 0;
+                            std::strcmp(name, "Is_Pool_Safe") != 0 && std::strcmp(name, "Attack_Target") != 0 &&
+                            std::strcmp(name, "Move_To") != 0 && std::strcmp(name, "Attack_Move") != 0 &&
+                            std::strcmp(name, "Guard_Target") != 0;
     const uint32_t counter = s.row != kNoBinding ? s.row : extra_counter_slot(slot);
     const Invocation inv{vm, ud, s.fn, counter, s.label.c_str(), dead_check, name, 1, lua_gettop(L)};
     const int n = invoke(L, inv, err, sizeof err);

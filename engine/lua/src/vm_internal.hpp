@@ -111,6 +111,21 @@ void task_force_set_targeting_priorities(Call& c, const std::vector<objects::Obj
 int ai_wrapper_object(Call& c, int i, objects::ObjectHandle& out);
 // An AITargetLocationWrapper with no live object (a region / marker target): its host position [port]. False otherwise.
 bool ai_target_position(Call& c, int i, Vec3& out);
+// q6 t03 (LUA_API.md "Unit order bindings: target arguments"): argument i as an AITargetLocationWrapper.
+//   is_target: the argument is one (false: anything else, nothing else filled);
+//   dead:      no AI host, the target is not valid (the original's AI target +0x38 null), or its object is gone [port];
+//   object:    its live game object (AI target vf+0x30), null for a region / marker target;
+//   has_position / position: the object's position, else the host's target_position (vf+0x68).
+struct AiTargetArg {
+    bool is_target = false;
+    bool dead = false;
+    objects::ObjectHandle object{};
+    bool has_position = false;
+    Vec3 position{};
+};
+AiTargetArg ai_target_arg(Call& c, int i);
+// A task force at argument i (any TaskForceClass kind): true and its live units in host order (empty without a host).
+bool ai_task_force_units(Call& c, int i, std::vector<objects::ObjectHandle>& out);
 // bind_ai_tactical.cpp: EvaluatePerception(name, player [, target at target_index; 0 = none]) through the attached
 // tactical AI host (AI targets and task forces accepted). Pushes the result and returns 1; -2 = no tactical host.
 int tactical_evaluate_perception(Call& c, std::string_view name, int32_t player, int target_index);
@@ -202,6 +217,14 @@ struct Call {
     }
     const Ud* userdata(int i, uint32_t cls) const;  // nullptr unless an engine userdata of `cls`
     int fail(const char* fmt, ...);                 // writes err, returns -1
+    // q6 t03 (LUA_API.md "What an error does to the script"): the original's script error 0x248190. Logs "SCRIPT ERROR:
+    // <text>" and sets the script's exited flag (+0x121, LuaVm::Impl::exit_requested, the flag ScriptExit sets), with no
+    // Lua error: the binding returns nothing (returns 0), pcall succeeds, the calling thread runs on to its next yield,
+    // and service_threads then resumes no other thread of the script and kills them all at the end of the pass; the
+    // hosts release the script on exit_requested(). Used by the GameObjectWrapper unit order bindings only so far: the
+    // other bindings either unwind (fail()) or log "SCRIPT ERROR" through their family's script_error() helper without
+    // the flag (open item: move those to this path).
+    int script_error_stop(const char* fmt, ...);
 };
 
 // Pushers. Wrappers are cached per VM: the same engine entity gives the SAME userdata every time, so

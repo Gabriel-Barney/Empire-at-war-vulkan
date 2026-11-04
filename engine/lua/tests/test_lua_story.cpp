@@ -519,6 +519,48 @@ static void test_bindings() {
     fs::remove_all(root, ec);
 }
 
+// q6 t03 (STORY.md §0 / §2.1: one plot table per game mode, every player's plot set in it): Get_Story_Plot finds a plot
+// of another galactic plot set (Thrawn's Revenge GCPlayerAgnostic, in the Independent_Forces set, asks for
+// "Conquests\\Factions\\Story_Generic_EMPIRE.xml", which the Empire's set loads); the wrapper then acts on that set.
+static void test_story_plot_group() {
+    StoryModel own, empire, rebel;
+    std::string err;
+    const char* plot = "<Story><Event Name=\"Recon_01\"><Event_Type>STORY_TRIGGER</Event_Type></Event></Story>";
+    CHECK(own.add_plot("Conquests\\Player_Agnostic_Plot.xml", plot, true, "GCPlayerAgnostic", &err) == 0);
+    CHECK(empire.add_plot("Conquests\\Historical\\Story_Campaign_Empire.xml", plot, true, {}, &err) == 0);
+    CHECK(empire.add_plot("Conquests\\Factions\\Story_Generic_EMPIRE.xml", plot, true, {}, &err) == 1);
+    CHECK(rebel.add_plot("Conquests\\Factions\\Story_Generic_REBEL.xml", plot, true, {}, &err) == 0);
+    const std::vector<StoryModel*> group{&empire, &own, &rebel};
+    LuaHost host;
+    LuaVm vm(host);
+    attach_story(vm, &own);
+    // Without the group: the own set only (the pre-q6-t03 answer).
+    CHECK(run(vm, "p = tostring(Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_EMPIRE.xml'))") == "" && gstr(vm, "p") == "nil");
+    attach_story_group(vm, &group);
+    CHECK(run(vm, "pe = Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_EMPIRE.xml') pr = Get_Story_Plot('Story_Generic_REBEL.xml')\n"
+                  "po = Get_Story_Plot('Player_Agnostic_Plot.xml') nf = tostring(Get_Story_Plot('Story_Generic_HUTT_CARTELS.xml'))\n"
+                  "v = tostring(pe.Is_Valid()) ev = pe.Get_Event('Recon_01') evv = tostring(ev.Is_Valid())\n"
+                  "ev.Set_Dialog('Recon') ev.Add_Dialog_Text('TEXT_RECON', 1) pr.Suspend()\n"
+                  "same = rawequal(pe, Get_Story_Plot('story_generic_empire.xml')) and 'same' or 'different'\n"
+                  "other = rawequal(pe, po) and 'same' or 'different'") == "");
+    CHECK(gstr(vm, "v") == "true" && gstr(vm, "evv") == "true" && gstr(vm, "nf") == "nil");
+    CHECK(gstr(vm, "same") == "same" && gstr(vm, "other") == "different");
+    // The edits landed in the Empire's and the Rebel's sets, not the caller's.
+    const StoryEventDef& recon = empire.plot(1).events[empire.find_event(1, "Recon_01")];
+    CHECK(recon.dialog.size() == 2 && recon.dialog[0] == "dialog:Recon" && recon.dialog[1] == "TEXT_RECON|1");
+    CHECK(own.plot(0).events[0].dialog.empty() && empire.plot(0).events[0].dialog.empty());
+    CHECK(!rebel.plot(0).active && own.plot(0).active);
+    // The own set wins over the group for a file both list.
+    StoryModel dup;
+    CHECK(dup.add_plot("Conquests\\Player_Agnostic_Plot.xml", plot, false, {}, &err) == 0);
+    const std::vector<StoryModel*> group2{&dup, &own};
+    attach_story_group(vm, &group2);
+    CHECK(run(vm, "po2 = Get_Story_Plot('Conquests\\\\Player_Agnostic_Plot.xml') own = rawequal(po, po2) and 'own' or 'dup'") == "");
+    CHECK(gstr(vm, "own") == "own");
+    attach_story_group(vm, nullptr);
+    CHECK(run(vm, "q = tostring(Get_Story_Plot('Story_Generic_EMPIRE.xml'))") == "" && gstr(vm, "q") == "nil");
+}
+
 static void test_ai_flags() {
     StoryModel m;
     LuaHost host;
@@ -980,6 +1022,7 @@ int main() {
     test_plots_file();
     test_bindings();
     test_ai_flags();
+    test_story_plot_group();  // q6 t03
     test_prereqs_elapsed_perpetual();
     test_exact_params();
     test_branches();

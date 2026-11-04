@@ -280,5 +280,10 @@ Can wait / skip: Get_CRC (MP only), the debug file-watcher reload, the `from sav
   - `Galactic_Starbase_Level_Change` (the stream has the new level, not the old / new types), `Galactic_Neutralized_Event`,
     `Player_Quit_Event`: no source yet.
   - Galactic events only arrive with a story session (no story: nobody drains the stream at a fixed point).
+  - (q6 t03, done for galactic sessions) Without a story session the scoring VM gets a player world of its own over the
+    campaign's players (`SimHost::start_galactic`; the story's world replaces it in `start_story`). Before, Find_Player gave
+    nil and `PlayerWrapper::Get_Name` failed ("no player world attached"), which released the script (TR: BootanaHutta.lua:15
+    at the first `Game_Mode_Starting_Event`). Still open: tactical-only sessions (skirmish) give the scoring VM no player
+    world (the players live in the battle AI's world).
   - The UI readers of §7, saving the script's own tables (§6: stats are empty after a load; a load re-creates the
     script, so `Game_Mode_Starting_Event("Galactic")` runs again at the first frame after it).

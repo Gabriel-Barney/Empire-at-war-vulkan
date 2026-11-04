@@ -1031,6 +1031,12 @@ static void test_scoring_service(const World& w) {
     };
     free_script("Scoring_Free", true);
     free_script("Scoring_Plain", false);
+    // q6 t03: the players without a story session (Thrawn's Revenge's plugins: Find_Player, PlayerWrapper::Get_Name).
+    script("Scoring_Players",
+           "function Base_Definitions() ServiceRate = 0 n = 0 end\n"
+           "function Game_Mode_Starting_Event(mode, map) local p = Find_Player(\"Empire\") Log(\"N:\" .. p.Get_Name()) end\n"
+           "function main() while true do n = n + 1 if n <= 2 then Log(\"F:\" .. Find_Player(\"Underworld\").Get_Faction_Name()) end "
+           "coroutine.yield(true) end end\n");
     DirectoryProvider files(path_to_utf8(root));
     jobs::JobSystem js(jobs::JobSystemConfig{0});
     const GalacticRules r = rules();
@@ -1107,6 +1113,17 @@ static void test_scoring_service(const World& w) {
         s.host->run_fast(40);
         CHECK(s.log() == "S:Galactic:Scoring_Campaign;" && s.host->scoring_services() == 0 && s.host->scoring_vm() != nullptr);
     }
+#if defined(ALAMO_LUA_PLAYERS)
+    {  // q6 t03: no story session - the scoring VM has a player world of its own over the campaign's players (before,
+       // Find_Player gave nil there and the first event call released the script).
+        Session s = start("Scoring_Players");
+        s.host->run_fast(10);
+        dump(s);
+        CHECK(s.log() == "N:Empire;F:UNDERWORLD;F:UNDERWORLD;");
+        CHECK(s.host->scoring_vm() != nullptr && s.host->scoring_releases() == 0);
+        CHECK(s.host->end_game_mode() && s.host->scoring_vm() == nullptr);
+    }
+#endif
     {  // GameRandom.Free_Random (ranged) draws from the free stream: the synced RNG and the frame CRCs are unchanged.
         Session a = start("Scoring_Free");
         Session b = start("Scoring_Plain");
