@@ -103,6 +103,7 @@ class ContrastTable;
 namespace alamo::lua {
 class ObjectBridge;
 class GlobalValueStore;  // Int-final
+enum class PreventAiResult : uint8_t;  // object_bridge.hpp
 }  // namespace alamo::lua
 
 namespace alamo::ai {
@@ -394,6 +395,14 @@ public:
     // centre (AI_TACTICAL_PERCEPTION §4). Fog itself is the FOW system's; perception reads it through the
     // PerceptionWorld object_fogged / point_fogged callbacks the host fills (absent = never fogged).
     void refog(int32_t player, float x, float y);
+
+    // q6 (OBJECT_SCRIPTS §10.1): Lua Prevent_AI_Usage on object `id` owned by `owner`, no object flag. true: out of the
+    // owner's free store (nothing when it is not there, e.g. in a task force); false: the normal admission (AI_TACTICAL
+    // §5.1, the TF-release path: no On_Unit_Added). Not sticky: a later admission path puts the object back. [port] the
+    // original admits an object at its creation, before its script runs; an object this world has not perceived yet is
+    // therefore skipped once by its first admission instead. NoAiPlayer: the owner has no tactical AI here (a human, a
+    // neutral player); NotInitialised: its AI has not had its first service.
+    lua::PreventAiResult prevent_ai_usage(int32_t id, int32_t owner, bool on);
 
     // ---- inspection ----
     bool is_ai_player(int32_t player) const;

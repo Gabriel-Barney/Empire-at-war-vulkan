@@ -1,4 +1,4 @@
-// OI abilities (owner: tactical abilities agent): the battle-host side of docs/re/TACTICAL_GAPS.md §1-§2 / §7 for
+// OI abilities (owner: tactical abilities agent): the battle-host side of docs/re/TACTICAL_GAPS.md Â§1-Â§2 / Â§7 for
 // engine/tactical/abilities - the AbilityHost hooks (fog tests, map rectangle, locomotor state, ground height, the
 // Battlefield_Modifier reveal list), the repair credit hooks, the ability actions after the tick (move / stop orders,
 // owner changes), the objects abilities create (mines, summons, deploy troopers, barrage targets) and the death spawns
@@ -33,6 +33,17 @@ std::string_view types_trim(std::string_view s) {
     while (!s.empty() && ws(s.back())) s.remove_suffix(1);
     return s;
 }
+// q6 (OBJECT_SCRIPTS Â§10.4 step 2, 0x20ACD0): Spawn_Unit's facing, from the point toward the map origin: yaw =
+// atan2(-y, -x) (0 at the origin in x / y), pitch = atan2(z, horizontal distance) when z != 0. [port] land objects drop
+// the pitch (they stand on the terrain; the movement and combat facings of the port are planar there).
+Vec3 facing_to_origin(Vec3 p, bool space) {
+    const float yaw = (p.x == 0.0f && p.y == 0.0f) ? 0.0f : dmath::atan2(-p.y, -p.x);
+    const float pitch = (space && p.z != 0.0f) ? dmath::atan2(p.z, dmath::sqrt(p.x * p.x + p.y * p.y)) : 0.0f;
+    float sy = 0.0f, cy = 1.0f, sp = 0.0f, cp = 1.0f;
+    dmath::sincos(yaw, sy, cy);
+    dmath::sincos(pitch, sp, cp);
+    return Vec3{cp * cy, cp * sy, sp};
+}
 }  // namespace
 
 void TacticalBattle::oi_add_ability_types() {
@@ -50,7 +61,7 @@ void TacticalBattle::oi_add_ability_types() {
         };
         for (const ta::AbilityObjectDesc& o : tables_->abilities.objects)
             for (const ta::UnitAbilityRecord& r : o.unit_abilities)
-                if (r.type == ta::kDeployTroopers) {  // §5.2: the spawn requests name the member types
+                if (r.type == ta::kDeployTroopers) {  // Â§5.2: the spawn requests name the member types
                     use(r.spawned_type);
                     std::vector<int32_t> members;
                     if (oi_company_members(r.spawned_type, members))
@@ -81,7 +92,7 @@ void TacticalBattle::oi_add_ability_types() {
 }
 
 bool TacticalBattle::oi_company_members(int32_t type, std::vector<int32_t>& members) const {
-    // REMAINING_GAPS §5.2: Company_Units (+0x958), else Squadron_Units (+0x978), list order; unknown names are skipped.
+    // REMAINING_GAPS Â§5.2: Company_Units (+0x958), else Squadron_Units (+0x978), list order; unknown names are skipped.
     members.clear();
     const objects::GameObjectTypes& types = catalog_->types();
     if (type < 0 || static_cast<size_t>(type) >= types.size()) return false;
@@ -110,7 +121,7 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     h.fow_reveal_add = [this](int32_t p, int32_t c, uint64_t s, float m) { fog_add_reveal_multiplier(p, c, s, m); };
     h.fow_reveal_remove = [this](int32_t p, uint64_t s) { fog_remove_reveal_modifier(p, s); };
 #endif
-    // FIGHTER_FLYING §6.5: the snowspeeder tow cable circles its target (a team container: every live member).
+    // FIGHTER_FLYING Â§6.5: the snowspeeder tow cable circles its target (a team container: every live member).
     h.cable_attack = [this](tc::ObjectId user, tc::ObjectId target, float r_min, float r_max) {
         if (!movement_) return;
         if (movement_->has_unit(user)) {
@@ -135,32 +146,32 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
         return movement_->view(id).speed > 0.0f;
     };
     h.ground_height = [this](float x, float y) { return space_ ? 0.0f : ground_height(x, y); };
-    // REMAINING_GAPS §5.1: the first occupant of the vehicle (EJECT_VEHICLE_THIEF).
+    // REMAINING_GAPS Â§5.1: the first occupant of the vehicle (EJECT_VEHICLE_THIEF).
     h.first_occupant = [this](tc::ObjectId vehicle) -> tc::ObjectId {
         const std::vector<objects::ObjectId> in = garrisoned_units(vehicle);
         return in.empty() ? tc::kNoObject : in.front();
     };
-    // §5.2: Company_Units, else Squadron_Units, as host type indexes.
+    // Â§5.2: Company_Units, else Squadron_Units, as host type indexes.
     h.company_members = [this](int32_t type, std::vector<int32_t>& members) { return oi_company_members(type, members); };
-    // §5.2: the owner's model bone (bind pose [M]); > 0 found, 0 missing bone, < 0 no model.
+    // Â§5.2: the owner's model bone (bind pose [M]); > 0 found, 0 missing bone, < 0 no model.
     h.bone_position = [this, st = &mode.primary()](tc::ObjectId owner, std::string_view bone, tactical::Vec3& pos) {
         Vec3 p{};
         const int r = model_bone_point(*st, st->find(owner), bone, p);
         if (r > 0) pos = tactical::Vec3{p.x, p.y, p.z};
         return r;
     };
-    // OI t02 (ABILITIES_HARDPOINTS §4.12 [port]): the map's water plane lies above the terrain under the point.
+    // OI t02 (ABILITIES_HARDPOINTS Â§4.12 [port]): the map's water plane lies above the terrain under the point.
     h.over_water = [this](tactical::Vec3 p) {
         if (space_ || !map_.terrain.present || map_.terrain.header.water_type == terrain::WaterType::None) return false;
         return map_.terrain.sample_height(p.x, p.y) < map_.terrain.header.water_height;
     };
 #ifdef ALAMO_SIM_HAVE_ANIM
-    // OI t03 (§4.13): clip frame count / fps from the sim model (an XML animation name resolved to its type id).
+    // OI t03 (Â§4.13): clip frame count / fps from the sim model (an XML animation name resolved to its type id).
     h.anim_clip = [this, m = &mode](tc::ObjectId id, int32_t type, std::string_view name, uint32_t variant, uint32_t& frames,
                                     float& fps) {
         return anim_clip_info(*m, id, type >= 0 ? type : anim::find_anim_type(name), frames, fps, variant);
     };
-    // OI follow-up t01 (§4.14): the ModelAnimType id of a name, and the type's Attack_Animation_Is_Overlay.
+    // OI follow-up t01 (Â§4.14): the ModelAnimType id of a name, and the type's Attack_Animation_Is_Overlay.
     h.anim_type = [](std::string_view name) { return anim::find_anim_type(name); };
     h.attack_overlay = [this, m = &mode](tc::ObjectId id) {
         if (!anim_) return false;
@@ -169,22 +180,22 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
         return st.exists(oh) && anim_->params_for(st.type(oh), m->kind()).attack_overlay;
     };
 #endif
-    // OI follow-up t03 (A1_READINGS §28.9): the script's shares of the movement lock (Lock_Current_Orders, a Divert).
-    // a1i t04: + the unload exit path of a landing object's unloaded units (§35.2, the locomotor's forced-move term).
+    // OI follow-up t03 (A1_READINGS Â§28.9): the script's shares of the movement lock (Lock_Current_Orders, a Divert).
+    // a1i t04: + the unload exit path of a landing object's unloaded units (Â§35.2, the locomotor's forced-move term).
     h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id) || landing_locked(id); };
-    // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range tests against a garrisoned target's host. S8 t10 (§5.1): the host's gun
+    // S8 t06 (LOB_SOLVER Â§3.5): Remote_Bomb range tests against a garrisoned target's host. S8 t10 (Â§5.1): the host's gun
     // bones of its current ALT entry (Num_Garrison_Guns FP_0<i>_ALT<a>, CombatSystem::garrison_fire_bones).
     h.garrison_holder = [this](tc::ObjectId id) -> tc::ObjectId { return garrison_holder_of(id); };
     h.garrison_fire_bones = [this](tc::ObjectId holder, tactical::Vec3& holder_pos, std::vector<tactical::Vec3>& bones) {
         return combat_ && combat_->garrison_fire_bones(holder, holder_pos, bones);
     };
-    // S8 t11 (MOVEMENT §3.2): DEPLOY drives the Walk locomotor's deploy states; oi_deploy_sync reports the changes back.
+    // S8 t11 (MOVEMENT Â§3.2): DEPLOY drives the Walk locomotor's deploy states; oi_deploy_sync reports the changes back.
     h.deploy = [this](tc::ObjectId id, bool on, uint32_t frame) {
         if (!movement_) return false;
         const mv::MovementSystem::DeployResult r = movement_->deploy(id, on, frame);
         return r != mv::MovementSystem::DeployResult::NoWalk && r != mv::MovementSystem::DeployResult::Ignored;
     };
-    // S8 t10 (LOB_SOLVER §3.5 "Facing at apply"): the thrown abilities snap the movement yaw (the combat facing follows).
+    // S8 t10 (LOB_SOLVER Â§3.5 "Facing at apply"): the thrown abilities snap the movement yaw (the combat facing follows).
     h.snap_yaw = [this](tc::ObjectId id, float yaw_deg) {
         if (movement_) movement_->snap_yaw(id, yaw_deg);
     };
@@ -270,27 +281,28 @@ objects::ObjectHandle TacticalBattle::script_spawn_company(TacticalMode& mode, c
         add.push_back(bt);
     }
     script_add_types(add);
-    // [port] member placement: the reinforcement drop layout around the point (land: snapped to a passable cell of each
-    // member's movement class); no layout -> every member at the point.
-    drop_pos_.clear();
-    const LandDropShape shape = land_drop_shape(ct);
-    const LandDropLayout lay = land_drop_layout(shape, p.position.x, p.position.y, drop_yaw(P.side));
-    if (lay.ok)
-        for (const LandDropSlot& s : lay.slots) {
-            Vec3 at{s.x, s.y, p.position.z};
-            if (!space_ && movement_) {
-                const mv::UnitDesc md = mv::unit_desc_from_type(types, s.type);
-                at = snap_passable(Vec3{s.x, s.y, 0.0f}, movement_->classes().mask(md.movement_class), false);
-            }
-            drop_pos_.push_back(at);
-        }
-    const size_t members = spawn_types(P).size();
-    if (drop_pos_.size() < members) drop_pos_.resize(members, p.position);  // deploy() places past the list at the side anchor
+    // Â§10.4 steps 2 / 5: every member faces the map origin; its spot is the free placement ring search around the point
+    // (members in Company_Units order, each later one avoiding the earlier ones). deploy() takes the spots in member
+    // order (Participant::spots: position, facing).
+    const Vec3 face = facing_to_origin(p.position, space_);
+    const std::vector<uint32_t> member_types = spawn_types(P);
+    std::vector<Vec3> spots;
+    script_member_spots(mode, member_types, p.position, dmath::atan2(face.y, face.x) * (180.0f / dmath::kPiF), spots);
+    for (const Vec3& s : spots) P.spots.emplace_back(s, face);
     const auto pi = static_cast<uint32_t>(parts_.size());
     parts_.push_back(std::move(P));
     const size_t first_unit = units_.size(), first_container = containers_.size();
     deploy(mode, pi, *bt_rng_);
-    drop_pos_.clear();
+    // Â§10.4 step 7: a TEAM container stands at its chunk's centroid, on land snapped passable [port: for the first
+    // member's movement class]; the members keep their spots.
+    if (!space_ && movement_ && units_.size() > first_unit) {
+        objects::ObjectStore& st = mode.primary();
+        const mv::UnitDesc md = mv::unit_desc_from_type(types, units_[first_unit].type);
+        for (size_t ci = first_container; ci < containers_.size(); ++ci)
+            if (st.alive(containers_[ci].h))
+                st.set_position(containers_[ci].h, snap_passable(st.position(containers_[ci].h),
+                                                                 movement_->classes().mask(md.movement_class), false));
+    }
     bt_used_ = true;
     objects::ObjectHandle out{};
     if (containers_.size() > first_container) out = containers_[first_container].h;
@@ -307,7 +319,7 @@ bool TacticalBattle::script_damage(TacticalMode& mode, objects::ObjectId id, flo
     tc::DamageRequest r;
     r.victim = id;
     r.amount = amount;
-    r.kind = tc::kKindDebug;  // Lua Take_Damage: kind 0 (OBJECT_SCRIPTS §6.1 step 4)
+    r.kind = tc::kKindDebug;  // Lua Take_Damage: kind 0 (OBJECT_SCRIPTS Â§6.1 step 4)
     const size_t deaths_before = combat_->deaths().size();
     combat_->take_damage(r, frame_);
     if (cannot_die && !had_cannot_die && combat_->has_unit(id)) combat_->set_flag(id, tc::kUnitCannotDie, false);
@@ -317,12 +329,91 @@ bool TacticalBattle::script_damage(TacticalMode& mode, objects::ObjectId id, flo
     return true;
 }
 
+bool TacticalBattle::script_invulnerable(objects::ObjectId id, bool on) {
+    if (finished_ || !combat_) return false;
+    auto apply = [this, on](objects::ObjectId u) {
+        if (!combat_->has_unit(u)) return;
+        combat_->set_flag(u, tc::kUnitInvulnerable, on);
+        if (!on) combat_->end_invulnerable(u);
+    };
+    // A TEAM container (Â§10.2): each member, in member (unit list) order; the container itself has no combat entry.
+    for (size_t ci = 0; ci < containers_.size(); ++ci) {
+        if (containers_[ci].id != id || !containers_[ci].team) continue;
+        for (const Unit& u : units_)
+            if (u.container == ci && u.alive && !u.retreated) apply(u.id);
+        return true;
+    }
+    if (!combat_->has_unit(id)) return false;
+    apply(id);
+    return true;
+}
+
+void TacticalBattle::script_member_spots(const TacticalMode& mode, std::span<const uint32_t> members, Vec3 at, float yaw_deg,
+                                         std::vector<Vec3>& out) const {
+    out.clear();
+    const objects::GameObjectTypes& types = catalog_->types();
+    auto has_model = [&](uint32_t t) {
+        return !types_trim(types.get_string(t, space_ ? "Space_Model_Name" : "Land_Model_Name")).empty();
+    };
+    constexpr uint64_t kLayer20 = 0x20;  // Space_Layer 0x20: never a blocker (space_member_spots)
+    // Blockers: as space_member_spots (the object tree, all owners: live, not dying, not Is_Decoration, a model for the
+    // mode, no TRANSPORT_LANDING / LAND_OBSTACLE / PROJECTILE; space: Space_Layer != 0x20), their box in x / y.
+    const objects::ObjectStore& st = mode.primary();
+    std::vector<FreePlacementBox> blockers;
+    for (const objects::ObjectHandle h : st.all_objects()) {
+        if (!st.alive(h) || st.dying(h)) continue;
+        const objects::TypeIndex t = st.type(h);
+        if (t >= types.size() || types.get_bool(t, "Is_Decoration") || !has_model(t)) continue;
+        if (st.has_behavior(h, objects::beh::TransportLanding) || st.has_behavior(h, objects::beh::LandObstacle) ||
+            st.has_behavior(h, objects::beh::Projectile))
+            continue;
+        if (space_ && types.get_mask(t, "Space_Layer") == kLayer20) continue;
+        const tactical::Aabb b = mode.bounds_of(h);
+        blockers.push_back({b.min.x, b.min.y, b.max.x, b.max.y});
+    }
+    // Land: the candidate's cell is pure Clear (effective bits & Clear == bits; out of the grid: never).
+    std::function<bool(float, float)> accept;
+    if (!space_ && movement_) {
+        const mv::PassabilityGrid* g = &movement_->grid();
+        accept = [g](float x, float y) { return g->passable_world({x, y}, mv::kPassClear); };
+    }
+    for (const uint32_t t : members) {
+        // The member's model box (model space, no Scale_Factor). [port] without model data (no art loaded) the type's
+        // hard extents (drop_half_extents), so the members still spread instead of all standing on the point.
+        FreePlacementBox local;
+        const BattleCatalog::ModelInfo* m = t < types.size() ? catalog_->model_info(t, space_, true) : nullptr;
+        if (m && m->has_bounds) {
+            local = {m->min[0], m->min[1], m->max[0], m->max[1]};
+        } else {
+            float hx = 0.0f, hy = 0.0f;
+            drop_half_extents(t, hx, hy);
+            local = {-hx, -hy, hx, hy};
+        }
+        float qx = 0.0f, qy = 0.0f;
+        if (!find_free_placement(at.x, at.y, local, blockers, 2500.0f, qx, qy, yaw_deg - 45.0f, accept)) {
+            qx = at.x;  // none: (0, 0, 0), replaced by the given point
+            qy = at.y;
+        }
+        const float z = (!space_ && map_.terrain.present) ? map_.terrain.sample_height(qx, qy) : at.z;
+        out.push_back(Vec3{qx, qy, z});
+        blockers.push_back({qx + local.min_x, qy + local.min_y, qx + local.max_x, qy + local.max_y});
+    }
+}
+
+bool TacticalBattle::script_has_model(const TacticalMode& mode, objects::ObjectHandle h) const {
+    const objects::ObjectStore& store = mode.primary();
+    if (!store.exists(h)) return false;
+    return !types_trim(catalog_->types().get_string(store.type(h), space_ ? "Space_Model_Name" : "Land_Model_Name")).empty();
+}
+
+Vec3 TacticalBattle::script_spawn_facing(Vec3 p) const { return facing_to_origin(p, space_); }
+
 void TacticalBattle::oi_events(TacticalMode& mode) {
     if (!abilities_ || !combat_) return;
     objects::ObjectStore& store = mode.primary();
     // a. ability actions (copies: the handlers below may add objects, which raise new events)
     const std::vector<ta::AbilityEvent> events(abilities_->events().begin(), abilities_->events().end());
-    std::vector<objects::ObjectId> remove_silently;  // STATION_HANGARS_SOUND §1.1: after the station upgrade (b)
+    std::vector<objects::ObjectId> remove_silently;  // STATION_HANGARS_SOUND Â§1.1: after the station upgrade (b)
     for (const ta::AbilityEvent& e : events) {
         switch (e.kind) {
             case ta::AbilityEventKind::RemoveSilently: remove_silently.push_back(e.id); break;
@@ -330,7 +421,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 Unit* u = unit_by_id(e.id);
                 if (u && u->alive && !u->retreated && u->movable && bt_rng_) {
                     // S7 t06: JET_PACK (0x3a38d0) swaps a Uses_Multiple_Locomotors unit to its secondary locomotor
-                    // (0x3a9910, MOVEMENT §3.1.1) before the move; the JETPACK locomotor flies it and swaps back on landing.
+                    // (0x3a9910, MOVEMENT Â§3.1.1) before the move; the JETPACK locomotor flies it and swaps back on landing.
                     // Its weapons are suspended meanwhile (kUnitWeaponsSuspended, set before each combat tick).
                     if (e.type == ta::kJetPack && movement_) movement_->use_secondary_locomotor(e.id, true);
                     const objects::ObjectId ids[] = {e.id};
@@ -347,7 +438,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 break;
             }
             case ta::AbilityEventKind::MarkerTossed: {
-                // S8 t10 (LOB_SOLVER §3.5 "MARKER removal"): the toss kills its ground-point MARKER (Dummy_Barrage_Target)
+                // S8 t10 (LOB_SOLVER Â§3.5 "MARKER removal"): the toss kills its ground-point MARKER (Dummy_Barrage_Target)
                 // with an ordinary Destroy_Object, spawned bomb or not. [port] removed here, after the ability pass.
                 for (size_t i = 0; i < dummies_.size(); ++i) {
                     if (dummies_[i].id != e.target) continue;
@@ -377,7 +468,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 break;
             }
             case ta::SpawnPurpose::Troopers: {
-                // §5.2: member type q.object_type at the bone, the owner's facing; anim 0x5f (none when the model lacks
+                // Â§5.2: member type q.object_type at the bone, the owner's facing; anim 0x5f (none when the model lacks
                 // it), attached at bone q.bone of q.source (0x38d320), +0x3a2 |= 2, then the trooper list (bind_spawn).
                 // [port] locomotor vf +0x200 is the movement registration in oi_spawn_unit.
                 const objects::ObjectId id = oi_spawn_unit(mode, q.object_type, oi_sv(q.position), oi_sv(q.facing), q.owner);
@@ -392,9 +483,9 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 break;
             }
             case ta::SpawnPurpose::CaptureVariant: {
-                // Vehicle_Thief (TACTICAL_GAPS §2.3.10): the victim type's capture variant (+0xda8, the resolved
+                // Vehicle_Thief (TACTICAL_GAPS Â§2.3.10): the victim type's capture variant (+0xda8, the resolved
                 // Vehicle_Thief_Inside_Clone of +0xda0) at the victim with the victim's owner (one id); the thief
-                // boards it; EJECT_VEHICLE_THIEF (46) on for the variant (REMAINING_GAPS §5.1). No variant: nothing.
+                // boards it; EJECT_VEHICLE_THIEF (46) on for the variant (REMAINING_GAPS Â§5.1). No variant: nothing.
                 int32_t vt = q.object_type;
                 const Unit* victim = unit_by_id(q.target);
                 if (vt < 0 && victim) {
@@ -413,7 +504,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 break;
             }
             case ta::SpawnPurpose::BarrageTarget: {
-                // BARRAGE (§2.2): Dummy_Barrage_Target owned by the shooter's first enemy, then an Attack command on it.
+                // BARRAGE (Â§2.2): Dummy_Barrage_Target owned by the shooter's first enemy, then an Attack command on it.
                 if (!bt_rng_ || !combat_->has_unit(q.source)) break;
                 const int32_t issuer = combat_->owner(q.source);
                 const objects::ObjectId d = spawn_dummy_target(mode, issuer, oi_sv(q.position), *bt_rng_);
@@ -456,7 +547,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 }
                 break;
             }
-            case ta::SpawnPurpose::StationUpgrade: hg_station_upgrade(mode, q); break;  // STATION_HANGARS_SOUND §1.2
+            case ta::SpawnPurpose::StationUpgrade: hg_station_upgrade(mode, q); break;  // STATION_HANGARS_SOUND Â§1.2
             default: break;  // InstantEffect: [port] the variant / composition is not resolved
         }
     }
@@ -464,7 +555,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
         hg_remove_silently(id);
         bt_kill_silently(mode, store.find(id));
     }
-    // c. Die step 7 (§1.9): Tactical_Respawn (delayed) and Destruction_Survivors, event order. Owner rule 0x3751a0
+    // c. Die step 7 (Â§1.9): Tactical_Respawn (delayed) and Destruction_Survivors, event order. Owner rule 0x3751a0
     //    [port: the dying object's owner].
     for (const tc::SurvivorEvent& s : combat_->survivor_events()) {
         if (s.respawn) {
@@ -492,14 +583,14 @@ void TacticalBattle::oi_deploy_sync() {
     if (!movement_) return;
     for (const mv::MovementSystem::DeployEvent& e : movement_->take_deploy_events()) {
         if (abilities_) abilities_->set_deploy_state(e.id, static_cast<uint8_t>(e.to));
-        // AI_TACTICAL §7.3.3 item 3: Walk vf6 0x61e930 raises 0x29 at the end of the Deploy / Undeploy clip, Deploy(true)
+        // AI_TACTICAL Â§7.3.3 item 3: Walk vf6 0x61e930 raises 0x29 at the end of the Deploy / Undeploy clip, Deploy(true)
         // 0x61d300 at once on a blocked reverse. This is the deploy's "unit ability finished".
         if (e.finished) ability_finished_.push_back(e.id);
     }
 }
 
 void TacticalBattle::oi_hash(StateHasher& h) const {
-    for (const Unit& u : units_) {  // §5.2 trooper attachments (ascending id; nothing hashed without troopers)
+    for (const Unit& u : units_) {  // Â§5.2 trooper attachments (ascending id; nothing hashed without troopers)
         if (u.attached_to == objects::kNoObjectId) continue;
         h.i32(u.id);
         h.i32(u.attached_to);

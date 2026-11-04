@@ -790,9 +790,28 @@ cmd::RejectReason SimHost::apply(uint8_t player, const cmd::EventData& ev) {
             return (!ids.empty() && sel.empty()) ? R::InvalidUnit : R::None;
         }
         case T::SelectAll: {
+            // q6 (COMMANDS §2.4.1): replace the selection with the issuer's SELECTABLE objects in owner-list order, without
+            // base structures, star bases, orbital structures, mines and objects with a parent; no category filter, no cap.
+            static const objects::BehaviorTypeId kGroundStructure = objects::behavior_type_id("DUMMY_GROUND_STRUCTURE");
+            static const objects::BehaviorTypeId kStarBase = objects::behavior_type_id("DUMMY_STAR_BASE");
+            static const objects::BehaviorTypeId kOrbital = objects::behavior_type_id("DUMMY_ORBITAL_STRUCTURE");
+            static const objects::BehaviorTypeId kMine = objects::behavior_type_id("PROXIMITY_MINE");
             sel.clear();
-            for (ObjectHandle h : store.owned_by(player))
-                if (store.active(h) && store.has_behavior(h, objects::beh::Selectable)) sel.push_back(store.id(h));
+            std::vector<ObjectId> members;
+            auto add = [&sel](ObjectId id) {
+                if (std::find(sel.begin(), sel.end(), id) == sel.end()) sel.push_back(id);  // already selected: nothing
+            };
+            for (ObjectHandle h : store.owned_by(player)) {
+                if (!store.active(h) || !store.has_behavior(h, objects::beh::Selectable)) continue;
+                if (store.has_behavior(h, kGroundStructure) || store.has_behavior(h, kStarBase) || store.has_behavior(h, kOrbital) ||
+                    store.has_behavior(h, kMine))
+                    continue;
+                if (store.exists(store.container(h))) continue;  // a parent (store link: contained / transported)
+                members.clear();
+                if (select_all_hook_ && !select_all_hook_(*this, player, h, members)) continue;
+                add(store.id(h));
+                for (const ObjectId m : members) add(m);  // a TEAM container: + its members
+            }
             return R::None;
         }
         case T::MoveToPosition: {

@@ -234,8 +234,11 @@ void drop_deployed_extents(const objects::GameObjectTypes& types, const BattleCa
 struct FreePlacementBox {
     float min_x = 0.0f, min_y = 0.0f, max_x = 0.0f, max_y = 0.0f;
 };
+// q6 (OBJECT_SCRIPTS §10.4 step 5): `start_deg` turns the ring angles (start, start + 22.5, ..., start + 360); `accept`
+// (land: the candidate's cell is pure Clear) must also pass for a candidate to be taken.
 bool find_free_placement(float px, float py, const FreePlacementBox& local, std::span<const FreePlacementBox> blockers, float radius,
-                         float& out_x, float& out_y);
+                         float& out_x, float& out_y, float start_deg = 0.0f,
+                         const std::function<bool(float x, float y)>& accept = {});
 // ---- end a1g t04 follow-up ----
 // S7 t12 / t22: the space fighter locomotor's formation attack target (FIGHTER_FLYING §2 step 6 / §4.3 / §4.9,
 // Formation_Attack_Target(F, &hp, -1) 0x41a2e0, TACTICAL_COMBAT §2.8) for a squadron leader or a fighter without a
@@ -681,6 +684,20 @@ public:
     // order) [port: outside the battle tick; the original's Die runs inside Take_Damage]. False when `id` is not a live
     // combat unit of this battle (the caller keeps its store-only path).
     bool script_damage(TacticalMode& mode, objects::ObjectId id, float amount, bool cannot_die);
+    // q6 (OBJECT_SCRIPTS §10.2): Lua Make_Invulnerable(on) (ObjectBridge::invulnerable_changed). The INVULNERABLE behaviour:
+    // on = CombatSystem kUnitInvulnerable (permanent, only damage kinds 0 / 13 pass, targeting unchanged); off = detached,
+    // which also ends an Invulnerability-ability duration. A TEAM container passes it to each member, not to itself. False
+    // when `id` is neither a combat unit of this battle nor a TEAM container.
+    bool script_invulnerable(objects::ObjectId id, bool on);
+    // q6 (OBJECT_SCRIPTS §10.3): Lua Hide's model test (ObjectBridge::has_model): the type of `h` names a model for this
+    // battle's mode (Space_ / Land_Model_Name). [port] by type data; the original reads the object's model pointer.
+    bool script_has_model(const TacticalMode& mode, objects::ObjectHandle h) const;
+    // q6 (COMMANDS §2.4.1 step 3 / 4): Select All's battle tests of an owned SELECTABLE object `id` (the store tests are the
+    // caller's, SimHost): false = skipped (its owner's retreat is running [port: every unit of that player], a TEAM member,
+    // a garrisoned unit); a TEAM container appends its live, not retreated members (member order) to `members`.
+    bool select_all_entry(objects::ObjectId id, int32_t owner, std::vector<objects::ObjectId>& members) const;
+    // q6 (OBJECT_SCRIPTS §10.4 step 2): Spawn_Unit's facing at `p`: toward the map origin (ObjectBridge::spawn_facing).
+    Vec3 script_spawn_facing(Vec3 p) const;
     const tactical::abilities::SpecialWeaponSystem& special_weapons() const { return l1_sw_; }
     const tactical::movement::HyperspaceDepartures& hyperspace() const { return l1_jumps_; }
     const tactical::movement::EngineControl& engines() const { return l1_engines_; }
@@ -1171,6 +1188,11 @@ private:
     // a1i t05 (A1_READINGS §35.4 item 4): the space Reinforce members' positions around (x, y), in spawn order (one member:
     // the point). False when a member's model box is not loaded (no model data) [port: the rows of 6 then].
     bool space_member_spots(TacticalMode& mode, const Participant& p, float x, float y, std::vector<Vec3>& out) const;
+    // q6 (OBJECT_SCRIPTS §10.4 step 5): Spawn_Unit's member spots around `at`, in member order: per member the free
+    // placement ring search (radius 2500, start angle yaw - 45), land candidates on a pure-Clear cell with z := terrain
+    // height; each placed member blocks the later ones; no free spot -> `at`.
+    void script_member_spots(const TacticalMode& mode, std::span<const uint32_t> members, Vec3 at, float yaw_deg,
+                             std::vector<Vec3>& out) const;
     std::vector<LandingUnload> landings_unloaded_;    // transient (not saved): see landings_unloaded()
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);

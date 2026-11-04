@@ -280,6 +280,11 @@ public:
     using OrderHook = std::function<commands::RejectReason(SimHost& host, uint8_t player, const commands::EventData& ev,
                                                            const std::vector<ObjectId>& selection)>;
     void set_order_hook(OrderHook hook) { order_hook_ = std::move(hook); }
+    // q6 (COMMANDS §2.4.1): Select All's tests that need the running battle (CampaignBattles): false = skip the owned
+    // SELECTABLE object `h` (a TEAM member, a garrisoned unit, a running retreat of its owner, Set_Selectable(false)); a
+    // TEAM container appends the members that join it. Unset: only the store tests.
+    using SelectAllHook = std::function<bool(SimHost& host, uint8_t player, ObjectHandle h, std::vector<ObjectId>& members)>;
+    void set_select_all_hook(SelectAllHook hook) { select_all_hook_ = std::move(hook); }
     // Port-only events (PortExtension 63, e.g. the pause / resume entry of docs/PHASE4.md "Camera and controls") offered to
     // the game host at the command phase in every mode, before the galactic / tactical handlers; Unhandled falls through.
     // P4 host: also offered every other event that no handler took (Unhandled after the galactic / tactical paths, e.g.
@@ -387,6 +392,7 @@ private:
     TacticalCommandHook tactical_cmd_;  // S10-int
     TacticalCommandHook galactic_cmd_;  // Int-final
     OrderHook order_hook_;              // P host
+    SelectAllHook select_all_hook_;     // q6
     PortEventHook port_hook_;           // P host
     std::array<std::array<std::vector<ObjectId>, 10>, kMaxPlayers> groups_;  // P host: control groups
     bool groups_used_ = false;                                               // P host

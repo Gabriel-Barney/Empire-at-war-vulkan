@@ -4183,6 +4183,9 @@ void CombatSystem::make_invulnerable(ObjectId id, int32_t frames, uint32_t frame
     if (u->invuln_end <= frame) u->invuln_end = frame + static_cast<uint32_t>(frames);  // attached only when missing
     if (hooks_) hooks_->unit_effect(id, UnitEffect::Invulnerable, u->owner, u->pos, frame);
 }
+void CombatSystem::end_invulnerable(ObjectId id) {
+    if (Unit* u = unit(id)) u->invuln_end = 0;
+}
 bool CombatSystem::timed_invulnerable(ObjectId id, uint32_t frame) const {
     const Unit* u = unit(id);
     return u && u->invuln_end > frame;

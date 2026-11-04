@@ -576,6 +576,7 @@ ObjectHandle spawn(Call& c, TypeIndex type, int32_t owner, Vec3 pos, ObjectHandl
     // q6 object scripts: a host that adopts script-spawned units into its systems (the battle's trees / combat /
     // movement) creates them through ObjectBridge::spawn_unit; unset (every host before q6): the store alone.
     const ObjectBridge* b = bridge(c);
+    if (company && !sp.container && b && b->spawn_facing) sp.facing = b->spawn_facing(pos);  // Spawn_Unit (§10.4 step 2)
     auto create = [&](const objects::SpawnParams& p) {
         if (b && b->spawn_unit) {
             const ObjectHandle made = b->spawn_unit(p);
@@ -1914,7 +1915,7 @@ int set_bool(Call& c, BoolField field, const char* count_msg, const char* type_m
                         "GameObjectWrapper::" method " -- invalid number of parameters. Expected 1, got %d.", \
                         "GameObjectWrapper::" method " -- invalid type for parameter 1. Expected " type_text "."); \
     }
-ALAMO_BOOL_SETTER(m_make_invulnerable, invulnerable, "Make_Invulnerable", "boolean")
+ALAMO_BOOL_SETTER(m_make_invulnerable_flag, invulnerable, "Make_Invulnerable", "boolean")
 ALAMO_BOOL_SETTER(m_set_cannot_be_killed, cannot_be_killed, "Set_Cannot_Be_Killed", "boolean")
 ALAMO_BOOL_SETTER(m_prevent_all_fire, prevent_all_fire, "Prevent_All_Fire", "boolean")
 ALAMO_BOOL_SETTER(m_prevent_opportunity_fire, prevent_opportunity_fire, "Prevent_Opportunity_Fire", "boolean")
@@ -1923,6 +1924,14 @@ ALAMO_BOOL_SETTER(m_set_in_limbo, in_limbo, "Set_In_Limbo", "boolean")
 ALAMO_BOOL_SETTER(m_set_check_contested_space, check_contested_space, "Set_Check_Contested_Space", "boolean")
 ALAMO_BOOL_SETTER(m_disable_capture, capture_disabled, "Disable_Capture", "boolean")
 #undef ALAMO_BOOL_SETTER
+
+// q6 (OBJECT_SCRIPTS §10.2): the stored flag, then the host's INVULNERABLE behaviour (ObjectBridge::invulnerable_changed).
+int m_make_invulnerable(Call& c) {
+    const int r = m_make_invulnerable_flag(c);
+    if (r != 0) return r;
+    if (const ObjectBridge* b = bridge(c); b && b->invulnerable_changed) b->invulnerable_changed(self_object(c), to_bool(c, 1));
+    return r;
+}
 
 // Set_Garrison_Spawn: stores the flag like the other boolean setters, then tells the host (the stored
 // flag's default does not match the original's enabled default, so the host is notified, not polled).
@@ -1947,6 +1956,9 @@ int m_set_selectable(Call& c) {
 int m_hide(Call& c) {
     if (c.nargs < 1) return c.script_error_stop("GameObjectWrapper::Hide -- Missing required boolean parameter.");
     if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::Hide -- Expected bool parameter.");
+    // q6 (OBJECT_SCRIPTS §10.3): without a model in this mode a script error (the script ends after its pass).
+    if (const ObjectBridge* b = bridge(c); b && b->has_model && !b->has_model(self_object(c)))
+        return c.script_error_stop("object %s has no model.", std::string(object_type_name(c, self_object(c))).c_str());
     if (ScriptObjectState* s = edit_self(c)) s->hidden = to_bool(c, 1);
     return 0;
 }
@@ -1954,6 +1966,16 @@ int m_hide(Call& c) {
 int m_prevent_ai_usage(Call& c) {
     if (!is_bool(c, 1)) return c.script_error_stop("GameObjectWrapper::Prevent_AI_Usage -- Expected bool parameter.");
     if (ScriptObjectState* s = edit_self(c)) s->prevent_ai_usage = to_bool(c, 1);
+    // q6 (OBJECT_SCRIPTS §10.1): the owner's AI free store. [port] the two error texts end where the spec quotes them.
+    if (const ObjectBridge* b = bridge(c); b && b->prevent_ai_usage) {
+        switch (b->prevent_ai_usage(self_object(c), to_bool(c, 1))) {
+            case PreventAiResult::Done: break;
+            case PreventAiResult::NoAiPlayer: c.script_warning("No AI Player active on the owner of this object."); break;
+            case PreventAiResult::NoFreeStore: c.script_warning("No freestore exists for this AI Player."); break;
+            case PreventAiResult::NoAiPresence: return c.script_error_stop("Owner has no AI presence in this mode.");
+            case PreventAiResult::NotInitialised: return c.script_error_stop("Owner AI is not yet initialized.  Wait a frame.");
+        }
+    }
     return 0;
 }
 

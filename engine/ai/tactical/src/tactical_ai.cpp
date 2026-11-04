@@ -237,6 +237,9 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     PerceptionWorld w;
     std::vector<TacticalAiObject> facts;
     std::vector<std::pair<int32_t, int32_t>> prev;  // (id, owner) of the last snapshot, ascending id
+    // q6 (OBJECT_SCRIPTS §10.1): ids a script took out of the AI before this world perceived them (ascending); their
+    // first admission (the add path of refresh) is skipped once.
+    std::vector<int32_t> unadmit_pending;
     TacticalPerception perc;
     ZoneGraph zones;
     std::map<std::string, uint32_t> eq_index;
@@ -1413,10 +1416,18 @@ void TacticalAiWorld::Impl::refresh() {
                 else perc.grid().register_object(w, o.id, mode_frame);
             }
             const bool produced = claim_produced(o, facts[i].handle);
+            bool unadmit = false;
+            if (!unadmit_pending.empty()) {
+                const auto it = std::lower_bound(unadmit_pending.begin(), unadmit_pending.end(), o.id);
+                if (it != unadmit_pending.end() && *it == o.id) {
+                    unadmit = true;
+                    unadmit_pending.erase(it);
+                }
+            }
             for (auto& pa : ai)
                 if (pa && pa->ctx.initialised()) {
                     pa->on_added(facts[i]);
-                    if (!produced) admit(*pa, i, true);
+                    if (!produced && !unadmit) admit(*pa, i, true);
                 }
         } else if (old->second != o.owner) {
             perc.grid().on_owner_changed(w, o.id);
@@ -3620,6 +3631,25 @@ void TacticalAiWorld::end_battle() {
 void TacticalAiWorld::set_suspended(bool suspended) { impl_->gate.suspend(suspended); }
 void TacticalAiWorld::order_replaced(int32_t object_id) { impl_->order_signal(object_id); }
 void TacticalAiWorld::refog(int32_t player, float x, float y) { impl_->perc.grid().refog_at(player, x, y, impl_->mode_frame); }
+lua::PreventAiResult TacticalAiWorld::prevent_ai_usage(int32_t id, int32_t owner, bool on) {
+    Impl& m = *impl_;
+    PlayerAi* pa = m.player_ai(owner);
+    if (!pa) return lua::PreventAiResult::NoAiPlayer;
+    if (!pa->ctx.initialised()) return lua::PreventAiResult::NotInitialised;
+    const PerceptionObject* o = m.object(id);
+    auto& pend = m.unadmit_pending;
+    const auto it = std::lower_bound(pend.begin(), pend.end(), id);
+    const bool pending = it != pend.end() && *it == id;
+    if (on) {
+        if (o) pa->fs.remove(id);
+        else if (!pending) pend.insert(it, id);
+    } else {
+        if (pending) pend.erase(it);
+        if (o) m.admit(*pa, static_cast<size_t>(o - m.w.objects.data()), false);
+    }
+    return lua::PreventAiResult::Done;
+}
+
 bool TacticalAiWorld::is_ai_player(int32_t player) const { return impl_->player_ai(player) != nullptr; }
 int32_t TacticalAiWorld::opponent(int32_t player) const {
     const PlayerAi* p = impl_->player_ai(player);

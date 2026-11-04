@@ -86,6 +86,7 @@ CampaignBattles::~CampaignBattles() {
     remove_battle_chunks();  // N1 stage 2
     host_->set_after_mode_update({});
     host_->set_tactical_command_hook({});
+    host_->set_select_all_hook({});        // q6
     host_->set_galactic_command_hook({});  // Int-final
     if (gate_)  // battle host: the story-block gate was installed in front of the manager
         if (GalacticMode* g = host_->galactic_mode(); g && g->sim() && g->sim()->conflict_hooks() == gate_.get()) g->sim()->set_conflict_hooks(nullptr);
@@ -210,6 +211,28 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
         TacticalMode* tm = h.tactical();
         if (!battle_ || !tm || pending_) return commands::RejectReason::Unhandled;
         return battle_->handle_command(*tm, player, ev, h.random().synced());
+    });
+    // q6 (COMMANDS §2.4.1): Select All in the running battle: TEAM members, garrisoned units and a retreating side are
+    // skipped (TacticalBattle::select_all_entry), a container brings its members; only objects whose selection flag is
+    // set (Set_Selectable, the tactical bridge's script state: unset = selectable) enter.
+    host_->set_select_all_hook([this](SimHost& h, uint8_t, objects::ObjectHandle o, std::vector<objects::ObjectId>& members) {
+        TacticalMode* tm = h.tactical();
+        if (!battle_ || !tm || pending_) return true;
+        const objects::ObjectStore& st = tm->primary();
+        auto flag = [this](objects::ObjectId id) {
+#ifdef ALAMO_SIM_HAVE_STORY
+            const lua::ScriptObjectState* s = story_bridge_ ? story_bridge_->find_state(id) : nullptr;
+            return !s || s->selectable != 0;
+#else
+            (void)this;
+            (void)id;
+            return true;
+#endif
+        };
+        const objects::ObjectId id = st.id(o);
+        if (!flag(id) || !battle_->select_all_entry(id, st.owner(o), members)) return false;
+        members.erase(std::remove_if(members.begin(), members.end(), [&](objects::ObjectId m) { return !flag(m); }), members.end());
+        return true;
     });
     // Int-final: galactic SpecialAbility commands GalacticSim leaves unhandled (kind 6 = the corruption choice).
     host_->set_galactic_command_hook([this](SimHost&, uint8_t player, const commands::EventData& ev) {
@@ -1358,6 +1381,27 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
             TacticalMode* tm = h->tactical();
             return battle_ && tm && tm->primary().alive(u) && battle_->script_damage(*tm, tm->primary().id(u), amount, cannot_die);
         };
+        // q6 (OBJECT_SCRIPTS §10.1-10.3): Make_Invulnerable -> combat's damage-kind gate, Prevent_AI_Usage -> the owner's
+        // AI free store, Hide -> the model test. [port] Object-script sessions only, like the hooks above.
+        b.invulnerable_changed = [this, h](objects::ObjectHandle u, bool on) {
+            TacticalMode* tm = h->tactical();
+            if (battle_ && tm && tm->primary().alive(u)) battle_->script_invulnerable(tm->primary().id(u), on);
+        };
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+        b.prevent_ai_usage = [this, h](objects::ObjectHandle u, bool on) {
+            TacticalMode* tm = h->tactical();
+            if (!ai_ || !tm || !tm->primary().alive(u)) return lua::PreventAiResult::NoAiPlayer;
+            const objects::ObjectStore& s2 = tm->primary();
+            return ai_->world().prevent_ai_usage(s2.id(u), s2.owner(u), on);
+        };
+#else
+        b.prevent_ai_usage = [](objects::ObjectHandle, bool) { return lua::PreventAiResult::NoAiPlayer; };
+#endif
+        b.has_model = [this, h](objects::ObjectHandle u) {
+            TacticalMode* tm = h->tactical();
+            return !battle_ || !tm || battle_->script_has_model(*tm, u);
+        };
+        b.spawn_facing = [this](Vec3 pos) { return battle_ ? battle_->script_spawn_facing(pos) : Vec3{1.0f, 0.0f, 0.0f}; };
         scripts->set_bridge(mode.primary(), &b);
 #if defined(ALAMO_LUA_PLAYERS)
         scripts->set_player_world(mode.primary(), s ? s->player_world() : host.object_script_players());
