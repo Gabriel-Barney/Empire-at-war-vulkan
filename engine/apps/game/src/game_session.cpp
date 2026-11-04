@@ -13,6 +13,7 @@
 #include "alamo/sim/save_session.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/terrain/ted.hpp"
+#include "alamo/vfs/vfs.hpp"  // q6: the mod layer decides the object-script switch
 #ifdef ALAMO_GAME_HAVE_UI
 #include "alamo/ui/orders.hpp"  // pause_event / read_pause_event
 #endif
@@ -183,7 +184,12 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     sim::SimConfig cfg;
     cfg.seed = spec_.seed;
     cfg.players = sim::session_players(setup_.players.size());
+    // q6 (docs/re/OBJECT_SCRIPTS.md "Port status"): game-object Lua scripts. [port interim rule] On only when a mod layer
+    // (MODPATH=) is loaded - mods such as Thrawn's Revenge need them (its company spawners) - so stock FoC sessions keep
+    // their behaviour and replays until the object scripts are checked against the shipped FoC scripts.
+    cfg.object_scripts = d.vfs && !d.vfs->mod_dirs().empty();
     host_ = std::make_unique<sim::SimHost>(d.types, *js_, cfg);
+    if (cfg.object_scripts) host_->set_object_script_files(d.files.get());
     if (replay) host_->replay_from(replay);
     // q6 t06: the GameScoring script, re-created by every new session before the players and plots (GAME_SCORING.md).
     if (const auto scoring = d.db.constants().get("Game_Scoring_Script_Name"))

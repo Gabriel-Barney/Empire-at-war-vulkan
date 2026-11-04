@@ -12,6 +12,7 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     sim/src/save_session.cpp    # N1 session descriptor + data fingerprints
     sim/src/map_spawn.cpp
     sim/src/scenario.cpp
+    sim/src/object_scripts.cpp  # q6: game-object Lua scripts (SimConfig::object_scripts; a no-op without engine/lua)
   )
   add_library(alamo::sim ALIAS alamo_sim)
   target_include_directories(alamo_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sim/include)

@@ -72,6 +72,9 @@ struct LuaHost {
 struct LuaVmOptions {
     std::string script_name = "Script";  // tostring(Script)
     bool math_library = false;           // expose the dmath-backed 'math' table (not in the original)
+    // q6 object scripts: GameObjectTypeWrapper.Get_Name returns the upper-cased name, as the original (it stores type
+    // names upper-cased, OBJECT_TYPES §3.1). [port interim] Off by default: other VMs keep the name as written.
+    bool upper_type_names = false;
 };
 
 struct UnboundHit {

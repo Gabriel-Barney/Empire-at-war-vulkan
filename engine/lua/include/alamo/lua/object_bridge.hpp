@@ -186,6 +186,11 @@ public:
     // pool). Without a hook [inferred stand-in]: created directly like Spawn_Unit.
     std::function<std::vector<objects::ObjectHandle>(objects::TypeIndex type, int32_t player, Vec3 position)>
         spawn_from_pool;
+    // q6 object scripts (OBJECT_SCRIPTS.md §6.1 step 3): Spawn_Unit / Create_Generic_Object-style direct creation
+    // (bind_objects.cpp spawn(): the unit and each Company_Units member) through the host, which links the object into
+    // its systems (a tactical battle: trees, and combat / movement when the type is in the battle tables). Returns the
+    // new object, or a null handle to fall back to ObjectStore::create. Unset (default): ObjectStore::create.
+    std::function<objects::ObjectHandle(const objects::SpawnParams& p)> spawn_unit;
     // refixf t03: the representative type 0x3973b0 (docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling
     // finders"; A1_READINGS §29) that Find_All_Objects_Of_Type and Find_Nearest match on: a team container -> the
     // company's Create_Team_Type, else the company type; a transport -> its company type; a squadron fleet -> its

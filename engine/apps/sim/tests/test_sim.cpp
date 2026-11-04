@@ -15,6 +15,9 @@
 //   * S4 story (built with engine/lua): synthetic plot + Lua script over a synthetic galactic campaign,
 //     fired-event log identical for 0/1/4/N workers = testdata/story_synthetic_golden.txt; with
 //     ALAMO_FOC_DATA the opening of Full_Story_Campaign_Underworld = testdata/story_underworld_golden.txt.
+//   * q6 game-object Lua scripts (SimConfig::object_scripts): attach order, the service gate and its first-pump
+//     draw, ScriptExit / binding-error / runtime-error / death release, proximity order, a mini company spawner, the
+//     save refusal, identical CRCs for 0/1/4 workers.
 // `alamo_sim_tests --regen` rewrites the streams and goldens (MSVC is the reference compiler);
 // `--regen-story` only the story logs; `--story-only` runs pacing + the synthetic story test.
 #include <algorithm>
@@ -47,6 +50,7 @@
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/lua/story_model.hpp"  // dialog_log (L1/S4 wave 1 test)
 #include "alamo/galactic/conflicts.hpp"  // BattleRequest (L1/S4 wave 2a test)
+#include "alamo/lua/script_remaining.hpp"  // GlobalValueStore (q6 object-script test)
 #endif
 
 using namespace alamo;
@@ -1325,6 +1329,293 @@ static void test_q6_story_chain(const World& w) {
 }
 }  // namespace story_test
 
+// q6: game-object Lua scripts (object_scripts.hpp, docs/re/OBJECT_SCRIPTS.md) on synthetic land types and scripts.
+namespace object_script_test {
+
+struct OsWorld {
+    fs::path root;
+    std::unique_ptr<DirectoryProvider> files;
+    objects::ObjectTypeDatabase db;
+    objects::GameObjectTypes types;
+};
+
+static void script(const fs::path& root, const char* name, const std::string& body) {
+    write_file(root / "Data/Scripts/GameObject" / (std::string(name) + ".lua"), body);
+}
+
+static std::unique_ptr<OsWorld> make_os_world() {
+    auto w = std::make_unique<OsWorld>();
+    w->root = fs::temp_directory_path() / "alamo_sim_object_scripts";
+    std::error_code ec;
+    remove_all_long(w->root, ec);
+    write_file(w->root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>Os.xml</File></GameObjectFiles>\n");
+    std::string xml = "<Os>\n";
+    for (const char* n : {"Os_Attach", "Os_Gate", "Os_NoRate", "Os_Exit", "Os_ExitDefs", "Os_BindErr", "Os_ThreadErr", "Os_Death",
+                          "Os_Prox", "Os_Spawner", "Os_Missing"})
+        xml += std::string(" <GroundInfantry Name=\"") + n + "\"><Tactical_Health>10</Tactical_Health><Lua_Script>" + n +
+               (std::string(n) == "Os_Gate" ? ".lua" : "") + "</Lua_Script></GroundInfantry>\n";
+    xml += " <GroundInfantry Name=\"Os_Attach_Variant\"><Variant_Of_Existing_Type>Os_Attach</Variant_Of_Existing_Type></GroundInfantry>\n"
+           " <GroundInfantry Name=\"Os_Plain\"><Tactical_Health>10</Tactical_Health></GroundInfantry>\n"
+           " <GroundInfantry Name=\"Os_Unit\"><Tactical_Health>10</Tactical_Health></GroundInfantry>\n"
+           "</Os>\n";
+    write_file(w->root / "Data/XML/Os.xml", xml);
+    const fs::path& r = w->root;
+    // Attach order: Object is nil in the top level and in Base_Definitions, set before the first pump; Get_Name upper-case.
+    script(r, "Os_Attach",
+           "TopSaw = tostring(Object)\n"
+           "function Base_Definitions() ServiceRate = 0 GlobalValue.Set('BD', TopSaw .. '/' .. tostring(Object)) end\n"
+           "function main() GlobalValue.Set('Main', Object.Get_Type().Get_Name() .. '/' .. Object.Get_Object_ID()) "
+           "while true do coroutine.yield(true) end end\n");
+    script(r, "Os_Gate",
+           "function Base_Definitions() ServiceRate = 1 end\n"
+           "function main() while true do GlobalValue.Set('Gate', (GlobalValue.Get('Gate') or '') .. GetCurrentTime.Frame() .. ';') "
+           "coroutine.yield(true) end end\n");
+    script(r, "Os_NoRate", "function main() GlobalValue.Set('NoRate', 1) end\n");
+    script(r, "Os_Exit",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function main() GlobalValue.Set('Exit', (GlobalValue.Get('Exit') or 0) + 1) _ScriptExit() coroutine.yield(false) end\n");
+    script(r, "Os_ExitDefs",
+           "function Base_Definitions() ServiceRate = 0 _ScriptExit() end\n"
+           "function main() GlobalValue.Set('ExitDefs', 1) end\n");
+    script(r, "Os_BindErr",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function main() Object.Event_Object_In_Range(5, 1) GlobalValue.Set('BindErr', (GlobalValue.Get('BindErr') or 0) + 1) "
+           "coroutine.yield(true) GlobalValue.Set('BindErrLater', 1) end\n");
+    script(r, "Os_ThreadErr",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function Second() while true do GlobalValue.Set('Second', (GlobalValue.Get('Second') or 0) + 1) coroutine.yield(true) end end\n"
+           "function main() Create_Thread('Second') coroutine.yield(true) error('boom') end\n");
+    script(r, "Os_Death",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function main() while true do GlobalValue.Set('Death', (GlobalValue.Get('Death') or 0) + 1) coroutine.yield(true) end end\n");
+    script(r, "Os_Prox",
+           "function Base_Definitions() ServiceRate = 0 end\n"
+           "function Hit(o, t) GlobalValue.Set('Hits', (GlobalValue.Get('Hits') or '') .. t.Get_Object_ID() .. ',') end\n"
+           "function main() Object.Event_Object_In_Range(Hit, 50) while true do Object.Service_Wrapper() "
+           "GlobalValue.Set('Hits', (GlobalValue.Get('Hits') or '') .. '|') coroutine.yield(true) end end\n");
+    // A miniature TR GenericCompanySpawner (OBJECT_SCRIPTS.md §6.1): exit outside land, spawn the company at the dummy,
+    // hide it, kill the dummy once 40% or less of the company lives. GameRandom draws on the synced stream.
+    script(r, "Os_Spawner",
+           "function Base_Definitions() ServiceRate = 0.1 Units = {} end\n"
+           "function main()\n"
+           "  if Get_Game_Mode() ~= 'Land' then _ScriptExit() coroutine.yield(false) end\n"
+           "  local t = Find_Object_Type('Os_Unit')\n"
+           "  local x, y, z = Object.Get_Position().Get_XYZ()\n"
+           "  for i = 1, 3 do\n"
+           "    local u = Spawn_Unit(t, Create_Position(x + 5 * i, y + GameRandom(1, 4), z), Object.Get_Owner())[1]\n"
+           "    table.insert(Units, u)\n"
+           "  end\n"
+           "  Object.Hide(true)\n"
+           "  while true do\n"
+           "    local alive = 0\n"
+           "    for _, u in ipairs(Units) do if u.Is_Valid() then alive = alive + 1 end end\n"
+           "    if alive / table.getn(Units) <= 0.4 then GlobalValue.Set('SpawnerDone', alive) Object.Take_Damage(999999) end\n"
+           "    coroutine.yield(true)\n"
+           "  end\n"
+           "end\n");
+    w->files = std::make_unique<DirectoryProvider>(path_to_utf8(w->root));
+    CHECK(w->db.load(*w->files));
+    CHECK(w->types.build(w->db));
+    return w;
+}
+
+static ObjectHandle spawn(SimHost& host, const OsWorld& w, const char* type, int32_t owner, Vec3 pos) {
+    objects::SpawnParams sp;
+    sp.type = static_cast<objects::TypeIndex>(w.db.find(type));
+    sp.owner = owner;
+    sp.position = pos;
+    sp.facing = {1.0f, 0.0f, 0.0f};
+    return host.tactical()->spawn(sp);
+}
+
+static std::string gv_text(SimHost& host, const char* key) { return host.global_values()->get(key).text; }
+static double gv_num(SimHost& host, const char* key) { return host.global_values()->get(key).number; }
+
+static SimConfig os_config(bool on) {
+    SimConfig cfg;
+    cfg.seed = 4242;
+    cfg.object_scripts = on;
+    return cfg;
+}
+
+static void test_attach_and_gate(const OsWorld& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    {   // Attach order, inherited Lua_Script, Get_Name upper-case; an object without a script attaches nothing.
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        const ObjectHandle plain = spawn(host, w, "Os_Plain", 0, {0, 0, 0});
+        const ObjectHandle v = spawn(host, w, "Os_Attach_Variant", 0, {0, 0, 0});
+        ObjectScriptHost& os = *host.object_scripts();
+        CHECK(os.live() == 1 && os.stats().attached == 1 && os.has_script(host.tactical()->primary(), v) &&
+              !os.has_script(host.tactical()->primary(), plain));
+        CHECK(gv_text(host, "BD") == "nil/nil");  // Object nil in the top level and in Base_Definitions
+        CHECK(gv_text(host, "Main").empty());     // main created, not run
+        host.run_fast(1);
+        CHECK(gv_text(host, "Main") == "OS_ATTACH_VARIANT/" + std::to_string(host.tactical()->primary().id(v)));
+        std::string why;
+        CHECK(!host.save_allowed(&why));
+        // A missing file: no script (counted).
+        spawn(host, w, "Os_Missing", 0, {0, 0, 0});
+        CHECK(os.live() == 1 && os.stats().load_failures == 1 && os.error_total() == 1);
+        // Mode end releases the store's scripts.
+        CHECK(host.end_game_mode() && os.live() == 0 && os.stats().released_mode == 1);
+    }
+    {   // Off (default): nothing attaches, no host.
+        SimHost host(w.types, js, os_config(false));
+        host.start_game(ModeKind::Land);
+        spawn(host, w, "Os_Attach", 0, {0, 0, 0});
+        CHECK(host.object_scripts() == nullptr && host.global_values()->get("BD").kind == lua::AiGlobalValue::Nil);
+    }
+    {   // The gate (§3.2): ServiceRate 1, the first pump at mode frame 0 sets LastService = -(one synced draw in [0, 1]),
+        // then now = (float)frame x 0.033333335f, due when now - LastService > 1 (strict, double).
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        spawn(host, w, "Os_Gate", 0, {0, 0, 0});
+        spawn(host, w, "Os_NoRate", 0, {0, 0, 0});  // no ServiceRate: never pumped, no draw
+        SimRng copy = host.random().synced();
+        const double r = static_cast<double>(copy.range_float(0.0f, first_pump_draw_hi(1.0)));
+        host.run_fast(200);
+        const std::string got = gv_text(host, "Gate");
+        const uint64_t f0 = std::strtoull(got.c_str(), nullptr, 10);
+        std::string want;
+        size_t pumps = 0;
+        double last = -r;
+        for (uint64_t f = f0; f < f0 + 400; ++f) {
+            const double now = object_script_time(f);
+            if (f != f0 && !(now - last > 1.0)) continue;
+            want += std::to_string(f) + ";";
+            if (f != f0) last = now;
+            if (want.size() <= got.size()) ++pumps;
+        }
+        CHECK(!got.empty() && want.compare(0, got.size(), got) == 0 && pumps >= 6);
+        CHECK(host.object_scripts()->stats().pumps == pumps);
+        CHECK(host.global_values()->get("NoRate").kind == lua::AiGlobalValue::Nil);
+        CHECK(host.object_scripts()->stats().first_draws == 1);
+        CHECK(host.random().synced().state() == copy.state());  // exactly the one draw
+        std::printf("object scripts gate: first draw %.6f, %zu pumps at mode frames %s\n", r, pumps, got.c_str());
+    }
+}
+
+static void test_release(const OsWorld& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimHost host(w.types, js, os_config(true));
+    host.set_object_script_files(w.files.get());
+    host.start_game(ModeKind::Land);
+    ObjectScriptHost& os = *host.object_scripts();
+    spawn(host, w, "Os_Exit", 0, {0, 0, 0});
+    spawn(host, w, "Os_ExitDefs", 0, {0, 0, 0});
+    spawn(host, w, "Os_BindErr", 0, {0, 0, 0});
+    spawn(host, w, "Os_ThreadErr", 0, {0, 0, 0});
+    const ObjectHandle dying = spawn(host, w, "Os_Death", 0, {0, 0, 0});
+    CHECK(os.live() == 5);
+    host.run_fast(3);
+    // ScriptExit in a thread: one pump, then released. ScriptExit in Base_Definitions: released before main runs.
+    CHECK(gv_num(host, "Exit") == 1.0 && host.global_values()->get("ExitDefs").kind == lua::AiGlobalValue::Nil);
+    // A binding script error (+0x121): the thread runs on to its yield, then the script is released.
+    CHECK(gv_num(host, "BindErr") == 1.0 && host.global_values()->get("BindErrLater").kind == lua::AiGlobalValue::Nil);
+    CHECK(os.stats().released_exit == 3);
+    // A Lua runtime error kills only its thread: the second thread keeps running.
+    const double second = gv_num(host, "Second");
+    host.run_fast(2);
+    CHECK(second >= 1.0 && gv_num(host, "Second") == second + 2.0 && os.stats().thread_errors == 1);
+    // Death stops the service at once and releases the script.
+    const double deaths = gv_num(host, "Death");
+    CHECK(deaths == 5.0);
+    host.tactical()->destroy(dying);
+    host.run_fast(3);
+    CHECK(gv_num(host, "Death") == deaths && os.stats().released_dead == 1 && os.live() == 1);
+    bool boom = false;
+    for (const auto& [text, n] : os.error_counts()) boom = boom || (text.find("boom") != std::string::npos && n == 1);
+    CHECK(boom);
+}
+
+static void test_proximity_and_spawner(const OsWorld& w) {
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    {   // Proximity (§4.3): synchronous callbacks inside Service_Wrapper, box of half-size 50, ascending id.
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        const ObjectHandle far_a = spawn(host, w, "Os_Plain", 1, {40, 40, 0});    // in the box (not in a 50 sphere)
+        spawn(host, w, "Os_Plain", 1, {60, 0, 0});                                // outside
+        const ObjectHandle prox = spawn(host, w, "Os_Prox", 0, {0, 0, 0});
+        const ObjectHandle near_b = spawn(host, w, "Os_Plain", 2, {-10, 0, 0});
+        host.run_fast(2);
+        const objects::ObjectStore& st = host.tactical()->primary();
+        const std::string a = std::to_string(st.id(far_a)), b = std::to_string(st.id(near_b));
+        CHECK(gv_text(host, "Hits") == a + "," + b + ",|" + a + "," + b + ",|");
+        (void)prox;
+    }
+    {   // The mini company spawner: units spawned in the first pump, the dummy dies when <= 40% of them live.
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        const ObjectHandle dummy = spawn(host, w, "Os_Spawner", 1, {100, 0, 0});
+        host.run_fast(1);
+        const objects::ObjectStore& st = host.tactical()->primary();
+        const std::vector<ObjectHandle> units = st.find_all_of_type(static_cast<objects::TypeIndex>(w.db.find("Os_Unit")));
+        CHECK(units.size() == 3);
+        for (const ObjectHandle u : units) CHECK(st.owner(u) == 1);
+        CHECK(host.object_scripts()->live() == 1);  // the spawned units have no script
+        host.run_fast(10);
+        CHECK(st.alive(dummy));
+        host.tactical()->destroy(units[0]);
+        host.tactical()->destroy(units[1]);
+        host.run_fast(10);
+        CHECK(!st.alive(dummy) && gv_num(host, "SpawnerDone") == 1.0 && host.object_scripts()->live() == 0 &&
+              host.object_scripts()->stats().released_dead == 1);
+    }
+    {   // Galactic store: Get_Game_Mode is "Galactic", the spawner exits on its first pump; a live script blocks the save.
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        GameMode& gal = host.start_game(ModeKind::Galactic);
+        objects::SpawnParams sp;
+        sp.type = static_cast<objects::TypeIndex>(w.db.find("Os_Attach"));
+        gal.primary().create(sp);
+        std::string why;
+        CHECK(!host.save_allowed(&why) && why.find("game-object Lua scripts") != std::string::npos);
+        sp.type = static_cast<objects::TypeIndex>(w.db.find("Os_Spawner"));
+        gal.primary().create(sp);
+        host.run_fast(1);
+        CHECK(host.object_scripts()->live() == 1 && host.object_scripts()->stats().released_exit == 1);
+    }
+}
+
+// Rule 3: the scripts (attach, first-pump draws, GameRandom in a pump, Spawn_Unit) give the same CRCs at every worker count.
+static void test_worker_counts(const OsWorld& w) {
+    CrcLog first;
+    for (const int32_t workers : {0, 1, 4}) {
+        jobs::JobSystem js(jobs::JobSystemConfig{workers});
+        SimHost host(w.types, js, os_config(true));
+        host.set_object_script_files(w.files.get());
+        host.start_game(ModeKind::Land);
+        for (int i = 0; i < 4; ++i) spawn(host, w, "Os_Spawner", i % 2, {static_cast<float>(100 * i), 0, 0});
+        spawn(host, w, "Os_Gate", 0, {0, 0, 0});
+        spawn(host, w, "Os_Prox", 1, {150, 0, 0});
+        host.run_fast(120);
+        if (workers == 0) {
+            first = host.crc_log();
+            CHECK(host.object_scripts()->stats().first_draws == 6);
+        } else {
+            CHECK(!first_divergence(first, host.crc_log()).diverged);
+        }
+    }
+}
+
+static void test_object_scripts() {
+    const auto w = make_os_world();
+    test_attach_and_gate(*w);
+    test_release(*w);
+    test_proximity_and_spawner(*w);
+    test_worker_counts(*w);
+    std::error_code ec;
+    remove_all_long(w->root, ec);
+    std::printf("object scripts: attach, gate, release, proximity, spawner, worker counts checked\n");
+}
+
+}  // namespace object_script_test
+
 static void test_story_synthetic(const World& w) {
     using namespace story_test;
     const fs::path root = fs::temp_directory_path() / "alamo_sim_story";
@@ -2386,6 +2677,7 @@ int main(int argc, char** argv) {
     story_test::test_scoring_service(*world);  // q6 t09
     story_test::test_scoring_story(*world);    // q6 t09
     story_test::test_q6_story_chain(*world);   // q6: load-time resume, Perpetual ELAPSED, SWITCH_CONTROL hook
+    object_script_test::test_object_scripts();  // q6: game-object Lua scripts
 #else
     std::printf("story: built without engine/lua, skipped\n");
 #endif

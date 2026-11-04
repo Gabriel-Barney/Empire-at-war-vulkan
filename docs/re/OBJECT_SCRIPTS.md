@@ -744,3 +744,37 @@ Every function in the table is registered in the port's bind files (§5).
 5. **Lua runtime error path**: confirm that 0x246940 / 0x248d10 never set +0x121 (only the thread dies). A probe
    could check this: an object script with a deliberate `nil` call in a second thread, and `main` still running
    afterwards. [M]
+
+---
+
+## 9. Port status (q6 t03, 2026-11-03)
+
+Implemented in `engine/apps/sim` (`object_scripts.hpp` / `.cpp`, `ObjectScriptHost`, owned by `SimHost`), with hooks in
+`engine/objects` (`ObjectStore::on_created`) and `engine/lua` (proximity events, `ObjectBridge::spawn_unit`,
+`LuaVmOptions::upper_type_names`). Tests: `alamo_sim_tests` (`object_script_test`), `alamo_lua_objects_tests`
+(proximity).
+
+**Opt-in, off by default.** `SimConfig::object_scripts` (false), `alamo_headless --object-scripts`. With the switch off
+nothing attaches and no RNG is drawn, so every existing golden and CRC stream is unchanged.
+**[port interim rule]** `alamo_game` (`GameSession`) turns the switch on only when a mod layer is loaded (`MODPATH`,
+the VFS has mod directories). Vanilla FoC runs keep the old streams until the object-script service is checked
+against the original by an in-game probe; then the rule goes and the switch is always on.
+
+Port choices (`[port]`, each also commented in the code):
+
+| Item | Choice |
+|---|---|
+| Stores | Only each mode's primary store attaches scripts; secondary (local / cosmetic) stores attach nothing |
+| Pool | None: a fresh VM per object (§1.4) |
+| Attach order | top level (require), GlobalValue + player world + object bridge, `Base_Definitions`, `main` thread created (not run), `Object` set last |
+| Death clones | No script (`TacticalMode::spawn_death_clone` suppresses the hook); `Base_Definitions` does not run for them |
+| Service point | After the whole primary store update of the mode (`GameMode::common_tick`; galactic after `GalacticSim::update`), not inside each object's service; newest-attached first; never while the mode is paused |
+| Gate | now = (double)((float)mode frame x 0.033333335f); pump when `now - LastService > ServiceRate` (strict, double) |
+| First-pump draw (§8 item 1) | `LastService = -(synced range_float(0, ServiceRate))`; the bound lives in `first_pump_draw_hi` only |
+| Release | ScriptExit or a binding script error (+0x121) after the pass; death / gone object at once (no deferred delete); mode end |
+| Lua runtime error (§8 item 5) | Kills only that thread, the script stays |
+| Proximity (§4.3, §8 item 4) | Synchronous callbacks inside `Service_Wrapper`; candidates in ascending object id; a callback that registers or cancels restarts the scan |
+| `Get_Name` | Upper-case on object-script VMs only (`upper_type_names`); story / AI VMs keep the raw name until their goldens are regenerated |
+| `Spawn_Unit` in a battle | Through `TacticalBattle::script_spawn` (battle bookkeeping); types outside the battle tables become props |
+| Saves | `save_allowed` refuses while any object script is live (§2.6: no script state is saved yet) |
+| Not done | `Execute_Script_On_Type` (§1.5), pooling, hot-reload re-attach, script state in saves |

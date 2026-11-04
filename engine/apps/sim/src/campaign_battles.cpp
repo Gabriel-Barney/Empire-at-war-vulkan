@@ -1185,7 +1185,10 @@ void CampaignBattles::story_load_map(galactic::BattleRequest& r) {
 // --- L1/S4 wave 2a story hookup (story_session.hpp "battle-host calls") ---
 void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
     StorySession* s = host.story();
-    if (!s || !battle_) return;
+    // q6: the battle's game-object scripts use this bridge too, so it is built without a story session as well when the
+    // host runs object scripts (SimConfig::object_scripts; off by default, so the sessions before q6 are unchanged).
+    ObjectScriptHost* scripts = host.object_scripts();
+    if ((!s && !scripts) || !battle_) return;
     story_bridge_ = std::make_unique<lua::ObjectBridge>();
     lua::ObjectBridge& b = *story_bridge_;
     b.abilities = &battle_->abilities();
@@ -1339,6 +1342,17 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
     };
     if (corruption_active_.player >= 0 && !corruption_active_.plots.empty()) st.plots_file = corruption_active_.plots;  // mission plots
     // --- end S4 ---
+    if (scripts) {  // q6: Spawn_Unit of an object script makes battle units (TacticalBattle::script_spawn)
+        b.spawn_unit = [this, h](const objects::SpawnParams& p) {
+            TacticalMode* tm = h->tactical();
+            return (battle_ && tm) ? battle_->script_spawn(*tm, p) : objects::ObjectHandle{};
+        };
+        scripts->set_bridge(mode.primary(), &b);
+#if defined(ALAMO_LUA_PLAYERS)
+        scripts->set_player_world(mode.primary(), s ? s->player_world() : host.object_script_players());
+#endif
+    }
+    if (!s) return;
     std::vector<std::string> diag;
     s->begin_battle(st, host.frame(), &diag);
     for (std::string& d : diag) log_.push_back(std::move(d));

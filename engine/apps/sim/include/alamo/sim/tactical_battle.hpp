@@ -661,6 +661,11 @@ public:
     int32_t retreat_increment_frames(int32_t player) const;
     // A script-spawned object joins the L1 systems (special-weapon / TSW packs). Call after TacticalMode::spawn.
     void adopt_object(TacticalMode& mode, objects::ObjectHandle h);
+    // q6 object scripts: Spawn_Unit of a game-object script (ObjectBridge::spawn_unit). TacticalMode::spawn (trees), then
+    // like an ability spawn (oi_spawn_unit): a combat / ability / movement unit when the type is in the battle tables, a
+    // prop otherwise [port: the tables are fixed after setup, so types first used by a script stay props], then the L1
+    // systems (adopt_object). An object with a container / attach parent (a company member) is only TacticalMode::spawn'd.
+    objects::ObjectHandle script_spawn(TacticalMode& mode, const objects::SpawnParams& p);
     const tactical::abilities::SpecialWeaponSystem& special_weapons() const { return l1_sw_; }
     const tactical::movement::HyperspaceDepartures& hyperspace() const { return l1_jumps_; }
     const tactical::movement::EngineControl& engines() const { return l1_engines_; }

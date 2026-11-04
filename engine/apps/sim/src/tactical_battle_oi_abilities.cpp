@@ -221,6 +221,18 @@ objects::ObjectId TacticalBattle::oi_spawn_unit(TacticalMode& mode, int32_t type
     return id;
 }
 
+objects::ObjectHandle TacticalBattle::script_spawn(TacticalMode& mode, const objects::SpawnParams& p) {
+    objects::ObjectHandle h{};
+    if (p.container || p.attach_parent) {
+        h = mode.spawn(p);
+    } else {
+        const objects::ObjectId id = oi_spawn_unit(mode, static_cast<int32_t>(p.type), p.position, p.facing, p.owner);
+        if (id != objects::kNoObjectId) h = mode.primary().find(id);
+    }
+    if (h) adopt_object(mode, h);
+    return h;
+}
+
 void TacticalBattle::oi_events(TacticalMode& mode) {
     if (!abilities_ || !combat_) return;
     objects::ObjectStore& store = mode.primary();
