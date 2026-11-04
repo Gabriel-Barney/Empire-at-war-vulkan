@@ -817,7 +817,9 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants (land)
     fog_after_deploy(mode);  // fog of war: dense mask, battle scale (owner: fog agent)
     vm_setup(mode);          // story t06: victory monitor records (§2.5) and the start's victory-relevant objects
-    tables_build_.reset();  // OPT3 t09: the tables are complete
+    // OPT3 t09: the setup's tables are complete. q6 t12: the build is kept (serial preload from now on) so a type first
+    // spawned by a game-object script can join the live tables (script_add_types); nothing else extends them after setup.
+    tables_build_->pf = serial_for;
 }
 
 // S8 t17 (FIGHTER_FLYING §4.10 B): each combat unit's squadron for the shared team target. Derived state (not saved):
@@ -3366,9 +3368,56 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
         if (e.breakoff_type >= 0 && spawn_prop(mode, e.breakoff_type, at, store.facing(oh), store.owner(oh))) ++stats_.props;
     }
     // d. deaths: destroy, death clone object, first Death_Explosions entry [port: pick rule untraced].
-    for (const tc::DeathEvent& d : combat_->deaths()) {
+    for (const tc::DeathEvent& d : combat_->deaths()) process_death(mode, d, rng);
+    // e. damaged smoke (render attachment).
+    for (const tc::SmokeEvent& e : combat_->smoke_events()) {
+        const objects::ObjectHandle h = store.find(e.id);
+        if (!store.exists(h)) continue;
+        const BattleTables::UnitVisuals* vis = visuals_of_type(static_cast<uint32_t>(store.type(h)));
+        effects_.push_back({e.id, vis ? vis->smoke : std::string(), e.percent, frame_});
+        ++stats_.smoke;
+    }
+    // f. ability events.
+    engines_restarted_.clear();
+    for (const ta::AbilityEvent& e : abilities_->events()) {
+        ++stats_.ability_events;
+        if (e.kind == ta::AbilityEventKind::Activated) ++stats_.activations;
+        if (e.kind == ta::AbilityEventKind::EnginesOffline)
+            if (Unit* u = unit_by_id(e.id)) {
+                engine_loops_.engines_offline(e.id, frame_);  // §3.3: both engine loops off
+                if (e.value == 1) {  // destroyed: Locomotor_Set_Engines(destroyed = 1), permanent
+                    u->engines_offline = true;
+                    l1_engines_destroyed(e.id);
+                } else {  // disabled by the station-upgrade copy: EngineControl::disable(id, -1) (HARDPOINT_DISABLED §9.1)
+                    l1_engines_.disable(e.id, -1.0f, frame_);
+                    l1_used_ = true;
+                }
+            }
+        if (e.kind == ta::AbilityEventKind::EnginesOnline)
+            if (Unit* u = unit_by_id(e.id)) {  // an ENGINE hardpoint repaired to max (0x393980 -> 0x554640)
+                if (l1_engines_.repair_online(e.id, frame_)) l1_used_ = true;
+                u->engines_offline = false;
+                engines_restarted_.push_back(e.id);
+                engine_loops_.engines_online(e.id, frame_);  // §3.3: idle loop on
+            }
+        if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
+        // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
+        // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
+        if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);
+        // S7 t26 (AI_TACTICAL §7.3.3 item 3): DEPLOY raises 0x29 when the deploy (anim 25 -> state 0x19) or undeploy (anim
+        // 26 -> state 0) clip ends, at once on a blocked reverse: oi_deploy_sync raises it from the movement deploy events
+        // (S8 t11), not the AbilitySystem Deployed event, which fires at the request.
+    }
+    oi_events(mode);  // OI abilities: ability moves / stops / owner changes, ability spawns, death survivors
+    oi_deploy_sync();  // S8 t11 / t12: this pass's deploy requests and jetpack swaps
+    abilities_->clear_events();
+}
+
+void TacticalBattle::process_death(TacticalMode& mode, const tc::DeathEvent& d, SimRng& rng) {
+    objects::ObjectStore& store = mode.primary();
+    {
         Unit* u = unit_by_id(d.id);
-        if (!u || !u->alive) continue;  // not a battle unit (dummy targets are invulnerable)
+        if (!u || !u->alive) return;  // not a battle unit (dummy targets are invulnerable)
         u->alive = false;
         --parts_[u->participant].alive;
         hg_unit_removed(u->id);  // hangars: carrier / single launched ship gone; engine loops forgotten
@@ -3414,48 +3463,6 @@ void TacticalBattle::consume_events(TacticalMode& mode, SimRng& rng) {
             if (!vis->death_explosions.empty()) spawn_particle(mode, vis->death_explosions.front(), at, owner);
         unit_gone(mode, *u);
     }
-    // e. damaged smoke (render attachment).
-    for (const tc::SmokeEvent& e : combat_->smoke_events()) {
-        const objects::ObjectHandle h = store.find(e.id);
-        if (!store.exists(h)) continue;
-        const BattleTables::UnitVisuals* vis = visuals_of_type(static_cast<uint32_t>(store.type(h)));
-        effects_.push_back({e.id, vis ? vis->smoke : std::string(), e.percent, frame_});
-        ++stats_.smoke;
-    }
-    // f. ability events.
-    engines_restarted_.clear();
-    for (const ta::AbilityEvent& e : abilities_->events()) {
-        ++stats_.ability_events;
-        if (e.kind == ta::AbilityEventKind::Activated) ++stats_.activations;
-        if (e.kind == ta::AbilityEventKind::EnginesOffline)
-            if (Unit* u = unit_by_id(e.id)) {
-                engine_loops_.engines_offline(e.id, frame_);  // §3.3: both engine loops off
-                if (e.value == 1) {  // destroyed: Locomotor_Set_Engines(destroyed = 1), permanent
-                    u->engines_offline = true;
-                    l1_engines_destroyed(e.id);
-                } else {  // disabled by the station-upgrade copy: EngineControl::disable(id, -1) (HARDPOINT_DISABLED §9.1)
-                    l1_engines_.disable(e.id, -1.0f, frame_);
-                    l1_used_ = true;
-                }
-            }
-        if (e.kind == ta::AbilityEventKind::EnginesOnline)
-            if (Unit* u = unit_by_id(e.id)) {  // an ENGINE hardpoint repaired to max (0x393980 -> 0x554640)
-                if (l1_engines_.repair_online(e.id, frame_)) l1_used_ = true;
-                u->engines_offline = false;
-                engines_restarted_.push_back(e.id);
-                engine_loops_.engines_online(e.id, frame_);  // §3.3: idle loop on
-            }
-        if (e.kind == ta::AbilityEventKind::SpawnObject) spawn_ability_object(mode, e);  // fog follow-up: FOW_REVEAL_PING
-        // S7 t15 A1 (ABILITIES_HARDPOINTS §2.6): every ability end raises signal 0x29, including the Remote_Bomb toss, which
-        // ends at its Toss_Anim end (LOB_SOLVER §3.5 step 4, S8 t06).
-        if (e.kind == ta::AbilityEventKind::Ended) ability_finished_.push_back(e.id);
-        // S7 t26 (AI_TACTICAL §7.3.3 item 3): DEPLOY raises 0x29 when the deploy (anim 25 -> state 0x19) or undeploy (anim
-        // 26 -> state 0) clip ends, at once on a blocked reverse: oi_deploy_sync raises it from the movement deploy events
-        // (S8 t11), not the AbilitySystem Deployed event, which fires at the request.
-    }
-    oi_events(mode);  // OI abilities: ability moves / stops / owner changes, ability spawns, death survivors
-    oi_deploy_sync();  // S8 t11 / t12: this pass's deploy requests and jetpack swaps
-    abilities_->clear_events();
 }
 
 // --- fog follow-up: S9 SpawnObject (FOW_REVEAL_PING, FOG_OF_WAR §3.3): the record's Spawned_Object_Type at the

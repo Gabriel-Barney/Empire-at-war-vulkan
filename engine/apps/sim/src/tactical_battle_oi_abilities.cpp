@@ -221,16 +221,100 @@ objects::ObjectId TacticalBattle::oi_spawn_unit(TacticalMode& mode, int32_t type
     return id;
 }
 
+void TacticalBattle::script_add_types(std::span<const uint32_t> add) {
+    if (!tables_) return;
+    const size_t before = types_used_.size();
+    const size_t n = catalog_->types().size();
+    for (const uint32_t t : add)
+        if (t < n && std::find(types_used_.begin(), types_used_.end(), t) == types_used_.end()) types_used_.push_back(t);
+    if (types_used_.size() == before) return;
+    tables_extend();
+    oi_add_ability_types();  // the new types' DEPLOY_TROOPERS / special spawn / Destruction_Survivors types
+}
+
 objects::ObjectHandle TacticalBattle::script_spawn(TacticalMode& mode, const objects::SpawnParams& p) {
     objects::ObjectHandle h{};
     if (p.container || p.attach_parent) {
         h = mode.spawn(p);
     } else {
+        const uint32_t t = static_cast<uint32_t>(p.type);
+        script_add_types(std::span<const uint32_t>(&t, 1));  // q6 t12: a real battle unit, not a prop
         const objects::ObjectId id = oi_spawn_unit(mode, static_cast<int32_t>(p.type), p.position, p.facing, p.owner);
         if (id != objects::kNoObjectId) h = mode.primary().find(id);
     }
     if (h) adopt_object(mode, h);
     return h;
+}
+
+objects::ObjectHandle TacticalBattle::script_spawn_company(TacticalMode& mode, const objects::SpawnParams& p) {
+    const objects::GameObjectTypes& types = catalog_->types();
+    const auto ct = static_cast<uint32_t>(p.type);
+    if (finished_ || !bt_rng_ || !combat_ || ct >= types.size() || ct >= rules_->types.size() || rules_->type(ct).members.empty())
+        return {};
+    // The participant: a built company of p.owner (no galactic object), side by owner as bt_adopt_built.
+    Participant P;
+    P.galactic_id = objects::kNoObjectId;
+    P.owner = p.owner;
+    P.type = ct;
+    P.side = p.owner == req_.info.defender ? 0 : 1;
+    P.built = true;
+    P.pop = 0.0f;
+    const auto& gt = galaxy_->rules().types;
+    P.power = ct < gt.size() ? gt[ct].ai_combat_power : 0.0f;
+    // Tables: the members, the company type and its TEAM object / behaviour types (as the constructor does for companies).
+    std::vector<uint32_t> add = spawn_types(P);
+    add.push_back(ct);
+    uint32_t ot = 0xFFFFFFFFu, bt = 0xFFFFFFFFu, squad = 0;
+    if (!add.empty() && bt_team(ct, add.front(), ot, bt, squad)) {
+        add.push_back(ot);
+        add.push_back(bt);
+    }
+    script_add_types(add);
+    // [port] member placement: the reinforcement drop layout around the point (land: snapped to a passable cell of each
+    // member's movement class); no layout -> every member at the point.
+    drop_pos_.clear();
+    const LandDropShape shape = land_drop_shape(ct);
+    const LandDropLayout lay = land_drop_layout(shape, p.position.x, p.position.y, drop_yaw(P.side));
+    if (lay.ok)
+        for (const LandDropSlot& s : lay.slots) {
+            Vec3 at{s.x, s.y, p.position.z};
+            if (!space_ && movement_) {
+                const mv::UnitDesc md = mv::unit_desc_from_type(types, s.type);
+                at = snap_passable(Vec3{s.x, s.y, 0.0f}, movement_->classes().mask(md.movement_class), false);
+            }
+            drop_pos_.push_back(at);
+        }
+    const size_t members = spawn_types(P).size();
+    if (drop_pos_.size() < members) drop_pos_.resize(members, p.position);  // deploy() places past the list at the side anchor
+    const auto pi = static_cast<uint32_t>(parts_.size());
+    parts_.push_back(std::move(P));
+    const size_t first_unit = units_.size(), first_container = containers_.size();
+    deploy(mode, pi, *bt_rng_);
+    drop_pos_.clear();
+    bt_used_ = true;
+    objects::ObjectHandle out{};
+    if (containers_.size() > first_container) out = containers_[first_container].h;
+    else if (units_.size() > first_unit) out = units_[first_unit].h;
+    return out;  // deploy() registered the members with the L1 systems (l1_register)
+}
+
+bool TacticalBattle::script_damage(TacticalMode& mode, objects::ObjectId id, float amount, bool cannot_die) {
+    Unit* u = unit_by_id(id);
+    if (finished_ || !combat_ || !bt_rng_ || !u || !u->alive || u->retreated || !combat_->has_unit(id) || !combat_->alive(id))
+        return false;
+    const bool had_cannot_die = (combat_->flags(id) & tc::kUnitCannotDie) != 0;
+    if (cannot_die && !had_cannot_die) combat_->set_flag(id, tc::kUnitCannotDie, true);
+    tc::DamageRequest r;
+    r.victim = id;
+    r.amount = amount;
+    r.kind = tc::kKindDebug;  // Lua Take_Damage: kind 0 (OBJECT_SCRIPTS §6.1 step 4)
+    const size_t deaths_before = combat_->deaths().size();
+    combat_->take_damage(r, frame_);
+    if (cannot_die && !had_cannot_die && combat_->has_unit(id)) combat_->set_flag(id, tc::kUnitCannotDie, false);
+    // The deaths this hit caused (the victim, team members it was shared with), in Die order.
+    const std::vector<tc::DeathEvent> deaths(combat_->deaths().begin() + static_cast<std::ptrdiff_t>(deaths_before), combat_->deaths().end());
+    for (const tc::DeathEvent& d : deaths) process_death(mode, d, *bt_rng_);
+    return true;
 }
 
 void TacticalBattle::oi_events(TacticalMode& mode) {

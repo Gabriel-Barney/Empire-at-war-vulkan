@@ -382,11 +382,15 @@ int method_call(lua_State* L) {
     const MethodSlot& s = method_slots()[slot];
     const char* name = s.label.c_str() + class_names()[s.cls].size() + 1;
     // q6 t03: the unit order bindings handle a dead caller themselves (LUA_API.md "Unit order bindings": Attack_Target
-    // returns nothing, Move_Internal reports a script error).
+    // returns nothing, Move_Internal reports a script error). q6 t12: the proximity bindings too (OBJECT_SCRIPTS §4.3:
+    // Event_Object_In_Range on a dead object does nothing; the exe has no "this object is dead!" text for them), so an
+    // object script's PumpEvents after its own object died (Take_Damage) does not kill the thread.
     const bool dead_check = ud->cls == cls_game_object() && std::strcmp(name, "Is_Valid") != 0 &&
                             std::strcmp(name, "Is_Pool_Safe") != 0 && std::strcmp(name, "Attack_Target") != 0 &&
                             std::strcmp(name, "Move_To") != 0 && std::strcmp(name, "Attack_Move") != 0 &&
-                            std::strcmp(name, "Guard_Target") != 0;
+                            std::strcmp(name, "Guard_Target") != 0 && std::strcmp(name, "Service_Wrapper") != 0 &&
+                            std::strcmp(name, "Event_Object_In_Range") != 0 &&
+                            std::strcmp(name, "Cancel_Event_Object_In_Range") != 0;
     const uint32_t counter = s.row != kNoBinding ? s.row : extra_counter_slot(slot);
     const Invocation inv{vm, ud, s.fn, counter, s.label.c_str(), dead_check, name, 1, lua_gettop(L)};
     const int n = invoke(L, inv, err, sizeof err);

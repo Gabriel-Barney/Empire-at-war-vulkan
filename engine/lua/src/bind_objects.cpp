@@ -584,6 +584,9 @@ ObjectHandle spawn(Call& c, TypeIndex type, int32_t owner, Vec3 pos, ObjectHandl
         }
         return st->create(p);
     };
+    // q6 t12: a host that lays out companies itself (the battle: members as units + TEAM containers) takes the company.
+    if (company && b && b->spawn_company && !sp.container && types(c) && !types(c)->get_type_refs(type, "Company_Units").empty())
+        if (const ObjectHandle made = b->spawn_company(sp)) return made;
     const ObjectHandle h = create(sp);
     if (company && types(c)) {
         for (const TypeIndex m : types(c)->get_type_refs(type, "Company_Units")) {
@@ -1780,9 +1783,11 @@ int m_despawn(Call& c) {
     return 0;
 }
 
-// Take_Damage(amount, [hardpoint type name]): direct health change [inferred]; with a name the
-// attached child of that type takes it (none: no-op). Invulnerable: nothing; Cannot_Be_Killed:
-// health stops at min(current, 1); <= 0 destroys.
+// Take_Damage(amount, [hardpoint type name]): damage kind 0 (OBJECT_SCRIPTS §6.1 step 4), which passes
+// invulnerability (TACTICAL_COMBAT §3.6 step 3), so Make_Invulnerable does not stop it (q6 t12). Without a name, a
+// host damage system (ObjectBridge::take_damage: a tactical battle's combat) takes it when it knows the object;
+// otherwise a direct health change [inferred]: with a name the attached child of that type takes it (none: no-op);
+// Cannot_Be_Killed: health stops at min(current, 1); <= 0 destroys.
 int m_take_damage(Call& c) {
     if (c.nargs < 1 || c.nargs > 2)
         return c.fail("GameObjectWrapper::Take_Damage -- invalid number of parameters. Expected 1 or 2, got %d.", c.nargs);
@@ -1803,7 +1808,9 @@ int m_take_damage(Call& c) {
         target = found;
     }
     const ScriptObjectState& s = state_of(c, st->id(target));
-    if (s.invulnerable) return 0;
+    if (c.nargs == 1)
+        if (const ObjectBridge* b = bridge(c); b && b->take_damage && b->take_damage(target, static_cast<float>(c.number(1)), s.cannot_be_killed))
+            return 0;
     const float cur = st->health(target);
     float next = cur - static_cast<float>(c.number(1));
     const objects::GameObjectTypes* ty = types(c);
@@ -1828,7 +1835,16 @@ int m_teleport(Call& c) {
     Vec3 p{};
     if (position_arg(c, 1, p) != PosArg::Ok)
         return c.fail("GameObjectWrapper:: Teleport -- unable to deduce a position from parameter 1.");
-    store(c)->set_position(self_object(c), p);
+    // q6 t12 (L1_S4_REMAINING §3.4 "Teleport", 0x5819e0 -> 0x3abb80): the unit's locomotor / transform move, not only the
+    // store position. A host with the tactical teleport (TacticalScriptHooks::teleport: store + movement + combat +
+    // trees) takes it, the facing kept; otherwise the store position alone.
+    objects::ObjectStore* st = store(c);
+    const ObjectHandle self = self_object(c);
+    if (const ObjectBridge* b = bridge(c); b && b->tactical && b->tactical->teleport) {
+        b->tactical->teleport(self, p, st->facing(self));
+        return 0;
+    }
+    st->set_position(self, p);
     return 0;
 }
 
@@ -2443,6 +2459,7 @@ int m_service_wrapper(Call& c) {
     lua_State* L = c.L;
     const objects::ObjectStore* st = store(c);
     const ObjectHandle self = self_object(c);
+    if (!st->alive(self)) return 0;  // q6 t12: a dead object fires nothing (no dead-object error, see bindings.cpp)
     const int t = push_prox(L);
     const double serial = prox_field(L, t, "s") + 1.0;  // this call's "done" mark
     set_prox_field(L, t, "s", serial);

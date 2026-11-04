@@ -1347,6 +1347,17 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
             TacticalMode* tm = h->tactical();
             return (battle_ && tm) ? battle_->script_spawn(*tm, p) : objects::ObjectHandle{};
         };
+        // q6 t12: companies come down as battle companies (members + TEAM containers), Take_Damage goes through combat.
+        // [port] Set only with object scripts on (the bridge is shared with the story VMs of this battle), so sessions
+        // without them keep the store-only Take_Damage of the story bindings.
+        b.spawn_company = [this, h](const objects::SpawnParams& p) {
+            TacticalMode* tm = h->tactical();
+            return (battle_ && tm) ? battle_->script_spawn_company(*tm, p) : objects::ObjectHandle{};
+        };
+        b.take_damage = [this, h](objects::ObjectHandle u, float amount, bool cannot_die) {
+            TacticalMode* tm = h->tactical();
+            return battle_ && tm && tm->primary().alive(u) && battle_->script_damage(*tm, tm->primary().id(u), amount, cannot_die);
+        };
         scripts->set_bridge(mode.primary(), &b);
 #if defined(ALAMO_LUA_PLAYERS)
         scripts->set_player_world(mode.primary(), s ? s->player_world() : host.object_script_players());

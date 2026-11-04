@@ -124,6 +124,10 @@ const char* kTypes = R"(<L1>
   <Unit_Abilities_Data SubObjectList="Yes"><Unit_Ability><Type>DEPLOY</Type></Unit_Ability></Unit_Abilities_Data></GroundInfantry>
  <GroundCompany Name="L1_Deploy_Squad"><Company_Units>L1_Deploy_Trooper, L1_Deploy_Trooper</Company_Units>
   <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
+ <GroundInfantry Name="L1_Team_Trooper"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type><Create_Team>Yes</Create_Team></GroundInfantry>
+ <GroundCompany Name="L1_Team_Squad"><Company_Units>L1_Team_Trooper, L1_Team_Trooper</Company_Units><Create_Team_Type>L1_Team</Create_Team_Type>
+  <Population_Value>1</Population_Value></GroundCompany>
+ <Team Name="L1_Team"><Behavior>TEAM</Behavior></Team>
 </L1>
 )";
 
@@ -835,6 +839,147 @@ JetRun run_jet(const Data& d, int32_t workers, bool force_back = false) {
     return out;
 }
 
+// ---- q6 t12: object-script spawns of types outside the battle tables, script Take_Damage ----
+// An object script's Spawn_Unit of a type no participant brought (L1_Scout, the company L1_Deploy_Squad) used to make a
+// store prop (no combat, movement, AI). TacticalBattle::script_spawn / script_spawn_company extend the battle tables and
+// make battle units: combat + movement registered, a move order of the owner accepted, the company's members contained
+// in its TEAM. script_damage is damage kind 0 through combat (passes invulnerability; Set_Cannot_Be_Killed holds at the
+// floor) and processes the kill at once.
+struct ScriptSpawnRun {
+    bool fought = false, scout_unit = false, scout_moves = false, company_units = false, company_moves = false;
+    bool held = false, killed = false, scout_moved = false;
+    uint32_t members = 0;
+    CrcLog crc;
+};
+
+ScriptSpawnRun run_script_spawn(const Data& d, int32_t workers) {
+    ScriptSpawnRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 12;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate");
+    s.forces = {{0, 1, sq}, {1, 2, fr}, {1, 2, sq}};
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = false;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    bool invaded = false;
+    const auto scout_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Scout"));
+    const auto squad_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Deploy_Squad"));
+    const auto member_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Deploy_Trooper"));
+    const auto team_sq_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Team_Squad"));
+    const auto team_member_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Team_Trooper"));
+    const auto team_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Team"));
+    objects::ObjectId scout = objects::kNoObjectId;
+    tactical::movement::V2 scout_from{};
+    for (uint64_t t = 0; t < 6000; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) {
+            if (out.fought) break;
+            continue;
+        }
+        out.fought = true;
+        objects::ObjectStore& st = tm->primary();
+        const uint32_t f = b->frame();
+        if (f == 1) {
+            Vec3 at{};
+            bool found = false;
+            for (const objects::ObjectHandle h : st.owned_by(1))
+                if (!found && st.alive(h) && b->combat().has_unit(st.id(h))) {
+                    at = st.position(h);
+                    found = true;
+                }
+            CHECK(found);
+            if (!found) break;
+            objects::SpawnParams p;
+            p.type = scout_t;
+            p.owner = 1;
+            p.position = Vec3{at.x + 20.0f, at.y, at.z};
+            p.facing = Vec3{1.0f, 0.0f, 0.0f};
+            const objects::ObjectHandle sh = b->script_spawn(*tm, p);
+            scout = sh ? st.id(sh) : objects::kNoObjectId;
+            out.scout_unit = sh && st.type(sh) == scout_t && b->combat().has_unit(scout) && b->movement().has_unit(scout);
+            if (!out.scout_unit) break;
+            scout_from = b->movement().view(scout).pos;
+            const objects::ObjectId ids[] = {scout};
+            out.scout_moves = b->order_move(*tm, 1, ids, scout_from.x + 60.0f, scout_from.y, host.random().synced()) ==
+                              commands::RejectReason::None;
+            // A company without Create_Team: two members, the first returned; with Create_Team + Create_Team_Type: two
+            // members and their L1_Team ability container, which is returned.
+            auto company = [&](objects::TypeIndex ct, objects::TypeIndex mt, float dy, bool team) {
+                p.type = ct;
+                p.position = Vec3{at.x, at.y + dy, at.z};
+                const objects::ObjectHandle ch = b->script_spawn_company(*tm, p);
+                std::vector<objects::ObjectId> mids;
+                for (const objects::ObjectHandle h : st.owned_by(1))
+                    if (st.alive(h) && st.type(h) == mt && b->combat().has_unit(st.id(h)) && b->movement().has_unit(st.id(h)))
+                        mids.push_back(st.id(h));
+                out.members += static_cast<uint32_t>(mids.size());
+                bool ok = ch && mids.size() == 2;
+                if (team) ok = ok && st.type(ch) == team_t && b->abilities().has_object(st.id(ch));  // the ability TEAM container
+                else ok = ok && (st.id(ch) == mids[0] || st.id(ch) == mids[1]);
+                out.company_units = out.company_units && ok;
+                out.company_moves = out.company_moves && !mids.empty() &&
+                                    b->order_move(*tm, 1, mids, at.x + 60.0f, at.y + dy, host.random().synced()) == commands::RejectReason::None;
+            };
+            out.company_units = out.company_moves = true;
+            company(squad_t, member_t, 30.0f, false);
+            company(team_sq_t, team_member_t, -30.0f, true);
+            continue;
+        }
+        if (scout == objects::kNoObjectId) continue;
+        if (f == 120) {
+            out.scout_moved = b->combat().has_unit(scout) && b->movement().view(scout).pos.x > scout_from.x + 1.0f;
+            // Cannot-be-killed holds at the floor; then a kill through combat, processed at once (no combat unit left).
+            out.held = b->script_damage(*tm, scout, 1.0e7f, true) && b->combat().has_unit(scout) && b->combat().alive(scout);
+            out.killed = b->script_damage(*tm, scout, 1.0e7f, false) && !st.alive(st.find(scout));
+        }
+        if (f >= 200) break;
+    }
+    out.crc = host.crc_log();
+    return out;
+}
+
+void test_script_spawn(const Data& d) {
+    const ScriptSpawnRun a = run_script_spawn(d, 0);
+    std::printf("  script spawn: fought %d; scout unit %d ordered %d moved %d; companies %d (%u members) ordered %d; "
+                "cannot-die held %d, killed %d\n",
+                a.fought, a.scout_unit, a.scout_moves, a.scout_moved, a.company_units, a.members, a.company_moves, a.held, a.killed);
+    CHECK(a.fought && a.scout_unit && a.scout_moves && a.scout_moved);
+    CHECK(a.company_units && a.company_moves);
+    CHECK(a.held && a.killed);
+    const ScriptSpawnRun w = run_script_spawn(d, 4);
+    CHECK(!first_divergence(a.crc, w.crc).diverged);
+}
+
 void test_jet(const Data& d) {
     const JetRun a = run_jet(d, 0);
     std::printf("  jetpack: fought %d ordered %d flew %d landed %d mirror %d suspended %u frames, shots in flight %u, after %u\n",
@@ -1173,6 +1318,7 @@ int main(int argc, char** argv) {
     test_pads(*d);  // Int-final
     test_jet(*d);   // S7 t10 / t14
     test_deploy(*d);  // S7 t26
+    test_script_spawn(*d);  // q6 t12
     test_foc();
     if (g_fail) {
         std::printf("alamo_sim_l1_tests: %d failure(s)\n", g_fail);
