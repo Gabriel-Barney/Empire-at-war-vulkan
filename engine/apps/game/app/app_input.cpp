@@ -138,7 +138,9 @@ void App::post_tick() {
         bview_.capture(*session_);
         if (const sim::TacticalBattle* b = session_->battle()) {
             const objects::ObjectStore& st = session_->host().modes().top_tactical()->primary();
-            audio_.battle_tick(*b, st, data_.types, local_player());
+            const game::GameSession* gs = session_.get();
+            audio_.battle_tick(*b, st, data_.types, local_player(),
+                               [gs](objects::ObjectId id) { return gs->script_hidden(id); });  // q6 t19 §10.3
             for (const TswCue& c : tsw_cues(b->special_weapon_events(), st)) {  // refixf t05: TSW_PLANET_DESTROY.md §11
                 if (c.kind == TswCue::Kind::Firing) tsw_shot_begin(c, *b, st);              // 0x2ccf30: the firing shot
                 else if (c.kind == TswCue::Kind::PlanetDestroyed) tsw_shake(c, *b);        // 0x2cdbb0 at the dummy
@@ -603,7 +605,9 @@ const ui::WorldPickTests* App::world_pick_tests() {
     const sim::TacticalMode* tm = session_ ? session_->host().modes().top_tactical() : nullptr;
     if (!tm) return nullptr;
     if (pick_radii_.size() != data_.types.size()) pick_radii_ = game::mouse_sphere_radii(data_.types);
-    pick_tests_ = game::tactical_pick_tests(*tm, session_->battle(), pick_radii_);
+    const game::GameSession* gs = session_.get();
+    pick_tests_ = game::tactical_pick_tests(*tm, session_->battle(), pick_radii_,
+                                            [gs](objects::ObjectId id) { return gs->script_hidden(id); });  // q6 t19 §10.3
     return &pick_tests_;
 }
 

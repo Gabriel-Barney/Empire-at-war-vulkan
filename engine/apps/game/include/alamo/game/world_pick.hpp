@@ -17,10 +17,12 @@
 // [port] Fog / stealth are not filtered (as before t08): the candidates are the tree entries in the view frustum.
 #pragma once
 #ifdef ALAMO_GAME_HAVE_UI
+#include <functional>
 #include <span>
 #include <vector>
 
 #include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/object_store.hpp"
 #include "alamo/ui/picking.hpp"
 
 namespace alamo::sim {
@@ -35,8 +37,13 @@ std::vector<float> mouse_sphere_radii(const objects::GameObjectTypes& types);
 
 // The pick tests over `mode` (and `battle` for the garrison skip; may be null). The callbacks keep the pointers and the
 // span: valid while the mode, the battle and `radii` live and no tick runs.
+// q6 t19 (OBJECT_SCRIPTS §10.3): `script_hidden` (optional, GameSession::script_hidden) - Lua-hidden objects are skipped
+// too (the model scene queries 0x266d10 / 0x267680 skip a hidden model, point and box pick). With the pick skipping it,
+// a hidden enemy never resolves as the object under the cursor, so it gets no attack cursor and no Attack order (the
+// cursor resolver 0x2ad280 refuses it as well).
 ui::WorldPickTests tactical_pick_tests(const sim::TacticalMode& mode, const sim::TacticalBattle* battle,
-                                       std::span<const float> radii);
+                                       std::span<const float> radii,
+                                       std::function<bool(objects::ObjectId)> script_hidden = {});
 
 }  // namespace alamo::game
 #endif

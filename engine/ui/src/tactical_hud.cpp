@@ -649,6 +649,8 @@ void TacticalHud::build_radar(const TacticalHudFrame& f, std::span<const HudUnit
         if (t && hostile && !t->visible_on_enemy_radar) continue;
         if (hostile && u.jammed) continue;  // R5 sensor jamming: the jammer's side drops these units from the enemy radar (0x35b4d0)
         if (hostile && u.stealthed) continue;  // R5 stealth: the same filter drops hostile Is_Stealthed units (ABILITY_VISUALS 1.4)
+        // q6 t19 (OBJECT_SCRIPTS §10.3): a Lua-hidden unit (model hidden) has no blip unless Visible_On_Radar_When_Fogged.
+        if (u.script_hidden && !(t && t->visible_on_radar_when_fogged)) continue;
         const Vec2f c = radar_view_.to_canvas(u.position.x, u.position.y);
         if (!radar_view_.inside(c)) continue;
         Rgba8 col = u.selected && f.radar_colorize_selected ? f.radar_selected_color : u.team_color;

@@ -471,6 +471,34 @@ bool LuaVm::exit_requested() const {
     return impl_->exit_requested;
 }
 
+void LuaVm::pool_kill_threads() {
+    check_owner();
+    Impl& vm = *impl_;
+    vm.exit_requested = true;
+    for (auto& [id, t] : vm.threads) t.killed = true;
+    vm.reap();
+    vm.next_thread = 0;
+    vm.current_thread = -1;
+    lua_State* L = vm.L;
+    lua_pushstring(L, kThreadValuesKey);
+    lua_newtable(L);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::reset_event_queue(L);
+}
+
+void LuaVm::collect_garbage() {
+    check_owner();
+    lua_State* L = impl_->L;
+    lua_settop(L, 0);
+    lua_setgcthreshold(L, 0);
+}
+
+void LuaVm::pool_handout() {
+    check_owner();
+    impl_->exit_requested = false;
+    impl_->current_thread = -1;
+}
+
 void LuaVm::set_time(double seconds) {
     check_owner();
     impl_->time = seconds;

@@ -2,13 +2,32 @@
 // Lua_Script, attached at construction, serviced after the store update, released on ScriptExit / a binding error /
 // death. Owned by SimHost (SimConfig::object_scripts; off by default, so sessions without it keep their CRC streams).
 //
-// ATTACH (§1.3, ObjectStore::on_created of every mode's PRIMARY store): a fresh VM per object [port: no pool, §7.1 item
-// 3]. Order: the file's top level (require), GlobalValue + the bridges (player world, object bridge when the host has
-// set one for the store), Base_Definitions() when it is a function, the `main` thread (created, not run), the global
-// Object last (so Object is nil in the top level and in Base_Definitions). A file that is missing or does not compile
-// = no script. Death clones get no script (TacticalMode::spawn_death_clone suppresses the hook: the original attaches
-// and releases at once, §1.2) [port: Base_Definitions does not run for them].
-// [port] Secondary stores (local / cosmetic objects) attach nothing. Execute_Script_On_Type (§1.5) is not loaded.
+// POOL (§1.4, 0x244170): instances come from a pool keyed by the script name, one per host (session). The first use of a
+// name loads one instance (new VM, the file's top level run) and reads its global ScriptPoolCount once: absent -> a pool
+// of 1 (this instance); N >= 1 -> N - 1 more instances loaded at once (top level run for each, in order), all in the
+// pool; 0 (or less, or not a whole count above 0) -> no pool, this and every later instance of the name is a fresh,
+// unpooled VM. A known name hands out the last free instance in list order, else loads one more and appends it (pools
+// grow to the peak live count). Handout: exit flag cleared, no current thread, the VM's host rebound to the object's
+// store (wrapper caches emptied when the store changes).
+// ATTACH (§1.3, ObjectStore::on_created of every mode's PRIMARY store). Order: the instance (pool), the engine globals
+// registered again (LuaVm::reinstall_engine_globals) + GlobalValue + the bridges (player world, object bridge; null
+// detaches), Base_Definitions() only for a fresh instance (a reused one ran it at its release), the `main` thread
+// (created, not run), the global Object last (so Object is nil in the top level and in Base_Definitions). A file that is
+// missing or does not compile = no script. Death clones get no script (TacticalMode::spawn_death_clone suppresses the
+// hook: the original attaches and releases at once, §1.2) [port: Base_Definitions does not run for them].
+// [port] Secondary stores (local / cosmetic objects) attach nothing.
+// RELEASE (§2.3, 0x2488e0): threads killed (ids restart at 0), ThreadValue / GetEvent cleared; a pooled instance then runs
+// Flush_G() (when a function) and Base_Definitions() at once, the stack is reset and a full collection runs, and it is
+// free again; an unpooled one is closed. [port] The bridges are detached before Flush_G / Base_Definitions run (bindings
+// called there see the store only: at a mode end the battle's systems may already be shut down), and the next handout
+// attaches the new store's. [port] Proximity registrations of a released object stay in its VM's registry: they are keyed
+// by object id, ids are never reused, so they never fire again.
+// TYPE INSTANCES (§1.5, Execute_Script_On_Type, type +0x5D): at type setup ([port] the first mode pushed with the script
+// files set) every type with Execute_Script_On_Type and a Lua_Script takes one instance from the same name pool (type
+// index order), engine globals registered, Base_Definitions() once while fresh [port: the original may run it once per
+// load pass, §1.5 M]; no main, no Object, never serviced, never released (the host keeps it for the session; End_All
+// only collects it, so its globals survive). Read by the AI hero setup C 0x726710 (type_vm); [port] the AI ports do not
+// call into hero scripts (galactic_pp.cpp / tactical_pp.cpp HeroM notes), so nothing calls it yet.
 //
 // SERVICE (§3), service(mode) right after the mode's primary store update (GameMode::common_tick; GalacticMode after
 // GalacticSim::update), not while the mode is paused: the scripts of that store newest-attached first (the store's
@@ -23,7 +42,12 @@
 //     thread; ScriptExit / a binding script error stops the pass) with time = now, frame = the mode frame;
 //   * exit flag set -> released; else LastService := -(one synced draw in [0, first_pump_draw_hi(ServiceRate)]) when
 //     LastService was not a number before the pump (the first pump), else now.
-// Everything runs on the sim thread in that fixed order, so worker counts never change it (rule 3).
+// Everything runs on the sim thread in that fixed order, so worker counts never change it (rule 3). The pool adds no
+// RNG draw: which instance an object gets (list order) and when the top levels / release-time Base_Definitions run are
+// fixed points of that order.
+// [port] Saves: no script state is saved yet (§2.6): save_allowed refuses while an object script is live. Free pooled
+// instances and type instances are not saved either; a loaded session starts with empty pools and reloads the type
+// instances.
 //
 // Diagnostics: per-object messages ("<mode frame> <script> (id N): <text>") and a count per distinct error text.
 #pragma once
@@ -67,7 +91,8 @@ public:
     ObjectScriptHost& operator=(const ObjectScriptHost&) = delete;
 
     // Session inputs (before the modes are pushed). files: the script roots (null = nothing attaches).
-    void set_files(const FileProvider* files) { files_ = files; }
+    // Set after a mode was pushed: the type instances load now (into the first store's pool binding).
+    void set_files(const FileProvider* files);
     void set_global_values(lua::GlobalValueStore* g) { globals_ = g; }
     void set_campaign(bool campaign) { campaign_ = campaign; }
 
@@ -87,10 +112,22 @@ public:
     size_t live(const objects::ObjectStore& store) const;
     bool has_script(const objects::ObjectStore& store, objects::ObjectHandle h) const;
     const lua::LuaVm* vm_of(const objects::ObjectStore& store, objects::ObjectHandle h) const;
+    // §1.5: the type instance of `t` (Execute_Script_On_Type), null when the type has none.
+    const lua::LuaVm* type_vm(objects::TypeIndex t) const;
+    size_t type_instances() const { return type_scripts_.size(); }
+    // §1.4: one entry per pooled script name (ascending name): instances in the pool and how many are handed out.
+    struct PoolInfo {
+        std::string name;
+        size_t size = 0, in_use = 0;
+    };
+    std::vector<PoolInfo> pools() const;
 
     struct Stats {
-        uint64_t attached = 0;       // instances created (Base_Definitions run, main thread made)
+        uint64_t attached = 0;       // object attaches (Base_Definitions run when fresh, main thread made)
         uint64_t load_failures = 0;  // missing / not compiling: no script
+        uint64_t loaded = 0;         // instances loaded (new VM, top level run): pool loads + unpooled ones
+        uint64_t reused = 0;         // attaches that took a free pooled instance
+        uint64_t pooled_releases = 0;  // releases that returned an instance to its pool (Flush_G + Base_Definitions)
         uint64_t pumps = 0;          // services that resumed the threads
         uint64_t first_draws = 0;    // synced draws for the first-pump LastService
         uint64_t released_exit = 0;  // ScriptExit or a binding script error (exit flag)
@@ -107,20 +144,31 @@ public:
     uint64_t error_total() const;
 
 private:
+    struct Instance;
     struct Script;
     struct StoreScripts;
+    struct TypeScript;
     StoreScripts* find(const objects::ObjectStore& store);
     const StoreScripts* find(const objects::ObjectStore& store) const;
     void attach(StoreScripts& ss, objects::ObjectHandle h);
-    void collect(StoreScripts& ss, Script& s);
+    void load_type_scripts(StoreScripts& ss);
+    // §1.4: an instance of `name` bound to the store of `ss` (null: load failure, noted). Unpooled instances are
+    // returned through `owned`.
+    Instance* acquire(StoreScripts& ss, const std::string& name, objects::ObjectId id, std::unique_ptr<Instance>& owned);
+    std::unique_ptr<Instance> load(StoreScripts& ss, const std::string& name, objects::ObjectId id);
+    void collect(uint64_t frame, Instance& in, objects::ObjectId id);
     void release(StoreScripts& ss, Script& s, uint64_t& counter);
-    void note(uint64_t frame, const Script& s, const std::string& what, bool error);
+    void note(uint64_t frame, const std::string& name, objects::ObjectId id, const std::string& what, bool error);
 
     GameRandom* random_;
     const FileProvider* files_ = nullptr;
     lua::GlobalValueStore* globals_ = nullptr;
     bool campaign_ = false;
     std::vector<std::unique_ptr<StoreScripts>> stores_;  // push order
+    // §1.4: name -> the pool's instances in list order (string keys; lookups and in-order walks only).
+    std::map<std::string, std::vector<std::unique_ptr<Instance>>> pools_;
+    std::vector<std::unique_ptr<TypeScript>> type_scripts_;  // ascending type index
+    bool types_loaded_ = false;
     Stats stats_;
     std::vector<std::string> messages_;
     std::map<std::string, uint64_t> error_counts_;  // diagnostics only (never read by the sim)
