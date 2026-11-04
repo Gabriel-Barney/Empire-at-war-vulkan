@@ -168,7 +168,7 @@ P = the player the evaluator belongs to (`Variable_Self`, `Variable_Enemy`, `Var
 | `IsFaction {Faction…}` | 0x6e0700 | −1 | 1 if P's faction name equals one of the strings (exact byte compare after the parser's normalisation [M]) | H |
 | `IsDifficulty {Difficulty_Level_Type}` | 0x6e0620 | 0 | 0 for a human P or when 0x2814d0 is false; else AI difficulty (AIPlayer +0x58) == value | H |
 | `CreditsUnnormalized` | slot 10: 0x6e05f0 | 0 | P's credits (float +0x70) if P is Self, else 0 | H |
-| `TechLevel`, `BudgetAllocation`, `StoryTrigger`, `ActiveGoals` | 0x6e09a0, 0x6e0560, 0x6e08e0, 0x6e0490 | 0 / 2 / 0 / 0 | galactic-side meanings (S2) | M |
+| `TechLevel`, `BudgetAllocation`, `StoryTrigger`, `ActiveGoals` | 0x6e09a0, 0x6e0560, 0x6e08e0, 0x6e0490 | 0 / 2 / 0 / 0 | galactic-side meanings (S2); `BudgetAllocation` in battle = the category's weight in the tactical template's `<Budget>` block, Self only (AI_GALACTIC_TOKENS §9.3, H) | M |
 
 ### 3.5 Game tokens (Game base 0x6e2170, TacticalGame 0x738010)
 

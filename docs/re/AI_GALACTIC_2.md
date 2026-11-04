@@ -274,9 +274,12 @@ Every marshaller call runs over the list in this order. This includes commit, so
   - No target or IgnoreTarget → empty lists and tolerance 0.
   - Otherwise tolerance T = 1 − (f·PFCA + MinContrastScale)/(f·PFCA + MaxContrastScale), with f = recent plan failures at this target (Learning 0x588980). Shipped 1.1 / 1.5 gives T = 0.2667 at f = 0.
   - Galactic list (0x5f1990):
-    - entry 0 = (null, total enemy **space** strength at the target 0x5f2430(…, 1), flag 1);
-    - entry 1 = (null, total enemy **ground** strength, flag 0);
-    - then one entry per EnemyContrastTypes type (plan map +0x68, map order) for space, then for ground. Each = that type's enemy strength × (MaxContrastScale + f·PFCA) × difficulty `Galactic_AI_Contrast_Multiplier`.
+    - entry 0 = (null, total enemy strength at the target 0x5f2430(…, 1), flag 1);
+    - entry 1 = (null, total enemy strength 0x5f2430(…, 0), flag 0);
+    - (q6 2026-11-04 correction, AI_GALACTIC_TOKENS §9.2 [H]: flag 1 is the **ground** layer (GroundTotalUnnormalized
+      plus ground structures), flag 0 the **space** layer, so entry 0 is ground and the typed ground rows come first;
+      the totals and typed rows also include the matching structures' own AI_Combat_Power);
+    - then one entry per EnemyContrastTypes type (plan map +0x68, map order) for flag 1, then for flag 0. Each = that type's enemy strength × (MaxContrastScale + f·PFCA) × difficulty `Galactic_AI_Contrast_Multiplier`.
     - The two totals are **not** scaled.
     - When a total is ≤ 0, its per-type entries are 0.
   - "Remaining" = a copy of the list.

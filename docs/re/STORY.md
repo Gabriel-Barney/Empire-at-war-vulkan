@@ -132,7 +132,8 @@ A STORY_TRIGGER **with** Prereq fires synchronously at the moment its prereq gro
    event's Timeout.
 4. triggered = 1.
 5. Apply the reward (`0x456970`).
-6. Story dialog / chapter handling (`+0x230` Story_Dialog and friends).
+6. Story dialog / chapter handling (`+0x230` Story_Dialog and friends), only when Story_Dialog is not empty
+   (§1.6).
 7. Dependants loop (§1.2), in dependants-list order.
 8. Perpetual: triggered = 0, vf4 Reset; if the type is not STORY_TRIGGER, active = 1 again with a new
    activation time (the event stays armed without needing its prereqs again).
@@ -140,6 +141,49 @@ A STORY_TRIGGER **with** Prereq fires synchronously at the moment its prereq gro
 Fire does **not** check active or triggered. Anything that calls Fire directly (TRIGGER_EVENT, RESET_BRANCH
 Param2) therefore fires an event that is unarmed, or already fired, again: the reward is re-applied and the
 dependants are re-checked.
+
+### 1.6 Fire step 6: story dialog fields (q6 t14, 2026-11-04) [H unless tagged]
+
+**Field map.** The event offset is the parse offset (`xml_field_tables.md`) minus 0x100.
+
+| event offset | XML field | type |
+|---|---|---|
+| +0x230 | `Story_Dialog` | string (script name, GALACTIC_DIALOGS §2.6) |
+| +0x250 | `Story_Chapter` | int |
+| +0x258 | `Story_Var` | string |
+| +0x278 | `Story_Tag` | string |
+| +0x298 | `Story_Incoming` | string; not read by Fire step 6 [L: its consumer was not traced] |
+| +0x2B8 | `Story_Dialog_Popup` | bool |
+| +0x2B9 | `Story_Dialog_SFX` | bool |
+| +0x2C0 | (no XML field) the Add_Dialog_Text line list (LUA_API) | vector of wide strings |
+
+**Step 6**, when Story_Dialog is not empty:
+1. **Tag.** tag = Story_Tag. If Story_Tag is empty, tag = `<Story_Dialog>_<chapter>` and the auto-tag flag is set.
+2. **Holocron add.** 0x47dc70(Story_Dialog, chapter, Story_Var, tag, pointer to the +0x2C0 list, auto-tag flag, 0)
+   adds a record to the holocron list (GALACTIC_DIALOGS §2.8).
+3. **Presentation.** If the MP callback 0x140b311e0 is set, it handles the presentation instead; GALACTIC_DIALOGS §2.1
+   names the MP hook 0x47edf0. Otherwise:
+   - **Popup false** (every shipped event):
+     - the command-bar component 0x43 (the holocron button) flashes (vf+0x120(0, 1, 0.5, 3));
+     - the local faction's +0x2F38 text (its `Default_Transmission_Message`, looked up with add-if-missing) is shown
+       as a white screen-text line (0x2dd630);
+     - if the event's SFX flag is set and the faction has a sound at +0x680 (`SFXEvent_Mission_Added`), that sound
+       plays (0x2d5290).
+   - **Popup true**: the summary dialog opens at this dialog and chapter (0x47e2c0).
+
+The dialog **file** is not loaded here. It is loaded when the plot is loaded (GALACTIC_DIALOGS §2.8).
+
+**Rewards on the holocron** (§6): 0x2C `REMOVE_STORY_GOAL` and 0x38 (`STORY_GOAL_COMPLETED` [M, by elimination])
+take a tag in Reward_Param1 and remove or complete the newest holocron record with that tag.
+
+**Port notes**
+- Run step 6 after the reward and before the dependants.
+- Use the default tag `<dialog>_<chapter>` when Story_Tag is empty.
+- Pass the event's dialog text list **by reference**, not as a copy.
+- Popup false: flash the holocron button, show the faction's transmission text, and play the mission SFX only when
+  `Story_Dialog_SFX` is set.
+- Popup true: open the summary at the chapter.
+- `Story_Var` substitutes into the `TEXT` lines of the chapter. `Story_Incoming` stays unread.
 
 ## 2. Plots: activation, suspension, reset (question 2)
 
@@ -376,6 +420,8 @@ the Perpetual re-arm. Reward_ParamN are single strings. Reward_Param_List is a l
 | STORY_ELEMENT | P1 plot name without ".xml" | activate plot `P1.xml`, any player's, in the current mode's manager; silent when not found (§2.4) | H (`0x4624e0`) |
 | SET_FLAG | P1 name, **P2 required** | flag = atoi(P2) (global table) | H (`0x32b960`) |
 | INCREMENT_FLAG | P1 name, **P2 required** | flag += atoi(P2) **only if the flag already exists**; otherwise "Attempting to increment undefined flag" and nothing happens | H (`0x3285a0`) |
+| REMOVE_STORY_GOAL (0x2c) | P1 tag | remove the newest holocron record with that tag (GALACTIC_DIALOGS §2.8) | H (`0x47eea0`) |
+| 0x38 (STORY_GOAL_COMPLETED, name M) | P1 tag | mark the newest holocron record with that tag completed (moves it to the Completed tab) | H (`0x47f5b0`) |
 | RANDOM_STORY | – | builds a random plot (`0x4bfdc0`); this is where the "Event %s, Type STORY_TRIGGER" / "Prereq %s" strings come from (`0x4be210`, `0x4be420`, `0x4bdfa0`) | H |
 
 All other rewards act on game systems (credits `+0x638` player, units, camera, objectives, …). See the
@@ -405,7 +451,8 @@ only dialog / chapter tags shipped events use are `Story_Dialog`, `Story_Chapter
 7. Story dialog / chapter fields (`+0x230..+0x2b9`) and the Lua dialog setters were not traced. (q6 2026-11-03: the
    Lua setters are now in LUA_API "StoryEventWrapper dialog and parameter setters": `+0x230` Story_Dialog, `+0x250`
    chapter, `+0x278` tag, `+0x2b8` popup flag, `+0x2c0` the Add_Dialog_Text list passed by pointer to the holocron
-   [H for the Fire call 0x455db0; the remaining fields of the range still untraced].)
+   [H for the Fire call 0x455db0; the remaining fields of the range still untraced].) (q6 t14 2026-11-04: field map
+   and step 6 in §1.6 [H]; only `Story_Incoming` +0x298 and holocron byte +0x6F are still untraced.)
 
 > **Status 2026-10-30:** The XML fields `Story_Dialog`, `Story_Tag`, `Story_Chapter` and `Story_Dialog_Popup` are now parsed (`engine/lua/src/story_model.cpp:367-374`) and a fired event with a dialog or tag is recorded for the UI (`story_model.cpp:628-630`). Not covered by this note: the +0x230..+0x2b9 layout and the Lua dialog setters.
 
