@@ -182,6 +182,11 @@ struct StatusRec {
     // last landing reports; Result = `result` set at the order (+0x45: every pending unit placed).
     std::vector<std::pair<int32_t, int32_t>> landings;
     bool saved_removable = true;
+    // q6 land end chain - Attack_Move on an object (A1_READINGS §33.2, AI_TACTICAL §7.7.3 item 1): the target's owner
+    // last seen (signal 0x1a stand-in: an owner change is detected by polling), and the TF unit count when the
+    // pending-empty test last ran (-1: not every unit has arrived yet).
+    int32_t target_owner = -1;
+    int32_t arrived_units = -1;
 };
 
 struct PlanInstance {
@@ -263,6 +268,10 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     std::map<int32_t, StatusRec> statuses;
     int32_t next_plan = 1, next_tf = 0, next_status = 0;
     int32_t current_plan = -1;
+    // q6 land end (decision log only): the free store being serviced (-1 none), and whether the order is a world task-force
+    // order (Impl::order logs those itself).
+    int32_t fs_servicing = -1;
+    bool in_world_order = false;
     int64_t now = 0;
     uint32_t mode_frame = 0;
 
@@ -510,10 +519,41 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
         return it == plans.end() ? -1 : it->second.player;
     }
     cmd::RejectReason order(int32_t player, const cmd::EventData& ev, const std::string& what) {
+        in_world_order = true;
         const cmd::RejectReason r = pipeline.execute_direct(static_cast<uint64_t>(now), static_cast<uint8_t>(player),
                                                             cmd::CommandSource::AI, ev);
+        in_world_order = false;
         decide(player, "order " + what + (r == cmd::RejectReason::None ? "" : " rejected " + std::string(cmd::reject_reason_name(r))));
         return r;
+    }
+    // q6 land end (decision log only): a Lua object order of a script (free store, plan event handler) - who ordered,
+    // the order, the first unit (type, id) and the unit count, the target object or position.
+    void log_script_order(uint8_t player, const cmd::EventData& ev, cmd::RejectReason r) {
+        if (ev.type() != cmd::EventType::PortExtension) return;
+        const uint32_t sub = ev.u("subtype");
+        const auto b = ev.bytes_view("data");
+        if (sub < lua::kLuaOrderSubtype || sub > lua::kLuaOrderSubtype + 0xFFu || b.size() < lua::kLuaOrderPayloadBytes) return;
+        const auto le = [&b](size_t off) {
+            return static_cast<uint32_t>(b[off]) | (static_cast<uint32_t>(b[off + 1]) << 8) | (static_cast<uint32_t>(b[off + 2]) << 16) |
+                   (static_cast<uint32_t>(b[off + 3]) << 24);
+        };
+        static constexpr const char* kNames[] = {"?", "move", "attack-move", "guard", "stop", "hyperspace", "cancel-hyperspace"};
+        const uint32_t k = sub - lua::kLuaOrderSubtype;
+        const auto unit = static_cast<int32_t>(le(0));
+        const PerceptionObject* uo = object(unit);
+        const uint32_t target = le(4);
+        char buf[200];
+        std::snprintf(buf, sizeof buf, " %s %s %d (+%zu) -> (%.0f, %.0f)", k < 7 ? kNames[k] : "?", uo ? type_name(uo->type).c_str() : "?",
+                      unit, (b.size() - lua::kLuaOrderPayloadBytes) / 4, static_cast<double>(std::bit_cast<float>(le(8))),
+                      static_cast<double>(std::bit_cast<float>(le(12))));
+        std::string text = fs_servicing >= 0 ? "fs order" : current_plan >= 0 ? "plan " + std::to_string(current_plan) + " lua order" : "lua order";
+        text += buf;
+        if (target != cmd::kNoObject) {
+            const PerceptionObject* to = object(static_cast<int32_t>(target));
+            text += " obj " + std::to_string(target) + " " + (to ? type_name(to->type) : std::string("?"));
+        }
+        if (r != cmd::RejectReason::None) text += " rejected " + std::string(cmd::reject_reason_name(r));
+        decide(static_cast<int32_t>(player), std::move(text));
     }
 
     // ---- object signals / free store ----
@@ -552,6 +592,8 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     void opportunity_events(const std::vector<OpportunityTargetEvent>& events);  // STRATEGIC_GAPS §5.3
     void service_statuses(int32_t player);
     bool step_status(StatusRec& s);
+    bool step_object_block(StatusRec& s, const TfRec& t);
+    void block_end_log(const StatusRec& s, const TfRec& t, const char* why);
     void space_reinforce_poll(StatusRec& s);  // refixf t06: SpaceReinforceBlockStatus IsFinished (AI_TACTICAL §7.4)
     void reinforcements_unloaded(const std::vector<ReinforcementsUnloaded>& recs);  // a1j t01: signal 0x19 (0x6a1440)
     void claim_force(TfRec& t);
@@ -1508,6 +1550,11 @@ void TacticalAiWorld::Impl::service_free_store(PlayerAi& p) {
     vm.set_frame(mode_frame);
     FreeStoreServiceStep step;
     free_store_service(p.sched, p.fs, mode_frame, step);
+    fs_servicing = p.player;
+    struct Reset {
+        int32_t& v;
+        ~Reset() { v = -1; }
+    } reset{fs_servicing};
     if (step.run_service) {
         vm.service_threads();
         lua::set_number_global(vm, "LastService", p.sched.last_service);
@@ -2284,15 +2331,11 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
             }
             if (!t) return finish(false);
             prune_tf(*t);
-            if (t->units.empty()) return finish(false);
-            if (s.target >= 0) {
-                // An Attack_Move / Move_To to an OBJECT (0x73c4f0) stays open after arrival while the object lives
-                // (A1_READINGS §33.2, modes 0 / 1) -> finished (true) when it dies. a1h t02: the status is passive; the
-                // battle host's movement follows the object (§33.4), the status no longer re-orders the units.
-                const ObjectHandle h = store.find(s.target);
-                if (!store.alive(h)) return finish(true);
-                return false;
+            if (t->units.empty()) {
+                if (s.target >= 0) block_end_log(s, *t, "task force empty");
+                return finish(false);
             }
+            if (s.target >= 0) return step_object_block(s, *t);
             if (now <= s.started) return false;
             for (const ObjectHandle u : t->units) {
                 const TacticalAiObject* f = fact(id_of(u));
@@ -2336,6 +2379,66 @@ bool TacticalAiWorld::Impl::step_status(StatusRec& s) {
     return false;
 }
 
+void TacticalAiWorld::Impl::block_end_log(const StatusRec& s, const TfRec& t, const char* why) {
+    if (!cfg.log_decisions) return;
+    const PerceptionObject* o = object(s.target);
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "plan %d tf %s attack-move block on obj %d %s/p%d ended: %s", s.plan, t.name.c_str(), s.target,
+                  o ? type_name(o->type).c_str() : "?", o ? o->owner : -1, why);
+    decide(t.player, buf);
+}
+
+// An Attack_Move to an OBJECT (0x73c4f0; Move_To keeps no object, tf_tactical_order) - A1_READINGS §33.2 modes 0 / 1,
+// AI_TACTICAL §7.7.3 item 1. Passive (a1h t02: the battle host's movement follows the object, §33.4). It finishes when
+// the object dies (signal 0x10, Result true [port: kept from a1h t02; the spec's Result is the BlockingStatus default]),
+// at once when the object's owner changed and it is no longer hostile (0x1a with the attack flag, which every TF
+// Attack_Move on an object sets), and in the pending-empty test once every unit has arrived (and again whenever a unit
+// leaves afterwards): object no longer hostile (0x39a4e0: owner relation to the TF player == 1), fails 0x5680b0, or fogged
+// for the TF player (real fog, force 1) while its type has neither *_State_Visible_Under_FOW flag. Otherwise it stays open
+// after arrival. Those finishes give Result nil. [port] 0x5680b0 is read as alive and not dead / being removed; its
+// garrison, transport, +0x3b4 and type +0x41 / +0x6b tests are not modelled. [port] Arrival = no TF unit has a movement
+// goal (the formation's signal 10 is not modelled per unit); the owner change is polled once per status service.
+bool TacticalAiWorld::Impl::step_object_block(StatusRec& s, const TfRec& t) {
+    auto end = [&](const char* why) {
+        block_end_log(s, t, why);
+        s.finished = true;
+        s.result = lua::AiStatusResult::Nil;
+        return false;
+    };
+    const ObjectHandle h = store.find(s.target);
+    if (!store.alive(h)) {
+        block_end_log(s, t, "target destroyed");
+        s.finished = true;
+        s.result = lua::AiStatusResult::True;
+        return false;
+    }
+    const int32_t owner = store.owner(h);
+    const bool hostile = owner >= 0 && owner != t.player && w.rel(t.player, owner) == 1;
+    if (owner != s.target_owner) {
+        s.target_owner = owner;
+        if (!hostile) return end("target owner changed, no longer hostile");
+    }
+    const auto n = static_cast<int32_t>(t.units.size());
+    if (s.arrived_units < 0) {
+        if (now <= s.started) return false;
+        for (const ObjectHandle u : t.units) {
+            const TacticalAiObject* f = fact(id_of(u));
+            if (f && f->moving) return false;
+        }
+    } else if (n >= s.arrived_units) {
+        return false;
+    }
+    s.arrived_units = n;
+    if (!hostile) return end("arrived, target not hostile");
+    const TacticalAiObject* f = fact(s.target);
+    const PerceptionObject* o = object(s.target);
+    if (!f || !o || !o->alive || f->target.dead_or_removing) return end("arrived, target not targetable");
+    if (!f->applies.last_state_visible_under_fow && !f->applies.initial_state_visible_under_fow && w.object_fogged &&
+        w.object_fogged(t.player, s.target))
+        return end("arrived, target fogged");
+    return false;
+}
+
 // ================================================================ tactical orders (§7.3)
 
 std::vector<uint32_t> TacticalAiWorld::Impl::movable_ids(const TfRec& t) {
@@ -2349,8 +2452,12 @@ int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const 
                                           std::optional<float> threat) {
     const std::vector<uint32_t> ids = movable_ids(t);
     const char* what = kind == AiTacticalOrder::AttackMove ? "attack-move" : kind == AiTacticalOrder::GuardTarget ? "guard" : "move";
-    char buf[96];
-    std::snprintf(buf, sizeof buf, " %zu units -> (%.0f, %.0f)", ids.size(), static_cast<double>(dest.x), static_cast<double>(dest.y));
+    char buf[200];
+    if (const PerceptionObject* to = target_object >= 0 && cfg.log_decisions ? object(target_object) : nullptr)
+        std::snprintf(buf, sizeof buf, " %zu units -> (%.0f, %.0f) obj %d %s/p%d", ids.size(), static_cast<double>(dest.x),
+                      static_cast<double>(dest.y), target_object, type_name(to->type).c_str(), to->owner);
+    else
+        std::snprintf(buf, sizeof buf, " %zu units -> (%.0f, %.0f)", ids.size(), static_cast<double>(dest.x), static_cast<double>(dest.y));
     if (ids.empty()) return new_status(t.plan, t.id, StatusKind::Failed);
     bool any = false;
     if (kind == AiTacticalOrder::MoveTo && threat) {
@@ -2375,6 +2482,8 @@ int32_t TacticalAiWorld::Impl::issue_move(TfRec& t, AiTacticalOrder kind, const 
     const int32_t id = new_status(t.plan, t.id, kind == AiTacticalOrder::GuardTarget ? StatusKind::Guard : StatusKind::Move);
     statuses[id].dest = dest;
     statuses[id].target = target_object;
+    if (const ObjectHandle th = target_object >= 0 ? store.find(target_object) : ObjectHandle{}; store.alive(th))
+        statuses[id].target_owner = store.owner(th);  // q6: the 0x1a owner-change stand-in compares against this
     return id;
 }
 
@@ -3397,6 +3506,7 @@ TacticalAiWorld::TacticalAiWorld(objects::ObjectStore& store, const objects::Gam
         const cmd::RejectReason r = w.host.execute(c.header.player, c.payload);
         ++w.orders;
         if (r != cmd::RejectReason::None) ++w.rejected;
+        if (w.cfg.log_decisions && !w.in_world_order) w.log_script_order(c.header.player, c.payload, r);
         return r;
     });
     w.bridge.pipeline = &w.pipeline;
@@ -3697,6 +3807,80 @@ const PlanLibrary& TacticalAiWorld::plans() const { return impl_->library; }
 const PerceptionWorld& TacticalAiWorld::world() const { return impl_->w; }
 float TacticalAiWorld::point_danger(int32_t player, float x, float y) const { return impl_->perc.grid().point_danger(impl_->w, player, x, y); }
 
+bool TacticalAiWorld::diagnostic_value(int32_t player, std::string_view equation, int32_t target_object, double& out) const {
+    const Impl& w = *impl_;
+    const PlayerAi* pa = w.player_ai(player);
+    if (!pa) return false;
+    const uint32_t e = w.eqs.find(ai_upper_copy(ai_trim(std::string(equation))));
+    if (e == kUnresolved) return false;
+    int32_t handle = -1;
+    if (target_object >= 0) {
+        for (const Slot& s : pa->slots)
+            if (s.alive && s.t.is_unit() && s.t.object_id == target_object) {
+                handle = s.handle;
+                break;
+            }
+        if (handle < 0) return false;
+    }
+    const LeafCacheReadOnly read_only;
+    const EvalResult r = w.perc.evaluate(w.eqs, e, w.eval_context(player, handle), w.w);  // rng unset: no Script_
+    if (!r.ok) return false;
+    out = r.value;
+    return true;
+}
+
+std::string TacticalAiWorld::diagnostic_holdings(int32_t player) const {
+    const Impl& w = *impl_;
+    const PlayerAi* pa = w.player_ai(player);
+    if (!pa) return {};
+    std::vector<int32_t> free_ids, unreserved;
+    pa->fs.units(free_ids, false);
+    pa->fs.units(unreserved, true);
+    std::string out = "free store " + std::to_string(free_ids.size()) + " (" + std::to_string(free_ids.size() - unreserved.size()) +
+                      " reserved)";
+    std::set<int32_t> held(free_ids.begin(), free_ids.end());
+    for (const auto& [id, pi] : w.plans) {
+        if (pi.player != player || pi.ended) continue;
+        std::string tfs;
+        size_t n = 0;
+        for (const int32_t t : pi.tfs) {
+            const auto it = w.tfs.find(t);
+            if (it == w.tfs.end()) continue;
+            tfs += " " + it->second.name + "=" + std::to_string(it->second.units.size());
+            n += it->second.units.size();
+            for (const ObjectHandle u : it->second.units) held.insert(w.id_of(u));
+        }
+        if (n == 0) continue;
+        std::string where = "global";
+        if (pi.slot >= 0 && static_cast<size_t>(pi.slot) < pa->slots.size()) {
+            const Slot& s = pa->slots[static_cast<size_t>(pi.slot)];
+            where = s.t.is_unit() ? "OBJECT_" + std::to_string(s.t.object_id) : s.t.name;
+        }
+        out += "; plan " + std::to_string(id) + " " + w.library.plans[pi.plan].name + "@" + where + tfs;
+    }
+    std::set<int32_t> held_members;  // members of held TEAM containers
+    for (size_t i = 0; i < w.w.objects.size() && i < w.facts.size(); ++i)
+        if (held.count(w.w.objects[i].id))
+            for (const int32_t m : w.facts[i].team_members) held_members.insert(m);
+    std::map<std::string, uint32_t> loose;
+    for (size_t i = 0; i < w.w.objects.size() && i < w.facts.size(); ++i) {
+        const PerceptionObject& o = w.w.objects[i];
+        if (!o.alive || o.owner != player || held.count(o.id)) continue;
+        if (o.rep_type >= 0 && !w.facts[i].free_store.is_team) {  // team members (and cargo): their container
+            if (!held_members.count(o.id) && (o.mobile || w.facts[i].applies.has_locomotor))
+                ++loose[w.type_name(o.type) + "(member, container " + std::to_string(o.team_leader) + ")"];
+            continue;
+        }
+        if (!o.mobile && !w.facts[i].applies.has_locomotor) continue;
+        ++loose[w.type_name(o.type) + (o.mobile ? "" : "(not mobile)")];
+    }
+    if (!loose.empty()) {
+        out += "; held by neither:";
+        for (const auto& [k, n] : loose) out += " " + k + "x" + std::to_string(n);
+    }
+    return out;
+}
+
 void TacticalAiWorld::hash(StateHasher& h) const {
     const Impl& w = *impl_;
     h.u32(static_cast<uint32_t>(w.ai.size()));
@@ -3800,13 +3984,14 @@ namespace {
 
 namespace io = save_io;
 
-constexpr uint32_t kTacticalAiSaveVersion = 10;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
+constexpr uint32_t kTacticalAiSaveVersion = 11;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
                                                  // 5: refixf t06 space reinforcement status fields; 6: a1g t01 PP+0x100,
                                                  // entry +0x30 moved into the free store; 7: S7 t20/t21/t15 A1 (no had_units /
                                                  // no_units_sent; ambush / ability status fields); 8: a1j t01 land
                                                  // reinforcement status (landings in flight, saved removable flag); 9: OPT3
                                                  // t04 the in-flight background land path recompute; 10: OPT2 t10
-                                                 // the pending slot-10 solves (plans + results)
+                                                 // the pending slot-10 solves (plans + results); 11: q6 object
+                                                 // Attack_Move block (target owner, arrived unit count)
 constexpr int kMaxGlobalDepth = 32;
 // Lower bounds of one record (count checks only).
 constexpr size_t kFactBytes = 12 + 5 + 13 + 17 + 4 + 6;
@@ -4202,6 +4387,7 @@ void TacticalAiWorld::write(ByteWriter& w) const {
         }
         put_pairs(w, s.landings);  // a1j t01
         w.boolean(s.saved_removable);
+        w.i32(s.target_owner).i32(s.arrived_units);  // q6 land end chain
     }
     // ---- PotentialPlans + reservations ----
     io::put_count(w, m.pps.size());
@@ -4534,6 +4720,8 @@ bool TacticalAiWorld::read(ByteReader& r) {
             }
             if (!get_pairs(r, s.landings)) return io::bad(r);  // a1j t01
             s.saved_removable = r.boolean();
+            s.target_owner = r.i32();  // q6 land end chain
+            s.arrived_units = r.i32();
             if (!r.ok() || s.id < 0 || s.id >= next[2] || (!new_statuses.empty() && new_statuses.rbegin()->first >= s.id))
                 return io::bad(r);
             const int32_t id = s.id;

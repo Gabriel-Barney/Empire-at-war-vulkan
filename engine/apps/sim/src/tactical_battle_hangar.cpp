@@ -286,6 +286,24 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
                 continue;
             }
             if (Unit* u = unit_by_id(id)) {
+                // q6 land end chain: a company without a team type (e.g. Boba_Fett_Team_Land_MP, one hero) has no
+                // container, so bt_adopt_built left its members immobile (only map / team members move there): they stood
+                // at the factory for the whole battle. They move like oi_spawn_unit's single units.
+                const objects::TypeIndex mt = store.type(h);
+                if (ci == 0xFFFFFFFFu && !u->movable && movement_ && mode.movable(h) &&
+                    catalog_->types().has_behavior(mt, objects::BehaviorSet::Union, objects::beh::Locomotor)) {
+                    const auto ut = static_cast<uint32_t>(mt);
+                    mv::UnitDesc md = mv::unit_desc_from_type(catalog_->types(), ut);
+                    md.locomotor = mv::locomotor_kind_from_type(catalog_->types(), ut, space_ ? mv::MoveMode::Space : mv::MoveMode::Land);
+                    const Vec3 p = store.position(h), f = store.facing(h);
+                    md.id = id;
+                    md.pos = {p.x, p.y};
+                    md.z = p.z;
+                    md.yaw_deg = dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF);
+                    md.owner = owner;
+                    movement_->add_unit(md);
+                    u->movable = true;
+                }
                 if (launched) u->flags_3a2 = static_cast<uint8_t>(u->flags_3a2 | 2u);  // hangar spawned (+0x3a2 |= 2)
                 if (u->movable) ordered.push_back(id);
             }

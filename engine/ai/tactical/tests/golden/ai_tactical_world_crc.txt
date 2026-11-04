@@ -49,8 +49,8 @@ frames 3600 orders 37 rejected 0 deaths E=7 R=5 units left 4 plans 2
 24 p0 plan 5 SYNSWEEP for Syn_Sweep_Area @CELL_2_2 SweepForce
 25 p0 tf SweepForce produce: 0 units, 1 pending reinforcements, 0 pads
 37 p0 order skirmish reinforce Syn_Corvette (tf SweepForce)
-40 p0 order tf Escort guard 2 units -> (-3000, -600)
-41 p1 order tf Escort guard 1 units -> (3000, -450)
+40 p0 order tf Escort guard 2 units -> (-3000, -600) obj 2 Syn_Frigate/p0
+41 p1 order tf Escort guard 1 units -> (3000, -450) obj 6 Syn_Frigate/p1
 43 p0 order tf SweepForce attack 6
 94 p1 plan 6 SYNDESTROY for Syn_Destroy_Unit @OBJECT_10 MainForce
 95 p1 tf MainForce produce: 1 units, 1 pending reinforcements, 0 pads
@@ -64,6 +64,7 @@ frames 3600 orders 37 rejected 0 deaths E=7 R=5 units left 4 plans 2
 298 p0 plan 5 SYNSWEEP ended success
 298 p0 order skirmish reinforce Syn_Corvette (tf SweepForce)
 304 p0 order tf SweepForce attack 7
+311 p1 fs order attack-move Syn_Frigate 7 (+0) -> (-3000, -600) obj 2 Syn_Frigate
 367 p0 plan 8 SYNDESTROY for Syn_Destroy_Unit @OBJECT_7 MainForce
 367 p0 tf MainForce produce: 0 units, 1 pending reinforcements, 0 pads
 379 p1 plan 9 SYNDESTROY for Syn_Destroy_Unit @OBJECT_12 MainForce
@@ -79,8 +80,10 @@ frames 3600 orders 37 rejected 0 deaths E=7 R=5 units left 4 plans 2
 656 p1 plan 4 SYNESCORT ended success
 673 p1 plan 12 SYNSWEEP for Syn_Sweep_Area @CELL_0_2 SweepForce
 674 p1 tf SweepForce produce: 1 units, 1 pending reinforcements, 0 pads
+685 p0 fs order attack-move Syn_Frigate 2 (+0) -> (3000, -600) obj 6 Syn_Frigate
 686 p1 order skirmish reinforce Syn_Corvette (tf SweepForce)
 686 p1 order tf SweepForce attack-move 1 units -> (-3000, 1000)
+686 p1 fs order attack-move Syn_Frigate 6 (+0) -> (2294, 267) obj 12 Syn_Corvette
 712 p0 plan 10 SYNDESTROY ended failure
 715 p0 tf SweepForce no units remaining
 715 p1 plan 13 SYNDESTROY for Syn_Destroy_Unit @OBJECT_1 MainForce
@@ -117,6 +120,7 @@ frames 3600 orders 37 rejected 0 deaths E=7 R=5 units left 4 plans 2
 1111 p0 tf SweepForce no units remaining
 1114 p0 plan 11 SYNSWEEP ended success
 1115 p1 plan 16 SYNDESTROY ended success
+1124 p1 fs order attack-move Syn_Frigate 16 (+0) -> (-1416, -30) obj 15 Syn_Frigate
 1127 p1 tf SweepForce no units remaining
 1132 p0 plan 18 SYNDESTROY ended success
 1136 p1 plan 12 SYNSWEEP ended success
@@ -126,6 +130,7 @@ frames 3600 orders 37 rejected 0 deaths E=7 R=5 units left 4 plans 2
 1163 p0 plan 20 SYNDESTROY for Syn_Destroy_Unit @OBJECT_16 MainForce
 1165 p0 tf MainForce produce: 1 units, 0 pending reinforcements, 0 pads
 1171 p0 order tf MainForce attack 16
+1189 p0 fs order attack-move Syn_Frigate 15 (+0) -> (1492, -51) obj 16 Syn_Frigate
 1271 p1 plan 19 SYNDESTROY ended success
 1302 p1 plan 21 SYNDESTROY for Syn_Destroy_Unit @OBJECT_14 MainForce
 1304 p1 tf MainForce produce: 1 units, 0 pending reinforcements, 0 pads
