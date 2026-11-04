@@ -19,7 +19,8 @@
 //   * Fire (§1.5): disabled -> nothing; Inactive_Delay > 0 and not forced -> restart the inactivity
 //     timer, no fire; script Story_Event_Trigger(name) (synchronous when a VM is attached with
 //     set_script_vm, else queued for deliver_script_triggers) and timeout cancelled; fired = true;
-//     reward; dependants; Perpetual: fired = false + Reset, and non-TRIGGER events re-armed.
+//     reward; dependants; Perpetual: fired = false + Reset (an ELAPSED timer restarts at its next T9, so a Perpetual
+//     STORY_ELAPSED T fires about every T + one story service, §4.7), and non-TRIGGER events re-armed.
 //     Fire checks neither armed nor fired.
 //   * Notifications (dispatch, §1.3/§4.3/§5): only to ARMED, unfired, enabled events of ACTIVE plots,
 //     per-type match rules (story_model.cpp). STORY_ELAPSED, STORY_FLAG, OBJECTIVE_TIMEOUT, Timeout and
@@ -145,7 +146,8 @@ struct StoryEventState {
     double activation_time = 0.0;  // story time when armed
     double timeout_at = -1.0;      // < 0: no timeout registered
     double inactive_start = -1.0;  // < 0: inactivity timer not started
-    // STORY_ELAPSED / OBJECTIVE_TIMEOUT timer (§4.7): never cleared by Reset / Perpetual.
+    // STORY_ELAPSED / OBJECTIVE_TIMEOUT timer (§4.7): vf4 (Perpetual re-arm, Lua Reset, RESET_EVENT, RESET_BRANCH) clears
+    // timer_acc and timer_init (q6 t03, 0x45e550 [H]); the next evaluation re-records timer_last.
     bool timer_init = false;
     double timer_last = 0.0;
     double timer_acc = 0.0;
@@ -161,6 +163,9 @@ struct StoryPlot {
     std::string name;        // file name as listed, e.g. "Story_Campaign_Underworld.xml"
     std::string lua_script;  // <Lua_Script> paired with this plot ("" = none)
     bool active = false;     // false = suspended
+    // q6 t03 (STORY.md §2.1): false when a later-loaded plot of the same file name (same model, or a later model of the
+    // StoryTable) replaced it in the story manager's table: no walk, dispatch, T9 service or name lookup reaches it.
+    bool in_table = true;
     std::vector<StoryEventDef> events;
     std::vector<StoryEventState> state;
     std::map<std::string, uint32_t> by_name;  // upper-case event name -> index (first definition)
@@ -198,6 +203,8 @@ struct StoryNotification {
     std::string faction;
 };
 
+class StoryTable;
+
 class StoryModel {
 public:
     static constexpr int32_t kUndefinedFlag = -99999999;  // value of a never-set flag (0x327d00)
@@ -232,14 +239,18 @@ public:
     // Dispatches a game notification of `type` (e.g. "STORY_CONQUER") to every armed, unfired, enabled
     // event of that type in the active plots. Returns the number of events fired (cascades included).
     uint32_t dispatch(std::string_view type, const StoryNotification& n);
-    // Lua Story_Event(name [, object]): STORY_AI_NOTIFICATION (`object_type` = the object's type name).
+    // The same for one plot (q6 t03: StoryTable walks for the dispatches that reach every player's plots).
+    uint32_t dispatch_plot(uint32_t plot, std::string_view type, const StoryNotification& n);
+    // Lua Story_Event(name [, object]): STORY_AI_NOTIFICATION (`object_type` = the object's type name). This model's
+    // plots only; with a StoryTable, Lua goes through StoryTable::story_event (every player's plots).
     uint32_t story_event(std::string_view name, std::string_view object_type = {}, bool has_object = false);
     // Generic notification: event parameters compared with `params` by index (types without a modelled
     // evaluator; also accepted for modelled types, through StoryNotification::params).
     uint32_t push_trigger(std::string_view type, std::span<const StoryParam> params);
     // Fire (debug / host): fires the event regardless of armed / fired (still not when disabled).
     bool trigger_event(uint32_t plot, uint32_t event);
-    // TRIGGER_EVENT semantics: fires every event named `name` in all plots (table order).
+    // TRIGGER_EVENT semantics: fires every event named `name` in all plots of this model (table order). The TRIGGER_EVENT
+    // reward itself uses the StoryTable when the model is in one (every player's plots).
     uint32_t trigger_event_by_name(std::string_view name);
     // Host poll of a self-evaluated type (STORY.md 1.3 / 4.1 steps 4-5: UNIT_PROXIMITY, CHECK_DESTROYED; L1/S4
     // wave 2a): walks the active plots and events in table order like dispatch and fires every armed, unfired,
@@ -271,12 +282,22 @@ public:
     // S4 (L1_S4_REMAINING.md §4.4, LOAD_TACTICAL_MAP Param2 entry i): the i-th object of that type in the current store
     // has the battle planet as its first planet ancestor. Unset: no Param2 entry matches.
     std::function<bool(std::string_view type, size_t index)> load_map_hero;
+    // q6 t03: the game text table (MasterTextFile, 0x140a7bc58) for Add_Dialog_Text: true + the text of `id`, false when
+    // the id has no entry (it then shows as itself). Unset [port: the headless sim has no text table]: every id shows as
+    // itself. Its results land in the hashed dialog lines, so a host that sets it must give every peer the same table.
+    std::function<bool(std::string_view id, std::string& out)> text_lookup;
+    // q6 t03 (STORY.md §2.4): the story manager's table this model's plot set belongs to (StoryTable::assign sets it);
+    // TRIGGER_EVENT, STORY_ELEMENT and DISABLE_STORY_EVENT with Param3 then reach every player's plots. nullptr = this
+    // model is the whole table.
+    StoryTable* table() const { return table_; }
 
     // ---- plots ----
     size_t plot_count() const { return plots_.size(); }
     const StoryPlot& plot(uint32_t i) const { return plots_[i]; }
     StoryPlot& plot(uint32_t i) { return plots_[i]; }
-    uint32_t find_plot(std::string_view name) const;  // file name, case-insensitive [port], path ignored
+    // q6 t03 (STORY.md §2.1 [H]): by the CRC-32 of the name as passed - case-sensitive, path included, no ".xml" added -
+    // among the plots in the table (in_table). UINT32_MAX if absent.
+    uint32_t find_plot(std::string_view name) const;
     uint32_t find_event(uint32_t plot, std::string_view name) const;  // UINT32_MAX if absent
     // Activate / Suspend / STORY_ELEMENT: flag only (STORY §7 item 2 [H], confirmed from the bytes: plot +0x660 := 1 / 0,
     // nothing re-evaluated, no Lua return values).
@@ -333,6 +354,9 @@ public:
     const std::vector<std::string>& warnings() const { return warnings_; }
 
 private:
+    friend class StoryTable;
+    void dispatch_in(uint32_t p, const std::string& type, const StoryNotification& n);  // type already normalised
+    void set_table_replaced(uint32_t plot, bool replaced);  // StoryTable: a later set's plot of the same name
     bool gated(uint32_t p, uint32_t e) const;  // armed, unfired, enabled, plot active
     bool prereqs_hold(uint32_t p, uint32_t e) const;
     void arm(uint32_t p, uint32_t e);
@@ -347,7 +371,9 @@ private:
     StoryObjective* find_objective(std::string_view text);
 
     std::vector<StoryPlot> plots_;
-    std::vector<uint32_t> plot_walk_;
+    std::vector<uint32_t> plot_walk_;      // plots in the table (in_table), table order
+    std::vector<uint8_t> table_replaced_;  // per plot: replaced by a later model's plot (StoryTable)
+    StoryTable* table_ = nullptr;
     std::vector<LuaVm*> script_vms_;  // per plot
     std::vector<std::string> script_errors_;
     std::shared_ptr<std::map<std::string, int32_t>> flags_ = std::make_shared<std::map<std::string, int32_t>>();
@@ -366,16 +392,56 @@ private:
     uint32_t reset_depth_ = 0;  // RESET_BRANCH depth limit 3 (§4.5)
 };
 
+// q6 t03 (STORY.md §2.1 / §2.4 [H]): one story manager's plot table. The original has no per-player plot sets: every
+// player's plots of a game mode sit in ONE table (Load_Plots loads Rebel_Story_Name, Empire_Story_Name,
+// Underworld_Story_Name, then the Story_Name pairs, into the mode's manager). The port keeps one StoryModel per plot set
+// (player: rewards, filters, the log) and a StoryTable over them for the lookups that reach every player's plots:
+//   * Get_Story_Plot / STORY_ELEMENT: find_plot - one lookup by the CRC-32 of the name as passed (case-sensitive);
+//   * TRIGGER_EVENT: trigger_event_by_name - every plot, active or suspended, in table order; each plot with that event
+//     fires it (no first-match stop);
+//   * Lua Story_Event: story_event - every ACTIVE plot, table order (no player filter);
+//   * DISABLE_STORY_EVENT with Param3: set_event_enabled - every plot with that event.
+// Plot order = the original's table order (§4.2 emulation) of the plot names in load order; a later-loaded plot of the
+// same name replaces the earlier one (its node, its place), which leaves its model's walks, dispatches, T9 services and
+// lookups (StoryPlot::in_table). Game-system dispatches with a player stay per model (the original's player filter);
+// Get_Event, the rewarding-plot rewards and prereqs stay inside one plot. Not thread-safe (sim thread). The models must
+// outlive the table's use; clear() detaches them (the destructor does not touch them).
+class StoryTable {
+public:
+    struct PlotRef {
+        uint32_t set = 0xFFFFFFFFu;  // index into the models given to assign()
+        uint32_t plot = 0xFFFFFFFFu;
+        bool valid() const { return set != 0xFFFFFFFFu; }
+    };
+    // The models in load order (nullptr entries are skipped). Each model's table() becomes this table.
+    void assign(std::vector<StoryModel*> models);
+    void clear();
+    size_t set_count() const { return models_.size(); }
+    StoryModel* model(size_t set) const { return set < models_.size() ? models_[set] : nullptr; }
+    uint32_t set_of(const StoryModel* m) const;  // UINT32_MAX when not in the table
+    const std::vector<PlotRef>& order() const { return order_; }  // the table's plots, table order
+    PlotRef find_plot(std::string_view name) const;
+    // Return the number of events fired (cascades included, every model).
+    uint32_t trigger_event_by_name(std::string_view name);
+    uint32_t story_event(std::string_view name, std::string_view object_type = {}, bool has_object = false);
+    void set_event_enabled(std::string_view name, bool enabled);
+
+private:
+    size_t fired_total() const;
+    std::vector<StoryModel*> models_;
+    std::vector<PlotRef> order_;
+};
+
 // Makes the story bindings of `vm` (Story_Event, Get_Story_Plot, Check_Story_Flag, Add_Objective,
 // Add/Remove_Radar_Blip, Add/Remove_Planet_Highlight, StoryPlotWrapper / StoryEventWrapper) act on
 // `model` (nullptr detaches; the bindings then do nothing / return nil). The model must outlive the
 // attachment.
 void attach_story(LuaVm& vm, StoryModel* model);
 StoryModel* attached_story(LuaVm& vm);
-// q6 t03: the other plot sets of the same story manager (the session's galactic plot sets, load order), which
-// Get_Story_Plot also searches after the VM's own model (STORY.md §0: one plot table per game mode). Plot / event wrappers
-// of a group model remember its index, so the group must keep its order for the VM's lifetime (and across a load).
-// nullptr detaches. The vector and its models must outlive the attachment.
-void attach_story_group(LuaVm& vm, const std::vector<StoryModel*>* group);
+// q6 t03: the story manager's table the VM's own model belongs to (the session's galactic plot sets): Get_Story_Plot and
+// Story_Event then act on every player's plots (StoryTable). Plot / event wrappers of another set's plot remember that
+// set's index in the table, so the table must keep its order for the VM's lifetime (and across a load). nullptr detaches
+// (the VM's own model is then the whole table). The table and its models must outlive the attachment.
+void attach_story_table(LuaVm& vm, StoryTable* table);
 
 }  // namespace alamo::lua

@@ -447,11 +447,31 @@ uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, 
     return static_cast<uint32_t>(plots_.size() - 1);
 }
 
+// q6 t03 (STORY.md §2.1 [H]): the plot table is a unique map keyed by the CRC-32 of the file name as written; a later
+// plot of the same key takes the node of the first one (its place in the walk) and the earlier plot leaves the table.
+// Plots a StoryTable marked replaced (a later plot set lists the same file) leave it too.
 void StoryModel::build_plot_order() {
     std::vector<uint32_t> keys;
     keys.reserve(plots_.size());
     for (const StoryPlot& p : plots_) keys.push_back(crc32(p.name.data(), p.name.size()));  // name as written
-    plot_walk_ = table_order(keys, nullptr);
+    const std::vector<uint32_t> order = table_order(keys, nullptr);
+    table_replaced_.resize(plots_.size(), 0);
+    for (uint32_t p = 0; p < plots_.size(); ++p) plots_[p].in_table = table_replaced_[p] == 0;
+    plot_walk_.clear();
+    for (const uint32_t first : order) {
+        uint32_t latest = first;  // the last plot of that key (table_order keeps the first one's place)
+        for (uint32_t p = first + 1; p < plots_.size(); ++p)
+            if (keys[p] == keys[first]) {
+                plots_[latest].in_table = false;
+                latest = p;
+            }
+        if (plots_[latest].in_table) plot_walk_.push_back(latest);
+    }
+}
+
+void StoryModel::set_table_replaced(uint32_t plot, bool replaced) {
+    table_replaced_.resize(plots_.size(), 0);
+    if (plot < plots_.size()) table_replaced_[plot] = replaced ? 1 : 0;
 }
 
 bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_file, std::string* err) {
@@ -494,10 +514,13 @@ bool StoryModel::load_plots(const FileProvider& files, std::string_view plots_fi
 
 // ------------------------------------------------------------------------------------------ lookup
 
+// q6 t03 (STORY.md §2.1 / §2.4 [H]): one hash lookup by the CRC-32 of the name as passed - no upper-casing, no trim, no
+// ".xml" added, the path included - so the name must match the Story_Plots text byte for byte. At most one plot of the
+// table has that key.
 uint32_t StoryModel::find_plot(std::string_view name) const {
-    const std::string want = base_name(trim(name));
-    for (uint32_t p = 0; p < plots_.size(); ++p)
-        if (iequal(base_name(plots_[p].name), want)) return p;
+    const uint32_t key = crc32(name.data(), name.size());
+    for (const uint32_t p : plot_walk_)
+        if (crc32(plots_[p].name.data(), plots_[p].name.size()) == key) return p;
     return kNone;
 }
 
@@ -511,8 +534,8 @@ void StoryModel::set_plot_active(uint32_t plot, bool active) {
     if (plot < plots_.size()) plots_[plot].active = active;  // Â§2.2: the flag only
 }
 
-// Â§2.3: for every event: triggered = 0, vf4 twice (events with prereqs disarm, counters restored);
-// disabled flags and ELAPSED accumulators untouched.
+// Â§2.3: for every event: triggered = 0, vf4 twice (events with prereqs disarm, counters restored, ELAPSED /
+// OBJECTIVE_TIMEOUT timers cleared); disabled flags untouched.
 void StoryModel::reset_plot(uint32_t plot) {
     if (plot >= plots_.size()) return;
     for (uint32_t e = 0; e < plots_[plot].events.size(); ++e) {
@@ -544,16 +567,24 @@ bool StoryModel::prereqs_hold(uint32_t p, uint32_t e) const {
     return false;
 }
 
-// vf4: an event with prereq groups disarms (timeout cancelled); counters restored.
+// vf4: an event with prereq groups disarms (timeout cancelled); counters restored. ELAPSED / OBJECTIVE_TIMEOUT override
+// it (0x45e550, q6 t03, STORY.md §2.3 / §4.7 [H]): the base reset, then accumulated = 0 and initialised = 0, so the timer
+// restarts at its next evaluation (vf7 re-records LastTime only when prereqs arm the event again). Shared by Fire's
+// Perpetual step, Lua Reset, RESET_EVENT and RESET_BRANCH.
 void StoryModel::reset_event(uint32_t p, uint32_t e) {
     StoryEventState& st = plots_[p].state[e];
-    if (plots_[p].events[e].has_prereq_tags) {
+    const StoryEventDef& def = plots_[p].events[e];
+    if (def.has_prereq_tags) {
         st.armed = false;
         st.timeout_at = -1.0;
     }
     st.countdowns.clear();
     st.count = 0;
     st.seen_level = -1;
+    if (def.type == "STORY_ELAPSED" || def.type == "STORY_OBJECTIVE_TIMEOUT") {
+        st.timer_acc = 0.0;
+        st.timer_init = false;
+    }
 }
 
 // Â§1.2: armed with activation time = now, Timeout registered; STORY_TRIGGER fires at once, ELAPSED /
@@ -699,7 +730,9 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
     } else if (type == "REMOVE_ALL_OBJECTIVES") {
         objectives_.clear();
     } else if (type == "TRIGGER_EVENT") {
-        trigger_event_by_name(p1);
+        // Every plot of the mode's table, every player's, active or not (§2.4): through the StoryTable when there is one.
+        if (table_) table_->trigger_event_by_name(p1);
+        else trigger_event_by_name(p1);
     } else if (type == "RESET_EVENT") {
         std::vector<std::string> names{p1};
         for (const std::string& n : plots_[p].events[e].reward_param_list) names.push_back(n);
@@ -738,14 +771,24 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
         if (p1.empty() || p2.empty()) return;
         const bool disable = parse_int(p2, 0) != 0;
         const bool all = parse_int(p3, 0) != 0;
-        for (uint32_t q = 0; q < plots_.size(); ++q) {
-            if (!all && q != p) continue;
-            const uint32_t ev = find_event(q, p1);
-            if (ev != kNone) plots_[q].state[ev].enabled = !disable;
+        if (all && table_) {
+            table_->set_event_enabled(p1, !disable);  // every plot of the table (q6 t03, §6.2)
+        } else {
+            for (uint32_t q = 0; q < plots_.size(); ++q) {
+                if (!all && q != p) continue;
+                if (all && !plots_[q].in_table) continue;
+                const uint32_t ev = find_event(q, p1);
+                if (ev != kNone) plots_[q].state[ev].enabled = !disable;
+            }
         }
     } else if (type == "STORY_ELEMENT") {
-        const uint32_t q = find_plot(p1 + ".xml");
-        if (q != kNone) set_plot_active(q, true);
+        // Any player's plot of the mode's table, active or suspended; silent when not found (§2.4).
+        if (table_) {
+            const StoryTable::PlotRef q = table_->find_plot(p1 + ".xml");
+            if (q.valid()) table_->model(q.set)->set_plot_active(q.plot, true);
+        } else if (const uint32_t q = find_plot(p1 + ".xml"); q != kNone) {
+            set_plot_active(q, true);
+        }
     } else if (on_reward) {
         on_reward(p, e, type, rp);
     }
@@ -978,32 +1021,55 @@ bool StoryModel::evaluate(uint32_t p, uint32_t e, std::string_view type, const S
     return true;
 }
 
-uint32_t StoryModel::dispatch(std::string_view type_in, const StoryNotification& n) {
-    const std::string type = upper(trim(type_in));
-    const size_t before = fired_.size();
-    if (type == "STORY_TRIGGER") return 0;  // nobody dispatches STORY_TRIGGER (Â§1.3)
+namespace {
+// The dispatched type, upper-cased; "" for the types no call site dispatches.
+std::string dispatched_type(std::string_view type_in) {
+    std::string type = upper(trim(type_in));
+    if (type == "STORY_TRIGGER") return {};  // nobody dispatches STORY_TRIGGER (Â§1.3)
     // L1/S4 wave 2b (SCRIPT_GAPS.md §4.6): no call site dispatches STORY_DIFFICULTY_LEVEL in 1.121 - parsed, never
     // evaluated.
-    if (type == "STORY_DIFFICULTY_LEVEL") return 0;
+    if (type == "STORY_DIFFICULTY_LEVEL") return {};
     // S4 (docs/re/L1_S4_REMAINING.md §4.3): no call site dispatches STORY_CAPTURE_HERO (0x11) in 1.121 either.
-    if (type == "STORY_CAPTURE_HERO") return 0;
-    for (const uint32_t p : plot_walk_) {
-        if (!plots_[p].active) continue;
-        const std::vector<uint32_t> walk = plots_[p].walk;
-        for (const uint32_t e : walk) {
-            if (plots_[p].events[e].type != type || !gated(p, e)) continue;
-            if (evaluate(p, e, type, n)) fire(p, e);
-        }
-    }
-    return static_cast<uint32_t>(fired_.size() - before);
+    if (type == "STORY_CAPTURE_HERO") return {};
+    return type;
 }
 
-uint32_t StoryModel::story_event(std::string_view name, std::string_view object_type, bool has_object) {
+StoryNotification ai_notification(std::string_view name, std::string_view object_type, bool has_object) {
     StoryNotification n;
     n.name = std::string(trim(name));
     n.has_object = has_object;
     if (has_object) n.params.push_back(StoryParam::of_text(object_type));
-    return dispatch("STORY_AI_NOTIFICATION", n);
+    return n;
+}
+}  // namespace
+
+void StoryModel::dispatch_in(uint32_t p, const std::string& type, const StoryNotification& n) {
+    if (p >= plots_.size() || !plots_[p].active || !plots_[p].in_table) return;
+    const std::vector<uint32_t> walk = plots_[p].walk;
+    for (const uint32_t e : walk) {
+        if (plots_[p].events[e].type != type || !gated(p, e)) continue;
+        if (evaluate(p, e, type, n)) fire(p, e);
+    }
+}
+
+uint32_t StoryModel::dispatch(std::string_view type_in, const StoryNotification& n) {
+    const std::string type = dispatched_type(type_in);
+    if (type.empty()) return 0;
+    const size_t before = fired_.size();
+    for (const uint32_t p : plot_walk_) dispatch_in(p, type, n);
+    return static_cast<uint32_t>(fired_.size() - before);
+}
+
+uint32_t StoryModel::dispatch_plot(uint32_t plot, std::string_view type_in, const StoryNotification& n) {
+    const std::string type = dispatched_type(type_in);
+    if (type.empty()) return 0;
+    const size_t before = fired_.size();
+    dispatch_in(plot, type, n);
+    return static_cast<uint32_t>(fired_.size() - before);
+}
+
+uint32_t StoryModel::story_event(std::string_view name, std::string_view object_type, bool has_object) {
+    return dispatch("STORY_AI_NOTIFICATION", ai_notification(name, object_type, has_object));
 }
 
 uint32_t StoryModel::push_trigger(std::string_view type, std::span<const StoryParam> params) {
@@ -1027,6 +1093,101 @@ uint32_t StoryModel::trigger_event_by_name(std::string_view name) {
         if (e != kNone) fire(p, e);  // active or suspended, no armed / fired / prereq check (Â§6.2)
     }
     return static_cast<uint32_t>(fired_.size() - before);
+}
+
+// ------------------------------------------------------------------------------------------ StoryTable (q6 t03)
+
+void StoryTable::clear() {
+    for (StoryModel* m : models_) {
+        if (!m) continue;
+        m->table_ = nullptr;
+        for (uint32_t p = 0; p < m->plot_count(); ++p) m->set_table_replaced(p, false);
+        m->build_plot_order();
+    }
+    models_.clear();
+    order_.clear();
+}
+
+// One node per key (CRC-32 of the plot file name as written), in the original's table order of the keys inserted in
+// load order (§4.2 emulation, the same as one model's plot_order()); the node holds the LAST plot of that key (§2.1
+// unique map: the later-loaded plot replaces the earlier one, which leaves its model's walks and lookups).
+void StoryTable::assign(std::vector<StoryModel*> models) {
+    clear();
+    models_ = std::move(models);
+    std::vector<uint32_t> keys;
+    std::vector<PlotRef> refs;
+    for (uint32_t s = 0; s < models_.size(); ++s) {
+        if (!models_[s]) continue;
+        for (uint32_t p = 0; p < models_[s]->plot_count(); ++p) {
+            const std::string& name = models_[s]->plot(p).name;
+            keys.push_back(crc32(name.data(), name.size()));
+            refs.push_back(PlotRef{s, p});
+        }
+    }
+    std::vector<uint8_t> replaced(keys.size(), 0);
+    for (const uint32_t first : table_order(keys, nullptr)) {
+        uint32_t latest = first;
+        for (uint32_t i = first + 1; i < keys.size(); ++i)
+            if (keys[i] == keys[first]) {
+                replaced[latest] = 1;
+                latest = i;
+            }
+        order_.push_back(refs[latest]);
+    }
+    for (size_t i = 0; i < refs.size(); ++i) models_[refs[i].set]->set_table_replaced(refs[i].plot, replaced[i] != 0);
+    for (StoryModel* m : models_)
+        if (m) {
+            m->table_ = this;
+            m->build_plot_order();
+        }
+}
+
+uint32_t StoryTable::set_of(const StoryModel* m) const {
+    for (uint32_t s = 0; s < models_.size(); ++s)
+        if (models_[s] == m) return s;
+    return kNone;
+}
+
+StoryTable::PlotRef StoryTable::find_plot(std::string_view name) const {
+    const uint32_t key = crc32(name.data(), name.size());  // as passed: case and path kept (§2.1)
+    for (const PlotRef& r : order_) {
+        const std::string& n = models_[r.set]->plot(r.plot).name;
+        if (crc32(n.data(), n.size()) == key) return r;
+    }
+    return {};
+}
+
+size_t StoryTable::fired_total() const {
+    size_t n = 0;
+    for (const StoryModel* m : models_)
+        if (m) n += m->fired().size();
+    return n;
+}
+
+uint32_t StoryTable::trigger_event_by_name(std::string_view name) {
+    const size_t before = fired_total();
+    for (const PlotRef& r : order_) {
+        StoryModel& m = *models_[r.set];
+        const uint32_t e = m.find_event(r.plot, name);
+        if (e != kNone) m.trigger_event(r.plot, e);  // every plot that has it: no first-match stop (§2.4)
+    }
+    return static_cast<uint32_t>(fired_total() - before);
+}
+
+uint32_t StoryTable::story_event(std::string_view name, std::string_view object_type, bool has_object) {
+    static const std::string kType = "STORY_AI_NOTIFICATION";
+    const StoryNotification n = ai_notification(name, object_type, has_object);
+    const size_t before = fired_total();
+    for (const PlotRef& r : order_) models_[r.set]->dispatch_in(r.plot, kType, n);  // active plots only
+    return static_cast<uint32_t>(fired_total() - before);
+}
+
+void StoryTable::set_event_enabled(std::string_view name, bool enabled) {
+    for (const PlotRef& r : order_) {
+        StoryModel& m = *models_[r.set];
+        const uint32_t e = m.find_event(r.plot, name);
+        if (e != kNone) m.plot(r.plot).state[e].enabled = enabled;
+    }
 }
 
 uint32_t StoryModel::poll(std::string_view type_in, const std::function<bool(const StoryEventDef&)>& match) {
@@ -1279,7 +1440,7 @@ void StoryModel::hash(StateHasher& h) const {
 // ------------------------------------------------------------------------------------------ save / load (OI lua)
 
 namespace {
-constexpr uint32_t kSaveVersion = 1;
+constexpr uint32_t kSaveVersion = 2;  // 2 (q6 t03): + Story_Dialog of a Lua-edited event (Set_Dialog); 1 still read
 constexpr uint32_t kSaveMaxCount = 1u << 24;  // sanity bound for counts / string lengths
 
 void put_str(ByteWriter& w, std::string_view s) {
@@ -1402,6 +1563,7 @@ void StoryModel::write(ByteWriter& w) const {
                 put_params(w, def.event_params);
                 put_params(w, def.reward_params);
                 put_strs(w, def.dialog);
+                put_str(w, def.story_dialog);
             }
         }
         put_strs(w, plot.pending_script_triggers);
@@ -1421,7 +1583,8 @@ void StoryModel::write(ByteWriter& w) const {
 }
 
 bool StoryModel::read(ByteReader& r) {
-    if (r.u32() != kSaveVersion || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (!r.ok() || version < 1 || version > kSaveVersion) return false;
     const uint32_t frame = r.u32();
     const double time = r.f64();
     const bool paused = get_bool(r);
@@ -1499,7 +1662,8 @@ bool StoryModel::read(ByteReader& r) {
             st.seen_level = r.i32();
             st.lua_edits = r.u32();
             if (st.lua_edits && (!get_str(r, def.reward_type) || !get_params(r, def.event_params) ||
-                                 !get_params(r, def.reward_params) || !get_strs(r, def.dialog)))
+                                 !get_params(r, def.reward_params) || !get_strs(r, def.dialog) ||
+                                 (version >= 2 && !get_str(r, def.story_dialog))))
                 return false;
         }
         if (!get_strs(r, plot.pending_script_triggers)) return false;

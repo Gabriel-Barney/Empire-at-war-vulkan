@@ -343,7 +343,7 @@ static void test_plots_file() {
     std::string err;
     CHECK(m.load_plots(dp, "Story_Plots_T.xml", &err));
     CHECK(m.plot_count() == 2 && m.plot(0).lua_script == "Script_A" && m.plot(1).lua_script.empty());
-    CHECK(m.plot(0).active && !m.plot(1).active && m.find_plot("b.XML") == 1);
+    CHECK(m.plot(0).active && !m.plot(1).active && m.find_plot("B.xml") == 1 && m.find_plot("b.XML") == 0xFFFFFFFFu);
     m.update(0, 0);
     CHECK(fired_names(m) == "A1,");  // the prereq-less STORY_TRIGGER A_Jump never fires by itself
     m.set_plot_active(1, true);
@@ -362,7 +362,8 @@ static void test_plots_file() {
     DirectoryProvider dp2(root.string());  // DirectoryProvider indexes its files when it is made
     StoryModel sub;
     CHECK(sub.load_plots(dp2, "Conquests\\Sub\\Story_Plots_S.xml", &err));
-    CHECK(sub.plot_count() == 2 && sub.find_plot("S1.xml") == 0 && sub.find_plot("B.xml") == 1);
+    CHECK(sub.plot_count() == 2 && sub.find_plot("Conquests\\Sub\\S1.xml") == 0 &&
+          sub.find_plot("Nowhere/B.xml") == 1 && sub.find_plot("S1.xml") == 0xFFFFFFFFu);
     fs::remove_all(root, ec);
 }
 
@@ -392,8 +393,9 @@ static void test_bindings() {
     host.store = &store;
     host.types = &types;
     LuaVm vm(host);
-    // Without a story: commands are no-ops, queries nil.
-    CHECK(run(vm, "Story_Event('X') p = tostring(Get_Story_Plot('Story_Test.xml'))") == "" && gstr(vm, "p") == "nil");
+    // Without a story: commands are no-ops, queries return nothing.
+    CHECK(run(vm, "Story_Event('X') p = tostring(Get_Story_Plot('Story_Test.xml'))") != "");  // tostring() of no value
+    CHECK(run(vm, "p = Get_Story_Plot('Story_Test.xml') p = tostring(p)") == "" && gstr(vm, "p") == "nil");
 
     StoryModel m;
     std::string err;
@@ -405,9 +407,15 @@ static void test_bindings() {
 
     CHECK(run(vm, "Story_Event('GO_NOW')") == "");
     CHECK(m.flag("Mission_Win") == 1);
-    CHECK(run(vm, "plot = Get_Story_Plot('story_test.XML') v = tostring(plot.Is_Valid())\n"
+    // q6 t03: the plot name matches case-sensitively (STORY.md §2.1: CRC of the name as passed); not found -> a warning
+    // and no value.
+    const size_t msgs0 = vm.messages().size();
+    CHECK(run(vm, "wrong = Get_Story_Plot('story_test.XML') wrong = tostring(wrong)") == "" && gstr(vm, "wrong") == "nil");
+    CHECK(vm.messages().size() == msgs0 + 1 &&
+          vm.messages().back().find("Get_Story_Plot -- plot story_test.XML not found.") != std::string::npos);
+    CHECK(run(vm, "plot = Get_Story_Plot('Story_Test.xml') v = tostring(plot.Is_Valid())\n"
                   "ev = plot.Get_Event('Enter') ev2 = plot.Get_Event('enter') eq = tostring(ev == ev2)\n"
-                  "none = tostring(plot.Get_Event('Nope')) ev_valid = tostring(ev.Is_Valid())\n"
+                  "ev_valid = tostring(ev.Is_Valid())\n"
                   "ev.Set_Event_Parameter(0, Object)\n"
                   "ev.Set_Reward_Parameter(1, 7)\n"
                   "ev.Set_Reward_Type('screen_text')\n"
@@ -415,14 +423,21 @@ static void test_bindings() {
                   "Add_Objective('TEXT_LUA_OBJ', true)\n"
                   "Add_Radar_Blip(Object, 'blip_1') Add_Radar_Blip(Object, 'blip_2') Remove_Radar_Blip('blip_1')\n"
                   "Add_Planet_Highlight(Object, '0') Remove_Planet_Highlight('0') Add_Planet_Highlight(Object, '1')") == "");
-    CHECK(gstr(vm, "v") == "true" && gstr(vm, "eq") == "true" && gstr(vm, "none") == "nil" && gstr(vm, "ev_valid") == "true");
+    CHECK(gstr(vm, "v") == "true" && gstr(vm, "eq") == "true" && gstr(vm, "ev_valid") == "true");
+    CHECK(!vm.exit_requested());
+    // Get_Event: a missing event is a script error (no unwind, no value; the script is flagged to end).
+    CHECK(run(vm, "none = plot.Get_Event('Nope') none = tostring(none)") == "" && gstr(vm, "none") == "nil");
+    CHECK(vm.exit_requested() && vm.messages().back().find("SCRIPT ERROR: StoryPlotWrapper::Get_Event -- cannot find event "
+                                                           "Nope in plot Story_Test.xml.") != std::string::npos);
     const uint32_t enter = m.find_event(0, "Enter");
     const StoryEventDef& def = m.plot(0).events[enter];
     const int32_t planet_id = store.id(planet);
-    // story t02: index 0 = Event_Param1; the planet object is stored as its type name (vf2 takes strings).
-    CHECK(def.event_params[0].kind == StoryParam::Kind::Text && def.event_params[0].text == "Kuat");
+    // story t02: index 0 = Event_Param1; the planet object is stored as its type NAME, upper-cased (q6 t03: the converter
+    // 0x73e610 gives the representative type's +0xf8 name); numbers as rounded "%d".
+    CHECK(def.event_params[0].kind == StoryParam::Kind::Text && def.event_params[0].text == "KUAT");
     CHECK(def.reward_params.size() == 2 && def.reward_params[1].text == "7" && def.reward_type == "SCREEN_TEXT");
-    CHECK(def.dialog.size() == 1 && def.dialog[0] == "TEXT_B|3");
+    // q6 t03: Add_Dialog_Text appends the formatted line (no text table: ids show as themselves).
+    CHECK(def.dialog.size() == 1 && def.dialog[0] == "TEXT_B");
     CHECK(m.blips().size() == 1 && m.blips()[0].name == "blip_2" && m.blips()[0].object_id == planet_id);
     CHECK(m.highlights().size() == 1 && m.highlights()[0].name == "1");
     bool lua_obj = false;
@@ -437,29 +452,43 @@ static void test_bindings() {
     bool entered = false;
     for (const StoryFired& f : m.fired()) entered = entered || f.event_name == "Enter";
     CHECK(entered);
-    // Index contract: 0..63; a table, nil or a negative index is refused with the original's message.
-    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Event_Parameter(-1, 1)")
-              .find("must set exactly one parameter per parameter index") != std::string::npos);
-    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Event_Parameter(64, 1)")
-              .find("must set exactly one parameter per parameter index") != std::string::npos);
+    // Event parameter index (q6 t03, LUA_API.md: the binding does not range-check, vf2 ignores what it has no parameter
+    // for): [port] outside 0..63 nothing happens, no error.
+    const size_t params_before = def.event_params.size();
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Event_Parameter(-1, 1)") == "");
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Event_Parameter(64, 1)") == "");
+    CHECK(def.event_params.size() == params_before);
 
-    // Contracts (the original's messages).
+    // Contracts (the original's messages). The StoryEventWrapper setters use the script error model (logged, no unwind).
+    auto last_msg_has = [&vm](const char* text) {
+        return !vm.messages().empty() && vm.messages().back().find(text) != std::string::npos;
+    };
     CHECK(run(vm, "Story_Event()").find("Expected 1 or 2, got 0") != std::string::npos);
     CHECK(run(vm, "Story_Event(3)").find("Expected string") != std::string::npos);
     CHECK(run(vm, "Get_Story_Plot()").find("Get_Story_Plot -- invalid number of parameters") != std::string::npos);
     CHECK(run(vm, "Add_Objective('x')").find("Expected 2, got 1") != std::string::npos);
     CHECK(run(vm, "Add_Radar_Blip(5, 'n')").find("could not deduce a position") != std::string::npos);
-    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Parameter('a', 1)")
-              .find("Expected number") != std::string::npos);
-    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Parameter(1, {})")
-              .find("must set exactly one parameter per parameter index") != std::string::npos);
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Parameter('a', 1)") == "" &&
+          last_msg_has("Set_Reward_Parameter -- invalid type for parameter 1. Expected number."));
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Parameter(1, {})") == "" &&
+          last_msg_has("Set_Reward_Parameter -- must set exactly one parameter per parameter index."));
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Parameter(1, true)") == "" &&
+          last_msg_has("must set exactly one parameter per parameter index."));
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Parameter(1)") == "" &&
+          last_msg_has("Set_Reward_Parameter -- invalid number of parameters. Expected 2, got 1."));
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Event_Parameter(1)") == "" &&
+          last_msg_has("Set_Event_Parameter -- invalid number of parameters. Expected 2, got 1."));
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Reward_Type(5)") == "" &&
+          last_msg_has("Set_Reward_Type -- invalid type for parameter 1. Expected string."));
+    CHECK(run(vm, "Get_Story_Plot('Story_Test.xml').Get_Event('Enter').Set_Dialog()") == "" &&
+          last_msg_has("Set_Dialog -- invalid number of parameters. Expected 1, got 0."));
     CHECK(run(vm, "Check_Story_Flag(1, 'F', nil, true)").find("Expected player") != std::string::npos);
 
     // StoryPlotWrapper.Reset / Suspend / Activate.
     CHECK(run(vm, "p = Get_Story_Plot('Story_Test.xml') p.Suspend()") == "" && !m.plot(0).active);
     CHECK(run(vm, "p.Activate() p.Reset()") == "" && m.plot(0).active);
     // Wrapper identity: plots and events are cached per VM, so tables keyed by them hit.
-    CHECK(run(vm, "kt = {} kt[p] = 'plot' kt[p.Get_Event('Enter')] = 'ev' q = Get_Story_Plot('STORY_TEST.xml')\n"
+    CHECK(run(vm, "kt = {} kt[p] = 'plot' kt[p.Get_Event('Enter')] = 'ev' q = Get_Story_Plot('Story_Test.xml')\n"
                   "i1 = kt[q] i2 = kt[q.Get_Event('ENTER')] i3 = rawequal(p, q) and 'same' or 'different'") == "");
     CHECK(gstr(vm, "i1") == "plot" && gstr(vm, "i2") == "ev" && gstr(vm, "i3") == "same");
 
@@ -493,7 +522,7 @@ static void test_bindings() {
             return n;
         };
         const StoryEventDef& build = m.plot(1).events[m.find_event(1, "Build")];
-        CHECK(build.event_params.size() == 2 && build.event_params[0].text == "Rock" && build.event_params[1].text == "3");
+        CHECK(build.event_params.size() == 2 && build.event_params[0].text == "ROCK" && build.event_params[1].text == "3");
         StoryNotification rock;
         rock.name = "ROCK";
         rock.has_object = true;
@@ -515,50 +544,187 @@ static void test_bindings() {
 
     // Detached: queries nil again.
     attach_story(vm, nullptr);
-    CHECK(run(vm, "p = tostring(Get_Story_Plot('Story_Test.xml'))") == "" && gstr(vm, "p") == "nil");
+    CHECK(run(vm, "p = Get_Story_Plot('Story_Test.xml') p = tostring(p)") == "" && gstr(vm, "p") == "nil");
     fs::remove_all(root, ec);
 }
 
-// q6 t03 (STORY.md §0 / §2.1: one plot table per game mode, every player's plot set in it): Get_Story_Plot finds a plot
-// of another galactic plot set (Thrawn's Revenge GCPlayerAgnostic, in the Independent_Forces set, asks for
-// "Conquests\\Factions\\Story_Generic_EMPIRE.xml", which the Empire's set loads); the wrapper then acts on that set.
-static void test_story_plot_group() {
+// q6 t03 (STORY.md §2.1 / §2.4 [H]): one plot table per game mode, every player's plot set in it (StoryTable).
+// Get_Story_Plot finds a plot of another player's set by its exact name (Thrawn's Revenge GCPlayerAgnostic, in the
+// Independent_Forces set, asks for "Conquests\\Factions\\Story_Generic_EMPIRE.xml", which the Empire's set loads) and the
+// wrapper then acts on that set; Lua Story_Event reaches every ACTIVE plot of every set; TRIGGER_EVENT fires the event
+// in every plot that has it, suspended ones too; STORY_ELEMENT opens any set's plot; a later plot of the same name
+// replaces the earlier one.
+static uint32_t fired_count(const StoryModel& m, const char* name);
+
+static const char kTablePlot[] =
+    "<Story><Event Name=\"Recon_01\"><Event_Type>STORY_TRIGGER</Event_Type></Event>"
+    "<Event Name=\"Note\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>PING</Event_Param2>"
+    "<Perpetual>True</Perpetual></Event>"
+    "<Event Name=\"Shared\"><Event_Type>STORY_TRIGGER</Event_Type></Event></Story>";
+
+static void test_story_table() {
     StoryModel own, empire, rebel;
     std::string err;
-    const char* plot = "<Story><Event Name=\"Recon_01\"><Event_Type>STORY_TRIGGER</Event_Type></Event></Story>";
-    CHECK(own.add_plot("Conquests\\Player_Agnostic_Plot.xml", plot, true, "GCPlayerAgnostic", &err) == 0);
-    CHECK(empire.add_plot("Conquests\\Historical\\Story_Campaign_Empire.xml", plot, true, {}, &err) == 0);
-    CHECK(empire.add_plot("Conquests\\Factions\\Story_Generic_EMPIRE.xml", plot, true, {}, &err) == 1);
-    CHECK(rebel.add_plot("Conquests\\Factions\\Story_Generic_REBEL.xml", plot, true, {}, &err) == 0);
-    const std::vector<StoryModel*> group{&empire, &own, &rebel};
+    CHECK(own.add_plot("Conquests\\Player_Agnostic_Plot.xml", kTablePlot, true, "GCPlayerAgnostic", &err) == 0);
+    CHECK(own.add_plot("Conquests\\Rewards.xml",
+                       "<Story><Event Name=\"Fire_Shared\"><Event_Type>STORY_TRIGGER</Event_Type>"
+                       "<Reward_Type>TRIGGER_EVENT</Reward_Type><Reward_Param1>Shared</Reward_Param1></Event>"
+                       "<Event Name=\"Open_Rebel\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>STORY_ELEMENT</Reward_Type>"
+                       "<Reward_Param1>Conquests\\Factions\\Story_Generic_REBEL</Reward_Param1></Event></Story>",
+                       true, {}, &err) == 1);
+    CHECK(empire.add_plot("Conquests\\Historical\\Story_Campaign_Empire.xml", kTablePlot, true, {}, &err) == 0);
+    CHECK(empire.add_plot("Conquests\\Factions\\Story_Generic_EMPIRE.xml", kTablePlot, true, {}, &err) == 1);
+    CHECK(rebel.add_plot("Conquests\\Factions\\Story_Generic_REBEL.xml", kTablePlot, false, {}, &err) == 0);
     LuaHost host;
     LuaVm vm(host);
     attach_story(vm, &own);
-    // Without the group: the own set only (the pre-q6-t03 answer).
-    CHECK(run(vm, "p = tostring(Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_EMPIRE.xml'))") == "" && gstr(vm, "p") == "nil");
-    attach_story_group(vm, &group);
-    CHECK(run(vm, "pe = Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_EMPIRE.xml') pr = Get_Story_Plot('Story_Generic_REBEL.xml')\n"
-                  "po = Get_Story_Plot('Player_Agnostic_Plot.xml') nf = tostring(Get_Story_Plot('Story_Generic_HUTT_CARTELS.xml'))\n"
+    // Without a table: the own set only.
+    CHECK(run(vm, "p = Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_EMPIRE.xml') p = tostring(p)") == "" &&
+          gstr(vm, "p") == "nil");
+    StoryTable table;
+    table.assign({&empire, &own, &rebel});
+    CHECK(own.table() == &table && empire.table() == &table && table.set_count() == 3 && table.order().size() == 5);
+    CHECK(table.set_of(&rebel) == 2 && table.set_of(nullptr) == 0xFFFFFFFFu);
+    attach_story_table(vm, &table);
+    CHECK(run(vm, "pe = Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_EMPIRE.xml')\n"
+                  "po = Get_Story_Plot('Conquests\\\\Player_Agnostic_Plot.xml')\n"
                   "v = tostring(pe.Is_Valid()) ev = pe.Get_Event('Recon_01') evv = tostring(ev.Is_Valid())\n"
-                  "ev.Set_Dialog('Recon') ev.Add_Dialog_Text('TEXT_RECON', 1) pr.Suspend()\n"
-                  "same = rawequal(pe, Get_Story_Plot('story_generic_empire.xml')) and 'same' or 'different'\n"
+                  "ev.Set_Dialog('Recon') ev.Add_Dialog_Text('TEXT_RECON')\n"
+                  "same = rawequal(pe, Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_EMPIRE.xml')) and 'same' or 'x'\n"
                   "other = rawequal(pe, po) and 'same' or 'different'") == "");
-    CHECK(gstr(vm, "v") == "true" && gstr(vm, "evv") == "true" && gstr(vm, "nf") == "nil");
+    CHECK(gstr(vm, "v") == "true" && gstr(vm, "evv") == "true");
     CHECK(gstr(vm, "same") == "same" && gstr(vm, "other") == "different");
-    // The edits landed in the Empire's and the Rebel's sets, not the caller's.
+    // The name matches byte for byte: no base-name match, case kept, no ".xml" added; each miss warns.
+    const size_t msgs = vm.messages().size();
+    CHECK(run(vm, "a = Get_Story_Plot('Story_Generic_REBEL.xml')\n"
+                  "b = Get_Story_Plot('conquests\\\\factions\\\\story_generic_rebel.xml')\n"
+                  "c = Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_REBEL')\n"
+                  "a = tostring(a) .. tostring(b) .. tostring(c)") == "" && gstr(vm, "a") == "nilnilnil");
+    CHECK(vm.messages().size() == msgs + 3);
+    // The edits landed in the Empire's set, not the caller's.
     const StoryEventDef& recon = empire.plot(1).events[empire.find_event(1, "Recon_01")];
-    CHECK(recon.dialog.size() == 2 && recon.dialog[0] == "dialog:Recon" && recon.dialog[1] == "TEXT_RECON|1");
+    CHECK(recon.story_dialog == "Recon" && recon.dialog.size() == 1 && recon.dialog[0] == "TEXT_RECON");
     CHECK(own.plot(0).events[0].dialog.empty() && empire.plot(0).events[0].dialog.empty());
-    CHECK(!rebel.plot(0).active && own.plot(0).active);
-    // The own set wins over the group for a file both list.
-    StoryModel dup;
-    CHECK(dup.add_plot("Conquests\\Player_Agnostic_Plot.xml", plot, false, {}, &err) == 0);
-    const std::vector<StoryModel*> group2{&dup, &own};
-    attach_story_group(vm, &group2);
-    CHECK(run(vm, "po2 = Get_Story_Plot('Conquests\\\\Player_Agnostic_Plot.xml') own = rawequal(po, po2) and 'own' or 'dup'") == "");
-    CHECK(gstr(vm, "own") == "own");
-    attach_story_group(vm, nullptr);
-    CHECK(run(vm, "q = tostring(Get_Story_Plot('Story_Generic_EMPIRE.xml'))") == "" && gstr(vm, "q") == "nil");
+    // Story_Event: every ACTIVE plot of every set (the Rebel plot is suspended).
+    CHECK(run(vm, "Story_Event('PING')") == "");
+    CHECK(fired_count(own, "Note") == 1 && fired_count(empire, "Note") == 2 && fired_count(rebel, "Note") == 0);
+    // TRIGGER_EVENT: every plot that has the event, suspended ones too, every set.
+    CHECK(own.trigger_event(1, own.find_event(1, "Fire_Shared")));
+    CHECK(fired_count(own, "Shared") == 1 && fired_count(empire, "Shared") == 2 && fired_count(rebel, "Shared") == 1);
+    CHECK(table.trigger_event_by_name("shared") == 4);
+    // STORY_ELEMENT: any set's plot (Reward_Param1 + ".xml").
+    CHECK(own.trigger_event(1, own.find_event(1, "Open_Rebel")) && rebel.plot(0).active);
+    CHECK(table.story_event("ping") == 4 && fired_count(rebel, "Note") == 1);
+    // A later set listing the same file replaces the earlier plot: the lookups, dispatches and walks reach only the new one.
+    StoryModel later;
+    CHECK(later.add_plot("Conquests\\Player_Agnostic_Plot.xml", kTablePlot, true, {}, &err) == 0);
+    table.assign({&empire, &own, &rebel, &later});
+    CHECK(!own.plot(0).in_table && later.plot(0).in_table && own.plot_order().size() == 1 && table.order().size() == 5);
+    CHECK(own.find_plot("Conquests\\Player_Agnostic_Plot.xml") == 0xFFFFFFFFu);
+    const StoryTable::PlotRef r = table.find_plot("Conquests\\Player_Agnostic_Plot.xml");
+    CHECK(r.valid() && r.set == 3 && r.plot == 0);
+    const uint32_t own_notes = fired_count(own, "Note");
+    CHECK(table.story_event("PING") == 4 && fired_count(own, "Note") == own_notes && fired_count(later, "Note") == 1);
+    // Inside one model the later plot of a name wins the same way.
+    StoryModel twice;
+    CHECK(twice.add_plot("Same.xml", kTablePlot, true, {}, &err) == 0 && twice.add_plot("Same.xml", kTablePlot, true, {}, &err) == 1);
+    CHECK(twice.find_plot("Same.xml") == 1 && !twice.plot(0).in_table && twice.plot_order().size() == 1);
+    CHECK(twice.story_event("PING") == 1 && twice.fired()[0].plot == 1);
+    // clear() hands every plot back to its model.
+    table.clear();
+    CHECK(own.table() == nullptr && own.plot(0).in_table && own.plot_order().size() == 2);
+    attach_story_table(vm, nullptr);
+    CHECK(run(vm, "q = Get_Story_Plot('Conquests\\\\Factions\\\\Story_Generic_EMPIRE.xml') q = tostring(q)") == "" &&
+          gstr(vm, "q") == "nil");
+}
+
+// q6 t03 (LUA_API.md "StoryEventWrapper dialog and parameter setters" [H]): Add_Dialog_Text slots and formatting, the
+// error / silent-abort cases, Clear_Dialog_Text, the shared converter of Set_Event_Parameter / Set_Reward_Parameter, and
+// the silent return of every method when the wrapper's event is gone.
+static void test_dialog_setters() {
+    const fs::path root = fs::temp_directory_path() / "alamo_lua_story_dialog";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<L><File>S.xml</File></L>");
+    write_file(root / "Data/XML/S.xml",
+               "<R><Planet Name=\"Kuat\"><Text_ID>TEXT_PLANET_KUAT</Text_ID></Planet><Prop Name=\"Rock\"></Prop></R>");
+    DirectoryProvider dp(root.string());
+    objects::ObjectTypeDatabase raw;
+    CHECK(raw.load(dp));
+    objects::GameObjectTypes types;
+    CHECK(types.build(raw));
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+    objects::SpawnParams sp;
+    sp.type = raw.find("Kuat");
+    const objects::ObjectHandle kuat = store.create(sp);
+    sp.type = raw.find("Rock");
+    const objects::ObjectHandle rock = store.create(sp);
+    const objects::ObjectHandle gone = store.create(sp);
+
+    StoryModel m;
+    std::string err;
+    CHECK(m.add_plot("Dialog.xml", "<Story><Event Name=\"Ev\"><Event_Type>STORY_TRIGGER</Event_Type></Event></Story>", true,
+                     {}, &err) == 0);
+    m.text_lookup = [](std::string_view id, std::string& out) {
+        if (id == "TEXT_FMT") out = "A=%s B=%s C=%s 100%%";
+        else if (id == "TEXT_PLANET_KUAT") out = "Kuat Drive Yards";
+        else if (id == "TEXT_CREDITS") out = "credits";
+        else return false;
+        return true;
+    };
+    LuaHost host;
+    host.store = &store;
+    host.types = &types;
+    LuaVm vm(host);
+    attach_story(vm, &m);
+    vm.set_object_global("Kuat", kuat);
+    vm.set_object_global("Rock", rock);
+    vm.set_object_global("Gone", gone);
+    CHECK(store.destroy(gone));
+    CHECK(run(vm, "ev = Get_Story_Plot('Dialog.xml').Get_Event('Ev')\n"
+                  "ev.Add_Dialog_Text('TEXT_FMT')\n"                                // empty slots
+                  "ev.Add_Dialog_Text('TEXT_FMT', Kuat, 'TEXT_CREDITS')\n"          // display name, text lookup
+                  "ev.Add_Dialog_Text('TEXT_FMT', 2.5, -1.7)\n"                     // (int)(n + 0.5)
+                  "ev.Add_Dialog_Text('TEXT_FMT', Find_Object_Type('Kuat'), 'NO_SUCH_TEXT')\n"  // type; missing id verbatim
+                  "ev.Add_Dialog_Text('TEXT_FMT', Gone, 1)\n"                       // dead object: nothing added
+                  "ev.Add_Dialog_Text('TEXT_FMT', Rock)\n"                          // no Text_ID: empty name
+                  "ev.Add_Dialog_Text('UNKNOWN_LINE')") == "");                     // missing format id: itself
+    const StoryEventDef& def = m.plot(0).events[0];
+    const std::vector<std::string> want{"A= B= C= 100%",    "A=Kuat Drive Yards B=credits C= 100%",
+                                        "A=3 B=-1 C= 100%", "A=Kuat Drive Yards B=NO_SUCH_TEXT C= 100%",
+                                        "A= B= C= 100%",    "UNKNOWN_LINE"};
+    CHECK(def.dialog == want);
+    CHECK(!vm.exit_requested() && vm.messages().empty());
+    // Errors: a slot of another type is an error, but the line is still added; 4+ arguments or a non-string id add nothing.
+    CHECK(run(vm, "ev.Add_Dialog_Text('TEXT_FMT', true, 7)") == "" && def.dialog.size() == 7 &&
+          def.dialog.back() == "A= B=7 C= 100%");
+    CHECK(vm.exit_requested() && vm.messages().size() == 1 &&
+          vm.messages()[0] == "SCRIPT ERROR: StoryEventWrapper::Add_Dialog_Text -- invalid type for parameter 1.");
+    CHECK(run(vm, "ev.Add_Dialog_Text('a', 'b', 'c', 'd') ev.Add_Dialog_Text(5)") == "" && def.dialog.size() == 7);
+    CHECK(vm.messages().size() == 3 && vm.messages()[1].find("invalid number of parameters. Expected 2.") != std::string::npos &&
+          vm.messages()[2].find("invalid type for parameter 1. Expected string.") != std::string::npos);
+    CHECK(run(vm, "ev.Clear_Dialog_Text(1, 2)") == "" && def.dialog.empty());
+    // The shared converter: object / type -> upper-cased type name, string as is, number rounded; others dropped. One
+    // Set_Event_Parameter call sets a whole name list.
+    CHECK(run(vm, "ev.Set_Event_Parameter(0, 'Abc', Kuat, 2.4, nil, true, {}, Gone)\n"
+                  "ev.Set_Event_Parameter(1.6, Find_Object_Type('Rock'))\n"
+                  "ev.Set_Reward_Parameter(0, Kuat) ev.Set_Reward_Parameter(0.4999, 'Rock')") == "");
+    CHECK(def.event_params.size() == 3 && def.event_params[0].text == "Abc KUAT 2" && def.event_params[2].text == "ROCK");
+    CHECK(def.reward_params.size() == 1 && def.reward_params[0].text == "Rock");
+    CHECK(run(vm, "ev.Set_Reward_Parameter(1, Gone)") == "" && def.reward_params.size() == 1 &&
+          vm.messages().back().find("must set exactly one parameter per parameter index.") != std::string::npos);
+    // Set_Dialog: the event's Story_Dialog only.
+    CHECK(run(vm, "ev.Add_Dialog_Text('X') ev.Set_Dialog('Intervention_Dialog')") == "" &&
+          def.story_dialog == "Intervention_Dialog" && def.dialog.size() == 1);
+    // An event wrapper whose event is gone: every method returns silently, before any argument check.
+    StoryModel empty;
+    attach_story(vm, &empty);
+    const size_t msgs = vm.messages().size();
+    CHECK(run(vm, "ev.Add_Dialog_Text(1, 2, 3, 4) ev.Set_Event_Parameter() ev.Set_Reward_Parameter('x') ev.Set_Dialog()\n"
+                  "ev.Set_Reward_Type() ev.Clear_Dialog_Text()") == "");
+    CHECK(vm.messages().size() == msgs);
+    fs::remove_all(root, ec);
 }
 
 static void test_ai_flags() {
@@ -612,13 +778,39 @@ static void test_prereqs_elapsed_perpetual() {
     // stays armed.
     CHECK(m.story_event("ping") == 1 && m.story_event("PING") == 1 && fired_count(m, "Perp_Note") == 2);
     CHECK(m.story_event("B") == 2 && fired_count(m, "AB_Or_C") == 1);  // B, then AB_Or_C inside B's Fire
-    // Perpetual ELAPSED: the accumulator is never cleared, so after its first fire it fires at every T9 [M].
+    // Perpetual ELAPSED (q6 t03, STORY.md §4.7 [H]): the re-arm runs vf4, which clears the accumulator and the
+    // initialised flag; the next T9 only re-records LastTime, so it fires again T seconds after that T9.
     m.update(4, 4.5);
     CHECK(fired_count(m, "Perp_Clock") == 0);
-    m.update(5, 5.0);
-    m.update(6, 5.0);
-    m.update(7, 5.1);
+    m.update(5, 5.0);  // armed at 4.0 by B: 1 s -> fire
+    const uint32_t perp = m.find_event(0, "Perp_Clock");
+    CHECK(fired_count(m, "Perp_Clock") == 1 && m.plot(0).state[perp].armed && !m.plot(0).state[perp].timer_init &&
+          m.plot(0).state[perp].timer_acc == 0.0);
+    m.update(6, 5.0);  // re-initialised here (LastTime = 5.0), nothing added
+    CHECK(m.plot(0).state[perp].timer_init && m.plot(0).state[perp].timer_last == 5.0);
+    m.update(7, 5.9);
+    CHECK(fired_count(m, "Perp_Clock") == 1);
+    m.update(8, 6.0);  // 1 s after the re-initialising T9
+    CHECK(fired_count(m, "Perp_Clock") == 2);
+    m.update(9, 6.5);
+    m.update(10, 7.5);  // re-initialised at 6.5: 1 s later
     CHECK(fired_count(m, "Perp_Clock") == 3);
+    // Lua Reset / RESET_EVENT share vf4: a prereq-less ELAPSED restarts from its next evaluation.
+    StoryModel r;
+    CHECK(r.add_plot("Reset.xml",
+                     "<Story><Event Name=\"Clock\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>2</Event_Param1></Event>"
+                     "</Story>",
+                     true, {}, &err) == 0);
+    r.update(0, 0.0);
+    r.update(1, 1.5);
+    CHECK(r.plot(0).state[0].timer_acc == 1.5);
+    r.reset_plot(0);
+    CHECK(r.plot(0).state[0].timer_acc == 0.0 && !r.plot(0).state[0].timer_init && r.plot(0).state[0].armed);
+    r.update(2, 2.0);  // re-initialised
+    r.update(3, 3.5);
+    CHECK(r.fired().empty());
+    r.update(4, 4.0);
+    CHECK(fired_count(r, "Clock") == 1);
     // OR: the second group alone arms (and fires) AB_Or_C.
     StoryModel o;
     CHECK(o.add_plot("Semantics.xml", kSemantics, true, {}, &err) == 0);
@@ -745,8 +937,8 @@ static void test_timeouts_and_pause() {
     CHECK(p.fired().size() == 1);
 }
 
-// l1s3 t03: CONQUER_COUNT counts every dispatched conquest (no filter, any new owner); plot lookups are
-// case-insensitive [port]; the story flag table is shared (STORY.md §0).
+// l1s3 t03: CONQUER_COUNT counts every dispatched conquest (no filter, any new owner); plot lookups match the name
+// byte for byte (q6 t03, STORY.md §2.1 [H]); the story flag table is shared (STORY.md §0).
 static void test_conquer_count_plots_flags() {
     StoryModel m;
     std::string err;
@@ -754,11 +946,11 @@ static void test_conquer_count_plots_flags() {
                      "<Story><Event Name=\"Two_Planets\"><Event_Type>STORY_CONQUER_COUNT</Event_Type>"
                      "<Event_Param1>2</Event_Param1></Event>"
                      "<Event Name=\"Open\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>STORY_ELEMENT</Reward_Type>"
-                     "<Reward_Param1>story_second</Reward_Param1></Event>"
+                     "<Reward_Param1>Story_Second</Reward_Param1></Event>"
                      "<Event Name=\"Win\"><Event_Type>STORY_TRIGGER</Event_Type><Reward_Type>SET_FLAG</Reward_Type>"
                      "<Reward_Param1>Mission_Win</Reward_Param1><Reward_Param2>1</Reward_Param2></Event></Story>",
                      true, {}, &err) == 0);
-    CHECK(m.add_plot("Story_Second.XML", "<Story><Event Name=\"S\"><Event_Type>STORY_TRIGGER</Event_Type></Event></Story>",
+    CHECK(m.add_plot("Story_Second.xml", "<Story><Event Name=\"S\"><Event_Type>STORY_TRIGGER</Event_Type></Event></Story>",
                      false, {}, &err) == 1);
     m.set_player(0);
     StoryNotification enemy;
@@ -769,7 +961,8 @@ static void test_conquer_count_plots_flags() {
     enemy.name = "Fondor";
     enemy.owner = 0;
     CHECK(m.dispatch("STORY_CONQUER_COUNT", enemy) == 1);
-    CHECK(m.find_plot("STORY_SECOND.xml") == 1 && m.find_plot("Data\\XML\\story_second.xml") == 1);
+    CHECK(m.find_plot("Story_Second.xml") == 1 && m.find_plot("STORY_SECOND.xml") == 0xFFFFFFFFu &&
+          m.find_plot("Data\\XML\\Story_Second.xml") == 0xFFFFFFFFu);
     CHECK(m.trigger_event_by_name("Open") == 1 && m.plot(1).active);
 
     // Shared flags: the tactical plot set's SET_FLAG reaches the campaign's STORY_FLAG.
@@ -1022,7 +1215,8 @@ int main() {
     test_plots_file();
     test_bindings();
     test_ai_flags();
-    test_story_plot_group();  // q6 t03
+    test_story_table();      // q6 t03
+    test_dialog_setters();   // q6 t03
     test_prereqs_elapsed_perpetual();
     test_exact_params();
     test_branches();

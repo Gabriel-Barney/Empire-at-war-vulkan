@@ -163,6 +163,9 @@ struct StorySession::Families {
 #endif
     lua::ObjectBridge bridge;
     lua::PresentationLog presentation;
+    // q6 t03: the galactic mode's plot table over the galactic sets' models in load order (STORY.md §2.4: Get_Story_Plot,
+    // STORY_ELEMENT, TRIGGER_EVENT and Lua Story_Event reach every player's plots). Outlives the sets' VMs.
+    lua::StoryTable table;
 };
 
 struct StorySession::Set {
@@ -237,10 +240,30 @@ std::string StoryLogEntry::text() const {
 }
 
 std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, const galactic::GalacticSim& sim) {
-    // Q6 [port]: <Story_Name> (campaign field type 0x1b, a string list; docs/re/xml_field_tables.md, no FoC sample) read as
-    // "Faction, plot file" pairs, as Thrawn's Revenge writes it. Used for a faction without a <Faction>_Story_Name (which
-    // one the original prefers is not recovered; the FoC data never has both). Later tags and pairs of a faction lose.
-    std::vector<std::pair<std::string, std::string>> pairs;
+    // q6 t03 (STORY.md §2.1 [H], TheStoryMode::Load_Plots): every plot set goes into the mode's one plot table in this
+    // order: Rebel_Story_Name, Empire_Story_Name, Underworld_Story_Name (the campaign's three fields), each only when that
+    // faction's player exists, then every <Story_Name> "Faction, plot file" pair in list order (campaign field type 0x1b,
+    // as Thrawn's Revenge writes it; a faction may get several sets). [port] a pair whose faction has no player is
+    // skipped; the player of a faction is its first player in the player list.
+    const auto players = sim.players();
+    auto player_of = [&](std::string_view faction) -> int32_t {
+        for (size_t p = 0; p < players.size(); ++p) {
+            const uint32_t f = players[p].faction;
+            if (f < sim.rules().factions.size() && iequal(sim.rules().factions[f].name, faction)) return static_cast<int32_t>(p);
+        }
+        return -1;
+    };
+    std::vector<StoryPlotSet> out;
+    for (const char* faction : {"Rebel", "Empire", "Underworld"}) {
+        const int32_t player = player_of(faction);
+        if (player < 0) continue;
+        const std::string tag = std::string(faction) + "_Story_Name";
+        for (const auto& [t, v] : campaign.raw)
+            if (iequal(t, tag) && !trim(v).empty()) {
+                out.push_back({player, std::string(trim(v))});
+                break;
+            }
+    }
     for (const std::string_view list : campaign.raw_values("Story_Name")) {
         std::vector<std::string_view> items;
         for (size_t at = 0; at <= list.size();) {
@@ -248,27 +271,8 @@ std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, 
             if (const std::string_view item = trim(list.substr(at, comma - at)); !item.empty()) items.push_back(item);
             at = comma + 1;
         }
-        for (size_t i = 0; i + 1 < items.size(); i += 2) pairs.emplace_back(items[i], items[i + 1]);
-    }
-    std::vector<StoryPlotSet> out;
-    const auto players = sim.players();
-    for (size_t p = 0; p < players.size(); ++p) {
-        const uint32_t f = players[p].faction;
-        if (f >= sim.rules().factions.size()) continue;
-        const std::string& faction = sim.rules().factions[f].name;
-        const std::string tag = faction + "_Story_Name";
-        bool found = false;
-        for (const auto& [t, v] : campaign.raw)
-            if (iequal(t, tag) && !trim(v).empty()) {
-                out.push_back({static_cast<int32_t>(p), std::string(trim(v))});
-                found = true;
-                break;
-            }
-        for (size_t i = 0; !found && i < pairs.size(); ++i)
-            if (iequal(pairs[i].first, faction)) {
-                out.push_back({static_cast<int32_t>(p), pairs[i].second});
-                found = true;
-            }
+        for (size_t i = 0; i + 1 < items.size(); i += 2)
+            if (const int32_t player = player_of(items[i]); player >= 0) out.push_back({player, std::string(items[i + 1])});
     }
     return out;
 }
@@ -488,14 +492,17 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
         };
         sets_.push_back(std::move(set));
     }
-    plot_group_.clear();  // q6 t03: one plot table per mode (STORY.md §0): Get_Story_Plot searches every galactic set
-    for (const auto& s : sets_) plot_group_.push_back(&s->model);
+    // q6 t03 (STORY.md §2.4): one plot table for the galactic mode, every player's plot set in load order. A plot listed
+    // again by a later set replaces the earlier one (StoryPlot::in_table), whose script is then not started [port].
+    std::vector<lua::StoryModel*> models;
+    for (const auto& s : sets_) models.push_back(&s->model);
+    lua_->table.assign(std::move(models));
     if (!st.lua) return true;
     for (size_t si = 0; si < sets_.size(); ++si) {
         Set& s = *sets_[si];
         for (uint32_t p = 0; p < s.model.plot_count(); ++p) {
             const std::string& script = s.model.plot(p).lua_script;
-            if (script.empty()) continue;
+            if (script.empty() || !s.model.plot(p).in_table) continue;
             Script sc;
             sc.plot = p;
             sc.name = script;
@@ -509,7 +516,7 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             opt.script_name = script;
             sc.vm = std::make_unique<lua::LuaVm>(host, opt);
             lua::attach_story(*sc.vm, &s.model);
-            lua::attach_story_group(*sc.vm, &plot_group_);  // q6 t03
+            lua::attach_story_table(*sc.vm, &lua_->table);  // q6 t03
 #if defined(ALAMO_LUA_PLAYERS)
             lua::attach_player_world(*sc.vm, &lua_->players);
 #endif
@@ -1145,6 +1152,15 @@ std::string StorySession::take_tactical_map(bool space) { return std::exchange(t
 void StorySession::collect(size_t set, std::string_view via) { collect_set(*sets_[set], static_cast<uint32_t>(set), via); }
 
 void StorySession::collect_set(Set& s, uint32_t number, std::string_view via) {
+    collect_one(s, number, via);
+    // q6 t03: a galactic set's Lua Story_Event / TRIGGER_EVENT / STORY_ELEMENT reaches the other galactic sets' plots
+    // (one plot table, STORY.md §2.4): their fires are logged with the same cause, after this set's, in set order.
+    if (number < sets_.size() && sets_[number].get() == &s)
+        for (size_t i = 0; i < sets_.size(); ++i)
+            if (i != number) collect_one(*sets_[i], static_cast<uint32_t>(i), via);
+}
+
+void StorySession::collect_one(Set& s, uint32_t number, std::string_view via) {
     const auto& fired = s.model.fired();
     for (; s.fired_seen < fired.size(); ++s.fired_seen) {
         const lua::StoryFired& f = fired[s.fired_seen];
