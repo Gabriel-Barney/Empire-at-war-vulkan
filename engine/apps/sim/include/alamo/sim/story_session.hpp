@@ -148,6 +148,7 @@ struct ObjectHandle;
 }  // namespace alamo::objects
 namespace alamo::lua {
 class StoryModel;
+class StoryHolocron;
 class LuaVm;
 class LuaPlayerWorld;
 class GlobalValueStore;  // Int-final
@@ -464,6 +465,11 @@ public:
     const lua::StoryModel& model(size_t set) const;
     lua::StoryModel& model(size_t set);
     int32_t plot_set_player(size_t set) const;
+    // q6 t14 (GALACTIC_DIALOGS §2.8): the game's one holocron list, shared by every plot set (galactic and tactical);
+    // nullptr without plot sets. Saved with the session (save version 3). mark_holocron_read: the summary dialog showed
+    // record `index` (0x1089e0 read = 1; no sim rule reads the flag, so a UI call is safe for the CRC).
+    const lua::StoryHolocron* holocron() const;
+    void mark_holocron_read(size_t index);
     size_t script_count() const;
     // Text form of the whole run: "# header", then every trigger ("T ...") and fired event ("F ...") in
     // the order they happened. Byte-identical across worker counts and compilers.

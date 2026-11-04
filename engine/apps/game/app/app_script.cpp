@@ -1554,6 +1554,33 @@ void App::make_script() {
         add_pause_steps(s);  // galactic pause / resume
         s.push_back(step_encyclopedia("encyclopedia over a planet"));
         s.push_back(step_shot("game_campaign_encyclopedia.png"));
+        // q6 t13: the fleet steps below (hops, attacks, the battle, the second attack and its auto-resolve) need a fleet of
+        // the local player. A campaign that gives it none (Thrawn's Revenge's only custom set, GCMenu_Rebel, is the mod's
+        // scripted selection menu: two planets, no starting forces) skips them with a log line; the pause, encyclopedia,
+        // options, video modes, black market, holocron, story summary and campaign score checks before and after still run.
+        // Decided on the first frame of the first fleet step, which then runs in that same frame: a campaign with a fleet
+        // (every vanilla one) keeps its frame-for-frame step timing and command stream.
+        auto no_fleet = std::make_shared<int>(-1);  // -1 not decided yet, 0 the local player has a fleet, 1 none
+        auto gated = std::make_shared<size_t>(0);   // how many steps need the fleet
+        const auto needs_fleet = [no_fleet, gated](ScriptStep st) {
+            return ScriptStep{st.name, [no_fleet, gated, run = std::move(st.run)](App& a, ui::InputFrame& f) {
+                                  if (*no_fleet < 0) {
+                                      const galactic::GalacticSim* g = a.session_ ? a.session_->galaxy() : nullptr;
+                                      if (!g) return run(a, f);
+                                      bool own = false;
+                                      for (const galactic::FleetState& fl : g->fleets())
+                                          own = own || (fl.alive && fl.owner == a.local_player() && !fl.contents.empty());
+                                      *no_fleet = own ? 0 : 1;
+                                      if (!own)
+                                          std::printf("script: the local player owns no fleet in %s: the %zu galactic move, attack and battle steps "
+                                                      "are skipped (each logs done without running)\n",
+                                                      a.session_->spec().campaign.c_str(), *gated);
+                                  }
+                                  return *no_fleet == 1 || run(a, f);
+                              },
+                              st.timeout_frames};
+        };
+        const size_t fleet_steps = s.size();
         // Plain fleet hops by input, to arrival (click, then drag).
         s.push_back(answer_ai_attacks(step_galactic_move(false)));
         s.push_back(answer_ai_attacks(step_galactic_move(true)));
@@ -1584,6 +1611,8 @@ void App::make_script() {
         s.push_back(step_wait("auto-resolve battle-end screen", [](App& a) { return a.auto_results_ > 0 && a.battle_end_open_ && a.ui_.gui.find(ui::dlg::kBattleEnd) && a.screen_text_.empty(); }, 600));
         s.push_back(step_shot("game_campaign_auto_result.png"));
         s.push_back(step_click_control(ui::dlg::kBattleEnd, "IDC_CONTINUE_BUTTON"));
+        *gated = s.size() - fleet_steps;
+        for (size_t k = fleet_steps; k < s.size(); ++k) s[k] = needs_fleet(std::move(s[k]));
         // The galaxy stands still from here (presentation-only hold: no AI conflict interrupts the screen checks).
         s.push_back(step_wait("hold the galaxy", [](App& a) { return a.script_hold_ = true; }, 10));
         // In-game options (MAIN_LOOP.md §1.5): the HUD's options button opens the game menu, which pauses the session; the

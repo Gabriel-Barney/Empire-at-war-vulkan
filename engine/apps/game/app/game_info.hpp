@@ -5,12 +5,15 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "alamo/game/game_data.hpp"
 #include "alamo/game/game_session.hpp"
+#include "alamo/game/story_script.hpp"
 #include "alamo/ui/gui_info_screens.hpp"
 #include "alamo/ui/gui_screens.hpp"
 #include "alamo/ui/hud_components.hpp"
@@ -59,27 +62,50 @@ private:
     std::vector<std::vector<float>> econ_, mil_, planets_;  // [player slot][sample]
 };
 
-// Story dialog entries of the local player's plot sets fired since `cursor` (advanced), in firing order, tag = the
-// event's Story_Tag. With a Story_Dialog script chapter (Data\Scripts\Story\<dialog>.txt, story_script.hpp): its title,
-// lines with their TEXTCOLOR colours and WAIT times, SFX / DIALOG cues, IMAGE, and the event's Lua dialog lines
-// (Add_Dialog_Text) at EXTRA_TEXT [port: appended when the chapter has no EXTRA_TEXT]; its MOVIE / MOVIE_ONCE goes to
-// `movies`. Without one: the Lua dialog lines, else the dialog name. Title fallback "Chapter n".
+// Story dialog scripts (GALACTIC_DIALOGS §2.8): every name a plot set asked to load (lua::StoryModel::dialog_loads: plot
+// load, Lua Set_Dialog, save load) goes into the cache once, in request order. `loads` keeps the per-set cursors.
+struct StoryScriptLoads {
+    std::vector<size_t> cursor;    // per galactic plot set
+    const void* tactical = nullptr;  // the tactical plot set the cursor below belongs to
+    size_t tactical_cursor = 0;
+};
+void sync_story_scripts(const GameSession& s, const GameData& d, StoryDialogCache& cache, StoryScriptLoads& loads);
+
+// Fire step 6 records (STORY.md §1.6) of every plot set since `cursor` (advanced), in firing order: the holocron list is
+// global (GALACTIC_DIALOGS §2.8), so every player's records count. With the loaded Story_Dialog script chapter
+// (story_script.hpp): its title, lines with their TEXTCOLOR colours and WAIT times (TEXT through Story_Var), SFX / DIALOG
+// cues, IMAGE, and the event's Add_Dialog_Text lines as they are at EXTRA_TEXT; its MOVIE / MOVIE_ONCE goes to `movies`.
+// Without one [port]: the Lua dialog lines, else the dialog name. Title fallback "Chapter n".
 struct StoryMovie {
     std::string name;
     bool loop = true;
 };
-// GALACTIC_DIALOGS §2.1: per returned dialog, Story_Dialog_Popup and whether it comes from a random story plot
-// (Random_Plot_*: the IDD_STORY_DIALOG offer, §2.4); every other dialog goes to the mission holocron.
+// GALACTIC_DIALOGS §2.1 / STORY.md §1.6 step 3: per returned dialog, Story_Dialog_Popup, Story_Dialog_SFX, the holocron
+// record it added, and whether it comes from a random story plot (Random_Plot_*: the IDD_STORY_DIALOG offer, §2.4).
 struct StoryDialogMeta {
     bool popup = false;
+    bool sfx = false;
     bool random_plot = false;
     std::string dialog;      // Story_Dialog
+    std::string tag;         // the record's tag
     int32_t chapter = -1;
+    uint64_t holocron_id = 0;
 };
-std::vector<ui::StoryDialogInfo> new_story_dialogs(const GameSession& s, const GameData& d, const ui::TextDatabase& text, size_t& cursor,
+bool story_dialog_chapter(const StoryDialogCache& cache, const ui::TextDatabase& text, std::string_view dialog, int32_t chapter,
+                          std::string_view var, const std::vector<std::string>& extra, ui::StoryDialogInfo& out, StoryMovie* movie);
+std::vector<ui::StoryDialogInfo> new_story_dialogs(const GameSession& s, const StoryDialogCache& cache, const ui::TextDatabase& text, size_t& cursor,
                                                    std::vector<StoryMovie>* movies = nullptr, std::vector<StoryDialogMeta>* meta = nullptr);
-// Story summary: the local plot sets' objectives (active / completed by `completed`) and the dialog recap.
-ui::StorySummaryInfo story_summary(const GameSession& s, const ui::TextDatabase& text, bool completed);
+// IDD_STORY_SUMMARY_DIALOG from the holocron list (GALACTIC_DIALOGS §2.8, fill_holocron_summary): the tab's rows (labels
+// looked up add-if-missing, colours dimmed once read / completed), the selected record's chapter (TITLE, TEXT with
+// Story_Var, EXTRA_TEXT lines as stored). row_ids = the records' ids per row; selected_index = the selected record's index
+// in the list (the caller marks it read, StorySession::mark_holocron_read), SIZE_MAX = none.
+struct HolocronSummaryView {
+    ui::StorySummaryInfo info;
+    std::vector<uint64_t> row_ids;
+    size_t selected_index = SIZE_MAX;
+};
+HolocronSummaryView holocron_summary(const GameSession& s, const StoryDialogCache& cache, const ui::TextDatabase& text, bool completed,
+                                     uint64_t selected_id);
 
 // P4 host: rows of the FoC galactic special panels for an open dialog (GameSession::special_dialog), from the GalacticSim
 // getters (galactic special_systems.hpp; docs/re/P4_SIM_SYSTEMS.md). `kind` = galactic::kSpecial*; `hero_id` = the dialog's

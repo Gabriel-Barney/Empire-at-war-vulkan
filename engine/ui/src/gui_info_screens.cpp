@@ -176,6 +176,9 @@ bool InfoScreens::show_story_summary(const StorySummaryInfo& s) {
     const int32_t n = static_cast<int32_t>(s.goals.size());
     const int32_t sel = n == 0 ? -1 : (s.selected >= 0 && s.selected < n ? s.selected : n - 1);
     d->set_items("IDC_GOAL_LIST", s.goals, sel);
+    if (GuiControl* c = d->get("IDC_GOAL_LIST"))  // §2.8 row colours (read / completed rows dimmed)
+        c->item_text_colors.assign(s.goal_colors.begin(),
+                                   s.goal_colors.begin() + static_cast<std::ptrdiff_t>(std::min(s.goals.size(), s.goal_colors.size())));
     d->set_items("IDC_STORY_RECAP", s.recap, -1);
     if (GuiControl* c = d->get("IDC_STORY_RECAP")) {
         c->item_text_colors.assign(s.recap_colors.begin(), s.recap_colors.begin() + static_cast<std::ptrdiff_t>(std::min(s.recap.size(), s.recap_colors.size())));

@@ -156,12 +156,13 @@ void App::handle_screen_actions(const std::vector<ui::ScreenAction>& acts) {
                 ui_.front.set_in_game(false);
                 open_main_menu();
                 break;
-            case K::StorySummaryGoal:  // GALACTIC_DIALOGS §2.2: a chapter chosen in the goal list -> refill with it
-                summary_chapter_ = a.button;
+            case K::StorySummaryGoal:  // GALACTIC_DIALOGS §2.2: a record chosen in the goal list -> refill with it
+                if (a.button >= 0 && static_cast<size_t>(a.button) < summary_rows_.size()) summary_entry_ = summary_rows_[static_cast<size_t>(a.button)];
                 open_story_summary();
                 break;
             case K::StorySummaryFilter:
                 summary_completed_ = a.button == 1;
+                summary_entry_ = 0;    // the tab's first row
                 open_story_summary();  // refill
                 break;
             // P4 host: both answers go through the command stream; their results come at the command phase
@@ -465,26 +466,31 @@ void App::open_battle_prompt(const galactic::GalacticSim& g, const galactic::Con
                 prompt_.right.icon.c_str());
 }
 
-// GALACTIC_DIALOGS §2.1: a Story_Dialog event's chapter goes to the mission holocron; b_story_arc_g flashes, the faction's
-// Default_Transmission_Message (TEXT_ENCYCLOPEDIA_HOLOCRON_UPDATED) is a white screen-text line and SFXEvent_Mission_Added
-// plays [port: always - no shipped event sets Story_Dialog_SFX, which the story model does not read]. Story_Dialog_Popup
-// opens the summary at once.
-void App::add_holocron_chapter(const ui::StoryDialogInfo& info, const StoryDialogMeta& meta) {
+// STORY.md §1.6 step 3 / GALACTIC_DIALOGS §2.1: a Story_Dialog event fired (its record is already in the sim's holocron
+// list). Popup false (every shipped event): b_story_arc_g flashes, the faction's Default_Transmission_Message
+// (TEXT_ENCYCLOPEDIA_HOLOCRON_UPDATED for every shipped faction [port: the port reads no faction field for it]) is a white
+// screen-text line, and SFXEvent_Mission_Added plays only when the event has Story_Dialog_SFX (no shipped event does).
+// Popup true: the summary opens at this record instead.
+void App::add_holocron_chapter(const StoryDialogMeta& meta, size_t lines) {
     HolocronChapter ch;
-    ch.title = info.title;
-    ch.lines = info.lines;
-    ch.colors = info.line_colors;
     ch.dialog = meta.dialog;
+    ch.tag = meta.tag;
     ch.chapter = meta.chapter;
+    ch.id = meta.holocron_id;
     holocron_chapters_.push_back(std::move(ch));
     ++holocron_updates_;
+    summary_entry_ = 0;  // the summary opens at the first (newest) row
+    std::printf("holocron: chapter %d of %s added (%zu lines), tag %s%s%s\n", meta.chapter, meta.dialog.c_str(), lines, meta.tag.c_str(),
+                meta.popup ? ", popup" : "", meta.sfx ? ", sfx" : "");
+    if (meta.popup) {
+        summary_completed_ = false;
+        summary_entry_ = meta.holocron_id;
+        open_story_summary();
+        return;
+    }
     holocron_flash_ = true;
-    summary_chapter_ = -1;  // the summary opens at the newest chapter
     screen_line(txt("TEXT_ENCYCLOPEDIA_HOLOCRON_UPDATED", U"The mission holocron has been updated."), ui::Rgba8{255, 255, 255, 255});
-    audio_.faction_sfx("SFXEvent_Mission_Added");
-    std::printf("holocron: chapter %d of %s added (%zu lines)%s\n", meta.chapter, meta.dialog.c_str(), holocron_chapters_.back().lines.size(),
-                meta.popup ? ", popup" : "");
-    if (meta.popup) open_story_summary();
+    if (meta.sfx) audio_.faction_sfx("SFXEvent_Mission_Added");
 }
 
 void App::update_radar() {
@@ -536,13 +542,14 @@ void App::galactic_screens() {
     holo_.sample(*g);
     std::vector<StoryMovie> movies;
     std::vector<StoryDialogMeta> meta;
-    std::vector<ui::StoryDialogInfo> dialogs = new_story_dialogs(*session_, data_, ui_.text, story_cursor_, &movies, &meta);
+    sync_story_scripts(*session_, data_, story_scripts_, story_loads_);  // GALACTIC_DIALOGS §2.8: scripts load with their plots
+    std::vector<ui::StoryDialogInfo> dialogs = new_story_dialogs(*session_, story_scripts_, ui_.text, story_cursor_, &movies, &meta);
     bool offer = false;  // a random-plot offer opened (its talking head plays in the dialog's portrait)
     for (size_t k = 0; k < dialogs.size(); ++k) {
         ui::StoryDialogInfo& i = dialogs[k];
         const StoryDialogMeta md = k < meta.size() ? meta[k] : StoryDialogMeta{};
         if (!md.random_plot) {
-            add_holocron_chapter(i, md);
+            add_holocron_chapter(md, i.lines.size());
             continue;
         }
         // ui ask 11: the talking head (MOVIE looped / MOVIE_ONCE) plays in the dialog's portrait: a GUI image page named
@@ -614,25 +621,22 @@ void App::open_holocron(ui::InfoPage page) {
     if (!info_.show_info(page)) notes_.push_back("holocron page missing");
 }
 
-// GALACTIC_DIALOGS §2.2: IDD_STORY_SUMMARY_DIALOG from the mission holocron - the goal list = the chapters' titles (Active
-// tab; [port] Completed lists none: chapter completion has no source yet), the recap = the newest chapter's body. Opening
-// stops the holocron flash and holds the ticks until it closes (the summary's galactic pause in single player).
+// GALACTIC_DIALOGS §2.2 / §2.8: IDD_STORY_SUMMARY_DIALOG from the sim's holocron list (holocron_summary): the tab's
+// records newest first, labelled by their chapter's first TEXT line, the selected record's chapter as the recap. Showing a
+// record marks it read (0x1089e0; its row dims from now on). Opening stops the holocron flash and holds the ticks until it
+// closes (the summary's galactic pause in single player).
 void App::open_story_summary() {
     if (!session_) return;
-    ui::StorySummaryInfo s;
-    s.completed = summary_completed_;
-    s.has_completed = false;
-    if (!summary_completed_ && !holocron_chapters_.empty()) {
-        for (const HolocronChapter& ch : holocron_chapters_) s.goals.push_back(ch.title.empty() ? ui::utf8_to_utf32(ch.dialog) : ch.title);
-        const size_t sel = summary_chapter_ >= 0 && static_cast<size_t>(summary_chapter_) < holocron_chapters_.size()
-                               ? static_cast<size_t>(summary_chapter_) : holocron_chapters_.size() - 1;
-        const HolocronChapter& ch = holocron_chapters_[sel];
-        s.selected = static_cast<int32_t>(sel);
-        s.title = ch.title;
-        s.recap = ch.lines;
-        s.recap_colors = ch.colors;
-    }
-    if (!info_.show_story_summary(s)) {
+    sync_story_scripts(*session_, data_, story_scripts_, story_loads_);
+    HolocronSummaryView v = holocron_summary(*session_, story_scripts_, ui_.text, summary_completed_, summary_entry_);
+    summary_rows_ = std::move(v.row_ids);
+    if (v.info.selected >= 0 && static_cast<size_t>(v.info.selected) < summary_rows_.size())
+        summary_entry_ = summary_rows_[static_cast<size_t>(v.info.selected)];
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (v.selected_index != SIZE_MAX)
+        if (sim::StorySession* story = session_->host().story()) story->mark_holocron_read(v.selected_index);
+#endif
+    if (!info_.show_story_summary(v.info)) {
         notes_.push_back("story summary dialog missing");
         return;
     }

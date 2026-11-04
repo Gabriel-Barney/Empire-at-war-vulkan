@@ -1,6 +1,9 @@
 #include "alamo/ai/ai_budget.hpp"
 
 #include <algorithm>
+#include <cmath>
+
+#include "alamo/ai/ai_types.hpp"
 
 #include "alamo/core/sim_crc.hpp"
 
@@ -59,6 +62,22 @@ void AiBudget::reweight(std::span<const float> raw) {
             e.readd = true;
         }
     }
+}
+
+void AiBudget::weigh(std::span<const float> raw, std::span<const uint8_t> member) {
+    auto in = [&](size_t i) { return i < member.size() && member[i] != 0; };
+    float sum = 0.0f;
+    uint32_t count = 0;
+    for (size_t i = 0; i < cat_.size(); ++i) {
+        const float w = in(i) && i < raw.size() && raw[i] > 0.0f ? raw[i] : 0.0f;  // negatives become 0
+        cat_[i].weight = w;
+        sum += w;
+        count += in(i) ? 1u : 0u;
+    }
+    if (count == 0) return;
+    for (size_t i = 0; i < cat_.size(); ++i)
+        if (in(i)) cat_[i].weight = sum != 0.0f ? cat_[i].weight / sum : 1.0f / static_cast<float>(count);
+    init_ = true;
 }
 
 void AiBudget::tick(float income, float period, float credits) {
@@ -262,6 +281,34 @@ void AiBudget::hash(StateHasher& h) const {
     h.f32(period_);
     h.f32(refund_);
     h.boolean(reset_);
+}
+
+int32_t ai_budget_key(std::span<const Param> params, const std::function<int64_t(std::string_view)>& goal_category,
+                      const std::function<uint64_t(std::string_view)>& object_category) {
+    const auto low32 = [](int64_t v) { return static_cast<int32_t>(static_cast<uint32_t>(static_cast<uint64_t>(v))); };
+    const auto goal = [&](std::string_view n) -> int64_t { return goal_category ? goal_category(n) : -1; };
+    for (const Param& p : params) {
+        if (!ai_iequal(p.name, "Parameter_Category")) continue;
+        switch (p.value.kind) {
+            case ParamValue::Kind::Number:
+                return std::fabs(p.value.number) < 9.0e18 ? low32(static_cast<int64_t>(p.value.number)) : -1;
+            case ParamValue::Kind::Enum: {
+                const bool goal_enum = ai_iequal(p.value.text, "AIGoalCategoryType");
+                int64_t v = 0;
+                for (const std::string& n : p.value.enum_values) {
+                    const int64_t x = goal_enum ? goal(n) : static_cast<int64_t>(object_category ? object_category(n) : uint64_t{0});
+                    if (goal_enum && x < 0) return -1;
+                    v |= x;
+                }
+                return low32(v);
+            }
+            default: {
+                const int64_t x = goal(p.value.text);
+                return x < 0 ? -1 : low32(x);
+            }
+        }
+    }
+    return -1;
 }
 
 }  // namespace alamo::ai

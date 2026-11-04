@@ -383,6 +383,10 @@ uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, 
                 def.story_chapter = parse_int(text, -1);
             } else if (iequal(tag, "Story_Dialog_Popup")) {
                 def.story_dialog_popup = iequal(text, "true") || iequal(text, "yes") || text == "1";
+            } else if (iequal(tag, "Story_Dialog_SFX")) {  // STORY.md §1.6 (+0x2B9); no shipped event sets it
+                def.story_dialog_sfx = iequal(text, "true") || iequal(text, "yes") || text == "1";
+            } else if (iequal(tag, "Story_Var")) {  // +0x258: the printf argument of the chapter's TEXT lines
+                def.story_var = std::string(text);
             } else if (iequal(tag, "Reward_Param_List")) {
                 for (std::string& n : name_list(text)) def.reward_param_list.push_back(std::move(n));
             } else if (const uint32_t i = param_index(tag, "Event_Param")) {
@@ -397,6 +401,7 @@ uint32_t StoryModel::add_plot(std::string_view plot_name, std::string_view xml, 
             continue;
         }
         def.has_prereq_tags = !pre.empty();
+        request_dialog_load(def.story_dialog);  // GALACTIC_DIALOGS §2.8: the dialog script loads with its plot (0x4562a0)
         const std::string key = upper(def.name);
         if (!plot.by_name.emplace(key, static_cast<uint32_t>(plot.events.size())).second) {
             warnings_.push_back(plot.name + ": duplicate event " + def.name + " (only the first is in the table)");
@@ -665,10 +670,25 @@ bool StoryModel::fire(uint32_t p, uint32_t e, bool forced) {
         st.last_fire_frame = frame_;
     }
     apply_reward(p, e);
-    // Step 6: story dialog / chapter (recorded for the UI, STORY.md 7.7).
-    if (const StoryEventDef& def = plots_[p].events[e]; !def.story_dialog.empty() || !def.story_tag.empty())
-        dialog_log_.push_back(StoryDialogEntry{frame_, p, e, def.story_dialog, def.story_tag, def.story_chapter,
-                                               def.story_dialog_popup});
+    // Step 6 (STORY.md §1.6), only with a Story_Dialog: the tag (Story_Tag, else "<dialog>_<chapter>" + the auto-tag flag),
+    // a holocron record that references this event's Add_Dialog_Text list, and the presentation record for the UI.
+    if (const StoryEventDef& def = plots_[p].events[e]; !def.story_dialog.empty()) {
+        StoryHolocronEntry h;
+        h.dialog = def.story_dialog;
+        h.var = def.story_var;
+        h.chapter = def.story_chapter;
+        h.auto_tag = def.story_tag.empty();
+        h.tag = h.auto_tag ? def.story_dialog + "_" + std::to_string(def.story_chapter) : def.story_tag;
+        h.frame = frame_;
+        h.model = this;
+        h.plot = p;
+        h.event = e;
+        StoryDialogEntry d{frame_, p, e, def.story_dialog, h.tag, def.story_chapter, def.story_dialog_popup,
+                           def.story_dialog_sfx, 0, plots_[p].name};
+        d.holocron_id = holocron_->add(std::move(h));
+        dialog_log_.push_back(d);
+        holocron_->push_log(std::move(d));
+    }
     // Dependants (copy: rewards never change definitions, but stay safe).
     const std::vector<uint32_t> deps = plots_[p].events[e].dependants;
     for (const uint32_t d : deps) {
@@ -789,6 +809,10 @@ void StoryModel::apply_reward(uint32_t p, uint32_t e) {
         } else if (const uint32_t q = find_plot(p1 + ".xml"); q != kNone) {
             set_plot_active(q, true);
         }
+    } else if (type == "REMOVE_STORY_GOAL") {  // 0x2C (0x47eea0): the newest holocron record with tag P1 goes
+        holocron_->remove_tag(p1);
+    } else if (type == "STORY_GOAL_COMPLETED") {  // 0x38 (0x47f5b0): ... is marked completed (the Completed tab)
+        holocron_->complete_tag(p1);
     } else if (on_reward) {
         on_reward(p, e, type, rp);
     }
@@ -1693,7 +1717,130 @@ bool StoryModel::read(ByteReader& r) {
     ai_flags_ = std::move(ai_flags);
     plots_ = std::move(plots);
     fired_ = std::move(fired);
+    // GALACTIC_DIALOGS §2.8: the holocron's load reader loads the dialog scripts again; the plot load already asked for the
+    // XML names, so only the Lua-set ones (Set_Dialog) are asked for here.
+    for (const StoryPlot& plot : plots_)
+        for (size_t i = 0; i < plot.events.size(); ++i)
+            if (plot.state[i].lua_edits) request_dialog_load(plot.events[i].story_dialog);
     return true;
+}
+
+// ------------------------------------------------------------------------------------------ holocron (GALACTIC_DIALOGS §2.8)
+
+uint64_t StoryHolocron::add(StoryHolocronEntry e) {
+    e.id = next_id_++;
+    const uint64_t id = e.id;
+    entries_.insert(entries_.begin(), std::move(e));  // newest first, no de-duplication
+    return id;
+}
+
+bool StoryHolocron::remove_tag(std::string_view tag) {
+    for (size_t i = 0; i < entries_.size(); ++i)
+        if (entries_[i].tag == tag) {
+            entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(i));
+            return true;
+        }
+    return false;
+}
+
+bool StoryHolocron::complete_tag(std::string_view tag) {
+    for (StoryHolocronEntry& e : entries_)
+        if (e.tag == tag) {
+            e.completed = true;
+            return true;
+        }
+    return false;
+}
+
+void StoryHolocron::mark_read(size_t index) {
+    if (index < entries_.size()) entries_[index].read = true;
+}
+
+size_t StoryHolocron::index_of(uint64_t id) const {
+    for (size_t i = 0; i < entries_.size(); ++i)
+        if (entries_[i].id == id) return i;
+    return SIZE_MAX;
+}
+
+const std::vector<std::string>& StoryHolocron::lines(const StoryHolocronEntry& e) const {
+    if (e.model && e.plot < e.model->plot_count() && e.event < e.model->plot(e.plot).events.size())
+        return e.model->plot(e.plot).events[e.event].dialog;
+    return e.detached_lines;
+}
+
+void StoryHolocron::detach(const StoryModel* model) {
+    for (StoryHolocronEntry& e : entries_)
+        if (e.model == model) {
+            e.detached_lines = lines(e);
+            e.model = nullptr;
+            e.ref_set = -1;
+        }
+}
+
+void StoryHolocron::clear() {
+    entries_.clear();
+    log_.clear();
+    next_id_ = 1;
+}
+
+namespace {
+constexpr uint32_t kHolocronVersion = 1;
+}  // namespace
+
+// Layout: u32 version, u64 next id, u32 count, per record (list order, newest first): id, dialog, var, tag, chapter, frame,
+// flags (completed, read, auto-tag), the reference (i32 set number, -1 = none; plot, event) and, without one, the lines.
+void StoryHolocron::write(ByteWriter& w, const std::function<int32_t(const StoryModel*)>& set_of) const {
+    w.u32(kHolocronVersion);
+    w.u64(next_id_);
+    w.u32(static_cast<uint32_t>(entries_.size()));
+    for (const StoryHolocronEntry& e : entries_) {
+        w.u64(e.id);
+        put_str(w, e.dialog);
+        put_str(w, e.var);
+        put_str(w, e.tag);
+        w.i32(e.chapter);
+        w.u32(e.frame);
+        w.u8(e.completed ? 1 : 0);
+        w.u8(e.read ? 1 : 0);
+        w.u8(e.auto_tag ? 1 : 0);
+        const int32_t set = e.model && set_of ? set_of(e.model) : (e.model ? -1 : e.ref_set);
+        w.i32(set);
+        w.u32(e.plot);
+        w.u32(e.event);
+        if (set < 0) put_strs(w, lines(e));
+    }
+}
+
+bool StoryHolocron::read(ByteReader& r) {
+    if (r.u32() != kHolocronVersion || !r.ok()) return false;
+    const uint64_t next = r.u64();
+    uint32_t n = 0;
+    if (!get_count(r, n)) return false;
+    std::vector<StoryHolocronEntry> entries(n);
+    for (StoryHolocronEntry& e : entries) {
+        e.id = r.u64();
+        if (!get_str(r, e.dialog) || !get_str(r, e.var) || !get_str(r, e.tag)) return false;
+        e.chapter = r.i32();
+        e.frame = r.u32();
+        e.completed = get_bool(r);
+        e.read = get_bool(r);
+        e.auto_tag = get_bool(r);
+        e.ref_set = r.i32();
+        e.plot = r.u32();
+        e.event = r.u32();
+        if (e.ref_set < 0 && !get_strs(r, e.detached_lines)) return false;
+        if (!r.ok()) return false;
+    }
+    entries_ = std::move(entries);
+    log_.clear();
+    next_id_ = next;
+    return true;
+}
+
+void StoryHolocron::relink(int32_t set, const StoryModel* model) {
+    for (StoryHolocronEntry& e : entries_)
+        if (e.ref_set == set && set >= 0 && model && e.plot < model->plot_count() && e.event < model->plot(e.plot).events.size())
+            e.model = model;
 }
 
 }  // namespace alamo::lua

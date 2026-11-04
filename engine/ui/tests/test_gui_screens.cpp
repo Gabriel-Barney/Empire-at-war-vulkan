@@ -123,7 +123,11 @@ void test_real_data() {
             ss.recap_colors = {Rgba8{255, 255, 255, 176}, Rgba8{255, 24, 39, 255}};
             ss.title = U"Incoming Transmission from Darth Vader";
             ss.has_completed = false;
+            ss.goal_colors = {Rgba8{128, 128, 255, 255}, Rgba8{84, 84, 168, 255}};  // q6 t14: per-row colours (read: x 0.66)
             CHECK(is.show_story_summary(ss));
+            if (const GuiDialog* sd = gui.find(dlg::kStorySummary))
+                if (const GuiControl* gl = sd->get("IDC_GOAL_LIST"))
+                    CHECK(gl->item_text_colors.size() == 2 && gl->item_text_colors[1].r == 84 && gl->item_text_colors[1].b == 168);
             const GuiDialog* d = gui.find(dlg::kStorySummary);
             CHECK(d != nullptr);
             if (d) {
