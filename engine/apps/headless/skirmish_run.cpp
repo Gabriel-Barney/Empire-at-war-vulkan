@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -660,6 +661,41 @@ std::string battle_state_text(uint64_t tick, sim::SimHost& host, const galactic:
         for (const auto& [k, c] : n) out += k + "x" + std::to_string(c) + " ";
         out += "}";
     }
+    // q6: the land-victory blockers (DUMMY_LAND_BASE_LEVEL_COMPONENT objects of the slot players): id, type, hull, shield,
+    // the enemy units that have it as their current target and the nearest enemy battle unit's distance.
+    static const objects::BehaviorTypeId kLandBaseBeh = objects::behavior_type_id("DUMMY_LAND_BASE_LEVEL_COMPONENT");
+    if (kLandBaseBeh != objects::kNoBehavior) {
+        const auto& c = tb.combat();
+        out += "\n  combat shots " + std::to_string(c.stats().shots) + " hits " + std::to_string(c.stats().hits) + " expired " +
+               std::to_string(c.stats().expired) + "\n  bases:";
+        for (const objects::ObjectHandle h : st.all_objects()) {
+            if (!st.active(h) || !st.has_behavior(h, kLandBaseBeh) || st.owner(h) < 0 || st.owner(h) > 1 || st.type(h) >= types.size()) continue;
+            const objects::ObjectId id = st.id(h);
+            const auto p = st.position(h);
+            uint32_t attackers = 0, in_range = 0, firing = 0;
+            float nearest = -1.0f;
+            for (const objects::ObjectHandle e : st.owned_by(1 - st.owner(h))) {
+                if (!st.active(e) || !c.has_unit(st.id(e))) continue;
+                if (c.current_target(st.id(e)) == id) {
+                    ++attackers;
+                    const auto q = st.position(e);
+                    const float d = std::sqrt((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y));
+                    if (d <= c.base_attack_range_of(st.id(e))) ++in_range;
+                    if (c.attacking(st.id(e))) ++firing;
+                }
+                if (!st.has_behavior(e, objects::beh::Locomotor)) continue;
+                const auto q = st.position(e);
+                const float d = std::sqrt((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y));
+                if (nearest < 0.0f || d < nearest) nearest = d;
+            }
+            char b2[256];
+            std::snprintf(b2, sizeof b2, " %u:%s/p%d hull %.0f/%.0f shield %.0f attackers %u (in range %u, attacking %u) nearest %.0f",
+                          static_cast<unsigned>(id), std::string(types.raw().types().name[st.type(h)]).c_str(), st.owner(h),
+                          static_cast<double>(c.has_unit(id) ? c.health(id) : -1.0f), static_cast<double>(c.has_unit(id) ? c.max_health(id) : -1.0f),
+                          static_cast<double>(c.has_unit(id) ? c.shield(id) : -1.0f), attackers, in_range, firing, static_cast<double>(nearest));
+            out += b2;
+        }
+    }
     return out + "\n";
 }
 
@@ -822,6 +858,9 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         std::vector<std::string> error_list;
         std::string state_text;  // skai: --ai-log state lines
         std::string script_state;  // q6: --object-scripts, the battle's last state line (units per player)
+        // q6: --ai-log diagnostics, damage taken by the slot players' DUMMY_LAND_BASE_LEVEL_COMPONENT objects since the last
+        // state line, per victim and source type (never hashed, no sim reads).
+        std::map<std::pair<objects::ObjectId, std::string>, std::pair<uint32_t, double>> base_damage;
         bool credits_set = !s.map_host;
         for (; t < max_ticks; ++t) {
             host.tick_once();
@@ -844,7 +883,33 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                 pads = bs.skirmish_pads;
                 structures = bs.pad_builds;
                 shots = static_cast<unsigned long>(bs.shots);
-                if (!ai_log.empty() && (bs.frames == 1 || bs.frames % 600 == 0)) state_text += battle_state_text(t + 1, host, *gs, *tb);
+                if (!ai_log.empty())
+                    if (sim::TacticalMode* tmode = host.tactical()) {
+                        static const objects::BehaviorTypeId kLandBaseDmg = objects::behavior_type_id("DUMMY_LAND_BASE_LEVEL_COMPONENT");
+                        const objects::ObjectStore& bst = tmode->primary();
+                        for (const auto& e : tb->combat().damage_events()) {
+                            const objects::ObjectHandle vh = bst.find(e.victim);
+                            if (!bst.exists(vh) || !bst.has_behavior(vh, kLandBaseDmg)) continue;
+                            const objects::ObjectHandle sh = bst.find(e.source);
+                            const std::string src = bst.exists(sh) && bst.type(sh) < tmode->types().size()
+                                                        ? std::string(tmode->types().raw().types().name[bst.type(sh)])
+                                                        : std::string("?");
+                            auto& acc = base_damage[{e.victim, src + "/k" + std::to_string(e.kind)}];
+                            ++acc.first;
+                            acc.second += static_cast<double>(e.hull_lost + e.absorbed);
+                        }
+                    }
+                if (!ai_log.empty() && (bs.frames == 1 || bs.frames % 600 == 0)) {
+                    state_text += battle_state_text(t + 1, host, *gs, *tb);
+                    if (!base_damage.empty()) {
+                        state_text += "  base damage:";
+                        for (const auto& [k, v] : base_damage)
+                            state_text += " " + std::to_string(k.first) + "<-" + k.second + " x" + std::to_string(v.first) + " = " +
+                                          std::to_string(static_cast<int>(v.second));
+                        state_text += "\n";
+                        base_damage.clear();
+                    }
+                }
                 if (opt.object_scripts && (bs.frames == 1 || bs.frames % 600 == 0)) script_state = battle_state_text(t + 1, host, *gs, *tb);
             }
             if (battles.battles_fought() > 0 && !battles.battle() && host.modes().depth() == 1) {

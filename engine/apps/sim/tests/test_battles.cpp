@@ -2743,6 +2743,13 @@ void test_land_drop_rules() {
         const std::vector<FreePlacementBox> all = {{-5000.0f, -5000.0f, 5000.0f, 5000.0f}};
         CHECK(!find_free_placement(100.0f, 50.0f, box, all, 2500.0f, qx, qy));
         CHECK(!find_free_placement(0.0f, 0.0f, FreePlacementBox{}, all, 2500.0f, qx, qy));  // zero step: r = 0 only
+        // q6 (OBJECT_SCRIPTS §10.4): Spawn_Unit's start angle (yaw - 45) and the land cell test.
+        bl.resize(1);
+        CHECK(find_free_placement(100.0f, 50.0f, box, bl, 2500.0f, qx, qy, 90.0f));  // ring 1 starts at 90 degrees
+        CHECK(std::fabs(qx - 100.0f) < 1e-2f && std::fabs(qy - 74.0f) < 1e-2f);
+        auto east_only = [](float x, float) { return x > 130.0f; };  // ring 1 (x <= 124) refused: ring 2, angle 0
+        CHECK(find_free_placement(100.0f, 50.0f, box, {}, 2500.0f, qx, qy, 0.0f, east_only));
+        CHECK(std::fabs(qx - 148.0f) < 1e-3f && std::fabs(qy - 50.0f) < 1e-3f);
     }
     std::printf("  land drop rules: OK\n");
 }

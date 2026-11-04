@@ -122,6 +122,16 @@ struct ScriptObjectState {
     std::map<uint8_t, AbilityState> abilities;  // by UnitAbilityType id (OBJECT_TYPES.md §9.1.4)
 };
 
+// q6 (OBJECT_SCRIPTS §10.1): the outcome of Prevent_AI_Usage on the owner's AI free store. The warnings log and go on; the
+// errors end the script after its pass.
+enum class PreventAiResult : uint8_t {
+    Done = 0,
+    NoAiPlayer,      // warning "No AI Player active on the owner of this object." (a human or AI-less owner: no effect)
+    NoAiPresence,    // error: the owner's AI has no presence in this mode
+    NotInitialised,  // error: the owner's AI is not initialised yet
+    NoFreeStore,     // warning "No freestore exists for this AI Player."
+};
+
 // Reinforce_Unit(type, location | false, player [, ignore_rules [, obey_zones]]) as the host sees it.
 struct ReinforceRequest {
     uint32_t id = 0;                                  // the request's BlockingStatus id
@@ -200,6 +210,19 @@ public:
     // combat Take_Damage with kind 0, TacticalBattle::script_damage); `cannot_die` = the object's Set_Cannot_Be_Killed.
     // True = applied by the host (the death, if any, processed there); false or unset: the store-only health change.
     std::function<bool(objects::ObjectHandle unit, float amount, bool cannot_die)> take_damage;
+    // q6 (OBJECT_SCRIPTS §10.2): Make_Invulnerable(on), called after ScriptObjectState::invulnerable is stored: the host's
+    // INVULNERABLE behaviour (a tactical battle: the combat gate that drops every damage kind but 0 and 13; a TEAM
+    // container passes it to its members). Unset: only the flag is stored.
+    std::function<void(objects::ObjectHandle, bool on)> invulnerable_changed;
+    // q6 (OBJECT_SCRIPTS §10.1): Prevent_AI_Usage(on) on the owner's AI free store of the current mode (true: removed,
+    // false: admitted by the normal rules); no object flag. Returns the outcome; unset: only the flag is stored.
+    std::function<PreventAiResult(objects::ObjectHandle, bool on)> prevent_ai_usage;
+    // q6 (OBJECT_SCRIPTS §10.3): whether the object has a model in this mode (decided from the type's model name, never from
+    // loaded art); Hide on an object without one is a script error. Unset: every object has one.
+    std::function<bool(objects::ObjectHandle)> has_model;
+    // q6 (OBJECT_SCRIPTS §10.4 step 2): Spawn_Unit's facing for a point in this mode (a tactical battle: toward the map
+    // origin). Unset: the location object's facing, else +X.
+    std::function<Vec3(Vec3 position)> spawn_facing;
     // refixf t03: the representative type 0x3973b0 (docs/re/LUA_API.md "Find_All_Objects_Of_Type and the sibling
     // finders"; A1_READINGS §29) that Find_All_Objects_Of_Type and Find_Nearest match on: a team container -> the
     // company's Create_Team_Type, else the company type; a transport -> its company type; a squadron fleet -> its

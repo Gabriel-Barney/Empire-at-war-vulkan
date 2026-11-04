@@ -215,6 +215,14 @@ public:
     void units_removed() override { a_->units_removed(); }
     // OI abilities: detonation effects / land stuns (TACTICAL_GAPS §1.10)
     void unit_effect(tc::ObjectId id, tc::UnitEffect e, int32_t player, tactical::Vec3 p, uint32_t frame) override {
+        // q6 (OBJECT_SCRIPTS §10.2): the Invulnerability ability adds its frames to the one INVULNERABLE behaviour, so a
+        // script-invulnerable unit (Make_Invulnerable(true): duration 0, kUnitInvulnerable) it hits is invulnerable for
+        // the ability's frames only and loses it when they run out. [port] the timed form stands for the behaviour from
+        // here; the Skip_Targeting stand-in targets (kUnitInvulnerable too) are never script objects and are left alone.
+        if (e == tc::UnitEffect::Invulnerable && b_->combat_) {
+            const uint32_t f = b_->combat_->flags(id);
+            if ((f & tc::kUnitInvulnerable) && !(f & tc::kUnitSkipTargeting)) b_->combat_->set_flag(id, tc::kUnitInvulnerable, false);
+        }
         a_->unit_effect(id, e, player, p, frame);
     }
     // --- fog follow-up: S8 targeting filter step 4 / special-weapon force 1 (read-only: parallel gather phase) ---
@@ -469,6 +477,20 @@ const BattleTables::UnitVisuals* TacticalBattle::visuals_of_type(uint32_t type) 
 TacticalBattle::Unit* TacticalBattle::unit_by_id(objects::ObjectId id) {
     const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
     return (it == units_.end() || it->id != id) ? nullptr : &*it;
+}
+
+bool TacticalBattle::select_all_entry(objects::ObjectId id, int32_t owner, std::vector<objects::ObjectId>& members) const {
+    if (owner >= 0 && owner == retreating_player()) return false;  // the retreat coordinator's list [port: the whole side]
+    if (garrison_holder_of(id) != objects::kNoObjectId) return false;  // garrisoned: parent = the host
+    const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
+    if (it != units_.end() && it->id == id && it->container != kNoContainer) return false;  // a TEAM member
+    for (size_t ci = 0; ci < containers_.size(); ++ci) {
+        if (containers_[ci].id != id || !containers_[ci].team) continue;
+        for (const Unit& u : units_)
+            if (u.container == ci && u.alive && !u.retreated) members.push_back(u.id);
+        break;
+    }
+    return true;
 }
 
 // FIGHTER_FLYING §6.3.1 type data: Uses_Multiple_Locomotors (+0x74), Stationary_Space_Layer (+0x16e0), the query
@@ -2095,15 +2117,15 @@ void TacticalBattle::landing_service(TacticalMode& mode, SimRng& rng) {
 }
 
 bool find_free_placement(float px, float py, const FreePlacementBox& local, std::span<const FreePlacementBox> blockers, float radius,
-                         float& out_x, float& out_y) {
+                         float& out_x, float& out_y, float start_deg, const std::function<bool(float x, float y)>& accept) {
     const float step = 1.2f * std::max(std::fabs(local.max_x - local.min_x), std::fabs(local.max_y - local.min_y));
     for (float r = 0.0f; r < radius; r += step) {
         for (int32_t k = 0; k <= 16; ++k) {
             float sn = 0.0f, cs = 1.0f;
-            dmath::sincos(static_cast<float>(k) * 22.5f * (dmath::kPiF / 180.0f), sn, cs);
+            dmath::sincos((start_deg + static_cast<float>(k) * 22.5f) * (dmath::kPiF / 180.0f), sn, cs);
             const float qx = px + r * cs, qy = py + r * sn;
             const FreePlacementBox q{qx + local.min_x, qy + local.min_y, qx + local.max_x, qy + local.max_y};
-            bool blocked = false;
+            bool blocked = accept && !accept(qx, qy);
             for (const FreePlacementBox& o : blockers)
                 if (q.min_x < o.max_x && o.min_x < q.max_x && q.min_y < o.max_y && o.min_y < q.max_y) {
                     blocked = true;
