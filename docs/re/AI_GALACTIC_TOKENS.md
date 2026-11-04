@@ -769,6 +769,14 @@ switch.
 - Rule: membership = every category listed by any template applied since the start, in first-insertion order, never
   removed; weight them with the tactical `weigh(raw, member)` rule; set `reset_` on every template apply and on every
   reset.
+- Port status (q6 contrast/budget, 2026-11-04): done. `AiBudget` keeps a member list (`add_member`, first-insertion order,
+  never removed; saved, budget save version 2) and init / reweight / tick / Σ P walk it; weights use the shared
+  `normalise_over` rule (also behind the tactical `weigh`). `TemplateSystem::last_applied()` / `last_removed()` report
+  what the last template pass did; `PlayerAi::apply_template_budget` inserts each applied template's `<Budget>` then
+  `Tactical_Budget_Allowance` categories [M: the order of the two lists] and sets the reset flag for an apply with
+  entries or any removal; a member without an equation weighs 0. Not changed: a goal of a non-member category is
+  accepted by `add_goal` but never accrued (the original would crash, [M]); `category_order` (Resolve_Category order)
+  still sorts every category by weight.
 
 ### 9.6 The contrast totals read live values (fog off), cached for 15 s [H unless tagged]
 
@@ -792,6 +800,11 @@ switch.
 - To match: cache the leaf part per (player, planet, mask, layer) with the frame stamp, lifetime 15 s and the stamp-0
   rule (AI_TACTICAL_PERCEPTION §1.2), and add the structure terms live.
 - No remembered (fogged) values are needed with shipped data.
+- Port status (q6 contrast/budget, 2026-11-04): not implemented; `galactic_ai_enemy_strength` still computes the leaf
+  live. The cache key is [M] (open item 6: what the binding-set hash 0x5f3e60 covers, and whether these Self + Target +
+  `Parameter_Category` entries are separate from the equations' entries, which the port's resolver cache keys with
+  Enemy / Human too), and the fogged leaf's signal-0xE recompute of all cached entries fires on visibility events whose
+  galactic cadence is not traced. Implement once both are [H].
 
 ### 9.7 A structure or starbase type with category mask 0 adds nothing to the contrast totals [H]
 
@@ -902,3 +915,10 @@ Read again: 0x6c5de0 (requirement), 0x5f1990 (list), 0x72ac70 / 0x6bff00 (satisf
 - Typed-row scale: `(double)max + (double)(float)(f * pfca)`, times the multiplier as double.
 - Optional, rounding only: compute 0x72ac70 in float.
 - After the item 1 fix, re-measure TR AI-only (Thrawn_Empire, 4000 ticks) before tuning anything else.
+- Port status (q6 contrast/budget, 2026-11-04): items 1-4 done (`galactic_contrast_total_open`, `galactic_contrast_gate`,
+  `galactic_contrast_scale`, `galactic_contrast_layer_satisfied` in `galactic_ai_tokens.hpp`; `PpRec` / PP layer
+  comments corrected). `escort_met` stays `main_met` (the port has one requirement list; whether 0x140b3a529 is always
+  set in galactic is [M]). TR Thrawn_Empire 4000 ticks, AI-only: decisions / orders / conflicts / owner changes 269 /
+  113 / 33 / 2 before, 413 / 237 / 66 / 3 after (item 1 alone 602 / 407 / 158 / 3, item 2 alone 332 / 105 / 25 / 2,
+  item 3-4 rounding alone and the §9.5 budget alone: no change); `fail Contrast` proposals 166 -> 80. With
+  `--human Empire`: 225 / 72 / 30 / 0 -> 586 / 403 / 85 / 0, `fail Contrast` 12 -> 2.

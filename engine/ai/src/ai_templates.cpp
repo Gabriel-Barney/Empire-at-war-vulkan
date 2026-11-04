@@ -56,11 +56,15 @@ void TemplateSystem::first_service(const Evaluator& eval) {
     if (!templates_.empty()) active_.push_back(templates_[0]);
     for (size_t i = 1; i < templates_.size(); ++i)
         if (!is_active(templates_[i]) && triggers(templates_[i], eval)) active_.push_back(templates_[i]);
+    last_applied_ = active_;
+    last_removed_ = false;
     recompute();
     changed_ = true;
 }
 
 void TemplateSystem::service(const Evaluator& eval) {
+    last_applied_.clear();
+    last_removed_ = false;
     if (templates_.empty()) return;
     bool added = false, removed = false;
     const uint32_t n = static_cast<uint32_t>(templates_.size());
@@ -69,6 +73,7 @@ void TemplateSystem::service(const Evaluator& eval) {
         cursor_ = (cursor_ + 1) % n;
         if (!is_active(t) && triggers(t, eval)) {
             active_.push_back(t);
+            last_applied_.push_back(t);
             added = true;
         }
     }
@@ -81,6 +86,7 @@ void TemplateSystem::service(const Evaluator& eval) {
             ++i;
         }
     }
+    last_removed_ = removed;
     if (added || removed) {
         recompute();
         changed_ = true;

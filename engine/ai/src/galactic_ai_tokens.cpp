@@ -174,6 +174,39 @@ std::vector<GalacticContrastEntry> galactic_ai_contrast_list(const gal::Galactic
     return out;
 }
 
+double galactic_contrast_scale(float max_contrast_scale, float failure_adjust, float multiplier) {
+    // 0x5f1990 (AI_GALACTIC_TOKENS §9.8 item 3) [H]: both terms widened before the add, then x the multiplier as double.
+    return (static_cast<double>(max_contrast_scale) + static_cast<double>(failure_adjust)) * static_cast<double>(multiplier);
+}
+
+bool galactic_contrast_layer_satisfied(std::span<const GalacticContrastEntry> entries, std::span<const double> remaining,
+                                       bool space, float tolerance) {
+    // 0x72ac70 (§9.8 item 4) [H], in float, over the layer's typed entries (row >= 0) in list order.
+    float total = 0.0f;
+    for (const GalacticContrastEntry& e : entries)
+        if (e.row >= 0 && e.space == space) total += static_cast<float>(e.target);
+    float residual = 0.0f;
+    for (size_t i = 0; i < entries.size() && i < remaining.size(); ++i) {
+        const GalacticContrastEntry& e = entries[i];
+        if (e.row < 0 || e.space != space) continue;
+        const auto t = static_cast<float>(e.target), r = static_cast<float>(remaining[i]);
+        if (!(t > 0.0f && r > 0.0f)) continue;
+        residual += (r / t) * (t / total);
+    }
+    return residual <= tolerance;
+}
+
+bool galactic_contrast_total_open(std::span<const GalacticContrastEntry> entries, std::span<const double> remaining,
+                                  bool covers_space, bool covers_ground) {
+    // 0x72b940 (§9.8 item 1) [H]: the key-0 entries by their layer byte (byte 1 ground -> rec+0x90, byte 0 space -> +0x91).
+    for (size_t i = 0; i < entries.size() && i < remaining.size(); ++i) {
+        const GalacticContrastEntry& e = entries[i];
+        if (e.row >= 0) continue;
+        if ((e.space ? covers_space : covers_ground) && remaining[i] > 0.0) return true;
+    }
+    return false;
+}
+
 namespace {
 
 constexpr double kNever = 1.0e18;              // TimeSince* of an event that never happened [H]

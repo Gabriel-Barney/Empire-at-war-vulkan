@@ -591,6 +591,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     void budget_add(Goal& g) override;
     void budget_release(Goal& g) override;
     void budget_weights() override;
+    void apply_template_budget();  // §9.5 members + reset flag after a template pass
     std::vector<int32_t> category_order() override;
     void queue_production(Goal& g) override;
     void instantiate(Goal& g) override { g.running = w->instantiate(*this, g); }

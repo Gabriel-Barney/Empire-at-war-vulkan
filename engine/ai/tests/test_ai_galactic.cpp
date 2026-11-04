@@ -767,16 +767,21 @@ static void test_definitions_and_templates() {
     t.first_service(eval);
     CHECK(t.goal_value(cq) == 1 && t.goal_value(2) == 1 && t.goal_value(3) == -1);
     CHECK(t.budget_equation(d.find_category("Offensive")) == "Offensive_Budget");
+    CHECK(t.last_applied().size() == 1 && t.last_applied()[0] == 0u && !t.last_removed());  // the base (§9.5 inserts)
     rich = true;
     t.service(eval);  // count = 1: one template checked per frame (cursor: base)
+    CHECK(t.last_applied().empty() && !t.last_removed());
     t.service(eval);  // Syn_Rich
     CHECK(t.active().size() == 2 && t.goal_value(2) == -3 && t.goal_value(cq) == 1);
+    CHECK(t.last_applied().size() == 1 && t.last_applied()[0] == 1u && !t.last_removed());
     rich = false;
     t.service(eval);
     CHECK(t.active().size() == 1 && t.goal_value(2) == 1);
+    CHECK(t.last_applied().empty() && t.last_removed());  // 0x612ac0: the budget's reset flag
     // Budget (AI_GALACTIC_2 §3): init, add goal, tick (asymmetric branch, drift), reweight, can fund, release.
     AiBudget b;
     b.reset(3);
+    for (const int32_t c : {0, 1, 2}) CHECK(b.add_member(c));  // §9.5: the members, insertion order
     const float raw[] = {3.0f, -1.0f, 1.0f};
     b.init(raw, 1000.0f);
     CHECK(b.weight(0) == 0.75f && b.weight(1) == 0.0f && b.weight(2) == 0.25f);
@@ -804,6 +809,76 @@ static void test_definitions_and_templates() {
     const float zero[] = {0.0f, 0.0f, 0.0f};
     b.reweight(zero);
     CHECK(std::fabs(b.weight(1) - 1.0f / 3.0f) < 1e-7f);
+}
+
+// AI_GALACTIC_TOKENS §9.5 [H]: the galactic budget holds only the categories the applied templates listed, in insertion
+// order, never removed; a member without an equation weighs 0 but counts (Σ = 0 -> 1 / members, not 1 / categories); the
+// reset flag makes the next income tick re-split every pool to credits x w; a non-member keeps its zeros.
+static void test_budget_membership() {
+    AiBudget b;
+    b.reset(5);
+    CHECK(b.add_member(3) && b.add_member(1) && !b.add_member(3) && !b.add_member(7) && !b.add_member(-1));
+    CHECK(b.members().size() == 2 && b.members()[0] == 3 && b.members()[1] == 1 && b.is_member(1) && !b.is_member(0));
+    b.mark_reset();
+    const float raw[] = {9.0f, 2.0f, 9.0f, 6.0f, 9.0f};  // only members 3 and 1 are read
+    b.init(raw, 1000.0f);
+    CHECK(!b.reset_pending());  // Init clears the flag set by the inserts before it
+    CHECK(b.weight(3) == 0.75f && b.weight(1) == 0.25f && b.weight(0) == 0.0f && b.weight(2) == 0.0f && b.weight(4) == 0.0f);
+    CHECK(b.pool(3) == 750.0f && b.pool(1) == 250.0f && b.pool(0) == 0.0f && b.pools_total() == 1000.0f);
+    const float zero[5] = {};
+    b.reweight(zero);  // Σ = 0: 1 / members
+    CHECK(b.weight(3) == 0.5f && b.weight(1) == 0.5f && b.weight(0) == 0.0f);
+    // The template that listed category 1 was removed: its equation is gone, so the caller passes 0; it stays a member.
+    const float only3[] = {0.0f, 0.0f, 0.0f, 6.0f, 0.0f};
+    b.reweight(only3);
+    CHECK(b.weight(3) == 1.0f && b.weight(1) == 0.0f && b.is_member(1) && b.members().size() == 2);
+    // No reset: the pools keep their split (P = A, + the drift x w).
+    b.tick(100.0f, 45.0f, 1100.0f);
+    CHECK(b.pool(3) == 750.0f + 100.0f && b.pool(1) == 250.0f);
+    // A template change set the flag: the next tick makes every pool Σ P x w + drift x w = credits x w, then clears it.
+    b.mark_reset();
+    b.tick(100.0f, 45.0f, 1200.0f);
+    CHECK(!b.reset_pending() && b.pool(3) == 1200.0f && b.pool(1) == 0.0f && b.pool(0) == 0.0f);
+    std::printf("budget membership: members {3, 1}; Σ=0 -> 1/2; removed category weight 0; reset -> credits x w\n");
+}
+
+// AI_GALACTIC_TOKENS §9.8 [H]: the contrast arithmetic (galactic_pp.cpp ContrastM).
+static void test_contrast_rules() {
+    // 0x5f1990 typed-row scale: (double)Max + (double)(float)(f x PFCA), then x the multiplier as double; not the float sum.
+    const float fp = static_cast<float>(1) * 0.05f;  // ConquerPiratePlan f = 1
+    CHECK(galactic_contrast_scale(1.15f, fp, 1.0f) == static_cast<double>(1.15f) + static_cast<double>(fp));
+    CHECK(galactic_contrast_scale(1.5f, 0.5f, 0.9f) == 2.0 * static_cast<double>(0.9f));
+    // List (§9.2): entry 0 the ground total, entry 1 the space total, two typed ground rows, two typed space rows.
+    const std::vector<GalacticContrastEntry> list = {{-1, false, 1000.0}, {-1, true, 400.0}, {0, false, 600.0},
+                                                     {1, false, 0.0},     {0, true, 300.0},  {1, true, 100.0}};
+    // Only the ground total is still short: a space-only candidate is not "still allowed" by it, a ground one is (the
+    // pre-fix port read remaining[0] for space and so swapped the two).
+    std::vector<double> rem = {50.0, -20.0, 0.0, 0.0, -5.0, 0.0};
+    CHECK(!galactic_contrast_total_open(list, rem, true, false));
+    CHECK(galactic_contrast_total_open(list, rem, false, true));
+    CHECK(galactic_contrast_total_open(list, rem, true, true));
+    rem[0] = -1.0;
+    rem[1] = 0.5;  // only the space total is short
+    CHECK(galactic_contrast_total_open(list, rem, true, false) && !galactic_contrast_total_open(list, rem, false, true));
+    // The totals are found by their layer byte, not by position.
+    const std::vector<GalacticContrastEntry> swapped = {{-1, true, 400.0}, {-1, false, 1000.0}};
+    const std::vector<double> rem2 = {-1.0, 10.0};  // ground short
+    CHECK(galactic_contrast_total_open(swapped, rem2, false, true) && !galactic_contrast_total_open(swapped, rem2, true, false));
+    // 0x72ac70 in float: ground typed rows 600 + 0 = 600; residual = (90/600) x (600/600) = 0.15 (row 1 has target 0).
+    rem = {0.0, 0.0, 90.0, 7.0, 0.0, 0.0};
+    CHECK(galactic_contrast_layer_satisfied(list, rem, false, 0.15f));
+    CHECK(!galactic_contrast_layer_satisfied(list, rem, false, 0.149f));
+    CHECK(galactic_contrast_layer_satisfied(list, rem, true, 0.0f));  // space rows met (rem <= 0)
+    rem[5] = 50.0;  // space: (50/100) x (100/400) = 0.125
+    CHECK(galactic_contrast_layer_satisfied(list, rem, true, 0.125f) && !galactic_contrast_layer_satisfied(list, rem, true, 0.12f));
+    // An empty layer (no typed rows, total 0) is satisfied at any tolerance >= 0.
+    CHECK(galactic_contrast_layer_satisfied(swapped, rem2, true, 0.0f));
+    // The gate: the plan-wide flags with the candidate's team kind, not its own layers.
+    CHECK(galactic_contrast_gate(true, false, true, false));
+    CHECK(!galactic_contrast_gate(false, false, true, true));
+    CHECK(!galactic_contrast_gate(true, false, false, true));  // escort-only candidate, escort contrast not met
+    CHECK(galactic_contrast_gate(false, true, false, true));
+    std::printf("contrast rules: totals by layer byte, float satisfied test, Max scale widened before the add, plan-wide gate\n");
 }
 
 // ================================================================ synthetic campaign
@@ -3815,6 +3890,8 @@ int main(int argc, char** argv) {
     test_goal_batched_accept();  // OPT2 t10
     test_plan_pick_and_solver();
     test_definitions_and_templates();
+    test_budget_membership();  // q6 contrast/budget (§9.5)
+    test_contrast_rules();     // q6 contrast/budget (§9.8)
     test_plan_load_parallel();
     test_synthetic_campaign();
     test_path_finder_world();
