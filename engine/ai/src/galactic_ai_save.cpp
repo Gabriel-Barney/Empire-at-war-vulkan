@@ -33,6 +33,7 @@
 //
 // read(): all-or-nothing. Every section is parsed into staged copies (fresh VMs included); the token resolver, the
 // only part read in place, is read after the whole stream validated; then everything is committed.
+#include <algorithm>
 #include <array>
 #include <span>
 
@@ -46,7 +47,30 @@ using save::put_vec;
 
 namespace {
 constexpr uint32_t kWorldVersion = 3;  // 2: pristine pooled VMs by reference; 3: AI player types (q6 t07)
-constexpr uint32_t kResolverVersion = 2;  // 2: logic frame, player conflict stamps, conflict observer (q6 t03)
+// 2: logic frame, player conflict stamps, conflict observer (q6 t03); 3: leaf cache keyed by (leaf, instance, system player,
+// parameter set) with each entry's parameters, the 0xE visible flags and the last seen surface units (q6 t18)
+constexpr uint32_t kResolverVersion = 3;
+
+// ---- perception parameters (a leaf cache entry's bindings copy) ----
+void put_param(ByteWriter& w, const Param& p) {
+    w.str(p.name);
+    w.u8(static_cast<uint8_t>(p.value.kind));
+    w.f64(p.value.number);
+    w.str(p.value.text);
+    w.u32(static_cast<uint32_t>(p.value.enum_values.size()));
+    for (const std::string& e : p.value.enum_values) w.str(e);
+}
+bool get_param(ByteReader& r, Param& p) {
+    p.name = r.str();
+    const uint8_t kind = r.u8();
+    if (kind > static_cast<uint8_t>(ParamValue::Kind::Identifier)) r.fail();
+    p.value.kind = static_cast<ParamValue::Kind>(kind);
+    p.value.number = r.f64();
+    p.value.text = r.str();
+    p.value.enum_values.resize(save::count(r, 4));
+    for (std::string& e : p.value.enum_values) e = r.str();
+    return r.ok();
+}
 constexpr int kMaxValueDepth = 32;
 
 // ---- objects ----
@@ -293,16 +317,15 @@ void GalacticSimTokenResolver::write(ByteWriter& w) const {
     for (const uint8_t x : last_battle_) w.u8(x);
     std::lock_guard<std::mutex> lock(mu_);
     w.u32(static_cast<uint32_t>(cache_.size()));
-    for (const auto& [k, e] : cache_) {
+    for (const auto& [k, e] : cache_) {  // version 3 entry layout
         w.str(k.leaf);
         w.i32(k.inst);
         w.i32(k.self);
-        w.i32(k.target);
-        w.i32(k.enemy);
-        w.i32(k.human);
         w.str(k.params);
         w.f64(e.value);
         w.i32(e.stamp);
+        w.u32(static_cast<uint32_t>(e.params.size()));
+        for (const Param& p : e.params) put_param(w, p);
     }
     w.u64(hits_);
     // version 2 (q6 t03)
@@ -319,6 +342,17 @@ void GalacticSimTokenResolver::write(ByteWriter& w) const {
     w.i32(active_.defender);
     w.u8(static_cast<uint8_t>((active_.linked ? 1u : 0u) | (active_.space_stamped ? 2u : 0u) | (active_.ground_stamped ? 4u : 0u) |
                               (active_.in_battle ? 8u : 0u)));
+    // version 3 (q6 t18)
+    w.u32(static_cast<uint32_t>(visible_.size()));
+    for (const std::vector<uint32_t>& row : visible_) {
+        w.u32(static_cast<uint32_t>(row.size()));
+        for (const uint32_t x : row) w.u32(x);
+    }
+    w.u32(static_cast<uint32_t>(last_surface_.size()));
+    for (const std::vector<int32_t>& ids : last_surface_) {
+        w.u32(static_cast<uint32_t>(ids.size()));
+        for (const int32_t id : ids) w.i32(id);
+    }
 }
 
 bool GalacticSimTokenResolver::read(ByteReader& r) {
@@ -340,21 +374,29 @@ bool GalacticSimTokenResolver::read(ByteReader& r) {
         if (e > 1) r.fail();
     }
     std::map<CacheKey, Entry> cache;
-    const uint32_t nc = save::count(r, 40);
+    const uint32_t nc = save::count(r, version >= 3 ? 32 : 40);
     for (uint32_t i = 0; i < nc && r.ok(); ++i) {
+        if (version < 3) {  // the old key carried Target / Enemy / Human: parsed and dropped (the cache restarts empty)
+            (void)r.str();
+            for (int f = 0; f < 5; ++f) (void)r.i32();
+            (void)r.str();
+            (void)r.f64();
+            (void)r.i32();
+            continue;
+        }
         CacheKey k;
         k.leaf = r.str();
         k.inst = r.i32();
         k.self = r.i32();
-        k.target = r.i32();
-        k.enemy = r.i32();
-        k.human = r.i32();
         k.params = r.str();
         Entry e;
         e.value = r.f64();
         e.stamp = r.i32();
+        e.params.resize(save::count(r, 18));
+        for (Param& p : e.params)
+            if (!get_param(r, p)) break;
         if (!cache.empty() && !(cache.rbegin()->first < k)) r.fail();
-        cache.emplace_hint(cache.end(), std::move(k), e);
+        cache.emplace_hint(cache.end(), std::move(k), std::move(e));
     }
     const uint64_t hits = r.u64();
     // version 2 (q6 t03); a version-1 image: no stamps, the observer re-synchronises at its next pass
@@ -384,7 +426,34 @@ bool GalacticSimTokenResolver::read(ByteReader& r) {
         active.ground_stamped = (flags & 4u) != 0;
         active.in_battle = (flags & 8u) != 0;
     }
+    // version 3 (q6 t18); older: no visible flags, the surface units as the sim holds them now (no landing at the next pass)
+    std::vector<std::vector<uint32_t>> visible;
+    std::vector<std::vector<int32_t>> surface;
+    if (version >= 3) {
+        visible.resize(save::count(r, 4));
+        for (std::vector<uint32_t>& row : visible) {
+            row.resize(save::count(r, 4));
+            for (uint32_t& x : row) x = r.u32();
+        }
+        surface.resize(save::count(r, 4));
+        if (!surface.empty() && surface.size() != n) r.fail();
+        for (std::vector<int32_t>& ids : surface) {
+            ids.resize(save::count(r, 4));
+            for (int32_t& id : ids) id = r.i32();
+            if (!std::is_sorted(ids.begin(), ids.end())) r.fail();
+        }
+    } else if (n != 0) {
+        const auto planets = sim_->planets();
+        surface.resize(n);
+        for (size_t i = 0; i < n; ++i) {
+            for (const ObjectHandle u : planets[i].surface)
+                if (sim_->store().alive(u)) surface[i].push_back(sim_->store().id(u));
+            std::sort(surface[i].begin(), surface[i].end());
+        }
+    }
     if (!r.ok() || !r.done()) return false;
+    visible_ = std::move(visible);
+    last_surface_ = std::move(surface);
     frame_ = frame;
     logic_frame_ = logic_frame;
     player_stamps_ = std::move(stamps);

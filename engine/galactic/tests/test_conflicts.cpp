@@ -500,6 +500,70 @@ void test_cargo_losses() {
     CHECK(e.attacker_losses == dead_att && e.defender_losses == dead_def);
 }
 
+// q6 t18 (AI_GALACTIC_TOKENS §9.12, BT §1.6): the overrun side strengths 0x2ab880, float. Space: the side's orbit combat
+// units, the defender + the starbase type of the planet's level. Ground: the side's surface units, the attacker + its orbit
+// fleets' ground cargo, the defender + every ground structure + the persisted records with a typed, resolvable type.
+void test_overrun_strength() {
+    World w({{pEmpire, rB, tSB1}, {pEmpire, rB, tFrigate}, {pEmpire, rB, tInfantry}, {pEmpire, rB, tBarracks},
+             {pUnder, rC, tFrigate}, {pUnder, rC, tCorvette}, {pUnder, rC, tInfantry}},
+            false);
+    ConflictInfo sb;
+    sb.kind = ConflictKind::Space;
+    sb.planet = rB;
+    sb.attacker = pUnder;
+    sb.defender = pEmpire;
+    CHECK(w.cm->overrun_strength(sb, true, true) == 1300.0f);  // frigate 1000 + SB_1 (level 1) 300
+    CHECK(w.cm->overrun_strength(sb, false, true) == 0.0f);
+    ConflictInfo lb = sb;
+    lb.kind = ConflictKind::Land;
+    CHECK(w.cm->overrun_strength(lb, true, false) == 300.0f);  // infantry 100 + barracks 200
+    if (std::vector<PersistedBuiltObject>* recs = w.sim.built_objects(rB)) {
+        recs->push_back({tInfantry, 1.0f, 2.0f, 0.0f, 0, 0});  // typed: + 100
+        recs->push_back({tPlanetA, 1.0f, 2.0f, 0.0f, 0, 0});   // no category: skipped
+        recs->push_back({kNoIndex, 1.0f, 2.0f, 0.0f, 0, 0});   // no type: skipped
+    }
+    CHECK(w.cm->overrun_strength(lb, true, false) == 400.0f);
+    ConflictInfo lc = lb;  // the Underworld at C as the attacker: its surface infantry, then the same unit as orbit cargo
+    lc.planet = rC;
+    CHECK(w.cm->overrun_strength(lc, false, false) == 100.0f);
+    std::vector<objects::ObjectHandle> ground;
+    for (objects::ObjectHandle h : w.sim.planets()[rC].surface)
+        if (w.store.alive(h) && w.store.owner(h) == pUnder) ground.push_back(h);
+    if (!ground.empty()) CHECK(w.sim.launch_units(pUnder, rC, ground) == commands::RejectReason::None);
+    CHECK(w.cm->overrun_strength(lc, false, false) == 100.0f);  // carried by its fleet in orbit
+    CHECK(w.cm->overrun_strength(lc, true, false) == 0.0f);     // the Empire has nothing at C
+    ConflictInfo sc = lc;
+    sc.kind = ConflictKind::Space;
+    CHECK(w.cm->overrun_strength(sc, false, true) == 1400.0f);  // frigate + corvette, not the cargo
+    CHECK(w.cm->overrun_strength(sc, true, true) == 0.0f);      // no starbase level at C
+    ConflictInfo bad = sb;
+    bad.planet = kInvalidPlanet;
+    CHECK(w.cm->overrun_strength(bad, true, true) == 0.0f);
+    // Decide: with Overrun_Auto_Resolve_Multiple (synthetic 3; vanilla 0 = off) a human defender's battle against a much
+    // weaker attacker is auto-resolved (BT §1.6); without it the human's Fight choice starts the battle.
+    for (const float multiple : {0.0f, 3.0f}) {
+        World h({{pEmpire, rB, tSB1}, {pEmpire, rB, tFrigate}, {pEmpire, rB, tFrigate}, {pEmpire, rB, tFrigate},
+                 {pUnder, rC, tCorvette}},
+                true);
+        h.crules.overrun_multiple = multiple;
+        h.cm->config().human_choice = BattleChoice::Fight;
+        int started = 0;
+        h.cm->start_battle = [&started](const BattleRequest&) {
+            ++started;
+            return true;
+        };
+        h.arrive_at_b();  // 3300 vs 400
+        if (multiple == 0.0f) {
+            CHECK(started == 1 && h.cm->battle_active());
+        } else {
+            CHECK(started == 0 && !h.cm->battle_active());
+            CHECK(h.cm->log().size() == 1 && h.cm->log()[0].how == 1);
+        }
+    }
+    std::printf("overrun strength: space 1300 / 0, ground defender 300 -> 400 with records, attacker cargo 100, overrun "
+                "multiple 3 auto-resolves a human battle\n");
+}
+
 void test_human_fight() {
     World w({{pEmpire, rA, tFrigate}, {pEmpire, rB, tFrigate}, {pEmpire, rB, tCorvette}, {pUnder, rC, tFrigate}}, true);
     w.cm->config().human_choice = BattleChoice::Fight;
@@ -1188,6 +1252,7 @@ int main() {
     std::printf("ai auto-resolve\n");
     test_ai_auto_resolve();
     std::printf("human fight\n");
+    test_overrun_strength();
     test_human_fight();
     test_human_retreat_after_battle();
     std::printf("pending choice\n");

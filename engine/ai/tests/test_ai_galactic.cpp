@@ -1676,6 +1676,119 @@ static void test_starbase_force_split() {
                 "Frigate row 1000; neutral owner 600, ally 0; persisted ground objects 1500 (Frigate row 1000)\n");
 }
 
+// q6 t18 (AI_GALACTIC_TOKENS §9.9): the perception leaf cache. One node per (AI player, target planet, leaf); the entry key
+// is the parameter set only, so an equation, the 0x5f2430 contrast helper (mask 0 = no parameter, a mask = the same entry as
+// an equation's Parameter_Category) and any Enemy / Human binding share one entry; a hit is NOW <= stamp + L x 30 (15 s for
+// the force leaves); the visibility signal 0xE recomputes and re-stamps the fogged nodes whose mask it covers or just
+// stopped covering. GroundbaseTotalUnnormalized (§9.12) has lifetime 0: always live.
+static void test_leaf_cache() {
+    MemoryFiles files;
+    AiDefinitions defs;
+    EquationSet eqs;
+    std::vector<std::string> plan_files;
+    syn_data(files, defs, eqs, plan_files);
+    eqs.add("Space_All", "Variable_Target.EnemyForce.SpaceTotalUnnormalized");
+    eqs.add("Space_Frigate", "Variable_Target.EnemyForce.SpaceTotalUnnormalized {Parameter_Category = \"Frigate\"}");
+    eqs.add("Ground_All", "Variable_Target.EnemyForce.GroundTotalUnnormalized");
+    eqs.add("Groundbase", "Variable_Target.EnemyForce.GroundbaseTotalUnnormalized");
+    eqs.link();
+    gal::GalacticRules rules = syn_rules();
+    rules.types[tBarracks].ai_combat_power = 300.0f;
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+    GameRandom rng(4242u, 77u);
+    gal::GalacticSim sim(rules, store, rng.synced());
+    gal::GalacticSetup setup = syn_setup();
+    setup.forces = {{0, 0, tSB1}, {1, 7, tSB1}, {1, 7, tBarracks}, {1, 7, tFrigate}};
+    CHECK(sim.start(setup));
+    std::vector<GalacticAiTypeInfo> tinfo(tTypes);
+    tinfo[tFrigate].categories = {"FRIGATE"};
+    tinfo[tCorvette].categories = {"CORVETTE"};
+    tinfo[tSB1].categories = tinfo[tSB2].categories = {"CAPITAL"};
+    tinfo[tBarracks].categories = {"STRUCTURE"};
+    fill_category_masks(tinfo);
+    const std::span<const GalacticAiTypeInfo> ti(tinfo);
+    const uint64_t frig = static_cast<uint64_t>(ai_category_bit("Frigate"));
+    GalacticSimTokenResolver res(sim, ti, nullptr, {});
+    const int32_t f0 = sim.frame() + 100;  // a stamp of 0 is never a hit (§9.9): start the resolver clock past it
+    res.refresh(f0);
+    EvalContext c;
+    c.self = 0;
+    c.target = 7;
+    auto value = [&](const char* name) {
+        const EvalResult r = evaluate(eqs, eqs.find(name), c, res);
+        CHECK(r.ok);
+        return r.value;
+    };
+    // Shared entries: the equation, the helper's leaf part and an Enemy / Human binding read one entry each.
+    CHECK(value("Space_All") == 1000.0);  // the frigate; the starbase's own power is not in the leaf
+    const size_t n1 = res.cache_size();
+    CHECK(n1 >= 1);
+    double v = 0.0;
+    CHECK(res.enemy_force(0, 7, true, 0, v) && v == 1000.0 && res.cache_size() == n1);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, 0, nullptr, &res) == 1600.0 && res.cache_size() == n1);
+    CHECK(value("Space_Frigate") == 1000.0);
+    const size_t n2 = res.cache_size();
+    CHECK(n2 == n1 + 1);
+    CHECK(res.enemy_force(0, 7, true, frig, v) && v == 1000.0 && res.cache_size() == n2);  // Parameter_Category = mask
+    c.enemy = 1;
+    c.human = 1;
+    CHECK(value("Space_All") == 1000.0 && res.cache_size() == n2);  // Enemy / Human are not in the key
+    // Another AI player's perception system has its own node.
+    CHECK(res.enemy_force(2, 7, true, 0, v) && res.cache_size() == n2 + 1);
+    // Staleness: a relation change is not seen until the entry's 15 s run out.
+    sim.set_relation(0, 1, gal::Relation::Neutral);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, 0) == 600.0);  // live: the leaf is empty, the own base counts
+    CHECK(value("Space_All") == 1000.0 && galactic_ai_enemy_strength(sim, ti, 7, 0, true, 0, nullptr, &res) == 1600.0);
+    res.refresh(f0 + 450);
+    CHECK(value("Space_All") == 1000.0);  // NOW = stamp + 450: still a hit
+    res.refresh(f0 + 451);
+    CHECK(value("Space_All") == 0.0);  // expired: recomputed and re-stamped at f0 + 451
+    sim.reset_relations();
+    CHECK(value("Space_All") == 0.0);  // the fresh entry hides the change again
+    // Signal 0xE: a ground-only mask recomputes the ground nodes only; the space mask recomputes the space nodes.
+    CHECK(res.visible_flags(7, 0) == 0u);
+    res.visibility_event(7, 0, 0x80u);
+    CHECK(res.visible_flags(7, 0) == 0x80u && value("Space_All") == 0.0);
+    res.visibility_event(7, 0, 0x20u);  // space covered (recompute), ground just lost coverage (recompute)
+    CHECK(res.visible_flags(7, 0) == 0x20u && value("Space_All") == 1000.0 && value("Space_Frigate") == 1000.0);
+    sim.set_relation(0, 1, gal::Relation::Neutral);
+    res.visibility_event(7, 0, 0u);  // lost coverage: recompute once more, visible := 0
+    CHECK(res.visible_flags(7, 0) == 0u && value("Space_All") == 0.0);
+    sim.reset_relations();
+    res.visibility_event(7, 0, 0u);  // not visible, not covered: nothing
+    CHECK(value("Space_All") == 0.0);
+    res.visibility_event(7, 1, 0xFFFFFFFFu);  // another player's event leaves player 0's nodes alone
+    CHECK(value("Space_All") == 0.0 && res.visible_flags(7, 1) == 0x2B8u);
+    // GroundbaseTotalUnnormalized (§9.12): every ground structure's power + the persisted records with a resolvable typed
+    // record, live (lifetime 0); the side filter failing (its own planet) is 0.0, a success.
+    CHECK(value("Groundbase") == 300.0);
+    if (std::vector<gal::PersistedBuiltObject>* recs = sim.built_objects(7)) {
+        recs->push_back({tFrigate, 10.0f, 20.0f, 0.1f, 0, 1});
+        recs->push_back({tCorvette, 30.0f, 20.0f, 0.1f, 1, 0});
+        recs->push_back({gal::kNoIndex, 50.0f, 20.0f, 0.1f, 0, 1});  // no type: skipped
+        recs->push_back({tPlanet, 50.0f, 20.0f, 0.1f, 0, 1});        // no category mask: skipped
+    }
+    CHECK(value("Groundbase") == 1800.0);
+    c.target = 0;
+    CHECK(value("Groundbase") == 0.0);
+    c.target = 7;
+    // Save / load keeps the entries, their stamps and the visible flags.
+    ByteWriter w;
+    res.write(w);
+    GalacticSimTokenResolver copy(sim, ti, nullptr, {});
+    ByteReader rd(w.bytes());
+    CHECK(copy.read(rd) && rd.ok() && copy.cache_size() == res.cache_size() && copy.visible_flags(7, 1) == 0x2B8u);
+    ByteWriter w2;
+    copy.write(w2);
+    CHECK(w2.bytes() == w.bytes());
+    const EvalResult rc = evaluate(eqs, eqs.find("Space_All"), c, copy);
+    CHECK(rc.ok && rc.value == 0.0);  // the stale cached value survived the round trip
+    std::printf("leaf cache: %zu entries, shared by equations / 0x5f2430 / Enemy-Human bindings; 15 s staleness; signal 0xE "
+                "recompute by mask; Groundbase 1800 live\n", res.cache_size());
+}
+
 // A2 t03: per-tech members of the other objects the force totals walk (AI_GALACTIC_TOKENS 2 / 3): every unit of an orbiting
 // fleet adds its type's members to the space leaf ("each unit's type power (category) + its per-tech members"); every
 // ground structure adds its members (never its own power) to the ground leaf; surface units add only their power; a
@@ -1842,6 +1955,24 @@ function Definitions()
 end
 function MainForce_Thread() ScriptExit() end
 )";
+// q6 t18 (AI_GALACTIC_TOKENS §9.10): synthetic galactic plans with an escort team (no shipped galactic plan has one).
+static const char* kPlanEscortOnly = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "EscortForce", "EscortForce", "DenyHeroAttach", "Corvette = 1,1" } }
+end
+function EscortForce_Thread() ScriptExit() end
+)";
+static const char* kPlanMainEscort = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "Frigate = 0,1" }, { "EscortForce", "EscortForce", "DenyHeroAttach", "Corvette = 1,1" } }
+end
+function MainForce_Thread() ScriptExit() end
+function EscortForce_Thread() ScriptExit() end
+)";
 
 struct ParityWorld {
     MemoryFiles files;
@@ -1873,6 +2004,8 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\MagicSpace.lua", kPlanMagic);
         files.add("Data\\Scripts\\AI\\BuildBarracks.lua", kPlanBuildBarracks);
         files.add("Data\\Scripts\\AI\\MaskCorvette.lua", kPlanMaskCorvette);
+        files.add("Data\\Scripts\\AI\\EscortOnly.lua", kPlanEscortOnly);
+        files.add("Data\\Scripts\\AI\\MainEscort.lua", kPlanMainEscort);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -1956,6 +2089,38 @@ static void test_free_store_supply() {
     pw.world->set_free_store_owner(f, -1);
     CHECK(pw.world->free_store_owner(f) == -1);
     std::printf("free-store supply: a reserved unit is supplied (0x4d2bd0 ignores +0x30)\n");
+}
+
+// q6 t18 (AI_GALACTIC_TOKENS §9.10): the galactic escort flag 0x529 is 1 from Setup C on (the galactic escort list is
+// always empty), so the Score gate (0x528 && B0) || (0x529 && B1) is open for an escort team even while the main contrast
+// is unmet, and the first placement pass skips escort slots while the main contrast is unmet.
+static void test_escort_flag() {
+    // The rule helpers.
+    CHECK(galactic_escort_met(false) && !galactic_escort_met(true));
+    CHECK(!galactic_place_skip(false, true, false) && galactic_place_skip(false, true, true));   // main unmet
+    CHECK(!galactic_place_skip(true, true, false) && !galactic_place_skip(true, true, true));    // both met
+    CHECK(galactic_place_skip(true, false, false) && !galactic_place_skip(true, false, true));   // IgnoreTarget-free tactical
+    CHECK(galactic_contrast_gate(false, true, false, true) && !galactic_contrast_gate(false, true, true, false));
+    // Synthetic plans at a target the Rebels hold with two frigates (the main contrast is unmet by one corvette).
+    ParityWorld pw(false, {"EscortOnly", "MainEscort", "MaskCorvette"}, [](gal::GalacticSetup& s) {
+        s.forces.push_back({1, 3, tFrigate});
+        s.forces.push_back({1, 3, tFrigate});
+        s.forces.push_back({0, 0, tCorvette});
+    });
+    pw.run(2);
+    bool ok_main = false, ok_escort = false, ok_both = false;
+    const std::vector<uint32_t> m = pw.world->solve_potential_plan(0, "MaskCorvette", "Conquer_Planet", 3, &ok_main);
+    const std::vector<uint32_t> e = pw.world->solve_potential_plan(0, "EscortOnly", "Conquer_Planet", 3, &ok_escort);
+    const std::vector<uint32_t> b = pw.world->solve_potential_plan(0, "MainEscort", "Conquer_Planet", 3, &ok_both);
+    std::printf("escort flag: MainForce corvette plan %s (%zu), EscortForce-only plan %s (%zu, corvette %s), Main+Escort %s (%zu)\n",
+                ok_main ? "solved" : "failed", m.size(), ok_escort ? "solved" : "failed", e.size(),
+                pw.has(e, tCorvette) ? "yes" : "no", ok_both ? "solved" : "failed", b.size());
+    // The escort-only candidate: v <= 0 (no main list score without a non-escort team), the gate is open through 0x529 and
+    // its team is below its minimum, so it is still allowed: the corvette is chosen whatever the main contrast says.
+    CHECK(ok_escort && pw.has(e, tCorvette));
+    // With both kinds of team the candidate enters the "still allowed" checks while the main contrast is unmet (the old
+    // escort_met = main_met rule vetoed both plans).
+    CHECK(ok_main && ok_both && b.size() == 2 && pw.has(b, tCorvette));
 }
 
 static void test_parity_rules() {
@@ -2204,6 +2369,11 @@ static void test_budget_fraction_before_init() {
             funded += r.available > 0.0f ? 1 : 0;
             total += r.available;
         }
+        // Leaf cache (AI_GALACTIC_TOKENS §9.9): the key is the parameter set only, so this query hits the entry the
+        // budget Init stored while the budget was still empty (D <= 0 -> 1e18) until its 5 s lifetime runs out.
+        const double cached = token(pw, frac_infra, ok);
+        CHECK(ok && cached == 1.0e18);
+        pw.run(5 * 30 + 1);
         const double infra = token(pw, frac_infra, ok);
         std::printf("budget init with BudgetFractionToBuild in Infra_Budget: %d funded categories, total %.0f, Barracks fraction %.4f\n",
                     funded, static_cast<double>(total), infra);
@@ -3924,7 +4094,9 @@ int main(int argc, char** argv) {
     test_path_finder_world();
     test_sim_hooks();
     test_starbase_force_split();
+    test_leaf_cache();
     test_force_members();
+    test_escort_flag();
     test_parity_rules();
     test_free_store_supply();
     test_production_disabled_and_delivery();

@@ -262,7 +262,10 @@ struct GalPp {
             }
         }
         main_met = (!layer_active_space || layer_satisfied(true)) && (!layer_active_ground || layer_satisfied(false));
-        escort_met = main_met;  // [port] one requirement list (no separate escort list)
+        // 0x140b3a529 (AI_GALACTIC_TOKENS §9.10 [H]): galactic has no escort list (Setup A empties it, 0x525 = 0), so the
+        // escort test of an empty remaining list passes: 1 after Setup C and every commit recompute of a targeted,
+        // non-IgnoreTarget solve (the only solves that reach this), whatever the main contrast.
+        escort_met = galactic_escort_met(def.ignore_target);
     }
 
     // RequiredCategories masks
@@ -485,8 +488,10 @@ public:
         for (int32_t k = 0; k < n; ++k) {
             const int32_t s = r.teams[static_cast<size_t>((std::max(r.start_team, 0) + k) % n)];
             PpSlot& slot = p_.slots[static_cast<size_t>(s)];
+            // First pass (§9.10): skip a non-escort slot when 0x528 && !0x529, an escort slot when 0x529 && !0x528; in
+            // galactic (0x529 = 1) escort slots wait while the main contrast is unmet, non-escort slots never wait.
             const bool escort = p_.tf_def(slot.tf).escort;
-            if (respect_met && ((escort && p_.escort_met) || (!escort && p_.main_met))) continue;
+            if (respect_met && galactic_place_skip(p_.main_met, p_.escort_met, escort)) continue;
             if (!(p_.slot_percent(slot) || static_cast<int32_t>(slot.assigned.size()) < p_.slot_max(slot))) continue;
             slot.assigned.push_back(sel);
             slot.cost_sum += p_.w.cost_none(r.type);
@@ -769,6 +774,9 @@ class ContrastM final : public PpMarshaller {
 public:
     explicit ContrastM(GalPp& p) : p_(p) {}
     void setup_a() override {  // 0x72bee0 -> 0x6c5de0 [H]
+        // 0x6c3080 at the solver start clears both flags (§9.10); they are first set by Setup C, so clearing them here,
+        // before any Setup C runs, is the same.
+        p_.main_met = p_.escort_met = false;
         p_.entries.clear();
         p_.tolerance = 0.0f;
         bool percent = false;
@@ -789,13 +797,21 @@ public:
         std::vector<uint64_t> masks;
         const size_t rows = p_.w.cfg.contrast ? p_.w.cfg.contrast->size() : 0;
         for (size_t j = 0; j < rows; ++j) masks.push_back(p_.w.cfg.contrast->rows[j].enemy_mask);
+        // q6 t18 (§9.6 / §9.9): the leaf part through the AI's perception leaf cache, shared with the equations.
         p_.entries = galactic_ai_contrast_list(p_.w.sim, p_.w.tinfo, static_cast<PlanetIndex>(p_.target), p_.player, masks, scale,
-                                               p_.w.cat_enum);
+                                               p_.w.cat_enum, &p_.w.res);
         p_.remaining.resize(p_.entries.size());
         for (size_t e = 0; e < p_.entries.size(); ++e) p_.remaining[e] = p_.entries[e].target;
     }
     void setup_c() override {  // 0x72aad0 [H]
-        if (p_.def.ignore_target || p_.entries.empty()) return;
+        if (p_.def.ignore_target) return;  // skipped: both flags stay 0 (§9.10)
+        if (p_.entries.empty()) {
+            // No target: both target lists are empty, so both 0x6bff00 tests pass (residual 0) and the commit recompute
+            // returns early: 0x528 = 0x529 = 1 for the whole solve (§9.10). [No reader here: Score returns 0 without
+            // entries and the placement skip rules are then both false.]
+            p_.main_met = p_.escort_met = true;
+            return;
+        }
         for (PpRec& r : p_.recs) {
             for (const int32_t s : r.teams) {
                 const bool esc = p_.tf_def(p_.slots[static_cast<size_t>(s)].tf).escort;
@@ -824,8 +840,10 @@ public:
         const double P = p_.power_eff(i);
         const bool free = r.free_unit >= 0;
         // 0x72b6a0: no pair counts when P <= 0; a pair counts only with w > 0 and R > 0, and a free unit then skips
-        // the tolerance / pop-cap test.
+        // the tolerance / pop-cap test. The main list is scored only for a candidate with a non-escort team (rec+0xB0), the
+        // escort list only with 0x525 (never in galactic): an escort-only candidate keeps v <= 0 (§9.10).
         for (const auto& [e, wgt] : r.pairs) {
+            if (!r.non_escort) break;
             const auto ei = static_cast<size_t>(e);
             const double R = p_.remaining[ei];
             if (!(P > 0.0 && wgt > 0.0f && R > 0.0)) continue;
@@ -844,7 +862,8 @@ public:
         if (!galactic_contrast_gate(p_.main_met, p_.escort_met, r.non_escort, r.escort)) return kVeto;
         if (p_.def.minimum_cost + p_.def.additional_cost > p_.gross) return 0.0f;
         // An untyped total of a layer this candidate covers is still short (§9.8 item 1): the totals by their layer byte.
-        if (galactic_contrast_total_open(p_.entries, p_.remaining, r.space, r.ground)) return 0.0f;
+        // Only through the main list (0x528 && rec+0xB0, §9.10); the escort-list check needs 0x525 (never in galactic).
+        if (p_.main_met && r.non_escort && galactic_contrast_total_open(p_.entries, p_.remaining, r.space, r.ground)) return 0.0f;
         for (const uint64_t m : p_.required_masks())
             if ((m & p_.selected_mask) == 0 && (m & p_.w.mask_of(r.type)) != 0) return 0.0f;
         for (const int32_t s : r.teams) {

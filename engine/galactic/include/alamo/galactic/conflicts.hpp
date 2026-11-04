@@ -304,6 +304,18 @@ public:
     // story t07: rule (a) with a forced type (LINK_TACTICAL Param6): the first record unit of `forced_type` leads.
     void split_land_forces(const ConflictInfo& head, BattleForces& defender, BattleForces& attacker, uint32_t forced_type) const;
     bool raid_force(int32_t player, const std::vector<ObjectHandle>& units) const;  // 0x432e20
+    // q6 t18: the overrun side strength 0x2ab880 (AI_GALACTIC_TOKENS §9.12, BT §1.6 step 2) [H], float throughout, read only
+    // when Overrun_Auto_Resolve_Multiple != 0 (FoC / TR leave it commented out). The player's own objects of the orbit list
+    // (space) or the surface list (ground), each with its unit power (type + members, 0x395d10); the attacker's ground side
+    // adds the ground power its orbit fleets carry [M: 0x395d10 flag 0 on a fleet = its ground units]; the defender's ground
+    // side adds the AI_Combat_Power of every ground structure on the planet (D+0x158: no mask, owner or alive test [port:
+    // the list holds live objects]) and the persisted-record sum 0x4b8000(D, all bits) (records whose type resolves and has
+    // a non-zero CategoryMask); the defender's space side adds, when the starbase level D+0x148 != 0, the AI_Combat_Power of
+    // the starbase type of that level for the defender's faction (by level, not the planet's starbase object [M: the first
+    // such type in type order]). The attacker's space strength (summed inline in 0x2b92e0) is the first term alone.
+    float overrun_strength(const ConflictInfo& record, bool defender, bool space) const;
+    // The units the overrun strength of that side counts (the named-hero test, BT §1.6).
+    std::vector<ObjectHandle> overrun_units(const ConflictInfo& record, bool defender, bool space) const;
     // OI galactic: retreat destination finders (TACTICAL_GAPS 4.5). Candidates = planets newest first (reverse row order),
     // smallest squared 3-D distance (double, strict <); filters in order: orbit controller = player (starbase owner when
     // level > 0, else the first idle combat fleet in orbit), ground-base / starbase owner = player, owner neutral, any.
