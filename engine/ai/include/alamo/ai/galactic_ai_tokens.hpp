@@ -15,8 +15,8 @@
 //     unowned / neutral matches neither.
 // PORT STAND-INS (marked [port] next to the code): the per-tech member lists (0x373e30) of fleet units, starbases and
 // structures are the types' Starting_Spawned_Units_Tech_N lists (galactic_ai_member_force); the force leaves hold
-// members only (galactic_ai_planet_force), the helper 0x5f2430 adds the structures' own AI_Combat_Power to the
-// untyped totals (galactic_ai_enemy_strength); the structure mask +0x1658 is the Capital default (no galactic structure
+// members only (galactic_ai_planet_force), the helper 0x5f2430 adds the matching structures' own AI_Combat_Power to every
+// contrast row (galactic_ai_enemy_strength; its 0x4b8000 list is not modelled); the structure mask +0x1658 is the Capital default (no galactic structure
 // sets it); orbital structures D+0x170 and the planet-type garrison list +0x20C8 are not modelled; Timeline = 0; black
 // market = GalacticSim's item table (P4 ai); Hints = the Galactic_Hints defaults (no Markup_Filename file is read);
 // island paths are hop-count shortest paths.
@@ -126,14 +126,28 @@ double galactic_ai_member_force(const galactic::GalacticSim& sim, std::span<cons
 double galactic_ai_planet_force(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                 PlanetIndex planet, int32_t self, bool enemy, bool space, uint64_t mask,
                                 const objects::EnumConverter* categories = nullptr);
-// The enemy strength at `planet` for AI player `self` (the perception helper 0x5f2430, GALACTIC_ECONOMY §6.2 [H]): the
-// Enemy leaf above (members only) plus, for the untyped total (`mask` == kAllCategories: the Contrast entries 0 / 1),
-// the own AI_Combat_Power of the planet's starbase (space) or of its ground structures (ground) when the planet's owner
-// is hostile to `self` [port: the 0x4ad9f0 "not held by the AI or an ally" test read as hostile; no garrison types
-// 0x4b8000]. A typed row (any other mask: the PotentialPlan Contrast rows [M]) never holds a structure's own power.
+// The enemy strength at `planet` for AI player `self` (the perception helper 0x5f2430, AI_GALACTIC_TOKENS §9.2 [H]): the
+// Enemy leaf above (members only) with the effective mask (`mask`, or every bit for 0), plus, when the planet is NOT held by
+// `self` or an ally (0x4ad9f0: owner set, relation Self / Ally, control > 0; pirates, neutral and unowned planets pass), the
+// own AI_Combat_Power of every structure whose category mask meets the effective mask: space = the planet's starbase type,
+// ground = each ground structure (D+0x158). So a typed row gets it too (every shipped starbase is Capital: the Capital row).
+// [port: the 0x4b8000 type-id list of planet data +0x10 is not modelled (adds 0).]
 double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                   PlanetIndex planet, int32_t self, bool space, uint64_t mask,
                                   const objects::EnumConverter* categories = nullptr);
+// One entry of the PotentialPlan Contrast requirement list (0x5f1990): `row` = the EnemyContrastTypes row, -1 for a layer
+// total; `space` = layer byte 0 (space) / false = layer byte 1 (ground); `target` = the required strength.
+struct GalacticContrastEntry {
+    int32_t row = -1;
+    bool space = false;
+    double target = 0.0;
+};
+// 0x5f1990 (AI_GALACTIC_TOKENS §9.2 layer order, AI_GALACTIC_2 Contrast Setup A) [H]: entry 0 = the ground total (0x5f2430
+// flag 1, mask 0), entry 1 = the space total (flag 0), then one row per `row_masks` entry for ground, then one per entry for
+// space, each = galactic_ai_enemy_strength(row mask) x `scale`, or 0 when its layer total is <= 0. The totals are unscaled.
+std::vector<GalacticContrastEntry> galactic_ai_contrast_list(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
+                                                             PlanetIndex planet, int32_t self, std::span<const uint64_t> row_masks,
+                                                             double scale, const objects::EnumConverter* categories = nullptr);
 
 // The galactic AI's planning-side buildability: GalacticSim::buildable (cost, queue kind, GalacticSim::build_check =
 // 0x2804d0 in the STRATEGIC_GAPS §1.3 order, no credits).

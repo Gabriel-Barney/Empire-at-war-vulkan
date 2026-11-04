@@ -153,6 +153,12 @@ float TemplateSystem::tactical_allowance(int32_t category) const {
     return allowance_[static_cast<size_t>(category)];
 }
 
+bool TemplateSystem::budget_listed(int32_t category) const {
+    if (category < 0 || static_cast<size_t>(category) >= budget_slot_.size()) return false;
+    const auto c = static_cast<size_t>(category);
+    return budget_slot_[c].written || (c < allowance_slot_.size() && allowance_slot_[c].written);
+}
+
 void TemplateSystem::hash(StateHasher& h) const {
     h.u32(cursor_);
     h.u32(count_);

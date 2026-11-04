@@ -1467,7 +1467,8 @@ static void test_sim_hooks() {
 
 // A2 t03 (Conquer_Opponent): the force leaf Target.EnemyForce.SpaceTotalUnnormalized holds the starbase's per-tech
 // spawned members only (AI_GALACTIC_TOKENS 2: "not the starbase's own power"), typed or not; the starbase's own
-// AI_Combat_Power is the helper 0x5f2430's add (GALACTIC_ECONOMY 6.2) and lands in the PotentialPlan's untyped totals only.
+// AI_Combat_Power is the helper 0x5f2430's add (AI_GALACTIC_TOKENS 9.2) and lands in every contrast row its category (Capital)
+// meets: the untyped total and the Capital row. The gate is "not held by the AI or an ally" (0x4ad9f0).
 static void test_starbase_force_split() {
     MemoryFiles files;
     AiDefinitions defs;
@@ -1509,10 +1510,12 @@ static void test_starbase_force_split() {
     CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, corv) == 1000.0);
     CHECK(galactic_ai_member_force(sim, ti, tSB1, 1, frig | corv) == 2000.0);
     CHECK(galactic_ai_member_force(sim, ti, tSB2, 1, kAllCategories) == 0.0);  // no members
-    // The leaf (members only) and the 0x5f2430 helper (+ the starbase's own power in the untyped total only).
+    // The leaf (members only) and the 0x5f2430 helper (+ the starbase's own power in every row its Capital mask meets).
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 2000.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 2600.0);
-    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap) == 0.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, 0) == 2600.0);   // mask 0 = every category
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap) == 600.0);  // the Capital row: the starbase's own power
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap | frig) == 1600.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, frig) == 1000.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, frig | corv) == 2000.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 0, 0, true, kAllCategories) == 0.0);  // its own base is not enemy strength
@@ -1543,7 +1546,32 @@ static void test_starbase_force_split() {
     // The Empire's own base is not enemy force from its point of view.
     c.target = 0;
     CHECK(value("Space_All") == 0.0);
-    std::printf("starbase force split: leaf 2000 (members), helper 0x5f2430 untyped 2600 (+ own 600), Capital row 0, Frigate row 1000\n");
+    // The Contrast list 0x5f1990 (AI_GALACTIC_TOKENS 9.2 layer order): ground total, space total, typed ground rows, typed
+    // space rows; a typed row = strength x scale, 0 when its layer total is <= 0 (the ground total is 0 here).
+    const uint64_t rows[] = {static_cast<uint64_t>(cap), static_cast<uint64_t>(frig)};
+    const std::vector<GalacticContrastEntry> list = galactic_ai_contrast_list(sim, ti, 7, 0, rows, 2.0);
+    CHECK(list.size() == 6);
+    if (list.size() == 6) {
+        CHECK(list[0].row == -1 && !list[0].space && list[0].target == 0.0);    // entry 0: the ground total (layer 1)
+        CHECK(list[1].row == -1 && list[1].space && list[1].target == 2600.0);  // entry 1: the space total (layer 0)
+        CHECK(list[2].row == 0 && !list[2].space && list[2].target == 0.0);     // ground rows: their layer total is 0
+        CHECK(list[3].row == 1 && !list[3].space && list[3].target == 0.0);
+        CHECK(list[4].row == 0 && list[4].space && list[4].target == 1200.0);   // Capital: the own 600 x 2
+        CHECK(list[5].row == 1 && list[5].space && list[5].target == 2000.0);   // Frigate: the member 1000 x 2
+    }
+    // Ownership gate 0x4ad9f0: a neutral owner (not hostile, so the leaf's Enemy side is empty) still passes the gate and the
+    // starbase's own power counts; an ally's planet adds nothing.
+    sim.set_relation(0, 1, gal::Relation::Neutral);
+    CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, true, kAllCategories) == 0.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 600.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap) == 600.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, frig) == 0.0);
+    sim.set_relation(0, 1, gal::Relation::Ally);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 0.0);
+    sim.reset_relations();
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 2600.0);
+    std::printf("starbase force split: leaf 2000 (members), helper 0x5f2430 untyped 2600 (+ own 600), Capital row 600, "
+                "Frigate row 1000; neutral owner 600, ally 0\n");
 }
 
 // A2 t03: per-tech members of the other objects the force totals walk (AI_GALACTIC_TOKENS 2 / 3): every unit of an orbiting
@@ -1607,11 +1635,15 @@ static void test_force_members() {
     // Ground leaf: infantry 200 (not its own list) + barracks members 600; the structures' own power (300, 1200) never.
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, false, kAllCategories) == 800.0);
     CHECK(galactic_ai_planet_force(sim, ti, 7, 0, true, false, inf) == 800.0);
-    // 0x5f2430: + the starbase's own 600 (space) / the ground structures' own 300 + 1200 (ground), untyped only.
+    // 0x5f2430: + the starbase's own 600 (space, Capital) / the ground structures' own 300 + 1200 (ground, Structure), in
+    // every row whose mask meets their category (AI_GALACTIC_TOKENS 9.2).
+    const uint64_t structure = ai_category_bit("Structure");
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, kAllCategories) == 4300.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, corv) == 1500.0);
+    CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, true, cap) == 1800.0);  // leaf 1200 (special weapon) + the starbase's 600
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, kAllCategories) == 2300.0);
     CHECK(galactic_ai_enemy_strength(sim, ti, 7, 0, false, inf) == 800.0);
+    CHECK(structure != 0 && galactic_ai_enemy_strength(sim, ti, 7, 0, false, structure) == 1500.0);  // the structures' own power
     // The token leaves on the live sim (Self = Empire).
     GalacticAiConfig cfg;
     cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};

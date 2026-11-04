@@ -1152,12 +1152,32 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     }
     void refresh_plan(Goal& g) override { w->reserve_pp(g.pp_handle); }
     void suspend_reservations(Goal& g) override { w->suspend_pp(g.pp_handle); }
-    bool uses_budget() override { return false; }  // the AIBudget is galactic-only (§4.1)
+    bool uses_budget() override { return false; }  // the budget's money is galactic-only (§4.1); weights below (§9.3)
     bool can_fund(const Goal&) override { return true; }
     float category_credits(int32_t) override { return 1.0f; }
     void budget_add(Goal&) override {}
     void budget_release(Goal&) override {}
-    void budget_weights() override {}
+    // The battle budget's weights (AI_GALACTIC_TOKENS §9.3 [H]): init 0x6137b0 at the first AI service (template_init) and
+    // reweight 0x614590 at each proposal-pass end (GoalSystem::end_pass), without the money step (galactic only). The map
+    // holds the categories of the active templates' <Budget> / Tactical_Budget_Allowance entries; each <Budget> equation is
+    // evaluated in the battle context, pre-loaded with the previous weight (a failing equation keeps it); a category with no
+    // equation counts as 0; then negatives -> 0 and w / Σw (1 / count when Σw = 0). Read by Variable_Self.BudgetAllocation.
+    void budget_weights() override {
+        const size_t n = w->defs.categories.size();
+        std::vector<float> raw(n, 0.0f);
+        std::vector<uint8_t> member(n, 0);
+        for (size_t c = 0; c < n; ++c) {
+            const auto ci = static_cast<int32_t>(c);
+            if (!ctx.templates.budget_listed(ci)) continue;
+            member[c] = 1;
+            const std::string& eq = ctx.templates.budget_equation(ci);
+            if (eq.empty()) continue;
+            raw[c] = ctx.budget.initialised() ? ctx.budget.weight(ci) : 0.0f;
+            double v = 0.0;
+            if (evaluate(eq, -1, v)) raw[c] = static_cast<float>(v);
+        }
+        ctx.budget.weigh(raw, member);
+    }
     std::vector<int32_t> category_order() override {
         std::vector<int32_t> order;
         for (size_t c = 0; c < w->defs.categories.size(); ++c) order.push_back(static_cast<int32_t>(c));
@@ -1187,10 +1207,9 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
 
     // ---- ContextModeServices ----
     void first_service(int64_t) override;
-    void template_init(int64_t) override {
-        std::string names;
-        for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
-        w->decide(player, "templates" + names);
+    void template_init(int64_t now) override {
+        budget_weights();  // the battle budget is filled at the first AI service (§9.3)
+        templates_changed(now);
     }
     void perception_service(int64_t) override {}  // §2: Service only reschedules
     void planning_service(int64_t) override { w->service_plans(player); }
@@ -1213,7 +1232,11 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
                 ++i;
         }
     }
-    void templates_changed(int64_t now) override { template_init(now); }
+    void templates_changed(int64_t) override {
+        std::string names;
+        for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
+        w->decide(player, "templates" + names);
+    }
 };
 
 int32_t TacticalAiWorld::Impl::opponent_of(int32_t player) const {
@@ -3388,6 +3411,20 @@ TacticalAiWorld::TacticalAiWorld(objects::ObjectStore& store, const objects::Gam
     w.perc.set_script_evaluator([&w](const EvalContext& c, std::string_view name, std::span<const Param> params, double& out) {
         return w.script_evaluate(c, name, params, out);
     });
+    // Variable_Self.BudgetAllocation (AI_GALACTIC_TOKENS §9.3): the key (ai_budget_key, the AIGoalCategoryType value) looked
+    // up among the budget's categories (AiDefinitions::category_value), that category's normalised weight; 0.0 otherwise.
+    w.perc.set_budget_weight([&w](int32_t player, std::span<const Param> params) {
+        const PlayerAi* pa = w.player_ai(player);
+        if (!pa) return 0.0;
+        const auto goal_category = [&w](std::string_view name) -> int64_t {
+            const int32_t c = w.defs.find_category(name);
+            return c >= 0 && static_cast<size_t>(c) < w.defs.category_value.size() ? w.defs.category_value[static_cast<size_t>(c)] : -1;
+        };
+        const int32_t key = ai_budget_key(params, goal_category, w.perc.config().category_mask);
+        for (size_t c = 0; c < w.defs.category_value.size() && c < pa->ctx.budget.size(); ++c)
+            if (w.defs.category_value[c] == key) return static_cast<double>(pa->ctx.budget.weight(static_cast<int32_t>(c)));
+        return 0.0;
+    });
     w.gate.start_game();
     // Shared perception: threat grid over the map, evaluator handles; land zone graph.
     TacticalPerceptionConfig pcfg;
@@ -3570,6 +3607,9 @@ void TacticalAiWorld::end_battle() {
     std::vector<int32_t> ids;
     for (const auto& [id, p] : w.plans) ids.push_back(id);
     for (const int32_t id : ids) w.end_plan(id, true);
+    // Goal slot 7 (0x6cafb0, AI_TACTICAL §1.4): the battle budget is cleared at battle end (AI_GALACTIC_TOKENS §9.3).
+    for (auto& a : w.ai)
+        if (a) a->ctx.budget.reset(w.defs.categories.size());
     for (auto& a : w.ai)
         if (a && a->fs_vm) {
             append_script_errors(*a->fs_vm, "free store " + std::to_string(a->player) + ": ", w.errors);  // S7 t27

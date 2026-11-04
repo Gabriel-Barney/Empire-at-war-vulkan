@@ -14,11 +14,10 @@ constexpr float kVeto = kAiBigFloat;
 constexpr double kInf = kPpInfinite;
 constexpr float kLevelFactorK = 1.0f;  // 0x140b16c8c = GameConstants +0x148C, ctor 1.0, no XML tag (AI_GALACTIC_3 §8) [H]
 
-struct ContrastEntry {
-    int32_t row = -1;    // contrast-table row (EnemyContrastTypes index); -1 = the untyped layer total
-    bool space = false;  // layer flag (entry 0 space, entry 1 ground; typed space rows then ground rows)
-    double target = 0.0;
-};
+// 0x5f1990 list entry (galactic_ai_tokens.hpp): entry 0 = the ground total, entry 1 = the space total, then the typed ground
+// rows, then the typed space rows (AI_GALACTIC_TOKENS §9.2).
+using ContrastEntry = GalacticContrastEntry;
+constexpr size_t total_entry(bool space) { return space ? 1u : 0u; }
 
 struct PpRec {  // rec[i] (0xB8)
     uint32_t type = gal::kNoIndex;
@@ -239,11 +238,6 @@ struct GalPp {
     }
 
     // ---- contrast helpers (0x6c5de0 / 0x72ac70 / 0x6c4b20) ----
-    double enemy_strength(bool space, uint64_t mask) const {
-        // 0x5f2430 (galactic_ai_enemy_strength): the members-only leaf Target.EnemyForce.<layer>TotalUnnormalized, plus the
-        // structures' own AI_Combat_Power in the untyped totals only; a typed row is the leaf with the row's mask [M].
-        return galactic_ai_enemy_strength(w.sim, w.tinfo, static_cast<PlanetIndex>(target), player, space, mask, w.cat_enum);
-    }
     float weight(uint32_t t, int32_t row) const {  // 0x5f1f90 x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3)
         if (!w.cfg.contrast || row < 0) return 0.0f;
         const float c = w.cfg.contrast->contrast(static_cast<size_t>(row), w.type_name(t), w.mask_of(t));
@@ -269,9 +263,9 @@ struct GalPp {
             // untyped total of its layer [M].
             const int32_t e = sel_entry[i];
             if (e >= 2 && static_cast<size_t>(e) < entries.size()) remaining[static_cast<size_t>(e)] -= static_cast<double>(weight(r.type, entries[static_cast<size_t>(e)].row)) * P;
-            if (!entries.empty()) {
-                if (r.space) remaining[0] -= P;
-                if (r.ground && entries.size() > 1) remaining[1] -= P;
+            if (entries.size() > 1) {
+                if (r.space) remaining[total_entry(true)] -= P;
+                if (r.ground) remaining[total_entry(false)] -= P;
             }
         }
         main_met = (!layer_active_space || layer_satisfied(true)) && (!layer_active_ground || layer_satisfied(false));
@@ -797,17 +791,12 @@ public:
         const float fp = static_cast<float>(f) * p_.def.per_failure_contrast_adjust;
         p_.tolerance = 1.0f - (fp + p_.def.min_contrast_scale) / (fp + p_.def.max_contrast_scale);
         const double scale = static_cast<double>(p_.def.max_contrast_scale + fp) * static_cast<double>(p_.pa.contrast_mult);
-        const double space_total = p_.enemy_strength(true, ~uint64_t{0});
-        const double ground_total = p_.enemy_strength(false, ~uint64_t{0});
-        p_.entries.push_back({-1, true, space_total});
-        p_.entries.push_back({-1, false, ground_total});
+        // 0x5f1990 -> 0x5f2430 (galactic_ai_contrast_list): ground total, space total, typed ground rows, typed space rows.
+        std::vector<uint64_t> masks;
         const size_t rows = p_.w.cfg.contrast ? p_.w.cfg.contrast->size() : 0;
-        for (const bool space : {true, false})
-            for (size_t j = 0; j < rows; ++j) {
-                const double total = space ? space_total : ground_total;
-                const double v = total > 0.0 ? p_.enemy_strength(space, p_.w.cfg.contrast->rows[j].enemy_mask) * scale : 0.0;
-                p_.entries.push_back({static_cast<int32_t>(j), space, v});
-            }
+        for (size_t j = 0; j < rows; ++j) masks.push_back(p_.w.cfg.contrast->rows[j].enemy_mask);
+        p_.entries = galactic_ai_contrast_list(p_.w.sim, p_.w.tinfo, static_cast<PlanetIndex>(p_.target), p_.player, masks, scale,
+                                               p_.w.cat_enum);
         p_.remaining.resize(p_.entries.size());
         for (size_t e = 0; e < p_.entries.size(); ++e) p_.remaining[e] = p_.entries[e].target;
     }
@@ -881,7 +870,7 @@ public:
         if (p_.def.ignore_target || p_.entries.empty()) return;
         for (const bool space : {true, false}) {
             if (!(space ? p_.layer_active_space : p_.layer_active_ground)) continue;
-            const size_t e = space ? 0 : 1;
+            const size_t e = total_entry(space);
             if (p_.entries[e].target > 0.0 && p_.remaining[e] / p_.entries[e].target > static_cast<double>(p_.tolerance)) success = false;
             if (!p_.layer_satisfied(space)) success = false;
         }

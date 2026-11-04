@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "alamo/ai/ai_budget.hpp"
 #include "alamo/ai/ai_free_store_path.hpp"
 #include "alamo/ai/ai_types.hpp"
 #include "alamo/galactic/campaign.hpp"
@@ -123,24 +124,54 @@ double galactic_ai_planet_force(const gal::GalacticSim& sim, std::span<const Gal
 
 double galactic_ai_enemy_strength(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types, PlanetIndex planet,
                                   int32_t self, bool space, uint64_t mask, const objects::EnumConverter* categories) {
-    double s = galactic_ai_planet_force(sim, types, planet, self, true, space, mask, categories);
-    if (mask != kAllCategories || static_cast<size_t>(planet) >= sim.planets().size()) return s;
+    // AI_GALACTIC_TOKENS §9.2 [H]. Effective mask = the given mask, or all bits for 0 (the leaf binds no Parameter_Category).
+    const uint64_t m = mask != 0 ? mask : kAllCategories;
+    // 2. The perception leaf Target.EnemyForce.<layer>TotalUnnormalized (members only; a failing leaf would count 0.0).
+    double s = galactic_ai_planet_force(sim, types, planet, self, true, space, m, categories);
+    if (static_cast<size_t>(planet) >= sim.planets().size()) return s;
     const gal::PlanetState& ps = sim.planets()[static_cast<size_t>(planet)];
+    // 3. Ownership gate 0x4ad9f0 (PHASE2_ANSWERS §7): held by the AI or an ally (owner set, relation Self / Ally, control
+    // > 0) -> nothing more. Every other owner passes, pirates, the neutral player and an unowned planet included.
+    if (ps.owner >= 0 && sim.allied(self, ps.owner) && ps.control > 0.0f) return s;
     const objects::ObjectStore& st = sim.store();
     const auto& gt = sim.rules().types;
-    auto power = [&](ObjectHandle h) {
-        const uint32_t t = static_cast<uint32_t>(st.type(h));
-        return t < gt.size() ? static_cast<double>(gt[t].ai_combat_power) : 0.0;
-    };
-    // [port] "not held by the AI or an ally" (0x4ad9f0) is read as the leaf's Enemy owner filter (hostile to Self).
-    if (ps.owner < 0 || !sim.is_hostile(self, ps.owner)) return s;
+    auto power = [&](uint32_t t) { return t < gt.size() ? static_cast<double>(gt[t].ai_combat_power) : 0.0; };
+    auto matches = [&](uint32_t t) { return t < types.size() && (types[t].category_mask & m) != 0; };
     if (space) {
-        if (ps.starbase && st.alive(ps.starbase)) s += power(ps.starbase);  // the starbase type's AI_Combat_Power [H]
+        // 5. The starbase TYPE (D+0xB8 -> +0x140, 0x3f8b40) when its category mask +0x1648 meets the mask: + its own power.
+        const uint32_t t = sim.starbase_type(planet);
+        if (t != gal::kNoIndex && matches(t)) s += power(t);
     } else {
-        for (const ObjectHandle u : ps.structures)  // Σ AI_Combat_Power of the ground structures [H]; garrison types 0x4b8000 [port: none]
-            if (st.alive(u)) s += power(u);
+        // 6. Every ground structure (D+0x158, list order) whose type meets the mask: + its own power. Then 0x4b8000(D, mask):
+        // the planet data +0x10 type-id list [port: not modelled, the port's planet has no such list; adds 0].
+        for (const ObjectHandle u : ps.structures) {
+            if (!st.alive(u)) continue;
+            const auto t = static_cast<uint32_t>(st.type(u));
+            if (matches(t)) s += power(t);
+        }
     }
     return s;
+}
+
+std::vector<GalacticContrastEntry> galactic_ai_contrast_list(const gal::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
+                                                             PlanetIndex planet, int32_t self, std::span<const uint64_t> row_masks,
+                                                             double scale, const objects::EnumConverter* categories) {
+    // 0x5f1990 (AI_GALACTIC_TOKENS §9.2 layer order) [H]: ground total (flag 1), space total (flag 0), the typed ground rows,
+    // the typed space rows; a layer's typed rows are 0 when its total is <= 0; the totals are not scaled.
+    std::vector<GalacticContrastEntry> out;
+    out.reserve(2 + 2 * row_masks.size());
+    const double ground = galactic_ai_enemy_strength(sim, types, planet, self, false, 0, categories);
+    const double space = galactic_ai_enemy_strength(sim, types, planet, self, true, 0, categories);
+    out.push_back({-1, false, ground});
+    out.push_back({-1, true, space});
+    for (const bool sp : {false, true}) {
+        const double total = sp ? space : ground;
+        for (size_t j = 0; j < row_masks.size(); ++j) {
+            const double v = total > 0.0 ? galactic_ai_enemy_strength(sim, types, planet, self, sp, row_masks[j], categories) * scale : 0.0;
+            out.push_back({static_cast<int32_t>(j), sp, v});
+        }
+    }
+    return out;
 }
 
 namespace {
@@ -687,35 +718,10 @@ struct GalacticSimTokenResolver::Impl {
         for (const std::string_view n : param_texts(params, "Parameter_Category")) m |= ai_category_bit(n, r.categories_);
         return m;
     }
-    // BudgetAllocation's key (§8.3): Parameter_Category (0x5f4780, default -1), the low 32 bits of the parsed value. An
-    // AIGoalCategoryType[...] enum value is the category's enum value (names OR-ed as the parser does for any enum [M]);
-    // another enum type (GameObjectCategoryType) its bits; a number itself; [port] a quoted name the AIGoalCategoryType
-    // value of that name. An unknown name -> -1 (no category).
+    // BudgetAllocation's key (§8.3): ai_budget_key (ai_budget.hpp), shared with the tactical leaf.
     int32_t budget_key(std::span<const Param> params) const {
-        for (const Param& p : params) {
-            if (!ai_iequal(p.name, "Parameter_Category")) continue;
-            const auto low32 = [](int64_t v) { return static_cast<int32_t>(static_cast<uint32_t>(static_cast<uint64_t>(v))); };
-            const auto goal = [&](std::string_view n) -> int64_t { return r.hooks_.goal_category ? r.hooks_.goal_category(n) : -1; };
-            switch (p.value.kind) {
-                case ParamValue::Kind::Number:
-                    return std::fabs(p.value.number) < 9.0e18 ? low32(static_cast<int64_t>(p.value.number)) : -1;
-                case ParamValue::Kind::Enum: {
-                    const bool goal_enum = ai_iequal(p.value.text, "AIGoalCategoryType");
-                    int64_t v = 0;
-                    for (const std::string& n : p.value.enum_values) {
-                        const int64_t x = goal_enum ? goal(n) : static_cast<int64_t>(ai_category_bit(n, r.categories_));
-                        if (goal_enum && x < 0) return -1;
-                        v |= x;
-                    }
-                    return low32(v);
-                }
-                default: {
-                    const int64_t x = goal(p.value.text);
-                    return x < 0 ? -1 : low32(x);
-                }
-            }
-        }
-        return -1;
+        return ai_budget_key(params, r.hooks_.goal_category,
+                             [this](std::string_view n) { return ai_category_bit(n, r.categories_); });
     }
     bool type_named(uint32_t t, std::span<const std::string_view> names) const {
         if (t >= rules.types.size()) return false;
