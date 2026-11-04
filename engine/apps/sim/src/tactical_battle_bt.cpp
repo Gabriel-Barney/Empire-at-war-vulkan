@@ -268,8 +268,9 @@ cmd::RejectReason TacticalBattle::tactical_build(TacticalMode& mode, uint8_t pla
     if (fog() && fog_object_hidden(static_cast<int32_t>(player), pad, true)) return R::NotAllowed;  // pad fogged (0x35f470)
 #endif
     const int32_t owner = st.owner(ph);
-    if (owner < 0 || (owner != static_cast<int32_t>(player) && combat_->is_enemy(static_cast<int32_t>(player), owner)))
-        return R::NotAllowed;  // not allied-owned (0x39a230)
+    // q6 t19 (AI_TACTICAL §7.5.1): 0x39a230(pad, player) = relation(player -> pad owner) == 0. A Neutral-owned (relation 2)
+    // pad is not allied, for humans and AI alike; the structure belongs to the builder, the pad keeps its owner.
+    if (owner < 0 || !bt_allied(static_cast<int32_t>(player), owner)) return R::NotAllowed;  // "not owned by an ally"
     if (const PadState* s = pad_state(pad); s && s->cooldown_end > frame_) return R::NotAllowed;
     if (uc_behavior() == objects::kNoBehavior || !types.has_behavior(type, objects::BehaviorSet::Union, uc_behavior())) return R::InvalidUnit;
     if (!ai) {
@@ -278,7 +279,7 @@ cmd::RejectReason TacticalBattle::tactical_build(TacticalMode& mode, uint8_t pla
         if (cost > have) return R::CannotAfford;
         if (cost > 0.0f && credits_add_) credits_add_(static_cast<int32_t>(player), -cost);  // execute 0x5d78a0: charge 1
     }
-    return pad_build(mode, pad, type, false) == 1 ? R::None : R::NotAllowed;
+    return pad_build(mode, pad, type, false, static_cast<int32_t>(player)) == 1 ? R::None : R::NotAllowed;
 }
 
 cmd::RejectReason TacticalBattle::tactical_sell(TacticalMode& mode, uint8_t player, objects::ObjectId object) {
@@ -312,10 +313,9 @@ cmd::RejectReason TacticalBattle::tactical_sell(TacticalMode& mode, uint8_t play
     s->built = objects::kNoObjectId;
     s->built_type = objects::kNone;
     s->locked = false;
-    if (st.alive(ph)) {
-        pad_persist(st, ph, bt, st.position(h), false);  // §9.4: the sale removes the persistent record (the object's x, y)
-        s4_capture_reset(mode, s->pad);      // §6.5: the child went away -> the pad's capture point back to neutral
-    }
+    // q6 t19 (AI_TACTICAL §7.5.1 item 4): a sale clears the slot and the persistence record but resets no ownership and
+    // starts no cooldown: the pad keeps its owner until someone captures it (the capture rules of an empty pad).
+    if (st.alive(ph)) pad_persist(st, ph, bt, st.position(h), false);  // §9.4: the sale removes the persistent record (the object's x, y)
     if (Unit* u = unit_by_id(object); u && u->alive) {
         u->alive = false;
         --parts_[u->participant].alive;
@@ -351,6 +351,29 @@ bool TacticalBattle::add_reserve(objects::ObjectHandle galactic, int32_t owner) 
     add_participant(galactic, owner, owner == req_.info.defender ? 0 : 1, true, false, false);
     if (parts_.size() == n) return false;
     bt_used_ = true;
+    return true;
+}
+
+// q6 t19 (SKIRMISH_SETUP §3.1 item 1, 0x27fad0): a finished land tactical build joins the player's reinforcement pool.
+bool TacticalBattle::add_built_reserve(int32_t owner, uint32_t type, objects::ObjectId& key) {
+    key = objects::kNoObjectId;
+    if (finished_ || !can_add_reserve(type)) return false;
+    Participant p;
+    p.galactic_id = kBuiltReserveKeyBase + static_cast<objects::ObjectId>(parts_.size());
+    p.owner = owner;
+    p.type = type;
+    p.side = owner == req_.info.defender ? 0 : 1;
+    p.reserve = true;
+    p.built = true;  // no galactic counterpart: not in the battle result
+    const galactic::ConflictTypeInfo& ti = rules_->type(type);
+    p.pop = static_cast<float>(ti.space_population_override >= 0 ? ti.space_population_override : ti.population);
+    const auto& types = galaxy_->rules().types;
+    p.power = type < types.size() ? types[type].ai_combat_power : 0.0f;
+    for (const auto& [mt, n] : ti.members)
+        if (mt < types.size()) p.power += static_cast<float>(n) * types[mt].ai_combat_power;
+    parts_.push_back(p);
+    bt_used_ = true;
+    key = p.galactic_id;
     return true;
 }
 
@@ -1160,7 +1183,7 @@ void TacticalBattle::bt_pad_restore(TacticalMode& mode) {
     // record's owner at the pad's build point (0x42e280) with the pad's facing, at full health (no UC phase, no cost), and
     // takes the pad's child slot. No match, an unknown type or owner -1: nothing (the record stays).
     // [port] an owner that is not a player of this battle's galaxy, or a type the battle tables cannot hold: nothing. The
-    // pad's capture-point controller is not re-derived here (0x501050(-1, -1) [M]); the pad's +0x3CB byte is not copied.
+    // pad's +0x3CB byte is not copied; the pad's owner is never changed (§9.11, below).
     if (!pad_records_ || pad_records_->empty() || !pad_restore_ || cfg_.skirmish || !combat_) return;
     static const objects::BehaviorTypeId kPad = objects::behavior_type_id("TACTICAL_BUILD_OBJECTS");
     if (kPad == objects::kNoBehavior) return;
@@ -1188,6 +1211,11 @@ void TacticalBattle::bt_pad_restore(TacticalMode& mode) {
         pads_mode_ = &mode;
         s->built = st.id(bh);
         s->built_type = sp.type;
+        // q6 t19 (AI_GALACTIC_TOKENS §9.11): the child slot is filled first, so 0x501050(capture, -1, -1) re-derives the
+        // controller by rule (a) = the pad's CURRENT owner: the pad keeps its owner (a defender turret may stand on a
+        // Neutral pad) and only the capture record (controller +0x08, progress) is refreshed. The recreate does not register
+        // the pad as a listener of the object's signal 0x28 (the port's pad state polls the child's death either way).
+        s4_capture_grant(mode, st.id(ph), st.owner(ph));
         bt_used_ = true;
         ++stats_.pad_restored;
     }

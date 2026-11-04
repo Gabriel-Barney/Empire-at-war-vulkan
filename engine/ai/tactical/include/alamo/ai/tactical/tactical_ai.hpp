@@ -123,6 +123,11 @@ struct TacticalAiObject {
     bool moving = false;                  // has a movement goal
     int32_t attack_target = -1;           // object id it is attacking (ordered or automatic), -1 none
     bool damage_tracking = false;         // DAMAGE_TRACKING (FindDeadlyEnemy radius form)
+    // q6 t19 - the target test 0x5680b0 (A1_READINGS §33.2.1): a TEAM container or a type with both
+    // Collidable_By_Projectile_Living and Is_Valid_Target; not garrisoned / hidden (+0x3a7), not dead, not carried in a
+    // transport, not in a hero clash (+0x3b4, `hero_clash`), and no SPECIAL_WEAPON unless it is a DUMMY_STAR_BASE.
+    bool valid_target = true;
+    bool hero_clash = false;  // obj +0x3b4 [port: no hero clashes yet, always false; kept so it can be wired]
     // UnitAI data-pack re-projection stamp (+0x20, A1_READINGS §14): UnitAiStamps::reprojection_check drawn by the host
     // when the UNIT_AI object was created (draw_unit_ai_stamps). kNoReprojectionStamp: the host does not carry it, the
     // grid uses its [port] legacy registration + 300.
@@ -280,6 +285,19 @@ public:
     // the tick just run, in the order they were sent. Defaults: never in flight, none (the units exist at the order).
     virtual bool reinforce_in_flight(int32_t /*player*/, int32_t /*key*/) { return false; }
     virtual std::vector<ReinforcementsUnloaded> reinforcements_unloaded() { return {}; }
+    // q6 t19 (A1_READINGS §33.2.2): the object ids the order just executed dropped from its move because their attack
+    // order (path A, kTfAttackMoveIssueAttack) was refused, in the order tried. Such a unit stays in the block's
+    // all-units list but is neither moved nor pending. Default: none (every unit moved).
+    virtual std::vector<int32_t> attack_order_refused() { return {}; }
+    // q6 t19 (SKIRMISH_SETUP §3 / §3.1, AI_GALACTIC_3 §1.11): land tactical builds completed in the tick just run, in
+    // completion order (signal 0x22): the type went to the player's reinforcement pool (no object appears), so the build
+    // task of the first task force (id order) producing that type ends its entry. Default: none (hosts whose builds
+    // spawn objects; those are claimed when they appear).
+    struct ProductionCompleted {
+        int32_t player = -1;
+        int32_t type = -1;  // PerceptionWorld type index
+    };
+    virtual std::vector<ProductionCompleted> production_completed() { return {}; }
 };
 
 // OPT2 t10: frames from a proposal slice to the apply of its PotentialPlan solves (TacticalAiConfig::pp_latency).

@@ -974,7 +974,7 @@ void TacticalBattle::deploy(TacticalMode& mode, uint32_t pi, SimRng& rng, uint32
         sp.owner = P.owner;
         sp.position = pos;
         sp.facing = face;
-        sp.parent_mode_id = P.galactic_id;
+        sp.parent_mode_id = P.built ? objects::kNoObjectId : P.galactic_id;  // q6 t19: a pool entry from tactical production
         const objects::ObjectHandle h = mode.spawn(sp, 1.0f);
         if (lead_sw) {  // battle host: lead object +0x28 = the spawned super-weapon's id
             bt_lead_ = mode.primary().id(h);
@@ -1607,6 +1607,9 @@ cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t pl
                 Landing landing = spawn_landing(mode, p, x, y);
                 landing.participant = i;
                 drop_pos_.clear();
+                // q6 t19 (SKIRMISH_SETUP §3.1 item 3): in skirmish a pool type without a Company_Transport_Unit cannot be
+                // dropped (0x2b5fe0 returns null: no landing object, no members).
+                if (landing.id == objects::kNoObjectId && cfg_.skirmish) return R::NotAllowed;
                 if (landing.id != objects::kNoObjectId) {
                     lay = land_drop_layout(shape, x, y, yaw, 3.0f);
                     const objects::GameObjectTypes& types = catalog_->types();
@@ -1972,7 +1975,7 @@ TacticalBattle::Landing TacticalBattle::spawn_landing(TacticalMode& mode, const 
     sp.position = {x, y, map_.terrain.sample_height(x, y) + types.get_float(l, "Hover_Offset")};
     const Vec3 f = p.side < 2 ? drop_facing_[p.side] : Vec3{};
     sp.facing = f.x == 0.0f && f.y == 0.0f ? facing_of_yaw(0.0f) : f;
-    sp.parent_mode_id = p.galactic_id;
+    sp.parent_mode_id = p.built ? objects::kNoObjectId : p.galactic_id;  // q6 t19: tactical production pool entries
     const objects::ObjectHandle h = mode.spawn(sp, 1.0f);
     objects::ObjectStore& st = mode.primary();
     st.add_behavior(h, objects::beh::TransportLanding);
@@ -3636,6 +3639,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     story_reinforced_.clear();  // L1/S4 wave 2b story hook: this tick's reserve deployments
     ability_finished_.clear();  // S7 t15 A1: this tick's signal 0x29
     landings_unloaded_.clear();  // a1i t04: signal 0x19 records of the last tick
+    production_done_.clear();    // q6 t19: signal 0x22 records of the last tick
     story_garrisoned_.clear();  // S4: this tick's garrison entries / structure captures
     story_captured_.clear();
     share_groups_sync();  // S8 t17 (FIGHTER_FLYING §4.10 B): squadron of the shared team target, before this tick's orders

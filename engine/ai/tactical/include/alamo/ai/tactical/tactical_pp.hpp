@@ -101,6 +101,10 @@ struct TacticalPpInput {
     float contrast_multiplier = 1.0f;  // Land_ / Space_AI_Contrast_Multiplier (difficulty)
     int32_t recent_failures = 0;       // Learning 0x588980 at this target
     std::function<double(uint64_t mask)> enemy_strength;
+    // q6 t19 - the escort list's strength (AI_TACTICAL §7.7.1 flag 1, read only when some TF is an EscortForce): unit
+    // target -> the enemies around the target, the target object excluded; region -> as enemy_strength. Absent: the
+    // escort list uses enemy_strength.
+    std::function<double(uint64_t mask)> escort_strength;
     SimRng* rng = nullptr;
     uint32_t max_iterations = 200;     // port guard
 };

@@ -20,6 +20,7 @@ struct ContrastEntry {
     int32_t row = -1;   // contrast-table row; -1 = the untyped layer total
     bool space = false; // layer
     double target = 0.0;
+    bool escort = false;  // q6 t19: entry of the escort list (AI_TACTICAL §7.7.1, flag 1)
 };
 
 struct PpRec {  // rec[i]
@@ -81,8 +82,13 @@ struct TacPp {
     float gross = 0.0f;  // PP+0x40: 0 in tactical (no Budget marshaller, §1.2)
     float net = 0.0f;    // PP+0x44: TacticalBuild purchases
     float tolerance = 0.0f;
+    // Contrast lists (AI_TACTICAL §7.7.1): the main list at [0, esc_base), then - q6 t19, only when some TF of the plan
+    // is an EscortForce (0x140b3a525) - the escort list at [esc_base, end) with the same layout (space total, ground
+    // total, typed rows). No escort list: esc_base = entries.size().
     std::vector<ContrastEntry> entries;
     std::vector<double> remaining;
+    bool has_escort_list = false;
+    size_t esc_base = 0;
     bool layer_active_space = false, layer_active_ground = false;
 
     explicit TacPp(const TacticalPpInput& i) : in(i), def(*i.def), types(*i.types) {}
@@ -145,33 +151,71 @@ struct TacPp {
         const auto* x = ti(t);
         return x ? in.contrast->contrast(static_cast<size_t>(row), x->name, x->category) : 0.0f;
     }
-    bool layer_satisfied(bool space) const {
+    bool layer_satisfied(bool space, bool escort = false) const {
         double total = 0.0, residual = 0.0;
-        for (size_t e = 2; e < entries.size(); ++e) {
-            if (entries[e].space != space) continue;
+        for (size_t e = 0; e < entries.size(); ++e) {
+            if (entries[e].row < 0 || entries[e].space != space || entries[e].escort != escort) continue;
             total += entries[e].target;
             residual += std::max(remaining[e], 0.0);
         }
         if (total <= 0.0) return true;
         return residual / total <= static_cast<double>(tolerance);
     }
+    // 0x6bff00: every active layer of the list passes 0x72ac70.
+    bool list_met(bool escort) const {
+        return (!layer_active_space || layer_satisfied(true, escort)) && (!layer_active_ground || layer_satisfied(false, escort));
+    }
+    bool escort_entry(size_t e) const { return has_escort_list && e >= esc_base; }
+    // The entry of the same row / layer in the main (escort = false) or escort list; -1 none.
+    int32_t entry_in(int32_t e, bool escort) const {
+        if (e < 0 || static_cast<size_t>(e) >= entries.size() || (escort && !has_escort_list)) return -1;
+        const size_t off = escort_entry(static_cast<size_t>(e)) ? static_cast<size_t>(e) - esc_base : static_cast<size_t>(e);
+        return static_cast<int32_t>((escort ? esc_base : 0) + off);
+    }
+    // Selection i subtracts from one list (0x6bf840): its contrast entry's row (weight x P) and the layer total (P).
+    void subtract(size_t i, bool escort) {
+        const PpRec& r = recs[sel_rec[i]];
+        const double P = static_cast<double>(power_of(r.type)) *
+                         (sel_unit[i] >= 0 ? static_cast<double>(in.free_units[static_cast<size_t>(units[static_cast<size_t>(sel_unit[i])].index)].health) : 1.0);
+        const int32_t e = entry_in(sel_entry[i], escort);
+        if (e >= 0 && entries[static_cast<size_t>(e)].row >= 0)
+            remaining[static_cast<size_t>(e)] -= static_cast<double>(weight(r.type, entries[static_cast<size_t>(e)].row)) * P;
+        const size_t base = escort ? esc_base : 0;
+        if (entries.size() > base) {
+            if (r.space) remaining[base] -= P;
+            if (r.ground && entries.size() > base + 1) remaining[base + 1] -= P;
+        }
+    }
+    // 0x6c4b20 (AI_GALACTIC_TOKENS §9.10): remaining lists from scratch, then the flags. No escort list: every selection
+    // subtracts from the main list (selection order) and the escort flag is set (empty escort remaining list). With an
+    // escort list (q6 t19, tactical): the task-force slots in order, each assigned selection into the escort list when
+    // its slot is an escort slot or the main contrast is already met at that point of the walk (re-tested after each
+    // main-list unit, false at the start), else into the main list; then the unplaced selections into the main list.
     void recompute_remaining() {
         remaining.resize(entries.size());
         for (size_t e = 0; e < entries.size(); ++e) remaining[e] = entries[e].target;
-        for (size_t i = 0; i < sel_rec.size(); ++i) {
-            const PpRec& r = recs[sel_rec[i]];
-            const double P = static_cast<double>(power_of(r.type)) *
-                             (sel_unit[i] >= 0 ? static_cast<double>(in.free_units[static_cast<size_t>(units[static_cast<size_t>(sel_unit[i])].index)].health) : 1.0);
-            const int32_t e = sel_entry[i];
-            if (e >= 2 && static_cast<size_t>(e) < entries.size())
-                remaining[static_cast<size_t>(e)] -= static_cast<double>(weight(r.type, entries[static_cast<size_t>(e)].row)) * P;
-            if (!entries.empty()) {
-                if (r.space) remaining[0] -= P;
-                if (r.ground && entries.size() > 1) remaining[1] -= P;
+        if (!has_escort_list) {
+            for (size_t i = 0; i < sel_rec.size(); ++i) subtract(i, false);
+            main_met = list_met(false);
+            escort_met = true;
+            return;
+        }
+        std::vector<uint8_t> placed(sel_rec.size(), 0);
+        bool met = false;
+        for (const PpSlot& sl : slots) {
+            const bool slot_escort = tf_def(sl.tf).escort;
+            for (const uint32_t i : sl.assigned) {
+                if (i >= sel_rec.size()) continue;
+                placed[i] = 1;
+                const bool escort = slot_escort || met;
+                subtract(i, escort);
+                if (!escort) met = list_met(false);
             }
         }
-        main_met = (!layer_active_space || layer_satisfied(true)) && (!layer_active_ground || layer_satisfied(false));
-        escort_met = main_met;  // [port] one requirement list (as galactic)
+        for (size_t i = 0; i < sel_rec.size(); ++i)
+            if (!placed[i]) subtract(i, false);
+        main_met = list_met(false);
+        escort_met = list_met(true);
     }
 };
 
@@ -321,7 +365,9 @@ public:
             const int32_t s = r.teams[static_cast<size_t>((std::max(r.start_team, 0) + k) % n)];
             PpSlot& slot = p_.slots[static_cast<size_t>(s)];
             const bool escort = p_.tf_def(slot.tf).escort;
-            if (respect_met && ((escort && p_.escort_met) || (!escort && p_.main_met))) continue;
+            // First pass (0x729830, AI_GALACTIC_TOKENS §9.10): a non-escort slot is skipped when main is met and escort is
+            // not, an escort slot when escort is met and main is not. The second pass ignores the flags.
+            if (respect_met && ((!escort && p_.main_met && !p_.escort_met) || (escort && p_.escort_met && !p_.main_met))) continue;
             if (!(p_.team_def(slot).percent || static_cast<int32_t>(slot.assigned.size()) < p_.team_def(slot).max)) continue;
             slot.assigned.push_back(sel);
             slot.cost_sum += p_.cost_of(r.type);
@@ -474,6 +520,8 @@ public:
     void setup_a() override {  // 0x72bee0 -> 0x6c5de0
         p_.entries.clear();
         p_.tolerance = 0.0f;
+        p_.has_escort_list = false;
+        p_.esc_base = 0;
         if (!p_.in.has_target || p_.def.ignore_target || !p_.in.enemy_strength) {
             p_.remaining.clear();
             return;
@@ -495,6 +543,24 @@ public:
                 const double v = t > 0.0 ? p_.in.enemy_strength(p_.in.contrast->rows[j].enemy_mask) * scale : 0.0;
                 p_.entries.push_back({static_cast<int32_t>(j), space, v});
             }
+        p_.esc_base = p_.entries.size();
+        // q6 t19 (AI_TACTICAL §7.7.1, AI_GALACTIC_TOKENS §9.10): the escort list (0x5f1d00 flag 1) when some TF of the
+        // plan is an EscortForce (Plan Setup A ran first): the same layout over escort_strength (unit target: the
+        // enemies around it, the target excluded; region: the main path). No escort_strength: the main path.
+        if (p_.any_escort) {
+            const std::function<double(uint64_t)>& es = p_.in.escort_strength ? p_.in.escort_strength : p_.in.enemy_strength;
+            p_.has_escort_list = true;
+            const double et = es(~uint64_t{0});
+            const double es_space = space_mode ? et : 0.0, es_ground = space_mode ? 0.0 : et;
+            p_.entries.push_back({-1, true, es_space, true});
+            p_.entries.push_back({-1, false, es_ground, true});
+            for (const bool space : {true, false})
+                for (size_t j = 0; j < rows; ++j) {
+                    const double t = space ? es_space : es_ground;
+                    const double v = t > 0.0 ? es(p_.in.contrast->rows[j].enemy_mask) * scale : 0.0;
+                    p_.entries.push_back({static_cast<int32_t>(j), space, v, true});
+                }
+        }
         p_.remaining.resize(p_.entries.size());
         for (size_t e = 0; e < p_.entries.size(); ++e) p_.remaining[e] = p_.entries[e].target;
     }
@@ -507,8 +573,8 @@ public:
                 r.non_escort = r.non_escort || !esc;
             }
             r.pairs.clear();
-            for (size_t e = 2; e < p_.entries.size(); ++e) {
-                if (!(p_.remaining[e] > 0.0)) continue;
+            for (size_t e = 0; e < p_.entries.size(); ++e) {
+                if (p_.entries[e].row < 0 || !(p_.remaining[e] > 0.0)) continue;
                 const float wgt = p_.weight(r.type, p_.entries[e].row);
                 r.pairs.emplace_back(static_cast<int32_t>(e), wgt);
                 if (wgt > 0.0f) {
@@ -527,6 +593,9 @@ public:
         r.contrast_entry = -1;
         const double P = p_.power_eff(i);
         for (const auto& [e, wgt] : r.pairs) {  // tactical: every pair is considered
+            // q6 t19 (AI_GALACTIC_2 §1.4): the main list only for a candidate with a non-escort team, the escort list when
+            // the candidate has an escort team or the main contrast is met.
+            if (p_.escort_entry(static_cast<size_t>(e)) ? !(r.escort || p_.main_met) : (r.escort && !r.non_escort)) continue;
             const double R = p_.remaining[static_cast<size_t>(e)];
             const double wp = static_cast<double>(wgt) * P;
             const double d = std::max(R - wp, 0.0), m = std::max(R, wp);
@@ -537,11 +606,19 @@ public:
             }
         }
         if (v > 0.0) return static_cast<float>(v * 2.0);  // x2 in tactical modes
+        // Gate: main side [port: the candidate's own layers, kept] with a non-escort team, or (q6 t19) the escort flag
+        // with an escort team.
         const bool layer_ok = (!r.space || p_.layer_satisfied(true)) && (!r.ground || p_.layer_satisfied(false));
-        if (!layer_ok) return kVeto;
+        const bool main_side = layer_ok && (r.non_escort || !r.escort);
+        if (!main_side && !(p_.escort_met && r.escort)) return kVeto;
         if (p_.def.minimum_cost + p_.def.additional_cost > p_.gross) return 0.0f;
-        if ((r.space && !p_.remaining.empty() && p_.remaining[0] > 0.0) || (r.ground && p_.remaining.size() > 1 && p_.remaining[1] > 0.0))
+        if (main_side &&
+            ((r.space && !p_.remaining.empty() && p_.remaining[0] > 0.0) || (r.ground && p_.remaining.size() > 1 && p_.remaining[1] > 0.0)))
             return 0.0f;
+        if (p_.has_escort_list) {  // the escort list's untyped totals (0x140b3a525 set)
+            const size_t b = p_.esc_base;
+            if ((r.space && p_.remaining[b] > 0.0) || (r.ground && p_.remaining.size() > b + 1 && p_.remaining[b + 1] > 0.0)) return 0.0f;
+        }
         for (const uint64_t m : p_.required_masks())
             if ((m & p_.selected_mask) == 0 && (m & p_.mask_of(r.type)) != 0) return 0.0f;
         for (const int32_t s : r.teams) {
@@ -560,11 +637,15 @@ public:
     }
     void finalize(bool& success) override {  // 0x72af80
         if (p_.def.ignore_target || p_.entries.empty()) return;
-        for (const bool space : {true, false}) {
-            if (!(space ? p_.layer_active_space : p_.layer_active_ground)) continue;
-            const size_t e = space ? 0 : 1;
-            if (p_.entries[e].target > 0.0 && p_.remaining[e] / p_.entries[e].target > static_cast<double>(p_.tolerance)) success = false;
-            if (!p_.layer_satisfied(space)) success = false;
+        for (const bool escort : {false, true}) {  // q6 t19: both lists (entries 0 and 1 of each)
+            if (escort && !p_.has_escort_list) continue;
+            const size_t base = escort ? p_.esc_base : 0;
+            for (const bool space : {true, false}) {
+                if (!(space ? p_.layer_active_space : p_.layer_active_ground)) continue;
+                const size_t e = base + (space ? 0 : 1);
+                if (p_.entries[e].target > 0.0 && p_.remaining[e] / p_.entries[e].target > static_cast<double>(p_.tolerance)) success = false;
+                if (!p_.layer_satisfied(space, escort)) success = false;
+            }
         }
     }
 

@@ -1117,6 +1117,14 @@ struct PadRun {
     bool fought = false, refused_rules = false, refused_full = false, started = false, uc_seen = false, built = false, cleared = false;
     bool cooldown_refused = false, rebuilt = false, locked = false;
     bool other_list_refused = false;  // t50: the type of the other mode's list (_Multiplayer in a campaign battle, _Campaign in a land skirmish)
+    // q6 t19 (AI_TACTICAL §7.5.1): an enemy builder is refused; the UC belongs to the builder and the pad keeps its owner;
+    // a Neutral-owned pad (player 2) refuses every build in skirmish (relation(Neutral, Neutral) = 2); the pad owner after
+    // its child died.
+    bool enemy_builder_refused = false, uc_owner_ok = false, neutral_refused = false;
+    int32_t owner_after_death = -9;
+    // q6 t19 (SKIRMISH_SETUP §3.1): a finished land build is a pool entry (key >= kBuiltReserveKeyBase, no galactic
+    // counterpart); in a skirmish a type without a Company_Transport_Unit (S10_Squad) cannot be dropped and stays pooled.
+    bool pool_added = false, pool_drop_refused = false;
     float sight_clear = -1.0f, sight_rain = -1.0f;
     bool fog_on = false;
     CrcLog crc;
@@ -1188,10 +1196,31 @@ PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
             scout = st.id(tm->spawn(sp));
             out.refused_rules = b->pad_build(*tm, pad, fr_t, true) == 0;  // not in the faction row
             out.other_list_refused = b->pad_build(*tm, pad, other_t, true) == 0;  // t50: only the mode's own list counts
+            out.enemy_builder_refused = b->pad_build(*tm, pad, uc_t, false, 0) == -1;  // q6 t19: player 0 is not allied with 1
             out.started = b->pad_build(*tm, pad, uc_t, true) == 1;
+            if (const objects::ObjectHandle uh = st.find(b->pad_contents(pad)); st.alive(uh))
+                out.uc_owner_ok = st.owner(uh) == 1 && st.owner(st.find(pad)) == 1;
+            sp.type = static_cast<objects::TypeIndex>(type_of(d, "L1_Build_Pad"));
+            sp.owner = 2;  // the Neutral player
+            sp.position = {1500.0f, 1500.0f, 0.0f};
+            const objects::ObjectId npad = st.id(tm->spawn(sp));
+            out.neutral_refused = b->pad_build(*tm, npad, uc_t, false) == -1;
             out.refused_full = b->pad_build(*tm, pad, uc_t, false) == -1;  // already has something built on it
             b->pad_lock(pad, true);
             out.locked = b->pad_locked(pad);
+        }
+        if (f == 2) {
+            objects::ObjectId key = objects::kNoObjectId;
+            const bool added = b->add_built_reserve(1, sq, key);
+            bool listed = false;
+            for (const TacticalBattle::Reserve& r : b->reserves(1)) listed = listed || (r.galactic_id == key && r.type == sq);
+            out.pool_added = added && key >= TacticalBattle::kBuiltReserveKeyBase && listed;
+            if (skirmish) {
+                const commands::RejectReason rr = b->order_reinforce(*tm, 1, key, -1000.0f, -1000.0f, host.random().synced());
+                bool still = false;
+                for (const TacticalBattle::Reserve& r : b->reserves(1)) still = still || r.galactic_id == key;
+                out.pool_drop_refused = rr != commands::RejectReason::None && still;
+            }
         }
         const objects::ObjectId c = b->pad_contents(pad);
         if (f > 1 && f < 60 && c != objects::kNoObjectId && st.alive(st.find(c)) && st.type(st.find(c)) == uc_t) out.uc_seen = true;
@@ -1202,6 +1231,7 @@ PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
         }
         if (built_frame && f == built_frame + 1) {
             out.cleared = b->pad_contents(pad) == objects::kNoObjectId && !b->pad_locked(pad);
+            out.owner_after_death = st.owner(st.find(pad));
             out.cooldown_refused = b->pad_build(*tm, pad, uc_t, false) == -1;
         }
         if (built_frame && f == built_frame + 40) out.rebuilt = b->pad_build(*tm, pad, uc_t, false) == 1;
@@ -1239,6 +1269,14 @@ void test_pads(const Data& d) {
     std::printf("  pads (land skirmish): fought %d refused-rules %d other-list-refused %d started %d uc %d built %d cleared %d rebuilt %d\n", k.fought,
                 k.refused_rules, k.other_list_refused, k.started, k.uc_seen, k.built, k.cleared, k.rebuilt);
     CHECK(k.fought && k.refused_rules && k.other_list_refused && k.started && k.refused_full && k.uc_seen && k.built && k.cleared && k.rebuilt);
+    std::printf("  pads q6 t19: enemy builder refused %d/%d, uc owner %d/%d, neutral pad refused %d/%d, owner after child death %d/%d\n",
+                a.enemy_builder_refused, k.enemy_builder_refused, a.uc_owner_ok, k.uc_owner_ok, a.neutral_refused, k.neutral_refused,
+                a.owner_after_death, k.owner_after_death);
+    CHECK(a.enemy_builder_refused && k.enemy_builder_refused && a.uc_owner_ok && k.uc_owner_ok);
+    CHECK(k.neutral_refused && !a.neutral_refused);  // campaign: the Neutral player is allied with itself (p == q)
+    std::printf("  pads q6 t19: built pool entry %d/%d, skirmish drop without a transport refused %d\n", a.pool_added, k.pool_added,
+                k.pool_drop_refused);
+    CHECK(a.pool_added && k.pool_added && k.pool_drop_refused);
 }
 // --- end Int-final ---
 
@@ -1250,6 +1288,9 @@ void test_pads(const Data& d) {
 // turret removes R1. After the battle only the winner's records remain (0x2bff60). A land skirmish does none of it.
 struct PersistRun {
     bool fought = false, restored = false, restored_ok = false, built = false, added_ok = false, sold = false, sold_ok = false;
+    // q6 t19 (AI_GALACTIC_TOKENS §9.11, AI_TACTICAL §7.5.1 item 5): the recreated child keeps the pad's owner (pad 0, the
+    // object 0 = the record owner); a sold child leaves the pad owner as it was.
+    bool pad_owner_kept = false, sold_owner_kept = false;
     size_t after = 99, expect_after = 0;
     bool filtered_ok = false;
     CrcLog crc;
@@ -1327,6 +1368,7 @@ PersistRun run_persist(const Data& d, int32_t workers, bool skirmish) {
             out.restored = c != objects::kNoObjectId && st.alive(ch);
             out.restored_ok = out.restored && st.type(ch) == static_cast<objects::TypeIndex>(turret) && st.owner(ch) == 0 &&
                               st.position(ch).x == -1500.0f && st.position(ch).y == -1500.0f && recs->size() == 2;
+            out.pad_owner_kept = st.alive(st.find(map_pad)) && st.owner(st.find(map_pad)) == 0;
             objects::SpawnParams sp;
             sp.type = static_cast<objects::TypeIndex>(type_of(d, "L1_Build_Pad"));
             sp.owner = 1;
@@ -1348,6 +1390,7 @@ PersistRun run_persist(const Data& d, int32_t workers, bool skirmish) {
             const objects::ObjectId c1 = b->pad_contents(map_pad);
             if (!skirmish && c1 != objects::kNoObjectId) {
                 out.sold = b->tactical_sell(*tm, 0, c1) == commands::RejectReason::None;
+                out.sold_owner_kept = st.alive(st.find(map_pad)) && st.owner(st.find(map_pad)) == 0;
                 out.sold_ok = recs->size() == 2 && (*recs)[0].x == 777.0f && (*recs)[1].owner == 1;
             }
         }
@@ -1367,6 +1410,8 @@ void test_persist(const Data& d) {
     std::printf("  persist: fought %d restored %d (ok %d) built %d added %d sold %d (ok %d) filtered %d\n", a.fought, a.restored, a.restored_ok,
                 a.built, a.added_ok, a.sold, a.sold_ok, a.filtered_ok);
     CHECK(a.fought && a.restored && a.restored_ok && a.built && a.added_ok && a.sold && a.sold_ok);
+    std::printf("  persist q6 t19: pad owner kept at the recreate %d, after the sale %d\n", a.pad_owner_kept, a.sold_owner_kept);
+    CHECK(a.pad_owner_kept && a.sold_owner_kept);
     CHECK(a.filtered_ok && a.after == a.expect_after);
     const PersistRun w = run_persist(d, 4, false);
     CHECK(!first_divergence(a.crc, w.crc).diverged);

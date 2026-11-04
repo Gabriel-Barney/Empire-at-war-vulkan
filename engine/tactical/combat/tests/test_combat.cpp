@@ -1804,6 +1804,9 @@ void test_attack_move_object() {
     UnitDesc f = c;
     f.category_mask = kCatFighter;
     const uint32_t fighter = push_unit(w.data, f);
+    UnitDesc nt = c;  // q6 t19: fails the type half of 0x5680b0 (e.g. no Collidable_By_Projectile_Living)
+    nt.target_test_type = false;
+    const uint32_t not_target = push_unit(w.data, nt);
     w.make();
     FogHooks fh;
     fh.human0 = false;
@@ -1880,6 +1883,13 @@ void test_attack_move_object() {
     w.sys->set_ability_active(6, 0, true);
     CHECK(w.sys->order_attack_issue(6, 7));
     CHECK(w.sys->ordered_target(6) == 7 && w.sys->order_locked(6) && w.sys->weapon_aim(6) == kNoObject);
+    // q6 t19 (A1_READINGS §33.2.1): a goal that fails 0x5680b0's type test is never promoted, even in range (ids ascend).
+    w.add(8, attacker, 0, Vec3{0, 8000, 0});
+    w.add(9, not_target, 1, Vec3{500, 8000, 0});
+    w.sys->set_attack_goal(8, 9);
+    w.tick();
+    w.tick();
+    CHECK(w.sys->ordered_target(8) == kNoObject && w.sys->attack_goal(8) == 9);
     w.sys->set_hooks(nullptr);
 }
 

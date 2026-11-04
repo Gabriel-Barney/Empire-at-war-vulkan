@@ -584,6 +584,27 @@ function MainForce_Thread()
   while true do Sleep(10) end
 end
 )";
+// q6 t19 (A1_READINGS §33.2.2, variant 10, land): a land Attack_Move block on an object returns nil in every case - here
+// the target dies while the units approach (signal 0x10: the block ends at once).
+const char* kPlanAttackResult = R"(
+require("SynAICommands")
+function Report(m) error(m) end
+ScriptPoolCount = 1
+function Definitions()
+  Category = "Syn_Destroy_Unit"
+  TaskForce = { { "MainForce", "Frigate | Corvette = 2,3" } }
+end
+function MainForce_Thread()
+  if Reported then
+    while true do Sleep(10) end
+  end
+  BlockOnCommand(MainForce.Produce_Force())
+  if not TestValid(Target) then ScriptExit() end
+  local res = BlockOnCommand(MainForce.Attack_Move(Target), 60)
+  Reported = true
+  Report(string.format("AMRESULT player=%d res=%s valid=%s", PlayerObject.Get_ID(), tostring(res), tostring(TestValid(Target))))
+end
+)";
 const char* kFreeStore = R"(
 require("SynBase")
 function Base_Definitions()
@@ -1038,6 +1059,10 @@ public:
         for (MockUnit& u : units_)
             if (u.owner == owner && u.type <= tCorvette) u.hp = 0.0f;
     }
+    void kill_id(int32_t id) {  // q6 t19: one unit dies at the next tick
+        for (MockUnit& u : units_)
+            if (u.id == id) u.hp = 0.0f;
+    }
     void kill_type(int32_t owner, int32_t type) {  // every unit of `owner` and `type` dies at the next tick
         for (MockUnit& u : units_)
             if (u.owner == owner && u.type == type) u.hp = 0.0f;
@@ -1278,6 +1303,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", plan);
     }
     if (variant == 7) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAbility);
+    if (variant == 10) files.add("Data\\Scripts\\AI\\SpaceMode\\SynDestroy.lua", kPlanAttackResult);  // q6 t19
     if (variant == 8) files.add("Data\\Scripts\\AI\\LandMode\\SynLandOnly.lua", kPlanLanding);  // replaces kPlanLandOnly
     if (variant == 9) {  // a1k t01
         files.add("Data\\Scripts\\AI\\SpaceMode\\SynSweep.lua", kPlanCollect);
@@ -1735,6 +1761,46 @@ void test_potential_plan() {
         in = f.input(TacticalMode::Space);
         in.pool = {{1, 1, 1.0f, 1, -1, false, 1, false}};
         CHECK(solve_tactical_pp(in, r) && r.picks.size() == 1);
+    }
+    // 7. q6 t19 - the tactical escort list (AI_TACTICAL §7.7.1, AI_GALACTIC_TOKENS §9.10): a plan with an EscortForce TF
+    //    has a second contrast list (escort_strength: the target's defenders). Frigates (1000 x weight 1.5) against a
+    //    corvette target of 400 (main row 400 x 1.5 = 600: one frigate) with defenders of D (escort row D x 1.5). MainForce
+    //    1-2, GuardForce (EscortForce) 0-1. The commit walk puts the second MainForce frigate - placed after main is met -
+    //    into the escort list, so D = 2000 (escort row 3000 = 2 frigates) is covered by the guard plus that frigate; with
+    //    D = 3000 (4500) the teams fill up short of the escort list and Finalize fails.
+    {
+        PpFixture f;
+        f.plan({{"MainForce", "Syn_Frigate = 1,2"}, {"GuardForce", "EscortForce", "Syn_Frigate = 0,1"}});
+        CHECK(f.def.task_forces.size() == 2 && f.def.task_forces[1].escort && !f.def.task_forces[0].escort);
+        galactic::ContrastTable ct;
+        galactic::ContrastRow row;
+        row.enemy = "Corvette";
+        row.enemy_mask = f.mask("Corvette");
+        row.friendly.push_back({"Frigate", f.mask("Frigate"), 1.5f});
+        ct.rows.push_back(row);
+        auto solve = [&](double defenders, TacticalPpResult& r) {
+            TacticalPpInput in = f.input(TacticalMode::Space);
+            in.has_target = true;
+            in.target_object = 900;
+            in.target_position = {0.0f, 0.0f, 0.0f};
+            in.contrast = &ct;
+            in.enemy_strength = [](uint64_t) { return 400.0; };
+            in.escort_strength = [defenders](uint64_t) { return defenders; };
+            in.free_units = {{11, 0, {100.0f, 0.0f, 0.0f}, 1.0f, false},
+                             {12, 0, {200.0f, 0.0f, 0.0f}, 1.0f, false},
+                             {13, 0, {300.0f, 0.0f, 0.0f}, 1.0f, false},
+                             {14, 0, {400.0f, 0.0f, 0.0f}, 1.0f, false}};
+            return solve_tactical_pp(in, r);
+        };
+        TacticalPpResult r;
+        const bool covered = solve(2000.0, r);
+        int32_t main_n = 0, guard_n = 0;
+        for (const TacticalPpPick& k : r.picks) (k.tf == 0 ? main_n : guard_n) += 1;
+        std::printf("  escort list: covered %d (%zu picks: main %d, guard %d)", covered, r.picks.size(), main_n, guard_n);
+        CHECK(covered && r.picks.size() == 3 && main_n == 2 && guard_n == 1);
+        const bool short_of = solve(3000.0, r);
+        std::printf(", defenders 3000: solved %d (failed %s)\n", short_of, r.last_veto.c_str());
+        CHECK(!short_of && r.last_veto == "Contrast");
     }
     // 6. Team expansion: category masks over types (mask overlap), names, exclusions.
     {
@@ -2904,6 +2970,35 @@ void test_battle_budget() {
     CHECK(zero && plain.errors.empty());
 }
 
+// q6 t19 (A1_READINGS §33.2.2): in land a task force's Attack_Move block on an enemy unit ends at once when the target dies
+// (30 frames after the order, units still approaching) and BlockOnCommand returns nil (was true).
+void test_attack_move_result() {
+    g_land = true;
+    int32_t target = -1, kill_frame = -1;
+    const RunResult r = run(30 * 60, 1, 10, nullptr, false, [&](int32_t f, MockHost& host, TacticalAiWorld& world) {
+        if (kill_frame >= 0) return;
+        for (const TacticalAiDecision& d : world.decision_log()) {
+            const size_t at = d.text.find(" attack-move ");
+            const size_t obj = d.text.find(" obj ", at == std::string::npos ? 0 : at);
+            if (at == std::string::npos || obj == std::string::npos || d.text.find("tf MainForce") == std::string::npos) continue;
+            if (f < d.frame + 30) return;
+            target = std::atoi(d.text.c_str() + obj + 5);
+            host.kill_id(target);
+            kill_frame = f;
+            return;
+        }
+    });
+    g_land = false;
+    std::string rep_line;  // whichever player's Destroy plan reached its target first (player 1 in this setup)
+    for (const std::string& e : r.errors)
+        if (rep_line.empty() && e.find("AMRESULT player=") != std::string::npos) rep_line = e;
+    const size_t ended = count_decisions(r, "ended: target destroyed");
+    std::printf("land attack-move result: target %d killed at %d, %zu block(s) ended by the death, %s\n", target, kill_frame, ended,
+                rep_line.empty() ? "(no report)" : rep_line.c_str());
+    CHECK(target >= 0 && ended >= 1);
+    CHECK(rep_line.find("res=nil") != std::string::npos && rep_line.find("valid=false") != std::string::npos);
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--write-golden") == 0) g_write_golden = true;
@@ -2938,6 +3033,7 @@ int main(int argc, char** argv) {
     test_landing_wait(true);
     test_landing_save();
     test_replan_and_priority_lifetime();  // a1k t01
+    test_attack_move_result();            // q6 t19
     std::printf(g_fail ? "alamo_ai_tactical_world_tests: %d FAILED\n" : "alamo_ai_tactical_world_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;
 }

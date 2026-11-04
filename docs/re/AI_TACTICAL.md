@@ -743,6 +743,14 @@ exemption [H]. (Corrects the port note in SKIRMISH_SETUP "Port status", which ex
 - 0x42e400: do not exempt Neutral-owned objects; only allied (relation 0) objects are ignored. Human builds skip the
   proximity test.
 - Iterate the AI pad table in a defined order (it is a hash map in the original, as the free store, §5.3).
+- Port status (q6 t19, 2026-11-04): done in `tactical_battle_pads.cpp` / `tactical_battle_bt.cpp` / `battle_ai.cpp` /
+  `engine/tactical/garrison` (capture rule a): builds need relation 0 to the pad owner (`bt_allied`, so a Neutral pad
+  refuses every build in skirmish), the UC and the result belong to the builder, an occupied pad keeps its owner,
+  child death resets the pad (or kills it), a sale keeps the owner and starts no cooldown; the AI pad list is in
+  ascending id order. 0x42e400 has no Neutral exemption, but its candidates are the battle's live units only [port,
+  open]: Neutral map props (`Prop_Urban_HalfWall_B`, `Prop_Bushes_Tan04`, `Influences_Capture_Point` unset = true)
+  stand within the radius of three Utapau pads, and counting them stopped every AI build there, so the vanilla land
+  skirmish no longer ended. Whether retail's query reaches props is not read.
 
 ### 7.6 Garrisons [H, Lua]
 `Try_Garrison` (PGCommands): nearest own `GarrisonCanFire` container within range that `Can_Garrison(unit)`, else (if not offensive-only) any `CanContainGarrison`; `SPREAD_OUT` off, `unit.Garrison(container)`, and if the unit was in a TF, `Release_Unit` + `Lock_Current_Orders`. `Try_Deploy_Garrison` ejects occupants above a health threshold that are good against the target. `Garrison_Bunker` / `Garrison_Transport` goals run the GarrisonTarget plan (move next to the target, guard until it is ours/empty, then `Garrison`). `TaskForce.Can_Garrison` / `Garrison` (0x5fbcb0 / 0x5fc440) are the TF-wide versions.

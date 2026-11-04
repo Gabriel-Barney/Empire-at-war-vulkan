@@ -328,6 +328,17 @@ void test_capture() {
     CHECK(c.owner(7) == 3);
     c.set_owner(7, 2);
     CHECK(c.owner(7) == 2 && c.progress(7) == 0.0f && c.pending(7) == -1);
+    // q6 t19 rule (a) (AI_GALACTIC_TOKENS §9.11, AI_TACTICAL §7.5.1 item 1): an occupied build pad keeps its owner whoever
+    // stands on it - here an enemy (0) alone on pad 8 (owner 1, not sticky) changes nothing; emptied, it is contested.
+    CHECK(c.add_point(8, 1, {9000, 0, 0}, d, 164));
+    bool occupied = true;
+    c.set_pad_occupied([&occupied](ObjectId p) { return p == 8 && occupied; });
+    inf = {{11, 0, {9010, 0, 0}}};
+    for (uint32_t f = 164; f <= 200; f += 4) c.service(f, inf);
+    CHECK(c.owner(8) == 1 && c.progress(8) == 0.0f);
+    occupied = false;
+    for (uint32_t f = 204; f <= 260; f += 4) c.service(f, inf);
+    CHECK(c.owner(8) == 0);
     StateHasher a, b;
     c.hash(a);
     c.hash(b);
