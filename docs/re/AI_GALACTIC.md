@@ -80,7 +80,7 @@ Notation:
 | DifficultyAdjustment field | Offset | Reader | Effect |
 |---|---|---|---|
 | Credit_Multiplier | +0x20 | Player::Add_Credits 0x27f370 | multiplies positive credit gains of AI players [H] |
-| Galactic / Space / Land_AI_Contrast_Multiplier | +0x34 / +0x38 / +0x3c | 0x5f1990 (galactic), 0x5f1d00 (Land if mode 1, else Space) | scales the enemy force a plan must contrast (§1.9.3) [H] |
+| Galactic / Space / Land_AI_Contrast_Multiplier | +0x34 / +0x38 / +0x3c | 0x5f1990 (galactic), 0x5f1d00 (Land if mode 1, else Space) | scales the enemy force a plan must contrast (§1.9.3; tactical lists: AI_TACTICAL §7.7.1) [H] |
 | Galactic / Space / Land_AI_Goal_Cycle_Sleep_Duration | +0x40 / +0x44 / +0x48 | goal-system slot 11 (0x6b8630 / 0x6b8950 / 0x6b87b0) | frames slept after each commit = `(int)(FPS × s)` [H] |
 | Bribe_Cost_Multiplier | +0x4c | not traced | [L] |
 | Health / Shield multipliers | +0x50 / +0x54 | Set_Difficulty | [H] |

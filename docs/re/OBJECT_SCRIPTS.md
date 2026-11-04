@@ -822,10 +822,9 @@ A1_READINGS §28) and:
   (0x6C27D0 → vf +0x98), the reinforce-unloaded path 0x6BF3D0, `Prevent_AI_Usage(false)`.
 - Only the owner's store, only the current mode. Allied AI stores that admitted a `Is_Community_Property` object
   (0x2B3670 loop) keep it.
-- Errors and warnings, in order: not a bool → error "Expected bool parameter."; owner player has no AI (player +0x360
-  null, e.g. a human) → **warning** "No AI Player active on the owner of this object." (no effect); no AI presence in
-  this mode → error "Owner has no AI presence in this mode…"; AI not initialised (+0x50 null) → error "Owner AI is not
-  yet initialized.  Wait a frame…"; no free store (+0x38 null) → warning "No freestore exists for this AI Player.".
+- Errors and warnings, in order (full texts in §10.6.1): not a bool → error; owner player has no AI (player +0x360
+  null, e.g. a human) → **warning** (no effect); no AI presence in this mode → error; AI not initialised (+0x50 null)
+  → error; no free store (+0x38 null) → warning. A wrapper whose object is gone is a silent no-op.
 
 **What it does not touch** [H for the absence of a flag; M for "no other effect"]: since the only state change is the
 free-store membership, everything that walks objects rather than the free store is unchanged: AI perception counts and
@@ -844,8 +843,8 @@ Setup A, FREESTORE_ALLOC). A unit already in a task force stays there.
 ### 10.2 `Make_Invulnerable(bool)` (0x57D550) [H]
 
 **What it does.**
-- Tactical modes only: current mode vf +0xF0 false → error "this function may only be used in tactical modes.".
-  Exactly one bool argument, else errors.
+- Tactical modes only: no current mode, or current mode vf +0xF0 false → error (§10.6.2). Exactly one bool
+  argument, else errors (the count is tested before the mode, the type after it; texts in §10.6.1).
 - The flag is the **INVULNERABLE behaviour (0x4B, `InvulnerableBehaviorClass`)**, present when obj +0x37D ≠ 0xFF.
   - `true`: if absent, attach it by name `"INVULNERABLE"` (0x4C3520 → 0x38C570(obj, behaviour, 0)). Already present →
     nothing.
@@ -985,3 +984,52 @@ See SKIRMISH_SETUP §4.1 (land skirmish) and BATTLE_TRANSITIONS §3.1a (campaign
 the type's `*_Victory_Relevant` flags, ownership / enemy relation and the dying / removed bits, so an invulnerable,
 hidden or `Prevent_AI_Usage` object counts like any other [H]. An invulnerable victory-relevant object can therefore
 keep a side alive until something kills it with kind 0 / 13 damage, `Kill` or a despawn.
+
+### 10.6 Follow-up: exact messages, `Make_Invulnerable` outside battles, `Spawn_Unit` pitch on land (q6 land follow-through, 2026-11-04)
+
+#### 10.6.1 Full message texts [H, strings referenced by the bindings]
+
+Every text starts with the binding's name, e.g. `GameObjectWrapper::Prevent_AI_Usage -- `. Double spaces and the
+spelling "particpants" are in the original.
+
+| Binding | Condition (test order) | Kind | Text after the prefix |
+|---|---|---|---|
+| `Prevent_AI_Usage` (0x57EC40) | wrapper's object gone (+0x60 null) | none | (silent no-op) |
+| | argument is not a bool | error | `Expected bool parameter.` |
+| | owner has no AI player | warning | `No AI Player active on the owner of this object.` |
+| | owner's AI has no presence in the current mode | error | `Owner has no AI presence in this mode.  Ensure the player is one of the standard particpants in the battle or call Enable_As_Actor before using Prevent_AI_Usage.` |
+| | AI presence not initialised | error | `Owner AI is not yet initialized.  Wait a frame before calling this function.` |
+| | presence has no free store | warning | `No freestore exists for this AI Player.` |
+| `Make_Invulnerable` (0x57D550) | wrapper's object gone | none | (silent no-op) |
+| | argument count ≠ 1 | error | `invalid number of parameters.  Expected 1, got %d.` |
+| | no current mode, or mode vf +0xF0 false | error | `this function may only be used in tactical modes.` |
+| | argument is not a bool | error | `invalid type for parameter 1.  Expected boolean.` |
+
+#### 10.6.2 `Make_Invulnerable` outside tactical modes [H]
+
+In galactic mode (and with no current mode, e.g. during a load) the call only raises the error above: nothing is
+attached, nothing is stored on the object or the player, and nothing is remembered for a later battle. The script ends
+after its current pass (Lua error, LUA_API conventions). A galactic object that later lands in a battle is a new
+tactical object (OBJECT_RUNTIME §1.1) with no INVULNERABLE behaviour unless a tactical script attaches it.
+[M] The decompile of the TEAM-container branch (§10.2) shows the member loop without the attach / detach call inside
+it (likely a decompiler artefact of the inlined behaviour lookup); the §10.2 reading "each member" is kept.
+
+#### 10.6.3 `Spawn_Unit` facing pitch on land [H for the value, M for what happens after]
+
+- 0x20ACD0(out, from = the spawn point, to = the map origin (0, 0, 0)) gives yaw as in §10.4 step 2, roll 0, and
+  pitch = −atan2(to.z − from.z, horizontal distance) = **atan2(z, d)** in degrees, z = the spawn point's height and
+  d = its horizontal distance from the origin. The pitch is computed when the z or x components differ (y is not
+  tested); with z = 0 it is 0 anyway, so "when z ≠ 0" in §10.4 gives the same value. Typical land values are small
+  (z of tens, d of thousands: about 1-3°).
+- The object constructor 0x388B60 stores the euler as given (obj +0x84 roll, +0x88 pitch, +0x8C yaw, copied to
+  +0x90..+0x98); neither 0x29E960, 0x2B3BE0 nor 0x29F810 flattens it. For a member with a land locomotor the terrain
+  conform (MOVEMENT §3.6: vf95 0x42D6A0 → 0x42BB40) recomputes pitch and roll from the ground when it commits a
+  position [M: whether an idle, just-spawned unit commits before its first move was not traced]. Objects without a
+  locomotor (structures, props) keep the spawn pitch [M].
+
+**Port notes**
+- Copy the message texts above exactly (they appear in the script log); warnings continue, errors end the script after
+  its pass, dead wrappers are silent.
+- `Make_Invulnerable` in galactic: error only, no stored state.
+- `Spawn_Unit` facing: yaw toward the origin, pitch atan2(z, d), roll 0, for every member; let the land locomotor's
+  terrain conform replace pitch / roll for mobile units. Do not zero the pitch at spawn: for structures it stays.

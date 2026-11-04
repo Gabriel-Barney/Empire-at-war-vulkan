@@ -122,6 +122,7 @@ Every tactical evaluation (proposal, FindTarget, EvaluatePerception) binds `Vari
 | AI_Player_Underworld | AI_GoalSet_ExpansionGeneric_Land, AI_GoalSet_Underworld_Land, AI_GoalSet_Underworld_Space, BasicOffensiveSpaceSet, BasicLandGoalSet | same | same |
 | None | BasicOffensiveSpaceSet, BasicLandGoalSet, AI_GoalSet_ExpansionGeneric_Land | same | same |
 | Basic*NoGalacticAI | as Basic* minus galactic sets; no free-store scripts declared | **none** → no free-store script runs [M] | same |
+| TR (Thrawn's Revenge) Basic* players (q6, 2026-11-04) | `BasicLandGoalSet` (+ SystemFunctions-type sets); no Expansion / faction land sets | **`LandTacticalFreeStore`** / `BusyTacticalFreeStore` (`LandFreeStoreScript` / `SpaceFreeStoreScript` are separate tags) | `Generic_Land` (Hero, Tactical_Targeted, Defensive, Tactical_Untargeted, High / Med_Priority, Map_Control) |
 
 `Test_Land` / `Test_Space` turn on categories Hero, Tactical_Targeted, Defensive, Tactical_Untargeted, StoryArc, High_Priority, Med_Priority, Map_Control (space also NoBudget) and turn off Macro_Goal. Their `Budget` equations are irrelevant in tactical (the AIBudget is galactic-only, AI_GALACTIC §1.6); the budget does not limit tactical goals. Each goal's numeric desire comes from its `GoalFunctions` perception equation, plus the learning failure terms (AI_GALACTIC §1.5).
 
@@ -199,6 +200,8 @@ Only for AI-owned, mobile objects (has locomotor, TEAM handled). It marks the un
 - The `Allowed_As_Defender_Land` equation is 1 in skirmish, and in campaign gates a defending AI with a base until its army is ≥ 3 × the attacker's force + reinforcements — the "defender turtles" rule.
 
 ### 5.6 Land skirmish end game: how idle units reach enemies they cannot see (RE, 2026-11-02) [H unless tagged]
+Scope: this section is **FoC**. TR runs a different land free store (`LandTacticalFreeStore`: visible enemy only within 600, else `enemy_location`, then heal and walk home), its `Should_Burn_Units_Land` skirmish branch is the pop-capped one only, and its `Should_Firesale_Land` is campaign-only; see §7.7.4-7.7.5.
+
 Question from the port: late FoC skirmish survivors (e.g. an M1 and a TIE Crawler) park for thousands of frames about
 600 from enemy troopers that are fogged to them. Retail has **no unit-level hunt** for this; the AI layer moves the
 units, using knowledge that ignores fog. The pieces, in the order they matter:
@@ -672,6 +675,185 @@ Nothing else in the dispatch is unclear. The open item is who removes the dummy 
 ### 7.6 Garrisons [H, Lua]
 `Try_Garrison` (PGCommands): nearest own `GarrisonCanFire` container within range that `Can_Garrison(unit)`, else (if not offensive-only) any `CanContainGarrison`; `SPREAD_OUT` off, `unit.Garrison(container)`, and if the unit was in a TF, `Release_Unit` + `Lock_Current_Orders`. `Try_Deploy_Garrison` ejects occupants above a health threshold that are good against the target. `Garrison_Bunker` / `Garrison_Transport` goals run the GarrisonTarget plan (move next to the target, guard until it is ours/empty, then `Garrison`). `TaskForce.Can_Garrison` / `Garrison` (0x5fbcb0 / 0x5fc440) are the TF-wide versions.
 
+### 7.7 Base-attack follow-through: Destroy_Structure sizing, release, re-tasking, and how a land skirmish ends (q6 RE, 2026-11-04) [H unless tagged]
+
+Port symptom: in a TR land skirmish (`_MP_LAND_BLOOD_GULCH`, Empire AI vs Rebel AI) the Empire kills everything but
+`Rebel_Command_Center` (and a barracks). The CC self-repairs (TACTICAL_GAPS §2.3.1a: it heals under fire), the
+Empire's `Destroy_Structure` task forces have 1-5 units and get released, and for 13 minutes no Empire unit came
+within 2884 of the CC. Vanilla FoC land skirmish in the port also had no winner at 40000 ticks. This section adds what
+the docs lacked. Sources: 0x6c5de0, 0x6c47c0, 0x5f1d00, 0x5f2820, 0x5b43d0 (token names), 0x72ac70, 0x6bff00,
+0x73ce80, 0x6e9440; FoC and TR `DestroyStructure.lua`, `PGTaskForce.lua`, `PGEvents.lua`, `BurnUnitsLand.lua`,
+FoC `BusyTacticalFreeStore.lua`, TR `LandTacticalFreeStore.lua`, `LandGoals.xml`, `BasicLandEquations.xml`,
+`AI_Equations_Skirmish.xml`, the structure XML.
+
+#### 7.7.1 The tactical contrast lists (0x6c5de0 / 0x6c47c0 → 0x5f1d00 → 0x5f2820) [H]
+
+AI_GALACTIC §1.9.3 and AI_GALACTIC_2 §1.4 "Contrast" describe the galactic lists (0x5f1990). Tactical modes (PP
++0x198 ≠ 0) build them differently:
+- **No target, or `IgnoreTarget`:** both lists empty, tolerance 0.
+- **Tolerance** T = 1 − (f·PFCA + `MinContrastScale`)/(f·PFCA + `MaxContrastScale`), f = recent failures of this
+  plan at this target (as galactic).
+- **Main list** (0x5f1d00 with flag 0) and, only when some TF of the plan is an `EscortForce`, an **escort list**
+  (flag 1). Layer byte of every entry = (mode == land), so a land list is all "ground".
+  - entry 0: (no type, `S(target, all categories)`), **not scaled**;
+  - then one row per `EnemyContrastTypes` key of the plan (plan +0x68, map order): `S(target, that key's category)` ×
+    (`MaxContrastScale` + f·PFCA) × `Land_AI_Contrast_Multiplier` (difficulty +0x3c; space +0x38);
+  - when entry 0 is ≤ 0, every typed row is 0.
+- **S(target, mask)** (0x5f2820) evaluates one token path in the AI's perception system for the current mode, with
+  `Parameter_Category` = mask when a mask is given (no attenuator, so full power regardless of health). The path
+  (token ids from 0x5b43d0) depends on the target and the flag:
+
+  | Target | Main list (flag 0) | Escort list (flag 1) |
+  |---|---|---|
+  | unit target (has an object) | `Target.ForceUnnormalized`: the target object's own `AI_Combat_Power` if its category matches (AI_TACTICAL_PERCEPTION §3.1) | `Target.Location.EnemyForceUnnormalized`: the enemies of Self around the target, the target itself excluded (§3.3 there) |
+  | region (hint zone) | `Target.EnemyForceUnnormalized` | the same |
+
+  The leaf's failure flag is ignored (a failing leaf counts as 0.0). Unlike galactic 0x5f2430, nothing else is added:
+  no own-structure power term.
+- **Satisfied test** 0x72ac70 (as AI_GALACTIC_2 §1.4): only typed rows (key ≠ 0) with target > 0 and remaining > 0
+  add to the residual. A list with no positive typed row is satisfied at once (residual 0 ≤ T).
+- So against a unit target the **main force is sized against the target object's own power** and the escort against
+  what defends it.
+
+#### 7.7.2 Worked example: `Destroy_Structure` against a command centre [H data, M consequence]
+
+| | FoC `DestroyStructure.lua` | TR `DestroyStructure.lua` |
+|---|---|---|
+| Contrast scales | library default 1.1 / 1.5 → T = 0.267 | `MinContrastScale 0.2`, `MaxContrastScale 2.0` → **T = 0.9** (a 10 % cover is enough) |
+| MainForce | `Infantry \| Vehicle \| Air = 1,10`, `LandHero = 0,2`, `DenyHeroAttach`, minus 4 transport / AA types | `Infantry \| Vehicle \| AirGunship \| AirSpeeder = 1,20`, `InfantryHero \| VehicleHero = 0,2` |
+| GuardForce (EscortForce) | `Squad_Rebel_Trooper \| Squad_Stormtrooper = 0,2` | `Infantry = 0,4` |
+| Goal (LandGoals.xml, same in both) | Enemy_Structure, Tactical_Targeted, Low_Threat, Time_Limit 30, Activation_Tracking_Duration 20, Per_Activation_Failure_Desire_Adjust −15 | same |
+
+- `Rebel_Command_Center` (and `Imperial_Command_Center`) sets **no `AI_Combat_Power`** in FoC or TR, so its power is 0.
+  The main list's entry 0 is 0, all typed rows are 0, and main contrast is satisfied before any unit is chosen.
+  (FoC barracks / factories have 300-800; TR's barracks template has 1.)
+- The solver (AI_GALACTIC_2 §1.2) then fills only the team minimums: Contrast scores 0 for a candidate while a slot is
+  below its min and vetoes it afterwards. Result with no defenders near the CC: **one MainForce unit, no escort**.
+  The pick is the best sum of FreeStore (nearest free unit, 1 − key/maxKey), Plan (team fill), TechTree (tech/5 × 2)
+  and Hero (0): the nearest high-tech unit of any listed category, chosen without regard to its damage against
+  structures (TR infantry do about 0.2 per hit after `ArmourG_Structure`).
+- With defenders near the CC the escort list (their power) is positive. Escort-team candidates fill GuardForce. A
+  candidate that only fits MainForce can also score on the escort list (main contrast met), but placing it in
+  MainForce subtracts from the main list only, so it never reduces the escort residual: MainForce can then grow
+  toward its max while the escort stays unmet [M: consequence of the commit rule 0x6c4b20, not observed]. This is the
+  only way a `Destroy_Structure` task force against a zero-power structure gets large.
+- Every ground structure without `AI_Combat_Power` behaves like the CC. `Applies` keeps the CC a target while fogged:
+  both CCs set `Last_State_Visible_Under_FOW` (TR also `Initial_State_Visible_Under_FOW`), §3.3 step 1.
+
+#### 7.7.3 When the task force is released [H]
+
+`MainForce_Thread` is `Produce_Force` → `QuickReinforce` → `Set_Land_AI_Targeting_Priorities` →
+`BlockOnCommand(MainForce.Attack_Move(AITarget, MainForce.Get_Self_Threat_Max()))` (no time limit) → `ScriptExit()`.
+GuardForce loops `Escort(GuardForce, MainForce)` forever. The plan ends, and every unit returns to the free store
+(plan end 0x5f6a50, `Release_Forces(1.0)`), on the first of:
+1. **The Attack_Move block finishes** (A1_READINGS §33.2, handler 0x73ce80). For an object target it does **not**
+   finish on arrival. It finishes when the target dies (signal 0x10), when the target turns non-hostile (0x1a), when
+   every unit of the block is gone (died, changed owner, or taken by a newer order, signal 0xb), when the TF is empty,
+   or, after all units reported arrival, when the target is no longer hostile, fails 0x5680b0 (alive, not garrisoned,
+   not in a transport, …), or is fogged for the AI **and** its type has neither `*_State_Visible_Under_FOW` flag. The
+   CC has the flag, so its block cannot finish by fog. While the CC lives, the plan holds its units there.
+2. **Reinforcement path.** In land `QuickReinforce` proceeds only when `Are_All_Units_On_Free_Store()`. If any unit had
+   to be bought (reinforcement pool), it calls `WaitForAllReinforcements(tf, target)` (drops near the target) and then
+   `ScriptExit()` ("Abandonning plan for reproposal if still relevant"). The dropped units are released near the
+   target and the goal is proposed again.
+3. **The goal is dropped by the goal system** (AI_GALACTIC §1.6). `DestroyStructure.lua` never calls
+   `Set_As_Goal_System_Removable(false)`, so its goal is replaceable: maintenance drops it when its re-evaluated desire
+   is ≤ 0 or the PP re-check 0x6c47c0 (contrast lists rebuilt, Finalize re-run) fails; Resolve_Category drops it when
+   higher-effective-desire Tactical_Targeted proposals take the category's slots. `Time_Limit` (30 s) does **not** end
+   a running tactical plan: it is only an activation test (`0 < AllowedTime < ETA`), and the AllowedTime < ETA
+   maintenance drop is galactic-only.
+4. **Plan events.** `Default_No_Units_Remaining` and `Default_Original_Target_Owner_Changed` call `ScriptExit()`;
+   `Default_Original_Target_Destroyed` does not (the block's signal ends the thread).
+5. **Other plans.** `Purge_Goals` from `BurnUnitsLand` (and the tech plans) ends every other running plan.
+6. **Single units** leave without ending the plan: `Default_Unit_Damaged` (PGEvents) releases a unit it sends to kite
+   or heal when the attacker is good against it, it is a hero, or its hull or shield is < 0.33 (`GoHeal(…, release)`
+   = `Move_To(healer)`, `Lock_Current_Orders`, `Release_Unit`); `Try_Garrison` does the same. Damage from the plan's
+   own `AITarget` is ignored by that handler, so a CC without weapons never triggers it.
+
+**Re-tasking.** A released unit is re-admitted to the free store (TF vf49 0x5ff610: free-store admission, then its
+targeting priorities reset to its type's, A1_READINGS §39.2). No stop order is issued, so a unit keeps shooting its
+current target [M: no order call on that path]. The goal is dropped at the next Commit and the same
+(Destroy_Structure, CC) pair is proposed again within one or two passes on Normal / Hard (A1_READINGS §39.1). If its
+activation fails (no free unit, PP fails), each failure in the last 20 s adds −15 to the desire. That silences the CC
+goal for up to 20 s (FoC desire ≈ 15, TR ≈ 5), then it comes back.
+
+#### 7.7.4 What the free store does with idle units near the end [H, shipped Lua]
+
+The two games differ here, and this is where the end game is decided.
+- **FoC `BusyTacticalFreeStore`** (§5.5): `Service_Attack` takes `Find_Nearest(unit, owner, false)`, the nearest
+  enemy UNIT_AI object **visible** to the AI (real fog; structures count: both CCs have UNIT_AI). If it is not good
+  against the unit (a CC without weapons never is), the unit `Attack_Move`s to it when within 600, **and at any
+  distance when `aggressive_mode`**, which is always on in skirmish. Only with no visible enemy does it use
+  `enemy_location` (hint-zone `EnemyUnitConcentration`, power-weighted, A1_READINGS §16, so a zero-power CC adds 0),
+  then `Service_Guard` (guard the nearest own structure).
+- **TR `LandTacticalFreeStore`** (TR's AI players declare `LandFreeStoreScript LandTacticalFreeStore`;
+  `BusyTacticalFreeStore` is their space script): `Service_Attack` needs `aggressive_mode`
+  (`Allowed_As_Defender_Land` > 0, or an `ATTACKER ENTRY POSITION` hint) and a visible nearest enemy. It
+  `Attack_Move`s to that enemy only when it is within `free_store_attack_range` (600; 6000 once an `AirGunship` /
+  `AirSpeeder` was serviced, a global that is never reset), else to `enemy_location`, else it gives up. Then
+  `Service_Kite`, `Service_Heal(1.0)` (an idle unit with any damage walks to the nearest own healer), and
+  `Service_Guard`: `Attack_Move(friendly_location)` (the zone with the highest own unit concentration) plus
+  `Try_Garrison`, or guard the nearest own structure. **An idle TR unit more than 600 from the CC walks home.**
+- TR's land goal set is `BasicLandGoalSet` only (no Expansion / faction land sets) and its land template is
+  `Generic_Land` (Tactical_Targeted on).
+
+#### 7.7.5 Goal proposal for the last structure: no special end-game rule [H]
+
+- No engine code proposes "finish the base". There is no desire ramp over battle time and no cheat or aggression
+  ramp for land targets. FoC and TR land data have no "close to victory" token (`Am_I_In_Winning_Position` is
+  galactic). `Destroy_Structure` is proposed for the CC on every pass with its normal desire.
+- **FoC `Should_Destroy_Structure`** for a CC: `Allowed_As_Defender_Land` (1 in skirmish) × 1.0 (faction owner) ×
+  (0.001 + 15 × (1 − `Target.Location.EnemyForce`)) × (1 − `May_Lose_Land_Control_Game`). With no defenders: ≈ 15.
+- **TR `Should_Destroy_Structure`**: `Allowed_As_Defender_Land` × (1 − neutral owner) × (0.001 + turret / bacta /
+  repair term + `Priority_Structures` + 20 × mines / reinforcement points + 5 × (1 − `Location.EnemyForce`)) ×
+  (1 − turbolaser tower) × (1 − `May_Lose_Land_Control_Game`) × (1 − `IsContestable`) ×
+  **`Is_Initial_Skirmish_State_Established`**. For a CC that is ≈ 5. The last factor is about **Self** (the
+  attacker): it is 1 only while Self owns a barracks **and** a command centre **and** has non-structure force > 0
+  **and** more than one resource structure (`TacticalBuiltStructureCount` of `Mineral_Processor`,
+  `Skirmish_Ground_Mining_Facility`, the two GroundWar reinforcement-point upgrades), or while Self owns any
+  `Ground_Level_*_Tech_Upgrade` (the "+" term; the sum can exceed 1). An Empire with at most one mine and no tech
+  upgrade proposes **no** `Destroy_Structure` at all.
+- **Burn_Units_Land.** FoC: as §5.6 item 5. TR: the campaign branch, or in skirmish `UnitSpaceAvailable` < 1 and
+  reinforcements > 0.25 × (or >) the enemy's half-infantry force. The plan collects every free unit and
+  `Attack_Move`s the nearest **visible** enemy with `InBase` (CCs have it), else the nearest visible enemy, until
+  it dies. With nothing visible it does nothing (one pass, `Sleep(5)`, release). TR's `Should_Firesale_Land` is
+  campaign-only, so TR skirmish never reveals the map. FoC's firesale reveals only for the **losing** AI (no command
+  centre) and the local human, never for the winner.
+
+#### 7.7.6 How a vanilla AI-vs-AI land skirmish ends [M: chain of [H] rules, not probed]
+
+1. `Destroy_Structure` for the enemy CC (desire ≈ 15, applicable while fogged) sends a 1-unit task force (§7.7.2). Its
+   Attack_Move block holds that unit at the CC until the CC dies or the unit dies (§7.7.3 item 1).
+2. Its arrival reveals the CC to the AI. From then on every idle free-store unit, map-wide, `Attack_Move`s to it
+   within about 2 s of its next service (FoC aggressive `Service_Attack`, §7.7.4). Burn_Units_Land does the same for
+   a capped AI. The combined damage beats the 14 hp/s self-repair.
+3. When the last `Victory_Relevant` enemy object dies, 0x2c0340 declares the winner after the 210-frame countdown
+   (SKIRMISH_SETUP §4).
+- If the 1-unit task force dies on the way, the goal is re-proposed (step 1 again). The goal-level pressure is one
+  unit at a time; the end comes from the free store's reaction to a visible target.
+- **TR on the original engine** [M]: step 2 reaches only idle units within 600 (air 6000) of the CC, and step 1
+  depends on `Is_Initial_Skirmish_State_Established` for the attacker. A slow end against a self-repairing CC is
+  therefore what TR's scripts produce. The port should match these rules first and judge TR by them.
+
+**Port notes**
+- Contrast (engine/ai tactical PP): build the tactical lists as §7.7.1: main list `Target.ForceUnnormalized` (unit) /
+  `Target.EnemyForceUnnormalized` (region), escort list `Target.Location.EnemyForceUnnormalized` only when an
+  EscortForce exists, typed rows × (Max + f·PFCA) × `Land_AI_Contrast_Multiplier`, no own-structure term. A 1-unit
+  `Destroy_Structure` task force against a zero-power CC is correct; do not enlarge it.
+- Attack_Move on an object target must stay open after arrival while the target lives and is hostile and not
+  (fogged without the visible-under-FOW flags). If the port's TFs "get released" while the CC lives, check this first:
+  log block finish reasons per plan.
+- Make sure `Applies` honours `Last_State_Visible_Under_FOW` / `Initial_State_Visible_Under_FOW` for the CC, so the
+  goal is proposed while the CC is fogged.
+- TR: log `Is_Initial_Skirmish_State_Established` and `Number_Resource_Structures_Land` for the Empire in the stuck
+  run. If the factor is 0, no `Destroy_Structure` goal exists, which is the 13-minute "no attacker within 2884"
+  picture. `TacticalBuiltStructureCount` and `HasUnit` for tech-upgrade objects must match the original
+  (AI_TACTICAL_PERCEPTION).
+- Free store: run TR's `LandTacticalFreeStore` for land and `BusyTacticalFreeStore` for space, as the AI player XML
+  says; FoC uses `BusyTacticalFreeStore` for both. `Find_Nearest` must include UNIT_AI structures and use real fog
+  for AI players.
+- Do not add an end-game cheat, a reveal for the winner, or a Force_Healing combat gate: the original has none.
+
 ---
 
 ## 8. Ability use by the AI
@@ -737,6 +919,8 @@ Lua short-circuit order matters: `(GameRandom.Get_Float() > 0.5) and Try_Ability
 8. Event code ↔ name table (shared with AI_GALACTIC open item 8) — needed to dispatch `Unit_Damaged`, `Target_In_Range`, etc. in the right order relative to combat.
 9. Confirm `Has_Space_Evaluator` on own type at space init vs representative type at runtime (§3.1) and the conflict-record attacker/defender offsets (§1.2).
 10. Probe: a skirmish AI-vs-AI land and space run logging per-frame synced-RNG counts and AI orders would validate §2, §5.3 and §10 (Gabriel launches; kit under `tools/probe_mod/`).
+11. From §7.7 (q6, 2026-11-04): confirm on the original that a 1-unit `Destroy_Structure` task force is what the AI sends against a command centre with no defenders, and that MainForce grows only while the escort list is unmet [M]; whether a released unit keeps its current attack order (no order call was found on the release path) [M]; `Number_Resource_Structures_Land` / `TacticalBuiltStructureCount` semantics for structures under construction (they gate TR's `Is_Initial_Skirmish_State_Established`).
+12. Probe (Gabriel): a TR AI-vs-AI `_MP_LAND_BLOOD_GULCH` run on the original, logging how long the last CC survives, would show whether TR's slow end (§7.7.6) is retail behaviour.
 
 ---
 
@@ -745,7 +929,7 @@ Lua short-circuit order matters: `(GameRandom.Get_Float() > 0.5) and Try_Ability
 **Key rules**
 - One context per AI player per battle; first service picks the opponent (attacker/defender preference), runs the six subsystems' begin hooks, and (land campaign battles only) swaps the AI's credits for the template tactical allowance, returning leftovers × Credit_Multiplier at the end.
 - Cadence is frame-driven in T7, player index order: Goal and Template every frame, Planning and Execution every 3 frames, Perception and Learning every 300 frames (no work). Easy sleeps 15 s after each tactical goal commit.
-- Targets: unit targets for objects whose type has `Has_Land/Space_Evaluator`, appended on creation and erased in place on death; land regions = map AI hint zones; space regions = a 2000-unit grid named `CELL_x_y`. `Applies` classifies by behaviour slots (unit / build pad / cash point / reinforcement point / structure) and owner alliance, and hides fully fogged objects.
+- Targets: unit targets for objects whose type has `Has_Land/Space_Evaluator`, appended on creation and erased in place on death; land regions = map AI hint zones; space regions = a 2000-unit grid named `CELL_x_y`. `Applies` classifies by behaviour slots (unit / build pad / cash point / reinforcement point / structure) and owner alliance, and hides fully fogged objects unless their type has `Last_State_Visible_Under_FOW` / `Initial_State_Visible_Under_FOW` (command centres do). Base attacks: §7.7.
 - Tactical goals are not budget-limited; desire = goal equation + learning terms; each accepted candidate draws once for its plan.
 - The free store runs `FreeStoreService` every ~20 s and `On_Unit_Service` per free unit every ~2 s (BusyTacticalFreeStore); this anti-idle Lua is most of what a casual observer sees the AI do.
 - FindTarget / Reachable_Target: score every applicable target, best-or-weighted pick with P(best) = p and at most one synced draw; FindDeadlyEnemy = max accumulated damage dealer; Get_Most_Defended_Position = max allied-force threat cell, ties by coin flip.
