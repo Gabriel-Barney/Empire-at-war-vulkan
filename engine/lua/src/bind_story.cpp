@@ -17,6 +17,7 @@ using detail::Call;
 namespace {
 
 const char kStoryKey[] = "alamo.story";
+const char kStoryGroupKey[] = "alamo.story.group";  // q6 t03
 constexpr uint32_t kNone = 0xFFFFFFFFu;
 
 StoryModel* story(lua_State* L) {
@@ -46,35 +47,55 @@ int push_bool(Call& c, bool b) {
     return 1;
 }
 
-void push_plot(Call& c, uint32_t plot) {
+// q6 t03: the session's galactic plot sets in load order (attach_story_group; nullptr = the VM's own model only).
+const std::vector<StoryModel*>* story_group(lua_State* L) {
+    lua_pushstring(L, kStoryGroupKey);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    const auto* g = static_cast<const std::vector<StoryModel*>*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    return g;
+}
+// The model a plot / event wrapper refers to: Ud::reserved = 0 the VM's own model (attach_story), k > 0 the group's
+// model k - 1 (a plot of another plot set found by Get_Story_Plot). nullptr when that model is gone.
+StoryModel* model_of(Call& c, int32_t slot) {
+    if (slot == 0) return story(c);
+    const std::vector<StoryModel*>* g = story_group(c.L);
+    return (g && slot > 0 && static_cast<size_t>(slot) <= g->size()) ? (*g)[static_cast<size_t>(slot) - 1] : nullptr;
+}
+StoryModel* self_model(Call& c) { return model_of(c, c.self->reserved); }
+
+void push_plot(Call& c, uint32_t plot, int32_t slot = 0) {
     detail::Ud ud;
     ud.cls = cls_plot();
     ud.id = static_cast<int32_t>(plot);
-    detail::push_cached_userdata(c.L, ud, static_cast<lua_Number>(plot));  // same plot -> same userdata
+    ud.reserved = slot;
+    // Same plot -> same userdata; key slot * 2^24 + plot (slot 0: the plot index, as before q6 t03).
+    detail::push_cached_userdata(c.L, ud, static_cast<lua_Number>(slot) * 16777216.0 + static_cast<lua_Number>(plot));
 }
 
-void push_event(Call& c, uint32_t plot, uint32_t event) {
+void push_event(Call& c, uint32_t plot, uint32_t event, int32_t slot = 0) {
     detail::Ud ud;
     ud.cls = cls_event();
     ud.id = static_cast<int32_t>(plot);
     ud.value = event;
-    // Key plot * 2^24 + event: exact in a double for any loadable plot set.
-    detail::push_cached_userdata(c.L, ud, static_cast<lua_Number>(plot) * 16777216.0 + static_cast<lua_Number>(event));
+    ud.reserved = slot;
+    // Key (slot * 2^24 + plot) * 2^24 + event: exact in a double for any loadable plot set and fewer than 32 sets.
+    const lua_Number p = static_cast<lua_Number>(slot) * 16777216.0 + static_cast<lua_Number>(plot);
+    detail::push_cached_userdata(c.L, ud, p * 16777216.0 + static_cast<lua_Number>(event));
 }
 
 bool self_plot_valid(Call& c) {
-    const StoryModel* m = story(c);
+    const StoryModel* m = self_model(c);
     return m && c.self->id >= 0 && static_cast<size_t>(c.self->id) < m->plot_count();
 }
 bool self_event_valid(Call& c) {
-    const StoryModel* m = story(c);
-    return self_plot_valid(c) && c.self->value < m->plot(static_cast<uint32_t>(c.self->id)).events.size();
+    return self_plot_valid(c) && c.self->value < self_model(c)->plot(static_cast<uint32_t>(c.self->id)).events.size();
 }
 StoryEventDef& self_event(Call& c) {
-    return story(c)->plot(static_cast<uint32_t>(c.self->id)).events[c.self->value];
+    return self_model(c)->plot(static_cast<uint32_t>(c.self->id)).events[c.self->value];
 }
 StoryEventState& self_event_state(Call& c) {
-    return story(c)->plot(static_cast<uint32_t>(c.self->id)).state[c.self->value];
+    return self_model(c)->plot(static_cast<uint32_t>(c.self->id)).state[c.self->value];
 }
 
 void no_story(Call& c, const char* what) { c.vm->message(std::string("[story] ") + what + " ignored: no story attached"); }
@@ -134,15 +155,30 @@ int g_story_event(Call& c) {
     return 0;
 }
 
-// Get_Story_Plot("File.xml") -> StoryPlotWrapper or nil.
+// Get_Story_Plot("File.xml") -> StoryPlotWrapper or nil. The original's story manager is one per game mode and holds
+// every plot of every player's plot set (STORY.md §0, §2.1), so the lookup sees the other galactic plot sets too
+// (attach_story_group): the VM's own set first, then the group in load order [port: the original's one hash map has no
+// order; a file listed by two sets is found in the own set, else the first]. Matching: StoryModel::find_plot (STORY.md
+// §8 item 7). Nothing found -> nil [port: the original's "plot %s not found" message is not logged].
 int g_get_story_plot(Call& c) {
     if (c.nargs != 1) return c.fail("Get_Story_Plot -- invalid number of parameters. Expected 1, got %d.", c.nargs);
     if (!c.is_string(1)) return c.fail("Get_Story_Plot -- invalid type for parameter 1. Expected string.");
     const StoryModel* m = story(c);
     const uint32_t p = m ? m->find_plot(c.string(1)) : kNone;
-    if (p == kNone) return push_nil(c);
-    push_plot(c, p);
-    return 1;
+    if (p != kNone) {
+        push_plot(c, p);
+        return 1;
+    }
+    if (const std::vector<StoryModel*>* g = story_group(c.L))
+        for (size_t i = 0; i < g->size(); ++i) {
+            const StoryModel* other = (*g)[i];
+            if (!other || other == m) continue;
+            const uint32_t q = other->find_plot(c.string(1));
+            if (q == kNone) continue;
+            push_plot(c, q, static_cast<int32_t>(i + 1));
+            return 1;
+        }
+    return push_nil(c);
 }
 
 // Check_Story_Flag(player, flag_name, location, reset) -> boolean. [inferred] AI story flags are
@@ -222,22 +258,22 @@ int m_plot_get_event(Call& c) {
     if (!c.is_string(1)) return c.fail("StoryPlotWrapper::Get_Event -- invalid type for parameter 1. Expected string.");
     if (!self_plot_valid(c)) return push_nil(c);
     const uint32_t plot = static_cast<uint32_t>(c.self->id);
-    const uint32_t e = story(c)->find_event(plot, c.string(1));
+    const uint32_t e = self_model(c)->find_event(plot, c.string(1));
     if (e == kNone) return push_nil(c);  // [inferred] nil for an unknown event
-    push_event(c, plot, e);
+    push_event(c, plot, e, c.self->reserved);
     return 1;
 }
 
 int m_plot_activate(Call& c) {
-    if (self_plot_valid(c)) story(c)->set_plot_active(static_cast<uint32_t>(c.self->id), true);
+    if (self_plot_valid(c)) self_model(c)->set_plot_active(static_cast<uint32_t>(c.self->id), true);
     return 0;
 }
 int m_plot_suspend(Call& c) {
-    if (self_plot_valid(c)) story(c)->set_plot_active(static_cast<uint32_t>(c.self->id), false);
+    if (self_plot_valid(c)) self_model(c)->set_plot_active(static_cast<uint32_t>(c.self->id), false);
     return 0;
 }
 int m_plot_reset(Call& c) {
-    if (self_plot_valid(c)) story(c)->reset_plot(static_cast<uint32_t>(c.self->id));
+    if (self_plot_valid(c)) self_model(c)->reset_plot(static_cast<uint32_t>(c.self->id));
     return 0;
 }
 
@@ -381,5 +417,15 @@ void attach_story(LuaVm& vm, StoryModel* model) {
 }
 
 StoryModel* attached_story(LuaVm& vm) { return story(vm.state()); }
+
+void attach_story_group(LuaVm& vm, const std::vector<StoryModel*>* group) {
+    lua_State* L = vm.state();
+    lua_pushstring(L, kStoryGroupKey);
+    if (group)
+        lua_pushlightuserdata(L, const_cast<std::vector<StoryModel*>*>(group));
+    else
+        lua_pushnil(L);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+}
 
 }  // namespace alamo::lua

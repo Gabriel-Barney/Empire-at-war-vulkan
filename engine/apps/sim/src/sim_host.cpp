@@ -163,6 +163,7 @@ const lua::LuaVm* SimHost::scoring_vm() const {
 void SimHost::create_scoring(GameMode& m) {
 #ifdef ALAMO_SIM_HAVE_STORY
     scoring_vm_.reset();
+    scoring_players_.reset();  // q6 t03: start_galactic attaches a new one
     scoring_starts_.clear();
     scoring_events_.clear();
     scoring_failed_ = false;
@@ -246,6 +247,7 @@ void SimHost::scoring_release(std::string_view why) {
 #ifdef ALAMO_SIM_HAVE_STORY
     scoring_note(std::string("released (") + std::string(why) + ")");
     scoring_vm_.reset();
+    scoring_players_.reset();
     scoring_starts_.clear();
     scoring_events_.clear();
     ++scoring_releases_;
@@ -429,6 +431,7 @@ bool SimHost::start_story(const StoryStart& start, std::vector<std::string>* dia
         lua::attach_object_bridge(*scoring_vm_, story_->object_bridge());
         lua::attach_presentation(*scoring_vm_, story_->presentation());
     }
+    scoring_players_.reset();  // q6 t03: the story's world replaces the scoring VM's own
     story_->set_scoring_tap([this](const std::vector<galactic::GalacticEvent>& events) {
         if (scoring_vm_) scoring_events_.insert(scoring_events_.end(), events.begin(), events.end());
     });
@@ -456,6 +459,17 @@ galactic::GalacticSim* SimHost::start_galactic(const galactic::GalacticRules& ru
         return nullptr;
     }
     mode.attach_sim(std::move(sim));
+#if defined(ALAMO_SIM_HAVE_STORY) && defined(ALAMO_LUA_PLAYERS)
+    // q6 t03 (GAME_SCORING.md §3, the PlayerWrapper arguments; TR's plugins call Find_Player / Get_Name): until a story
+    // session gives it the story's world, the scoring VM gets a player world of its own over the campaign's players. [port]
+    // Not hashed: with a GalacticSim the facts it serves (credits, relations, tech locks) are the sim's, which the sim
+    // hashes; only Lua-only flags a scoring script might set live here (the story session's world hashes those).
+    if (scoring_vm_ && !story_) {
+        scoring_players_ = std::make_shared<lua::LuaPlayerWorld>();
+        scoring_players_->attach_galactic(mode.sim());
+        lua::attach_player_world(*scoring_vm_, scoring_players_.get());
+    }
+#endif
     scoring_mode_started(ModeKind::Galactic, {});  // q6 t09: map = the campaign name, resolved at delivery
     return mode.sim();
 }
@@ -466,7 +480,10 @@ bool SimHost::end_game_mode() {
         scoring_flush_starts();          // a mode set up and ended within one frame still started first
         scoring_call("Game_Mode_Ending_Event", {arg_string(scoring_mode_name(modes_.top()->kind()))});
     }
-    if (modes_.depth() <= 1) scoring_vm_.reset();  // q6 t06: before the store its wrappers point into
+    if (modes_.depth() <= 1) {  // q6 t06: before the store its wrappers point into
+        scoring_vm_.reset();
+        scoring_players_.reset();  // q6 t03: after the VM that points to it
+    }
 #endif
     if (story_) {
         if (modes_.depth() <= 1) story_.reset();  // the galactic mode (bottom) ends: the story with it

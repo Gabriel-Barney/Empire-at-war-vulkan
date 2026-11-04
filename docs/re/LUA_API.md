@@ -1359,6 +1359,25 @@ only the two object-carrying classes and needs an object; Move_Internal also acc
 falls back to a position. The task-force variants (`SpaceTaskForceClass` 0x6e54d0 / `LandTaskForceClass` 0x6e99c0
 `Attack_Target`, …) are separate functions with their own messages and were not read here.
 
+**Port status (q6 t03, 2026-11-03).** `engine/lua/src/bind_objects.cpp` (`m_attack_target`, `move_internal`) follows the
+tables above: AI targets, task forces and positions as listed, unit tables (Attack_Target sorted by id, Move_Internal
+in table order, one order per unit), the self / container fallback, the locked warning, and every error above as a
+**script error** (`Call::script_error_stop`: "SCRIPT ERROR" logged, nothing returned, no unwind, and the script's exited
+flag = `LuaVm::Impl::exit_requested`, the flag `ScriptExit` sets, so `service_threads` resumes no further thread of that
+script and kills them all at the end of the pass; the AI plan hosts and the GameScoring host already release a script
+on it). Galactic `Move_To` keeps its stage-2 path (0x57d8c0 not read). [port] not modelled: the formation /
+coordinator checks, the attack test 0x38d730, the team-container expansion, the space collision-type string (skipped,
+not validated), the optional number of Attack_Move / Guard_Target, the task force's own position vf+0x170 (the first
+live unit's position), and Move_To to an object is still the followed MoveToObject order. Open: the other bindings'
+"SCRIPT ERROR" helpers (`script_error()` in bind_objects / bind_script_gaps / bind_script_remaining / bind_fog,
+`script_error_nil` in bind_ai_tactical) and the `fail()` path (a Lua error that unwinds and kills only the calling
+thread) do not set the flag yet; moving them changes which scripts stop, so it needs its own golden pass. The AI free
+store host does not check `exit_requested()` before its per-unit function calls.
+Open (RE, q6 t03): `StoryEventWrapper.Add_Dialog_Text` (0x73df60) argument count. Its message says "Expected 2" and the
+port requires exactly 2, but Thrawn's Revenge `intervention-missions/missions/Recon.lua:117` calls it with one text id
+(`event.Add_Dialog_Text("TEXT_INTERVENTION_RECON_OBJECTIVE_MAIN_FACTION")`), so the port's story run stops there at
+frame 2402. Read whether 0x73df60 accepts 1 or 2 arguments (and what a 1-argument call appends) before changing it.
+
 ## EvaluatePerception(name, player [, target]) — 0x699430: nil versus 0 [H]
 
 The binding returns either one number or **nothing** (nil in Lua). It never substitutes 0. A failed evaluation returns

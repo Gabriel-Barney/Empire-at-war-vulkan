@@ -488,6 +488,8 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
         };
         sets_.push_back(std::move(set));
     }
+    plot_group_.clear();  // q6 t03: one plot table per mode (STORY.md §0): Get_Story_Plot searches every galactic set
+    for (const auto& s : sets_) plot_group_.push_back(&s->model);
     if (!st.lua) return true;
     for (size_t si = 0; si < sets_.size(); ++si) {
         Set& s = *sets_[si];
@@ -507,6 +509,7 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
             opt.script_name = script;
             sc.vm = std::make_unique<lua::LuaVm>(host, opt);
             lua::attach_story(*sc.vm, &s.model);
+            lua::attach_story_group(*sc.vm, &plot_group_);  // q6 t03
 #if defined(ALAMO_LUA_PLAYERS)
             lua::attach_player_world(*sc.vm, &lua_->players);
 #endif

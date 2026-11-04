@@ -406,7 +406,11 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
    No shipped event uses CONQUER_COUNT.
 7. **Plot lookups** (§2.1, §7 item 6) [port]: Get_Story_Plot, STORY_ELEMENT and `find_plot` match the file name
    **case-insensitively** and ignore a path; the plot walk order still uses the CRC of the name as written. Shipped
-   data has no case mismatch (§7 data check), so the two readings cannot differ there.
+   data has no case mismatch (§7 data check), so the two readings cannot differ there. (q6 t03) The story manager is one
+   per mode (§0), so `Get_Story_Plot` also finds the plots of the **other galactic plot sets** (`attach_story_group`):
+   the calling script's own set first, then the sets in load order. Thrawn's Revenge needs it: GCPlayerAgnostic (in the
+   Independent_Forces set) asks for `Conquests\Factions\Story_Generic_<FACTION>.xml`, which only that faction's set lists.
+   STORY_ELEMENT, TRIGGER_EVENT and `Story_Event` still act on the own set only (open).
 8. **Story flags** (§0) [H]: one table for the whole session - every galactic plot set and the tactical story's plot
    set use the same flags (`StoryModel::share_flags`). Before 2026-11-02 each plot set had its own table, so a mission's
    `SET_FLAG <Faction>_A0xM0y_WIN` (20 such flags in FoC, e.g. `EMPIRE_A01M03_WIN`, set in the tactical plots) never

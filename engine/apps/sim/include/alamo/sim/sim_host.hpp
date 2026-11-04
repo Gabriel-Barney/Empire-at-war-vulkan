@@ -82,6 +82,7 @@ class FileProvider;
 namespace alamo::lua {
 class GlobalValueStore;
 class LuaVm;
+class LuaPlayerWorld;
 struct AiEventArg;
 }  // namespace alamo::lua
 namespace alamo::galactic {
@@ -422,6 +423,10 @@ private:
     uint32_t load_base_depth_ = 0;
     void read_chunks(const SaveFile& in, LoadReport& rep);
 #ifdef ALAMO_SIM_HAVE_STORY
+    // q6 t03: the scoring VM's own player world while no story session runs (start_galactic; GAME_SCORING.md: the
+    // script reaches the session's players in every session). Replaced by the story's world in start_story, dropped
+    // with the VM. Before scoring_vm_, so destroyed after it. Null without the players family.
+    std::shared_ptr<lua::LuaPlayerWorld> scoring_players_;
     // q6 t06: last member, so it is destroyed before the stores, the RNG and the GlobalValue table it points to.
     std::unique_ptr<lua::LuaVm> scoring_vm_;
 #endif

@@ -372,5 +372,10 @@ private:
 // attachment.
 void attach_story(LuaVm& vm, StoryModel* model);
 StoryModel* attached_story(LuaVm& vm);
+// q6 t03: the other plot sets of the same story manager (the session's galactic plot sets, load order), which
+// Get_Story_Plot also searches after the VM's own model (STORY.md §0: one plot table per game mode). Plot / event wrappers
+// of a group model remember its index, so the group must keep its order for the VM's lifetime (and across a load).
+// nullptr detaches. The vector and its models must outlive the attachment.
+void attach_story_group(LuaVm& vm, const std::vector<StoryModel*>* group);
 
 }  // namespace alamo::lua

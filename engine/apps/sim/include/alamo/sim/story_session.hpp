@@ -528,6 +528,9 @@ private:
     // Lua families shared by every VM of the session (declared before sets_: the VMs go first).
     struct Families;
     std::unique_ptr<Families> lua_;
+    // q6 t03: the galactic sets' models in load order (lua::attach_story_group: Get_Story_Plot sees every galactic plot
+    // set, STORY.md §0). Before sets_, so it outlives their VMs.
+    std::vector<lua::StoryModel*> plot_group_;
     std::vector<std::unique_ptr<Set>> sets_;
     std::vector<StoryTrigger> triggers_;
     std::vector<StoryTrigger> pending_host_;

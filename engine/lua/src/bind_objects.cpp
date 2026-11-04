@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <iterator>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -470,14 +471,6 @@ Event ev_move_to_object(objects::ModeKind mode, ObjectId self, ObjectId target) 
     return commands::ev::move_to_object(wire(target), {wire(self)});
 #else
     (void)mode; (void)self; (void)target;
-    return {};
-#endif
-}
-Event ev_attack(ObjectId self, ObjectId target) {
-#if ALAMO_LUA_HAVE_COMMANDS
-    return commands::ev::attack(wire(target), {wire(self)});
-#else
-    (void)self; (void)target;
     return {};
 #endif
 }
@@ -1512,14 +1505,74 @@ int m_are_engines_online(Call& c) {
 
 // ---------------------------------------------------------------- orders
 
-int m_move_to(Call& c) {
+// q6 t03 (docs/re/LUA_API.md "Unit order bindings: target arguments"): GameObjectWrapper Attack_Target (0x5730f0) and
+// Move_To / Attack_Move / Guard_Target (Move_Internal 0x57da90, flags 0 / 1 / 2). Argument errors are script errors
+// (Call::script_error_stop: logged, nothing returned, no unwind; the script stops after the current thread), warnings only
+// log. The dispatcher's dead-caller check is off for these four (bindings.cpp): the bindings handle it as the spec says.
+// [port] not modelled: the movement coordinator / formation (steps 6), the per-unit attack test 0x38d730 ("unable to
+// attack") and the team-container expansion of step 7 (the battle host expands team containers itself), the space
+// collision-type string (read past, not validated), the optional distance number of Attack_Move / Guard_Target.
+
+// The units of an order: a Lua table at argument 1 (its live GameObjectWrapper entries, table order) or the caller alone.
+// `dest` = the destination argument (2 after a table, else 1). A non-object entry: Move_Internal -> script error "Entry
+// %d in unit array is not a gameobject." (the loop carries on); Attack_Target -> the copy-pasted warning; skipped.
+struct OrderUnits {
+    std::vector<ObjectHandle> units;
+    int dest = 1;
+};
+OrderUnits order_units(Call& c, const char* who, bool move_internal) {
+    OrderUnits u;
+    if (!c.has(1) || lua_type(c.L, c.idx(1)) != LUA_TTABLE) {
+        u.units.push_back(self_object(c));
+        return u;
+    }
+    u.dest = 2;
+    const int t = c.idx(1);
+    const int n = luaL_getn(c.L, t);
+    for (int k = 1; k <= n; ++k) {
+        lua_rawgeti(c.L, t, k);
+        const Ud* ud = lua_type(c.L, -1) == LUA_TUSERDATA ? static_cast<const Ud*>(lua_touserdata(c.L, -1)) : nullptr;
+        const bool is_object = ud && ud->cls == detail::cls_game_object();
+        const bool alive = is_object && detail::object_alive(*c.vm, *ud);
+        const ObjectHandle h = alive ? detail::object_handle(*ud) : ObjectHandle{};
+        lua_pop(c.L, 1);
+        if (!is_object) {
+            if (move_internal)
+                c.script_error_stop("GameObjectWrapper::%s -- Entry %d in unit array is not a gameobject.", who, k);
+            else
+                c.vm->message("SCRIPT WARNING: Find_Best_Local_Threat_Center -- invalid type for entry at index " +
+                              std::to_string(k) + " in object table.");
+            continue;
+        }
+        if (h) u.units.push_back(h);  // dead entries: skipped silently
+    }
+    return u;
+}
+
+// Issues one order per unit (unit-table orders) or the caller's order; the BlockingStatus waits on the first unit's
+// [port: the original's single UnitMovementBlockStatus covers them all].
+int issue_each(Call& c, const std::vector<ObjectHandle>& units, const std::function<Event(ObjectId)>& order) {
+    ObjectId first = objects::kNoObjectId;
+    uint32_t first_serial = 0;
+    for (const ObjectHandle h : units) {
+        const ObjectId id = store(c)->id(h);
+        const uint32_t serial = issue(c, h, order(id));
+        if (first == objects::kNoObjectId) {
+            first = id;
+            first_serial = serial;
+        }
+    }
+    return push_block(c, first, first_serial);
+}
+
+// Galactic Move_To (0x57d8c0 in the original, not part of this spec): the stage-2 path unchanged, dead caller included.
+int galactic_move_to(Call& c) {
+    if (!detail::object_alive(*c.vm, *c.self)) return c.fail("GameObjectWrapper::Move_To -- this object is dead!");
     Vec3 p{};
     ObjectHandle target{};
     if (position_arg(c, 1, p, &target) != PosArg::Ok)
         return c.fail("GameObjectWrapper::Move_To -- could not extract a position from parameter 1.");  // [inferred]
     if (detail::movement_locked(c, c.self->id)) return locked_orders_warning(c);
-    // REMAINING_GAPS §4.2: Move_Internal's optional numeric threat threshold T (argument 2 [M]), carried as the order's
-    // arg (float bits; 0 = off). [port] with T an object target becomes a move to its current position.
     if (c.is_number(2)) {
         const ObjectId tid = target ? store(c)->id(target) : objects::kNoObjectId;
         const float t = static_cast<float>(c.number(2));
@@ -1529,35 +1582,120 @@ int m_move_to(Call& c) {
     return issue_and_block(c, lua_order(LuaOrder::MoveTo, c.self->id, objects::kNoObjectId, p, 0));
 }
 
-int m_attack_move(Call& c) {
+enum MoveFlags : int { kMoveTo = 0, kAttackMove = 1, kGuardTarget = 2 };
+
+int move_internal(Call& c, int flags, const char* who) {
+    objects::ObjectStore* st = store(c);
+    if (st->mode() == objects::ModeKind::Galactic) {
+        if (flags == kMoveTo) return galactic_move_to(c);
+        return c.script_error_stop("GameObjectWrapper::%s -- this command is only supported in tactical modes", who);
+    }
+    if (!detail::object_alive(*c.vm, *c.self)) return c.script_error_stop("GameObjectWrapper::%s -- this object is already dead", who);
+    if (detail::movement_locked(c, c.self->id)) return locked_orders_warning(c);
+    const OrderUnits u = order_units(c, who, true);
+    const int d = u.dest;
+    const ObjectHandle self = self_object(c);
+    const ObjectHandle self_container = container_of(c, self);
+    // Attack_Move / Guard_Target take an object target unless it is the caller or the caller's container (then its
+    // position).
+    auto object_target = [&](ObjectHandle o) { return (o && o != self && o != self_container) ? o : ObjectHandle{}; };
     Vec3 p{};
     ObjectHandle target{};
-    if (position_arg(c, 1, p, &target) != PosArg::Ok)
-        return c.fail("GameObjectWrapper::Attack_Move -- could not extract a position from parameter 1.");  // [inferred]
-    const ObjectId tid = target ? store(c)->id(target) : objects::kNoObjectId;
-    return issue_and_block(c, lua_order(LuaOrder::AttackMove, c.self->id, tid, p, 0));
+    std::vector<ObjectHandle> tf_units;
+    if (const detail::AiTargetArg a = detail::ai_target_arg(c, d); a.is_target) {
+        // [port] a region target without a host position counts as dead (nothing to move to).
+        if (a.dead || !a.has_position) return c.script_error_stop("GameObjectWrapper::%s -- Target is already dead.", who);
+        p = a.position;
+        target = flags == kMoveTo ? a.object : object_target(a.object);
+    } else if (const Ud* o = c.userdata(d, detail::cls_game_object())) {
+        if (!detail::object_alive(*c.vm, *o)) return c.script_error_stop("GameObjectWrapper::%s -- Target is already dead.", who);
+        const ObjectHandle h = detail::object_handle(*o);
+        p = st->position(h);
+        target = flags == kMoveTo ? h : object_target(h);
+    } else if (detail::ai_task_force_units(c, d, tf_units)) {
+        // TaskForceClass: its position (vf+0x170) [port: the first live unit's position; none = nothing to move to].
+        // Guard_Target: the first member that is not the caller or its container; Move_To keeps the stage-2 rule (the
+        // first unit as an object target, which the battle host follows).
+        if (tf_units.empty()) return c.script_error_stop("GameObjectWrapper::%s -- Target is already dead.", who);
+        p = st->position(tf_units.front());
+        if (flags == kMoveTo) target = tf_units.front();
+        else if (flags == kGuardTarget)
+            for (const ObjectHandle m : tf_units)
+                if ((target = object_target(m))) break;
+    } else if (const Ud* pw = c.userdata(d, cls_position())) {
+        p = position_of(*pw);
+    } else {
+        const std::string name(object_type_name(c, self));
+        return c.script_error_stop("GameObjectWrapper::%s -- Parameter 1 is not a valid destination for unit %s", who, name.c_str());
+    }
+    // Space only: an optional collision-type string [port: read past]; then an optional number.
+    int k = d + 1;
+    if (st->mode() == objects::ModeKind::Space && c.is_string(k)) ++k;
+    if (u.units.empty()) {
+        c.vm->message(std::string("SCRIPT WARNING: GameObjectWrapper::") + who + " -- failed to move any objects");
+        return 0;
+    }
+    const ObjectId tid = target ? st->id(target) : objects::kNoObjectId;
+    if (flags == kAttackMove) return issue_each(c, u.units, [&](ObjectId id) { return lua_order(LuaOrder::AttackMove, id, tid, p, 0); });
+    if (flags == kGuardTarget) return issue_each(c, u.units, [&](ObjectId id) { return lua_order(LuaOrder::Guard, id, tid, p, 0); });
+    // Move_To. REMAINING_GAPS §4.2: Move_Internal's optional numeric threat threshold T, carried as the order's arg
+    // (float bits; 0 = off). [port] with T an object target becomes a move to its current position; without it an
+    // object target is the MoveToObject order the battle host follows (a1h t02).
+    if (c.is_number(k)) {
+        const float t = static_cast<float>(c.number(k));
+        const uint32_t bits = t != 0.0f ? std::bit_cast<uint32_t>(t) : 0u;
+        return issue_each(c, u.units, [&](ObjectId id) { return lua_order(LuaOrder::MoveTo, id, tid, p, bits); });
+    }
+    if (target) return issue_each(c, u.units, [&](ObjectId id) { return ev_move_to_object(st->mode(), id, tid); });
+    return issue_each(c, u.units, [&](ObjectId id) { return lua_order(LuaOrder::MoveTo, id, objects::kNoObjectId, p, 0); });
 }
+
+int m_move_to(Call& c) { return move_internal(c, kMoveTo, "Move_To"); }
+int m_attack_move(Call& c) { return move_internal(c, kAttackMove, "Attack_Move"); }
+int m_guard_target(Call& c) { return move_internal(c, kGuardTarget, "Guard_Target"); }
 
 int m_attack_target(Call& c) {
-    if (c.nargs != 1)
-        return c.fail("GameObjectWrapper::Attack_Target -- invalid number of parameters. Expected %d, got %d.", 1, c.nargs);
-    const Ud* t = c.userdata(1, detail::cls_game_object());
-    if (!t || !detail::object_alive(*c.vm, *t)) {
-        const std::string name(object_type_name(c, self_object(c)));
-        return c.fail("GameObjectWrapper::Attack_Target -- Parameter 1 is not a valid destination for unit %s", name.c_str());
-    }
+    static constexpr const char* kWho = "GameObjectWrapper::Attack_Target -- ";
+    if (store(c)->mode() == objects::ModeKind::Galactic)
+        return c.script_error_stop("%sthis command is only supported in tactical modes", kWho);
+    if (c.nargs < 1) return c.script_error_stop("%sinvalid number of parameters. Expected %d, got %d.", kWho, 1, c.nargs);
+    if (!detail::object_alive(*c.vm, *c.self)) return 0;  // a dead caller: nothing, no error
     if (detail::movement_locked(c, c.self->id)) return locked_orders_warning(c);
-    if (ScriptObjectState* s = edit_self(c)) s->attack_target = t->id;
-    return issue_and_block(c, ev_attack(c.self->id, t->id));
-}
-
-int m_guard_target(Call& c) {
-    Vec3 p{};
+    const bool table = lua_type(c.L, c.idx(1)) == LUA_TTABLE;
+    if (table && c.nargs < 2) return c.script_error_stop("%sinvalid number of parameters. Expected %d, got %d.", kWho, 2, c.nargs);
+    const int d = table ? 2 : 1;
     ObjectHandle target{};
-    if (position_arg(c, 1, p, &target) != PosArg::Ok)
-        return c.fail("GameObjectWrapper::Guard_Target -- could not extract a position from parameter 1.");  // [inferred]
-    const ObjectId tid = target ? store(c)->id(target) : objects::kNoObjectId;
-    return issue_and_block(c, lua_order(LuaOrder::Guard, c.self->id, tid, p, 0));
+    if (const detail::AiTargetArg a = detail::ai_target_arg(c, d); a.is_target) {
+        if (a.dead) return c.script_error_stop("%sTarget is already dead.", kWho);
+        if (!a.object) return c.script_error_stop("%sdestination is not valid for an attack command.", kWho);
+        target = a.object;
+    } else if (const Ud* t = c.userdata(d, detail::cls_game_object())) {
+        if (!detail::object_alive(*c.vm, *t)) return c.script_error_stop("%sTarget is already dead.", kWho);
+        target = detail::object_handle(*t);
+    } else {
+        const std::string name(object_type_name(c, self_object(c)));
+        return c.script_error_stop("%sParameter 1 is not a valid destination for unit %s", kWho, name.c_str());
+    }
+    OrderUnits u = order_units(c, "Attack_Target", false);
+    // Table attackers are sorted by object id (ascending; the caller alone needs no sort).
+    std::stable_sort(u.units.begin(), u.units.end(),
+                     [&c](ObjectHandle a, ObjectHandle b) { return store(c)->id(a) < store(c)->id(b); });
+    const ObjectId tid = store(c)->id(target);
+    if (u.units.empty()) return push_block(c, c.self->id, 0);  // the status is returned even with no attacker
+#if ALAMO_LUA_HAVE_COMMANDS
+    std::vector<uint32_t> attackers;
+    for (const ObjectHandle h : u.units) attackers.push_back(wire(store(c)->id(h)));
+    const Event e = commands::ev::attack(wire(tid), attackers);
+#else
+    const Event e{};
+#endif
+    for (const ObjectHandle h : u.units)
+        if (ScriptObjectState* s = edit_state(c, store(c)->id(h))) {
+            s->attack_target = tid;
+            s->has_orders = true;
+        }
+    const uint32_t serial = issue(c, u.units.front(), e);
+    return push_block(c, store(c)->id(u.units.front()), serial);
 }
 
 int m_stop(Call& c) {

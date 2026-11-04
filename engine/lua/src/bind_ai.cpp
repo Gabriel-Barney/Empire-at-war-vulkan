@@ -669,6 +669,45 @@ bool detail::ai_target_position(Call& c, int i, Vec3& out) {
     return h && h->target_valid(ud->id) && h->target_position(ud->id, out);
 }
 
+detail::AiTargetArg detail::ai_target_arg(Call& c, int i) {
+    AiTargetArg a;
+    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return a;
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
+    if (!ud || ud->cls != cls_target()) return a;
+    a.is_target = true;
+    AiScriptHost* h = host_of(c.L);
+    const objects::ObjectStore* st = c.vm->host.store;
+    if (!h || !st || !h->target_valid(ud->id)) {
+        a.dead = true;
+        return a;
+    }
+    if (const objects::ObjectHandle o = h->target_object(ud->id)) {
+        if (!st->alive(o)) {  // [port] a unit target whose unit has died
+            a.dead = true;
+            return a;
+        }
+        a.object = o;
+        a.position = st->position(o);
+        a.has_position = true;
+        return a;
+    }
+    a.has_position = h->target_position(ud->id, a.position);
+    return a;
+}
+
+bool detail::ai_task_force_units(Call& c, int i, std::vector<objects::ObjectHandle>& out) {
+    out.clear();
+    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return false;
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
+    if (!ud || !is_tf_class(ud->cls)) return false;
+    AiScriptHost* h = host_of(c.L);
+    const objects::ObjectStore* st = c.vm->host.store;
+    if (!h || !st) return true;
+    for (const objects::ObjectHandle u : h->tf_units(ud->id))
+        if (u && st->alive(u)) out.push_back(u);
+    return true;
+}
+
 // ================================================================ host-side API
 
 void attach_ai_host(LuaVm& vm, AiScriptHost* host, int32_t script_id) {
