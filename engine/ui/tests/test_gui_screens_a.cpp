@@ -564,6 +564,33 @@ void test_advanced_video_port() {
     video->set_selected("IDC_PORT_DETAIL_LEVEL", 3);
     click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(!acts.back().video.detail_picked);
+    // Auto Detect (gfxf t02): the button only asks the host; refresh_video_dialogs shows what the host then set, in the Video
+    // dialog and in an open Advanced dialog, and leaves the rest of the Video dialog (here the gamma slider) as the player had it.
+    video->set_value("IDC_GAMMA_SLIDER", 77);
+    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_AUTO_DETECT");
+    CHECK(acts.back().kind == MenuAction::Kind::AutoDetectVideo);
+    set_advanced_detail(cur, kQualityPresets[1]);
+    cur.anisotropy = 4;
+    cur.ambient_occlusion = true;
+    applied.anti_alias = kAntiAliasChoices[1].value;
+    applied.detail = kQualityPresets[1];
+    fe.refresh_video_dialogs();
+    CHECK(video->get("IDC_PORT_DETAIL_LEVEL")->selected == 1 && video->get("IDC_PORT_ANTI_ALIASING")->selected == 1 &&
+          video->get("IDC_GAMMA_SLIDER")->value == 77);
+    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
+    d = fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
+    CHECK(d != nullptr);
+    if (!d) return;
+    CHECK(d->get("IDC_PORT_MESH_DETAIL")->selected == 1 && d->get("IDC_PORT_ANISOTROPY")->selected == 2 && d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked);
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_AUTO_DETECT");  // the same button inside Advanced
+    CHECK(acts.back().kind == MenuAction::Kind::AutoDetectVideo);
+    set_advanced_detail(cur, kQualityPresets[3]);
+    cur.anisotropy = 16;
+    cur.ambient_occlusion = false;
+    applied.detail = kQualityPresets[3];
+    fe.refresh_video_dialogs();
+    CHECK(d->get("IDC_PORT_MESH_DETAIL")->selected == 3 && d->get("IDC_PORT_ANISOTROPY")->selected == 4 && !d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked &&
+          video->get("IDC_PORT_DETAIL_LEVEL")->selected == 3);
     constexpr AdvancedVideoSettings all100;
     CHECK(advanced_detail_level(all100) == 100 && quality_level(all100) == 3);
     // The levels are consistent: each preset reads back as itself, a mix is Custom, and the anti-aliasing ranges are where they say.

@@ -831,6 +831,15 @@ void FrontEnd::fill_video(GuiDialog& d) {
     }
 }
 
+void FrontEnd::refresh_video_dialogs() {
+    if (GuiDialog* vd = gui_->find(kVideo)) {
+        const VideoSettings v = p_.video ? p_.video() : VideoSettings{};
+        vd->set_selected("IDC_PORT_ANTI_ALIASING", static_cast<int32_t>(level_index(kAntiAliasChoices, v.anti_alias)));
+        vd->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(current_advanced(p_, v))));
+    }
+    if (GuiDialog* ad = gui_->find(kAdvancedVideo)) fill_advanced_video(*ad, current_advanced(p_, p_.video ? p_.video() : VideoSettings{}));
+}
+
 void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s) {
     for (const AdvLevel& l : kAdvLevels) {
         hide_slider(d, l.slider);
