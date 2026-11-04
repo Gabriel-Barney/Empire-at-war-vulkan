@@ -201,6 +201,28 @@ static void test_language() {
         res = evaluate(set, set.find("Bad"), ctx, r);
         CHECK(!res.ok);
         CHECK(set.equation(set.find("B")).line == 5);
+        CHECK(eval_failure_site(set, evaluate(set, set.find("a"), ctx, r)).empty());  // ok: no site
+        CHECK(eval_failure_site(set, evaluate(set, set.find("Loop"), ctx, r)) == "recursion Function_Loop");
+    }
+    // q6 t10 diagnostics: eval_failure_site names the first failing node, also inside a nested Function_.
+    {
+        const char* xml =
+            "<Equations>\n<Outer> 1 + Function_Inner.Evaluate </Outer>\n"
+            "<Inner> Game.IsCampaignGame * Variable_Human.SpaceTotalUnnormalized + Variable_Target.Nope </Inner>\n"
+            "<Div> 1 / (Game.IsCampaignGame - 1) </Div>\n<Scr> Script_AnyFreeLandSlots.Evaluate </Scr>\n</Equations>\n";
+        EquationSet set;
+        LoadReport rep;
+        set.add_file(xml, "site.xml", rep);
+        set.link(&rep);
+        EvalContext ctx;
+        ctx.self = 0;
+        EvalResult res = evaluate(set, set.find("Outer"), ctx, r);
+        CHECK(!res.ok && res.error == EvalError::Token);
+        CHECK(eval_failure_site(set, res) == "Variable_Human.SpaceTotalUnnormalized");
+        res = evaluate(set, set.find("Div"), ctx, r);
+        CHECK(!res.ok && eval_failure_site(set, res) == "divide-by-zero");
+        res = evaluate(set, set.find("Scr"), ctx, r);
+        CHECK(!res.ok && eval_failure_site(set, res) == "Script_AnyFreeLandSlots");
     }
 }
 

@@ -539,6 +539,15 @@ static void test_tokens() {
     CHECK(f.val("Variable_Self.BaseLevel") == 1.0);
     CHECK(f.val("Variable_Self.CreditsUnnormalized") == 1000.0);
     CHECK(f.val("Variable_Enemy.CreditsUnnormalized") == 0.0);  // not Self
+    // q6 t10 BudgetAllocation (AI_GALACTIC_TOKENS 8.3): Self only; no tactical budget -> 0.0 for every key.
+    CHECK(f.val("Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[MajorItem]}") == 0.0);
+    CHECK(f.val("Variable_Self.BudgetAllocation") == 0.0);
+    {
+        double b = 0;
+        CHECK(!f.eval("Variable_Enemy.BudgetAllocation {Parameter_Category = AIGoalCategoryType[MajorItem]}", b));
+        CHECK(!f.eval("Variable_Human.BudgetAllocation {Parameter_Category = AIGoalCategoryType[MajorItem]}", b));
+        CHECK(!f.eval("1 + Variable_Enemy.BudgetAllocation", b));  // a failing leaf fails the equation
+    }
     CHECK(f.val("Variable_Self.UnitSpaceAvailable") == 20.0);
     CHECK(f.val("Variable_Self.TacticalBuiltStructureCount") == 1.0);
     CHECK(f.val("Variable_Self.TacticalBuiltStructureCount {Parameter_Type = \"E_Ground_Barracks\"}") == 1.0);
