@@ -1,185 +1,185 @@
 # A2 synthetic AI-vs-AI campaign: per-frame CRC (every 150th frame + last), decisions
-frame 150 ba1a50e408a12fb2
-frame 300 a0728737fc52c0df
-frame 450 5034a7afb5b48fab
-frame 600 521da1c6f6582e55
-frame 750 1af66cc105b69be6
-frame 900 1dd976d1f49eee0a
-frame 1050 866e29598222d0ec
-frame 1200 73d384507fe04b22
-frame 1350 a8e0ca4ecca8e05d
-frame 1500 621b3bd01be1ebe0
-frame 1650 43a718c749733a40
-frame 1800 316e67e6cb4d94fa
-frame 1950 5964702193b07597
-frame 2100 d2b36c2e5aed3bba
-frame 2250 937b14087b54b406
-frame 2400 ba9e36a0d257d891
-frame 2550 1947752c8d095fd5
-frame 2700 56d903757422a2a5
-frame 2850 63618ba8828a5e10
-frame 3000 3e438a303160d4c1
-frame 3150 8499426406b4734c
-frame 3300 a41a7442c4439ff6
-frame 3450 0529c11efa77c755
-frame 3600 1376292f2dd512dd
-frame 3750 1ce5dceae162934d
-frame 3900 3c57a2d1f83512d5
-frame 4050 f9524b4a0dbfb7fa
-frame 4200 40ea3f3fc5f8f770
-frame 4350 51039e4144753589
-frame 4500 6bd97f88455afbc0
-frame 4650 09ad3d10e8c9d13f
-frame 4800 6c5dd7aea05b1ccc
-frame 4950 a45e326754394da7
-frame 5100 69096365fe98e164
-frame 5250 e08a45b9485965ad
-frame 5400 8efe49d3bad19b80
-frame 5550 2632addfc297bec3
-frame 5700 a4de8de8fe9b1aa4
-frame 5850 bd1338d8b40b9518
-frame 6000 e26d94859126ef7e
-frame 6150 f56eeb93b64be0f1
-frame 6300 70f311934b060dde
-frame 6450 fc8947463f9f28b5
-frame 6600 0f0237661390bcf9
-frame 6750 a0ed4041ba04f564
-frame 6900 b7667d5bb21a10cf
-frame 7050 a01a8a2d8a8a119f
-frame 7200 349cdf78e94c3f8b
-frame 7350 5fc533b0dcc34664
-frame 7500 f2b447a3839f08a3
-frame 7650 d54d6fa558594136
-frame 7800 0d8588f9251f2864
-frame 7950 e18bc25b8d8b3d8c
-frame 8100 1b2c293f7cccf082
-frame 8250 2d953514524ca666
-frame 8400 2a87a08bc0cefc37
-frame 8550 8a204943fd50227e
-frame 8700 3947bbc96775f9dd
-frame 8850 fc4597af2d974c69
-frame 9000 7fdf21a26799d638
-frame 9150 7d6772f281e4b04b
-frame 9300 f027496f18f3a189
-frame 9450 5d3bef2bf96a5d93
-frame 9600 ac8ece3eb4299179
-frame 9750 4b7d2e1f07f775f8
-frame 9900 7e0cffbb1cb820cf
-frame 10050 e18edb5d2b753ba5
-frame 10200 e8eaaca8e26292ef
-frame 10350 13e113a1833bb354
-frame 10500 f027b3b9cc496d1b
-frame 10650 7e77da465e2249d4
-frame 10800 3e4c5aa6dc6a34de
-frame 10950 4b6305d3ec40c13a
-frame 11100 3154be72cc6c9379
-frame 11250 15008c7cce5fc6e9
-frame 11400 7de337149bd7fc8b
-frame 11550 46d848fddd4a60b4
-frame 11700 01373b882a48c116
-frame 11850 ebc33be414fce7b0
-frame 12000 8fa7f9d00485c65b
-frame 12150 04f2bec043d78beb
-frame 12300 ca753fd0ce75a6d7
-frame 12450 060edc399cd84e86
-frame 12600 48d96d269f1bce20
-frame 12750 2b348e34495cbe15
-frame 12900 7114f602777d3551
-frame 13050 c3074b547528c3a5
-frame 13200 c798cd1f766c9cd3
-frame 13350 9d20cbc3662bbfb2
-frame 13500 68a6ebec4de9bcbd
-frame 13650 26ec8b697366d99a
-frame 13800 7f74f1061471da59
-frame 13950 ecb469081f55f073
-frame 14100 60495235b07a35d4
-frame 14250 c3c5fdb22cb69f41
-frame 14400 040358747b52af47
-frame 14550 419c916821ef6722
-frame 14700 4df928b6e0d0e613
-frame 14850 271a33714e605056
-frame 15000 3ec133d29000b389
-frame 15150 cbd11d3b4d85f62f
-frame 15300 3dae09500fd1d51f
-frame 15450 852cbe2daf04cbfe
-frame 15600 3d3390179de3ab72
-frame 15750 5f5194ce44d7d3a8
-frame 15900 16d304c42850749a
-frame 16050 5b96f5d94f366388
-frame 16200 bd0dff347ef204bd
-frame 16350 bea5bf0dc570fa95
-frame 16500 a6030e31092bf868
-frame 16650 7fb2caf6924b2ac6
-frame 16800 a49b93037714af01
-frame 16950 a77995a2b18c3f89
-frame 17100 79d2b315803b04bc
-frame 17250 80b0a320ba97e9e8
-frame 17400 eab0cf8b7ad80e54
-frame 17550 f6cc9354a7df335e
-frame 17700 4c80b51fa43bdda6
-frame 17850 936b9f3aa98fd02d
-frame 18000 94b7659db827ed89
-frame 18150 60efcf693d6f6cd6
-frame 18300 0ea6391661f5278c
-frame 18450 d97a436339db8aa4
-frame 18600 84b80fcccfe9ecfd
-frame 18750 c6cd578d5b7bb7eb
-frame 18900 301cb34d5b385e79
-frame 19050 c3fdab00d863544a
-frame 19200 616570832219b5b7
-frame 19350 b63fea7ab0efe3ba
-frame 19500 2a8dd05789fc6be7
-frame 19650 50077c1fc3f9fdb6
-frame 19800 ea37d4a55079985d
-frame 19950 af7af6de59d0b4ae
-frame 20100 98167aa002776437
-frame 20250 68fcb43e4c579d91
-frame 20400 c783a64cc44647b6
-frame 20550 88be78a041938fa1
-frame 20700 3e17c7aceea3a4b9
-frame 20850 553065d6ad57ba58
-frame 21000 a15d158796679929
-frame 21150 28c4d7a1bb76f807
-frame 21300 8ffb483879f361bf
-frame 21450 162ff73d3febab19
-frame 21600 f96fb19bc13ad35b
-frame 21750 d182699846827b44
-frame 21900 a3b7912463030440
-frame 22050 0bb704fd28e40ed4
-frame 22200 df6de710e91e5024
-frame 22350 fdf6ea1686300f3e
-frame 22500 5213996f1e0fa690
-frame 22650 9e00c76dc065e552
-frame 22800 aa1d027f8bfe9a46
-frame 22950 780907a698eef080
-frame 23100 c601250191df7081
-frame 23250 c5c48565b83f3c2a
-frame 23400 5c98223ac79d12b3
-frame 23550 9f443a32745912b8
-frame 23700 d670298440eff4d5
-frame 23850 46494d08b7c9a0c2
-frame 24000 dfee99403c50b5d0
-frame 24150 fa06c27f6925f778
-frame 24300 e6c015630294d868
-frame 24450 4787dc833f156202
-frame 24600 350650461ecd0713
-frame 24750 10eb8a9e13dab42c
-frame 24900 e09fe969c7dc3b08
-frame 25050 71dc0df0e3ed1bba
-frame 25200 7b6fdd2bfa9b50a1
-frame 25350 45f2485a945f739e
-frame 25500 224d1bcd030f09ba
-frame 25650 1e8d84f05529fe26
-frame 25800 b3771fce48d4eaee
-frame 25950 36c46ac3099bedb5
-frame 26100 33d481dd6eb1bed2
-frame 26250 11aa0a8b860fb132
-frame 26400 e302f405a43c103e
-frame 26550 2b3bb97097154592
-frame 26700 9a5233fd0ec025ca
-frame 26850 b43eefb51dfbbed7
-frame 27000 1d15eae0f9cfbc30
-frames 27000 planets E=0 R=8 N=0 credits E=1616 R=1427 orders 144 rejected 0 conflicts 13 plans running 0
+frame 150 833a97359e788d79
+frame 300 c262d582f1c75301
+frame 450 ab31e98e5f7221cb
+frame 600 3f75de69fde86bee
+frame 750 6fc6e1fb776140a4
+frame 900 529c852d1c1247af
+frame 1050 c46aff1d932bafcc
+frame 1200 4df3f57ff591ab2f
+frame 1350 3682e6ecc5b86a00
+frame 1500 6f6b1afbf4aa4e25
+frame 1650 25d2f47a14f67828
+frame 1800 99bb2737b77e1a76
+frame 1950 fc7664125d576981
+frame 2100 0860e9c86a162204
+frame 2250 6802ff690c646db5
+frame 2400 6d278db813e64b5a
+frame 2550 9c6f204b0ef66061
+frame 2700 db6fbfa6ded3a59e
+frame 2850 ad6b76d14aab9e9e
+frame 3000 e0960db707361b27
+frame 3150 d931003e2eaa3d61
+frame 3300 4296448b8345f891
+frame 3450 88deadea3af8ab27
+frame 3600 4e42b94254501ea4
+frame 3750 fb308af1b955a423
+frame 3900 2fbb902fca2b4481
+frame 4050 f356009c684ce276
+frame 4200 52814c3e8cc57680
+frame 4350 28c20d99b54a31f1
+frame 4500 91e05868b59b5ad7
+frame 4650 7618da52c1f2e1d5
+frame 4800 a155fc7253b2b08e
+frame 4950 dbac3e6af29b5199
+frame 5100 7e7a7c2fe58cd625
+frame 5250 3d6c98e88295b5b9
+frame 5400 bd3ce9652c5e85ed
+frame 5550 9a1668684f5ab16c
+frame 5700 d5cce7c9e044aee0
+frame 5850 872a8289075fc415
+frame 6000 8da75e9755a1b01d
+frame 6150 d8d37eeae1389770
+frame 6300 3767f18efea15c33
+frame 6450 7b8a6c7fd3e9a1f7
+frame 6600 620192954a47b93f
+frame 6750 1ece19d15903bc7e
+frame 6900 d5821ecd59dd809b
+frame 7050 c730a4c1bf716f41
+frame 7200 7756071df5bb0454
+frame 7350 5440a62539d84ff5
+frame 7500 0fac2a14a3d2e238
+frame 7650 322904d89ab8d6df
+frame 7800 07e8555046d712de
+frame 7950 bd07155cee87e303
+frame 8100 99a3beea24b24688
+frame 8250 19b8e41ff45ced06
+frame 8400 a6b7ddc5abc86fff
+frame 8550 23c23e20783278f5
+frame 8700 b71c66f1440308e7
+frame 8850 5d6c806004625d89
+frame 9000 d6506a1da15c1b86
+frame 9150 cf5c0b85a6e74652
+frame 9300 6e9f5d77ba712cc3
+frame 9450 1e6b3c9fcee6cf5b
+frame 9600 7001870e117bb6ff
+frame 9750 f488b82fafd7dec5
+frame 9900 f0fc2d93c32b2970
+frame 10050 b581dbe34ce591e5
+frame 10200 6dcee58006fd0eb5
+frame 10350 008e47ffe12ba4b0
+frame 10500 323b4344bdd64f8e
+frame 10650 417cd36e28967864
+frame 10800 92e04fcc1904d076
+frame 10950 393bef1d95b14dc1
+frame 11100 3cc3b7297e003c4f
+frame 11250 f23b673c62a98965
+frame 11400 6d852d6d8066df97
+frame 11550 5f7200a6cb79e3f7
+frame 11700 67e1d4d10cbf22c3
+frame 11850 5017b0481e802634
+frame 12000 4682161f1178933c
+frame 12150 c886535cc4140071
+frame 12300 54635b4f20ad89f2
+frame 12450 0861cc3ed1c94c14
+frame 12600 8836f460d59ae382
+frame 12750 79dd59fafcbdd28e
+frame 12900 36be4a7a4f3c8bf6
+frame 13050 a9b55965565d4b97
+frame 13200 8245c0f118cda9cb
+frame 13350 bc8196323abc2a48
+frame 13500 9008c4662c50ca60
+frame 13650 4bd6b5e1a90eb4d9
+frame 13800 26ab91fc6f6938a5
+frame 13950 ab7577a66447633a
+frame 14100 60c02081e2e9c966
+frame 14250 578c7d4759af68af
+frame 14400 047353379a3234a2
+frame 14550 7d604f5632a3afc6
+frame 14700 d9873440583b03fc
+frame 14850 624e2eac1f507fff
+frame 15000 ed57f1305b6821aa
+frame 15150 b2dcacdb905559e4
+frame 15300 aea845fd6055900e
+frame 15450 699c63f5550b8365
+frame 15600 27491264d92381fc
+frame 15750 f0e80282a070e44f
+frame 15900 60425f8983214735
+frame 16050 ca8880f8a30c606a
+frame 16200 73c4a4012521d6b7
+frame 16350 c74b505927e34db4
+frame 16500 089ed6bb440d8fea
+frame 16650 6d68248bf87cc86e
+frame 16800 f459199cc5da6659
+frame 16950 759dfa6d7b49571c
+frame 17100 8a855adb47e9c611
+frame 17250 5129f55894f1f646
+frame 17400 511d5b3004234fa6
+frame 17550 1c156ce6ba380728
+frame 17700 be02368c7c243c6e
+frame 17850 81986c64116be807
+frame 18000 cf89f5e27e0ebbbf
+frame 18150 b0eaab2d93d2e2b3
+frame 18300 0f02bd4ed14f3ae0
+frame 18450 994df14dbea658f9
+frame 18600 367f28c41d12ba79
+frame 18750 698e20acf10dfcb0
+frame 18900 5dfb9b44dc14da75
+frame 19050 c32e3ed2d742baa2
+frame 19200 32254e2b6fa88e49
+frame 19350 af20c55cccebbf54
+frame 19500 aec7f4cb7adc1218
+frame 19650 13523049f80a5076
+frame 19800 03c4a1e5f75a7a10
+frame 19950 186417c23a639ff0
+frame 20100 32ca490d0869e1ac
+frame 20250 8eea13dbe98e1b7a
+frame 20400 882d18b319bb4e09
+frame 20550 83d52e5134193154
+frame 20700 8278a1dcc3590929
+frame 20850 1895304de7a6c5a6
+frame 21000 87d788481f0679ea
+frame 21150 abc19f8ea28f8a8c
+frame 21300 05a53f2168d56c37
+frame 21450 a649c8832806240a
+frame 21600 160e414ad388aac5
+frame 21750 1a36bf3984e7e4a0
+frame 21900 12f0891378752de3
+frame 22050 75dff2fda9c4a816
+frame 22200 6ecbb5357e299f8e
+frame 22350 c956b735351cae54
+frame 22500 b1789e0294c28f70
+frame 22650 c68ff9127772d876
+frame 22800 257213451ffcecad
+frame 22950 647705640a64da2a
+frame 23100 1d23dd30e7405599
+frame 23250 be11a4fa337556c3
+frame 23400 6409ba78d48af860
+frame 23550 6ee28cb684f9697a
+frame 23700 09bbbcbe470f0456
+frame 23850 c9cf00b1f77aa28d
+frame 24000 0eb82863f0743128
+frame 24150 afdf4c7f66cc7633
+frame 24300 50104f65033b40e9
+frame 24450 6e5434ebabf3c688
+frame 24600 01793013ac35175b
+frame 24750 5bdce8c76620fcdb
+frame 24900 a6ce8423e0212ea5
+frame 25050 a9425d1bfd797218
+frame 25200 2558b52bda3e296e
+frame 25350 5d46243e197250b0
+frame 25500 068071725a6e3944
+frame 25650 f25180a64f0e3d82
+frame 25800 e292849a5db783f5
+frame 25950 f1e7b62ff6804957
+frame 26100 6cbee9e254a0c663
+frame 26250 12d14fcd2c06476c
+frame 26400 798a3b29222426a7
+frame 26550 a94e79ef5b04569c
+frame 26700 4fc4a37dfc4efdba
+frame 26850 d919d4287faba036
+frame 27000 76fe982d15ac4c7c
+frames 27000 planets E=0 R=8 N=0 credits E=1176 R=1166 orders 138 rejected 0 conflicts 12 plans running 0
 1 p0 opponent 1
 1 p0 templates Syn_Default
 1 p0 plan 1 CONQUER for Conquer_Planet @P2 SpaceForce(1+1) GroundForce(1+1) net 650 gross 1600 eta 7.2
@@ -351,7 +351,7 @@ frames 27000 planets E=0 R=8 N=0 credits E=1616 R=1427 orders 144 rejected 0 con
 2419 p0 tf GroundForce move to P3
 2419 p0 order move fleet 51 -> P3
 2584 p0 plan 26 CONQUER ended failure
-2592 p0 plan 28 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
+2592 p0 plan 28 CONQUER for Conquer_Planet @P3 SpaceForce(4+0) GroundForce(2+0) net 0 gross 2700 eta 0.0
 2593 p0 order move fleet 41 -> P2
 2593 p0 order move fleet 51 -> P2
 2708 p0 plan 29 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 6.0
@@ -394,7 +394,7 @@ frames 27000 planets E=0 R=8 N=0 credits E=1616 R=1427 orders 144 rejected 0 con
 3434 p1 plan 31 CONQUER ended success
 3436 p0 plan 32 CONQUER ended success
 3442 p0 plan 33 CONQUER for Conquer_Planet @P5 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
-3442 p1 plan 34 CONQUER for Conquer_Planet @P0 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1600 eta 0.0
+3442 p1 plan 34 CONQUER for Conquer_Planet @P0 SpaceForce(3+0) GroundForce(2+0) net 0 gross 2000 eta 0.0
 3448 p0 tf SpaceForce move to P5
 3448 p0 order move fleet 51 -> P5
 3449 p1 tf SpaceForce move to P0
@@ -411,87 +411,78 @@ frames 27000 planets E=0 R=8 N=0 credits E=1616 R=1427 orders 144 rejected 0 con
 3779 p1 order invade P0 with 2
 3784 p0 plan 33 CONQUER ended success
 3785 p1 plan 34 CONQUER ended success
-3794 p1 plan 35 CONQUER for Conquer_Planet @P5 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
+3794 p1 plan 35 CONQUER for Conquer_Planet @P5 SpaceForce(4+0) GroundForce(2+0) net 0 gross 2100 eta 0.0
+3794 p1 order move fleet 43 -> P6
 3794 p1 order launch 18 at P0
 3794 p1 order form 18 alone
 3794 p1 order launch 19 at P0
-3794 p1 order form 19 into fleet 59
 3797 p1 order move fleet 59 -> P6
-3800 p1 tf SpaceForce move to P5
-3800 p1 order move fleet 47 -> P5
-3887 p1 plan 35 CONQUER ended failure
-4652 p1 plan 36 CONQUER for Conquer_Planet @P5 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-4652 p1 order move fleet 43 -> P6
-4652 p1 order move fleet 59 -> P6
-5075 p1 plan 36 CONQUER ended failure
-5075 p1 order auto-land 18 at P6
-5075 p1 order auto-land 19 at P6
-5415 p1 plan 37 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
-5417 p1 build task 32 Corvette for ReserveForce
+4217 p1 tf SpaceForce move to P5
+4217 p1 order move fleet 47 -> P5
+4304 p1 plan 35 CONQUER ended failure
+5409 p1 plan 36 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
+5411 p1 build task 32 Corvette for ReserveForce
 5456 p1 order build Corvette at P6
-5675 p1 plan 37 BUILDSPACE ended success
-9465 p1 plan 38 CONQUER for Conquer_Planet @P3 SpaceForce(1+1) GroundForce(2+0) net 400 gross 1300 eta 7.2
-9465 p1 plan 39 UPGRADESTARBASE for Upgrade_Starbase @P0 BaseForce(0+1) net 900 gross 900 eta 10.0
+5675 p1 plan 36 BUILDSPACE ended success
+9466 p1 plan 37 CONQUER for Conquer_Planet @P3 SpaceForce(1+1) GroundForce(2+0) net 400 gross 1300 eta 7.2
+9466 p1 plan 38 UPGRADESTARBASE for Upgrade_Starbase @P0 BaseForce(0+1) net 900 gross 900 eta 10.0
 9467 p1 build task 33 Corvette for SpaceForce
 9467 p1 build task 34 SB1 for BaseForce at P0
-9467 p1 order launch 18 at P6
-9467 p1 order form 18 alone
-9467 p1 order launch 19 at P6
-9467 p1 order form 19 into fleet 62
-9470 p1 order move fleet 62 -> P2
+9467 p1 order move fleet 59 -> P2
 9486 p1 order build SB1 at P0
-9501 p1 plan 38 CONQUER ended success (released)
-9508 p1 plan 40 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
+9502 p1 plan 37 CONQUER ended success (released)
+9509 p1 plan 39 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
 9509 p1 build task 35 Corvette for ReserveForce
 9548 p1 order build Corvette at P6
-9767 p1 plan 40 BUILDSPACE ended success
-9779 p1 plan 41 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-9779 p1 order move fleet 60 -> P2
-9779 p1 order move fleet 62 -> P2
-9791 p1 plan 39 UPGRADESTARBASE ended success
-9866 p1 plan 41 CONQUER ended failure
-10289 p1 order auto-land 18 at P2
-10289 p1 order auto-land 19 at P2
-12163 p1 plan 42 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+1) net 400 gross 400 eta 7.2
-12164 p1 build task 36 Corvette for ReserveForce
+9767 p1 plan 39 BUILDSPACE ended success
+9791 p1 plan 38 UPGRADESTARBASE ended success
+9977 p1 order auto-land 18 at P2
+9977 p1 order auto-land 19 at P2
+9986 p1 plan 40 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
+9986 p1 order move fleet 60 -> P2
+10070 p1 order move fleet 60 -> P2
+10325 p1 tf SpaceForce move to P3
+10325 p1 order move fleet 60 -> P3
+10442 p1 order launch 18 at P2
+10442 p1 order launch 19 at P2
+10448 p1 tf GroundForce move to P3
+10448 p1 order move fleet 64 -> P3
+10622 p1 order invade P3 with 2
+10628 p1 plan 40 CONQUER ended success
+12162 p1 plan 41 CONQUER for Conquer_Planet @P4 SpaceForce(1+1) GroundForce(2+0) net 400 gross 1300 eta 7.2
+12164 p1 build task 36 Corvette for SpaceForce
 12214 p1 order build Corvette at P0
-12434 p1 plan 42 BUILDSPACE ended success
-16212 p1 plan 43 CONQUER for Conquer_Planet @P3 SpaceForce(1+1) GroundForce(2+0) net 400 gross 1300 eta 7.2
-16214 p1 build task 37 Corvette for SpaceForce
-16275 p1 order build Corvette at P0
-16492 p1 plan 43 CONQUER ended success (released)
-16500 p1 plan 44 CONQUER for Conquer_Planet @P3 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-16502 p1 order move fleet 65 -> P2
-16673 p1 tf SpaceForce move to P3
-16673 p1 order move fleet 65 -> P3
-16808 p1 order launch 18 at P2
-16808 p1 order launch 19 at P2
-16814 p1 tf GroundForce move to P3
-16814 p1 order move fleet 68 -> P3
-16988 p1 order invade P3 with 2
-16994 p1 plan 44 CONQUER ended success
-17008 p1 plan 45 CONQUER for Conquer_Planet @P4 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-17015 p1 tf SpaceForce move to P4
-17015 p1 order move fleet 65 -> P4
-17165 p1 order launch 18 at P3
-17165 p1 order launch 19 at P3
-17171 p1 tf GroundForce move to P4
-17171 p1 order move fleet 69 -> P4
-17345 p1 order invade P4 with 2
-17351 p1 plan 45 CONQUER ended success
-18307 p1 plan 46 CONQUER for Conquer_Planet @P5 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
-18314 p1 tf SpaceForce move to P5
-18314 p1 order move fleet 65 -> P5
-18464 p1 order launch 18 at P4
-18464 p1 order launch 19 at P4
-18470 p1 tf GroundForce move to P5
-18470 p1 order move fleet 70 -> P5
-18644 p1 order invade P5 with 2
-18650 p1 plan 46 CONQUER ended success
-21613 p1 plan 47 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 10.8
-21614 p1 build task 38 Corvette for ReserveForce
-21614 p1 build task 39 Frigate for ReserveForce
-21669 p1 order build Corvette at P0
-21793 p1 order build Frigate at P6
-22118 p1 order move fleet 73 -> P0
-22883 p1 plan 47 BUILDSPACE ended success
+12431 p1 order move fleet 65 -> P3
+12442 p1 plan 41 CONQUER ended success (released)
+12694 p1 plan 42 CONQUER for Conquer_Planet @P4 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
+12701 p1 tf SpaceForce move to P4
+12701 p1 order move fleet 60 -> P4
+12851 p1 order launch 18 at P3
+12851 p1 order launch 19 at P3
+12857 p1 tf GroundForce move to P4
+12857 p1 order move fleet 67 -> P4
+13031 p1 order invade P4 with 2
+13037 p1 plan 42 CONQUER ended success
+13975 p1 plan 43 CONQUER for Conquer_Planet @P5 SpaceForce(2+0) GroundForce(2+0) net 0 gross 1300 eta 0.0
+13982 p1 tf SpaceForce move to P5
+13982 p1 order move fleet 60 -> P5
+14132 p1 order launch 18 at P4
+14132 p1 order launch 19 at P4
+14138 p1 tf GroundForce move to P5
+14138 p1 order move fleet 68 -> P5
+14312 p1 order invade P5 with 2
+14318 p1 plan 43 CONQUER ended success
+18910 p1 plan 44 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 10.8
+18911 p1 build task 37 Frigate for ReserveForce
+18911 p1 build task 38 Corvette for ReserveForce
+18972 p1 order build Frigate at P0
+19096 p1 order build Corvette at P6
+19313 p1 order move fleet 71 -> P0
+19820 p1 plan 44 BUILDSPACE ended success
+22963 p1 plan 45 BUILDSPACE for Build_Space_Forces @global ReserveForce(0+2) net 1100 gross 1100 eta 10.8
+22964 p1 build task 39 Corvette for ReserveForce
+22964 p1 build task 40 Frigate for ReserveForce
+23002 p1 order build Corvette at P0
+23126 p1 order build Frigate at P6
+23450 p1 order move fleet 74 -> P0
+24215 p1 plan 45 BUILDSPACE ended success

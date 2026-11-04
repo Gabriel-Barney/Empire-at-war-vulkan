@@ -31,7 +31,7 @@ struct PpRec {  // rec[i] (0xB8)
     std::vector<std::pair<int32_t, float>> pairs;  // +0x98 (entry, weight)
     bool is_hero = false;        // +0x54
     bool non_escort = false, escort = false;  // +0xB0 / +0xB1
-    bool space = false, ground = false;       // +0x90 / +0x91 layer flags
+    bool ground = false, space = false;       // +0x90 / +0x91 layer flags (AI_GALACTIC_TOKENS §9.8: +0x90 ground, +0x91 space)
 };
 
 struct PpSlot {  // 0x50 B
@@ -89,7 +89,7 @@ struct GalPp {
     float tolerance = 0.0f;
     std::vector<ContrastEntry> entries;
     std::vector<double> remaining;
-    bool layer_active_space = false, layer_active_ground = false;  // PP+0x1A1 / +0x1A0
+    bool layer_active_space = false, layer_active_ground = false;  // PP+0x1A0 / +0x1A1 (AI_GALACTIC_2 Setup C)
     // A2 galactic (AI_GALACTIC_3): PP+0x19C terrain (§6.1; empty = -1) and the remaining population 0x140b3a530
     // (§3.5, only with AI_Uses_Galactic_Pop_Cap).
     int32_t terrain = -1;
@@ -243,15 +243,8 @@ struct GalPp {
         const float c = w.cfg.contrast->contrast(static_cast<size_t>(row), w.type_name(t), w.mask_of(t));
         return terrain < 0 ? c : static_cast<float>(static_cast<double>(c) * effectiveness(t));
     }
-    bool layer_satisfied(bool space) const {
-        double total = 0.0, residual = 0.0;
-        for (size_t e = 2; e < entries.size(); ++e) {
-            if (entries[e].space != space) continue;
-            total += entries[e].target;
-            residual += std::max(remaining[e], 0.0);
-        }
-        if (total <= 0.0) return true;
-        return residual / total <= static_cast<double>(tolerance);
+    bool layer_satisfied(bool space) const {  // 0x72ac70, in float (AI_GALACTIC_TOKENS §9.8 item 4)
+        return galactic_contrast_layer_satisfied(entries, remaining, space, tolerance);
     }
     void recompute_remaining() {
         remaining.resize(entries.size());
@@ -790,7 +783,8 @@ public:
         const int32_t f = p_.pa.ctx.learning.recent_plan_failures(p_.plan, p_.target, p_.w.now);
         const float fp = static_cast<float>(f) * p_.def.per_failure_contrast_adjust;
         p_.tolerance = 1.0f - (fp + p_.def.min_contrast_scale) / (fp + p_.def.max_contrast_scale);
-        const double scale = static_cast<double>(p_.def.max_contrast_scale + fp) * static_cast<double>(p_.pa.contrast_mult);
+        // Typed-row scale (§9.8 item 3): (double)Max + (double)(float)(f x PFCA), x the multiplier as double.
+        const double scale = galactic_contrast_scale(p_.def.max_contrast_scale, fp, p_.pa.contrast_mult);
         // 0x5f1990 -> 0x5f2430 (galactic_ai_contrast_list): ground total, space total, typed ground rows, typed space rows.
         std::vector<uint64_t> masks;
         const size_t rows = p_.w.cfg.contrast ? p_.w.cfg.contrast->size() : 0;
@@ -845,11 +839,12 @@ public:
             }
         }
         if (v > 0.0) return static_cast<float>(v);
-        const bool layer_ok = (!r.space || p_.layer_satisfied(true)) && (!r.ground || p_.layer_satisfied(false));
-        if (!layer_ok) return kVeto;
+        // The gate (AI_GALACTIC_TOKENS §9.8 item 2): the plan-wide flag 0x140b3a528 (every active layer satisfied) with the
+        // candidate's non-escort team +0xB0, or 0x140b3a529 with +0xB1; not the candidate's own layers.
+        if (!galactic_contrast_gate(p_.main_met, p_.escort_met, r.non_escort, r.escort)) return kVeto;
         if (p_.def.minimum_cost + p_.def.additional_cost > p_.gross) return 0.0f;
-        if ((r.space && p_.remaining.size() > 0 && p_.remaining[0] > 0.0) || (r.ground && p_.remaining.size() > 1 && p_.remaining[1] > 0.0))
-            return 0.0f;
+        // An untyped total of a layer this candidate covers is still short (§9.8 item 1): the totals by their layer byte.
+        if (galactic_contrast_total_open(p_.entries, p_.remaining, r.space, r.ground)) return 0.0f;
         for (const uint64_t m : p_.required_masks())
             if ((m & p_.selected_mask) == 0 && (m & p_.w.mask_of(r.type)) != 0) return 0.0f;
         for (const int32_t s : r.teams) {

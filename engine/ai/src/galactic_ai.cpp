@@ -617,19 +617,36 @@ void PlayerAi::budget_release(Goal& g) {
 }
 
 void PlayerAi::budget_weights() {
-    // 0x614590 / 0x6137b0: each category's equation, pre-loaded with the previous normalised weight (a failing
-    // equation keeps it); negatives -> 0; normalised.
+    // 0x614590 / 0x6137b0 (AI_GALACTIC_TOKENS §9.5): each member in insertion order; with an equation, the start value is
+    // the previous normalised weight and a failing equation keeps it; without one (allowance-only, or its template was
+    // removed) the weight is 0 but the member counts. Negatives -> 0, w / Σw, 1 / members when Σw = 0 (AiBudget).
     const size_t n = w->defs.categories.size();
     std::vector<float> raw(n, 0.0f);
-    for (size_t c = 0; c < n; ++c) {
-        const auto ci = static_cast<int32_t>(c);
-        raw[c] = ctx.budget.initialised() ? ctx.budget.weight(ci) : 0.0f;
+    for (const int32_t ci : ctx.budget.members()) {
+        const auto c = static_cast<size_t>(ci);
         const std::string& eq = ctx.templates.budget_equation(ci);
+        if (eq.empty()) continue;
+        raw[c] = ctx.budget.initialised() ? ctx.budget.weight(ci) : 0.0f;
         double v = 0.0;
-        if (!eq.empty() && evaluate(eq, -1, v)) raw[c] = static_cast<float>(v);
+        if (evaluate(eq, -1, v)) raw[c] = static_cast<float>(v);
     }
     if (!ctx.budget.initialised()) ctx.budget.init(raw, w->sim.credits(player));
     else ctx.budget.reweight(raw);
+}
+
+void PlayerAi::apply_template_budget() {
+    // §9.5 [H]: template apply 0x670ed0 inserts its <Budget> entries (0x615420), then its Tactical_Budget_Allowance entries
+    // (0x615550) [M: the order of the two lists]; a category joins the map at its first insert and never leaves. Every
+    // insert call and every removal (0x612ac0, which also re-applies the remaining templates) sets the reset flag, so the
+    // next income tick re-splits every pool to credits x w.
+    bool reset = ctx.templates.last_removed();
+    for (const uint32_t t : ctx.templates.last_applied()) {
+        const TemplateDef& d = w->defs.templates[t];
+        for (const auto& e : d.budget) ctx.budget.add_member(e.first);
+        for (const auto& e : d.tactical_allowance) ctx.budget.add_member(e.first);
+        reset = reset || !d.budget.empty() || !d.tactical_allowance.empty();
+    }
+    if (reset) ctx.budget.mark_reset();
 }
 
 // Per galactic income tick (0x614340 from 0x4b2ef0, AI_GALACTIC_2 Â§3.1) [H]: GalacticSim's income-tick listener
@@ -706,6 +723,7 @@ void PlayerAi::first_service(int64_t) {
 }
 
 void PlayerAi::template_init(int64_t) {
+    apply_template_budget();  // the base and the triggering templates insert their categories; Init clears the flag
     budget_weights();
     std::string names;
     for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
@@ -732,6 +750,7 @@ void PlayerAi::execution_service(int64_t) {
 }
 
 void PlayerAi::templates_changed(int64_t) {
+    apply_template_budget();
     std::string names;
     for (const uint32_t t : ctx.templates.active()) names += " " + w->defs.templates[t].name;
     w->decide(player, "templates" + names);

@@ -148,6 +148,24 @@ struct GalacticContrastEntry {
 std::vector<GalacticContrastEntry> galactic_ai_contrast_list(const galactic::GalacticSim& sim, std::span<const GalacticAiTypeInfo> types,
                                                              PlanetIndex planet, int32_t self, std::span<const uint64_t> row_masks,
                                                              double scale, const objects::EnumConverter* categories = nullptr);
+// The contrast marshaller's arithmetic (AI_GALACTIC_TOKENS §9.8, AI_GALACTIC_2 Contrast) [H]:
+// - 0x5f1990 typed-row scale: ((double)MaxContrastScale + (double)(float)(f x PerFailureContrastAdjust)) x (double)multiplier
+//   (`failure_adjust` = the float product f x PFCA).
+double galactic_contrast_scale(float max_contrast_scale, float failure_adjust, float multiplier);
+// - 0x72ac70 satisfied test, in float: total = Σ (float)target over the layer's typed entries (row >= 0); residual =
+//   Σ (rem / target) x (target / total) over those with target > 0 and rem > 0; satisfied <=> residual <= tolerance.
+bool galactic_contrast_layer_satisfied(std::span<const GalacticContrastEntry> entries, std::span<const double> remaining,
+                                       bool space, float tolerance);
+// - 0x72b940 "still allowed" rule after v <= 0: an untyped total (row -1) still has remaining > 0 and the candidate covers
+//   that entry's layer (layer byte 1 ground -> rec+0x90, byte 0 space -> rec+0x91). Found by layer byte, not position.
+bool galactic_contrast_total_open(std::span<const GalacticContrastEntry> entries, std::span<const double> remaining,
+                                  bool covers_space, bool covers_ground);
+// - 0x72b940 gate: the "still allowed" checks run only when the plan-wide flag 0x140b3a528 (every active layer satisfied,
+//   0x6bff00) is set and the candidate has a non-escort team (rec+0xB0), or 0x140b3a529 and an escort team (rec+0xB1);
+//   otherwise v <= 0 is a veto.
+constexpr bool galactic_contrast_gate(bool main_met, bool escort_met, bool non_escort, bool escort) {
+    return (main_met && non_escort) || (escort_met && escort);
+}
 
 // The galactic AI's planning-side buildability: GalacticSim::buildable (cost, queue kind, GalacticSim::build_check =
 // 0x2804d0 in the STRATEGIC_GAPS §1.3 order, no credits).
