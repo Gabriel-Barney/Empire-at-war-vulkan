@@ -322,6 +322,12 @@ Question: how the original creates the members of a land skirmish company that h
 - A pool type without `Company_Transport_Unit` cannot be dropped in skirmish (no landing object, no members).
 - The AI uses bought pool entries only through the Reinforcement marshaller of a later plan; the buying plan does not
   drop them.
+- Port status (q6 t19, 2026-11-04): done for land. A finished land company becomes a pool entry
+  (`TacticalBattle::add_built_reserve`, key 0x01000000 + participant index, no galactic counterpart); the producing
+  TF's entry is cleared (`production_completed`) and a later plan drops it through `order_reinforce` and the landing
+  object (locked until the 0x19 unload finish). A skirmish type without a landing object is refused and stays pooled.
+  The hangar no-team stand-in stays only for space hangar launches; space production still spawns at the builder
+  [port].
 
 ## 4. Land skirmish victory, types 0x12..0x16 (item 2)
 
@@ -483,13 +489,13 @@ Port status (headless `--skirmish-ai skirmish` / `foc-land`, `tactical_battle_sk
 | §2.2 starting forces | the factions' Space_ / Land_Skirmish_AI_Default_Forces as the battle's start participants at the slot's start anchor (Player_k / Team_tt spawn markers, bt_skirmish_anchors); no garrison re-delivery (§2.4) [port]. |
 | §2.3 space special weapons | not placed [port, open]. |
 | §2.5 / §2.6 pre-built pads | t50 rule kept: the Team_NN Command Center and Barracks pads of both slots start built, from MultiplayerStructureMarker data. §2.5 says retail reads that data only in campaign and pre-builds from the map's pre-placed pad type (+0x18), which the port's map reader does not decode [M, open]. |
-| §3 production | land and space skirmish; a finished land company appears 120 units in front of its builder instead of joining the reinforcement pool [port]. Retail never does this (§3.1, q6 t19). |
+| §3 production | land and space skirmish; a finished land company joins the reinforcement pool and arrives by a later Reinforce landing (§3.1, q6 t19, 2026-11-04). Space production still appears in front of its builder [port]. |
 | §4 victory | 0x13 (land) and 0x16 (space) polled each frame, declared at once, reported as 0x0e / 0x0f [port]. |
 | §5 income | per-frame float add of (base × multiplier + additive) / interval / 30 for the object's own stream; a mod on the object's own stream (the supply dock) counts while the object lives; mods on other streams are not applied [M]. |
 | §6 unit cap | ConflictFactionInfo::unit_cap_for_players: sorted keys, linear, 0 outside, integer part (2 players: 9); N = the two slots. |
 | L1_S4 §4.2 capture start gate | 0 in skirmish map battles. |
 | Time limit | none for the skirmish host (the port's 8-minute campaign battle limit is off; the run ends at `--ticks`). |
-| L1_S4 §3.6 pad rule 0x42e400 | a Neutral-faction owner (map props) does not block a pad (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"); with `Influences_Capture_Point` defaulting to true, every prop near a pad blocked it before [M]. The Lua `pad_rule` copy (`engine/lua`) still uses the battle's `is_enemy` [open]. Correction (q6 t19, AI_TACTICAL §7.5.1) [H]: 0x42e400 has no Neutral exemption; every alive `Influences_Capture_Point` object not allied (relation ≠ 0) with the pad owner blocks, Neutral-owned ones included, unless it has BASE_SHIELD or DUMMY_GROUND_STRUCTURE. Which shipped props near pads have `Influences_Capture_Point` (default true) decides the effect [open]. |
+| L1_S4 §3.6 pad rule 0x42e400 | a Neutral-faction owner (map props) does not block a pad (BATTLE_TRANSITIONS: "a Neutral player is simply not an enemy"); with `Influences_Capture_Point` defaulting to true, every prop near a pad blocked it before [M]. The Lua `pad_rule` copy (`engine/lua`) still uses the battle's `is_enemy` [open]. Correction (q6 t19, AI_TACTICAL §7.5.1) [H]: 0x42e400 has no Neutral exemption; every alive `Influences_Capture_Point` object not allied (relation ≠ 0) with the pad owner blocks, Neutral-owned ones included, unless it has BASE_SHIELD or DUMMY_GROUND_STRUCTURE. Which shipped props near pads have `Influences_Capture_Point` (default true) decides the effect [open]. Port (q6 t19, 2026-11-04): the exemption is gone, and the candidates are the battle's live units only [port, open], because Neutral props (`Influences_Capture_Point` unset) next to three Utapau pads otherwise stopped every AI build there (AI_TACTICAL §7.5.1 Port notes). |
 | AI_TACTICAL §7.5 Build / Build_All | a task force with no reservations takes its pad picks from its plan's PotentialPlan first (BuildEconStructure.lua calls Build_All without Produce_Force) [M: retail's TF holds them from plan start]. |
 | AI_TACTICAL_PERCEPTION TacticalBuiltStructureCount | counts the player's finished structures on build pads (pre-built base included) [M]. Before, nothing was counted, so `Num_Refineries` stayed 0 and `Tactical_Multiplayer_Should_Build_Units_Generic_Land` (gated by `Is_Initial_Skirmish_State_Established`) never fired. |
 | AI_GALACTIC_3 §1.11 produced unit | a task force with a unit still in production is not empty (No_Units_Remaining waits for it); before, the Produce_Force plan ended 3 frames after its order. Since S7 t20 (main) this is the `units_lost` check, raised from the removal signals; the skai poll was dropped on the merge. |

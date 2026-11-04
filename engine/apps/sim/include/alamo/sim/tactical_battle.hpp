@@ -375,6 +375,20 @@ public:
         std::vector<objects::ObjectId> units;
     };
     std::span<const LandingUnload> landings_unloaded() const { return landings_unloaded_; }
+    // q6 t19 (SKIRMISH_SETUP §3 / §3.1): a finished land tactical build (not DUMMY_UPGRADE) never spawns: 0x27fad0 appends
+    // the type to the player's reinforcement pool (a reserve participant with no galactic counterpart, built = true, key
+    // kBuiltReserveKeyBase + its participant index) and signal 0x22 tells the build task it completed. The records of
+    // the tick just run (transient, not saved), in completion order.
+    static constexpr objects::ObjectId kBuiltReserveKeyBase = 0x01000000;
+    struct ProductionDone {
+        int32_t player = -1;
+        uint32_t type = 0;
+        objects::ObjectId key = objects::kNoObjectId;  // the pool entry, kNoObjectId when the pool refused the type
+    };
+    std::span<const ProductionDone> production_done() const { return production_done_; }
+    // Appends `type` to `owner`'s pool (above). False (nothing added) when the battle finished or a type it spawns is not
+    // in this battle's tables. Returns the key through `key`.
+    bool add_built_reserve(int32_t owner, uint32_t type, objects::ObjectId& key);
     // a1i t04: a landing object still waiting for its footprint to clear (state 4: model hidden) [port: no renderer reads
     // it yet]; the landing objects of `player` that have not finished their unload (timed mode; untimed ones finish at the
     // order).
@@ -791,9 +805,11 @@ public:
     // placements); their state is created on first use. pad_build = Lua Build (§2.2) / start build 0x42dbd0 without
     // charge or SFX: 1 started, 0 refused by the rules (check_rules: the type in the pad owner's faction row of
     // Tactical_Buildable_Objects_Campaign [S10 battles are campaign battles] and rule 0x42e400: no live non-allied
-    // Influences_Capture_Point object within the pad type's Capture_Point_Radius, 3-D), -1 start failed (pad not empty,
-    // cooldown running, type missing). The under-construction (UC) object of `type` is spawned at the pad (position,
-    // facing; owner = the pad owner). Each tick (after the S4 step): a UC reaching its end frame (Tactical_Build_Time_Seconds
+    // Influences_Capture_Point object within the pad type's Capture_Point_Radius, 3-D; q6 t19: no Neutral exemption, objects
+    // with BASE_SHIELD / DUMMY_GROUND_STRUCTURE ignored), -1 start failed (pad not empty, cooldown running, type missing,
+    // `builder` not allied with the pad owner - relation 0, so a skirmish Neutral pad never). The under-construction (UC)
+    // object of `type` is spawned at the pad (position, facing; owner = `builder`, default the pad owner as Lua pad.Build;
+    // the pad owner is unchanged, AI_TACTICAL §7.5.1). Each tick (after the S4 step): a UC reaching its end frame (Tactical_Build_Time_Seconds
     // of the UC type x 30 [port: per-mode player multiplier 1]) is replaced by its Tactical_Buildable_Constructed type at
     // the UC position (+0.1 z, same facing, builder's ownership); a UC / built object that died clears the pad (lock
     // cleared with the built object; Destroy_When_Child_Dies kills the pad; else Minimum_Time_Before_Pad_Can_Build_Again
@@ -804,7 +820,7 @@ public:
     // allied with the pad owner is killed silently; when the child goes away a CAPTURE_POINT pad goes back to the
     // neutral player (owner + capture record). Galactic persistence: see set_pad_persistence. CRC: hash_abilities once a
     // pad was used.
-    int32_t pad_build(TacticalMode& mode, objects::ObjectId pad, objects::TypeIndex type, bool check_rules);
+    int32_t pad_build(TacticalMode& mode, objects::ObjectId pad, objects::TypeIndex type, bool check_rules, int32_t builder = -1);
     objects::ObjectId pad_contents(objects::ObjectId pad) const;  // built, else UC, else kNoObjectId
     bool pad_locked(objects::ObjectId pad) const;
     void pad_lock(objects::ObjectId pad, bool lock);
@@ -1203,6 +1219,7 @@ private:
     void script_member_spots(const TacticalMode& mode, std::span<const uint32_t> members, Vec3 at, float yaw_deg,
                              std::vector<Vec3>& out) const;
     std::vector<LandingUnload> landings_unloaded_;    // transient (not saved): see landings_unloaded()
+    std::vector<ProductionDone> production_done_;     // q6 t19, transient (not saved): see production_done()
     void reinforce(TacticalMode& mode, SimRng& rng, bool force_empty_sides);
     void issue_orders(TacticalMode& mode, SimRng& rng);
     void retreat_policy();
@@ -1602,6 +1619,10 @@ private:
     // S7 t30 (TACTICAL_COMBAT §2.10): the start value of the relation table entry (row p, column q): 0 friendly, 1 enemy,
     // 2 neutral. Skirmish (cfg_.skirmish) or campaign rules; the combat matrix's enemy flag = (value == 1).
     int32_t bt_relation(int32_t p, int32_t q) const;
+    bool bt_allied(int32_t p, int32_t q) const { return bt_relation(p, q) == 0; }  // 0x39a230 / 0x39a2c0 (AI_TACTICAL §7.5.1)
+    // q6 t19 rule 0x42e400 per object (alive + Influences_Capture_Point tested by the caller): no BASE_SHIELD, no
+    // DUMMY_GROUND_STRUCTURE, owner not allied with `pad_owner`.
+    bool pad_rule_blocker(const objects::ObjectStore& st, objects::ObjectHandle h, int32_t pad_owner) const;
     int32_t bt_map_owner(uint32_t raw) const;    // .ted owner (faction index) -> player [probe 2026-10-29]; -1 = unknown
     void s4_capture_grant(TacticalMode& mode, objects::ObjectId point, int32_t owner);  // landing point -> attacker
     void bt_kill_silently(TacticalMode& mode, objects::ObjectHandle h);  // 0x391310 flag 1 (no death events)

@@ -89,6 +89,8 @@ void TacticalBattle::s4_init() {
     captures_ = std::make_unique<tg::CapturePointSystem>(neutral, 4u, secs > 0.0f ? static_cast<uint32_t>(30.0f * secs + 0.5f) : 0u);
     captures_->set_allied(allied);
     captures_->set_neutral_owner([this](int32_t o) { return bt_owner_neutral(o); });  // REMAINING_GAPS §3.3
+    // q6 t19 rule (a) (AI_GALACTIC_TOKENS §9.11): a pad holding a UC or a child is never captured (keeps its owner).
+    captures_->set_pad_occupied([this](tg::ObjectId id) { return pad_contents(id) != objects::kNoObjectId; });
     captures_->set_occupant_owner([this](tg::ObjectId id) {  // rule (b): the first occupant's owner
         const auto in = garrison_.occupants(id);
         if (in.empty() || !s4_store_) return -1;

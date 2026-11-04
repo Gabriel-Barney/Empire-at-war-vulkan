@@ -364,6 +364,9 @@ struct UnitDesc {
     uint32_t space_layer = 0;  // Space_Layer (short-range attackers only)
     bool target_stealth_units = false;
     bool is_valid_target = true;
+    // q6 t19: the type half of the target test 0x5680b0 (A1_READINGS §33.2.1 tests 1 / 6; the host computes it), read
+    // by the path-B goal promotion (§2.8 B step 3). Default true (hosts without type data).
+    bool target_test_type = true;
     bool destroy_when_all_hardpoints_destroyed = false;  // type +0xa8
     bool immune_to_damage = false;
     bool redirect_damage_to_teammates = false, share_damage_with_teammates = false;

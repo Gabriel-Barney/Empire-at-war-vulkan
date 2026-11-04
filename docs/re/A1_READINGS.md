@@ -1777,6 +1777,10 @@ gets garrisoned, enters a transport, dies (also via signal 0x10), starts a hero 
 - Implement 0x5680b0 as the table: TEAM container, or both type flags; then not garrisoned, not dead, not in a
   transport, not in a hero clash, and the special-weapon / star-base rule. The port has no hero clashes (TACTICAL_COMBAT
   item 24), so test 5 is always passed there until they exist; keep the field so it can be wired.
+- Port status (q6 t19, 2026-11-04): `BattleAi::fill` sets `TacticalAiObject::valid_target` from the table
+  (`hero_clash` kept, always false; "in a transport" = garrisoned, the port has no carried units) and the object
+  block's end test reads it; the combat goal promotion reads the type part (`UnitDesc::target_test_type`,
+  `battle_catalog.cpp`).
 
 #### 33.2.2 Result and arrival for Move_To / Attack_Move on an object (q6 t19 RE, 2026-11-04) [H unless tagged]
 
@@ -1810,6 +1814,10 @@ its break function and `BreakBlock`.
 - Keep a pending set filled only at order issue (and zone legs); remove a unit on its formation-arrival event, on
   0xb / 0x10 / 0x1a of the unit; never re-add it because its formation re-pathed after the target moved.
 - Attack_Move: exclude units whose attack order is refused from the move and from pending.
+- Port status (q6 t19, 2026-11-04): land object blocks return nil and end at once on the target's death; the status
+  keeps an all-units list and a pending list filled only at issue (minus `attack_order_refused()`), a unit leaves
+  pending once when it stops moving and is never re-added (AI save version 12). Space still returns true on the
+  target's death [port, unchanged].
 
 ### 33.3 Superseded statuses
 

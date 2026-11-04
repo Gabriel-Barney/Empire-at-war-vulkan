@@ -1066,8 +1066,11 @@ bool CombatSystem::promote_goal(Unit& u) {
         return false;
     }
     if (t == &u || !is_enemy(u.owner, t->owner)) return false;  // hostile to the unit's owner (relation table == 1)
-    if (t->flags & (kUnitSkipTargeting | kUnitDead | kUnitGarrisoned)) return false;  // 0x5680b0 [M: +0x361 / +0x38e]
-    if (!desc_of(*t).is_valid_target) return false;
+    // 0x5680b0 (A1_READINGS §33.2.1, q6 t19): type half (TEAM / Collidable_By_Projectile_Living + Is_Valid_Target,
+    // SPECIAL_WEAPON only on a DUMMY_STAR_BASE) from the desc; not garrisoned / hidden (+0x3a7), not dead (+0x3a0 0x40);
+    // [port] no transports or hero clashes (+0x3b4) in battles. kUnitSkipTargeting (the port's untargetable marker) kept.
+    if (t->flags & (kUnitSkipTargeting | kUnitDead | kUnitGarrisoned)) return false;
+    if (!desc_of(*t).target_test_type) return false;
     float d = 0.0f, E = 0.0f;
     range_geometry(*t, u.pos, d, E);
     if (const ProjectileDesc* gw = grenade_weapon(u)) {

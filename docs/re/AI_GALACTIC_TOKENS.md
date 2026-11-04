@@ -1203,6 +1203,10 @@ commit 0x72bf80, and the PP re-check 0x6c47c0), satisfied test 0x72ac70.
   `escort_met && !main_met`.
 - Tactical commit: list = escort if (the slot is an escort slot) or (main already met during this walk), else main.
 - Reset both flags at solver start; recompute them at Setup C and after every commit.
+- Port status (q6 t19, 2026-11-04, tactical only): `tactical_pp.cpp` builds the escort contrast list when the plan
+  has an escort task force (strength around the target without the target itself), keeps `escort_met = true` without
+  one, commits with the slot / main-met rule above and gates / places with both flags. The main list stays the zone
+  enemy strength [port, open]. Galactic is unchanged.
 
 ### 9.11 Capture pads at the recreate of a persisted object (§9.4) [H unless tagged]
 
@@ -1250,6 +1254,8 @@ is the pad's current owner: **the pad's owner never changes at recreate**.
   with the "occupied pad keeps its owner" rule: the pad owner stays unchanged and only its capture state is refreshed.
 - Do not give the pad the recreated object's owner. `TacticalBattle::pad_persist` should not change pad ownership on
   recreate.
+- Port status (q6 t19, 2026-11-04): done. `bt_pad_restore` fills the child slot first and refreshes the capture
+  state (`s4_capture_grant` with the pad's own owner); the pad keeps its owner, no 0x28 listener.
 
 ### 9.12 `GroundbaseTotalUnnormalized` and the overrun strength: how they read D [H unless tagged]
 
