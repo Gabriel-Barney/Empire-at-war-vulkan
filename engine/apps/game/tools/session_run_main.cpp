@@ -2,11 +2,13 @@
 // ticks it, printing the players, their AI types, the starting forces and how far the session got. For trying mods
 // without the menus.
 //
-//   alamo_session_run [--game DIR] [MODPATH=..] (--campaign NAME [--faction F] | --skirmish MAP --human F --ai F)
+//   alamo_session_run [--game DIR] [MODPATH=..] (--campaign NAME [--faction F] | --skirmish MAP --human F --ai F
+//                     [--units-human T[*N],..] [--units-ai T[*N],..])
 //                     [--ticks N] [--seed S] [--difficulty 0..2] [--workers N] [--no-galactic-ai] [--no-tactical-ai]
 //   --game defaults to ALAMO_FOC_DATA. Exit 0: started and ticked, 1: load / start failed, 2: usage.
 //   Example (Thrawn's Revenge): alamo_session_run --game "...\corruption" MODPATH="...\32470\1125571106"
 //                               --campaign Thrawn_Empire --ticks 3000
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -22,7 +24,7 @@ namespace {
 
 int usage() {
     std::fprintf(stderr,
-                 "usage: alamo_session_run [--game DIR] [MODPATH=..] (--campaign NAME [--faction F] | --skirmish MAP --human F --ai F)\n"
+                 "usage: alamo_session_run [--game DIR] [MODPATH=..] (--campaign NAME [--faction F] | --skirmish MAP --human F --ai F [--units-human T[*N],..] [--units-ai T[*N],..])\n"
                  "                         [--ticks N] [--seed S] [--difficulty 0..2] [--workers N] [--no-galactic-ai] [--no-tactical-ai]\n");
     return 2;
 }
@@ -76,6 +78,21 @@ int main(int argc, char** argv) {
         else if (a == "--skirmish") skirmish = true, spec.skirmish_map = next();
         else if (a == "--human") spec.skirmish.human_faction = next();
         else if (a == "--ai") spec.skirmish.ai_faction = next();
+        else if (a == "--units-human" || a == "--units-ai") {  // comma-separated type names, TYPE*N repeats
+            std::vector<std::string>& out = a == "--units-human" ? spec.skirmish.units_human : spec.skirmish.units_ai;
+            const std::string list = next();
+            for (size_t p = 0; p <= list.size();) {
+                const size_t e = std::min(list.find(',', p), list.size());
+                std::string item = list.substr(p, e - p);
+                uint32_t n = 1;
+                if (const size_t star = item.find('*'); star != std::string::npos) {
+                    n = static_cast<uint32_t>(std::strtoul(item.c_str() + star + 1, nullptr, 10));
+                    item.resize(star);
+                }
+                for (uint32_t k = 0; k < n && !item.empty(); ++k) out.push_back(item);
+                p = e + 1;
+            }
+        }
         else if (a == "--ticks") ticks = std::strtoull(next().c_str(), nullptr, 10);
         else if (a == "--seed") spec.seed = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--difficulty") spec.difficulty = std::atoi(next().c_str());

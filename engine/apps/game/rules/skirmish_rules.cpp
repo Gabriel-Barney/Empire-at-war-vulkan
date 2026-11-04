@@ -220,12 +220,21 @@ std::vector<uint32_t> skirmish_data_force_types(const SkirmishForceData& d, cons
         std::rotate(list.begin(), h, h + 1);
         return list;
     }
-    int32_t squadrons = 0;
-    for (const uint32_t t : list) squadrons += rules.types[t].kind == galactic::UnitKind::Squadron ? 1 : 0;
-    std::vector<uint32_t> carriers = buildable_units(rules, d.types, fi, false, squadrons);
-    if (carriers.empty()) carriers = buildable_units(rules, d.types, fi, false);
-    if (!carriers.empty()) list.insert(list.begin(), carriers.front());
+    if (const uint32_t leader = skirmish_hyperspace_leader(rules, d.types, fi, list); leader != galactic::kNoIndex)
+        list.insert(list.begin(), leader);
     return list;
+}
+
+uint32_t skirmish_hyperspace_leader(const galactic::GalacticRules& rules, const objects::GameObjectTypes& types, uint32_t faction,
+                                    const std::vector<uint32_t>& fleet) {
+    if (fleet.empty()) return galactic::kNoIndex;
+    if (std::any_of(fleet.begin(), fleet.end(), [&](uint32_t t) { return t < rules.types.size() && hop_capable(rules.types[t]); }))
+        return galactic::kNoIndex;
+    int32_t squadrons = 0;
+    for (const uint32_t t : fleet) squadrons += t < rules.types.size() && rules.types[t].kind == galactic::UnitKind::Squadron ? 1 : 0;
+    std::vector<uint32_t> carriers = buildable_units(rules, types, faction, false, squadrons);
+    if (carriers.empty()) carriers = buildable_units(rules, types, faction, false);
+    return carriers.empty() ? galactic::kNoIndex : carriers.front();
 }
 
 std::string skirmish_map_planet_type(const galactic::GalacticRules& rules, std::string_view map) {

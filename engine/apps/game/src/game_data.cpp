@@ -234,6 +234,17 @@ bool make_skirmish_galaxy(const GameData& data, const SkirmishSetup& s, galactic
             nh = add(0, kSkirmishHumanPlanet, s.ground_human, s.human_faction, true);
     } else {
         na = add(1, kSkirmishBattlePlanet, s.units_ai, s.ai_faction);
+        // q6 [port]: the human fleet hops to the battle (the skirmish is hosted as a galactic hop), so a bought fleet
+        // without a hyperspace member (Thrawn's Revenge sells Nantex fighters) is led by the hyperspace ship the default
+        // forces would get (skirmish_hyperspace_leader); otherwise its opening hop is refused and the battle never starts.
+        // Retail places the bought units at the map's spawn markers (SKIRMISH_SETUP 2.2). Default fleets carry their own.
+        if (!s.units_human.empty()) {
+            std::vector<uint32_t> bought;
+            for (const std::string& name : s.units_human)
+                if (const uint32_t t = rules.find_type(name); t != galactic::kNoIndex) bought.push_back(t);
+            if (const uint32_t lead = skirmish_hyperspace_leader(rules, data.types, human.faction, bought); lead != galactic::kNoIndex)
+                g.forces.push_back({0, kSkirmishHumanPlanet, lead});
+        }
         nh = add(0, kSkirmishHumanPlanet, s.units_human, s.human_faction);
         if (nh > 0 && !s.ground_human.empty()) add(0, kSkirmishHumanPlanet, s.ground_human, s.human_faction, true);  // P4 host
     }

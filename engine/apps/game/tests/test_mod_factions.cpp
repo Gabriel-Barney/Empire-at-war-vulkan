@@ -200,6 +200,29 @@ void test_synthetic() {
     CHECK(game::make_skirmish_galaxy(d, s, g, &err));
     if (!err.empty()) std::printf("space skirmish: %s\n", err.c_str());
     CHECK(forces_of(g, 0, game::kSkirmishHumanPlanet) == 3 && forces_of(g, 1, game::kSkirmishBattlePlanet) == 3);
+    // q6: a bought space fleet without a hyperspace member (Y_Slow) is led by the faction's cheapest hyperspace ship (Y_A),
+    // put in front; a bought fleet that can jump is kept as bought.
+    {
+        game::SkirmishSetup b = s;
+        b.human_faction = "Yevetha";
+        b.ai_faction = "Chiss";
+        b.units_human = {"Y_Slow", "Y_Slow"};
+        err.clear();
+        CHECK(game::make_skirmish_galaxy(d, b, g, &err));
+        CHECK(forces_of(g, 0, game::kSkirmishHumanPlanet) == 3);
+        for (const auto& f : g.forces)
+            if (f.player == 0) {
+                CHECK(d.rules.types[f.type].name == "Y_A");
+                break;
+            }
+        b.units_human = {"Y_Slow", "Y_C"};
+        CHECK(game::make_skirmish_galaxy(d, b, g, &err));
+        CHECK(forces_of(g, 0, game::kSkirmishHumanPlanet) == 2);
+        const uint32_t slow = d.rules.find_type("Y_Slow"), fac = d.rules.find_faction("Yevetha");
+        CHECK(game::skirmish_hyperspace_leader(d.rules, d.types, fac, {slow}) == d.rules.find_type("Y_A"));
+        CHECK(game::skirmish_hyperspace_leader(d.rules, d.types, fac, {slow, d.rules.find_type("Y_C")}) == galactic::kNoIndex);
+        CHECK(game::skirmish_hyperspace_leader(d.rules, d.types, fac, {}) == galactic::kNoIndex);
+    }
     s.land = true;
     err.clear();
     CHECK(game::make_skirmish_galaxy(d, s, g, &err));
