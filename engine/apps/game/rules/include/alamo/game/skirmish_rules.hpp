@@ -94,6 +94,13 @@ std::vector<std::string> skirmish_default_forces(const SkirmishForceData& data, 
 // The data path above (never the stock lists, options.stock_lists is not read) as type indices of `data.rules`.
 std::vector<uint32_t> skirmish_data_force_types(const SkirmishForceData& data, const std::string& faction, bool land,
                                                 const SkirmishForceOptions& options = {});
+// [port] the hyperspace leader of the galactic-hop arrangement for a space fleet of `faction` (type indices of `rules`):
+// kNoIndex when `fleet` is empty or already has a hyperspace member (SpaceUnit / Squadron with Hyperspace and a speed);
+// else the faction's cheapest buildable hyperspace ship that holds the fleet's squadrons, else its cheapest one (the
+// same pick as skirmish_data_force_types), kNoIndex when the faction has none. q6: alamo_game also leads a bought fleet
+// with it (make_skirmish_galaxy), e.g. Thrawn's Revenge's buy list offers fighters without Hyperspace (Nantex).
+uint32_t skirmish_hyperspace_leader(const galactic::GalacticRules& rules, const objects::GameObjectTypes& types, uint32_t faction,
+                                    const std::vector<uint32_t>& fleet);
 // q6 t08 [port] (no RE rule: retail places nothing without a default force list): the faction's buildable units of one
 // mode - land: GroundUnit types, space: hyperspace SpaceUnit types with Max_Speed > 0 (no stations) - with
 // Build_Cost_Credits > 0, Tech_Level >= 1, Affiliation naming the faction, no Required_Planets, no build limit of 0, not a
