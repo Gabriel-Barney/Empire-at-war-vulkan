@@ -155,7 +155,7 @@ Children of `<Story_Mode_Plots>` are read in order:
 - The plot is stored under the CRC of the text **as written** (case kept). Lookups by name (`0x328370`, used by
   Get_Story_Plot and STORY_ELEMENT) hash without upper-casing, so the text must match byte for byte, path and case
   included. The CRC routine `0x215a30` is a plain table CRC32 over the raw bytes with no case folding, so it **is**
-  case-sensitive [H, q6 2026-11-03]; the port matches case-insensitively (§8 item 7).
+  case-sensitive [H, q6 2026-11-03]; the port matches the same way since q6 t03 (§8 item 7).
 - **One plot table per story manager for every player** [H, q6 2026-11-03]. `TheStoryMode::Load_Plots` (caller of
   `0x329aa0`) clears the current mode's manager (mode `+0xa0`, `0x32acc0`) and loads, into that same manager, each
   player's Story_Plots file in this order: the campaign's `Rebel_Story_Name` (+0x48), `Empire_Story_Name` (+0x68) and
@@ -422,8 +422,8 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
    names inside a tag AND, whitespace or commas; edge-triggered. A prereq-armed ELAPSED counts from its activation time;
    a prereq-less one from its first T9 while its plot is active. Perpetual has no once-per-frame limit: a notified type
    fires once per matching notification (two in one frame fire twice), and a Perpetual ELAPSED fires at every T9 after
-   its first fire (the accumulator is never cleared). **This last point is wrong** (q6 RE 2026-11-03, §4.7 [H]): vf4
-   clears the timer, so the original re-fires every T + one service; see item 11. The timer mechanism also means that any **initialised** timer
+   its first fire (the accumulator is never cleared). **This last point was wrong** (q6 RE 2026-11-03, §4.7 [H]): vf4
+   clears the timer, so the original re-fires every T + one service; the port does so since q6 t03 (item 11). The timer mechanism also means that any **initialised** timer
    (not only a prereq-armed one, §4.7 last bullet) adds the whole suspension gap at its first T9 after its plot is
    activated again, since LastTime is only refreshed by an evaluation [M].
 2. **Parameter matching** (§5): the generic rule (types without a modelled evaluator, e.g. RETREAT, SELECT_PLANET, the
@@ -438,6 +438,11 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
    parameter is matched by the event type's own rule (name lists, per-name counts, thresholds), like XML text, and
    setting an event parameter restarts that event's per-name countdowns. Index range 0..63; anything else, or a nil /
    table value, fails with "must set exactly one parameter per parameter index".
+   **Since q6 t03** the setters follow LUA_API "StoryEventWrapper dialog and parameter setters" [H]: the shared
+   converter gives an object / type its upper-cased type name, a number `(int)(n + 0.5)`, a string as is, and drops
+   anything else (a player, a boolean, nil, a dead object); Set_Event_Parameter joins several values into one name
+   list; errors go through `script_error_stop`. The player-value reading above is gone (`#player:N` is only read back
+   from older saves).
 3. **Branches** (§6.2): as written - RESET_BRANCH compares the branch byte-exact, resets in table order, re-checks the
    branch's events (TRIGGER fires), then fires Param2 (even when disabled it is still called: Fire does nothing);
    depth 3, so an event that resets its own branch and fires itself through Param2 fires 1 + 3 times. DISABLE_BRANCH
@@ -470,6 +475,12 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
    name is unique per manager, and when two sets list the same file, the **later-loaded** plot replaces the earlier
    one (§2.1). The port's own-set-first order gives the same answer whenever names are unique, which holds for the
    data checked. The name must also match case-sensitively (§2.1, §7 item 6), unlike the port.
+   **Port since q6 t03: as the original.** `lua::StoryTable` (one per mode, `StorySession` load order Rebel / Empire /
+   Underworld tags, then the Story_Name pairs) is the one table: a later plot of the same name replaces the earlier one
+   (`StoryPlot::in_table`), names match byte for byte, Get_Story_Plot (warning when missing) and STORY_ELEMENT do one
+   lookup, TRIGGER_EVENT fires the event in every plot of the table, Story_Event reaches every active plot, Get_Event
+   stays in its own plot (script error when missing). The per-player StoryModels stay (save format, players, rewards);
+   the case-insensitive / own-set-first reading above is gone.
 8. **Story flags** (§0) [H]: one table for the whole session - every galactic plot set and the tactical story's plot
    set use the same flags (`StoryModel::share_flags`). Before 2026-11-02 each plot set had its own table, so a mission's
    `SET_FLAG <Faction>_A0xM0y_WIN` (20 such flags in FoC, e.g. `EMPIRE_A01M03_WIN`, set in the tactical plots) never
@@ -486,7 +497,7 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
    retail, so their machine is settled before the first event); test: `alamo_sim_tests` `test_q6_story_chain`.
 10. **SWITCH_CONTROL** (AI_GALACTIC.md §1.2, reward 0x30) [port, q6]: the reward goes to the host
     (`StorySession::set_switch_control_hook`, installed by `SimHost::set_switch_control_hook` before the plots load) with
-    Reward_Param1 resolved to a player (faction name, or a player object set from Lua: `#player:N`) and Reward_Param2 the
+    Reward_Param1 resolved to a player (faction name; `#player:N` only from a save made before q6 t03) and Reward_Param2 the
     AIPlayerType name. `alamo_headless --galactic-ai --story` and `GameSession` call `GalacticAiWorld::set_ai_type` at
     once (inside T9), difficulty Normal / the session's; the human keeps its control. `alamo_headless --galactic-ai
     --story` also gives the story player world the galactic AI's equations and resolver as its perception source, so
@@ -499,8 +510,10 @@ rules above where they leave a choice. Tests: `engine/lua/tests/test_lua_story.c
     restarts there. Period = T of unpaused story time + one story service [M for the exact frame count]. Thrawn's
     Revenge's `Galactic_Cycle_Increment` / `Galactic_Cycle_Finished` (Player_Agnostic_Plot, `STORY_ELAPSED 40`,
     Perpetual, no prereq) therefore fire once per ~40 s, as the week counter expects. The same vf4 runs on Lua `Reset`,
-    RESET_EVENT and RESET_BRANCH, so those restart an ELAPSED timer too (§2.3). Port: open (change the model and the
-    `test_q6_story_chain` expectation). A retail probe is no longer needed for the rule; one would only pin the frame
+    RESET_EVENT and RESET_BRANCH, so those restart an ELAPSED timer too (§2.3). **Port: done (q6 t03)** - the ELAPSED /
+    OBJECTIVE_TIMEOUT reset clears the accumulator and the flag for Fire's Perpetual step, Lua Reset, RESET_EVENT and
+    RESET_BRANCH; `test_q6_story_chain` expects period 2 s + one T9; TR Thrawn_Empire 4000 ticks: 5761 -> 1291 story
+    events fired. A retail probe is no longer needed for the rule; one would only pin the frame
     count.
 12. **Planet `Get_Owner`** [port, q6]: a galactic planet object's `GameObjectWrapper.Get_Owner` returns the galactic
     planet owner (`PlanetState::owner`). The port creates planet objects without a store owner, so before q6 every

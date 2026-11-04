@@ -892,15 +892,19 @@ static void test_many_players(const World& w) {
 
     data::CampaignDef c;
     c.raw = {{"Empire_Story_Name", "Story_Plots_E.xml"},
-             {"Story_Name", " Empire, Ignored.xml, Mod_3 , Sub\\Story_Plots_M3.xml,\n Mod_16, M16.xml, Dangling "},
+             {"Story_Name", " Empire, Second_E.xml, Mod_3 , Sub\\Story_Plots_M3.xml,\n Mod_16, M16.xml, Dangling "},
              {"Story_Name", "Mod_3, Later.xml, Mod_5, M5.xml"}};
     const std::vector<StoryPlotSet> sets = campaign_plot_sets(c, *gs);
-    CHECK(sets.size() == 4);
-    if (sets.size() == 4) {
-        CHECK(sets[0].player == pEmpire && sets[0].plots_file == "Story_Plots_E.xml");  // the faction tag wins
-        CHECK(sets[1].player == 3 + 3 && sets[1].plots_file == "Sub\\Story_Plots_M3.xml");  // the first pair wins
-        CHECK(sets[2].player == 3 + 5 && sets[2].plots_file == "M5.xml");
+    // q6 t03 (STORY.md §2.1 [H]): the faction tags first, then every Story_Name pair in list order (a faction may get
+    // several sets); a dangling name is dropped.
+    CHECK(sets.size() == 6);
+    if (sets.size() == 6) {
+        CHECK(sets[0].player == pEmpire && sets[0].plots_file == "Story_Plots_E.xml");
+        CHECK(sets[1].player == pEmpire && sets[1].plots_file == "Second_E.xml");
+        CHECK(sets[2].player == 3 + 3 && sets[2].plots_file == "Sub\\Story_Plots_M3.xml");
         CHECK(sets[3].player == 3 + 16 && sets[3].plots_file == "M16.xml");
+        CHECK(sets[4].player == 3 + 3 && sets[4].plots_file == "Later.xml");
+        CHECK(sets[5].player == 3 + 5 && sets[5].plots_file == "M5.xml");
     }
 }
 
@@ -1203,9 +1207,11 @@ static void test_scoring_story(const World& w) {
 // at load - Story_Event_Trigger only switches state when CurrentState == NextState, which holds only after main's first
 // resume; the load-time resume (StorySession::start_threads_at_load) puts it there before the first T9's STORY_ELAPSED
 // dispatch (T9 step 2) - (2) a prereq-less Perpetual STORY_ELAPSED fires first where the T9 clock has accumulated
-// Param1 seconds since the first T9, then at every T9 (STORY.md §4.7: the accumulator is never cleared [M]),
-// (3) SWITCH_CONTROL rewards reach the host hook (SimHost::set_switch_control_hook), from an XML reward (faction name)
-// and from a Lua Set_Reward_Parameter(0, player object) like StoryUtil.ChangeAIPlayer. Same results for every worker count.
+// Param1 seconds since the first T9; the Perpetual reset clears the accumulator and the initialised flag, so the next
+// T9 re-records the start and the next fire comes Param1 seconds after that (STORY.md §4.7 [H]: period Param1 plus one
+// T9), (3) SWITCH_CONTROL rewards reach the host hook (SimHost::set_switch_control_hook), from an XML reward (faction
+// name) and from a Lua Set_Reward_Parameter(0, faction name) like StoryUtil.ChangeAIPlayer (a player object is not a
+// converter value: LUA_API.md "StoryEventWrapper dialog and parameter setters"). Same results for every worker count.
 static const char* kQ6Plot =
     "<Story>\n"
     " <Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n"
@@ -1230,7 +1236,7 @@ static const char* kQ6Script =
     "      if CurrentState == \"Started\" then\n"
     "        Story_Event(\"SWITCH_XML\")\n"
     "        local ev = Get_Story_Plot(\"Story_Q6.xml\").Get_Event(\"Switch_Lua\")\n"
-    "        ev.Set_Reward_Parameter(0, Find_Player(\"Empire\"))\n"
+    "        ev.Set_Reward_Parameter(0, \"Empire\")\n"
     "        ev.Set_Reward_Parameter(1, \"OtherAI\")\n"
     "        Story_Event(\"SWITCH_LUA\")\n"
     "      end\n"
@@ -1299,21 +1305,33 @@ static void test_q6_story_chain(const World& w) {
         CHECK(switches.size() == 2 && switches[0].player == pUnder && switches[0].ai_type == "TestAI" &&
               switches[0].player_text == "Underworld" && switches[0].frame == f1);
         CHECK(switches.size() == 2 && switches[1].player == pEmpire && switches[1].ai_type == "OtherAI" &&
-              switches[1].player_text == "#player:0");
-        // (2) Cycle: LastTime = the first T9's clock, accumulated += now - LastTime; first fire at accumulated >= 2 s,
-        // then at every T9 to the end of the run.
-        double acc = 0.0;
-        uint64_t first_fire = 0;
-        for (size_t i = 1; i < clock.size() && !first_fire; ++i) {
-            acc += clock[i].second - clock[i - 1].second;
-            if (acc >= 2.0) first_fire = clock[i].first;
-        }
+              switches[1].player_text == "Empire");
+        // (2) Cycle: the first T9 records LastTime, later T9s add now - LastTime; a fire at accumulated >= 2 s clears
+        // the accumulator and the flag, the T9 after it records LastTime again.
         std::vector<uint64_t> expect;
-        for (uint64_t f = first_fire; first_fire && f <= clock.back().first; ++f) expect.push_back(f);
+        {
+            double acc = 0.0, last = 0.0;
+            bool init = false;
+            for (const auto& [frame, now] : clock) {
+                if (!init) {
+                    init = true;
+                    last = now;
+                    continue;
+                }
+                acc += now - last;
+                last = now;
+                if (acc >= 2.0) {
+                    expect.push_back(frame);
+                    acc = 0.0;
+                    init = false;
+                }
+            }
+        }
+        const uint64_t first_fire = expect.empty() ? 0 : expect.front();
         std::printf("  q6 story chain, workers %2d: Begin @%" PRIu64 ", Cycle first @%" PRIu64 " (x%zu), %zu SWITCH_CONTROL\n",
                     workers, f1, fired["Cycle"].empty() ? 0 : fired["Cycle"].front(), fired["Cycle"].size(), switches.size());
         CHECK(first_fire >= 60 && first_fire <= 62);  // 2 s = 60 galactic frames after the first T9 (+-1: float clock)
-        CHECK(fired["Cycle"] == expect);
+        CHECK(fired["Cycle"] == expect && expect.size() >= 2 && expect[1] - expect[0] >= 60 && expect[1] - expect[0] <= 63);
         if (first_log.empty()) {
             first_log = log;
             first_switch = sw_text;

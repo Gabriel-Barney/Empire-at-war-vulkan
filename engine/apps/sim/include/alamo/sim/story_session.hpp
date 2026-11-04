@@ -2,8 +2,10 @@
 //
 // A StorySession belongs to one game session of a SimHost (SimHost::start_story). It owns
 //   * one engine/lua StoryModel per plot set (TheStoryMode::Load_Plots loads one plot set per
-//     faction, docs/re/MAIN_LOOP.md 5.2): the plots file named by the campaign's
-//     <Faction>_Story_Name tag, loaded in player-list order;
+//     faction, docs/re/MAIN_LOOP.md 5.2): the campaign's Rebel / Empire / Underworld_Story_Name, then its
+//     <Story_Name> pairs (campaign_plot_sets), and one lua::StoryTable over the galactic sets (q6 t03, STORY.md
+//     §2.4: the original keeps every player's plots in one table per mode, so Get_Story_Plot, STORY_ELEMENT,
+//     TRIGGER_EVENT and Lua Story_Event reach every set; fires in other sets are logged with the caller's cause);
 //   * one LuaVm per plot that has a <Lua_Script> (the original's LuaScriptClass = one lua_State per
 //     script, SUBSYSTEMS.md "lua_script"): Lua globals of two factions' story scripts never share a
 //     state. Every VM of the session is created, serviced and destroyed on the sim thread;
@@ -165,9 +167,9 @@ struct StoryPlotSet {
     std::string plots_file;  // e.g. "Story_Plots_Campaign_Underworld.XML"
 };
 
-// The campaign's plot sets: for every player in player-list order, the campaign tag
-// "<faction name>_Story_Name" (Rebel_Story_Name, Empire_Story_Name, Underworld_Story_Name ...), else (Q6 [port]) the
-// faction's entry in the campaign's <Story_Name> "Faction, plot file, ..." list (mods: Thrawn's Revenge).
+// The campaign's plot sets in the original's load order (q6 t03, STORY.md §2.1 [H]): Rebel_Story_Name, Empire_Story_Name,
+// Underworld_Story_Name (each when that faction has a player), then every <Story_Name> "Faction, plot file, ..." pair in
+// list order (mods: Thrawn's Revenge; [port] a pair whose faction has no player is skipped).
 std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, const galactic::GalacticSim& sim);
 
 struct StoryStart {
@@ -316,8 +318,9 @@ struct StoryLogEntry {
 };
 
 // q6: one SWITCH_CONTROL story reward (AI_GALACTIC.md §1.2: reward case 0x30 -> Player::Set_AI_Type, then the
-// difficulty). Reward_Param1 = the player (a faction name, or "#player:N" for a player object set from Lua, e.g. Thrawn's
-// Revenge's StoryUtil.ChangeAIPlayer: Set_Reward_Parameter + Story_Event), Reward_Param2 = the AIPlayerType name ("Human"
+// difficulty). Reward_Param1 = the player (a faction name, also when set from Lua, e.g. Thrawn's Revenge's
+// StoryUtil.ChangeAIPlayer: Set_Reward_Parameter + Story_Event; "#player:N" only from a save made before q6 t03, when a
+// player object was accepted), Reward_Param2 = the AIPlayerType name ("Human"
 // removes the AI). `player` is the resolved player index (-1 = no such faction / player).
 struct StorySwitchControl {
     uint64_t frame = 0;
@@ -528,9 +531,7 @@ private:
     // Lua families shared by every VM of the session (declared before sets_: the VMs go first).
     struct Families;
     std::unique_ptr<Families> lua_;
-    // q6 t03: the galactic sets' models in load order (lua::attach_story_group: Get_Story_Plot sees every galactic plot
-    // set, STORY.md §0). Before sets_, so it outlives their VMs.
-    std::vector<lua::StoryModel*> plot_group_;
+    // (q6 t03: the galactic mode's plot table, lua::StoryTable over the galactic sets' models, lives in Families.)
     std::vector<std::unique_ptr<Set>> sets_;
     std::vector<StoryTrigger> triggers_;
     std::vector<StoryTrigger> pending_host_;
@@ -559,7 +560,8 @@ private:
     bool autoresolve_disabled_ = false;              // OI galactic: story lock global flag (+0x41)
     std::vector<PlanetIndex> autoresolve_planets_;   // OI galactic: story lock planet list (+0x308), insertion order
     void route_corruption_mission(int32_t winner, uint64_t frame);
-    void collect_set(Set& s, uint32_t number, std::string_view via);
+    void collect_set(Set& s, uint32_t number, std::string_view via);  // + the other galactic sets (q6 t03)
+    void collect_one(Set& s, uint32_t number, std::string_view via);
     void service_script_in(Set& s, uint32_t number, Script& sc, uint64_t frame, double seconds);
     void start_threads_at_load(Set& s, uint32_t number, Script& sc, double seconds);  // q6: the first resume (header comment)
     void service_tactical(uint64_t frame);
