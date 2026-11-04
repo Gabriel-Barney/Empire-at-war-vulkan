@@ -13,10 +13,16 @@
 //   0x614880, spend 0x6110e0 (Allocate_Resources / build-task charge).
 // Flush_Category 0x612cb0 = "available A = 0" and nothing else (AI_GALACTIC_3 §8) [H]; the PAYG reclaim of
 // release (0x5f7d40) is computed by the caller (galactic_build.cpp payg_reclaim) and passed in.
+// Tactical (AI_GALACTIC_TOKENS §9.3 [H]): every goal system has a budget; in battle only its weights are used
+// (weigh(), no money step), filled at the first AI service, reweighted at each proposal-pass end, cleared at battle end.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <span>
+#include <string_view>
 #include <vector>
+
+#include "alamo/ai/perception_equations.hpp"
 
 namespace alamo {
 class ByteReader;
@@ -53,6 +59,11 @@ public:
     // Reweight 0x614590: `raw` = each category's equation value (the caller pre-loads the previous normalised
     // weight, so a failing equation keeps it). Then A = P, R = I, every goal A -= a, c = 0, needs re-add.
     void reweight(std::span<const float> raw);
+    // Tactical weights (AI_GALACTIC_TOKENS §9.3 [H]): the budget map holds only the categories `member` flags (the active
+    // templates' <Budget> and Tactical_Budget_Allowance entries); `raw` = each member's equation value (the caller
+    // pre-loads the previous weight; a member without an equation counts as 0). Negatives -> 0, w / Σw over the members,
+    // 1 / member count when Σw = 0; a non-member reads 0. Money fields untouched. No member: every weight 0.
+    void weigh(std::span<const float> raw, std::span<const uint8_t> member);
     // Per-tick accrual 0x614340 (income = the player's gain this tick, period = T seconds, credits = player +0x70).
     void tick(float income, float period, float credits);
     // Add goal 0x610d30: the first call creates the struct (req = cost, h = min(eta, time_limit unless < 0));
@@ -104,5 +115,13 @@ private:
     float rate68_ = 0.0f, period_ = 0.0f, refund_ = 0.0f;
     bool reset_ = false, init_ = false;
 };
+
+// BudgetAllocation's key (AI_GALACTIC_TOKENS §8.3, galactic and tactical leaf 0x6e0560): Parameter_Category (0x5f4780,
+// default -1), the low 32 bits of the parsed value. An AIGoalCategoryType[...] enum value is the category's enum value
+// (`goal_category`: name -> AIGoalCategoryType value, -1 unknown; names OR-ed as the parser does for any enum [M]); another
+// enum type (GameObjectCategoryType) its bits (`object_category`); a number itself; [port] a quoted name the
+// AIGoalCategoryType value of that name. An unknown name -> -1 (no category).
+int32_t ai_budget_key(std::span<const Param> params, const std::function<int64_t(std::string_view)>& goal_category,
+                      const std::function<uint64_t(std::string_view)>& object_category);
 
 }  // namespace alamo::ai

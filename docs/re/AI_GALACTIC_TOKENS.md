@@ -417,6 +417,8 @@ conflict in which the AI is the defender starts (or is dropped), and 0.0 before 
 - Port status (q6 t10, 2026-11-04): galactic leaf done (q6 t03). Tactical player roots (`engine/ai/tactical`
   tactical_perception.cpp): Self-only as above, value 0.0 for every key (no tactical budget; §9.3 since shows the battle budget is filled from the template, open for the port); before t10
   the tactical leaf also returned 0.0 on Enemy / Human / Owner roots instead of failing.
+- Port status (q6 contrast/budget, 2026-11-04): the tactical leaf now returns the battle budget's weight (§9.3 port
+  status).
 - Port status (q6 t10): with no human player (headless `--galactic-ai` without `--human`), TR's
   `Allow_Blind_Space_Production` (via `Needs_More_Space_Force_Globally`: `Variable_Human.SpaceTotalUnnormalized`) and
   `Should_Conquer_Opponent_Planet` (via `Player_Danger_Score`: `Variable_Human.PlanetsControlled`) fail on every
@@ -469,6 +471,9 @@ DLL RVAs (PerceptionFunctionG.dll, FoC x64):
 - On failure, leave the caller's output variable untouched. The callers already pre-load it: 0.0 for the template
   trigger, the previous weight for the budget.
 - No operator short-circuits, `*` by 0 included.
+- Port status (q6 contrast/budget, 2026-11-04): checked, no change needed. The port's evaluator stops at the first
+  failing node, and every caller (galactic evaluate, templates, goals, tactical evaluate / evaluate_concurrent) writes
+  its output only on success.
 
 ### 9.2 Contrast totals of 0x5f2430: perception leaf plus the structures' own power [H unless tagged]
 
@@ -535,6 +540,14 @@ ground structures, so the list 0x5f1990 builds is:
 - `ContrastM::setup_a` (`engine/ai/src/galactic_pp.cpp`) pushes the space total first. The original pushes ground
   first, then the typed ground rows, then the typed space rows. Match the order if candidate-pair order matters there.
 - A failing leaf counts as 0.0 here, not as a failure of the plan.
+- Port status (q6 contrast/budget, 2026-11-04): done except the 0x4b8000 term.
+  - `galactic_ai_enemy_strength` uses the effective mask and the 0x4ad9f0-style gate (owner set, Self or ally,
+    control > 0 → leaf only). It adds the starbase type's power and each matching ground structure's power to every
+    row whose mask matches.
+  - `galactic_ai_contrast_list` builds the 0x5f1990 order (ground total, space total, typed ground rows, typed
+    space rows), and `ContrastM::setup_a` uses it.
+  - The 0x4b8000 list term adds 0: the port's planet state has no such list ("[port: none]").
+  - The `CO_SBUNTYPED` stand-in (own power only for mask "all", hostile owners only) is removed.
 
 ### 9.3 BudgetAllocation in battle: the tactical budget is filled from the mode template [H unless tagged]
 
@@ -598,3 +611,8 @@ block.
 - Clear it at battle end.
 - `BudgetAllocation` on a tactical Self root then returns that weight. Returning a fixed 0.0 in battle is wrong but
   harmless for current data.
+- Port status (q6 contrast/budget, 2026-11-04): done in `engine/ai/tactical` (`PlayerAi::budget_weights`).
+  - Members are the categories the active templates list in `<Budget>` / `Tactical_Budget_Allowance`. The budget is
+    weighed at template init and again after each proposal pass. A failing equation keeps the previous weight.
+  - Cleared in `end_battle`.
+  - With FoC data, only the battle.ai CRC moves; orders and decisions are unchanged.

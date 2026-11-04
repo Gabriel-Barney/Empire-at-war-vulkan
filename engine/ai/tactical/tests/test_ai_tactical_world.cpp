@@ -636,6 +636,9 @@ bool g_land = false;
 // a1j t01: land landings in the mock (g_land runs): 0 off (Reinforce spawns at once), 1 a Reinforce unloads its unit
 // kLandingDelay frames later with a signal 0x19 record, 2 the landing dies before its unit is out (a record without units).
 int g_landing = 0;
+// q6 (AI_GALACTIC_TOKENS 9.3): Syn_Space carries a <Budget> block (Defensive 3, Tactical_Targeted = Game.Age, Map_Control =
+// the Defensive BudgetAllocation, Tactical_Untargeted -2) and a Tactical_Budget_Allowance-only Hero entry.
+bool g_budget = false;
 constexpr uint32_t kLandingDelay = 60;
 
 class MockHost final : public TacticalAiHost {
@@ -1167,7 +1170,17 @@ void syn_data(MemoryFiles& files, AiDefinitions& defs, EquationSet& eqs, bool sc
     defs.add_goals(mode_text(kGoals), "goals.xml");
     defs.link();
     defs.add_function_set("SynSpaceSet", kSet, "SynSpaceSet.xml");
-    defs.add_templates(kTemplates, "t.xml");
+    if (g_budget) {
+        std::string t = kTemplates;
+        const std::string at = "<Priority>1</Priority><Trigger>One</Trigger>";
+        t.insert(t.find(at) + at.size(),
+                 "<Budget><Defensive>Syn_Budget_Def</Defensive><Tactical_Targeted>Syn_Budget_Age</Tactical_Targeted>"
+                 "<Map_Control>Syn_Budget_Probe</Map_Control><Tactical_Untargeted>Syn_Budget_Neg</Tactical_Untargeted></Budget>"
+                 "<Tactical_Budget_Allowance><Hero>1.0</Hero></Tactical_Budget_Allowance>");
+        defs.add_templates(t, "t.xml");
+    } else {
+        defs.add_templates(kTemplates, "t.xml");
+    }
     char buf[1024];
     const std::string player = mode_text(kPlayer);
     for (const char* n : {"SynEmpire", "SynRebel"}) {
@@ -1190,6 +1203,12 @@ void syn_data(MemoryFiles& files, AiDefinitions& defs, EquationSet& eqs, bool sc
         eqs.add("Syn_Want_Retreat", "(Game.Age > 75) * 3");
     }
     eqs.add("Current_Enemy_Location", "Variable_Target.EnemyForceUnnormalized");
+    if (g_budget) {
+        eqs.add("Syn_Budget_Def", "3.0");
+        eqs.add("Syn_Budget_Age", "Game.Age");
+        eqs.add("Syn_Budget_Probe", "Variable_Self.BudgetAllocation {Parameter_Category = AIGoalCategoryType[Defensive]}");
+        eqs.add("Syn_Budget_Neg", "-2.0");
+    }
     eqs.link();
 }
 
@@ -2825,6 +2844,64 @@ void test_order_results_bounded(int variant, int32_t frames) {
 }
 }  // namespace
 
+// q6 (AI_GALACTIC_TOKENS 9.3, AI_TACTICAL_PERCEPTION 3.4): the battle budget. Filled at the first AI service from the active
+// template's <Budget> / Tactical_Budget_Allowance entries (normalised over the listed categories only), reweighted at each
+// proposal-pass end (Tactical_Targeted follows Game.Age; Map_Control reads Variable_Self.BudgetAllocation of Defensive, so it
+// is 0 at the init and the previous Defensive weight after), negatives -> 0, an allowance-only category listed with weight
+// 0, an unlisted category 0; cleared at battle end. The plain synthetic template has no <Budget>: every weight stays 0.
+void test_battle_budget() {
+    const int32_t frames = 30 * 60;
+    AiDefinitions defs;
+    {
+        MemoryFiles files;
+        EquationSet eqs;
+        syn_data(files, defs, eqs);
+    }
+    const int32_t def = defs.find_category("Defensive"), tt = defs.find_category("Tactical_Targeted"),
+                  mc = defs.find_category("Map_Control"), tu = defs.find_category("Tactical_Untargeted"),
+                  hero = defs.find_category("Hero"), off = defs.find_category("Offensive");
+    CHECK(def >= 0 && tt >= 0 && mc >= 0 && tu >= 0 && hero >= 0 && off >= 0);
+    std::vector<float> first, last;
+    uint32_t changes = 0;
+    const auto capture = [&](int32_t, MockHost&, TacticalAiWorld& world) {
+        const AiContext* c = world.context(0);
+        if (!c || !c->initialised()) return;
+        std::vector<float> now;
+        for (size_t k = 0; k < c->budget.size(); ++k) now.push_back(c->budget.weight(static_cast<int32_t>(k)));
+        if (first.empty()) first = now;
+        else if (now != last) ++changes;
+        last = now;
+    };
+    g_budget = true;
+    const RunResult r = run(frames, 1, 0, nullptr, false, capture);
+    g_budget = false;
+    CHECK(r.errors.empty());
+    const auto at = [](const std::vector<float>& v, int32_t k) { return k >= 0 && static_cast<size_t>(k) < v.size() ? v[static_cast<size_t>(k)] : -1.0f; };
+    CHECK(!first.empty() && !last.empty());
+    // Init (frame of the first service, Game.Age = f / 30): Defensive 3, Tactical_Targeted Age, Map_Control 0, the rest 0.
+    float sum = 0.0f;
+    for (const float x : first) sum += x;
+    CHECK(std::fabs(sum - 1.0f) < 1e-5f);
+    CHECK(at(first, def) > 0.9f && at(first, tt) > 0.0f && at(first, tt) < 0.1f && at(first, mc) == 0.0f);
+    CHECK(at(first, tu) == 0.0f && at(first, hero) == 0.0f && at(first, off) == 0.0f);
+    // Reweighted at the pass ends: Tactical_Targeted grows with Game.Age, Map_Control = the previous Defensive weight > 0.
+    sum = 0.0f;
+    for (const float x : last) sum += x;
+    CHECK(std::fabs(sum - 1.0f) < 1e-5f);
+    CHECK(changes > 0 && at(last, tt) > at(first, tt) && at(last, mc) > 0.0f && at(last, tu) == 0.0f && at(last, off) == 0.0f);
+    std::printf("battle budget: init Defensive %.4f Tactical_Targeted %.4f Map_Control %.4f; after %u reweights Defensive %.4f "
+                "Tactical_Targeted %.4f Map_Control %.4f\n", static_cast<double>(at(first, def)), static_cast<double>(at(first, tt)),
+                static_cast<double>(at(first, mc)), changes, static_cast<double>(at(last, def)), static_cast<double>(at(last, tt)),
+                static_cast<double>(at(last, mc)));
+    // Without a <Budget> block nothing is listed: every weight stays 0 (the shipped-equation-free synthetic golden).
+    bool zero = true;
+    const RunResult plain = run(30 * 20, 1, 0, nullptr, false, [&](int32_t, MockHost&, TacticalAiWorld& world) {
+        if (const AiContext* c = world.context(0))
+            for (size_t k = 0; k < c->budget.size(); ++k) zero = zero && c->budget.weight(static_cast<int32_t>(k)) == 0.0f;
+    });
+    CHECK(zero && plain.errors.empty());
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--write-golden") == 0) g_write_golden = true;
@@ -2832,6 +2909,7 @@ int main(int argc, char** argv) {
     test_mod_category_enum();  // q6 t03
     test_space_layer_categories();  // q6 t03
     test_skirmish();
+    test_battle_budget();  // q6 (AI_GALACTIC_TOKENS 9.3)
     test_opportunity_and_hijack();
     test_group_orders();
     test_tactical_production();

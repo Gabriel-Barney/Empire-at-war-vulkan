@@ -49,6 +49,9 @@ public:
     int32_t plan_value(uint32_t plan) const;
     const std::string& budget_equation(int32_t category) const;  // "" = none
     float tactical_allowance(int32_t category) const;
+    // The category is in the budget map: an active template wrote a <Budget> or Tactical_Budget_Allowance entry for it
+    // (0x615420 / 0x615550, AI_GALACTIC_TOKENS §9.3).
+    bool budget_listed(int32_t category) const;
     const std::vector<uint32_t>& active() const { return active_; }  // template indices, activation order
     const std::vector<uint32_t>& templates() const { return templates_; }
     void hash(StateHasher& h) const;
